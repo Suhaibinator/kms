@@ -441,14 +441,14 @@ The project must publish client SDKs that are easy for consuming services to use
 At minimum:
 
 1. Go SDK.
-2. TypeScript/Node.js SDK.
-3. Python SDK.
+2. Python SDK.
 
 Additional SDKs may include:
 
-1. Java/Kotlin.
-2. C#/.NET.
-3. Rust.
+1. TypeScript/Node.js.
+2. Java/Kotlin.
+3. C#/.NET.
+4. Rust.
 
 ### 9.2 SDK Responsibilities
 
@@ -559,7 +559,7 @@ Additional requirements:
 1. `Resolve` must batch fetches into as few RPCs as possible.
 2. Resolved secret values must redact themselves in `String()`/`Format()`/JSON marshaling; access to plaintext requires an explicit `Value()` call.
 3. `Init` on an already-initialized value must be idempotent.
-4. Non-Go SDKs must provide the equivalent idiom (e.g. decorators/descriptors in Python, a schema object in TypeScript).
+4. Non-Go SDKs must provide the equivalent idiom (e.g. decorators/descriptors in Python).
 
 ### 9.6 Hot Reload
 
@@ -1648,13 +1648,12 @@ Deliver:
 2. Client-bound secret wrapping (10.7).
 3. Path-based authorization.
 4. Go SDK.
-5. TypeScript SDK.
-6. Python SDK.
-7. SDK caching.
-8. SDK typed hydration.
-9. Declarative `SecretValue`/`ParameterValue` types with `Init`/`Resolve`.
-10. Policy management APIs.
-11. Import tooling and gradethis migration (section 33).
+5. Python SDK.
+6. SDK caching.
+7. SDK typed hydration.
+8. Declarative `SecretValue`/`ParameterValue` types with `Init`/`Resolve`.
+9. Policy management APIs.
+10. Import tooling and gradethis migration (section 33).
 
 ### Phase 2.5: Watch and Hot Reload
 
@@ -1664,7 +1663,7 @@ Deliver:
 2. `WatchService.Subscribe` bidirectional stream with snapshot, replay, and heartbeats.
 3. Subscription registry with liveness tracking and `ListSubscribers` admin API.
 4. Go SDK hot reload: dynamic value handles, `OnChange` callbacks, reconnect/resume, reconciliation poll.
-5. TypeScript and Python SDK watch support.
+5. Python SDK watch support.
 
 ### Phase 3: Frontend
 
@@ -1788,7 +1787,7 @@ Audit:
   required for all secret and admin operations
 
 Client SDKs:
-  Go first, then TypeScript and Python
+  Go first, then Python
 
 Config initialization:
   declarative SecretValue/ParameterValue fields resolved by Init/Resolve

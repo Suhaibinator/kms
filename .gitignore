@@ -11,6 +11,10 @@
 # Test binary, built with `go test -c`
 *.test
 
+# Compiled output binary (produced by `make backend`)
+/bin/
+parameter-store
+
 # Code coverage profiles and other test artifacts
 *.out
 coverage.*
@@ -30,3 +34,30 @@ go.work.sum
 # Editor/IDE
 # .idea/
 # .vscode/
+
+# frontend build artifacts
+frontend/out/*
+!frontend/out/.gitkeep
+frontend/node_modules/
+frontend/.next/
+frontend/out.bak/
+
+# local databases and keys
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+master.key
+*.key
+
+# Python SDK local artifacts
+sdk/python/.venv/
+**/__pycache__/
+**/.mypy_cache/
+**/.pytest_cache/
+*.egg-info/
+*.py[cod]
+
+# macOS / editor cruft
+.DS_Store

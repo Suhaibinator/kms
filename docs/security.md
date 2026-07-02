@@ -1,0 +1,403 @@
+# Security Model
+
+This document describes the encryption, authentication, authorization, and
+audit design implemented in `internal/crypto`, `internal/core`, and
+`internal/policy`, and states plainly what the system does and does not
+protect against. It is the security reference; see
+[`operations.md`](operations.md) for the operational procedures (backup,
+restore, key rotation) that follow from it.
+
+## Threat model, in one paragraph
+
+The design goal is: an attacker who obtains the SQLite database file (backup
+theft, disk snapshot, stolen laptop with a dev copy) gains nothing without
+also obtaining the master key. An attacker who *also* has the master key
+still cannot decrypt secrets that were opted into client-bound mode — that
+requires the plaintext client token as well, which never touches the
+database. This defends against **offline theft of data at rest**. It does
+**not** defend against a live compromise of the running server process: an
+attacker with code execution on the KMS host can read master key material
+from process memory, intercept client tokens as they arrive on requests, and
+decrypt anything the server itself can decrypt. Section
+["What this does not protect against"](#what-this-does-not-protect-against)
+spells this out further.
+
+## Envelope encryption
+
+Every secret **version** is encrypted independently under its own
+Data Encryption Key (DEK):
+
+```
+plaintext secret
+   | AES-256-GCM, fresh random 12-byte nonce, fresh random 32-byte DEK
+   v
+ciphertext + nonce           (stored in secret_versions.ciphertext / .nonce)
+
+DEK
+   | AES-256-GCM, wrapped under the active KEK
+   v
+encrypted_dek                (stored in secret_versions.encrypted_dek)
+```
+
+Implementation: `internal/crypto/aead.go` (`seal`/`open`, `sealPacked`/
+`openPacked` — nonce and ciphertext packed as `nonce || ciphertext`, GCM tag
+appended by the cipher) and `internal/crypto/envelope.go` (`Encrypt`,
+`EncryptClientBound`, `Decrypt`, `RewrapDEK`). The only algorithm implemented
+is AES-256-GCM (`crypto.AlgorithmAES256GCM`); there is no unauthenticated
+mode and no custom cipher.
+
+A fresh DEK per version means nonce reuse under the same key is structurally
+avoided — the nonce only ever needs to be unique per DEK, and each DEK is
+used to seal exactly one value plus (for client-bound secrets) wrap one
+inner layer.
+
+### Associated data (AAD) binding
+
+Every ciphertext is bound to an associated-data string built by
+`crypto.BuildAAD`:
+
+```
+kms/v1|type:<resource_type>|path:<path>|version:<version>
+```
+
+plus an internal domain-separation suffix appended per layer
+(`|layer:value`, `|layer:dek`, `|layer:dek-inner`) so the value ciphertext,
+the DEK wrap layer, and the client-bound inner layer can never be confused
+for one another even though they may use overlapping key material. Because
+AES-GCM authenticates the AAD, a ciphertext blob copied into a different
+record, a different version, or a different layer fails authentication
+immediately rather than decrypting to garbage or — worse — to a
+plausible-looking wrong value. This is what plan §10.5 calls binding
+"namespace, secret name, version" as associated data; the path already
+encodes namespace and name.
+
+### Parameters vs. secrets
+
+Parameters are non-secret and are stored as plaintext in `parameters` /
+`parameter_versions` (still gated by the same path-based authorization).
+Secrets are always encrypted; there is no code path that writes secret
+plaintext to SQLite.
+
+## KEK management and master key acquisition
+
+The Key Encryption Key (KEK) wraps DEKs. It is never stored in SQLite. On
+startup (`internal/crypto/unseal.go`, `Unseal`), the service acquires it in
+this order:
+
+1. **Key file** (`encryption.kek_file`): raw key material read from disk —
+   32 raw bytes, 64 hex characters, or base64 of 32 bytes
+   (`LoadKEKMaterialFromFile`). This is the unattended path: a restart needs
+   no human.
+2. **Passphrase**: if no key file is configured/present, a human passphrase
+   is required — either pre-supplied (e.g. via `KMS_MASTER_PASSPHRASE`) or
+   read interactively with a no-echo TTY prompt (confirmed twice on first
+   initialization). The passphrase is stretched into 32 bytes of KEK
+   material with **argon2id** (`DeriveKEKMaterialFromPassphrase`), using a
+   random salt persisted in `key_metadata.kdf_salt` and cost parameters
+   persisted as JSON in `key_metadata.kdf`. Default parameters
+   (`DefaultArgon2Params`) follow RFC 9106's second recommended profile: 64
+   MiB memory, 3 iterations, up to 4 threads.
+
+If neither is available — no key file and stdin is not a TTY (and no
+pre-supplied passphrase) — the service fails fast with `ErrNoKeySource`
+rather than hanging a systemd unit on an invisible prompt.
+
+**Key-check canary.** At initialization the service encrypts a fixed
+plaintext (`"kms/v1 key-check canary"`) under the new KEK and stores the
+result in `key_metadata.key_check` (`NewKeyCheck`). On every subsequent
+unseal, `VerifyKeyCheck` decrypts this canary with the presented key; a wrong
+passphrase or the wrong key file fails immediately at startup with an
+actionable error, rather than surfacing later as scattered decryption
+failures on live traffic.
+
+**Which mode was used is recorded**, not guessable: `key_metadata.source` is
+`"file"` or `"passphrase"`. A database initialized with a file-based key
+cannot later be unlocked with a passphrase, and vice versa — `unlock()`
+returns a specific error naming the mismatch.
+
+Key material is held only as an unexported `[]byte` inside `*crypto.KEK` and
+is explicitly zeroed (`crypto.Zero`) as soon as it is no longer needed —
+after deriving/loading it into a `KEK`, after using a passphrase, after a
+rewrap during rotation. Go cannot guarantee no copy of a byte slice ever
+existed in memory (GC, escape analysis), but this removes the primary
+buffer immediately rather than leaving it for GC.
+
+### Keyring and rotation
+
+`crypto.Keyring` holds the active KEK plus any retired KEKs still needed to
+decrypt historical secret versions (each version records its `kek_id`, so
+old versions keep working after rotation without being rewritten).
+`Service.RotateKEK` (`internal/core/admin.go`) rewraps every secret
+version's `encrypted_dek` from the old KEK to the new one via
+`crypto.RewrapDEK` — **without ever decrypting the value ciphertext itself**
+— then marks the new KEK active. This runs inside one storage transaction
+(metadata swap + rewrap), so rotation is crash-safe. For client-bound
+secrets, rotation only touches the outer (KEK) layer; the inner
+client-token-derived layer is untouched and requires no client
+participation (plan §11.4.4).
+
+## Client-bound secrets (opt-in double wrapping)
+
+A secret opts into client-bound mode at creation (`client_bound: true`,
+`WithClientBound()` in the Go SDK). Its DEK is wrapped in two layers instead
+of one:
+
+```
+DEK
+   | HKDF-SHA256(client token, random 32-byte salt) -> client key
+   | AES-256-GCM seal under client key
+   v
+inner-wrapped DEK
+   | AES-256-GCM seal under the KEK
+   v
+stored encrypted_dek
+```
+
+(`crypto.EncryptClientBound`, `deriveClientKey` — HKDF info string `"kms/v1
+client-bound key"`.) The random salt is stored per-version in
+`secret_versions.client_key_salt`; the client token itself is **never**
+stored — only `sha256(token)` in `secrets.access_token_hash` as a lookup/
+verification hash (`crypto.TokenHash`).
+
+To decrypt, the server needs both the master key (to unwrap the outer layer)
+**and** the client-supplied token on the request (to derive the inner-layer
+key). It discards the token and derived key from memory immediately after
+use. `Service.GetSecret` requires the caller's `x-kms-secret-token` to
+match the stored hash before even attempting decryption
+(`internal/core/secrets.go`); a missing or wrong token and a genuinely
+corrupted ciphertext produce the **same** generic error
+(`domain.ErrDecryptFailed`), so a caller cannot use error content to
+distinguish "wrong token" from "ciphertext tampered" from "wrong KEK."
+
+Layering rather than deriving one key from `master ⊕ token` is deliberate
+(plan §10.7): KEK rotation rewraps only the outer layer as a pure
+server-side operation; client token rotation is independent and only
+requires the client to supply the old token when writing a new version.
+
+**Token rotation is per-version, not global.** The per-version HKDF key
+share is the token itself, bound to that version's own
+`client_key_salt` — not the secret-level `access_token_hash`, which only
+tracks the most recently minted token. Rotating (`PutSecret` with
+`generate_access_token: true` on an existing client-bound secret —
+requires the *current* token to authorize the write) encrypts only the
+**new** version under the new token; every prior version stays encrypted
+under whichever token was active when it was written
+(`internal/core/secrets.go`, `PutSecret`/`GetSecret`). Keep old tokens if
+you need to read historical versions after a rotation, and note that
+promoting an older version back to "current" (`PromoteSecretVersion`,
+which only moves a pointer — it never re-encrypts) means callers must
+present *that version's* token, not the latest one, to read it.
+
+**Threat model for client-bound secrets, specifically:**
+
+| Attacker has | Can decrypt? |
+|---|---|
+| SQLite DB only | No |
+| SQLite DB + master key | **No** — this is the whole point. The inner layer requires the client token, which lives only in the consuming application's configuration, never in the KMS database. |
+| A leaked client token alone | No — still needs the ciphertext (from the DB) and the master key (to unwrap the outer layer) to get anywhere, and even then only decrypts secrets bound to that specific token. |
+| Full live compromise of the running KMS host | Yes, for any request whose token arrives while the attacker has code execution — this defends against **offline** database+key theft, not a live host compromise (see below). |
+
+**No recovery escrow, by design.** Losing either the master key or a
+secret's client token makes that secret **permanently and irrecoverably**
+lost. There is no backdoor, no admin override, no support path around this.
+`Service.RevealSecret` (the admin/frontend/CLI reveal path) explicitly
+refuses to even attempt decryption of a client-bound secret
+(`domain.ErrFailedPrecondition`, "client-bound secrets cannot be revealed:
+the server cannot decrypt them without the client token") — the frontend and
+CLI show metadata only, and the "New secret" UI requires an explicit
+checkbox acknowledgment of this before it will submit the form
+(`frontend/pages/secrets/new.tsx`).
+
+## Token model
+
+Two kinds of bearer tokens, both high-entropy random values minted by the
+server and stored **only as a SHA-256 hash** (`crypto.GenerateToken`,
+`crypto.TokenHash`) — the plaintext is shown to the caller exactly once at
+creation/rotation time and is not retrievable again:
+
+- **Identity tokens** (`identities.token_hash`, prefix `kms_`): one per
+  client or admin identity. Sent as `authorization: Bearer <token>`
+  (gRPC metadata key `authorization`; HTTP `Authorization` header). This is
+  what `Service.Authenticate` looks up to resolve a `domain.Identity`, and
+  what establishes the caller's identity for authorization and for the
+  watch subscription registry.
+- **Per-secret access tokens** (`secrets.access_token_hash`, prefix
+  `kmss_`): optional, attached to an individual secret. When set, every
+  `GetSecret`/`PutSecret` on that secret — **including by admins** — must
+  supply the matching token via the `x-kms-secret-token` gRPC metadata
+  key / `X-KMS-Secret-Token` HTTP header (`tokenHashMatches`, constant-time
+  comparison via `hmac.Equal`). For client-bound secrets this same token
+  additionally serves as the key-derivation material described above. The
+  admin `RevealSecret` path bypasses the per-secret token gate (a
+  break-glass capability, fully audited) but — as noted above — still
+  cannot decrypt a client-bound secret without the token.
+
+Authentication failures are generic (`domain.ErrUnauthenticated`,
+"invalid credentials") regardless of whether the token was malformed,
+unknown, or belonged to a disabled identity, and every failure is audited
+(`auth.failure`) with the source IP and user agent but never the attempted
+token. Failed authentications are also rate-limited per source IP — see
+[below](#login-and-failed-authentication-rate-limiting).
+
+## Login and failed-authentication rate limiting
+
+The HTTP server throttles credential guessing with a per-IP token-bucket
+limiter (`internal/server/httpserver/ratelimit.go`), shared by two call
+sites: every request to `POST /api/v1/auth/login`, and every failed
+authentication on any other endpoint (`serveAPI`,
+`internal/server/httpserver/server.go`) — so an attacker can't dodge the
+throttle by hitting arbitrary API paths with bad credentials instead of
+the login endpoint. Each bucket allows a burst of 10 immediate attempts
+and refills at 5 per minute; once exhausted, further attempts from that
+key get `429 rate_limited` instead of being evaluated.
+
+The bucket key is the caller's IP as resolved by `clientIP` — the real TCP
+peer address by default, or the first address in `X-Forwarded-For` if
+`security.trust_proxy_headers` is enabled (see
+[`operations.md`](operations.md#tls-and-mtls) for when that's safe to
+turn on). It is resolved once per request and reused as the source IP on
+every audit event the request produces (`auth.failure`, `authz.denial`,
+`secret.read`, and so on — see [Audit guarantees](#audit-guarantees)
+below), so the rate-limit key and the audited source IP are always
+consistent with each other.
+
+**The bucket map itself is bounded**, so a caller presenting an unbounded
+set of distinct keys (e.g. a spoofed or rotating source IP once
+`trust_proxy_headers` is on) cannot exhaust server memory: the map caps
+at 65,536 tracked keys, and when full, idle buckets that have refilled
+back to burst capacity are swept before a new key is admitted. If the map
+is still full after sweeping — every tracked key is actively
+throttled — the new event is refused outright rather than growing the map
+without limit.
+
+## Authorization: path-based RBAC with deny precedence
+
+`internal/policy` implements policy evaluation; `internal/core` is the only
+caller. A `Policy` binds a `subject` (an identity name, or `"*"` for every
+non-admin client) to `allow` and `deny` rule lists. Each rule is an
+`(operation, path)` pair:
+
+- **Operation** patterns: an exact operation (`secret:read`), a category
+  wildcard (`secret:*`, `parameter:*`, `admin:*`), or the global wildcard
+  `*`. The known operations are `parameter:{read,write,list,delete}`,
+  `secret:{read,write,list,disable,destroy,promote}`, and
+  `admin:{namespace:create,policy:write,audit:read,key:rotate}`
+  (`domain.Op*` constants).
+- **Path** patterns: an exact canonical path, or a prefix pattern ending in
+  `/*` (e.g. `/prod/gradethis/*`), which matches the base path itself and
+  everything under it.
+
+**Evaluation is default-deny with deny precedence** (`policy.Evaluate`):
+
+1. If any `deny` rule across every policy bound to the subject matches
+   `(operation, path)` → **deny**, full stop.
+2. Else if any `allow` rule matches → **allow**.
+3. Else → **deny**.
+
+Admin identities (`Identity.Kind == "admin"`) bypass policy evaluation
+entirely — they are authorized for everything except the one place that is
+cryptographically impossible regardless of privilege (revealing a
+client-bound secret without its token).
+
+**List filtering** is a two-step check (`Service.listFilter` /
+`policy.MayListUnder`): first, a coarse check that at least one `allow` rule
+could possibly match something under the requested prefix (otherwise the
+list operation itself is denied and audited as `authz.denial`); then every
+individual result is filtered through the same `Evaluate` used for reads, so
+a caller never sees an item their policy would deny reading directly, even
+though a partial-tree deny doesn't forbid listing the rest of the tree.
+
+Every authorization **denial** is audited (`authz.denial`) with the
+attempted operation and path. Policy rules and paths are normalized and
+validated at write time (`policy.ValidateRules`) — unknown operations or
+malformed path patterns are rejected before they can silently fail to
+match anything.
+
+## Path validation
+
+All resource paths are canonicalized and validated by `internal/pathutil`
+before any storage or authorization operation touches them
+(`pathutil.Normalize`): must start with `/`, no empty segments, no `.` or
+`..` segments, each segment restricted to `[A-Za-z0-9._-]`, capped at 512
+characters total and 32 segments. This closes the traversal and injection
+surface for every path-addressed resource (parameters, secrets, policy
+rules, watch subscription patterns).
+
+## Audit guarantees
+
+Every secret read, secret reveal, secret/parameter write, version
+promotion, disable, destroy, policy change, namespace change,
+authentication failure, authorization denial, and KEK rotation is audited
+(`internal/core/*.go`, `Service.audit`/`auditOp`/`auditStrict`) into
+`audit_events`. Audit records carry actor identity/kind, resource
+type/path/version, decision (`allow`/`deny`/`error`), source IP, user
+agent, request ID, and an opaque `metadata_json` blob for
+operation-specific context — **never** secret plaintext, never a token.
+The recorded source IP is resolved the same way as the rate-limit key
+above (real TCP peer address, or `X-Forwarded-For` only if
+`security.trust_proxy_headers` is enabled) — see
+[above](#login-and-failed-authentication-rate-limiting).
+
+**Secret reads fail closed on audit failure.** For `secret.read` and
+`secret.reveal` specifically, the audit event is written with
+`Service.auditStrict` *before* the plaintext is returned to the caller; if
+the audit write fails, the already-decrypted plaintext is explicitly zeroed
+(`crypto.Zero`) and the call returns `domain.ErrFailedPrecondition`
+("audit unavailable") instead of the secret. Every other audit call site
+(writes, denials, admin actions) uses the non-strict `Service.audit`, which
+logs a failure loudly but does not block the underlying operation — the
+plan's requirement that "all secret reads are audited" (§28.9) is enforced
+by refusing to serve the read rather than by hoping the write succeeds.
+Audit writes also run with `context.WithoutCancel` plus a 5s timeout, so a
+client disconnecting mid-request cannot suppress the record of what it did.
+
+## Redaction
+
+Redaction is enforced by type, not by call-site discipline:
+
+- The Go SDK's `Secret` and `SecretValue` types (`sdk/go/paramstore`) always
+  print `"[REDACTED]"` from `String`, `GoString`, `Format` (every `fmt`
+  verb), and `MarshalJSON` — plaintext is reachable only via `Value()`/
+  `StringValue()`. This makes accidental logging of a secret a type error
+  you'd have to work around, not a mistake you can make by passing the
+  wrong variable to `%v`.
+- Server-side, the JSON HTTP API's `SecretMetadata` shape
+  (`docs/http-api.md`) never includes a value field at all — the only
+  endpoint that can return plaintext is the admin-only `POST
+  /api/v1/secrets/reveal`, which is explicitly audited per call.
+- The frontend never renders a secret value outside the explicit reveal
+  flow, and client-bound secrets have no reveal affordance in the UI at
+  all — the "Reveal secret" control is absent and the panel explains why,
+  because the server itself cannot produce the plaintext.
+- HTTP request logging (`internal/server/httpserver/server.go`) deliberately
+  omits the query string from log lines, since resource paths travel there
+  and must never be allowed to grow into carrying anything sensitive.
+
+## What this does not protect against
+
+Being explicit about the boundary, per plan §3 (non-goals) and §10.7.4:
+
+- **A live, fully compromised KMS host.** If an attacker has code execution
+  on the server process, they can read the unsealed KEK from memory,
+  observe client-bound tokens as they arrive on live requests, and decrypt
+  anything the server itself is currently able to decrypt. Client-bound
+  mode raises the bar (a leaked token alone, or a stolen DB+key alone, is
+  each insufficient) but does not create a boundary against the process
+  that holds the key material and sees the traffic.
+- **A malicious or compromised administrator.** Admin identities bypass
+  path-based policy entirely and can reveal any non-client-bound secret;
+  every reveal is audited, which gives detection, not prevention.
+- **Loss of the master key or a client-bound secret's client token**, which
+  is unrecoverable by design (no escrow) — see
+  [`operations.md`](operations.md#disaster-recovery) for what this means
+  operationally.
+- **This is not a replacement for a cloud KMS, HSM, or enterprise
+  key-management system** in high-compliance environments (plan §3.1); the
+  local KEK provider is the only one implemented in v1.
+- **Multi-tenant isolation beyond path-based policy.** All tenants share one
+  SQLite database and one master key; isolation is enforced by
+  authorization policy, not by separate encryption domains per tenant.
+- **Availability.** SQLite is embedded, single-writer, single-node storage;
+  this is a security document, not an HA design, and the service makes no
+  claims about surviving host failure without external backup (see
+  [`operations.md`](operations.md)).

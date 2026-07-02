@@ -1,0 +1,139 @@
+package httpserver
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"io"
+	"log/slog"
+	"net/http"
+	"net/http/httptest"
+	"testing"
+	"time"
+
+	"github.com/Suhaibinator/kms/internal/core"
+	"github.com/Suhaibinator/kms/internal/crypto"
+	"github.com/Suhaibinator/kms/internal/domain"
+)
+
+// testEnv wires a real core.Service over the in-memory fakeStore behind the
+// HTTP handler, with a seeded admin and client identity.
+type testEnv struct {
+	t           *testing.T
+	store       *fakeStore
+	svc         *core.Service
+	handler     http.Handler
+	adminToken  string
+	clientToken string
+}
+
+func newTestEnv(t *testing.T) *testEnv {
+	t.Helper()
+	return newTestEnvWith(t, true)
+}
+
+// newTestEnvWith builds the environment; ready=false leaves the keyring
+// unattached so readiness gating can be exercised.
+func newTestEnvWith(t *testing.T, ready bool) *testEnv {
+	t.Helper()
+	store := newFakeStore()
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	svc := core.New(store, logger, "test-version")
+
+	ctx := context.Background()
+	_ = store.InsertKeyMetadata(ctx, domain.KeyMetadata{
+		ID: "kek-test", Source: domain.KeySourceFile, State: domain.KeyStateActive, CreatedAt: time.Now().UTC(),
+	})
+	if ready {
+		kek, err := crypto.NewKEKFromMaterial("kek-test", make([]byte, 32))
+		if err != nil {
+			t.Fatalf("build kek: %v", err)
+		}
+		svc.SetKeyring(crypto.NewKeyring(kek))
+	}
+
+	adminToken, adminHash, _ := crypto.GenerateToken("kms")
+	if _, err := store.CreateIdentity(ctx, "admin", domain.IdentityKindAdmin, adminHash); err != nil {
+		t.Fatalf("seed admin: %v", err)
+	}
+	clientToken, clientHash, _ := crypto.GenerateToken("kms")
+	if _, err := store.CreateIdentity(ctx, "client", domain.IdentityKindClient, clientHash); err != nil {
+		t.Fatalf("seed client: %v", err)
+	}
+
+	srv, err := New(svc, Config{Addr: ":0", FrontendEnabled: false, Version: "test-version"})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	return &testEnv{t: t, store: store, svc: svc, handler: srv.Handler, adminToken: adminToken, clientToken: clientToken}
+}
+
+func (e *testEnv) do(method, target string, body any, headers map[string]string) *httptest.ResponseRecorder {
+	e.t.Helper()
+	var req *http.Request
+	if body != nil {
+		b, err := json.Marshal(body)
+		if err != nil {
+			e.t.Fatalf("marshal body: %v", err)
+		}
+		req = httptest.NewRequest(method, target, bytes.NewReader(b))
+	} else {
+		req = httptest.NewRequest(method, target, nil)
+	}
+	for k, v := range headers {
+		req.Header.Set(k, v)
+	}
+	w := httptest.NewRecorder()
+	e.handler.ServeHTTP(w, req)
+	return w
+}
+
+func (e *testEnv) admin(method, target string, body any) *httptest.ResponseRecorder {
+	return e.do(method, target, body, map[string]string{"Authorization": "Bearer " + e.adminToken})
+}
+
+func (e *testEnv) client(method, target string, body any) *httptest.ResponseRecorder {
+	return e.do(method, target, body, map[string]string{"Authorization": "Bearer " + e.clientToken})
+}
+
+// decodeBody unmarshals a JSON response body into a generic map.
+func decodeBody(t *testing.T, w *httptest.ResponseRecorder) map[string]any {
+	t.Helper()
+	var m map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &m); err != nil {
+		t.Fatalf("decode body %q: %v", w.Body.String(), err)
+	}
+	return m
+}
+
+func errCode(t *testing.T, w *httptest.ResponseRecorder) string {
+	t.Helper()
+	m := decodeBody(t, w)
+	errObj, ok := m["error"].(map[string]any)
+	if !ok {
+		t.Fatalf("no error object in %q", w.Body.String())
+	}
+	code, _ := errObj["code"].(string)
+	return code
+}
+
+func mustStatus(t *testing.T, w *httptest.ResponseRecorder, want int) {
+	t.Helper()
+	if w.Code != want {
+		t.Fatalf("status = %d, want %d; body=%s", w.Code, want, w.Body.String())
+	}
+}
+
+// newReadyService builds a ready core.Service (keyring attached) over store,
+// used by tests that only need the service wired, not seeded identities.
+func newReadyService(t *testing.T, store *fakeStore) *core.Service {
+	t.Helper()
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	svc := core.New(store, logger, "v")
+	kek, err := crypto.NewKEKFromMaterial("kek-test", make([]byte, 32))
+	if err != nil {
+		t.Fatalf("build kek: %v", err)
+	}
+	svc.SetKeyring(crypto.NewKeyring(kek))
+	return svc
+}

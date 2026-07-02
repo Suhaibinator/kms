@@ -1,0 +1,500 @@
+syntax = "proto3";
+
+package kms.v1;
+
+option go_package = "github.com/Suhaibinator/kms/gen/kmsv1";
+
+// ---------------------------------------------------------------------------
+// Common types
+// ---------------------------------------------------------------------------
+
+// Parameter is a non-sensitive configuration value.
+message Parameter {
+  string path = 1;
+  string value = 2;
+  string content_type = 3; // string | integer | float | boolean | json | binary
+  uint64 version = 4;
+  string metadata_json = 5;
+  string created_by = 6;
+  int64 created_at_unix_ms = 7;
+  map<string, uint64> labels = 8; // label -> version, e.g. current -> 3
+}
+
+// ParameterVersionInfo describes one immutable parameter version (no value).
+message ParameterVersionInfo {
+  uint64 version = 1;
+  string content_type = 2;
+  string state = 3; // enabled | disabled
+  string created_by = 4;
+  int64 created_at_unix_ms = 5;
+  string metadata_json = 6;
+}
+
+// SecretMetadata never contains plaintext.
+message SecretMetadata {
+  string path = 1;
+  string content_type = 2;
+  bool client_bound = 3;
+  bool has_access_token = 4;
+  string metadata_json = 5;
+  int64 created_at_unix_ms = 6;
+  int64 updated_at_unix_ms = 7;
+  map<string, uint64> labels = 8; // label -> version
+  repeated SecretVersionInfo versions = 9;
+}
+
+message SecretVersionInfo {
+  uint64 version = 1;
+  string state = 2; // enabled | disabled | destroyed
+  string created_by = 3;
+  int64 created_at_unix_ms = 4;
+  int64 destroyed_at_unix_ms = 5;
+  int64 expires_at_unix_ms = 6;
+  string metadata_json = 7;
+}
+
+// ---------------------------------------------------------------------------
+// ParameterService
+// ---------------------------------------------------------------------------
+
+service ParameterService {
+  rpc GetParameter(GetParameterRequest) returns (GetParameterResponse);
+  rpc PutParameter(PutParameterRequest) returns (PutParameterResponse);
+  rpc ListParameters(ListParametersRequest) returns (ListParametersResponse);
+  rpc DeleteParameter(DeleteParameterRequest) returns (DeleteParameterResponse);
+  rpc GetParameterMetadata(GetParameterMetadataRequest) returns (GetParameterMetadataResponse);
+}
+
+message GetParameterRequest {
+  string path = 1;
+  // Exactly one of version/label may be set; both empty means label "current".
+  uint64 version = 2;
+  string label = 3;
+}
+
+message GetParameterResponse {
+  Parameter parameter = 1;
+}
+
+message PutParameterRequest {
+  string path = 1;
+  string value = 2;
+  string content_type = 3; // defaults to "string"
+  string metadata_json = 4;
+}
+
+message PutParameterResponse {
+  uint64 version = 1;
+  uint64 revision = 2;
+}
+
+message ListParametersRequest {
+  string path_prefix = 1;
+  int32 page_size = 2;   // default 100, max 1000
+  string page_token = 3;
+}
+
+message ListParametersResponse {
+  repeated Parameter parameters = 1;
+  string next_page_token = 2;
+}
+
+message DeleteParameterRequest {
+  string path = 1;
+}
+
+message DeleteParameterResponse {
+  uint64 revision = 1;
+}
+
+message GetParameterMetadataRequest {
+  string path = 1;
+}
+
+message GetParameterMetadataResponse {
+  string path = 1;
+  string content_type = 2;
+  string metadata_json = 3;
+  int64 created_at_unix_ms = 4;
+  int64 updated_at_unix_ms = 5;
+  map<string, uint64> labels = 6;
+  repeated ParameterVersionInfo versions = 7;
+}
+
+// ---------------------------------------------------------------------------
+// SecretService
+// ---------------------------------------------------------------------------
+//
+// Authentication travels in gRPC metadata:
+//   "authorization":      "Bearer <per-client token>"
+//   "x-kms-secret-token": "<per-secret access token>"  (when required / client-bound)
+
+service SecretService {
+  rpc GetSecret(GetSecretRequest) returns (GetSecretResponse);
+  rpc PutSecret(PutSecretRequest) returns (PutSecretResponse);
+  rpc ListSecrets(ListSecretsRequest) returns (ListSecretsResponse);
+  rpc DeleteSecret(DeleteSecretRequest) returns (DeleteSecretResponse);
+  rpc DisableSecret(DisableSecretRequest) returns (DisableSecretResponse);
+  rpc DestroySecretVersion(DestroySecretVersionRequest) returns (DestroySecretVersionResponse);
+  rpc GetSecretMetadata(GetSecretMetadataRequest) returns (GetSecretMetadataResponse);
+  rpc PromoteSecretVersion(PromoteSecretVersionRequest) returns (PromoteSecretVersionResponse);
+}
+
+message GetSecretRequest {
+  string path = 1;
+  uint64 version = 2; // 0 = use label
+  string label = 3;   // default "current"
+}
+
+message GetSecretResponse {
+  string path = 1;
+  uint64 version = 2;
+  bytes value = 3;
+  string content_type = 4;
+  string metadata_json = 5;
+  int64 created_at_unix_ms = 6;
+}
+
+message PutSecretRequest {
+  string path = 1;
+  bytes value = 2;
+  string content_type = 3;
+  string metadata_json = 4;
+  // client_bound opts this secret into client-bound double wrapping. Only
+  // honored on first creation; later puts must match the existing mode.
+  bool client_bound = 5;
+  // generate_access_token asks the server to mint a per-secret access token.
+  // The token is returned exactly once in the response. Required (or an
+  // existing token supplied via metadata) when client_bound is true.
+  bool generate_access_token = 6;
+  // expires_at for the new version, 0 = never.
+  int64 expires_at_unix_ms = 7;
+}
+
+message PutSecretResponse {
+  uint64 version = 1;
+  uint64 revision = 2;
+  // access_token is set only when generate_access_token was true. It is never
+  // retrievable again.
+  string access_token = 3;
+}
+
+message ListSecretsRequest {
+  string path_prefix = 1;
+  int32 page_size = 2;
+  string page_token = 3;
+}
+
+message ListSecretsResponse {
+  repeated SecretMetadata secrets = 1; // metadata only, never values
+  string next_page_token = 2;
+}
+
+message DeleteSecretRequest {
+  string path = 1;
+}
+
+message DeleteSecretResponse {
+  uint64 revision = 1;
+}
+
+message DisableSecretRequest {
+  string path = 1;
+  uint64 version = 2; // 0 = all versions
+  bool enable = 3;    // true = re-enable instead of disable
+}
+
+message DisableSecretResponse {
+  uint64 revision = 1;
+}
+
+message DestroySecretVersionRequest {
+  string path = 1;
+  uint64 version = 2;
+}
+
+message DestroySecretVersionResponse {
+  uint64 revision = 1;
+}
+
+message GetSecretMetadataRequest {
+  string path = 1;
+}
+
+message GetSecretMetadataResponse {
+  SecretMetadata secret = 1;
+}
+
+message PromoteSecretVersionRequest {
+  string path = 1;
+  uint64 version = 2; // version to become "current"
+}
+
+message PromoteSecretVersionResponse {
+  uint64 current_version = 1;
+  uint64 previous_version = 2;
+  uint64 revision = 3;
+}
+
+// ---------------------------------------------------------------------------
+// WatchService
+// ---------------------------------------------------------------------------
+
+service WatchService {
+  // Subscribe is the primary hot-reload mechanism. The client declares the
+  // paths/prefixes it wants and its last-applied revision; the server streams
+  // an initial snapshot (or delta), then pushes events as values change,
+  // interleaved with heartbeats.
+  rpc Subscribe(stream SubscribeRequest) returns (stream SubscribeEvent);
+
+  // Single-resource conveniences built on the same event model.
+  rpc WatchParameter(WatchParameterRequest) returns (stream SubscribeEvent);
+  rpc WatchNamespace(WatchNamespaceRequest) returns (stream SubscribeEvent);
+}
+
+message SubscribeRequest {
+  // First message: subscription registration.
+  string client_name = 1;        // e.g. "gradethis-be"
+  repeated string paths = 2;     // exact paths and/or prefixes: "/prod/payments/*"
+  uint64 last_seen_revision = 3; // 0 = send full snapshot
+  // Subsequent messages: acks / heartbeat responses.
+  uint64 acked_revision = 4;
+}
+
+message SubscribeEvent {
+  oneof event {
+    Snapshot snapshot = 1;
+    ParameterChange change = 2;
+    SecretMetadataChange secret_change = 3;
+    Heartbeat heartbeat = 4;
+  }
+  uint64 revision = 5; // global, monotonically increasing
+}
+
+message Snapshot {
+  repeated Parameter parameters = 1;
+}
+
+message ParameterChange {
+  string path = 1;
+  string change_type = 2; // put | delete | label
+  string value = 3;       // new value for put
+  string content_type = 4;
+  uint64 version = 5;
+  string label = 6; // for label moves
+}
+
+message SecretMetadataChange {
+  string path = 1;
+  string change_type = 2; // put | delete | promote | disable | enable | destroy
+  uint64 version = 3;
+  string label = 4;
+}
+
+message Heartbeat {
+  int64 server_time_unix_ms = 1;
+}
+
+message WatchParameterRequest {
+  string path = 1;
+  uint64 last_seen_revision = 2;
+}
+
+message WatchNamespaceRequest {
+  string path_prefix = 1;
+  uint64 last_seen_revision = 2;
+}
+
+// ---------------------------------------------------------------------------
+// AdminService
+// ---------------------------------------------------------------------------
+
+service AdminService {
+  rpc CreateNamespace(CreateNamespaceRequest) returns (CreateNamespaceResponse);
+  rpc ListNamespaces(ListNamespacesRequest) returns (ListNamespacesResponse);
+  rpc CreatePolicy(CreatePolicyRequest) returns (CreatePolicyResponse);
+  rpc UpdatePolicy(UpdatePolicyRequest) returns (UpdatePolicyResponse);
+  rpc DeletePolicy(DeletePolicyRequest) returns (DeletePolicyResponse);
+  rpc ListPolicies(ListPoliciesRequest) returns (ListPoliciesResponse);
+  rpc CreateIdentity(CreateIdentityRequest) returns (CreateIdentityResponse);
+  rpc ListIdentities(ListIdentitiesRequest) returns (ListIdentitiesResponse);
+  rpc RevokeIdentity(RevokeIdentityRequest) returns (RevokeIdentityResponse);
+  rpc RotateIdentityToken(RotateIdentityTokenRequest) returns (RotateIdentityTokenResponse);
+  rpc ListAuditEvents(ListAuditEventsRequest) returns (ListAuditEventsResponse);
+  rpc ListSubscribers(ListSubscribersRequest) returns (ListSubscribersResponse);
+  rpc Health(HealthRequest) returns (HealthResponse);
+}
+
+message Namespace {
+  string path = 1;
+  string description = 2;
+  string created_by = 3;
+  int64 created_at_unix_ms = 4;
+}
+
+message CreateNamespaceRequest {
+  string path = 1;
+  string description = 2;
+}
+
+message CreateNamespaceResponse {
+  Namespace namespace = 1;
+}
+
+message ListNamespacesRequest {
+  int32 page_size = 1;
+  string page_token = 2;
+}
+
+message ListNamespacesResponse {
+  repeated Namespace namespaces = 1;
+  string next_page_token = 2;
+}
+
+// PolicyRule grants or denies one operation on a path or path prefix.
+message PolicyRule {
+  string operation = 1; // e.g. "secret:read", "parameter:*", "*"
+  string path = 2;      // exact path or prefix ending in "/*"
+}
+
+message Policy {
+  string name = 1;
+  string subject = 2; // identity name, or "*" for all clients
+  repeated PolicyRule allow = 3;
+  repeated PolicyRule deny = 4;
+  int64 created_at_unix_ms = 5;
+  int64 updated_at_unix_ms = 6;
+}
+
+message CreatePolicyRequest {
+  Policy policy = 1;
+}
+
+message CreatePolicyResponse {
+  Policy policy = 1;
+}
+
+message UpdatePolicyRequest {
+  Policy policy = 1; // matched by name
+}
+
+message UpdatePolicyResponse {
+  Policy policy = 1;
+}
+
+message DeletePolicyRequest {
+  string name = 1;
+}
+
+message DeletePolicyResponse {}
+
+message ListPoliciesRequest {
+  int32 page_size = 1;
+  string page_token = 2;
+}
+
+message ListPoliciesResponse {
+  repeated Policy policies = 1;
+  string next_page_token = 2;
+}
+
+message Identity {
+  string name = 1;
+  string kind = 2; // client | admin
+  bool disabled = 3;
+  int64 created_at_unix_ms = 4;
+}
+
+message CreateIdentityRequest {
+  string name = 1;
+  string kind = 2; // client | admin
+}
+
+message CreateIdentityResponse {
+  Identity identity = 1;
+  // token is returned exactly once and never retrievable again.
+  string token = 2;
+}
+
+message ListIdentitiesRequest {
+  int32 page_size = 1;
+  string page_token = 2;
+}
+
+message ListIdentitiesResponse {
+  repeated Identity identities = 1;
+  string next_page_token = 2;
+}
+
+message RevokeIdentityRequest {
+  string name = 1;
+}
+
+message RevokeIdentityResponse {}
+
+message RotateIdentityTokenRequest {
+  string name = 1;
+}
+
+message RotateIdentityTokenResponse {
+  string token = 1; // returned exactly once
+}
+
+message AuditEvent {
+  int64 id = 1;
+  string event_type = 2;
+  string actor_identity = 3;
+  string actor_type = 4;
+  string resource_type = 5;
+  string resource_path = 6;
+  uint64 resource_version = 7;
+  string decision = 8; // allow | deny | error
+  string source_ip = 9;
+  string user_agent = 10;
+  string request_id = 11;
+  int64 created_at_unix_ms = 12;
+  string metadata_json = 13;
+}
+
+message ListAuditEventsRequest {
+  string path_prefix = 1;
+  string actor_identity = 2;
+  string event_type = 3;
+  int64 from_unix_ms = 4;
+  int64 to_unix_ms = 5;
+  int32 page_size = 6;
+  string page_token = 7;
+}
+
+message ListAuditEventsResponse {
+  repeated AuditEvent events = 1;
+  string next_page_token = 2;
+}
+
+message Subscriber {
+  string client_name = 1;
+  string instance_id = 2;
+  string identity = 3;
+  repeated string paths = 4;
+  string remote_addr = 5;
+  int64 connected_at_unix_ms = 6;
+  int64 last_heartbeat_unix_ms = 7;
+  uint64 last_acked_revision = 8;
+}
+
+message ListSubscribersRequest {}
+
+message ListSubscribersResponse {
+  repeated Subscriber subscribers = 1;
+  uint64 current_revision = 2;
+}
+
+message HealthRequest {}
+
+message HealthResponse {
+  bool healthy = 1;
+  bool ready = 2;
+  string version = 3;
+  uint64 current_revision = 4;
+  string details_json = 5;
+}

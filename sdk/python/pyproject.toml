@@ -1,0 +1,55 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "kms-paramstore"
+version = "0.1.0"
+description = "Python SDK for the KMS parameter store and secret management service"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "Suhaib" }]
+keywords = ["kms", "secrets", "parameter-store", "grpc", "configuration"]
+dependencies = [
+    # The vendored stubs are emitted by protoc 6.x and require a matching
+    # protobuf runtime.
+    "grpcio>=1.60",
+    "protobuf>=6.30,<7",
+]
+
+[project.optional-dependencies]
+dev = [
+    "grpcio-tools>=1.60",
+    "pytest>=7",
+    "mypy>=1.8",
+]
+
+[project.urls]
+Homepage = "https://github.com/Suhaibinator/kms"
+Source = "https://github.com/Suhaibinator/kms/tree/main/sdk/python"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["kms_paramstore*"]
+
+[tool.setuptools.package-data]
+"kms_paramstore" = ["py.typed"]
+"kms_paramstore._gen" = ["*.pyi"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.mypy]
+python_version = "3.10"
+files = ["kms_paramstore"]
+ignore_missing_imports = true
+warn_redundant_casts = true
+no_implicit_optional = true
+# The generated protobuf/gRPC stubs are not authored to be type-clean.
+exclude = ['kms_paramstore/_gen/']
+
+[[tool.mypy.overrides]]
+module = "kms_paramstore._gen.*"
+ignore_errors = true

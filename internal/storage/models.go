@@ -1,0 +1,334 @@
+package storage
+
+import (
+	"time"
+
+	"github.com/Suhaibinator/kms/internal/domain"
+)
+
+// This file defines the GORM models. They map one-to-one onto the tables in
+// migrations/0001_initial.sql. Timestamps are stored as fixed-width RFC3339
+// UTC text (see fmtTime) so lexicographic ordering matches chronological
+// ordering in SQL. Nullable time/blob columns use pointer/[]byte fields so a
+// zero value round-trips to SQL NULL.
+
+// keyMetadataModel -> key_metadata.
+type keyMetadataModel struct {
+	ID        string `gorm:"column:id;primaryKey"`
+	Source    string `gorm:"column:source;not null"`
+	KDF       string `gorm:"column:kdf;not null;default:''"`
+	KDFSalt   []byte `gorm:"column:kdf_salt"`
+	KeyCheck  []byte `gorm:"column:key_check;not null"`
+	State     string `gorm:"column:state;not null;default:active"`
+	CreatedAt string `gorm:"column:created_at;not null"`
+}
+
+func (keyMetadataModel) TableName() string { return "key_metadata" }
+
+// namespaceModel -> namespaces.
+type namespaceModel struct {
+	ID          int64  `gorm:"column:id;primaryKey;autoIncrement"`
+	Path        string `gorm:"column:path;not null;unique"`
+	Description string `gorm:"column:description;not null;default:''"`
+	CreatedBy   string `gorm:"column:created_by;not null;default:''"`
+	CreatedAt   string `gorm:"column:created_at;not null"`
+}
+
+func (namespaceModel) TableName() string { return "namespaces" }
+
+// parameterModel -> parameters.
+type parameterModel struct {
+	ID           int64  `gorm:"column:id;primaryKey;autoIncrement"`
+	Path         string `gorm:"column:path;not null;unique"`
+	ContentType  string `gorm:"column:content_type;not null;default:string"`
+	MetadataJSON string `gorm:"column:metadata_json;not null;default:{}"`
+	CreatedAt    string `gorm:"column:created_at;not null"`
+	UpdatedAt    string `gorm:"column:updated_at;not null"`
+}
+
+func (parameterModel) TableName() string { return "parameters" }
+
+// parameterVersionModel -> parameter_versions.
+type parameterVersionModel struct {
+	ID            int64          `gorm:"column:id;primaryKey;autoIncrement"`
+	ParameterID   int64          `gorm:"column:parameter_id;not null;uniqueIndex:idx_param_ver,priority:1"`
+	Parameter     parameterModel `gorm:"foreignKey:ParameterID;references:ID;constraint:OnDelete:CASCADE"`
+	VersionNumber int64          `gorm:"column:version_number;not null;uniqueIndex:idx_param_ver,priority:2"`
+	Value         string         `gorm:"column:value;not null"`
+	ContentType   string         `gorm:"column:content_type;not null;default:string"`
+	State         string         `gorm:"column:state;not null;default:enabled"`
+	CreatedBy     string         `gorm:"column:created_by;not null;default:''"`
+	CreatedAt     string         `gorm:"column:created_at;not null"`
+	MetadataJSON  string         `gorm:"column:metadata_json;not null;default:{}"`
+}
+
+func (parameterVersionModel) TableName() string { return "parameter_versions" }
+
+// parameterLabelModel -> parameter_labels.
+type parameterLabelModel struct {
+	ParameterID   int64          `gorm:"column:parameter_id;not null;primaryKey;autoIncrement:false"`
+	Parameter     parameterModel `gorm:"foreignKey:ParameterID;references:ID;constraint:OnDelete:CASCADE"`
+	Label         string         `gorm:"column:label;not null;primaryKey"`
+	VersionNumber int64          `gorm:"column:version_number;not null"`
+}
+
+func (parameterLabelModel) TableName() string { return "parameter_labels" }
+
+// secretModel -> secrets.
+type secretModel struct {
+	ID              int64  `gorm:"column:id;primaryKey;autoIncrement"`
+	Path            string `gorm:"column:path;not null;unique"`
+	ClientBound     int64  `gorm:"column:client_bound;not null;default:0"`
+	AccessTokenHash []byte `gorm:"column:access_token_hash"`
+	ContentType     string `gorm:"column:content_type;not null;default:application/octet-stream"`
+	MetadataJSON    string `gorm:"column:metadata_json;not null;default:{}"`
+	CreatedAt       string `gorm:"column:created_at;not null"`
+	UpdatedAt       string `gorm:"column:updated_at;not null"`
+}
+
+func (secretModel) TableName() string { return "secrets" }
+
+// secretVersionModel -> secret_versions.
+type secretVersionModel struct {
+	ID            int64       `gorm:"column:id;primaryKey;autoIncrement"`
+	SecretID      int64       `gorm:"column:secret_id;not null;uniqueIndex:idx_secret_ver,priority:1"`
+	Secret        secretModel `gorm:"foreignKey:SecretID;references:ID;constraint:OnDelete:CASCADE"`
+	VersionNumber int64       `gorm:"column:version_number;not null;uniqueIndex:idx_secret_ver,priority:2"`
+	Ciphertext    []byte      `gorm:"column:ciphertext"`
+	EncryptedDEK  []byte      `gorm:"column:encrypted_dek"`
+	KEKID         string      `gorm:"column:kek_id;not null"`
+	WrapMode      string      `gorm:"column:wrap_mode;not null;default:standard"`
+	ClientKeySalt []byte      `gorm:"column:client_key_salt"`
+	Algorithm     string      `gorm:"column:algorithm;not null;default:AES-256-GCM"`
+	Nonce         []byte      `gorm:"column:nonce"`
+	AAD           string      `gorm:"column:aad;not null"`
+	State         string      `gorm:"column:state;not null;default:enabled"`
+	CreatedBy     string      `gorm:"column:created_by;not null;default:''"`
+	CreatedAt     string      `gorm:"column:created_at;not null"`
+	DestroyedAt   *string     `gorm:"column:destroyed_at"`
+	ExpiresAt     *string     `gorm:"column:expires_at"`
+	MetadataJSON  string      `gorm:"column:metadata_json;not null;default:{}"`
+}
+
+func (secretVersionModel) TableName() string { return "secret_versions" }
+
+// secretLabelModel -> secret_labels.
+type secretLabelModel struct {
+	SecretID      int64       `gorm:"column:secret_id;not null;primaryKey;autoIncrement:false"`
+	Secret        secretModel `gorm:"foreignKey:SecretID;references:ID;constraint:OnDelete:CASCADE"`
+	Label         string      `gorm:"column:label;not null;primaryKey"`
+	VersionNumber int64       `gorm:"column:version_number;not null"`
+}
+
+func (secretLabelModel) TableName() string { return "secret_labels" }
+
+// identityModel -> identities.
+type identityModel struct {
+	ID           int64  `gorm:"column:id;primaryKey;autoIncrement"`
+	Name         string `gorm:"column:name;not null;unique"`
+	Kind         string `gorm:"column:kind;not null"`
+	TokenHash    []byte `gorm:"column:token_hash;not null;index:idx_identities_token_hash"`
+	Disabled     int64  `gorm:"column:disabled;not null;default:0"`
+	CreatedAt    string `gorm:"column:created_at;not null"`
+	MetadataJSON string `gorm:"column:metadata_json;not null;default:{}"`
+}
+
+func (identityModel) TableName() string { return "identities" }
+
+// policyModel -> policies.
+type policyModel struct {
+	ID        int64  `gorm:"column:id;primaryKey;autoIncrement"`
+	Name      string `gorm:"column:name;not null;unique"`
+	Subject   string `gorm:"column:subject;not null;index:idx_policies_subject"`
+	RulesJSON string `gorm:"column:rules_json;not null"`
+	CreatedAt string `gorm:"column:created_at;not null"`
+	UpdatedAt string `gorm:"column:updated_at;not null"`
+}
+
+func (policyModel) TableName() string { return "policies" }
+
+// auditEventModel -> audit_events.
+type auditEventModel struct {
+	ID              int64  `gorm:"column:id;primaryKey;autoIncrement"`
+	EventType       string `gorm:"column:event_type;not null"`
+	ActorIdentity   string `gorm:"column:actor_identity;not null;default:'';index:idx_audit_actor"`
+	ActorType       string `gorm:"column:actor_type;not null;default:''"`
+	ResourceType    string `gorm:"column:resource_type;not null;default:''"`
+	ResourcePath    string `gorm:"column:resource_path;not null;default:'';index:idx_audit_path"`
+	ResourceVersion int64  `gorm:"column:resource_version;not null;default:0"`
+	Decision        string `gorm:"column:decision;not null;default:''"`
+	SourceIP        string `gorm:"column:source_ip;not null;default:''"`
+	UserAgent       string `gorm:"column:user_agent;not null;default:''"`
+	RequestID       string `gorm:"column:request_id;not null;default:''"`
+	CreatedAt       string `gorm:"column:created_at;not null;index:idx_audit_created"`
+	MetadataJSON    string `gorm:"column:metadata_json;not null;default:{}"`
+}
+
+func (auditEventModel) TableName() string { return "audit_events" }
+
+// changeLogModel -> change_log. The table itself is created via raw DDL (see
+// changeLogDDL) to guarantee INTEGER PRIMARY KEY AUTOINCREMENT; this struct is
+// used only for queries.
+type changeLogModel struct {
+	Revision      int64   `gorm:"column:revision;primaryKey;autoIncrement"`
+	ResourceType  string  `gorm:"column:resource_type;not null"`
+	Path          string  `gorm:"column:path;not null"`
+	ChangeType    string  `gorm:"column:change_type;not null"`
+	Value         *string `gorm:"column:value"`
+	ContentType   string  `gorm:"column:content_type;not null;default:''"`
+	VersionNumber int64   `gorm:"column:version_number;not null;default:0"`
+	Label         string  `gorm:"column:label;not null;default:''"`
+	CreatedAt     string  `gorm:"column:created_at;not null"`
+}
+
+func (changeLogModel) TableName() string { return "change_log" }
+
+// schemaMigrationModel -> schema_migrations. Tracks the applied schema version.
+type schemaMigrationModel struct {
+	Version   int    `gorm:"column:version;primaryKey;autoIncrement:false"`
+	AppliedAt string `gorm:"column:applied_at;not null"`
+}
+
+func (schemaMigrationModel) TableName() string { return "schema_migrations" }
+
+// autoMigrateModels are migrated by GORM. change_log is intentionally absent:
+// it is created by raw DDL to guarantee AUTOINCREMENT.
+var autoMigrateModels = []any{
+	&keyMetadataModel{},
+	&namespaceModel{},
+	&parameterModel{},
+	&parameterVersionModel{},
+	&parameterLabelModel{},
+	&secretModel{},
+	&secretVersionModel{},
+	&secretLabelModel{},
+	&identityModel{},
+	&policyModel{},
+	&auditEventModel{},
+}
+
+// ---- model <-> domain conversions ----------------------------------------
+
+func toKeyMetadata(m keyMetadataModel) domain.KeyMetadata {
+	return domain.KeyMetadata{
+		ID:        m.ID,
+		Source:    m.Source,
+		KDF:       m.KDF,
+		KDFSalt:   m.KDFSalt,
+		KeyCheck:  m.KeyCheck,
+		State:     m.State,
+		CreatedAt: parseTime(m.CreatedAt),
+	}
+}
+
+func toIdentity(m identityModel) domain.Identity {
+	return domain.Identity{
+		ID:        m.ID,
+		Name:      m.Name,
+		Kind:      m.Kind,
+		Disabled:  i2b(m.Disabled),
+		CreatedAt: parseTime(m.CreatedAt),
+	}
+}
+
+func toNamespace(m namespaceModel) domain.Namespace {
+	return domain.Namespace{
+		Path:        m.Path,
+		Description: m.Description,
+		CreatedBy:   m.CreatedBy,
+		CreatedAt:   parseTime(m.CreatedAt),
+	}
+}
+
+func toSecretRecord(sec secretModel, labels map[string]uint64) SecretRecord {
+	return SecretRecord{
+		ID:              sec.ID,
+		Path:            sec.Path,
+		ClientBound:     i2b(sec.ClientBound),
+		AccessTokenHash: sec.AccessTokenHash,
+		ContentType:     sec.ContentType,
+		Metadata:        sec.MetadataJSON,
+		CreatedAt:       parseTime(sec.CreatedAt),
+		UpdatedAt:       parseTime(sec.UpdatedAt),
+		Labels:          labels,
+	}
+}
+
+func toSecretVersionRecord(v secretVersionModel) SecretVersionRecord {
+	return SecretVersionRecord{
+		ID:            v.ID,
+		SecretID:      v.SecretID,
+		Version:       uint64(v.VersionNumber),
+		Ciphertext:    v.Ciphertext,
+		EncryptedDEK:  v.EncryptedDEK,
+		KEKID:         v.KEKID,
+		WrapMode:      v.WrapMode,
+		ClientKeySalt: v.ClientKeySalt,
+		Algorithm:     v.Algorithm,
+		Nonce:         v.Nonce,
+		AAD:           v.AAD,
+		State:         v.State,
+		CreatedBy:     v.CreatedBy,
+		CreatedAt:     parseTime(v.CreatedAt),
+		DestroyedAt:   parseTimePtr(v.DestroyedAt),
+		ExpiresAt:     parseTimePtr(v.ExpiresAt),
+		Metadata:      v.MetadataJSON,
+	}
+}
+
+func toChangeEntry(m changeLogModel) domain.ChangeLogEntry {
+	value := ""
+	if m.Value != nil {
+		value = *m.Value
+	}
+	return domain.ChangeLogEntry{
+		Revision:     uint64(m.Revision),
+		ResourceType: m.ResourceType,
+		Path:         m.Path,
+		ChangeType:   m.ChangeType,
+		Value:        value,
+		ContentType:  m.ContentType,
+		Version:      uint64(m.VersionNumber),
+		Label:        m.Label,
+		CreatedAt:    parseTime(m.CreatedAt),
+	}
+}
+
+func toAuditEvent(m auditEventModel) domain.AuditEvent {
+	return domain.AuditEvent{
+		ID:              m.ID,
+		EventType:       m.EventType,
+		ActorIdentity:   m.ActorIdentity,
+		ActorType:       m.ActorType,
+		ResourceType:    m.ResourceType,
+		ResourcePath:    m.ResourcePath,
+		ResourceVersion: uint64(m.ResourceVersion),
+		Decision:        m.Decision,
+		SourceIP:        m.SourceIP,
+		UserAgent:       m.UserAgent,
+		RequestID:       m.RequestID,
+		CreatedAt:       parseTime(m.CreatedAt),
+		Metadata:        m.MetadataJSON,
+	}
+}
+
+// zeroOr returns v if non-empty, else def.
+func zeroOr(v, def string) string {
+	if v == "" {
+		return def
+	}
+	return v
+}
+
+func b2i(b bool) int64 {
+	if b {
+		return 1
+	}
+	return 0
+}
+
+func i2b(i int64) bool { return i != 0 }
+
+// nowUTC returns the current time truncated to what the DB representation can
+// hold, so returned domain values match subsequently-read ones exactly.
+func nowUTC() time.Time { return parseTime(fmtTime(time.Now())) }
