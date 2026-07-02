@@ -116,7 +116,7 @@ func (h *harness) withRawDB(fn func(db *sql.DB)) {
 	if err != nil {
 		h.tb.Fatalf("raw open: %v", err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 	fn(db)
 }
 

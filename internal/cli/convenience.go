@@ -132,10 +132,10 @@ func (c *CLI) cmdPutSecret(args []string) int {
 	if err != nil {
 		return c.fail("put-secret: %v", err)
 	}
-	fmt.Fprintf(c.Stdout, "Stored %s version %d (revision %d)\n", path, resp.Version, resp.Revision)
+	_, _ = fmt.Fprintf(c.Stdout, "Stored %s version %d (revision %d)\n", path, resp.Version, resp.Revision)
 	if resp.AccessToken != "" {
-		fmt.Fprintf(c.Stdout, "  access token: %s\n", resp.AccessToken)
-		fmt.Fprintln(c.Stdout, "  WARNING: shown once; store it now.")
+		_, _ = fmt.Fprintf(c.Stdout, "  access token: %s\n", resp.AccessToken)
+		_, _ = fmt.Fprintln(c.Stdout, "  WARNING: shown once; store it now.")
 	}
 	return 0
 }
@@ -181,7 +181,7 @@ func (c *CLI) cmdGetSecret(args []string) int {
 		if err := os.WriteFile(*out, resp.Value, 0o600); err != nil {
 			return c.fail("writing --out: %v", err)
 		}
-		fmt.Fprintf(c.Stderr, "Wrote %d bytes to %s\n", len(resp.Value), *out)
+		_, _ = fmt.Fprintf(c.Stderr, "Wrote %d bytes to %s\n", len(resp.Value), *out)
 	case *show || !c.stdoutIsTTY():
 		// Piped or explicitly allowed: emit raw bytes with no trailing newline.
 		if _, err := c.Stdout.Write(resp.Value); err != nil {
@@ -224,7 +224,7 @@ func (c *CLI) cmdPutParameter(args []string) int {
 	if err != nil {
 		return c.fail("put-parameter: %v", err)
 	}
-	fmt.Fprintf(c.Stdout, "Stored %s version %d (revision %d)\n", path, resp.Version, resp.Revision)
+	_, _ = fmt.Fprintf(c.Stdout, "Stored %s version %d (revision %d)\n", path, resp.Version, resp.Revision)
 	return 0
 }
 
@@ -254,7 +254,7 @@ func (c *CLI) cmdList(args []string) int {
 	secretClient := kmsv1.NewSecretServiceClient(conn)
 
 	tw := tabwriter.NewWriter(c.Stdout, 0, 4, 2, ' ', 0)
-	fmt.Fprintln(tw, "TYPE\tPATH\tCURRENT\tNOTE")
+	_, _ = fmt.Fprintln(tw, "TYPE\tPATH\tCURRENT\tNOTE")
 
 	// Page through the full result set; a listing command that silently
 	// truncated at the first page would give a misleading partial view.
@@ -264,7 +264,7 @@ func (c *CLI) cmdList(args []string) int {
 			return c.fail("list parameters: %v", err)
 		}
 		for _, p := range resp.Parameters {
-			fmt.Fprintf(tw, "parameter\t%s\t%d\t%s\n", p.Path, p.Version, p.ContentType)
+			_, _ = fmt.Fprintf(tw, "parameter\t%s\t%d\t%s\n", p.Path, p.Version, p.ContentType)
 		}
 		if token = resp.NextPageToken; token == "" {
 			break
@@ -280,7 +280,7 @@ func (c *CLI) cmdList(args []string) int {
 			if s.ClientBound {
 				note = "client-bound"
 			}
-			fmt.Fprintf(tw, "secret\t%s\t%d\t%s\n", s.Path, s.Labels["current"], note)
+			_, _ = fmt.Fprintf(tw, "secret\t%s\t%d\t%s\n", s.Path, s.Labels["current"], note)
 		}
 		if token = resp.NextPageToken; token == "" {
 			break

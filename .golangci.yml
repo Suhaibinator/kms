@@ -1,0 +1,16 @@
+version: "2"
+
+# Lint configuration for the parameter-store service. Runs the standard,
+# high-signal linter set with no per-issue suppressions: findings are fixed in
+# code, not excluded here. Generated files (protobuf/gRPC stubs) carry
+# "DO NOT EDIT" headers and are skipped by golangci-lint's built-in generated
+# file detection.
+linters:
+  default: standard # errcheck, govet, ineffassign, staticcheck, unused
+  enable:
+    - bodyclose # HTTP response bodies must be closed
+    - misspell # catch typos in comments/strings
+
+formatters:
+  enable:
+    - gofmt

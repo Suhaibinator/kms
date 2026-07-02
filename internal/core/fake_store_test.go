@@ -73,16 +73,6 @@ func (f *fakeStore) addIdentity(name, kind, token string) domain.Identity {
 
 func (f *fakeStore) addPolicy(p domain.Policy) { f.policies = append(f.policies, p) }
 
-func (f *fakeStore) auditsWithDecision(decision string) []domain.AuditEvent {
-	var out []domain.AuditEvent
-	for _, e := range f.audits {
-		if e.Decision == decision {
-			out = append(out, e)
-		}
-	}
-	return out
-}
-
 func (f *fakeStore) lastAudit() (domain.AuditEvent, bool) {
 	if len(f.audits) == 0 {
 		return domain.AuditEvent{}, false

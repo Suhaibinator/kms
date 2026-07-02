@@ -46,11 +46,11 @@ func (c *CLI) cmdInit(args []string) int {
 	}
 	keyring.Active().Destroy()
 
-	fmt.Fprintf(c.Stdout, "Initialized database at %s\n", *db)
+	_, _ = fmt.Fprintf(c.Stdout, "Initialized database at %s\n", *db)
 	if *keyFile != "" {
-		fmt.Fprintf(c.Stdout, "Master key file: %s (back this up separately from the database)\n", *keyFile)
+		_, _ = fmt.Fprintf(c.Stdout, "Master key file: %s (back this up separately from the database)\n", *keyFile)
 	} else {
-		fmt.Fprintln(c.Stdout, "Master key derived from passphrase. You must supply it on every start.")
+		_, _ = fmt.Fprintln(c.Stdout, "Master key derived from passphrase. You must supply it on every start.")
 	}
 
 	if *admin != "" {
@@ -80,7 +80,7 @@ func (c *CLI) cmdMigrate(args []string) int {
 		return c.fail("migrating database: %v", err)
 	}
 	_ = store.Close()
-	fmt.Fprintf(c.Stdout, "Migrations applied; %s is up to date.\n", *db)
+	_, _ = fmt.Fprintf(c.Stdout, "Migrations applied; %s is up to date.\n", *db)
 	return 0
 }
 
@@ -103,16 +103,16 @@ func (c *CLI) cmdCheck(args []string) int {
 	if err := store.Ping(ctx); err != nil {
 		return c.fail("database unreachable: %v", err)
 	}
-	fmt.Fprintf(c.Stdout, "Database OK: %s (schema up to date)\n", *db)
+	_, _ = fmt.Fprintf(c.Stdout, "Database OK: %s (schema up to date)\n", *db)
 
 	// Verify the master key only if the database has been initialized and some
 	// key source is available. Never print key material.
 	if _, err := store.ActiveKeyMetadata(ctx); errors.Is(err, domain.ErrNotFound) {
-		fmt.Fprintln(c.Stdout, "Master key: database not yet initialized (run init).")
+		_, _ = fmt.Fprintln(c.Stdout, "Master key: database not yet initialized (run init).")
 		return 0
 	}
 	if !c.keySourceAvailable(*keyFile) {
-		fmt.Fprintln(c.Stdout, "Master key: not checked (no key file, passphrase, or TTY available).")
+		_, _ = fmt.Fprintln(c.Stdout, "Master key: not checked (no key file, passphrase, or TTY available).")
 		return 0
 	}
 	keyring, err := c.unseal(ctx, store, *keyFile, false)
@@ -120,7 +120,7 @@ func (c *CLI) cmdCheck(args []string) int {
 		return c.fail("master key verification failed: %v", err)
 	}
 	keyring.Active().Destroy()
-	fmt.Fprintln(c.Stdout, "Master key OK.")
+	_, _ = fmt.Fprintln(c.Stdout, "Master key OK.")
 	return 0
 }
 
@@ -157,8 +157,8 @@ func (c *CLI) cmdBackup(args []string) int {
 	if err := store.Backup(context.Background(), *out); err != nil {
 		return c.fail("backup failed: %v", err)
 	}
-	fmt.Fprintf(c.Stdout, "Backup written to %s\n", *out)
-	fmt.Fprintln(c.Stdout, "Note: the master key is NOT included; back it up separately.")
+	_, _ = fmt.Fprintf(c.Stdout, "Backup written to %s\n", *out)
+	_, _ = fmt.Fprintln(c.Stdout, "Note: the master key is NOT included; back it up separately.")
 	return 0
 }
 
@@ -185,8 +185,8 @@ func (c *CLI) cmdRestore(args []string) int {
 	}
 	_ = store.Close()
 
-	fmt.Fprintf(c.Stdout, "Restored %s from %s\n", *db, *in)
-	fmt.Fprintln(c.Stdout, "Next steps: ensure the matching master key (file or passphrase) is available before starting the server.")
+	_, _ = fmt.Fprintf(c.Stdout, "Restored %s from %s\n", *db, *in)
+	_, _ = fmt.Fprintln(c.Stdout, "Next steps: ensure the matching master key (file or passphrase) is available before starting the server.")
 	return 0
 }
 
@@ -257,16 +257,16 @@ func (c *CLI) cmdRotateKEK(args []string) int {
 	if err != nil {
 		return c.fail("rotating KEK: %v", err)
 	}
-	fmt.Fprintf(c.Stdout, "KEK rotated: %d secret versions rewrapped under %s\n", count, newKM.ID)
+	_, _ = fmt.Fprintf(c.Stdout, "KEK rotated: %d secret versions rewrapped under %s\n", count, newKM.ID)
 	if *newKeyFile != "" {
-		fmt.Fprintf(c.Stdout, "New master key file: %s (back it up; the old key is no longer sufficient after retirement).\n", *newKeyFile)
+		_, _ = fmt.Fprintf(c.Stdout, "New master key file: %s (back it up; the old key is no longer sufficient after retirement).\n", *newKeyFile)
 	} else {
-		fmt.Fprintln(c.Stdout, "New master key derived from the entered passphrase; use it on the next start.")
+		_, _ = fmt.Fprintln(c.Stdout, "New master key derived from the entered passphrase; use it on the next start.")
 	}
 	// A running server holds the OLD keyring in memory and will fail to decrypt
 	// the rewrapped rows until it is restarted with the new key. Rotate with the
 	// server stopped, or update its master-key configuration and restart it.
-	fmt.Fprintln(c.Stderr, "IMPORTANT: point any running server at the new master key and restart it; "+
+	_, _ = fmt.Fprintln(c.Stderr, "IMPORTANT: point any running server at the new master key and restart it; "+
 		"the old key can no longer decrypt secrets after this rotation.")
 	return 0
 }
@@ -317,9 +317,9 @@ func (c *CLI) buildNewKEK(newKeyFile string) (domain.KeyMetadata, []byte, error)
 
 // printTokenOnce prints a freshly minted token with a clear one-time warning.
 func printTokenOnce(w io.Writer, kind, name, token string) {
-	fmt.Fprintf(w, "Created %s %q.\n", kind, name)
-	fmt.Fprintf(w, "  token: %s\n", token)
-	fmt.Fprintln(w, "  WARNING: this token is shown once and cannot be recovered. Store it securely.")
+	_, _ = fmt.Fprintf(w, "Created %s %q.\n", kind, name)
+	_, _ = fmt.Fprintf(w, "  token: %s\n", token)
+	_, _ = fmt.Fprintln(w, "  WARNING: this token is shown once and cannot be recovered. Store it securely.")
 }
 
 func fileExists(path string) bool {

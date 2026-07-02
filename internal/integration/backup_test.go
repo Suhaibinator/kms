@@ -45,7 +45,7 @@ func TestBackupAndRestore(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open backup: %v", err)
 	}
-	defer restored.Close()
+	defer func() { _ = restored.Close() }()
 
 	svc := core.New(restored, slog.New(slog.NewTextHandler(h.logBuf, nil)), "test")
 	keyring, err := crypto.Unseal(ctx, restored, crypto.UnsealOptions{KeyFilePath: h.keyPath})
@@ -98,7 +98,7 @@ func TestRestoreWithWrongKeyFails(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open backup: %v", err)
 	}
-	defer restored.Close()
+	defer func() { _ = restored.Close() }()
 	if _, err := crypto.Unseal(ctx, restored, crypto.UnsealOptions{KeyFilePath: wrongKeyPath}); err == nil {
 		t.Error("unseal with wrong key succeeded; expected key-check failure")
 	}

@@ -20,18 +20,18 @@ func (c *CLI) newPrompter() crypto.PassphrasePrompter {
 		return nil
 	}
 	return func(confirm bool) ([]byte, error) {
-		fmt.Fprint(c.Stderr, "Master passphrase: ")
+		_, _ = fmt.Fprint(c.Stderr, "Master passphrase: ")
 		p1, err := term.ReadPassword(int(c.Stdin.Fd()))
-		fmt.Fprintln(c.Stderr)
+		_, _ = fmt.Fprintln(c.Stderr)
 		if err != nil {
 			return nil, err
 		}
 		if !confirm {
 			return p1, nil
 		}
-		fmt.Fprint(c.Stderr, "Confirm passphrase: ")
+		_, _ = fmt.Fprint(c.Stderr, "Confirm passphrase: ")
 		p2, err := term.ReadPassword(int(c.Stdin.Fd()))
-		fmt.Fprintln(c.Stderr)
+		_, _ = fmt.Fprintln(c.Stderr)
 		if err != nil {
 			crypto.Zero(p1)
 			return nil, err

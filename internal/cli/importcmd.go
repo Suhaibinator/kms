@@ -77,7 +77,7 @@ func (c *CLI) cmdImport(args []string) int {
 			results[i] = importResult{Key: e.Key, Path: e.Path}
 		}
 		writeImportReport(out, results, false)
-		fmt.Fprintf(c.Stderr, "Dry run: %d keys would be imported into %s. No data written.\n", len(entries), *namespace)
+		_, _ = fmt.Fprintf(c.Stderr, "Dry run: %d keys would be imported into %s. No data written.\n", len(entries), *namespace)
 		return 0
 	}
 
@@ -111,7 +111,7 @@ func (c *CLI) cmdImport(args []string) int {
 		results = append(results, importResult{Key: e.Key, Path: e.Path, Token: res.AccessToken})
 	}
 	writeImportReport(out, results, true)
-	fmt.Fprintf(c.Stderr, "Imported %d secrets into %s.\n", len(results), *namespace)
+	_, _ = fmt.Fprintf(c.Stderr, "Imported %d secrets into %s.\n", len(results), *namespace)
 	return 0
 }
 
@@ -132,19 +132,19 @@ func (c *CLI) reportWriter(path string) (io.Writer, func(), error) {
 // per-secret access tokens and a one-time warning.
 func writeImportReport(w io.Writer, results []importResult, withTokens bool) {
 	if withTokens {
-		fmt.Fprintln(w, "# import mapping: old key -> new path -> access token")
+		_, _ = fmt.Fprintln(w, "# import mapping: old key -> new path -> access token")
 	} else {
-		fmt.Fprintln(w, "# import mapping (dry run): old key -> new path")
+		_, _ = fmt.Fprintln(w, "# import mapping (dry run): old key -> new path")
 	}
 	for _, r := range results {
 		if withTokens {
-			fmt.Fprintf(w, "%s -> %s -> %s\n", r.Key, r.Path, r.Token)
+			_, _ = fmt.Fprintf(w, "%s -> %s -> %s\n", r.Key, r.Path, r.Token)
 		} else {
-			fmt.Fprintf(w, "%s -> %s\n", r.Key, r.Path)
+			_, _ = fmt.Fprintf(w, "%s -> %s\n", r.Key, r.Path)
 		}
 	}
 	if withTokens {
-		fmt.Fprintln(w, "# WARNING: access tokens are shown once here and are not recoverable. Update app configs now.")
+		_, _ = fmt.Fprintln(w, "# WARNING: access tokens are shown once here and are not recoverable. Update app configs now.")
 	}
 }
 
