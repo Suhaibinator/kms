@@ -275,10 +275,17 @@ func (c *Client) fetchParameter(ctx context.Context, path string, o getOptions) 
 // GetSecret returns a secret. The returned Secret redacts itself in logs and
 // string/JSON formatting; call Value or StringValue for plaintext. Use
 // WithSecretToken for token-protected or client-bound secrets.
+//
+// Token-gated reads (WithSecretToken) bypass the client cache entirely: caching
+// them under the token-less key would let later calls without the token read
+// the plaintext from cache, skipping the server's per-secret token check, and
+// would keep serving after a token rotation until the TTL expired.
 func (c *Client) GetSecret(ctx context.Context, path string, opts ...GetOption) (Secret, error) {
 	o := applyGetOptions(opts)
-	if s, ok := c.cache.getSecret(path, o.version, o.label); ok {
-		return s, nil
+	if o.secretToken == "" {
+		if s, ok := c.cache.getSecret(path, o.version, o.label); ok {
+			return s, nil
+		}
 	}
 
 	cctx, cancel := c.callCtx(ctx, o.secretToken)
@@ -300,7 +307,9 @@ func (c *Client) GetSecret(ctx context.Context, path string, opts ...GetOption) 
 	if s.path == "" {
 		s.path = path
 	}
-	c.cache.putSecret(path, o.version, o.label, s)
+	if o.secretToken == "" {
+		c.cache.putSecret(path, o.version, o.label, s)
+	}
 	return s, nil
 }
 

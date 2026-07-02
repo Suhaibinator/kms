@@ -12,15 +12,16 @@ license = { text = "MIT" }
 authors = [{ name = "Suhaib" }]
 keywords = ["kms", "secrets", "parameter-store", "grpc", "configuration"]
 dependencies = [
-    # The vendored stubs are emitted by protoc 6.x and require a matching
-    # protobuf runtime.
-    "grpcio>=1.60",
-    "protobuf>=6.30,<7",
+    # The vendored stubs hard-fail at import on older runtimes: kms_pb2_grpc.py
+    # requires grpcio >= 1.81.1 and kms_pb2.py validates protobuf >= 6.33.5.
+    # Keep these lower bounds in sync when regenerating the stubs.
+    "grpcio>=1.81.1",
+    "protobuf>=6.33.5,<7",
 ]
 
 [project.optional-dependencies]
 dev = [
-    "grpcio-tools>=1.60",
+    "grpcio-tools>=1.81.1",
     "pytest>=7",
     "mypy>=1.8",
 ]

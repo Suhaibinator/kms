@@ -120,6 +120,36 @@ func TestCacheTTL(t *testing.T) {
 	}
 }
 
+func TestTokenGatedSecretBypassesCache(t *testing.T) {
+	c, srv := newTestClient(t, Config{CacheTTL: time.Minute})
+	srv.SetSecret("/bound", []byte("v1"))
+
+	// A token-gated read must not populate the cache: a later read without the
+	// token has to reach the server (and its token check), not the cache.
+	if _, err := c.GetSecret(context.Background(), "/bound", WithSecretToken("tok")); err != nil {
+		t.Fatalf("GetSecret with token: %v", err)
+	}
+	if _, err := c.GetSecret(context.Background(), "/bound"); err != nil {
+		t.Fatalf("GetSecret without token: %v", err)
+	}
+	md := srv.LastMetadata("GetSecret")
+	if got := md.Get("x-kms-secret-token"); len(got) != 0 {
+		t.Errorf("token-less read served from token-gated cache entry; last RPC metadata token = %v, want none (RPC per read)", got)
+	}
+
+	// A token-gated read must not be served from a cache entry either: after a
+	// token-less read primes the cache, a read with the token still sees the
+	// server's current value.
+	srv.SetSecret("/bound", []byte("v2"))
+	s, err := c.GetSecret(context.Background(), "/bound", WithSecretToken("tok"))
+	if err != nil {
+		t.Fatalf("GetSecret with token after prime: %v", err)
+	}
+	if s.StringValue() != "v2" {
+		t.Errorf("token read = %q, want v2 (must bypass cache)", s.StringValue())
+	}
+}
+
 func TestCacheDisabled(t *testing.T) {
 	c, srv := newTestClient(t, Config{}) // CacheTTL 0
 	srv.SetParameter("/p", "first")

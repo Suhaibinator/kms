@@ -11,9 +11,10 @@
 # Test binary, built with `go test -c`
 *.test
 
-# Compiled output binary (produced by `make backend`)
+# Compiled output binary (produced by `make backend`). Root-anchored so it
+# does not swallow the cmd/parameter-store source package.
 /bin/
-parameter-store
+/parameter-store
 
 # Code coverage profiles and other test artifacts
 *.out

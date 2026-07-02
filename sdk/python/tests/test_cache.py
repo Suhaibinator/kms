@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import pytest
+
 from kms_paramstore import Client, Secret
+from kms_paramstore.errors import PermissionDeniedError
 from tests.helpers import wait_until
 
 
@@ -60,6 +63,26 @@ def test_secret_cache(server):
         # writing through the client invalidates
         c.put_secret("/c/s", b"three")
         assert c.get_secret("/c/s").value == b"three"
+    finally:
+        c.close()
+
+
+def test_token_gated_secret_bypasses_cache(server):
+    addr, store = server
+    c = _client(addr, ttl=30)
+    try:
+        res = c.put_secret("/c/gated", b"one", generate_access_token=True)
+        token = res.access_token
+        assert token
+        assert c.get_secret("/c/gated", secret_token=token).value == b"one"
+        # The token read must not have populated the cache: a token-less read
+        # has to reach the server's token gate and be rejected there.
+        with pytest.raises(PermissionDeniedError):
+            c.get_secret("/c/gated")
+        # Nor may a token read be served from cache: it sees server-side changes
+        # immediately.
+        store.secrets["/c/gated"]["versions"].append((b"two", "application/octet-stream"))
+        assert c.get_secret("/c/gated", secret_token=token).value == b"two"
     finally:
         c.close()
 

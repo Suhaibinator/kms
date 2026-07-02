@@ -279,10 +279,16 @@ class Client:
 
         Use ``secret_token`` for token-protected or client-bound secrets; for
         client-bound secrets it also carries the client key share.
+
+        Token-gated reads bypass the client cache entirely: caching them under
+        the token-less key would let later calls without ``secret_token`` read
+        the plaintext from cache, skipping the server's per-secret token check,
+        and would keep serving after a token rotation until the TTL expired.
         """
-        cached = self._cache.get_secret(path, version, label)
-        if cached is not None:
-            return cached
+        if not secret_token:
+            cached = self._cache.get_secret(path, version, label)
+            if cached is not None:
+                return cached
         try:
             resp = self._secret_stub.GetSecret(
                 kms_pb2.GetSecretRequest(path=path, version=version, label=label),
@@ -297,7 +303,8 @@ class Client:
             version=resp.version,
             content_type=resp.content_type,
         )
-        self._cache.put_secret(path, version, label, s)
+        if not secret_token:
+            self._cache.put_secret(path, version, label, s)
         return s
 
     def put_secret(
