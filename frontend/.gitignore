@@ -1,0 +1,10 @@
+/node_modules
+/.next
+# Ignore the static-export build output, but keep the directory tracked (via
+# .gitkeep) so the Go binary's //go:embed frontend/out directive builds on a
+# fresh clone before `make frontend` has run.
+/out/*
+!/out/.gitkeep
+next-env.d.ts
+*.tsbuildinfo
+.DS_Store

@@ -1,0 +1,274 @@
+import Link from "next/link";
+import { useCallback, useEffect, useState } from "react";
+import { api } from "@/lib/api";
+import type { AuditEvent, HealthResponse, Subscriber } from "@/lib/types";
+import { useToast } from "@/context/ToastContext";
+import { formatRelative } from "@/lib/format";
+import { Badge, EmptyState, Loading, PageHeader } from "@/components/ui";
+
+interface Count {
+  value: number;
+  more: boolean;
+}
+
+interface Dashboard {
+  health: HealthResponse | null;
+  namespaces: Count | null;
+  parameters: Count | null;
+  secrets: Count | null;
+  subscribers: Subscriber[];
+  currentRevision: number;
+  audit: AuditEvent[];
+}
+
+const EMPTY: Dashboard = {
+  health: null,
+  namespaces: null,
+  parameters: null,
+  secrets: null,
+  subscribers: [],
+  currentRevision: 0,
+  audit: [],
+};
+
+function countFrom<T>(items: T[] | undefined, nextToken: string | undefined): Count {
+  return { value: items?.length ?? 0, more: !!nextToken };
+}
+
+function CountText({ c }: { c: Count | null }) {
+  if (!c) return <span className="faint">—</span>;
+  return (
+    <>
+      {c.value}
+      {c.more ? "+" : ""}
+    </>
+  );
+}
+
+export default function DashboardPage() {
+  const toast = useToast();
+  const [data, setData] = useState<Dashboard>(EMPTY);
+  const [loading, setLoading] = useState(true);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    const [health, ns, params, secrets, subs, audit] = await Promise.allSettled([
+      api.health(),
+      api.listNamespaces(200),
+      api.listParameters(undefined, 200),
+      api.listSecrets(undefined, 200),
+      api.subscribers(),
+      api.listAudit({ page_size: 8 }),
+    ]);
+
+    const next: Dashboard = { ...EMPTY };
+    if (health.status === "fulfilled") next.health = health.value;
+    if (ns.status === "fulfilled") next.namespaces = countFrom(ns.value.namespaces, ns.value.next_page_token);
+    if (params.status === "fulfilled")
+      next.parameters = countFrom(params.value.parameters, params.value.next_page_token);
+    if (secrets.status === "fulfilled")
+      next.secrets = countFrom(secrets.value.secrets, secrets.value.next_page_token);
+    if (subs.status === "fulfilled") {
+      next.subscribers = subs.value.subscribers ?? [];
+      next.currentRevision = subs.value.current_revision ?? 0;
+    }
+    if (audit.status === "fulfilled") next.audit = audit.value.events ?? [];
+
+    // Surface the first failure (if any) without blocking the rest.
+    const firstError = [health, ns, params, secrets, subs, audit].find(
+      (r) => r.status === "rejected",
+    ) as PromiseRejectedResult | undefined;
+    if (firstError) toast.error(firstError.reason, "Some dashboard data failed to load");
+
+    setData(next);
+    setLoading(false);
+  }, [toast]);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  const staleCount = data.subscribers.filter(
+    (s) => s.last_acked_revision < data.currentRevision,
+  ).length;
+
+  if (loading) return <Loading label="Loading dashboard…" />;
+
+  const h = data.health;
+
+  return (
+    <>
+      <PageHeader
+        title="Overview"
+        subtitle="Service status and configuration at a glance."
+        actions={
+          <button className="btn" onClick={() => void load()}>
+            Refresh
+          </button>
+        }
+      />
+
+      <div className="card-grid">
+        <div className="stat">
+          <div className="stat-label">Service</div>
+          <div className="row-wrap" style={{ marginTop: 8 }}>
+            <Badge kind={h?.healthy ? "success" : "danger"}>
+              {h?.healthy ? "healthy" : "unhealthy"}
+            </Badge>
+            <Badge kind={h?.ready ? "success" : "warning"}>
+              {h?.ready ? "ready" : "not ready"}
+            </Badge>
+          </div>
+          <div className="stat-sub">{h?.version ? `version ${h.version}` : "version unknown"}</div>
+        </div>
+
+        <div className="stat">
+          <div className="stat-label">Current revision</div>
+          <div className="stat-value">{h?.current_revision ?? data.currentRevision}</div>
+          <div className="stat-sub">latest applied configuration</div>
+        </div>
+
+        <div className="stat">
+          <div className="stat-label">Namespaces</div>
+          <div className="stat-value">
+            <CountText c={data.namespaces} />
+          </div>
+          <div className="stat-sub">
+            <Link href="/namespaces">Manage →</Link>
+          </div>
+        </div>
+
+        <div className="stat">
+          <div className="stat-label">Parameters</div>
+          <div className="stat-value">
+            <CountText c={data.parameters} />
+          </div>
+          <div className="stat-sub">
+            <Link href="/parameters">Manage →</Link>
+          </div>
+        </div>
+
+        <div className="stat">
+          <div className="stat-label">Secrets</div>
+          <div className="stat-value">
+            <CountText c={data.secrets} />
+          </div>
+          <div className="stat-sub">
+            <Link href="/secrets">Manage →</Link>
+          </div>
+        </div>
+
+        <div className="stat">
+          <div className="stat-label">Subscribers</div>
+          <div className="stat-value">{data.subscribers.length}</div>
+          <div className="stat-sub">
+            {staleCount > 0 ? (
+              <span className="text-warning">{staleCount} behind latest revision</span>
+            ) : (
+              <span className="text-success">all up to date</span>
+            )}
+          </div>
+        </div>
+      </div>
+
+      <div className="card mt-24">
+        <div className="card-title">
+          Recent activity
+          <Link href="/audit" className="text-sm">
+            View audit log →
+          </Link>
+        </div>
+        {data.audit.length === 0 ? (
+          <EmptyState title="No recent events" />
+        ) : (
+          <div className="table-wrap">
+            <table className="data">
+              <thead>
+                <tr>
+                  <th>When</th>
+                  <th>Event</th>
+                  <th>Actor</th>
+                  <th>Resource</th>
+                  <th>Decision</th>
+                </tr>
+              </thead>
+              <tbody>
+                {data.audit.map((e) => (
+                  <tr key={e.id}>
+                    <td className="nowrap">{formatRelative(e.created_at_unix_ms)}</td>
+                    <td className="mono">{e.event_type}</td>
+                    <td>
+                      {e.actor_identity || <span className="faint">—</span>}
+                      {e.actor_type ? <span className="faint text-sm"> · {e.actor_type}</span> : null}
+                    </td>
+                    <td className="cell-path">{e.resource_path || <span className="faint">—</span>}</td>
+                    <td>
+                      <Badge
+                        kind={
+                          e.decision === "allow"
+                            ? "success"
+                            : e.decision === "deny"
+                              ? "danger"
+                              : "neutral"
+                        }
+                      >
+                        {e.decision || "—"}
+                      </Badge>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+
+      <div className="card">
+        <div className="card-title">
+          Live subscribers
+          <Link href="/subscribers" className="text-sm">
+            View all →
+          </Link>
+        </div>
+        {data.subscribers.length === 0 ? (
+          <EmptyState title="No applications are currently subscribed" />
+        ) : (
+          <div className="table-wrap">
+            <table className="data">
+              <thead>
+                <tr>
+                  <th>Client</th>
+                  <th>Last heartbeat</th>
+                  <th>Applied revision</th>
+                </tr>
+              </thead>
+              <tbody>
+                {data.subscribers.slice(0, 6).map((s) => {
+                  const behind = data.currentRevision - s.last_acked_revision;
+                  return (
+                    <tr key={s.instance_id || s.client_name}>
+                      <td>
+                        {s.client_name}
+                        {s.instance_id ? (
+                          <span className="faint text-sm"> · {s.instance_id}</span>
+                        ) : null}
+                      </td>
+                      <td className="nowrap">{formatRelative(s.last_heartbeat_unix_ms)}</td>
+                      <td>
+                        {behind > 0 ? (
+                          <Badge kind="warning">{behind} behind</Badge>
+                        ) : (
+                          <Badge kind="success">up to date</Badge>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+    </>
+  );
+}
