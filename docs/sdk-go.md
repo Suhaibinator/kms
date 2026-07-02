@@ -184,10 +184,12 @@ if err := client.Resolve(ctx, &cfg); err != nil {
 ```
 
 `Resolve` (`sdk/go/paramstore/resolve.go`) walks `cfg` via reflection —
-including nested structs and non-nil struct pointers (with cycle
-detection) — finds every `SecretValue`/`ParameterValue` field (unexported
-fields are skipped), and initializes them **concurrently**, one goroutine
-per field, since the service exposes no batch-read RPC. It returns the
+including nested structs, non-nil struct pointers and pointer chains (with
+cycle detection), and the elements of slices and arrays of those types
+(`[]T`, `[]*T`, `[N]T`) — finds every `SecretValue`/`ParameterValue` field
+(unexported fields are skipped), and initializes them **concurrently**, one
+goroutine per field, since the service exposes no batch-read RPC. Map values,
+interface values, and channel/function fields are not walked. It returns the
 joined (`errors.Join`) set of every field's error, if any; fields that
 already succeeded remain initialized even if a sibling field failed.
 `cfg` must be a non-nil pointer to a struct.
@@ -257,6 +259,26 @@ double-applies a change.
 If the store is unreachable, `Get()` keeps returning the last-known value;
 the SDK reconnects in the background and reconciles automatically once it
 resumes.
+
+### Deleted parameters
+
+When a dynamic parameter is deleted and the SDK observes it — either a
+snapshot resync (after a reconnect past the replay window) that omits the path,
+or a reconciliation fetch that returns not-found — the handle reverts:
+
+- `Get()` returns the field's configured `Default` if one is set. With no
+  `Default`, `Get()` keeps the last-known value (it never errors), and
+  `OnChange` does not fire.
+- The deletion is surfaced through the existing `OnChange(old, new string)`
+  callback, invoked as `OnChange(oldValue, Default)` (skipped when `oldValue`
+  already equals `Default`). There is no separate deletion event or flag on
+  `ParameterValue`.
+- A `Client.Watch` callback receives an `Event` with `Type == EventDelete` and
+  an empty `Value` for the deleted path.
+
+Deletion is scoped to the paths a stream actually subscribed to: only paths
+under the registered patterns that are absent from a snapshot are reverted, so
+an unrelated known path is never cleared by another watch's snapshot.
 
 ## Testing against a fake server
 
