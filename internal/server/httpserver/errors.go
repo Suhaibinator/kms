@@ -27,7 +27,11 @@ func mapError(err error) (status int, code, message string) {
 	case errors.Is(err, domain.ErrInvalidArgument):
 		return http.StatusBadRequest, "invalid_argument", err.Error()
 	case errors.Is(err, domain.ErrUnauthenticated):
-		return http.StatusUnauthorized, "unauthenticated", err.Error()
+		// Fixed generic message, mirroring the gRPC boundary: an authentication
+		// failure must never reveal whether a resource or identity exists
+		// (domain.ErrUnauthenticated's invariant). Enforce it here rather than
+		// trusting every construction site to stay generic.
+		return http.StatusUnauthorized, "unauthenticated", "unauthenticated"
 	case errors.Is(err, domain.ErrPermissionDenied):
 		return http.StatusForbidden, "permission_denied", err.Error()
 	case errors.Is(err, domain.ErrNotFound):
