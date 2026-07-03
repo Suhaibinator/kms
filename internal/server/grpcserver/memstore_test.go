@@ -10,7 +10,6 @@ import (
 
 	"github.com/Suhaibinator/kms/internal/crypto"
 	"github.com/Suhaibinator/kms/internal/domain"
-	"github.com/Suhaibinator/kms/internal/keyutil"
 	"github.com/Suhaibinator/kms/internal/storage"
 )
 
@@ -632,12 +631,12 @@ func (m *memStore) PruneChangeLog(_ context.Context, _ time.Duration, _ int) (in
 	return 0, nil
 }
 
-func (m *memStore) SnapshotParameters(_ context.Context, selectors []domain.WatchSelector) ([]domain.Parameter, uint64, error) {
+func (m *memStore) SnapshotParameters(_ context.Context, namespaces []domain.NamespaceRef) ([]domain.Parameter, uint64, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	var out []domain.Parameter
 	for _, row := range m.params {
-		if selectorMatchAny(selectors, row.ref) {
+		if namespaceMatchAny(namespaces, row.ref.NS) {
 			out = append(out, m.paramLocked(row))
 		}
 	}
@@ -645,9 +644,9 @@ func (m *memStore) SnapshotParameters(_ context.Context, selectors []domain.Watc
 	return out, m.revision, nil
 }
 
-func selectorMatchAny(selectors []domain.WatchSelector, ref domain.Ref) bool {
-	for _, s := range selectors {
-		if s.NS == ref.NS && keyutil.MatchKey(s.KeyPattern, ref.Key) {
+func namespaceMatchAny(namespaces []domain.NamespaceRef, ns domain.NamespaceRef) bool {
+	for _, n := range namespaces {
+		if n == ns {
 			return true
 		}
 	}

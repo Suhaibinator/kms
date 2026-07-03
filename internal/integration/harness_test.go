@@ -255,10 +255,10 @@ func (h *harness) grant(name, subject string, allow, deny []domain.PolicyRule) {
 	}
 }
 
-// allowRule builds a policy rule matching an operation against a namespace
-// (env, app — exact or "*") and key pattern (exact, "*", or "prefix/*").
-func allowRule(op, env, app, key string) domain.PolicyRule {
-	return domain.PolicyRule{Operation: op, Env: env, App: app, KeyPattern: key}
+// allowRule builds a namespace-level policy rule matching an operation against a
+// namespace (env, app — exact or "*").
+func allowRule(op, env, app string) domain.PolicyRule {
+	return domain.PolicyRule{Operation: op, Env: env, App: app}
 }
 
 // stdSecret builds a plain (non-client-bound) secret write, ensuring the target

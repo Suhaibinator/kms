@@ -94,8 +94,8 @@ func TestImplicitHomeGrantVsExplicitPolicy(t *testing.T) {
 	// An explicit policy unlocks the home write and the cross-namespace read.
 	h.grant("home-client-extra", "home-client",
 		[]domain.PolicyRule{
-			allowRule(domain.OpParameterWrite, "prod", "home", "*"),
-			allowRule(domain.OpParameterRead, "prod", "other", "setting"),
+			allowRule(domain.OpParameterWrite, "prod", "home"),
+			allowRule(domain.OpParameterRead, "prod", "other"),
 		}, nil)
 	if _, _, err := h.svc.PutParameter(ctx, client, domain.Ref{NS: home, Key: "new"}, "v", "string", ""); err != nil {
 		t.Errorf("home write with policy err = %v, want ok", err)

@@ -24,7 +24,7 @@ func TestSubscribe_UnauthorizedNamespaceRejected(t *testing.T) {
 	if err != nil {
 		t.Fatalf("subscribe: %v", err)
 	}
-	if err := stream.Send(&kmsv1.SubscribeRequest{ClientName: "c", Selectors: []*kmsv1.WatchSelector{sel("prod", "app", "*")}}); err != nil {
+	if err := stream.Send(&kmsv1.SubscribeRequest{ClientName: "c", Namespaces: []*kmsv1.NamespaceRef{pNS("prod", "app")}}); err != nil {
 		t.Fatalf("send: %v", err)
 	}
 	_, err = stream.Recv()
@@ -40,7 +40,7 @@ func TestSubscribe_MTLSOnlyNamespaceRejectsTokenClient(t *testing.T) {
 	env := newTestEnv(t, true)
 	env.store.addNamespace(domain.NamespaceRef{Env: "prod", App: "secure"}, domain.AuthMethodMTLS)
 	env.store.addPolicy(domain.Policy{Name: "r", Subject: "client", Allow: []domain.PolicyRule{
-		{Operation: domain.OpParameterRead, Env: "prod", App: "secure", KeyPattern: "*"},
+		{Operation: domain.OpParameterRead, Env: "prod", App: "secure"},
 	}})
 
 	ctx, cancel := context.WithTimeout(clientCtx(), 5*time.Second)
@@ -49,7 +49,7 @@ func TestSubscribe_MTLSOnlyNamespaceRejectsTokenClient(t *testing.T) {
 	if err != nil {
 		t.Fatalf("subscribe: %v", err)
 	}
-	if err := stream.Send(&kmsv1.SubscribeRequest{ClientName: "c", Selectors: []*kmsv1.WatchSelector{sel("prod", "secure", "*")}}); err != nil {
+	if err := stream.Send(&kmsv1.SubscribeRequest{ClientName: "c", Namespaces: []*kmsv1.NamespaceRef{pNS("prod", "secure")}}); err != nil {
 		t.Fatalf("send: %v", err)
 	}
 	_, err = stream.Recv()
@@ -73,7 +73,7 @@ func TestSubscribe_HomeNamespaceGrantAllows(t *testing.T) {
 	if err != nil {
 		t.Fatalf("subscribe: %v", err)
 	}
-	if err := stream.Send(&kmsv1.SubscribeRequest{ClientName: "home", Selectors: []*kmsv1.WatchSelector{sel("prod", "home", "*")}}); err != nil {
+	if err := stream.Send(&kmsv1.SubscribeRequest{ClientName: "home", Namespaces: []*kmsv1.NamespaceRef{pNS("prod", "home")}}); err != nil {
 		t.Fatalf("send: %v", err)
 	}
 	// A successful registration yields the initial (empty) snapshot rather than an error.

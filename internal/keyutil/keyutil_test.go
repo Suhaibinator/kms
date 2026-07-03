@@ -74,45 +74,6 @@ func TestValidateKeyInvalid(t *testing.T) {
 	}
 }
 
-func TestValidateKeyPattern(t *testing.T) {
-	valid := []string{"*", "billing/*", "billing/stripe-key", "a/b/*"}
-	for _, p := range valid {
-		if err := ValidateKeyPattern(p); err != nil {
-			t.Errorf("ValidateKeyPattern(%q) unexpected error: %v", p, err)
-		}
-	}
-	invalid := []string{"", "/*", "a//b/*", "a b/*"}
-	for _, p := range invalid {
-		if err := ValidateKeyPattern(p); err == nil {
-			t.Errorf("ValidateKeyPattern(%q) = nil, want error", p)
-		}
-	}
-}
-
-func TestMatchKey(t *testing.T) {
-	tests := []struct {
-		pattern, key string
-		want         bool
-	}{
-		{"", "anything", true},
-		{"*", "anything", true},
-		{"*", "a/b/c", true},
-		{"rate-limit", "rate-limit", true},
-		{"rate-limit", "rate-limit2", false},
-		{"billing/*", "billing", true},
-		{"billing/*", "billing/stripe", true},
-		{"billing/*", "billing/stripe/sub", true},
-		{"billing/*", "billingx", false},
-		{"billing/*", "bill", false},
-		{"a/b", "a/b/c", false},
-	}
-	for _, tt := range tests {
-		if got := MatchKey(tt.pattern, tt.key); got != tt.want {
-			t.Errorf("MatchKey(%q, %q) = %v, want %v", tt.pattern, tt.key, got, tt.want)
-		}
-	}
-}
-
 func TestParseNamespace(t *testing.T) {
 	ns, err := ParseNamespace("prod/gradethis")
 	if err != nil {

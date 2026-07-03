@@ -54,26 +54,22 @@ func refFromProto(r *kmsv1.ResourceRef) domain.Ref {
 	return domain.Ref{NS: nsRefFromProto(r.GetNamespace()), Key: r.GetKey()}
 }
 
-// selectorFromProto reads a watch selector off the wire.
-func selectorFromProto(s *kmsv1.WatchSelector) domain.WatchSelector {
-	if s == nil {
-		return domain.WatchSelector{}
-	}
-	return domain.WatchSelector{NS: nsRefFromProto(s.GetNamespace()), KeyPattern: s.GetKeyPattern()}
-}
-
-// selectorsFromProto maps a slice of wire selectors to the domain type.
-func selectorsFromProto(sels []*kmsv1.WatchSelector) []domain.WatchSelector {
-	out := make([]domain.WatchSelector, 0, len(sels))
-	for _, s := range sels {
-		out = append(out, selectorFromProto(s))
+// namespacesFromProto maps a slice of wire namespace refs to the domain type.
+func namespacesFromProto(refs []*kmsv1.NamespaceRef) []domain.NamespaceRef {
+	out := make([]domain.NamespaceRef, 0, len(refs))
+	for _, r := range refs {
+		out = append(out, nsRefFromProto(r))
 	}
 	return out
 }
 
-// selectorToProto renders a watch selector on the wire.
-func selectorToProto(s domain.WatchSelector) *kmsv1.WatchSelector {
-	return &kmsv1.WatchSelector{Namespace: nsRefToProto(s.NS), KeyPattern: s.KeyPattern}
+// namespacesToProto renders a slice of namespace refs on the wire.
+func namespacesToProto(nss []domain.NamespaceRef) []*kmsv1.NamespaceRef {
+	out := make([]*kmsv1.NamespaceRef, 0, len(nss))
+	for _, ns := range nss {
+		out = append(out, nsRefToProto(ns))
+	}
+	return out
 }
 
 // --- auth methods ----------------------------------------------------------
@@ -249,7 +245,6 @@ func toProtoRules(rs []domain.PolicyRule) []*kmsv1.PolicyRule {
 			Operation: r.Operation,
 			Env:       r.Env,
 			App:       r.App,
-			Key:       r.KeyPattern,
 		})
 	}
 	return out
@@ -271,10 +266,9 @@ func fromProtoRules(rs []*kmsv1.PolicyRule) []domain.PolicyRule {
 	out := make([]domain.PolicyRule, 0, len(rs))
 	for _, r := range rs {
 		out = append(out, domain.PolicyRule{
-			Operation:  r.GetOperation(),
-			Env:        r.GetEnv(),
-			App:        r.GetApp(),
-			KeyPattern: r.GetKey(),
+			Operation: r.GetOperation(),
+			Env:       r.GetEnv(),
+			App:       r.GetApp(),
 		})
 	}
 	return out
@@ -305,15 +299,11 @@ func toProtoAuditEvent(e domain.AuditEvent) *kmsv1.AuditEvent {
 // --- subscribers -----------------------------------------------------------
 
 func toProtoSubscriber(s domain.Subscriber) *kmsv1.Subscriber {
-	sels := make([]*kmsv1.WatchSelector, 0, len(s.Selectors))
-	for _, sel := range s.Selectors {
-		sels = append(sels, selectorToProto(sel))
-	}
 	return &kmsv1.Subscriber{
 		ClientName:          s.ClientName,
 		InstanceId:          s.InstanceID,
 		Identity:            s.Identity,
-		Selectors:           sels,
+		Namespaces:          namespacesToProto(s.Namespaces),
 		RemoteAddr:          s.RemoteAddr,
 		ConnectedAtUnixMs:   unixMS(s.ConnectedAt),
 		LastHeartbeatUnixMs: unixMS(s.LastHeartbeat),

@@ -37,7 +37,7 @@ func certOpSetup(t *testing.T) (*Service, *fakeStore, Principal, domain.Namespac
 	store.addNamespace(nsA, domain.AuthMethodToken, domain.AuthMethodMTLS)
 	store.addNamespace(nsB, domain.AuthMethodToken, domain.AuthMethodMTLS)
 	store.addPolicy(domain.Policy{Name: "cert", Subject: "issuer", Allow: []domain.PolicyRule{
-		{Operation: domain.OpAdminIdentityCert, Env: nsA.Env, App: nsA.App, KeyPattern: "*"},
+		{Operation: domain.OpAdminIdentityCert, Env: nsA.Env, App: nsA.App},
 	}})
 	return s, store, boundClientPrincipal("issuer", nsA), nsA, nsB
 }
@@ -105,7 +105,7 @@ func TestIssueCertificateTargetGuard(t *testing.T) {
 		withCA(t, s)
 		store.addNamespace(nsA, domain.AuthMethodToken, domain.AuthMethodMTLS)
 		store.addPolicy(domain.Policy{Name: "cert", Subject: "issuer", Allow: []domain.PolicyRule{
-			{Operation: domain.OpAdminIdentityCert, Env: "*", App: "*", KeyPattern: "*"},
+			{Operation: domain.OpAdminIdentityCert, Env: "*", App: "*"},
 		}})
 		issuer := boundClientPrincipal("issuer", nsA)
 		bindIdentity(store, "buddy", domain.IdentityKindClient, &nsA)
@@ -126,7 +126,7 @@ func TestIssueCertificateTargetGuard(t *testing.T) {
 		store.addNamespace(nsA, domain.AuthMethodToken, domain.AuthMethodMTLS)
 		store.addNamespace(nsB, domain.AuthMethodToken, domain.AuthMethodMTLS)
 		store.addPolicy(domain.Policy{Name: "cert", Subject: "issuer", Allow: []domain.PolicyRule{
-			{Operation: domain.OpAdminIdentityCert, Env: nsB.Env, App: nsB.App, KeyPattern: "*"},
+			{Operation: domain.OpAdminIdentityCert, Env: nsB.Env, App: nsB.App},
 		}})
 		issuer := boundClientPrincipal("issuer", nsA) // home is nsA
 		bindIdentity(store, "buddy", domain.IdentityKindClient, &nsA)
@@ -215,10 +215,9 @@ func TestReauthorizeWatchMTLSCertRevoked(t *testing.T) {
 		Method:   domain.AuthMethodMTLS,
 		Serial:   serial,
 	}
-	sel := domain.WatchSelector{NS: tns, KeyPattern: "*"}
 
 	// Baseline: a valid cert re-authorizes.
-	if _, err := s.ReauthorizeWatch(ctx, pr, sel); err != nil {
+	if err := s.ReauthorizeWatch(ctx, pr, tns); err != nil {
 		t.Fatalf("baseline reauth: %v", err)
 	}
 
@@ -226,7 +225,7 @@ func TestReauthorizeWatchMTLSCertRevoked(t *testing.T) {
 	if err := s.RevokeIdentityCertificate(ctx, adminPrincipal(), "svc", serial); err != nil {
 		t.Fatalf("RevokeIdentityCertificate: %v", err)
 	}
-	if _, err := s.ReauthorizeWatch(ctx, pr, sel); !errors.Is(err, domain.ErrUnauthenticated) {
+	if err := s.ReauthorizeWatch(ctx, pr, tns); !errors.Is(err, domain.ErrUnauthenticated) {
 		t.Fatalf("reauth after cert revoke err = %v, want ErrUnauthenticated", err)
 	}
 }
@@ -238,10 +237,10 @@ func TestReauthorizeWatchNamespaceTightenedToMTLS(t *testing.T) {
 	store.addNamespace(tns, domain.AuthMethodToken, domain.AuthMethodMTLS)
 	store.addIdentity("app", domain.IdentityKindClient, "kms_tok")
 	pr := clientPrincipalTok("app", "kms_tok") // token method
-	sel := domain.WatchSelector{NS: tns, KeyPattern: "*"}
+	pr.Identity.Namespace = &tns               // home-bound: implicit grant authorizes the namespace
 
-	// Baseline: the token method is admitted, so reauth succeeds.
-	if _, err := s.ReauthorizeWatch(ctx, pr, sel); err != nil {
+	// Baseline: token admitted and the home grant covers the namespace, so reauth succeeds.
+	if err := s.ReauthorizeWatch(ctx, pr, tns); err != nil {
 		t.Fatalf("baseline reauth: %v", err)
 	}
 
@@ -249,7 +248,7 @@ func TestReauthorizeWatchNamespaceTightenedToMTLS(t *testing.T) {
 	if _, err := s.UpdateNamespace(ctx, adminPrincipal(), tns, "", []domain.AuthMethod{domain.AuthMethodMTLS}); err != nil {
 		t.Fatalf("UpdateNamespace: %v", err)
 	}
-	if _, err := s.ReauthorizeWatch(ctx, pr, sel); !errors.Is(err, domain.ErrPermissionDenied) {
+	if err := s.ReauthorizeWatch(ctx, pr, tns); !errors.Is(err, domain.ErrPermissionDenied) {
 		t.Fatalf("reauth after tighten err = %v, want ErrPermissionDenied", err)
 	}
 }
@@ -268,8 +267,41 @@ func TestReauthorizeWatchAdminBypassesTightenedGate(t *testing.T) {
 		Method:   domain.AuthMethodToken,
 		Token:    "kms_admin",
 	}
-	sel := domain.WatchSelector{NS: tns, KeyPattern: "*"}
-	if _, err := s.ReauthorizeWatch(ctx, pr, sel); err != nil {
+	if err := s.ReauthorizeWatch(ctx, pr, tns); err != nil {
 		t.Fatalf("admin reauth on mtls-only ns: %v", err)
+	}
+}
+
+// TestReauthorizeWatchPolicyRevoked confirms mid-stream revocation of a client's
+// EXPLICIT namespace grant fails the next heartbeat re-authorization (closing the
+// stream), while a home-bound client's implicit grant survives the same change.
+func TestReauthorizeWatchPolicyRevoked(t *testing.T) {
+	ctx := context.Background()
+	store := newFakeStore()
+	s := newTestService(store)
+	store.addNamespace(tns, domain.AuthMethodToken)
+	store.addIdentity("app", domain.IdentityKindClient, "kms_tok")
+	store.addPolicy(domain.Policy{Name: "r", Subject: "app", Allow: []domain.PolicyRule{
+		{Operation: domain.OpParameterRead, Env: tns.Env, App: tns.App},
+	}})
+	pr := clientPrincipalTok("app", "kms_tok") // unbound: reaches tns only via the grant
+
+	// Baseline: the explicit grant admits the stream.
+	if err := s.ReauthorizeWatch(ctx, pr, tns); err != nil {
+		t.Fatalf("baseline reauth: %v", err)
+	}
+	// Revoke the grant; the next reauth must deny.
+	store.policies = nil
+	if err := s.ReauthorizeWatch(ctx, pr, tns); !errors.Is(err, domain.ErrPermissionDenied) {
+		t.Fatalf("reauth after revoke err = %v, want ErrPermissionDenied", err)
+	}
+
+	// A home-bound client keeps its implicit grant with no policies at all.
+	store.addIdentity("home", domain.IdentityKindClient, "home_tok")
+	homePr := clientPrincipalTok("home", "home_tok")
+	nsCopy := tns
+	homePr.Identity.Namespace = &nsCopy
+	if err := s.ReauthorizeWatch(ctx, homePr, tns); err != nil {
+		t.Fatalf("home-bound reauth after policy clear: %v", err)
 	}
 }

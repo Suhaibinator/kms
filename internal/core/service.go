@@ -372,7 +372,7 @@ func (s *Service) authorize(ctx context.Context, pr Principal, operation, resour
 	if err != nil {
 		return domain.Errorf(domain.ErrPermissionDenied, "authorization unavailable")
 	}
-	if !policy.Authorize(policies, pr.home(), operation, ref) {
+	if !policy.Authorize(policies, pr.home(), operation, ref.NS) {
 		s.auditRef(ctx, pr, "authz.denial", resourceType, ref, 0, "deny", map[string]string{"operation": operation})
 		return domain.Errorf(domain.ErrPermissionDenied, "access denied")
 	}
@@ -383,13 +383,14 @@ func (s *Service) authorize(ctx context.Context, pr Principal, operation, resour
 // enumeration (implicit home grant short-circuits for a home-namespace list,
 // else policy.MayListUnder), and returns a per-item predicate. Enumerating the
 // namespace requires listOp; each item is included only if the caller is
-// authorized for one of itemOps on it. Admins pass everything through.
+// authorized for one of itemOps on the namespace. Admins pass everything through.
 //
-// Separating the two levels is what closes the "list reveals what read denies"
-// gap: parameter listings return values inline, so they pass only
-// parameter:read as the item op; secret listings return metadata only, so they
-// pass secret:list and secret:read.
-func (s *Service) listFilter(ctx context.Context, pr Principal, resourceType, listOp string, ns domain.NamespaceRef, keyPrefix string, itemOps ...string) (func(domain.Ref) bool, error) {
+// Authorization is namespace-level, so the per-item predicate is constant across
+// a namespace; it is still applied per item to keep the "list reveals what read
+// denies" gap closed at the operation level: parameter listings return values
+// inline, so they pass only parameter:read as the item op; secret listings
+// return metadata only, so they pass secret:list and secret:read.
+func (s *Service) listFilter(ctx context.Context, pr Principal, resourceType, listOp string, ns domain.NamespaceRef, itemOps ...string) (func(domain.Ref) bool, error) {
 	if err := s.namespaceMethodGate(ctx, pr, ns, resourceType); err != nil {
 		return nil, err
 	}
@@ -402,17 +403,16 @@ func (s *Service) listFilter(ctx context.Context, pr Principal, resourceType, li
 	}
 	home := pr.home()
 	// A home-namespace list is covered by the implicit grant (read/list) with no
-	// explicit policy; otherwise the subject needs an allow rule intersecting the
-	// prefix subtree.
+	// explicit policy; otherwise the subject needs an allow rule on the namespace.
 	homeGrant := home != nil && *home == ns && policy.IsImplicitHomeOp(listOp)
-	if !homeGrant && !policy.MayListUnder(policies, listOp, ns, keyPrefix) {
-		s.auditRef(ctx, pr, "authz.denial", resourceType, domain.Ref{NS: ns, Key: keyPrefix}, 0, "deny",
+	if !homeGrant && !policy.MayListUnder(policies, listOp, ns) {
+		s.auditRef(ctx, pr, "authz.denial", resourceType, domain.Ref{NS: ns}, 0, "deny",
 			map[string]string{"operation": listOp})
 		return nil, domain.Errorf(domain.ErrPermissionDenied, "access denied")
 	}
 	return func(ref domain.Ref) bool {
 		for _, op := range itemOps {
-			if policy.Authorize(policies, home, op, ref) {
+			if policy.Authorize(policies, home, op, ref.NS) {
 				return true
 			}
 		}
@@ -422,16 +422,13 @@ func (s *Service) listFilter(ctx context.Context, pr Principal, resourceType, li
 
 // --- watch plumbing --------------------------------------------------------
 
-// AuthorizeSubscribe checks that pr may register a watch over every selector:
-// the namespace auth-method gate plus read authorization scoped to the
-// selector's key pattern ("" and "*" mean the whole namespace, which the
-// implicit home grant covers). It authorizes against the selector's pattern
-// rather than the whole namespace so a least-privilege client granted read on
-// "billing/*" can subscribe to "billing/*"; this is only a "could this client
-// read something under this selector" pre-check — WatchAccessChecker still
-// filters every delivered event by its exact key. It is the subscribe-time
-// authorization the watch hub cannot perform itself.
-func (s *Service) AuthorizeSubscribe(ctx context.Context, pr Principal, selectors []domain.WatchSelector) error {
+// AuthorizeSubscribe checks that pr may register a watch over every requested
+// namespace: the namespace auth-method gate plus namespace-level read
+// authorization (the implicit home grant covers the caller's own namespace).
+// Authorization is all-or-nothing per namespace and checked once here; the watch
+// hub performs no per-event filtering, so an admitted subscriber receives every
+// change in each authorized namespace.
+func (s *Service) AuthorizeSubscribe(ctx context.Context, pr Principal, namespaces []domain.NamespaceRef) error {
 	if pr.IsAdmin() {
 		return nil
 	}
@@ -440,13 +437,12 @@ func (s *Service) AuthorizeSubscribe(ctx context.Context, pr Principal, selector
 		return domain.Errorf(domain.ErrPermissionDenied, "authorization unavailable")
 	}
 	home := pr.home()
-	for _, sel := range selectors {
-		if err := s.namespaceMethodGate(ctx, pr, sel.NS, domain.ResourceParameter); err != nil {
+	for _, ns := range namespaces {
+		if err := s.namespaceMethodGate(ctx, pr, ns, domain.ResourceParameter); err != nil {
 			return err
 		}
-		ref := domain.Ref{NS: sel.NS, Key: normalizeSelectorKey(sel.KeyPattern)}
-		if !policy.Authorize(policies, home, domain.OpParameterRead, ref) {
-			s.auditRef(ctx, pr, "authz.denial", domain.ResourceParameter, ref, 0, "deny",
+		if !policy.Authorize(policies, home, domain.OpParameterRead, ns) {
+			s.auditRef(ctx, pr, "authz.denial", domain.ResourceParameter, domain.Ref{NS: ns}, 0, "deny",
 				map[string]string{"operation": "subscribe"})
 			return domain.Errorf(domain.ErrPermissionDenied, "access denied")
 		}
@@ -454,64 +450,39 @@ func (s *Service) AuthorizeSubscribe(ctx context.Context, pr Principal, selector
 	return nil
 }
 
-// normalizeSelectorKey maps a watch selector's key pattern to the key used for
-// subscribe-time authorization: an empty pattern (whole namespace) becomes "*".
-func normalizeSelectorKey(pattern string) string {
-	if pattern == "" {
-		return "*"
-	}
-	return pattern
-}
-
-// WatchAccessChecker returns a predicate the watch hub uses to filter events and
-// snapshot contents per subscriber: parameter events require parameter:read,
-// secret events require secret:read (the implicit home grant covers both in the
-// caller's own namespace). Admins see everything.
+// ReauthorizeWatch re-validates a live stream's credential and re-runs the full
+// subscribe-time authorization for every subscribed namespace. The watch handler
+// calls it on every heartbeat tick and closes the stream on error, so revocation
+// takes effect within one heartbeat interval rather than waiting for a reconnect.
 //
-// The predicate captures a point-in-time policy snapshot. Long-lived streams
-// must refresh it periodically via ReauthorizeWatch so policy changes and
-// identity revocation take effect without waiting for a reconnect.
-func (s *Service) WatchAccessChecker(ctx context.Context, pr Principal) (func(resourceType string, ref domain.Ref) bool, error) {
-	if pr.IsAdmin() {
-		return func(string, domain.Ref) bool { return true }, nil
-	}
-	policies, err := s.store.PoliciesForSubject(ctx, pr.Identity.Name)
-	if err != nil {
-		return nil, domain.Errorf(domain.ErrPermissionDenied, "authorization unavailable")
-	}
-	home := pr.home()
-	return func(resourceType string, ref domain.Ref) bool {
-		op := domain.OpParameterRead
-		if resourceType == domain.ResourceSecret {
-			op = domain.OpSecretRead
-		}
-		return policy.Authorize(policies, home, op, ref)
-	}, nil
-}
-
-// ReauthorizeWatch re-validates a live stream's credential and returns a fresh
-// access predicate reflecting current policies. The watch handler calls it on
-// every heartbeat tick and closes the stream on error. For token streams it
-// re-authenticates the bearer token itself, so rotating or revoking a token
-// tears down any stream still using the old one within one heartbeat interval.
+// Credential re-check: for token streams it re-authenticates the bearer token
+// itself, so rotating or revoking a token drops the stream (ErrUnauthenticated).
 // For mTLS streams it re-checks that the identity is still enabled AND that the
 // presenting certificate (by serial) is still valid, so revoking a single cert
-// tears the stream down.
+// drops the stream. Any transport that builds an mTLS Principal MUST populate
+// Serial (via CertSerial); when it is empty the per-cert recheck is skipped and
+// only the identity-disable check protects the stream.
 //
-// The stream's active selectors are passed so the per-namespace auth-method gate
-// is re-evaluated: tightening a namespace to a method this caller no longer
-// satisfies (e.g. mtls-only for a token stream) drops the stream on the next
-// heartbeat. Callers that pass no selectors get credential re-validation only.
-func (s *Service) ReauthorizeWatch(ctx context.Context, pr Principal, selectors ...domain.WatchSelector) (func(resourceType string, ref domain.Ref) bool, error) {
+// Authorization re-check: for each subscribed namespace it re-runs the same
+// per-namespace method gate AND namespace-level policy check (home grant folded
+// in) that AuthorizeSubscribe applies at subscribe time. So tightening a
+// namespace's allowed methods, or revoking a client's explicit grant to a
+// namespace, drops the stream on the next heartbeat (ErrPermissionDenied), while
+// a home-namespace subscriber keeps its implicit grant across policy changes.
+// This is namespace-level and cheap (one policy read plus a check per subscribed
+// namespace per heartbeat), not the per-event predicate that was removed. Admins
+// bypass namespace authorization (identity re-validated above). Callers that pass
+// no namespaces get credential re-validation only.
+func (s *Service) ReauthorizeWatch(ctx context.Context, pr Principal, namespaces ...domain.NamespaceRef) error {
 	if pr.Method == domain.AuthMethodToken {
 		id, err := s.Authenticate(ctx, pr.Token, pr.RemoteAddr, pr.UserAgent)
 		if err != nil || id.Name != pr.Identity.Name || id.Kind != pr.Identity.Kind {
-			return nil, domain.Errorf(domain.ErrUnauthenticated, "invalid credentials")
+			return domain.Errorf(domain.ErrUnauthenticated, "invalid credentials")
 		}
 	} else {
 		id, err := s.store.GetIdentityByName(ctx, pr.Identity.Name)
 		if err != nil || id.Disabled || id.Kind != pr.Identity.Kind {
-			return nil, domain.Errorf(domain.ErrUnauthenticated, "invalid credentials")
+			return domain.Errorf(domain.ErrUnauthenticated, "invalid credentials")
 		}
 		// Re-validate the specific certificate: a single revoked/expired serial
 		// (identity still enabled) must still tear the stream down. Any transport
@@ -523,19 +494,28 @@ func (s *Service) ReauthorizeWatch(ctx context.Context, pr Principal, selectors 
 			if cerr != nil || rec.IdentityName != pr.Identity.Name || rec.IdentityDisabled ||
 				!rec.Cert.RevokedAt.IsZero() ||
 				(!rec.Cert.NotAfter.IsZero() && s.now().After(rec.Cert.NotAfter)) {
-				return nil, domain.Errorf(domain.ErrUnauthenticated, "invalid credentials")
+				return domain.Errorf(domain.ErrUnauthenticated, "invalid credentials")
 			}
 		}
 	}
-	// Re-run the per-namespace auth-method gate for each active selector so a
-	// namespace whose allowed methods were tightened drops a now-inadmissible
-	// stream (client identities only; admins bypass the gate).
-	for _, sel := range selectors {
-		if err := s.namespaceMethodGate(ctx, pr, sel.NS, domain.ResourceParameter); err != nil {
-			return nil, err
+	// Re-run the FULL per-namespace authorization (method gate + policy) for each
+	// subscribed namespace, mirroring AuthorizeSubscribe, so a live stream is torn
+	// down promptly when a namespace's allowed methods are tightened OR the
+	// caller's grant for that namespace is revoked. Client identities only; admins
+	// bypass namespace authorization (their identity was re-validated above).
+	if !pr.IsAdmin() {
+		policies, perr := s.store.PoliciesForSubject(ctx, pr.Identity.Name)
+		if perr != nil {
+			return domain.Errorf(domain.ErrPermissionDenied, "authorization unavailable")
+		}
+		home := pr.home()
+		for _, ns := range namespaces {
+			if err := s.namespaceMethodGate(ctx, pr, ns, domain.ResourceParameter); err != nil {
+				return err
+			}
 		}
 	}
-	return s.WatchAccessChecker(ctx, pr)
+	return nil
 }
 
 // --- audit -----------------------------------------------------------------

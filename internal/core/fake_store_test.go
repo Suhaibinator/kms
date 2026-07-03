@@ -719,7 +719,7 @@ func (f *fakeStore) ListChangesSince(context.Context, uint64, int) ([]domain.Cha
 	return nil, nil
 }
 func (f *fakeStore) PruneChangeLog(context.Context, time.Duration, int) (int, error) { return 0, nil }
-func (f *fakeStore) SnapshotParameters(context.Context, []domain.WatchSelector) ([]domain.Parameter, uint64, error) {
+func (f *fakeStore) SnapshotParameters(context.Context, []domain.NamespaceRef) ([]domain.Parameter, uint64, error) {
 	return nil, f.revision, nil
 }
 

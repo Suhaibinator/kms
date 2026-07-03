@@ -364,7 +364,7 @@ func TestPolicies(t *testing.T) {
 	policy := map[string]any{
 		"policy": map[string]any{
 			"name": "reader", "subject": "client",
-			"allow": []map[string]any{{"operation": "secret:read", "env": "prod", "app": "gradethis", "key": "billing/*"}},
+			"allow": []map[string]any{{"operation": "secret:read", "env": "prod", "app": "gradethis"}},
 		},
 	}
 	w := e.admin(http.MethodPost, "/api/v1/policies", policy)
@@ -374,8 +374,11 @@ func TestPolicies(t *testing.T) {
 		t.Fatalf("policy = %v", created)
 	}
 	rule := created["allow"].([]any)[0].(map[string]any)
-	if rule["operation"] != "secret:read" || rule["env"] != "prod" || rule["app"] != "gradethis" || rule["key"] != "billing/*" {
+	if rule["operation"] != "secret:read" || rule["env"] != "prod" || rule["app"] != "gradethis" {
 		t.Fatalf("rule = %v", rule)
+	}
+	if _, ok := rule["key"]; ok {
+		t.Fatalf("policy rule unexpectedly carries a key field: %v", rule)
 	}
 
 	w = e.admin(http.MethodGet, "/api/v1/policies", nil)

@@ -125,14 +125,6 @@ func (r Ref) String() string {
 	return b.String()
 }
 
-// WatchSelector selects the parameters a subscriber is interested in within a
-// single namespace. An empty (or "*") KeyPattern selects every key in the
-// namespace; "prefix/*" selects a subtree; anything else is an exact key.
-type WatchSelector struct {
-	NS         NamespaceRef
-	KeyPattern string
-}
-
 // Parameter is a non-sensitive configuration value at its resolved version.
 type Parameter struct {
 	Ref         Ref
@@ -215,14 +207,14 @@ type Namespace struct {
 	SecretCount    uint64
 }
 
-// PolicyRule allows or denies one operation on parameters/secrets whose
-// namespace matches Env/App (exact or "*") and whose key matches KeyPattern
-// (exact, "*", or "prefix/*"). Operation may use the wildcard forms above.
+// PolicyRule allows or denies one operation on a whole namespace whose Env/App
+// match (exact or "*"). Authorization is per-namespace: there is no key field,
+// so a grant covers every key in the matched namespace. Operation may use the
+// wildcard forms above.
 type PolicyRule struct {
-	Operation  string `json:"operation"`
-	Env        string `json:"env"`
-	App        string `json:"app"`
-	KeyPattern string `json:"key"`
+	Operation string `json:"operation"`
+	Env       string `json:"env"`
+	App       string `json:"app"`
 }
 
 // Policy binds allow/deny rules to a subject (identity name, or "*").
@@ -286,7 +278,8 @@ type AuditEvent struct {
 }
 
 // AuditFilter narrows audit queries. Env/App match exactly (empty = any);
-// KeyPrefix matches the resource key as a path prefix.
+// KeyPrefix is an opaque browsing filter on the resource key (LIKE 'prefix%'),
+// never a security boundary.
 type AuditFilter struct {
 	Env           string
 	App           string
@@ -311,12 +304,14 @@ type ChangeLogEntry struct {
 	CreatedAt    time.Time
 }
 
-// Subscriber describes one live watch stream in the registry.
+// Subscriber describes one live watch stream in the registry. Namespaces are
+// the (env, app) namespaces the stream is subscribed to; a subscriber receives
+// every change in each of them.
 type Subscriber struct {
 	ClientName        string
 	InstanceID        string
 	Identity          string
-	Selectors         []WatchSelector
+	Namespaces        []NamespaceRef
 	RemoteAddr        string
 	ConnectedAt       time.Time
 	LastHeartbeat     time.Time

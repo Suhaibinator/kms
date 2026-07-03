@@ -243,15 +243,17 @@ func likeEscape(s string) string {
 	return strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`).Replace(s)
 }
 
-// applyKeyPrefix restricts q to rows whose key column is prefix or lies under
-// it ("billing" matches "billing" and "billing/stripe" but never "billingx").
-// An empty prefix matches everything. Keys are always namespace-scoped by the
+// applyKeyPrefix restricts q to rows whose key column begins with prefix,
+// treated as an opaque byte prefix ("billing" matches "billing", "billing/x",
+// and "billingx" alike). It is a non-authz browsing convenience only — never a
+// security boundary; keys are opaque and the server never interprets '/'. An
+// empty prefix matches everything. Keys are always namespace-scoped by the
 // caller, so this only narrows within a single namespace.
 func applyKeyPrefix(q *gorm.DB, column, prefix string) *gorm.DB {
 	if prefix == "" {
 		return q
 	}
-	return q.Where(column+" = ? OR "+column+` LIKE ? ESCAPE '\'`, prefix, likeEscape(prefix)+"/%")
+	return q.Where(column+` LIKE ? ESCAPE '\'`, likeEscape(prefix)+"%")
 }
 
 func clampLimit(limit int) int {

@@ -28,16 +28,18 @@ func TestListSecretsFiltersByPolicy(t *testing.T) {
 		t.Fatalf("admin saw %d secrets, want 3", len(all))
 	}
 
+	// Authorization is namespace-level: a client granted list+read on the
+	// namespace sees every key in it.
 	store.addPolicy(domain.Policy{Name: "r", Subject: "app", Allow: []domain.PolicyRule{
-		{Operation: domain.OpSecretList, Env: "prod", App: "app", KeyPattern: "billing/*"},
-		{Operation: domain.OpSecretRead, Env: "prod", App: "app", KeyPattern: "billing/*"},
+		{Operation: domain.OpSecretList, Env: "prod", App: "app"},
+		{Operation: domain.OpSecretRead, Env: "prod", App: "app"},
 	}})
 	got, _, err := s.ListSecrets(ctx, clientPrincipal("app"), tns, "", storage.ListPage{})
 	if err != nil {
 		t.Fatalf("client ListSecrets: %v", err)
 	}
-	if len(got) != 1 || got[0].Ref.Key != "billing/c" {
-		t.Fatalf("client saw %v, want [billing/c]", got)
+	if len(got) != 3 {
+		t.Fatalf("client saw %d secrets, want 3 (whole namespace)", len(got))
 	}
 }
 
@@ -103,7 +105,7 @@ func TestPolicyAndIdentityAdminGating(t *testing.T) {
 	client := clientPrincipal("app")
 
 	valid := domain.Policy{Name: "p", Subject: "app",
-		Allow: []domain.PolicyRule{{Operation: domain.OpSecretRead, Env: "prod", App: "app", KeyPattern: "*"}}}
+		Allow: []domain.PolicyRule{{Operation: domain.OpSecretRead, Env: "prod", App: "app"}}}
 	if _, err := s.CreatePolicy(ctx, adminPrincipal(), valid); err != nil {
 		t.Fatalf("seed policy: %v", err)
 	}
@@ -182,7 +184,7 @@ func TestListNamespacesScopedToAccess(t *testing.T) {
 
 	// A client scoped to prod/app by policy sees only it.
 	store.addPolicy(domain.Policy{Name: "r", Subject: "app", Allow: []domain.PolicyRule{
-		{Operation: domain.OpSecretRead, Env: "prod", App: "app", KeyPattern: "*"},
+		{Operation: domain.OpSecretRead, Env: "prod", App: "app"},
 	}})
 	scoped, _, err := s.ListNamespaces(ctx, clientPrincipal("app"), storage.ListPage{})
 	if err != nil {
@@ -204,103 +206,68 @@ func TestListNamespacesScopedToAccess(t *testing.T) {
 	}
 }
 
-func TestWatchAccessChecker(t *testing.T) {
-	ctx := context.Background()
-	store := newFakeStore()
-	s := newTestService(store)
-
-	adminCheck, err := s.WatchAccessChecker(ctx, adminPrincipal())
-	if err != nil {
-		t.Fatalf("admin WatchAccessChecker: %v", err)
-	}
-	if !adminCheck(domain.ResourceSecret, mkref("any", "app", "k")) {
-		t.Fatal("admin predicate denied access")
-	}
-
-	store.addPolicy(domain.Policy{Name: "r", Subject: "app", Allow: []domain.PolicyRule{
-		{Operation: domain.OpSecretRead, Env: "prod", App: "app", KeyPattern: "*"},
-	}})
-	check, err := s.WatchAccessChecker(ctx, clientPrincipal("app"))
-	if err != nil {
-		t.Fatalf("client WatchAccessChecker: %v", err)
-	}
-	if !check(domain.ResourceSecret, mkref("prod", "app", "x")) {
-		t.Error("secret read under prod/app should be visible")
-	}
-	if check(domain.ResourceSecret, mkref("staging", "app", "x")) {
-		t.Error("secret outside prod/app must not be visible")
-	}
-	if check(domain.ResourceParameter, mkref("prod", "app", "x")) {
-		t.Error("parameter read was not granted, must not be visible")
-	}
-}
-
 func TestAuthorizeSubscribe(t *testing.T) {
 	ctx := context.Background()
 	store := newFakeStore()
 	store.addNamespace(tns, domain.AuthMethodMTLS) // mTLS-only
 	s := newTestService(store)
 
-	sel := []domain.WatchSelector{{NS: tns, KeyPattern: "*"}}
+	nss := []domain.NamespaceRef{tns}
 
 	// A token client bound to the (home) namespace is rejected at subscribe by
 	// the method gate, before authorization.
 	home := boundClientPrincipal("app", tns) // token method
-	if err := s.AuthorizeSubscribe(ctx, home, sel); !errors.Is(err, domain.ErrPermissionDenied) {
+	if err := s.AuthorizeSubscribe(ctx, home, nss); !errors.Is(err, domain.ErrPermissionDenied) {
 		t.Fatalf("mtls-only subscribe via token err = %v, want ErrPermissionDenied", err)
 	}
 
-	// After allowing token on the namespace, the home grant covers the selector.
+	// After allowing token on the namespace, the home grant covers it.
 	if _, err := s.UpdateNamespace(ctx, adminPrincipal(), tns, "", []domain.AuthMethod{domain.AuthMethodMTLS, domain.AuthMethodToken}); err != nil {
 		t.Fatalf("UpdateNamespace: %v", err)
 	}
-	if err := s.AuthorizeSubscribe(ctx, home, sel); err != nil {
+	if err := s.AuthorizeSubscribe(ctx, home, nss); err != nil {
 		t.Fatalf("home subscribe after token enabled: %v", err)
 	}
 
 	// An unbound token client without a read policy is denied by authorization.
-	if err := s.AuthorizeSubscribe(ctx, clientPrincipal("stranger"), sel); !errors.Is(err, domain.ErrPermissionDenied) {
+	if err := s.AuthorizeSubscribe(ctx, clientPrincipal("stranger"), nss); !errors.Is(err, domain.ErrPermissionDenied) {
 		t.Fatalf("unbound subscribe err = %v, want ErrPermissionDenied", err)
 	}
 
 	// Admin may subscribe to anything.
-	if err := s.AuthorizeSubscribe(ctx, adminPrincipal(), sel); err != nil {
+	if err := s.AuthorizeSubscribe(ctx, adminPrincipal(), nss); err != nil {
 		t.Fatalf("admin subscribe: %v", err)
 	}
 }
 
-// TestAuthorizeSubscribeScopedGrant pins Fix A: subscribe authorization is scoped
-// to the selector's key pattern, not the whole namespace. A least-privilege
-// client granted parameter:read on "billing/*" must be able to subscribe to that
-// subtree (this fails under the old empty-key Ref), while broader selectors stay
-// denied. Per-event delivery is still filtered by exact key (WatchAccessChecker).
-func TestAuthorizeSubscribeScopedGrant(t *testing.T) {
+// TestAuthorizeSubscribeNamespaceLevel pins the namespace-level model:
+// authorization is all-or-nothing per namespace. A client with an explicit
+// allow rule on a namespace may subscribe to the WHOLE namespace (there is no
+// finer key scoping), while a client not authorized for a namespace is denied
+// subscribing to it.
+func TestAuthorizeSubscribeNamespaceLevel(t *testing.T) {
 	ctx := context.Background()
 	store := newFakeStore()
+	other := domain.NamespaceRef{Env: "prod", App: "other"}
 	store.addNamespace(tns, domain.AuthMethodToken, domain.AuthMethodMTLS)
-	store.addPolicy(domain.Policy{Name: "billing", Subject: "app", Allow: []domain.PolicyRule{
-		{Operation: domain.OpParameterRead, Env: tns.Env, App: tns.App, KeyPattern: "billing/*"},
+	store.addNamespace(other, domain.AuthMethodToken, domain.AuthMethodMTLS)
+	store.addPolicy(domain.Policy{Name: "reader", Subject: "app", Allow: []domain.PolicyRule{
+		{Operation: domain.OpParameterRead, Env: tns.Env, App: tns.App},
 	}})
 	s := newTestService(store)
 	pr := clientPrincipal("app") // token method, unbound (no implicit grant)
 
-	// Allowed: the selector matching the granted subtree. This is the assertion
-	// that goes RED without Fix A (old code authorized Ref{NS, Key:""}, which
-	// keyutil.MatchKey("billing/*","") rejects).
-	if err := s.AuthorizeSubscribe(ctx, pr, []domain.WatchSelector{{NS: tns, KeyPattern: "billing/*"}}); err != nil {
-		t.Fatalf("scoped subscribe to billing/*: err = %v, want allowed", err)
+	// Authorized for the whole granted namespace.
+	if err := s.AuthorizeSubscribe(ctx, pr, []domain.NamespaceRef{tns}); err != nil {
+		t.Fatalf("subscribe to granted namespace: err = %v, want allowed", err)
 	}
-	// Allowed: an exact key under the granted subtree.
-	if err := s.AuthorizeSubscribe(ctx, pr, []domain.WatchSelector{{NS: tns, KeyPattern: "billing/x"}}); err != nil {
-		t.Fatalf("scoped subscribe to billing/x: err = %v, want allowed", err)
+	// Denied for a namespace the client has no grant on.
+	if err := s.AuthorizeSubscribe(ctx, pr, []domain.NamespaceRef{other}); !errors.Is(err, domain.ErrPermissionDenied) {
+		t.Fatalf("subscribe to ungranted namespace: err = %v, want ErrPermissionDenied", err)
 	}
-	// Denied: the whole namespace (broader than the grant).
-	if err := s.AuthorizeSubscribe(ctx, pr, []domain.WatchSelector{{NS: tns, KeyPattern: "*"}}); !errors.Is(err, domain.ErrPermissionDenied) {
-		t.Fatalf("subscribe to *: err = %v, want ErrPermissionDenied", err)
-	}
-	// Denied: a sibling subtree the grant does not cover.
-	if err := s.AuthorizeSubscribe(ctx, pr, []domain.WatchSelector{{NS: tns, KeyPattern: "other/*"}}); !errors.Is(err, domain.ErrPermissionDenied) {
-		t.Fatalf("subscribe to other/*: err = %v, want ErrPermissionDenied", err)
+	// A mix denies as soon as one namespace is unauthorized.
+	if err := s.AuthorizeSubscribe(ctx, pr, []domain.NamespaceRef{tns, other}); !errors.Is(err, domain.ErrPermissionDenied) {
+		t.Fatalf("subscribe to mixed namespaces: err = %v, want ErrPermissionDenied", err)
 	}
 }
 
@@ -311,7 +278,7 @@ func TestReauthorizeWatchRevocation(t *testing.T) {
 	store.addIdentity("app", domain.IdentityKindClient, "kms_tok")
 	pr := clientPrincipalTok("app", "kms_tok")
 
-	if _, err := s.ReauthorizeWatch(ctx, pr); err != nil {
+	if err := s.ReauthorizeWatch(ctx, pr); err != nil {
 		t.Fatalf("ReauthorizeWatch(active): %v", err)
 	}
 
@@ -319,7 +286,7 @@ func TestReauthorizeWatchRevocation(t *testing.T) {
 	if err := store.UpdateIdentityTokenHash(ctx, "app", crypto.TokenHash("kms_rotated")); err != nil {
 		t.Fatalf("rotate: %v", err)
 	}
-	if _, err := s.ReauthorizeWatch(ctx, pr); !errors.Is(err, domain.ErrUnauthenticated) {
+	if err := s.ReauthorizeWatch(ctx, pr); !errors.Is(err, domain.ErrUnauthenticated) {
 		t.Fatalf("ReauthorizeWatch(rotated token) err = %v, want ErrUnauthenticated", err)
 	}
 
@@ -329,14 +296,14 @@ func TestReauthorizeWatchRevocation(t *testing.T) {
 	if err := store.SetIdentityDisabled(ctx, "app3", true); err != nil {
 		t.Fatalf("disable: %v", err)
 	}
-	if _, err := s.ReauthorizeWatch(ctx, pr3); !errors.Is(err, domain.ErrUnauthenticated) {
+	if err := s.ReauthorizeWatch(ctx, pr3); !errors.Is(err, domain.ErrUnauthenticated) {
 		t.Fatalf("ReauthorizeWatch(disabled) err = %v, want ErrUnauthenticated", err)
 	}
 
 	// Kind mismatch rejected.
 	store.addIdentity("app2", domain.IdentityKindClient, "kms_tok2")
 	mismatch := Principal{Identity: domain.Identity{Name: "app2", Kind: domain.IdentityKindAdmin}, Method: domain.AuthMethodToken, Token: "kms_tok2"}
-	if _, err := s.ReauthorizeWatch(ctx, mismatch); !errors.Is(err, domain.ErrUnauthenticated) {
+	if err := s.ReauthorizeWatch(ctx, mismatch); !errors.Is(err, domain.ErrUnauthenticated) {
 		t.Fatalf("ReauthorizeWatch(kind mismatch) err = %v, want ErrUnauthenticated", err)
 	}
 }
@@ -349,14 +316,14 @@ func TestReauthorizeWatchMTLSDisabled(t *testing.T) {
 	pr := Principal{Identity: domain.Identity{Name: "svc", Kind: domain.IdentityKindClient}, Method: domain.AuthMethodMTLS}
 
 	// An enabled mTLS identity re-authorizes.
-	if _, err := s.ReauthorizeWatch(ctx, pr); err != nil {
+	if err := s.ReauthorizeWatch(ctx, pr); err != nil {
 		t.Fatalf("ReauthorizeWatch(mtls active): %v", err)
 	}
 	// Disabling it tears the stream down on the next tick.
 	if err := store.SetIdentityDisabled(ctx, "svc", true); err != nil {
 		t.Fatalf("disable: %v", err)
 	}
-	if _, err := s.ReauthorizeWatch(ctx, pr); !errors.Is(err, domain.ErrUnauthenticated) {
+	if err := s.ReauthorizeWatch(ctx, pr); !errors.Is(err, domain.ErrUnauthenticated) {
 		t.Fatalf("ReauthorizeWatch(mtls disabled) err = %v, want ErrUnauthenticated", err)
 	}
 }

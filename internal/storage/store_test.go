@@ -348,12 +348,17 @@ func TestListParametersNamespaceScoped(t *testing.T) {
 	mustErrIs(t, err, domain.ErrNotFound, "list missing namespace")
 }
 
+// TestListParametersPrefixEscaping verifies the list browsing filter is a plain
+// opaque byte prefix (LIKE 'prefix%') that still escapes LIKE metacharacters, so
+// an underscore in the prefix matches only a literal underscore, never a wildcard
+// character. It is a non-authz browsing convenience: "a_b" matches "a_b",
+// "a_b/child", and "a_bc" alike (opaque prefix, not segment-aware), but never
+// "aXb" (the '_' is escaped).
 func TestListParametersPrefixEscaping(t *testing.T) {
 	st := newStore(t)
 	ctx := context.Background()
 	ns := nsRef("prod", "app")
 	seedNS(t, st, "prod", "app")
-	// Underscore is a valid key char; prefix "a_b" must not match "aXb".
 	for _, k := range []string{"a_b", "a_b/child", "aXb", "aXb/child", "a_bc"} {
 		if _, _, err := st.PutParameter(ctx, domain.Ref{NS: ns, Key: k}, "v", "", "", "u"); err != nil {
 			t.Fatal(err)
@@ -367,14 +372,13 @@ func TestListParametersPrefixEscaping(t *testing.T) {
 	for _, p := range list {
 		got[p.Ref.Key] = true
 	}
-	if !got["a_b"] || !got["a_b/child"] {
-		t.Fatalf("prefix a_b should include itself and children: %v", got)
+	// Opaque prefix: itself, children, and the "a_bc" sibling all begin with "a_b".
+	if !got["a_b"] || !got["a_b/child"] || !got["a_bc"] {
+		t.Fatalf("opaque prefix a_b should include a_b, a_b/child, a_bc: %v", got)
 	}
+	// The escaped underscore must not act as a LIKE wildcard.
 	if got["aXb"] || got["aXb/child"] {
 		t.Fatalf("prefix a_b must not match aXb via LIKE wildcard: %v", got)
-	}
-	if got["a_bc"] {
-		t.Fatalf("prefix a_b must not match sibling a_bc: %v", got)
 	}
 }
 
@@ -1369,21 +1373,21 @@ func TestPolicies(t *testing.T) {
 	p := domain.Policy{
 		Name:    "p1",
 		Subject: "svc-1",
-		Allow:   []domain.PolicyRule{{Operation: domain.OpSecretRead, Env: "prod", App: "gradethis", KeyPattern: "billing/*"}},
-		Deny:    []domain.PolicyRule{{Operation: domain.OpSecretWrite, Env: "prod", App: "gradethis", KeyPattern: "billing/stripe"}},
+		Allow:   []domain.PolicyRule{{Operation: domain.OpSecretRead, Env: "prod", App: "gradethis"}},
+		Deny:    []domain.PolicyRule{{Operation: domain.OpSecretWrite, Env: "prod", App: "gradethis"}},
 	}
 	created, err := st.CreatePolicy(ctx, p)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(created.Allow) != 1 || created.Allow[0].KeyPattern != "billing/*" || created.Allow[0].Env != "prod" {
+	if len(created.Allow) != 1 || created.Allow[0].App != "gradethis" || created.Allow[0].Env != "prod" {
 		t.Fatalf("created = %+v", created)
 	}
 	_, err = st.CreatePolicy(ctx, p)
 	mustErrIs(t, err, domain.ErrAlreadyExists, "dup policy")
 
 	p.Deny = nil
-	p.Allow = []domain.PolicyRule{{Operation: "*", Env: "*", App: "*", KeyPattern: "*"}}
+	p.Allow = []domain.PolicyRule{{Operation: "*", Env: "*", App: "*"}}
 	updated, err := st.UpdatePolicy(ctx, p)
 	if err != nil {
 		t.Fatal(err)
@@ -1392,7 +1396,7 @@ func TestPolicies(t *testing.T) {
 		t.Fatalf("updated = %+v", updated)
 	}
 
-	if _, err := st.CreatePolicy(ctx, domain.Policy{Name: "wild", Subject: "*", Allow: []domain.PolicyRule{{Operation: domain.OpParameterRead, Env: "*", App: "*", KeyPattern: "*"}}}); err != nil {
+	if _, err := st.CreatePolicy(ctx, domain.Policy{Name: "wild", Subject: "*", Allow: []domain.PolicyRule{{Operation: domain.OpParameterRead, Env: "*", App: "*"}}}); err != nil {
 		t.Fatal(err)
 	}
 	forSubj, err := st.PoliciesForSubject(ctx, "svc-1")
@@ -1632,10 +1636,6 @@ func TestPruneChangeLogRetentionMath(t *testing.T) {
 	})
 }
 
-func selNS(env, app, pattern string) domain.WatchSelector {
-	return domain.WatchSelector{NS: nsRef(env, app), KeyPattern: pattern}
-}
-
 func TestSnapshotParameters(t *testing.T) {
 	st := newStore(t)
 	ctx := context.Background()
@@ -1654,8 +1654,8 @@ func TestSnapshotParameters(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// all keys in a namespace ("*").
-	params, rev, err := st.SnapshotParameters(ctx, []domain.WatchSelector{selNS("prod", "svc", "*")})
+	// A whole namespace: every current parameter in it.
+	params, rev, err := st.SnapshotParameters(ctx, []domain.NamespaceRef{nsRef("prod", "svc")})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1663,7 +1663,7 @@ func TestSnapshotParameters(t *testing.T) {
 		t.Fatal("snapshot revision should be non-zero")
 	}
 	if len(params) != 2 {
-		t.Fatalf("prod/svc * returned %d, want 2", len(params))
+		t.Fatalf("prod/svc returned %d, want 2", len(params))
 	}
 	byKey := map[string]domain.Parameter{}
 	for _, p := range params {
@@ -1673,14 +1673,14 @@ func TestSnapshotParameters(t *testing.T) {
 		t.Fatalf("prod/svc a snapshot = %+v", byKey["a"])
 	}
 
-	// exact key.
-	exact, _, _ := st.SnapshotParameters(ctx, []domain.WatchSelector{selNS("stage", "svc", "c")})
-	if len(exact) != 1 || exact[0].Ref.Key != "c" || exact[0].Ref.NS.Env != "stage" {
-		t.Fatalf("exact = %+v", exact)
+	// A single other namespace.
+	other, _, _ := st.SnapshotParameters(ctx, []domain.NamespaceRef{nsRef("stage", "svc")})
+	if len(other) != 1 || other[0].Ref.Key != "c" || other[0].Ref.NS.Env != "stage" {
+		t.Fatalf("stage/svc = %+v", other)
 	}
 
-	// multiple namespaces in one snapshot.
-	both, _, _ := st.SnapshotParameters(ctx, []domain.WatchSelector{selNS("prod", "svc", "*"), selNS("stage", "svc", "*")})
+	// Multiple namespaces in one snapshot.
+	both, _, _ := st.SnapshotParameters(ctx, []domain.NamespaceRef{nsRef("prod", "svc"), nsRef("stage", "svc")})
 	if len(both) != 3 {
 		t.Fatalf("both namespaces = %d, want 3", len(both))
 	}
@@ -1689,27 +1689,21 @@ func TestSnapshotParameters(t *testing.T) {
 		t.Fatalf("order = %q..%q", both[0].Ref.Key, both[2].Ref.Key)
 	}
 
-	// empty selector KeyPattern means all keys, same as "*".
-	empty, _, _ := st.SnapshotParameters(ctx, []domain.WatchSelector{selNS("prod", "svc", "")})
-	if len(empty) != 2 {
-		t.Fatalf("empty pattern = %d, want 2", len(empty))
-	}
-
-	// no selectors => nothing (but a valid revision).
+	// No namespaces => nothing (but a valid revision).
 	none, rev2, _ := st.SnapshotParameters(ctx, nil)
 	if len(none) != 0 || rev2 == 0 {
-		t.Fatalf("empty selectors = %d rev %d", len(none), rev2)
+		t.Fatalf("empty namespaces = %d rev %d", len(none), rev2)
 	}
 
-	// a selector for a non-existent namespace matches nothing.
-	missing, rev3, _ := st.SnapshotParameters(ctx, []domain.WatchSelector{selNS("nope", "svc", "*")})
+	// A non-existent namespace matches nothing.
+	missing, rev3, _ := st.SnapshotParameters(ctx, []domain.NamespaceRef{nsRef("nope", "svc")})
 	if len(missing) != 0 || rev3 == 0 {
 		t.Fatalf("missing namespace = %d rev %d", len(missing), rev3)
 	}
 }
 
 // TestSnapshotParametersSetBased exercises the set-based snapshot query against
-// the contract it must preserve: prefix/exact patterns, label resolution, the
+// the contract it must preserve: whole-namespace scope, label resolution, the
 // full labels map, omission of parameters lacking a "current" label or a
 // version row for it, and empty results.
 func TestSnapshotParametersSetBased(t *testing.T) {
@@ -1718,7 +1712,8 @@ func TestSnapshotParametersSetBased(t *testing.T) {
 	ns := nsRef("prod", "svc")
 	seedNS(t, st, "prod", "svc")
 
-	// billing/a has two versions -> current v2, previous v1.
+	// billing/a has two versions -> current v2, previous v1. The '/' is an
+	// ordinary character in the key; the snapshot is whole-namespace.
 	if _, _, err := st.PutParameter(ctx, domain.Ref{NS: ns, Key: "billing/a"}, "1", "text/plain", `{"k":"1"}`, "alice"); err != nil {
 		t.Fatal(err)
 	}
@@ -1737,18 +1732,17 @@ func TestSnapshotParametersSetBased(t *testing.T) {
 		return m
 	}
 
-	// Prefix pattern selects the subtree only.
-	pref, rev, err := st.SnapshotParameters(ctx, []domain.WatchSelector{selNS("prod", "svc", "billing/*")})
+	all, rev, err := st.SnapshotParameters(ctx, []domain.NamespaceRef{nsRef("prod", "svc")})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if wantRev, _ := st.CurrentRevision(ctx); rev != wantRev {
 		t.Fatalf("snapshot rev %d != CurrentRevision %d", rev, wantRev)
 	}
-	if len(pref) != 1 {
-		t.Fatalf("billing/* returned %d, want 1 (%+v)", len(pref), pref)
+	if len(all) != 2 {
+		t.Fatalf("namespace returned %d, want 2 (%+v)", len(all), all)
 	}
-	a := byKey(pref)["billing/a"]
+	a := byKey(all)["billing/a"]
 	if a.Value != "2" || a.Version != 2 || a.ContentType != "text/plain" || a.Metadata != `{"k":"2"}` || a.CreatedBy != "bob" {
 		t.Fatalf("billing/a = %+v", a)
 	}
@@ -1756,18 +1750,13 @@ func TestSnapshotParametersSetBased(t *testing.T) {
 	if a.Labels[domain.LabelCurrent] != 2 || a.Labels[domain.LabelPrevious] != 1 {
 		t.Fatalf("billing/a labels = %+v", a.Labels)
 	}
-
-	// Exact-key pattern.
-	exact, _, err := st.SnapshotParameters(ctx, []domain.WatchSelector{selNS("prod", "svc", "other")})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(exact) != 1 || exact[0].Ref.Key != "other" || exact[0].Value != "x" {
-		t.Fatalf("exact = %+v", exact)
+	if byKey(all)["other"].Value != "x" {
+		t.Fatalf("other = %+v", byKey(all)["other"])
 	}
 
-	// Patterns matching nothing: empty slice, still a valid revision.
-	empty, rev3, err := st.SnapshotParameters(ctx, []domain.WatchSelector{selNS("prod", "svc", "nope/*"), selNS("prod", "svc", "also-nope")})
+	// An empty namespace: empty slice, still a valid revision.
+	seedNS(t, st, "prod", "empty")
+	empty, rev3, err := st.SnapshotParameters(ctx, []domain.NamespaceRef{nsRef("prod", "empty")})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1776,7 +1765,7 @@ func TestSnapshotParametersSetBased(t *testing.T) {
 	}
 
 	// A parameter whose "current" label was removed (only a non-current label
-	// remains) must be omitted, even though its key matches the pattern.
+	// remains) must be omitted.
 	if _, _, err := st.PutParameter(ctx, domain.Ref{NS: ns, Key: "orphan"}, "o1", "", "", "u"); err != nil {
 		t.Fatal(err)
 	}
@@ -1791,7 +1780,7 @@ func TestSnapshotParametersSetBased(t *testing.T) {
 		Delete(&parameterLabelModel{}).Error; err != nil {
 		t.Fatal(err)
 	}
-	afterOrphan := byKey(mustSnapshot(t, st, ctx, []domain.WatchSelector{selNS("prod", "svc", "*")}))
+	afterOrphan := byKey(mustSnapshot(t, st, ctx, []domain.NamespaceRef{nsRef("prod", "svc")}))
 	if _, ok := afterOrphan["orphan"]; ok {
 		t.Fatalf("param with no current label should be omitted, got %+v", afterOrphan["orphan"])
 	}
@@ -1811,38 +1800,17 @@ func TestSnapshotParametersSetBased(t *testing.T) {
 		Delete(&parameterVersionModel{}).Error; err != nil {
 		t.Fatal(err)
 	}
-	afterGhost := byKey(mustSnapshot(t, st, ctx, []domain.WatchSelector{selNS("prod", "svc", "*")}))
+	afterGhost := byKey(mustSnapshot(t, st, ctx, []domain.NamespaceRef{nsRef("prod", "svc")}))
 	if _, ok := afterGhost["ghost"]; ok {
 		t.Fatal("param whose current version row is gone should be omitted")
 	}
 }
 
-// TestSnapshotParametersLikeEscape verifies prefix patterns escape LIKE
-// metacharacters so "a_b/*" and "p%q/*" match only the literal key, never a
-// wildcard expansion (an unescaped "_" or "%" would match "aXb" / "pZZq").
-func TestSnapshotParametersLikeEscape(t *testing.T) {
-	st := newStore(t)
-	ctx := context.Background()
-	ns := nsRef("prod", "svc")
-	seedNS(t, st, "prod", "svc")
-	if _, _, err := st.PutParameter(ctx, domain.Ref{NS: ns, Key: "a_b/x"}, "match-underscore", "", "", "u"); err != nil {
-		t.Fatal(err)
-	}
-	if _, _, err := st.PutParameter(ctx, domain.Ref{NS: ns, Key: "aXb/x"}, "wildcard-underscore", "", "", "u"); err != nil {
-		t.Fatal(err)
-	}
-
-	under := mustSnapshot(t, st, ctx, []domain.WatchSelector{selNS("prod", "svc", "a_b/*")})
-	if len(under) != 1 || under[0].Ref.Key != "a_b/x" {
-		t.Fatalf("a_b/* should match only a_b/x, got %+v", under)
-	}
-}
-
-func mustSnapshot(t *testing.T, st *SQLStore, ctx context.Context, selectors []domain.WatchSelector) []domain.Parameter {
+func mustSnapshot(t *testing.T, st *SQLStore, ctx context.Context, namespaces []domain.NamespaceRef) []domain.Parameter {
 	t.Helper()
-	ps, _, err := st.SnapshotParameters(ctx, selectors)
+	ps, _, err := st.SnapshotParameters(ctx, namespaces)
 	if err != nil {
-		t.Fatalf("SnapshotParameters(%v): %v", selectors, err)
+		t.Fatalf("SnapshotParameters(%v): %v", namespaces, err)
 	}
 	return ps
 }

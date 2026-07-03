@@ -172,7 +172,7 @@ func TestAuthorizeClientAllowedByPolicy(t *testing.T) {
 	}
 	store.addPolicy(domain.Policy{
 		Name: "p", Subject: "app",
-		Allow: []domain.PolicyRule{{Operation: domain.OpParameterRead, Env: "prod", App: "app", KeyPattern: "*"}},
+		Allow: []domain.PolicyRule{{Operation: domain.OpParameterRead, Env: "prod", App: "app"}},
 	})
 	s := newTestService(store)
 
@@ -332,7 +332,7 @@ func TestImplicitHomeGrant(t *testing.T) {
 	t.Run("deny rule beats implicit grant", func(t *testing.T) {
 		store.policies = nil
 		store.addPolicy(domain.Policy{Name: "d", Subject: "app",
-			Deny: []domain.PolicyRule{{Operation: domain.OpParameterRead, Env: "prod", App: "app", KeyPattern: "x"}}})
+			Deny: []domain.PolicyRule{{Operation: domain.OpParameterRead, Env: "prod", App: "app"}}})
 		if _, err := s.GetParameter(ctx, home, tref("x"), 0, ""); !errors.Is(err, domain.ErrPermissionDenied) {
 			t.Fatalf("deny-over-grant err = %v, want ErrPermissionDenied", err)
 		}

@@ -641,23 +641,21 @@ var SecretService_ServiceDesc = grpc.ServiceDesc{
 }
 
 const (
-	WatchService_Subscribe_FullMethodName      = "/kms.v1.WatchService/Subscribe"
-	WatchService_WatchParameter_FullMethodName = "/kms.v1.WatchService/WatchParameter"
-	WatchService_WatchNamespace_FullMethodName = "/kms.v1.WatchService/WatchNamespace"
+	WatchService_Subscribe_FullMethodName = "/kms.v1.WatchService/Subscribe"
 )
 
 // WatchServiceClient is the client API for WatchService service.
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 type WatchServiceClient interface {
-	// Subscribe is the primary hot-reload mechanism. The client declares the
-	// namespace selectors it wants and its last-applied revision; the server
-	// streams an initial snapshot (or delta), then pushes events as values
-	// change, interleaved with heartbeats.
+	// Subscribe is the hot-reload mechanism. The client declares the namespaces
+	// it wants and its last-applied revision; the server streams an initial
+	// snapshot (or delta), then pushes EVERY change in those namespaces the
+	// caller is authorized for, interleaved with heartbeats. Authorization is
+	// checked once per namespace at registration; there is no key-level
+	// filtering — a subscriber to a namespace receives all of its changes and
+	// routes them client-side.
 	Subscribe(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[SubscribeRequest, SubscribeEvent], error)
-	// Single-resource conveniences built on the same event model.
-	WatchParameter(ctx context.Context, in *WatchParameterRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[SubscribeEvent], error)
-	WatchNamespace(ctx context.Context, in *WatchNamespaceRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[SubscribeEvent], error)
 }
 
 type watchServiceClient struct {
@@ -681,56 +679,18 @@ func (c *watchServiceClient) Subscribe(ctx context.Context, opts ...grpc.CallOpt
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type WatchService_SubscribeClient = grpc.BidiStreamingClient[SubscribeRequest, SubscribeEvent]
 
-func (c *watchServiceClient) WatchParameter(ctx context.Context, in *WatchParameterRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[SubscribeEvent], error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	stream, err := c.cc.NewStream(ctx, &WatchService_ServiceDesc.Streams[1], WatchService_WatchParameter_FullMethodName, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	x := &grpc.GenericClientStream[WatchParameterRequest, SubscribeEvent]{ClientStream: stream}
-	if err := x.ClientStream.SendMsg(in); err != nil {
-		return nil, err
-	}
-	if err := x.ClientStream.CloseSend(); err != nil {
-		return nil, err
-	}
-	return x, nil
-}
-
-// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
-type WatchService_WatchParameterClient = grpc.ServerStreamingClient[SubscribeEvent]
-
-func (c *watchServiceClient) WatchNamespace(ctx context.Context, in *WatchNamespaceRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[SubscribeEvent], error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	stream, err := c.cc.NewStream(ctx, &WatchService_ServiceDesc.Streams[2], WatchService_WatchNamespace_FullMethodName, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	x := &grpc.GenericClientStream[WatchNamespaceRequest, SubscribeEvent]{ClientStream: stream}
-	if err := x.ClientStream.SendMsg(in); err != nil {
-		return nil, err
-	}
-	if err := x.ClientStream.CloseSend(); err != nil {
-		return nil, err
-	}
-	return x, nil
-}
-
-// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
-type WatchService_WatchNamespaceClient = grpc.ServerStreamingClient[SubscribeEvent]
-
 // WatchServiceServer is the server API for WatchService service.
 // All implementations must embed UnimplementedWatchServiceServer
 // for forward compatibility.
 type WatchServiceServer interface {
-	// Subscribe is the primary hot-reload mechanism. The client declares the
-	// namespace selectors it wants and its last-applied revision; the server
-	// streams an initial snapshot (or delta), then pushes events as values
-	// change, interleaved with heartbeats.
+	// Subscribe is the hot-reload mechanism. The client declares the namespaces
+	// it wants and its last-applied revision; the server streams an initial
+	// snapshot (or delta), then pushes EVERY change in those namespaces the
+	// caller is authorized for, interleaved with heartbeats. Authorization is
+	// checked once per namespace at registration; there is no key-level
+	// filtering — a subscriber to a namespace receives all of its changes and
+	// routes them client-side.
 	Subscribe(grpc.BidiStreamingServer[SubscribeRequest, SubscribeEvent]) error
-	// Single-resource conveniences built on the same event model.
-	WatchParameter(*WatchParameterRequest, grpc.ServerStreamingServer[SubscribeEvent]) error
-	WatchNamespace(*WatchNamespaceRequest, grpc.ServerStreamingServer[SubscribeEvent]) error
 	mustEmbedUnimplementedWatchServiceServer()
 }
 
@@ -743,12 +703,6 @@ type UnimplementedWatchServiceServer struct{}
 
 func (UnimplementedWatchServiceServer) Subscribe(grpc.BidiStreamingServer[SubscribeRequest, SubscribeEvent]) error {
 	return status.Error(codes.Unimplemented, "method Subscribe not implemented")
-}
-func (UnimplementedWatchServiceServer) WatchParameter(*WatchParameterRequest, grpc.ServerStreamingServer[SubscribeEvent]) error {
-	return status.Error(codes.Unimplemented, "method WatchParameter not implemented")
-}
-func (UnimplementedWatchServiceServer) WatchNamespace(*WatchNamespaceRequest, grpc.ServerStreamingServer[SubscribeEvent]) error {
-	return status.Error(codes.Unimplemented, "method WatchNamespace not implemented")
 }
 func (UnimplementedWatchServiceServer) mustEmbedUnimplementedWatchServiceServer() {}
 func (UnimplementedWatchServiceServer) testEmbeddedByValue()                      {}
@@ -778,28 +732,6 @@ func _WatchService_Subscribe_Handler(srv interface{}, stream grpc.ServerStream) 
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type WatchService_SubscribeServer = grpc.BidiStreamingServer[SubscribeRequest, SubscribeEvent]
 
-func _WatchService_WatchParameter_Handler(srv interface{}, stream grpc.ServerStream) error {
-	m := new(WatchParameterRequest)
-	if err := stream.RecvMsg(m); err != nil {
-		return err
-	}
-	return srv.(WatchServiceServer).WatchParameter(m, &grpc.GenericServerStream[WatchParameterRequest, SubscribeEvent]{ServerStream: stream})
-}
-
-// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
-type WatchService_WatchParameterServer = grpc.ServerStreamingServer[SubscribeEvent]
-
-func _WatchService_WatchNamespace_Handler(srv interface{}, stream grpc.ServerStream) error {
-	m := new(WatchNamespaceRequest)
-	if err := stream.RecvMsg(m); err != nil {
-		return err
-	}
-	return srv.(WatchServiceServer).WatchNamespace(m, &grpc.GenericServerStream[WatchNamespaceRequest, SubscribeEvent]{ServerStream: stream})
-}
-
-// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
-type WatchService_WatchNamespaceServer = grpc.ServerStreamingServer[SubscribeEvent]
-
 // WatchService_ServiceDesc is the grpc.ServiceDesc for WatchService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -813,16 +745,6 @@ var WatchService_ServiceDesc = grpc.ServiceDesc{
 			Handler:       _WatchService_Subscribe_Handler,
 			ServerStreams: true,
 			ClientStreams: true,
-		},
-		{
-			StreamName:    "WatchParameter",
-			Handler:       _WatchService_WatchParameter_Handler,
-			ServerStreams: true,
-		},
-		{
-			StreamName:    "WatchNamespace",
-			Handler:       _WatchService_WatchNamespace_Handler,
-			ServerStreams: true,
 		},
 	},
 	Metadata: "kms/v1/kms.proto",

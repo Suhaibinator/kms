@@ -696,16 +696,6 @@ class WatchServiceStub:
                 request_serializer=kms_dot_v1_dot_kms__pb2.SubscribeRequest.SerializeToString,
                 response_deserializer=kms_dot_v1_dot_kms__pb2.SubscribeEvent.FromString,
                 _registered_method=True)
-        self.WatchParameter = channel.unary_stream(
-                '/kms.v1.WatchService/WatchParameter',
-                request_serializer=kms_dot_v1_dot_kms__pb2.WatchParameterRequest.SerializeToString,
-                response_deserializer=kms_dot_v1_dot_kms__pb2.SubscribeEvent.FromString,
-                _registered_method=True)
-        self.WatchNamespace = channel.unary_stream(
-                '/kms.v1.WatchService/WatchNamespace',
-                request_serializer=kms_dot_v1_dot_kms__pb2.WatchNamespaceRequest.SerializeToString,
-                response_deserializer=kms_dot_v1_dot_kms__pb2.SubscribeEvent.FromString,
-                _registered_method=True)
 
 
 class WatchServiceServicer:
@@ -716,24 +706,14 @@ class WatchServiceServicer:
     """
 
     def Subscribe(self, request_iterator, context):
-        """Subscribe is the primary hot-reload mechanism. The client declares the
-        namespace selectors it wants and its last-applied revision; the server
-        streams an initial snapshot (or delta), then pushes events as values
-        change, interleaved with heartbeats.
+        """Subscribe is the hot-reload mechanism. The client declares the namespaces
+        it wants and its last-applied revision; the server streams an initial
+        snapshot (or delta), then pushes EVERY change in those namespaces the
+        caller is authorized for, interleaved with heartbeats. Authorization is
+        checked once per namespace at registration; there is no key-level
+        filtering — a subscriber to a namespace receives all of its changes and
+        routes them client-side.
         """
-        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
-        context.set_details('Method not implemented!')
-        raise NotImplementedError('Method not implemented!')
-
-    def WatchParameter(self, request, context):
-        """Single-resource conveniences built on the same event model.
-        """
-        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
-        context.set_details('Method not implemented!')
-        raise NotImplementedError('Method not implemented!')
-
-    def WatchNamespace(self, request, context):
-        """Missing associated documentation comment in .proto file."""
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
@@ -744,16 +724,6 @@ def add_WatchServiceServicer_to_server(servicer, server):
             'Subscribe': grpc.stream_stream_rpc_method_handler(
                     servicer.Subscribe,
                     request_deserializer=kms_dot_v1_dot_kms__pb2.SubscribeRequest.FromString,
-                    response_serializer=kms_dot_v1_dot_kms__pb2.SubscribeEvent.SerializeToString,
-            ),
-            'WatchParameter': grpc.unary_stream_rpc_method_handler(
-                    servicer.WatchParameter,
-                    request_deserializer=kms_dot_v1_dot_kms__pb2.WatchParameterRequest.FromString,
-                    response_serializer=kms_dot_v1_dot_kms__pb2.SubscribeEvent.SerializeToString,
-            ),
-            'WatchNamespace': grpc.unary_stream_rpc_method_handler(
-                    servicer.WatchNamespace,
-                    request_deserializer=kms_dot_v1_dot_kms__pb2.WatchNamespaceRequest.FromString,
                     response_serializer=kms_dot_v1_dot_kms__pb2.SubscribeEvent.SerializeToString,
             ),
     }
@@ -787,60 +757,6 @@ class WatchService:
             target,
             '/kms.v1.WatchService/Subscribe',
             kms_dot_v1_dot_kms__pb2.SubscribeRequest.SerializeToString,
-            kms_dot_v1_dot_kms__pb2.SubscribeEvent.FromString,
-            options,
-            channel_credentials,
-            insecure,
-            call_credentials,
-            compression,
-            wait_for_ready,
-            timeout,
-            metadata,
-            _registered_method=True)
-
-    @staticmethod
-    def WatchParameter(request,
-            target,
-            options=(),
-            channel_credentials=None,
-            call_credentials=None,
-            insecure=False,
-            compression=None,
-            wait_for_ready=None,
-            timeout=None,
-            metadata=None):
-        return grpc.experimental.unary_stream(
-            request,
-            target,
-            '/kms.v1.WatchService/WatchParameter',
-            kms_dot_v1_dot_kms__pb2.WatchParameterRequest.SerializeToString,
-            kms_dot_v1_dot_kms__pb2.SubscribeEvent.FromString,
-            options,
-            channel_credentials,
-            insecure,
-            call_credentials,
-            compression,
-            wait_for_ready,
-            timeout,
-            metadata,
-            _registered_method=True)
-
-    @staticmethod
-    def WatchNamespace(request,
-            target,
-            options=(),
-            channel_credentials=None,
-            call_credentials=None,
-            insecure=False,
-            compression=None,
-            wait_for_ready=None,
-            timeout=None,
-            metadata=None):
-        return grpc.experimental.unary_stream(
-            request,
-            target,
-            '/kms.v1.WatchService/WatchNamespace',
-            kms_dot_v1_dot_kms__pb2.WatchNamespaceRequest.SerializeToString,
             kms_dot_v1_dot_kms__pb2.SubscribeEvent.FromString,
             options,
             channel_credentials,

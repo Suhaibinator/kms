@@ -113,32 +113,3 @@ func TestIdentityTokensAreDistinct(t *testing.T) {
 		t.Fatal("rotation returned the same token")
 	}
 }
-
-func TestReauthorizeWatchReflectsPolicyChange(t *testing.T) {
-	ctx := context.Background()
-	store := newFakeStore()
-	s := newTestService(store)
-	store.addIdentity("app", domain.IdentityKindClient, "kms_tok")
-	pr := clientPrincipalTok("app", "kms_tok")
-
-	// With no policy, the fresh predicate denies.
-	check1, err := s.ReauthorizeWatch(ctx, pr)
-	if err != nil {
-		t.Fatalf("ReauthorizeWatch: %v", err)
-	}
-	if check1(domain.ResourceSecret, mkref("prod", "app", "x")) {
-		t.Fatal("predicate granted access with no policy")
-	}
-
-	// After granting a policy, a newly obtained predicate reflects it.
-	store.addPolicy(domain.Policy{Name: "r", Subject: "app", Allow: []domain.PolicyRule{
-		{Operation: domain.OpSecretRead, Env: "prod", App: "app", KeyPattern: "*"},
-	}})
-	check2, err := s.ReauthorizeWatch(ctx, pr)
-	if err != nil {
-		t.Fatalf("ReauthorizeWatch after grant: %v", err)
-	}
-	if !check2(domain.ResourceSecret, mkref("prod", "app", "x")) {
-		t.Fatal("fresh predicate did not reflect the new policy")
-	}
-}

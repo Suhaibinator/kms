@@ -93,7 +93,7 @@ func (s *Service) ListParameters(ctx context.Context, pr Principal, ns domain.Na
 	// Parameter list responses carry values inline, so an item is only exposed
 	// when the caller may read it (parameter:list authorizes the enumeration
 	// itself, not value disclosure).
-	filter, err := s.listFilter(ctx, pr, domain.ResourceParameter, domain.OpParameterList, ns, keyPrefix, domain.OpParameterRead)
+	filter, err := s.listFilter(ctx, pr, domain.ResourceParameter, domain.OpParameterList, ns, domain.OpParameterRead)
 	if err != nil {
 		return nil, "", err
 	}

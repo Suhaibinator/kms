@@ -22,14 +22,6 @@ class ResourceRef(_message.Message):
     key: str
     def __init__(self, namespace: _Optional[_Union[NamespaceRef, _Mapping]] = ..., key: _Optional[str] = ...) -> None: ...
 
-class WatchSelector(_message.Message):
-    __slots__ = ("namespace", "key_pattern")
-    NAMESPACE_FIELD_NUMBER: _ClassVar[int]
-    KEY_PATTERN_FIELD_NUMBER: _ClassVar[int]
-    namespace: NamespaceRef
-    key_pattern: str
-    def __init__(self, namespace: _Optional[_Union[NamespaceRef, _Mapping]] = ..., key_pattern: _Optional[str] = ...) -> None: ...
-
 class Parameter(_message.Message):
     __slots__ = ("ref", "value", "content_type", "version", "metadata_json", "created_by", "created_at_unix_ms", "labels")
     class LabelsEntry(_message.Message):
@@ -366,16 +358,16 @@ class PromoteSecretVersionResponse(_message.Message):
     def __init__(self, current_version: _Optional[int] = ..., previous_version: _Optional[int] = ..., revision: _Optional[int] = ...) -> None: ...
 
 class SubscribeRequest(_message.Message):
-    __slots__ = ("client_name", "selectors", "last_seen_revision", "acked_revision")
+    __slots__ = ("client_name", "namespaces", "last_seen_revision", "acked_revision")
     CLIENT_NAME_FIELD_NUMBER: _ClassVar[int]
-    SELECTORS_FIELD_NUMBER: _ClassVar[int]
+    NAMESPACES_FIELD_NUMBER: _ClassVar[int]
     LAST_SEEN_REVISION_FIELD_NUMBER: _ClassVar[int]
     ACKED_REVISION_FIELD_NUMBER: _ClassVar[int]
     client_name: str
-    selectors: _containers.RepeatedCompositeFieldContainer[WatchSelector]
+    namespaces: _containers.RepeatedCompositeFieldContainer[NamespaceRef]
     last_seen_revision: int
     acked_revision: int
-    def __init__(self, client_name: _Optional[str] = ..., selectors: _Optional[_Iterable[_Union[WatchSelector, _Mapping]]] = ..., last_seen_revision: _Optional[int] = ..., acked_revision: _Optional[int] = ...) -> None: ...
+    def __init__(self, client_name: _Optional[str] = ..., namespaces: _Optional[_Iterable[_Union[NamespaceRef, _Mapping]]] = ..., last_seen_revision: _Optional[int] = ..., acked_revision: _Optional[int] = ...) -> None: ...
 
 class SubscribeEvent(_message.Message):
     __slots__ = ("snapshot", "change", "secret_change", "heartbeat", "revision")
@@ -430,24 +422,6 @@ class Heartbeat(_message.Message):
     SERVER_TIME_UNIX_MS_FIELD_NUMBER: _ClassVar[int]
     server_time_unix_ms: int
     def __init__(self, server_time_unix_ms: _Optional[int] = ...) -> None: ...
-
-class WatchParameterRequest(_message.Message):
-    __slots__ = ("ref", "last_seen_revision")
-    REF_FIELD_NUMBER: _ClassVar[int]
-    LAST_SEEN_REVISION_FIELD_NUMBER: _ClassVar[int]
-    ref: ResourceRef
-    last_seen_revision: int
-    def __init__(self, ref: _Optional[_Union[ResourceRef, _Mapping]] = ..., last_seen_revision: _Optional[int] = ...) -> None: ...
-
-class WatchNamespaceRequest(_message.Message):
-    __slots__ = ("namespace", "key_pattern", "last_seen_revision")
-    NAMESPACE_FIELD_NUMBER: _ClassVar[int]
-    KEY_PATTERN_FIELD_NUMBER: _ClassVar[int]
-    LAST_SEEN_REVISION_FIELD_NUMBER: _ClassVar[int]
-    namespace: NamespaceRef
-    key_pattern: str
-    last_seen_revision: int
-    def __init__(self, namespace: _Optional[_Union[NamespaceRef, _Mapping]] = ..., key_pattern: _Optional[str] = ..., last_seen_revision: _Optional[int] = ...) -> None: ...
 
 class Namespace(_message.Message):
     __slots__ = ("ref", "description", "allowed_auth_methods", "created_by", "created_at_unix_ms", "parameter_count", "secret_count")
@@ -570,16 +544,14 @@ class ListNamespacesResponse(_message.Message):
     def __init__(self, namespaces: _Optional[_Iterable[_Union[Namespace, _Mapping]]] = ..., next_page_token: _Optional[str] = ...) -> None: ...
 
 class PolicyRule(_message.Message):
-    __slots__ = ("operation", "env", "app", "key")
+    __slots__ = ("operation", "env", "app")
     OPERATION_FIELD_NUMBER: _ClassVar[int]
     ENV_FIELD_NUMBER: _ClassVar[int]
     APP_FIELD_NUMBER: _ClassVar[int]
-    KEY_FIELD_NUMBER: _ClassVar[int]
     operation: str
     env: str
     app: str
-    key: str
-    def __init__(self, operation: _Optional[str] = ..., env: _Optional[str] = ..., app: _Optional[str] = ..., key: _Optional[str] = ...) -> None: ...
+    def __init__(self, operation: _Optional[str] = ..., env: _Optional[str] = ..., app: _Optional[str] = ...) -> None: ...
 
 class Policy(_message.Message):
     __slots__ = ("name", "subject", "allow", "deny", "created_at_unix_ms", "updated_at_unix_ms")
@@ -826,11 +798,11 @@ class ListAuditEventsResponse(_message.Message):
     def __init__(self, events: _Optional[_Iterable[_Union[AuditEvent, _Mapping]]] = ..., next_page_token: _Optional[str] = ...) -> None: ...
 
 class Subscriber(_message.Message):
-    __slots__ = ("client_name", "instance_id", "identity", "selectors", "remote_addr", "connected_at_unix_ms", "last_heartbeat_unix_ms", "last_acked_revision")
+    __slots__ = ("client_name", "instance_id", "identity", "namespaces", "remote_addr", "connected_at_unix_ms", "last_heartbeat_unix_ms", "last_acked_revision")
     CLIENT_NAME_FIELD_NUMBER: _ClassVar[int]
     INSTANCE_ID_FIELD_NUMBER: _ClassVar[int]
     IDENTITY_FIELD_NUMBER: _ClassVar[int]
-    SELECTORS_FIELD_NUMBER: _ClassVar[int]
+    NAMESPACES_FIELD_NUMBER: _ClassVar[int]
     REMOTE_ADDR_FIELD_NUMBER: _ClassVar[int]
     CONNECTED_AT_UNIX_MS_FIELD_NUMBER: _ClassVar[int]
     LAST_HEARTBEAT_UNIX_MS_FIELD_NUMBER: _ClassVar[int]
@@ -838,12 +810,12 @@ class Subscriber(_message.Message):
     client_name: str
     instance_id: str
     identity: str
-    selectors: _containers.RepeatedCompositeFieldContainer[WatchSelector]
+    namespaces: _containers.RepeatedCompositeFieldContainer[NamespaceRef]
     remote_addr: str
     connected_at_unix_ms: int
     last_heartbeat_unix_ms: int
     last_acked_revision: int
-    def __init__(self, client_name: _Optional[str] = ..., instance_id: _Optional[str] = ..., identity: _Optional[str] = ..., selectors: _Optional[_Iterable[_Union[WatchSelector, _Mapping]]] = ..., remote_addr: _Optional[str] = ..., connected_at_unix_ms: _Optional[int] = ..., last_heartbeat_unix_ms: _Optional[int] = ..., last_acked_revision: _Optional[int] = ...) -> None: ...
+    def __init__(self, client_name: _Optional[str] = ..., instance_id: _Optional[str] = ..., identity: _Optional[str] = ..., namespaces: _Optional[_Iterable[_Union[NamespaceRef, _Mapping]]] = ..., remote_addr: _Optional[str] = ..., connected_at_unix_ms: _Optional[int] = ..., last_heartbeat_unix_ms: _Optional[int] = ..., last_acked_revision: _Optional[int] = ...) -> None: ...
 
 class ListSubscribersRequest(_message.Message):
     __slots__ = ()

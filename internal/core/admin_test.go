@@ -18,7 +18,7 @@ func TestRequireAdminGatesPolicyWrites(t *testing.T) {
 	s := newTestService(store)
 
 	valid := domain.Policy{Name: "p", Subject: "app",
-		Allow: []domain.PolicyRule{{Operation: domain.OpSecretRead, Env: "prod", App: "app", KeyPattern: "*"}}}
+		Allow: []domain.PolicyRule{{Operation: domain.OpSecretRead, Env: "prod", App: "app"}}}
 
 	if _, err := s.CreatePolicy(ctx, clientPrincipal("app"), valid); !errors.Is(err, domain.ErrPermissionDenied) {
 		t.Fatalf("client CreatePolicy err = %v, want ErrPermissionDenied", err)
@@ -31,7 +31,7 @@ func TestRequireAdminGatesPolicyWrites(t *testing.T) {
 	if err != nil {
 		t.Fatalf("admin CreatePolicy: %v", err)
 	}
-	if out.Allow[0].KeyPattern != "*" || out.Allow[0].Env != "prod" {
+	if out.Allow[0].App != "app" || out.Allow[0].Env != "prod" {
 		t.Fatalf("stored rule = %+v", out.Allow[0])
 	}
 	if len(store.policies) != 1 {
@@ -43,7 +43,7 @@ func TestCreatePolicyValidatesRules(t *testing.T) {
 	ctx := context.Background()
 	s := newTestService(newFakeStore())
 	bad := domain.Policy{Name: "p", Subject: "app",
-		Allow: []domain.PolicyRule{{Operation: "secret:teleport", Env: "prod", App: "app", KeyPattern: "*"}}}
+		Allow: []domain.PolicyRule{{Operation: "secret:teleport", Env: "prod", App: "app"}}}
 	if _, err := s.CreatePolicy(ctx, adminPrincipal(), bad); !errors.Is(err, domain.ErrInvalidArgument) {
 		t.Fatalf("err = %v, want ErrInvalidArgument", err)
 	}
@@ -122,7 +122,7 @@ func TestCreateNamespaceAuthorization(t *testing.T) {
 
 	// Granting admin:namespace:create lets the client create the namespace.
 	store.addPolicy(domain.Policy{Name: "ns", Subject: "app",
-		Allow: []domain.PolicyRule{{Operation: domain.OpAdminNamespaceCreate, Env: "team", App: "x", KeyPattern: "*"}}})
+		Allow: []domain.PolicyRule{{Operation: domain.OpAdminNamespaceCreate, Env: "team", App: "x"}}})
 	if _, err := s.CreateNamespace(ctx, clientPrincipal("app"), mkns("team", "x"), "", nil); err != nil {
 		t.Fatalf("authorized CreateNamespace: %v", err)
 	}
@@ -315,7 +315,7 @@ func TestListAuditAuthorization(t *testing.T) {
 		t.Fatalf("client err = %v, want ErrPermissionDenied", err)
 	}
 	store.addPolicy(domain.Policy{Name: "a", Subject: "app",
-		Allow: []domain.PolicyRule{{Operation: domain.OpAdminAuditRead, Env: "*", App: "*", KeyPattern: "*"}}})
+		Allow: []domain.PolicyRule{{Operation: domain.OpAdminAuditRead, Env: "*", App: "*"}}})
 	if _, _, err := s.ListAuditEvents(ctx, clientPrincipal("app"), domain.AuditFilter{}, storage.ListPage{}); err != nil {
 		t.Fatalf("authorized ListAuditEvents: %v", err)
 	}

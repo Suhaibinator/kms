@@ -291,7 +291,8 @@ type Store interface {
 	// reused after pruning.
 	PruneChangeLog(ctx context.Context, keepDuration time.Duration, maxRows int) (int, error)
 	// SnapshotParameters returns, in one consistent read transaction, the
-	// current revision and the "current" value of every parameter matching
-	// any of the given selectors (see keyutil.MatchKey).
-	SnapshotParameters(ctx context.Context, selectors []domain.WatchSelector) ([]domain.Parameter, uint64, error)
+	// current revision and the "current" value of every parameter in the given
+	// namespaces (WHERE namespace_id IN (...)). Authorization is namespace-level,
+	// so the snapshot is the whole authorized namespace.
+	SnapshotParameters(ctx context.Context, namespaces []domain.NamespaceRef) ([]domain.Parameter, uint64, error)
 }

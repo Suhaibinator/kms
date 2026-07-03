@@ -243,7 +243,6 @@ type policyRuleDTO struct {
 	Operation string `json:"operation"`
 	Env       string `json:"env"`
 	App       string `json:"app"`
-	Key       string `json:"key"`
 }
 
 type policyDTO struct {
@@ -269,7 +268,7 @@ func toPolicyDTO(p domain.Policy) policyDTO {
 func toRuleDTOs(rules []domain.PolicyRule) []policyRuleDTO {
 	out := make([]policyRuleDTO, 0, len(rules))
 	for _, r := range rules {
-		out = append(out, policyRuleDTO{Operation: r.Operation, Env: r.Env, App: r.App, Key: r.KeyPattern})
+		out = append(out, policyRuleDTO{Operation: r.Operation, Env: r.Env, App: r.App})
 	}
 	return out
 }
@@ -286,7 +285,7 @@ func (d policyDTO) toDomain() domain.Policy {
 func fromRuleDTOs(rules []policyRuleDTO) []domain.PolicyRule {
 	out := make([]domain.PolicyRule, 0, len(rules))
 	for _, r := range rules {
-		out = append(out, domain.PolicyRule{Operation: r.Operation, Env: r.Env, App: r.App, KeyPattern: r.Key})
+		out = append(out, domain.PolicyRule{Operation: r.Operation, Env: r.Env, App: r.App})
 	}
 	return out
 }
@@ -384,37 +383,27 @@ func toAuditEventDTO(e domain.AuditEvent) auditEventDTO {
 
 // --- subscribers -----------------------------------------------------------
 
-type watchSelectorDTO struct {
-	Env        string `json:"env"`
-	App        string `json:"app"`
-	KeyPattern string `json:"key_pattern"`
-}
-
 type subscriberDTO struct {
-	ClientName          string             `json:"client_name"`
-	InstanceID          string             `json:"instance_id"`
-	Identity            string             `json:"identity"`
-	Selectors           []watchSelectorDTO `json:"selectors"`
-	RemoteAddr          string             `json:"remote_addr"`
-	ConnectedAtUnixMS   int64              `json:"connected_at_unix_ms"`
-	LastHeartbeatUnixMS int64              `json:"last_heartbeat_unix_ms"`
-	LastAckedRevision   uint64             `json:"last_acked_revision"`
+	ClientName          string            `json:"client_name"`
+	InstanceID          string            `json:"instance_id"`
+	Identity            string            `json:"identity"`
+	Namespaces          []namespaceRefDTO `json:"namespaces"`
+	RemoteAddr          string            `json:"remote_addr"`
+	ConnectedAtUnixMS   int64             `json:"connected_at_unix_ms"`
+	LastHeartbeatUnixMS int64             `json:"last_heartbeat_unix_ms"`
+	LastAckedRevision   uint64            `json:"last_acked_revision"`
 }
 
 func toSubscriberDTO(s domain.Subscriber) subscriberDTO {
-	selectors := make([]watchSelectorDTO, 0, len(s.Selectors))
-	for _, sel := range s.Selectors {
-		selectors = append(selectors, watchSelectorDTO{
-			Env:        sel.NS.Env,
-			App:        sel.NS.App,
-			KeyPattern: sel.KeyPattern,
-		})
+	namespaces := make([]namespaceRefDTO, 0, len(s.Namespaces))
+	for _, ns := range s.Namespaces {
+		namespaces = append(namespaces, namespaceRefDTO{Env: ns.Env, App: ns.App})
 	}
 	return subscriberDTO{
 		ClientName:          s.ClientName,
 		InstanceID:          s.InstanceID,
 		Identity:            s.Identity,
-		Selectors:           selectors,
+		Namespaces:          namespaces,
 		RemoteAddr:          s.RemoteAddr,
 		ConnectedAtUnixMS:   unixMS(s.ConnectedAt),
 		LastHeartbeatUnixMS: unixMS(s.LastHeartbeat),

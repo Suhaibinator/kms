@@ -223,8 +223,9 @@ func (h *Hub) drain(ctx context.Context, cursor uint64) uint64 {
 	}
 }
 
-// dispatch delivers one entry to every live subscriber whose patterns match and
-// whose authorization predicate allows it. Slow subscribers are dropped.
+// dispatch delivers one entry to every live subscriber of the entry's
+// namespace. Authorization is namespace-level and already enforced at subscribe
+// time, so there is no per-event access check here. Slow subscribers are dropped.
 func (h *Hub) dispatch(e domain.ChangeLogEntry) {
 	h.mu.Lock()
 	subs := make([]*Subscription, 0, len(h.subs))
@@ -235,9 +236,6 @@ func (h *Hub) dispatch(e domain.ChangeLogEntry) {
 
 	for _, s := range subs {
 		if !s.matches(e.Ref) {
-			continue
-		}
-		if !s.allow(e.ResourceType, e.Ref) {
 			continue
 		}
 		if !s.offer(e) {
@@ -289,11 +287,6 @@ func (h *Hub) remove(id uint64) {
 // that race in during backlog computation are buffered and de-duplicated
 // against the backlog revision.
 func (h *Hub) Subscribe(ctx context.Context, reg Registration) (*Subscription, error) {
-	if reg.Allowed == nil {
-		// Fail closed: a subscriber with no predicate sees nothing anyway;
-		// treat it as an empty allow so dispatch simply never matches.
-		reg.Allowed = func(string, domain.Ref) bool { return false }
-	}
 	now := h.now()
 	sub := &Subscription{
 		hub:           h,
@@ -304,7 +297,6 @@ func (h *Hub) Subscribe(ctx context.Context, reg Registration) (*Subscription, e
 		connectedAt:   now,
 		lastHeartbeat: now,
 	}
-	sub.UpdateAllowed(reg.Allowed)
 
 	// Register first so the dispatch loop cannot skip entries committed while
 	// the backlog is being computed.
@@ -330,7 +322,8 @@ func (h *Hub) Subscribe(ctx context.Context, reg Registration) (*Subscription, e
 
 // computeBacklog decides between replaying change-log entries and sending a
 // full snapshot, per the retention/replay policy, and returns the chosen
-// backlog filtered to what the subscriber may see.
+// backlog scoped to the subscriber's namespaces. Namespace-level authorization
+// is enforced at subscribe time, so no per-item filtering happens here.
 func (h *Hub) computeBacklog(ctx context.Context, reg Registration) (Backlog, error) {
 	current, err := h.store.CurrentRevision(ctx)
 	if err != nil {
@@ -350,17 +343,11 @@ func (h *Hub) computeBacklog(ctx context.Context, reg Registration) (Backlog, er
 		// rather than silently skipping the pruned changes.
 	}
 
-	params, snapRev, err := h.store.SnapshotParameters(ctx, reg.Selectors)
+	params, snapRev, err := h.store.SnapshotParameters(ctx, reg.Namespaces)
 	if err != nil {
 		return Backlog{}, err
 	}
-	filtered := params[:0]
-	for _, p := range params {
-		if reg.Allowed(domain.ResourceParameter, p.Ref) {
-			filtered = append(filtered, p)
-		}
-	}
-	return Backlog{IsSnapshot: true, Snapshot: filtered, Revision: snapRev}, nil
+	return Backlog{IsSnapshot: true, Snapshot: params, Revision: snapRev}, nil
 }
 
 // canReplay reports whether the reconnecting subscriber's last-seen revision is
@@ -381,8 +368,8 @@ func (h *Hub) canReplay(ctx context.Context, lastSeen, current uint64) bool {
 	return oldest != 0 && oldest <= lastSeen+1
 }
 
-// replayEntries reads change-log entries in (lastSeen, current], filtered by
-// pattern and authorization. complete is false when a gap is detected at the
+// replayEntries reads change-log entries in (lastSeen, current], filtered to
+// the subscriber's namespaces. complete is false when a gap is detected at the
 // tail (a prune raced this subscribe), signaling the caller to fall back to a
 // snapshot rather than replaying a discontinuous log.
 func (h *Hub) replayEntries(ctx context.Context, reg Registration, current uint64) (entries []domain.ChangeLogEntry, complete bool, err error) {
@@ -415,10 +402,7 @@ func (h *Hub) replayEntries(ctx context.Context, reg Registration, current uint6
 				// stream so it is not delivered twice.
 				continue
 			}
-			if !selectorMatchAny(reg.Selectors, e.Ref) {
-				continue
-			}
-			if !reg.Allowed(e.ResourceType, e.Ref) {
+			if !namespaceMatchAny(reg.Namespaces, e.Ref.NS) {
 				continue
 			}
 			out = append(out, e)

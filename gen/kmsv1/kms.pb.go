@@ -130,62 +130,6 @@ func (x *ResourceRef) GetKey() string {
 	return ""
 }
 
-// WatchSelector declares interest in a set of keys within one namespace for a
-// Subscribe stream. An empty or "*" key_pattern matches every key in the
-// namespace; a "prefix/*" pattern matches keys under that prefix; any other
-// value is an exact key match.
-type WatchSelector struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Namespace     *NamespaceRef          `protobuf:"bytes,1,opt,name=namespace,proto3" json:"namespace,omitempty"`
-	KeyPattern    string                 `protobuf:"bytes,2,opt,name=key_pattern,json=keyPattern,proto3" json:"key_pattern,omitempty"` // "" or "*" = all keys; "prefix/*"; or an exact key
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *WatchSelector) Reset() {
-	*x = WatchSelector{}
-	mi := &file_kms_v1_kms_proto_msgTypes[2]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *WatchSelector) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*WatchSelector) ProtoMessage() {}
-
-func (x *WatchSelector) ProtoReflect() protoreflect.Message {
-	mi := &file_kms_v1_kms_proto_msgTypes[2]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use WatchSelector.ProtoReflect.Descriptor instead.
-func (*WatchSelector) Descriptor() ([]byte, []int) {
-	return file_kms_v1_kms_proto_rawDescGZIP(), []int{2}
-}
-
-func (x *WatchSelector) GetNamespace() *NamespaceRef {
-	if x != nil {
-		return x.Namespace
-	}
-	return nil
-}
-
-func (x *WatchSelector) GetKeyPattern() string {
-	if x != nil {
-		return x.KeyPattern
-	}
-	return ""
-}
-
 // Parameter is a non-sensitive configuration value.
 type Parameter struct {
 	state           protoimpl.MessageState `protogen:"open.v1"`
@@ -203,7 +147,7 @@ type Parameter struct {
 
 func (x *Parameter) Reset() {
 	*x = Parameter{}
-	mi := &file_kms_v1_kms_proto_msgTypes[3]
+	mi := &file_kms_v1_kms_proto_msgTypes[2]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -215,7 +159,7 @@ func (x *Parameter) String() string {
 func (*Parameter) ProtoMessage() {}
 
 func (x *Parameter) ProtoReflect() protoreflect.Message {
-	mi := &file_kms_v1_kms_proto_msgTypes[3]
+	mi := &file_kms_v1_kms_proto_msgTypes[2]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -228,7 +172,7 @@ func (x *Parameter) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Parameter.ProtoReflect.Descriptor instead.
 func (*Parameter) Descriptor() ([]byte, []int) {
-	return file_kms_v1_kms_proto_rawDescGZIP(), []int{3}
+	return file_kms_v1_kms_proto_rawDescGZIP(), []int{2}
 }
 
 func (x *Parameter) GetRef() *ResourceRef {
@@ -302,7 +246,7 @@ type ParameterVersionInfo struct {
 
 func (x *ParameterVersionInfo) Reset() {
 	*x = ParameterVersionInfo{}
-	mi := &file_kms_v1_kms_proto_msgTypes[4]
+	mi := &file_kms_v1_kms_proto_msgTypes[3]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -314,7 +258,7 @@ func (x *ParameterVersionInfo) String() string {
 func (*ParameterVersionInfo) ProtoMessage() {}
 
 func (x *ParameterVersionInfo) ProtoReflect() protoreflect.Message {
-	mi := &file_kms_v1_kms_proto_msgTypes[4]
+	mi := &file_kms_v1_kms_proto_msgTypes[3]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -327,7 +271,7 @@ func (x *ParameterVersionInfo) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ParameterVersionInfo.ProtoReflect.Descriptor instead.
 func (*ParameterVersionInfo) Descriptor() ([]byte, []int) {
-	return file_kms_v1_kms_proto_rawDescGZIP(), []int{4}
+	return file_kms_v1_kms_proto_rawDescGZIP(), []int{3}
 }
 
 func (x *ParameterVersionInfo) GetVersion() uint64 {
@@ -390,7 +334,7 @@ type SecretMetadata struct {
 
 func (x *SecretMetadata) Reset() {
 	*x = SecretMetadata{}
-	mi := &file_kms_v1_kms_proto_msgTypes[5]
+	mi := &file_kms_v1_kms_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -402,7 +346,7 @@ func (x *SecretMetadata) String() string {
 func (*SecretMetadata) ProtoMessage() {}
 
 func (x *SecretMetadata) ProtoReflect() protoreflect.Message {
-	mi := &file_kms_v1_kms_proto_msgTypes[5]
+	mi := &file_kms_v1_kms_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -415,7 +359,7 @@ func (x *SecretMetadata) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SecretMetadata.ProtoReflect.Descriptor instead.
 func (*SecretMetadata) Descriptor() ([]byte, []int) {
-	return file_kms_v1_kms_proto_rawDescGZIP(), []int{5}
+	return file_kms_v1_kms_proto_rawDescGZIP(), []int{4}
 }
 
 func (x *SecretMetadata) GetRef() *ResourceRef {
@@ -496,7 +440,7 @@ type SecretVersionInfo struct {
 
 func (x *SecretVersionInfo) Reset() {
 	*x = SecretVersionInfo{}
-	mi := &file_kms_v1_kms_proto_msgTypes[6]
+	mi := &file_kms_v1_kms_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -508,7 +452,7 @@ func (x *SecretVersionInfo) String() string {
 func (*SecretVersionInfo) ProtoMessage() {}
 
 func (x *SecretVersionInfo) ProtoReflect() protoreflect.Message {
-	mi := &file_kms_v1_kms_proto_msgTypes[6]
+	mi := &file_kms_v1_kms_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -521,7 +465,7 @@ func (x *SecretVersionInfo) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SecretVersionInfo.ProtoReflect.Descriptor instead.
 func (*SecretVersionInfo) Descriptor() ([]byte, []int) {
-	return file_kms_v1_kms_proto_rawDescGZIP(), []int{6}
+	return file_kms_v1_kms_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *SecretVersionInfo) GetVersion() uint64 {
@@ -585,7 +529,7 @@ type GetParameterRequest struct {
 
 func (x *GetParameterRequest) Reset() {
 	*x = GetParameterRequest{}
-	mi := &file_kms_v1_kms_proto_msgTypes[7]
+	mi := &file_kms_v1_kms_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -597,7 +541,7 @@ func (x *GetParameterRequest) String() string {
 func (*GetParameterRequest) ProtoMessage() {}
 
 func (x *GetParameterRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_kms_v1_kms_proto_msgTypes[7]
+	mi := &file_kms_v1_kms_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -610,7 +554,7 @@ func (x *GetParameterRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetParameterRequest.ProtoReflect.Descriptor instead.
 func (*GetParameterRequest) Descriptor() ([]byte, []int) {
-	return file_kms_v1_kms_proto_rawDescGZIP(), []int{7}
+	return file_kms_v1_kms_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *GetParameterRequest) GetRef() *ResourceRef {
@@ -643,7 +587,7 @@ type GetParameterResponse struct {
 
 func (x *GetParameterResponse) Reset() {
 	*x = GetParameterResponse{}
-	mi := &file_kms_v1_kms_proto_msgTypes[8]
+	mi := &file_kms_v1_kms_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -655,7 +599,7 @@ func (x *GetParameterResponse) String() string {
 func (*GetParameterResponse) ProtoMessage() {}
 
 func (x *GetParameterResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_kms_v1_kms_proto_msgTypes[8]
+	mi := &file_kms_v1_kms_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -668,7 +612,7 @@ func (x *GetParameterResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetParameterResponse.ProtoReflect.Descriptor instead.
 func (*GetParameterResponse) Descriptor() ([]byte, []int) {
-	return file_kms_v1_kms_proto_rawDescGZIP(), []int{8}
+	return file_kms_v1_kms_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *GetParameterResponse) GetParameter() *Parameter {
@@ -690,7 +634,7 @@ type PutParameterRequest struct {
 
 func (x *PutParameterRequest) Reset() {
 	*x = PutParameterRequest{}
-	mi := &file_kms_v1_kms_proto_msgTypes[9]
+	mi := &file_kms_v1_kms_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -702,7 +646,7 @@ func (x *PutParameterRequest) String() string {
 func (*PutParameterRequest) ProtoMessage() {}
 
 func (x *PutParameterRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_kms_v1_kms_proto_msgTypes[9]
+	mi := &file_kms_v1_kms_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -715,7 +659,7 @@ func (x *PutParameterRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PutParameterRequest.ProtoReflect.Descriptor instead.
 func (*PutParameterRequest) Descriptor() ([]byte, []int) {
-	return file_kms_v1_kms_proto_rawDescGZIP(), []int{9}
+	return file_kms_v1_kms_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *PutParameterRequest) GetRef() *ResourceRef {
@@ -756,7 +700,7 @@ type PutParameterResponse struct {
 
 func (x *PutParameterResponse) Reset() {
 	*x = PutParameterResponse{}
-	mi := &file_kms_v1_kms_proto_msgTypes[10]
+	mi := &file_kms_v1_kms_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -768,7 +712,7 @@ func (x *PutParameterResponse) String() string {
 func (*PutParameterResponse) ProtoMessage() {}
 
 func (x *PutParameterResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_kms_v1_kms_proto_msgTypes[10]
+	mi := &file_kms_v1_kms_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -781,7 +725,7 @@ func (x *PutParameterResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PutParameterResponse.ProtoReflect.Descriptor instead.
 func (*PutParameterResponse) Descriptor() ([]byte, []int) {
-	return file_kms_v1_kms_proto_rawDescGZIP(), []int{10}
+	return file_kms_v1_kms_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *PutParameterResponse) GetVersion() uint64 {
@@ -812,7 +756,7 @@ type ListParametersRequest struct {
 
 func (x *ListParametersRequest) Reset() {
 	*x = ListParametersRequest{}
-	mi := &file_kms_v1_kms_proto_msgTypes[11]
+	mi := &file_kms_v1_kms_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -824,7 +768,7 @@ func (x *ListParametersRequest) String() string {
 func (*ListParametersRequest) ProtoMessage() {}
 
 func (x *ListParametersRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_kms_v1_kms_proto_msgTypes[11]
+	mi := &file_kms_v1_kms_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -837,7 +781,7 @@ func (x *ListParametersRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListParametersRequest.ProtoReflect.Descriptor instead.
 func (*ListParametersRequest) Descriptor() ([]byte, []int) {
-	return file_kms_v1_kms_proto_rawDescGZIP(), []int{11}
+	return file_kms_v1_kms_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *ListParametersRequest) GetNamespace() *NamespaceRef {
@@ -878,7 +822,7 @@ type ListParametersResponse struct {
 
 func (x *ListParametersResponse) Reset() {
 	*x = ListParametersResponse{}
-	mi := &file_kms_v1_kms_proto_msgTypes[12]
+	mi := &file_kms_v1_kms_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -890,7 +834,7 @@ func (x *ListParametersResponse) String() string {
 func (*ListParametersResponse) ProtoMessage() {}
 
 func (x *ListParametersResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_kms_v1_kms_proto_msgTypes[12]
+	mi := &file_kms_v1_kms_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -903,7 +847,7 @@ func (x *ListParametersResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListParametersResponse.ProtoReflect.Descriptor instead.
 func (*ListParametersResponse) Descriptor() ([]byte, []int) {
-	return file_kms_v1_kms_proto_rawDescGZIP(), []int{12}
+	return file_kms_v1_kms_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *ListParametersResponse) GetParameters() []*Parameter {
@@ -929,7 +873,7 @@ type DeleteParameterRequest struct {
 
 func (x *DeleteParameterRequest) Reset() {
 	*x = DeleteParameterRequest{}
-	mi := &file_kms_v1_kms_proto_msgTypes[13]
+	mi := &file_kms_v1_kms_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -941,7 +885,7 @@ func (x *DeleteParameterRequest) String() string {
 func (*DeleteParameterRequest) ProtoMessage() {}
 
 func (x *DeleteParameterRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_kms_v1_kms_proto_msgTypes[13]
+	mi := &file_kms_v1_kms_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -954,7 +898,7 @@ func (x *DeleteParameterRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteParameterRequest.ProtoReflect.Descriptor instead.
 func (*DeleteParameterRequest) Descriptor() ([]byte, []int) {
-	return file_kms_v1_kms_proto_rawDescGZIP(), []int{13}
+	return file_kms_v1_kms_proto_rawDescGZIP(), []int{12}
 }
 
 func (x *DeleteParameterRequest) GetRef() *ResourceRef {
@@ -973,7 +917,7 @@ type DeleteParameterResponse struct {
 
 func (x *DeleteParameterResponse) Reset() {
 	*x = DeleteParameterResponse{}
-	mi := &file_kms_v1_kms_proto_msgTypes[14]
+	mi := &file_kms_v1_kms_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -985,7 +929,7 @@ func (x *DeleteParameterResponse) String() string {
 func (*DeleteParameterResponse) ProtoMessage() {}
 
 func (x *DeleteParameterResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_kms_v1_kms_proto_msgTypes[14]
+	mi := &file_kms_v1_kms_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -998,7 +942,7 @@ func (x *DeleteParameterResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteParameterResponse.ProtoReflect.Descriptor instead.
 func (*DeleteParameterResponse) Descriptor() ([]byte, []int) {
-	return file_kms_v1_kms_proto_rawDescGZIP(), []int{14}
+	return file_kms_v1_kms_proto_rawDescGZIP(), []int{13}
 }
 
 func (x *DeleteParameterResponse) GetRevision() uint64 {
@@ -1017,7 +961,7 @@ type GetParameterMetadataRequest struct {
 
 func (x *GetParameterMetadataRequest) Reset() {
 	*x = GetParameterMetadataRequest{}
-	mi := &file_kms_v1_kms_proto_msgTypes[15]
+	mi := &file_kms_v1_kms_proto_msgTypes[14]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1029,7 +973,7 @@ func (x *GetParameterMetadataRequest) String() string {
 func (*GetParameterMetadataRequest) ProtoMessage() {}
 
 func (x *GetParameterMetadataRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_kms_v1_kms_proto_msgTypes[15]
+	mi := &file_kms_v1_kms_proto_msgTypes[14]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1042,7 +986,7 @@ func (x *GetParameterMetadataRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetParameterMetadataRequest.ProtoReflect.Descriptor instead.
 func (*GetParameterMetadataRequest) Descriptor() ([]byte, []int) {
-	return file_kms_v1_kms_proto_rawDescGZIP(), []int{15}
+	return file_kms_v1_kms_proto_rawDescGZIP(), []int{14}
 }
 
 func (x *GetParameterMetadataRequest) GetRef() *ResourceRef {
@@ -1067,7 +1011,7 @@ type GetParameterMetadataResponse struct {
 
 func (x *GetParameterMetadataResponse) Reset() {
 	*x = GetParameterMetadataResponse{}
-	mi := &file_kms_v1_kms_proto_msgTypes[16]
+	mi := &file_kms_v1_kms_proto_msgTypes[15]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1079,7 +1023,7 @@ func (x *GetParameterMetadataResponse) String() string {
 func (*GetParameterMetadataResponse) ProtoMessage() {}
 
 func (x *GetParameterMetadataResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_kms_v1_kms_proto_msgTypes[16]
+	mi := &file_kms_v1_kms_proto_msgTypes[15]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1092,7 +1036,7 @@ func (x *GetParameterMetadataResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetParameterMetadataResponse.ProtoReflect.Descriptor instead.
 func (*GetParameterMetadataResponse) Descriptor() ([]byte, []int) {
-	return file_kms_v1_kms_proto_rawDescGZIP(), []int{16}
+	return file_kms_v1_kms_proto_rawDescGZIP(), []int{15}
 }
 
 func (x *GetParameterMetadataResponse) GetRef() *ResourceRef {
@@ -1155,7 +1099,7 @@ type GetSecretRequest struct {
 
 func (x *GetSecretRequest) Reset() {
 	*x = GetSecretRequest{}
-	mi := &file_kms_v1_kms_proto_msgTypes[17]
+	mi := &file_kms_v1_kms_proto_msgTypes[16]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1167,7 +1111,7 @@ func (x *GetSecretRequest) String() string {
 func (*GetSecretRequest) ProtoMessage() {}
 
 func (x *GetSecretRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_kms_v1_kms_proto_msgTypes[17]
+	mi := &file_kms_v1_kms_proto_msgTypes[16]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1180,7 +1124,7 @@ func (x *GetSecretRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetSecretRequest.ProtoReflect.Descriptor instead.
 func (*GetSecretRequest) Descriptor() ([]byte, []int) {
-	return file_kms_v1_kms_proto_rawDescGZIP(), []int{17}
+	return file_kms_v1_kms_proto_rawDescGZIP(), []int{16}
 }
 
 func (x *GetSecretRequest) GetRef() *ResourceRef {
@@ -1218,7 +1162,7 @@ type GetSecretResponse struct {
 
 func (x *GetSecretResponse) Reset() {
 	*x = GetSecretResponse{}
-	mi := &file_kms_v1_kms_proto_msgTypes[18]
+	mi := &file_kms_v1_kms_proto_msgTypes[17]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1230,7 +1174,7 @@ func (x *GetSecretResponse) String() string {
 func (*GetSecretResponse) ProtoMessage() {}
 
 func (x *GetSecretResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_kms_v1_kms_proto_msgTypes[18]
+	mi := &file_kms_v1_kms_proto_msgTypes[17]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1243,7 +1187,7 @@ func (x *GetSecretResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetSecretResponse.ProtoReflect.Descriptor instead.
 func (*GetSecretResponse) Descriptor() ([]byte, []int) {
-	return file_kms_v1_kms_proto_rawDescGZIP(), []int{18}
+	return file_kms_v1_kms_proto_rawDescGZIP(), []int{17}
 }
 
 func (x *GetSecretResponse) GetRef() *ResourceRef {
@@ -1309,7 +1253,7 @@ type PutSecretRequest struct {
 
 func (x *PutSecretRequest) Reset() {
 	*x = PutSecretRequest{}
-	mi := &file_kms_v1_kms_proto_msgTypes[19]
+	mi := &file_kms_v1_kms_proto_msgTypes[18]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1321,7 +1265,7 @@ func (x *PutSecretRequest) String() string {
 func (*PutSecretRequest) ProtoMessage() {}
 
 func (x *PutSecretRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_kms_v1_kms_proto_msgTypes[19]
+	mi := &file_kms_v1_kms_proto_msgTypes[18]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1334,7 +1278,7 @@ func (x *PutSecretRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PutSecretRequest.ProtoReflect.Descriptor instead.
 func (*PutSecretRequest) Descriptor() ([]byte, []int) {
-	return file_kms_v1_kms_proto_rawDescGZIP(), []int{19}
+	return file_kms_v1_kms_proto_rawDescGZIP(), []int{18}
 }
 
 func (x *PutSecretRequest) GetRef() *ResourceRef {
@@ -1399,7 +1343,7 @@ type PutSecretResponse struct {
 
 func (x *PutSecretResponse) Reset() {
 	*x = PutSecretResponse{}
-	mi := &file_kms_v1_kms_proto_msgTypes[20]
+	mi := &file_kms_v1_kms_proto_msgTypes[19]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1411,7 +1355,7 @@ func (x *PutSecretResponse) String() string {
 func (*PutSecretResponse) ProtoMessage() {}
 
 func (x *PutSecretResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_kms_v1_kms_proto_msgTypes[20]
+	mi := &file_kms_v1_kms_proto_msgTypes[19]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1424,7 +1368,7 @@ func (x *PutSecretResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PutSecretResponse.ProtoReflect.Descriptor instead.
 func (*PutSecretResponse) Descriptor() ([]byte, []int) {
-	return file_kms_v1_kms_proto_rawDescGZIP(), []int{20}
+	return file_kms_v1_kms_proto_rawDescGZIP(), []int{19}
 }
 
 func (x *PutSecretResponse) GetVersion() uint64 {
@@ -1462,7 +1406,7 @@ type ListSecretsRequest struct {
 
 func (x *ListSecretsRequest) Reset() {
 	*x = ListSecretsRequest{}
-	mi := &file_kms_v1_kms_proto_msgTypes[21]
+	mi := &file_kms_v1_kms_proto_msgTypes[20]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1474,7 +1418,7 @@ func (x *ListSecretsRequest) String() string {
 func (*ListSecretsRequest) ProtoMessage() {}
 
 func (x *ListSecretsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_kms_v1_kms_proto_msgTypes[21]
+	mi := &file_kms_v1_kms_proto_msgTypes[20]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1487,7 +1431,7 @@ func (x *ListSecretsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListSecretsRequest.ProtoReflect.Descriptor instead.
 func (*ListSecretsRequest) Descriptor() ([]byte, []int) {
-	return file_kms_v1_kms_proto_rawDescGZIP(), []int{21}
+	return file_kms_v1_kms_proto_rawDescGZIP(), []int{20}
 }
 
 func (x *ListSecretsRequest) GetNamespace() *NamespaceRef {
@@ -1528,7 +1472,7 @@ type ListSecretsResponse struct {
 
 func (x *ListSecretsResponse) Reset() {
 	*x = ListSecretsResponse{}
-	mi := &file_kms_v1_kms_proto_msgTypes[22]
+	mi := &file_kms_v1_kms_proto_msgTypes[21]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1540,7 +1484,7 @@ func (x *ListSecretsResponse) String() string {
 func (*ListSecretsResponse) ProtoMessage() {}
 
 func (x *ListSecretsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_kms_v1_kms_proto_msgTypes[22]
+	mi := &file_kms_v1_kms_proto_msgTypes[21]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1553,7 +1497,7 @@ func (x *ListSecretsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListSecretsResponse.ProtoReflect.Descriptor instead.
 func (*ListSecretsResponse) Descriptor() ([]byte, []int) {
-	return file_kms_v1_kms_proto_rawDescGZIP(), []int{22}
+	return file_kms_v1_kms_proto_rawDescGZIP(), []int{21}
 }
 
 func (x *ListSecretsResponse) GetSecrets() []*SecretMetadata {
@@ -1579,7 +1523,7 @@ type DeleteSecretRequest struct {
 
 func (x *DeleteSecretRequest) Reset() {
 	*x = DeleteSecretRequest{}
-	mi := &file_kms_v1_kms_proto_msgTypes[23]
+	mi := &file_kms_v1_kms_proto_msgTypes[22]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1591,7 +1535,7 @@ func (x *DeleteSecretRequest) String() string {
 func (*DeleteSecretRequest) ProtoMessage() {}
 
 func (x *DeleteSecretRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_kms_v1_kms_proto_msgTypes[23]
+	mi := &file_kms_v1_kms_proto_msgTypes[22]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1604,7 +1548,7 @@ func (x *DeleteSecretRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteSecretRequest.ProtoReflect.Descriptor instead.
 func (*DeleteSecretRequest) Descriptor() ([]byte, []int) {
-	return file_kms_v1_kms_proto_rawDescGZIP(), []int{23}
+	return file_kms_v1_kms_proto_rawDescGZIP(), []int{22}
 }
 
 func (x *DeleteSecretRequest) GetRef() *ResourceRef {
@@ -1623,7 +1567,7 @@ type DeleteSecretResponse struct {
 
 func (x *DeleteSecretResponse) Reset() {
 	*x = DeleteSecretResponse{}
-	mi := &file_kms_v1_kms_proto_msgTypes[24]
+	mi := &file_kms_v1_kms_proto_msgTypes[23]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1635,7 +1579,7 @@ func (x *DeleteSecretResponse) String() string {
 func (*DeleteSecretResponse) ProtoMessage() {}
 
 func (x *DeleteSecretResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_kms_v1_kms_proto_msgTypes[24]
+	mi := &file_kms_v1_kms_proto_msgTypes[23]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1648,7 +1592,7 @@ func (x *DeleteSecretResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteSecretResponse.ProtoReflect.Descriptor instead.
 func (*DeleteSecretResponse) Descriptor() ([]byte, []int) {
-	return file_kms_v1_kms_proto_rawDescGZIP(), []int{24}
+	return file_kms_v1_kms_proto_rawDescGZIP(), []int{23}
 }
 
 func (x *DeleteSecretResponse) GetRevision() uint64 {
@@ -1669,7 +1613,7 @@ type DisableSecretRequest struct {
 
 func (x *DisableSecretRequest) Reset() {
 	*x = DisableSecretRequest{}
-	mi := &file_kms_v1_kms_proto_msgTypes[25]
+	mi := &file_kms_v1_kms_proto_msgTypes[24]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1681,7 +1625,7 @@ func (x *DisableSecretRequest) String() string {
 func (*DisableSecretRequest) ProtoMessage() {}
 
 func (x *DisableSecretRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_kms_v1_kms_proto_msgTypes[25]
+	mi := &file_kms_v1_kms_proto_msgTypes[24]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1694,7 +1638,7 @@ func (x *DisableSecretRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DisableSecretRequest.ProtoReflect.Descriptor instead.
 func (*DisableSecretRequest) Descriptor() ([]byte, []int) {
-	return file_kms_v1_kms_proto_rawDescGZIP(), []int{25}
+	return file_kms_v1_kms_proto_rawDescGZIP(), []int{24}
 }
 
 func (x *DisableSecretRequest) GetRef() *ResourceRef {
@@ -1727,7 +1671,7 @@ type DisableSecretResponse struct {
 
 func (x *DisableSecretResponse) Reset() {
 	*x = DisableSecretResponse{}
-	mi := &file_kms_v1_kms_proto_msgTypes[26]
+	mi := &file_kms_v1_kms_proto_msgTypes[25]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1739,7 +1683,7 @@ func (x *DisableSecretResponse) String() string {
 func (*DisableSecretResponse) ProtoMessage() {}
 
 func (x *DisableSecretResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_kms_v1_kms_proto_msgTypes[26]
+	mi := &file_kms_v1_kms_proto_msgTypes[25]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1752,7 +1696,7 @@ func (x *DisableSecretResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DisableSecretResponse.ProtoReflect.Descriptor instead.
 func (*DisableSecretResponse) Descriptor() ([]byte, []int) {
-	return file_kms_v1_kms_proto_rawDescGZIP(), []int{26}
+	return file_kms_v1_kms_proto_rawDescGZIP(), []int{25}
 }
 
 func (x *DisableSecretResponse) GetRevision() uint64 {
@@ -1772,7 +1716,7 @@ type DestroySecretVersionRequest struct {
 
 func (x *DestroySecretVersionRequest) Reset() {
 	*x = DestroySecretVersionRequest{}
-	mi := &file_kms_v1_kms_proto_msgTypes[27]
+	mi := &file_kms_v1_kms_proto_msgTypes[26]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1784,7 +1728,7 @@ func (x *DestroySecretVersionRequest) String() string {
 func (*DestroySecretVersionRequest) ProtoMessage() {}
 
 func (x *DestroySecretVersionRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_kms_v1_kms_proto_msgTypes[27]
+	mi := &file_kms_v1_kms_proto_msgTypes[26]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1797,7 +1741,7 @@ func (x *DestroySecretVersionRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DestroySecretVersionRequest.ProtoReflect.Descriptor instead.
 func (*DestroySecretVersionRequest) Descriptor() ([]byte, []int) {
-	return file_kms_v1_kms_proto_rawDescGZIP(), []int{27}
+	return file_kms_v1_kms_proto_rawDescGZIP(), []int{26}
 }
 
 func (x *DestroySecretVersionRequest) GetRef() *ResourceRef {
@@ -1823,7 +1767,7 @@ type DestroySecretVersionResponse struct {
 
 func (x *DestroySecretVersionResponse) Reset() {
 	*x = DestroySecretVersionResponse{}
-	mi := &file_kms_v1_kms_proto_msgTypes[28]
+	mi := &file_kms_v1_kms_proto_msgTypes[27]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1835,7 +1779,7 @@ func (x *DestroySecretVersionResponse) String() string {
 func (*DestroySecretVersionResponse) ProtoMessage() {}
 
 func (x *DestroySecretVersionResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_kms_v1_kms_proto_msgTypes[28]
+	mi := &file_kms_v1_kms_proto_msgTypes[27]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1848,7 +1792,7 @@ func (x *DestroySecretVersionResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DestroySecretVersionResponse.ProtoReflect.Descriptor instead.
 func (*DestroySecretVersionResponse) Descriptor() ([]byte, []int) {
-	return file_kms_v1_kms_proto_rawDescGZIP(), []int{28}
+	return file_kms_v1_kms_proto_rawDescGZIP(), []int{27}
 }
 
 func (x *DestroySecretVersionResponse) GetRevision() uint64 {
@@ -1867,7 +1811,7 @@ type GetSecretMetadataRequest struct {
 
 func (x *GetSecretMetadataRequest) Reset() {
 	*x = GetSecretMetadataRequest{}
-	mi := &file_kms_v1_kms_proto_msgTypes[29]
+	mi := &file_kms_v1_kms_proto_msgTypes[28]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1879,7 +1823,7 @@ func (x *GetSecretMetadataRequest) String() string {
 func (*GetSecretMetadataRequest) ProtoMessage() {}
 
 func (x *GetSecretMetadataRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_kms_v1_kms_proto_msgTypes[29]
+	mi := &file_kms_v1_kms_proto_msgTypes[28]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1892,7 +1836,7 @@ func (x *GetSecretMetadataRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetSecretMetadataRequest.ProtoReflect.Descriptor instead.
 func (*GetSecretMetadataRequest) Descriptor() ([]byte, []int) {
-	return file_kms_v1_kms_proto_rawDescGZIP(), []int{29}
+	return file_kms_v1_kms_proto_rawDescGZIP(), []int{28}
 }
 
 func (x *GetSecretMetadataRequest) GetRef() *ResourceRef {
@@ -1911,7 +1855,7 @@ type GetSecretMetadataResponse struct {
 
 func (x *GetSecretMetadataResponse) Reset() {
 	*x = GetSecretMetadataResponse{}
-	mi := &file_kms_v1_kms_proto_msgTypes[30]
+	mi := &file_kms_v1_kms_proto_msgTypes[29]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1923,7 +1867,7 @@ func (x *GetSecretMetadataResponse) String() string {
 func (*GetSecretMetadataResponse) ProtoMessage() {}
 
 func (x *GetSecretMetadataResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_kms_v1_kms_proto_msgTypes[30]
+	mi := &file_kms_v1_kms_proto_msgTypes[29]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1936,7 +1880,7 @@ func (x *GetSecretMetadataResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetSecretMetadataResponse.ProtoReflect.Descriptor instead.
 func (*GetSecretMetadataResponse) Descriptor() ([]byte, []int) {
-	return file_kms_v1_kms_proto_rawDescGZIP(), []int{30}
+	return file_kms_v1_kms_proto_rawDescGZIP(), []int{29}
 }
 
 func (x *GetSecretMetadataResponse) GetSecret() *SecretMetadata {
@@ -1956,7 +1900,7 @@ type PromoteSecretVersionRequest struct {
 
 func (x *PromoteSecretVersionRequest) Reset() {
 	*x = PromoteSecretVersionRequest{}
-	mi := &file_kms_v1_kms_proto_msgTypes[31]
+	mi := &file_kms_v1_kms_proto_msgTypes[30]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1968,7 +1912,7 @@ func (x *PromoteSecretVersionRequest) String() string {
 func (*PromoteSecretVersionRequest) ProtoMessage() {}
 
 func (x *PromoteSecretVersionRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_kms_v1_kms_proto_msgTypes[31]
+	mi := &file_kms_v1_kms_proto_msgTypes[30]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1981,7 +1925,7 @@ func (x *PromoteSecretVersionRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PromoteSecretVersionRequest.ProtoReflect.Descriptor instead.
 func (*PromoteSecretVersionRequest) Descriptor() ([]byte, []int) {
-	return file_kms_v1_kms_proto_rawDescGZIP(), []int{31}
+	return file_kms_v1_kms_proto_rawDescGZIP(), []int{30}
 }
 
 func (x *PromoteSecretVersionRequest) GetRef() *ResourceRef {
@@ -2009,7 +1953,7 @@ type PromoteSecretVersionResponse struct {
 
 func (x *PromoteSecretVersionResponse) Reset() {
 	*x = PromoteSecretVersionResponse{}
-	mi := &file_kms_v1_kms_proto_msgTypes[32]
+	mi := &file_kms_v1_kms_proto_msgTypes[31]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2021,7 +1965,7 @@ func (x *PromoteSecretVersionResponse) String() string {
 func (*PromoteSecretVersionResponse) ProtoMessage() {}
 
 func (x *PromoteSecretVersionResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_kms_v1_kms_proto_msgTypes[32]
+	mi := &file_kms_v1_kms_proto_msgTypes[31]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2034,7 +1978,7 @@ func (x *PromoteSecretVersionResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PromoteSecretVersionResponse.ProtoReflect.Descriptor instead.
 func (*PromoteSecretVersionResponse) Descriptor() ([]byte, []int) {
-	return file_kms_v1_kms_proto_rawDescGZIP(), []int{32}
+	return file_kms_v1_kms_proto_rawDescGZIP(), []int{31}
 }
 
 func (x *PromoteSecretVersionResponse) GetCurrentVersion() uint64 {
@@ -2061,9 +2005,9 @@ func (x *PromoteSecretVersionResponse) GetRevision() uint64 {
 type SubscribeRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// First message: subscription registration.
-	ClientName       string           `protobuf:"bytes,1,opt,name=client_name,json=clientName,proto3" json:"client_name,omitempty"`                      // e.g. "gradethis-be"
-	Selectors        []*WatchSelector `protobuf:"bytes,2,rep,name=selectors,proto3" json:"selectors,omitempty"`                                          // namespace + key pattern per selector
-	LastSeenRevision uint64           `protobuf:"varint,3,opt,name=last_seen_revision,json=lastSeenRevision,proto3" json:"last_seen_revision,omitempty"` // 0 = send full snapshot
+	ClientName       string          `protobuf:"bytes,1,opt,name=client_name,json=clientName,proto3" json:"client_name,omitempty"`                      // e.g. "gradethis-be"
+	Namespaces       []*NamespaceRef `protobuf:"bytes,2,rep,name=namespaces,proto3" json:"namespaces,omitempty"`                                        // the namespaces to watch
+	LastSeenRevision uint64          `protobuf:"varint,3,opt,name=last_seen_revision,json=lastSeenRevision,proto3" json:"last_seen_revision,omitempty"` // 0 = send full snapshot
 	// Subsequent messages: acks / heartbeat responses.
 	AckedRevision uint64 `protobuf:"varint,4,opt,name=acked_revision,json=ackedRevision,proto3" json:"acked_revision,omitempty"`
 	unknownFields protoimpl.UnknownFields
@@ -2072,7 +2016,7 @@ type SubscribeRequest struct {
 
 func (x *SubscribeRequest) Reset() {
 	*x = SubscribeRequest{}
-	mi := &file_kms_v1_kms_proto_msgTypes[33]
+	mi := &file_kms_v1_kms_proto_msgTypes[32]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2084,7 +2028,7 @@ func (x *SubscribeRequest) String() string {
 func (*SubscribeRequest) ProtoMessage() {}
 
 func (x *SubscribeRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_kms_v1_kms_proto_msgTypes[33]
+	mi := &file_kms_v1_kms_proto_msgTypes[32]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2097,7 +2041,7 @@ func (x *SubscribeRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SubscribeRequest.ProtoReflect.Descriptor instead.
 func (*SubscribeRequest) Descriptor() ([]byte, []int) {
-	return file_kms_v1_kms_proto_rawDescGZIP(), []int{33}
+	return file_kms_v1_kms_proto_rawDescGZIP(), []int{32}
 }
 
 func (x *SubscribeRequest) GetClientName() string {
@@ -2107,9 +2051,9 @@ func (x *SubscribeRequest) GetClientName() string {
 	return ""
 }
 
-func (x *SubscribeRequest) GetSelectors() []*WatchSelector {
+func (x *SubscribeRequest) GetNamespaces() []*NamespaceRef {
 	if x != nil {
-		return x.Selectors
+		return x.Namespaces
 	}
 	return nil
 }
@@ -2144,7 +2088,7 @@ type SubscribeEvent struct {
 
 func (x *SubscribeEvent) Reset() {
 	*x = SubscribeEvent{}
-	mi := &file_kms_v1_kms_proto_msgTypes[34]
+	mi := &file_kms_v1_kms_proto_msgTypes[33]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2156,7 +2100,7 @@ func (x *SubscribeEvent) String() string {
 func (*SubscribeEvent) ProtoMessage() {}
 
 func (x *SubscribeEvent) ProtoReflect() protoreflect.Message {
-	mi := &file_kms_v1_kms_proto_msgTypes[34]
+	mi := &file_kms_v1_kms_proto_msgTypes[33]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2169,7 +2113,7 @@ func (x *SubscribeEvent) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SubscribeEvent.ProtoReflect.Descriptor instead.
 func (*SubscribeEvent) Descriptor() ([]byte, []int) {
-	return file_kms_v1_kms_proto_rawDescGZIP(), []int{34}
+	return file_kms_v1_kms_proto_rawDescGZIP(), []int{33}
 }
 
 func (x *SubscribeEvent) GetEvent() isSubscribeEvent_Event {
@@ -2259,7 +2203,7 @@ type Snapshot struct {
 
 func (x *Snapshot) Reset() {
 	*x = Snapshot{}
-	mi := &file_kms_v1_kms_proto_msgTypes[35]
+	mi := &file_kms_v1_kms_proto_msgTypes[34]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2271,7 +2215,7 @@ func (x *Snapshot) String() string {
 func (*Snapshot) ProtoMessage() {}
 
 func (x *Snapshot) ProtoReflect() protoreflect.Message {
-	mi := &file_kms_v1_kms_proto_msgTypes[35]
+	mi := &file_kms_v1_kms_proto_msgTypes[34]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2284,7 +2228,7 @@ func (x *Snapshot) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Snapshot.ProtoReflect.Descriptor instead.
 func (*Snapshot) Descriptor() ([]byte, []int) {
-	return file_kms_v1_kms_proto_rawDescGZIP(), []int{35}
+	return file_kms_v1_kms_proto_rawDescGZIP(), []int{34}
 }
 
 func (x *Snapshot) GetParameters() []*Parameter {
@@ -2308,7 +2252,7 @@ type ParameterChange struct {
 
 func (x *ParameterChange) Reset() {
 	*x = ParameterChange{}
-	mi := &file_kms_v1_kms_proto_msgTypes[36]
+	mi := &file_kms_v1_kms_proto_msgTypes[35]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2320,7 +2264,7 @@ func (x *ParameterChange) String() string {
 func (*ParameterChange) ProtoMessage() {}
 
 func (x *ParameterChange) ProtoReflect() protoreflect.Message {
-	mi := &file_kms_v1_kms_proto_msgTypes[36]
+	mi := &file_kms_v1_kms_proto_msgTypes[35]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2333,7 +2277,7 @@ func (x *ParameterChange) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ParameterChange.ProtoReflect.Descriptor instead.
 func (*ParameterChange) Descriptor() ([]byte, []int) {
-	return file_kms_v1_kms_proto_rawDescGZIP(), []int{36}
+	return file_kms_v1_kms_proto_rawDescGZIP(), []int{35}
 }
 
 func (x *ParameterChange) GetRef() *ResourceRef {
@@ -2392,7 +2336,7 @@ type SecretMetadataChange struct {
 
 func (x *SecretMetadataChange) Reset() {
 	*x = SecretMetadataChange{}
-	mi := &file_kms_v1_kms_proto_msgTypes[37]
+	mi := &file_kms_v1_kms_proto_msgTypes[36]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2404,7 +2348,7 @@ func (x *SecretMetadataChange) String() string {
 func (*SecretMetadataChange) ProtoMessage() {}
 
 func (x *SecretMetadataChange) ProtoReflect() protoreflect.Message {
-	mi := &file_kms_v1_kms_proto_msgTypes[37]
+	mi := &file_kms_v1_kms_proto_msgTypes[36]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2417,7 +2361,7 @@ func (x *SecretMetadataChange) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SecretMetadataChange.ProtoReflect.Descriptor instead.
 func (*SecretMetadataChange) Descriptor() ([]byte, []int) {
-	return file_kms_v1_kms_proto_rawDescGZIP(), []int{37}
+	return file_kms_v1_kms_proto_rawDescGZIP(), []int{36}
 }
 
 func (x *SecretMetadataChange) GetRef() *ResourceRef {
@@ -2457,7 +2401,7 @@ type Heartbeat struct {
 
 func (x *Heartbeat) Reset() {
 	*x = Heartbeat{}
-	mi := &file_kms_v1_kms_proto_msgTypes[38]
+	mi := &file_kms_v1_kms_proto_msgTypes[37]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2469,7 +2413,7 @@ func (x *Heartbeat) String() string {
 func (*Heartbeat) ProtoMessage() {}
 
 func (x *Heartbeat) ProtoReflect() protoreflect.Message {
-	mi := &file_kms_v1_kms_proto_msgTypes[38]
+	mi := &file_kms_v1_kms_proto_msgTypes[37]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2482,126 +2426,12 @@ func (x *Heartbeat) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Heartbeat.ProtoReflect.Descriptor instead.
 func (*Heartbeat) Descriptor() ([]byte, []int) {
-	return file_kms_v1_kms_proto_rawDescGZIP(), []int{38}
+	return file_kms_v1_kms_proto_rawDescGZIP(), []int{37}
 }
 
 func (x *Heartbeat) GetServerTimeUnixMs() int64 {
 	if x != nil {
 		return x.ServerTimeUnixMs
-	}
-	return 0
-}
-
-type WatchParameterRequest struct {
-	state            protoimpl.MessageState `protogen:"open.v1"`
-	Ref              *ResourceRef           `protobuf:"bytes,1,opt,name=ref,proto3" json:"ref,omitempty"`
-	LastSeenRevision uint64                 `protobuf:"varint,2,opt,name=last_seen_revision,json=lastSeenRevision,proto3" json:"last_seen_revision,omitempty"`
-	unknownFields    protoimpl.UnknownFields
-	sizeCache        protoimpl.SizeCache
-}
-
-func (x *WatchParameterRequest) Reset() {
-	*x = WatchParameterRequest{}
-	mi := &file_kms_v1_kms_proto_msgTypes[39]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *WatchParameterRequest) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*WatchParameterRequest) ProtoMessage() {}
-
-func (x *WatchParameterRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_kms_v1_kms_proto_msgTypes[39]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use WatchParameterRequest.ProtoReflect.Descriptor instead.
-func (*WatchParameterRequest) Descriptor() ([]byte, []int) {
-	return file_kms_v1_kms_proto_rawDescGZIP(), []int{39}
-}
-
-func (x *WatchParameterRequest) GetRef() *ResourceRef {
-	if x != nil {
-		return x.Ref
-	}
-	return nil
-}
-
-func (x *WatchParameterRequest) GetLastSeenRevision() uint64 {
-	if x != nil {
-		return x.LastSeenRevision
-	}
-	return 0
-}
-
-// WatchNamespace streams changes for a whole namespace, optionally narrowed by
-// key_pattern (empty or "*" = all keys).
-type WatchNamespaceRequest struct {
-	state            protoimpl.MessageState `protogen:"open.v1"`
-	Namespace        *NamespaceRef          `protobuf:"bytes,1,opt,name=namespace,proto3" json:"namespace,omitempty"`
-	KeyPattern       string                 `protobuf:"bytes,2,opt,name=key_pattern,json=keyPattern,proto3" json:"key_pattern,omitempty"`
-	LastSeenRevision uint64                 `protobuf:"varint,3,opt,name=last_seen_revision,json=lastSeenRevision,proto3" json:"last_seen_revision,omitempty"`
-	unknownFields    protoimpl.UnknownFields
-	sizeCache        protoimpl.SizeCache
-}
-
-func (x *WatchNamespaceRequest) Reset() {
-	*x = WatchNamespaceRequest{}
-	mi := &file_kms_v1_kms_proto_msgTypes[40]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *WatchNamespaceRequest) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*WatchNamespaceRequest) ProtoMessage() {}
-
-func (x *WatchNamespaceRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_kms_v1_kms_proto_msgTypes[40]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use WatchNamespaceRequest.ProtoReflect.Descriptor instead.
-func (*WatchNamespaceRequest) Descriptor() ([]byte, []int) {
-	return file_kms_v1_kms_proto_rawDescGZIP(), []int{40}
-}
-
-func (x *WatchNamespaceRequest) GetNamespace() *NamespaceRef {
-	if x != nil {
-		return x.Namespace
-	}
-	return nil
-}
-
-func (x *WatchNamespaceRequest) GetKeyPattern() string {
-	if x != nil {
-		return x.KeyPattern
-	}
-	return ""
-}
-
-func (x *WatchNamespaceRequest) GetLastSeenRevision() uint64 {
-	if x != nil {
-		return x.LastSeenRevision
 	}
 	return 0
 }
@@ -2623,7 +2453,7 @@ type Namespace struct {
 
 func (x *Namespace) Reset() {
 	*x = Namespace{}
-	mi := &file_kms_v1_kms_proto_msgTypes[41]
+	mi := &file_kms_v1_kms_proto_msgTypes[38]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2635,7 +2465,7 @@ func (x *Namespace) String() string {
 func (*Namespace) ProtoMessage() {}
 
 func (x *Namespace) ProtoReflect() protoreflect.Message {
-	mi := &file_kms_v1_kms_proto_msgTypes[41]
+	mi := &file_kms_v1_kms_proto_msgTypes[38]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2648,7 +2478,7 @@ func (x *Namespace) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Namespace.ProtoReflect.Descriptor instead.
 func (*Namespace) Descriptor() ([]byte, []int) {
-	return file_kms_v1_kms_proto_rawDescGZIP(), []int{41}
+	return file_kms_v1_kms_proto_rawDescGZIP(), []int{38}
 }
 
 func (x *Namespace) GetRef() *NamespaceRef {
@@ -2714,7 +2544,7 @@ type CertBundle struct {
 
 func (x *CertBundle) Reset() {
 	*x = CertBundle{}
-	mi := &file_kms_v1_kms_proto_msgTypes[42]
+	mi := &file_kms_v1_kms_proto_msgTypes[39]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2726,7 +2556,7 @@ func (x *CertBundle) String() string {
 func (*CertBundle) ProtoMessage() {}
 
 func (x *CertBundle) ProtoReflect() protoreflect.Message {
-	mi := &file_kms_v1_kms_proto_msgTypes[42]
+	mi := &file_kms_v1_kms_proto_msgTypes[39]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2739,7 +2569,7 @@ func (x *CertBundle) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CertBundle.ProtoReflect.Descriptor instead.
 func (*CertBundle) Descriptor() ([]byte, []int) {
-	return file_kms_v1_kms_proto_rawDescGZIP(), []int{42}
+	return file_kms_v1_kms_proto_rawDescGZIP(), []int{39}
 }
 
 func (x *CertBundle) GetCertPem() string {
@@ -2784,7 +2614,7 @@ type IdentityCertInfo struct {
 
 func (x *IdentityCertInfo) Reset() {
 	*x = IdentityCertInfo{}
-	mi := &file_kms_v1_kms_proto_msgTypes[43]
+	mi := &file_kms_v1_kms_proto_msgTypes[40]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2796,7 +2626,7 @@ func (x *IdentityCertInfo) String() string {
 func (*IdentityCertInfo) ProtoMessage() {}
 
 func (x *IdentityCertInfo) ProtoReflect() protoreflect.Message {
-	mi := &file_kms_v1_kms_proto_msgTypes[43]
+	mi := &file_kms_v1_kms_proto_msgTypes[40]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2809,7 +2639,7 @@ func (x *IdentityCertInfo) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use IdentityCertInfo.ProtoReflect.Descriptor instead.
 func (*IdentityCertInfo) Descriptor() ([]byte, []int) {
-	return file_kms_v1_kms_proto_rawDescGZIP(), []int{43}
+	return file_kms_v1_kms_proto_rawDescGZIP(), []int{40}
 }
 
 func (x *IdentityCertInfo) GetSerial() string {
@@ -2862,7 +2692,7 @@ type Identity struct {
 
 func (x *Identity) Reset() {
 	*x = Identity{}
-	mi := &file_kms_v1_kms_proto_msgTypes[44]
+	mi := &file_kms_v1_kms_proto_msgTypes[41]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2874,7 +2704,7 @@ func (x *Identity) String() string {
 func (*Identity) ProtoMessage() {}
 
 func (x *Identity) ProtoReflect() protoreflect.Message {
-	mi := &file_kms_v1_kms_proto_msgTypes[44]
+	mi := &file_kms_v1_kms_proto_msgTypes[41]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2887,7 +2717,7 @@ func (x *Identity) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Identity.ProtoReflect.Descriptor instead.
 func (*Identity) Descriptor() ([]byte, []int) {
-	return file_kms_v1_kms_proto_rawDescGZIP(), []int{44}
+	return file_kms_v1_kms_proto_rawDescGZIP(), []int{41}
 }
 
 func (x *Identity) GetName() string {
@@ -2951,7 +2781,7 @@ type CreateNamespaceRequest struct {
 
 func (x *CreateNamespaceRequest) Reset() {
 	*x = CreateNamespaceRequest{}
-	mi := &file_kms_v1_kms_proto_msgTypes[45]
+	mi := &file_kms_v1_kms_proto_msgTypes[42]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2963,7 +2793,7 @@ func (x *CreateNamespaceRequest) String() string {
 func (*CreateNamespaceRequest) ProtoMessage() {}
 
 func (x *CreateNamespaceRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_kms_v1_kms_proto_msgTypes[45]
+	mi := &file_kms_v1_kms_proto_msgTypes[42]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2976,7 +2806,7 @@ func (x *CreateNamespaceRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateNamespaceRequest.ProtoReflect.Descriptor instead.
 func (*CreateNamespaceRequest) Descriptor() ([]byte, []int) {
-	return file_kms_v1_kms_proto_rawDescGZIP(), []int{45}
+	return file_kms_v1_kms_proto_rawDescGZIP(), []int{42}
 }
 
 func (x *CreateNamespaceRequest) GetRef() *NamespaceRef {
@@ -3009,7 +2839,7 @@ type CreateNamespaceResponse struct {
 
 func (x *CreateNamespaceResponse) Reset() {
 	*x = CreateNamespaceResponse{}
-	mi := &file_kms_v1_kms_proto_msgTypes[46]
+	mi := &file_kms_v1_kms_proto_msgTypes[43]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3021,7 +2851,7 @@ func (x *CreateNamespaceResponse) String() string {
 func (*CreateNamespaceResponse) ProtoMessage() {}
 
 func (x *CreateNamespaceResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_kms_v1_kms_proto_msgTypes[46]
+	mi := &file_kms_v1_kms_proto_msgTypes[43]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3034,7 +2864,7 @@ func (x *CreateNamespaceResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateNamespaceResponse.ProtoReflect.Descriptor instead.
 func (*CreateNamespaceResponse) Descriptor() ([]byte, []int) {
-	return file_kms_v1_kms_proto_rawDescGZIP(), []int{46}
+	return file_kms_v1_kms_proto_rawDescGZIP(), []int{43}
 }
 
 func (x *CreateNamespaceResponse) GetNamespace() *Namespace {
@@ -3057,7 +2887,7 @@ type UpdateNamespaceRequest struct {
 
 func (x *UpdateNamespaceRequest) Reset() {
 	*x = UpdateNamespaceRequest{}
-	mi := &file_kms_v1_kms_proto_msgTypes[47]
+	mi := &file_kms_v1_kms_proto_msgTypes[44]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3069,7 +2899,7 @@ func (x *UpdateNamespaceRequest) String() string {
 func (*UpdateNamespaceRequest) ProtoMessage() {}
 
 func (x *UpdateNamespaceRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_kms_v1_kms_proto_msgTypes[47]
+	mi := &file_kms_v1_kms_proto_msgTypes[44]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3082,7 +2912,7 @@ func (x *UpdateNamespaceRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UpdateNamespaceRequest.ProtoReflect.Descriptor instead.
 func (*UpdateNamespaceRequest) Descriptor() ([]byte, []int) {
-	return file_kms_v1_kms_proto_rawDescGZIP(), []int{47}
+	return file_kms_v1_kms_proto_rawDescGZIP(), []int{44}
 }
 
 func (x *UpdateNamespaceRequest) GetRef() *NamespaceRef {
@@ -3115,7 +2945,7 @@ type UpdateNamespaceResponse struct {
 
 func (x *UpdateNamespaceResponse) Reset() {
 	*x = UpdateNamespaceResponse{}
-	mi := &file_kms_v1_kms_proto_msgTypes[48]
+	mi := &file_kms_v1_kms_proto_msgTypes[45]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3127,7 +2957,7 @@ func (x *UpdateNamespaceResponse) String() string {
 func (*UpdateNamespaceResponse) ProtoMessage() {}
 
 func (x *UpdateNamespaceResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_kms_v1_kms_proto_msgTypes[48]
+	mi := &file_kms_v1_kms_proto_msgTypes[45]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3140,7 +2970,7 @@ func (x *UpdateNamespaceResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UpdateNamespaceResponse.ProtoReflect.Descriptor instead.
 func (*UpdateNamespaceResponse) Descriptor() ([]byte, []int) {
-	return file_kms_v1_kms_proto_rawDescGZIP(), []int{48}
+	return file_kms_v1_kms_proto_rawDescGZIP(), []int{45}
 }
 
 func (x *UpdateNamespaceResponse) GetNamespace() *Namespace {
@@ -3161,7 +2991,7 @@ type DeleteNamespaceRequest struct {
 
 func (x *DeleteNamespaceRequest) Reset() {
 	*x = DeleteNamespaceRequest{}
-	mi := &file_kms_v1_kms_proto_msgTypes[49]
+	mi := &file_kms_v1_kms_proto_msgTypes[46]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3173,7 +3003,7 @@ func (x *DeleteNamespaceRequest) String() string {
 func (*DeleteNamespaceRequest) ProtoMessage() {}
 
 func (x *DeleteNamespaceRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_kms_v1_kms_proto_msgTypes[49]
+	mi := &file_kms_v1_kms_proto_msgTypes[46]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3186,7 +3016,7 @@ func (x *DeleteNamespaceRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteNamespaceRequest.ProtoReflect.Descriptor instead.
 func (*DeleteNamespaceRequest) Descriptor() ([]byte, []int) {
-	return file_kms_v1_kms_proto_rawDescGZIP(), []int{49}
+	return file_kms_v1_kms_proto_rawDescGZIP(), []int{46}
 }
 
 func (x *DeleteNamespaceRequest) GetRef() *NamespaceRef {
@@ -3204,7 +3034,7 @@ type DeleteNamespaceResponse struct {
 
 func (x *DeleteNamespaceResponse) Reset() {
 	*x = DeleteNamespaceResponse{}
-	mi := &file_kms_v1_kms_proto_msgTypes[50]
+	mi := &file_kms_v1_kms_proto_msgTypes[47]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3216,7 +3046,7 @@ func (x *DeleteNamespaceResponse) String() string {
 func (*DeleteNamespaceResponse) ProtoMessage() {}
 
 func (x *DeleteNamespaceResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_kms_v1_kms_proto_msgTypes[50]
+	mi := &file_kms_v1_kms_proto_msgTypes[47]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3229,7 +3059,7 @@ func (x *DeleteNamespaceResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteNamespaceResponse.ProtoReflect.Descriptor instead.
 func (*DeleteNamespaceResponse) Descriptor() ([]byte, []int) {
-	return file_kms_v1_kms_proto_rawDescGZIP(), []int{50}
+	return file_kms_v1_kms_proto_rawDescGZIP(), []int{47}
 }
 
 type ListNamespacesRequest struct {
@@ -3242,7 +3072,7 @@ type ListNamespacesRequest struct {
 
 func (x *ListNamespacesRequest) Reset() {
 	*x = ListNamespacesRequest{}
-	mi := &file_kms_v1_kms_proto_msgTypes[51]
+	mi := &file_kms_v1_kms_proto_msgTypes[48]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3254,7 +3084,7 @@ func (x *ListNamespacesRequest) String() string {
 func (*ListNamespacesRequest) ProtoMessage() {}
 
 func (x *ListNamespacesRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_kms_v1_kms_proto_msgTypes[51]
+	mi := &file_kms_v1_kms_proto_msgTypes[48]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3267,7 +3097,7 @@ func (x *ListNamespacesRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListNamespacesRequest.ProtoReflect.Descriptor instead.
 func (*ListNamespacesRequest) Descriptor() ([]byte, []int) {
-	return file_kms_v1_kms_proto_rawDescGZIP(), []int{51}
+	return file_kms_v1_kms_proto_rawDescGZIP(), []int{48}
 }
 
 func (x *ListNamespacesRequest) GetPageSize() int32 {
@@ -3294,7 +3124,7 @@ type ListNamespacesResponse struct {
 
 func (x *ListNamespacesResponse) Reset() {
 	*x = ListNamespacesResponse{}
-	mi := &file_kms_v1_kms_proto_msgTypes[52]
+	mi := &file_kms_v1_kms_proto_msgTypes[49]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3306,7 +3136,7 @@ func (x *ListNamespacesResponse) String() string {
 func (*ListNamespacesResponse) ProtoMessage() {}
 
 func (x *ListNamespacesResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_kms_v1_kms_proto_msgTypes[52]
+	mi := &file_kms_v1_kms_proto_msgTypes[49]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3319,7 +3149,7 @@ func (x *ListNamespacesResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListNamespacesResponse.ProtoReflect.Descriptor instead.
 func (*ListNamespacesResponse) Descriptor() ([]byte, []int) {
-	return file_kms_v1_kms_proto_rawDescGZIP(), []int{52}
+	return file_kms_v1_kms_proto_rawDescGZIP(), []int{49}
 }
 
 func (x *ListNamespacesResponse) GetNamespaces() []*Namespace {
@@ -3336,20 +3166,20 @@ func (x *ListNamespacesResponse) GetNextPageToken() string {
 	return ""
 }
 
-// PolicyRule grants or denies one operation on keys within a namespace scope.
+// PolicyRule grants or denies one operation on a whole namespace. Authorization
+// is namespace-level: there is no per-key scoping.
 type PolicyRule struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Operation     string                 `protobuf:"bytes,1,opt,name=operation,proto3" json:"operation,omitempty"` // e.g. "secret:read", "parameter:*", "*"
 	Env           string                 `protobuf:"bytes,2,opt,name=env,proto3" json:"env,omitempty"`             // exact env or "*"
 	App           string                 `protobuf:"bytes,3,opt,name=app,proto3" json:"app,omitempty"`             // exact app or "*"
-	Key           string                 `protobuf:"bytes,4,opt,name=key,proto3" json:"key,omitempty"`             // exact key, "*", or "prefix/*"
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *PolicyRule) Reset() {
 	*x = PolicyRule{}
-	mi := &file_kms_v1_kms_proto_msgTypes[53]
+	mi := &file_kms_v1_kms_proto_msgTypes[50]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3361,7 +3191,7 @@ func (x *PolicyRule) String() string {
 func (*PolicyRule) ProtoMessage() {}
 
 func (x *PolicyRule) ProtoReflect() protoreflect.Message {
-	mi := &file_kms_v1_kms_proto_msgTypes[53]
+	mi := &file_kms_v1_kms_proto_msgTypes[50]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3374,7 +3204,7 @@ func (x *PolicyRule) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PolicyRule.ProtoReflect.Descriptor instead.
 func (*PolicyRule) Descriptor() ([]byte, []int) {
-	return file_kms_v1_kms_proto_rawDescGZIP(), []int{53}
+	return file_kms_v1_kms_proto_rawDescGZIP(), []int{50}
 }
 
 func (x *PolicyRule) GetOperation() string {
@@ -3398,13 +3228,6 @@ func (x *PolicyRule) GetApp() string {
 	return ""
 }
 
-func (x *PolicyRule) GetKey() string {
-	if x != nil {
-		return x.Key
-	}
-	return ""
-}
-
 type Policy struct {
 	state           protoimpl.MessageState `protogen:"open.v1"`
 	Name            string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
@@ -3419,7 +3242,7 @@ type Policy struct {
 
 func (x *Policy) Reset() {
 	*x = Policy{}
-	mi := &file_kms_v1_kms_proto_msgTypes[54]
+	mi := &file_kms_v1_kms_proto_msgTypes[51]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3431,7 +3254,7 @@ func (x *Policy) String() string {
 func (*Policy) ProtoMessage() {}
 
 func (x *Policy) ProtoReflect() protoreflect.Message {
-	mi := &file_kms_v1_kms_proto_msgTypes[54]
+	mi := &file_kms_v1_kms_proto_msgTypes[51]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3444,7 +3267,7 @@ func (x *Policy) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Policy.ProtoReflect.Descriptor instead.
 func (*Policy) Descriptor() ([]byte, []int) {
-	return file_kms_v1_kms_proto_rawDescGZIP(), []int{54}
+	return file_kms_v1_kms_proto_rawDescGZIP(), []int{51}
 }
 
 func (x *Policy) GetName() string {
@@ -3498,7 +3321,7 @@ type CreatePolicyRequest struct {
 
 func (x *CreatePolicyRequest) Reset() {
 	*x = CreatePolicyRequest{}
-	mi := &file_kms_v1_kms_proto_msgTypes[55]
+	mi := &file_kms_v1_kms_proto_msgTypes[52]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3510,7 +3333,7 @@ func (x *CreatePolicyRequest) String() string {
 func (*CreatePolicyRequest) ProtoMessage() {}
 
 func (x *CreatePolicyRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_kms_v1_kms_proto_msgTypes[55]
+	mi := &file_kms_v1_kms_proto_msgTypes[52]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3523,7 +3346,7 @@ func (x *CreatePolicyRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreatePolicyRequest.ProtoReflect.Descriptor instead.
 func (*CreatePolicyRequest) Descriptor() ([]byte, []int) {
-	return file_kms_v1_kms_proto_rawDescGZIP(), []int{55}
+	return file_kms_v1_kms_proto_rawDescGZIP(), []int{52}
 }
 
 func (x *CreatePolicyRequest) GetPolicy() *Policy {
@@ -3542,7 +3365,7 @@ type CreatePolicyResponse struct {
 
 func (x *CreatePolicyResponse) Reset() {
 	*x = CreatePolicyResponse{}
-	mi := &file_kms_v1_kms_proto_msgTypes[56]
+	mi := &file_kms_v1_kms_proto_msgTypes[53]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3554,7 +3377,7 @@ func (x *CreatePolicyResponse) String() string {
 func (*CreatePolicyResponse) ProtoMessage() {}
 
 func (x *CreatePolicyResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_kms_v1_kms_proto_msgTypes[56]
+	mi := &file_kms_v1_kms_proto_msgTypes[53]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3567,7 +3390,7 @@ func (x *CreatePolicyResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreatePolicyResponse.ProtoReflect.Descriptor instead.
 func (*CreatePolicyResponse) Descriptor() ([]byte, []int) {
-	return file_kms_v1_kms_proto_rawDescGZIP(), []int{56}
+	return file_kms_v1_kms_proto_rawDescGZIP(), []int{53}
 }
 
 func (x *CreatePolicyResponse) GetPolicy() *Policy {
@@ -3586,7 +3409,7 @@ type UpdatePolicyRequest struct {
 
 func (x *UpdatePolicyRequest) Reset() {
 	*x = UpdatePolicyRequest{}
-	mi := &file_kms_v1_kms_proto_msgTypes[57]
+	mi := &file_kms_v1_kms_proto_msgTypes[54]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3598,7 +3421,7 @@ func (x *UpdatePolicyRequest) String() string {
 func (*UpdatePolicyRequest) ProtoMessage() {}
 
 func (x *UpdatePolicyRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_kms_v1_kms_proto_msgTypes[57]
+	mi := &file_kms_v1_kms_proto_msgTypes[54]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3611,7 +3434,7 @@ func (x *UpdatePolicyRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UpdatePolicyRequest.ProtoReflect.Descriptor instead.
 func (*UpdatePolicyRequest) Descriptor() ([]byte, []int) {
-	return file_kms_v1_kms_proto_rawDescGZIP(), []int{57}
+	return file_kms_v1_kms_proto_rawDescGZIP(), []int{54}
 }
 
 func (x *UpdatePolicyRequest) GetPolicy() *Policy {
@@ -3630,7 +3453,7 @@ type UpdatePolicyResponse struct {
 
 func (x *UpdatePolicyResponse) Reset() {
 	*x = UpdatePolicyResponse{}
-	mi := &file_kms_v1_kms_proto_msgTypes[58]
+	mi := &file_kms_v1_kms_proto_msgTypes[55]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3642,7 +3465,7 @@ func (x *UpdatePolicyResponse) String() string {
 func (*UpdatePolicyResponse) ProtoMessage() {}
 
 func (x *UpdatePolicyResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_kms_v1_kms_proto_msgTypes[58]
+	mi := &file_kms_v1_kms_proto_msgTypes[55]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3655,7 +3478,7 @@ func (x *UpdatePolicyResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UpdatePolicyResponse.ProtoReflect.Descriptor instead.
 func (*UpdatePolicyResponse) Descriptor() ([]byte, []int) {
-	return file_kms_v1_kms_proto_rawDescGZIP(), []int{58}
+	return file_kms_v1_kms_proto_rawDescGZIP(), []int{55}
 }
 
 func (x *UpdatePolicyResponse) GetPolicy() *Policy {
@@ -3674,7 +3497,7 @@ type DeletePolicyRequest struct {
 
 func (x *DeletePolicyRequest) Reset() {
 	*x = DeletePolicyRequest{}
-	mi := &file_kms_v1_kms_proto_msgTypes[59]
+	mi := &file_kms_v1_kms_proto_msgTypes[56]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3686,7 +3509,7 @@ func (x *DeletePolicyRequest) String() string {
 func (*DeletePolicyRequest) ProtoMessage() {}
 
 func (x *DeletePolicyRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_kms_v1_kms_proto_msgTypes[59]
+	mi := &file_kms_v1_kms_proto_msgTypes[56]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3699,7 +3522,7 @@ func (x *DeletePolicyRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeletePolicyRequest.ProtoReflect.Descriptor instead.
 func (*DeletePolicyRequest) Descriptor() ([]byte, []int) {
-	return file_kms_v1_kms_proto_rawDescGZIP(), []int{59}
+	return file_kms_v1_kms_proto_rawDescGZIP(), []int{56}
 }
 
 func (x *DeletePolicyRequest) GetName() string {
@@ -3717,7 +3540,7 @@ type DeletePolicyResponse struct {
 
 func (x *DeletePolicyResponse) Reset() {
 	*x = DeletePolicyResponse{}
-	mi := &file_kms_v1_kms_proto_msgTypes[60]
+	mi := &file_kms_v1_kms_proto_msgTypes[57]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3729,7 +3552,7 @@ func (x *DeletePolicyResponse) String() string {
 func (*DeletePolicyResponse) ProtoMessage() {}
 
 func (x *DeletePolicyResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_kms_v1_kms_proto_msgTypes[60]
+	mi := &file_kms_v1_kms_proto_msgTypes[57]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3742,7 +3565,7 @@ func (x *DeletePolicyResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeletePolicyResponse.ProtoReflect.Descriptor instead.
 func (*DeletePolicyResponse) Descriptor() ([]byte, []int) {
-	return file_kms_v1_kms_proto_rawDescGZIP(), []int{60}
+	return file_kms_v1_kms_proto_rawDescGZIP(), []int{57}
 }
 
 type ListPoliciesRequest struct {
@@ -3755,7 +3578,7 @@ type ListPoliciesRequest struct {
 
 func (x *ListPoliciesRequest) Reset() {
 	*x = ListPoliciesRequest{}
-	mi := &file_kms_v1_kms_proto_msgTypes[61]
+	mi := &file_kms_v1_kms_proto_msgTypes[58]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3767,7 +3590,7 @@ func (x *ListPoliciesRequest) String() string {
 func (*ListPoliciesRequest) ProtoMessage() {}
 
 func (x *ListPoliciesRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_kms_v1_kms_proto_msgTypes[61]
+	mi := &file_kms_v1_kms_proto_msgTypes[58]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3780,7 +3603,7 @@ func (x *ListPoliciesRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListPoliciesRequest.ProtoReflect.Descriptor instead.
 func (*ListPoliciesRequest) Descriptor() ([]byte, []int) {
-	return file_kms_v1_kms_proto_rawDescGZIP(), []int{61}
+	return file_kms_v1_kms_proto_rawDescGZIP(), []int{58}
 }
 
 func (x *ListPoliciesRequest) GetPageSize() int32 {
@@ -3807,7 +3630,7 @@ type ListPoliciesResponse struct {
 
 func (x *ListPoliciesResponse) Reset() {
 	*x = ListPoliciesResponse{}
-	mi := &file_kms_v1_kms_proto_msgTypes[62]
+	mi := &file_kms_v1_kms_proto_msgTypes[59]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3819,7 +3642,7 @@ func (x *ListPoliciesResponse) String() string {
 func (*ListPoliciesResponse) ProtoMessage() {}
 
 func (x *ListPoliciesResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_kms_v1_kms_proto_msgTypes[62]
+	mi := &file_kms_v1_kms_proto_msgTypes[59]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3832,7 +3655,7 @@ func (x *ListPoliciesResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListPoliciesResponse.ProtoReflect.Descriptor instead.
 func (*ListPoliciesResponse) Descriptor() ([]byte, []int) {
-	return file_kms_v1_kms_proto_rawDescGZIP(), []int{62}
+	return file_kms_v1_kms_proto_rawDescGZIP(), []int{59}
 }
 
 func (x *ListPoliciesResponse) GetPolicies() []*Policy {
@@ -3868,7 +3691,7 @@ type CreateIdentityRequest struct {
 
 func (x *CreateIdentityRequest) Reset() {
 	*x = CreateIdentityRequest{}
-	mi := &file_kms_v1_kms_proto_msgTypes[63]
+	mi := &file_kms_v1_kms_proto_msgTypes[60]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3880,7 +3703,7 @@ func (x *CreateIdentityRequest) String() string {
 func (*CreateIdentityRequest) ProtoMessage() {}
 
 func (x *CreateIdentityRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_kms_v1_kms_proto_msgTypes[63]
+	mi := &file_kms_v1_kms_proto_msgTypes[60]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3893,7 +3716,7 @@ func (x *CreateIdentityRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateIdentityRequest.ProtoReflect.Descriptor instead.
 func (*CreateIdentityRequest) Descriptor() ([]byte, []int) {
-	return file_kms_v1_kms_proto_rawDescGZIP(), []int{63}
+	return file_kms_v1_kms_proto_rawDescGZIP(), []int{60}
 }
 
 func (x *CreateIdentityRequest) GetName() string {
@@ -3945,7 +3768,7 @@ type CreateIdentityResponse struct {
 
 func (x *CreateIdentityResponse) Reset() {
 	*x = CreateIdentityResponse{}
-	mi := &file_kms_v1_kms_proto_msgTypes[64]
+	mi := &file_kms_v1_kms_proto_msgTypes[61]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3957,7 +3780,7 @@ func (x *CreateIdentityResponse) String() string {
 func (*CreateIdentityResponse) ProtoMessage() {}
 
 func (x *CreateIdentityResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_kms_v1_kms_proto_msgTypes[64]
+	mi := &file_kms_v1_kms_proto_msgTypes[61]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3970,7 +3793,7 @@ func (x *CreateIdentityResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateIdentityResponse.ProtoReflect.Descriptor instead.
 func (*CreateIdentityResponse) Descriptor() ([]byte, []int) {
-	return file_kms_v1_kms_proto_rawDescGZIP(), []int{64}
+	return file_kms_v1_kms_proto_rawDescGZIP(), []int{61}
 }
 
 func (x *CreateIdentityResponse) GetIdentity() *Identity {
@@ -4004,7 +3827,7 @@ type ListIdentitiesRequest struct {
 
 func (x *ListIdentitiesRequest) Reset() {
 	*x = ListIdentitiesRequest{}
-	mi := &file_kms_v1_kms_proto_msgTypes[65]
+	mi := &file_kms_v1_kms_proto_msgTypes[62]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4016,7 +3839,7 @@ func (x *ListIdentitiesRequest) String() string {
 func (*ListIdentitiesRequest) ProtoMessage() {}
 
 func (x *ListIdentitiesRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_kms_v1_kms_proto_msgTypes[65]
+	mi := &file_kms_v1_kms_proto_msgTypes[62]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4029,7 +3852,7 @@ func (x *ListIdentitiesRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListIdentitiesRequest.ProtoReflect.Descriptor instead.
 func (*ListIdentitiesRequest) Descriptor() ([]byte, []int) {
-	return file_kms_v1_kms_proto_rawDescGZIP(), []int{65}
+	return file_kms_v1_kms_proto_rawDescGZIP(), []int{62}
 }
 
 func (x *ListIdentitiesRequest) GetPageSize() int32 {
@@ -4056,7 +3879,7 @@ type ListIdentitiesResponse struct {
 
 func (x *ListIdentitiesResponse) Reset() {
 	*x = ListIdentitiesResponse{}
-	mi := &file_kms_v1_kms_proto_msgTypes[66]
+	mi := &file_kms_v1_kms_proto_msgTypes[63]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4068,7 +3891,7 @@ func (x *ListIdentitiesResponse) String() string {
 func (*ListIdentitiesResponse) ProtoMessage() {}
 
 func (x *ListIdentitiesResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_kms_v1_kms_proto_msgTypes[66]
+	mi := &file_kms_v1_kms_proto_msgTypes[63]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4081,7 +3904,7 @@ func (x *ListIdentitiesResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListIdentitiesResponse.ProtoReflect.Descriptor instead.
 func (*ListIdentitiesResponse) Descriptor() ([]byte, []int) {
-	return file_kms_v1_kms_proto_rawDescGZIP(), []int{66}
+	return file_kms_v1_kms_proto_rawDescGZIP(), []int{63}
 }
 
 func (x *ListIdentitiesResponse) GetIdentities() []*Identity {
@@ -4107,7 +3930,7 @@ type RevokeIdentityRequest struct {
 
 func (x *RevokeIdentityRequest) Reset() {
 	*x = RevokeIdentityRequest{}
-	mi := &file_kms_v1_kms_proto_msgTypes[67]
+	mi := &file_kms_v1_kms_proto_msgTypes[64]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4119,7 +3942,7 @@ func (x *RevokeIdentityRequest) String() string {
 func (*RevokeIdentityRequest) ProtoMessage() {}
 
 func (x *RevokeIdentityRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_kms_v1_kms_proto_msgTypes[67]
+	mi := &file_kms_v1_kms_proto_msgTypes[64]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4132,7 +3955,7 @@ func (x *RevokeIdentityRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RevokeIdentityRequest.ProtoReflect.Descriptor instead.
 func (*RevokeIdentityRequest) Descriptor() ([]byte, []int) {
-	return file_kms_v1_kms_proto_rawDescGZIP(), []int{67}
+	return file_kms_v1_kms_proto_rawDescGZIP(), []int{64}
 }
 
 func (x *RevokeIdentityRequest) GetName() string {
@@ -4150,7 +3973,7 @@ type RevokeIdentityResponse struct {
 
 func (x *RevokeIdentityResponse) Reset() {
 	*x = RevokeIdentityResponse{}
-	mi := &file_kms_v1_kms_proto_msgTypes[68]
+	mi := &file_kms_v1_kms_proto_msgTypes[65]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4162,7 +3985,7 @@ func (x *RevokeIdentityResponse) String() string {
 func (*RevokeIdentityResponse) ProtoMessage() {}
 
 func (x *RevokeIdentityResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_kms_v1_kms_proto_msgTypes[68]
+	mi := &file_kms_v1_kms_proto_msgTypes[65]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4175,7 +3998,7 @@ func (x *RevokeIdentityResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RevokeIdentityResponse.ProtoReflect.Descriptor instead.
 func (*RevokeIdentityResponse) Descriptor() ([]byte, []int) {
-	return file_kms_v1_kms_proto_rawDescGZIP(), []int{68}
+	return file_kms_v1_kms_proto_rawDescGZIP(), []int{65}
 }
 
 type RotateIdentityTokenRequest struct {
@@ -4187,7 +4010,7 @@ type RotateIdentityTokenRequest struct {
 
 func (x *RotateIdentityTokenRequest) Reset() {
 	*x = RotateIdentityTokenRequest{}
-	mi := &file_kms_v1_kms_proto_msgTypes[69]
+	mi := &file_kms_v1_kms_proto_msgTypes[66]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4199,7 +4022,7 @@ func (x *RotateIdentityTokenRequest) String() string {
 func (*RotateIdentityTokenRequest) ProtoMessage() {}
 
 func (x *RotateIdentityTokenRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_kms_v1_kms_proto_msgTypes[69]
+	mi := &file_kms_v1_kms_proto_msgTypes[66]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4212,7 +4035,7 @@ func (x *RotateIdentityTokenRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RotateIdentityTokenRequest.ProtoReflect.Descriptor instead.
 func (*RotateIdentityTokenRequest) Descriptor() ([]byte, []int) {
-	return file_kms_v1_kms_proto_rawDescGZIP(), []int{69}
+	return file_kms_v1_kms_proto_rawDescGZIP(), []int{66}
 }
 
 func (x *RotateIdentityTokenRequest) GetName() string {
@@ -4231,7 +4054,7 @@ type RotateIdentityTokenResponse struct {
 
 func (x *RotateIdentityTokenResponse) Reset() {
 	*x = RotateIdentityTokenResponse{}
-	mi := &file_kms_v1_kms_proto_msgTypes[70]
+	mi := &file_kms_v1_kms_proto_msgTypes[67]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4243,7 +4066,7 @@ func (x *RotateIdentityTokenResponse) String() string {
 func (*RotateIdentityTokenResponse) ProtoMessage() {}
 
 func (x *RotateIdentityTokenResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_kms_v1_kms_proto_msgTypes[70]
+	mi := &file_kms_v1_kms_proto_msgTypes[67]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4256,7 +4079,7 @@ func (x *RotateIdentityTokenResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RotateIdentityTokenResponse.ProtoReflect.Descriptor instead.
 func (*RotateIdentityTokenResponse) Descriptor() ([]byte, []int) {
-	return file_kms_v1_kms_proto_rawDescGZIP(), []int{70}
+	return file_kms_v1_kms_proto_rawDescGZIP(), []int{67}
 }
 
 func (x *RotateIdentityTokenResponse) GetToken() string {
@@ -4278,7 +4101,7 @@ type IssueIdentityCertificateRequest struct {
 
 func (x *IssueIdentityCertificateRequest) Reset() {
 	*x = IssueIdentityCertificateRequest{}
-	mi := &file_kms_v1_kms_proto_msgTypes[71]
+	mi := &file_kms_v1_kms_proto_msgTypes[68]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4290,7 +4113,7 @@ func (x *IssueIdentityCertificateRequest) String() string {
 func (*IssueIdentityCertificateRequest) ProtoMessage() {}
 
 func (x *IssueIdentityCertificateRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_kms_v1_kms_proto_msgTypes[71]
+	mi := &file_kms_v1_kms_proto_msgTypes[68]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4303,7 +4126,7 @@ func (x *IssueIdentityCertificateRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use IssueIdentityCertificateRequest.ProtoReflect.Descriptor instead.
 func (*IssueIdentityCertificateRequest) Descriptor() ([]byte, []int) {
-	return file_kms_v1_kms_proto_rawDescGZIP(), []int{71}
+	return file_kms_v1_kms_proto_rawDescGZIP(), []int{68}
 }
 
 func (x *IssueIdentityCertificateRequest) GetName() string {
@@ -4329,7 +4152,7 @@ type IssueIdentityCertificateResponse struct {
 
 func (x *IssueIdentityCertificateResponse) Reset() {
 	*x = IssueIdentityCertificateResponse{}
-	mi := &file_kms_v1_kms_proto_msgTypes[72]
+	mi := &file_kms_v1_kms_proto_msgTypes[69]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4341,7 +4164,7 @@ func (x *IssueIdentityCertificateResponse) String() string {
 func (*IssueIdentityCertificateResponse) ProtoMessage() {}
 
 func (x *IssueIdentityCertificateResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_kms_v1_kms_proto_msgTypes[72]
+	mi := &file_kms_v1_kms_proto_msgTypes[69]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4354,7 +4177,7 @@ func (x *IssueIdentityCertificateResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use IssueIdentityCertificateResponse.ProtoReflect.Descriptor instead.
 func (*IssueIdentityCertificateResponse) Descriptor() ([]byte, []int) {
-	return file_kms_v1_kms_proto_rawDescGZIP(), []int{72}
+	return file_kms_v1_kms_proto_rawDescGZIP(), []int{69}
 }
 
 func (x *IssueIdentityCertificateResponse) GetCert() *CertBundle {
@@ -4376,7 +4199,7 @@ type RevokeIdentityCertificateRequest struct {
 
 func (x *RevokeIdentityCertificateRequest) Reset() {
 	*x = RevokeIdentityCertificateRequest{}
-	mi := &file_kms_v1_kms_proto_msgTypes[73]
+	mi := &file_kms_v1_kms_proto_msgTypes[70]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4388,7 +4211,7 @@ func (x *RevokeIdentityCertificateRequest) String() string {
 func (*RevokeIdentityCertificateRequest) ProtoMessage() {}
 
 func (x *RevokeIdentityCertificateRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_kms_v1_kms_proto_msgTypes[73]
+	mi := &file_kms_v1_kms_proto_msgTypes[70]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4401,7 +4224,7 @@ func (x *RevokeIdentityCertificateRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RevokeIdentityCertificateRequest.ProtoReflect.Descriptor instead.
 func (*RevokeIdentityCertificateRequest) Descriptor() ([]byte, []int) {
-	return file_kms_v1_kms_proto_rawDescGZIP(), []int{73}
+	return file_kms_v1_kms_proto_rawDescGZIP(), []int{70}
 }
 
 func (x *RevokeIdentityCertificateRequest) GetName() string {
@@ -4426,7 +4249,7 @@ type RevokeIdentityCertificateResponse struct {
 
 func (x *RevokeIdentityCertificateResponse) Reset() {
 	*x = RevokeIdentityCertificateResponse{}
-	mi := &file_kms_v1_kms_proto_msgTypes[74]
+	mi := &file_kms_v1_kms_proto_msgTypes[71]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4438,7 +4261,7 @@ func (x *RevokeIdentityCertificateResponse) String() string {
 func (*RevokeIdentityCertificateResponse) ProtoMessage() {}
 
 func (x *RevokeIdentityCertificateResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_kms_v1_kms_proto_msgTypes[74]
+	mi := &file_kms_v1_kms_proto_msgTypes[71]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4451,7 +4274,7 @@ func (x *RevokeIdentityCertificateResponse) ProtoReflect() protoreflect.Message 
 
 // Deprecated: Use RevokeIdentityCertificateResponse.ProtoReflect.Descriptor instead.
 func (*RevokeIdentityCertificateResponse) Descriptor() ([]byte, []int) {
-	return file_kms_v1_kms_proto_rawDescGZIP(), []int{74}
+	return file_kms_v1_kms_proto_rawDescGZIP(), []int{71}
 }
 
 // WhoAmI returns the calling identity as resolved from its credential. It is
@@ -4465,7 +4288,7 @@ type WhoAmIRequest struct {
 
 func (x *WhoAmIRequest) Reset() {
 	*x = WhoAmIRequest{}
-	mi := &file_kms_v1_kms_proto_msgTypes[75]
+	mi := &file_kms_v1_kms_proto_msgTypes[72]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4477,7 +4300,7 @@ func (x *WhoAmIRequest) String() string {
 func (*WhoAmIRequest) ProtoMessage() {}
 
 func (x *WhoAmIRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_kms_v1_kms_proto_msgTypes[75]
+	mi := &file_kms_v1_kms_proto_msgTypes[72]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4490,7 +4313,7 @@ func (x *WhoAmIRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use WhoAmIRequest.ProtoReflect.Descriptor instead.
 func (*WhoAmIRequest) Descriptor() ([]byte, []int) {
-	return file_kms_v1_kms_proto_rawDescGZIP(), []int{75}
+	return file_kms_v1_kms_proto_rawDescGZIP(), []int{72}
 }
 
 type WhoAmIResponse struct {
@@ -4505,7 +4328,7 @@ type WhoAmIResponse struct {
 
 func (x *WhoAmIResponse) Reset() {
 	*x = WhoAmIResponse{}
-	mi := &file_kms_v1_kms_proto_msgTypes[76]
+	mi := &file_kms_v1_kms_proto_msgTypes[73]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4517,7 +4340,7 @@ func (x *WhoAmIResponse) String() string {
 func (*WhoAmIResponse) ProtoMessage() {}
 
 func (x *WhoAmIResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_kms_v1_kms_proto_msgTypes[76]
+	mi := &file_kms_v1_kms_proto_msgTypes[73]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4530,7 +4353,7 @@ func (x *WhoAmIResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use WhoAmIResponse.ProtoReflect.Descriptor instead.
 func (*WhoAmIResponse) Descriptor() ([]byte, []int) {
-	return file_kms_v1_kms_proto_rawDescGZIP(), []int{76}
+	return file_kms_v1_kms_proto_rawDescGZIP(), []int{73}
 }
 
 func (x *WhoAmIResponse) GetName() string {
@@ -4571,7 +4394,7 @@ type GetCACertificateRequest struct {
 
 func (x *GetCACertificateRequest) Reset() {
 	*x = GetCACertificateRequest{}
-	mi := &file_kms_v1_kms_proto_msgTypes[77]
+	mi := &file_kms_v1_kms_proto_msgTypes[74]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4583,7 +4406,7 @@ func (x *GetCACertificateRequest) String() string {
 func (*GetCACertificateRequest) ProtoMessage() {}
 
 func (x *GetCACertificateRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_kms_v1_kms_proto_msgTypes[77]
+	mi := &file_kms_v1_kms_proto_msgTypes[74]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4596,7 +4419,7 @@ func (x *GetCACertificateRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetCACertificateRequest.ProtoReflect.Descriptor instead.
 func (*GetCACertificateRequest) Descriptor() ([]byte, []int) {
-	return file_kms_v1_kms_proto_rawDescGZIP(), []int{77}
+	return file_kms_v1_kms_proto_rawDescGZIP(), []int{74}
 }
 
 type GetCACertificateResponse struct {
@@ -4608,7 +4431,7 @@ type GetCACertificateResponse struct {
 
 func (x *GetCACertificateResponse) Reset() {
 	*x = GetCACertificateResponse{}
-	mi := &file_kms_v1_kms_proto_msgTypes[78]
+	mi := &file_kms_v1_kms_proto_msgTypes[75]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4620,7 +4443,7 @@ func (x *GetCACertificateResponse) String() string {
 func (*GetCACertificateResponse) ProtoMessage() {}
 
 func (x *GetCACertificateResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_kms_v1_kms_proto_msgTypes[78]
+	mi := &file_kms_v1_kms_proto_msgTypes[75]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4633,7 +4456,7 @@ func (x *GetCACertificateResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetCACertificateResponse.ProtoReflect.Descriptor instead.
 func (*GetCACertificateResponse) Descriptor() ([]byte, []int) {
-	return file_kms_v1_kms_proto_rawDescGZIP(), []int{78}
+	return file_kms_v1_kms_proto_rawDescGZIP(), []int{75}
 }
 
 func (x *GetCACertificateResponse) GetCertPem() string {
@@ -4666,7 +4489,7 @@ type AuditEvent struct {
 
 func (x *AuditEvent) Reset() {
 	*x = AuditEvent{}
-	mi := &file_kms_v1_kms_proto_msgTypes[79]
+	mi := &file_kms_v1_kms_proto_msgTypes[76]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4678,7 +4501,7 @@ func (x *AuditEvent) String() string {
 func (*AuditEvent) ProtoMessage() {}
 
 func (x *AuditEvent) ProtoReflect() protoreflect.Message {
-	mi := &file_kms_v1_kms_proto_msgTypes[79]
+	mi := &file_kms_v1_kms_proto_msgTypes[76]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4691,7 +4514,7 @@ func (x *AuditEvent) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AuditEvent.ProtoReflect.Descriptor instead.
 func (*AuditEvent) Descriptor() ([]byte, []int) {
-	return file_kms_v1_kms_proto_rawDescGZIP(), []int{79}
+	return file_kms_v1_kms_proto_rawDescGZIP(), []int{76}
 }
 
 func (x *AuditEvent) GetId() int64 {
@@ -4816,7 +4639,7 @@ type ListAuditEventsRequest struct {
 
 func (x *ListAuditEventsRequest) Reset() {
 	*x = ListAuditEventsRequest{}
-	mi := &file_kms_v1_kms_proto_msgTypes[80]
+	mi := &file_kms_v1_kms_proto_msgTypes[77]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4828,7 +4651,7 @@ func (x *ListAuditEventsRequest) String() string {
 func (*ListAuditEventsRequest) ProtoMessage() {}
 
 func (x *ListAuditEventsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_kms_v1_kms_proto_msgTypes[80]
+	mi := &file_kms_v1_kms_proto_msgTypes[77]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4841,7 +4664,7 @@ func (x *ListAuditEventsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListAuditEventsRequest.ProtoReflect.Descriptor instead.
 func (*ListAuditEventsRequest) Descriptor() ([]byte, []int) {
-	return file_kms_v1_kms_proto_rawDescGZIP(), []int{80}
+	return file_kms_v1_kms_proto_rawDescGZIP(), []int{77}
 }
 
 func (x *ListAuditEventsRequest) GetEnv() string {
@@ -4917,7 +4740,7 @@ type ListAuditEventsResponse struct {
 
 func (x *ListAuditEventsResponse) Reset() {
 	*x = ListAuditEventsResponse{}
-	mi := &file_kms_v1_kms_proto_msgTypes[81]
+	mi := &file_kms_v1_kms_proto_msgTypes[78]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4929,7 +4752,7 @@ func (x *ListAuditEventsResponse) String() string {
 func (*ListAuditEventsResponse) ProtoMessage() {}
 
 func (x *ListAuditEventsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_kms_v1_kms_proto_msgTypes[81]
+	mi := &file_kms_v1_kms_proto_msgTypes[78]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4942,7 +4765,7 @@ func (x *ListAuditEventsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListAuditEventsResponse.ProtoReflect.Descriptor instead.
 func (*ListAuditEventsResponse) Descriptor() ([]byte, []int) {
-	return file_kms_v1_kms_proto_rawDescGZIP(), []int{81}
+	return file_kms_v1_kms_proto_rawDescGZIP(), []int{78}
 }
 
 func (x *ListAuditEventsResponse) GetEvents() []*AuditEvent {
@@ -4964,7 +4787,7 @@ type Subscriber struct {
 	ClientName          string                 `protobuf:"bytes,1,opt,name=client_name,json=clientName,proto3" json:"client_name,omitempty"`
 	InstanceId          string                 `protobuf:"bytes,2,opt,name=instance_id,json=instanceId,proto3" json:"instance_id,omitempty"`
 	Identity            string                 `protobuf:"bytes,3,opt,name=identity,proto3" json:"identity,omitempty"`
-	Selectors           []*WatchSelector       `protobuf:"bytes,4,rep,name=selectors,proto3" json:"selectors,omitempty"`
+	Namespaces          []*NamespaceRef        `protobuf:"bytes,4,rep,name=namespaces,proto3" json:"namespaces,omitempty"` // the namespaces this stream is watching
 	RemoteAddr          string                 `protobuf:"bytes,5,opt,name=remote_addr,json=remoteAddr,proto3" json:"remote_addr,omitempty"`
 	ConnectedAtUnixMs   int64                  `protobuf:"varint,6,opt,name=connected_at_unix_ms,json=connectedAtUnixMs,proto3" json:"connected_at_unix_ms,omitempty"`
 	LastHeartbeatUnixMs int64                  `protobuf:"varint,7,opt,name=last_heartbeat_unix_ms,json=lastHeartbeatUnixMs,proto3" json:"last_heartbeat_unix_ms,omitempty"`
@@ -4975,7 +4798,7 @@ type Subscriber struct {
 
 func (x *Subscriber) Reset() {
 	*x = Subscriber{}
-	mi := &file_kms_v1_kms_proto_msgTypes[82]
+	mi := &file_kms_v1_kms_proto_msgTypes[79]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4987,7 +4810,7 @@ func (x *Subscriber) String() string {
 func (*Subscriber) ProtoMessage() {}
 
 func (x *Subscriber) ProtoReflect() protoreflect.Message {
-	mi := &file_kms_v1_kms_proto_msgTypes[82]
+	mi := &file_kms_v1_kms_proto_msgTypes[79]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5000,7 +4823,7 @@ func (x *Subscriber) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Subscriber.ProtoReflect.Descriptor instead.
 func (*Subscriber) Descriptor() ([]byte, []int) {
-	return file_kms_v1_kms_proto_rawDescGZIP(), []int{82}
+	return file_kms_v1_kms_proto_rawDescGZIP(), []int{79}
 }
 
 func (x *Subscriber) GetClientName() string {
@@ -5024,9 +4847,9 @@ func (x *Subscriber) GetIdentity() string {
 	return ""
 }
 
-func (x *Subscriber) GetSelectors() []*WatchSelector {
+func (x *Subscriber) GetNamespaces() []*NamespaceRef {
 	if x != nil {
-		return x.Selectors
+		return x.Namespaces
 	}
 	return nil
 }
@@ -5067,7 +4890,7 @@ type ListSubscribersRequest struct {
 
 func (x *ListSubscribersRequest) Reset() {
 	*x = ListSubscribersRequest{}
-	mi := &file_kms_v1_kms_proto_msgTypes[83]
+	mi := &file_kms_v1_kms_proto_msgTypes[80]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5079,7 +4902,7 @@ func (x *ListSubscribersRequest) String() string {
 func (*ListSubscribersRequest) ProtoMessage() {}
 
 func (x *ListSubscribersRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_kms_v1_kms_proto_msgTypes[83]
+	mi := &file_kms_v1_kms_proto_msgTypes[80]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5092,7 +4915,7 @@ func (x *ListSubscribersRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListSubscribersRequest.ProtoReflect.Descriptor instead.
 func (*ListSubscribersRequest) Descriptor() ([]byte, []int) {
-	return file_kms_v1_kms_proto_rawDescGZIP(), []int{83}
+	return file_kms_v1_kms_proto_rawDescGZIP(), []int{80}
 }
 
 type ListSubscribersResponse struct {
@@ -5105,7 +4928,7 @@ type ListSubscribersResponse struct {
 
 func (x *ListSubscribersResponse) Reset() {
 	*x = ListSubscribersResponse{}
-	mi := &file_kms_v1_kms_proto_msgTypes[84]
+	mi := &file_kms_v1_kms_proto_msgTypes[81]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5117,7 +4940,7 @@ func (x *ListSubscribersResponse) String() string {
 func (*ListSubscribersResponse) ProtoMessage() {}
 
 func (x *ListSubscribersResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_kms_v1_kms_proto_msgTypes[84]
+	mi := &file_kms_v1_kms_proto_msgTypes[81]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5130,7 +4953,7 @@ func (x *ListSubscribersResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListSubscribersResponse.ProtoReflect.Descriptor instead.
 func (*ListSubscribersResponse) Descriptor() ([]byte, []int) {
-	return file_kms_v1_kms_proto_rawDescGZIP(), []int{84}
+	return file_kms_v1_kms_proto_rawDescGZIP(), []int{81}
 }
 
 func (x *ListSubscribersResponse) GetSubscribers() []*Subscriber {
@@ -5155,7 +4978,7 @@ type HealthRequest struct {
 
 func (x *HealthRequest) Reset() {
 	*x = HealthRequest{}
-	mi := &file_kms_v1_kms_proto_msgTypes[85]
+	mi := &file_kms_v1_kms_proto_msgTypes[82]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5167,7 +4990,7 @@ func (x *HealthRequest) String() string {
 func (*HealthRequest) ProtoMessage() {}
 
 func (x *HealthRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_kms_v1_kms_proto_msgTypes[85]
+	mi := &file_kms_v1_kms_proto_msgTypes[82]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5180,7 +5003,7 @@ func (x *HealthRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use HealthRequest.ProtoReflect.Descriptor instead.
 func (*HealthRequest) Descriptor() ([]byte, []int) {
-	return file_kms_v1_kms_proto_rawDescGZIP(), []int{85}
+	return file_kms_v1_kms_proto_rawDescGZIP(), []int{82}
 }
 
 type HealthResponse struct {
@@ -5196,7 +5019,7 @@ type HealthResponse struct {
 
 func (x *HealthResponse) Reset() {
 	*x = HealthResponse{}
-	mi := &file_kms_v1_kms_proto_msgTypes[86]
+	mi := &file_kms_v1_kms_proto_msgTypes[83]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5208,7 +5031,7 @@ func (x *HealthResponse) String() string {
 func (*HealthResponse) ProtoMessage() {}
 
 func (x *HealthResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_kms_v1_kms_proto_msgTypes[86]
+	mi := &file_kms_v1_kms_proto_msgTypes[83]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5221,7 +5044,7 @@ func (x *HealthResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use HealthResponse.ProtoReflect.Descriptor instead.
 func (*HealthResponse) Descriptor() ([]byte, []int) {
-	return file_kms_v1_kms_proto_rawDescGZIP(), []int{86}
+	return file_kms_v1_kms_proto_rawDescGZIP(), []int{83}
 }
 
 func (x *HealthResponse) GetHealthy() bool {
@@ -5269,11 +5092,7 @@ const file_kms_v1_kms_proto_rawDesc = "" +
 	"\x03app\x18\x02 \x01(\tR\x03app\"S\n" +
 	"\vResourceRef\x122\n" +
 	"\tnamespace\x18\x01 \x01(\v2\x14.kms.v1.NamespaceRefR\tnamespace\x12\x10\n" +
-	"\x03key\x18\x02 \x01(\tR\x03key\"d\n" +
-	"\rWatchSelector\x122\n" +
-	"\tnamespace\x18\x01 \x01(\v2\x14.kms.v1.NamespaceRefR\tnamespace\x12\x1f\n" +
-	"\vkey_pattern\x18\x02 \x01(\tR\n" +
-	"keyPattern\"\xe8\x02\n" +
+	"\x03key\x18\x02 \x01(\tR\x03key\"\xe8\x02\n" +
 	"\tParameter\x12%\n" +
 	"\x03ref\x18\x01 \x01(\v2\x13.kms.v1.ResourceRefR\x03ref\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value\x12!\n" +
@@ -5418,11 +5237,13 @@ const file_kms_v1_kms_proto_rawDesc = "" +
 	"\x1cPromoteSecretVersionResponse\x12'\n" +
 	"\x0fcurrent_version\x18\x01 \x01(\x04R\x0ecurrentVersion\x12)\n" +
 	"\x10previous_version\x18\x02 \x01(\x04R\x0fpreviousVersion\x12\x1a\n" +
-	"\brevision\x18\x03 \x01(\x04R\brevision\"\xbd\x01\n" +
+	"\brevision\x18\x03 \x01(\x04R\brevision\"\xbe\x01\n" +
 	"\x10SubscribeRequest\x12\x1f\n" +
 	"\vclient_name\x18\x01 \x01(\tR\n" +
-	"clientName\x123\n" +
-	"\tselectors\x18\x02 \x03(\v2\x15.kms.v1.WatchSelectorR\tselectors\x12,\n" +
+	"clientName\x124\n" +
+	"\n" +
+	"namespaces\x18\x02 \x03(\v2\x14.kms.v1.NamespaceRefR\n" +
+	"namespaces\x12,\n" +
 	"\x12last_seen_revision\x18\x03 \x01(\x04R\x10lastSeenRevision\x12%\n" +
 	"\x0eacked_revision\x18\x04 \x01(\x04R\rackedRevision\"\x90\x02\n" +
 	"\x0eSubscribeEvent\x12.\n" +
@@ -5451,15 +5272,7 @@ const file_kms_v1_kms_proto_rawDesc = "" +
 	"\aversion\x18\x03 \x01(\x04R\aversion\x12\x14\n" +
 	"\x05label\x18\x04 \x01(\tR\x05label\":\n" +
 	"\tHeartbeat\x12-\n" +
-	"\x13server_time_unix_ms\x18\x01 \x01(\x03R\x10serverTimeUnixMs\"l\n" +
-	"\x15WatchParameterRequest\x12%\n" +
-	"\x03ref\x18\x01 \x01(\v2\x13.kms.v1.ResourceRefR\x03ref\x12,\n" +
-	"\x12last_seen_revision\x18\x02 \x01(\x04R\x10lastSeenRevision\"\x9a\x01\n" +
-	"\x15WatchNamespaceRequest\x122\n" +
-	"\tnamespace\x18\x01 \x01(\v2\x14.kms.v1.NamespaceRefR\tnamespace\x12\x1f\n" +
-	"\vkey_pattern\x18\x02 \x01(\tR\n" +
-	"keyPattern\x12,\n" +
-	"\x12last_seen_revision\x18\x03 \x01(\x04R\x10lastSeenRevision\"\x9f\x02\n" +
+	"\x13server_time_unix_ms\x18\x01 \x01(\x03R\x10serverTimeUnixMs\"\x9f\x02\n" +
 	"\tNamespace\x12&\n" +
 	"\x03ref\x18\x01 \x01(\v2\x14.kms.v1.NamespaceRefR\x03ref\x12 \n" +
 	"\vdescription\x18\x02 \x01(\tR\vdescription\x120\n" +
@@ -5512,13 +5325,12 @@ const file_kms_v1_kms_proto_rawDesc = "" +
 	"\n" +
 	"namespaces\x18\x01 \x03(\v2\x11.kms.v1.NamespaceR\n" +
 	"namespaces\x12&\n" +
-	"\x0fnext_page_token\x18\x02 \x01(\tR\rnextPageToken\"`\n" +
+	"\x0fnext_page_token\x18\x02 \x01(\tR\rnextPageToken\"N\n" +
 	"\n" +
 	"PolicyRule\x12\x1c\n" +
 	"\toperation\x18\x01 \x01(\tR\toperation\x12\x10\n" +
 	"\x03env\x18\x02 \x01(\tR\x03env\x12\x10\n" +
-	"\x03app\x18\x03 \x01(\tR\x03app\x12\x10\n" +
-	"\x03key\x18\x04 \x01(\tR\x03key\"\xe2\x01\n" +
+	"\x03app\x18\x03 \x01(\tR\x03app\"\xe2\x01\n" +
 	"\x06Policy\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x18\n" +
 	"\asubject\x18\x02 \x01(\tR\asubject\x12(\n" +
@@ -5629,15 +5441,17 @@ const file_kms_v1_kms_proto_rawDesc = "" +
 	"page_token\x18\t \x01(\tR\tpageToken\"m\n" +
 	"\x17ListAuditEventsResponse\x12*\n" +
 	"\x06events\x18\x01 \x03(\v2\x12.kms.v1.AuditEventR\x06events\x12&\n" +
-	"\x0fnext_page_token\x18\x02 \x01(\tR\rnextPageToken\"\xd6\x02\n" +
+	"\x0fnext_page_token\x18\x02 \x01(\tR\rnextPageToken\"\xd7\x02\n" +
 	"\n" +
 	"Subscriber\x12\x1f\n" +
 	"\vclient_name\x18\x01 \x01(\tR\n" +
 	"clientName\x12\x1f\n" +
 	"\vinstance_id\x18\x02 \x01(\tR\n" +
 	"instanceId\x12\x1a\n" +
-	"\bidentity\x18\x03 \x01(\tR\bidentity\x123\n" +
-	"\tselectors\x18\x04 \x03(\v2\x15.kms.v1.WatchSelectorR\tselectors\x12\x1f\n" +
+	"\bidentity\x18\x03 \x01(\tR\bidentity\x124\n" +
+	"\n" +
+	"namespaces\x18\x04 \x03(\v2\x14.kms.v1.NamespaceRefR\n" +
+	"namespaces\x12\x1f\n" +
 	"\vremote_addr\x18\x05 \x01(\tR\n" +
 	"remoteAddr\x12/\n" +
 	"\x14connected_at_unix_ms\x18\x06 \x01(\x03R\x11connectedAtUnixMs\x123\n" +
@@ -5668,11 +5482,9 @@ const file_kms_v1_kms_proto_rawDesc = "" +
 	"\rDisableSecret\x12\x1c.kms.v1.DisableSecretRequest\x1a\x1d.kms.v1.DisableSecretResponse\x12a\n" +
 	"\x14DestroySecretVersion\x12#.kms.v1.DestroySecretVersionRequest\x1a$.kms.v1.DestroySecretVersionResponse\x12X\n" +
 	"\x11GetSecretMetadata\x12 .kms.v1.GetSecretMetadataRequest\x1a!.kms.v1.GetSecretMetadataResponse\x12a\n" +
-	"\x14PromoteSecretVersion\x12#.kms.v1.PromoteSecretVersionRequest\x1a$.kms.v1.PromoteSecretVersionResponse2\xe7\x01\n" +
+	"\x14PromoteSecretVersion\x12#.kms.v1.PromoteSecretVersionRequest\x1a$.kms.v1.PromoteSecretVersionResponse2Q\n" +
 	"\fWatchService\x12A\n" +
-	"\tSubscribe\x12\x18.kms.v1.SubscribeRequest\x1a\x16.kms.v1.SubscribeEvent(\x010\x01\x12I\n" +
-	"\x0eWatchParameter\x12\x1d.kms.v1.WatchParameterRequest\x1a\x16.kms.v1.SubscribeEvent0\x01\x12I\n" +
-	"\x0eWatchNamespace\x12\x1d.kms.v1.WatchNamespaceRequest\x1a\x16.kms.v1.SubscribeEvent0\x012\xac\f\n" +
+	"\tSubscribe\x12\x18.kms.v1.SubscribeRequest\x1a\x16.kms.v1.SubscribeEvent(\x010\x012\xac\f\n" +
 	"\fAdminService\x12R\n" +
 	"\x0fCreateNamespace\x12\x1e.kms.v1.CreateNamespaceRequest\x1a\x1f.kms.v1.CreateNamespaceResponse\x12R\n" +
 	"\x0fUpdateNamespace\x12\x1e.kms.v1.UpdateNamespaceRequest\x1a\x1f.kms.v1.UpdateNamespaceResponse\x12R\n" +
@@ -5706,238 +5518,228 @@ func file_kms_v1_kms_proto_rawDescGZIP() []byte {
 	return file_kms_v1_kms_proto_rawDescData
 }
 
-var file_kms_v1_kms_proto_msgTypes = make([]protoimpl.MessageInfo, 90)
+var file_kms_v1_kms_proto_msgTypes = make([]protoimpl.MessageInfo, 87)
 var file_kms_v1_kms_proto_goTypes = []any{
 	(*NamespaceRef)(nil),                      // 0: kms.v1.NamespaceRef
 	(*ResourceRef)(nil),                       // 1: kms.v1.ResourceRef
-	(*WatchSelector)(nil),                     // 2: kms.v1.WatchSelector
-	(*Parameter)(nil),                         // 3: kms.v1.Parameter
-	(*ParameterVersionInfo)(nil),              // 4: kms.v1.ParameterVersionInfo
-	(*SecretMetadata)(nil),                    // 5: kms.v1.SecretMetadata
-	(*SecretVersionInfo)(nil),                 // 6: kms.v1.SecretVersionInfo
-	(*GetParameterRequest)(nil),               // 7: kms.v1.GetParameterRequest
-	(*GetParameterResponse)(nil),              // 8: kms.v1.GetParameterResponse
-	(*PutParameterRequest)(nil),               // 9: kms.v1.PutParameterRequest
-	(*PutParameterResponse)(nil),              // 10: kms.v1.PutParameterResponse
-	(*ListParametersRequest)(nil),             // 11: kms.v1.ListParametersRequest
-	(*ListParametersResponse)(nil),            // 12: kms.v1.ListParametersResponse
-	(*DeleteParameterRequest)(nil),            // 13: kms.v1.DeleteParameterRequest
-	(*DeleteParameterResponse)(nil),           // 14: kms.v1.DeleteParameterResponse
-	(*GetParameterMetadataRequest)(nil),       // 15: kms.v1.GetParameterMetadataRequest
-	(*GetParameterMetadataResponse)(nil),      // 16: kms.v1.GetParameterMetadataResponse
-	(*GetSecretRequest)(nil),                  // 17: kms.v1.GetSecretRequest
-	(*GetSecretResponse)(nil),                 // 18: kms.v1.GetSecretResponse
-	(*PutSecretRequest)(nil),                  // 19: kms.v1.PutSecretRequest
-	(*PutSecretResponse)(nil),                 // 20: kms.v1.PutSecretResponse
-	(*ListSecretsRequest)(nil),                // 21: kms.v1.ListSecretsRequest
-	(*ListSecretsResponse)(nil),               // 22: kms.v1.ListSecretsResponse
-	(*DeleteSecretRequest)(nil),               // 23: kms.v1.DeleteSecretRequest
-	(*DeleteSecretResponse)(nil),              // 24: kms.v1.DeleteSecretResponse
-	(*DisableSecretRequest)(nil),              // 25: kms.v1.DisableSecretRequest
-	(*DisableSecretResponse)(nil),             // 26: kms.v1.DisableSecretResponse
-	(*DestroySecretVersionRequest)(nil),       // 27: kms.v1.DestroySecretVersionRequest
-	(*DestroySecretVersionResponse)(nil),      // 28: kms.v1.DestroySecretVersionResponse
-	(*GetSecretMetadataRequest)(nil),          // 29: kms.v1.GetSecretMetadataRequest
-	(*GetSecretMetadataResponse)(nil),         // 30: kms.v1.GetSecretMetadataResponse
-	(*PromoteSecretVersionRequest)(nil),       // 31: kms.v1.PromoteSecretVersionRequest
-	(*PromoteSecretVersionResponse)(nil),      // 32: kms.v1.PromoteSecretVersionResponse
-	(*SubscribeRequest)(nil),                  // 33: kms.v1.SubscribeRequest
-	(*SubscribeEvent)(nil),                    // 34: kms.v1.SubscribeEvent
-	(*Snapshot)(nil),                          // 35: kms.v1.Snapshot
-	(*ParameterChange)(nil),                   // 36: kms.v1.ParameterChange
-	(*SecretMetadataChange)(nil),              // 37: kms.v1.SecretMetadataChange
-	(*Heartbeat)(nil),                         // 38: kms.v1.Heartbeat
-	(*WatchParameterRequest)(nil),             // 39: kms.v1.WatchParameterRequest
-	(*WatchNamespaceRequest)(nil),             // 40: kms.v1.WatchNamespaceRequest
-	(*Namespace)(nil),                         // 41: kms.v1.Namespace
-	(*CertBundle)(nil),                        // 42: kms.v1.CertBundle
-	(*IdentityCertInfo)(nil),                  // 43: kms.v1.IdentityCertInfo
-	(*Identity)(nil),                          // 44: kms.v1.Identity
-	(*CreateNamespaceRequest)(nil),            // 45: kms.v1.CreateNamespaceRequest
-	(*CreateNamespaceResponse)(nil),           // 46: kms.v1.CreateNamespaceResponse
-	(*UpdateNamespaceRequest)(nil),            // 47: kms.v1.UpdateNamespaceRequest
-	(*UpdateNamespaceResponse)(nil),           // 48: kms.v1.UpdateNamespaceResponse
-	(*DeleteNamespaceRequest)(nil),            // 49: kms.v1.DeleteNamespaceRequest
-	(*DeleteNamespaceResponse)(nil),           // 50: kms.v1.DeleteNamespaceResponse
-	(*ListNamespacesRequest)(nil),             // 51: kms.v1.ListNamespacesRequest
-	(*ListNamespacesResponse)(nil),            // 52: kms.v1.ListNamespacesResponse
-	(*PolicyRule)(nil),                        // 53: kms.v1.PolicyRule
-	(*Policy)(nil),                            // 54: kms.v1.Policy
-	(*CreatePolicyRequest)(nil),               // 55: kms.v1.CreatePolicyRequest
-	(*CreatePolicyResponse)(nil),              // 56: kms.v1.CreatePolicyResponse
-	(*UpdatePolicyRequest)(nil),               // 57: kms.v1.UpdatePolicyRequest
-	(*UpdatePolicyResponse)(nil),              // 58: kms.v1.UpdatePolicyResponse
-	(*DeletePolicyRequest)(nil),               // 59: kms.v1.DeletePolicyRequest
-	(*DeletePolicyResponse)(nil),              // 60: kms.v1.DeletePolicyResponse
-	(*ListPoliciesRequest)(nil),               // 61: kms.v1.ListPoliciesRequest
-	(*ListPoliciesResponse)(nil),              // 62: kms.v1.ListPoliciesResponse
-	(*CreateIdentityRequest)(nil),             // 63: kms.v1.CreateIdentityRequest
-	(*CreateIdentityResponse)(nil),            // 64: kms.v1.CreateIdentityResponse
-	(*ListIdentitiesRequest)(nil),             // 65: kms.v1.ListIdentitiesRequest
-	(*ListIdentitiesResponse)(nil),            // 66: kms.v1.ListIdentitiesResponse
-	(*RevokeIdentityRequest)(nil),             // 67: kms.v1.RevokeIdentityRequest
-	(*RevokeIdentityResponse)(nil),            // 68: kms.v1.RevokeIdentityResponse
-	(*RotateIdentityTokenRequest)(nil),        // 69: kms.v1.RotateIdentityTokenRequest
-	(*RotateIdentityTokenResponse)(nil),       // 70: kms.v1.RotateIdentityTokenResponse
-	(*IssueIdentityCertificateRequest)(nil),   // 71: kms.v1.IssueIdentityCertificateRequest
-	(*IssueIdentityCertificateResponse)(nil),  // 72: kms.v1.IssueIdentityCertificateResponse
-	(*RevokeIdentityCertificateRequest)(nil),  // 73: kms.v1.RevokeIdentityCertificateRequest
-	(*RevokeIdentityCertificateResponse)(nil), // 74: kms.v1.RevokeIdentityCertificateResponse
-	(*WhoAmIRequest)(nil),                     // 75: kms.v1.WhoAmIRequest
-	(*WhoAmIResponse)(nil),                    // 76: kms.v1.WhoAmIResponse
-	(*GetCACertificateRequest)(nil),           // 77: kms.v1.GetCACertificateRequest
-	(*GetCACertificateResponse)(nil),          // 78: kms.v1.GetCACertificateResponse
-	(*AuditEvent)(nil),                        // 79: kms.v1.AuditEvent
-	(*ListAuditEventsRequest)(nil),            // 80: kms.v1.ListAuditEventsRequest
-	(*ListAuditEventsResponse)(nil),           // 81: kms.v1.ListAuditEventsResponse
-	(*Subscriber)(nil),                        // 82: kms.v1.Subscriber
-	(*ListSubscribersRequest)(nil),            // 83: kms.v1.ListSubscribersRequest
-	(*ListSubscribersResponse)(nil),           // 84: kms.v1.ListSubscribersResponse
-	(*HealthRequest)(nil),                     // 85: kms.v1.HealthRequest
-	(*HealthResponse)(nil),                    // 86: kms.v1.HealthResponse
-	nil,                                       // 87: kms.v1.Parameter.LabelsEntry
-	nil,                                       // 88: kms.v1.SecretMetadata.LabelsEntry
-	nil,                                       // 89: kms.v1.GetParameterMetadataResponse.LabelsEntry
+	(*Parameter)(nil),                         // 2: kms.v1.Parameter
+	(*ParameterVersionInfo)(nil),              // 3: kms.v1.ParameterVersionInfo
+	(*SecretMetadata)(nil),                    // 4: kms.v1.SecretMetadata
+	(*SecretVersionInfo)(nil),                 // 5: kms.v1.SecretVersionInfo
+	(*GetParameterRequest)(nil),               // 6: kms.v1.GetParameterRequest
+	(*GetParameterResponse)(nil),              // 7: kms.v1.GetParameterResponse
+	(*PutParameterRequest)(nil),               // 8: kms.v1.PutParameterRequest
+	(*PutParameterResponse)(nil),              // 9: kms.v1.PutParameterResponse
+	(*ListParametersRequest)(nil),             // 10: kms.v1.ListParametersRequest
+	(*ListParametersResponse)(nil),            // 11: kms.v1.ListParametersResponse
+	(*DeleteParameterRequest)(nil),            // 12: kms.v1.DeleteParameterRequest
+	(*DeleteParameterResponse)(nil),           // 13: kms.v1.DeleteParameterResponse
+	(*GetParameterMetadataRequest)(nil),       // 14: kms.v1.GetParameterMetadataRequest
+	(*GetParameterMetadataResponse)(nil),      // 15: kms.v1.GetParameterMetadataResponse
+	(*GetSecretRequest)(nil),                  // 16: kms.v1.GetSecretRequest
+	(*GetSecretResponse)(nil),                 // 17: kms.v1.GetSecretResponse
+	(*PutSecretRequest)(nil),                  // 18: kms.v1.PutSecretRequest
+	(*PutSecretResponse)(nil),                 // 19: kms.v1.PutSecretResponse
+	(*ListSecretsRequest)(nil),                // 20: kms.v1.ListSecretsRequest
+	(*ListSecretsResponse)(nil),               // 21: kms.v1.ListSecretsResponse
+	(*DeleteSecretRequest)(nil),               // 22: kms.v1.DeleteSecretRequest
+	(*DeleteSecretResponse)(nil),              // 23: kms.v1.DeleteSecretResponse
+	(*DisableSecretRequest)(nil),              // 24: kms.v1.DisableSecretRequest
+	(*DisableSecretResponse)(nil),             // 25: kms.v1.DisableSecretResponse
+	(*DestroySecretVersionRequest)(nil),       // 26: kms.v1.DestroySecretVersionRequest
+	(*DestroySecretVersionResponse)(nil),      // 27: kms.v1.DestroySecretVersionResponse
+	(*GetSecretMetadataRequest)(nil),          // 28: kms.v1.GetSecretMetadataRequest
+	(*GetSecretMetadataResponse)(nil),         // 29: kms.v1.GetSecretMetadataResponse
+	(*PromoteSecretVersionRequest)(nil),       // 30: kms.v1.PromoteSecretVersionRequest
+	(*PromoteSecretVersionResponse)(nil),      // 31: kms.v1.PromoteSecretVersionResponse
+	(*SubscribeRequest)(nil),                  // 32: kms.v1.SubscribeRequest
+	(*SubscribeEvent)(nil),                    // 33: kms.v1.SubscribeEvent
+	(*Snapshot)(nil),                          // 34: kms.v1.Snapshot
+	(*ParameterChange)(nil),                   // 35: kms.v1.ParameterChange
+	(*SecretMetadataChange)(nil),              // 36: kms.v1.SecretMetadataChange
+	(*Heartbeat)(nil),                         // 37: kms.v1.Heartbeat
+	(*Namespace)(nil),                         // 38: kms.v1.Namespace
+	(*CertBundle)(nil),                        // 39: kms.v1.CertBundle
+	(*IdentityCertInfo)(nil),                  // 40: kms.v1.IdentityCertInfo
+	(*Identity)(nil),                          // 41: kms.v1.Identity
+	(*CreateNamespaceRequest)(nil),            // 42: kms.v1.CreateNamespaceRequest
+	(*CreateNamespaceResponse)(nil),           // 43: kms.v1.CreateNamespaceResponse
+	(*UpdateNamespaceRequest)(nil),            // 44: kms.v1.UpdateNamespaceRequest
+	(*UpdateNamespaceResponse)(nil),           // 45: kms.v1.UpdateNamespaceResponse
+	(*DeleteNamespaceRequest)(nil),            // 46: kms.v1.DeleteNamespaceRequest
+	(*DeleteNamespaceResponse)(nil),           // 47: kms.v1.DeleteNamespaceResponse
+	(*ListNamespacesRequest)(nil),             // 48: kms.v1.ListNamespacesRequest
+	(*ListNamespacesResponse)(nil),            // 49: kms.v1.ListNamespacesResponse
+	(*PolicyRule)(nil),                        // 50: kms.v1.PolicyRule
+	(*Policy)(nil),                            // 51: kms.v1.Policy
+	(*CreatePolicyRequest)(nil),               // 52: kms.v1.CreatePolicyRequest
+	(*CreatePolicyResponse)(nil),              // 53: kms.v1.CreatePolicyResponse
+	(*UpdatePolicyRequest)(nil),               // 54: kms.v1.UpdatePolicyRequest
+	(*UpdatePolicyResponse)(nil),              // 55: kms.v1.UpdatePolicyResponse
+	(*DeletePolicyRequest)(nil),               // 56: kms.v1.DeletePolicyRequest
+	(*DeletePolicyResponse)(nil),              // 57: kms.v1.DeletePolicyResponse
+	(*ListPoliciesRequest)(nil),               // 58: kms.v1.ListPoliciesRequest
+	(*ListPoliciesResponse)(nil),              // 59: kms.v1.ListPoliciesResponse
+	(*CreateIdentityRequest)(nil),             // 60: kms.v1.CreateIdentityRequest
+	(*CreateIdentityResponse)(nil),            // 61: kms.v1.CreateIdentityResponse
+	(*ListIdentitiesRequest)(nil),             // 62: kms.v1.ListIdentitiesRequest
+	(*ListIdentitiesResponse)(nil),            // 63: kms.v1.ListIdentitiesResponse
+	(*RevokeIdentityRequest)(nil),             // 64: kms.v1.RevokeIdentityRequest
+	(*RevokeIdentityResponse)(nil),            // 65: kms.v1.RevokeIdentityResponse
+	(*RotateIdentityTokenRequest)(nil),        // 66: kms.v1.RotateIdentityTokenRequest
+	(*RotateIdentityTokenResponse)(nil),       // 67: kms.v1.RotateIdentityTokenResponse
+	(*IssueIdentityCertificateRequest)(nil),   // 68: kms.v1.IssueIdentityCertificateRequest
+	(*IssueIdentityCertificateResponse)(nil),  // 69: kms.v1.IssueIdentityCertificateResponse
+	(*RevokeIdentityCertificateRequest)(nil),  // 70: kms.v1.RevokeIdentityCertificateRequest
+	(*RevokeIdentityCertificateResponse)(nil), // 71: kms.v1.RevokeIdentityCertificateResponse
+	(*WhoAmIRequest)(nil),                     // 72: kms.v1.WhoAmIRequest
+	(*WhoAmIResponse)(nil),                    // 73: kms.v1.WhoAmIResponse
+	(*GetCACertificateRequest)(nil),           // 74: kms.v1.GetCACertificateRequest
+	(*GetCACertificateResponse)(nil),          // 75: kms.v1.GetCACertificateResponse
+	(*AuditEvent)(nil),                        // 76: kms.v1.AuditEvent
+	(*ListAuditEventsRequest)(nil),            // 77: kms.v1.ListAuditEventsRequest
+	(*ListAuditEventsResponse)(nil),           // 78: kms.v1.ListAuditEventsResponse
+	(*Subscriber)(nil),                        // 79: kms.v1.Subscriber
+	(*ListSubscribersRequest)(nil),            // 80: kms.v1.ListSubscribersRequest
+	(*ListSubscribersResponse)(nil),           // 81: kms.v1.ListSubscribersResponse
+	(*HealthRequest)(nil),                     // 82: kms.v1.HealthRequest
+	(*HealthResponse)(nil),                    // 83: kms.v1.HealthResponse
+	nil,                                       // 84: kms.v1.Parameter.LabelsEntry
+	nil,                                       // 85: kms.v1.SecretMetadata.LabelsEntry
+	nil,                                       // 86: kms.v1.GetParameterMetadataResponse.LabelsEntry
 }
 var file_kms_v1_kms_proto_depIdxs = []int32{
 	0,  // 0: kms.v1.ResourceRef.namespace:type_name -> kms.v1.NamespaceRef
-	0,  // 1: kms.v1.WatchSelector.namespace:type_name -> kms.v1.NamespaceRef
-	1,  // 2: kms.v1.Parameter.ref:type_name -> kms.v1.ResourceRef
-	87, // 3: kms.v1.Parameter.labels:type_name -> kms.v1.Parameter.LabelsEntry
-	1,  // 4: kms.v1.SecretMetadata.ref:type_name -> kms.v1.ResourceRef
-	88, // 5: kms.v1.SecretMetadata.labels:type_name -> kms.v1.SecretMetadata.LabelsEntry
-	6,  // 6: kms.v1.SecretMetadata.versions:type_name -> kms.v1.SecretVersionInfo
-	1,  // 7: kms.v1.GetParameterRequest.ref:type_name -> kms.v1.ResourceRef
-	3,  // 8: kms.v1.GetParameterResponse.parameter:type_name -> kms.v1.Parameter
-	1,  // 9: kms.v1.PutParameterRequest.ref:type_name -> kms.v1.ResourceRef
-	0,  // 10: kms.v1.ListParametersRequest.namespace:type_name -> kms.v1.NamespaceRef
-	3,  // 11: kms.v1.ListParametersResponse.parameters:type_name -> kms.v1.Parameter
-	1,  // 12: kms.v1.DeleteParameterRequest.ref:type_name -> kms.v1.ResourceRef
-	1,  // 13: kms.v1.GetParameterMetadataRequest.ref:type_name -> kms.v1.ResourceRef
-	1,  // 14: kms.v1.GetParameterMetadataResponse.ref:type_name -> kms.v1.ResourceRef
-	89, // 15: kms.v1.GetParameterMetadataResponse.labels:type_name -> kms.v1.GetParameterMetadataResponse.LabelsEntry
-	4,  // 16: kms.v1.GetParameterMetadataResponse.versions:type_name -> kms.v1.ParameterVersionInfo
-	1,  // 17: kms.v1.GetSecretRequest.ref:type_name -> kms.v1.ResourceRef
-	1,  // 18: kms.v1.GetSecretResponse.ref:type_name -> kms.v1.ResourceRef
-	1,  // 19: kms.v1.PutSecretRequest.ref:type_name -> kms.v1.ResourceRef
-	0,  // 20: kms.v1.ListSecretsRequest.namespace:type_name -> kms.v1.NamespaceRef
-	5,  // 21: kms.v1.ListSecretsResponse.secrets:type_name -> kms.v1.SecretMetadata
-	1,  // 22: kms.v1.DeleteSecretRequest.ref:type_name -> kms.v1.ResourceRef
-	1,  // 23: kms.v1.DisableSecretRequest.ref:type_name -> kms.v1.ResourceRef
-	1,  // 24: kms.v1.DestroySecretVersionRequest.ref:type_name -> kms.v1.ResourceRef
-	1,  // 25: kms.v1.GetSecretMetadataRequest.ref:type_name -> kms.v1.ResourceRef
-	5,  // 26: kms.v1.GetSecretMetadataResponse.secret:type_name -> kms.v1.SecretMetadata
-	1,  // 27: kms.v1.PromoteSecretVersionRequest.ref:type_name -> kms.v1.ResourceRef
-	2,  // 28: kms.v1.SubscribeRequest.selectors:type_name -> kms.v1.WatchSelector
-	35, // 29: kms.v1.SubscribeEvent.snapshot:type_name -> kms.v1.Snapshot
-	36, // 30: kms.v1.SubscribeEvent.change:type_name -> kms.v1.ParameterChange
-	37, // 31: kms.v1.SubscribeEvent.secret_change:type_name -> kms.v1.SecretMetadataChange
-	38, // 32: kms.v1.SubscribeEvent.heartbeat:type_name -> kms.v1.Heartbeat
-	3,  // 33: kms.v1.Snapshot.parameters:type_name -> kms.v1.Parameter
-	1,  // 34: kms.v1.ParameterChange.ref:type_name -> kms.v1.ResourceRef
-	1,  // 35: kms.v1.SecretMetadataChange.ref:type_name -> kms.v1.ResourceRef
-	1,  // 36: kms.v1.WatchParameterRequest.ref:type_name -> kms.v1.ResourceRef
-	0,  // 37: kms.v1.WatchNamespaceRequest.namespace:type_name -> kms.v1.NamespaceRef
-	0,  // 38: kms.v1.Namespace.ref:type_name -> kms.v1.NamespaceRef
-	0,  // 39: kms.v1.Identity.namespace:type_name -> kms.v1.NamespaceRef
-	43, // 40: kms.v1.Identity.certs:type_name -> kms.v1.IdentityCertInfo
-	0,  // 41: kms.v1.CreateNamespaceRequest.ref:type_name -> kms.v1.NamespaceRef
-	41, // 42: kms.v1.CreateNamespaceResponse.namespace:type_name -> kms.v1.Namespace
-	0,  // 43: kms.v1.UpdateNamespaceRequest.ref:type_name -> kms.v1.NamespaceRef
-	41, // 44: kms.v1.UpdateNamespaceResponse.namespace:type_name -> kms.v1.Namespace
-	0,  // 45: kms.v1.DeleteNamespaceRequest.ref:type_name -> kms.v1.NamespaceRef
-	41, // 46: kms.v1.ListNamespacesResponse.namespaces:type_name -> kms.v1.Namespace
-	53, // 47: kms.v1.Policy.allow:type_name -> kms.v1.PolicyRule
-	53, // 48: kms.v1.Policy.deny:type_name -> kms.v1.PolicyRule
-	54, // 49: kms.v1.CreatePolicyRequest.policy:type_name -> kms.v1.Policy
-	54, // 50: kms.v1.CreatePolicyResponse.policy:type_name -> kms.v1.Policy
-	54, // 51: kms.v1.UpdatePolicyRequest.policy:type_name -> kms.v1.Policy
-	54, // 52: kms.v1.UpdatePolicyResponse.policy:type_name -> kms.v1.Policy
-	54, // 53: kms.v1.ListPoliciesResponse.policies:type_name -> kms.v1.Policy
-	0,  // 54: kms.v1.CreateIdentityRequest.namespace:type_name -> kms.v1.NamespaceRef
-	44, // 55: kms.v1.CreateIdentityResponse.identity:type_name -> kms.v1.Identity
-	42, // 56: kms.v1.CreateIdentityResponse.cert:type_name -> kms.v1.CertBundle
-	44, // 57: kms.v1.ListIdentitiesResponse.identities:type_name -> kms.v1.Identity
-	42, // 58: kms.v1.IssueIdentityCertificateResponse.cert:type_name -> kms.v1.CertBundle
-	0,  // 59: kms.v1.WhoAmIResponse.namespace:type_name -> kms.v1.NamespaceRef
-	79, // 60: kms.v1.ListAuditEventsResponse.events:type_name -> kms.v1.AuditEvent
-	2,  // 61: kms.v1.Subscriber.selectors:type_name -> kms.v1.WatchSelector
-	82, // 62: kms.v1.ListSubscribersResponse.subscribers:type_name -> kms.v1.Subscriber
-	7,  // 63: kms.v1.ParameterService.GetParameter:input_type -> kms.v1.GetParameterRequest
-	9,  // 64: kms.v1.ParameterService.PutParameter:input_type -> kms.v1.PutParameterRequest
-	11, // 65: kms.v1.ParameterService.ListParameters:input_type -> kms.v1.ListParametersRequest
-	13, // 66: kms.v1.ParameterService.DeleteParameter:input_type -> kms.v1.DeleteParameterRequest
-	15, // 67: kms.v1.ParameterService.GetParameterMetadata:input_type -> kms.v1.GetParameterMetadataRequest
-	17, // 68: kms.v1.SecretService.GetSecret:input_type -> kms.v1.GetSecretRequest
-	19, // 69: kms.v1.SecretService.PutSecret:input_type -> kms.v1.PutSecretRequest
-	21, // 70: kms.v1.SecretService.ListSecrets:input_type -> kms.v1.ListSecretsRequest
-	23, // 71: kms.v1.SecretService.DeleteSecret:input_type -> kms.v1.DeleteSecretRequest
-	25, // 72: kms.v1.SecretService.DisableSecret:input_type -> kms.v1.DisableSecretRequest
-	27, // 73: kms.v1.SecretService.DestroySecretVersion:input_type -> kms.v1.DestroySecretVersionRequest
-	29, // 74: kms.v1.SecretService.GetSecretMetadata:input_type -> kms.v1.GetSecretMetadataRequest
-	31, // 75: kms.v1.SecretService.PromoteSecretVersion:input_type -> kms.v1.PromoteSecretVersionRequest
-	33, // 76: kms.v1.WatchService.Subscribe:input_type -> kms.v1.SubscribeRequest
-	39, // 77: kms.v1.WatchService.WatchParameter:input_type -> kms.v1.WatchParameterRequest
-	40, // 78: kms.v1.WatchService.WatchNamespace:input_type -> kms.v1.WatchNamespaceRequest
-	45, // 79: kms.v1.AdminService.CreateNamespace:input_type -> kms.v1.CreateNamespaceRequest
-	47, // 80: kms.v1.AdminService.UpdateNamespace:input_type -> kms.v1.UpdateNamespaceRequest
-	49, // 81: kms.v1.AdminService.DeleteNamespace:input_type -> kms.v1.DeleteNamespaceRequest
-	51, // 82: kms.v1.AdminService.ListNamespaces:input_type -> kms.v1.ListNamespacesRequest
-	55, // 83: kms.v1.AdminService.CreatePolicy:input_type -> kms.v1.CreatePolicyRequest
-	57, // 84: kms.v1.AdminService.UpdatePolicy:input_type -> kms.v1.UpdatePolicyRequest
-	59, // 85: kms.v1.AdminService.DeletePolicy:input_type -> kms.v1.DeletePolicyRequest
-	61, // 86: kms.v1.AdminService.ListPolicies:input_type -> kms.v1.ListPoliciesRequest
-	63, // 87: kms.v1.AdminService.CreateIdentity:input_type -> kms.v1.CreateIdentityRequest
-	65, // 88: kms.v1.AdminService.ListIdentities:input_type -> kms.v1.ListIdentitiesRequest
-	67, // 89: kms.v1.AdminService.RevokeIdentity:input_type -> kms.v1.RevokeIdentityRequest
-	69, // 90: kms.v1.AdminService.RotateIdentityToken:input_type -> kms.v1.RotateIdentityTokenRequest
-	71, // 91: kms.v1.AdminService.IssueIdentityCertificate:input_type -> kms.v1.IssueIdentityCertificateRequest
-	73, // 92: kms.v1.AdminService.RevokeIdentityCertificate:input_type -> kms.v1.RevokeIdentityCertificateRequest
-	75, // 93: kms.v1.AdminService.WhoAmI:input_type -> kms.v1.WhoAmIRequest
-	77, // 94: kms.v1.AdminService.GetCACertificate:input_type -> kms.v1.GetCACertificateRequest
-	80, // 95: kms.v1.AdminService.ListAuditEvents:input_type -> kms.v1.ListAuditEventsRequest
-	83, // 96: kms.v1.AdminService.ListSubscribers:input_type -> kms.v1.ListSubscribersRequest
-	85, // 97: kms.v1.AdminService.Health:input_type -> kms.v1.HealthRequest
-	8,  // 98: kms.v1.ParameterService.GetParameter:output_type -> kms.v1.GetParameterResponse
-	10, // 99: kms.v1.ParameterService.PutParameter:output_type -> kms.v1.PutParameterResponse
-	12, // 100: kms.v1.ParameterService.ListParameters:output_type -> kms.v1.ListParametersResponse
-	14, // 101: kms.v1.ParameterService.DeleteParameter:output_type -> kms.v1.DeleteParameterResponse
-	16, // 102: kms.v1.ParameterService.GetParameterMetadata:output_type -> kms.v1.GetParameterMetadataResponse
-	18, // 103: kms.v1.SecretService.GetSecret:output_type -> kms.v1.GetSecretResponse
-	20, // 104: kms.v1.SecretService.PutSecret:output_type -> kms.v1.PutSecretResponse
-	22, // 105: kms.v1.SecretService.ListSecrets:output_type -> kms.v1.ListSecretsResponse
-	24, // 106: kms.v1.SecretService.DeleteSecret:output_type -> kms.v1.DeleteSecretResponse
-	26, // 107: kms.v1.SecretService.DisableSecret:output_type -> kms.v1.DisableSecretResponse
-	28, // 108: kms.v1.SecretService.DestroySecretVersion:output_type -> kms.v1.DestroySecretVersionResponse
-	30, // 109: kms.v1.SecretService.GetSecretMetadata:output_type -> kms.v1.GetSecretMetadataResponse
-	32, // 110: kms.v1.SecretService.PromoteSecretVersion:output_type -> kms.v1.PromoteSecretVersionResponse
-	34, // 111: kms.v1.WatchService.Subscribe:output_type -> kms.v1.SubscribeEvent
-	34, // 112: kms.v1.WatchService.WatchParameter:output_type -> kms.v1.SubscribeEvent
-	34, // 113: kms.v1.WatchService.WatchNamespace:output_type -> kms.v1.SubscribeEvent
-	46, // 114: kms.v1.AdminService.CreateNamespace:output_type -> kms.v1.CreateNamespaceResponse
-	48, // 115: kms.v1.AdminService.UpdateNamespace:output_type -> kms.v1.UpdateNamespaceResponse
-	50, // 116: kms.v1.AdminService.DeleteNamespace:output_type -> kms.v1.DeleteNamespaceResponse
-	52, // 117: kms.v1.AdminService.ListNamespaces:output_type -> kms.v1.ListNamespacesResponse
-	56, // 118: kms.v1.AdminService.CreatePolicy:output_type -> kms.v1.CreatePolicyResponse
-	58, // 119: kms.v1.AdminService.UpdatePolicy:output_type -> kms.v1.UpdatePolicyResponse
-	60, // 120: kms.v1.AdminService.DeletePolicy:output_type -> kms.v1.DeletePolicyResponse
-	62, // 121: kms.v1.AdminService.ListPolicies:output_type -> kms.v1.ListPoliciesResponse
-	64, // 122: kms.v1.AdminService.CreateIdentity:output_type -> kms.v1.CreateIdentityResponse
-	66, // 123: kms.v1.AdminService.ListIdentities:output_type -> kms.v1.ListIdentitiesResponse
-	68, // 124: kms.v1.AdminService.RevokeIdentity:output_type -> kms.v1.RevokeIdentityResponse
-	70, // 125: kms.v1.AdminService.RotateIdentityToken:output_type -> kms.v1.RotateIdentityTokenResponse
-	72, // 126: kms.v1.AdminService.IssueIdentityCertificate:output_type -> kms.v1.IssueIdentityCertificateResponse
-	74, // 127: kms.v1.AdminService.RevokeIdentityCertificate:output_type -> kms.v1.RevokeIdentityCertificateResponse
-	76, // 128: kms.v1.AdminService.WhoAmI:output_type -> kms.v1.WhoAmIResponse
-	78, // 129: kms.v1.AdminService.GetCACertificate:output_type -> kms.v1.GetCACertificateResponse
-	81, // 130: kms.v1.AdminService.ListAuditEvents:output_type -> kms.v1.ListAuditEventsResponse
-	84, // 131: kms.v1.AdminService.ListSubscribers:output_type -> kms.v1.ListSubscribersResponse
-	86, // 132: kms.v1.AdminService.Health:output_type -> kms.v1.HealthResponse
-	98, // [98:133] is the sub-list for method output_type
-	63, // [63:98] is the sub-list for method input_type
-	63, // [63:63] is the sub-list for extension type_name
-	63, // [63:63] is the sub-list for extension extendee
-	0,  // [0:63] is the sub-list for field type_name
+	1,  // 1: kms.v1.Parameter.ref:type_name -> kms.v1.ResourceRef
+	84, // 2: kms.v1.Parameter.labels:type_name -> kms.v1.Parameter.LabelsEntry
+	1,  // 3: kms.v1.SecretMetadata.ref:type_name -> kms.v1.ResourceRef
+	85, // 4: kms.v1.SecretMetadata.labels:type_name -> kms.v1.SecretMetadata.LabelsEntry
+	5,  // 5: kms.v1.SecretMetadata.versions:type_name -> kms.v1.SecretVersionInfo
+	1,  // 6: kms.v1.GetParameterRequest.ref:type_name -> kms.v1.ResourceRef
+	2,  // 7: kms.v1.GetParameterResponse.parameter:type_name -> kms.v1.Parameter
+	1,  // 8: kms.v1.PutParameterRequest.ref:type_name -> kms.v1.ResourceRef
+	0,  // 9: kms.v1.ListParametersRequest.namespace:type_name -> kms.v1.NamespaceRef
+	2,  // 10: kms.v1.ListParametersResponse.parameters:type_name -> kms.v1.Parameter
+	1,  // 11: kms.v1.DeleteParameterRequest.ref:type_name -> kms.v1.ResourceRef
+	1,  // 12: kms.v1.GetParameterMetadataRequest.ref:type_name -> kms.v1.ResourceRef
+	1,  // 13: kms.v1.GetParameterMetadataResponse.ref:type_name -> kms.v1.ResourceRef
+	86, // 14: kms.v1.GetParameterMetadataResponse.labels:type_name -> kms.v1.GetParameterMetadataResponse.LabelsEntry
+	3,  // 15: kms.v1.GetParameterMetadataResponse.versions:type_name -> kms.v1.ParameterVersionInfo
+	1,  // 16: kms.v1.GetSecretRequest.ref:type_name -> kms.v1.ResourceRef
+	1,  // 17: kms.v1.GetSecretResponse.ref:type_name -> kms.v1.ResourceRef
+	1,  // 18: kms.v1.PutSecretRequest.ref:type_name -> kms.v1.ResourceRef
+	0,  // 19: kms.v1.ListSecretsRequest.namespace:type_name -> kms.v1.NamespaceRef
+	4,  // 20: kms.v1.ListSecretsResponse.secrets:type_name -> kms.v1.SecretMetadata
+	1,  // 21: kms.v1.DeleteSecretRequest.ref:type_name -> kms.v1.ResourceRef
+	1,  // 22: kms.v1.DisableSecretRequest.ref:type_name -> kms.v1.ResourceRef
+	1,  // 23: kms.v1.DestroySecretVersionRequest.ref:type_name -> kms.v1.ResourceRef
+	1,  // 24: kms.v1.GetSecretMetadataRequest.ref:type_name -> kms.v1.ResourceRef
+	4,  // 25: kms.v1.GetSecretMetadataResponse.secret:type_name -> kms.v1.SecretMetadata
+	1,  // 26: kms.v1.PromoteSecretVersionRequest.ref:type_name -> kms.v1.ResourceRef
+	0,  // 27: kms.v1.SubscribeRequest.namespaces:type_name -> kms.v1.NamespaceRef
+	34, // 28: kms.v1.SubscribeEvent.snapshot:type_name -> kms.v1.Snapshot
+	35, // 29: kms.v1.SubscribeEvent.change:type_name -> kms.v1.ParameterChange
+	36, // 30: kms.v1.SubscribeEvent.secret_change:type_name -> kms.v1.SecretMetadataChange
+	37, // 31: kms.v1.SubscribeEvent.heartbeat:type_name -> kms.v1.Heartbeat
+	2,  // 32: kms.v1.Snapshot.parameters:type_name -> kms.v1.Parameter
+	1,  // 33: kms.v1.ParameterChange.ref:type_name -> kms.v1.ResourceRef
+	1,  // 34: kms.v1.SecretMetadataChange.ref:type_name -> kms.v1.ResourceRef
+	0,  // 35: kms.v1.Namespace.ref:type_name -> kms.v1.NamespaceRef
+	0,  // 36: kms.v1.Identity.namespace:type_name -> kms.v1.NamespaceRef
+	40, // 37: kms.v1.Identity.certs:type_name -> kms.v1.IdentityCertInfo
+	0,  // 38: kms.v1.CreateNamespaceRequest.ref:type_name -> kms.v1.NamespaceRef
+	38, // 39: kms.v1.CreateNamespaceResponse.namespace:type_name -> kms.v1.Namespace
+	0,  // 40: kms.v1.UpdateNamespaceRequest.ref:type_name -> kms.v1.NamespaceRef
+	38, // 41: kms.v1.UpdateNamespaceResponse.namespace:type_name -> kms.v1.Namespace
+	0,  // 42: kms.v1.DeleteNamespaceRequest.ref:type_name -> kms.v1.NamespaceRef
+	38, // 43: kms.v1.ListNamespacesResponse.namespaces:type_name -> kms.v1.Namespace
+	50, // 44: kms.v1.Policy.allow:type_name -> kms.v1.PolicyRule
+	50, // 45: kms.v1.Policy.deny:type_name -> kms.v1.PolicyRule
+	51, // 46: kms.v1.CreatePolicyRequest.policy:type_name -> kms.v1.Policy
+	51, // 47: kms.v1.CreatePolicyResponse.policy:type_name -> kms.v1.Policy
+	51, // 48: kms.v1.UpdatePolicyRequest.policy:type_name -> kms.v1.Policy
+	51, // 49: kms.v1.UpdatePolicyResponse.policy:type_name -> kms.v1.Policy
+	51, // 50: kms.v1.ListPoliciesResponse.policies:type_name -> kms.v1.Policy
+	0,  // 51: kms.v1.CreateIdentityRequest.namespace:type_name -> kms.v1.NamespaceRef
+	41, // 52: kms.v1.CreateIdentityResponse.identity:type_name -> kms.v1.Identity
+	39, // 53: kms.v1.CreateIdentityResponse.cert:type_name -> kms.v1.CertBundle
+	41, // 54: kms.v1.ListIdentitiesResponse.identities:type_name -> kms.v1.Identity
+	39, // 55: kms.v1.IssueIdentityCertificateResponse.cert:type_name -> kms.v1.CertBundle
+	0,  // 56: kms.v1.WhoAmIResponse.namespace:type_name -> kms.v1.NamespaceRef
+	76, // 57: kms.v1.ListAuditEventsResponse.events:type_name -> kms.v1.AuditEvent
+	0,  // 58: kms.v1.Subscriber.namespaces:type_name -> kms.v1.NamespaceRef
+	79, // 59: kms.v1.ListSubscribersResponse.subscribers:type_name -> kms.v1.Subscriber
+	6,  // 60: kms.v1.ParameterService.GetParameter:input_type -> kms.v1.GetParameterRequest
+	8,  // 61: kms.v1.ParameterService.PutParameter:input_type -> kms.v1.PutParameterRequest
+	10, // 62: kms.v1.ParameterService.ListParameters:input_type -> kms.v1.ListParametersRequest
+	12, // 63: kms.v1.ParameterService.DeleteParameter:input_type -> kms.v1.DeleteParameterRequest
+	14, // 64: kms.v1.ParameterService.GetParameterMetadata:input_type -> kms.v1.GetParameterMetadataRequest
+	16, // 65: kms.v1.SecretService.GetSecret:input_type -> kms.v1.GetSecretRequest
+	18, // 66: kms.v1.SecretService.PutSecret:input_type -> kms.v1.PutSecretRequest
+	20, // 67: kms.v1.SecretService.ListSecrets:input_type -> kms.v1.ListSecretsRequest
+	22, // 68: kms.v1.SecretService.DeleteSecret:input_type -> kms.v1.DeleteSecretRequest
+	24, // 69: kms.v1.SecretService.DisableSecret:input_type -> kms.v1.DisableSecretRequest
+	26, // 70: kms.v1.SecretService.DestroySecretVersion:input_type -> kms.v1.DestroySecretVersionRequest
+	28, // 71: kms.v1.SecretService.GetSecretMetadata:input_type -> kms.v1.GetSecretMetadataRequest
+	30, // 72: kms.v1.SecretService.PromoteSecretVersion:input_type -> kms.v1.PromoteSecretVersionRequest
+	32, // 73: kms.v1.WatchService.Subscribe:input_type -> kms.v1.SubscribeRequest
+	42, // 74: kms.v1.AdminService.CreateNamespace:input_type -> kms.v1.CreateNamespaceRequest
+	44, // 75: kms.v1.AdminService.UpdateNamespace:input_type -> kms.v1.UpdateNamespaceRequest
+	46, // 76: kms.v1.AdminService.DeleteNamespace:input_type -> kms.v1.DeleteNamespaceRequest
+	48, // 77: kms.v1.AdminService.ListNamespaces:input_type -> kms.v1.ListNamespacesRequest
+	52, // 78: kms.v1.AdminService.CreatePolicy:input_type -> kms.v1.CreatePolicyRequest
+	54, // 79: kms.v1.AdminService.UpdatePolicy:input_type -> kms.v1.UpdatePolicyRequest
+	56, // 80: kms.v1.AdminService.DeletePolicy:input_type -> kms.v1.DeletePolicyRequest
+	58, // 81: kms.v1.AdminService.ListPolicies:input_type -> kms.v1.ListPoliciesRequest
+	60, // 82: kms.v1.AdminService.CreateIdentity:input_type -> kms.v1.CreateIdentityRequest
+	62, // 83: kms.v1.AdminService.ListIdentities:input_type -> kms.v1.ListIdentitiesRequest
+	64, // 84: kms.v1.AdminService.RevokeIdentity:input_type -> kms.v1.RevokeIdentityRequest
+	66, // 85: kms.v1.AdminService.RotateIdentityToken:input_type -> kms.v1.RotateIdentityTokenRequest
+	68, // 86: kms.v1.AdminService.IssueIdentityCertificate:input_type -> kms.v1.IssueIdentityCertificateRequest
+	70, // 87: kms.v1.AdminService.RevokeIdentityCertificate:input_type -> kms.v1.RevokeIdentityCertificateRequest
+	72, // 88: kms.v1.AdminService.WhoAmI:input_type -> kms.v1.WhoAmIRequest
+	74, // 89: kms.v1.AdminService.GetCACertificate:input_type -> kms.v1.GetCACertificateRequest
+	77, // 90: kms.v1.AdminService.ListAuditEvents:input_type -> kms.v1.ListAuditEventsRequest
+	80, // 91: kms.v1.AdminService.ListSubscribers:input_type -> kms.v1.ListSubscribersRequest
+	82, // 92: kms.v1.AdminService.Health:input_type -> kms.v1.HealthRequest
+	7,  // 93: kms.v1.ParameterService.GetParameter:output_type -> kms.v1.GetParameterResponse
+	9,  // 94: kms.v1.ParameterService.PutParameter:output_type -> kms.v1.PutParameterResponse
+	11, // 95: kms.v1.ParameterService.ListParameters:output_type -> kms.v1.ListParametersResponse
+	13, // 96: kms.v1.ParameterService.DeleteParameter:output_type -> kms.v1.DeleteParameterResponse
+	15, // 97: kms.v1.ParameterService.GetParameterMetadata:output_type -> kms.v1.GetParameterMetadataResponse
+	17, // 98: kms.v1.SecretService.GetSecret:output_type -> kms.v1.GetSecretResponse
+	19, // 99: kms.v1.SecretService.PutSecret:output_type -> kms.v1.PutSecretResponse
+	21, // 100: kms.v1.SecretService.ListSecrets:output_type -> kms.v1.ListSecretsResponse
+	23, // 101: kms.v1.SecretService.DeleteSecret:output_type -> kms.v1.DeleteSecretResponse
+	25, // 102: kms.v1.SecretService.DisableSecret:output_type -> kms.v1.DisableSecretResponse
+	27, // 103: kms.v1.SecretService.DestroySecretVersion:output_type -> kms.v1.DestroySecretVersionResponse
+	29, // 104: kms.v1.SecretService.GetSecretMetadata:output_type -> kms.v1.GetSecretMetadataResponse
+	31, // 105: kms.v1.SecretService.PromoteSecretVersion:output_type -> kms.v1.PromoteSecretVersionResponse
+	33, // 106: kms.v1.WatchService.Subscribe:output_type -> kms.v1.SubscribeEvent
+	43, // 107: kms.v1.AdminService.CreateNamespace:output_type -> kms.v1.CreateNamespaceResponse
+	45, // 108: kms.v1.AdminService.UpdateNamespace:output_type -> kms.v1.UpdateNamespaceResponse
+	47, // 109: kms.v1.AdminService.DeleteNamespace:output_type -> kms.v1.DeleteNamespaceResponse
+	49, // 110: kms.v1.AdminService.ListNamespaces:output_type -> kms.v1.ListNamespacesResponse
+	53, // 111: kms.v1.AdminService.CreatePolicy:output_type -> kms.v1.CreatePolicyResponse
+	55, // 112: kms.v1.AdminService.UpdatePolicy:output_type -> kms.v1.UpdatePolicyResponse
+	57, // 113: kms.v1.AdminService.DeletePolicy:output_type -> kms.v1.DeletePolicyResponse
+	59, // 114: kms.v1.AdminService.ListPolicies:output_type -> kms.v1.ListPoliciesResponse
+	61, // 115: kms.v1.AdminService.CreateIdentity:output_type -> kms.v1.CreateIdentityResponse
+	63, // 116: kms.v1.AdminService.ListIdentities:output_type -> kms.v1.ListIdentitiesResponse
+	65, // 117: kms.v1.AdminService.RevokeIdentity:output_type -> kms.v1.RevokeIdentityResponse
+	67, // 118: kms.v1.AdminService.RotateIdentityToken:output_type -> kms.v1.RotateIdentityTokenResponse
+	69, // 119: kms.v1.AdminService.IssueIdentityCertificate:output_type -> kms.v1.IssueIdentityCertificateResponse
+	71, // 120: kms.v1.AdminService.RevokeIdentityCertificate:output_type -> kms.v1.RevokeIdentityCertificateResponse
+	73, // 121: kms.v1.AdminService.WhoAmI:output_type -> kms.v1.WhoAmIResponse
+	75, // 122: kms.v1.AdminService.GetCACertificate:output_type -> kms.v1.GetCACertificateResponse
+	78, // 123: kms.v1.AdminService.ListAuditEvents:output_type -> kms.v1.ListAuditEventsResponse
+	81, // 124: kms.v1.AdminService.ListSubscribers:output_type -> kms.v1.ListSubscribersResponse
+	83, // 125: kms.v1.AdminService.Health:output_type -> kms.v1.HealthResponse
+	93, // [93:126] is the sub-list for method output_type
+	60, // [60:93] is the sub-list for method input_type
+	60, // [60:60] is the sub-list for extension type_name
+	60, // [60:60] is the sub-list for extension extendee
+	0,  // [0:60] is the sub-list for field type_name
 }
 
 func init() { file_kms_v1_kms_proto_init() }
@@ -5945,7 +5747,7 @@ func file_kms_v1_kms_proto_init() {
 	if File_kms_v1_kms_proto != nil {
 		return
 	}
-	file_kms_v1_kms_proto_msgTypes[34].OneofWrappers = []any{
+	file_kms_v1_kms_proto_msgTypes[33].OneofWrappers = []any{
 		(*SubscribeEvent_Snapshot)(nil),
 		(*SubscribeEvent_Change)(nil),
 		(*SubscribeEvent_SecretChange)(nil),
@@ -5957,7 +5759,7 @@ func file_kms_v1_kms_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_kms_v1_kms_proto_rawDesc), len(file_kms_v1_kms_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   90,
+			NumMessages:   87,
 			NumExtensions: 0,
 			NumServices:   4,
 		},

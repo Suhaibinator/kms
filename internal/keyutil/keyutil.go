@@ -128,35 +128,6 @@ func isKeyRune(r rune) bool {
 	return false
 }
 
-// ValidateKeyPattern validates a key pattern used by policies and watch
-// selectors: an exact key, "*" (all keys), or a "prefix/*" subtree. Empty is
-// rejected here; callers that treat "" as "match all" should normalize first.
-func ValidateKeyPattern(pattern string) error {
-	if pattern == "*" {
-		return nil
-	}
-	if base, ok := strings.CutSuffix(pattern, "/*"); ok {
-		if err := ValidateKey(base); err != nil {
-			return fmt.Errorf("pattern %q: %w", pattern, err)
-		}
-		return nil
-	}
-	return ValidateKey(pattern)
-}
-
-// MatchKey reports whether key matches pattern. An empty pattern or "*" matches
-// every key; "prefix/*" matches "prefix" itself and everything beneath it;
-// otherwise the match is exact. Inputs are assumed already validated.
-func MatchKey(pattern, key string) bool {
-	if pattern == "" || pattern == "*" {
-		return true
-	}
-	if base, ok := strings.CutSuffix(pattern, "/*"); ok {
-		return key == base || strings.HasPrefix(key, base+"/")
-	}
-	return pattern == key
-}
-
 // ParseNamespace parses the SDK/CLI display form "env/app" into a NamespaceRef.
 // It is client-side sugar; the server takes explicit env/app fields.
 func ParseNamespace(s string) (domain.NamespaceRef, error) {

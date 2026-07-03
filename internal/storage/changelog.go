@@ -97,59 +97,37 @@ func (s *SQLStore) PruneChangeLog(ctx context.Context, keepDuration time.Duratio
 	return int(deleted), nil
 }
 
-// snapshotSelectorClause resolves the namespaces referenced by the selectors
-// and builds a parameters-table WHERE condition (over p.namespace_id and
-// p.name). Selectors naming a namespace that does not exist contribute nothing.
-// matchNone is true when no selector resolves to any rows, so the caller can
-// skip the join entirely while still returning the current revision.
-func snapshotSelectorClause(tx *gorm.DB, selectors []domain.WatchSelector) (clause string, args []any, matchNone bool, err error) {
-	if len(selectors) == 0 {
-		return "", nil, true, nil
+// snapshotNamespaceIDs resolves the given namespaces to their row IDs in one
+// query. Namespaces that do not exist contribute nothing. matchNone is true when
+// no namespace resolves to a row, so the caller can skip the join entirely while
+// still returning the current revision.
+func snapshotNamespaceIDs(tx *gorm.DB, namespaces []domain.NamespaceRef) (ids []int64, matchNone bool, err error) {
+	if len(namespaces) == 0 {
+		return nil, true, nil
 	}
-	// Resolve the distinct namespaces referenced, in one query.
-	nsIDs := map[domain.NamespaceRef]int64{}
 	var where []string
 	var whereArgs []any
 	seen := map[domain.NamespaceRef]bool{}
-	for _, sel := range selectors {
-		if seen[sel.NS] {
+	for _, ns := range namespaces {
+		if seen[ns] {
 			continue
 		}
-		seen[sel.NS] = true
+		seen[ns] = true
 		where = append(where, "(env = ? AND app = ?)")
-		whereArgs = append(whereArgs, sel.NS.Env, sel.NS.App)
+		whereArgs = append(whereArgs, ns.Env, ns.App)
 	}
 	var nsRows []namespaceModel
-	if err := tx.Select("id", "env", "app").Where(strings.Join(where, " OR "), whereArgs...).Find(&nsRows).Error; err != nil {
-		return "", nil, false, err
+	if err := tx.Select("id").Where(strings.Join(where, " OR "), whereArgs...).Find(&nsRows).Error; err != nil {
+		return nil, false, err
 	}
-	for _, m := range nsRows {
-		nsIDs[domain.NamespaceRef{Env: m.Env, App: m.App}] = m.ID
+	if len(nsRows) == 0 {
+		return nil, true, nil
 	}
-
-	var clauses []string
-	for _, sel := range selectors {
-		id, ok := nsIDs[sel.NS]
-		if !ok {
-			continue // namespace does not exist
-		}
-		switch {
-		case sel.KeyPattern == "" || sel.KeyPattern == "*":
-			clauses = append(clauses, "(p.namespace_id = ?)")
-			args = append(args, id)
-		case strings.HasSuffix(sel.KeyPattern, "/*"):
-			base := strings.TrimSuffix(sel.KeyPattern, "/*")
-			clauses = append(clauses, `(p.namespace_id = ? AND (p.name = ? OR p.name LIKE ? ESCAPE '\'))`)
-			args = append(args, id, base, likeEscape(base)+"/%")
-		default:
-			clauses = append(clauses, "(p.namespace_id = ? AND p.name = ?)")
-			args = append(args, id, sel.KeyPattern)
-		}
+	ids = make([]int64, len(nsRows))
+	for i, m := range nsRows {
+		ids[i] = m.ID
 	}
-	if len(clauses) == 0 {
-		return "", nil, true, nil
-	}
-	return strings.Join(clauses, " OR "), args, false, nil
+	return ids, false, nil
 }
 
 // snapshotRow is the flattened result of the set-based snapshot join: one row
@@ -169,8 +147,9 @@ type snapshotRow struct {
 }
 
 // SnapshotParameters returns, in one consistent read transaction, the current
-// revision and the "current" value of every parameter matching any selector
-// (see keyutil.MatchKey). Each selector is scoped to one namespace.
+// revision and the "current" value of every parameter in the given namespaces
+// (WHERE namespace_id IN (...)). Authorization is namespace-level and checked
+// once at subscribe time, so the snapshot is the whole authorized namespace.
 //
 // The DSN sets _txlock=immediate, so this transaction acquires SQLite's global
 // write lock the instant it begins (BEGIN IMMEDIATE) and holds it until commit.
@@ -179,7 +158,7 @@ type snapshotRow struct {
 // writer. To keep the lock held for as short a time as possible, the body does
 // a fixed, small number of SET-BASED queries (revision + one join + one label
 // fetch) rather than an N+1 loop over each matching parameter.
-func (s *SQLStore) SnapshotParameters(ctx context.Context, selectors []domain.WatchSelector) ([]domain.Parameter, uint64, error) {
+func (s *SQLStore) SnapshotParameters(ctx context.Context, namespaces []domain.NamespaceRef) ([]domain.Parameter, uint64, error) {
 	var out []domain.Parameter
 	var revision uint64
 	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
@@ -189,7 +168,7 @@ func (s *SQLStore) SnapshotParameters(ctx context.Context, selectors []domain.Wa
 		}
 		revision = rev
 
-		clause, args, matchNone, err := snapshotSelectorClause(tx, selectors)
+		nsIDs, matchNone, err := snapshotNamespaceIDs(tx, namespaces)
 		if err != nil {
 			return err
 		}
@@ -197,9 +176,9 @@ func (s *SQLStore) SnapshotParameters(ctx context.Context, selectors []domain.Wa
 			return nil
 		}
 
-		// One join resolves every matching parameter at its "current" label and
-		// pulls the version row and namespace in a single statement. The inner
-		// joins reproduce the per-parameter contract exactly: a parameter is
+		// One join resolves every parameter in the namespaces at its "current"
+		// label and pulls the version row and namespace in a single statement. The
+		// inner joins reproduce the per-parameter contract exactly: a parameter is
 		// dropped when it has no "current" label, or no version row for that
 		// label. Ordering by (env, app, name) gives a stable display order.
 		q := tx.Table("parameters AS p").
@@ -210,7 +189,7 @@ func (s *SQLStore) SnapshotParameters(ctx context.Context, selectors []domain.Wa
 			Joins("JOIN namespaces n ON n.id = p.namespace_id").
 			Joins("JOIN parameter_labels pl ON pl.parameter_id = p.id AND pl.label = ?", domain.LabelCurrent).
 			Joins("JOIN parameter_versions pv ON pv.parameter_id = p.id AND pv.version_number = pl.version_number").
-			Where(clause, args...)
+			Where("p.namespace_id IN ?", nsIDs)
 		var rows []snapshotRow
 		if err := q.Order("n.env ASC, n.app ASC, p.name ASC").Scan(&rows).Error; err != nil {
 			return err

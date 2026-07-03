@@ -34,7 +34,7 @@ func (s *Service) requireAdminOrOp(ctx context.Context, pr Principal, operation,
 	if err != nil {
 		return domain.Errorf(domain.ErrPermissionDenied, "authorization unavailable")
 	}
-	if !policy.Authorize(policies, pr.home(), operation, ref) {
+	if !policy.Authorize(policies, pr.home(), operation, ref.NS) {
 		s.auditRef(ctx, pr, eventType, resourceType, ref, 0, "deny", map[string]string{"operation": operation})
 		return domain.Errorf(domain.ErrPermissionDenied, "access denied")
 	}
@@ -135,10 +135,10 @@ func (s *Service) ListNamespaces(ctx context.Context, pr Principal, page storage
 			visible = append(visible, ns)
 			continue
 		}
-		if policy.MayListUnder(policies, domain.OpParameterRead, ns.NamespaceRef, "") ||
-			policy.MayListUnder(policies, domain.OpParameterList, ns.NamespaceRef, "") ||
-			policy.MayListUnder(policies, domain.OpSecretRead, ns.NamespaceRef, "") ||
-			policy.MayListUnder(policies, domain.OpSecretList, ns.NamespaceRef, "") {
+		if policy.MayListUnder(policies, domain.OpParameterRead, ns.NamespaceRef) ||
+			policy.MayListUnder(policies, domain.OpParameterList, ns.NamespaceRef) ||
+			policy.MayListUnder(policies, domain.OpSecretRead, ns.NamespaceRef) ||
+			policy.MayListUnder(policies, domain.OpSecretList, ns.NamespaceRef) {
 			visible = append(visible, ns)
 		}
 	}

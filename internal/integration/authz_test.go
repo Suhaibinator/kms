@@ -35,9 +35,9 @@ func TestAuthorizationDenials(t *testing.T) {
 	// A scoped client may read within its namespace only.
 	app, _ := h.createClient("app")
 	h.grant("app-read", "app", []domain.PolicyRule{
-		allowRule(domain.OpParameterRead, "prod", "app", "*"),
-		allowRule(domain.OpParameterList, "prod", "app", "*"),
-		allowRule(domain.OpSecretRead, "prod", "app", "*"),
+		allowRule(domain.OpParameterRead, "prod", "app"),
+		allowRule(domain.OpParameterList, "prod", "app"),
+		allowRule(domain.OpSecretRead, "prod", "app"),
 	}, nil)
 
 	if got, err := h.svc.GetParameter(ctx, app, h.ref("/prod/app/rate"), 0, ""); err != nil || got.Value != "10" {
@@ -64,23 +64,25 @@ func TestAuthorizationDenials(t *testing.T) {
 	}
 }
 
-// §25.1.2 / §16.3 — deny rules take precedence over allow rules.
+// §25.1.2 / §16.3 — deny rules take precedence over allow rules. Authorization
+// is namespace-level: a broad allow across an env is carved back by a deny on a
+// single namespace.
 func TestDenyPrecedence(t *testing.T) {
 	h := newHarness(t)
 	ctx := context.Background()
-	mustPutParam(t, h, "/prod/app/public", "ok")
-	mustPutParam(t, h, "/prod/app/restricted", "no")
+	mustPutParam(t, h, "/prod/open/setting", "ok")
+	mustPutParam(t, h, "/prod/locked/setting", "no")
 
 	client, _ := h.createClient("mixed")
 	h.grant("mixed-policy", "mixed",
-		[]domain.PolicyRule{allowRule("parameter:*", "prod", "app", "*")},
-		[]domain.PolicyRule{allowRule(domain.OpParameterRead, "prod", "app", "restricted")},
+		[]domain.PolicyRule{allowRule(domain.OpParameterRead, "prod", "*")},
+		[]domain.PolicyRule{allowRule(domain.OpParameterRead, "prod", "locked")},
 	)
 
-	if got, err := h.svc.GetParameter(ctx, client, h.ref("/prod/app/public"), 0, ""); err != nil || got.Value != "ok" {
-		t.Errorf("allowed path = %q err=%v, want ok", got.Value, err)
+	if got, err := h.svc.GetParameter(ctx, client, h.ref("/prod/open/setting"), 0, ""); err != nil || got.Value != "ok" {
+		t.Errorf("allowed namespace = %q err=%v, want ok", got.Value, err)
 	}
-	if _, err := h.svc.GetParameter(ctx, client, h.ref("/prod/app/restricted"), 0, ""); !errors.Is(err, domain.ErrPermissionDenied) {
-		t.Errorf("denied path err = %v, want ErrPermissionDenied (deny precedence)", err)
+	if _, err := h.svc.GetParameter(ctx, client, h.ref("/prod/locked/setting"), 0, ""); !errors.Is(err, domain.ErrPermissionDenied) {
+		t.Errorf("denied namespace err = %v, want ErrPermissionDenied (deny precedence)", err)
 	}
 }

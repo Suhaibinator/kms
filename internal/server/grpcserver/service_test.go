@@ -158,7 +158,7 @@ func TestGate_MTLSOnlyNamespaceRejectsTokenClient(t *testing.T) {
 	env.store.addPolicy(domain.Policy{
 		Name:    "read",
 		Subject: "client",
-		Allow:   []domain.PolicyRule{{Operation: domain.OpParameterRead, Env: "prod", App: "svc", KeyPattern: "*"}},
+		Allow:   []domain.PolicyRule{{Operation: domain.OpParameterRead, Env: "prod", App: "svc"}},
 	})
 	_, err := env.param().GetParameter(clientCtx(), &kmsv1.GetParameterRequest{Ref: pRef("prod", "svc", "x")})
 	if codeOf(err) != codes.PermissionDenied {
@@ -172,7 +172,7 @@ func TestGate_TokenNamespaceAdmitsTokenClient(t *testing.T) {
 	env.store.addPolicy(domain.Policy{
 		Name:    "read",
 		Subject: "client",
-		Allow:   []domain.PolicyRule{{Operation: domain.OpParameterRead, Env: "prod", App: "svc", KeyPattern: "*"}},
+		Allow:   []domain.PolicyRule{{Operation: domain.OpParameterRead, Env: "prod", App: "svc"}},
 	})
 	if _, err := env.param().PutParameter(adminCtx(), &kmsv1.PutParameterRequest{Ref: pRef("prod", "svc", "x"), Value: "v"}); err != nil {
 		t.Fatalf("seed put: %v", err)

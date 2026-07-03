@@ -84,7 +84,7 @@ func (f *fakeStore) ListChangesSince(ctx context.Context, since uint64, limit in
 	return out, nil
 }
 
-func (f *fakeStore) SnapshotParameters(ctx context.Context, selectors []domain.WatchSelector) ([]domain.Parameter, uint64, error) {
+func (f *fakeStore) SnapshotParameters(ctx context.Context, namespaces []domain.NamespaceRef) ([]domain.Parameter, uint64, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.snapErr != nil {
@@ -94,10 +94,11 @@ func (f *fakeStore) SnapshotParameters(ctx context.Context, selectors []domain.W
 	if rev == 0 && len(f.entries) > 0 {
 		rev = f.entries[len(f.entries)-1].Revision
 	}
-	// Filter snapshot by the requested selectors, mirroring the real store.
+	// Filter snapshot by the requested namespaces, mirroring the real store
+	// (whole authorized namespaces, no key matching).
 	var out []domain.Parameter
 	for _, p := range f.snapshot {
-		if selectorMatchAny(selectors, p.Ref) {
+		if namespaceMatchAny(namespaces, p.Ref.NS) {
 			out = append(out, p)
 		}
 	}
@@ -241,14 +242,13 @@ func (f *fakeStore) ListAudit(context.Context, domain.AuditFilter, storage.ListP
 
 // --- helpers ---
 
-// ref and sel build a resource ref and a watch selector in the standard test
-// namespace "prod/app" unless another namespace is given.
+// ref builds a resource ref; nsr builds a namespace ref.
 func ref(env, app, key string) domain.Ref {
 	return domain.Ref{NS: domain.NamespaceRef{Env: env, App: app}, Key: key}
 }
 
-func sel(env, app, keyPattern string) domain.WatchSelector {
-	return domain.WatchSelector{NS: domain.NamespaceRef{Env: env, App: app}, KeyPattern: keyPattern}
+func nsr(env, app string) domain.NamespaceRef {
+	return domain.NamespaceRef{Env: env, App: app}
 }
 
 func paramPut(rev uint64, r domain.Ref, value string) domain.ChangeLogEntry {
@@ -324,8 +324,6 @@ func collect(t *testing.T, sub *Subscription, n int, timeout time.Duration) []do
 	return out
 }
 
-func allow(string, domain.Ref) bool { return true }
-
 // --- tests ---
 
 func TestSubscribe_SnapshotForFreshSubscriber(t *testing.T) {
@@ -338,8 +336,7 @@ func TestSubscribe_SnapshotForFreshSubscriber(t *testing.T) {
 	}
 	h := newTestHub(t, store, Options{})
 	sub, err := h.Subscribe(context.Background(), Registration{
-		Selectors: []domain.WatchSelector{sel("prod", "app", "alpha/*")},
-		Allowed:   allow,
+		Namespaces: []domain.NamespaceRef{nsr("prod", "app")},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -352,13 +349,14 @@ func TestSubscribe_SnapshotForFreshSubscriber(t *testing.T) {
 	if bl.Revision != 7 {
 		t.Fatalf("snapshot revision = %d, want 7", bl.Revision)
 	}
-	if len(bl.Snapshot) != 1 || bl.Snapshot[0].Ref.Key != "alpha/x" {
-		t.Fatalf("snapshot = %+v, want only alpha/x", bl.Snapshot)
+	// The whole namespace is snapshotted — every key, no key filtering.
+	if len(bl.Snapshot) != 2 {
+		t.Fatalf("snapshot = %+v, want the whole namespace (2 params)", bl.Snapshot)
 	}
 }
 
 func TestSubscribe_SnapshotFiltersByNamespace(t *testing.T) {
-	// Same key pattern, different namespace: the selector must not match.
+	// Same key, different namespace: only the subscribed namespace is snapshotted.
 	store := &fakeStore{
 		snapshot: []domain.Parameter{
 			{Ref: ref("prod", "app", "alpha/x"), Value: "1"},
@@ -368,8 +366,7 @@ func TestSubscribe_SnapshotFiltersByNamespace(t *testing.T) {
 	}
 	h := newTestHub(t, store, Options{})
 	sub, err := h.Subscribe(context.Background(), Registration{
-		Selectors: []domain.WatchSelector{sel("prod", "app", "alpha/*")},
-		Allowed:   allow,
+		Namespaces: []domain.NamespaceRef{nsr("prod", "app")},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -378,31 +375,6 @@ func TestSubscribe_SnapshotFiltersByNamespace(t *testing.T) {
 	bl := sub.Backlog()
 	if len(bl.Snapshot) != 1 || bl.Snapshot[0].Ref.NS.App != "app" {
 		t.Fatalf("snapshot = %+v, want only prod/app/alpha/x", bl.Snapshot)
-	}
-}
-
-func TestSubscribe_SnapshotFiltersByAuthz(t *testing.T) {
-	store := &fakeStore{
-		snapshot: []domain.Parameter{
-			{Ref: ref("prod", "app", "alpha/x"), Value: "1"},
-			{Ref: ref("prod", "app", "alpha/secret"), Value: "2"},
-		},
-		snapRev: 3,
-	}
-	h := newTestHub(t, store, Options{})
-	sub, err := h.Subscribe(context.Background(), Registration{
-		Selectors: []domain.WatchSelector{sel("prod", "app", "alpha/*")},
-		Allowed: func(_ string, r domain.Ref) bool {
-			return r.Key != "alpha/secret"
-		},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer sub.Close()
-	bl := sub.Backlog()
-	if len(bl.Snapshot) != 1 || bl.Snapshot[0].Ref.Key != "alpha/x" {
-		t.Fatalf("snapshot = %+v, want only alpha/x (authz filtered)", bl.Snapshot)
 	}
 }
 
@@ -415,9 +387,8 @@ func TestSubscribe_ReplayForRecentSubscriber(t *testing.T) {
 	)
 	h := newTestHub(t, store, Options{})
 	sub, err := h.Subscribe(context.Background(), Registration{
-		Selectors:        []domain.WatchSelector{sel("prod", "app", "alpha/*")},
+		Namespaces:       []domain.NamespaceRef{nsr("prod", "app")},
 		LastSeenRevision: 1,
-		Allowed:          allow,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -430,8 +401,10 @@ func TestSubscribe_ReplayForRecentSubscriber(t *testing.T) {
 	if bl.Revision != 3 {
 		t.Fatalf("replay revision = %d, want 3", bl.Revision)
 	}
-	if len(bl.Replay) != 1 || bl.Replay[0].Ref.Key != "alpha/y" {
-		t.Fatalf("replay = %+v, want only alpha/y (rev>1, matches alpha/*)", bl.Replay)
+	// Every change after lastSeen in the namespace replays (rev 2 and 3), with no
+	// key filtering.
+	if len(bl.Replay) != 2 || bl.Replay[0].Ref.Key != "alpha/y" || bl.Replay[1].Ref.Key != "beta/z" {
+		t.Fatalf("replay = %+v, want alpha/y and beta/z (rev>1 in namespace)", bl.Replay)
 	}
 }
 
@@ -444,9 +417,8 @@ func TestSubscribe_PrunedLogFallsBackToSnapshot(t *testing.T) {
 	store.append(paramPut(60, ref("prod", "app", "alpha/x"), "1"))
 	h := newTestHub(t, store, Options{})
 	sub, err := h.Subscribe(context.Background(), Registration{
-		Selectors:        []domain.WatchSelector{sel("prod", "app", "alpha/*")},
+		Namespaces:       []domain.NamespaceRef{nsr("prod", "app")},
 		LastSeenRevision: 10, // older than oldest retained (50)
-		Allowed:          allow,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -476,9 +448,8 @@ func TestSubscribe_PruneRacingReplayFallsBackToSnapshot(t *testing.T) {
 	)
 	h := newTestHub(t, store, Options{})
 	sub, err := h.Subscribe(context.Background(), Registration{
-		Selectors:        []domain.WatchSelector{sel("prod", "app", "alpha/*")},
+		Namespaces:       []domain.NamespaceRef{nsr("prod", "app")},
 		LastSeenRevision: 10,
-		Allowed:          allow,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -498,9 +469,8 @@ func TestSubscribe_TooManyToReplayFallsBackToSnapshot(t *testing.T) {
 	store.append(paramPut(10000, ref("prod", "app", "alpha/x"), "1"))
 	h := newTestHub(t, store, Options{SnapshotMaxReplay: 100})
 	sub, err := h.Subscribe(context.Background(), Registration{
-		Selectors:        []domain.WatchSelector{sel("prod", "app", "alpha/*")},
+		Namespaces:       []domain.NamespaceRef{nsr("prod", "app")},
 		LastSeenRevision: 5, // 10000-5 > 100
-		Allowed:          allow,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -519,9 +489,8 @@ func TestSubscribe_UpToDateSubscriberGetsEmptyReplay(t *testing.T) {
 	)
 	h := newTestHub(t, store, Options{})
 	sub, err := h.Subscribe(context.Background(), Registration{
-		Selectors:        []domain.WatchSelector{sel("prod", "app", "alpha/*")},
+		Namespaces:       []domain.NamespaceRef{nsr("prod", "app")},
 		LastSeenRevision: 2, // current
-		Allowed:          allow,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -543,9 +512,8 @@ func TestSubscribe_EmptyLogFreshSubscriberSnapshots(t *testing.T) {
 	store := &fakeStore{} // empty log, oldest = 0
 	h := newTestHub(t, store, Options{})
 	sub, err := h.Subscribe(context.Background(), Registration{
-		Selectors:        []domain.WatchSelector{sel("prod", "app", "alpha/*")},
+		Namespaces:       []domain.NamespaceRef{nsr("prod", "app")},
 		LastSeenRevision: 5, // claims a revision but log is empty
-		Allowed:          allow,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -563,8 +531,7 @@ func TestDispatch_DeliversInRevisionOrder(t *testing.T) {
 	defer stop()
 
 	sub, err := h.Subscribe(context.Background(), Registration{
-		Selectors: []domain.WatchSelector{sel("prod", "app", "alpha/*")},
-		Allowed:   allow,
+		Namespaces: []domain.NamespaceRef{nsr("prod", "app")},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -586,17 +553,18 @@ func TestDispatch_DeliversInRevisionOrder(t *testing.T) {
 	}
 }
 
-func TestDispatch_FiltersBySelectorAndAuthz(t *testing.T) {
+// TestDispatch_FiltersByNamespace confirms delivery is purely namespace-scoped:
+// a subscriber to prod/app receives every change in prod/app — including keys it
+// never "selected" (there is no key filtering anymore) — and nothing from any
+// other namespace.
+func TestDispatch_FiltersByNamespace(t *testing.T) {
 	store := &fakeStore{}
 	h := newTestHub(t, store, Options{})
 	stop := runHub(t, h)
 	defer stop()
 
 	sub, err := h.Subscribe(context.Background(), Registration{
-		Selectors: []domain.WatchSelector{sel("prod", "app", "alpha/*")},
-		Allowed: func(_ string, r domain.Ref) bool {
-			return r.Key != "alpha/denied"
-		},
+		Namespaces: []domain.NamespaceRef{nsr("prod", "app")},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -604,16 +572,22 @@ func TestDispatch_FiltersBySelectorAndAuthz(t *testing.T) {
 	defer sub.Close()
 
 	store.append(
-		paramPut(1, ref("prod", "app", "beta/x"), "1"),      // key pattern miss
-		paramPut(2, ref("prod", "other", "alpha/x"), "2"),   // namespace miss
-		paramPut(3, ref("prod", "app", "alpha/denied"), ""), // authz miss
-		paramPut(4, ref("prod", "app", "alpha/ok"), "4"),    // delivered
+		paramPut(1, ref("prod", "app", "beta/x"), "1"),    // delivered (same namespace)
+		paramPut(2, ref("prod", "other", "alpha/x"), "2"), // namespace miss
+		paramPut(3, ref("prod", "app", "alpha/deep"), ""), // delivered (never "selected")
+		paramPut(4, ref("prod", "app", "alpha/ok"), "4"),  // delivered
 	)
 	h.Wake()
 
-	got := collect(t, sub, 1, time.Second)
-	if got[0].Ref.Key != "alpha/ok" || got[0].Revision != 4 {
-		t.Fatalf("delivered %+v, want alpha/ok rev 4", got[0])
+	got := collect(t, sub, 3, time.Second)
+	wantRevs := []uint64{1, 3, 4}
+	for i, e := range got {
+		if e.Revision != wantRevs[i] {
+			t.Fatalf("event %d revision = %d, want %d (got %+v)", i, e.Revision, wantRevs[i], got)
+		}
+		if e.Ref.NS.App != "app" {
+			t.Fatalf("event %d from wrong namespace: %+v", i, e)
+		}
 	}
 }
 
@@ -624,8 +598,7 @@ func TestDispatch_SecretEventsDelivered(t *testing.T) {
 	defer stop()
 
 	sub, err := h.Subscribe(context.Background(), Registration{
-		Selectors: []domain.WatchSelector{sel("prod", "svc", "*")},
-		Allowed:   allow,
+		Namespaces: []domain.NamespaceRef{nsr("prod", "svc")},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -674,9 +647,8 @@ func TestDispatch_NoDuplicateAcrossBacklogBoundary(t *testing.T) {
 	defer stop()
 
 	sub, err := h.Subscribe(context.Background(), Registration{
-		Selectors:        []domain.WatchSelector{sel("prod", "app", "alpha/*")},
+		Namespaces:       []domain.NamespaceRef{nsr("prod", "app")},
 		LastSeenRevision: 0,
-		Allowed:          allow,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -704,8 +676,7 @@ func TestSlowSubscriberDropped(t *testing.T) {
 	defer stop()
 
 	sub, err := h.Subscribe(context.Background(), Registration{
-		Selectors: []domain.WatchSelector{sel("prod", "app", "alpha/*")},
-		Allowed:   allow,
+		Namespaces: []domain.NamespaceRef{nsr("prod", "app")},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -741,8 +712,7 @@ func TestLivenessExpiry(t *testing.T) {
 	defer stop()
 
 	sub, err := h.Subscribe(context.Background(), Registration{
-		Selectors: []domain.WatchSelector{sel("prod", "app", "alpha/*")},
-		Allowed:   allow,
+		Namespaces: []domain.NamespaceRef{nsr("prod", "app")},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -771,8 +741,7 @@ func TestLiveness_AckKeepsAlive(t *testing.T) {
 	defer stop()
 
 	sub, err := h.Subscribe(context.Background(), Registration{
-		Selectors: []domain.WatchSelector{sel("prod", "app", "alpha/*")},
-		Allowed:   allow,
+		Namespaces: []domain.NamespaceRef{nsr("prod", "app")},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -807,14 +776,13 @@ func TestPruneLoop(t *testing.T) {
 func TestSubscribersRegistry(t *testing.T) {
 	store := &fakeStore{}
 	h := newTestHub(t, store, Options{})
-	selector := sel("prod", "app", "alpha/*")
+	namespace := nsr("prod", "app")
 	sub, err := h.Subscribe(context.Background(), Registration{
 		ClientName: "app",
 		InstanceID: "app-abcd",
 		Identity:   "id-1",
 		RemoteAddr: "1.2.3.4:5",
-		Selectors:  []domain.WatchSelector{selector},
-		Allowed:    allow,
+		Namespaces: []domain.NamespaceRef{namespace},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -827,12 +795,12 @@ func TestSubscribersRegistry(t *testing.T) {
 	if got.ClientName != "app" || got.InstanceID != "app-abcd" || got.Identity != "id-1" {
 		t.Fatalf("registry record = %+v", got)
 	}
-	if len(got.Selectors) != 1 || got.Selectors[0] != selector {
-		t.Fatalf("selectors = %+v", got.Selectors)
+	if len(got.Namespaces) != 1 || got.Namespaces[0] != namespace {
+		t.Fatalf("namespaces = %+v", got.Namespaces)
 	}
 	// Mutating the returned copy must not affect the registry.
-	got.Selectors[0] = sel("prod", "app", "mutated")
-	if h.Subscribers()[0].Selectors[0] != selector {
+	got.Namespaces[0] = nsr("prod", "mutated")
+	if h.Subscribers()[0].Namespaces[0] != namespace {
 		t.Fatal("Subscribers() returned an aliased slice")
 	}
 	sub.Ack(42)
@@ -849,8 +817,7 @@ func TestSubscribe_BacklogStoreError(t *testing.T) {
 	store := &fakeStore{currentRevErr: errors.New("db down")}
 	h := newTestHub(t, store, Options{})
 	_, err := h.Subscribe(context.Background(), Registration{
-		Selectors: []domain.WatchSelector{sel("prod", "app", "alpha/*")},
-		Allowed:   allow,
+		Namespaces: []domain.NamespaceRef{nsr("prod", "app")},
 	})
 	if err == nil {
 		t.Fatal("expected error when backlog computation fails")
@@ -878,49 +845,6 @@ func TestRun_ReturnsOnContextCancel(t *testing.T) {
 	}
 }
 
-func TestUpdateAllowedSwapsPredicate(t *testing.T) {
-	store := &fakeStore{}
-	h := newTestHub(t, store, Options{})
-	stop := runHub(t, h)
-	defer stop()
-
-	sub, err := h.Subscribe(context.Background(), Registration{
-		Selectors: []domain.WatchSelector{sel("prod", "app", "alpha/*")},
-		Allowed:   allow,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer sub.Close()
-
-	// Initially authorized: the first event is delivered.
-	store.append(paramPut(1, ref("prod", "app", "alpha/x"), "1"))
-	h.Wake()
-	got := collect(t, sub, 1, time.Second)
-	if got[0].Revision != 1 {
-		t.Fatalf("first event revision = %d, want 1", got[0].Revision)
-	}
-
-	// Revoke authorization; subsequent events must be filtered out.
-	sub.UpdateAllowed(func(string, domain.Ref) bool { return false })
-	store.append(paramPut(2, ref("prod", "app", "alpha/y"), "2"))
-	h.Wake()
-	select {
-	case e := <-sub.Events():
-		t.Fatalf("received %+v after authorization revoked", e)
-	case <-time.After(150 * time.Millisecond):
-	}
-
-	// Restore authorization; delivery resumes.
-	sub.UpdateAllowed(allow)
-	store.append(paramPut(3, ref("prod", "app", "alpha/z"), "3"))
-	h.Wake()
-	got = collect(t, sub, 1, time.Second)
-	if got[0].Revision != 3 {
-		t.Fatalf("resumed event revision = %d, want 3", got[0].Revision)
-	}
-}
-
 func TestNoGoroutineLeak(t *testing.T) {
 	baseline := runtime.NumGoroutine()
 	store := &fakeStore{}
@@ -934,8 +858,7 @@ func TestNoGoroutineLeak(t *testing.T) {
 	// Churn subscribers: subscribe, deliver, then drop them.
 	for i := 0; i < 25; i++ {
 		sub, err := h.Subscribe(context.Background(), Registration{
-			Selectors: []domain.WatchSelector{sel("prod", "app", "alpha/*")},
-			Allowed:   allow,
+			Namespaces: []domain.NamespaceRef{nsr("prod", "app")},
 		})
 		if err != nil {
 			t.Fatal(err)
@@ -954,28 +877,6 @@ func TestNoGoroutineLeak(t *testing.T) {
 
 	// Allow scheduler to reap. Goroutine count should return near baseline.
 	waitFor(t, func() bool { return runtime.NumGoroutine() <= baseline+2 }, 2*time.Second)
-}
-
-func TestNilAllowedDeniesEverything(t *testing.T) {
-	store := &fakeStore{}
-	h := newTestHub(t, store, Options{})
-	stop := runHub(t, h)
-	defer stop()
-	sub, err := h.Subscribe(context.Background(), Registration{
-		Selectors: []domain.WatchSelector{sel("prod", "app", "alpha/*")},
-		Allowed:   nil, // must be treated as deny-all
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer sub.Close()
-	store.append(paramPut(1, ref("prod", "app", "alpha/x"), "1"))
-	h.Wake()
-	select {
-	case e := <-sub.Events():
-		t.Fatalf("nil predicate should deny, but delivered %+v", e)
-	case <-time.After(150 * time.Millisecond):
-	}
 }
 
 // --- test utilities ---

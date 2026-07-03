@@ -30,15 +30,6 @@ message ResourceRef {
   string key = 2;             // relative key within the namespace
 }
 
-// WatchSelector declares interest in a set of keys within one namespace for a
-// Subscribe stream. An empty or "*" key_pattern matches every key in the
-// namespace; a "prefix/*" pattern matches keys under that prefix; any other
-// value is an exact key match.
-message WatchSelector {
-  NamespaceRef namespace = 1;
-  string key_pattern = 2; // "" or "*" = all keys; "prefix/*"; or an exact key
-}
-
 // Parameter is a non-sensitive configuration value.
 message Parameter {
   ResourceRef ref = 1;     // namespace + relative key
@@ -278,22 +269,21 @@ message PromoteSecretVersionResponse {
 // ---------------------------------------------------------------------------
 
 service WatchService {
-  // Subscribe is the primary hot-reload mechanism. The client declares the
-  // namespace selectors it wants and its last-applied revision; the server
-  // streams an initial snapshot (or delta), then pushes events as values
-  // change, interleaved with heartbeats.
+  // Subscribe is the hot-reload mechanism. The client declares the namespaces
+  // it wants and its last-applied revision; the server streams an initial
+  // snapshot (or delta), then pushes EVERY change in those namespaces the
+  // caller is authorized for, interleaved with heartbeats. Authorization is
+  // checked once per namespace at registration; there is no key-level
+  // filtering — a subscriber to a namespace receives all of its changes and
+  // routes them client-side.
   rpc Subscribe(stream SubscribeRequest) returns (stream SubscribeEvent);
-
-  // Single-resource conveniences built on the same event model.
-  rpc WatchParameter(WatchParameterRequest) returns (stream SubscribeEvent);
-  rpc WatchNamespace(WatchNamespaceRequest) returns (stream SubscribeEvent);
 }
 
 message SubscribeRequest {
   // First message: subscription registration.
-  string client_name = 1;                // e.g. "gradethis-be"
-  repeated WatchSelector selectors = 2;  // namespace + key pattern per selector
-  uint64 last_seen_revision = 3;         // 0 = send full snapshot
+  string client_name = 1;              // e.g. "gradethis-be"
+  repeated NamespaceRef namespaces = 2; // the namespaces to watch
+  uint64 last_seen_revision = 3;       // 0 = send full snapshot
   // Subsequent messages: acks / heartbeat responses.
   uint64 acked_revision = 4;
 }
@@ -332,19 +322,6 @@ message SecretMetadataChange {
 
 message Heartbeat {
   int64 server_time_unix_ms = 1;
-}
-
-message WatchParameterRequest {
-  ResourceRef ref = 1;
-  uint64 last_seen_revision = 2;
-}
-
-// WatchNamespace streams changes for a whole namespace, optionally narrowed by
-// key_pattern (empty or "*" = all keys).
-message WatchNamespaceRequest {
-  NamespaceRef namespace = 1;
-  string key_pattern = 2;
-  uint64 last_seen_revision = 3;
 }
 
 // ---------------------------------------------------------------------------
@@ -454,12 +431,12 @@ message ListNamespacesResponse {
   string next_page_token = 2;
 }
 
-// PolicyRule grants or denies one operation on keys within a namespace scope.
+// PolicyRule grants or denies one operation on a whole namespace. Authorization
+// is namespace-level: there is no per-key scoping.
 message PolicyRule {
   string operation = 1; // e.g. "secret:read", "parameter:*", "*"
   string env = 2;       // exact env or "*"
   string app = 3;       // exact app or "*"
-  string key = 4;       // exact key, "*", or "prefix/*"
 }
 
 message Policy {
@@ -629,7 +606,7 @@ message Subscriber {
   string client_name = 1;
   string instance_id = 2;
   string identity = 3;
-  repeated WatchSelector selectors = 4;
+  repeated NamespaceRef namespaces = 4; // the namespaces this stream is watching
   string remote_addr = 5;
   int64 connected_at_unix_ms = 6;
   int64 last_heartbeat_unix_ms = 7;

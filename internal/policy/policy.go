@@ -1,16 +1,17 @@
 // Package policy implements namespace-native authorization with deny precedence.
 //
 // A policy binds a subject (identity name or "*") to allow and deny rules.
-// Each rule pairs an operation pattern with a namespace scope (env, app) and a
-// key pattern:
+// Each rule pairs an operation pattern with a namespace scope (env, app):
 //
 //	operation: "secret:read" | "secret:*" | "parameter:*" | "admin:*" | "*"
 //	env / app: an exact value or "*"
-//	key:       an exact key, "*" (all keys), or a "prefix/*" subtree
+//
+// Authorization is per-namespace: a grant covers a whole namespace, every key
+// in it. There is no key-level scoping.
 //
 // Evaluation (default deny), over policies already filtered to the subject and
 // "*" by the caller:
-//  1. If any deny rule matches (operation, ref) -> deny.
+//  1. If any deny rule matches (operation, ns) -> deny.
 //  2. Else if any allow rule matches -> allow.
 //  3. Else -> deny.
 //
@@ -27,23 +28,33 @@ import (
 	"github.com/Suhaibinator/kms/internal/keyutil"
 )
 
+// Evaluate applies deny > explicit allow > default deny for operation on ns,
+// without the implicit home-namespace grant. It is the plain policy decision;
+// callers that want the home grant folded in use Authorize.
+func Evaluate(policies []domain.Policy, operation string, ns domain.NamespaceRef) bool {
+	if deniedBy(policies, operation, ns) {
+		return false
+	}
+	return allowedBy(policies, operation, ns)
+}
+
 // Authorize applies the full precedence for a namespaced operation:
 // deny > implicit home grant > explicit allow > default deny. home is the
 // caller's bound namespace, or nil when the caller is unbound (admin/tooling).
-func Authorize(policies []domain.Policy, home *domain.NamespaceRef, operation string, ref domain.Ref) bool {
-	if deniedBy(policies, operation, ref) {
+func Authorize(policies []domain.Policy, home *domain.NamespaceRef, operation string, ns domain.NamespaceRef) bool {
+	if deniedBy(policies, operation, ns) {
 		return false
 	}
-	if HasImplicitHomeGrant(home, operation, ref) {
+	if HasImplicitHomeGrant(home, operation, ns) {
 		return true
 	}
-	return allowedBy(policies, operation, ref)
+	return allowedBy(policies, operation, ns)
 }
 
-func deniedBy(policies []domain.Policy, operation string, ref domain.Ref) bool {
+func deniedBy(policies []domain.Policy, operation string, ns domain.NamespaceRef) bool {
 	for _, p := range policies {
 		for _, r := range p.Deny {
-			if ruleMatches(r, operation, ref) {
+			if ruleMatches(r, operation, ns) {
 				return true
 			}
 		}
@@ -51,10 +62,10 @@ func deniedBy(policies []domain.Policy, operation string, ref domain.Ref) bool {
 	return false
 }
 
-func allowedBy(policies []domain.Policy, operation string, ref domain.Ref) bool {
+func allowedBy(policies []domain.Policy, operation string, ns domain.NamespaceRef) bool {
 	for _, p := range policies {
 		for _, r := range p.Allow {
-			if ruleMatches(r, operation, ref) {
+			if ruleMatches(r, operation, ns) {
 				return true
 			}
 		}
@@ -65,7 +76,7 @@ func allowedBy(policies []domain.Policy, operation string, ref domain.Ref) bool 
 // implicitHomeOps are the operations a namespace-bound identity may perform in
 // its own namespace with no explicit policy (plan §3, §6): parameter and secret
 // reads and lists. Subscribe is authorized by core as a continuous
-// parameter:list/read within the home namespace and therefore rides on the same
+// parameter:read within the home namespace and therefore rides on the same
 // grant. Writes, deletes, disables, destroys, and promotes always require an
 // explicit allow rule.
 var implicitHomeOps = map[string]bool{
@@ -82,25 +93,24 @@ func IsImplicitHomeOp(operation string) bool {
 }
 
 // HasImplicitHomeGrant reports whether the implicit home-namespace grant alone
-// (before considering deny rules) would permit operation on ref for a caller
-// whose bound namespace is home. It is true only when the caller is bound, the
-// ref is in the caller's own namespace, and the operation is in the implicit
-// set. Callers must still apply deny precedence (Authorize does this).
-func HasImplicitHomeGrant(home *domain.NamespaceRef, operation string, ref domain.Ref) bool {
+// (before considering deny rules) would permit operation on ns for a caller
+// whose bound namespace is home. It is true only when the caller is bound, ns
+// is the caller's own namespace, and the operation is in the implicit set.
+// Callers must still apply deny precedence (Authorize does this).
+func HasImplicitHomeGrant(home *domain.NamespaceRef, operation string, ns domain.NamespaceRef) bool {
 	if home == nil {
 		return false
 	}
 	if !IsImplicitHomeOp(operation) {
 		return false
 	}
-	return *home == ref.NS
+	return *home == ns
 }
 
-func ruleMatches(r domain.PolicyRule, operation string, ref domain.Ref) bool {
+func ruleMatches(r domain.PolicyRule, operation string, ns domain.NamespaceRef) bool {
 	return operationMatches(r.Operation, operation) &&
-		labelMatches(r.Env, ref.NS.Env) &&
-		labelMatches(r.App, ref.NS.App) &&
-		keyutil.MatchKey(r.KeyPattern, ref.Key)
+		labelMatches(r.Env, ns.Env) &&
+		labelMatches(r.App, ns.App)
 }
 
 // labelMatches matches an env or app rule component: exact or "*".
@@ -121,59 +131,21 @@ func operationMatches(pattern, op string) bool {
 	return pattern == op
 }
 
-// MayListUnder reports whether a list operation scoped to (ns, keyPrefix) could
-// possibly return anything for this subject: true when at least one allow rule
-// with a matching namespace scope has a key pattern that intersects the
-// keyPrefix subtree ("" = the whole namespace). Callers must still filter
-// individual results with Evaluate/Authorize — deny rules are intentionally
-// ignored here because a deny on a sub-key only prunes items, it does not
-// forbid listing the rest of the subtree. It also does not consult the implicit
-// home-namespace grant; core short-circuits home-namespace lists separately.
-func MayListUnder(policies []domain.Policy, operation string, ns domain.NamespaceRef, keyPrefix string) bool {
-	for _, p := range policies {
-		for _, r := range p.Allow {
-			if !operationMatches(r.Operation, operation) {
-				continue
-			}
-			if !labelMatches(r.Env, ns.Env) || !labelMatches(r.App, ns.App) {
-				continue
-			}
-			if keyPatternIntersectsSubtree(r.KeyPattern, keyPrefix) {
-				return true
-			}
-		}
-	}
-	return false
-}
-
-// keyPatternIntersectsSubtree reports whether a rule key pattern can match any
-// key inside the subtree rooted at prefix ("" = the whole namespace).
-func keyPatternIntersectsSubtree(pattern, prefix string) bool {
-	if pattern == "" || pattern == "*" {
-		return true
-	}
-	if base, ok := strings.CutSuffix(pattern, "/*"); ok {
-		// Two subtrees intersect when one root contains the other.
-		return keyPrefixContains(base, prefix) || keyPrefixContains(prefix, base)
-	}
-	// Exact-key rule: it must live inside the prefix subtree.
-	return keyPrefixContains(prefix, pattern)
-}
-
-// keyPrefixContains reports whether key lies within the subtree rooted at root
-// ("" = the whole namespace). Matching is segment-aware: "billing" contains
-// "billing/stripe" but not "billing-2".
-func keyPrefixContains(root, key string) bool {
-	if root == "" {
-		return true
-	}
-	return key == root || strings.HasPrefix(key, root+"/")
+// MayListUnder reports whether at least one allow rule grants operation on ns
+// for this subject. Because authorization is namespace-level, a subject that may
+// list a namespace may see every key in it. Deny rules are intentionally not
+// consulted here — core applies deny precedence per item via Authorize; this is
+// only the "may the subject enumerate this namespace at all" gate. It does not
+// consult the implicit home-namespace grant; core short-circuits home-namespace
+// lists separately.
+func MayListUnder(policies []domain.Policy, operation string, ns domain.NamespaceRef) bool {
+	return allowedBy(policies, operation, ns)
 }
 
 // ValidateRules canonicalizes every rule in the policy (operation against the
-// known set; env/app/key normalized and validated) and returns the normalized
-// policy or an error naming the offending rule. An empty env, app, or key
-// component normalizes to "*" (unscoped).
+// known set; env/app normalized and validated) and returns the normalized
+// policy or an error naming the offending rule. An empty env or app component
+// normalizes to "*" (unscoped).
 func ValidateRules(p domain.Policy) (domain.Policy, error) {
 	if p.Name == "" {
 		return p, domain.Errorf(domain.ErrInvalidArgument, "policy name is required")
@@ -215,16 +187,7 @@ func normalizeRule(r domain.PolicyRule) (domain.PolicyRule, error) {
 	if err != nil {
 		return r, err
 	}
-	key := r.KeyPattern
-	if key == "" {
-		key = "*"
-	}
-	if key != "*" {
-		if err := keyutil.ValidateKeyPattern(key); err != nil {
-			return r, err
-		}
-	}
-	return domain.PolicyRule{Operation: r.Operation, Env: env, App: app, KeyPattern: key}, nil
+	return domain.PolicyRule{Operation: r.Operation, Env: env, App: app}, nil
 }
 
 // normalizeLabel normalizes an env/app rule component: "" or "*" become "*";

@@ -40,7 +40,7 @@ func FuzzValidateRules(f *testing.F) {
 		p := domain.Policy{
 			Name:    "fuzz",
 			Subject: "*",
-			Allow:   []domain.PolicyRule{{Operation: op, Env: env, App: app, KeyPattern: key}},
+			Allow:   []domain.PolicyRule{{Operation: op, Env: env, App: app}},
 		}
 		normalized, err := policy.ValidateRules(p)
 		if err != nil {
@@ -58,11 +58,11 @@ func FuzzValidateRules(f *testing.F) {
 			(len(normalized.Allow) == 1 && reNormalized.Allow[0] != normalized.Allow[0]) {
 			t.Fatalf("re-validation changed the policy: %+v -> %+v", normalized.Allow, reNormalized.Allow)
 		}
-		// A normalized policy must be safe to evaluate against arbitrary refs.
-		ref := domain.Ref{NS: domain.NamespaceRef{Env: "prod", App: "app"}, Key: "thing"}
-		_ = policy.Authorize([]domain.Policy{normalized}, nil, op, ref)
-		_ = policy.Authorize([]domain.Policy{normalized}, nil, "secret:read", ref)
-		_ = policy.MayListUnder([]domain.Policy{normalized}, op, domain.NamespaceRef{Env: "prod", App: "app"}, "")
+		// A normalized policy must be safe to evaluate against arbitrary namespaces.
+		ns := domain.NamespaceRef{Env: "prod", App: "app"}
+		_ = policy.Authorize([]domain.Policy{normalized}, nil, op, ns)
+		_ = policy.Authorize([]domain.Policy{normalized}, nil, "secret:read", ns)
+		_ = policy.MayListUnder([]domain.Policy{normalized}, op, ns)
 	})
 }
 

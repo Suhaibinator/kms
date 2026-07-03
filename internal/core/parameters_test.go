@@ -70,7 +70,7 @@ func TestPutParameterAuthorization(t *testing.T) {
 	}
 
 	store.addPolicy(domain.Policy{Name: "w", Subject: "app",
-		Allow: []domain.PolicyRule{{Operation: domain.OpParameterWrite, Env: "prod", App: "app", KeyPattern: "*"}}})
+		Allow: []domain.PolicyRule{{Operation: domain.OpParameterWrite, Env: "prod", App: "app"}}})
 	if _, _, err := s.PutParameter(ctx, clientPrincipal("app"), tref("x"), "1", "integer", "{}"); err != nil {
 		t.Fatalf("authorized PutParameter: %v", err)
 	}
@@ -97,18 +97,20 @@ func TestListParametersFiltersByPolicy(t *testing.T) {
 		}
 	})
 
-	t.Run("client sees only permitted subtree", func(t *testing.T) {
+	t.Run("client granted the namespace sees every key", func(t *testing.T) {
+		// Authorization is namespace-level: a client granted list+read on the
+		// namespace sees all of its keys, not a key subtree.
 		store.policies = nil
 		store.addPolicy(domain.Policy{Name: "r", Subject: "app", Allow: []domain.PolicyRule{
-			{Operation: domain.OpParameterList, Env: "prod", App: "app", KeyPattern: "billing/*"},
-			{Operation: domain.OpParameterRead, Env: "prod", App: "app", KeyPattern: "billing/*"},
+			{Operation: domain.OpParameterList, Env: "prod", App: "app"},
+			{Operation: domain.OpParameterRead, Env: "prod", App: "app"},
 		}})
 		got, _, err := s.ListParameters(ctx, clientPrincipal("app"), tns, "", storage.ListPage{})
 		if err != nil {
 			t.Fatalf("ListParameters: %v", err)
 		}
-		if len(got) != 1 || got[0].Ref.Key != "billing/c" {
-			t.Fatalf("client saw %v, want [billing/c]", got)
+		if len(got) != 3 {
+			t.Fatalf("client saw %d keys, want 3 (whole namespace)", len(got))
 		}
 	})
 
@@ -116,7 +118,7 @@ func TestListParametersFiltersByPolicy(t *testing.T) {
 		store.policies = nil
 		// read but not list.
 		store.addPolicy(domain.Policy{Name: "r", Subject: "app", Allow: []domain.PolicyRule{
-			{Operation: domain.OpParameterRead, Env: "prod", App: "app", KeyPattern: "*"},
+			{Operation: domain.OpParameterRead, Env: "prod", App: "app"},
 		}})
 		_, _, err := s.ListParameters(ctx, clientPrincipal("app"), tns, "", storage.ListPage{})
 		if !errors.Is(err, domain.ErrPermissionDenied) {

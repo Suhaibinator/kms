@@ -299,7 +299,7 @@ func (s *Service) ListSecrets(ctx context.Context, pr Principal, ns domain.Names
 	}
 	// Secret list responses are metadata-only (never values), so either
 	// secret:list or secret:read on an item exposes its metadata.
-	filter, err := s.listFilter(ctx, pr, domain.ResourceSecret, domain.OpSecretList, ns, keyPrefix, domain.OpSecretList, domain.OpSecretRead)
+	filter, err := s.listFilter(ctx, pr, domain.ResourceSecret, domain.OpSecretList, ns, domain.OpSecretList, domain.OpSecretRead)
 	if err != nil {
 		return nil, "", err
 	}

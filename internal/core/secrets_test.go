@@ -353,7 +353,7 @@ func TestPutSecretAuthorization(t *testing.T) {
 	}
 
 	store.addPolicy(domain.Policy{Name: "w", Subject: "app",
-		Allow: []domain.PolicyRule{{Operation: domain.OpSecretWrite, Env: "prod", App: "app", KeyPattern: "*"}}})
+		Allow: []domain.PolicyRule{{Operation: domain.OpSecretWrite, Env: "prod", App: "app"}}})
 	if _, err := s.PutSecret(ctx, clientPrincipal("app"), PutSecretInput{
 		Ref: tref("s"), Value: []byte("v"), ContentType: "text/plain",
 	}); err != nil {
