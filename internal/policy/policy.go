@@ -27,17 +27,6 @@ import (
 	"github.com/Suhaibinator/kms/internal/keyutil"
 )
 
-// Evaluate reports whether operation on ref is allowed by the supplied policies
-// (already filtered to the subject and "*" by the caller), using pure rule
-// evaluation with deny precedence. It does not consult the implicit
-// home-namespace grant; use Authorize for operations that should honor it.
-func Evaluate(policies []domain.Policy, operation string, ref domain.Ref) bool {
-	if deniedBy(policies, operation, ref) {
-		return false
-	}
-	return allowedBy(policies, operation, ref)
-}
-
 // Authorize applies the full precedence for a namespaced operation:
 // deny > implicit home grant > explicit allow > default deny. home is the
 // caller's bound namespace, or nil when the caller is unbound (admin/tooling).

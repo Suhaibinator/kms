@@ -21,11 +21,11 @@ func TestValidateEnvApp(t *testing.T) {
 		"",
 		"-prod",
 		"prod-",
-		"Prod",         // uppercase
-		"pr_od",        // underscore not allowed in labels
-		"pr.od",        // dot not allowed in labels
-		"prod/x",       // slash not allowed
-		"pr od",        // space
+		"Prod",   // uppercase
+		"pr_od",  // underscore not allowed in labels
+		"pr.od",  // dot not allowed in labels
+		"prod/x", // slash not allowed
+		"pr od",  // space
 		strings.Repeat("a", MaxLabelLength+1),
 	}
 	for _, s := range invalid {
@@ -136,9 +136,9 @@ func TestSplitDisplayPath(t *testing.T) {
 	if ref.NS.Env != "prod" || ref.NS.App != "gradethis" || ref.Key != "billing/stripe-key" {
 		t.Fatalf("got %+v", ref)
 	}
-	// Round-trips with String / DisplayPath.
-	if got := DisplayPath(ref); got != "/prod/gradethis/billing/stripe-key" {
-		t.Fatalf("DisplayPath round-trip = %q", got)
+	// Round-trips with Ref.String.
+	if got := ref.String(); got != "/prod/gradethis/billing/stripe-key" {
+		t.Fatalf("String round-trip = %q", got)
 	}
 	for _, bad := range []string{
 		"",

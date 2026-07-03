@@ -191,7 +191,3 @@ func SplitDisplayPath(p string) (domain.Ref, error) {
 	}
 	return ref, nil
 }
-
-// DisplayPath renders a Ref as "/env/app/key" (equivalent to Ref.String); it is
-// the inverse of SplitDisplayPath, offered so path handling has one home.
-func DisplayPath(r domain.Ref) string { return r.String() }

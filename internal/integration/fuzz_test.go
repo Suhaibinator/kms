@@ -60,8 +60,8 @@ func FuzzValidateRules(f *testing.F) {
 		}
 		// A normalized policy must be safe to evaluate against arbitrary refs.
 		ref := domain.Ref{NS: domain.NamespaceRef{Env: "prod", App: "app"}, Key: "thing"}
-		_ = policy.Evaluate([]domain.Policy{normalized}, op, ref)
-		_ = policy.Evaluate([]domain.Policy{normalized}, "secret:read", ref)
+		_ = policy.Authorize([]domain.Policy{normalized}, nil, op, ref)
+		_ = policy.Authorize([]domain.Policy{normalized}, nil, "secret:read", ref)
 		_ = policy.MayListUnder([]domain.Policy{normalized}, op, domain.NamespaceRef{Env: "prod", App: "app"}, "")
 	})
 }

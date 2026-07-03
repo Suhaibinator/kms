@@ -21,43 +21,50 @@ func ref(env, app, key string) domain.Ref {
 	return domain.Ref{NS: domain.NamespaceRef{Env: env, App: app}, Key: key}
 }
 
+// evaluate is the pure rule-only check (no implicit home grant): Authorize
+// with a nil home namespace. Kept as a test helper since production always
+// authorizes through Authorize.
+func evaluate(policies []domain.Policy, operation string, r domain.Ref) bool {
+	return Authorize(policies, nil, operation, r)
+}
+
 func TestEvaluateDefaultDeny(t *testing.T) {
-	if Evaluate(nil, domain.OpSecretRead, ref("prod", "gradethis", "x")) {
+	if evaluate(nil, domain.OpSecretRead, ref("prod", "gradethis", "x")) {
 		t.Fatal("empty policy set allowed access")
 	}
 	ps := []domain.Policy{policyWith("p", []domain.PolicyRule{rule(domain.OpParameterRead, "prod", "*", "*")}, nil)}
-	if Evaluate(ps, domain.OpSecretRead, ref("prod", "gradethis", "x")) {
+	if evaluate(ps, domain.OpSecretRead, ref("prod", "gradethis", "x")) {
 		t.Fatal("unrelated allow rule granted access")
 	}
 }
 
 func TestEvaluateAllow(t *testing.T) {
 	ps := []domain.Policy{policyWith("p", []domain.PolicyRule{rule(domain.OpSecretRead, "prod", "payments", "stripe/*")}, nil)}
-	if !Evaluate(ps, domain.OpSecretRead, ref("prod", "payments", "stripe/api-key")) {
+	if !evaluate(ps, domain.OpSecretRead, ref("prod", "payments", "stripe/api-key")) {
 		t.Fatal("matching allow rule did not grant access")
 	}
-	if Evaluate(ps, domain.OpSecretRead, ref("prod", "payments", "other/key")) {
+	if evaluate(ps, domain.OpSecretRead, ref("prod", "payments", "other/key")) {
 		t.Fatal("allow rule matched outside its key subtree")
 	}
 	// App must match too.
-	if Evaluate(ps, domain.OpSecretRead, ref("prod", "billing", "stripe/api-key")) {
+	if evaluate(ps, domain.OpSecretRead, ref("prod", "billing", "stripe/api-key")) {
 		t.Fatal("allow rule matched a different app")
 	}
 	// Operation must match too.
-	if Evaluate(ps, domain.OpSecretWrite, ref("prod", "payments", "stripe/api-key")) {
+	if evaluate(ps, domain.OpSecretWrite, ref("prod", "payments", "stripe/api-key")) {
 		t.Fatal("read allow rule granted write")
 	}
 }
 
 func TestEvaluateEnvAppWildcards(t *testing.T) {
 	ps := []domain.Policy{policyWith("p", []domain.PolicyRule{rule(domain.OpSecretRead, "*", "*", "db")}, nil)}
-	if !Evaluate(ps, domain.OpSecretRead, ref("prod", "a", "db")) {
+	if !evaluate(ps, domain.OpSecretRead, ref("prod", "a", "db")) {
 		t.Fatal("env/app wildcard did not match prod/a")
 	}
-	if !Evaluate(ps, domain.OpSecretRead, ref("staging", "b", "db")) {
+	if !evaluate(ps, domain.OpSecretRead, ref("staging", "b", "db")) {
 		t.Fatal("env/app wildcard did not match staging/b")
 	}
-	if Evaluate(ps, domain.OpSecretRead, ref("prod", "a", "other")) {
+	if evaluate(ps, domain.OpSecretRead, ref("prod", "a", "other")) {
 		t.Fatal("key mismatch should not match")
 	}
 }
@@ -67,10 +74,10 @@ func TestEvaluateDenyPrecedence(t *testing.T) {
 	deny := []domain.PolicyRule{rule(domain.OpSecretRead, "prod", "payments", "admin/*")}
 
 	ps := []domain.Policy{policyWith("p", allow, deny)}
-	if !Evaluate(ps, domain.OpSecretRead, ref("prod", "payments", "stripe")) {
+	if !evaluate(ps, domain.OpSecretRead, ref("prod", "payments", "stripe")) {
 		t.Fatal("non-denied key should be allowed")
 	}
-	if Evaluate(ps, domain.OpSecretRead, ref("prod", "payments", "admin/root")) {
+	if evaluate(ps, domain.OpSecretRead, ref("prod", "payments", "admin/root")) {
 		t.Fatal("deny rule did not override allow")
 	}
 
@@ -79,7 +86,7 @@ func TestEvaluateDenyPrecedence(t *testing.T) {
 		policyWith("allow-all", allow, nil),
 		policyWith("deny-admin", nil, deny),
 	}
-	if Evaluate(split, domain.OpSecretRead, ref("prod", "payments", "admin/root")) {
+	if evaluate(split, domain.OpSecretRead, ref("prod", "payments", "admin/root")) {
 		t.Fatal("cross-policy deny did not override allow")
 	}
 }
@@ -104,8 +111,8 @@ func TestEvaluateOperationWildcards(t *testing.T) {
 	}
 	for _, tt := range tests {
 		ps := []domain.Policy{policyWith("p", []domain.PolicyRule{rule(tt.pattern, "*", "*", "*")}, nil)}
-		if got := Evaluate(ps, tt.op, ref("any", "any", "path")); got != tt.want {
-			t.Errorf("Evaluate(op pattern %q, op %q) = %v, want %v", tt.pattern, tt.op, got, tt.want)
+		if got := evaluate(ps, tt.op, ref("any", "any", "path")); got != tt.want {
+			t.Errorf("evaluate(op pattern %q, op %q) = %v, want %v", tt.pattern, tt.op, got, tt.want)
 		}
 	}
 }
@@ -114,7 +121,7 @@ func TestEvaluateGlobalWildcard(t *testing.T) {
 	ps := []domain.Policy{policyWith("p", []domain.PolicyRule{rule("*", "*", "*", "*")}, nil)}
 	refs := []domain.Ref{ref("a", "b", "c"), ref("prod", "payments", "admin"), ref("x", "y", "a/b/c")}
 	for _, r := range refs {
-		if !Evaluate(ps, domain.OpSecretDestroy, r) {
+		if !evaluate(ps, domain.OpSecretDestroy, r) {
 			t.Errorf("global allow did not match %v", r)
 		}
 	}
@@ -125,10 +132,10 @@ func TestEvaluateDenyWildcardBeatsSpecificAllow(t *testing.T) {
 		[]domain.PolicyRule{rule(domain.OpSecretRead, "prod", "*", "*")},
 		[]domain.PolicyRule{rule("secret:*", "prod", "gradethis", "secrets/*")},
 	)}
-	if Evaluate(ps, domain.OpSecretRead, ref("prod", "gradethis", "secrets/db")) {
+	if evaluate(ps, domain.OpSecretRead, ref("prod", "gradethis", "secrets/db")) {
 		t.Fatal("category deny wildcard did not override specific allow")
 	}
-	if !Evaluate(ps, domain.OpSecretRead, ref("prod", "gradethis", "config/db")) {
+	if !evaluate(ps, domain.OpSecretRead, ref("prod", "gradethis", "config/db")) {
 		t.Fatal("allow should still apply outside the denied subtree")
 	}
 }
@@ -304,7 +311,7 @@ func TestValidateRulesValid(t *testing.T) {
 		Allow: []domain.PolicyRule{
 			rule(domain.OpSecretRead, "prod", "gradethis", "billing/*"),
 			rule("secret:*", "prod", "other", "config"), // exact key preserved
-			rule("*", "", "", ""),                        // empties normalize to "*"
+			rule("*", "", "", ""),                       // empties normalize to "*"
 		},
 		Deny: []domain.PolicyRule{rule(domain.OpSecretRead, "prod", "gradethis", "billing/admin/*")},
 	}
