@@ -15,10 +15,11 @@ import (
 	"crypto/hmac"
 	"crypto/x509"
 	"errors"
-	"log/slog"
 	"strings"
 	"sync/atomic"
 	"time"
+
+	"go.uber.org/zap"
 
 	"github.com/Suhaibinator/kms/internal/ca"
 	"github.com/Suhaibinator/kms/internal/crypto"
@@ -95,7 +96,7 @@ type Service struct {
 	keyring atomic.Pointer[crypto.Keyring]
 	hub     atomic.Pointer[Hub]
 	ca      atomic.Pointer[ca.CA]
-	log     *slog.Logger
+	log     *zap.Logger
 	version string
 	now     func() time.Time
 }
@@ -104,9 +105,9 @@ type Service struct {
 // (after unseal); until then the service reports not-ready and refuses secret
 // operations. The built-in CA is bootstrapped via BootstrapCA once the keyring
 // is present.
-func New(store storage.Store, logger *slog.Logger, version string) *Service {
+func New(store storage.Store, logger *zap.Logger, version string) *Service {
 	if logger == nil {
-		logger = slog.Default()
+		logger = zap.NewNop()
 	}
 	s := &Service{store: store, log: logger, version: version, now: func() time.Time { return time.Now().UTC() }}
 	var h Hub = noopHub{}
@@ -125,7 +126,7 @@ func (s *Service) SetHub(h Hub) { s.hub.Store(&h) }
 func (s *Service) Store() storage.Store { return s.store }
 
 // Logger returns the service logger.
-func (s *Service) Logger() *slog.Logger { return s.log }
+func (s *Service) Logger() *zap.Logger { return s.log }
 
 // Version returns the build version string.
 func (s *Service) Version() string { return s.version }
@@ -529,7 +530,7 @@ func (s *Service) ReauthorizeWatch(ctx context.Context, pr Principal, selectors 
 // secret material. Callers that must fail closed use auditStrict.
 func (s *Service) audit(ctx context.Context, ev domain.AuditEvent) {
 	if err := s.appendAudit(ctx, ev); err != nil {
-		s.log.Error("audit append failed", "event_type", ev.EventType, "error", err)
+		s.log.Error("audit append failed", zap.String("event_type", ev.EventType), zap.Error(err))
 	}
 }
 
@@ -538,7 +539,7 @@ func (s *Service) audit(ctx context.Context, ev domain.AuditEvent) {
 func (s *Service) auditStrict(ctx context.Context, ev domain.AuditEvent) error {
 	if err := s.appendAudit(ctx, ev); err != nil {
 		s.log.Error("audit append failed (failing operation closed)",
-			"event_type", ev.EventType, "error", err)
+			zap.String("event_type", ev.EventType), zap.Error(err))
 		return domain.Errorf(domain.ErrFailedPrecondition, "audit unavailable")
 	}
 	return nil

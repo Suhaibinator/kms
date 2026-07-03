@@ -11,12 +11,12 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"fmt"
-	"log/slog"
 	"os"
 	"strconv"
 	"strings"
 	"time"
 
+	"go.uber.org/zap/zapcore"
 	"gopkg.in/yaml.v3"
 )
 
@@ -273,17 +273,17 @@ func (c Config) Redacted() string {
 		c.Watch.RetainRows, c.Log.Level)
 }
 
-// LogLevel maps the configured level string to a slog.Level, defaulting to
+// LogLevel maps the configured level string to a zapcore.Level, defaulting to
 // info for empty or unrecognized values.
-func (c Config) LogLevel() slog.Level {
+func (c Config) LogLevel() zapcore.Level {
 	switch strings.ToLower(strings.TrimSpace(c.Log.Level)) {
 	case "debug":
-		return slog.LevelDebug
+		return zapcore.DebugLevel
 	case "warn", "warning":
-		return slog.LevelWarn
+		return zapcore.WarnLevel
 	case "error":
-		return slog.LevelError
+		return zapcore.ErrorLevel
 	default:
-		return slog.LevelInfo
+		return zapcore.InfoLevel
 	}
 }

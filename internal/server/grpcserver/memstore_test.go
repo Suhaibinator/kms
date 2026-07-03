@@ -24,10 +24,10 @@ type memStore struct {
 
 	pingErr error
 
-	identities []*domain.Identity         // by name (with token/cert state)
-	tokenIndex map[string]string          // hex(tokenHash) -> identity name
-	certs      map[string]*certRow        // serial -> issued cert
-	caKey      *storage.CAKeyRecord       // single active CA key (nil until bootstrap)
+	identities []*domain.Identity           // by name (with token/cert state)
+	tokenIndex map[string]string            // hex(tokenHash) -> identity name
+	certs      map[string]*certRow          // serial -> issued cert
+	caKey      *storage.CAKeyRecord         // single active CA key (nil until bootstrap)
 	namespaces map[string]*domain.Namespace // key: ns.String()
 	policies   []domain.Policy
 	audit      []domain.AuditEvent

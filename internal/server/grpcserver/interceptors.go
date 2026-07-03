@@ -8,6 +8,7 @@ import (
 	"runtime/debug"
 	"strings"
 
+	"go.uber.org/zap"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
@@ -36,8 +37,8 @@ func (s *Server) unaryInterceptor(ctx context.Context, req any, info *grpc.Unary
 
 	defer func() {
 		if r := recover(); r != nil {
-			s.log.Error("panic in unary handler", "method", info.FullMethod,
-				"request_id", reqID, "panic", r, "stack", string(debug.Stack()))
+			s.log.Error("panic in unary handler", zap.String("method", info.FullMethod),
+				zap.String("request_id", reqID), zap.Any("panic", r), zap.String("stack", string(debug.Stack())))
 			err = status.Error(codes.Internal, "internal error")
 			resp = nil
 		}
@@ -68,8 +69,8 @@ func (s *Server) streamInterceptor(srv any, ss grpc.ServerStream, info *grpc.Str
 
 	defer func() {
 		if r := recover(); r != nil {
-			s.log.Error("panic in stream handler", "method", info.FullMethod,
-				"request_id", reqID, "panic", r, "stack", string(debug.Stack()))
+			s.log.Error("panic in stream handler", zap.String("method", info.FullMethod),
+				zap.String("request_id", reqID), zap.Any("panic", r), zap.String("stack", string(debug.Stack())))
 			err = status.Error(codes.Internal, "internal error")
 		}
 	}()

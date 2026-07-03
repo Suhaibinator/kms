@@ -3,11 +3,12 @@ package watch
 import (
 	"context"
 	"errors"
-	"log/slog"
 	"runtime"
 	"sync"
 	"testing"
 	"time"
+
+	"go.uber.org/zap"
 
 	"github.com/Suhaibinator/kms/internal/domain"
 	"github.com/Suhaibinator/kms/internal/storage"
@@ -276,12 +277,8 @@ func secretPut(rev uint64, r domain.Ref) domain.ChangeLogEntry {
 
 func newTestHub(t *testing.T, store storage.Store, opts Options) *Hub {
 	t.Helper()
-	return NewHub(store, slog.New(slog.NewTextHandler(&discardWriter{}, nil)), opts)
+	return NewHub(store, zap.NewNop(), opts)
 }
-
-type discardWriter struct{}
-
-func (discardWriter) Write(p []byte) (int, error) { return len(p), nil }
 
 // runHub starts the hub loop and returns a stop func that cancels and waits.
 func runHub(t *testing.T, h *Hub) func() {
@@ -607,10 +604,10 @@ func TestDispatch_FiltersBySelectorAndAuthz(t *testing.T) {
 	defer sub.Close()
 
 	store.append(
-		paramPut(1, ref("prod", "app", "beta/x"), "1"),     // key pattern miss
-		paramPut(2, ref("prod", "other", "alpha/x"), "2"),  // namespace miss
+		paramPut(1, ref("prod", "app", "beta/x"), "1"),      // key pattern miss
+		paramPut(2, ref("prod", "other", "alpha/x"), "2"),   // namespace miss
 		paramPut(3, ref("prod", "app", "alpha/denied"), ""), // authz miss
-		paramPut(4, ref("prod", "app", "alpha/ok"), "4"),   // delivered
+		paramPut(4, ref("prod", "app", "alpha/ok"), "4"),    // delivered
 	)
 	h.Wake()
 

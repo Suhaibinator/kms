@@ -5,6 +5,8 @@ import (
 	"errors"
 	"net/http"
 
+	"go.uber.org/zap"
+
 	"github.com/Suhaibinator/kms/internal/domain"
 )
 
@@ -56,8 +58,8 @@ func (s *server) writeError(w http.ResponseWriter, r *http.Request, err error) {
 	status, code, message := mapError(err)
 	if status >= 500 {
 		s.log.Error("request failed",
-			"method", r.Method, "path", r.URL.Path, "status", status,
-			"request_id", requestIDFrom(r.Context()), "error", err.Error())
+			zap.String("method", r.Method), zap.String("path", r.URL.Path), zap.Int("status", status),
+			zap.String("request_id", requestIDFrom(r.Context())), zap.String("error", err.Error()))
 	}
 	writeJSON(w, status, errorEnvelope{Error: errorBody{Code: code, Message: message}})
 }

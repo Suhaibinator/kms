@@ -14,8 +14,8 @@ func TestPutParameterValidation(t *testing.T) {
 	s := newTestService(newFakeStore())
 
 	cases := map[string]struct {
-		ref         domain.Ref
-		value, ct   string
+		ref       domain.Ref
+		value, ct string
 	}{
 		"bad env":             {domain.Ref{NS: mkns("PROD", "app"), Key: "p"}, "1", "integer"},
 		"bad key":             {domain.Ref{NS: tns, Key: "/leading"}, "1", "integer"},

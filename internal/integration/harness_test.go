@@ -9,12 +9,15 @@ import (
 	"context"
 	"database/sql"
 	"errors"
-	"log/slog"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
+
+	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
 
 	"github.com/Suhaibinator/kms/internal/core"
 	"github.com/Suhaibinator/kms/internal/crypto"
@@ -76,8 +79,7 @@ func (h *harness) open() {
 	if err != nil {
 		h.tb.Fatalf("open store: %v", err)
 	}
-	logger := slog.New(slog.NewTextHandler(h.logBuf, &slog.HandlerOptions{Level: slog.LevelDebug}))
-	svc := core.New(store, logger, "test")
+	svc := core.New(store, newTestLogger(h.logBuf), "test")
 	keyring, err := crypto.Unseal(context.Background(), store, crypto.UnsealOptions{
 		KeyFilePath:            h.keyPath,
 		CreateKeyFileIfMissing: true,
@@ -276,6 +278,15 @@ func mustPutParam(t *testing.T, h *harness, path, value string) {
 }
 
 // --- log buffer ------------------------------------------------------------
+
+// newTestLogger builds a real *zap.Logger writing JSON to w at debug level. The
+// security redaction test scans the captured buffer to assert no secret
+// plaintext or token ever reaches the logs, so these loggers must emit real
+// output rather than discard it (a Nop logger would make that assertion vacuous).
+func newTestLogger(w io.Writer) *zap.Logger {
+	enc := zapcore.NewJSONEncoder(zap.NewProductionEncoderConfig())
+	return zap.New(zapcore.NewCore(enc, zapcore.AddSync(w), zapcore.DebugLevel))
+}
 
 // syncBuffer is a concurrency-safe io.Writer capturing all log output.
 type syncBuffer struct {

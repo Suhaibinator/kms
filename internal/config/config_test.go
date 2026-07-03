@@ -2,12 +2,13 @@ package config
 
 import (
 	"crypto/tls"
-	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"go.uber.org/zap/zapcore"
 )
 
 func TestDefaults(t *testing.T) {
@@ -65,7 +66,7 @@ log:
 	if cfg.Watch.RetainRows != 500 {
 		t.Errorf("retain_rows = %d", cfg.Watch.RetainRows)
 	}
-	if cfg.LogLevel() != slog.LevelDebug {
+	if cfg.LogLevel() != zapcore.DebugLevel {
 		t.Errorf("log level = %v", cfg.LogLevel())
 	}
 }
@@ -95,7 +96,7 @@ func TestEnvOverrides(t *testing.T) {
 	if cfg.Frontend.Enabled {
 		t.Errorf("frontend should be disabled via env")
 	}
-	if cfg.LogLevel() != slog.LevelWarn {
+	if cfg.LogLevel() != zapcore.WarnLevel {
 		t.Errorf("log level = %v", cfg.LogLevel())
 	}
 }

@@ -12,11 +12,12 @@ import (
 	"errors"
 	"io"
 	"io/fs"
-	"log/slog"
 	"net"
 	"net/http"
 	"strings"
 	"time"
+
+	"go.uber.org/zap"
 
 	"github.com/Suhaibinator/kms/internal/core"
 	"github.com/Suhaibinator/kms/internal/domain"
@@ -50,7 +51,7 @@ const maxBodyBytes = 4 << 20
 type server struct {
 	svc          *core.Service
 	cfg          Config
-	log          *slog.Logger
+	log          *zap.Logger
 	loginLimiter *rateLimiter
 	static       *staticHandler
 	apiMux       *http.ServeMux
@@ -225,11 +226,11 @@ func (s *server) logging(next http.Handler) http.Handler {
 		// The query string is intentionally omitted: it may carry resource
 		// paths and must never grow to include anything sensitive in a log.
 		s.log.Info("http request",
-			"method", r.Method,
-			"path", r.URL.Path,
-			"status", rec.status,
-			"duration_ms", time.Since(start).Milliseconds(),
-			"request_id", requestID,
+			zap.String("method", r.Method),
+			zap.String("path", r.URL.Path),
+			zap.Int("status", rec.status),
+			zap.Int64("duration_ms", time.Since(start).Milliseconds()),
+			zap.String("request_id", requestID),
 		)
 	})
 }

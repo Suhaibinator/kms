@@ -256,6 +256,9 @@ func (f *fakeStore) ListNamespaces(context.Context, storage.ListPage) ([]domain.
 // --- parameters ---
 
 func (f *fakeStore) PutParameter(_ context.Context, ref domain.Ref, value, contentType, metadata, createdBy string) (uint64, uint64, error) {
+	// Intentional fidelity gap: the real SQLStore requires the namespace to
+	// pre-exist and returns ErrNotFound otherwise (covered in storage/store_test.go);
+	// this fake is deliberately lenient and writes without that check.
 	p := f.params[ref.String()]
 	if p == nil {
 		p = &fakeParam{}
@@ -318,6 +321,9 @@ func (f *fakeStore) DeleteParameter(_ context.Context, ref domain.Ref) (uint64, 
 // --- secrets ---
 
 func (f *fakeStore) CreateSecretVersion(_ context.Context, p storage.CreateSecretParams) (uint64, uint64, error) {
+	// Intentional fidelity gap: the real SQLStore requires the namespace to
+	// pre-exist and returns ErrNotFound otherwise (covered in storage/store_test.go);
+	// this fake is deliberately lenient and writes without that check.
 	key := p.Ref.String()
 	sec := f.secrets[key]
 	if sec == nil {

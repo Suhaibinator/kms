@@ -3,7 +3,6 @@ package integration
 import (
 	"context"
 	"errors"
-	"log/slog"
 	"path/filepath"
 	"testing"
 
@@ -47,7 +46,7 @@ func TestBackupAndRestore(t *testing.T) {
 	}
 	defer func() { _ = restored.Close() }()
 
-	svc := core.New(restored, slog.New(slog.NewTextHandler(h.logBuf, nil)), "test")
+	svc := core.New(restored, newTestLogger(h.logBuf), "test")
 	keyring, err := crypto.Unseal(ctx, restored, crypto.UnsealOptions{KeyFilePath: h.keyPath})
 	if err != nil {
 		t.Fatalf("unseal backup: %v", err)

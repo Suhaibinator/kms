@@ -7,12 +7,14 @@ import (
 	"errors"
 	"io"
 	"io/fs"
-	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
 	"time"
+
+	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
 
 	kms "github.com/Suhaibinator/kms"
 	"github.com/Suhaibinator/kms/internal/config"
@@ -91,7 +93,7 @@ func (c *CLI) cmdServe(args []string) int {
 	}
 
 	logger := newLogger(c.Stderr, cfg.LogLevel())
-	logger.Info("starting parameter-store", "version", Version, "config", cfg.Redacted())
+	logger.Info("starting parameter-store", zap.String("version", Version), zap.String("config", cfg.Redacted()))
 
 	// Startup order per plan 23.1: open store (migrates), unseal, then listeners.
 	store, err := storage.Open(cfg.Storage.SQLitePath)
@@ -127,7 +129,7 @@ func (c *CLI) cmdServe(args []string) int {
 	svc.SetHub(hub)
 	go func() {
 		if err := hub.Run(ctx); err != nil && ctx.Err() == nil {
-			logger.Error("watch hub stopped", "error", err)
+			logger.Error("watch hub stopped", zap.Error(err))
 		}
 	}()
 
@@ -142,7 +144,7 @@ func (c *CLI) cmdServe(args []string) int {
 		for _, addr := range []string{cfg.Server.GRPCAddr, cfg.Server.HTTPAddr} {
 			if isNonLoopbackBind(addr) {
 				logger.Warn("TLS is DISABLED on a non-loopback address; bearer tokens and secret values will travel in cleartext — enable security.tls_enabled or bind to loopback / terminate TLS at a trusted proxy",
-					"addr", addr)
+					zap.String("addr", addr))
 			}
 		}
 		if !isNonLoopbackBind(cfg.Server.GRPCAddr) && !isNonLoopbackBind(cfg.Server.HTTPAddr) {
@@ -166,10 +168,10 @@ func (c *CLI) cmdServe(args []string) int {
 		}
 		go func() {
 			if err := grpcSrv.Serve(); err != nil {
-				logger.Error("gRPC server stopped", "error", err)
+				logger.Error("gRPC server stopped", zap.Error(err))
 			}
 		}()
-		logger.Info("gRPC listening", "addr", cfg.Server.GRPCAddr, "tls", tlsCfg != nil)
+		logger.Info("gRPC listening", zap.String("addr", cfg.Server.GRPCAddr), zap.Bool("tls", tlsCfg != nil))
 	} else {
 		logger.Warn("gRPC server not wired (GRPCFactory is nil); serving HTTP only")
 	}
@@ -212,18 +214,18 @@ func (c *CLI) cmdServe(args []string) int {
 			httpErr <- e
 		}
 	}()
-	logger.Info("HTTP listening", "addr", cfg.Server.HTTPAddr, "tls", tlsCfg != nil, "frontend", cfg.Frontend.Enabled)
+	logger.Info("HTTP listening", zap.String("addr", cfg.Server.HTTPAddr), zap.Bool("tls", tlsCfg != nil), zap.Bool("frontend", cfg.Frontend.Enabled))
 
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 	exitCode := 0
 	select {
 	case sig := <-sigCh:
-		logger.Info("shutdown signal received", "signal", sig.String())
+		logger.Info("shutdown signal received", zap.String("signal", sig.String()))
 	case e := <-httpErr:
 		// A listener that fails to start (e.g. address already in use) is fatal;
 		// exit non-zero so a process supervisor reports the failure.
-		logger.Error("HTTP server failed", "error", e)
+		logger.Error("HTTP server failed", zap.Error(e))
 		exitCode = 1
 	}
 
@@ -247,7 +249,7 @@ func (c *CLI) cmdServe(args []string) int {
 		}
 	}
 	if err := httpSrv.Shutdown(shutdownCtx); err != nil {
-		logger.Error("HTTP shutdown error", "error", err)
+		logger.Error("HTTP shutdown error", zap.Error(err))
 	}
 	cancel() // stop the watch hub before the deferred store.Close
 	logger.Info("shutdown complete")
@@ -281,6 +283,10 @@ func grpcServerTLS(base *tls.Config, svc *core.Service) (*tls.Config, error) {
 }
 
 // newLogger builds a structured JSON logger at the given level, writing to w.
-func newLogger(w io.Writer, level slog.Level) *slog.Logger {
-	return slog.New(slog.NewJSONHandler(w, &slog.HandlerOptions{Level: level}))
+func newLogger(w io.Writer, level zapcore.Level) *zap.Logger {
+	encCfg := zap.NewProductionEncoderConfig()
+	encCfg.EncodeTime = zapcore.ISO8601TimeEncoder
+	encCfg.EncodeLevel = zapcore.LowercaseLevelEncoder
+	core := zapcore.NewCore(zapcore.NewJSONEncoder(encCfg), zapcore.AddSync(w), level)
+	return zap.New(core)
 }

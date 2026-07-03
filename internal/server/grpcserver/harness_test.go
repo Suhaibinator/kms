@@ -9,13 +9,12 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
-	"io"
-	"log/slog"
 	"math/big"
 	"net"
 	"testing"
 	"time"
 
+	"go.uber.org/zap"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
@@ -79,7 +78,7 @@ func newTestEnv(t *testing.T, ready bool) *testEnv {
 // plaintext and TLS harnesses.
 func buildService(t *testing.T, store *memStore, ready bool) (*core.Service, *watch.Hub) {
 	t.Helper()
-	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	logger := zap.NewNop()
 	svc := core.New(store, logger, "v-test")
 	if ready {
 		kek, err := crypto.NewKEKFromMaterial("kek-1", make([]byte, 32))
@@ -244,14 +243,14 @@ func genServerCert(t *testing.T) (tls.Certificate, *x509.CertPool) {
 		t.Fatalf("gen server key: %v", err)
 	}
 	tmpl := &x509.Certificate{
-		SerialNumber: big.NewInt(1),
-		Subject:      pkix.Name{CommonName: "bufnet"},
-		DNSNames:     []string{"bufnet"},
-		NotBefore:    time.Now().Add(-time.Minute),
-		NotAfter:     time.Now().Add(time.Hour),
-		KeyUsage:     x509.KeyUsageDigitalSignature | x509.KeyUsageCertSign,
-		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
-		IsCA:         true,
+		SerialNumber:          big.NewInt(1),
+		Subject:               pkix.Name{CommonName: "bufnet"},
+		DNSNames:              []string{"bufnet"},
+		NotBefore:             time.Now().Add(-time.Minute),
+		NotAfter:              time.Now().Add(time.Hour),
+		KeyUsage:              x509.KeyUsageDigitalSignature | x509.KeyUsageCertSign,
+		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		IsCA:                  true,
 		BasicConstraintsValid: true,
 	}
 	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)

@@ -2,7 +2,6 @@ package integration
 
 import (
 	"context"
-	"log/slog"
 	"path/filepath"
 	"testing"
 
@@ -127,7 +126,7 @@ func TestKEKRotationEndToEnd(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new key file failed to unseal: %v", err)
 	}
-	svc2 := core.New(st2, slog.New(slog.NewTextHandler(h.logBuf, nil)), "test")
+	svc2 := core.New(st2, newTestLogger(h.logBuf), "test")
 	svc2.SetKeyring(kr)
 	if got, err := svc2.GetSecret(ctx, h.admin, stdRef, 0, ""); err != nil || string(got.Value) != stdValue {
 		t.Errorf("decrypt after re-unseal with new key = %q err=%v, want %q", got.Value, err, stdValue)

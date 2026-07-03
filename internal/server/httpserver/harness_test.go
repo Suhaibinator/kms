@@ -4,12 +4,12 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"io"
-	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 	"time"
+
+	"go.uber.org/zap"
 
 	"github.com/Suhaibinator/kms/internal/core"
 	"github.com/Suhaibinator/kms/internal/crypto"
@@ -38,7 +38,7 @@ func newTestEnv(t *testing.T) *testEnv {
 func newTestEnvWith(t *testing.T, ready bool) *testEnv {
 	t.Helper()
 	store := newFakeStore()
-	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	logger := zap.NewNop()
 	svc := core.New(store, logger, "test-version")
 
 	ctx := context.Background()
@@ -137,7 +137,7 @@ func mustStatus(t *testing.T, w *httptest.ResponseRecorder, want int) {
 // used by tests that only need the service wired, not seeded identities.
 func newReadyService(t *testing.T, store *fakeStore) *core.Service {
 	t.Helper()
-	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	logger := zap.NewNop()
 	svc := core.New(store, logger, "v")
 	kek, err := crypto.NewKEKFromMaterial("kek-test", make([]byte, 32))
 	if err != nil {

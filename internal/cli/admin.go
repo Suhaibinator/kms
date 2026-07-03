@@ -5,8 +5,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log/slog"
 	"os"
+
+	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
 
 	"github.com/Suhaibinator/kms/internal/core"
 	"github.com/Suhaibinator/kms/internal/crypto"
@@ -16,8 +18,8 @@ import (
 
 // quietLogger builds a warn-level logger for administrative commands so normal
 // runs keep stdout/stderr clean while still surfacing problems.
-func (c *CLI) quietLogger() *slog.Logger {
-	return newLogger(c.Stderr, slog.LevelWarn)
+func (c *CLI) quietLogger() *zap.Logger {
+	return newLogger(c.Stderr, zapcore.WarnLevel)
 }
 
 // --- init ------------------------------------------------------------------

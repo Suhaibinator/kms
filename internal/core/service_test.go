@@ -6,10 +6,10 @@ import (
 	"crypto/x509"
 	"encoding/pem"
 	"errors"
-	"io"
-	"log/slog"
 	"testing"
 	"time"
+
+	"go.uber.org/zap"
 
 	"github.com/Suhaibinator/kms/internal/crypto"
 	"github.com/Suhaibinator/kms/internal/domain"
@@ -31,7 +31,7 @@ func mkref(env, app, key string) domain.Ref {
 func seedTokenNS(f *fakeStore) { f.addNamespace(tns, domain.AuthMethodToken, domain.AuthMethodMTLS) }
 
 func newTestService(store *fakeStore) *Service {
-	return New(store, slog.New(slog.NewTextHandler(io.Discard, nil)), "test")
+	return New(store, zap.NewNop(), "test")
 }
 
 // withKeyring attaches a working keyring so secret operations can run.
@@ -303,7 +303,7 @@ func TestMethodGateAdminBypass(t *testing.T) {
 func TestImplicitHomeGrant(t *testing.T) {
 	ctx := context.Background()
 	store := newFakeStore()
-	seedTokenNS(store)                        // home namespace, token allowed
+	seedTokenNS(store)                                                 // home namespace, token allowed
 	store.addNamespace(mkns("staging", "app"), domain.AuthMethodToken) // a foreign namespace
 	if _, _, err := store.PutParameter(ctx, tref("x"), "1", "integer", "{}", "root"); err != nil {
 		t.Fatalf("seed: %v", err)

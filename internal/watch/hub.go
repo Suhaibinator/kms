@@ -12,9 +12,10 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
-	"log/slog"
 	"sync"
 	"time"
+
+	"go.uber.org/zap"
 
 	"github.com/Suhaibinator/kms/internal/domain"
 	"github.com/Suhaibinator/kms/internal/storage"
@@ -102,7 +103,7 @@ func (o Options) withDefaults() Options {
 // dispatch loop with Run.
 type Hub struct {
 	store storage.Store
-	log   *slog.Logger
+	log   *zap.Logger
 	opts  Options
 	now   func() time.Time
 
@@ -120,9 +121,9 @@ type Hub struct {
 }
 
 // NewHub constructs a hub over store. logger may be nil.
-func NewHub(store storage.Store, logger *slog.Logger, opts Options) *Hub {
+func NewHub(store storage.Store, logger *zap.Logger, opts Options) *Hub {
 	if logger == nil {
-		logger = slog.Default()
+		logger = zap.NewNop()
 	}
 	opts = opts.withDefaults()
 	return &Hub{
@@ -174,7 +175,7 @@ func (h *Hub) Subscribers() []domain.Subscriber {
 func (h *Hub) Run(ctx context.Context) error {
 	cursor, err := h.store.CurrentRevision(ctx)
 	if err != nil {
-		h.log.Error("watch hub: reading current revision at start", "error", err)
+		h.log.Error("watch hub: reading current revision at start", zap.Error(err))
 		// Start from zero; the first drain will re-read and advance.
 		cursor = 0
 	}
@@ -206,7 +207,7 @@ func (h *Hub) drain(ctx context.Context, cursor uint64) uint64 {
 	for {
 		entries, err := h.store.ListChangesSince(ctx, cursor, dispatchBatch)
 		if err != nil {
-			h.log.Error("watch hub: reading change log", "since", cursor, "error", err)
+			h.log.Error("watch hub: reading change log", zap.Uint64("since", cursor), zap.Error(err))
 			return cursor
 		}
 		if len(entries) == 0 {
@@ -259,7 +260,7 @@ func (h *Hub) dropExpired() {
 	h.mu.Unlock()
 	for _, s := range stale {
 		h.log.Info("watch hub: dropping stale subscriber",
-			"client", s.reg.ClientName, "instance", s.reg.InstanceID)
+			zap.String("client", s.reg.ClientName), zap.String("instance", s.reg.InstanceID))
 		s.Close()
 	}
 }
@@ -268,11 +269,11 @@ func (h *Hub) dropExpired() {
 func (h *Hub) pruneChangeLog(ctx context.Context) {
 	n, err := h.store.PruneChangeLog(ctx, h.opts.RetainDuration, h.opts.RetainRows)
 	if err != nil {
-		h.log.Error("watch hub: pruning change log", "error", err)
+		h.log.Error("watch hub: pruning change log", zap.Error(err))
 		return
 	}
 	if n > 0 {
-		h.log.Info("watch hub: pruned change log", "removed", n)
+		h.log.Info("watch hub: pruned change log", zap.Int("removed", n))
 	}
 }
 
@@ -373,7 +374,7 @@ func (h *Hub) canReplay(ctx context.Context, lastSeen, current uint64) bool {
 	}
 	oldest, err := h.store.OldestRetainedRevision(ctx)
 	if err != nil {
-		h.log.Error("watch hub: reading oldest retained revision", "error", err)
+		h.log.Error("watch hub: reading oldest retained revision", zap.Error(err))
 		return false
 	}
 	// The log must contain an unbroken tail starting at or before lastSeen+1.

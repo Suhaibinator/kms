@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 
+	"go.uber.org/zap"
+
 	"github.com/Suhaibinator/kms/internal/crypto"
 	"github.com/Suhaibinator/kms/internal/domain"
 	"github.com/Suhaibinator/kms/internal/storage"
@@ -86,7 +88,7 @@ func (s *Service) GetSecret(ctx context.Context, pr Principal, ref domain.Ref, v
 	plaintext, err := s.decryptVersion(keyring, rec, ver, pr.SecretToken)
 	if err != nil {
 		s.auditRef(ctx, pr, "secret.read", domain.ResourceSecret, ref, ver.Version, "error", nil)
-		s.log.Error("secret decryption failed", "ref", ref.String(), "version", ver.Version, "kek_id", ver.KEKID)
+		s.log.Error("secret decryption failed", zap.String("ref", ref.String()), zap.Uint64("version", ver.Version), zap.String("kek_id", ver.KEKID))
 		return domain.SecretValue{}, err
 	}
 
@@ -137,7 +139,7 @@ func (s *Service) RevealSecret(ctx context.Context, pr Principal, ref domain.Ref
 	plaintext, err := s.decryptVersion(keyring, rec, ver, "")
 	if err != nil {
 		s.auditRef(ctx, pr, "secret.reveal", domain.ResourceSecret, ref, ver.Version, "error", nil)
-		s.log.Error("secret decryption failed", "ref", ref.String(), "version", ver.Version, "kek_id", ver.KEKID)
+		s.log.Error("secret decryption failed", zap.String("ref", ref.String()), zap.Uint64("version", ver.Version), zap.String("kek_id", ver.KEKID))
 		return domain.SecretValue{}, err
 	}
 	if err := s.auditStrict(ctx, s.buildEvent(pr, "secret.reveal", domain.ResourceSecret, ref, ver.Version, "allow", nil)); err != nil {
