@@ -1,6 +1,15 @@
 # Namespace-Native Rewrite — Implementation Plan
 
-Status: **approved design, not yet implemented.**
+Status: **the (env, app) namespace model, built-in CA, and per-namespace
+auth methods are implemented on branch `rewrite/namespaces`.** This revision
+of the plan removes the per-*key* concepts that an earlier revision
+introduced: there are no key patterns in policy, no watch selectors, and no
+prefix matching anywhere. **The namespace `(env, app)` is the single unit of
+authorization, subscription, and isolation; keys are opaque strings the
+server never interprets.** The sections below describe that corrected target;
+the remaining work brings the watch subsystem and the policy model in line
+with it (see §15).
+
 Supersedes the path-string data model in [`plan.md`](plan.md) (§13.1 path
 format, §12 storage, §8 API shapes). Everything else in `plan.md` (crypto,
 versioning, labels, redaction, audit guarantees, deployment) carries over
@@ -22,15 +31,24 @@ on the wire (explicit fields, no server-side path parsing), in authorization
 management), and in the SDKs (a namespaced client resolving relative keys,
 with hot reload on by default).
 
+**The namespace is the only hierarchy the server understands.** Within a
+namespace, keys are a flat set of opaque strings. A key may contain `/`
+(`db/port`, `metrics/port`) — but that is purely a *client-side* naming
+convention to avoid clashes; the server never parses, splits, or matches on
+it. Authorization, subscription, and isolation are all at the granularity of
+the namespace: if you need two things isolated from each other, they belong
+in two namespaces, not two key prefixes.
+
 ## 2. Locked decisions
 
 These were settled explicitly and are not up for re-litigation during
 implementation:
 
 1. **Namespace model:** fixed `(env, app)` pair, `UNIQUE(env, app)`. Keys
-   within a namespace are relative names; a key may contain `/` (e.g.
-   `billing/stripe-key`) but interior slashes are just part of the name,
-   never namespace structure.
+   within a namespace are a flat set of **opaque strings**. A key may
+   contain `/` (e.g. `db/port`) but that is a client naming convention only —
+   the server never parses, splits, prefix-matches, or otherwise interprets
+   it. `db/port` and `metrics/port` are simply two distinct keys.
 2. **Wire protocol:** requests carry explicit namespace + key fields. The
    `/env/app/key` form survives only as a *display* format (logs, audit
    rendering, frontend breadcrumbs) and as *client-side* SDK sugar. The
@@ -44,9 +62,17 @@ implementation:
    endpoint + token.
 5. **SDK ergonomics:** namespaced client (`Config.Namespace` /
    `Client(..., namespace=...)`), relative keys, leading-`/` absolute-path
-   escape hatch parsed **in the SDK**, hot reload **on by default** for
+   escape hatch parsed **in the SDK** (for addressing a key in *another*
+   namespace the client is authorized for), hot reload **on by default** for
    parameters (`Static: true` to opt out), secrets remain
    notify-and-refetch (plaintext is never pushed over a stream).
+8. **Authorization, subscription, and isolation are per-namespace.** A
+   client is authorized for a namespace or it isn't; if it is, it may read,
+   list, and watch **every** key in that namespace — nothing finer. There is
+   no per-key authorization and no key-level watch filtering. A subscriber to
+   `(env, app)` receives every change in that namespace. Any narrower
+   interest (e.g. "only wake me for `db/*`") is the client's own concern,
+   applied in its callback; the server and wire know nothing about it.
 6. **Proof of app identity: mTLS client certificates from a built-in CA.**
    Bearer tokens are possession-free ("whoever holds the string is the
    app"); machine clients instead prove identity with a client certificate
@@ -62,11 +88,11 @@ implementation:
 Defaults chosen to complete the design; flag during review if any is wrong:
 
 - **Implicit home-namespace grant.** An identity bound to a namespace may
-  `parameter:read/list`, `secret:read/list`, and subscribe within that
+  `parameter:read/list`, `secret:read/list`, and subscribe to its **own**
   namespace with **no policy required** — the token *is* the app. Writes,
-  disables, destroys, promotes, and any cross-namespace access still
-  require explicit policy. This is what makes "endpoint + credential and
-  you're done" real.
+  disables, destroys, promotes, and any access to *another* namespace still
+  require an explicit policy grant (which is itself namespace-level — see
+  §6). This is what makes "endpoint + credential and you're done" real.
 - **Namespace deletion requires an empty namespace** (no parameters, no
   secrets, no bound identities). A secrets store should not support
   recursive delete of live secrets in one call. New `DeleteNamespace` RPC +
@@ -76,9 +102,11 @@ Defaults chosen to complete the design; flag during review if any is wrong:
   namespace if any. This is the SDK's namespace-discovery mechanism and
   replaces nothing (it's new).
 - **Naming rules:** `env` and `app` are 1–64 chars of `[a-z0-9-]`, not
-  starting/ending with `-`. Keys are 1–256 chars of `[a-z0-9-_.]` segments
-  separated by single `/`, no leading/trailing/double slashes. Enforced in
-  one place (`internal/keyutil`, the successor of `internal/pathutil`).
+  starting/ending with `-`. A key is 1–256 chars of `[a-z0-9-_./]` with no
+  leading/trailing/double slash — but the slash is validated only as a legal
+  character, **not** as structure; the server stores and compares the whole
+  key verbatim. Enforced in one place (`internal/keyutil`, the successor of
+  `internal/pathutil`).
 - **Audit and change-log rows denormalize `env`/`app`/`key` as text** (no
   FK). Both tables are append-only history and must stay readable after a
   namespace is deleted; joining through a FK would break that.
@@ -218,35 +246,48 @@ func (r Ref) String() string           // "/prod/gradethis/rate-limit" (display)
 - `Identity` gains `Namespace *NamespaceRef` and `HasToken bool`;
   `Certs []IdentityCert` on the admin-facing view.
 - `AuditEvent` replaces `ResourcePath` with `ResourceEnv/App/Key`;
-  `AuditFilter.PathPrefix` becomes `Env/App/KeyPrefix` fields.
-- `PolicyRule` becomes `{Operation, Env, App, KeyPattern}` (see §6).
-- `Subscriber.Paths` becomes `Selectors []WatchSelector` where
-  `WatchSelector{NS NamespaceRef; KeyPattern string}`.
+  `AuditFilter.PathPrefix` becomes `Env/App/KeyPrefix` fields (the key
+  prefix is a browsing filter only — an opaque `LIKE 'prefix%'`, see §6).
+- `PolicyRule` becomes `{Operation, Env, App}` — **no key field**. A grant
+  is an operation on a whole namespace (see §6).
+- `Subscriber.NS []NamespaceRef` — the namespaces a stream is subscribed to
+  (replaces the old `Paths`/selectors).
 - New: `domain.OpAdminNamespaceDelete`.
 
 `internal/pathutil` is replaced by `internal/keyutil`: `ValidateEnv`,
-`ValidateApp`, `ValidateKey`, `MatchKey(pattern, key)` (exact or trailing
-`*` prefix), display formatting, and the SDK-facing absolute-path split
-(`SplitDisplayPath("/env/app/key") (Ref, error)` — used by SDKs and CLI
-only, never by the server request path).
+`ValidateApp`, `ValidateKey`, display formatting, and the SDK-facing
+absolute-path split (`SplitDisplayPath("/env/app/key") (Ref, error)` — used
+by SDKs and CLI only, never by the server request path). There is **no**
+`MatchKey`/key-pattern matcher: the server never pattern-matches keys.
 
 ## 6. Authorization (`internal/policy`, `internal/core`)
 
-Rule shape (stored in `policies.rules_json`, exposed via proto/HTTP):
+**Authorization is per-namespace.** A grant is an operation on a whole
+namespace; there is no key-level scoping. Rule shape (stored in
+`policies.rules_json`, exposed via proto/HTTP):
 
 ```json
-{ "operation": "secret:read", "env": "prod", "app": "gradethis", "key": "billing/*" }
+{ "operation": "secret:read", "env": "prod", "app": "gradethis" }
 ```
 
-- `env`/`app`: exact or `"*"`. `key`: exact, `"*"`, or `"prefix/*"`.
-- Evaluation order unchanged: deny → allow → default deny.
-- `Evaluate(policies, op, ref)` and `MayListUnder(policies, op, ns,
-  keyPrefix)` take refs instead of strings.
-- **New pre-step in `core`:** if the caller's identity has a bound
-  namespace and `ref.NS` equals it and the operation is in the implicit
-  set (`parameter:read|list`, `secret:read|list`, subscribe), allow
-  without consulting policies. Deny rules still apply (deny > implicit
-  grant), so an admin can carve exceptions.
+- `env`/`app`: exact or `"*"`. There is **no** `key` field.
+- Evaluation order: deny → allow → default deny. `Evaluate(policies, op,
+  ns)` takes a `NamespaceRef`, not a ref+key.
+- **Implicit home-namespace grant (pre-step in `core`):** if the caller's
+  identity has a bound namespace, that namespace equals the target
+  namespace, and the operation is in the implicit set
+  (`parameter:read|list`, `secret:read|list`, subscribe), allow without
+  consulting policies. Deny rules still apply (deny > implicit grant), so an
+  admin can carve out a whole namespace but not a single key.
+- A read/list/subscribe on a namespace is a single yes/no decision. Because
+  authorization is all-or-nothing per namespace, **once a subscriber is
+  admitted to a namespace it receives every change in it** — there is no
+  per-event authorization filtering (nothing to filter against).
+- **List browsing filter:** `List*` accepts an optional `key_prefix`. It is
+  a pure convenience filter (`name LIKE 'prefix%'` on the opaque key string,
+  not segment-aware), never a security boundary — a caller authorized for
+  the namespace may list any key in it; the prefix just narrows what the
+  page returns.
 - Admin operations gain `admin:namespace:delete`, `admin:namespace:update`
   (auth-method changes), and `admin:identity:cert` (issue/revoke).
 
@@ -313,21 +354,24 @@ Breaking rewrite, same package. Shared messages:
 ```proto
 message NamespaceRef { string env = 1; string app = 2; }
 message ResourceRef  { NamespaceRef namespace = 1; string key = 2; }
-message WatchSelector { NamespaceRef namespace = 1; string key_pattern = 2; } // "" = "*"
 ```
 
-Per-service changes (mechanical unless noted):
+There is no `WatchSelector` and no `key_pattern` anywhere. Per-service
+changes (mechanical unless noted):
 
 - **ParameterService / SecretService:** every `string path` field becomes
   `ResourceRef ref`. `List*Request.path_prefix` becomes `NamespaceRef
-  namespace` + `string key_prefix` (listing is always namespace-scoped;
+  namespace` + optional `string key_prefix` (a browsing filter only — §6;
   cross-namespace overviews come from `ListNamespaces` + per-namespace
   counts, see §10).
-- **WatchService:** `SubscribeRequest.paths` becomes `repeated
-  WatchSelector selectors`. `ParameterChange`/`SecretMetadataChange`/
-  `Parameter` carry `ResourceRef`. `WatchNamespaceRequest` takes
-  `NamespaceRef` + optional `key_pattern`; `WatchParameterRequest` takes
-  `ResourceRef`.
+- **WatchService:** collapses to one stream. `SubscribeRequest` carries
+  `repeated NamespaceRef namespaces` (the namespaces to watch) +
+  `last_seen_revision`; the server streams **every** change in those
+  namespaces the caller is authorized for. `ParameterChange`/
+  `SecretMetadataChange`/`Parameter` carry `ResourceRef` (namespace + exact
+  key). The old `WatchParameter`/`WatchNamespace` convenience RPCs and all
+  key-pattern selectors are **removed** — watching one key or one prefix is
+  a namespace subscription plus a client-side filter in the callback.
 - **AdminService:**
   - `Namespace{env, app, description, allowed_auth_methods, ...}`;
     `CreateNamespace` takes env/app (+ optional auth methods); new
@@ -343,20 +387,26 @@ Per-service changes (mechanical unless noted):
     `RevokeIdentityCertificate(name, serial)` (§7).
   - New `WhoAmI() returns (identity name, kind, NamespaceRef namespace,
     string auth_method)`.
-  - `PolicyRule{operation, env, app, key}`.
+  - `PolicyRule{operation, env, app}` (no key).
   - `ListAuditEventsRequest`: `path_prefix` → `env`/`app`/`key_prefix`.
-  - `Subscriber.paths` → `repeated WatchSelector selectors`.
+  - `Subscriber.namespaces` (`repeated NamespaceRef`) replaces `paths`.
 
 Regenerate `gen/kmsv1` (protoc per existing setup) and
 `sdk/python/kms_paramstore/_gen` (`sdk/python/gen.sh`).
 
 ## 9. Watch hub (`internal/watch`) and change log
 
-- Hub interest matching keys on `(NamespaceRef, key pattern)` via
-  `keyutil.MatchKey` — replaces path-prefix matching.
-- `storage.SnapshotParameters(ctx, selectors []WatchSelector)` — snapshot
-  query becomes `WHERE namespace_id = ? AND (name = ? | name LIKE ?)` per
-  selector, one consistent read transaction, as today.
+- The hub routes purely by namespace: a change in `(env, app)` is delivered
+  to every subscriber of that namespace. No key matching, no selectors —
+  `keyutil.MatchKey` does not exist.
+- Authorization is checked **once, at subscribe time**, per requested
+  namespace (a namespace-level yes/no, home grant or explicit policy). After
+  admission the stream carries every change in the namespace; there is no
+  per-event authorization predicate.
+- `storage.SnapshotParameters(ctx, namespaces []NamespaceRef)` — snapshot
+  query is `WHERE namespace_id = ?` per namespace, one consistent read
+  transaction (the whole authorized namespace, as the declarative path
+  already needs).
 - `ListChangesSince` unchanged in shape; entries carry env/app/key.
 - Replay/revision semantics (monotonic `change_log.revision`, prune rules,
   at-least-once delivery) are untouched.
@@ -382,16 +432,18 @@ Frontend (`frontend/`):
   edit auth methods, delete (disabled unless empty, with explanation),
   per-row parameter/secret counts linking into the pages below.
 - **Parameters / Secrets pages:** replace free-text prefix filter with an
-  env → app cascading selector (from `ListNamespaces`) + key-prefix box;
-  rows show relative keys; create/edit forms take namespace + key.
+  env → app cascading picker (from `ListNamespaces`) + a key-prefix
+  browsing box; rows show relative keys; create/edit forms take namespace +
+  key.
 - **Identities page:** optional namespace binding + auth methods on
   create; one-time display of token and/or PEM bundle (download button);
   per-identity cert list (fingerprint, expiry, revoke button, issue-new);
   bound namespace as a chip; explain the implicit grant in help text.
-- **Policies page:** rule editor gets env/app/key fields with `*` support.
-- **Subscribers page:** render selectors as `env/app · pattern`; group by
-  namespace.
-- **Audit page:** env/app dropdown filters + key prefix.
+- **Policies page:** rule editor has operation + env/app fields (with `*`
+  support). No key field — a grant is on a whole namespace.
+- **Subscribers page:** render each subscriber's subscribed namespaces;
+  group by namespace.
+- **Audit page:** env/app dropdown filters + a key-prefix browsing box.
 
 ## 11. SDKs
 
@@ -422,15 +474,20 @@ err = client.Resolve(ctx, &cfg)
   cross-namespace reads. A relative key on a client with no namespace
   (unbound token, no `Config.Namespace`) is a config error naming the key.
 - `Dynamic bool` field is **removed**, replaced by `Static bool`
-  (zero-value = hot reload on). All non-static `ParameterValue`s resolve
-  through one namespace-wide selector (`{ns, "*"}`) on the shared
-  Subscribe stream instead of per-path registrations; `Client.Watch(ctx,
-  "billing/*", fn)` takes a relative pattern (or absolute with `/`).
+  (zero-value = hot reload on). Non-static `ParameterValue`s and every
+  `Watch` share **one namespace subscription** on the Subscribe stream; the
+  SDK routes each incoming change to the matching field by **exact key** and
+  to any `Watch` callbacks.
+- `Client.Watch(ctx, fn)` watches the client's whole namespace (fires for
+  every change in it). It takes **no key pattern** — an app that only cares
+  about a subset filters by its own convention inside `fn` (e.g.
+  `strings.HasPrefix(ev.Key, "db/")`). An optional overload may watch a
+  *different* namespace the client is authorized for.
 - Namespace discovery: on first namespace-needing call, if
   `Config.Namespace` is empty, call `WhoAmI` once (cached for the client's
   lifetime); surface `ErrNoNamespace` if the identity is unbound.
 - Reconnect/backoff/reconciliation/redaction semantics all carry over;
-  reconciliation lists by `(ns, key_prefix)` instead of path prefix.
+  reconciliation lists the whole subscribed namespace.
 - `paramstoretest`: `SetParameter(ns, key, value)` etc.; keep a
   `SetParameterPath("/env/app/key", ...)` convenience that splits
   client-side, to keep test call-sites terse.
@@ -439,10 +496,10 @@ err = client.Resolve(ctx, &cfg)
 
 Mirror of the Go changes: `Client(endpoint, token=..., namespace="prod/gradethis"
 | None)`, relative keys in `SecretValue`/`ParameterValue`, `static=True`
-replaces `dynamic=True` (default flips to hot-reload-on),
-`client.watch("billing/*", cb)`, WhoAmI discovery, `_gen` regenerated via
-`sdk/python/gen.sh`. The stricter `fallback_to_defaults_on_error=False`
-default behavior is kept as-is.
+replaces `dynamic=True` (default flips to hot-reload-on), `client.watch(cb)`
+(whole-namespace, no pattern — the callback filters by its own convention),
+WhoAmI discovery, `_gen` regenerated via `sdk/python/gen.sh`. The stricter
+`fallback_to_defaults_on_error=False` default behavior is kept as-is.
 
 **Hot-reload default flip risk (both SDKs):** values now change at runtime
 by default. This is the intended semantic ("updates propagate to all
@@ -464,6 +521,11 @@ reads. Docs must state the flip prominently.
   ripples.
 
 ## 13. Phases
+
+> **Historical.** This section records the original build, which is done.
+> Where it mentions watch key-patterns/selectors or per-key policy (Phase 2,
+> Phase 3), it is superseded by the namespace-level model in §6/§8/§9 and the
+> removal delta in §15.
 
 Work happens on one feature branch (`rewrite/namespaces`), one commit per
 phase; the branch merges only when everything is green. `go test ./...`
@@ -535,6 +597,14 @@ with pointers here.
 
 - Data migration from any existing instance (greenfield by decision).
 - Hierarchical namespaces deeper than (env, app).
+- **Per-key authorization.** The namespace is the authorization unit; there
+  is no way to grant read on one key but not another within a namespace. If
+  two sets of keys need different access, they belong in different
+  namespaces.
+- **Key hierarchy / prefix matching / watch selectors on the server.** Keys
+  are opaque; the server never interprets `/`. The only key-prefix operation
+  is the list *browsing* filter, which is a plain `LIKE 'prefix%'` and not a
+  security boundary.
 - Batch-read RPC (SDK `Resolve` stays concurrent-per-field).
 - Pushing secret plaintext over watch streams (unchanged invariant).
 - Server-side acceptance of `/env/app/key` strings anywhere.
@@ -542,3 +612,48 @@ with pointers here.
   only for this pass.
 - CRL/OCSP distribution — revocation is enforced in the KMS's own
   interceptor, which is the only relying party.
+
+## 15. Remaining work — the simplification delta
+
+The `(env, app)` model, schema, built-in CA, per-namespace auth methods, and
+the SDK ergonomics are implemented. An earlier revision also built per-key
+policy patterns and key-pattern watch selectors; this section is the delta
+that removes them and lands the namespace-level model above. It is a
+watch-and-authz refactor, not a fresh build.
+
+**Server:**
+- `internal/domain`: drop `KeyPattern` from `PolicyRule`; remove
+  `WatchSelector`; `Subscriber` tracks `[]NamespaceRef`.
+- `internal/keyutil`: delete `MatchKey` and `ValidateKeyPattern`. Keep
+  env/app/key validation and `SplitDisplayPath`.
+- `internal/policy`: `Evaluate`/`Authorize` take a `NamespaceRef` (not
+  ref+key); delete `MayListUnder`'s key-prefix logic (list authz is a
+  namespace yes/no). Implicit-home-grant helper stays, namespace-level.
+- `internal/watch`: hub routes by namespace; delete selector matching and
+  the per-event access predicate. `SnapshotParameters(namespaces)`.
+- `internal/core`: `AuthorizeSubscribe` becomes a namespace-level check per
+  requested namespace; drop the per-event `WatchAccessChecker`; policy
+  storage/validation drops the key field.
+- `internal/storage`: `SnapshotParameters(namespaces)`; list `key_prefix`
+  becomes a plain `LIKE 'prefix%'` (documented as a non-authz browsing
+  filter).
+- `proto` + `gen`: remove `WatchSelector`/`key_pattern`; `SubscribeRequest`
+  carries `repeated NamespaceRef namespaces`; drop `WatchParameter`/
+  `WatchNamespace`; `PolicyRule` loses `key`; `Subscriber.namespaces`.
+- `grpcserver`/`httpserver`: subscribe by namespace; policy DTOs drop `key`;
+  subscriber views expose namespaces.
+
+**SDKs (Go + Python):** one shared namespace subscription; route incoming
+changes to fields by exact key; `Watch(fn)` is whole-namespace with no
+pattern (callback filters by convention); reconciliation lists the whole
+namespace. Delete `matchPattern`/`reconcilePrefix`/`normalizeSelectorKey`
+and the base-key machinery.
+
+**Frontend / docs:** policy editor loses the key field; subscribers page
+shows namespaces; `docs/http-api.md`, `docs/sdk-*.md`, `docs/security.md`
+updated to the namespace-level authz and pattern-free watch.
+
+**Gate:** the same acceptance script in §13, minus any per-key step; plus a
+test that a client authorized for a namespace receives a change to a key it
+never "selected", and that a client *not* authorized for a namespace cannot
+subscribe to it at all.
