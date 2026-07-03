@@ -70,13 +70,13 @@ func (c *CLI) Run(args []string) int {
 	case "list":
 		return c.cmdList(cmdArgs)
 	case "version", "--version", "-version":
-		fmt.Fprintln(c.Stdout, Version)
+		_, _ = fmt.Fprintln(c.Stdout, Version)
 		return 0
 	case "help", "-h", "--help":
 		c.usage()
 		return 0
 	default:
-		fmt.Fprintf(c.Stderr, "unknown command %q\n\n", cmd)
+		_, _ = fmt.Fprintf(c.Stderr, "unknown command %q\n\n", cmd)
 		c.usage()
 		return 2
 	}
@@ -92,7 +92,7 @@ func (c *CLI) consumeGlobalFlags(args []string) []string {
 		switch {
 		case a == "--config" || a == "-config":
 			if i+1 >= len(args) {
-				fmt.Fprintln(c.Stderr, "--config requires a value")
+				_, _ = fmt.Fprintln(c.Stderr, "--config requires a value")
 				return nil
 			}
 			c.ConfigPath = args[i+1]
@@ -111,7 +111,7 @@ func (c *CLI) consumeGlobalFlags(args []string) []string {
 }
 
 func (c *CLI) usage() {
-	fmt.Fprint(c.Stderr, `parameter-store — parameter and secret management service
+	_, _ = fmt.Fprint(c.Stderr, `parameter-store — parameter and secret management service
 
 Usage:
   parameter-store [--config FILE] <command> [flags]
@@ -148,7 +148,7 @@ Run "parameter-store <command> -h" for command-specific flags.
 
 // fail prints an error to stderr and returns exit code 1.
 func (c *CLI) fail(format string, args ...any) int {
-	fmt.Fprintf(c.Stderr, "error: "+format+"\n", args...)
+	_, _ = fmt.Fprintf(c.Stderr, "error: "+format+"\n", args...)
 	return 1
 }
 

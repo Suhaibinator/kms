@@ -22,7 +22,7 @@ func ExampleNewClient() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	ctx := context.Background()
 	dbPassword, err := client.GetSecret(ctx, "/prod/payments/postgres/password")
@@ -44,7 +44,7 @@ func ExampleClient_Resolve() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	cfg := Config{
 		DBPassword: paramstore.SecretValue{Key: "/prod/payments/postgres/password"},
@@ -64,7 +64,7 @@ func ExampleClient_Resolve() {
 
 func ExampleClient_Watch() {
 	client, _ := paramstore.NewClient(paramstore.Config{Endpoint: "localhost:8443"})
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	stop, err := client.Watch(context.Background(), "/prod/payments/*", func(ev paramstore.Event) {
 		fmt.Printf("%s %s => %s\n", ev.Type, ev.Path, ev.Value)
@@ -77,7 +77,7 @@ func ExampleClient_Watch() {
 
 func ExampleClient_GetSecret_errorHandling() {
 	client, _ := paramstore.NewClient(paramstore.Config{Endpoint: "localhost:8443"})
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	_, err := client.GetSecret(context.Background(), "/prod/missing")
 	switch {

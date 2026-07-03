@@ -148,9 +148,9 @@ func (v SecretValue) GoString() string { return redactedText }
 func (v SecretValue) Format(f fmt.State, verb rune) {
 	switch verb {
 	case 'q':
-		fmt.Fprintf(f, "%q", redactedText)
+		_, _ = fmt.Fprintf(f, "%q", redactedText)
 	default:
-		io.WriteString(f, redactedText)
+		_, _ = io.WriteString(f, redactedText)
 	}
 }
 

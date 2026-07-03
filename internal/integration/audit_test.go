@@ -126,7 +126,7 @@ func TestAuditRowsHaveNoPlaintext(t *testing.T) {
 		if err != nil {
 			t.Fatalf("query audit rows: %v", err)
 		}
-		defer rows.Close()
+		defer func() { _ = rows.Close() }()
 		n := 0
 		for rows.Next() {
 			var et, md, rp string

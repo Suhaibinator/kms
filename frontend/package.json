@@ -6,7 +6,7 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "next typegen && tsc --noEmit"
   },
   "dependencies": {
     "next": "16.2.10",
@@ -14,9 +14,9 @@
     "react-dom": "19.2.7"
   },
   "devDependencies": {
-    "@types/node": "22.20.0",
+    "@types/node": "26.1.0",
     "@types/react": "19.2.17",
     "@types/react-dom": "19.2.3",
-    "typescript": "5.9.3"
+    "typescript": "6.0.3"
   }
 }

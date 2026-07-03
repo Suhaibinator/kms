@@ -106,7 +106,7 @@ func TestKEKRotationEndToEnd(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reopen for old-key check: %v", err)
 	}
-	defer st1.Close()
+	defer func() { _ = st1.Close() }()
 	if _, err := crypto.Unseal(ctx, st1, crypto.UnsealOptions{KeyFilePath: h.keyPath}); err == nil {
 		t.Error("old key file still unsealed after rotation; expected key-check failure")
 	}
@@ -115,7 +115,7 @@ func TestKEKRotationEndToEnd(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reopen for new-key check: %v", err)
 	}
-	defer st2.Close()
+	defer func() { _ = st2.Close() }()
 	kr, err := crypto.Unseal(ctx, st2, crypto.UnsealOptions{KeyFilePath: newKeyPath})
 	if err != nil {
 		t.Fatalf("new key file failed to unseal: %v", err)

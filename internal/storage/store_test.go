@@ -240,8 +240,12 @@ func TestGetParameterNotFound(t *testing.T) {
 func TestParameterInfo(t *testing.T) {
 	st := newStore(t)
 	ctx := context.Background()
-	st.PutParameter(ctx, "/p", "a", "", "", "u1")
-	st.PutParameter(ctx, "/p", "b", "", "", "u2")
+	if _, _, err := st.PutParameter(ctx, "/p", "a", "", "", "u1"); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := st.PutParameter(ctx, "/p", "b", "", "", "u2"); err != nil {
+		t.Fatal(err)
+	}
 	info, err := st.GetParameterInfo(ctx, "/p")
 	if err != nil {
 		t.Fatal(err)
@@ -319,8 +323,12 @@ func TestListParametersPrefixEscaping(t *testing.T) {
 func TestDeleteParameterCascades(t *testing.T) {
 	st := newStore(t)
 	ctx := context.Background()
-	st.PutParameter(ctx, "/p", "a", "", "", "u")
-	st.PutParameter(ctx, "/p", "b", "", "", "u")
+	if _, _, err := st.PutParameter(ctx, "/p", "a", "", "", "u"); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := st.PutParameter(ctx, "/p", "b", "", "", "u"); err != nil {
+		t.Fatal(err)
+	}
 	var pid int64
 	if err := st.db.Raw("SELECT id FROM parameters WHERE path='/p'").Scan(&pid).Error; err != nil {
 		t.Fatal(err)
@@ -752,7 +760,9 @@ func TestRotateKEK(t *testing.T) {
 func TestRotateKEKRollback(t *testing.T) {
 	st := newStore(t)
 	ctx := context.Background()
-	st.InsertKeyMetadata(ctx, domain.KeyMetadata{ID: "kek-a", Source: "file", KeyCheck: []byte("a"), State: domain.KeyStateActive})
+	if err := st.InsertKeyMetadata(ctx, domain.KeyMetadata{ID: "kek-a", Source: "file", KeyCheck: []byte("a"), State: domain.KeyStateActive}); err != nil {
+		t.Fatal(err)
+	}
 	putSecret(t, st, "/s1", false)
 	putSecret(t, st, "/s2", false)
 
@@ -803,7 +813,9 @@ func TestNamespaces(t *testing.T) {
 	_, err = st.CreateNamespace(ctx, domain.Namespace{Path: "/team/a"})
 	mustErrIs(t, err, domain.ErrAlreadyExists, "dup namespace")
 
-	st.CreateNamespace(ctx, domain.Namespace{Path: "/team/b"})
+	if _, err := st.CreateNamespace(ctx, domain.Namespace{Path: "/team/b"}); err != nil {
+		t.Fatal(err)
+	}
 	list, _, err := st.ListNamespaces(ctx, ListPage{Limit: 100})
 	if err != nil || len(list) != 2 || list[0].Path != "/team/a" {
 		t.Fatalf("list = %+v err %v", list, err)
@@ -880,7 +892,9 @@ func TestPolicies(t *testing.T) {
 		t.Fatalf("updated = %+v", updated)
 	}
 
-	st.CreatePolicy(ctx, domain.Policy{Name: "wild", Subject: "*", Allow: []domain.PolicyRule{{Operation: domain.OpParameterRead, Path: "/*"}}})
+	if _, err := st.CreatePolicy(ctx, domain.Policy{Name: "wild", Subject: "*", Allow: []domain.PolicyRule{{Operation: domain.OpParameterRead, Path: "/*"}}}); err != nil {
+		t.Fatal(err)
+	}
 	forSubj, err := st.PoliciesForSubject(ctx, "svc-1")
 	if err != nil {
 		t.Fatal(err)
@@ -938,8 +952,12 @@ func TestAuditTimeRangeFractionalSeconds(t *testing.T) {
 	base := time.Date(2026, 7, 1, 12, 0, 0, 0, time.UTC)
 	// e1 at .000, e2 at .500 — RFC3339Nano would trim e1's fraction and misorder
 	// a string range comparison; fixed-width format keeps it correct.
-	st.AppendAudit(ctx, domain.AuditEvent{EventType: "x", ResourcePath: "/p", CreatedAt: base})
-	st.AppendAudit(ctx, domain.AuditEvent{EventType: "x", ResourcePath: "/p", CreatedAt: base.Add(500 * time.Millisecond)})
+	if err := st.AppendAudit(ctx, domain.AuditEvent{EventType: "x", ResourcePath: "/p", CreatedAt: base}); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.AppendAudit(ctx, domain.AuditEvent{EventType: "x", ResourcePath: "/p", CreatedAt: base.Add(500 * time.Millisecond)}); err != nil {
+		t.Fatal(err)
+	}
 
 	from := base.Add(250 * time.Millisecond)
 	got, _, err := st.ListAudit(ctx, domain.AuditFilter{From: from}, ListPage{Limit: 100})
@@ -958,7 +976,9 @@ func TestAuditPagination(t *testing.T) {
 	st := newStore(t)
 	ctx := context.Background()
 	for i := 0; i < 5; i++ {
-		st.AppendAudit(ctx, domain.AuditEvent{EventType: "e", ResourcePath: "/p"})
+		if err := st.AppendAudit(ctx, domain.AuditEvent{EventType: "e", ResourcePath: "/p"}); err != nil {
+			t.Fatal(err)
+		}
 	}
 	var seen int
 	token := ""
@@ -1104,10 +1124,18 @@ func TestPruneChangeLogRetentionMath(t *testing.T) {
 func TestSnapshotParameters(t *testing.T) {
 	st := newStore(t)
 	ctx := context.Background()
-	st.PutParameter(ctx, "/prod/a", "1", "", "", "u")
-	st.PutParameter(ctx, "/prod/a", "2", "", "", "u") // current is v2
-	st.PutParameter(ctx, "/prod/b", "x", "", "", "u")
-	st.PutParameter(ctx, "/stage/c", "y", "", "", "u")
+	if _, _, err := st.PutParameter(ctx, "/prod/a", "1", "", "", "u"); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := st.PutParameter(ctx, "/prod/a", "2", "", "", "u"); err != nil { // current is v2
+		t.Fatal(err)
+	}
+	if _, _, err := st.PutParameter(ctx, "/prod/b", "x", "", "", "u"); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := st.PutParameter(ctx, "/stage/c", "y", "", "", "u"); err != nil {
+		t.Fatal(err)
+	}
 
 	// exact + prefix patterns.
 	params, rev, err := st.SnapshotParameters(ctx, []string{"/prod/*"})
@@ -1158,10 +1186,18 @@ func TestSnapshotParametersSetBased(t *testing.T) {
 	ctx := context.Background()
 
 	// /prod/a has two versions -> current v2, previous v1.
-	st.PutParameter(ctx, "/prod/a", "1", "text/plain", `{"k":"1"}`, "alice")
-	st.PutParameter(ctx, "/prod/a", "2", "text/plain", `{"k":"2"}`, "bob")
-	st.PutParameter(ctx, "/prod/b", "x", "", "", "u")
-	st.PutParameter(ctx, "/stage/c", "y", "", "", "u")
+	if _, _, err := st.PutParameter(ctx, "/prod/a", "1", "text/plain", `{"k":"1"}`, "alice"); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := st.PutParameter(ctx, "/prod/a", "2", "text/plain", `{"k":"2"}`, "bob"); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := st.PutParameter(ctx, "/prod/b", "x", "", "", "u"); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := st.PutParameter(ctx, "/stage/c", "y", "", "", "u"); err != nil {
+		t.Fatal(err)
+	}
 
 	byPath := func(ps []domain.Parameter) map[string]domain.Parameter {
 		m := map[string]domain.Parameter{}
@@ -1221,8 +1257,12 @@ func TestSnapshotParametersSetBased(t *testing.T) {
 
 	// A parameter whose "current" label was removed (only a non-current label
 	// remains) must be omitted, even though its path matches the pattern.
-	st.PutParameter(ctx, "/prod/orphan", "o1", "", "", "u")
-	st.PutParameter(ctx, "/prod/orphan", "o2", "", "", "u") // current=2, previous=1
+	if _, _, err := st.PutParameter(ctx, "/prod/orphan", "o1", "", "", "u"); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := st.PutParameter(ctx, "/prod/orphan", "o2", "", "", "u"); err != nil { // current=2, previous=1
+		t.Fatal(err)
+	}
 	var op parameterModel
 	if err := st.db.Where("path = ?", "/prod/orphan").First(&op).Error; err != nil {
 		t.Fatal(err)
@@ -1240,7 +1280,9 @@ func TestSnapshotParametersSetBased(t *testing.T) {
 	}
 
 	// A "current" label pointing at a missing version row must also be omitted.
-	st.PutParameter(ctx, "/prod/ghost", "g1", "", "", "u")
+	if _, _, err := st.PutParameter(ctx, "/prod/ghost", "g1", "", "", "u"); err != nil {
+		t.Fatal(err)
+	}
 	var gp parameterModel
 	if err := st.db.Where("path = ?", "/prod/ghost").First(&gp).Error; err != nil {
 		t.Fatal(err)
@@ -1261,10 +1303,18 @@ func TestSnapshotParametersSetBased(t *testing.T) {
 func TestSnapshotParametersLikeEscape(t *testing.T) {
 	st := newStore(t)
 	ctx := context.Background()
-	st.PutParameter(ctx, "/a_b/x", "match-underscore", "", "", "u")
-	st.PutParameter(ctx, "/aXb/x", "wildcard-underscore", "", "", "u")
-	st.PutParameter(ctx, "/p%q/x", "match-percent", "", "", "u")
-	st.PutParameter(ctx, "/pZZq/x", "wildcard-percent", "", "", "u")
+	if _, _, err := st.PutParameter(ctx, "/a_b/x", "match-underscore", "", "", "u"); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := st.PutParameter(ctx, "/aXb/x", "wildcard-underscore", "", "", "u"); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := st.PutParameter(ctx, "/p%q/x", "match-percent", "", "", "u"); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := st.PutParameter(ctx, "/pZZq/x", "wildcard-percent", "", "", "u"); err != nil {
+		t.Fatal(err)
+	}
 
 	under := mustSnapshot(t, st, ctx, []string{"/a_b/*"})
 	if len(under) != 1 || under[0].Path != "/a_b/x" {
@@ -1291,7 +1341,9 @@ func mustSnapshot(t *testing.T, st *SQLStore, ctx context.Context, patterns []st
 func TestBackup(t *testing.T) {
 	st := newStore(t)
 	ctx := context.Background()
-	st.PutParameter(ctx, "/a", "v", "", "", "u")
+	if _, _, err := st.PutParameter(ctx, "/a", "v", "", "", "u"); err != nil {
+		t.Fatal(err)
+	}
 
 	dest := filepath.Join(t.TempDir(), "backup.db")
 	if err := st.Backup(ctx, dest); err != nil {
@@ -1302,7 +1354,7 @@ func TestBackup(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open backup: %v", err)
 	}
-	defer bk.Close()
+	defer func() { _ = bk.Close() }()
 	got, err := bk.GetParameter(ctx, "/a", 0, "")
 	if err != nil || got.Value != "v" {
 		t.Fatalf("backup data = %+v err %v", got, err)
