@@ -22,7 +22,11 @@ func bindIdentity(store *fakeStore, name, kind string, ns *domain.NamespaceRef) 
 }
 
 // certOpSetup builds a service (CA bootstrapped) plus a non-admin "issuer"
-// principal bound to nsA and granted the delegated admin:identity:cert op.
+// principal bound to nsA and granted the delegated admin:identity:cert op scoped
+// to nsA. The grant is deliberately namespace-scoped (not env:*/app:*): the
+// authorization now runs against the caller's home namespace (Fix B), so this
+// whole guard suite would fail authorization outright under the old empty-NS-ref
+// code — the "same-namespace allowed" case genuinely depends on the fix.
 func certOpSetup(t *testing.T) (*Service, *fakeStore, Principal, domain.NamespaceRef, domain.NamespaceRef) {
 	t.Helper()
 	nsA := mkns("prod", "a")
@@ -33,7 +37,7 @@ func certOpSetup(t *testing.T) (*Service, *fakeStore, Principal, domain.Namespac
 	store.addNamespace(nsA, domain.AuthMethodToken, domain.AuthMethodMTLS)
 	store.addNamespace(nsB, domain.AuthMethodToken, domain.AuthMethodMTLS)
 	store.addPolicy(domain.Policy{Name: "cert", Subject: "issuer", Allow: []domain.PolicyRule{
-		{Operation: domain.OpAdminIdentityCert, Env: "*", App: "*", KeyPattern: "*"},
+		{Operation: domain.OpAdminIdentityCert, Env: nsA.Env, App: nsA.App, KeyPattern: "*"},
 	}})
 	return s, store, boundClientPrincipal("issuer", nsA), nsA, nsB
 }
@@ -89,6 +93,45 @@ func TestIssueCertificateTargetGuard(t *testing.T) {
 		bindIdentity(store, "boss", domain.IdentityKindAdmin, &nsB)
 		if _, err := s.IssueIdentityCertificate(ctx, adminPrincipal(), "boss", 0); err != nil {
 			t.Fatalf("admin issue for any target: %v", err)
+		}
+	})
+
+	// A wildcard admin:identity:cert grant still authorizes (retains the coverage
+	// certOpSetup gave up when it switched to a namespace-scoped grant).
+	t.Run("wildcard grant allowed", func(t *testing.T) {
+		nsA := mkns("prod", "a")
+		store := newFakeStore()
+		s := newTestService(store)
+		withCA(t, s)
+		store.addNamespace(nsA, domain.AuthMethodToken, domain.AuthMethodMTLS)
+		store.addPolicy(domain.Policy{Name: "cert", Subject: "issuer", Allow: []domain.PolicyRule{
+			{Operation: domain.OpAdminIdentityCert, Env: "*", App: "*", KeyPattern: "*"},
+		}})
+		issuer := boundClientPrincipal("issuer", nsA)
+		bindIdentity(store, "buddy", domain.IdentityKindClient, &nsA)
+		if _, err := s.IssueIdentityCertificate(ctx, issuer, "buddy", 0); err != nil {
+			t.Fatalf("wildcard grant issue: %v", err)
+		}
+	})
+
+	// A grant scoped to a DIFFERENT namespace than the issuer's home does not
+	// authorize, even for an in-home target: env/app scoping is enforced at the
+	// authorization layer (before guardCertTarget).
+	t.Run("grant scoped to another namespace denied", func(t *testing.T) {
+		nsA := mkns("prod", "a")
+		nsB := mkns("prod", "b")
+		store := newFakeStore()
+		s := newTestService(store)
+		withCA(t, s)
+		store.addNamespace(nsA, domain.AuthMethodToken, domain.AuthMethodMTLS)
+		store.addNamespace(nsB, domain.AuthMethodToken, domain.AuthMethodMTLS)
+		store.addPolicy(domain.Policy{Name: "cert", Subject: "issuer", Allow: []domain.PolicyRule{
+			{Operation: domain.OpAdminIdentityCert, Env: nsB.Env, App: nsB.App, KeyPattern: "*"},
+		}})
+		issuer := boundClientPrincipal("issuer", nsA) // home is nsA
+		bindIdentity(store, "buddy", domain.IdentityKindClient, &nsA)
+		if _, err := s.IssueIdentityCertificate(ctx, issuer, "buddy", 0); !errors.Is(err, domain.ErrPermissionDenied) {
+			t.Fatalf("wrong-namespace grant err = %v, want ErrPermissionDenied", err)
 		}
 	})
 }

@@ -2,7 +2,7 @@ import Link from "next/link";
 import { useRouter } from "next/router";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { api, ApiError, type ResourceRef } from "@/lib/api";
-import type { Parameter, ParameterMetadata } from "@/lib/types";
+import { PARAMETER_CONTENT_TYPES, type Parameter, type ParameterMetadata } from "@/lib/types";
 import { useToast } from "@/context/ToastContext";
 import { useQueryParams } from "@/lib/hooks";
 import { displayNamespace, displayPath, formatUnixMs, isEmptyJson, labelEntries, prettyJson } from "@/lib/format";
@@ -40,7 +40,7 @@ export default function ParameterDetailPage() {
 
   const [newVersionOpen, setNewVersionOpen] = useState(false);
   const [value, setValue] = useState("");
-  const [contentType, setContentType] = useState("text/plain");
+  const [contentType, setContentType] = useState("string");
   const [metadataJson, setMetadataJson] = useState("{}");
   const [saving, setSaving] = useState(false);
 
@@ -72,7 +72,7 @@ export default function ParameterDetailPage() {
 
   function openNewVersion() {
     setValue(current?.value ?? "");
-    setContentType(current?.content_type ?? meta?.content_type ?? "text/plain");
+    setContentType(current?.content_type ?? meta?.content_type ?? "string");
     setMetadataJson(!isEmptyJson(meta?.metadata_json) ? prettyJson(meta?.metadata_json) : "{}");
     setNewVersionOpen(true);
   }
@@ -87,7 +87,7 @@ export default function ParameterDetailPage() {
         app,
         key,
         value,
-        content_type: contentType.trim() || "text/plain",
+        content_type: contentType || "string",
         metadata_json: metadataJson.trim() || "{}",
       });
       toast.success(`Saved version ${res.version}`, displayPath(ref));
@@ -317,11 +317,17 @@ export default function ParameterDetailPage() {
           </Field>
           <div className="form-row">
             <Field label="Content type">
-              <input
-                className="input"
+              <select
+                className="select"
                 value={contentType}
                 onChange={(e) => setContentType(e.target.value)}
-              />
+              >
+                {PARAMETER_CONTENT_TYPES.map((ct) => (
+                  <option key={ct} value={ct}>
+                    {ct}
+                  </option>
+                ))}
+              </select>
             </Field>
             <Field label="Metadata JSON">
               <input

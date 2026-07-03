@@ -336,12 +336,26 @@ func (s *Service) guardCertTarget(ctx context.Context, pr Principal, eventType s
 	return nil
 }
 
+// certAuthzRef scopes the admin:identity:cert authorization to the caller's home
+// namespace so a namespace-scoped grant ({admin:identity:cert, env, app}) matches
+// — guardCertTarget then confirms the actual target lives in that namespace. An
+// unbound non-admin has no home, so it authorizes against an empty-namespace ref
+// (matching only wildcard env:*/app:* grants) and is denied by guardCertTarget
+// regardless. Authorizing before loading the target avoids leaking identity
+// existence to unauthorized callers.
+func certAuthzRef(pr Principal, name string) domain.Ref {
+	if h := pr.home(); h != nil {
+		return domain.Ref{NS: *h, Key: name}
+	}
+	return domain.Ref{Key: name}
+}
+
 // IssueIdentityCertificate mints an additional client certificate for an
 // existing identity (renewal/rollover). Available to admins, or to identities
 // granted admin:identity:cert (restricted to non-admin targets in the caller's
 // own namespace; see guardCertTarget). The private key is returned exactly once.
 func (s *Service) IssueIdentityCertificate(ctx context.Context, pr Principal, name string, ttl time.Duration) (*CertBundle, error) {
-	if err := s.requireAdminOrOp(ctx, pr, domain.OpAdminIdentityCert, "identity.cert.issue", domain.ResourceIdentity, domain.Ref{Key: name}); err != nil {
+	if err := s.requireAdminOrOp(ctx, pr, domain.OpAdminIdentityCert, "identity.cert.issue", domain.ResourceIdentity, certAuthzRef(pr, name)); err != nil {
 		return nil, err
 	}
 	id, err := s.store.GetIdentityByName(ctx, name)
@@ -395,7 +409,7 @@ func (s *Service) issueCert(ctx context.Context, name string, ttl time.Duration)
 // must belong to the named identity. Available to admins, or to identities
 // granted admin:identity:cert.
 func (s *Service) RevokeIdentityCertificate(ctx context.Context, pr Principal, name, serial string) error {
-	if err := s.requireAdminOrOp(ctx, pr, domain.OpAdminIdentityCert, "identity.cert.revoke", domain.ResourceIdentity, domain.Ref{Key: name}); err != nil {
+	if err := s.requireAdminOrOp(ctx, pr, domain.OpAdminIdentityCert, "identity.cert.revoke", domain.ResourceIdentity, certAuthzRef(pr, name)); err != nil {
 		return err
 	}
 	rec, err := s.store.GetIdentityCertBySerial(ctx, serial)

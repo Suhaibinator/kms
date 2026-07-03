@@ -423,10 +423,14 @@ func (s *Service) listFilter(ctx context.Context, pr Principal, resourceType, li
 // --- watch plumbing --------------------------------------------------------
 
 // AuthorizeSubscribe checks that pr may register a watch over every selector:
-// the namespace auth-method gate plus namespace-level read authorization
-// (Authorize with OpParameterRead on the selector's namespace, which the
-// implicit home grant covers). It is the subscribe-time authorization the watch
-// hub cannot perform itself.
+// the namespace auth-method gate plus read authorization scoped to the
+// selector's key pattern ("" and "*" mean the whole namespace, which the
+// implicit home grant covers). It authorizes against the selector's pattern
+// rather than the whole namespace so a least-privilege client granted read on
+// "billing/*" can subscribe to "billing/*"; this is only a "could this client
+// read something under this selector" pre-check — WatchAccessChecker still
+// filters every delivered event by its exact key. It is the subscribe-time
+// authorization the watch hub cannot perform itself.
 func (s *Service) AuthorizeSubscribe(ctx context.Context, pr Principal, selectors []domain.WatchSelector) error {
 	if pr.IsAdmin() {
 		return nil
@@ -440,13 +444,23 @@ func (s *Service) AuthorizeSubscribe(ctx context.Context, pr Principal, selector
 		if err := s.namespaceMethodGate(ctx, pr, sel.NS, domain.ResourceParameter); err != nil {
 			return err
 		}
-		if !policy.Authorize(policies, home, domain.OpParameterRead, domain.Ref{NS: sel.NS}) {
-			s.auditRef(ctx, pr, "authz.denial", domain.ResourceParameter, domain.Ref{NS: sel.NS}, 0, "deny",
+		ref := domain.Ref{NS: sel.NS, Key: normalizeSelectorKey(sel.KeyPattern)}
+		if !policy.Authorize(policies, home, domain.OpParameterRead, ref) {
+			s.auditRef(ctx, pr, "authz.denial", domain.ResourceParameter, ref, 0, "deny",
 				map[string]string{"operation": "subscribe"})
 			return domain.Errorf(domain.ErrPermissionDenied, "access denied")
 		}
 	}
 	return nil
+}
+
+// normalizeSelectorKey maps a watch selector's key pattern to the key used for
+// subscribe-time authorization: an empty pattern (whole namespace) becomes "*".
+func normalizeSelectorKey(pattern string) string {
+	if pattern == "" {
+		return "*"
+	}
+	return pattern
 }
 
 // WatchAccessChecker returns a predicate the watch hub uses to filter events and

@@ -399,3 +399,15 @@ export const POLICY_OPERATIONS: string[] = [
   "admin:audit:read",
   "admin:key:rotate",
 ];
+
+// The content types the server accepts for a parameter value. Anything outside
+// this allowlist is rejected with invalid_argument, so the UI must offer only
+// these. "string" is the default.
+export const PARAMETER_CONTENT_TYPES: string[] = [
+  "string",
+  "integer",
+  "float",
+  "boolean",
+  "json",
+  "binary",
+];

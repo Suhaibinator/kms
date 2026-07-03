@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "@/lib/api";
-import type { Parameter } from "@/lib/types";
+import { PARAMETER_CONTENT_TYPES, type Parameter } from "@/lib/types";
 import { useToast } from "@/context/ToastContext";
 import { useNamespaces, useQueryParams } from "@/lib/hooks";
 import { formatUnixMs, labelEntries } from "@/lib/format";
@@ -36,7 +36,7 @@ export default function ParametersPage() {
   const [createNs, setCreateNs] = useState<NamespaceSelection>(NO_NS);
   const [key, setKey] = useState("");
   const [value, setValue] = useState("");
-  const [contentType, setContentType] = useState("text/plain");
+  const [contentType, setContentType] = useState("string");
   const [metadataJson, setMetadataJson] = useState("{}");
   const [saving, setSaving] = useState(false);
 
@@ -125,7 +125,7 @@ export default function ParametersPage() {
     setCreateNs(hasNs ? ns : NO_NS);
     setKey("");
     setValue("");
-    setContentType("text/plain");
+    setContentType("string");
     setMetadataJson("{}");
     setCreateOpen(true);
   }
@@ -148,7 +148,7 @@ export default function ParametersPage() {
         app: createNs.app,
         key: k,
         value,
-        content_type: contentType.trim() || "text/plain",
+        content_type: contentType || "string",
         metadata_json: metadataJson.trim() || "{}",
       });
       toast.success(`Parameter saved (version ${res.version})`, `${createNs.env}/${createNs.app}/${k}`);
@@ -334,11 +334,17 @@ export default function ParametersPage() {
           </Field>
           <div className="form-row">
             <Field label="Content type">
-              <input
-                className="input"
+              <select
+                className="select"
                 value={contentType}
                 onChange={(e) => setContentType(e.target.value)}
-              />
+              >
+                {PARAMETER_CONTENT_TYPES.map((ct) => (
+                  <option key={ct} value={ct}>
+                    {ct}
+                  </option>
+                ))}
+              </select>
             </Field>
             <Field label="Metadata JSON">
               <input

@@ -269,6 +269,41 @@ func TestAuthorizeSubscribe(t *testing.T) {
 	}
 }
 
+// TestAuthorizeSubscribeScopedGrant pins Fix A: subscribe authorization is scoped
+// to the selector's key pattern, not the whole namespace. A least-privilege
+// client granted parameter:read on "billing/*" must be able to subscribe to that
+// subtree (this fails under the old empty-key Ref), while broader selectors stay
+// denied. Per-event delivery is still filtered by exact key (WatchAccessChecker).
+func TestAuthorizeSubscribeScopedGrant(t *testing.T) {
+	ctx := context.Background()
+	store := newFakeStore()
+	store.addNamespace(tns, domain.AuthMethodToken, domain.AuthMethodMTLS)
+	store.addPolicy(domain.Policy{Name: "billing", Subject: "app", Allow: []domain.PolicyRule{
+		{Operation: domain.OpParameterRead, Env: tns.Env, App: tns.App, KeyPattern: "billing/*"},
+	}})
+	s := newTestService(store)
+	pr := clientPrincipal("app") // token method, unbound (no implicit grant)
+
+	// Allowed: the selector matching the granted subtree. This is the assertion
+	// that goes RED without Fix A (old code authorized Ref{NS, Key:""}, which
+	// keyutil.MatchKey("billing/*","") rejects).
+	if err := s.AuthorizeSubscribe(ctx, pr, []domain.WatchSelector{{NS: tns, KeyPattern: "billing/*"}}); err != nil {
+		t.Fatalf("scoped subscribe to billing/*: err = %v, want allowed", err)
+	}
+	// Allowed: an exact key under the granted subtree.
+	if err := s.AuthorizeSubscribe(ctx, pr, []domain.WatchSelector{{NS: tns, KeyPattern: "billing/x"}}); err != nil {
+		t.Fatalf("scoped subscribe to billing/x: err = %v, want allowed", err)
+	}
+	// Denied: the whole namespace (broader than the grant).
+	if err := s.AuthorizeSubscribe(ctx, pr, []domain.WatchSelector{{NS: tns, KeyPattern: "*"}}); !errors.Is(err, domain.ErrPermissionDenied) {
+		t.Fatalf("subscribe to *: err = %v, want ErrPermissionDenied", err)
+	}
+	// Denied: a sibling subtree the grant does not cover.
+	if err := s.AuthorizeSubscribe(ctx, pr, []domain.WatchSelector{{NS: tns, KeyPattern: "other/*"}}); !errors.Is(err, domain.ErrPermissionDenied) {
+		t.Fatalf("subscribe to other/*: err = %v, want ErrPermissionDenied", err)
+	}
+}
+
 func TestReauthorizeWatchRevocation(t *testing.T) {
 	ctx := context.Background()
 	store := newFakeStore()
