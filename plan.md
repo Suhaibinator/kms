@@ -325,6 +325,12 @@ Secrets used to configure the service itself must not be logged.
 
 ## 8. API Requirements
 
+> **Superseded.** The API shapes below (path-string request fields) are
+> replaced by the namespace-native wire protocol in
+> [`plan-namespaces.md`](plan-namespaces.md) §8. See there for the current
+> `NamespaceRef`/`ResourceRef`/`WatchSelector` messages and per-service
+> changes.
+
 The service must expose a gRPC API as the primary programmatic interface.
 
 The service may expose HTTP APIs for frontend use, but consuming services should prefer gRPC through official SDKs.
@@ -820,6 +826,12 @@ The init command must:
 
 ## 12. Storage Requirements
 
+> **Superseded.** The schema below (flat `path TEXT UNIQUE` rows) is replaced
+> by the namespace-native schema in
+> [`plan-namespaces.md`](plan-namespaces.md) §4 (first-class `namespaces`
+> table with foreign keys, `ca_keys`, `identity_certs`, denormalized
+> `env`/`app`/`key` in history tables).
+
 ### 12.1 SQLite Tables
 
 The service should define tables for:
@@ -923,6 +935,12 @@ parameter-store migrate --db ./kms.db
 ## 13. Data Model Requirements
 
 ### 13.1 Path Format
+
+> **Superseded.** The flat path-string addressing below is replaced by the
+> namespace-native model in [`plan-namespaces.md`](plan-namespaces.md) §2/§5:
+> a resource is a `(namespace, key)` pair where the namespace is a fixed
+> `(env, app)` entity. The `/env/app/key` form survives only as a *display*
+> format and as client-side SDK sugar; the server never parses a path string.
 
 Resources should be addressed by path.
 
@@ -1110,6 +1128,12 @@ admin:key:rotate
 ```
 
 ### 16.2 Path-Based Access
+
+> **Superseded.** Path-prefix policy matching below is replaced by the
+> namespace-native rule shape in [`plan-namespaces.md`](plan-namespaces.md) §6:
+> rules are `{operation, env, app, key}` (env/app exact or `*`; key exact, `*`,
+> or `prefix/*`), plus an implicit home-namespace read/list grant. Deny
+> precedence and least-privilege intent are unchanged.
 
 Policies should support path prefixes.
 

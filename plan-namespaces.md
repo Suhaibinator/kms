@@ -297,7 +297,8 @@ namespaced operation — parameter reads included — first checks
 an audit event. The implicit home-namespace grant (§6) sits *behind* this
 gate: a namespace-bound identity using a disallowed method still gets
 nothing. Admin-kind identities bypass the method gate (management plane;
-see §3) but not policy or audit.
+see §3); as today, admin access is not policy-restricted but every action
+is audited.
 
 **SDK surface:** already 90% present — `MTLSFromFiles`/`TLSConfig` exist
 in both SDKs. Changes: `Token` becomes optional when a client cert is

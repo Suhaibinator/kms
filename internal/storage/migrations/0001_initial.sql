@@ -1,4 +1,7 @@
--- 0001_initial.sql — full v1 schema (namespace-native).
+-- 0001_initial.sql — full v1 schema (namespace-native), DESCRIPTIVE ONLY.
+-- The running schema is created by GORM AutoMigrate over the models in
+-- models.go (plus the raw change_log DDL in store.go); this file documents
+-- that schema and is not executed. Keep it in sync when models change.
 -- Times are stored as RFC3339Nano UTC strings. All secret material in this
 -- schema is ciphertext or hashes; plaintext secrets and raw keys never land here.
 --
@@ -120,7 +123,7 @@ CREATE TABLE ca_keys (
     cert_pem      TEXT NOT NULL,
     encrypted_key BLOB NOT NULL,
     encrypted_dek BLOB NOT NULL,
-    kek_id        TEXT NOT NULL REFERENCES key_metadata(id),
+    kek_id        TEXT NOT NULL,           -- id of the wrapping KEK (no FK at runtime)
     state         TEXT NOT NULL DEFAULT 'active', -- 'active' | 'retired'
     created_at    TEXT NOT NULL
 );
