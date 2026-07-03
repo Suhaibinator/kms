@@ -284,6 +284,12 @@ class WatchServicer(kms_pb2_grpc.WatchServiceServicer):
         it = iter(request_iterator)
         reg = next(it)
         namespaces = [(n.env, n.app) for n in reg.namespaces]
+        if not namespaces:
+            # Parity with the real server (grpcserver.normalizeNamespaces): an empty
+            # subscription is rejected. Keeps the fake honest so a client that sends
+            # namespaces=[] fails loudly here instead of "succeeding" against a
+            # lenient fake.
+            context.abort(grpc.StatusCode.INVALID_ARGUMENT, "at least one namespace is required")
         sub = _Subscription(namespaces=namespaces, queue=[], cond=threading.Condition())
 
         with self.store.lock:

@@ -67,15 +67,15 @@ def test_watch_stop_unregisters(client, server):
     stop = client.watch(lambda ev: hits.append(ev))
     assert wait_until(lambda: (NS_ENV, NS_APP) in _namespaces(store))
     stop()
-    # Like the Go SDK, the stream stays up and reconnects with the reduced
-    # namespace set; the stopped watcher's namespace must no longer be
-    # subscribed (no other watcher or param holds it).
-    assert wait_until(
-        lambda: (NS_ENV, NS_APP) not in _namespaces(store)
-    ), "namespace still subscribed after stop"
+    # Namespaces are add-only (matching the Go SDK): the subscription stays up on
+    # the namespace after the last watcher stops — dropping it would send an empty
+    # subscription, which the server rejects (and would spin the reconnect loop).
+    # What must stop is delivery to the stopped callback.
     hits.clear()
     store.put_param(NS_ENV, NS_APP, "x/a", value="v")
+    time.sleep(0.3)  # let any delivery happen; the stopped watcher must get none
     assert hits == [], "stopped watcher still received events"
+    assert (NS_ENV, NS_APP) in _namespaces(store), "namespace must stay subscribed (add-only)"
 
 
 def test_hot_reload_on_by_default(client, server):

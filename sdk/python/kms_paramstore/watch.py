@@ -182,22 +182,11 @@ class _SubManager:
                 self._watchers.remove(w)
             except ValueError:
                 return
-            nsk = (w.ns.env, w.ns.app)
-            still_needed = self._namespace_needed_locked(nsk)
-            if not still_needed:
-                self._namespaces.discard(nsk)
-            started = self._started
-        if started and not still_needed:
-            self._signal_restart()
-
-    def _namespace_needed_locked(self, nsk: _NSKey) -> bool:
-        env, app = nsk
-        if any((w.ns.env, w.ns.app) == nsk for w in self._watchers):
-            return True
-        # Hot-reloading parameters hold their namespace subscription.
-        if any(rk[0] == env and rk[1] == app for rk in self._param_handlers):
-            return True
-        return False
+        # Namespaces are add-only (matching the Go SDK): removing the last watcher
+        # for a namespace does NOT unsubscribe it. The server rejects an empty
+        # subscription, so dropping the last namespace would send namespaces=[] and
+        # spin the reconnect loop forever; the subscription instead persists until
+        # close() tears the whole stream down.
 
     def _add_namespace_locked(self, nsk: _NSKey) -> bool:
         if nsk in self._namespaces:
