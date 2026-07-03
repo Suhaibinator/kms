@@ -628,7 +628,7 @@ func (m *subManager) reconcile() {
 // reconcileSelector lists the parameters under a wildcard watcher's namespace
 // and key prefix and applies any drift the stream missed.
 func (m *subManager) reconcileSelector(ctx context.Context, sel ref, snapRev uint64) {
-	keyPrefix := strings.TrimSuffix(sel.key, "*")
+	keyPrefix := reconcilePrefix(sel.key)
 	pageToken := ""
 	for i := 0; i < 100; i++ { // bounded to avoid runaway loops
 		cctx, cancel := m.client.callCtx(ctx, "")
@@ -712,11 +712,28 @@ func backoffDelay(attempt int) time.Duration {
 	return j
 }
 
+// reconcilePrefix derives the server list KeyPrefix for a watch selector's key
+// pattern. The server's list prefix is key-level: prefix "billing" matches the
+// base key "billing" and everything under "billing/". So "billing/*" must list
+// with prefix "billing" (not "billing/", which would match nothing), and a
+// whole-namespace "*"/"" pattern lists with an empty prefix.
+func reconcilePrefix(keyPattern string) string {
+	if keyPattern == "*" || keyPattern == "" {
+		return ""
+	}
+	return strings.TrimSuffix(keyPattern, "/*")
+}
+
 // matchPattern reports whether a subscription pattern matches a concrete path.
-// A pattern ending in "*" is a prefix match; otherwise it is an exact match.
+// Both are display-path strings ("/env/app/key"). A "prefix/*" pattern matches
+// the base key ("/env/app/prefix") AND everything beneath it
+// ("/env/app/prefix/..."), mirroring the server's keyutil.MatchKey; anything
+// else is an exact match. Matching the base key matters because the server hub
+// delivers base-key events to a "prefix/*" subscriber, so the SDK's local
+// dispatch must not drop them.
 func matchPattern(pattern, path string) bool {
-	if strings.HasSuffix(pattern, "*") {
-		return strings.HasPrefix(path, strings.TrimSuffix(pattern, "*"))
+	if base, ok := strings.CutSuffix(pattern, "/*"); ok {
+		return path == base || strings.HasPrefix(path, base+"/")
 	}
 	return pattern == path
 }

@@ -703,3 +703,75 @@ func TestWatchStopEndsCtxWatcherGoroutine(t *testing.T) {
 		t.Errorf("ctx-watcher goroutines leaked after stop(): base=%d now=%d", base, runtime.NumGoroutine())
 	}
 }
+
+// TestMatchPatternBaseKey pins the prefix-matches-base-key semantics of
+// matchPattern: a "prefix/*" pattern must match both "/env/app/prefix" and
+// everything beneath it, mirroring the server's keyutil.MatchKey.
+func TestMatchPatternBaseKey(t *testing.T) {
+	cases := []struct {
+		pattern, path string
+		want          bool
+	}{
+		{"/prod/app/billing/*", "/prod/app/billing", true},        // base key (the fix)
+		{"/prod/app/billing/*", "/prod/app/billing/stripe", true}, // child
+		{"/prod/app/billing/*", "/prod/app/billing/x/y", true},    // deep child
+		{"/prod/app/billing/*", "/prod/app/billingx", false},      // sibling, not under
+		{"/prod/app/billing/*", "/prod/app/other", false},
+		{"/prod/app/*", "/prod/app/anything", true},         // whole namespace
+		{"/prod/app/*", "/prod/app2/anything", false},       // namespace boundary respected
+		{"/prod/app/billing", "/prod/app/billing", true},    // exact
+		{"/prod/app/billing", "/prod/app/billing/x", false}, // exact is not a prefix
+	}
+	for _, c := range cases {
+		if got := matchPattern(c.pattern, c.path); got != c.want {
+			t.Errorf("matchPattern(%q, %q) = %v, want %v", c.pattern, c.path, got, c.want)
+		}
+	}
+}
+
+// TestReconcilePrefix pins the server list-prefix derivation: "billing/*" must
+// list with prefix "billing" (base + children), not "billing/" (matches nothing).
+func TestReconcilePrefix(t *testing.T) {
+	cases := map[string]string{
+		"billing/*": "billing",
+		"a/b/*":     "a/b",
+		"*":         "",
+		"":          "",
+		"billing":   "billing",
+	}
+	for pattern, want := range cases {
+		if got := reconcilePrefix(pattern); got != want {
+			t.Errorf("reconcilePrefix(%q) = %q, want %q", pattern, got, want)
+		}
+	}
+}
+
+// TestWatchPrefixMatchesBaseKey proves a "prefix/*" watcher fires for the base
+// key "prefix" itself. The server hub delivers base-key events to a prefix
+// subscriber (keyutil.MatchKey), so the SDK's local dispatch must not drop them.
+func TestWatchPrefixMatchesBaseKey(t *testing.T) {
+	c, srv := newTestClient(t, Config{})
+
+	events := make(chan Event, 4)
+	stop, err := c.Watch(context.Background(), "billing/*", func(ev Event) { events <- ev })
+	if err != nil {
+		t.Fatalf("Watch: %v", err)
+	}
+	defer stop()
+
+	sub, err := srv.WaitForSubscribe(waitTimeout)
+	if err != nil {
+		t.Fatalf("WaitForSubscribe: %v", err)
+	}
+	// The base key "billing" (no child segment) is under "billing/*" per server
+	// semantics; the callback must fire.
+	sub.PushChange(2, testNS, "billing", "put", "5", 2)
+	select {
+	case ev := <-events:
+		if ev.Key != "billing" || ev.Value != "5" {
+			t.Errorf("base-key event = %+v, want key=billing value=5", ev)
+		}
+	case <-time.After(waitTimeout):
+		t.Fatal("base-key event not delivered to billing/* watcher")
+	}
+}

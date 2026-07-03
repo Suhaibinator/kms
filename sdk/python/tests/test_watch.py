@@ -307,3 +307,15 @@ def test_reconnect_after_server_restart(server):
         assert wait_until(lambda: cfg.p.get() == "2", timeout=10), "did not recover after reconnect"
     finally:
         c.close()
+
+
+def test_pattern_prefix_derives_base_key():
+    # Server list prefix is key-level: "billing/*" must list with "billing" (base
+    # + children), not "billing/" (which matches nothing); "*" -> "".
+    from kms_paramstore.watch import _pattern_prefix
+
+    assert _pattern_prefix("billing/*") == "billing"
+    assert _pattern_prefix("a/b/*") == "a/b"
+    assert _pattern_prefix("*") == ""
+    assert _pattern_prefix("") == ""
+    assert _pattern_prefix("billing") == "billing"

@@ -123,9 +123,17 @@ def _proto_ref_key(pref) -> _RefKey:
 
 
 def _pattern_prefix(pattern: str) -> str:
-    """Key prefix implied by a trailing-``*`` pattern (``"billing/*"`` -> ``"billing/"``)."""
-    if pattern.endswith("*"):
-        return pattern[:-1]
+    """Server list KeyPrefix implied by a watch key pattern.
+
+    The server's list prefix is key-level: prefix ``"billing"`` matches the base
+    key ``"billing"`` and everything under ``"billing/"``. So ``"billing/*"`` maps
+    to ``"billing"`` (not ``"billing/"``, which matches nothing), and a
+    whole-namespace ``"*"``/``""`` pattern maps to an empty prefix.
+    """
+    if pattern in ("*", ""):
+        return ""
+    if pattern.endswith("/*"):
+        return pattern[:-2]
     return pattern
 
 
