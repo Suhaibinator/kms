@@ -17,6 +17,7 @@ __all__ = [
     "FailedPreconditionError",
     "NotInitializedError",
     "ConfigError",
+    "NoNamespaceError",
     "map_grpc_error",
 ]
 
@@ -50,6 +51,16 @@ class NotInitializedError(ParamStoreError):
 
 class ConfigError(ParamStoreError):
     """The SDK was configured incorrectly (bad endpoint, missing key, ...)."""
+
+
+class NoNamespaceError(ConfigError):
+    """A relative key was used but the client has no namespace to resolve it.
+
+    Raised when a relative (non-``/``-prefixed) key is resolved on a client that
+    was neither given a ``namespace=`` nor bound to one (``WhoAmI`` reports the
+    identity unbound). Give the client a ``namespace`` or use an absolute
+    ``/env/app/key``.
+    """
 
 
 # Map gRPC status codes to SDK exception types. Codes not listed here surface as

@@ -11,11 +11,11 @@ import (
 
 func TestSecretResolutionOrder(t *testing.T) {
 	c, srv := newTestClient(t, Config{})
-	srv.SetSecret("/store/only", []byte("from-store"))
+	srv.SetSecret(testNS, "store/only", []byte("from-store"))
 
 	t.Run("env overrides store", func(t *testing.T) {
 		t.Setenv("MY_SECRET", "from-env")
-		sv := SecretValue{Key: "/store/only", EnvVar: "MY_SECRET", Default: "from-default"}
+		sv := SecretValue{Key: "store/only", EnvVar: "MY_SECRET", Default: "from-default"}
 		if err := sv.Init(c); err != nil {
 			t.Fatalf("Init: %v", err)
 		}
@@ -25,7 +25,7 @@ func TestSecretResolutionOrder(t *testing.T) {
 	})
 
 	t.Run("store when no env", func(t *testing.T) {
-		sv := SecretValue{Key: "/store/only", EnvVar: "UNSET_SECRET", Default: "from-default"}
+		sv := SecretValue{Key: "store/only", EnvVar: "UNSET_SECRET", Default: "from-default"}
 		if err := sv.Init(c); err != nil {
 			t.Fatalf("Init: %v", err)
 		}
@@ -35,7 +35,7 @@ func TestSecretResolutionOrder(t *testing.T) {
 	})
 
 	t.Run("default when store missing", func(t *testing.T) {
-		sv := SecretValue{Key: "/missing", Default: "from-default"}
+		sv := SecretValue{Key: "missing", Default: "from-default"}
 		if err := sv.Init(c); err != nil {
 			t.Fatalf("Init: %v", err)
 		}
@@ -45,24 +45,24 @@ func TestSecretResolutionOrder(t *testing.T) {
 	})
 
 	t.Run("error when nothing resolves", func(t *testing.T) {
-		sv := SecretValue{Key: "/missing"}
+		sv := SecretValue{Key: "missing"}
 		err := sv.Init(c)
 		if err == nil {
 			t.Fatal("expected error")
 		}
-		if !strings.Contains(err.Error(), "/missing") {
-			t.Errorf("error should name the path: %v", err)
+		if !strings.Contains(err.Error(), "missing") {
+			t.Errorf("error should name the key: %v", err)
 		}
 	})
 }
 
 func TestParameterResolutionOrder(t *testing.T) {
 	c, srv := newTestClient(t, Config{})
-	srv.SetParameter("/p/store", "100")
+	srv.SetParameter(testNS, "p/store", "100")
 
 	t.Run("env overrides", func(t *testing.T) {
 		t.Setenv("RATE", "999")
-		pv := ParameterValue{Key: "/p/store", EnvVar: "RATE", Default: "1"}
+		pv := ParameterValue{Key: "p/store", EnvVar: "RATE", Default: "1", Static: true}
 		if err := pv.Init(c); err != nil {
 			t.Fatalf("Init: %v", err)
 		}
@@ -72,7 +72,7 @@ func TestParameterResolutionOrder(t *testing.T) {
 	})
 
 	t.Run("store", func(t *testing.T) {
-		pv := ParameterValue{Key: "/p/store", Default: "1"}
+		pv := ParameterValue{Key: "p/store", Default: "1", Static: true}
 		if err := pv.Init(c); err != nil {
 			t.Fatalf("Init: %v", err)
 		}
@@ -82,7 +82,7 @@ func TestParameterResolutionOrder(t *testing.T) {
 	})
 
 	t.Run("default", func(t *testing.T) {
-		pv := ParameterValue{Key: "/p/missing", Default: "7"}
+		pv := ParameterValue{Key: "p/missing", Default: "7", Static: true}
 		if err := pv.Init(c); err != nil {
 			t.Fatalf("Init: %v", err)
 		}
@@ -92,9 +92,9 @@ func TestParameterResolutionOrder(t *testing.T) {
 	})
 
 	t.Run("error", func(t *testing.T) {
-		pv := ParameterValue{Key: "/p/missing"}
-		if err := pv.Init(c); err == nil || !strings.Contains(err.Error(), "/p/missing") {
-			t.Errorf("expected error naming path, got %v", err)
+		pv := ParameterValue{Key: "p/missing", Static: true}
+		if err := pv.Init(c); err == nil || !strings.Contains(err.Error(), "p/missing") {
+			t.Errorf("expected error naming key, got %v", err)
 		}
 	})
 }
@@ -107,7 +107,7 @@ func TestDefaultOnlyUsedOnNotFound(t *testing.T) {
 
 	t.Run("secret: NotFound uses Default", func(t *testing.T) {
 		c, _ := newTestClient(t, Config{})
-		sv := SecretValue{Key: "/absent", Default: "dev-value"}
+		sv := SecretValue{Key: "absent", Default: "dev-value"}
 		if err := sv.Init(c); err != nil {
 			t.Fatalf("Init: %v", err)
 		}
@@ -118,14 +118,14 @@ func TestDefaultOnlyUsedOnNotFound(t *testing.T) {
 
 	t.Run("secret: non-NotFound error does NOT use Default", func(t *testing.T) {
 		c, srv := newTestClient(t, Config{})
-		srv.SetSecretError("/flaky", unavailable())
-		sv := SecretValue{Key: "/flaky", Default: "sk_test_dev"}
+		srv.SetSecretError(testNS, "flaky", unavailable())
+		sv := SecretValue{Key: "flaky", Default: "sk_test_dev"}
 		err := sv.Init(c)
 		if err == nil {
 			t.Fatal("expected error when store unreachable and Default set")
 		}
-		if !strings.Contains(err.Error(), "/flaky") {
-			t.Errorf("error should name path: %v", err)
+		if !strings.Contains(err.Error(), "flaky") {
+			t.Errorf("error should name key: %v", err)
 		}
 		if sv.Initialized() {
 			t.Error("value must not be initialized on hard error")
@@ -134,8 +134,8 @@ func TestDefaultOnlyUsedOnNotFound(t *testing.T) {
 
 	t.Run("secret: opt-in flag restores fallback", func(t *testing.T) {
 		c, srv := newTestClient(t, Config{FallbackToDefaultsOnError: true})
-		srv.SetSecretError("/flaky", unavailable())
-		sv := SecretValue{Key: "/flaky", Default: "dev-value"}
+		srv.SetSecretError(testNS, "flaky", unavailable())
+		sv := SecretValue{Key: "flaky", Default: "dev-value"}
 		if err := sv.Init(c); err != nil {
 			t.Fatalf("Init with fallback flag: %v", err)
 		}
@@ -146,21 +146,21 @@ func TestDefaultOnlyUsedOnNotFound(t *testing.T) {
 
 	t.Run("parameter: non-NotFound error does NOT use Default", func(t *testing.T) {
 		c, srv := newTestClient(t, Config{})
-		srv.SetParameterError("/flaky", unavailable())
-		pv := ParameterValue{Key: "/flaky", Default: "999"}
+		srv.SetParameterError(testNS, "flaky", unavailable())
+		pv := ParameterValue{Key: "flaky", Default: "999"}
 		err := pv.Init(c)
 		if err == nil {
 			t.Fatal("expected error")
 		}
-		if !strings.Contains(err.Error(), "/flaky") {
-			t.Errorf("error should name path: %v", err)
+		if !strings.Contains(err.Error(), "flaky") {
+			t.Errorf("error should name key: %v", err)
 		}
 	})
 
 	t.Run("parameter: opt-in flag restores fallback", func(t *testing.T) {
 		c, srv := newTestClient(t, Config{FallbackToDefaultsOnError: true})
-		srv.SetParameterError("/flaky", unavailable())
-		pv := ParameterValue{Key: "/flaky", Default: "42"}
+		srv.SetParameterError(testNS, "flaky", unavailable())
+		pv := ParameterValue{Key: "flaky", Default: "42", Static: true}
 		if err := pv.Init(c); err != nil {
 			t.Fatalf("Init with fallback flag: %v", err)
 		}
@@ -171,13 +171,13 @@ func TestDefaultOnlyUsedOnNotFound(t *testing.T) {
 
 	t.Run("resolve: hard error with Default still fails", func(t *testing.T) {
 		c, srv := newTestClient(t, Config{})
-		srv.SetSecret("/ok", []byte("v"))
-		srv.SetSecretError("/flaky", unavailable())
+		srv.SetSecret(testNS, "ok", []byte("v"))
+		srv.SetSecretError(testNS, "flaky", unavailable())
 		type Cfg struct {
 			OK    SecretValue
 			Flaky SecretValue
 		}
-		cfg := &Cfg{OK: SecretValue{Key: "/ok"}, Flaky: SecretValue{Key: "/flaky", Default: "dev"}}
+		cfg := &Cfg{OK: SecretValue{Key: "ok"}, Flaky: SecretValue{Key: "flaky", Default: "dev"}}
 		if err := c.Resolve(context.Background(), cfg); err == nil {
 			t.Fatal("expected Resolve to fail on hard error despite Default")
 		}
@@ -186,14 +186,14 @@ func TestDefaultOnlyUsedOnNotFound(t *testing.T) {
 
 func TestInitIdempotent(t *testing.T) {
 	c, srv := newTestClient(t, Config{})
-	srv.SetSecret("/idem", []byte("v1"))
+	srv.SetSecret(testNS, "idem", []byte("v1"))
 
-	sv := SecretValue{Key: "/idem"}
+	sv := SecretValue{Key: "idem"}
 	if err := sv.Init(c); err != nil {
 		t.Fatalf("Init: %v", err)
 	}
 	// Change the underlying value; a second Init must not re-fetch.
-	srv.SetSecret("/idem", []byte("v2"))
+	srv.SetSecret(testNS, "idem", []byte("v2"))
 	if err := sv.Init(c); err != nil {
 		t.Fatalf("second Init: %v", err)
 	}
@@ -204,10 +204,10 @@ func TestInitIdempotent(t *testing.T) {
 
 func TestResolveStructWalking(t *testing.T) {
 	c, srv := newTestClient(t, Config{})
-	srv.SetSecret("/db/password", []byte("dbpw"))
-	srv.SetSecret("/stripe/key", []byte("sk_test"))
-	srv.SetParameter("/rate", "50")
-	srv.SetParameter("/nested/timeout", "30s")
+	srv.SetSecret(testNS, "db/password", []byte("dbpw"))
+	srv.SetSecret(testNS, "stripe/key", []byte("sk_test"))
+	srv.SetParameter(testNS, "rate", "50")
+	srv.SetParameter(testNS, "nested/timeout", "30s")
 
 	type Nested struct {
 		Timeout ParameterValue
@@ -223,11 +223,11 @@ func TestResolveStructWalking(t *testing.T) {
 	}
 
 	cfg := &Config2{
-		DBPassword: SecretValue{Key: "/db/password"},
-		StripeKey:  &SecretValue{Key: "/stripe/key"},
-		Rate:       ParameterValue{Key: "/rate"},
-		Nested:     Nested{Timeout: ParameterValue{Key: "/nested/timeout"}},
-		NestedPtr:  &Nested{Timeout: ParameterValue{Key: "/nested/timeout"}},
+		DBPassword: SecretValue{Key: "db/password"},
+		StripeKey:  &SecretValue{Key: "stripe/key"},
+		Rate:       ParameterValue{Key: "rate", Static: true},
+		Nested:     Nested{Timeout: ParameterValue{Key: "nested/timeout", Static: true}},
+		NestedPtr:  &Nested{Timeout: ParameterValue{Key: "nested/timeout", Static: true}},
 	}
 	_ = cfg.unexported
 
@@ -261,12 +261,12 @@ func TestResolveStructWalking(t *testing.T) {
 // panic at .Value()).
 func TestResolveWalksSlicesAndArrays(t *testing.T) {
 	c, srv := newTestClient(t, Config{})
-	srv.SetSecret("/s/a", []byte("sa"))
-	srv.SetSecret("/s/b", []byte("sb"))
-	srv.SetSecret("/s/ptr", []byte("sptr"))
-	srv.SetParameter("/p/a", "pa")
-	srv.SetParameter("/p/b", "pb")
-	srv.SetParameter("/p/arr", "parr")
+	srv.SetSecret(testNS, "s/a", []byte("sa"))
+	srv.SetSecret(testNS, "s/b", []byte("sb"))
+	srv.SetSecret(testNS, "s/ptr", []byte("sptr"))
+	srv.SetParameter(testNS, "p/a", "pa")
+	srv.SetParameter(testNS, "p/b", "pb")
+	srv.SetParameter(testNS, "p/arr", "parr")
 
 	type Sub struct {
 		Secret SecretValue
@@ -279,14 +279,14 @@ func TestResolveWalksSlicesAndArrays(t *testing.T) {
 	}
 	cfg := &Cfg{
 		Slice: []Sub{
-			{Secret: SecretValue{Key: "/s/a"}, Param: ParameterValue{Key: "/p/a"}},
-			{Secret: SecretValue{Key: "/s/b"}, Param: ParameterValue{Key: "/p/b"}},
+			{Secret: SecretValue{Key: "s/a"}, Param: ParameterValue{Key: "p/a", Static: true}},
+			{Secret: SecretValue{Key: "s/b"}, Param: ParameterValue{Key: "p/b", Static: true}},
 		},
 		PtrSlice: []*Sub{
-			{Secret: SecretValue{Key: "/s/ptr"}, Param: ParameterValue{Key: "/p/a"}},
+			{Secret: SecretValue{Key: "s/ptr"}, Param: ParameterValue{Key: "p/a", Static: true}},
 		},
 		Arr: [1]Sub{
-			{Secret: SecretValue{Key: "/s/a"}, Param: ParameterValue{Key: "/p/arr"}},
+			{Secret: SecretValue{Key: "s/a"}, Param: ParameterValue{Key: "p/arr", Static: true}},
 		},
 	}
 
@@ -313,12 +313,12 @@ func TestResolveWalksSlicesAndArrays(t *testing.T) {
 // does not error on it.
 func TestResolveSkipsMapValues(t *testing.T) {
 	c, srv := newTestClient(t, Config{})
-	srv.SetSecret("/s/a", []byte("sa"))
+	srv.SetSecret(testNS, "s/a", []byte("sa"))
 
 	type Cfg struct {
 		M map[string]SecretValue
 	}
-	cfg := &Cfg{M: map[string]SecretValue{"k": {Key: "/s/a"}}}
+	cfg := &Cfg{M: map[string]SecretValue{"k": {Key: "s/a"}}}
 	if err := c.Resolve(context.Background(), cfg); err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
@@ -346,22 +346,22 @@ func TestResolveErrors(t *testing.T) {
 
 func TestResolveReportsMissingField(t *testing.T) {
 	c, srv := newTestClient(t, Config{})
-	srv.SetSecret("/ok", []byte("v"))
+	srv.SetSecret(testNS, "ok", []byte("v"))
 
 	type Config3 struct {
 		OK      SecretValue
 		Missing SecretValue
 	}
 	cfg := &Config3{
-		OK:      SecretValue{Key: "/ok"},
-		Missing: SecretValue{Key: "/nope"},
+		OK:      SecretValue{Key: "ok"},
+		Missing: SecretValue{Key: "nope"},
 	}
 	err := c.Resolve(context.Background(), cfg)
 	if err == nil {
 		t.Fatal("expected error")
 	}
-	if !strings.Contains(err.Error(), "/nope") {
-		t.Errorf("error should name missing path: %v", err)
+	if !strings.Contains(err.Error(), "nope") {
+		t.Errorf("error should name missing key: %v", err)
 	}
 	// The resolvable field should still have been initialized.
 	if !cfg.OK.Initialized() {
@@ -371,14 +371,14 @@ func TestResolveReportsMissingField(t *testing.T) {
 
 func TestExplicitInitPattern(t *testing.T) {
 	c, srv := newTestClient(t, Config{})
-	srv.SetSecret("/a", []byte("va"))
-	srv.SetParameter("/b", "vb")
+	srv.SetSecret(testNS, "a", []byte("va"))
+	srv.SetParameter(testNS, "b", "vb")
 
 	type Config4 struct {
 		A SecretValue
 		B ParameterValue
 	}
-	cfg := &Config4{A: SecretValue{Key: "/a"}, B: ParameterValue{Key: "/b"}}
+	cfg := &Config4{A: SecretValue{Key: "a"}, B: ParameterValue{Key: "b", Static: true}}
 	// Explicit per-field Init (plan 9.5).
 	if err := cfg.A.Init(c); err != nil {
 		t.Fatal(err)

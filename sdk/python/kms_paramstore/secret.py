@@ -17,18 +17,22 @@ class Secret:
     explicit :meth:`value` / :meth:`string_value` accessors.
     """
 
-    __slots__ = ("_value", "_path", "_version", "_content_type")
+    __slots__ = ("_value", "_env", "_app", "_key", "_version", "_content_type")
 
     def __init__(
         self,
         value: bytes = b"",
         *,
-        path: str = "",
+        env: str = "",
+        app: str = "",
+        key: str = "",
         version: int = 0,
         content_type: str = "",
     ) -> None:
         self._value = bytes(value)
-        self._path = path
+        self._env = env
+        self._app = app
+        self._key = key
         self._version = version
         self._content_type = content_type
 
@@ -47,8 +51,27 @@ class Secret:
     # --- non-sensitive metadata --------------------------------------------
 
     @property
+    def env(self) -> str:
+        return self._env
+
+    @property
+    def app(self) -> str:
+        return self._app
+
+    @property
+    def key(self) -> str:
+        return self._key
+
+    @property
+    def namespace(self) -> str:
+        return f"{self._env}/{self._app}"
+
+    @property
     def path(self) -> str:
-        return self._path
+        """Display path ``/env/app/key`` (or the bare key if the namespace is unset)."""
+        if self._env and self._app:
+            return f"/{self._env}/{self._app}/{self._key}"
+        return self._key
 
     @property
     def version(self) -> int:
@@ -89,6 +112,14 @@ class Secret:
         raise TypeError("Secret is unhashable to discourage caching by value")
 
 
-def new_secret(value: bytes, *, path: str = "", version: int = 0, content_type: str = "") -> Secret:
+def new_secret(
+    value: bytes,
+    *,
+    env: str = "",
+    app: str = "",
+    key: str = "",
+    version: int = 0,
+    content_type: str = "",
+) -> Secret:
     """Wrap plaintext in a :class:`Secret` (mainly for tests and tooling)."""
-    return Secret(value, path=path, version=version, content_type=content_type)
+    return Secret(value, env=env, app=app, key=key, version=version, content_type=content_type)

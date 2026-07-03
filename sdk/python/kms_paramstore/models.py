@@ -1,6 +1,8 @@
 """Lightweight public data types returned by the client.
 
-These decouple callers from the generated protobuf messages.
+These decouple callers from the generated protobuf messages. A resource is
+addressed by an explicit ``(env, app, key)``; each type also exposes a
+``namespace`` (``"env/app"``) and a ``path`` (``"/env/app/key"``) display helper.
 """
 
 from __future__ import annotations
@@ -17,9 +19,21 @@ __all__ = [
 ]
 
 
+def _display_namespace(env: str, app: str) -> str:
+    return f"{env}/{app}"
+
+
+def _display_path(env: str, app: str, key: str) -> str:
+    if env and app:
+        return f"/{env}/{app}/{key}"
+    return key
+
+
 @dataclass
 class Parameter:
-    path: str
+    env: str
+    app: str
+    key: str
     value: str
     content_type: str
     version: int
@@ -27,6 +41,14 @@ class Parameter:
     created_by: str = ""
     created_at_unix_ms: int = 0
     labels: Dict[str, int] = field(default_factory=dict)
+
+    @property
+    def namespace(self) -> str:
+        return _display_namespace(self.env, self.app)
+
+    @property
+    def path(self) -> str:
+        return _display_path(self.env, self.app, self.key)
 
 
 @dataclass
@@ -44,7 +66,9 @@ class SecretVersion:
 class SecretInfo:
     """Secret-level metadata. Never carries plaintext."""
 
-    path: str
+    env: str
+    app: str
+    key: str
     content_type: str
     client_bound: bool
     has_access_token: bool
@@ -53,6 +77,14 @@ class SecretInfo:
     updated_at_unix_ms: int = 0
     labels: Dict[str, int] = field(default_factory=dict)
     versions: List[SecretVersion] = field(default_factory=list)
+
+    @property
+    def namespace(self) -> str:
+        return _display_namespace(self.env, self.app)
+
+    @property
+    def path(self) -> str:
+        return _display_path(self.env, self.app, self.key)
 
 
 @dataclass
@@ -69,8 +101,11 @@ class PutSecretResult:
 
 
 def _parameter_from_proto(p) -> Parameter:
+    ref = p.ref
     return Parameter(
-        path=p.path,
+        env=ref.namespace.env,
+        app=ref.namespace.app,
+        key=ref.key,
         value=p.value,
         content_type=p.content_type,
         version=p.version,
@@ -82,8 +117,11 @@ def _parameter_from_proto(p) -> Parameter:
 
 
 def _secret_info_from_proto(s) -> SecretInfo:
+    ref = s.ref
     return SecretInfo(
-        path=s.path,
+        env=ref.namespace.env,
+        app=ref.namespace.app,
+        key=ref.key,
         content_type=s.content_type,
         client_bound=s.client_bound,
         has_access_token=s.has_access_token,

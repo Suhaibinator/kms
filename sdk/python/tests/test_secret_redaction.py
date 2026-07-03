@@ -10,7 +10,7 @@ from kms_paramstore import Secret
 
 
 def test_str_repr_format_redact():
-    s = Secret(b"hunter2", path="/p", version=3, content_type="string")
+    s = Secret(b"hunter2", env="prod", app="app", key="p", version=3, content_type="string")
     assert str(s) == "[REDACTED]"
     assert repr(s) == "[REDACTED]"
     assert f"{s}" == "[REDACTED]"
@@ -30,8 +30,10 @@ def test_plaintext_accessors():
 
 
 def test_metadata_exposed_not_value():
-    s = Secret(b"x", path="/a/b", version=7, content_type="text/plain")
-    assert s.path == "/a/b"
+    s = Secret(b"x", env="prod", app="svc", key="a/b", version=7, content_type="text/plain")
+    assert s.path == "/prod/svc/a/b"
+    assert s.namespace == "prod/svc"
+    assert s.key == "a/b"
     assert s.version == 7
     assert s.content_type == "text/plain"
 

@@ -10,16 +10,17 @@ from kms_paramstore import (
     Secret,
     SecretValue,
 )
+from tests.conftest import NS, NS_APP, NS_ENV
 
 
 def test_resolve_from_store(client, server):
     _addr, store = server
-    store.put_param("/cfg/rate", "42")
-    client.put_secret("/cfg/api", b"sk_live_x")
+    store.put_param(NS_ENV, NS_APP, "cfg/rate", value="42")
+    client.put_secret("cfg/api", b"sk_live_x")
 
     class Cfg:
-        rate = ParameterValue("/cfg/rate")
-        api = SecretValue("/cfg/api")
+        rate = ParameterValue("cfg/rate")
+        api = SecretValue("cfg/api")
 
     cfg = Cfg()
     client.resolve(cfg)
@@ -33,14 +34,26 @@ def test_resolve_from_store(client, server):
     assert isinstance(cfg.api, Secret)
 
 
+def test_absolute_key_in_descriptor(client, server):
+    _addr, store = server
+    store.put_param_path("/other/svc/rate", "9")
+
+    class Cfg:
+        rate = ParameterValue("/other/svc/rate", static=True)
+
+    cfg = Cfg()
+    client.resolve(cfg)
+    assert cfg.rate.get() == "9"
+
+
 def test_env_override_takes_precedence(client, server, monkeypatch):
     _addr, store = server
-    store.put_param("/cfg/x", "from-store")
+    store.put_param(NS_ENV, NS_APP, "cfg/x", value="from-store")
     monkeypatch.setenv("MY_X", "from-env")
 
     class Cfg:
-        x = ParameterValue("/cfg/x", env_var="MY_X")
-        s = SecretValue("/cfg/s", env_var="MY_S")
+        x = ParameterValue("cfg/x", env_var="MY_X")
+        s = SecretValue("cfg/s", env_var="MY_S")
 
     monkeypatch.setenv("MY_S", "env-secret")
     cfg = Cfg()
@@ -51,8 +64,8 @@ def test_env_override_takes_precedence(client, server, monkeypatch):
 
 def test_default_used_only_on_not_found(client):
     class Cfg:
-        p = ParameterValue("/absent", default="dev-default")
-        s = SecretValue("/absent-secret", default="dev-secret")
+        p = ParameterValue("absent", default="dev-default")
+        s = SecretValue("absent-secret", default="dev-secret")
 
     cfg = Cfg()
     client.resolve(cfg)
@@ -63,13 +76,14 @@ def test_default_used_only_on_not_found(client):
 def test_default_not_used_on_other_error_by_default():
     from tests._fake_server import start_server
 
-    srv, addr, _store = start_server(require_bearer="need-token")
+    srv, addr, _store = start_server(require_bearer="need-token", whoami_namespace=NS)
     try:
-        # No token -> UNAUTHENTICATED, which is NOT an absent value.
-        c = Client(addr)
+        # No token -> UNAUTHENTICATED, which is NOT an absent value. A configured
+        # namespace avoids a WhoAmI round trip (which would also be unauthenticated).
+        c = Client(addr, namespace=NS)
 
         class Cfg:
-            p = ParameterValue("/x", default="dev-default")
+            p = ParameterValue("x", default="dev-default")
 
         cfg = Cfg()
         with pytest.raises(ParamStoreError):
@@ -77,7 +91,7 @@ def test_default_not_used_on_other_error_by_default():
         c.close()
 
         # With the permissive fallback flag, the default is used instead.
-        c2 = Client(addr, fallback_to_defaults_on_error=True)
+        c2 = Client(addr, namespace=NS, fallback_to_defaults_on_error=True)
         cfg2 = Cfg()
         c2.resolve(cfg2)
         assert cfg2.p.get() == "dev-default"
@@ -96,14 +110,14 @@ def test_missing_key_env_default_raises(client):
 
 def test_resolve_walks_nested_config(client, server):
     _addr, store = server
-    store.put_param("/rate", "5")
-    client.put_secret("/db/pass", b"pw")
+    store.put_param(NS_ENV, NS_APP, "rate", value="5")
+    client.put_secret("db/pass", b"pw")
 
     class DB:
-        password = SecretValue("/db/pass")
+        password = SecretValue("db/pass")
 
     class App:
-        rate = ParameterValue("/rate")
+        rate = ParameterValue("rate")
 
         def __init__(self):
             self.db = DB()
@@ -116,16 +130,16 @@ def test_resolve_walks_nested_config(client, server):
 
 def test_init_is_idempotent(client, server):
     _addr, store = server
-    store.put_param("/idem", "one")
+    store.put_param(NS_ENV, NS_APP, "idem", value="one")
 
     class Cfg:
-        p = ParameterValue("/idem")
+        p = ParameterValue("idem", static=True)
 
     cfg = Cfg()
     client.resolve(cfg)
     assert cfg.p.get() == "one"
     # Change the store, re-resolve: an already-initialized field is untouched.
-    store.put_param("/idem", "two")
+    store.put_param(NS_ENV, NS_APP, "idem", value="two")
     client.resolve(cfg)
     assert cfg.p.get() == "one"
 
@@ -134,13 +148,13 @@ def test_per_instance_isolation(client, server):
     _addr, store = server
 
     class Cfg:
-        p = ParameterValue("/iso")
+        p = ParameterValue("iso", static=True)
 
-    store.put_param("/iso", "first")
+    store.put_param(NS_ENV, NS_APP, "iso", value="first")
     a = Cfg()
     client.resolve(a)
 
-    store.put_param("/iso", "second")
+    store.put_param(NS_ENV, NS_APP, "iso", value="second")
     b = Cfg()
     client.resolve(b)
 
@@ -152,9 +166,9 @@ def test_per_instance_isolation(client, server):
 def test_resolve_many_fields_concurrently(client, server):
     _addr, store = server
     for i in range(12):
-        store.put_param(f"/many/p{i}", str(i))
+        store.put_param(NS_ENV, NS_APP, f"many/p{i}", value=str(i))
 
-    ns = {f"p{i}": ParameterValue(f"/many/p{i}") for i in range(12)}
+    ns = {f"p{i}": ParameterValue(f"many/p{i}", static=True) for i in range(12)}
     Cfg = type("Cfg", (), ns)
     cfg = Cfg()
     client.resolve(cfg)

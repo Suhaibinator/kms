@@ -16,19 +16,36 @@
 // representation of any type in this package. Access to plaintext always
 // requires an explicit call ([Secret.Value], [SecretValue.Value]).
 //
+// # Namespaces and keys
+//
+// A client operates in a namespace — a fixed (env, app) pair such as
+// "prod/gradethis". Keys are relative to that namespace ("postgres/password");
+// interior slashes are part of the key name, not namespace structure. Set the
+// namespace with [Config.Namespace], or leave it empty to discover it from the
+// identity at first use (via WhoAmI); a relative key on an unbound identity then
+// fails with [ErrNoNamespace]. A leading-slash key is an absolute "/env/app/key"
+// display path, split in the SDK to reach another namespace.
+//
+// # Hot reload
+//
+// Non-secret [ParameterValue] fields hot-reload by default: they track the store
+// over a shared Subscribe stream and [ParameterValue.Get] always returns the
+// latest value. Set [ParameterValue.Static] to resolve once at Init instead.
+//
 // # Quick start
 //
 //	client, err := paramstore.NewClient(paramstore.Config{
-//	    Endpoint: "parameter-store.prod.internal:8443",
-//	    TLS:      paramstore.MTLSFromFiles("client.crt", "client.key", "ca.crt"),
-//	    CacheTTL: time.Minute,
+//	    Endpoint:  "parameter-store.prod.internal:8443",
+//	    Namespace: "prod/payments", // or "" to discover via WhoAmI
+//	    TLS:       paramstore.MTLSFromFiles("client.crt", "client.key", "ca.crt"),
+//	    CacheTTL:  time.Minute,
 //	})
 //	if err != nil {
 //	    return err
 //	}
 //	defer client.Close()
 //
-//	dbPassword, err := client.GetSecret(ctx, "/prod/payments/postgres/password")
+//	dbPassword, err := client.GetSecret(ctx, "postgres/password")
 //	if err != nil {
 //	    return err
 //	}

@@ -4,8 +4,9 @@ Declare :class:`SecretValue` / :class:`ParameterValue` as class attributes on a
 config object, then resolve them all with a single :meth:`Client.resolve` call::
 
     class AppConfig:
-        stripe_key = SecretValue("/prod/gradethis/stripe-api-key", token="...")
-        rate_limit = ParameterValue("/prod/gradethis/rate-limit", dynamic=True)
+        stripe_key = SecretValue("stripe-api-key", token="...")
+        rate_limit = ParameterValue("rate-limit")              # hot-reloads
+        log_format = ParameterValue("log-format", static=True)  # boot-time only
 
     cfg = AppConfig()
     client.resolve(cfg)
@@ -13,10 +14,13 @@ config object, then resolve them all with a single :meth:`Client.resolve` call::
     cfg.stripe_key            # -> a redacting Secret
     cfg.stripe_key.value      # -> bytes plaintext (explicit access only)
     print(cfg.stripe_key)     # -> [REDACTED]
-    cfg.rate_limit.get()      # -> latest value, hot-reloaded when dynamic
+    cfg.rate_limit.get()      # -> latest value, hot-reloaded (default)
+
+Keys are relative to the client namespace, or absolute ``/env/app/key``.
+Parameters hot-reload by default; pass ``static=True`` for a boot-time-only read.
 
 Resolution order for each field: environment override, then store fetch, then
-``default``, else an error naming the path (fail fast at startup).
+``default``, else an error naming the key (fail fast at startup).
 """
 
 from __future__ import annotations
@@ -53,13 +57,13 @@ class _SecretState:
 
 
 class _ParamState:
-    __slots__ = ("lock", "initialized", "from_env", "dynamic", "client", "value", "callbacks")
+    __slots__ = ("lock", "initialized", "from_env", "static", "client", "value", "callbacks")
 
     def __init__(self) -> None:
         self.lock = threading.RLock()
         self.initialized = False
         self.from_env = False
-        self.dynamic = False
+        self.static = False
         self.client: Optional["Client"] = None
         self.value = ""
         self.callbacks: List[Callable[[str, str], None]] = []
@@ -87,7 +91,7 @@ class _ParamState:
 
 
 class ParameterHandle:
-    """Handle for a resolved :class:`ParameterValue`; hot-reloads when dynamic."""
+    """Handle for a resolved :class:`ParameterValue`; hot-reloads unless static."""
 
     __slots__ = ("_key", "_state")
 
@@ -111,7 +115,7 @@ class ParameterHandle:
     def on_change(self, fn: Callable[[str, str], None]) -> None:
         """Register a callback ``fn(old, new)`` fired on a dispatch thread.
 
-        A callback on a non-dynamic or env-pinned value never fires.
+        A callback on a static or env-pinned value never fires.
         """
         with self._state.lock:
             self._state.callbacks.append(fn)
@@ -166,11 +170,11 @@ class SecretValue(_DescriptorBase):
     """A declarative, store-backed secret field that resolves to a :class:`Secret`.
 
     Args:
-        key: store path, e.g. ``"/prod/gradethis/stripe-api-key"``.
+        key: relative key (``"stripe-api-key"``) or absolute ``"/env/app/key"``.
         token: per-secret access token; for client-bound secrets it is also the
             client key share.
         env_var: optional environment variable that, when set and non-empty,
-            overrides the store value.
+            overrides the store value (no namespace resolution is needed then).
         default: optional fallback (development only).
     """
 
@@ -204,7 +208,7 @@ class SecretValue(_DescriptorBase):
             if self._env_var:
                 ev = os.environ.get(self._env_var, "")
                 if ev != "":
-                    st.secret = Secret(ev.encode("utf-8"), path=self._key)
+                    st.secret = Secret(ev.encode("utf-8"), key=self._key)
                     st.from_env = True
                     st.initialized = True
                     client._logf("secret %r resolved from env %s (store fetch skipped)", self._key, self._env_var)
@@ -215,7 +219,7 @@ class SecretValue(_DescriptorBase):
                 except Exception as err:
                     if self._default is not None and client._default_allowed_for_error(err):
                         client._logf("secret %r fetch failed (%s); using default", self._key, err)
-                        st.secret = Secret(self._default.encode("utf-8"), path=self._key)
+                        st.secret = Secret(self._default.encode("utf-8"), key=self._key)
                         st.initialized = True
                         return
                     raise errors.ParamStoreError(f"resolve secret {self._key!r}: {err}") from err
@@ -223,7 +227,7 @@ class SecretValue(_DescriptorBase):
                 st.initialized = True
                 return
             if self._default is not None:
-                st.secret = Secret(self._default.encode("utf-8"), path=self._key)
+                st.secret = Secret(self._default.encode("utf-8"), key=self._key)
                 st.initialized = True
                 return
             raise errors.ConfigError("SecretValue has no key, env_var, or default configured")
@@ -232,17 +236,27 @@ class SecretValue(_DescriptorBase):
 class ParameterValue(_DescriptorBase):
     """A declarative, store-backed non-secret field.
 
-    With ``dynamic=True`` the value hot-reloads over the Subscribe stream and
+    Hot reload is on by default: the value tracks the Subscribe stream and
     :meth:`ParameterHandle.get` always returns the latest value without an RPC.
+    Every non-static field in a namespace rides one namespace-wide selector.
+    Pass ``static=True`` for a boot-time-only read (no subscription). An
+    env-pinned field never hot-reloads regardless of ``static``.
+
+    Args:
+        key: relative key (``"rate-limit"``) or absolute ``"/env/app/key"``.
+        env_var: environment variable that, when set and non-empty, pins the
+            value (no store fetch, no hot reload, no namespace resolution).
+        default: optional fallback (development only).
+        static: opt out of hot reload — read once at resolve time.
     """
 
     def __init__(self, key: str = "", *, env_var: Optional[str] = None, default: Optional[str] = None,
-                 dynamic: bool = False) -> None:
+                 static: bool = False) -> None:
         super().__init__()
         self._key = key
         self._env_var = env_var or ""
         self._default = default
-        self._dynamic = dynamic
+        self._static = static
 
     def _new_state(self) -> object:
         return _ParamState()
@@ -266,27 +280,37 @@ class ParameterValue(_DescriptorBase):
                 if ev != "":
                     st.value = ev
                     st.from_env = True
+                    st.static = True
                     st.initialized = True
-                    if self._dynamic:
+                    if not self._static:
                         client._logf("parameter %r pinned to env %s; hot reload disabled", self._key, self._env_var)
                     return
-            st.value = self._resolve_from_store(client, timeout)
+            ref, value = self._resolve_from_store(client, timeout)
+            st.value = value
             st.initialized = True
-            if self._dynamic and self._key:
-                st.dynamic = True
-                client._subs().register_param(self._key, st.value, st.apply_update)
+            # Hot reload on by default: register on the namespace-wide selector.
+            if not self._static and ref is not None:
+                st.static = False
+                client._subs().register_param(ref, value, st.apply_update)
+            else:
+                st.static = True
 
-    def _resolve_from_store(self, client: "Client", timeout: Optional[float]) -> str:
+    def _resolve_from_store(self, client: "Client", timeout: Optional[float]):
+        """Return ``(ref, value)``; ``ref`` is None when the default is used."""
         if self._key:
+            # A relative key on a namespace-less client is a config error naming
+            # the key; it must propagate rather than fall back to a default.
+            ref = client._resolve_ref(self._key)
             try:
-                return client.get_parameter(self._key, timeout=timeout)
+                value = client._get_parameter_ref(ref, timeout=timeout)
             except Exception as err:
                 if self._default is not None and client._default_allowed_for_error(err):
                     client._logf("parameter %r fetch failed (%s); using default", self._key, err)
-                    return self._default
+                    return None, self._default
                 raise errors.ParamStoreError(f"resolve parameter {self._key!r}: {err}") from err
+            return ref, value
         if self._default is not None:
-            return self._default
+            return None, self._default
         raise errors.ConfigError("ParameterValue has no key, env_var, or default configured")
 
 
