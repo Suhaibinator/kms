@@ -83,7 +83,7 @@ func (f *fakeStore) ListChangesSince(ctx context.Context, since uint64, limit in
 	return out, nil
 }
 
-func (f *fakeStore) SnapshotParameters(ctx context.Context, patterns []string) ([]domain.Parameter, uint64, error) {
+func (f *fakeStore) SnapshotParameters(ctx context.Context, selectors []domain.WatchSelector) ([]domain.Parameter, uint64, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.snapErr != nil {
@@ -93,10 +93,10 @@ func (f *fakeStore) SnapshotParameters(ctx context.Context, patterns []string) (
 	if rev == 0 && len(f.entries) > 0 {
 		rev = f.entries[len(f.entries)-1].Revision
 	}
-	// Filter snapshot by the requested patterns, mirroring the real store.
+	// Filter snapshot by the requested selectors, mirroring the real store.
 	var out []domain.Parameter
 	for _, p := range f.snapshot {
-		if patternMatchAny(patterns, p.Path) {
+		if selectorMatchAny(selectors, p.Ref) {
 			out = append(out, p)
 		}
 	}
@@ -131,55 +131,66 @@ func (f *fakeStore) ActiveKeyMetadata(context.Context) (domain.KeyMetadata, erro
 	panic("unused")
 }
 func (f *fakeStore) SetKeyState(context.Context, string, string) error { panic("unused") }
-func (f *fakeStore) RotateKEK(context.Context, domain.KeyMetadata, func(storage.SecretVersionRecord) ([]byte, error)) (int, error) {
+func (f *fakeStore) RotateKEK(context.Context, domain.KeyMetadata,
+	func(storage.SecretVersionRecord) ([]byte, error),
+	func(storage.CAKeyRecord) ([]byte, error)) (int, int, error) {
 	panic("unused")
 }
 func (f *fakeStore) CreateNamespace(context.Context, domain.Namespace) (domain.Namespace, error) {
 	panic("unused")
 }
+func (f *fakeStore) GetNamespace(context.Context, domain.NamespaceRef) (domain.Namespace, error) {
+	panic("unused")
+}
+func (f *fakeStore) UpdateNamespace(context.Context, domain.NamespaceRef, string, []domain.AuthMethod) (domain.Namespace, error) {
+	panic("unused")
+}
+func (f *fakeStore) DeleteNamespace(context.Context, domain.NamespaceRef) error { panic("unused") }
 func (f *fakeStore) ListNamespaces(context.Context, storage.ListPage) ([]domain.Namespace, string, error) {
 	panic("unused")
 }
-func (f *fakeStore) PutParameter(context.Context, string, string, string, string, string) (uint64, uint64, error) {
+func (f *fakeStore) PutParameter(context.Context, domain.Ref, string, string, string, string) (uint64, uint64, error) {
 	panic("unused")
 }
-func (f *fakeStore) GetParameter(context.Context, string, uint64, string) (domain.Parameter, error) {
+func (f *fakeStore) GetParameter(context.Context, domain.Ref, uint64, string) (domain.Parameter, error) {
 	panic("unused")
 }
-func (f *fakeStore) GetParameterInfo(context.Context, string) (domain.ParameterInfo, error) {
+func (f *fakeStore) GetParameterInfo(context.Context, domain.Ref) (domain.ParameterInfo, error) {
 	panic("unused")
 }
-func (f *fakeStore) ListParameters(context.Context, string, storage.ListPage) ([]domain.Parameter, string, error) {
+func (f *fakeStore) ListParameters(context.Context, domain.NamespaceRef, string, storage.ListPage) ([]domain.Parameter, string, error) {
 	panic("unused")
 }
-func (f *fakeStore) DeleteParameter(context.Context, string) (uint64, error) { panic("unused") }
+func (f *fakeStore) DeleteParameter(context.Context, domain.Ref) (uint64, error) { panic("unused") }
 func (f *fakeStore) CreateSecretVersion(context.Context, storage.CreateSecretParams) (uint64, uint64, error) {
 	panic("unused")
 }
-func (f *fakeStore) GetSecretRecord(context.Context, string) (storage.SecretRecord, error) {
+func (f *fakeStore) GetSecretRecord(context.Context, domain.Ref) (storage.SecretRecord, error) {
 	panic("unused")
 }
-func (f *fakeStore) GetSecretVersion(context.Context, string, uint64, string) (storage.SecretRecord, storage.SecretVersionRecord, error) {
+func (f *fakeStore) GetSecretVersion(context.Context, domain.Ref, uint64, string) (storage.SecretRecord, storage.SecretVersionRecord, error) {
 	panic("unused")
 }
-func (f *fakeStore) GetSecretInfo(context.Context, string) (domain.Secret, error) { panic("unused") }
-func (f *fakeStore) ListSecrets(context.Context, string, storage.ListPage) ([]domain.Secret, string, error) {
+func (f *fakeStore) GetSecretInfo(context.Context, domain.Ref) (domain.Secret, error) {
 	panic("unused")
 }
-func (f *fakeStore) DeleteSecret(context.Context, string) (uint64, error) { panic("unused") }
-func (f *fakeStore) SetSecretVersionState(context.Context, string, uint64, string) (uint64, error) {
+func (f *fakeStore) ListSecrets(context.Context, domain.NamespaceRef, string, storage.ListPage) ([]domain.Secret, string, error) {
 	panic("unused")
 }
-func (f *fakeStore) DestroySecretVersion(context.Context, string, uint64) (uint64, error) {
+func (f *fakeStore) DeleteSecret(context.Context, domain.Ref) (uint64, error) { panic("unused") }
+func (f *fakeStore) SetSecretVersionState(context.Context, domain.Ref, uint64, string) (uint64, error) {
 	panic("unused")
 }
-func (f *fakeStore) PromoteSecretVersion(context.Context, string, uint64) (uint64, uint64, uint64, error) {
+func (f *fakeStore) DestroySecretVersion(context.Context, domain.Ref, uint64) (uint64, error) {
 	panic("unused")
 }
-func (f *fakeStore) UpdateSecretAccessTokenHash(context.Context, string, []byte) error {
+func (f *fakeStore) PromoteSecretVersion(context.Context, domain.Ref, uint64) (uint64, uint64, uint64, error) {
 	panic("unused")
 }
-func (f *fakeStore) CreateIdentity(context.Context, string, string, []byte) (domain.Identity, error) {
+func (f *fakeStore) UpdateSecretAccessTokenHash(context.Context, domain.Ref, []byte) error {
+	panic("unused")
+}
+func (f *fakeStore) CreateIdentity(context.Context, storage.CreateIdentityParams) (domain.Identity, error) {
 	panic("unused")
 }
 func (f *fakeStore) GetIdentityByTokenHash(context.Context, []byte) (domain.Identity, error) {
@@ -195,6 +206,20 @@ func (f *fakeStore) SetIdentityDisabled(context.Context, string, bool) error { p
 func (f *fakeStore) UpdateIdentityTokenHash(context.Context, string, []byte) error {
 	panic("unused")
 }
+func (f *fakeStore) InsertCAKey(context.Context, storage.CAKeyRecord) error { panic("unused") }
+func (f *fakeStore) ActiveCAKey(context.Context) (storage.CAKeyRecord, error) {
+	panic("unused")
+}
+func (f *fakeStore) InsertIdentityCert(context.Context, string, domain.IdentityCert) error {
+	panic("unused")
+}
+func (f *fakeStore) ListIdentityCerts(context.Context, string) ([]domain.IdentityCert, error) {
+	panic("unused")
+}
+func (f *fakeStore) GetIdentityCertBySerial(context.Context, string) (storage.IdentityCertRecord, error) {
+	panic("unused")
+}
+func (f *fakeStore) RevokeIdentityCert(context.Context, string) error { panic("unused") }
 func (f *fakeStore) CreatePolicy(context.Context, domain.Policy) (domain.Policy, error) {
 	panic("unused")
 }
@@ -215,11 +240,21 @@ func (f *fakeStore) ListAudit(context.Context, domain.AuditFilter, storage.ListP
 
 // --- helpers ---
 
-func paramPut(rev uint64, path, value string) domain.ChangeLogEntry {
+// ref and sel build a resource ref and a watch selector in the standard test
+// namespace "prod/app" unless another namespace is given.
+func ref(env, app, key string) domain.Ref {
+	return domain.Ref{NS: domain.NamespaceRef{Env: env, App: app}, Key: key}
+}
+
+func sel(env, app, keyPattern string) domain.WatchSelector {
+	return domain.WatchSelector{NS: domain.NamespaceRef{Env: env, App: app}, KeyPattern: keyPattern}
+}
+
+func paramPut(rev uint64, r domain.Ref, value string) domain.ChangeLogEntry {
 	return domain.ChangeLogEntry{
 		Revision:     rev,
 		ResourceType: domain.ResourceParameter,
-		Path:         path,
+		Ref:          r,
 		ChangeType:   domain.ChangePut,
 		Value:        value,
 		ContentType:  "string",
@@ -228,11 +263,11 @@ func paramPut(rev uint64, path, value string) domain.ChangeLogEntry {
 	}
 }
 
-func secretPut(rev uint64, path string) domain.ChangeLogEntry {
+func secretPut(rev uint64, r domain.Ref) domain.ChangeLogEntry {
 	return domain.ChangeLogEntry{
 		Revision:     rev,
 		ResourceType: domain.ResourceSecret,
-		Path:         path,
+		Ref:          r,
 		ChangeType:   domain.ChangePut,
 		Version:      rev,
 		CreatedAt:    time.Unix(int64(rev), 0).UTC(),
@@ -292,22 +327,22 @@ func collect(t *testing.T, sub *Subscription, n int, timeout time.Duration) []do
 	return out
 }
 
-func allow(rt, path string) bool { return true }
+func allow(string, domain.Ref) bool { return true }
 
 // --- tests ---
 
 func TestSubscribe_SnapshotForFreshSubscriber(t *testing.T) {
 	store := &fakeStore{
 		snapshot: []domain.Parameter{
-			{Path: "/a/x", Value: "1"},
-			{Path: "/b/y", Value: "2"},
+			{Ref: ref("prod", "app", "alpha/x"), Value: "1"},
+			{Ref: ref("prod", "app", "beta/y"), Value: "2"},
 		},
 		snapRev: 7,
 	}
 	h := newTestHub(t, store, Options{})
 	sub, err := h.Subscribe(context.Background(), Registration{
-		Patterns: []string{"/a/*"},
-		Allowed:  allow,
+		Selectors: []domain.WatchSelector{sel("prod", "app", "alpha/*")},
+		Allowed:   allow,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -320,24 +355,48 @@ func TestSubscribe_SnapshotForFreshSubscriber(t *testing.T) {
 	if bl.Revision != 7 {
 		t.Fatalf("snapshot revision = %d, want 7", bl.Revision)
 	}
-	if len(bl.Snapshot) != 1 || bl.Snapshot[0].Path != "/a/x" {
-		t.Fatalf("snapshot = %+v, want only /a/x", bl.Snapshot)
+	if len(bl.Snapshot) != 1 || bl.Snapshot[0].Ref.Key != "alpha/x" {
+		t.Fatalf("snapshot = %+v, want only alpha/x", bl.Snapshot)
+	}
+}
+
+func TestSubscribe_SnapshotFiltersByNamespace(t *testing.T) {
+	// Same key pattern, different namespace: the selector must not match.
+	store := &fakeStore{
+		snapshot: []domain.Parameter{
+			{Ref: ref("prod", "app", "alpha/x"), Value: "1"},
+			{Ref: ref("prod", "other", "alpha/x"), Value: "2"},
+		},
+		snapRev: 4,
+	}
+	h := newTestHub(t, store, Options{})
+	sub, err := h.Subscribe(context.Background(), Registration{
+		Selectors: []domain.WatchSelector{sel("prod", "app", "alpha/*")},
+		Allowed:   allow,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sub.Close()
+	bl := sub.Backlog()
+	if len(bl.Snapshot) != 1 || bl.Snapshot[0].Ref.NS.App != "app" {
+		t.Fatalf("snapshot = %+v, want only prod/app/alpha/x", bl.Snapshot)
 	}
 }
 
 func TestSubscribe_SnapshotFiltersByAuthz(t *testing.T) {
 	store := &fakeStore{
 		snapshot: []domain.Parameter{
-			{Path: "/a/x", Value: "1"},
-			{Path: "/a/secret", Value: "2"},
+			{Ref: ref("prod", "app", "alpha/x"), Value: "1"},
+			{Ref: ref("prod", "app", "alpha/secret"), Value: "2"},
 		},
 		snapRev: 3,
 	}
 	h := newTestHub(t, store, Options{})
 	sub, err := h.Subscribe(context.Background(), Registration{
-		Patterns: []string{"/a/*"},
-		Allowed: func(rt, path string) bool {
-			return path != "/a/secret"
+		Selectors: []domain.WatchSelector{sel("prod", "app", "alpha/*")},
+		Allowed: func(_ string, r domain.Ref) bool {
+			return r.Key != "alpha/secret"
 		},
 	})
 	if err != nil {
@@ -345,21 +404,21 @@ func TestSubscribe_SnapshotFiltersByAuthz(t *testing.T) {
 	}
 	defer sub.Close()
 	bl := sub.Backlog()
-	if len(bl.Snapshot) != 1 || bl.Snapshot[0].Path != "/a/x" {
-		t.Fatalf("snapshot = %+v, want only /a/x (authz filtered)", bl.Snapshot)
+	if len(bl.Snapshot) != 1 || bl.Snapshot[0].Ref.Key != "alpha/x" {
+		t.Fatalf("snapshot = %+v, want only alpha/x (authz filtered)", bl.Snapshot)
 	}
 }
 
 func TestSubscribe_ReplayForRecentSubscriber(t *testing.T) {
 	store := &fakeStore{}
 	store.append(
-		paramPut(1, "/a/x", "1"),
-		paramPut(2, "/a/y", "2"),
-		paramPut(3, "/b/z", "3"),
+		paramPut(1, ref("prod", "app", "alpha/x"), "1"),
+		paramPut(2, ref("prod", "app", "alpha/y"), "2"),
+		paramPut(3, ref("prod", "app", "beta/z"), "3"),
 	)
 	h := newTestHub(t, store, Options{})
 	sub, err := h.Subscribe(context.Background(), Registration{
-		Patterns:         []string{"/a/*"},
+		Selectors:        []domain.WatchSelector{sel("prod", "app", "alpha/*")},
 		LastSeenRevision: 1,
 		Allowed:          allow,
 	})
@@ -374,21 +433,21 @@ func TestSubscribe_ReplayForRecentSubscriber(t *testing.T) {
 	if bl.Revision != 3 {
 		t.Fatalf("replay revision = %d, want 3", bl.Revision)
 	}
-	if len(bl.Replay) != 1 || bl.Replay[0].Path != "/a/y" {
-		t.Fatalf("replay = %+v, want only /a/y (rev>1, matches /a/*)", bl.Replay)
+	if len(bl.Replay) != 1 || bl.Replay[0].Ref.Key != "alpha/y" {
+		t.Fatalf("replay = %+v, want only alpha/y (rev>1, matches alpha/*)", bl.Replay)
 	}
 }
 
 func TestSubscribe_PrunedLogFallsBackToSnapshot(t *testing.T) {
 	store := &fakeStore{
 		oldest:   50, // entries 1..49 pruned
-		snapshot: []domain.Parameter{{Path: "/a/x", Value: "1"}},
+		snapshot: []domain.Parameter{{Ref: ref("prod", "app", "alpha/x"), Value: "1"}},
 		snapRev:  60,
 	}
-	store.append(paramPut(60, "/a/x", "1"))
+	store.append(paramPut(60, ref("prod", "app", "alpha/x"), "1"))
 	h := newTestHub(t, store, Options{})
 	sub, err := h.Subscribe(context.Background(), Registration{
-		Patterns:         []string{"/a/*"},
+		Selectors:        []domain.WatchSelector{sel("prod", "app", "alpha/*")},
 		LastSeenRevision: 10, // older than oldest retained (50)
 		Allowed:          allow,
 	})
@@ -410,17 +469,17 @@ func TestSubscribe_PrunedLogFallsBackToSnapshot(t *testing.T) {
 func TestSubscribe_PruneRacingReplayFallsBackToSnapshot(t *testing.T) {
 	store := &fakeStore{
 		oldest:   11, // canReplay: oldest(11) <= lastSeen+1(11) -> replay permitted
-		snapshot: []domain.Parameter{{Path: "/a/x", Value: "1"}},
+		snapshot: []domain.Parameter{{Ref: ref("prod", "app", "alpha/x"), Value: "1"}},
 		snapRev:  20,
 	}
 	// The retained log starts at 15 (11..14 were pruned after canReplay checked).
 	store.append(
-		paramPut(15, "/a/x", "1"),
-		paramPut(20, "/a/y", "2"),
+		paramPut(15, ref("prod", "app", "alpha/x"), "1"),
+		paramPut(20, ref("prod", "app", "alpha/y"), "2"),
 	)
 	h := newTestHub(t, store, Options{})
 	sub, err := h.Subscribe(context.Background(), Registration{
-		Patterns:         []string{"/a/*"},
+		Selectors:        []domain.WatchSelector{sel("prod", "app", "alpha/*")},
 		LastSeenRevision: 10,
 		Allowed:          allow,
 	})
@@ -436,13 +495,13 @@ func TestSubscribe_PruneRacingReplayFallsBackToSnapshot(t *testing.T) {
 func TestSubscribe_TooManyToReplayFallsBackToSnapshot(t *testing.T) {
 	store := &fakeStore{
 		oldest:   1,
-		snapshot: []domain.Parameter{{Path: "/a/x", Value: "1"}},
+		snapshot: []domain.Parameter{{Ref: ref("prod", "app", "alpha/x"), Value: "1"}},
 		snapRev:  10000,
 	}
-	store.append(paramPut(10000, "/a/x", "1"))
+	store.append(paramPut(10000, ref("prod", "app", "alpha/x"), "1"))
 	h := newTestHub(t, store, Options{SnapshotMaxReplay: 100})
 	sub, err := h.Subscribe(context.Background(), Registration{
-		Patterns:         []string{"/a/*"},
+		Selectors:        []domain.WatchSelector{sel("prod", "app", "alpha/*")},
 		LastSeenRevision: 5, // 10000-5 > 100
 		Allowed:          allow,
 	})
@@ -457,10 +516,13 @@ func TestSubscribe_TooManyToReplayFallsBackToSnapshot(t *testing.T) {
 
 func TestSubscribe_UpToDateSubscriberGetsEmptyReplay(t *testing.T) {
 	store := &fakeStore{}
-	store.append(paramPut(1, "/a/x", "1"), paramPut(2, "/a/y", "2"))
+	store.append(
+		paramPut(1, ref("prod", "app", "alpha/x"), "1"),
+		paramPut(2, ref("prod", "app", "alpha/y"), "2"),
+	)
 	h := newTestHub(t, store, Options{})
 	sub, err := h.Subscribe(context.Background(), Registration{
-		Patterns:         []string{"/a/*"},
+		Selectors:        []domain.WatchSelector{sel("prod", "app", "alpha/*")},
 		LastSeenRevision: 2, // current
 		Allowed:          allow,
 	})
@@ -484,7 +546,7 @@ func TestSubscribe_EmptyLogFreshSubscriberSnapshots(t *testing.T) {
 	store := &fakeStore{} // empty log, oldest = 0
 	h := newTestHub(t, store, Options{})
 	sub, err := h.Subscribe(context.Background(), Registration{
-		Patterns:         []string{"/a/*"},
+		Selectors:        []domain.WatchSelector{sel("prod", "app", "alpha/*")},
 		LastSeenRevision: 5, // claims a revision but log is empty
 		Allowed:          allow,
 	})
@@ -504,15 +566,19 @@ func TestDispatch_DeliversInRevisionOrder(t *testing.T) {
 	defer stop()
 
 	sub, err := h.Subscribe(context.Background(), Registration{
-		Patterns: []string{"/a/*"},
-		Allowed:  allow,
+		Selectors: []domain.WatchSelector{sel("prod", "app", "alpha/*")},
+		Allowed:   allow,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer sub.Close()
 
-	store.append(paramPut(1, "/a/x", "1"), paramPut(2, "/a/y", "2"), paramPut(3, "/a/z", "3"))
+	store.append(
+		paramPut(1, ref("prod", "app", "alpha/x"), "1"),
+		paramPut(2, ref("prod", "app", "alpha/y"), "2"),
+		paramPut(3, ref("prod", "app", "alpha/z"), "3"),
+	)
 	h.Wake()
 
 	got := collect(t, sub, 3, time.Second)
@@ -523,16 +589,16 @@ func TestDispatch_DeliversInRevisionOrder(t *testing.T) {
 	}
 }
 
-func TestDispatch_FiltersByPatternAndAuthz(t *testing.T) {
+func TestDispatch_FiltersBySelectorAndAuthz(t *testing.T) {
 	store := &fakeStore{}
 	h := newTestHub(t, store, Options{})
 	stop := runHub(t, h)
 	defer stop()
 
 	sub, err := h.Subscribe(context.Background(), Registration{
-		Patterns: []string{"/a/*"},
-		Allowed: func(rt, path string) bool {
-			return path != "/a/denied"
+		Selectors: []domain.WatchSelector{sel("prod", "app", "alpha/*")},
+		Allowed: func(_ string, r domain.Ref) bool {
+			return r.Key != "alpha/denied"
 		},
 	})
 	if err != nil {
@@ -541,15 +607,16 @@ func TestDispatch_FiltersByPatternAndAuthz(t *testing.T) {
 	defer sub.Close()
 
 	store.append(
-		paramPut(1, "/b/x", "1"),      // pattern miss
-		paramPut(2, "/a/denied", "2"), // authz miss
-		paramPut(3, "/a/ok", "3"),     // delivered
+		paramPut(1, ref("prod", "app", "beta/x"), "1"),     // key pattern miss
+		paramPut(2, ref("prod", "other", "alpha/x"), "2"),  // namespace miss
+		paramPut(3, ref("prod", "app", "alpha/denied"), ""), // authz miss
+		paramPut(4, ref("prod", "app", "alpha/ok"), "4"),   // delivered
 	)
 	h.Wake()
 
 	got := collect(t, sub, 1, time.Second)
-	if got[0].Path != "/a/ok" || got[0].Revision != 3 {
-		t.Fatalf("delivered %+v, want /a/ok rev 3", got[0])
+	if got[0].Ref.Key != "alpha/ok" || got[0].Revision != 4 {
+		t.Fatalf("delivered %+v, want alpha/ok rev 4", got[0])
 	}
 }
 
@@ -560,15 +627,15 @@ func TestDispatch_SecretEventsDelivered(t *testing.T) {
 	defer stop()
 
 	sub, err := h.Subscribe(context.Background(), Registration{
-		Patterns: []string{"/s/*"},
-		Allowed:  allow,
+		Selectors: []domain.WatchSelector{sel("prod", "svc", "*")},
+		Allowed:   allow,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer sub.Close()
 
-	store.append(secretPut(1, "/s/db"))
+	store.append(secretPut(1, ref("prod", "svc", "db")))
 	h.Wake()
 
 	got := collect(t, sub, 1, time.Second)
@@ -601,13 +668,16 @@ func TestDispatch_NoDuplicateAcrossBacklogBoundary(t *testing.T) {
 	// Subscriber replays up to current, then live events must not repeat any
 	// revision already in the backlog.
 	store := &fakeStore{}
-	store.append(paramPut(1, "/a/x", "1"), paramPut(2, "/a/y", "2"))
+	store.append(
+		paramPut(1, ref("prod", "app", "alpha/x"), "1"),
+		paramPut(2, ref("prod", "app", "alpha/y"), "2"),
+	)
 	h := newTestHub(t, store, Options{})
 	stop := runHub(t, h)
 	defer stop()
 
 	sub, err := h.Subscribe(context.Background(), Registration{
-		Patterns:         []string{"/a/*"},
+		Selectors:        []domain.WatchSelector{sel("prod", "app", "alpha/*")},
 		LastSeenRevision: 0,
 		Allowed:          allow,
 	})
@@ -621,7 +691,7 @@ func TestDispatch_NoDuplicateAcrossBacklogBoundary(t *testing.T) {
 	if bl.Revision != 2 {
 		t.Fatalf("backlog revision = %d, want 2", bl.Revision)
 	}
-	store.append(paramPut(3, "/a/z", "3"))
+	store.append(paramPut(3, ref("prod", "app", "alpha/z"), "3"))
 	h.Wake()
 
 	got := collect(t, sub, 1, time.Second)
@@ -637,8 +707,8 @@ func TestSlowSubscriberDropped(t *testing.T) {
 	defer stop()
 
 	sub, err := h.Subscribe(context.Background(), Registration{
-		Patterns: []string{"/a/*"},
-		Allowed:  allow,
+		Selectors: []domain.WatchSelector{sel("prod", "app", "alpha/*")},
+		Allowed:   allow,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -647,7 +717,7 @@ func TestSlowSubscriberDropped(t *testing.T) {
 	// Push more events than the buffer holds without consuming any.
 	var entries []domain.ChangeLogEntry
 	for i := uint64(1); i <= 20; i++ {
-		entries = append(entries, paramPut(i, "/a/x", "v"))
+		entries = append(entries, paramPut(i, ref("prod", "app", "alpha/x"), "v"))
 	}
 	store.append(entries...)
 	h.Wake()
@@ -674,8 +744,8 @@ func TestLivenessExpiry(t *testing.T) {
 	defer stop()
 
 	sub, err := h.Subscribe(context.Background(), Registration{
-		Patterns: []string{"/a/*"},
-		Allowed:  allow,
+		Selectors: []domain.WatchSelector{sel("prod", "app", "alpha/*")},
+		Allowed:   allow,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -704,8 +774,8 @@ func TestLiveness_AckKeepsAlive(t *testing.T) {
 	defer stop()
 
 	sub, err := h.Subscribe(context.Background(), Registration{
-		Patterns: []string{"/a/*"},
-		Allowed:  allow,
+		Selectors: []domain.WatchSelector{sel("prod", "app", "alpha/*")},
+		Allowed:   allow,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -740,12 +810,13 @@ func TestPruneLoop(t *testing.T) {
 func TestSubscribersRegistry(t *testing.T) {
 	store := &fakeStore{}
 	h := newTestHub(t, store, Options{})
+	selector := sel("prod", "app", "alpha/*")
 	sub, err := h.Subscribe(context.Background(), Registration{
 		ClientName: "app",
 		InstanceID: "app-abcd",
 		Identity:   "id-1",
 		RemoteAddr: "1.2.3.4:5",
-		Patterns:   []string{"/a/*"},
+		Selectors:  []domain.WatchSelector{selector},
 		Allowed:    allow,
 	})
 	if err != nil {
@@ -759,12 +830,12 @@ func TestSubscribersRegistry(t *testing.T) {
 	if got.ClientName != "app" || got.InstanceID != "app-abcd" || got.Identity != "id-1" {
 		t.Fatalf("registry record = %+v", got)
 	}
-	if len(got.Paths) != 1 || got.Paths[0] != "/a/*" {
-		t.Fatalf("paths = %+v", got.Paths)
+	if len(got.Selectors) != 1 || got.Selectors[0] != selector {
+		t.Fatalf("selectors = %+v", got.Selectors)
 	}
 	// Mutating the returned copy must not affect the registry.
-	got.Paths[0] = "/mutated"
-	if h.Subscribers()[0].Paths[0] != "/a/*" {
+	got.Selectors[0] = sel("prod", "app", "mutated")
+	if h.Subscribers()[0].Selectors[0] != selector {
 		t.Fatal("Subscribers() returned an aliased slice")
 	}
 	sub.Ack(42)
@@ -781,8 +852,8 @@ func TestSubscribe_BacklogStoreError(t *testing.T) {
 	store := &fakeStore{currentRevErr: errors.New("db down")}
 	h := newTestHub(t, store, Options{})
 	_, err := h.Subscribe(context.Background(), Registration{
-		Patterns: []string{"/a/*"},
-		Allowed:  allow,
+		Selectors: []domain.WatchSelector{sel("prod", "app", "alpha/*")},
+		Allowed:   allow,
 	})
 	if err == nil {
 		t.Fatal("expected error when backlog computation fails")
@@ -817,8 +888,8 @@ func TestUpdateAllowedSwapsPredicate(t *testing.T) {
 	defer stop()
 
 	sub, err := h.Subscribe(context.Background(), Registration{
-		Patterns: []string{"/a/*"},
-		Allowed:  allow,
+		Selectors: []domain.WatchSelector{sel("prod", "app", "alpha/*")},
+		Allowed:   allow,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -826,7 +897,7 @@ func TestUpdateAllowedSwapsPredicate(t *testing.T) {
 	defer sub.Close()
 
 	// Initially authorized: the first event is delivered.
-	store.append(paramPut(1, "/a/x", "1"))
+	store.append(paramPut(1, ref("prod", "app", "alpha/x"), "1"))
 	h.Wake()
 	got := collect(t, sub, 1, time.Second)
 	if got[0].Revision != 1 {
@@ -834,8 +905,8 @@ func TestUpdateAllowedSwapsPredicate(t *testing.T) {
 	}
 
 	// Revoke authorization; subsequent events must be filtered out.
-	sub.UpdateAllowed(func(string, string) bool { return false })
-	store.append(paramPut(2, "/a/y", "2"))
+	sub.UpdateAllowed(func(string, domain.Ref) bool { return false })
+	store.append(paramPut(2, ref("prod", "app", "alpha/y"), "2"))
 	h.Wake()
 	select {
 	case e := <-sub.Events():
@@ -845,7 +916,7 @@ func TestUpdateAllowedSwapsPredicate(t *testing.T) {
 
 	// Restore authorization; delivery resumes.
 	sub.UpdateAllowed(allow)
-	store.append(paramPut(3, "/a/z", "3"))
+	store.append(paramPut(3, ref("prod", "app", "alpha/z"), "3"))
 	h.Wake()
 	got = collect(t, sub, 1, time.Second)
 	if got[0].Revision != 3 {
@@ -865,11 +936,14 @@ func TestNoGoroutineLeak(t *testing.T) {
 
 	// Churn subscribers: subscribe, deliver, then drop them.
 	for i := 0; i < 25; i++ {
-		sub, err := h.Subscribe(context.Background(), Registration{Patterns: []string{"/a/*"}, Allowed: allow})
+		sub, err := h.Subscribe(context.Background(), Registration{
+			Selectors: []domain.WatchSelector{sel("prod", "app", "alpha/*")},
+			Allowed:   allow,
+		})
 		if err != nil {
 			t.Fatal(err)
 		}
-		store.append(paramPut(uint64(i+1), "/a/x", "v"))
+		store.append(paramPut(uint64(i+1), ref("prod", "app", "alpha/x"), "v"))
 		h.Wake()
 		sub.Close()
 	}
@@ -891,14 +965,14 @@ func TestNilAllowedDeniesEverything(t *testing.T) {
 	stop := runHub(t, h)
 	defer stop()
 	sub, err := h.Subscribe(context.Background(), Registration{
-		Patterns: []string{"/a/*"},
-		Allowed:  nil, // must be treated as deny-all
+		Selectors: []domain.WatchSelector{sel("prod", "app", "alpha/*")},
+		Allowed:   nil, // must be treated as deny-all
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer sub.Close()
-	store.append(paramPut(1, "/a/x", "1"))
+	store.append(paramPut(1, ref("prod", "app", "alpha/x"), "1"))
 	h.Wake()
 	select {
 	case e := <-sub.Events():

@@ -17,7 +17,9 @@ func (s *SQLStore) AppendAudit(ctx context.Context, ev domain.AuditEvent) error 
 		ActorIdentity:   ev.ActorIdentity,
 		ActorType:       ev.ActorType,
 		ResourceType:    ev.ResourceType,
-		ResourcePath:    ev.ResourcePath,
+		ResourceEnv:     ev.ResourceEnv,
+		ResourceApp:     ev.ResourceApp,
+		ResourceKey:     ev.ResourceKey,
 		ResourceVersion: int64(ev.ResourceVersion),
 		Decision:        ev.Decision,
 		SourceIP:        ev.SourceIP,
@@ -40,7 +42,13 @@ func (s *SQLStore) ListAudit(ctx context.Context, f domain.AuditFilter, page Lis
 		}
 		q = q.Where("id < ?", id)
 	}
-	q = applyPrefix(q, "resource_path", f.PathPrefix)
+	if f.Env != "" {
+		q = q.Where("resource_env = ?", f.Env)
+	}
+	if f.App != "" {
+		q = q.Where("resource_app = ?", f.App)
+	}
+	q = applyKeyPrefix(q, "resource_key", f.KeyPrefix)
 	if f.ActorIdentity != "" {
 		q = q.Where("actor_identity = ?", f.ActorIdentity)
 	}

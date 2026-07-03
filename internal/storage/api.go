@@ -6,6 +6,11 @@
 // it stores ciphertext, wrapped DEKs, and token hashes only. All multi-step
 // operations documented as atomic must run in a single SQLite transaction.
 //
+// Resources are addressed by domain.Ref (namespace + relative key), never by a
+// parsed path string. A parameter or secret lives inside a namespace, which
+// must already exist (the namespace_id foreign key requires it); operations
+// against a missing namespace return domain.ErrNotFound naming it.
+//
 // Times are persisted as RFC3339Nano UTC strings. Page tokens are opaque
 // strings produced and consumed only by this package ("" = first page).
 package storage
@@ -20,7 +25,7 @@ import (
 // SecretRecord is the secret-level row.
 type SecretRecord struct {
 	ID              int64
-	Path            string
+	Ref             domain.Ref
 	ClientBound     bool
 	AccessTokenHash []byte // nil when no per-secret token is set
 	ContentType     string
@@ -54,7 +59,8 @@ type SecretVersionRecord struct {
 }
 
 // EncryptedPayload is what the service layer produces for a new secret
-// version. The storage layer persists it verbatim.
+// version. The storage layer persists it verbatim. AAD is produced in the
+// service layer (it binds env/app/key/version) and stored opaque here.
 type EncryptedPayload struct {
 	Ciphertext    []byte
 	EncryptedDEK  []byte
@@ -72,7 +78,7 @@ type EncryptedPayload struct {
 // version number the new version will receive (the AAD binds it). It must be
 // pure computation — no I/O, no calls back into storage.
 type CreateSecretParams struct {
-	Path        string
+	Ref         domain.Ref
 	ContentType string
 	Metadata    string
 	CreatedBy   string
@@ -83,6 +89,37 @@ type CreateSecretParams struct {
 	AccessTokenHash []byte
 	ExpiresAt       time.Time // zero = never
 	Encrypt         func(version uint64) (EncryptedPayload, error)
+}
+
+// CreateIdentityParams describes a new identity. TokenHash may be nil for a
+// cert-only identity; Namespace may be nil for an unbound admin/tooling
+// identity. A non-nil Namespace must already exist.
+type CreateIdentityParams struct {
+	Name      string
+	Kind      string // domain.IdentityKindClient | domain.IdentityKindAdmin
+	TokenHash []byte
+	Namespace *domain.NamespaceRef
+}
+
+// CAKeyRecord is one built-in CA key. Private key material is envelope-encrypted
+// under a KEK; the storage layer never sees plaintext. CertPEM is public.
+type CAKeyRecord struct {
+	ID           string
+	CertPEM      string
+	EncryptedKey []byte
+	EncryptedDEK []byte
+	KEKID        string
+	State        string // domain.KeyStateActive | domain.KeyStateRetired
+	CreatedAt    time.Time
+}
+
+// IdentityCertRecord is an issued certificate joined to its owning identity —
+// everything the auth interceptor needs to accept or reject a presented client
+// certificate (revocation, expiry, and identity-disabled are all checked here).
+type IdentityCertRecord struct {
+	Cert             domain.IdentityCert
+	IdentityName     string
+	IdentityDisabled bool
 }
 
 // ListPage bundles pagination inputs.
@@ -113,35 +150,47 @@ type Store interface {
 	SetKeyState(ctx context.Context, id, state string) error
 
 	// RotateKEK atomically (single transaction): inserts newKM with state
-	// "active", marks every other key "retired", and rewraps every
-	// non-destroyed secret version by storing rewrap's returned encrypted DEK
-	// with kek_id = newKM.ID. rewrap must be pure computation (no I/O, no
-	// storage calls). Returns the number of versions rewrapped. On any error
-	// the database is unchanged.
+	// "active", marks every other key "retired", rewraps every non-destroyed
+	// secret version via rewrapSecret, and rewraps every CA key (active and
+	// retired) via rewrapCA, storing each returned encrypted DEK with kek_id =
+	// newKM.ID. Both callbacks must be pure computation (no I/O, no storage
+	// calls). Returns the number of secret versions and CA keys rewrapped. On
+	// any error the database is unchanged.
 	RotateKEK(ctx context.Context, newKM domain.KeyMetadata,
-		rewrap func(rec SecretVersionRecord) (newEncryptedDEK []byte, err error)) (int, error)
+		rewrapSecret func(rec SecretVersionRecord) (newEncryptedDEK []byte, err error),
+		rewrapCA func(rec CAKeyRecord) (newEncryptedDEK []byte, err error)) (secretsRewrapped, caRewrapped int, err error)
 
 	// --- namespaces ------------------------------------------------------
 
 	CreateNamespace(ctx context.Context, ns domain.Namespace) (domain.Namespace, error)
+	GetNamespace(ctx context.Context, ref domain.NamespaceRef) (domain.Namespace, error)
+	// UpdateNamespace replaces the description and the allowed auth-method set
+	// (full replace). domain.ErrNotFound when the namespace is absent.
+	UpdateNamespace(ctx context.Context, ref domain.NamespaceRef, description string, methods []domain.AuthMethod) (domain.Namespace, error)
+	// DeleteNamespace removes an empty namespace. Verified in the same
+	// transaction: any remaining parameter, secret, or bound identity yields
+	// domain.ErrFailedPrecondition.
+	DeleteNamespace(ctx context.Context, ref domain.NamespaceRef) error
+	// ListNamespaces returns namespaces ordered by (env, app), each carrying its
+	// parameter and secret counts.
 	ListNamespaces(ctx context.Context, page ListPage) ([]domain.Namespace, string, error)
 
 	// --- parameters ------------------------------------------------------
 
-	// PutParameter atomically upserts the parameter, appends an immutable
-	// version, moves labels (current -> new, previous -> old current), and
-	// appends a change-log entry. Returns the new version and revision.
-	PutParameter(ctx context.Context, path, value, contentType, metadata, createdBy string) (version, revision uint64, err error)
+	// PutParameter atomically upserts the parameter in its namespace, appends an
+	// immutable version, moves labels (current -> new, previous -> old current),
+	// and appends a change-log entry. Returns the new version and revision.
+	PutParameter(ctx context.Context, ref domain.Ref, value, contentType, metadata, createdBy string) (version, revision uint64, err error)
 
 	// GetParameter resolves version (>0) or label (default "current").
-	GetParameter(ctx context.Context, path string, version uint64, label string) (domain.Parameter, error)
-	GetParameterInfo(ctx context.Context, path string) (domain.ParameterInfo, error)
-	// ListParameters returns each matching parameter at its "current" label,
-	// ordered by path.
-	ListParameters(ctx context.Context, prefix string, page ListPage) ([]domain.Parameter, string, error)
+	GetParameter(ctx context.Context, ref domain.Ref, version uint64, label string) (domain.Parameter, error)
+	GetParameterInfo(ctx context.Context, ref domain.Ref) (domain.ParameterInfo, error)
+	// ListParameters returns each parameter in ns matching keyPrefix at its
+	// "current" label, ordered by key.
+	ListParameters(ctx context.Context, ns domain.NamespaceRef, keyPrefix string, page ListPage) ([]domain.Parameter, string, error)
 	// DeleteParameter removes the parameter and all versions, and appends a
 	// change-log entry. Returns the revision.
-	DeleteParameter(ctx context.Context, path string) (uint64, error)
+	DeleteParameter(ctx context.Context, ref domain.Ref) (uint64, error)
 
 	// --- secrets ---------------------------------------------------------
 
@@ -152,39 +201,65 @@ type Store interface {
 	// an existing secret's mode.
 	CreateSecretVersion(ctx context.Context, p CreateSecretParams) (version, revision uint64, err error)
 
-	GetSecretRecord(ctx context.Context, path string) (SecretRecord, error)
+	GetSecretRecord(ctx context.Context, ref domain.Ref) (SecretRecord, error)
 	// GetSecretVersion resolves version (>0) or label (default "current") and
 	// returns both the secret row and the version row.
-	GetSecretVersion(ctx context.Context, path string, version uint64, label string) (SecretRecord, SecretVersionRecord, error)
-	GetSecretInfo(ctx context.Context, path string) (domain.Secret, error)
-	ListSecrets(ctx context.Context, prefix string, page ListPage) ([]domain.Secret, string, error)
-	DeleteSecret(ctx context.Context, path string) (uint64, error)
+	GetSecretVersion(ctx context.Context, ref domain.Ref, version uint64, label string) (SecretRecord, SecretVersionRecord, error)
+	GetSecretInfo(ctx context.Context, ref domain.Ref) (domain.Secret, error)
+	ListSecrets(ctx context.Context, ns domain.NamespaceRef, keyPrefix string, page ListPage) ([]domain.Secret, string, error)
+	DeleteSecret(ctx context.Context, ref domain.Ref) (uint64, error)
 
 	// SetSecretVersionState enables/disables version (0 = all non-destroyed
 	// versions). Destroyed versions are never resurrected. Appends a
 	// change-log entry (disable/enable). Returns the revision.
-	SetSecretVersionState(ctx context.Context, path string, version uint64, state string) (uint64, error)
+	SetSecretVersionState(ctx context.Context, ref domain.Ref, version uint64, state string) (uint64, error)
 
 	// DestroySecretVersion irreversibly nulls ciphertext, encrypted DEK, and
 	// nonce, sets state destroyed + destroyed_at, appends a change-log entry.
-	DestroySecretVersion(ctx context.Context, path string, version uint64) (uint64, error)
+	DestroySecretVersion(ctx context.Context, ref domain.Ref, version uint64) (uint64, error)
 
 	// PromoteSecretVersion atomically points "current" at version and
 	// "previous" at the old current (if different). The target version must
 	// exist and be enabled. Appends a change-log entry (promote).
-	PromoteSecretVersion(ctx context.Context, path string, version uint64) (current, previous, revision uint64, err error)
+	PromoteSecretVersion(ctx context.Context, ref domain.Ref, version uint64) (current, previous, revision uint64, err error)
 
 	// UpdateSecretAccessTokenHash replaces the per-secret token hash.
-	UpdateSecretAccessTokenHash(ctx context.Context, path string, hash []byte) error
+	UpdateSecretAccessTokenHash(ctx context.Context, ref domain.Ref, hash []byte) error
 
 	// --- identities ------------------------------------------------------
 
-	CreateIdentity(ctx context.Context, name, kind string, tokenHash []byte) (domain.Identity, error)
+	CreateIdentity(ctx context.Context, params CreateIdentityParams) (domain.Identity, error)
+	// GetIdentityByTokenHash returns the identity whose token hash matches. It
+	// only matches identities that carry a token hash (cert-only identities are
+	// never returned); certs are omitted (hot auth path).
 	GetIdentityByTokenHash(ctx context.Context, tokenHash []byte) (domain.Identity, error)
+	// GetIdentityByName returns the identity including its issued certificate
+	// summaries and namespace binding (admin-facing view).
 	GetIdentityByName(ctx context.Context, name string) (domain.Identity, error)
 	ListIdentities(ctx context.Context, page ListPage) ([]domain.Identity, string, error)
 	SetIdentityDisabled(ctx context.Context, name string, disabled bool) error
+	// UpdateIdentityTokenHash replaces an identity's token hash (nil clears it).
 	UpdateIdentityTokenHash(ctx context.Context, name string, tokenHash []byte) error
+
+	// --- built-in CA / client certificates -------------------------------
+
+	// InsertCAKey stores a CA key as active and retires every other CA key in
+	// the same transaction (retire-on-rotate).
+	InsertCAKey(ctx context.Context, ca CAKeyRecord) error
+	// ActiveCAKey returns the single active CA key; domain.ErrNotFound before
+	// the CA has been generated.
+	ActiveCAKey(ctx context.Context) (CAKeyRecord, error)
+
+	// InsertIdentityCert records a certificate issued to identityName (which
+	// must exist).
+	InsertIdentityCert(ctx context.Context, identityName string, cert domain.IdentityCert) error
+	// ListIdentityCerts returns every certificate issued to identityName.
+	ListIdentityCerts(ctx context.Context, identityName string) ([]domain.IdentityCert, error)
+	// GetIdentityCertBySerial returns the certificate joined to its owning
+	// identity's name and disabled flag. domain.ErrNotFound for unknown serials.
+	GetIdentityCertBySerial(ctx context.Context, serial string) (IdentityCertRecord, error)
+	// RevokeIdentityCert marks a certificate revoked (idempotent).
+	RevokeIdentityCert(ctx context.Context, serial string) error
 
 	// --- policies --------------------------------------------------------
 
@@ -217,6 +292,6 @@ type Store interface {
 	PruneChangeLog(ctx context.Context, keepDuration time.Duration, maxRows int) (int, error)
 	// SnapshotParameters returns, in one consistent read transaction, the
 	// current revision and the "current" value of every parameter matching
-	// any of the given patterns (see pathutil.Match).
-	SnapshotParameters(ctx context.Context, patterns []string) ([]domain.Parameter, uint64, error)
+	// any of the given selectors (see keyutil.MatchKey).
+	SnapshotParameters(ctx context.Context, selectors []domain.WatchSelector) ([]domain.Parameter, uint64, error)
 }

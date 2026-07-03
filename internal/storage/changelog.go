@@ -97,35 +97,69 @@ func (s *SQLStore) PruneChangeLog(ctx context.Context, keepDuration time.Duratio
 	return int(deleted), nil
 }
 
-// snapshotPatternClause translates the given patterns (pathutil.Match syntax:
-// exact path or a trailing "/*") into a SQL condition. It returns matchAll when
-// any pattern matches everything and matchNone when there are no patterns.
-func snapshotPatternClause(patterns []string) (clause string, args []any, matchAll, matchNone bool) {
-	if len(patterns) == 0 {
-		return "", nil, false, true
+// snapshotSelectorClause resolves the namespaces referenced by the selectors
+// and builds a parameters-table WHERE condition (over p.namespace_id and
+// p.name). Selectors naming a namespace that does not exist contribute nothing.
+// matchNone is true when no selector resolves to any rows, so the caller can
+// skip the join entirely while still returning the current revision.
+func snapshotSelectorClause(tx *gorm.DB, selectors []domain.WatchSelector) (clause string, args []any, matchNone bool, err error) {
+	if len(selectors) == 0 {
+		return "", nil, true, nil
 	}
+	// Resolve the distinct namespaces referenced, in one query.
+	nsIDs := map[domain.NamespaceRef]int64{}
+	var where []string
+	var whereArgs []any
+	seen := map[domain.NamespaceRef]bool{}
+	for _, sel := range selectors {
+		if seen[sel.NS] {
+			continue
+		}
+		seen[sel.NS] = true
+		where = append(where, "(env = ? AND app = ?)")
+		whereArgs = append(whereArgs, sel.NS.Env, sel.NS.App)
+	}
+	var nsRows []namespaceModel
+	if err := tx.Select("id", "env", "app").Where(strings.Join(where, " OR "), whereArgs...).Find(&nsRows).Error; err != nil {
+		return "", nil, false, err
+	}
+	for _, m := range nsRows {
+		nsIDs[domain.NamespaceRef{Env: m.Env, App: m.App}] = m.ID
+	}
+
 	var clauses []string
-	for _, pat := range patterns {
-		if pat == "/*" {
-			return "", nil, true, false
+	for _, sel := range selectors {
+		id, ok := nsIDs[sel.NS]
+		if !ok {
+			continue // namespace does not exist
 		}
-		if base, ok := strings.CutSuffix(pat, "/*"); ok {
-			clauses = append(clauses, `(path = ? OR path LIKE ? ESCAPE '\')`)
-			args = append(args, base, likeEscape(base)+"/%")
-		} else {
-			clauses = append(clauses, "path = ?")
-			args = append(args, pat)
+		switch {
+		case sel.KeyPattern == "" || sel.KeyPattern == "*":
+			clauses = append(clauses, "(p.namespace_id = ?)")
+			args = append(args, id)
+		case strings.HasSuffix(sel.KeyPattern, "/*"):
+			base := strings.TrimSuffix(sel.KeyPattern, "/*")
+			clauses = append(clauses, `(p.namespace_id = ? AND (p.name = ? OR p.name LIKE ? ESCAPE '\'))`)
+			args = append(args, id, base, likeEscape(base)+"/%")
+		default:
+			clauses = append(clauses, "(p.namespace_id = ? AND p.name = ?)")
+			args = append(args, id, sel.KeyPattern)
 		}
 	}
-	return strings.Join(clauses, " OR "), args, false, false
+	if len(clauses) == 0 {
+		return "", nil, true, nil
+	}
+	return strings.Join(clauses, " OR "), args, false, nil
 }
 
 // snapshotRow is the flattened result of the set-based snapshot join: one row
 // per matching parameter resolved at its "current" label, joined to that
-// label's version.
+// label's version and its namespace.
 type snapshotRow struct {
 	ID          int64
-	Path        string
+	Env         string
+	App         string
+	Key         string
 	Value       string
 	ContentType string
 	Version     int64
@@ -135,7 +169,8 @@ type snapshotRow struct {
 }
 
 // SnapshotParameters returns, in one consistent read transaction, the current
-// revision and the "current" value of every parameter matching any pattern.
+// revision and the "current" value of every parameter matching any selector
+// (see keyutil.MatchKey). Each selector is scoped to one namespace.
 //
 // The DSN sets _txlock=immediate, so this transaction acquires SQLite's global
 // write lock the instant it begins (BEGIN IMMEDIATE) and holds it until commit.
@@ -143,10 +178,8 @@ type snapshotRow struct {
 // snapshots fire at once and would serialize against each other and every
 // writer. To keep the lock held for as short a time as possible, the body does
 // a fixed, small number of SET-BASED queries (revision + one join + one label
-// fetch) rather than the previous N+1 loop over each matching parameter.
-func (s *SQLStore) SnapshotParameters(ctx context.Context, patterns []string) ([]domain.Parameter, uint64, error) {
-	clause, args, matchAll, matchNone := snapshotPatternClause(patterns)
-
+// fetch) rather than an N+1 loop over each matching parameter.
+func (s *SQLStore) SnapshotParameters(ctx context.Context, selectors []domain.WatchSelector) ([]domain.Parameter, uint64, error) {
 	var out []domain.Parameter
 	var revision uint64
 	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
@@ -155,27 +188,31 @@ func (s *SQLStore) SnapshotParameters(ctx context.Context, patterns []string) ([
 			return err
 		}
 		revision = rev
+
+		clause, args, matchNone, err := snapshotSelectorClause(tx, selectors)
+		if err != nil {
+			return err
+		}
 		if matchNone {
 			return nil
 		}
 
 		// One join resolves every matching parameter at its "current" label and
-		// pulls the version row in a single statement. The inner joins reproduce
-		// the per-parameter contract exactly: a parameter is dropped when it has
-		// no "current" label, or no version row for that label. Ordering by path
-		// preserves the previous by-path result order.
+		// pulls the version row and namespace in a single statement. The inner
+		// joins reproduce the per-parameter contract exactly: a parameter is
+		// dropped when it has no "current" label, or no version row for that
+		// label. Ordering by (env, app, name) gives a stable display order.
 		q := tx.Table("parameters AS p").
-			Select("p.id AS id, p.path AS path, pv.value AS value, "+
-				"pv.content_type AS content_type, pv.version_number AS version, "+
-				"pv.metadata_json AS metadata, pv.created_by AS created_by, "+
-				"pv.created_at AS created_at").
+			Select("p.id AS id, n.env AS env, n.app AS app, p.name AS key, "+
+				"pv.value AS value, pv.content_type AS content_type, "+
+				"pv.version_number AS version, pv.metadata_json AS metadata, "+
+				"pv.created_by AS created_by, pv.created_at AS created_at").
+			Joins("JOIN namespaces n ON n.id = p.namespace_id").
 			Joins("JOIN parameter_labels pl ON pl.parameter_id = p.id AND pl.label = ?", domain.LabelCurrent).
-			Joins("JOIN parameter_versions pv ON pv.parameter_id = p.id AND pv.version_number = pl.version_number")
-		if !matchAll {
-			q = q.Where(clause, args...)
-		}
+			Joins("JOIN parameter_versions pv ON pv.parameter_id = p.id AND pv.version_number = pl.version_number").
+			Where(clause, args...)
 		var rows []snapshotRow
-		if err := q.Order("p.path ASC").Scan(&rows).Error; err != nil {
+		if err := q.Order("n.env ASC, n.app ASC, p.name ASC").Scan(&rows).Error; err != nil {
 			return err
 		}
 		if len(rows) == 0 {
@@ -205,7 +242,7 @@ func (s *SQLStore) SnapshotParameters(ctx context.Context, patterns []string) ([
 		out = make([]domain.Parameter, 0, len(rows))
 		for _, r := range rows {
 			out = append(out, domain.Parameter{
-				Path:        r.Path,
+				Ref:         domain.Ref{NS: domain.NamespaceRef{Env: r.Env, App: r.App}, Key: r.Key},
 				Value:       r.Value,
 				ContentType: r.ContentType,
 				Version:     uint64(r.Version),

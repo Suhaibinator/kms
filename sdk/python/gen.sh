@@ -30,7 +30,8 @@ cp "$tmp/kms/v1/kms_pb2.pyi"     "$out_pkg/kms_pb2.pyi"
 cp "$tmp/kms/v1/kms_pb2_grpc.py" "$out_pkg/kms_pb2_grpc.py"
 
 # Make the grpc stub import the message module from the vendored location.
-sed -i 's/^from kms\.v1 import kms_pb2 as/from kms_paramstore._gen import kms_pb2 as/' \
+# perl -i is portable across GNU and BSD/macOS (unlike `sed -i`).
+perl -i -pe 's/^from kms\.v1 import kms_pb2 as/from kms_paramstore._gen import kms_pb2 as/' \
   "$out_pkg/kms_pb2_grpc.py"
 
 echo "Regenerated stubs in $out_pkg"

@@ -17,7 +17,6 @@ import (
 	"time"
 
 	"github.com/Suhaibinator/kms/internal/domain"
-	"github.com/Suhaibinator/kms/internal/pathutil"
 	"github.com/Suhaibinator/kms/internal/storage"
 )
 
@@ -234,10 +233,10 @@ func (h *Hub) dispatch(e domain.ChangeLogEntry) {
 	h.mu.Unlock()
 
 	for _, s := range subs {
-		if !s.matches(e.Path) {
+		if !s.matches(e.Ref) {
 			continue
 		}
-		if !s.allow(e.ResourceType, e.Path) {
+		if !s.allow(e.ResourceType, e.Ref) {
 			continue
 		}
 		if !s.offer(e) {
@@ -292,7 +291,7 @@ func (h *Hub) Subscribe(ctx context.Context, reg Registration) (*Subscription, e
 	if reg.Allowed == nil {
 		// Fail closed: a subscriber with no predicate sees nothing anyway;
 		// treat it as an empty allow so dispatch simply never matches.
-		reg.Allowed = func(string, string) bool { return false }
+		reg.Allowed = func(string, domain.Ref) bool { return false }
 	}
 	now := h.now()
 	sub := &Subscription{
@@ -350,13 +349,13 @@ func (h *Hub) computeBacklog(ctx context.Context, reg Registration) (Backlog, er
 		// rather than silently skipping the pruned changes.
 	}
 
-	params, snapRev, err := h.store.SnapshotParameters(ctx, reg.Patterns)
+	params, snapRev, err := h.store.SnapshotParameters(ctx, reg.Selectors)
 	if err != nil {
 		return Backlog{}, err
 	}
 	filtered := params[:0]
 	for _, p := range params {
-		if reg.Allowed(domain.ResourceParameter, p.Path) {
+		if reg.Allowed(domain.ResourceParameter, p.Ref) {
 			filtered = append(filtered, p)
 		}
 	}
@@ -415,10 +414,10 @@ func (h *Hub) replayEntries(ctx context.Context, reg Registration, current uint6
 				// stream so it is not delivered twice.
 				continue
 			}
-			if !patternMatchAny(reg.Patterns, e.Path) {
+			if !selectorMatchAny(reg.Selectors, e.Ref) {
 				continue
 			}
-			if !reg.Allowed(e.ResourceType, e.Path) {
+			if !reg.Allowed(e.ResourceType, e.Ref) {
 				continue
 			}
 			out = append(out, e)
@@ -428,15 +427,6 @@ func (h *Hub) replayEntries(ctx context.Context, reg Registration, current uint6
 		}
 	}
 	return out, true, nil
-}
-
-func patternMatchAny(patterns []string, path string) bool {
-	for _, p := range patterns {
-		if pathutil.Match(p, path) {
-			return true
-		}
-	}
-	return false
 }
 
 // randomHex returns n bytes of hex-encoded randomness for instance IDs. It is

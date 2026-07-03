@@ -6,30 +6,30 @@ import (
 	"time"
 
 	"github.com/Suhaibinator/kms/internal/domain"
-	"github.com/Suhaibinator/kms/internal/pathutil"
+	"github.com/Suhaibinator/kms/internal/keyutil"
 )
 
 // allowFunc is the per-subscriber authorization predicate. It is held behind an
 // atomic pointer so the transport layer can swap in a freshly re-authorized
 // predicate (on heartbeat) without racing the dispatch loop that reads it.
-type allowFunc func(resourceType, path string) bool
+type allowFunc func(resourceType string, ref domain.Ref) bool
 
-func denyAll(string, string) bool { return false }
+func denyAll(string, domain.Ref) bool { return false }
 
 // Registration is the immutable description of a watch subscription supplied by
-// the transport layer. Patterns are already normalized (pathutil.NormalizePrefix)
-// and Allowed is the per-subscriber authorization predicate built from the
-// caller's policies (see core.Service.WatchAccessChecker).
+// the transport layer. Selectors are already validated (namespace + key
+// pattern) and Allowed is the per-subscriber authorization predicate built from
+// the caller's policies (see core.Service.WatchAccessChecker).
 type Registration struct {
 	ClientName       string
 	InstanceID       string
 	Identity         string
 	RemoteAddr       string
-	Patterns         []string
+	Selectors        []domain.WatchSelector
 	LastSeenRevision uint64
 	// Allowed reports whether the subscriber may observe a change to
-	// (resourceType, path). A nil predicate denies everything.
-	Allowed func(resourceType, path string) bool
+	// (resourceType, ref). A nil predicate denies everything.
+	Allowed func(resourceType string, ref domain.Ref) bool
 }
 
 // Backlog is the initial state handed to a subscriber before live events flow.
@@ -188,13 +188,13 @@ func (s *Subscription) activate(bl Backlog) (alive bool) {
 func (s *Subscription) describe() domain.Subscriber {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	paths := make([]string, len(s.reg.Patterns))
-	copy(paths, s.reg.Patterns)
+	selectors := make([]domain.WatchSelector, len(s.reg.Selectors))
+	copy(selectors, s.reg.Selectors)
 	return domain.Subscriber{
 		ClientName:        s.reg.ClientName,
 		InstanceID:        s.reg.InstanceID,
 		Identity:          s.reg.Identity,
-		Paths:             paths,
+		Selectors:         selectors,
 		RemoteAddr:        s.reg.RemoteAddr,
 		ConnectedAt:       s.connectedAt,
 		LastHeartbeat:     s.lastHeartbeat,
@@ -209,19 +209,19 @@ func (s *Subscription) lastHeartbeatTime() time.Time {
 	return s.lastHeartbeat
 }
 
-// allow evaluates the current authorization predicate for (resourceType, path).
+// allow evaluates the current authorization predicate for (resourceType, ref).
 // A subscription with no predicate installed denies everything (fail closed).
-func (s *Subscription) allow(resourceType, path string) bool {
+func (s *Subscription) allow(resourceType string, ref domain.Ref) bool {
 	fp := s.allowed.Load()
 	if fp == nil {
 		return false
 	}
-	return (*fp)(resourceType, path)
+	return (*fp)(resourceType, ref)
 }
 
 // UpdateAllowed atomically swaps the authorization predicate. A nil predicate
 // is treated as deny-all. It is safe to call concurrently with dispatch.
-func (s *Subscription) UpdateAllowed(fn func(resourceType, path string) bool) {
+func (s *Subscription) UpdateAllowed(fn func(resourceType string, ref domain.Ref) bool) {
 	f := allowFunc(denyAll)
 	if fn != nil {
 		f = fn
@@ -229,10 +229,22 @@ func (s *Subscription) UpdateAllowed(fn func(resourceType, path string) bool) {
 	s.allowed.Store(&f)
 }
 
-// matches reports whether any registered pattern covers the entry's path.
-func (s *Subscription) matches(path string) bool {
-	for _, p := range s.reg.Patterns {
-		if pathutil.Match(p, path) {
+// matches reports whether any registered selector covers the entry's ref.
+func (s *Subscription) matches(ref domain.Ref) bool {
+	return selectorMatchAny(s.reg.Selectors, ref)
+}
+
+// selectorMatch reports whether one selector covers ref: the namespaces must be
+// identical and the ref's key must match the selector's key pattern (an empty
+// or "*" pattern matches every key in the namespace).
+func selectorMatch(sel domain.WatchSelector, ref domain.Ref) bool {
+	return sel.NS == ref.NS && keyutil.MatchKey(sel.KeyPattern, ref.Key)
+}
+
+// selectorMatchAny reports whether any selector covers ref.
+func selectorMatchAny(selectors []domain.WatchSelector, ref domain.Ref) bool {
+	for _, sel := range selectors {
+		if selectorMatch(sel, ref) {
 			return true
 		}
 	}

@@ -35,7 +35,9 @@ const tsLayout = "2006-01-02T15:04:05.000000000Z07:00"
 const changeLogDDL = `CREATE TABLE IF NOT EXISTS change_log (
 	revision       INTEGER PRIMARY KEY AUTOINCREMENT,
 	resource_type  TEXT NOT NULL,
-	path           TEXT NOT NULL,
+	env            TEXT NOT NULL,
+	app            TEXT NOT NULL,
+	key            TEXT NOT NULL,
 	change_type    TEXT NOT NULL,
 	value          TEXT,
 	content_type   TEXT NOT NULL DEFAULT '',
@@ -44,7 +46,7 @@ const changeLogDDL = `CREATE TABLE IF NOT EXISTS change_log (
 	created_at     TEXT NOT NULL
 )`
 
-const changeLogIndexDDL = `CREATE INDEX IF NOT EXISTS idx_change_log_path ON change_log(path)`
+const changeLogIndexDDL = `CREATE INDEX IF NOT EXISTS idx_change_log_ns ON change_log(env, app)`
 
 // SQLStore is the SQLite-backed implementation of Store.
 type SQLStore struct {
@@ -241,11 +243,12 @@ func likeEscape(s string) string {
 	return strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`).Replace(s)
 }
 
-// applyPrefix restricts q to rows whose path is prefix or lies under it,
-// matching pathutil.HasPrefix semantics ("/a" matches "/a" and "/a/b" but never
-// "/ab"). An empty or root prefix matches everything.
-func applyPrefix(q *gorm.DB, column, prefix string) *gorm.DB {
-	if prefix == "" || prefix == "/" {
+// applyKeyPrefix restricts q to rows whose key column is prefix or lies under
+// it ("billing" matches "billing" and "billing/stripe" but never "billingx").
+// An empty prefix matches everything. Keys are always namespace-scoped by the
+// caller, so this only narrows within a single namespace.
+func applyKeyPrefix(q *gorm.DB, column, prefix string) *gorm.DB {
+	if prefix == "" {
 		return q
 	}
 	return q.Where(column+" = ? OR "+column+` LIKE ? ESCAPE '\'`, prefix, likeEscape(prefix)+"/%")
@@ -299,6 +302,22 @@ func decodeIntToken(tok string) (int64, error) {
 // isUniqueErr reports whether err is a SQLite UNIQUE-constraint violation.
 func isUniqueErr(err error) bool {
 	return err != nil && strings.Contains(strings.ToUpper(err.Error()), "UNIQUE CONSTRAINT")
+}
+
+// resolveNamespaceID looks up the primary key of an existing namespace. It
+// returns domain.ErrNotFound (naming the namespace) when none exists, so
+// callers that address a resource by ref surface a clear error before touching
+// the parameters/secrets tables (whose namespace_id foreign key requires it).
+func resolveNamespaceID(tx *gorm.DB, ns domain.NamespaceRef) (int64, error) {
+	var m namespaceModel
+	err := tx.Select("id").Where("env = ? AND app = ?", ns.Env, ns.App).First(&m).Error
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return 0, domain.Errorf(domain.ErrNotFound, "namespace %s", ns)
+		}
+		return 0, err
+	}
+	return m.ID, nil
 }
 
 // appendChange inserts a change_log row and returns its assigned revision.

@@ -34,22 +34,44 @@ func setSecretLabel(tx *gorm.DB, secretID int64, label string, version uint64) e
 	}).Error
 }
 
-// CreateSecretVersion atomically creates/updates the secret row, assigns the
-// next version number, invokes p.Encrypt(version) inside the transaction,
-// stores the payload, moves labels, and appends a metadata-only change-log
-// entry.
+// findSecret resolves a secret row from its ref, returning ErrNotFound (naming
+// the ref) when the namespace or the secret is absent.
+func (s *SQLStore) findSecret(db *gorm.DB, ref domain.Ref) (secretModel, error) {
+	nsID, err := resolveNamespaceID(db, ref.NS)
+	if err != nil {
+		return secretModel{}, err
+	}
+	var sec secretModel
+	if err := db.Where("namespace_id = ? AND name = ?", nsID, ref.Key).First(&sec).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return secretModel{}, domain.Errorf(domain.ErrNotFound, "secret %s", ref)
+		}
+		return secretModel{}, err
+	}
+	return sec, nil
+}
+
+// CreateSecretVersion atomically creates/updates the secret row within its
+// namespace, assigns the next version number, invokes p.Encrypt(version) inside
+// the transaction, stores the payload, moves labels, and appends a
+// metadata-only change-log entry. The namespace must already exist.
 func (s *SQLStore) CreateSecretVersion(ctx context.Context, p CreateSecretParams) (version, revision uint64, err error) {
 	contentType := zeroOr(p.ContentType, "application/octet-stream")
 	metadata := zeroOr(p.Metadata, "{}")
 	now := fmtTime(time.Now())
 
 	err = s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		nsID, err := resolveNamespaceID(tx, p.Ref.NS)
+		if err != nil {
+			return err
+		}
 		var sec secretModel
-		e := tx.Where("path = ?", p.Path).First(&sec).Error
+		e := tx.Where("namespace_id = ? AND name = ?", nsID, p.Ref.Key).First(&sec).Error
 		switch {
 		case errors.Is(e, gorm.ErrRecordNotFound):
 			sec = secretModel{
-				Path:            p.Path,
+				NamespaceID:     nsID,
+				Name:            p.Ref.Key,
 				ClientBound:     b2i(p.ClientBound),
 				AccessTokenHash: p.AccessTokenHash,
 				ContentType:     contentType,
@@ -65,7 +87,7 @@ func (s *SQLStore) CreateSecretVersion(ctx context.Context, p CreateSecretParams
 		default:
 			if i2b(sec.ClientBound) != p.ClientBound {
 				return domain.Errorf(domain.ErrFailedPrecondition,
-					"secret %s wrap-mode mismatch (existing client_bound=%v, requested=%v)", p.Path, i2b(sec.ClientBound), p.ClientBound)
+					"secret %s wrap-mode mismatch (existing client_bound=%v, requested=%v)", p.Ref, i2b(sec.ClientBound), p.ClientBound)
 			}
 			upd := map[string]any{
 				"content_type":  contentType,
@@ -130,7 +152,9 @@ func (s *SQLStore) CreateSecretVersion(ctx context.Context, p CreateSecretParams
 
 		rev, err := appendChange(tx, &changeLogModel{
 			ResourceType:  domain.ResourceSecret,
-			Path:          p.Path,
+			Env:           p.Ref.NS.Env,
+			App:           p.Ref.NS.App,
+			Key:           p.Ref.Key,
 			ChangeType:    domain.ChangePut,
 			ContentType:   contentType,
 			VersionNumber: int64(newVer),
@@ -150,31 +174,25 @@ func (s *SQLStore) CreateSecretVersion(ctx context.Context, p CreateSecretParams
 }
 
 // GetSecretRecord returns the secret-level row.
-func (s *SQLStore) GetSecretRecord(ctx context.Context, path string) (SecretRecord, error) {
+func (s *SQLStore) GetSecretRecord(ctx context.Context, ref domain.Ref) (SecretRecord, error) {
 	db := s.db.WithContext(ctx)
-	var sec secretModel
-	if err := db.Where("path = ?", path).First(&sec).Error; err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return SecretRecord{}, domain.Errorf(domain.ErrNotFound, "secret %s", path)
-		}
+	sec, err := s.findSecret(db, ref)
+	if err != nil {
 		return SecretRecord{}, err
 	}
 	labels, err := loadSecretLabels(db, sec.ID)
 	if err != nil {
 		return SecretRecord{}, err
 	}
-	return toSecretRecord(sec, labels), nil
+	return toSecretRecord(sec, ref, labels), nil
 }
 
 // GetSecretVersion resolves version (>0) or label (default "current") and
 // returns both the secret row and the version row. It does not filter by state.
-func (s *SQLStore) GetSecretVersion(ctx context.Context, path string, version uint64, label string) (SecretRecord, SecretVersionRecord, error) {
+func (s *SQLStore) GetSecretVersion(ctx context.Context, ref domain.Ref, version uint64, label string) (SecretRecord, SecretVersionRecord, error) {
 	db := s.db.WithContext(ctx)
-	var sec secretModel
-	if err := db.Where("path = ?", path).First(&sec).Error; err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return SecretRecord{}, SecretVersionRecord{}, domain.Errorf(domain.ErrNotFound, "secret %s", path)
-		}
+	sec, err := s.findSecret(db, ref)
+	if err != nil {
 		return SecretRecord{}, SecretVersionRecord{}, err
 	}
 	ver := version
@@ -183,7 +201,7 @@ func (s *SQLStore) GetSecretVersion(ctx context.Context, path string, version ui
 		var lm secretLabelModel
 		if err := db.Where("secret_id = ? AND label = ?", sec.ID, lbl).First(&lm).Error; err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) {
-				return SecretRecord{}, SecretVersionRecord{}, domain.Errorf(domain.ErrNotFound, "secret %s label %q", path, lbl)
+				return SecretRecord{}, SecretVersionRecord{}, domain.Errorf(domain.ErrNotFound, "secret %s label %q", ref, lbl)
 			}
 			return SecretRecord{}, SecretVersionRecord{}, err
 		}
@@ -192,7 +210,7 @@ func (s *SQLStore) GetSecretVersion(ctx context.Context, path string, version ui
 	var sv secretVersionModel
 	if err := db.Where("secret_id = ? AND version_number = ?", sec.ID, ver).First(&sv).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return SecretRecord{}, SecretVersionRecord{}, domain.Errorf(domain.ErrNotFound, "secret %s version %d", path, ver)
+			return SecretRecord{}, SecretVersionRecord{}, domain.Errorf(domain.ErrNotFound, "secret %s version %d", ref, ver)
 		}
 		return SecretRecord{}, SecretVersionRecord{}, err
 	}
@@ -200,10 +218,10 @@ func (s *SQLStore) GetSecretVersion(ctx context.Context, path string, version ui
 	if err != nil {
 		return SecretRecord{}, SecretVersionRecord{}, err
 	}
-	return toSecretRecord(sec, labels), toSecretVersionRecord(sv), nil
+	return toSecretRecord(sec, ref, labels), toSecretVersionRecord(sv), nil
 }
 
-func (s *SQLStore) secretInfo(ctx context.Context, sec secretModel) (domain.Secret, error) {
+func (s *SQLStore) secretInfo(ctx context.Context, ns domain.NamespaceRef, sec secretModel) (domain.Secret, error) {
 	db := s.db.WithContext(ctx)
 	labels, err := loadSecretLabels(db, sec.ID)
 	if err != nil {
@@ -226,7 +244,7 @@ func (s *SQLStore) secretInfo(ctx context.Context, sec secretModel) (domain.Secr
 		})
 	}
 	return domain.Secret{
-		Path:           sec.Path,
+		Ref:            domain.Ref{NS: ns, Key: sec.Name},
 		ContentType:    sec.ContentType,
 		ClientBound:    i2b(sec.ClientBound),
 		HasAccessToken: sec.AccessTokenHash != nil,
@@ -239,42 +257,44 @@ func (s *SQLStore) secretInfo(ctx context.Context, sec secretModel) (domain.Secr
 }
 
 // GetSecretInfo returns secret-level metadata and version history.
-func (s *SQLStore) GetSecretInfo(ctx context.Context, path string) (domain.Secret, error) {
-	var sec secretModel
-	if err := s.db.WithContext(ctx).Where("path = ?", path).First(&sec).Error; err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return domain.Secret{}, domain.Errorf(domain.ErrNotFound, "secret %s", path)
-		}
+func (s *SQLStore) GetSecretInfo(ctx context.Context, ref domain.Ref) (domain.Secret, error) {
+	sec, err := s.findSecret(s.db.WithContext(ctx), ref)
+	if err != nil {
 		return domain.Secret{}, err
 	}
-	return s.secretInfo(ctx, sec)
+	return s.secretInfo(ctx, ref.NS, sec)
 }
 
-// ListSecrets returns matching secrets ordered by path.
-func (s *SQLStore) ListSecrets(ctx context.Context, prefix string, page ListPage) ([]domain.Secret, string, error) {
+// ListSecrets returns secrets in ns matching keyPrefix, ordered by key. The
+// namespace must exist.
+func (s *SQLStore) ListSecrets(ctx context.Context, ns domain.NamespaceRef, keyPrefix string, page ListPage) ([]domain.Secret, string, error) {
 	limit := clampLimit(page.Limit)
 	after, err := decodeToken(page.Token)
 	if err != nil {
 		return nil, "", err
 	}
-	q := s.db.WithContext(ctx).Model(&secretModel{})
-	if after != "" {
-		q = q.Where("path > ?", after)
+	nsID, err := resolveNamespaceID(s.db.WithContext(ctx), ns)
+	if err != nil {
+		return nil, "", err
 	}
-	q = applyPrefix(q, "path", prefix)
+	q := s.db.WithContext(ctx).Model(&secretModel{}).Where("namespace_id = ?", nsID)
+	if after != "" {
+		q = q.Where("name > ?", after)
+	}
+	q = applyKeyPrefix(q, "name", keyPrefix)
 
 	var rows []secretModel
-	if err := q.Order("path ASC").Limit(limit + 1).Find(&rows).Error; err != nil {
+	if err := q.Order("name ASC").Limit(limit + 1).Find(&rows).Error; err != nil {
 		return nil, "", err
 	}
 	next := ""
 	if len(rows) > limit {
 		rows = rows[:limit]
-		next = encodeToken(rows[len(rows)-1].Path)
+		next = encodeToken(rows[len(rows)-1].Name)
 	}
 	out := make([]domain.Secret, 0, len(rows))
 	for _, sec := range rows {
-		info, err := s.secretInfo(ctx, sec)
+		info, err := s.secretInfo(ctx, ns, sec)
 		if err != nil {
 			return nil, "", err
 		}
@@ -285,14 +305,11 @@ func (s *SQLStore) ListSecrets(ctx context.Context, prefix string, page ListPage
 
 // DeleteSecret removes the secret and all versions and appends a change-log
 // entry.
-func (s *SQLStore) DeleteSecret(ctx context.Context, path string) (uint64, error) {
+func (s *SQLStore) DeleteSecret(ctx context.Context, ref domain.Ref) (uint64, error) {
 	var revision uint64
 	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		var sec secretModel
-		if err := tx.Where("path = ?", path).First(&sec).Error; err != nil {
-			if errors.Is(err, gorm.ErrRecordNotFound) {
-				return domain.Errorf(domain.ErrNotFound, "secret %s", path)
-			}
+		sec, err := s.findSecret(tx, ref)
+		if err != nil {
 			return err
 		}
 		if err := tx.Where("secret_id = ?", sec.ID).Delete(&secretLabelModel{}).Error; err != nil {
@@ -306,7 +323,9 @@ func (s *SQLStore) DeleteSecret(ctx context.Context, path string) (uint64, error
 		}
 		rev, err := appendChange(tx, &changeLogModel{
 			ResourceType: domain.ResourceSecret,
-			Path:         path,
+			Env:          ref.NS.Env,
+			App:          ref.NS.App,
+			Key:          ref.Key,
 			ChangeType:   domain.ChangeDelete,
 		})
 		if err != nil {
@@ -323,29 +342,26 @@ func (s *SQLStore) DeleteSecret(ctx context.Context, path string) (uint64, error
 
 // SetSecretVersionState enables/disables version (0 = all non-destroyed
 // versions). Destroyed versions are never resurrected.
-func (s *SQLStore) SetSecretVersionState(ctx context.Context, path string, version uint64, state string) (uint64, error) {
+func (s *SQLStore) SetSecretVersionState(ctx context.Context, ref domain.Ref, version uint64, state string) (uint64, error) {
 	if state != domain.StateEnabled && state != domain.StateDisabled {
 		return 0, domain.Errorf(domain.ErrInvalidArgument, "invalid state %q", state)
 	}
 	var revision uint64
 	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		var sec secretModel
-		if err := tx.Where("path = ?", path).First(&sec).Error; err != nil {
-			if errors.Is(err, gorm.ErrRecordNotFound) {
-				return domain.Errorf(domain.ErrNotFound, "secret %s", path)
-			}
+		sec, err := s.findSecret(tx, ref)
+		if err != nil {
 			return err
 		}
 		if version > 0 {
 			var sv secretVersionModel
 			if err := tx.Where("secret_id = ? AND version_number = ?", sec.ID, version).First(&sv).Error; err != nil {
 				if errors.Is(err, gorm.ErrRecordNotFound) {
-					return domain.Errorf(domain.ErrNotFound, "secret %s version %d", path, version)
+					return domain.Errorf(domain.ErrNotFound, "secret %s version %d", ref, version)
 				}
 				return err
 			}
 			if sv.State == domain.StateDestroyed {
-				return domain.Errorf(domain.ErrFailedPrecondition, "secret %s version %d is destroyed", path, version)
+				return domain.Errorf(domain.ErrFailedPrecondition, "secret %s version %d is destroyed", ref, version)
 			}
 			if err := tx.Model(&secretVersionModel{}).Where("id = ?", sv.ID).Update("state", state).Error; err != nil {
 				return err
@@ -363,7 +379,9 @@ func (s *SQLStore) SetSecretVersionState(ctx context.Context, path string, versi
 		}
 		rev, err := appendChange(tx, &changeLogModel{
 			ResourceType:  domain.ResourceSecret,
-			Path:          path,
+			Env:           ref.NS.Env,
+			App:           ref.NS.App,
+			Key:           ref.Key,
 			ChangeType:    changeType,
 			VersionNumber: int64(version),
 		})
@@ -381,28 +399,25 @@ func (s *SQLStore) SetSecretVersionState(ctx context.Context, path string, versi
 
 // DestroySecretVersion irreversibly nulls ciphertext, encrypted DEK, and nonce,
 // sets state destroyed + destroyed_at, and appends a change-log entry.
-func (s *SQLStore) DestroySecretVersion(ctx context.Context, path string, version uint64) (uint64, error) {
+func (s *SQLStore) DestroySecretVersion(ctx context.Context, ref domain.Ref, version uint64) (uint64, error) {
 	if version == 0 {
 		return 0, domain.Errorf(domain.ErrInvalidArgument, "version is required")
 	}
 	var revision uint64
 	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		var sec secretModel
-		if err := tx.Where("path = ?", path).First(&sec).Error; err != nil {
-			if errors.Is(err, gorm.ErrRecordNotFound) {
-				return domain.Errorf(domain.ErrNotFound, "secret %s", path)
-			}
+		sec, err := s.findSecret(tx, ref)
+		if err != nil {
 			return err
 		}
 		var sv secretVersionModel
 		if err := tx.Where("secret_id = ? AND version_number = ?", sec.ID, version).First(&sv).Error; err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) {
-				return domain.Errorf(domain.ErrNotFound, "secret %s version %d", path, version)
+				return domain.Errorf(domain.ErrNotFound, "secret %s version %d", ref, version)
 			}
 			return err
 		}
 		if sv.State == domain.StateDestroyed {
-			return domain.Errorf(domain.ErrFailedPrecondition, "secret %s version %d already destroyed", path, version)
+			return domain.Errorf(domain.ErrFailedPrecondition, "secret %s version %d already destroyed", ref, version)
 		}
 		if err := tx.Model(&secretVersionModel{}).Where("id = ?", sv.ID).Updates(map[string]any{
 			"ciphertext":    nil,
@@ -415,7 +430,9 @@ func (s *SQLStore) DestroySecretVersion(ctx context.Context, path string, versio
 		}
 		rev, err := appendChange(tx, &changeLogModel{
 			ResourceType:  domain.ResourceSecret,
-			Path:          path,
+			Env:           ref.NS.Env,
+			App:           ref.NS.App,
+			Key:           ref.Key,
 			ChangeType:    domain.ChangeDestroy,
 			VersionNumber: int64(version),
 		})
@@ -433,27 +450,24 @@ func (s *SQLStore) DestroySecretVersion(ctx context.Context, path string, versio
 
 // PromoteSecretVersion points "current" at version and "previous" at the old
 // current (if different). The target version must exist and be enabled.
-func (s *SQLStore) PromoteSecretVersion(ctx context.Context, path string, version uint64) (current, previous, revision uint64, err error) {
+func (s *SQLStore) PromoteSecretVersion(ctx context.Context, ref domain.Ref, version uint64) (current, previous, revision uint64, err error) {
 	if version == 0 {
 		return 0, 0, 0, domain.Errorf(domain.ErrInvalidArgument, "version is required")
 	}
 	err = s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		var sec secretModel
-		if err := tx.Where("path = ?", path).First(&sec).Error; err != nil {
-			if errors.Is(err, gorm.ErrRecordNotFound) {
-				return domain.Errorf(domain.ErrNotFound, "secret %s", path)
-			}
+		sec, err := s.findSecret(tx, ref)
+		if err != nil {
 			return err
 		}
 		var sv secretVersionModel
 		if err := tx.Where("secret_id = ? AND version_number = ?", sec.ID, version).First(&sv).Error; err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) {
-				return domain.Errorf(domain.ErrNotFound, "secret %s version %d", path, version)
+				return domain.Errorf(domain.ErrNotFound, "secret %s version %d", ref, version)
 			}
 			return err
 		}
 		if sv.State != domain.StateEnabled {
-			return domain.Errorf(domain.ErrFailedPrecondition, "secret %s version %d is not enabled", path, version)
+			return domain.Errorf(domain.ErrFailedPrecondition, "secret %s version %d is not enabled", ref, version)
 		}
 		labels, err := loadSecretLabels(tx, sec.ID)
 		if err != nil {
@@ -471,7 +485,9 @@ func (s *SQLStore) PromoteSecretVersion(ctx context.Context, path string, versio
 		}
 		rev, err := appendChange(tx, &changeLogModel{
 			ResourceType:  domain.ResourceSecret,
-			Path:          path,
+			Env:           ref.NS.Env,
+			App:           ref.NS.App,
+			Key:           ref.Key,
 			ChangeType:    domain.ChangePromote,
 			VersionNumber: int64(version),
 			Label:         domain.LabelCurrent,
@@ -489,16 +505,15 @@ func (s *SQLStore) PromoteSecretVersion(ctx context.Context, path string, versio
 }
 
 // UpdateSecretAccessTokenHash replaces the per-secret token hash.
-func (s *SQLStore) UpdateSecretAccessTokenHash(ctx context.Context, path string, hash []byte) error {
-	res := s.db.WithContext(ctx).Model(&secretModel{}).Where("path = ?", path).Updates(map[string]any{
-		"access_token_hash": hash,
-		"updated_at":        fmtTime(time.Now()),
+func (s *SQLStore) UpdateSecretAccessTokenHash(ctx context.Context, ref domain.Ref, hash []byte) error {
+	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		sec, err := s.findSecret(tx, ref)
+		if err != nil {
+			return err
+		}
+		return tx.Model(&secretModel{}).Where("id = ?", sec.ID).Updates(map[string]any{
+			"access_token_hash": hash,
+			"updated_at":        fmtTime(time.Now()),
+		}).Error
 	})
-	if res.Error != nil {
-		return res.Error
-	}
-	if res.RowsAffected == 0 {
-		return domain.Errorf(domain.ErrNotFound, "secret %s", path)
-	}
-	return nil
 }
