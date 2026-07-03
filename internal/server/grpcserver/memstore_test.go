@@ -396,14 +396,14 @@ func (m *memStore) ListPolicies(_ context.Context, _ storage.ListPage) ([]domain
 func (m *memStore) CreateNamespace(_ context.Context, ns domain.Namespace) (domain.Namespace, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if _, ok := m.namespaces[ns.NamespaceRef.String()]; ok {
+	if _, ok := m.namespaces[ns.String()]; ok {
 		return domain.Namespace{}, domain.Errorf(domain.ErrAlreadyExists, "namespace %s", ns.NamespaceRef)
 	}
 	if ns.CreatedAt.IsZero() {
 		ns.CreatedAt = m.clock()
 	}
 	rec := ns
-	m.namespaces[ns.NamespaceRef.String()] = &rec
+	m.namespaces[ns.String()] = &rec
 	return rec, nil
 }
 
@@ -462,7 +462,7 @@ func (m *memStore) ListNamespaces(_ context.Context, _ storage.ListPage) ([]doma
 		}
 		out = append(out, full)
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].NamespaceRef.String() < out[j].NamespaceRef.String() })
+	sort.Slice(out, func(i, j int) bool { return out[i].String() < out[j].String() })
 	return out, "", nil
 }
 
@@ -567,7 +567,7 @@ func (m *memStore) ListParameters(_ context.Context, ns domain.NamespaceRef, key
 		if row.ref.NS != ns {
 			continue
 		}
-		if keyPrefix != "" && !(row.ref.Key == keyPrefix || strings.HasPrefix(row.ref.Key, keyPrefix)) {
+		if keyPrefix != "" && (row.ref.Key != keyPrefix && !strings.HasPrefix(row.ref.Key, keyPrefix)) {
 			continue
 		}
 		out = append(out, m.paramLocked(row))

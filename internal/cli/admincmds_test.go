@@ -19,7 +19,7 @@ func TestWriteCertBundleToDir(t *testing.T) {
 		Serial:         "7f3a",
 		NotAfterUnixMs: 1893456000000,
 	}
-	if err := c.CLI.writeCertBundle(dir, "svc", bundle); err != nil {
+	if err := c.writeCertBundle(dir, "svc", bundle); err != nil {
 		t.Fatalf("writeCertBundle: %v", err)
 	}
 	certPath := filepath.Join(dir, "svc.crt")
@@ -49,7 +49,7 @@ func TestWriteCertBundleToDir(t *testing.T) {
 func TestWriteCertBundleToStdout(t *testing.T) {
 	c := newTestCLI()
 	bundle := &kmsv1.CertBundle{CertPem: "CERT\n", KeyPem: "KEY\n", Serial: "s1"}
-	if err := c.CLI.writeCertBundle("", "svc", bundle); err != nil {
+	if err := c.writeCertBundle("", "svc", bundle); err != nil {
 		t.Fatalf("writeCertBundle: %v", err)
 	}
 	out := c.stdout()

@@ -188,7 +188,7 @@ func (f *fakeStore) RotateKEK(_ context.Context, newKM domain.KeyMetadata,
 // --- namespaces ---
 
 func (f *fakeStore) CreateNamespace(_ context.Context, ns domain.Namespace) (domain.Namespace, error) {
-	key := ns.NamespaceRef.String()
+	key := ns.String()
 	if _, ok := f.namespaces[key]; ok {
 		return domain.Namespace{}, domain.Errorf(domain.ErrAlreadyExists, "namespace %s", ns.NamespaceRef)
 	}
