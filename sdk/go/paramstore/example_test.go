@@ -16,6 +16,8 @@ import (
 func ExampleNewClient() {
 	client, err := paramstore.NewClient(paramstore.Config{
 		Endpoint: "parameter-store.prod.internal:8443",
+		// Cert-only identity: the namespace is discovered from the cert via
+		// WhoAmI. Set Namespace explicitly to skip discovery.
 		TLS:      paramstore.MTLSFromFiles("client.crt", "client.key", "ca.crt"),
 		CacheTTL: time.Minute,
 	})
@@ -25,7 +27,7 @@ func ExampleNewClient() {
 	defer func() { _ = client.Close() }()
 
 	ctx := context.Background()
-	dbPassword, err := client.GetSecret(ctx, "/prod/payments/postgres/password")
+	dbPassword, err := client.GetSecret(ctx, "postgres/password")
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -40,16 +42,19 @@ func ExampleClient_Resolve() {
 		RateLimit  paramstore.ParameterValue
 	}
 
-	client, err := paramstore.NewClient(paramstore.Config{Endpoint: "localhost:8443"})
+	client, err := paramstore.NewClient(paramstore.Config{
+		Endpoint:  "localhost:8443",
+		Namespace: "prod/payments",
+	})
 	if err != nil {
 		log.Fatal(err)
 	}
 	defer func() { _ = client.Close() }()
 
 	cfg := Config{
-		DBPassword: paramstore.SecretValue{Key: "/prod/payments/postgres/password"},
-		StripeKey:  paramstore.SecretValue{Key: "/prod/payments/stripe/api-key", EnvVar: "STRIPE_KEY"},
-		RateLimit:  paramstore.ParameterValue{Key: "/prod/payments/rate-limit", Dynamic: true},
+		DBPassword: paramstore.SecretValue{Key: "postgres/password"},
+		StripeKey:  paramstore.SecretValue{Key: "stripe/api-key", EnvVar: "STRIPE_KEY"},
+		RateLimit:  paramstore.ParameterValue{Key: "rate-limit"}, // hot-reloads by default
 	}
 	if err := client.Resolve(context.Background(), &cfg); err != nil {
 		log.Fatal(err)
@@ -63,11 +68,16 @@ func ExampleClient_Resolve() {
 }
 
 func ExampleClient_Watch() {
-	client, _ := paramstore.NewClient(paramstore.Config{Endpoint: "localhost:8443"})
+	client, _ := paramstore.NewClient(paramstore.Config{
+		Endpoint:  "localhost:8443",
+		Namespace: "prod/payments",
+	})
 	defer func() { _ = client.Close() }()
 
-	stop, err := client.Watch(context.Background(), "/prod/payments/*", func(ev paramstore.Event) {
-		fmt.Printf("%s %s => %s\n", ev.Type, ev.Path, ev.Value)
+	// Watch fires for every change in the client's namespace; filter inside the
+	// callback if you only care about a subset.
+	stop, err := client.Watch(context.Background(), func(ev paramstore.Event) {
+		fmt.Printf("%s %s => %s\n", ev.Type, ev.Key, ev.Value)
 	})
 	if err != nil {
 		log.Fatal(err)
@@ -76,10 +86,13 @@ func ExampleClient_Watch() {
 }
 
 func ExampleClient_GetSecret_errorHandling() {
-	client, _ := paramstore.NewClient(paramstore.Config{Endpoint: "localhost:8443"})
+	client, _ := paramstore.NewClient(paramstore.Config{
+		Endpoint:  "localhost:8443",
+		Namespace: "prod/payments",
+	})
 	defer func() { _ = client.Close() }()
 
-	_, err := client.GetSecret(context.Background(), "/prod/missing")
+	_, err := client.GetSecret(context.Background(), "missing")
 	switch {
 	case errors.Is(err, paramstore.ErrNotFound):
 		fmt.Println("not found")

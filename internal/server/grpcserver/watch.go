@@ -3,7 +3,6 @@ package grpcserver
 import (
 	"context"
 	"fmt"
-	"strings"
 	"time"
 
 	"google.golang.org/grpc/codes"
@@ -11,7 +10,8 @@ import (
 
 	kmsv1 "github.com/Suhaibinator/kms/gen/kmsv1"
 	"github.com/Suhaibinator/kms/internal/core"
-	"github.com/Suhaibinator/kms/internal/pathutil"
+	"github.com/Suhaibinator/kms/internal/domain"
+	"github.com/Suhaibinator/kms/internal/keyutil"
 	"github.com/Suhaibinator/kms/internal/watch"
 )
 
@@ -20,16 +20,12 @@ type watchServer struct {
 	s *Server
 }
 
-// eventSender is the common Send surface of the bidi and server-streaming watch
-// RPCs, letting the backlog/pump logic be shared.
-type eventSender interface {
-	Send(*kmsv1.SubscribeEvent) error
-}
-
-// Subscribe is the bidirectional hot-reload stream. The first client message is
-// the registration; subsequent messages are heartbeat acks. The server streams
-// an initial backlog (snapshot or replay), then live change events interleaved
-// with heartbeats.
+// Subscribe is the hot-reload stream. The first client message is the
+// registration (the namespaces to watch); subsequent messages are heartbeat
+// acks. The server streams an initial backlog (snapshot or replay), then live
+// change events interleaved with heartbeats. Authorization is namespace-level
+// and checked once, here, at registration; every change in a subscribed
+// namespace is then delivered and routed client-side.
 func (w *watchServer) Subscribe(stream kmsv1.WatchService_SubscribeServer) error {
 	ctx := stream.Context()
 	pr, err := requirePrincipal(ctx)
@@ -42,12 +38,11 @@ func (w *watchServer) Subscribe(stream kmsv1.WatchService_SubscribeServer) error
 		// Client closed before registering; nothing to do.
 		return err
 	}
-	patterns, err := normalizePatterns(first.GetPaths())
+	namespaces, err := normalizeNamespaces(namespacesFromProto(first.GetNamespaces()))
 	if err != nil {
 		return status.Error(codes.InvalidArgument, err.Error())
 	}
-	allowed, err := w.s.svc.WatchAccessChecker(ctx, pr)
-	if err != nil {
+	if err := w.s.svc.AuthorizeSubscribe(ctx, pr, namespaces); err != nil {
 		return w.s.mapErr(ctx, err)
 	}
 
@@ -56,9 +51,8 @@ func (w *watchServer) Subscribe(stream kmsv1.WatchService_SubscribeServer) error
 		InstanceID:       instanceID(first.GetClientName()),
 		Identity:         pr.Identity.Name,
 		RemoteAddr:       pr.RemoteAddr,
-		Patterns:         patterns,
+		Namespaces:       namespaces,
 		LastSeenRevision: first.GetLastSeenRevision(),
-		Allowed:          allowed,
 	}
 	sub, err := w.s.hub.Subscribe(ctx, reg)
 	if err != nil {
@@ -84,73 +78,12 @@ func (w *watchServer) Subscribe(stream kmsv1.WatchService_SubscribeServer) error
 		}
 	}()
 
-	// Bidi clients ack their own liveness, so do not self-refresh.
-	return w.pump(ctx, stream, sub, pr, lastRev, false)
-}
-
-// WatchParameter streams events for a single exact parameter path.
-func (w *watchServer) WatchParameter(req *kmsv1.WatchParameterRequest, stream kmsv1.WatchService_WatchParameterServer) error {
-	ctx := stream.Context()
-	pr, err := requirePrincipal(ctx)
-	if err != nil {
-		return err
-	}
-	path, err := pathutil.Normalize(req.GetPath())
-	if err != nil {
-		return status.Error(codes.InvalidArgument, err.Error())
-	}
-	return w.serverStream(ctx, stream, pr, []string{path}, req.GetLastSeenRevision())
-}
-
-// WatchNamespace streams events for everything under a prefix. The request may
-// carry either a plain path (treated as its subtree) or an explicit "base/*"
-// pattern.
-func (w *watchServer) WatchNamespace(req *kmsv1.WatchNamespaceRequest, stream kmsv1.WatchService_WatchNamespaceServer) error {
-	ctx := stream.Context()
-	pr, err := requirePrincipal(ctx)
-	if err != nil {
-		return err
-	}
-	pattern, err := namespacePattern(req.GetPathPrefix())
-	if err != nil {
-		return status.Error(codes.InvalidArgument, err.Error())
-	}
-	return w.serverStream(ctx, stream, pr, []string{pattern}, req.GetLastSeenRevision())
-}
-
-// serverStream drives a server-streaming watch (WatchParameter/WatchNamespace).
-// These carry no client acks, so liveness is refreshed on each successful send
-// (a send failing means the client is gone) in addition to gRPC keepalive.
-func (w *watchServer) serverStream(ctx context.Context, stream eventSender, pr core.Principal, patterns []string, lastSeen uint64) error {
-	allowed, err := w.s.svc.WatchAccessChecker(ctx, pr)
-	if err != nil {
-		return w.s.mapErr(ctx, err)
-	}
-	reg := watch.Registration{
-		ClientName:       pr.Identity.Name,
-		InstanceID:       instanceID(pr.Identity.Name),
-		Identity:         pr.Identity.Name,
-		RemoteAddr:       pr.RemoteAddr,
-		Patterns:         patterns,
-		LastSeenRevision: lastSeen,
-		Allowed:          allowed,
-	}
-	sub, err := w.s.hub.Subscribe(ctx, reg)
-	if err != nil {
-		return w.s.mapErr(ctx, err)
-	}
-	defer sub.Close()
-
-	lastRev, err := w.sendBacklog(stream, sub)
-	if err != nil {
-		return err
-	}
-	return w.pump(ctx, stream, sub, pr, lastRev, true)
+	return w.pump(ctx, stream, sub, pr, namespaces, lastRev)
 }
 
 // sendBacklog delivers the subscription's initial state and returns the highest
 // revision the client is now caught up to.
-func (w *watchServer) sendBacklog(stream eventSender, sub *watch.Subscription) (uint64, error) {
+func (w *watchServer) sendBacklog(stream kmsv1.WatchService_SubscribeServer, sub *watch.Subscription) (uint64, error) {
 	bl := sub.Backlog()
 	if bl.IsSnapshot {
 		ev := &kmsv1.SubscribeEvent{
@@ -174,17 +107,12 @@ func (w *watchServer) sendBacklog(stream eventSender, sub *watch.Subscription) (
 
 // pump forwards live events and heartbeats until the stream, subscription, or
 // context ends. On every heartbeat tick it re-authorizes the stream: an error
-// (identity revoked/disabled) closes the stream, and a fresh predicate is
-// swapped in so policy changes take effect within one heartbeat interval. When
-// selfAck is set, each successful send refreshes the subscriber's liveness
-// (used by server-streaming watchers with no client acks).
-func (w *watchServer) pump(ctx context.Context, stream eventSender, sub *watch.Subscription, pr core.Principal, lastRev uint64, selfAck bool) error {
+// (identity revoked/disabled, or a namespace tightened to a method this caller
+// no longer satisfies) closes the stream. Bidi clients ack their own liveness.
+func (w *watchServer) pump(ctx context.Context, stream kmsv1.WatchService_SubscribeServer, sub *watch.Subscription, pr core.Principal, namespaces []domain.NamespaceRef, lastRev uint64) error {
 	ticker := time.NewTicker(w.s.hub.HeartbeatInterval())
 	defer ticker.Stop()
 
-	if selfAck {
-		sub.Ack(lastRev)
-	}
 	for {
 		select {
 		case <-ctx.Done():
@@ -196,18 +124,12 @@ func (w *watchServer) pump(ctx context.Context, stream eventSender, sub *watch.S
 				return err
 			}
 			lastRev = e.Revision
-			if selfAck {
-				sub.Ack(lastRev)
-			}
 		case <-ticker.C:
-			// Re-validate identity and refresh the authorization predicate so
-			// revocation and policy edits apply to this live stream.
-			allowed, err := w.s.svc.ReauthorizeWatch(ctx, pr)
-			if err != nil {
+			// Re-validate identity and re-run the per-namespace method gate so
+			// revocation and namespace method changes apply to this live stream.
+			if err := w.s.svc.ReauthorizeWatch(ctx, pr, namespaces...); err != nil {
 				return w.s.mapErr(ctx, err)
 			}
-			sub.UpdateAllowed(allowed)
-
 			hb := &kmsv1.SubscribeEvent{
 				Event:    &kmsv1.SubscribeEvent_Heartbeat{Heartbeat: &kmsv1.Heartbeat{ServerTimeUnixMs: time.Now().UnixMilli()}},
 				Revision: lastRev,
@@ -215,43 +137,24 @@ func (w *watchServer) pump(ctx context.Context, stream eventSender, sub *watch.S
 			if err := stream.Send(hb); err != nil {
 				return err
 			}
-			if selfAck {
-				sub.Ack(lastRev)
-			}
 		}
 	}
 }
 
-// normalizePatterns validates and canonicalizes the requested watch patterns.
-func normalizePatterns(paths []string) ([]string, error) {
-	if len(paths) == 0 {
-		return nil, fmt.Errorf("at least one path is required")
+// normalizeNamespaces validates the requested namespaces. At least one is
+// required.
+func normalizeNamespaces(namespaces []domain.NamespaceRef) ([]domain.NamespaceRef, error) {
+	if len(namespaces) == 0 {
+		return nil, fmt.Errorf("at least one namespace is required")
 	}
-	out := make([]string, 0, len(paths))
-	for _, p := range paths {
-		np, err := pathutil.NormalizePrefix(p)
-		if err != nil {
+	out := make([]domain.NamespaceRef, 0, len(namespaces))
+	for _, ns := range namespaces {
+		if err := keyutil.ValidateNamespace(ns); err != nil {
 			return nil, err
 		}
-		out = append(out, np)
+		out = append(out, ns)
 	}
 	return out, nil
-}
-
-// namespacePattern converts a WatchNamespace request into a prefix pattern,
-// accepting either a plain path (its whole subtree) or an explicit "base/*".
-func namespacePattern(raw string) (string, error) {
-	if raw == "*" || raw == "/*" {
-		return "/*", nil
-	}
-	if strings.HasSuffix(raw, "/*") {
-		return pathutil.NormalizePrefix(raw)
-	}
-	base, err := pathutil.Normalize(raw)
-	if err != nil {
-		return "", err
-	}
-	return base + "/*", nil
 }
 
 // instanceID derives a per-connection identifier from the client name and a

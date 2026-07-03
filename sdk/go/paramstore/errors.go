@@ -32,6 +32,12 @@ var (
 	// ErrNotInitialized is returned (or panicked with) when a declarative value
 	// is used before Init/Resolve has run.
 	ErrNotInitialized = errors.New("paramstore: value not initialized")
+
+	// ErrNoNamespace is returned when a relative key must be resolved but no
+	// namespace is available: Config.Namespace is empty and the identity is
+	// unbound (WhoAmI reports no namespace). Set Config.Namespace, bind the
+	// identity to a namespace, or use an absolute "/env/app/key" display path.
+	ErrNoNamespace = errors.New("paramstore: no namespace")
 )
 
 // mapError translates a gRPC status error into one of the exported sentinel

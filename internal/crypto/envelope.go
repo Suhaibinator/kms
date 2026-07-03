@@ -29,11 +29,16 @@ const clientKeySaltSize = 32
 // without a token. Transport layers must surface it generically.
 var ErrClientTokenRequired = errors.New("client token required")
 
-// BuildAAD returns the canonical associated-data string binding a ciphertext
-// to its record identity. It is persisted alongside the ciphertext and must
-// match at decrypt time.
-func BuildAAD(resourceType, path string, version uint64) string {
-	return fmt.Sprintf("kms/v1|type:%s|path:%s|version:%d", resourceType, path, version)
+// BuildAAD returns the canonical associated-data string binding a secret
+// version's ciphertext to its namespace-native identity. It is persisted
+// alongside the ciphertext and must match byte-for-byte at decrypt time.
+//
+// The env, app, and key components are expected to be keyutil-validated by the
+// caller (env/app are [a-z0-9-]; key segments are [a-z0-9._-] joined by '/'),
+// none of which can contain the ';' or '=' delimiters, so the encoding is
+// unambiguous without escaping.
+func BuildAAD(env, app, key string, version uint64) string {
+	return fmt.Sprintf("env=%s;app=%s;key=%s;version=%d", env, app, key, version)
 }
 
 // EncryptResult carries everything storage persists for one secret version.

@@ -5,6 +5,8 @@ import (
 	"errors"
 	"net/http"
 
+	"go.uber.org/zap"
+
 	"github.com/Suhaibinator/kms/internal/domain"
 )
 
@@ -27,7 +29,11 @@ func mapError(err error) (status int, code, message string) {
 	case errors.Is(err, domain.ErrInvalidArgument):
 		return http.StatusBadRequest, "invalid_argument", err.Error()
 	case errors.Is(err, domain.ErrUnauthenticated):
-		return http.StatusUnauthorized, "unauthenticated", err.Error()
+		// Fixed generic message, mirroring the gRPC boundary: an authentication
+		// failure must never reveal whether a resource or identity exists
+		// (domain.ErrUnauthenticated's invariant). Enforce it here rather than
+		// trusting every construction site to stay generic.
+		return http.StatusUnauthorized, "unauthenticated", "unauthenticated"
 	case errors.Is(err, domain.ErrPermissionDenied):
 		return http.StatusForbidden, "permission_denied", err.Error()
 	case errors.Is(err, domain.ErrNotFound):
@@ -52,8 +58,8 @@ func (s *server) writeError(w http.ResponseWriter, r *http.Request, err error) {
 	status, code, message := mapError(err)
 	if status >= 500 {
 		s.log.Error("request failed",
-			"method", r.Method, "path", r.URL.Path, "status", status,
-			"request_id", requestIDFrom(r.Context()), "error", err.Error())
+			zap.String("method", r.Method), zap.String("path", r.URL.Path), zap.Int("status", status),
+			zap.String("request_id", requestIDFrom(r.Context())), zap.String("error", err.Error()))
 	}
 	writeJSON(w, status, errorEnvelope{Error: errorBody{Code: code, Message: message}})
 }

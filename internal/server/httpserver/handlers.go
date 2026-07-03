@@ -3,12 +3,10 @@ package httpserver
 import (
 	"encoding/base64"
 	"net/http"
-	"strconv"
 	"time"
 
 	"github.com/Suhaibinator/kms/internal/core"
 	"github.com/Suhaibinator/kms/internal/domain"
-	"github.com/Suhaibinator/kms/internal/storage"
 )
 
 // newAPIMux registers every JSON API route. Method-aware patterns give
@@ -17,9 +15,12 @@ func (s *server) newAPIMux() *http.ServeMux {
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("POST /api/v1/auth/login", s.handleLogin)
+	mux.HandleFunc("GET /api/v1/whoami", s.handleWhoAmI)
 
 	mux.HandleFunc("GET /api/v1/namespaces", s.handleListNamespaces)
 	mux.HandleFunc("POST /api/v1/namespaces", s.handleCreateNamespace)
+	mux.HandleFunc("PATCH /api/v1/namespaces", s.handleUpdateNamespace)
+	mux.HandleFunc("DELETE /api/v1/namespaces", s.handleDeleteNamespace)
 
 	mux.HandleFunc("GET /api/v1/parameters", s.handleListParameters)
 	mux.HandleFunc("GET /api/v1/parameters/get", s.handleGetParameter)
@@ -44,6 +45,8 @@ func (s *server) newAPIMux() *http.ServeMux {
 	mux.HandleFunc("GET /api/v1/identities", s.handleListIdentities)
 	mux.HandleFunc("POST /api/v1/identities", s.handleCreateIdentity)
 	mux.HandleFunc("POST /api/v1/identities/rotate", s.handleRotateIdentity)
+	mux.HandleFunc("POST /api/v1/identities/issue-cert", s.handleIssueCert)
+	mux.HandleFunc("POST /api/v1/identities/revoke-cert", s.handleRevokeCert)
 	mux.HandleFunc("POST /api/v1/identities/revoke", s.handleRevokeIdentity)
 
 	mux.HandleFunc("GET /api/v1/audit", s.handleListAudit)
@@ -89,6 +92,33 @@ func (s *server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// handleWhoAmI returns the caller's identity description. Any authenticated
+// identity may call it; no policy check applies. It is the SDK's
+// namespace-discovery mechanism.
+func (s *server) handleWhoAmI(w http.ResponseWriter, r *http.Request) {
+	res, err := s.svc.WhoAmI(r.Context(), principalFrom(r.Context()))
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"name":        res.Name,
+		"kind":        res.Kind,
+		"namespace":   toNamespaceRefDTO(res.Namespace),
+		"auth_method": string(res.Method),
+	})
+}
+
+// handleCA serves the built-in CA public certificate. No auth (see serveAPI).
+func (s *server) handleCA(w http.ResponseWriter, r *http.Request) {
+	pem, err := s.svc.CACertPEM()
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"cert_pem": string(pem)})
+}
+
 func (s *server) handleLiveness(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
@@ -109,8 +139,7 @@ func (s *server) handleReadiness(w http.ResponseWriter, r *http.Request) {
 // --- namespaces ------------------------------------------------------------
 
 func (s *server) handleListNamespaces(w http.ResponseWriter, r *http.Request) {
-	pr := principalFrom(r.Context())
-	items, next, err := s.svc.ListNamespaces(r.Context(), pr, listPage(r))
+	items, next, err := s.svc.ListNamespaces(r.Context(), principalFrom(r.Context()), listPage(r))
 	if err != nil {
 		s.writeError(w, r, err)
 		return
@@ -124,14 +153,18 @@ func (s *server) handleListNamespaces(w http.ResponseWriter, r *http.Request) {
 
 func (s *server) handleCreateNamespace(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		Path        string `json:"path"`
-		Description string `json:"description"`
+		Env                string   `json:"env"`
+		App                string   `json:"app"`
+		Description        string   `json:"description"`
+		AllowedAuthMethods []string `json:"allowed_auth_methods"`
 	}
 	if err := decodeJSON(w, r, &body); err != nil {
 		s.writeError(w, r, err)
 		return
 	}
-	ns, err := s.svc.CreateNamespace(r.Context(), principalFrom(r.Context()), body.Path, body.Description)
+	ns, err := s.svc.CreateNamespace(r.Context(), principalFrom(r.Context()),
+		domain.NamespaceRef{Env: body.Env, App: body.App}, body.Description,
+		authMethodsFromStrings(body.AllowedAuthMethods))
 	if err != nil {
 		s.writeError(w, r, err)
 		return
@@ -139,12 +172,40 @@ func (s *server) handleCreateNamespace(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"namespace": toNamespaceDTO(ns)})
 }
 
+func (s *server) handleUpdateNamespace(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Env                string   `json:"env"`
+		App                string   `json:"app"`
+		Description        string   `json:"description"`
+		AllowedAuthMethods []string `json:"allowed_auth_methods"`
+	}
+	if err := decodeJSON(w, r, &body); err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	ns, err := s.svc.UpdateNamespace(r.Context(), principalFrom(r.Context()),
+		domain.NamespaceRef{Env: body.Env, App: body.App}, body.Description,
+		authMethodsFromStrings(body.AllowedAuthMethods))
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"namespace": toNamespaceDTO(ns)})
+}
+
+func (s *server) handleDeleteNamespace(w http.ResponseWriter, r *http.Request) {
+	if err := s.svc.DeleteNamespace(r.Context(), principalFrom(r.Context()), nsRefFromQuery(r)); err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{})
+}
+
 // --- parameters ------------------------------------------------------------
 
 func (s *server) handleListParameters(w http.ResponseWriter, r *http.Request) {
-	pr := principalFrom(r.Context())
-	prefix := r.URL.Query().Get("prefix")
-	items, next, err := s.svc.ListParameters(r.Context(), pr, prefix, listPage(r))
+	items, next, err := s.svc.ListParameters(r.Context(), principalFrom(r.Context()),
+		nsRefFromQuery(r), r.URL.Query().Get("key_prefix"), listPage(r))
 	if err != nil {
 		s.writeError(w, r, err)
 		return
@@ -157,14 +218,13 @@ func (s *server) handleListParameters(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *server) handleGetParameter(w http.ResponseWriter, r *http.Request) {
-	pr := principalFrom(r.Context())
-	q := r.URL.Query()
-	version, err := parseVersion(q.Get("version"))
+	version, err := parseVersion(r.URL.Query().Get("version"))
 	if err != nil {
 		s.writeError(w, r, err)
 		return
 	}
-	p, err := s.svc.GetParameter(r.Context(), pr, q.Get("path"), version, q.Get("label"))
+	p, err := s.svc.GetParameter(r.Context(), principalFrom(r.Context()),
+		refFromQuery(r), version, r.URL.Query().Get("label"))
 	if err != nil {
 		s.writeError(w, r, err)
 		return
@@ -173,8 +233,7 @@ func (s *server) handleGetParameter(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *server) handleParameterMetadata(w http.ResponseWriter, r *http.Request) {
-	pr := principalFrom(r.Context())
-	info, err := s.svc.GetParameterInfo(r.Context(), pr, r.URL.Query().Get("path"))
+	info, err := s.svc.GetParameterInfo(r.Context(), principalFrom(r.Context()), refFromQuery(r))
 	if err != nil {
 		s.writeError(w, r, err)
 		return
@@ -184,7 +243,7 @@ func (s *server) handleParameterMetadata(w http.ResponseWriter, r *http.Request)
 
 func (s *server) handlePutParameter(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		Path         string `json:"path"`
+		refFields
 		Value        string `json:"value"`
 		ContentType  string `json:"content_type"`
 		MetadataJSON string `json:"metadata_json"`
@@ -194,7 +253,7 @@ func (s *server) handlePutParameter(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	version, revision, err := s.svc.PutParameter(r.Context(), principalFrom(r.Context()),
-		body.Path, body.Value, body.ContentType, body.MetadataJSON)
+		body.ref(), body.Value, body.ContentType, body.MetadataJSON)
 	if err != nil {
 		s.writeError(w, r, err)
 		return
@@ -203,7 +262,7 @@ func (s *server) handlePutParameter(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *server) handleDeleteParameter(w http.ResponseWriter, r *http.Request) {
-	revision, err := s.svc.DeleteParameter(r.Context(), principalFrom(r.Context()), r.URL.Query().Get("path"))
+	revision, err := s.svc.DeleteParameter(r.Context(), principalFrom(r.Context()), refFromQuery(r))
 	if err != nil {
 		s.writeError(w, r, err)
 		return
@@ -214,9 +273,8 @@ func (s *server) handleDeleteParameter(w http.ResponseWriter, r *http.Request) {
 // --- secrets ---------------------------------------------------------------
 
 func (s *server) handleListSecrets(w http.ResponseWriter, r *http.Request) {
-	pr := principalFrom(r.Context())
-	prefix := r.URL.Query().Get("prefix")
-	items, next, err := s.svc.ListSecrets(r.Context(), pr, prefix, listPage(r))
+	items, next, err := s.svc.ListSecrets(r.Context(), principalFrom(r.Context()),
+		nsRefFromQuery(r), r.URL.Query().Get("key_prefix"), listPage(r))
 	if err != nil {
 		s.writeError(w, r, err)
 		return
@@ -229,8 +287,7 @@ func (s *server) handleListSecrets(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *server) handleSecretMetadata(w http.ResponseWriter, r *http.Request) {
-	pr := principalFrom(r.Context())
-	sec, err := s.svc.GetSecretInfo(r.Context(), pr, r.URL.Query().Get("path"))
+	sec, err := s.svc.GetSecretInfo(r.Context(), principalFrom(r.Context()), refFromQuery(r))
 	if err != nil {
 		s.writeError(w, r, err)
 		return
@@ -240,7 +297,7 @@ func (s *server) handleSecretMetadata(w http.ResponseWriter, r *http.Request) {
 
 func (s *server) handlePutSecret(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		Path                string `json:"path"`
+		refFields
 		ValueBase64         string `json:"value_base64"`
 		ContentType         string `json:"content_type"`
 		MetadataJSON        string `json:"metadata_json"`
@@ -258,7 +315,7 @@ func (s *server) handlePutSecret(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	res, err := s.svc.PutSecret(r.Context(), principalFrom(r.Context()), core.PutSecretInput{
-		Path:          body.Path,
+		Ref:           body.ref(),
 		Value:         value,
 		ContentType:   body.ContentType,
 		Metadata:      body.MetadataJSON,
@@ -279,7 +336,7 @@ func (s *server) handlePutSecret(w http.ResponseWriter, r *http.Request) {
 
 func (s *server) handleRevealSecret(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		Path    string `json:"path"`
+		refFields
 		Version uint64 `json:"version"`
 		Label   string `json:"label"`
 	}
@@ -287,13 +344,15 @@ func (s *server) handleRevealSecret(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, r, err)
 		return
 	}
-	val, err := s.svc.RevealSecret(r.Context(), principalFrom(r.Context()), body.Path, body.Version, body.Label)
+	val, err := s.svc.RevealSecret(r.Context(), principalFrom(r.Context()), body.ref(), body.Version, body.Label)
 	if err != nil {
 		s.writeError(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"path":         val.Path,
+		"env":          val.Ref.NS.Env,
+		"app":          val.Ref.NS.App,
+		"key":          val.Ref.Key,
 		"version":      val.Version,
 		"value_base64": base64.StdEncoding.EncodeToString(val.Value),
 		"content_type": val.ContentType,
@@ -302,7 +361,7 @@ func (s *server) handleRevealSecret(w http.ResponseWriter, r *http.Request) {
 
 func (s *server) handleDisableSecret(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		Path    string `json:"path"`
+		refFields
 		Version uint64 `json:"version"`
 		Enable  bool   `json:"enable"`
 	}
@@ -310,7 +369,7 @@ func (s *server) handleDisableSecret(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, r, err)
 		return
 	}
-	revision, err := s.svc.DisableSecret(r.Context(), principalFrom(r.Context()), body.Path, body.Version, body.Enable)
+	revision, err := s.svc.DisableSecret(r.Context(), principalFrom(r.Context()), body.ref(), body.Version, body.Enable)
 	if err != nil {
 		s.writeError(w, r, err)
 		return
@@ -320,14 +379,14 @@ func (s *server) handleDisableSecret(w http.ResponseWriter, r *http.Request) {
 
 func (s *server) handleDestroySecret(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		Path    string `json:"path"`
+		refFields
 		Version uint64 `json:"version"`
 	}
 	if err := decodeJSON(w, r, &body); err != nil {
 		s.writeError(w, r, err)
 		return
 	}
-	revision, err := s.svc.DestroySecretVersion(r.Context(), principalFrom(r.Context()), body.Path, body.Version)
+	revision, err := s.svc.DestroySecretVersion(r.Context(), principalFrom(r.Context()), body.ref(), body.Version)
 	if err != nil {
 		s.writeError(w, r, err)
 		return
@@ -337,14 +396,14 @@ func (s *server) handleDestroySecret(w http.ResponseWriter, r *http.Request) {
 
 func (s *server) handlePromoteSecret(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		Path    string `json:"path"`
+		refFields
 		Version uint64 `json:"version"`
 	}
 	if err := decodeJSON(w, r, &body); err != nil {
 		s.writeError(w, r, err)
 		return
 	}
-	current, previous, revision, err := s.svc.PromoteSecretVersion(r.Context(), principalFrom(r.Context()), body.Path, body.Version)
+	current, previous, revision, err := s.svc.PromoteSecretVersion(r.Context(), principalFrom(r.Context()), body.ref(), body.Version)
 	if err != nil {
 		s.writeError(w, r, err)
 		return
@@ -357,7 +416,7 @@ func (s *server) handlePromoteSecret(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *server) handleDeleteSecret(w http.ResponseWriter, r *http.Request) {
-	revision, err := s.svc.DeleteSecret(r.Context(), principalFrom(r.Context()), r.URL.Query().Get("path"))
+	revision, err := s.svc.DeleteSecret(r.Context(), principalFrom(r.Context()), refFromQuery(r))
 	if err != nil {
 		s.writeError(w, r, err)
 		return
@@ -443,19 +502,35 @@ func (s *server) handleListIdentities(w http.ResponseWriter, r *http.Request) {
 
 func (s *server) handleCreateIdentity(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		Name string `json:"name"`
-		Kind string `json:"kind"`
+		Name           string           `json:"name"`
+		Kind           string           `json:"kind"`
+		Namespace      *namespaceRefDTO `json:"namespace"`
+		AuthMethods    []string         `json:"auth_methods"`
+		CertTTLSeconds int64            `json:"cert_ttl_seconds"`
 	}
 	if err := decodeJSON(w, r, &body); err != nil {
 		s.writeError(w, r, err)
 		return
 	}
-	id, token, err := s.svc.CreateIdentity(r.Context(), principalFrom(r.Context()), body.Name, body.Kind)
+	res, err := s.svc.CreateIdentity(r.Context(), principalFrom(r.Context()), core.CreateIdentityInput{
+		Name:        body.Name,
+		Kind:        body.Kind,
+		Namespace:   body.Namespace.toDomain(),
+		AuthMethods: authMethodsFromStrings(body.AuthMethods),
+		CertTTL:     time.Duration(body.CertTTLSeconds) * time.Second,
+	})
 	if err != nil {
 		s.writeError(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"identity": toIdentityDTO(id), "token": token})
+	resp := map[string]any{"identity": toIdentityDTO(res.Identity)}
+	if res.Token != "" {
+		resp["token"] = res.Token
+	}
+	if res.Cert != nil {
+		resp["cert"] = toCertBundleDTO(res.Cert)
+	}
+	writeJSON(w, http.StatusOK, resp)
 }
 
 func (s *server) handleRotateIdentity(w http.ResponseWriter, r *http.Request) {
@@ -474,6 +549,40 @@ func (s *server) handleRotateIdentity(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"token": token})
 }
 
+func (s *server) handleIssueCert(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Name       string `json:"name"`
+		TTLSeconds int64  `json:"ttl_seconds"`
+	}
+	if err := decodeJSON(w, r, &body); err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	bundle, err := s.svc.IssueIdentityCertificate(r.Context(), principalFrom(r.Context()),
+		body.Name, time.Duration(body.TTLSeconds)*time.Second)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"cert": toCertBundleDTO(bundle)})
+}
+
+func (s *server) handleRevokeCert(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Name   string `json:"name"`
+		Serial string `json:"serial"`
+	}
+	if err := decodeJSON(w, r, &body); err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	if err := s.svc.RevokeIdentityCertificate(r.Context(), principalFrom(r.Context()), body.Name, body.Serial); err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{})
+}
+
 func (s *server) handleRevokeIdentity(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Name string `json:"name"`
@@ -487,6 +596,16 @@ func (s *server) handleRevokeIdentity(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{})
+}
+
+// toCertBundleDTO renders a one-time cert issuance for the wire.
+func toCertBundleDTO(b *core.CertBundle) certBundleDTO {
+	return certBundleDTO{
+		CertPEM:        b.CertPEM,
+		KeyPEM:         b.KeyPEM,
+		Serial:         b.Serial,
+		NotAfterUnixMS: unixMS(b.NotAfter),
+	}
 }
 
 // --- audit / subscribers / keys --------------------------------------------
@@ -504,7 +623,9 @@ func (s *server) handleListAudit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	filter := domain.AuditFilter{
-		PathPrefix:    q.Get("path_prefix"),
+		Env:           q.Get("env"),
+		App:           q.Get("app"),
+		KeyPrefix:     q.Get("key_prefix"),
 		ActorIdentity: q.Get("actor"),
 		EventType:     q.Get("event_type"),
 		From:          from,
@@ -548,45 +669,11 @@ func (s *server) handleListKeys(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"keys": out})
 }
 
-// --- shared parsing helpers ------------------------------------------------
+// --- shared helpers --------------------------------------------------------
 
 func (s *server) version() string {
 	if s.cfg.Version != "" {
 		return s.cfg.Version
 	}
 	return s.svc.Version()
-}
-
-func listPage(r *http.Request) storage.ListPage {
-	size, _ := strconv.Atoi(r.URL.Query().Get("page_size"))
-	return storage.ListPage{Limit: size, Token: r.URL.Query().Get("page_token")}
-}
-
-func parseVersion(s string) (uint64, error) {
-	if s == "" {
-		return 0, nil
-	}
-	v, err := strconv.ParseUint(s, 10, 64)
-	if err != nil {
-		return 0, invalidArg("version must be a non-negative integer")
-	}
-	return v, nil
-}
-
-func parseUnixMS(s string) (time.Time, error) {
-	if s == "" {
-		return time.Time{}, nil
-	}
-	ms, err := strconv.ParseInt(s, 10, 64)
-	if err != nil {
-		return time.Time{}, invalidArg("timestamp must be unix milliseconds")
-	}
-	if ms == 0 {
-		return time.Time{}, nil
-	}
-	return time.UnixMilli(ms).UTC(), nil
-}
-
-func invalidArg(msg string) error {
-	return domain.Errorf(domain.ErrInvalidArgument, "%s", msg)
 }

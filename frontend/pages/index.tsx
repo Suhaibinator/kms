@@ -8,6 +8,7 @@ import { Badge, EmptyState, Loading, PageHeader } from "@/components/ui";
 
 interface Count {
   value: number;
+  // true when the namespace list was truncated, so totals are a lower bound.
   more: boolean;
 }
 
@@ -31,10 +32,6 @@ const EMPTY: Dashboard = {
   audit: [],
 };
 
-function countFrom<T>(items: T[] | undefined, nextToken: string | undefined): Count {
-  return { value: items?.length ?? 0, more: !!nextToken };
-}
-
 function CountText({ c }: { c: Count | null }) {
   if (!c) return <span className="faint">—</span>;
   return (
@@ -45,6 +42,15 @@ function CountText({ c }: { c: Count | null }) {
   );
 }
 
+// Recent-activity resource: full path when a key is present, else namespace.
+function resourceLabel(e: AuditEvent): string | null {
+  if (e.resource_env && e.resource_app && e.resource_key) {
+    return `/${e.resource_env}/${e.resource_app}/${e.resource_key}`;
+  }
+  if (e.resource_env && e.resource_app) return `${e.resource_env}/${e.resource_app}`;
+  return null;
+}
+
 export default function DashboardPage() {
   const toast = useToast();
   const [data, setData] = useState<Dashboard>(EMPTY);
@@ -52,22 +58,25 @@ export default function DashboardPage() {
 
   const load = useCallback(async () => {
     setLoading(true);
-    const [health, ns, params, secrets, subs, audit] = await Promise.allSettled([
+    // Parameter/secret totals are cross-namespace overviews, which the
+    // namespace-scoped list APIs can't answer directly — they come from the
+    // per-namespace counts on ListNamespaces (plan §10).
+    const [health, ns, subs, audit] = await Promise.allSettled([
       api.health(),
       api.listNamespaces(200),
-      api.listParameters(undefined, 200),
-      api.listSecrets(undefined, 200),
       api.subscribers(),
       api.listAudit({ page_size: 8 }),
     ]);
 
     const next: Dashboard = { ...EMPTY };
     if (health.status === "fulfilled") next.health = health.value;
-    if (ns.status === "fulfilled") next.namespaces = countFrom(ns.value.namespaces, ns.value.next_page_token);
-    if (params.status === "fulfilled")
-      next.parameters = countFrom(params.value.parameters, params.value.next_page_token);
-    if (secrets.status === "fulfilled")
-      next.secrets = countFrom(secrets.value.secrets, secrets.value.next_page_token);
+    if (ns.status === "fulfilled") {
+      const list = ns.value.namespaces ?? [];
+      const more = !!ns.value.next_page_token;
+      next.namespaces = { value: list.length, more };
+      next.parameters = { value: list.reduce((sum, n) => sum + (n.parameter_count ?? 0), 0), more };
+      next.secrets = { value: list.reduce((sum, n) => sum + (n.secret_count ?? 0), 0), more };
+    }
     if (subs.status === "fulfilled") {
       next.subscribers = subs.value.subscribers ?? [];
       next.currentRevision = subs.value.current_revision ?? 0;
@@ -75,7 +84,7 @@ export default function DashboardPage() {
     if (audit.status === "fulfilled") next.audit = audit.value.events ?? [];
 
     // Surface the first failure (if any) without blocking the rest.
-    const firstError = [health, ns, params, secrets, subs, audit].find(
+    const firstError = [health, ns, subs, audit].find(
       (r) => r.status === "rejected",
     ) as PromiseRejectedResult | undefined;
     if (firstError) toast.error(firstError.reason, "Some dashboard data failed to load");
@@ -193,30 +202,37 @@ export default function DashboardPage() {
                 </tr>
               </thead>
               <tbody>
-                {data.audit.map((e) => (
-                  <tr key={e.id}>
-                    <td className="nowrap">{formatRelative(e.created_at_unix_ms)}</td>
-                    <td className="mono">{e.event_type}</td>
-                    <td>
-                      {e.actor_identity || <span className="faint">—</span>}
-                      {e.actor_type ? <span className="faint text-sm"> · {e.actor_type}</span> : null}
-                    </td>
-                    <td className="cell-path">{e.resource_path || <span className="faint">—</span>}</td>
-                    <td>
-                      <Badge
-                        kind={
-                          e.decision === "allow"
-                            ? "success"
-                            : e.decision === "deny"
-                              ? "danger"
-                              : "neutral"
-                        }
-                      >
-                        {e.decision || "—"}
-                      </Badge>
-                    </td>
-                  </tr>
-                ))}
+                {data.audit.map((e) => {
+                  const resource = resourceLabel(e);
+                  return (
+                    <tr key={e.id}>
+                      <td className="nowrap">{formatRelative(e.created_at_unix_ms)}</td>
+                      <td className="mono">{e.event_type}</td>
+                      <td>
+                        {e.actor_identity || <span className="faint">—</span>}
+                        {e.actor_type ? (
+                          <span className="faint text-sm"> · {e.actor_type}</span>
+                        ) : null}
+                      </td>
+                      <td className="cell-path">
+                        {resource || <span className="faint">—</span>}
+                      </td>
+                      <td>
+                        <Badge
+                          kind={
+                            e.decision === "allow"
+                              ? "success"
+                              : e.decision === "deny"
+                                ? "danger"
+                                : "neutral"
+                          }
+                        >
+                          {e.decision || "—"}
+                        </Badge>
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>

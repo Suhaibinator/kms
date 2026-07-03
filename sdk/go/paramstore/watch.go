@@ -3,9 +3,9 @@ package paramstore
 import (
 	"context"
 	"errors"
+	"fmt"
 	"math/rand/v2"
 	"sort"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -40,15 +40,22 @@ func (t EventType) String() string {
 	}
 }
 
-// Event is delivered to Watch callbacks when a watched path changes.
+// Event is delivered to Watch callbacks for every change in a watched
+// namespace.
 type Event struct {
-	Type       EventType
-	Path       string
+	Type EventType
+	// Namespace is the "env/app" namespace of the changed resource.
+	Namespace string
+	// Key is the resource key, relative to Namespace.
+	Key        string
 	Value      string // populated for EventPut
 	Version    uint64
 	Revision   uint64
 	ChangeType string // raw server change_type, useful for secret changes
 }
+
+// Path returns the "/env/app/key" display path of the event's resource.
+func (e Event) Path() string { return "/" + e.Namespace + "/" + e.Key }
 
 // defaultReconcileInterval is the safety-net full-sync poll cadence (plan 8.4).
 const defaultReconcileInterval = 5 * time.Minute
@@ -58,33 +65,46 @@ type knownVal struct {
 	present bool
 	// rev is the stream revision (or reconcile snapshot revision) the value was
 	// last applied at. It fences stale writes: a reconcile read that raced a
-	// newer live event must not regress the path (defect M2).
+	// newer live event must not regress the key (defect M2).
 	rev uint64
 }
 
+// watcher fires fn for every change in its namespace. The namespace is the unit
+// of subscription; a watcher receives all changes in ns and filters (if it
+// wants a subset) inside fn.
 type watcher struct {
-	id      uint64
-	pattern string
-	fn      func(Event)
+	id uint64
+	ns namespaceRef
+	fn func(Event)
 }
 
 // subManager owns the Subscribe stream lifecycle for a Client: connect, send
-// registration, apply events, ack heartbeats, reconnect with backoff, resume by
-// revision, and reconcile periodically.
+// the namespace subscription, apply events, ack heartbeats, reconnect with
+// backoff, resume by revision, and reconcile periodically.
+//
+// The namespace (env, app) is the unit of subscription. Every non-static
+// ParameterValue and every Watch share ONE subscription to the set of
+// namespaces they reference (the client's own namespace plus any extra
+// namespace a Watch targets). The server streams every change in those
+// namespaces; the SDK routes each incoming change to the matching field by
+// exact key and to every Watch on the change's namespace.
 type subManager struct {
 	client *Client
 
-	mu            sync.Mutex
-	paths         map[string]struct{}
-	paramHandlers map[string][]func(newVal string, present bool)
-	known         map[string]knownVal
+	mu sync.Mutex
+	// namespaces is the set of namespaces sent on the Subscribe request, keyed
+	// by "env/app". Add-only: a namespace, once subscribed, is never
+	// unsubscribed for the client's lifetime.
+	namespaces    map[string]namespaceRef
+	paramHandlers map[string][]func(newVal string, present bool) // display key -> handlers
+	known         map[string]knownVal                            // display key -> value
 	watchers      []*watcher
 	nextWatcherID uint64
 	started       bool
-	// streamPaths is the exact path/pattern set sent on the current stream's
+	// streamNamespaces is the namespace set sent on the current stream's
 	// Subscribe request. A snapshot is authoritative for this set, so it scopes
-	// which absent-but-known paths a snapshot may treat as deleted (defect M3).
-	streamPaths []string
+	// which absent-but-known keys a snapshot may treat as deleted (defect M3).
+	streamNamespaces []namespaceRef
 
 	lastRev atomic.Uint64
 
@@ -100,7 +120,7 @@ type subManager struct {
 func newSubManager(c *Client) *subManager {
 	return &subManager{
 		client:            c,
-		paths:             make(map[string]struct{}),
+		namespaces:        make(map[string]namespaceRef),
 		paramHandlers:     make(map[string][]func(string, bool)),
 		known:             make(map[string]knownVal),
 		stopCh:            make(chan struct{}),
@@ -110,33 +130,35 @@ func newSubManager(c *Client) *subManager {
 }
 
 // registerParam seeds a parameter's known value and registers a handler that is
-// invoked whenever a new value arrives for path.
-func (m *subManager) registerParam(path, initial string, handler func(newVal string, present bool)) {
+// invoked whenever a new value arrives for its exact key, subscribing to the
+// key's namespace if it is not already subscribed.
+func (m *subManager) registerParam(r ref, initial string, handler func(newVal string, present bool)) {
 	m.mu.Lock()
-	newPath := m.addPathLocked(path)
-	m.known[path] = knownVal{value: initial, present: true}
-	m.paramHandlers[path] = append(m.paramHandlers[path], handler)
+	changed := m.addNamespaceLocked(r.ns)
+	disp := r.display()
+	m.known[disp] = knownVal{value: initial, present: true}
+	m.paramHandlers[disp] = append(m.paramHandlers[disp], handler)
 	wasStarted := m.started
 	m.ensureStartedLocked()
 	m.mu.Unlock()
 
-	if wasStarted && newPath {
+	if wasStarted && changed {
 		m.signalRestart()
 	}
 }
 
-// registerWatcher adds a namespace/pattern watcher.
-func (m *subManager) registerWatcher(pattern string, fn func(Event)) *watcher {
+// registerWatcher adds a whole-namespace watcher.
+func (m *subManager) registerWatcher(ns namespaceRef, fn func(Event)) *watcher {
 	m.mu.Lock()
 	m.nextWatcherID++
-	w := &watcher{id: m.nextWatcherID, pattern: pattern, fn: fn}
+	w := &watcher{id: m.nextWatcherID, ns: ns, fn: fn}
 	m.watchers = append(m.watchers, w)
-	newPath := m.addPathLocked(pattern)
+	changed := m.addNamespaceLocked(ns)
 	wasStarted := m.started
 	m.ensureStartedLocked()
 	m.mu.Unlock()
 
-	if wasStarted && newPath {
+	if wasStarted && changed {
 		m.signalRestart()
 	}
 	return w
@@ -144,47 +166,23 @@ func (m *subManager) registerWatcher(pattern string, fn func(Event)) *watcher {
 
 func (m *subManager) removeWatcher(w *watcher) {
 	m.mu.Lock()
-	idx := -1
+	defer m.mu.Unlock()
 	for i, x := range m.watchers {
 		if x.id == w.id {
-			idx = i
-			break
+			m.watchers = append(m.watchers[:i], m.watchers[i+1:]...)
+			return
 		}
-	}
-	if idx < 0 {
-		m.mu.Unlock()
-		return
-	}
-	m.watchers = append(m.watchers[:idx], m.watchers[idx+1:]...)
-	// Drop the pattern from the subscription set only if no other watcher and no
-	// parameter handler still needs it.
-	stillNeeded := false
-	for _, x := range m.watchers {
-		if x.pattern == w.pattern {
-			stillNeeded = true
-			break
-		}
-	}
-	if _, ok := m.paramHandlers[w.pattern]; ok {
-		stillNeeded = true
-	}
-	if !stillNeeded {
-		delete(m.paths, w.pattern)
-	}
-	started := m.started
-	m.mu.Unlock()
-
-	if started && !stillNeeded {
-		m.signalRestart()
 	}
 }
 
-// addPathLocked adds p to the subscription set, reporting whether it was new.
-func (m *subManager) addPathLocked(p string) bool {
-	if _, ok := m.paths[p]; ok {
+// addNamespaceLocked adds ns to the subscription set, reporting whether it was
+// newly added (and thus whether the stream must reconnect to include it).
+func (m *subManager) addNamespaceLocked(ns namespaceRef) bool {
+	k := ns.String()
+	if _, ok := m.namespaces[k]; ok {
 		return false
 	}
-	m.paths[p] = struct{}{}
+	m.namespaces[k] = ns
 	return true
 }
 
@@ -215,14 +213,14 @@ func (m *subManager) drainRestart() {
 	}
 }
 
-func (m *subManager) snapshotPaths() []string {
+func (m *subManager) snapshotNamespaces() []namespaceRef {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	out := make([]string, 0, len(m.paths))
-	for p := range m.paths {
-		out = append(out, p)
+	out := make([]namespaceRef, 0, len(m.namespaces))
+	for _, n := range m.namespaces {
+		out = append(out, n)
 	}
-	sort.Strings(out)
+	sort.Slice(out, func(i, j int) bool { return out[i].String() < out[j].String() })
 	return out
 }
 
@@ -288,7 +286,7 @@ func (m *subManager) run() {
 
 		if m.restartRequested.Swap(false) {
 			attempt = 0
-			continue // path set changed: reconnect immediately with the union
+			continue // namespace set changed: reconnect immediately with the union
 		}
 
 		d := backoffDelay(attempt)
@@ -309,13 +307,17 @@ func (m *subManager) runStream(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	paths := m.snapshotPaths()
+	nss := m.snapshotNamespaces()
 	m.mu.Lock()
-	m.streamPaths = paths
+	m.streamNamespaces = nss
 	m.mu.Unlock()
+	protoNS := make([]*kmsv1.NamespaceRef, len(nss))
+	for i, n := range nss {
+		protoNS[i] = n.proto()
+	}
 	if err := stream.Send(&kmsv1.SubscribeRequest{
 		ClientName:       m.client.clientName,
-		Paths:            paths,
+		Namespaces:       protoNS,
 		LastSeenRevision: m.getRev(),
 	}); err != nil {
 		return err
@@ -357,25 +359,26 @@ func (m *subManager) handleEvent(ev *kmsv1.SubscribeEvent, stream kmsv1.WatchSer
 }
 
 func (m *subManager) applySnapshot(s *kmsv1.Snapshot, rev uint64) {
-	// A snapshot is authoritative for the paths this stream subscribed to: it
-	// enumerates every currently-present parameter under those patterns. We apply
-	// the present values, then treat any previously-known path that falls under
-	// the subscribed patterns but is absent from the snapshot as deleted — a
+	// A snapshot is authoritative for the namespaces this stream subscribed to:
+	// it enumerates every currently-present parameter in those namespaces. We
+	// apply the present values, then treat any previously-known key in a
+	// subscribed namespace that is absent from the snapshot as deleted — a
 	// parameter removed while we were disconnected past the replay window (defect
-	// M3). Paths outside the subscribed scope are never touched.
+	// M3). Keys in other namespaces are never touched.
 	present := make(map[string]struct{}, len(s.GetParameters()))
 	for _, p := range s.GetParameters() {
-		present[p.GetPath()] = struct{}{}
-		m.setValue(p.GetPath(), p.GetValue(), true, p.GetVersion(), rev, false)
+		disp := refFromProto(p.GetRef()).display()
+		present[disp] = struct{}{}
+		m.setValue(disp, p.GetValue(), true, p.GetVersion(), rev, false)
 	}
 	for _, path := range m.absentKnownPaths(present) {
 		m.setValue(path, "", false, 0, rev, false)
 	}
 }
 
-// absentKnownPaths returns the currently-present known paths that fall within
-// this stream's subscribed pattern scope but are missing from present. These
-// were deleted while the snapshot was authoritative.
+// absentKnownPaths returns the currently-present known keys in this stream's
+// subscribed namespaces that are missing from present. These were deleted while
+// the snapshot was authoritative.
 func (m *subManager) absentKnownPaths(present map[string]struct{}) []string {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -395,13 +398,15 @@ func (m *subManager) absentKnownPaths(present map[string]struct{}) []string {
 	return out
 }
 
-// pathInScopeLocked reports whether path matches any pattern sent on the current
-// stream's Subscribe request. Scoping to the request (rather than the live path
-// set) avoids treating a path registered after the request was sent — and thus
-// legitimately absent from the resulting snapshot — as deleted.
+// pathInScopeLocked reports whether the display key belongs to a namespace sent
+// on the current stream's Subscribe request. Scoping to the request (rather than
+// the live namespace set) avoids treating a key in a namespace subscribed after
+// the request was sent — and thus legitimately absent from the resulting
+// snapshot — as deleted.
 func (m *subManager) pathInScopeLocked(path string) bool {
-	for _, p := range m.streamPaths {
-		if matchPattern(p, path) {
+	ns := refOf(path).ns
+	for _, s := range m.streamNamespaces {
+		if s == ns {
 			return true
 		}
 	}
@@ -409,38 +414,41 @@ func (m *subManager) pathInScopeLocked(path string) bool {
 }
 
 func (m *subManager) applyChange(c *kmsv1.ParameterChange, rev uint64) {
+	disp := refFromProto(c.GetRef()).display()
 	switch c.GetChangeType() {
 	case "delete":
-		m.setValue(c.GetPath(), "", false, c.GetVersion(), rev, false)
+		m.setValue(disp, "", false, c.GetVersion(), rev, false)
 	default: // put | label
-		m.setValue(c.GetPath(), c.GetValue(), true, c.GetVersion(), rev, false)
+		m.setValue(disp, c.GetValue(), true, c.GetVersion(), rev, false)
 	}
 }
 
 func (m *subManager) applySecretChange(c *kmsv1.SecretMetadataChange, rev uint64) {
-	m.client.cache.invalidateSecret(c.GetPath())
+	r := refFromProto(c.GetRef())
+	m.client.cache.invalidateSecret(r.display())
 	ev := Event{
 		Type:       EventSecretChange,
-		Path:       c.GetPath(),
+		Namespace:  r.ns.String(),
+		Key:        r.key,
 		Version:    c.GetVersion(),
 		Revision:   rev,
 		ChangeType: c.GetChangeType(),
 	}
-	for _, w := range m.matchingWatchers(c.GetPath()) {
+	for _, w := range m.matchingWatchers(r.ns) {
 		m.fireWatcher(w, ev)
 	}
 }
 
 // setValue applies value for path, updating known state, parameter handlers,
-// the read cache, and matching watchers — but only when the value actually
-// changed, which keeps event delivery idempotent for callers.
+// the read cache, and the namespace's watchers — but only when the value
+// actually changed, which keeps event delivery idempotent for callers.
 //
 // rev fences stale writes. For a live event (reconcile=false) rev is the stream
-// revision and the write applies only if it is strictly newer than the path's
+// revision and the write applies only if it is strictly newer than the key's
 // last-applied revision (rev==0 is unversioned/best-effort and always applies).
 // For a reconcile read (reconcile=true) rev is the snapshot revision captured
 // before the fetch; the write applies only if no newer live event has advanced
-// the path past that snapshot — otherwise the reconcile read is stale and must
+// the key past that snapshot — otherwise the reconcile read is stale and must
 // be dropped so it cannot regress a fresher value (defect M2).
 func (m *subManager) setValue(path, value string, present bool, version, rev uint64, reconcile bool) {
 	m.mu.Lock()
@@ -463,7 +471,8 @@ func (m *subManager) setValue(path, value string, present bool, version, rev uin
 	}
 	handlers := make([]func(string, bool), len(m.paramHandlers[path]))
 	copy(handlers, m.paramHandlers[path])
-	watchers := m.matchingWatchersLocked(path)
+	r := refOf(path)
+	watchers := m.matchingWatchersLocked(r.ns)
 	m.mu.Unlock()
 
 	if !changed {
@@ -479,7 +488,7 @@ func (m *subManager) setValue(path, value string, present bool, version, rev uin
 	if !present {
 		evType = EventDelete
 	}
-	ev := Event{Type: evType, Path: path, Value: value, Version: version, Revision: rev}
+	ev := Event{Type: evType, Namespace: r.ns.String(), Key: r.key, Value: value, Version: version, Revision: rev}
 	for _, w := range watchers {
 		m.fireWatcher(w, ev)
 	}
@@ -489,7 +498,7 @@ func (m *subManager) setValue(path, value string, present bool, version, rev uin
 // live-vs-reconcile semantics.
 func revAllowsWrite(prevRev, rev uint64, reconcile bool) bool {
 	if reconcile {
-		// Authoritative only if no newer live event advanced the path past the
+		// Authoritative only if no newer live event advanced the key past the
 		// snapshot revision we captured before reading.
 		return prevRev <= rev
 	}
@@ -503,16 +512,16 @@ func (m *subManager) watcherCount() int {
 	return len(m.watchers)
 }
 
-func (m *subManager) matchingWatchers(path string) []*watcher {
+func (m *subManager) matchingWatchers(ns namespaceRef) []*watcher {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return m.matchingWatchersLocked(path)
+	return m.matchingWatchersLocked(ns)
 }
 
-func (m *subManager) matchingWatchersLocked(path string) []*watcher {
+func (m *subManager) matchingWatchersLocked(ns namespaceRef) []*watcher {
 	var out []*watcher
 	for _, w := range m.watchers {
-		if matchPattern(w.pattern, path) {
+		if w.ns == ns {
 			out = append(out, w)
 		}
 	}
@@ -523,7 +532,7 @@ func (m *subManager) matchingWatchersLocked(path string) []*watcher {
 // goroutine so a slow or panicking handler cannot stall the stream.
 func (m *subManager) fireWatcher(w *watcher, ev Event) {
 	fn := w.fn
-	m.client.enqueueCallback(ev.Path, func() { fn(ev) })
+	m.client.enqueueCallback(ev.Path(), func() { fn(ev) })
 }
 
 func (m *subManager) reconcileLoop() {
@@ -540,19 +549,18 @@ func (m *subManager) reconcileLoop() {
 	}
 }
 
-// reconcile is the periodic safety net (plan 8.4.8): fetch current values for
-// registered parameters and apply any drift missed by the event stream.
+// reconcile is the periodic safety net (plan 8.4.8): list every subscribed
+// namespace in full and apply any drift the event stream missed, including
+// deletions of previously-known hot-reload parameters.
 func (m *subManager) reconcile() {
 	m.mu.Lock()
+	nsList := make([]namespaceRef, 0, len(m.namespaces))
+	for _, n := range m.namespaces {
+		nsList = append(nsList, n)
+	}
 	paramPaths := make([]string, 0, len(m.paramHandlers))
 	for p := range m.paramHandlers {
 		paramPaths = append(paramPaths, p)
-	}
-	prefixes := make([]string, 0)
-	for _, w := range m.watchers {
-		if strings.HasSuffix(w.pattern, "*") {
-			prefixes = append(prefixes, strings.TrimSuffix(w.pattern, "*"))
-		}
 	}
 	m.mu.Unlock()
 
@@ -565,64 +573,95 @@ func (m *subManager) reconcile() {
 	ctx, cancel := context.WithTimeout(m.client.rootCtx, m.client.timeout)
 	defer cancel()
 
-	for _, p := range paramPaths {
-		val, err := m.client.fetchParameter(ctx, p, getOptions{})
-		if err != nil {
-			// A dynamic parameter the store no longer has was deleted while the
-			// stream missed the event: treat it as a deletion (defect M3). Any
-			// other error (unavailable, timeout) keeps the last-known value.
-			if errors.Is(err, ErrNotFound) {
-				m.setValue(p, "", false, 0, snapRev, true)
-			}
-			continue
-		}
-		m.setValue(p, val, true, 0, snapRev, true)
+	present := make(map[string]struct{})
+	listed := make(map[string]bool) // namespace string -> fully enumerated
+	for _, ns := range nsList {
+		listed[ns.String()] = m.reconcileNamespace(ctx, ns, snapRev, present)
 	}
 
-	for _, prefix := range prefixes {
-		m.reconcilePrefix(ctx, prefix, snapRev)
+	// A registered hot-reload parameter absent from its (fully listed) namespace
+	// was deleted while the stream missed the event: revert it (defect M3). If
+	// the namespace could not be listed, keep the last-known value.
+	for _, p := range paramPaths {
+		if _, ok := present[p]; ok {
+			continue
+		}
+		if !listed[refOf(p).ns.String()] {
+			continue
+		}
+		m.setValue(p, "", false, 0, snapRev, true)
 	}
 }
 
-func (m *subManager) reconcilePrefix(ctx context.Context, prefix string, snapRev uint64) {
+// reconcileNamespace lists every parameter in ns (empty key prefix) and applies
+// any drift the stream missed, recording each present key in present. It reports
+// whether the namespace was fully enumerated (false on any list error, so the
+// caller does not mistake a fetch failure for a deletion).
+func (m *subManager) reconcileNamespace(ctx context.Context, ns namespaceRef, snapRev uint64, present map[string]struct{}) bool {
 	pageToken := ""
 	for i := 0; i < 100; i++ { // bounded to avoid runaway loops
 		cctx, cancel := m.client.callCtx(ctx, "")
 		resp, err := m.client.params.ListParameters(cctx, &kmsv1.ListParametersRequest{
-			PathPrefix: prefix,
-			PageToken:  pageToken,
+			Namespace: ns.proto(),
+			PageToken: pageToken,
 		})
 		cancel()
 		if err != nil {
-			return
+			return false
 		}
 		for _, p := range resp.GetParameters() {
-			m.setValue(p.GetPath(), p.GetValue(), true, p.GetVersion(), snapRev, true)
+			disp := refFromProto(p.GetRef()).display()
+			present[disp] = struct{}{}
+			m.setValue(disp, p.GetValue(), true, p.GetVersion(), snapRev, true)
 		}
 		pageToken = resp.GetNextPageToken()
 		if pageToken == "" {
-			return
+			return true
 		}
 	}
+	return true
 }
 
-// Watch subscribes to a path or prefix pattern (e.g. "/prod/payments/*") and
-// invokes fn for every change. The returned stop function unregisters the
-// watcher; it is also called automatically if ctx is cancelled.
-func (c *Client) Watch(ctx context.Context, pattern string, fn func(Event)) (stop func(), err error) {
+// Watch subscribes to the client's whole namespace and invokes fn for every
+// change in it — there is no key pattern. An app that only cares about a subset
+// filters inside fn by its own convention (e.g.
+// strings.HasPrefix(ev.Key, "db/")). The returned stop function unregisters the
+// watcher; it is also called automatically if ctx is cancelled. Watch requires
+// the client to have a namespace (Config.Namespace or a namespace-bound
+// identity); otherwise it returns ErrNoNamespace.
+func (c *Client) Watch(ctx context.Context, fn func(Event)) (stop func(), err error) {
+	ns, bound, err := c.resolveNamespace(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if !bound {
+		return nil, fmt.Errorf("%w: Watch needs a namespace (set Config.Namespace or bind the identity)", ErrNoNamespace)
+	}
+	return c.watchNamespace(ctx, ns, fn)
+}
+
+// WatchNamespace watches a specific namespace ("env/app") the client is
+// authorized for, invoking fn for every change in it. Like Watch it takes no key
+// pattern. Use it to observe a namespace other than the client's own.
+func (c *Client) WatchNamespace(ctx context.Context, namespace string, fn func(Event)) (stop func(), err error) {
+	ns, err := parseNamespace(namespace)
+	if err != nil {
+		return nil, err
+	}
+	return c.watchNamespace(ctx, ns, fn)
+}
+
+func (c *Client) watchNamespace(ctx context.Context, ns namespaceRef, fn func(Event)) (func(), error) {
 	if fn == nil {
 		return nil, errors.New("paramstore: Watch requires a non-nil callback")
 	}
-	if pattern == "" {
-		return nil, errors.New("paramstore: Watch requires a non-empty pattern")
-	}
-	w := c.subs().registerWatcher(pattern, fn)
+	w := c.subs().registerWatcher(ns, fn)
 	// done is closed by stop() so the ctx-watcher goroutine below always exits,
 	// even when ctx is non-cancelable (e.g. context.Background()) and the caller
 	// unregisters via stop() rather than context cancellation (defect L3).
 	done := make(chan struct{})
 	var once sync.Once
-	stop = func() {
+	stop := func() {
 		once.Do(func() {
 			close(done)
 			c.subs().removeWatcher(w)
@@ -658,13 +697,4 @@ func backoffDelay(attempt int) time.Duration {
 		j = 10 * time.Millisecond
 	}
 	return j
-}
-
-// matchPattern reports whether a subscription pattern matches a concrete path.
-// A pattern ending in "*" is a prefix match; otherwise it is an exact match.
-func matchPattern(pattern, path string) bool {
-	if strings.HasSuffix(pattern, "*") {
-		return strings.HasPrefix(path, strings.TrimSuffix(pattern, "*"))
-	}
-	return pattern == path
 }

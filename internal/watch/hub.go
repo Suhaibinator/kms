@@ -12,12 +12,12 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
-	"log/slog"
 	"sync"
 	"time"
 
+	"go.uber.org/zap"
+
 	"github.com/Suhaibinator/kms/internal/domain"
-	"github.com/Suhaibinator/kms/internal/pathutil"
 	"github.com/Suhaibinator/kms/internal/storage"
 )
 
@@ -103,7 +103,7 @@ func (o Options) withDefaults() Options {
 // dispatch loop with Run.
 type Hub struct {
 	store storage.Store
-	log   *slog.Logger
+	log   *zap.Logger
 	opts  Options
 	now   func() time.Time
 
@@ -121,9 +121,9 @@ type Hub struct {
 }
 
 // NewHub constructs a hub over store. logger may be nil.
-func NewHub(store storage.Store, logger *slog.Logger, opts Options) *Hub {
+func NewHub(store storage.Store, logger *zap.Logger, opts Options) *Hub {
 	if logger == nil {
-		logger = slog.Default()
+		logger = zap.NewNop()
 	}
 	opts = opts.withDefaults()
 	return &Hub{
@@ -175,7 +175,7 @@ func (h *Hub) Subscribers() []domain.Subscriber {
 func (h *Hub) Run(ctx context.Context) error {
 	cursor, err := h.store.CurrentRevision(ctx)
 	if err != nil {
-		h.log.Error("watch hub: reading current revision at start", "error", err)
+		h.log.Error("watch hub: reading current revision at start", zap.Error(err))
 		// Start from zero; the first drain will re-read and advance.
 		cursor = 0
 	}
@@ -207,7 +207,7 @@ func (h *Hub) drain(ctx context.Context, cursor uint64) uint64 {
 	for {
 		entries, err := h.store.ListChangesSince(ctx, cursor, dispatchBatch)
 		if err != nil {
-			h.log.Error("watch hub: reading change log", "since", cursor, "error", err)
+			h.log.Error("watch hub: reading change log", zap.Uint64("since", cursor), zap.Error(err))
 			return cursor
 		}
 		if len(entries) == 0 {
@@ -223,8 +223,9 @@ func (h *Hub) drain(ctx context.Context, cursor uint64) uint64 {
 	}
 }
 
-// dispatch delivers one entry to every live subscriber whose patterns match and
-// whose authorization predicate allows it. Slow subscribers are dropped.
+// dispatch delivers one entry to every live subscriber of the entry's
+// namespace. Authorization is namespace-level and already enforced at subscribe
+// time, so there is no per-event access check here. Slow subscribers are dropped.
 func (h *Hub) dispatch(e domain.ChangeLogEntry) {
 	h.mu.Lock()
 	subs := make([]*Subscription, 0, len(h.subs))
@@ -234,10 +235,7 @@ func (h *Hub) dispatch(e domain.ChangeLogEntry) {
 	h.mu.Unlock()
 
 	for _, s := range subs {
-		if !s.matches(e.Path) {
-			continue
-		}
-		if !s.allow(e.ResourceType, e.Path) {
+		if !s.matches(e.Ref) {
 			continue
 		}
 		if !s.offer(e) {
@@ -260,7 +258,7 @@ func (h *Hub) dropExpired() {
 	h.mu.Unlock()
 	for _, s := range stale {
 		h.log.Info("watch hub: dropping stale subscriber",
-			"client", s.reg.ClientName, "instance", s.reg.InstanceID)
+			zap.String("client", s.reg.ClientName), zap.String("instance", s.reg.InstanceID))
 		s.Close()
 	}
 }
@@ -269,11 +267,11 @@ func (h *Hub) dropExpired() {
 func (h *Hub) pruneChangeLog(ctx context.Context) {
 	n, err := h.store.PruneChangeLog(ctx, h.opts.RetainDuration, h.opts.RetainRows)
 	if err != nil {
-		h.log.Error("watch hub: pruning change log", "error", err)
+		h.log.Error("watch hub: pruning change log", zap.Error(err))
 		return
 	}
 	if n > 0 {
-		h.log.Info("watch hub: pruned change log", "removed", n)
+		h.log.Info("watch hub: pruned change log", zap.Int("removed", n))
 	}
 }
 
@@ -289,11 +287,6 @@ func (h *Hub) remove(id uint64) {
 // that race in during backlog computation are buffered and de-duplicated
 // against the backlog revision.
 func (h *Hub) Subscribe(ctx context.Context, reg Registration) (*Subscription, error) {
-	if reg.Allowed == nil {
-		// Fail closed: a subscriber with no predicate sees nothing anyway;
-		// treat it as an empty allow so dispatch simply never matches.
-		reg.Allowed = func(string, string) bool { return false }
-	}
 	now := h.now()
 	sub := &Subscription{
 		hub:           h,
@@ -304,7 +297,6 @@ func (h *Hub) Subscribe(ctx context.Context, reg Registration) (*Subscription, e
 		connectedAt:   now,
 		lastHeartbeat: now,
 	}
-	sub.UpdateAllowed(reg.Allowed)
 
 	// Register first so the dispatch loop cannot skip entries committed while
 	// the backlog is being computed.
@@ -330,7 +322,8 @@ func (h *Hub) Subscribe(ctx context.Context, reg Registration) (*Subscription, e
 
 // computeBacklog decides between replaying change-log entries and sending a
 // full snapshot, per the retention/replay policy, and returns the chosen
-// backlog filtered to what the subscriber may see.
+// backlog scoped to the subscriber's namespaces. Namespace-level authorization
+// is enforced at subscribe time, so no per-item filtering happens here.
 func (h *Hub) computeBacklog(ctx context.Context, reg Registration) (Backlog, error) {
 	current, err := h.store.CurrentRevision(ctx)
 	if err != nil {
@@ -350,17 +343,11 @@ func (h *Hub) computeBacklog(ctx context.Context, reg Registration) (Backlog, er
 		// rather than silently skipping the pruned changes.
 	}
 
-	params, snapRev, err := h.store.SnapshotParameters(ctx, reg.Patterns)
+	params, snapRev, err := h.store.SnapshotParameters(ctx, reg.Namespaces)
 	if err != nil {
 		return Backlog{}, err
 	}
-	filtered := params[:0]
-	for _, p := range params {
-		if reg.Allowed(domain.ResourceParameter, p.Path) {
-			filtered = append(filtered, p)
-		}
-	}
-	return Backlog{IsSnapshot: true, Snapshot: filtered, Revision: snapRev}, nil
+	return Backlog{IsSnapshot: true, Snapshot: params, Revision: snapRev}, nil
 }
 
 // canReplay reports whether the reconnecting subscriber's last-seen revision is
@@ -374,15 +361,15 @@ func (h *Hub) canReplay(ctx context.Context, lastSeen, current uint64) bool {
 	}
 	oldest, err := h.store.OldestRetainedRevision(ctx)
 	if err != nil {
-		h.log.Error("watch hub: reading oldest retained revision", "error", err)
+		h.log.Error("watch hub: reading oldest retained revision", zap.Error(err))
 		return false
 	}
 	// The log must contain an unbroken tail starting at or before lastSeen+1.
 	return oldest != 0 && oldest <= lastSeen+1
 }
 
-// replayEntries reads change-log entries in (lastSeen, current], filtered by
-// pattern and authorization. complete is false when a gap is detected at the
+// replayEntries reads change-log entries in (lastSeen, current], filtered to
+// the subscriber's namespaces. complete is false when a gap is detected at the
 // tail (a prune raced this subscribe), signaling the caller to fall back to a
 // snapshot rather than replaying a discontinuous log.
 func (h *Hub) replayEntries(ctx context.Context, reg Registration, current uint64) (entries []domain.ChangeLogEntry, complete bool, err error) {
@@ -415,10 +402,7 @@ func (h *Hub) replayEntries(ctx context.Context, reg Registration, current uint6
 				// stream so it is not delivered twice.
 				continue
 			}
-			if !patternMatchAny(reg.Patterns, e.Path) {
-				continue
-			}
-			if !reg.Allowed(e.ResourceType, e.Path) {
+			if !namespaceMatchAny(reg.Namespaces, e.Ref.NS) {
 				continue
 			}
 			out = append(out, e)
@@ -428,15 +412,6 @@ func (h *Hub) replayEntries(ctx context.Context, reg Registration, current uint6
 		}
 	}
 	return out, true, nil
-}
-
-func patternMatchAny(patterns []string, path string) bool {
-	for _, p := range patterns {
-		if pathutil.Match(p, path) {
-			return true
-		}
-	}
-	return false
 }
 
 // randomHex returns n bytes of hex-encoded randomness for instance IDs. It is

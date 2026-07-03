@@ -1,11 +1,11 @@
 import Link from "next/link";
 import { useRouter } from "next/router";
-import { useCallback, useEffect, useState } from "react";
-import { api, ApiError } from "@/lib/api";
-import type { Parameter, ParameterMetadata } from "@/lib/types";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { api, ApiError, type ResourceRef } from "@/lib/api";
+import { PARAMETER_CONTENT_TYPES, type Parameter, type ParameterMetadata } from "@/lib/types";
 import { useToast } from "@/context/ToastContext";
-import { useQueryParam } from "@/lib/hooks";
-import { formatUnixMs, isEmptyJson, labelEntries, prettyJson } from "@/lib/format";
+import { useQueryParams } from "@/lib/hooks";
+import { displayNamespace, displayPath, formatUnixMs, isEmptyJson, labelEntries, prettyJson } from "@/lib/format";
 import {
   Badge,
   EmptyState,
@@ -22,7 +22,12 @@ import CopyButton from "@/components/CopyButton";
 export default function ParameterDetailPage() {
   const router = useRouter();
   const toast = useToast();
-  const { value: path, ready } = useQueryParam("path");
+  const { values, ready } = useQueryParams(["env", "app", "key"]);
+  const env = values.env ?? "";
+  const app = values.app ?? "";
+  const key = values.key ?? "";
+  const hasRef = !!env && !!app && !!key;
+  const ref = useMemo<ResourceRef>(() => ({ env, app, key }), [env, app, key]);
 
   const [meta, setMeta] = useState<ParameterMetadata | null>(null);
   const [current, setCurrent] = useState<Parameter | null>(null);
@@ -35,7 +40,7 @@ export default function ParameterDetailPage() {
 
   const [newVersionOpen, setNewVersionOpen] = useState(false);
   const [value, setValue] = useState("");
-  const [contentType, setContentType] = useState("text/plain");
+  const [contentType, setContentType] = useState("string");
   const [metadataJson, setMetadataJson] = useState("{}");
   const [saving, setSaving] = useState(false);
 
@@ -43,11 +48,11 @@ export default function ParameterDetailPage() {
   const [deleting, setDeleting] = useState(false);
 
   const load = useCallback(async () => {
-    if (!path) return;
+    if (!hasRef) return;
     setLoading(true);
     setNotFound(false);
     try {
-      const [m, cur] = await Promise.all([api.parameterMetadata(path), api.getParameter(path)]);
+      const [m, cur] = await Promise.all([api.parameterMetadata(ref), api.getParameter(ref)]);
       setMeta(m);
       setCurrent(cur.parameter);
     } catch (err) {
@@ -59,31 +64,33 @@ export default function ParameterDetailPage() {
     } finally {
       setLoading(false);
     }
-  }, [path, toast]);
+  }, [hasRef, ref, toast]);
 
   useEffect(() => {
-    if (ready && path) void load();
-  }, [ready, path, load]);
+    if (ready && hasRef) void load();
+  }, [ready, hasRef, load]);
 
   function openNewVersion() {
     setValue(current?.value ?? "");
-    setContentType(current?.content_type ?? meta?.content_type ?? "text/plain");
+    setContentType(current?.content_type ?? meta?.content_type ?? "string");
     setMetadataJson(!isEmptyJson(meta?.metadata_json) ? prettyJson(meta?.metadata_json) : "{}");
     setNewVersionOpen(true);
   }
 
   async function saveVersion(e: React.FormEvent) {
     e.preventDefault();
-    if (!path) return;
+    if (!hasRef) return;
     setSaving(true);
     try {
       const res = await api.putParameter({
-        path,
+        env,
+        app,
+        key,
         value,
-        content_type: contentType.trim() || "text/plain",
+        content_type: contentType || "string",
         metadata_json: metadataJson.trim() || "{}",
       });
-      toast.success(`Saved version ${res.version}`, path);
+      toast.success(`Saved version ${res.version}`, displayPath(ref));
       setNewVersionOpen(false);
       setViewed(null);
       await load();
@@ -95,9 +102,9 @@ export default function ParameterDetailPage() {
   }
 
   async function viewVersion(version: number) {
-    if (!path) return;
+    if (!hasRef) return;
     try {
-      const res = await api.getParameter(path, version);
+      const res = await api.getParameter(ref, version);
       setViewed({
         version: res.parameter.version,
         value: res.parameter.value,
@@ -109,12 +116,12 @@ export default function ParameterDetailPage() {
   }
 
   async function onDelete() {
-    if (!path) return;
+    if (!hasRef) return;
     setDeleting(true);
     try {
-      await api.deleteParameter(path);
-      toast.success("Parameter deleted", path);
-      await router.push("/parameters");
+      await api.deleteParameter(ref);
+      toast.success("Parameter deleted", displayPath(ref));
+      await router.push(`/parameters?env=${encodeURIComponent(env)}&app=${encodeURIComponent(app)}`);
     } catch (err) {
       toast.error(err, "Failed to delete parameter");
     } finally {
@@ -122,9 +129,17 @@ export default function ParameterDetailPage() {
     }
   }
 
+  const backLink = hasRef
+    ? `/parameters?env=${encodeURIComponent(env)}&app=${encodeURIComponent(app)}`
+    : "/parameters";
+
   if (!ready || loading) return <Loading label="Loading parameter…" />;
-  if (!path) {
-    return <EmptyState title="No parameter specified">Provide a ?path= query parameter.</EmptyState>;
+  if (!hasRef) {
+    return (
+      <EmptyState title="No parameter specified">
+        Provide ?env=, ?app=, and ?key= query parameters.
+      </EmptyState>
+    );
   }
   if (notFound || !meta) {
     return (
@@ -132,13 +147,13 @@ export default function ParameterDetailPage() {
         <PageHeader
           title="Parameter not found"
           actions={
-            <Link className="btn" href="/parameters">
+            <Link className="btn" href={backLink}>
               Back to parameters
             </Link>
           }
         />
         <EmptyState title="Not found">
-          No parameter exists at <span className="mono">{path}</span>.
+          No parameter exists at <span className="mono">{displayPath(ref)}</span>.
         </EmptyState>
       </>
     );
@@ -147,10 +162,10 @@ export default function ParameterDetailPage() {
   return (
     <>
       <PageHeader
-        title={<span className="mono">{meta.path}</span>}
+        title={<span className="mono">{displayPath(ref)}</span>}
         subtitle={
-          <Link href="/parameters" className="text-sm">
-            ← All parameters
+          <Link href={backLink} className="text-sm">
+            ← {displayNamespace(ref)}
           </Link>
         }
         actions={
@@ -187,6 +202,8 @@ export default function ParameterDetailPage() {
         <div className="card-title">Metadata</div>
         <KeyValue
           rows={[
+            ["Namespace", <span className="mono" key="ns">{displayNamespace(ref)}</span>],
+            ["Key", <span className="mono" key="key">{key}</span>],
             ["Content type", meta.content_type || "—"],
             ["Created", formatUnixMs(meta.created_at_unix_ms)],
             ["Updated", formatUnixMs(meta.updated_at_unix_ms)],
@@ -300,11 +317,17 @@ export default function ParameterDetailPage() {
           </Field>
           <div className="form-row">
             <Field label="Content type">
-              <input
-                className="input"
+              <select
+                className="select"
                 value={contentType}
                 onChange={(e) => setContentType(e.target.value)}
-              />
+              >
+                {PARAMETER_CONTENT_TYPES.map((ct) => (
+                  <option key={ct} value={ct}>
+                    {ct}
+                  </option>
+                ))}
+              </select>
             </Field>
             <Field label="Metadata JSON">
               <input
@@ -323,7 +346,7 @@ export default function ParameterDetailPage() {
         danger
         message={
           <>
-            Delete <span className="mono">{meta.path}</span> and all its versions?
+            Delete <span className="mono">{displayPath(ref)}</span> and all its versions?
           </>
         }
         confirmLabel="Delete parameter"

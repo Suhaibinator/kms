@@ -2,34 +2,24 @@ package watch
 
 import (
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/Suhaibinator/kms/internal/domain"
-	"github.com/Suhaibinator/kms/internal/pathutil"
 )
 
-// allowFunc is the per-subscriber authorization predicate. It is held behind an
-// atomic pointer so the transport layer can swap in a freshly re-authorized
-// predicate (on heartbeat) without racing the dispatch loop that reads it.
-type allowFunc func(resourceType, path string) bool
-
-func denyAll(string, string) bool { return false }
-
 // Registration is the immutable description of a watch subscription supplied by
-// the transport layer. Patterns are already normalized (pathutil.NormalizePrefix)
-// and Allowed is the per-subscriber authorization predicate built from the
-// caller's policies (see core.Service.WatchAccessChecker).
+// the transport layer. Namespaces are the (env, app) namespaces the stream
+// watches; they are already validated and already authorized (core checks
+// namespace-level access once, at subscribe time — see
+// core.Service.AuthorizeSubscribe). The hub performs no per-event authorization:
+// a subscriber receives every change in each of its namespaces.
 type Registration struct {
 	ClientName       string
 	InstanceID       string
 	Identity         string
 	RemoteAddr       string
-	Patterns         []string
+	Namespaces       []domain.NamespaceRef
 	LastSeenRevision uint64
-	// Allowed reports whether the subscriber may observe a change to
-	// (resourceType, path). A nil predicate denies everything.
-	Allowed func(resourceType, path string) bool
 }
 
 // Backlog is the initial state handed to a subscriber before live events flow.
@@ -59,11 +49,6 @@ type Subscription struct {
 	done   chan struct{}
 
 	bufferCap int
-
-	// allowed is the live authorization predicate. It starts from
-	// reg.Allowed and may be replaced via UpdateAllowed as the stream is
-	// periodically re-authorized.
-	allowed atomic.Pointer[allowFunc]
 
 	closeOnce sync.Once
 
@@ -123,10 +108,10 @@ func (s *Subscription) Close() {
 	})
 }
 
-// offer is called by the dispatch loop for every entry that matches this
-// subscriber's patterns and authorization. It returns false when the
-// subscriber must be dropped (buffer overflow or already closed); the caller
-// then closes it. It never blocks.
+// offer is called by the dispatch loop for every entry in one of this
+// subscriber's namespaces. It returns false when the subscriber must be dropped
+// (buffer overflow or already closed); the caller then closes it. It never
+// blocks.
 func (s *Subscription) offer(e domain.ChangeLogEntry) (alive bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -188,13 +173,13 @@ func (s *Subscription) activate(bl Backlog) (alive bool) {
 func (s *Subscription) describe() domain.Subscriber {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	paths := make([]string, len(s.reg.Patterns))
-	copy(paths, s.reg.Patterns)
+	namespaces := make([]domain.NamespaceRef, len(s.reg.Namespaces))
+	copy(namespaces, s.reg.Namespaces)
 	return domain.Subscriber{
 		ClientName:        s.reg.ClientName,
 		InstanceID:        s.reg.InstanceID,
 		Identity:          s.reg.Identity,
-		Paths:             paths,
+		Namespaces:        namespaces,
 		RemoteAddr:        s.reg.RemoteAddr,
 		ConnectedAt:       s.connectedAt,
 		LastHeartbeat:     s.lastHeartbeat,
@@ -209,30 +194,15 @@ func (s *Subscription) lastHeartbeatTime() time.Time {
 	return s.lastHeartbeat
 }
 
-// allow evaluates the current authorization predicate for (resourceType, path).
-// A subscription with no predicate installed denies everything (fail closed).
-func (s *Subscription) allow(resourceType, path string) bool {
-	fp := s.allowed.Load()
-	if fp == nil {
-		return false
-	}
-	return (*fp)(resourceType, path)
+// matches reports whether the entry's namespace is one this subscriber watches.
+func (s *Subscription) matches(ref domain.Ref) bool {
+	return namespaceMatchAny(s.reg.Namespaces, ref.NS)
 }
 
-// UpdateAllowed atomically swaps the authorization predicate. A nil predicate
-// is treated as deny-all. It is safe to call concurrently with dispatch.
-func (s *Subscription) UpdateAllowed(fn func(resourceType, path string) bool) {
-	f := allowFunc(denyAll)
-	if fn != nil {
-		f = fn
-	}
-	s.allowed.Store(&f)
-}
-
-// matches reports whether any registered pattern covers the entry's path.
-func (s *Subscription) matches(path string) bool {
-	for _, p := range s.reg.Patterns {
-		if pathutil.Match(p, path) {
+// namespaceMatchAny reports whether ns is in the subscribed set.
+func namespaceMatchAny(namespaces []domain.NamespaceRef, ns domain.NamespaceRef) bool {
+	for _, n := range namespaces {
+		if n == ns {
 			return true
 		}
 	}

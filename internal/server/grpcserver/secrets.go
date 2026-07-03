@@ -17,12 +17,12 @@ func (h *secretServer) GetSecret(ctx context.Context, req *kmsv1.GetSecretReques
 	if err != nil {
 		return nil, err
 	}
-	val, err := h.s.svc.GetSecret(ctx, pr, req.GetPath(), req.GetVersion(), req.GetLabel())
+	val, err := h.s.svc.GetSecret(ctx, pr, refFromProto(req.GetRef()), req.GetVersion(), req.GetLabel())
 	if err != nil {
 		return nil, h.s.mapErr(ctx, err)
 	}
 	return &kmsv1.GetSecretResponse{
-		Path:            val.Path,
+		Ref:             refToProto(val.Ref),
 		Version:         val.Version,
 		Value:           val.Value,
 		ContentType:     val.ContentType,
@@ -37,7 +37,7 @@ func (h *secretServer) PutSecret(ctx context.Context, req *kmsv1.PutSecretReques
 		return nil, err
 	}
 	res, err := h.s.svc.PutSecret(ctx, pr, core.PutSecretInput{
-		Path:          req.GetPath(),
+		Ref:           refFromProto(req.GetRef()),
 		Value:         req.GetValue(),
 		ContentType:   req.GetContentType(),
 		Metadata:      req.GetMetadataJson(),
@@ -61,7 +61,7 @@ func (h *secretServer) ListSecrets(ctx context.Context, req *kmsv1.ListSecretsRe
 	if err != nil {
 		return nil, err
 	}
-	secrets, next, err := h.s.svc.ListSecrets(ctx, pr, req.GetPathPrefix(), pageFrom(req.GetPageSize(), req.GetPageToken()))
+	secrets, next, err := h.s.svc.ListSecrets(ctx, pr, nsRefFromProto(req.GetNamespace()), req.GetKeyPrefix(), pageFrom(req.GetPageSize(), req.GetPageToken()))
 	if err != nil {
 		return nil, h.s.mapErr(ctx, err)
 	}
@@ -77,7 +77,7 @@ func (h *secretServer) DeleteSecret(ctx context.Context, req *kmsv1.DeleteSecret
 	if err != nil {
 		return nil, err
 	}
-	revision, err := h.s.svc.DeleteSecret(ctx, pr, req.GetPath())
+	revision, err := h.s.svc.DeleteSecret(ctx, pr, refFromProto(req.GetRef()))
 	if err != nil {
 		return nil, h.s.mapErr(ctx, err)
 	}
@@ -89,7 +89,7 @@ func (h *secretServer) DisableSecret(ctx context.Context, req *kmsv1.DisableSecr
 	if err != nil {
 		return nil, err
 	}
-	revision, err := h.s.svc.DisableSecret(ctx, pr, req.GetPath(), req.GetVersion(), req.GetEnable())
+	revision, err := h.s.svc.DisableSecret(ctx, pr, refFromProto(req.GetRef()), req.GetVersion(), req.GetEnable())
 	if err != nil {
 		return nil, h.s.mapErr(ctx, err)
 	}
@@ -101,7 +101,7 @@ func (h *secretServer) DestroySecretVersion(ctx context.Context, req *kmsv1.Dest
 	if err != nil {
 		return nil, err
 	}
-	revision, err := h.s.svc.DestroySecretVersion(ctx, pr, req.GetPath(), req.GetVersion())
+	revision, err := h.s.svc.DestroySecretVersion(ctx, pr, refFromProto(req.GetRef()), req.GetVersion())
 	if err != nil {
 		return nil, h.s.mapErr(ctx, err)
 	}
@@ -113,7 +113,7 @@ func (h *secretServer) GetSecretMetadata(ctx context.Context, req *kmsv1.GetSecr
 	if err != nil {
 		return nil, err
 	}
-	sec, err := h.s.svc.GetSecretInfo(ctx, pr, req.GetPath())
+	sec, err := h.s.svc.GetSecretInfo(ctx, pr, refFromProto(req.GetRef()))
 	if err != nil {
 		return nil, h.s.mapErr(ctx, err)
 	}
@@ -125,7 +125,7 @@ func (h *secretServer) PromoteSecretVersion(ctx context.Context, req *kmsv1.Prom
 	if err != nil {
 		return nil, err
 	}
-	current, previous, revision, err := h.s.svc.PromoteSecretVersion(ctx, pr, req.GetPath(), req.GetVersion())
+	current, previous, revision, err := h.s.svc.PromoteSecretVersion(ctx, pr, refFromProto(req.GetRef()), req.GetVersion())
 	if err != nil {
 		return nil, h.s.mapErr(ctx, err)
 	}

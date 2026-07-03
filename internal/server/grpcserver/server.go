@@ -9,10 +9,10 @@ package grpcserver
 import (
 	"context"
 	"crypto/tls"
-	"log/slog"
 	"net"
 	"time"
 
+	"go.uber.org/zap"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/health"
@@ -53,7 +53,7 @@ type Server struct {
 	cfg    Config
 	svc    *core.Service
 	hub    *watch.Hub
-	log    *slog.Logger
+	log    *zap.Logger
 	grpc   *grpc.Server
 	health *health.Server
 
@@ -74,7 +74,7 @@ func New(svc *core.Service, hub *watch.Hub, cfg Config) (*Server, error) {
 	}
 	log := svc.Logger()
 	if log == nil {
-		log = slog.Default()
+		log = zap.NewNop()
 	}
 
 	s := &Server{

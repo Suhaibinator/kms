@@ -65,7 +65,7 @@ func TestUnsealInitializeAndUnlockFileMode(t *testing.T) {
 	}
 
 	// A value encrypted under the fresh keyring round-trips.
-	aad := BuildAAD(domain.ResourceSecret, "/x", 1)
+	aad := BuildAAD("prod", "app", "/x", 1)
 	res, err := Encrypt(ring.Active(), []byte("v"), aad)
 	if err != nil {
 		t.Fatalf("Encrypt: %v", err)

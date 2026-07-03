@@ -1,13 +1,48 @@
 // Types mirror the HTTP API contract in docs/http-api.md exactly.
 // Field names must match the JSON wire format; do not rename.
+//
+// Namespace-native model: a resource is addressed by a namespace (env, app)
+// plus a relative key. The old flat `path` string is gone from the wire;
+// `/env/app/key` survives only as a display format (see lib/format.ts).
 
 export type IdentityKind = "admin" | "client";
+
+// Authentication methods a namespace admits and an identity may present.
+export type AuthMethod = "mtls" | "token";
+
+// A namespace address. Both fields are required to name a namespace.
+export interface NamespaceRef {
+  env: string;
+  app: string;
+}
 
 export interface Identity {
   name: string;
   kind: IdentityKind;
   disabled?: boolean;
   created_at_unix_ms?: number;
+  // Bound namespace, or null/absent for unbound (admin/tooling) identities.
+  namespace?: NamespaceRef | null;
+  has_token?: boolean;
+  certs?: IdentityCert[];
+}
+
+export interface IdentityCert {
+  serial: string;
+  fingerprint: string;
+  not_after_unix_ms: number;
+  // Zero when the cert is still valid; a timestamp once revoked.
+  revoked_at_unix_ms: number;
+  created_at_unix_ms: number;
+}
+
+// One-time PEM bundle returned when a client certificate is issued. The
+// private key is shown exactly once and never stored server-side.
+export interface CertBundle {
+  cert_pem: string;
+  key_pem: string;
+  serial: string;
+  not_after_unix_ms: number;
 }
 
 export interface LoginResponse {
@@ -34,15 +69,35 @@ export interface ApiErrorEnvelope {
 // --- Namespaces ---
 
 export interface Namespace {
-  path: string;
+  env: string;
+  app: string;
   description: string;
+  allowed_auth_methods: AuthMethod[];
   created_by: string;
   created_at_unix_ms: number;
+  parameter_count: number;
+  secret_count: number;
 }
 
 export interface ListNamespacesResponse {
   namespaces: Namespace[];
   next_page_token: string;
+}
+
+export interface CreateNamespaceRequest {
+  env: string;
+  app: string;
+  description: string;
+  allowed_auth_methods: AuthMethod[];
+}
+
+// PATCH body: env/app identify the namespace; description + auth methods are
+// a full replacement.
+export interface UpdateNamespaceRequest {
+  env: string;
+  app: string;
+  description: string;
+  allowed_auth_methods: AuthMethod[];
 }
 
 // --- Parameters ---
@@ -52,7 +107,9 @@ export interface ParameterLabels {
 }
 
 export interface Parameter {
-  path: string;
+  env: string;
+  app: string;
+  key: string;
   value: string;
   content_type: string;
   version: number;
@@ -77,7 +134,9 @@ export interface ParameterVersionMeta {
 }
 
 export interface ParameterMetadata {
-  path: string;
+  env: string;
+  app: string;
+  key: string;
   content_type: string;
   metadata_json: string;
   created_at_unix_ms: number;
@@ -87,7 +146,9 @@ export interface ParameterMetadata {
 }
 
 export interface PutParameterRequest {
-  path: string;
+  env: string;
+  app: string;
+  key: string;
   value: string;
   content_type: string;
   metadata_json: string;
@@ -117,7 +178,9 @@ export interface SecretVersion {
 }
 
 export interface SecretMetadata {
-  path: string;
+  env: string;
+  app: string;
+  key: string;
   content_type: string;
   client_bound: boolean;
   has_access_token: boolean;
@@ -134,7 +197,9 @@ export interface ListSecretsResponse {
 }
 
 export interface CreateSecretRequest {
-  path: string;
+  env: string;
+  app: string;
+  key: string;
   value_base64: string;
   content_type: string;
   metadata_json: string;
@@ -149,33 +214,13 @@ export interface CreateSecretResponse {
   access_token?: string;
 }
 
-export interface RevealSecretRequest {
-  path: string;
-  version: number;
-  label: string;
-}
-
 export interface RevealSecretResponse {
-  path: string;
+  env: string;
+  app: string;
+  key: string;
   version: number;
   value_base64: string;
   content_type: string;
-}
-
-export interface DisableSecretRequest {
-  path: string;
-  version: number;
-  enable: boolean;
-}
-
-export interface DestroySecretRequest {
-  path: string;
-  version: number;
-}
-
-export interface PromoteSecretRequest {
-  path: string;
-  version: number;
 }
 
 export interface PromoteSecretResponse {
@@ -186,9 +231,13 @@ export interface PromoteSecretResponse {
 
 // --- Policies ---
 
+// A rule grants an operation over a whole namespace. env/app are exact or "*".
+// There is no key field: the namespace (env, app) is the unit of authorization,
+// so a grant applies to every key in the matched namespace.
 export interface PolicyRule {
   operation: string;
-  path: string;
+  env: string;
+  app: string;
 }
 
 export interface Policy {
@@ -212,13 +261,43 @@ export interface ListIdentitiesResponse {
   next_page_token: string;
 }
 
+export interface CreateIdentityRequest {
+  name: string;
+  kind: IdentityKind;
+  // null = unbound. When set, the identity gets the implicit home-namespace
+  // grant for reads/lists within it.
+  namespace: NamespaceRef | null;
+  auth_methods: AuthMethod[];
+  // Only meaningful when auth_methods includes "mtls".
+  cert_ttl_seconds: number;
+}
+
+// token present only when auth_methods included "token"; cert present only
+// when it included "mtls". Both are shown exactly once.
 export interface CreateIdentityResponse {
   identity: Identity;
+  token?: string;
+  cert?: CertBundle;
+}
+
+export interface IssueCertResponse {
+  cert: CertBundle;
+}
+
+// One-time new bearer token from rotating a token identity's credential.
+export interface RotateIdentityResponse {
   token: string;
 }
 
-export interface RotateIdentityResponse {
-  token: string;
+export interface WhoAmIResponse {
+  name: string;
+  kind: IdentityKind;
+  namespace: NamespaceRef | null;
+  auth_method: string;
+}
+
+export interface CaResponse {
+  cert_pem: string;
 }
 
 // --- Audit ---
@@ -229,7 +308,9 @@ export interface AuditEvent {
   actor_identity: string;
   actor_type: string;
   resource_type: string;
-  resource_path: string;
+  resource_env: string;
+  resource_app: string;
+  resource_key: string;
   resource_version: number;
   decision: string;
   source_ip: string;
@@ -245,7 +326,9 @@ export interface ListAuditResponse {
 }
 
 export interface AuditFilters {
-  path_prefix?: string;
+  env?: string;
+  app?: string;
+  key_prefix?: string;
   actor?: string;
   event_type?: string;
   from_unix_ms?: number;
@@ -260,7 +343,10 @@ export interface Subscriber {
   client_name: string;
   instance_id: string;
   identity: string;
-  paths: string[];
+  // The namespaces this stream is subscribed to. A subscriber receives every
+  // change in each of these namespaces; there is no per-key filtering on the
+  // wire (any narrower interest is applied client-side in the callback).
+  namespaces: NamespaceRef[];
   remote_addr: string;
   connected_at_unix_ms: number;
   last_heartbeat_unix_ms: number;
@@ -285,7 +371,7 @@ export interface KeysResponse {
   keys: KeyMetadata[];
 }
 
-// The operation identifiers recognized by the policy engine (plan 16.1).
+// The operation identifiers recognized by the policy engine (plan §6, §16.1).
 export const POLICY_OPERATIONS: string[] = [
   "*",
   "parameter:*",
@@ -302,7 +388,22 @@ export const POLICY_OPERATIONS: string[] = [
   "secret:promote",
   "admin:*",
   "admin:namespace:create",
+  "admin:namespace:update",
+  "admin:namespace:delete",
+  "admin:identity:cert",
   "admin:policy:write",
   "admin:audit:read",
   "admin:key:rotate",
+];
+
+// The content types the server accepts for a parameter value. Anything outside
+// this allowlist is rejected with invalid_argument, so the UI must offer only
+// these. "string" is the default.
+export const PARAMETER_CONTENT_TYPES: string[] = [
+  "string",
+  "integer",
+  "float",
+  "boolean",
+  "json",
+  "binary",
 ];

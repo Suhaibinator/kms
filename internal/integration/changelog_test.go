@@ -19,8 +19,8 @@ func TestChangeLog(t *testing.T) {
 	}
 
 	var revs []uint64
-	for _, p := range []string{"/prod/a", "/prod/b", "/prod/c", "/prod/d"} {
-		_, rev, err := h.svc.PutParameter(ctx, h.admin, p, "v", "string", "")
+	for _, p := range []string{"/prod/app/a", "/prod/app/b", "/prod/app/c", "/prod/app/d"} {
+		_, rev, err := h.svc.PutParameter(ctx, h.admin, h.ensureNS(p), "v", "string", "")
 		if err != nil {
 			t.Fatalf("PutParameter %s: %v", p, err)
 		}
@@ -74,7 +74,7 @@ func TestChangeLog(t *testing.T) {
 	}
 
 	// A subsequent write must not reuse a pruned revision.
-	_, nextRev, err := h.svc.PutParameter(ctx, h.admin, "/prod/e", "v", "string", "")
+	_, nextRev, err := h.svc.PutParameter(ctx, h.admin, h.ensureNS("/prod/app/e"), "v", "string", "")
 	if err != nil {
 		t.Fatalf("PutParameter after prune: %v", err)
 	}

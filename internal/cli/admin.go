@@ -5,8 +5,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log/slog"
 	"os"
+
+	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
 
 	"github.com/Suhaibinator/kms/internal/core"
 	"github.com/Suhaibinator/kms/internal/crypto"
@@ -16,8 +18,8 @@ import (
 
 // quietLogger builds a warn-level logger for administrative commands so normal
 // runs keep stdout/stderr clean while still surfacing problems.
-func (c *CLI) quietLogger() *slog.Logger {
-	return newLogger(c.Stderr, slog.LevelWarn)
+func (c *CLI) quietLogger() *zap.Logger {
+	return newLogger(c.Stderr, zapcore.WarnLevel)
 }
 
 // --- init ------------------------------------------------------------------
@@ -58,7 +60,11 @@ func (c *CLI) cmdInit(args []string) int {
 		if err != nil {
 			return c.fail("generating admin token: %v", err)
 		}
-		if _, err := store.CreateIdentity(ctx, *admin, domain.IdentityKindAdmin, hash); err != nil {
+		if _, err := store.CreateIdentity(ctx, storage.CreateIdentityParams{
+			Name:      *admin,
+			Kind:      domain.IdentityKindAdmin,
+			TokenHash: hash,
+		}); err != nil {
 			return c.fail("creating admin identity: %v", err)
 		}
 		printTokenOnce(c.Stdout, "admin identity", *admin, token)
@@ -214,7 +220,11 @@ func (c *CLI) cmdCreateAdmin(args []string) int {
 	if err != nil {
 		return c.fail("generating token: %v", err)
 	}
-	if _, err := store.CreateIdentity(context.Background(), *name, domain.IdentityKindAdmin, hash); err != nil {
+	if _, err := store.CreateIdentity(context.Background(), storage.CreateIdentityParams{
+		Name:      *name,
+		Kind:      domain.IdentityKindAdmin,
+		TokenHash: hash,
+	}); err != nil {
 		return c.fail("creating admin identity: %v", err)
 	}
 	printTokenOnce(c.Stdout, "admin identity", *name, token)
@@ -253,11 +263,12 @@ func (c *CLI) cmdRotateKEK(args []string) int {
 	}
 
 	pr := core.Principal{Identity: domain.Identity{Name: "cli", Kind: domain.IdentityKindAdmin}}
-	count, err := svc.RotateKEK(ctx, pr, newKM, material)
+	secretsRewrapped, caRewrapped, err := svc.RotateKEK(ctx, pr, newKM, material)
 	if err != nil {
 		return c.fail("rotating KEK: %v", err)
 	}
-	_, _ = fmt.Fprintf(c.Stdout, "KEK rotated: %d secret versions rewrapped under %s\n", count, newKM.ID)
+	_, _ = fmt.Fprintf(c.Stdout, "KEK rotated: %d secret versions and %d CA keys rewrapped under %s\n",
+		secretsRewrapped, caRewrapped, newKM.ID)
 	if *newKeyFile != "" {
 		_, _ = fmt.Fprintf(c.Stdout, "New master key file: %s (back it up; the old key is no longer sufficient after retirement).\n", *newKeyFile)
 	} else {

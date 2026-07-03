@@ -3,8 +3,8 @@ package grpcserver
 import (
 	"context"
 	"errors"
-	"log/slog"
 
+	"go.uber.org/zap"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
@@ -16,7 +16,7 @@ import (
 // to a bare "internal error" so no key metadata, ciphertext detail, or panic
 // value ever leaks to the caller. Unexpected errors are logged server-side with
 // the request ID for correlation.
-func mapError(log *slog.Logger, ctx context.Context, err error) error {
+func mapError(log *zap.Logger, ctx context.Context, err error) error {
 	if err == nil {
 		return nil
 	}
@@ -42,7 +42,7 @@ func mapError(log *slog.Logger, ctx context.Context, err error) error {
 	default:
 		// Log the real error server-side; return an opaque message.
 		if log != nil {
-			log.Error("unhandled internal error", "request_id", requestIDFrom(ctx), "error", err)
+			log.Error("unhandled internal error", zap.String("request_id", requestIDFrom(ctx)), zap.Error(err))
 		}
 		return status.Error(codes.Internal, "internal error")
 	}

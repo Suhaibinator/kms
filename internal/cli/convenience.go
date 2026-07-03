@@ -18,9 +18,12 @@ import (
 	"google.golang.org/grpc/metadata"
 
 	kmsv1 "github.com/Suhaibinator/kms/gen/kmsv1"
+	"github.com/Suhaibinator/kms/internal/domain"
+	"github.com/Suhaibinator/kms/internal/keyutil"
 )
 
-// connFlags holds the shared gRPC connection flags for convenience commands.
+// connFlags holds the shared gRPC connection flags for convenience and admin
+// commands that talk to a running server.
 type connFlags struct {
 	endpoint    string
 	token       string
@@ -72,7 +75,8 @@ func (cf *connFlags) dial() (*grpc.ClientConn, error) {
 }
 
 // authCtx attaches the identity token and optional per-secret token as gRPC
-// metadata, matching the server's expected header names.
+// metadata, matching the server's expected header names. mTLS callers omit the
+// bearer token; the server derives their identity from the client certificate.
 func (cf *connFlags) authCtx(ctx context.Context) context.Context {
 	var kvs []string
 	if cf.token != "" {
@@ -91,6 +95,27 @@ func callContext() (context.Context, context.CancelFunc) {
 	return context.WithTimeout(context.Background(), 30*time.Second)
 }
 
+// protoRef builds a wire ResourceRef from a domain Ref. The CLI is a client, so
+// it may resolve the "/env/app/key" display form to explicit fields locally.
+func protoRef(ref domain.Ref) *kmsv1.ResourceRef {
+	return &kmsv1.ResourceRef{
+		Namespace: &kmsv1.NamespaceRef{Env: ref.NS.Env, App: ref.NS.App},
+		Key:       ref.Key,
+	}
+}
+
+// displayPath renders a wire ResourceRef as "/env/app/key" for output.
+func displayPath(ref *kmsv1.ResourceRef) string {
+	if ref == nil {
+		return ""
+	}
+	ns := ref.GetNamespace()
+	return domain.Ref{
+		NS:  domain.NamespaceRef{Env: ns.GetEnv(), App: ns.GetApp()},
+		Key: ref.GetKey(),
+	}.String()
+}
+
 // --- put-secret ------------------------------------------------------------
 
 func (c *CLI) cmdPutSecret(args []string) int {
@@ -106,9 +131,12 @@ func (c *CLI) cmdPutSecret(args []string) int {
 	}
 	pos := c.args()
 	if len(pos) < 1 || pos[0] == "" {
-		return c.fail("put-secret requires a PATH argument")
+		return c.fail("put-secret requires a /env/app/key argument")
 	}
-	path := pos[0]
+	ref, err := keyutil.SplitDisplayPath(pos[0])
+	if err != nil {
+		return c.fail("invalid path: %v", err)
+	}
 	value, err := c.readValue(*valueFile)
 	if err != nil {
 		return c.fail("reading value: %v", err)
@@ -123,7 +151,7 @@ func (c *CLI) cmdPutSecret(args []string) int {
 	defer cancel()
 
 	resp, err := kmsv1.NewSecretServiceClient(conn).PutSecret(cf.authCtx(ctx), &kmsv1.PutSecretRequest{
-		Path:                path,
+		Ref:                 protoRef(ref),
 		Value:               value,
 		ContentType:         *contentType,
 		ClientBound:         *clientBound,
@@ -132,7 +160,7 @@ func (c *CLI) cmdPutSecret(args []string) int {
 	if err != nil {
 		return c.fail("put-secret: %v", err)
 	}
-	_, _ = fmt.Fprintf(c.Stdout, "Stored %s version %d (revision %d)\n", path, resp.Version, resp.Revision)
+	_, _ = fmt.Fprintf(c.Stdout, "Stored %s version %d (revision %d)\n", ref, resp.Version, resp.Revision)
 	if resp.AccessToken != "" {
 		_, _ = fmt.Fprintf(c.Stdout, "  access token: %s\n", resp.AccessToken)
 		_, _ = fmt.Fprintln(c.Stdout, "  WARNING: shown once; store it now.")
@@ -155,9 +183,12 @@ func (c *CLI) cmdGetSecret(args []string) int {
 	}
 	pos := c.args()
 	if len(pos) < 1 || pos[0] == "" {
-		return c.fail("get-secret requires a PATH argument")
+		return c.fail("get-secret requires a /env/app/key argument")
 	}
-	path := pos[0]
+	ref, err := keyutil.SplitDisplayPath(pos[0])
+	if err != nil {
+		return c.fail("invalid path: %v", err)
+	}
 
 	conn, err := cf.dial()
 	if err != nil {
@@ -168,7 +199,7 @@ func (c *CLI) cmdGetSecret(args []string) int {
 	defer cancel()
 
 	resp, err := kmsv1.NewSecretServiceClient(conn).GetSecret(cf.authCtx(ctx), &kmsv1.GetSecretRequest{
-		Path:    path,
+		Ref:     protoRef(ref),
 		Version: *version,
 		Label:   *label,
 	})
@@ -204,9 +235,13 @@ func (c *CLI) cmdPutParameter(args []string) int {
 	}
 	pos := c.args()
 	if len(pos) < 2 || pos[0] == "" {
-		return c.fail("put-parameter requires PATH and VALUE arguments")
+		return c.fail("put-parameter requires /env/app/key and VALUE arguments")
 	}
-	path, value := pos[0], pos[1]
+	ref, err := keyutil.SplitDisplayPath(pos[0])
+	if err != nil {
+		return c.fail("invalid path: %v", err)
+	}
+	value := pos[1]
 
 	conn, err := cf.dial()
 	if err != nil {
@@ -217,14 +252,14 @@ func (c *CLI) cmdPutParameter(args []string) int {
 	defer cancel()
 
 	resp, err := kmsv1.NewParameterServiceClient(conn).PutParameter(cf.authCtx(ctx), &kmsv1.PutParameterRequest{
-		Path:        path,
+		Ref:         protoRef(ref),
 		Value:       value,
 		ContentType: *contentType,
 	})
 	if err != nil {
 		return c.fail("put-parameter: %v", err)
 	}
-	_, _ = fmt.Fprintf(c.Stdout, "Stored %s version %d (revision %d)\n", path, resp.Version, resp.Revision)
+	_, _ = fmt.Fprintf(c.Stdout, "Stored %s version %d (revision %d)\n", ref, resp.Version, resp.Revision)
 	return 0
 }
 
@@ -233,13 +268,19 @@ func (c *CLI) cmdPutParameter(args []string) int {
 func (c *CLI) cmdList(args []string) int {
 	fs := c.newFlags("list")
 	cf := addConnFlags(fs)
+	keyPrefix := fs.String("prefix", "", "relative key prefix within the namespace")
 	if !c.parseFlags(fs, args) {
 		return 2
 	}
-	var prefix string
-	if pos := c.args(); len(pos) > 0 {
-		prefix = pos[0]
+	pos := c.args()
+	if len(pos) < 1 || pos[0] == "" {
+		return c.fail("list requires an env/app namespace argument")
 	}
+	ns, err := keyutil.ParseNamespace(pos[0])
+	if err != nil {
+		return c.fail("invalid namespace: %v", err)
+	}
+	pns := &kmsv1.NamespaceRef{Env: ns.Env, App: ns.App}
 
 	conn, err := cf.dial()
 	if err != nil {
@@ -259,19 +300,19 @@ func (c *CLI) cmdList(args []string) int {
 	// Page through the full result set; a listing command that silently
 	// truncated at the first page would give a misleading partial view.
 	for token := ""; ; {
-		resp, err := paramClient.ListParameters(actx, &kmsv1.ListParametersRequest{PathPrefix: prefix, PageToken: token})
+		resp, err := paramClient.ListParameters(actx, &kmsv1.ListParametersRequest{Namespace: pns, KeyPrefix: *keyPrefix, PageToken: token})
 		if err != nil {
 			return c.fail("list parameters: %v", err)
 		}
 		for _, p := range resp.Parameters {
-			_, _ = fmt.Fprintf(tw, "parameter\t%s\t%d\t%s\n", p.Path, p.Version, p.ContentType)
+			_, _ = fmt.Fprintf(tw, "parameter\t%s\t%d\t%s\n", displayPath(p.Ref), p.Version, p.ContentType)
 		}
 		if token = resp.NextPageToken; token == "" {
 			break
 		}
 	}
 	for token := ""; ; {
-		resp, err := secretClient.ListSecrets(actx, &kmsv1.ListSecretsRequest{PathPrefix: prefix, PageToken: token})
+		resp, err := secretClient.ListSecrets(actx, &kmsv1.ListSecretsRequest{Namespace: pns, KeyPrefix: *keyPrefix, PageToken: token})
 		if err != nil {
 			return c.fail("list secrets: %v", err)
 		}
@@ -280,7 +321,7 @@ func (c *CLI) cmdList(args []string) int {
 			if s.ClientBound {
 				note = "client-bound"
 			}
-			_, _ = fmt.Fprintf(tw, "secret\t%s\t%d\t%s\n", s.Path, s.Labels["current"], note)
+			_, _ = fmt.Fprintf(tw, "secret\t%s\t%d\t%s\n", displayPath(s.Ref), s.Labels["current"], note)
 		}
 		if token = resp.NextPageToken; token == "" {
 			break

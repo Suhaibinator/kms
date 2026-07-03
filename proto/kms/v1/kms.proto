@@ -7,10 +7,32 @@ option go_package = "github.com/Suhaibinator/kms/gen/kmsv1";
 // ---------------------------------------------------------------------------
 // Common types
 // ---------------------------------------------------------------------------
+//
+// A namespace is a fixed (env, app) pair and the unit of ownership,
+// authorization, and auth-method policy. Parameters and secrets live inside a
+// namespace and are addressed by a relative key. The server never parses a
+// "/env/app/key" path string: callers always send the namespace and key as
+// separate, explicit fields. The slash-joined form survives only as a display
+// convenience in SDKs, the CLI, logs, and the frontend.
+
+// NamespaceRef identifies a namespace by its (env, app) pair. Both fields are
+// required and validated (1-64 chars of [a-z0-9-], no leading/trailing '-').
+message NamespaceRef {
+  string env = 1; // deployment environment, e.g. "prod"
+  string app = 2; // application, e.g. "gradethis"
+}
+
+// ResourceRef addresses one parameter or secret: its namespace plus a relative
+// key. The key may contain interior '/' (e.g. "billing/stripe-key") but those
+// slashes are part of the name, never namespace structure.
+message ResourceRef {
+  NamespaceRef namespace = 1; // owning namespace
+  string key = 2;             // relative key within the namespace
+}
 
 // Parameter is a non-sensitive configuration value.
 message Parameter {
-  string path = 1;
+  ResourceRef ref = 1;     // namespace + relative key
   string value = 2;
   string content_type = 3; // string | integer | float | boolean | json | binary
   uint64 version = 4;
@@ -32,7 +54,7 @@ message ParameterVersionInfo {
 
 // SecretMetadata never contains plaintext.
 message SecretMetadata {
-  string path = 1;
+  ResourceRef ref = 1; // namespace + relative key
   string content_type = 2;
   bool client_bound = 3;
   bool has_access_token = 4;
@@ -66,7 +88,7 @@ service ParameterService {
 }
 
 message GetParameterRequest {
-  string path = 1;
+  ResourceRef ref = 1;
   // Exactly one of version/label may be set; both empty means label "current".
   uint64 version = 2;
   string label = 3;
@@ -77,7 +99,7 @@ message GetParameterResponse {
 }
 
 message PutParameterRequest {
-  string path = 1;
+  ResourceRef ref = 1;
   string value = 2;
   string content_type = 3; // defaults to "string"
   string metadata_json = 4;
@@ -88,10 +110,13 @@ message PutParameterResponse {
   uint64 revision = 2;
 }
 
+// ListParameters is always namespace-scoped. key_prefix optionally narrows to
+// keys under a prefix; empty lists every key in the namespace.
 message ListParametersRequest {
-  string path_prefix = 1;
-  int32 page_size = 2;   // default 100, max 1000
-  string page_token = 3;
+  NamespaceRef namespace = 1;
+  string key_prefix = 2;
+  int32 page_size = 3;   // default 100, max 1000
+  string page_token = 4;
 }
 
 message ListParametersResponse {
@@ -100,7 +125,7 @@ message ListParametersResponse {
 }
 
 message DeleteParameterRequest {
-  string path = 1;
+  ResourceRef ref = 1;
 }
 
 message DeleteParameterResponse {
@@ -108,11 +133,11 @@ message DeleteParameterResponse {
 }
 
 message GetParameterMetadataRequest {
-  string path = 1;
+  ResourceRef ref = 1;
 }
 
 message GetParameterMetadataResponse {
-  string path = 1;
+  ResourceRef ref = 1;
   string content_type = 2;
   string metadata_json = 3;
   int64 created_at_unix_ms = 4;
@@ -141,13 +166,13 @@ service SecretService {
 }
 
 message GetSecretRequest {
-  string path = 1;
+  ResourceRef ref = 1;
   uint64 version = 2; // 0 = use label
   string label = 3;   // default "current"
 }
 
 message GetSecretResponse {
-  string path = 1;
+  ResourceRef ref = 1;
   uint64 version = 2;
   bytes value = 3;
   string content_type = 4;
@@ -156,7 +181,7 @@ message GetSecretResponse {
 }
 
 message PutSecretRequest {
-  string path = 1;
+  ResourceRef ref = 1;
   bytes value = 2;
   string content_type = 3;
   string metadata_json = 4;
@@ -179,10 +204,13 @@ message PutSecretResponse {
   string access_token = 3;
 }
 
+// ListSecrets is always namespace-scoped and returns metadata only, never
+// plaintext. key_prefix optionally narrows to keys under a prefix.
 message ListSecretsRequest {
-  string path_prefix = 1;
-  int32 page_size = 2;
-  string page_token = 3;
+  NamespaceRef namespace = 1;
+  string key_prefix = 2;
+  int32 page_size = 3;
+  string page_token = 4;
 }
 
 message ListSecretsResponse {
@@ -191,7 +219,7 @@ message ListSecretsResponse {
 }
 
 message DeleteSecretRequest {
-  string path = 1;
+  ResourceRef ref = 1;
 }
 
 message DeleteSecretResponse {
@@ -199,7 +227,7 @@ message DeleteSecretResponse {
 }
 
 message DisableSecretRequest {
-  string path = 1;
+  ResourceRef ref = 1;
   uint64 version = 2; // 0 = all versions
   bool enable = 3;    // true = re-enable instead of disable
 }
@@ -209,7 +237,7 @@ message DisableSecretResponse {
 }
 
 message DestroySecretVersionRequest {
-  string path = 1;
+  ResourceRef ref = 1;
   uint64 version = 2;
 }
 
@@ -218,7 +246,7 @@ message DestroySecretVersionResponse {
 }
 
 message GetSecretMetadataRequest {
-  string path = 1;
+  ResourceRef ref = 1;
 }
 
 message GetSecretMetadataResponse {
@@ -226,7 +254,7 @@ message GetSecretMetadataResponse {
 }
 
 message PromoteSecretVersionRequest {
-  string path = 1;
+  ResourceRef ref = 1;
   uint64 version = 2; // version to become "current"
 }
 
@@ -241,22 +269,21 @@ message PromoteSecretVersionResponse {
 // ---------------------------------------------------------------------------
 
 service WatchService {
-  // Subscribe is the primary hot-reload mechanism. The client declares the
-  // paths/prefixes it wants and its last-applied revision; the server streams
-  // an initial snapshot (or delta), then pushes events as values change,
-  // interleaved with heartbeats.
+  // Subscribe is the hot-reload mechanism. The client declares the namespaces
+  // it wants and its last-applied revision; the server streams an initial
+  // snapshot (or delta), then pushes EVERY change in those namespaces the
+  // caller is authorized for, interleaved with heartbeats. Authorization is
+  // checked once per namespace at registration; there is no key-level
+  // filtering — a subscriber to a namespace receives all of its changes and
+  // routes them client-side.
   rpc Subscribe(stream SubscribeRequest) returns (stream SubscribeEvent);
-
-  // Single-resource conveniences built on the same event model.
-  rpc WatchParameter(WatchParameterRequest) returns (stream SubscribeEvent);
-  rpc WatchNamespace(WatchNamespaceRequest) returns (stream SubscribeEvent);
 }
 
 message SubscribeRequest {
   // First message: subscription registration.
-  string client_name = 1;        // e.g. "gradethis-be"
-  repeated string paths = 2;     // exact paths and/or prefixes: "/prod/payments/*"
-  uint64 last_seen_revision = 3; // 0 = send full snapshot
+  string client_name = 1;              // e.g. "gradethis-be"
+  repeated NamespaceRef namespaces = 2; // the namespaces to watch
+  uint64 last_seen_revision = 3;       // 0 = send full snapshot
   // Subsequent messages: acks / heartbeat responses.
   uint64 acked_revision = 4;
 }
@@ -276,7 +303,7 @@ message Snapshot {
 }
 
 message ParameterChange {
-  string path = 1;
+  ResourceRef ref = 1;
   string change_type = 2; // put | delete | label
   string value = 3;       // new value for put
   string content_type = 4;
@@ -284,8 +311,10 @@ message ParameterChange {
   string label = 6; // for label moves
 }
 
+// SecretMetadataChange notifies subscribers that a secret changed. Plaintext is
+// never pushed over the stream; clients refetch through GetSecret.
 message SecretMetadataChange {
-  string path = 1;
+  ResourceRef ref = 1;
   string change_type = 2; // put | delete | promote | disable | enable | destroy
   uint64 version = 3;
   string label = 4;
@@ -295,22 +324,14 @@ message Heartbeat {
   int64 server_time_unix_ms = 1;
 }
 
-message WatchParameterRequest {
-  string path = 1;
-  uint64 last_seen_revision = 2;
-}
-
-message WatchNamespaceRequest {
-  string path_prefix = 1;
-  uint64 last_seen_revision = 2;
-}
-
 // ---------------------------------------------------------------------------
 // AdminService
 // ---------------------------------------------------------------------------
 
 service AdminService {
   rpc CreateNamespace(CreateNamespaceRequest) returns (CreateNamespaceResponse);
+  rpc UpdateNamespace(UpdateNamespaceRequest) returns (UpdateNamespaceResponse);
+  rpc DeleteNamespace(DeleteNamespaceRequest) returns (DeleteNamespaceResponse);
   rpc ListNamespaces(ListNamespacesRequest) returns (ListNamespacesResponse);
   rpc CreatePolicy(CreatePolicyRequest) returns (CreatePolicyResponse);
   rpc UpdatePolicy(UpdatePolicyRequest) returns (UpdatePolicyResponse);
@@ -320,26 +341,85 @@ service AdminService {
   rpc ListIdentities(ListIdentitiesRequest) returns (ListIdentitiesResponse);
   rpc RevokeIdentity(RevokeIdentityRequest) returns (RevokeIdentityResponse);
   rpc RotateIdentityToken(RotateIdentityTokenRequest) returns (RotateIdentityTokenResponse);
+  rpc IssueIdentityCertificate(IssueIdentityCertificateRequest) returns (IssueIdentityCertificateResponse);
+  rpc RevokeIdentityCertificate(RevokeIdentityCertificateRequest) returns (RevokeIdentityCertificateResponse);
+  rpc WhoAmI(WhoAmIRequest) returns (WhoAmIResponse);
+  rpc GetCACertificate(GetCACertificateRequest) returns (GetCACertificateResponse);
   rpc ListAuditEvents(ListAuditEventsRequest) returns (ListAuditEventsResponse);
   rpc ListSubscribers(ListSubscribersRequest) returns (ListSubscribersResponse);
   rpc Health(HealthRequest) returns (HealthResponse);
 }
 
+// Namespace is the (env, app) entity plus its settings and cheap COUNT-joined
+// child totals for the dashboard.
 message Namespace {
-  string path = 1;
+  NamespaceRef ref = 1;
   string description = 2;
-  string created_by = 3;
+  repeated string allowed_auth_methods = 3; // "mtls" | "token"
+  string created_by = 4;
+  int64 created_at_unix_ms = 5;
+  uint64 parameter_count = 6;
+  uint64 secret_count = 7;
+}
+
+// CertBundle carries a freshly issued client certificate. The private key is
+// generated server-side and returned here exactly once; it is never stored.
+message CertBundle {
+  string cert_pem = 1;
+  string key_pem = 2;
+  string serial = 3;
+  int64 not_after_unix_ms = 4;
+}
+
+// IdentityCertInfo summarizes an issued certificate (never the private key).
+message IdentityCertInfo {
+  string serial = 1;
+  string fingerprint = 2;          // sha256 of DER, for display/pinning
+  int64 not_after_unix_ms = 3;
+  int64 revoked_at_unix_ms = 4;    // 0 = valid
+  int64 created_at_unix_ms = 5;
+}
+
+message Identity {
+  string name = 1;
+  string kind = 2; // client | admin
+  bool disabled = 3;
   int64 created_at_unix_ms = 4;
+  NamespaceRef namespace = 5;          // unset = unbound (admin/tooling)
+  bool has_token = 6;
+  repeated IdentityCertInfo certs = 7; // issued-cert summaries
 }
 
 message CreateNamespaceRequest {
-  string path = 1;
+  NamespaceRef ref = 1;
   string description = 2;
+  // allowed_auth_methods defaults server-side to ["mtls"] when empty.
+  repeated string allowed_auth_methods = 3;
 }
 
 message CreateNamespaceResponse {
   Namespace namespace = 1;
 }
+
+// UpdateNamespace replaces the description and allowed_auth_methods wholesale
+// (full replace, not a merge).
+message UpdateNamespaceRequest {
+  NamespaceRef ref = 1;
+  string description = 2;
+  repeated string allowed_auth_methods = 3;
+}
+
+message UpdateNamespaceResponse {
+  Namespace namespace = 1;
+}
+
+// DeleteNamespace only succeeds when the namespace is empty (no parameters, no
+// secrets, no bound identities).
+message DeleteNamespaceRequest {
+  NamespaceRef ref = 1;
+}
+
+message DeleteNamespaceResponse {}
 
 message ListNamespacesRequest {
   int32 page_size = 1;
@@ -351,10 +431,12 @@ message ListNamespacesResponse {
   string next_page_token = 2;
 }
 
-// PolicyRule grants or denies one operation on a path or path prefix.
+// PolicyRule grants or denies one operation on a whole namespace. Authorization
+// is namespace-level: there is no per-key scoping.
 message PolicyRule {
   string operation = 1; // e.g. "secret:read", "parameter:*", "*"
-  string path = 2;      // exact path or prefix ending in "/*"
+  string env = 2;       // exact env or "*"
+  string app = 3;       // exact app or "*"
 }
 
 message Policy {
@@ -398,22 +480,27 @@ message ListPoliciesResponse {
   string next_page_token = 2;
 }
 
-message Identity {
-  string name = 1;
-  string kind = 2; // client | admin
-  bool disabled = 3;
-  int64 created_at_unix_ms = 4;
-}
-
 message CreateIdentityRequest {
   string name = 1;
   string kind = 2; // client | admin
+  // namespace optionally binds a client identity to a namespace (unset =
+  // unbound). Binding enables the implicit home-namespace grant.
+  NamespaceRef namespace = 3;
+  // auth_methods selects which credentials to mint: "mtls" (a cert bundle) and
+  // /or "token". Empty defaults server-side.
+  repeated string auth_methods = 4;
+  // cert_ttl_seconds sets the lifetime of the minted cert when "mtls" is
+  // requested; 0 uses the server default (90 days).
+  int64 cert_ttl_seconds = 5;
 }
 
 message CreateIdentityResponse {
   Identity identity = 1;
-  // token is returned exactly once and never retrievable again.
+  // token is returned exactly once and never retrievable again. Present only
+  // when "token" was among the requested auth_methods.
   string token = 2;
+  // cert is a one-time PEM bundle, present only when "mtls" was requested.
+  CertBundle cert = 3;
 }
 
 message ListIdentitiesRequest {
@@ -440,30 +527,74 @@ message RotateIdentityTokenResponse {
   string token = 1; // returned exactly once
 }
 
+// IssueIdentityCertificate mints a new client certificate for an existing
+// identity. Multiple concurrent valid certs allow zero-downtime rollover.
+message IssueIdentityCertificateRequest {
+  string name = 1;
+  int64 ttl_seconds = 2; // 0 = server default (90 days)
+}
+
+message IssueIdentityCertificateResponse {
+  CertBundle cert = 1; // one-time PEM bundle
+}
+
+// RevokeIdentityCertificate revokes a single certificate by serial. Revoking
+// the identity (or disabling it) invalidates all of its certs.
+message RevokeIdentityCertificateRequest {
+  string name = 1;
+  string serial = 2;
+}
+
+message RevokeIdentityCertificateResponse {}
+
+// WhoAmI returns the calling identity as resolved from its credential. It is
+// callable by any authenticated identity with no policy check, and is the
+// SDK's namespace-discovery mechanism.
+message WhoAmIRequest {}
+
+message WhoAmIResponse {
+  string name = 1;
+  string kind = 2;             // client | admin
+  NamespaceRef namespace = 3;  // unset = unbound
+  string auth_method = 4;      // mtls | token
+}
+
+// GetCACertificate returns the built-in CA's public certificate for baking
+// into app deploy images. Callable without authentication.
+message GetCACertificateRequest {}
+
+message GetCACertificateResponse {
+  string cert_pem = 1;
+}
+
 message AuditEvent {
   int64 id = 1;
   string event_type = 2;
   string actor_identity = 3;
   string actor_type = 4;
   string resource_type = 5;
-  string resource_path = 6;
-  uint64 resource_version = 7;
-  string decision = 8; // allow | deny | error
-  string source_ip = 9;
-  string user_agent = 10;
-  string request_id = 11;
-  int64 created_at_unix_ms = 12;
-  string metadata_json = 13;
+  string resource_env = 6; // denormalized; readable after namespace deletion
+  string resource_app = 7;
+  string resource_key = 8;
+  uint64 resource_version = 9;
+  string decision = 10; // allow | deny | error
+  string source_ip = 11;
+  string user_agent = 12;
+  string request_id = 13;
+  int64 created_at_unix_ms = 14;
+  string metadata_json = 15;
 }
 
 message ListAuditEventsRequest {
-  string path_prefix = 1;
-  string actor_identity = 2;
-  string event_type = 3;
-  int64 from_unix_ms = 4;
-  int64 to_unix_ms = 5;
-  int32 page_size = 6;
-  string page_token = 7;
+  string env = 1;        // exact env filter, empty = any
+  string app = 2;        // exact app filter, empty = any
+  string key_prefix = 3; // key prefix filter, empty = any
+  string actor_identity = 4;
+  string event_type = 5;
+  int64 from_unix_ms = 6;
+  int64 to_unix_ms = 7;
+  int32 page_size = 8;
+  string page_token = 9;
 }
 
 message ListAuditEventsResponse {
@@ -475,7 +606,7 @@ message Subscriber {
   string client_name = 1;
   string instance_id = 2;
   string identity = 3;
-  repeated string paths = 4;
+  repeated NamespaceRef namespaces = 4; // the namespaces this stream is watching
   string remote_addr = 5;
   int64 connected_at_unix_ms = 6;
   int64 last_heartbeat_unix_ms = 7;

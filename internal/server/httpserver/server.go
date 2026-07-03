@@ -12,13 +12,15 @@ import (
 	"errors"
 	"io"
 	"io/fs"
-	"log/slog"
 	"net"
 	"net/http"
 	"strings"
 	"time"
 
+	"go.uber.org/zap"
+
 	"github.com/Suhaibinator/kms/internal/core"
+	"github.com/Suhaibinator/kms/internal/domain"
 )
 
 // Config configures the HTTP server.
@@ -49,7 +51,7 @@ const maxBodyBytes = 4 << 20
 type server struct {
 	svc          *core.Service
 	cfg          Config
-	log          *slog.Logger
+	log          *zap.Logger
 	loginLimiter *rateLimiter
 	static       *staticHandler
 	apiMux       *http.ServeMux
@@ -115,6 +117,13 @@ func (s *server) serveAPI(w http.ResponseWriter, r *http.Request) {
 	case "/api/v1/health":
 		s.handleHealth(w, r)
 		return
+	case "/api/v1/ca":
+		if r.Method != http.MethodGet {
+			writeErrorCode(w, http.StatusMethodNotAllowed, "invalid_argument", "method not allowed")
+			return
+		}
+		s.handleCA(w, r)
+		return
 	case "/api/v1/auth/login":
 		if !s.loginLimiter.allow(ip) {
 			writeErrorCode(w, http.StatusTooManyRequests, "rate_limited", "too many requests; slow down")
@@ -153,7 +162,10 @@ func (s *server) authenticate(r *http.Request, ip string) (core.Principal, error
 		return core.Principal{}, err
 	}
 	return core.Principal{
-		Identity:    id,
+		Identity: id,
+		// HTTP callers authenticate with a bearer token by definition. The
+		// per-namespace method gate lives in core; admin-kind identities bypass it.
+		Method:      domain.AuthMethodToken,
 		Token:       token,
 		SecretToken: r.Header.Get("X-KMS-Secret-Token"),
 		RemoteAddr:  ip,
@@ -214,11 +226,11 @@ func (s *server) logging(next http.Handler) http.Handler {
 		// The query string is intentionally omitted: it may carry resource
 		// paths and must never grow to include anything sensitive in a log.
 		s.log.Info("http request",
-			"method", r.Method,
-			"path", r.URL.Path,
-			"status", rec.status,
-			"duration_ms", time.Since(start).Milliseconds(),
-			"request_id", requestID,
+			zap.String("method", r.Method),
+			zap.String("path", r.URL.Path),
+			zap.Int("status", rec.status),
+			zap.Int64("duration_ms", time.Since(start).Milliseconds()),
+			zap.String("request_id", requestID),
 		)
 	})
 }

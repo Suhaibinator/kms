@@ -13,10 +13,16 @@ if _ROOT not in sys.path:
 from kms_paramstore import Client  # noqa: E402
 from tests._fake_server import start_server  # noqa: E402
 
+# The default namespace used across tests. Relative keys on the ``client``
+# fixture resolve here; ``NS`` is the "env/app" config string.
+NS = "prod/app"
+NS_ENV = "prod"
+NS_APP = "app"
+
 
 @pytest.fixture
 def server():
-    srv, addr, store = start_server()
+    srv, addr, store = start_server(whoami_namespace=NS)
     try:
         yield addr, store
     finally:
@@ -26,7 +32,7 @@ def server():
 @pytest.fixture
 def client(server):
     addr, _store = server
-    c = Client(addr, cache_ttl=0)
+    c = Client(addr, namespace=NS, cache_ttl=0)
     try:
         yield c
     finally:

@@ -18,9 +18,10 @@ func TestTokenProtectedSecret(t *testing.T) {
 	ctx := context.Background()
 	const path = "/prod/app/token-protected"
 	const plaintext = "token-protected-value"
+	ref := h.ensureNS(path)
 
 	res, err := h.svc.PutSecret(ctx, h.admin, core.PutSecretInput{
-		Path: path, Value: []byte(plaintext), GenerateToken: true,
+		Ref: ref, Value: []byte(plaintext), GenerateToken: true,
 	})
 	if err != nil {
 		t.Fatalf("PutSecret: %v", err)
@@ -30,26 +31,26 @@ func TestTokenProtectedSecret(t *testing.T) {
 	}
 
 	// Admin GetSecret without the token is denied.
-	if _, err := h.svc.GetSecret(ctx, h.admin, path, 0, ""); !errors.Is(err, domain.ErrPermissionDenied) {
+	if _, err := h.svc.GetSecret(ctx, h.admin, ref, 0, ""); !errors.Is(err, domain.ErrPermissionDenied) {
 		t.Errorf("admin GetSecret without token err = %v, want ErrPermissionDenied", err)
 	}
 	// A wrong token is denied with the same generic error.
 	wrong := h.admin
 	wrong.SecretToken = "kmss_wrongwrongwrongwrongwrongwrong"
-	if _, err := h.svc.GetSecret(ctx, wrong, path, 0, ""); !errors.Is(err, domain.ErrPermissionDenied) {
+	if _, err := h.svc.GetSecret(ctx, wrong, ref, 0, ""); !errors.Is(err, domain.ErrPermissionDenied) {
 		t.Errorf("GetSecret wrong token err = %v, want ErrPermissionDenied", err)
 	}
 	// The correct token succeeds.
 	withTok := h.admin
 	withTok.SecretToken = res.AccessToken
-	got, err := h.svc.GetSecret(ctx, withTok, path, 0, "")
+	got, err := h.svc.GetSecret(ctx, withTok, ref, 0, "")
 	if err != nil || string(got.Value) != plaintext {
 		t.Fatalf("GetSecret with token = %q err=%v, want %q", got.Value, err, plaintext)
 	}
 
 	// RevealSecret (admin break-glass) bypasses the token gate for a standard
 	// secret and is audited.
-	revealed, err := h.svc.RevealSecret(ctx, h.admin, path, 0, "")
+	revealed, err := h.svc.RevealSecret(ctx, h.admin, ref, 0, "")
 	if err != nil {
 		t.Fatalf("RevealSecret: %v", err)
 	}

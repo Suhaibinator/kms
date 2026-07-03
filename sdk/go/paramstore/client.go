@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -36,9 +37,18 @@ type Config struct {
 	// may be any gRPC target; see DialOptions.
 	Endpoint string
 
+	// Namespace is the client's home namespace in "env/app" form (e.g.
+	// "prod/gradethis"). Relative keys are resolved against it. Leave it empty
+	// to discover the namespace from the identity at first use via WhoAmI; a
+	// relative key on an unbound identity then fails with ErrNoNamespace.
+	// Absolute "/env/app/key" display paths never require a namespace.
+	Namespace string
+
 	// Token is the per-client identity token, sent as
-	// "authorization: Bearer <token>" on every RPC. Empty is allowed for
-	// unauthenticated/dev servers.
+	// "authorization: Bearer <token>" on every RPC. It is optional when TLS
+	// carries a client certificate (the identity then derives from the cert
+	// server-side); required only for token-method identities. Empty is also
+	// allowed for unauthenticated/dev servers.
 	Token string
 
 	// TLS configures transport security. Nil means an insecure connection
@@ -97,6 +107,15 @@ type Client struct {
 	params  kmsv1.ParameterServiceClient
 	secrets kmsv1.SecretServiceClient
 	watch   kmsv1.WatchServiceClient
+	admin   kmsv1.AdminServiceClient
+
+	// cfgNamespace is the parsed Config.Namespace (zero when unset). nsMu guards
+	// the WhoAmI-discovered namespace, resolved lazily once for the client's
+	// lifetime when cfgNamespace is unset and a relative key needs a namespace.
+	cfgNamespace namespaceRef
+	nsMu         sync.Mutex
+	nsResolved   bool
+	nsDiscovered namespaceRef
 
 	cache *cache
 
@@ -134,6 +153,15 @@ func NewClient(cfg Config) (*Client, error) {
 		cfg.Logger = stdLogger{}
 	}
 
+	var nsRef namespaceRef
+	if cfg.Namespace != "" {
+		var err error
+		nsRef, err = parseNamespace(cfg.Namespace)
+		if err != nil {
+			return nil, err
+		}
+	}
+
 	opts := make([]grpc.DialOption, 0, 4+len(cfg.DialOptions))
 	if cfg.TLS != nil {
 		opts = append(opts, grpc.WithTransportCredentials(credentials.NewTLS(cfg.TLS)))
@@ -160,19 +188,21 @@ func NewClient(cfg Config) (*Client, error) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	c := &Client{
-		cfg:        cfg,
-		clientName: cfg.ClientName,
-		timeout:    cfg.Timeout,
-		logger:     cfg.Logger,
-		cc:         cc,
-		params:     kmsv1.NewParameterServiceClient(cc),
-		secrets:    kmsv1.NewSecretServiceClient(cc),
-		watch:      kmsv1.NewWatchServiceClient(cc),
-		cache:      newCache(cfg.CacheTTL),
-		rootCtx:    ctx,
-		rootCancel: cancel,
-		cbQueue:    make(chan func(), callbackQueueSize),
-		closed:     make(chan struct{}),
+		cfg:          cfg,
+		clientName:   cfg.ClientName,
+		timeout:      cfg.Timeout,
+		logger:       cfg.Logger,
+		cc:           cc,
+		params:       kmsv1.NewParameterServiceClient(cc),
+		secrets:      kmsv1.NewSecretServiceClient(cc),
+		watch:        kmsv1.NewWatchServiceClient(cc),
+		admin:        kmsv1.NewAdminServiceClient(cc),
+		cfgNamespace: nsRef,
+		cache:        newCache(cfg.CacheTTL),
+		rootCtx:      ctx,
+		rootCancel:   cancel,
+		cbQueue:      make(chan func(), callbackQueueSize),
+		closed:       make(chan struct{}),
 	}
 	go c.dispatchCallbacks()
 	return c, nil
@@ -243,24 +273,79 @@ func (c *Client) withAuth(ctx context.Context, secretToken string) context.Conte
 	return metadata.AppendToOutgoingContext(ctx, kv...)
 }
 
-// GetParameter returns the value of a non-secret parameter. By default it reads
-// the "current" label; use WithVersion or WithLabel to read another.
-func (c *Client) GetParameter(ctx context.Context, path string, opts ...GetOption) (string, error) {
+// resolveNamespace returns the client's namespace. Config.Namespace wins; when
+// it is empty the namespace is discovered once from the identity via WhoAmI and
+// cached for the client's lifetime. The bool reports whether a namespace is
+// bound at all (false = unbound identity with no Config.Namespace). A transient
+// WhoAmI error is returned without caching so a later call retries.
+func (c *Client) resolveNamespace(ctx context.Context) (namespaceRef, bool, error) {
+	if !c.cfgNamespace.isZero() {
+		return c.cfgNamespace, true, nil
+	}
+	c.nsMu.Lock()
+	defer c.nsMu.Unlock()
+	if c.nsResolved {
+		return c.nsDiscovered, !c.nsDiscovered.isZero(), nil
+	}
+	cctx, cancel := c.callCtx(ctx, "")
+	defer cancel()
+	resp, err := c.admin.WhoAmI(cctx, &kmsv1.WhoAmIRequest{})
+	if err != nil {
+		return namespaceRef{}, false, mapError(err)
+	}
+	n := resp.GetNamespace()
+	c.nsDiscovered = namespaceRef{env: n.GetEnv(), app: n.GetApp()}
+	c.nsResolved = true
+	return c.nsDiscovered, !c.nsDiscovered.isZero(), nil
+}
+
+// resolveRef turns a user-supplied key into a fully-qualified ref. A leading
+// "/" is an absolute display path ("/env/app/key...") split in the SDK for
+// cross-namespace access; any other key is relative to the client namespace. A
+// relative key on a client with no namespace fails with ErrNoNamespace, naming
+// the key.
+func (c *Client) resolveRef(ctx context.Context, key string) (ref, error) {
+	if strings.HasPrefix(key, "/") {
+		return splitDisplayPath(key)
+	}
+	ns, bound, err := c.resolveNamespace(ctx)
+	if err != nil {
+		return ref{}, err
+	}
+	if !bound {
+		return ref{}, fmt.Errorf("%w: relative key %q needs a namespace (set Config.Namespace or bind the identity)", ErrNoNamespace, key)
+	}
+	return ref{ns: ns, key: key}, nil
+}
+
+// GetParameter returns the value of a non-secret parameter. key is relative to
+// the client namespace, or an absolute "/env/app/key" display path. By default
+// it reads the "current" label; use WithVersion or WithLabel to read another.
+func (c *Client) GetParameter(ctx context.Context, key string, opts ...GetOption) (string, error) {
 	o := applyGetOptions(opts)
-	if v, ok := c.cache.getParam(path, o.version, o.label); ok {
+	r, err := c.resolveRef(ctx, key)
+	if err != nil {
+		return "", err
+	}
+	return c.getParameter(ctx, r, o)
+}
+
+// getParameter reads a resolved ref through the cache, falling back to a fetch.
+func (c *Client) getParameter(ctx context.Context, r ref, o getOptions) (string, error) {
+	if v, ok := c.cache.getParam(r.display(), o.version, o.label); ok {
 		return v, nil
 	}
-	return c.fetchParameter(ctx, path, o)
+	return c.fetchParameter(ctx, r, o)
 }
 
 // fetchParameter issues the GetParameter RPC unconditionally (skipping the cache
 // read) and refreshes the cache with the result. The subscription reconciler
 // uses it to detect drift the cache would otherwise hide.
-func (c *Client) fetchParameter(ctx context.Context, path string, o getOptions) (string, error) {
+func (c *Client) fetchParameter(ctx context.Context, r ref, o getOptions) (string, error) {
 	cctx, cancel := c.callCtx(ctx, o.secretToken)
 	defer cancel()
 	resp, err := c.params.GetParameter(cctx, &kmsv1.GetParameterRequest{
-		Path:    path,
+		Ref:     r.resourceProto(),
 		Version: o.version,
 		Label:   o.label,
 	})
@@ -268,7 +353,7 @@ func (c *Client) fetchParameter(ctx context.Context, path string, o getOptions) 
 		return "", mapError(err)
 	}
 	value := resp.GetParameter().GetValue()
-	c.cache.putParam(path, o.version, o.label, value)
+	c.cache.putParam(r.display(), o.version, o.label, value)
 	return value, nil
 }
 
@@ -280,10 +365,15 @@ func (c *Client) fetchParameter(ctx context.Context, path string, o getOptions) 
 // them under the token-less key would let later calls without the token read
 // the plaintext from cache, skipping the server's per-secret token check, and
 // would keep serving after a token rotation until the TTL expired.
-func (c *Client) GetSecret(ctx context.Context, path string, opts ...GetOption) (Secret, error) {
+func (c *Client) GetSecret(ctx context.Context, key string, opts ...GetOption) (Secret, error) {
 	o := applyGetOptions(opts)
+	r, err := c.resolveRef(ctx, key)
+	if err != nil {
+		return Secret{}, err
+	}
+	display := r.display()
 	if o.secretToken == "" {
-		if s, ok := c.cache.getSecret(path, o.version, o.label); ok {
+		if s, ok := c.cache.getSecret(display, o.version, o.label); ok {
 			return s, nil
 		}
 	}
@@ -291,24 +381,25 @@ func (c *Client) GetSecret(ctx context.Context, path string, opts ...GetOption) 
 	cctx, cancel := c.callCtx(ctx, o.secretToken)
 	defer cancel()
 	resp, err := c.secrets.GetSecret(cctx, &kmsv1.GetSecretRequest{
-		Path:    path,
+		Ref:     r.resourceProto(),
 		Version: o.version,
 		Label:   o.label,
 	})
 	if err != nil {
 		return Secret{}, mapError(err)
 	}
+	path := display
+	if resp.GetRef() != nil {
+		path = refFromProto(resp.GetRef()).display()
+	}
 	s := Secret{
 		value:       resp.GetValue(),
-		path:        resp.GetPath(),
+		path:        path,
 		version:     resp.GetVersion(),
 		contentType: resp.GetContentType(),
 	}
-	if s.path == "" {
-		s.path = path
-	}
 	if o.secretToken == "" {
-		c.cache.putSecret(path, o.version, o.label, s)
+		c.cache.putSecret(display, o.version, o.label, s)
 	}
 	return s, nil
 }
@@ -319,14 +410,19 @@ type PutParameterResult struct {
 	Revision uint64
 }
 
-// PutParameter creates a new immutable version of a parameter. It is intended
-// for tooling; most applications only read.
-func (c *Client) PutParameter(ctx context.Context, path, value string, opts ...PutOption) (PutParameterResult, error) {
+// PutParameter creates a new immutable version of a parameter. key is relative
+// to the client namespace, or an absolute "/env/app/key" display path. It is
+// intended for tooling; most applications only read.
+func (c *Client) PutParameter(ctx context.Context, key, value string, opts ...PutOption) (PutParameterResult, error) {
 	o := applyPutOptions(opts)
+	r, err := c.resolveRef(ctx, key)
+	if err != nil {
+		return PutParameterResult{}, err
+	}
 	cctx, cancel := c.callCtx(ctx, "")
 	defer cancel()
 	resp, err := c.params.PutParameter(cctx, &kmsv1.PutParameterRequest{
-		Path:         path,
+		Ref:          r.resourceProto(),
 		Value:        value,
 		ContentType:  o.contentType,
 		MetadataJson: o.metadataJSON,
@@ -334,7 +430,7 @@ func (c *Client) PutParameter(ctx context.Context, path, value string, opts ...P
 	if err != nil {
 		return PutParameterResult{}, mapError(err)
 	}
-	c.cache.invalidateParam(path)
+	c.cache.invalidateParam(r.display())
 	return PutParameterResult{Version: resp.GetVersion(), Revision: resp.GetRevision()}, nil
 }
 
@@ -346,14 +442,19 @@ type PutSecretResult struct {
 	AccessToken string
 }
 
-// PutSecret creates a new immutable version of a secret. It is intended for
-// tooling.
-func (c *Client) PutSecret(ctx context.Context, path string, value []byte, opts ...PutSecretOption) (PutSecretResult, error) {
+// PutSecret creates a new immutable version of a secret. key is relative to the
+// client namespace, or an absolute "/env/app/key" display path. It is intended
+// for tooling.
+func (c *Client) PutSecret(ctx context.Context, key string, value []byte, opts ...PutSecretOption) (PutSecretResult, error) {
 	o := applyPutSecretOptions(opts)
+	r, err := c.resolveRef(ctx, key)
+	if err != nil {
+		return PutSecretResult{}, err
+	}
 	cctx, cancel := c.callCtx(ctx, o.secretToken)
 	defer cancel()
 	resp, err := c.secrets.PutSecret(cctx, &kmsv1.PutSecretRequest{
-		Path:                path,
+		Ref:                 r.resourceProto(),
 		Value:               value,
 		ContentType:         o.contentType,
 		MetadataJson:        o.metadataJSON,
@@ -364,7 +465,7 @@ func (c *Client) PutSecret(ctx context.Context, path string, value []byte, opts 
 	if err != nil {
 		return PutSecretResult{}, mapError(err)
 	}
-	c.cache.invalidateSecret(path)
+	c.cache.invalidateSecret(r.display())
 	return PutSecretResult{
 		Version:     resp.GetVersion(),
 		Revision:    resp.GetRevision(),

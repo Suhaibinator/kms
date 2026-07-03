@@ -86,14 +86,20 @@ func (s *SQLStore) SetKeyState(ctx context.Context, id, state string) error {
 }
 
 // RotateKEK atomically inserts newKM (state "active"), retires every other key,
-// and rewraps every non-destroyed secret version by storing rewrap's returned
-// encrypted DEK with kek_id = newKM.ID. The whole rotation runs in one
-// transaction; on any error the database is unchanged. Returns the number of
-// versions rewrapped.
+// rewraps every non-destroyed secret version, and rewraps every CA key. Each
+// rewrap callback receives the row and returns its new encrypted DEK, stored
+// with kek_id = newKM.ID. Both callbacks must be pure computation (no I/O, no
+// storage calls). The whole rotation runs in one transaction; on any error the
+// database is unchanged. Returns the number of secret versions and CA keys
+// rewrapped.
+//
+// CA keys are rewrapped regardless of state (active or retired) so that after a
+// rotation no row references a superseded KEK and the old KEK can be fully
+// retired.
 func (s *SQLStore) RotateKEK(ctx context.Context, newKM domain.KeyMetadata,
-	rewrap func(rec SecretVersionRecord) (newEncryptedDEK []byte, err error)) (int, error) {
-	count := 0
-	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+	rewrapSecret func(rec SecretVersionRecord) (newEncryptedDEK []byte, err error),
+	rewrapCA func(rec CAKeyRecord) (newEncryptedDEK []byte, err error)) (secretsRewrapped, caRewrapped int, err error) {
+	err = s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		created := newKM.CreatedAt
 		if created.IsZero() {
 			created = time.Now()
@@ -123,7 +129,7 @@ func (s *SQLStore) RotateKEK(ctx context.Context, newKM domain.KeyMetadata,
 			return err
 		}
 		for _, r := range rows {
-			newDEK, err := rewrap(toSecretVersionRecord(r))
+			newDEK, err := rewrapSecret(toSecretVersionRecord(r))
 			if err != nil {
 				return err
 			}
@@ -133,12 +139,30 @@ func (s *SQLStore) RotateKEK(ctx context.Context, newKM domain.KeyMetadata,
 			}).Error; err != nil {
 				return err
 			}
-			count++
+			secretsRewrapped++
+		}
+
+		var caRows []caKeyModel
+		if err := tx.Order("id ASC").Find(&caRows).Error; err != nil {
+			return err
+		}
+		for _, r := range caRows {
+			newDEK, err := rewrapCA(toCAKeyRecord(r))
+			if err != nil {
+				return err
+			}
+			if err := tx.Model(&caKeyModel{}).Where("id = ?", r.ID).Updates(map[string]any{
+				"encrypted_dek": newDEK,
+				"kek_id":        newKM.ID,
+			}).Error; err != nil {
+				return err
+			}
+			caRewrapped++
 		}
 		return nil
 	})
 	if err != nil {
-		return 0, err
+		return 0, 0, err
 	}
-	return count, nil
+	return secretsRewrapped, caRewrapped, nil
 }

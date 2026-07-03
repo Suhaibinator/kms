@@ -696,16 +696,6 @@ class WatchServiceStub:
                 request_serializer=kms_dot_v1_dot_kms__pb2.SubscribeRequest.SerializeToString,
                 response_deserializer=kms_dot_v1_dot_kms__pb2.SubscribeEvent.FromString,
                 _registered_method=True)
-        self.WatchParameter = channel.unary_stream(
-                '/kms.v1.WatchService/WatchParameter',
-                request_serializer=kms_dot_v1_dot_kms__pb2.WatchParameterRequest.SerializeToString,
-                response_deserializer=kms_dot_v1_dot_kms__pb2.SubscribeEvent.FromString,
-                _registered_method=True)
-        self.WatchNamespace = channel.unary_stream(
-                '/kms.v1.WatchService/WatchNamespace',
-                request_serializer=kms_dot_v1_dot_kms__pb2.WatchNamespaceRequest.SerializeToString,
-                response_deserializer=kms_dot_v1_dot_kms__pb2.SubscribeEvent.FromString,
-                _registered_method=True)
 
 
 class WatchServiceServicer:
@@ -716,24 +706,14 @@ class WatchServiceServicer:
     """
 
     def Subscribe(self, request_iterator, context):
-        """Subscribe is the primary hot-reload mechanism. The client declares the
-        paths/prefixes it wants and its last-applied revision; the server streams
-        an initial snapshot (or delta), then pushes events as values change,
-        interleaved with heartbeats.
+        """Subscribe is the hot-reload mechanism. The client declares the namespaces
+        it wants and its last-applied revision; the server streams an initial
+        snapshot (or delta), then pushes EVERY change in those namespaces the
+        caller is authorized for, interleaved with heartbeats. Authorization is
+        checked once per namespace at registration; there is no key-level
+        filtering — a subscriber to a namespace receives all of its changes and
+        routes them client-side.
         """
-        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
-        context.set_details('Method not implemented!')
-        raise NotImplementedError('Method not implemented!')
-
-    def WatchParameter(self, request, context):
-        """Single-resource conveniences built on the same event model.
-        """
-        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
-        context.set_details('Method not implemented!')
-        raise NotImplementedError('Method not implemented!')
-
-    def WatchNamespace(self, request, context):
-        """Missing associated documentation comment in .proto file."""
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
@@ -744,16 +724,6 @@ def add_WatchServiceServicer_to_server(servicer, server):
             'Subscribe': grpc.stream_stream_rpc_method_handler(
                     servicer.Subscribe,
                     request_deserializer=kms_dot_v1_dot_kms__pb2.SubscribeRequest.FromString,
-                    response_serializer=kms_dot_v1_dot_kms__pb2.SubscribeEvent.SerializeToString,
-            ),
-            'WatchParameter': grpc.unary_stream_rpc_method_handler(
-                    servicer.WatchParameter,
-                    request_deserializer=kms_dot_v1_dot_kms__pb2.WatchParameterRequest.FromString,
-                    response_serializer=kms_dot_v1_dot_kms__pb2.SubscribeEvent.SerializeToString,
-            ),
-            'WatchNamespace': grpc.unary_stream_rpc_method_handler(
-                    servicer.WatchNamespace,
-                    request_deserializer=kms_dot_v1_dot_kms__pb2.WatchNamespaceRequest.FromString,
                     response_serializer=kms_dot_v1_dot_kms__pb2.SubscribeEvent.SerializeToString,
             ),
     }
@@ -798,60 +768,6 @@ class WatchService:
             metadata,
             _registered_method=True)
 
-    @staticmethod
-    def WatchParameter(request,
-            target,
-            options=(),
-            channel_credentials=None,
-            call_credentials=None,
-            insecure=False,
-            compression=None,
-            wait_for_ready=None,
-            timeout=None,
-            metadata=None):
-        return grpc.experimental.unary_stream(
-            request,
-            target,
-            '/kms.v1.WatchService/WatchParameter',
-            kms_dot_v1_dot_kms__pb2.WatchParameterRequest.SerializeToString,
-            kms_dot_v1_dot_kms__pb2.SubscribeEvent.FromString,
-            options,
-            channel_credentials,
-            insecure,
-            call_credentials,
-            compression,
-            wait_for_ready,
-            timeout,
-            metadata,
-            _registered_method=True)
-
-    @staticmethod
-    def WatchNamespace(request,
-            target,
-            options=(),
-            channel_credentials=None,
-            call_credentials=None,
-            insecure=False,
-            compression=None,
-            wait_for_ready=None,
-            timeout=None,
-            metadata=None):
-        return grpc.experimental.unary_stream(
-            request,
-            target,
-            '/kms.v1.WatchService/WatchNamespace',
-            kms_dot_v1_dot_kms__pb2.WatchNamespaceRequest.SerializeToString,
-            kms_dot_v1_dot_kms__pb2.SubscribeEvent.FromString,
-            options,
-            channel_credentials,
-            insecure,
-            call_credentials,
-            compression,
-            wait_for_ready,
-            timeout,
-            metadata,
-            _registered_method=True)
-
 
 class AdminServiceStub:
     """---------------------------------------------------------------------------
@@ -870,6 +786,16 @@ class AdminServiceStub:
                 '/kms.v1.AdminService/CreateNamespace',
                 request_serializer=kms_dot_v1_dot_kms__pb2.CreateNamespaceRequest.SerializeToString,
                 response_deserializer=kms_dot_v1_dot_kms__pb2.CreateNamespaceResponse.FromString,
+                _registered_method=True)
+        self.UpdateNamespace = channel.unary_unary(
+                '/kms.v1.AdminService/UpdateNamespace',
+                request_serializer=kms_dot_v1_dot_kms__pb2.UpdateNamespaceRequest.SerializeToString,
+                response_deserializer=kms_dot_v1_dot_kms__pb2.UpdateNamespaceResponse.FromString,
+                _registered_method=True)
+        self.DeleteNamespace = channel.unary_unary(
+                '/kms.v1.AdminService/DeleteNamespace',
+                request_serializer=kms_dot_v1_dot_kms__pb2.DeleteNamespaceRequest.SerializeToString,
+                response_deserializer=kms_dot_v1_dot_kms__pb2.DeleteNamespaceResponse.FromString,
                 _registered_method=True)
         self.ListNamespaces = channel.unary_unary(
                 '/kms.v1.AdminService/ListNamespaces',
@@ -916,6 +842,26 @@ class AdminServiceStub:
                 request_serializer=kms_dot_v1_dot_kms__pb2.RotateIdentityTokenRequest.SerializeToString,
                 response_deserializer=kms_dot_v1_dot_kms__pb2.RotateIdentityTokenResponse.FromString,
                 _registered_method=True)
+        self.IssueIdentityCertificate = channel.unary_unary(
+                '/kms.v1.AdminService/IssueIdentityCertificate',
+                request_serializer=kms_dot_v1_dot_kms__pb2.IssueIdentityCertificateRequest.SerializeToString,
+                response_deserializer=kms_dot_v1_dot_kms__pb2.IssueIdentityCertificateResponse.FromString,
+                _registered_method=True)
+        self.RevokeIdentityCertificate = channel.unary_unary(
+                '/kms.v1.AdminService/RevokeIdentityCertificate',
+                request_serializer=kms_dot_v1_dot_kms__pb2.RevokeIdentityCertificateRequest.SerializeToString,
+                response_deserializer=kms_dot_v1_dot_kms__pb2.RevokeIdentityCertificateResponse.FromString,
+                _registered_method=True)
+        self.WhoAmI = channel.unary_unary(
+                '/kms.v1.AdminService/WhoAmI',
+                request_serializer=kms_dot_v1_dot_kms__pb2.WhoAmIRequest.SerializeToString,
+                response_deserializer=kms_dot_v1_dot_kms__pb2.WhoAmIResponse.FromString,
+                _registered_method=True)
+        self.GetCACertificate = channel.unary_unary(
+                '/kms.v1.AdminService/GetCACertificate',
+                request_serializer=kms_dot_v1_dot_kms__pb2.GetCACertificateRequest.SerializeToString,
+                response_deserializer=kms_dot_v1_dot_kms__pb2.GetCACertificateResponse.FromString,
+                _registered_method=True)
         self.ListAuditEvents = channel.unary_unary(
                 '/kms.v1.AdminService/ListAuditEvents',
                 request_serializer=kms_dot_v1_dot_kms__pb2.ListAuditEventsRequest.SerializeToString,
@@ -941,6 +887,18 @@ class AdminServiceServicer:
     """
 
     def CreateNamespace(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def UpdateNamespace(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def DeleteNamespace(self, request, context):
         """Missing associated documentation comment in .proto file."""
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
@@ -1000,6 +958,30 @@ class AdminServiceServicer:
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
+    def IssueIdentityCertificate(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def RevokeIdentityCertificate(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def WhoAmI(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def GetCACertificate(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
     def ListAuditEvents(self, request, context):
         """Missing associated documentation comment in .proto file."""
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
@@ -1025,6 +1007,16 @@ def add_AdminServiceServicer_to_server(servicer, server):
                     servicer.CreateNamespace,
                     request_deserializer=kms_dot_v1_dot_kms__pb2.CreateNamespaceRequest.FromString,
                     response_serializer=kms_dot_v1_dot_kms__pb2.CreateNamespaceResponse.SerializeToString,
+            ),
+            'UpdateNamespace': grpc.unary_unary_rpc_method_handler(
+                    servicer.UpdateNamespace,
+                    request_deserializer=kms_dot_v1_dot_kms__pb2.UpdateNamespaceRequest.FromString,
+                    response_serializer=kms_dot_v1_dot_kms__pb2.UpdateNamespaceResponse.SerializeToString,
+            ),
+            'DeleteNamespace': grpc.unary_unary_rpc_method_handler(
+                    servicer.DeleteNamespace,
+                    request_deserializer=kms_dot_v1_dot_kms__pb2.DeleteNamespaceRequest.FromString,
+                    response_serializer=kms_dot_v1_dot_kms__pb2.DeleteNamespaceResponse.SerializeToString,
             ),
             'ListNamespaces': grpc.unary_unary_rpc_method_handler(
                     servicer.ListNamespaces,
@@ -1070,6 +1062,26 @@ def add_AdminServiceServicer_to_server(servicer, server):
                     servicer.RotateIdentityToken,
                     request_deserializer=kms_dot_v1_dot_kms__pb2.RotateIdentityTokenRequest.FromString,
                     response_serializer=kms_dot_v1_dot_kms__pb2.RotateIdentityTokenResponse.SerializeToString,
+            ),
+            'IssueIdentityCertificate': grpc.unary_unary_rpc_method_handler(
+                    servicer.IssueIdentityCertificate,
+                    request_deserializer=kms_dot_v1_dot_kms__pb2.IssueIdentityCertificateRequest.FromString,
+                    response_serializer=kms_dot_v1_dot_kms__pb2.IssueIdentityCertificateResponse.SerializeToString,
+            ),
+            'RevokeIdentityCertificate': grpc.unary_unary_rpc_method_handler(
+                    servicer.RevokeIdentityCertificate,
+                    request_deserializer=kms_dot_v1_dot_kms__pb2.RevokeIdentityCertificateRequest.FromString,
+                    response_serializer=kms_dot_v1_dot_kms__pb2.RevokeIdentityCertificateResponse.SerializeToString,
+            ),
+            'WhoAmI': grpc.unary_unary_rpc_method_handler(
+                    servicer.WhoAmI,
+                    request_deserializer=kms_dot_v1_dot_kms__pb2.WhoAmIRequest.FromString,
+                    response_serializer=kms_dot_v1_dot_kms__pb2.WhoAmIResponse.SerializeToString,
+            ),
+            'GetCACertificate': grpc.unary_unary_rpc_method_handler(
+                    servicer.GetCACertificate,
+                    request_deserializer=kms_dot_v1_dot_kms__pb2.GetCACertificateRequest.FromString,
+                    response_serializer=kms_dot_v1_dot_kms__pb2.GetCACertificateResponse.SerializeToString,
             ),
             'ListAuditEvents': grpc.unary_unary_rpc_method_handler(
                     servicer.ListAuditEvents,
@@ -1118,6 +1130,60 @@ class AdminService:
             '/kms.v1.AdminService/CreateNamespace',
             kms_dot_v1_dot_kms__pb2.CreateNamespaceRequest.SerializeToString,
             kms_dot_v1_dot_kms__pb2.CreateNamespaceResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def UpdateNamespace(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/kms.v1.AdminService/UpdateNamespace',
+            kms_dot_v1_dot_kms__pb2.UpdateNamespaceRequest.SerializeToString,
+            kms_dot_v1_dot_kms__pb2.UpdateNamespaceResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def DeleteNamespace(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/kms.v1.AdminService/DeleteNamespace',
+            kms_dot_v1_dot_kms__pb2.DeleteNamespaceRequest.SerializeToString,
+            kms_dot_v1_dot_kms__pb2.DeleteNamespaceResponse.FromString,
             options,
             channel_credentials,
             insecure,
@@ -1361,6 +1427,114 @@ class AdminService:
             '/kms.v1.AdminService/RotateIdentityToken',
             kms_dot_v1_dot_kms__pb2.RotateIdentityTokenRequest.SerializeToString,
             kms_dot_v1_dot_kms__pb2.RotateIdentityTokenResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def IssueIdentityCertificate(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/kms.v1.AdminService/IssueIdentityCertificate',
+            kms_dot_v1_dot_kms__pb2.IssueIdentityCertificateRequest.SerializeToString,
+            kms_dot_v1_dot_kms__pb2.IssueIdentityCertificateResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def RevokeIdentityCertificate(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/kms.v1.AdminService/RevokeIdentityCertificate',
+            kms_dot_v1_dot_kms__pb2.RevokeIdentityCertificateRequest.SerializeToString,
+            kms_dot_v1_dot_kms__pb2.RevokeIdentityCertificateResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def WhoAmI(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/kms.v1.AdminService/WhoAmI',
+            kms_dot_v1_dot_kms__pb2.WhoAmIRequest.SerializeToString,
+            kms_dot_v1_dot_kms__pb2.WhoAmIResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def GetCACertificate(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/kms.v1.AdminService/GetCACertificate',
+            kms_dot_v1_dot_kms__pb2.GetCACertificateRequest.SerializeToString,
+            kms_dot_v1_dot_kms__pb2.GetCACertificateResponse.FromString,
             options,
             channel_credentials,
             insecure,

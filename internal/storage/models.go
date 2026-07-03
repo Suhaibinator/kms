@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"encoding/json"
 	"time"
 
 	"github.com/Suhaibinator/kms/internal/domain"
@@ -25,25 +26,29 @@ type keyMetadataModel struct {
 
 func (keyMetadataModel) TableName() string { return "key_metadata" }
 
-// namespaceModel -> namespaces.
+// namespaceModel -> namespaces. AllowedAuthMethods is a JSON array of strings.
 type namespaceModel struct {
-	ID          int64  `gorm:"column:id;primaryKey;autoIncrement"`
-	Path        string `gorm:"column:path;not null;unique"`
-	Description string `gorm:"column:description;not null;default:''"`
-	CreatedBy   string `gorm:"column:created_by;not null;default:''"`
-	CreatedAt   string `gorm:"column:created_at;not null"`
+	ID                 int64  `gorm:"column:id;primaryKey;autoIncrement"`
+	Env                string `gorm:"column:env;not null;uniqueIndex:idx_ns_env_app,priority:1"`
+	App                string `gorm:"column:app;not null;uniqueIndex:idx_ns_env_app,priority:2"`
+	Description        string `gorm:"column:description;not null;default:''"`
+	AllowedAuthMethods string `gorm:"column:allowed_auth_methods;not null;default:[\"mtls\"]"`
+	CreatedBy          string `gorm:"column:created_by;not null;default:''"`
+	CreatedAt          string `gorm:"column:created_at;not null"`
 }
 
 func (namespaceModel) TableName() string { return "namespaces" }
 
 // parameterModel -> parameters.
 type parameterModel struct {
-	ID           int64  `gorm:"column:id;primaryKey;autoIncrement"`
-	Path         string `gorm:"column:path;not null;unique"`
-	ContentType  string `gorm:"column:content_type;not null;default:string"`
-	MetadataJSON string `gorm:"column:metadata_json;not null;default:{}"`
-	CreatedAt    string `gorm:"column:created_at;not null"`
-	UpdatedAt    string `gorm:"column:updated_at;not null"`
+	ID           int64          `gorm:"column:id;primaryKey;autoIncrement"`
+	NamespaceID  int64          `gorm:"column:namespace_id;not null;uniqueIndex:idx_param_ns_name,priority:1"`
+	Namespace    namespaceModel `gorm:"foreignKey:NamespaceID;references:ID"`
+	Name         string         `gorm:"column:name;not null;uniqueIndex:idx_param_ns_name,priority:2"`
+	ContentType  string         `gorm:"column:content_type;not null;default:string"`
+	MetadataJSON string         `gorm:"column:metadata_json;not null;default:{}"`
+	CreatedAt    string         `gorm:"column:created_at;not null"`
+	UpdatedAt    string         `gorm:"column:updated_at;not null"`
 }
 
 func (parameterModel) TableName() string { return "parameters" }
@@ -76,14 +81,16 @@ func (parameterLabelModel) TableName() string { return "parameter_labels" }
 
 // secretModel -> secrets.
 type secretModel struct {
-	ID              int64  `gorm:"column:id;primaryKey;autoIncrement"`
-	Path            string `gorm:"column:path;not null;unique"`
-	ClientBound     int64  `gorm:"column:client_bound;not null;default:0"`
-	AccessTokenHash []byte `gorm:"column:access_token_hash"`
-	ContentType     string `gorm:"column:content_type;not null;default:application/octet-stream"`
-	MetadataJSON    string `gorm:"column:metadata_json;not null;default:{}"`
-	CreatedAt       string `gorm:"column:created_at;not null"`
-	UpdatedAt       string `gorm:"column:updated_at;not null"`
+	ID              int64          `gorm:"column:id;primaryKey;autoIncrement"`
+	NamespaceID     int64          `gorm:"column:namespace_id;not null;uniqueIndex:idx_secret_ns_name,priority:1"`
+	Namespace       namespaceModel `gorm:"foreignKey:NamespaceID;references:ID"`
+	Name            string         `gorm:"column:name;not null;uniqueIndex:idx_secret_ns_name,priority:2"`
+	ClientBound     int64          `gorm:"column:client_bound;not null;default:0"`
+	AccessTokenHash []byte         `gorm:"column:access_token_hash"`
+	ContentType     string         `gorm:"column:content_type;not null;default:application/octet-stream"`
+	MetadataJSON    string         `gorm:"column:metadata_json;not null;default:{}"`
+	CreatedAt       string         `gorm:"column:created_at;not null"`
+	UpdatedAt       string         `gorm:"column:updated_at;not null"`
 }
 
 func (secretModel) TableName() string { return "secrets" }
@@ -122,18 +129,48 @@ type secretLabelModel struct {
 
 func (secretLabelModel) TableName() string { return "secret_labels" }
 
-// identityModel -> identities.
+// identityModel -> identities. TokenHash is nullable (cert-only identities have
+// none); NamespaceID is nullable (unbound admin/tooling identities).
 type identityModel struct {
-	ID           int64  `gorm:"column:id;primaryKey;autoIncrement"`
-	Name         string `gorm:"column:name;not null;unique"`
-	Kind         string `gorm:"column:kind;not null"`
-	TokenHash    []byte `gorm:"column:token_hash;not null;index:idx_identities_token_hash"`
-	Disabled     int64  `gorm:"column:disabled;not null;default:0"`
-	CreatedAt    string `gorm:"column:created_at;not null"`
-	MetadataJSON string `gorm:"column:metadata_json;not null;default:{}"`
+	ID           int64           `gorm:"column:id;primaryKey;autoIncrement"`
+	Name         string          `gorm:"column:name;not null;unique"`
+	Kind         string          `gorm:"column:kind;not null"`
+	TokenHash    []byte          `gorm:"column:token_hash;index:idx_identities_token_hash"`
+	NamespaceID  *int64          `gorm:"column:namespace_id"`
+	Namespace    *namespaceModel `gorm:"foreignKey:NamespaceID;references:ID"`
+	Disabled     int64           `gorm:"column:disabled;not null;default:0"`
+	CreatedAt    string          `gorm:"column:created_at;not null"`
+	MetadataJSON string          `gorm:"column:metadata_json;not null;default:{}"`
 }
 
 func (identityModel) TableName() string { return "identities" }
+
+// caKeyModel -> ca_keys. Private key material is envelope-encrypted under the
+// active KEK; the public cert is served unauthenticated.
+type caKeyModel struct {
+	ID           string `gorm:"column:id;primaryKey"`
+	CertPEM      string `gorm:"column:cert_pem;not null"`
+	EncryptedKey []byte `gorm:"column:encrypted_key;not null"`
+	EncryptedDEK []byte `gorm:"column:encrypted_dek;not null"`
+	KEKID        string `gorm:"column:kek_id;not null"`
+	State        string `gorm:"column:state;not null;default:active"`
+	CreatedAt    string `gorm:"column:created_at;not null"`
+}
+
+func (caKeyModel) TableName() string { return "ca_keys" }
+
+// identityCertModel -> identity_certs. Never holds private keys.
+type identityCertModel struct {
+	Serial      string        `gorm:"column:serial;primaryKey"`
+	IdentityID  int64         `gorm:"column:identity_id;not null;index:idx_identity_certs_identity"`
+	Identity    identityModel `gorm:"foreignKey:IdentityID;references:ID;constraint:OnDelete:CASCADE"`
+	Fingerprint string        `gorm:"column:fingerprint;not null"`
+	NotAfter    string        `gorm:"column:not_after;not null"`
+	RevokedAt   *string       `gorm:"column:revoked_at"`
+	CreatedAt   string        `gorm:"column:created_at;not null"`
+}
+
+func (identityCertModel) TableName() string { return "identity_certs" }
 
 // policyModel -> policies.
 type policyModel struct {
@@ -147,14 +184,16 @@ type policyModel struct {
 
 func (policyModel) TableName() string { return "policies" }
 
-// auditEventModel -> audit_events.
+// auditEventModel -> audit_events. Resource env/app/key are denormalized text.
 type auditEventModel struct {
 	ID              int64  `gorm:"column:id;primaryKey;autoIncrement"`
 	EventType       string `gorm:"column:event_type;not null"`
 	ActorIdentity   string `gorm:"column:actor_identity;not null;default:'';index:idx_audit_actor"`
 	ActorType       string `gorm:"column:actor_type;not null;default:''"`
 	ResourceType    string `gorm:"column:resource_type;not null;default:''"`
-	ResourcePath    string `gorm:"column:resource_path;not null;default:'';index:idx_audit_path"`
+	ResourceEnv     string `gorm:"column:resource_env;not null;default:'';index:idx_audit_ns,priority:1"`
+	ResourceApp     string `gorm:"column:resource_app;not null;default:'';index:idx_audit_ns,priority:2"`
+	ResourceKey     string `gorm:"column:resource_key;not null;default:''"`
 	ResourceVersion int64  `gorm:"column:resource_version;not null;default:0"`
 	Decision        string `gorm:"column:decision;not null;default:''"`
 	SourceIP        string `gorm:"column:source_ip;not null;default:''"`
@@ -172,7 +211,9 @@ func (auditEventModel) TableName() string { return "audit_events" }
 type changeLogModel struct {
 	Revision      int64   `gorm:"column:revision;primaryKey;autoIncrement"`
 	ResourceType  string  `gorm:"column:resource_type;not null"`
-	Path          string  `gorm:"column:path;not null"`
+	Env           string  `gorm:"column:env;not null"`
+	App           string  `gorm:"column:app;not null"`
+	Key           string  `gorm:"column:key;not null"`
 	ChangeType    string  `gorm:"column:change_type;not null"`
 	Value         *string `gorm:"column:value"`
 	ContentType   string  `gorm:"column:content_type;not null;default:''"`
@@ -203,6 +244,8 @@ var autoMigrateModels = []any{
 	&secretVersionModel{},
 	&secretLabelModel{},
 	&identityModel{},
+	&caKeyModel{},
+	&identityCertModel{},
 	&policyModel{},
 	&auditEventModel{},
 }
@@ -221,6 +264,8 @@ func toKeyMetadata(m keyMetadataModel) domain.KeyMetadata {
 	}
 }
 
+// toIdentity maps the base identity row. Namespace and Certs are filled by the
+// caller (they require additional lookups and are omitted on the hot auth path).
 func toIdentity(m identityModel) domain.Identity {
 	return domain.Identity{
 		ID:        m.ID,
@@ -228,22 +273,47 @@ func toIdentity(m identityModel) domain.Identity {
 		Kind:      m.Kind,
 		Disabled:  i2b(m.Disabled),
 		CreatedAt: parseTime(m.CreatedAt),
+		HasToken:  len(m.TokenHash) > 0,
 	}
 }
 
 func toNamespace(m namespaceModel) domain.Namespace {
 	return domain.Namespace{
-		Path:        m.Path,
-		Description: m.Description,
-		CreatedBy:   m.CreatedBy,
+		ID:                 m.ID,
+		NamespaceRef:       domain.NamespaceRef{Env: m.Env, App: m.App},
+		Description:        m.Description,
+		AllowedAuthMethods: parseAuthMethods(m.AllowedAuthMethods),
+		CreatedBy:          m.CreatedBy,
+		CreatedAt:          parseTime(m.CreatedAt),
+	}
+}
+
+func toIdentityCert(m identityCertModel) domain.IdentityCert {
+	return domain.IdentityCert{
+		Serial:      m.Serial,
+		Fingerprint: m.Fingerprint,
+		NotAfter:    parseTime(m.NotAfter),
+		RevokedAt:   parseTimePtr(m.RevokedAt),
 		CreatedAt:   parseTime(m.CreatedAt),
 	}
 }
 
-func toSecretRecord(sec secretModel, labels map[string]uint64) SecretRecord {
+func toCAKeyRecord(m caKeyModel) CAKeyRecord {
+	return CAKeyRecord{
+		ID:           m.ID,
+		CertPEM:      m.CertPEM,
+		EncryptedKey: m.EncryptedKey,
+		EncryptedDEK: m.EncryptedDEK,
+		KEKID:        m.KEKID,
+		State:        m.State,
+		CreatedAt:    parseTime(m.CreatedAt),
+	}
+}
+
+func toSecretRecord(sec secretModel, ref domain.Ref, labels map[string]uint64) SecretRecord {
 	return SecretRecord{
 		ID:              sec.ID,
-		Path:            sec.Path,
+		Ref:             ref,
 		ClientBound:     i2b(sec.ClientBound),
 		AccessTokenHash: sec.AccessTokenHash,
 		ContentType:     sec.ContentType,
@@ -284,7 +354,7 @@ func toChangeEntry(m changeLogModel) domain.ChangeLogEntry {
 	return domain.ChangeLogEntry{
 		Revision:     uint64(m.Revision),
 		ResourceType: m.ResourceType,
-		Path:         m.Path,
+		Ref:          domain.Ref{NS: domain.NamespaceRef{Env: m.Env, App: m.App}, Key: m.Key},
 		ChangeType:   m.ChangeType,
 		Value:        value,
 		ContentType:  m.ContentType,
@@ -301,7 +371,9 @@ func toAuditEvent(m auditEventModel) domain.AuditEvent {
 		ActorIdentity:   m.ActorIdentity,
 		ActorType:       m.ActorType,
 		ResourceType:    m.ResourceType,
-		ResourcePath:    m.ResourcePath,
+		ResourceEnv:     m.ResourceEnv,
+		ResourceApp:     m.ResourceApp,
+		ResourceKey:     m.ResourceKey,
 		ResourceVersion: uint64(m.ResourceVersion),
 		Decision:        m.Decision,
 		SourceIP:        m.SourceIP,
@@ -310,6 +382,33 @@ func toAuditEvent(m auditEventModel) domain.AuditEvent {
 		CreatedAt:       parseTime(m.CreatedAt),
 		Metadata:        m.MetadataJSON,
 	}
+}
+
+// marshalAuthMethods renders a set of auth methods as the stored JSON array.
+// An empty set defaults to ["mtls"] — the strongest posture (plan §3).
+func marshalAuthMethods(methods []domain.AuthMethod) string {
+	if len(methods) == 0 {
+		return `["mtls"]`
+	}
+	b, err := json.Marshal(methods)
+	if err != nil {
+		// AuthMethod is a plain string; marshalling cannot fail in practice.
+		return `["mtls"]`
+	}
+	return string(b)
+}
+
+// parseAuthMethods decodes the stored JSON array. Unparseable or empty text
+// yields nil so callers see an explicit empty set rather than a bogus method.
+func parseAuthMethods(s string) []domain.AuthMethod {
+	if s == "" {
+		return nil
+	}
+	var methods []domain.AuthMethod
+	if err := json.Unmarshal([]byte(s), &methods); err != nil {
+		return nil
+	}
+	return methods
 }
 
 // zeroOr returns v if non-empty, else def.

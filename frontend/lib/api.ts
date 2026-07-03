@@ -4,12 +4,15 @@
 import type {
   ApiErrorEnvelope,
   AuditFilters,
+  CaResponse,
+  CreateIdentityRequest,
   CreateIdentityResponse,
+  CreateNamespaceRequest,
   CreateSecretRequest,
   CreateSecretResponse,
   HealthResponse,
   Identity,
-  IdentityKind,
+  IssueCertResponse,
   KeysResponse,
   ListAuditResponse,
   ListIdentitiesResponse,
@@ -19,16 +22,20 @@ import type {
   ListSecretsResponse,
   LoginResponse,
   Namespace,
+  NamespaceRef,
   Parameter,
   ParameterMetadata,
   Policy,
   PromoteSecretResponse,
+  PutParameterRequest,
   PutParameterResponse,
   RevealSecretResponse,
   RevisionResponse,
   RotateIdentityResponse,
   SecretMetadata,
   SubscribersResponse,
+  UpdateNamespaceRequest,
+  WhoAmIResponse,
 } from "./types";
 
 const API_BASE = "/api/v1";
@@ -121,7 +128,7 @@ function httpStatusToCode(status: number): string {
 }
 
 interface FetchOptions {
-  method?: "GET" | "POST" | "PUT" | "DELETE";
+  method?: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
   body?: unknown;
   headers?: Record<string, string>;
   auth?: boolean;
@@ -183,6 +190,13 @@ function qs(params: Record<string, string | number | undefined | null>): string 
   return parts.length ? `?${parts.join("&")}` : "";
 }
 
+// A namespace + key address; the shape point ops and detail views pass around.
+export interface ResourceRef {
+  env: string;
+  app: string;
+  key: string;
+}
+
 export const api = {
   // --- Auth & health ---
   login(token: string): Promise<LoginResponse> {
@@ -195,6 +209,13 @@ export const api = {
   health(): Promise<HealthResponse> {
     return apiFetch<HealthResponse>("/health", { auth: false });
   },
+  whoami(): Promise<WhoAmIResponse> {
+    return apiFetch<WhoAmIResponse>("/whoami");
+  },
+  // Public: the built-in CA certificate, for baking into app deploy images.
+  ca(): Promise<CaResponse> {
+    return apiFetch<CaResponse>("/ca", { auth: false });
+  },
 
   // --- Namespaces ---
   listNamespaces(pageSize?: number, pageToken?: string): Promise<ListNamespacesResponse> {
@@ -202,87 +223,118 @@ export const api = {
       `/namespaces${qs({ page_size: pageSize, page_token: pageToken })}`,
     );
   },
-  createNamespace(path: string, description: string): Promise<{ namespace: Namespace }> {
+  createNamespace(req: CreateNamespaceRequest): Promise<{ namespace: Namespace }> {
     return apiFetch<{ namespace: Namespace }>("/namespaces", {
       method: "POST",
-      body: { path, description },
+      body: req,
+    });
+  },
+  updateNamespace(req: UpdateNamespaceRequest): Promise<{ namespace: Namespace }> {
+    return apiFetch<{ namespace: Namespace }>("/namespaces", {
+      method: "PATCH",
+      body: req,
+    });
+  },
+  deleteNamespace(ns: NamespaceRef): Promise<Record<string, never>> {
+    return apiFetch<Record<string, never>>(`/namespaces${qs({ env: ns.env, app: ns.app })}`, {
+      method: "DELETE",
     });
   },
 
   // --- Parameters ---
   listParameters(
-    prefix?: string,
+    ns: NamespaceRef,
+    keyPrefix?: string,
     pageSize?: number,
     pageToken?: string,
   ): Promise<ListParametersResponse> {
     return apiFetch<ListParametersResponse>(
-      `/parameters${qs({ prefix, page_size: pageSize, page_token: pageToken })}`,
+      `/parameters${qs({
+        env: ns.env,
+        app: ns.app,
+        key_prefix: keyPrefix,
+        page_size: pageSize,
+        page_token: pageToken,
+      })}`,
     );
   },
-  getParameter(path: string, version?: number, label?: string): Promise<{ parameter: Parameter }> {
+  getParameter(ref: ResourceRef, version?: number, label?: string): Promise<{ parameter: Parameter }> {
     return apiFetch<{ parameter: Parameter }>(
-      `/parameters/get${qs({ path, version, label })}`,
+      `/parameters/get${qs({ env: ref.env, app: ref.app, key: ref.key, version, label })}`,
     );
   },
-  parameterMetadata(path: string): Promise<ParameterMetadata> {
-    return apiFetch<ParameterMetadata>(`/parameters/metadata${qs({ path })}`);
+  parameterMetadata(ref: ResourceRef): Promise<ParameterMetadata> {
+    return apiFetch<ParameterMetadata>(
+      `/parameters/metadata${qs({ env: ref.env, app: ref.app, key: ref.key })}`,
+    );
   },
-  putParameter(req: {
-    path: string;
-    value: string;
-    content_type: string;
-    metadata_json: string;
-  }): Promise<PutParameterResponse> {
+  putParameter(req: PutParameterRequest): Promise<PutParameterResponse> {
     return apiFetch<PutParameterResponse>("/parameters", { method: "PUT", body: req });
   },
-  deleteParameter(path: string): Promise<RevisionResponse> {
-    return apiFetch<RevisionResponse>(`/parameters${qs({ path })}`, { method: "DELETE" });
+  deleteParameter(ref: ResourceRef): Promise<RevisionResponse> {
+    return apiFetch<RevisionResponse>(
+      `/parameters${qs({ env: ref.env, app: ref.app, key: ref.key })}`,
+      { method: "DELETE" },
+    );
   },
 
   // --- Secrets ---
-  listSecrets(prefix?: string, pageSize?: number, pageToken?: string): Promise<ListSecretsResponse> {
+  listSecrets(
+    ns: NamespaceRef,
+    keyPrefix?: string,
+    pageSize?: number,
+    pageToken?: string,
+  ): Promise<ListSecretsResponse> {
     return apiFetch<ListSecretsResponse>(
-      `/secrets${qs({ prefix, page_size: pageSize, page_token: pageToken })}`,
+      `/secrets${qs({
+        env: ns.env,
+        app: ns.app,
+        key_prefix: keyPrefix,
+        page_size: pageSize,
+        page_token: pageToken,
+      })}`,
     );
   },
-  secretMetadata(path: string): Promise<{ secret: SecretMetadata }> {
-    return apiFetch<{ secret: SecretMetadata }>(`/secrets/metadata${qs({ path })}`);
+  secretMetadata(ref: ResourceRef): Promise<{ secret: SecretMetadata }> {
+    return apiFetch<{ secret: SecretMetadata }>(
+      `/secrets/metadata${qs({ env: ref.env, app: ref.app, key: ref.key })}`,
+    );
   },
   // Creating or updating a secret. For client-bound *updates* the caller must
   // supply the existing secret token, sent as X-KMS-Secret-Token.
-  createSecret(
-    req: CreateSecretRequest,
-    secretToken?: string,
-  ): Promise<CreateSecretResponse> {
+  createSecret(req: CreateSecretRequest, secretToken?: string): Promise<CreateSecretResponse> {
     const headers = secretToken ? { "X-KMS-Secret-Token": secretToken } : undefined;
     return apiFetch<CreateSecretResponse>("/secrets", { method: "POST", body: req, headers });
   },
-  revealSecret(path: string, version: number, label: string): Promise<RevealSecretResponse> {
+  revealSecret(ref: ResourceRef, version: number, label: string): Promise<RevealSecretResponse> {
     return apiFetch<RevealSecretResponse>("/secrets/reveal", {
       method: "POST",
-      body: { path, version, label },
+      body: { env: ref.env, app: ref.app, key: ref.key, version, label },
     });
   },
-  disableSecret(path: string, version: number, enable: boolean): Promise<RevisionResponse> {
+  disableSecret(ref: ResourceRef, version: number, enable: boolean): Promise<RevisionResponse> {
     return apiFetch<RevisionResponse>("/secrets/disable", {
       method: "POST",
-      body: { path, version, enable },
+      body: { env: ref.env, app: ref.app, key: ref.key, version, enable },
     });
   },
-  destroySecret(path: string, version: number): Promise<RevisionResponse> {
+  destroySecret(ref: ResourceRef, version: number): Promise<RevisionResponse> {
     return apiFetch<RevisionResponse>("/secrets/destroy", {
       method: "POST",
-      body: { path, version },
+      body: { env: ref.env, app: ref.app, key: ref.key, version },
     });
   },
-  promoteSecret(path: string, version: number): Promise<PromoteSecretResponse> {
+  promoteSecret(ref: ResourceRef, version: number): Promise<PromoteSecretResponse> {
     return apiFetch<PromoteSecretResponse>("/secrets/promote", {
       method: "POST",
-      body: { path, version },
+      body: { env: ref.env, app: ref.app, key: ref.key, version },
     });
   },
-  deleteSecret(path: string): Promise<RevisionResponse> {
-    return apiFetch<RevisionResponse>(`/secrets${qs({ path })}`, { method: "DELETE" });
+  deleteSecret(ref: ResourceRef): Promise<RevisionResponse> {
+    return apiFetch<RevisionResponse>(
+      `/secrets${qs({ env: ref.env, app: ref.app, key: ref.key })}`,
+      { method: "DELETE" },
+    );
   },
 
   // --- Policies ---
@@ -307,12 +359,27 @@ export const api = {
       `/identities${qs({ page_size: pageSize, page_token: pageToken })}`,
     );
   },
-  createIdentity(name: string, kind: IdentityKind): Promise<CreateIdentityResponse> {
+  createIdentity(req: CreateIdentityRequest): Promise<CreateIdentityResponse> {
     return apiFetch<CreateIdentityResponse>("/identities", {
       method: "POST",
-      body: { name, kind },
+      body: req,
     });
   },
+  issueCert(name: string, ttlSeconds: number): Promise<IssueCertResponse> {
+    return apiFetch<IssueCertResponse>("/identities/issue-cert", {
+      method: "POST",
+      body: { name, ttl_seconds: ttlSeconds },
+    });
+  },
+  revokeCert(name: string, serial: string): Promise<Record<string, never>> {
+    return apiFetch<Record<string, never>>("/identities/revoke-cert", {
+      method: "POST",
+      body: { name, serial },
+    });
+  },
+  // Rotate a token identity's bearer token: mints a new one and invalidates
+  // the old. Shown once, like a create-time token. mTLS identities rotate via
+  // issueCert instead.
   rotateIdentity(name: string): Promise<RotateIdentityResponse> {
     return apiFetch<RotateIdentityResponse>("/identities/rotate", {
       method: "POST",
@@ -330,7 +397,9 @@ export const api = {
   listAudit(filters: AuditFilters): Promise<ListAuditResponse> {
     return apiFetch<ListAuditResponse>(
       `/audit${qs({
-        path_prefix: filters.path_prefix,
+        env: filters.env,
+        app: filters.app,
+        key_prefix: filters.key_prefix,
         actor: filters.actor,
         event_type: filters.event_type,
         from_unix_ms: filters.from_unix_ms,

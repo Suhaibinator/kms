@@ -9,9 +9,29 @@ import (
 	"github.com/Suhaibinator/kms/sdk/go/paramstore/paramstoretest"
 )
 
-// newTestClient starts a fake server and a Client wired to it, registering
-// cleanup on t.
+// testNS is the home namespace most tests bind their client to; relative keys
+// resolve against it. The fake server addresses parameters/secrets by the same
+// namespace + relative key.
+const testNS = "prod/app"
+
+// newTestClient starts a fake server and a Client wired to it, bound to testNS
+// unless the caller set a namespace, registering cleanup on t.
 func newTestClient(t *testing.T, cfg Config) (*Client, *paramstoretest.Server) {
+	t.Helper()
+	if cfg.Namespace == "" {
+		cfg.Namespace = testNS
+	}
+	return newRawTestClient(t, cfg)
+}
+
+// newUnboundTestClient is newTestClient without a default namespace, for tests
+// exercising WhoAmI discovery and ErrNoNamespace.
+func newUnboundTestClient(t *testing.T, cfg Config) (*Client, *paramstoretest.Server) {
+	t.Helper()
+	return newRawTestClient(t, cfg)
+}
+
+func newRawTestClient(t *testing.T, cfg Config) (*Client, *paramstoretest.Server) {
 	t.Helper()
 	srv, err := paramstoretest.New()
 	if err != nil {

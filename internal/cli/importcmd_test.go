@@ -8,7 +8,12 @@ import (
 	"sort"
 	"strings"
 	"testing"
+
+	"github.com/Suhaibinator/kms/internal/domain"
 )
+
+// testNS is the destination namespace shared by the import entry tests.
+var testNS = domain.NamespaceRef{Env: "prod", App: "gradethis"}
 
 func TestSlug(t *testing.T) {
 	cases := map[string]string{
@@ -25,15 +30,15 @@ func TestSlug(t *testing.T) {
 
 func TestBuildImportEntriesHappy(t *testing.T) {
 	items := []kv{{Key: "FOO", Value: "1"}, {Key: "BAR_BAZ", Value: "2"}}
-	entries, err := buildImportEntries("/prod/gradethis", items)
+	entries, err := buildImportEntries(testNS, items)
 	if err != nil {
 		t.Fatalf("buildImportEntries: %v", err)
 	}
 	// Sorted by key: BAR_BAZ < FOO.
-	if entries[0].Key != "BAR_BAZ" || entries[0].Path != "/prod/gradethis/bar-baz" {
+	if entries[0].Key != "BAR_BAZ" || entries[0].Ref.String() != "/prod/gradethis/bar-baz" {
 		t.Fatalf("entry0 = %+v", entries[0])
 	}
-	if entries[1].Path != "/prod/gradethis/foo" {
+	if entries[1].Ref.String() != "/prod/gradethis/foo" {
 		t.Fatalf("entry1 = %+v", entries[1])
 	}
 }
@@ -41,7 +46,7 @@ func TestBuildImportEntriesHappy(t *testing.T) {
 func TestBuildImportEntriesCollision(t *testing.T) {
 	// "A_B" and "a-b" both slug to "a-b".
 	items := []kv{{Key: "A_B", Value: "1"}, {Key: "a-b", Value: "2"}}
-	_, err := buildImportEntries("/prod/gradethis", items)
+	_, err := buildImportEntries(testNS, items)
 	if err == nil || !strings.Contains(err.Error(), "collision") {
 		t.Fatalf("expected collision error, got %v", err)
 	}
@@ -50,18 +55,28 @@ func TestBuildImportEntriesCollision(t *testing.T) {
 	}
 }
 
-func TestBuildImportEntriesInvalidPath(t *testing.T) {
+func TestBuildImportEntriesInvalidKey(t *testing.T) {
 	items := []kv{{Key: "has space", Value: "1"}}
-	_, err := buildImportEntries("/prod/gradethis", items)
-	if err == nil || !strings.Contains(err.Error(), "valid paths") {
-		t.Fatalf("expected invalid path error, got %v", err)
+	_, err := buildImportEntries(testNS, items)
+	if err == nil || !strings.Contains(err.Error(), "valid keys") {
+		t.Fatalf("expected invalid key error, got %v", err)
 	}
 }
 
-func TestBuildImportEntriesBadNamespace(t *testing.T) {
-	_, err := buildImportEntries("no-slash", []kv{{Key: "A", Value: "1"}})
+func TestResolveImportNamespaceBad(t *testing.T) {
+	_, err := resolveImportNamespace("no-slash", "", "")
 	if err == nil || !strings.Contains(err.Error(), "namespace") {
 		t.Fatalf("expected namespace error, got %v", err)
+	}
+}
+
+func TestResolveImportNamespaceEnvApp(t *testing.T) {
+	ns, err := resolveImportNamespace("", "prod", "gradethis")
+	if err != nil {
+		t.Fatalf("resolveImportNamespace: %v", err)
+	}
+	if ns != testNS {
+		t.Fatalf("ns = %+v, want %+v", ns, testNS)
 	}
 }
 
@@ -124,7 +139,7 @@ func TestImportDryRun(t *testing.T) {
 
 	c := newTestCLI()
 	code := c.cmdImport([]string{
-		"--from", src, "--namespace", "/prod/gradethis",
+		"--from", src, "--namespace", "prod/gradethis",
 		"--dry-run", "--report", report, "--db", dbPath,
 	})
 	if code != 0 {
@@ -160,7 +175,7 @@ func TestImportReportRefusesExistingFile(t *testing.T) {
 	writeFile(t, report, "existing")
 
 	c := newTestCLI()
-	code := c.cmdImport([]string{"--from", src, "--namespace", "/prod/x", "--dry-run", "--report", report})
+	code := c.cmdImport([]string{"--from", src, "--namespace", "prod/x", "--dry-run", "--report", report})
 	if code == 0 {
 		t.Fatalf("expected failure when report file exists")
 	}

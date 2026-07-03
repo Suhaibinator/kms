@@ -4,8 +4,9 @@ Typical use::
 
     from kms_paramstore import Client
 
-    with Client("parameter-store.prod.internal:8443", token="<client-token>") as client:
-        db_password = client.get_secret("/prod/gradethis/postgres-password")
+    with Client("parameter-store.prod.internal:8443", namespace="prod/gradethis",
+                token="<client-token>") as client:
+        db_password = client.get_secret("postgres-password")  # relative to namespace
         print(db_password)          # [REDACTED]
         connect(db_password.value)  # explicit access to plaintext
 
@@ -16,11 +17,12 @@ in logs and errors, and provides declarative :class:`SecretValue` /
 
 from __future__ import annotations
 
-from .client import Client
+from .client import Client, WhoAmI
 from .config import TLSConfig
 from .errors import (
     ConfigError,
     FailedPreconditionError,
+    NoNamespaceError,
     NotFoundError,
     NotInitializedError,
     ParamStoreError,
@@ -37,6 +39,7 @@ __version__ = "0.1.0"
 
 __all__ = [
     "Client",
+    "WhoAmI",
     "TLSConfig",
     "Secret",
     "new_secret",
@@ -57,6 +60,7 @@ __all__ = [
     "FailedPreconditionError",
     "NotInitializedError",
     "ConfigError",
+    "NoNamespaceError",
     "tls_from_files",
     "mtls_from_files",
     "tls_from_bytes",

@@ -21,23 +21,29 @@ func stdInput(res EncryptResult) DecryptInput {
 }
 
 func TestBuildAADFormat(t *testing.T) {
-	got := BuildAAD(domain.ResourceSecret, "/prod/x", 3)
-	want := "kms/v1|type:secret|path:/prod/x|version:3"
+	got := BuildAAD("prod", "gradethis", "billing/stripe-key", 3)
+	want := "env=prod;app=gradethis;key=billing/stripe-key;version=3"
 	if got != want {
 		t.Fatalf("BuildAAD = %q, want %q", got, want)
 	}
-	// Distinct identity => distinct AAD.
-	if BuildAAD(domain.ResourceSecret, "/prod/x", 3) == BuildAAD(domain.ResourceSecret, "/prod/x", 4) {
+	// Distinct identity => distinct AAD across every component.
+	if BuildAAD("prod", "app", "x", 3) == BuildAAD("prod", "app", "x", 4) {
 		t.Fatal("AAD not sensitive to version")
 	}
-	if BuildAAD(domain.ResourceSecret, "/a", 1) == BuildAAD(domain.ResourceParameter, "/a", 1) {
-		t.Fatal("AAD not sensitive to resource type")
+	if BuildAAD("prod", "app", "x", 1) == BuildAAD("staging", "app", "x", 1) {
+		t.Fatal("AAD not sensitive to env")
+	}
+	if BuildAAD("prod", "app", "x", 1) == BuildAAD("prod", "other", "x", 1) {
+		t.Fatal("AAD not sensitive to app")
+	}
+	if BuildAAD("prod", "app", "x", 1) == BuildAAD("prod", "app", "y", 1) {
+		t.Fatal("AAD not sensitive to key")
 	}
 }
 
 func TestEncryptDecryptStandardRoundTrip(t *testing.T) {
 	kek := mustKEK(t, "kek-1")
-	aad := BuildAAD(domain.ResourceSecret, "/prod/db", 1)
+	aad := BuildAAD("prod", "app", "/prod/db", 1)
 	plaintext := []byte("super-secret-password")
 
 	res, err := Encrypt(kek, plaintext, aad)
@@ -71,7 +77,7 @@ func TestEncryptDecryptStandardRoundTrip(t *testing.T) {
 
 func TestEncryptEmptyPlaintextRoundTrips(t *testing.T) {
 	kek := mustKEK(t, "kek-empty")
-	aad := BuildAAD(domain.ResourceSecret, "/e", 1)
+	aad := BuildAAD("prod", "app", "/e", 1)
 	res, err := Encrypt(kek, []byte{}, aad)
 	if err != nil {
 		t.Fatalf("Encrypt: %v", err)
@@ -96,7 +102,7 @@ func TestEncryptNilKEK(t *testing.T) {
 
 func TestDecryptFailsClosedOnTamper(t *testing.T) {
 	kek := mustKEK(t, "kek-tamper")
-	aad := BuildAAD(domain.ResourceSecret, "/prod/db", 7)
+	aad := BuildAAD("prod", "app", "/prod/db", 7)
 	res, err := Encrypt(kek, []byte("value"), aad)
 	if err != nil {
 		t.Fatalf("Encrypt: %v", err)
@@ -116,7 +122,7 @@ func TestDecryptFailsClosedOnTamper(t *testing.T) {
 			in.Nonce[0] ^= 0x01
 		},
 		"aad mismatch": func(in *DecryptInput) {
-			in.AAD = BuildAAD(domain.ResourceSecret, "/prod/db", 8) // wrong version
+			in.AAD = BuildAAD("prod", "app", "/prod/db", 8) // wrong version
 		},
 		"truncated ciphertext": func(in *DecryptInput) {
 			in.Ciphertext = in.Ciphertext[:len(in.Ciphertext)-1]
@@ -140,7 +146,7 @@ func TestDecryptFailsClosedOnTamper(t *testing.T) {
 func TestDecryptWrongKEK(t *testing.T) {
 	kek := mustKEK(t, "kek-a")
 	other := mustKEK(t, "kek-b")
-	aad := BuildAAD(domain.ResourceSecret, "/x", 1)
+	aad := BuildAAD("prod", "app", "/x", 1)
 	res, err := Encrypt(kek, []byte("v"), aad)
 	if err != nil {
 		t.Fatalf("Encrypt: %v", err)
@@ -152,7 +158,7 @@ func TestDecryptWrongKEK(t *testing.T) {
 
 func TestDecryptUnknownWrapMode(t *testing.T) {
 	kek := mustKEK(t, "kek-mode")
-	aad := BuildAAD(domain.ResourceSecret, "/x", 1)
+	aad := BuildAAD("prod", "app", "/x", 1)
 	res, err := Encrypt(kek, []byte("v"), aad)
 	if err != nil {
 		t.Fatalf("Encrypt: %v", err)
@@ -169,8 +175,8 @@ func TestDecryptUnknownWrapMode(t *testing.T) {
 // this is the cross-record substitution defense.
 func TestDecryptRejectsCrossRecordDEK(t *testing.T) {
 	kek := mustKEK(t, "kek-cross")
-	aadA := BuildAAD(domain.ResourceSecret, "/a", 1)
-	aadB := BuildAAD(domain.ResourceSecret, "/b", 1)
+	aadA := BuildAAD("prod", "app", "/a", 1)
+	aadB := BuildAAD("prod", "app", "/b", 1)
 	resA, err := Encrypt(kek, []byte("secret-a"), aadA)
 	if err != nil {
 		t.Fatalf("Encrypt A: %v", err)
@@ -189,7 +195,7 @@ func TestDecryptRejectsCrossRecordDEK(t *testing.T) {
 
 func TestClientBoundRoundTrip(t *testing.T) {
 	kek := mustKEK(t, "kek-cb")
-	aad := BuildAAD(domain.ResourceSecret, "/prod/cb", 1)
+	aad := BuildAAD("prod", "app", "/prod/cb", 1)
 	token := "kmss_client-access-token-value"
 	plaintext := []byte("client-bound-secret")
 
@@ -217,7 +223,7 @@ func TestClientBoundRoundTrip(t *testing.T) {
 
 func TestClientBoundRequiresToken(t *testing.T) {
 	kek := mustKEK(t, "kek-cb2")
-	aad := BuildAAD(domain.ResourceSecret, "/x", 1)
+	aad := BuildAAD("prod", "app", "/x", 1)
 	if _, err := EncryptClientBound(kek, []byte("v"), aad, ""); !errors.Is(err, ErrClientTokenRequired) {
 		t.Fatalf("EncryptClientBound(empty token) err = %v, want ErrClientTokenRequired", err)
 	}
@@ -234,7 +240,7 @@ func TestClientBoundRequiresToken(t *testing.T) {
 
 func TestClientBoundWrongToken(t *testing.T) {
 	kek := mustKEK(t, "kek-cb3")
-	aad := BuildAAD(domain.ResourceSecret, "/x", 1)
+	aad := BuildAAD("prod", "app", "/x", 1)
 	res, err := EncryptClientBound(kek, []byte("v"), aad, "correct-token")
 	if err != nil {
 		t.Fatalf("EncryptClientBound: %v", err)
@@ -250,7 +256,7 @@ func TestClientBoundWrongToken(t *testing.T) {
 // secret: even with the correct KEK, a missing/incorrect token fails.
 func TestClientBoundUndecryptableWithoutToken(t *testing.T) {
 	kek := mustKEK(t, "kek-cb4")
-	aad := BuildAAD(domain.ResourceSecret, "/x", 1)
+	aad := BuildAAD("prod", "app", "/x", 1)
 	res, err := EncryptClientBound(kek, []byte("v"), aad, "the-only-key-share")
 	if err != nil {
 		t.Fatalf("EncryptClientBound: %v", err)
@@ -298,7 +304,7 @@ func TestClientKeyDerivation(t *testing.T) {
 func TestRewrapDEKStandard(t *testing.T) {
 	from := mustKEK(t, "kek-old")
 	to := mustKEK(t, "kek-new")
-	aad := BuildAAD(domain.ResourceSecret, "/rotate", 1)
+	aad := BuildAAD("prod", "app", "/rotate", 1)
 	res, err := Encrypt(from, []byte("rotate-me"), aad)
 	if err != nil {
 		t.Fatalf("Encrypt: %v", err)
@@ -331,7 +337,7 @@ func TestRewrapDEKStandard(t *testing.T) {
 func TestRewrapDEKClientBoundPreservesInnerLayer(t *testing.T) {
 	from := mustKEK(t, "kek-cbo")
 	to := mustKEK(t, "kek-cbn")
-	aad := BuildAAD(domain.ResourceSecret, "/rotate/cb", 1)
+	aad := BuildAAD("prod", "app", "/rotate/cb", 1)
 	token := "client-token"
 	res, err := EncryptClientBound(from, []byte("cb-value"), aad, token)
 	if err != nil {
@@ -358,7 +364,7 @@ func TestRewrapDEKRejectsWrongSource(t *testing.T) {
 	from := mustKEK(t, "kek-rw-a")
 	wrong := mustKEK(t, "kek-rw-b")
 	to := mustKEK(t, "kek-rw-c")
-	aad := BuildAAD(domain.ResourceSecret, "/x", 1)
+	aad := BuildAAD("prod", "app", "/x", 1)
 	res, err := Encrypt(from, []byte("v"), aad)
 	if err != nil {
 		t.Fatalf("Encrypt: %v", err)
@@ -394,7 +400,7 @@ func TestDomainSeparationSuffixesDistinct(t *testing.T) {
 // and wrapped DEK — a fresh DEK and nonce per sealing operation.
 func TestEncryptUniquePerCall(t *testing.T) {
 	kek := mustKEK(t, "kek-uniq")
-	aad := BuildAAD(domain.ResourceSecret, "/x", 1)
+	aad := BuildAAD("prod", "app", "/x", 1)
 	a, err := Encrypt(kek, []byte("same-plaintext"), aad)
 	if err != nil {
 		t.Fatalf("Encrypt a: %v", err)
@@ -418,7 +424,7 @@ func TestEncryptUniquePerCall(t *testing.T) {
 // another (value ciphertext as wrapped DEK, and vice versa).
 func TestDecryptRejectsCrossLayerConfusion(t *testing.T) {
 	kek := mustKEK(t, "kek-layer")
-	aad := BuildAAD(domain.ResourceSecret, "/x", 1)
+	aad := BuildAAD("prod", "app", "/x", 1)
 	res, err := Encrypt(kek, []byte("v"), aad)
 	if err != nil {
 		t.Fatalf("Encrypt: %v", err)
@@ -440,7 +446,7 @@ func TestDecryptRejectsCrossLayerConfusion(t *testing.T) {
 // A tampered client-key salt derives the wrong client key and must fail.
 func TestClientBoundWrongSaltFails(t *testing.T) {
 	kek := mustKEK(t, "kek-salt")
-	aad := BuildAAD(domain.ResourceSecret, "/x", 1)
+	aad := BuildAAD("prod", "app", "/x", 1)
 	res, err := EncryptClientBound(kek, []byte("v"), aad, "token")
 	if err != nil {
 		t.Fatalf("EncryptClientBound: %v", err)

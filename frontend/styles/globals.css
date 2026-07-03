@@ -977,6 +977,40 @@ table.data th.mono {
   color: var(--text);
 }
 
+/* namespace management hub: env-grouped tables */
+.ns-group {
+  margin-bottom: 22px;
+}
+.ns-group-title {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+.ns-group-env {
+  font-family: var(--mono);
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+/* small inline chip for namespace bindings, cert state, etc. */
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--mono);
+  font-size: 12px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+}
+
 /* tabs */
 .tabs {
   display: flex;

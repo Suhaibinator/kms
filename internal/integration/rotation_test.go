@@ -2,7 +2,6 @@ package integration
 
 import (
 	"context"
-	"log/slog"
 	"path/filepath"
 	"testing"
 
@@ -21,14 +20,16 @@ func TestKEKRotationEndToEnd(t *testing.T) {
 
 	const stdPath = "/prod/app/standard"
 	const stdValue = "standard-rotate-value"
-	if _, err := h.svc.PutSecret(ctx, h.admin, putSecret(stdPath, stdValue)); err != nil {
+	stdRef := h.ref(stdPath)
+	if _, err := h.svc.PutSecret(ctx, h.admin, h.stdSecret(stdPath, stdValue)); err != nil {
 		t.Fatalf("PutSecret standard: %v", err)
 	}
 
 	const boundPath = "/prod/app/bound"
 	const boundValue = "bound-rotate-value"
+	boundRef := h.ref(boundPath)
 	boundRes, err := h.svc.PutSecret(ctx, h.admin, core.PutSecretInput{
-		Path: boundPath, Value: []byte(boundValue), ClientBound: true, GenerateToken: true,
+		Ref: h.ensureNS(boundPath), Value: []byte(boundValue), ClientBound: true, GenerateToken: true,
 	})
 	if err != nil {
 		t.Fatalf("PutSecret client-bound: %v", err)
@@ -36,7 +37,7 @@ func TestKEKRotationEndToEnd(t *testing.T) {
 	boundToken := boundRes.AccessToken
 
 	// Record the KEK id in use before rotation.
-	_, verBefore, err := h.store.GetSecretVersion(ctx, stdPath, 0, "")
+	_, verBefore, err := h.store.GetSecretVersion(ctx, stdRef, 0, "")
 	if err != nil {
 		t.Fatalf("GetSecretVersion before: %v", err)
 	}
@@ -52,26 +53,31 @@ func TestKEKRotationEndToEnd(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new kek id: %v", err)
 	}
-	count, err := h.svc.RotateKEK(ctx, h.admin, domain.KeyMetadata{ID: newID, Source: domain.KeySourceFile}, newMaterial)
+	secretsRewrapped, caRewrapped, err := h.svc.RotateKEK(ctx, h.admin, domain.KeyMetadata{ID: newID, Source: domain.KeySourceFile}, newMaterial)
 	if err != nil {
 		t.Fatalf("RotateKEK: %v", err)
 	}
-	if count != 2 {
-		t.Errorf("rewrapped %d versions, want 2", count)
+	if secretsRewrapped != 2 {
+		t.Errorf("rewrapped %d secret versions, want 2", secretsRewrapped)
+	}
+	// The harness bootstraps the built-in CA, so its single active key is rewrapped
+	// under the fresh KEK too (CA keys rewrap regardless of state).
+	if caRewrapped != 1 {
+		t.Errorf("rewrapped %d CA keys, want 1", caRewrapped)
 	}
 
 	// Both secrets still decrypt through the live (rotated) service.
-	if got, err := h.svc.GetSecret(ctx, h.admin, stdPath, 0, ""); err != nil || string(got.Value) != stdValue {
+	if got, err := h.svc.GetSecret(ctx, h.admin, stdRef, 0, ""); err != nil || string(got.Value) != stdValue {
 		t.Errorf("standard after rotate = %q err=%v, want %q", got.Value, err, stdValue)
 	}
 	boundPr := h.admin
 	boundPr.SecretToken = boundToken
-	if got, err := h.svc.GetSecret(ctx, boundPr, boundPath, 0, ""); err != nil || string(got.Value) != boundValue {
+	if got, err := h.svc.GetSecret(ctx, boundPr, boundRef, 0, ""); err != nil || string(got.Value) != boundValue {
 		t.Errorf("client-bound after rotate = %q err=%v, want %q", got.Value, err, boundValue)
 	}
 
 	// The stored version now references the new KEK id.
-	_, verAfter, err := h.store.GetSecretVersion(ctx, stdPath, 0, "")
+	_, verAfter, err := h.store.GetSecretVersion(ctx, stdRef, 0, "")
 	if err != nil {
 		t.Fatalf("GetSecretVersion after: %v", err)
 	}
@@ -120,9 +126,9 @@ func TestKEKRotationEndToEnd(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new key file failed to unseal: %v", err)
 	}
-	svc2 := core.New(st2, slog.New(slog.NewTextHandler(h.logBuf, nil)), "test")
+	svc2 := core.New(st2, newTestLogger(h.logBuf), "test")
 	svc2.SetKeyring(kr)
-	if got, err := svc2.GetSecret(ctx, h.admin, stdPath, 0, ""); err != nil || string(got.Value) != stdValue {
+	if got, err := svc2.GetSecret(ctx, h.admin, stdRef, 0, ""); err != nil || string(got.Value) != stdValue {
 		t.Errorf("decrypt after re-unseal with new key = %q err=%v, want %q", got.Value, err, stdValue)
 	}
 }

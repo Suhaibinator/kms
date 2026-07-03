@@ -21,36 +21,60 @@ vendored under `kms_paramstore/_gen/`, so no `protoc` is needed to use the SDK.
 ```python
 from kms_paramstore import Client
 
-with Client("parameter-store.prod.internal:8443", token="<client-token>") as client:
-    db_password = client.get_secret("/prod/gradethis/postgres-password")
+with Client("parameter-store.prod.internal:8443", namespace="prod/gradethis",
+            token="<client-token>") as client:
+    db_password = client.get_secret("postgres-password")   # relative to the namespace
     print(db_password)            # -> [REDACTED]
     connect(db_password.value)    # explicit access to plaintext bytes
 
-    rate = client.get_parameter("/prod/gradethis/rate-limit")
+    rate = client.get_parameter("rate-limit")
 ```
 
 `get_secret` returns a `Secret` that renders as `[REDACTED]` in `str`, `repr`,
 f-strings, `%`-formatting, and logging. Plaintext is only reachable through the
 explicit `.value` (bytes) / `.string_value` (str) properties.
 
+## Namespaces and keys
+
+A namespace is a fixed `(env, app)` pair, written `"env/app"`. Set it once on the
+client; every key you pass is then resolved SDK-side:
+
+- a **relative** key (`"rate-limit"`, `"billing/stripe-key"`) is looked up in the
+  client's namespace — interior slashes are just part of the name;
+- an **absolute** `"/env/app/key"` addresses another namespace directly (the
+  cross-namespace escape hatch).
+
+`namespace` is optional. When omitted, the client discovers it once via `WhoAmI`
+from a namespace-bound identity (mTLS cert or token). An unbound identity plus a
+relative key raises `NoNamespaceError` — pass `namespace=` or use an absolute
+path. `client.who_am_i()` returns the identity the server sees
+(`name`, `kind`, `namespace`, `auth_method`).
+
 ## TLS / mTLS
+
+The recommended posture is a **client certificate** minted by the KMS's built-in
+CA: it proves possession (a stolen token alone is useless where a namespace
+requires mTLS), and the server derives the identity — and thus the namespace —
+from the cert, so `token` is optional.
 
 ```python
 from kms_paramstore import Client, mtls_from_files
 
+# Cert-only: no token, namespace discovered via WhoAmI.
 client = Client(
     "parameter-store.prod.internal:8443",
-    token="<client-token>",
-    tls=mtls_from_files("client.crt", "client.key", "ca.crt"),
+    tls=mtls_from_files("app.crt", "app.key", "ca.crt"),
 )
 ```
 
-Use `tls_from_files(ca_cert)` for server-only TLS, `mtls_from_files(cert, key, ca)`
-for mutual TLS, or `tls_from_bytes(ca_cert=..., client_cert=..., client_key=...)`
-to build credentials from in-memory PEM. `tls` also accepts a
-`TLSConfig(ca=..., cert=..., key=...)` dataclass (paths or raw PEM bytes) if you'd
-rather hold the sources as data and call `.to_credentials()` yourself. With no
-`tls` the channel is insecure (development only).
+`token` is still accepted (and sent alongside a cert when both are present); it is
+required only for token-method identities, and admitted only where the namespace's
+`allowed_auth_methods` includes `"token"`. Use `tls_from_files(ca_cert)` for
+server-only TLS, `mtls_from_files(cert, key, ca)` for mutual TLS, or
+`tls_from_bytes(ca_cert=..., client_cert=..., client_key=...)` to build credentials
+from in-memory PEM. `tls` also accepts a `TLSConfig(ca=..., cert=..., key=...)`
+dataclass (paths or raw PEM bytes). With no `tls` the channel is insecure
+(development only).
 
 ## Caching
 
@@ -72,9 +96,10 @@ call — the Python equivalent of the Go SDK's `SecretValue` / `ParameterValue` 
 from kms_paramstore import Client, SecretValue, ParameterValue
 
 class AppConfig:
-    stripe_key = SecretValue("/prod/gradethis/stripe-api-key", token="<per-secret-token>")
-    openai_key = SecretValue("/prod/gradethis/openai-api-key", env_var="OPENAI_API_KEY")
-    rate_limit = ParameterValue("/prod/gradethis/rate-limit", dynamic=True, default="100")
+    stripe_key = SecretValue("stripe-api-key", token="<per-secret-token>")
+    openai_key = SecretValue("openai-api-key", env_var="OPENAI_API_KEY")
+    rate_limit = ParameterValue("rate-limit", default="100")       # hot-reloads
+    log_format = ParameterValue("log-format", static=True)         # boot-time only
 
 cfg = AppConfig()
 client.resolve(cfg)   # walks the object (and nested config objects) concurrently
@@ -101,20 +126,37 @@ fetch, then `default`, otherwise a fail-fast error naming the path.
 
 ## Hot reload
 
-`ParameterValue(..., dynamic=True)` registers the field on the client's watch
-subscription; `.get()` always returns the latest value with no RPC.
+**Hot reload is on by default.** A `ParameterValue` tracks the client's watch
+subscription; `.get()` always returns the latest value with no RPC, and updates
+propagate to every subscribed process. This is a change from earlier versions,
+where the field had to opt in with `dynamic=True` — that keyword is gone.
+
+Pass `static=True` for a boot-time-only read (no subscription):
+
+```python
+port = ParameterValue("listen-port", static=True)   # read once at resolve
+```
+
+The **namespace `(env, app)` is the unit of subscription.** All non-static
+fields in a namespace share that namespace's **single** subscription on the
+shared stream, so many hot-reloading fields cost one registration.
 
 ```python
 cfg.rate_limit.on_change(lambda old, new: pool.resize(int(new)))
 ```
 
-For lower-level use, subscribe to a path or prefix directly:
+For lower-level use, watch the client's whole namespace. `watch` takes **no
+key pattern** — it fires for every change in the namespace, and an app that
+cares about only some keys filters inside the callback:
 
 ```python
 def on_event(ev):
-    print(ev.type, ev.path, ev.value)
+    if not ev.key.startswith("billing/"):
+        return                                        # this app's own convention
+    print(ev.type, ev.namespace, ev.key, ev.value)    # ev.path -> "/env/app/key"
 
-stop = client.watch("/prod/gradethis/*", on_event)
+stop = client.watch(on_event)                         # the client's namespace
+# client.watch_namespace("other/svc", on_event)       # another authorized namespace
 # ... later
 stop()
 ```
@@ -122,21 +164,23 @@ stop()
 The SDK owns the connection lifecycle: it subscribes on startup, acks
 heartbeats, reconnects with exponential backoff + jitter (1s base, 60s cap)
 resuming from the last seen revision, and reconciles every 5 minutes via a full
-sync. Events are applied idempotently by revision. Callbacks run on a single
-dedicated dispatch thread with a bounded queue (a full queue drops
-notifications, never values; a raising callback is swallowed and logged), so a
-slow or failing callback never stalls the stream. Env-var-overridden values are
-pinned and do not hot-reload.
+sync (listing the whole subscribed namespace, reconciled by exact key). Events are applied idempotently by
+revision. Callbacks run on a single dedicated dispatch thread with a bounded
+queue (a full queue drops notifications, never values; a raising callback is
+swallowed and logged), so a slow or failing callback never stalls the stream.
+Env-var-overridden values are pinned and do not hot-reload.
 
 ## Errors
 
 All SDK errors derive from `ParamStoreError`. gRPC status codes map to
 `NotFoundError`, `PermissionDeniedError`, `UnauthenticatedError`, and
 `FailedPreconditionError`; other codes surface as a generic `ParamStoreError`.
-`ConfigError` signals bad SDK usage (a missing endpoint, an unconfigured
-`SecretValue`/`ParameterValue`); `NotInitializedError` is raised when a
-declarative field is read before `Client.resolve` has run. No exception (or its
-message) ever contains secret plaintext.
+`ConfigError` signals bad SDK usage (a missing endpoint, a malformed namespace,
+an unconfigured `SecretValue`/`ParameterValue`); its subclass `NoNamespaceError`
+is raised when a relative key is used on a client with no namespace (unbound
+identity and no `namespace=`). `NotInitializedError` is raised when a declarative
+field is read before `Client.resolve` has run. No exception (or its message) ever
+contains secret plaintext.
 
 ## Development
 

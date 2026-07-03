@@ -4,6 +4,14 @@
 connect, send registration, apply events, ack heartbeats, reconnect with
 exponential backoff + jitter, resume by revision, and reconcile periodically.
 Applications only ever see values and callbacks.
+
+The **namespace** ``(env, app)`` is the unit of subscription: a client
+subscribes to a namespace and receives *every* change in it. Hot-reloading
+parameters and every :meth:`Client.watch` share one subscription per namespace;
+the SDK routes each incoming change to the matching parameter field by **exact
+key** and to every watcher registered on that namespace. There are no key
+patterns or selectors anywhere — a watcher that cares about only some keys
+filters by its own convention inside its callback.
 """
 
 from __future__ import annotations
@@ -14,9 +22,11 @@ import random
 import threading
 import time
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Callable, Dict, List, Optional
+from typing import TYPE_CHECKING, Callable, Dict, List, Optional, Set, Tuple
 
+from . import errors
 from ._gen import kms_pb2
+from ._refs import NamespaceRef, Ref
 
 if TYPE_CHECKING:
     from .client import Client
@@ -27,6 +37,10 @@ __all__ = ["Event", "EventType"]
 _DEFAULT_RECONCILE_INTERVAL = 300.0  # seconds
 _BACKOFF_BASE = 1.0
 _BACKOFF_MAX = 60.0
+
+# (env, app, key) identifies a resource; (env, app) a subscribed namespace.
+_RefKey = Tuple[str, str, str]
+_NSKey = Tuple[str, str]
 
 
 class EventType(enum.Enum):
@@ -40,20 +54,29 @@ class EventType(enum.Enum):
 
 @dataclass
 class Event:
-    """Delivered to :meth:`Client.watch` callbacks when a watched path changes."""
+    """Delivered to :meth:`Client.watch` callbacks when any key in the
+    subscribed namespace changes."""
 
     type: EventType
-    path: str
+    namespace: str  # "env/app"
+    key: str        # relative key within the namespace
     value: str = ""  # populated for PUT
     version: int = 0
     revision: int = 0
     change_type: str = ""  # raw server change_type, useful for secret changes
 
+    @property
+    def path(self) -> str:
+        """Absolute display path ``/env/app/key`` for logging."""
+        if self.namespace:
+            return f"/{self.namespace}/{self.key}"
+        return self.key
+
 
 @dataclass
 class _Watcher:
     id: int
-    pattern: str
+    ns: NamespaceRef
     fn: Callable[[Event], None]
 
 
@@ -61,16 +84,26 @@ class _Watcher:
 class _Known:
     value: str
     present: bool
+    # Revision the value was last applied at. Fences stale writes: a
+    # reconcile/reconnect read that raced a newer live event is dropped.
+    rev: int = 0
 
 
 ParamHandler = Callable[[str, bool], None]  # (new_value, present)
 
 
-def match_pattern(pattern: str, path: str) -> bool:
-    """A pattern ending in ``*`` is a prefix match; otherwise exact."""
-    if pattern.endswith("*"):
-        return path.startswith(pattern[:-1])
-    return pattern == path
+def _rev_allows_write(prev_rev: int, rev: int, reconcile: bool) -> bool:
+    """Stale-write fence for :meth:`_SubManager._set_value`.
+
+    A live event (``reconcile=False``) must be strictly newer than what was
+    already applied (``rev == 0`` is unversioned/best-effort and always
+    applies). A reconcile read (``reconcile=True``) carries the snapshot
+    revision captured before the fetch, and is authoritative only if no newer
+    live event has advanced the key past it.
+    """
+    if reconcile:
+        return prev_rev <= rev
+    return rev == 0 or rev > prev_rev
 
 
 def backoff_delay(attempt: int) -> float:
@@ -84,13 +117,26 @@ def backoff_delay(attempt: int) -> float:
     return max(j, 0.01)
 
 
+def _ref_key(ref: Ref) -> _RefKey:
+    return (ref.ns.env, ref.ns.app, ref.key)
+
+
+def _proto_ref_key(pref) -> _RefKey:
+    return (pref.namespace.env, pref.namespace.app, pref.key)
+
+
 class _SubManager:
     def __init__(self, client: "Client", reconcile_interval: float = _DEFAULT_RECONCILE_INTERVAL) -> None:
         self._client = client
         self._lock = threading.Lock()
-        self._paths: set[str] = set()
-        self._param_handlers: Dict[str, List[ParamHandler]] = {}
-        self._known: Dict[str, _Known] = {}
+        self._namespaces: Set[_NSKey] = set()
+        # Namespaces actually sent on the current stream's Subscribe request. A
+        # snapshot is authoritative only for these, so deletions are diffed
+        # against this scope (not the live namespace set, which may have grown
+        # since the request was sent).
+        self._stream_namespaces: List[_NSKey] = []
+        self._param_handlers: Dict[_RefKey, List[ParamHandler]] = {}
+        self._known: Dict[_RefKey, _Known] = {}
         self._watchers: List[_Watcher] = []
         self._next_watcher_id = 0
         self._started = False
@@ -106,25 +152,27 @@ class _SubManager:
 
     # --- registration ------------------------------------------------------
 
-    def register_param(self, path: str, initial: str, handler: ParamHandler) -> None:
+    def register_param(self, ref: Ref, initial: str, handler: ParamHandler) -> None:
+        """Register a hot-reloading parameter on its namespace subscription."""
         with self._lock:
-            new_path = self._add_path_locked(path)
-            self._known[path] = _Known(initial, True)
-            self._param_handlers.setdefault(path, []).append(handler)
+            new_ns = self._add_namespace_locked((ref.ns.env, ref.ns.app))
+            rk = _ref_key(ref)
+            self._known[rk] = _Known(initial, True)
+            self._param_handlers.setdefault(rk, []).append(handler)
             was_started = self._started
             self._ensure_started_locked()
-        if was_started and new_path:
+        if was_started and new_ns:
             self._signal_restart()
 
-    def register_watcher(self, pattern: str, fn: Callable[[Event], None]) -> _Watcher:
+    def register_watcher(self, ns: NamespaceRef, fn: Callable[[Event], None]) -> _Watcher:
         with self._lock:
             self._next_watcher_id += 1
-            w = _Watcher(self._next_watcher_id, pattern, fn)
+            w = _Watcher(self._next_watcher_id, ns, fn)
             self._watchers.append(w)
-            new_path = self._add_path_locked(pattern)
+            new_ns = self._add_namespace_locked((ns.env, ns.app))
             was_started = self._started
             self._ensure_started_locked()
-        if was_started and new_path:
+        if was_started and new_ns:
             self._signal_restart()
         return w
 
@@ -134,19 +182,16 @@ class _SubManager:
                 self._watchers.remove(w)
             except ValueError:
                 return
-            still_needed = any(x.pattern == w.pattern for x in self._watchers)
-            if w.pattern in self._param_handlers:
-                still_needed = True
-            if not still_needed:
-                self._paths.discard(w.pattern)
-            started = self._started
-        if started and not still_needed:
-            self._signal_restart()
+        # Namespaces are add-only (matching the Go SDK): removing the last watcher
+        # for a namespace does NOT unsubscribe it. The server rejects an empty
+        # subscription, so dropping the last namespace would send namespaces=[] and
+        # spin the reconnect loop forever; the subscription instead persists until
+        # close() tears the whole stream down.
 
-    def _add_path_locked(self, p: str) -> bool:
-        if p in self._paths:
+    def _add_namespace_locked(self, nsk: _NSKey) -> bool:
+        if nsk in self._namespaces:
             return False
-        self._paths.add(p)
+        self._namespaces.add(nsk)
         return True
 
     def _ensure_started_locked(self) -> None:
@@ -175,9 +220,9 @@ class _SubManager:
         # last one seen (idempotent, at-least-once).
         return rev == 0 or rev > self._get_rev()
 
-    def _snapshot_paths(self) -> List[str]:
+    def _snapshot_namespaces(self) -> List[_NSKey]:
         with self._lock:
-            return sorted(self._paths)
+            return sorted(self._namespaces)
 
     # --- lifecycle ---------------------------------------------------------
 
@@ -213,7 +258,7 @@ class _SubManager:
                 return
             if self._restart_requested:
                 attempt = 0
-                continue  # path set changed: reconnect immediately
+                continue  # namespace set changed: reconnect immediately
             delay = backoff_delay(attempt)
             attempt += 1
             self._log("watch stream ended (%s); reconnecting in %.2fs", err, delay)
@@ -223,9 +268,12 @@ class _SubManager:
 
     def _run_stream(self) -> Optional[Exception]:
         out_q: "queue.Queue[Optional[kms_pb2.SubscribeRequest]]" = queue.Queue()
+        nss = self._snapshot_namespaces()
+        with self._lock:
+            self._stream_namespaces = list(nss)
         registration = kms_pb2.SubscribeRequest(
             client_name=self._client._client_name,
-            paths=self._snapshot_paths(),
+            namespaces=[kms_pb2.NamespaceRef(env=env, app=app) for (env, app) in nss],
             last_seen_revision=self._get_rev(),
         )
 
@@ -270,60 +318,105 @@ class _SubManager:
             out_q.put(kms_pb2.SubscribeRequest(acked_revision=self._get_rev()))
 
     def _apply_snapshot(self, snap, rev: int) -> None:
+        # A snapshot is authoritative for this stream's namespaces: it
+        # enumerates every currently-present parameter in them. Apply the
+        # present values, then treat any previously-known key in a subscribed
+        # namespace but absent from the snapshot as deleted — a parameter
+        # removed while we were disconnected past the replay window. Keys
+        # outside the subscribed namespaces are untouched.
+        present: Set[_RefKey] = set()
         for p in snap.parameters:
-            self._set_value(p.path, p.value, True, p.version, rev)
+            rk = _proto_ref_key(p.ref)
+            present.add(rk)
+            self._set_value(rk, p.value, True, p.version, rev)
+        for rk in self._absent_known_keys(present):
+            self._set_value(rk, "", False, 0, rev)
+
+    def _absent_known_keys(self, present: Set[_RefKey]) -> List[_RefKey]:
+        """Known-present keys within the current stream's namespaces missing from the snapshot."""
+        with self._lock:
+            out: List[_RefKey] = []
+            for rk, known in self._known.items():
+                if not known.present:
+                    continue
+                if rk in present:
+                    continue
+                if not self._key_in_scope_locked(rk):
+                    continue
+                out.append(rk)
+            return out
+
+    def _key_in_scope_locked(self, rk: _RefKey) -> bool:
+        env, app, _key = rk
+        return (env, app) in self._stream_namespaces
 
     def _apply_change(self, change, rev: int) -> None:
+        rk = _proto_ref_key(change.ref)
         if change.change_type == "delete":
-            self._set_value(change.path, "", False, change.version, rev)
+            self._set_value(rk, "", False, change.version, rev)
         else:  # put | label
-            self._set_value(change.path, change.value, True, change.version, rev)
+            self._set_value(rk, change.value, True, change.version, rev)
 
     def _apply_secret_change(self, change, rev: int) -> None:
-        self._client._cache.invalidate_secret(change.path)
+        rk = _proto_ref_key(change.ref)
+        env, app, key = rk
+        self._client._cache.invalidate_secret(str(Ref(NamespaceRef(env, app), key)))
         ev = Event(
             type=EventType.SECRET_CHANGE,
-            path=change.path,
+            namespace=f"{env}/{app}",
+            key=key,
             version=change.version,
             revision=rev,
             change_type=change.change_type,
         )
-        for w in self._matching_watchers(change.path):
+        for w in self._matching_watchers(rk):
             self._fire_watcher(w, ev)
 
-    def _set_value(self, path: str, value: str, present: bool, version: int, rev: int) -> None:
+    def _set_value(
+        self, rk: _RefKey, value: str, present: bool, version: int, rev: int, reconcile: bool = False
+    ) -> None:
         with self._lock:
-            prev = self._known.get(path)
+            prev = self._known.get(rk)
+            if prev is not None and not _rev_allows_write(prev.rev, rev, reconcile):
+                return  # stale write: a newer revision already applied for this key
+            new_rev = rev
+            if prev is not None and prev.rev > new_rev:
+                new_rev = prev.rev
             if present:
                 changed = prev is None or prev.value != value or not prev.present
-                self._known[path] = _Known(value, True)
+                self._known[rk] = _Known(value, True, new_rev)
             else:
                 changed = prev is not None and prev.present
-                self._known.pop(path, None)
-            handlers = list(self._param_handlers.get(path, ()))
-            watchers = self._matching_watchers_locked(path)
+                self._known.pop(rk, None)
+            handlers = list(self._param_handlers.get(rk, ()))
+            watchers = self._matching_watchers_locked(rk)
 
         if not changed:
             return
 
-        self._client._cache.invalidate_param(path)
+        env, app, key = rk
+        self._client._cache.invalidate_param(str(Ref(NamespaceRef(env, app), key)))
         for h in handlers:
             try:
                 h(value, present)
             except Exception as e:  # a bad handler must not stall the stream
-                self._log("value handler for %s raised: %s", path, e)
+                self._log("value handler for %s/%s raised: %s", f"{env}/{app}", key, e)
 
         ev_type = EventType.PUT if present else EventType.DELETE
-        ev = Event(type=ev_type, path=path, value=value, version=version, revision=rev)
+        ev = Event(
+            type=ev_type, namespace=f"{env}/{app}", key=key, value=value, version=version, revision=rev
+        )
         for w in watchers:
             self._fire_watcher(w, ev)
 
-    def _matching_watchers(self, path: str) -> List[_Watcher]:
+    def _matching_watchers(self, rk: _RefKey) -> List[_Watcher]:
         with self._lock:
-            return self._matching_watchers_locked(path)
+            return self._matching_watchers_locked(rk)
 
-    def _matching_watchers_locked(self, path: str) -> List[_Watcher]:
-        return [w for w in self._watchers if match_pattern(w.pattern, path)]
+    def _matching_watchers_locked(self, rk: _RefKey) -> List[_Watcher]:
+        env, app, _key = rk
+        # A namespace subscriber sees every change in the namespace.
+        return [w for w in self._watchers if w.ns.env == env and w.ns.app == app]
 
     def _fire_watcher(self, w: _Watcher, ev: Event) -> None:
         fn = w.fn
@@ -340,31 +433,48 @@ class _SubManager:
 
     def _reconcile(self) -> None:
         with self._lock:
-            param_paths = list(self._param_handlers.keys())
-            prefixes = [w.pattern[:-1] for w in self._watchers if w.pattern.endswith("*")]
+            namespaces = list(self._namespaces)
+            param_keys = set(self._param_handlers.keys())
 
-        for p in param_paths:
-            try:
-                val = self._client._fetch_parameter(p, version=0, label="", secret_token="")
-            except Exception:
-                continue  # keep last-known value
-            self._set_value(p, val, True, 0, self._get_rev())
+        # Capture the snapshot revision before any read. Every value fetched
+        # reflects the store at least as of this revision; a live event that
+        # lands with a higher revision while we read wins over these (now stale)
+        # reads, enforced by reconcile=True in _set_value.
+        snap_rev = self._get_rev()
 
-        for prefix in prefixes:
-            self._reconcile_prefix(prefix)
+        # List the whole subscribed namespace and reconcile by exact key. A
+        # registered parameter absent from its namespace listing was deleted
+        # while the stream missed the event; revert it (present=False).
+        for env, app in namespaces:
+            present = self._reconcile_namespace(NamespaceRef(env, app), snap_rev)
+            if present is None:
+                continue  # listing failed; keep last-known values for this namespace
+            for rk in param_keys:
+                if rk[0] == env and rk[1] == app and rk not in present:
+                    self._set_value(rk, "", False, 0, snap_rev, reconcile=True)
 
-    def _reconcile_prefix(self, prefix: str) -> None:
+    def _reconcile_namespace(self, ns: NamespaceRef, snap_rev: int) -> Optional[Set[_RefKey]]:
+        """List every parameter in ``ns``, applying present values.
+
+        Returns the set of present keys, or ``None`` if the listing failed (in
+        which case deletion detection must be skipped so a transient error does
+        not revert live fields).
+        """
+        present: Set[_RefKey] = set()
         page_token = ""
-        for _ in range(100):  # bounded to avoid runaway loops
+        for _ in range(1000):  # bounded to avoid runaway loops
             try:
-                resp = self._client._list_parameters_raw(prefix, page_token)
+                resp = self._client._list_parameters_raw(ns, "", page_token)
             except Exception:
-                return
+                return None
             for p in resp.parameters:
-                self._set_value(p.path, p.value, True, p.version, self._get_rev())
+                rk = _proto_ref_key(p.ref)
+                present.add(rk)
+                self._set_value(rk, p.value, True, p.version, snap_rev, reconcile=True)
             page_token = resp.next_page_token
             if not page_token:
-                return
+                return present
+        return present
 
     def _log(self, fmt: str, *args) -> None:
         self._client._logf(fmt, *args)

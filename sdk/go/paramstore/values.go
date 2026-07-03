@@ -20,7 +20,8 @@ import (
 // mutex directly could not, and would leak plaintext through fmt's reflection
 // of unexported fields).
 type SecretValue struct {
-	// Key is the store path, e.g. "/prod/payments/stripe/api-key".
+	// Key is the secret key, relative to the client namespace (e.g.
+	// "stripe/api-key"), or an absolute "/env/app/key" display path.
 	Key string
 	// Token is the per-secret access token. For client-bound secrets it is also
 	// the client key share (plan 10.7).
@@ -159,23 +160,26 @@ func (v SecretValue) MarshalJSON() ([]byte, error) {
 	return []byte(`"` + redactedText + `"`), nil
 }
 
-// ParameterValue is a declarative, store-backed non-secret field. With
-// Dynamic set it hot-reloads over the Subscribe stream; Get always returns the
-// latest value without an RPC.
+// ParameterValue is a declarative, store-backed non-secret field. By default it
+// hot-reloads over the client's shared Subscribe stream, so Get always returns
+// the latest value without an RPC. Set Static to opt out and resolve once at
+// Init.
 //
 // Like SecretValue, mutable state lives behind a pointer so the value type
 // stays copy-safe.
 type ParameterValue struct {
-	// Key is the store path.
+	// Key is the parameter key, relative to the client namespace (e.g.
+	// "rate-limit"), or an absolute "/env/app/key" display path.
 	Key string
 	// EnvVar optionally overrides the store value; an env-set value is pinned
 	// and does not hot-reload.
 	EnvVar string
 	// Default is an optional fallback, intended for development.
 	Default string
-	// Dynamic registers the value on the client's subscription so it
-	// hot-reloads on change (plan 9.6).
-	Dynamic bool
+	// Static disables hot reload: the value resolves once at Init and never
+	// changes afterward. The zero value keeps hot reload ON — every non-static
+	// ParameterValue tracks its namespace over the shared Subscribe stream.
+	Static bool
 
 	state *paramState
 }
@@ -185,7 +189,6 @@ type paramState struct {
 	mu          sync.Mutex
 	initialized bool
 	fromEnv     bool
-	dynamic     bool
 	client      *Client
 	callbacks   []func(old, new string)
 }
@@ -201,9 +204,9 @@ func storeString(ptr *atomic.Pointer[string], s string) { ptr.Store(&s) }
 
 // Init resolves the value (env override, store fetch, Default only when the
 // store reports the value absent unless Config.FallbackToDefaultsOnError is set,
-// else error) and, when Dynamic is set and the value did not come from an env
-// override, registers it on the client's subscription for hot reload. It is
-// idempotent.
+// else error) and, unless Static is set or the value came from an env override,
+// registers the value's namespace on the client's shared subscription for hot
+// reload. It is idempotent.
 func (p *ParameterValue) Init(client *Client) error {
 	return p.InitContext(context.Background(), client)
 }
@@ -223,30 +226,41 @@ func (p *ParameterValue) InitContext(ctx context.Context, client *Client) error 
 			storeString(&st.value, ev)
 			st.fromEnv = true
 			st.initialized = true
-			if p.Dynamic {
+			if !p.Static {
 				client.logf("paramstore: parameter %q pinned to env %s; hot reload disabled", p.Key, p.EnvVar)
 			}
 			return nil
 		}
 	}
 
-	value, err := p.resolveFromStore(ctx, client)
+	var (
+		r       ref
+		haveRef bool
+	)
+	if p.Key != "" {
+		rr, err := client.resolveRef(ctx, p.Key)
+		if err != nil {
+			return err
+		}
+		r, haveRef = rr, true
+	}
+
+	value, err := p.resolveFromStore(ctx, client, r, haveRef)
 	if err != nil {
 		return err
 	}
 	storeString(&st.value, value)
 	st.initialized = true
 
-	if p.Dynamic && p.Key != "" {
-		st.dynamic = true
-		client.subs().registerParam(p.Key, value, p.applyUpdate)
+	if !p.Static && haveRef {
+		client.subs().registerParam(r, value, p.applyUpdate)
 	}
 	return nil
 }
 
-func (p *ParameterValue) resolveFromStore(ctx context.Context, client *Client) (string, error) {
-	if p.Key != "" {
-		v, err := client.GetParameter(ctx, p.Key)
+func (p *ParameterValue) resolveFromStore(ctx context.Context, client *Client, r ref, haveRef bool) (string, error) {
+	if haveRef {
+		v, err := client.getParameter(ctx, r, getOptions{})
 		if err == nil {
 			return v, nil
 		}
@@ -321,8 +335,7 @@ func (p *ParameterValue) Get() string {
 
 // OnChange registers a callback invoked (on a dedicated goroutine) whenever the
 // value changes. old and new are the previous and current values. Registering a
-// callback on a non-Dynamic or env-pinned value is allowed but it will never
-// fire.
+// callback on a Static or env-pinned value is allowed but it will never fire.
 func (p *ParameterValue) OnChange(fn func(old, new string)) {
 	st := p.ensureState()
 	st.mu.Lock()

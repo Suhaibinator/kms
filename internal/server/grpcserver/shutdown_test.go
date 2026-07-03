@@ -24,7 +24,7 @@ func TestForcedStopUnblocksActiveWatchStream(t *testing.T) {
 	if err != nil {
 		t.Fatalf("subscribe: %v", err)
 	}
-	if err := stream.Send(&kmsv1.SubscribeRequest{ClientName: "shutdown-app", Paths: []string{"/cfg/*"}}); err != nil {
+	if err := stream.Send(&kmsv1.SubscribeRequest{ClientName: "shutdown-app", Namespaces: []*kmsv1.NamespaceRef{pNS("prod", "app")}}); err != nil {
 		t.Fatalf("send registration: %v", err)
 	}
 	// Wait for the initial snapshot so the stream is definitely established and

@@ -50,7 +50,7 @@ func TestSubscribe_SnapshotThenLiveThenAck(t *testing.T) {
 	}
 	if err := stream.Send(&kmsv1.SubscribeRequest{
 		ClientName: "app-1",
-		Paths:      []string{"/cfg/*"},
+		Namespaces: []*kmsv1.NamespaceRef{pNS("prod", "app")},
 	}); err != nil {
 		t.Fatalf("send registration: %v", err)
 	}
@@ -62,12 +62,13 @@ func TestSubscribe_SnapshotThenLiveThenAck(t *testing.T) {
 	}
 
 	// 2. A write shows up as a live parameter change carrying the value.
-	if _, err := env.param().PutParameter(adminCtx(), &kmsv1.PutParameterRequest{Path: "/cfg/db", Value: "postgres://x"}); err != nil {
+	if _, err := env.param().PutParameter(adminCtx(), &kmsv1.PutParameterRequest{Ref: pRef("prod", "app", "db"), Value: "postgres://x"}); err != nil {
 		t.Fatalf("put: %v", err)
 	}
 	change := recvMatching(t, stream, isParamChange)
 	pc := change.GetChange()
-	if pc.GetPath() != "/cfg/db" || pc.GetValue() != "postgres://x" || pc.GetChangeType() != domain.ChangePut {
+	if pc.GetRef().GetKey() != "db" || pc.GetRef().GetNamespace().GetApp() != "app" ||
+		pc.GetValue() != "postgres://x" || pc.GetChangeType() != domain.ChangePut {
 		t.Fatalf("change = %+v", pc)
 	}
 	if change.GetRevision() == 0 {
@@ -98,18 +99,18 @@ func TestSubscribe_SecretEventCarriesNoValue(t *testing.T) {
 	if err != nil {
 		t.Fatalf("subscribe: %v", err)
 	}
-	if err := stream.Send(&kmsv1.SubscribeRequest{ClientName: "app", Paths: []string{"/s/*"}}); err != nil {
+	if err := stream.Send(&kmsv1.SubscribeRequest{ClientName: "app", Namespaces: []*kmsv1.NamespaceRef{pNS("prod", "app")}}); err != nil {
 		t.Fatalf("send: %v", err)
 	}
 	recvMatching(t, stream, isSnapshot)
 
 	// A secret change is injected with a poisoned value in the change log.
-	env.store.injectSecretChange("/s/db", domain.ChangePut, 3)
+	env.store.injectSecretChange(ref("prod", "app", "db"), domain.ChangePut, 3)
 	env.hub.Wake()
 
 	ev := recvMatching(t, stream, isSecretChange)
 	sc := ev.GetSecretChange()
-	if sc.GetPath() != "/s/db" || sc.GetChangeType() != domain.ChangePut || sc.GetVersion() != 3 {
+	if sc.GetRef().GetKey() != "db" || sc.GetChangeType() != domain.ChangePut || sc.GetVersion() != 3 {
 		t.Fatalf("secret change = %+v", sc)
 	}
 	// The event must be a metadata-only secret change: no parameter change (the
@@ -119,13 +120,16 @@ func TestSubscribe_SecretEventCarriesNoValue(t *testing.T) {
 	}
 }
 
-func TestSubscribe_AuthorizationFiltersEvents(t *testing.T) {
+// TestSubscribe_DeliversWholeNamespace proves the namespace-level model: once a
+// client is admitted to a namespace it receives EVERY change in it, including
+// keys it never "selected" — there is no per-key filtering on the stream.
+func TestSubscribe_DeliversWholeNamespace(t *testing.T) {
 	env := newTestEnv(t, true)
-	// Grant the client read on /cfg/pub/* only.
+	env.store.addNamespace(domain.NamespaceRef{Env: "prod", App: "app"}, domain.AuthMethodToken)
 	env.store.addPolicy(domain.Policy{
-		Name:    "pub-read",
+		Name:    "cfg",
 		Subject: "client",
-		Allow:   []domain.PolicyRule{{Operation: domain.OpParameterRead, Path: "/cfg/pub/*"}},
+		Allow:   []domain.PolicyRule{{Operation: domain.OpParameterRead, Env: "prod", App: "app"}},
 	})
 
 	ctx, cancel := context.WithTimeout(clientCtx(), 5*time.Second)
@@ -134,33 +138,37 @@ func TestSubscribe_AuthorizationFiltersEvents(t *testing.T) {
 	if err != nil {
 		t.Fatalf("subscribe: %v", err)
 	}
-	if err := stream.Send(&kmsv1.SubscribeRequest{ClientName: "c", Paths: []string{"/cfg/*"}}); err != nil {
+	if err := stream.Send(&kmsv1.SubscribeRequest{ClientName: "c", Namespaces: []*kmsv1.NamespaceRef{pNS("prod", "app")}}); err != nil {
 		t.Fatalf("send: %v", err)
 	}
 	recvMatching(t, stream, isSnapshot)
 
-	// Admin writes both a private and a public parameter.
-	if _, err := env.param().PutParameter(adminCtx(), &kmsv1.PutParameterRequest{Path: "/cfg/priv/secret", Value: "no"}); err != nil {
+	// Admin writes two keys in the namespace, in order.
+	if _, err := env.param().PutParameter(adminCtx(), &kmsv1.PutParameterRequest{Ref: pRef("prod", "app", "priv/secret"), Value: "no"}); err != nil {
 		t.Fatalf("put priv: %v", err)
 	}
-	if _, err := env.param().PutParameter(adminCtx(), &kmsv1.PutParameterRequest{Path: "/cfg/pub/ok", Value: "yes"}); err != nil {
+	if _, err := env.param().PutParameter(adminCtx(), &kmsv1.PutParameterRequest{Ref: pRef("prod", "app", "pub/ok"), Value: "yes"}); err != nil {
 		t.Fatalf("put pub: %v", err)
 	}
 
-	// The first (and only permitted) change the client sees must be the public one.
-	change := recvMatching(t, stream, isParamChange)
-	if change.GetChange().GetPath() != "/cfg/pub/ok" {
-		t.Fatalf("client received unauthorized path: %+v", change.GetChange())
+	// The client receives both keys, in write order — no key is filtered out.
+	first := recvMatching(t, stream, isParamChange)
+	if first.GetChange().GetRef().GetKey() != "priv/secret" {
+		t.Fatalf("first change = %+v, want priv/secret (namespace-wide delivery)", first.GetChange())
+	}
+	second := recvMatching(t, stream, isParamChange)
+	if second.GetChange().GetRef().GetKey() != "pub/ok" {
+		t.Fatalf("second change = %+v, want pub/ok", second.GetChange())
 	}
 }
 
 func TestSubscribe_ReplayOnReconnect(t *testing.T) {
 	env := newTestEnv(t, true)
 	// Seed two revisions before subscribing.
-	if _, err := env.param().PutParameter(adminCtx(), &kmsv1.PutParameterRequest{Path: "/cfg/a", Value: "1"}); err != nil {
+	if _, err := env.param().PutParameter(adminCtx(), &kmsv1.PutParameterRequest{Ref: pRef("prod", "app", "a"), Value: "1"}); err != nil {
 		t.Fatalf("put a: %v", err)
 	}
-	putB, err := env.param().PutParameter(adminCtx(), &kmsv1.PutParameterRequest{Path: "/cfg/b", Value: "2"})
+	putB, err := env.param().PutParameter(adminCtx(), &kmsv1.PutParameterRequest{Ref: pRef("prod", "app", "b"), Value: "2"})
 	if err != nil {
 		t.Fatalf("put b: %v", err)
 	}
@@ -175,66 +183,21 @@ func TestSubscribe_ReplayOnReconnect(t *testing.T) {
 	// snapshot) of the change at revision 2.
 	if err := stream.Send(&kmsv1.SubscribeRequest{
 		ClientName:       "app",
-		Paths:            []string{"/cfg/*"},
+		Namespaces:       []*kmsv1.NamespaceRef{pNS("prod", "app")},
 		LastSeenRevision: 1,
 	}); err != nil {
 		t.Fatalf("send: %v", err)
 	}
 	change := recvMatching(t, stream, isParamChange)
-	if change.GetChange().GetPath() != "/cfg/b" {
-		t.Fatalf("replay = %+v, want /cfg/b", change.GetChange())
+	if change.GetChange().GetRef().GetKey() != "b" {
+		t.Fatalf("replay = %+v, want key b", change.GetChange())
 	}
 	if change.GetRevision() != putB.GetRevision() {
 		t.Fatalf("replay revision = %d, want %d", change.GetRevision(), putB.GetRevision())
 	}
 }
 
-func TestWatchParameter_ServerStreaming(t *testing.T) {
-	env := newTestEnv(t, true)
-	ctx, cancel := context.WithTimeout(adminCtx(), 5*time.Second)
-	defer cancel()
-
-	stream, err := env.watchClient().WatchParameter(ctx, &kmsv1.WatchParameterRequest{Path: "/cfg/only"})
-	if err != nil {
-		t.Fatalf("watch parameter: %v", err)
-	}
-	recvMatching(t, stream, isSnapshot)
-
-	// A write to a different path must not be delivered; the matching one must.
-	if _, err := env.param().PutParameter(adminCtx(), &kmsv1.PutParameterRequest{Path: "/cfg/other", Value: "x"}); err != nil {
-		t.Fatalf("put other: %v", err)
-	}
-	if _, err := env.param().PutParameter(adminCtx(), &kmsv1.PutParameterRequest{Path: "/cfg/only", Value: "y"}); err != nil {
-		t.Fatalf("put only: %v", err)
-	}
-	change := recvMatching(t, stream, isParamChange)
-	if change.GetChange().GetPath() != "/cfg/only" {
-		t.Fatalf("watch parameter delivered %+v, want /cfg/only", change.GetChange())
-	}
-}
-
-func TestWatchNamespace_ServerStreaming(t *testing.T) {
-	env := newTestEnv(t, true)
-	ctx, cancel := context.WithTimeout(adminCtx(), 5*time.Second)
-	defer cancel()
-
-	// A plain path is treated as its whole subtree.
-	stream, err := env.watchClient().WatchNamespace(ctx, &kmsv1.WatchNamespaceRequest{PathPrefix: "/ns/app"})
-	if err != nil {
-		t.Fatalf("watch namespace: %v", err)
-	}
-	recvMatching(t, stream, isSnapshot)
-
-	if _, err := env.param().PutParameter(adminCtx(), &kmsv1.PutParameterRequest{Path: "/ns/app/feature", Value: "on"}); err != nil {
-		t.Fatalf("put: %v", err)
-	}
-	change := recvMatching(t, stream, isParamChange)
-	if change.GetChange().GetPath() != "/ns/app/feature" {
-		t.Fatalf("watch namespace delivered %+v", change.GetChange())
-	}
-}
-
-func TestSubscribe_InvalidPatternRejected(t *testing.T) {
+func TestSubscribe_InvalidNamespaceRejected(t *testing.T) {
 	env := newTestEnv(t, true)
 	ctx, cancel := context.WithTimeout(adminCtx(), 3*time.Second)
 	defer cancel()
@@ -242,10 +205,10 @@ func TestSubscribe_InvalidPatternRejected(t *testing.T) {
 	if err != nil {
 		t.Fatalf("subscribe: %v", err)
 	}
-	if err := stream.Send(&kmsv1.SubscribeRequest{ClientName: "app", Paths: []string{"no-leading-slash"}}); err != nil {
+	// An empty namespace is invalid.
+	if err := stream.Send(&kmsv1.SubscribeRequest{ClientName: "app", Namespaces: []*kmsv1.NamespaceRef{pNS("", "")}}); err != nil {
 		t.Fatalf("send: %v", err)
 	}
-	// The invalid pattern must terminate the stream with InvalidArgument.
 	_, err = stream.Recv()
 	if codeOf(err) != codes.InvalidArgument {
 		t.Fatalf("recv err code = %v, want InvalidArgument", codeOf(err))
@@ -264,10 +227,11 @@ func drainUntilErr(s eventStream) error {
 
 func TestSubscribe_ReauthRevocationClosesStream(t *testing.T) {
 	env := newTestEnv(t, true)
+	env.store.addNamespace(domain.NamespaceRef{Env: "prod", App: "app"}, domain.AuthMethodToken)
 	env.store.addPolicy(domain.Policy{
 		Name:    "cfg-read",
 		Subject: "client",
-		Allow:   []domain.PolicyRule{{Operation: domain.OpParameterRead, Path: "/cfg/*"}},
+		Allow:   []domain.PolicyRule{{Operation: domain.OpParameterRead, Env: "prod", App: "app"}},
 	})
 
 	ctx, cancel := context.WithTimeout(clientCtx(), 5*time.Second)
@@ -276,13 +240,13 @@ func TestSubscribe_ReauthRevocationClosesStream(t *testing.T) {
 	if err != nil {
 		t.Fatalf("subscribe: %v", err)
 	}
-	if err := stream.Send(&kmsv1.SubscribeRequest{ClientName: "c", Paths: []string{"/cfg/*"}}); err != nil {
+	if err := stream.Send(&kmsv1.SubscribeRequest{ClientName: "c", Namespaces: []*kmsv1.NamespaceRef{pNS("prod", "app")}}); err != nil {
 		t.Fatalf("send: %v", err)
 	}
 	recvMatching(t, stream, isSnapshot)
 
 	// Confirm the client is receiving events while authorized.
-	if _, err := env.param().PutParameter(adminCtx(), &kmsv1.PutParameterRequest{Path: "/cfg/a", Value: "1"}); err != nil {
+	if _, err := env.param().PutParameter(adminCtx(), &kmsv1.PutParameterRequest{Ref: pRef("prod", "app", "a"), Value: "1"}); err != nil {
 		t.Fatalf("put: %v", err)
 	}
 	recvMatching(t, stream, isParamChange)
@@ -298,12 +262,20 @@ func TestSubscribe_ReauthRevocationClosesStream(t *testing.T) {
 	}
 }
 
-func TestSubscribe_ReauthPolicyChangeStopsEvents(t *testing.T) {
+// TestSubscribe_PolicyRevocationClosesLiveStream pins that a mid-stream
+// revocation of a client's EXPLICIT namespace grant tears the live stream down
+// on the next heartbeat re-authorization — consistent with identity-disable and
+// method-tightening. (A home-bound subscriber keeps its implicit grant and is
+// unaffected; see TestSubscribe_HomeNamespaceGrantAllows.)
+func TestSubscribe_PolicyRevocationClosesLiveStream(t *testing.T) {
 	env := newTestEnv(t, true)
+	env.store.addNamespace(domain.NamespaceRef{Env: "prod", App: "app"}, domain.AuthMethodToken)
+	// "client" is UNBOUND — it reaches prod/app only through this explicit grant,
+	// so clearing it genuinely revokes its access.
 	env.store.addPolicy(domain.Policy{
 		Name:    "cfg-read",
 		Subject: "client",
-		Allow:   []domain.PolicyRule{{Operation: domain.OpParameterRead, Path: "/cfg/*"}},
+		Allow:   []domain.PolicyRule{{Operation: domain.OpParameterRead, Env: "prod", App: "app"}},
 	})
 
 	ctx, cancel := context.WithTimeout(clientCtx(), 5*time.Second)
@@ -312,40 +284,61 @@ func TestSubscribe_ReauthPolicyChangeStopsEvents(t *testing.T) {
 	if err != nil {
 		t.Fatalf("subscribe: %v", err)
 	}
-	if err := stream.Send(&kmsv1.SubscribeRequest{ClientName: "c", Paths: []string{"/cfg/*"}}); err != nil {
+	if err := stream.Send(&kmsv1.SubscribeRequest{ClientName: "c", Namespaces: []*kmsv1.NamespaceRef{pNS("prod", "app")}}); err != nil {
 		t.Fatalf("send: %v", err)
 	}
 	recvMatching(t, stream, isSnapshot)
-	if _, err := env.param().PutParameter(adminCtx(), &kmsv1.PutParameterRequest{Path: "/cfg/a", Value: "1"}); err != nil {
+	if _, err := env.param().PutParameter(adminCtx(), &kmsv1.PutParameterRequest{Ref: pRef("prod", "app", "a"), Value: "1"}); err != nil {
 		t.Fatalf("put a: %v", err)
 	}
 	recvMatching(t, stream, isParamChange)
 
-	// Remove the client's read policy. The identity stays valid, so the stream
-	// stays open, but re-authorization on the next heartbeats swaps in a
-	// deny-all predicate.
+	// Revoke the client's read grant. The next heartbeat's re-authorization must
+	// fail and close the stream with PermissionDenied.
 	env.store.clearPolicies()
-	// Give a few heartbeats to apply the refreshed predicate.
+	closeErr := drainUntilErr(stream)
+	if codeOf(closeErr) != codes.PermissionDenied {
+		t.Fatalf("stream close code = %v, want PermissionDenied", codeOf(closeErr))
+	}
+}
+
+// TestSubscribe_HomeGrantSurvivesPolicyChange is the counterpart to
+// TestSubscribe_PolicyRevocationClosesLiveStream: a subscriber bound to its home
+// namespace holds an implicit grant that is not policy-derived, so clearing all
+// policies mid-stream leaves several heartbeats of re-authorization untouched and
+// the stream keeps delivering.
+func TestSubscribe_HomeGrantSurvivesPolicyChange(t *testing.T) {
+	env := newTestEnv(t, true)
+	ns := domain.NamespaceRef{Env: "prod", App: "home"}
+	env.store.addNamespace(ns, domain.AuthMethodToken)
+	env.store.addIdentity("homeclient", domain.IdentityKindClient, "home-token", &ns)
+
+	ctx, cancel := context.WithTimeout(authCtx("home-token"), 5*time.Second)
+	defer cancel()
+	stream, err := env.watchClient().Subscribe(ctx)
+	if err != nil {
+		t.Fatalf("subscribe: %v", err)
+	}
+	if err := stream.Send(&kmsv1.SubscribeRequest{ClientName: "home", Namespaces: []*kmsv1.NamespaceRef{pNS("prod", "home")}}); err != nil {
+		t.Fatalf("send: %v", err)
+	}
+	recvMatching(t, stream, isSnapshot)
+	if _, err := env.param().PutParameter(adminCtx(), &kmsv1.PutParameterRequest{Ref: pRef("prod", "home", "a"), Value: "1"}); err != nil {
+		t.Fatalf("put a: %v", err)
+	}
+	recvMatching(t, stream, isParamChange)
+
+	// Clear all policies and let several heartbeats re-authorize; the implicit home
+	// grant persists, so the stream stays open and still delivers.
+	env.store.clearPolicies()
 	time.Sleep(4 * env.hub.HeartbeatInterval())
 
-	// A write to the now-denied path must not reach the client.
-	if _, err := env.param().PutParameter(adminCtx(), &kmsv1.PutParameterRequest{Path: "/cfg/b", Value: "2"}); err != nil {
+	if _, err := env.param().PutParameter(adminCtx(), &kmsv1.PutParameterRequest{Ref: pRef("prod", "home", "b"), Value: "2"}); err != nil {
 		t.Fatalf("put b: %v", err)
 	}
-
-	// Read across several heartbeats; no parameter change may appear.
-	heartbeats := 0
-	for heartbeats < 4 {
-		ev, err := stream.Recv()
-		if err != nil {
-			t.Fatalf("unexpected stream error: %v", err)
-		}
-		if ev.GetHeartbeat() != nil {
-			heartbeats++
-		}
-		if pc := ev.GetChange(); pc != nil {
-			t.Fatalf("event delivered after authorization revoked: %+v", pc)
-		}
+	change := recvMatching(t, stream, isParamChange)
+	if change.GetChange().GetRef().GetKey() != "b" {
+		t.Fatalf("change = %+v, want key b (home grant unaffected by policy change)", change.GetChange())
 	}
 }
 

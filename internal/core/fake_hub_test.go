@@ -36,17 +36,17 @@ func TestWritesWakeHub(t *testing.T) {
 		name string
 		run  func() error
 	}{
-		{"put parameter", func() error { _, _, err := s.PutParameter(ctx, admin, "/p", "1", "integer", "{}"); return err }},
-		{"delete parameter", func() error { _, err := s.DeleteParameter(ctx, admin, "/p"); return err }},
+		{"put parameter", func() error { _, _, err := s.PutParameter(ctx, admin, tref("p"), "1", "integer", "{}"); return err }},
+		{"delete parameter", func() error { _, err := s.DeleteParameter(ctx, admin, tref("p")); return err }},
 		{"put secret", func() error {
-			_, err := s.PutSecret(ctx, admin, PutSecretInput{Path: "/s", Value: []byte("v"), ContentType: "text/plain"})
+			_, err := s.PutSecret(ctx, admin, PutSecretInput{Ref: tref("s"), Value: []byte("v"), ContentType: "text/plain"})
 			return err
 		}},
-		{"disable secret", func() error { _, err := s.DisableSecret(ctx, admin, "/s", 1, false); return err }},
-		{"enable secret", func() error { _, err := s.DisableSecret(ctx, admin, "/s", 1, true); return err }},
-		{"promote secret", func() error { _, _, _, err := s.PromoteSecretVersion(ctx, admin, "/s", 1); return err }},
-		{"destroy secret", func() error { _, err := s.DestroySecretVersion(ctx, admin, "/s", 1); return err }},
-		{"delete secret", func() error { _, err := s.DeleteSecret(ctx, admin, "/s"); return err }},
+		{"disable secret", func() error { _, err := s.DisableSecret(ctx, admin, tref("s"), 1, false); return err }},
+		{"enable secret", func() error { _, err := s.DisableSecret(ctx, admin, tref("s"), 1, true); return err }},
+		{"promote secret", func() error { _, _, _, err := s.PromoteSecretVersion(ctx, admin, tref("s"), 1); return err }},
+		{"destroy secret", func() error { _, err := s.DestroySecretVersion(ctx, admin, tref("s"), 1); return err }},
+		{"delete secret", func() error { _, err := s.DeleteSecret(ctx, admin, tref("s")); return err }},
 	}
 	for _, step := range steps {
 		before := hub.wakes
@@ -60,11 +60,11 @@ func TestWritesWakeHub(t *testing.T) {
 
 	// A read must NOT wake the hub.
 	before := hub.wakes
-	if _, _, err := s.PutParameter(ctx, admin, "/r", "1", "integer", "{}"); err != nil {
+	if _, _, err := s.PutParameter(ctx, admin, tref("r"), "1", "integer", "{}"); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
 	hub.wakes = before // reset, ignore the seed write
-	if _, err := s.GetParameter(ctx, admin, "/r", 0, ""); err != nil {
+	if _, err := s.GetParameter(ctx, admin, tref("r"), 0, ""); err != nil {
 		t.Fatalf("GetParameter: %v", err)
 	}
 	if hub.wakes != before {

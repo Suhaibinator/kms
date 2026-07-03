@@ -2,8 +2,10 @@ package grpcserver
 
 import (
 	"context"
+	"time"
 
 	kmsv1 "github.com/Suhaibinator/kms/gen/kmsv1"
+	"github.com/Suhaibinator/kms/internal/core"
 	"github.com/Suhaibinator/kms/internal/domain"
 )
 
@@ -12,16 +14,41 @@ type adminServer struct {
 	s *Server
 }
 
+// --- namespaces ------------------------------------------------------------
+
 func (h *adminServer) CreateNamespace(ctx context.Context, req *kmsv1.CreateNamespaceRequest) (*kmsv1.CreateNamespaceResponse, error) {
 	pr, err := requirePrincipal(ctx)
 	if err != nil {
 		return nil, err
 	}
-	ns, err := h.s.svc.CreateNamespace(ctx, pr, req.GetPath(), req.GetDescription())
+	ns, err := h.s.svc.CreateNamespace(ctx, pr, nsRefFromProto(req.GetRef()), req.GetDescription(), authMethodsFromProto(req.GetAllowedAuthMethods()))
 	if err != nil {
 		return nil, h.s.mapErr(ctx, err)
 	}
 	return &kmsv1.CreateNamespaceResponse{Namespace: toProtoNamespace(ns)}, nil
+}
+
+func (h *adminServer) UpdateNamespace(ctx context.Context, req *kmsv1.UpdateNamespaceRequest) (*kmsv1.UpdateNamespaceResponse, error) {
+	pr, err := requirePrincipal(ctx)
+	if err != nil {
+		return nil, err
+	}
+	ns, err := h.s.svc.UpdateNamespace(ctx, pr, nsRefFromProto(req.GetRef()), req.GetDescription(), authMethodsFromProto(req.GetAllowedAuthMethods()))
+	if err != nil {
+		return nil, h.s.mapErr(ctx, err)
+	}
+	return &kmsv1.UpdateNamespaceResponse{Namespace: toProtoNamespace(ns)}, nil
+}
+
+func (h *adminServer) DeleteNamespace(ctx context.Context, req *kmsv1.DeleteNamespaceRequest) (*kmsv1.DeleteNamespaceResponse, error) {
+	pr, err := requirePrincipal(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if err := h.s.svc.DeleteNamespace(ctx, pr, nsRefFromProto(req.GetRef())); err != nil {
+		return nil, h.s.mapErr(ctx, err)
+	}
+	return &kmsv1.DeleteNamespaceResponse{}, nil
 }
 
 func (h *adminServer) ListNamespaces(ctx context.Context, req *kmsv1.ListNamespacesRequest) (*kmsv1.ListNamespacesResponse, error) {
@@ -39,6 +66,8 @@ func (h *adminServer) ListNamespaces(ctx context.Context, req *kmsv1.ListNamespa
 	}
 	return &kmsv1.ListNamespacesResponse{Namespaces: out, NextPageToken: next}, nil
 }
+
+// --- policies --------------------------------------------------------------
 
 func (h *adminServer) CreatePolicy(ctx context.Context, req *kmsv1.CreatePolicyRequest) (*kmsv1.CreatePolicyResponse, error) {
 	pr, err := requirePrincipal(ctx)
@@ -91,16 +120,32 @@ func (h *adminServer) ListPolicies(ctx context.Context, req *kmsv1.ListPoliciesR
 	return &kmsv1.ListPoliciesResponse{Policies: out, NextPageToken: next}, nil
 }
 
+// --- identities ------------------------------------------------------------
+
 func (h *adminServer) CreateIdentity(ctx context.Context, req *kmsv1.CreateIdentityRequest) (*kmsv1.CreateIdentityResponse, error) {
 	pr, err := requirePrincipal(ctx)
 	if err != nil {
 		return nil, err
 	}
-	id, token, err := h.s.svc.CreateIdentity(ctx, pr, req.GetName(), req.GetKind())
+	in := core.CreateIdentityInput{
+		Name:        req.GetName(),
+		Kind:        req.GetKind(),
+		AuthMethods: authMethodsFromProto(req.GetAuthMethods()),
+		CertTTL:     time.Duration(req.GetCertTtlSeconds()) * time.Second,
+	}
+	if ns := req.GetNamespace(); ns != nil {
+		bound := nsRefFromProto(ns)
+		in.Namespace = &bound
+	}
+	res, err := h.s.svc.CreateIdentity(ctx, pr, in)
 	if err != nil {
 		return nil, h.s.mapErr(ctx, err)
 	}
-	return &kmsv1.CreateIdentityResponse{Identity: toProtoIdentity(id), Token: token}, nil
+	return &kmsv1.CreateIdentityResponse{
+		Identity: toProtoIdentity(res.Identity),
+		Token:    res.Token,
+		Cert:     certBundleToProto(res.Cert),
+	}, nil
 }
 
 func (h *adminServer) ListIdentities(ctx context.Context, req *kmsv1.ListIdentitiesRequest) (*kmsv1.ListIdentitiesResponse, error) {
@@ -142,13 +187,76 @@ func (h *adminServer) RotateIdentityToken(ctx context.Context, req *kmsv1.Rotate
 	return &kmsv1.RotateIdentityTokenResponse{Token: token}, nil
 }
 
+func (h *adminServer) IssueIdentityCertificate(ctx context.Context, req *kmsv1.IssueIdentityCertificateRequest) (*kmsv1.IssueIdentityCertificateResponse, error) {
+	pr, err := requirePrincipal(ctx)
+	if err != nil {
+		return nil, err
+	}
+	bundle, err := h.s.svc.IssueIdentityCertificate(ctx, pr, req.GetName(), time.Duration(req.GetTtlSeconds())*time.Second)
+	if err != nil {
+		return nil, h.s.mapErr(ctx, err)
+	}
+	return &kmsv1.IssueIdentityCertificateResponse{Cert: certBundleToProto(bundle)}, nil
+}
+
+func (h *adminServer) RevokeIdentityCertificate(ctx context.Context, req *kmsv1.RevokeIdentityCertificateRequest) (*kmsv1.RevokeIdentityCertificateResponse, error) {
+	pr, err := requirePrincipal(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if err := h.s.svc.RevokeIdentityCertificate(ctx, pr, req.GetName(), req.GetSerial()); err != nil {
+		return nil, h.s.mapErr(ctx, err)
+	}
+	return &kmsv1.RevokeIdentityCertificateResponse{}, nil
+}
+
+// --- identity self-description & CA -----------------------------------------
+
+// WhoAmI returns the caller's own identity and namespace binding. Any
+// authenticated identity may call it (no policy check); it is the SDK's
+// namespace-discovery mechanism.
+func (h *adminServer) WhoAmI(ctx context.Context, _ *kmsv1.WhoAmIRequest) (*kmsv1.WhoAmIResponse, error) {
+	pr, err := requirePrincipal(ctx)
+	if err != nil {
+		return nil, err
+	}
+	res, err := h.s.svc.WhoAmI(ctx, pr)
+	if err != nil {
+		return nil, h.s.mapErr(ctx, err)
+	}
+	resp := &kmsv1.WhoAmIResponse{
+		Name:       res.Name,
+		Kind:       res.Kind,
+		AuthMethod: string(res.Method),
+	}
+	if res.Namespace != nil {
+		resp.Namespace = nsRefToProto(*res.Namespace)
+	}
+	return resp, nil
+}
+
+// GetCACertificate returns the built-in CA certificate. It is public: no
+// authentication is required (the interceptor exempts it), so apps can fetch
+// the trust anchor before they hold any credential.
+func (h *adminServer) GetCACertificate(ctx context.Context, _ *kmsv1.GetCACertificateRequest) (*kmsv1.GetCACertificateResponse, error) {
+	pem, err := h.s.svc.CACertPEM()
+	if err != nil {
+		return nil, h.s.mapErr(ctx, err)
+	}
+	return &kmsv1.GetCACertificateResponse{CertPem: string(pem)}, nil
+}
+
+// --- audit / subscribers ---------------------------------------------------
+
 func (h *adminServer) ListAuditEvents(ctx context.Context, req *kmsv1.ListAuditEventsRequest) (*kmsv1.ListAuditEventsResponse, error) {
 	pr, err := requirePrincipal(ctx)
 	if err != nil {
 		return nil, err
 	}
 	filter := domain.AuditFilter{
-		PathPrefix:    req.GetPathPrefix(),
+		Env:           req.GetEnv(),
+		App:           req.GetApp(),
+		KeyPrefix:     req.GetKeyPrefix(),
 		ActorIdentity: req.GetActorIdentity(),
 		EventType:     req.GetEventType(),
 		From:          unixMSToTime(req.GetFromUnixMs()),

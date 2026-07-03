@@ -21,7 +21,7 @@ func (h *parameterServer) GetParameter(ctx context.Context, req *kmsv1.GetParame
 	if err != nil {
 		return nil, err
 	}
-	p, err := h.s.svc.GetParameter(ctx, pr, req.GetPath(), req.GetVersion(), req.GetLabel())
+	p, err := h.s.svc.GetParameter(ctx, pr, refFromProto(req.GetRef()), req.GetVersion(), req.GetLabel())
 	if err != nil {
 		return nil, h.s.mapErr(ctx, err)
 	}
@@ -33,7 +33,7 @@ func (h *parameterServer) PutParameter(ctx context.Context, req *kmsv1.PutParame
 	if err != nil {
 		return nil, err
 	}
-	version, revision, err := h.s.svc.PutParameter(ctx, pr, req.GetPath(), req.GetValue(), req.GetContentType(), req.GetMetadataJson())
+	version, revision, err := h.s.svc.PutParameter(ctx, pr, refFromProto(req.GetRef()), req.GetValue(), req.GetContentType(), req.GetMetadataJson())
 	if err != nil {
 		return nil, h.s.mapErr(ctx, err)
 	}
@@ -45,7 +45,7 @@ func (h *parameterServer) ListParameters(ctx context.Context, req *kmsv1.ListPar
 	if err != nil {
 		return nil, err
 	}
-	params, next, err := h.s.svc.ListParameters(ctx, pr, req.GetPathPrefix(), pageFrom(req.GetPageSize(), req.GetPageToken()))
+	params, next, err := h.s.svc.ListParameters(ctx, pr, nsRefFromProto(req.GetNamespace()), req.GetKeyPrefix(), pageFrom(req.GetPageSize(), req.GetPageToken()))
 	if err != nil {
 		return nil, h.s.mapErr(ctx, err)
 	}
@@ -60,7 +60,7 @@ func (h *parameterServer) DeleteParameter(ctx context.Context, req *kmsv1.Delete
 	if err != nil {
 		return nil, err
 	}
-	revision, err := h.s.svc.DeleteParameter(ctx, pr, req.GetPath())
+	revision, err := h.s.svc.DeleteParameter(ctx, pr, refFromProto(req.GetRef()))
 	if err != nil {
 		return nil, h.s.mapErr(ctx, err)
 	}
@@ -72,7 +72,7 @@ func (h *parameterServer) GetParameterMetadata(ctx context.Context, req *kmsv1.G
 	if err != nil {
 		return nil, err
 	}
-	info, err := h.s.svc.GetParameterInfo(ctx, pr, req.GetPath())
+	info, err := h.s.svc.GetParameterInfo(ctx, pr, refFromProto(req.GetRef()))
 	if err != nil {
 		return nil, h.s.mapErr(ctx, err)
 	}
@@ -81,7 +81,7 @@ func (h *parameterServer) GetParameterMetadata(ctx context.Context, req *kmsv1.G
 		versions = append(versions, toProtoParamVersionInfo(v))
 	}
 	return &kmsv1.GetParameterMetadataResponse{
-		Path:            info.Path,
+		Ref:             refToProto(info.Ref),
 		ContentType:     info.ContentType,
 		MetadataJson:    info.Metadata,
 		CreatedAtUnixMs: unixMS(info.CreatedAt),

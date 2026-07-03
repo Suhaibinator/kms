@@ -1,42 +1,84 @@
 import Link from "next/link";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "@/lib/api";
-import type { Parameter } from "@/lib/types";
+import { PARAMETER_CONTENT_TYPES, type Parameter } from "@/lib/types";
 import { useToast } from "@/context/ToastContext";
+import { useNamespaces, useQueryParams } from "@/lib/hooks";
 import { formatUnixMs, labelEntries } from "@/lib/format";
 import { Badge, EmptyState, Field, Loading, PageHeader, Pagination, Spinner } from "@/components/ui";
 import { ConfirmDialog, Modal } from "@/components/Modal";
+import NamespacePicker, { type NamespaceSelection } from "@/components/NamespacePicker";
 
-function detailLink(path: string): string {
-  return `/parameters/detail?path=${encodeURIComponent(path)}`;
+function detailLink(ref: { env: string; app: string; key: string }): string {
+  return `/parameters/detail?env=${encodeURIComponent(ref.env)}&app=${encodeURIComponent(
+    ref.app,
+  )}&key=${encodeURIComponent(ref.key)}`;
 }
+
+const NO_NS: NamespaceSelection = { env: "", app: "" };
 
 export default function ParametersPage() {
   const toast = useToast();
+  const { namespaces, error: nsError } = useNamespaces();
+  const { values: queryValues, ready: queryReady } = useQueryParams(["env", "app", "key_prefix"]);
+
+  const [ns, setNs] = useState<NamespaceSelection>(NO_NS);
+  const [prefixInput, setPrefixInput] = useState("");
+  const [prefix, setPrefix] = useState("");
+
   const [rows, setRows] = useState<Parameter[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(false);
   const [nextToken, setNextToken] = useState("");
   const [pageStack, setPageStack] = useState<string[]>([]);
   const [pageToken, setPageToken] = useState("");
 
-  const [prefixInput, setPrefixInput] = useState("");
-  const [prefix, setPrefix] = useState("");
-
   const [createOpen, setCreateOpen] = useState(false);
-  const [path, setPath] = useState("");
+  const [createNs, setCreateNs] = useState<NamespaceSelection>(NO_NS);
+  const [key, setKey] = useState("");
   const [value, setValue] = useState("");
-  const [contentType, setContentType] = useState("text/plain");
+  const [contentType, setContentType] = useState("string");
   const [metadataJson, setMetadataJson] = useState("{}");
   const [saving, setSaving] = useState(false);
 
-  const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<Parameter | null>(null);
   const [deleting, setDeleting] = useState(false);
 
+  // Seed the selection from deep-link query params exactly once.
+  const seeded = useRef(false);
+  useEffect(() => {
+    if (!queryReady || seeded.current) return;
+    seeded.current = true;
+    const env = queryValues.env ?? "";
+    const app = queryValues.app ?? "";
+    const kp = queryValues.key_prefix ?? "";
+    if (env || app) setNs({ env, app });
+    if (kp) {
+      setPrefixInput(kp);
+      setPrefix(kp);
+    }
+  }, [queryReady, queryValues]);
+
+  useEffect(() => {
+    if (nsError) toast.error(nsError, "Failed to load namespaces");
+  }, [nsError, toast]);
+
+  const hasNs = !!ns.env && !!ns.app;
+
   const load = useCallback(
-    async (token: string, activePrefix: string) => {
+    async (token: string, selection: NamespaceSelection, activePrefix: string) => {
+      if (!selection.env || !selection.app) {
+        setRows([]);
+        setNextToken("");
+        return;
+      }
       setLoading(true);
       try {
-        const res = await api.listParameters(activePrefix || undefined, 100, token || undefined);
+        const res = await api.listParameters(
+          { env: selection.env, app: selection.app },
+          activePrefix || undefined,
+          100,
+          token || undefined,
+        );
         setRows(res.parameters ?? []);
         setNextToken(res.next_page_token ?? "");
       } catch (err) {
@@ -49,9 +91,14 @@ export default function ParametersPage() {
   );
 
   useEffect(() => {
-    void load(pageToken, prefix);
-  }, [load, pageToken, prefix]);
+    void load(pageToken, ns, prefix);
+  }, [load, pageToken, ns, prefix]);
 
+  function onSelectNamespace(next: NamespaceSelection) {
+    setNs(next);
+    setPageStack([]);
+    setPageToken("");
+  }
   function applyFilter(e: React.FormEvent) {
     e.preventDefault();
     setPageStack([]);
@@ -74,29 +121,43 @@ export default function ParametersPage() {
     setPageToken("");
   }
 
+  function openCreate() {
+    setCreateNs(hasNs ? ns : NO_NS);
+    setKey("");
+    setValue("");
+    setContentType("string");
+    setMetadataJson("{}");
+    setCreateOpen(true);
+  }
+
   async function onCreate(e: React.FormEvent) {
     e.preventDefault();
-    const p = path.trim();
-    if (!p) {
-      toast.error(new Error("A parameter path is required."), "Missing path");
+    if (!createNs.env || !createNs.app) {
+      toast.error(new Error("Choose a namespace for the parameter."), "Missing namespace");
+      return;
+    }
+    const k = key.trim();
+    if (!k) {
+      toast.error(new Error("A key is required."), "Missing key");
       return;
     }
     setSaving(true);
     try {
       const res = await api.putParameter({
-        path: p,
+        env: createNs.env,
+        app: createNs.app,
+        key: k,
         value,
-        content_type: contentType.trim() || "text/plain",
+        content_type: contentType || "string",
         metadata_json: metadataJson.trim() || "{}",
       });
-      toast.success(`Parameter saved (version ${res.version})`, p);
+      toast.success(`Parameter saved (version ${res.version})`, `${createNs.env}/${createNs.app}/${k}`);
       setCreateOpen(false);
-      setPath("");
-      setValue("");
-      setContentType("text/plain");
-      setMetadataJson("{}");
-      goReset();
-      await load("", prefix);
+      // If the new parameter lands in the currently viewed namespace, refresh.
+      if (createNs.env === ns.env && createNs.app === ns.app) {
+        goReset();
+        await load("", ns, prefix);
+      }
     } catch (err) {
       toast.error(err, "Failed to save parameter");
     } finally {
@@ -108,10 +169,14 @@ export default function ParametersPage() {
     if (!deleteTarget) return;
     setDeleting(true);
     try {
-      await api.deleteParameter(deleteTarget);
-      toast.success("Parameter deleted", deleteTarget);
+      await api.deleteParameter({
+        env: deleteTarget.env,
+        app: deleteTarget.app,
+        key: deleteTarget.key,
+      });
+      toast.success("Parameter deleted", deleteTarget.key);
       setDeleteTarget(null);
-      await load(pageToken, prefix);
+      await load(pageToken, ns, prefix);
     } catch (err) {
       toast.error(err, "Failed to delete parameter");
     } finally {
@@ -123,47 +188,55 @@ export default function ParametersPage() {
     <>
       <PageHeader
         title="Parameters"
-        subtitle="Non-secret configuration values, versioned like secrets."
+        subtitle="Non-secret configuration values, scoped to a namespace and versioned like secrets."
         actions={
-          <button className="btn btn-primary" onClick={() => setCreateOpen(true)}>
+          <button className="btn btn-primary" onClick={openCreate}>
             New parameter
           </button>
         }
       />
 
       <form className="filters" onSubmit={applyFilter}>
+        <NamespacePicker namespaces={namespaces} value={ns} onChange={onSelectNamespace} />
         <div className="field filter-grow">
-          <label className="field-label" htmlFor="prefix">
-            Path prefix
+          <label className="field-label" htmlFor="key-prefix">
+            Key prefix
           </label>
           <input
-            id="prefix"
+            id="key-prefix"
             className="input mono"
-            placeholder="/prod/api"
+            placeholder="billing/"
             value={prefixInput}
+            disabled={!hasNs}
             onChange={(e) => setPrefixInput(e.target.value)}
           />
         </div>
-        <button type="submit" className="btn">
+        <button type="submit" className="btn" disabled={!hasNs}>
           Filter
         </button>
-        <button type="button" className="btn btn-ghost" onClick={clearFilter}>
+        <button type="button" className="btn btn-ghost" onClick={clearFilter} disabled={!hasNs}>
           Clear
         </button>
       </form>
 
-      {loading ? (
+      {!hasNs ? (
+        <EmptyState title="Choose a namespace">
+          Pick an environment and application above to list its parameters.
+        </EmptyState>
+      ) : loading ? (
         <Loading />
       ) : rows.length === 0 ? (
         <EmptyState title="No parameters found">
-          {prefix ? "No parameters match this prefix." : "Create a parameter to get started."}
+          {prefix
+            ? "No parameters match this key prefix."
+            : `No parameters in ${ns.env}/${ns.app} yet.`}
         </EmptyState>
       ) : (
         <div className="table-wrap card-table">
           <table className="data">
             <thead>
               <tr>
-                <th>Path</th>
+                <th>Key</th>
                 <th>Version</th>
                 <th>Type</th>
                 <th>Labels</th>
@@ -173,10 +246,10 @@ export default function ParametersPage() {
             </thead>
             <tbody>
               {rows.map((p) => (
-                <tr key={p.path}>
-                  <td data-label="Path">
-                    <Link className="cell-path" href={detailLink(p.path)}>
-                      {p.path}
+                <tr key={p.key}>
+                  <td data-label="Key">
+                    <Link className="cell-path" href={detailLink(p)}>
+                      {p.key}
                     </Link>
                   </td>
                   <td data-label="Version">v{p.version}</td>
@@ -197,12 +270,12 @@ export default function ParametersPage() {
                   </td>
                   <td>
                     <div className="row-actions">
-                      <Link className="btn btn-sm" href={detailLink(p.path)}>
+                      <Link className="btn btn-sm" href={detailLink(p)}>
                         Details
                       </Link>
                       <button
                         className="btn btn-sm btn-danger"
-                        onClick={() => setDeleteTarget(p.path)}
+                        onClick={() => setDeleteTarget(p)}
                       >
                         Delete
                       </button>
@@ -239,12 +312,15 @@ export default function ParametersPage() {
         }
       >
         <form onSubmit={onCreate}>
-          <Field label="Path" hint="Absolute path, e.g. /prod/api/rate-limit">
+          <div className="form-row">
+            <NamespacePicker namespaces={namespaces} value={createNs} onChange={setCreateNs} />
+          </div>
+          <Field label="Key" hint="Relative to the namespace, e.g. rate-limit or billing/timeout">
             <input
               className="input mono"
-              value={path}
-              onChange={(e) => setPath(e.target.value)}
-              placeholder="/prod/api/rate-limit"
+              value={key}
+              onChange={(e) => setKey(e.target.value)}
+              placeholder="rate-limit"
               autoFocus
             />
           </Field>
@@ -258,11 +334,17 @@ export default function ParametersPage() {
           </Field>
           <div className="form-row">
             <Field label="Content type">
-              <input
-                className="input"
+              <select
+                className="select"
                 value={contentType}
                 onChange={(e) => setContentType(e.target.value)}
-              />
+              >
+                {PARAMETER_CONTENT_TYPES.map((ct) => (
+                  <option key={ct} value={ct}>
+                    {ct}
+                  </option>
+                ))}
+              </select>
             </Field>
             <Field label="Metadata JSON">
               <input
@@ -281,7 +363,11 @@ export default function ParametersPage() {
         danger
         message={
           <>
-            Delete <span className="mono">{deleteTarget}</span> and all its versions?
+            Delete <span className="mono">{deleteTarget?.key}</span> from{" "}
+            <span className="mono">
+              {deleteTarget ? `${deleteTarget.env}/${deleteTarget.app}` : ""}
+            </span>{" "}
+            and all its versions?
           </>
         }
         confirmLabel="Delete parameter"

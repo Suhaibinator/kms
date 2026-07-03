@@ -3,15 +3,18 @@ package cli
 import (
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"io"
 	"io/fs"
-	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
 	"time"
+
+	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
 
 	kms "github.com/Suhaibinator/kms"
 	"github.com/Suhaibinator/kms/internal/config"
@@ -90,7 +93,7 @@ func (c *CLI) cmdServe(args []string) int {
 	}
 
 	logger := newLogger(c.Stderr, cfg.LogLevel())
-	logger.Info("starting parameter-store", "version", Version, "config", cfg.Redacted())
+	logger.Info("starting parameter-store", zap.String("version", Version), zap.String("config", cfg.Redacted()))
 
 	// Startup order per plan 23.1: open store (migrates), unseal, then listeners.
 	store, err := storage.Open(cfg.Storage.SQLitePath)
@@ -109,6 +112,12 @@ func (c *CLI) cmdServe(args []string) int {
 	}
 	svc.SetKeyring(keyring)
 
+	// Bootstrap the built-in CA (generate on first unseal, load thereafter). Its
+	// certificate anchors client-certificate authentication on the gRPC listener.
+	if err := svc.BootstrapCA(context.Background()); err != nil {
+		return c.fail("initializing certificate authority: %v", err)
+	}
+
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -120,7 +129,7 @@ func (c *CLI) cmdServe(args []string) int {
 	svc.SetHub(hub)
 	go func() {
 		if err := hub.Run(ctx); err != nil && ctx.Err() == nil {
-			logger.Error("watch hub stopped", "error", err)
+			logger.Error("watch hub stopped", zap.Error(err))
 		}
 	}()
 
@@ -135,7 +144,7 @@ func (c *CLI) cmdServe(args []string) int {
 		for _, addr := range []string{cfg.Server.GRPCAddr, cfg.Server.HTTPAddr} {
 			if isNonLoopbackBind(addr) {
 				logger.Warn("TLS is DISABLED on a non-loopback address; bearer tokens and secret values will travel in cleartext — enable security.tls_enabled or bind to loopback / terminate TLS at a trusted proxy",
-					"addr", addr)
+					zap.String("addr", addr))
 			}
 		}
 		if !isNonLoopbackBind(cfg.Server.GRPCAddr) && !isNonLoopbackBind(cfg.Server.HTTPAddr) {
@@ -145,16 +154,24 @@ func (c *CLI) cmdServe(args []string) int {
 
 	var grpcSrv GRPCServer
 	if GRPCFactory != nil {
-		grpcSrv, err = GRPCFactory(svc, hub, GRPCConfig{Addr: cfg.Server.GRPCAddr, TLS: tlsCfg})
+		// The gRPC listener authenticates machine clients by mTLS: add the built-in
+		// CA to its client-CA pool and verify a presented client certificate, but do
+		// not require one (VerifyClientCertIfGiven) — token-only clients still
+		// connect, and the per-namespace auth-method gate decides admittance.
+		grpcTLS, terr := grpcServerTLS(tlsCfg, svc)
+		if terr != nil {
+			return c.fail("building gRPC TLS config: %v", terr)
+		}
+		grpcSrv, err = GRPCFactory(svc, hub, GRPCConfig{Addr: cfg.Server.GRPCAddr, TLS: grpcTLS})
 		if err != nil {
 			return c.fail("building gRPC server: %v", err)
 		}
 		go func() {
 			if err := grpcSrv.Serve(); err != nil {
-				logger.Error("gRPC server stopped", "error", err)
+				logger.Error("gRPC server stopped", zap.Error(err))
 			}
 		}()
-		logger.Info("gRPC listening", "addr", cfg.Server.GRPCAddr, "tls", tlsCfg != nil)
+		logger.Info("gRPC listening", zap.String("addr", cfg.Server.GRPCAddr), zap.Bool("tls", tlsCfg != nil))
 	} else {
 		logger.Warn("gRPC server not wired (GRPCFactory is nil); serving HTTP only")
 	}
@@ -197,18 +214,18 @@ func (c *CLI) cmdServe(args []string) int {
 			httpErr <- e
 		}
 	}()
-	logger.Info("HTTP listening", "addr", cfg.Server.HTTPAddr, "tls", tlsCfg != nil, "frontend", cfg.Frontend.Enabled)
+	logger.Info("HTTP listening", zap.String("addr", cfg.Server.HTTPAddr), zap.Bool("tls", tlsCfg != nil), zap.Bool("frontend", cfg.Frontend.Enabled))
 
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 	exitCode := 0
 	select {
 	case sig := <-sigCh:
-		logger.Info("shutdown signal received", "signal", sig.String())
+		logger.Info("shutdown signal received", zap.String("signal", sig.String()))
 	case e := <-httpErr:
 		// A listener that fails to start (e.g. address already in use) is fatal;
 		// exit non-zero so a process supervisor reports the failure.
-		logger.Error("HTTP server failed", "error", e)
+		logger.Error("HTTP server failed", zap.Error(e))
 		exitCode = 1
 	}
 
@@ -232,14 +249,44 @@ func (c *CLI) cmdServe(args []string) int {
 		}
 	}
 	if err := httpSrv.Shutdown(shutdownCtx); err != nil {
-		logger.Error("HTTP shutdown error", "error", err)
+		logger.Error("HTTP shutdown error", zap.Error(err))
 	}
 	cancel() // stop the watch hub before the deferred store.Close
 	logger.Info("shutdown complete")
 	return exitCode
 }
 
+// grpcServerTLS derives the gRPC listener's TLS config from the base server
+// config, adding the built-in CA to the client-CA pool and switching to
+// VerifyClientCertIfGiven so a client may authenticate by certificate without
+// every client being forced to present one. A nil base (TLS disabled) yields nil
+// — plaintext development transport carries no client certificates.
+func grpcServerTLS(base *tls.Config, svc *core.Service) (*tls.Config, error) {
+	if base == nil {
+		return nil, nil
+	}
+	caCert, err := svc.CACertificate()
+	if err != nil {
+		return nil, err
+	}
+	cfg := base.Clone()
+	var pool *x509.CertPool
+	if cfg.ClientCAs != nil {
+		pool = cfg.ClientCAs.Clone()
+	} else {
+		pool = x509.NewCertPool()
+	}
+	pool.AddCert(caCert)
+	cfg.ClientCAs = pool
+	cfg.ClientAuth = tls.VerifyClientCertIfGiven
+	return cfg, nil
+}
+
 // newLogger builds a structured JSON logger at the given level, writing to w.
-func newLogger(w io.Writer, level slog.Level) *slog.Logger {
-	return slog.New(slog.NewJSONHandler(w, &slog.HandlerOptions{Level: level}))
+func newLogger(w io.Writer, level zapcore.Level) *zap.Logger {
+	encCfg := zap.NewProductionEncoderConfig()
+	encCfg.EncodeTime = zapcore.ISO8601TimeEncoder
+	encCfg.EncodeLevel = zapcore.LowercaseLevelEncoder
+	core := zapcore.NewCore(zapcore.NewJSONEncoder(encCfg), zapcore.AddSync(w), level)
+	return zap.New(core)
 }

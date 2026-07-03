@@ -1,9 +1,9 @@
 # Security Model
 
 This document describes the encryption, authentication, authorization, and
-audit design implemented in `internal/crypto`, `internal/core`, and
-`internal/policy`, and states plainly what the system does and does not
-protect against. It is the security reference; see
+audit design implemented in `internal/crypto`, `internal/ca`, `internal/core`,
+`internal/policy`, and `internal/keyutil`, and states plainly what the system
+does and does not protect against. It is the security reference; see
 [`operations.md`](operations.md) for the operational procedures (backup,
 restore, key rotation) that follow from it.
 
@@ -54,10 +54,10 @@ inner layer.
 ### Associated data (AAD) binding
 
 Every ciphertext is bound to an associated-data string built by
-`crypto.BuildAAD`:
+`crypto.BuildAAD` from the secret's namespace, key, and version:
 
 ```
-kms/v1|type:<resource_type>|path:<path>|version:<version>
+env=<env>;app=<app>;key=<key>;version=<version>
 ```
 
 plus an internal domain-separation suffix appended per layer
@@ -68,15 +68,21 @@ AES-GCM authenticates the AAD, a ciphertext blob copied into a different
 record, a different version, or a different layer fails authentication
 immediately rather than decrypting to garbage or — worse — to a
 plausible-looking wrong value. This is what plan §10.5 calls binding
-"namespace, secret name, version" as associated data; the path already
-encodes namespace and name.
+"namespace, secret name, version" as associated data — now expressed as the
+explicit `(env, app, key)` triple rather than a packed path.
+
+The old `type:<resource_type>` component is gone: only secrets are
+envelope-encrypted (parameters are stored in plaintext, see below), so there
+is no second resource type for a secret's ciphertext to be confused with, and
+`(env, app, key, version)` already identifies a secret version uniquely. The
+per-layer suffixes are unchanged.
 
 ### Parameters vs. secrets
 
 Parameters are non-secret and are stored as plaintext in `parameters` /
-`parameter_versions` (still gated by the same path-based authorization).
-Secrets are always encrypted; there is no code path that writes secret
-plaintext to SQLite.
+`parameter_versions` (still gated by the same namespace/key-based
+authorization). Secrets are always encrypted; there is no code path that
+writes secret plaintext to SQLite.
 
 ## KEK management and master key acquisition
 
@@ -215,12 +221,18 @@ server and stored **only as a SHA-256 hash** (`crypto.GenerateToken`,
 `crypto.TokenHash`) — the plaintext is shown to the caller exactly once at
 creation/rotation time and is not retrievable again:
 
-- **Identity tokens** (`identities.token_hash`, prefix `kms_`): one per
-  client or admin identity. Sent as `authorization: Bearer <token>`
-  (gRPC metadata key `authorization`; HTTP `Authorization` header). This is
-  what `Service.Authenticate` looks up to resolve a `domain.Identity`, and
-  what establishes the caller's identity for authorization and for the
-  watch subscription registry.
+- **Identity tokens** (`identities.token_hash`, prefix `kms_`): the token
+  method of authenticating a client or admin identity. Sent as
+  `authorization: Bearer <token>` (gRPC metadata key `authorization`; HTTP
+  `Authorization` header). This is what `Service.Authenticate` looks up to
+  resolve a `domain.Identity`, and what establishes the caller's identity for
+  authorization and for the watch subscription registry. `token_hash` is now
+  **nullable**: a **cert-only** identity (one that authenticates by mTLS,
+  §[Proof of identity](#proof-of-identity-the-built-in-ca-and-mtls)) has no
+  token at all and stores `NULL`. As before, the stored material is a hash
+  only — the store never holds a usable credential, whether a token
+  (hash-only) or a certificate (public key only; the leaf private key is
+  returned once at issuance and never persisted).
 - **Per-secret access tokens** (`secrets.access_token_hash`, prefix
   `kmss_`): optional, attached to an individual secret. When set, every
   `GetSecret`/`PutSecret` on that secret — **including by admins** — must
@@ -238,6 +250,88 @@ unknown, or belonged to a disabled identity, and every failure is audited
 (`auth.failure`) with the source IP and user agent but never the attempted
 token. Failed authentications are also rate-limited per source IP — see
 [below](#login-and-failed-authentication-rate-limiting).
+
+## Proof of identity: the built-in CA and mTLS
+
+A bearer token scopes access but does not prove possession — anyone holding
+the string is the identity. Machine clients therefore authenticate with
+**mTLS client certificates minted by a certificate authority embedded in the
+KMS** (`internal/ca`, plan-namespaces.md §7). The certificate is proof of
+possession of a private key the KMS issued; a stolen database or a leaked
+token does not let an attacker impersonate the identity on the wire.
+
+**The CA.** At first unseal the service generates a self-signed CA
+(`ca.Generate`): an **Ed25519** key pair and a long-lived (**10-year**),
+self-signed CA certificate marked `IsCA` with **`MaxPathLenZero`**, so it can
+sign leaf client certificates but no intermediates. The CA is rotated by
+re-bootstrapping, not renewed. It signs **client certificates only** — the
+server's own TLS serving certificate remains operator-provided.
+
+**The CA private key is never at rest in plaintext.** It is stored in the
+`ca_keys` table enveloped exactly like a secret version: its own DEK wraps the
+PKCS#8 key material (`encrypted_key`), and that DEK is wrapped under the active
+KEK (`encrypted_dek`, `kek_id`). KEK rotation rewraps the CA key's DEK
+alongside every secret DEK (plan-namespaces.md §7), so rotation needs no
+certificate reissue — the identity↔namespace binding lives in the database,
+not in the cert. The plaintext key exists only in server memory while signing.
+
+**Issued client certificates** (`ca.IssueClientCert`) are short-lived
+Ed25519 leaves carrying the identity name in the CommonName **and** in a URI
+SAN of the form `kms://identity/<name>`, marked `ExtKeyUsageClientAuth`. The
+default TTL is **90 days** (`ca.DefaultCertTTL`), settable per issuance, and
+`NotBefore` is backdated **5 minutes** (`clockSkew`) to tolerate small clock
+differences. A **fresh key pair is generated per issuance and returned exactly
+once** (PEM bundle); the CA never retains or stores a leaf private key, exactly
+like the token model.
+
+**Mapping a peer certificate to an identity is URI-SAN-only.**
+`ca.IdentityFromCert` requires exactly one `kms://identity/<name>` URI SAN and
+returns its `<name>`; the CommonName is cosmetic and is **never** used as a
+fallback, so a certificate lacking the SAN (or carrying more than one) is
+rejected. The authentication interceptor maps a TLS-verified peer certificate
+through this SAN to a stored identity, then checks the certificate serial
+against `identity_certs`: the serial must be present, not revoked
+(`revoked_at IS NULL`), not past `not_after`, and belong to an identity that
+is not disabled. The result is an authenticated context carrying
+`{identity, method: mtls}`.
+
+**Revocation is a database check, not CRL/OCSP.** Because the KMS is the only
+relying party for these certificates, revocation is per-serial:
+`RevokeIdentityCertificate(name, serial)` stamps `identity_certs.revoked_at`,
+and disabling or revoking an identity invalidates **all** of its certificates
+at once. The interceptor consults `identity_certs` directly (serials cached in
+memory, invalidated on change); there is no CRL or OCSP machinery to distribute
+or poll. An identity may hold several concurrently-valid certificates, which is
+what makes zero-downtime certificate rollover (issue new, deploy, revoke old)
+possible.
+
+The CA certificate is public: it is served unauthenticated (`GET /api/v1/ca`)
+and shown by the CLI, so it can be baked into application deploy images as the
+trust root for the client connection.
+
+## Per-namespace authentication methods
+
+Each namespace records which authentication methods admit a caller at all, in
+`namespaces.allowed_auth_methods` (a JSON array of `"mtls"` and/or `"token"`).
+**New namespaces default to `["mtls"]`** — the strongest posture — and adding
+`"token"` is an explicit, audited namespace-settings change
+(`admin:namespace:update`).
+
+The method gate runs in `internal/core` **before authorization**, on every
+namespaced operation — parameter reads included: if the caller's
+authentication method is not in the target namespace's
+`allowed_auth_methods`, the operation is refused with `PermissionDenied`
+("namespace requires mtls") and audited, before any policy or implicit-grant
+evaluation. The implicit home-namespace grant (below) sits *behind* this gate,
+so a namespace-bound identity presenting a disallowed method still gets
+nothing.
+
+The gate applies to **client-kind** identities. **Admin-kind** identities are
+the management plane: a human administering namespaces from a browser cannot
+practically present a client certificate, so admins bypass the method gate
+(browser login stays token-based). Bypassing the *method gate* does not waive
+auditing — every admin action is still audited exactly as before (see
+[Audit guarantees](#audit-guarantees)).
 
 ## Login and failed-authentication rate limiting
 
@@ -270,58 +364,106 @@ is still full after sweeping — every tracked key is actively
 throttled — the new event is refused outright rather than growing the map
 without limit.
 
-## Authorization: path-based RBAC with deny precedence
+## Authorization: namespace-native RBAC with deny precedence
 
 `internal/policy` implements policy evaluation; `internal/core` is the only
 caller. A `Policy` binds a `subject` (an identity name, or `"*"` for every
-non-admin client) to `allow` and `deny` rule lists. Each rule is an
-`(operation, path)` pair:
+non-admin client) to `allow` and `deny` rule lists. **Authorization is
+namespace-level:** a grant is an operation on a whole namespace, and there is
+no per-key scoping. Each rule is an `(operation, env, app)` tuple:
+
+```json
+{ "operation": "secret:read", "env": "prod", "app": "gradethis" }
+```
 
 - **Operation** patterns: an exact operation (`secret:read`), a category
-  wildcard (`secret:*`, `parameter:*`, `admin:*`), or the global wildcard
-  `*`. The known operations are `parameter:{read,write,list,delete}`,
+  wildcard (`secret:*`, `parameter:*`, `admin:*`, matching even multi-segment
+  admin ops), or the global wildcard `*`. The known operations are
+  `parameter:{read,write,list,delete}`,
   `secret:{read,write,list,disable,destroy,promote}`, and
-  `admin:{namespace:create,policy:write,audit:read,key:rotate}`
+  `admin:{namespace:create,namespace:update,namespace:delete,identity:cert,policy:write,audit:read,key:rotate}`
   (`domain.Op*` constants).
-- **Path** patterns: an exact canonical path, or a prefix pattern ending in
-  `/*` (e.g. `/prod/gradethis/*`), which matches the base path itself and
-  everything under it.
+- **`env` / `app`**: an exact label or `"*"` (`policy.labelMatches`). There is
+  no `key` field — a grant that matches an operation on `(env, app)` covers
+  **every** key in that namespace.
 
-**Evaluation is default-deny with deny precedence** (`policy.Evaluate`):
+**Evaluation precedence** for a namespaced operation is
+**deny > implicit home-namespace grant > explicit allow > default deny**
+(`policy.Authorize`), evaluated against the target `NamespaceRef`:
 
 1. If any `deny` rule across every policy bound to the subject matches
-   `(operation, path)` → **deny**, full stop.
-2. Else if any `allow` rule matches → **allow**.
-3. Else → **deny**.
+   `(operation, ns)` → **deny**, full stop.
+2. Else if the **implicit home-namespace grant** applies → **allow**.
+3. Else if any `allow` rule matches → **allow**.
+4. Else → **deny**.
 
-Admin identities (`Identity.Kind == "admin"`) bypass policy evaluation
-entirely — they are authorized for everything except the one place that is
-cryptographically impossible regardless of privilege (revealing a
-client-bound secret without its token).
+**The implicit home-namespace grant** (`policy.HasImplicitHomeGrant`, plan
+§3/§6) is what makes "endpoint + credential and you're done" real: an identity
+bound to a namespace may perform read/list operations **in its own namespace
+with no policy rule at all**. The implicit set is exactly
+`parameter:read`, `parameter:list`, `secret:read`, and `secret:list`; a
+subscribe rides on the same grant (it is authorized once, as a namespace-level
+`parameter:read`, when the stream registers). It applies **only** to the
+caller's own namespace — access to any *other* namespace, and every write,
+delete, disable, destroy, and promote, always requires an explicit `allow`
+rule (itself namespace-level). Deny rules still override the implicit grant
+(step 1 precedes step 2), so an admin can carve out a whole namespace — but not
+a single key. `policy.Evaluate` is the pure rule-only form used where the
+implicit grant must not apply.
 
-**List filtering** is a two-step check (`Service.listFilter` /
-`policy.MayListUnder`): first, a coarse check that at least one `allow` rule
-could possibly match something under the requested prefix (otherwise the
-list operation itself is denied and audited as `authz.denial`); then every
-individual result is filtered through the same `Evaluate` used for reads, so
-a caller never sees an item their policy would deny reading directly, even
-though a partial-tree deny doesn't forbid listing the rest of the tree.
+Admin identities (`Identity.Kind == "admin"`) are authorized for everything
+policy could grant — they are the management plane — except the one place that
+is cryptographically impossible regardless of privilege (revealing a
+client-bound secret without its token). Their actions remain fully audited.
 
-Every authorization **denial** is audited (`authz.denial`) with the
-attempted operation and path. Policy rules and paths are normalized and
-validated at write time (`policy.ValidateRules`) — unknown operations or
-malformed path patterns are rejected before they can silently fail to
-match anything.
+**Delegating `admin:identity:cert` is delegating impersonation.** Whoever can
+issue a client certificate for identity *B* can authenticate *as* *B*. The
+server enforces the sharp boundary — `guardCertTarget` refuses any non-admin
+caller a certificate for an **admin-kind** target or for a target **outside the
+caller's own namespace** (`IssueIdentityCertificate` and
+`RevokeIdentityCertificate` both apply it; admins are unrestricted). What it
+cannot prevent is the inherent meaning of the grant *within* a namespace: a
+non-admin holding `admin:identity:cert` can mint a certificate for any
+**non-admin identity in its own namespace**, and thereby assume that identity's
+policy grants. Read the operation as "may assume any non-admin identity in the
+caller's home namespace," and do **not** delegate it in a namespace whose
+client identities are deliberately given *different* privileges from one
+another. The cross-namespace and admin-impersonation vectors are closed; the
+in-namespace lateral capability is the delegation itself.
 
-## Path validation
+**List authorization** is a single namespace-level check
+(`policy.MayListUnder` / `Authorize` with the `list` operation): a caller
+either may list a namespace or may not, and if it may, it sees **every** key
+in it. There is no per-item filtering, because there is no per-key
+authorization to filter against. (The `key_prefix` accepted by `List*` is a
+convenience *browsing* filter — a plain `LIKE 'prefix%'` on the opaque key
+string — never a security boundary.)
 
-All resource paths are canonicalized and validated by `internal/pathutil`
-before any storage or authorization operation touches them
-(`pathutil.Normalize`): must start with `/`, no empty segments, no `.` or
-`..` segments, each segment restricted to `[A-Za-z0-9._-]`, capped at 512
-characters total and 32 segments. This closes the traversal and injection
-surface for every path-addressed resource (parameters, secrets, policy
-rules, watch subscription patterns).
+Every authorization **denial** is audited (`authz.denial`) with the attempted
+operation and the target `env`/`app`(`/key` for display). Policy rules are
+normalized and validated at write time (`policy.ValidateRules`): unknown
+operations are rejected, an empty `env`/`app` normalizes to `"*"`, and
+non-`"*"` labels are validated by `internal/keyutil`.
+
+## Namespace and key validation
+
+Namespaces and keys are validated by `internal/keyutil` (the successor to the
+old `internal/pathutil`) before any storage or authorization operation touches
+them:
+
+- **`env` / `app`** (`ValidateEnv` / `ValidateApp`): 1–64 characters of
+  `[a-z0-9-]`, not starting or ending with `-`.
+- **`key`** (`ValidateKey`): 1–256 characters total; `/`-separated segments of
+  `[a-z0-9._-]`; no leading, trailing, empty, `.`, or `..` segment. The slash
+  is validated only as a legal character — a key is an **opaque** string the
+  server never splits, prefix-matches, or otherwise interprets. `db/port` and
+  `metrics/port` are two unrelated keys; there is no key hierarchy, no
+  `MatchKey`, and no key-pattern authorization anywhere.
+
+Because env, app, and key are explicit, validated fields on the wire — never a
+single path string the server parses — the traversal and injection surface
+that a path parser would expose does not exist: a caller cannot smuggle `..` or
+an extra namespace segment through a key.
 
 ## Audit guarantees
 
@@ -329,10 +471,12 @@ Every secret read, secret reveal, secret/parameter write, version
 promotion, disable, destroy, policy change, namespace change,
 authentication failure, authorization denial, and KEK rotation is audited
 (`internal/core/*.go`, `Service.audit`/`auditOp`/`auditStrict`) into
-`audit_events`. Audit records carry actor identity/kind, resource
-type/path/version, decision (`allow`/`deny`/`error`), source IP, user
-agent, request ID, and an opaque `metadata_json` blob for
-operation-specific context — **never** secret plaintext, never a token.
+`audit_events`. Audit records carry actor identity/kind, the resource's
+`env`/`app`/`key`/version (denormalized as text with no foreign key, so the
+history stays readable after a namespace is deleted — plan-namespaces.md §3),
+decision (`allow`/`deny`/`error`), source IP, user agent, request ID, and an
+opaque `metadata_json` blob for operation-specific context — **never** secret
+plaintext, never a token.
 The recorded source IP is resolved the same way as the rate-limit key
 above (real TCP peer address, or `X-Forwarded-For` only if
 `security.trust_proxy_headers` is enabled) — see
@@ -370,8 +514,9 @@ Redaction is enforced by type, not by call-site discipline:
   all — the "Reveal secret" control is absent and the panel explains why,
   because the server itself cannot produce the plaintext.
 - HTTP request logging (`internal/server/httpserver/server.go`) deliberately
-  omits the query string from log lines, since resource paths travel there
-  and must never be allowed to grow into carrying anything sensitive.
+  omits the query string from log lines, since resource identifiers (the
+  `env`/`app`/`key` query parameters) travel there and must never be allowed to
+  grow into carrying anything sensitive.
 
 ## What this does not protect against
 
@@ -384,9 +529,11 @@ Being explicit about the boundary, per plan §3 (non-goals) and §10.7.4:
   mode raises the bar (a leaked token alone, or a stolen DB+key alone, is
   each insufficient) but does not create a boundary against the process
   that holds the key material and sees the traffic.
-- **A malicious or compromised administrator.** Admin identities bypass
-  path-based policy entirely and can reveal any non-client-bound secret;
-  every reveal is audited, which gives detection, not prevention.
+- **A malicious or compromised administrator.** Admin identities are the
+  management plane: they bypass the per-namespace method gate and are
+  authorized for any operation policy could grant, and can reveal any
+  non-client-bound secret; every action is audited, which gives detection,
+  not prevention.
 - **Loss of the master key or a client-bound secret's client token**, which
   is unrecoverable by design (no escrow) — see
   [`operations.md`](operations.md#disaster-recovery) for what this means
@@ -394,9 +541,10 @@ Being explicit about the boundary, per plan §3 (non-goals) and §10.7.4:
 - **This is not a replacement for a cloud KMS, HSM, or enterprise
   key-management system** in high-compliance environments (plan §3.1); the
   local KEK provider is the only one implemented in v1.
-- **Multi-tenant isolation beyond path-based policy.** All tenants share one
-  SQLite database and one master key; isolation is enforced by
-  authorization policy, not by separate encryption domains per tenant.
+- **Multi-tenant isolation beyond namespace authorization.** All tenants share
+  one SQLite database and one master key; isolation is enforced by the
+  namespace method gate and authorization policy, not by separate encryption
+  domains per tenant.
 - **Availability.** SQLite is embedded, single-writer, single-node storage;
   this is a security document, not an HA design, and the service makes no
   claims about surviving host failure without external backup (see

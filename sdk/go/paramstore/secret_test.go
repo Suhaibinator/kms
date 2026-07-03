@@ -69,7 +69,7 @@ func TestSecretRedactionInStruct(t *testing.T) {
 }
 
 func TestSecretValueRedaction(t *testing.T) {
-	sv := SecretValue{Key: "/x", Default: leak}
+	sv := SecretValue{Key: "x", Default: leak}
 	// Init via default so it holds plaintext.
 	c, _ := newTestClient(t, Config{})
 	if err := sv.Init(c); err != nil {

@@ -1,12 +1,15 @@
-import { Fragment, useCallback, useEffect, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
 import { api } from "@/lib/api";
 import type { AuditEvent, AuditFilters } from "@/lib/types";
 import { useToast } from "@/context/ToastContext";
+import { useNamespaces } from "@/lib/hooks";
 import { datetimeLocalToUnixMs, formatUnixMs, isEmptyJson, prettyJson } from "@/lib/format";
 import { Badge, EmptyState, JsonView, Loading, PageHeader, Pagination } from "@/components/ui";
 
 interface FilterForm {
-  path_prefix: string;
+  env: string;
+  app: string;
+  key_prefix: string;
   actor: string;
   event_type: string;
   from: string;
@@ -14,7 +17,9 @@ interface FilterForm {
 }
 
 const EMPTY_FORM: FilterForm = {
-  path_prefix: "",
+  env: "",
+  app: "",
+  key_prefix: "",
   actor: "",
   event_type: "",
   from: "",
@@ -27,8 +32,21 @@ function decisionKind(decision: string): "success" | "danger" | "neutral" {
   return "neutral";
 }
 
+// Render the resource an event touched: full path when a key is present,
+// otherwise the namespace, otherwise just the resource type.
+function resourceLabel(e: AuditEvent): string | null {
+  if (e.resource_env && e.resource_app && e.resource_key) {
+    return `/${e.resource_env}/${e.resource_app}/${e.resource_key}`;
+  }
+  if (e.resource_env && e.resource_app) {
+    return `${e.resource_env}/${e.resource_app}`;
+  }
+  return null;
+}
+
 export default function AuditPage() {
   const toast = useToast();
+  const { namespaces } = useNamespaces();
   const [events, setEvents] = useState<AuditEvent[]>([]);
   const [loading, setLoading] = useState(true);
   const [nextToken, setNextToken] = useState("");
@@ -38,6 +56,20 @@ export default function AuditPage() {
   const [form, setForm] = useState<FilterForm>(EMPTY_FORM);
   const [applied, setApplied] = useState<AuditFilters>({});
   const [expanded, setExpanded] = useState<number | null>(null);
+
+  const envs = useMemo(() => {
+    const set = new Set<string>();
+    for (const ns of namespaces) set.add(ns.env);
+    return [...set].sort((a, b) => a.localeCompare(b));
+  }, [namespaces]);
+
+  const apps = useMemo(() => {
+    const set = new Set<string>();
+    for (const ns of namespaces) {
+      if (!form.env || ns.env === form.env) set.add(ns.app);
+    }
+    return [...set].sort((a, b) => a.localeCompare(b));
+  }, [namespaces, form.env]);
 
   const load = useCallback(
     async (token: string, filters: AuditFilters) => {
@@ -65,7 +97,9 @@ export default function AuditPage() {
     setPageToken("");
     setExpanded(null);
     setApplied({
-      path_prefix: form.path_prefix.trim() || undefined,
+      env: form.env.trim() || undefined,
+      app: form.app.trim() || undefined,
+      key_prefix: form.key_prefix.trim() || undefined,
       actor: form.actor.trim() || undefined,
       event_type: form.event_type.trim() || undefined,
       from_unix_ms: datetimeLocalToUnixMs(form.from),
@@ -89,21 +123,63 @@ export default function AuditPage() {
     setPageToken("");
   }
 
+  function onEnv(env: string) {
+    // Clear the app if it no longer belongs to the chosen env.
+    const stillValid = !env || namespaces.some((ns) => ns.env === env && ns.app === form.app);
+    setForm({ ...form, env, app: stillValid ? form.app : "" });
+  }
+
   return (
     <>
       <PageHeader title="Audit log" subtitle="Authorization decisions and administrative actions." />
 
       <form className="filters" onSubmit={apply}>
         <div className="field">
+          <label className="field-label" htmlFor="f-env">
+            Environment
+          </label>
+          <select
+            id="f-env"
+            className="select"
+            value={form.env}
+            onChange={(e) => onEnv(e.target.value)}
+          >
+            <option value="">All envs</option>
+            {envs.map((env) => (
+              <option key={env} value={env}>
+                {env}
+              </option>
+            ))}
+          </select>
+        </div>
+        <div className="field">
+          <label className="field-label" htmlFor="f-app">
+            Application
+          </label>
+          <select
+            id="f-app"
+            className="select"
+            value={form.app}
+            onChange={(e) => setForm({ ...form, app: e.target.value })}
+          >
+            <option value="">All apps</option>
+            {apps.map((app) => (
+              <option key={app} value={app}>
+                {app}
+              </option>
+            ))}
+          </select>
+        </div>
+        <div className="field">
           <label className="field-label" htmlFor="f-prefix">
-            Path prefix
+            Key prefix
           </label>
           <input
             id="f-prefix"
             className="input mono"
-            value={form.path_prefix}
-            onChange={(e) => setForm({ ...form, path_prefix: e.target.value })}
-            placeholder="/prod"
+            value={form.key_prefix}
+            onChange={(e) => setForm({ ...form, key_prefix: e.target.value })}
+            placeholder="billing/"
           />
         </div>
         <div className="field">
@@ -184,6 +260,7 @@ export default function AuditPage() {
               {events.map((e) => {
                 const open = expanded === e.id;
                 const hasMeta = !isEmptyJson(e.metadata_json);
+                const resource = resourceLabel(e);
                 return (
                   <Fragment key={e.id}>
                     <tr>
@@ -200,9 +277,9 @@ export default function AuditPage() {
                         ) : null}
                       </td>
                       <td data-label="Resource">
-                        {e.resource_path ? (
+                        {resource ? (
                           <span className="cell-path">
-                            {e.resource_path}
+                            {resource}
                             {e.resource_version > 0 ? (
                               <span className="faint"> · v{e.resource_version}</span>
                             ) : null}

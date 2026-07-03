@@ -3,11 +3,12 @@ package watch
 import (
 	"context"
 	"errors"
-	"log/slog"
 	"runtime"
 	"sync"
 	"testing"
 	"time"
+
+	"go.uber.org/zap"
 
 	"github.com/Suhaibinator/kms/internal/domain"
 	"github.com/Suhaibinator/kms/internal/storage"
@@ -83,7 +84,7 @@ func (f *fakeStore) ListChangesSince(ctx context.Context, since uint64, limit in
 	return out, nil
 }
 
-func (f *fakeStore) SnapshotParameters(ctx context.Context, patterns []string) ([]domain.Parameter, uint64, error) {
+func (f *fakeStore) SnapshotParameters(ctx context.Context, namespaces []domain.NamespaceRef) ([]domain.Parameter, uint64, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.snapErr != nil {
@@ -93,10 +94,11 @@ func (f *fakeStore) SnapshotParameters(ctx context.Context, patterns []string) (
 	if rev == 0 && len(f.entries) > 0 {
 		rev = f.entries[len(f.entries)-1].Revision
 	}
-	// Filter snapshot by the requested patterns, mirroring the real store.
+	// Filter snapshot by the requested namespaces, mirroring the real store
+	// (whole authorized namespaces, no key matching).
 	var out []domain.Parameter
 	for _, p := range f.snapshot {
-		if patternMatchAny(patterns, p.Path) {
+		if namespaceMatchAny(namespaces, p.Ref.NS) {
 			out = append(out, p)
 		}
 	}
@@ -131,55 +133,66 @@ func (f *fakeStore) ActiveKeyMetadata(context.Context) (domain.KeyMetadata, erro
 	panic("unused")
 }
 func (f *fakeStore) SetKeyState(context.Context, string, string) error { panic("unused") }
-func (f *fakeStore) RotateKEK(context.Context, domain.KeyMetadata, func(storage.SecretVersionRecord) ([]byte, error)) (int, error) {
+func (f *fakeStore) RotateKEK(context.Context, domain.KeyMetadata,
+	func(storage.SecretVersionRecord) ([]byte, error),
+	func(storage.CAKeyRecord) ([]byte, error)) (int, int, error) {
 	panic("unused")
 }
 func (f *fakeStore) CreateNamespace(context.Context, domain.Namespace) (domain.Namespace, error) {
 	panic("unused")
 }
+func (f *fakeStore) GetNamespace(context.Context, domain.NamespaceRef) (domain.Namespace, error) {
+	panic("unused")
+}
+func (f *fakeStore) UpdateNamespace(context.Context, domain.NamespaceRef, string, []domain.AuthMethod) (domain.Namespace, error) {
+	panic("unused")
+}
+func (f *fakeStore) DeleteNamespace(context.Context, domain.NamespaceRef) error { panic("unused") }
 func (f *fakeStore) ListNamespaces(context.Context, storage.ListPage) ([]domain.Namespace, string, error) {
 	panic("unused")
 }
-func (f *fakeStore) PutParameter(context.Context, string, string, string, string, string) (uint64, uint64, error) {
+func (f *fakeStore) PutParameter(context.Context, domain.Ref, string, string, string, string) (uint64, uint64, error) {
 	panic("unused")
 }
-func (f *fakeStore) GetParameter(context.Context, string, uint64, string) (domain.Parameter, error) {
+func (f *fakeStore) GetParameter(context.Context, domain.Ref, uint64, string) (domain.Parameter, error) {
 	panic("unused")
 }
-func (f *fakeStore) GetParameterInfo(context.Context, string) (domain.ParameterInfo, error) {
+func (f *fakeStore) GetParameterInfo(context.Context, domain.Ref) (domain.ParameterInfo, error) {
 	panic("unused")
 }
-func (f *fakeStore) ListParameters(context.Context, string, storage.ListPage) ([]domain.Parameter, string, error) {
+func (f *fakeStore) ListParameters(context.Context, domain.NamespaceRef, string, storage.ListPage) ([]domain.Parameter, string, error) {
 	panic("unused")
 }
-func (f *fakeStore) DeleteParameter(context.Context, string) (uint64, error) { panic("unused") }
+func (f *fakeStore) DeleteParameter(context.Context, domain.Ref) (uint64, error) { panic("unused") }
 func (f *fakeStore) CreateSecretVersion(context.Context, storage.CreateSecretParams) (uint64, uint64, error) {
 	panic("unused")
 }
-func (f *fakeStore) GetSecretRecord(context.Context, string) (storage.SecretRecord, error) {
+func (f *fakeStore) GetSecretRecord(context.Context, domain.Ref) (storage.SecretRecord, error) {
 	panic("unused")
 }
-func (f *fakeStore) GetSecretVersion(context.Context, string, uint64, string) (storage.SecretRecord, storage.SecretVersionRecord, error) {
+func (f *fakeStore) GetSecretVersion(context.Context, domain.Ref, uint64, string) (storage.SecretRecord, storage.SecretVersionRecord, error) {
 	panic("unused")
 }
-func (f *fakeStore) GetSecretInfo(context.Context, string) (domain.Secret, error) { panic("unused") }
-func (f *fakeStore) ListSecrets(context.Context, string, storage.ListPage) ([]domain.Secret, string, error) {
+func (f *fakeStore) GetSecretInfo(context.Context, domain.Ref) (domain.Secret, error) {
 	panic("unused")
 }
-func (f *fakeStore) DeleteSecret(context.Context, string) (uint64, error) { panic("unused") }
-func (f *fakeStore) SetSecretVersionState(context.Context, string, uint64, string) (uint64, error) {
+func (f *fakeStore) ListSecrets(context.Context, domain.NamespaceRef, string, storage.ListPage) ([]domain.Secret, string, error) {
 	panic("unused")
 }
-func (f *fakeStore) DestroySecretVersion(context.Context, string, uint64) (uint64, error) {
+func (f *fakeStore) DeleteSecret(context.Context, domain.Ref) (uint64, error) { panic("unused") }
+func (f *fakeStore) SetSecretVersionState(context.Context, domain.Ref, uint64, string) (uint64, error) {
 	panic("unused")
 }
-func (f *fakeStore) PromoteSecretVersion(context.Context, string, uint64) (uint64, uint64, uint64, error) {
+func (f *fakeStore) DestroySecretVersion(context.Context, domain.Ref, uint64) (uint64, error) {
 	panic("unused")
 }
-func (f *fakeStore) UpdateSecretAccessTokenHash(context.Context, string, []byte) error {
+func (f *fakeStore) PromoteSecretVersion(context.Context, domain.Ref, uint64) (uint64, uint64, uint64, error) {
 	panic("unused")
 }
-func (f *fakeStore) CreateIdentity(context.Context, string, string, []byte) (domain.Identity, error) {
+func (f *fakeStore) UpdateSecretAccessTokenHash(context.Context, domain.Ref, []byte) error {
+	panic("unused")
+}
+func (f *fakeStore) CreateIdentity(context.Context, storage.CreateIdentityParams) (domain.Identity, error) {
 	panic("unused")
 }
 func (f *fakeStore) GetIdentityByTokenHash(context.Context, []byte) (domain.Identity, error) {
@@ -195,6 +208,20 @@ func (f *fakeStore) SetIdentityDisabled(context.Context, string, bool) error { p
 func (f *fakeStore) UpdateIdentityTokenHash(context.Context, string, []byte) error {
 	panic("unused")
 }
+func (f *fakeStore) InsertCAKey(context.Context, storage.CAKeyRecord) error { panic("unused") }
+func (f *fakeStore) ActiveCAKey(context.Context) (storage.CAKeyRecord, error) {
+	panic("unused")
+}
+func (f *fakeStore) InsertIdentityCert(context.Context, string, domain.IdentityCert) error {
+	panic("unused")
+}
+func (f *fakeStore) ListIdentityCerts(context.Context, string) ([]domain.IdentityCert, error) {
+	panic("unused")
+}
+func (f *fakeStore) GetIdentityCertBySerial(context.Context, string) (storage.IdentityCertRecord, error) {
+	panic("unused")
+}
+func (f *fakeStore) RevokeIdentityCert(context.Context, string) error { panic("unused") }
 func (f *fakeStore) CreatePolicy(context.Context, domain.Policy) (domain.Policy, error) {
 	panic("unused")
 }
@@ -215,11 +242,20 @@ func (f *fakeStore) ListAudit(context.Context, domain.AuditFilter, storage.ListP
 
 // --- helpers ---
 
-func paramPut(rev uint64, path, value string) domain.ChangeLogEntry {
+// ref builds a resource ref; nsr builds a namespace ref.
+func ref(env, app, key string) domain.Ref {
+	return domain.Ref{NS: domain.NamespaceRef{Env: env, App: app}, Key: key}
+}
+
+func nsr(env, app string) domain.NamespaceRef {
+	return domain.NamespaceRef{Env: env, App: app}
+}
+
+func paramPut(rev uint64, r domain.Ref, value string) domain.ChangeLogEntry {
 	return domain.ChangeLogEntry{
 		Revision:     rev,
 		ResourceType: domain.ResourceParameter,
-		Path:         path,
+		Ref:          r,
 		ChangeType:   domain.ChangePut,
 		Value:        value,
 		ContentType:  "string",
@@ -228,11 +264,11 @@ func paramPut(rev uint64, path, value string) domain.ChangeLogEntry {
 	}
 }
 
-func secretPut(rev uint64, path string) domain.ChangeLogEntry {
+func secretPut(rev uint64, r domain.Ref) domain.ChangeLogEntry {
 	return domain.ChangeLogEntry{
 		Revision:     rev,
 		ResourceType: domain.ResourceSecret,
-		Path:         path,
+		Ref:          r,
 		ChangeType:   domain.ChangePut,
 		Version:      rev,
 		CreatedAt:    time.Unix(int64(rev), 0).UTC(),
@@ -241,12 +277,8 @@ func secretPut(rev uint64, path string) domain.ChangeLogEntry {
 
 func newTestHub(t *testing.T, store storage.Store, opts Options) *Hub {
 	t.Helper()
-	return NewHub(store, slog.New(slog.NewTextHandler(&discardWriter{}, nil)), opts)
+	return NewHub(store, zap.NewNop(), opts)
 }
-
-type discardWriter struct{}
-
-func (discardWriter) Write(p []byte) (int, error) { return len(p), nil }
 
 // runHub starts the hub loop and returns a stop func that cancels and waits.
 func runHub(t *testing.T, h *Hub) func() {
@@ -292,22 +324,19 @@ func collect(t *testing.T, sub *Subscription, n int, timeout time.Duration) []do
 	return out
 }
 
-func allow(rt, path string) bool { return true }
-
 // --- tests ---
 
 func TestSubscribe_SnapshotForFreshSubscriber(t *testing.T) {
 	store := &fakeStore{
 		snapshot: []domain.Parameter{
-			{Path: "/a/x", Value: "1"},
-			{Path: "/b/y", Value: "2"},
+			{Ref: ref("prod", "app", "alpha/x"), Value: "1"},
+			{Ref: ref("prod", "app", "beta/y"), Value: "2"},
 		},
 		snapRev: 7,
 	}
 	h := newTestHub(t, store, Options{})
 	sub, err := h.Subscribe(context.Background(), Registration{
-		Patterns: []string{"/a/*"},
-		Allowed:  allow,
+		Namespaces: []domain.NamespaceRef{nsr("prod", "app")},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -320,48 +349,46 @@ func TestSubscribe_SnapshotForFreshSubscriber(t *testing.T) {
 	if bl.Revision != 7 {
 		t.Fatalf("snapshot revision = %d, want 7", bl.Revision)
 	}
-	if len(bl.Snapshot) != 1 || bl.Snapshot[0].Path != "/a/x" {
-		t.Fatalf("snapshot = %+v, want only /a/x", bl.Snapshot)
+	// The whole namespace is snapshotted — every key, no key filtering.
+	if len(bl.Snapshot) != 2 {
+		t.Fatalf("snapshot = %+v, want the whole namespace (2 params)", bl.Snapshot)
 	}
 }
 
-func TestSubscribe_SnapshotFiltersByAuthz(t *testing.T) {
+func TestSubscribe_SnapshotFiltersByNamespace(t *testing.T) {
+	// Same key, different namespace: only the subscribed namespace is snapshotted.
 	store := &fakeStore{
 		snapshot: []domain.Parameter{
-			{Path: "/a/x", Value: "1"},
-			{Path: "/a/secret", Value: "2"},
+			{Ref: ref("prod", "app", "alpha/x"), Value: "1"},
+			{Ref: ref("prod", "other", "alpha/x"), Value: "2"},
 		},
-		snapRev: 3,
+		snapRev: 4,
 	}
 	h := newTestHub(t, store, Options{})
 	sub, err := h.Subscribe(context.Background(), Registration{
-		Patterns: []string{"/a/*"},
-		Allowed: func(rt, path string) bool {
-			return path != "/a/secret"
-		},
+		Namespaces: []domain.NamespaceRef{nsr("prod", "app")},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer sub.Close()
 	bl := sub.Backlog()
-	if len(bl.Snapshot) != 1 || bl.Snapshot[0].Path != "/a/x" {
-		t.Fatalf("snapshot = %+v, want only /a/x (authz filtered)", bl.Snapshot)
+	if len(bl.Snapshot) != 1 || bl.Snapshot[0].Ref.NS.App != "app" {
+		t.Fatalf("snapshot = %+v, want only prod/app/alpha/x", bl.Snapshot)
 	}
 }
 
 func TestSubscribe_ReplayForRecentSubscriber(t *testing.T) {
 	store := &fakeStore{}
 	store.append(
-		paramPut(1, "/a/x", "1"),
-		paramPut(2, "/a/y", "2"),
-		paramPut(3, "/b/z", "3"),
+		paramPut(1, ref("prod", "app", "alpha/x"), "1"),
+		paramPut(2, ref("prod", "app", "alpha/y"), "2"),
+		paramPut(3, ref("prod", "app", "beta/z"), "3"),
 	)
 	h := newTestHub(t, store, Options{})
 	sub, err := h.Subscribe(context.Background(), Registration{
-		Patterns:         []string{"/a/*"},
+		Namespaces:       []domain.NamespaceRef{nsr("prod", "app")},
 		LastSeenRevision: 1,
-		Allowed:          allow,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -374,23 +401,24 @@ func TestSubscribe_ReplayForRecentSubscriber(t *testing.T) {
 	if bl.Revision != 3 {
 		t.Fatalf("replay revision = %d, want 3", bl.Revision)
 	}
-	if len(bl.Replay) != 1 || bl.Replay[0].Path != "/a/y" {
-		t.Fatalf("replay = %+v, want only /a/y (rev>1, matches /a/*)", bl.Replay)
+	// Every change after lastSeen in the namespace replays (rev 2 and 3), with no
+	// key filtering.
+	if len(bl.Replay) != 2 || bl.Replay[0].Ref.Key != "alpha/y" || bl.Replay[1].Ref.Key != "beta/z" {
+		t.Fatalf("replay = %+v, want alpha/y and beta/z (rev>1 in namespace)", bl.Replay)
 	}
 }
 
 func TestSubscribe_PrunedLogFallsBackToSnapshot(t *testing.T) {
 	store := &fakeStore{
 		oldest:   50, // entries 1..49 pruned
-		snapshot: []domain.Parameter{{Path: "/a/x", Value: "1"}},
+		snapshot: []domain.Parameter{{Ref: ref("prod", "app", "alpha/x"), Value: "1"}},
 		snapRev:  60,
 	}
-	store.append(paramPut(60, "/a/x", "1"))
+	store.append(paramPut(60, ref("prod", "app", "alpha/x"), "1"))
 	h := newTestHub(t, store, Options{})
 	sub, err := h.Subscribe(context.Background(), Registration{
-		Patterns:         []string{"/a/*"},
+		Namespaces:       []domain.NamespaceRef{nsr("prod", "app")},
 		LastSeenRevision: 10, // older than oldest retained (50)
-		Allowed:          allow,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -410,19 +438,18 @@ func TestSubscribe_PrunedLogFallsBackToSnapshot(t *testing.T) {
 func TestSubscribe_PruneRacingReplayFallsBackToSnapshot(t *testing.T) {
 	store := &fakeStore{
 		oldest:   11, // canReplay: oldest(11) <= lastSeen+1(11) -> replay permitted
-		snapshot: []domain.Parameter{{Path: "/a/x", Value: "1"}},
+		snapshot: []domain.Parameter{{Ref: ref("prod", "app", "alpha/x"), Value: "1"}},
 		snapRev:  20,
 	}
 	// The retained log starts at 15 (11..14 were pruned after canReplay checked).
 	store.append(
-		paramPut(15, "/a/x", "1"),
-		paramPut(20, "/a/y", "2"),
+		paramPut(15, ref("prod", "app", "alpha/x"), "1"),
+		paramPut(20, ref("prod", "app", "alpha/y"), "2"),
 	)
 	h := newTestHub(t, store, Options{})
 	sub, err := h.Subscribe(context.Background(), Registration{
-		Patterns:         []string{"/a/*"},
+		Namespaces:       []domain.NamespaceRef{nsr("prod", "app")},
 		LastSeenRevision: 10,
-		Allowed:          allow,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -436,15 +463,14 @@ func TestSubscribe_PruneRacingReplayFallsBackToSnapshot(t *testing.T) {
 func TestSubscribe_TooManyToReplayFallsBackToSnapshot(t *testing.T) {
 	store := &fakeStore{
 		oldest:   1,
-		snapshot: []domain.Parameter{{Path: "/a/x", Value: "1"}},
+		snapshot: []domain.Parameter{{Ref: ref("prod", "app", "alpha/x"), Value: "1"}},
 		snapRev:  10000,
 	}
-	store.append(paramPut(10000, "/a/x", "1"))
+	store.append(paramPut(10000, ref("prod", "app", "alpha/x"), "1"))
 	h := newTestHub(t, store, Options{SnapshotMaxReplay: 100})
 	sub, err := h.Subscribe(context.Background(), Registration{
-		Patterns:         []string{"/a/*"},
+		Namespaces:       []domain.NamespaceRef{nsr("prod", "app")},
 		LastSeenRevision: 5, // 10000-5 > 100
-		Allowed:          allow,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -457,12 +483,14 @@ func TestSubscribe_TooManyToReplayFallsBackToSnapshot(t *testing.T) {
 
 func TestSubscribe_UpToDateSubscriberGetsEmptyReplay(t *testing.T) {
 	store := &fakeStore{}
-	store.append(paramPut(1, "/a/x", "1"), paramPut(2, "/a/y", "2"))
+	store.append(
+		paramPut(1, ref("prod", "app", "alpha/x"), "1"),
+		paramPut(2, ref("prod", "app", "alpha/y"), "2"),
+	)
 	h := newTestHub(t, store, Options{})
 	sub, err := h.Subscribe(context.Background(), Registration{
-		Patterns:         []string{"/a/*"},
+		Namespaces:       []domain.NamespaceRef{nsr("prod", "app")},
 		LastSeenRevision: 2, // current
-		Allowed:          allow,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -484,9 +512,8 @@ func TestSubscribe_EmptyLogFreshSubscriberSnapshots(t *testing.T) {
 	store := &fakeStore{} // empty log, oldest = 0
 	h := newTestHub(t, store, Options{})
 	sub, err := h.Subscribe(context.Background(), Registration{
-		Patterns:         []string{"/a/*"},
+		Namespaces:       []domain.NamespaceRef{nsr("prod", "app")},
 		LastSeenRevision: 5, // claims a revision but log is empty
-		Allowed:          allow,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -504,15 +531,18 @@ func TestDispatch_DeliversInRevisionOrder(t *testing.T) {
 	defer stop()
 
 	sub, err := h.Subscribe(context.Background(), Registration{
-		Patterns: []string{"/a/*"},
-		Allowed:  allow,
+		Namespaces: []domain.NamespaceRef{nsr("prod", "app")},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer sub.Close()
 
-	store.append(paramPut(1, "/a/x", "1"), paramPut(2, "/a/y", "2"), paramPut(3, "/a/z", "3"))
+	store.append(
+		paramPut(1, ref("prod", "app", "alpha/x"), "1"),
+		paramPut(2, ref("prod", "app", "alpha/y"), "2"),
+		paramPut(3, ref("prod", "app", "alpha/z"), "3"),
+	)
 	h.Wake()
 
 	got := collect(t, sub, 3, time.Second)
@@ -523,17 +553,18 @@ func TestDispatch_DeliversInRevisionOrder(t *testing.T) {
 	}
 }
 
-func TestDispatch_FiltersByPatternAndAuthz(t *testing.T) {
+// TestDispatch_FiltersByNamespace confirms delivery is purely namespace-scoped:
+// a subscriber to prod/app receives every change in prod/app — including keys it
+// never "selected" (there is no key filtering anymore) — and nothing from any
+// other namespace.
+func TestDispatch_FiltersByNamespace(t *testing.T) {
 	store := &fakeStore{}
 	h := newTestHub(t, store, Options{})
 	stop := runHub(t, h)
 	defer stop()
 
 	sub, err := h.Subscribe(context.Background(), Registration{
-		Patterns: []string{"/a/*"},
-		Allowed: func(rt, path string) bool {
-			return path != "/a/denied"
-		},
+		Namespaces: []domain.NamespaceRef{nsr("prod", "app")},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -541,15 +572,22 @@ func TestDispatch_FiltersByPatternAndAuthz(t *testing.T) {
 	defer sub.Close()
 
 	store.append(
-		paramPut(1, "/b/x", "1"),      // pattern miss
-		paramPut(2, "/a/denied", "2"), // authz miss
-		paramPut(3, "/a/ok", "3"),     // delivered
+		paramPut(1, ref("prod", "app", "beta/x"), "1"),    // delivered (same namespace)
+		paramPut(2, ref("prod", "other", "alpha/x"), "2"), // namespace miss
+		paramPut(3, ref("prod", "app", "alpha/deep"), ""), // delivered (never "selected")
+		paramPut(4, ref("prod", "app", "alpha/ok"), "4"),  // delivered
 	)
 	h.Wake()
 
-	got := collect(t, sub, 1, time.Second)
-	if got[0].Path != "/a/ok" || got[0].Revision != 3 {
-		t.Fatalf("delivered %+v, want /a/ok rev 3", got[0])
+	got := collect(t, sub, 3, time.Second)
+	wantRevs := []uint64{1, 3, 4}
+	for i, e := range got {
+		if e.Revision != wantRevs[i] {
+			t.Fatalf("event %d revision = %d, want %d (got %+v)", i, e.Revision, wantRevs[i], got)
+		}
+		if e.Ref.NS.App != "app" {
+			t.Fatalf("event %d from wrong namespace: %+v", i, e)
+		}
 	}
 }
 
@@ -560,15 +598,14 @@ func TestDispatch_SecretEventsDelivered(t *testing.T) {
 	defer stop()
 
 	sub, err := h.Subscribe(context.Background(), Registration{
-		Patterns: []string{"/s/*"},
-		Allowed:  allow,
+		Namespaces: []domain.NamespaceRef{nsr("prod", "svc")},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer sub.Close()
 
-	store.append(secretPut(1, "/s/db"))
+	store.append(secretPut(1, ref("prod", "svc", "db")))
 	h.Wake()
 
 	got := collect(t, sub, 1, time.Second)
@@ -601,15 +638,17 @@ func TestDispatch_NoDuplicateAcrossBacklogBoundary(t *testing.T) {
 	// Subscriber replays up to current, then live events must not repeat any
 	// revision already in the backlog.
 	store := &fakeStore{}
-	store.append(paramPut(1, "/a/x", "1"), paramPut(2, "/a/y", "2"))
+	store.append(
+		paramPut(1, ref("prod", "app", "alpha/x"), "1"),
+		paramPut(2, ref("prod", "app", "alpha/y"), "2"),
+	)
 	h := newTestHub(t, store, Options{})
 	stop := runHub(t, h)
 	defer stop()
 
 	sub, err := h.Subscribe(context.Background(), Registration{
-		Patterns:         []string{"/a/*"},
+		Namespaces:       []domain.NamespaceRef{nsr("prod", "app")},
 		LastSeenRevision: 0,
-		Allowed:          allow,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -621,7 +660,7 @@ func TestDispatch_NoDuplicateAcrossBacklogBoundary(t *testing.T) {
 	if bl.Revision != 2 {
 		t.Fatalf("backlog revision = %d, want 2", bl.Revision)
 	}
-	store.append(paramPut(3, "/a/z", "3"))
+	store.append(paramPut(3, ref("prod", "app", "alpha/z"), "3"))
 	h.Wake()
 
 	got := collect(t, sub, 1, time.Second)
@@ -637,8 +676,7 @@ func TestSlowSubscriberDropped(t *testing.T) {
 	defer stop()
 
 	sub, err := h.Subscribe(context.Background(), Registration{
-		Patterns: []string{"/a/*"},
-		Allowed:  allow,
+		Namespaces: []domain.NamespaceRef{nsr("prod", "app")},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -647,7 +685,7 @@ func TestSlowSubscriberDropped(t *testing.T) {
 	// Push more events than the buffer holds without consuming any.
 	var entries []domain.ChangeLogEntry
 	for i := uint64(1); i <= 20; i++ {
-		entries = append(entries, paramPut(i, "/a/x", "v"))
+		entries = append(entries, paramPut(i, ref("prod", "app", "alpha/x"), "v"))
 	}
 	store.append(entries...)
 	h.Wake()
@@ -674,8 +712,7 @@ func TestLivenessExpiry(t *testing.T) {
 	defer stop()
 
 	sub, err := h.Subscribe(context.Background(), Registration{
-		Patterns: []string{"/a/*"},
-		Allowed:  allow,
+		Namespaces: []domain.NamespaceRef{nsr("prod", "app")},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -704,8 +741,7 @@ func TestLiveness_AckKeepsAlive(t *testing.T) {
 	defer stop()
 
 	sub, err := h.Subscribe(context.Background(), Registration{
-		Patterns: []string{"/a/*"},
-		Allowed:  allow,
+		Namespaces: []domain.NamespaceRef{nsr("prod", "app")},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -740,13 +776,13 @@ func TestPruneLoop(t *testing.T) {
 func TestSubscribersRegistry(t *testing.T) {
 	store := &fakeStore{}
 	h := newTestHub(t, store, Options{})
+	namespace := nsr("prod", "app")
 	sub, err := h.Subscribe(context.Background(), Registration{
 		ClientName: "app",
 		InstanceID: "app-abcd",
 		Identity:   "id-1",
 		RemoteAddr: "1.2.3.4:5",
-		Patterns:   []string{"/a/*"},
-		Allowed:    allow,
+		Namespaces: []domain.NamespaceRef{namespace},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -759,12 +795,12 @@ func TestSubscribersRegistry(t *testing.T) {
 	if got.ClientName != "app" || got.InstanceID != "app-abcd" || got.Identity != "id-1" {
 		t.Fatalf("registry record = %+v", got)
 	}
-	if len(got.Paths) != 1 || got.Paths[0] != "/a/*" {
-		t.Fatalf("paths = %+v", got.Paths)
+	if len(got.Namespaces) != 1 || got.Namespaces[0] != namespace {
+		t.Fatalf("namespaces = %+v", got.Namespaces)
 	}
 	// Mutating the returned copy must not affect the registry.
-	got.Paths[0] = "/mutated"
-	if h.Subscribers()[0].Paths[0] != "/a/*" {
+	got.Namespaces[0] = nsr("prod", "mutated")
+	if h.Subscribers()[0].Namespaces[0] != namespace {
 		t.Fatal("Subscribers() returned an aliased slice")
 	}
 	sub.Ack(42)
@@ -781,8 +817,7 @@ func TestSubscribe_BacklogStoreError(t *testing.T) {
 	store := &fakeStore{currentRevErr: errors.New("db down")}
 	h := newTestHub(t, store, Options{})
 	_, err := h.Subscribe(context.Background(), Registration{
-		Patterns: []string{"/a/*"},
-		Allowed:  allow,
+		Namespaces: []domain.NamespaceRef{nsr("prod", "app")},
 	})
 	if err == nil {
 		t.Fatal("expected error when backlog computation fails")
@@ -810,49 +845,6 @@ func TestRun_ReturnsOnContextCancel(t *testing.T) {
 	}
 }
 
-func TestUpdateAllowedSwapsPredicate(t *testing.T) {
-	store := &fakeStore{}
-	h := newTestHub(t, store, Options{})
-	stop := runHub(t, h)
-	defer stop()
-
-	sub, err := h.Subscribe(context.Background(), Registration{
-		Patterns: []string{"/a/*"},
-		Allowed:  allow,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer sub.Close()
-
-	// Initially authorized: the first event is delivered.
-	store.append(paramPut(1, "/a/x", "1"))
-	h.Wake()
-	got := collect(t, sub, 1, time.Second)
-	if got[0].Revision != 1 {
-		t.Fatalf("first event revision = %d, want 1", got[0].Revision)
-	}
-
-	// Revoke authorization; subsequent events must be filtered out.
-	sub.UpdateAllowed(func(string, string) bool { return false })
-	store.append(paramPut(2, "/a/y", "2"))
-	h.Wake()
-	select {
-	case e := <-sub.Events():
-		t.Fatalf("received %+v after authorization revoked", e)
-	case <-time.After(150 * time.Millisecond):
-	}
-
-	// Restore authorization; delivery resumes.
-	sub.UpdateAllowed(allow)
-	store.append(paramPut(3, "/a/z", "3"))
-	h.Wake()
-	got = collect(t, sub, 1, time.Second)
-	if got[0].Revision != 3 {
-		t.Fatalf("resumed event revision = %d, want 3", got[0].Revision)
-	}
-}
-
 func TestNoGoroutineLeak(t *testing.T) {
 	baseline := runtime.NumGoroutine()
 	store := &fakeStore{}
@@ -865,11 +857,13 @@ func TestNoGoroutineLeak(t *testing.T) {
 
 	// Churn subscribers: subscribe, deliver, then drop them.
 	for i := 0; i < 25; i++ {
-		sub, err := h.Subscribe(context.Background(), Registration{Patterns: []string{"/a/*"}, Allowed: allow})
+		sub, err := h.Subscribe(context.Background(), Registration{
+			Namespaces: []domain.NamespaceRef{nsr("prod", "app")},
+		})
 		if err != nil {
 			t.Fatal(err)
 		}
-		store.append(paramPut(uint64(i+1), "/a/x", "v"))
+		store.append(paramPut(uint64(i+1), ref("prod", "app", "alpha/x"), "v"))
 		h.Wake()
 		sub.Close()
 	}
@@ -883,28 +877,6 @@ func TestNoGoroutineLeak(t *testing.T) {
 
 	// Allow scheduler to reap. Goroutine count should return near baseline.
 	waitFor(t, func() bool { return runtime.NumGoroutine() <= baseline+2 }, 2*time.Second)
-}
-
-func TestNilAllowedDeniesEverything(t *testing.T) {
-	store := &fakeStore{}
-	h := newTestHub(t, store, Options{})
-	stop := runHub(t, h)
-	defer stop()
-	sub, err := h.Subscribe(context.Background(), Registration{
-		Patterns: []string{"/a/*"},
-		Allowed:  nil, // must be treated as deny-all
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer sub.Close()
-	store.append(paramPut(1, "/a/x", "1"))
-	h.Wake()
-	select {
-	case e := <-sub.Events():
-		t.Fatalf("nil predicate should deny, but delivered %+v", e)
-	case <-time.After(150 * time.Millisecond):
-	}
 }
 
 // --- test utilities ---

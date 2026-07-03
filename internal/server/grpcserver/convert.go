@@ -4,6 +4,7 @@ import (
 	"time"
 
 	kmsv1 "github.com/Suhaibinator/kms/gen/kmsv1"
+	"github.com/Suhaibinator/kms/internal/core"
 	"github.com/Suhaibinator/kms/internal/domain"
 )
 
@@ -23,9 +24,86 @@ func unixMSToTime(ms int64) time.Time {
 	return time.UnixMilli(ms).UTC()
 }
 
+// --- refs and selectors ----------------------------------------------------
+
+// nsRefToProto renders a namespace reference on the wire.
+func nsRefToProto(ns domain.NamespaceRef) *kmsv1.NamespaceRef {
+	return &kmsv1.NamespaceRef{Env: ns.Env, App: ns.App}
+}
+
+// nsRefFromProto reads a namespace reference off the wire. A nil message yields
+// the zero NamespaceRef, which the core layer rejects with InvalidArgument.
+func nsRefFromProto(n *kmsv1.NamespaceRef) domain.NamespaceRef {
+	if n == nil {
+		return domain.NamespaceRef{}
+	}
+	return domain.NamespaceRef{Env: n.GetEnv(), App: n.GetApp()}
+}
+
+// refToProto renders a resource reference (namespace + relative key).
+func refToProto(ref domain.Ref) *kmsv1.ResourceRef {
+	return &kmsv1.ResourceRef{Namespace: nsRefToProto(ref.NS), Key: ref.Key}
+}
+
+// refFromProto reads a resource reference off the wire. A nil message yields the
+// zero Ref, which the core layer rejects with InvalidArgument.
+func refFromProto(r *kmsv1.ResourceRef) domain.Ref {
+	if r == nil {
+		return domain.Ref{}
+	}
+	return domain.Ref{NS: nsRefFromProto(r.GetNamespace()), Key: r.GetKey()}
+}
+
+// namespacesFromProto maps a slice of wire namespace refs to the domain type.
+func namespacesFromProto(refs []*kmsv1.NamespaceRef) []domain.NamespaceRef {
+	out := make([]domain.NamespaceRef, 0, len(refs))
+	for _, r := range refs {
+		out = append(out, nsRefFromProto(r))
+	}
+	return out
+}
+
+// namespacesToProto renders a slice of namespace refs on the wire.
+func namespacesToProto(nss []domain.NamespaceRef) []*kmsv1.NamespaceRef {
+	out := make([]*kmsv1.NamespaceRef, 0, len(nss))
+	for _, ns := range nss {
+		out = append(out, nsRefToProto(ns))
+	}
+	return out
+}
+
+// --- auth methods ----------------------------------------------------------
+
+// authMethodsFromProto casts the wire's []string auth methods to the named
+// domain type. Validation of unknown values happens in the core layer.
+func authMethodsFromProto(methods []string) []domain.AuthMethod {
+	if methods == nil {
+		return nil
+	}
+	out := make([]domain.AuthMethod, len(methods))
+	for i, m := range methods {
+		out[i] = domain.AuthMethod(m)
+	}
+	return out
+}
+
+// authMethodsToProto casts the named domain auth methods back to []string.
+func authMethodsToProto(methods []domain.AuthMethod) []string {
+	if methods == nil {
+		return nil
+	}
+	out := make([]string, len(methods))
+	for i, m := range methods {
+		out[i] = string(m)
+	}
+	return out
+}
+
+// --- parameters ------------------------------------------------------------
+
 func toProtoParameter(p domain.Parameter) *kmsv1.Parameter {
 	return &kmsv1.Parameter{
-		Path:            p.Path,
+		Ref:             refToProto(p.Ref),
 		Value:           p.Value,
 		ContentType:     p.ContentType,
 		Version:         p.Version,
@@ -55,13 +133,15 @@ func toProtoParamVersionInfo(v domain.ParameterVersionInfo) *kmsv1.ParameterVers
 	}
 }
 
+// --- secrets ---------------------------------------------------------------
+
 func toProtoSecretMetadata(s domain.Secret) *kmsv1.SecretMetadata {
 	versions := make([]*kmsv1.SecretVersionInfo, 0, len(s.Versions))
 	for _, v := range s.Versions {
 		versions = append(versions, toProtoSecretVersionInfo(v))
 	}
 	return &kmsv1.SecretMetadata{
-		Path:            s.Path,
+		Ref:             refToProto(s.Ref),
 		ContentType:     s.ContentType,
 		ClientBound:     s.ClientBound,
 		HasAccessToken:  s.HasAccessToken,
@@ -85,23 +165,67 @@ func toProtoSecretVersionInfo(v domain.SecretVersionInfo) *kmsv1.SecretVersionIn
 	}
 }
 
+// --- namespaces ------------------------------------------------------------
+
 func toProtoNamespace(n domain.Namespace) *kmsv1.Namespace {
 	return &kmsv1.Namespace{
-		Path:            n.Path,
-		Description:     n.Description,
-		CreatedBy:       n.CreatedBy,
-		CreatedAtUnixMs: unixMS(n.CreatedAt),
+		Ref:                nsRefToProto(n.NamespaceRef),
+		Description:        n.Description,
+		AllowedAuthMethods: authMethodsToProto(n.AllowedAuthMethods),
+		CreatedBy:          n.CreatedBy,
+		CreatedAtUnixMs:    unixMS(n.CreatedAt),
+		ParameterCount:     n.ParameterCount,
+		SecretCount:        n.SecretCount,
 	}
 }
 
+// --- identities ------------------------------------------------------------
+
 func toProtoIdentity(id domain.Identity) *kmsv1.Identity {
-	return &kmsv1.Identity{
+	out := &kmsv1.Identity{
 		Name:            id.Name,
 		Kind:            id.Kind,
 		Disabled:        id.Disabled,
 		CreatedAtUnixMs: unixMS(id.CreatedAt),
+		HasToken:        id.HasToken,
+	}
+	if id.Namespace != nil {
+		out.Namespace = nsRefToProto(*id.Namespace)
+	}
+	if len(id.Certs) > 0 {
+		out.Certs = make([]*kmsv1.IdentityCertInfo, 0, len(id.Certs))
+		for _, c := range id.Certs {
+			out.Certs = append(out.Certs, toProtoIdentityCert(c))
+		}
+	}
+	return out
+}
+
+func toProtoIdentityCert(c domain.IdentityCert) *kmsv1.IdentityCertInfo {
+	return &kmsv1.IdentityCertInfo{
+		Serial:          c.Serial,
+		Fingerprint:     c.Fingerprint,
+		NotAfterUnixMs:  unixMS(c.NotAfter),
+		RevokedAtUnixMs: unixMS(c.RevokedAt),
+		CreatedAtUnixMs: unixMS(c.CreatedAt),
 	}
 }
+
+// certBundleToProto renders a freshly issued certificate bundle (private key
+// returned exactly once at issuance). A nil bundle yields nil.
+func certBundleToProto(b *core.CertBundle) *kmsv1.CertBundle {
+	if b == nil {
+		return nil
+	}
+	return &kmsv1.CertBundle{
+		CertPem:        b.CertPEM,
+		KeyPem:         b.KeyPEM,
+		Serial:         b.Serial,
+		NotAfterUnixMs: unixMS(b.NotAfter),
+	}
+}
+
+// --- policies --------------------------------------------------------------
 
 func toProtoPolicy(p domain.Policy) *kmsv1.Policy {
 	return &kmsv1.Policy{
@@ -117,7 +241,11 @@ func toProtoPolicy(p domain.Policy) *kmsv1.Policy {
 func toProtoRules(rs []domain.PolicyRule) []*kmsv1.PolicyRule {
 	out := make([]*kmsv1.PolicyRule, 0, len(rs))
 	for _, r := range rs {
-		out = append(out, &kmsv1.PolicyRule{Operation: r.Operation, Path: r.Path})
+		out = append(out, &kmsv1.PolicyRule{
+			Operation: r.Operation,
+			Env:       r.Env,
+			App:       r.App,
+		})
 	}
 	return out
 }
@@ -137,10 +265,16 @@ func fromProtoPolicy(p *kmsv1.Policy) domain.Policy {
 func fromProtoRules(rs []*kmsv1.PolicyRule) []domain.PolicyRule {
 	out := make([]domain.PolicyRule, 0, len(rs))
 	for _, r := range rs {
-		out = append(out, domain.PolicyRule{Operation: r.GetOperation(), Path: r.GetPath()})
+		out = append(out, domain.PolicyRule{
+			Operation: r.GetOperation(),
+			Env:       r.GetEnv(),
+			App:       r.GetApp(),
+		})
 	}
 	return out
 }
+
+// --- audit -----------------------------------------------------------------
 
 func toProtoAuditEvent(e domain.AuditEvent) *kmsv1.AuditEvent {
 	return &kmsv1.AuditEvent{
@@ -149,7 +283,9 @@ func toProtoAuditEvent(e domain.AuditEvent) *kmsv1.AuditEvent {
 		ActorIdentity:   e.ActorIdentity,
 		ActorType:       e.ActorType,
 		ResourceType:    e.ResourceType,
-		ResourcePath:    e.ResourcePath,
+		ResourceEnv:     e.ResourceEnv,
+		ResourceApp:     e.ResourceApp,
+		ResourceKey:     e.ResourceKey,
 		ResourceVersion: e.ResourceVersion,
 		Decision:        e.Decision,
 		SourceIp:        e.SourceIP,
@@ -160,18 +296,22 @@ func toProtoAuditEvent(e domain.AuditEvent) *kmsv1.AuditEvent {
 	}
 }
 
+// --- subscribers -----------------------------------------------------------
+
 func toProtoSubscriber(s domain.Subscriber) *kmsv1.Subscriber {
 	return &kmsv1.Subscriber{
 		ClientName:          s.ClientName,
 		InstanceId:          s.InstanceID,
 		Identity:            s.Identity,
-		Paths:               s.Paths,
+		Namespaces:          namespacesToProto(s.Namespaces),
 		RemoteAddr:          s.RemoteAddr,
 		ConnectedAtUnixMs:   unixMS(s.ConnectedAt),
 		LastHeartbeatUnixMs: unixMS(s.LastHeartbeat),
 		LastAckedRevision:   s.LastAckedRevision,
 	}
 }
+
+// --- watch events ----------------------------------------------------------
 
 // toSubscribeEvent converts a change-log entry into a wire event. Parameter
 // changes carry their (non-sensitive) value inline; secret changes are always
@@ -181,7 +321,7 @@ func toSubscribeEvent(e domain.ChangeLogEntry) *kmsv1.SubscribeEvent {
 		return &kmsv1.SubscribeEvent{
 			Event: &kmsv1.SubscribeEvent_SecretChange{
 				SecretChange: &kmsv1.SecretMetadataChange{
-					Path:       e.Path,
+					Ref:        refToProto(e.Ref),
 					ChangeType: e.ChangeType,
 					Version:    e.Version,
 					Label:      e.Label,
@@ -193,7 +333,7 @@ func toSubscribeEvent(e domain.ChangeLogEntry) *kmsv1.SubscribeEvent {
 	return &kmsv1.SubscribeEvent{
 		Event: &kmsv1.SubscribeEvent_Change{
 			Change: &kmsv1.ParameterChange{
-				Path:        e.Path,
+				Ref:         refToProto(e.Ref),
 				ChangeType:  e.ChangeType,
 				Value:       e.Value,
 				ContentType: e.ContentType,

@@ -59,6 +59,8 @@ func (c *CLI) Run(args []string) int {
 		return c.cmdCreateAdmin(cmdArgs)
 	case "rotate-kek":
 		return c.cmdRotateKEK(cmdArgs)
+	case "admin":
+		return c.cmdAdmin(cmdArgs)
 	case "import":
 		return c.cmdImport(cmdArgs)
 	case "put-secret":
@@ -129,11 +131,14 @@ Administration:
   rotate-kek       Rotate the master key, rewrapping all secrets.
   import           Import data from SuhaibParameterStore.
 
+Management (talk to a running server over gRPC):
+  admin            Manage namespaces, identities, and the built-in CA.
+
 Convenience (talk to a running server over gRPC):
-  put-secret PATH        Store a secret (value from --value-file or stdin).
-  get-secret PATH        Fetch a secret (requires --show, --out, or a pipe).
-  put-parameter PATH VAL Store a parameter value.
-  list PREFIX            List parameters and secrets under a prefix.
+  put-secret /env/app/key       Store a secret (value from --value-file or stdin).
+  get-secret /env/app/key       Fetch a secret (requires --show, --out, or a pipe).
+  put-parameter /env/app/key V  Store a parameter value.
+  list env/app                  List parameters and secrets in a namespace (--prefix).
 
 Other:
   version          Print the build version.

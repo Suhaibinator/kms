@@ -1,11 +1,13 @@
 import Link from "next/link";
 import { useRouter } from "next/router";
-import { useCallback, useEffect, useState } from "react";
-import { api, ApiError } from "@/lib/api";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { api, ApiError, type ResourceRef } from "@/lib/api";
 import type { SecretMetadata, SecretVersion } from "@/lib/types";
 import { useToast } from "@/context/ToastContext";
-import { useQueryParam } from "@/lib/hooks";
+import { useQueryParams } from "@/lib/hooks";
 import {
+  displayNamespace,
+  displayPath,
   formatUnixMs,
   isEmptyJson,
   labelEntries,
@@ -40,7 +42,12 @@ interface Revealed {
 export default function SecretDetailPage() {
   const router = useRouter();
   const toast = useToast();
-  const { value: path, ready } = useQueryParam("path");
+  const { values, ready } = useQueryParams(["env", "app", "key"]);
+  const env = values.env ?? "";
+  const app = values.app ?? "";
+  const key = values.key ?? "";
+  const hasRef = !!env && !!app && !!key;
+  const ref = useMemo<ResourceRef>(() => ({ env, app, key }), [env, app, key]);
 
   const [secret, setSecret] = useState<SecretMetadata | null>(null);
   const [loading, setLoading] = useState(true);
@@ -66,11 +73,11 @@ export default function SecretDetailPage() {
   const [newVersionOpen, setNewVersionOpen] = useState(false);
 
   const load = useCallback(async () => {
-    if (!path) return;
+    if (!hasRef) return;
     setLoading(true);
     setNotFound(false);
     try {
-      const res = await api.secretMetadata(path);
+      const res = await api.secretMetadata(ref);
       setSecret(res.secret);
       const cur = res.secret.labels?.current;
       setSelectedVersion(typeof cur === "number" ? cur : res.secret.versions?.[0]?.version ?? null);
@@ -83,16 +90,16 @@ export default function SecretDetailPage() {
     } finally {
       setLoading(false);
     }
-  }, [path, toast]);
+  }, [hasRef, ref, toast]);
 
   useEffect(() => {
-    if (ready && path) void load();
-  }, [ready, path, load]);
+    if (ready && hasRef) void load();
+  }, [ready, hasRef, load]);
 
   // Clear any revealed value when navigating away or reloading the secret.
   useEffect(() => {
     return () => setRevealed(null);
-  }, [path]);
+  }, [env, app, key]);
 
   // Auto-hide countdown for the revealed value.
   useEffect(() => {
@@ -116,10 +123,10 @@ export default function SecretDetailPage() {
 
   const doReveal = useCallback(
     async (version: number) => {
-      if (!path) return;
+      if (!hasRef) return;
       setRevealBusy(true);
       try {
-        const res = await api.revealSecret(path, version, "");
+        const res = await api.revealSecret(ref, version, "");
         setRevealed({
           version: res.version,
           valueBase64: res.value_base64,
@@ -135,32 +142,34 @@ export default function SecretDetailPage() {
         setRevealTarget(null);
       }
     },
-    [path, toast],
+    [hasRef, ref, toast],
   );
 
   const runAction = useCallback(async () => {
-    if (!path || !confirm) return;
+    if (!hasRef || !confirm) return;
     setActionBusy(true);
     try {
       if (confirm.kind === "delete") {
-        await api.deleteSecret(path);
-        toast.success("Secret deleted", path);
+        await api.deleteSecret(ref);
+        toast.success("Secret deleted", displayPath(ref));
         setConfirm(null);
-        await router.push("/secrets");
+        await router.push(`/secrets?env=${encodeURIComponent(env)}&app=${encodeURIComponent(app)}`);
         return;
       }
       if (confirm.kind === "promote") {
-        const res = await api.promoteSecret(path, confirm.version);
+        const res = await api.promoteSecret(ref, confirm.version);
         toast.success(`Promoted v${res.current_version} to current`);
       } else if (confirm.kind === "destroy") {
-        await api.destroySecret(path, confirm.version);
+        await api.destroySecret(ref, confirm.version);
         toast.success(`Destroyed version ${confirm.version}`);
         // If the destroyed version was revealed, hide it.
         setRevealed((r) => (r && r.version === confirm.version ? null : r));
       } else {
         const enable = confirm.kind === "enable";
-        await api.disableSecret(path, confirm.version, enable);
-        toast.success(enable ? `Enabled version ${confirm.version}` : `Disabled version ${confirm.version}`);
+        await api.disableSecret(ref, confirm.version, enable);
+        toast.success(
+          enable ? `Enabled version ${confirm.version}` : `Disabled version ${confirm.version}`,
+        );
         if (!enable) setRevealed((r) => (r && r.version === confirm.version ? null : r));
       }
       setConfirm(null);
@@ -170,11 +179,19 @@ export default function SecretDetailPage() {
     } finally {
       setActionBusy(false);
     }
-  }, [path, confirm, toast, load, router]);
+  }, [hasRef, ref, env, app, confirm, toast, load, router]);
+
+  const backLink = hasRef
+    ? `/secrets?env=${encodeURIComponent(env)}&app=${encodeURIComponent(app)}`
+    : "/secrets";
 
   if (!ready || loading) return <Loading label="Loading secret…" />;
-  if (!path) {
-    return <EmptyState title="No secret specified">Provide a ?path= query parameter.</EmptyState>;
+  if (!hasRef) {
+    return (
+      <EmptyState title="No secret specified">
+        Provide ?env=, ?app=, and ?key= query parameters.
+      </EmptyState>
+    );
   }
   if (notFound || !secret) {
     return (
@@ -182,13 +199,13 @@ export default function SecretDetailPage() {
         <PageHeader
           title="Secret not found"
           actions={
-            <Link className="btn" href="/secrets">
+            <Link className="btn" href={backLink}>
               Back to secrets
             </Link>
           }
         />
         <EmptyState title="Not found">
-          No secret exists at <span className="mono">{path}</span>.
+          No secret exists at <span className="mono">{displayPath(ref)}</span>.
         </EmptyState>
       </>
     );
@@ -200,10 +217,10 @@ export default function SecretDetailPage() {
   return (
     <>
       <PageHeader
-        title={<span className="mono">{secret.path}</span>}
+        title={<span className="mono">{displayPath(ref)}</span>}
         subtitle={
-          <Link href="/secrets" className="text-sm">
-            ← All secrets
+          <Link href={backLink} className="text-sm">
+            ← {displayNamespace(ref)}
           </Link>
         }
         actions={
@@ -222,6 +239,8 @@ export default function SecretDetailPage() {
         <div className="card-title">Metadata</div>
         <KeyValue
           rows={[
+            ["Namespace", <span className="mono" key="ns">{displayNamespace(ref)}</span>],
+            ["Key", <span className="mono" key="key">{key}</span>],
             ["Content type", secret.content_type || "—"],
             [
               "Mode",
@@ -232,10 +251,7 @@ export default function SecretDetailPage() {
               ),
             ],
             ["Access token", secret.has_access_token ? "yes" : "no"],
-            [
-              "Current version",
-              typeof current === "number" ? `v${current}` : "—",
-            ],
+            ["Current version", typeof current === "number" ? `v${current}` : "—"],
             ["Created", formatUnixMs(secret.created_at_unix_ms)],
             ["Updated", formatUnixMs(secret.updated_at_unix_ms)],
             [
@@ -287,9 +303,7 @@ export default function SecretDetailPage() {
                 <CopyButton
                   label="Copy value"
                   value={() =>
-                    revealed.isText
-                      ? base64ToUtf8(revealed.valueBase64)
-                      : revealed.valueBase64
+                    revealed.isText ? base64ToUtf8(revealed.valueBase64) : revealed.valueBase64
                   }
                 />
                 <button className="btn btn-sm" onClick={() => setRevealed(null)}>
@@ -298,11 +312,7 @@ export default function SecretDetailPage() {
               </div>
             </div>
             {revealed.isText ? (
-              <div
-                className="reveal-value masked"
-                tabIndex={0}
-                title="Hover, focus, or tap to reveal"
-              >
+              <div className="reveal-value masked" tabIndex={0} title="Hover, focus, or tap to reveal">
                 {base64ToUtf8(revealed.valueBase64)}
               </div>
             ) : (
@@ -408,7 +418,7 @@ export default function SecretDetailPage() {
         message={
           <>
             You are about to decrypt and display version {revealTarget} of{" "}
-            <span className="mono">{secret.path}</span>. This is recorded in the
+            <span className="mono">{displayPath(ref)}</span>. This is recorded in the
             audit log. The value will auto-hide after {REVEAL_SECONDS} seconds.
           </>
         }
@@ -434,7 +444,7 @@ export default function SecretDetailPage() {
         message={
           confirm?.kind === "delete" ? (
             <>
-              This deletes the secret <span className="mono">{secret.path}</span> and all
+              This deletes the secret <span className="mono">{displayPath(ref)}</span> and all
               of its versions.
             </>
           ) : confirm?.kind === "promote" ? (
@@ -522,7 +532,11 @@ function VersionRow({
       <td>{v.created_by || <span className="faint">—</span>}</td>
       <td className="nowrap">{formatUnixMs(v.created_at_unix_ms)}</td>
       <td className="nowrap">
-        {v.expires_at_unix_ms > 0 ? formatUnixMs(v.expires_at_unix_ms) : <span className="faint">never</span>}
+        {v.expires_at_unix_ms > 0 ? (
+          formatUnixMs(v.expires_at_unix_ms)
+        ) : (
+          <span className="faint">never</span>
+        )}
       </td>
       <td>
         <div className="row-actions">
@@ -612,7 +626,9 @@ function NewVersionModal({
     try {
       const res = await api.createSecret(
         {
-          path: secret.path,
+          env: secret.env,
+          app: secret.app,
+          key: secret.key,
           value_base64: utf8ToBase64(value),
           content_type: contentType.trim() || "text/plain",
           metadata_json: metadataJson.trim() || "{}",

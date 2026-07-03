@@ -1,7 +1,8 @@
 // Package paramstoretest provides an in-process, scriptable fake of the KMS
 // gRPC services, backed by bufconn. It lets SDK consumers (and the SDK's own
 // tests) exercise Client behaviour end to end without a real server: script
-// parameter/secret values, inject errors, drive the Subscribe stream (snapshots,
+// parameter/secret values by namespace + relative key (or by display path),
+// inject errors, set the WhoAmI identity, drive the Subscribe stream (snapshots,
 // changes, heartbeats), and forcibly drop streams to test reconnect.
 package paramstoretest
 
@@ -9,6 +10,7 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"strings"
 	"sync"
 	"time"
 
@@ -21,8 +23,47 @@ import (
 	"google.golang.org/grpc/test/bufconn"
 )
 
-func notFound(path string) error {
-	return status.Errorf(codes.NotFound, "no such resource: %s", path)
+func notFound(display string) error {
+	return status.Errorf(codes.NotFound, "no such resource: %s", display)
+}
+
+// nsProto parses an "env/app" namespace string into a NamespaceRef.
+func nsProto(namespace string) *kmsv1.NamespaceRef {
+	env, app, _ := strings.Cut(namespace, "/")
+	return &kmsv1.NamespaceRef{Env: env, App: app}
+}
+
+// resourceProto builds a ResourceRef from a namespace + relative key.
+func resourceProto(namespace, key string) *kmsv1.ResourceRef {
+	return &kmsv1.ResourceRef{Namespace: nsProto(namespace), Key: key}
+}
+
+// displayOf renders a ResourceRef as its "/env/app/key" display path, the
+// canonical key used by the fake's internal maps.
+func displayOf(r *kmsv1.ResourceRef) string {
+	return "/" + r.GetNamespace().GetEnv() + "/" + r.GetNamespace().GetApp() + "/" + r.GetKey()
+}
+
+// splitDisplay splits a "/env/app/key..." display path into its namespace and
+// relative key.
+func splitDisplay(p string) (namespace, key string) {
+	parts := strings.SplitN(strings.TrimPrefix(p, "/"), "/", 3)
+	if len(parts) < 3 {
+		return "", strings.TrimPrefix(p, "/")
+	}
+	return parts[0] + "/" + parts[1], parts[2]
+}
+
+// Param builds a *kmsv1.Parameter for pushing on a Subscription snapshot,
+// addressed by namespace + relative key.
+func Param(namespace, key, value string, version uint64) *kmsv1.Parameter {
+	return &kmsv1.Parameter{Ref: resourceProto(namespace, key), Value: value, Version: version}
+}
+
+// ParamPath is Param addressed by "/env/app/key" display path.
+func ParamPath(displayPath, value string, version uint64) *kmsv1.Parameter {
+	ns, key := splitDisplay(displayPath)
+	return Param(ns, key, value, version)
 }
 
 // Server is a fake KMS server. Create one with New and stop it with Close.
@@ -30,20 +71,22 @@ type Server struct {
 	kmsv1.UnimplementedParameterServiceServer
 	kmsv1.UnimplementedSecretServiceServer
 	kmsv1.UnimplementedWatchServiceServer
+	kmsv1.UnimplementedAdminServiceServer
 
 	lis  *bufconn.Listener
 	grpc *grpc.Server
 
 	mu           sync.Mutex
-	params       map[string]*kmsv1.Parameter
-	secrets      map[string][]byte
-	secretMeta   map[string]*kmsv1.GetSecretResponse
+	params       map[string]*kmsv1.Parameter         // display path -> parameter
+	secretMeta   map[string]*kmsv1.GetSecretResponse // display path -> secret
 	revision     uint64
-	paramErr     map[string]error
-	secretErr    map[string]error
+	paramErr     map[string]error       // display path -> error
+	secretErr    map[string]error       // display path -> error
 	lastMetadata map[string]metadata.MD // method -> incoming md
 	putSecrets   []PutSecretCall
-	getParamHook func(path string)
+	getParamHook func(displayPath string)
+	listHook     func(namespace string)
+	identity     *kmsv1.WhoAmIResponse
 
 	subMu     sync.Mutex
 	subs      []*Subscription
@@ -52,7 +95,9 @@ type Server struct {
 
 // PutSecretCall records a PutSecret invocation for assertions.
 type PutSecretCall struct {
-	Path                string
+	Namespace           string
+	Key                 string
+	Path                string // display path
 	Value               []byte
 	ClientBound         bool
 	GenerateAccessToken bool
@@ -63,17 +108,18 @@ func New() (*Server, error) {
 	s := &Server{
 		lis:          bufconn.Listen(1 << 20),
 		params:       make(map[string]*kmsv1.Parameter),
-		secrets:      make(map[string][]byte),
 		secretMeta:   make(map[string]*kmsv1.GetSecretResponse),
 		paramErr:     make(map[string]error),
 		secretErr:    make(map[string]error),
 		lastMetadata: make(map[string]metadata.MD),
+		identity:     &kmsv1.WhoAmIResponse{Name: "test", Kind: "client"},
 		subNotify:    make(chan *Subscription, 16),
 	}
 	s.grpc = grpc.NewServer()
 	kmsv1.RegisterParameterServiceServer(s.grpc, s)
 	kmsv1.RegisterSecretServiceServer(s.grpc, s)
 	kmsv1.RegisterWatchServiceServer(s.grpc, s)
+	kmsv1.RegisterAdminServiceServer(s.grpc, s)
 	go func() { _ = s.grpc.Serve(s.lis) }()
 	return s, nil
 }
@@ -96,67 +142,118 @@ func (s *Server) DialOptions() []grpc.DialOption {
 
 // --- scripting API ---------------------------------------------------------
 
-// SetParameter stores a parameter value and bumps the revision.
-func (s *Server) SetParameter(path, value string) uint64 {
+// SetParameter stores a parameter value addressed by namespace + relative key
+// and bumps the revision.
+func (s *Server) SetParameter(namespace, key, value string) uint64 {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.revision++
-	s.params[path] = &kmsv1.Parameter{
-		Path:    path,
-		Value:   value,
-		Version: s.revision,
-	}
+	ref := resourceProto(namespace, key)
+	s.params[displayOf(ref)] = &kmsv1.Parameter{Ref: ref, Value: value, Version: s.revision}
 	return s.revision
+}
+
+// SetParameterPath is SetParameter addressed by "/env/app/key" display path.
+func (s *Server) SetParameterPath(displayPath, value string) uint64 {
+	ns, key := splitDisplay(displayPath)
+	return s.SetParameter(ns, key, value)
 }
 
 // RemoveParameter removes a parameter and bumps the revision.
-func (s *Server) RemoveParameter(path string) uint64 {
+func (s *Server) RemoveParameter(namespace, key string) uint64 {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.revision++
-	delete(s.params, path)
+	delete(s.params, displayOf(resourceProto(namespace, key)))
 	return s.revision
 }
 
-// SetSecret stores secret plaintext.
-func (s *Server) SetSecret(path string, value []byte) {
+// RemoveParameterPath is RemoveParameter addressed by display path.
+func (s *Server) RemoveParameterPath(displayPath string) uint64 {
+	ns, key := splitDisplay(displayPath)
+	return s.RemoveParameter(ns, key)
+}
+
+// SetSecret stores secret plaintext addressed by namespace + relative key.
+func (s *Server) SetSecret(namespace, key string, value []byte) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.revision++
-	s.secrets[path] = value
-	s.secretMeta[path] = &kmsv1.GetSecretResponse{
-		Path:    path,
+	ref := resourceProto(namespace, key)
+	s.secretMeta[displayOf(ref)] = &kmsv1.GetSecretResponse{
+		Ref:     ref,
 		Version: s.revision,
 		Value:   value,
 	}
 }
 
-// SetParameterError makes GetParameter for path return err.
-func (s *Server) SetParameterError(path string, err error) {
+// SetSecretPath is SetSecret addressed by display path.
+func (s *Server) SetSecretPath(displayPath string, value []byte) {
+	ns, key := splitDisplay(displayPath)
+	s.SetSecret(ns, key, value)
+}
+
+// SetParameterError makes GetParameter for namespace+key return err.
+func (s *Server) SetParameterError(namespace, key string, err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.paramErr[path] = err
+	s.paramErr[displayOf(resourceProto(namespace, key))] = err
+}
+
+// SetParameterErrorPath is SetParameterError addressed by display path.
+func (s *Server) SetParameterErrorPath(displayPath string, err error) {
+	ns, key := splitDisplay(displayPath)
+	s.SetParameterError(ns, key, err)
+}
+
+// SetSecretError makes GetSecret for namespace+key return err.
+func (s *Server) SetSecretError(namespace, key string, err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.secretErr[displayOf(resourceProto(namespace, key))] = err
+}
+
+// SetSecretErrorPath is SetSecretError addressed by display path.
+func (s *Server) SetSecretErrorPath(displayPath string, err error) {
+	ns, key := splitDisplay(displayPath)
+	s.SetSecretError(ns, key, err)
 }
 
 // SetGetParameterHook installs fn to run at the start of every GetParameter,
-// before the value is read, with the requested path. It lets a test inject a
-// concurrent event mid-fetch to exercise reconcile/stream races. Pass nil to
-// clear. The hook runs outside the server lock.
-func (s *Server) SetGetParameterHook(fn func(path string)) {
+// before the value is read, with the requested display path. It lets a test
+// inject a concurrent event mid-fetch to exercise reconcile/stream races. Pass
+// nil to clear. The hook runs outside the server lock.
+func (s *Server) SetGetParameterHook(fn func(displayPath string)) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.getParamHook = fn
 }
 
-// SetSecretError makes GetSecret for path return err.
-func (s *Server) SetSecretError(path string, err error) {
+// SetListParametersHook installs fn to run at the start of every
+// ListParameters, before the values are read, with the requested namespace
+// ("env/app"). It lets a test inject a concurrent event mid-reconcile to
+// exercise the reconcile/stream race. Pass nil to clear. The hook runs outside
+// the server lock.
+func (s *Server) SetListParametersHook(fn func(namespace string)) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.secretErr[path] = err
+	s.listHook = fn
+}
+
+// SetIdentity sets the identity returned by WhoAmI. namespace is "env/app", or
+// "" for an unbound identity. It lets a test drive namespace discovery.
+func (s *Server) SetIdentity(name, kind, namespace, authMethod string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	resp := &kmsv1.WhoAmIResponse{Name: name, Kind: kind, AuthMethod: authMethod}
+	if namespace != "" {
+		resp.Namespace = nsProto(namespace)
+	}
+	s.identity = resp
 }
 
 // LastMetadata returns the incoming gRPC metadata seen by the most recent call
-// to the named method (e.g. "GetSecret", "GetParameter", "Subscribe").
+// to the named method (e.g. "GetSecret", "GetParameter", "Subscribe", "WhoAmI").
 func (s *Server) LastMetadata(method string) metadata.MD {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -190,39 +287,52 @@ func (s *Server) recordMD(ctx context.Context, method string) {
 
 func (s *Server) GetParameter(ctx context.Context, req *kmsv1.GetParameterRequest) (*kmsv1.GetParameterResponse, error) {
 	s.recordMD(ctx, "GetParameter")
+	display := displayOf(req.GetRef())
 	s.mu.Lock()
 	hook := s.getParamHook
 	s.mu.Unlock()
 	if hook != nil {
-		hook(req.GetPath())
+		hook(display)
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if err := s.paramErr[req.GetPath()]; err != nil {
+	if err := s.paramErr[display]; err != nil {
 		return nil, err
 	}
-	p, ok := s.params[req.GetPath()]
+	p, ok := s.params[display]
 	if !ok {
-		return nil, notFound(req.GetPath())
+		return nil, notFound(display)
 	}
 	return &kmsv1.GetParameterResponse{Parameter: p}, nil
 }
 
 func (s *Server) PutParameter(ctx context.Context, req *kmsv1.PutParameterRequest) (*kmsv1.PutParameterResponse, error) {
 	s.recordMD(ctx, "PutParameter")
-	rev := s.SetParameter(req.GetPath(), req.GetValue())
+	rev := s.SetParameterPath(displayOf(req.GetRef()), req.GetValue())
 	return &kmsv1.PutParameterResponse{Version: rev, Revision: rev}, nil
 }
 
 func (s *Server) ListParameters(ctx context.Context, req *kmsv1.ListParametersRequest) (*kmsv1.ListParametersResponse, error) {
 	s.recordMD(ctx, "ListParameters")
 	s.mu.Lock()
+	hook := s.listHook
+	s.mu.Unlock()
+	if hook != nil {
+		ns := req.GetNamespace().GetEnv() + "/" + req.GetNamespace().GetApp()
+		hook(ns)
+	}
+	s.mu.Lock()
 	defer s.mu.Unlock()
 	var out []*kmsv1.Parameter
-	for path, p := range s.params {
-		if req.GetPathPrefix() == "" || hasPrefix(path, req.GetPathPrefix()) {
-			out = append(out, p)
+	for _, p := range s.params {
+		if p.GetRef().GetNamespace().GetEnv() != req.GetNamespace().GetEnv() ||
+			p.GetRef().GetNamespace().GetApp() != req.GetNamespace().GetApp() {
+			continue
 		}
+		if !strings.HasPrefix(p.GetRef().GetKey(), req.GetKeyPrefix()) {
+			continue
+		}
+		out = append(out, p)
 	}
 	return &kmsv1.ListParametersResponse{Parameters: out}, nil
 }
@@ -231,24 +341,29 @@ func (s *Server) ListParameters(ctx context.Context, req *kmsv1.ListParametersRe
 
 func (s *Server) GetSecret(ctx context.Context, req *kmsv1.GetSecretRequest) (*kmsv1.GetSecretResponse, error) {
 	s.recordMD(ctx, "GetSecret")
+	display := displayOf(req.GetRef())
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if err := s.secretErr[req.GetPath()]; err != nil {
+	if err := s.secretErr[display]; err != nil {
 		return nil, err
 	}
-	meta, ok := s.secretMeta[req.GetPath()]
+	meta, ok := s.secretMeta[display]
 	if !ok {
-		return nil, notFound(req.GetPath())
+		return nil, notFound(display)
 	}
 	return meta, nil
 }
 
 func (s *Server) PutSecret(ctx context.Context, req *kmsv1.PutSecretRequest) (*kmsv1.PutSecretResponse, error) {
 	s.recordMD(ctx, "PutSecret")
-	s.SetSecret(req.GetPath(), req.GetValue())
+	display := displayOf(req.GetRef())
+	s.SetSecretPath(display, req.GetValue())
+	ns, key := splitDisplay(display)
 	s.mu.Lock()
 	s.putSecrets = append(s.putSecrets, PutSecretCall{
-		Path:                req.GetPath(),
+		Namespace:           ns,
+		Key:                 key,
+		Path:                display,
 		Value:               req.GetValue(),
 		ClientBound:         req.GetClientBound(),
 		GenerateAccessToken: req.GetGenerateAccessToken(),
@@ -257,9 +372,18 @@ func (s *Server) PutSecret(ctx context.Context, req *kmsv1.PutSecretRequest) (*k
 	s.mu.Unlock()
 	resp := &kmsv1.PutSecretResponse{Version: rev, Revision: rev}
 	if req.GetGenerateAccessToken() {
-		resp.AccessToken = "minted-token-for-" + req.GetPath()
+		resp.AccessToken = "minted-token-for-" + display
 	}
 	return resp, nil
+}
+
+// --- AdminService ----------------------------------------------------------
+
+func (s *Server) WhoAmI(ctx context.Context, _ *kmsv1.WhoAmIRequest) (*kmsv1.WhoAmIResponse, error) {
+	s.recordMD(ctx, "WhoAmI")
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.identity, nil
 }
 
 // --- WatchService ----------------------------------------------------------
@@ -276,7 +400,7 @@ func (s *Server) Subscribe(stream kmsv1.WatchService_SubscribeServer) error {
 	md, _ := metadata.FromIncomingContext(stream.Context())
 	sub := &Subscription{
 		ClientName:       first.GetClientName(),
-		Paths:            first.GetPaths(),
+		Namespaces:       first.GetNamespaces(),
 		LastSeenRevision: first.GetLastSeenRevision(),
 		Metadata:         md,
 		send:             make(chan *kmsv1.SubscribeEvent, 64),
@@ -357,7 +481,7 @@ func (s *Server) WaitForSubscribe(timeout time.Duration) (*Subscription, error) 
 // Subscription is a handle to one open Subscribe stream that a test can drive.
 type Subscription struct {
 	ClientName       string
-	Paths            []string
+	Namespaces       []*kmsv1.NamespaceRef
 	LastSeenRevision uint64
 	Metadata         metadata.MD
 
@@ -368,7 +492,29 @@ type Subscription struct {
 	closed   sync.Once
 }
 
-// PushSnapshot sends a snapshot event carrying the given parameters.
+// HasNamespace reports whether the subscription requested the given namespace
+// ("env/app").
+func (sub *Subscription) HasNamespace(namespace string) bool {
+	for _, ns := range sub.Namespaces {
+		if ns.GetEnv()+"/"+ns.GetApp() == namespace {
+			return true
+		}
+	}
+	return false
+}
+
+// NamespaceStrings renders the requested namespaces as "env/app" for convenient
+// assertions.
+func (sub *Subscription) NamespaceStrings() []string {
+	out := make([]string, 0, len(sub.Namespaces))
+	for _, ns := range sub.Namespaces {
+		out = append(out, ns.GetEnv()+"/"+ns.GetApp())
+	}
+	return out
+}
+
+// PushSnapshot sends a snapshot event carrying the given parameters. Build
+// parameters with Param / ParamPath.
 func (sub *Subscription) PushSnapshot(revision uint64, params ...*kmsv1.Parameter) {
 	sub.send <- &kmsv1.SubscribeEvent{
 		Event:    &kmsv1.SubscribeEvent_Snapshot{Snapshot: &kmsv1.Snapshot{Parameters: params}},
@@ -376,11 +522,11 @@ func (sub *Subscription) PushSnapshot(revision uint64, params ...*kmsv1.Paramete
 	}
 }
 
-// PushChange sends a parameter change event.
-func (sub *Subscription) PushChange(revision uint64, path, changeType, value string, version uint64) {
+// PushChange sends a parameter change event addressed by namespace + relative key.
+func (sub *Subscription) PushChange(revision uint64, namespace, key, changeType, value string, version uint64) {
 	sub.send <- &kmsv1.SubscribeEvent{
 		Event: &kmsv1.SubscribeEvent_Change{Change: &kmsv1.ParameterChange{
-			Path:       path,
+			Ref:        resourceProto(namespace, key),
 			ChangeType: changeType,
 			Value:      value,
 			Version:    version,
@@ -389,16 +535,29 @@ func (sub *Subscription) PushChange(revision uint64, path, changeType, value str
 	}
 }
 
-// PushSecretChange sends a secret metadata change event.
-func (sub *Subscription) PushSecretChange(revision uint64, path, changeType string, version uint64) {
+// PushChangePath is PushChange addressed by "/env/app/key" display path.
+func (sub *Subscription) PushChangePath(revision uint64, displayPath, changeType, value string, version uint64) {
+	ns, key := splitDisplay(displayPath)
+	sub.PushChange(revision, ns, key, changeType, value, version)
+}
+
+// PushSecretChange sends a secret metadata change event addressed by namespace
+// + relative key.
+func (sub *Subscription) PushSecretChange(revision uint64, namespace, key, changeType string, version uint64) {
 	sub.send <- &kmsv1.SubscribeEvent{
 		Event: &kmsv1.SubscribeEvent_SecretChange{SecretChange: &kmsv1.SecretMetadataChange{
-			Path:       path,
+			Ref:        resourceProto(namespace, key),
 			ChangeType: changeType,
 			Version:    version,
 		}},
 		Revision: revision,
 	}
+}
+
+// PushSecretChangePath is PushSecretChange addressed by display path.
+func (sub *Subscription) PushSecretChangePath(revision uint64, displayPath, changeType string, version uint64) {
+	ns, key := splitDisplay(displayPath)
+	sub.PushSecretChange(revision, ns, key, changeType, version)
 }
 
 // SendHeartbeat sends a heartbeat event carrying the current revision.
@@ -424,10 +583,4 @@ func (sub *Subscription) WaitAck(timeout time.Duration) (uint64, error) {
 // connection, exercising client reconnect/resume.
 func (sub *Subscription) Kill() {
 	sub.closed.Do(func() { close(sub.closeCh) })
-}
-
-// Helpers ------------------------------------------------------------------
-
-func hasPrefix(s, prefix string) bool {
-	return len(s) >= len(prefix) && s[:len(prefix)] == prefix
 }

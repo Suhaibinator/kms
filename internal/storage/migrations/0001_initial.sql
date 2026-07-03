@@ -1,6 +1,14 @@
--- 0001_initial.sql — full v1 schema.
+-- 0001_initial.sql — full v1 schema (namespace-native), DESCRIPTIVE ONLY.
+-- The running schema is created by GORM AutoMigrate over the models in
+-- models.go (plus the raw change_log DDL in store.go); this file documents
+-- that schema and is not executed. Keep it in sync when models change.
 -- Times are stored as RFC3339Nano UTC strings. All secret material in this
 -- schema is ciphertext or hashes; plaintext secrets and raw keys never land here.
+--
+-- A namespace is a first-class (env, app) pair: parameters and secrets belong
+-- to one by foreign key, keyed by a relative name (which may itself contain
+-- '/'). Audit and change-log rows denormalize env/app/key as text (no FK) so
+-- history stays readable after a namespace is deleted.
 
 CREATE TABLE key_metadata (
     id         TEXT PRIMARY KEY,           -- e.g. "kek-a1b2c3"
@@ -13,20 +21,25 @@ CREATE TABLE key_metadata (
 );
 
 CREATE TABLE namespaces (
-    id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    path        TEXT NOT NULL UNIQUE,
-    description TEXT NOT NULL DEFAULT '',
-    created_by  TEXT NOT NULL DEFAULT '',
-    created_at  TEXT NOT NULL
+    id                   INTEGER PRIMARY KEY AUTOINCREMENT,
+    env                  TEXT NOT NULL,
+    app                  TEXT NOT NULL,
+    description          TEXT NOT NULL DEFAULT '',
+    allowed_auth_methods TEXT NOT NULL DEFAULT '["mtls"]', -- JSON array: "mtls" | "token"
+    created_by           TEXT NOT NULL DEFAULT '',
+    created_at           TEXT NOT NULL,
+    UNIQUE (env, app)
 );
 
 CREATE TABLE parameters (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
-    path            TEXT NOT NULL UNIQUE,
+    namespace_id    INTEGER NOT NULL REFERENCES namespaces(id),
+    name            TEXT NOT NULL,          -- relative key, e.g. 'rate-limit'
     content_type    TEXT NOT NULL DEFAULT 'string',
     metadata_json   TEXT NOT NULL DEFAULT '{}',
     created_at      TEXT NOT NULL,
-    updated_at      TEXT NOT NULL
+    updated_at      TEXT NOT NULL,
+    UNIQUE (namespace_id, name)
 );
 
 CREATE TABLE parameter_versions (
@@ -51,13 +64,15 @@ CREATE TABLE parameter_labels (
 
 CREATE TABLE secrets (
     id                INTEGER PRIMARY KEY AUTOINCREMENT,
-    path              TEXT NOT NULL UNIQUE,
+    namespace_id      INTEGER NOT NULL REFERENCES namespaces(id),
+    name              TEXT NOT NULL,
     client_bound      INTEGER NOT NULL DEFAULT 0,
     access_token_hash BLOB,                -- sha256(token); NULL when no per-secret token
     content_type      TEXT NOT NULL DEFAULT 'application/octet-stream',
     metadata_json     TEXT NOT NULL DEFAULT '{}',
     created_at        TEXT NOT NULL,
-    updated_at        TEXT NOT NULL
+    updated_at        TEXT NOT NULL,
+    UNIQUE (namespace_id, name)
 );
 
 CREATE TABLE secret_versions (
@@ -92,7 +107,8 @@ CREATE TABLE identities (
     id            INTEGER PRIMARY KEY AUTOINCREMENT,
     name          TEXT NOT NULL UNIQUE,
     kind          TEXT NOT NULL,           -- 'client' | 'admin'
-    token_hash    BLOB NOT NULL,           -- sha256(token)
+    token_hash    BLOB,                    -- sha256(token); NULL for cert-only identities
+    namespace_id  INTEGER REFERENCES namespaces(id), -- NULL = unbound (admin/tooling)
     disabled      INTEGER NOT NULL DEFAULT 0,
     created_at    TEXT NOT NULL,
     metadata_json TEXT NOT NULL DEFAULT '{}'
@@ -100,11 +116,35 @@ CREATE TABLE identities (
 
 CREATE INDEX idx_identities_token_hash ON identities(token_hash);
 
+-- Built-in CA. Private key material is encrypted under the active KEK exactly
+-- like a secret version; the public cert is served at GET /api/v1/ca.
+CREATE TABLE ca_keys (
+    id            TEXT PRIMARY KEY,        -- e.g. "ca-7f3a"
+    cert_pem      TEXT NOT NULL,
+    encrypted_key BLOB NOT NULL,
+    encrypted_dek BLOB NOT NULL,
+    kek_id        TEXT NOT NULL,           -- id of the wrapping KEK (no FK at runtime)
+    state         TEXT NOT NULL DEFAULT 'active', -- 'active' | 'retired'
+    created_at    TEXT NOT NULL
+);
+
+-- Issued client certificates (never private keys — those are returned once).
+CREATE TABLE identity_certs (
+    serial      TEXT PRIMARY KEY,
+    identity_id INTEGER NOT NULL REFERENCES identities(id) ON DELETE CASCADE,
+    fingerprint TEXT NOT NULL,             -- sha256 of DER, for display/pinning
+    not_after   TEXT NOT NULL,
+    revoked_at  TEXT,                       -- NULL = valid
+    created_at  TEXT NOT NULL
+);
+
+CREATE INDEX idx_identity_certs_identity ON identity_certs(identity_id);
+
 CREATE TABLE policies (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
     name       TEXT NOT NULL UNIQUE,
     subject    TEXT NOT NULL,              -- identity name or '*'
-    rules_json TEXT NOT NULL,              -- {"allow":[{"operation","path"}],"deny":[...]}
+    rules_json TEXT NOT NULL,              -- {"allow":[{"operation","env","app","key"}],"deny":[...]}
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
@@ -117,7 +157,9 @@ CREATE TABLE audit_events (
     actor_identity   TEXT NOT NULL DEFAULT '',
     actor_type       TEXT NOT NULL DEFAULT '',
     resource_type    TEXT NOT NULL DEFAULT '',
-    resource_path    TEXT NOT NULL DEFAULT '',
+    resource_env     TEXT NOT NULL DEFAULT '',
+    resource_app     TEXT NOT NULL DEFAULT '',
+    resource_key     TEXT NOT NULL DEFAULT '',
     resource_version INTEGER NOT NULL DEFAULT 0,
     decision         TEXT NOT NULL DEFAULT '',
     source_ip        TEXT NOT NULL DEFAULT '',
@@ -128,7 +170,7 @@ CREATE TABLE audit_events (
 );
 
 CREATE INDEX idx_audit_created ON audit_events(created_at);
-CREATE INDEX idx_audit_path ON audit_events(resource_path);
+CREATE INDEX idx_audit_ns ON audit_events(resource_env, resource_app);
 CREATE INDEX idx_audit_actor ON audit_events(actor_identity);
 
 -- change_log is the watch replay journal. AUTOINCREMENT guarantees revisions
@@ -136,7 +178,9 @@ CREATE INDEX idx_audit_actor ON audit_events(actor_identity);
 CREATE TABLE change_log (
     revision      INTEGER PRIMARY KEY AUTOINCREMENT,
     resource_type TEXT NOT NULL,           -- 'parameter' | 'secret'
-    path          TEXT NOT NULL,
+    env           TEXT NOT NULL,
+    app           TEXT NOT NULL,
+    key           TEXT NOT NULL,
     change_type   TEXT NOT NULL,           -- put|delete|label|promote|disable|enable|destroy
     value         TEXT,                    -- new value for parameter puts; NULL for secrets
     content_type  TEXT NOT NULL DEFAULT '',
@@ -145,4 +189,4 @@ CREATE TABLE change_log (
     created_at    TEXT NOT NULL
 );
 
-CREATE INDEX idx_change_log_path ON change_log(path);
+CREATE INDEX idx_change_log_ns ON change_log(env, app);

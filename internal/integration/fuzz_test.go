@@ -10,37 +10,37 @@ import (
 	"github.com/Suhaibinator/kms/internal/policy"
 )
 
-// FuzzValidateRules feeds arbitrary operation/path pairs through the policy
-// validator (which transitively exercises the path/prefix parser) and then
-// through evaluation. It must never panic; it must only ever return a normalized
-// policy or an ErrInvalidArgument, and a normalized policy must re-validate
-// unchanged. Run with:
+// FuzzValidateRules feeds arbitrary operation/env/app/key tuples through the
+// policy validator (which exercises the namespace and key-pattern validators)
+// and then through evaluation. It must never panic; it must only ever return a
+// normalized policy or an ErrInvalidArgument, and a normalized policy must
+// re-validate unchanged. Run with:
 //
 //	go test ./internal/integration -run x -fuzz FuzzValidateRules
 //
 // Under `go test` (no -fuzz) the seed corpus runs as an ordinary test. (§25.4.2)
 func FuzzValidateRules(f *testing.F) {
-	seeds := []struct{ op, path string }{
-		{"secret:read", "/prod/app/*"},
-		{"parameter:*", "/prod"},
-		{"*", "/*"},
-		{"admin:key:rotate", "/prod/a/b/c"},
-		{"", ""},
-		{"bogus:op", "not-a-path"},
-		{"secret:read", "/../../etc/passwd"},
-		{"secret:read", "//double//slash"},
-		{"parameter:read", "/a/b/*/c"},
-		{"secret:*", "/x/*"},
+	seeds := []struct{ op, env, app, key string }{
+		{"secret:read", "prod", "app", "*"},
+		{"parameter:*", "prod", "*", ""},
+		{"*", "*", "*", "*"},
+		{"admin:key:rotate", "prod", "a", "b/c"},
+		{"", "", "", ""},
+		{"bogus:op", "not a namespace", "app", "key"},
+		{"secret:read", "prod", "app", "../../etc/passwd"},
+		{"secret:read", "prod", "app", "double//slash"},
+		{"parameter:read", "prod", "app", "a/b/*/c"},
+		{"secret:*", "prod", "x", "*"},
 	}
 	for _, s := range seeds {
-		f.Add(s.op, s.path)
+		f.Add(s.op, s.env, s.app, s.key)
 	}
 
-	f.Fuzz(func(t *testing.T, op, path string) {
+	f.Fuzz(func(t *testing.T, op, env, app, key string) {
 		p := domain.Policy{
 			Name:    "fuzz",
 			Subject: "*",
-			Allow:   []domain.PolicyRule{{Operation: op, Path: path}},
+			Allow:   []domain.PolicyRule{{Operation: op, Env: env, App: app}},
 		}
 		normalized, err := policy.ValidateRules(p)
 		if err != nil {
@@ -58,10 +58,11 @@ func FuzzValidateRules(f *testing.F) {
 			(len(normalized.Allow) == 1 && reNormalized.Allow[0] != normalized.Allow[0]) {
 			t.Fatalf("re-validation changed the policy: %+v -> %+v", normalized.Allow, reNormalized.Allow)
 		}
-		// A normalized policy must be safe to evaluate against arbitrary paths.
-		_ = policy.Evaluate([]domain.Policy{normalized}, op, "/prod/app/thing")
-		_ = policy.Evaluate([]domain.Policy{normalized}, "secret:read", path)
-		_ = policy.MayListUnder([]domain.Policy{normalized}, op, "/prod")
+		// A normalized policy must be safe to evaluate against arbitrary namespaces.
+		ns := domain.NamespaceRef{Env: "prod", App: "app"}
+		_ = policy.Authorize([]domain.Policy{normalized}, nil, op, ns)
+		_ = policy.Authorize([]domain.Policy{normalized}, nil, "secret:read", ns)
+		_ = policy.MayListUnder([]domain.Policy{normalized}, op, ns)
 	})
 }
 
@@ -71,6 +72,7 @@ func FuzzValidateRules(f *testing.F) {
 // ErrInvalidArgument. (§25.4.3)
 func FuzzMetadataJSON(f *testing.F) {
 	h := newHarness(f)
+	ref := h.ensureNS("/fuzz/app/meta")
 	var mu sync.Mutex // serialize the shared store across parallel fuzz workers
 	ctx := context.Background()
 
@@ -84,7 +86,7 @@ func FuzzMetadataJSON(f *testing.F) {
 	f.Fuzz(func(t *testing.T, metadata string) {
 		mu.Lock()
 		defer mu.Unlock()
-		_, _, err := h.svc.PutParameter(ctx, h.admin, "/fuzz/metadata", "value", "string", metadata)
+		_, _, err := h.svc.PutParameter(ctx, h.admin, ref, "value", "string", metadata)
 		if err != nil && !errors.Is(err, domain.ErrInvalidArgument) {
 			t.Fatalf("PutParameter with metadata %q returned unexpected error: %v", metadata, err)
 		}

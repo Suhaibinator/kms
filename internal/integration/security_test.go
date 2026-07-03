@@ -20,10 +20,11 @@ func TestNoPlaintextOrTokensAtRest(t *testing.T) {
 	ctx := context.Background()
 	const path = "/prod/app/at-rest"
 	const plaintext = "AT-REST-PLAINTEXT-CANARY-4d9e21"
+	ref := h.ensureNS(path)
 
 	// A per-secret access token is minted; an identity token is minted too.
 	res, err := h.svc.PutSecret(ctx, h.admin, core.PutSecretInput{
-		Path: path, Value: []byte(plaintext), GenerateToken: true,
+		Ref: ref, Value: []byte(plaintext), GenerateToken: true,
 	})
 	if err != nil {
 		t.Fatalf("PutSecret: %v", err)
@@ -32,19 +33,23 @@ func TestNoPlaintextOrTokensAtRest(t *testing.T) {
 	if accessToken == "" {
 		t.Fatal("expected an access token")
 	}
-	_, idToken, err := h.svc.CreateIdentity(ctx, h.admin, "diskscan", domain.IdentityKindClient)
+	idRes, err := h.svc.CreateIdentity(ctx, h.admin, core.CreateIdentityInput{
+		Name: "diskscan", Kind: domain.IdentityKindClient,
+		AuthMethods: []domain.AuthMethod{domain.AuthMethodToken},
+	})
 	if err != nil {
 		t.Fatalf("CreateIdentity: %v", err)
 	}
+	idToken := idRes.Token
 
 	// Read the secret so a decryption path also runs before we inspect logs.
 	tokenPr := h.admin
 	tokenPr.SecretToken = accessToken
-	if _, err := h.svc.GetSecret(ctx, tokenPr, path, 0, ""); err != nil {
+	if _, err := h.svc.GetSecret(ctx, tokenPr, ref, 0, ""); err != nil {
 		t.Fatalf("GetSecret: %v", err)
 	}
 
-	_, ver, err := h.store.GetSecretVersion(ctx, path, 0, "")
+	_, ver, err := h.store.GetSecretVersion(ctx, ref, 0, "")
 	if err != nil {
 		t.Fatalf("GetSecretVersion: %v", err)
 	}
@@ -88,25 +93,26 @@ func TestDisabledSecretUnreadable(t *testing.T) {
 	h := newHarness(t)
 	ctx := context.Background()
 	const path = "/prod/app/disable-me"
+	ref := h.ensureNS(path)
 
-	if _, err := h.svc.PutSecret(ctx, h.admin, putSecret(path, "disabled-value")); err != nil {
+	if _, err := h.svc.PutSecret(ctx, h.admin, h.stdSecret(path, "disabled-value")); err != nil {
 		t.Fatalf("PutSecret: %v", err)
 	}
-	if _, err := h.svc.DisableSecret(ctx, h.admin, path, 1, false); err != nil {
+	if _, err := h.svc.DisableSecret(ctx, h.admin, ref, 1, false); err != nil {
 		t.Fatalf("DisableSecret: %v", err)
 	}
-	if _, err := h.svc.GetSecret(ctx, h.admin, path, 1, ""); !errors.Is(err, domain.ErrFailedPrecondition) {
+	if _, err := h.svc.GetSecret(ctx, h.admin, ref, 1, ""); !errors.Is(err, domain.ErrFailedPrecondition) {
 		t.Errorf("read disabled version err = %v, want ErrFailedPrecondition", err)
 	}
-	if _, err := h.svc.GetSecret(ctx, h.admin, path, 0, ""); !errors.Is(err, domain.ErrFailedPrecondition) {
+	if _, err := h.svc.GetSecret(ctx, h.admin, ref, 0, ""); !errors.Is(err, domain.ErrFailedPrecondition) {
 		t.Errorf("read disabled current err = %v, want ErrFailedPrecondition", err)
 	}
 
 	// Re-enabling restores readability.
-	if _, err := h.svc.DisableSecret(ctx, h.admin, path, 1, true); err != nil {
+	if _, err := h.svc.DisableSecret(ctx, h.admin, ref, 1, true); err != nil {
 		t.Fatalf("re-enable: %v", err)
 	}
-	if got, err := h.svc.GetSecret(ctx, h.admin, path, 1, ""); err != nil || string(got.Value) != "disabled-value" {
+	if got, err := h.svc.GetSecret(ctx, h.admin, ref, 1, ""); err != nil || string(got.Value) != "disabled-value" {
 		t.Errorf("re-enabled read = %q err=%v, want disabled-value", got.Value, err)
 	}
 }
@@ -117,23 +123,24 @@ func TestDestroyedVersionUndecryptable(t *testing.T) {
 	h := newHarness(t)
 	ctx := context.Background()
 	const path = "/prod/app/destroy-me"
+	ref := h.ensureNS(path)
 
-	if _, err := h.svc.PutSecret(ctx, h.admin, putSecret(path, "v1-destroyme")); err != nil {
+	if _, err := h.svc.PutSecret(ctx, h.admin, h.stdSecret(path, "v1-destroyme")); err != nil {
 		t.Fatalf("PutSecret v1: %v", err)
 	}
-	if _, err := h.svc.PutSecret(ctx, h.admin, putSecret(path, "v2-live")); err != nil {
+	if _, err := h.svc.PutSecret(ctx, h.admin, h.stdSecret(path, "v2-live")); err != nil {
 		t.Fatalf("PutSecret v2: %v", err)
 	}
-	if _, err := h.svc.DestroySecretVersion(ctx, h.admin, path, 1); err != nil {
+	if _, err := h.svc.DestroySecretVersion(ctx, h.admin, ref, 1); err != nil {
 		t.Fatalf("DestroySecretVersion: %v", err)
 	}
 
-	if _, err := h.svc.GetSecret(ctx, h.admin, path, 1, ""); !errors.Is(err, domain.ErrFailedPrecondition) {
+	if _, err := h.svc.GetSecret(ctx, h.admin, ref, 1, ""); !errors.Is(err, domain.ErrFailedPrecondition) {
 		t.Errorf("read destroyed version err = %v, want ErrFailedPrecondition", err)
 	}
 
 	// The ciphertext bytes are nulled at rest.
-	_, ver, err := h.store.GetSecretVersion(ctx, path, 1, "")
+	_, ver, err := h.store.GetSecretVersion(ctx, ref, 1, "")
 	if err != nil {
 		t.Fatalf("GetSecretVersion: %v", err)
 	}
@@ -146,7 +153,7 @@ func TestDestroyedVersionUndecryptable(t *testing.T) {
 	}
 
 	// The still-live version is unaffected.
-	if got, err := h.svc.GetSecret(ctx, h.admin, path, 2, ""); err != nil || string(got.Value) != "v2-live" {
+	if got, err := h.svc.GetSecret(ctx, h.admin, ref, 2, ""); err != nil || string(got.Value) != "v2-live" {
 		t.Errorf("live version = %q err=%v, want v2-live", got.Value, err)
 	}
 }
@@ -156,43 +163,45 @@ func TestCiphertextTamperingFails(t *testing.T) {
 	h := newHarness(t)
 	ctx := context.Background()
 	const path = "/prod/app/tamper-ct"
+	ref := h.ensureNS(path)
 
-	if _, err := h.svc.PutSecret(ctx, h.admin, putSecret(path, "tamper-target")); err != nil {
+	if _, err := h.svc.PutSecret(ctx, h.admin, h.stdSecret(path, "tamper-target")); err != nil {
 		t.Fatalf("PutSecret: %v", err)
 	}
 	h.reopen(func(db *sql.DB) {
-		flipColumnByte(t, db, path, 1, "ciphertext")
+		flipColumnByte(t, db, ref, 1, "ciphertext")
 	})
-	if _, err := h.svc.GetSecret(ctx, h.admin, path, 1, ""); !errors.Is(err, domain.ErrDecryptFailed) {
+	if _, err := h.svc.GetSecret(ctx, h.admin, ref, 1, ""); !errors.Is(err, domain.ErrDecryptFailed) {
 		t.Errorf("read tampered ciphertext err = %v, want ErrDecryptFailed", err)
 	}
 }
 
 // §25.3.8 — an associated-data mismatch causes a decryption failure. Corrupting
-// the stored AAD (which binds resource/path/version) breaks authentication.
+// the stored AAD (which binds env/app/key/version) breaks authentication.
 // The AAD used for decryption is derived from the row's authoritative identity
-// (resource type, path, version), not read from the stored aad column. So the
-// stored column is advisory: corrupting it alone must NOT affect a legitimate
-// read (the value still decrypts), because the column is never a tamperable
-// decryption input. The real binding — that a version's ciphertext cannot be
-// decrypted under a different secret's identity — is exercised by
-// TestAADCrossWireFails.
+// (env, app, key, version), not read from the stored aad column. So the stored
+// column is advisory: corrupting it alone must NOT affect a legitimate read (the
+// value still decrypts), because the column is never a tamperable decryption
+// input. The real binding — that a version's ciphertext cannot be decrypted
+// under a different secret's identity — is exercised by TestAADCrossWireFails.
 func TestStoredAADColumnIsAdvisory(t *testing.T) {
 	h := newHarness(t)
 	ctx := context.Background()
 	const path = "/prod/app/tamper-aad"
+	ref := h.ensureNS(path)
 
-	if _, err := h.svc.PutSecret(ctx, h.admin, putSecret(path, "aad-target")); err != nil {
+	if _, err := h.svc.PutSecret(ctx, h.admin, h.stdSecret(path, "aad-target")); err != nil {
 		t.Fatalf("PutSecret: %v", err)
 	}
 	h.reopen(func(db *sql.DB) {
 		if _, err := db.Exec(
 			`UPDATE secret_versions SET aad = aad || 'x'
-			 WHERE version_number = 1 AND secret_id = (SELECT id FROM secrets WHERE path = ?)`, path); err != nil {
+			 WHERE version_number = 1 AND secret_id = `+secretIDSubquery,
+			ref.NS.Env, ref.NS.App, ref.Key); err != nil {
 			t.Fatalf("corrupt aad: %v", err)
 		}
 	})
-	got, err := h.svc.GetSecret(ctx, h.admin, path, 1, "")
+	got, err := h.svc.GetSecret(ctx, h.admin, ref, 1, "")
 	if err != nil {
 		t.Fatalf("read after corrupting advisory aad column: %v (AAD must derive from identity, not the column)", err)
 	}
@@ -201,15 +210,23 @@ func TestStoredAADColumnIsAdvisory(t *testing.T) {
 	}
 }
 
+// secretIDSubquery resolves a secret's id from (env, app, key) bind parameters —
+// secrets are keyed by namespace_id + name, not a flat path.
+const secretIDSubquery = `(SELECT s.id FROM secrets s
+	JOIN namespaces n ON n.id = s.namespace_id
+	WHERE n.env = ? AND n.app = ? AND s.name = ?)`
+
 // flipColumnByte inverts the first byte of a blob column on a secret version.
-func flipColumnByte(t *testing.T, db *sql.DB, path string, version int, column string) {
+func flipColumnByte(t *testing.T, db *sql.DB, ref domain.Ref, version int, column string) {
 	t.Helper()
 	var id int64
 	var blob []byte
 	row := db.QueryRow(
 		`SELECT sv.id, sv.`+column+` FROM secret_versions sv
 		 JOIN secrets s ON s.id = sv.secret_id
-		 WHERE s.path = ? AND sv.version_number = ?`, path, version)
+		 JOIN namespaces n ON n.id = s.namespace_id
+		 WHERE n.env = ? AND n.app = ? AND s.name = ? AND sv.version_number = ?`,
+		ref.NS.Env, ref.NS.App, ref.Key, version)
 	if err := row.Scan(&id, &blob); err != nil {
 		t.Fatalf("read %s: %v", column, err)
 	}
