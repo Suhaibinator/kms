@@ -19,7 +19,7 @@ function emptyDraft(): Draft {
 }
 
 function newRule(): PolicyRule {
-  return { operation: "secret:read", path: "" };
+  return { operation: "secret:read", env: "*", app: "*", key: "*" };
 }
 
 export default function PoliciesPage() {
@@ -89,10 +89,16 @@ export default function PoliciesPage() {
       toast.error(new Error("A subject is required."), "Missing subject");
       return;
     }
+    // Drop incomplete rules; env/app/key are all required (use "*" for any).
     const clean = (rules: PolicyRule[]) =>
       rules
-        .filter((r) => r.path.trim() !== "")
-        .map((r) => ({ operation: r.operation, path: r.path.trim() }));
+        .filter((r) => r.env.trim() !== "" && r.app.trim() !== "" && r.key.trim() !== "")
+        .map((r) => ({
+          operation: r.operation,
+          env: r.env.trim(),
+          app: r.app.trim(),
+          key: r.key.trim(),
+        }));
 
     const policy: Policy = {
       name: draft.name.trim(),
@@ -141,7 +147,7 @@ export default function PoliciesPage() {
     <>
       <PageHeader
         title="Policies"
-        subtitle="Allow / deny rules that authorize identities for operations on paths."
+        subtitle="Allow / deny rules that authorize identities for operations on a namespace and key."
         actions={
           <button className="btn btn-primary" onClick={openCreate}>
             New policy
@@ -243,7 +249,9 @@ export default function PoliciesPage() {
             </div>
 
             <div className="info-panel mb-16">
-              Deny rules always override allow rules, regardless of order.
+              Deny rules always override allow rules. Use <span className="mono">*</span> for env,
+              app, or key to match any; keys also accept a{" "}
+              <span className="mono">prefix/*</span> form.
             </div>
 
             <RuleEditor
@@ -314,7 +322,7 @@ function RuleEditor({
       ) : (
         <div className="stack">
           {rules.map((rule, i) => (
-            <div key={i} className="rule-row">
+            <div key={i} className="rule-row" style={{ flexWrap: "wrap" }}>
               <div className="rule-op">
                 <label className="field-label">Operation</label>
                 <select
@@ -329,13 +337,31 @@ function RuleEditor({
                   ))}
                 </select>
               </div>
-              <div className="rule-path">
-                <label className="field-label">Path pattern</label>
+              <div style={{ width: 110 }}>
+                <label className="field-label">Env</label>
                 <input
                   className="input mono"
-                  value={rule.path}
-                  onChange={(e) => update(i, { path: e.target.value })}
-                  placeholder="/prod/payments/*"
+                  value={rule.env}
+                  onChange={(e) => update(i, { env: e.target.value })}
+                  placeholder="prod"
+                />
+              </div>
+              <div style={{ width: 130 }}>
+                <label className="field-label">App</label>
+                <input
+                  className="input mono"
+                  value={rule.app}
+                  onChange={(e) => update(i, { app: e.target.value })}
+                  placeholder="gradethis"
+                />
+              </div>
+              <div className="rule-path">
+                <label className="field-label">Key</label>
+                <input
+                  className="input mono"
+                  value={rule.key}
+                  onChange={(e) => update(i, { key: e.target.value })}
+                  placeholder="billing/*"
                 />
               </div>
               <button

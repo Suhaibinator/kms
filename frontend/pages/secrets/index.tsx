@@ -1,13 +1,17 @@
 import Link from "next/link";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "@/lib/api";
 import type { SecretMetadata } from "@/lib/types";
 import { useToast } from "@/context/ToastContext";
+import { useNamespaces, useQueryParams } from "@/lib/hooks";
 import { formatUnixMs } from "@/lib/format";
 import { Badge, EmptyState, Loading, PageHeader, Pagination } from "@/components/ui";
+import NamespacePicker, { type NamespaceSelection } from "@/components/NamespacePicker";
 
-function secretLink(path: string): string {
-  return `/secrets/detail?path=${encodeURIComponent(path)}`;
+function secretLink(ref: { env: string; app: string; key: string }): string {
+  return `/secrets/detail?env=${encodeURIComponent(ref.env)}&app=${encodeURIComponent(
+    ref.app,
+  )}&key=${encodeURIComponent(ref.key)}`;
 }
 
 function currentVersion(s: SecretMetadata): number | null {
@@ -15,22 +19,58 @@ function currentVersion(s: SecretMetadata): number | null {
   return typeof c === "number" ? c : null;
 }
 
+const NO_NS: NamespaceSelection = { env: "", app: "" };
+
 export default function SecretsPage() {
   const toast = useToast();
+  const { namespaces, error: nsError } = useNamespaces();
+  const { values: queryValues, ready: queryReady } = useQueryParams(["env", "app", "key_prefix"]);
+
+  const [ns, setNs] = useState<NamespaceSelection>(NO_NS);
+  const [prefixInput, setPrefixInput] = useState("");
+  const [prefix, setPrefix] = useState("");
+
   const [secrets, setSecrets] = useState<SecretMetadata[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(false);
   const [nextToken, setNextToken] = useState("");
   const [pageStack, setPageStack] = useState<string[]>([]);
   const [pageToken, setPageToken] = useState("");
 
-  const [prefixInput, setPrefixInput] = useState("");
-  const [prefix, setPrefix] = useState("");
+  const seeded = useRef(false);
+  useEffect(() => {
+    if (!queryReady || seeded.current) return;
+    seeded.current = true;
+    const env = queryValues.env ?? "";
+    const app = queryValues.app ?? "";
+    const kp = queryValues.key_prefix ?? "";
+    if (env || app) setNs({ env, app });
+    if (kp) {
+      setPrefixInput(kp);
+      setPrefix(kp);
+    }
+  }, [queryReady, queryValues]);
+
+  useEffect(() => {
+    if (nsError) toast.error(nsError, "Failed to load namespaces");
+  }, [nsError, toast]);
+
+  const hasNs = !!ns.env && !!ns.app;
 
   const load = useCallback(
-    async (token: string, activePrefix: string) => {
+    async (token: string, selection: NamespaceSelection, activePrefix: string) => {
+      if (!selection.env || !selection.app) {
+        setSecrets([]);
+        setNextToken("");
+        return;
+      }
       setLoading(true);
       try {
-        const res = await api.listSecrets(activePrefix || undefined, 100, token || undefined);
+        const res = await api.listSecrets(
+          { env: selection.env, app: selection.app },
+          activePrefix || undefined,
+          100,
+          token || undefined,
+        );
         setSecrets(res.secrets ?? []);
         setNextToken(res.next_page_token ?? "");
       } catch (err) {
@@ -43,9 +83,14 @@ export default function SecretsPage() {
   );
 
   useEffect(() => {
-    void load(pageToken, prefix);
-  }, [load, pageToken, prefix]);
+    void load(pageToken, ns, prefix);
+  }, [load, pageToken, ns, prefix]);
 
+  function onSelectNamespace(next: NamespaceSelection) {
+    setNs(next);
+    setPageStack([]);
+    setPageToken("");
+  }
   function applyFilter(e: React.FormEvent) {
     e.preventDefault();
     setPageStack([]);
@@ -68,51 +113,61 @@ export default function SecretsPage() {
     setPageToken("");
   }
 
+  const newSecretLink = hasNs
+    ? `/secrets/new?env=${encodeURIComponent(ns.env)}&app=${encodeURIComponent(ns.app)}`
+    : "/secrets/new";
+
   return (
     <>
       <PageHeader
         title="Secrets"
-        subtitle="Encrypted values. Metadata only is shown here — reveal happens on the detail page."
+        subtitle="Encrypted values, scoped to a namespace. Metadata only is shown here — reveal happens on the detail page."
         actions={
-          <Link className="btn btn-primary" href="/secrets/new">
+          <Link className="btn btn-primary" href={newSecretLink}>
             New secret
           </Link>
         }
       />
 
       <form className="filters" onSubmit={applyFilter}>
+        <NamespacePicker namespaces={namespaces} value={ns} onChange={onSelectNamespace} />
         <div className="field filter-grow">
-          <label className="field-label" htmlFor="prefix">
-            Path prefix
+          <label className="field-label" htmlFor="key-prefix">
+            Key prefix
           </label>
           <input
-            id="prefix"
+            id="key-prefix"
             className="input mono"
-            placeholder="/prod/payments"
+            placeholder="billing/"
             value={prefixInput}
+            disabled={!hasNs}
             onChange={(e) => setPrefixInput(e.target.value)}
           />
         </div>
-        <button type="submit" className="btn">
+        <button type="submit" className="btn" disabled={!hasNs}>
           Filter
         </button>
-        <button type="button" className="btn btn-ghost" onClick={clearFilter}>
+        <button type="button" className="btn btn-ghost" onClick={clearFilter} disabled={!hasNs}>
           Clear
         </button>
       </form>
 
-      {loading ? (
+      {!hasNs ? (
+        <EmptyState title="Choose a namespace">
+          Pick an environment and application above to list its secrets.
+        </EmptyState>
+      ) : loading ? (
         <Loading />
       ) : secrets.length === 0 ? (
         <EmptyState title="No secrets found">
-          {prefix ? "No secrets match this prefix." : "Create a secret to get started."}
+          {prefix ? "No secrets match this key prefix." : `No secrets in ${ns.env}/${ns.app} yet.`}
         </EmptyState>
       ) : (
         <div className="table-wrap card-table">
           <table className="data">
             <thead>
               <tr>
-                <th>Path</th>
+                <th>Key</th>
                 <th>Type</th>
                 <th>Current</th>
                 <th>Versions</th>
@@ -124,16 +179,18 @@ export default function SecretsPage() {
               {secrets.map((s) => {
                 const cur = currentVersion(s);
                 return (
-                  <tr key={s.path}>
-                    <td data-label="Path">
-                      <Link className="cell-path" href={secretLink(s.path)}>
-                        {s.path}
+                  <tr key={s.key}>
+                    <td data-label="Key">
+                      <Link className="cell-path" href={secretLink(s)}>
+                        {s.key}
                       </Link>
                     </td>
                     <td className="nowrap" data-label="Type">
                       {s.content_type || <span className="faint">—</span>}
                     </td>
-                    <td data-label="Current">{cur !== null ? `v${cur}` : <span className="faint">—</span>}</td>
+                    <td data-label="Current">
+                      {cur !== null ? `v${cur}` : <span className="faint">—</span>}
+                    </td>
                     <td data-label="Versions">{s.versions?.length ?? 0}</td>
                     <td data-label="Mode">
                       <div className="row-wrap">

@@ -2,6 +2,18 @@
 
 const EMPTY = "—"; // em dash
 
+// The one place the frontend renders the legacy `/env/app/key` display form.
+// The wire protocol never carries it; this is for humans (breadcrumbs, audit
+// rows, confirmation copy) only.
+export function displayPath(ref: { env: string; app: string; key: string }): string {
+  return `/${ref.env}/${ref.app}/${ref.key}`;
+}
+
+// A namespace shown compactly, e.g. "prod/gradethis".
+export function displayNamespace(ns: { env: string; app: string }): string {
+  return `${ns.env}/${ns.app}`;
+}
+
 export function formatUnixMs(ms: number | undefined | null): string {
   if (!ms || ms <= 0) return EMPTY;
   const d = new Date(ms);
