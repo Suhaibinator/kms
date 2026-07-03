@@ -125,7 +125,7 @@ func (s *SQLStore) GetIdentityCertBySerial(ctx context.Context, serial string) (
 		IdentityDisabled int64
 	}
 	err := s.db.WithContext(ctx).Table("identity_certs AS c").
-		Select("c.serial, c.fingerprint, c.not_after, c.revoked_at, c.created_at, " +
+		Select("c.serial, c.fingerprint, c.not_after, c.revoked_at, c.created_at, "+
 			"i.name AS identity_name, i.disabled AS identity_disabled").
 		Joins("JOIN identities i ON i.id = c.identity_id").
 		Where("c.serial = ?", serial).
