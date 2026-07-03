@@ -310,15 +310,45 @@ func (s *Service) CreateIdentity(ctx context.Context, pr Principal, in CreateIde
 	return CreateIdentityResult{Identity: id, Token: token, Cert: bundle}, nil
 }
 
+// guardCertTarget restricts a certificate operation reached via the delegated
+// admin:identity:cert op (a non-admin caller) to safe targets. Without it,
+// holding that op would be a full privilege escalation: the caller could mint a
+// valid cert bundle for an admin identity and then mTLS-authenticate as that
+// admin. Non-admin callers may therefore never operate on an admin-kind target,
+// and only on identities bound to the caller's own namespace. Admin callers are
+// unrestricted. Denials are audited (no key material).
+func (s *Service) guardCertTarget(ctx context.Context, pr Principal, eventType string, target domain.Identity) error {
+	if pr.IsAdmin() {
+		return nil
+	}
+	deny := func(reason string) error {
+		s.auditName(ctx, pr, eventType, domain.ResourceIdentity, target.Name, "deny",
+			map[string]string{"operation": domain.OpAdminIdentityCert, "reason": reason})
+		return domain.Errorf(domain.ErrPermissionDenied, "access denied")
+	}
+	if target.Kind == domain.IdentityKindAdmin {
+		return deny("admin_target")
+	}
+	home := pr.home()
+	if home == nil || target.Namespace == nil || *home != *target.Namespace {
+		return deny("cross_namespace")
+	}
+	return nil
+}
+
 // IssueIdentityCertificate mints an additional client certificate for an
 // existing identity (renewal/rollover). Available to admins, or to identities
-// granted admin:identity:cert. The private key is returned exactly once.
+// granted admin:identity:cert (restricted to non-admin targets in the caller's
+// own namespace; see guardCertTarget). The private key is returned exactly once.
 func (s *Service) IssueIdentityCertificate(ctx context.Context, pr Principal, name string, ttl time.Duration) (*CertBundle, error) {
 	if err := s.requireAdminOrOp(ctx, pr, domain.OpAdminIdentityCert, "identity.cert.issue", domain.ResourceIdentity, domain.Ref{Key: name}); err != nil {
 		return nil, err
 	}
 	id, err := s.store.GetIdentityByName(ctx, name)
 	if err != nil {
+		return nil, err
+	}
+	if err := s.guardCertTarget(ctx, pr, "identity.cert.issue", id); err != nil {
 		return nil, err
 	}
 	if id.Disabled {
@@ -374,6 +404,13 @@ func (s *Service) RevokeIdentityCertificate(ctx context.Context, pr Principal, n
 	}
 	if rec.IdentityName != name {
 		return domain.Errorf(domain.ErrNotFound, "certificate %s for identity %s", serial, name)
+	}
+	target, err := s.store.GetIdentityByName(ctx, name)
+	if err != nil {
+		return err
+	}
+	if err := s.guardCertTarget(ctx, pr, "identity.cert.revoke", target); err != nil {
+		return err
 	}
 	if err := s.store.RevokeIdentityCert(ctx, serial); err != nil {
 		return err

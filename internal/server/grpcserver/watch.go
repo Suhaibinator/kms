@@ -3,7 +3,6 @@ package grpcserver
 import (
 	"context"
 	"fmt"
-	"strings"
 	"time"
 
 	"google.golang.org/grpc/codes"
@@ -11,7 +10,8 @@ import (
 
 	kmsv1 "github.com/Suhaibinator/kms/gen/kmsv1"
 	"github.com/Suhaibinator/kms/internal/core"
-	"github.com/Suhaibinator/kms/internal/pathutil"
+	"github.com/Suhaibinator/kms/internal/domain"
+	"github.com/Suhaibinator/kms/internal/keyutil"
 	"github.com/Suhaibinator/kms/internal/watch"
 )
 
@@ -42,9 +42,12 @@ func (w *watchServer) Subscribe(stream kmsv1.WatchService_SubscribeServer) error
 		// Client closed before registering; nothing to do.
 		return err
 	}
-	patterns, err := normalizePatterns(first.GetPaths())
+	selectors, err := normalizeSelectors(selectorsFromProto(first.GetSelectors()))
 	if err != nil {
 		return status.Error(codes.InvalidArgument, err.Error())
+	}
+	if err := w.s.svc.AuthorizeSubscribe(ctx, pr, selectors); err != nil {
+		return w.s.mapErr(ctx, err)
 	}
 	allowed, err := w.s.svc.WatchAccessChecker(ctx, pr)
 	if err != nil {
@@ -56,7 +59,7 @@ func (w *watchServer) Subscribe(stream kmsv1.WatchService_SubscribeServer) error
 		InstanceID:       instanceID(first.GetClientName()),
 		Identity:         pr.Identity.Name,
 		RemoteAddr:       pr.RemoteAddr,
-		Patterns:         patterns,
+		Selectors:        selectors,
 		LastSeenRevision: first.GetLastSeenRevision(),
 		Allowed:          allowed,
 	}
@@ -85,43 +88,56 @@ func (w *watchServer) Subscribe(stream kmsv1.WatchService_SubscribeServer) error
 	}()
 
 	// Bidi clients ack their own liveness, so do not self-refresh.
-	return w.pump(ctx, stream, sub, pr, lastRev, false)
+	return w.pump(ctx, stream, sub, pr, selectors, lastRev, false)
 }
 
-// WatchParameter streams events for a single exact parameter path.
+// WatchParameter streams events for a single exact parameter key.
 func (w *watchServer) WatchParameter(req *kmsv1.WatchParameterRequest, stream kmsv1.WatchService_WatchParameterServer) error {
 	ctx := stream.Context()
 	pr, err := requirePrincipal(ctx)
 	if err != nil {
 		return err
 	}
-	path, err := pathutil.Normalize(req.GetPath())
-	if err != nil {
+	ref := refFromProto(req.GetRef())
+	if err := keyutil.ValidateNamespace(ref.NS); err != nil {
 		return status.Error(codes.InvalidArgument, err.Error())
 	}
-	return w.serverStream(ctx, stream, pr, []string{path}, req.GetLastSeenRevision())
+	if err := keyutil.ValidateKey(ref.Key); err != nil {
+		return status.Error(codes.InvalidArgument, err.Error())
+	}
+	sel := domain.WatchSelector{NS: ref.NS, KeyPattern: ref.Key}
+	return w.serverStream(ctx, stream, pr, []domain.WatchSelector{sel}, req.GetLastSeenRevision())
 }
 
-// WatchNamespace streams events for everything under a prefix. The request may
-// carry either a plain path (treated as its subtree) or an explicit "base/*"
-// pattern.
+// WatchNamespace streams events for a namespace, optionally filtered to a key
+// pattern (empty or "*" watches every key in the namespace).
 func (w *watchServer) WatchNamespace(req *kmsv1.WatchNamespaceRequest, stream kmsv1.WatchService_WatchNamespaceServer) error {
 	ctx := stream.Context()
 	pr, err := requirePrincipal(ctx)
 	if err != nil {
 		return err
 	}
-	pattern, err := namespacePattern(req.GetPathPrefix())
-	if err != nil {
+	ns := nsRefFromProto(req.GetNamespace())
+	if err := keyutil.ValidateNamespace(ns); err != nil {
 		return status.Error(codes.InvalidArgument, err.Error())
 	}
-	return w.serverStream(ctx, stream, pr, []string{pattern}, req.GetLastSeenRevision())
+	pattern := req.GetKeyPattern()
+	if pattern != "" && pattern != "*" {
+		if err := keyutil.ValidateKeyPattern(pattern); err != nil {
+			return status.Error(codes.InvalidArgument, err.Error())
+		}
+	}
+	sel := domain.WatchSelector{NS: ns, KeyPattern: pattern}
+	return w.serverStream(ctx, stream, pr, []domain.WatchSelector{sel}, req.GetLastSeenRevision())
 }
 
 // serverStream drives a server-streaming watch (WatchParameter/WatchNamespace).
 // These carry no client acks, so liveness is refreshed on each successful send
 // (a send failing means the client is gone) in addition to gRPC keepalive.
-func (w *watchServer) serverStream(ctx context.Context, stream eventSender, pr core.Principal, patterns []string, lastSeen uint64) error {
+func (w *watchServer) serverStream(ctx context.Context, stream eventSender, pr core.Principal, selectors []domain.WatchSelector, lastSeen uint64) error {
+	if err := w.s.svc.AuthorizeSubscribe(ctx, pr, selectors); err != nil {
+		return w.s.mapErr(ctx, err)
+	}
 	allowed, err := w.s.svc.WatchAccessChecker(ctx, pr)
 	if err != nil {
 		return w.s.mapErr(ctx, err)
@@ -131,7 +147,7 @@ func (w *watchServer) serverStream(ctx context.Context, stream eventSender, pr c
 		InstanceID:       instanceID(pr.Identity.Name),
 		Identity:         pr.Identity.Name,
 		RemoteAddr:       pr.RemoteAddr,
-		Patterns:         patterns,
+		Selectors:        selectors,
 		LastSeenRevision: lastSeen,
 		Allowed:          allowed,
 	}
@@ -145,7 +161,7 @@ func (w *watchServer) serverStream(ctx context.Context, stream eventSender, pr c
 	if err != nil {
 		return err
 	}
-	return w.pump(ctx, stream, sub, pr, lastRev, true)
+	return w.pump(ctx, stream, sub, pr, selectors, lastRev, true)
 }
 
 // sendBacklog delivers the subscription's initial state and returns the highest
@@ -178,7 +194,7 @@ func (w *watchServer) sendBacklog(stream eventSender, sub *watch.Subscription) (
 // swapped in so policy changes take effect within one heartbeat interval. When
 // selfAck is set, each successful send refreshes the subscriber's liveness
 // (used by server-streaming watchers with no client acks).
-func (w *watchServer) pump(ctx context.Context, stream eventSender, sub *watch.Subscription, pr core.Principal, lastRev uint64, selfAck bool) error {
+func (w *watchServer) pump(ctx context.Context, stream eventSender, sub *watch.Subscription, pr core.Principal, selectors []domain.WatchSelector, lastRev uint64, selfAck bool) error {
 	ticker := time.NewTicker(w.s.hub.HeartbeatInterval())
 	defer ticker.Stop()
 
@@ -201,8 +217,10 @@ func (w *watchServer) pump(ctx context.Context, stream eventSender, sub *watch.S
 			}
 		case <-ticker.C:
 			// Re-validate identity and refresh the authorization predicate so
-			// revocation and policy edits apply to this live stream.
-			allowed, err := w.s.svc.ReauthorizeWatch(ctx, pr)
+			// revocation and policy edits apply to this live stream. Passing the
+			// selectors re-runs the per-namespace method gate, so a namespace
+			// tightened to mtls-only drops an existing token stream.
+			allowed, err := w.s.svc.ReauthorizeWatch(ctx, pr, selectors...)
 			if err != nil {
 				return w.s.mapErr(ctx, err)
 			}
@@ -222,36 +240,26 @@ func (w *watchServer) pump(ctx context.Context, stream eventSender, sub *watch.S
 	}
 }
 
-// normalizePatterns validates and canonicalizes the requested watch patterns.
-func normalizePatterns(paths []string) ([]string, error) {
-	if len(paths) == 0 {
-		return nil, fmt.Errorf("at least one path is required")
+// normalizeSelectors validates the requested watch selectors. At least one is
+// required; each names a namespace and an optional key pattern (empty or "*"
+// selects every key in the namespace).
+func normalizeSelectors(sels []domain.WatchSelector) ([]domain.WatchSelector, error) {
+	if len(sels) == 0 {
+		return nil, fmt.Errorf("at least one selector is required")
 	}
-	out := make([]string, 0, len(paths))
-	for _, p := range paths {
-		np, err := pathutil.NormalizePrefix(p)
-		if err != nil {
+	out := make([]domain.WatchSelector, 0, len(sels))
+	for _, sel := range sels {
+		if err := keyutil.ValidateNamespace(sel.NS); err != nil {
 			return nil, err
 		}
-		out = append(out, np)
+		if sel.KeyPattern != "" && sel.KeyPattern != "*" {
+			if err := keyutil.ValidateKeyPattern(sel.KeyPattern); err != nil {
+				return nil, err
+			}
+		}
+		out = append(out, sel)
 	}
 	return out, nil
-}
-
-// namespacePattern converts a WatchNamespace request into a prefix pattern,
-// accepting either a plain path (its whole subtree) or an explicit "base/*".
-func namespacePattern(raw string) (string, error) {
-	if raw == "*" || raw == "/*" {
-		return "/*", nil
-	}
-	if strings.HasSuffix(raw, "/*") {
-		return pathutil.NormalizePrefix(raw)
-	}
-	base, err := pathutil.Normalize(raw)
-	if err != nil {
-		return "", err
-	}
-	return base + "/*", nil
 }
 
 // instanceID derives a per-connection identifier from the client name and a

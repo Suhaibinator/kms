@@ -60,11 +60,13 @@ func TestMigrationsFreshAndIdempotent(t *testing.T) {
 		t.Errorf("change_log DDL missing AUTOINCREMENT: %q", ddl)
 	}
 
-	// Every expected table exists.
+	// Every expected table exists (namespace-native schema: namespaces plus the
+	// built-in CA and client-certificate tables).
 	for _, table := range []string{
 		"key_metadata", "namespaces", "parameters", "parameter_versions",
 		"parameter_labels", "secrets", "secret_versions", "secret_labels",
-		"identities", "policies", "audit_events", "change_log",
+		"identities", "ca_keys", "identity_certs", "policies", "audit_events",
+		"change_log", "schema_migrations",
 	} {
 		var name string
 		err := db.QueryRow("SELECT name FROM sqlite_master WHERE type='table' AND name=?", table).Scan(&name)

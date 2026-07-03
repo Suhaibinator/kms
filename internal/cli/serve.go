@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"io"
 	"io/fs"
@@ -109,6 +110,12 @@ func (c *CLI) cmdServe(args []string) int {
 	}
 	svc.SetKeyring(keyring)
 
+	// Bootstrap the built-in CA (generate on first unseal, load thereafter). Its
+	// certificate anchors client-certificate authentication on the gRPC listener.
+	if err := svc.BootstrapCA(context.Background()); err != nil {
+		return c.fail("initializing certificate authority: %v", err)
+	}
+
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -145,7 +152,15 @@ func (c *CLI) cmdServe(args []string) int {
 
 	var grpcSrv GRPCServer
 	if GRPCFactory != nil {
-		grpcSrv, err = GRPCFactory(svc, hub, GRPCConfig{Addr: cfg.Server.GRPCAddr, TLS: tlsCfg})
+		// The gRPC listener authenticates machine clients by mTLS: add the built-in
+		// CA to its client-CA pool and verify a presented client certificate, but do
+		// not require one (VerifyClientCertIfGiven) — token-only clients still
+		// connect, and the per-namespace auth-method gate decides admittance.
+		grpcTLS, terr := grpcServerTLS(tlsCfg, svc)
+		if terr != nil {
+			return c.fail("building gRPC TLS config: %v", terr)
+		}
+		grpcSrv, err = GRPCFactory(svc, hub, GRPCConfig{Addr: cfg.Server.GRPCAddr, TLS: grpcTLS})
 		if err != nil {
 			return c.fail("building gRPC server: %v", err)
 		}
@@ -237,6 +252,32 @@ func (c *CLI) cmdServe(args []string) int {
 	cancel() // stop the watch hub before the deferred store.Close
 	logger.Info("shutdown complete")
 	return exitCode
+}
+
+// grpcServerTLS derives the gRPC listener's TLS config from the base server
+// config, adding the built-in CA to the client-CA pool and switching to
+// VerifyClientCertIfGiven so a client may authenticate by certificate without
+// every client being forced to present one. A nil base (TLS disabled) yields nil
+// — plaintext development transport carries no client certificates.
+func grpcServerTLS(base *tls.Config, svc *core.Service) (*tls.Config, error) {
+	if base == nil {
+		return nil, nil
+	}
+	caCert, err := svc.CACertificate()
+	if err != nil {
+		return nil, err
+	}
+	cfg := base.Clone()
+	var pool *x509.CertPool
+	if cfg.ClientCAs != nil {
+		pool = cfg.ClientCAs.Clone()
+	} else {
+		pool = x509.NewCertPool()
+	}
+	pool.AddCert(caCert)
+	cfg.ClientCAs = pool
+	cfg.ClientAuth = tls.VerifyClientCertIfGiven
+	return cfg, nil
 }
 
 // newLogger builds a structured JSON logger at the given level, writing to w.

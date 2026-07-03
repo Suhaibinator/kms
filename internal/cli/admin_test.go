@@ -47,7 +47,7 @@ func TestInitCheckImportEndToEnd(t *testing.T) {
 	report := filepath.Join(dir, "report.txt")
 	c3 := newTestCLI()
 	code := c3.cmdImport([]string{
-		"--from", src, "--namespace", "/prod/gradethis",
+		"--from", src, "--namespace", "prod/gradethis",
 		"--db", db, "--master-key-file", keyFile, "--report", report,
 	})
 	if code != 0 {
@@ -75,7 +75,8 @@ func TestInitCheckImportEndToEnd(t *testing.T) {
 	svc.SetKeyring(keyring)
 
 	pr := core.Principal{Identity: domain.Identity{Name: "admin", Kind: domain.IdentityKindAdmin}}
-	val, err := svc.RevealSecret(context.Background(), pr, "/prod/gradethis/stripe-key", 0, "")
+	stripeRef := domain.Ref{NS: domain.NamespaceRef{Env: "prod", App: "gradethis"}, Key: "stripe-key"}
+	val, err := svc.RevealSecret(context.Background(), pr, stripeRef, 0, "")
 	if err != nil {
 		t.Fatalf("reveal imported secret: %v", err)
 	}

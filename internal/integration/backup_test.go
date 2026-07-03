@@ -19,7 +19,7 @@ func TestBackupAndRestore(t *testing.T) {
 	h := newHarness(t)
 	ctx := context.Background()
 
-	if _, err := h.svc.PutSecret(ctx, h.admin, putSecret("/prod/app/db", "restore-me-secret")); err != nil {
+	if _, err := h.svc.PutSecret(ctx, h.admin, h.stdSecret("/prod/app/db", "restore-me-secret")); err != nil {
 		t.Fatalf("PutSecret: %v", err)
 	}
 	mustPutParam(t, h, "/prod/app/rate", "42")
@@ -62,14 +62,14 @@ func TestBackupAndRestore(t *testing.T) {
 		t.Errorf("restored revision = %d, want %d", gotRev, wantRev)
 	}
 
-	sec, err := svc.GetSecret(ctx, h.admin, "/prod/app/db", 0, "")
+	sec, err := svc.GetSecret(ctx, h.admin, h.ref("/prod/app/db"), 0, "")
 	if err != nil {
 		t.Fatalf("restored GetSecret: %v", err)
 	}
 	if string(sec.Value) != "restore-me-secret" {
 		t.Errorf("restored secret = %q, want restore-me-secret", sec.Value)
 	}
-	param, err := svc.GetParameter(ctx, h.admin, "/prod/app/rate", 0, "")
+	param, err := svc.GetParameter(ctx, h.admin, h.ref("/prod/app/rate"), 0, "")
 	if err != nil || param.Value != "42" {
 		t.Errorf("restored parameter = %q err=%v, want 42", param.Value, err)
 	}
@@ -81,7 +81,7 @@ func TestRestoreWithWrongKeyFails(t *testing.T) {
 	h := newHarness(t)
 	ctx := context.Background()
 
-	if _, err := h.svc.PutSecret(ctx, h.admin, putSecret("/prod/app/db", "value")); err != nil {
+	if _, err := h.svc.PutSecret(ctx, h.admin, h.stdSecret("/prod/app/db", "value")); err != nil {
 		t.Fatalf("PutSecret: %v", err)
 	}
 	backupPath := filepath.Join(t.TempDir(), "backup.db")

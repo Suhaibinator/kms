@@ -57,6 +57,11 @@ type Principal struct {
 	// only so long-lived token streams can re-authenticate periodically (see
 	// ReauthorizeWatch). Empty for mTLS callers. Never logged or persisted.
 	Token string
+	// Serial is the serial of the client certificate an mTLS caller presented
+	// (empty for token callers). It lets long-lived mTLS streams be re-validated
+	// against the specific certificate, so revoking one serial tears the stream
+	// down (see ReauthorizeWatch). Transports set it via CertSerial.
+	Serial string
 	// SecretToken is the optional per-secret access token supplied with the
 	// request (x-kms-secret-token). Never logged, never persisted.
 	SecretToken string
@@ -283,7 +288,7 @@ func (s *Service) VerifyClientCert(ctx context.Context, cert *x509.Certificate, 
 	if err != nil {
 		return domain.Identity{}, s.mtlsAuthFailure(ctx, remoteAddr, userAgent)
 	}
-	serial := certSerialHex(cert)
+	serial := CertSerial(cert)
 	rec, err := s.store.GetIdentityCertBySerial(ctx, serial)
 	if err != nil {
 		return domain.Identity{}, s.mtlsAuthFailure(ctx, remoteAddr, userAgent)
@@ -312,9 +317,13 @@ func (s *Service) mtlsAuthFailure(ctx context.Context, remoteAddr, userAgent str
 	return domain.Errorf(domain.ErrUnauthenticated, "invalid credentials")
 }
 
-// certSerialHex renders a certificate serial the same way internal/ca does
-// (lowercase hex, no leading "0x"), so lookups by serial match the stored form.
-func certSerialHex(cert *x509.Certificate) string {
+// CertSerial renders a client certificate's serial the same way internal/ca
+// does (lowercase hex, no leading "0x"), so lookups by serial match the stored
+// form. Transports use it to populate Principal.Serial for mTLS callers.
+func CertSerial(cert *x509.Certificate) string {
+	if cert == nil {
+		return ""
+	}
 	return strings.ToLower(cert.SerialNumber.Text(16))
 }
 
@@ -469,9 +478,16 @@ func (s *Service) WatchAccessChecker(ctx context.Context, pr Principal) (func(re
 // access predicate reflecting current policies. The watch handler calls it on
 // every heartbeat tick and closes the stream on error. For token streams it
 // re-authenticates the bearer token itself, so rotating or revoking a token
-// tears down any stream still using the old one within one heartbeat interval;
-// for mTLS streams it re-checks that the identity is still enabled.
-func (s *Service) ReauthorizeWatch(ctx context.Context, pr Principal) (func(resourceType string, ref domain.Ref) bool, error) {
+// tears down any stream still using the old one within one heartbeat interval.
+// For mTLS streams it re-checks that the identity is still enabled AND that the
+// presenting certificate (by serial) is still valid, so revoking a single cert
+// tears the stream down.
+//
+// The stream's active selectors are passed so the per-namespace auth-method gate
+// is re-evaluated: tightening a namespace to a method this caller no longer
+// satisfies (e.g. mtls-only for a token stream) drops the stream on the next
+// heartbeat. Callers that pass no selectors get credential re-validation only.
+func (s *Service) ReauthorizeWatch(ctx context.Context, pr Principal, selectors ...domain.WatchSelector) (func(resourceType string, ref domain.Ref) bool, error) {
 	if pr.Method == domain.AuthMethodToken {
 		id, err := s.Authenticate(ctx, pr.Token, pr.RemoteAddr, pr.UserAgent)
 		if err != nil || id.Name != pr.Identity.Name || id.Kind != pr.Identity.Kind {
@@ -481,6 +497,24 @@ func (s *Service) ReauthorizeWatch(ctx context.Context, pr Principal) (func(reso
 		id, err := s.store.GetIdentityByName(ctx, pr.Identity.Name)
 		if err != nil || id.Disabled || id.Kind != pr.Identity.Kind {
 			return nil, domain.Errorf(domain.ErrUnauthenticated, "invalid credentials")
+		}
+		// Re-validate the specific certificate: a single revoked/expired serial
+		// (identity still enabled) must still tear the stream down.
+		if pr.Serial != "" {
+			rec, cerr := s.store.GetIdentityCertBySerial(ctx, pr.Serial)
+			if cerr != nil || rec.IdentityName != pr.Identity.Name || rec.IdentityDisabled ||
+				!rec.Cert.RevokedAt.IsZero() ||
+				(!rec.Cert.NotAfter.IsZero() && s.now().After(rec.Cert.NotAfter)) {
+				return nil, domain.Errorf(domain.ErrUnauthenticated, "invalid credentials")
+			}
+		}
+	}
+	// Re-run the per-namespace auth-method gate for each active selector so a
+	// namespace whose allowed methods were tightened drops a now-inadmissible
+	// stream (client identities only; admins bypass the gate).
+	for _, sel := range selectors {
+		if err := s.namespaceMethodGate(ctx, pr, sel.NS, domain.ResourceParameter); err != nil {
+			return nil, err
 		}
 	}
 	return s.WatchAccessChecker(ctx, pr)

@@ -14,7 +14,7 @@ import (
 
 	"github.com/Suhaibinator/kms/internal/core"
 	"github.com/Suhaibinator/kms/internal/domain"
-	"github.com/Suhaibinator/kms/internal/pathutil"
+	"github.com/Suhaibinator/kms/internal/keyutil"
 	"github.com/Suhaibinator/kms/internal/storage"
 )
 
@@ -24,11 +24,11 @@ type kv struct {
 	Value string
 }
 
-// importEntry is a source record mapped to its destination path.
+// importEntry is a source record mapped to its destination resource reference.
 type importEntry struct {
 	Key   string
 	Value string
-	Path  string
+	Ref   domain.Ref
 }
 
 // importResult is one row of the mapping report.
@@ -41,7 +41,9 @@ type importResult struct {
 func (c *CLI) cmdImport(args []string) int {
 	fs := c.newFlags("import")
 	from := fs.String("from", "", "source export: JSON file or SuhaibParameterStore SQLite db")
-	namespace := fs.String("namespace", "", "destination namespace, e.g. /prod/gradethis")
+	namespace := fs.String("namespace", "", "destination namespace env/app, e.g. prod/gradethis")
+	env := fs.String("env", "", "destination environment (alternative to --namespace)")
+	app := fs.String("app", "", "destination application (alternative to --namespace)")
 	db := fs.String("db", "./kms.db", "destination database (required unless --dry-run)")
 	keyFile := fs.String("master-key-file", "", "master key file (omit to use a passphrase)")
 	dryRun := fs.Bool("dry-run", false, "print old key -> new path mapping without writing")
@@ -52,15 +54,16 @@ func (c *CLI) cmdImport(args []string) int {
 	if *from == "" {
 		return c.fail("--from is required")
 	}
-	if *namespace == "" {
-		return c.fail("--namespace is required")
+	ns, err := resolveImportNamespace(*namespace, *env, *app)
+	if err != nil {
+		return c.fail("%v", err)
 	}
 
 	items, err := loadImportSource(*from)
 	if err != nil {
 		return c.fail("reading source: %v", err)
 	}
-	entries, err := buildImportEntries(*namespace, items)
+	entries, err := buildImportEntries(ns, items)
 	if err != nil {
 		return c.fail("%v", err)
 	}
@@ -74,10 +77,10 @@ func (c *CLI) cmdImport(args []string) int {
 	if *dryRun {
 		results := make([]importResult, len(entries))
 		for i, e := range entries {
-			results[i] = importResult{Key: e.Key, Path: e.Path}
+			results[i] = importResult{Key: e.Key, Path: e.Ref.String()}
 		}
 		writeImportReport(out, results, false)
-		_, _ = fmt.Fprintf(c.Stderr, "Dry run: %d keys would be imported into %s. No data written.\n", len(entries), *namespace)
+		_, _ = fmt.Fprintf(c.Stderr, "Dry run: %d keys would be imported into %s. No data written.\n", len(entries), ns)
 		return 0
 	}
 
@@ -97,22 +100,53 @@ func (c *CLI) cmdImport(args []string) int {
 	svc.SetKeyring(keyring)
 
 	pr := core.Principal{Identity: domain.Identity{Name: "import", Kind: domain.IdentityKindAdmin}}
+
+	// A parameter/secret write requires the namespace to already exist. Create it
+	// if missing so import works against a fresh database; an existing namespace
+	// is left untouched.
+	if _, err := svc.CreateNamespace(ctx, pr, ns, "imported from SuhaibParameterStore", nil); err != nil && !errors.Is(err, domain.ErrAlreadyExists) {
+		return c.fail("ensuring namespace %s: %v", ns, err)
+	}
+
 	results := make([]importResult, 0, len(entries))
 	for _, e := range entries {
 		res, err := svc.PutSecret(ctx, pr, core.PutSecretInput{
-			Path:          e.Path,
+			Ref:           e.Ref,
 			Value:         []byte(e.Value),
 			ContentType:   "text/plain",
 			GenerateToken: true,
 		})
 		if err != nil {
-			return c.fail("importing %s -> %s: %v", e.Key, e.Path, err)
+			return c.fail("importing %s -> %s: %v", e.Key, e.Ref, err)
 		}
-		results = append(results, importResult{Key: e.Key, Path: e.Path, Token: res.AccessToken})
+		results = append(results, importResult{Key: e.Key, Path: e.Ref.String(), Token: res.AccessToken})
 	}
 	writeImportReport(out, results, true)
-	_, _ = fmt.Fprintf(c.Stderr, "Imported %d secrets into %s.\n", len(results), *namespace)
+	_, _ = fmt.Fprintf(c.Stderr, "Imported %d secrets into %s.\n", len(results), ns)
 	return 0
+}
+
+// resolveImportNamespace resolves the destination namespace from either
+// --namespace env/app or the --env/--app pair (mutually exclusive with it).
+func resolveImportNamespace(namespace, env, app string) (domain.NamespaceRef, error) {
+	if namespace != "" {
+		if env != "" || app != "" {
+			return domain.NamespaceRef{}, fmt.Errorf("pass either --namespace or --env/--app, not both")
+		}
+		ns, err := keyutil.ParseNamespace(namespace)
+		if err != nil {
+			return domain.NamespaceRef{}, fmt.Errorf("invalid --namespace %q: %v", namespace, err)
+		}
+		return ns, nil
+	}
+	if env == "" || app == "" {
+		return domain.NamespaceRef{}, fmt.Errorf("--namespace (or both --env and --app) is required")
+	}
+	ns := domain.NamespaceRef{Env: env, App: app}
+	if err := keyutil.ValidateNamespace(ns); err != nil {
+		return domain.NamespaceRef{}, fmt.Errorf("invalid namespace: %v", err)
+	}
+	return ns, nil
 }
 
 // reportWriter returns the destination for the mapping report: the named file
@@ -154,14 +188,10 @@ func slug(key string) string {
 	return strings.ToLower(strings.ReplaceAll(key, "_", "-"))
 }
 
-// buildImportEntries maps each source key to namespace + "/" + slug(key),
-// validating paths and rejecting collisions. Output is sorted by key for a
-// deterministic report.
-func buildImportEntries(namespace string, items []kv) ([]importEntry, error) {
-	ns, err := pathutil.Normalize(namespace)
-	if err != nil {
-		return nil, fmt.Errorf("invalid --namespace %q: %v", namespace, err)
-	}
+// buildImportEntries maps each source key to a relative key slug(key) within
+// the destination namespace, validating keys and rejecting collisions. Output
+// is sorted by key for a deterministic report.
+func buildImportEntries(ns domain.NamespaceRef, items []kv) ([]importEntry, error) {
 	byPath := map[string][]string{}
 	out := make([]importEntry, 0, len(items))
 	var invalid []string
@@ -170,17 +200,18 @@ func buildImportEntries(namespace string, items []kv) ([]importEntry, error) {
 			invalid = append(invalid, "(empty key)")
 			continue
 		}
-		norm, err := pathutil.Normalize(ns + "/" + slug(it.Key))
-		if err != nil {
+		key := slug(it.Key)
+		if err := keyutil.ValidateKey(key); err != nil {
 			invalid = append(invalid, fmt.Sprintf("%q (%v)", it.Key, err))
 			continue
 		}
-		byPath[norm] = append(byPath[norm], it.Key)
-		out = append(out, importEntry{Key: it.Key, Value: it.Value, Path: norm})
+		ref := domain.Ref{NS: ns, Key: key}
+		byPath[ref.String()] = append(byPath[ref.String()], it.Key)
+		out = append(out, importEntry{Key: it.Key, Value: it.Value, Ref: ref})
 	}
 	if len(invalid) > 0 {
 		sort.Strings(invalid)
-		return nil, fmt.Errorf("cannot map keys to valid paths: %s", strings.Join(invalid, "; "))
+		return nil, fmt.Errorf("cannot map keys to valid keys: %s", strings.Join(invalid, "; "))
 	}
 
 	var collisions []string
@@ -192,7 +223,7 @@ func buildImportEntries(namespace string, items []kv) ([]importEntry, error) {
 	}
 	if len(collisions) > 0 {
 		sort.Strings(collisions)
-		return nil, fmt.Errorf("path collisions (distinct keys slug to the same path): %s", strings.Join(collisions, "; "))
+		return nil, fmt.Errorf("path collisions (distinct keys slug to the same key): %s", strings.Join(collisions, "; "))
 	}
 
 	sort.Slice(out, func(i, j int) bool { return out[i].Key < out[j].Key })

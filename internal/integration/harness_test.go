@@ -8,6 +8,7 @@ package integration
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -18,6 +19,7 @@ import (
 	"github.com/Suhaibinator/kms/internal/core"
 	"github.com/Suhaibinator/kms/internal/crypto"
 	"github.com/Suhaibinator/kms/internal/domain"
+	"github.com/Suhaibinator/kms/internal/keyutil"
 	"github.com/Suhaibinator/kms/internal/storage"
 	// The database/sql driver "sqlite" (modernc) is registered transitively via
 	// the storage package's glebarez/sqlite dependency; raw connections below
@@ -37,6 +39,7 @@ type harness struct {
 
 	mu       sync.Mutex
 	storeOff bool
+	nsSeen   map[domain.NamespaceRef]bool
 }
 
 // newHarness builds a store, unseals a file-based master key, and returns a
@@ -50,8 +53,12 @@ func newHarness(tb testing.TB) *harness {
 		dbPath:  filepath.Join(dir, "kms.db"),
 		keyPath: filepath.Join(dir, "master.key"),
 		logBuf:  &syncBuffer{},
+		nsSeen:  map[domain.NamespaceRef]bool{},
 		admin: core.Principal{
-			Identity:   domain.Identity{Name: "root", Kind: domain.IdentityKindAdmin},
+			Identity: domain.Identity{Name: "root", Kind: domain.IdentityKindAdmin},
+			// Admin-kind bypasses the per-namespace method gate; Method is set for
+			// realism (a browser/CLI admin authenticates with a bearer token).
+			Method:     domain.AuthMethodToken,
 			RemoteAddr: "127.0.0.1",
 			UserAgent:  "integration-test",
 			RequestID:  "req-root",
@@ -80,6 +87,13 @@ func (h *harness) open() {
 		h.tb.Fatalf("unseal: %v", err)
 	}
 	svc.SetKeyring(keyring)
+	// Bootstrap the built-in CA (idempotent: generates on a fresh DB, loads the
+	// stored key on reopen) so the identity-certificate and KEK-rotation flows
+	// that touch CA keys are exercised end to end.
+	if err := svc.BootstrapCA(context.Background()); err != nil {
+		_ = store.Close()
+		h.tb.Fatalf("bootstrap CA: %v", err)
+	}
 	h.store = store
 	h.svc = svc
 	h.storeOff = false
@@ -134,21 +148,95 @@ func (h *harness) scanBytes() []byte {
 	return out
 }
 
+// --- refs & namespaces -----------------------------------------------------
+
+// ref parses an "/env/app/key" display path into a domain.Ref. Tests keep using
+// display paths for readability; the server never parses them (SplitDisplayPath
+// is the SDK/CLI escape hatch).
+func (h *harness) ref(path string) domain.Ref {
+	h.tb.Helper()
+	r, err := keyutil.SplitDisplayPath(path)
+	if err != nil {
+		h.tb.Fatalf("ref %q: %v", path, err)
+	}
+	return r
+}
+
+// nsRef builds a namespace reference from env and app.
+func nsRef(env, app string) domain.NamespaceRef {
+	return domain.NamespaceRef{Env: env, App: app}
+}
+
+// ensureNS creates the namespace addressed by path's (env, app) if it does not
+// already exist, admitting both auth methods so token-authenticated clients pass
+// the method gate and policy is the authorization actually exercised. It returns
+// the parsed ref. Storage requires the namespace to pre-exist before any
+// parameter or secret write.
+func (h *harness) ensureNS(path string) domain.Ref {
+	h.tb.Helper()
+	r := h.ref(path)
+	h.ensureNSRef(r.NS, domain.AuthMethodMTLS, domain.AuthMethodToken)
+	return r
+}
+
+// ensureNSRef creates ns with the given allowed auth methods if absent
+// (idempotent within a harness).
+func (h *harness) ensureNSRef(ns domain.NamespaceRef, methods ...domain.AuthMethod) {
+	h.tb.Helper()
+	h.mu.Lock()
+	seen := h.nsSeen[ns]
+	h.mu.Unlock()
+	if seen {
+		return
+	}
+	if len(methods) == 0 {
+		methods = []domain.AuthMethod{domain.AuthMethodMTLS, domain.AuthMethodToken}
+	}
+	if _, err := h.svc.CreateNamespace(context.Background(), h.admin, ns, "", methods); err != nil &&
+		!errors.Is(err, domain.ErrAlreadyExists) {
+		h.tb.Fatalf("create namespace %s: %v", ns, err)
+	}
+	h.mu.Lock()
+	h.nsSeen[ns] = true
+	h.mu.Unlock()
+}
+
 // --- principals ------------------------------------------------------------
 
-// createClient mints a client identity via the admin path and returns an
-// authenticated principal plus its bearer token.
+// createClient mints an unbound token client via the admin path and returns an
+// authenticated (token-method) principal plus its bearer token. Unbound clients
+// have no implicit home grant, so their access is governed purely by policy.
 func (h *harness) createClient(name string) (core.Principal, string) {
 	h.tb.Helper()
-	_, token, err := h.svc.CreateIdentity(context.Background(), h.admin, name, domain.IdentityKindClient)
+	return h.createBoundClient(name, nil)
+}
+
+// createBoundClient mints a token client optionally bound to a home namespace
+// (nil = unbound) and returns an authenticated token-method principal plus its
+// bearer token.
+func (h *harness) createBoundClient(name string, home *domain.NamespaceRef) (core.Principal, string) {
+	h.tb.Helper()
+	res, err := h.svc.CreateIdentity(context.Background(), h.admin, core.CreateIdentityInput{
+		Name:        name,
+		Kind:        domain.IdentityKindClient,
+		Namespace:   home,
+		AuthMethods: []domain.AuthMethod{domain.AuthMethodToken},
+	})
 	if err != nil {
 		h.tb.Fatalf("create identity %q: %v", name, err)
 	}
-	id, err := h.svc.Authenticate(context.Background(), token, "10.0.0.9", "client-agent")
+	id, err := h.svc.Authenticate(context.Background(), res.Token, "10.0.0.9", "client-agent")
 	if err != nil {
 		h.tb.Fatalf("authenticate %q: %v", name, err)
 	}
-	return core.Principal{Identity: id, RemoteAddr: "10.0.0.9", UserAgent: "client-agent", RequestID: "req-" + name}, token
+	return core.Principal{
+		Identity:   id,
+		Method:     domain.AuthMethodToken,
+		Token:      res.Token,
+		RemoteAddr: "10.0.0.9",
+		UserAgent:  "client-agent",
+		RequestID:  "req-" + name,
+	}, res.Token
 }
 
 // grant creates an allow/deny policy for a subject.
@@ -165,19 +253,24 @@ func (h *harness) grant(name, subject string, allow, deny []domain.PolicyRule) {
 	}
 }
 
-func allowRule(op, path string) domain.PolicyRule {
-	return domain.PolicyRule{Operation: op, Path: path}
+// allowRule builds a policy rule matching an operation against a namespace
+// (env, app — exact or "*") and key pattern (exact, "*", or "prefix/*").
+func allowRule(op, env, app, key string) domain.PolicyRule {
+	return domain.PolicyRule{Operation: op, Env: env, App: app, KeyPattern: key}
 }
 
-// putSecret builds a plain (non-client-bound) secret write.
-func putSecret(path, value string) core.PutSecretInput {
-	return core.PutSecretInput{Path: path, Value: []byte(value)}
+// stdSecret builds a plain (non-client-bound) secret write, ensuring the target
+// namespace exists first.
+func (h *harness) stdSecret(path, value string) core.PutSecretInput {
+	h.tb.Helper()
+	return core.PutSecretInput{Ref: h.ensureNS(path), Value: []byte(value)}
 }
 
-// mustPutParam writes a string parameter as admin or fails the test.
+// mustPutParam writes a string parameter as admin (creating the namespace if
+// needed) or fails the test.
 func mustPutParam(t *testing.T, h *harness, path, value string) {
 	t.Helper()
-	if _, _, err := h.svc.PutParameter(context.Background(), h.admin, path, value, "string", ""); err != nil {
+	if _, _, err := h.svc.PutParameter(context.Background(), h.admin, h.ensureNS(path), value, "string", ""); err != nil {
 		t.Fatalf("PutParameter %s: %v", path, err)
 	}
 }
