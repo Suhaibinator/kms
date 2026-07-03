@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import threading
+import time
 
 from kms_paramstore import Client, EventType, ParameterValue
 from tests.conftest import NS, NS_APP, NS_ENV
@@ -156,6 +157,127 @@ def test_heartbeat_ack(server):
         rev = store.heartbeat()
         assert wait_until(lambda: store.subs and store.subs[0].acked >= rev), "no ack for heartbeat"
         stop()
+    finally:
+        c.close()
+
+
+def test_deleted_param_reverts_via_reconnect_snapshot(server):
+    # A parameter deleted while the stream was disconnected past the replay
+    # window must be recovered from the reconnect snapshot diff and revert the
+    # field to its configured default (Go parity M3).
+    addr, store = server
+    c = Client(addr, namespace=NS)
+    try:
+        store.put_param(NS_ENV, NS_APP, "dp/rate", value="5")
+
+        class Cfg:
+            rate = ParameterValue("dp/rate", default="1")  # hot reload on
+
+        cfg = Cfg()
+        changes = []
+        c.resolve(cfg)
+        assert cfg.rate.get() == "5"
+        cfg.rate.on_change(lambda old, new: changes.append((old, new)))
+        assert wait_until(lambda: len(store.subs) >= 1)
+
+        # Delete server-side WITHOUT broadcasting (the client misses the event),
+        # bump the revision, then force a reconnect so a fresh snapshot omits it.
+        with store.lock:
+            store.params.pop((NS_ENV, NS_APP, "dp/rate"), None)
+            store._next_rev()
+        for sub in list(store.subs):
+            with sub.cond:
+                sub.closed = True
+                sub.cond.notify()
+
+        assert wait_until(lambda: cfg.rate.get() == "1", timeout=10), "did not revert to default"
+        assert wait_until(lambda: ("5", "1") in changes), "on_change did not fire the revert"
+    finally:
+        c.close()
+
+
+def test_deleted_param_reverts_via_reconcile_notfound(server):
+    # The periodic reconcile must treat a NotFound on a registered parameter as
+    # a deletion and revert to default — not swallow it (Go parity M3).
+    addr, store = server
+    c = Client(addr, namespace=NS)
+    try:
+        store.put_param(NS_ENV, NS_APP, "dp/rl", value="5")
+
+        class Cfg:
+            rate = ParameterValue("dp/rl", default="1")
+
+        cfg = Cfg()
+        changes = []
+        c.resolve(cfg)
+        cfg.rate.on_change(lambda old, new: changes.append((old, new)))
+        assert wait_until(lambda: len(store.subs) >= 1)
+
+        # Delete server-side (missed by the stream), then run reconcile directly.
+        with store.lock:
+            store.params.pop((NS_ENV, NS_APP, "dp/rl"), None)
+        c._subs()._reconcile()
+
+        assert wait_until(lambda: cfg.rate.get() == "1"), "reconcile did not revert to default"
+        assert wait_until(lambda: ("5", "1") in changes)
+    finally:
+        c.close()
+
+
+def test_no_default_keeps_last_known_on_delete(server):
+    # With no default, a deletion keeps the last-known value (apps rarely want
+    # config to vanish underneath them).
+    addr, store = server
+    c = Client(addr, namespace=NS)
+    try:
+        store.put_param(NS_ENV, NS_APP, "dp/keep", value="7")
+
+        class Cfg:
+            v = ParameterValue("dp/keep")  # no default
+
+        cfg = Cfg()
+        c.resolve(cfg)
+        assert wait_until(lambda: len(store.subs) >= 1)
+        with store.lock:
+            store.params.pop((NS_ENV, NS_APP, "dp/keep"), None)
+        c._subs()._reconcile()
+        time.sleep(0.1)
+        assert cfg.v.get() == "7", "value with no default should be kept on delete"
+    finally:
+        c.close()
+
+
+def test_stale_reconcile_write_is_fenced(server):
+    # A reconcile/reconnect read that raced a newer live event must be dropped so
+    # it cannot regress a fresher value (Go parity M2).
+    addr, store = server
+    c = Client(addr, namespace=NS)
+    try:
+        store.put_param(NS_ENV, NS_APP, "sf/k", value="1")
+
+        class Cfg:
+            v = ParameterValue("sf/k")
+
+        cfg = Cfg()
+        c.resolve(cfg)
+        assert wait_until(lambda: len(store.subs) >= 1)
+        sub = c._subs()
+        rk = (NS_ENV, NS_APP, "sf/k")
+
+        # A newer live event applies "2" at revision 5.
+        sub._set_value(rk, "2", True, 2, 5, reconcile=False)
+        assert wait_until(lambda: cfg.v.get() == "2")
+
+        # A reconcile read captured at an older snapshot revision (3) must NOT
+        # regress the value back to "1".
+        sub._set_value(rk, "1", True, 1, 3, reconcile=True)
+        time.sleep(0.1)
+        assert cfg.v.get() == "2", "stale reconcile write regressed a newer value"
+
+        # A live event older than what we already applied is likewise dropped.
+        sub._set_value(rk, "0", True, 1, 4, reconcile=False)
+        time.sleep(0.1)
+        assert cfg.v.get() == "2", "stale live event regressed a newer value"
     finally:
         c.close()
 

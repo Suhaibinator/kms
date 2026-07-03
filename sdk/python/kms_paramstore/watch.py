@@ -21,6 +21,7 @@ import time
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Callable, Dict, List, Optional, Set, Tuple
 
+from . import errors
 from ._gen import kms_pb2
 from ._refs import NamespaceRef, Ref, match_key
 
@@ -80,9 +81,26 @@ class _Watcher:
 class _Known:
     value: str
     present: bool
+    # Revision the value was last applied at. Fences stale writes: a
+    # reconcile/reconnect read that raced a newer live event is dropped.
+    rev: int = 0
 
 
 ParamHandler = Callable[[str, bool], None]  # (new_value, present)
+
+
+def _rev_allows_write(prev_rev: int, rev: int, reconcile: bool) -> bool:
+    """Stale-write fence for :meth:`_SubManager._set_value`.
+
+    A live event (``reconcile=False``) must be strictly newer than what was
+    already applied (``rev == 0`` is unversioned/best-effort and always
+    applies). A reconcile read (``reconcile=True``) carries the snapshot
+    revision captured before the fetch, and is authoritative only if no newer
+    live event has advanced the key past it.
+    """
+    if reconcile:
+        return prev_rev <= rev
+    return rev == 0 or rev > prev_rev
 
 
 def backoff_delay(attempt: int) -> float:
@@ -116,6 +134,11 @@ class _SubManager:
         self._client = client
         self._lock = threading.Lock()
         self._selectors: Set[_Selector] = set()
+        # Selectors actually sent on the current stream's Subscribe request.
+        # A snapshot is authoritative only for these, so deletions are diffed
+        # against this scope (not the live selector set, which may have grown
+        # since the request was sent).
+        self._stream_selectors: List[_Selector] = []
         self._param_handlers: Dict[_RefKey, List[ParamHandler]] = {}
         self._known: Dict[_RefKey, _Known] = {}
         self._watchers: List[_Watcher] = []
@@ -261,11 +284,14 @@ class _SubManager:
 
     def _run_stream(self) -> Optional[Exception]:
         out_q: "queue.Queue[Optional[kms_pb2.SubscribeRequest]]" = queue.Queue()
+        sels = self._snapshot_selectors()
+        with self._lock:
+            self._stream_selectors = list(sels)
         registration = kms_pb2.SubscribeRequest(
             client_name=self._client._client_name,
             selectors=[
                 kms_pb2.WatchSelector(namespace=kms_pb2.NamespaceRef(env=env, app=app), key_pattern=pat)
-                for (env, app, pat) in self._snapshot_selectors()
+                for (env, app, pat) in sels
             ],
             last_seen_revision=self._get_rev(),
         )
@@ -311,8 +337,39 @@ class _SubManager:
             out_q.put(kms_pb2.SubscribeRequest(acked_revision=self._get_rev()))
 
     def _apply_snapshot(self, snap, rev: int) -> None:
+        # A snapshot is authoritative for this stream's selectors: it enumerates
+        # every currently-present parameter under them. Apply the present values,
+        # then treat any previously-known key in scope but absent from the
+        # snapshot as deleted — a parameter removed while we were disconnected
+        # past the replay window. Keys outside the subscribed scope are untouched.
+        present: Set[_RefKey] = set()
         for p in snap.parameters:
-            self._set_value(_proto_ref_key(p.ref), p.value, True, p.version, rev)
+            rk = _proto_ref_key(p.ref)
+            present.add(rk)
+            self._set_value(rk, p.value, True, p.version, rev)
+        for rk in self._absent_known_keys(present):
+            self._set_value(rk, "", False, 0, rev)
+
+    def _absent_known_keys(self, present: Set[_RefKey]) -> List[_RefKey]:
+        """Known-present keys within the current stream's scope missing from the snapshot."""
+        with self._lock:
+            out: List[_RefKey] = []
+            for rk, known in self._known.items():
+                if not known.present:
+                    continue
+                if rk in present:
+                    continue
+                if not self._key_in_scope_locked(rk):
+                    continue
+                out.append(rk)
+            return out
+
+    def _key_in_scope_locked(self, rk: _RefKey) -> bool:
+        env, app, key = rk
+        for (senv, sapp, pat) in self._stream_selectors:
+            if senv == env and sapp == app and match_key(pat, key):
+                return True
+        return False
 
     def _apply_change(self, change, rev: int) -> None:
         rk = _proto_ref_key(change.ref)
@@ -336,12 +393,19 @@ class _SubManager:
         for w in self._matching_watchers(rk):
             self._fire_watcher(w, ev)
 
-    def _set_value(self, rk: _RefKey, value: str, present: bool, version: int, rev: int) -> None:
+    def _set_value(
+        self, rk: _RefKey, value: str, present: bool, version: int, rev: int, reconcile: bool = False
+    ) -> None:
         with self._lock:
             prev = self._known.get(rk)
+            if prev is not None and not _rev_allows_write(prev.rev, rev, reconcile):
+                return  # stale write: a newer revision already applied for this key
+            new_rev = rev
+            if prev is not None and prev.rev > new_rev:
+                new_rev = prev.rev
             if present:
                 changed = prev is None or prev.value != value or not prev.present
-                self._known[rk] = _Known(value, True)
+                self._known[rk] = _Known(value, True, new_rev)
             else:
                 changed = prev is not None and prev.present
                 self._known.pop(rk, None)
@@ -399,19 +463,31 @@ class _SubManager:
                 if w.key_pattern.endswith("*")
             ]
 
+        # Capture the snapshot revision before any read. Every value fetched
+        # reflects the store at least as of this revision; a live event that
+        # lands with a higher revision while we read wins over these (now stale)
+        # reads, enforced by reconcile=True in _set_value.
+        snap_rev = self._get_rev()
+
         for rk in param_refs:
             env, app, key = rk
             ref = Ref(NamespaceRef(env, app), key)
             try:
                 val = self._client._fetch_parameter(ref, version=0, label="", secret_token="")
+            except errors.NotFoundError:
+                # A hot-reloading parameter the store no longer has was deleted
+                # while the stream missed the event: treat it as a deletion so
+                # the field reverts to its default.
+                self._set_value(rk, "", False, 0, snap_rev, reconcile=True)
+                continue
             except Exception:
-                continue  # keep last-known value
-            self._set_value(rk, val, True, 0, self._get_rev())
+                continue  # other errors (unavailable, timeout) keep last-known value
+            self._set_value(rk, val, True, 0, snap_rev, reconcile=True)
 
         for ns, key_prefix in prefixes:
-            self._reconcile_prefix(ns, key_prefix)
+            self._reconcile_prefix(ns, key_prefix, snap_rev)
 
-    def _reconcile_prefix(self, ns: NamespaceRef, key_prefix: str) -> None:
+    def _reconcile_prefix(self, ns: NamespaceRef, key_prefix: str, snap_rev: int) -> None:
         page_token = ""
         for _ in range(100):  # bounded to avoid runaway loops
             try:
@@ -419,7 +495,7 @@ class _SubManager:
             except Exception:
                 return
             for p in resp.parameters:
-                self._set_value(_proto_ref_key(p.ref), p.value, True, p.version, self._get_rev())
+                self._set_value(_proto_ref_key(p.ref), p.value, True, p.version, snap_rev, reconcile=True)
             page_token = resp.next_page_token
             if not page_token:
                 return

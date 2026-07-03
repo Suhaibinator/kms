@@ -73,10 +73,16 @@ def test_unbound_identity_absolute_key_works():
 def test_bad_namespace_config_fails_fast():
     srv, addr, _store = _server(whoami_namespace="prod/app")
     try:
+        # Structural failures are caught client-side...
         with pytest.raises(ConfigError):
             Client(addr, namespace="no-slash")
         with pytest.raises(ConfigError):
-            Client(addr, namespace="prod/App")  # uppercase not allowed
+            Client(addr, namespace="prod/")  # empty app
+        with pytest.raises(ConfigError):
+            Client(addr, namespace="prod/app/extra")  # extra slash
+        # ...but the character set is the server's authority, so a name the SDK
+        # can't prove wrong (uppercase) is accepted client-side (Go parity).
+        Client(addr, namespace="prod/App").close()
     finally:
         srv.stop(grace=0)
 

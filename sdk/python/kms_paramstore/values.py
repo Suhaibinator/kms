@@ -57,21 +57,26 @@ class _SecretState:
 
 
 class _ParamState:
-    __slots__ = ("lock", "initialized", "from_env", "static", "client", "value", "callbacks")
+    __slots__ = ("lock", "initialized", "from_env", "static", "default", "client", "value", "callbacks")
 
     def __init__(self) -> None:
         self.lock = threading.RLock()
         self.initialized = False
         self.from_env = False
         self.static = False
+        self.default: Optional[str] = None
         self.client: Optional["Client"] = None
         self.value = ""
         self.callbacks: List[Callable[[str, str], None]] = []
 
     def apply_update(self, new_val: str, present: bool) -> None:
-        # Deletions keep the last-known value (apps rarely want config to vanish).
+        # A deletion reverts to the configured default so the app stops serving a
+        # value the store no longer has. With no default the last-known value is
+        # kept, since apps rarely want config to vanish underneath them.
         if not present:
-            return
+            if self.default is None:
+                return
+            new_val = self.default
         with self.lock:
             old = self.value
             if old == new_val:
@@ -275,6 +280,7 @@ class ParameterValue(_DescriptorBase):
             if st.initialized:
                 return
             st.client = client
+            st.default = self._default  # revert target for a later deletion
             if self._env_var:
                 ev = os.environ.get(self._env_var, "")
                 if ev != "":

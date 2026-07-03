@@ -34,9 +34,6 @@ __all__ = [
     "to_proto_ref",
 ]
 
-_MAX_LABEL = 64
-
-
 @dataclass(frozen=True)
 class NamespaceRef:
     """A namespace: a fixed ``(env, app)`` pair. Renders as ``"env/app"``."""
@@ -62,25 +59,16 @@ class Ref:
         return f"/{self.ns.env}/{self.ns.app}/{self.key}"
 
 
-def _validate_label(kind: str, s: str) -> None:
-    if not s:
-        raise errors.ConfigError(f"{kind} must not be empty")
-    if len(s) > _MAX_LABEL:
-        raise errors.ConfigError(f"{kind} {s!r} exceeds {_MAX_LABEL} characters")
-    if s[0] == "-" or s[-1] == "-":
-        raise errors.ConfigError(f"{kind} {s!r} must not start or end with '-'")
-    for ch in s:
-        if not (ch.islower() and ch.isascii() or ch.isdigit() or ch == "-"):
-            raise errors.ConfigError(f"{kind} {s!r} contains invalid character {ch!r}")
-
-
 def parse_namespace(s: str) -> NamespaceRef:
-    """Parse the SDK config form ``"env/app"`` into a :class:`NamespaceRef`."""
+    """Parse the SDK config form ``"env/app"`` into a :class:`NamespaceRef`.
+
+    Only structural validity (both halves present, no extra slash) is checked
+    here; the character set is left to the server, which is authoritative on
+    naming — mirroring the Go SDK's ``parseNamespace``.
+    """
     env, sep, app = s.partition("/")
-    if not sep:
+    if not sep or not env or not app or "/" in app:
         raise errors.ConfigError(f"namespace {s!r} must be of the form env/app")
-    _validate_label("env", env)
-    _validate_label("app", app)
     return NamespaceRef(env, app)
 
 
@@ -89,31 +77,29 @@ def split_display_path(p: str) -> Ref:
 
     The key may contain interior slashes (they are part of the name). Used only
     as the SDK's cross-namespace escape hatch; the server never sees the string.
+    Only structure is checked (three non-empty segments); key syntax is the
+    server's authority.
     """
     if not p.startswith("/"):
         raise errors.ConfigError(f"path {p!r} must start with '/'")
     parts = p[1:].split("/", 2)
     if len(parts) < 3 or not parts[0] or not parts[1] or not parts[2]:
         raise errors.ConfigError(f"path {p!r} must be of the form /env/app/key")
-    _validate_label("env", parts[0])
-    _validate_label("app", parts[1])
     return Ref(NamespaceRef(parts[0], parts[1]), parts[2])
 
 
 def split_display_pattern(p: str) -> "tuple[NamespaceRef, str]":
     """Split an absolute watch pattern ``"/env/app/pattern"``.
 
-    ``/env/app`` (no trailing pattern) is treated as ``"*"`` (all keys).
+    Requires all three segments — ``"/env/app/*"`` for the whole namespace;
+    ``"/env/app"`` is rejected, matching the Go SDK.
     """
     if not p.startswith("/"):
         raise errors.ConfigError(f"pattern {p!r} must start with '/'")
     parts = p[1:].split("/", 2)
-    if len(parts) < 2 or not parts[0] or not parts[1]:
+    if len(parts) < 3 or not parts[0] or not parts[1] or not parts[2]:
         raise errors.ConfigError(f"pattern {p!r} must be of the form /env/app/pattern")
-    _validate_label("env", parts[0])
-    _validate_label("app", parts[1])
-    key_pattern = parts[2] if len(parts) == 3 and parts[2] else "*"
-    return NamespaceRef(parts[0], parts[1]), key_pattern
+    return NamespaceRef(parts[0], parts[1]), parts[2]
 
 
 def match_key(pattern: str, key: str) -> bool:

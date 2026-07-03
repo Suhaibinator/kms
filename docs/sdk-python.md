@@ -49,10 +49,11 @@ every key you pass is resolved SDK-side:
 The server never parses a path string; the SDK splits an absolute path into
 explicit `(env, app, key)` fields before it hits the wire, and sends the
 namespace as structured fields for a relative key. **Key resolution is done
-client-side; the server is authoritative on key *syntax*.** The SDK
-validates only the `env`/`app` labels it must split (lowercase
-`[a-z0-9-]`, no leading/trailing `-`) and defers relative-key validation to
-the server, so it will not reject a key that a newer server would accept.
+client-side; the server is authoritative on naming.** The SDK checks only
+structure — that a namespace string has both halves and an absolute path has
+three segments — and defers the character set of `env`, `app`, and keys to
+the server, so it will not reject a name that a newer server would accept.
+This matches the Go SDK.
 
 The namespace can be set explicitly or discovered:
 
