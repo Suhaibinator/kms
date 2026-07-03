@@ -21,14 +21,11 @@ func ns(env, app string) domain.NamespaceRef {
 	return domain.NamespaceRef{Env: env, App: app}
 }
 
-// evaluate is the pure rule-only check (no implicit home grant), exercising the
-// exported Evaluate. Authorize with a nil home namespace is equivalent.
+// evaluate is the pure rule-only check (no implicit home grant): Authorize with
+// a nil home namespace, which skips the implicit grant and leaves the plain
+// deny > allow > default-deny decision.
 func evaluate(policies []domain.Policy, operation string, n domain.NamespaceRef) bool {
-	got := Evaluate(policies, operation, n)
-	if got != Authorize(policies, nil, operation, n) {
-		panic("Evaluate and Authorize(nil home) disagree")
-	}
-	return got
+	return Authorize(policies, nil, operation, n)
 }
 
 func TestEvaluateDefaultDeny(t *testing.T) {

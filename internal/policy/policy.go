@@ -28,16 +28,6 @@ import (
 	"github.com/Suhaibinator/kms/internal/keyutil"
 )
 
-// Evaluate applies deny > explicit allow > default deny for operation on ns,
-// without the implicit home-namespace grant. It is the plain policy decision;
-// callers that want the home grant folded in use Authorize.
-func Evaluate(policies []domain.Policy, operation string, ns domain.NamespaceRef) bool {
-	if deniedBy(policies, operation, ns) {
-		return false
-	}
-	return allowedBy(policies, operation, ns)
-}
-
 // Authorize applies the full precedence for a namespaced operation:
 // deny > implicit home grant > explicit allow > default deny. home is the
 // caller's bound namespace, or nil when the caller is unbound (admin/tooling).
