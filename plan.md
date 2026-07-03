@@ -1,5 +1,11 @@
 # Parameter Store and Secret Management Service Requirements
 
+> **Note:** the flat path-string data model in this document (§8 API shapes,
+> §12 storage, §13.1 path format, §16.2 path-based access) is superseded by
+> the namespace-native rewrite planned in
+> [`plan-namespaces.md`](plan-namespaces.md). All other requirements here
+> (crypto, versioning, redaction, audit, deployment) remain authoritative.
+
 ## 1. Overview
 
 This document defines the requirements for a self-contained parameter store and secret management service. The service provides a secure centralized system for storing, retrieving, versioning, rotating, and auditing application configuration values and secrets.
