@@ -415,6 +415,21 @@ policy could grant — they are the management plane — except the one place th
 is cryptographically impossible regardless of privilege (revealing a
 client-bound secret without its token). Their actions remain fully audited.
 
+**Delegating `admin:identity:cert` is delegating impersonation.** Whoever can
+issue a client certificate for identity *B* can authenticate *as* *B*. The
+server enforces the sharp boundary — `guardCertTarget` refuses any non-admin
+caller a certificate for an **admin-kind** target or for a target **outside the
+caller's own namespace** (`IssueIdentityCertificate` and
+`RevokeIdentityCertificate` both apply it; admins are unrestricted). What it
+cannot prevent is the inherent meaning of the grant *within* a namespace: a
+non-admin holding `admin:identity:cert` can mint a certificate for any
+**non-admin identity in its own namespace**, and thereby assume that identity's
+policy grants. Read the operation as "may assume any non-admin identity in the
+caller's home namespace," and do **not** delegate it in a namespace whose
+client identities are deliberately given *different* privileges from one
+another. The cross-namespace and admin-impersonation vectors are closed; the
+in-namespace lateral capability is the delegation itself.
+
 **List filtering** is a two-step check (`policy.MayListUnder` plus per-item
 evaluation): first, a coarse check that at least one `allow` rule (in the
 requested namespace, with a key pattern intersecting the requested key prefix)

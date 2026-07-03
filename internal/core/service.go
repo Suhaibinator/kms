@@ -499,7 +499,10 @@ func (s *Service) ReauthorizeWatch(ctx context.Context, pr Principal, selectors 
 			return nil, domain.Errorf(domain.ErrUnauthenticated, "invalid credentials")
 		}
 		// Re-validate the specific certificate: a single revoked/expired serial
-		// (identity still enabled) must still tear the stream down.
+		// (identity still enabled) must still tear the stream down. Any transport
+		// that builds an mTLS Principal MUST populate Serial (via CertSerial) —
+		// when it is empty this per-cert recheck is skipped and only the
+		// identity-disable check above protects the stream.
 		if pr.Serial != "" {
 			rec, cerr := s.store.GetIdentityCertBySerial(ctx, pr.Serial)
 			if cerr != nil || rec.IdentityName != pr.Identity.Name || rec.IdentityDisabled ||
