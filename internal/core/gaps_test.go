@@ -14,9 +14,8 @@ func TestClientBoundTokenRotation(t *testing.T) {
 	s := newTestService(store)
 	withKeyring(t, s)
 
-	// Create with a minted token.
 	res := putSecret(t, s, PutSecretInput{
-		Path: "/cb", Value: []byte("v1"), ContentType: "text/plain",
+		Ref: tref("cb"), Value: []byte("v1"), ContentType: "text/plain",
 		ClientBound: true, GenerateToken: true,
 	})
 	t1 := res.AccessToken
@@ -25,7 +24,7 @@ func TestClientBoundTokenRotation(t *testing.T) {
 	upd := adminPrincipal()
 	upd.SecretToken = t1
 	res2, err := s.PutSecret(ctx, upd, PutSecretInput{
-		Path: "/cb", Value: []byte("v2"), ContentType: "text/plain",
+		Ref: tref("cb"), Value: []byte("v2"), ContentType: "text/plain",
 		ClientBound: true, GenerateToken: true,
 	})
 	if err != nil {
@@ -36,10 +35,9 @@ func TestClientBoundTokenRotation(t *testing.T) {
 		t.Fatalf("rotation did not mint a distinct token (t1=%q t2=%q)", t1, t2)
 	}
 
-	// The new token reads the current version.
 	prNew := adminPrincipal()
 	prNew.SecretToken = t2
-	val, err := s.GetSecret(ctx, prNew, "/cb", 0, "")
+	val, err := s.GetSecret(ctx, prNew, tref("cb"), 0, "")
 	if err != nil {
 		t.Fatalf("read with new token: %v", err)
 	}
@@ -47,16 +45,14 @@ func TestClientBoundTokenRotation(t *testing.T) {
 		t.Fatalf("value = %q, want v2", val.Value)
 	}
 
-	// The old token cannot decrypt the new current version (wrong key -> generic
-	// decryption failure, indistinguishable from tampering).
+	// The old token cannot decrypt the new current version.
 	prOld := adminPrincipal()
 	prOld.SecretToken = t1
-	if _, err := s.GetSecret(ctx, prOld, "/cb", 0, ""); !errors.Is(err, domain.ErrDecryptFailed) {
+	if _, err := s.GetSecret(ctx, prOld, tref("cb"), 0, ""); !errors.Is(err, domain.ErrDecryptFailed) {
 		t.Fatalf("read current with rotated-away token err = %v, want ErrDecryptFailed", err)
 	}
-	// But the old token still reads the version it originally encrypted (v1):
-	// rotation must not orphan prior versions.
-	if val, err := s.GetSecret(ctx, prOld, "/cb", 1, ""); err != nil || string(val.Value) != "v1" {
+	// But the old token still reads the version it originally encrypted (v1).
+	if val, err := s.GetSecret(ctx, prOld, tref("cb"), 1, ""); err != nil || string(val.Value) != "v1" {
 		t.Fatalf("read v1 with old token = %q err=%v, want v1", val.Value, err)
 	}
 }
@@ -69,7 +65,7 @@ func TestPutSecretRejectsOversizeValue(t *testing.T) {
 
 	big := make([]byte, maxValueBytes+1)
 	_, err := s.PutSecret(ctx, adminPrincipal(), PutSecretInput{
-		Path: "/s", Value: big, ContentType: "application/octet-stream",
+		Ref: tref("s"), Value: big, ContentType: "application/octet-stream",
 	})
 	if !errors.Is(err, domain.ErrInvalidArgument) {
 		t.Fatalf("oversize err = %v, want ErrInvalidArgument", err)
@@ -83,7 +79,7 @@ func TestPutParameterRejectsOversizeValue(t *testing.T) {
 	for i := range big {
 		big[i] = 'a'
 	}
-	_, _, err := s.PutParameter(ctx, adminPrincipal(), "/p", string(big), "string", "{}")
+	_, _, err := s.PutParameter(ctx, adminPrincipal(), tref("p"), string(big), "string", "{}")
 	if !errors.Is(err, domain.ErrInvalidArgument) {
 		t.Fatalf("oversize err = %v, want ErrInvalidArgument", err)
 	}
@@ -94,22 +90,26 @@ func TestIdentityTokensAreDistinct(t *testing.T) {
 	store := newFakeStore()
 	s := newTestService(store)
 
-	_, ta, err := s.CreateIdentity(ctx, adminPrincipal(), "svc-a", domain.IdentityKindClient)
+	a, err := s.CreateIdentity(ctx, adminPrincipal(), CreateIdentityInput{
+		Name: "svc-a", Kind: domain.IdentityKindClient, AuthMethods: []domain.AuthMethod{domain.AuthMethodToken},
+	})
 	if err != nil {
 		t.Fatalf("create a: %v", err)
 	}
-	_, tb, err := s.CreateIdentity(ctx, adminPrincipal(), "svc-b", domain.IdentityKindClient)
+	b, err := s.CreateIdentity(ctx, adminPrincipal(), CreateIdentityInput{
+		Name: "svc-b", Kind: domain.IdentityKindClient, AuthMethods: []domain.AuthMethod{domain.AuthMethodToken},
+	})
 	if err != nil {
 		t.Fatalf("create b: %v", err)
 	}
-	if ta == tb {
+	if a.Token == b.Token {
 		t.Fatal("two identities received the same token")
 	}
 	tc, err := s.RotateIdentityToken(ctx, adminPrincipal(), "svc-a")
 	if err != nil {
 		t.Fatalf("rotate a: %v", err)
 	}
-	if tc == ta {
+	if tc == a.Token {
 		t.Fatal("rotation returned the same token")
 	}
 }
@@ -126,19 +126,19 @@ func TestReauthorizeWatchReflectsPolicyChange(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReauthorizeWatch: %v", err)
 	}
-	if check1(domain.ResourceSecret, "/prod/x") {
+	if check1(domain.ResourceSecret, mkref("prod", "app", "x")) {
 		t.Fatal("predicate granted access with no policy")
 	}
 
 	// After granting a policy, a newly obtained predicate reflects it.
 	store.addPolicy(domain.Policy{Name: "r", Subject: "app", Allow: []domain.PolicyRule{
-		{Operation: domain.OpSecretRead, Path: "/prod/*"},
+		{Operation: domain.OpSecretRead, Env: "prod", App: "app", KeyPattern: "*"},
 	}})
 	check2, err := s.ReauthorizeWatch(ctx, pr)
 	if err != nil {
 		t.Fatalf("ReauthorizeWatch after grant: %v", err)
 	}
-	if !check2(domain.ResourceSecret, "/prod/x") {
+	if !check2(domain.ResourceSecret, mkref("prod", "app", "x")) {
 		t.Fatal("fresh predicate did not reflect the new policy")
 	}
 }

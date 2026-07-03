@@ -14,6 +14,7 @@ import (
 	"github.com/Suhaibinator/kms/internal/core"
 	"github.com/Suhaibinator/kms/internal/crypto"
 	"github.com/Suhaibinator/kms/internal/domain"
+	"github.com/Suhaibinator/kms/internal/storage"
 )
 
 // testEnv wires a real core.Service over the in-memory fakeStore behind the
@@ -50,14 +51,22 @@ func newTestEnvWith(t *testing.T, ready bool) *testEnv {
 			t.Fatalf("build kek: %v", err)
 		}
 		svc.SetKeyring(crypto.NewKeyring(kek))
+		// Bootstrap the built-in CA so the certificate endpoints work.
+		if err := svc.BootstrapCA(ctx); err != nil {
+			t.Fatalf("bootstrap CA: %v", err)
+		}
 	}
 
 	adminToken, adminHash, _ := crypto.GenerateToken("kms")
-	if _, err := store.CreateIdentity(ctx, "admin", domain.IdentityKindAdmin, adminHash); err != nil {
+	if _, err := store.CreateIdentity(ctx, storage.CreateIdentityParams{
+		Name: "admin", Kind: domain.IdentityKindAdmin, TokenHash: adminHash,
+	}); err != nil {
 		t.Fatalf("seed admin: %v", err)
 	}
 	clientToken, clientHash, _ := crypto.GenerateToken("kms")
-	if _, err := store.CreateIdentity(ctx, "client", domain.IdentityKindClient, clientHash); err != nil {
+	if _, err := store.CreateIdentity(ctx, storage.CreateIdentityParams{
+		Name: "client", Kind: domain.IdentityKindClient, TokenHash: clientHash,
+	}); err != nil {
 		t.Fatalf("seed client: %v", err)
 	}
 

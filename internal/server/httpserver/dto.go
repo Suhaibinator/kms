@@ -6,9 +6,11 @@ import (
 	"github.com/Suhaibinator/kms/internal/domain"
 )
 
-// The DTO types below define the exact JSON field names in docs/http-api.md.
-// They are separate from the domain types because the wire format uses Unix
-// milliseconds for timestamps and omits internal fields.
+// The DTO types below define the exact JSON field names in docs/http-api.md and
+// mirror frontend/lib/types.ts. Resources are addressed by a flattened
+// namespace (env, app) plus a relative key; there is no `path` string on the
+// wire. Timestamps are Unix milliseconds (*_unix_ms). They are separate from the
+// domain types because the wire format omits internal fields.
 
 func unixMS(t time.Time) int64 {
 	if t.IsZero() {
@@ -24,10 +26,93 @@ func rawJSON(s string) string {
 	return s
 }
 
+// nonNilLabels guarantees the JSON renders an object rather than null.
+func nonNilLabels(m map[string]uint64) map[string]uint64 {
+	if m == nil {
+		return map[string]uint64{}
+	}
+	return m
+}
+
+// --- namespace reference ---------------------------------------------------
+
+// namespaceRefDTO is the {"env","app"} object nested in identities, whoami, and
+// create-identity requests. It is a pointer field so it can serialize as null
+// for unbound identities.
+type namespaceRefDTO struct {
+	Env string `json:"env"`
+	App string `json:"app"`
+}
+
+func toNamespaceRefDTO(ref *domain.NamespaceRef) *namespaceRefDTO {
+	if ref == nil {
+		return nil
+	}
+	return &namespaceRefDTO{Env: ref.Env, App: ref.App}
+}
+
+func (d *namespaceRefDTO) toDomain() *domain.NamespaceRef {
+	if d == nil {
+		return nil
+	}
+	return &domain.NamespaceRef{Env: d.Env, App: d.App}
+}
+
+// --- namespaces ------------------------------------------------------------
+
+type namespaceDTO struct {
+	Env                string   `json:"env"`
+	App                string   `json:"app"`
+	Description        string   `json:"description"`
+	AllowedAuthMethods []string `json:"allowed_auth_methods"`
+	CreatedBy          string   `json:"created_by"`
+	CreatedAtUnixMS    int64    `json:"created_at_unix_ms"`
+	ParameterCount     uint64   `json:"parameter_count"`
+	SecretCount        uint64   `json:"secret_count"`
+}
+
+func toNamespaceDTO(n domain.Namespace) namespaceDTO {
+	return namespaceDTO{
+		Env:                n.Env,
+		App:                n.App,
+		Description:        n.Description,
+		AllowedAuthMethods: authMethodsToStrings(n.AllowedAuthMethods),
+		CreatedBy:          n.CreatedBy,
+		CreatedAtUnixMS:    unixMS(n.CreatedAt),
+		ParameterCount:     n.ParameterCount,
+		SecretCount:        n.SecretCount,
+	}
+}
+
+// authMethodsToStrings renders the allowed-auth-method set as a non-nil JSON
+// array of strings.
+func authMethodsToStrings(methods []domain.AuthMethod) []string {
+	out := make([]string, 0, len(methods))
+	for _, m := range methods {
+		out = append(out, string(m))
+	}
+	return out
+}
+
+// authMethodsFromStrings casts the wire strings to domain.AuthMethod without
+// validating them; core rejects unknown methods.
+func authMethodsFromStrings(methods []string) []domain.AuthMethod {
+	if methods == nil {
+		return nil
+	}
+	out := make([]domain.AuthMethod, 0, len(methods))
+	for _, m := range methods {
+		out = append(out, domain.AuthMethod(m))
+	}
+	return out
+}
+
 // --- parameters ------------------------------------------------------------
 
 type parameterDTO struct {
-	Path            string            `json:"path"`
+	Env             string            `json:"env"`
+	App             string            `json:"app"`
+	Key             string            `json:"key"`
 	Value           string            `json:"value"`
 	ContentType     string            `json:"content_type"`
 	Version         uint64            `json:"version"`
@@ -39,7 +124,9 @@ type parameterDTO struct {
 
 func toParameterDTO(p domain.Parameter) parameterDTO {
 	return parameterDTO{
-		Path:            p.Path,
+		Env:             p.Ref.NS.Env,
+		App:             p.Ref.NS.App,
+		Key:             p.Ref.Key,
 		Value:           p.Value,
 		ContentType:     p.ContentType,
 		Version:         p.Version,
@@ -60,7 +147,9 @@ type parameterVersionDTO struct {
 }
 
 type parameterInfoDTO struct {
-	Path            string                `json:"path"`
+	Env             string                `json:"env"`
+	App             string                `json:"app"`
+	Key             string                `json:"key"`
 	ContentType     string                `json:"content_type"`
 	MetadataJSON    string                `json:"metadata_json"`
 	CreatedAtUnixMS int64                 `json:"created_at_unix_ms"`
@@ -82,7 +171,9 @@ func toParameterInfoDTO(p domain.ParameterInfo) parameterInfoDTO {
 		})
 	}
 	return parameterInfoDTO{
-		Path:            p.Path,
+		Env:             p.Ref.NS.Env,
+		App:             p.Ref.NS.App,
+		Key:             p.Ref.Key,
 		ContentType:     p.ContentType,
 		MetadataJSON:    rawJSON(p.Metadata),
 		CreatedAtUnixMS: unixMS(p.CreatedAt),
@@ -105,7 +196,9 @@ type secretVersionDTO struct {
 }
 
 type secretMetadataDTO struct {
-	Path            string             `json:"path"`
+	Env             string             `json:"env"`
+	App             string             `json:"app"`
+	Key             string             `json:"key"`
 	ContentType     string             `json:"content_type"`
 	ClientBound     bool               `json:"client_bound"`
 	HasAccessToken  bool               `json:"has_access_token"`
@@ -130,7 +223,9 @@ func toSecretMetadataDTO(s domain.Secret) secretMetadataDTO {
 		})
 	}
 	return secretMetadataDTO{
-		Path:            s.Path,
+		Env:             s.Ref.NS.Env,
+		App:             s.Ref.NS.App,
+		Key:             s.Ref.Key,
 		ContentType:     s.ContentType,
 		ClientBound:     s.ClientBound,
 		HasAccessToken:  s.HasAccessToken,
@@ -142,29 +237,13 @@ func toSecretMetadataDTO(s domain.Secret) secretMetadataDTO {
 	}
 }
 
-// --- namespaces ------------------------------------------------------------
-
-type namespaceDTO struct {
-	Path            string `json:"path"`
-	Description     string `json:"description"`
-	CreatedBy       string `json:"created_by"`
-	CreatedAtUnixMS int64  `json:"created_at_unix_ms"`
-}
-
-func toNamespaceDTO(n domain.Namespace) namespaceDTO {
-	return namespaceDTO{
-		Path:            n.Path,
-		Description:     n.Description,
-		CreatedBy:       n.CreatedBy,
-		CreatedAtUnixMS: unixMS(n.CreatedAt),
-	}
-}
-
 // --- policies --------------------------------------------------------------
 
 type policyRuleDTO struct {
 	Operation string `json:"operation"`
-	Path      string `json:"path"`
+	Env       string `json:"env"`
+	App       string `json:"app"`
+	Key       string `json:"key"`
 }
 
 type policyDTO struct {
@@ -190,7 +269,7 @@ func toPolicyDTO(p domain.Policy) policyDTO {
 func toRuleDTOs(rules []domain.PolicyRule) []policyRuleDTO {
 	out := make([]policyRuleDTO, 0, len(rules))
 	for _, r := range rules {
-		out = append(out, policyRuleDTO{Operation: r.Operation, Path: r.Path})
+		out = append(out, policyRuleDTO{Operation: r.Operation, Env: r.Env, App: r.App, Key: r.KeyPattern})
 	}
 	return out
 }
@@ -207,27 +286,60 @@ func (d policyDTO) toDomain() domain.Policy {
 func fromRuleDTOs(rules []policyRuleDTO) []domain.PolicyRule {
 	out := make([]domain.PolicyRule, 0, len(rules))
 	for _, r := range rules {
-		out = append(out, domain.PolicyRule{Operation: r.Operation, Path: r.Path})
+		out = append(out, domain.PolicyRule{Operation: r.Operation, Env: r.Env, App: r.App, KeyPattern: r.Key})
 	}
 	return out
 }
 
 // --- identities ------------------------------------------------------------
 
-type identityDTO struct {
-	Name            string `json:"name"`
-	Kind            string `json:"kind"`
-	Disabled        bool   `json:"disabled"`
+type identityCertDTO struct {
+	Serial          string `json:"serial"`
+	Fingerprint     string `json:"fingerprint"`
+	NotAfterUnixMS  int64  `json:"not_after_unix_ms"`
+	RevokedAtUnixMS int64  `json:"revoked_at_unix_ms"`
 	CreatedAtUnixMS int64  `json:"created_at_unix_ms"`
 }
 
+type identityDTO struct {
+	Name            string            `json:"name"`
+	Kind            string            `json:"kind"`
+	Disabled        bool              `json:"disabled"`
+	CreatedAtUnixMS int64             `json:"created_at_unix_ms"`
+	Namespace       *namespaceRefDTO  `json:"namespace"`
+	HasToken        bool              `json:"has_token"`
+	Certs           []identityCertDTO `json:"certs"`
+}
+
 func toIdentityDTO(id domain.Identity) identityDTO {
+	certs := make([]identityCertDTO, 0, len(id.Certs))
+	for _, c := range id.Certs {
+		certs = append(certs, identityCertDTO{
+			Serial:          c.Serial,
+			Fingerprint:     c.Fingerprint,
+			NotAfterUnixMS:  unixMS(c.NotAfter),
+			RevokedAtUnixMS: unixMS(c.RevokedAt),
+			CreatedAtUnixMS: unixMS(c.CreatedAt),
+		})
+	}
 	return identityDTO{
 		Name:            id.Name,
 		Kind:            id.Kind,
 		Disabled:        id.Disabled,
 		CreatedAtUnixMS: unixMS(id.CreatedAt),
+		Namespace:       toNamespaceRefDTO(id.Namespace),
+		HasToken:        id.HasToken,
+		Certs:           certs,
 	}
+}
+
+// certBundleDTO is the one-time PEM bundle returned when a client certificate
+// is issued. The private key is shown exactly once and never stored.
+type certBundleDTO struct {
+	CertPEM        string `json:"cert_pem"`
+	KeyPEM         string `json:"key_pem"`
+	Serial         string `json:"serial"`
+	NotAfterUnixMS int64  `json:"not_after_unix_ms"`
 }
 
 // --- audit -----------------------------------------------------------------
@@ -238,7 +350,9 @@ type auditEventDTO struct {
 	ActorIdentity   string `json:"actor_identity"`
 	ActorType       string `json:"actor_type"`
 	ResourceType    string `json:"resource_type"`
-	ResourcePath    string `json:"resource_path"`
+	ResourceEnv     string `json:"resource_env"`
+	ResourceApp     string `json:"resource_app"`
+	ResourceKey     string `json:"resource_key"`
 	ResourceVersion uint64 `json:"resource_version"`
 	Decision        string `json:"decision"`
 	SourceIP        string `json:"source_ip"`
@@ -255,7 +369,9 @@ func toAuditEventDTO(e domain.AuditEvent) auditEventDTO {
 		ActorIdentity:   e.ActorIdentity,
 		ActorType:       e.ActorType,
 		ResourceType:    e.ResourceType,
-		ResourcePath:    e.ResourcePath,
+		ResourceEnv:     e.ResourceEnv,
+		ResourceApp:     e.ResourceApp,
+		ResourceKey:     e.ResourceKey,
 		ResourceVersion: e.ResourceVersion,
 		Decision:        e.Decision,
 		SourceIP:        e.SourceIP,
@@ -268,27 +384,37 @@ func toAuditEventDTO(e domain.AuditEvent) auditEventDTO {
 
 // --- subscribers -----------------------------------------------------------
 
+type watchSelectorDTO struct {
+	Env        string `json:"env"`
+	App        string `json:"app"`
+	KeyPattern string `json:"key_pattern"`
+}
+
 type subscriberDTO struct {
-	ClientName          string   `json:"client_name"`
-	InstanceID          string   `json:"instance_id"`
-	Identity            string   `json:"identity"`
-	Paths               []string `json:"paths"`
-	RemoteAddr          string   `json:"remote_addr"`
-	ConnectedAtUnixMS   int64    `json:"connected_at_unix_ms"`
-	LastHeartbeatUnixMS int64    `json:"last_heartbeat_unix_ms"`
-	LastAckedRevision   uint64   `json:"last_acked_revision"`
+	ClientName          string             `json:"client_name"`
+	InstanceID          string             `json:"instance_id"`
+	Identity            string             `json:"identity"`
+	Selectors           []watchSelectorDTO `json:"selectors"`
+	RemoteAddr          string             `json:"remote_addr"`
+	ConnectedAtUnixMS   int64              `json:"connected_at_unix_ms"`
+	LastHeartbeatUnixMS int64              `json:"last_heartbeat_unix_ms"`
+	LastAckedRevision   uint64             `json:"last_acked_revision"`
 }
 
 func toSubscriberDTO(s domain.Subscriber) subscriberDTO {
-	paths := s.Paths
-	if paths == nil {
-		paths = []string{}
+	selectors := make([]watchSelectorDTO, 0, len(s.Selectors))
+	for _, sel := range s.Selectors {
+		selectors = append(selectors, watchSelectorDTO{
+			Env:        sel.NS.Env,
+			App:        sel.NS.App,
+			KeyPattern: sel.KeyPattern,
+		})
 	}
 	return subscriberDTO{
 		ClientName:          s.ClientName,
 		InstanceID:          s.InstanceID,
 		Identity:            s.Identity,
-		Paths:               paths,
+		Selectors:           selectors,
 		RemoteAddr:          s.RemoteAddr,
 		ConnectedAtUnixMS:   unixMS(s.ConnectedAt),
 		LastHeartbeatUnixMS: unixMS(s.LastHeartbeat),
@@ -312,12 +438,4 @@ func toKeyDTO(k domain.KeyMetadata) keyDTO {
 		State:           k.State,
 		CreatedAtUnixMS: unixMS(k.CreatedAt),
 	}
-}
-
-// nonNilLabels guarantees the JSON renders an object rather than null.
-func nonNilLabels(m map[string]uint64) map[string]uint64 {
-	if m == nil {
-		return map[string]uint64{}
-	}
-	return m
 }

@@ -3,6 +3,7 @@ package core
 import (
 	"bytes"
 	"context"
+	"sort"
 	"time"
 
 	"github.com/Suhaibinator/kms/internal/crypto"
@@ -11,16 +12,22 @@ import (
 )
 
 // fakeStore is an in-memory storage.Store for core unit tests. It implements
-// the flows the service actually exercises (secrets, parameters, identities,
-// policies, audit) with just enough fidelity to drive real crypto round-trips,
-// plus hooks/fields to inject failures. It never sees plaintext.
+// the flows the service actually exercises (namespaces, secrets, parameters,
+// identities, certificates, the CA key, policies, audit) with just enough
+// fidelity to drive real crypto round-trips, plus hooks/fields to inject
+// failures. It never sees plaintext.
+//
+// Resources are keyed by their display path (ref.String()) or, for namespaces,
+// by "env/app" (ns.String()).
 type fakeStore struct {
 	identitiesByName map[string]domain.Identity
 	identitiesByHash map[string]domain.Identity
+	certsBySerial    map[string]certEntry
 	policies         []domain.Policy
 	secrets          map[string]*fakeSecret
 	params           map[string]*fakeParam
-	namespaces       []domain.Namespace
+	namespaces       map[string]domain.Namespace
+	caKey            *storage.CAKeyRecord
 	keys             []domain.KeyMetadata
 	audits           []domain.AuditEvent
 	revision         uint64
@@ -32,9 +39,11 @@ type fakeStore struct {
 
 	// optional behavior overrides
 	onPoliciesForSubject func(subject string) ([]domain.Policy, error)
-	onGetSecretVersion   func(path string, version uint64, label string) (storage.SecretRecord, storage.SecretVersionRecord, error)
-	onListSecrets        func(prefix string, page storage.ListPage) ([]domain.Secret, string, error)
-	onListParameters     func(prefix string, page storage.ListPage) ([]domain.Parameter, string, error)
+}
+
+type certEntry struct {
+	cert     domain.IdentityCert
+	identity string
 }
 
 type fakeSecret struct {
@@ -57,21 +66,38 @@ func newFakeStore() *fakeStore {
 	return &fakeStore{
 		identitiesByName: map[string]domain.Identity{},
 		identitiesByHash: map[string]domain.Identity{},
+		certsBySerial:    map[string]certEntry{},
 		secrets:          map[string]*fakeSecret{},
 		params:           map[string]*fakeParam{},
+		namespaces:       map[string]domain.Namespace{},
 	}
 }
 
 // --- test helpers ---
 
 func (f *fakeStore) addIdentity(name, kind, token string) domain.Identity {
-	id := domain.Identity{ID: int64(len(f.identitiesByName) + 1), Name: name, Kind: kind, CreatedAt: time.Now()}
+	id := domain.Identity{ID: int64(len(f.identitiesByName) + 1), Name: name, Kind: kind, CreatedAt: time.Now(), HasToken: token != ""}
 	f.identitiesByName[name] = id
-	f.identitiesByHash[string(crypto.TokenHash(token))] = id
+	if token != "" {
+		f.identitiesByHash[string(crypto.TokenHash(token))] = id
+	}
 	return id
 }
 
 func (f *fakeStore) addPolicy(p domain.Policy) { f.policies = append(f.policies, p) }
+
+// addNamespace seeds a namespace with the given allowed auth methods.
+func (f *fakeStore) addNamespace(ns domain.NamespaceRef, methods ...domain.AuthMethod) {
+	if len(methods) == 0 {
+		methods = []domain.AuthMethod{domain.AuthMethodMTLS}
+	}
+	f.namespaces[ns.String()] = domain.Namespace{
+		ID:                 int64(len(f.namespaces) + 1),
+		NamespaceRef:       ns,
+		AllowedAuthMethods: methods,
+		CreatedAt:          time.Now(),
+	}
+}
 
 func (f *fakeStore) lastAudit() (domain.AuditEvent, bool) {
 	if len(f.audits) == 0 {
@@ -89,8 +115,8 @@ func (f *fakeStore) hasAudit(eventType, decision string) bool {
 	return false
 }
 
-func (f *fakeStore) tamperCiphertext(path string, version uint64) {
-	sec := f.secrets[path]
+func (f *fakeStore) tamperCiphertext(ref domain.Ref, version uint64) {
+	sec := f.secrets[ref.String()]
 	rec := sec.versions[version]
 	rec.Ciphertext = bytes.Clone(rec.Ciphertext)
 	rec.Ciphertext[0] ^= 0xff
@@ -99,8 +125,8 @@ func (f *fakeStore) tamperCiphertext(path string, version uint64) {
 
 // expireVersion ages a version's expiry into the past, simulating a version
 // that expired during its lifetime (PutSecret rejects writing a past expiry).
-func (f *fakeStore) expireVersion(path string, version uint64) {
-	sec := f.secrets[path]
+func (f *fakeStore) expireVersion(ref domain.Ref, version uint64) {
+	sec := f.secrets[ref.String()]
 	rec := sec.versions[version]
 	rec.ExpiresAt = time.Now().Add(-time.Hour)
 	sec.versions[version] = rec
@@ -127,49 +153,118 @@ func (f *fakeStore) ActiveKeyMetadata(context.Context) (domain.KeyMetadata, erro
 func (f *fakeStore) SetKeyState(context.Context, string, string) error { return nil }
 
 func (f *fakeStore) RotateKEK(_ context.Context, newKM domain.KeyMetadata,
-	rewrap func(rec storage.SecretVersionRecord) ([]byte, error)) (int, error) {
-	count := 0
+	rewrapSecret func(rec storage.SecretVersionRecord) ([]byte, error),
+	rewrapCA func(rec storage.CAKeyRecord) ([]byte, error)) (int, int, error) {
+	secrets := 0
 	for _, sec := range f.secrets {
 		for v, rec := range sec.versions {
 			if rec.State == domain.StateDestroyed {
 				continue
 			}
-			nd, err := rewrap(rec)
+			nd, err := rewrapSecret(rec)
 			if err != nil {
-				return 0, err
+				return 0, 0, err
 			}
 			rec.EncryptedDEK = nd
 			rec.KEKID = newKM.ID
 			sec.versions[v] = rec
-			count++
+			secrets++
 		}
 	}
+	caCount := 0
+	if f.caKey != nil {
+		nd, err := rewrapCA(*f.caKey)
+		if err != nil {
+			return 0, 0, err
+		}
+		f.caKey.EncryptedDEK = nd
+		f.caKey.KEKID = newKM.ID
+		caCount++
+	}
 	f.keys = append(f.keys, newKM)
-	return count, nil
+	return secrets, caCount, nil
 }
 
 // --- namespaces ---
 
 func (f *fakeStore) CreateNamespace(_ context.Context, ns domain.Namespace) (domain.Namespace, error) {
-	f.namespaces = append(f.namespaces, ns)
+	key := ns.NamespaceRef.String()
+	if _, ok := f.namespaces[key]; ok {
+		return domain.Namespace{}, domain.Errorf(domain.ErrAlreadyExists, "namespace %s", ns.NamespaceRef)
+	}
+	ns.ID = int64(len(f.namespaces) + 1)
+	f.namespaces[key] = ns
 	return ns, nil
 }
+
+func (f *fakeStore) GetNamespace(_ context.Context, ref domain.NamespaceRef) (domain.Namespace, error) {
+	ns, ok := f.namespaces[ref.String()]
+	if !ok {
+		return domain.Namespace{}, domain.Errorf(domain.ErrNotFound, "namespace %s", ref)
+	}
+	return ns, nil
+}
+
+func (f *fakeStore) UpdateNamespace(_ context.Context, ref domain.NamespaceRef, description string, methods []domain.AuthMethod) (domain.Namespace, error) {
+	ns, ok := f.namespaces[ref.String()]
+	if !ok {
+		return domain.Namespace{}, domain.Errorf(domain.ErrNotFound, "namespace %s", ref)
+	}
+	ns.Description = description
+	ns.AllowedAuthMethods = methods
+	f.namespaces[ref.String()] = ns
+	return ns, nil
+}
+
+func (f *fakeStore) DeleteNamespace(_ context.Context, ref domain.NamespaceRef) error {
+	if _, ok := f.namespaces[ref.String()]; !ok {
+		return domain.Errorf(domain.ErrNotFound, "namespace %s", ref)
+	}
+	for _, p := range f.params {
+		if p.cur.Ref.NS == ref {
+			return domain.Errorf(domain.ErrFailedPrecondition, "namespace %s is not empty (parameters)", ref)
+		}
+	}
+	for _, sec := range f.secrets {
+		if sec.rec.Ref.NS == ref {
+			return domain.Errorf(domain.ErrFailedPrecondition, "namespace %s is not empty (secrets)", ref)
+		}
+	}
+	for _, id := range f.identitiesByName {
+		if id.Namespace != nil && *id.Namespace == ref {
+			return domain.Errorf(domain.ErrFailedPrecondition, "namespace %s is not empty (bound identities)", ref)
+		}
+	}
+	delete(f.namespaces, ref.String())
+	return nil
+}
+
 func (f *fakeStore) ListNamespaces(context.Context, storage.ListPage) ([]domain.Namespace, string, error) {
-	return f.namespaces, "", nil
+	out := make([]domain.Namespace, 0, len(f.namespaces))
+	for _, ns := range f.namespaces {
+		out = append(out, ns)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Env != out[j].Env {
+			return out[i].Env < out[j].Env
+		}
+		return out[i].App < out[j].App
+	})
+	return out, "", nil
 }
 
 // --- parameters ---
 
-func (f *fakeStore) PutParameter(_ context.Context, path, value, contentType, metadata, createdBy string) (uint64, uint64, error) {
-	p := f.params[path]
+func (f *fakeStore) PutParameter(_ context.Context, ref domain.Ref, value, contentType, metadata, createdBy string) (uint64, uint64, error) {
+	p := f.params[ref.String()]
 	if p == nil {
 		p = &fakeParam{}
-		f.params[path] = p
+		f.params[ref.String()] = p
 	}
 	version := uint64(len(p.history) + 1)
 	f.revision++
 	param := domain.Parameter{
-		Path: path, Value: value, ContentType: contentType, Version: version,
+		Ref: ref, Value: value, ContentType: contentType, Version: version,
 		Metadata: metadata, CreatedBy: createdBy, CreatedAt: time.Now(),
 		Labels: map[string]uint64{domain.LabelCurrent: version},
 	}
@@ -178,44 +273,44 @@ func (f *fakeStore) PutParameter(_ context.Context, path, value, contentType, me
 	return version, f.revision, nil
 }
 
-func (f *fakeStore) GetParameter(_ context.Context, path string, version uint64, _ string) (domain.Parameter, error) {
-	p := f.params[path]
+func (f *fakeStore) GetParameter(_ context.Context, ref domain.Ref, version uint64, _ string) (domain.Parameter, error) {
+	p := f.params[ref.String()]
 	if p == nil {
-		return domain.Parameter{}, domain.Errorf(domain.ErrNotFound, "parameter %s", path)
+		return domain.Parameter{}, domain.Errorf(domain.ErrNotFound, "parameter %s", ref)
 	}
 	if version > 0 {
 		if int(version) <= len(p.history) {
 			return p.history[version-1], nil
 		}
-		return domain.Parameter{}, domain.Errorf(domain.ErrNotFound, "parameter %s v%d", path, version)
+		return domain.Parameter{}, domain.Errorf(domain.ErrNotFound, "parameter %s v%d", ref, version)
 	}
 	return p.cur, nil
 }
 
-func (f *fakeStore) GetParameterInfo(_ context.Context, path string) (domain.ParameterInfo, error) {
-	p := f.params[path]
+func (f *fakeStore) GetParameterInfo(_ context.Context, ref domain.Ref) (domain.ParameterInfo, error) {
+	p := f.params[ref.String()]
 	if p == nil {
-		return domain.ParameterInfo{}, domain.Errorf(domain.ErrNotFound, "parameter %s", path)
+		return domain.ParameterInfo{}, domain.Errorf(domain.ErrNotFound, "parameter %s", ref)
 	}
-	return domain.ParameterInfo{Path: path, ContentType: p.cur.ContentType, Metadata: p.cur.Metadata}, nil
+	return domain.ParameterInfo{Ref: ref, ContentType: p.cur.ContentType, Metadata: p.cur.Metadata}, nil
 }
 
-func (f *fakeStore) ListParameters(_ context.Context, prefix string, page storage.ListPage) ([]domain.Parameter, string, error) {
-	if f.onListParameters != nil {
-		return f.onListParameters(prefix, page)
-	}
+func (f *fakeStore) ListParameters(_ context.Context, ns domain.NamespaceRef, keyPrefix string, _ storage.ListPage) ([]domain.Parameter, string, error) {
 	var out []domain.Parameter
 	for _, p := range f.params {
-		out = append(out, p.cur)
+		if p.cur.Ref.NS == ns && keyHasPrefix(p.cur.Ref.Key, keyPrefix) {
+			out = append(out, p.cur)
+		}
 	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Ref.Key < out[j].Ref.Key })
 	return out, "", nil
 }
 
-func (f *fakeStore) DeleteParameter(_ context.Context, path string) (uint64, error) {
-	if _, ok := f.params[path]; !ok {
-		return 0, domain.Errorf(domain.ErrNotFound, "parameter %s", path)
+func (f *fakeStore) DeleteParameter(_ context.Context, ref domain.Ref) (uint64, error) {
+	if _, ok := f.params[ref.String()]; !ok {
+		return 0, domain.Errorf(domain.ErrNotFound, "parameter %s", ref)
 	}
-	delete(f.params, path)
+	delete(f.params, ref.String())
 	f.revision++
 	return f.revision, nil
 }
@@ -223,13 +318,14 @@ func (f *fakeStore) DeleteParameter(_ context.Context, path string) (uint64, err
 // --- secrets ---
 
 func (f *fakeStore) CreateSecretVersion(_ context.Context, p storage.CreateSecretParams) (uint64, uint64, error) {
-	sec := f.secrets[p.Path]
+	key := p.Ref.String()
+	sec := f.secrets[key]
 	if sec == nil {
 		sec = &fakeSecret{
-			rec:      storage.SecretRecord{Path: p.Path, ClientBound: p.ClientBound, Labels: map[string]uint64{}},
+			rec:      storage.SecretRecord{Ref: p.Ref, ClientBound: p.ClientBound, Labels: map[string]uint64{}},
 			versions: map[uint64]storage.SecretVersionRecord{},
 		}
-		f.secrets[p.Path] = sec
+		f.secrets[key] = sec
 	} else if sec.rec.ClientBound != p.ClientBound {
 		return 0, 0, domain.Errorf(domain.ErrFailedPrecondition, "client_bound mismatch")
 	}
@@ -277,61 +373,58 @@ func (f *fakeStore) resolveVersion(sec *fakeSecret, version uint64, label string
 	}
 }
 
-func (f *fakeStore) GetSecretRecord(_ context.Context, path string) (storage.SecretRecord, error) {
-	sec := f.secrets[path]
+func (f *fakeStore) GetSecretRecord(_ context.Context, ref domain.Ref) (storage.SecretRecord, error) {
+	sec := f.secrets[ref.String()]
 	if sec == nil {
-		return storage.SecretRecord{}, domain.Errorf(domain.ErrNotFound, "secret %s", path)
+		return storage.SecretRecord{}, domain.Errorf(domain.ErrNotFound, "secret %s", ref)
 	}
 	return sec.rec, nil
 }
 
-func (f *fakeStore) GetSecretVersion(_ context.Context, path string, version uint64, label string) (storage.SecretRecord, storage.SecretVersionRecord, error) {
-	if f.onGetSecretVersion != nil {
-		return f.onGetSecretVersion(path, version, label)
-	}
-	sec := f.secrets[path]
+func (f *fakeStore) GetSecretVersion(_ context.Context, ref domain.Ref, version uint64, label string) (storage.SecretRecord, storage.SecretVersionRecord, error) {
+	sec := f.secrets[ref.String()]
 	if sec == nil {
-		return storage.SecretRecord{}, storage.SecretVersionRecord{}, domain.Errorf(domain.ErrNotFound, "secret %s", path)
+		return storage.SecretRecord{}, storage.SecretVersionRecord{}, domain.Errorf(domain.ErrNotFound, "secret %s", ref)
 	}
 	v, ok := f.resolveVersion(sec, version, label)
 	if !ok {
-		return storage.SecretRecord{}, storage.SecretVersionRecord{}, domain.Errorf(domain.ErrNotFound, "secret %s version", path)
+		return storage.SecretRecord{}, storage.SecretVersionRecord{}, domain.Errorf(domain.ErrNotFound, "secret %s version", ref)
 	}
 	return sec.rec, sec.versions[v], nil
 }
 
-func (f *fakeStore) GetSecretInfo(_ context.Context, path string) (domain.Secret, error) {
-	sec := f.secrets[path]
+func (f *fakeStore) GetSecretInfo(_ context.Context, ref domain.Ref) (domain.Secret, error) {
+	sec := f.secrets[ref.String()]
 	if sec == nil {
-		return domain.Secret{}, domain.Errorf(domain.ErrNotFound, "secret %s", path)
+		return domain.Secret{}, domain.Errorf(domain.ErrNotFound, "secret %s", ref)
 	}
-	return domain.Secret{Path: path, ContentType: sec.rec.ContentType, ClientBound: sec.rec.ClientBound}, nil
+	return domain.Secret{Ref: ref, ContentType: sec.rec.ContentType, ClientBound: sec.rec.ClientBound}, nil
 }
 
-func (f *fakeStore) ListSecrets(_ context.Context, prefix string, page storage.ListPage) ([]domain.Secret, string, error) {
-	if f.onListSecrets != nil {
-		return f.onListSecrets(prefix, page)
-	}
+func (f *fakeStore) ListSecrets(_ context.Context, ns domain.NamespaceRef, keyPrefix string, _ storage.ListPage) ([]domain.Secret, string, error) {
 	var out []domain.Secret
 	for _, sec := range f.secrets {
-		out = append(out, domain.Secret{Path: sec.rec.Path, ClientBound: sec.rec.ClientBound})
+		if sec.rec.Ref.NS == ns && keyHasPrefix(sec.rec.Ref.Key, keyPrefix) {
+			out = append(out, domain.Secret{Ref: sec.rec.Ref, ClientBound: sec.rec.ClientBound})
+		}
 	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Ref.Key < out[j].Ref.Key })
 	return out, "", nil
 }
 
-func (f *fakeStore) DeleteSecret(_ context.Context, path string) (uint64, error) {
-	if _, ok := f.secrets[path]; !ok {
-		return 0, domain.Errorf(domain.ErrNotFound, "secret %s", path)
+func (f *fakeStore) DeleteSecret(_ context.Context, ref domain.Ref) (uint64, error) {
+	if _, ok := f.secrets[ref.String()]; !ok {
+		return 0, domain.Errorf(domain.ErrNotFound, "secret %s", ref)
 	}
-	delete(f.secrets, path)
+	delete(f.secrets, ref.String())
 	f.revision++
 	return f.revision, nil
 }
 
-func (f *fakeStore) SetSecretVersionState(_ context.Context, path string, version uint64, state string) (uint64, error) {
-	sec := f.secrets[path]
+func (f *fakeStore) SetSecretVersionState(_ context.Context, ref domain.Ref, version uint64, state string) (uint64, error) {
+	sec := f.secrets[ref.String()]
 	if sec == nil {
-		return 0, domain.Errorf(domain.ErrNotFound, "secret %s", path)
+		return 0, domain.Errorf(domain.ErrNotFound, "secret %s", ref)
 	}
 	apply := func(v uint64) {
 		rec := sec.versions[v]
@@ -346,7 +439,7 @@ func (f *fakeStore) SetSecretVersionState(_ context.Context, path string, versio
 		}
 	} else {
 		if _, ok := sec.versions[version]; !ok {
-			return 0, domain.Errorf(domain.ErrNotFound, "secret %s v%d", path, version)
+			return 0, domain.Errorf(domain.ErrNotFound, "secret %s v%d", ref, version)
 		}
 		apply(version)
 	}
@@ -354,14 +447,14 @@ func (f *fakeStore) SetSecretVersionState(_ context.Context, path string, versio
 	return f.revision, nil
 }
 
-func (f *fakeStore) DestroySecretVersion(_ context.Context, path string, version uint64) (uint64, error) {
-	sec := f.secrets[path]
+func (f *fakeStore) DestroySecretVersion(_ context.Context, ref domain.Ref, version uint64) (uint64, error) {
+	sec := f.secrets[ref.String()]
 	if sec == nil {
-		return 0, domain.Errorf(domain.ErrNotFound, "secret %s", path)
+		return 0, domain.Errorf(domain.ErrNotFound, "secret %s", ref)
 	}
 	rec, ok := sec.versions[version]
 	if !ok {
-		return 0, domain.Errorf(domain.ErrNotFound, "secret %s v%d", path, version)
+		return 0, domain.Errorf(domain.ErrNotFound, "secret %s v%d", ref, version)
 	}
 	rec.State = domain.StateDestroyed
 	rec.Ciphertext, rec.EncryptedDEK, rec.Nonce = nil, nil, nil
@@ -371,14 +464,14 @@ func (f *fakeStore) DestroySecretVersion(_ context.Context, path string, version
 	return f.revision, nil
 }
 
-func (f *fakeStore) PromoteSecretVersion(_ context.Context, path string, version uint64) (uint64, uint64, uint64, error) {
-	sec := f.secrets[path]
+func (f *fakeStore) PromoteSecretVersion(_ context.Context, ref domain.Ref, version uint64) (uint64, uint64, uint64, error) {
+	sec := f.secrets[ref.String()]
 	if sec == nil {
-		return 0, 0, 0, domain.Errorf(domain.ErrNotFound, "secret %s", path)
+		return 0, 0, 0, domain.Errorf(domain.ErrNotFound, "secret %s", ref)
 	}
 	rec, ok := sec.versions[version]
 	if !ok {
-		return 0, 0, 0, domain.Errorf(domain.ErrNotFound, "secret %s v%d", path, version)
+		return 0, 0, 0, domain.Errorf(domain.ErrNotFound, "secret %s v%d", ref, version)
 	}
 	if rec.State != domain.StateEnabled {
 		return 0, 0, 0, domain.Errorf(domain.ErrFailedPrecondition, "version not enabled")
@@ -392,10 +485,10 @@ func (f *fakeStore) PromoteSecretVersion(_ context.Context, path string, version
 	return version, prev, f.revision, nil
 }
 
-func (f *fakeStore) UpdateSecretAccessTokenHash(_ context.Context, path string, hash []byte) error {
-	sec := f.secrets[path]
+func (f *fakeStore) UpdateSecretAccessTokenHash(_ context.Context, ref domain.Ref, hash []byte) error {
+	sec := f.secrets[ref.String()]
 	if sec == nil {
-		return domain.Errorf(domain.ErrNotFound, "secret %s", path)
+		return domain.Errorf(domain.ErrNotFound, "secret %s", ref)
 	}
 	sec.rec.AccessTokenHash = hash
 	return nil
@@ -403,13 +496,23 @@ func (f *fakeStore) UpdateSecretAccessTokenHash(_ context.Context, path string, 
 
 // --- identities ---
 
-func (f *fakeStore) CreateIdentity(_ context.Context, name, kind string, tokenHash []byte) (domain.Identity, error) {
-	if _, ok := f.identitiesByName[name]; ok {
-		return domain.Identity{}, domain.Errorf(domain.ErrAlreadyExists, "identity %s", name)
+func (f *fakeStore) CreateIdentity(_ context.Context, params storage.CreateIdentityParams) (domain.Identity, error) {
+	if _, ok := f.identitiesByName[params.Name]; ok {
+		return domain.Identity{}, domain.Errorf(domain.ErrAlreadyExists, "identity %s", params.Name)
 	}
-	id := domain.Identity{ID: int64(len(f.identitiesByName) + 1), Name: name, Kind: kind, CreatedAt: time.Now()}
-	f.identitiesByName[name] = id
-	f.identitiesByHash[string(tokenHash)] = id
+	if params.Namespace != nil {
+		if _, ok := f.namespaces[params.Namespace.String()]; !ok {
+			return domain.Identity{}, domain.Errorf(domain.ErrNotFound, "namespace %s", *params.Namespace)
+		}
+	}
+	id := domain.Identity{
+		ID: int64(len(f.identitiesByName) + 1), Name: params.Name, Kind: params.Kind,
+		CreatedAt: time.Now(), Namespace: params.Namespace, HasToken: len(params.TokenHash) > 0,
+	}
+	f.identitiesByName[params.Name] = id
+	if len(params.TokenHash) > 0 {
+		f.identitiesByHash[string(params.TokenHash)] = id
+	}
 	return id, nil
 }
 
@@ -426,14 +529,28 @@ func (f *fakeStore) GetIdentityByName(_ context.Context, name string) (domain.Id
 	if !ok {
 		return domain.Identity{}, domain.Errorf(domain.ErrNotFound, "identity %s", name)
 	}
+	id.Certs = f.certsForIdentity(name)
 	return id, nil
+}
+
+func (f *fakeStore) certsForIdentity(name string) []domain.IdentityCert {
+	var out []domain.IdentityCert
+	for _, e := range f.certsBySerial {
+		if e.identity == name {
+			out = append(out, e.cert)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Serial < out[j].Serial })
+	return out
 }
 
 func (f *fakeStore) ListIdentities(context.Context, storage.ListPage) ([]domain.Identity, string, error) {
 	var out []domain.Identity
 	for _, id := range f.identitiesByName {
+		id.Certs = f.certsForIdentity(id.Name)
 		out = append(out, id)
 	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out, "", nil
 }
 
@@ -444,8 +561,7 @@ func (f *fakeStore) SetIdentityDisabled(_ context.Context, name string, disabled
 	}
 	id.Disabled = disabled
 	f.identitiesByName[name] = id
-	// Keep the hash-indexed copy (read by GetIdentityByTokenHash) in sync, as
-	// a single-row store would.
+	// Keep the hash-indexed copy (read by GetIdentityByTokenHash) in sync.
 	for h, existing := range f.identitiesByHash {
 		if existing.Name == name {
 			existing.Disabled = disabled
@@ -468,7 +584,68 @@ func (f *fakeStore) UpdateIdentityTokenHash(_ context.Context, name string, toke
 			delete(f.identitiesByHash, h)
 		}
 	}
-	f.identitiesByHash[string(tokenHash)] = id
+	id.HasToken = len(tokenHash) > 0
+	f.identitiesByName[name] = id
+	if len(tokenHash) > 0 {
+		f.identitiesByHash[string(tokenHash)] = id
+	}
+	return nil
+}
+
+// --- built-in CA / client certificates ---
+
+func (f *fakeStore) InsertCAKey(_ context.Context, ca storage.CAKeyRecord) error {
+	rec := ca
+	f.caKey = &rec
+	return nil
+}
+
+func (f *fakeStore) ActiveCAKey(context.Context) (storage.CAKeyRecord, error) {
+	if f.caKey == nil {
+		return storage.CAKeyRecord{}, domain.Errorf(domain.ErrNotFound, "no active ca key")
+	}
+	return *f.caKey, nil
+}
+
+func (f *fakeStore) InsertIdentityCert(_ context.Context, identityName string, cert domain.IdentityCert) error {
+	if _, ok := f.identitiesByName[identityName]; !ok {
+		return domain.Errorf(domain.ErrNotFound, "identity %s", identityName)
+	}
+	if _, ok := f.certsBySerial[cert.Serial]; ok {
+		return domain.Errorf(domain.ErrAlreadyExists, "certificate %s", cert.Serial)
+	}
+	f.certsBySerial[cert.Serial] = certEntry{cert: cert, identity: identityName}
+	return nil
+}
+
+func (f *fakeStore) ListIdentityCerts(_ context.Context, identityName string) ([]domain.IdentityCert, error) {
+	if _, ok := f.identitiesByName[identityName]; !ok {
+		return nil, domain.Errorf(domain.ErrNotFound, "identity %s", identityName)
+	}
+	return f.certsForIdentity(identityName), nil
+}
+
+func (f *fakeStore) GetIdentityCertBySerial(_ context.Context, serial string) (storage.IdentityCertRecord, error) {
+	e, ok := f.certsBySerial[serial]
+	if !ok {
+		return storage.IdentityCertRecord{}, domain.Errorf(domain.ErrNotFound, "certificate %s", serial)
+	}
+	return storage.IdentityCertRecord{
+		Cert:             e.cert,
+		IdentityName:     e.identity,
+		IdentityDisabled: f.identitiesByName[e.identity].Disabled,
+	}, nil
+}
+
+func (f *fakeStore) RevokeIdentityCert(_ context.Context, serial string) error {
+	e, ok := f.certsBySerial[serial]
+	if !ok {
+		return domain.Errorf(domain.ErrNotFound, "certificate %s", serial)
+	}
+	if e.cert.RevokedAt.IsZero() {
+		e.cert.RevokedAt = time.Now()
+		f.certsBySerial[serial] = e
+	}
 	return nil
 }
 
@@ -536,6 +713,15 @@ func (f *fakeStore) ListChangesSince(context.Context, uint64, int) ([]domain.Cha
 	return nil, nil
 }
 func (f *fakeStore) PruneChangeLog(context.Context, time.Duration, int) (int, error) { return 0, nil }
-func (f *fakeStore) SnapshotParameters(context.Context, []string) ([]domain.Parameter, uint64, error) {
+func (f *fakeStore) SnapshotParameters(context.Context, []domain.WatchSelector) ([]domain.Parameter, uint64, error) {
 	return nil, f.revision, nil
+}
+
+// keyHasPrefix reports whether key falls under the segment-aware key prefix
+// ("" matches all keys).
+func keyHasPrefix(key, prefix string) bool {
+	if prefix == "" {
+		return true
+	}
+	return key == prefix || (len(key) > len(prefix) && key[:len(prefix)] == prefix && key[len(prefix)] == '/')
 }
