@@ -513,6 +513,9 @@ func (s *Service) ReauthorizeWatch(ctx context.Context, pr Principal, namespaces
 			if err := s.namespaceMethodGate(ctx, pr, ns, domain.ResourceParameter); err != nil {
 				return err
 			}
+			if !policy.Authorize(policies, home, domain.OpParameterRead, ns) {
+				return domain.Errorf(domain.ErrPermissionDenied, "access denied")
+			}
 		}
 	}
 	return nil
