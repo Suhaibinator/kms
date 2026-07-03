@@ -66,13 +66,6 @@ implementation:
    namespace the client is authorized for), hot reload **on by default** for
    parameters (`Static: true` to opt out), secrets remain
    notify-and-refetch (plaintext is never pushed over a stream).
-8. **Authorization, subscription, and isolation are per-namespace.** A
-   client is authorized for a namespace or it isn't; if it is, it may read,
-   list, and watch **every** key in that namespace — nothing finer. There is
-   no per-key authorization and no key-level watch filtering. A subscriber to
-   `(env, app)` receives every change in that namespace. Any narrower
-   interest (e.g. "only wake me for `db/*`") is the client's own concern,
-   applied in its callback; the server and wire know nothing about it.
 6. **Proof of app identity: mTLS client certificates from a built-in CA.**
    Bearer tokens are possession-free ("whoever holds the string is the
    app"); machine clients instead prove identity with a client certificate
@@ -82,6 +75,13 @@ implementation:
    into it — enforced on every operation in the namespace, including reads
    of unprotected parameters. A namespace can require mTLS-only, making
    token theft useless for that namespace.
+8. **Authorization, subscription, and isolation are per-namespace.** A
+   client is authorized for a namespace or it isn't; if it is, it may read,
+   list, and watch **every** key in that namespace — nothing finer. There is
+   no per-key authorization and no key-level watch filtering. A subscriber to
+   `(env, app)` receives every change in that namespace. Any narrower
+   interest (e.g. "only wake me for `db/*`") is the client's own concern,
+   applied in its callback; the server and wire know nothing about it.
 
 ## 3. Decisions made by this plan
 
@@ -383,7 +383,7 @@ changes (mechanical unless noted):
     `repeated string auth_methods`; response returns token and/or a
     one-time PEM cert bundle. `Identity` message gains namespace,
     `has_token`, and issued-cert summaries.
-  - New `IssueIdentityCertificate(name, ttl)` / 
+  - New `IssueIdentityCertificate(name, ttl)` /
     `RevokeIdentityCertificate(name, serial)` (§7).
   - New `WhoAmI() returns (identity name, kind, NamespaceRef namespace,
     string auth_method)`.
