@@ -79,6 +79,12 @@ startup — addresses, paths, and feature flags, deliberately never a
 wholesale dump of the file (so nothing sensitive that might end up in the
 YAML by mistake gets logged).
 
+Logs are structured JSON emitted by [Uber zap](https://github.com/uber-go/zap):
+each line carries `ts` (ISO8601, millisecond precision), a lowercase `level`
+(`debug`/`info`/`warn`/`error`), `msg`, and typed fields. `log.level` /
+`KMS_LOG_LEVEL` sets the minimum level (default `info`). Secret plaintext,
+tokens, and key material never appear in a log line at any level.
+
 ## Administrative CLI reference
 
 These commands are implemented in `internal/cli` and operate directly on the
