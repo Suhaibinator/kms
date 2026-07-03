@@ -14,7 +14,7 @@ Source: `sdk/python/kms_paramstore/`. Requires Python 3.10+.
 
 This document describes the public API as implemented and verified: every
 symbol below was checked against `sdk/python/kms_paramstore/*.py`, the
-package's own test suite (`sdk/python/tests/`, 53 tests, all passing), and a
+package's own test suite (`sdk/python/tests/`, 59 tests, all passing), and a
 live round trip against a running `parameter-store` server (put/get a
 secret and a parameter, namespace discovery, declarative `resolve`,
 redaction, and hot reload). For the wire-level contract, see
@@ -332,19 +332,20 @@ versions, where a field had to opt in with `dynamic=True` — **that keyword is
 gone**. To read a value once at resolution time and never track changes, pass
 `static=True`.
 
-All non-static fields in a namespace ride **one** namespace-wide selector —
-`{namespace, "*"}` — on the shared stream, rather than a per-key
-registration, so many hot-reloading fields cost a single subscription. A
-`static=True` field opens no subscription at all. An `env_var`-pinned field
-is never registered (it can never change at runtime), and `resolve` logs
-that hot reload was skipped for it.
+The **namespace `(env, app)` is the unit of subscription.** All non-static
+fields in a namespace share that namespace's **one** subscription on the
+shared stream, rather than a per-key registration, so many hot-reloading
+fields cost a single subscription. A `static=True` field opens no
+subscription at all. An `env_var`-pinned field is never registered (it can
+never change at runtime), and `resolve` logs that hot reload was skipped for
+it.
 
 The SDK owns the whole connection lifecycle — connect, send registration,
 apply snapshot/changes, ack heartbeats, reconnect with jittered exponential
 backoff (base 1s, cap 60s) on stream loss, resume from the last-applied
 revision, and a periodic full reconciliation poll (default every 5 minutes,
-listing by namespace + key prefix) as a safety net. Applications only see
-values and callbacks.
+listing the whole subscribed namespace and reconciling by exact key) as a
+safety net. Applications only see values and callbacks.
 
 ```python
 # 1. Live handle — always the latest value, no RPC.
@@ -354,12 +355,14 @@ rate_limit = cfg.rate_limit.get()      # equivalently: cfg.rate_limit.value
 #    dedicated dispatch thread.
 cfg.rate_limit.on_change(lambda old, new: pool.resize(int(new)))
 
-# 3. Pattern watch for advanced use — relative to the client namespace,
-#    or absolute "/env/app/pattern".
+# 3. Namespace watch for advanced use — fires for EVERY change in the
+#    namespace; there is no key pattern. Filter inside the callback.
 def on_event(ev):
-    print(ev.type, ev.namespace, ev.key, ev.value)   # ev.path -> "/env/app/key"
+    if not ev.key.startswith("billing/"):
+        return                                          # this app's own convention
+    print(ev.type, ev.namespace, ev.key, ev.value)      # ev.path -> "/env/app/key"
 
-stop = client.watch("billing/*", on_event)    # or "*", or "/prod/gradethis/*"
+stop = client.watch(on_event)                           # the client's namespace
 # ... later
 stop()
 ```
@@ -370,13 +373,16 @@ resolution; `on_change(fn)` registers `fn(old, new)`, called on the shared
 dispatch thread — a callback on a static or env-pinned field is accepted but
 never fires; `initialized` reports whether resolution has run.
 
-`Client.watch(pattern, callback) -> stop`: subscribes to a key pattern
-within a namespace. `pattern` is relative to the client namespace —
-an exact key, `"*"` (all keys), or a `"prefix/*"` subtree (e.g.
-`"billing/*"`) — or an absolute `"/env/app/pattern"` for another namespace.
-`callback` receives an `Event` for every matching change, dispatched on the
-shared callback thread so a slow or raising callback cannot stall the stream
-or other callbacks. `Event` (`kms_paramstore/watch.py`) carries
+`Client.watch(callback) -> stop`: subscribes to the client's whole
+namespace. It takes **no key pattern** — the namespace is the unit of
+subscription, so `callback` fires for **every** change in the namespace; an
+application interested in only some keys filters by its own convention inside
+the callback (e.g. `if ev.key.startswith("billing/"): ...`). `callback` is
+dispatched on the shared callback thread so a slow or raising callback cannot
+stall the stream or other callbacks. `Client.watch_namespace(namespace,
+callback) -> stop` does the same for another namespace the client is
+authorized for (`namespace` is an `"env/app"` string, or `None` for the
+client's own). `Event` (`kms_paramstore/watch.py`) carries
 `type: EventType`, `namespace` (`"env/app"`), `key` (relative), `value`
 (populated for puts), `version`, `revision`, and `change_type`; its `path`
 property renders the absolute display path `"/env/app/key"` for logging.

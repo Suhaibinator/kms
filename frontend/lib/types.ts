@@ -231,13 +231,13 @@ export interface PromoteSecretResponse {
 
 // --- Policies ---
 
-// A rule matches an operation against a namespace + key. env/app are exact or
-// "*"; key is exact, "*", or "prefix/*".
+// A rule grants an operation over a whole namespace. env/app are exact or "*".
+// There is no key field: the namespace (env, app) is the unit of authorization,
+// so a grant applies to every key in the matched namespace.
 export interface PolicyRule {
   operation: string;
   env: string;
   app: string;
-  key: string;
 }
 
 export interface Policy {
@@ -339,18 +339,14 @@ export interface AuditFilters {
 
 // --- Subscribers ---
 
-export interface WatchSelector {
-  env: string;
-  app: string;
-  // "" or "*" means all keys in the namespace.
-  key_pattern: string;
-}
-
 export interface Subscriber {
   client_name: string;
   instance_id: string;
   identity: string;
-  selectors: WatchSelector[];
+  // The namespaces this stream is subscribed to. A subscriber receives every
+  // change in each of these namespaces; there is no per-key filtering on the
+  // wire (any narrower interest is applied client-side in the callback).
+  namespaces: NamespaceRef[];
   remote_addr: string;
   connected_at_unix_ms: number;
   last_heartbeat_unix_ms: number;

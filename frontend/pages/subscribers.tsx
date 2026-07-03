@@ -1,22 +1,21 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "@/lib/api";
-import type { Subscriber, WatchSelector } from "@/lib/types";
+import type { NamespaceRef, Subscriber } from "@/lib/types";
 import { useToast } from "@/context/ToastContext";
 import { formatRelative, formatUnixMs } from "@/lib/format";
 import { Badge, EmptyState, Loading, PageHeader } from "@/components/ui";
 
 const REFRESH_MS = 5000;
 
-function formatSelector(sel: WatchSelector): string {
-  const pattern = sel.key_pattern && sel.key_pattern !== "" ? sel.key_pattern : "*";
-  return `${sel.env}/${sel.app} · ${pattern}`;
+function formatNamespace(ns: NamespaceRef): string {
+  return `${ns.env}/${ns.app}`;
 }
 
-// The namespace a subscriber is grouped under: the namespace of its first
-// selector. In practice a client subscribes namespace-wide, so this is stable.
+// The namespace a subscriber is grouped under: its first watched namespace. A
+// client subscribes namespace-wide, so this is stable.
 function groupKey(s: Subscriber): string {
-  const first = s.selectors?.[0];
-  return first ? `${first.env}/${first.app}` : "unscoped";
+  const first = s.namespaces?.[0];
+  return first ? formatNamespace(first) : "unscoped";
 }
 
 export default function SubscribersPage() {
@@ -142,7 +141,7 @@ export default function SubscribersPage() {
                   <tr>
                     <th>Client</th>
                     <th>Identity</th>
-                    <th>Selectors</th>
+                    <th>Namespaces</th>
                     <th>Remote address</th>
                     <th>Connected</th>
                     <th>Last heartbeat</th>
@@ -167,12 +166,12 @@ export default function SubscribersPage() {
                         <td className="mono">{s.identity || <span className="faint">—</span>}</td>
                         <td>
                           <div className="row-wrap">
-                            {(s.selectors ?? []).length === 0 ? (
+                            {(s.namespaces ?? []).length === 0 ? (
                               <span className="faint">—</span>
                             ) : (
-                              s.selectors.map((sel, i) => (
+                              s.namespaces.map((ns, i) => (
                                 <Badge key={i} kind="neutral">
-                                  {formatSelector(sel)}
+                                  {formatNamespace(ns)}
                                 </Badge>
                               ))
                             )}

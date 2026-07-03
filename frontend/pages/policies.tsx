@@ -19,7 +19,7 @@ function emptyDraft(): Draft {
 }
 
 function newRule(): PolicyRule {
-  return { operation: "secret:read", env: "*", app: "*", key: "*" };
+  return { operation: "secret:read", env: "*", app: "*" };
 }
 
 export default function PoliciesPage() {
@@ -89,15 +89,14 @@ export default function PoliciesPage() {
       toast.error(new Error("A subject is required."), "Missing subject");
       return;
     }
-    // Drop incomplete rules; env/app/key are all required (use "*" for any).
+    // Drop incomplete rules; env/app are both required (use "*" for any).
     const clean = (rules: PolicyRule[]) =>
       rules
-        .filter((r) => r.env.trim() !== "" && r.app.trim() !== "" && r.key.trim() !== "")
+        .filter((r) => r.env.trim() !== "" && r.app.trim() !== "")
         .map((r) => ({
           operation: r.operation,
           env: r.env.trim(),
           app: r.app.trim(),
-          key: r.key.trim(),
         }));
 
     const policy: Policy = {
@@ -147,7 +146,7 @@ export default function PoliciesPage() {
     <>
       <PageHeader
         title="Policies"
-        subtitle="Allow / deny rules that authorize identities for operations on a namespace and key."
+        subtitle="Allow / deny rules that authorize identities for operations on a namespace."
         actions={
           <button className="btn btn-primary" onClick={openCreate}>
             New policy
@@ -249,9 +248,9 @@ export default function PoliciesPage() {
             </div>
 
             <div className="info-panel mb-16">
-              Deny rules always override allow rules. Use <span className="mono">*</span> for env,
-              app, or key to match any; keys also accept a{" "}
-              <span className="mono">prefix/*</span> form.
+              Deny rules always override allow rules. Use <span className="mono">*</span> for env or
+              app to match any. A grant covers the whole namespace — every key in it — since the
+              namespace is the unit of authorization.
             </div>
 
             <RuleEditor
@@ -353,15 +352,6 @@ function RuleEditor({
                   value={rule.app}
                   onChange={(e) => update(i, { app: e.target.value })}
                   placeholder="gradethis"
-                />
-              </div>
-              <div className="rule-path">
-                <label className="field-label">Key</label>
-                <input
-                  className="input mono"
-                  value={rule.key}
-                  onChange={(e) => update(i, { key: e.target.value })}
-                  placeholder="billing/*"
                 />
               </div>
               <button

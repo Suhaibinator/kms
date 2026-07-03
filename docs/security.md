@@ -368,11 +368,12 @@ without limit.
 
 `internal/policy` implements policy evaluation; `internal/core` is the only
 caller. A `Policy` binds a `subject` (an identity name, or `"*"` for every
-non-admin client) to `allow` and `deny` rule lists. Each rule is an
-`(operation, env, app, key)` tuple:
+non-admin client) to `allow` and `deny` rule lists. **Authorization is
+namespace-level:** a grant is an operation on a whole namespace, and there is
+no per-key scoping. Each rule is an `(operation, env, app)` tuple:
 
 ```json
-{ "operation": "secret:read", "env": "prod", "app": "gradethis", "key": "billing/*" }
+{ "operation": "secret:read", "env": "prod", "app": "gradethis" }
 ```
 
 - **Operation** patterns: an exact operation (`secret:read`), a category
@@ -382,17 +383,16 @@ non-admin client) to `allow` and `deny` rule lists. Each rule is an
   `secret:{read,write,list,disable,destroy,promote}`, and
   `admin:{namespace:create,namespace:update,namespace:delete,identity:cert,policy:write,audit:read,key:rotate}`
   (`domain.Op*` constants).
-- **`env` / `app`**: an exact label or `"*"` (`policy.labelMatches`).
-- **`key`**: an exact key, `"*"` (all keys in the namespace), or a
-  `"prefix/*"` subtree (`keyutil.MatchKey`). Matching is segment-aware, so
-  `billing/*` matches `billing/stripe` but not `billing-2`.
+- **`env` / `app`**: an exact label or `"*"` (`policy.labelMatches`). There is
+  no `key` field — a grant that matches an operation on `(env, app)` covers
+  **every** key in that namespace.
 
 **Evaluation precedence** for a namespaced operation is
 **deny > implicit home-namespace grant > explicit allow > default deny**
-(`policy.Authorize`):
+(`policy.Authorize`), evaluated against the target `NamespaceRef`:
 
 1. If any `deny` rule across every policy bound to the subject matches
-   `(operation, ref)` → **deny**, full stop.
+   `(operation, ns)` → **deny**, full stop.
 2. Else if the **implicit home-namespace grant** applies → **allow**.
 3. Else if any `allow` rule matches → **allow**.
 4. Else → **deny**.
@@ -402,13 +402,14 @@ non-admin client) to `allow` and `deny` rule lists. Each rule is an
 bound to a namespace may perform read/list operations **in its own namespace
 with no policy rule at all**. The implicit set is exactly
 `parameter:read`, `parameter:list`, `secret:read`, and `secret:list`; a
-subscribe rides on the same grant (it is authorized as continuous parameter
-reads/lists within the namespace). It applies **only** to the caller's own
-namespace — cross-namespace access, and every write, delete, disable, destroy,
-and promote, always requires an explicit `allow` rule. Deny rules still
-override the implicit grant (step 1 precedes step 2), so an admin can carve
-exceptions inside a home namespace. `policy.Evaluate` is the pure
-rule-only form used where the implicit grant must not apply.
+subscribe rides on the same grant (it is authorized once, as a namespace-level
+`parameter:read`, when the stream registers). It applies **only** to the
+caller's own namespace — access to any *other* namespace, and every write,
+delete, disable, destroy, and promote, always requires an explicit `allow`
+rule (itself namespace-level). Deny rules still override the implicit grant
+(step 1 precedes step 2), so an admin can carve out a whole namespace — but not
+a single key. `policy.Evaluate` is the pure rule-only form used where the
+implicit grant must not apply.
 
 Admin identities (`Identity.Kind == "admin"`) are authorized for everything
 policy could grant — they are the management plane — except the one place that
@@ -430,21 +431,19 @@ client identities are deliberately given *different* privileges from one
 another. The cross-namespace and admin-impersonation vectors are closed; the
 in-namespace lateral capability is the delegation itself.
 
-**List filtering** is a two-step check (`policy.MayListUnder` plus per-item
-evaluation): first, a coarse check that at least one `allow` rule (in the
-requested namespace, with a key pattern intersecting the requested key prefix)
-could possibly match something (otherwise the list is denied and audited as
-`authz.denial`); then every individual result is filtered through the same
-per-item authorization used for reads, so a caller never sees an item their
-policy would deny reading directly, even though a partial-subtree deny doesn't
-forbid listing the rest.
+**List authorization** is a single namespace-level check
+(`policy.MayListUnder` / `Authorize` with the `list` operation): a caller
+either may list a namespace or may not, and if it may, it sees **every** key
+in it. There is no per-item filtering, because there is no per-key
+authorization to filter against. (The `key_prefix` accepted by `List*` is a
+convenience *browsing* filter — a plain `LIKE 'prefix%'` on the opaque key
+string — never a security boundary.)
 
 Every authorization **denial** is audited (`authz.denial`) with the attempted
-operation and the target `env`/`app`/`key`. Policy rules are normalized and
-validated at write time (`policy.ValidateRules`): unknown operations are
-rejected, an empty `env`/`app`/`key` normalizes to `"*"`, and non-`"*"` labels
-and key patterns are validated by `internal/keyutil` before they can silently
-fail to match anything.
+operation and the target `env`/`app`(`/key` for display). Policy rules are
+normalized and validated at write time (`policy.ValidateRules`): unknown
+operations are rejected, an empty `env`/`app` normalizes to `"*"`, and
+non-`"*"` labels are validated by `internal/keyutil`.
 
 ## Namespace and key validation
 
@@ -455,10 +454,11 @@ them:
 - **`env` / `app`** (`ValidateEnv` / `ValidateApp`): 1–64 characters of
   `[a-z0-9-]`, not starting or ending with `-`.
 - **`key`** (`ValidateKey`): 1–256 characters total; `/`-separated segments of
-  `[a-z0-9._-]`; no leading, trailing, empty, `.`, or `..` segment. Interior
-  slashes are part of the key name, not namespace structure.
-- **key patterns** in policy rules and watch selectors (`ValidateKeyPattern` /
-  `MatchKey`): an exact key, `"*"`, or a `"prefix/*"` subtree.
+  `[a-z0-9._-]`; no leading, trailing, empty, `.`, or `..` segment. The slash
+  is validated only as a legal character — a key is an **opaque** string the
+  server never splits, prefix-matches, or otherwise interprets. `db/port` and
+  `metrics/port` are two unrelated keys; there is no key hierarchy, no
+  `MatchKey`, and no key-pattern authorization anywhere.
 
 Because env, app, and key are explicit, validated fields on the wire — never a
 single path string the server parses — the traversal and injection surface

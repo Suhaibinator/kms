@@ -89,8 +89,10 @@ token material.
 Timestamps are Unix milliseconds (`*_unix_ms`, integer). Binary values are
 base64 (`value_base64`). A resource reference is flattened at the top level of
 each DTO as `env`, `app`, `key`; list queries use `env`, `app`, and
-`key_prefix`. Display paths shown in the UI look like
-`/prod/gradethis/rate-limit`.
+`key_prefix`. The `key_prefix` is a plain browsing filter (`LIKE 'prefix%'` on
+the opaque key string), **not** an authorization boundary — a caller authorized
+for a namespace may list any key in it; the prefix only narrows what a page
+returns. Display paths shown in the UI look like `/prod/gradethis/rate-limit`.
 
 `Namespace`:
 ```json
@@ -262,18 +264,19 @@ Listing is always namespace-scoped: `env` and `app` are required.
 
 ### Policies
 
-Policy shape (rules match an operation against a namespace + key):
+Policy shape (a rule grants an operation over a whole namespace):
 ```json
 { "name": "gradethis-read", "subject": "gradethis-be",
-  "allow": [ {"operation": "secret:read", "env": "prod", "app": "gradethis", "key": "billing/*"} ],
+  "allow": [ {"operation": "secret:read", "env": "prod", "app": "gradethis"} ],
   "deny":  [],
   "created_at_unix_ms": 0, "updated_at_unix_ms": 0 }
 ```
 
-A rule's `env` and `app` are exact or `"*"`; `key` is exact, `"*"`, or
-`"prefix/*"`. Deny rules always override allow; evaluation is deny → allow →
-default deny. The implicit home-namespace grant sits behind deny rules (a deny
-still wins).
+A rule's `env` and `app` are exact or `"*"`. There is **no** `key` field: the
+namespace `(env, app)` is the unit of authorization, so a grant applies to every
+key in the matched namespace. Deny rules always override allow; evaluation is
+deny → allow → default deny. The implicit home-namespace grant sits behind deny
+rules (a deny still wins).
 
 - `GET /api/v1/policies?page_size=&page_token=` →
   `{"policies": [...], "next_page_token": ""}`
@@ -332,13 +335,15 @@ still wins).
   ```json
   { "subscribers": [ { "client_name": "gradethis-be", "instance_id": "gradethis-be-8f3a",
       "identity": "gradethis-be",
-      "selectors": [ { "env": "prod", "app": "gradethis", "key_pattern": "*" } ],
+      "namespaces": [ { "env": "prod", "app": "gradethis" } ],
       "remote_addr": "10.0.0.5:53411", "connected_at_unix_ms": 0,
       "last_heartbeat_unix_ms": 0, "last_acked_revision": 41 } ],
     "current_revision": 42 }
   ```
-  Each selector is a namespace + key pattern (`""` or `"*"` = all keys). The UI
-  compares `last_acked_revision` against `current_revision` to show which apps
+  `namespaces` are the namespaces the stream is subscribed to. A subscriber
+  receives **every** change in each namespace it watches; there is no key-level
+  filtering on the wire (a client narrows its interest in its own callback). The
+  UI compares `last_acked_revision` against `current_revision` to show which apps
   have applied the latest configuration.
 
 ### Key metadata

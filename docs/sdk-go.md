@@ -71,8 +71,8 @@ dispatcher); it is idempotent.
 ## Namespaces and keys
 
 Every key the SDK accepts — in `GetParameter`/`GetSecret`/`PutParameter`/
-`PutSecret`, in `SecretValue.Key`/`ParameterValue.Key`, and in `Client.Watch`
-patterns — is resolved the same way:
+`PutSecret`, and in `SecretValue.Key`/`ParameterValue.Key` — is resolved the
+same way (`Client.Watch` takes no key, only a namespace; see below):
 
 - A key with a **leading `/`** is an absolute `/env/app/key` display path. The
   SDK splits it into an explicit namespace + key (requiring at least three
@@ -288,20 +288,22 @@ current value (parameters are not secret).
 
 ## Hot reload
 
-Non-`Static` parameters (or paths watched directly — see below) are served
-over the client's shared `Subscribe` stream. The SDK owns the whole connection
-lifecycle — connect, send selectors, apply snapshot/changes, ack heartbeats,
-reconnect with jittered exponential backoff (base 1s, cap 60s) on stream loss,
-and resume from the last-applied revision. Applications only see values and
-callbacks.
+Non-`Static` parameters (and namespaces watched directly — see below) are
+served over the client's shared `Subscribe` stream. The SDK owns the whole
+connection lifecycle — connect, send the namespace subscription, apply
+snapshot/changes, ack heartbeats, reconnect with jittered exponential backoff
+(base 1s, cap 60s) on stream loss, and resume from the last-applied revision.
+Applications only see values and callbacks.
 
-Rather than registering one selector per key, **every non-static
-`ParameterValue` in a namespace shares a single namespace-wide selector
-`{namespace, "*"}`** on the stream, with a per-key handler dispatched from the
-events it delivers. Registering additional parameters in a namespace already
-covered therefore does **not** reconnect the stream; the selector set only
-changes (and the stream only reconnects) when a new namespace or a new
-`Watch` pattern is added. Static fields resolve once and never register.
+The **namespace `(env, app)` is the unit of subscription**. **Every non-static
+`ParameterValue` and every `Watch` share one subscription** to the set of
+namespaces they reference — the client's own namespace, plus any extra
+namespace a `WatchNamespace` targets. The server streams **every** change in
+those namespaces; the SDK routes each incoming change to the matching field by
+**exact key** and to every `Watch` on the change's namespace. Registering more
+parameters or watchers in an already-subscribed namespace therefore does
+**not** reconnect the stream; the stream only reconnects when a new namespace
+is added. Static fields resolve once and never subscribe.
 
 ```go
 // 1. Live handle — always the latest value, safe for concurrent use, no RPC.
@@ -312,8 +314,12 @@ cfg.RateLimit.OnChange(func(old, new string) {
     pool.Resize(mustAtoi(new))
 })
 
-// 3. Namespace-level watch for advanced use.
-stop, err := client.Watch(ctx, "billing/*", func(ev paramstore.Event) {
+// 3. Namespace-level watch for advanced use. Fires for EVERY key in the
+//    namespace; filter inside the callback if you only want a subset.
+stop, err := client.Watch(ctx, func(ev paramstore.Event) {
+    if !strings.HasPrefix(ev.Key, "billing/") {
+        return
+    }
     fmt.Printf("%s %s/%s => %s\n", ev.Type, ev.Namespace, ev.Key, ev.Value)
 })
 defer stop()
@@ -325,15 +331,17 @@ recovered/logged and cannot stall the stream or other callbacks (a full
 dispatch queue drops the notification — values are already updated by then
 — and logs a warning rather than blocking).
 
-`Client.Watch(ctx, pattern, fn)` takes a **relative** key pattern against the
-client namespace — an exact key (`"rate-limit"`), a `"*"` prefix pattern
-(`"billing/*"`), or `"*"` for the whole namespace — or an absolute
-`/env/app/pattern` for another namespace. It delivers every matching `Event`:
-parameter puts/deletes (`EventPut`/`EventDelete`, with `Value` populated for
-puts) and secret metadata changes (`EventSecretChange`; no plaintext, re-fetch
-via `GetSecret` if needed). It returns a `stop` function; `stop` is also called
-automatically if the supplied `ctx` is cancelled. A relative pattern on a
-client with no namespace returns `ErrNoNamespace`.
+`Client.Watch(ctx, fn)` subscribes to the client's **whole namespace** and
+takes **no key pattern**: it fires for every change in the namespace, so an app
+that only cares about a subset filters inside `fn` by its own convention (e.g.
+`strings.HasPrefix(ev.Key, "db/")`). Each `Event` is a parameter put/delete
+(`EventPut`/`EventDelete`, with `Value` populated for puts) or a secret metadata
+change (`EventSecretChange`; no plaintext, re-fetch via `GetSecret` if needed).
+`Watch` returns a `stop` function; `stop` is also called automatically if the
+supplied `ctx` is cancelled. On a client with no namespace (unbound identity and
+empty `Config.Namespace`) `Watch` returns `ErrNoNamespace`. To observe a
+different namespace the client is authorized for, use
+`Client.WatchNamespace(ctx, "env/app", fn)`.
 
 An `Event` (`sdk/go/paramstore/watch.go`) carries `Type`, `Namespace`
 (`"env/app"`), `Key` (relative), `Value` (for puts), `Version`, `Revision`,
@@ -341,9 +349,9 @@ and the raw `ChangeType`. `Event.Path()` returns the `/env/app/key` display
 path.
 
 As a safety net, the subscription manager also polls a full reconciliation
-every 5 minutes (registered parameter keys via exact fetches, and any
-`"*"`-suffixed watch patterns via `ListParameters` on the namespace + key
-prefix), applying any drift the event stream might have missed — event
+every 5 minutes: it lists each subscribed namespace in full
+(`ListParameters` with an empty key prefix) and applies any drift the event
+stream missed, including deletions of previously-known parameters. Event
 delivery is at-least-once and idempotent by revision, so this never
 double-applies a change.
 
@@ -368,8 +376,9 @@ or a reconciliation fetch that returns not-found — the handle reverts:
   an empty `Value` for the deleted key.
 
 Deletion is scoped to what a stream actually subscribed to: only known keys
-within the subscribed selectors that are absent from a snapshot are reverted,
-so an unrelated known key is never cleared by another stream's snapshot.
+within the subscribed **namespaces** that are absent from a snapshot are
+reverted, so a known key in another namespace is never cleared by an unrelated
+snapshot.
 
 ## Testing against a fake server
 
@@ -397,7 +406,7 @@ Scripting surface:
 - **Errors:** `SetParameterError(ns, key, err)` / `SetParameterErrorPath`, `SetSecretError` / `SetSecretErrorPath`.
 - **Identity:** `SetIdentity(name, kind, namespace, authMethod)` sets the `WhoAmI` response — pass an empty `namespace` for an unbound identity — to drive namespace discovery and `ErrNoNamespace`.
 - **Inspection:** `LastMetadata(method)` (the incoming gRPC metadata of the most recent call), `PutSecretCalls()`, `Revision()`, `SubscribeCount()`, `SetGetParameterHook(func(displayPath string))` (runs at the start of every `GetParameter`, to inject a concurrent event mid-fetch).
-- **Driving the stream:** `WaitForSubscribe(timeout)` returns a `*Subscription` whose requested selectors are inspectable via `Selectors`, `HasSelector(ns, keyPattern)`, and `SelectorDisplays()`. Push events with `PushSnapshot(rev, params...)` (build params with the `paramstoretest.Param(ns, key, value, version)` / `ParamPath(displayPath, value, version)` helpers), `PushChange(rev, ns, key, changeType, value, version)` / `PushChangePath`, `PushSecretChange(rev, ns, key, changeType, version)` / `PushSecretChangePath`, `SendHeartbeat(rev)`, `WaitAck(timeout)`, and `Kill()` (force a disconnect to exercise reconnect and resume-by-revision).
+- **Driving the stream:** `WaitForSubscribe(timeout)` returns a `*Subscription` whose requested namespaces are inspectable via `Namespaces`, `HasNamespace(ns)`, and `NamespaceStrings()`. Push events with `PushSnapshot(rev, params...)` (build params with the `paramstoretest.Param(ns, key, value, version)` / `ParamPath(displayPath, value, version)` helpers), `PushChange(rev, ns, key, changeType, value, version)` / `PushChangePath`, `PushSecretChange(rev, ns, key, changeType, version)` / `PushSecretChangePath`, `SendHeartbeat(rev)`, `WaitAck(timeout)`, and `Kill()` (force a disconnect to exercise reconnect and resume-by-revision).
 
 ## What this document does not cover
 
