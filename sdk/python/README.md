@@ -137,21 +137,26 @@ Pass `static=True` for a boot-time-only read (no subscription):
 port = ParameterValue("listen-port", static=True)   # read once at resolve
 ```
 
-All non-static fields in a namespace ride a **single** namespace-wide selector on
-the shared stream, so many hot-reloading fields cost one registration.
+The **namespace `(env, app)` is the unit of subscription.** All non-static
+fields in a namespace share that namespace's **single** subscription on the
+shared stream, so many hot-reloading fields cost one registration.
 
 ```python
 cfg.rate_limit.on_change(lambda old, new: pool.resize(int(new)))
 ```
 
-For lower-level use, subscribe to a key pattern directly — relative to the client
-namespace, or an absolute `/env/app/pattern`:
+For lower-level use, watch the client's whole namespace. `watch` takes **no
+key pattern** — it fires for every change in the namespace, and an app that
+cares about only some keys filters inside the callback:
 
 ```python
 def on_event(ev):
-    print(ev.type, ev.namespace, ev.key, ev.value)   # ev.path -> "/env/app/key"
+    if not ev.key.startswith("billing/"):
+        return                                        # this app's own convention
+    print(ev.type, ev.namespace, ev.key, ev.value)    # ev.path -> "/env/app/key"
 
-stop = client.watch("billing/*", on_event)   # or "*", or "/prod/gradethis/*"
+stop = client.watch(on_event)                         # the client's namespace
+# client.watch_namespace("other/svc", on_event)       # another authorized namespace
 # ... later
 stop()
 ```
@@ -159,7 +164,7 @@ stop()
 The SDK owns the connection lifecycle: it subscribes on startup, acks
 heartbeats, reconnects with exponential backoff + jitter (1s base, 60s cap)
 resuming from the last seen revision, and reconciles every 5 minutes via a full
-sync (listing by namespace + key prefix). Events are applied idempotently by
+sync (listing the whole subscribed namespace, reconciled by exact key). Events are applied idempotently by
 revision. Callbacks run on a single dedicated dispatch thread with a bounded
 queue (a full queue drops notifications, never values; a raising callback is
 swallowed and logged), so a slow or failing callback never stalls the stream.

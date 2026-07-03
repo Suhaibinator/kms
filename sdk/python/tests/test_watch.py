@@ -8,15 +8,17 @@ from tests.conftest import NS, NS_APP, NS_ENV
 from tests.helpers import wait_until
 
 
-def _selectors(store):
-    """All (env, app, pattern) selectors currently registered server-side."""
+def _namespaces(store):
+    """All (env, app) namespaces currently subscribed server-side."""
     out = []
     for s in store.subs:
-        out.extend(s.selectors)
+        out.extend(s.namespaces)
     return out
 
 
-def test_watch_callback_fires_on_change(client, server):
+def test_watch_fires_for_every_key_in_namespace(client, server):
+    # The namespace is the unit of subscription: a plain watch(cb) receives
+    # every change in the client's namespace, including keys it never named.
     _addr, store = server
     received = []
     lock = threading.Lock()
@@ -25,10 +27,9 @@ def test_watch_callback_fires_on_change(client, server):
         with lock:
             received.append(ev)
 
-    stop = client.watch("w/*", cb)
+    stop = client.watch(cb)
     try:
-        # Wait until the server has registered the subscription.
-        assert wait_until(lambda: len(store.subs) >= 1), "subscription not registered"
+        assert wait_until(lambda: (NS_ENV, NS_APP) in _namespaces(store)), "namespace not subscribed"
         store.put_param(NS_ENV, NS_APP, "w/a", value="v1")
         assert wait_until(lambda: any(e.key == "w/a" for e in received)), "no event delivered"
         with lock:
@@ -37,16 +38,23 @@ def test_watch_callback_fires_on_change(client, server):
         assert ev.value == "v1"
         assert ev.namespace == "prod/app"
         assert ev.path == "/prod/app/w/a"
+
+        # A change to an unrelated key in the same namespace is delivered too.
+        store.put_param(NS_ENV, NS_APP, "totally/other", value="z")
+        assert wait_until(lambda: any(e.key == "totally/other" for e in received)), \
+            "namespace subscriber missed a key it never selected"
     finally:
         stop()
 
 
-def test_watch_absolute_pattern_other_namespace(client, server):
+def test_watch_namespace_other(client, server):
+    # watch_namespace subscribes to another namespace the client is authorized
+    # for; the callback filters keys by its own convention.
     _addr, store = server
     received = []
-    stop = client.watch("/other/svc/*", lambda ev: received.append(ev))
+    stop = client.watch_namespace("other/svc", lambda ev: received.append(ev))
     try:
-        assert wait_until(lambda: ("other", "svc", "*") in _selectors(store))
+        assert wait_until(lambda: ("other", "svc") in _namespaces(store))
         store.put_param("other", "svc", "k", value="1")
         assert wait_until(lambda: any(e.key == "k" and e.namespace == "other/svc" for e in received))
     finally:
@@ -56,14 +64,15 @@ def test_watch_absolute_pattern_other_namespace(client, server):
 def test_watch_stop_unregisters(client, server):
     _addr, store = server
     hits = []
-    stop = client.watch("x/*", lambda ev: hits.append(ev))
-    assert wait_until(lambda: (NS_ENV, NS_APP, "x/*") in _selectors(store))
+    stop = client.watch(lambda ev: hits.append(ev))
+    assert wait_until(lambda: (NS_ENV, NS_APP) in _namespaces(store))
     stop()
     # Like the Go SDK, the stream stays up and reconnects with the reduced
-    # selector set; the stopped watcher's selector must no longer be registered.
+    # namespace set; the stopped watcher's namespace must no longer be
+    # subscribed (no other watcher or param holds it).
     assert wait_until(
-        lambda: (NS_ENV, NS_APP, "x/*") not in _selectors(store)
-    ), "selector still registered after stop"
+        lambda: (NS_ENV, NS_APP) not in _namespaces(store)
+    ), "namespace still subscribed after stop"
     hits.clear()
     store.put_param(NS_ENV, NS_APP, "x/a", value="v")
     assert hits == [], "stopped watcher still received events"
@@ -85,8 +94,8 @@ def test_hot_reload_on_by_default(client, server):
 
     cfg.rate.on_change(lambda old, new: (lock.acquire(), changes.append((old, new)), lock.release()))
 
-    # A non-static field registers ONE namespace-wide selector {ns, "*"}.
-    assert wait_until(lambda: (NS_ENV, NS_APP, "*") in _selectors(store))
+    # A non-static field subscribes to the client's namespace.
+    assert wait_until(lambda: (NS_ENV, NS_APP) in _namespaces(store))
     store.put_param(NS_ENV, NS_APP, "dyn/rate", value="2")
 
     assert wait_until(lambda: cfg.rate.get() == "2"), "value did not hot-reload"
@@ -112,7 +121,7 @@ def test_static_parameter_does_not_subscribe(client, server):
     assert cfg.log.get() == "text"
 
 
-def test_namespace_wide_selector_shared(client, server):
+def test_namespace_subscription_shared(client, server):
     _addr, store = server
     store.put_param(NS_ENV, NS_APP, "a", value="1")
     store.put_param(NS_ENV, NS_APP, "b", value="2")
@@ -123,9 +132,9 @@ def test_namespace_wide_selector_shared(client, server):
 
     cfg = Cfg()
     client.resolve(cfg)
-    # Both non-static fields ride the single namespace-wide "*" selector.
-    assert wait_until(lambda: (NS_ENV, NS_APP, "*") in _selectors(store))
-    assert wait_until(lambda: sum(1 for s in _selectors(store) if s == (NS_ENV, NS_APP, "*")) == 1)
+    # Both non-static fields share the single namespace subscription.
+    assert wait_until(lambda: (NS_ENV, NS_APP) in _namespaces(store))
+    assert wait_until(lambda: sum(1 for n in _namespaces(store) if n == (NS_ENV, NS_APP)) == 1)
 
 
 def test_env_pinned_does_not_hot_reload(client, server, monkeypatch):
@@ -140,10 +149,10 @@ def test_env_pinned_does_not_hot_reload(client, server, monkeypatch):
     client.resolve(cfg)
     assert cfg.pinned.get() == "env-value"
 
-    # An env-pinned value is never registered on any selector, so a store change
-    # has no code path to reach it — assert deterministically.
+    # An env-pinned value never subscribes, so a store change has no code path
+    # to reach it — assert deterministically.
     store.put_param(NS_ENV, NS_APP, "dyn/pinned", value="changed")
-    assert (NS_ENV, NS_APP, "*") not in _selectors(store)
+    assert (NS_ENV, NS_APP) not in _namespaces(store)
     assert cfg.pinned.get() == "env-value"
 
 
@@ -152,7 +161,7 @@ def test_heartbeat_ack(server):
     c = Client(addr, namespace=NS)
     try:
         store.put_param(NS_ENV, NS_APP, "hb/p", value="v")  # revision -> 1
-        stop = c.watch("hb/p", lambda ev: None)
+        stop = c.watch(lambda ev: None)
         assert wait_until(lambda: len(store.subs) >= 1)
         rev = store.heartbeat()
         assert wait_until(lambda: store.subs and store.subs[0].acked >= rev), "no ack for heartbeat"
@@ -197,8 +206,9 @@ def test_deleted_param_reverts_via_reconnect_snapshot(server):
 
 
 def test_deleted_param_reverts_via_reconcile_notfound(server):
-    # The periodic reconcile must treat a NotFound on a registered parameter as
-    # a deletion and revert to default — not swallow it (Go parity M3).
+    # The periodic reconcile lists the whole namespace; a registered parameter
+    # absent from that listing was deleted while the stream missed the event and
+    # must revert to default — not be swallowed (Go parity M3).
     addr, store = server
     c = Client(addr, namespace=NS)
     try:
@@ -307,15 +317,3 @@ def test_reconnect_after_server_restart(server):
         assert wait_until(lambda: cfg.p.get() == "2", timeout=10), "did not recover after reconnect"
     finally:
         c.close()
-
-
-def test_pattern_prefix_derives_base_key():
-    # Server list prefix is key-level: "billing/*" must list with "billing" (base
-    # + children), not "billing/" (which matches nothing); "*" -> "".
-    from kms_paramstore.watch import _pattern_prefix
-
-    assert _pattern_prefix("billing/*") == "billing"
-    assert _pattern_prefix("a/b/*") == "a/b"
-    assert _pattern_prefix("*") == ""
-    assert _pattern_prefix("") == ""
-    assert _pattern_prefix("billing") == "billing"

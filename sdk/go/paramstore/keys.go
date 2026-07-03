@@ -23,9 +23,8 @@ func (n namespaceRef) proto() *kmsv1.NamespaceRef {
 	return &kmsv1.NamespaceRef{Env: n.env, App: n.app}
 }
 
-// ref is a fully-qualified resource reference: a namespace plus a relative key.
-// For watch selectors the key holds a key pattern ("*", "prefix/*", or an exact
-// key) rather than a concrete key.
+// ref is a fully-qualified resource reference: a namespace plus an exact,
+// opaque key.
 type ref struct {
 	ns  namespaceRef
 	key string
@@ -33,17 +32,13 @@ type ref struct {
 
 // display renders the reference as the "/env/app/key" display path. It is used
 // for logs and audit rendering and as the SDK's internal map key for the read
-// cache, known-value tracking, and pattern matching.
+// cache and known-value tracking.
 func (r ref) display() string {
 	return "/" + r.ns.env + "/" + r.ns.app + "/" + r.key
 }
 
 func (r ref) resourceProto() *kmsv1.ResourceRef {
 	return &kmsv1.ResourceRef{Namespace: r.ns.proto(), Key: r.key}
-}
-
-func (r ref) selectorProto() *kmsv1.WatchSelector {
-	return &kmsv1.WatchSelector{Namespace: r.ns.proto(), KeyPattern: r.key}
 }
 
 // refFromProto converts a wire ResourceRef into a ref.

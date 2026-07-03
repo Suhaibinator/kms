@@ -5,10 +5,13 @@ connect, send registration, apply events, ack heartbeats, reconnect with
 exponential backoff + jitter, resume by revision, and reconcile periodically.
 Applications only ever see values and callbacks.
 
-Interest is expressed as namespace-scoped *selectors* ``(env, app, key_pattern)``.
-Hot-reloading parameters register through one namespace-wide selector
-(``{ns, "*"}``) so every non-static field in a namespace rides a single stream
-registration; explicit :meth:`Client.watch` calls add their own selectors.
+The **namespace** ``(env, app)`` is the unit of subscription: a client
+subscribes to a namespace and receives *every* change in it. Hot-reloading
+parameters and every :meth:`Client.watch` share one subscription per namespace;
+the SDK routes each incoming change to the matching parameter field by **exact
+key** and to every watcher registered on that namespace. There are no key
+patterns or selectors anywhere — a watcher that cares about only some keys
+filters by its own convention inside its callback.
 """
 
 from __future__ import annotations
@@ -23,7 +26,7 @@ from typing import TYPE_CHECKING, Callable, Dict, List, Optional, Set, Tuple
 
 from . import errors
 from ._gen import kms_pb2
-from ._refs import NamespaceRef, Ref, match_key
+from ._refs import NamespaceRef, Ref
 
 if TYPE_CHECKING:
     from .client import Client
@@ -35,9 +38,9 @@ _DEFAULT_RECONCILE_INTERVAL = 300.0  # seconds
 _BACKOFF_BASE = 1.0
 _BACKOFF_MAX = 60.0
 
-# (env, app, key) identifies a resource; (env, app, key_pattern) a selector.
+# (env, app, key) identifies a resource; (env, app) a subscribed namespace.
 _RefKey = Tuple[str, str, str]
-_Selector = Tuple[str, str, str]
+_NSKey = Tuple[str, str]
 
 
 class EventType(enum.Enum):
@@ -51,7 +54,8 @@ class EventType(enum.Enum):
 
 @dataclass
 class Event:
-    """Delivered to :meth:`Client.watch` callbacks when a watched key changes."""
+    """Delivered to :meth:`Client.watch` callbacks when any key in the
+    subscribed namespace changes."""
 
     type: EventType
     namespace: str  # "env/app"
@@ -73,7 +77,6 @@ class Event:
 class _Watcher:
     id: int
     ns: NamespaceRef
-    key_pattern: str
     fn: Callable[[Event], None]
 
 
@@ -122,31 +125,16 @@ def _proto_ref_key(pref) -> _RefKey:
     return (pref.namespace.env, pref.namespace.app, pref.key)
 
 
-def _pattern_prefix(pattern: str) -> str:
-    """Server list KeyPrefix implied by a watch key pattern.
-
-    The server's list prefix is key-level: prefix ``"billing"`` matches the base
-    key ``"billing"`` and everything under ``"billing/"``. So ``"billing/*"`` maps
-    to ``"billing"`` (not ``"billing/"``, which matches nothing), and a
-    whole-namespace ``"*"``/``""`` pattern maps to an empty prefix.
-    """
-    if pattern in ("*", ""):
-        return ""
-    if pattern.endswith("/*"):
-        return pattern[:-2]
-    return pattern
-
-
 class _SubManager:
     def __init__(self, client: "Client", reconcile_interval: float = _DEFAULT_RECONCILE_INTERVAL) -> None:
         self._client = client
         self._lock = threading.Lock()
-        self._selectors: Set[_Selector] = set()
-        # Selectors actually sent on the current stream's Subscribe request.
-        # A snapshot is authoritative only for these, so deletions are diffed
-        # against this scope (not the live selector set, which may have grown
+        self._namespaces: Set[_NSKey] = set()
+        # Namespaces actually sent on the current stream's Subscribe request. A
+        # snapshot is authoritative only for these, so deletions are diffed
+        # against this scope (not the live namespace set, which may have grown
         # since the request was sent).
-        self._stream_selectors: List[_Selector] = []
+        self._stream_namespaces: List[_NSKey] = []
         self._param_handlers: Dict[_RefKey, List[ParamHandler]] = {}
         self._known: Dict[_RefKey, _Known] = {}
         self._watchers: List[_Watcher] = []
@@ -165,27 +153,26 @@ class _SubManager:
     # --- registration ------------------------------------------------------
 
     def register_param(self, ref: Ref, initial: str, handler: ParamHandler) -> None:
-        """Register a hot-reloading parameter on the namespace-wide selector."""
+        """Register a hot-reloading parameter on its namespace subscription."""
         with self._lock:
-            selector = (ref.ns.env, ref.ns.app, "*")
-            new_selector = self._add_selector_locked(selector)
+            new_ns = self._add_namespace_locked((ref.ns.env, ref.ns.app))
             rk = _ref_key(ref)
             self._known[rk] = _Known(initial, True)
             self._param_handlers.setdefault(rk, []).append(handler)
             was_started = self._started
             self._ensure_started_locked()
-        if was_started and new_selector:
+        if was_started and new_ns:
             self._signal_restart()
 
-    def register_watcher(self, ns: NamespaceRef, key_pattern: str, fn: Callable[[Event], None]) -> _Watcher:
+    def register_watcher(self, ns: NamespaceRef, fn: Callable[[Event], None]) -> _Watcher:
         with self._lock:
             self._next_watcher_id += 1
-            w = _Watcher(self._next_watcher_id, ns, key_pattern, fn)
+            w = _Watcher(self._next_watcher_id, ns, fn)
             self._watchers.append(w)
-            new_selector = self._add_selector_locked((ns.env, ns.app, key_pattern))
+            new_ns = self._add_namespace_locked((ns.env, ns.app))
             was_started = self._started
             self._ensure_started_locked()
-        if was_started and new_selector:
+        if was_started and new_ns:
             self._signal_restart()
         return w
 
@@ -195,27 +182,27 @@ class _SubManager:
                 self._watchers.remove(w)
             except ValueError:
                 return
-            selector = (w.ns.env, w.ns.app, w.key_pattern)
-            still_needed = self._selector_needed_locked(selector)
+            nsk = (w.ns.env, w.ns.app)
+            still_needed = self._namespace_needed_locked(nsk)
             if not still_needed:
-                self._selectors.discard(selector)
+                self._namespaces.discard(nsk)
             started = self._started
         if started and not still_needed:
             self._signal_restart()
 
-    def _selector_needed_locked(self, selector: _Selector) -> bool:
-        env, app, pattern = selector
-        if any((w.ns.env, w.ns.app, w.key_pattern) == selector for w in self._watchers):
+    def _namespace_needed_locked(self, nsk: _NSKey) -> bool:
+        env, app = nsk
+        if any((w.ns.env, w.ns.app) == nsk for w in self._watchers):
             return True
-        # Hot-reloading parameters hold the namespace-wide "*" selector.
-        if pattern == "*" and any(rk[0] == env and rk[1] == app for rk in self._param_handlers):
+        # Hot-reloading parameters hold their namespace subscription.
+        if any(rk[0] == env and rk[1] == app for rk in self._param_handlers):
             return True
         return False
 
-    def _add_selector_locked(self, selector: _Selector) -> bool:
-        if selector in self._selectors:
+    def _add_namespace_locked(self, nsk: _NSKey) -> bool:
+        if nsk in self._namespaces:
             return False
-        self._selectors.add(selector)
+        self._namespaces.add(nsk)
         return True
 
     def _ensure_started_locked(self) -> None:
@@ -244,9 +231,9 @@ class _SubManager:
         # last one seen (idempotent, at-least-once).
         return rev == 0 or rev > self._get_rev()
 
-    def _snapshot_selectors(self) -> List[_Selector]:
+    def _snapshot_namespaces(self) -> List[_NSKey]:
         with self._lock:
-            return sorted(self._selectors)
+            return sorted(self._namespaces)
 
     # --- lifecycle ---------------------------------------------------------
 
@@ -282,7 +269,7 @@ class _SubManager:
                 return
             if self._restart_requested:
                 attempt = 0
-                continue  # selector set changed: reconnect immediately
+                continue  # namespace set changed: reconnect immediately
             delay = backoff_delay(attempt)
             attempt += 1
             self._log("watch stream ended (%s); reconnecting in %.2fs", err, delay)
@@ -292,15 +279,12 @@ class _SubManager:
 
     def _run_stream(self) -> Optional[Exception]:
         out_q: "queue.Queue[Optional[kms_pb2.SubscribeRequest]]" = queue.Queue()
-        sels = self._snapshot_selectors()
+        nss = self._snapshot_namespaces()
         with self._lock:
-            self._stream_selectors = list(sels)
+            self._stream_namespaces = list(nss)
         registration = kms_pb2.SubscribeRequest(
             client_name=self._client._client_name,
-            selectors=[
-                kms_pb2.WatchSelector(namespace=kms_pb2.NamespaceRef(env=env, app=app), key_pattern=pat)
-                for (env, app, pat) in sels
-            ],
+            namespaces=[kms_pb2.NamespaceRef(env=env, app=app) for (env, app) in nss],
             last_seen_revision=self._get_rev(),
         )
 
@@ -345,11 +329,12 @@ class _SubManager:
             out_q.put(kms_pb2.SubscribeRequest(acked_revision=self._get_rev()))
 
     def _apply_snapshot(self, snap, rev: int) -> None:
-        # A snapshot is authoritative for this stream's selectors: it enumerates
-        # every currently-present parameter under them. Apply the present values,
-        # then treat any previously-known key in scope but absent from the
-        # snapshot as deleted — a parameter removed while we were disconnected
-        # past the replay window. Keys outside the subscribed scope are untouched.
+        # A snapshot is authoritative for this stream's namespaces: it
+        # enumerates every currently-present parameter in them. Apply the
+        # present values, then treat any previously-known key in a subscribed
+        # namespace but absent from the snapshot as deleted — a parameter
+        # removed while we were disconnected past the replay window. Keys
+        # outside the subscribed namespaces are untouched.
         present: Set[_RefKey] = set()
         for p in snap.parameters:
             rk = _proto_ref_key(p.ref)
@@ -359,7 +344,7 @@ class _SubManager:
             self._set_value(rk, "", False, 0, rev)
 
     def _absent_known_keys(self, present: Set[_RefKey]) -> List[_RefKey]:
-        """Known-present keys within the current stream's scope missing from the snapshot."""
+        """Known-present keys within the current stream's namespaces missing from the snapshot."""
         with self._lock:
             out: List[_RefKey] = []
             for rk, known in self._known.items():
@@ -373,11 +358,8 @@ class _SubManager:
             return out
 
     def _key_in_scope_locked(self, rk: _RefKey) -> bool:
-        env, app, key = rk
-        for (senv, sapp, pat) in self._stream_selectors:
-            if senv == env and sapp == app and match_key(pat, key):
-                return True
-        return False
+        env, app, _key = rk
+        return (env, app) in self._stream_namespaces
 
     def _apply_change(self, change, rev: int) -> None:
         rk = _proto_ref_key(change.ref)
@@ -443,11 +425,9 @@ class _SubManager:
             return self._matching_watchers_locked(rk)
 
     def _matching_watchers_locked(self, rk: _RefKey) -> List[_Watcher]:
-        env, app, key = rk
-        return [
-            w for w in self._watchers
-            if w.ns.env == env and w.ns.app == app and match_key(w.key_pattern, key)
-        ]
+        env, app, _key = rk
+        # A namespace subscriber sees every change in the namespace.
+        return [w for w in self._watchers if w.ns.env == env and w.ns.app == app]
 
     def _fire_watcher(self, w: _Watcher, ev: Event) -> None:
         fn = w.fn
@@ -464,12 +444,8 @@ class _SubManager:
 
     def _reconcile(self) -> None:
         with self._lock:
-            param_refs = list(self._param_handlers.keys())
-            prefixes = [
-                (w.ns, _pattern_prefix(w.key_pattern))
-                for w in self._watchers
-                if w.key_pattern.endswith("*")
-            ]
+            namespaces = list(self._namespaces)
+            param_keys = set(self._param_handlers.keys())
 
         # Capture the snapshot revision before any read. Every value fetched
         # reflects the store at least as of this revision; a live event that
@@ -477,36 +453,39 @@ class _SubManager:
         # reads, enforced by reconcile=True in _set_value.
         snap_rev = self._get_rev()
 
-        for rk in param_refs:
-            env, app, key = rk
-            ref = Ref(NamespaceRef(env, app), key)
-            try:
-                val = self._client._fetch_parameter(ref, version=0, label="", secret_token="")
-            except errors.NotFoundError:
-                # A hot-reloading parameter the store no longer has was deleted
-                # while the stream missed the event: treat it as a deletion so
-                # the field reverts to its default.
-                self._set_value(rk, "", False, 0, snap_rev, reconcile=True)
-                continue
-            except Exception:
-                continue  # other errors (unavailable, timeout) keep last-known value
-            self._set_value(rk, val, True, 0, snap_rev, reconcile=True)
+        # List the whole subscribed namespace and reconcile by exact key. A
+        # registered parameter absent from its namespace listing was deleted
+        # while the stream missed the event; revert it (present=False).
+        for env, app in namespaces:
+            present = self._reconcile_namespace(NamespaceRef(env, app), snap_rev)
+            if present is None:
+                continue  # listing failed; keep last-known values for this namespace
+            for rk in param_keys:
+                if rk[0] == env and rk[1] == app and rk not in present:
+                    self._set_value(rk, "", False, 0, snap_rev, reconcile=True)
 
-        for ns, key_prefix in prefixes:
-            self._reconcile_prefix(ns, key_prefix, snap_rev)
+    def _reconcile_namespace(self, ns: NamespaceRef, snap_rev: int) -> Optional[Set[_RefKey]]:
+        """List every parameter in ``ns``, applying present values.
 
-    def _reconcile_prefix(self, ns: NamespaceRef, key_prefix: str, snap_rev: int) -> None:
+        Returns the set of present keys, or ``None`` if the listing failed (in
+        which case deletion detection must be skipped so a transient error does
+        not revert live fields).
+        """
+        present: Set[_RefKey] = set()
         page_token = ""
-        for _ in range(100):  # bounded to avoid runaway loops
+        for _ in range(1000):  # bounded to avoid runaway loops
             try:
-                resp = self._client._list_parameters_raw(ns, key_prefix, page_token)
+                resp = self._client._list_parameters_raw(ns, "", page_token)
             except Exception:
-                return
+                return None
             for p in resp.parameters:
-                self._set_value(_proto_ref_key(p.ref), p.value, True, p.version, snap_rev, reconcile=True)
+                rk = _proto_ref_key(p.ref)
+                present.add(rk)
+                self._set_value(rk, p.value, True, p.version, snap_rev, reconcile=True)
             page_token = resp.next_page_token
             if not page_token:
-                return
+                return present
+        return present
 
     def _log(self, fmt: str, *args) -> None:
         self._client._logf(fmt, *args)

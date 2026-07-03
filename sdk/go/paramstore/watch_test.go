@@ -2,6 +2,7 @@ package paramstore
 
 import (
 	"context"
+	"errors"
 	"runtime"
 	"strings"
 	"sync"
@@ -15,7 +16,7 @@ import (
 const waitTimeout = 5 * time.Second
 
 // TestDefaultHotReload proves the flipped default: a ParameterValue with no
-// Static flag hot-reloads over the shared, namespace-wide subscription.
+// Static flag hot-reloads over the shared, namespace-level subscription.
 func TestDefaultHotReload(t *testing.T) {
 	c, srv := newTestClient(t, Config{ClientName: "test-app"})
 	srv.SetParameter(testNS, "rate", "100")
@@ -38,9 +39,9 @@ func TestDefaultHotReload(t *testing.T) {
 	if sub.ClientName != "test-app" {
 		t.Errorf("ClientName = %q, want test-app", sub.ClientName)
 	}
-	// Non-static values register one namespace-wide selector, not a per-key path.
-	if !sub.HasSelector(testNS, "*") {
-		t.Errorf("selectors = %v, want namespace-wide %s/*", sub.SelectorDisplays(), testNS)
+	// Non-static values subscribe to the client's whole namespace.
+	if !sub.HasNamespace(testNS) {
+		t.Errorf("namespaces = %v, want %s", sub.NamespaceStrings(), testNS)
 	}
 	if sub.LastSeenRevision != 0 {
 		t.Errorf("first LastSeenRevision = %d, want 0", sub.LastSeenRevision)
@@ -61,10 +62,10 @@ func TestDefaultHotReload(t *testing.T) {
 	}
 }
 
-// TestNamespaceWideSelectorShared proves that multiple non-static parameters in
-// the same namespace share ONE namespace-wide selector (rather than one
-// per-key), and that registering the second does not reconnect the stream.
-func TestNamespaceWideSelectorShared(t *testing.T) {
+// TestNamespaceSubscriptionShared proves that multiple non-static parameters in
+// the same namespace share ONE namespace subscription (rather than one per-key),
+// and that registering the second does not reconnect the stream.
+func TestNamespaceSubscriptionShared(t *testing.T) {
 	c, srv := newTestClient(t, Config{})
 	srv.SetParameter(testNS, "a", "1")
 	srv.SetParameter(testNS, "b", "2")
@@ -78,22 +79,22 @@ func TestNamespaceWideSelectorShared(t *testing.T) {
 	if err != nil {
 		t.Fatalf("WaitForSubscribe: %v", err)
 	}
-	// Second param, same namespace: selector set is unchanged, so no reconnect.
+	// Second param, same namespace: namespace set is unchanged, so no reconnect.
 	if err := b.Init(c); err != nil {
 		t.Fatalf("Init b: %v", err)
 	}
 	time.Sleep(150 * time.Millisecond)
 	if n := srv.SubscribeCount(); n != 1 {
-		t.Errorf("SubscribeCount = %d, want 1 (namespace-wide selector is shared)", n)
+		t.Errorf("SubscribeCount = %d, want 1 (namespace subscription is shared)", n)
 	}
-	if len(sub.Selectors) != 1 || !sub.HasSelector(testNS, "*") {
-		t.Errorf("selectors = %v, want exactly [%s/*]", sub.SelectorDisplays(), testNS)
+	if len(sub.Namespaces) != 1 || !sub.HasNamespace(testNS) {
+		t.Errorf("namespaces = %v, want exactly [%s]", sub.NamespaceStrings(), testNS)
 	}
 
-	// A change to b flows over the shared selector.
+	// A change to b flows over the shared namespace subscription.
 	sub.PushChange(6, testNS, "b", "put", "22", 6)
 	if !eventually(t, waitTimeout, func() bool { return b.Get() == "22" }) {
-		t.Errorf("b did not hot-reload over shared selector; Get = %q", b.Get())
+		t.Errorf("b did not hot-reload over shared subscription; Get = %q", b.Get())
 	}
 }
 
@@ -285,11 +286,15 @@ func TestEnvPinnedValueDoesNotReload(t *testing.T) {
 	}
 }
 
-func TestWatchPattern(t *testing.T) {
+// TestWatchReceivesEveryChangeInNamespace proves the namespace-level watch
+// semantic: a whole-namespace Watch fires for every key in the namespace,
+// including keys the app never named, and for keys with interior slashes. Keys
+// in other namespaces are not delivered.
+func TestWatchReceivesEveryChangeInNamespace(t *testing.T) {
 	c, srv := newTestClient(t, Config{})
 
 	events := make(chan Event, 16)
-	stop, err := c.Watch(context.Background(), "payments/*", func(ev Event) { events <- ev })
+	stop, err := c.Watch(context.Background(), func(ev Event) { events <- ev })
 	if err != nil {
 		t.Fatalf("Watch: %v", err)
 	}
@@ -299,10 +304,12 @@ func TestWatchPattern(t *testing.T) {
 	if err != nil {
 		t.Fatalf("WaitForSubscribe: %v", err)
 	}
-	if !sub.HasSelector(testNS, "payments/*") {
-		t.Errorf("selectors = %v, want prefix pattern payments/*", sub.SelectorDisplays())
+	if !sub.HasNamespace(testNS) {
+		t.Errorf("namespaces = %v, want %s", sub.NamespaceStrings(), testNS)
 	}
 
+	// A key the app never "selected" is still delivered — the namespace is the
+	// unit of subscription.
 	sub.PushChange(2, testNS, "payments/rate", "put", "9", 2)
 	select {
 	case ev := <-events:
@@ -316,24 +323,35 @@ func TestWatchPattern(t *testing.T) {
 		t.Fatal("watch event not delivered")
 	}
 
-	// A non-matching key must not deliver.
+	// A different key in the same namespace also fires.
 	sub.PushChange(3, testNS, "other/x", "put", "1", 3)
 	select {
 	case ev := <-events:
-		t.Errorf("unexpected event for non-matching key: %+v", ev)
+		if ev.Key != "other/x" || ev.Value != "1" {
+			t.Errorf("event = %+v, want key=other/x value=1", ev)
+		}
+	case <-time.After(waitTimeout):
+		t.Fatal("second-key event not delivered")
+	}
+
+	// A change in a different namespace must not deliver.
+	sub.PushChangePath(4, "/prod/other-app/rate", "put", "7", 4)
+	select {
+	case ev := <-events:
+		t.Errorf("unexpected event for out-of-namespace key: %+v", ev)
 	case <-time.After(200 * time.Millisecond):
 	}
 }
 
-// TestWatchAbsolutePattern proves an absolute "/env/app/pattern" Watch reaches
-// another namespace.
-func TestWatchAbsolutePattern(t *testing.T) {
+// TestWatchNamespace proves WatchNamespace reaches a namespace other than the
+// client's own.
+func TestWatchNamespace(t *testing.T) {
 	c, srv := newTestClient(t, Config{})
 
 	events := make(chan Event, 4)
-	stop, err := c.Watch(context.Background(), "/staging/billing/*", func(ev Event) { events <- ev })
+	stop, err := c.WatchNamespace(context.Background(), "staging/billing", func(ev Event) { events <- ev })
 	if err != nil {
-		t.Fatalf("Watch: %v", err)
+		t.Fatalf("WatchNamespace: %v", err)
 	}
 	defer stop()
 
@@ -341,8 +359,8 @@ func TestWatchAbsolutePattern(t *testing.T) {
 	if err != nil {
 		t.Fatalf("WaitForSubscribe: %v", err)
 	}
-	if !sub.HasSelector("staging/billing", "*") {
-		t.Errorf("selectors = %v, want staging/billing *", sub.SelectorDisplays())
+	if !sub.HasNamespace("staging/billing") {
+		t.Errorf("namespaces = %v, want staging/billing", sub.NamespaceStrings())
 	}
 	sub.PushChangePath(2, "/staging/billing/rate", "put", "5", 2)
 	select {
@@ -365,7 +383,7 @@ func TestWatchSecretChangeInvalidatesCache(t *testing.T) {
 	}
 
 	events := make(chan Event, 4)
-	stop, err := c.Watch(context.Background(), "db/*", func(ev Event) { events <- ev })
+	stop, err := c.Watch(context.Background(), func(ev Event) { events <- ev })
 	if err != nil {
 		t.Fatalf("Watch: %v", err)
 	}
@@ -439,8 +457,13 @@ func TestReconcileAppliesMissedDrift(t *testing.T) {
 	if err := pv.Init(c); err != nil {
 		t.Fatalf("Init: %v", err)
 	}
-	watchEvents := make(chan Event, 8)
-	stop, err := c.Watch(context.Background(), "x/*", func(ev Event) { watchEvents <- ev })
+	var mu sync.Mutex
+	got := map[string]string{}
+	stop, err := c.Watch(context.Background(), func(ev Event) {
+		mu.Lock()
+		got[ev.Key] = ev.Value
+		mu.Unlock()
+	})
 	if err != nil {
 		t.Fatalf("Watch: %v", err)
 	}
@@ -454,20 +477,19 @@ func TestReconcileAppliesMissedDrift(t *testing.T) {
 	srv.SetParameter(testNS, "rate", "999")
 	srv.SetParameter(testNS, "x/y", "new")
 
-	// The periodic safety net reconciles both the exact hot-reload parameter and
-	// the prefix watcher (via ListParameters on the namespace + key prefix).
+	// The periodic safety net lists the whole subscribed namespace and applies
+	// the drift to both the hot-reload parameter and the whole-namespace watcher.
 	c.sub.reconcile()
 
 	if pv.Get() != "999" {
 		t.Errorf("reconcile did not apply drift to hot-reload param; Get = %q", pv.Get())
 	}
-	select {
-	case ev := <-watchEvents:
-		if ev.Key != "x/y" || ev.Value != "new" {
-			t.Errorf("reconcile watch event = %+v", ev)
-		}
-	case <-time.After(waitTimeout):
-		t.Fatal("reconcile did not deliver watcher event for prefix drift")
+	if !eventually(t, waitTimeout, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return got["x/y"] == "new"
+	}) {
+		t.Fatal("reconcile did not deliver watcher event for namespace drift")
 	}
 }
 
@@ -475,7 +497,7 @@ func TestWatchStopViaContextCancel(t *testing.T) {
 	c, srv := newTestClient(t, Config{})
 	ctx, cancel := context.WithCancel(context.Background())
 
-	_, err := c.Watch(ctx, "sub/*", func(ev Event) {})
+	_, err := c.Watch(ctx, func(ev Event) {})
 	if err != nil {
 		t.Fatalf("Watch: %v", err)
 	}
@@ -514,12 +536,12 @@ func TestReconcileDoesNotRegressToStaleValue(t *testing.T) {
 		t.Fatalf("WaitForSubscribe: %v", err)
 	}
 
-	// While reconcile reads rate, a fresher change (V2 at revision 5) lands and
-	// is fully applied. The server value is deliberately left at "V1", so the
-	// reconcile fetch returns the now-stale value. The fence must drop it.
+	// While reconcile lists the namespace, a fresher change (V2 at revision 5)
+	// lands and is fully applied. The server value is deliberately left at "V1",
+	// so the reconcile list returns the now-stale value. The fence must drop it.
 	var once sync.Once
-	srv.SetGetParameterHook(func(display string) {
-		if display != "/prod/app/rate" {
+	srv.SetListParametersHook(func(namespace string) {
+		if namespace != testNS {
 			return
 		}
 		once.Do(func() {
@@ -605,7 +627,7 @@ func TestSnapshotOnlyDeletesInScopeAbsentPaths(t *testing.T) {
 	if err := gone.Init(c); err != nil {
 		t.Fatalf("Init gone: %v", err)
 	}
-	// Both share the one namespace-wide selector, so a single stream carries them.
+	// Both share the one namespace subscription, so a single stream carries them.
 	sub, err := srv.WaitForSubscribe(waitTimeout)
 	if err != nil {
 		t.Fatalf("WaitForSubscribe: %v", err)
@@ -662,11 +684,10 @@ func TestReconcileNotFoundRevertsToDefault(t *testing.T) {
 // non-cancelable context, so it does not leak until Client.Close.
 func TestWatchStopEndsCtxWatcherGoroutine(t *testing.T) {
 	c, srv := newTestClient(t, Config{})
-	const pattern = "leak/*"
 
 	// Start the subscription with one watcher and let startup goroutines settle
 	// so the baseline count excludes stream churn.
-	first, err := c.Watch(context.Background(), pattern, func(Event) {})
+	first, err := c.Watch(context.Background(), func(Event) {})
 	if err != nil {
 		t.Fatalf("Watch: %v", err)
 	}
@@ -677,12 +698,13 @@ func TestWatchStopEndsCtxWatcherGoroutine(t *testing.T) {
 	runtime.GC()
 	base := runtime.NumGoroutine()
 
-	// Reusing the same pattern avoids subscription restarts, so the goroutine
-	// delta is exactly the per-watch ctx-watcher goroutines.
+	// All watchers share the client's one namespace subscription, so adding them
+	// causes no stream restart; the goroutine delta is exactly the per-watch
+	// ctx-watcher goroutines.
 	const n = 40
 	stops := []func(){first}
 	for i := 0; i < n; i++ {
-		stop, err := c.Watch(context.Background(), pattern, func(Event) {})
+		stop, err := c.Watch(context.Background(), func(Event) {})
 		if err != nil {
 			t.Fatalf("Watch %d: %v", i, err)
 		}
@@ -704,74 +726,15 @@ func TestWatchStopEndsCtxWatcherGoroutine(t *testing.T) {
 	}
 }
 
-// TestMatchPatternBaseKey pins the prefix-matches-base-key semantics of
-// matchPattern: a "prefix/*" pattern must match both "/env/app/prefix" and
-// everything beneath it, mirroring the server's keyutil.MatchKey.
-func TestMatchPatternBaseKey(t *testing.T) {
-	cases := []struct {
-		pattern, path string
-		want          bool
-	}{
-		{"/prod/app/billing/*", "/prod/app/billing", true},        // base key (the fix)
-		{"/prod/app/billing/*", "/prod/app/billing/stripe", true}, // child
-		{"/prod/app/billing/*", "/prod/app/billing/x/y", true},    // deep child
-		{"/prod/app/billing/*", "/prod/app/billingx", false},      // sibling, not under
-		{"/prod/app/billing/*", "/prod/app/other", false},
-		{"/prod/app/*", "/prod/app/anything", true},         // whole namespace
-		{"/prod/app/*", "/prod/app2/anything", false},       // namespace boundary respected
-		{"/prod/app/billing", "/prod/app/billing", true},    // exact
-		{"/prod/app/billing", "/prod/app/billing/x", false}, // exact is not a prefix
-	}
-	for _, c := range cases {
-		if got := matchPattern(c.pattern, c.path); got != c.want {
-			t.Errorf("matchPattern(%q, %q) = %v, want %v", c.pattern, c.path, got, c.want)
-		}
-	}
-}
+// TestWatchUnboundNamespaceErrors proves Watch requires a namespace: an unbound
+// client (no Config.Namespace, unbound identity) gets ErrNoNamespace rather than
+// a silent no-op.
+func TestWatchUnboundNamespaceErrors(t *testing.T) {
+	c, srv := newUnboundTestClient(t, Config{})
+	srv.SetIdentity("tool", "client", "", "token")
 
-// TestReconcilePrefix pins the server list-prefix derivation: "billing/*" must
-// list with prefix "billing" (base + children), not "billing/" (matches nothing).
-func TestReconcilePrefix(t *testing.T) {
-	cases := map[string]string{
-		"billing/*": "billing",
-		"a/b/*":     "a/b",
-		"*":         "",
-		"":          "",
-		"billing":   "billing",
-	}
-	for pattern, want := range cases {
-		if got := reconcilePrefix(pattern); got != want {
-			t.Errorf("reconcilePrefix(%q) = %q, want %q", pattern, got, want)
-		}
-	}
-}
-
-// TestWatchPrefixMatchesBaseKey proves a "prefix/*" watcher fires for the base
-// key "prefix" itself. The server hub delivers base-key events to a prefix
-// subscriber (keyutil.MatchKey), so the SDK's local dispatch must not drop them.
-func TestWatchPrefixMatchesBaseKey(t *testing.T) {
-	c, srv := newTestClient(t, Config{})
-
-	events := make(chan Event, 4)
-	stop, err := c.Watch(context.Background(), "billing/*", func(ev Event) { events <- ev })
-	if err != nil {
-		t.Fatalf("Watch: %v", err)
-	}
-	defer stop()
-
-	sub, err := srv.WaitForSubscribe(waitTimeout)
-	if err != nil {
-		t.Fatalf("WaitForSubscribe: %v", err)
-	}
-	// The base key "billing" (no child segment) is under "billing/*" per server
-	// semantics; the callback must fire.
-	sub.PushChange(2, testNS, "billing", "put", "5", 2)
-	select {
-	case ev := <-events:
-		if ev.Key != "billing" || ev.Value != "5" {
-			t.Errorf("base-key event = %+v, want key=billing value=5", ev)
-		}
-	case <-time.After(waitTimeout):
-		t.Fatal("base-key event not delivered to billing/* watcher")
+	_, err := c.Watch(context.Background(), func(Event) {})
+	if !errors.Is(err, ErrNoNamespace) {
+		t.Fatalf("Watch on unbound client err = %v, want ErrNoNamespace", err)
 	}
 }

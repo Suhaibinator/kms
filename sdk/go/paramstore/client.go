@@ -301,9 +301,9 @@ func (c *Client) resolveNamespace(ctx context.Context) (namespaceRef, bool, erro
 
 // resolveRef turns a user-supplied key into a fully-qualified ref. A leading
 // "/" is an absolute display path ("/env/app/key...") split in the SDK for
-// cross-namespace access; any other key (including watch patterns like
-// "billing/*") is relative to the client namespace. A relative key on a client
-// with no namespace fails with ErrNoNamespace, naming the key.
+// cross-namespace access; any other key is relative to the client namespace. A
+// relative key on a client with no namespace fails with ErrNoNamespace, naming
+// the key.
 func (c *Client) resolveRef(ctx context.Context, key string) (ref, error) {
 	if strings.HasPrefix(key, "/") {
 		return splitDisplayPath(key)

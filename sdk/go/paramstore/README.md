@@ -144,9 +144,13 @@ cfg.RateLimit.OnChange(func(old, new string) {
     pool.Resize(mustAtoi(new))
 })
 
-// Watch a relative key pattern ("rate-limit", "billing/*", "*"), or an absolute
-// "/env/app/pattern" for another namespace:
-stop, _ := client.Watch(ctx, "billing/*", func(ev paramstore.Event) {
+// Watch fires for EVERY change in the client's namespace — there is no key
+// pattern. Filter inside the callback if you only care about a subset. Use
+// client.WatchNamespace(ctx, "env/app", fn) to watch a different namespace.
+stop, _ := client.Watch(ctx, func(ev paramstore.Event) {
+    if !strings.HasPrefix(ev.Key, "billing/") {
+        return
+    }
     log.Printf("%s %s/%s -> %s", ev.Type, ev.Namespace, ev.Key, ev.Value)
 })
 defer stop()

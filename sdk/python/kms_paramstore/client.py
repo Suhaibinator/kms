@@ -18,7 +18,6 @@ from ._refs import (
     Ref,
     parse_namespace,
     split_display_path,
-    split_display_pattern,
     to_proto_namespace,
     to_proto_ref,
 )
@@ -528,23 +527,32 @@ class Client:
 
     # --- watch / hot reload ------------------------------------------------
 
-    def watch(self, pattern: str, callback: Callable[[Event], None]) -> Callable[[], None]:
-        """Subscribe to a key pattern within a namespace.
+    def watch(self, callback: Callable[[Event], None]) -> Callable[[], None]:
+        """Subscribe to the client's whole namespace.
 
-        ``pattern`` is relative to the client namespace (``"billing/*"``,
-        ``"*"``, or an exact key) or an absolute ``"/env/app/pattern"``.
-        ``callback`` is invoked for every change on a dedicated dispatch thread.
-        Returns a ``stop`` function that unregisters the watcher.
+        The namespace ``(env, app)`` is the unit of subscription: ``callback``
+        fires for **every** change in the client's namespace, on a dedicated
+        dispatch thread. There are no key patterns — an application interested
+        in only some keys filters by its own convention inside ``callback``
+        (e.g. ``if ev.key.startswith("billing/"): ...``). Returns a ``stop``
+        function that unregisters the watcher.
         """
-        if not pattern:
-            raise errors.ConfigError("watch requires a non-empty pattern")
+        return self.watch_namespace(None, callback)
+
+    def watch_namespace(
+        self, namespace: "Optional[str | NamespaceRef]", callback: Callable[[Event], None]
+    ) -> Callable[[], None]:
+        """Subscribe to a namespace, firing ``callback`` for every change in it.
+
+        ``namespace`` is an ``"env/app"`` string (or :class:`NamespaceRef`), or
+        ``None`` for the client's own namespace. The namespace must be one the
+        client is authorized for; the server streams every change in it and the
+        callback filters by its own convention. Returns a ``stop`` function.
+        """
         if callback is None:
             raise errors.ConfigError("watch requires a callback")
-        if pattern.startswith("/"):
-            ns, key_pattern = split_display_pattern(pattern)
-        else:
-            ns, key_pattern = self._require_namespace(pattern), pattern
-        w = self._subs().register_watcher(ns, key_pattern, callback)
+        ns = self._resolve_namespace_arg(namespace)
+        w = self._subs().register_watcher(ns, callback)
         stopped = threading.Event()
 
         def stop() -> None:

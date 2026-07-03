@@ -74,7 +74,9 @@ func ExampleClient_Watch() {
 	})
 	defer func() { _ = client.Close() }()
 
-	stop, err := client.Watch(context.Background(), "*", func(ev paramstore.Event) {
+	// Watch fires for every change in the client's namespace; filter inside the
+	// callback if you only care about a subset.
+	stop, err := client.Watch(context.Background(), func(ev paramstore.Event) {
 		fmt.Printf("%s %s => %s\n", ev.Type, ev.Key, ev.Value)
 	})
 	if err != nil {

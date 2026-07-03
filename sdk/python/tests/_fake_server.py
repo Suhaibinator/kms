@@ -2,9 +2,9 @@
 
 It implements enough of ParameterService, SecretService, WatchService, and the
 AdminService WhoAmI RPC to test namespace-native reads, writes, auth-metadata
-propagation, error mapping, pagination, caching, hot reload, namespace-wide
-subscription selectors, and WhoAmI-based namespace discovery. It is intentionally
-simple, not a faithful store.
+propagation, error mapping, pagination, caching, hot reload, namespace
+subscription, and WhoAmI-based namespace discovery. It is intentionally simple,
+not a faithful store.
 
 Resources are keyed by an explicit ``(env, app, key)`` tuple. Test helpers accept
 either explicit ``env, app, key`` or an absolute ``/env/app/key`` display path.
@@ -23,16 +23,7 @@ import grpc
 from kms_paramstore._gen import kms_pb2, kms_pb2_grpc
 
 _RefKey = Tuple[str, str, str]  # (env, app, key)
-_Selector = Tuple[str, str, str]  # (env, app, key_pattern)
-
-
-def _match_key(pattern: str, key: str) -> bool:
-    if pattern in ("", "*"):
-        return True
-    if pattern.endswith("/*"):
-        base = pattern[:-2]
-        return key == base or key.startswith(base + "/")
-    return pattern == key
+_NSKey = Tuple[str, str]  # (env, app)
 
 
 def _split_path(path: str) -> _RefKey:
@@ -53,7 +44,7 @@ def _proto_ref(rk: _RefKey) -> kms_pb2.ResourceRef:
 
 @dataclass
 class _Subscription:
-    selectors: List[_Selector]
+    namespaces: List[_NSKey]
     queue: "list"
     cond: threading.Condition
     acked: int = 0
@@ -128,8 +119,8 @@ class FakeStore:
         with self.lock:
             subs = list(self.subs)
         for sub in subs:
-            deliver = rk is None or any(_match_key(pat, rk[2]) and pat_env == rk[0] and pat_app == rk[1]
-                                        for (pat_env, pat_app, pat) in sub.selectors)
+            # A subscriber to a namespace receives every change in it.
+            deliver = rk is None or (rk[0], rk[1]) in sub.namespaces
             if deliver:
                 with sub.cond:
                     sub.queue.append(ev)
@@ -292,15 +283,15 @@ class WatchServicer(kms_pb2_grpc.WatchServiceServicer):
     def Subscribe(self, request_iterator, context):
         it = iter(request_iterator)
         reg = next(it)
-        selectors = [(s.namespace.env, s.namespace.app, s.key_pattern) for s in reg.selectors]
-        sub = _Subscription(selectors=selectors, queue=[], cond=threading.Condition())
+        namespaces = [(n.env, n.app) for n in reg.namespaces]
+        sub = _Subscription(namespaces=namespaces, queue=[], cond=threading.Condition())
 
         with self.store.lock:
             self.store.subs.append(sub)
             rev = self.store.revision
             snap_params = []
             for rk, versions in self.store.params.items():
-                if any(_match_key(pat, rk[2]) and e == rk[0] and a == rk[1] for (e, a, pat) in selectors):
+                if (rk[0], rk[1]) in namespaces:
                     value, ct = versions[-1]
                     snap_params.append(kms_pb2.Parameter(
                         ref=_proto_ref(rk), value=value, content_type=ct, version=len(versions),
@@ -340,12 +331,6 @@ class WatchServicer(kms_pb2_grpc.WatchServiceServicer):
                     return
                 ev = sub.queue.pop(0)
             yield ev
-
-    def WatchParameter(self, request, context):
-        return iter(())
-
-    def WatchNamespace(self, request, context):
-        return iter(())
 
 
 class AdminServicer(kms_pb2_grpc.AdminServiceServicer):

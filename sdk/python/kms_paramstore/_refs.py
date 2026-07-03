@@ -6,10 +6,12 @@ format and as *client-side* SDK sugar. This module owns:
 
 - parsing the ``"env/app"`` namespace config string,
 - splitting an absolute ``"/env/app/key"`` display path (the cross-namespace
-  escape hatch) into an explicit :class:`Ref`,
-- splitting an absolute watch pattern ``"/env/app/pattern"``,
-- key-pattern matching (exact, ``"*"``, or ``"prefix/*"``), and
+  escape hatch) into an explicit :class:`Ref`, and
 - building the generated ``NamespaceRef`` / ``ResourceRef`` protobufs.
+
+There is no key-pattern matcher: the namespace is the unit of subscription, and
+a subscriber receives every change in it. Any narrower interest is applied by
+the client in its callback, never on the wire.
 
 Only the shapes needed to *split* a display path are validated here (env/app
 labels); relative keys are handed to the server, which is the authority on key
@@ -28,8 +30,6 @@ __all__ = [
     "Ref",
     "parse_namespace",
     "split_display_path",
-    "split_display_pattern",
-    "match_key",
     "to_proto_namespace",
     "to_proto_ref",
 ]
@@ -86,34 +86,6 @@ def split_display_path(p: str) -> Ref:
     if len(parts) < 3 or not parts[0] or not parts[1] or not parts[2]:
         raise errors.ConfigError(f"path {p!r} must be of the form /env/app/key")
     return Ref(NamespaceRef(parts[0], parts[1]), parts[2])
-
-
-def split_display_pattern(p: str) -> "tuple[NamespaceRef, str]":
-    """Split an absolute watch pattern ``"/env/app/pattern"``.
-
-    Requires all three segments — ``"/env/app/*"`` for the whole namespace;
-    ``"/env/app"`` is rejected, matching the Go SDK.
-    """
-    if not p.startswith("/"):
-        raise errors.ConfigError(f"pattern {p!r} must start with '/'")
-    parts = p[1:].split("/", 2)
-    if len(parts) < 3 or not parts[0] or not parts[1] or not parts[2]:
-        raise errors.ConfigError(f"pattern {p!r} must be of the form /env/app/pattern")
-    return NamespaceRef(parts[0], parts[1]), parts[2]
-
-
-def match_key(pattern: str, key: str) -> bool:
-    """Report whether ``key`` matches ``pattern``.
-
-    ``""`` or ``"*"`` matches every key; ``"prefix/*"`` matches ``"prefix"`` and
-    everything beneath it; otherwise the match is exact.
-    """
-    if pattern in ("", "*"):
-        return True
-    if pattern.endswith("/*"):
-        base = pattern[:-2]
-        return key == base or key.startswith(base + "/")
-    return pattern == key
 
 
 def to_proto_namespace(ns: NamespaceRef) -> kms_pb2.NamespaceRef:

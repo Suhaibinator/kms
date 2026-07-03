@@ -7,23 +7,8 @@ from kms_paramstore._refs import (
     Ref,
     parse_namespace,
     split_display_path,
-    split_display_pattern,
 )
 from kms_paramstore.errors import ConfigError
-
-
-def test_split_display_pattern_requires_third_segment():
-    # Whole namespace is spelled with an explicit "*"...
-    ns, pat = split_display_pattern("/prod/app/*")
-    assert ns == NamespaceRef("prod", "app") and pat == "*"
-    # ...a subtree keeps its pattern...
-    ns, pat = split_display_pattern("/prod/app/billing/*")
-    assert (ns, pat) == (NamespaceRef("prod", "app"), "billing/*")
-    # ...and a missing 3rd segment is an error (Go parity; not silently "*").
-    with pytest.raises(ConfigError):
-        split_display_pattern("/prod/app")
-    with pytest.raises(ConfigError):
-        split_display_pattern("prod/app/*")  # must start with "/"
 
 
 def test_parse_namespace_structural_only():

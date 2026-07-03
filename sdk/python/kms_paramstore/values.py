@@ -243,8 +243,9 @@ class ParameterValue(_DescriptorBase):
 
     Hot reload is on by default: the value tracks the Subscribe stream and
     :meth:`ParameterHandle.get` always returns the latest value without an RPC.
-    Every non-static field in a namespace rides one namespace-wide selector.
-    Pass ``static=True`` for a boot-time-only read (no subscription). An
+    Every non-static field in a namespace shares that namespace's single
+    subscription. Pass ``static=True`` for a boot-time-only read (no
+    subscription). An
     env-pinned field never hot-reloads regardless of ``static``.
 
     Args:
@@ -294,7 +295,7 @@ class ParameterValue(_DescriptorBase):
             ref, value = self._resolve_from_store(client, timeout)
             st.value = value
             st.initialized = True
-            # Hot reload on by default: register on the namespace-wide selector.
+            # Hot reload on by default: register on the namespace subscription.
             if not self._static and ref is not None:
                 st.static = False
                 client._subs().register_param(ref, value, st.apply_update)

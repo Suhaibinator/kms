@@ -85,6 +85,7 @@ type Server struct {
 	lastMetadata map[string]metadata.MD // method -> incoming md
 	putSecrets   []PutSecretCall
 	getParamHook func(displayPath string)
+	listHook     func(namespace string)
 	identity     *kmsv1.WhoAmIResponse
 
 	subMu     sync.Mutex
@@ -228,6 +229,17 @@ func (s *Server) SetGetParameterHook(fn func(displayPath string)) {
 	s.getParamHook = fn
 }
 
+// SetListParametersHook installs fn to run at the start of every
+// ListParameters, before the values are read, with the requested namespace
+// ("env/app"). It lets a test inject a concurrent event mid-reconcile to
+// exercise the reconcile/stream race. Pass nil to clear. The hook runs outside
+// the server lock.
+func (s *Server) SetListParametersHook(fn func(namespace string)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.listHook = fn
+}
+
 // SetIdentity sets the identity returned by WhoAmI. namespace is "env/app", or
 // "" for an unbound identity. It lets a test drive namespace discovery.
 func (s *Server) SetIdentity(name, kind, namespace, authMethod string) {
@@ -302,6 +314,13 @@ func (s *Server) PutParameter(ctx context.Context, req *kmsv1.PutParameterReques
 
 func (s *Server) ListParameters(ctx context.Context, req *kmsv1.ListParametersRequest) (*kmsv1.ListParametersResponse, error) {
 	s.recordMD(ctx, "ListParameters")
+	s.mu.Lock()
+	hook := s.listHook
+	s.mu.Unlock()
+	if hook != nil {
+		ns := req.GetNamespace().GetEnv() + "/" + req.GetNamespace().GetApp()
+		hook(ns)
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	var out []*kmsv1.Parameter
@@ -381,7 +400,7 @@ func (s *Server) Subscribe(stream kmsv1.WatchService_SubscribeServer) error {
 	md, _ := metadata.FromIncomingContext(stream.Context())
 	sub := &Subscription{
 		ClientName:       first.GetClientName(),
-		Selectors:        first.GetSelectors(),
+		Namespaces:       first.GetNamespaces(),
 		LastSeenRevision: first.GetLastSeenRevision(),
 		Metadata:         md,
 		send:             make(chan *kmsv1.SubscribeEvent, 64),
@@ -462,7 +481,7 @@ func (s *Server) WaitForSubscribe(timeout time.Duration) (*Subscription, error) 
 // Subscription is a handle to one open Subscribe stream that a test can drive.
 type Subscription struct {
 	ClientName       string
-	Selectors        []*kmsv1.WatchSelector
+	Namespaces       []*kmsv1.NamespaceRef
 	LastSeenRevision uint64
 	Metadata         metadata.MD
 
@@ -473,24 +492,23 @@ type Subscription struct {
 	closed   sync.Once
 }
 
-// HasSelector reports whether the subscription requested the given namespace
-// ("env/app") and key pattern.
-func (sub *Subscription) HasSelector(namespace, keyPattern string) bool {
-	for _, sel := range sub.Selectors {
-		ns := sel.GetNamespace().GetEnv() + "/" + sel.GetNamespace().GetApp()
-		if ns == namespace && sel.GetKeyPattern() == keyPattern {
+// HasNamespace reports whether the subscription requested the given namespace
+// ("env/app").
+func (sub *Subscription) HasNamespace(namespace string) bool {
+	for _, ns := range sub.Namespaces {
+		if ns.GetEnv()+"/"+ns.GetApp() == namespace {
 			return true
 		}
 	}
 	return false
 }
 
-// SelectorDisplays renders the requested selectors as "/env/app/pattern" for
-// convenient assertions.
-func (sub *Subscription) SelectorDisplays() []string {
-	out := make([]string, 0, len(sub.Selectors))
-	for _, sel := range sub.Selectors {
-		out = append(out, "/"+sel.GetNamespace().GetEnv()+"/"+sel.GetNamespace().GetApp()+"/"+sel.GetKeyPattern())
+// NamespaceStrings renders the requested namespaces as "env/app" for convenient
+// assertions.
+func (sub *Subscription) NamespaceStrings() []string {
+	out := make([]string, 0, len(sub.Namespaces))
+	for _, ns := range sub.Namespaces {
+		out = append(out, ns.GetEnv()+"/"+ns.GetApp())
 	}
 	return out
 }
