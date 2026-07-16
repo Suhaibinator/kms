@@ -206,6 +206,55 @@ func TestListNamespacesScopedToAccess(t *testing.T) {
 	}
 }
 
+func TestListNamespacesHonorsExplicitDeny(t *testing.T) {
+	ctx := context.Background()
+	store := newFakeStore()
+	s := newTestService(store)
+	prod := mkns("prod", "app")
+	staging := mkns("staging", "app")
+	for _, ns := range []domain.NamespaceRef{prod, staging} {
+		if _, err := s.CreateNamespace(ctx, adminPrincipal(), ns, "", []domain.AuthMethod{domain.AuthMethodToken}); err != nil {
+			t.Fatalf("seed namespace %s: %v", ns, err)
+		}
+	}
+
+	// A matching deny must override a broad allow when deciding whether namespace
+	// metadata and resource counts are visible.
+	store.addPolicy(domain.Policy{
+		Name:    "cross-namespace-deny",
+		Subject: "app",
+		Allow: []domain.PolicyRule{
+			{Operation: "*", Env: "*", App: "*"},
+		},
+		Deny: []domain.PolicyRule{
+			{Operation: "*", Env: prod.Env, App: prod.App},
+		},
+	})
+	visible, _, err := s.ListNamespaces(ctx, clientPrincipal("app"), storage.ListPage{})
+	if err != nil {
+		t.Fatalf("ListNamespaces(cross-namespace deny): %v", err)
+	}
+	if len(visible) != 1 || visible[0].NamespaceRef != staging {
+		t.Fatalf("namespaces with denied prod = %v, want [staging/app]", visible)
+	}
+
+	// Deny precedence also applies to the implicit home-namespace grant.
+	store.addPolicy(domain.Policy{
+		Name:    "home-deny",
+		Subject: "svc",
+		Deny: []domain.PolicyRule{
+			{Operation: "*", Env: prod.Env, App: prod.App},
+		},
+	})
+	home, _, err := s.ListNamespaces(ctx, boundClientPrincipal("svc", prod), storage.ListPage{})
+	if err != nil {
+		t.Fatalf("ListNamespaces(home deny): %v", err)
+	}
+	if len(home) != 0 {
+		t.Fatalf("namespaces with denied home = %v, want none", home)
+	}
+}
+
 func TestAuthorizeSubscribe(t *testing.T) {
 	ctx := context.Background()
 	store := newFakeStore()

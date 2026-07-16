@@ -129,17 +129,21 @@ func (s *Service) ListNamespaces(ctx context.Context, pr Principal, page storage
 		return nil, "", domain.Errorf(domain.ErrPermissionDenied, "authorization unavailable")
 	}
 	home := pr.home()
+	visibleOps := [...]string{
+		domain.OpParameterRead,
+		domain.OpParameterList,
+		domain.OpSecretRead,
+		domain.OpSecretList,
+	}
 	visible := all[:0]
 	for _, ns := range all {
-		if home != nil && *home == ns.NamespaceRef {
-			visible = append(visible, ns)
-			continue
-		}
-		if policy.MayListUnder(policies, domain.OpParameterRead, ns.NamespaceRef) ||
-			policy.MayListUnder(policies, domain.OpParameterList, ns.NamespaceRef) ||
-			policy.MayListUnder(policies, domain.OpSecretRead, ns.NamespaceRef) ||
-			policy.MayListUnder(policies, domain.OpSecretList, ns.NamespaceRef) {
-			visible = append(visible, ns)
+		for _, operation := range visibleOps {
+			// Use the full authorization decision so explicit denies override both
+			// policy allows and the implicit home-namespace grant.
+			if policy.Authorize(policies, home, operation, ns.NamespaceRef) {
+				visible = append(visible, ns)
+				break
+			}
 		}
 	}
 	return visible, next, nil
