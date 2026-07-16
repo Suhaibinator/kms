@@ -35,6 +35,7 @@ __all__ = ["Event", "EventType"]
 
 # Safety-net full-sync poll cadence (plan 8.4.8).
 _DEFAULT_RECONCILE_INTERVAL = 300.0  # seconds
+_MAX_RECONCILE_PAGES = 1000
 _BACKOFF_BASE = 1.0
 _BACKOFF_MAX = 60.0
 
@@ -462,7 +463,7 @@ class _SubManager:
         """
         present: Set[_RefKey] = set()
         page_token = ""
-        for _ in range(1000):  # bounded to avoid runaway loops
+        for _ in range(_MAX_RECONCILE_PAGES):  # bounded to avoid runaway loops
             try:
                 resp = self._client._list_parameters_raw(ns, "", page_token)
             except Exception:
@@ -474,7 +475,10 @@ class _SubManager:
             page_token = resp.next_page_token
             if not page_token:
                 return present
-        return present
+        # A non-empty page token means this is only a partial listing. Returning
+        # None skips deletion detection so keys beyond the safety cap retain
+        # their last-known values.
+        return None
 
     def _log(self, fmt: str, *args) -> None:
         self._client._logf(fmt, *args)

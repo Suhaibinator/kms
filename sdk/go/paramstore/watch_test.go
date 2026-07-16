@@ -10,7 +10,9 @@ import (
 	"testing"
 	"time"
 
+	kmsv1 "github.com/Suhaibinator/kms/gen/kmsv1"
 	"github.com/Suhaibinator/kms/sdk/go/paramstore/paramstoretest"
+	"google.golang.org/grpc"
 )
 
 const waitTimeout = 5 * time.Second
@@ -490,6 +492,40 @@ func TestReconcileAppliesMissedDrift(t *testing.T) {
 		return got["x/y"] == "new"
 	}) {
 		t.Fatal("reconcile did not deliver watcher event for namespace drift")
+	}
+}
+
+type cappedPaginationClient struct {
+	kmsv1.ParameterServiceClient
+	calls int
+}
+
+func (c *cappedPaginationClient) ListParameters(
+	context.Context,
+	*kmsv1.ListParametersRequest,
+	...grpc.CallOption,
+) (*kmsv1.ListParametersResponse, error) {
+	c.calls++
+	return &kmsv1.ListParametersResponse{NextPageToken: "more"}, nil
+}
+
+func TestReconcileNamespacePageCapIsIncomplete(t *testing.T) {
+	c, _ := newTestClient(t, Config{})
+	stub := &cappedPaginationClient{ParameterServiceClient: c.params}
+	c.params = stub
+
+	m := newSubManager(c)
+	complete := m.reconcileNamespace(
+		context.Background(),
+		namespaceRef{env: "prod", app: "app"},
+		0,
+		make(map[string]struct{}),
+	)
+	if complete {
+		t.Fatal("reconcileNamespace reported a capped, partially listed namespace as complete")
+	}
+	if stub.calls != maxReconcilePages {
+		t.Fatalf("ListParameters calls = %d, want cap %d", stub.calls, maxReconcilePages)
 	}
 }
 

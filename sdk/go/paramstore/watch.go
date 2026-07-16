@@ -57,8 +57,11 @@ type Event struct {
 // Path returns the "/env/app/key" display path of the event's resource.
 func (e Event) Path() string { return "/" + e.Namespace + "/" + e.Key }
 
-// defaultReconcileInterval is the safety-net full-sync poll cadence (plan 8.4).
-const defaultReconcileInterval = 5 * time.Minute
+const (
+	// defaultReconcileInterval is the safety-net full-sync poll cadence (plan 8.4).
+	defaultReconcileInterval = 5 * time.Minute
+	maxReconcilePages        = 100
+)
 
 type knownVal struct {
 	value   string
@@ -599,7 +602,7 @@ func (m *subManager) reconcile() {
 // caller does not mistake a fetch failure for a deletion).
 func (m *subManager) reconcileNamespace(ctx context.Context, ns namespaceRef, snapRev uint64, present map[string]struct{}) bool {
 	pageToken := ""
-	for i := 0; i < 100; i++ { // bounded to avoid runaway loops
+	for i := 0; i < maxReconcilePages; i++ { // bounded to avoid runaway loops
 		cctx, cancel := m.client.callCtx(ctx, "")
 		resp, err := m.client.params.ListParameters(cctx, &kmsv1.ListParametersRequest{
 			Namespace: ns.proto(),
@@ -619,7 +622,10 @@ func (m *subManager) reconcileNamespace(ctx context.Context, ns namespaceRef, sn
 			return true
 		}
 	}
-	return true
+	// A non-empty page token means the namespace was only partially listed.
+	// Report it as incomplete so the caller cannot mistake keys beyond the cap
+	// for deletions and revert their hot-reloaded values.
+	return false
 }
 
 // Watch subscribes to the client's whole namespace and invokes fn for every

@@ -3,7 +3,10 @@ from __future__ import annotations
 import threading
 import time
 
+import kms_paramstore.watch as watch_module
 from kms_paramstore import Client, EventType, ParameterValue
+from kms_paramstore._gen import kms_pb2
+from kms_paramstore._refs import NamespaceRef
 from tests.conftest import NS, NS_APP, NS_ENV
 from tests.helpers import wait_until
 
@@ -232,6 +235,22 @@ def test_deleted_param_reverts_via_reconcile_notfound(server):
         assert wait_until(lambda: ("5", "1") in changes)
     finally:
         c.close()
+
+
+def test_reconcile_page_cap_is_incomplete(client, monkeypatch):
+    calls = []
+
+    def list_page(_ns, _key_prefix, page_token):
+        calls.append(page_token)
+        return kms_pb2.ListParametersResponse(next_page_token="more")
+
+    monkeypatch.setattr(watch_module, "_MAX_RECONCILE_PAGES", 2)
+    monkeypatch.setattr(client, "_list_parameters_raw", list_page)
+
+    present = client._subs()._reconcile_namespace(NamespaceRef(NS_ENV, NS_APP), 0)
+
+    assert present is None, "a capped, partially listed namespace must be incomplete"
+    assert calls == ["", "more"]
 
 
 def test_no_default_keeps_last_known_on_delete(server):
