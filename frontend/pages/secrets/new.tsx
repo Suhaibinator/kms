@@ -35,7 +35,6 @@ export default function NewSecretPage() {
   const [clientBound, setClientBound] = useState(false);
   const [ack, setAck] = useState(false);
   const [generateToken, setGenerateToken] = useState(false);
-  const [providedToken, setProvidedToken] = useState("");
 
   const [saving, setSaving] = useState(false);
 
@@ -79,37 +78,26 @@ export default function NewSecretPage() {
         );
         return;
       }
-      if (!generateToken && !providedToken.trim()) {
-        toast.error(
-          new Error("Client-bound secrets need an access token: generate one, or supply your own."),
-          "Access token required",
-        );
-        return;
-      }
     }
 
     const expiresMs = datetimeLocalToUnixMs(expires) ?? 0;
-    const secretToken = clientBound && !generateToken ? providedToken.trim() : undefined;
 
     setSaving(true);
     try {
-      const res = await api.createSecret(
-        {
-          env: ns.env,
-          app: ns.app,
-          key: k,
-          value_base64: utf8ToBase64(value),
-          content_type: contentType.trim() || "text/plain",
-          metadata_json: metadataJson.trim() || "{}",
-          client_bound: clientBound,
-          generate_access_token: generateToken,
-          expires_at_unix_ms: expiresMs,
-        },
-        secretToken,
-      );
+      const res = await api.createSecret({
+        env: ns.env,
+        app: ns.app,
+        key: k,
+        value_base64: utf8ToBase64(value),
+        content_type: contentType.trim() || "text/plain",
+        metadata_json: metadataJson.trim() || "{}",
+        client_bound: clientBound,
+        // The server must mint the key share for every new client-bound secret.
+        generate_access_token: clientBound || generateToken,
+        expires_at_unix_ms: expiresMs,
+      });
       // Clear plaintext inputs from the DOM immediately.
       setValue("");
-      setProvidedToken("");
       const ref = { env: ns.env, app: ns.app, key: k };
       setCreatedRef(ref);
 
@@ -213,7 +201,6 @@ export default function NewSecretPage() {
                 if (!e.target.checked) {
                   setAck(false);
                   setGenerateToken(false);
-                  setProvidedToken("");
                 }
               }}
             />
@@ -244,34 +231,10 @@ export default function NewSecretPage() {
                 </label>
               </div>
 
-              <div className="checkbox-row mb-16">
-                <input
-                  id="gen-token"
-                  type="checkbox"
-                  checked={generateToken}
-                  onChange={(e) => setGenerateToken(e.target.checked)}
-                />
-                <label htmlFor="gen-token">
-                  Generate a new access token for me (shown once after creation).
-                </label>
+              <div className="info-panel mb-16">
+                A new client access token will be generated and shown once after creation.
+                Store it immediately; the server cannot recover it later.
               </div>
-
-              {!generateToken ? (
-                <Field
-                  label="Client access token"
-                  hint="Required when not generating one. Sent once to derive the encryption key; never stored server-side in recoverable form."
-                >
-                  <input
-                    className="input mono"
-                    type="password"
-                    value={providedToken}
-                    autoComplete="off"
-                    spellCheck={false}
-                    onChange={(e) => setProvidedToken(e.target.value)}
-                    placeholder="existing client access token"
-                  />
-                </Field>
-              ) : null}
             </>
           ) : (
             <div className="checkbox-row mb-16">
