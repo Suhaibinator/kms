@@ -105,14 +105,14 @@ func (c *CLI) cmdServe(args []string) int {
 	svc := core.New(store, logger, Version)
 
 	// Unseal before starting listeners. In interactive mode this blocks on the
-	// passphrase prompt; readiness gating keeps any early request answered 503.
+	// passphrase prompt; no network listener exists until unseal succeeds.
 	keyring, err := c.unseal(context.Background(), store, cfg.Encryption.KEKFile, false)
 	if err != nil {
 		return c.fail("acquiring master key: %v", err)
 	}
 	svc.SetKeyring(keyring)
 
-	// Bootstrap the built-in CA (generate on first unseal, load thereafter). Its
+	// Bootstrap the built-in CA (generate on first serve, load thereafter). Its
 	// certificate anchors client-certificate authentication on the gRPC listener.
 	if err := svc.BootstrapCA(context.Background()); err != nil {
 		return c.fail("initializing certificate authority: %v", err)

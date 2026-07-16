@@ -1,19 +1,17 @@
 # Namespace-Native Rewrite — Implementation Plan
 
-Status: **the (env, app) namespace model, built-in CA, and per-namespace
-auth methods are implemented on branch `rewrite/namespaces`.** This revision
-of the plan removes the per-*key* concepts that an earlier revision
-introduced: there are no key patterns in policy, no watch selectors, and no
-prefix matching anywhere. **The namespace `(env, app)` is the single unit of
-authorization, subscription, and isolation; keys are opaque strings the
-server never interprets.** The sections below describe that corrected target;
-the remaining work brings the watch subsystem and the policy model in line
-with it (see §15).
+Status: **completed and merged to `main`.** This is the historical implementation
+plan for the `(env, app)` namespace model, built-in client CA, per-namespace
+auth methods, and the later removal of per-key policy/watch concepts. There are
+no key patterns in policy and no watch selectors. **The namespace `(env, app)`
+is the single unit of authorization scope, subscription, and isolation; keys
+are opaque strings the server never interprets.** Section 15 records a
+completed simplification, not remaining work. For the current operator and API
+contracts, use `README.md` and `docs/`.
 
-Supersedes the path-string data model in [`plan.md`](plan.md) (§13.1 path
-format, §12 storage, §8 API shapes). Everything else in `plan.md` (crypto,
-versioning, labels, redaction, audit guarantees, deployment) carries over
-unchanged.
+This plan superseded the path-string data model in [`plan.md`](plan.md) (§13.1
+path format, §12 storage, §8 API shapes). The current code and reference docs
+are authoritative where either historical plan differs.
 
 ## 1. Motivation
 
@@ -75,9 +73,9 @@ implementation:
    into it — enforced on every operation in the namespace, including reads
    of unprotected parameters. A namespace can require mTLS-only, making
    token theft useless for that namespace.
-8. **Authorization, subscription, and isolation are per-namespace.** A
-   client is authorized for a namespace or it isn't; if it is, it may read,
-   list, and watch **every** key in that namespace — nothing finer. There is
+8. **Authorization, subscription, and isolation are per-namespace.** Each
+   operation is authorized for a whole namespace; if granted, it covers
+   **every** key in that namespace — nothing finer. There is
    no per-key authorization and no key-level watch filtering. A subscriber to
    `(env, app)` receives every change in that namespace. Any narrower
    interest (e.g. "only wake me for `db/*`") is the client's own concern,
@@ -123,8 +121,9 @@ Defaults chosen to complete the design; flag during review if any is wrong:
 - **The namespace auth-method gate applies to client-kind identities.**
   Admin-kind identities (human, token-based frontend login) are the
   management plane: they can administer any namespace from a browser
-  (which cannot practically do client-cert auth), with the same policy and
-  audit controls as today, including the audited secret-reveal flow.
+  (which cannot practically do client-cert auth). Admins bypass data-plane
+  policy and the namespace method gate, but audit and client-bound secret
+  cryptography still apply.
 - **Client cert keys are generated server-side and returned exactly once**
   (PEM bundle), like tokens today. A CSR flow (client keeps its own key)
   is out of scope for this pass.
@@ -271,14 +270,14 @@ namespace; there is no key-level scoping. Rule shape (stored in
 ```
 
 - `env`/`app`: exact or `"*"`. There is **no** `key` field.
-- Evaluation order: deny → allow → default deny. `Evaluate(policies, op,
-  ns)` takes a `NamespaceRef`, not a ref+key.
+- Evaluation order: deny → implicit home grant → allow → default deny.
+  `Authorize(policies, home, op, ns)` takes a `NamespaceRef`, not a ref+key.
 - **Implicit home-namespace grant (pre-step in `core`):** if the caller's
   identity has a bound namespace, that namespace equals the target
   namespace, and the operation is in the implicit set
   (`parameter:read|list`, `secret:read|list`, subscribe), allow without
-  consulting policies. Deny rules still apply (deny > implicit grant), so an
-  admin can carve out a whole namespace but not a single key.
+  requiring an explicit allow. Deny rules still apply (deny > implicit grant),
+  so a policy author can carve out a whole namespace but not a single key.
 - A read/list/subscribe on a namespace is a single yes/no decision. Because
   authorization is all-or-nothing per namespace, **once a subscriber is
   admitted to a namespace it receives every change in it** — there is no
@@ -300,17 +299,19 @@ namespace registers which auth methods admit a caller at all.
 
 **Built-in CA (`internal/ca`, new package):**
 
-- Generated at first unseal (Ed25519 or ECDSA P-256), private key
-  encrypted under the active KEK exactly like a secret version; plaintext
-  key exists only in memory while issuing. KEK rotation rewraps it along
+- Generated during the first `serve` startup after unseal (Ed25519), private
+  key encrypted under the active KEK exactly like a secret version; the
+  plaintext key remains in the service process while it is running. KEK
+  rotation rewraps it along
   with secret DEKs (`RotateKEK` gains the `ca_keys` row).
 - Signs **client certificates only**. The server's own TLS certificate
   remains operator-provided, as today.
-- The gRPC/HTTP listeners add the built-in CA to their client-CA pool
+- The gRPC listener adds the built-in CA to its client-CA pool
   (alongside any operator-supplied client CA) with
   `tls.VerifyClientCertIfGiven` — token-only clients still connect.
 - CA certificate is public: `GET /api/v1/ca` (no auth) and
-  `parameter-store admin ca show`, for baking into app deploy images.
+  `parameter-store admin ca show`, for inspection and out-of-band validation
+  of KMS-issued **client** certificates. It is not the server TLS trust root.
 
 **Certificate contents & mapping:** CN and URI SAN `kms://identity/<name>`
 name the identity; the namespace binding stays in the database (so
@@ -453,7 +454,7 @@ Frontend (`frontend/`):
 client, err := paramstore.NewClient(paramstore.Config{
     Endpoint: os.Getenv("PARAM_STORE_ENDPOINT"),
     // Preferred: cert-only identity (proof of possession, §7).
-    TLS: paramstore.MTLSFromFiles("app.crt", "app.key", "ca.crt"),
+    TLS: paramstore.MTLSFromFiles("app.crt", "app.key", "server-ca.crt"),
     // Token is optional when a client cert is supplied; required only for
     // token-method identities (and only admitted where the namespace's
     // allowed_auth_methods includes "token").
@@ -481,13 +482,14 @@ err = client.Resolve(ctx, &cfg)
 - `Client.Watch(ctx, fn)` watches the client's whole namespace (fires for
   every change in it). It takes **no key pattern** — an app that only cares
   about a subset filters by its own convention inside `fn` (e.g.
-  `strings.HasPrefix(ev.Key, "db/")`). An optional overload may watch a
-  *different* namespace the client is authorized for.
+  `strings.HasPrefix(ev.Key, "db/")`). `WatchNamespace` watches a *different*
+  namespace the client is authorized for.
 - Namespace discovery: on first namespace-needing call, if
   `Config.Namespace` is empty, call `WhoAmI` once (cached for the client's
   lifetime); surface `ErrNoNamespace` if the identity is unbound.
-- Reconnect/backoff/reconciliation/redaction semantics all carry over;
-  reconciliation lists the whole subscribed namespace.
+- Reconnect/backoff/reconciliation/redaction semantics all carry over.
+  Reconciliation pagination is bounded; incomplete scans apply fetched values
+  but do not infer deletions.
 - `paramstoretest`: `SetParameter(ns, key, value)` etc.; keep a
   `SetParameterPath("/env/app/key", ...)` convenience that splits
   client-side, to keep test call-sites terse.
@@ -498,8 +500,8 @@ Mirror of the Go changes: `Client(endpoint, token=..., namespace="prod/gradethis
 | None)`, relative keys in `SecretValue`/`ParameterValue`, `static=True`
 replaces `dynamic=True` (default flips to hot-reload-on), `client.watch(cb)`
 (whole-namespace, no pattern — the callback filters by its own convention),
-WhoAmI discovery, `_gen` regenerated via `sdk/python/gen.sh`. The stricter
-`fallback_to_defaults_on_error=False` default behavior is kept as-is.
+WhoAmI discovery, `_gen` regenerated via `sdk/python/gen.sh`. The default
+`fallback_to_defaults_on_error=False` behavior matches the Go SDK.
 
 **Hot-reload default flip risk (both SDKs):** values now change at runtime
 by default. This is the intended semantic ("updates propagate to all
@@ -509,11 +511,10 @@ reads. Docs must state the flip prominently.
 
 ## 12. CLI (`internal/cli`)
 
-- `import`: gains `--env`/`--app` (or reads them from the mapping file);
-  writes through the new storage API. The import mapping report renders
-  display paths.
-- `admin` subcommands: namespace create/update/delete/list with env/app
-  args (`--auth-methods mtls,token`); identity create gains `--namespace
+- `import`: accepts `--env`/`--app` or `--namespace env/app`, writes through
+  the new storage API, and renders display paths in its mapping report.
+- `admin` subcommands: namespace create/update/delete/list with `--env`/`--app`
+  flags (`--auth-methods mtls,token`); identity create gains `--namespace
   env/app`, `--auth mtls|token|both`, `--ttl`, `--out <dir>` (writes the
   one-time PEM bundle); new `identity issue-cert` / `identity revoke-cert`
   and `ca show`.
@@ -527,11 +528,9 @@ reads. Docs must state the flip prominently.
 > Phase 3), it is superseded by the namespace-level model in §6/§8/§9 and the
 > removal delta in §15.
 
-Work happens on one feature branch (`rewrite/namespaces`), one commit per
-phase; the branch merges only when everything is green. `go test ./...`
-cannot be green between phases 1–2 (the module includes the SDK, which
-compiles against the old proto until phase 3) — per-phase gates below are
-the honest checkpoints. No backward-compatibility shims at any point.
+Work happened on feature branch `rewrite/namespaces`, one commit per phase.
+The phase gates below are retained as historical implementation checkpoints;
+they are not claims about the current test count or current branch state.
 
 **Phase 1 — data model.** `internal/domain` (Ref types, AuthMethod, rule
 shape, op constants), `internal/keyutil` (new; delete `internal/pathutil`),
@@ -556,13 +555,13 @@ cert-authenticated gRPC read against an mTLS-only namespace.
 
 **Phase 3 — Go SDK.** `sdk/go/paramstore` (+ `paramstoretest`): Config
 (cert-only identity, optional Token), key resolution, Static flip,
-namespace-wide subscribe selector, WhoAmI discovery, watch patterns,
+namespace-wide subscription, WhoAmI discovery, namespace watches,
 reconciliation, README.
 *Gate:* `go test ./... -race` green (entire module), `go vet ./...`.
 
 **Phase 4 — Python SDK.** `sdk/python/gen.sh` regen, `kms_paramstore/*`
 mirror changes, tests.
-*Gate:* `pytest sdk/python` green (currently 40 tests; will grow).
+*Gate:* `pytest sdk/python` green.
 
 **Phase 5 — frontend.** `lib/`, all pages per §10.
 *Gate:* `make frontend && make backend && make check-frontend`; manual
@@ -613,13 +612,12 @@ with pointers here.
 - CRL/OCSP distribution — revocation is enforced in the KMS's own
   interceptor, which is the only relying party.
 
-## 15. Remaining work — the simplification delta
+## 15. Completed simplification delta
 
-The `(env, app)` model, schema, built-in CA, per-namespace auth methods, and
-the SDK ergonomics are implemented. An earlier revision also built per-key
-policy patterns and key-pattern watch selectors; this section is the delta
-that removes them and lands the namespace-level model above. It is a
-watch-and-authz refactor, not a fresh build.
+An earlier revision built per-key policy patterns and key-pattern watch
+selectors. The completed delta below removed them and landed the
+namespace-level model above. The checklist is retained as implementation
+history.
 
 **Server:**
 - `internal/domain`: drop `KeyPattern` from `PolicyRule`; remove

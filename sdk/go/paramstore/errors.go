@@ -29,8 +29,9 @@ var (
 	// secret).
 	ErrFailedPrecondition = errors.New("paramstore: failed precondition")
 
-	// ErrNotInitialized is returned (or panicked with) when a declarative value
-	// is used before Init/Resolve has run.
+	// ErrNotInitialized is reserved for compatibility. Declarative values do not
+	// currently return it: SecretValue.Value panics with a descriptive message,
+	// while ParameterValue.Get returns the empty string before Init/Resolve.
 	ErrNotInitialized = errors.New("paramstore: value not initialized")
 
 	// ErrNoNamespace is returned when a relative key must be resolved but no

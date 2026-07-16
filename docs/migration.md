@@ -8,18 +8,19 @@ when gradethis builds and runs with no dependency on
 
 A namespace is a fixed `(env, app)` pair. Flat, prefixed keys become a
 namespace plus a **relative** key; the old `/prod/gradethis/...` path string
-survives only as a display form, never as something you configure.
+survives as a display form and optional client-side SDK/CLI convenience, never
+as a server-side wire or storage field.
 
 | SuhaibParameterStore | This service |
 |---|---|
-| flat key, e.g. `gradethis_TWILIO_ACCOUNT_SID` | namespace `prod/gradethis` + relative key `twilio-account-sid` |
+| flat key, e.g. `gradethis_TWILIO_ACCOUNT_SID` | namespace `prod/gradethis` + relative key `gradethis-twilio-account-sid` (`slug` lowercases and replaces `_` with `-`; it does not strip prefixes) |
 | `ParameterStoreKey` | `SecretValue.Key` / `ParameterValue.Key` — a **relative** key (or an absolute `/env/app/key` for cross-namespace reads) |
 | `ParameterStoreSecret` (per-key access secret) | `SecretValue.Token` (per-secret access token) |
 | `EnvironmentVariableKey` | `SecretValue.EnvVar` / `ParameterValue.EnvVar` |
 | `ParameterStoreValue` (dev default) | `SecretValue.Default` / `ParameterValue.Default` |
 | master password entered at startup | master key file, or passphrase (argon2id) at unseal |
 | — (client just held the store secret) | **client identity credential**: a per-client certificate bundle (mTLS, recommended) or a bearer token, presented on connect |
-| — (keys existed as bare paths) | **namespace registration**: the `(env, app)` namespace must exist before any parameter/secret is written into it |
+| — (keys existed as bare paths) | **namespace registration**: ordinary writes require the `(env, app)` namespace to exist; the offline importer creates it if absent |
 
 The new SDK is not API-compatible with `ParameterStoreConfig` by design; the
 rewrite is mechanical but the API stands on its own merits. The two new rows
@@ -68,7 +69,7 @@ func Load(ctx context.Context) (*Config, error) {
         TLS: paramstore.MTLSFromFiles(
             os.Getenv("PARAM_STORE_CLIENT_CERT"),
             os.Getenv("PARAM_STORE_CLIENT_KEY"),
-            os.Getenv("PARAM_STORE_CA_CERT"),
+            os.Getenv("PARAM_STORE_SERVER_CA_CERT"), // trusts the operator-provided server cert
         ),
     })
     if err != nil {
@@ -76,7 +77,7 @@ func Load(ctx context.Context) (*Config, error) {
     }
     cfg := &Config{
         StripeAPIKey: paramstore.SecretValue{
-            Key:     "stripe-api-key",              // relative to prod/gradethis
+            Key:     "gradethis-stripe-api-key",    // importer preserves the source prefix
             Token:   os.Getenv("STRIPE_API_KEY_TOKEN"), // per-secret token if the secret requires one (from the import report)
             EnvVar:  "STRIPE_API_KEY",              // env override still wins
             Default: "sk_test_dev_only",            // dev only
@@ -97,7 +98,7 @@ func Load(ctx context.Context) (*Config, error) {
 
 Notes:
 
-- **Keys are relative.** `Key: "stripe-api-key"` resolves inside the client's
+- **Keys are relative.** `Key: "gradethis-stripe-api-key"` resolves inside the client's
   namespace. Use an absolute `Key: "/staging/gradethis/rate-limit"` only to
   reach another namespace (subject to policy).
 - **Token is optional.** A token-authenticated client instead sets
@@ -136,7 +137,7 @@ hot-reloading by default) — see [`sdk-python.md`](sdk-python.md).
    # namespace prod/gradethis (mTLS-only by default), then a bound client
    # identity "gradethis-be" issued a cert bundle (key returned once).
    #   parameter-store admin namespace create --env prod --app gradethis
-   #   parameter-store admin identity create --name gradethis-be \
+   #   parameter-store admin identity create gradethis-be \
    #       --namespace prod/gradethis --auth mtls --ttl 90d --out ./gradethis-be/
    ```
    Because the identity is bound to the namespace, it may read secrets and
@@ -147,17 +148,17 @@ hot-reloading by default) — see [`sdk-python.md`](sdk-python.md).
    genuinely required. (Command detail lives in [`operations.md`](operations.md).)
 3. **Import** existing data (dry-run first). Import now maps flat keys into a
    namespace via `--env`/`--app`; each old key becomes a relative key
-   (`gradethis_STRIPE_API_KEY` → `stripe-api-key`):
+   (`gradethis_STRIPE_API_KEY` → `gradethis-stripe-api-key`):
    ```bash
    parameter-store import --from parameterstore.db \
        --env prod --app gradethis --dry-run
    parameter-store import --from parameterstore.db \
        --env prod --app gradethis --report tokens.csv
    ```
-   The report maps every old key to its new relative key and freshly minted
-   per-secret access token. Tokens appear only in this report — store it
-   securely, distribute the tokens into gradethis config, then delete it.
-   (Import flags and mapping-file support: [`operations.md`](operations.md).)
+   A dry-run report contains only the old-key → display-path mapping. A real
+   import additionally includes each freshly minted per-secret access token;
+   store that report securely, distribute the tokens into gradethis config,
+   then delete it. (Import flags: [`operations.md`](operations.md).)
 4. **Dual-run**: point gradethis dev/staging at the new SDK; keep the old
    store running. Verify every value matches (compare tool / staging boot).
 5. **Cut over production**, then decommission SuhaibParameterStore.

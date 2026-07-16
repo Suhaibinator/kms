@@ -32,7 +32,7 @@ go get github.com/Suhaibinator/kms/sdk/go/paramstore
 client, err := paramstore.NewClient(paramstore.Config{
     Endpoint:  "parameter-store.prod.internal:8443",
     Namespace: "prod/gradethis",                                    // env/app; optional (see below)
-    TLS:       paramstore.MTLSFromFiles("client.crt", "client.key", "ca.crt"),
+    TLS:       paramstore.MTLSFromFiles("client.crt", "client.key", "server-ca.crt"),
     CacheTTL:  time.Minute,
 })
 if err != nil {
@@ -44,7 +44,9 @@ defer client.Close()
 The recommended posture is a **client certificate** minted by the KMS's
 built-in CA (proof of possession; see [`security.md`](security.md)): the
 identity derives from the cert server-side, so `Token` is not needed. Supply a
-`Token` only for token-method identities.
+`Token` only for token-method identities. `server-ca.crt` must trust the
+operator-provided **server** certificate. It is not the built-in client CA
+returned by `admin ca show`.
 
 `Config` fields (`sdk/go/paramstore/client.go`):
 
@@ -146,10 +148,13 @@ res, err := client.PutSecret(ctx, "stripe-api-key", []byte("sk_live_..."),
 ```
 
 `PutSecretOption`s: `WithSecretContentType`, `WithSecretMetadataJSON`,
-`WithClientBound()` (opt in to client-bound double wrapping — only honored
-on first creation), `WithGenerateAccessToken()`, `WithExpiresAt(unixMS
-int64)`, `WithPutSecretToken(token string)` (supply the existing token when
-updating a token-protected or client-bound secret).
+`WithClientBound()` (opt in to client-bound double wrapping — fixed at first
+creation), `WithGenerateAccessToken()`, `WithExpiresAt(unixMS int64)`, and
+`WithPutSecretToken(token string)`. New client-bound secrets require both
+`WithClientBound()` and `WithGenerateAccessToken()`; preserve the returned
+one-time token. Updates require `WithClientBound()` plus
+`WithPutSecretToken(currentToken)`; adding `WithGenerateAccessToken()` rotates
+the token for the new version.
 
 ## Errors
 
@@ -173,10 +178,11 @@ case errors.Is(err, paramstore.ErrFailedPrecondition):
 `ErrNoNamespace` is returned when a relative key needs a namespace but none is
 available (unbound identity, empty `Config.Namespace`) — see
 [Namespace discovery](#namespace-discovery-whoami-and-errnonamespace).
-`ErrNotInitialized` is returned (or panicked with, from `SecretValue.Value`/
-`ParameterValue` before `Init`) when a declarative value is read before
-resolution. None of these errors, nor anything wrapping them, ever carries
-secret plaintext. Errors outside this mapped set (e.g. `Unavailable`,
+`SecretValue.Value` panics with a descriptive message when read before
+resolution; `ParameterValue.Get` returns `""` before resolution. The exported
+`ErrNotInitialized` sentinel is reserved for compatibility and is not currently
+emitted. None of these errors, nor anything wrapping them, ever carries secret
+plaintext. Errors outside this mapped set (e.g. `Unavailable`,
 `DeadlineExceeded`, `Internal`) are returned as the original gRPC status
 error.
 
@@ -325,11 +331,11 @@ stop, err := client.Watch(ctx, func(ev paramstore.Event) {
 defer stop()
 ```
 
-`OnChange` callbacks (and `Watch` callbacks) run on a single dedicated
-dispatch goroutine shared by the client; a panicking or slow callback is
-recovered/logged and cannot stall the stream or other callbacks (a full
-dispatch queue drops the notification — values are already updated by then
-— and logs a warning rather than blocking).
+`OnChange` callbacks (and `Watch` callbacks) run serially on one dedicated
+dispatch goroutine shared by the client. A panic is recovered and logged. A
+slow callback cannot stall the subscription stream, but it **does delay later
+callbacks**; if the bounded dispatch queue fills, the notification is dropped
+and logged (the value was already updated before dispatch).
 
 `Client.Watch(ctx, fn)` subscribes to the client's **whole namespace** and
 takes **no key pattern**: it fires for every change in the namespace, so an app
@@ -348,12 +354,14 @@ An `Event` (`sdk/go/paramstore/watch.go`) carries `Type`, `Namespace`
 and the raw `ChangeType`. `Event.Path()` returns the `/env/app/key` display
 path.
 
-As a safety net, the subscription manager also polls a full reconciliation
-every 5 minutes: it lists each subscribed namespace in full
-(`ListParameters` with an empty key prefix) and applies any drift the event
-stream missed, including deletions of previously-known parameters. Event
-delivery is at-least-once and idempotent by revision, so this never
-double-applies a change.
+As a safety net, the subscription manager also polls a reconciliation every 5
+minutes: it lists each subscribed namespace with an empty key prefix, applies
+the values it receives, and infers deletions only after a complete listing.
+Enumeration is capped at 100 pages to prevent runaway pagination. If a list
+call fails or the cap is reached with another page pending, fetched values are
+still applied but deletion inference is skipped. Event delivery is
+at-least-once and idempotent by revision, so this never double-applies a
+change.
 
 If the store is unreachable, `Get()` keeps returning the last-known value;
 the SDK reconnects in the background and reconciles automatically once it
@@ -416,4 +424,3 @@ Scripting surface:
   [`operations.md`](operations.md).
 - The encryption, authentication (built-in CA, mTLS), and authorization model
   — see [`security.md`](security.md).
-```

@@ -1,10 +1,11 @@
 # Parameter Store and Secret Management Service Requirements
 
-> **Note:** the flat path-string data model in this document (§8 API shapes,
-> §12 storage, §13.1 path format, §16.2 path-based access) is superseded by
-> the namespace-native rewrite planned in
-> [`plan-namespaces.md`](plan-namespaces.md). All other requirements here
-> (crypto, versioning, redaction, audit, deployment) remain authoritative.
+> **Historical requirements.** This document records the original design. The
+> namespace-native rewrite in [`plan-namespaces.md`](plan-namespaces.md) was
+> implemented and merged; several details here were subsequently refined. The
+> current code, `README.md`, and `docs/` are authoritative. In particular, the
+> flat path model, per-key policy/watch concepts, CA trust guidance, and exact
+> operational behavior below must not be treated as current contracts.
 
 ## 1. Overview
 
@@ -328,8 +329,8 @@ Secrets used to configure the service itself must not be logged.
 > **Superseded.** The API shapes below (path-string request fields) are
 > replaced by the namespace-native wire protocol in
 > [`plan-namespaces.md`](plan-namespaces.md) §8. See there for the current
-> `NamespaceRef`/`ResourceRef`/`WatchSelector` messages and per-service
-> changes.
+> `NamespaceRef`/`ResourceRef` messages and per-service changes. The current
+> protocol has no watch selector or key-pattern message.
 
 The service must expose a gRPC API as the primary programmatic interface.
 
@@ -421,7 +422,7 @@ The server must maintain an in-memory registry of live subscribers, backed by th
 3. A subscriber that misses N heartbeats (default 3) is considered dead; the server closes the stream and drops it from the registry.
 4. Standard gRPC keepalive settings should be configured in addition to application-level heartbeats.
 5. Clients reconnect on stream loss with jittered exponential backoff, resuming from their last-seen revision.
-6. The registry must be queryable via the Admin API and visible in the frontend: which apps are connected, what paths they watch, and which revision each has applied. This is how operators verify a config change has actually propagated.
+6. The registry must be queryable via the Admin API and visible in the frontend: which apps are connected, what namespaces they watch, and which global revision each has applied. Because the revision is global, lag is a coarse signal; it does not prove that a particular namespace change propagated.
 7. Subscriber counts and stale-subscriber detection should be exported as metrics.
 8. As a safety net against missed events, SDKs should perform a periodic full-sync reconciliation poll (default every 5 minutes) comparing revisions.
 
@@ -484,7 +485,7 @@ SDKs must:
 ```go
 client, err := paramstore.NewClient(paramstore.Config{
     Endpoint: "parameter-store.prod.internal:8443",
-    TLS:      paramstore.MTLSFromFiles("client.crt", "client.key", "ca.crt"),
+    TLS:      paramstore.MTLSFromFiles("client.crt", "client.key", "server-ca.crt"),
     CacheTTL: time.Minute,
 })
 if err != nil {
@@ -597,7 +598,7 @@ Requirements:
 
 1. `ParameterValue` fields with `Dynamic: true` (and values hydrated via `Resolve` with a `dynamic` tag) are automatically registered on the app's subscription; `Get()` returns the latest value without an RPC.
 2. Updates must be atomic per value: readers see either the old or the new value, never a partial state.
-3. Callbacks run on a dedicated goroutine; a panicking or slow callback must not stall the stream or other callbacks.
+3. Callbacks run serially on a dedicated goroutine; a panic is recovered, and a slow callback must not stall the stream but does delay later callbacks.
 4. Env-var-overridden values do not hot-reload (the override pins them); the SDK should log this at startup.
 5. Secrets hot-reload indirectly: on a secret metadata change event the SDK may re-fetch the secret and update the handle, but only when the app opts in (e.g. `Reloadable: true`), since consuming code must be written to tolerate rotation.
 6. If the store is unreachable, apps keep serving the last-known values; the SDK reconnects in the background and reconciles on resume.
@@ -1131,8 +1132,8 @@ admin:key:rotate
 
 > **Superseded.** Path-prefix policy matching below is replaced by the
 > namespace-native rule shape in [`plan-namespaces.md`](plan-namespaces.md) §6:
-> rules are `{operation, env, app, key}` (env/app exact or `*`; key exact, `*`,
-> or `prefix/*`), plus an implicit home-namespace read/list grant. Deny
+> rules are `{operation, env, app}` (env/app exact or `*`) over a whole
+> namespace, plus an implicit home-namespace read/list grant. Deny
 > precedence and least-privilege intent are unchanged.
 
 Policies should support path prefixes.
@@ -1157,7 +1158,7 @@ Explicit deny rules must override allow rules.
 
 ### 16.4 Least Privilege
 
-Consuming services should generally have read-only access to a narrow path prefix.
+Consuming services should generally have read-only access to a narrowly scoped namespace.
 
 Only the Parameter Store service itself should access SQLite and the KEK provider.
 
@@ -1415,7 +1416,7 @@ Optional convenience commands:
 parameter-store put-secret /prod/payments/stripe/api-key
 parameter-store get-secret /prod/payments/stripe/api-key
 parameter-store put-parameter /prod/payments/rate-limit 100
-parameter-store list /prod/payments
+parameter-store list prod/payments
 ```
 
 CLI secret output should be carefully controlled. By default, secret retrieval should avoid printing to terminal unless explicitly requested.
@@ -1886,7 +1887,7 @@ This service exists to replace SuhaibParameterStore. The migration is the primar
 
 ### 33.1 SDK Migration Posture
 
-The Go SDK is not required to be API-compatible with `SuhaibParameterStoreClient` or its `ParameterStoreConfig` type. Where the old client's design is lacking, the new SDK must not inherit it. The concepts do map (store key to path, per-key access secret to token, env fallback, dev default), so migrating a consuming app is a mechanical rewrite of its config fields, but the new API's shape — declarative fields with `Init`/`Resolve` (9.5), redaction by default, batched resolution, hot reload — is designed on its own merits.
+The Go SDK is not required to be API-compatible with `SuhaibParameterStoreClient` or its `ParameterStoreConfig` type. Where the old client's design is lacking, the new SDK must not inherit it. The concepts do map (store key to path, per-key access secret to token, env fallback, dev default), so migrating a consuming app is a mechanical rewrite of its config fields, but the new API's shape — declarative fields with `Init`/`Resolve` (9.5), redaction by default, concurrent per-field resolution, hot reload — is designed on its own merits.
 
 The migration guide must include a before/after example for a typical gradethis config field so the rewrite is unambiguous.
 
@@ -1895,15 +1896,15 @@ The migration guide must include a before/after example for a typical gradethis 
 The binary must provide an import command that migrates existing SuhaibParameterStore data:
 
 ```bash
-parameter-store import --from <export-file-or-endpoint> --namespace /prod/gradethis
+parameter-store import --from <export-file-or-sqlite-db> --namespace prod/gradethis
 ```
 
 The importer must:
 
-1. Map flat keys (e.g. `gradethis_TWILIO_ACCOUNT_SID`) to namespaced paths.
-2. Preserve or re-issue per-secret access tokens, emitting a mapping report so app configs can be updated.
+1. Map flat keys (e.g. `gradethis_TWILIO_ACCOUNT_SID`) to slugged namespaced paths without stripping the source prefix.
+2. Re-issue per-secret access tokens, emitting a mapping report so app configs can be updated.
 3. Encrypt all imported secrets under the new envelope scheme.
-4. Support a dry-run mode that reports the resulting paths and tokens without writing.
+4. Support a dry-run mode that reports the resulting paths without writing or minting tokens.
 
 ### 33.3 Cutover
 

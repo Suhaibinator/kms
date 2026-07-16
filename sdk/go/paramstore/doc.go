@@ -37,7 +37,7 @@
 //	client, err := paramstore.NewClient(paramstore.Config{
 //	    Endpoint:  "parameter-store.prod.internal:8443",
 //	    Namespace: "prod/payments", // or "" to discover via WhoAmI
-//	    TLS:       paramstore.MTLSFromFiles("client.crt", "client.key", "ca.crt"),
+//	    TLS:       paramstore.MTLSFromFiles("client.crt", "client.key", "server-ca.crt"),
 //	    CacheTTL:  time.Minute,
 //	})
 //	if err != nil {

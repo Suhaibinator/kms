@@ -559,8 +559,9 @@ message WhoAmIResponse {
   string auth_method = 4;      // mtls | token
 }
 
-// GetCACertificate returns the built-in CA's public certificate for baking
-// into app deploy images. Callable without authentication.
+// GetCACertificate returns the built-in client CA's public certificate for
+// inspection and out-of-band validation of KMS-issued client certificates. It
+// is not the server TLS trust root. Callable without authentication.
 message GetCACertificateRequest {}
 
 message GetCACertificateResponse {

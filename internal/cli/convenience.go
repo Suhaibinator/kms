@@ -122,8 +122,8 @@ func (c *CLI) cmdPutSecret(args []string) int {
 	fs := c.newFlags("put-secret")
 	cf := addConnFlags(fs)
 	valueFile := fs.String("value-file", "", "read the secret value from this file (default: stdin)")
-	clientBound := fs.Bool("client-bound", false, "create a client-bound secret")
-	genToken := fs.Bool("generate-token", false, "mint a per-secret access token (shown once)")
+	clientBound := fs.Bool("client-bound", false, "write a client-bound secret (new secrets also require --generate-token)")
+	genToken := fs.Bool("generate-token", false, "mint or rotate a per-secret access token (shown once)")
 	contentType := fs.String("content-type", "text/plain", "secret content type")
 	fs.StringVar(&cf.secretToken, "secret-token", "", "existing per-secret token (client-bound updates)")
 	if !c.parseFlags(fs, args) {

@@ -88,8 +88,9 @@ func WithSecretMetadataJSON(j string) PutSecretOption {
 	return func(o *putSecretOptions) { o.metadataJSON = j }
 }
 
-// WithClientBound opts a newly created secret into client-bound double
-// wrapping. Honored only on first creation.
+// WithClientBound opts a secret into client-bound double wrapping. New secrets
+// also require WithGenerateAccessToken; updates must keep this option set and
+// supply the current token with WithPutSecretToken.
 func WithClientBound() PutSecretOption {
 	return func(o *putSecretOptions) { o.clientBound = true }
 }

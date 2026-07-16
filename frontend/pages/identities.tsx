@@ -236,8 +236,8 @@ export default function IdentitiesPage() {
     setCaBusy(true);
     try {
       const res = await api.ca();
-      downloadText("kms-ca.crt", res.cert_pem);
-      toast.success("CA certificate downloaded", "Bake it into your app deploy images.");
+      downloadText("kms-client-ca.crt", res.cert_pem);
+      toast.success("Client CA certificate downloaded", "Use it to validate KMS-issued client certificates.");
     } catch (err) {
       toast.error(err, "Failed to fetch CA certificate");
     } finally {
@@ -598,8 +598,9 @@ export default function IdentitiesPage() {
         title="Rotate token?"
         message={
           <>
-            Rotating issues a new bearer token for <span className="mono">{rotateTarget}</span> and
-            immediately invalidates the current one. Applications must be updated with the new token.
+            Rotating issues a new bearer token for <span className="mono">{rotateTarget}</span>. The
+            old token fails new RPCs; an existing watch closes on its next heartbeat. Applications
+            must be updated with the new token.
           </>
         }
         confirmLabel="Rotate token"
@@ -615,7 +616,7 @@ export default function IdentitiesPage() {
         message={
           <>
             Revoke <span className="mono">{revokeTarget}</span>? Its token and all of its
-            certificates stop working immediately.
+            certificates stop working on the next RPC; existing watch streams close on the next heartbeat.
           </>
         }
         confirmLabel="Revoke identity"

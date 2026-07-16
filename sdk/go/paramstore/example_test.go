@@ -18,7 +18,7 @@ func ExampleNewClient() {
 		Endpoint: "parameter-store.prod.internal:8443",
 		// Cert-only identity: the namespace is discovered from the cert via
 		// WhoAmI. Set Namespace explicitly to skip discovery.
-		TLS:      paramstore.MTLSFromFiles("client.crt", "client.key", "ca.crt"),
+		TLS:      paramstore.MTLSFromFiles("client.crt", "client.key", "server-ca.crt"),
 		CacheTTL: time.Minute,
 	})
 	if err != nil {

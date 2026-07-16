@@ -10,8 +10,8 @@ import (
 	"github.com/Suhaibinator/kms/internal/policy"
 )
 
-// FuzzValidateRules feeds arbitrary operation/env/app/key tuples through the
-// policy validator (which exercises the namespace and key-pattern validators)
+// FuzzValidateRules feeds arbitrary operation/env/app tuples through the
+// policy validator (which exercises the operation and namespace validators)
 // and then through evaluation. It must never panic; it must only ever return a
 // normalized policy or an ErrInvalidArgument, and a normalized policy must
 // re-validate unchanged. Run with:

@@ -4384,8 +4384,9 @@ func (x *WhoAmIResponse) GetAuthMethod() string {
 	return ""
 }
 
-// GetCACertificate returns the built-in CA's public certificate for baking
-// into app deploy images. Callable without authentication.
+// GetCACertificate returns the built-in client CA's public certificate for
+// inspection and out-of-band validation of KMS-issued client certificates. It
+// is not the server TLS trust root. Callable without authentication.
 type GetCACertificateRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	unknownFields protoimpl.UnknownFields

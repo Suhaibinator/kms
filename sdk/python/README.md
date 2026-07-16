@@ -10,10 +10,11 @@ Requires Python 3.10+.
 ## Install
 
 ```bash
-pip install kms-paramstore          # or: pip install -e sdk/python
+pip install -e sdk/python
+# For a published release: pip install kms-paramstore
 ```
 
-Runtime dependencies: `grpcio` and `protobuf` (>= 6.30). The gRPC stubs are
+Runtime dependencies are `grpcio>=1.81.1` and `protobuf>=6.33.5,<7`. The gRPC stubs are
 vendored under `kms_paramstore/_gen/`, so no `protoc` is needed to use the SDK.
 
 ## Quick start
@@ -55,7 +56,9 @@ path. `client.who_am_i()` returns the identity the server sees
 The recommended posture is a **client certificate** minted by the KMS's built-in
 CA: it proves possession (a stolen token alone is useless where a namespace
 requires mTLS), and the server derives the identity — and thus the namespace —
-from the cert, so `token` is optional.
+from the cert, so `token` is optional. `server-ca.crt` must trust the
+operator-provided server certificate; it is not the built-in client CA shown by
+`admin ca show`.
 
 ```python
 from kms_paramstore import Client, mtls_from_files
@@ -63,7 +66,7 @@ from kms_paramstore import Client, mtls_from_files
 # Cert-only: no token, namespace discovered via WhoAmI.
 client = Client(
     "parameter-store.prod.internal:8443",
-    tls=mtls_from_files("app.crt", "app.key", "ca.crt"),
+    tls=mtls_from_files("app.crt", "app.key", "server-ca.crt"),
 )
 ```
 
@@ -163,11 +166,13 @@ stop()
 
 The SDK owns the connection lifecycle: it subscribes on startup, acks
 heartbeats, reconnects with exponential backoff + jitter (1s base, 60s cap)
-resuming from the last seen revision, and reconciles every 5 minutes via a full
-sync (listing the whole subscribed namespace, reconciled by exact key). Events are applied idempotently by
-revision. Callbacks run on a single dedicated dispatch thread with a bounded
-queue (a full queue drops notifications, never values; a raising callback is
-swallowed and logged), so a slow or failing callback never stalls the stream.
+resuming from the last seen revision, and reconciles every 5 minutes by listing
+the subscribed namespace. Enumeration is capped at 1,000 pages; if listing
+fails or the cap is reached with more pages pending, fetched values are applied
+but deletions are not inferred. Events are applied idempotently by revision.
+Callbacks run serially on a single dedicated dispatch thread with a bounded
+queue (a full queue drops notifications, never values; an exception is logged),
+so a slow callback does not stall the stream but does delay later callbacks.
 Env-var-overridden values are pinned and do not hot-reload.
 
 ## Errors

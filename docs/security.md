@@ -10,11 +10,13 @@ restore, key rotation) that follow from it.
 ## Threat model, in one paragraph
 
 The design goal is: an attacker who obtains the SQLite database file (backup
-theft, disk snapshot, stolen laptop with a dev copy) gains nothing without
-also obtaining the master key. An attacker who *also* has the master key
+theft, disk snapshot, stolen laptop with a dev copy) cannot recover **secret
+plaintext** without also obtaining the master key. The database still exposes
+parameters, resource metadata, identities, policies, and audit records, so it
+must remain access-controlled. An attacker who *also* has the master key
 still cannot decrypt secrets that were opted into client-bound mode — that
 requires the plaintext client token as well, which never touches the
-database. This defends against **offline theft of data at rest**. It does
+database. This defends against **offline theft of secret data at rest**. It does
 **not** defend against a live compromise of the running server process: an
 attacker with code execution on the KMS host can read master key material
 from process memory, intercept client tokens as they arrive on requests, and
@@ -80,7 +82,7 @@ per-layer suffixes are unchanged.
 ### Parameters vs. secrets
 
 Parameters are non-secret and are stored as plaintext in `parameters` /
-`parameter_versions` (still gated by the same namespace/key-based
+`parameter_versions` (still gated by the same namespace-level
 authorization). Secrets are always encrypted; there is no code path that
 writes secret plaintext to SQLite.
 
@@ -130,14 +132,15 @@ buffer immediately rather than leaving it for GC.
 
 ### Keyring and rotation
 
-`crypto.Keyring` holds the active KEK plus any retired KEKs still needed to
-decrypt historical secret versions (each version records its `kek_id`, so
-old versions keep working after rotation without being rewritten).
-`Service.RotateKEK` (`internal/core/admin.go`) rewraps every secret
-version's `encrypted_dek` from the old KEK to the new one via
+`crypto.Keyring` can hold active and retired KEKs, which permits safe concurrent
+reads during a rotation. `Service.RotateKEK` (`internal/core/admin.go`) rewraps
+every **non-destroyed** secret version's `encrypted_dek` from the old KEK to the new one via
 `crypto.RewrapDEK` — **without ever decrypting the value ciphertext itself**
-— then marks the new KEK active. This runs inside one storage transaction
-(metadata swap + rewrap), so rotation is crash-safe. For client-bound
+— and updates each row's `kek_id`; destroyed versions already have their
+ciphertext and DEK nulled. The CA keys are rewrapped in the same transaction.
+No readable secret or CA row depends on the retired KEK after commit. This runs
+inside one storage transaction (metadata swap + rewrap), so rotation is
+crash-safe. For client-bound
 secrets, rotation only touches the outer (KEK) layer; the inner
 client-token-derived layer is untouched and requires no client
 participation (plan §11.4.4).
@@ -145,8 +148,10 @@ participation (plan §11.4.4).
 ## Client-bound secrets (opt-in double wrapping)
 
 A secret opts into client-bound mode at creation (`client_bound: true`,
-`WithClientBound()` in the Go SDK). Its DEK is wrapped in two layers instead
-of one:
+`WithClientBound()` in the Go SDK). Creation must also request server-side
+token generation (`generate_access_token: true` / `WithGenerateAccessToken()`):
+the returned token is the only client key share, is shown once, and cannot be
+recovered. Its DEK is wrapped in two layers instead of one:
 
 ```
 DEK
@@ -167,13 +172,12 @@ verification hash (`crypto.TokenHash`).
 
 To decrypt, the server needs both the master key (to unwrap the outer layer)
 **and** the client-supplied token on the request (to derive the inner-layer
-key). It discards the token and derived key from memory immediately after
-use. `Service.GetSecret` requires the caller's `x-kms-secret-token` to
-match the stored hash before even attempting decryption
-(`internal/core/secrets.go`); a missing or wrong token and a genuinely
-corrupted ciphertext produce the **same** generic error
-(`domain.ErrDecryptFailed`), so a caller cannot use error content to
-distinguish "wrong token" from "ciphertext tampered" from "wrong KEK."
+key). It discards the request token and derived key after use. Because token
+rotation is per-version, `secrets.access_token_hash` represents only the latest
+token and is not used to validate historical client-bound reads. A missing
+token is rejected as `PermissionDenied`; a supplied wrong token fails the
+version-specific authenticated unwrap as a generic `ErrDecryptFailed`, the same
+failure class as corrupted ciphertext or a wrong KEK.
 
 Layering rather than deriving one key from `master ⊕ token` is deliberate
 (plan §10.7): KEK rotation rewraps only the outer layer as a pure
@@ -203,9 +207,10 @@ present *that version's* token, not the latest one, to read it.
 | A leaked client token alone | No — still needs the ciphertext (from the DB) and the master key (to unwrap the outer layer) to get anywhere, and even then only decrypts secrets bound to that specific token. |
 | Full live compromise of the running KMS host | Yes, for any request whose token arrives while the attacker has code execution — this defends against **offline** database+key theft, not a live host compromise (see below). |
 
-**No recovery escrow, by design.** Losing either the master key or a
-secret's client token makes that secret **permanently and irrecoverably**
-lost. There is no backdoor, no admin override, no support path around this.
+**No recovery escrow, by design.** Losing the master key makes every secret
+version irrecoverable. Losing a client token makes the versions encrypted under
+that token irrecoverable; versions written under other retained tokens remain
+readable. There is no backdoor, admin override, or support path around this.
 `Service.RevealSecret` (the admin/frontend/CLI reveal path) explicitly
 refuses to even attempt decryption of a client-bound secret
 (`domain.ErrFailedPrecondition`, "client-bound secrets cannot be revealed:
@@ -257,14 +262,16 @@ A bearer token scopes access but does not prove possession — anyone holding
 the string is the identity. Machine clients therefore authenticate with
 **mTLS client certificates minted by a certificate authority embedded in the
 KMS** (`internal/ca`, plan-namespaces.md §7). The certificate is proof of
-possession of a private key the KMS issued; a stolen database or a leaked
-token does not let an attacker impersonate the identity on the wire.
+possession of a private key the KMS issued. In an mTLS-only namespace, a stolen
+database or leaked bearer token does not let an attacker impersonate the
+identity on the wire without its client private key.
 
-**The CA.** At first unseal the service generates a self-signed CA
+**The CA.** On the first `serve` startup after unseal, the service generates a self-signed CA
 (`ca.Generate`): an **Ed25519** key pair and a long-lived (**10-year**),
 self-signed CA certificate marked `IsCA` with **`MaxPathLenZero`**, so it can
-sign leaf client certificates but no intermediates. The CA is rotated by
-re-bootstrapping, not renewed. It signs **client certificates only** — the
+sign leaf client certificates but no intermediates. It is not automatically
+renewed, and the CLI currently has no dedicated CA-rotation command. It signs
+**client certificates only** — the
 server's own TLS serving certificate remains operator-provided.
 
 **The CA private key is never at rest in plaintext.** It is stored in the
@@ -273,7 +280,8 @@ PKCS#8 key material (`encrypted_key`), and that DEK is wrapped under the active
 KEK (`encrypted_dek`, `kek_id`). KEK rotation rewraps the CA key's DEK
 alongside every secret DEK (plan-namespaces.md §7), so rotation needs no
 certificate reissue — the identity↔namespace binding lives in the database,
-not in the cert. The plaintext key exists only in server memory while signing.
+not in the cert. The plaintext signing key remains in server memory for the
+process lifetime so it can issue certificates.
 
 **Issued client certificates** (`ca.IssueClientCert`) are short-lived
 Ed25519 leaves carrying the identity name in the CommonName **and** in a URI
@@ -299,15 +307,17 @@ is not disabled. The result is an authenticated context carrying
 relying party for these certificates, revocation is per-serial:
 `RevokeIdentityCertificate(name, serial)` stamps `identity_certs.revoked_at`,
 and disabling or revoking an identity invalidates **all** of its certificates
-at once. The interceptor consults `identity_certs` directly (serials cached in
-memory, invalidated on change); there is no CRL or OCSP machinery to distribute
+at once. The interceptor consults `identity_certs` directly in the database on
+each new RPC; there is no CRL or OCSP machinery to distribute
 or poll. An identity may hold several concurrently-valid certificates, which is
 what makes zero-downtime certificate rollover (issue new, deploy, revoke old)
 possible.
 
-The CA certificate is public: it is served unauthenticated (`GET /api/v1/ca`)
-and shown by the CLI, so it can be baked into application deploy images as the
-trust root for the client connection.
+The built-in CA certificate is public: it is served unauthenticated (`GET
+/api/v1/ca`) and shown by the CLI for inspection or out-of-band verification of
+KMS-issued **client** certificates. It is not the SDK's server-trust root: the
+server certificate is operator-provided and clients must trust its issuer
+separately.
 
 ## Per-namespace authentication methods
 
@@ -407,14 +417,15 @@ subscribe rides on the same grant (it is authorized once, as a namespace-level
 caller's own namespace — access to any *other* namespace, and every write,
 delete, disable, destroy, and promote, always requires an explicit `allow`
 rule (itself namespace-level). Deny rules still override the implicit grant
-(step 1 precedes step 2), so an admin can carve out a whole namespace — but not
-a single key. `policy.Evaluate` is the pure rule-only form used where the
-implicit grant must not apply.
+(step 1 precedes step 2), so a policy author can carve out a whole namespace —
+but not a single key. `policy.Authorize` with a nil home namespace is the
+rule-only form used where the implicit grant must not apply.
 
-Admin identities (`Identity.Kind == "admin"`) are authorized for everything
-policy could grant — they are the management plane — except the one place that
+Admin identities (`Identity.Kind == "admin"`) bypass namespace method gates and
+data-plane policy — they are the management plane — except the one place that
 is cryptographically impossible regardless of privilege (revealing a
-client-bound secret without its token). Their actions remain fully audited.
+client-bound secret without its token). Their secret and administrative actions
+still follow the normal audit guarantees.
 
 **Delegating `admin:identity:cert` is delegating impersonation.** Whoever can
 issue a client certificate for identity *B* can authenticate *as* *B*. The
@@ -431,13 +442,15 @@ client identities are deliberately given *different* privileges from one
 another. The cross-namespace and admin-impersonation vectors are closed; the
 in-namespace lateral capability is the delegation itself.
 
-**List authorization** is a single namespace-level check
-(`policy.MayListUnder` / `Authorize` with the `list` operation): a caller
-either may list a namespace or may not, and if it may, it sees **every** key
-in it. There is no per-item filtering, because there is no per-key
-authorization to filter against. (The `key_prefix` accepted by `List*` is a
-convenience *browsing* filter — a plain `LIKE 'prefix%'` on the opaque key
-string — never a security boundary.)
+**List authorization** is namespace-level, but operation checks still matter.
+The caller first needs the relevant `*:list` grant (or the implicit home
+grant). Parameter list results include values, so each item also requires
+`parameter:read`; secret list results are metadata-only and accept
+`secret:list` or `secret:read`. Because rules have no key field, that per-item
+predicate is constant across a namespace: it can include every matching key or
+none, never carve out individual keys. The `key_prefix` accepted by `List*` is
+a convenience browsing filter — a plain `LIKE 'prefix%'` on the opaque key
+string — never a security boundary.
 
 Every authorization **denial** is audited (`authz.denial`) with the attempted
 operation and the target `env`/`app`(`/key` for display). Policy rules are
@@ -530,12 +543,13 @@ Being explicit about the boundary, per plan §3 (non-goals) and §10.7.4:
   each insufficient) but does not create a boundary against the process
   that holds the key material and sees the traffic.
 - **A malicious or compromised administrator.** Admin identities are the
-  management plane: they bypass the per-namespace method gate and are
-  authorized for any operation policy could grant, and can reveal any
+  management plane: they bypass the per-namespace method gate and data-plane
+  policy, and can reveal any
   non-client-bound secret; every action is audited, which gives detection,
   not prevention.
-- **Loss of the master key or a client-bound secret's client token**, which
-  is unrecoverable by design (no escrow) — see
+- **Loss of the master key**, which makes every secret version unrecoverable,
+  or loss of a client-bound version's client token, which makes versions
+  encrypted under that token unrecoverable. Both are by design (no escrow); see
   [`operations.md`](operations.md#disaster-recovery) for what this means
   operationally.
 - **This is not a replacement for a cloud KMS, HSM, or enterprise

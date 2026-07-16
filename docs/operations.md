@@ -32,10 +32,12 @@ storage:
 
 security:
   tls_enabled: true
-  mtls_enabled: true
+  # Built-in-CA client certificates work whenever TLS is enabled. Set this
+  # only to add a separate operator-supplied client CA to the gRPC trust pool.
+  mtls_enabled: false
   server_cert_file: "/etc/parameter-store/tls/server.crt"
   server_key_file: "/etc/parameter-store/tls/server.key"
-  client_ca_file: "/etc/parameter-store/tls/client-ca.crt"
+  client_ca_file: ""
   trust_proxy_headers: false
 
 encryption:
@@ -101,8 +103,8 @@ immediately via its shared database). All flags are the standard library
 | `backup` | `--db`, `--out` (required, must not already exist) | Writes a consistent online backup via `store.Backup`. Prints a reminder that the master key is not included. |
 | `restore` | `--db` (destination), `--in` (required, source backup), `--force` (overwrite an existing destination) | Validates the input is a real SQLite file (checks the file header), copies it into place, removes stale `-wal`/`-shm` sidecars, then opens (and migrates) the restored copy to confirm it's usable. |
 | `create-admin` | `--db`, `--name` (required) | Creates an admin identity directly against the database file and prints its token once. Uses WAL mode's concurrent-reader support, but coordinating this against a live `serve` process is the operator's responsibility. |
-| `rotate-kek` | `--db`, `--key-file` (current key, omit to use the current passphrase), `--new-key-file` (new key, omit to enter a new passphrase) | Unseals with the current key, generates or loads the new key, and calls the same `Service.RotateKEK` used internally — rewrapping every secret version's DEK **and the built-in CA's key** under the new KEK in one transaction. Prints both counts (`N secret versions and M CA keys rewrapped`). |
-| `import` | `--from` (JSON file or SuhaibParameterStore SQLite export), `--namespace env/app` **or** `--env`/`--app`, `--db` (required unless `--dry-run`), `--master-key-file`, `--dry-run`, `--report FILE` | Maps flat source keys to **relative slug keys** (`slug(key)`, e.g. `TWILIO_SID` → `twilio-sid`) in the destination namespace, **auto-creates the namespace** if it does not exist, writes each as a new secret via a ref-based `PutSecret` with a freshly minted per-secret access token, and emits a mapping report (old key → `/env/app/key` display path → token, written once). Distinct source keys that slug to the same key are reported as a collision rather than silently overwriting. `--dry-run` reports the mapping without writing or minting tokens. Pass either `--namespace` or `--env`/`--app`, not both. See [`migration.md`](migration.md) for the full gradethis walkthrough. |
+| `rotate-kek` | `--db`, `--key-file` (current key, omit to use the current passphrase), `--new-key-file` (new key, omit to enter a new passphrase) | Unseals with the current key, generates or loads the new key, and calls the same `Service.RotateKEK` used internally — rewrapping every **non-destroyed** secret version's DEK and every built-in CA key under the new KEK in one transaction. Prints both counts (`N secret versions and M CA keys rewrapped`). Run with `serve` stopped; a live process retains the old keyring. |
+| `import` | `--from` (JSON file or SuhaibParameterStore SQLite export), `--namespace env/app` **or** `--env`/`--app`, `--db` (default `./kms.db`), `--master-key-file`, `--dry-run`, `--report FILE` | Maps flat source keys to **relative slug keys** (`slug(key)`, e.g. `TWILIO_SID` → `twilio-sid`) in the destination namespace, **auto-creates the namespace** if it does not exist, writes each as a new secret via a ref-based `PutSecret` with a freshly minted per-secret access token, and emits a mapping report (old key → `/env/app/key` display path → token, written once). Distinct source keys that slug to the same key are reported as a collision rather than silently overwriting. `--dry-run` reports the mapping without writing or minting tokens. Pass either `--namespace` or `--env`/`--app`, not both. See [`migration.md`](migration.md) for the full gradethis walkthrough. |
 
 `init`, `check`, `rotate-kek`, and `import` all go through the same
 master-key acquisition path as `serve` (key file → `KMS_MASTER_PASSPHRASE`
@@ -120,9 +122,9 @@ above). Every admin command shares the connection flags `--endpoint`
 
 | Command | Args / flags | Purpose |
 |---|---|---|
-| `admin namespace create ENV/APP` | `--description`, `--auth-methods mtls,token` (default: mTLS-only) | Create a namespace. |
-| `admin namespace update ENV/APP` | `--description`, `--auth-methods` | **Full replace** of the description and allowed auth methods. |
-| `admin namespace delete ENV/APP` | — | Delete an **empty** namespace (no parameters, secrets, or bound identities). |
+| `admin namespace create` | `--env ENV`, `--app APP`, `--description`, `--auth-methods mtls,token` (default: mTLS-only) | Create a namespace. Environment/application are flags, not a positional `ENV/APP` argument. |
+| `admin namespace update` | `--env ENV`, `--app APP`, `--description`, `--auth-methods` | **Full replace** of the description and allowed auth methods. |
+| `admin namespace delete` | `--env ENV`, `--app APP` | Delete an **empty** namespace (no parameters, secrets, or bound identities). |
 | `admin namespace list` | — | Table of namespaces with allowed auth methods and parameter/secret counts. |
 | `admin identity create NAME` | `--kind client\|admin` (default `client`), `--namespace env/app`, `--auth mtls\|token\|both` (default `mtls`), `--ttl 90d` (or e.g. `720h`), `--out DIR` | Create an identity. Mints a token and/or a one-time PEM cert bundle per `--auth`; with `--out DIR` writes `NAME.crt` (0644) and `NAME.key` (0600), otherwise prints them once. |
 | `admin identity issue-cert NAME` | `--ttl`, `--out DIR` | Mint an **additional** client certificate for an existing identity (for overlap rollover). |
@@ -130,7 +132,7 @@ above). Every admin command shares the connection flags `--endpoint`
 | `admin identity rotate NAME` | — | Rotate a token identity's bearer token (printed once). |
 | `admin identity revoke NAME` | — | Disable an identity; **all** of its certificates become invalid. |
 | `admin identity list` | — | Table: name, kind, namespace, has-token, cert count, disabled. |
-| `admin ca show` | `--out FILE` | Print (or write) the public built-in CA certificate, to bake into client trust stores. |
+| `admin ca show` | `--out FILE` | Print (or write) the public built-in **client-issuing** CA certificate for inspection or out-of-band verification of KMS-issued client certificates. This is not the SDK's server-trust CA. |
 
 `--ttl` accepts a Go duration (`720h`) or a bare day count (`90d`); omitting
 it uses the server's 90-day default. `--auth-methods` and `--auth` values are
@@ -152,7 +154,7 @@ key client-side; `list` takes a bare `ENV/APP` namespace.
 
 | Command | Extra flags | Purpose |
 |---|---|---|
-| `put-secret /env/app/key` | `--value-file` (default: read stdin), `--content-type` (default `text/plain`), `--client-bound`, `--generate-token`, `--secret-token` (for client-bound updates) | Stores a new secret version. Prints the minted access token once when `--generate-token` is set. |
+| `put-secret /env/app/key` | `--value-file` (default: read stdin), `--content-type` (default `text/plain`), `--client-bound`, `--generate-token`, `--secret-token` (for client-bound updates) | Stores a new secret version. A new client-bound secret requires `--client-bound --generate-token`; the server-minted token is its one-time client key share. Existing client-bound secrets require `--client-bound --secret-token`, and adding `--generate-token` rotates the token for the new version. |
 | `get-secret /env/app/key` | `--version`, `--label`, `--secret-token`, `--show` (allow printing to a terminal), `--out FILE` (write to a file instead, mode 0600) | Fetches a secret value. Refuses to print raw secret bytes to an interactive terminal unless `--show` is passed or output is piped — `--out FILE` or piping (`\| cat`) works without `--show`. |
 | `put-parameter /env/app/key VALUE` | `--content-type` (default `string`) | Stores a new parameter version. |
 | `list ENV/APP` | `--prefix` (relative key prefix within the namespace) | Lists parameters and secrets (metadata only) in a namespace as a table: type, `/env/app/key`, current version, content-type/client-bound note. Pages through the full result set. |
@@ -186,9 +188,10 @@ On `serve`, the process (`internal/cli/serve.go`):
 health service (`grpc.health.v1.Health`, `internal/server/grpcserver`)
 report **not ready** until the store is reachable and the master key has
 been acquired and verified — `Service.Ready()` checks exactly this
-(`internal/core/service.go`). The gRPC/HTTP listeners can be up and
-answering "not ready" while a human is still at the passphrase prompt; they
-never silently accept traffic before the key is verified.
+(`internal/core/service.go`). Startup acquires the key and bootstraps the CA
+**before** either listener starts, so an interactive passphrase prompt appears
+as connection failure, not a listening-but-unready service. After startup, an
+already-running listener reports not ready if the database becomes unreachable.
 
 ## Master key acquisition (unattended vs. interactive)
 
@@ -265,10 +268,10 @@ Set in `security:`:
 ```yaml
 security:
   tls_enabled: true
-  mtls_enabled: true
+  mtls_enabled: false  # built-in client CA is added automatically
   server_cert_file: "/etc/parameter-store/tls/server.crt"
   server_key_file: "/etc/parameter-store/tls/server.key"
-  client_ca_file: "/etc/parameter-store/tls/client-ca.crt"
+  client_ca_file: ""   # set only for an additional operator client CA
   trust_proxy_headers: false
 ```
 
@@ -287,10 +290,15 @@ The TLS layer verifies any certificate offered; the per-namespace
 `allowed_auth_methods` gate, not the handshake, decides who is admitted.
 
 `mtls_enabled` (which requires `tls_enabled` and a `client_ca_file`, both
-checked to exist at config-validation time) additionally trusts an
-**operator-supplied** client CA alongside the built-in one — use it when you
-also issue client certificates from a corporate PKI. Certificate presentation
+checked to exist at config-validation time) adds an **operator-supplied** CA to
+the gRPC TLS trust pool alongside the built-in one. Certificate presentation
 stays optional either way (`VerifyClientCertIfGiven`, not require-and-verify).
+However, TLS trust alone does not create a KMS identity: certificate auth also
+requires the `kms://identity/<name>` SAN and a matching `identity_certs` row.
+The current public issuance API creates those rows only for built-in-CA
+certificates, so an external CA is not independently usable for identity auth
+without a separate provisioning mechanism. Do not enable `mtls_enabled` merely
+to use the built-in CA.
 
 The embedded HTTP/frontend listener **never** requires a client certificate:
 it clones the TLS config and sets `tls.NoClientCert` (`serve.go`), since human
@@ -333,28 +341,30 @@ address. Default: `false`.
 
 Machine clients authenticate by mTLS certificates minted by a certificate
 authority embedded in the KMS. There is nothing to provision: the CA is
-**bootstrapped at first unseal** and lives inside the same database.
+**bootstrapped during the first `serve` startup after unseal** and lives inside
+the same database.
 
 **Lifecycle.**
 
-- On the first `serve`/init after the master key is acquired,
+- On the first `serve` after the master key is acquired,
   `Service.BootstrapCA` generates the CA — an Ed25519 key pair and a
   long-lived (10-year), self-signed CA certificate that signs client leaves
   only. On every later start it loads and decrypts the existing CA.
 - The **CA private key is stored KEK-wrapped** in the `ca_keys` table
   (enveloped exactly like a secret version: its own DEK wraps the key, and the
-  active KEK wraps that DEK); the plaintext key exists only in server memory
-  while issuing. A stolen database without the master key yields no usable CA
+  active KEK wraps that DEK); the plaintext signing key remains in server
+  memory for the process lifetime so certificates can be issued. A stolen
+  database without the master key yields no usable CA
   key — see [`security.md`](security.md#proof-of-identity-the-built-in-ca-and-mtls).
 - **KEK rotation rewraps the CA key** alongside every secret DEK, in the same
   transaction (`rotate-kek` prints the CA-key count). Rotation never reissues
   or invalidates any client certificate: the identity↔namespace binding lives
   in the database, not in the certificate, and issued leaves are unaffected.
 - The CA certificate is **public**: `admin ca show [--out FILE]` (or the
-  unauthenticated `GET /api/v1/ca`) prints it, for baking into each client's
-  trust store as the root that verifies the KMS-issued client certs. It is
-  also what serves as the gRPC listener's client-CA (see
-  [TLS and mTLS](#tls-and-mtls)).
+  unauthenticated `GET /api/v1/ca`) prints it for inspection or out-of-band
+  verification of KMS-issued client certificates. The gRPC server loads this
+  client-CA directly from the database. SDK clients instead need a CA bundle
+  that trusts the separately operator-provided **server** certificate.
 
 **Certificate rollover runbook.** Issued client certificates default to a
 **90-day** TTL (`--ttl` overrides). Because an identity may hold several
@@ -364,14 +374,14 @@ replacement *before* the current one expires:
 ```bash
 # 1. Mint an additional cert for the existing identity (old cert still valid).
 parameter-store admin identity issue-cert gradethis-be --ttl 90d --out ./certs \
-    --endpoint kms.internal:8443 --ca ca.crt --cert admin.crt --key admin.key
+    --endpoint kms.internal:8443 --ca server-ca.crt --cert admin.crt --key admin.key
 #    -> writes certs/gradethis-be.crt and certs/gradethis-be.key (note the serial)
 
 # 2. Deploy the new cert/key to the app and roll it (both certs verify meanwhile).
 
 # 3. Once all instances present the new cert, revoke the old one by serial.
 parameter-store admin identity revoke-cert gradethis-be --serial <old-serial> \
-    --endpoint kms.internal:8443 --ca ca.crt --cert admin.crt --key admin.key
+    --endpoint kms.internal:8443 --ca server-ca.crt --cert admin.crt --key admin.key
 ```
 
 A certificate's serial is printed when it is issued and is listed per
@@ -391,8 +401,8 @@ strongest posture. Allow token auth explicitly (e.g. for a service that
 cannot yet present a certificate) with:
 
 ```bash
-parameter-store admin namespace update prod/gradethis --auth-methods mtls,token \
-    --endpoint kms.internal:8443 --ca ca.crt --cert admin.crt --key admin.key
+parameter-store admin namespace update --env prod --app gradethis --auth-methods mtls,token \
+    --endpoint kms.internal:8443 --ca server-ca.crt --cert admin.crt --key admin.key
 ```
 
 The method gate runs **before** authorization on every namespaced operation
@@ -480,22 +490,21 @@ decryption errors later. Confirm `/readyz` reports ready after starting.
 |---|---|
 | Database lost, key intact, backup exists | Restore the backup; secrets decrypt normally. |
 | Database corrupted, no backup | Data loss. This is single-node embedded storage — back it up. |
-| **Master key lost, database intact** | **All non-client-bound secrets are permanently unrecoverable.** There is no escrow, no recovery mechanism, no support path. Parameters (never encrypted) and metadata are unaffected; every secret value is gone. The KEK-wrapped CA private key is unrecoverable too (and the server cannot even unseal without the key, so it will not start); standing up a replacement instance bootstraps a **new** CA, so every previously issued client certificate stops verifying and must be re-issued and the new CA cert redistributed via `admin ca show`. This is why the key backup procedure above exists and must never be skipped. |
-| **Client-bound secret's client token lost** (secret created with `client_bound: true`) | That specific secret is **permanently unrecoverable**, even with the master key and the database both intact. This is by design (plan §10.7.3) — client-bound mode exists precisely so the KMS operator cannot single-handedly recover it. Document this trade-off to anyone opting a secret into client-bound mode; the frontend and CLI require explicit acknowledgment at creation time for exactly this reason. |
+| **Master key lost, database intact** | **All secret versions are permanently unrecoverable, including client-bound versions** (which require the master key plus their client token). There is no escrow, recovery mechanism, or support path. Parameters and metadata are unaffected. The KEK-wrapped CA private key is also unrecoverable, so the old instance cannot start; a replacement instance bootstraps a new CA and all client certificates must be re-issued. This is why the key backup procedure above must never be skipped. |
+| **A client-bound version's client token is lost** | Every version encrypted under that token is **permanently unrecoverable**, even with the master key and database intact. Versions written under other retained tokens remain readable. This is by design (plan §10.7.3); the frontend requires explicit acknowledgment at creation time. |
 | Wrong master key / passphrase supplied | Startup fails immediately at the key-check step (`VerifyKeyCheck`) with an actionable error — the service will not start in a half-unsealed state. |
 
 ## KEK rotation
 
-Rotation rewraps every secret's `encrypted_dek` — **and the built-in CA's
-key** (`ca_keys`) — under a freshly generated KEK, without decrypting and
+Rotation rewraps every **non-destroyed** secret version's `encrypted_dek` —
+**and every built-in CA key** (`ca_keys`) — under a freshly generated KEK, without decrypting and
 re-encrypting the underlying value ciphertext, and commits the metadata swap
 and all rewraps in a single storage transaction (`Service.RotateKEK`,
 `internal/core/admin.go`) — so rotation either completes fully or leaves the
 previous KEK active, never a partially rewrapped state. It rewraps the CA key
-without reissuing any certificate. Historical secret versions keep their original `kek_id`
-recorded, so retired KEKs must be retained (in the keyring) as long as any
-version still references them; rotation does not delete old key material,
-it demotes it to "retired" and keeps it available for decryption.
+without reissuing any certificate. Every rewrapped row receives the new
+`kek_id`; destroyed versions have already had their ciphertext and DEK nulled.
+No readable secret or CA row depends on the retired KEK after the transaction.
 
 For client-bound secrets, rotation **only touches the outer (KEK) layer**.
 The inner, client-token-derived layer is untouched — rotating the master
@@ -506,12 +515,14 @@ key never requires contacting any client or invalidating any client token
 parameter-store rotate-kek --db /var/lib/parameter-store/kms.db \
     --key-file /etc/parameter-store/master.key \
     --new-key-file /etc/parameter-store/master-new.key
-# -> KEK rotated: 128 secret versions and 1 CA keys rewrapped under ca-<id>
+# -> KEK rotated: 128 secret versions and 1 CA keys rewrapped under kek-<id>
 # The old key can no longer decrypt after this rotation; point any running
 # server at the new master key and restart it.
 ```
 
-The command prints the count of rewrapped secret versions and CA keys. Omit
+Stop `serve` before running this offline command; otherwise the live process
+continues with its old in-memory keyring until restarted. The command prints
+the count of rewrapped secret versions and CA keys. Omit
 `--key-file` to unseal the current key from a passphrase instead of a file;
 omit `--new-key-file` to be prompted for a new passphrase rather than
 generating a new key file. Every rotation is audited as `key.rotate`.
@@ -521,8 +532,8 @@ generating a new key file. Every rotation is audited as `key.rotate`.
 - `GET /healthz` — liveness (plain text, no auth).
 - `GET /readyz` — readiness: store reachable, migrations applied, master
   key acquired and verified. Alert on this being unready for longer than a
-  normal restart window — in interactive/passphrase mode a long "not ready"
-  period may simply mean nobody has entered the passphrase yet.
+  normal restart window. During an interactive passphrase prompt the listeners
+  have not started, so probes see a connection failure rather than `not ready`.
 - gRPC standard health service (`grpc.health.v1.Health`) mirrors the same
   readiness signal per registered service name
   (`kms.v1.ParameterService`, `kms.v1.SecretService`, `kms.v1.WatchService`),
@@ -533,9 +544,10 @@ generating a new key file. Every rotation is audited as `key.rotate`.
   is useful as a coarse "is anything moving" signal.
 - The frontend's **Subscribers** page (`/subscribers`, backed by `GET
   /api/v1/subscribers`) is the operational way to confirm a configuration
-  change actually propagated: it lists every live-subscribed application,
-  its watched namespace selectors, last heartbeat, and last-acked revision
-  compared against the server's current revision.
+  subscription: it lists every live-subscribed application, its watched
+  namespaces, last heartbeat, and last-acked revision. The comparison uses the
+  server's global revision, so unrelated namespace changes can make a healthy
+  subscriber appear behind; it is not proof that a specific key was applied.
 - The **Audit** page / `GET /api/v1/audit` is the record of every secret
   access, write, admin action, and authorization denial — see
   [`security.md`](security.md#audit-guarantees) for exactly what is and

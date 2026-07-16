@@ -34,8 +34,8 @@ import (
 const (
 	// caCommonName is the Subject/Issuer CN of the built-in CA certificate.
 	caCommonName = "kms-builtin-ca"
-	// caValidity is how long the self-signed CA certificate is valid. The CA
-	// is rotated by re-bootstrapping, not renewed, so it is long-lived.
+	// caValidity is how long the self-signed CA certificate is valid. It is
+	// long-lived because there is no automatic renewal mechanism.
 	caValidity = 10 * 365 * 24 * time.Hour
 	// DefaultCertTTL is used by IssueClientCert when a non-positive ttl is
 	// passed. It matches the plan's 90-day default.

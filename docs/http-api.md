@@ -42,18 +42,24 @@ bearer-token theft useless for it. New namespaces default to `["mtls"]`
 (strongest posture); adding `"token"` is an explicit, audited namespace-settings
 change.
 
+The HTTP listener itself is bearer-token only; machine clients present mTLS
+certificates on the gRPC listener. The HTTP API exposes the same namespace
+configuration, so the two methods are summarized here for completeness:
+
 - **mTLS** clients authenticate with a client certificate minted by the
   built-in CA (see `GET /api/v1/ca` and the identities endpoints). Certificates
-  prove possession — the private key never leaves the client after issuance.
+  prove possession. The private key is generated server-side, returned once,
+  never persisted by the server, and must then be retained by the client.
 - **token** clients authenticate with a bearer token, which is
   possession-free: whoever holds the string is treated as the app.
 
 The auth-method gate applies to **client-kind** identities. **Admin-kind**
 identities are the management plane: they administer any namespace from a
-browser (which cannot practically present a client certificate), subject to the
-same policy and audit controls, and therefore **bypass the method gate** — the
-browser login above stays token-based regardless of a namespace's
-`allowed_auth_methods`. Admin identities do not bypass policy or audit.
+browser (which cannot practically present a client certificate), and therefore
+**bypass both the method gate and data-plane policy checks** — the browser login
+above stays token-based regardless of a namespace's `allowed_auth_methods`.
+Admin identities never bypass auditing or the cryptographic impossibility of
+revealing a client-bound secret without its token.
 
 A namespace-bound client identity also carries an **implicit home-namespace
 grant**: it may read, list, and subscribe within its own namespace with no
@@ -155,7 +161,7 @@ returns. Display paths shown in the UI look like `/prod/gradethis/rate-limit`.
   "namespace": { "env": "prod", "app": "gradethis" },
   "has_token": true,
   "certs": [
-    { "serial": "0a1b2c", "fingerprint": "sha256:…",
+    { "serial": "0a1b2c", "fingerprint": "<64 lowercase hex characters>",
       "not_after_unix_ms": 0, "revoked_at_unix_ms": 0,
       "created_at_unix_ms": 0 }
   ]
@@ -187,8 +193,9 @@ certificates; `revoked_at_unix_ms` of `0` means valid.
   Callable by any authenticated identity (no policy check). This is the SDK's
   namespace-discovery mechanism.
 - `GET /api/v1/ca` — **no auth** → `{"cert_pem": "-----BEGIN CERTIFICATE-----\n…"}`
-  The built-in CA's public certificate, for baking into app deploy images and
-  configuring clients to trust the KMS-issued client certs.
+  The built-in **client-issuing** CA's public certificate, useful for
+  out-of-band validation of KMS-issued client certificates. It is not the
+  server-trust CA used by SDKs; the server certificate is operator-provided.
 
 ### Namespaces
 
@@ -211,7 +218,8 @@ certificates; `revoked_at_unix_ms` of `0` means valid.
   ```
   → `{"namespace": Namespace}`
 - `DELETE /api/v1/namespaces?env=&app=` → `{}`
-  Only succeeds when the namespace is empty (no parameters, no secrets).
+  Only succeeds when the namespace is empty (no parameters, no secrets, and no
+  bound identities).
   Otherwise returns `failed_precondition` (412).
 
 ### Parameters
@@ -247,8 +255,12 @@ Listing is always namespace-scoped: `env` and `app` are required.
   ```
   → `{"version": 1, "revision": 7, "access_token": "..."}`
   (`access_token` present only when `generate_access_token` was true — shown
-  once, never again.)
-  Client-bound updates additionally require header `X-KMS-Secret-Token: <token>`.
+  once, never again.) Creating a client-bound secret requires both
+  `client_bound: true` and `generate_access_token: true`; the server-minted
+  token is its only client key share. Client-bound updates additionally require
+  header `X-KMS-Secret-Token: <current-token>`; setting
+  `generate_access_token: true` on an update rotates the token for the new
+  version and returns it once.
 - `POST /api/v1/secrets/reveal` — `{"env","app","key","version": 0,"label": ""}` →
   `{"env","app","key","version","value_base64","content_type"}`.
   Admin only. Every call is audited as a reveal event. Returns
@@ -309,10 +321,12 @@ rules (a deny still wins).
   valid certificates per identity allow zero-downtime rollover.
 - `POST /api/v1/identities/revoke-cert` — `{"name", "serial"}` → `{}`
   Revokes a single certificate by serial; other certs keep working. Takes
-  effect on the next RPC.
+  effect on the next RPC; an existing watch stream is closed on its next
+  heartbeat reauthorization.
 - `POST /api/v1/identities/revoke` — `{"name"}` → `{}`
   Disables the identity: its token and **all** of its certificates stop working
-  immediately.
+  for new RPCs immediately; an existing watch stream is closed on its next
+  heartbeat reauthorization.
 
 ### Audit
 
@@ -343,8 +357,10 @@ rules (a deny still wins).
   `namespaces` are the namespaces the stream is subscribed to. A subscriber
   receives **every** change in each namespace it watches; there is no key-level
   filtering on the wire (a client narrows its interest in its own callback). The
-  UI compares `last_acked_revision` against `current_revision` to show which apps
-  have applied the latest configuration.
+  UI compares `last_acked_revision` against the server's **global**
+  `current_revision`. This is a coarse lag signal: revisions from namespaces a
+  subscriber does not watch can make it appear behind even when it has applied
+  every relevant event.
 
 ### Key metadata
 

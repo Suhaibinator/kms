@@ -9,27 +9,24 @@ Secret plaintext never appears in logs, errors, or the default string
 representation of any type in this package — reaching it always requires an
 explicit property access.
 
-Distribution name: `kms-paramstore` (PyPI). Import name: `kms_paramstore`.
-Source: `sdk/python/kms_paramstore/`. Requires Python 3.10+.
+Distribution name: `kms-paramstore`. Import name: `kms_paramstore`. Source:
+`sdk/python/kms_paramstore/`. Requires Python 3.10+. The documented install
+path below does not assume a published package release.
 
-This document describes the public API as implemented and verified: every
-symbol below was checked against `sdk/python/kms_paramstore/*.py`, the
-package's own test suite (`sdk/python/tests/`, 59 tests, all passing), and a
-live round trip against a running `parameter-store` server (put/get a
-secret and a parameter, namespace discovery, declarative `resolve`,
-redaction, and hot reload). For the wire-level contract, see
+This document describes the public API as implemented in
+`sdk/python/kms_paramstore/*.py`. For the wire-level contract, see
 `proto/kms/v1/kms.proto` and [`http-api.md`](http-api.md); for the
 namespace/key model, see [`migration.md`](migration.md).
 
 ## Installing
 
 ```bash
-pip install kms-paramstore
-# or, from a checkout:
 pip install -e sdk/python
+# For a published release, the package name is:
+# pip install kms-paramstore
 ```
 
-Runtime dependencies are `grpcio` and `protobuf` (>= 6.30); the generated
+Runtime dependencies are `grpcio>=1.81.1` and `protobuf>=6.33.5,<7`; the generated
 gRPC stubs are vendored under `kms_paramstore/_gen/`, so `protoc` is not
 needed to use the SDK.
 
@@ -62,7 +59,7 @@ The namespace can be set explicitly or discovered:
 Client("host:8443", namespace="prod/gradethis", token="...")
 
 # Discovered — the client calls WhoAmI once and caches the result.
-Client("host:8443", tls=mtls_from_files("app.crt", "app.key", "ca.crt"))
+Client("host:8443", tls=mtls_from_files("app.crt", "app.key", "server-ca.crt"))
 ```
 
 When `namespace` is omitted, the client discovers its namespace from the
@@ -79,7 +76,7 @@ from kms_paramstore import Client, mtls_from_files
 
 # Recommended: cert-only identity. No token; the namespace is discovered.
 with Client("parameter-store.prod.internal:8443",
-            tls=mtls_from_files("app.crt", "app.key", "ca.crt")) as client:
+            tls=mtls_from_files("app.crt", "app.key", "server-ca.crt")) as client:
     db_password = client.get_secret("postgres-password")  # relative to the namespace
     print(db_password)           # [REDACTED]
     connect(db_password.value)   # explicit access to plaintext (bytes)
@@ -100,7 +97,7 @@ or constructed and closed manually. `Client.__init__` parameters
 | `client_name` | Identifies this client in the subscription registry (visible on the frontend's Subscribers page). Defaults to `os.path.basename(sys.argv[0])`. |
 | `fallback_to_defaults_on_error` | Controls when a declarative field's `default` is used — see [Declarative config](#declarative-config-secretvalue-and-parametervalue) below. Defaults to `False`. |
 | `logger` | A `logging.Logger` for operational messages (keys, env var names, connection state) — never secret plaintext. Defaults to `logging.getLogger("kms_paramstore")`. |
-| `channel_options` | Extra gRPC channel options (`list[tuple[str, object]]`), appended after the SDK's own keepalive defaults. |
+| `channel_options` | Extra gRPC channel options (`list[tuple[str, object]]`). They are passed before the SDK's fixed keepalive entries; avoid supplying duplicate keepalive keys because gRPC's duplicate-option precedence is not an SDK contract. |
 | `channel` | A pre-built `grpc.Channel` to use directly (mainly for tests); when set, `endpoint`/`tls`/`channel_options` are ignored and the SDK does not own (and will not close) the channel. |
 
 Client-side keepalive pings every 30s with a 10s timeout,
@@ -181,7 +178,7 @@ result = client.put_secret("stripe-api-key", b"sk_live_...",
 ```
 
 - `put_parameter(key, value, *, content_type="", metadata_json="", timeout=None) -> PutResult`
-- `put_secret(key, value, *, content_type="", metadata_json="", client_bound=False, generate_access_token=False, expires_at_unix_ms=0, secret_token="", timeout=None) -> PutSecretResult` — `value` may be `bytes` or `str` (a `str` is UTF-8-encoded); `client_bound=True` opts into client-bound double wrapping (only honored on first creation); `secret_token` supplies the existing token when updating a token-protected or client-bound secret.
+- `put_secret(key, value, *, content_type="", metadata_json="", client_bound=False, generate_access_token=False, expires_at_unix_ms=0, secret_token="", timeout=None) -> PutSecretResult` — `value` may be `bytes` or `str` (a `str` is UTF-8-encoded). A new client-bound secret requires `client_bound=True, generate_access_token=True`; retain the returned one-time token. Updates require `client_bound=True, secret_token=current_token`; also setting `generate_access_token=True` rotates the token for the new version.
 - `list_parameters(namespace=None, key_prefix="", *, page_size=0, page_token="") -> (list[Parameter], next_page_token)` — listing is namespace-scoped; `namespace` accepts an `"env/app"` string (or `None` for the client's own namespace) and `key_prefix` filters by relative-key prefix.
 - `delete_parameter(key, *, timeout=None) -> int` (returns the revision)
 - `get_secret_metadata(key, *, timeout=None) -> SecretInfo` (metadata only, never plaintext)
@@ -231,12 +228,12 @@ from kms_paramstore import Client, TLSConfig, tls_from_files, mtls_from_files
 
 # Recommended: cert-only mutual TLS, identity + namespace derived from the cert.
 client = Client("host:8443",
-                tls=mtls_from_files("app.crt", "app.key", "ca.crt"))
+                tls=mtls_from_files("app.crt", "app.key", "server-ca.crt"))
 
 # Dataclass form, accepts file paths or raw PEM bytes:
-client = Client("host:8443", token="...", tls=TLSConfig(ca="ca.crt"))
+client = Client("host:8443", token="...", tls=TLSConfig(ca="server-ca.crt"))
 client = Client("host:8443",
-                tls=TLSConfig(ca="ca.crt", cert="app.crt", key="app.key"))
+                tls=TLSConfig(ca="server-ca.crt", cert="app.crt", key="app.key"))
 ```
 
 `tls=` accepts either a `TLSConfig` (`ca`/`cert`/`key`, each a file path or
@@ -246,7 +243,9 @@ raw `bytes`; `to_credentials()` builds the `grpc.ChannelCredentials`) or a
 (mutual TLS), or `tls_from_bytes(ca_cert=None, client_cert=None,
 client_key=None)` (in-memory PEM bytes, e.g. from a secrets manager rather
 than a file). Supplying `cert`/`key` presents a client certificate, which is
-the recommended way to authenticate — `token` then becomes optional. With no
+the recommended way to authenticate — `token` then becomes optional. The CA
+argument must trust the operator-provided **server** certificate; the built-in
+client CA returned by `admin ca show` is not a server trust root. With no
 `tls=`, the channel is insecure — development only.
 
 ## Declarative config: `SecretValue` and `ParameterValue`
@@ -298,9 +297,9 @@ not-found** (`NotFoundError`), unless the client was constructed with
 `fallback_to_defaults_on_error=True` — a connectivity error, timeout, or
 auth failure fails resolution outright by default, so a process cannot
 silently boot on a dev default merely because the store was briefly
-unreachable. This is stricter than the Go SDK, which falls back to
-`Default` on any fetch error; set `fallback_to_defaults_on_error=True` on
-the `Client` to opt into the permissive (Go-like) behavior.
+unreachable. This matches the Go SDK. Set
+`fallback_to_defaults_on_error=True` on the `Client` to opt into permissive
+any-error fallback in either SDK.
 
 ### `Client.resolve`: one call for a whole object graph
 
@@ -343,9 +342,11 @@ it.
 The SDK owns the whole connection lifecycle — connect, send registration,
 apply snapshot/changes, ack heartbeats, reconnect with jittered exponential
 backoff (base 1s, cap 60s) on stream loss, resume from the last-applied
-revision, and a periodic full reconciliation poll (default every 5 minutes,
-listing the whole subscribed namespace and reconciling by exact key) as a
-safety net. Applications only see values and callbacks.
+revision, and a periodic reconciliation poll (default every 5 minutes) as a
+safety net. The poll applies listed values and infers deletions only after a
+complete enumeration. It is capped at 1,000 pages; on a list failure or a cap
+with another page pending, fetched values are applied but deletion inference is
+skipped. Applications only see values and callbacks.
 
 ```python
 # 1. Live handle — always the latest value, no RPC.
@@ -378,8 +379,9 @@ namespace. It takes **no key pattern** — the namespace is the unit of
 subscription, so `callback` fires for **every** change in the namespace; an
 application interested in only some keys filters by its own convention inside
 the callback (e.g. `if ev.key.startswith("billing/"): ...`). `callback` is
-dispatched on the shared callback thread so a slow or raising callback cannot
-stall the stream or other callbacks. `Client.watch_namespace(namespace,
+dispatched serially on the shared callback thread. A slow or raising callback
+cannot stall the stream, and exceptions are logged, but a slow callback does
+delay later callbacks. `Client.watch_namespace(namespace,
 callback) -> stop` does the same for another namespace the client is
 authorized for (`namespace` is an `"env/app"` string, or `None` for the
 client's own). `Event` (`kms_paramstore/watch.py`) carries

@@ -15,7 +15,7 @@ import "github.com/Suhaibinator/kms/sdk/go/paramstore"
 client, err := paramstore.NewClient(paramstore.Config{
     Endpoint:  "parameter-store.prod.internal:8443",
     Namespace: "prod/gradethis",                                    // env/app; optional (see below)
-    TLS:       paramstore.MTLSFromFiles("client.crt", "client.key", "ca.crt"),
+    TLS:       paramstore.MTLSFromFiles("client.crt", "client.key", "server-ca.crt"),
     CacheTTL:  time.Minute,                                         // optional in-memory read cache
 })
 if err != nil {
@@ -27,7 +27,9 @@ defer client.Close()
 The preferred posture is a **client certificate** (proof of possession, minted
 by the KMS CA): identity derives from the cert server-side, so `Token` is
 optional. `Token` is only required for token-method identities. `TLS: nil` uses
-an insecure connection (development only).
+an insecure connection (development only). `server-ca.crt` must trust the
+operator-provided server certificate; it is not the built-in client CA shown by
+`admin ca show`.
 
 ### Namespaces and keys
 

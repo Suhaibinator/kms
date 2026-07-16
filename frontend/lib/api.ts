@@ -212,7 +212,7 @@ export const api = {
   whoami(): Promise<WhoAmIResponse> {
     return apiFetch<WhoAmIResponse>("/whoami");
   },
-  // Public: the built-in CA certificate, for baking into app deploy images.
+  // Public: the built-in client CA, for validating KMS-issued client certs.
   ca(): Promise<CaResponse> {
     return apiFetch<CaResponse>("/ca", { auth: false });
   },

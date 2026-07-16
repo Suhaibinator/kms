@@ -73,8 +73,8 @@ type Principal struct {
 
 // IsAdmin reports whether the principal has the admin kind. Admin-kind
 // identities are the management plane: they bypass the per-namespace
-// auth-method gate (a browser cannot practically do client-cert auth) but not
-// policy or audit.
+// auth-method gate and data-plane policy (a browser cannot practically do
+// client-cert auth), but not audit or client-bound cryptography.
 func (p Principal) IsAdmin() bool { return p.Identity.Kind == domain.IdentityKindAdmin }
 
 // home returns the caller's bound namespace (nil when unbound), passed to
