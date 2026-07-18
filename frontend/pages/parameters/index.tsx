@@ -31,6 +31,8 @@ export default function ParametersPage() {
   const [nextToken, setNextToken] = useState("");
   const [pageStack, setPageStack] = useState<string[]>([]);
   const [pageToken, setPageToken] = useState("");
+  const [loadNonce, setLoadNonce] = useState(0);
+  const loadSeq = useRef(0);
 
   const [createOpen, setCreateOpen] = useState(false);
   const [createNs, setCreateNs] = useState<NamespaceSelection>(NO_NS);
@@ -66,9 +68,11 @@ export default function ParametersPage() {
 
   const load = useCallback(
     async (token: string, selection: NamespaceSelection, activePrefix: string) => {
+      const requestSeq = ++loadSeq.current;
       if (!selection.env || !selection.app) {
         setRows([]);
         setNextToken("");
+        setLoading(false);
         return;
       }
       setLoading(true);
@@ -79,12 +83,18 @@ export default function ParametersPage() {
           100,
           token || undefined,
         );
-        setRows(res.parameters ?? []);
-        setNextToken(res.next_page_token ?? "");
+        if (requestSeq === loadSeq.current) {
+          setRows(res.parameters ?? []);
+          setNextToken(res.next_page_token ?? "");
+        }
       } catch (err) {
-        toast.error(err, "Failed to load parameters");
+        if (requestSeq === loadSeq.current) {
+          setRows([]);
+          setNextToken("");
+          toast.error(err, "Failed to load parameters");
+        }
       } finally {
-        setLoading(false);
+        if (requestSeq === loadSeq.current) setLoading(false);
       }
     },
     [toast],
@@ -92,24 +102,39 @@ export default function ParametersPage() {
 
   useEffect(() => {
     void load(pageToken, ns, prefix);
-  }, [load, pageToken, ns, prefix]);
+  }, [load, loadNonce, pageToken, ns, prefix]);
 
   function onSelectNamespace(next: NamespaceSelection) {
+    loadSeq.current++;
     setNs(next);
+    setRows([]);
+    setNextToken("");
+    setDeleteTarget(null);
     setPageStack([]);
     setPageToken("");
+    setLoadNonce((n) => n + 1);
   }
   function applyFilter(e: React.FormEvent) {
     e.preventDefault();
+    loadSeq.current++;
+    setRows([]);
+    setNextToken("");
+    setDeleteTarget(null);
     setPageStack([]);
     setPageToken("");
     setPrefix(prefixInput.trim());
+    setLoadNonce((n) => n + 1);
   }
   function clearFilter() {
+    loadSeq.current++;
     setPrefixInput("");
+    setRows([]);
+    setNextToken("");
+    setDeleteTarget(null);
     setPageStack([]);
     setPageToken("");
     setPrefix("");
+    setLoadNonce((n) => n + 1);
   }
   function goNext() {
     if (!nextToken) return;

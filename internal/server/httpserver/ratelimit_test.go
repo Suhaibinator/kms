@@ -77,6 +77,33 @@ func TestFailedAuthThrottled(t *testing.T) {
 	}
 }
 
+func TestFailedAuthLimiterRunsBeforeAuthentication(t *testing.T) {
+	e := newTestEnv(t)
+	for i := 0; i < 10; i++ {
+		w := e.do(http.MethodGet, "/api/v1/namespaces", nil, map[string]string{"Authorization": "Bearer bad"})
+		if w.Code != http.StatusUnauthorized {
+			t.Fatalf("attempt %d: status = %d, want 401", i+1, w.Code)
+		}
+	}
+	// Even correct credentials are not verified while this IP's failed-auth
+	// bucket is exhausted. The old post-auth limiter incorrectly returned 200.
+	w := e.do(http.MethodGet, "/api/v1/namespaces", nil, map[string]string{"Authorization": "Bearer " + e.adminToken})
+	if w.Code != http.StatusTooManyRequests {
+		t.Fatalf("valid request after exhausted auth bucket = %d, want 429", w.Code)
+	}
+}
+
+func TestRateLimiterRefund(t *testing.T) {
+	l := newRateLimiter(1, 1)
+	if !l.allow("k") {
+		t.Fatal("reservation should succeed")
+	}
+	l.refund("k")
+	if !l.allow("k") {
+		t.Fatal("successful-auth refund did not restore the token")
+	}
+}
+
 func TestRateLimiterRefill(t *testing.T) {
 	now := time.Unix(0, 0)
 	l := newRateLimiter(60, 2) // 60/min = 1/sec, burst 2

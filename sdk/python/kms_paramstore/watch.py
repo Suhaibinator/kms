@@ -325,6 +325,14 @@ class _SubManager:
         # namespace but absent from the snapshot as deleted — a parameter
         # removed while we were disconnected past the replay window. Keys
         # outside the subscribed namespaces are untouched.
+        # Secret events are metadata-only and are not represented in a full
+        # parameter snapshot. Invalidate tokenless cached secrets throughout
+        # the authoritative stream scope so a pruned secret change cannot
+        # leave stale plaintext cached until TTL expiry.
+        with self._lock:
+            stream_namespaces = list(self._stream_namespaces)
+        self._client._cache.invalidate_secrets_in_namespaces(stream_namespaces)
+
         present: Set[_RefKey] = set()
         for p in snap.parameters:
             rk = _proto_ref_key(p.ref)
@@ -388,7 +396,9 @@ class _SubManager:
                 self._known[rk] = _Known(value, True, new_rev)
             else:
                 changed = prev is not None and prev.present
-                self._known.pop(rk, None)
+                # Retain a revisioned tombstone so a reconcile read captured
+                # before this delete cannot resurrect the old value.
+                self._known[rk] = _Known("", False, new_rev)
             handlers = list(self._param_handlers.get(rk, ()))
             watchers = self._matching_watchers_locked(rk)
 

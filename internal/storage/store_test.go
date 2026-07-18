@@ -33,6 +33,15 @@ func ref(env, app, key string) domain.Ref { return domain.Ref{NS: nsRef(env, app
 // seedNS creates a namespace (default auth methods) and returns it.
 func seedNS(t *testing.T, st *SQLStore, env, app string) domain.Namespace {
 	t.Helper()
+	if _, err := st.ActiveKeyMetadata(context.Background()); errors.Is(err, domain.ErrNotFound) {
+		if err := st.InsertKeyMetadata(context.Background(), domain.KeyMetadata{
+			ID: "kek-a", Source: domain.KeySourceFile, KeyCheck: []byte("test"), State: domain.KeyStateActive,
+		}); err != nil {
+			t.Fatalf("InsertKeyMetadata: %v", err)
+		}
+	} else if err != nil {
+		t.Fatalf("ActiveKeyMetadata: %v", err)
+	}
 	ns, err := st.CreateNamespace(context.Background(), domain.Namespace{NamespaceRef: nsRef(env, app), CreatedBy: "admin"})
 	if err != nil {
 		t.Fatalf("CreateNamespace(%s/%s): %v", env, app, err)
@@ -474,6 +483,24 @@ func TestCreateSecretVersion(t *testing.T) {
 	}
 }
 
+func TestCreateSecretVersionRejectsRetiredKEKPayload(t *testing.T) {
+	st := newStore(t)
+	ctx := context.Background()
+	seedNS(t, st, "prod", "app")
+	if err := st.SetKeyState(ctx, "kek-a", domain.KeyStateRetired); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.InsertKeyMetadata(ctx, domain.KeyMetadata{ID: "kek-new", State: domain.KeyStateActive, KeyCheck: []byte("x")}); err != nil {
+		t.Fatal(err)
+	}
+	r := ref("prod", "app", "stale")
+	_, _, err := st.CreateSecretVersion(ctx, CreateSecretParams{Ref: r, Encrypt: encryptStub(nil)}) // payload uses kek-a
+	mustErrIs(t, err, domain.ErrFailedPrecondition, "stale KEK payload")
+	if _, err := st.GetSecretRecord(ctx, r); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("stale-key write left a secret row: %v", err)
+	}
+}
+
 func TestCreateSecretVersionModeMismatch(t *testing.T) {
 	st := newStore(t)
 	ctx := context.Background()
@@ -821,9 +848,6 @@ func TestRotateKEK(t *testing.T) {
 	st := newStore(t)
 	ctx := context.Background()
 	seedNS(t, st, "prod", "app")
-	if err := st.InsertKeyMetadata(ctx, domain.KeyMetadata{ID: "kek-a", Source: "file", KeyCheck: []byte("a"), State: domain.KeyStateActive}); err != nil {
-		t.Fatal(err)
-	}
 	s1 := ref("prod", "app", "s1")
 	s2 := ref("prod", "app", "s2")
 	putSecret(t, st, s1, false) // v1
@@ -912,9 +936,6 @@ func TestRotateKEKRollback(t *testing.T) {
 	st := newStore(t)
 	ctx := context.Background()
 	seedNS(t, st, "prod", "app")
-	if err := st.InsertKeyMetadata(ctx, domain.KeyMetadata{ID: "kek-a", Source: "file", KeyCheck: []byte("a"), State: domain.KeyStateActive}); err != nil {
-		t.Fatal(err)
-	}
 	s1 := ref("prod", "app", "s1")
 	putSecret(t, st, s1, false)
 	putSecret(t, st, ref("prod", "app", "s2"), false)
@@ -1065,6 +1086,34 @@ func TestIdentityCertCRUD(t *testing.T) {
 	st.db.Raw("SELECT COUNT(*) FROM identity_certs").Scan(&n)
 	if n != 0 {
 		t.Fatalf("certs after identity delete = %d, want 0 (cascade)", n)
+	}
+}
+
+func TestCreateIdentityWithCertIsAtomic(t *testing.T) {
+	st := newStore(t)
+	ctx := context.Background()
+	if _, err := st.CreateIdentity(ctx, CreateIdentityParams{Name: "owner", Kind: domain.IdentityKindClient}); err != nil {
+		t.Fatal(err)
+	}
+	cert := domain.IdentityCert{Serial: "shared", Fingerprint: "fp", NotAfter: time.Now().Add(time.Hour), CreatedAt: time.Now()}
+	if err := st.InsertIdentityCert(ctx, "owner", cert); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := st.CreateIdentity(ctx, CreateIdentityParams{Name: "retryable", Kind: domain.IdentityKindClient, Cert: &cert})
+	mustErrIs(t, err, domain.ErrAlreadyExists, "duplicate initial cert")
+	if _, err := st.GetIdentityByName(ctx, "retryable"); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("failed cert insert left identity behind: %v", err)
+	}
+
+	cert.Serial = "unique"
+	id, err := st.CreateIdentity(ctx, CreateIdentityParams{Name: "retryable", Kind: domain.IdentityKindClient, Cert: &cert})
+	if err != nil {
+		t.Fatalf("retry after rollback: %v", err)
+	}
+	full, err := st.GetIdentityByName(ctx, id.Name)
+	if err != nil || len(full.Certs) != 1 || full.Certs[0].Serial != "unique" {
+		t.Fatalf("atomic identity/cert result = %+v err %v", full, err)
 	}
 }
 

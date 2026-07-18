@@ -99,6 +99,9 @@ type CreateIdentityParams struct {
 	Kind      string // domain.IdentityKindClient | domain.IdentityKindAdmin
 	TokenHash []byte
 	Namespace *domain.NamespaceRef
+	// Cert, when non-nil, is inserted in the same transaction as the identity.
+	// This makes first-certificate issuance atomic and retry-safe.
+	Cert *domain.IdentityCert
 }
 
 // CAKeyRecord is one built-in CA key. Private key material is envelope-encrypted

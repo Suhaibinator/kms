@@ -186,6 +186,14 @@ func (m *memStore) CreateIdentity(_ context.Context, params storage.CreateIdenti
 	if len(params.TokenHash) > 0 {
 		m.tokenIndex[hex.EncodeToString(params.TokenHash)] = params.Name
 	}
+	if params.Cert != nil {
+		if _, exists := m.certs[params.Cert.Serial]; exists {
+			m.identities = m.identities[:len(m.identities)-1]
+			delete(m.tokenIndex, hex.EncodeToString(params.TokenHash))
+			return domain.Identity{}, domain.Errorf(domain.ErrAlreadyExists, "certificate %s", params.Cert.Serial)
+		}
+		m.certs[params.Cert.Serial] = &certRow{identityName: params.Name, cert: *params.Cert}
+	}
 	return *id, nil
 }
 

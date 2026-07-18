@@ -58,20 +58,44 @@ func (l *rateLimiter) allow(key string) bool {
 		b = &bucket{tokens: l.burst, last: now}
 		l.buckets[key] = b
 	} else {
-		elapsed := now.Sub(b.last).Seconds()
-		if elapsed > 0 {
-			b.tokens += elapsed * l.rate
-			if b.tokens > l.burst {
-				b.tokens = l.burst
-			}
-			b.last = now
-		}
+		l.refill(b, now)
 	}
 	if b.tokens >= 1 {
 		b.tokens--
 		return true
 	}
 	return false
+}
+
+// refund returns one previously reserved token after successful
+// authentication. Reserving before credential verification means an exhausted
+// bucket avoids the expensive authentication path entirely, while successful
+// requests do not consume the failed-auth budget.
+func (l *rateLimiter) refund(key string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	b := l.buckets[key]
+	if b == nil {
+		return
+	}
+	l.refill(b, l.now())
+	b.tokens++
+	if b.tokens > l.burst {
+		b.tokens = l.burst
+	}
+}
+
+// refill updates one bucket to now. Caller holds mu.
+func (l *rateLimiter) refill(b *bucket, now time.Time) {
+	elapsed := now.Sub(b.last).Seconds()
+	if elapsed <= 0 {
+		return
+	}
+	b.tokens += elapsed * l.rate
+	if b.tokens > l.burst {
+		b.tokens = l.burst
+	}
+	b.last = now
 }
 
 // sweep drops buckets that have refilled to full (i.e. the key has been idle

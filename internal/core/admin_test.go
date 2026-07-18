@@ -128,6 +128,30 @@ func TestCreateNamespaceAuthorization(t *testing.T) {
 	}
 }
 
+func TestDelegatedNamespaceAdminObeysMethodGate(t *testing.T) {
+	ctx := context.Background()
+	store := newFakeStore()
+	store.addNamespace(tns, domain.AuthMethodMTLS)
+	store.addPolicy(domain.Policy{Name: "delegated", Subject: "app", Allow: []domain.PolicyRule{{
+		Operation: domain.OpAdminNamespaceUpdate, Env: tns.Env, App: tns.App,
+	}}})
+	s := newTestService(store)
+	pr := boundClientPrincipal("app", tns) // token-authenticated
+
+	if _, err := s.UpdateNamespace(ctx, pr, tns, "bypass", []domain.AuthMethod{domain.AuthMethodToken}); !errors.Is(err, domain.ErrPermissionDenied) {
+		t.Fatalf("token delegated update err = %v, want ErrPermissionDenied", err)
+	}
+	got, _ := store.GetNamespace(ctx, tns)
+	if got.Description == "bypass" {
+		t.Fatal("disallowed token caller changed an mTLS-only namespace")
+	}
+
+	pr.Method = domain.AuthMethodMTLS
+	if _, err := s.UpdateNamespace(ctx, pr, tns, "allowed", []domain.AuthMethod{domain.AuthMethodMTLS}); err != nil {
+		t.Fatalf("mTLS delegated update: %v", err)
+	}
+}
+
 func TestCreateIdentity(t *testing.T) {
 	ctx := context.Background()
 	store := newFakeStore()

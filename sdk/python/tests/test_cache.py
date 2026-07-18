@@ -3,6 +3,7 @@ from __future__ import annotations
 import pytest
 
 from kms_paramstore import Client
+from kms_paramstore._gen import kms_pb2
 from kms_paramstore.errors import PermissionDeniedError
 from tests.conftest import NS, NS_APP, NS_ENV
 from tests.helpers import wait_until
@@ -64,6 +65,24 @@ def test_secret_cache(server):
         # writing through the client invalidates
         c.put_secret("c/s", b"three")
         assert c.get_secret("c/s").value == b"three"
+    finally:
+        c.close()
+
+
+def test_full_snapshot_invalidates_scoped_secret_cache(server):
+    addr, store = server
+    c = _client(addr, ttl=30)
+    try:
+        c.put_secret("c/snapshot", b"one")
+        assert c.get_secret("c/snapshot").value == b"one"
+        store.secrets[(NS_ENV, NS_APP, "c/snapshot")]["versions"].append(
+            (b"two", "application/octet-stream")
+        )
+        sub = c._subs()
+        with sub._lock:
+            sub._stream_namespaces = [(NS_ENV, NS_APP)]
+        sub._apply_snapshot(kms_pb2.Snapshot(), 10)
+        assert c.get_secret("c/snapshot").value == b"two"
     finally:
         c.close()
 

@@ -41,6 +41,9 @@ type Options struct {
 	// SubscriberBuffer is the per-subscriber event channel depth. A subscriber
 	// that lets it fill is dropped and expected to reconnect by revision.
 	SubscriberBuffer int
+	// DrainRetryInterval is how soon a transient change-log read failure is
+	// retried without waiting for another write to wake the hub.
+	DrainRetryInterval time.Duration
 
 	// now overrides the clock (tests). nil uses time.Now.
 	now func() time.Time
@@ -48,13 +51,14 @@ type Options struct {
 
 // Defaults.
 const (
-	defaultHeartbeatInterval = 30 * time.Second
-	defaultMissedHeartbeats  = 3
-	defaultSnapshotMaxReplay = 4096
-	defaultPruneInterval     = 5 * time.Minute
-	defaultRetainDuration    = 24 * time.Hour
-	defaultRetainRows        = 100000
-	defaultSubscriberBuffer  = 256
+	defaultHeartbeatInterval  = 30 * time.Second
+	defaultMissedHeartbeats   = 3
+	defaultSnapshotMaxReplay  = 4096
+	defaultPruneInterval      = 5 * time.Minute
+	defaultRetainDuration     = 24 * time.Hour
+	defaultRetainRows         = 100000
+	defaultSubscriberBuffer   = 256
+	defaultDrainRetryInterval = time.Second
 )
 
 // dispatchBatch is how many change-log entries the dispatch loop reads per
@@ -91,6 +95,9 @@ func (o Options) withDefaults() Options {
 	}
 	if o.SubscriberBuffer <= 0 {
 		o.SubscriberBuffer = defaultSubscriberBuffer
+	}
+	if o.DrainRetryInterval <= 0 {
+		o.DrainRetryInterval = defaultDrainRetryInterval
 	}
 	if o.now == nil {
 		o.now = func() time.Time { return time.Now().UTC() }
@@ -173,11 +180,21 @@ func (h *Hub) Subscribers() []domain.Subscriber {
 // the starting revision from the store; any entries already present are treated
 // as history (subscribers receive them via backlog, not the live stream).
 func (h *Hub) Run(ctx context.Context) error {
-	cursor, err := h.store.CurrentRevision(ctx)
-	if err != nil {
+	var cursor uint64
+	for {
+		var err error
+		cursor, err = h.store.CurrentRevision(ctx)
+		if err == nil {
+			break
+		}
 		h.log.Error("watch hub: reading current revision at start", zap.Error(err))
-		// Start from zero; the first drain will re-read and advance.
-		cursor = 0
+		timer := time.NewTimer(h.opts.DrainRetryInterval)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return ctx.Err()
+		case <-timer.C:
+		}
 	}
 
 	liveness := time.NewTicker(h.opts.HeartbeatInterval)
@@ -187,12 +204,50 @@ func (h *Hub) Run(ctx context.Context) error {
 
 	close(h.startedCh)
 
+	var retryTimer *time.Timer
+	var retryCh <-chan time.Time
+	scheduleRetry := func() {
+		if retryTimer == nil {
+			retryTimer = time.NewTimer(h.opts.DrainRetryInterval)
+			retryCh = retryTimer.C
+		}
+	}
+	stopRetry := func() {
+		if retryTimer == nil {
+			return
+		}
+		if !retryTimer.Stop() {
+			select {
+			case <-retryTimer.C:
+			default:
+			}
+		}
+		retryTimer = nil
+		retryCh = nil
+	}
+	defer stopRetry()
 	for {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-h.wake:
-			cursor = h.drain(ctx, cursor)
+			var drainErr error
+			cursor, drainErr = h.drain(ctx, cursor)
+			if drainErr != nil {
+				h.log.Error("watch hub: reading change log", zap.Uint64("since", cursor), zap.Error(drainErr))
+				scheduleRetry()
+			} else {
+				stopRetry()
+			}
+		case <-retryCh:
+			retryTimer = nil
+			retryCh = nil
+			var drainErr error
+			cursor, drainErr = h.drain(ctx, cursor)
+			if drainErr != nil {
+				h.log.Error("watch hub: retrying change log read", zap.Uint64("since", cursor), zap.Error(drainErr))
+				scheduleRetry()
+			}
 		case <-liveness.C:
 			h.dropExpired()
 		case <-prune.C:
@@ -202,23 +257,24 @@ func (h *Hub) Run(ctx context.Context) error {
 }
 
 // drain reads and dispatches change-log entries after cursor until the log is
-// exhausted, returning the advanced cursor.
-func (h *Hub) drain(ctx context.Context, cursor uint64) uint64 {
+// exhausted, returning the advanced cursor. On a transient error, any entries
+// already dispatched remain reflected in the returned cursor so retry does not
+// duplicate them.
+func (h *Hub) drain(ctx context.Context, cursor uint64) (uint64, error) {
 	for {
 		entries, err := h.store.ListChangesSince(ctx, cursor, dispatchBatch)
 		if err != nil {
-			h.log.Error("watch hub: reading change log", zap.Uint64("since", cursor), zap.Error(err))
-			return cursor
+			return cursor, err
 		}
 		if len(entries) == 0 {
-			return cursor
+			return cursor, nil
 		}
 		for _, e := range entries {
 			h.dispatch(e)
 			cursor = e.Revision
 		}
 		if len(entries) < dispatchBatch {
-			return cursor
+			return cursor, nil
 		}
 	}
 }
@@ -375,40 +431,39 @@ func (h *Hub) canReplay(ctx context.Context, lastSeen, current uint64) bool {
 func (h *Hub) replayEntries(ctx context.Context, reg Registration, current uint64) (entries []domain.ChangeLogEntry, complete bool, err error) {
 	var out []domain.ChangeLogEntry
 	cursor := reg.LastSeenRevision
-	first := true
 	for cursor < current {
 		batch, err := h.store.ListChangesSince(ctx, cursor, dispatchBatch)
 		if err != nil {
 			return nil, false, err
 		}
 		if len(batch) == 0 {
-			break
-		}
-		if first {
-			// Revisions are contiguous (change_log AUTOINCREMENT), so the only
-			// way the first replayed entry can be beyond lastSeen+1 is that
-			// lastSeen+1..batch[0].Revision-1 were pruned after canReplay
-			// checked the retention boundary. Replaying would silently drop
-			// those changes, so bail and let the caller send a snapshot.
-			if batch[0].Revision > reg.LastSeenRevision+1 {
-				return nil, false, nil
-			}
-			first = false
+			// cursor is still behind the captured current revision, so an empty
+			// tail means pruning raced the paginated read.
+			return nil, false, nil
 		}
 		for _, e := range batch {
-			cursor = e.Revision
 			if e.Revision > current {
 				// Committed after our consistent point; leave it for the live
 				// stream so it is not delivered twice.
-				continue
+				break
 			}
+			// AUTOINCREMENT revisions are contiguous until pruning. Check every
+			// page boundary, not just the first result, because a prune may race
+			// after one or more full pages have already been read.
+			if e.Revision != cursor+1 {
+				return nil, false, nil
+			}
+			cursor = e.Revision
 			if !namespaceMatchAny(reg.Namespaces, e.Ref.NS) {
 				continue
 			}
 			out = append(out, e)
 		}
+		if cursor >= current {
+			return out, true, nil
+		}
 		if len(batch) < dispatchBatch {
-			break
+			return nil, false, nil
 		}
 	}
 	return out, true, nil

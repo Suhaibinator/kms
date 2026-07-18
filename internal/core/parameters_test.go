@@ -137,6 +137,17 @@ func TestListParametersFiltersByPolicy(t *testing.T) {
 			t.Fatalf("home client saw %d, want 3", len(got))
 		}
 	})
+
+	t.Run("explicit deny overrides home list grant", func(t *testing.T) {
+		store.policies = nil
+		store.addPolicy(domain.Policy{Name: "deny-list", Subject: "app", Deny: []domain.PolicyRule{
+			{Operation: domain.OpParameterList, Env: "prod", App: "app"},
+		}})
+		_, _, err := s.ListParameters(ctx, boundClientPrincipal("app", tns), tns, "", storage.ListPage{})
+		if !errors.Is(err, domain.ErrPermissionDenied) {
+			t.Fatalf("explicit list deny err = %v, want ErrPermissionDenied", err)
+		}
+	})
 }
 
 func TestDeleteParameter(t *testing.T) {

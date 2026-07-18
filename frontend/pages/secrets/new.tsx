@@ -265,6 +265,7 @@ export default function NewSecretPage() {
       {/* One-time access token reveal */}
       <Modal
         open={mintedToken !== null}
+        dismissible={false}
         title="Save this access token now"
         onClose={finishTokenReveal}
         footer={

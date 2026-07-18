@@ -230,3 +230,25 @@ func (c *cache) invalidateSecret(path string) {
 		delete(c.secrets, path)
 	}
 }
+
+// invalidateSecretsInNamespaces drops every cached secret whose path belongs
+// to one of namespaces. A reconnect snapshot is parameter-only, so this closes
+// the cache gap for secret changes lost beyond the replay window.
+func (c *cache) invalidateSecretsInNamespaces(namespaces []namespaceRef) {
+	if c == nil || len(namespaces) == 0 {
+		return
+	}
+	scope := make(map[namespaceRef]struct{}, len(namespaces))
+	for _, ns := range namespaces {
+		scope[ns] = struct{}{}
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for path, byKey := range c.secrets {
+		if _, ok := scope[refOf(path).ns]; !ok {
+			continue
+		}
+		c.secretCount -= len(byKey)
+		delete(c.secrets, path)
+	}
+}

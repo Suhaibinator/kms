@@ -25,7 +25,12 @@ type fakeStore struct {
 	snapRev  uint64
 
 	currentRevErr error
+	currentErrs   int
+	currentCalls  int
 	listErr       error
+	listErrs      int
+	listCalls     int
+	onList        func(since uint64, limit int) ([]domain.ChangeLogEntry, error)
 	oldestErr     error
 	snapErr       error
 
@@ -42,6 +47,11 @@ func (f *fakeStore) append(e ...domain.ChangeLogEntry) {
 func (f *fakeStore) CurrentRevision(ctx context.Context) (uint64, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.currentCalls++
+	if f.currentErrs > 0 {
+		f.currentErrs--
+		return 0, errors.New("transient current revision failure")
+	}
 	if f.currentRevErr != nil {
 		return 0, f.currentRevErr
 	}
@@ -69,6 +79,14 @@ func (f *fakeStore) OldestRetainedRevision(ctx context.Context) (uint64, error) 
 func (f *fakeStore) ListChangesSince(ctx context.Context, since uint64, limit int) ([]domain.ChangeLogEntry, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.listCalls++
+	if f.onList != nil {
+		return f.onList(since, limit)
+	}
+	if f.listErrs > 0 {
+		f.listErrs--
+		return nil, errors.New("transient list failure")
+	}
 	if f.listErr != nil {
 		return nil, f.listErr
 	}
@@ -460,6 +478,55 @@ func TestSubscribe_PruneRacingReplayFallsBackToSnapshot(t *testing.T) {
 	}
 }
 
+func TestSubscribe_PruneRacingSecondReplayPageFallsBackToSnapshot(t *testing.T) {
+	store := &fakeStore{oldest: 2, snapRev: 515}
+	for rev := uint64(2); rev <= 513; rev++ {
+		store.append(paramPut(rev, ref("prod", "app", "k"), "v"))
+	}
+	// Revision 514 was present when replay began but is pruned before page two;
+	// 515 remains. Continuity must be checked across every page boundary.
+	store.append(paramPut(515, ref("prod", "app", "tail"), "v"))
+	h := newTestHub(t, store, Options{})
+	sub, err := h.Subscribe(context.Background(), Registration{
+		Namespaces:       []domain.NamespaceRef{nsr("prod", "app")},
+		LastSeenRevision: 1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sub.Close()
+	if !sub.Backlog().IsSnapshot {
+		t.Fatal("second-page replay gap did not fall back to snapshot")
+	}
+}
+
+func TestSubscribe_EmptyReplayTailFallsBackToSnapshot(t *testing.T) {
+	store := &fakeStore{oldest: 2, snapRev: 514}
+	for rev := uint64(2); rev <= 514; rev++ {
+		store.append(paramPut(rev, ref("prod", "app", "k"), "v"))
+	}
+	var calls int
+	store.onList = func(_ uint64, _ int) ([]domain.ChangeLogEntry, error) {
+		calls++
+		if calls == 1 {
+			return append([]domain.ChangeLogEntry(nil), store.entries[:dispatchBatch]...), nil
+		}
+		return nil, nil // tail pruned after the full first page
+	}
+	h := newTestHub(t, store, Options{})
+	sub, err := h.Subscribe(context.Background(), Registration{
+		Namespaces:       []domain.NamespaceRef{nsr("prod", "app")},
+		LastSeenRevision: 1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sub.Close()
+	if !sub.Backlog().IsSnapshot {
+		t.Fatal("empty replay tail did not fall back to snapshot")
+	}
+}
+
 func TestSubscribe_TooManyToReplayFallsBackToSnapshot(t *testing.T) {
 	store := &fakeStore{
 		oldest:   1,
@@ -550,6 +617,31 @@ func TestDispatch_DeliversInRevisionOrder(t *testing.T) {
 		if e.Revision != uint64(i+1) {
 			t.Fatalf("event %d revision = %d, want %d", i, e.Revision, i+1)
 		}
+	}
+}
+
+func TestDispatch_RetriesTransientReadWithoutAnotherWake(t *testing.T) {
+	store := &fakeStore{listErrs: 1}
+	h := newTestHub(t, store, Options{DrainRetryInterval: 10 * time.Millisecond})
+	stop := runHub(t, h)
+	defer stop()
+	sub, err := h.Subscribe(context.Background(), Registration{Namespaces: []domain.NamespaceRef{nsr("prod", "app")}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sub.Close()
+
+	store.append(paramPut(1, ref("prod", "app", "retry"), "ok"))
+	h.Wake()
+	got := collect(t, sub, 1, time.Second)
+	if got[0].Revision != 1 {
+		t.Fatalf("retried event revision = %d, want 1", got[0].Revision)
+	}
+	store.mu.Lock()
+	calls := store.listCalls
+	store.mu.Unlock()
+	if calls < 2 {
+		t.Fatalf("ListChangesSince called %d times, want initial failure plus automatic retry", calls)
 	}
 }
 
@@ -842,6 +934,35 @@ func TestRun_ReturnsOnContextCancel(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("Run did not return on cancel")
+	}
+}
+
+func TestRun_StartedWaitsForInitialCursorRetry(t *testing.T) {
+	store := &fakeStore{currentErrs: 1}
+	h := newTestHub(t, store, Options{DrainRetryInterval: 50 * time.Millisecond})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- h.Run(ctx) }()
+
+	waitFor(t, func() bool {
+		store.mu.Lock()
+		defer store.mu.Unlock()
+		return store.currentCalls >= 1
+	}, time.Second)
+	select {
+	case <-h.Started():
+		t.Fatal("Started closed after a failed initial cursor read")
+	default:
+	}
+	select {
+	case <-h.Started():
+	case <-time.After(time.Second):
+		t.Fatal("Started did not close after the initial cursor retry succeeded")
+	}
+	cancel()
+	if err := <-done; !errors.Is(err, context.Canceled) {
+		t.Fatalf("Run returned %v, want context.Canceled", err)
 	}
 }
 

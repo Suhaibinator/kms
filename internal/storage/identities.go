@@ -5,6 +5,7 @@ import (
 	"errors"
 
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 
 	"github.com/Suhaibinator/kms/internal/domain"
 )
@@ -64,6 +65,21 @@ func (s *SQLStore) CreateIdentity(ctx context.Context, params CreateIdentityPara
 				return domain.Errorf(domain.ErrAlreadyExists, "identity %s", params.Name)
 			}
 			return err
+		}
+		if params.Cert != nil {
+			cert := identityCertModel{
+				Serial:      params.Cert.Serial,
+				IdentityID:  m.ID,
+				Fingerprint: params.Cert.Fingerprint,
+				NotAfter:    fmtTime(params.Cert.NotAfter),
+				CreatedAt:   fmtTime(params.Cert.CreatedAt),
+			}
+			if err := tx.Omit(clause.Associations).Create(&cert).Error; err != nil {
+				if isUniqueErr(err) {
+					return domain.Errorf(domain.ErrAlreadyExists, "certificate %s", params.Cert.Serial)
+				}
+				return err
+			}
 		}
 		id, err := s.hydrateIdentity(tx, m, false)
 		if err != nil {

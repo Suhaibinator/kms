@@ -11,6 +11,7 @@ from kms_paramstore import (
     SecretValue,
 )
 from tests.conftest import NS, NS_APP, NS_ENV
+from tests.helpers import wait_until
 
 
 def test_resolve_from_store(client, server):
@@ -71,6 +72,23 @@ def test_default_used_only_on_not_found(client):
     client.resolve(cfg)
     assert cfg.p.get() == "dev-default"
     assert cfg.s.value == b"dev-secret"
+
+
+def test_missing_parameter_default_stays_hot_reloaded(client, server):
+    _addr, store = server
+
+    class Cfg:
+        p = ParameterValue("created-later", default="dev-default")
+
+    cfg = Cfg()
+    client.resolve(cfg)
+    assert cfg.p.get() == "dev-default"
+    assert wait_until(lambda: (NS_ENV, NS_APP) in {
+        ns for sub in store.subs for ns in sub.namespaces
+    })
+
+    store.put_param(NS_ENV, NS_APP, "created-later", value="from-store")
+    assert wait_until(lambda: cfg.p.get() == "from-store"), "fallback value never subscribed"
 
 
 def test_default_not_used_on_other_error_by_default():

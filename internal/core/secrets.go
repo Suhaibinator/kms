@@ -239,6 +239,10 @@ func (s *Service) PutSecret(ctx context.Context, pr Principal, in PutSecretInput
 		}
 	}
 
+	// Keep the selected active KEK stable through the write in this process.
+	// SQL storage independently checks key_metadata inside the transaction to
+	// catch a rotation performed by another process.
+	s.keyWriteMu.RLock()
 	kek := keyring.Active()
 	value := in.Value
 	ref := in.Ref
@@ -274,6 +278,7 @@ func (s *Service) PutSecret(ctx context.Context, pr Principal, in PutSecretInput
 			}, nil
 		},
 	})
+	s.keyWriteMu.RUnlock()
 	if err != nil {
 		return PutSecretResult{}, err
 	}

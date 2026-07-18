@@ -303,7 +303,7 @@ class ParameterValue(_DescriptorBase):
                 st.static = True
 
     def _resolve_from_store(self, client: "Client", timeout: Optional[float]):
-        """Return ``(ref, value)``; ``ref`` is None when the default is used."""
+        """Return ``(ref, value)``; ``ref`` is None only for a default-only descriptor."""
         if self._key:
             # A relative key on a namespace-less client is a config error naming
             # the key; it must propagate rather than fall back to a default.
@@ -313,7 +313,10 @@ class ParameterValue(_DescriptorBase):
             except Exception as err:
                 if self._default is not None and client._default_allowed_for_error(err):
                     client._logf("parameter %r fetch failed (%s); using default", self._key, err)
-                    return None, self._default
+                    # Keep the resolved ref so non-static values subscribe and
+                    # can replace the fallback when the missing parameter is
+                    # created later.
+                    return ref, self._default
                 raise errors.ParamStoreError(f"resolve parameter {self._key!r}: {err}") from err
             return ref, value
         if self._default is not None:

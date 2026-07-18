@@ -5,7 +5,9 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -69,6 +71,60 @@ type Options struct {
 // Open opens (creating if needed) the database at path with default options.
 func Open(path string) (*SQLStore, error) {
 	return OpenWithOptions(path, Options{})
+}
+
+// ValidateKMSDatabase opens an existing database read-only and verifies that
+// it is a migrated KMS database supported by this build. Unlike Open it never
+// creates a missing file or adds KMS tables to an unrelated SQLite database.
+func ValidateKMSDatabase(path string) error {
+	if path == "" {
+		return domain.Errorf(domain.ErrInvalidArgument, "database path is empty")
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		return fmt.Errorf("stat database %q: %w", path, err)
+	}
+	if !info.Mode().IsRegular() {
+		return fmt.Errorf("database %q is not a regular file", path)
+	}
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return fmt.Errorf("resolve database path %q: %w", path, err)
+	}
+	u := url.URL{Scheme: "file", Path: abs}
+	db, err := gorm.Open(sqlite.Open(u.String()+"?mode=ro&_pragma=query_only(1)"), &gorm.Config{
+		Logger:                 logger.Default.LogMode(logger.Silent),
+		SkipDefaultTransaction: true,
+	})
+	if err != nil {
+		return fmt.Errorf("open database %q read-only: %w", path, err)
+	}
+	sqlDB, err := db.DB()
+	if err != nil {
+		return fmt.Errorf("access database %q: %w", path, err)
+	}
+	defer func() { _ = sqlDB.Close() }()
+
+	for _, table := range []string{"schema_migrations", "key_metadata", "namespaces", "identities", "change_log"} {
+		var count int64
+		if err := db.Raw("SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?", table).Scan(&count).Error; err != nil {
+			return fmt.Errorf("inspect database %q: %w", path, err)
+		}
+		if count != 1 {
+			return fmt.Errorf("database %q is not a KMS database (missing table %s)", path, table)
+		}
+	}
+	var stored schemaMigrationModel
+	if err := db.Order("version DESC").First(&stored).Error; err != nil {
+		return fmt.Errorf("database %q has no valid KMS schema version: %w", path, err)
+	}
+	if stored.Version > schemaVersion {
+		return fmt.Errorf("database schema version %d is newer than supported version %d; upgrade the binary", stored.Version, schemaVersion)
+	}
+	if stored.Version < 1 {
+		return fmt.Errorf("database %q has invalid KMS schema version %d", path, stored.Version)
+	}
+	return nil
 }
 
 // OpenWithOptions opens the database at path with the given options. Pragmas are

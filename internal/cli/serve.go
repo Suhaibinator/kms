@@ -103,6 +103,7 @@ func (c *CLI) cmdServe(args []string) int {
 	defer func() { _ = store.Close() }()
 
 	svc := core.New(store, logger, Version)
+	svc.SetAuditEnabled(cfg.Audit.Enabled)
 
 	// Unseal before starting listeners. In interactive mode this blocks on the
 	// passphrase prompt; no network listener exists until unseal succeeds.
@@ -132,6 +133,10 @@ func (c *CLI) cmdServe(args []string) int {
 			logger.Error("watch hub stopped", zap.Error(err))
 		}
 	}()
+	// Do not admit subscribers until the hub has captured its initial cursor;
+	// otherwise a write can land between listener startup and hub initialization
+	// and be absent from both replay and live delivery.
+	<-hub.Started()
 
 	tlsCfg, err := cfg.BuildServerTLS()
 	if err != nil {

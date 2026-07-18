@@ -607,6 +607,44 @@ func TestReconcileDoesNotRegressToStaleValue(t *testing.T) {
 	}
 }
 
+func TestDeleteTombstoneFencesStaleReconcile(t *testing.T) {
+	c, _ := newTestClient(t, Config{})
+	m := c.subs()
+	path := "/prod/app/deleted"
+	m.setValue(path, "live", true, 1, 5, false)
+	m.setValue(path, "", false, 0, 6, false)
+	// This read began before the delete. It must not recreate the key after the
+	// delete retained only a revision tombstone.
+	m.setValue(path, "stale", true, 1, 5, true)
+
+	m.mu.Lock()
+	known, ok := m.known[path]
+	m.mu.Unlock()
+	if !ok || known.present || known.rev != 6 {
+		t.Fatalf("known state after stale reconcile = %+v, present=%v; want rev-6 tombstone", known, ok)
+	}
+}
+
+func TestFullSnapshotInvalidatesSecretsInStreamNamespaces(t *testing.T) {
+	c, _ := newTestClient(t, Config{CacheTTL: time.Minute})
+	m := c.subs()
+	scoped := "/prod/app/db/password"
+	other := "/prod/other/db/password"
+	c.cache.putSecret(scoped, 0, "", Secret{})
+	c.cache.putSecret(other, 0, "", Secret{})
+	m.mu.Lock()
+	m.streamNamespaces = []namespaceRef{{env: "prod", app: "app"}}
+	m.mu.Unlock()
+
+	m.applySnapshot(&kmsv1.Snapshot{}, 20)
+	if _, ok := c.cache.getSecret(scoped, 0, ""); ok {
+		t.Fatal("full snapshot left a scoped secret cache entry stale")
+	}
+	if _, ok := c.cache.getSecret(other, 0, ""); !ok {
+		t.Fatal("full snapshot invalidated a secret outside its stream scope")
+	}
+}
+
 // TestSnapshotResyncRevertsDeletedParamToDefault proves half of the M3 fix: a
 // resync snapshot that omits a previously-known hot-reload parameter (deleted
 // while disconnected) reverts the handle to its Default and fires OnChange.

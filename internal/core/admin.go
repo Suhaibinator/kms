@@ -30,6 +30,15 @@ func (s *Service) requireAdminOrOp(ctx context.Context, pr Principal, operation,
 	if pr.IsAdmin() {
 		return nil
 	}
+	// Delegated management operations against an existing namespace must obey
+	// the same authentication-method boundary as data-plane operations. Create
+	// is excluded because the target namespace does not exist yet; partially
+	// specified refs (for example audit filters) cannot be gated as one namespace.
+	if operation != domain.OpAdminNamespaceCreate && ref.NS.Env != "" && ref.NS.App != "" {
+		if err := s.namespaceMethodGate(ctx, pr, ref.NS, resourceType); err != nil {
+			return err
+		}
+	}
 	policies, err := s.store.PoliciesForSubject(ctx, pr.Identity.Name)
 	if err != nil {
 		return domain.Errorf(domain.ErrPermissionDenied, "authorization unavailable")
@@ -285,22 +294,28 @@ func (s *Service) CreateIdentity(ctx context.Context, pr Principal, in CreateIde
 		}
 	}
 
+	var (
+		bundle  *CertBundle
+		certRec *domain.IdentityCert
+	)
+	if wantCert {
+		var generated domain.IdentityCert
+		bundle, generated, err = s.generateCert(in.Name, in.CertTTL)
+		if err != nil {
+			return CreateIdentityResult{}, err
+		}
+		certRec = &generated
+	}
+
 	id, err := s.store.CreateIdentity(ctx, storage.CreateIdentityParams{
 		Name:      in.Name,
 		Kind:      in.Kind,
 		TokenHash: hash,
 		Namespace: in.Namespace,
+		Cert:      certRec,
 	})
 	if err != nil {
 		return CreateIdentityResult{}, err
-	}
-
-	var bundle *CertBundle
-	if wantCert {
-		bundle, err = s.issueCert(ctx, in.Name, in.CertTTL)
-		if err != nil {
-			return CreateIdentityResult{}, err
-		}
 	}
 
 	meta := map[string]string{"action": "create", "kind": in.Kind}
@@ -384,21 +399,33 @@ func (s *Service) IssueIdentityCertificate(ctx context.Context, pr Principal, na
 // issueCert mints a certificate via the built-in CA and records it. The caller
 // audits. The identity must already exist.
 func (s *Service) issueCert(ctx context.Context, name string, ttl time.Duration) (*CertBundle, error) {
+	bundle, cert, err := s.generateCert(name, ttl)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.store.InsertIdentityCert(ctx, name, cert); err != nil {
+		return nil, err
+	}
+	return bundle, nil
+}
+
+// generateCert mints a certificate without touching storage. CreateIdentity
+// passes the resulting record into the identity transaction; renewals persist
+// it separately after confirming the target identity already exists.
+func (s *Service) generateCert(name string, ttl time.Duration) (*CertBundle, domain.IdentityCert, error) {
 	authority := s.ca.Load()
 	if authority == nil {
-		return nil, domain.Errorf(domain.ErrNotReady, "certificate authority not initialized")
+		return nil, domain.IdentityCert{}, domain.Errorf(domain.ErrNotReady, "certificate authority not initialized")
 	}
 	issued, err := authority.IssueClientCert(name, ttl)
 	if err != nil {
-		return nil, domain.Errorf(domain.ErrInvalidArgument, "%v", err)
+		return nil, domain.IdentityCert{}, domain.Errorf(domain.ErrInvalidArgument, "%v", err)
 	}
-	if err := s.store.InsertIdentityCert(ctx, name, domain.IdentityCert{
+	cert := domain.IdentityCert{
 		Serial:      issued.Serial,
 		Fingerprint: issued.FingerprintSHA256,
 		NotAfter:    issued.NotAfter,
 		CreatedAt:   s.now(),
-	}); err != nil {
-		return nil, err
 	}
 	return &CertBundle{
 		CertPEM:     string(issued.CertPEM),
@@ -406,7 +433,7 @@ func (s *Service) issueCert(ctx context.Context, name string, ttl time.Duration)
 		Serial:      issued.Serial,
 		Fingerprint: issued.FingerprintSHA256,
 		NotAfter:    issued.NotAfter,
-	}, nil
+	}, cert, nil
 }
 
 // RevokeIdentityCertificate revokes a single certificate by serial. The serial
@@ -556,6 +583,12 @@ func (s *Service) RotateKEK(ctx context.Context, pr Principal, newKM domain.KeyM
 		return 0, 0, err
 	}
 	defer crypto.Zero(newMaterial)
+
+	// Serialize the active-key switch with in-process secret writers. The
+	// storage transaction also verifies the active key, which fences writers in
+	// other processes using the same database.
+	s.keyWriteMu.Lock()
+	defer s.keyWriteMu.Unlock()
 
 	newKEK, err := crypto.NewKEKFromMaterial(newKM.ID, newMaterial)
 	if err != nil {

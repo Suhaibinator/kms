@@ -138,17 +138,19 @@ func (s *server) serveAPI(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, r, err)
 		return
 	}
+	// Reserve from the failed-auth bucket before doing credential work. A
+	// successful authentication refunds the reservation; a failed one keeps it.
+	// This makes throttling effective even while the bucket is exhausted.
+	if !s.loginLimiter.allow(ip) {
+		writeErrorCode(w, http.StatusTooManyRequests, "rate_limited", "too many requests; slow down")
+		return
+	}
 	pr, err := s.authenticate(r, ip)
 	if err != nil {
-		// Throttle credential guessing: a failed auth consumes a login token,
-		// and an exhausted bucket returns 429 instead of 401.
-		if !s.loginLimiter.allow(ip) {
-			writeErrorCode(w, http.StatusTooManyRequests, "rate_limited", "too many requests; slow down")
-			return
-		}
 		s.writeError(w, r, err)
 		return
 	}
+	s.loginLimiter.refund(ip)
 	ctx = context.WithValue(r.Context(), principalKey, pr)
 	s.apiMux.ServeHTTP(w, r.WithContext(ctx))
 }

@@ -16,6 +16,7 @@ import (
 	"crypto/x509"
 	"errors"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -92,13 +93,15 @@ type WhoAmIResult struct {
 
 // Service wires storage, crypto, watch, the built-in CA, and audit together.
 type Service struct {
-	store   storage.Store
-	keyring atomic.Pointer[crypto.Keyring]
-	hub     atomic.Pointer[Hub]
-	ca      atomic.Pointer[ca.CA]
-	log     *zap.Logger
-	version string
-	now     func() time.Time
+	store        storage.Store
+	keyring      atomic.Pointer[crypto.Keyring]
+	keyWriteMu   sync.RWMutex
+	hub          atomic.Pointer[Hub]
+	ca           atomic.Pointer[ca.CA]
+	auditEnabled atomic.Bool
+	log          *zap.Logger
+	version      string
+	now          func() time.Time
 }
 
 // New constructs a Service. The keyring is attached later via SetKeyring
@@ -110,6 +113,7 @@ func New(store storage.Store, logger *zap.Logger, version string) *Service {
 		logger = zap.NewNop()
 	}
 	s := &Service{store: store, log: logger, version: version, now: func() time.Time { return time.Now().UTC() }}
+	s.auditEnabled.Store(true)
 	var h Hub = noopHub{}
 	s.hub.Store(&h)
 	return s
@@ -120,6 +124,11 @@ func (s *Service) SetKeyring(k *crypto.Keyring) { s.keyring.Store(k) }
 
 // SetHub attaches the watch hub.
 func (s *Service) SetHub(h Hub) { s.hub.Store(&h) }
+
+// SetAuditEnabled controls whether audit events are persisted. Auditing is on
+// by default so non-server consumers retain the secure behavior unless they
+// explicitly opt out through configuration.
+func (s *Service) SetAuditEnabled(enabled bool) { s.auditEnabled.Store(enabled) }
 
 // Store exposes the underlying store to trusted in-process consumers
 // (watch hub snapshot/replay, CLI). Transport layers must not use it.
@@ -380,8 +389,8 @@ func (s *Service) authorize(ctx context.Context, pr Principal, operation, resour
 }
 
 // listFilter enforces the method gate over the list namespace, authorizes the
-// enumeration (implicit home grant short-circuits for a home-namespace list,
-// else policy.MayListUnder), and returns a per-item predicate. Enumerating the
+// enumeration with the full deny-aware policy decision, and returns a per-item
+// predicate. Enumerating the
 // namespace requires listOp; each item is included only if the caller is
 // authorized for one of itemOps on the namespace. Admins pass everything through.
 //
@@ -402,10 +411,9 @@ func (s *Service) listFilter(ctx context.Context, pr Principal, resourceType, li
 		return nil, domain.Errorf(domain.ErrPermissionDenied, "authorization unavailable")
 	}
 	home := pr.home()
-	// A home-namespace list is covered by the implicit grant (read/list) with no
-	// explicit policy; otherwise the subject needs an allow rule on the namespace.
-	homeGrant := home != nil && *home == ns && policy.IsImplicitHomeOp(listOp)
-	if !homeGrant && !policy.MayListUnder(policies, listOp, ns) {
+	// Use the full authorization decision here: explicit denies must override
+	// both policy allows and the implicit home-namespace grant.
+	if !policy.Authorize(policies, home, listOp, ns) {
 		s.auditRef(ctx, pr, "authz.denial", resourceType, domain.Ref{NS: ns}, 0, "deny",
 			map[string]string{"operation": listOp})
 		return nil, domain.Errorf(domain.ErrPermissionDenied, "access denied")
@@ -543,6 +551,9 @@ func (s *Service) auditStrict(ctx context.Context, ev domain.AuditEvent) error {
 }
 
 func (s *Service) appendAudit(ctx context.Context, ev domain.AuditEvent) error {
+	if !s.auditEnabled.Load() {
+		return nil
+	}
 	if ev.CreatedAt.IsZero() {
 		ev.CreatedAt = s.now()
 	}

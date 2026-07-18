@@ -639,6 +639,7 @@ function CredentialsModal({
     <Modal
       open={credentials !== null}
       wide
+      dismissible={false}
       title="Save these credentials now"
       onClose={onClose}
       footer={

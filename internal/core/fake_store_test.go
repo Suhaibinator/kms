@@ -519,6 +519,14 @@ func (f *fakeStore) CreateIdentity(_ context.Context, params storage.CreateIdent
 	if len(params.TokenHash) > 0 {
 		f.identitiesByHash[string(params.TokenHash)] = id
 	}
+	if params.Cert != nil {
+		if _, exists := f.certsBySerial[params.Cert.Serial]; exists {
+			delete(f.identitiesByName, params.Name)
+			delete(f.identitiesByHash, string(params.TokenHash))
+			return domain.Identity{}, domain.Errorf(domain.ErrAlreadyExists, "certificate %s", params.Cert.Serial)
+		}
+		f.certsBySerial[params.Cert.Serial] = certEntry{cert: *params.Cert, identity: params.Name}
+	}
 	return id, nil
 }
 

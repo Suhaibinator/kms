@@ -4,6 +4,11 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/glebarez/sqlite"
+	"gorm.io/gorm"
+
+	"github.com/Suhaibinator/kms/internal/storage"
 )
 
 // fakeSQLiteBytes returns bytes that begin with the SQLite magic header.
@@ -35,8 +40,11 @@ func TestRestoreFile(t *testing.T) {
 	dir := t.TempDir()
 	in := filepath.Join(dir, "backup.db")
 	dst := filepath.Join(dir, "kms.db")
-	content := fakeSQLiteBytes("the-data")
-	writeFileBytes(t, in, content)
+	createKMSDB(t, in)
+	content, err := os.ReadFile(in)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	// Fresh restore into a non-existent destination.
 	if err := restoreFile(in, dst, false); err != nil {
@@ -52,7 +60,7 @@ func TestRestoreFileRemovesSidecars(t *testing.T) {
 	dir := t.TempDir()
 	in := filepath.Join(dir, "backup.db")
 	dst := filepath.Join(dir, "kms.db")
-	writeFileBytes(t, in, fakeSQLiteBytes("data"))
+	createKMSDB(t, in)
 	writeFileBytes(t, dst, fakeSQLiteBytes("old"))
 	writeFileBytes(t, dst+"-wal", []byte("stale wal"))
 	writeFileBytes(t, dst+"-shm", []byte("stale shm"))
@@ -72,7 +80,7 @@ func TestRestoreFileRefusesExisting(t *testing.T) {
 	dir := t.TempDir()
 	in := filepath.Join(dir, "backup.db")
 	dst := filepath.Join(dir, "kms.db")
-	writeFileBytes(t, in, fakeSQLiteBytes("data"))
+	createKMSDB(t, in)
 	writeFileBytes(t, dst, fakeSQLiteBytes("existing"))
 
 	if err := restoreFile(in, dst, false); err == nil {
@@ -87,9 +95,48 @@ func TestRestoreFileRefusesExisting(t *testing.T) {
 func TestRestoreFileSameFile(t *testing.T) {
 	dir := t.TempDir()
 	f := filepath.Join(dir, "kms.db")
-	writeFileBytes(t, f, fakeSQLiteBytes("data"))
+	createKMSDB(t, f)
 	if err := restoreFile(f, f, true); err == nil {
 		t.Fatalf("expected same-file guard")
+	}
+}
+
+func TestRestoreFileRejectsUnrelatedSQLite(t *testing.T) {
+	dir := t.TempDir()
+	in := filepath.Join(dir, "unrelated.db")
+	dst := filepath.Join(dir, "kms.db")
+	// A fully valid SQLite database with an unrelated schema must be rejected
+	// before the destination is touched.
+	db, err := gorm.Open(sqlite.Open(in), &gorm.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Exec("CREATE TABLE unrelated (id INTEGER PRIMARY KEY)").Error; err != nil {
+		t.Fatal(err)
+	}
+	sqlDB, err := db.DB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := sqlDB.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := restoreFile(in, dst, false); err == nil {
+		t.Fatal("expected unrelated SQLite input to be rejected")
+	}
+	if fileExists(dst) {
+		t.Fatal("destination should not be written for unrelated SQLite input")
+	}
+}
+
+func createKMSDB(t *testing.T, path string) {
+	t.Helper()
+	st, err := storage.Open(path)
+	if err != nil {
+		t.Fatalf("create KMS database: %v", err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatalf("close KMS database: %v", err)
 	}
 }
 

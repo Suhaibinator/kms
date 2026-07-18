@@ -155,6 +155,9 @@ func (c *CLI) cmdBackup(args []string) int {
 	if fileExists(*out) {
 		return c.fail("output file %s already exists; refusing to overwrite", *out)
 	}
+	if err := storage.ValidateKMSDatabase(*db); err != nil {
+		return c.fail("invalid backup source: %v", err)
+	}
 	store, err := storage.Open(*db)
 	if err != nil {
 		return c.fail("opening database: %v", err)

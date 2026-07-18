@@ -54,6 +54,19 @@ func TestBackupRequiresOut(t *testing.T) {
 	}
 }
 
+func TestBackupRejectsMissingSource(t *testing.T) {
+	dir := t.TempDir()
+	missing := filepath.Join(dir, "missing.db")
+	out := filepath.Join(dir, "backup.db")
+	c := newTestCLI()
+	if code := c.cmdBackup([]string{"--db", missing, "--out", out}); code == 0 {
+		t.Fatal("missing source was accepted as an empty backup")
+	}
+	if fileExists(missing) || fileExists(out) {
+		t.Fatal("failed backup created a source or output database")
+	}
+}
+
 // TestRestoreCommandEndToEnd backs up a real database and restores it,
 // validating that the restored copy opens.
 func TestRestoreCommandEndToEnd(t *testing.T) {

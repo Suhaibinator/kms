@@ -8,6 +8,7 @@ export function Modal({
   children,
   footer,
   wide,
+  dismissible = true,
 }: {
   open: boolean;
   title: ReactNode;
@@ -15,20 +16,22 @@ export function Modal({
   children: ReactNode;
   footer?: ReactNode;
   wide?: boolean;
+  /** Whether Escape, the backdrop, and the header close button may dismiss. */
+  dismissible?: boolean;
 }) {
   useEffect(() => {
     if (!open) return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
+      if (dismissible && e.key === "Escape") onClose();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [open, onClose]);
+  }, [open, onClose, dismissible]);
 
   if (!open) return null;
 
   return (
-    <div className="modal-overlay" onMouseDown={onClose}>
+    <div className="modal-overlay" onMouseDown={dismissible ? onClose : undefined}>
       <div
         className={`modal ${wide ? "wide" : ""}`}
         role="dialog"
@@ -37,9 +40,11 @@ export function Modal({
       >
         <div className="modal-header">
           <div className="modal-title">{title}</div>
-          <button className="toast-close" aria-label="Close" onClick={onClose}>
-            ×
-          </button>
+          {dismissible ? (
+            <button className="toast-close" aria-label="Close" onClick={onClose}>
+              ×
+            </button>
+          ) : null}
         </div>
         <div className="modal-body">{children}</div>
         {footer ? <div className="modal-footer">{footer}</div> : null}

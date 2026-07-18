@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import threading
 import time
-from typing import Dict, Optional, Tuple
+from typing import Dict, Iterable, Optional, Tuple
 
 from .secret import Secret
 
@@ -86,3 +86,16 @@ class Cache:
             return
         with self._lock:
             self._secrets.pop(path, None)
+
+    def invalidate_secrets_in_namespaces(self, namespaces: Iterable[Tuple[str, str]]) -> None:
+        """Drop all secret entries in the authoritative snapshot scope."""
+        if not self.enabled:
+            return
+        scope = set(namespaces)
+        if not scope:
+            return
+        with self._lock:
+            for path in list(self._secrets):
+                parts = path.split("/", 3)
+                if len(parts) == 4 and (parts[1], parts[2]) in scope:
+                    self._secrets.pop(path, None)

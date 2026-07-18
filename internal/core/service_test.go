@@ -126,6 +126,20 @@ func TestAuthenticate(t *testing.T) {
 	})
 }
 
+func TestAuditCanBeDisabled(t *testing.T) {
+	store := newFakeStore()
+	s := newTestService(store)
+	s.SetAuditEnabled(false)
+	s.auditName(context.Background(), adminPrincipal(), "test.event", domain.ResourceIdentity, "subject", "allow", nil)
+	if len(store.audits) != 0 {
+		t.Fatalf("disabled audit wrote %d events", len(store.audits))
+	}
+	store.auditErr = errors.New("audit sink unavailable")
+	if err := s.auditStrict(context.Background(), domain.AuditEvent{EventType: "strict"}); err != nil {
+		t.Fatalf("disabled auditStrict should be a no-op: %v", err)
+	}
+}
+
 func TestAuthorizeAdminBypass(t *testing.T) {
 	ctx := context.Background()
 	store := newFakeStore()

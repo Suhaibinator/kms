@@ -115,6 +115,21 @@ func (s *SQLStore) CreateSecretVersion(ctx context.Context, p CreateSecretParams
 		if err != nil {
 			return err
 		}
+		// Rotation and this write both run under BEGIN IMMEDIATE. Verify the
+		// payload's KEK after encryption while still holding that write lock, so a
+		// writer can never commit ciphertext under a key already made inactive.
+		var active keyMetadataModel
+		if aerr := tx.Where("state = ?", domain.KeyStateActive).
+			Order("created_at DESC, id DESC").First(&active).Error; aerr == nil {
+			if payload.KEKID != active.ID {
+				return domain.Errorf(domain.ErrFailedPrecondition,
+					"active KEK changed during secret write; retry")
+			}
+		} else if errors.Is(aerr, gorm.ErrRecordNotFound) {
+			return domain.Errorf(domain.ErrFailedPrecondition, "no active KEK for secret write")
+		} else {
+			return aerr
+		}
 
 		sv := secretVersionModel{
 			SecretID:      sec.ID,

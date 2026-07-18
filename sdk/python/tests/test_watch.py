@@ -307,6 +307,14 @@ def test_stale_reconcile_write_is_fenced(server):
         sub._set_value(rk, "0", True, 1, 4, reconcile=False)
         time.sleep(0.1)
         assert cfg.v.get() == "2", "stale live event regressed a newer value"
+
+        # A delete must retain its revision fence. Dropping the known entry would
+        # allow this older reconcile result to resurrect the key.
+        sub._set_value(rk, "", False, 0, 6, reconcile=False)
+        sub._set_value(rk, "stale", True, 1, 5, reconcile=True)
+        with sub._lock:
+            assert not sub._known[rk].present
+            assert sub._known[rk].rev == 6
     finally:
         c.close()
 
