@@ -175,6 +175,36 @@ queue (a full queue drops notifications, never values; an exception is logged),
 so a slow callback does not stall the stream but does delay later callbacks.
 Env-var-overridden values are pinned and do not hot-reload.
 
+## Atomic configuration releases
+
+Use the synchronous, thread-safe release loader when related values must be
+resolved and installed together:
+
+```python
+from kms_paramstore import ReleaseLoader, ReleaseLoaderConfig
+
+loader = ReleaseLoader(client, ReleaseLoaderConfig(
+    name="runtime",
+    secret_token_provider=lambda alias, path: local_tokens.get(alias),
+))
+
+def prepare(cancel, snapshot):
+    return decode_validate_and_prepare(cancel, snapshot)
+
+loader.run(prepare)  # blocks; call loader.stop() from another thread to stop
+```
+
+Snapshots are frozen/redacting and expose release version, activation
+revision, digest, schema pin, exact entries, parameters, and `Secret` values by
+stable alias. A prepared object's `commit()` must be infallible and normally
+performs an atomic reference swap; `abort()` releases stale or failed prepared
+work. Startup fails until one release applies. Later outages and rejections
+retain the last-known-good state.
+
+`run_typed_release` provides an explicit no-reflection decode step. See
+[`../../docs/sdk-python.md`](../../docs/sdk-python.md#atomic-release-loading)
+for lifecycle, cancellation, token-provider, and status details.
+
 ## Errors
 
 All SDK errors derive from `ParamStoreError`. gRPC status codes map to

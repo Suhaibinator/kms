@@ -12,7 +12,8 @@ restore, key rotation) that follow from it.
 The design goal is: an attacker who obtains the SQLite database file (backup
 theft, disk snapshot, stolen laptop with a dev copy) cannot recover **secret
 plaintext** without also obtaining the master key. The database still exposes
-parameters, resource metadata, identities, policies, and audit records, so it
+parameters, configuration release/schema metadata, resource metadata,
+identities, policies, and audit records, so it
 must remain access-controlled. An attacker who *also* has the master key
 still cannot decrypt secrets that were opted into client-bound mode — that
 requires the plaintext client token as well, which never touches the
@@ -387,10 +388,12 @@ no per-key scoping. Each rule is an `(operation, env, app)` tuple:
 ```
 
 - **Operation** patterns: an exact operation (`secret:read`), a category
-  wildcard (`secret:*`, `parameter:*`, `admin:*`, matching even multi-segment
-  admin ops), or the global wildcard `*`. The known operations are
+  wildcard (`secret:*`, `parameter:*`, `configuration-release:*`, `admin:*`,
+  matching even multi-segment admin ops), or the global wildcard `*`. The
+  known operations are
   `parameter:{read,write,list,delete}`,
-  `secret:{read,write,list,disable,destroy,promote}`, and
+  `secret:{read,write,list,disable,destroy,promote}`,
+  `configuration-release:{create,read,validate,activate,list,watch}`, and
   `admin:{namespace:create,namespace:update,namespace:delete,identity:cert,policy:write,audit:read,key:rotate}`
   (`domain.Op*` constants).
 - **`env` / `app`**: an exact label or `"*"` (`policy.labelMatches`). There is
@@ -411,7 +414,8 @@ no per-key scoping. Each rule is an `(operation, env, app)` tuple:
 §3/§6) is what makes "endpoint + credential and you're done" real: an identity
 bound to a namespace may perform read/list operations **in its own namespace
 with no policy rule at all**. The implicit set is exactly
-`parameter:read`, `parameter:list`, `secret:read`, and `secret:list`; a
+`parameter:read`, `parameter:list`, `secret:read`, `secret:list`,
+`configuration-release:read`, and `configuration-release:watch`; an ordinary
 subscribe rides on the same grant (it is authorized once, as a namespace-level
 `parameter:read`, when the stream registers). It applies **only** to the
 caller's own namespace — access to any *other* namespace, and every write,
@@ -458,6 +462,48 @@ normalized and validated at write time (`policy.ValidateRules`): unknown
 operations are rejected, an empty `env`/`app` normalizes to `"*"`, and
 non-`"*"` labels are validated by `internal/keyutil`.
 
+## Configuration release security boundary
+
+A configuration release is an immutable set of exact references and
+non-sensitive metadata, not a capability. Permission to create, read,
+validate, activate, list, or watch a release does **not** grant access to any
+referenced parameter or secret. Creation and validation independently
+authorize resource reads, including every cross-namespace reference; each SDK
+loader fetches pinned values through the existing parameter and secret RPCs and
+their existing authorization and cryptographic checks.
+
+Secret entries persist only resource identity/version, content type,
+non-sensitive metadata, and the booleans `client_bound` and
+`has_access_token`. Secret plaintext, token hashes, plaintext access tokens,
+and client-bound key shares never enter release rows, digests, watch events,
+validation errors, diffs, acknowledgement diagnostics, logs, or metrics. A
+loader's token provider is local application code and is invoked only for a
+protected secret; the credential is sent only on that secret's read RPC.
+
+The deterministic release digest covers an alias-sorted protobuf projection of
+schema and resource pins, captured metadata, and parameter digests. It excludes
+values, tokens, timestamps, creator identity, activation revision, and movable
+labels. Parameters are not secret, but resolved parameter values are still
+excluded from default snapshot formatting to avoid dumping a complete runtime
+configuration. Secret values retain the SDK's redacting `Secret` type and
+require explicit value access.
+
+Current and previous releases are protected against parameter deletion,
+secret deletion, and secret-version destruction in the same storage
+transaction as the destructive operation. A conflict returns
+`FAILED_PRECONDITION`, identifies the release/version/alias, and is audited.
+This is referential integrity, not irrevocability: disabling a secret version
+remains an emergency revocation mechanism, and a later validation/loading
+attempt rejects an unreadable pin rather than revealing it.
+
+Lifecycle rows are per process instance and state. `received` means the loader
+finished resolution and snapshot construction; it is distinct from ordinary
+namespace-stream transport acknowledgement. `prepared`, `applied`, and
+`rejected` describe application lifecycle. Rejection diagnostics supplied by
+applications are stored only as `[redacted]`; operators diagnose from the
+bounded category. Connection state is stored separately, so registration does
+not fabricate a lifecycle acknowledgement.
+
 ## Namespace and key validation
 
 Namespaces and keys are validated by `internal/keyutil` (the successor to the
@@ -482,7 +528,10 @@ an extra namespace segment through a key.
 
 Every secret read, secret reveal, secret/parameter write, version
 promotion, disable, destroy, policy change, namespace change,
-authentication failure, authorization denial, and KEK rotation is audited
+authentication failure, authorization denial, KEK rotation, schema
+registration, release create/validate/activate/rollback, CAS conflict,
+release lifecycle acknowledgement, and blocked release-reference destruction
+is audited
 (`internal/core/*.go`, `Service.audit`/`auditOp`/`auditStrict`) into
 `audit_events`. Audit records carry actor identity/kind, the resource's
 `env`/`app`/`key`/version (denormalized as text with no foreign key, so the
@@ -518,6 +567,11 @@ Redaction is enforced by type, not by call-site discipline:
   `StringValue()`. This makes accidental logging of a secret a type error
   you'd have to work around, not a mistake you can make by passing the
   wrong variable to `%v`.
+- Go `ReleaseSnapshot` formatting and JSON marshaling contain only release
+  identity and entry metadata; Python `ReleaseSnapshot` formatting similarly
+  reports counts rather than resolved maps. Their nested secret values remain
+  redacting `Secret` objects. Release/status metric types deliberately omit
+  aliases, paths, diagnostics, values, and token material.
 - Server-side, the JSON HTTP API's `SecretMetadata` shape
   (`docs/http-api.md`) never includes a value field at all — the only
   endpoint that can return plaintext is the admin-only `POST

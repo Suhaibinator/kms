@@ -10,7 +10,7 @@ For the encryption and authorization design behind these procedures, see
 > `internal/cli`. The offline commands (`init`, `migrate`, `check`, `backup`,
 > `restore`, `create-admin`, `rotate-kek`, `import`) operate directly on the
 > SQLite file; the `admin` command group and the convenience commands
-> (`put-secret`, `get-secret`, `put-parameter`, `list`) talk to a running
+> (`put-secret`, `get-secret`, `put-parameter`, `list`, `release`) talk to a running
 > server over gRPC. `make build` produces a working `bin/parameter-store`,
 > and `serve` opens both the gRPC and HTTP listeners
 > (`cmd/parameter-store/main.go` wires `cli.GRPCFactory` to
@@ -53,6 +53,9 @@ watch:
   heartbeat_interval: 30s
   retain_duration: 24h
   retain_rows: 10000
+  release_retain_duration: 2160h       # 90 days
+  release_retain_versions: 100
+  release_subscriber_retain_duration: 720h  # 30 days
 
 log:
   level: "info"
@@ -163,6 +166,84 @@ A literal `--` ends flag parsing: everything after it is taken as
 positional arguments verbatim, even if it begins with `-`. Use it when a
 value itself looks like a flag, e.g. `parameter-store put-parameter
 /prod/gradethis/flag -- -5`.
+
+### Configuration release commands
+
+The `release` command group uses the same gRPC connection flags as the other
+convenience commands. A release definition is strict JSON or YAML:
+
+```yaml
+namespace: prod/gradethis
+name: runtime
+schema_id: gradethis/runtime
+schema_version: 1
+entries:
+  - alias: rate_limits
+    kind: parameter
+    key: config/rate-limits       # relative to the release namespace
+    label: current                # resolved before the release is stored
+  - alias: db_password
+    kind: secret
+    key: db-password
+    version: 3
+```
+
+An absolute `key`, such as `/shared/platform/feature-flags`, creates a
+cross-namespace reference subject to independent resource authorization.
+Specify `version` or `label`, not both; omitting both resolves `current`.
+
+```bash
+parameter-store release schema create gradethis/runtime runtime.schema.json \
+  --endpoint localhost:8443 --token "$ADMIN_TOKEN" --insecure
+parameter-store release schema show gradethis/runtime 1 \
+  --endpoint localhost:8443 --token "$ADMIN_TOKEN" --insecure
+parameter-store release schema list gradethis/runtime \
+  --endpoint localhost:8443 --token "$ADMIN_TOKEN" --insecure
+
+parameter-store release create runtime-release.yaml \
+  --endpoint localhost:8443 --token "$ADMIN_TOKEN" --insecure
+parameter-store release validate prod/gradethis runtime 1 \
+  --endpoint localhost:8443 --token "$ADMIN_TOKEN" --insecure
+parameter-store release show prod/gradethis runtime 1 \
+  --endpoint localhost:8443 --token "$ADMIN_TOKEN" --insecure
+parameter-store release list prod/gradethis runtime \
+  --endpoint localhost:8443 --token "$ADMIN_TOKEN" --insecure
+parameter-store release diff prod/gradethis runtime 1 2 \
+  --endpoint localhost:8443 --token "$ADMIN_TOKEN" --insecure
+```
+
+Activate with compare-and-swap to avoid overwriting an activation you did not
+observe. `0` means “expect no active release”:
+
+```bash
+parameter-store release activate prod/gradethis runtime 1 \
+  --expected-current-version 0 \
+  --endpoint localhost:8443 --token "$ADMIN_TOKEN" --insecure
+
+# Defaults to the active release's previous version and includes a CAS guard.
+parameter-store release rollback prod/gradethis runtime \
+  --endpoint localhost:8443 --token "$ADMIN_TOKEN" --insecure
+
+# Or reactivate any retained immutable version directly.
+parameter-store release rollback prod/gradethis runtime 1 \
+  --endpoint localhost:8443 --token "$ADMIN_TOKEN" --insecure
+```
+
+`show` and `diff` print aliases, references, exact versions, content types,
+and parameter digests only. They never read or render secret plaintext or
+tokens. `subscribers` is admin-only and pivots the per-state rows into one line
+per process instance:
+
+```bash
+parameter-store release subscribers prod/gradethis runtime \
+  --endpoint localhost:8443 --token "$ADMIN_TOKEN" --insecure
+# CLIENT  INSTANCE  RECEIVED  PREPARED  APPLIED  REJECTED  LAG  CONNECTED
+```
+
+The embedded **Releases** page offers equivalent create, schema, validate,
+diff, activate, rollback, and subscriber views. Its secret entries are
+metadata-only. Full behavior is in
+[`configuration-releases.md`](configuration-releases.md).
 
 ## Startup sequence and readiness
 
@@ -536,7 +617,9 @@ generating a new key file. Every rotation is audited as `key.rotate`.
   have not started, so probes see a connection failure rather than `not ready`.
 - gRPC standard health service (`grpc.health.v1.Health`) mirrors the same
   readiness signal per registered service name
-  (`kms.v1.ParameterService`, `kms.v1.SecretService`, `kms.v1.WatchService`),
+  (`kms.v1.ParameterService`, `kms.v1.SecretService`, `kms.v1.WatchService`,
+  `kms.v1.ConfigurationReleaseService`, and
+  `kms.v1.ConfigurationSchemaService`),
   refreshed on a 5s interval by default
   (`grpcserver.Config.HealthRefreshInterval`).
 - `GET /api/v1/health` (authenticated-exempt) returns
@@ -548,6 +631,12 @@ generating a new key file. Every rotation is audited as `key.rotate`.
   namespaces, last heartbeat, and last-acked revision. The comparison uses the
   server's global revision, so unrelated namespace changes can make a healthy
   subscriber appear behind; it is not proof that a specific key was applied.
+- The frontend's **Releases** page and `parameter-store release subscribers`
+  show application lifecycle separately from transport receipt. Rows are per
+  process instance and grouped by client name, with latest received, prepared,
+  applied, and rejected release identities, current connection state, and lag
+  against that release name's active activation revision. Registration is
+  visible immediately, before the first lifecycle acknowledgement.
 - The **Audit** page / `GET /api/v1/audit` is the record of every secret
   access, write, admin action, and authorization denial — see
   [`security.md`](security.md#audit-guarantees) for exactly what is and
@@ -565,3 +654,13 @@ subscription manager handles both cases identically) but is worth knowing
 when tuning retention: a longer window means more reconnect scenarios can
 replay cheaply instead of falling back to a snapshot, at the cost of a
 larger `change_log` table.
+
+Configuration release replay and history have additional guards. By default,
+KMS retains at least the newest 100 inactive release versions and 90 days of
+history (`watch.release_retain_versions`,
+`watch.release_retain_duration`). It never prunes current or previous releases,
+their schema dependencies, or versions required by retained activation replay.
+Disconnected per-instance lifecycle state is pruned after 30 days by default
+(`watch.release_subscriber_retain_duration`). These three settings must be
+positive. Release activation rows are filtered out of the existing namespace
+resource stream; release loaders use their dedicated stream.

@@ -388,6 +388,109 @@ within the subscribed **namespaces** that are absent from a snapshot are
 reverted, so a known key in another namespace is never cleared by an unrelated
 snapshot.
 
+## Atomic release loading
+
+Use `ReleaseLoader` when several parameter and secret versions must be
+prepared and installed as one candidate. It watches one named release in the
+client's home namespace; unlike ordinary `ParameterValue` callbacks, a release
+event cannot be permanently lost to callback-queue saturation.
+
+```go
+loader, err := paramstore.NewReleaseLoader(client, paramstore.ReleaseLoaderConfig{
+    Name:              "runtime",
+    ReconcileInterval: time.Minute, // default
+    MaxConcurrentFetches: 16,       // default; maximum 256
+    SecretTokenProvider: func(alias, path string) (string, bool) {
+        token, ok := bootstrapSecretTokens[alias]
+        return token, ok
+    },
+})
+if err != nil {
+    return err
+}
+
+err = loader.Run(ctx, func(ctx context.Context, candidate paramstore.ReleaseSnapshot) (
+    paramstore.PreparedRelease, error,
+) {
+    limits, ok := candidate.Parameter("rate_limits")
+    if !ok {
+        return nil, errors.New("rate_limits alias is missing")
+    }
+    password, ok := candidate.Secret("db_password")
+    if !ok {
+        return nil, errors.New("db_password alias is missing")
+    }
+
+    // Decode and validate explicitly. Secret plaintext is accessible only
+    // through Value/StringValue, just like a direct GetSecret result.
+    return prepareRuntime(ctx, limits.Value(), password.Value())
+})
+```
+
+`ReleaseLoaderConfig.Name` is required. `ReconcileInterval` defaults to one
+minute and `MaxConcurrentFetches` to 16. `InstanceID` normally stays empty so
+the loader generates one process-lifetime UUID and reuses it across stream
+reconnects; set it only when the runtime already owns a stable replica ID. The
+client's `Config.ClientName` groups replicas in subscriber views.
+
+The `SecretTokenProvider(alias, path)` callback is invoked only for entries
+captured as token-protected or client-bound. Tokens remain local and are sent
+only as metadata on that pinned secret's `GetSecret` RPC; they never enter the
+release, snapshot formatting, watch event, acknowledgement, metric, or KMS
+storage.
+
+`ReleaseSnapshot` provides `Namespace`, `Name`, `Version`,
+`ActivationRevision`, `SchemaID`, `SchemaVersion`, `Digest`, and
+`MetadataJSON`, plus alias-keyed `Entry`/`Entries`, `Parameter`/`Parameters`,
+and `Secret`/`Secrets` accessors. Maps returned from plural accessors are
+copies. Each entry exposes exact path/version, content type, captured metadata,
+parameter digest, and non-sensitive secret protection flags. `String`, every
+`fmt` verb, and JSON marshaling exclude resolved parameter and secret values;
+`Secret` retains its existing `[REDACTED]` formatting.
+
+Application preparation returns:
+
+```go
+type PreparedRelease interface {
+    Commit() // must be infallible; normally an atomic pointer swap
+    Abort()  // frees an uncommitted candidate
+}
+```
+
+The callback context is canceled when a newer activation supersedes the
+candidate. The loader resolves exact pins concurrently, verifies versions and
+digests, reports `received`, calls preparation, reports `prepared`, then
+fresh-reads the active name/version/revision/digest before `Commit`. It calls
+`Abort` exactly once for any successfully prepared candidate that cannot
+commit. A failed initial candidate makes `Run` return; after one successful
+commit, outages and rejected candidates leave the last-known-good release in
+place. A panic in `Commit` is fatal and is never reported as `applied`.
+
+For an explicit typed decode step without reflection:
+
+```go
+err = paramstore.RunTypedRelease(ctx, loader,
+    func(snapshot paramstore.ReleaseSnapshot) (RuntimeConfig, error) {
+        return decodeRuntime(snapshot)
+    },
+    func(ctx context.Context, cfg RuntimeConfig) (paramstore.PreparedRelease, error) {
+        return prepareTypedRuntime(ctx, cfg)
+    },
+)
+```
+
+`loader.Status()` and `loader.Stats()` return bounded redacted state and
+low-cardinality counters: observed/applied version and revision, lifecycle
+state, reconnects, timings, and rejection-category counts. They contain no
+aliases, paths, values, tokens, or diagnostics.
+
+The final fresh read is a staleness fence, not a distributed lock. A release
+activated immediately after it can briefly leave this replica on the prior
+version; the newer activation is then handled as the next candidate. Replicas
+apply independently—there is no fleet-wide barrier in version 1. Server-side
+release/schema semantics are documented in
+[`configuration-releases.md`](configuration-releases.md).
+
 ## Testing against a fake server
 
 `sdk/go/paramstore/paramstoretest` provides an in-process, scriptable fake

@@ -395,6 +395,103 @@ returned `stop` function unregisters the watcher.
 `Client.current_revision` is a read-only property: the last revision the
 active subscription has applied, or `0` if nothing is being watched.
 
+## Atomic release loading
+
+Use `ReleaseLoader` when related parameter and secret versions must be
+prepared and installed as one candidate. It uses the dedicated release stream,
+not the ordinary namespace callback queue.
+
+```python
+import threading
+from kms_paramstore import (
+    ReleaseLoader, ReleaseLoaderConfig, ReleaseSnapshot,
+)
+
+loader = ReleaseLoader(client, ReleaseLoaderConfig(
+    name="runtime",
+    reconcile_interval=60.0,       # default
+    max_concurrent_fetches=16,     # default; maximum 256
+    secret_token_provider=lambda alias, path: local_tokens.get(alias),
+))
+
+class PreparedRuntime:
+    def __init__(self, next_runtime):
+        self.next_runtime = next_runtime
+
+    def commit(self) -> None:
+        # Must be infallible; normally an atomic reference swap.
+        runtime_ref.set(self.next_runtime)
+
+    def abort(self) -> None:
+        self.next_runtime.close()
+
+def prepare(cancel: threading.Event, snapshot: ReleaseSnapshot) -> PreparedRuntime:
+    limits_json = snapshot.parameters["rate_limits"]
+    password = snapshot.secrets["db_password"]
+    # Decode and validate explicitly. Secret plaintext is available only via
+    # password.value / password.string_value.
+    return PreparedRuntime(build_runtime(cancel, limits_json, password.value))
+
+loader.run(prepare)  # blocks until loader.stop() or the optional stop_event
+```
+
+`ReleaseLoaderConfig.name` is required. `namespace=None` uses the client's
+namespace/discovery; set a namespace string or `NamespaceRef` only when a
+loader should be explicitly scoped. `client_name=None` uses the client's
+name. A process-wide UUID is used as `instance_id` and reused across
+reconnects unless one is supplied. Reconciliation defaults to 60 seconds,
+resolution concurrency to 16, reconnect backoff to 0.25–30 seconds, and RPC
+deadlines to the client's default unless `request_timeout` is set.
+
+The token provider receives `(alias, absolute_path)` and may return a token
+string, `(token, bool)`, or `None`. It is called only for a release entry
+captured as token-protected or client-bound. Tokens remain local and are sent
+only with the corresponding pinned secret read; they never enter KMS release
+storage, snapshots, watch events, lifecycle acknowledgements, logs, or metrics.
+
+`ReleaseSnapshot` is a frozen dataclass with namespace, release version,
+activation revision, schema ID/version, deterministic digest, metadata,
+immutable entry tuple, and read-only alias-keyed parameter/secret mappings.
+Each `ReleaseEntry` contains exact path/version, content type, captured
+metadata, parameter digest, and non-sensitive secret protection flags. Snapshot
+`str`/`repr`/formatting omit resolved values, and every `Secret` remains
+`[REDACTED]` unless `.value` or `.string_value` is used explicitly.
+
+Preparation receives a cancellation event set when a newer activation
+supersedes the candidate. The loader resolves exact pins concurrently,
+verifies versions and digests, reports `received`, calls preparation, reports
+`prepared`, and fresh-reads active name/version/revision/digest before
+`commit`. It calls `abort` exactly once for every successfully prepared object
+that does not commit. An initial failure raises `ReleaseStartupError`; after a
+successful commit, outages and rejected candidates retain the last-known-good
+release. An exception from `commit` raises fatal `ReleaseCommitError` and is
+never acknowledged as applied. A `ReleaseLoader` may be run only once.
+
+For explicit typed decoding without descriptors, dataclass reflection, or
+schema generation:
+
+```python
+from kms_paramstore import run_typed_release
+
+run_typed_release(
+    loader,
+    decode=lambda snapshot: decode_runtime(snapshot),
+    prepare=lambda cancel, cfg: prepare_runtime(cancel, cfg),
+    stop_event=shutdown,
+)
+```
+
+`loader.status()` and `loader.stats()` are thread-safe, frozen, redacted views
+of observed/applied versions and revisions, state, bounded timing/reconnect
+counters, and bounded acknowledgement/rejection counts. They contain no
+aliases, paths, values, tokens, or diagnostics.
+
+The final active read is a staleness fence, not a distributed lock. An
+activation immediately after it can briefly leave this replica on the prior
+release; the next activation event prepares the newer candidate. Replicas
+apply independently—version 1 has no fleet-wide barrier. See
+[`configuration-releases.md`](configuration-releases.md) for server semantics.
+
 ## Parity with the Go SDK
 
 The two SDKs are intentionally close; the naming differs where each
@@ -407,6 +504,8 @@ language's conventions do (see [`sdk-go.md`](sdk-go.md)):
 | Unbound + relative key | `ErrNoNamespace` | `NoNamespaceError` (a `ConfigError`) |
 | Identity discovery | `WhoAmI` | `client.who_am_i()` / `WhoAmI` dataclass |
 | Cross-namespace key | leading-`/` display path | leading-`/` display path |
+| Atomic release loader | `ReleaseLoader.Run` | `ReleaseLoader.run` |
+| Explicit typed helper | `RunTypedRelease[T]` | `run_typed_release` |
 
 ## What this document does not cover
 
