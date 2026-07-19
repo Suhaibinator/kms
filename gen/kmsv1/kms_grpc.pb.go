@@ -751,6 +751,519 @@ var WatchService_ServiceDesc = grpc.ServiceDesc{
 }
 
 const (
+	ConfigurationReleaseService_CreateRelease_FullMethodName    = "/kms.v1.ConfigurationReleaseService/CreateRelease"
+	ConfigurationReleaseService_ValidateRelease_FullMethodName  = "/kms.v1.ConfigurationReleaseService/ValidateRelease"
+	ConfigurationReleaseService_ActivateRelease_FullMethodName  = "/kms.v1.ConfigurationReleaseService/ActivateRelease"
+	ConfigurationReleaseService_GetRelease_FullMethodName       = "/kms.v1.ConfigurationReleaseService/GetRelease"
+	ConfigurationReleaseService_GetActiveRelease_FullMethodName = "/kms.v1.ConfigurationReleaseService/GetActiveRelease"
+	ConfigurationReleaseService_ListReleases_FullMethodName     = "/kms.v1.ConfigurationReleaseService/ListReleases"
+	ConfigurationReleaseService_WatchRelease_FullMethodName     = "/kms.v1.ConfigurationReleaseService/WatchRelease"
+)
+
+// ConfigurationReleaseServiceClient is the client API for ConfigurationReleaseService service.
+//
+// For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
+//
+// Configuration releases are immutable namespace-scoped manifests. They
+// contain exact parameter/secret version references and non-sensitive
+// metadata only; values and secret access tokens are never embedded.
+type ConfigurationReleaseServiceClient interface {
+	CreateRelease(ctx context.Context, in *CreateReleaseRequest, opts ...grpc.CallOption) (*CreateReleaseResponse, error)
+	ValidateRelease(ctx context.Context, in *ValidateReleaseRequest, opts ...grpc.CallOption) (*ValidateReleaseResponse, error)
+	ActivateRelease(ctx context.Context, in *ActivateReleaseRequest, opts ...grpc.CallOption) (*ActivateReleaseResponse, error)
+	GetRelease(ctx context.Context, in *GetReleaseRequest, opts ...grpc.CallOption) (*GetReleaseResponse, error)
+	GetActiveRelease(ctx context.Context, in *GetActiveReleaseRequest, opts ...grpc.CallOption) (*GetActiveReleaseResponse, error)
+	ListReleases(ctx context.Context, in *ListReleasesRequest, opts ...grpc.CallOption) (*ListReleasesResponse, error)
+	WatchRelease(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[WatchReleaseRequest, WatchReleaseEvent], error)
+}
+
+type configurationReleaseServiceClient struct {
+	cc grpc.ClientConnInterface
+}
+
+func NewConfigurationReleaseServiceClient(cc grpc.ClientConnInterface) ConfigurationReleaseServiceClient {
+	return &configurationReleaseServiceClient{cc}
+}
+
+func (c *configurationReleaseServiceClient) CreateRelease(ctx context.Context, in *CreateReleaseRequest, opts ...grpc.CallOption) (*CreateReleaseResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(CreateReleaseResponse)
+	err := c.cc.Invoke(ctx, ConfigurationReleaseService_CreateRelease_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *configurationReleaseServiceClient) ValidateRelease(ctx context.Context, in *ValidateReleaseRequest, opts ...grpc.CallOption) (*ValidateReleaseResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ValidateReleaseResponse)
+	err := c.cc.Invoke(ctx, ConfigurationReleaseService_ValidateRelease_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *configurationReleaseServiceClient) ActivateRelease(ctx context.Context, in *ActivateReleaseRequest, opts ...grpc.CallOption) (*ActivateReleaseResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ActivateReleaseResponse)
+	err := c.cc.Invoke(ctx, ConfigurationReleaseService_ActivateRelease_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *configurationReleaseServiceClient) GetRelease(ctx context.Context, in *GetReleaseRequest, opts ...grpc.CallOption) (*GetReleaseResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetReleaseResponse)
+	err := c.cc.Invoke(ctx, ConfigurationReleaseService_GetRelease_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *configurationReleaseServiceClient) GetActiveRelease(ctx context.Context, in *GetActiveReleaseRequest, opts ...grpc.CallOption) (*GetActiveReleaseResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetActiveReleaseResponse)
+	err := c.cc.Invoke(ctx, ConfigurationReleaseService_GetActiveRelease_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *configurationReleaseServiceClient) ListReleases(ctx context.Context, in *ListReleasesRequest, opts ...grpc.CallOption) (*ListReleasesResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListReleasesResponse)
+	err := c.cc.Invoke(ctx, ConfigurationReleaseService_ListReleases_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *configurationReleaseServiceClient) WatchRelease(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[WatchReleaseRequest, WatchReleaseEvent], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &ConfigurationReleaseService_ServiceDesc.Streams[0], ConfigurationReleaseService_WatchRelease_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[WatchReleaseRequest, WatchReleaseEvent]{ClientStream: stream}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type ConfigurationReleaseService_WatchReleaseClient = grpc.BidiStreamingClient[WatchReleaseRequest, WatchReleaseEvent]
+
+// ConfigurationReleaseServiceServer is the server API for ConfigurationReleaseService service.
+// All implementations must embed UnimplementedConfigurationReleaseServiceServer
+// for forward compatibility.
+//
+// Configuration releases are immutable namespace-scoped manifests. They
+// contain exact parameter/secret version references and non-sensitive
+// metadata only; values and secret access tokens are never embedded.
+type ConfigurationReleaseServiceServer interface {
+	CreateRelease(context.Context, *CreateReleaseRequest) (*CreateReleaseResponse, error)
+	ValidateRelease(context.Context, *ValidateReleaseRequest) (*ValidateReleaseResponse, error)
+	ActivateRelease(context.Context, *ActivateReleaseRequest) (*ActivateReleaseResponse, error)
+	GetRelease(context.Context, *GetReleaseRequest) (*GetReleaseResponse, error)
+	GetActiveRelease(context.Context, *GetActiveReleaseRequest) (*GetActiveReleaseResponse, error)
+	ListReleases(context.Context, *ListReleasesRequest) (*ListReleasesResponse, error)
+	WatchRelease(grpc.BidiStreamingServer[WatchReleaseRequest, WatchReleaseEvent]) error
+	mustEmbedUnimplementedConfigurationReleaseServiceServer()
+}
+
+// UnimplementedConfigurationReleaseServiceServer must be embedded to have
+// forward compatible implementations.
+//
+// NOTE: this should be embedded by value instead of pointer to avoid a nil
+// pointer dereference when methods are called.
+type UnimplementedConfigurationReleaseServiceServer struct{}
+
+func (UnimplementedConfigurationReleaseServiceServer) CreateRelease(context.Context, *CreateReleaseRequest) (*CreateReleaseResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method CreateRelease not implemented")
+}
+func (UnimplementedConfigurationReleaseServiceServer) ValidateRelease(context.Context, *ValidateReleaseRequest) (*ValidateReleaseResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ValidateRelease not implemented")
+}
+func (UnimplementedConfigurationReleaseServiceServer) ActivateRelease(context.Context, *ActivateReleaseRequest) (*ActivateReleaseResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ActivateRelease not implemented")
+}
+func (UnimplementedConfigurationReleaseServiceServer) GetRelease(context.Context, *GetReleaseRequest) (*GetReleaseResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetRelease not implemented")
+}
+func (UnimplementedConfigurationReleaseServiceServer) GetActiveRelease(context.Context, *GetActiveReleaseRequest) (*GetActiveReleaseResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetActiveRelease not implemented")
+}
+func (UnimplementedConfigurationReleaseServiceServer) ListReleases(context.Context, *ListReleasesRequest) (*ListReleasesResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListReleases not implemented")
+}
+func (UnimplementedConfigurationReleaseServiceServer) WatchRelease(grpc.BidiStreamingServer[WatchReleaseRequest, WatchReleaseEvent]) error {
+	return status.Error(codes.Unimplemented, "method WatchRelease not implemented")
+}
+func (UnimplementedConfigurationReleaseServiceServer) mustEmbedUnimplementedConfigurationReleaseServiceServer() {
+}
+func (UnimplementedConfigurationReleaseServiceServer) testEmbeddedByValue() {}
+
+// UnsafeConfigurationReleaseServiceServer may be embedded to opt out of forward compatibility for this service.
+// Use of this interface is not recommended, as added methods to ConfigurationReleaseServiceServer will
+// result in compilation errors.
+type UnsafeConfigurationReleaseServiceServer interface {
+	mustEmbedUnimplementedConfigurationReleaseServiceServer()
+}
+
+func RegisterConfigurationReleaseServiceServer(s grpc.ServiceRegistrar, srv ConfigurationReleaseServiceServer) {
+	// If the following call panics, it indicates UnimplementedConfigurationReleaseServiceServer was
+	// embedded by pointer and is nil.  This will cause panics if an
+	// unimplemented method is ever invoked, so we test this at initialization
+	// time to prevent it from happening at runtime later due to I/O.
+	if t, ok := srv.(interface{ testEmbeddedByValue() }); ok {
+		t.testEmbeddedByValue()
+	}
+	s.RegisterService(&ConfigurationReleaseService_ServiceDesc, srv)
+}
+
+func _ConfigurationReleaseService_CreateRelease_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CreateReleaseRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ConfigurationReleaseServiceServer).CreateRelease(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ConfigurationReleaseService_CreateRelease_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ConfigurationReleaseServiceServer).CreateRelease(ctx, req.(*CreateReleaseRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ConfigurationReleaseService_ValidateRelease_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ValidateReleaseRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ConfigurationReleaseServiceServer).ValidateRelease(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ConfigurationReleaseService_ValidateRelease_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ConfigurationReleaseServiceServer).ValidateRelease(ctx, req.(*ValidateReleaseRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ConfigurationReleaseService_ActivateRelease_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ActivateReleaseRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ConfigurationReleaseServiceServer).ActivateRelease(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ConfigurationReleaseService_ActivateRelease_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ConfigurationReleaseServiceServer).ActivateRelease(ctx, req.(*ActivateReleaseRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ConfigurationReleaseService_GetRelease_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetReleaseRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ConfigurationReleaseServiceServer).GetRelease(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ConfigurationReleaseService_GetRelease_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ConfigurationReleaseServiceServer).GetRelease(ctx, req.(*GetReleaseRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ConfigurationReleaseService_GetActiveRelease_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetActiveReleaseRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ConfigurationReleaseServiceServer).GetActiveRelease(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ConfigurationReleaseService_GetActiveRelease_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ConfigurationReleaseServiceServer).GetActiveRelease(ctx, req.(*GetActiveReleaseRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ConfigurationReleaseService_ListReleases_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListReleasesRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ConfigurationReleaseServiceServer).ListReleases(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ConfigurationReleaseService_ListReleases_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ConfigurationReleaseServiceServer).ListReleases(ctx, req.(*ListReleasesRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ConfigurationReleaseService_WatchRelease_Handler(srv interface{}, stream grpc.ServerStream) error {
+	return srv.(ConfigurationReleaseServiceServer).WatchRelease(&grpc.GenericServerStream[WatchReleaseRequest, WatchReleaseEvent]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type ConfigurationReleaseService_WatchReleaseServer = grpc.BidiStreamingServer[WatchReleaseRequest, WatchReleaseEvent]
+
+// ConfigurationReleaseService_ServiceDesc is the grpc.ServiceDesc for ConfigurationReleaseService service.
+// It's only intended for direct use with grpc.RegisterService,
+// and not to be introspected or modified (even as a copy)
+var ConfigurationReleaseService_ServiceDesc = grpc.ServiceDesc{
+	ServiceName: "kms.v1.ConfigurationReleaseService",
+	HandlerType: (*ConfigurationReleaseServiceServer)(nil),
+	Methods: []grpc.MethodDesc{
+		{
+			MethodName: "CreateRelease",
+			Handler:    _ConfigurationReleaseService_CreateRelease_Handler,
+		},
+		{
+			MethodName: "ValidateRelease",
+			Handler:    _ConfigurationReleaseService_ValidateRelease_Handler,
+		},
+		{
+			MethodName: "ActivateRelease",
+			Handler:    _ConfigurationReleaseService_ActivateRelease_Handler,
+		},
+		{
+			MethodName: "GetRelease",
+			Handler:    _ConfigurationReleaseService_GetRelease_Handler,
+		},
+		{
+			MethodName: "GetActiveRelease",
+			Handler:    _ConfigurationReleaseService_GetActiveRelease_Handler,
+		},
+		{
+			MethodName: "ListReleases",
+			Handler:    _ConfigurationReleaseService_ListReleases_Handler,
+		},
+	},
+	Streams: []grpc.StreamDesc{
+		{
+			StreamName:    "WatchRelease",
+			Handler:       _ConfigurationReleaseService_WatchRelease_Handler,
+			ServerStreams: true,
+			ClientStreams: true,
+		},
+	},
+	Metadata: "kms/v1/kms.proto",
+}
+
+const (
+	ConfigurationSchemaService_CreateSchema_FullMethodName = "/kms.v1.ConfigurationSchemaService/CreateSchema"
+	ConfigurationSchemaService_GetSchema_FullMethodName    = "/kms.v1.ConfigurationSchemaService/GetSchema"
+	ConfigurationSchemaService_ListSchemas_FullMethodName  = "/kms.v1.ConfigurationSchemaService/ListSchemas"
+)
+
+// ConfigurationSchemaServiceClient is the client API for ConfigurationSchemaService service.
+//
+// For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
+type ConfigurationSchemaServiceClient interface {
+	CreateSchema(ctx context.Context, in *CreateSchemaRequest, opts ...grpc.CallOption) (*CreateSchemaResponse, error)
+	GetSchema(ctx context.Context, in *GetSchemaRequest, opts ...grpc.CallOption) (*GetSchemaResponse, error)
+	ListSchemas(ctx context.Context, in *ListSchemasRequest, opts ...grpc.CallOption) (*ListSchemasResponse, error)
+}
+
+type configurationSchemaServiceClient struct {
+	cc grpc.ClientConnInterface
+}
+
+func NewConfigurationSchemaServiceClient(cc grpc.ClientConnInterface) ConfigurationSchemaServiceClient {
+	return &configurationSchemaServiceClient{cc}
+}
+
+func (c *configurationSchemaServiceClient) CreateSchema(ctx context.Context, in *CreateSchemaRequest, opts ...grpc.CallOption) (*CreateSchemaResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(CreateSchemaResponse)
+	err := c.cc.Invoke(ctx, ConfigurationSchemaService_CreateSchema_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *configurationSchemaServiceClient) GetSchema(ctx context.Context, in *GetSchemaRequest, opts ...grpc.CallOption) (*GetSchemaResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetSchemaResponse)
+	err := c.cc.Invoke(ctx, ConfigurationSchemaService_GetSchema_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *configurationSchemaServiceClient) ListSchemas(ctx context.Context, in *ListSchemasRequest, opts ...grpc.CallOption) (*ListSchemasResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListSchemasResponse)
+	err := c.cc.Invoke(ctx, ConfigurationSchemaService_ListSchemas_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// ConfigurationSchemaServiceServer is the server API for ConfigurationSchemaService service.
+// All implementations must embed UnimplementedConfigurationSchemaServiceServer
+// for forward compatibility.
+type ConfigurationSchemaServiceServer interface {
+	CreateSchema(context.Context, *CreateSchemaRequest) (*CreateSchemaResponse, error)
+	GetSchema(context.Context, *GetSchemaRequest) (*GetSchemaResponse, error)
+	ListSchemas(context.Context, *ListSchemasRequest) (*ListSchemasResponse, error)
+	mustEmbedUnimplementedConfigurationSchemaServiceServer()
+}
+
+// UnimplementedConfigurationSchemaServiceServer must be embedded to have
+// forward compatible implementations.
+//
+// NOTE: this should be embedded by value instead of pointer to avoid a nil
+// pointer dereference when methods are called.
+type UnimplementedConfigurationSchemaServiceServer struct{}
+
+func (UnimplementedConfigurationSchemaServiceServer) CreateSchema(context.Context, *CreateSchemaRequest) (*CreateSchemaResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method CreateSchema not implemented")
+}
+func (UnimplementedConfigurationSchemaServiceServer) GetSchema(context.Context, *GetSchemaRequest) (*GetSchemaResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetSchema not implemented")
+}
+func (UnimplementedConfigurationSchemaServiceServer) ListSchemas(context.Context, *ListSchemasRequest) (*ListSchemasResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListSchemas not implemented")
+}
+func (UnimplementedConfigurationSchemaServiceServer) mustEmbedUnimplementedConfigurationSchemaServiceServer() {
+}
+func (UnimplementedConfigurationSchemaServiceServer) testEmbeddedByValue() {}
+
+// UnsafeConfigurationSchemaServiceServer may be embedded to opt out of forward compatibility for this service.
+// Use of this interface is not recommended, as added methods to ConfigurationSchemaServiceServer will
+// result in compilation errors.
+type UnsafeConfigurationSchemaServiceServer interface {
+	mustEmbedUnimplementedConfigurationSchemaServiceServer()
+}
+
+func RegisterConfigurationSchemaServiceServer(s grpc.ServiceRegistrar, srv ConfigurationSchemaServiceServer) {
+	// If the following call panics, it indicates UnimplementedConfigurationSchemaServiceServer was
+	// embedded by pointer and is nil.  This will cause panics if an
+	// unimplemented method is ever invoked, so we test this at initialization
+	// time to prevent it from happening at runtime later due to I/O.
+	if t, ok := srv.(interface{ testEmbeddedByValue() }); ok {
+		t.testEmbeddedByValue()
+	}
+	s.RegisterService(&ConfigurationSchemaService_ServiceDesc, srv)
+}
+
+func _ConfigurationSchemaService_CreateSchema_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CreateSchemaRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ConfigurationSchemaServiceServer).CreateSchema(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ConfigurationSchemaService_CreateSchema_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ConfigurationSchemaServiceServer).CreateSchema(ctx, req.(*CreateSchemaRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ConfigurationSchemaService_GetSchema_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetSchemaRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ConfigurationSchemaServiceServer).GetSchema(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ConfigurationSchemaService_GetSchema_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ConfigurationSchemaServiceServer).GetSchema(ctx, req.(*GetSchemaRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ConfigurationSchemaService_ListSchemas_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListSchemasRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ConfigurationSchemaServiceServer).ListSchemas(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ConfigurationSchemaService_ListSchemas_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ConfigurationSchemaServiceServer).ListSchemas(ctx, req.(*ListSchemasRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+// ConfigurationSchemaService_ServiceDesc is the grpc.ServiceDesc for ConfigurationSchemaService service.
+// It's only intended for direct use with grpc.RegisterService,
+// and not to be introspected or modified (even as a copy)
+var ConfigurationSchemaService_ServiceDesc = grpc.ServiceDesc{
+	ServiceName: "kms.v1.ConfigurationSchemaService",
+	HandlerType: (*ConfigurationSchemaServiceServer)(nil),
+	Methods: []grpc.MethodDesc{
+		{
+			MethodName: "CreateSchema",
+			Handler:    _ConfigurationSchemaService_CreateSchema_Handler,
+		},
+		{
+			MethodName: "GetSchema",
+			Handler:    _ConfigurationSchemaService_GetSchema_Handler,
+		},
+		{
+			MethodName: "ListSchemas",
+			Handler:    _ConfigurationSchemaService_ListSchemas_Handler,
+		},
+	},
+	Streams:  []grpc.StreamDesc{},
+	Metadata: "kms/v1/kms.proto",
+}
+
+const (
 	AdminService_CreateNamespace_FullMethodName           = "/kms.v1.AdminService/CreateNamespace"
 	AdminService_UpdateNamespace_FullMethodName           = "/kms.v1.AdminService/UpdateNamespace"
 	AdminService_DeleteNamespace_FullMethodName           = "/kms.v1.AdminService/DeleteNamespace"
@@ -769,6 +1282,7 @@ const (
 	AdminService_GetCACertificate_FullMethodName          = "/kms.v1.AdminService/GetCACertificate"
 	AdminService_ListAuditEvents_FullMethodName           = "/kms.v1.AdminService/ListAuditEvents"
 	AdminService_ListSubscribers_FullMethodName           = "/kms.v1.AdminService/ListSubscribers"
+	AdminService_ListReleaseSubscribers_FullMethodName    = "/kms.v1.AdminService/ListReleaseSubscribers"
 	AdminService_Health_FullMethodName                    = "/kms.v1.AdminService/Health"
 )
 
@@ -794,6 +1308,7 @@ type AdminServiceClient interface {
 	GetCACertificate(ctx context.Context, in *GetCACertificateRequest, opts ...grpc.CallOption) (*GetCACertificateResponse, error)
 	ListAuditEvents(ctx context.Context, in *ListAuditEventsRequest, opts ...grpc.CallOption) (*ListAuditEventsResponse, error)
 	ListSubscribers(ctx context.Context, in *ListSubscribersRequest, opts ...grpc.CallOption) (*ListSubscribersResponse, error)
+	ListReleaseSubscribers(ctx context.Context, in *ListReleaseSubscribersRequest, opts ...grpc.CallOption) (*ListReleaseSubscribersResponse, error)
 	Health(ctx context.Context, in *HealthRequest, opts ...grpc.CallOption) (*HealthResponse, error)
 }
 
@@ -985,6 +1500,16 @@ func (c *adminServiceClient) ListSubscribers(ctx context.Context, in *ListSubscr
 	return out, nil
 }
 
+func (c *adminServiceClient) ListReleaseSubscribers(ctx context.Context, in *ListReleaseSubscribersRequest, opts ...grpc.CallOption) (*ListReleaseSubscribersResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListReleaseSubscribersResponse)
+	err := c.cc.Invoke(ctx, AdminService_ListReleaseSubscribers_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *adminServiceClient) Health(ctx context.Context, in *HealthRequest, opts ...grpc.CallOption) (*HealthResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(HealthResponse)
@@ -1017,6 +1542,7 @@ type AdminServiceServer interface {
 	GetCACertificate(context.Context, *GetCACertificateRequest) (*GetCACertificateResponse, error)
 	ListAuditEvents(context.Context, *ListAuditEventsRequest) (*ListAuditEventsResponse, error)
 	ListSubscribers(context.Context, *ListSubscribersRequest) (*ListSubscribersResponse, error)
+	ListReleaseSubscribers(context.Context, *ListReleaseSubscribersRequest) (*ListReleaseSubscribersResponse, error)
 	Health(context.Context, *HealthRequest) (*HealthResponse, error)
 	mustEmbedUnimplementedAdminServiceServer()
 }
@@ -1081,6 +1607,9 @@ func (UnimplementedAdminServiceServer) ListAuditEvents(context.Context, *ListAud
 }
 func (UnimplementedAdminServiceServer) ListSubscribers(context.Context, *ListSubscribersRequest) (*ListSubscribersResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ListSubscribers not implemented")
+}
+func (UnimplementedAdminServiceServer) ListReleaseSubscribers(context.Context, *ListReleaseSubscribersRequest) (*ListReleaseSubscribersResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListReleaseSubscribers not implemented")
 }
 func (UnimplementedAdminServiceServer) Health(context.Context, *HealthRequest) (*HealthResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method Health not implemented")
@@ -1430,6 +1959,24 @@ func _AdminService_ListSubscribers_Handler(srv interface{}, ctx context.Context,
 	return interceptor(ctx, in, info, handler)
 }
 
+func _AdminService_ListReleaseSubscribers_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListReleaseSubscribersRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AdminServiceServer).ListReleaseSubscribers(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AdminService_ListReleaseSubscribers_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AdminServiceServer).ListReleaseSubscribers(ctx, req.(*ListReleaseSubscribersRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _AdminService_Health_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(HealthRequest)
 	if err := dec(in); err != nil {
@@ -1526,6 +2073,10 @@ var AdminService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ListSubscribers",
 			Handler:    _AdminService_ListSubscribers_Handler,
+		},
+		{
+			MethodName: "ListReleaseSubscribers",
+			Handler:    _AdminService_ListReleaseSubscribers_Handler,
 		},
 		{
 			MethodName: "Health",

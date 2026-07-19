@@ -30,6 +30,9 @@ var (
 	// destroyed version, client-bound mismatch, missing token...).
 	ErrFailedPrecondition = errors.New("failed precondition")
 
+	// ErrAborted: a compare-and-swap or other concurrency guard conflicted.
+	ErrAborted = errors.New("aborted")
+
 	// ErrDecryptFailed: a value could not be decrypted. Callers other than
 	// admins receive it without further detail so a wrong client token and a
 	// corrupted ciphertext are indistinguishable.

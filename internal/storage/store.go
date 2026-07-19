@@ -22,7 +22,7 @@ import (
 
 // schemaVersion is the schema version this build supports. Opening a database
 // stamped with a higher version is refused.
-const schemaVersion = 1
+const schemaVersion = 2
 
 // tsLayout is a fixed-width RFC3339 UTC layout with nanosecond precision. Unlike
 // time.RFC3339Nano it never trims trailing zeros, so every stored timestamp has

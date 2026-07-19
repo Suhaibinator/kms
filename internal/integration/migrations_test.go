@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Suhaibinator/kms/internal/domain"
 	"github.com/Suhaibinator/kms/internal/storage"
 )
 
@@ -48,8 +49,8 @@ func TestMigrationsFreshAndIdempotent(t *testing.T) {
 	if err := db.QueryRow("SELECT MAX(version) FROM schema_migrations").Scan(&version); err != nil {
 		t.Fatalf("read schema_migrations: %v", err)
 	}
-	if version != 1 {
-		t.Errorf("schema version = %d, want 1", version)
+	if version != 2 {
+		t.Errorf("schema version = %d, want 2", version)
 	}
 
 	var ddl string
@@ -66,12 +67,76 @@ func TestMigrationsFreshAndIdempotent(t *testing.T) {
 		"key_metadata", "namespaces", "parameters", "parameter_versions",
 		"parameter_labels", "secrets", "secret_versions", "secret_labels",
 		"identities", "ca_keys", "identity_certs", "policies", "audit_events",
-		"change_log", "schema_migrations",
+		"change_log", "schema_migrations", "configuration_releases",
+		"configuration_release_entries", "configuration_release_labels",
+		"configuration_release_activations", "configuration_schemas", "release_subscriber_states", "release_subscriber_connections",
 	} {
 		var name string
 		err := db.QueryRow("SELECT name FROM sqlite_master WHERE type='table' AND name=?", table).Scan(&name)
 		if err != nil {
 			t.Errorf("expected table %q to exist: %v", table, err)
+		}
+	}
+}
+
+// Configuration releases are an additive schema-v2 upgrade. A database
+// stamped at v1 must gain the new tables without disturbing existing data.
+func TestMigrationV1ToV2AddsConfigurationReleaseTables(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "kms-v1.db")
+	store, err := storage.Open(dbPath)
+	if err != nil {
+		t.Fatalf("create database: %v", err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatalf("close database: %v", err)
+	}
+
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatalf("raw open: %v", err)
+	}
+	for _, table := range []string{
+		"release_subscriber_states", "release_subscriber_connections", "configuration_release_labels",
+		"configuration_release_activations", "configuration_release_entries", "configuration_releases", "configuration_schemas",
+	} {
+		if _, err := db.Exec("DROP TABLE " + table); err != nil {
+			_ = db.Close()
+			t.Fatalf("drop %s: %v", table, err)
+		}
+	}
+	if _, err := db.Exec("UPDATE schema_migrations SET version = 1"); err != nil {
+		_ = db.Close()
+		t.Fatalf("stamp v1: %v", err)
+	}
+	if _, err := db.Exec("INSERT INTO namespaces(env,app,description,allowed_auth_methods,created_by,created_at) VALUES('prod','kept','x','[\"token\"]','root','2026-01-01T00:00:00.000000000Z')"); err != nil {
+		_ = db.Close()
+		t.Fatalf("seed existing data: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close raw database: %v", err)
+	}
+
+	upgraded, err := storage.Open(dbPath)
+	if err != nil {
+		t.Fatalf("upgrade v1 database: %v", err)
+	}
+	defer func() { _ = upgraded.Close() }()
+	if _, err := upgraded.GetNamespace(context.Background(), domain.NamespaceRef{Env: "prod", App: "kept"}); err != nil {
+		t.Fatalf("existing namespace lost during upgrade: %v", err)
+	}
+
+	check, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatalf("inspect upgraded database: %v", err)
+	}
+	defer func() { _ = check.Close() }()
+	for _, table := range []string{
+		"configuration_releases", "configuration_release_entries",
+		"configuration_release_labels", "configuration_release_activations", "configuration_schemas", "release_subscriber_states", "release_subscriber_connections",
+	} {
+		var count int
+		if err := check.QueryRow("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?", table).Scan(&count); err != nil || count != 1 {
+			t.Errorf("schema-v2 table %q missing: count=%d err=%v", table, count, err)
 		}
 	}
 }

@@ -38,6 +38,13 @@ type Options struct {
 	// RetainDuration and RetainRows bound change-log retention at prune time.
 	RetainDuration time.Duration
 	RetainRows     int
+	// ReleaseRetainDuration and ReleaseRetainVersions retain inactive immutable
+	// releases. Active/previous and releases required by retained replay events
+	// are independently protected by storage.
+	ReleaseRetainDuration time.Duration
+	ReleaseRetainVersions int
+	// ReleaseSubscriberRetainDuration bounds disconnected lifecycle rows.
+	ReleaseSubscriberRetainDuration time.Duration
 	// SubscriberBuffer is the per-subscriber event channel depth. A subscriber
 	// that lets it fill is dropped and expected to reconnect by revision.
 	SubscriberBuffer int
@@ -51,14 +58,17 @@ type Options struct {
 
 // Defaults.
 const (
-	defaultHeartbeatInterval  = 30 * time.Second
-	defaultMissedHeartbeats   = 3
-	defaultSnapshotMaxReplay  = 4096
-	defaultPruneInterval      = 5 * time.Minute
-	defaultRetainDuration     = 24 * time.Hour
-	defaultRetainRows         = 100000
-	defaultSubscriberBuffer   = 256
-	defaultDrainRetryInterval = time.Second
+	defaultHeartbeatInterval               = 30 * time.Second
+	defaultMissedHeartbeats                = 3
+	defaultSnapshotMaxReplay               = 4096
+	defaultPruneInterval                   = 5 * time.Minute
+	defaultRetainDuration                  = 24 * time.Hour
+	defaultRetainRows                      = 100000
+	defaultReleaseRetainDuration           = 90 * 24 * time.Hour
+	defaultReleaseRetainVersions           = 100
+	defaultReleaseSubscriberRetainDuration = 30 * 24 * time.Hour
+	defaultSubscriberBuffer                = 256
+	defaultDrainRetryInterval              = time.Second
 )
 
 // dispatchBatch is how many change-log entries the dispatch loop reads per
@@ -93,6 +103,15 @@ func (o Options) withDefaults() Options {
 	if o.RetainRows <= 0 {
 		o.RetainRows = defaultRetainRows
 	}
+	if o.ReleaseRetainDuration <= 0 {
+		o.ReleaseRetainDuration = defaultReleaseRetainDuration
+	}
+	if o.ReleaseRetainVersions <= 0 {
+		o.ReleaseRetainVersions = defaultReleaseRetainVersions
+	}
+	if o.ReleaseSubscriberRetainDuration <= 0 {
+		o.ReleaseSubscriberRetainDuration = defaultReleaseSubscriberRetainDuration
+	}
 	if o.SubscriberBuffer <= 0 {
 		o.SubscriberBuffer = defaultSubscriberBuffer
 	}
@@ -122,9 +141,10 @@ type Hub struct {
 	// happens-before edge with the initial revision read.
 	startedCh chan struct{}
 
-	mu     sync.Mutex
-	subs   map[uint64]*Subscription
-	nextID uint64
+	mu          sync.Mutex
+	subs        map[uint64]*Subscription
+	releaseSubs map[uint64]*ReleaseSubscription
+	nextID      uint64
 }
 
 // NewHub constructs a hub over store. logger may be nil.
@@ -134,13 +154,14 @@ func NewHub(store storage.Store, logger *zap.Logger, opts Options) *Hub {
 	}
 	opts = opts.withDefaults()
 	return &Hub{
-		store:     store,
-		log:       logger,
-		opts:      opts,
-		now:       opts.now,
-		wake:      make(chan struct{}, 1),
-		startedCh: make(chan struct{}),
-		subs:      make(map[uint64]*Subscription),
+		store:       store,
+		log:         logger,
+		opts:        opts,
+		now:         opts.now,
+		wake:        make(chan struct{}, 1),
+		startedCh:   make(chan struct{}),
+		subs:        make(map[uint64]*Subscription),
+		releaseSubs: make(map[uint64]*ReleaseSubscription),
 	}
 }
 
@@ -284,6 +305,19 @@ func (h *Hub) drain(ctx context.Context, cursor uint64) (uint64, error) {
 // time, so there is no per-event access check here. Slow subscribers are dropped.
 func (h *Hub) dispatch(e domain.ChangeLogEntry) {
 	h.mu.Lock()
+	if e.ResourceType == domain.ResourceConfigurationRelease {
+		subs := make([]*ReleaseSubscription, 0, len(h.releaseSubs))
+		for _, s := range h.releaseSubs {
+			subs = append(subs, s)
+		}
+		h.mu.Unlock()
+		for _, s := range subs {
+			if s.matches(e) {
+				s.offer(e)
+			}
+		}
+		return
+	}
 	subs := make([]*Subscription, 0, len(h.subs))
 	for _, s := range h.subs {
 		subs = append(subs, s)
@@ -329,12 +363,30 @@ func (h *Hub) pruneChangeLog(ctx context.Context) {
 	if n > 0 {
 		h.log.Info("watch hub: pruned change log", zap.Int("removed", n))
 	}
+	if rs, ok := h.store.(storage.ReleaseStore); ok {
+		if n, err := rs.PruneConfigurationReleases(ctx, h.opts.ReleaseRetainDuration, h.opts.ReleaseRetainVersions); err != nil {
+			h.log.Error("watch hub: pruning configuration releases", zap.Error(err))
+		} else if n > 0 {
+			h.log.Info("watch hub: pruned configuration releases", zap.Int("removed", n))
+		}
+		if n, err := rs.PruneReleaseAcknowledgements(ctx, h.now().Add(-h.opts.ReleaseSubscriberRetainDuration)); err != nil {
+			h.log.Error("watch hub: pruning release subscriber states", zap.Error(err))
+		} else if n > 0 {
+			h.log.Info("watch hub: pruned release subscriber states", zap.Int("removed", n))
+		}
+	}
 }
 
 // remove deletes a subscription from the registry (idempotent).
 func (h *Hub) remove(id uint64) {
 	h.mu.Lock()
 	delete(h.subs, id)
+	h.mu.Unlock()
+}
+
+func (h *Hub) removeRelease(id uint64) {
+	h.mu.Lock()
+	delete(h.releaseSubs, id)
 	h.mu.Unlock()
 }
 
@@ -454,6 +506,9 @@ func (h *Hub) replayEntries(ctx context.Context, reg Registration, current uint6
 				return nil, false, nil
 			}
 			cursor = e.Revision
+			if e.ResourceType == domain.ResourceConfigurationRelease {
+				continue
+			}
 			if !namespaceMatchAny(reg.Namespaces, e.Ref.NS) {
 				continue
 			}

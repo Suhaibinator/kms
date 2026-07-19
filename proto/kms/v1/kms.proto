@@ -279,6 +279,243 @@ service WatchService {
   rpc Subscribe(stream SubscribeRequest) returns (stream SubscribeEvent);
 }
 
+// ---------------------------------------------------------------------------
+// ConfigurationReleaseService
+// ---------------------------------------------------------------------------
+
+// Configuration releases are immutable namespace-scoped manifests. They
+// contain exact parameter/secret version references and non-sensitive
+// metadata only; values and secret access tokens are never embedded.
+service ConfigurationReleaseService {
+  rpc CreateRelease(CreateReleaseRequest) returns (CreateReleaseResponse);
+  rpc ValidateRelease(ValidateReleaseRequest) returns (ValidateReleaseResponse);
+  rpc ActivateRelease(ActivateReleaseRequest) returns (ActivateReleaseResponse);
+  rpc GetRelease(GetReleaseRequest) returns (GetReleaseResponse);
+  rpc GetActiveRelease(GetActiveReleaseRequest) returns (GetActiveReleaseResponse);
+  rpc ListReleases(ListReleasesRequest) returns (ListReleasesResponse);
+  rpc WatchRelease(stream WatchReleaseRequest) returns (stream WatchReleaseEvent);
+}
+
+// ReleaseEntrySelector is accepted only when creating a release. Exactly one
+// of version/label may be set; both empty resolves label "current". The server
+// persists the resolved exact version in ConfigurationReleaseEntry.
+message ReleaseEntrySelector {
+  string alias = 1;
+  string kind = 2; // parameter | secret
+  ResourceRef ref = 3;
+  uint64 version = 4;
+  string label = 5;
+}
+
+message ConfigurationReleaseEntry {
+  string alias = 1;
+  string kind = 2; // parameter | secret
+  ResourceRef ref = 3;
+  uint64 version = 4;
+  string content_type = 5;
+  string metadata_json = 6;
+  // SHA-256 hex digest of the exact parameter bytes. Empty for secrets.
+  string parameter_digest = 7;
+  bool client_bound = 8;
+  bool has_access_token = 9;
+}
+
+message ConfigurationRelease {
+  NamespaceRef namespace = 1;
+  string name = 2;
+  uint64 version = 3;
+  string schema_id = 4;
+  uint64 schema_version = 5;
+  repeated ConfigurationReleaseEntry entries = 6;
+  string digest = 7;
+  string metadata_json = 8;
+  string created_by = 9;
+  int64 created_at_unix_ms = 10;
+}
+
+message CreateReleaseRequest {
+  NamespaceRef namespace = 1;
+  string name = 2;
+  string schema_id = 3;
+  uint64 schema_version = 4;
+  repeated ReleaseEntrySelector entries = 5;
+  string metadata_json = 6;
+}
+
+message CreateReleaseResponse {
+  ConfigurationRelease release = 1;
+}
+
+message ValidateReleaseRequest {
+  NamespaceRef namespace = 1;
+  string name = 2;
+  uint64 version = 3;
+}
+
+message ReleaseValidationError {
+  string alias = 1;        // empty for release-level errors
+  string code = 2;         // bounded machine-readable category
+  string schema_pointer = 3;
+  string message = 4;      // sanitized; never contains resource values
+}
+
+message ValidateReleaseResponse {
+  bool valid = 1;
+  repeated ReleaseValidationError errors = 2;
+}
+
+message ActivateReleaseRequest {
+  NamespaceRef namespace = 1;
+  string name = 2;
+  uint64 version = 3;
+  // Presence distinguishes an omitted guard from "expect no active release".
+  optional uint64 expected_current_version = 4;
+}
+
+message ActivateReleaseResponse {
+  ConfigurationRelease release = 1;
+  uint64 current_version = 2;
+  uint64 previous_version = 3;
+  uint64 activation_revision = 4;
+  bool changed = 5;
+}
+
+message GetReleaseRequest {
+  NamespaceRef namespace = 1;
+  string name = 2;
+  uint64 version = 3;
+}
+
+message GetReleaseResponse {
+  ConfigurationRelease release = 1;
+}
+
+message GetActiveReleaseRequest {
+  NamespaceRef namespace = 1;
+  string name = 2;
+}
+
+message GetActiveReleaseResponse {
+  ConfigurationRelease release = 1;
+  uint64 activation_revision = 2;
+  uint64 previous_version = 3;
+}
+
+message ListReleasesRequest {
+  NamespaceRef namespace = 1;
+  string name = 2; // empty lists every release name in the namespace
+  int32 page_size = 3;
+  string page_token = 4;
+}
+
+message ReleaseSummary {
+  ConfigurationRelease release = 1;
+  bool current = 2;
+  bool previous = 3;
+  uint64 activation_revision = 4;
+}
+
+message ListReleasesResponse {
+  repeated ReleaseSummary releases = 1;
+  string next_page_token = 2;
+}
+
+message ReleaseWatchRegistration {
+  NamespaceRef namespace = 1;
+  string name = 2;
+  string client_name = 3;
+  string instance_id = 4;
+  uint64 last_seen_revision = 5;
+}
+
+message ReleaseAcknowledgement {
+  NamespaceRef namespace = 1;
+  string name = 2;
+  uint64 version = 3;
+  uint64 activation_revision = 4;
+  string client_name = 5;
+  string instance_id = 6;
+  string state = 7;              // received | prepared | applied | rejected
+  string rejection_category = 8;
+  string diagnostic = 9;         // bounded, redacted application text
+  int64 timestamp_unix_ms = 10;
+}
+
+message WatchReleaseRequest {
+  oneof request {
+    ReleaseWatchRegistration register = 1;
+    ReleaseAcknowledgement acknowledgement = 2;
+  }
+}
+
+message ReleaseSnapshotEvent {
+  ConfigurationRelease release = 1;
+}
+
+message ReleaseActivationEvent {
+  ConfigurationRelease release = 1;
+}
+
+message WatchReleaseEvent {
+  oneof event {
+    ReleaseSnapshotEvent snapshot = 1;
+    ReleaseActivationEvent activation = 2;
+    Heartbeat heartbeat = 3;
+  }
+  // Global changelog revision assigned by activation.
+  uint64 revision = 4;
+}
+
+// ---------------------------------------------------------------------------
+// ConfigurationSchemaService
+// ---------------------------------------------------------------------------
+
+service ConfigurationSchemaService {
+  rpc CreateSchema(CreateSchemaRequest) returns (CreateSchemaResponse);
+  rpc GetSchema(GetSchemaRequest) returns (GetSchemaResponse);
+  rpc ListSchemas(ListSchemasRequest) returns (ListSchemasResponse);
+}
+
+message ConfigurationSchema {
+  string id = 1;
+  uint64 version = 2;
+  string schema_json = 3;
+  string digest = 4;
+  string metadata_json = 5;
+  string created_by = 6;
+  int64 created_at_unix_ms = 7;
+}
+
+message CreateSchemaRequest {
+  string id = 1;
+  string schema_json = 2;
+  string metadata_json = 3;
+}
+
+message CreateSchemaResponse {
+  ConfigurationSchema schema = 1;
+}
+
+message GetSchemaRequest {
+  string id = 1;
+  uint64 version = 2;
+}
+
+message GetSchemaResponse {
+  ConfigurationSchema schema = 1;
+}
+
+message ListSchemasRequest {
+  string id = 1;
+  int32 page_size = 2;
+  string page_token = 3;
+}
+
+message ListSchemasResponse {
+  repeated ConfigurationSchema schemas = 1;
+  string next_page_token = 2;
+}
+
 message SubscribeRequest {
   // First message: subscription registration.
   string client_name = 1;              // e.g. "gradethis-be"
@@ -347,6 +584,7 @@ service AdminService {
   rpc GetCACertificate(GetCACertificateRequest) returns (GetCACertificateResponse);
   rpc ListAuditEvents(ListAuditEventsRequest) returns (ListAuditEventsResponse);
   rpc ListSubscribers(ListSubscribersRequest) returns (ListSubscribersResponse);
+  rpc ListReleaseSubscribers(ListReleaseSubscribersRequest) returns (ListReleaseSubscribersResponse);
   rpc Health(HealthRequest) returns (HealthResponse);
 }
 
@@ -619,6 +857,35 @@ message ListSubscribersRequest {}
 message ListSubscribersResponse {
   repeated Subscriber subscribers = 1;
   uint64 current_revision = 2;
+}
+
+message ReleaseSubscriberState {
+  NamespaceRef namespace = 1;
+  string release_name = 2;
+  string client_name = 3;
+  string instance_id = 4;
+  string identity = 5;
+  string state = 6;
+  uint64 release_version = 7;
+  uint64 activation_revision = 8;
+  string rejection_category = 9;
+  string diagnostic = 10;
+  int64 client_timestamp_unix_ms = 11;
+  int64 server_timestamp_unix_ms = 12;
+  bool connected = 13;
+}
+
+message ListReleaseSubscribersRequest {
+  NamespaceRef namespace = 1;
+  string release_name = 2;
+  int32 page_size = 3;
+  string page_token = 4;
+}
+
+message ListReleaseSubscribersResponse {
+  repeated ReleaseSubscriberState subscribers = 1;
+  string next_page_token = 2;
+  uint64 current_revision = 3;
 }
 
 message HealthRequest {}

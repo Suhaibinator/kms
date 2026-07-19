@@ -59,7 +59,8 @@ func ValidAuthMethod(m AuthMethod) bool {
 }
 
 // Operations the policy engine distinguishes. A policy rule may also use
-// wildcards: "parameter:*", "secret:*", "admin:*", or "*".
+// wildcards: "parameter:*", "secret:*", "configuration-release:*",
+// "admin:*", or "*".
 const (
 	OpParameterRead   = "parameter:read"
 	OpParameterWrite  = "parameter:write"
@@ -73,6 +74,13 @@ const (
 	OpSecretDestroy = "secret:destroy"
 	OpSecretPromote = "secret:promote"
 
+	OpConfigurationReleaseCreate   = "configuration-release:create"
+	OpConfigurationReleaseRead     = "configuration-release:read"
+	OpConfigurationReleaseValidate = "configuration-release:validate"
+	OpConfigurationReleaseActivate = "configuration-release:activate"
+	OpConfigurationReleaseList     = "configuration-release:list"
+	OpConfigurationReleaseWatch    = "configuration-release:watch"
+
 	OpAdminNamespaceCreate = "admin:namespace:create"
 	OpAdminNamespaceUpdate = "admin:namespace:update"
 	OpAdminNamespaceDelete = "admin:namespace:delete"
@@ -84,13 +92,14 @@ const (
 
 // Change types recorded in the change log and pushed over watch streams.
 const (
-	ChangePut     = "put"
-	ChangeDelete  = "delete"
-	ChangeLabel   = "label"
-	ChangePromote = "promote"
-	ChangeDisable = "disable"
-	ChangeEnable  = "enable"
-	ChangeDestroy = "destroy"
+	ChangePut      = "put"
+	ChangeDelete   = "delete"
+	ChangeLabel    = "label"
+	ChangePromote  = "promote"
+	ChangeDisable  = "disable"
+	ChangeEnable   = "enable"
+	ChangeDestroy  = "destroy"
+	ChangeActivate = "activate"
 )
 
 // NamespaceRef is a fixed (env, app) pair — the first-class grouping every

@@ -20,25 +20,41 @@ var validParameterContentTypes = map[string]bool{
 // validateParameterValue checks that value parses as its declared type, so a
 // typo can't push an unparseable value to every subscribed application.
 func validateParameterValue(value, contentType string) error {
-	var err error
-	switch contentType {
-	case "integer":
-		_, err = strconv.ParseInt(strings.TrimSpace(value), 10, 64)
-	case "float":
-		_, err = strconv.ParseFloat(strings.TrimSpace(value), 64)
-	case "boolean":
-		_, err = strconv.ParseBool(strings.TrimSpace(value))
-	case "json":
-		if !json.Valid([]byte(value)) {
-			err = errors.New("invalid JSON")
-		}
-	case "binary":
-		_, err = base64.StdEncoding.DecodeString(value)
-	}
+	_, err := parseParameterValue(value, contentType)
 	if err != nil {
 		return domain.Errorf(domain.ErrInvalidArgument, "value does not parse as %s", contentType)
 	}
 	return nil
+}
+
+// parseParameterValue is the canonical content-type conversion used both when
+// writing parameters and when constructing a release's alias-keyed schema
+// document. Binary values remain represented by their base64 text after the
+// encoding has been validated, because JSON Schema has no byte-string type.
+func parseParameterValue(value, contentType string) (any, error) {
+	switch contentType {
+	case "string":
+		return value, nil
+	case "integer":
+		return strconv.ParseInt(strings.TrimSpace(value), 10, 64)
+	case "float":
+		return strconv.ParseFloat(strings.TrimSpace(value), 64)
+	case "boolean":
+		return strconv.ParseBool(strings.TrimSpace(value))
+	case "json":
+		var decoded any
+		if err := json.Unmarshal([]byte(value), &decoded); err != nil {
+			return nil, err
+		}
+		return decoded, nil
+	case "binary":
+		if _, err := base64.StdEncoding.DecodeString(value); err != nil {
+			return nil, err
+		}
+		return value, nil
+	default:
+		return nil, errors.New("unsupported content type")
+	}
 }
 
 // GetParameter resolves a parameter at a version (>0) or label ("" = current).
@@ -131,6 +147,9 @@ func (s *Service) DeleteParameter(ctx context.Context, pr Principal, ref domain.
 	}
 	revision, err := s.store.DeleteParameter(ctx, ref)
 	if err != nil {
+		if errors.Is(err, domain.ErrFailedPrecondition) {
+			s.auditProtectedReleaseReference(ctx, pr, ref, domain.ReleaseEntryParameter, 0, "delete")
+		}
 		return 0, err
 	}
 	s.auditRef(ctx, pr, "parameter.delete", domain.ResourceParameter, ref, 0, "allow", nil)

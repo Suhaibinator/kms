@@ -319,6 +319,9 @@ func (s *SQLStore) DeleteParameter(ctx context.Context, ref domain.Ref) (uint64,
 		if err != nil {
 			return err
 		}
+		if err := rejectProtectedReleaseReference(tx, ref, domain.ReleaseEntryParameter, 0); err != nil {
+			return err
+		}
 		if err := tx.Where("parameter_id = ?", p.ID).Delete(&parameterLabelModel{}).Error; err != nil {
 			return err
 		}

@@ -327,6 +327,9 @@ func (s *SQLStore) DeleteSecret(ctx context.Context, ref domain.Ref) (uint64, er
 		if err != nil {
 			return err
 		}
+		if err := rejectProtectedReleaseReference(tx, ref, domain.ReleaseEntrySecret, 0); err != nil {
+			return err
+		}
 		if err := tx.Where("secret_id = ?", sec.ID).Delete(&secretLabelModel{}).Error; err != nil {
 			return err
 		}
@@ -422,6 +425,9 @@ func (s *SQLStore) DestroySecretVersion(ctx context.Context, ref domain.Ref, ver
 	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		sec, err := s.findSecret(tx, ref)
 		if err != nil {
+			return err
+		}
+		if err := rejectProtectedReleaseReference(tx, ref, domain.ReleaseEntrySecret, version); err != nil {
 			return err
 		}
 		var sv secretVersionModel

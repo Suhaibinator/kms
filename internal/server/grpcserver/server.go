@@ -9,6 +9,7 @@ package grpcserver
 import (
 	"context"
 	"crypto/tls"
+	"fmt"
 	"net"
 	"time"
 
@@ -84,6 +85,9 @@ func New(svc *core.Service, hub *watch.Hub, cfg Config) (*Server, error) {
 		log:  log,
 		done: make(chan struct{}),
 	}
+	if err := svc.ResetReleaseSubscriberConnections(context.Background()); err != nil {
+		return nil, fmt.Errorf("resetting release subscriber connections: %w", err)
+	}
 
 	opts := []grpc.ServerOption{
 		grpc.ChainUnaryInterceptor(s.unaryInterceptor),
@@ -108,6 +112,8 @@ func New(svc *core.Service, hub *watch.Hub, cfg Config) (*Server, error) {
 	kmsv1.RegisterSecretServiceServer(s.grpc, &secretServer{s: s})
 	kmsv1.RegisterAdminServiceServer(s.grpc, &adminServer{s: s})
 	kmsv1.RegisterWatchServiceServer(s.grpc, &watchServer{s: s})
+	kmsv1.RegisterConfigurationReleaseServiceServer(s.grpc, &configurationReleaseServer{s: s, connections: make(map[releaseConnectionKey]map[uint64]struct{})})
+	kmsv1.RegisterConfigurationSchemaServiceServer(s.grpc, &configurationSchemaServer{s: s})
 	healthgrpc.RegisterHealthServer(s.grpc, s.health)
 
 	return s, nil
@@ -161,6 +167,8 @@ func (s *Server) refreshHealth() {
 		s.health.SetServingStatus("kms.v1.ParameterService", st)
 		s.health.SetServingStatus("kms.v1.SecretService", st)
 		s.health.SetServingStatus("kms.v1.WatchService", st)
+		s.health.SetServingStatus("kms.v1.ConfigurationReleaseService", st)
+		s.health.SetServingStatus("kms.v1.ConfigurationSchemaService", st)
 	}
 	set()
 	ticker := time.NewTicker(s.cfg.HealthRefreshInterval)

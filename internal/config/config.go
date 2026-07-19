@@ -74,9 +74,12 @@ type AuditConfig struct {
 
 // WatchConfig holds watch/hot-reload tuning.
 type WatchConfig struct {
-	HeartbeatInterval Duration `yaml:"heartbeat_interval"`
-	RetainDuration    Duration `yaml:"retain_duration"`
-	RetainRows        int      `yaml:"retain_rows"`
+	HeartbeatInterval               Duration `yaml:"heartbeat_interval"`
+	RetainDuration                  Duration `yaml:"retain_duration"`
+	RetainRows                      int      `yaml:"retain_rows"`
+	ReleaseRetainDuration           Duration `yaml:"release_retain_duration"`
+	ReleaseRetainVersions           int      `yaml:"release_retain_versions"`
+	ReleaseSubscriberRetainDuration Duration `yaml:"release_subscriber_retain_duration"`
 }
 
 // LogConfig holds logging settings.
@@ -98,9 +101,12 @@ func Default() Config {
 		Frontend:   FrontendConfig{Enabled: true},
 		Audit:      AuditConfig{Enabled: true},
 		Watch: WatchConfig{
-			HeartbeatInterval: Duration(30 * time.Second),
-			RetainDuration:    Duration(24 * time.Hour),
-			RetainRows:        10000,
+			HeartbeatInterval:               Duration(30 * time.Second),
+			RetainDuration:                  Duration(24 * time.Hour),
+			RetainRows:                      10000,
+			ReleaseRetainDuration:           Duration(90 * 24 * time.Hour),
+			ReleaseRetainVersions:           100,
+			ReleaseSubscriberRetainDuration: Duration(30 * 24 * time.Hour),
 		},
 		Log: LogConfig{Level: "info"},
 	}
@@ -211,6 +217,24 @@ func (c Config) Validate() error {
 			return err
 		}
 	}
+	if time.Duration(c.Watch.HeartbeatInterval) <= 0 {
+		return fmt.Errorf("watch.heartbeat_interval must be positive")
+	}
+	if time.Duration(c.Watch.RetainDuration) <= 0 {
+		return fmt.Errorf("watch.retain_duration must be positive")
+	}
+	if c.Watch.RetainRows <= 0 {
+		return fmt.Errorf("watch.retain_rows must be positive")
+	}
+	if time.Duration(c.Watch.ReleaseRetainDuration) <= 0 {
+		return fmt.Errorf("watch.release_retain_duration must be positive")
+	}
+	if c.Watch.ReleaseRetainVersions <= 0 {
+		return fmt.Errorf("watch.release_retain_versions must be positive")
+	}
+	if time.Duration(c.Watch.ReleaseSubscriberRetainDuration) <= 0 {
+		return fmt.Errorf("watch.release_subscriber_retain_duration must be positive")
+	}
 	return nil
 }
 
@@ -265,12 +289,13 @@ func (c Config) Redacted() string {
 	}
 	return fmt.Sprintf(
 		"grpc_addr=%s http_addr=%s sqlite_path=%s tls=%t mtls=%t kek_file=%s frontend=%t audit=%t "+
-			"heartbeat=%s retain_duration=%s retain_rows=%d log_level=%s",
+			"heartbeat=%s retain_duration=%s retain_rows=%d release_retain_duration=%s release_retain_versions=%d release_subscriber_retain_duration=%s log_level=%s",
 		c.Server.GRPCAddr, c.Server.HTTPAddr, c.Storage.SQLitePath,
 		c.Security.TLSEnabled, c.Security.MTLSEnabled, kek,
 		c.Frontend.Enabled, c.Audit.Enabled,
 		time.Duration(c.Watch.HeartbeatInterval), time.Duration(c.Watch.RetainDuration),
-		c.Watch.RetainRows, c.Log.Level)
+		c.Watch.RetainRows, time.Duration(c.Watch.ReleaseRetainDuration), c.Watch.ReleaseRetainVersions,
+		time.Duration(c.Watch.ReleaseSubscriberRetainDuration), c.Log.Level)
 }
 
 // LogLevel maps the configured level string to a zapcore.Level, defaulting to

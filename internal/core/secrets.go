@@ -342,6 +342,9 @@ func (s *Service) DeleteSecret(ctx context.Context, pr Principal, ref domain.Ref
 	}
 	revision, err := s.store.DeleteSecret(ctx, ref)
 	if err != nil {
+		if errors.Is(err, domain.ErrFailedPrecondition) {
+			s.auditProtectedReleaseReference(ctx, pr, ref, domain.ReleaseEntrySecret, 0, "delete")
+		}
 		return 0, err
 	}
 	s.auditRef(ctx, pr, "secret.delete", domain.ResourceSecret, ref, 0, "allow", nil)
@@ -386,6 +389,9 @@ func (s *Service) DestroySecretVersion(ctx context.Context, pr Principal, ref do
 	}
 	revision, err := s.store.DestroySecretVersion(ctx, ref, version)
 	if err != nil {
+		if errors.Is(err, domain.ErrFailedPrecondition) {
+			s.auditProtectedReleaseReference(ctx, pr, ref, domain.ReleaseEntrySecret, version, "destroy")
+		}
 		return 0, err
 	}
 	s.auditRef(ctx, pr, "secret.destroy", domain.ResourceSecret, ref, version, "allow", nil)

@@ -25,6 +25,9 @@ func TestDefaults(t *testing.T) {
 	if time.Duration(cfg.Watch.HeartbeatInterval) != 30*time.Second {
 		t.Fatalf("heartbeat default = %v", time.Duration(cfg.Watch.HeartbeatInterval))
 	}
+	if time.Duration(cfg.Watch.ReleaseRetainDuration) != 90*24*time.Hour || cfg.Watch.ReleaseRetainVersions != 100 || time.Duration(cfg.Watch.ReleaseSubscriberRetainDuration) != 30*24*time.Hour {
+		t.Fatalf("release retention defaults = %+v", cfg.Watch)
+	}
 }
 
 func TestLoadYAMLOverlay(t *testing.T) {

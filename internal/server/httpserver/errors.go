@@ -40,6 +40,8 @@ func mapError(err error) (status int, code, message string) {
 		return http.StatusNotFound, "not_found", err.Error()
 	case errors.Is(err, domain.ErrAlreadyExists):
 		return http.StatusConflict, "already_exists", err.Error()
+	case errors.Is(err, domain.ErrAborted):
+		return http.StatusConflict, "aborted", err.Error()
 	case errors.Is(err, domain.ErrFailedPrecondition):
 		return http.StatusPreconditionFailed, "failed_precondition", err.Error()
 	case errors.Is(err, domain.ErrNotReady):

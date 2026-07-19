@@ -51,6 +51,16 @@ func (s *server) newAPIMux() *http.ServeMux {
 
 	mux.HandleFunc("GET /api/v1/audit", s.handleListAudit)
 	mux.HandleFunc("GET /api/v1/subscribers", s.handleListSubscribers)
+	mux.HandleFunc("GET /api/v1/release-subscribers", s.handleListReleaseSubscribers)
+
+	mux.HandleFunc("GET /api/v1/releases", s.handleListReleases)
+	mux.HandleFunc("POST /api/v1/releases", s.handleCreateRelease)
+	mux.HandleFunc("GET /api/v1/releases/get", s.handleGetRelease)
+	mux.HandleFunc("GET /api/v1/releases/active", s.handleGetActiveRelease)
+	mux.HandleFunc("POST /api/v1/releases/validate", s.handleValidateRelease)
+	mux.HandleFunc("POST /api/v1/releases/activate", s.handleActivateRelease)
+	mux.HandleFunc("GET /api/v1/configuration-schemas", s.handleListConfigurationSchemas)
+	mux.HandleFunc("POST /api/v1/configuration-schemas", s.handleCreateConfigurationSchema)
 	mux.HandleFunc("GET /api/v1/keys", s.handleListKeys)
 
 	return mux

@@ -141,14 +141,14 @@ func TestImplicitHomeGrant(t *testing.T) {
 	home := &domain.NamespaceRef{Env: "prod", App: "gradethis"}
 
 	// Read/list in the home namespace is allowed with no policies at all.
-	for _, op := range []string{domain.OpParameterRead, domain.OpParameterList, domain.OpSecretRead, domain.OpSecretList} {
+	for _, op := range []string{domain.OpParameterRead, domain.OpParameterList, domain.OpSecretRead, domain.OpSecretList, domain.OpConfigurationReleaseRead, domain.OpConfigurationReleaseWatch} {
 		if !Authorize(nil, home, op, ns("prod", "gradethis")) {
 			t.Errorf("implicit grant did not allow %s in home namespace", op)
 		}
 	}
 
 	// Writes and other mutations are NOT implicitly granted.
-	for _, op := range []string{domain.OpParameterWrite, domain.OpSecretWrite, domain.OpSecretDestroy, domain.OpParameterDelete} {
+	for _, op := range []string{domain.OpParameterWrite, domain.OpSecretWrite, domain.OpSecretDestroy, domain.OpParameterDelete, domain.OpConfigurationReleaseCreate, domain.OpConfigurationReleaseValidate, domain.OpConfigurationReleaseActivate, domain.OpConfigurationReleaseList} {
 		if Authorize(nil, home, op, ns("prod", "gradethis")) {
 			t.Errorf("implicit grant wrongly allowed mutation %s", op)
 		}
@@ -162,6 +162,14 @@ func TestImplicitHomeGrant(t *testing.T) {
 	// An unbound caller gets nothing implicitly.
 	if Authorize(nil, nil, domain.OpSecretRead, ns("prod", "gradethis")) {
 		t.Fatal("unbound caller got an implicit grant")
+	}
+}
+
+func TestConfigurationReleaseOperationsAreValidPolicyRules(t *testing.T) {
+	for _, op := range []string{domain.OpConfigurationReleaseCreate, domain.OpConfigurationReleaseRead, domain.OpConfigurationReleaseValidate, domain.OpConfigurationReleaseActivate, domain.OpConfigurationReleaseList, domain.OpConfigurationReleaseWatch, "configuration-release:*"} {
+		if !validOperationPattern(op) {
+			t.Errorf("release operation %q rejected", op)
+		}
 	}
 }
 

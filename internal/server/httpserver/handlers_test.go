@@ -254,6 +254,75 @@ func TestParameterMissingNamespace(t *testing.T) {
 	mustStatus(t, w, http.StatusNotFound)
 }
 
+func TestConfigurationReleaseHTTPLifecycle(t *testing.T) {
+	e := newReleaseTestEnv(t)
+	e.createNS("prod", "app")
+
+	w := e.admin(http.MethodPut, "/api/v1/parameters", map[string]any{
+		"env": "prod", "app": "app", "key": "config/runtime", "value": `{"enabled":true}`, "content_type": "json",
+	})
+	mustStatus(t, w, http.StatusOK)
+
+	w = e.admin(http.MethodPost, "/api/v1/configuration-schemas", map[string]any{
+		"id": "runtime", "schema_json": `{"type":"object","properties":{"settings":{"type":"object"}},"required":["settings"]}`,
+	})
+	mustStatus(t, w, http.StatusCreated)
+	schema := decodeBody(t, w)["schema"].(map[string]any)
+
+	w = e.admin(http.MethodPost, "/api/v1/releases", map[string]any{
+		"namespace": map[string]any{"env": "prod", "app": "app"},
+		"name":      "runtime", "schema_id": "runtime", "schema_version": schema["version"],
+		"entries": []map[string]any{{
+			"alias": "settings", "kind": "parameter",
+			"ref":   map[string]any{"namespace": map[string]any{"env": "prod", "app": "app"}, "key": "config/runtime"},
+			"label": "current",
+		}},
+	})
+	mustStatus(t, w, http.StatusCreated)
+	release := decodeBody(t, w)["release"].(map[string]any)
+	if release["digest"] == "" || release["version"].(float64) != 1 {
+		t.Fatalf("release = %v", release)
+	}
+	entries := release["entries"].([]any)
+	if len(entries) != 1 || entries[0].(map[string]any)["parameter_digest"] == "" {
+		t.Fatalf("release entries = %v", entries)
+	}
+
+	w = e.admin(http.MethodPost, "/api/v1/releases/validate", map[string]any{
+		"namespace": map[string]any{"env": "prod", "app": "app"}, "name": "runtime", "version": 1,
+	})
+	mustStatus(t, w, http.StatusOK)
+	if decodeBody(t, w)["valid"] != true {
+		t.Fatal("release should validate")
+	}
+
+	w = e.admin(http.MethodPost, "/api/v1/releases/activate", map[string]any{
+		"namespace": map[string]any{"env": "prod", "app": "app"}, "name": "runtime", "version": 1,
+		"expected_current_version": 0,
+	})
+	mustStatus(t, w, http.StatusOK)
+	activation := decodeBody(t, w)
+	if activation["changed"] != true || activation["activation_revision"].(float64) == 0 {
+		t.Fatalf("activation = %v", activation)
+	}
+
+	w = e.admin(http.MethodGet, "/api/v1/releases/active?env=prod&app=app&name=runtime", nil)
+	mustStatus(t, w, http.StatusOK)
+	if decodeBody(t, w)["release"].(map[string]any)["version"].(float64) != 1 {
+		t.Fatal("active release version mismatch")
+	}
+
+	// Presence-aware CAS distinguishes an omitted guard from expect-no-active.
+	w = e.admin(http.MethodPost, "/api/v1/releases/activate", map[string]any{
+		"namespace": map[string]any{"env": "prod", "app": "app"}, "name": "runtime", "version": 1,
+		"expected_current_version": 0,
+	})
+	mustStatus(t, w, http.StatusConflict)
+	if errCode(t, w) != "aborted" {
+		t.Fatalf("code = %s", errCode(t, w))
+	}
+}
+
 func TestSecretsLifecycle(t *testing.T) {
 	e := newTestEnv(t)
 	e.createNS("prod", "gradethis")

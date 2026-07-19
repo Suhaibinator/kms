@@ -224,6 +224,120 @@ type changeLogModel struct {
 
 func (changeLogModel) TableName() string { return "change_log" }
 
+type configurationReleaseModel struct {
+	ID            int64          `gorm:"column:id;primaryKey;autoIncrement"`
+	NamespaceID   int64          `gorm:"column:namespace_id;not null;uniqueIndex:idx_release_ns_name_ver,priority:1"`
+	Namespace     namespaceModel `gorm:"foreignKey:NamespaceID;references:ID"`
+	Name          string         `gorm:"column:name;not null;uniqueIndex:idx_release_ns_name_ver,priority:2"`
+	VersionNumber int64          `gorm:"column:version_number;not null;uniqueIndex:idx_release_ns_name_ver,priority:3"`
+	SchemaID      string         `gorm:"column:schema_id;not null;default:''"`
+	SchemaVersion int64          `gorm:"column:schema_version;not null;default:0"`
+	Digest        string         `gorm:"column:digest;not null"`
+	MetadataJSON  string         `gorm:"column:metadata_json;not null;default:{}"`
+	CreatedBy     string         `gorm:"column:created_by;not null;default:''"`
+	CreatedAt     string         `gorm:"column:created_at;not null"`
+}
+
+func (configurationReleaseModel) TableName() string { return "configuration_releases" }
+
+type configurationReleaseEntryModel struct {
+	ID              int64                     `gorm:"column:id;primaryKey;autoIncrement"`
+	ReleaseID       int64                     `gorm:"column:release_id;not null;uniqueIndex:idx_release_entry_alias,priority:1;index:idx_release_entry_ref,priority:1"`
+	Release         configurationReleaseModel `gorm:"foreignKey:ReleaseID;references:ID;constraint:OnDelete:CASCADE"`
+	Alias           string                    `gorm:"column:alias;not null;uniqueIndex:idx_release_entry_alias,priority:2"`
+	Kind            string                    `gorm:"column:kind;not null;index:idx_release_entry_ref,priority:2"`
+	ResourceEnv     string                    `gorm:"column:resource_env;not null;index:idx_release_entry_ref,priority:3"`
+	ResourceApp     string                    `gorm:"column:resource_app;not null;index:idx_release_entry_ref,priority:4"`
+	ResourceKey     string                    `gorm:"column:resource_key;not null;index:idx_release_entry_ref,priority:5"`
+	ResourceVersion int64                     `gorm:"column:resource_version;not null;index:idx_release_entry_ref,priority:6"`
+	ContentType     string                    `gorm:"column:content_type;not null;default:''"`
+	MetadataJSON    string                    `gorm:"column:metadata_json;not null;default:{}"`
+	ParameterDigest string                    `gorm:"column:parameter_digest;not null;default:''"`
+	ClientBound     int64                     `gorm:"column:client_bound;not null;default:0"`
+	HasAccessToken  int64                     `gorm:"column:has_access_token;not null;default:0"`
+}
+
+func (configurationReleaseEntryModel) TableName() string { return "configuration_release_entries" }
+
+type configurationReleaseLabelModel struct {
+	NamespaceID        int64          `gorm:"column:namespace_id;not null;primaryKey;autoIncrement:false"`
+	Namespace          namespaceModel `gorm:"foreignKey:NamespaceID;references:ID"`
+	ReleaseName        string         `gorm:"column:release_name;not null;primaryKey"`
+	Label              string         `gorm:"column:label;not null;primaryKey"`
+	VersionNumber      int64          `gorm:"column:version_number;not null"`
+	ActivationRevision int64          `gorm:"column:activation_revision;not null;default:0"`
+}
+
+func (configurationReleaseLabelModel) TableName() string { return "configuration_release_labels" }
+
+// configurationReleaseActivationModel preserves the authoritative identity of
+// an activation after its replay row ages out of the global changelog. This
+// lets idempotently retried lifecycle acknowledgements remain verifiable for
+// the longer release-retention window without keeping ordinary watch history
+// forever.
+type configurationReleaseActivationModel struct {
+	Revision      int64          `gorm:"column:revision;primaryKey;autoIncrement:false"`
+	NamespaceID   int64          `gorm:"column:namespace_id;not null;index:idx_release_activation_lookup,priority:1"`
+	Namespace     namespaceModel `gorm:"foreignKey:NamespaceID;references:ID"`
+	ReleaseName   string         `gorm:"column:release_name;not null;index:idx_release_activation_lookup,priority:2"`
+	VersionNumber int64          `gorm:"column:version_number;not null;index:idx_release_activation_lookup,priority:3"`
+	ActivatedAt   string         `gorm:"column:activated_at;not null;index:idx_release_activation_time"`
+}
+
+func (configurationReleaseActivationModel) TableName() string {
+	return "configuration_release_activations"
+}
+
+type configurationSchemaModel struct {
+	ID            string `gorm:"column:id;not null;primaryKey"`
+	VersionNumber int64  `gorm:"column:version_number;not null;primaryKey;autoIncrement:false"`
+	SchemaJSON    string `gorm:"column:schema_json;not null"`
+	Digest        string `gorm:"column:digest;not null"`
+	MetadataJSON  string `gorm:"column:metadata_json;not null;default:{}"`
+	CreatedBy     string `gorm:"column:created_by;not null;default:''"`
+	CreatedAt     string `gorm:"column:created_at;not null"`
+}
+
+func (configurationSchemaModel) TableName() string { return "configuration_schemas" }
+
+type releaseSubscriberStateModel struct {
+	NamespaceID        int64          `gorm:"column:namespace_id;not null;primaryKey;autoIncrement:false;index:idx_release_subscriber_page,priority:1"`
+	Namespace          namespaceModel `gorm:"foreignKey:NamespaceID;references:ID"`
+	ReleaseName        string         `gorm:"column:release_name;not null;primaryKey;index:idx_release_subscriber_page,priority:2"`
+	ClientName         string         `gorm:"column:client_name;not null;primaryKey"`
+	InstanceID         string         `gorm:"column:instance_id;not null;primaryKey"`
+	State              string         `gorm:"column:state;not null;primaryKey"`
+	Identity           string         `gorm:"column:identity;not null;default:''"`
+	ReleaseVersion     int64          `gorm:"column:release_version;not null"`
+	ActivationRevision int64          `gorm:"column:activation_revision;not null"`
+	RejectionCategory  string         `gorm:"column:rejection_category;not null;default:''"`
+	Diagnostic         string         `gorm:"column:diagnostic;not null;default:''"`
+	ClientTimestamp    string         `gorm:"column:client_timestamp;not null"`
+	ServerTimestamp    string         `gorm:"column:server_timestamp;not null;index:idx_release_subscriber_server_time;index:idx_release_subscriber_page,priority:3"`
+	Connected          int64          `gorm:"column:connected;not null;default:0"`
+	DisconnectedAt     *string        `gorm:"column:disconnected_at;index:idx_release_subscriber_disconnected"`
+}
+
+func (releaseSubscriberStateModel) TableName() string { return "release_subscriber_states" }
+
+type releaseSubscriberConnectionModel struct {
+	NamespaceID     int64          `gorm:"column:namespace_id;not null;primaryKey;autoIncrement:false;index:idx_release_connection_page,priority:1"`
+	Namespace       namespaceModel `gorm:"foreignKey:NamespaceID;references:ID"`
+	ReleaseName     string         `gorm:"column:release_name;not null;primaryKey;index:idx_release_connection_page,priority:2"`
+	ClientName      string         `gorm:"column:client_name;not null;primaryKey"`
+	InstanceID      string         `gorm:"column:instance_id;not null;primaryKey"`
+	Identity        string         `gorm:"column:identity;not null;default:''"`
+	ConnectionID    string         `gorm:"column:connection_id;not null;default:''"`
+	Connected       int64          `gorm:"column:connected;not null;default:0"`
+	ConnectedAt     string         `gorm:"column:connected_at;not null"`
+	DisconnectedAt  *string        `gorm:"column:disconnected_at;index:idx_release_connection_disconnected"`
+	ServerTimestamp string         `gorm:"column:server_timestamp;not null;index:idx_release_connection_server_time;index:idx_release_connection_page,priority:3"`
+}
+
+func (releaseSubscriberConnectionModel) TableName() string {
+	return "release_subscriber_connections"
+}
+
 // schemaMigrationModel -> schema_migrations. Tracks the applied schema version.
 type schemaMigrationModel struct {
 	Version   int    `gorm:"column:version;primaryKey;autoIncrement:false"`
@@ -248,6 +362,13 @@ var autoMigrateModels = []any{
 	&identityCertModel{},
 	&policyModel{},
 	&auditEventModel{},
+	&configurationReleaseModel{},
+	&configurationReleaseEntryModel{},
+	&configurationReleaseLabelModel{},
+	&configurationReleaseActivationModel{},
+	&configurationSchemaModel{},
+	&releaseSubscriberStateModel{},
+	&releaseSubscriberConnectionModel{},
 }
 
 // ---- model <-> domain conversions ----------------------------------------

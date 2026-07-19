@@ -79,6 +79,10 @@ func (s *SQLStore) DeleteNamespace(ctx context.Context, ref domain.NamespaceRef)
 			{"parameters", "parameters"},
 			{"secrets", "secrets"},
 			{"identities", "bound identities"},
+			{"configuration_releases", "configuration releases"},
+			{"configuration_release_labels", "configuration release labels"},
+			{"release_subscriber_states", "configuration release subscriber states"},
+			{"release_subscriber_connections", "configuration release subscriber connections"},
 		} {
 			var n int64
 			if err := tx.Table(check.table).Where("namespace_id = ?", id).Count(&n).Error; err != nil {

@@ -769,6 +769,527 @@ class WatchService:
             _registered_method=True)
 
 
+class ConfigurationReleaseServiceStub:
+    """---------------------------------------------------------------------------
+    ConfigurationReleaseService
+    ---------------------------------------------------------------------------
+
+    Configuration releases are immutable namespace-scoped manifests. They
+    contain exact parameter/secret version references and non-sensitive
+    metadata only; values and secret access tokens are never embedded.
+    """
+
+    def __init__(self, channel):
+        """Constructor.
+
+        Args:
+            channel: A grpc.Channel.
+        """
+        self.CreateRelease = channel.unary_unary(
+                '/kms.v1.ConfigurationReleaseService/CreateRelease',
+                request_serializer=kms_dot_v1_dot_kms__pb2.CreateReleaseRequest.SerializeToString,
+                response_deserializer=kms_dot_v1_dot_kms__pb2.CreateReleaseResponse.FromString,
+                _registered_method=True)
+        self.ValidateRelease = channel.unary_unary(
+                '/kms.v1.ConfigurationReleaseService/ValidateRelease',
+                request_serializer=kms_dot_v1_dot_kms__pb2.ValidateReleaseRequest.SerializeToString,
+                response_deserializer=kms_dot_v1_dot_kms__pb2.ValidateReleaseResponse.FromString,
+                _registered_method=True)
+        self.ActivateRelease = channel.unary_unary(
+                '/kms.v1.ConfigurationReleaseService/ActivateRelease',
+                request_serializer=kms_dot_v1_dot_kms__pb2.ActivateReleaseRequest.SerializeToString,
+                response_deserializer=kms_dot_v1_dot_kms__pb2.ActivateReleaseResponse.FromString,
+                _registered_method=True)
+        self.GetRelease = channel.unary_unary(
+                '/kms.v1.ConfigurationReleaseService/GetRelease',
+                request_serializer=kms_dot_v1_dot_kms__pb2.GetReleaseRequest.SerializeToString,
+                response_deserializer=kms_dot_v1_dot_kms__pb2.GetReleaseResponse.FromString,
+                _registered_method=True)
+        self.GetActiveRelease = channel.unary_unary(
+                '/kms.v1.ConfigurationReleaseService/GetActiveRelease',
+                request_serializer=kms_dot_v1_dot_kms__pb2.GetActiveReleaseRequest.SerializeToString,
+                response_deserializer=kms_dot_v1_dot_kms__pb2.GetActiveReleaseResponse.FromString,
+                _registered_method=True)
+        self.ListReleases = channel.unary_unary(
+                '/kms.v1.ConfigurationReleaseService/ListReleases',
+                request_serializer=kms_dot_v1_dot_kms__pb2.ListReleasesRequest.SerializeToString,
+                response_deserializer=kms_dot_v1_dot_kms__pb2.ListReleasesResponse.FromString,
+                _registered_method=True)
+        self.WatchRelease = channel.stream_stream(
+                '/kms.v1.ConfigurationReleaseService/WatchRelease',
+                request_serializer=kms_dot_v1_dot_kms__pb2.WatchReleaseRequest.SerializeToString,
+                response_deserializer=kms_dot_v1_dot_kms__pb2.WatchReleaseEvent.FromString,
+                _registered_method=True)
+
+
+class ConfigurationReleaseServiceServicer:
+    """---------------------------------------------------------------------------
+    ConfigurationReleaseService
+    ---------------------------------------------------------------------------
+
+    Configuration releases are immutable namespace-scoped manifests. They
+    contain exact parameter/secret version references and non-sensitive
+    metadata only; values and secret access tokens are never embedded.
+    """
+
+    def CreateRelease(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def ValidateRelease(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def ActivateRelease(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def GetRelease(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def GetActiveRelease(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def ListReleases(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def WatchRelease(self, request_iterator, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+
+def add_ConfigurationReleaseServiceServicer_to_server(servicer, server):
+    rpc_method_handlers = {
+            'CreateRelease': grpc.unary_unary_rpc_method_handler(
+                    servicer.CreateRelease,
+                    request_deserializer=kms_dot_v1_dot_kms__pb2.CreateReleaseRequest.FromString,
+                    response_serializer=kms_dot_v1_dot_kms__pb2.CreateReleaseResponse.SerializeToString,
+            ),
+            'ValidateRelease': grpc.unary_unary_rpc_method_handler(
+                    servicer.ValidateRelease,
+                    request_deserializer=kms_dot_v1_dot_kms__pb2.ValidateReleaseRequest.FromString,
+                    response_serializer=kms_dot_v1_dot_kms__pb2.ValidateReleaseResponse.SerializeToString,
+            ),
+            'ActivateRelease': grpc.unary_unary_rpc_method_handler(
+                    servicer.ActivateRelease,
+                    request_deserializer=kms_dot_v1_dot_kms__pb2.ActivateReleaseRequest.FromString,
+                    response_serializer=kms_dot_v1_dot_kms__pb2.ActivateReleaseResponse.SerializeToString,
+            ),
+            'GetRelease': grpc.unary_unary_rpc_method_handler(
+                    servicer.GetRelease,
+                    request_deserializer=kms_dot_v1_dot_kms__pb2.GetReleaseRequest.FromString,
+                    response_serializer=kms_dot_v1_dot_kms__pb2.GetReleaseResponse.SerializeToString,
+            ),
+            'GetActiveRelease': grpc.unary_unary_rpc_method_handler(
+                    servicer.GetActiveRelease,
+                    request_deserializer=kms_dot_v1_dot_kms__pb2.GetActiveReleaseRequest.FromString,
+                    response_serializer=kms_dot_v1_dot_kms__pb2.GetActiveReleaseResponse.SerializeToString,
+            ),
+            'ListReleases': grpc.unary_unary_rpc_method_handler(
+                    servicer.ListReleases,
+                    request_deserializer=kms_dot_v1_dot_kms__pb2.ListReleasesRequest.FromString,
+                    response_serializer=kms_dot_v1_dot_kms__pb2.ListReleasesResponse.SerializeToString,
+            ),
+            'WatchRelease': grpc.stream_stream_rpc_method_handler(
+                    servicer.WatchRelease,
+                    request_deserializer=kms_dot_v1_dot_kms__pb2.WatchReleaseRequest.FromString,
+                    response_serializer=kms_dot_v1_dot_kms__pb2.WatchReleaseEvent.SerializeToString,
+            ),
+    }
+    generic_handler = grpc.method_handlers_generic_handler(
+            'kms.v1.ConfigurationReleaseService', rpc_method_handlers)
+    server.add_generic_rpc_handlers((generic_handler,))
+    server.add_registered_method_handlers('kms.v1.ConfigurationReleaseService', rpc_method_handlers)
+
+
+ # This class is part of an EXPERIMENTAL API.
+class ConfigurationReleaseService:
+    """---------------------------------------------------------------------------
+    ConfigurationReleaseService
+    ---------------------------------------------------------------------------
+
+    Configuration releases are immutable namespace-scoped manifests. They
+    contain exact parameter/secret version references and non-sensitive
+    metadata only; values and secret access tokens are never embedded.
+    """
+
+    @staticmethod
+    def CreateRelease(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/kms.v1.ConfigurationReleaseService/CreateRelease',
+            kms_dot_v1_dot_kms__pb2.CreateReleaseRequest.SerializeToString,
+            kms_dot_v1_dot_kms__pb2.CreateReleaseResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def ValidateRelease(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/kms.v1.ConfigurationReleaseService/ValidateRelease',
+            kms_dot_v1_dot_kms__pb2.ValidateReleaseRequest.SerializeToString,
+            kms_dot_v1_dot_kms__pb2.ValidateReleaseResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def ActivateRelease(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/kms.v1.ConfigurationReleaseService/ActivateRelease',
+            kms_dot_v1_dot_kms__pb2.ActivateReleaseRequest.SerializeToString,
+            kms_dot_v1_dot_kms__pb2.ActivateReleaseResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def GetRelease(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/kms.v1.ConfigurationReleaseService/GetRelease',
+            kms_dot_v1_dot_kms__pb2.GetReleaseRequest.SerializeToString,
+            kms_dot_v1_dot_kms__pb2.GetReleaseResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def GetActiveRelease(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/kms.v1.ConfigurationReleaseService/GetActiveRelease',
+            kms_dot_v1_dot_kms__pb2.GetActiveReleaseRequest.SerializeToString,
+            kms_dot_v1_dot_kms__pb2.GetActiveReleaseResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def ListReleases(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/kms.v1.ConfigurationReleaseService/ListReleases',
+            kms_dot_v1_dot_kms__pb2.ListReleasesRequest.SerializeToString,
+            kms_dot_v1_dot_kms__pb2.ListReleasesResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def WatchRelease(request_iterator,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.stream_stream(
+            request_iterator,
+            target,
+            '/kms.v1.ConfigurationReleaseService/WatchRelease',
+            kms_dot_v1_dot_kms__pb2.WatchReleaseRequest.SerializeToString,
+            kms_dot_v1_dot_kms__pb2.WatchReleaseEvent.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+
+class ConfigurationSchemaServiceStub:
+    """---------------------------------------------------------------------------
+    ConfigurationSchemaService
+    ---------------------------------------------------------------------------
+
+    """
+
+    def __init__(self, channel):
+        """Constructor.
+
+        Args:
+            channel: A grpc.Channel.
+        """
+        self.CreateSchema = channel.unary_unary(
+                '/kms.v1.ConfigurationSchemaService/CreateSchema',
+                request_serializer=kms_dot_v1_dot_kms__pb2.CreateSchemaRequest.SerializeToString,
+                response_deserializer=kms_dot_v1_dot_kms__pb2.CreateSchemaResponse.FromString,
+                _registered_method=True)
+        self.GetSchema = channel.unary_unary(
+                '/kms.v1.ConfigurationSchemaService/GetSchema',
+                request_serializer=kms_dot_v1_dot_kms__pb2.GetSchemaRequest.SerializeToString,
+                response_deserializer=kms_dot_v1_dot_kms__pb2.GetSchemaResponse.FromString,
+                _registered_method=True)
+        self.ListSchemas = channel.unary_unary(
+                '/kms.v1.ConfigurationSchemaService/ListSchemas',
+                request_serializer=kms_dot_v1_dot_kms__pb2.ListSchemasRequest.SerializeToString,
+                response_deserializer=kms_dot_v1_dot_kms__pb2.ListSchemasResponse.FromString,
+                _registered_method=True)
+
+
+class ConfigurationSchemaServiceServicer:
+    """---------------------------------------------------------------------------
+    ConfigurationSchemaService
+    ---------------------------------------------------------------------------
+
+    """
+
+    def CreateSchema(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def GetSchema(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def ListSchemas(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+
+def add_ConfigurationSchemaServiceServicer_to_server(servicer, server):
+    rpc_method_handlers = {
+            'CreateSchema': grpc.unary_unary_rpc_method_handler(
+                    servicer.CreateSchema,
+                    request_deserializer=kms_dot_v1_dot_kms__pb2.CreateSchemaRequest.FromString,
+                    response_serializer=kms_dot_v1_dot_kms__pb2.CreateSchemaResponse.SerializeToString,
+            ),
+            'GetSchema': grpc.unary_unary_rpc_method_handler(
+                    servicer.GetSchema,
+                    request_deserializer=kms_dot_v1_dot_kms__pb2.GetSchemaRequest.FromString,
+                    response_serializer=kms_dot_v1_dot_kms__pb2.GetSchemaResponse.SerializeToString,
+            ),
+            'ListSchemas': grpc.unary_unary_rpc_method_handler(
+                    servicer.ListSchemas,
+                    request_deserializer=kms_dot_v1_dot_kms__pb2.ListSchemasRequest.FromString,
+                    response_serializer=kms_dot_v1_dot_kms__pb2.ListSchemasResponse.SerializeToString,
+            ),
+    }
+    generic_handler = grpc.method_handlers_generic_handler(
+            'kms.v1.ConfigurationSchemaService', rpc_method_handlers)
+    server.add_generic_rpc_handlers((generic_handler,))
+    server.add_registered_method_handlers('kms.v1.ConfigurationSchemaService', rpc_method_handlers)
+
+
+ # This class is part of an EXPERIMENTAL API.
+class ConfigurationSchemaService:
+    """---------------------------------------------------------------------------
+    ConfigurationSchemaService
+    ---------------------------------------------------------------------------
+
+    """
+
+    @staticmethod
+    def CreateSchema(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/kms.v1.ConfigurationSchemaService/CreateSchema',
+            kms_dot_v1_dot_kms__pb2.CreateSchemaRequest.SerializeToString,
+            kms_dot_v1_dot_kms__pb2.CreateSchemaResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def GetSchema(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/kms.v1.ConfigurationSchemaService/GetSchema',
+            kms_dot_v1_dot_kms__pb2.GetSchemaRequest.SerializeToString,
+            kms_dot_v1_dot_kms__pb2.GetSchemaResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def ListSchemas(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/kms.v1.ConfigurationSchemaService/ListSchemas',
+            kms_dot_v1_dot_kms__pb2.ListSchemasRequest.SerializeToString,
+            kms_dot_v1_dot_kms__pb2.ListSchemasResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+
 class AdminServiceStub:
     """---------------------------------------------------------------------------
     AdminService
@@ -871,6 +1392,11 @@ class AdminServiceStub:
                 '/kms.v1.AdminService/ListSubscribers',
                 request_serializer=kms_dot_v1_dot_kms__pb2.ListSubscribersRequest.SerializeToString,
                 response_deserializer=kms_dot_v1_dot_kms__pb2.ListSubscribersResponse.FromString,
+                _registered_method=True)
+        self.ListReleaseSubscribers = channel.unary_unary(
+                '/kms.v1.AdminService/ListReleaseSubscribers',
+                request_serializer=kms_dot_v1_dot_kms__pb2.ListReleaseSubscribersRequest.SerializeToString,
+                response_deserializer=kms_dot_v1_dot_kms__pb2.ListReleaseSubscribersResponse.FromString,
                 _registered_method=True)
         self.Health = channel.unary_unary(
                 '/kms.v1.AdminService/Health',
@@ -994,6 +1520,12 @@ class AdminServiceServicer:
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
+    def ListReleaseSubscribers(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
     def Health(self, request, context):
         """Missing associated documentation comment in .proto file."""
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
@@ -1092,6 +1624,11 @@ def add_AdminServiceServicer_to_server(servicer, server):
                     servicer.ListSubscribers,
                     request_deserializer=kms_dot_v1_dot_kms__pb2.ListSubscribersRequest.FromString,
                     response_serializer=kms_dot_v1_dot_kms__pb2.ListSubscribersResponse.SerializeToString,
+            ),
+            'ListReleaseSubscribers': grpc.unary_unary_rpc_method_handler(
+                    servicer.ListReleaseSubscribers,
+                    request_deserializer=kms_dot_v1_dot_kms__pb2.ListReleaseSubscribersRequest.FromString,
+                    response_serializer=kms_dot_v1_dot_kms__pb2.ListReleaseSubscribersResponse.SerializeToString,
             ),
             'Health': grpc.unary_unary_rpc_method_handler(
                     servicer.Health,
@@ -1589,6 +2126,33 @@ class AdminService:
             '/kms.v1.AdminService/ListSubscribers',
             kms_dot_v1_dot_kms__pb2.ListSubscribersRequest.SerializeToString,
             kms_dot_v1_dot_kms__pb2.ListSubscribersResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def ListReleaseSubscribers(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/kms.v1.AdminService/ListReleaseSubscribers',
+            kms_dot_v1_dot_kms__pb2.ListReleaseSubscribersRequest.SerializeToString,
+            kms_dot_v1_dot_kms__pb2.ListReleaseSubscribersResponse.FromString,
             options,
             channel_credentials,
             insecure,
