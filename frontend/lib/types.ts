@@ -358,6 +358,102 @@ export interface SubscribersResponse {
   current_revision: number;
 }
 
+// --- Configuration releases ------------------------------------------------
+
+export type ReleaseEntryKind = "parameter" | "secret";
+
+export interface ReleaseEntrySelector {
+  alias: string;
+  kind: ReleaseEntryKind;
+  ref: ResourceReference;
+  version?: number;
+  label?: string;
+}
+
+export interface ResourceReference {
+  namespace: NamespaceRef;
+  key: string;
+}
+
+export interface ConfigurationReleaseEntry {
+  alias: string;
+  kind: ReleaseEntryKind;
+  ref: ResourceReference;
+  version: number;
+  content_type: string;
+  metadata_json: string;
+  parameter_digest: string;
+  client_bound: boolean;
+  has_access_token: boolean;
+}
+
+export interface ConfigurationRelease {
+  namespace: NamespaceRef;
+  name: string;
+  version: number;
+  schema_id: string;
+  schema_version: number;
+  entries: ConfigurationReleaseEntry[];
+  digest: string;
+  metadata_json: string;
+  created_by: string;
+  created_at_unix_ms: number;
+}
+
+export interface ReleaseSummary {
+  release: ConfigurationRelease;
+  current: boolean;
+  previous: boolean;
+  activation_revision: number;
+}
+
+export interface CreateReleaseRequest {
+  namespace: NamespaceRef;
+  name: string;
+  schema_id?: string;
+  schema_version?: number;
+  entries: ReleaseEntrySelector[];
+  metadata_json?: string;
+}
+
+export interface ReleaseValidationError {
+  alias: string;
+  code: string;
+  schema_pointer: string;
+  message: string;
+}
+
+export interface ValidateReleaseResponse {
+  valid: boolean;
+  errors: ReleaseValidationError[];
+}
+
+export interface ConfigurationSchema {
+  id: string;
+  version: number;
+  schema_json: string;
+  digest: string;
+  metadata_json: string;
+  created_by: string;
+  created_at_unix_ms: number;
+}
+
+export interface ReleaseSubscriberState {
+  namespace: NamespaceRef;
+  release_name: string;
+  client_name: string;
+  instance_id: string;
+  identity: string;
+  state: "" | "received" | "prepared" | "applied" | "rejected"; // empty = transport registered, no lifecycle state yet
+  release_version: number;
+  activation_revision: number;
+  rejection_category: string;
+  diagnostic: string;
+  client_timestamp_unix_ms: number;
+  server_timestamp_unix_ms: number;
+  connected: boolean;
+}
+
 // --- Keys ---
 
 export interface KeyMetadata {
@@ -386,6 +482,13 @@ export const POLICY_OPERATIONS: string[] = [
   "secret:disable",
   "secret:destroy",
   "secret:promote",
+  "configuration-release:*",
+  "configuration-release:create",
+  "configuration-release:read",
+  "configuration-release:validate",
+  "configuration-release:activate",
+  "configuration-release:list",
+  "configuration-release:watch",
   "admin:*",
   "admin:namespace:create",
   "admin:namespace:update",

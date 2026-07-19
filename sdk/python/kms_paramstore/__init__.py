@@ -30,6 +30,20 @@ from .errors import (
     UnauthenticatedError,
 )
 from .models import Parameter, PutResult, PutSecretResult, SecretInfo, SecretVersion
+from .release import (
+    PreparedRelease,
+    ReleaseCommitError,
+    ReleaseEntry,
+    ReleaseLoader,
+    ReleaseLoaderConfig,
+    ReleaseLoaderError,
+    ReleaseSnapshot,
+    ReleaseStartupError,
+    ReleaseStats,
+    ReleaseStatus,
+    SecretTokenProvider,
+    run_typed_release,
+)
 from .secret import Secret, new_secret
 from .tls import mtls_from_files, tls_from_bytes, tls_from_files
 from .values import ParameterHandle, ParameterValue, SecretValue
@@ -53,6 +67,18 @@ __all__ = [
     "SecretVersion",
     "PutResult",
     "PutSecretResult",
+    "PreparedRelease",
+    "ReleaseCommitError",
+    "ReleaseEntry",
+    "ReleaseLoader",
+    "ReleaseLoaderConfig",
+    "ReleaseLoaderError",
+    "ReleaseSnapshot",
+    "ReleaseStartupError",
+    "ReleaseStats",
+    "ReleaseStatus",
+    "SecretTokenProvider",
+    "run_typed_release",
     "ParamStoreError",
     "NotFoundError",
     "PermissionDeniedError",

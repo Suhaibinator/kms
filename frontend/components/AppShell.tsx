@@ -28,6 +28,7 @@ const NAV: NavGroup[] = [
       { href: "/namespaces", label: "Namespaces", icon: <Icon.namespace /> },
       { href: "/parameters", label: "Parameters", icon: <Icon.parameter /> },
       { href: "/secrets", label: "Secrets", icon: <Icon.secret /> },
+      { href: "/releases", label: "Releases", icon: <Icon.parameter /> },
     ],
   },
   {

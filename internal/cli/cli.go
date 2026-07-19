@@ -71,6 +71,8 @@ func (c *CLI) Run(args []string) int {
 		return c.cmdPutParameter(cmdArgs)
 	case "list":
 		return c.cmdList(cmdArgs)
+	case "release":
+		return c.cmdRelease(cmdArgs)
 	case "version", "--version", "-version":
 		_, _ = fmt.Fprintln(c.Stdout, Version)
 		return 0
@@ -139,6 +141,7 @@ Convenience (talk to a running server over gRPC):
   get-secret /env/app/key       Fetch a secret (requires --show, --out, or a pipe).
   put-parameter /env/app/key V  Store a parameter value.
   list env/app                  List parameters and secrets in a namespace (--prefix).
+  release                       Manage configuration releases and schemas.
 
 Other:
   version          Print the build version.

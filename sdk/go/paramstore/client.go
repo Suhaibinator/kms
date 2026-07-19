@@ -103,11 +103,12 @@ type Client struct {
 	timeout    time.Duration
 	logger     Logger
 
-	cc      *grpc.ClientConn
-	params  kmsv1.ParameterServiceClient
-	secrets kmsv1.SecretServiceClient
-	watch   kmsv1.WatchServiceClient
-	admin   kmsv1.AdminServiceClient
+	cc       *grpc.ClientConn
+	params   kmsv1.ParameterServiceClient
+	secrets  kmsv1.SecretServiceClient
+	watch    kmsv1.WatchServiceClient
+	releases kmsv1.ConfigurationReleaseServiceClient
+	admin    kmsv1.AdminServiceClient
 
 	// cfgNamespace is the parsed Config.Namespace (zero when unset). nsMu guards
 	// the WhoAmI-discovered namespace, resolved lazily once for the client's
@@ -196,6 +197,7 @@ func NewClient(cfg Config) (*Client, error) {
 		params:       kmsv1.NewParameterServiceClient(cc),
 		secrets:      kmsv1.NewSecretServiceClient(cc),
 		watch:        kmsv1.NewWatchServiceClient(cc),
+		releases:     kmsv1.NewConfigurationReleaseServiceClient(cc),
 		admin:        kmsv1.NewAdminServiceClient(cc),
 		cfgNamespace: nsRef,
 		cache:        newCache(cfg.CacheTTL),
