@@ -240,15 +240,21 @@ creation/rotation time and is not retrievable again:
   (hash-only) or a certificate (public key only; the leaf private key is
   returned once at issuance and never persisted).
 - **Per-secret access tokens** (`secrets.access_token_hash`, prefix
-  `kmss_`): optional, attached to an individual secret. When set, every
-  `GetSecret`/`PutSecret` on that secret — **including by admins** — must
-  supply the matching token via the `x-kms-secret-token` gRPC metadata
-  key / `X-KMS-Secret-Token` HTTP header (`tokenHashMatches`, constant-time
-  comparison via `hmac.Equal`). For client-bound secrets this same token
-  additionally serves as the key-derivation material described above. The
-  admin `RevealSecret` path bypasses the per-secret token gate (a
-  break-glass capability, fully audited) but — as noted above — still
-  cannot decrypt a client-bound secret without the token.
+  `kmss_`): optional, attached to an individual secret. Each immutable
+  version records whether a token was required when it was written, so first
+  enabling a token on a later standard-secret version does not retroactively
+  protect older versions. `GetSecret` for a standard-secret version marked
+  token-protected — **including when called by admins** — requires the matching
+  token via the `x-kms-secret-token` gRPC metadata key /
+  `X-KMS-Secret-Token` HTTP header (`tokenHashMatches`, constant-time
+  comparison via `hmac.Equal`). Explicit rotation replaces the shared
+  credential for every standard-secret version already marked protected. For
+  client-bound secrets, writing another version requires the current token,
+  and reads use the token as the per-version key-derivation material described
+  above. The admin `RevealSecret` path
+  bypasses the standard per-secret token gate (a break-glass capability,
+  fully audited) but — as noted above — still cannot decrypt a client-bound
+  secret without that version's token.
 
 Authentication failures are generic (`domain.ErrUnauthenticated`,
 "invalid credentials") regardless of whether the token was malformed,
@@ -472,7 +478,7 @@ authorize resource reads, including every cross-namespace reference; each SDK
 loader fetches pinned values through the existing parameter and secret RPCs and
 their existing authorization and cryptographic checks.
 
-Secret entries persist only resource identity/version, content type,
+Secret entries capture the exact version's resource identity, content type,
 non-sensitive metadata, and the booleans `client_bound` and
 `has_access_token`. Secret plaintext, token hashes, plaintext access tokens,
 and client-bound key shares never enter release rows, digests, watch events,

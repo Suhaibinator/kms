@@ -62,6 +62,12 @@ func (s *Service) GetSecret(ctx context.Context, pr Principal, ref domain.Ref, v
 	// The generic error covers missing and wrong tokens so callers cannot
 	// distinguish them.
 	//
+	// Protection presence is pinned to the exact version. This prevents adding
+	// a token to a later version from retroactively making older immutable
+	// versions unreadable. The token hash remains secret-scoped, so rotating an
+	// existing standard-secret token replaces the credential for every version
+	// that was created as token-protected.
+	//
 	// For a client-bound secret the token is the decryption key itself, bound
 	// per version (each version has its own HKDF salt and may have been written
 	// under a different token after a rotation). The secret-level AccessTokenHash
@@ -70,13 +76,13 @@ func (s *Service) GetSecret(ctx context.Context, pr Principal, ref domain.Ref, v
 	// be present here and let the crypto layer authenticate it against the
 	// specific version — a wrong token fails as a generic decryption error, with
 	// no additional information leaked.
-	if rec.ClientBound {
+	if ver.ClientBound {
 		if pr.SecretToken == "" {
 			s.auditRef(ctx, pr, "secret.read", domain.ResourceSecret, ref, ver.Version, "deny",
 				map[string]string{"reason": "token"})
 			return domain.SecretValue{}, domain.Errorf(domain.ErrPermissionDenied, "access denied")
 		}
-	} else if len(rec.AccessTokenHash) > 0 && !tokenHashMatches(pr.SecretToken, rec.AccessTokenHash) {
+	} else if ver.HasAccessToken && !tokenHashMatches(pr.SecretToken, rec.AccessTokenHash) {
 		s.auditRef(ctx, pr, "secret.read", domain.ResourceSecret, ref, ver.Version, "deny",
 			map[string]string{"reason": "token"})
 		return domain.SecretValue{}, domain.Errorf(domain.ErrPermissionDenied, "access denied")
@@ -102,7 +108,7 @@ func (s *Service) GetSecret(ctx context.Context, pr Principal, ref domain.Ref, v
 		Ref:         ref,
 		Version:     ver.Version,
 		Value:       plaintext,
-		ContentType: rec.ContentType,
+		ContentType: ver.ContentType,
 		Metadata:    ver.Metadata,
 		CreatedAt:   ver.CreatedAt,
 	}, nil
@@ -128,7 +134,7 @@ func (s *Service) RevealSecret(ctx context.Context, pr Principal, ref domain.Ref
 	if err != nil {
 		return domain.SecretValue{}, err
 	}
-	if rec.ClientBound {
+	if ver.ClientBound {
 		return domain.SecretValue{}, domain.Errorf(domain.ErrFailedPrecondition,
 			"client-bound secrets cannot be revealed: the server cannot decrypt them without the client token")
 	}
@@ -151,7 +157,7 @@ func (s *Service) RevealSecret(ctx context.Context, pr Principal, ref domain.Ref
 		Ref:         ref,
 		Version:     ver.Version,
 		Value:       plaintext,
-		ContentType: rec.ContentType,
+		ContentType: ver.ContentType,
 		Metadata:    ver.Metadata,
 		CreatedAt:   ver.CreatedAt,
 	}, nil

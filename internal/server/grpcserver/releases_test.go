@@ -2,6 +2,7 @@ package grpcserver
 
 import (
 	"context"
+	"io"
 	"net"
 	"path/filepath"
 	"testing"
@@ -109,6 +110,7 @@ func TestConfigurationReleaseGRPCLifecycleAndWatch(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		acknowledged := false
 		for _, subscriber := range states.GetSubscribers() {
 			if subscriber.GetState() != domain.ReleaseStateReceived {
 				continue
@@ -116,11 +118,63 @@ func TestConfigurationReleaseGRPCLifecycleAndWatch(t *testing.T) {
 			if subscriber.GetDiagnostic() != "[redacted]" || !subscriber.GetConnected() {
 				t.Fatalf("subscriber=%+v", subscriber)
 			}
-			_ = stream.CloseSend()
-			return
+			acknowledged = true
+			break
+		}
+		if acknowledged {
+			break
 		}
 		if time.Now().After(deadline) {
 			t.Fatal("acknowledgement was not persisted")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	// A reconnect can briefly overlap the old stream. Close the newer stream
+	// first, then the older one: the final close must fence against the newest
+	// persisted connection generation rather than its own older generation.
+	duplicate, err := releases.WatchRelease(adminCtx())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := duplicate.Send(&kmsv1.WatchReleaseRequest{Request: &kmsv1.WatchReleaseRequest_Register{Register: &kmsv1.ReleaseWatchRegistration{Namespace: pNS("prod", "app"), Name: "runtime", ClientName: "api", InstanceId: "replica-1"}}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := duplicate.Recv(); err != nil {
+		t.Fatal(err)
+	}
+	if err := duplicate.CloseSend(); err != nil {
+		t.Fatal(err)
+	}
+	for {
+		if _, err := duplicate.Recv(); err == io.EOF {
+			break
+		} else if err != nil {
+			t.Fatalf("duplicate stream close err=%v, want EOF", err)
+		}
+	}
+
+	if err := stream.CloseSend(); err != nil {
+		t.Fatal(err)
+	}
+	for {
+		if _, err := stream.Recv(); err == io.EOF {
+			break
+		} else if err != nil {
+			t.Fatalf("original stream close err=%v, want EOF", err)
+		}
+	}
+	deadline = time.Now().Add(time.Second)
+	for {
+		states, err := admin.ListReleaseSubscribers(adminCtx(), &kmsv1.ListReleaseSubscribersRequest{Namespace: pNS("prod", "app"), ReleaseName: "runtime"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(states.GetSubscribers()) == 1 && !states.GetSubscribers()[0].GetConnected() {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("last duplicate stream close left subscriber connected: %+v", states.GetSubscribers())
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
@@ -129,14 +183,24 @@ func TestConfigurationReleaseGRPCLifecycleAndWatch(t *testing.T) {
 func ptrUint64(v uint64) *uint64 { return &v }
 
 func TestReleaseConnectionOverlapDoesNotReportPrematureDisconnect(t *testing.T) {
-	h := &configurationReleaseServer{connections: make(map[releaseConnectionKey]map[uint64]struct{})}
+	h := &configurationReleaseServer{connections: make(map[releaseConnectionKey]*releaseConnectionState)}
 	key := releaseConnectionKey{namespace: domain.NamespaceRef{Env: "prod", App: "app"}, name: "runtime", clientName: "api", instanceID: "replica-1"}
 	first := h.addConnection(key)
-	second := h.addConnection(key)
-	if h.removeConnection(key, first) {
-		t.Fatal("older overlapping stream was treated as the last connection")
+	if err := h.persistConnection(key, first, func() error { return nil }); err != nil {
+		t.Fatal(err)
 	}
-	if !h.removeConnection(key, second) {
+	second := h.addConnection(key)
+	if err := h.persistConnection(key, second, func() error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if last, _ := h.removeConnection(key, second); last {
+		t.Fatal("newer overlapping stream was treated as the last connection")
+	}
+	last, persistedID := h.removeConnection(key, first)
+	if !last {
 		t.Fatal("last stream disconnect was not detected")
+	}
+	if persistedID != second {
+		t.Fatalf("disconnect generation=%d, want most recently persisted generation %d", persistedID, second)
 	}
 }

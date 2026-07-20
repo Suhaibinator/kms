@@ -97,24 +97,27 @@ func (secretModel) TableName() string { return "secrets" }
 
 // secretVersionModel -> secret_versions.
 type secretVersionModel struct {
-	ID            int64       `gorm:"column:id;primaryKey;autoIncrement"`
-	SecretID      int64       `gorm:"column:secret_id;not null;uniqueIndex:idx_secret_ver,priority:1"`
-	Secret        secretModel `gorm:"foreignKey:SecretID;references:ID;constraint:OnDelete:CASCADE"`
-	VersionNumber int64       `gorm:"column:version_number;not null;uniqueIndex:idx_secret_ver,priority:2"`
-	Ciphertext    []byte      `gorm:"column:ciphertext"`
-	EncryptedDEK  []byte      `gorm:"column:encrypted_dek"`
-	KEKID         string      `gorm:"column:kek_id;not null"`
-	WrapMode      string      `gorm:"column:wrap_mode;not null;default:standard"`
-	ClientKeySalt []byte      `gorm:"column:client_key_salt"`
-	Algorithm     string      `gorm:"column:algorithm;not null;default:AES-256-GCM"`
-	Nonce         []byte      `gorm:"column:nonce"`
-	AAD           string      `gorm:"column:aad;not null"`
-	State         string      `gorm:"column:state;not null;default:enabled"`
-	CreatedBy     string      `gorm:"column:created_by;not null;default:''"`
-	CreatedAt     string      `gorm:"column:created_at;not null"`
-	DestroyedAt   *string     `gorm:"column:destroyed_at"`
-	ExpiresAt     *string     `gorm:"column:expires_at"`
-	MetadataJSON  string      `gorm:"column:metadata_json;not null;default:{}"`
+	ID             int64       `gorm:"column:id;primaryKey;autoIncrement"`
+	SecretID       int64       `gorm:"column:secret_id;not null;uniqueIndex:idx_secret_ver,priority:1"`
+	Secret         secretModel `gorm:"foreignKey:SecretID;references:ID;constraint:OnDelete:CASCADE"`
+	VersionNumber  int64       `gorm:"column:version_number;not null;uniqueIndex:idx_secret_ver,priority:2"`
+	ContentType    string      `gorm:"column:content_type;not null;default:application/octet-stream"`
+	ClientBound    int64       `gorm:"column:client_bound;not null;default:0"`
+	HasAccessToken int64       `gorm:"column:has_access_token;not null;default:0"`
+	Ciphertext     []byte      `gorm:"column:ciphertext"`
+	EncryptedDEK   []byte      `gorm:"column:encrypted_dek"`
+	KEKID          string      `gorm:"column:kek_id;not null"`
+	WrapMode       string      `gorm:"column:wrap_mode;not null;default:standard"`
+	ClientKeySalt  []byte      `gorm:"column:client_key_salt"`
+	Algorithm      string      `gorm:"column:algorithm;not null;default:AES-256-GCM"`
+	Nonce          []byte      `gorm:"column:nonce"`
+	AAD            string      `gorm:"column:aad;not null"`
+	State          string      `gorm:"column:state;not null;default:enabled"`
+	CreatedBy      string      `gorm:"column:created_by;not null;default:''"`
+	CreatedAt      string      `gorm:"column:created_at;not null"`
+	DestroyedAt    *string     `gorm:"column:destroyed_at"`
+	ExpiresAt      *string     `gorm:"column:expires_at"`
+	MetadataJSON   string      `gorm:"column:metadata_json;not null;default:{}"`
 }
 
 func (secretVersionModel) TableName() string { return "secret_versions" }
@@ -447,23 +450,26 @@ func toSecretRecord(sec secretModel, ref domain.Ref, labels map[string]uint64) S
 
 func toSecretVersionRecord(v secretVersionModel) SecretVersionRecord {
 	return SecretVersionRecord{
-		ID:            v.ID,
-		SecretID:      v.SecretID,
-		Version:       uint64(v.VersionNumber),
-		Ciphertext:    v.Ciphertext,
-		EncryptedDEK:  v.EncryptedDEK,
-		KEKID:         v.KEKID,
-		WrapMode:      v.WrapMode,
-		ClientKeySalt: v.ClientKeySalt,
-		Algorithm:     v.Algorithm,
-		Nonce:         v.Nonce,
-		AAD:           v.AAD,
-		State:         v.State,
-		CreatedBy:     v.CreatedBy,
-		CreatedAt:     parseTime(v.CreatedAt),
-		DestroyedAt:   parseTimePtr(v.DestroyedAt),
-		ExpiresAt:     parseTimePtr(v.ExpiresAt),
-		Metadata:      v.MetadataJSON,
+		ID:             v.ID,
+		SecretID:       v.SecretID,
+		Version:        uint64(v.VersionNumber),
+		ContentType:    v.ContentType,
+		ClientBound:    i2b(v.ClientBound),
+		HasAccessToken: i2b(v.HasAccessToken),
+		Ciphertext:     v.Ciphertext,
+		EncryptedDEK:   v.EncryptedDEK,
+		KEKID:          v.KEKID,
+		WrapMode:       v.WrapMode,
+		ClientKeySalt:  v.ClientKeySalt,
+		Algorithm:      v.Algorithm,
+		Nonce:          v.Nonce,
+		AAD:            v.AAD,
+		State:          v.State,
+		CreatedBy:      v.CreatedBy,
+		CreatedAt:      parseTime(v.CreatedAt),
+		DestroyedAt:    parseTimePtr(v.DestroyedAt),
+		ExpiresAt:      parseTimePtr(v.ExpiresAt),
+		Metadata:       v.MetadataJSON,
 	}
 }
 

@@ -109,6 +109,11 @@ immediately via its shared database). All flags are the standard library
 | `rotate-kek` | `--db`, `--key-file` (current key, omit to use the current passphrase), `--new-key-file` (new key, omit to enter a new passphrase) | Unseals with the current key, generates or loads the new key, and calls the same `Service.RotateKEK` used internally — rewrapping every **non-destroyed** secret version's DEK and every built-in CA key under the new KEK in one transaction. Prints both counts (`N secret versions and M CA keys rewrapped`). Run with `serve` stopped; a live process retains the old keyring. |
 | `import` | `--from` (JSON file or SuhaibParameterStore SQLite export), `--namespace env/app` **or** `--env`/`--app`, `--db` (default `./kms.db`), `--master-key-file`, `--dry-run`, `--report FILE` | Maps flat source keys to **relative slug keys** (`slug(key)`, e.g. `TWILIO_SID` → `twilio-sid`) in the destination namespace, **auto-creates the namespace** if it does not exist, writes each as a new secret via a ref-based `PutSecret` with a freshly minted per-secret access token, and emits a mapping report (old key → `/env/app/key` display path → token, written once). Distinct source keys that slug to the same key are reported as a collision rather than silently overwriting. `--dry-run` reports the mapping without writing or minting tokens. Pass either `--namespace` or `--env`/`--app`, not both. See [`migration.md`](migration.md) for the full gradethis walkthrough. |
 
+The v1→v2 database migration adds content type, client-bound mode, and
+token-required state to each immutable secret-version row. Because v1 retained
+only the latest shared secret attributes, legacy versions are backfilled from
+those values; every version created after migration stores its own attributes.
+
 `init`, `check`, `rotate-kek`, and `import` all go through the same
 master-key acquisition path as `serve` (key file → `KMS_MASTER_PASSPHRASE`
 → interactive prompt) via the shared `unseal` helper, so the same no-TTY

@@ -555,6 +555,124 @@ func TestCreateSecretVersionKeepsTokenHash(t *testing.T) {
 	}
 }
 
+func TestSecretVersionPinsContentAndProtectionAttributes(t *testing.T) {
+	st := newStore(t)
+	ctx := context.Background()
+	seedNS(t, st, "prod", "app")
+	r := ref("prod", "app", "s")
+
+	if _, _, err := st.CreateSecretVersion(ctx, CreateSecretParams{
+		Ref: r, ContentType: "text/plain", Encrypt: encryptStub(nil),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := st.CreateSecretVersion(ctx, CreateSecretParams{
+		Ref: r, ContentType: "application/json", AccessTokenHash: []byte("token-v2"), Encrypt: encryptStub(nil),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// Omitting a hash preserves the per-secret token and records that the new
+	// version is protected without minting or rotating it.
+	if _, _, err := st.CreateSecretVersion(ctx, CreateSecretParams{
+		Ref: r, ContentType: "application/yaml", Encrypt: encryptStub(nil),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	rec, v1, err := st.GetSecretVersion(ctx, r, 1, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rec.ContentType != "application/yaml" || len(rec.AccessTokenHash) == 0 {
+		t.Fatalf("latest secret metadata = %+v, want yaml with token", rec)
+	}
+	if v1.ContentType != "text/plain" || v1.ClientBound || v1.HasAccessToken {
+		t.Fatalf("v1 attributes = %+v, want original unprotected text version", v1)
+	}
+	_, v2, err := st.GetSecretVersion(ctx, r, 2, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v2.ContentType != "application/json" || v2.ClientBound || !v2.HasAccessToken {
+		t.Fatalf("v2 attributes = %+v, want protected json version", v2)
+	}
+	_, v3, err := st.GetSecretVersion(ctx, r, 3, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v3.ContentType != "application/yaml" || !v3.HasAccessToken {
+		t.Fatalf("v3 attributes = %+v, want inherited token protection", v3)
+	}
+
+	bound := ref("prod", "app", "bound")
+	if _, _, err := st.CreateSecretVersion(ctx, CreateSecretParams{
+		Ref: bound, ClientBound: true, AccessTokenHash: []byte("bound-token"), Encrypt: encryptStub(nil),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	_, boundV1, err := st.GetSecretVersion(ctx, bound, 1, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !boundV1.ClientBound || !boundV1.HasAccessToken {
+		t.Fatalf("client-bound v1 attributes = %+v", boundV1)
+	}
+}
+
+func TestSchemaV2BackfillsSecretVersionAttributes(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "kms.db")
+	st, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	seedNS(t, st, "prod", "app")
+	r := ref("prod", "app", "s")
+	if _, _, err := st.CreateSecretVersion(ctx, CreateSecretParams{
+		Ref: r, ContentType: "ignored", Encrypt: encryptStub(nil),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// Emulate a v1 database after AutoMigrate has introduced the new columns:
+	// historical versions have no independent values, while the shared secret
+	// row contains the only attributes that v2 retained.
+	if err := st.db.Exec(`UPDATE secrets SET content_type = ?, client_bound = 1, access_token_hash = ? WHERE name = ?`, "application/custom", []byte("token-hash"), "s").Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := st.db.Exec(`UPDATE secret_versions SET content_type = '', client_bound = 0, has_access_token = 0`).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := st.db.Exec(`DELETE FROM schema_migrations`).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := st.db.Create(&schemaMigrationModel{Version: 1, AppliedAt: fmtTime(time.Now())}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	st, err = Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	_, ver, err := st.GetSecretVersion(ctx, r, 1, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ver.ContentType != "application/custom" || !ver.ClientBound || !ver.HasAccessToken {
+		t.Fatalf("backfilled attributes = %+v", ver)
+	}
+	var latest schemaMigrationModel
+	if err := st.db.Order("version DESC").First(&latest).Error; err != nil {
+		t.Fatal(err)
+	}
+	if latest.Version != schemaVersion {
+		t.Fatalf("schema version = %d, want %d", latest.Version, schemaVersion)
+	}
+}
+
 func TestSecretEncryptErrorAborts(t *testing.T) {
 	st := newStore(t)
 	ctx := context.Background()

@@ -193,8 +193,26 @@ func (s *SQLStore) migrate() error {
 	if err := s.db.Exec(changeLogIndexDDL).Error; err != nil {
 		return fmt.Errorf("create change_log index: %w", err)
 	}
+	needsSecretVersionAttributeBackfill := current < 2 ||
+		!s.db.Migrator().HasColumn(&secretVersionModel{}, "ContentType") ||
+		!s.db.Migrator().HasColumn(&secretVersionModel{}, "ClientBound") ||
+		!s.db.Migrator().HasColumn(&secretVersionModel{}, "HasAccessToken")
 	if err := s.db.AutoMigrate(autoMigrateModels...); err != nil {
 		return fmt.Errorf("auto-migrate: %w", err)
+	}
+	if needsSecretVersionAttributeBackfill {
+		// v2 makes content/protection metadata immutable per secret version.
+		// Older schemas only retained the latest values on secrets, so that is
+		// the only safe backfill available for existing version history. Future
+		// writes persist the attributes alongside every new version.
+		if err := s.db.Transaction(func(tx *gorm.DB) error {
+			return tx.Exec(`UPDATE secret_versions
+				SET content_type = (SELECT content_type FROM secrets WHERE secrets.id = secret_versions.secret_id),
+				    client_bound = (SELECT client_bound FROM secrets WHERE secrets.id = secret_versions.secret_id),
+				    has_access_token = CASE WHEN COALESCE(length((SELECT access_token_hash FROM secrets WHERE secrets.id = secret_versions.secret_id)), 0) > 0 THEN 1 ELSE 0 END`).Error
+		}); err != nil {
+			return fmt.Errorf("backfill secret version attributes: %w", err)
+		}
 	}
 
 	// Defensive verification of the critical AUTOINCREMENT invariant.

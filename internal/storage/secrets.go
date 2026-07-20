@@ -110,6 +110,10 @@ func (s *SQLStore) CreateSecretVersion(ctx context.Context, p CreateSecretParams
 			return err
 		}
 		newVer := uint64(maxVer) + 1
+		hasAccessToken := len(sec.AccessTokenHash) > 0
+		if p.AccessTokenHash != nil {
+			hasAccessToken = len(p.AccessTokenHash) > 0
+		}
 
 		payload, err := p.Encrypt(newVer)
 		if err != nil {
@@ -132,21 +136,24 @@ func (s *SQLStore) CreateSecretVersion(ctx context.Context, p CreateSecretParams
 		}
 
 		sv := secretVersionModel{
-			SecretID:      sec.ID,
-			VersionNumber: int64(newVer),
-			Ciphertext:    payload.Ciphertext,
-			EncryptedDEK:  payload.EncryptedDEK,
-			KEKID:         payload.KEKID,
-			WrapMode:      zeroOr(payload.WrapMode, domain.WrapModeStandard),
-			ClientKeySalt: payload.ClientKeySalt,
-			Algorithm:     zeroOr(payload.Algorithm, "AES-256-GCM"),
-			Nonce:         payload.Nonce,
-			AAD:           payload.AAD,
-			State:         domain.StateEnabled,
-			CreatedBy:     p.CreatedBy,
-			CreatedAt:     now,
-			ExpiresAt:     fmtTimePtr(p.ExpiresAt),
-			MetadataJSON:  metadata,
+			SecretID:       sec.ID,
+			VersionNumber:  int64(newVer),
+			ContentType:    contentType,
+			ClientBound:    b2i(p.ClientBound),
+			HasAccessToken: b2i(hasAccessToken),
+			Ciphertext:     payload.Ciphertext,
+			EncryptedDEK:   payload.EncryptedDEK,
+			KEKID:          payload.KEKID,
+			WrapMode:       zeroOr(payload.WrapMode, domain.WrapModeStandard),
+			ClientKeySalt:  payload.ClientKeySalt,
+			Algorithm:      zeroOr(payload.Algorithm, "AES-256-GCM"),
+			Nonce:          payload.Nonce,
+			AAD:            payload.AAD,
+			State:          domain.StateEnabled,
+			CreatedBy:      p.CreatedBy,
+			CreatedAt:      now,
+			ExpiresAt:      fmtTimePtr(p.ExpiresAt),
+			MetadataJSON:   metadata,
 		}
 		if err := tx.Omit(clause.Associations).Create(&sv).Error; err != nil {
 			return err

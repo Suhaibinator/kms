@@ -43,9 +43,9 @@ export default function ReleasesPage() {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "type": "object"
 }`);
-  const [diffFrom, setDiffFrom] = useState(0);
-  const [diffTo, setDiffTo] = useState(0);
-  const [selectedVersion, setSelectedVersion] = useState(0);
+  const [diffFrom, setDiffFrom] = useState("");
+  const [diffTo, setDiffTo] = useState("");
+  const [selectedReleaseKey, setSelectedReleaseKey] = useState("");
 
   const hasNS = Boolean(ns.env && ns.app);
 
@@ -163,8 +163,8 @@ export default function ReleasesPage() {
   }
 
   const diff = useMemo(() => {
-    const from = releases.find((r) => r.release.version === diffFrom)?.release;
-    const to = releases.find((r) => r.release.version === diffTo)?.release;
+    const from = releases.find((r) => releaseKey(r.release) === diffFrom)?.release;
+    const to = releases.find((r) => releaseKey(r.release) === diffTo)?.release;
     if (!from || !to) return [];
     const aliases = new Set([...from.entries.map((e) => e.alias), ...to.entries.map((e) => e.alias)]);
     return [...aliases].sort().flatMap((alias) => {
@@ -203,7 +203,7 @@ export default function ReleasesPage() {
     return [...grouped.values()].sort((a, b) => a.client.localeCompare(b.client) || a.instance.localeCompare(b.instance));
   }, [subscribers]);
 
-  const selectedRelease = releases.find((summary) => summary.release.version === selectedVersion)?.release;
+  const selectedRelease = releases.find((summary) => releaseKey(summary.release) === selectedReleaseKey)?.release;
 
   function lifecycleCell(state: ReleaseSubscriberState | undefined) {
     if (!state) return <span className="faint">—</span>;
@@ -246,7 +246,7 @@ export default function ReleasesPage() {
                 <td className="mono">{r.schema_id ? `${r.schema_id}@${r.schema_version}` : <span className="faint">none</span>}</td>
                 <td>{r.entries.length}</td>
                 <td className="mono" title={r.digest}>{r.digest.slice(0, 16)}…</td>
-                <td className="row-wrap"><button className="btn btn-sm" onClick={() => setSelectedVersion(r.version)}>View</button><button className="btn btn-sm" onClick={() => void validate(r)}>Validate</button><button className="btn btn-sm btn-primary" disabled={summary.current} onClick={() => void activate(summary)}>Activate</button></td>
+                <td className="row-wrap"><button className="btn btn-sm" onClick={() => setSelectedReleaseKey(releaseKey(r))}>View</button><button className="btn btn-sm" onClick={() => void validate(r)}>Validate</button><button className="btn btn-sm btn-primary" disabled={summary.current} onClick={() => void activate(summary)}>Activate</button></td>
               </tr>;
             })}</tbody>
           </table>
@@ -279,8 +279,8 @@ export default function ReleasesPage() {
       <section className="card mb-16">
         <h2>Diff versions</h2>
         <div className="row-wrap mb-12">
-          <select className="select" value={diffFrom} onChange={(e) => setDiffFrom(Number(e.target.value))}><option value={0}>From…</option>{releases.map((r) => <option key={`f-${r.release.version}`} value={r.release.version}>{releaseKey(r.release)}</option>)}</select>
-          <select className="select" value={diffTo} onChange={(e) => setDiffTo(Number(e.target.value))}><option value={0}>To…</option>{releases.map((r) => <option key={`t-${r.release.version}`} value={r.release.version}>{releaseKey(r.release)}</option>)}</select>
+          <select className="select" value={diffFrom} onChange={(e) => setDiffFrom(e.target.value)}><option value="">From…</option>{releases.map((r) => <option key={`f-${releaseKey(r.release)}`} value={releaseKey(r.release)}>{releaseKey(r.release)}</option>)}</select>
+          <select className="select" value={diffTo} onChange={(e) => setDiffTo(e.target.value)}><option value="">To…</option>{releases.map((r) => <option key={`t-${releaseKey(r.release)}`} value={releaseKey(r.release)}>{releaseKey(r.release)}</option>)}</select>
         </div>
         {diffFrom && diffTo && diff.length === 0 ? <div className="faint">No manifest differences.</div> : diff.length ? <div className="table-wrap"><table className="data"><thead><tr><th>Alias</th><th>From</th><th>To</th></tr></thead><tbody>{diff.map((d) => <tr key={d.alias}><td className="mono">{d.alias}</td><td className="mono">{d.left}</td><td className="mono">{d.right}</td></tr>)}</tbody></table></div> : null}
       </section>

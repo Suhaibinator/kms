@@ -17,8 +17,16 @@ type configurationReleaseServer struct {
 	kmsv1.UnimplementedConfigurationReleaseServiceServer
 	s              *Server
 	connectionMu   sync.Mutex
-	connections    map[releaseConnectionKey]map[uint64]struct{}
+	connections    map[releaseConnectionKey]*releaseConnectionState
 	nextConnection uint64
+}
+
+type releaseConnectionState struct {
+	// registrationMu preserves the order in which connection generations are
+	// persisted without blocking registrations for other subscriber instances.
+	registrationMu sync.Mutex
+	active         map[uint64]struct{}
+	persistedID    uint64
 }
 
 type releaseConnectionKey struct {
@@ -32,22 +40,58 @@ func (h *configurationReleaseServer) addConnection(key releaseConnectionKey) uin
 	h.connectionMu.Lock()
 	defer h.connectionMu.Unlock()
 	h.nextConnection++
-	if h.connections[key] == nil {
-		h.connections[key] = make(map[uint64]struct{})
+	if h.connections == nil {
+		h.connections = make(map[releaseConnectionKey]*releaseConnectionState)
 	}
-	h.connections[key][h.nextConnection] = struct{}{}
+	state := h.connections[key]
+	if state == nil {
+		state = &releaseConnectionState{active: make(map[uint64]struct{})}
+		h.connections[key] = state
+	}
+	state.active[h.nextConnection] = struct{}{}
 	return h.nextConnection
 }
 
-func (h *configurationReleaseServer) removeConnection(key releaseConnectionKey, id uint64) bool {
+// persistConnection serializes registrations for one subscriber instance and
+// records the generation that storage most recently accepted. Keeping this
+// distinct from the active stream IDs lets the last duplicate stream clear
+// liveness even when a newer duplicate closed before it.
+func (h *configurationReleaseServer) persistConnection(key releaseConnectionKey, id uint64, persist func() error) error {
+	h.connectionMu.Lock()
+	state := h.connections[key]
+	h.connectionMu.Unlock()
+	if state == nil {
+		return fmt.Errorf("release connection registration disappeared")
+	}
+	state.registrationMu.Lock()
+	defer state.registrationMu.Unlock()
+	if err := persist(); err != nil {
+		return err
+	}
+	h.connectionMu.Lock()
+	if h.connections[key] == state {
+		state.persistedID = id
+	}
+	h.connectionMu.Unlock()
+	return nil
+}
+
+func (h *configurationReleaseServer) removeConnection(key releaseConnectionKey, id uint64) (bool, uint64) {
 	h.connectionMu.Lock()
 	defer h.connectionMu.Unlock()
-	delete(h.connections[key], id)
-	if len(h.connections[key]) != 0 {
-		return false
+	state := h.connections[key]
+	if state == nil {
+		return false, 0
+	}
+	if _, ok := state.active[id]; !ok {
+		return false, 0
+	}
+	delete(state.active, id)
+	if len(state.active) != 0 {
+		return false, 0
 	}
 	delete(h.connections, key)
-	return true
+	return state.persistedID != 0, state.persistedID
 }
 
 func (h *configurationReleaseServer) CreateRelease(ctx context.Context, req *kmsv1.CreateReleaseRequest) (*kmsv1.CreateReleaseResponse, error) {
@@ -166,17 +210,30 @@ func (h *configurationReleaseServer) WatchRelease(stream kmsv1.ConfigurationRele
 	connectionKey := releaseConnectionKey{namespace: ns, name: reg.Name, clientName: reg.ClientName, instanceID: reg.InstanceID}
 	connectionID := h.addConnection(connectionKey)
 	connectionIDText := fmt.Sprintf("%d", connectionID)
-	if err := h.s.svc.SetReleaseSubscriberConnected(ctx, ns, reg.Name, reg.ClientName, reg.InstanceID, pr.Identity.Name, connectionIDText, true); err != nil {
-		h.removeConnection(connectionKey, connectionID)
+	if err := h.persistConnection(connectionKey, connectionID, func() error {
+		return h.s.svc.SetReleaseSubscriberConnected(ctx, ns, reg.Name, reg.ClientName, reg.InstanceID, pr.Identity.Name, connectionIDText, true)
+	}); err != nil {
+		if last, persistedID := h.removeConnection(connectionKey, connectionID); last {
+			cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 5*time.Second)
+			cleanupErr := h.s.svc.SetReleaseSubscriberConnected(cleanupCtx, ns, reg.Name, reg.ClientName, reg.InstanceID, pr.Identity.Name, fmt.Sprintf("%d", persistedID), false)
+			cleanupCancel()
+			if cleanupErr != nil {
+				h.s.log.Warn("release subscriber failed-registration cleanup failed",
+					zap.String("release", reg.Name),
+					zap.String("client", reg.ClientName),
+					zap.String("instance_id", reg.InstanceID),
+					zap.Error(cleanupErr))
+			}
+		}
 		sub.Close()
 		return h.s.mapErr(ctx, err)
 	}
 	defer func() {
 		sub.Close()
-		if h.removeConnection(connectionKey, connectionID) {
+		if last, persistedID := h.removeConnection(connectionKey, connectionID); last {
 			cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cleanupCancel()
-			if cleanupErr := h.s.svc.SetReleaseSubscriberConnected(cleanupCtx, ns, reg.Name, reg.ClientName, reg.InstanceID, pr.Identity.Name, connectionIDText, false); cleanupErr != nil {
+			if cleanupErr := h.s.svc.SetReleaseSubscriberConnected(cleanupCtx, ns, reg.Name, reg.ClientName, reg.InstanceID, pr.Identity.Name, fmt.Sprintf("%d", persistedID), false); cleanupErr != nil {
 				h.s.log.Warn("release subscriber disconnect cleanup failed",
 					zap.String("release", reg.Name),
 					zap.String("client", reg.ClientName),

@@ -39,23 +39,30 @@ type SecretRecord struct {
 // wrapping metadata. Ciphertext, EncryptedDEK, and Nonce are nil for
 // destroyed versions.
 type SecretVersionRecord struct {
-	ID            int64
-	SecretID      int64
-	Version       uint64
-	Ciphertext    []byte
-	EncryptedDEK  []byte
-	KEKID         string
-	WrapMode      string // domain.WrapModeStandard | domain.WrapModeClientBound
-	ClientKeySalt []byte // HKDF salt for client-bound versions, else nil
-	Algorithm     string
-	Nonce         []byte
-	AAD           string
-	State         string
-	CreatedBy     string
-	CreatedAt     time.Time
-	DestroyedAt   time.Time
-	ExpiresAt     time.Time
-	Metadata      string
+	ID       int64
+	SecretID int64
+	Version  uint64
+	// ContentType and the protection flags are immutable attributes of this
+	// exact version. SecretRecord carries the latest secret-level view for
+	// listing and token-hash rotation, but must not be used to interpret or
+	// authorize a historical version.
+	ContentType    string
+	ClientBound    bool
+	HasAccessToken bool
+	Ciphertext     []byte
+	EncryptedDEK   []byte
+	KEKID          string
+	WrapMode       string // domain.WrapModeStandard | domain.WrapModeClientBound
+	ClientKeySalt  []byte // HKDF salt for client-bound versions, else nil
+	Algorithm      string
+	Nonce          []byte
+	AAD            string
+	State          string
+	CreatedBy      string
+	CreatedAt      time.Time
+	DestroyedAt    time.Time
+	ExpiresAt      time.Time
+	Metadata       string
 }
 
 // EncryptedPayload is what the service layer produces for a new secret

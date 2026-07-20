@@ -74,6 +74,57 @@ func TestPutSecretNewVersionRoundTrips(t *testing.T) {
 	}
 }
 
+func TestExactSecretVersionPinsContentTypeAndTokenProtection(t *testing.T) {
+	ctx := context.Background()
+	store := newFakeStore()
+	s := newTestService(store)
+	withKeyring(t, s)
+
+	putSecret(t, s, PutSecretInput{Ref: tref("api"), Value: []byte("v1"), ContentType: "text/plain"})
+	v2 := putSecret(t, s, PutSecretInput{
+		Ref: tref("api"), Value: []byte(`{"version":2}`), ContentType: "application/json", GenerateToken: true,
+	})
+
+	// Adding protection to v2 must not retroactively alter v1. A pinned release
+	// can continue resolving v1 without a token and sees its original type.
+	v1, err := s.GetSecret(ctx, adminPrincipal(), tref("api"), 1, "")
+	if err != nil {
+		t.Fatalf("GetSecret(v1): %v", err)
+	}
+	if string(v1.Value) != "v1" || v1.ContentType != "text/plain" {
+		t.Fatalf("v1 = %+v, want original text version", v1)
+	}
+	if _, err := s.GetSecret(ctx, adminPrincipal(), tref("api"), 2, ""); !errors.Is(err, domain.ErrPermissionDenied) {
+		t.Fatalf("GetSecret(v2 without token) err = %v, want permission denied", err)
+	}
+	pr := adminPrincipal()
+	pr.SecretToken = v2.AccessToken
+	gotV2, err := s.GetSecret(ctx, pr, tref("api"), 2, "")
+	if err != nil {
+		t.Fatalf("GetSecret(v2): %v", err)
+	}
+	if gotV2.ContentType != "application/json" {
+		t.Fatalf("v2 content type = %q", gotV2.ContentType)
+	}
+
+	// Token rotation remains secret-scoped: it changes the credential used by
+	// every version that was born protected, without changing whether v1 is
+	// protected.
+	v3 := putSecret(t, s, PutSecretInput{
+		Ref: tref("api"), Value: []byte("v3"), ContentType: "text/plain", GenerateToken: true,
+	})
+	if _, err := s.GetSecret(ctx, pr, tref("api"), 2, ""); !errors.Is(err, domain.ErrPermissionDenied) {
+		t.Fatalf("GetSecret(v2 with rotated-out token) err = %v, want permission denied", err)
+	}
+	pr.SecretToken = v3.AccessToken
+	if _, err := s.GetSecret(ctx, pr, tref("api"), 2, ""); err != nil {
+		t.Fatalf("GetSecret(v2 with current token): %v", err)
+	}
+	if _, err := s.GetSecret(ctx, adminPrincipal(), tref("api"), 1, ""); err != nil {
+		t.Fatalf("GetSecret(v1 after token rotation): %v", err)
+	}
+}
+
 func TestGetSecretTokenGate(t *testing.T) {
 	ctx := context.Background()
 	store := newFakeStore()

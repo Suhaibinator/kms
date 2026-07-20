@@ -90,3 +90,70 @@ func TestConfigurationSchemaErrorsAreSanitized(t *testing.T) {
 		t.Fatalf("unexpected schema error %q", err)
 	}
 }
+
+func TestConfigurationReleaseSecretPinSurvivesLaterAttributeChanges(t *testing.T) {
+	ctx := context.Background()
+	st, err := storage.Open(filepath.Join(t.TempDir(), "kms.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	ns := domain.NamespaceRef{Env: "prod", App: "app"}
+	if _, err := st.CreateNamespace(ctx, domain.Namespace{NamespaceRef: ns, CreatedBy: "admin"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.InsertKeyMetadata(ctx, domain.KeyMetadata{ID: "kek-a", Source: domain.KeySourceFile, KeyCheck: []byte("test"), State: domain.KeyStateActive}); err != nil {
+		t.Fatal(err)
+	}
+	ref := domain.Ref{NS: ns, Key: "secret"}
+	encrypt := func(version uint64) (storage.EncryptedPayload, error) {
+		return storage.EncryptedPayload{
+			Ciphertext: []byte{byte(version)}, EncryptedDEK: []byte("dek"), KEKID: "kek-a",
+			WrapMode: domain.WrapModeStandard, Algorithm: "AES-256-GCM", Nonce: []byte("nonce"), AAD: "aad",
+		}, nil
+	}
+	if _, _, err := st.CreateSecretVersion(ctx, storage.CreateSecretParams{
+		Ref: ref, ContentType: "text/plain", Metadata: "{}", CreatedBy: "admin", Encrypt: encrypt,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	svc := New(st, nil, "test")
+	release, err := svc.CreateConfigurationRelease(ctx, adminPrincipal(), domain.CreateConfigurationReleaseInput{
+		Namespace: ns,
+		Name:      "runtime",
+		Entries: []domain.ReleaseEntrySelector{{
+			Alias: "credential", Kind: domain.ReleaseEntrySecret, Ref: ref, Version: 1,
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	entry := release.Entries[0]
+	if entry.ContentType != "text/plain" || entry.ClientBound || entry.HasAccessToken {
+		t.Fatalf("release v1 secret pin = %+v", entry)
+	}
+
+	// A later immutable secret version may use a different content type and be
+	// the first version protected by a per-secret access token.
+	if _, _, err := st.CreateSecretVersion(ctx, storage.CreateSecretParams{
+		Ref: ref, ContentType: "application/json", Metadata: "{}", CreatedBy: "admin",
+		AccessTokenHash: []byte("new-token-hash"), Encrypt: encrypt,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	validation, err := svc.ValidateConfigurationRelease(ctx, adminPrincipal(), ns, "runtime", release.Version)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(validation) != 0 {
+		t.Fatalf("historical release validation = %+v, want valid", validation)
+	}
+	stored, err := svc.GetConfigurationRelease(ctx, adminPrincipal(), ns, "runtime", release.Version)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := stored.Entries[0]; got.ContentType != "text/plain" || got.HasAccessToken {
+		t.Fatalf("stored release pin changed: %+v", got)
+	}
+}

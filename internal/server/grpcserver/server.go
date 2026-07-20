@@ -112,7 +112,7 @@ func New(svc *core.Service, hub *watch.Hub, cfg Config) (*Server, error) {
 	kmsv1.RegisterSecretServiceServer(s.grpc, &secretServer{s: s})
 	kmsv1.RegisterAdminServiceServer(s.grpc, &adminServer{s: s})
 	kmsv1.RegisterWatchServiceServer(s.grpc, &watchServer{s: s})
-	kmsv1.RegisterConfigurationReleaseServiceServer(s.grpc, &configurationReleaseServer{s: s, connections: make(map[releaseConnectionKey]map[uint64]struct{})})
+	kmsv1.RegisterConfigurationReleaseServiceServer(s.grpc, &configurationReleaseServer{s: s, connections: make(map[releaseConnectionKey]*releaseConnectionState)})
 	kmsv1.RegisterConfigurationSchemaServiceServer(s.grpc, &configurationSchemaServer{s: s})
 	healthgrpc.RegisterHealthServer(s.grpc, s.health)
 

@@ -128,7 +128,7 @@ func (s *Service) CreateConfigurationRelease(ctx context.Context, pr Principal, 
 			if err := s.authorize(ctx, pr, domain.OpSecretRead, domain.ResourceSecret, sel.Ref); err != nil {
 				return domain.ConfigurationRelease{}, err
 			}
-			rec, ver, err := s.store.GetSecretVersion(ctx, sel.Ref, sel.Version, label)
+			_, ver, err := s.store.GetSecretVersion(ctx, sel.Ref, sel.Version, label)
 			if err != nil {
 				return domain.ConfigurationRelease{}, err
 			}
@@ -138,7 +138,7 @@ func (s *Service) CreateConfigurationRelease(ctx context.Context, pr Principal, 
 			if len(ver.Metadata) > maxReleaseMetadataBytes {
 				return domain.ConfigurationRelease{}, domain.Errorf(domain.ErrFailedPrecondition, "release alias %q metadata exceeds release limit", sel.Alias)
 			}
-			entries = append(entries, domain.ConfigurationReleaseEntry{Alias: sel.Alias, Kind: sel.Kind, Ref: sel.Ref, Version: ver.Version, ContentType: rec.ContentType, Metadata: ver.Metadata, ClientBound: rec.ClientBound, HasAccessToken: len(rec.AccessTokenHash) > 0})
+			entries = append(entries, domain.ConfigurationReleaseEntry{Alias: sel.Alias, Kind: sel.Kind, Ref: sel.Ref, Version: ver.Version, ContentType: ver.ContentType, Metadata: ver.Metadata, ClientBound: ver.ClientBound, HasAccessToken: ver.HasAccessToken})
 		default:
 			return domain.ConfigurationRelease{}, domain.Errorf(domain.ErrInvalidArgument, "release alias %q has unknown kind %q", sel.Alias, sel.Kind)
 		}
@@ -266,7 +266,7 @@ func (s *Service) ValidateConfigurationRelease(ctx context.Context, pr Principal
 				validation = append(validation, validationAuthError(entry.Alias, err))
 				continue
 			}
-			record, ver, err := s.store.GetSecretVersion(ctx, entry.Ref, entry.Version, "")
+			_, ver, err := s.store.GetSecretVersion(ctx, entry.Ref, entry.Version, "")
 			if err != nil {
 				validation = append(validation, validationReadError(entry.Alias, err))
 				continue
@@ -275,11 +275,11 @@ func (s *Service) ValidateConfigurationRelease(ctx context.Context, pr Principal
 				validation = append(validation, domain.ReleaseValidationError{Alias: entry.Alias, Code: domain.ReleaseValidationUnreadable, Message: "secret version is not readable"})
 				continue
 			}
-			if record.ContentType != entry.ContentType {
+			if ver.ContentType != entry.ContentType {
 				validation = append(validation, domain.ReleaseValidationError{Alias: entry.Alias, Code: domain.ReleaseValidationContentType, Message: "secret content type does not match release pin"})
 				continue
 			}
-			if record.ClientBound != entry.ClientBound || (len(record.AccessTokenHash) > 0) != entry.HasAccessToken {
+			if ver.ClientBound != entry.ClientBound || ver.HasAccessToken != entry.HasAccessToken {
 				validation = append(validation, domain.ReleaseValidationError{Alias: entry.Alias, Code: domain.ReleaseValidationUnreadable, Message: "secret protection metadata does not match release pin"})
 			}
 		default:

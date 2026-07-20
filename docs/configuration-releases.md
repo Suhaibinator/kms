@@ -18,7 +18,7 @@ Creation accepts each entry with either an exact `version` or a movable
 persistence. The immutable stored entry contains:
 
 - alias, `parameter`/`secret` kind, structured `ResourceRef`, and exact version;
-- captured content type and immutable non-sensitive metadata;
+- the pinned version's content type and immutable non-sensitive metadata;
 - SHA-256 of the exact parameter bytes, or no value digest for a secret; and
 - secret protection flags (`client_bound`, `has_access_token`), never a token
   or plaintext.
@@ -159,7 +159,13 @@ alias when they would break a protected release. These attempts are audited.
 Promoting a parameter or secret's ordinary `current` label never changes an
 active release pin. Ordinary secret value rotation preserves the existing
 per-secret access token unless token generation/rotation is explicitly
-requested; the token still remains outside the release.
+requested; the token still remains outside the release. Each secret version
+also retains its own content type, client-bound flag, and token-required flag.
+Enabling a token on a later standard-secret version therefore does not
+retroactively protect an older version. Explicit token rotation replaces the
+shared credential used by every standard-secret version already marked as
+token-protected; client-bound versions remain cryptographically bound to the
+token used when each version was written.
 
 Release history defaults to at least the newest 100 inactive versions and 90
 days. Current, previous, schema dependencies, and versions needed by retained

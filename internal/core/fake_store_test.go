@@ -349,10 +349,13 @@ func (f *fakeStore) CreateSecretVersion(_ context.Context, p storage.CreateSecre
 		sec.rec.ClientBound = p.ClientBound
 	}
 	sec.versions[version] = storage.SecretVersionRecord{
-		Version: version, Ciphertext: payload.Ciphertext, EncryptedDEK: payload.EncryptedDEK,
+		Version: version, ContentType: p.ContentType, ClientBound: p.ClientBound,
+		HasAccessToken: len(sec.rec.AccessTokenHash) > 0,
+		Ciphertext:     payload.Ciphertext, EncryptedDEK: payload.EncryptedDEK,
 		KEKID: payload.KEKID, WrapMode: payload.WrapMode, ClientKeySalt: payload.ClientKeySalt,
 		Algorithm: payload.Algorithm, Nonce: payload.Nonce, AAD: payload.AAD,
 		State: domain.StateEnabled, CreatedBy: p.CreatedBy, CreatedAt: time.Now(), ExpiresAt: p.ExpiresAt,
+		Metadata: p.Metadata,
 	}
 	if sec.current != 0 {
 		sec.previous = sec.current
