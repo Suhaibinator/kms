@@ -656,7 +656,7 @@ func TestSchemaV2BackfillsSecretVersionAttributes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer st.Close()
+	defer func() { _ = st.Close() }()
 	_, ver, err := st.GetSecretVersion(ctx, r, 1, "")
 	if err != nil {
 		t.Fatal(err)

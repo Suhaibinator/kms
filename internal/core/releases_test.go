@@ -16,7 +16,7 @@ func TestConfigurationReleaseCoreLifecycleAndHistoricalAck(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer st.Close()
+	defer func() { _ = st.Close() }()
 	ns := domain.NamespaceRef{Env: "prod", App: "app"}
 	if _, err := st.CreateNamespace(ctx, domain.Namespace{NamespaceRef: ns, CreatedBy: "admin"}); err != nil {
 		t.Fatal(err)
@@ -97,7 +97,7 @@ func TestConfigurationReleaseSecretPinSurvivesLaterAttributeChanges(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer st.Close()
+	defer func() { _ = st.Close() }()
 	ns := domain.NamespaceRef{Env: "prod", App: "app"}
 	if _, err := st.CreateNamespace(ctx, domain.Namespace{NamespaceRef: ns, CreatedBy: "admin"}); err != nil {
 		t.Fatal(err)

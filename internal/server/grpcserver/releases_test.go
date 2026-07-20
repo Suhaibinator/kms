@@ -28,7 +28,7 @@ func TestConfigurationReleaseGRPCLifecycleAndWatch(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer st.Close()
+	defer func() { _ = st.Close() }()
 	ns := domain.NamespaceRef{Env: "prod", App: "app"}
 	if _, err := st.CreateNamespace(ctx, domain.Namespace{NamespaceRef: ns}); err != nil {
 		t.Fatal(err)
@@ -59,7 +59,7 @@ func TestConfigurationReleaseGRPCLifecycleAndWatch(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 	param := kmsv1.NewParameterServiceClient(conn)
 	if _, err := param.PutParameter(adminCtx(), &kmsv1.PutParameterRequest{Ref: pRef("prod", "app", "config"), Value: `{"enabled":true}`, ContentType: "json"}); err != nil {
 		t.Fatal(err)
