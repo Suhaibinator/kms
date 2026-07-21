@@ -26,10 +26,15 @@ defer client.Close()
 
 The preferred posture is a **client certificate** (proof of possession, minted
 by the KMS CA): identity derives from the cert server-side, so `Token` is
-optional. `Token` is only required for token-method identities. `TLS: nil` uses
-an insecure connection (development only). `server-ca.crt` must trust the
-operator-provided server certificate; it is not the built-in client CA shown by
-`admin ca show`.
+optional. `Token` is only required for token-method identities. `server-ca.crt`
+must trust the operator-provided server certificate; it is not the built-in
+client CA shown by `admin ca show`.
+
+Transport security must be explicit: without `TLS`, `NewClient` fails instead
+of silently sending credentials and secret plaintext over cleartext. A local
+development server can be reached with `Insecure: true`; do not use that option
+across an untrusted network. Low-level callers may instead provide explicit
+transport credentials through `DialOptions`.
 
 ### Namespaces and keys
 
@@ -227,3 +232,6 @@ client, _ := paramstore.NewClient(paramstore.Config{
     DialOptions: srv.DialOptions(),
 })
 ```
+
+`srv.DialOptions()` includes explicit cleartext transport credentials for the
+in-process connection, so no `Insecure` flag is needed in this test setup.

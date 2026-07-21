@@ -597,6 +597,35 @@ func TestAuditAndKeys(t *testing.T) {
 	}
 }
 
+func TestPartialAuditFilterAppliesNamespaceMethodEligibility(t *testing.T) {
+	e := newTestEnv(t)
+	e.createNS("stage", "token", "token")
+	e.createNS("stage", "mtls")
+
+	policy := map[string]any{"policy": map[string]any{
+		"name": "audit-stage", "subject": "client",
+		"allow": []map[string]any{{"operation": "admin:audit:read", "env": "stage", "app": "*"}},
+	}}
+	w := e.admin(http.MethodPost, "/api/v1/policies", policy)
+	mustStatus(t, w, http.StatusOK)
+
+	for _, app := range []string{"token", "mtls"} {
+		w = e.admin(http.MethodPut, "/api/v1/parameters", map[string]any{
+			"env": "stage", "app": app, "key": "x", "value": "1", "content_type": "integer",
+		})
+		mustStatus(t, w, http.StatusOK)
+	}
+
+	// The partial env filter remains authorized, but each returned row must also
+	// admit the token method used by the delegated caller.
+	w = e.client(http.MethodGet, "/api/v1/audit?env=stage&event_type=parameter.write", nil)
+	mustStatus(t, w, http.StatusOK)
+	events, _ := decodeBody(t, w)["events"].([]any)
+	if len(events) != 1 || events[0].(map[string]any)["resource_app"] != "token" {
+		t.Fatalf("partial audit events = %v, want only stage/token", events)
+	}
+}
+
 func TestSubscribers(t *testing.T) {
 	e := newTestEnv(t)
 	e.createNS("prod", "gradethis")
@@ -631,6 +660,14 @@ func TestNamespaceMethodGate(t *testing.T) {
 	gatedToken, _ := decodeBody(t, w)["token"].(string)
 	gatedHdr := map[string]string{"Authorization": "Bearer " + gatedToken}
 
+	// Namespace enumeration is a multi-namespace read: it succeeds but omits
+	// metadata for namespaces that do not admit the caller's method.
+	w = e.do(http.MethodGet, "/api/v1/namespaces", nil, gatedHdr)
+	mustStatus(t, w, http.StatusOK)
+	if got := decodeBody(t, w)["namespaces"].([]any); len(got) != 0 {
+		t.Fatalf("token caller listed mTLS-only namespace: %v", got)
+	}
+
 	// Token method not admitted -> 403 with a method-gate message.
 	w = e.do(http.MethodGet, "/api/v1/parameters?env=stage&app=svc", nil, gatedHdr)
 	mustStatus(t, w, http.StatusForbidden)
@@ -646,6 +683,11 @@ func TestNamespaceMethodGate(t *testing.T) {
 
 	w = e.do(http.MethodGet, "/api/v1/parameters?env=stage&app=svc", nil, gatedHdr)
 	mustStatus(t, w, http.StatusOK)
+	w = e.do(http.MethodGet, "/api/v1/namespaces", nil, gatedHdr)
+	mustStatus(t, w, http.StatusOK)
+	if got := decodeBody(t, w)["namespaces"].([]any); len(got) != 1 {
+		t.Fatalf("token-admitting namespace list = %v, want one namespace", got)
+	}
 }
 
 func TestMethodNotAllowed(t *testing.T) {

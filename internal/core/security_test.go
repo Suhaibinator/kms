@@ -2,7 +2,10 @@ package core
 
 import (
 	"context"
+	"crypto/x509"
 	"errors"
+	"math/big"
+	"strings"
 	"testing"
 	"time"
 
@@ -211,9 +214,10 @@ func TestReauthorizeWatchMTLSCertRevoked(t *testing.T) {
 	serial := res.Cert.Serial
 	nsCopy := tns
 	pr := Principal{
-		Identity: domain.Identity{Name: "svc", Kind: domain.IdentityKindClient, Namespace: &nsCopy},
-		Method:   domain.AuthMethodMTLS,
-		Serial:   serial,
+		Identity:    domain.Identity{Name: "svc", Kind: domain.IdentityKindClient, Namespace: &nsCopy},
+		Method:      domain.AuthMethodMTLS,
+		Serial:      serial,
+		Fingerprint: res.Cert.Fingerprint,
 	}
 
 	// Baseline: a valid cert re-authorizes.
@@ -227,6 +231,65 @@ func TestReauthorizeWatchMTLSCertRevoked(t *testing.T) {
 	}
 	if err := s.ReauthorizeWatch(ctx, pr, tns); !errors.Is(err, domain.ErrUnauthenticated) {
 		t.Fatalf("reauth after cert revoke err = %v, want ErrUnauthenticated", err)
+	}
+}
+
+func TestReauthorizeWatchMTLSFingerprintBound(t *testing.T) {
+	ctx := context.Background()
+	store := newFakeStore()
+	s := newTestService(store)
+	withCA(t, s)
+	store.addNamespace(tns, domain.AuthMethodMTLS)
+
+	res, err := s.CreateIdentity(ctx, adminPrincipal(), CreateIdentityInput{
+		Name: "svc", Kind: domain.IdentityKindClient, Namespace: &tns,
+		AuthMethods: []domain.AuthMethod{domain.AuthMethodMTLS},
+	})
+	if err != nil {
+		t.Fatalf("CreateIdentity: %v", err)
+	}
+	nsCopy := tns
+	pr := Principal{
+		Identity:    domain.Identity{Name: "svc", Kind: domain.IdentityKindClient, Namespace: &nsCopy},
+		Method:      domain.AuthMethodMTLS,
+		Serial:      res.Cert.Serial,
+		Fingerprint: res.Cert.Fingerprint,
+	}
+	if err := s.ReauthorizeWatch(ctx, pr, tns); err != nil {
+		t.Fatalf("baseline reauth: %v", err)
+	}
+
+	pr.Fingerprint = strings.Repeat("0", 64)
+	if err := s.ReauthorizeWatch(ctx, pr, tns); !errors.Is(err, domain.ErrUnauthenticated) {
+		t.Fatalf("reauth with mismatched fingerprint err = %v, want ErrUnauthenticated", err)
+	}
+	pr.Fingerprint = ""
+	if err := s.ReauthorizeWatch(ctx, pr, tns); !errors.Is(err, domain.ErrUnauthenticated) {
+		t.Fatalf("reauth with missing fingerprint err = %v, want ErrUnauthenticated", err)
+	}
+	pr.Fingerprint = res.Cert.Fingerprint
+	pr.Serial = ""
+	if err := s.ReauthorizeWatch(ctx, pr, tns); !errors.Is(err, domain.ErrUnauthenticated) {
+		t.Fatalf("reauth with missing serial err = %v, want ErrUnauthenticated", err)
+	}
+	pr.Fingerprint = ""
+	if err := s.ReauthorizeWatch(ctx, pr, tns); !errors.Is(err, domain.ErrUnauthenticated) {
+		t.Fatalf("reauth with both certificate bindings missing err = %v, want ErrUnauthenticated", err)
+	}
+}
+
+func TestCertificateIdentityHelpersFailClosedOnIncompleteCertificate(t *testing.T) {
+	if got := CertSerial(nil); got != "" {
+		t.Fatalf("CertSerial(nil) = %q, want empty", got)
+	}
+	if got := CertSerial(&x509.Certificate{}); got != "" {
+		t.Fatalf("CertSerial(nil serial) = %q, want empty", got)
+	}
+	if got := CertFingerprint(nil); got != "" {
+		t.Fatalf("CertFingerprint(nil) = %q, want empty", got)
+	}
+	if got := CertFingerprint(&x509.Certificate{SerialNumber: big.NewInt(1)}); got != "" {
+		t.Fatalf("CertFingerprint(empty raw DER) = %q, want empty", got)
 	}
 }
 
@@ -269,6 +332,40 @@ func TestReauthorizeWatchAdminBypassesTightenedGate(t *testing.T) {
 	}
 	if err := s.ReauthorizeWatch(ctx, pr, tns); err != nil {
 		t.Fatalf("admin reauth on mtls-only ns: %v", err)
+	}
+}
+
+func TestReauthorizeWatchAdminRejectsRecreatedNamespace(t *testing.T) {
+	ctx := context.Background()
+	store := newFakeStore()
+	s := newTestService(store)
+	store.addNamespace(tns, domain.AuthMethodToken)
+	store.addIdentity("root", domain.IdentityKindAdmin, "kms_admin")
+	pr := Principal{
+		Identity: domain.Identity{Name: "root", Kind: domain.IdentityKindAdmin},
+		Method:   domain.AuthMethodToken,
+		Token:    "kms_admin",
+	}
+	bound, err := s.AuthorizeSubscribeContext(ctx, pr, []domain.NamespaceRef{tns})
+	if err != nil {
+		t.Fatal(err)
+	}
+	old, err := store.GetNamespace(ctx, tns)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.DeleteNamespace(ctx, tns); err != nil {
+		t.Fatal(err)
+	}
+	recreated, err := store.CreateNamespace(ctx, domain.Namespace{NamespaceRef: tns, AllowedAuthMethods: []domain.AuthMethod{domain.AuthMethodMTLS}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if recreated.ID == old.ID {
+		t.Fatalf("namespace ID was reused: %d", recreated.ID)
+	}
+	if err := s.ReauthorizeWatch(bound, pr, tns); !errors.Is(err, domain.ErrAborted) {
+		t.Fatalf("admin reauth after namespace recreation err = %v, want ErrAborted", err)
 	}
 }
 

@@ -269,21 +269,26 @@ type IdentityCert struct {
 // plaintext or token material. Resource env/app/key are denormalized text so
 // history stays readable after a namespace is deleted.
 type AuditEvent struct {
-	ID              int64
-	EventType       string
-	ActorIdentity   string
-	ActorType       string
-	ResourceType    string
-	ResourceEnv     string
-	ResourceApp     string
-	ResourceKey     string
-	ResourceVersion uint64
-	Decision        string // "allow" | "deny" | "error"
-	SourceIP        string
-	UserAgent       string
-	RequestID       string
-	CreatedAt       time.Time
-	Metadata        string
+	ID            int64
+	EventType     string
+	ActorIdentity string
+	ActorType     string
+	ResourceType  string
+	// ResourceNamespaceID is the immutable namespace incarnation captured when
+	// the event is written. It is denormalized (no foreign key) so deleted
+	// history remains available to admins without letting a recreated env/app
+	// inherit the prior incarnation's delegated visibility.
+	ResourceNamespaceID int64
+	ResourceEnv         string
+	ResourceApp         string
+	ResourceKey         string
+	ResourceVersion     uint64
+	Decision            string // "allow" | "deny" | "error"
+	SourceIP            string
+	UserAgent           string
+	RequestID           string
+	CreatedAt           time.Time
+	Metadata            string
 }
 
 // AuditFilter narrows audit queries. Env/App match exactly (empty = any);
@@ -304,13 +309,17 @@ type AuditFilter struct {
 type ChangeLogEntry struct {
 	Revision     uint64
 	ResourceType string // ResourceParameter | ResourceSecret
-	Ref          Ref
-	ChangeType   string
-	Value        string // parameter value for puts; empty for secrets
-	ContentType  string
-	Version      uint64
-	Label        string
-	CreatedAt    time.Time
+	// NamespaceID is the immutable namespace incarnation that produced this
+	// event. Watch replay/live matching must use it in addition to Ref so a
+	// deleted namespace's history cannot flow into a recreated name.
+	NamespaceID int64
+	Ref         Ref
+	ChangeType  string
+	Value       string // parameter value for puts; empty for secrets
+	ContentType string
+	Version     uint64
+	Label       string
+	CreatedAt   time.Time
 }
 
 // Subscriber describes one live watch stream in the registry. Namespaces are

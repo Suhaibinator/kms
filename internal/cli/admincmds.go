@@ -2,8 +2,10 @@ package cli
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"text/tabwriter"
@@ -11,6 +13,7 @@ import (
 
 	kmsv1 "github.com/Suhaibinator/kms/gen/kmsv1"
 	"github.com/Suhaibinator/kms/internal/domain"
+	"github.com/Suhaibinator/kms/internal/fileutil"
 	"github.com/Suhaibinator/kms/internal/keyutil"
 )
 
@@ -286,21 +289,52 @@ func (c *CLI) cmdIdentityCreate(args []string) int {
 	ctx, cancel := callContext()
 	defer cancel()
 
-	resp, err := kmsv1.NewAdminServiceClient(conn).CreateIdentity(cf.authCtx(ctx), req)
-	if err != nil {
-		return c.fail("identity create: %v", err)
-	}
-	_, _ = fmt.Fprintf(c.Stdout, "Created identity %q (kind %s).\n", name, *kind)
-	if resp.Token != "" {
-		_, _ = fmt.Fprintf(c.Stdout, "  token: %s\n", resp.Token)
-		_, _ = fmt.Fprintln(c.Stdout, "  WARNING: the token is shown once and cannot be recovered.")
-	}
-	if resp.Cert != nil {
-		if err := c.writeCertBundle(*outDir, name, resp.Cert); err != nil {
-			return c.fail("%v", err)
+	client := kmsv1.NewAdminServiceClient(conn)
+	create := func(certOutput *reservedCertBundle) error {
+		resp, createErr := client.CreateIdentity(cf.authCtx(ctx), req)
+		if createErr != nil {
+			return fmt.Errorf("identity create: %w", createErr)
 		}
+		return c.writeCreatedIdentityResult(name, *kind, methods, certOutput, resp)
+	}
+	if hasAuthMethod(methods, "mtls") {
+		err = c.withReservedCertBundle(*outDir, name, create)
+	} else {
+		err = create(nil)
+	}
+	if err != nil {
+		return c.fail("%v", err)
 	}
 	return 0
+}
+
+func (c *CLI) writeCreatedIdentityResult(name, kind string, methods []string, certOutput *reservedCertBundle, resp *kmsv1.CreateIdentityResponse) error {
+	if resp == nil {
+		return fmt.Errorf("server returned no identity result")
+	}
+	// Persist one-time private-key material before writing informational
+	// stdout. A broken pipe must not discard an already-enrolled key when a
+	// healthy file sink was reserved before the RPC.
+	if hasAuthMethod(methods, "mtls") && resp.Cert == nil {
+		return fmt.Errorf("server returned no certificate bundle")
+	}
+	if resp.Cert != nil {
+		if err := c.writeCertBundleToOutput(certOutput, resp.Cert); err != nil {
+			return err
+		}
+	}
+	if _, err := fmt.Fprintf(c.Stdout, "Created identity %q (kind %s).\n", name, kind); err != nil {
+		return fmt.Errorf("writing identity output: %w", err)
+	}
+	if resp.Token != "" {
+		if _, err := fmt.Fprintf(c.Stdout, "  token: %s\n", resp.Token); err != nil {
+			return fmt.Errorf("writing one-time identity token: %w", err)
+		}
+		if _, err := fmt.Fprintln(c.Stdout, "  WARNING: the token is shown once and cannot be recovered."); err != nil {
+			return fmt.Errorf("writing one-time identity token warning: %w", err)
+		}
+	}
+	return nil
 }
 
 func (c *CLI) cmdIdentityIssueCert(args []string) int {
@@ -329,13 +363,17 @@ func (c *CLI) cmdIdentityIssueCert(args []string) int {
 	ctx, cancel := callContext()
 	defer cancel()
 
-	resp, err := kmsv1.NewAdminServiceClient(conn).IssueIdentityCertificate(cf.authCtx(ctx), &kmsv1.IssueIdentityCertificateRequest{
-		Name: name, TtlSeconds: ttlSeconds,
+	client := kmsv1.NewAdminServiceClient(conn)
+	err = c.withReservedCertBundle(*outDir, name, func(certOutput *reservedCertBundle) error {
+		resp, issueErr := client.IssueIdentityCertificate(cf.authCtx(ctx), &kmsv1.IssueIdentityCertificateRequest{
+			Name: name, TtlSeconds: ttlSeconds,
+		})
+		if issueErr != nil {
+			return fmt.Errorf("identity issue-cert: %w", issueErr)
+		}
+		return c.writeCertBundleToOutput(certOutput, resp.Cert)
 	})
 	if err != nil {
-		return c.fail("identity issue-cert: %v", err)
-	}
-	if err := c.writeCertBundle(*outDir, name, resp.Cert); err != nil {
 		return c.fail("%v", err)
 	}
 	return 0
@@ -396,7 +434,9 @@ func (c *CLI) cmdIdentityRotate(args []string) int {
 	if err != nil {
 		return c.fail("identity rotate: %v", err)
 	}
-	printTokenOnce(c.Stdout, "identity", pos[0], resp.Token)
+	if err := printTokenOnce(c.Stdout, "identity", pos[0], resp.Token); err != nil {
+		return c.fail("writing one-time identity token: %v", err)
+	}
 	return 0
 }
 
@@ -502,32 +542,140 @@ func (c *CLI) cmdAdminCA(args []string) int {
 
 // --- shared helpers --------------------------------------------------------
 
+// reservedCertBundle holds exclusive reservations for the two output paths.
+// Commands reserve before invoking an RPC that returns a one-time private key,
+// so a local path collision cannot consume an otherwise unrecoverable key.
+type reservedCertBundle struct {
+	certPath string
+	keyPath  string
+	certFile *os.File
+	keyFile  *os.File
+}
+
+var certOutputNameRE = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$`)
+
+func reserveCertBundle(outDir, name string) (*reservedCertBundle, error) {
+	// Match the server's identity-name grammar before using the name as a path
+	// component. In particular, never transiently reserve ../NAME outside outDir
+	// only to have the server reject the identity later.
+	if !certOutputNameRE.MatchString(name) {
+		return nil, fmt.Errorf("invalid identity name %q for certificate output", name)
+	}
+	// Resolve the caller's output-directory spelling once and use only that
+	// canonical, validated parent from this point onward. Resolving the key path
+	// independently after reserving the certificate would let a concurrent
+	// symlink replacement split the one-time bundle across two directories and
+	// make later status/error paths refer to a different entry.
+	certPath, err := fileutil.ResolveStablePath(filepath.Join(outDir, name+".crt"))
+	if err != nil {
+		return nil, fmt.Errorf("writing certificate: %w", err)
+	}
+	keyPath := filepath.Join(filepath.Dir(certPath), name+".key")
+	certFile, err := os.OpenFile(certPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+	if err != nil {
+		return nil, fmt.Errorf("writing certificate: %w", err)
+	}
+	keyFile, err := fileutil.OpenPrivateExclusive(keyPath)
+	if err != nil {
+		_ = certFile.Close()
+		// Do not unlink by pathname: another writer with access to outDir could
+		// replace the reservation between OpenFile and cleanup. Leaving the empty
+		// certificate placeholder is fail-safe and makes operator cleanup explicit.
+		return nil, fmt.Errorf("writing private key: %w (certificate reservation left at %s; inspect and remove it before retrying)", err, certPath)
+	}
+	return &reservedCertBundle{
+		certPath: certPath,
+		keyPath:  keyPath,
+		certFile: certFile,
+		keyFile:  keyFile,
+	}, nil
+}
+
+func (output *reservedCertBundle) cleanup() {
+	if output == nil {
+		return
+	}
+	_ = output.certFile.Close()
+	_ = output.keyFile.Close()
+}
+
+func (c *CLI) withReservedCertBundle(outDir, name string, use func(*reservedCertBundle) error) error {
+	if outDir == "" {
+		return use(nil)
+	}
+	output, err := reserveCertBundle(outDir, name)
+	if err != nil {
+		return err
+	}
+	defer output.cleanup()
+	if err := use(output); err != nil {
+		// Reservations and any partial key remain in place. Removing them by name
+		// would be unsafe in a shared writable directory because those names can be
+		// unlinked and replaced while the RPC is in flight.
+		return fmt.Errorf("%w (certificate reservations left at %s and %s; inspect and remove them before retrying)", err, output.certPath, output.keyPath)
+	}
+	return nil
+}
+
 // writeCertBundle prints or writes the one-time certificate + private key. When
 // outDir is empty it prints the PEM blocks to stdout with a one-time warning;
-// otherwise it writes NAME.crt and NAME.key (the key mode is 0600).
+// otherwise it exclusively reserves NAME.crt and NAME.key (the key mode is
+// 0600) before publishing the bundle.
 func (c *CLI) writeCertBundle(outDir, name string, bundle *kmsv1.CertBundle) error {
+	return c.withReservedCertBundle(outDir, name, func(output *reservedCertBundle) error {
+		return c.writeCertBundleToOutput(output, bundle)
+	})
+}
+
+func (c *CLI) writeCertBundleToOutput(output *reservedCertBundle, bundle *kmsv1.CertBundle) error {
 	if bundle == nil {
 		return fmt.Errorf("server returned no certificate bundle")
 	}
-	if outDir == "" {
-		_, _ = fmt.Fprintf(c.Stdout, "  certificate (serial %s, expires %s):\n", bundle.Serial,
-			time.UnixMilli(bundle.NotAfterUnixMs).UTC().Format(time.RFC3339))
-		_, _ = fmt.Fprint(c.Stdout, bundle.CertPem)
-		_, _ = fmt.Fprint(c.Stdout, bundle.KeyPem)
-		_, _ = fmt.Fprintln(c.Stdout, "  WARNING: the private key is shown once and is never stored server-side.")
+	if output == nil {
+		if _, err := fmt.Fprintf(c.Stdout, "  certificate (serial %s, expires %s):\n", bundle.Serial,
+			time.UnixMilli(bundle.NotAfterUnixMs).UTC().Format(time.RFC3339)); err != nil {
+			return fmt.Errorf("writing certificate output: %w", err)
+		}
+		for _, text := range []string{
+			bundle.CertPem,
+			bundle.KeyPem,
+			"  WARNING: the private key is shown once and is never stored server-side.\n",
+		} {
+			if _, err := io.WriteString(c.Stdout, text); err != nil {
+				return fmt.Errorf("writing certificate output: %w", err)
+			}
+		}
 		return nil
 	}
-	certPath := filepath.Join(outDir, name+".crt")
-	keyPath := filepath.Join(outDir, name+".key")
-	if err := os.WriteFile(certPath, []byte(bundle.CertPem), 0o644); err != nil {
+
+	if _, err := output.certFile.Write([]byte(bundle.CertPem)); err != nil {
 		return fmt.Errorf("writing certificate: %w", err)
 	}
-	if err := os.WriteFile(keyPath, []byte(bundle.KeyPem), 0o600); err != nil {
+	if _, err := output.keyFile.Write([]byte(bundle.KeyPem)); err != nil {
 		return fmt.Errorf("writing private key: %w", err)
 	}
-	_, _ = fmt.Fprintf(c.Stdout, "  wrote %s and %s (serial %s)\n", certPath, keyPath, bundle.Serial)
-	_, _ = fmt.Fprintln(c.Stdout, "  WARNING: the private key is written once and is never stored server-side.")
+	if err := output.certFile.Close(); err != nil {
+		return fmt.Errorf("closing certificate: %w", err)
+	}
+	if err := output.keyFile.Close(); err != nil {
+		return fmt.Errorf("closing private key: %w", err)
+	}
+	if _, err := fmt.Fprintf(c.Stdout, "  wrote %s and %s (serial %s)\n", output.certPath, output.keyPath, bundle.Serial); err != nil {
+		return fmt.Errorf("writing certificate status: %w", err)
+	}
+	if _, err := fmt.Fprintln(c.Stdout, "  WARNING: the private key is written once and is never stored server-side."); err != nil {
+		return fmt.Errorf("writing certificate warning: %w", err)
+	}
 	return nil
+}
+
+func hasAuthMethod(methods []string, want string) bool {
+	for _, method := range methods {
+		if method == want {
+			return true
+		}
+	}
+	return false
 }
 
 // namespaceFromFlags validates and assembles a NamespaceRef from --env/--app.

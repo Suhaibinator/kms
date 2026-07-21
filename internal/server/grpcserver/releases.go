@@ -9,6 +9,7 @@ import (
 
 	kmsv1 "github.com/Suhaibinator/kms/gen/kmsv1"
 	"github.com/Suhaibinator/kms/internal/domain"
+	"github.com/Suhaibinator/kms/internal/storage"
 	"github.com/Suhaibinator/kms/internal/watch"
 	"go.uber.org/zap"
 )
@@ -34,6 +35,7 @@ type releaseConnectionKey struct {
 	name       string
 	clientName string
 	instanceID string
+	identity   string
 }
 
 func (h *configurationReleaseServer) addConnection(key releaseConnectionKey) uint64 {
@@ -199,22 +201,27 @@ func (h *configurationReleaseServer) WatchRelease(stream kmsv1.ConfigurationRele
 	if regp.GetClientName() == "" || regp.GetInstanceId() == "" || len(regp.GetClientName()) > 128 || len(regp.GetInstanceId()) > 128 {
 		return h.s.mapErr(ctx, domain.Errorf(domain.ErrInvalidArgument, "client_name and instance_id must be between 1 and 128 bytes"))
 	}
-	if err := h.s.svc.AuthorizeReleaseWatch(ctx, pr, ns, regp.GetName()); err != nil {
+	ctx, err = h.s.svc.AuthorizeReleaseWatchContext(ctx, pr, ns, regp.GetName())
+	if err != nil {
 		return h.s.mapErr(ctx, err)
 	}
-	reg := watch.ReleaseRegistration{Namespace: ns, Name: regp.GetName(), ClientName: regp.GetClientName(), InstanceID: regp.GetInstanceId(), Identity: pr.Identity.Name, LastSeenRevision: regp.GetLastSeenRevision()}
+	namespaceID, ok := storage.ExpectedNamespaceIncarnation(ctx, ns)
+	if !ok {
+		return h.s.mapErr(ctx, domain.Errorf(domain.ErrAborted, "namespace %s changed during request; retry", ns))
+	}
+	reg := watch.ReleaseRegistration{Namespace: ns, NamespaceID: namespaceID, Name: regp.GetName(), ClientName: regp.GetClientName(), InstanceID: regp.GetInstanceId(), Identity: pr.Identity.Name, LastSeenRevision: regp.GetLastSeenRevision()}
 	sub, err := h.s.hub.SubscribeRelease(ctx, reg)
 	if err != nil {
 		return h.s.mapErr(ctx, err)
 	}
-	connectionKey := releaseConnectionKey{namespace: ns, name: reg.Name, clientName: reg.ClientName, instanceID: reg.InstanceID}
+	connectionKey := releaseConnectionKey{namespace: ns, name: reg.Name, clientName: reg.ClientName, instanceID: reg.InstanceID, identity: pr.Identity.Name}
 	connectionID := h.addConnection(connectionKey)
 	connectionIDText := fmt.Sprintf("%d", connectionID)
 	if err := h.persistConnection(connectionKey, connectionID, func() error {
 		return h.s.svc.SetReleaseSubscriberConnected(ctx, ns, reg.Name, reg.ClientName, reg.InstanceID, pr.Identity.Name, connectionIDText, true)
 	}); err != nil {
 		if last, persistedID := h.removeConnection(connectionKey, connectionID); last {
-			cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 5*time.Second)
+			cleanupCtx, cleanupCancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 			cleanupErr := h.s.svc.SetReleaseSubscriberConnected(cleanupCtx, ns, reg.Name, reg.ClientName, reg.InstanceID, pr.Identity.Name, fmt.Sprintf("%d", persistedID), false)
 			cleanupCancel()
 			if cleanupErr != nil {
@@ -231,7 +238,7 @@ func (h *configurationReleaseServer) WatchRelease(stream kmsv1.ConfigurationRele
 	defer func() {
 		sub.Close()
 		if last, persistedID := h.removeConnection(connectionKey, connectionID); last {
-			cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 5*time.Second)
+			cleanupCtx, cleanupCancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 			defer cleanupCancel()
 			if cleanupErr := h.s.svc.SetReleaseSubscriberConnected(cleanupCtx, ns, reg.Name, reg.ClientName, reg.InstanceID, pr.Identity.Name, fmt.Sprintf("%d", persistedID), false); cleanupErr != nil {
 				h.s.log.Warn("release subscriber disconnect cleanup failed",
@@ -271,7 +278,7 @@ func (h *configurationReleaseServer) WatchRelease(stream kmsv1.ConfigurationRele
 				recvErr <- domain.Errorf(domain.ErrInvalidArgument, "acknowledgement does not match registration")
 				return
 			}
-			err = h.s.svc.AcknowledgeConfigurationRelease(ctx, pr, domain.ReleaseAcknowledgement{Namespace: ns, ReleaseName: a.GetName(), ReleaseVersion: a.GetVersion(), ActivationRevision: a.GetActivationRevision(), ClientName: a.GetClientName(), InstanceID: a.GetInstanceId(), State: a.GetState(), RejectionCategory: a.GetRejectionCategory(), Diagnostic: a.GetDiagnostic(), ClientTimestamp: unixMSToTime(a.GetTimestampUnixMs())})
+			err = h.s.svc.AcknowledgeConfigurationRelease(ctx, pr, domain.ReleaseAcknowledgement{Namespace: ns, ReleaseName: a.GetName(), ReleaseVersion: a.GetVersion(), ActivationRevision: a.GetActivationRevision(), ClientName: a.GetClientName(), InstanceID: a.GetInstanceId(), ConnectionID: connectionIDText, State: a.GetState(), RejectionCategory: a.GetRejectionCategory(), Diagnostic: a.GetDiagnostic(), ClientTimestamp: unixMSToTime(a.GetTimestampUnixMs())})
 			if err != nil {
 				recvErr <- err
 				return

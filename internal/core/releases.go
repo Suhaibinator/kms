@@ -40,7 +40,7 @@ func (s *Service) releaseStore() (storage.ReleaseStore, error) {
 	return rs, nil
 }
 
-func (s *Service) auditProtectedReleaseReference(ctx context.Context, pr Principal, ref domain.Ref, kind string, version uint64, operation string) {
+func (s *Service) auditProtectedReleaseReference(ctx context.Context, pr Principal, ref domain.Ref, namespaceID int64, kind string, version uint64, operation string) {
 	rs, ok := s.store.(storage.ReleaseStore)
 	if !ok {
 		return
@@ -48,7 +48,7 @@ func (s *Service) auditProtectedReleaseReference(ctx context.Context, pr Princip
 	if _, err := rs.FindProtectedReleaseReference(ctx, ref, kind, version); err != nil {
 		return
 	}
-	s.auditRef(ctx, pr, "configuration_release.reference_blocked", kind, ref, version, "deny", map[string]string{"operation": operation})
+	s.auditRefWithNamespaceID(ctx, pr, "configuration_release.reference_blocked", kind, ref, namespaceID, version, "deny", map[string]string{"operation": operation})
 }
 
 func validateReleaseAddress(ns domain.NamespaceRef, name string) error {
@@ -75,7 +75,8 @@ func (s *Service) CreateConfigurationRelease(ctx context.Context, pr Principal, 
 	if (in.SchemaID == "") != (in.SchemaVersion == 0) {
 		return domain.ConfigurationRelease{}, domain.Errorf(domain.ErrInvalidArgument, "schema_id and schema_version must be specified together")
 	}
-	if err := s.authorize(ctx, pr, domain.OpConfigurationReleaseCreate, domain.ResourceConfigurationRelease, domain.Ref{NS: in.Namespace, Key: in.Name}); err != nil {
+	ctx, namespace, err := s.authorize(ctx, pr, domain.OpConfigurationReleaseCreate, domain.ResourceConfigurationRelease, domain.Ref{NS: in.Namespace, Key: in.Name})
+	if err != nil {
 		return domain.ConfigurationRelease{}, err
 	}
 	rs, err := s.releaseStore()
@@ -113,7 +114,8 @@ func (s *Service) CreateConfigurationRelease(ctx context.Context, pr Principal, 
 		}
 		switch sel.Kind {
 		case domain.ReleaseEntryParameter:
-			if err := s.authorize(ctx, pr, domain.OpParameterRead, domain.ResourceParameter, sel.Ref); err != nil {
+			ctx, _, err = s.authorize(ctx, pr, domain.OpParameterRead, domain.ResourceParameter, sel.Ref)
+			if err != nil {
 				return domain.ConfigurationRelease{}, err
 			}
 			p, err := s.store.GetParameter(ctx, sel.Ref, sel.Version, label)
@@ -125,7 +127,8 @@ func (s *Service) CreateConfigurationRelease(ctx context.Context, pr Principal, 
 			}
 			entries = append(entries, domain.ConfigurationReleaseEntry{Alias: sel.Alias, Kind: sel.Kind, Ref: sel.Ref, Version: p.Version, ContentType: p.ContentType, Metadata: p.Metadata, ParameterDigest: sha256Hex([]byte(p.Value))})
 		case domain.ReleaseEntrySecret:
-			if err := s.authorize(ctx, pr, domain.OpSecretRead, domain.ResourceSecret, sel.Ref); err != nil {
+			ctx, _, err = s.authorize(ctx, pr, domain.OpSecretRead, domain.ResourceSecret, sel.Ref)
+			if err != nil {
 				return domain.ConfigurationRelease{}, err
 			}
 			_, ver, err := s.store.GetSecretVersion(ctx, sel.Ref, sel.Version, label)
@@ -153,7 +156,7 @@ func (s *Service) CreateConfigurationRelease(ctx context.Context, pr Principal, 
 	if err != nil {
 		return domain.ConfigurationRelease{}, err
 	}
-	s.auditRef(ctx, pr, "configuration_release.create", domain.ResourceConfigurationRelease, domain.Ref{NS: in.Namespace, Key: in.Name}, out.Version, "allow", nil)
+	s.auditRefWithNamespaceID(ctx, pr, "configuration_release.create", domain.ResourceConfigurationRelease, domain.Ref{NS: in.Namespace, Key: in.Name}, namespace.ID, out.Version, "allow", nil)
 	return out, nil
 }
 
@@ -164,7 +167,8 @@ func (s *Service) GetConfigurationRelease(ctx context.Context, pr Principal, ns 
 	if version == 0 {
 		return domain.ConfigurationRelease{}, domain.Errorf(domain.ErrInvalidArgument, "version is required")
 	}
-	if err := s.authorize(ctx, pr, domain.OpConfigurationReleaseRead, domain.ResourceConfigurationRelease, domain.Ref{NS: ns, Key: name}); err != nil {
+	ctx, _, err := s.authorize(ctx, pr, domain.OpConfigurationReleaseRead, domain.ResourceConfigurationRelease, domain.Ref{NS: ns, Key: name})
+	if err != nil {
 		return domain.ConfigurationRelease{}, err
 	}
 	rs, err := s.releaseStore()
@@ -178,7 +182,8 @@ func (s *Service) GetActiveConfigurationRelease(ctx context.Context, pr Principa
 	if err := validateReleaseAddress(ns, name); err != nil {
 		return domain.ActiveConfigurationRelease{}, err
 	}
-	if err := s.authorize(ctx, pr, domain.OpConfigurationReleaseRead, domain.ResourceConfigurationRelease, domain.Ref{NS: ns, Key: name}); err != nil {
+	ctx, _, err := s.authorize(ctx, pr, domain.OpConfigurationReleaseRead, domain.ResourceConfigurationRelease, domain.Ref{NS: ns, Key: name})
+	if err != nil {
 		return domain.ActiveConfigurationRelease{}, err
 	}
 	rs, err := s.releaseStore()
@@ -201,7 +206,8 @@ func (s *Service) ListConfigurationReleases(ctx context.Context, pr Principal, n
 	if key == "" {
 		key = "releases"
 	}
-	if err := s.authorize(ctx, pr, domain.OpConfigurationReleaseList, domain.ResourceConfigurationRelease, domain.Ref{NS: ns, Key: key}); err != nil {
+	ctx, _, err := s.authorize(ctx, pr, domain.OpConfigurationReleaseList, domain.ResourceConfigurationRelease, domain.Ref{NS: ns, Key: key})
+	if err != nil {
 		return nil, "", err
 	}
 	rs, err := s.releaseStore()
@@ -218,7 +224,8 @@ func (s *Service) ValidateConfigurationRelease(ctx context.Context, pr Principal
 	if version == 0 {
 		return nil, domain.Errorf(domain.ErrInvalidArgument, "version is required")
 	}
-	if err := s.authorize(ctx, pr, domain.OpConfigurationReleaseValidate, domain.ResourceConfigurationRelease, domain.Ref{NS: ns, Key: name}); err != nil {
+	ctx, namespace, err := s.authorize(ctx, pr, domain.OpConfigurationReleaseValidate, domain.ResourceConfigurationRelease, domain.Ref{NS: ns, Key: name})
+	if err != nil {
 		return nil, err
 	}
 	rs, err := s.releaseStore()
@@ -234,10 +241,12 @@ func (s *Service) ValidateConfigurationRelease(ctx context.Context, pr Principal
 	for _, entry := range rel.Entries {
 		switch entry.Kind {
 		case domain.ReleaseEntryParameter:
-			if err := s.authorize(ctx, pr, domain.OpParameterRead, domain.ResourceParameter, entry.Ref); err != nil {
-				validation = append(validation, validationAuthError(entry.Alias, err))
+			entryCtx, _, authErr := s.authorize(ctx, pr, domain.OpParameterRead, domain.ResourceParameter, entry.Ref)
+			if authErr != nil {
+				validation = append(validation, validationAuthError(entry.Alias, authErr))
 				continue
 			}
+			ctx = entryCtx
 			p, err := s.store.GetParameter(ctx, entry.Ref, entry.Version, "")
 			if err != nil {
 				validation = append(validation, validationReadError(entry.Alias, err))
@@ -262,10 +271,12 @@ func (s *Service) ValidateConfigurationRelease(ctx context.Context, pr Principal
 			}
 			obj[entry.Alias] = value
 		case domain.ReleaseEntrySecret:
-			if err := s.authorize(ctx, pr, domain.OpSecretRead, domain.ResourceSecret, entry.Ref); err != nil {
-				validation = append(validation, validationAuthError(entry.Alias, err))
+			entryCtx, _, authErr := s.authorize(ctx, pr, domain.OpSecretRead, domain.ResourceSecret, entry.Ref)
+			if authErr != nil {
+				validation = append(validation, validationAuthError(entry.Alias, authErr))
 				continue
 			}
+			ctx = entryCtx
 			_, ver, err := s.store.GetSecretVersion(ctx, entry.Ref, entry.Version, "")
 			if err != nil {
 				validation = append(validation, validationReadError(entry.Alias, err))
@@ -300,7 +311,7 @@ func (s *Service) ValidateConfigurationRelease(ctx context.Context, pr Principal
 	if len(validation) > 0 {
 		decision = "error"
 	}
-	s.auditRef(ctx, pr, "configuration_release.validate", domain.ResourceConfigurationRelease, domain.Ref{NS: ns, Key: name}, version, decision, map[string]string{"error_count": strconv.Itoa(len(validation))})
+	s.auditRefWithNamespaceID(ctx, pr, "configuration_release.validate", domain.ResourceConfigurationRelease, domain.Ref{NS: ns, Key: name}, namespace.ID, version, decision, map[string]string{"error_count": strconv.Itoa(len(validation))})
 	return validation, nil
 }
 
@@ -311,7 +322,8 @@ func (s *Service) ActivateConfigurationRelease(ctx context.Context, pr Principal
 	if version == 0 {
 		return domain.ActiveConfigurationRelease{}, false, domain.Errorf(domain.ErrInvalidArgument, "version is required")
 	}
-	if err := s.authorize(ctx, pr, domain.OpConfigurationReleaseActivate, domain.ResourceConfigurationRelease, domain.Ref{NS: ns, Key: name}); err != nil {
+	ctx, namespace, err := s.authorize(ctx, pr, domain.OpConfigurationReleaseActivate, domain.ResourceConfigurationRelease, domain.Ref{NS: ns, Key: name})
+	if err != nil {
 		return domain.ActiveConfigurationRelease{}, false, err
 	}
 	rs, err := s.releaseStore()
@@ -326,7 +338,7 @@ func (s *Service) ActivateConfigurationRelease(ctx context.Context, pr Principal
 			event = "configuration_release.cas_conflict"
 			decision = "deny"
 		}
-		s.auditRef(ctx, pr, event, domain.ResourceConfigurationRelease, domain.Ref{NS: ns, Key: name}, version, decision, nil)
+		s.auditRefWithNamespaceID(ctx, pr, event, domain.ResourceConfigurationRelease, domain.Ref{NS: ns, Key: name}, namespace.ID, version, decision, nil)
 		return domain.ActiveConfigurationRelease{}, false, err
 	}
 	if changed {
@@ -334,17 +346,31 @@ func (s *Service) ActivateConfigurationRelease(ctx context.Context, pr Principal
 		if active.PreviousVersion > 0 && version < active.PreviousVersion {
 			event = "configuration_release.rollback"
 		}
-		s.auditRef(ctx, pr, event, domain.ResourceConfigurationRelease, domain.Ref{NS: ns, Key: name}, version, "allow", map[string]string{"previous_version": strconv.FormatUint(active.PreviousVersion, 10)})
+		s.auditRefWithNamespaceID(ctx, pr, event, domain.ResourceConfigurationRelease, domain.Ref{NS: ns, Key: name}, namespace.ID, version, "allow", map[string]string{"previous_version": strconv.FormatUint(active.PreviousVersion, 10)})
 		s.getHub().Wake()
 	}
 	return active, changed, nil
 }
 
 func (s *Service) AuthorizeReleaseWatch(ctx context.Context, pr Principal, ns domain.NamespaceRef, name string) error {
+	_, err := s.AuthorizeReleaseWatchContext(ctx, pr, ns, name)
+	return err
+}
+
+// AuthorizeReleaseWatchContext returns the namespace-incarnation-bound context
+// that must be used for the initial release snapshot and connection lifecycle.
+func (s *Service) AuthorizeReleaseWatchContext(ctx context.Context, pr Principal, ns domain.NamespaceRef, name string) (context.Context, error) {
 	if err := validateReleaseAddress(ns, name); err != nil {
-		return err
+		return ctx, err
 	}
-	return s.authorize(ctx, pr, domain.OpConfigurationReleaseWatch, domain.ResourceConfigurationRelease, domain.Ref{NS: ns, Key: name})
+	bound, namespace, err := s.authorize(ctx, pr, domain.OpConfigurationReleaseWatch, domain.ResourceConfigurationRelease, domain.Ref{NS: ns, Key: name})
+	if err != nil {
+		return ctx, err
+	}
+	if namespace.ID == 0 {
+		return ctx, domain.Errorf(domain.ErrNotFound, "namespace %s", ns)
+	}
+	return bound, nil
 }
 
 func (s *Service) ReauthorizeReleaseWatch(ctx context.Context, pr Principal, ns domain.NamespaceRef, name string) error {
@@ -358,10 +384,11 @@ func (s *Service) AcknowledgeConfigurationRelease(ctx context.Context, pr Princi
 	if err := validateReleaseAddress(ack.Namespace, ack.ReleaseName); err != nil {
 		return err
 	}
-	if err := s.authorize(ctx, pr, domain.OpConfigurationReleaseWatch, domain.ResourceConfigurationRelease, domain.Ref{NS: ack.Namespace, Key: ack.ReleaseName}); err != nil {
+	ctx, namespace, err := s.authorize(ctx, pr, domain.OpConfigurationReleaseWatch, domain.ResourceConfigurationRelease, domain.Ref{NS: ack.Namespace, Key: ack.ReleaseName})
+	if err != nil {
 		return err
 	}
-	if ack.ReleaseVersion == 0 || ack.ActivationRevision == 0 || ack.ClientName == "" || ack.InstanceID == "" {
+	if ack.ReleaseVersion == 0 || ack.ActivationRevision == 0 || ack.ClientName == "" || ack.InstanceID == "" || ack.ConnectionID == "" {
 		return domain.Errorf(domain.ErrInvalidArgument, "release acknowledgement is incomplete")
 	}
 	if len(ack.ClientName) > maxReleaseClientIDBytes || len(ack.InstanceID) > maxReleaseClientIDBytes {
@@ -383,7 +410,6 @@ func (s *Service) AcknowledgeConfigurationRelease(ctx context.Context, pr Princi
 	ack.Diagnostic = sanitizeDiagnostic(ack.Diagnostic)
 	ack.Identity = pr.Identity.Name
 	ack.ServerTimestamp = s.now()
-	ack.Connected = true
 	if ack.ClientTimestamp.IsZero() {
 		ack.ClientTimestamp = ack.ServerTimestamp
 	}
@@ -404,7 +430,7 @@ func (s *Service) AcknowledgeConfigurationRelease(ctx context.Context, pr Princi
 	if err := rs.UpsertReleaseAcknowledgement(ctx, ack); err != nil {
 		return err
 	}
-	s.auditRef(ctx, pr, "configuration_release.acknowledge", domain.ResourceConfigurationRelease, domain.Ref{NS: ack.Namespace, Key: ack.ReleaseName}, ack.ReleaseVersion, "allow", map[string]string{"state": ack.State, "category": ack.RejectionCategory, "client_name": ack.ClientName, "instance_id": ack.InstanceID})
+	s.auditRefWithNamespaceID(ctx, pr, "configuration_release.acknowledge", domain.ResourceConfigurationRelease, domain.Ref{NS: ack.Namespace, Key: ack.ReleaseName}, namespace.ID, ack.ReleaseVersion, "allow", map[string]string{"state": ack.State, "category": ack.RejectionCategory, "client_name": ack.ClientName, "instance_id": ack.InstanceID})
 	return nil
 }
 

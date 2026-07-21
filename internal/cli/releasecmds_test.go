@@ -120,3 +120,45 @@ func TestOptionalExpectedCurrentVersionTracksPresenceOfZero(t *testing.T) {
 		t.Fatalf("optional value = %+v", value)
 	}
 }
+
+func TestReleaseSubscriberPresentationSeparatesIdentitiesSharingClientInstance(t *testing.T) {
+	instances := map[releaseSubscriberInstanceKey]*releaseSubscriberInstanceStatus{}
+	mergeReleaseSubscriberStates(instances, []*kmsv1.ReleaseSubscriberState{
+		{
+			Identity:           "identity-a",
+			ClientName:         "shared-client",
+			InstanceId:         "same-instance",
+			State:              "received",
+			ReleaseVersion:     1,
+			ActivationRevision: 1,
+		},
+		{
+			Identity:           "identity-b",
+			ClientName:         "shared-client",
+			InstanceId:         "same-instance",
+			State:              "applied",
+			ReleaseVersion:     2,
+			ActivationRevision: 2,
+			Connected:          true,
+		},
+	})
+	if len(instances) != 2 {
+		t.Fatalf("grouped instances = %d, want 2", len(instances))
+	}
+
+	var output bytes.Buffer
+	writeReleaseSubscriberInstances(&output, instances, 2)
+	lines := strings.Split(strings.TrimSpace(output.String()), "\n")
+	if len(lines) != 3 {
+		t.Fatalf("output rows = %d, want header plus 2 identities:\n%s", len(lines), output.String())
+	}
+	if got := strings.Join(strings.Fields(lines[0]), "|"); got != "IDENTITY|CLIENT|INSTANCE|RECEIVED|PREPARED|APPLIED|REJECTED|LAG|CONNECTED" {
+		t.Fatalf("header = %q", got)
+	}
+	if got := strings.Join(strings.Fields(lines[1]), "|"); got != "identity-a|shared-client|same-instance|v1/r1|-|-|-|1|false" {
+		t.Fatalf("identity-a row = %q", got)
+	}
+	if got := strings.Join(strings.Fields(lines[2]), "|"); got != "identity-b|shared-client|same-instance|-|-|v2/r2|-|0|true" {
+		t.Fatalf("identity-b row = %q", got)
+	}
+}

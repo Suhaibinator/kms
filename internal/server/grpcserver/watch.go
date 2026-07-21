@@ -12,6 +12,7 @@ import (
 	"github.com/Suhaibinator/kms/internal/core"
 	"github.com/Suhaibinator/kms/internal/domain"
 	"github.com/Suhaibinator/kms/internal/keyutil"
+	"github.com/Suhaibinator/kms/internal/storage"
 	"github.com/Suhaibinator/kms/internal/watch"
 )
 
@@ -42,16 +43,26 @@ func (w *watchServer) Subscribe(stream kmsv1.WatchService_SubscribeServer) error
 	if err != nil {
 		return status.Error(codes.InvalidArgument, err.Error())
 	}
-	if err := w.s.svc.AuthorizeSubscribe(ctx, pr, namespaces); err != nil {
+	ctx, err = w.s.svc.AuthorizeSubscribeContext(ctx, pr, namespaces)
+	if err != nil {
 		return w.s.mapErr(ctx, err)
 	}
 
+	namespaceIDs := make(map[domain.NamespaceRef]int64, len(namespaces))
+	for _, ns := range namespaces {
+		id, ok := storage.ExpectedNamespaceIncarnation(ctx, ns)
+		if !ok {
+			return w.s.mapErr(ctx, domain.Errorf(domain.ErrAborted, "namespace %s changed during request; retry", ns))
+		}
+		namespaceIDs[ns] = id
+	}
 	reg := watch.Registration{
 		ClientName:       first.GetClientName(),
 		InstanceID:       instanceID(first.GetClientName()),
 		Identity:         pr.Identity.Name,
 		RemoteAddr:       pr.RemoteAddr,
 		Namespaces:       namespaces,
+		NamespaceIDs:     namespaceIDs,
 		LastSeenRevision: first.GetLastSeenRevision(),
 	}
 	sub, err := w.s.hub.Subscribe(ctx, reg)

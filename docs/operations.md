@@ -103,8 +103,8 @@ immediately via its shared database). All flags are the standard library
 | `init` | `--db` (default `./kms.db`), `--master-key-file` (omit for a passphrase prompt), `--admin NAME` (optional) | Creates/migrates the database and the master key (generating a key file, or prompting for a new passphrase with confirmation). With `--admin`, also creates a bootstrap admin identity and prints its token once. |
 | `migrate` | `--db` | Opens the database, applying any pending migrations, and exits. |
 | `check` | `--db`, `--key-file` (optional) | Verifies the database is reachable and, if a key source is available (file, `KMS_MASTER_PASSPHRASE`, or TTY), verifies the master key against the stored key-check value. Never prints key material. |
-| `backup` | `--db`, `--out` (required, must not already exist) | Writes a consistent online backup via `store.Backup`. Prints a reminder that the master key is not included. |
-| `restore` | `--db` (destination), `--in` (required, source backup), `--force` (overwrite an existing destination) | Validates the input is a real SQLite file (checks the file header), copies it into place, removes stale `-wal`/`-shm` sidecars, then opens (and migrates) the restored copy to confirm it's usable. |
+| `backup` | `--db`, `--out` (required, must not already exist) | Writes a consistent online backup through owner-only staging and atomic no-replace publication. Prints a reminder that the master key is not included. |
+| `restore` | `--db` (destination), `--in` (required, source backup), `--force` (overwrite an existing destination) | Validates the input is a KMS SQLite backup, stages an owner-only copy, publishes it atomically, removes stale `-wal`/`-shm` sidecars, then opens (and migrates) it. Without `--force`, publication never replaces an existing or concurrently created entry. |
 | `create-admin` | `--db`, `--name` (required) | Creates an admin identity directly against the database file and prints its token once. Uses WAL mode's concurrent-reader support, but coordinating this against a live `serve` process is the operator's responsibility. |
 | `rotate-kek` | `--db`, `--key-file` (current key, omit to use the current passphrase), `--new-key-file` (new key, omit to enter a new passphrase) | Unseals with the current key, generates or loads the new key, and calls the same `Service.RotateKEK` used internally — rewrapping every **non-destroyed** secret version's DEK and every built-in CA key under the new KEK in one transaction. Prints both counts (`N secret versions and M CA keys rewrapped`). Run with `serve` stopped; a live process retains the old keyring. |
 | `import` | `--from` (JSON file or SuhaibParameterStore SQLite export), `--namespace env/app` **or** `--env`/`--app`, `--db` (default `./kms.db`), `--master-key-file`, `--dry-run`, `--report FILE` | Maps flat source keys to **relative slug keys** (`slug(key)`, e.g. `TWILIO_SID` → `twilio-sid`) in the destination namespace, **auto-creates the namespace** if it does not exist, writes each as a new secret via a ref-based `PutSecret` with a freshly minted per-secret access token, and emits a mapping report (old key → `/env/app/key` display path → token, written once). Distinct source keys that slug to the same key are reported as a collision rather than silently overwriting. `--dry-run` reports the mapping without writing or minting tokens. Pass either `--namespace` or `--env`/`--app`, not both. See [`migration.md`](migration.md) for the full gradethis walkthrough. |
@@ -118,6 +118,43 @@ those values; every version created after migration stores its own attributes.
 master-key acquisition path as `serve` (key file → `KMS_MASTER_PASSPHRASE`
 → interactive prompt) via the shared `unseal` helper, so the same no-TTY
 fail-fast behavior applies.
+
+### Secure destination paths
+
+Database, backup, restore, generated-key, identity certificate/key-bundle, and
+import-report destinations must have a stable parent. KMS resolves parent
+symlinks once, uses only the canonical result, and checks every directory in
+that chain. On POSIX, each directory must be owned by root or the service user;
+group/other write is refused unless the sticky bit protects entries. On macOS,
+any allow ACL in the chain is also refused, and ACLs are stripped from private
+artifacts. On Windows, the chain must have a trusted owner and a DACL that gives
+no untrusted SID delete or ACL-control authority; private artifacts receive a
+protected current-user-only DACL. Prepare destination directories under the
+same OS account that runs the command.
+
+Private files are created exclusively and owner-only (`0600` files/`0700`
+staging directories on POSIX). The identity `.crt` is intentionally public at
+`0644`; its `.key` is private, and both entries are reserved before minting.
+Import reports are private because successful reports contain one-time access
+tokens. Existing files and symlinks are refused except an explicitly opened
+existing database that already passes owner-only checks and `restore --force`;
+backup and non-force restore use atomic no-replace publication.
+
+> **Existing-database compatibility:** a hardened build fails closed on a
+> legacy `0644` database instead of starting with broad access. Stop **all** KMS
+> processes first. Verify that the database and its directory are owned by a
+> trusted account and that there is no concern about attacker-open handles or
+> modified content. On POSIX, set the database to `0600` (and correct ownership
+> if necessary); on macOS, also remove unsafe extended ACLs. On Windows, replace
+> inherited/broad permissions with a protected DACL granting full access only
+> to the account that runs KMS. Then restart. If provenance, content, or handle
+> safety cannot be established, do not repair the file in place—restore a
+> known-good backup into a fresh secure directory.
+
+On non-Darwin POSIX systems, these checks cover owner UID, mode bits, and
+sticky-directory behavior only. They do **not** inspect NFSv4 or other extended
+ACL entries; operators must verify separately that no such ACL grants broader
+path-mutation or file-access rights.
 
 ### Management commands (`admin` group, over gRPC)
 
@@ -196,6 +233,11 @@ entries:
 An absolute `key`, such as `/shared/platform/feature-flags`, creates a
 cross-namespace reference subject to independent resource authorization.
 Specify `version` or `label`, not both; omitting both resolves `current`.
+Creation persists the exact immutable namespace-row ID for every resolved
+reference. Deleting and recreating the same `env/app` therefore cannot retarget
+an existing pin. Releases migrated without those IDs remain readable and keep
+conservative name-based deletion guards, but activation fails closed; recreate
+such a release before activating it so every source obtains an exact pin.
 
 ```bash
 parameter-store release schema create gradethis/runtime runtime.schema.json \
@@ -457,11 +499,22 @@ the same database.
 concurrently-valid certificates, rollover is zero-downtime — issue the
 replacement *before* the current one expires:
 
+Certificate paths are reserved before the minting RPC. If the RPC or a local
+write fails, the CLI deliberately leaves the exclusive placeholders (and any
+partial private key at `0600`) in place rather than unlinking a pathname that
+could have been replaced concurrently. Inspect and remove those two files
+before retrying.
+
 ```bash
-# 1. Mint an additional cert for the existing identity (old cert still valid).
-parameter-store admin identity issue-cert gradethis-be --ttl 90d --out ./certs \
+# 1. Reserve a fresh directory, then mint an additional cert for the existing
+# identity (the old cert remains valid). Certificate output paths are created
+# exclusively and are never overwritten.
+mkdir -p ./certs
+rollover_dir="$(mktemp -d ./certs/gradethis-be-rollover.XXXXXX)"
+parameter-store admin identity issue-cert gradethis-be --ttl 90d --out "$rollover_dir" \
     --endpoint kms.internal:8443 --ca server-ca.crt --cert admin.crt --key admin.key
-#    -> writes certs/gradethis-be.crt and certs/gradethis-be.key (note the serial)
+#    -> writes $rollover_dir/gradethis-be.crt and
+#       $rollover_dir/gradethis-be.key (note the serial)
 
 # 2. Deploy the new cert/key to the app and roll it (both certs verify meanwhile).
 
@@ -539,8 +592,12 @@ parameter-store backup --db /var/lib/parameter-store/kms.db \
 ```
 
 `backup` refuses to overwrite an existing output file, so each invocation
-needs a fresh path (a timestamp, as above, is the simplest scheme). It
-prints an explicit reminder that the master key is not included.
+needs a fresh path (a timestamp, as above, is the simplest scheme). Its
+destination parent must satisfy [secure destination-path](#secure-destination-paths)
+checks. The backup is built in a private staging directory, restricted
+owner-only, then published atomically without replacement; an entry created at
+the destination during the backup wins. The command prints an explicit
+reminder that the master key is not included.
 
 ## Restore
 
@@ -563,6 +620,10 @@ systemctl start parameter-store
 `-wal`/`-shm` sidecar files left over from the previous database so the
 restored copy is self-consistent, then opens (and migrates) the restored
 file to confirm it's usable — all before you start the server against it.
+The destination must satisfy [secure destination-path](#secure-destination-paths)
+checks. Copying uses an owner-only staging file; without `--force`, atomic
+no-replace publication preserves any existing or concurrently created entry.
+`--force` is the only path that intentionally replaces the destination.
 Ensure the master key file (or passphrase) matches what the restored
 database expects: `key_metadata.source` in the restored database records
 which mode it was, and the key-check canary (`crypto.VerifyKeyCheck`) will
@@ -659,6 +720,14 @@ subscription manager handles both cases identically) but is worth knowing
 when tuning retention: a longer window means more reconnect scenarios can
 replay cheaply instead of falling back to a snapshot, at the cost of a
 larger `change_log` table.
+
+Every new change row carries the immutable ID of the namespace incarnation
+that produced it. A watch registration is bound to the exact current ID, and
+both replay and live delivery require that match. Deleting/recreating an
+`env/app` is therefore a new namespace: the stale stream closes on heartbeat
+(including admin streams), and a reconnect authorizes the replacement afresh.
+Legacy change rows without an ID force a current snapshot instead of ambiguous
+replay; release watches use the same exact-incarnation rule.
 
 Configuration release replay and history have additional guards. By default,
 KMS retains at least the newest 100 inactive release versions and 90 days of

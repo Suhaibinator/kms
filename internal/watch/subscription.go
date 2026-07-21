@@ -14,11 +14,15 @@ import (
 // core.Service.AuthorizeSubscribe). The hub performs no per-event authorization:
 // a subscriber receives every change in each of its namespaces.
 type Registration struct {
-	ClientName       string
-	InstanceID       string
-	Identity         string
-	RemoteAddr       string
-	Namespaces       []domain.NamespaceRef
+	ClientName string
+	InstanceID string
+	Identity   string
+	RemoteAddr string
+	Namespaces []domain.NamespaceRef
+	// NamespaceIDs binds each display name to the immutable row authorized by
+	// core. Hub.Subscribe rejects missing/non-positive IDs, so all replay,
+	// snapshot, and live delivery is fail-closed by construction.
+	NamespaceIDs     map[domain.NamespaceRef]int64
 	LastSeenRevision uint64
 }
 
@@ -195,8 +199,12 @@ func (s *Subscription) lastHeartbeatTime() time.Time {
 }
 
 // matches reports whether the entry's namespace is one this subscriber watches.
-func (s *Subscription) matches(ref domain.Ref) bool {
-	return namespaceMatchAny(s.reg.Namespaces, ref.NS)
+func (s *Subscription) matches(entry domain.ChangeLogEntry) bool {
+	if !namespaceMatchAny(s.reg.Namespaces, entry.Ref.NS) {
+		return false
+	}
+	expectedID, bound := s.reg.NamespaceIDs[entry.Ref.NS]
+	return bound && expectedID > 0 && entry.NamespaceID == expectedID
 }
 
 // namespaceMatchAny reports whether ns is in the subscribed set.

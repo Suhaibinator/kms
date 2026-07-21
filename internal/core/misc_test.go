@@ -1,8 +1,11 @@
 package core
 
 import (
+	"bytes"
 	"context"
+	"encoding/base64"
 	"errors"
+	"path/filepath"
 	"testing"
 
 	"github.com/Suhaibinator/kms/internal/crypto"
@@ -206,6 +209,94 @@ func TestListNamespacesScopedToAccess(t *testing.T) {
 	}
 }
 
+func TestListNamespacesFiltersDisallowedAuthenticationMethods(t *testing.T) {
+	ctx := context.Background()
+	store := newFakeStore()
+	s := newTestService(store)
+	mtlsOnly := mkns("prod", "mtls-only")
+	tokenAllowed := mkns("prod", "token-allowed")
+	store.addNamespace(mtlsOnly, domain.AuthMethodMTLS)
+	store.addNamespace(tokenAllowed, domain.AuthMethodToken)
+	store.addPolicy(domain.Policy{Name: "read-all", Subject: "app", Allow: []domain.PolicyRule{{
+		Operation: domain.OpParameterRead, Env: "*", App: "*",
+	}}})
+
+	tokenVisible, _, err := s.ListNamespaces(ctx, clientPrincipal("app"), storage.ListPage{})
+	if err != nil {
+		t.Fatalf("ListNamespaces(token): %v", err)
+	}
+	if len(tokenVisible) != 1 || tokenVisible[0].NamespaceRef != tokenAllowed {
+		t.Fatalf("token-visible namespaces = %v, want [%s]", tokenVisible, tokenAllowed)
+	}
+
+	mtlsPrincipal := clientPrincipal("app")
+	mtlsPrincipal.Method = domain.AuthMethodMTLS
+	mtlsVisible, _, err := s.ListNamespaces(ctx, mtlsPrincipal, storage.ListPage{})
+	if err != nil {
+		t.Fatalf("ListNamespaces(mTLS): %v", err)
+	}
+	if len(mtlsVisible) != 1 || mtlsVisible[0].NamespaceRef != mtlsOnly {
+		t.Fatalf("mTLS-visible namespaces = %v, want [%s]", mtlsVisible, mtlsOnly)
+	}
+
+	adminVisible, _, err := s.ListNamespaces(ctx, adminPrincipal(), storage.ListPage{})
+	if err != nil {
+		t.Fatalf("ListNamespaces(admin): %v", err)
+	}
+	if len(adminVisible) != 2 {
+		t.Fatalf("admin-visible namespaces = %v, want both", adminVisible)
+	}
+}
+
+func TestListNamespacesFilteredPaginationIsCompleteAndConfidential(t *testing.T) {
+	ctx := context.Background()
+	st, err := storage.Open(filepath.Join(t.TempDir(), "namespace-pages.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = st.Close() }()
+	for _, tc := range []struct {
+		app    string
+		method domain.AuthMethod
+	}{
+		{app: "a-hidden", method: domain.AuthMethodMTLS},
+		{app: "b-visible", method: domain.AuthMethodToken},
+		{app: "c-hidden", method: domain.AuthMethodMTLS},
+		{app: "d-visible", method: domain.AuthMethodToken},
+	} {
+		if _, err := st.CreateNamespace(ctx, domain.Namespace{NamespaceRef: mkns("prod", tc.app), AllowedAuthMethods: []domain.AuthMethod{tc.method}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := st.CreatePolicy(ctx, domain.Policy{Name: "read", Subject: "app", Allow: []domain.PolicyRule{{Operation: domain.OpParameterRead, Env: "*", App: "*"}}}); err != nil {
+		t.Fatal(err)
+	}
+	s := New(st, nil, "test")
+	page1, next, err := s.ListNamespaces(ctx, clientPrincipal("app"), storage.ListPage{Limit: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page1) != 1 || page1[0].App != "b-visible" || next == "" {
+		t.Fatalf("first filtered namespace page = %+v next=%q", page1, next)
+	}
+	sealed, err := base64.RawURLEncoding.DecodeString(next)
+	if err != nil {
+		t.Fatalf("decode opaque cursor envelope: %v", err)
+	}
+	for _, hidden := range []string{"prod/a-hidden", "prod/c-hidden", "prod/b-visible"} {
+		if bytes.Contains(sealed, []byte(hidden)) {
+			t.Fatalf("delegated cursor exposed namespace %q", hidden)
+		}
+	}
+	page2, final, err := s.ListNamespaces(ctx, clientPrincipal("app"), storage.ListPage{Limit: 1, Token: next})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page2) != 1 || page2[0].App != "d-visible" || final != "" {
+		t.Fatalf("second filtered namespace page = %+v next=%q", page2, final)
+	}
+}
+
 func TestListNamespacesHonorsExplicitDeny(t *testing.T) {
 	ctx := context.Background()
 	store := newFakeStore()
@@ -283,9 +374,19 @@ func TestAuthorizeSubscribe(t *testing.T) {
 		t.Fatalf("unbound subscribe err = %v, want ErrPermissionDenied", err)
 	}
 
-	// Admin may subscribe to anything.
+	// Admin bypasses policy/method restrictions for an existing namespace.
 	if err := s.AuthorizeSubscribe(ctx, adminPrincipal(), nss); err != nil {
 		t.Fatalf("admin subscribe: %v", err)
+	}
+
+	// A stream still needs a concrete immutable row to bind. Admin bypass must
+	// not turn a nonexistent name into access to whatever is created later.
+	missing := domain.NamespaceRef{Env: "prod", App: "missing"}
+	if err := s.AuthorizeSubscribe(ctx, adminPrincipal(), []domain.NamespaceRef{missing}); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("admin missing-namespace subscribe err = %v, want ErrNotFound", err)
+	}
+	if err := s.AuthorizeReleaseWatch(ctx, adminPrincipal(), missing, "runtime"); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("admin missing-namespace release watch err = %v, want ErrNotFound", err)
 	}
 }
 
@@ -361,8 +462,19 @@ func TestReauthorizeWatchMTLSDisabled(t *testing.T) {
 	ctx := context.Background()
 	store := newFakeStore()
 	s := newTestService(store)
-	store.addIdentity("svc", domain.IdentityKindClient, "")
-	pr := Principal{Identity: domain.Identity{Name: "svc", Kind: domain.IdentityKindClient}, Method: domain.AuthMethodMTLS}
+	withCA(t, s)
+	res, err := s.CreateIdentity(ctx, adminPrincipal(), CreateIdentityInput{
+		Name: "svc", Kind: domain.IdentityKindClient, AuthMethods: []domain.AuthMethod{domain.AuthMethodMTLS},
+	})
+	if err != nil {
+		t.Fatalf("CreateIdentity: %v", err)
+	}
+	pr := Principal{
+		Identity:    domain.Identity{Name: "svc", Kind: domain.IdentityKindClient},
+		Method:      domain.AuthMethodMTLS,
+		Serial:      res.Cert.Serial,
+		Fingerprint: res.Cert.Fingerprint,
+	}
 
 	// An enabled mTLS identity re-authorizes.
 	if err := s.ReauthorizeWatch(ctx, pr); err != nil {

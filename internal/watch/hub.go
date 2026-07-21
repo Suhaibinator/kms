@@ -325,7 +325,7 @@ func (h *Hub) dispatch(e domain.ChangeLogEntry) {
 	h.mu.Unlock()
 
 	for _, s := range subs {
-		if !s.matches(e.Ref) {
+		if !s.matches(e) {
 			continue
 		}
 		if !s.offer(e) {
@@ -395,6 +395,35 @@ func (h *Hub) removeRelease(id uint64) {
 // that race in during backlog computation are buffered and de-duplicated
 // against the backlog revision.
 func (h *Hub) Subscribe(ctx context.Context, reg Registration) (*Subscription, error) {
+	// Registration is retained for the stream lifetime. Own its reference-typed
+	// fields so a caller cannot mutate the authorized names/IDs after validation.
+	reg.Namespaces = append([]domain.NamespaceRef(nil), reg.Namespaces...)
+	ids := make(map[domain.NamespaceRef]int64, len(reg.NamespaceIDs))
+	for ns, id := range reg.NamespaceIDs {
+		ids[ns] = id
+	}
+	reg.NamespaceIDs = ids
+	if len(reg.Namespaces) == 0 {
+		return nil, domain.Errorf(domain.ErrInvalidArgument, "at least one namespace incarnation is required")
+	}
+	for _, ns := range reg.Namespaces {
+		id, ok := reg.NamespaceIDs[ns]
+		if !ok || id <= 0 {
+			return nil, domain.Errorf(domain.ErrInvalidArgument, "namespace incarnation is required for %s", ns)
+		}
+		var err error
+		ctx, err = storage.BindNamespaceIncarnation(ctx, ns, id)
+		if err != nil {
+			return nil, err
+		}
+		current, err := h.store.GetNamespace(ctx, ns)
+		if err != nil {
+			return nil, err
+		}
+		if current.ID != id {
+			return nil, domain.Errorf(domain.ErrAborted, "namespace %s changed during subscribe; retry", ns)
+		}
+	}
 	now := h.now()
 	sub := &Subscription{
 		hub:           h,
@@ -510,6 +539,18 @@ func (h *Hub) replayEntries(ctx context.Context, reg Registration, current uint6
 				continue
 			}
 			if !namespaceMatchAny(reg.Namespaces, e.Ref.NS) {
+				continue
+			}
+			expectedID, bound := reg.NamespaceIDs[e.Ref.NS]
+			if !bound || expectedID <= 0 {
+				return nil, false, domain.Errorf(domain.ErrAborted, "namespace incarnation binding was lost for %s", e.Ref.NS)
+			}
+			// Legacy rows predate immutable namespace IDs. A replay containing
+			// one cannot be safely attributed, so force a current snapshot.
+			if e.NamespaceID == 0 {
+				return nil, false, nil
+			}
+			if e.NamespaceID != expectedID {
 				continue
 			}
 			out = append(out, e)

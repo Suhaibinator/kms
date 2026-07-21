@@ -2,6 +2,7 @@ package core
 
 import (
 	"context"
+	"errors"
 	"regexp"
 	"strconv"
 	"time"
@@ -27,27 +28,54 @@ func (s *Service) requireAdmin(ctx context.Context, pr Principal, eventType, res
 // unconditionally and other identities may perform only when granted the
 // specific admin operation on the resource. Denials are audited.
 func (s *Service) requireAdminOrOp(ctx context.Context, pr Principal, operation, eventType, resourceType string, ref domain.Ref) error {
+	_, _, err := s.requireAdminOrOpContext(ctx, pr, operation, eventType, resourceType, ref)
+	return err
+}
+
+// requireAdminOrOpContext preserves the immutable namespace row used for a
+// delegated management decision. Namespace update/delete also bind admins so
+// the mutation and its audit record cannot cross a delete/recreate ABA window.
+func (s *Service) requireAdminOrOpContext(ctx context.Context, pr Principal, operation, eventType, resourceType string, ref domain.Ref) (context.Context, domain.Namespace, error) {
 	if pr.IsAdmin() {
-		return nil
+		if resourceType == domain.ResourceNamespace && operation != domain.OpAdminNamespaceCreate {
+			ns, err := s.store.GetNamespace(ctx, ref.NS)
+			if err != nil {
+				return ctx, domain.Namespace{}, err
+			}
+			bound, err := storage.BindNamespaceIncarnation(ctx, ref.NS, ns.ID)
+			return bound, ns, err
+		}
+		return ctx, domain.Namespace{}, nil
 	}
+	var namespace domain.Namespace
 	// Delegated management operations against an existing namespace must obey
 	// the same authentication-method boundary as data-plane operations. Create
 	// is excluded because the target namespace does not exist yet; partially
 	// specified refs (for example audit filters) cannot be gated as one namespace.
 	if operation != domain.OpAdminNamespaceCreate && ref.NS.Env != "" && ref.NS.App != "" {
-		if err := s.namespaceMethodGate(ctx, pr, ref.NS, resourceType); err != nil {
-			return err
+		var err error
+		namespace, err = s.namespaceMethodCheck(ctx, pr, ref.NS, resourceType)
+		if err != nil {
+			return ctx, domain.Namespace{}, err
+		}
+		ctx, err = storage.BindNamespaceIncarnation(ctx, ref.NS, namespace.ID)
+		if err != nil {
+			return ctx, domain.Namespace{}, err
 		}
 	}
 	policies, err := s.store.PoliciesForSubject(ctx, pr.Identity.Name)
 	if err != nil {
-		return domain.Errorf(domain.ErrPermissionDenied, "authorization unavailable")
+		return ctx, domain.Namespace{}, domain.Errorf(domain.ErrPermissionDenied, "authorization unavailable")
 	}
 	if !policy.Authorize(policies, pr.home(), operation, ref.NS) {
-		s.auditRef(ctx, pr, eventType, resourceType, ref, 0, "deny", map[string]string{"operation": operation})
-		return domain.Errorf(domain.ErrPermissionDenied, "access denied")
+		if namespace.ID != 0 {
+			s.auditRefWithNamespaceID(ctx, pr, eventType, resourceType, ref, namespace.ID, 0, "deny", map[string]string{"operation": operation})
+		} else {
+			s.auditRef(ctx, pr, eventType, resourceType, ref, 0, "deny", map[string]string{"operation": operation})
+		}
+		return ctx, domain.Namespace{}, domain.Errorf(domain.ErrPermissionDenied, "access denied")
 	}
-	return nil
+	return ctx, namespace, nil
 }
 
 // --- namespaces --------------------------------------------------------------
@@ -77,7 +105,7 @@ func (s *Service) CreateNamespace(ctx context.Context, pr Principal, ref domain.
 	if err != nil {
 		return domain.Namespace{}, err
 	}
-	s.auditRef(ctx, pr, "namespace.create", domain.ResourceNamespace, domain.Ref{NS: ref}, 0, "allow", nil)
+	s.auditRefWithNamespaceID(ctx, pr, "namespace.create", domain.ResourceNamespace, domain.Ref{NS: ref}, ns.ID, 0, "allow", nil)
 	return ns, nil
 }
 
@@ -92,14 +120,15 @@ func (s *Service) UpdateNamespace(ctx context.Context, pr Principal, ref domain.
 	if err != nil {
 		return domain.Namespace{}, err
 	}
-	if err := s.requireAdminOrOp(ctx, pr, domain.OpAdminNamespaceUpdate, "namespace.update", domain.ResourceNamespace, domain.Ref{NS: ref}); err != nil {
+	ctx, authorizedNamespace, err := s.requireAdminOrOpContext(ctx, pr, domain.OpAdminNamespaceUpdate, "namespace.update", domain.ResourceNamespace, domain.Ref{NS: ref})
+	if err != nil {
 		return domain.Namespace{}, err
 	}
 	ns, err := s.store.UpdateNamespace(ctx, ref, description, methods)
 	if err != nil {
 		return domain.Namespace{}, err
 	}
-	s.auditRef(ctx, pr, "namespace.update", domain.ResourceNamespace, domain.Ref{NS: ref}, 0, "allow", nil)
+	s.auditRefWithNamespaceID(ctx, pr, "namespace.update", domain.ResourceNamespace, domain.Ref{NS: ref}, authorizedNamespace.ID, 0, "allow", nil)
 	return ns, nil
 }
 
@@ -111,13 +140,14 @@ func (s *Service) DeleteNamespace(ctx context.Context, pr Principal, ref domain.
 	if err := keyutil.ValidateNamespace(ref); err != nil {
 		return domain.Errorf(domain.ErrInvalidArgument, "%v", err)
 	}
-	if err := s.requireAdminOrOp(ctx, pr, domain.OpAdminNamespaceDelete, "namespace.delete", domain.ResourceNamespace, domain.Ref{NS: ref}); err != nil {
+	ctx, authorizedNamespace, err := s.requireAdminOrOpContext(ctx, pr, domain.OpAdminNamespaceDelete, "namespace.delete", domain.ResourceNamespace, domain.Ref{NS: ref})
+	if err != nil {
 		return err
 	}
 	if err := s.store.DeleteNamespace(ctx, ref); err != nil {
 		return err
 	}
-	s.auditRef(ctx, pr, "namespace.delete", domain.ResourceNamespace, domain.Ref{NS: ref}, 0, "allow", nil)
+	s.auditRefWithNamespaceID(ctx, pr, "namespace.delete", domain.ResourceNamespace, domain.Ref{NS: ref}, authorizedNamespace.ID, 0, "allow", nil)
 	return nil
 }
 
@@ -126,12 +156,8 @@ func (s *Service) DeleteNamespace(ctx context.Context, pr Principal, ref domain.
 // policy or the implicit home-namespace grant), so the namespace tree is not a
 // recon surface for a narrowly-scoped client.
 func (s *Service) ListNamespaces(ctx context.Context, pr Principal, page storage.ListPage) ([]domain.Namespace, string, error) {
-	all, next, err := s.store.ListNamespaces(ctx, page)
-	if err != nil {
-		return nil, "", err
-	}
 	if pr.IsAdmin() {
-		return all, next, nil
+		return s.store.ListNamespaces(ctx, page)
 	}
 	policies, err := s.store.PoliciesForSubject(ctx, pr.Identity.Name)
 	if err != nil {
@@ -144,16 +170,56 @@ func (s *Service) ListNamespaces(ctx context.Context, pr Principal, page storage
 		domain.OpSecretRead,
 		domain.OpSecretList,
 	}
-	visible := all[:0]
-	for _, ns := range all {
-		for _, operation := range visibleOps {
-			// Use the full authorization decision so explicit denies override both
-			// policy allows and the implicit home-namespace grant.
-			if policy.Authorize(policies, home, operation, ns.NamespaceRef) {
-				visible = append(visible, ns)
+	limit := filteredPageLimit(page.Limit)
+	visible := make([]domain.Namespace, 0, limit+1)
+	scope := filteredCursorScope(pr, nil)
+	cursor, err := s.openFilteredCursor(page.Token, "namespaces", scope)
+	if err != nil {
+		return nil, "", err
+	}
+	for batch := 0; batch < maxFilteredScanBatches && len(visible) <= limit; batch++ {
+		rows, rawNext, err := s.store.ListNamespaces(ctx, storage.ListPage{Limit: filteredScanBatchSize, Token: cursor})
+		if err != nil {
+			return nil, "", err
+		}
+		for _, ns := range rows {
+			// Multi-namespace listings filter rather than reject: a caller may be
+			// authorized for namespaces that admit different authentication methods,
+			// but metadata must not cross that method boundary.
+			if !authMethodAllowed(ns.AllowedAuthMethods, pr.Method) {
+				continue
+			}
+			for _, operation := range visibleOps {
+				// Use the full authorization decision so explicit denies override both
+				// policy allows and the implicit home-namespace grant.
+				if policy.Authorize(policies, home, operation, ns.NamespaceRef) {
+					visible = append(visible, ns)
+					break
+				}
+			}
+			if len(visible) > limit {
 				break
 			}
 		}
+		if len(visible) > limit {
+			rawVisibleNext := storage.NamespacePageToken(visible[limit-1].NamespaceRef)
+			next, err := s.sealFilteredCursor("namespaces", scope, rawVisibleNext)
+			if err != nil {
+				return nil, "", err
+			}
+			return visible[:limit], next, nil
+		}
+		if rawNext == "" {
+			return visible, "", nil
+		}
+		if rawNext == cursor {
+			return nil, "", domain.Errorf(domain.ErrFailedPrecondition, "namespace pagination did not advance")
+		}
+		cursor = rawNext
+	}
+	next, err := s.sealFilteredCursor("namespaces", scope, cursor)
+	if err != nil {
+		return nil, "", err
 	}
 	return visible, next, nil
 }
@@ -536,7 +602,136 @@ func (s *Service) ListAuditEvents(ctx context.Context, pr Principal, f domain.Au
 			return nil, "", err
 		}
 	}
-	return s.store.ListAudit(ctx, f, page)
+	if pr.IsAdmin() {
+		return s.store.ListAudit(ctx, f, page)
+	}
+	policies, err := s.store.PoliciesForSubject(ctx, pr.Identity.Name)
+	if err != nil {
+		return nil, "", domain.Errorf(domain.ErrPermissionDenied, "authorization unavailable")
+	}
+
+	// A broad or partially specified filter legitimately spans namespaces, so it
+	// cannot be method-gated once at authorization time. Filter each namespaced
+	// row against the namespace's current method boundary instead. Global audit
+	// rows have no namespace boundary and remain visible under the delegated
+	// policy grant. History for a deleted namespace fails closed because its
+	// allowed methods can no longer be established; admins retain that history.
+	type namespaceAccess struct {
+		namespace domain.Namespace
+		exists    bool
+	}
+	accessByNamespace := make(map[domain.NamespaceRef]namespaceAccess)
+	visibleEvent := func(event domain.AuditEvent) (bool, error) {
+		if event.ResourceEnv == "" && event.ResourceApp == "" {
+			if !globalAuditEvent(event) {
+				return false, nil
+			}
+			return policy.Authorize(policies, nil, domain.OpAdminAuditRead, domain.NamespaceRef{}), nil
+		}
+		// A row with only half a namespace cannot be assigned a method or policy
+		// boundary and therefore fails closed for delegated callers.
+		if event.ResourceEnv == "" || event.ResourceApp == "" {
+			return false, nil
+		}
+		nsRef := domain.NamespaceRef{Env: event.ResourceEnv, App: event.ResourceApp}
+		if !policy.Authorize(policies, pr.home(), domain.OpAdminAuditRead, nsRef) {
+			return false, nil
+		}
+		access, known := accessByNamespace[nsRef]
+		if !known {
+			ns, getErr := s.store.GetNamespace(ctx, nsRef)
+			switch {
+			case getErr == nil:
+				access = namespaceAccess{namespace: ns, exists: true}
+			case errors.Is(getErr, domain.ErrNotFound):
+				access = namespaceAccess{}
+			default:
+				return false, getErr
+			}
+			accessByNamespace[nsRef] = access
+		}
+		// Bind the row to the immutable namespace incarnation captured at audit
+		// time. Legacy/malformed rows with no incarnation ID fail closed.
+		return access.exists && authMethodAllowed(access.namespace.AllowedAuthMethods, pr.Method) &&
+			event.ResourceNamespaceID != 0 &&
+			event.ResourceNamespaceID == access.namespace.ID, nil
+	}
+
+	limit := filteredPageLimit(page.Limit)
+	visible := make([]domain.AuditEvent, 0, limit+1)
+	scope := filteredCursorScope(pr, f)
+	cursor, err := s.openFilteredCursor(page.Token, "audit", scope)
+	if err != nil {
+		return nil, "", err
+	}
+	for batch := 0; batch < maxFilteredScanBatches && len(visible) <= limit; batch++ {
+		events, rawNext, err := s.store.ListAudit(ctx, f, storage.ListPage{Limit: filteredScanBatchSize, Token: cursor})
+		if err != nil {
+			return nil, "", err
+		}
+		for _, event := range events {
+			allowed, err := visibleEvent(event)
+			if err != nil {
+				return nil, "", err
+			}
+			if allowed {
+				visible = append(visible, event)
+			}
+			if len(visible) > limit {
+				break
+			}
+		}
+		if len(visible) > limit {
+			rawVisibleNext := storage.AuditPageToken(visible[limit-1].ID)
+			next, err := s.sealFilteredCursor("audit", scope, rawVisibleNext)
+			if err != nil {
+				return nil, "", err
+			}
+			return visible[:limit], next, nil
+		}
+		if rawNext == "" {
+			return visible, "", nil
+		}
+		if rawNext == cursor {
+			return nil, "", domain.Errorf(domain.ErrFailedPrecondition, "audit pagination did not advance")
+		}
+		cursor = rawNext
+	}
+	next, err := s.sealFilteredCursor("audit", scope, cursor)
+	if err != nil {
+		return nil, "", err
+	}
+	return visible, next, nil
+}
+
+func globalAuditEvent(event domain.AuditEvent) bool {
+	// A row carrying an immutable namespace ID is namespaced even if malformed
+	// or legacy denormalized env/app fields are blank. Never let it inherit a
+	// global-resource classification for delegated audit readers.
+	if event.ResourceNamespaceID != 0 {
+		return false
+	}
+	if event.EventType == "auth.failure" && event.ResourceType == "" {
+		return true
+	}
+	switch event.ResourceType {
+	case domain.ResourcePolicy, domain.ResourceIdentity, domain.ResourceKey,
+		domain.ResourceConfigurationSchema, "subscriber", "audit":
+		return true
+	default:
+		return false
+	}
+}
+
+func filteredPageLimit(limit int) int {
+	switch {
+	case limit <= 0:
+		return 100
+	case limit > 1000:
+		return 1000
+	default:
+		return limit
+	}
 }
 
 // ListSubscribers returns the live watch registry. Admin only.

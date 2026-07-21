@@ -204,3 +204,29 @@ func TestReleaseConnectionOverlapDoesNotReportPrematureDisconnect(t *testing.T) 
 		t.Fatalf("disconnect generation=%d, want most recently persisted generation %d", persistedID, second)
 	}
 }
+
+func TestReleaseConnectionGenerationsAreScopedByIdentity(t *testing.T) {
+	h := &configurationReleaseServer{connections: make(map[releaseConnectionKey]*releaseConnectionState)}
+	base := releaseConnectionKey{
+		namespace: domain.NamespaceRef{Env: "prod", App: "app"},
+		name:      "runtime", clientName: "api", instanceID: "replica-1",
+	}
+	alice := base
+	alice.identity = "alice"
+	bob := base
+	bob.identity = "bob"
+	aliceID := h.addConnection(alice)
+	bobID := h.addConnection(bob)
+	if err := h.persistConnection(alice, aliceID, func() error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.persistConnection(bob, bobID, func() error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if last, persisted := h.removeConnection(alice, aliceID); !last || persisted != aliceID {
+		t.Fatalf("alice removal = last %v persisted %d, want true/%d", last, persisted, aliceID)
+	}
+	if last, persisted := h.removeConnection(bob, bobID); !last || persisted != bobID {
+		t.Fatalf("bob removal = last %v persisted %d, want true/%d", last, persisted, bobID)
+	}
+}

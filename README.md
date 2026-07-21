@@ -247,7 +247,7 @@ client, err := paramstore.NewClient(paramstore.Config{
     Endpoint:  "localhost:8443",
     Namespace: "prod/gradethis",
     Token:     os.Getenv("GRADETHIS_TOKEN"),
-    // TLS is intentionally nil only because this local server is plaintext.
+    Insecure:  true, // explicit cleartext opt-in for this local server only
 })
 if err != nil {
     log.Fatal(err)

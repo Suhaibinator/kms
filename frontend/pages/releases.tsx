@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import NamespacePicker, { type NamespaceSelection } from "@/components/NamespacePicker";
 import { Badge, EmptyState, Loading, PageHeader } from "@/components/ui";
 import { useToast } from "@/context/ToastContext";
@@ -32,8 +32,11 @@ export default function ReleasesPage() {
   const [releases, setReleases] = useState<ReleaseSummary[]>([]);
   const [schemas, setSchemas] = useState<ConfigurationSchema[]>([]);
   const [subscribers, setSubscribers] = useState<ReleaseSubscriberState[]>([]);
-  const [subscriberRevision, setSubscriberRevision] = useState(0);
-  const [loading, setLoading] = useState(false);
+	const [subscriberRevision, setSubscriberRevision] = useState(0);
+	const [subscriberNextPageToken, setSubscriberNextPageToken] = useState("");
+	const [subscriberCursor, setSubscriberCursor] = useState<{ scope: string; tokens: string[]; index: number }>({ scope: "", tokens: [""], index: 0 });
+	const [loading, setLoading] = useState(false);
+	const refreshGeneration = useRef(0);
   const [definition, setDefinition] = useState(`{
   "name": "runtime",
   "entries": []
@@ -47,16 +50,27 @@ export default function ReleasesPage() {
   const [diffTo, setDiffTo] = useState("");
   const [selectedReleaseKey, setSelectedReleaseKey] = useState("");
 
-  const hasNS = Boolean(ns.env && ns.app);
+	const hasNS = Boolean(ns.env && ns.app);
+	const subscriberScope = hasNS && name ? JSON.stringify([ns.env, ns.app, name]) : "";
+	const activeSubscriberCursor = subscriberCursor.scope === subscriberScope
+		? subscriberCursor
+		: { scope: subscriberScope, tokens: [""], index: 0 };
+	const subscriberPageToken = activeSubscriberCursor.tokens[activeSubscriberCursor.index] ?? "";
 
   useEffect(() => {
     if (namespaceError) toast.error(namespaceError, "Failed to load namespaces");
   }, [namespaceError, toast]);
 
-  const refresh = useCallback(async () => {
-    if (!hasNS) {
-      setReleases([]);
-      return;
+	const refresh = useCallback(async () => {
+		const generation = ++refreshGeneration.current;
+		if (!hasNS) {
+			setReleases([]);
+			setSchemas([]);
+			setSubscribers([]);
+			setSubscriberRevision(0);
+			setSubscriberNextPageToken("");
+			setLoading(false);
+			return;
     }
     setLoading(true);
     try {
@@ -64,26 +78,44 @@ export default function ReleasesPage() {
         api.listReleases(ns, name || undefined, 100),
         api.listSchemas(),
       ]);
-      setReleases(releaseResult.releases ?? []);
-      setSchemas(schemaResult.schemas ?? []);
-      if (name) {
-        const status = await api.releaseSubscribers(ns, name);
-        setSubscribers(status.subscribers ?? []);
-        setSubscriberRevision(status.current_revision ?? 0);
-      } else {
-        setSubscribers([]);
-        setSubscriberRevision(0);
-      }
-    } catch (err) {
-      toast.error(err, "Failed to load releases");
-    } finally {
-      setLoading(false);
-    }
-  }, [hasNS, name, ns, toast]);
+		if (generation !== refreshGeneration.current) return;
+		setReleases(releaseResult.releases ?? []);
+		setSchemas(schemaResult.schemas ?? []);
+		if (name) {
+			const status = await api.releaseSubscribers(ns, name, 1000, subscriberPageToken || undefined);
+			if (generation !== refreshGeneration.current) return;
+			setSubscribers(status.subscribers ?? []);
+			setSubscriberRevision(status.current_revision ?? 0);
+			setSubscriberNextPageToken(status.next_page_token ?? "");
+			setSubscriberCursor((current) => current.scope === subscriberScope
+				? current
+				: { scope: subscriberScope, tokens: [""], index: 0 });
+		} else {
+			setSubscribers([]);
+			setSubscriberRevision(0);
+			setSubscriberNextPageToken("");
+		}
+	} catch (err) {
+		if (generation === refreshGeneration.current) toast.error(err, "Failed to load releases");
+	} finally {
+		if (generation === refreshGeneration.current) setLoading(false);
+	}
+	}, [hasNS, name, ns, subscriberPageToken, subscriberScope, toast]);
 
-  useEffect(() => {
-    void refresh();
-  }, [refresh]);
+	useEffect(() => {
+		void refresh();
+	}, [refresh]);
+
+	function previousSubscriberPage() {
+		setSubscriberCursor({ ...activeSubscriberCursor, index: Math.max(0, activeSubscriberCursor.index - 1) });
+	}
+
+	function nextSubscriberPage() {
+		if (!subscriberNextPageToken || subscriberNextPageToken === subscriberPageToken) return;
+		const tokens = activeSubscriberCursor.tokens.slice(0, activeSubscriberCursor.index + 1);
+		tokens.push(subscriberNextPageToken);
+		setSubscriberCursor({ ...activeSubscriberCursor, tokens, index: activeSubscriberCursor.index + 1 });
+	}
 
   async function createRelease() {
     if (!hasNS) return;
@@ -178,6 +210,7 @@ export default function ReleasesPage() {
 
   const subscriberInstances = useMemo(() => {
     const grouped = new Map<string, {
+      identity: string;
       client: string;
       instance: string;
       connected: boolean;
@@ -185,8 +218,9 @@ export default function ReleasesPage() {
       latestRevision: number;
     }>();
     for (const state of subscribers) {
-      const key = `${state.client_name}\u0000${state.instance_id}`;
+      const key = JSON.stringify([state.identity, state.client_name, state.instance_id]);
       const row = grouped.get(key) ?? {
+        identity: state.identity,
         client: state.client_name,
         instance: state.instance_id,
         connected: false,
@@ -200,7 +234,7 @@ export default function ReleasesPage() {
       row.latestRevision = Math.max(row.latestRevision, state.activation_revision);
       grouped.set(key, row);
     }
-    return [...grouped.values()].sort((a, b) => a.client.localeCompare(b.client) || a.instance.localeCompare(b.instance));
+    return [...grouped.values()].sort((a, b) => a.identity.localeCompare(b.identity) || a.client.localeCompare(b.client) || a.instance.localeCompare(b.instance));
   }, [subscribers]);
 
   const selectedRelease = releases.find((summary) => releaseKey(summary.release) === selectedReleaseKey)?.release;
@@ -285,9 +319,14 @@ export default function ReleasesPage() {
         {diffFrom && diffTo && diff.length === 0 ? <div className="faint">No manifest differences.</div> : diff.length ? <div className="table-wrap"><table className="data"><thead><tr><th>Alias</th><th>From</th><th>To</th></tr></thead><tbody>{diff.map((d) => <tr key={d.alias}><td className="mono">{d.alias}</td><td className="mono">{d.left}</td><td className="mono">{d.right}</td></tr>)}</tbody></table></div> : null}
       </section>
 
-      <section className="card">
-        <h2>Release subscribers</h2>
-        {!name ? <div className="faint">Enter a release name to view per-instance state.</div> : subscriberInstances.length === 0 ? <div className="faint">No subscriber state recorded.</div> : <div className="table-wrap"><table className="data"><thead><tr><th>Client</th><th>Instance</th><th>Received</th><th>Prepared</th><th>Applied</th><th>Rejected</th><th>Connection</th><th>Lag</th></tr></thead><tbody>{subscriberInstances.map((instance) => <tr key={`${instance.client}-${instance.instance}`}><td>{instance.client}</td><td className="mono">{instance.instance}</td><td className="mono">{lifecycleCell(instance.states.received)}</td><td className="mono">{lifecycleCell(instance.states.prepared)}</td><td className="mono">{lifecycleCell(instance.states.applied)}</td><td className="mono">{lifecycleCell(instance.states.rejected)}</td><td><Badge kind={instance.connected ? "success" : "neutral"}>{instance.connected ? "connected" : "disconnected"}</Badge></td><td>{Math.max(0, subscriberRevision - instance.latestRevision)}</td></tr>)}</tbody></table></div>}
+	<section className="card">
+		<h2>Release subscribers</h2>
+		{name ? <div className="row-wrap mb-12">
+			<button className="btn btn-sm" disabled={activeSubscriberCursor.index === 0} onClick={previousSubscriberPage}>Previous page</button>
+			<button className="btn btn-sm" disabled={!subscriberNextPageToken || subscriberNextPageToken === subscriberPageToken} onClick={nextSubscriberPage}>Next page</button>
+			<span className="text-sm faint">Page {activeSubscriberCursor.index + 1} · up to 1,000 state rows</span>
+		</div> : null}
+		{!name ? <div className="faint">Enter a release name to view per-instance state.</div> : subscriberInstances.length === 0 ? <div className="faint">No subscriber state recorded.</div> : <div className="table-wrap"><table className="data"><thead><tr><th>Identity</th><th>Client</th><th>Instance</th><th>Received</th><th>Prepared</th><th>Applied</th><th>Rejected</th><th>Connection</th><th>Lag</th></tr></thead><tbody>{subscriberInstances.map((instance) => <tr key={JSON.stringify([instance.identity, instance.client, instance.instance])}><td>{instance.identity}</td><td>{instance.client}</td><td className="mono">{instance.instance}</td><td className="mono">{lifecycleCell(instance.states.received)}</td><td className="mono">{lifecycleCell(instance.states.prepared)}</td><td className="mono">{lifecycleCell(instance.states.applied)}</td><td className="mono">{lifecycleCell(instance.states.rejected)}</td><td><Badge kind={instance.connected ? "success" : "neutral"}>{instance.connected ? "connected" : "disconnected"}</Badge></td><td>{Math.max(0, subscriberRevision - instance.latestRevision)}</td></tr>)}</tbody></table></div>}
       </section>
     </>
   );

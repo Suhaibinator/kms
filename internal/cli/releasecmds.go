@@ -598,13 +598,7 @@ func (c *CLI) cmdReleaseSubscribers(args []string) int {
 	ctx, cancel := callContext()
 	defer cancel()
 	client := kmsv1.NewAdminServiceClient(conn)
-	type instanceStatus struct {
-		client, instance string
-		connected        bool
-		latestRevision   uint64
-		states           map[string]*kmsv1.ReleaseSubscriberState
-	}
-	instances := map[string]*instanceStatus{}
+	instances := map[releaseSubscriberInstanceKey]*releaseSubscriberInstanceStatus{}
 	currentRevision := uint64(0)
 	pageToken := ""
 	for {
@@ -615,37 +609,76 @@ func (c *CLI) cmdReleaseSubscribers(args []string) int {
 			return c.fail("release subscribers: %v", listErr)
 		}
 		currentRevision = max(currentRevision, resp.GetCurrentRevision())
-		for _, subscriber := range resp.GetSubscribers() {
-			key := subscriber.GetClientName() + "\x00" + subscriber.GetInstanceId()
-			instance := instances[key]
-			if instance == nil {
-				instance = &instanceStatus{client: subscriber.GetClientName(), instance: subscriber.GetInstanceId(), states: make(map[string]*kmsv1.ReleaseSubscriberState)}
-				instances[key] = instance
-			}
-			instance.states[subscriber.GetState()] = subscriber
-			instance.connected = instance.connected || subscriber.GetConnected()
-			instance.latestRevision = max(instance.latestRevision, subscriber.GetActivationRevision())
-		}
+		mergeReleaseSubscriberStates(instances, resp.GetSubscribers())
 		pageToken = resp.GetNextPageToken()
 		if pageToken == "" {
 			break
 		}
 	}
-	keys := make([]string, 0, len(instances))
+	writeReleaseSubscriberInstances(c.Stdout, instances, currentRevision)
+	return 0
+}
+
+type releaseSubscriberInstanceStatus struct {
+	identity, client, instance string
+	connected                  bool
+	latestRevision             uint64
+	states                     map[string]*kmsv1.ReleaseSubscriberState
+}
+
+type releaseSubscriberInstanceKey struct {
+	identity string
+	client   string
+	instance string
+}
+
+func mergeReleaseSubscriberStates(instances map[releaseSubscriberInstanceKey]*releaseSubscriberInstanceStatus, subscribers []*kmsv1.ReleaseSubscriberState) {
+	for _, subscriber := range subscribers {
+		key := releaseSubscriberInstanceKey{
+			identity: subscriber.GetIdentity(),
+			client:   subscriber.GetClientName(),
+			instance: subscriber.GetInstanceId(),
+		}
+		instance := instances[key]
+		if instance == nil {
+			instance = &releaseSubscriberInstanceStatus{
+				identity: subscriber.GetIdentity(),
+				client:   subscriber.GetClientName(),
+				instance: subscriber.GetInstanceId(),
+				states:   make(map[string]*kmsv1.ReleaseSubscriberState),
+			}
+			instances[key] = instance
+		}
+		instance.states[subscriber.GetState()] = subscriber
+		instance.connected = instance.connected || subscriber.GetConnected()
+		instance.latestRevision = max(instance.latestRevision, subscriber.GetActivationRevision())
+	}
+}
+
+func writeReleaseSubscriberInstances(w io.Writer, instances map[releaseSubscriberInstanceKey]*releaseSubscriberInstanceStatus, currentRevision uint64) {
+	keys := make([]releaseSubscriberInstanceKey, 0, len(instances))
 	for key := range instances {
 		keys = append(keys, key)
 	}
-	sort.Strings(keys)
-	tw := tabwriter.NewWriter(c.Stdout, 0, 4, 2, ' ', 0)
-	_, _ = fmt.Fprintln(tw, "CLIENT\tINSTANCE\tRECEIVED\tPREPARED\tAPPLIED\tREJECTED\tLAG\tCONNECTED")
+	sort.Slice(keys, func(i, j int) bool {
+		if keys[i].identity != keys[j].identity {
+			return keys[i].identity < keys[j].identity
+		}
+		if keys[i].client != keys[j].client {
+			return keys[i].client < keys[j].client
+		}
+		return keys[i].instance < keys[j].instance
+	})
+	tw := tabwriter.NewWriter(w, 0, 4, 2, ' ', 0)
+	_, _ = fmt.Fprintln(tw, "IDENTITY\tCLIENT\tINSTANCE\tRECEIVED\tPREPARED\tAPPLIED\tREJECTED\tLAG\tCONNECTED")
 	for _, key := range keys {
 		instance := instances[key]
 		lag := uint64(0)
 		if currentRevision > instance.latestRevision {
 			lag = currentRevision - instance.latestRevision
 		}
-		_, _ = fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%d\t%t\n",
-			instance.client, instance.instance,
+		_, _ = fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%d\t%t\n",
+			instance.identity, instance.client, instance.instance,
 			releaseSubscriberStateText(instance.states[domain.ReleaseStateReceived]),
 			releaseSubscriberStateText(instance.states[domain.ReleaseStatePrepared]),
 			releaseSubscriberStateText(instance.states[domain.ReleaseStateApplied]),
@@ -653,7 +686,6 @@ func (c *CLI) cmdReleaseSubscribers(args []string) int {
 			lag, instance.connected)
 	}
 	_ = tw.Flush()
-	return 0
 }
 
 func releaseSubscriberStateText(state *kmsv1.ReleaseSubscriberState) string {

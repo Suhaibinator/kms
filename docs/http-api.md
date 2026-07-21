@@ -447,8 +447,10 @@ rules (a deny still wins).
   "current_revision":42}`.
 
 Release subscriber rows are per process instance and lifecycle state. Group
-rows by `(client_name, instance_id)` to show received/prepared/applied/rejected
-together. A connected instance with no lifecycle acknowledgement yet is
+rows by `(identity, client_name, instance_id)` to show
+received/prepared/applied/rejected together without combining different
+authenticated identities that reuse the same client and instance names. A
+connected instance with no lifecycle acknowledgement yet is
 represented by a row whose `state` is empty. `current_revision` is the active
 revision for the requested release name, so lag is release-specific rather
 than namespace-global.

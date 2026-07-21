@@ -99,12 +99,15 @@ the latest current activation rather than being permanently dropped. Delivery
 is at least once in monotonically increasing activation-revision order, so a
 client must accept an idempotent duplicate after reconnect.
 
-Lifecycle acknowledgements are idempotent by namespace, release name, client,
-instance, state, and activation identity. The admin subscriber API stores the
+Lifecycle acknowledgements are idempotent by namespace, release name,
+authenticated identity, client, instance, state, and activation identity. The
+client timestamp is diagnostic; server receipt time orders retries for the same
+activation. The admin subscriber API stores the
 latest `received`, `prepared`, `applied`, and `rejected` rows separately, plus
 transport connection state. A newly registered instance is therefore visible
 as connected before it has acknowledged any lifecycle state. UIs group
-instances by client name; replicas do not overwrite one another.
+instances by `(identity, client_name, instance_id)`; different authenticated
+identities and replicas do not overwrite one another.
 
 Bounded rejection categories are `resolution_failed`, `token_unavailable`,
 `version_mismatch`, `digest_mismatch`, `prepare_failed`, `superseded`,

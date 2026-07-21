@@ -55,13 +55,14 @@ returned by `admin ca show`.
 | `Endpoint` | `host:port` of the server's gRPC listener. Required unless `DialOptions` supplies a custom dialer (as tests do). |
 | `Namespace` | The client's home namespace in `"env/app"` form (e.g. `"prod/gradethis"`). Relative keys resolve against it. Leave empty to discover it from the identity at first use (see [Namespaces and keys](#namespaces-and-keys)). A malformed value fails `NewClient`. |
 | `Token` | Per-client identity token, sent as `authorization: Bearer <token>` on every RPC. **Optional** when `TLS` carries a client certificate (the cert proves identity); required only for token-method identities. Empty is also allowed against an unauthenticated/dev server. |
-| `TLS` | `*tls.Config`. `nil` dials insecure (development only). Build one with `TLSFromFiles`/`TLSConfig` (server-auth only) or `MTLSFromFiles`/`MTLSConfig` (client cert + server auth). The `*FromFiles` variants panic on error and are meant for inline use in a `Config` literal; the non-panicking variants return an error. |
+| `TLS` | `*tls.Config`. Build one with `TLSFromFiles`/`TLSConfig` (server-auth only) or `MTLSFromFiles`/`MTLSConfig` (client cert + server auth). The `*FromFiles` variants panic on error and are meant for inline use in a `Config` literal; the non-panicking variants return an error. When `TLS` is `nil`, the client requires either `Insecure: true` or explicit custom transport credentials in `DialOptions`. |
+| `Insecure` | Explicitly opts into a cleartext connection for local development. Defaults to `false` and is mutually exclusive with `TLS`; never enable it across an untrusted network. |
 | `CacheTTL` | Enables an in-memory read cache for `GetParameter`/`GetSecret` when `> 0`. Cache entries are invalidated automatically by watch events once a subscription is active (see Hot reload below), and unconditionally on every write. |
 | `FallbackToDefaultsOnError` | When `false` (default), a declarative field's `Default` is used only when the store affirmatively reports the value **absent** (`ErrNotFound`); every other fetch error fails `Init`/`Resolve`, so a process cannot silently boot on a dev default because the store was briefly unreachable. Set `true` to restore permissive any-error → `Default`. |
 | `Timeout` | Default per-RPC deadline applied when the caller's `context.Context` has no earlier deadline. Defaults to 5s. Does not apply to the long-lived `Subscribe` stream. |
 | `ClientName` | Identifies this client in the subscription registry (visible on the frontend's Subscribers page). Defaults to `filepath.Base(os.Args[0])`. |
 | `Logger` | Receives operational log lines (keys, env var names, connection state, revisions) — never secret plaintext. Defaults to the standard `log` package. Implement the one-method `Logger` interface (`Printf(format string, args ...any)`) to redirect. |
-| `DialOptions` | Extra `grpc.DialOption`s appended after the SDK's own defaults, so they can override transport credentials or inject a custom dialer (e.g. bufconn in tests). |
+| `DialOptions` | Extra `grpc.DialOption`s appended after the SDK's own options, so advanced callers can override transport credentials or inject a custom dialer (e.g. bufconn in tests). If neither `TLS` nor `Insecure` is set, these options must supply transport credentials; gRPC otherwise fails closed. |
 
 `NewClient` dials immediately (`grpc.NewClient`) and starts a background
 goroutine that drains change-callback dispatch; it does not block on
@@ -510,6 +511,10 @@ client, _ := paramstore.NewClient(paramstore.Config{
     DialOptions: srv.DialOptions(),
 })
 ```
+
+`srv.DialOptions()` includes explicit cleartext credentials for this in-process
+test transport. For a standalone plaintext development server, opt in directly
+with `Insecure: true`.
 
 Scripting surface:
 

@@ -448,8 +448,8 @@ export const api = {
       body: { namespace: ns, name, version, expected_current_version: expected },
     });
   },
-  releaseSubscribers(ns: NamespaceRef, name: string): Promise<{ subscribers: ReleaseSubscriberState[]; current_revision: number; next_page_token: string }> {
-    return apiFetch(`/release-subscribers${qs({ env: ns.env, app: ns.app, name })}`);
+  releaseSubscribers(ns: NamespaceRef, name: string, pageSize?: number, pageToken?: string): Promise<ReleaseSubscribersPage> {
+    return apiFetch(`/release-subscribers${qs({ env: ns.env, app: ns.app, name, page_size: pageSize, page_token: pageToken })}`);
   },
   listSchemas(id?: string, pageToken?: string): Promise<{ schemas: ConfigurationSchema[]; next_page_token: string }> {
     return apiFetch(`/configuration-schemas${qs({ id, page_token: pageToken })}`);
@@ -466,3 +466,9 @@ export const api = {
     return apiFetch<KeysResponse>("/keys");
   },
 };
+
+export interface ReleaseSubscribersPage {
+  subscribers: ReleaseSubscriberState[];
+  current_revision: number;
+  next_page_token: string;
+}

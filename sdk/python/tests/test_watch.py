@@ -161,7 +161,7 @@ def test_env_pinned_does_not_hot_reload(client, server, monkeypatch):
 
 def test_heartbeat_ack(server):
     addr, store = server
-    c = Client(addr, namespace=NS)
+    c = Client(addr, namespace=NS, insecure=True)
     try:
         store.put_param(NS_ENV, NS_APP, "hb/p", value="v")  # revision -> 1
         stop = c.watch(lambda ev: None)
@@ -178,7 +178,7 @@ def test_deleted_param_reverts_via_reconnect_snapshot(server):
     # window must be recovered from the reconnect snapshot diff and revert the
     # field to its configured default (Go parity M3).
     addr, store = server
-    c = Client(addr, namespace=NS)
+    c = Client(addr, namespace=NS, insecure=True)
     try:
         store.put_param(NS_ENV, NS_APP, "dp/rate", value="5")
 
@@ -213,7 +213,7 @@ def test_deleted_param_reverts_via_reconcile_notfound(server):
     # absent from that listing was deleted while the stream missed the event and
     # must revert to default — not be swallowed (Go parity M3).
     addr, store = server
-    c = Client(addr, namespace=NS)
+    c = Client(addr, namespace=NS, insecure=True)
     try:
         store.put_param(NS_ENV, NS_APP, "dp/rl", value="5")
 
@@ -257,7 +257,7 @@ def test_no_default_keeps_last_known_on_delete(server):
     # With no default, a deletion keeps the last-known value (apps rarely want
     # config to vanish underneath them).
     addr, store = server
-    c = Client(addr, namespace=NS)
+    c = Client(addr, namespace=NS, insecure=True)
     try:
         store.put_param(NS_ENV, NS_APP, "dp/keep", value="7")
 
@@ -280,7 +280,7 @@ def test_stale_reconcile_write_is_fenced(server):
     # A reconcile/reconnect read that raced a newer live event must be dropped so
     # it cannot regress a fresher value (Go parity M2).
     addr, store = server
-    c = Client(addr, namespace=NS)
+    c = Client(addr, namespace=NS, insecure=True)
     try:
         store.put_param(NS_ENV, NS_APP, "sf/k", value="1")
 
@@ -322,7 +322,7 @@ def test_stale_reconcile_write_is_fenced(server):
 def test_reconnect_after_server_restart(server):
     # The subscription should recover values after a transient stream failure.
     addr, store = server
-    c = Client(addr, namespace=NS)
+    c = Client(addr, namespace=NS, insecure=True)
     try:
         store.put_param(NS_ENV, NS_APP, "rc/p", value="1")
 

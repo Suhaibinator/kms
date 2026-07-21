@@ -160,10 +160,16 @@ func (c *CLI) cmdPutSecret(args []string) int {
 	if err != nil {
 		return c.fail("put-secret: %v", err)
 	}
-	_, _ = fmt.Fprintf(c.Stdout, "Stored %s version %d (revision %d)\n", ref, resp.Version, resp.Revision)
+	if _, err := fmt.Fprintf(c.Stdout, "Stored %s version %d (revision %d)\n", ref, resp.Version, resp.Revision); err != nil {
+		return c.fail("writing secret result: %v", err)
+	}
 	if resp.AccessToken != "" {
-		_, _ = fmt.Fprintf(c.Stdout, "  access token: %s\n", resp.AccessToken)
-		_, _ = fmt.Fprintln(c.Stdout, "  WARNING: shown once; store it now.")
+		if _, err := fmt.Fprintf(c.Stdout, "  access token: %s\n", resp.AccessToken); err != nil {
+			return c.fail("writing one-time secret access token: %v", err)
+		}
+		if _, err := fmt.Fprintln(c.Stdout, "  WARNING: shown once; store it now."); err != nil {
+			return c.fail("writing one-time secret access token warning: %v", err)
+		}
 	}
 	return 0
 }

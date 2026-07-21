@@ -4,8 +4,11 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Suhaibinator/kms/internal/crypto"
 	"github.com/Suhaibinator/kms/internal/domain"
@@ -346,6 +349,219 @@ func TestListAuditAuthorization(t *testing.T) {
 	if _, _, err := s.ListAuditEvents(ctx, adminPrincipal(), domain.AuditFilter{}, storage.ListPage{}); err != nil {
 		t.Fatalf("admin ListAuditEvents: %v", err)
 	}
+}
+
+func TestListAuditEventsFiltersRowsByAuthenticationMethod(t *testing.T) {
+	ctx := context.Background()
+	store := newFakeStore()
+	s := newTestService(store)
+	tokenNS := mkns("stage", "token")
+	mtlsNS := mkns("stage", "mtls")
+	deletedNS := mkns("stage", "deleted")
+	recreatedNS := mkns("stage", "recreated")
+	deniedNS := mkns("stage", "denied")
+	store.addNamespace(tokenNS, domain.AuthMethodToken)
+	store.addNamespace(mtlsNS, domain.AuthMethodMTLS)
+	store.addNamespace(recreatedNS, domain.AuthMethodToken)
+	store.addNamespace(deniedNS, domain.AuthMethodToken)
+	tokenCreated := store.namespaces[tokenNS.String()].CreatedAt
+	mtlsCreated := store.namespaces[mtlsNS.String()].CreatedAt
+	recreatedAt := store.namespaces[recreatedNS.String()].CreatedAt
+	store.addPolicy(domain.Policy{Name: "audit-stage", Subject: "auditor", Allow: []domain.PolicyRule{{
+		Operation: domain.OpAdminAuditRead, Env: "stage", App: "*",
+	}}, Deny: []domain.PolicyRule{{Operation: domain.OpAdminAuditRead, Env: deniedNS.Env, App: deniedNS.App}}})
+	store.audits = []domain.AuditEvent{
+		{ID: 7, EventType: "parameter.read", ResourceType: domain.ResourceParameter, ResourceNamespaceID: store.namespaces[tokenNS.String()].ID, ResourceEnv: tokenNS.Env, ResourceApp: tokenNS.App, CreatedAt: tokenCreated.Add(time.Second)},
+		{ID: 6, EventType: "parameter.read", ResourceType: domain.ResourceParameter, ResourceNamespaceID: store.namespaces[mtlsNS.String()].ID, ResourceEnv: mtlsNS.Env, ResourceApp: mtlsNS.App, CreatedAt: mtlsCreated.Add(time.Second)},
+		{ID: 5, EventType: "parameter.read", ResourceType: domain.ResourceParameter, ResourceNamespaceID: store.namespaces[deniedNS.String()].ID, ResourceEnv: deniedNS.Env, ResourceApp: deniedNS.App, CreatedAt: time.Now()},
+		// Half-specified namespaced rows cannot be assigned a policy boundary.
+		{ID: 4, EventType: "parameter.read", ResourceType: domain.ResourceParameter, ResourceEnv: tokenNS.Env},
+		{ID: 3, EventType: "namespace.delete", ResourceType: domain.ResourceNamespace, ResourceEnv: deletedNS.Env, ResourceApp: deletedNS.App, CreatedAt: time.Now()},
+		// Fully blank rows for namespace-bound resource types are malformed, not global.
+		{ID: 2, EventType: "parameter.read", ResourceType: domain.ResourceParameter},
+		// A row older than a current namespace with the same name belongs to a
+		// prior deleted incarnation and must not inherit the new method policy,
+		// even if restored timestamps are inconsistent.
+		{ID: 1, EventType: "parameter.read", ResourceType: domain.ResourceParameter, ResourceNamespaceID: store.namespaces[recreatedNS.String()].ID + 1000, ResourceEnv: recreatedNS.Env, ResourceApp: recreatedNS.App, CreatedAt: recreatedAt.Add(time.Minute)},
+	}
+	filter := domain.AuditFilter{Env: "stage"} // intentionally partial
+
+	tokenRows, _, err := s.ListAuditEvents(ctx, clientPrincipal("auditor"), filter, storage.ListPage{})
+	if err != nil {
+		t.Fatalf("ListAuditEvents(token): %v", err)
+	}
+	if len(tokenRows) != 1 || tokenRows[0].ResourceApp != tokenNS.App {
+		t.Fatalf("token audit rows = %+v, want only %s", tokenRows, tokenNS)
+	}
+
+	mtlsPrincipal := clientPrincipal("auditor")
+	mtlsPrincipal.Method = domain.AuthMethodMTLS
+	mtlsRows, _, err := s.ListAuditEvents(ctx, mtlsPrincipal, filter, storage.ListPage{})
+	if err != nil {
+		t.Fatalf("ListAuditEvents(mTLS): %v", err)
+	}
+	if len(mtlsRows) != 1 || mtlsRows[0].ResourceApp != mtlsNS.App {
+		t.Fatalf("mTLS audit rows = %+v, want only %s", mtlsRows, mtlsNS)
+	}
+
+	adminRows, _, err := s.ListAuditEvents(ctx, adminPrincipal(), filter, storage.ListPage{})
+	if err != nil {
+		t.Fatalf("ListAuditEvents(admin): %v", err)
+	}
+	if len(adminRows) != 7 {
+		t.Fatalf("admin audit rows = %+v, want current and deleted namespace history", adminRows)
+	}
+
+	if _, _, err := s.ListAuditEvents(ctx, clientPrincipal("auditor"),
+		domain.AuditFilter{Env: mtlsNS.Env, App: mtlsNS.App}, storage.ListPage{}); !errors.Is(err, domain.ErrPermissionDenied) {
+		t.Fatalf("fully scoped token audit query err = %v, want ErrPermissionDenied", err)
+	}
+}
+
+func TestListAuditEventsBroadFilterPreservesGlobalRows(t *testing.T) {
+	ctx := context.Background()
+	store := newFakeStore()
+	s := newTestService(store)
+	tokenNS := mkns("prod", "token")
+	store.addNamespace(tokenNS, domain.AuthMethodToken)
+	tokenCreated := store.namespaces[tokenNS.String()].CreatedAt
+	store.addPolicy(domain.Policy{Name: "audit-all", Subject: "auditor", Allow: []domain.PolicyRule{{
+		Operation: domain.OpAdminAuditRead, Env: "*", App: "*",
+	}}})
+	store.audits = []domain.AuditEvent{
+		// A malformed row with a namespace incarnation but blank env/app must not
+		// inherit the otherwise-global policy resource classification.
+		{ID: 3, EventType: "policy.update", ResourceType: domain.ResourcePolicy, ResourceNamespaceID: 999},
+		{ID: 2, EventType: "parameter.read", ResourceType: domain.ResourceParameter, ResourceNamespaceID: store.namespaces[tokenNS.String()].ID, ResourceEnv: tokenNS.Env, ResourceApp: tokenNS.App, CreatedAt: tokenCreated.Add(time.Second)},
+		{ID: 1, EventType: "auth.failure"},
+	}
+
+	rows, _, err := s.ListAuditEvents(ctx, clientPrincipal("auditor"), domain.AuditFilter{}, storage.ListPage{})
+	if err != nil {
+		t.Fatalf("ListAuditEvents(broad): %v", err)
+	}
+	if len(rows) != 2 {
+		t.Fatalf("broad token audit rows = %+v, want allowed namespace and global row", rows)
+	}
+}
+
+func TestListAuditEventsGlobalRowsUseCurrentPolicySnapshot(t *testing.T) {
+	store := newFakeStore()
+	s := newTestService(store)
+	allow := []domain.Policy{{Name: "allow", Subject: "auditor", Allow: []domain.PolicyRule{{
+		Operation: domain.OpAdminAuditRead, Env: "*", App: "*",
+	}}}}
+	deny := []domain.Policy{{Name: "deny", Subject: "auditor", Deny: []domain.PolicyRule{{
+		Operation: domain.OpAdminAuditRead, Env: "*", App: "*",
+	}}}}
+	calls := 0
+	store.onPoliciesForSubject = func(string) ([]domain.Policy, error) {
+		calls++
+		if calls == 1 {
+			return allow, nil
+		}
+		return deny, nil
+	}
+	store.audits = []domain.AuditEvent{{ID: 1, EventType: "auth.failure"}}
+	rows, _, err := s.ListAuditEvents(context.Background(), clientPrincipal("auditor"), domain.AuditFilter{}, storage.ListPage{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 0 {
+		t.Fatalf("global rows after policy revocation = %+v, want none", rows)
+	}
+}
+
+func TestListAuditEventsFilteredPaginationIsCompleteAndScopeBound(t *testing.T) {
+	ctx := context.Background()
+	st, err := storage.Open(filepath.Join(t.TempDir(), "audit-pages.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = st.Close() }()
+	tokenNS := mkns("prod", "token")
+	mtlsNS := mkns("prod", "mtls")
+	tokenRow, err := st.CreateNamespace(ctx, domain.Namespace{NamespaceRef: tokenNS, AllowedAuthMethods: []domain.AuthMethod{domain.AuthMethodToken}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mtlsRow, err := st.CreateNamespace(ctx, domain.Namespace{NamespaceRef: mtlsNS, AllowedAuthMethods: []domain.AuthMethod{domain.AuthMethodMTLS}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.CreatePolicy(ctx, domain.Policy{Name: "audit", Subject: "auditor", Allow: []domain.PolicyRule{{Operation: domain.OpAdminAuditRead, Env: "*", App: "*"}}}); err != nil {
+		t.Fatal(err)
+	}
+	at := time.Now().UTC()
+	for i, ns := range []domain.Namespace{tokenRow, mtlsRow, tokenRow, mtlsRow} {
+		if err := st.AppendAudit(ctx, domain.AuditEvent{
+			EventType: "parameter.read", ResourceType: domain.ResourceParameter,
+			ResourceNamespaceID: ns.ID, ResourceEnv: ns.Env, ResourceApp: ns.App,
+			CreatedAt: at.Add(time.Duration(i) * time.Second),
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	s := New(st, nil, "test")
+	pr := clientPrincipal("auditor")
+	page1, next, err := s.ListAuditEvents(ctx, pr, domain.AuditFilter{}, storage.ListPage{Limit: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page1) != 1 || page1[0].ID != 3 || next == "" {
+		t.Fatalf("first filtered audit page = %+v next=%q, want visible ID 3 and continuation", page1, next)
+	}
+	if next == storage.AuditPageToken(page1[0].ID) {
+		t.Fatal("delegated audit cursor exposed the raw storage cursor")
+	}
+	page2, final, err := s.ListAuditEvents(ctx, pr, domain.AuditFilter{}, storage.ListPage{Limit: 1, Token: next})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page2) != 1 || page2[0].ID != 1 || final != "" {
+		t.Fatalf("second filtered audit page = %+v next=%q, want visible ID 1 and exhaustion", page2, final)
+	}
+	if _, _, err := s.ListAuditEvents(ctx, pr, domain.AuditFilter{EventType: "other"}, storage.ListPage{Token: next}); !errors.Is(err, domain.ErrInvalidArgument) {
+		t.Fatalf("cursor reused across filters err = %v, want ErrInvalidArgument", err)
+	}
+}
+
+func TestFilteredListingsHaveBoundedRawScanWork(t *testing.T) {
+	t.Run("namespaces", func(t *testing.T) {
+		store := newFakeStore()
+		store.addPolicy(domain.Policy{Name: "read", Subject: "app", Allow: []domain.PolicyRule{{Operation: domain.OpParameterRead, Env: "*", App: "*"}}})
+		calls := 0
+		store.onListNamespaces = func(storage.ListPage) ([]domain.Namespace, string, error) {
+			calls++
+			return []domain.Namespace{{NamespaceRef: mkns("prod", fmt.Sprintf("hidden-%d", calls)), AllowedAuthMethods: []domain.AuthMethod{domain.AuthMethodMTLS}}}, fmt.Sprintf("raw-%d", calls), nil
+		}
+		rows, next, err := newTestService(store).ListNamespaces(context.Background(), clientPrincipal("app"), storage.ListPage{Limit: 1})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(rows) != 0 || next == "" || calls != maxFilteredScanBatches {
+			t.Fatalf("rows=%v next=%q calls=%d, want empty continuation after %d bounded calls", rows, next, calls, maxFilteredScanBatches)
+		}
+	})
+
+	t.Run("audit", func(t *testing.T) {
+		store := newFakeStore()
+		hidden := mkns("prod", "mtls")
+		store.addNamespace(hidden, domain.AuthMethodMTLS)
+		store.addPolicy(domain.Policy{Name: "audit", Subject: "auditor", Allow: []domain.PolicyRule{{Operation: domain.OpAdminAuditRead, Env: "*", App: "*"}}})
+		calls := 0
+		store.onListAudit = func(domain.AuditFilter, storage.ListPage) ([]domain.AuditEvent, string, error) {
+			calls++
+			return []domain.AuditEvent{{ID: int64(calls), EventType: "parameter.read", ResourceType: domain.ResourceParameter, ResourceNamespaceID: store.namespaces[hidden.String()].ID, ResourceEnv: hidden.Env, ResourceApp: hidden.App}}, fmt.Sprintf("raw-%d", calls), nil
+		}
+		rows, next, err := newTestService(store).ListAuditEvents(context.Background(), clientPrincipal("auditor"), domain.AuditFilter{}, storage.ListPage{Limit: 1})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(rows) != 0 || next == "" || calls != maxFilteredScanBatches {
+			t.Fatalf("rows=%v next=%q calls=%d, want empty continuation after %d bounded calls", rows, next, calls, maxFilteredScanBatches)
+		}
+	})
 }
 
 func TestRotateKEKRewrapsSecretsAndCA(t *testing.T) {

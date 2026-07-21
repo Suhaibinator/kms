@@ -130,12 +130,16 @@ type ReleaseAcknowledgement struct {
 	ClientName         string
 	InstanceID         string
 	Identity           string
-	State              string
-	RejectionCategory  string
-	Diagnostic         string
-	ClientTimestamp    time.Time
-	ServerTimestamp    time.Time
-	Connected          bool
+	// ConnectionID is the server-issued generation for the stream that carried
+	// this acknowledgement. It is internal transport state, never accepted from
+	// the wire or exposed in subscriber responses.
+	ConnectionID      string
+	State             string
+	RejectionCategory string
+	Diagnostic        string
+	ClientTimestamp   time.Time
+	ServerTimestamp   time.Time
+	Connected         bool
 }
 
 // ReleaseSubscriberConnection is transport liveness for one process instance.

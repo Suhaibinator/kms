@@ -14,6 +14,7 @@ import (
 
 	"github.com/Suhaibinator/kms/internal/core"
 	"github.com/Suhaibinator/kms/internal/domain"
+	"github.com/Suhaibinator/kms/internal/fileutil"
 	"github.com/Suhaibinator/kms/internal/keyutil"
 	"github.com/Suhaibinator/kms/internal/storage"
 )
@@ -72,14 +73,25 @@ func (c *CLI) cmdImport(args []string) int {
 	if err != nil {
 		return c.fail("%v", err)
 	}
-	defer closeReport()
+	reportClosed := false
+	defer func() {
+		if !reportClosed {
+			_ = closeReport()
+		}
+	}()
 
 	if *dryRun {
 		results := make([]importResult, len(entries))
 		for i, e := range entries {
 			results[i] = importResult{Key: e.Key, Path: e.Ref.String()}
 		}
-		writeImportReport(out, results, false)
+		if err := writeImportReport(out, results, false); err != nil {
+			return c.fail("writing import report: %v", err)
+		}
+		reportClosed = true
+		if err := closeReport(); err != nil {
+			return c.fail("closing import report: %v", err)
+		}
 		_, _ = fmt.Fprintf(c.Stderr, "Dry run: %d keys would be imported into %s. No data written.\n", len(entries), ns)
 		return 0
 	}
@@ -121,7 +133,13 @@ func (c *CLI) cmdImport(args []string) int {
 		}
 		results = append(results, importResult{Key: e.Key, Path: e.Ref.String(), Token: res.AccessToken})
 	}
-	writeImportReport(out, results, true)
+	if err := writeImportReport(out, results, true); err != nil {
+		return c.fail("writing one-time import token report: %v", err)
+	}
+	reportClosed = true
+	if err := closeReport(); err != nil {
+		return c.fail("closing one-time import token report: %v", err)
+	}
 	_, _ = fmt.Fprintf(c.Stderr, "Imported %d secrets into %s.\n", len(results), ns)
 	return 0
 }
@@ -151,35 +169,46 @@ func resolveImportNamespace(namespace, env, app string) (domain.NamespaceRef, er
 
 // reportWriter returns the destination for the mapping report: the named file
 // (refusing to overwrite), or stdout when path is empty.
-func (c *CLI) reportWriter(path string) (io.Writer, func(), error) {
+func (c *CLI) reportWriter(path string) (io.Writer, func() error, error) {
 	if path == "" {
-		return c.Stdout, func() {}, nil
+		return c.Stdout, func() error { return nil }, nil
 	}
-	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	f, err := fileutil.OpenPrivateExclusive(path)
 	if err != nil {
 		return nil, nil, fmt.Errorf("opening report file %s: %w", path, err)
 	}
-	return f, func() { _ = f.Close() }, nil
+	return f, f.Close, nil
 }
 
 // writeImportReport renders the mapping. When withTokens is set it includes the
 // per-secret access tokens and a one-time warning.
-func writeImportReport(w io.Writer, results []importResult, withTokens bool) {
+func writeImportReport(w io.Writer, results []importResult, withTokens bool) error {
 	if withTokens {
-		_, _ = fmt.Fprintln(w, "# import mapping: old key -> new path -> access token")
+		if _, err := fmt.Fprintln(w, "# import mapping: old key -> new path -> access token"); err != nil {
+			return err
+		}
 	} else {
-		_, _ = fmt.Fprintln(w, "# import mapping (dry run): old key -> new path")
+		if _, err := fmt.Fprintln(w, "# import mapping (dry run): old key -> new path"); err != nil {
+			return err
+		}
 	}
 	for _, r := range results {
 		if withTokens {
-			_, _ = fmt.Fprintf(w, "%s -> %s -> %s\n", r.Key, r.Path, r.Token)
+			if _, err := fmt.Fprintf(w, "%s -> %s -> %s\n", r.Key, r.Path, r.Token); err != nil {
+				return err
+			}
 		} else {
-			_, _ = fmt.Fprintf(w, "%s -> %s\n", r.Key, r.Path)
+			if _, err := fmt.Fprintf(w, "%s -> %s\n", r.Key, r.Path); err != nil {
+				return err
+			}
 		}
 	}
 	if withTokens {
-		_, _ = fmt.Fprintln(w, "# WARNING: access tokens are shown once here and are not recoverable. Update app configs now.")
+		if _, err := fmt.Fprintln(w, "# WARNING: access tokens are shown once here and are not recoverable. Update app configs now."); err != nil {
+			return err
+		}
 	}
+	return nil
 }
 
 // slug converts a flat key into a path segment: lowercased with underscores

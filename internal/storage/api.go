@@ -79,6 +79,20 @@ type EncryptedPayload struct {
 	AAD           string
 }
 
+// SecretWriteExpectation is the secret state observed by the service before it
+// prepares a write. Storage compares it inside the write transaction so an
+// absent secret cannot silently become an update and a client-bound write
+// cannot commit after its validated token has been rotated.
+type SecretWriteExpectation struct {
+	Exists bool
+	// ID is the immutable row identity observed by the service. Comparing it
+	// prevents a delete-and-recreate cycle at the same ref (ABA) from being
+	// mistaken for the original secret, including unprotected secrets whose
+	// access-token hashes are both nil.
+	ID              int64
+	AccessTokenHash []byte
+}
+
 // CreateSecretParams describes a new secret version write.
 //
 // Encrypt is called exactly once, inside the write transaction, with the
@@ -94,8 +108,11 @@ type CreateSecretParams struct {
 	// the per-secret token). It may be set on creation or when minting a new
 	// token for an existing secret.
 	AccessTokenHash []byte
-	ExpiresAt       time.Time // zero = never
-	Encrypt         func(version uint64) (EncryptedPayload, error)
+	// Expected, when non-nil, is checked atomically before any secret state is
+	// changed or Encrypt is called. A mismatch returns domain.ErrAborted.
+	Expected  *SecretWriteExpectation
+	ExpiresAt time.Time // zero = never
+	Encrypt   func(version uint64) (EncryptedPayload, error)
 }
 
 // CreateIdentityParams describes a new identity. TokenHash may be nil for a
@@ -208,7 +225,8 @@ type Store interface {
 	// the next version number, invokes p.Encrypt(version), stores the
 	// payload, moves labels, and appends a metadata-only change-log entry.
 	// Fails with domain.ErrFailedPrecondition if p.ClientBound does not match
-	// an existing secret's mode.
+	// an existing secret's mode, or domain.ErrAborted if p.Expected no longer
+	// matches the secret row.
 	CreateSecretVersion(ctx context.Context, p CreateSecretParams) (version, revision uint64, err error)
 
 	GetSecretRecord(ctx context.Context, ref domain.Ref) (SecretRecord, error)

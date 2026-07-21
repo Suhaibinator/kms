@@ -62,7 +62,8 @@ func (s *Service) GetParameter(ctx context.Context, pr Principal, ref domain.Ref
 	if err := validateRef(ref); err != nil {
 		return domain.Parameter{}, err
 	}
-	if err := s.authorize(ctx, pr, domain.OpParameterRead, domain.ResourceParameter, ref); err != nil {
+	ctx, _, err := s.authorize(ctx, pr, domain.OpParameterRead, domain.ResourceParameter, ref)
+	if err != nil {
 		return domain.Parameter{}, err
 	}
 	return s.store.GetParameter(ctx, ref, version, label)
@@ -88,14 +89,15 @@ func (s *Service) PutParameter(ctx context.Context, pr Principal, ref domain.Ref
 	if metadata, err = validateMetadataJSON(metadata); err != nil {
 		return 0, 0, err
 	}
-	if err := s.authorize(ctx, pr, domain.OpParameterWrite, domain.ResourceParameter, ref); err != nil {
+	ctx, namespace, err := s.authorize(ctx, pr, domain.OpParameterWrite, domain.ResourceParameter, ref)
+	if err != nil {
 		return 0, 0, err
 	}
 	version, revision, err = s.store.PutParameter(ctx, ref, value, contentType, metadata, pr.Identity.Name)
 	if err != nil {
 		return 0, 0, err
 	}
-	s.auditRef(ctx, pr, "parameter.write", domain.ResourceParameter, ref, version, "allow", nil)
+	s.auditRefWithNamespaceID(ctx, pr, "parameter.write", domain.ResourceParameter, ref, namespace.ID, version, "allow", nil)
 	s.getHub().Wake()
 	return version, revision, nil
 }
@@ -109,7 +111,7 @@ func (s *Service) ListParameters(ctx context.Context, pr Principal, ns domain.Na
 	// Parameter list responses carry values inline, so an item is only exposed
 	// when the caller may read it (parameter:list authorizes the enumeration
 	// itself, not value disclosure).
-	filter, err := s.listFilter(ctx, pr, domain.ResourceParameter, domain.OpParameterList, ns, domain.OpParameterRead)
+	ctx, _, filter, err := s.listFilter(ctx, pr, domain.ResourceParameter, domain.OpParameterList, ns, domain.OpParameterRead)
 	if err != nil {
 		return nil, "", err
 	}
@@ -131,7 +133,8 @@ func (s *Service) GetParameterInfo(ctx context.Context, pr Principal, ref domain
 	if err := validateRef(ref); err != nil {
 		return domain.ParameterInfo{}, err
 	}
-	if err := s.authorize(ctx, pr, domain.OpParameterRead, domain.ResourceParameter, ref); err != nil {
+	ctx, _, err := s.authorize(ctx, pr, domain.OpParameterRead, domain.ResourceParameter, ref)
+	if err != nil {
 		return domain.ParameterInfo{}, err
 	}
 	return s.store.GetParameterInfo(ctx, ref)
@@ -142,17 +145,18 @@ func (s *Service) DeleteParameter(ctx context.Context, pr Principal, ref domain.
 	if err := validateRef(ref); err != nil {
 		return 0, err
 	}
-	if err := s.authorize(ctx, pr, domain.OpParameterDelete, domain.ResourceParameter, ref); err != nil {
+	ctx, namespace, err := s.authorize(ctx, pr, domain.OpParameterDelete, domain.ResourceParameter, ref)
+	if err != nil {
 		return 0, err
 	}
 	revision, err := s.store.DeleteParameter(ctx, ref)
 	if err != nil {
 		if errors.Is(err, domain.ErrFailedPrecondition) {
-			s.auditProtectedReleaseReference(ctx, pr, ref, domain.ReleaseEntryParameter, 0, "delete")
+			s.auditProtectedReleaseReference(ctx, pr, ref, namespace.ID, domain.ReleaseEntryParameter, 0, "delete")
 		}
 		return 0, err
 	}
-	s.auditRef(ctx, pr, "parameter.delete", domain.ResourceParameter, ref, 0, "allow", nil)
+	s.auditRefWithNamespaceID(ctx, pr, "parameter.delete", domain.ResourceParameter, ref, namespace.ID, 0, "allow", nil)
 	s.getHub().Wake()
 	return revision, nil
 }

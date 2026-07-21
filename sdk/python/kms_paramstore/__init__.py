@@ -2,10 +2,10 @@
 
 Typical use::
 
-    from kms_paramstore import Client
+    from kms_paramstore import Client, tls_from_files
 
     with Client("parameter-store.prod.internal:8443", namespace="prod/gradethis",
-                token="<client-token>") as client:
+                token="<client-token>", tls=tls_from_files("server-ca.crt")) as client:
         db_password = client.get_secret("postgres-password")  # relative to namespace
         print(db_password)          # [REDACTED]
         connect(db_password.value)  # explicit access to plaintext

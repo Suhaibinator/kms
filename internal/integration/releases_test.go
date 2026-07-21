@@ -200,9 +200,14 @@ func TestConfigurationReleaseLifecycle(t *testing.T) {
 	// The historical namespace-wide watch stream must advance past release
 	// revisions without surfacing release events to existing consumers.
 	legacyHub := watch.NewHub(h.store, nil, watch.Options{})
+	namespace, err := h.store.GetNamespace(ctx, ns)
+	if err != nil {
+		t.Fatalf("GetNamespace for legacy watcher: %v", err)
+	}
 	legacySub, err := legacyHub.Subscribe(ctx, watch.Registration{
 		ClientName: "legacy", InstanceID: "replica-1", Identity: "legacy",
-		Namespaces: []domain.NamespaceRef{ns}, LastSeenRevision: activeV1.ActivationRevision,
+		Namespaces: []domain.NamespaceRef{ns}, NamespaceIDs: map[domain.NamespaceRef]int64{ns: namespace.ID},
+		LastSeenRevision: activeV1.ActivationRevision,
 	})
 	if err != nil {
 		t.Fatalf("legacy Subscribe: %v", err)

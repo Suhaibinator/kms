@@ -1,6 +1,8 @@
 package cli
 
 import (
+	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -46,6 +48,85 @@ func TestWriteCertBundleToDir(t *testing.T) {
 	}
 }
 
+func TestWriteCertBundleRefusesPreexistingPrivateKey(t *testing.T) {
+	dir := t.TempDir()
+	keyPath := filepath.Join(dir, "svc.key")
+	if err := os.WriteFile(keyPath, []byte("attacker-controlled"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(keyPath, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	c := newTestCLI()
+	bundle := &kmsv1.CertBundle{CertPem: "CERT\n", KeyPem: "PRIVATE KEY\n", Serial: "s1"}
+	if err := c.writeCertBundle(dir, "svc", bundle); err == nil {
+		t.Fatal("expected pre-existing private-key path to be refused")
+	}
+	if got := readFileString(t, keyPath); got != "attacker-controlled" {
+		t.Fatalf("pre-existing key file was changed: %q", got)
+	}
+	if runtime.GOOS != "windows" {
+		info, err := os.Stat(keyPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := info.Mode().Perm(); got != 0o644 {
+			t.Fatalf("pre-existing key mode changed to %o", got)
+		}
+	}
+	if info, err := os.Stat(filepath.Join(dir, "svc.crt")); err != nil || info.Size() != 0 {
+		t.Fatalf("safe empty certificate reservation = %+v, %v", info, err)
+	}
+}
+
+func TestWriteCertBundleRefusesPrivateKeySymlink(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "attacker-readable")
+	if err := os.WriteFile(target, []byte("unchanged"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	keyPath := filepath.Join(dir, "svc.key")
+	if err := os.Symlink(target, keyPath); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+
+	c := newTestCLI()
+	bundle := &kmsv1.CertBundle{CertPem: "CERT\n", KeyPem: "PRIVATE KEY\n", Serial: "s1"}
+	if err := c.writeCertBundle(dir, "svc", bundle); err == nil {
+		t.Fatal("expected private-key symlink to be refused")
+	}
+	if got := readFileString(t, target); got != "unchanged" {
+		t.Fatalf("symlink target received private key: %q", got)
+	}
+	if info, err := os.Lstat(keyPath); err != nil || info.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("private-key symlink was changed: info=%v err=%v", info, err)
+	}
+	if info, err := os.Stat(filepath.Join(dir, "svc.crt")); err != nil || info.Size() != 0 {
+		t.Fatalf("safe empty certificate reservation = %+v, %v", info, err)
+	}
+}
+
+func TestWriteCertBundleRefusesPreexistingCertificateWithoutCreatingKey(t *testing.T) {
+	dir := t.TempDir()
+	certPath := filepath.Join(dir, "svc.crt")
+	if err := os.WriteFile(certPath, []byte("existing certificate"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	c := newTestCLI()
+	bundle := &kmsv1.CertBundle{CertPem: "NEW CERT\n", KeyPem: "PRIVATE KEY\n", Serial: "s1"}
+	if err := c.writeCertBundle(dir, "svc", bundle); err == nil {
+		t.Fatal("expected pre-existing certificate path to be refused")
+	}
+	if got := readFileString(t, certPath); got != "existing certificate" {
+		t.Fatalf("pre-existing certificate was changed: %q", got)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "svc.key")); !os.IsNotExist(err) {
+		t.Fatalf("private key was created despite certificate collision: %v", err)
+	}
+}
+
 func TestWriteCertBundleToStdout(t *testing.T) {
 	c := newTestCLI()
 	bundle := &kmsv1.CertBundle{CertPem: "CERT\n", KeyPem: "KEY\n", Serial: "s1"}
@@ -55,6 +136,259 @@ func TestWriteCertBundleToStdout(t *testing.T) {
 	out := c.stdout()
 	if !strings.Contains(out, "CERT") || !strings.Contains(out, "KEY") || !strings.Contains(out, "WARNING") {
 		t.Fatalf("stdout = %s", out)
+	}
+}
+
+func TestWriteCertBundlePropagatesStdoutFailure(t *testing.T) {
+	c := newTestCLI()
+	c.Stdout = errorWriter{err: io.ErrClosedPipe}
+	if err := c.writeCertBundle("", "svc", testCertBundle()); !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("writeCertBundle stdout error = %v, want closed pipe", err)
+	}
+}
+
+func TestCreatedIdentityPersistsReservedCertBeforeStatusOutputFailure(t *testing.T) {
+	dir := t.TempDir()
+	c := newTestCLI()
+	output, err := reserveCertBundle(dir, "svc")
+	if err != nil {
+		t.Fatalf("reserveCertBundle: %v", err)
+	}
+	c.Stdout = errorWriter{err: io.ErrClosedPipe}
+	bundle := testCertBundle()
+	resp := &kmsv1.CreateIdentityResponse{Token: "kms_once", Cert: bundle}
+	if err := c.writeCreatedIdentityResult("svc", "client", []string{"token", "mtls"}, output, resp); !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("writeCreatedIdentityResult error = %v, want closed pipe", err)
+	}
+	if got := readFileString(t, output.certPath); got != bundle.CertPem {
+		t.Fatalf("certificate content = %q", got)
+	}
+	if got := readFileString(t, output.keyPath); got != bundle.KeyPem {
+		t.Fatalf("private key content = %q", got)
+	}
+}
+
+type errorWriter struct{ err error }
+
+func (w errorWriter) Write([]byte) (int, error) { return 0, w.err }
+
+func TestPrintTokenOncePropagatesOutputFailure(t *testing.T) {
+	if err := printTokenOnce(errorWriter{err: io.ErrClosedPipe}, "identity", "svc", "kms_secret"); !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("printTokenOnce error = %v, want closed pipe", err)
+	}
+}
+
+func TestWithReservedCertBundleRejectsCollisionBeforeUse(t *testing.T) {
+	dir := t.TempDir()
+	keyPath := filepath.Join(dir, "svc.key")
+	if err := os.WriteFile(keyPath, []byte("existing key"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c := newTestCLI()
+	uses := 0
+	err := c.withReservedCertBundle(dir, "svc", func(*reservedCertBundle) error {
+		uses++
+		return nil
+	})
+	if err == nil {
+		t.Fatal("reservation succeeded despite existing private-key path")
+	}
+	if uses != 0 {
+		t.Fatalf("protected operation ran %d times before output reservation succeeded", uses)
+	}
+	if got := readFileString(t, keyPath); got != "existing key" {
+		t.Fatalf("existing key changed: %q", got)
+	}
+	if info, err := os.Stat(filepath.Join(dir, "svc.crt")); err != nil || info.Size() != 0 {
+		t.Fatalf("safe empty certificate reservation = %+v, %v", info, err)
+	}
+}
+
+func TestWithReservedCertBundleLeavesReservationsAfterUseFailure(t *testing.T) {
+	dir := t.TempDir()
+	c := newTestCLI()
+	wantErr := errors.New("mint failed")
+	err := c.withReservedCertBundle(dir, "svc", func(output *reservedCertBundle) error {
+		if output == nil {
+			t.Fatal("file output was not reserved")
+		}
+		for _, path := range []string{output.certPath, output.keyPath} {
+			if _, statErr := os.Stat(path); statErr != nil {
+				t.Fatalf("reserved path %s: %v", path, statErr)
+			}
+		}
+		return wantErr
+	})
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("withReservedCertBundle error = %v, want %v", err, wantErr)
+	}
+	for _, suffix := range []string{".crt", ".key"} {
+		info, statErr := os.Stat(filepath.Join(dir, "svc"+suffix))
+		if statErr != nil || info.Size() != 0 {
+			t.Fatalf("%s safe empty reservation = %+v, %v", suffix, info, statErr)
+		}
+	}
+	if !strings.Contains(err.Error(), "inspect and remove") {
+		t.Fatalf("failure should explain reservation cleanup: %v", err)
+	}
+}
+
+func TestReserveCertBundleRejectsPathTraversalName(t *testing.T) {
+	parent := t.TempDir()
+	outDir := filepath.Join(parent, "certs")
+	if err := os.Mkdir(outDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := reserveCertBundle(outDir, "../escape"); err == nil {
+		t.Fatal("path-traversal identity name should be rejected locally")
+	}
+	for _, suffix := range []string{".crt", ".key"} {
+		if _, err := os.Stat(filepath.Join(parent, "escape"+suffix)); !os.IsNotExist(err) {
+			t.Fatalf("path outside output directory was touched: %v", err)
+		}
+	}
+}
+
+func TestReserveCertBundleUsesCanonicalOutputDirectory(t *testing.T) {
+	realDir := t.TempDir()
+	alias := filepath.Join(t.TempDir(), "certs")
+	if err := os.Symlink(realDir, alias); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+
+	output, err := reserveCertBundle(alias, "svc")
+	if err != nil {
+		t.Fatalf("reserveCertBundle: %v", err)
+	}
+	defer output.cleanup()
+
+	canonicalDir, err := filepath.EvalSymlinks(realDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := filepath.Join(canonicalDir, "svc.crt"); output.certPath != want {
+		t.Fatalf("certificate reservation path = %q, want canonical %q", output.certPath, want)
+	}
+	if want := filepath.Join(canonicalDir, "svc.key"); output.keyPath != want {
+		t.Fatalf("private-key reservation path = %q, want canonical %q", output.keyPath, want)
+	}
+	assertReservedFileOwnsPath(t, output.certFile, output.certPath)
+	assertReservedFileOwnsPath(t, output.keyFile, output.keyPath)
+}
+
+func TestReservedCertBundleIgnoresOutputParentSymlinkReplacement(t *testing.T) {
+	realDir := t.TempDir()
+	replacementDir := t.TempDir()
+	alias := filepath.Join(t.TempDir(), "certs")
+	if err := os.Symlink(realDir, alias); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+
+	output, err := reserveCertBundle(alias, "svc")
+	if err != nil {
+		t.Fatalf("reserveCertBundle: %v", err)
+	}
+	defer output.cleanup()
+	if err := os.Remove(alias); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(replacementDir, alias); err != nil {
+		t.Skipf("replace output-directory symlink: %v", err)
+	}
+
+	// The stored canonical paths must still name the exact files held open for
+	// the one-time bundle, even though the caller's original path now resolves
+	// to a different directory.
+	assertReservedFileOwnsPath(t, output.certFile, output.certPath)
+	assertReservedFileOwnsPath(t, output.keyFile, output.keyPath)
+	c := newTestCLI()
+	bundle := testCertBundle()
+	if err := c.writeCertBundleToOutput(output, bundle); err != nil {
+		t.Fatalf("writeCertBundleToOutput: %v", err)
+	}
+	if got := readFileString(t, filepath.Join(realDir, "svc.crt")); got != bundle.CertPem {
+		t.Fatalf("canonical certificate content = %q", got)
+	}
+	if got := readFileString(t, filepath.Join(realDir, "svc.key")); got != bundle.KeyPem {
+		t.Fatalf("canonical private-key content = %q", got)
+	}
+	for _, suffix := range []string{".crt", ".key"} {
+		if _, err := os.Stat(filepath.Join(replacementDir, "svc"+suffix)); !os.IsNotExist(err) {
+			t.Fatalf("replacement parent received %s output: %v", suffix, err)
+		}
+	}
+	if !strings.Contains(c.stdout(), output.certPath) || !strings.Contains(c.stdout(), output.keyPath) {
+		t.Fatalf("status did not report canonical reserved paths: %s", c.stdout())
+	}
+	if strings.Contains(c.stdout(), alias) {
+		t.Fatalf("status reused mutable output-directory spelling %q: %s", alias, c.stdout())
+	}
+}
+
+func assertReservedFileOwnsPath(t *testing.T, file *os.File, path string) {
+	t.Helper()
+	held, err := file.Stat()
+	if err != nil {
+		t.Fatalf("stat reserved file: %v", err)
+	}
+	named, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat reserved path %s: %v", path, err)
+	}
+	if !os.SameFile(held, named) {
+		t.Fatalf("reserved handle no longer owns path %s", path)
+	}
+}
+
+func TestWithReservedCertBundlePublishesBundle(t *testing.T) {
+	bundle := testCertBundle()
+	dir := t.TempDir()
+	c := newTestCLI()
+	if err := c.withReservedCertBundle(dir, "svc", func(output *reservedCertBundle) error {
+		return c.writeCertBundleToOutput(output, bundle)
+	}); err != nil {
+		t.Fatalf("withReservedCertBundle: %v", err)
+	}
+	if got := readFileString(t, filepath.Join(dir, "svc.crt")); got != bundle.CertPem {
+		t.Fatalf("certificate = %q", got)
+	}
+	keyPath := filepath.Join(dir, "svc.key")
+	if got := readFileString(t, keyPath); got != bundle.KeyPem {
+		t.Fatalf("private key = %q", got)
+	}
+	if runtime.GOOS != "windows" {
+		if info, err := os.Stat(keyPath); err != nil {
+			t.Fatal(err)
+		} else if got := info.Mode().Perm(); got != 0o600 {
+			t.Fatalf("private key mode = %o, want 600", got)
+		}
+	}
+}
+
+func TestWithReservedCertBundlePreservesStdoutOutput(t *testing.T) {
+	c := newTestCLI()
+	err := c.withReservedCertBundle("", "svc", func(output *reservedCertBundle) error {
+		if output != nil {
+			t.Fatal("stdout output unexpectedly reserved files")
+		}
+		return c.writeCertBundleToOutput(output, testCertBundle())
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"CERTIFICATE", "PRIVATE KEY", "WARNING"} {
+		if !strings.Contains(c.stdout(), want) {
+			t.Fatalf("stdout missing %q: %s", want, c.stdout())
+		}
+	}
+}
+
+func testCertBundle() *kmsv1.CertBundle {
+	return &kmsv1.CertBundle{
+		CertPem:        "-----BEGIN CERTIFICATE-----\nabc\n-----END CERTIFICATE-----\n",
+		KeyPem:         "-----BEGIN PRIVATE KEY-----\ndef\n-----END PRIVATE KEY-----\n",
+		Serial:         "7f3a",
+		NotAfterUnixMs: 1893456000000,
 	}
 }
 

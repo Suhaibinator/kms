@@ -32,7 +32,7 @@ def server():
 @pytest.fixture
 def client(server):
     addr, _store = server
-    c = Client(addr, namespace=NS, cache_ttl=0)
+    c = Client(addr, namespace=NS, insecure=True, cache_ttl=0)
     try:
         yield c
     finally:

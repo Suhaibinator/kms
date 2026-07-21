@@ -45,7 +45,8 @@ func (s *Service) GetSecret(ctx context.Context, pr Principal, ref domain.Ref, v
 	if err := validateRef(ref); err != nil {
 		return domain.SecretValue{}, err
 	}
-	if err := s.authorize(ctx, pr, domain.OpSecretRead, domain.ResourceSecret, ref); err != nil {
+	ctx, namespace, err := s.authorize(ctx, pr, domain.OpSecretRead, domain.ResourceSecret, ref)
+	if err != nil {
 		return domain.SecretValue{}, err
 	}
 	keyring, err := s.requireKeyring()
@@ -78,12 +79,12 @@ func (s *Service) GetSecret(ctx context.Context, pr Principal, ref domain.Ref, v
 	// no additional information leaked.
 	if ver.ClientBound {
 		if pr.SecretToken == "" {
-			s.auditRef(ctx, pr, "secret.read", domain.ResourceSecret, ref, ver.Version, "deny",
+			s.auditRefWithNamespaceID(ctx, pr, "secret.read", domain.ResourceSecret, ref, namespace.ID, ver.Version, "deny",
 				map[string]string{"reason": "token"})
 			return domain.SecretValue{}, domain.Errorf(domain.ErrPermissionDenied, "access denied")
 		}
 	} else if ver.HasAccessToken && !tokenHashMatches(pr.SecretToken, rec.AccessTokenHash) {
-		s.auditRef(ctx, pr, "secret.read", domain.ResourceSecret, ref, ver.Version, "deny",
+		s.auditRefWithNamespaceID(ctx, pr, "secret.read", domain.ResourceSecret, ref, namespace.ID, ver.Version, "deny",
 			map[string]string{"reason": "token"})
 		return domain.SecretValue{}, domain.Errorf(domain.ErrPermissionDenied, "access denied")
 	}
@@ -93,13 +94,13 @@ func (s *Service) GetSecret(ctx context.Context, pr Principal, ref domain.Ref, v
 
 	plaintext, err := s.decryptVersion(keyring, rec, ver, pr.SecretToken)
 	if err != nil {
-		s.auditRef(ctx, pr, "secret.read", domain.ResourceSecret, ref, ver.Version, "error", nil)
+		s.auditRefWithNamespaceID(ctx, pr, "secret.read", domain.ResourceSecret, ref, namespace.ID, ver.Version, "error", nil)
 		s.log.Error("secret decryption failed", zap.String("ref", ref.String()), zap.Uint64("version", ver.Version), zap.String("kek_id", ver.KEKID))
 		return domain.SecretValue{}, err
 	}
 
 	// Fail closed: a secret read that cannot be audited is not served.
-	if err := s.auditStrict(ctx, s.buildEvent(pr, "secret.read", domain.ResourceSecret, ref, ver.Version, "allow", nil)); err != nil {
+	if err := s.auditRefStrictWithNamespaceID(ctx, pr, "secret.read", domain.ResourceSecret, ref, namespace.ID, ver.Version, "allow", nil); err != nil {
 		crypto.Zero(plaintext)
 		return domain.SecretValue{}, err
 	}
@@ -125,6 +126,10 @@ func (s *Service) RevealSecret(ctx context.Context, pr Principal, ref domain.Ref
 		s.auditRef(ctx, pr, "secret.reveal", domain.ResourceSecret, ref, version, "deny", nil)
 		return domain.SecretValue{}, domain.Errorf(domain.ErrPermissionDenied, "access denied")
 	}
+	ctx, namespace, err := s.authorize(ctx, pr, domain.OpSecretRead, domain.ResourceSecret, ref)
+	if err != nil {
+		return domain.SecretValue{}, err
+	}
 	keyring, err := s.requireKeyring()
 	if err != nil {
 		return domain.SecretValue{}, err
@@ -144,11 +149,11 @@ func (s *Service) RevealSecret(ctx context.Context, pr Principal, ref domain.Ref
 
 	plaintext, err := s.decryptVersion(keyring, rec, ver, "")
 	if err != nil {
-		s.auditRef(ctx, pr, "secret.reveal", domain.ResourceSecret, ref, ver.Version, "error", nil)
+		s.auditRefWithNamespaceID(ctx, pr, "secret.reveal", domain.ResourceSecret, ref, namespace.ID, ver.Version, "error", nil)
 		s.log.Error("secret decryption failed", zap.String("ref", ref.String()), zap.Uint64("version", ver.Version), zap.String("kek_id", ver.KEKID))
 		return domain.SecretValue{}, err
 	}
-	if err := s.auditStrict(ctx, s.buildEvent(pr, "secret.reveal", domain.ResourceSecret, ref, ver.Version, "allow", nil)); err != nil {
+	if err := s.auditRefStrictWithNamespaceID(ctx, pr, "secret.reveal", domain.ResourceSecret, ref, namespace.ID, ver.Version, "allow", nil); err != nil {
 		crypto.Zero(plaintext)
 		return domain.SecretValue{}, err
 	}
@@ -186,7 +191,8 @@ func (s *Service) PutSecret(ctx context.Context, pr Principal, in PutSecretInput
 	if err != nil {
 		return PutSecretResult{}, err
 	}
-	if err := s.authorize(ctx, pr, domain.OpSecretWrite, domain.ResourceSecret, in.Ref); err != nil {
+	ctx, namespace, err := s.authorize(ctx, pr, domain.OpSecretWrite, domain.ResourceSecret, in.Ref)
+	if err != nil {
 		return PutSecretResult{}, err
 	}
 	keyring, err := s.requireKeyring()
@@ -203,6 +209,11 @@ func (s *Service) PutSecret(ctx context.Context, pr Principal, in PutSecretInput
 		return PutSecretResult{}, domain.Errorf(domain.ErrFailedPrecondition,
 			"secret %s already exists with client_bound=%v; the mode of a secret cannot change", in.Ref, existing.ClientBound)
 	}
+	expected := &storage.SecretWriteExpectation{Exists: exists}
+	if exists {
+		expected.ID = existing.ID
+		expected.AccessTokenHash = append([]byte(nil), existing.AccessTokenHash...)
+	}
 
 	// Resolve token handling.
 	var (
@@ -216,7 +227,7 @@ func (s *Service) PutSecret(ctx context.Context, pr Principal, in PutSecretInput
 			// Writing a new version requires proving possession of the
 			// current token — it is the encryption key share.
 			if !tokenHashMatches(pr.SecretToken, existing.AccessTokenHash) {
-				s.auditRef(ctx, pr, "secret.write", domain.ResourceSecret, in.Ref, 0, "deny",
+				s.auditRefWithNamespaceID(ctx, pr, "secret.write", domain.ResourceSecret, in.Ref, namespace.ID, 0, "deny",
 					map[string]string{"reason": "token"})
 				return PutSecretResult{}, domain.Errorf(domain.ErrPermissionDenied, "access denied")
 			}
@@ -259,6 +270,7 @@ func (s *Service) PutSecret(ctx context.Context, pr Principal, in PutSecretInput
 		CreatedBy:       pr.Identity.Name,
 		ClientBound:     in.ClientBound,
 		AccessTokenHash: newTokenHash,
+		Expected:        expected,
 		ExpiresAt:       unixMSToTime(in.ExpiresAt),
 		Encrypt: func(version uint64) (storage.EncryptedPayload, error) {
 			aad := crypto.BuildAAD(ref.NS.Env, ref.NS.App, ref.Key, version)
@@ -296,7 +308,7 @@ func (s *Service) PutSecret(ctx context.Context, pr Principal, in PutSecretInput
 	if in.GenerateToken {
 		meta["token_minted"] = "true"
 	}
-	s.auditRef(ctx, pr, "secret.write", domain.ResourceSecret, ref, version, "allow", meta)
+	s.auditRefWithNamespaceID(ctx, pr, "secret.write", domain.ResourceSecret, ref, namespace.ID, version, "allow", meta)
 	s.getHub().Wake()
 
 	return PutSecretResult{Version: version, Revision: revision, AccessToken: mintedToken}, nil
@@ -310,7 +322,7 @@ func (s *Service) ListSecrets(ctx context.Context, pr Principal, ns domain.Names
 	}
 	// Secret list responses are metadata-only (never values), so either
 	// secret:list or secret:read on an item exposes its metadata.
-	filter, err := s.listFilter(ctx, pr, domain.ResourceSecret, domain.OpSecretList, ns, domain.OpSecretList, domain.OpSecretRead)
+	ctx, _, filter, err := s.listFilter(ctx, pr, domain.ResourceSecret, domain.OpSecretList, ns, domain.OpSecretList, domain.OpSecretRead)
 	if err != nil {
 		return nil, "", err
 	}
@@ -332,7 +344,8 @@ func (s *Service) GetSecretInfo(ctx context.Context, pr Principal, ref domain.Re
 	if err := validateRef(ref); err != nil {
 		return domain.Secret{}, err
 	}
-	if err := s.authorize(ctx, pr, domain.OpSecretRead, domain.ResourceSecret, ref); err != nil {
+	ctx, _, err := s.authorize(ctx, pr, domain.OpSecretRead, domain.ResourceSecret, ref)
+	if err != nil {
 		return domain.Secret{}, err
 	}
 	return s.store.GetSecretInfo(ctx, ref)
@@ -343,17 +356,18 @@ func (s *Service) DeleteSecret(ctx context.Context, pr Principal, ref domain.Ref
 	if err := validateRef(ref); err != nil {
 		return 0, err
 	}
-	if err := s.authorize(ctx, pr, domain.OpSecretDestroy, domain.ResourceSecret, ref); err != nil {
+	ctx, namespace, err := s.authorize(ctx, pr, domain.OpSecretDestroy, domain.ResourceSecret, ref)
+	if err != nil {
 		return 0, err
 	}
 	revision, err := s.store.DeleteSecret(ctx, ref)
 	if err != nil {
 		if errors.Is(err, domain.ErrFailedPrecondition) {
-			s.auditProtectedReleaseReference(ctx, pr, ref, domain.ReleaseEntrySecret, 0, "delete")
+			s.auditProtectedReleaseReference(ctx, pr, ref, namespace.ID, domain.ReleaseEntrySecret, 0, "delete")
 		}
 		return 0, err
 	}
-	s.auditRef(ctx, pr, "secret.delete", domain.ResourceSecret, ref, 0, "allow", nil)
+	s.auditRefWithNamespaceID(ctx, pr, "secret.delete", domain.ResourceSecret, ref, namespace.ID, 0, "allow", nil)
 	s.getHub().Wake()
 	return revision, nil
 }
@@ -364,7 +378,8 @@ func (s *Service) DisableSecret(ctx context.Context, pr Principal, ref domain.Re
 	if err := validateRef(ref); err != nil {
 		return 0, err
 	}
-	if err := s.authorize(ctx, pr, domain.OpSecretDisable, domain.ResourceSecret, ref); err != nil {
+	ctx, namespace, err := s.authorize(ctx, pr, domain.OpSecretDisable, domain.ResourceSecret, ref)
+	if err != nil {
 		return 0, err
 	}
 	state := domain.StateDisabled
@@ -377,7 +392,7 @@ func (s *Service) DisableSecret(ctx context.Context, pr Principal, ref domain.Re
 	if err != nil {
 		return 0, err
 	}
-	s.auditRef(ctx, pr, eventType, domain.ResourceSecret, ref, version, "allow", nil)
+	s.auditRefWithNamespaceID(ctx, pr, eventType, domain.ResourceSecret, ref, namespace.ID, version, "allow", nil)
 	s.getHub().Wake()
 	return revision, nil
 }
@@ -390,17 +405,18 @@ func (s *Service) DestroySecretVersion(ctx context.Context, pr Principal, ref do
 	if version == 0 {
 		return 0, domain.Errorf(domain.ErrInvalidArgument, "version is required")
 	}
-	if err := s.authorize(ctx, pr, domain.OpSecretDestroy, domain.ResourceSecret, ref); err != nil {
+	ctx, namespace, err := s.authorize(ctx, pr, domain.OpSecretDestroy, domain.ResourceSecret, ref)
+	if err != nil {
 		return 0, err
 	}
 	revision, err := s.store.DestroySecretVersion(ctx, ref, version)
 	if err != nil {
 		if errors.Is(err, domain.ErrFailedPrecondition) {
-			s.auditProtectedReleaseReference(ctx, pr, ref, domain.ReleaseEntrySecret, version, "destroy")
+			s.auditProtectedReleaseReference(ctx, pr, ref, namespace.ID, domain.ReleaseEntrySecret, version, "destroy")
 		}
 		return 0, err
 	}
-	s.auditRef(ctx, pr, "secret.destroy", domain.ResourceSecret, ref, version, "allow", nil)
+	s.auditRefWithNamespaceID(ctx, pr, "secret.destroy", domain.ResourceSecret, ref, namespace.ID, version, "allow", nil)
 	s.getHub().Wake()
 	return revision, nil
 }
@@ -413,14 +429,15 @@ func (s *Service) PromoteSecretVersion(ctx context.Context, pr Principal, ref do
 	if version == 0 {
 		return 0, 0, 0, domain.Errorf(domain.ErrInvalidArgument, "version is required")
 	}
-	if err := s.authorize(ctx, pr, domain.OpSecretPromote, domain.ResourceSecret, ref); err != nil {
+	ctx, namespace, err := s.authorize(ctx, pr, domain.OpSecretPromote, domain.ResourceSecret, ref)
+	if err != nil {
 		return 0, 0, 0, err
 	}
 	current, previous, revision, err = s.store.PromoteSecretVersion(ctx, ref, version)
 	if err != nil {
 		return 0, 0, 0, err
 	}
-	s.auditRef(ctx, pr, "secret.promote", domain.ResourceSecret, ref, version, "allow", nil)
+	s.auditRefWithNamespaceID(ctx, pr, "secret.promote", domain.ResourceSecret, ref, namespace.ID, version, "allow", nil)
 	s.getHub().Wake()
 	return current, previous, revision, nil
 }

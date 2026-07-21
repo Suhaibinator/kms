@@ -146,6 +146,46 @@ secrets, rotation only touches the outer (KEK) layer; the inner
 client-token-derived layer is untouched and requires no client
 participation (plan §11.4.4).
 
+## Filesystem output integrity
+
+Path hardening applies to the primary SQLite database, backup and restore
+destinations, generated KEK files, identity certificate/private-key bundles,
+and import reports. Before creating or securing one of these files, KMS
+resolves the destination's parent symlinks once and uses only the resulting
+canonical path. Every directory in that canonical chain must be owned by root
+or the service account and must not let another account replace its entries;
+group- or other-writable POSIX directories are rejected unless sticky-directory
+semantics protect entries. An existing database must additionally be an
+owner-only, regular, current-user-owned, unchanged entry before it is handed to
+SQLite; legacy broad permissions fail closed for explicit operator review.
+This closes child-symlink and mutable-parent swaps, not merely
+create-then-`chmod` exposure.
+
+Private files are created exclusively and owner-only: `0600` files and `0700`
+staging directories on POSIX, or a protected DACL granting full access only to
+the current process user on Windows. Backup creation occurs inside such a
+private staging directory and is restricted before publication. Identity
+certificate output is intentionally public (`0644`); its paired private key is
+owner-only, and both names are reserved before the one-time minting RPC. Import
+reports are owner-only because non-dry-run reports contain one-time access
+tokens. Backup and non-force restore publish complete staged files atomically
+without replacing an entry that appeared concurrently; `restore --force` is
+the explicit replacement exception.
+
+Platform enforcement is deliberately specific:
+
+- On macOS, every allow ACL entry anywhere in the canonical parent chain is
+  rejected. Extended ACLs are removed from private files/directories through
+  the already-open descriptor and verified absent before use.
+- On Windows, the parent chain must be owned by the process user, Local System,
+  or Builtin Administrators. A DACL is required; allow ACEs that give an
+  untrusted SID delete, child-delete, ownership, or DACL-control authority are
+  rejected. Private output DACLs are protected from inheritance.
+- On other supported POSIX systems, enforcement covers owner UID, mode bits,
+  and sticky-directory semantics. It does **not** inspect or claim coverage of
+  NFSv4 or other extended ACL entries; operators must ensure separately that
+  those ACLs grant no broader path-mutation or file-access authority.
+
 ## Client-bound secrets (opt-in double wrapping)
 
 A secret opts into client-bound mode at creation (`client_bound: true`,
@@ -305,10 +345,16 @@ returns its `<name>`; the CommonName is cosmetic and is **never** used as a
 fallback, so a certificate lacking the SAN (or carrying more than one) is
 rejected. The authentication interceptor maps a TLS-verified peer certificate
 through this SAN to a stored identity, then checks the certificate serial
-against `identity_certs`: the serial must be present, not revoked
+against `identity_certs`: the serial must be present, and the SHA-256
+fingerprint of the exact presented leaf DER must equal the fingerprint stored
+at enrollment. The certificate must also be not revoked
 (`revoked_at IS NULL`), not past `not_after`, and belong to an identity that
 is not disabled. The result is an authenticated context carrying
-`{identity, method: mtls}`.
+`{identity, method: mtls, serial, fingerprint}`. Serial and SAN equality alone
+are deliberately insufficient, so an additional trusted client CA cannot mint
+a different leaf that impersonates an enrolled KMS certificate. Long-lived
+ordinary and release watch streams re-check the same serial/fingerprint binding
+on every heartbeat.
 
 **Revocation is a database check, not CRL/OCSP.** Because the KMS is the only
 relying party for these certificates, revocation is per-serial:
@@ -349,6 +395,44 @@ practically present a client certificate, so admins bypass the method gate
 (browser login stays token-based). Bypassing the *method gate* does not waive
 auditing — every admin action is still audited exactly as before (see
 [Audit guarantees](#audit-guarantees)).
+
+Operations that legitimately span namespaces, including namespace listings
+and delegated audit queries, apply the method gate and full policy decision to
+each returned row. Ineligible rows are omitted rather than causing an entire
+mixed-scope page to fail. Their continuation state is encrypted and bound to
+the caller, authentication method, and query scope; each request scans a fixed
+maximum number of storage batches, so filtering cannot turn one remote page
+request into an unbounded database scan.
+
+The cursor seal key is domain-separated from the active KEK. Replicas and
+restarts using the same active KEK can therefore continue a page, while the
+fixed-size padded envelope hides the length and contents of the underlying
+storage cursor. A KEK rotation normally retires the old key from the next
+process, so delegated page tokens minted before rotation are deliberately
+rejected unless that retired key remains explicitly loaded; clients should
+restart the listing from its first page after rotation.
+
+### Immutable namespace-incarnation binding
+
+An `env/app` pair is a reusable address, not a durable security identity. Each
+namespace row has an immutable numeric ID for its incarnation. The method and
+policy checks return that exact row, and `internal/core` accumulates its ID in
+the request context (including every independently authorized namespace in a
+cross-namespace operation). Namespaced storage work re-resolves the address
+with the expected ID inside the same read or write transaction. If the row was
+deleted, recreated, or rebound between authorization and use, the operation
+fails with `Aborted` instead of acting on the replacement. Admin policy bypass
+does not turn a stale bound incarnation into the new row.
+
+Audit events are stamped directly with the already-authorized ID, never by a
+post-operation name lookup. Standard and release watch registration requires a
+positive ID, copies the retained registration state, and verifies that the row
+still exists before admission. New `change_log` rows persist that ID; replay
+and live delivery require an exact ID match. A legacy change row with ID `0`
+cannot be attributed safely and forces a current snapshot rather than replay.
+Heartbeat reauthorization checks the same binding—including for admins—so
+deleting/recreating a namespace closes the stale stream. Release watches apply
+the same rules to activation replay and live events.
 
 ## Login and failed-authentication rate limiting
 
@@ -486,6 +570,16 @@ validation errors, diffs, acknowledgement diagnostics, logs, or metrics. A
 loader's token provider is local application code and is invoked only for a
 protected secret; the credential is sent only on that secret's read RPC.
 
+Every release entry also persists the immutable `resource_namespace_id` that
+was independently authorized for its parameter or secret reference. Release
+creation rechecks all accumulated namespace bindings in its write transaction;
+activation joins the stored ID, textual address, resource key, and exact
+version, so a delete/recreate at the same address cannot retarget a pin.
+Current/previous-release deletion guards likewise prefer the exact ID. Migrated
+legacy entries with ID `0` remain readable and retain their conservative
+name-based deletion guard, but activation fails closed with
+`FailedPrecondition`; recreate the release to establish exact pins.
+
 The deterministic release digest covers an alias-sorted protobuf projection of
 schema and resource pins, captured metadata, and parameter digests. It excludes
 values, tokens, timestamps, creator identity, activation revision, and movable
@@ -540,11 +634,14 @@ release lifecycle acknowledgement, and blocked release-reference destruction
 is audited
 (`internal/core/*.go`, `Service.audit`/`auditOp`/`auditStrict`) into
 `audit_events`. Audit records carry actor identity/kind, the resource's
-`env`/`app`/`key`/version (denormalized as text with no foreign key, so the
-history stays readable after a namespace is deleted — plan-namespaces.md §3),
+`env`/`app`/`key`/version and immutable namespace-incarnation ID (denormalized
+with no foreign key, so the history stays readable after a namespace is
+deleted — plan-namespaces.md §3),
 decision (`allow`/`deny`/`error`), source IP, user agent, request ID, and an
 opaque `metadata_json` blob for operation-specific context — **never** secret
 plaintext, never a token.
+The core audit path receives the bound ID from the authorization context, so it
+does not perform a racy post-operation lookup by `env/app`.
 The recorded source IP is resolved the same way as the rate-limit key
 above (real TCP peer address, or `X-Forwarded-For` only if
 `security.trust_proxy_headers` is enabled) — see
@@ -562,6 +659,14 @@ plan's requirement that "all secret reads are audited" (§28.9) is enforced
 by refusing to serve the read rather than by hoping the write succeeds.
 Audit writes also run with `context.WithoutCancel` plus a 5s timeout, so a
 client disconnecting mid-request cannot suppress the record of what it did.
+
+Admins can read deleted and legacy audit history. Delegated audit readers see
+only rows whose complete namespace, immutable incarnation ID, current
+authentication-method boundary, and current per-row policy decision all match.
+Rows from deleted/recreated namespaces, legacy rows without an incarnation ID,
+and malformed partial namespace rows fail closed. Only explicitly global event
+classes (for example `auth.failure` and name-addressed policy/identity/key
+operations) are eligible without a namespace.
 
 ## Redaction
 

@@ -4,12 +4,16 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
 	"testing"
 	"time"
+
+	"gorm.io/gorm"
 
 	"github.com/Suhaibinator/kms/internal/domain"
 )
@@ -140,6 +144,159 @@ func TestPragmasApplied(t *testing.T) {
 	check("busy_timeout", "5000")
 }
 
+func TestOpenCreatesDatabaseWithRestrictedPermissions(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows does not expose POSIX permission bits")
+	}
+	path := filepath.Join(t.TempDir(), "kms.db")
+	st, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := info.Mode().Perm(); got != 0o600 {
+		t.Fatalf("new database mode = %o, want 600", got)
+	}
+}
+
+func TestOpenRejectsBroadExistingDatabasePermissions(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows security is asserted through DACL-specific tests")
+	}
+	path := filepath.Join(t.TempDir(), "kms.db")
+	st, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(path, 0o666); err != nil {
+		t.Fatal(err)
+	}
+	st, err = Open(path)
+	if st != nil {
+		_ = st.Close()
+	}
+	if err == nil {
+		t.Fatal("broadly accessible existing database was accepted")
+	}
+}
+
+func TestOpenRejectsSharedMutableDatabaseParent(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows DACL rejection is covered by fileutil platform tests")
+	}
+	root := t.TempDir()
+	dir := filepath.Join(root, "shared")
+	if err := os.Mkdir(dir, 0o777); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(dir, 0o777); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "kms.db")
+	st, err := Open(path)
+	if st != nil {
+		_ = st.Close()
+	}
+	if err == nil {
+		t.Fatal("database open accepted a parent mutable by another account")
+	}
+	if _, err := os.Lstat(path); !os.IsNotExist(err) {
+		t.Fatalf("unsafe database path was created: %v", err)
+	}
+}
+
+func TestOpenRefusesDanglingDatabaseSymlink(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "attacker-target.db")
+	path := filepath.Join(dir, "kms.db")
+	if err := os.Symlink(target, path); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+
+	st, err := Open(path)
+	if st != nil {
+		_ = st.Close()
+	}
+	if err == nil {
+		t.Fatal("dangling database symlink was accepted")
+	}
+	if _, err := os.Stat(target); !os.IsNotExist(err) {
+		t.Fatalf("database open followed dangling symlink: %v", err)
+	}
+}
+
+func TestOpenRefusesExistingDatabaseSymlink(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "target.db")
+	targetStore, err := Open(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := targetStore.Close(); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "kms.db")
+	if err := os.Symlink(target, path); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+
+	st, err := Open(path)
+	if st != nil {
+		_ = st.Close()
+	}
+	if err == nil {
+		t.Fatal("existing database symlink was accepted")
+	}
+	if info, err := os.Lstat(path); err != nil || info.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("database symlink changed: info=%v err=%v", info, err)
+	}
+}
+
+func TestOpenUsesTheLiteralSpecialCharacterPath(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows filenames do not support every character covered here")
+	}
+	for _, name := range []string{
+		"kms?tenant=other.db",
+		"kms#fragment.db",
+		"file:kms.db",
+		"kms%3Fencoded.db",
+	} {
+		t.Run(name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), name)
+			st, err := Open(path)
+			if err != nil {
+				t.Fatalf("Open(%q): %v", path, err)
+			}
+			if err := st.Close(); err != nil {
+				t.Fatal(err)
+			}
+			if err := ValidateKMSDatabase(path); err != nil {
+				t.Fatalf("literal path is not the migrated database: %v", err)
+			}
+			info, err := os.Stat(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if info.Size() == 0 {
+				t.Fatal("literal path remained the empty reservation file")
+			}
+			if got := info.Mode().Perm(); got != 0o600 {
+				t.Fatalf("literal database mode = %o, want 600", got)
+			}
+		})
+	}
+}
+
 func TestPingAndClose(t *testing.T) {
 	st := newStore(t)
 	if err := st.Ping(context.Background()); err != nil {
@@ -177,6 +334,154 @@ func TestReopenAndVersionGuard(t *testing.T) {
 	_ = st2.Close()
 	if _, err := Open(p); err == nil {
 		t.Fatal("expected Open to refuse a newer schema version")
+	}
+}
+
+func TestMigrationRepairsCurrentStampedChangeLogNamespaceID(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "kms.db")
+	st, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ns := seedNS(t, st, "prod", "app")
+	ctx := context.Background()
+	if _, _, err := st.PutParameter(ctx, ref("prod", "app", "before"), "legacy", "", "", "admin"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Model an interrupted/current-stamped database whose physical change-log
+	// table is still the pre-incarnation shape. Open must inspect the table, not
+	// trust the schema stamp alone, and legacy rows must remain unattributed (0).
+	for _, statement := range []string{
+		`DROP INDEX IF EXISTS idx_change_log_namespace_revision`,
+		`DROP INDEX IF EXISTS idx_change_log_ns`,
+		`ALTER TABLE change_log RENAME TO change_log_pre_namespace_id`,
+		`CREATE TABLE change_log (
+			revision INTEGER PRIMARY KEY AUTOINCREMENT,
+			resource_type TEXT NOT NULL,
+			env TEXT NOT NULL,
+			app TEXT NOT NULL,
+			key TEXT NOT NULL,
+			change_type TEXT NOT NULL,
+			value TEXT,
+			content_type TEXT NOT NULL DEFAULT '',
+			version_number INTEGER NOT NULL DEFAULT 0,
+			label TEXT NOT NULL DEFAULT '',
+			created_at TEXT NOT NULL
+		)`,
+		`INSERT INTO change_log (
+			revision, resource_type, env, app, key, change_type, value,
+			content_type, version_number, label, created_at
+		) SELECT revision, resource_type, env, app, key, change_type, value,
+			content_type, version_number, label, created_at
+		FROM change_log_pre_namespace_id`,
+		`DROP TABLE change_log_pre_namespace_id`,
+		`CREATE INDEX idx_change_log_ns ON change_log(env, app)`,
+	} {
+		if err := st.db.Exec(statement).Error; err != nil {
+			_ = st.Close()
+			t.Fatalf("prepare current-stamped legacy change_log: %v", err)
+		}
+	}
+	var stamped schemaMigrationModel
+	if err := st.db.Order("version DESC").First(&stamped).Error; err != nil {
+		t.Fatal(err)
+	}
+	if stamped.Version != schemaVersion {
+		t.Fatalf("schema stamp = %d, want current %d", stamped.Version, schemaVersion)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	repaired, err := Open(path)
+	if err != nil {
+		t.Fatalf("repair current-stamped legacy change_log: %v", err)
+	}
+	defer func() { _ = repaired.Close() }()
+	if !repaired.db.Migrator().HasColumn(&changeLogModel{}, "NamespaceID") {
+		t.Fatal("namespace_id column was not repaired")
+	}
+	entries, err := repaired.ListChangesSince(ctx, 0, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 || entries[0].NamespaceID != 0 {
+		t.Fatalf("legacy entries = %+v, want one fail-closed namespace_id=0 row", entries)
+	}
+
+	if _, _, err := repaired.PutParameter(ctx, ref("prod", "app", "after"), "current", "", "", "admin"); err != nil {
+		t.Fatal(err)
+	}
+	entries, err = repaired.ListChangesSince(ctx, entries[0].Revision, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 || entries[0].NamespaceID != ns.ID {
+		t.Fatalf("new entries = %+v, want namespace_id=%d", entries, ns.ID)
+	}
+}
+
+func TestMigrationRepairsCurrentStampedReleaseEntryNamespaceID(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "kms.db")
+	st, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	source := seedNS(t, st, "prod", "source")
+	target := seedNS(t, st, "prod", "target")
+	resource := ref("prod", "source", "config")
+	if _, _, err := st.PutParameter(ctx, resource, "value", "string", "{}", "admin"); err != nil {
+		t.Fatal(err)
+	}
+	release, err := st.CreateConfigurationRelease(ctx, domain.ConfigurationRelease{
+		Namespace: target.NamespaceRef, Name: "runtime", Digest: "digest", Metadata: "{}",
+		Entries: []domain.ConfigurationReleaseEntry{{Alias: "config", Kind: domain.ReleaseEntryParameter, Ref: resource, Version: 1}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, statement := range []string{
+		`DROP INDEX IF EXISTS idx_release_entry_resource`,
+		`ALTER TABLE configuration_release_entries DROP COLUMN resource_namespace_id`,
+	} {
+		if err := st.db.Exec(statement).Error; err != nil {
+			_ = st.Close()
+			t.Fatalf("prepare current-stamped legacy release entries: %v", err)
+		}
+	}
+	var stamped schemaMigrationModel
+	if err := st.db.Order("version DESC").First(&stamped).Error; err != nil {
+		t.Fatal(err)
+	}
+	if stamped.Version != schemaVersion {
+		t.Fatalf("schema stamp = %d, want current %d", stamped.Version, schemaVersion)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	repaired, err := Open(path)
+	if err != nil {
+		t.Fatalf("repair current-stamped legacy release entries: %v", err)
+	}
+	defer func() { _ = repaired.Close() }()
+	if !repaired.db.Migrator().HasColumn(&configurationReleaseEntryModel{}, "ResourceNamespaceID") {
+		t.Fatal("resource_namespace_id column was not repaired")
+	}
+	var entry configurationReleaseEntryModel
+	if err := repaired.db.First(&entry).Error; err != nil {
+		t.Fatal(err)
+	}
+	if entry.ResourceNamespaceID != 0 {
+		t.Fatalf("legacy resource namespace ID = %d, want fail-closed 0", entry.ResourceNamespaceID)
+	}
+	if _, _, err := repaired.ActivateConfigurationRelease(ctx, target.NamespaceRef, release.Name, release.Version, nil); !errors.Is(err, domain.ErrFailedPrecondition) {
+		t.Fatalf("activate migrated legacy release err = %v, want ErrFailedPrecondition", err)
+	}
+	if source.ID <= 0 {
+		t.Fatal("source namespace setup failed")
 	}
 }
 
@@ -552,6 +857,298 @@ func TestCreateSecretVersionKeepsTokenHash(t *testing.T) {
 	}
 	if string(rec.AccessTokenHash) != "tokenhash" {
 		t.Fatalf("token hash = %q, want kept", rec.AccessTokenHash)
+	}
+}
+
+func TestCreateSecretVersionRejectsStaleExpectation(t *testing.T) {
+	st := newStore(t)
+	ctx := context.Background()
+	seedNS(t, st, "prod", "app")
+	r := ref("prod", "app", "guarded")
+
+	if _, _, err := st.CreateSecretVersion(ctx, CreateSecretParams{
+		Ref: r, ClientBound: true, AccessTokenHash: []byte("hash-v1"), Encrypt: encryptStub(nil),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	recV1, err := st.GetSecretRecord(ctx, r)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	encrypted := false
+	_, _, err = st.CreateSecretVersion(ctx, CreateSecretParams{
+		Ref: r, ClientBound: true,
+		Expected: &SecretWriteExpectation{Exists: false},
+		Encrypt: func(version uint64) (EncryptedPayload, error) {
+			encrypted = true
+			return encryptStub(nil)(version)
+		},
+	})
+	if !errors.Is(err, domain.ErrAborted) {
+		t.Fatalf("stale create err = %v, want ErrAborted", err)
+	}
+	if encrypted {
+		t.Fatal("stale create invoked Encrypt before rejecting the changed state")
+	}
+
+	if _, _, err := st.CreateSecretVersion(ctx, CreateSecretParams{
+		Ref: r, ClientBound: true, AccessTokenHash: []byte("hash-v2"),
+		Expected: &SecretWriteExpectation{Exists: true, ID: recV1.ID, AccessTokenHash: []byte("hash-v1")},
+		Encrypt:  encryptStub(nil),
+	}); err != nil {
+		t.Fatalf("current token rotation: %v", err)
+	}
+
+	encrypted = false
+	_, _, err = st.CreateSecretVersion(ctx, CreateSecretParams{
+		Ref: r, ClientBound: true,
+		Expected: &SecretWriteExpectation{Exists: true, ID: recV1.ID, AccessTokenHash: []byte("hash-v1")},
+		Encrypt: func(version uint64) (EncryptedPayload, error) {
+			encrypted = true
+			return encryptStub(nil)(version)
+		},
+	})
+	if !errors.Is(err, domain.ErrAborted) {
+		t.Fatalf("stale token write err = %v, want ErrAborted", err)
+	}
+	if encrypted {
+		t.Fatal("stale token write encrypted a version before rejecting the rotated token")
+	}
+
+	if _, _, err := st.CreateSecretVersion(ctx, CreateSecretParams{
+		Ref: r, ClientBound: true,
+		Expected: &SecretWriteExpectation{Exists: true, ID: recV1.ID, AccessTokenHash: []byte("hash-v2")},
+		Encrypt:  encryptStub(nil),
+	}); err != nil {
+		t.Fatalf("write with current expectation: %v", err)
+	}
+	info, err := st.GetSecretInfo(ctx, r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(info.Versions) != 3 {
+		t.Fatalf("version count = %d, want 3 successful writes only", len(info.Versions))
+	}
+}
+
+func TestCreateSecretVersionRejectsDeleteRecreateABA(t *testing.T) {
+	st := newStore(t)
+	ctx := context.Background()
+	seedNS(t, st, "prod", "app")
+	r := ref("prod", "app", "aba")
+	if _, _, err := st.CreateSecretVersion(ctx, CreateSecretParams{Ref: r, Encrypt: encryptStub(nil)}); err != nil {
+		t.Fatal(err)
+	}
+	original, err := st.GetSecretRecord(ctx, r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.DeleteSecret(ctx, r); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := st.CreateSecretVersion(ctx, CreateSecretParams{Ref: r, Encrypt: encryptStub(nil)}); err != nil {
+		t.Fatal(err)
+	}
+	replacement, err := st.GetSecretRecord(ctx, r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if replacement.ID == original.ID {
+		t.Fatalf("replacement reused secret row ID %d", original.ID)
+	}
+
+	encrypted := false
+	_, _, err = st.CreateSecretVersion(ctx, CreateSecretParams{
+		Ref:      r,
+		Expected: &SecretWriteExpectation{Exists: true, ID: original.ID},
+		Encrypt: func(version uint64) (EncryptedPayload, error) {
+			encrypted = true
+			return encryptStub(nil)(version)
+		},
+	})
+	if !errors.Is(err, domain.ErrAborted) {
+		t.Fatalf("delete/recreate ABA err = %v, want ErrAborted", err)
+	}
+	if encrypted {
+		t.Fatal("delete/recreate ABA invoked Encrypt before rejecting stale row identity")
+	}
+}
+
+func TestGetSecretVersionReadsOneSnapshot(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "kms.db")
+	reader, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = reader.Close() })
+	ctx := context.Background()
+	seedNS(t, reader, "prod", "app")
+	r := ref("prod", "app", "snapshot")
+	if _, _, err := reader.CreateSecretVersion(ctx, CreateSecretParams{
+		Ref: r, AccessTokenHash: []byte("hash-v1"), Encrypt: encryptStub(nil),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	writer, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = writer.Close() })
+
+	firstRead := make(chan struct{})
+	resumeRead := make(chan struct{})
+	var pause sync.Once
+	if err := reader.db.Callback().Query().After("gorm:query").Register("test:pause_secret_snapshot", func(db *gorm.DB) {
+		if db.Statement.Table == "secrets" {
+			pause.Do(func() {
+				close(firstRead)
+				<-resumeRead
+			})
+		}
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	type readResult struct {
+		rec SecretRecord
+		ver SecretVersionRecord
+		err error
+	}
+	readDone := make(chan readResult, 1)
+	go func() {
+		rec, ver, err := reader.GetSecretVersion(ctx, r, 0, "")
+		readDone <- readResult{rec: rec, ver: ver, err: err}
+	}()
+	select {
+	case <-firstRead:
+	case <-time.After(2 * time.Second):
+		t.Fatal("secret read did not reach the snapshot hook")
+	}
+
+	writeDone := make(chan error, 1)
+	go func() {
+		_, _, err := writer.CreateSecretVersion(ctx, CreateSecretParams{
+			Ref: r, AccessTokenHash: []byte("hash-v2"), Encrypt: encryptStub(nil),
+		})
+		writeDone <- err
+	}()
+	var concurrentWriteErr error
+	writerCompleted := false
+	select {
+	case concurrentWriteErr = <-writeDone:
+		writerCompleted = true
+	case <-time.After(2 * time.Second):
+	}
+	close(resumeRead)
+
+	got := <-readDone
+	if got.err != nil {
+		t.Fatalf("GetSecretVersion: %v", got.err)
+	}
+	if string(got.rec.AccessTokenHash) != "hash-v1" || got.ver.Version != 1 {
+		t.Fatalf("read mixed snapshots: hash=%q version=%d, want hash-v1/version 1", got.rec.AccessTokenHash, got.ver.Version)
+	}
+	if !writerCompleted {
+		concurrentWriteErr = <-writeDone
+		t.Fatalf("read-only snapshot blocked the concurrent writer: %v", concurrentWriteErr)
+	}
+	if concurrentWriteErr != nil {
+		t.Fatalf("concurrent write inside read snapshot: %v", concurrentWriteErr)
+	}
+	latest, latestVersion, err := reader.GetSecretVersion(ctx, r, 0, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(latest.AccessTokenHash) != "hash-v2" || latestVersion.Version != 2 {
+		t.Fatalf("post-write read = hash %q/version %d, want hash-v2/version 2", latest.AccessTokenHash, latestVersion.Version)
+	}
+}
+
+func TestGetParameterReadsOneSnapshot(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "kms.db")
+	reader, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = reader.Close() })
+	ctx := context.Background()
+	seedNS(t, reader, "prod", "app")
+	r := ref("prod", "app", "snapshot-parameter")
+	if _, _, err := reader.PutParameter(ctx, r, "v1", "string", "{}", "test"); err != nil {
+		t.Fatal(err)
+	}
+
+	writer, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = writer.Close() })
+
+	firstRead := make(chan struct{})
+	resumeRead := make(chan struct{})
+	var pause sync.Once
+	if err := reader.db.Callback().Query().After("gorm:query").Register("test:pause_parameter_snapshot", func(db *gorm.DB) {
+		if db.Statement.Table == "parameters" {
+			pause.Do(func() {
+				close(firstRead)
+				<-resumeRead
+			})
+		}
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	type readResult struct {
+		parameter domain.Parameter
+		err       error
+	}
+	readDone := make(chan readResult, 1)
+	go func() {
+		parameter, err := reader.GetParameter(ctx, r, 0, "")
+		readDone <- readResult{parameter: parameter, err: err}
+	}()
+	select {
+	case <-firstRead:
+	case <-time.After(2 * time.Second):
+		t.Fatal("parameter read did not reach the snapshot hook")
+	}
+
+	writeDone := make(chan error, 1)
+	go func() {
+		_, _, err := writer.PutParameter(ctx, r, "v2", "string", "{}", "test")
+		writeDone <- err
+	}()
+	var concurrentWriteErr error
+	writerCompleted := false
+	select {
+	case concurrentWriteErr = <-writeDone:
+		writerCompleted = true
+	case <-time.After(2 * time.Second):
+	}
+	close(resumeRead)
+
+	got := <-readDone
+	if got.err != nil {
+		t.Fatalf("GetParameter: %v", got.err)
+	}
+	if got.parameter.Value != "v1" || got.parameter.Version != 1 {
+		t.Fatalf("read mixed snapshots: value=%q version=%d, want v1/version 1", got.parameter.Value, got.parameter.Version)
+	}
+	if !writerCompleted {
+		concurrentWriteErr = <-writeDone
+		t.Fatalf("read-only snapshot blocked the concurrent writer: %v", concurrentWriteErr)
+	}
+	if concurrentWriteErr != nil {
+		t.Fatalf("concurrent write inside read snapshot: %v", concurrentWriteErr)
+	}
+	latest, err := reader.GetParameter(ctx, r, 0, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if latest.Value != "v2" || latest.Version != 2 {
+		t.Fatalf("post-write read = %q/version %d, want v2/version 2", latest.Value, latest.Version)
 	}
 }
 
@@ -1588,9 +2185,9 @@ func TestAuditAppendListAndFilters(t *testing.T) {
 	ctx := context.Background()
 	base := time.Date(2026, 7, 1, 12, 0, 0, 0, time.UTC)
 	events := []domain.AuditEvent{
-		{EventType: "read", ActorIdentity: "alice", ResourceEnv: "prod", ResourceApp: "app", ResourceKey: "x", Decision: "allow", CreatedAt: base},
-		{EventType: "write", ActorIdentity: "bob", ResourceEnv: "prod", ResourceApp: "app", ResourceKey: "y", Decision: "allow", CreatedAt: base.Add(time.Second)},
-		{EventType: "read", ActorIdentity: "alice", ResourceEnv: "stage", ResourceApp: "app", ResourceKey: "z", Decision: "deny", CreatedAt: base.Add(2 * time.Second)},
+		{EventType: "read", ActorIdentity: "alice", ResourceNamespaceID: 42, ResourceEnv: "prod", ResourceApp: "app", ResourceKey: "x", Decision: "allow", CreatedAt: base},
+		{EventType: "write", ActorIdentity: "bob", ResourceNamespaceID: 42, ResourceEnv: "prod", ResourceApp: "app", ResourceKey: "y", Decision: "allow", CreatedAt: base.Add(time.Second)},
+		{EventType: "read", ActorIdentity: "alice", ResourceNamespaceID: 43, ResourceEnv: "stage", ResourceApp: "app", ResourceKey: "z", Decision: "deny", CreatedAt: base.Add(2 * time.Second)},
 	}
 	for _, e := range events {
 		if err := st.AppendAudit(ctx, e); err != nil {
@@ -1604,6 +2201,9 @@ func TestAuditAppendListAndFilters(t *testing.T) {
 	}
 	if len(all) != 3 || all[0].ResourceEnv != "stage" || all[0].ResourceKey != "z" {
 		t.Fatalf("audit order = %+v", all)
+	}
+	if all[0].ResourceNamespaceID != 43 {
+		t.Fatalf("audit namespace incarnation ID = %d, want 43", all[0].ResourceNamespaceID)
 	}
 	// namespace filter (env + app).
 	byNS, _, _ := st.ListAudit(ctx, domain.AuditFilter{Env: "prod", App: "app"}, ListPage{Limit: 100})
@@ -1869,6 +2469,27 @@ func TestSnapshotParameters(t *testing.T) {
 	}
 }
 
+func TestSnapshotParametersRequiresEveryBoundNamespacePair(t *testing.T) {
+	st := newStore(t)
+	existing := seedNS(t, st, "prod", "existing")
+	missing := nsRef("prod", "missing")
+	ctx, err := BindNamespaceIncarnation(context.Background(), existing.NamespaceRef, existing.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Even a malformed internal registration that reuses a real row ID for a
+	// different display name must not let one successful pair mask the missing
+	// pair during the set-based namespace resolution.
+	ctx, err = BindNamespaceIncarnation(ctx, missing, existing.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _, err = st.SnapshotParameters(ctx, []domain.NamespaceRef{existing.NamespaceRef, missing})
+	if !errors.Is(err, domain.ErrAborted) {
+		t.Fatalf("snapshot with one mismatched bound pair err = %v, want ErrAborted", err)
+	}
+}
+
 // TestSnapshotParametersSetBased exercises the set-based snapshot query against
 // the contract it must preserve: whole-namespace scope, label resolution, the
 // full labels map, omission of parameters lacking a "current" label or a
@@ -1996,6 +2617,15 @@ func TestBackup(t *testing.T) {
 	if err := st.Backup(ctx, dest); err != nil {
 		t.Fatal(err)
 	}
+	if runtime.GOOS != "windows" {
+		info, err := os.Stat(dest)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := info.Mode().Perm(); got != 0o600 {
+			t.Fatalf("backup mode = %o, want 600", got)
+		}
+	}
 	// backup must be a usable database with the data.
 	bk, err := Open(dest)
 	if err != nil {
@@ -2009,6 +2639,50 @@ func TestBackup(t *testing.T) {
 	// existing destination is refused.
 	err = st.Backup(ctx, dest)
 	mustErrIs(t, err, domain.ErrAlreadyExists, "backup over existing")
+}
+
+func TestBackupRefusesDanglingSymlinkDestination(t *testing.T) {
+	st := newStore(t)
+	dir := t.TempDir()
+	target := filepath.Join(dir, "attacker-target")
+	dest := filepath.Join(dir, "backup.db")
+	if err := os.Symlink(target, dest); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+
+	err := st.Backup(context.Background(), dest)
+	mustErrIs(t, err, domain.ErrAlreadyExists, "backup to dangling symlink")
+	if _, err := os.Stat(target); !os.IsNotExist(err) {
+		t.Fatalf("backup followed dangling symlink: %v", err)
+	}
+	if info, err := os.Lstat(dest); err != nil || info.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("backup destination symlink changed: info=%v err=%v", info, err)
+	}
+	if matches, err := filepath.Glob(filepath.Join(dir, ".kms-backup-*")); err != nil || len(matches) != 0 {
+		t.Fatalf("backup staging directories remain after refusal: %v (glob err %v)", matches, err)
+	}
+}
+
+func TestBackupRejectsSharedMutableParent(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows DACL rejection is covered by fileutil platform tests")
+	}
+	st := newStore(t)
+	root := t.TempDir()
+	dir := filepath.Join(root, "shared")
+	if err := os.Mkdir(dir, 0o777); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(dir, 0o777); err != nil {
+		t.Fatal(err)
+	}
+	dest := filepath.Join(dir, "backup.db")
+	if err := st.Backup(context.Background(), dest); err == nil {
+		t.Fatal("backup accepted a parent mutable by another account")
+	}
+	if _, err := os.Lstat(dest); !os.IsNotExist(err) {
+		t.Fatalf("unsafe backup path was created: %v", err)
+	}
 }
 
 func TestTimeRoundTripNanoseconds(t *testing.T) {

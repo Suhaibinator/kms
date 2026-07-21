@@ -155,6 +155,8 @@ func (s *fakeStore) CreateNamespace(_ context.Context, ns domain.Namespace) (dom
 		return domain.Namespace{}, domain.Errorf(domain.ErrAlreadyExists, "namespace %s", ns.NamespaceRef)
 	}
 	cp := ns
+	s.nextID++
+	cp.ID = s.nextID
 	s.namespaces[k] = &cp
 	s.nsOrder = append(s.nsOrder, k)
 	return cp, nil

@@ -56,7 +56,8 @@ The namespace can be set explicitly or discovered:
 
 ```python
 # Explicit — no discovery round trip.
-Client("host:8443", namespace="prod/gradethis", token="...")
+Client("host:8443", namespace="prod/gradethis", token="...",
+       tls=tls_from_files("server-ca.crt"))
 
 # Discovered — the client calls WhoAmI once and caches the result.
 Client("host:8443", tls=mtls_from_files("app.crt", "app.key", "server-ca.crt"))
@@ -91,7 +92,8 @@ or constructed and closed manually. `Client.__init__` parameters
 | `endpoint` | `host:port` of the server's gRPC listener. Required unless `channel` is supplied. First positional argument. |
 | `token` | Per-client identity token, sent as `authorization: Bearer <token>` on every RPC. **Optional** — an mTLS client certificate authenticates on its own, and a dev server may need no credential at all. When both a token and a cert are present, the token is still sent. Second positional argument, or keyword. |
 | `namespace` | The client's namespace as `"env/app"`. Keyword-only, `None` by default. When `None`, the namespace is discovered from the identity via `WhoAmI` on first use. A malformed string fails fast with `ConfigError` at construction. |
-| `tls` | `TLSConfig` (see below) or a raw `grpc.ChannelCredentials`. `None` (default) dials insecure — development only. |
+| `tls` | `TLSConfig` (see below) or a raw `grpc.ChannelCredentials`. When omitted, the client requires either `insecure=True` or a pre-built `channel`. |
+| `insecure` | Explicitly opts into a cleartext channel for local development. Defaults to `False` and is mutually exclusive with `tls`; never enable it across an untrusted network. |
 | `cache_ttl` | Seconds to cache `get_parameter`/`get_secret` reads; `0` (default) disables caching. Cache entries are invalidated by writes through the client and, once a subscription is active, by watch events. |
 | `timeout` | Default per-RPC deadline in seconds, used when a call doesn't pass its own `timeout`. Defaults to 5.0. Does not apply to the long-lived `Subscribe` stream. |
 | `client_name` | Identifies this client in the subscription registry (visible on the frontend's Subscribers page). Defaults to `os.path.basename(sys.argv[0])`. |
@@ -245,8 +247,15 @@ client_key=None)` (in-memory PEM bytes, e.g. from a secrets manager rather
 than a file). Supplying `cert`/`key` presents a client certificate, which is
 the recommended way to authenticate — `token` then becomes optional. The CA
 argument must trust the operator-provided **server** certificate; the built-in
-client CA returned by `admin ca show` is not a server trust root. With no
-`tls=`, the channel is insecure — development only.
+client CA returned by `admin ca show` is not a server trust root.
+
+Transport selection is fail-closed: with no `tls=`, construction raises
+`ConfigError` unless a pre-built `channel` is supplied or cleartext is explicitly
+enabled for local development:
+
+```python
+client = Client("localhost:8443", namespace="dev/app", insecure=True)
+```
 
 ## Declarative config: `SecretValue` and `ParameterValue`
 

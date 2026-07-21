@@ -157,6 +157,7 @@ CREATE TABLE audit_events (
     actor_identity   TEXT NOT NULL DEFAULT '',
     actor_type       TEXT NOT NULL DEFAULT '',
     resource_type    TEXT NOT NULL DEFAULT '',
+    resource_namespace_id INTEGER NOT NULL DEFAULT 0,
     resource_env     TEXT NOT NULL DEFAULT '',
     resource_app     TEXT NOT NULL DEFAULT '',
     resource_key     TEXT NOT NULL DEFAULT '',
@@ -171,13 +172,15 @@ CREATE TABLE audit_events (
 
 CREATE INDEX idx_audit_created ON audit_events(created_at);
 CREATE INDEX idx_audit_ns ON audit_events(resource_env, resource_app);
+CREATE INDEX idx_audit_namespace_id ON audit_events(resource_namespace_id);
 CREATE INDEX idx_audit_actor ON audit_events(actor_identity);
 
 -- change_log is the watch replay journal. AUTOINCREMENT guarantees revisions
 -- stay monotonic and are never reused even after pruning (sqlite_sequence).
 CREATE TABLE change_log (
     revision      INTEGER PRIMARY KEY AUTOINCREMENT,
-    resource_type TEXT NOT NULL,           -- 'parameter' | 'secret'
+    resource_type TEXT NOT NULL,           -- 'parameter' | 'secret' | 'configuration_release'
+    namespace_id  INTEGER NOT NULL DEFAULT 0,
     env           TEXT NOT NULL,
     app           TEXT NOT NULL,
     key           TEXT NOT NULL,
@@ -190,3 +193,4 @@ CREATE TABLE change_log (
 );
 
 CREATE INDEX idx_change_log_ns ON change_log(env, app);
+CREATE INDEX idx_change_log_namespace_revision ON change_log(namespace_id, revision);

@@ -62,7 +62,11 @@ func TestConfigurationReleaseCoreLifecycleAndHistoricalAck(t *testing.T) {
 	if err != nil || !changed {
 		t.Fatalf("activate2=%+v changed=%v err=%v", a2, changed, err)
 	}
-	err = svc.AcknowledgeConfigurationRelease(ctx, pr, domain.ReleaseAcknowledgement{Namespace: ns, ReleaseName: "runtime", ReleaseVersion: r1.Version, ActivationRevision: a1.ActivationRevision, ClientName: "api", InstanceID: "replica-1", State: domain.ReleaseStateRejected, RejectionCategory: domain.ReleaseRejectSuperseded, Diagnostic: "accidental-secret-value"})
+	const connectionID = "core-test-connection"
+	if err := svc.SetReleaseSubscriberConnected(ctx, ns, "runtime", "api", "replica-1", pr.Identity.Name, connectionID, true); err != nil {
+		t.Fatal(err)
+	}
+	err = svc.AcknowledgeConfigurationRelease(ctx, pr, domain.ReleaseAcknowledgement{Namespace: ns, ReleaseName: "runtime", ReleaseVersion: r1.Version, ActivationRevision: a1.ActivationRevision, ClientName: "api", InstanceID: "replica-1", ConnectionID: connectionID, State: domain.ReleaseStateRejected, RejectionCategory: domain.ReleaseRejectSuperseded, Diagnostic: "accidental-secret-value"})
 	if err != nil {
 		t.Fatalf("historical superseded acknowledgement: %v", err)
 	}
@@ -73,10 +77,13 @@ func TestConfigurationReleaseCoreLifecycleAndHistoricalAck(t *testing.T) {
 	if err != nil || len(acks) != 1 || acks[0].Diagnostic != "[redacted]" {
 		t.Fatalf("redacted acknowledgements=%+v err=%v", acks, err)
 	}
+	if acks[0].Identity != pr.Identity.Name {
+		t.Fatalf("acknowledgement identity = %q, want authenticated principal %q", acks[0].Identity, pr.Identity.Name)
+	}
 	if activeRevision != a2.ActivationRevision {
 		t.Fatalf("subscriber current revision=%d want active release revision %d", activeRevision, a2.ActivationRevision)
 	}
-	err = svc.AcknowledgeConfigurationRelease(ctx, pr, domain.ReleaseAcknowledgement{Namespace: ns, ReleaseName: "runtime", ReleaseVersion: r1.Version, ActivationRevision: a1.ActivationRevision + 999, ClientName: "api", InstanceID: "replica-1", State: domain.ReleaseStateRejected, RejectionCategory: domain.ReleaseRejectSuperseded})
+	err = svc.AcknowledgeConfigurationRelease(ctx, pr, domain.ReleaseAcknowledgement{Namespace: ns, ReleaseName: "runtime", ReleaseVersion: r1.Version, ActivationRevision: a1.ActivationRevision + 999, ClientName: "api", InstanceID: "replica-1", ConnectionID: connectionID, State: domain.ReleaseStateRejected, RejectionCategory: domain.ReleaseRejectSuperseded})
 	if !errors.Is(err, domain.ErrFailedPrecondition) {
 		t.Fatalf("fabricated revision err=%v", err)
 	}

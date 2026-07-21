@@ -11,6 +11,7 @@ import (
 // ReleaseRegistration is the immutable scope of one release stream.
 type ReleaseRegistration struct {
 	Namespace        domain.NamespaceRef
+	NamespaceID      int64
 	Name             string
 	ClientName       string
 	InstanceID       string
@@ -62,7 +63,8 @@ func (s *ReleaseSubscription) Close() {
 	s.closeOnce.Do(func() { s.mu.Lock(); s.closed = true; s.mu.Unlock(); close(s.done); s.hub.removeRelease(s.id) })
 }
 func (s *ReleaseSubscription) matches(e domain.ChangeLogEntry) bool {
-	return e.ResourceType == domain.ResourceConfigurationRelease && e.Ref.NS == s.reg.Namespace && e.Ref.Key == s.reg.Name
+	return e.ResourceType == domain.ResourceConfigurationRelease && e.Ref.NS == s.reg.Namespace && e.Ref.Key == s.reg.Name &&
+		s.reg.NamespaceID > 0 && e.NamespaceID == s.reg.NamespaceID
 }
 
 func (s *ReleaseSubscription) offer(e domain.ChangeLogEntry) {
@@ -113,6 +115,21 @@ func (h *Hub) SubscribeRelease(ctx context.Context, reg ReleaseRegistration) (*R
 	if !ok {
 		return nil, domain.Errorf(domain.ErrNotReady, "configuration release storage is unavailable")
 	}
+	if reg.NamespaceID <= 0 {
+		return nil, domain.Errorf(domain.ErrInvalidArgument, "namespace incarnation is required for %s", reg.Namespace)
+	}
+	var err error
+	ctx, err = storage.BindNamespaceIncarnation(ctx, reg.Namespace, reg.NamespaceID)
+	if err != nil {
+		return nil, err
+	}
+	current, err := h.store.GetNamespace(ctx, reg.Namespace)
+	if err != nil {
+		return nil, err
+	}
+	if current.ID != reg.NamespaceID {
+		return nil, domain.Errorf(domain.ErrAborted, "namespace %s changed during subscribe; retry", reg.Namespace)
+	}
 	sub := &ReleaseSubscription{hub: h, reg: reg, events: make(chan ReleaseEvent, 1), done: make(chan struct{})}
 	h.mu.Lock()
 	h.nextID++
@@ -156,6 +173,13 @@ func (h *Hub) computeReleaseBacklog(ctx context.Context, rs storage.ReleaseStore
 				}
 				cursor = e.Revision
 				if e.ResourceType != domain.ResourceConfigurationRelease || e.Ref.NS != reg.Namespace || e.Ref.Key != reg.Name {
+					continue
+				}
+				if e.NamespaceID == 0 {
+					canReplay = false
+					break
+				}
+				if e.NamespaceID != reg.NamespaceID {
 					continue
 				}
 				rel, err := rs.GetConfigurationRelease(ctx, reg.Namespace, reg.Name, e.Version)

@@ -67,7 +67,9 @@ func (c *CLI) cmdInit(args []string) int {
 		}); err != nil {
 			return c.fail("creating admin identity: %v", err)
 		}
-		printTokenOnce(c.Stdout, "admin identity", *admin, token)
+		if err := printTokenOnce(c.Stdout, "admin identity", *admin, token); err != nil {
+			return c.fail("writing one-time admin token: %v", err)
+		}
 	}
 	return 0
 }
@@ -187,12 +189,6 @@ func (c *CLI) cmdRestore(args []string) int {
 	if err := restoreFile(*in, *db, *force); err != nil {
 		return c.fail("%v", err)
 	}
-	// Validate by opening (and migrating) the restored copy.
-	store, err := storage.Open(*db)
-	if err != nil {
-		return c.fail("restored database failed to open: %v", err)
-	}
-	_ = store.Close()
 
 	_, _ = fmt.Fprintf(c.Stdout, "Restored %s from %s\n", *db, *in)
 	_, _ = fmt.Fprintln(c.Stdout, "Next steps: ensure the matching master key (file or passphrase) is available before starting the server.")
@@ -230,7 +226,9 @@ func (c *CLI) cmdCreateAdmin(args []string) int {
 	}); err != nil {
 		return c.fail("creating admin identity: %v", err)
 	}
-	printTokenOnce(c.Stdout, "admin identity", *name, token)
+	if err := printTokenOnce(c.Stdout, "admin identity", *name, token); err != nil {
+		return c.fail("writing one-time admin token: %v", err)
+	}
 	return 0
 }
 
@@ -330,10 +328,15 @@ func (c *CLI) buildNewKEK(newKeyFile string) (domain.KeyMetadata, []byte, error)
 // --- shared helpers --------------------------------------------------------
 
 // printTokenOnce prints a freshly minted token with a clear one-time warning.
-func printTokenOnce(w io.Writer, kind, name, token string) {
-	_, _ = fmt.Fprintf(w, "Created %s %q.\n", kind, name)
-	_, _ = fmt.Fprintf(w, "  token: %s\n", token)
-	_, _ = fmt.Fprintln(w, "  WARNING: this token is shown once and cannot be recovered. Store it securely.")
+func printTokenOnce(w io.Writer, kind, name, token string) error {
+	if _, err := fmt.Fprintf(w, "Created %s %q.\n", kind, name); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintf(w, "  token: %s\n", token); err != nil {
+		return err
+	}
+	_, err := fmt.Fprintln(w, "  WARNING: this token is shown once and cannot be recovered. Store it securely.")
+	return err
 }
 
 func fileExists(path string) bool {

@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Suhaibinator/kms/internal/domain"
 	"github.com/Suhaibinator/kms/internal/storage"
@@ -49,8 +50,8 @@ func TestMigrationsFreshAndIdempotent(t *testing.T) {
 	if err := db.QueryRow("SELECT MAX(version) FROM schema_migrations").Scan(&version); err != nil {
 		t.Fatalf("read schema_migrations: %v", err)
 	}
-	if version != 2 {
-		t.Errorf("schema version = %d, want 2", version)
+	if version != 6 {
+		t.Errorf("schema version = %d, want 6", version)
 	}
 
 	var ddl string
@@ -59,6 +60,20 @@ func TestMigrationsFreshAndIdempotent(t *testing.T) {
 	}
 	if !strings.Contains(strings.ToUpper(ddl), "AUTOINCREMENT") {
 		t.Errorf("change_log DDL missing AUTOINCREMENT: %q", ddl)
+	}
+	for _, column := range []struct{ table, name string }{
+		{"audit_events", "resource_namespace_id"},
+		{"change_log", "namespace_id"},
+		{"configuration_release_entries", "resource_namespace_id"},
+	} {
+		var count int
+		query := "SELECT COUNT(*) FROM pragma_table_info('" + column.table + "') WHERE name = ?"
+		if err := db.QueryRow(query, column.name).Scan(&count); err != nil {
+			t.Fatalf("inspect %s.%s: %v", column.table, column.name, err)
+		}
+		if count != 1 {
+			t.Errorf("expected physical column %s.%s", column.table, column.name)
+		}
 	}
 
 	// Every expected table exists (namespace-native schema: namespaces plus the
@@ -76,6 +91,369 @@ func TestMigrationsFreshAndIdempotent(t *testing.T) {
 		if err != nil {
 			t.Errorf("expected table %q to exist: %v", table, err)
 		}
+	}
+}
+
+// Schema v3 adds authenticated identity to the release-subscriber primary
+// keys. Existing lifecycle and connection rows must survive the SQLite table
+// rebuild, and a second identity must then be able to use the same client tuple
+// without overwriting the first.
+func TestMigrationV2ToV3ScopesReleaseSubscribersByIdentity(t *testing.T) {
+	ctx := context.Background()
+	dbPath := filepath.Join(t.TempDir(), "kms-v2.db")
+	store, err := storage.Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ns := domain.NamespaceRef{Env: "prod", App: "app"}
+	if _, err := store.CreateNamespace(ctx, domain.Namespace{NamespaceRef: ns}); err != nil {
+		t.Fatal(err)
+	}
+	at := time.Now().UTC()
+	if err := store.SetReleaseInstanceConnected(ctx, domain.ReleaseSubscriberConnection{
+		Namespace: ns, ReleaseName: "runtime", ClientName: "api", InstanceID: "replica-1",
+		Identity: "alice", ConnectionID: "alice-1", Connected: true, ServerTimestamp: at,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.UpsertReleaseAcknowledgement(ctx, domain.ReleaseAcknowledgement{
+		Namespace: ns, ReleaseName: "runtime", ReleaseVersion: 1, ActivationRevision: 7,
+		ClientName: "api", InstanceID: "replica-1", Identity: "alice", ConnectionID: "alice-1",
+		State: domain.ReleaseStateReceived, ClientTimestamp: at, ServerTimestamp: at,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	statements := []string{
+		`ALTER TABLE release_subscriber_states RENAME TO release_subscriber_states_v3_seed`,
+		`CREATE TABLE release_subscriber_states (
+			namespace_id INTEGER NOT NULL, release_name TEXT NOT NULL,
+			client_name TEXT NOT NULL, instance_id TEXT NOT NULL, state TEXT NOT NULL,
+			identity TEXT NOT NULL DEFAULT '', release_version INTEGER NOT NULL,
+			activation_revision INTEGER NOT NULL, rejection_category TEXT NOT NULL DEFAULT '',
+			diagnostic TEXT NOT NULL DEFAULT '', client_timestamp TEXT NOT NULL,
+			server_timestamp TEXT NOT NULL, connected INTEGER NOT NULL DEFAULT 0,
+			disconnected_at TEXT,
+			PRIMARY KEY (namespace_id, release_name, client_name, instance_id, state),
+			FOREIGN KEY (namespace_id) REFERENCES namespaces(id)
+		)`,
+		`INSERT INTO release_subscriber_states SELECT namespace_id, release_name,
+			client_name, instance_id, state, identity, release_version,
+			activation_revision, rejection_category, diagnostic, client_timestamp,
+			server_timestamp, connected, disconnected_at
+			FROM release_subscriber_states_v3_seed`,
+		`DROP TABLE release_subscriber_states_v3_seed`,
+		`ALTER TABLE release_subscriber_connections RENAME TO release_subscriber_connections_v3_seed`,
+		`CREATE TABLE release_subscriber_connections (
+			namespace_id INTEGER NOT NULL, release_name TEXT NOT NULL,
+			client_name TEXT NOT NULL, instance_id TEXT NOT NULL,
+			identity TEXT NOT NULL DEFAULT '', connection_id TEXT NOT NULL DEFAULT '',
+			connected INTEGER NOT NULL DEFAULT 0, connected_at TEXT NOT NULL,
+			disconnected_at TEXT, server_timestamp TEXT NOT NULL,
+			PRIMARY KEY (namespace_id, release_name, client_name, instance_id),
+			FOREIGN KEY (namespace_id) REFERENCES namespaces(id)
+		)`,
+		`INSERT INTO release_subscriber_connections SELECT namespace_id,
+			release_name, client_name, instance_id, identity, connection_id,
+			connected, connected_at, disconnected_at, server_timestamp
+			FROM release_subscriber_connections_v3_seed`,
+		`DROP TABLE release_subscriber_connections_v3_seed`,
+		`UPDATE schema_migrations SET version = 2`,
+	}
+	for _, statement := range statements {
+		if _, err := db.Exec(statement); err != nil {
+			_ = db.Close()
+			t.Fatalf("prepare v2 schema: %v", err)
+		}
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	upgraded, err := storage.Open(dbPath)
+	if err != nil {
+		t.Fatalf("upgrade v2 database: %v", err)
+	}
+	defer func() { _ = upgraded.Close() }()
+	if err := upgraded.SetReleaseInstanceConnected(ctx, domain.ReleaseSubscriberConnection{
+		Namespace: ns, ReleaseName: "runtime", ClientName: "api", InstanceID: "replica-1",
+		Identity: "bob", ConnectionID: "bob-1", Connected: true, ServerTimestamp: at.Add(time.Second),
+	}); err != nil {
+		t.Fatalf("second identity after migration: %v", err)
+	}
+	rows, _, err := upgraded.ListReleaseAcknowledgements(ctx, ns, "runtime", storage.ListPage{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	identities := make(map[string]bool, len(rows))
+	for _, row := range rows {
+		identities[row.Identity] = true
+	}
+	if !identities["alice"] || !identities["bob"] {
+		t.Fatalf("subscriber identities after migration = %v, rows=%+v", identities, rows)
+	}
+}
+
+// A current schema stamp is not proof that every physical table migration
+// completed. Repair either subscriber table independently when an interrupted
+// or manually restored database contains one stale v2 key.
+func TestMigrationRepairsPartialSubscriberSchemaDespiteCurrentStamp(t *testing.T) {
+	ctx := context.Background()
+	dbPath := filepath.Join(t.TempDir(), "kms-partial-v3.db")
+	store, err := storage.Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ns := domain.NamespaceRef{Env: "prod", App: "app"}
+	if _, err := store.CreateNamespace(ctx, domain.Namespace{NamespaceRef: ns}); err != nil {
+		t.Fatal(err)
+	}
+	at := time.Now().UTC()
+	if err := store.SetReleaseInstanceConnected(ctx, domain.ReleaseSubscriberConnection{
+		Namespace: ns, ReleaseName: "runtime", ClientName: "api", InstanceID: "replica-1",
+		Identity: "alice", ConnectionID: "alice-1", Connected: true, ServerTimestamp: at,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.UpsertReleaseAcknowledgement(ctx, domain.ReleaseAcknowledgement{
+		Namespace: ns, ReleaseName: "runtime", ReleaseVersion: 1, ActivationRevision: 7,
+		ClientName: "api", InstanceID: "replica-1", Identity: "alice", ConnectionID: "alice-1",
+		State: domain.ReleaseStateReceived, ClientTimestamp: at, ServerTimestamp: at,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	statements := []string{
+		`ALTER TABLE release_subscriber_states RENAME TO release_subscriber_states_v3_seed`,
+		`CREATE TABLE release_subscriber_states (
+			namespace_id INTEGER NOT NULL, release_name TEXT NOT NULL,
+			client_name TEXT NOT NULL, instance_id TEXT NOT NULL, state TEXT NOT NULL,
+			identity TEXT NOT NULL DEFAULT '', release_version INTEGER NOT NULL,
+			activation_revision INTEGER NOT NULL, rejection_category TEXT NOT NULL DEFAULT '',
+			diagnostic TEXT NOT NULL DEFAULT '', client_timestamp TEXT NOT NULL,
+			server_timestamp TEXT NOT NULL, connected INTEGER NOT NULL DEFAULT 0,
+			disconnected_at TEXT,
+			PRIMARY KEY (namespace_id, release_name, client_name, instance_id, state),
+			FOREIGN KEY (namespace_id) REFERENCES namespaces(id)
+		)`,
+		`INSERT INTO release_subscriber_states SELECT namespace_id, release_name,
+			client_name, instance_id, state, identity, release_version,
+			activation_revision, rejection_category, diagnostic, client_timestamp,
+			server_timestamp, connected, disconnected_at
+			FROM release_subscriber_states_v3_seed`,
+		`DROP TABLE release_subscriber_states_v3_seed`,
+	}
+	for _, statement := range statements {
+		if _, err := db.Exec(statement); err != nil {
+			_ = db.Close()
+			t.Fatalf("prepare partial schema: %v", err)
+		}
+	}
+	var version int
+	if err := db.QueryRow("SELECT MAX(version) FROM schema_migrations").Scan(&version); err != nil {
+		t.Fatal(err)
+	}
+	if version != 6 {
+		t.Fatalf("partial database schema stamp = %d, want current v6", version)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	repaired, err := storage.Open(dbPath)
+	if err != nil {
+		t.Fatalf("repair partial current-stamped database: %v", err)
+	}
+	defer func() { _ = repaired.Close() }()
+	if err := repaired.SetReleaseInstanceConnected(ctx, domain.ReleaseSubscriberConnection{
+		Namespace: ns, ReleaseName: "runtime", ClientName: "api", InstanceID: "replica-1",
+		Identity: "bob", ConnectionID: "bob-1", Connected: true, ServerTimestamp: at,
+	}); err != nil {
+		t.Fatalf("second identity connection after partial repair: %v", err)
+	}
+	if err := repaired.UpsertReleaseAcknowledgement(ctx, domain.ReleaseAcknowledgement{
+		Namespace: ns, ReleaseName: "runtime", ReleaseVersion: 1, ActivationRevision: 7,
+		ClientName: "api", InstanceID: "replica-1", Identity: "bob", ConnectionID: "bob-1",
+		State: domain.ReleaseStateReceived, ClientTimestamp: at, ServerTimestamp: at,
+	}); err != nil {
+		t.Fatalf("second identity after partial repair: %v", err)
+	}
+	rows, _, err := repaired.ListReleaseAcknowledgements(ctx, ns, "runtime", storage.ListPage{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	identities := make(map[string]bool, len(rows))
+	for _, row := range rows {
+		identities[row.Identity] = true
+	}
+	if !identities["alice"] || !identities["bob"] {
+		t.Fatalf("subscriber identities after partial repair = %v, rows=%+v", identities, rows)
+	}
+}
+
+func TestMigrationRepairsConnectionOnlyStaleKey(t *testing.T) {
+	ctx := context.Background()
+	dbPath := filepath.Join(t.TempDir(), "kms-stale-connection.db")
+	store, err := storage.Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ns := domain.NamespaceRef{Env: "prod", App: "app"}
+	if _, err := store.CreateNamespace(ctx, domain.Namespace{NamespaceRef: ns}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, statement := range []string{
+		`ALTER TABLE release_subscriber_connections RENAME TO release_subscriber_connections_v3_seed`,
+		`CREATE TABLE release_subscriber_connections (
+			namespace_id INTEGER NOT NULL, release_name TEXT NOT NULL,
+			client_name TEXT NOT NULL, instance_id TEXT NOT NULL,
+			identity TEXT NOT NULL DEFAULT '', connection_id TEXT NOT NULL DEFAULT '',
+			connected INTEGER NOT NULL DEFAULT 0, connected_at TEXT NOT NULL,
+			disconnected_at TEXT, server_timestamp TEXT NOT NULL,
+			PRIMARY KEY (namespace_id, release_name, client_name, instance_id),
+			FOREIGN KEY (namespace_id) REFERENCES namespaces(id)
+		)`,
+		`INSERT INTO release_subscriber_connections SELECT namespace_id, release_name,
+			client_name, instance_id, identity, connection_id, connected,
+			connected_at, disconnected_at, server_timestamp
+			FROM release_subscriber_connections_v3_seed`,
+		`DROP TABLE release_subscriber_connections_v3_seed`,
+	} {
+		if _, err := db.Exec(statement); err != nil {
+			_ = db.Close()
+			t.Fatalf("prepare stale connection table: %v", err)
+		}
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	repaired, err := storage.Open(dbPath)
+	if err != nil {
+		t.Fatalf("repair connection-only stale key: %v", err)
+	}
+	defer func() { _ = repaired.Close() }()
+	at := time.Now().UTC()
+	for _, identity := range []string{"alice", "bob"} {
+		if err := repaired.SetReleaseInstanceConnected(ctx, domain.ReleaseSubscriberConnection{
+			Namespace: ns, ReleaseName: "runtime", ClientName: "api", InstanceID: "replica-1",
+			Identity: identity, ConnectionID: identity + "-1", Connected: true, ServerTimestamp: at,
+		}); err != nil {
+			t.Fatalf("connect %s after repair: %v", identity, err)
+		}
+	}
+	rows, _, err := repaired.ListReleaseAcknowledgements(ctx, ns, "runtime", storage.ListPage{})
+	if err != nil || len(rows) != 2 {
+		t.Fatalf("connection identities after repair = %+v err=%v, want two", rows, err)
+	}
+}
+
+func TestMigrationRecreatesOneMissingSubscriberTable(t *testing.T) {
+	ctx := context.Background()
+	dbPath := filepath.Join(t.TempDir(), "kms-missing-connection.db")
+	store, err := storage.Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ns := domain.NamespaceRef{Env: "prod", App: "app"}
+	if _, err := store.CreateNamespace(ctx, domain.Namespace{NamespaceRef: ns}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`DROP TABLE release_subscriber_connections`); err != nil {
+		_ = db.Close()
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	repaired, err := storage.Open(dbPath)
+	if err != nil {
+		t.Fatalf("recreate missing connection table: %v", err)
+	}
+	defer func() { _ = repaired.Close() }()
+	if err := repaired.SetReleaseInstanceConnected(ctx, domain.ReleaseSubscriberConnection{
+		Namespace: ns, ReleaseName: "runtime", ClientName: "api", InstanceID: "replica-1",
+		Identity: "alice", ConnectionID: "alice-1", Connected: true, ServerTimestamp: time.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("use recreated connection table: %v", err)
+	}
+}
+
+func TestMigrationV3ToV4AddsAuditNamespaceIncarnation(t *testing.T) {
+	ctx := context.Background()
+	dbPath := filepath.Join(t.TempDir(), "kms-v3-audit.db")
+	store, err := storage.Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.AppendAudit(ctx, domain.AuditEvent{EventType: "legacy", ResourceType: domain.ResourceParameter}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, statement := range []string{
+		`DROP INDEX idx_audit_namespace_id`,
+		`ALTER TABLE audit_events DROP COLUMN resource_namespace_id`,
+		`UPDATE schema_migrations SET version = 3`,
+	} {
+		if _, err := db.Exec(statement); err != nil {
+			_ = db.Close()
+			t.Fatalf("prepare v3 audit schema: %v", err)
+		}
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	upgraded, err := storage.Open(dbPath)
+	if err != nil {
+		t.Fatalf("upgrade v3 audit schema: %v", err)
+	}
+	defer func() { _ = upgraded.Close() }()
+	if err := upgraded.AppendAudit(ctx, domain.AuditEvent{EventType: "current", ResourceType: domain.ResourceParameter, ResourceNamespaceID: 77}); err != nil {
+		t.Fatal(err)
+	}
+	rows, _, err := upgraded.ListAudit(ctx, domain.AuditFilter{}, storage.ListPage{})
+	if err != nil || len(rows) != 2 {
+		t.Fatalf("audit rows after v4 migration = %+v err=%v", rows, err)
+	}
+	if rows[0].ResourceNamespaceID != 77 || rows[1].ResourceNamespaceID != 0 {
+		t.Fatalf("audit incarnation IDs after v4 migration = [%d %d], want [77 0]", rows[0].ResourceNamespaceID, rows[1].ResourceNamespaceID)
 	}
 }
 
