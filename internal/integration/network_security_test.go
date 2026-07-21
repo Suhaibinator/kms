@@ -604,6 +604,7 @@ func mustNetworkTLSCertificate(t *testing.T, bundle *kmsv1.CertBundle) tls.Certi
 	block, _ := pem.Decode([]byte(bundle.GetCertPem()))
 	if block == nil {
 		t.Fatal("client certificate PEM is empty")
+		return tls.Certificate{}
 	}
 	pair.Leaf, err = x509.ParseCertificate(block.Bytes)
 	if err != nil {
