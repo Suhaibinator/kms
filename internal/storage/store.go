@@ -94,8 +94,8 @@ func ValidateKMSDatabase(path string) error {
 	if err != nil {
 		return fmt.Errorf("resolve database path %q: %w", path, err)
 	}
-	u := url.URL{Scheme: "file", Path: abs}
-	db, err := gorm.Open(sqlite.Open(u.String()+"?mode=ro&_pragma=query_only(1)"), &gorm.Config{
+	databaseURI := sqliteFileURI(filepath.ToSlash(abs))
+	db, err := gorm.Open(sqlite.Open(databaseURI+"?mode=ro&_pragma=query_only(1)"), &gorm.Config{
 		Logger:                 logger.Default.LogMode(logger.Silent),
 		SkipDefaultTransaction: true,
 	})
@@ -173,10 +173,10 @@ func OpenWithOptions(path string, opts Options) (*SQLStore, error) {
 	// writer acquires the write lock up front. This prevents WAL stale-snapshot
 	// conflicts between concurrent read-then-write transactions (e.g. two
 	// PutParameter calls racing to assign the next version).
-	databaseURL := url.URL{Scheme: "file", Path: filepath.ToSlash(absPath)}
+	databaseURI := sqliteFileURI(filepath.ToSlash(absPath))
 	dsn := fmt.Sprintf(
 		"%s?_txlock=immediate&_pragma=busy_timeout(%d)&_pragma=foreign_keys(1)&_pragma=journal_mode(WAL)&_pragma=synchronous(%s)",
-		databaseURL.String(), busy.Milliseconds(), sync,
+		databaseURI, busy.Milliseconds(), sync,
 	)
 	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{
 		Logger:                 logger.Default.LogMode(logger.Silent),
@@ -193,6 +193,27 @@ func OpenWithOptions(path string, opts Options) (*SQLStore, error) {
 		return nil, err
 	}
 	return s, nil
+}
+
+// sqliteFileURI returns a SQLite file URI for an absolute path whose directory
+// separators have already been normalized to slashes. A Windows drive path is
+// an absolute URI path, not an authority: C:/kms.db must therefore become
+// file:///C:/kms.db (empty host), never file://C:/kms.db (host "C:").
+// url.URL performs the required escaping so literal ?, #, and % bytes in a
+// filename cannot be reinterpreted as URI query, fragment, or escape syntax.
+func sqliteFileURI(slashPath string) string {
+	if isWindowsDriveSlashPath(slashPath) {
+		slashPath = "/" + slashPath
+	}
+	return (&url.URL{Scheme: "file", Path: slashPath}).String()
+}
+
+func isWindowsDriveSlashPath(path string) bool {
+	if len(path) < 3 || path[1] != ':' || path[2] != '/' {
+		return false
+	}
+	drive := path[0]
+	return drive >= 'A' && drive <= 'Z' || drive >= 'a' && drive <= 'z'
 }
 
 func (s *SQLStore) migrate() error {
