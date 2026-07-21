@@ -3,10 +3,10 @@ package fileutil
 import "os"
 
 // RestrictOwnerOnly removes inherited broad access from an already-open file
-// or directory. On POSIX this applies 0600/0700; on Windows it installs a
-// protected DACL granting full access only to the process user. Call it before
-// writing sensitive content so inherited parent permissions never create an
-// exposure window.
+// or directory. On POSIX this applies 0600/0700; on Windows it sets the owner
+// to the process user and installs a protected DACL granting full access only
+// to that user. Call it before writing sensitive content so inherited parent
+// permissions never create an exposure window.
 func RestrictOwnerOnly(file *os.File, directory bool) error {
 	return restrictOwnerOnly(file, directory)
 }

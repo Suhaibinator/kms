@@ -26,7 +26,7 @@ func requireCurrentUserOwner(file *os.File) error {
 	if err != nil {
 		return err
 	}
-	if owner == nil || !owner.Equals(user.User.Sid) {
+	if !isCurrentWindowsUserOwner(owner, user.User.Sid) {
 		ownerName := "<none>"
 		if owner != nil {
 			ownerName = owner.String()
@@ -34,4 +34,8 @@ func requireCurrentUserOwner(file *os.File) error {
 		return fmt.Errorf("file is owned by %s, current user is %s", ownerName, user.User.Sid.String())
 	}
 	return nil
+}
+
+func isCurrentWindowsUserOwner(owner, user *windows.SID) bool {
+	return owner != nil && user != nil && owner.Equals(user)
 }

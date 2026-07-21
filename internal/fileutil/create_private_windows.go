@@ -19,7 +19,8 @@ func privateSecurityAttributes(directory bool) (*windows.SecurityAttributes, *wi
 	if directory {
 		inherit = "OICI"
 	}
-	sd, err := windows.SecurityDescriptorFromString("D:P(A;" + inherit + ";GA;;;" + user.User.Sid.String() + ")")
+	userSID := user.User.Sid.String()
+	sd, err := windows.SecurityDescriptorFromString("O:" + userSID + "D:P(A;" + inherit + ";GA;;;" + userSID + ")")
 	if err != nil {
 		return nil, nil, err
 	}

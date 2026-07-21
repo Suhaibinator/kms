@@ -7,6 +7,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -129,12 +130,14 @@ func TestWriteKEKMaterialFile(t *testing.T) {
 	if len(material) != keySize {
 		t.Fatalf("material len = %d, want %d", len(material), keySize)
 	}
-	info, err := os.Stat(p)
-	if err != nil {
-		t.Fatalf("stat: %v", err)
-	}
-	if perm := info.Mode().Perm(); perm != 0o600 {
-		t.Fatalf("perm = %o, want 600", perm)
+	if runtime.GOOS != "windows" {
+		info, err := os.Stat(p)
+		if err != nil {
+			t.Fatalf("stat: %v", err)
+		}
+		if perm := info.Mode().Perm(); perm != 0o600 {
+			t.Fatalf("perm = %o, want 600", perm)
+		}
 	}
 	// File round-trips back to the same material (stored as hex).
 	loaded, err := LoadKEKMaterialFromFile(p)

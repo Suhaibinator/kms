@@ -68,12 +68,12 @@ func requireStableWindowsChain(path string, allowTrustedReparse bool) error {
 		}
 		var fileInfo windows.ByHandleFileInformation
 		if err := windows.GetFileInformationByHandle(handle, &fileInfo); err != nil {
-			windows.CloseHandle(handle)
+			_ = windows.CloseHandle(handle)
 			return fmt.Errorf("inspect exact path component %s: %w", current, err)
 		}
 		isReparse := fileInfo.FileAttributes&windows.FILE_ATTRIBUTE_REPARSE_POINT != 0
 		if !allowTrustedReparse && isReparse {
-			windows.CloseHandle(handle)
+			_ = windows.CloseHandle(handle)
 			return fmt.Errorf("resolved path component %s became a reparse point", current)
 		}
 		sd, err := windows.GetSecurityInfo(
@@ -81,7 +81,9 @@ func requireStableWindowsChain(path string, allowTrustedReparse bool) error {
 			windows.SE_FILE_OBJECT,
 			windows.OWNER_SECURITY_INFORMATION|windows.DACL_SECURITY_INFORMATION,
 		)
-		windows.CloseHandle(handle)
+		if closeErr := windows.CloseHandle(handle); closeErr != nil {
+			return fmt.Errorf("close exact path component %s: %w", current, closeErr)
+		}
 		if err != nil {
 			return fmt.Errorf("inspect DACL on exact path component %s: %w", current, err)
 		}

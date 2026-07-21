@@ -3,11 +3,9 @@
 package fileutil
 
 import (
-	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"golang.org/x/sys/windows"
@@ -106,7 +104,11 @@ func TestRequireStableParentInspectsReparseEntryDACL(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer windows.CloseHandle(handle)
+	defer func() {
+		if err := windows.CloseHandle(handle); err != nil {
+			t.Errorf("close reparse-point handle: %v", err)
+		}
+	}()
 	user, err := windows.GetCurrentProcessToken().GetTokenUser()
 	if err != nil {
 		t.Fatal(err)
@@ -148,11 +150,7 @@ func TestRequireStableParentInspectsReparseEntryDACL(t *testing.T) {
 // invariant without making privilege availability a reason to skip.
 func createTestDirectoryJunction(t *testing.T, target, link string) {
 	t.Helper()
-	if strings.ContainsAny(target+link, "\"%\r\n") {
-		t.Fatalf("temporary reparse-point path cannot be safely passed to cmd.exe: target=%q link=%q", target, link)
-	}
-	command := fmt.Sprintf(`mklink /J "%s" "%s"`, link, target)
-	out, err := exec.Command("cmd.exe", "/d", "/v:off", "/s", "/c", command).CombinedOutput()
+	out, err := exec.Command("cmd", "/c", "mklink", "/J", link, target).CombinedOutput()
 	if err != nil {
 		t.Fatalf("create test directory junction: %v: %s", err, out)
 	}
