@@ -3,12 +3,14 @@ package core
 import (
 	"bytes"
 	"encoding/base64"
+	"errors"
 	"strings"
 	"testing"
 
 	"go.uber.org/zap"
 
 	"github.com/Suhaibinator/kms/internal/crypto"
+	"github.com/Suhaibinator/kms/internal/domain"
 )
 
 func TestFilteredCursorIsFixedLengthAndSurvivesServiceRestart(t *testing.T) {
@@ -96,5 +98,60 @@ func TestFilteredCursorRequiresReferencedKEKToRemainLoadedAfterRotation(t *testi
 	newOnly.SetKeyring(crypto.NewKeyring(newOnlyKEK))
 	if _, err := newOnly.openFilteredCursor(token, "namespace", "scope"); err == nil {
 		t.Fatal("pre-rotation cursor opened without its referenced KEK")
+	}
+}
+
+func TestFilteredCursorRejectsEveryEnvelopeMutation(t *testing.T) {
+	svc := New(newFakeStore(), zap.NewNop(), "test")
+	token, err := svc.sealFilteredCursor("namespaces", "caller-scope", "raw-storage-cursor")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if opened, err := svc.openFilteredCursor(token, "namespaces", "caller-scope"); err != nil || opened != "raw-storage-cursor" {
+		t.Fatalf("unmodified cursor = %q, %v", opened, err)
+	}
+
+	sealed, err := base64.RawURLEncoding.DecodeString(token)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := range sealed {
+		mutated := append([]byte(nil), sealed...)
+		mutated[i] ^= 1
+		mutatedToken := base64.RawURLEncoding.EncodeToString(mutated)
+		if _, err := svc.openFilteredCursor(mutatedToken, "namespaces", "caller-scope"); !errors.Is(err, domain.ErrInvalidArgument) {
+			t.Fatalf("mutating envelope byte %d returned %v, want ErrInvalidArgument", i, err)
+		}
+	}
+}
+
+func TestFilteredCursorIsBoundToExactCallerScope(t *testing.T) {
+	svc := New(newFakeStore(), zap.NewNop(), "test")
+	alice := Principal{Identity: domain.Identity{ID: 7, Name: "alice"}, Method: domain.AuthMethodToken}
+	token, err := svc.sealFilteredCursor("audit", filteredCursorScope(alice, map[string]string{"env": "prod"}), "raw-storage-cursor")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	tests := []struct {
+		name      string
+		principal Principal
+	}{
+		{name: "different identity name", principal: Principal{Identity: domain.Identity{ID: 7, Name: "mallory"}, Method: domain.AuthMethodToken}},
+		{name: "different identity row", principal: Principal{Identity: domain.Identity{ID: 8, Name: "alice"}, Method: domain.AuthMethodToken}},
+		{name: "different authentication method", principal: Principal{Identity: domain.Identity{ID: 7, Name: "alice"}, Method: domain.AuthMethodMTLS}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			scope := filteredCursorScope(tt.principal, map[string]string{"env": "prod"})
+			if _, err := svc.openFilteredCursor(token, "audit", scope); !errors.Is(err, domain.ErrInvalidArgument) {
+				t.Fatalf("cross-scope cursor error = %v, want ErrInvalidArgument", err)
+			}
+		})
+	}
+
+	otherFilter := filteredCursorScope(alice, map[string]string{"env": "stage"})
+	if _, err := svc.openFilteredCursor(token, "audit", otherFilter); !errors.Is(err, domain.ErrInvalidArgument) {
+		t.Fatalf("cross-filter cursor error = %v, want ErrInvalidArgument", err)
 	}
 }

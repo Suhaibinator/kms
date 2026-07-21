@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"testing"
 
 	kmsv1 "github.com/Suhaibinator/kms/gen/kmsv1"
@@ -201,6 +202,63 @@ func TestWithReservedCertBundleRejectsCollisionBeforeUse(t *testing.T) {
 	}
 	if info, err := os.Stat(filepath.Join(dir, "svc.crt")); err != nil || info.Size() != 0 {
 		t.Fatalf("safe empty certificate reservation = %+v, %v", info, err)
+	}
+}
+
+func TestReserveCertBundleConcurrentCallersExactlyOneOwnsPair(t *testing.T) {
+	dir := t.TempDir()
+	const callers = 16
+	type result struct {
+		output *reservedCertBundle
+		err    error
+	}
+	start := make(chan struct{})
+	results := make(chan result, callers)
+	var wg sync.WaitGroup
+	for i := 0; i < callers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			output, err := reserveCertBundle(dir, "svc")
+			results <- result{output: output, err: err}
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(results)
+
+	var winner *reservedCertBundle
+	for got := range results {
+		switch {
+		case got.err == nil && got.output != nil:
+			if winner != nil {
+				t.Fatal("more than one caller acquired the one-time certificate pair")
+			}
+			winner = got.output
+		case errors.Is(got.err, os.ErrExist) && got.output == nil:
+			// Expected: all later callers observe the existing reservation.
+		default:
+			t.Fatalf("unexpected reservation result: output=%v err=%v", got.output, got.err)
+		}
+	}
+	if winner == nil {
+		t.Fatal("no concurrent caller acquired the certificate pair")
+	}
+	defer winner.cleanup()
+	assertReservedFileOwnsPath(t, winner.certFile, winner.certPath)
+	assertReservedFileOwnsPath(t, winner.keyFile, winner.keyPath)
+
+	c := newTestCLI()
+	bundle := testCertBundle()
+	if err := c.writeCertBundleToOutput(winner, bundle); err != nil {
+		t.Fatal(err)
+	}
+	if got := readFileString(t, winner.certPath); got != bundle.CertPem {
+		t.Fatalf("winning certificate reservation = %q", got)
+	}
+	if got := readFileString(t, winner.keyPath); got != bundle.KeyPem {
+		t.Fatalf("winning private-key reservation = %q", got)
 	}
 }
 

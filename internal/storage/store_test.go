@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -929,6 +930,133 @@ func TestCreateSecretVersionRejectsStaleExpectation(t *testing.T) {
 	}
 	if len(info.Versions) != 3 {
 		t.Fatalf("version count = %d, want 3 successful writes only", len(info.Versions))
+	}
+}
+
+func TestCreateSecretVersionConcurrentExpectedAbsentOnlyOneWins(t *testing.T) {
+	st := newStore(t)
+	ctx := context.Background()
+	seedNS(t, st, "prod", "app")
+	r := ref("prod", "app", "concurrent-create")
+
+	type result struct {
+		version uint64
+		err     error
+	}
+	start := make(chan struct{})
+	results := make(chan result, 2)
+	var wg sync.WaitGroup
+	for i := 0; i < 2; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			version, _, err := st.CreateSecretVersion(ctx, CreateSecretParams{
+				Ref:         r,
+				ClientBound: true,
+				Expected:    &SecretWriteExpectation{Exists: false},
+				Encrypt:     encryptStub(nil),
+			})
+			results <- result{version: version, err: err}
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(results)
+
+	var succeeded, conflicted int
+	for got := range results {
+		switch {
+		case got.err == nil && got.version == 1:
+			succeeded++
+		case errors.Is(got.err, domain.ErrAborted):
+			conflicted++
+		default:
+			t.Fatalf("unexpected concurrent create result: version=%d err=%v", got.version, got.err)
+		}
+	}
+	if succeeded != 1 || conflicted != 1 {
+		t.Fatalf("concurrent creates succeeded=%d conflicted=%d, want 1/1", succeeded, conflicted)
+	}
+	info, err := st.GetSecretInfo(ctx, r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(info.Versions) != 1 || info.Labels[domain.LabelCurrent] != 1 {
+		t.Fatalf("concurrent create persisted %+v, want exactly version 1", info)
+	}
+}
+
+func TestCreateSecretVersionConcurrentTokenRotationsOnlyOneWins(t *testing.T) {
+	st := newStore(t)
+	ctx := context.Background()
+	seedNS(t, st, "prod", "app")
+	r := ref("prod", "app", "concurrent-rotation")
+	oldHash := []byte("hash-v1")
+	if _, _, err := st.CreateSecretVersion(ctx, CreateSecretParams{
+		Ref: r, ClientBound: true, AccessTokenHash: oldHash, Encrypt: encryptStub(nil),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	rec, err := st.GetSecretRecord(ctx, r)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	type result struct {
+		hash []byte
+		err  error
+	}
+	start := make(chan struct{})
+	results := make(chan result, 2)
+	var wg sync.WaitGroup
+	for i := 0; i < 2; i++ {
+		newHash := []byte(fmt.Sprintf("hash-v%d", i+2))
+		wg.Add(1)
+		go func(newHash []byte) {
+			defer wg.Done()
+			<-start
+			_, _, err := st.CreateSecretVersion(ctx, CreateSecretParams{
+				Ref: r, ClientBound: true, AccessTokenHash: newHash,
+				Expected: &SecretWriteExpectation{Exists: true, ID: rec.ID, AccessTokenHash: oldHash},
+				Encrypt:  encryptStub(nil),
+			})
+			results <- result{hash: newHash, err: err}
+		}(newHash)
+	}
+	close(start)
+	wg.Wait()
+	close(results)
+
+	var winnerHash []byte
+	var succeeded, conflicted int
+	for got := range results {
+		switch {
+		case got.err == nil:
+			succeeded++
+			winnerHash = got.hash
+		case errors.Is(got.err, domain.ErrAborted):
+			conflicted++
+		default:
+			t.Fatalf("unexpected concurrent rotation error: %v", got.err)
+		}
+	}
+	if succeeded != 1 || conflicted != 1 {
+		t.Fatalf("concurrent rotations succeeded=%d conflicted=%d, want 1/1", succeeded, conflicted)
+	}
+	latest, err := st.GetSecretRecord(ctx, r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(latest.AccessTokenHash, winnerHash) {
+		t.Fatalf("persisted token hash = %q, want winning hash %q", latest.AccessTokenHash, winnerHash)
+	}
+	info, err := st.GetSecretInfo(ctx, r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(info.Versions) != 2 || info.Labels[domain.LabelCurrent] != 2 {
+		t.Fatalf("concurrent rotations persisted %+v, want versions 1 and 2 only", info)
 	}
 }
 
