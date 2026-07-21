@@ -17,6 +17,17 @@ const (
 )
 
 func requireStableDirectoryChain(path string) error {
+	return requireStableWindowsChain(path, false)
+}
+
+func requireStablePathSpelling(path string) error {
+	// Inspect each caller-visible component through an exact reparse-point
+	// handle. Named security queries may follow a junction/symlink and report
+	// only its target, leaving the mutable entry itself unchecked.
+	return requireStableWindowsChain(path, true)
+}
+
+func requireStableWindowsChain(path string, allowTrustedReparse bool) error {
 	user, err := windows.GetCurrentProcessToken().GetTokenUser()
 	if err != nil {
 		return err
@@ -34,13 +45,39 @@ func requireStableDirectoryChain(path string) error {
 	}
 
 	for _, current := range stablePathChain(path) {
-		sd, err := windows.GetNamedSecurityInfo(
-			extendedWindowsPath(current),
+		name, err := windows.UTF16PtrFromString(extendedWindowsPath(current))
+		if err != nil {
+			return err
+		}
+		handle, err := windows.CreateFile(
+			name,
+			windows.READ_CONTROL,
+			windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE|windows.FILE_SHARE_DELETE,
+			nil,
+			windows.OPEN_EXISTING,
+			windows.FILE_FLAG_BACKUP_SEMANTICS|windows.FILE_FLAG_OPEN_REPARSE_POINT,
+			0,
+		)
+		if err != nil {
+			return fmt.Errorf("open exact path component %s: %w", current, err)
+		}
+		var fileInfo windows.ByHandleFileInformation
+		if err := windows.GetFileInformationByHandle(handle, &fileInfo); err != nil {
+			windows.CloseHandle(handle)
+			return fmt.Errorf("inspect exact path component %s: %w", current, err)
+		}
+		if !allowTrustedReparse && fileInfo.FileAttributes&windows.FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+			windows.CloseHandle(handle)
+			return fmt.Errorf("resolved path component %s became a reparse point", current)
+		}
+		sd, err := windows.GetSecurityInfo(
+			handle,
 			windows.SE_FILE_OBJECT,
 			windows.OWNER_SECURITY_INFORMATION|windows.DACL_SECURITY_INFORMATION,
 		)
+		windows.CloseHandle(handle)
 		if err != nil {
-			return fmt.Errorf("inspect DACL on %s: %w", current, err)
+			return fmt.Errorf("inspect DACL on exact path component %s: %w", current, err)
 		}
 		owner, _, err := sd.Owner()
 		if err != nil {
@@ -84,10 +121,4 @@ func requireStableDirectoryChain(path string) error {
 		}
 	}
 	return nil
-}
-
-func requireStablePathSpelling(path string) error {
-	// Inspect the caller-visible chain before resolving reparse points, then the
-	// canonical target chain is inspected separately by ResolveStablePath.
-	return requireStableDirectoryChain(path)
 }
