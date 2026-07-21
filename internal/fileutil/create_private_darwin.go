@@ -19,7 +19,7 @@ func openPrivateExclusive(path string) (*os.File, error) {
 	return file, nil
 }
 
-func mkdirPrivateExclusive(path string) error {
+func mkdirPrivateExclusive(path string) (retErr error) {
 	if err := os.Mkdir(path, 0o700); err != nil {
 		return err
 	}
@@ -27,7 +27,11 @@ func mkdirPrivateExclusive(path string) error {
 	if err != nil {
 		return fmt.Errorf("open private directory %s: %w", path, err)
 	}
-	defer dir.Close()
+	defer func() {
+		if err := dir.Close(); err != nil && retErr == nil {
+			retErr = fmt.Errorf("close private directory %s: %w", path, err)
+		}
+	}()
 	if err := restrictOwnerOnly(dir, true); err != nil {
 		return fmt.Errorf("secure private directory %s: %w", path, err)
 	}

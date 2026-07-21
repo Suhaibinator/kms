@@ -11,7 +11,7 @@ import (
 // rejected rather than repaired: changing an ACL cannot revoke a handle that
 // another account may already have opened. The exact opened inode is verified
 // against the inspected directory entry before and after normalization.
-func SecureExistingPrivateFile(path string) (string, error) {
+func SecureExistingPrivateFile(path string) (securedPath string, retErr error) {
 	stablePath, err := ResolveStablePath(path)
 	if err != nil {
 		return "", err
@@ -27,7 +27,12 @@ func SecureExistingPrivateFile(path string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	defer file.Close()
+	defer func() {
+		if err := file.Close(); err != nil && retErr == nil {
+			securedPath = ""
+			retErr = fmt.Errorf("close secured private file %s: %w", path, err)
+		}
+	}()
 
 	opened, err := file.Stat()
 	if err != nil {

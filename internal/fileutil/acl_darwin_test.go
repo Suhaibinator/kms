@@ -32,7 +32,11 @@ func TestRestrictOwnerOnlyRemovesDarwinACLByDescriptor(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer file.Close()
+	t.Cleanup(func() {
+		if err := file.Close(); err != nil {
+			t.Errorf("close ACL test file: %v", err)
+		}
+	})
 	addDarwinTestACL(t, path, "everyone allow read")
 	before, err := darwinACLLines(path)
 	if err != nil {

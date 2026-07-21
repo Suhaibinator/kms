@@ -48,8 +48,14 @@ func TestCreatePrivateTempUsesPrefixAndOwnerOnlyMode(t *testing.T) {
 		t.Fatalf("CreatePrivateTemp: %v", err)
 	}
 	path := file.Name()
-	defer os.Remove(path)
-	defer file.Close()
+	t.Cleanup(func() {
+		if err := file.Close(); err != nil {
+			t.Errorf("close private temporary file: %v", err)
+		}
+		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("remove private temporary file: %v", err)
+		}
+	})
 	resolvedDir, err := filepath.EvalSymlinks(dir)
 	if err != nil {
 		t.Fatal(err)
