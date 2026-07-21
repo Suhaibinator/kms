@@ -78,6 +78,8 @@ jobs:
           go-version-file: go.mod
           cache: true
           cache-dependency-path: go.sum
+      - name: Download Go modules
+        run: go mod download
       - name: Integration tests with race detector and coverage
         run: make test-integration GO_TEST_TIMEOUT=15m GO_TEST_FLAGS='-race -covermode=atomic -coverprofile=integration-coverage.out'
       - name: Require exercised production coverage
