@@ -22,6 +22,7 @@ import (
 // backup, so this covers the online database path plus process argument parsing,
 // secure staging/publication, no-replace restore, and restored-key readability.
 func TestCLIProcessBackupRestoreSecurity(t *testing.T) {
+	binary := buildParameterStoreBinary(t)
 	e := newLoopbackTLSEnv(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 	defer cancel()
@@ -39,7 +40,6 @@ func TestCLIProcessBackupRestoreSecurity(t *testing.T) {
 		t.Fatalf("seed backup secret over TLS: %v", err)
 	}
 
-	binary := buildParameterStoreBinary(t, ctx)
 	backupDir := t.TempDir()
 	backupPath := filepath.Join(backupDir, "online-backup.db")
 	if output, err := runParameterStoreProcess(ctx, binary, "backup", "--db", e.dbPath, "--out", backupPath); err != nil {
@@ -144,8 +144,11 @@ func TestCLIProcessBackupRestoreSecurity(t *testing.T) {
 	})
 }
 
-func buildParameterStoreBinary(t *testing.T, ctx context.Context) string {
+func buildParameterStoreBinary(t *testing.T) string {
 	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+
 	_, thisFile, _, ok := runtime.Caller(0)
 	if !ok {
 		t.Fatal("locate integration test source")
