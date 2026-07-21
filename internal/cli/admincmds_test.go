@@ -244,6 +244,7 @@ func TestReserveCertBundleConcurrentCallersExactlyOneOwnsPair(t *testing.T) {
 	}
 	if winner == nil {
 		t.Fatal("no concurrent caller acquired the certificate pair")
+		return
 	}
 	defer winner.cleanup()
 	assertReservedFileOwnsPath(t, winner.certFile, winner.certPath)
@@ -269,6 +270,7 @@ func TestWithReservedCertBundleLeavesReservationsAfterUseFailure(t *testing.T) {
 	err := c.withReservedCertBundle(dir, "svc", func(output *reservedCertBundle) error {
 		if output == nil {
 			t.Fatal("file output was not reserved")
+			return errors.New("test callback received no reserved file output")
 		}
 		for _, path := range []string{output.certPath, output.keyPath} {
 			if _, statErr := os.Stat(path); statErr != nil {

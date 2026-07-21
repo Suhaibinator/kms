@@ -20,6 +20,20 @@ Run the hermetic integration suite:
 make test-integration
 ```
 
+The integration target instruments the production packages matched by
+`INTEGRATION_COVERPKG` (by default `./internal/...` and `./sdk/go/...`). This is
+intentional: `internal/integration` contains external-package tests but no
+non-test statements of its own, so package-local coverage would always be a
+misleading 0.0%. To reproduce the CI coverage assertion locally:
+
+```bash
+make test-integration GO_TEST_FLAGS='-covermode=atomic -coverprofile=integration-coverage.out'
+make check-integration-coverage
+```
+
+The check fails when the profile is absent, has no total, or reports 0.0%
+statement coverage for the instrumented production packages.
+
 `internal/integration` is the canonical integration-test package. Its harness
 uses temporary SQLite databases and key files and may bind only ephemeral
 loopback listeners. Tests must not require a pre-existing server, service
@@ -50,11 +64,20 @@ CI executes the file utility, crypto, storage, and CLI packages on Linux,
 macOS, and Windows. That is important: the macOS ACL and Windows DACL tests are
 build-tagged and the database, backup, restore, certificate, and key workflows
 must use those native primitives. They cannot be meaningfully validated by a
-Linux-only run or cross-compilation.
+Linux-only run or cross-compilation. The Windows job also invokes the
+reparse-entry DACL regression by exact test name and requires its JSON event
+stream to contain a pass event and no skip event. Its setup deterministically
+creates an unprivileged directory junction and fails if it cannot do so; a
+renamed test, build-tag drift, or lack of symlink privilege cannot silently
+turn that security check green.
+Windows system roots may be owned by the exact TrustedInstaller service SID;
+other SIDs in the NT SERVICE namespace remain untrusted.
 
 ## Python SDK
 
-The Python SDK tests start only an in-process fake gRPC server:
+The Python SDK tests start only an in-process fake gRPC server. OpenSSL must be
+available on `PATH` because the TLS transport regressions mint ephemeral test
+certificates; GitHub-hosted Ubuntu CI runners provide it by default.
 
 ```bash
 cd sdk/python
@@ -87,8 +110,9 @@ The workflow in `.github/workflows/ci.yml` runs these independent checks:
 
 - `Go build & unit tests (race)` — module tidiness, vet, build, unit/component
   tests, the race detector, and coverage.
-- `Go integration tests (race)` — only `./internal/integration`, with fresh
-  execution, the race detector, a test timeout, and coverage.
+- `Go integration tests (race)` — only `./internal/integration` as the test
+  driver, with fresh execution, the race detector, a test timeout, production
+  package instrumentation, and a mandatory non-zero coverage profile.
 - `Native filesystem security` — `./internal/fileutil`, `./internal/crypto`,
   `./internal/storage`, and `./internal/cli` on Linux, macOS, and Windows so
   native permission and ACL semantics flow through database, backup, restore,

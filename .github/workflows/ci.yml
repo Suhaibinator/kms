@@ -80,8 +80,8 @@ jobs:
           cache-dependency-path: go.sum
       - name: Integration tests with race detector and coverage
         run: make test-integration GO_TEST_TIMEOUT=15m GO_TEST_FLAGS='-race -covermode=atomic -coverprofile=integration-coverage.out'
-      - name: Coverage summary
-        run: go tool cover -func=integration-coverage.out | tail -1
+      - name: Require exercised production coverage
+        run: make check-integration-coverage INTEGRATION_COVERAGE_PROFILE=integration-coverage.out
 
   # Linux cannot execute the build-tagged Darwin ACL and Windows DACL tests.
   # Native runners make those security regressions observable rather than only
@@ -105,6 +105,30 @@ jobs:
           cache-dependency-path: go.sum
       - name: Run native permission and ACL tests
         run: go test ./internal/fileutil ./internal/crypto ./internal/storage ./internal/cli -count=1 -timeout=10m
+      - name: Require Windows reparse-entry DACL regression
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $testName = 'TestRequireStableParentInspectsReparseEntryDACL'
+          $json = @(& go test ./internal/fileutil -run "^$testName`$" -count=1 -timeout=2m -json)
+          $goTestExit = $LASTEXITCODE
+          $events = @($json | ForEach-Object { ConvertFrom-Json -InputObject $_ })
+          $events |
+            Where-Object { $_.Action -eq 'output' } |
+            ForEach-Object { Write-Host -NoNewline $_.Output }
+          if ($goTestExit -ne 0) {
+            throw "go test failed with exit code $goTestExit"
+          }
+          $testEvents = @($events | Where-Object { $_.Test -eq $testName })
+          $skipEvents = @($testEvents | Where-Object { $_.Action -eq 'skip' })
+          if ($skipEvents.Count -ne 0) {
+            throw "$testName skipped; this security regression must run"
+          }
+          $passEvents = @($testEvents | Where-Object { $_.Action -eq 'pass' })
+          if ($passEvents.Count -ne 1) {
+            throw "$testName did not emit exactly one passing test event"
+          }
 
   go-vuln:
     name: Go vulnerability scan (govulncheck)
