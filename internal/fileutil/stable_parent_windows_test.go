@@ -92,7 +92,7 @@ func TestRequireStableParentInspectsReparseEntryDACL(t *testing.T) {
 				TrusteeValue: windows.TrusteeValueFromSID(user.User.Sid)},
 		},
 		{
-			AccessPermissions: windows.ACCESS_MASK(windows.DELETE),
+			AccessPermissions: windows.ACCESS_MASK(windows.GENERIC_WRITE),
 			AccessMode:        windows.SET_ACCESS,
 			Trustee: windows.TRUSTEE{TrusteeForm: windows.TRUSTEE_IS_SID, TrusteeType: windows.TRUSTEE_IS_WELL_KNOWN_GROUP,
 				TrusteeValue: windows.TrusteeValueFromSID(everyone)},
@@ -107,6 +107,6 @@ func TestRequireStableParentInspectsReparseEntryDACL(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := RequireStableParent(filepath.Join(link, "output.db")); err == nil {
-		t.Fatal("reparse entry granting Everyone DELETE was accepted")
+		t.Fatal("reparse entry granting Everyone GENERIC_WRITE was accepted")
 	}
 }

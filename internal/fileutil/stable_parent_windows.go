@@ -66,7 +66,8 @@ func requireStableWindowsChain(path string, allowTrustedReparse bool) error {
 			windows.CloseHandle(handle)
 			return fmt.Errorf("inspect exact path component %s: %w", current, err)
 		}
-		if !allowTrustedReparse && fileInfo.FileAttributes&windows.FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+		isReparse := fileInfo.FileAttributes&windows.FILE_ATTRIBUTE_REPARSE_POINT != 0
+		if !allowTrustedReparse && isReparse {
 			windows.CloseHandle(handle)
 			return fmt.Errorf("resolved path component %s became a reparse point", current)
 		}
@@ -103,6 +104,17 @@ func requireStableWindowsChain(path string, allowTrustedReparse bool) error {
 				continue
 			}
 			dangerous := windows.ACCESS_MASK(windows.DELETE|windows.WRITE_DAC|windows.WRITE_OWNER|windows.GENERIC_ALL) | fileDeleteChild
+			if isReparse {
+				// A junction/symlink can be retargeted in place through
+				// FSCTL_SET_REPARSE_POINT; deleting the directory entry is not
+				// required. Reject every untrusted write-shaped grant on the exact
+				// reparse entry, including an unmapped generic ACE.
+				dangerous |= windows.ACCESS_MASK(windows.GENERIC_WRITE |
+					windows.FILE_WRITE_DATA |
+					windows.FILE_APPEND_DATA |
+					windows.FILE_WRITE_EA |
+					windows.FILE_WRITE_ATTRIBUTES)
+			}
 			if ace.Mask&dangerous == 0 {
 				continue
 			}
