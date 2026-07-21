@@ -14,6 +14,7 @@ const (
 	accessAllowedCallbackACEType       = 9
 	accessAllowedCallbackObjectACEType = 11
 	fileDeleteChild                    = windows.ACCESS_MASK(0x00000040)
+	trustedInstallerSIDString          = "S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464"
 )
 
 func requireStableDirectoryChain(path string) error {
@@ -40,8 +41,12 @@ func requireStableWindowsChain(path string, allowTrustedReparse bool) error {
 	if err != nil {
 		return err
 	}
+	trustedInstaller, err := windows.StringToSid(trustedInstallerSIDString)
+	if err != nil {
+		return fmt.Errorf("parse TrustedInstaller SID: %w", err)
+	}
 	trusted := func(sid *windows.SID) bool {
-		return sid != nil && (sid.Equals(user.User.Sid) || sid.Equals(system) || sid.Equals(admins))
+		return isTrustedWindowsOwner(sid, user.User.Sid, system, admins, trustedInstaller)
 	}
 
 	for _, current := range stablePathChain(path) {
@@ -133,4 +138,16 @@ func requireStableWindowsChain(path string, allowTrustedReparse bool) error {
 		}
 	}
 	return nil
+}
+
+func isTrustedWindowsOwner(sid, user, system, admins, trustedInstaller *windows.SID) bool {
+	if sid == nil {
+		return false
+	}
+	for _, trusted := range []*windows.SID{user, system, admins, trustedInstaller} {
+		if trusted != nil && sid.Equals(trusted) {
+			return true
+		}
+	}
+	return false
 }

@@ -3,12 +3,45 @@
 package fileutil
 
 import (
+	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"golang.org/x/sys/windows"
 )
+
+func TestIsTrustedWindowsOwnerAcceptsExactTrustedInstallerSID(t *testing.T) {
+	owner, err := windows.StringToSid(trustedInstallerSIDString)
+	if err != nil {
+		t.Fatal(err)
+	}
+	trustedInstaller, err := windows.StringToSid(trustedInstallerSIDString)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !isTrustedWindowsOwner(owner, nil, nil, nil, trustedInstaller) {
+		t.Fatal("exact TrustedInstaller service SID was rejected")
+	}
+}
+
+func TestIsTrustedWindowsOwnerRejectsDifferentServiceSID(t *testing.T) {
+	trustedInstaller, err := windows.StringToSid(trustedInstallerSIDString)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// This remains a syntactically valid NT SERVICE SID and differs only in the
+	// final sub-authority. Service-SID namespace membership alone is not trust.
+	otherService, err := windows.StringToSid("S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478465")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if isTrustedWindowsOwner(otherService, nil, nil, nil, trustedInstaller) {
+		t.Fatal("non-TrustedInstaller service SID was accepted")
+	}
+}
 
 func TestRequireStableParentRejectsDeleteChildGrant(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "shared")
@@ -56,9 +89,7 @@ func TestRequireStableParentInspectsReparseEntryDACL(t *testing.T) {
 		t.Fatal(err)
 	}
 	link := filepath.Join(t.TempDir(), "link")
-	if err := os.Symlink(target, link); err != nil {
-		t.Skipf("directory symlinks unavailable: %v", err)
-	}
+	createTestDirectoryJunction(t, target, link)
 	name, err := windows.UTF16PtrFromString(extendedWindowsPath(link))
 	if err != nil {
 		t.Fatal(err)
@@ -108,5 +139,37 @@ func TestRequireStableParentInspectsReparseEntryDACL(t *testing.T) {
 	}
 	if err := RequireStableParent(filepath.Join(link, "output.db")); err == nil {
 		t.Fatal("reparse entry granting Everyone GENERIC_WRITE was accepted")
+	}
+}
+
+// createTestDirectoryJunction deterministically exercises the unprivileged
+// reparse-point setup used by CI. Directory symlinks may require Developer Mode
+// or SeCreateSymbolicLinkPrivilege; junctions test the same exact-entry DACL
+// invariant without making privilege availability a reason to skip.
+func createTestDirectoryJunction(t *testing.T, target, link string) {
+	t.Helper()
+	if strings.ContainsAny(target+link, "\"%\r\n") {
+		t.Fatalf("temporary reparse-point path cannot be safely passed to cmd.exe: target=%q link=%q", target, link)
+	}
+	command := fmt.Sprintf(`mklink /J "%s" "%s"`, link, target)
+	out, err := exec.Command("cmd.exe", "/d", "/v:off", "/s", "/c", command).CombinedOutput()
+	if err != nil {
+		t.Fatalf("create test directory junction: %v: %s", err, out)
+	}
+
+	name, err := windows.UTF16PtrFromString(extendedWindowsPath(link))
+	if err != nil {
+		t.Fatal(err)
+	}
+	attrs, err := windows.GetFileAttributes(name)
+	if err != nil {
+		t.Fatalf("inspect test reparse point: %v", err)
+	}
+	if attrs&windows.FILE_ATTRIBUTE_REPARSE_POINT == 0 {
+		t.Fatalf("test path %s is not a reparse point (attributes %#x)", link, attrs)
+	}
+	info, err := os.Stat(link)
+	if err != nil || !info.IsDir() {
+		t.Fatalf("test reparse point does not resolve to its directory target: info=%v err=%v", info, err)
 	}
 }
