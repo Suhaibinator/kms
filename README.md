@@ -142,10 +142,12 @@ make build   # runs the `frontend` target (npm ci && npm run build -> frontend/o
              # then the `backend` target (go build -> bin/parameter-store)
 ```
 
-`make frontend` and `make backend` are also available individually; `make
-test` runs the full test suite with the race detector, and
-`make check-frontend` fails if `frontend/out/index.html` is missing (useful
-in CI before a release build, so an empty UI never ships silently).
+`make frontend` and `make backend` are also available individually. `make
+test` runs every Go test with the race detector; `make test-unit` and `make
+test-integration` provide the same unit/integration split enforced by CI.
+`make check-frontend` fails if `frontend/out/index.html` is missing (useful in
+CI before a release build, so an empty UI never ships silently). See
+[`docs/testing.md`](docs/testing.md) for all local and CI regression commands.
 
 ### Initialize and run
 
