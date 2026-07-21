@@ -556,12 +556,13 @@ func (s *Service) AuthorizeSubscribeContext(ctx context.Context, pr Principal, n
 // namespace incarnation exists so a delete/recreate closes a stale stream.
 // Callers that pass no namespaces get credential re-validation only.
 func (s *Service) ReauthorizeWatch(ctx context.Context, pr Principal, namespaces ...domain.NamespaceRef) error {
-	if pr.Method == domain.AuthMethodToken {
+	switch pr.Method {
+	case domain.AuthMethodToken:
 		id, err := s.Authenticate(ctx, pr.Token, pr.RemoteAddr, pr.UserAgent)
 		if err != nil || id.Name != pr.Identity.Name || id.Kind != pr.Identity.Kind {
 			return domain.Errorf(domain.ErrUnauthenticated, "invalid credentials")
 		}
-	} else if pr.Method == domain.AuthMethodMTLS {
+	case domain.AuthMethodMTLS:
 		id, err := s.store.GetIdentityByName(ctx, pr.Identity.Name)
 		if err != nil || id.Disabled || id.Kind != pr.Identity.Kind {
 			return domain.Errorf(domain.ErrUnauthenticated, "invalid credentials")
@@ -580,7 +581,7 @@ func (s *Service) ReauthorizeWatch(ctx context.Context, pr Principal, namespaces
 			(!rec.Cert.NotAfter.IsZero() && s.now().After(rec.Cert.NotAfter)) {
 			return domain.Errorf(domain.ErrUnauthenticated, "invalid credentials")
 		}
-	} else {
+	default:
 		return domain.Errorf(domain.ErrUnauthenticated, "invalid credentials")
 	}
 	// Re-run the FULL per-namespace authorization (method gate + policy) for each
@@ -656,13 +657,6 @@ func (s *Service) auditRef(ctx context.Context, pr Principal, eventType, resourc
 // name lookup could otherwise stamp a newly recreated namespace (ABA).
 func (s *Service) auditRefWithNamespaceID(ctx context.Context, pr Principal, eventType, resourceType string, ref domain.Ref, namespaceID int64, version uint64, decision string, meta map[string]string) {
 	s.audit(ctx, s.buildRefEventWithNamespaceID(pr, eventType, resourceType, ref, namespaceID, version, decision, meta))
-}
-
-// auditRefStrict is the fail-closed counterpart used before returning secret
-// plaintext. It preserves the same immutable namespace-incarnation binding as
-// ordinary namespaced audit events.
-func (s *Service) auditRefStrict(ctx context.Context, pr Principal, eventType, resourceType string, ref domain.Ref, version uint64, decision string, meta map[string]string) error {
-	return s.auditStrict(ctx, s.buildRefEvent(ctx, pr, eventType, resourceType, ref, version, decision, meta))
 }
 
 func (s *Service) auditRefStrictWithNamespaceID(ctx context.Context, pr Principal, eventType, resourceType string, ref domain.Ref, namespaceID int64, version uint64, decision string, meta map[string]string) error {
