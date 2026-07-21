@@ -128,9 +128,9 @@ that chain. On POSIX, each directory must be owned by root or the service user;
 group/other write is refused unless the sticky bit protects entries. On macOS,
 any allow ACL in the chain is also refused, and ACLs are stripped from private
 artifacts. On Windows, the chain must have a trusted owner and a DACL that gives
-no untrusted SID delete or ACL-control authority; private artifacts receive a
-protected current-user-only DACL. Prepare destination directories under the
-same OS account that runs the command.
+no untrusted SID path-mutation authority, including reparse-point retarget
+writes; private artifacts receive a protected current-user-only DACL. Prepare
+destination directories under the same OS account that runs the command.
 
 Private files are created exclusively and owner-only (`0600` files/`0700`
 staging directories on POSIX). The identity `.crt` is intentionally public at

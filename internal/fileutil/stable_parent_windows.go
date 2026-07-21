@@ -128,7 +128,7 @@ func requireStableWindowsChain(path string, allowTrustedReparse bool) error {
 			}
 			sid := (*windows.SID)(unsafe.Pointer(&ace.SidStart))
 			if !trusted(sid) {
-				return fmt.Errorf("%s grants delete or ACL-control rights to untrusted SID %s", current, sid.String())
+				return fmt.Errorf("%s grants path-mutation rights to untrusted SID %s", current, sid.String())
 			}
 		}
 	}

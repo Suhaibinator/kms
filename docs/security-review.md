@@ -38,10 +38,11 @@ symlinks once, use only that canonical path, and require every directory in the
 chain to be root- or service-account-owned without cross-account entry-replace
 authority. On macOS, any allow ACL in that chain is rejected and extended ACLs
 are stripped from private artifacts; on Windows, untrusted delete/ACL-control
-allow ACEs are rejected and private artifacts receive protected current-user
-DACLs. On other supported POSIX systems the check covers ownership, mode bits,
-and sticky-directory semantics only; it does **not** claim to inspect NFSv4 or
-other extended ACLs, which operators must constrain separately.
+and reparse-retarget write ACEs are rejected and private artifacts receive
+protected current-user DACLs. On other supported POSIX systems the check covers
+ownership, mode bits, and sticky-directory semantics only; it does **not**
+claim to inspect NFSv4 or other extended ACLs, which operators must constrain
+separately.
 
 > **Legacy database compatibility:** hardened startup rejects a legacy `0644`
 > database fail-closed. Stop every KMS process, verify trusted ownership and

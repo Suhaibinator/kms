@@ -179,8 +179,9 @@ Platform enforcement is deliberately specific:
   the already-open descriptor and verified absent before use.
 - On Windows, the parent chain must be owned by the process user, Local System,
   or Builtin Administrators. A DACL is required; allow ACEs that give an
-  untrusted SID delete, child-delete, ownership, or DACL-control authority are
-  rejected. Private output DACLs are protected from inheritance.
+  untrusted SID delete, child-delete, ownership, DACL-control, or reparse-point
+  retarget authority are rejected. Private output DACLs are protected from
+  inheritance.
 - On other supported POSIX systems, enforcement covers owner UID, mode bits,
   and sticky-directory semantics. It does **not** inspect or claim coverage of
   NFSv4 or other extended ACL entries; operators must ensure separately that
