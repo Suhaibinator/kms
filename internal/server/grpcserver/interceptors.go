@@ -120,6 +120,7 @@ func (s *Server) authenticate(ctx context.Context, reqID string) (context.Contex
 				Identity:    id,
 				Method:      domain.AuthMethodMTLS,
 				Serial:      core.CertSerial(cert),
+				Fingerprint: core.CertFingerprint(cert),
 				SecretToken: secretToken,
 				RemoteAddr:  remoteAddr,
 				UserAgent:   userAgent,

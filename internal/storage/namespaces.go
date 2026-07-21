@@ -36,8 +36,16 @@ func (s *SQLStore) CreateNamespace(ctx context.Context, ns domain.Namespace) (do
 // GetNamespace returns the namespace addressed by ref.
 func (s *SQLStore) GetNamespace(ctx context.Context, ref domain.NamespaceRef) (domain.Namespace, error) {
 	var m namespaceModel
-	if err := s.db.WithContext(ctx).Where("env = ? AND app = ?", ref.Env, ref.App).First(&m).Error; err != nil {
+	q := s.db.WithContext(ctx).Where("env = ? AND app = ?", ref.Env, ref.App)
+	expectedID, bound := ExpectedNamespaceIncarnation(ctx, ref)
+	if bound {
+		q = q.Where("id = ?", expectedID)
+	}
+	if err := q.First(&m).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
+			if bound {
+				return domain.Namespace{}, domain.Errorf(domain.ErrAborted, "namespace %s changed during request; retry", ref)
+			}
 			return domain.Namespace{}, domain.Errorf(domain.ErrNotFound, "namespace %s", ref)
 		}
 		return domain.Namespace{}, err
@@ -48,8 +56,13 @@ func (s *SQLStore) GetNamespace(ctx context.Context, ref domain.NamespaceRef) (d
 // UpdateNamespace replaces a namespace's description and allowed auth methods
 // (full replace of the method set). An empty method set defaults to ["mtls"].
 func (s *SQLStore) UpdateNamespace(ctx context.Context, ref domain.NamespaceRef, description string, methods []domain.AuthMethod) (domain.Namespace, error) {
-	res := s.db.WithContext(ctx).Model(&namespaceModel{}).
-		Where("env = ? AND app = ?", ref.Env, ref.App).
+	db := s.db.WithContext(ctx)
+	id, err := resolveNamespaceID(db, ref)
+	if err != nil {
+		return domain.Namespace{}, err
+	}
+	res := db.Model(&namespaceModel{}).
+		Where("id = ?", id).
 		Updates(map[string]any{
 			"description":          description,
 			"allowed_auth_methods": marshalAuthMethods(methods),
@@ -58,7 +71,7 @@ func (s *SQLStore) UpdateNamespace(ctx context.Context, ref domain.NamespaceRef,
 		return domain.Namespace{}, res.Error
 	}
 	if res.RowsAffected == 0 {
-		return domain.Namespace{}, domain.Errorf(domain.ErrNotFound, "namespace %s", ref)
+		return domain.Namespace{}, domain.Errorf(domain.ErrAborted, "namespace %s changed during request; retry", ref)
 	}
 	return s.GetNamespace(ctx, ref)
 }
@@ -79,6 +92,10 @@ func (s *SQLStore) DeleteNamespace(ctx context.Context, ref domain.NamespaceRef)
 			{"parameters", "parameters"},
 			{"secrets", "secrets"},
 			{"identities", "bound identities"},
+			{"configuration_releases", "configuration releases"},
+			{"configuration_release_labels", "configuration release labels"},
+			{"release_subscriber_states", "configuration release subscriber states"},
+			{"release_subscriber_connections", "configuration release subscriber connections"},
 		} {
 			var n int64
 			if err := tx.Table(check.table).Where("namespace_id = ?", id).Count(&n).Error; err != nil {
@@ -169,4 +186,11 @@ func splitNamespaceToken(tok string) (env, app string, ok bool) {
 		}
 	}
 	return tok, "", false
+}
+
+// NamespacePageToken returns the storage cursor immediately after ref. The
+// service uses it when authorization filtering happens above storage so a
+// response cursor never names a filtered-out namespace.
+func NamespacePageToken(ref domain.NamespaceRef) string {
+	return encodeToken(ref.String())
 }

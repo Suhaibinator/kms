@@ -51,9 +51,14 @@ type Config struct {
 	// allowed for unauthenticated/dev servers.
 	Token string
 
-	// TLS configures transport security. Nil means an insecure connection
-	// (development only). Use TLSFromFiles or MTLSFromFiles to build one.
+	// TLS configures transport security. Use TLSFromFiles or MTLSFromFiles to
+	// build one. When TLS is nil, NewClient fails unless Insecure is explicitly
+	// set or DialOptions supplies custom transport credentials.
 	TLS *tls.Config
+
+	// Insecure explicitly permits a cleartext connection. Use it only for local
+	// development on a trusted network. It is mutually exclusive with TLS.
+	Insecure bool
 
 	// CacheTTL enables an in-memory read cache for GetParameter/GetSecret when
 	// greater than zero. Cached parameter and secret entries are invalidated by
@@ -89,8 +94,9 @@ type Config struct {
 
 	// DialOptions are appended to the dial options the SDK builds, allowing
 	// advanced transport tuning or injection of a custom dialer. Options here
-	// override earlier ones (e.g. transport credentials), which is how tests
-	// dial an in-process server.
+	// override earlier ones (e.g. transport credentials). When neither TLS nor
+	// Insecure is set, DialOptions must supply transport credentials; this is how
+	// tests explicitly dial an in-process cleartext server.
 	DialOptions []grpc.DialOption
 }
 
@@ -103,11 +109,12 @@ type Client struct {
 	timeout    time.Duration
 	logger     Logger
 
-	cc      *grpc.ClientConn
-	params  kmsv1.ParameterServiceClient
-	secrets kmsv1.SecretServiceClient
-	watch   kmsv1.WatchServiceClient
-	admin   kmsv1.AdminServiceClient
+	cc       *grpc.ClientConn
+	params   kmsv1.ParameterServiceClient
+	secrets  kmsv1.SecretServiceClient
+	watch    kmsv1.WatchServiceClient
+	releases kmsv1.ConfigurationReleaseServiceClient
+	admin    kmsv1.AdminServiceClient
 
 	// cfgNamespace is the parsed Config.Namespace (zero when unset). nsMu guards
 	// the WhoAmI-discovered namespace, resolved lazily once for the client's
@@ -138,7 +145,9 @@ type Client struct {
 	closeErr  error
 }
 
-// NewClient dials the parameter store and returns a ready Client.
+// NewClient dials the parameter store and returns a ready Client. Transport
+// security must be selected explicitly with Config.TLS, Config.Insecure, or
+// custom transport credentials in Config.DialOptions.
 func NewClient(cfg Config) (*Client, error) {
 	if cfg.Endpoint == "" && len(cfg.DialOptions) == 0 {
 		return nil, errors.New("paramstore: Config.Endpoint is required")
@@ -163,10 +172,15 @@ func NewClient(cfg Config) (*Client, error) {
 	}
 
 	opts := make([]grpc.DialOption, 0, 4+len(cfg.DialOptions))
-	if cfg.TLS != nil {
+	switch {
+	case cfg.TLS != nil && cfg.Insecure:
+		return nil, errors.New("paramstore: Config.TLS and Config.Insecure are mutually exclusive")
+	case cfg.TLS != nil:
 		opts = append(opts, grpc.WithTransportCredentials(credentials.NewTLS(cfg.TLS)))
-	} else {
+	case cfg.Insecure:
 		opts = append(opts, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	case len(cfg.DialOptions) == 0:
+		return nil, errors.New("paramstore: transport security is required; set Config.TLS, or set Config.Insecure only for local development")
 	}
 	opts = append(opts, grpc.WithKeepaliveParams(keepalive.ClientParameters{
 		Time:                30 * time.Second,
@@ -196,6 +210,7 @@ func NewClient(cfg Config) (*Client, error) {
 		params:       kmsv1.NewParameterServiceClient(cc),
 		secrets:      kmsv1.NewSecretServiceClient(cc),
 		watch:        kmsv1.NewWatchServiceClient(cc),
+		releases:     kmsv1.NewConfigurationReleaseServiceClient(cc),
 		admin:        kmsv1.NewAdminServiceClient(cc),
 		cfgNamespace: nsRef,
 		cache:        newCache(cfg.CacheTTL),

@@ -1,7 +1,7 @@
-// Package integration exercises the real service stack end to end: a real
-// SQLite store, real envelope crypto, and the core.Service business logic, with
-// no transport layer. It covers plan §25.2 (integration) and §25.3 (security)
-// for the parts that live below the gRPC/HTTP boundary, plus §25.4 fuzz targets
+// Package integration exercises the real service stack end to end. Fast tests
+// call core.Service over a real SQLite store and envelope crypto, while the
+// loopback harness also crosses TCP, TLS, gRPC interceptors/handlers, watches,
+// SDK clients, and CLI subprocess boundaries. It also contains fuzz targets
 // for the policy and metadata parsers.
 package integration
 

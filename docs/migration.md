@@ -18,6 +18,7 @@ as a server-side wire or storage field.
 | `ParameterStoreSecret` (per-key access secret) | `SecretValue.Token` (per-secret access token) |
 | `EnvironmentVariableKey` | `SecretValue.EnvVar` / `ParameterValue.EnvVar` |
 | `ParameterStoreValue` (dev default) | `SecretValue.Default` / `ParameterValue.Default` |
+| application-managed `config/release` manifest | native immutable configuration release + atomic activation revision + Go/Python `ReleaseLoader` |
 | master password entered at startup | master key file, or passphrase (argon2id) at unseal |
 | — (client just held the store secret) | **client identity credential**: a per-client certificate bundle (mTLS, recommended) or a bearer token, presented on connect |
 | — (keys existed as bare paths) | **namespace registration**: ordinary writes require the `(env, app)` namespace to exist; the offline importer creates it if absent |
@@ -120,6 +121,89 @@ override → store → default → startup error naming the missing key.
 The Python SDK is the mirror image of this (`namespace="prod/gradethis"`
 optional, `SecretValue("stripe-api-key")`, `ParameterValue("rate-limit")`
 hot-reloading by default) — see [`sdk-python.md`](sdk-python.md).
+
+## Replacing an application-managed `config/release` manifest
+
+If the application currently watches a parameter such as `config/release`
+whose JSON body points to versions of other keys, migrate that orchestration to
+a native release. Do not include the old manifest parameter itself in the new
+release.
+
+1. Inventory every alias and exact parameter/secret version. Creation can
+   accept a label, but KMS resolves it before persistence; explicit versions
+   make the migration artifact easiest to review.
+2. Optionally register a Draft 2020-12 schema for the alias-keyed **parameter**
+   object. Secrets are excluded from that object.
+3. Create and validate the immutable release without activating it.
+4. Deploy release-aware replicas with their existing, locally distributed
+   per-secret tokens, then activate with compare-and-swap.
+5. Monitor per-instance `applied` state and remove the old manifest watcher
+   only after the dual-run window succeeds.
+
+```yaml
+# runtime-release.yaml
+namespace: prod/gradethis
+name: runtime
+schema_id: gradethis/runtime
+schema_version: 1
+entries:
+  - {alias: permissions, kind: parameter, key: config/groups/permissions, version: 12}
+  - {alias: rate_limits, kind: parameter, key: config/groups/rate-limits, version: 8}
+  - {alias: db_password, kind: secret, key: db-password, version: 3}
+  - {alias: session_signing_key, kind: secret, key: session-token-secret, version: 7}
+```
+
+```bash
+parameter-store release create runtime-release.yaml \
+  --endpoint "$PARAM_STORE_ENDPOINT" --token "$ADMIN_TOKEN" \
+  --ca "$PARAM_STORE_SERVER_CA_CERT"
+parameter-store release validate prod/gradethis runtime 1 \
+  --endpoint "$PARAM_STORE_ENDPOINT" --token "$ADMIN_TOKEN" \
+  --ca "$PARAM_STORE_SERVER_CA_CERT"
+parameter-store release activate prod/gradethis runtime 1 \
+  --expected-current-version 0 \
+  --endpoint "$PARAM_STORE_ENDPOINT" --token "$ADMIN_TOKEN" \
+  --ca "$PARAM_STORE_SERVER_CA_CERT"
+```
+
+The Go process replaces manifest watching, parallel ad hoc reads, and apply
+bookkeeping with one loader:
+
+```go
+loader, err := paramstore.NewReleaseLoader(client, paramstore.ReleaseLoaderConfig{
+    Name: "runtime",
+    SecretTokenProvider: func(alias, path string) (string, bool) {
+        token, ok := bootstrapSecretTokens[alias]
+        return token, ok
+    },
+})
+if err != nil { return err }
+return loader.Run(ctx, func(ctx context.Context, snapshot paramstore.ReleaseSnapshot) (
+    paramstore.PreparedRelease, error,
+) {
+    return decodeValidateAndPrepare(ctx, snapshot)
+})
+```
+
+Python uses `ReleaseLoader(client, ReleaseLoaderConfig(name="runtime", ...))`
+and synchronous `loader.run(prepare)` with the same resolution, cancellation,
+prepare/commit/abort, last-known-good, and acknowledgement guarantees. Both
+SDKs decode explicitly; native releases do not use reflection or generate
+schemas from application types.
+
+Roll back by reactivating any retained immutable version:
+
+```bash
+parameter-store release rollback prod/gradethis runtime 1 \
+  --endpoint "$PARAM_STORE_ENDPOINT" --token "$ADMIN_TOKEN" \
+  --ca "$PARAM_STORE_SERVER_CA_CERT"
+```
+
+Use the Releases frontend or `parameter-store release subscribers
+prod/gradethis runtime` until every expected instance reports the target as
+`applied`. Replicas apply independently—version 1 has no fleet-wide barrier.
+An activation racing immediately after a loader's final active read is handled
+as the next candidate, so do not treat activation as a distributed commit.
 
 ## Steps
 

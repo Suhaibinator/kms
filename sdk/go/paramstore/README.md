@@ -26,10 +26,15 @@ defer client.Close()
 
 The preferred posture is a **client certificate** (proof of possession, minted
 by the KMS CA): identity derives from the cert server-side, so `Token` is
-optional. `Token` is only required for token-method identities. `TLS: nil` uses
-an insecure connection (development only). `server-ca.crt` must trust the
-operator-provided server certificate; it is not the built-in client CA shown by
-`admin ca show`.
+optional. `Token` is only required for token-method identities. `server-ca.crt`
+must trust the operator-provided server certificate; it is not the built-in
+client CA shown by `admin ca show`.
+
+Transport security must be explicit: without `TLS`, `NewClient` fails instead
+of silently sending credentials and secret plaintext over cleartext. A local
+development server can be reached with `Insecure: true`; do not use that option
+across an untrusted network. Low-level callers may instead provide explicit
+transport credentials through `DialOptions`.
 
 ### Namespaces and keys
 
@@ -161,6 +166,41 @@ defer stop()
 If the store is unreachable the SDK keeps serving last-known values and
 reconnects in the background.
 
+## Atomic configuration releases
+
+Use a release loader when related values must be resolved and installed
+together rather than through independent key callbacks:
+
+```go
+loader, err := paramstore.NewReleaseLoader(client, paramstore.ReleaseLoaderConfig{
+    Name: "runtime",
+    SecretTokenProvider: func(alias, path string) (string, bool) {
+        token, ok := localTokens[alias]
+        return token, ok
+    },
+})
+if err != nil { return err }
+
+err = loader.Run(ctx, func(ctx context.Context, snapshot paramstore.ReleaseSnapshot) (
+    paramstore.PreparedRelease, error,
+) {
+    return decodeValidateAndPrepare(ctx, snapshot)
+})
+```
+
+The snapshot exposes the release version, activation revision, deterministic
+digest, schema pin, and exact alias-keyed resource pins. Resolved maps are
+immutable-by-copy and normal formatting excludes values; secret plaintext
+still requires explicit `Secret.Value`/`StringValue`. `PreparedRelease.Commit`
+must be infallible and normally performs an atomic swap; `Abort` releases any
+prepared candidate that becomes stale or fails the final active-release check.
+The loader fails startup until one release applies, then retains the
+last-known-good state through outages and rejections.
+
+`RunTypedRelease[T]` adds an explicit decode step and uses no reflection.
+See [`../../../docs/sdk-go.md`](../../../docs/sdk-go.md#atomic-release-loading)
+for lifecycle, acknowledgement, token-provider, and status details.
+
 ## Errors
 
 Map gRPC codes to sentinels with `errors.Is`:
@@ -192,3 +232,6 @@ client, _ := paramstore.NewClient(paramstore.Config{
     DialOptions: srv.DialOptions(),
 })
 ```
+
+`srv.DialOptions()` includes explicit cleartext transport credentials for the
+in-process connection, so no `Insecure` flag is needed in this test setup.

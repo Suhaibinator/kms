@@ -13,20 +13,21 @@ func (s *SQLStore) AppendAudit(ctx context.Context, ev domain.AuditEvent) error 
 		created = nowUTC()
 	}
 	m := auditEventModel{
-		EventType:       ev.EventType,
-		ActorIdentity:   ev.ActorIdentity,
-		ActorType:       ev.ActorType,
-		ResourceType:    ev.ResourceType,
-		ResourceEnv:     ev.ResourceEnv,
-		ResourceApp:     ev.ResourceApp,
-		ResourceKey:     ev.ResourceKey,
-		ResourceVersion: int64(ev.ResourceVersion),
-		Decision:        ev.Decision,
-		SourceIP:        ev.SourceIP,
-		UserAgent:       ev.UserAgent,
-		RequestID:       ev.RequestID,
-		CreatedAt:       fmtTime(created),
-		MetadataJSON:    zeroOr(ev.Metadata, "{}"),
+		EventType:           ev.EventType,
+		ActorIdentity:       ev.ActorIdentity,
+		ActorType:           ev.ActorType,
+		ResourceType:        ev.ResourceType,
+		ResourceNamespaceID: ev.ResourceNamespaceID,
+		ResourceEnv:         ev.ResourceEnv,
+		ResourceApp:         ev.ResourceApp,
+		ResourceKey:         ev.ResourceKey,
+		ResourceVersion:     int64(ev.ResourceVersion),
+		Decision:            ev.Decision,
+		SourceIP:            ev.SourceIP,
+		UserAgent:           ev.UserAgent,
+		RequestID:           ev.RequestID,
+		CreatedAt:           fmtTime(created),
+		MetadataJSON:        zeroOr(ev.Metadata, "{}"),
 	}
 	return s.db.WithContext(ctx).Create(&m).Error
 }
@@ -78,4 +79,11 @@ func (s *SQLStore) ListAudit(ctx context.Context, f domain.AuditFilter, page Lis
 		out = append(out, toAuditEvent(m))
 	}
 	return out, next, nil
+}
+
+// AuditPageToken returns the storage cursor immediately after id. The service
+// uses it when authorization filtering happens above storage so empty filtered
+// pages and cursors for hidden rows are not exposed to callers.
+func AuditPageToken(id int64) string {
+	return encodeIntToken(id)
 }

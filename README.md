@@ -47,6 +47,14 @@ management.
   by default (opt out with `Static`). Secrets push metadata-only change
   notifications (notify-then-refetch); plaintext is never pushed over the
   stream.
+- **Atomic configuration releases**: an immutable namespace-scoped release
+  pins exact parameter and secret versions under stable aliases. One activation
+  moves `current`/`previous`, writes one authoritative global revision, and can
+  be guarded with compare-and-swap. Go and Python loaders resolve the complete
+  candidate, let the application prepare it, fence stale work, and retain the
+  last-known-good release on later failures. Optional immutable Draft 2020-12
+  JSON Schemas validate the alias-keyed parameter object; secret values and
+  per-secret tokens are never stored in a release or watch event.
 - **Declarative SDK config** in both Go and Python: `SecretValue`/
   `ParameterValue` fields resolved with one `Resolve`/`resolve` call — env
   override, then store, then dev default, else a startup error naming the
@@ -83,7 +91,9 @@ parameter-store — single binary (cmd/parameter-store)
   +--- grpcserver ---------------+--- httpserver -------------------+
   |    ParameterService, Secret- |    /api/v1/*  (frontend + admin) |
   |    Service, AdminService,    |    /healthz  /readyz              |
-  |    WatchService              |    embedded Next.js export        |
+  |    WatchService, Configura-  |    embedded Next.js export        |
+  |    tionReleaseService,       |                                   |
+  |    ConfigurationSchemaService                                   |
   |    (gRPC clients / SDKs)     |    (frontend/out)                 |
   +-------------------------------+-----------------------------------+
                   |
@@ -107,7 +117,8 @@ parameter-store — single binary (cmd/parameter-store)
                   v
   internal/storage (SQLite, WAL mode)
     namespaces · parameters · secrets · policies · identities ·
-    identity_certs · ca_keys · audit_events · change_log · key_metadata
+    identity_certs · ca_keys · configuration_releases · configuration_schemas ·
+    release subscriber state · audit_events · change_log · key_metadata
 ```
 
 The master key (KEK) is acquired at startup from a key file or a
@@ -131,10 +142,12 @@ make build   # runs the `frontend` target (npm ci && npm run build -> frontend/o
              # then the `backend` target (go build -> bin/parameter-store)
 ```
 
-`make frontend` and `make backend` are also available individually; `make
-test` runs the full test suite with the race detector, and
-`make check-frontend` fails if `frontend/out/index.html` is missing (useful
-in CI before a release build, so an empty UI never ships silently).
+`make frontend` and `make backend` are also available individually. `make
+test` runs every Go test with the race detector; `make test-unit` and `make
+test-integration` provide the same unit/integration split enforced by CI.
+`make check-frontend` fails if `frontend/out/index.html` is missing (useful in
+CI before a release build, so an empty UI never ships silently). See
+[`docs/testing.md`](docs/testing.md) for all local and CI regression commands.
 
 ### Initialize and run
 
@@ -236,7 +249,7 @@ client, err := paramstore.NewClient(paramstore.Config{
     Endpoint:  "localhost:8443",
     Namespace: "prod/gradethis",
     Token:     os.Getenv("GRADETHIS_TOKEN"),
-    // TLS is intentionally nil only because this local server is plaintext.
+    Insecure:  true, // explicit cleartext opt-in for this local server only
 })
 if err != nil {
     log.Fatal(err)
@@ -299,6 +312,9 @@ watch:
   heartbeat_interval: 30s
   retain_duration: 24h
   retain_rows: 10000
+  release_retain_duration: 2160h
+  release_retain_versions: 100
+  release_subscriber_retain_duration: 720h
 
 log:
   level: "info"
@@ -362,6 +378,17 @@ changed; use the view as a coarse liveness/lag signal, not proof that a
 specific key was applied. See [`docs/sdk-go.md`](docs/sdk-go.md#hot-reload) and
 [`plan-namespaces.md`](plan-namespaces.md) §9 for the full design.
 
+For related values that must change together, use a **configuration release**
+instead of independent key callbacks. A release-aware client observes the
+release version and activation revision, resolves every exact pin, verifies
+digests and versions, prepares application resources, then commits only after a
+fresh active-release check. The release stream records distinct `received`,
+`prepared`, `applied`, and `rejected` states per process instance, grouped by
+client name in the UI. This is application apply state; the ordinary namespace
+subscriber acknowledgement remains transport receipt only. See
+[`docs/configuration-releases.md`](docs/configuration-releases.md) and the SDK
+guides.
+
 ## Frontend
 
 The `frontend/` directory is a Next.js app built as a static export
@@ -374,7 +401,9 @@ values are hidden by default and require an explicit action, with
 client-bound secrets showing no reveal option at all — the server cannot
 produce their plaintext), policy management, identity management (namespace
 binding, auth methods, one-time mTLS certificate issuance and revocation),
-audit log browsing with filters, live subscriber visibility, and a
+audit log browsing with filters, live subscriber visibility, configuration
+release/schema creation, validation, diff, activation, rollback and per-instance
+apply status, and a
 health/status view. All dynamic data comes from the
 `/api/v1/*` JSON API described in [`docs/http-api.md`](docs/http-api.md);
 unknown frontend routes fall back to the exported entry HTML so
@@ -382,9 +411,11 @@ client-side routing resolves deep links on refresh.
 
 ## Client SDKs
 
-- **Go** (`sdk/go/paramstore`) — see [`docs/sdk-go.md`](docs/sdk-go.md).
+- **Go** (`sdk/go/paramstore`) — declarative values plus the atomic
+  `ReleaseLoader`; see [`docs/sdk-go.md`](docs/sdk-go.md).
 - **Python** (`sdk/python`, package `kms_paramstore`, distribution
-  `kms-paramstore`) — see [`docs/sdk-python.md`](docs/sdk-python.md).
+  `kms-paramstore`) — equivalent synchronous release loading with explicit
+  decoding; see [`docs/sdk-python.md`](docs/sdk-python.md).
 
 ## Documentation
 
@@ -397,6 +428,9 @@ client-side routing resolves deep links on refresh.
 - [`docs/sdk-python.md`](docs/sdk-python.md) — the Python client SDK.
 - [`docs/http-api.md`](docs/http-api.md) — the JSON HTTP API contract used
   by the embedded frontend.
+- [`docs/configuration-releases.md`](docs/configuration-releases.md) — release
+  and schema gRPC contracts, lifecycle semantics, limits, and operational
+  guarantees.
 - [`docs/migration.md`](docs/migration.md) — migrating from
   SuhaibParameterStore (gradethis's prior parameter store).
 - [`plan.md`](plan.md) — the original requirements/design record (historical;

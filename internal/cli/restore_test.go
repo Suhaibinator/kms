@@ -1,8 +1,10 @@
 package cli
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	"github.com/glebarez/sqlite"
@@ -41,18 +43,13 @@ func TestRestoreFile(t *testing.T) {
 	in := filepath.Join(dir, "backup.db")
 	dst := filepath.Join(dir, "kms.db")
 	createKMSDB(t, in)
-	content, err := os.ReadFile(in)
-	if err != nil {
-		t.Fatal(err)
-	}
 
 	// Fresh restore into a non-existent destination.
 	if err := restoreFile(in, dst, false); err != nil {
 		t.Fatalf("restoreFile: %v", err)
 	}
-	got, _ := os.ReadFile(dst)
-	if string(got) != string(content) {
-		t.Fatalf("restored content mismatch")
+	if err := storage.ValidateKMSDatabase(dst); err != nil {
+		t.Fatalf("restored database is invalid: %v", err)
 	}
 }
 
@@ -89,6 +86,100 @@ func TestRestoreFileRefusesExisting(t *testing.T) {
 	// With force it overwrites.
 	if err := restoreFile(in, dst, true); err != nil {
 		t.Fatalf("force restore: %v", err)
+	}
+}
+
+func TestCopyFileAtomicRefusesLateDestinationWithoutForce(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "source")
+	dst := filepath.Join(dir, "destination")
+	writeFileBytes(t, src, []byte("restored data"))
+	writeFileBytes(t, dst, []byte("concurrent data"))
+
+	err := copyFileAtomic(src, dst, false)
+	if !errors.Is(err, os.ErrExist) {
+		t.Fatalf("copyFileAtomic error = %v, want destination-exists error", err)
+	}
+	if got := readFileString(t, dst); got != "concurrent data" {
+		t.Fatalf("non-forced publish replaced concurrent destination: %q", got)
+	}
+	if matches, err := filepath.Glob(filepath.Join(dir, ".kms-restore-*")); err != nil || len(matches) != 0 {
+		t.Fatalf("restore staging files remain after refusal: %v (glob err %v)", matches, err)
+	}
+
+	// --force remains the explicit compatibility path for replacement.
+	if err := copyFileAtomic(src, dst, true); err != nil {
+		t.Fatalf("forced copyFileAtomic: %v", err)
+	}
+	if got := readFileString(t, dst); got != "restored data" {
+		t.Fatalf("forced publish did not replace destination: %q", got)
+	}
+}
+
+func TestCopyFileAtomicRefusesDestinationSymlinkWithoutForce(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "source")
+	target := filepath.Join(dir, "target")
+	dst := filepath.Join(dir, "destination")
+	writeFileBytes(t, src, []byte("restored data"))
+	writeFileBytes(t, target, []byte("target data"))
+	if err := os.Symlink(target, dst); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+
+	err := copyFileAtomic(src, dst, false)
+	if !errors.Is(err, os.ErrExist) {
+		t.Fatalf("copyFileAtomic error = %v, want destination-exists error", err)
+	}
+	if got := readFileString(t, target); got != "target data" {
+		t.Fatalf("non-forced publish changed symlink target: %q", got)
+	}
+	if info, err := os.Lstat(dst); err != nil || info.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("destination symlink was replaced: info=%v err=%v", info, err)
+	}
+}
+
+func TestCopyFileAtomicRejectsSharedMutableParent(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows DACL rejection is covered by fileutil platform tests")
+	}
+	root := t.TempDir()
+	dir := filepath.Join(root, "shared")
+	if err := os.Mkdir(dir, 0o777); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(dir, 0o777); err != nil {
+		t.Fatal(err)
+	}
+	src := filepath.Join(root, "source")
+	writeFileBytes(t, src, []byte("restored data"))
+	dst := filepath.Join(dir, "destination")
+	if err := copyFileAtomic(src, dst, false); err == nil {
+		t.Fatal("restore staging accepted a parent mutable by another account")
+	}
+	if fileExists(dst) {
+		t.Fatal("unsafe destination parent was modified")
+	}
+}
+
+func TestRestoreUsesCanonicalDestinationParent(t *testing.T) {
+	root := t.TempDir()
+	realDir := filepath.Join(root, "real")
+	if err := os.Mkdir(realDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	aliasDir := filepath.Join(root, "alias")
+	if err := os.Symlink(realDir, aliasDir); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	in := filepath.Join(root, "backup.db")
+	createKMSDB(t, in)
+	aliasDst := filepath.Join(aliasDir, "kms.db")
+	if err := restoreFile(in, aliasDst, false); err != nil {
+		t.Fatal(err)
+	}
+	if err := storage.ValidateKMSDatabase(filepath.Join(realDir, "kms.db")); err != nil {
+		t.Fatalf("canonical destination is not a valid KMS database: %v", err)
 	}
 }
 

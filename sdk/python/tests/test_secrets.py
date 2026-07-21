@@ -66,7 +66,7 @@ def test_bearer_token_propagation():
     srv, addr, _store = start_server(require_bearer="sekret", whoami_namespace=NS)
     try:
         # Correct token succeeds.
-        ok = Client(addr, namespace=NS, token="sekret")
+        ok = Client(addr, namespace=NS, token="sekret", insecure=True)
         ok.put_parameter("p", "v")
         assert ok.get_parameter("p") == "v"
         ok.close()
@@ -74,7 +74,7 @@ def test_bearer_token_propagation():
         # Missing token is rejected.
         from kms_paramstore import UnauthenticatedError
 
-        bad = Client(addr, namespace=NS)
+        bad = Client(addr, namespace=NS, insecure=True)
         with pytest.raises(UnauthenticatedError):
             bad.get_parameter("p")
         bad.close()

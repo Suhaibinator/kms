@@ -289,6 +289,22 @@ func (h *adminServer) ListSubscribers(ctx context.Context, req *kmsv1.ListSubscr
 	return &kmsv1.ListSubscribersResponse{Subscribers: out, CurrentRevision: rev}, nil
 }
 
+func (h *adminServer) ListReleaseSubscribers(ctx context.Context, req *kmsv1.ListReleaseSubscribersRequest) (*kmsv1.ListReleaseSubscribersResponse, error) {
+	pr, err := requirePrincipal(ctx)
+	if err != nil {
+		return nil, err
+	}
+	rows, next, rev, err := h.s.svc.ListReleaseSubscribers(ctx, pr, nsRefFromProto(req.GetNamespace()), req.GetReleaseName(), pageFrom(req.GetPageSize(), req.GetPageToken()))
+	if err != nil {
+		return nil, h.s.mapErr(ctx, err)
+	}
+	out := make([]*kmsv1.ReleaseSubscriberState, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, toProtoReleaseSubscriber(row))
+	}
+	return &kmsv1.ListReleaseSubscribersResponse{Subscribers: out, NextPageToken: next, CurrentRevision: rev}, nil
+}
+
 // Health is public: it reports liveness and readiness without requiring
 // credentials or a ready service, so external probes can call it at any time.
 func (h *adminServer) Health(ctx context.Context, _ *kmsv1.HealthRequest) (*kmsv1.HealthResponse, error) {

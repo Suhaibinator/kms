@@ -2,13 +2,16 @@ package paramstore
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/status"
 )
 
@@ -254,6 +257,70 @@ func TestNewClientValidation(t *testing.T) {
 	}
 	if _, err := NewClient(Config{Endpoint: "x:1", Namespace: "not-a-namespace"}); err == nil {
 		t.Error("expected error for malformed Namespace")
+	}
+	if c, err := NewClient(Config{Endpoint: "x:1", Token: "identity-token"}); err == nil {
+		_ = c.Close()
+		t.Error("expected error when transport security is not configured")
+	}
+}
+
+func TestNewClientTransportControls(t *testing.T) {
+	tests := []struct {
+		name string
+		cfg  Config
+	}{
+		{
+			name: "explicit insecure",
+			cfg:  Config{Endpoint: "passthrough:///transport-test", Insecure: true},
+		},
+		{
+			name: "TLS",
+			cfg: Config{
+				Endpoint: "passthrough:///transport-test",
+				TLS:      &tls.Config{MinVersion: tls.VersionTLS12},
+			},
+		},
+		{
+			name: "custom transport credentials",
+			cfg: Config{
+				Endpoint: "passthrough:///transport-test",
+				DialOptions: []grpc.DialOption{
+					grpc.WithTransportCredentials(insecure.NewCredentials()),
+				},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			client, err := NewClient(tt.cfg)
+			if err != nil {
+				t.Fatalf("NewClient: %v", err)
+			}
+			if err := client.Close(); err != nil {
+				t.Fatalf("Close: %v", err)
+			}
+		})
+	}
+
+	if _, err := NewClient(Config{
+		Endpoint: "passthrough:///transport-test",
+		TLS:      &tls.Config{MinVersion: tls.VersionTLS12},
+		Insecure: true,
+	}); err == nil {
+		t.Error("expected TLS and Insecure to be rejected together")
+	}
+
+	// An unrelated custom option must not cause the SDK to restore its old
+	// implicit cleartext credentials. grpc.NewClient fails closed when no
+	// transport credential was supplied.
+	if _, err := NewClient(Config{
+		Endpoint: "passthrough:///transport-test",
+		DialOptions: []grpc.DialOption{
+			grpc.WithDefaultCallOptions(grpc.WaitForReady(true)),
+		},
+	}); err == nil {
+		t.Error("expected custom options without transport credentials to fail")
 	}
 }
 

@@ -10,7 +10,7 @@ from tests.helpers import wait_until
 
 
 def _client(addr, ttl):
-    return Client(addr, namespace=NS, cache_ttl=ttl)
+    return Client(addr, namespace=NS, insecure=True, cache_ttl=ttl)
 
 
 def test_parameter_cache_hit_avoids_refetch(server):

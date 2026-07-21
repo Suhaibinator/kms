@@ -2,6 +2,7 @@ package storage
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"time"
 
@@ -164,79 +165,72 @@ func (s *SQLStore) findParameter(db *gorm.DB, ref domain.Ref) (parameterModel, e
 
 // GetParameter resolves version (>0) or label (default "current").
 func (s *SQLStore) GetParameter(ctx context.Context, ref domain.Ref, version uint64, label string) (domain.Parameter, error) {
-	db := s.db.WithContext(ctx)
-	p, err := s.findParameter(db, ref)
-	if err != nil {
-		return domain.Parameter{}, err
-	}
-	ver, err := resolveParamVersion(db, ref, p.ID, version, label)
-	if err != nil {
-		return domain.Parameter{}, err
-	}
-	var pv parameterVersionModel
-	if err := db.Where("parameter_id = ? AND version_number = ?", p.ID, ver).First(&pv).Error; err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return domain.Parameter{}, domain.Errorf(domain.ErrNotFound, "parameter %s version %d", ref, ver)
+	var out domain.Parameter
+	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		p, err := s.findParameter(tx, ref)
+		if err != nil {
+			return err
 		}
-		return domain.Parameter{}, err
-	}
-	labels, err := loadParamLabels(db, p.ID)
-	if err != nil {
-		return domain.Parameter{}, err
-	}
-	return domain.Parameter{
-		Ref:         ref,
-		Value:       pv.Value,
-		ContentType: pv.ContentType,
-		Version:     ver,
-		Metadata:    pv.MetadataJSON,
-		CreatedBy:   pv.CreatedBy,
-		CreatedAt:   parseTime(pv.CreatedAt),
-		Labels:      labels,
-	}, nil
+		ver, err := resolveParamVersion(tx, ref, p.ID, version, label)
+		if err != nil {
+			return err
+		}
+		var pv parameterVersionModel
+		if err := tx.Where("parameter_id = ? AND version_number = ?", p.ID, ver).First(&pv).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return domain.Errorf(domain.ErrNotFound, "parameter %s version %d", ref, ver)
+			}
+			return err
+		}
+		labels, err := loadParamLabels(tx, p.ID)
+		if err != nil {
+			return err
+		}
+		out = domain.Parameter{
+			Ref: ref, Value: pv.Value, ContentType: pv.ContentType, Version: ver,
+			Metadata: pv.MetadataJSON, CreatedBy: pv.CreatedBy,
+			CreatedAt: parseTime(pv.CreatedAt), Labels: labels,
+		}
+		return nil
+	}, &sql.TxOptions{ReadOnly: true})
+	return out, err
 }
 
 // GetParameterInfo returns parameter-level metadata plus version history.
 func (s *SQLStore) GetParameterInfo(ctx context.Context, ref domain.Ref) (domain.ParameterInfo, error) {
-	db := s.db.WithContext(ctx)
-	p, err := s.findParameter(db, ref)
-	if err != nil {
-		return domain.ParameterInfo{}, err
-	}
-	var vers []parameterVersionModel
-	if err := db.Where("parameter_id = ?", p.ID).Order("version_number ASC").Find(&vers).Error; err != nil {
-		return domain.ParameterInfo{}, err
-	}
-	labels, err := loadParamLabels(db, p.ID)
-	if err != nil {
-		return domain.ParameterInfo{}, err
-	}
-	vinfos := make([]domain.ParameterVersionInfo, 0, len(vers))
-	for _, v := range vers {
-		vinfos = append(vinfos, domain.ParameterVersionInfo{
-			Version:     uint64(v.VersionNumber),
-			ContentType: v.ContentType,
-			State:       v.State,
-			CreatedBy:   v.CreatedBy,
-			CreatedAt:   parseTime(v.CreatedAt),
-			Metadata:    v.MetadataJSON,
-		})
-	}
-	return domain.ParameterInfo{
-		Ref:         ref,
-		ContentType: p.ContentType,
-		Metadata:    p.MetadataJSON,
-		CreatedAt:   parseTime(p.CreatedAt),
-		UpdatedAt:   parseTime(p.UpdatedAt),
-		Labels:      labels,
-		Versions:    vinfos,
-	}, nil
+	var out domain.ParameterInfo
+	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		p, err := s.findParameter(tx, ref)
+		if err != nil {
+			return err
+		}
+		var vers []parameterVersionModel
+		if err := tx.Where("parameter_id = ?", p.ID).Order("version_number ASC").Find(&vers).Error; err != nil {
+			return err
+		}
+		labels, err := loadParamLabels(tx, p.ID)
+		if err != nil {
+			return err
+		}
+		vinfos := make([]domain.ParameterVersionInfo, 0, len(vers))
+		for _, v := range vers {
+			vinfos = append(vinfos, domain.ParameterVersionInfo{
+				Version: uint64(v.VersionNumber), ContentType: v.ContentType, State: v.State,
+				CreatedBy: v.CreatedBy, CreatedAt: parseTime(v.CreatedAt), Metadata: v.MetadataJSON,
+			})
+		}
+		out = domain.ParameterInfo{
+			Ref: ref, ContentType: p.ContentType, Metadata: p.MetadataJSON,
+			CreatedAt: parseTime(p.CreatedAt), UpdatedAt: parseTime(p.UpdatedAt), Labels: labels, Versions: vinfos,
+		}
+		return nil
+	}, &sql.TxOptions{ReadOnly: true})
+	return out, err
 }
 
 // currentParameter loads a parameter at its "current" label. It returns
 // (_, false, nil) when the parameter has no current label or version row.
-func (s *SQLStore) currentParameter(ctx context.Context, ns domain.NamespaceRef, p parameterModel) (domain.Parameter, bool, error) {
-	db := s.db.WithContext(ctx)
+func currentParameter(db *gorm.DB, ns domain.NamespaceRef, p parameterModel) (domain.Parameter, bool, error) {
 	var lm parameterLabelModel
 	err := db.Where("parameter_id = ? AND label = ?", p.ID, domain.LabelCurrent).First(&lm).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -277,35 +271,40 @@ func (s *SQLStore) ListParameters(ctx context.Context, ns domain.NamespaceRef, k
 	if err != nil {
 		return nil, "", err
 	}
-	nsID, err := resolveNamespaceID(s.db.WithContext(ctx), ns)
+	var out []domain.Parameter
+	next := ""
+	err = s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		nsID, err := resolveNamespaceID(tx, ns)
+		if err != nil {
+			return err
+		}
+		q := tx.Model(&parameterModel{}).Where("namespace_id = ?", nsID)
+		if after != "" {
+			q = q.Where("name > ?", after)
+		}
+		q = applyKeyPrefix(q, "name", keyPrefix)
+		var rows []parameterModel
+		if err := q.Order("name ASC").Limit(limit + 1).Find(&rows).Error; err != nil {
+			return err
+		}
+		if len(rows) > limit {
+			rows = rows[:limit]
+			next = encodeToken(rows[len(rows)-1].Name)
+		}
+		out = make([]domain.Parameter, 0, len(rows))
+		for _, p := range rows {
+			param, ok, err := currentParameter(tx, ns, p)
+			if err != nil {
+				return err
+			}
+			if ok {
+				out = append(out, param)
+			}
+		}
+		return nil
+	}, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
 		return nil, "", err
-	}
-	q := s.db.WithContext(ctx).Model(&parameterModel{}).Where("namespace_id = ?", nsID)
-	if after != "" {
-		q = q.Where("name > ?", after)
-	}
-	q = applyKeyPrefix(q, "name", keyPrefix)
-
-	var rows []parameterModel
-	if err := q.Order("name ASC").Limit(limit + 1).Find(&rows).Error; err != nil {
-		return nil, "", err
-	}
-	next := ""
-	if len(rows) > limit {
-		rows = rows[:limit]
-		next = encodeToken(rows[len(rows)-1].Name)
-	}
-
-	out := make([]domain.Parameter, 0, len(rows))
-	for _, p := range rows {
-		param, ok, err := s.currentParameter(ctx, ns, p)
-		if err != nil {
-			return nil, "", err
-		}
-		if ok {
-			out = append(out, param)
-		}
 	}
 	return out, next, nil
 }
@@ -317,6 +316,9 @@ func (s *SQLStore) DeleteParameter(ctx context.Context, ref domain.Ref) (uint64,
 	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		p, err := s.findParameter(tx, ref)
 		if err != nil {
+			return err
+		}
+		if err := rejectProtectedReleaseReference(tx, ref, domain.ReleaseEntryParameter, 0); err != nil {
 			return err
 		}
 		if err := tx.Where("parameter_id = ?", p.ID).Delete(&parameterLabelModel{}).Error; err != nil {

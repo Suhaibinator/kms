@@ -1,7 +1,9 @@
 package storage
 
 import (
+	"bytes"
 	"context"
+	"database/sql"
 	"errors"
 	"time"
 
@@ -67,6 +69,15 @@ func (s *SQLStore) CreateSecretVersion(ctx context.Context, p CreateSecretParams
 		}
 		var sec secretModel
 		e := tx.Where("namespace_id = ? AND name = ?", nsID, p.Ref.Key).First(&sec).Error
+		if p.Expected != nil {
+			exists := e == nil
+			if exists != p.Expected.Exists {
+				return domain.Errorf(domain.ErrAborted, "secret %s changed concurrently; retry", p.Ref)
+			}
+			if exists && (sec.ID != p.Expected.ID || !bytes.Equal(sec.AccessTokenHash, p.Expected.AccessTokenHash)) {
+				return domain.Errorf(domain.ErrAborted, "secret %s changed concurrently; retry", p.Ref)
+			}
+		}
 		switch {
 		case errors.Is(e, gorm.ErrRecordNotFound):
 			sec = secretModel{
@@ -110,6 +121,10 @@ func (s *SQLStore) CreateSecretVersion(ctx context.Context, p CreateSecretParams
 			return err
 		}
 		newVer := uint64(maxVer) + 1
+		hasAccessToken := len(sec.AccessTokenHash) > 0
+		if p.AccessTokenHash != nil {
+			hasAccessToken = len(p.AccessTokenHash) > 0
+		}
 
 		payload, err := p.Encrypt(newVer)
 		if err != nil {
@@ -132,21 +147,24 @@ func (s *SQLStore) CreateSecretVersion(ctx context.Context, p CreateSecretParams
 		}
 
 		sv := secretVersionModel{
-			SecretID:      sec.ID,
-			VersionNumber: int64(newVer),
-			Ciphertext:    payload.Ciphertext,
-			EncryptedDEK:  payload.EncryptedDEK,
-			KEKID:         payload.KEKID,
-			WrapMode:      zeroOr(payload.WrapMode, domain.WrapModeStandard),
-			ClientKeySalt: payload.ClientKeySalt,
-			Algorithm:     zeroOr(payload.Algorithm, "AES-256-GCM"),
-			Nonce:         payload.Nonce,
-			AAD:           payload.AAD,
-			State:         domain.StateEnabled,
-			CreatedBy:     p.CreatedBy,
-			CreatedAt:     now,
-			ExpiresAt:     fmtTimePtr(p.ExpiresAt),
-			MetadataJSON:  metadata,
+			SecretID:       sec.ID,
+			VersionNumber:  int64(newVer),
+			ContentType:    contentType,
+			ClientBound:    b2i(p.ClientBound),
+			HasAccessToken: b2i(hasAccessToken),
+			Ciphertext:     payload.Ciphertext,
+			EncryptedDEK:   payload.EncryptedDEK,
+			KEKID:          payload.KEKID,
+			WrapMode:       zeroOr(payload.WrapMode, domain.WrapModeStandard),
+			ClientKeySalt:  payload.ClientKeySalt,
+			Algorithm:      zeroOr(payload.Algorithm, "AES-256-GCM"),
+			Nonce:          payload.Nonce,
+			AAD:            payload.AAD,
+			State:          domain.StateEnabled,
+			CreatedBy:      p.CreatedBy,
+			CreatedAt:      now,
+			ExpiresAt:      fmtTimePtr(p.ExpiresAt),
+			MetadataJSON:   metadata,
 		}
 		if err := tx.Omit(clause.Associations).Create(&sv).Error; err != nil {
 			return err
@@ -190,54 +208,66 @@ func (s *SQLStore) CreateSecretVersion(ctx context.Context, p CreateSecretParams
 
 // GetSecretRecord returns the secret-level row.
 func (s *SQLStore) GetSecretRecord(ctx context.Context, ref domain.Ref) (SecretRecord, error) {
-	db := s.db.WithContext(ctx)
-	sec, err := s.findSecret(db, ref)
-	if err != nil {
-		return SecretRecord{}, err
-	}
-	labels, err := loadSecretLabels(db, sec.ID)
-	if err != nil {
-		return SecretRecord{}, err
-	}
-	return toSecretRecord(sec, ref, labels), nil
+	var out SecretRecord
+	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		sec, err := s.findSecret(tx, ref)
+		if err != nil {
+			return err
+		}
+		labels, err := loadSecretLabels(tx, sec.ID)
+		if err != nil {
+			return err
+		}
+		out = toSecretRecord(sec, ref, labels)
+		return nil
+	}, &sql.TxOptions{ReadOnly: true})
+	return out, err
 }
 
 // GetSecretVersion resolves version (>0) or label (default "current") and
 // returns both the secret row and the version row. It does not filter by state.
 func (s *SQLStore) GetSecretVersion(ctx context.Context, ref domain.Ref, version uint64, label string) (SecretRecord, SecretVersionRecord, error) {
-	db := s.db.WithContext(ctx)
-	sec, err := s.findSecret(db, ref)
-	if err != nil {
-		return SecretRecord{}, SecretVersionRecord{}, err
-	}
-	ver := version
-	if ver == 0 {
-		lbl := zeroOr(label, domain.LabelCurrent)
-		var lm secretLabelModel
-		if err := db.Where("secret_id = ? AND label = ?", sec.ID, lbl).First(&lm).Error; err != nil {
-			if errors.Is(err, gorm.ErrRecordNotFound) {
-				return SecretRecord{}, SecretVersionRecord{}, domain.Errorf(domain.ErrNotFound, "secret %s label %q", ref, lbl)
+	var rec SecretRecord
+	var versionRec SecretVersionRecord
+	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		sec, err := s.findSecret(tx, ref)
+		if err != nil {
+			return err
+		}
+		ver := version
+		if ver == 0 {
+			lbl := zeroOr(label, domain.LabelCurrent)
+			var lm secretLabelModel
+			if err := tx.Where("secret_id = ? AND label = ?", sec.ID, lbl).First(&lm).Error; err != nil {
+				if errors.Is(err, gorm.ErrRecordNotFound) {
+					return domain.Errorf(domain.ErrNotFound, "secret %s label %q", ref, lbl)
+				}
+				return err
 			}
-			return SecretRecord{}, SecretVersionRecord{}, err
+			ver = uint64(lm.VersionNumber)
 		}
-		ver = uint64(lm.VersionNumber)
-	}
-	var sv secretVersionModel
-	if err := db.Where("secret_id = ? AND version_number = ?", sec.ID, ver).First(&sv).Error; err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return SecretRecord{}, SecretVersionRecord{}, domain.Errorf(domain.ErrNotFound, "secret %s version %d", ref, ver)
+		var sv secretVersionModel
+		if err := tx.Where("secret_id = ? AND version_number = ?", sec.ID, ver).First(&sv).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return domain.Errorf(domain.ErrNotFound, "secret %s version %d", ref, ver)
+			}
+			return err
 		}
-		return SecretRecord{}, SecretVersionRecord{}, err
-	}
-	labels, err := loadSecretLabels(db, sec.ID)
+		labels, err := loadSecretLabels(tx, sec.ID)
+		if err != nil {
+			return err
+		}
+		rec = toSecretRecord(sec, ref, labels)
+		versionRec = toSecretVersionRecord(sv)
+		return nil
+	}, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
 		return SecretRecord{}, SecretVersionRecord{}, err
 	}
-	return toSecretRecord(sec, ref, labels), toSecretVersionRecord(sv), nil
+	return rec, versionRec, nil
 }
 
-func (s *SQLStore) secretInfo(ctx context.Context, ns domain.NamespaceRef, sec secretModel) (domain.Secret, error) {
-	db := s.db.WithContext(ctx)
+func secretInfo(db *gorm.DB, ns domain.NamespaceRef, sec secretModel) (domain.Secret, error) {
 	labels, err := loadSecretLabels(db, sec.ID)
 	if err != nil {
 		return domain.Secret{}, err
@@ -273,11 +303,16 @@ func (s *SQLStore) secretInfo(ctx context.Context, ns domain.NamespaceRef, sec s
 
 // GetSecretInfo returns secret-level metadata and version history.
 func (s *SQLStore) GetSecretInfo(ctx context.Context, ref domain.Ref) (domain.Secret, error) {
-	sec, err := s.findSecret(s.db.WithContext(ctx), ref)
-	if err != nil {
-		return domain.Secret{}, err
-	}
-	return s.secretInfo(ctx, ref.NS, sec)
+	var out domain.Secret
+	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		sec, err := s.findSecret(tx, ref)
+		if err != nil {
+			return err
+		}
+		out, err = secretInfo(tx, ref.NS, sec)
+		return err
+	}, &sql.TxOptions{ReadOnly: true})
+	return out, err
 }
 
 // ListSecrets returns secrets in ns matching keyPrefix, ordered by key. The
@@ -288,32 +323,38 @@ func (s *SQLStore) ListSecrets(ctx context.Context, ns domain.NamespaceRef, keyP
 	if err != nil {
 		return nil, "", err
 	}
-	nsID, err := resolveNamespaceID(s.db.WithContext(ctx), ns)
+	var out []domain.Secret
+	next := ""
+	err = s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		nsID, err := resolveNamespaceID(tx, ns)
+		if err != nil {
+			return err
+		}
+		q := tx.Model(&secretModel{}).Where("namespace_id = ?", nsID)
+		if after != "" {
+			q = q.Where("name > ?", after)
+		}
+		q = applyKeyPrefix(q, "name", keyPrefix)
+		var rows []secretModel
+		if err := q.Order("name ASC").Limit(limit + 1).Find(&rows).Error; err != nil {
+			return err
+		}
+		if len(rows) > limit {
+			rows = rows[:limit]
+			next = encodeToken(rows[len(rows)-1].Name)
+		}
+		out = make([]domain.Secret, 0, len(rows))
+		for _, sec := range rows {
+			info, err := secretInfo(tx, ns, sec)
+			if err != nil {
+				return err
+			}
+			out = append(out, info)
+		}
+		return nil
+	}, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
 		return nil, "", err
-	}
-	q := s.db.WithContext(ctx).Model(&secretModel{}).Where("namespace_id = ?", nsID)
-	if after != "" {
-		q = q.Where("name > ?", after)
-	}
-	q = applyKeyPrefix(q, "name", keyPrefix)
-
-	var rows []secretModel
-	if err := q.Order("name ASC").Limit(limit + 1).Find(&rows).Error; err != nil {
-		return nil, "", err
-	}
-	next := ""
-	if len(rows) > limit {
-		rows = rows[:limit]
-		next = encodeToken(rows[len(rows)-1].Name)
-	}
-	out := make([]domain.Secret, 0, len(rows))
-	for _, sec := range rows {
-		info, err := s.secretInfo(ctx, ns, sec)
-		if err != nil {
-			return nil, "", err
-		}
-		out = append(out, info)
 	}
 	return out, next, nil
 }
@@ -325,6 +366,9 @@ func (s *SQLStore) DeleteSecret(ctx context.Context, ref domain.Ref) (uint64, er
 	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		sec, err := s.findSecret(tx, ref)
 		if err != nil {
+			return err
+		}
+		if err := rejectProtectedReleaseReference(tx, ref, domain.ReleaseEntrySecret, 0); err != nil {
 			return err
 		}
 		if err := tx.Where("secret_id = ?", sec.ID).Delete(&secretLabelModel{}).Error; err != nil {
@@ -422,6 +466,9 @@ func (s *SQLStore) DestroySecretVersion(ctx context.Context, ref domain.Ref, ver
 	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		sec, err := s.findSecret(tx, ref)
 		if err != nil {
+			return err
+		}
+		if err := rejectProtectedReleaseReference(tx, ref, domain.ReleaseEntrySecret, version); err != nil {
 			return err
 		}
 		var sv secretVersionModel

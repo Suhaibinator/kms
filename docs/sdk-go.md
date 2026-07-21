@@ -55,13 +55,14 @@ returned by `admin ca show`.
 | `Endpoint` | `host:port` of the server's gRPC listener. Required unless `DialOptions` supplies a custom dialer (as tests do). |
 | `Namespace` | The client's home namespace in `"env/app"` form (e.g. `"prod/gradethis"`). Relative keys resolve against it. Leave empty to discover it from the identity at first use (see [Namespaces and keys](#namespaces-and-keys)). A malformed value fails `NewClient`. |
 | `Token` | Per-client identity token, sent as `authorization: Bearer <token>` on every RPC. **Optional** when `TLS` carries a client certificate (the cert proves identity); required only for token-method identities. Empty is also allowed against an unauthenticated/dev server. |
-| `TLS` | `*tls.Config`. `nil` dials insecure (development only). Build one with `TLSFromFiles`/`TLSConfig` (server-auth only) or `MTLSFromFiles`/`MTLSConfig` (client cert + server auth). The `*FromFiles` variants panic on error and are meant for inline use in a `Config` literal; the non-panicking variants return an error. |
+| `TLS` | `*tls.Config`. Build one with `TLSFromFiles`/`TLSConfig` (server-auth only) or `MTLSFromFiles`/`MTLSConfig` (client cert + server auth). The `*FromFiles` variants panic on error and are meant for inline use in a `Config` literal; the non-panicking variants return an error. When `TLS` is `nil`, the client requires either `Insecure: true` or explicit custom transport credentials in `DialOptions`. |
+| `Insecure` | Explicitly opts into a cleartext connection for local development. Defaults to `false` and is mutually exclusive with `TLS`; never enable it across an untrusted network. |
 | `CacheTTL` | Enables an in-memory read cache for `GetParameter`/`GetSecret` when `> 0`. Cache entries are invalidated automatically by watch events once a subscription is active (see Hot reload below), and unconditionally on every write. |
 | `FallbackToDefaultsOnError` | When `false` (default), a declarative field's `Default` is used only when the store affirmatively reports the value **absent** (`ErrNotFound`); every other fetch error fails `Init`/`Resolve`, so a process cannot silently boot on a dev default because the store was briefly unreachable. Set `true` to restore permissive any-error → `Default`. |
 | `Timeout` | Default per-RPC deadline applied when the caller's `context.Context` has no earlier deadline. Defaults to 5s. Does not apply to the long-lived `Subscribe` stream. |
 | `ClientName` | Identifies this client in the subscription registry (visible on the frontend's Subscribers page). Defaults to `filepath.Base(os.Args[0])`. |
 | `Logger` | Receives operational log lines (keys, env var names, connection state, revisions) — never secret plaintext. Defaults to the standard `log` package. Implement the one-method `Logger` interface (`Printf(format string, args ...any)`) to redirect. |
-| `DialOptions` | Extra `grpc.DialOption`s appended after the SDK's own defaults, so they can override transport credentials or inject a custom dialer (e.g. bufconn in tests). |
+| `DialOptions` | Extra `grpc.DialOption`s appended after the SDK's own options, so advanced callers can override transport credentials or inject a custom dialer (e.g. bufconn in tests). If neither `TLS` nor `Insecure` is set, these options must supply transport credentials; gRPC otherwise fails closed. |
 
 `NewClient` dials immediately (`grpc.NewClient`) and starts a background
 goroutine that drains change-callback dispatch; it does not block on
@@ -388,6 +389,109 @@ within the subscribed **namespaces** that are absent from a snapshot are
 reverted, so a known key in another namespace is never cleared by an unrelated
 snapshot.
 
+## Atomic release loading
+
+Use `ReleaseLoader` when several parameter and secret versions must be
+prepared and installed as one candidate. It watches one named release in the
+client's home namespace; unlike ordinary `ParameterValue` callbacks, a release
+event cannot be permanently lost to callback-queue saturation.
+
+```go
+loader, err := paramstore.NewReleaseLoader(client, paramstore.ReleaseLoaderConfig{
+    Name:              "runtime",
+    ReconcileInterval: time.Minute, // default
+    MaxConcurrentFetches: 16,       // default; maximum 256
+    SecretTokenProvider: func(alias, path string) (string, bool) {
+        token, ok := bootstrapSecretTokens[alias]
+        return token, ok
+    },
+})
+if err != nil {
+    return err
+}
+
+err = loader.Run(ctx, func(ctx context.Context, candidate paramstore.ReleaseSnapshot) (
+    paramstore.PreparedRelease, error,
+) {
+    limits, ok := candidate.Parameter("rate_limits")
+    if !ok {
+        return nil, errors.New("rate_limits alias is missing")
+    }
+    password, ok := candidate.Secret("db_password")
+    if !ok {
+        return nil, errors.New("db_password alias is missing")
+    }
+
+    // Decode and validate explicitly. Secret plaintext is accessible only
+    // through Value/StringValue, just like a direct GetSecret result.
+    return prepareRuntime(ctx, limits.Value(), password.Value())
+})
+```
+
+`ReleaseLoaderConfig.Name` is required. `ReconcileInterval` defaults to one
+minute and `MaxConcurrentFetches` to 16. `InstanceID` normally stays empty so
+the loader generates one process-lifetime UUID and reuses it across stream
+reconnects; set it only when the runtime already owns a stable replica ID. The
+client's `Config.ClientName` groups replicas in subscriber views.
+
+The `SecretTokenProvider(alias, path)` callback is invoked only for entries
+captured as token-protected or client-bound. Tokens remain local and are sent
+only as metadata on that pinned secret's `GetSecret` RPC; they never enter the
+release, snapshot formatting, watch event, acknowledgement, metric, or KMS
+storage.
+
+`ReleaseSnapshot` provides `Namespace`, `Name`, `Version`,
+`ActivationRevision`, `SchemaID`, `SchemaVersion`, `Digest`, and
+`MetadataJSON`, plus alias-keyed `Entry`/`Entries`, `Parameter`/`Parameters`,
+and `Secret`/`Secrets` accessors. Maps returned from plural accessors are
+copies. Each entry exposes exact path/version, content type, captured metadata,
+parameter digest, and non-sensitive secret protection flags. `String`, every
+`fmt` verb, and JSON marshaling exclude resolved parameter and secret values;
+`Secret` retains its existing `[REDACTED]` formatting.
+
+Application preparation returns:
+
+```go
+type PreparedRelease interface {
+    Commit() // must be infallible; normally an atomic pointer swap
+    Abort()  // frees an uncommitted candidate
+}
+```
+
+The callback context is canceled when a newer activation supersedes the
+candidate. The loader resolves exact pins concurrently, verifies versions and
+digests, reports `received`, calls preparation, reports `prepared`, then
+fresh-reads the active name/version/revision/digest before `Commit`. It calls
+`Abort` exactly once for any successfully prepared candidate that cannot
+commit. A failed initial candidate makes `Run` return; after one successful
+commit, outages and rejected candidates leave the last-known-good release in
+place. A panic in `Commit` is fatal and is never reported as `applied`.
+
+For an explicit typed decode step without reflection:
+
+```go
+err = paramstore.RunTypedRelease(ctx, loader,
+    func(snapshot paramstore.ReleaseSnapshot) (RuntimeConfig, error) {
+        return decodeRuntime(snapshot)
+    },
+    func(ctx context.Context, cfg RuntimeConfig) (paramstore.PreparedRelease, error) {
+        return prepareTypedRuntime(ctx, cfg)
+    },
+)
+```
+
+`loader.Status()` and `loader.Stats()` return bounded redacted state and
+low-cardinality counters: observed/applied version and revision, lifecycle
+state, reconnects, timings, and rejection-category counts. They contain no
+aliases, paths, values, tokens, or diagnostics.
+
+The final fresh read is a staleness fence, not a distributed lock. A release
+activated immediately after it can briefly leave this replica on the prior
+version; the newer activation is then handled as the next candidate. Replicas
+apply independently—there is no fleet-wide barrier in version 1. Server-side
+release/schema semantics are documented in
+[`configuration-releases.md`](configuration-releases.md).
+
 ## Testing against a fake server
 
 `sdk/go/paramstore/paramstoretest` provides an in-process, scriptable fake
@@ -407,6 +511,10 @@ client, _ := paramstore.NewClient(paramstore.Config{
     DialOptions: srv.DialOptions(),
 })
 ```
+
+`srv.DialOptions()` includes explicit cleartext credentials for this in-process
+test transport. For a standalone plaintext development server, opt in directly
+with `Insecure: true`.
 
 Scripting surface:
 

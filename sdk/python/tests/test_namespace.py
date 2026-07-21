@@ -14,7 +14,7 @@ def test_whoami_discovers_namespace():
     srv, addr, store = _server(whoami_namespace="prod/gradethis")
     try:
         # No namespace configured: the client discovers it from WhoAmI on first use.
-        c = Client(addr)
+        c = Client(addr, insecure=True)
         c.put_parameter("rate", "10")  # relative key -> resolves to prod/gradethis
         assert ("prod", "gradethis", "rate") in store.params
         assert c.get_parameter("rate") == "10"
@@ -30,7 +30,7 @@ def test_whoami_discovers_namespace():
 def test_whoami_called_once_and_cached():
     srv, addr, store = _server(whoami_namespace="prod/gradethis")
     try:
-        c = Client(addr)
+        c = Client(addr, insecure=True)
         # Several relative-key ops; discovery must not depend on repeated WhoAmI.
         c.put_parameter("a", "1")
         c.put_parameter("b", "2")
@@ -47,7 +47,7 @@ def test_whoami_called_once_and_cached():
 def test_unbound_identity_relative_key_raises():
     srv, addr, store = _server(whoami_namespace=None)  # unbound
     try:
-        c = Client(addr)
+        c = Client(addr, insecure=True)
         with pytest.raises(NoNamespaceError) as ei:
             c.get_parameter("rate")
         assert "rate" in str(ei.value)  # message names the key
@@ -61,7 +61,7 @@ def test_unbound_identity_relative_key_raises():
 def test_unbound_identity_absolute_key_works():
     srv, addr, store = _server(whoami_namespace=None)
     try:
-        c = Client(addr)
+        c = Client(addr, insecure=True)
         # Absolute paths need no namespace.
         c.put_parameter("/prod/svc/k", "v")
         assert c.get_parameter("/prod/svc/k") == "v"
@@ -75,14 +75,14 @@ def test_bad_namespace_config_fails_fast():
     try:
         # Structural failures are caught client-side...
         with pytest.raises(ConfigError):
-            Client(addr, namespace="no-slash")
+            Client(addr, namespace="no-slash", insecure=True)
         with pytest.raises(ConfigError):
-            Client(addr, namespace="prod/")  # empty app
+            Client(addr, namespace="prod/", insecure=True)  # empty app
         with pytest.raises(ConfigError):
-            Client(addr, namespace="prod/app/extra")  # extra slash
+            Client(addr, namespace="prod/app/extra", insecure=True)  # extra slash
         # ...but the character set is the server's authority, so a name the SDK
         # can't prove wrong (uppercase) is accepted client-side (Go parity).
-        Client(addr, namespace="prod/App").close()
+        Client(addr, namespace="prod/App", insecure=True).close()
     finally:
         srv.stop(grace=0)
 
@@ -92,7 +92,7 @@ def test_configured_namespace_skips_whoami():
     # must avoid that call entirely for absolute-free relative reads.
     srv, addr, store = _server(require_bearer="tok", whoami_namespace="prod/app")
     try:
-        c = Client(addr, namespace="prod/app", token="tok")
+        c = Client(addr, namespace="prod/app", token="tok", insecure=True)
         c.put_parameter("k", "v")
         assert c.get_parameter("k") == "v"
         c.close()

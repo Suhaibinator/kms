@@ -23,13 +23,14 @@ type memStore struct {
 
 	pingErr error
 
-	identities []*domain.Identity           // by name (with token/cert state)
-	tokenIndex map[string]string            // hex(tokenHash) -> identity name
-	certs      map[string]*certRow          // serial -> issued cert
-	caKey      *storage.CAKeyRecord         // single active CA key (nil until bootstrap)
-	namespaces map[string]*domain.Namespace // key: ns.String()
-	policies   []domain.Policy
-	audit      []domain.AuditEvent
+	identities      []*domain.Identity           // by name (with token/cert state)
+	tokenIndex      map[string]string            // hex(tokenHash) -> identity name
+	certs           map[string]*certRow          // serial -> issued cert
+	caKey           *storage.CAKeyRecord         // single active CA key (nil until bootstrap)
+	namespaces      map[string]*domain.Namespace // key: ns.String()
+	nextNamespaceID int64
+	policies        []domain.Policy
+	audit           []domain.AuditEvent
 
 	params map[string]*paramRow // key: ref.String()
 
@@ -109,7 +110,9 @@ func (m *memStore) addNamespace(ns domain.NamespaceRef, methods ...domain.AuthMe
 }
 
 func (m *memStore) putNamespaceLocked(ns domain.NamespaceRef, desc string, methods []domain.AuthMethod) *domain.Namespace {
+	m.nextNamespaceID++
 	rec := &domain.Namespace{
+		ID:                 m.nextNamespaceID,
 		NamespaceRef:       ns,
 		Description:        desc,
 		AllowedAuthMethods: methods,
@@ -134,6 +137,11 @@ func (m *memStore) injectSecretChange(ref domain.Ref, changeType string, version
 }
 
 func (m *memStore) appendChangeLocked(e domain.ChangeLogEntry) uint64 {
+	if e.NamespaceID == 0 {
+		if ns := m.namespaces[e.Ref.NS.String()]; ns != nil {
+			e.NamespaceID = ns.ID
+		}
+	}
 	m.revision++
 	e.Revision = m.revision
 	if e.CreatedAt.IsZero() {
@@ -409,6 +417,8 @@ func (m *memStore) CreateNamespace(_ context.Context, ns domain.Namespace) (doma
 	if ns.CreatedAt.IsZero() {
 		ns.CreatedAt = m.clock()
 	}
+	m.nextNamespaceID++
+	ns.ID = m.nextNamespaceID
 	rec := ns
 	m.namespaces[ns.String()] = &rec
 	return rec, nil

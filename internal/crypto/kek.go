@@ -2,6 +2,7 @@ package crypto
 
 import (
 	"bytes"
+	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
@@ -16,6 +17,7 @@ import (
 	"golang.org/x/crypto/argon2"
 
 	"github.com/Suhaibinator/kms/internal/domain"
+	"github.com/Suhaibinator/kms/internal/fileutil"
 )
 
 // KEK is a key-encryption key. Key material is unexported; the only ways to
@@ -95,7 +97,7 @@ func WriteKEKMaterialFile(path string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	f, err := fileutil.OpenPrivateExclusive(path)
 	if err != nil {
 		Zero(material)
 		return nil, err
@@ -241,6 +243,39 @@ func (r *Keyring) Get(id string) (*KEK, error) {
 		return nil, fmt.Errorf("unknown KEK %q: %w", id, domain.ErrDecryptFailed)
 	}
 	return k, nil
+}
+
+// ActiveSubkey derives a domain-separated key from the active KEK without
+// exposing the KEK material. The returned id lets callers persist which KEK
+// was used so the same subkey can be recovered after rotation or restart.
+func (r *Keyring) ActiveSubkey(purpose string) (string, [sha256.Size]byte, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	if r.active == nil {
+		return "", [sha256.Size]byte{}, errors.New("active KEK is unavailable")
+	}
+	return r.active.ID, deriveSubkey(r.active, purpose), nil
+}
+
+// Subkey derives the same domain-separated key from the identified active or
+// retired KEK. It is used to open records that outlive a KEK rotation.
+func (r *Keyring) Subkey(id, purpose string) ([sha256.Size]byte, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	k, ok := r.byID[id]
+	if !ok {
+		return [sha256.Size]byte{}, fmt.Errorf("unknown KEK %q: %w", id, domain.ErrDecryptFailed)
+	}
+	return deriveSubkey(k, purpose), nil
+}
+
+func deriveSubkey(k *KEK, purpose string) [sha256.Size]byte {
+	mac := hmac.New(sha256.New, k.key)
+	_, _ = mac.Write([]byte("kms/subkey/v1\x00"))
+	_, _ = mac.Write([]byte(purpose))
+	var out [sha256.Size]byte
+	copy(out[:], mac.Sum(nil))
+	return out
 }
 
 // Add registers a retired KEK for decryption of historical records.

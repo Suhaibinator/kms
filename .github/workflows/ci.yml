@@ -21,24 +21,32 @@ jobs:
   go-lint:
     name: Go lint (golangci-lint)
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
+          cache: true
+          cache-dependency-path: go.sum
       - name: golangci-lint
         uses: golangci/golangci-lint-action@v9
         with:
           version: v2.11.4
 
   go-test:
-    name: Go build & test (race)
+    name: Go build & unit tests (race)
     runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      GOTOOLCHAIN: local
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
+          cache: true
+          cache-dependency-path: go.sum
       - name: Verify go.mod / go.sum are tidy
         run: |
           go mod tidy
@@ -48,19 +56,93 @@ jobs:
         run: go vet ./...
       - name: Build
         run: go build ./...
-      - name: Test with race detector and coverage
-        run: go test ./... -race -covermode=atomic -coverprofile=coverage.out
+      - name: Unit tests with race detector and coverage
+        run: make test-unit GO_TEST_TIMEOUT=15m GO_TEST_FLAGS='-race -covermode=atomic -coverprofile=coverage.out'
       - name: Coverage summary
         run: go tool cover -func=coverage.out | tail -1
 
-  go-vuln:
-    name: Go vulnerability scan (govulncheck)
+  # Keep integration tests as a distinct required status. The suite owns its
+  # real SQLite/key material and any loopback listeners, so CI needs no service
+  # containers, cloud credentials, or network dependencies beyond module setup.
+  go-integration:
+    name: Go integration tests (race)
     runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      GOTOOLCHAIN: local
+      TZ: UTC
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
+          cache: true
+          cache-dependency-path: go.sum
+      - name: Integration tests with race detector and coverage
+        run: make test-integration GO_TEST_TIMEOUT=15m GO_TEST_FLAGS='-race -covermode=atomic -coverprofile=integration-coverage.out'
+      - name: Require exercised production coverage
+        run: make check-integration-coverage INTEGRATION_COVERAGE_PROFILE=integration-coverage.out
+
+  # Linux cannot execute the build-tagged Darwin ACL and Windows DACL tests.
+  # Native runners make those security regressions observable rather than only
+  # proving that the platform-specific source cross-compiles.
+  filesystem-security:
+    name: Native filesystem security (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-15, windows-2025]
+    env:
+      GOTOOLCHAIN: local
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+          cache-dependency-path: go.sum
+      - name: Run native permission and ACL tests
+        run: go test ./internal/fileutil ./internal/crypto ./internal/storage ./internal/cli -count=1 -timeout=10m
+      - name: Require Windows reparse-entry DACL regression
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $testName = 'TestRequireStableParentInspectsReparseEntryDACL'
+          $json = @(& go test ./internal/fileutil -run "^$testName`$" -count=1 -timeout=2m -json)
+          $goTestExit = $LASTEXITCODE
+          $events = @($json | ForEach-Object { ConvertFrom-Json -InputObject $_ })
+          $events |
+            Where-Object { $_.Action -eq 'output' } |
+            ForEach-Object { Write-Host -NoNewline $_.Output }
+          if ($goTestExit -ne 0) {
+            throw "go test failed with exit code $goTestExit"
+          }
+          $testEvents = @($events | Where-Object { $_.Test -eq $testName })
+          $skipEvents = @($testEvents | Where-Object { $_.Action -eq 'skip' })
+          if ($skipEvents.Count -ne 0) {
+            throw "$testName skipped; this security regression must run"
+          }
+          $passEvents = @($testEvents | Where-Object { $_.Action -eq 'pass' })
+          if ($passEvents.Count -ne 1) {
+            throw "$testName did not emit exactly one passing test event"
+          }
+
+  go-vuln:
+    name: Go vulnerability scan (govulncheck)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      GOTOOLCHAIN: local
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+          cache-dependency-path: go.sum
       # Run the official tool directly rather than golang/govulncheck-action,
       # whose bundled checkout breaks on current runners
       # ("Duplicate header: Authorization"). This keeps us on the latest
@@ -73,6 +155,7 @@ jobs:
   python-sdk:
     name: Python SDK (pytest & mypy)
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     defaults:
       run:
         working-directory: sdk/python
@@ -85,16 +168,19 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: ${{ matrix.python-version }}
+          cache: pip
+          cache-dependency-path: sdk/python/pyproject.toml
       - name: Install SDK with dev dependencies
-        run: pip install -e '.[dev]'
+        run: python -m pip install -e '.[dev]'
       - name: Type-check (mypy)
         run: mypy
       - name: Test (pytest)
-        run: pytest -q
+        run: python -m pytest -q
 
   frontend:
     name: Frontend (typecheck & build)
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     defaults:
       run:
         working-directory: frontend

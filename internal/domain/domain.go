@@ -59,7 +59,8 @@ func ValidAuthMethod(m AuthMethod) bool {
 }
 
 // Operations the policy engine distinguishes. A policy rule may also use
-// wildcards: "parameter:*", "secret:*", "admin:*", or "*".
+// wildcards: "parameter:*", "secret:*", "configuration-release:*",
+// "admin:*", or "*".
 const (
 	OpParameterRead   = "parameter:read"
 	OpParameterWrite  = "parameter:write"
@@ -73,6 +74,13 @@ const (
 	OpSecretDestroy = "secret:destroy"
 	OpSecretPromote = "secret:promote"
 
+	OpConfigurationReleaseCreate   = "configuration-release:create"
+	OpConfigurationReleaseRead     = "configuration-release:read"
+	OpConfigurationReleaseValidate = "configuration-release:validate"
+	OpConfigurationReleaseActivate = "configuration-release:activate"
+	OpConfigurationReleaseList     = "configuration-release:list"
+	OpConfigurationReleaseWatch    = "configuration-release:watch"
+
 	OpAdminNamespaceCreate = "admin:namespace:create"
 	OpAdminNamespaceUpdate = "admin:namespace:update"
 	OpAdminNamespaceDelete = "admin:namespace:delete"
@@ -84,13 +92,14 @@ const (
 
 // Change types recorded in the change log and pushed over watch streams.
 const (
-	ChangePut     = "put"
-	ChangeDelete  = "delete"
-	ChangeLabel   = "label"
-	ChangePromote = "promote"
-	ChangeDisable = "disable"
-	ChangeEnable  = "enable"
-	ChangeDestroy = "destroy"
+	ChangePut      = "put"
+	ChangeDelete   = "delete"
+	ChangeLabel    = "label"
+	ChangePromote  = "promote"
+	ChangeDisable  = "disable"
+	ChangeEnable   = "enable"
+	ChangeDestroy  = "destroy"
+	ChangeActivate = "activate"
 )
 
 // NamespaceRef is a fixed (env, app) pair — the first-class grouping every
@@ -260,21 +269,26 @@ type IdentityCert struct {
 // plaintext or token material. Resource env/app/key are denormalized text so
 // history stays readable after a namespace is deleted.
 type AuditEvent struct {
-	ID              int64
-	EventType       string
-	ActorIdentity   string
-	ActorType       string
-	ResourceType    string
-	ResourceEnv     string
-	ResourceApp     string
-	ResourceKey     string
-	ResourceVersion uint64
-	Decision        string // "allow" | "deny" | "error"
-	SourceIP        string
-	UserAgent       string
-	RequestID       string
-	CreatedAt       time.Time
-	Metadata        string
+	ID            int64
+	EventType     string
+	ActorIdentity string
+	ActorType     string
+	ResourceType  string
+	// ResourceNamespaceID is the immutable namespace incarnation captured when
+	// the event is written. It is denormalized (no foreign key) so deleted
+	// history remains available to admins without letting a recreated env/app
+	// inherit the prior incarnation's delegated visibility.
+	ResourceNamespaceID int64
+	ResourceEnv         string
+	ResourceApp         string
+	ResourceKey         string
+	ResourceVersion     uint64
+	Decision            string // "allow" | "deny" | "error"
+	SourceIP            string
+	UserAgent           string
+	RequestID           string
+	CreatedAt           time.Time
+	Metadata            string
 }
 
 // AuditFilter narrows audit queries. Env/App match exactly (empty = any);
@@ -295,13 +309,17 @@ type AuditFilter struct {
 type ChangeLogEntry struct {
 	Revision     uint64
 	ResourceType string // ResourceParameter | ResourceSecret
-	Ref          Ref
-	ChangeType   string
-	Value        string // parameter value for puts; empty for secrets
-	ContentType  string
-	Version      uint64
-	Label        string
-	CreatedAt    time.Time
+	// NamespaceID is the immutable namespace incarnation that produced this
+	// event. Watch replay/live matching must use it in addition to Ref so a
+	// deleted namespace's history cannot flow into a recreated name.
+	NamespaceID int64
+	Ref         Ref
+	ChangeType  string
+	Value       string // parameter value for puts; empty for secrets
+	ContentType string
+	Version     uint64
+	Label       string
+	CreatedAt   time.Time
 }
 
 // Subscriber describes one live watch stream in the registry. Namespaces are

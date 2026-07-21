@@ -411,6 +411,148 @@ func toSubscriberDTO(s domain.Subscriber) subscriberDTO {
 	}
 }
 
+// --- configuration releases ----------------------------------------------
+
+type resourceRefDTO struct {
+	Namespace namespaceRefDTO `json:"namespace"`
+	Key       string          `json:"key"`
+}
+
+func refDTO(ref domain.Ref) resourceRefDTO {
+	return resourceRefDTO{Namespace: namespaceRefDTO{Env: ref.NS.Env, App: ref.NS.App}, Key: ref.Key}
+}
+
+func (r resourceRefDTO) toDomain(defaultNS domain.NamespaceRef) domain.Ref {
+	ns := domain.NamespaceRef{Env: r.Namespace.Env, App: r.Namespace.App}
+	if ns.Env == "" && ns.App == "" {
+		ns = defaultNS
+	}
+	return domain.Ref{NS: ns, Key: r.Key}
+}
+
+type releaseEntryDTO struct {
+	Alias           string         `json:"alias"`
+	Kind            string         `json:"kind"`
+	Ref             resourceRefDTO `json:"ref"`
+	Version         uint64         `json:"version"`
+	ContentType     string         `json:"content_type"`
+	MetadataJSON    string         `json:"metadata_json"`
+	ParameterDigest string         `json:"parameter_digest"`
+	ClientBound     bool           `json:"client_bound"`
+	HasAccessToken  bool           `json:"has_access_token"`
+}
+
+type releaseDTO struct {
+	Namespace       namespaceRefDTO   `json:"namespace"`
+	Name            string            `json:"name"`
+	Version         uint64            `json:"version"`
+	SchemaID        string            `json:"schema_id"`
+	SchemaVersion   uint64            `json:"schema_version"`
+	Entries         []releaseEntryDTO `json:"entries"`
+	Digest          string            `json:"digest"`
+	MetadataJSON    string            `json:"metadata_json"`
+	CreatedBy       string            `json:"created_by"`
+	CreatedAtUnixMS int64             `json:"created_at_unix_ms"`
+}
+
+func toReleaseDTO(r domain.ConfigurationRelease) releaseDTO {
+	entries := make([]releaseEntryDTO, 0, len(r.Entries))
+	for _, e := range r.Entries {
+		entries = append(entries, releaseEntryDTO{
+			Alias: e.Alias, Kind: e.Kind, Ref: refDTO(e.Ref), Version: e.Version,
+			ContentType: e.ContentType, MetadataJSON: rawJSON(e.Metadata),
+			ParameterDigest: e.ParameterDigest, ClientBound: e.ClientBound,
+			HasAccessToken: e.HasAccessToken,
+		})
+	}
+	return releaseDTO{
+		Namespace: namespaceRefDTO{Env: r.Namespace.Env, App: r.Namespace.App},
+		Name:      r.Name, Version: r.Version, SchemaID: r.SchemaID, SchemaVersion: r.SchemaVersion,
+		Entries: entries, Digest: r.Digest, MetadataJSON: rawJSON(r.Metadata),
+		CreatedBy: r.CreatedBy, CreatedAtUnixMS: unixMS(r.CreatedAt),
+	}
+}
+
+type releaseSelectorDTO struct {
+	Alias   string         `json:"alias"`
+	Kind    string         `json:"kind"`
+	Ref     resourceRefDTO `json:"ref"`
+	Version uint64         `json:"version"`
+	Label   string         `json:"label"`
+}
+
+type createReleaseDTO struct {
+	Namespace     namespaceRefDTO      `json:"namespace"`
+	Name          string               `json:"name"`
+	SchemaID      string               `json:"schema_id"`
+	SchemaVersion uint64               `json:"schema_version"`
+	Entries       []releaseSelectorDTO `json:"entries"`
+	MetadataJSON  string               `json:"metadata_json"`
+}
+
+func (d createReleaseDTO) toDomain() domain.CreateConfigurationReleaseInput {
+	ns := domain.NamespaceRef{Env: d.Namespace.Env, App: d.Namespace.App}
+	entries := make([]domain.ReleaseEntrySelector, 0, len(d.Entries))
+	for _, e := range d.Entries {
+		entries = append(entries, domain.ReleaseEntrySelector{
+			Alias: e.Alias, Kind: e.Kind, Ref: e.Ref.toDomain(ns), Version: e.Version, Label: e.Label,
+		})
+	}
+	return domain.CreateConfigurationReleaseInput{
+		Namespace: ns, Name: d.Name, SchemaID: d.SchemaID, SchemaVersion: d.SchemaVersion,
+		Entries: entries, Metadata: d.MetadataJSON,
+	}
+}
+
+type releaseValidationErrorDTO struct {
+	Alias         string `json:"alias"`
+	Code          string `json:"code"`
+	SchemaPointer string `json:"schema_pointer"`
+	Message       string `json:"message"`
+}
+
+type schemaDTO struct {
+	ID              string `json:"id"`
+	Version         uint64 `json:"version"`
+	SchemaJSON      string `json:"schema_json"`
+	Digest          string `json:"digest"`
+	MetadataJSON    string `json:"metadata_json"`
+	CreatedBy       string `json:"created_by"`
+	CreatedAtUnixMS int64  `json:"created_at_unix_ms"`
+}
+
+func toSchemaDTO(s domain.ConfigurationSchema) schemaDTO {
+	return schemaDTO{ID: s.ID, Version: s.Version, SchemaJSON: s.Schema, Digest: s.Digest,
+		MetadataJSON: rawJSON(s.Metadata), CreatedBy: s.CreatedBy, CreatedAtUnixMS: unixMS(s.CreatedAt)}
+}
+
+type releaseSubscriberDTO struct {
+	Namespace             namespaceRefDTO `json:"namespace"`
+	ReleaseName           string          `json:"release_name"`
+	ClientName            string          `json:"client_name"`
+	InstanceID            string          `json:"instance_id"`
+	Identity              string          `json:"identity"`
+	State                 string          `json:"state"`
+	ReleaseVersion        uint64          `json:"release_version"`
+	ActivationRevision    uint64          `json:"activation_revision"`
+	RejectionCategory     string          `json:"rejection_category"`
+	Diagnostic            string          `json:"diagnostic"`
+	ClientTimestampUnixMS int64           `json:"client_timestamp_unix_ms"`
+	ServerTimestampUnixMS int64           `json:"server_timestamp_unix_ms"`
+	Connected             bool            `json:"connected"`
+}
+
+func toReleaseSubscriberDTO(s domain.ReleaseAcknowledgement) releaseSubscriberDTO {
+	return releaseSubscriberDTO{
+		Namespace:   namespaceRefDTO{Env: s.Namespace.Env, App: s.Namespace.App},
+		ReleaseName: s.ReleaseName, ClientName: s.ClientName, InstanceID: s.InstanceID,
+		Identity: s.Identity, State: s.State, ReleaseVersion: s.ReleaseVersion,
+		ActivationRevision: s.ActivationRevision, RejectionCategory: s.RejectionCategory,
+		Diagnostic: s.Diagnostic, ClientTimestampUnixMS: unixMS(s.ClientTimestamp),
+		ServerTimestampUnixMS: unixMS(s.ServerTimestamp), Connected: s.Connected,
+	}
+}
+
 // --- keys ------------------------------------------------------------------
 
 type keyDTO struct {

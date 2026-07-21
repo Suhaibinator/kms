@@ -3,6 +3,8 @@ package cli
 import (
 	"bytes"
 	"database/sql"
+	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -178,6 +180,15 @@ func TestImportReportRefusesExistingFile(t *testing.T) {
 	code := c.cmdImport([]string{"--from", src, "--namespace", "prod/x", "--dry-run", "--report", report})
 	if code == 0 {
 		t.Fatalf("expected failure when report file exists")
+	}
+}
+
+func TestWriteImportReportPropagatesOutputFailure(t *testing.T) {
+	err := writeImportReport(errorWriter{err: io.ErrClosedPipe}, []importResult{{
+		Key: "OLD_KEY", Path: "/prod/app/old-key", Token: "kmss_secret",
+	}}, true)
+	if !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("writeImportReport error = %v, want closed pipe", err)
 	}
 }
 

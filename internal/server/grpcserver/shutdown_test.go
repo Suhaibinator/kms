@@ -6,6 +6,7 @@ import (
 	"time"
 
 	kmsv1 "github.com/Suhaibinator/kms/gen/kmsv1"
+	"github.com/Suhaibinator/kms/internal/domain"
 )
 
 // TestForcedStopUnblocksActiveWatchStream locks in the escape hatch that
@@ -16,6 +17,7 @@ import (
 // with a still-connected hot-reload client.
 func TestForcedStopUnblocksActiveWatchStream(t *testing.T) {
 	env := newTestEnv(t, true)
+	env.store.addNamespace(domain.NamespaceRef{Env: "prod", App: "app"})
 
 	ctx, cancel := context.WithCancel(adminCtx())
 	defer cancel()

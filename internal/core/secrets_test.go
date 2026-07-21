@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/Suhaibinator/kms/internal/domain"
+	"github.com/Suhaibinator/kms/internal/storage"
 )
 
 // putSecret creates/updates a secret as admin and returns the result. It fails
@@ -24,6 +25,7 @@ func putSecret(t *testing.T, s *Service, in PutSecretInput) PutSecretResult {
 func TestPutGetSecretStandardRoundTrip(t *testing.T) {
 	ctx := context.Background()
 	store := newFakeStore()
+	seedTokenNS(store)
 	s := newTestService(store)
 	withKeyring(t, s)
 
@@ -50,6 +52,9 @@ func TestPutGetSecretStandardRoundTrip(t *testing.T) {
 	if ev.ResourceEnv != "prod" || ev.ResourceApp != "app" || ev.ResourceKey != "db" {
 		t.Fatalf("audit ref = %s/%s/%s, want prod/app/db", ev.ResourceEnv, ev.ResourceApp, ev.ResourceKey)
 	}
+	if ev.ResourceNamespaceID != store.namespaces[tns.String()].ID {
+		t.Fatalf("secret.read audit namespace ID = %d, want %d", ev.ResourceNamespaceID, store.namespaces[tns.String()].ID)
+	}
 }
 
 func TestPutSecretNewVersionRoundTrips(t *testing.T) {
@@ -71,6 +76,92 @@ func TestPutSecretNewVersionRoundTrips(t *testing.T) {
 	old, err := s.GetSecret(ctx, adminPrincipal(), tref("db"), 1, "")
 	if err != nil || string(old.Value) != "v1" {
 		t.Fatalf("v1 = %q, %v; want v1", old.Value, err)
+	}
+}
+
+func TestPutSecretRejectsDeleteRecreateABA(t *testing.T) {
+	ctx := context.Background()
+	store := newFakeStore()
+	s := newTestService(store)
+	withKeyring(t, s)
+	r := tref("aba")
+
+	putSecret(t, s, PutSecretInput{Ref: r, Value: []byte("original")})
+	originalID := store.secrets[r.String()].rec.ID
+	store.beforeCreateSecretVersion = func(p storage.CreateSecretParams) {
+		// Simulate a different writer deleting and recreating the same ref after
+		// core read the record but before storage validates its expectation.
+		store.nextSecretID++
+		store.secrets[r.String()] = &fakeSecret{
+			rec: storage.SecretRecord{
+				ID: store.nextSecretID, Ref: r, Labels: map[string]uint64{domain.LabelCurrent: 1},
+			},
+			versions: map[uint64]storage.SecretVersionRecord{1: {Version: 1, State: domain.StateEnabled}},
+			next:     1,
+			current:  1,
+		}
+	}
+
+	_, err := s.PutSecret(ctx, adminPrincipal(), PutSecretInput{Ref: r, Value: []byte("stale-write")})
+	if !errors.Is(err, domain.ErrAborted) {
+		t.Fatalf("PutSecret after delete/recreate err = %v, want ErrAborted", err)
+	}
+	if got := store.secrets[r.String()].rec.ID; got == originalID {
+		t.Fatalf("test did not install replacement row: ID = %d", got)
+	}
+	if got := store.secrets[r.String()].next; got != 1 {
+		t.Fatalf("replacement version advanced to %d after rejected stale write", got)
+	}
+}
+
+func TestExactSecretVersionPinsContentTypeAndTokenProtection(t *testing.T) {
+	ctx := context.Background()
+	store := newFakeStore()
+	s := newTestService(store)
+	withKeyring(t, s)
+
+	putSecret(t, s, PutSecretInput{Ref: tref("api"), Value: []byte("v1"), ContentType: "text/plain"})
+	v2 := putSecret(t, s, PutSecretInput{
+		Ref: tref("api"), Value: []byte(`{"version":2}`), ContentType: "application/json", GenerateToken: true,
+	})
+
+	// Adding protection to v2 must not retroactively alter v1. A pinned release
+	// can continue resolving v1 without a token and sees its original type.
+	v1, err := s.GetSecret(ctx, adminPrincipal(), tref("api"), 1, "")
+	if err != nil {
+		t.Fatalf("GetSecret(v1): %v", err)
+	}
+	if string(v1.Value) != "v1" || v1.ContentType != "text/plain" {
+		t.Fatalf("v1 = %+v, want original text version", v1)
+	}
+	if _, err := s.GetSecret(ctx, adminPrincipal(), tref("api"), 2, ""); !errors.Is(err, domain.ErrPermissionDenied) {
+		t.Fatalf("GetSecret(v2 without token) err = %v, want permission denied", err)
+	}
+	pr := adminPrincipal()
+	pr.SecretToken = v2.AccessToken
+	gotV2, err := s.GetSecret(ctx, pr, tref("api"), 2, "")
+	if err != nil {
+		t.Fatalf("GetSecret(v2): %v", err)
+	}
+	if gotV2.ContentType != "application/json" {
+		t.Fatalf("v2 content type = %q", gotV2.ContentType)
+	}
+
+	// Token rotation remains secret-scoped: it changes the credential used by
+	// every version that was born protected, without changing whether v1 is
+	// protected.
+	v3 := putSecret(t, s, PutSecretInput{
+		Ref: tref("api"), Value: []byte("v3"), ContentType: "text/plain", GenerateToken: true,
+	})
+	if _, err := s.GetSecret(ctx, pr, tref("api"), 2, ""); !errors.Is(err, domain.ErrPermissionDenied) {
+		t.Fatalf("GetSecret(v2 with rotated-out token) err = %v, want permission denied", err)
+	}
+	pr.SecretToken = v3.AccessToken
+	if _, err := s.GetSecret(ctx, pr, tref("api"), 2, ""); err != nil {
+		t.Fatalf("GetSecret(v2 with current token): %v", err)
+	}
+	if _, err := s.GetSecret(ctx, adminPrincipal(), tref("api"), 1, ""); err != nil {
+		t.Fatalf("GetSecret(v1 after token rotation): %v", err)
 	}
 }
 
@@ -218,6 +309,7 @@ func TestRevealSecretNonAdminDenied(t *testing.T) {
 func TestRevealSecretBypassesTokenGate(t *testing.T) {
 	ctx := context.Background()
 	store := newFakeStore()
+	seedTokenNS(store)
 	s := newTestService(store)
 	withKeyring(t, s)
 	putSecret(t, s, PutSecretInput{Ref: tref("s"), Value: []byte("v"), ContentType: "text/plain", GenerateToken: true})
@@ -231,6 +323,10 @@ func TestRevealSecretBypassesTokenGate(t *testing.T) {
 	}
 	if !store.hasAudit("secret.reveal", "allow") {
 		t.Error("reveal not audited as allow")
+	}
+	ev, ok := store.lastAudit()
+	if !ok || ev.EventType != "secret.reveal" || ev.ResourceNamespaceID != store.namespaces[tns.String()].ID {
+		t.Fatalf("secret.reveal audit = %+v, want bound namespace incarnation", ev)
 	}
 }
 

@@ -45,6 +45,7 @@ func ExampleClient_Resolve() {
 	client, err := paramstore.NewClient(paramstore.Config{
 		Endpoint:  "localhost:8443",
 		Namespace: "prod/payments",
+		Insecure:  true, // local development only
 	})
 	if err != nil {
 		log.Fatal(err)
@@ -71,6 +72,7 @@ func ExampleClient_Watch() {
 	client, _ := paramstore.NewClient(paramstore.Config{
 		Endpoint:  "localhost:8443",
 		Namespace: "prod/payments",
+		Insecure:  true, // local development only
 	})
 	defer func() { _ = client.Close() }()
 
@@ -89,6 +91,7 @@ func ExampleClient_GetSecret_errorHandling() {
 	client, _ := paramstore.NewClient(paramstore.Config{
 		Endpoint:  "localhost:8443",
 		Namespace: "prod/payments",
+		Insecure:  true, // local development only
 	})
 	defer func() { _ = client.Close() }()
 

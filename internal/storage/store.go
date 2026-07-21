@@ -18,11 +18,12 @@ import (
 	"gorm.io/gorm/logger"
 
 	"github.com/Suhaibinator/kms/internal/domain"
+	"github.com/Suhaibinator/kms/internal/fileutil"
 )
 
 // schemaVersion is the schema version this build supports. Opening a database
 // stamped with a higher version is refused.
-const schemaVersion = 1
+const schemaVersion = 6
 
 // tsLayout is a fixed-width RFC3339 UTC layout with nanosecond precision. Unlike
 // time.RFC3339Nano it never trims trailing zeros, so every stored timestamp has
@@ -37,6 +38,7 @@ const tsLayout = "2006-01-02T15:04:05.000000000Z07:00"
 const changeLogDDL = `CREATE TABLE IF NOT EXISTS change_log (
 	revision       INTEGER PRIMARY KEY AUTOINCREMENT,
 	resource_type  TEXT NOT NULL,
+	namespace_id   INTEGER NOT NULL DEFAULT 0,
 	env            TEXT NOT NULL,
 	app            TEXT NOT NULL,
 	key            TEXT NOT NULL,
@@ -49,6 +51,7 @@ const changeLogDDL = `CREATE TABLE IF NOT EXISTS change_log (
 )`
 
 const changeLogIndexDDL = `CREATE INDEX IF NOT EXISTS idx_change_log_ns ON change_log(env, app)`
+const changeLogNamespaceIndexDDL = `CREATE INDEX IF NOT EXISTS idx_change_log_namespace_revision ON change_log(namespace_id, revision)`
 
 // SQLStore is the SQLite-backed implementation of Store.
 type SQLStore struct {
@@ -91,8 +94,8 @@ func ValidateKMSDatabase(path string) error {
 	if err != nil {
 		return fmt.Errorf("resolve database path %q: %w", path, err)
 	}
-	u := url.URL{Scheme: "file", Path: abs}
-	db, err := gorm.Open(sqlite.Open(u.String()+"?mode=ro&_pragma=query_only(1)"), &gorm.Config{
+	databaseURI := sqliteFileURI(filepath.ToSlash(abs))
+	db, err := gorm.Open(sqlite.Open(databaseURI+"?mode=ro&_pragma=query_only(1)"), &gorm.Config{
 		Logger:                 logger.Default.LogMode(logger.Silent),
 		SkipDefaultTransaction: true,
 	})
@@ -133,6 +136,31 @@ func OpenWithOptions(path string, opts Options) (*SQLStore, error) {
 	if path == "" {
 		return nil, domain.Errorf(domain.ErrInvalidArgument, "database path is empty")
 	}
+	stablePath, err := fileutil.ResolveStablePath(path)
+	if err != nil {
+		return nil, fmt.Errorf("validate database path %q: %w", path, err)
+	}
+	// SQLite creates a missing database with its default 0666 mode, leaving the
+	// effective permissions to the process umask. Reserve a missing path with a
+	// restrictive mode first; O_EXCL also ensures this step never truncates an
+	// existing database. Existing databases retain their operator-selected mode.
+	created, err := fileutil.OpenPrivateExclusive(stablePath)
+	if err == nil {
+		if err := created.Close(); err != nil {
+			return nil, fmt.Errorf("close new database %q: %w", path, err)
+		}
+	} else if errors.Is(err, os.ErrExist) {
+		// Never hand SQLite a symlink, an attacker-owned pre-existing entry, or
+		// an inherited broad ACL. The entry-stable parent plus exact-file checks
+		// make the secured path safe to reuse for SQLite's pathname open.
+		stablePath, err = fileutil.SecureExistingPrivateFile(stablePath)
+		if err != nil {
+			return nil, fmt.Errorf("secure existing database %q: %w", path, err)
+		}
+	} else {
+		return nil, fmt.Errorf("create database %q: %w", path, err)
+	}
+	absPath := stablePath
 	busy := opts.BusyTimeout
 	if busy <= 0 {
 		busy = 5 * time.Second
@@ -145,9 +173,10 @@ func OpenWithOptions(path string, opts Options) (*SQLStore, error) {
 	// writer acquires the write lock up front. This prevents WAL stale-snapshot
 	// conflicts between concurrent read-then-write transactions (e.g. two
 	// PutParameter calls racing to assign the next version).
+	databaseURI := sqliteFileURI(filepath.ToSlash(absPath))
 	dsn := fmt.Sprintf(
 		"%s?_txlock=immediate&_pragma=busy_timeout(%d)&_pragma=foreign_keys(1)&_pragma=journal_mode(WAL)&_pragma=synchronous(%s)",
-		path, busy.Milliseconds(), sync,
+		databaseURI, busy.Milliseconds(), sync,
 	)
 	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{
 		Logger:                 logger.Default.LogMode(logger.Silent),
@@ -164,6 +193,27 @@ func OpenWithOptions(path string, opts Options) (*SQLStore, error) {
 		return nil, err
 	}
 	return s, nil
+}
+
+// sqliteFileURI returns a SQLite file URI for an absolute path whose directory
+// separators have already been normalized to slashes. A Windows drive path is
+// an absolute URI path, not an authority: C:/kms.db must therefore become
+// file:///C:/kms.db (empty host), never file://C:/kms.db (host "C:").
+// url.URL performs the required escaping so literal ?, #, and % bytes in a
+// filename cannot be reinterpreted as URI query, fragment, or escape syntax.
+func sqliteFileURI(slashPath string) string {
+	if isWindowsDriveSlashPath(slashPath) {
+		slashPath = "/" + slashPath
+	}
+	return (&url.URL{Scheme: "file", Path: slashPath}).String()
+}
+
+func isWindowsDriveSlashPath(path string) bool {
+	if len(path) < 3 || path[1] != ':' || path[2] != '/' {
+		return false
+	}
+	drive := path[0]
+	return drive >= 'A' && drive <= 'Z' || drive >= 'a' && drive <= 'z'
 }
 
 func (s *SQLStore) migrate() error {
@@ -190,11 +240,70 @@ func (s *SQLStore) migrate() error {
 	if err := s.db.Exec(changeLogDDL).Error; err != nil {
 		return fmt.Errorf("create change_log: %w", err)
 	}
+	// CREATE TABLE IF NOT EXISTS does not evolve existing raw-DDL tables. Legacy
+	// rows remain namespace_id=0 and therefore fail closed for incarnation-bound
+	// watch replay; all new rows are stamped by appendChange.
+	if !s.db.Migrator().HasColumn(&changeLogModel{}, "NamespaceID") {
+		if err := s.db.Exec("ALTER TABLE change_log ADD COLUMN namespace_id INTEGER NOT NULL DEFAULT 0").Error; err != nil {
+			return fmt.Errorf("add change_log namespace incarnation: %w", err)
+		}
+	}
 	if err := s.db.Exec(changeLogIndexDDL).Error; err != nil {
 		return fmt.Errorf("create change_log index: %w", err)
 	}
-	if err := s.db.AutoMigrate(autoMigrateModels...); err != nil {
+	if err := s.db.Exec(changeLogNamespaceIndexDDL).Error; err != nil {
+		return fmt.Errorf("create change_log namespace incarnation index: %w", err)
+	}
+	if err := ensureReleaseSubscriberIdentityKeys(s.db); err != nil {
+		return err
+	}
+	needsSecretVersionAttributeBackfill := current < 2 ||
+		!s.db.Migrator().HasColumn(&secretVersionModel{}, "ContentType") ||
+		!s.db.Migrator().HasColumn(&secretVersionModel{}, "ClientBound") ||
+		!s.db.Migrator().HasColumn(&secretVersionModel{}, "HasAccessToken")
+	// GORM attempts to rebuild manually repaired SQLite composite-key tables
+	// when its inferred DDL differs textually, even when the physical key is
+	// already correct. Migrate the ordinary models first, then create subscriber
+	// tables only when absent; existing tables were repaired and are verified by
+	// physical schema below.
+	ordinaryModels := make([]any, 0, len(autoMigrateModels)-2)
+	for _, model := range autoMigrateModels {
+		switch model.(type) {
+		case *releaseSubscriberStateModel, *releaseSubscriberConnectionModel:
+			continue
+		default:
+			ordinaryModels = append(ordinaryModels, model)
+		}
+	}
+	if err := s.db.AutoMigrate(ordinaryModels...); err != nil {
 		return fmt.Errorf("auto-migrate: %w", err)
+	}
+	if !s.db.Migrator().HasTable(&releaseSubscriberStateModel{}) {
+		if err := s.db.AutoMigrate(&releaseSubscriberStateModel{}); err != nil {
+			return fmt.Errorf("create release subscriber states: %w", err)
+		}
+	}
+	if !s.db.Migrator().HasTable(&releaseSubscriberConnectionModel{}) {
+		if err := s.db.AutoMigrate(&releaseSubscriberConnectionModel{}); err != nil {
+			return fmt.Errorf("create release subscriber connections: %w", err)
+		}
+	}
+	if err := verifyReleaseSubscriberIdentityKeys(s.db); err != nil {
+		return fmt.Errorf("verify release subscriber identity keys: %w", err)
+	}
+	if needsSecretVersionAttributeBackfill {
+		// v2 makes content/protection metadata immutable per secret version.
+		// Older schemas only retained the latest values on secrets, so that is
+		// the only safe backfill available for existing version history. Future
+		// writes persist the attributes alongside every new version.
+		if err := s.db.Transaction(func(tx *gorm.DB) error {
+			return tx.Exec(`UPDATE secret_versions
+				SET content_type = (SELECT content_type FROM secrets WHERE secrets.id = secret_versions.secret_id),
+				    client_bound = (SELECT client_bound FROM secrets WHERE secrets.id = secret_versions.secret_id),
+				    has_access_token = CASE WHEN COALESCE(length((SELECT access_token_hash FROM secrets WHERE secrets.id = secret_versions.secret_id)), 0) > 0 THEN 1 ELSE 0 END`).Error
+		}); err != nil {
+			return fmt.Errorf("backfill secret version attributes: %w", err)
+		}
 	}
 
 	// Defensive verification of the critical AUTOINCREMENT invariant.
@@ -238,20 +347,56 @@ func (s *SQLStore) Backup(ctx context.Context, destPath string) error {
 	if destPath == "" {
 		return domain.Errorf(domain.ErrInvalidArgument, "backup destination is empty")
 	}
+	requestedDest := destPath
+	stableDest, err := fileutil.ResolveStablePath(destPath)
+	if err != nil {
+		return fmt.Errorf("validate backup destination %s: %w", destPath, err)
+	}
+	destPath = stableDest
 	if _, err := os.Stat(destPath); err == nil {
-		return domain.Errorf(domain.ErrAlreadyExists, "backup destination %s already exists", destPath)
+		return domain.Errorf(domain.ErrAlreadyExists, "backup destination %s already exists", requestedDest)
 	} else if !os.IsNotExist(err) {
 		return fmt.Errorf("stat backup destination: %w", err)
 	}
+	// VACUUM INTO chooses its own create mode. Build the backup beneath a private
+	// staging directory, restrict it before publication, then use the platform's
+	// atomic no-replace primitive so a concurrently-created path always wins.
+	stagingDir, err := fileutil.MkdirPrivateTemp(filepath.Dir(destPath), ".kms-backup-")
+	if err != nil {
+		return fmt.Errorf("create backup staging directory: %w", err)
+	}
+	stagedPath := filepath.Join(stagingDir, "backup.db")
+	defer func() {
+		// Keep cleanup non-recursive: if a hostile writer swaps the staging
+		// directory name, cleanup must not descend into their replacement.
+		for _, suffix := range []string{"", "-journal", "-wal", "-shm"} {
+			_ = os.Remove(stagedPath + suffix)
+		}
+		_ = os.Remove(stagingDir)
+	}()
+
 	// VACUUM INTO does not accept bound parameters on all drivers, so build a
 	// safely single-quote-escaped literal.
-	quoted := "'" + strings.ReplaceAll(destPath, "'", "''") + "'"
+	quoted := "'" + strings.ReplaceAll(stagedPath, "'", "''") + "'"
 	if err := s.db.WithContext(ctx).Exec("VACUUM INTO " + quoted).Error; err != nil {
-		// SQLite may leave a partial/truncated file behind on failure. Remove it
-		// so a later retry's existence check does not treat the orphan as a
-		// valid backup. Best-effort; the original error is what matters.
-		_ = os.Remove(destPath)
-		return fmt.Errorf("vacuum into %s: %w", destPath, err)
+		return fmt.Errorf("vacuum into %s: %w", requestedDest, err)
+	}
+	stagedFile, err := fileutil.OpenForOwnerRestriction(stagedPath)
+	if err != nil {
+		return fmt.Errorf("open completed backup: %w", err)
+	}
+	if err := fileutil.RestrictOwnerOnly(stagedFile, false); err != nil {
+		_ = stagedFile.Close()
+		return fmt.Errorf("restrict backup permissions: %w", err)
+	}
+	if err := stagedFile.Close(); err != nil {
+		return fmt.Errorf("close completed backup: %w", err)
+	}
+	if err := fileutil.PublishNoReplace(stagedPath, destPath); err != nil {
+		if errors.Is(err, os.ErrExist) {
+			return domain.Errorf(domain.ErrAlreadyExists, "backup destination %s already exists", requestedDest)
+		}
+		return fmt.Errorf("publish backup %s: %w", requestedDest, err)
 	}
 	return nil
 }
@@ -368,9 +513,17 @@ func isUniqueErr(err error) bool {
 // the parameters/secrets tables (whose namespace_id foreign key requires it).
 func resolveNamespaceID(tx *gorm.DB, ns domain.NamespaceRef) (int64, error) {
 	var m namespaceModel
-	err := tx.Select("id").Where("env = ? AND app = ?", ns.Env, ns.App).First(&m).Error
+	q := tx.Select("id").Where("env = ? AND app = ?", ns.Env, ns.App)
+	expectedID, bound := ExpectedNamespaceIncarnation(tx.Statement.Context, ns)
+	if bound {
+		q = q.Where("id = ?", expectedID)
+	}
+	err := q.First(&m).Error
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
+			if bound {
+				return 0, domain.Errorf(domain.ErrAborted, "namespace %s changed during request; retry", ns)
+			}
 			return 0, domain.Errorf(domain.ErrNotFound, "namespace %s", ns)
 		}
 		return 0, err
@@ -380,6 +533,13 @@ func resolveNamespaceID(tx *gorm.DB, ns domain.NamespaceRef) (int64, error) {
 
 // appendChange inserts a change_log row and returns its assigned revision.
 func appendChange(tx *gorm.DB, cl *changeLogModel) (uint64, error) {
+	if cl.NamespaceID == 0 && cl.Env != "" && cl.App != "" {
+		id, err := resolveNamespaceID(tx, domain.NamespaceRef{Env: cl.Env, App: cl.App})
+		if err != nil {
+			return 0, err
+		}
+		cl.NamespaceID = id
+	}
 	if cl.CreatedAt == "" {
 		cl.CreatedAt = fmtTime(time.Now())
 	}

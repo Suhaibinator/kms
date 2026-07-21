@@ -3,7 +3,7 @@
 // A policy binds a subject (identity name or "*") to allow and deny rules.
 // Each rule pairs an operation pattern with a namespace scope (env, app):
 //
-//	operation: "secret:read" | "secret:*" | "parameter:*" | "admin:*" | "*"
+//	operation: "secret:read" | "secret:*" | "parameter:*" | "configuration-release:*" | "admin:*" | "*"
 //	env / app: an exact value or "*"
 //
 // Authorization is per-namespace: a grant covers a whole namespace, every key
@@ -70,10 +70,12 @@ func allowedBy(policies []domain.Policy, operation string, ns domain.NamespaceRe
 // grant. Writes, deletes, disables, destroys, and promotes always require an
 // explicit allow rule.
 var implicitHomeOps = map[string]bool{
-	domain.OpParameterRead: true,
-	domain.OpParameterList: true,
-	domain.OpSecretRead:    true,
-	domain.OpSecretList:    true,
+	domain.OpParameterRead:             true,
+	domain.OpParameterList:             true,
+	domain.OpSecretRead:                true,
+	domain.OpSecretList:                true,
+	domain.OpConfigurationReleaseRead:  true,
+	domain.OpConfigurationReleaseWatch: true,
 }
 
 // IsImplicitHomeOp reports whether operation is in the implicit home-namespace
@@ -198,6 +200,9 @@ var knownOperations = map[string]bool{
 	domain.OpSecretRead: true, domain.OpSecretWrite: true,
 	domain.OpSecretList: true, domain.OpSecretDisable: true,
 	domain.OpSecretDestroy: true, domain.OpSecretPromote: true,
+	domain.OpConfigurationReleaseCreate: true, domain.OpConfigurationReleaseRead: true,
+	domain.OpConfigurationReleaseValidate: true, domain.OpConfigurationReleaseActivate: true,
+	domain.OpConfigurationReleaseList: true, domain.OpConfigurationReleaseWatch: true,
 	domain.OpAdminNamespaceCreate: true, domain.OpAdminNamespaceUpdate: true,
 	domain.OpAdminNamespaceDelete: true, domain.OpAdminIdentityCert: true,
 	domain.OpAdminPolicyWrite: true, domain.OpAdminAuditRead: true,
@@ -210,7 +215,7 @@ func validOperationPattern(op string) bool {
 	}
 	if cat, ok := strings.CutSuffix(op, ":*"); ok {
 		switch cat {
-		case "parameter", "secret", "admin":
+		case "parameter", "secret", "configuration-release", "admin":
 			return true
 		}
 		return false

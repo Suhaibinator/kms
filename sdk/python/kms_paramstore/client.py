@@ -74,6 +74,10 @@ class Client:
     ``namespace`` is omitted it is discovered once via ``WhoAmI`` from a
     namespace-bound identity; an unbound identity plus a relative key raises
     :class:`~kms_paramstore.errors.NoNamespaceError`.
+
+    When the client builds its own channel, transport security must be explicit:
+    pass ``tls=...`` for TLS/mTLS, or ``insecure=True`` only for local
+    development. A pre-built ``channel`` is already an explicit transport.
     """
 
     def __init__(
@@ -83,6 +87,7 @@ class Client:
         *,
         namespace: Optional[str] = None,
         tls: "Optional[TLSConfig | grpc.ChannelCredentials]" = None,
+        insecure: bool = False,
         cache_ttl: float = 0.0,
         timeout: float = DEFAULT_TIMEOUT,
         client_name: Optional[str] = None,
@@ -93,6 +98,13 @@ class Client:
     ) -> None:
         if channel is None and not endpoint:
             raise errors.ConfigError("endpoint is required")
+        if channel is None and tls is not None and insecure:
+            raise errors.ConfigError("tls and insecure=True are mutually exclusive")
+        if channel is None and tls is None and not insecure:
+            raise errors.ConfigError(
+                "transport security is required; pass tls=..., or set insecure=True "
+                "only for local development"
+            )
         # Token is optional: an mTLS client certificate authenticates on its own
         # (the server derives the identity from the cert), and dev servers may be
         # unauthenticated. When both are present the token still travels too.
@@ -126,6 +138,8 @@ class Client:
             if creds is not None:
                 self._channel = grpc.secure_channel(endpoint, creds, options=options)
             else:
+                # Reaching this branch requires the explicit insecure=True
+                # opt-in validated above.
                 self._channel = grpc.insecure_channel(endpoint, options=options)
             self._owns_channel = True
 

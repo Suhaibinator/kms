@@ -311,6 +311,28 @@ func toProtoSubscriber(s domain.Subscriber) *kmsv1.Subscriber {
 	}
 }
 
+// --- configuration releases ----------------------------------------------
+
+func toProtoConfigurationReleaseEntry(e domain.ConfigurationReleaseEntry) *kmsv1.ConfigurationReleaseEntry {
+	return &kmsv1.ConfigurationReleaseEntry{Alias: e.Alias, Kind: e.Kind, Ref: refToProto(e.Ref), Version: e.Version, ContentType: e.ContentType, MetadataJson: e.Metadata, ParameterDigest: e.ParameterDigest, ClientBound: e.ClientBound, HasAccessToken: e.HasAccessToken}
+}
+
+func toProtoConfigurationRelease(r domain.ConfigurationRelease) *kmsv1.ConfigurationRelease {
+	entries := make([]*kmsv1.ConfigurationReleaseEntry, 0, len(r.Entries))
+	for _, e := range r.Entries {
+		entries = append(entries, toProtoConfigurationReleaseEntry(e))
+	}
+	return &kmsv1.ConfigurationRelease{Namespace: nsRefToProto(r.Namespace), Name: r.Name, Version: r.Version, SchemaId: r.SchemaID, SchemaVersion: r.SchemaVersion, Entries: entries, Digest: r.Digest, MetadataJson: r.Metadata, CreatedBy: r.CreatedBy, CreatedAtUnixMs: unixMS(r.CreatedAt)}
+}
+
+func toProtoConfigurationSchema(s domain.ConfigurationSchema) *kmsv1.ConfigurationSchema {
+	return &kmsv1.ConfigurationSchema{Id: s.ID, Version: s.Version, SchemaJson: s.Schema, Digest: s.Digest, MetadataJson: s.Metadata, CreatedBy: s.CreatedBy, CreatedAtUnixMs: unixMS(s.CreatedAt)}
+}
+
+func toProtoReleaseSubscriber(a domain.ReleaseAcknowledgement) *kmsv1.ReleaseSubscriberState {
+	return &kmsv1.ReleaseSubscriberState{Namespace: nsRefToProto(a.Namespace), ReleaseName: a.ReleaseName, ClientName: a.ClientName, InstanceId: a.InstanceID, Identity: a.Identity, State: a.State, ReleaseVersion: a.ReleaseVersion, ActivationRevision: a.ActivationRevision, RejectionCategory: a.RejectionCategory, Diagnostic: a.Diagnostic, ClientTimestampUnixMs: unixMS(a.ClientTimestamp), ServerTimestampUnixMs: unixMS(a.ServerTimestamp), Connected: a.Connected}
+}
+
 // --- watch events ----------------------------------------------------------
 
 // toSubscribeEvent converts a change-log entry into a wire event. Parameter

@@ -38,6 +38,15 @@ type fakeStore struct {
 	pruneErr   error
 }
 
+type replacedNamespaceStore struct {
+	*fakeStore
+	currentID int64
+}
+
+func (s *replacedNamespaceStore) GetNamespace(_ context.Context, ns domain.NamespaceRef) (domain.Namespace, error) {
+	return domain.Namespace{ID: s.currentID, NamespaceRef: ns}, nil
+}
+
 func (f *fakeStore) append(e ...domain.ChangeLogEntry) {
 	f.mu.Lock()
 	f.entries = append(f.entries, e...)
@@ -159,8 +168,12 @@ func (f *fakeStore) RotateKEK(context.Context, domain.KeyMetadata,
 func (f *fakeStore) CreateNamespace(context.Context, domain.Namespace) (domain.Namespace, error) {
 	panic("unused")
 }
-func (f *fakeStore) GetNamespace(context.Context, domain.NamespaceRef) (domain.Namespace, error) {
-	panic("unused")
+func (f *fakeStore) GetNamespace(ctx context.Context, ns domain.NamespaceRef) (domain.Namespace, error) {
+	id, ok := storage.ExpectedNamespaceIncarnation(ctx, ns)
+	if !ok {
+		return domain.Namespace{}, domain.Errorf(domain.ErrAborted, "namespace incarnation is not bound")
+	}
+	return domain.Namespace{ID: id, NamespaceRef: ns}, nil
 }
 func (f *fakeStore) UpdateNamespace(context.Context, domain.NamespaceRef, string, []domain.AuthMethod) (domain.Namespace, error) {
 	panic("unused")
@@ -273,6 +286,7 @@ func paramPut(rev uint64, r domain.Ref, value string) domain.ChangeLogEntry {
 	return domain.ChangeLogEntry{
 		Revision:     rev,
 		ResourceType: domain.ResourceParameter,
+		NamespaceID:  testNamespaceID(r.NS),
 		Ref:          r,
 		ChangeType:   domain.ChangePut,
 		Value:        value,
@@ -282,10 +296,17 @@ func paramPut(rev uint64, r domain.Ref, value string) domain.ChangeLogEntry {
 	}
 }
 
+func paramPutInNamespace(rev uint64, namespaceID int64, r domain.Ref, value string) domain.ChangeLogEntry {
+	e := paramPut(rev, r, value)
+	e.NamespaceID = namespaceID
+	return e
+}
+
 func secretPut(rev uint64, r domain.Ref) domain.ChangeLogEntry {
 	return domain.ChangeLogEntry{
 		Revision:     rev,
 		ResourceType: domain.ResourceSecret,
+		NamespaceID:  testNamespaceID(r.NS),
 		Ref:          r,
 		ChangeType:   domain.ChangePut,
 		Version:      rev,
@@ -293,13 +314,43 @@ func secretPut(rev uint64, r domain.Ref) domain.ChangeLogEntry {
 	}
 }
 
-func newTestHub(t *testing.T, store storage.Store, opts Options) *Hub {
+func testNamespaceID(ns domain.NamespaceRef) int64 {
+	id := int64(17)
+	for _, r := range ns.Env + "\x00" + ns.App {
+		id = id*33 + int64(r)
+	}
+	if id < 0 {
+		id = -id
+	}
+	if id == 0 {
+		return 1
+	}
+	return id
+}
+
+// testHub makes each ordinary unit-test registration explicit by supplying the
+// same synthetic immutable IDs stamped into the fake change log above. Tests
+// for missing-ID rejection instantiate Hub directly instead of using this
+// convenience wrapper.
+type testHub struct{ *Hub }
+
+func (h *testHub) Subscribe(ctx context.Context, reg Registration) (*Subscription, error) {
+	if reg.NamespaceIDs == nil {
+		reg.NamespaceIDs = make(map[domain.NamespaceRef]int64, len(reg.Namespaces))
+		for _, ns := range reg.Namespaces {
+			reg.NamespaceIDs[ns] = testNamespaceID(ns)
+		}
+	}
+	return h.Hub.Subscribe(ctx, reg)
+}
+
+func newTestHub(t *testing.T, store storage.Store, opts Options) *testHub {
 	t.Helper()
-	return NewHub(store, zap.NewNop(), opts)
+	return &testHub{Hub: NewHub(store, zap.NewNop(), opts)}
 }
 
 // runHub starts the hub loop and returns a stop func that cancels and waits.
-func runHub(t *testing.T, h *Hub) func() {
+func runHub(t *testing.T, h *testHub) func() {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
@@ -343,6 +394,62 @@ func collect(t *testing.T, sub *Subscription, n int, timeout time.Duration) []do
 }
 
 // --- tests ---
+
+func TestSubscribe_RejectsMissingNamespaceIncarnation(t *testing.T) {
+	h := NewHub(&fakeStore{}, zap.NewNop(), Options{})
+	_, err := h.Subscribe(context.Background(), Registration{
+		Namespaces: []domain.NamespaceRef{nsr("prod", "app")},
+	})
+	if !errors.Is(err, domain.ErrInvalidArgument) {
+		t.Fatalf("missing namespace incarnation err = %v, want ErrInvalidArgument", err)
+	}
+}
+
+func TestSubscribe_RejectsNamespaceReplacedBeforeReplay(t *testing.T) {
+	ns := nsr("prod", "app")
+	const authorizedID int64 = 41
+	h := NewHub(&replacedNamespaceStore{fakeStore: &fakeStore{}, currentID: authorizedID + 1}, zap.NewNop(), Options{})
+	_, err := h.Subscribe(context.Background(), Registration{
+		Namespaces:   []domain.NamespaceRef{ns},
+		NamespaceIDs: map[domain.NamespaceRef]int64{ns: authorizedID},
+	})
+	if !errors.Is(err, domain.ErrAborted) {
+		t.Fatalf("replaced namespace subscribe err = %v, want ErrAborted", err)
+	}
+}
+
+func TestSubscribe_CopiesNamespaceIncarnationRegistration(t *testing.T) {
+	ns := nsr("prod", "app")
+	const authorizedID int64 = 41
+	namespaces := []domain.NamespaceRef{ns}
+	ids := map[domain.NamespaceRef]int64{ns: authorizedID}
+	h := NewHub(&fakeStore{}, zap.NewNop(), Options{})
+	sub, err := h.Subscribe(context.Background(), Registration{Namespaces: namespaces, NamespaceIDs: ids})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sub.Close()
+
+	// Mutating caller-owned containers after registration must not rewrite the
+	// authorization scope retained by the live subscription.
+	namespaces[0] = nsr("prod", "other")
+	ids[ns] = authorizedID + 1
+	h.dispatch(paramPutInNamespace(1, authorizedID+1, ref("prod", "app", "wrong"), "must-not-cross"))
+	select {
+	case event := <-sub.Events():
+		t.Fatalf("caller mutation rewrote namespace binding: %+v", event)
+	default:
+	}
+	h.dispatch(paramPutInNamespace(2, authorizedID, ref("prod", "app", "right"), "safe"))
+	select {
+	case event := <-sub.Events():
+		if event.NamespaceID != authorizedID || event.Value != "safe" {
+			t.Fatalf("exact copied registration event = %+v", event)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("copied namespace registration no longer matched")
+	}
+}
 
 func TestSubscribe_SnapshotForFreshSubscriber(t *testing.T) {
 	store := &fakeStore{
@@ -423,6 +530,87 @@ func TestSubscribe_ReplayForRecentSubscriber(t *testing.T) {
 	// key filtering.
 	if len(bl.Replay) != 2 || bl.Replay[0].Ref.Key != "alpha/y" || bl.Replay[1].Ref.Key != "beta/z" {
 		t.Fatalf("replay = %+v, want alpha/y and beta/z (rev>1 in namespace)", bl.Replay)
+	}
+}
+
+func TestSubscribe_LegacyNamespaceReplayFallsBackToSnapshot(t *testing.T) {
+	ns := nsr("prod", "app")
+	store := &fakeStore{
+		snapshot: []domain.Parameter{{Ref: ref("prod", "app", "current"), Value: "safe-current"}},
+		snapRev:  2,
+	}
+	legacy := paramPut(2, ref("prod", "app", "legacy"), "ambiguous-history")
+	legacy.NamespaceID = 0
+	store.append(
+		paramPutInNamespace(1, 99, ref("prod", "other", "cursor"), "unrelated"),
+		// namespace_id=0 models a row written before incarnation IDs were
+		// persisted. Its display name is not sufficient to attribute it safely.
+		legacy,
+	)
+	h := newTestHub(t, store, Options{})
+	sub, err := h.Subscribe(context.Background(), Registration{
+		Namespaces:       []domain.NamespaceRef{ns},
+		NamespaceIDs:     map[domain.NamespaceRef]int64{ns: 10},
+		LastSeenRevision: 1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sub.Close()
+	bl := sub.Backlog()
+	if !bl.IsSnapshot {
+		t.Fatalf("legacy row was replayed instead of forcing a snapshot: %+v", bl.Replay)
+	}
+	if len(bl.Snapshot) != 1 || bl.Snapshot[0].Value != "safe-current" {
+		t.Fatalf("snapshot = %+v, want current incarnation state", bl.Snapshot)
+	}
+}
+
+func TestSubscribe_NamespaceIncarnationIsolatesReplayAndLive(t *testing.T) {
+	ns := nsr("prod", "app")
+	const oldID int64 = 10
+	const recreatedID int64 = 11
+	store := &fakeStore{}
+	store.append(
+		paramPutInNamespace(1, 99, ref("prod", "other", "cursor"), "unrelated"),
+		paramPutInNamespace(2, oldID, ref("prod", "app", "old"), "authorized-old"),
+		paramPutInNamespace(3, recreatedID, ref("prod", "app", "new"), "must-not-cross"),
+	)
+	h := newTestHub(t, store, Options{})
+	sub, err := h.Subscribe(context.Background(), Registration{
+		Namespaces:       []domain.NamespaceRef{ns},
+		NamespaceIDs:     map[domain.NamespaceRef]int64{ns: oldID},
+		LastSeenRevision: 1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sub.Close()
+	bl := sub.Backlog()
+	if bl.IsSnapshot {
+		t.Fatal("expected an exact-ID replay")
+	}
+	if len(bl.Replay) != 1 || bl.Replay[0].NamespaceID != oldID || bl.Replay[0].Value != "authorized-old" {
+		t.Fatalf("replay crossed namespace incarnations: %+v", bl.Replay)
+	}
+
+	// The registration remains pinned after replay. A new live value from a
+	// recreated row with the same display name is ignored, while an exact-ID
+	// event still flows (the latter proves the stream was not merely closed).
+	h.dispatch(paramPutInNamespace(4, recreatedID, ref("prod", "app", "newer"), "must-not-cross-live"))
+	select {
+	case got := <-sub.Events():
+		t.Fatalf("recreated namespace reached old subscriber: %+v", got)
+	default:
+	}
+	h.dispatch(paramPutInNamespace(5, oldID, ref("prod", "app", "old-live"), "authorized-live"))
+	select {
+	case got := <-sub.Events():
+		if got.NamespaceID != oldID || got.Value != "authorized-live" {
+			t.Fatalf("live event = %+v, want exact old incarnation", got)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("exact-incarnation live event was not delivered")
 	}
 }
 

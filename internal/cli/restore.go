@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/Suhaibinator/kms/internal/fileutil"
 	"github.com/Suhaibinator/kms/internal/storage"
 )
 
@@ -31,21 +32,39 @@ func restoreFile(in, dst string, force bool) error {
 	if err != nil {
 		return err
 	}
-	if inAbs == dstAbs {
+	stableDst, err := fileutil.ResolveStablePath(dstAbs)
+	if err != nil {
+		return fmt.Errorf("validate restore destination %s: %w", dst, err)
+	}
+	inInfo, err := os.Stat(inAbs)
+	if err != nil {
+		return err
+	}
+	dstInfo, dstErr := os.Stat(stableDst)
+	if inAbs == stableDst || (dstErr == nil && os.SameFile(inInfo, dstInfo)) {
 		return errors.New("input and destination are the same file")
 	}
-	if fileExists(dst) && !force {
-		return fmt.Errorf("destination %s already exists; pass --force to overwrite", dst)
-	}
-
-	if err := copyFileAtomic(in, dstAbs); err != nil {
+	if err := copyFileAtomic(in, stableDst, force); err != nil {
+		if !force && errors.Is(err, os.ErrExist) {
+			return fmt.Errorf("destination %s already exists; pass --force to overwrite", dst)
+		}
 		return fmt.Errorf("copying backup: %w", err)
 	}
 	// A restored database must not inherit sidecar journals from a previous db.
 	for _, suffix := range []string{"-wal", "-shm"} {
-		if err := os.Remove(dstAbs + suffix); err != nil && !os.IsNotExist(err) {
-			return fmt.Errorf("removing stale %s: %w", dstAbs+suffix, err)
+		if err := os.Remove(stableDst + suffix); err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("removing stale %s: %w", stableDst+suffix, err)
 		}
+	}
+	// Validate and migrate through the already-resolved spelling. Reopening the
+	// caller's original path here would reintroduce a parent-symlink swap after
+	// the atomic publication completed.
+	store, err := storage.Open(stableDst)
+	if err != nil {
+		return fmt.Errorf("restored database failed to open: %w", err)
+	}
+	if err := store.Close(); err != nil {
+		return fmt.Errorf("closing restored database: %w", err)
 	}
 	return nil
 }
@@ -68,23 +87,24 @@ func validateSQLiteFile(path string) error {
 	return nil
 }
 
-func copyFileAtomic(src, dst string) error {
+func copyFileAtomic(src, dst string, force bool) error {
+	stableDst, err := fileutil.ResolveStablePath(dst)
+	if err != nil {
+		return err
+	}
+	dst = stableDst
 	in, err := os.Open(src)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = in.Close() }()
 
-	out, err := os.CreateTemp(filepath.Dir(dst), ".kms-restore-*")
+	out, err := fileutil.CreatePrivateTemp(filepath.Dir(dst), ".kms-restore-")
 	if err != nil {
 		return err
 	}
 	tmp := out.Name()
 	defer func() { _ = os.Remove(tmp) }()
-	if err := out.Chmod(0o600); err != nil {
-		_ = out.Close()
-		return err
-	}
 	if _, err := io.Copy(out, in); err != nil {
 		_ = out.Close()
 		return err
@@ -96,5 +116,11 @@ func copyFileAtomic(src, dst string) error {
 	if err := out.Close(); err != nil {
 		return err
 	}
-	return os.Rename(tmp, dst)
+	if force {
+		return os.Rename(tmp, dst)
+	}
+	// Publish the completed staging file with the platform's atomic no-replace
+	// primitive. Any directory entry (including a symlink) that appeared at dst
+	// after validation makes publication fail closed.
+	return fileutil.PublishNoReplace(tmp, dst)
 }

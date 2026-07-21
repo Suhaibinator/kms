@@ -13,7 +13,9 @@ package core
 import (
 	"context"
 	"crypto/hmac"
+	"crypto/sha256"
 	"crypto/x509"
+	"encoding/hex"
 	"errors"
 	"strings"
 	"sync"
@@ -62,8 +64,14 @@ type Principal struct {
 	// Serial is the serial of the client certificate an mTLS caller presented
 	// (empty for token callers). It lets long-lived mTLS streams be re-validated
 	// against the specific certificate, so revoking one serial tears the stream
-	// down (see ReauthorizeWatch). Transports set it via CertSerial.
+	// down (see ReauthorizeWatch). Transports set it alongside Fingerprint via
+	// CertSerial and CertFingerprint.
 	Serial string
+	// Fingerprint is the lowercase SHA-256 fingerprint of the exact client leaf
+	// certificate an mTLS caller presented. Together with Serial it binds
+	// long-lived reauthorization to the enrolled certificate rather than merely
+	// to issuer-scoped serial and SAN claims. Empty for token callers.
+	Fingerprint string
 	// SecretToken is the optional per-secret access token supplied with the
 	// request (x-kms-secret-token). Never logged, never persisted.
 	SecretToken string
@@ -102,6 +110,10 @@ type Service struct {
 	log          *zap.Logger
 	version      string
 	now          func() time.Time
+	// filteredPageKey encrypts continuation state for authorization-filtered
+	// listings. Raw storage cursors can contain hidden namespace names and must
+	// never be returned to delegated callers.
+	filteredPageKey [32]byte
 }
 
 // New constructs a Service. The keyring is attached later via SetKeyring
@@ -112,7 +124,7 @@ func New(store storage.Store, logger *zap.Logger, version string) *Service {
 	if logger == nil {
 		logger = zap.NewNop()
 	}
-	s := &Service{store: store, log: logger, version: version, now: func() time.Time { return time.Now().UTC() }}
+	s := &Service{store: store, log: logger, version: version, now: func() time.Time { return time.Now().UTC() }, filteredPageKey: mustNewFilteredPageKey()}
 	s.auditEnabled.Store(true)
 	var h Hub = noopHub{}
 	s.hub.Store(&h)
@@ -290,20 +302,23 @@ func (s *Service) Authenticate(ctx context.Context, token, remoteAddr, userAgent
 
 // VerifyClientCert maps a verified peer certificate to an identity for mTLS
 // authentication. The TLS layer has already checked the chain against the
-// built-in CA pool; this method enforces the KMS-specific claims: exactly one
-// kms://identity/<name> SAN, a matching non-revoked, non-expired certificate
-// record, and an enabled identity. Failures are generic and audited.
+// configured client-CA pool; this method enforces the KMS-specific claims:
+// exactly one kms://identity/<name> SAN, an exact fingerprint match to the
+// enrolled non-revoked/non-expired certificate, and an enabled identity.
+// Failures are generic and audited.
 func (s *Service) VerifyClientCert(ctx context.Context, cert *x509.Certificate, remoteAddr, userAgent string) (domain.Identity, error) {
 	name, err := ca.IdentityFromCert(cert)
 	if err != nil {
 		return domain.Identity{}, s.mtlsAuthFailure(ctx, remoteAddr, userAgent)
 	}
 	serial := CertSerial(cert)
+	fingerprint := CertFingerprint(cert)
 	rec, err := s.store.GetIdentityCertBySerial(ctx, serial)
 	if err != nil {
 		return domain.Identity{}, s.mtlsAuthFailure(ctx, remoteAddr, userAgent)
 	}
-	if rec.IdentityName != name || rec.IdentityDisabled ||
+	if fingerprint == "" || rec.Cert.Fingerprint != fingerprint ||
+		rec.IdentityName != name || rec.IdentityDisabled ||
 		!rec.Cert.RevokedAt.IsZero() ||
 		(!rec.Cert.NotAfter.IsZero() && s.now().After(rec.Cert.NotAfter)) {
 		return domain.Identity{}, s.mtlsAuthFailure(ctx, remoteAddr, userAgent)
@@ -331,61 +346,99 @@ func (s *Service) mtlsAuthFailure(ctx context.Context, remoteAddr, userAgent str
 // does (lowercase hex, no leading "0x"), so lookups by serial match the stored
 // form. Transports use it to populate Principal.Serial for mTLS callers.
 func CertSerial(cert *x509.Certificate) string {
-	if cert == nil {
+	if cert == nil || cert.SerialNumber == nil {
 		return ""
 	}
 	return strings.ToLower(cert.SerialNumber.Text(16))
 }
 
+// CertFingerprint returns the lowercase SHA-256 fingerprint of the exact DER
+// leaf certificate. It matches the representation persisted at enrollment.
+func CertFingerprint(cert *x509.Certificate) string {
+	if cert == nil || len(cert.Raw) == 0 {
+		return ""
+	}
+	sum := sha256.Sum256(cert.Raw)
+	return hex.EncodeToString(sum[:])
+}
+
 // --- namespace auth-method gate --------------------------------------------
 
-// namespaceMethodGate enforces, before authorization, that the caller's
-// authentication method is admitted by the namespace (plan §7). Admin-kind
-// identities bypass it (management plane). A nonexistent namespace surfaces as
-// the storage error (ErrNotFound on reads). A disallowed method is
-// ErrPermissionDenied with an explicit message and an audited denial.
-func (s *Service) namespaceMethodGate(ctx context.Context, pr Principal, ns domain.NamespaceRef, resourceType string) error {
-	if pr.IsAdmin() {
-		return nil
-	}
+// namespaceMethodCheck returns the exact immutable namespace row whose method
+// policy was checked. Keeping that row identity lets every later storage call
+// and audit event remain bound to the same namespace incarnation even if
+// another process deletes and recreates the (env, app) name mid-request.
+func (s *Service) namespaceMethodCheck(ctx context.Context, pr Principal, ns domain.NamespaceRef, resourceType string) (domain.Namespace, error) {
 	n, err := s.store.GetNamespace(ctx, ns)
 	if err != nil {
-		return err
+		return domain.Namespace{}, err
 	}
-	if authMethodAllowed(n.AllowedAuthMethods, pr.Method) {
-		return nil
+	if expectedID, ok := storage.ExpectedNamespaceIncarnation(ctx, ns); ok && expectedID != n.ID {
+		return domain.Namespace{}, domain.Errorf(domain.ErrAborted, "namespace %s changed during request; retry", ns)
+	}
+	if pr.IsAdmin() || authMethodAllowed(n.AllowedAuthMethods, pr.Method) {
+		return n, nil
 	}
 	allowed := make([]string, len(n.AllowedAuthMethods))
 	for i, m := range n.AllowedAuthMethods {
 		allowed[i] = string(m)
 	}
-	s.auditRef(ctx, pr, "authz.method_denied", resourceType, domain.Ref{NS: ns}, 0, "deny",
+	s.auditRefWithNamespaceID(ctx, pr, "authz.method_denied", resourceType, domain.Ref{NS: ns}, n.ID, 0, "deny",
 		map[string]string{"method": string(pr.Method), "required": strings.Join(allowed, ",")})
-	return domain.Errorf(domain.ErrPermissionDenied,
+	return domain.Namespace{}, domain.Errorf(domain.ErrPermissionDenied,
 		"namespace %s requires %s", ns, strings.Join(allowed, " or "))
+}
+
+// namespaceMethodGate preserves the error-only form used by management and
+// watch reauthorization paths.
+func (s *Service) namespaceMethodGate(ctx context.Context, pr Principal, ns domain.NamespaceRef, resourceType string) error {
+	_, err := s.namespaceMethodCheck(ctx, pr, ns, resourceType)
+	return err
+}
+
+// namespaceAuthorizationContext performs the method check and binds subsequent
+// storage work to the exact row that was observed. Admins still bypass the
+// namespace method policy. For compatibility with existing admin semantics, a
+// missing namespace is left for the addressed storage operation to report; no
+// row was authorized in that case, so there is no incarnation to bind.
+func (s *Service) namespaceAuthorizationContext(ctx context.Context, pr Principal, ns domain.NamespaceRef, resourceType string) (context.Context, domain.Namespace, error) {
+	n, err := s.namespaceMethodCheck(ctx, pr, ns, resourceType)
+	if err != nil {
+		if pr.IsAdmin() && errors.Is(err, domain.ErrNotFound) {
+			return ctx, domain.Namespace{}, nil
+		}
+		return ctx, domain.Namespace{}, err
+	}
+	bound, err := storage.BindNamespaceIncarnation(ctx, ns, n.ID)
+	if err != nil {
+		return ctx, domain.Namespace{}, err
+	}
+	return bound, n, nil
 }
 
 // --- authorization ---------------------------------------------------------
 
 // authorize enforces the per-namespace method gate and then policy for one
 // data-plane operation on ref. Admin identities are authorized for everything
-// (and skip the method gate). Denials are audited.
-func (s *Service) authorize(ctx context.Context, pr Principal, operation, resourceType string, ref domain.Ref) error {
-	if err := s.namespaceMethodGate(ctx, pr, ref.NS, resourceType); err != nil {
-		return err
+// (and skip the method restriction). It returns a context pinned to the exact
+// namespace row used for the decision. Denials are audited.
+func (s *Service) authorize(ctx context.Context, pr Principal, operation, resourceType string, ref domain.Ref) (context.Context, domain.Namespace, error) {
+	bound, n, err := s.namespaceAuthorizationContext(ctx, pr, ref.NS, resourceType)
+	if err != nil {
+		return ctx, domain.Namespace{}, err
 	}
 	if pr.IsAdmin() {
-		return nil
+		return bound, n, nil
 	}
-	policies, err := s.store.PoliciesForSubject(ctx, pr.Identity.Name)
+	policies, err := s.store.PoliciesForSubject(bound, pr.Identity.Name)
 	if err != nil {
-		return domain.Errorf(domain.ErrPermissionDenied, "authorization unavailable")
+		return ctx, domain.Namespace{}, domain.Errorf(domain.ErrPermissionDenied, "authorization unavailable")
 	}
 	if !policy.Authorize(policies, pr.home(), operation, ref.NS) {
-		s.auditRef(ctx, pr, "authz.denial", resourceType, ref, 0, "deny", map[string]string{"operation": operation})
-		return domain.Errorf(domain.ErrPermissionDenied, "access denied")
+		s.auditRefWithNamespaceID(bound, pr, "authz.denial", resourceType, ref, n.ID, 0, "deny", map[string]string{"operation": operation})
+		return ctx, domain.Namespace{}, domain.Errorf(domain.ErrPermissionDenied, "access denied")
 	}
-	return nil
+	return bound, n, nil
 }
 
 // listFilter enforces the method gate over the list namespace, authorizes the
@@ -399,26 +452,27 @@ func (s *Service) authorize(ctx context.Context, pr Principal, operation, resour
 // denies" gap closed at the operation level: parameter listings return values
 // inline, so they pass only parameter:read as the item op; secret listings
 // return metadata only, so they pass secret:list and secret:read.
-func (s *Service) listFilter(ctx context.Context, pr Principal, resourceType, listOp string, ns domain.NamespaceRef, itemOps ...string) (func(domain.Ref) bool, error) {
-	if err := s.namespaceMethodGate(ctx, pr, ns, resourceType); err != nil {
-		return nil, err
+func (s *Service) listFilter(ctx context.Context, pr Principal, resourceType, listOp string, ns domain.NamespaceRef, itemOps ...string) (context.Context, domain.Namespace, func(domain.Ref) bool, error) {
+	bound, n, err := s.namespaceAuthorizationContext(ctx, pr, ns, resourceType)
+	if err != nil {
+		return ctx, domain.Namespace{}, nil, err
 	}
 	if pr.IsAdmin() {
-		return func(domain.Ref) bool { return true }, nil
+		return bound, n, func(domain.Ref) bool { return true }, nil
 	}
-	policies, err := s.store.PoliciesForSubject(ctx, pr.Identity.Name)
+	policies, err := s.store.PoliciesForSubject(bound, pr.Identity.Name)
 	if err != nil {
-		return nil, domain.Errorf(domain.ErrPermissionDenied, "authorization unavailable")
+		return ctx, domain.Namespace{}, nil, domain.Errorf(domain.ErrPermissionDenied, "authorization unavailable")
 	}
 	home := pr.home()
 	// Use the full authorization decision here: explicit denies must override
 	// both policy allows and the implicit home-namespace grant.
 	if !policy.Authorize(policies, home, listOp, ns) {
-		s.auditRef(ctx, pr, "authz.denial", resourceType, domain.Ref{NS: ns}, 0, "deny",
+		s.auditRefWithNamespaceID(bound, pr, "authz.denial", resourceType, domain.Ref{NS: ns}, n.ID, 0, "deny",
 			map[string]string{"operation": listOp})
-		return nil, domain.Errorf(domain.ErrPermissionDenied, "access denied")
+		return ctx, domain.Namespace{}, nil, domain.Errorf(domain.ErrPermissionDenied, "access denied")
 	}
-	return func(ref domain.Ref) bool {
+	return bound, n, func(ref domain.Ref) bool {
 		for _, op := range itemOps {
 			if policy.Authorize(policies, home, op, ref.NS) {
 				return true
@@ -437,25 +491,44 @@ func (s *Service) listFilter(ctx context.Context, pr Principal, resourceType, li
 // hub performs no per-event filtering, so an admitted subscriber receives every
 // change in each authorized namespace.
 func (s *Service) AuthorizeSubscribe(ctx context.Context, pr Principal, namespaces []domain.NamespaceRef) error {
-	if pr.IsAdmin() {
-		return nil
+	_, err := s.AuthorizeSubscribeContext(ctx, pr, namespaces)
+	return err
+}
+
+// AuthorizeSubscribeContext is the context-preserving form used by transports.
+// The returned context pins every subscribed namespace incarnation through the
+// initial snapshot and subsequent heartbeat reauthorization.
+func (s *Service) AuthorizeSubscribeContext(ctx context.Context, pr Principal, namespaces []domain.NamespaceRef) (context.Context, error) {
+	var policies []domain.Policy
+	var err error
+	if !pr.IsAdmin() {
+		policies, err = s.store.PoliciesForSubject(ctx, pr.Identity.Name)
 	}
-	policies, err := s.store.PoliciesForSubject(ctx, pr.Identity.Name)
 	if err != nil {
-		return domain.Errorf(domain.ErrPermissionDenied, "authorization unavailable")
+		return ctx, domain.Errorf(domain.ErrPermissionDenied, "authorization unavailable")
 	}
 	home := pr.home()
 	for _, ns := range namespaces {
-		if err := s.namespaceMethodGate(ctx, pr, ns, domain.ResourceParameter); err != nil {
-			return err
+		bound, n, err := s.namespaceAuthorizationContext(ctx, pr, ns, domain.ResourceParameter)
+		if err != nil {
+			return ctx, err
 		}
-		if !policy.Authorize(policies, home, domain.OpParameterRead, ns) {
-			s.auditRef(ctx, pr, "authz.denial", domain.ResourceParameter, domain.Ref{NS: ns}, 0, "deny",
+		// A live watch cannot safely follow a name that has no current row: there
+		// is no immutable incarnation to bind, so a later create could silently
+		// turn the registration into access to a namespace that was never checked.
+		// Admins retain their ordinary data-plane missing-namespace behavior, but
+		// registration itself requires a concrete namespace just like non-admins.
+		if n.ID == 0 {
+			return ctx, domain.Errorf(domain.ErrNotFound, "namespace %s", ns)
+		}
+		ctx = bound
+		if !pr.IsAdmin() && !policy.Authorize(policies, home, domain.OpParameterRead, ns) {
+			s.auditRefWithNamespaceID(ctx, pr, "authz.denial", domain.ResourceParameter, domain.Ref{NS: ns}, n.ID, 0, "deny",
 				map[string]string{"operation": "subscribe"})
-			return domain.Errorf(domain.ErrPermissionDenied, "access denied")
+			return ctx, domain.Errorf(domain.ErrPermissionDenied, "access denied")
 		}
 	}
-	return nil
+	return ctx, nil
 }
 
 // ReauthorizeWatch re-validates a live stream's credential and re-runs the full
@@ -466,10 +539,10 @@ func (s *Service) AuthorizeSubscribe(ctx context.Context, pr Principal, namespac
 // Credential re-check: for token streams it re-authenticates the bearer token
 // itself, so rotating or revoking a token drops the stream (ErrUnauthenticated).
 // For mTLS streams it re-checks that the identity is still enabled AND that the
-// presenting certificate (by serial) is still valid, so revoking a single cert
-// drops the stream. Any transport that builds an mTLS Principal MUST populate
-// Serial (via CertSerial); when it is empty the per-cert recheck is skipped and
-// only the identity-disable check protects the stream.
+// exact presenting certificate (serial plus fingerprint) is still enrolled and
+// valid, so revoking a single cert drops the stream. Any transport that builds
+// an mTLS Principal MUST populate Serial and Fingerprint; missing either fails
+// reauthorization closed.
 //
 // Authorization re-check: for each subscribed namespace it re-runs the same
 // per-namespace method gate AND namespace-level policy check (home grant folded
@@ -479,51 +552,58 @@ func (s *Service) AuthorizeSubscribe(ctx context.Context, pr Principal, namespac
 // a home-namespace subscriber keeps its implicit grant across policy changes.
 // This is namespace-level and cheap (one policy read plus a check per subscribed
 // namespace per heartbeat), not the per-event predicate that was removed. Admins
-// bypass namespace authorization (identity re-validated above). Callers that pass
-// no namespaces get credential re-validation only.
+// bypass method/policy restrictions, but still re-check that each context-bound
+// namespace incarnation exists so a delete/recreate closes a stale stream.
+// Callers that pass no namespaces get credential re-validation only.
 func (s *Service) ReauthorizeWatch(ctx context.Context, pr Principal, namespaces ...domain.NamespaceRef) error {
-	if pr.Method == domain.AuthMethodToken {
+	switch pr.Method {
+	case domain.AuthMethodToken:
 		id, err := s.Authenticate(ctx, pr.Token, pr.RemoteAddr, pr.UserAgent)
 		if err != nil || id.Name != pr.Identity.Name || id.Kind != pr.Identity.Kind {
 			return domain.Errorf(domain.ErrUnauthenticated, "invalid credentials")
 		}
-	} else {
+	case domain.AuthMethodMTLS:
 		id, err := s.store.GetIdentityByName(ctx, pr.Identity.Name)
 		if err != nil || id.Disabled || id.Kind != pr.Identity.Kind {
 			return domain.Errorf(domain.ErrUnauthenticated, "invalid credentials")
 		}
-		// Re-validate the specific certificate: a single revoked/expired serial
-		// (identity still enabled) must still tear the stream down. Any transport
-		// that builds an mTLS Principal MUST populate Serial (via CertSerial) —
-		// when it is empty this per-cert recheck is skipped and only the
-		// identity-disable check above protects the stream.
-		if pr.Serial != "" {
-			rec, cerr := s.store.GetIdentityCertBySerial(ctx, pr.Serial)
-			if cerr != nil || rec.IdentityName != pr.Identity.Name || rec.IdentityDisabled ||
-				!rec.Cert.RevokedAt.IsZero() ||
-				(!rec.Cert.NotAfter.IsZero() && s.now().After(rec.Cert.NotAfter)) {
-				return domain.Errorf(domain.ErrUnauthenticated, "invalid credentials")
-			}
+		// Re-validate the specific enrolled certificate: a revoked/expired serial
+		// or a different leaf carrying the same issuer-scoped serial and SAN must
+		// tear the stream down. Any transport that builds an mTLS Principal MUST
+		// populate Serial and Fingerprint. Missing either binding is invalid.
+		if pr.Serial == "" || pr.Fingerprint == "" {
+			return domain.Errorf(domain.ErrUnauthenticated, "invalid credentials")
 		}
+		rec, cerr := s.store.GetIdentityCertBySerial(ctx, pr.Serial)
+		if cerr != nil || rec.Cert.Fingerprint != pr.Fingerprint ||
+			rec.IdentityName != pr.Identity.Name || rec.IdentityDisabled ||
+			!rec.Cert.RevokedAt.IsZero() ||
+			(!rec.Cert.NotAfter.IsZero() && s.now().After(rec.Cert.NotAfter)) {
+			return domain.Errorf(domain.ErrUnauthenticated, "invalid credentials")
+		}
+	default:
+		return domain.Errorf(domain.ErrUnauthenticated, "invalid credentials")
 	}
 	// Re-run the FULL per-namespace authorization (method gate + policy) for each
 	// subscribed namespace, mirroring AuthorizeSubscribe, so a live stream is torn
-	// down promptly when a namespace's allowed methods are tightened OR the
-	// caller's grant for that namespace is revoked. Client identities only; admins
-	// bypass namespace authorization (their identity was re-validated above).
+	// down promptly when a namespace is replaced, its allowed methods are
+	// tightened, or the caller's grant is revoked. Admins bypass method/policy
+	// restrictions but not the exact-row existence check in namespaceMethodCheck.
+	var policies []domain.Policy
 	if !pr.IsAdmin() {
-		policies, perr := s.store.PoliciesForSubject(ctx, pr.Identity.Name)
+		var perr error
+		policies, perr = s.store.PoliciesForSubject(ctx, pr.Identity.Name)
 		if perr != nil {
 			return domain.Errorf(domain.ErrPermissionDenied, "authorization unavailable")
 		}
-		home := pr.home()
-		for _, ns := range namespaces {
-			if err := s.namespaceMethodGate(ctx, pr, ns, domain.ResourceParameter); err != nil {
-				return err
-			}
-			if !policy.Authorize(policies, home, domain.OpParameterRead, ns) {
-				return domain.Errorf(domain.ErrPermissionDenied, "access denied")
-			}
+	}
+	home := pr.home()
+	for _, ns := range namespaces {
+		if err := s.namespaceMethodGate(ctx, pr, ns, domain.ResourceParameter); err != nil {
+			return err
+		}
+		if !pr.IsAdmin() && !policy.Authorize(policies, home, domain.OpParameterRead, ns) {
+			return domain.Errorf(domain.ErrPermissionDenied, "access denied")
 		}
 	}
 	return nil
@@ -569,7 +649,34 @@ func (s *Service) appendAudit(ctx context.Context, ev domain.AuditEvent) error {
 
 // auditRef records a namespaced operation, denormalizing the ref's env/app/key.
 func (s *Service) auditRef(ctx context.Context, pr Principal, eventType, resourceType string, ref domain.Ref, version uint64, decision string, meta map[string]string) {
-	s.audit(ctx, s.buildEvent(pr, eventType, resourceType, ref, version, decision, meta))
+	s.audit(ctx, s.buildRefEvent(ctx, pr, eventType, resourceType, ref, version, decision, meta))
+}
+
+// auditRefWithNamespaceID records the namespace row observed before the
+// operation. Callers use it for mutable/delete paths where a post-operation
+// name lookup could otherwise stamp a newly recreated namespace (ABA).
+func (s *Service) auditRefWithNamespaceID(ctx context.Context, pr Principal, eventType, resourceType string, ref domain.Ref, namespaceID int64, version uint64, decision string, meta map[string]string) {
+	s.audit(ctx, s.buildRefEventWithNamespaceID(pr, eventType, resourceType, ref, namespaceID, version, decision, meta))
+}
+
+func (s *Service) auditRefStrictWithNamespaceID(ctx context.Context, pr Principal, eventType, resourceType string, ref domain.Ref, namespaceID int64, version uint64, decision string, meta map[string]string) error {
+	return s.auditStrict(ctx, s.buildRefEventWithNamespaceID(pr, eventType, resourceType, ref, namespaceID, version, decision, meta))
+}
+
+func (s *Service) buildRefEvent(ctx context.Context, pr Principal, eventType, resourceType string, ref domain.Ref, version uint64, decision string, meta map[string]string) domain.AuditEvent {
+	event := s.buildEvent(pr, eventType, resourceType, ref, version, decision, meta)
+	if ref.NS.Env != "" && ref.NS.App != "" {
+		if namespaceID, ok := storage.ExpectedNamespaceIncarnation(ctx, ref.NS); ok {
+			event.ResourceNamespaceID = namespaceID
+		}
+	}
+	return event
+}
+
+func (s *Service) buildRefEventWithNamespaceID(pr Principal, eventType, resourceType string, ref domain.Ref, namespaceID int64, version uint64, decision string, meta map[string]string) domain.AuditEvent {
+	event := s.buildEvent(pr, eventType, resourceType, ref, version, decision, meta)
+	event.ResourceNamespaceID = namespaceID
+	return event
 }
 
 // auditName records an operation on a name-addressed resource (policy,

@@ -20,10 +20,10 @@ vendored under `kms_paramstore/_gen/`, so no `protoc` is needed to use the SDK.
 ## Quick start
 
 ```python
-from kms_paramstore import Client
+from kms_paramstore import Client, tls_from_files
 
 with Client("parameter-store.prod.internal:8443", namespace="prod/gradethis",
-            token="<client-token>") as client:
+            token="<client-token>", tls=tls_from_files("server-ca.crt")) as client:
     db_password = client.get_secret("postgres-password")   # relative to the namespace
     print(db_password)            # -> [REDACTED]
     connect(db_password.value)    # explicit access to plaintext bytes
@@ -76,8 +76,15 @@ required only for token-method identities, and admitted only where the namespace
 server-only TLS, `mtls_from_files(cert, key, ca)` for mutual TLS, or
 `tls_from_bytes(ca_cert=..., client_cert=..., client_key=...)` to build credentials
 from in-memory PEM. `tls` also accepts a `TLSConfig(ca=..., cert=..., key=...)`
-dataclass (paths or raw PEM bytes). With no `tls` the channel is insecure
-(development only).
+dataclass (paths or raw PEM bytes).
+
+Transport choice is fail-closed: if `tls` is omitted, construction fails unless
+you pass a pre-built `channel` or explicitly set `insecure=True`. The latter is
+for local development only and must not be used across an untrusted network:
+
+```python
+client = Client("localhost:8443", namespace="dev/app", insecure=True)
+```
 
 ## Caching
 
@@ -86,7 +93,12 @@ entries are invalidated by writes through the client and by watch events when a
 subscription is active.
 
 ```python
-client = Client("host:8443", token="...", cache_ttl=60)
+client = Client(
+    "host:8443",
+    token="...",
+    tls=tls_from_files("server-ca.crt"),
+    cache_ttl=60,
+)
 ```
 
 ## Declarative config (descriptors)
@@ -174,6 +186,36 @@ Callbacks run serially on a single dedicated dispatch thread with a bounded
 queue (a full queue drops notifications, never values; an exception is logged),
 so a slow callback does not stall the stream but does delay later callbacks.
 Env-var-overridden values are pinned and do not hot-reload.
+
+## Atomic configuration releases
+
+Use the synchronous, thread-safe release loader when related values must be
+resolved and installed together:
+
+```python
+from kms_paramstore import ReleaseLoader, ReleaseLoaderConfig
+
+loader = ReleaseLoader(client, ReleaseLoaderConfig(
+    name="runtime",
+    secret_token_provider=lambda alias, path: local_tokens.get(alias),
+))
+
+def prepare(cancel, snapshot):
+    return decode_validate_and_prepare(cancel, snapshot)
+
+loader.run(prepare)  # blocks; call loader.stop() from another thread to stop
+```
+
+Snapshots are frozen/redacting and expose release version, activation
+revision, digest, schema pin, exact entries, parameters, and `Secret` values by
+stable alias. A prepared object's `commit()` must be infallible and normally
+performs an atomic reference swap; `abort()` releases stale or failed prepared
+work. Startup fails until one release applies. Later outages and rejections
+retain the last-known-good state.
+
+`run_typed_release` provides an explicit no-reflection decode step. See
+[`../../docs/sdk-python.md`](../../docs/sdk-python.md#atomic-release-loading)
+for lifecycle, cancellation, token-provider, and status details.
 
 ## Errors
 

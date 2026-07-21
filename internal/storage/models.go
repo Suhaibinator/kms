@@ -97,24 +97,27 @@ func (secretModel) TableName() string { return "secrets" }
 
 // secretVersionModel -> secret_versions.
 type secretVersionModel struct {
-	ID            int64       `gorm:"column:id;primaryKey;autoIncrement"`
-	SecretID      int64       `gorm:"column:secret_id;not null;uniqueIndex:idx_secret_ver,priority:1"`
-	Secret        secretModel `gorm:"foreignKey:SecretID;references:ID;constraint:OnDelete:CASCADE"`
-	VersionNumber int64       `gorm:"column:version_number;not null;uniqueIndex:idx_secret_ver,priority:2"`
-	Ciphertext    []byte      `gorm:"column:ciphertext"`
-	EncryptedDEK  []byte      `gorm:"column:encrypted_dek"`
-	KEKID         string      `gorm:"column:kek_id;not null"`
-	WrapMode      string      `gorm:"column:wrap_mode;not null;default:standard"`
-	ClientKeySalt []byte      `gorm:"column:client_key_salt"`
-	Algorithm     string      `gorm:"column:algorithm;not null;default:AES-256-GCM"`
-	Nonce         []byte      `gorm:"column:nonce"`
-	AAD           string      `gorm:"column:aad;not null"`
-	State         string      `gorm:"column:state;not null;default:enabled"`
-	CreatedBy     string      `gorm:"column:created_by;not null;default:''"`
-	CreatedAt     string      `gorm:"column:created_at;not null"`
-	DestroyedAt   *string     `gorm:"column:destroyed_at"`
-	ExpiresAt     *string     `gorm:"column:expires_at"`
-	MetadataJSON  string      `gorm:"column:metadata_json;not null;default:{}"`
+	ID             int64       `gorm:"column:id;primaryKey;autoIncrement"`
+	SecretID       int64       `gorm:"column:secret_id;not null;uniqueIndex:idx_secret_ver,priority:1"`
+	Secret         secretModel `gorm:"foreignKey:SecretID;references:ID;constraint:OnDelete:CASCADE"`
+	VersionNumber  int64       `gorm:"column:version_number;not null;uniqueIndex:idx_secret_ver,priority:2"`
+	ContentType    string      `gorm:"column:content_type;not null;default:application/octet-stream"`
+	ClientBound    int64       `gorm:"column:client_bound;not null;default:0"`
+	HasAccessToken int64       `gorm:"column:has_access_token;not null;default:0"`
+	Ciphertext     []byte      `gorm:"column:ciphertext"`
+	EncryptedDEK   []byte      `gorm:"column:encrypted_dek"`
+	KEKID          string      `gorm:"column:kek_id;not null"`
+	WrapMode       string      `gorm:"column:wrap_mode;not null;default:standard"`
+	ClientKeySalt  []byte      `gorm:"column:client_key_salt"`
+	Algorithm      string      `gorm:"column:algorithm;not null;default:AES-256-GCM"`
+	Nonce          []byte      `gorm:"column:nonce"`
+	AAD            string      `gorm:"column:aad;not null"`
+	State          string      `gorm:"column:state;not null;default:enabled"`
+	CreatedBy      string      `gorm:"column:created_by;not null;default:''"`
+	CreatedAt      string      `gorm:"column:created_at;not null"`
+	DestroyedAt    *string     `gorm:"column:destroyed_at"`
+	ExpiresAt      *string     `gorm:"column:expires_at"`
+	MetadataJSON   string      `gorm:"column:metadata_json;not null;default:{}"`
 }
 
 func (secretVersionModel) TableName() string { return "secret_versions" }
@@ -186,21 +189,22 @@ func (policyModel) TableName() string { return "policies" }
 
 // auditEventModel -> audit_events. Resource env/app/key are denormalized text.
 type auditEventModel struct {
-	ID              int64  `gorm:"column:id;primaryKey;autoIncrement"`
-	EventType       string `gorm:"column:event_type;not null"`
-	ActorIdentity   string `gorm:"column:actor_identity;not null;default:'';index:idx_audit_actor"`
-	ActorType       string `gorm:"column:actor_type;not null;default:''"`
-	ResourceType    string `gorm:"column:resource_type;not null;default:''"`
-	ResourceEnv     string `gorm:"column:resource_env;not null;default:'';index:idx_audit_ns,priority:1"`
-	ResourceApp     string `gorm:"column:resource_app;not null;default:'';index:idx_audit_ns,priority:2"`
-	ResourceKey     string `gorm:"column:resource_key;not null;default:''"`
-	ResourceVersion int64  `gorm:"column:resource_version;not null;default:0"`
-	Decision        string `gorm:"column:decision;not null;default:''"`
-	SourceIP        string `gorm:"column:source_ip;not null;default:''"`
-	UserAgent       string `gorm:"column:user_agent;not null;default:''"`
-	RequestID       string `gorm:"column:request_id;not null;default:''"`
-	CreatedAt       string `gorm:"column:created_at;not null;index:idx_audit_created"`
-	MetadataJSON    string `gorm:"column:metadata_json;not null;default:{}"`
+	ID                  int64  `gorm:"column:id;primaryKey;autoIncrement"`
+	EventType           string `gorm:"column:event_type;not null"`
+	ActorIdentity       string `gorm:"column:actor_identity;not null;default:'';index:idx_audit_actor"`
+	ActorType           string `gorm:"column:actor_type;not null;default:''"`
+	ResourceType        string `gorm:"column:resource_type;not null;default:''"`
+	ResourceNamespaceID int64  `gorm:"column:resource_namespace_id;not null;default:0;index:idx_audit_namespace_id"`
+	ResourceEnv         string `gorm:"column:resource_env;not null;default:'';index:idx_audit_ns,priority:1"`
+	ResourceApp         string `gorm:"column:resource_app;not null;default:'';index:idx_audit_ns,priority:2"`
+	ResourceKey         string `gorm:"column:resource_key;not null;default:''"`
+	ResourceVersion     int64  `gorm:"column:resource_version;not null;default:0"`
+	Decision            string `gorm:"column:decision;not null;default:''"`
+	SourceIP            string `gorm:"column:source_ip;not null;default:''"`
+	UserAgent           string `gorm:"column:user_agent;not null;default:''"`
+	RequestID           string `gorm:"column:request_id;not null;default:''"`
+	CreatedAt           string `gorm:"column:created_at;not null;index:idx_audit_created"`
+	MetadataJSON        string `gorm:"column:metadata_json;not null;default:{}"`
 }
 
 func (auditEventModel) TableName() string { return "audit_events" }
@@ -211,6 +215,7 @@ func (auditEventModel) TableName() string { return "audit_events" }
 type changeLogModel struct {
 	Revision      int64   `gorm:"column:revision;primaryKey;autoIncrement"`
 	ResourceType  string  `gorm:"column:resource_type;not null"`
+	NamespaceID   int64   `gorm:"column:namespace_id;not null;default:0;index:idx_change_log_namespace_revision,priority:1"`
 	Env           string  `gorm:"column:env;not null"`
 	App           string  `gorm:"column:app;not null"`
 	Key           string  `gorm:"column:key;not null"`
@@ -223,6 +228,124 @@ type changeLogModel struct {
 }
 
 func (changeLogModel) TableName() string { return "change_log" }
+
+type configurationReleaseModel struct {
+	ID            int64          `gorm:"column:id;primaryKey;autoIncrement"`
+	NamespaceID   int64          `gorm:"column:namespace_id;not null;uniqueIndex:idx_release_ns_name_ver,priority:1"`
+	Namespace     namespaceModel `gorm:"foreignKey:NamespaceID;references:ID"`
+	Name          string         `gorm:"column:name;not null;uniqueIndex:idx_release_ns_name_ver,priority:2"`
+	VersionNumber int64          `gorm:"column:version_number;not null;uniqueIndex:idx_release_ns_name_ver,priority:3"`
+	SchemaID      string         `gorm:"column:schema_id;not null;default:''"`
+	SchemaVersion int64          `gorm:"column:schema_version;not null;default:0"`
+	Digest        string         `gorm:"column:digest;not null"`
+	MetadataJSON  string         `gorm:"column:metadata_json;not null;default:{}"`
+	CreatedBy     string         `gorm:"column:created_by;not null;default:''"`
+	CreatedAt     string         `gorm:"column:created_at;not null"`
+}
+
+func (configurationReleaseModel) TableName() string { return "configuration_releases" }
+
+type configurationReleaseEntryModel struct {
+	ID        int64                     `gorm:"column:id;primaryKey;autoIncrement"`
+	ReleaseID int64                     `gorm:"column:release_id;not null;uniqueIndex:idx_release_entry_alias,priority:1;index:idx_release_entry_ref,priority:1"`
+	Release   configurationReleaseModel `gorm:"foreignKey:ReleaseID;references:ID;constraint:OnDelete:CASCADE"`
+	Alias     string                    `gorm:"column:alias;not null;uniqueIndex:idx_release_entry_alias,priority:2"`
+	Kind      string                    `gorm:"column:kind;not null;index:idx_release_entry_ref,priority:2;index:idx_release_entry_resource,priority:2"`
+	// ResourceNamespaceID is deliberately denormalized without a foreign key:
+	// immutable/inactive release history may outlive deletion of its source
+	// namespace, but must never resolve a recreated env/app name instead.
+	ResourceNamespaceID int64  `gorm:"column:resource_namespace_id;not null;default:0;index:idx_release_entry_resource,priority:1"`
+	ResourceEnv         string `gorm:"column:resource_env;not null;index:idx_release_entry_ref,priority:3"`
+	ResourceApp         string `gorm:"column:resource_app;not null;index:idx_release_entry_ref,priority:4"`
+	ResourceKey         string `gorm:"column:resource_key;not null;index:idx_release_entry_ref,priority:5;index:idx_release_entry_resource,priority:3"`
+	ResourceVersion     int64  `gorm:"column:resource_version;not null;index:idx_release_entry_ref,priority:6;index:idx_release_entry_resource,priority:4"`
+	ContentType         string `gorm:"column:content_type;not null;default:''"`
+	MetadataJSON        string `gorm:"column:metadata_json;not null;default:{}"`
+	ParameterDigest     string `gorm:"column:parameter_digest;not null;default:''"`
+	ClientBound         int64  `gorm:"column:client_bound;not null;default:0"`
+	HasAccessToken      int64  `gorm:"column:has_access_token;not null;default:0"`
+}
+
+func (configurationReleaseEntryModel) TableName() string { return "configuration_release_entries" }
+
+type configurationReleaseLabelModel struct {
+	NamespaceID        int64          `gorm:"column:namespace_id;not null;primaryKey;autoIncrement:false"`
+	Namespace          namespaceModel `gorm:"foreignKey:NamespaceID;references:ID"`
+	ReleaseName        string         `gorm:"column:release_name;not null;primaryKey"`
+	Label              string         `gorm:"column:label;not null;primaryKey"`
+	VersionNumber      int64          `gorm:"column:version_number;not null"`
+	ActivationRevision int64          `gorm:"column:activation_revision;not null;default:0"`
+}
+
+func (configurationReleaseLabelModel) TableName() string { return "configuration_release_labels" }
+
+// configurationReleaseActivationModel preserves the authoritative identity of
+// an activation after its replay row ages out of the global changelog. This
+// lets idempotently retried lifecycle acknowledgements remain verifiable for
+// the longer release-retention window without keeping ordinary watch history
+// forever.
+type configurationReleaseActivationModel struct {
+	Revision      int64          `gorm:"column:revision;primaryKey;autoIncrement:false"`
+	NamespaceID   int64          `gorm:"column:namespace_id;not null;index:idx_release_activation_lookup,priority:1"`
+	Namespace     namespaceModel `gorm:"foreignKey:NamespaceID;references:ID"`
+	ReleaseName   string         `gorm:"column:release_name;not null;index:idx_release_activation_lookup,priority:2"`
+	VersionNumber int64          `gorm:"column:version_number;not null;index:idx_release_activation_lookup,priority:3"`
+	ActivatedAt   string         `gorm:"column:activated_at;not null;index:idx_release_activation_time"`
+}
+
+func (configurationReleaseActivationModel) TableName() string {
+	return "configuration_release_activations"
+}
+
+type configurationSchemaModel struct {
+	ID            string `gorm:"column:id;not null;primaryKey"`
+	VersionNumber int64  `gorm:"column:version_number;not null;primaryKey;autoIncrement:false"`
+	SchemaJSON    string `gorm:"column:schema_json;not null"`
+	Digest        string `gorm:"column:digest;not null"`
+	MetadataJSON  string `gorm:"column:metadata_json;not null;default:{}"`
+	CreatedBy     string `gorm:"column:created_by;not null;default:''"`
+	CreatedAt     string `gorm:"column:created_at;not null"`
+}
+
+func (configurationSchemaModel) TableName() string { return "configuration_schemas" }
+
+type releaseSubscriberStateModel struct {
+	NamespaceID        int64          `gorm:"column:namespace_id;not null;primaryKey;autoIncrement:false;index:idx_release_subscriber_page,priority:1"`
+	Namespace          namespaceModel `gorm:"foreignKey:NamespaceID;references:ID"`
+	ReleaseName        string         `gorm:"column:release_name;not null;primaryKey;index:idx_release_subscriber_page,priority:2"`
+	ClientName         string         `gorm:"column:client_name;not null;primaryKey"`
+	InstanceID         string         `gorm:"column:instance_id;not null;primaryKey"`
+	Identity           string         `gorm:"column:identity;not null;default:'';primaryKey"`
+	State              string         `gorm:"column:state;not null;primaryKey"`
+	ReleaseVersion     int64          `gorm:"column:release_version;not null"`
+	ActivationRevision int64          `gorm:"column:activation_revision;not null"`
+	RejectionCategory  string         `gorm:"column:rejection_category;not null;default:''"`
+	Diagnostic         string         `gorm:"column:diagnostic;not null;default:''"`
+	ClientTimestamp    string         `gorm:"column:client_timestamp;not null"`
+	ServerTimestamp    string         `gorm:"column:server_timestamp;not null;index:idx_release_subscriber_server_time;index:idx_release_subscriber_page,priority:3"`
+	Connected          int64          `gorm:"column:connected;not null;default:0"`
+	DisconnectedAt     *string        `gorm:"column:disconnected_at;index:idx_release_subscriber_disconnected"`
+}
+
+func (releaseSubscriberStateModel) TableName() string { return "release_subscriber_states" }
+
+type releaseSubscriberConnectionModel struct {
+	NamespaceID     int64          `gorm:"column:namespace_id;not null;primaryKey;autoIncrement:false;index:idx_release_connection_page,priority:1"`
+	Namespace       namespaceModel `gorm:"foreignKey:NamespaceID;references:ID"`
+	ReleaseName     string         `gorm:"column:release_name;not null;primaryKey;index:idx_release_connection_page,priority:2"`
+	ClientName      string         `gorm:"column:client_name;not null;primaryKey"`
+	InstanceID      string         `gorm:"column:instance_id;not null;primaryKey"`
+	Identity        string         `gorm:"column:identity;not null;default:'';primaryKey"`
+	ConnectionID    string         `gorm:"column:connection_id;not null;default:''"`
+	Connected       int64          `gorm:"column:connected;not null;default:0"`
+	ConnectedAt     string         `gorm:"column:connected_at;not null"`
+	DisconnectedAt  *string        `gorm:"column:disconnected_at;index:idx_release_connection_disconnected"`
+	ServerTimestamp string         `gorm:"column:server_timestamp;not null;index:idx_release_connection_server_time;index:idx_release_connection_page,priority:3"`
+}
+
+func (releaseSubscriberConnectionModel) TableName() string {
+	return "release_subscriber_connections"
+}
 
 // schemaMigrationModel -> schema_migrations. Tracks the applied schema version.
 type schemaMigrationModel struct {
@@ -248,6 +371,13 @@ var autoMigrateModels = []any{
 	&identityCertModel{},
 	&policyModel{},
 	&auditEventModel{},
+	&configurationReleaseModel{},
+	&configurationReleaseEntryModel{},
+	&configurationReleaseLabelModel{},
+	&configurationReleaseActivationModel{},
+	&configurationSchemaModel{},
+	&releaseSubscriberStateModel{},
+	&releaseSubscriberConnectionModel{},
 }
 
 // ---- model <-> domain conversions ----------------------------------------
@@ -326,23 +456,26 @@ func toSecretRecord(sec secretModel, ref domain.Ref, labels map[string]uint64) S
 
 func toSecretVersionRecord(v secretVersionModel) SecretVersionRecord {
 	return SecretVersionRecord{
-		ID:            v.ID,
-		SecretID:      v.SecretID,
-		Version:       uint64(v.VersionNumber),
-		Ciphertext:    v.Ciphertext,
-		EncryptedDEK:  v.EncryptedDEK,
-		KEKID:         v.KEKID,
-		WrapMode:      v.WrapMode,
-		ClientKeySalt: v.ClientKeySalt,
-		Algorithm:     v.Algorithm,
-		Nonce:         v.Nonce,
-		AAD:           v.AAD,
-		State:         v.State,
-		CreatedBy:     v.CreatedBy,
-		CreatedAt:     parseTime(v.CreatedAt),
-		DestroyedAt:   parseTimePtr(v.DestroyedAt),
-		ExpiresAt:     parseTimePtr(v.ExpiresAt),
-		Metadata:      v.MetadataJSON,
+		ID:             v.ID,
+		SecretID:       v.SecretID,
+		Version:        uint64(v.VersionNumber),
+		ContentType:    v.ContentType,
+		ClientBound:    i2b(v.ClientBound),
+		HasAccessToken: i2b(v.HasAccessToken),
+		Ciphertext:     v.Ciphertext,
+		EncryptedDEK:   v.EncryptedDEK,
+		KEKID:          v.KEKID,
+		WrapMode:       v.WrapMode,
+		ClientKeySalt:  v.ClientKeySalt,
+		Algorithm:      v.Algorithm,
+		Nonce:          v.Nonce,
+		AAD:            v.AAD,
+		State:          v.State,
+		CreatedBy:      v.CreatedBy,
+		CreatedAt:      parseTime(v.CreatedAt),
+		DestroyedAt:    parseTimePtr(v.DestroyedAt),
+		ExpiresAt:      parseTimePtr(v.ExpiresAt),
+		Metadata:       v.MetadataJSON,
 	}
 }
 
@@ -354,6 +487,7 @@ func toChangeEntry(m changeLogModel) domain.ChangeLogEntry {
 	return domain.ChangeLogEntry{
 		Revision:     uint64(m.Revision),
 		ResourceType: m.ResourceType,
+		NamespaceID:  m.NamespaceID,
 		Ref:          domain.Ref{NS: domain.NamespaceRef{Env: m.Env, App: m.App}, Key: m.Key},
 		ChangeType:   m.ChangeType,
 		Value:        value,
@@ -366,21 +500,22 @@ func toChangeEntry(m changeLogModel) domain.ChangeLogEntry {
 
 func toAuditEvent(m auditEventModel) domain.AuditEvent {
 	return domain.AuditEvent{
-		ID:              m.ID,
-		EventType:       m.EventType,
-		ActorIdentity:   m.ActorIdentity,
-		ActorType:       m.ActorType,
-		ResourceType:    m.ResourceType,
-		ResourceEnv:     m.ResourceEnv,
-		ResourceApp:     m.ResourceApp,
-		ResourceKey:     m.ResourceKey,
-		ResourceVersion: uint64(m.ResourceVersion),
-		Decision:        m.Decision,
-		SourceIP:        m.SourceIP,
-		UserAgent:       m.UserAgent,
-		RequestID:       m.RequestID,
-		CreatedAt:       parseTime(m.CreatedAt),
-		Metadata:        m.MetadataJSON,
+		ID:                  m.ID,
+		EventType:           m.EventType,
+		ActorIdentity:       m.ActorIdentity,
+		ActorType:           m.ActorType,
+		ResourceType:        m.ResourceType,
+		ResourceNamespaceID: m.ResourceNamespaceID,
+		ResourceEnv:         m.ResourceEnv,
+		ResourceApp:         m.ResourceApp,
+		ResourceKey:         m.ResourceKey,
+		ResourceVersion:     uint64(m.ResourceVersion),
+		Decision:            m.Decision,
+		SourceIP:            m.SourceIP,
+		UserAgent:           m.UserAgent,
+		RequestID:           m.RequestID,
+		CreatedAt:           parseTime(m.CreatedAt),
+		Metadata:            m.MetadataJSON,
 	}
 }
 

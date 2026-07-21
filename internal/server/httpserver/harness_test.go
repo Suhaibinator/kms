@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -31,6 +32,39 @@ type testEnv struct {
 func newTestEnv(t *testing.T) *testEnv {
 	t.Helper()
 	return newTestEnvWith(t, true)
+}
+
+// newReleaseTestEnv uses the real schema-v2 store because the legacy HTTP
+// fakeStore intentionally implements only the pre-release storage contract.
+func newReleaseTestEnv(t *testing.T) *testEnv {
+	t.Helper()
+	store, err := storage.Open(filepath.Join(t.TempDir(), "kms.db"))
+	if err != nil {
+		t.Fatalf("open release test store: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	ctx := context.Background()
+	if err := store.InsertKeyMetadata(ctx, domain.KeyMetadata{ID: "kek-test", Source: domain.KeySourceFile, State: domain.KeyStateActive, CreatedAt: time.Now().UTC()}); err != nil {
+		t.Fatalf("seed key metadata: %v", err)
+	}
+	kek, err := crypto.NewKEKFromMaterial("kek-test", make([]byte, 32))
+	if err != nil {
+		t.Fatalf("build kek: %v", err)
+	}
+	svc := core.New(store, zap.NewNop(), "test-version")
+	svc.SetKeyring(crypto.NewKeyring(kek))
+	adminToken, adminHash, err := crypto.GenerateToken("kms")
+	if err != nil {
+		t.Fatalf("generate admin token: %v", err)
+	}
+	if _, err := store.CreateIdentity(ctx, storage.CreateIdentityParams{Name: "admin", Kind: domain.IdentityKindAdmin, TokenHash: adminHash}); err != nil {
+		t.Fatalf("seed admin: %v", err)
+	}
+	srv, err := New(svc, Config{Addr: ":0", FrontendEnabled: false, Version: "test-version"})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	return &testEnv{t: t, svc: svc, handler: srv.Handler, adminToken: adminToken}
 }
 
 // newTestEnvWith builds the environment; ready=false leaves the keyring

@@ -82,6 +82,7 @@ Non-2xx responses carry:
 | permission_denied    | 403  |
 | not_found            | 404  |
 | already_exists       | 409  |
+| aborted (CAS conflict) | 409 |
 | failed_precondition  | 412  |
 | internal             | 500  |
 | unavailable (not ready) | 503 |
@@ -93,9 +94,10 @@ token material.
 ## Common types
 
 Timestamps are Unix milliseconds (`*_unix_ms`, integer). Binary values are
-base64 (`value_base64`). A resource reference is flattened at the top level of
-each DTO as `env`, `app`, `key`; list queries use `env`, `app`, and
-`key_prefix`. The `key_prefix` is a plain browsing filter (`LIKE 'prefix%'` on
+base64 (`value_base64`). Parameter and secret resource references are flattened
+at the top level as `env`, `app`, `key`; configuration release entries retain a
+structured `ref` because a single release may point across namespaces. List
+queries use `env`, `app`, and `key_prefix`. The `key_prefix` is a plain browsing filter (`LIKE 'prefix%'` on
 the opaque key string), **not** an authorization boundary — a caller authorized
 for a namespace may list any key in it; the prefix only narrows what a page
 returns. Display paths shown in the UI look like `/prod/gradethis/rate-limit`.
@@ -178,6 +180,38 @@ certificates; `revoked_at_unix_ms` of `0` means valid.
   "key_pem": "-----BEGIN PRIVATE KEY-----\n…",
   "serial": "0a1b2c", "not_after_unix_ms": 0 }
 ```
+
+`ConfigurationRelease` (secret entries contain metadata only):
+```json
+{
+  "namespace": { "env": "prod", "app": "gradethis" },
+  "name": "runtime",
+  "version": 14,
+  "schema_id": "gradethis/runtime",
+  "schema_version": 1,
+  "entries": [
+    { "alias": "rate_limits", "kind": "parameter",
+      "ref": { "namespace": { "env": "prod", "app": "gradethis" },
+               "key": "config/rate-limits" },
+      "version": 8, "content_type": "json", "metadata_json": "{}",
+      "parameter_digest": "<sha256 hex>",
+      "client_bound": false, "has_access_token": false },
+    { "alias": "db_password", "kind": "secret",
+      "ref": { "namespace": { "env": "prod", "app": "gradethis" },
+               "key": "db-password" },
+      "version": 3, "content_type": "text/plain", "metadata_json": "{}",
+      "parameter_digest": "", "client_bound": false,
+      "has_access_token": true }
+  ],
+  "digest": "<deterministic sha256 hex>",
+  "metadata_json": "{}", "created_by": "admin",
+  "created_at_unix_ms": 1710000000000
+}
+```
+
+Release values, secret plaintext, and per-secret access tokens never appear in
+this DTO. Creation selectors use the same `ref` shape, plus either `version` or
+`label`; an empty reference namespace means the release namespace.
 
 ## Endpoints
 
@@ -361,6 +395,69 @@ rules (a deny still wins).
   `current_revision`. This is a coarse lag signal: revisions from namespaces a
   subscriber does not watch can make it appear behind even when it has applied
   every relevant event.
+
+### Configuration releases and schemas
+
+- `POST /api/v1/releases` creates, but does not activate, an immutable release:
+  ```json
+  { "namespace": { "env": "prod", "app": "gradethis" },
+    "name": "runtime", "schema_id": "gradethis/runtime", "schema_version": 1,
+    "entries": [
+      { "alias": "rate_limits", "kind": "parameter",
+        "ref": { "namespace": {}, "key": "config/rate-limits" }, "label": "current" },
+      { "alias": "db_password", "kind": "secret",
+        "ref": { "namespace": {}, "key": "db-password" }, "version": 3 }
+    ], "metadata_json": "{}" }
+  ```
+  → `201 {"release": ConfigurationRelease}`. Labels are resolved to exact
+  versions before the returned release is persisted.
+- `GET /api/v1/releases?env=&app=&name=&page_size=&page_token=` →
+  `{"releases":[{"release":ConfigurationRelease,"current":true,
+  "previous":false,"activation_revision":42}],"next_page_token":""}`.
+  `name` is optional; the namespace is required.
+- `GET /api/v1/releases/get?env=&app=&name=&version=` →
+  `{"release": ConfigurationRelease}`.
+- `GET /api/v1/releases/active?env=&app=&name=` →
+  `{"release":ConfigurationRelease,"activation_revision":42,
+  "previous_version":13}`.
+- `POST /api/v1/releases/validate` with
+  `{"namespace":{"env":"prod","app":"gradethis"},"name":"runtime","version":14}`
+  → `{"valid":false,"errors":[{"alias":"rate_limits",
+  "code":"schema_violation","schema_pointer":"/properties/rate_limits/type",
+  "message":"configuration value does not satisfy schema"}]}`. Error messages
+  are sanitized and never include values.
+- `POST /api/v1/releases/activate` with
+  `{"namespace":{"env":"prod","app":"gradethis"},"name":"runtime",
+  "version":14,"expected_current_version":13}` →
+  `{"release":ConfigurationRelease,"activation_revision":42,
+  "previous_version":13,"changed":true}`. Omit `expected_current_version` for
+  no CAS guard; an explicit `0` requires that no release is active. A conflict
+  is HTTP 409. Activating the current version is an idempotent no-op.
+- `POST /api/v1/configuration-schemas` with
+  `{"id":"gradethis/runtime","schema_json":"{...}","metadata_json":"{}"}`
+  → `201 {"schema":{"id","version","schema_json","digest",
+  "metadata_json","created_by","created_at_unix_ms"}}`.
+- `GET /api/v1/configuration-schemas?id=&page_size=&page_token=` →
+  `{"schemas":[...],"next_page_token":""}`. `id` is optional.
+- `GET /api/v1/release-subscribers?env=&app=&name=&page_size=&page_token=` →
+  `{"subscribers":[{"namespace","release_name","client_name","instance_id",
+  "identity","state","release_version","activation_revision",
+  "rejection_category","diagnostic","client_timestamp_unix_ms",
+  "server_timestamp_unix_ms","connected"}],"next_page_token":"",
+  "current_revision":42}`.
+
+Release subscriber rows are per process instance and lifecycle state. Group
+rows by `(identity, client_name, instance_id)` to show
+received/prepared/applied/rejected together without combining different
+authenticated identities that reuse the same client and instance names. A
+connected instance with no lifecycle acknowledgement yet is
+represented by a row whose `state` is empty. `current_revision` is the active
+revision for the requested release name, so lag is release-specific rather
+than namespace-global.
+
+Release watch and acknowledgement traffic is gRPC-only. See
+[`configuration-releases.md`](configuration-releases.md#grpc-contract) for the
+bidirectional `WatchRelease` contract.
 
 ### Key metadata
 

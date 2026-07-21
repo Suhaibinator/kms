@@ -3,9 +3,12 @@ package core
 import (
 	"bytes"
 	"context"
+	"crypto/ed25519"
+	"crypto/rand"
 	"crypto/x509"
 	"encoding/pem"
 	"errors"
+	"math/big"
 	"testing"
 	"time"
 
@@ -427,6 +430,29 @@ func TestVerifyClientCertLifecycle(t *testing.T) {
 	}
 }
 
+func TestVerifyClientCertRejectsFingerprintMismatch(t *testing.T) {
+	ctx := context.Background()
+	store := newFakeStore()
+	s := newTestService(store)
+	withCA(t, s)
+
+	res, err := s.CreateIdentity(ctx, adminPrincipal(), CreateIdentityInput{
+		Name: "svc", Kind: domain.IdentityKindClient, AuthMethods: []domain.AuthMethod{domain.AuthMethodMTLS},
+	})
+	if err != nil {
+		t.Fatalf("CreateIdentity: %v", err)
+	}
+	leaf := parseCertPEM(t, res.Cert.CertPEM)
+
+	// Keep the identity claims and serial unchanged on a valid leaf from a
+	// different trusted issuer. Core must bind the exact presented leaf to the
+	// enrolled record after the TLS layer has accepted its chain.
+	alternate := alternateTrustedLeaf(t, leaf)
+	if _, err := s.VerifyClientCert(ctx, alternate, "ip", "ua"); !errors.Is(err, domain.ErrUnauthenticated) {
+		t.Fatalf("same SAN/serial with different fingerprint err = %v, want ErrUnauthenticated", err)
+	}
+}
+
 func TestVerifyClientCertRejectsDisabledIdentity(t *testing.T) {
 	ctx := context.Background()
 	store := newFakeStore()
@@ -516,10 +542,67 @@ func parseCertPEM(t *testing.T, certPEM string) *x509.Certificate {
 	block, _ := pem.Decode([]byte(certPEM))
 	if block == nil {
 		t.Fatal("no PEM block")
+		return nil
 	}
 	cert, err := x509.ParseCertificate(block.Bytes)
 	if err != nil {
 		t.Fatalf("ParseCertificate: %v", err)
 	}
 	return cert
+}
+
+// alternateTrustedLeaf returns a valid client leaf signed by a separate CA,
+// while retaining the enrolled leaf's serial and identity claims.
+func alternateTrustedLeaf(t *testing.T, enrolled *x509.Certificate) *x509.Certificate {
+	t.Helper()
+	caPub, caPriv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("generate alternate CA key: %v", err)
+	}
+	now := time.Now().UTC()
+	caTemplate := &x509.Certificate{
+		SerialNumber:          big.NewInt(1),
+		NotBefore:             now.Add(-time.Hour),
+		NotAfter:              now.Add(24 * time.Hour),
+		KeyUsage:              x509.KeyUsageCertSign,
+		BasicConstraintsValid: true,
+		IsCA:                  true,
+	}
+	caDER, err := x509.CreateCertificate(rand.Reader, caTemplate, caTemplate, caPub, caPriv)
+	if err != nil {
+		t.Fatalf("create alternate CA: %v", err)
+	}
+	caCert, err := x509.ParseCertificate(caDER)
+	if err != nil {
+		t.Fatalf("parse alternate CA: %v", err)
+	}
+
+	leafPub, _, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("generate alternate leaf key: %v", err)
+	}
+	leafTemplate := &x509.Certificate{
+		SerialNumber:          new(big.Int).Set(enrolled.SerialNumber),
+		Subject:               enrolled.Subject,
+		NotBefore:             now.Add(-time.Hour),
+		NotAfter:              now.Add(time.Hour),
+		KeyUsage:              x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
+		BasicConstraintsValid: true,
+		URIs:                  enrolled.URIs,
+	}
+	leafDER, err := x509.CreateCertificate(rand.Reader, leafTemplate, caCert, leafPub, caPriv)
+	if err != nil {
+		t.Fatalf("create alternate leaf: %v", err)
+	}
+	leaf, err := x509.ParseCertificate(leafDER)
+	if err != nil {
+		t.Fatalf("parse alternate leaf: %v", err)
+	}
+	roots := x509.NewCertPool()
+	roots.AddCert(caCert)
+	if _, err := leaf.Verify(x509.VerifyOptions{Roots: roots, KeyUsages: []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth}}); err != nil {
+		t.Fatalf("verify alternate leaf: %v", err)
+	}
+	return leaf
 }

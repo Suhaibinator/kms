@@ -41,6 +41,7 @@ func isHeartbeat(e *kmsv1.SubscribeEvent) bool    { return e.GetHeartbeat() != n
 
 func TestSubscribe_SnapshotThenLiveThenAck(t *testing.T) {
 	env := newTestEnv(t, true)
+	env.store.addNamespace(domain.NamespaceRef{Env: "prod", App: "app"})
 	ctx, cancel := context.WithTimeout(adminCtx(), 5*time.Second)
 	defer cancel()
 
@@ -92,6 +93,7 @@ func TestSubscribe_SnapshotThenLiveThenAck(t *testing.T) {
 
 func TestSubscribe_SecretEventCarriesNoValue(t *testing.T) {
 	env := newTestEnv(t, true)
+	env.store.addNamespace(domain.NamespaceRef{Env: "prod", App: "app"})
 	ctx, cancel := context.WithTimeout(adminCtx(), 5*time.Second)
 	defer cancel()
 

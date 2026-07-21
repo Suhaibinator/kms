@@ -98,7 +98,7 @@ def test_default_not_used_on_other_error_by_default():
     try:
         # No token -> UNAUTHENTICATED, which is NOT an absent value. A configured
         # namespace avoids a WhoAmI round trip (which would also be unauthenticated).
-        c = Client(addr, namespace=NS)
+        c = Client(addr, namespace=NS, insecure=True)
 
         class Cfg:
             p = ParameterValue("x", default="dev-default")
@@ -109,7 +109,12 @@ def test_default_not_used_on_other_error_by_default():
         c.close()
 
         # With the permissive fallback flag, the default is used instead.
-        c2 = Client(addr, namespace=NS, fallback_to_defaults_on_error=True)
+        c2 = Client(
+            addr,
+            namespace=NS,
+            insecure=True,
+            fallback_to_defaults_on_error=True,
+        )
         cfg2 = Cfg()
         c2.resolve(cfg2)
         assert cfg2.p.get() == "dev-default"

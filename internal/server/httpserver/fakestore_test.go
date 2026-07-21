@@ -155,6 +155,8 @@ func (s *fakeStore) CreateNamespace(_ context.Context, ns domain.Namespace) (dom
 		return domain.Namespace{}, domain.Errorf(domain.ErrAlreadyExists, "namespace %s", ns.NamespaceRef)
 	}
 	cp := ns
+	s.nextID++
+	cp.ID = s.nextID
 	s.namespaces[k] = &cp
 	s.nsOrder = append(s.nsOrder, k)
 	return cp, nil
@@ -383,9 +385,14 @@ func (s *fakeStore) CreateSecretVersion(_ context.Context, p storage.CreateSecre
 	if err != nil {
 		return 0, 0, err
 	}
+	if p.AccessTokenHash != nil {
+		sec.rec.AccessTokenHash = p.AccessTokenHash
+	}
 	sec.versions[v] = storage.SecretVersionRecord{
 		ID: int64(v), SecretID: sec.rec.ID, Version: v,
-		Ciphertext: payload.Ciphertext, EncryptedDEK: payload.EncryptedDEK,
+		ContentType: p.ContentType, ClientBound: p.ClientBound,
+		HasAccessToken: len(sec.rec.AccessTokenHash) > 0,
+		Ciphertext:     payload.Ciphertext, EncryptedDEK: payload.EncryptedDEK,
 		KEKID: payload.KEKID, WrapMode: payload.WrapMode, ClientKeySalt: payload.ClientKeySalt,
 		Algorithm: payload.Algorithm, Nonce: payload.Nonce, AAD: payload.AAD,
 		State: domain.StateEnabled, CreatedBy: p.CreatedBy, CreatedAt: now, ExpiresAt: p.ExpiresAt,
@@ -394,9 +401,6 @@ func (s *fakeStore) CreateSecretVersion(_ context.Context, p storage.CreateSecre
 	sec.rec.ContentType = p.ContentType
 	sec.rec.Metadata = p.Metadata
 	sec.rec.UpdatedAt = now
-	if p.AccessTokenHash != nil {
-		sec.rec.AccessTokenHash = p.AccessTokenHash
-	}
 	if old, ok := sec.rec.Labels[domain.LabelCurrent]; ok {
 		sec.rec.Labels[domain.LabelPrevious] = old
 	}

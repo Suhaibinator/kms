@@ -34,6 +34,8 @@ func mapError(log *zap.Logger, ctx context.Context, err error) error {
 		return status.Error(codes.PermissionDenied, err.Error())
 	case errors.Is(err, domain.ErrFailedPrecondition):
 		return status.Error(codes.FailedPrecondition, err.Error())
+	case errors.Is(err, domain.ErrAborted):
+		return status.Error(codes.Aborted, err.Error())
 	case errors.Is(err, domain.ErrNotReady):
 		return status.Error(codes.Unavailable, "service not ready")
 	case errors.Is(err, domain.ErrDecryptFailed):

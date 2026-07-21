@@ -39,23 +39,30 @@ type SecretRecord struct {
 // wrapping metadata. Ciphertext, EncryptedDEK, and Nonce are nil for
 // destroyed versions.
 type SecretVersionRecord struct {
-	ID            int64
-	SecretID      int64
-	Version       uint64
-	Ciphertext    []byte
-	EncryptedDEK  []byte
-	KEKID         string
-	WrapMode      string // domain.WrapModeStandard | domain.WrapModeClientBound
-	ClientKeySalt []byte // HKDF salt for client-bound versions, else nil
-	Algorithm     string
-	Nonce         []byte
-	AAD           string
-	State         string
-	CreatedBy     string
-	CreatedAt     time.Time
-	DestroyedAt   time.Time
-	ExpiresAt     time.Time
-	Metadata      string
+	ID       int64
+	SecretID int64
+	Version  uint64
+	// ContentType and the protection flags are immutable attributes of this
+	// exact version. SecretRecord carries the latest secret-level view for
+	// listing and token-hash rotation, but must not be used to interpret or
+	// authorize a historical version.
+	ContentType    string
+	ClientBound    bool
+	HasAccessToken bool
+	Ciphertext     []byte
+	EncryptedDEK   []byte
+	KEKID          string
+	WrapMode       string // domain.WrapModeStandard | domain.WrapModeClientBound
+	ClientKeySalt  []byte // HKDF salt for client-bound versions, else nil
+	Algorithm      string
+	Nonce          []byte
+	AAD            string
+	State          string
+	CreatedBy      string
+	CreatedAt      time.Time
+	DestroyedAt    time.Time
+	ExpiresAt      time.Time
+	Metadata       string
 }
 
 // EncryptedPayload is what the service layer produces for a new secret
@@ -70,6 +77,20 @@ type EncryptedPayload struct {
 	Algorithm     string
 	Nonce         []byte
 	AAD           string
+}
+
+// SecretWriteExpectation is the secret state observed by the service before it
+// prepares a write. Storage compares it inside the write transaction so an
+// absent secret cannot silently become an update and a client-bound write
+// cannot commit after its validated token has been rotated.
+type SecretWriteExpectation struct {
+	Exists bool
+	// ID is the immutable row identity observed by the service. Comparing it
+	// prevents a delete-and-recreate cycle at the same ref (ABA) from being
+	// mistaken for the original secret, including unprotected secrets whose
+	// access-token hashes are both nil.
+	ID              int64
+	AccessTokenHash []byte
 }
 
 // CreateSecretParams describes a new secret version write.
@@ -87,8 +108,11 @@ type CreateSecretParams struct {
 	// the per-secret token). It may be set on creation or when minting a new
 	// token for an existing secret.
 	AccessTokenHash []byte
-	ExpiresAt       time.Time // zero = never
-	Encrypt         func(version uint64) (EncryptedPayload, error)
+	// Expected, when non-nil, is checked atomically before any secret state is
+	// changed or Encrypt is called. A mismatch returns domain.ErrAborted.
+	Expected  *SecretWriteExpectation
+	ExpiresAt time.Time // zero = never
+	Encrypt   func(version uint64) (EncryptedPayload, error)
 }
 
 // CreateIdentityParams describes a new identity. TokenHash may be nil for a
@@ -201,7 +225,8 @@ type Store interface {
 	// the next version number, invokes p.Encrypt(version), stores the
 	// payload, moves labels, and appends a metadata-only change-log entry.
 	// Fails with domain.ErrFailedPrecondition if p.ClientBound does not match
-	// an existing secret's mode.
+	// an existing secret's mode, or domain.ErrAborted if p.Expected no longer
+	// matches the secret row.
 	CreateSecretVersion(ctx context.Context, p CreateSecretParams) (version, revision uint64, err error)
 
 	GetSecretRecord(ctx context.Context, ref domain.Ref) (SecretRecord, error)

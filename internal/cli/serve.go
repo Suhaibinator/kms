@@ -123,9 +123,12 @@ func (c *CLI) cmdServe(args []string) int {
 	defer cancel()
 
 	hub := watch.NewHub(store, logger, watch.Options{
-		HeartbeatInterval: time.Duration(cfg.Watch.HeartbeatInterval),
-		RetainDuration:    time.Duration(cfg.Watch.RetainDuration),
-		RetainRows:        cfg.Watch.RetainRows,
+		HeartbeatInterval:               time.Duration(cfg.Watch.HeartbeatInterval),
+		RetainDuration:                  time.Duration(cfg.Watch.RetainDuration),
+		RetainRows:                      cfg.Watch.RetainRows,
+		ReleaseRetainDuration:           time.Duration(cfg.Watch.ReleaseRetainDuration),
+		ReleaseRetainVersions:           cfg.Watch.ReleaseRetainVersions,
+		ReleaseSubscriberRetainDuration: time.Duration(cfg.Watch.ReleaseSubscriberRetainDuration),
 	})
 	svc.SetHub(hub)
 	go func() {

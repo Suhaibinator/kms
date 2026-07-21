@@ -254,6 +254,75 @@ func TestParameterMissingNamespace(t *testing.T) {
 	mustStatus(t, w, http.StatusNotFound)
 }
 
+func TestConfigurationReleaseHTTPLifecycle(t *testing.T) {
+	e := newReleaseTestEnv(t)
+	e.createNS("prod", "app")
+
+	w := e.admin(http.MethodPut, "/api/v1/parameters", map[string]any{
+		"env": "prod", "app": "app", "key": "config/runtime", "value": `{"enabled":true}`, "content_type": "json",
+	})
+	mustStatus(t, w, http.StatusOK)
+
+	w = e.admin(http.MethodPost, "/api/v1/configuration-schemas", map[string]any{
+		"id": "runtime", "schema_json": `{"type":"object","properties":{"settings":{"type":"object"}},"required":["settings"]}`,
+	})
+	mustStatus(t, w, http.StatusCreated)
+	schema := decodeBody(t, w)["schema"].(map[string]any)
+
+	w = e.admin(http.MethodPost, "/api/v1/releases", map[string]any{
+		"namespace": map[string]any{"env": "prod", "app": "app"},
+		"name":      "runtime", "schema_id": "runtime", "schema_version": schema["version"],
+		"entries": []map[string]any{{
+			"alias": "settings", "kind": "parameter",
+			"ref":   map[string]any{"namespace": map[string]any{"env": "prod", "app": "app"}, "key": "config/runtime"},
+			"label": "current",
+		}},
+	})
+	mustStatus(t, w, http.StatusCreated)
+	release := decodeBody(t, w)["release"].(map[string]any)
+	if release["digest"] == "" || release["version"].(float64) != 1 {
+		t.Fatalf("release = %v", release)
+	}
+	entries := release["entries"].([]any)
+	if len(entries) != 1 || entries[0].(map[string]any)["parameter_digest"] == "" {
+		t.Fatalf("release entries = %v", entries)
+	}
+
+	w = e.admin(http.MethodPost, "/api/v1/releases/validate", map[string]any{
+		"namespace": map[string]any{"env": "prod", "app": "app"}, "name": "runtime", "version": 1,
+	})
+	mustStatus(t, w, http.StatusOK)
+	if decodeBody(t, w)["valid"] != true {
+		t.Fatal("release should validate")
+	}
+
+	w = e.admin(http.MethodPost, "/api/v1/releases/activate", map[string]any{
+		"namespace": map[string]any{"env": "prod", "app": "app"}, "name": "runtime", "version": 1,
+		"expected_current_version": 0,
+	})
+	mustStatus(t, w, http.StatusOK)
+	activation := decodeBody(t, w)
+	if activation["changed"] != true || activation["activation_revision"].(float64) == 0 {
+		t.Fatalf("activation = %v", activation)
+	}
+
+	w = e.admin(http.MethodGet, "/api/v1/releases/active?env=prod&app=app&name=runtime", nil)
+	mustStatus(t, w, http.StatusOK)
+	if decodeBody(t, w)["release"].(map[string]any)["version"].(float64) != 1 {
+		t.Fatal("active release version mismatch")
+	}
+
+	// Presence-aware CAS distinguishes an omitted guard from expect-no-active.
+	w = e.admin(http.MethodPost, "/api/v1/releases/activate", map[string]any{
+		"namespace": map[string]any{"env": "prod", "app": "app"}, "name": "runtime", "version": 1,
+		"expected_current_version": 0,
+	})
+	mustStatus(t, w, http.StatusConflict)
+	if errCode(t, w) != "aborted" {
+		t.Fatalf("code = %s", errCode(t, w))
+	}
+}
+
 func TestSecretsLifecycle(t *testing.T) {
 	e := newTestEnv(t)
 	e.createNS("prod", "gradethis")
@@ -528,6 +597,35 @@ func TestAuditAndKeys(t *testing.T) {
 	}
 }
 
+func TestPartialAuditFilterAppliesNamespaceMethodEligibility(t *testing.T) {
+	e := newTestEnv(t)
+	e.createNS("stage", "token", "token")
+	e.createNS("stage", "mtls")
+
+	policy := map[string]any{"policy": map[string]any{
+		"name": "audit-stage", "subject": "client",
+		"allow": []map[string]any{{"operation": "admin:audit:read", "env": "stage", "app": "*"}},
+	}}
+	w := e.admin(http.MethodPost, "/api/v1/policies", policy)
+	mustStatus(t, w, http.StatusOK)
+
+	for _, app := range []string{"token", "mtls"} {
+		w = e.admin(http.MethodPut, "/api/v1/parameters", map[string]any{
+			"env": "stage", "app": app, "key": "x", "value": "1", "content_type": "integer",
+		})
+		mustStatus(t, w, http.StatusOK)
+	}
+
+	// The partial env filter remains authorized, but each returned row must also
+	// admit the token method used by the delegated caller.
+	w = e.client(http.MethodGet, "/api/v1/audit?env=stage&event_type=parameter.write", nil)
+	mustStatus(t, w, http.StatusOK)
+	events, _ := decodeBody(t, w)["events"].([]any)
+	if len(events) != 1 || events[0].(map[string]any)["resource_app"] != "token" {
+		t.Fatalf("partial audit events = %v, want only stage/token", events)
+	}
+}
+
 func TestSubscribers(t *testing.T) {
 	e := newTestEnv(t)
 	e.createNS("prod", "gradethis")
@@ -562,6 +660,14 @@ func TestNamespaceMethodGate(t *testing.T) {
 	gatedToken, _ := decodeBody(t, w)["token"].(string)
 	gatedHdr := map[string]string{"Authorization": "Bearer " + gatedToken}
 
+	// Namespace enumeration is a multi-namespace read: it succeeds but omits
+	// metadata for namespaces that do not admit the caller's method.
+	w = e.do(http.MethodGet, "/api/v1/namespaces", nil, gatedHdr)
+	mustStatus(t, w, http.StatusOK)
+	if got := decodeBody(t, w)["namespaces"].([]any); len(got) != 0 {
+		t.Fatalf("token caller listed mTLS-only namespace: %v", got)
+	}
+
 	// Token method not admitted -> 403 with a method-gate message.
 	w = e.do(http.MethodGet, "/api/v1/parameters?env=stage&app=svc", nil, gatedHdr)
 	mustStatus(t, w, http.StatusForbidden)
@@ -577,6 +683,11 @@ func TestNamespaceMethodGate(t *testing.T) {
 
 	w = e.do(http.MethodGet, "/api/v1/parameters?env=stage&app=svc", nil, gatedHdr)
 	mustStatus(t, w, http.StatusOK)
+	w = e.do(http.MethodGet, "/api/v1/namespaces", nil, gatedHdr)
+	mustStatus(t, w, http.StatusOK)
+	if got := decodeBody(t, w)["namespaces"].([]any); len(got) != 1 {
+		t.Fatalf("token-admitting namespace list = %v, want one namespace", got)
+	}
 }
 
 func TestMethodNotAllowed(t *testing.T) {

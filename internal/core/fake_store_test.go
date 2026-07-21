@@ -31,6 +31,8 @@ type fakeStore struct {
 	keys             []domain.KeyMetadata
 	audits           []domain.AuditEvent
 	revision         uint64
+	nextSecretID     int64
+	nextNamespaceID  int64
 
 	// error injection
 	pingErr     error
@@ -38,7 +40,10 @@ type fakeStore struct {
 	policiesErr error
 
 	// optional behavior overrides
-	onPoliciesForSubject func(subject string) ([]domain.Policy, error)
+	onPoliciesForSubject      func(subject string) ([]domain.Policy, error)
+	beforeCreateSecretVersion func(storage.CreateSecretParams)
+	onListNamespaces          func(storage.ListPage) ([]domain.Namespace, string, error)
+	onListAudit               func(domain.AuditFilter, storage.ListPage) ([]domain.AuditEvent, string, error)
 }
 
 type certEntry struct {
@@ -91,8 +96,9 @@ func (f *fakeStore) addNamespace(ns domain.NamespaceRef, methods ...domain.AuthM
 	if len(methods) == 0 {
 		methods = []domain.AuthMethod{domain.AuthMethodMTLS}
 	}
+	f.nextNamespaceID++
 	f.namespaces[ns.String()] = domain.Namespace{
-		ID:                 int64(len(f.namespaces) + 1),
+		ID:                 f.nextNamespaceID,
 		NamespaceRef:       ns,
 		AllowedAuthMethods: methods,
 		CreatedAt:          time.Now(),
@@ -192,7 +198,8 @@ func (f *fakeStore) CreateNamespace(_ context.Context, ns domain.Namespace) (dom
 	if _, ok := f.namespaces[key]; ok {
 		return domain.Namespace{}, domain.Errorf(domain.ErrAlreadyExists, "namespace %s", ns.NamespaceRef)
 	}
-	ns.ID = int64(len(f.namespaces) + 1)
+	f.nextNamespaceID++
+	ns.ID = f.nextNamespaceID
 	f.namespaces[key] = ns
 	return ns, nil
 }
@@ -239,7 +246,10 @@ func (f *fakeStore) DeleteNamespace(_ context.Context, ref domain.NamespaceRef) 
 	return nil
 }
 
-func (f *fakeStore) ListNamespaces(context.Context, storage.ListPage) ([]domain.Namespace, string, error) {
+func (f *fakeStore) ListNamespaces(_ context.Context, page storage.ListPage) ([]domain.Namespace, string, error) {
+	if f.onListNamespaces != nil {
+		return f.onListNamespaces(page)
+	}
 	out := make([]domain.Namespace, 0, len(f.namespaces))
 	for _, ns := range f.namespaces {
 		out = append(out, ns)
@@ -324,11 +334,22 @@ func (f *fakeStore) CreateSecretVersion(_ context.Context, p storage.CreateSecre
 	// Intentional fidelity gap: the real SQLStore requires the namespace to
 	// pre-exist and returns ErrNotFound otherwise (covered in storage/store_test.go);
 	// this fake is deliberately lenient and writes without that check.
+	if hook := f.beforeCreateSecretVersion; hook != nil {
+		f.beforeCreateSecretVersion = nil
+		hook(p)
+	}
 	key := p.Ref.String()
 	sec := f.secrets[key]
+	if p.Expected != nil {
+		exists := sec != nil
+		if exists != p.Expected.Exists || (exists && (sec.rec.ID != p.Expected.ID || !bytes.Equal(sec.rec.AccessTokenHash, p.Expected.AccessTokenHash))) {
+			return 0, 0, domain.Errorf(domain.ErrAborted, "secret changed concurrently")
+		}
+	}
 	if sec == nil {
+		f.nextSecretID++
 		sec = &fakeSecret{
-			rec:      storage.SecretRecord{Ref: p.Ref, ClientBound: p.ClientBound, Labels: map[string]uint64{}},
+			rec:      storage.SecretRecord{ID: f.nextSecretID, Ref: p.Ref, ClientBound: p.ClientBound, Labels: map[string]uint64{}},
 			versions: map[uint64]storage.SecretVersionRecord{},
 		}
 		f.secrets[key] = sec
@@ -349,10 +370,13 @@ func (f *fakeStore) CreateSecretVersion(_ context.Context, p storage.CreateSecre
 		sec.rec.ClientBound = p.ClientBound
 	}
 	sec.versions[version] = storage.SecretVersionRecord{
-		Version: version, Ciphertext: payload.Ciphertext, EncryptedDEK: payload.EncryptedDEK,
+		Version: version, ContentType: p.ContentType, ClientBound: p.ClientBound,
+		HasAccessToken: len(sec.rec.AccessTokenHash) > 0,
+		Ciphertext:     payload.Ciphertext, EncryptedDEK: payload.EncryptedDEK,
 		KEKID: payload.KEKID, WrapMode: payload.WrapMode, ClientKeySalt: payload.ClientKeySalt,
 		Algorithm: payload.Algorithm, Nonce: payload.Nonce, AAD: payload.AAD,
 		State: domain.StateEnabled, CreatedBy: p.CreatedBy, CreatedAt: time.Now(), ExpiresAt: p.ExpiresAt,
+		Metadata: p.Metadata,
 	}
 	if sec.current != 0 {
 		sec.previous = sec.current
@@ -715,7 +739,10 @@ func (f *fakeStore) AppendAudit(_ context.Context, ev domain.AuditEvent) error {
 	f.audits = append(f.audits, ev)
 	return nil
 }
-func (f *fakeStore) ListAudit(_ context.Context, _ domain.AuditFilter, _ storage.ListPage) ([]domain.AuditEvent, string, error) {
+func (f *fakeStore) ListAudit(_ context.Context, filter domain.AuditFilter, page storage.ListPage) ([]domain.AuditEvent, string, error) {
+	if f.onListAudit != nil {
+		return f.onListAudit(filter, page)
+	}
 	return f.audits, "", nil
 }
 

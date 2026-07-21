@@ -12,7 +12,8 @@ restore, key rotation) that follow from it.
 The design goal is: an attacker who obtains the SQLite database file (backup
 theft, disk snapshot, stolen laptop with a dev copy) cannot recover **secret
 plaintext** without also obtaining the master key. The database still exposes
-parameters, resource metadata, identities, policies, and audit records, so it
+parameters, configuration release/schema metadata, resource metadata,
+identities, policies, and audit records, so it
 must remain access-controlled. An attacker who *also* has the master key
 still cannot decrypt secrets that were opted into client-bound mode — that
 requires the plaintext client token as well, which never touches the
@@ -145,6 +146,47 @@ secrets, rotation only touches the outer (KEK) layer; the inner
 client-token-derived layer is untouched and requires no client
 participation (plan §11.4.4).
 
+## Filesystem output integrity
+
+Path hardening applies to the primary SQLite database, backup and restore
+destinations, generated KEK files, identity certificate/private-key bundles,
+and import reports. Before creating or securing one of these files, KMS
+resolves the destination's parent symlinks once and uses only the resulting
+canonical path. Every directory in that canonical chain must be owned by root
+or the service account and must not let another account replace its entries;
+group- or other-writable POSIX directories are rejected unless sticky-directory
+semantics protect entries. An existing database must additionally be an
+owner-only, regular, current-user-owned, unchanged entry before it is handed to
+SQLite; legacy broad permissions fail closed for explicit operator review.
+This closes child-symlink and mutable-parent swaps, not merely
+create-then-`chmod` exposure.
+
+Private files are created exclusively and owner-only: `0600` files and `0700`
+staging directories on POSIX, or a protected DACL granting full access only to
+the current process user on Windows. Backup creation occurs inside such a
+private staging directory and is restricted before publication. Identity
+certificate output is intentionally public (`0644`); its paired private key is
+owner-only, and both names are reserved before the one-time minting RPC. Import
+reports are owner-only because non-dry-run reports contain one-time access
+tokens. Backup and non-force restore publish complete staged files atomically
+without replacing an entry that appeared concurrently; `restore --force` is
+the explicit replacement exception.
+
+Platform enforcement is deliberately specific:
+
+- On macOS, every allow ACL entry anywhere in the canonical parent chain is
+  rejected. Extended ACLs are removed from private files/directories through
+  the already-open descriptor and verified absent before use.
+- On Windows, the parent chain must be owned by the process user, Local System,
+  or Builtin Administrators. A DACL is required; allow ACEs that give an
+  untrusted SID delete, child-delete, ownership, DACL-control, or reparse-point
+  retarget authority are rejected. Private output DACLs are protected from
+  inheritance.
+- On other supported POSIX systems, enforcement covers owner UID, mode bits,
+  and sticky-directory semantics. It does **not** inspect or claim coverage of
+  NFSv4 or other extended ACL entries; operators must ensure separately that
+  those ACLs grant no broader path-mutation or file-access authority.
+
 ## Client-bound secrets (opt-in double wrapping)
 
 A secret opts into client-bound mode at creation (`client_bound: true`,
@@ -239,15 +281,21 @@ creation/rotation time and is not retrievable again:
   (hash-only) or a certificate (public key only; the leaf private key is
   returned once at issuance and never persisted).
 - **Per-secret access tokens** (`secrets.access_token_hash`, prefix
-  `kmss_`): optional, attached to an individual secret. When set, every
-  `GetSecret`/`PutSecret` on that secret — **including by admins** — must
-  supply the matching token via the `x-kms-secret-token` gRPC metadata
-  key / `X-KMS-Secret-Token` HTTP header (`tokenHashMatches`, constant-time
-  comparison via `hmac.Equal`). For client-bound secrets this same token
-  additionally serves as the key-derivation material described above. The
-  admin `RevealSecret` path bypasses the per-secret token gate (a
-  break-glass capability, fully audited) but — as noted above — still
-  cannot decrypt a client-bound secret without the token.
+  `kmss_`): optional, attached to an individual secret. Each immutable
+  version records whether a token was required when it was written, so first
+  enabling a token on a later standard-secret version does not retroactively
+  protect older versions. `GetSecret` for a standard-secret version marked
+  token-protected — **including when called by admins** — requires the matching
+  token via the `x-kms-secret-token` gRPC metadata key /
+  `X-KMS-Secret-Token` HTTP header (`tokenHashMatches`, constant-time
+  comparison via `hmac.Equal`). Explicit rotation replaces the shared
+  credential for every standard-secret version already marked protected. For
+  client-bound secrets, writing another version requires the current token,
+  and reads use the token as the per-version key-derivation material described
+  above. The admin `RevealSecret` path
+  bypasses the standard per-secret token gate (a break-glass capability,
+  fully audited) but — as noted above — still cannot decrypt a client-bound
+  secret without that version's token.
 
 Authentication failures are generic (`domain.ErrUnauthenticated`,
 "invalid credentials") regardless of whether the token was malformed,
@@ -298,10 +346,16 @@ returns its `<name>`; the CommonName is cosmetic and is **never** used as a
 fallback, so a certificate lacking the SAN (or carrying more than one) is
 rejected. The authentication interceptor maps a TLS-verified peer certificate
 through this SAN to a stored identity, then checks the certificate serial
-against `identity_certs`: the serial must be present, not revoked
+against `identity_certs`: the serial must be present, and the SHA-256
+fingerprint of the exact presented leaf DER must equal the fingerprint stored
+at enrollment. The certificate must also be not revoked
 (`revoked_at IS NULL`), not past `not_after`, and belong to an identity that
 is not disabled. The result is an authenticated context carrying
-`{identity, method: mtls}`.
+`{identity, method: mtls, serial, fingerprint}`. Serial and SAN equality alone
+are deliberately insufficient, so an additional trusted client CA cannot mint
+a different leaf that impersonates an enrolled KMS certificate. Long-lived
+ordinary and release watch streams re-check the same serial/fingerprint binding
+on every heartbeat.
 
 **Revocation is a database check, not CRL/OCSP.** Because the KMS is the only
 relying party for these certificates, revocation is per-serial:
@@ -342,6 +396,44 @@ practically present a client certificate, so admins bypass the method gate
 (browser login stays token-based). Bypassing the *method gate* does not waive
 auditing — every admin action is still audited exactly as before (see
 [Audit guarantees](#audit-guarantees)).
+
+Operations that legitimately span namespaces, including namespace listings
+and delegated audit queries, apply the method gate and full policy decision to
+each returned row. Ineligible rows are omitted rather than causing an entire
+mixed-scope page to fail. Their continuation state is encrypted and bound to
+the caller, authentication method, and query scope; each request scans a fixed
+maximum number of storage batches, so filtering cannot turn one remote page
+request into an unbounded database scan.
+
+The cursor seal key is domain-separated from the active KEK. Replicas and
+restarts using the same active KEK can therefore continue a page, while the
+fixed-size padded envelope hides the length and contents of the underlying
+storage cursor. A KEK rotation normally retires the old key from the next
+process, so delegated page tokens minted before rotation are deliberately
+rejected unless that retired key remains explicitly loaded; clients should
+restart the listing from its first page after rotation.
+
+### Immutable namespace-incarnation binding
+
+An `env/app` pair is a reusable address, not a durable security identity. Each
+namespace row has an immutable numeric ID for its incarnation. The method and
+policy checks return that exact row, and `internal/core` accumulates its ID in
+the request context (including every independently authorized namespace in a
+cross-namespace operation). Namespaced storage work re-resolves the address
+with the expected ID inside the same read or write transaction. If the row was
+deleted, recreated, or rebound between authorization and use, the operation
+fails with `Aborted` instead of acting on the replacement. Admin policy bypass
+does not turn a stale bound incarnation into the new row.
+
+Audit events are stamped directly with the already-authorized ID, never by a
+post-operation name lookup. Standard and release watch registration requires a
+positive ID, copies the retained registration state, and verifies that the row
+still exists before admission. New `change_log` rows persist that ID; replay
+and live delivery require an exact ID match. A legacy change row with ID `0`
+cannot be attributed safely and forces a current snapshot rather than replay.
+Heartbeat reauthorization checks the same binding—including for admins—so
+deleting/recreating a namespace closes the stale stream. Release watches apply
+the same rules to activation replay and live events.
 
 ## Login and failed-authentication rate limiting
 
@@ -387,10 +479,12 @@ no per-key scoping. Each rule is an `(operation, env, app)` tuple:
 ```
 
 - **Operation** patterns: an exact operation (`secret:read`), a category
-  wildcard (`secret:*`, `parameter:*`, `admin:*`, matching even multi-segment
-  admin ops), or the global wildcard `*`. The known operations are
+  wildcard (`secret:*`, `parameter:*`, `configuration-release:*`, `admin:*`,
+  matching even multi-segment admin ops), or the global wildcard `*`. The
+  known operations are
   `parameter:{read,write,list,delete}`,
-  `secret:{read,write,list,disable,destroy,promote}`, and
+  `secret:{read,write,list,disable,destroy,promote}`,
+  `configuration-release:{create,read,validate,activate,list,watch}`, and
   `admin:{namespace:create,namespace:update,namespace:delete,identity:cert,policy:write,audit:read,key:rotate}`
   (`domain.Op*` constants).
 - **`env` / `app`**: an exact label or `"*"` (`policy.labelMatches`). There is
@@ -411,7 +505,8 @@ no per-key scoping. Each rule is an `(operation, env, app)` tuple:
 §3/§6) is what makes "endpoint + credential and you're done" real: an identity
 bound to a namespace may perform read/list operations **in its own namespace
 with no policy rule at all**. The implicit set is exactly
-`parameter:read`, `parameter:list`, `secret:read`, and `secret:list`; a
+`parameter:read`, `parameter:list`, `secret:read`, `secret:list`,
+`configuration-release:read`, and `configuration-release:watch`; an ordinary
 subscribe rides on the same grant (it is authorized once, as a namespace-level
 `parameter:read`, when the stream registers). It applies **only** to the
 caller's own namespace — access to any *other* namespace, and every write,
@@ -458,6 +553,58 @@ normalized and validated at write time (`policy.ValidateRules`): unknown
 operations are rejected, an empty `env`/`app` normalizes to `"*"`, and
 non-`"*"` labels are validated by `internal/keyutil`.
 
+## Configuration release security boundary
+
+A configuration release is an immutable set of exact references and
+non-sensitive metadata, not a capability. Permission to create, read,
+validate, activate, list, or watch a release does **not** grant access to any
+referenced parameter or secret. Creation and validation independently
+authorize resource reads, including every cross-namespace reference; each SDK
+loader fetches pinned values through the existing parameter and secret RPCs and
+their existing authorization and cryptographic checks.
+
+Secret entries capture the exact version's resource identity, content type,
+non-sensitive metadata, and the booleans `client_bound` and
+`has_access_token`. Secret plaintext, token hashes, plaintext access tokens,
+and client-bound key shares never enter release rows, digests, watch events,
+validation errors, diffs, acknowledgement diagnostics, logs, or metrics. A
+loader's token provider is local application code and is invoked only for a
+protected secret; the credential is sent only on that secret's read RPC.
+
+Every release entry also persists the immutable `resource_namespace_id` that
+was independently authorized for its parameter or secret reference. Release
+creation rechecks all accumulated namespace bindings in its write transaction;
+activation joins the stored ID, textual address, resource key, and exact
+version, so a delete/recreate at the same address cannot retarget a pin.
+Current/previous-release deletion guards likewise prefer the exact ID. Migrated
+legacy entries with ID `0` remain readable and retain their conservative
+name-based deletion guard, but activation fails closed with
+`FailedPrecondition`; recreate the release to establish exact pins.
+
+The deterministic release digest covers an alias-sorted protobuf projection of
+schema and resource pins, captured metadata, and parameter digests. It excludes
+values, tokens, timestamps, creator identity, activation revision, and movable
+labels. Parameters are not secret, but resolved parameter values are still
+excluded from default snapshot formatting to avoid dumping a complete runtime
+configuration. Secret values retain the SDK's redacting `Secret` type and
+require explicit value access.
+
+Current and previous releases are protected against parameter deletion,
+secret deletion, and secret-version destruction in the same storage
+transaction as the destructive operation. A conflict returns
+`FAILED_PRECONDITION`, identifies the release/version/alias, and is audited.
+This is referential integrity, not irrevocability: disabling a secret version
+remains an emergency revocation mechanism, and a later validation/loading
+attempt rejects an unreadable pin rather than revealing it.
+
+Lifecycle rows are per process instance and state. `received` means the loader
+finished resolution and snapshot construction; it is distinct from ordinary
+namespace-stream transport acknowledgement. `prepared`, `applied`, and
+`rejected` describe application lifecycle. Rejection diagnostics supplied by
+applications are stored only as `[redacted]`; operators diagnose from the
+bounded category. Connection state is stored separately, so registration does
+not fabricate a lifecycle acknowledgement.
+
 ## Namespace and key validation
 
 Namespaces and keys are validated by `internal/keyutil` (the successor to the
@@ -482,14 +629,20 @@ an extra namespace segment through a key.
 
 Every secret read, secret reveal, secret/parameter write, version
 promotion, disable, destroy, policy change, namespace change,
-authentication failure, authorization denial, and KEK rotation is audited
+authentication failure, authorization denial, KEK rotation, schema
+registration, release create/validate/activate/rollback, CAS conflict,
+release lifecycle acknowledgement, and blocked release-reference destruction
+is audited
 (`internal/core/*.go`, `Service.audit`/`auditOp`/`auditStrict`) into
 `audit_events`. Audit records carry actor identity/kind, the resource's
-`env`/`app`/`key`/version (denormalized as text with no foreign key, so the
-history stays readable after a namespace is deleted — plan-namespaces.md §3),
+`env`/`app`/`key`/version and immutable namespace-incarnation ID (denormalized
+with no foreign key, so the history stays readable after a namespace is
+deleted — plan-namespaces.md §3),
 decision (`allow`/`deny`/`error`), source IP, user agent, request ID, and an
 opaque `metadata_json` blob for operation-specific context — **never** secret
 plaintext, never a token.
+The core audit path receives the bound ID from the authorization context, so it
+does not perform a racy post-operation lookup by `env/app`.
 The recorded source IP is resolved the same way as the rate-limit key
 above (real TCP peer address, or `X-Forwarded-For` only if
 `security.trust_proxy_headers` is enabled) — see
@@ -508,6 +661,14 @@ by refusing to serve the read rather than by hoping the write succeeds.
 Audit writes also run with `context.WithoutCancel` plus a 5s timeout, so a
 client disconnecting mid-request cannot suppress the record of what it did.
 
+Admins can read deleted and legacy audit history. Delegated audit readers see
+only rows whose complete namespace, immutable incarnation ID, current
+authentication-method boundary, and current per-row policy decision all match.
+Rows from deleted/recreated namespaces, legacy rows without an incarnation ID,
+and malformed partial namespace rows fail closed. Only explicitly global event
+classes (for example `auth.failure` and name-addressed policy/identity/key
+operations) are eligible without a namespace.
+
 ## Redaction
 
 Redaction is enforced by type, not by call-site discipline:
@@ -518,6 +679,11 @@ Redaction is enforced by type, not by call-site discipline:
   `StringValue()`. This makes accidental logging of a secret a type error
   you'd have to work around, not a mistake you can make by passing the
   wrong variable to `%v`.
+- Go `ReleaseSnapshot` formatting and JSON marshaling contain only release
+  identity and entry metadata; Python `ReleaseSnapshot` formatting similarly
+  reports counts rather than resolved maps. Their nested secret values remain
+  redacting `Secret` objects. Release/status metric types deliberately omit
+  aliases, paths, diagnostics, values, and token material.
 - Server-side, the JSON HTTP API's `SecretMetadata` shape
   (`docs/http-api.md`) never includes a value field at all — the only
   endpoint that can return plaintext is the admin-only `POST

@@ -2,6 +2,7 @@ package storage
 
 import (
 	"context"
+	"database/sql"
 	"math"
 	"strings"
 	"time"
@@ -108,24 +109,41 @@ func snapshotNamespaceIDs(tx *gorm.DB, namespaces []domain.NamespaceRef) (ids []
 	var where []string
 	var whereArgs []any
 	seen := map[domain.NamespaceRef]bool{}
+	expected := map[domain.NamespaceRef]int64{}
 	for _, ns := range namespaces {
 		if seen[ns] {
 			continue
 		}
 		seen[ns] = true
-		where = append(where, "(env = ? AND app = ?)")
-		whereArgs = append(whereArgs, ns.Env, ns.App)
+		if id, ok := ExpectedNamespaceIncarnation(tx.Statement.Context, ns); ok {
+			where = append(where, "(env = ? AND app = ? AND id = ?)")
+			whereArgs = append(whereArgs, ns.Env, ns.App, id)
+			expected[ns] = id
+		} else {
+			where = append(where, "(env = ? AND app = ?)")
+			whereArgs = append(whereArgs, ns.Env, ns.App)
+		}
 	}
 	var nsRows []namespaceModel
-	if err := tx.Select("id").Where(strings.Join(where, " OR "), whereArgs...).Find(&nsRows).Error; err != nil {
+	if err := tx.Select("id", "env", "app").Where(strings.Join(where, " OR "), whereArgs...).Find(&nsRows).Error; err != nil {
 		return nil, false, err
 	}
 	if len(nsRows) == 0 {
+		if len(expected) != 0 {
+			return nil, false, domain.Errorf(domain.ErrAborted, "subscribed namespace changed during request; retry")
+		}
 		return nil, true, nil
 	}
 	ids = make([]int64, len(nsRows))
+	found := make(map[domain.NamespaceRef]int64, len(nsRows))
 	for i, m := range nsRows {
 		ids[i] = m.ID
+		found[domain.NamespaceRef{Env: m.Env, App: m.App}] = m.ID
+	}
+	for ns, id := range expected {
+		if found[ns] != id {
+			return nil, false, domain.Errorf(domain.ErrAborted, "subscribed namespace changed during request; retry")
+		}
 	}
 	return ids, false, nil
 }
@@ -151,13 +169,12 @@ type snapshotRow struct {
 // (WHERE namespace_id IN (...)). Authorization is namespace-level and checked
 // once at subscribe time, so the snapshot is the whole authorized namespace.
 //
-// The DSN sets _txlock=immediate, so this transaction acquires SQLite's global
-// write lock the instant it begins (BEGIN IMMEDIATE) and holds it until commit.
-// This runs on the hot watch-subscribe path; under a reconnect storm many
-// snapshots fire at once and would serialize against each other and every
-// writer. To keep the lock held for as short a time as possible, the body does
-// a fixed, small number of SET-BASED queries (revision + one join + one label
-// fetch) rather than an N+1 loop over each matching parameter.
+// The store DSN normally requests BEGIN IMMEDIATE for writes, but ReadOnly below
+// makes the SQLite driver use a deferred read transaction. That preserves one
+// consistent revision/data snapshot without reserving the global writer lock
+// during reconnect storms. The body also uses a fixed, small number of
+// SET-BASED queries (revision + one join + one label fetch) rather than an N+1
+// loop over each matching parameter.
 func (s *SQLStore) SnapshotParameters(ctx context.Context, namespaces []domain.NamespaceRef) ([]domain.Parameter, uint64, error) {
 	var out []domain.Parameter
 	var revision uint64
@@ -232,7 +249,7 @@ func (s *SQLStore) SnapshotParameters(ctx context.Context, namespaces []domain.N
 			})
 		}
 		return nil
-	})
+	}, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
 		return nil, 0, err
 	}

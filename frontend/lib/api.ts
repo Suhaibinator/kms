@@ -7,6 +7,9 @@ import type {
   CaResponse,
   CreateIdentityRequest,
   CreateIdentityResponse,
+  CreateReleaseRequest,
+  ConfigurationRelease,
+  ConfigurationSchema,
   CreateNamespaceRequest,
   CreateSecretRequest,
   CreateSecretResponse,
@@ -33,8 +36,11 @@ import type {
   RevisionResponse,
   RotateIdentityResponse,
   SecretMetadata,
+  ReleaseSubscriberState,
+  ReleaseSummary,
   SubscribersResponse,
   UpdateNamespaceRequest,
+  ValidateReleaseResponse,
   WhoAmIResponse,
 } from "./types";
 
@@ -415,8 +421,54 @@ export const api = {
     return apiFetch<SubscribersResponse>("/subscribers");
   },
 
+  // --- Configuration releases ---
+  listReleases(
+    ns: NamespaceRef,
+    name?: string,
+    pageSize?: number,
+    pageToken?: string,
+  ): Promise<{ releases: ReleaseSummary[]; next_page_token: string }> {
+    return apiFetch(`/releases${qs({ env: ns.env, app: ns.app, name, page_size: pageSize, page_token: pageToken })}`);
+  },
+  createRelease(req: CreateReleaseRequest): Promise<{ release: ConfigurationRelease }> {
+    return apiFetch("/releases", { method: "POST", body: req });
+  },
+  getRelease(ns: NamespaceRef, name: string, version: number): Promise<{ release: ConfigurationRelease }> {
+    return apiFetch(`/releases/get${qs({ env: ns.env, app: ns.app, name, version })}`);
+  },
+  getActiveRelease(ns: NamespaceRef, name: string): Promise<{ release: ConfigurationRelease; activation_revision: number; previous_version: number }> {
+    return apiFetch(`/releases/active${qs({ env: ns.env, app: ns.app, name })}`);
+  },
+  validateRelease(ns: NamespaceRef, name: string, version: number): Promise<ValidateReleaseResponse> {
+    return apiFetch("/releases/validate", { method: "POST", body: { namespace: ns, name, version } });
+  },
+  activateRelease(ns: NamespaceRef, name: string, version: number, expected?: number): Promise<{ release: ConfigurationRelease; activation_revision: number; previous_version: number; changed: boolean }> {
+    return apiFetch("/releases/activate", {
+      method: "POST",
+      body: { namespace: ns, name, version, expected_current_version: expected },
+    });
+  },
+  releaseSubscribers(ns: NamespaceRef, name: string, pageSize?: number, pageToken?: string): Promise<ReleaseSubscribersPage> {
+    return apiFetch(`/release-subscribers${qs({ env: ns.env, app: ns.app, name, page_size: pageSize, page_token: pageToken })}`);
+  },
+  listSchemas(id?: string, pageToken?: string): Promise<{ schemas: ConfigurationSchema[]; next_page_token: string }> {
+    return apiFetch(`/configuration-schemas${qs({ id, page_token: pageToken })}`);
+  },
+  createSchema(id: string, schemaJson: string, metadataJson = "{}"): Promise<{ schema: ConfigurationSchema }> {
+    return apiFetch("/configuration-schemas", {
+      method: "POST",
+      body: { id, schema_json: schemaJson, metadata_json: metadataJson },
+    });
+  },
+
   // --- Keys ---
   keys(): Promise<KeysResponse> {
     return apiFetch<KeysResponse>("/keys");
   },
 };
+
+export interface ReleaseSubscribersPage {
+  subscribers: ReleaseSubscriberState[];
+  current_revision: number;
+  next_page_token: string;
+}
