@@ -3,6 +3,7 @@
 package fileutil
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -25,6 +26,44 @@ func TestOpenPrivateExclusiveUsesProtectedCurrentUserDACL(t *testing.T) {
 		}
 	}()
 	assertProtectedCurrentUserDACL(t, windows.Handle(file.Fd()), false)
+}
+
+func TestOpenPrivateExclusiveRejectsDanglingFinalSymlink(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "must-not-be-created")
+	link := filepath.Join(dir, "private-output")
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatalf("create dangling symlink regression fixture: %v", err)
+	}
+
+	file, err := OpenPrivateExclusive(link)
+	if file != nil {
+		_ = file.Close()
+		t.Fatal("OpenPrivateExclusive returned a file for a dangling symlink")
+	}
+	if err == nil {
+		t.Fatal("OpenPrivateExclusive followed a dangling symlink")
+	}
+	if !errors.Is(err, os.ErrExist) {
+		t.Fatalf("OpenPrivateExclusive error = %v, want ErrExist for the existing link entry", err)
+	}
+	if _, err := os.Lstat(target); !os.IsNotExist(err) {
+		t.Fatalf("dangling symlink target was created or changed: %v", err)
+	}
+	info, err := os.Lstat(link)
+	if err != nil {
+		t.Fatalf("lstat symlink after rejected create: %v", err)
+	}
+	if info.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("final path mode = %v, want the original symlink", info.Mode())
+	}
+	gotTarget, err := os.Readlink(link)
+	if err != nil {
+		t.Fatalf("read symlink after rejected create: %v", err)
+	}
+	if gotTarget != target {
+		t.Fatalf("symlink target = %q, want unchanged %q", gotTarget, target)
+	}
 }
 
 func TestMkdirPrivateTempUsesProtectedCurrentUserDACL(t *testing.T) {
