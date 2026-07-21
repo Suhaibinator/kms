@@ -363,6 +363,7 @@ def start_server(
     require_bearer: Optional[str] = None,
     whoami_namespace: Optional[str] = None,
     whoami_kind: str = "client",
+    server_credentials: Optional[grpc.ServerCredentials] = None,
 ) -> tuple:
     """Start the fake server on a random localhost port.
 
@@ -378,6 +379,11 @@ def start_server(
     kms_pb2_grpc.add_SecretServiceServicer_to_server(SecretServicer(store), server)
     kms_pb2_grpc.add_WatchServiceServicer_to_server(WatchServicer(store), server)
     kms_pb2_grpc.add_AdminServiceServicer_to_server(AdminServicer(store), server)
-    port = server.add_insecure_port("localhost:0")
+    if server_credentials is None:
+        port = server.add_insecure_port("localhost:0")
+    else:
+        port = server.add_secure_port("localhost:0", server_credentials)
+    if port == 0:
+        raise RuntimeError("failed to bind the fake gRPC server")
     server.start()
     return server, f"localhost:{port}", store
