@@ -98,24 +98,23 @@ func (s *releaseLoaderServer) WatchRelease(stream kmsv1.ConfigurationReleaseServ
 		return err
 	}
 	s.watchRegs <- first.GetRegister()
-	recv := make(chan *kmsv1.WatchReleaseRequest, 1)
 	recvErr := make(chan error, 1)
 	go func() {
+		// Record each acknowledgement before the next Recv so a following EOF
+		// cannot overtake it. This mirrors the production release server.
 		for {
 			request, recvError := stream.Recv()
 			if recvError != nil {
 				recvErr <- recvError
 				return
 			}
-			recv <- request
+			if ack := request.GetAcknowledgement(); ack != nil {
+				s.acks <- ack
+			}
 		}
 	}()
 	for {
 		select {
-		case request := <-recv:
-			if ack := request.GetAcknowledgement(); ack != nil {
-				s.acks <- ack
-			}
 		case event := <-s.watchEvents:
 			if err := stream.Send(event); err != nil {
 				return err
@@ -553,8 +552,6 @@ func TestReleaseLoaderStartupRejectionWaitsForRejectedAcknowledgementSend(t *tes
 			if ack.GetState() == ReleaseStateRejected {
 				rejected = ack
 			}
-		case err := <-runErr:
-			t.Fatalf("Run returned %v before the server recorded the rejected acknowledgement", err)
 		case <-deadline:
 			t.Fatal("server did not record the rejected acknowledgement")
 		}

@@ -131,6 +131,21 @@ func TestConfigurationReleaseLifecycle(t *testing.T) {
 			t.Fatalf("release validation leaked sensitive value %q", sensitive)
 		}
 	}
+	releaseV3, err := h.svc.CreateConfigurationRelease(ctx, h.admin, domain.CreateConfigurationReleaseInput{
+		Namespace: ns, Name: "runtime", SchemaID: schemaV1.ID, SchemaVersion: schemaV1.Version,
+		Metadata: `{"purpose":"runtime"}`,
+		Entries: []domain.ReleaseEntrySelector{
+			{Alias: "database_password", Kind: domain.ReleaseEntrySecret, Ref: secretRef, Version: secretV2.Version},
+			{Alias: "workers", Kind: domain.ReleaseEntryParameter, Ref: parameterRef, Version: parameterV2},
+		},
+	})
+	if err != nil {
+		t.Fatalf("CreateConfigurationRelease v3: %v", err)
+	}
+	validation, err = h.svc.ValidateConfigurationRelease(ctx, h.admin, ns, "runtime", releaseV3.Version)
+	if err != nil || len(validation) != 0 {
+		t.Fatalf("ValidateConfigurationRelease v3 errors=%+v err=%v", validation, err)
+	}
 
 	beforeActivation, err := h.store.CurrentRevision(ctx)
 	if err != nil {
@@ -147,7 +162,7 @@ func TestConfigurationReleaseLifecycle(t *testing.T) {
 
 	// A stale compare-and-swap must neither move current nor consume a global
 	// changelog revision.
-	if _, _, err := h.svc.ActivateConfigurationRelease(ctx, h.admin, ns, "runtime", releaseV2.Version, &zero); !errors.Is(err, domain.ErrAborted) {
+	if _, _, err := h.svc.ActivateConfigurationRelease(ctx, h.admin, ns, "runtime", releaseV3.Version, &zero); !errors.Is(err, domain.ErrAborted) {
 		t.Fatalf("stale CAS activation err = %v, want ErrAborted", err)
 	}
 	afterConflict, err := h.store.CurrentRevision(ctx)
@@ -159,19 +174,30 @@ func TestConfigurationReleaseLifecycle(t *testing.T) {
 	}
 
 	expectV1 := releaseV1.Version
-	activeV2, changed, err := h.svc.ActivateConfigurationRelease(ctx, h.admin, ns, "runtime", releaseV2.Version, &expectV1)
+	if _, changed, err := h.svc.ActivateConfigurationRelease(ctx, h.admin, ns, "runtime", releaseV2.Version, &expectV1); !errors.Is(err, domain.ErrFailedPrecondition) || changed {
+		t.Fatalf("schema-invalid activation changed=%v err=%v, want validation failure", changed, err)
+	}
+	afterValidationFailure, err := h.store.CurrentRevision(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if afterValidationFailure != activeV1.ActivationRevision {
+		t.Fatalf("validation failure advanced revision from %d to %d", activeV1.ActivationRevision, afterValidationFailure)
+	}
+
+	activeV2, changed, err := h.svc.ActivateConfigurationRelease(ctx, h.admin, ns, "runtime", releaseV3.Version, &expectV1)
 	if err != nil || !changed {
-		t.Fatalf("ActivateConfigurationRelease v2 changed=%v err=%v", changed, err)
+		t.Fatalf("ActivateConfigurationRelease v3 changed=%v err=%v", changed, err)
 	}
 	if activeV2.PreviousVersion != releaseV1.Version {
-		t.Fatalf("active v2 previous = %d, want %d", activeV2.PreviousVersion, releaseV1.Version)
+		t.Fatalf("active v3 previous = %d, want %d", activeV2.PreviousVersion, releaseV1.Version)
 	}
 	rolledBack, changed, err := h.svc.ActivateConfigurationRelease(ctx, h.admin, ns, "runtime", releaseV1.Version, nil)
 	if err != nil || !changed {
 		t.Fatalf("rollback to v1 changed=%v err=%v", changed, err)
 	}
-	if rolledBack.Release.Version != releaseV1.Version || rolledBack.PreviousVersion != releaseV2.Version {
-		t.Fatalf("rollback active = %+v, want current v%d previous v%d", rolledBack, releaseV1.Version, releaseV2.Version)
+	if rolledBack.Release.Version != releaseV1.Version || rolledBack.PreviousVersion != releaseV3.Version {
+		t.Fatalf("rollback active = %+v, want current v%d previous v%d", rolledBack, releaseV1.Version, releaseV3.Version)
 	}
 
 	activationChanges, err := h.store.ListChangesSince(ctx, beforeActivation, 100)
@@ -181,7 +207,7 @@ func TestConfigurationReleaseLifecycle(t *testing.T) {
 	if len(activationChanges) != 3 {
 		t.Fatalf("activation change count = %d (%+v), want exactly 3", len(activationChanges), activationChanges)
 	}
-	wantVersions := []uint64{releaseV1.Version, releaseV2.Version, releaseV1.Version}
+	wantVersions := []uint64{releaseV1.Version, releaseV3.Version, releaseV1.Version}
 	for i, change := range activationChanges {
 		if change.ResourceType != domain.ResourceConfigurationRelease || change.ChangeType != "activate" || change.Ref.NS != ns || change.Ref.Key != "runtime" {
 			t.Fatalf("activation change %d = %+v", i, change)

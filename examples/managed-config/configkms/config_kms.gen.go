@@ -4,6 +4,7 @@ package configkms
 
 import (
 	context "context"
+	json "encoding/json"
 	errors "errors"
 	fmt "fmt"
 	rootconfig "github.com/Suhaibinator/kms/examples/managed-config/config"
@@ -55,6 +56,26 @@ type HttpServerView struct{ generation *immutableGeneration }
 // RequestHandlerView is an immutable projection captured from a Snapshot.
 type RequestHandlerView struct{ generation *immutableGeneration }
 
+// EncodeParameterGroups encodes every complete non-secret parameter group from root.
+// The returned documents use the same canonical encodings accepted by the generated store.
+func EncodeParameterGroups(root *rootconfig.Config) (map[string]json.RawMessage, error) {
+	if err := validateInlinePointers(root); err != nil {
+		return nil, err
+	}
+	groups := make(map[string]json.RawMessage, 2)
+	group0, err := configstore.EncodeGroup(root, groupFields0)
+	if err != nil {
+		return nil, fmt.Errorf("generated config store: encode parameter group runtime: %w", err)
+	}
+	groups["runtime"] = group0
+	group1, err := configstore.EncodeGroup(root, groupFields1)
+	if err != nil {
+		return nil, fmt.Errorf("generated config store: encode parameter group server: %w", err)
+	}
+	groups["server"] = group1
+	return groups, nil
+}
+
 // Start synchronously validates and publishes the initial release, then watches in the background.
 func Start(ctx context.Context, client *kmsclient.Client, options Options) (*Store, error) {
 	if options.Defaults == nil {
@@ -63,6 +84,9 @@ func Start(ctx context.Context, client *kmsclient.Client, options Options) (*Sto
 	defaults := options.Defaults()
 	if defaults == nil {
 		return nil, errors.New("generated config store: Options.Defaults returned nil")
+	}
+	if err := validateInlinePointers(defaults); err != nil {
+		return nil, err
 	}
 	if !defaults.APIKey.IsZero() || defaults.APIKey.Path() != "" || defaults.APIKey.Version() != 0 || defaults.APIKey.ContentType() != "" {
 		return nil, fmt.Errorf("generated config store: default secret APIKey must be zero")
@@ -117,10 +141,16 @@ func (s *Store) prepare(ctx context.Context, snapshot kmsclient.ReleaseSnapshot)
 	if err := candidate.Validate(); err != nil {
 		return configstore.PreparedCandidate{}, configstore.Reject(configstore.RejectConfigValidationFailed, fmt.Errorf("validate KMS configuration: %w", err))
 	}
+	if err := validateInlinePointers(candidate); err != nil {
+		return configstore.PreparedCandidate{}, configstore.Reject(configstore.RejectConfigValidationFailed, err)
+	}
 	effectiveDefaults := cloneRoot(s.defaults)
 	effectiveDefaults.APIKey = secret0.Clone()
 	if err := effectiveDefaults.Validate(); err != nil {
 		return configstore.PreparedCandidate{}, configstore.Reject(configstore.RejectConfigValidationFailed, fmt.Errorf("validate effective application defaults: %w", err))
+	}
+	if err := validateInlinePointers(effectiveDefaults); err != nil {
+		return configstore.PreparedCandidate{}, configstore.Reject(configstore.RejectConfigValidationFailed, err)
 	}
 	// Validation is application code and may mutate its receiver. Clone once more before retaining either value.
 	candidate = cloneRoot(candidate)
@@ -168,6 +198,10 @@ func (s *Store) Current() Snapshot {
 
 func (s Snapshot) Release() configstore.ReleaseIdentity { return s.generation.release }
 
+// Config returns a defensive copy of this complete immutable generation.
+// Use generated views instead when reading hot configuration in an operation path.
+func (s Snapshot) Config() *rootconfig.Config { return cloneRoot(s.generation.config) }
+
 func (s Snapshot) HttpServer() HttpServerView { return HttpServerView{generation: s.generation} }
 func (s Snapshot) RequestHandler() RequestHandlerView {
 	return RequestHandlerView{generation: s.generation}
@@ -187,6 +221,13 @@ func cloneRoot(value *rootconfig.Config) *rootconfig.Config {
 	out := configstore.Clone(*value)
 	out.APIKey = value.APIKey.Clone()
 	return &out
+}
+
+func validateInlinePointers(value *rootconfig.Config) error {
+	if value == nil {
+		return errors.New("generated config store: configuration root is nil")
+	}
+	return nil
 }
 
 func cloneValue0(value string) string {

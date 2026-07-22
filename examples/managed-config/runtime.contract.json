@@ -29,6 +29,7 @@
       "group": "runtime",
       "json_name": "greeting",
       "go_name": "Greeting",
+      "go_path": "Greeting",
       "reload": "hot",
       "encoding": "string",
       "views": [
@@ -39,6 +40,7 @@
       "group": "runtime",
       "json_name": "request_limit",
       "go_name": "RequestLimit",
+      "go_path": "RequestLimit",
       "reload": "hot",
       "encoding": "int32",
       "views": [
@@ -49,6 +51,7 @@
       "group": "server",
       "json_name": "listen_address",
       "go_name": "ListenAddress",
+      "go_path": "ListenAddress",
       "reload": "restart",
       "encoding": "string",
       "views": [
@@ -61,6 +64,7 @@
       "alias": "api_key",
       "kind": "secret",
       "go_name": "APIKey",
+      "go_path": "APIKey",
       "reload": "hot",
       "encoding": "secret",
       "views": [

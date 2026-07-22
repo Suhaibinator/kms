@@ -1,6 +1,9 @@
 package invalid
 
-import "github.com/Suhaibinator/kms/sdk/go/kmsclient"
+import (
+	"github.com/Suhaibinator/kms/internal/configgen/testdata/commonfragment"
+	"github.com/Suhaibinator/kms/sdk/go/kmsclient"
+)
 
 type BothSources struct {
 	Value string `json:"value" kms:"group=one,secret=two,reload=hot" kms_views:"api"`
@@ -103,3 +106,55 @@ type BadNestedJSONName struct {
 }
 
 func (*BadNestedJSONName) Validate() error { return nil }
+
+type InlineScalar struct {
+	Value string `kms:"inline"`
+}
+
+func (*InlineScalar) Validate() error { return nil }
+
+type InlineViews struct {
+	Common commonfragment.Config `kms:"inline" kms_views:"api"`
+}
+
+func (*InlineViews) Validate() error { return nil }
+
+type PromotedValidate struct {
+	commonfragment.Config `kms:"inline"`
+}
+
+type EmptyFragment struct {
+	Local string `kms:"-"`
+}
+
+type EmptyInline struct {
+	Empty EmptyFragment `kms:"inline"`
+}
+
+func (*EmptyInline) Validate() error { return nil }
+
+type RecursiveInlineFragment struct {
+	Value string                   `json:"value" kms:"group=runtime,reload=hot" kms_views:"api"`
+	Next  *RecursiveInlineFragment `kms:"inline"`
+}
+
+type RecursiveInline struct {
+	Fragment *RecursiveInlineFragment `kms:"inline"`
+}
+
+func (*RecursiveInline) Validate() error { return nil }
+
+type FirstViewFragment struct {
+	Value string `json:"first" kms:"group=one,reload=hot" kms_views:"api"`
+}
+
+type SecondViewFragment struct {
+	Value string `json:"second" kms:"group=one,reload=hot" kms_views:"api"`
+}
+
+type DuplicateViewGetter struct {
+	First  FirstViewFragment  `kms:"inline"`
+	Second SecondViewFragment `kms:"inline"`
+}
+
+func (*DuplicateViewGetter) Validate() error { return nil }

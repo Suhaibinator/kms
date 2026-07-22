@@ -23,14 +23,15 @@ var aliasPattern = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_-]{0,63}$`)
 const maxReleaseEntries = 256
 
 type ir struct {
-	PackagePath string
-	PackageName string
-	TypeName    string
-	Root        *types.Named
-	Groups      []*groupIR
-	Secrets     []*fieldIR
-	Fields      []*fieldIR
-	Views       []*viewIR
+	PackagePath    string
+	PackageName    string
+	TypeName       string
+	Root           *types.Named
+	Groups         []*groupIR
+	Secrets        []*fieldIR
+	Fields         []*fieldIR
+	Views          []*viewIR
+	InlinePointers []string
 }
 
 type groupIR struct {
@@ -46,6 +47,7 @@ type viewIR struct {
 
 type fieldIR struct {
 	GoName   string
+	GoPath   string
 	JSONName string
 	Source   string
 	Secret   bool
@@ -53,7 +55,7 @@ type fieldIR struct {
 	Views    []string
 	Type     *typeIR
 	Position token.Pos
-	Index    int
+	Index    []int
 }
 
 func (f *fieldIR) canonicalName() string {
@@ -144,123 +146,189 @@ func analyzePackage(pkg *types.Package, sizes types.Sizes, typeName string) (*ir
 	secretAliases := make(map[string]string)
 	jsonByGroup := make(map[string]map[string]string)
 	viewByName := make(map[string]*viewIR)
-	viewMethods := map[string]string{"Release": "the generated Snapshot.Release method"}
-
-	for i := 0; i < rootStruct.NumFields(); i++ {
-		field := rootStruct.Field(i)
-		if !field.Exported() {
-			return nil, fmt.Errorf("configgen: unexported root field %s cannot be isolated by a separate binding package", field.Name())
-		}
-		if field.Anonymous() {
-			return nil, fmt.Errorf("configgen: root field %s is embedded; managed fields must be named", field.Name())
-		}
-		tag := reflect.StructTag(rootStruct.Tag(i))
-		kmsTag, hasKMS := tag.Lookup("kms")
-		if !hasKMS || strings.TrimSpace(kmsTag) == "" {
-			return nil, fmt.Errorf("configgen: exported root field %s must declare kms:\"-\" or one managed source", field.Name())
-		}
-		if strings.TrimSpace(kmsTag) == "-" {
-			if views, ok := tag.Lookup("kms_views"); ok && strings.TrimSpace(views) != "" {
-				return nil, fmt.Errorf("configgen: excluded field %s must not declare kms_views", field.Name())
-			}
-			if _, err := analyzeType(field.Type(), sizes, make(map[types.Type]bool), "excluded field "+field.Name()); err != nil {
-				return nil, fmt.Errorf("configgen: excluded field %s must be structurally deep-cloneable: %w", field.Name(), err)
-			}
-			continue
-		}
-
-		clauses, err := parseKMSClauses(field.Name(), kmsTag)
-		if err != nil {
-			return nil, err
-		}
-		groupAlias, hasGroup := clauses["group"]
-		secretAlias, hasSecret := clauses["secret"]
-		if hasGroup == hasSecret {
-			return nil, fmt.Errorf("configgen: field %s must declare exactly one of group or secret", field.Name())
-		}
-		reload, ok := clauses["reload"]
-		if !ok || (reload != "hot" && reload != "restart") {
-			return nil, fmt.Errorf("configgen: field %s must declare reload=hot or reload=restart", field.Name())
-		}
-		views, err := parseViews(field.Name(), tag)
-		if err != nil {
-			return nil, err
-		}
-
-		managed := &fieldIR{GoName: field.Name(), Reload: reload, Views: views, Position: field.Pos(), Index: i}
-		if hasSecret {
-			if !validAlias(secretAlias) {
-				return nil, fmt.Errorf("configgen: field %s has invalid secret alias %q", field.Name(), secretAlias)
-			}
-			if !isNamedType(field.Type(), kmsclientPath, "Secret") {
-				return nil, fmt.Errorf("configgen: secret field %s must have exact type kmsclient.Secret", field.Name())
-			}
-			jsonTag, ok := tag.Lookup("json")
-			if !ok || jsonTag != "-" {
-				return nil, fmt.Errorf("configgen: secret field %s must declare json:\"-\"", field.Name())
-			}
-			if previous, duplicate := secretAliases[secretAlias]; duplicate {
-				return nil, fmt.Errorf("configgen: secret alias %q is used by both %s and %s", secretAlias, previous, field.Name())
-			}
-			if _, collision := groupByAlias[secretAlias]; collision {
-				return nil, fmt.Errorf("configgen: alias %q is used as both a group and a secret", secretAlias)
-			}
-			secretAliases[secretAlias] = field.Name()
-			managed.Source = secretAlias
-			managed.Secret = true
-			result.Secrets = append(result.Secrets, managed)
-		} else {
-			if !validAlias(groupAlias) {
-				return nil, fmt.Errorf("configgen: field %s has invalid group alias %q", field.Name(), groupAlias)
-			}
-			if _, collision := secretAliases[groupAlias]; collision {
-				return nil, fmt.Errorf("configgen: alias %q is used as both a group and a secret", groupAlias)
-			}
-			if isNamedType(field.Type(), kmsclientPath, "ParameterValue") || isNamedType(field.Type(), kmsclientPath, "SecretValue") {
-				return nil, fmt.Errorf("configgen: field %s uses legacy managed type %s; managed config fields must use ordinary values", field.Name(), types.TypeString(field.Type(), nil))
-			}
-			if isNamedType(field.Type(), kmsclientPath, "Secret") {
-				return nil, fmt.Errorf("configgen: kmsclient.Secret field %s must use secret=, not group=", field.Name())
-			}
-			jsonName, err := explicitJSONName(field.Name(), tag)
-			if err != nil {
-				return nil, err
-			}
-			typeInfo, err := analyzeType(field.Type(), sizes, make(map[types.Type]bool), "field "+field.Name())
-			if err != nil {
-				return nil, err
-			}
-			managed.Source = groupAlias
-			managed.JSONName = jsonName
-			managed.Type = typeInfo
-			group := groupByAlias[groupAlias]
-			if group == nil {
-				group = &groupIR{Alias: groupAlias}
-				groupByAlias[groupAlias] = group
-				jsonByGroup[groupAlias] = make(map[string]string)
-			}
-			if previous, duplicate := jsonByGroup[groupAlias][jsonName]; duplicate {
-				return nil, fmt.Errorf("configgen: JSON name %q in group %q is used by both %s and %s", jsonName, groupAlias, previous, field.Name())
-			}
-			jsonByGroup[groupAlias][jsonName] = field.Name()
-			group.Fields = append(group.Fields, managed)
-		}
-		result.Fields = append(result.Fields, managed)
-
-		for _, viewName := range views {
-			view := viewByName[viewName]
-			if view == nil {
-				method := exportedIdentifier(viewName)
-				if previous, collision := viewMethods[method]; collision {
-					return nil, fmt.Errorf("configgen: view %q generates method %s, which collides with %s", viewName, method, previous)
-				}
-				viewMethods[method] = fmt.Sprintf("view %q", viewName)
-				view = &viewIR{Name: viewName, Method: method}
-				viewByName[viewName] = view
-			}
-			view.Fields = append(view.Fields, managed)
-		}
+	viewFieldByName := make(map[string]map[string]string)
+	viewMethods := map[string]string{
+		"Config":  "the generated Snapshot.Config method",
+		"Release": "the generated Snapshot.Release method",
 	}
+	inlineStack := make(map[types.Type]bool)
+
+	var walkStruct func(*types.Struct, []string, []int) error
+	walkStruct = func(current *types.Struct, parentPath []string, parentIndex []int) error {
+		for i := 0; i < current.NumFields(); i++ {
+			field := current.Field(i)
+			path := append(append([]string(nil), parentPath...), field.Name())
+			index := append(append([]int(nil), parentIndex...), i)
+			goPath := strings.Join(path, ".")
+			location := "root field " + goPath
+			if len(parentPath) != 0 {
+				location = "inline field " + goPath
+			}
+			if !field.Exported() {
+				return fmt.Errorf("configgen: unexported %s cannot be isolated by a separate binding package", location)
+			}
+
+			tag := reflect.StructTag(current.Tag(i))
+			kmsTag, hasKMS := tag.Lookup("kms")
+			trimmedKMS := strings.TrimSpace(kmsTag)
+			if trimmedKMS == "inline" {
+				if views, ok := tag.Lookup("kms_views"); ok && strings.TrimSpace(views) != "" {
+					return fmt.Errorf("configgen: inline field %s must not declare kms_views", goPath)
+				}
+				inlineType := types.Unalias(field.Type())
+				pointer := false
+				if ptr, ok := inlineType.(*types.Pointer); ok {
+					pointer = true
+					inlineType = types.Unalias(ptr.Elem())
+				}
+				named, ok := inlineType.(*types.Named)
+				if !ok || named.Obj() == nil || !named.Obj().Exported() || named.TypeParams() != nil && named.TypeParams().Len() != 0 {
+					return fmt.Errorf("configgen: inline field %s must have an exported, non-generic named struct type or pointer to one", goPath)
+				}
+				inlineStruct, ok := named.Underlying().(*types.Struct)
+				if !ok {
+					return fmt.Errorf("configgen: inline field %s must have a struct type", goPath)
+				}
+				if inlineStack[named] {
+					return fmt.Errorf("configgen: inline field %s creates a recursive inline configuration", goPath)
+				}
+				if pointer {
+					result.InlinePointers = append(result.InlinePointers, goPath)
+				}
+				before := len(result.Fields)
+				inlineStack[named] = true
+				err := walkStruct(inlineStruct, path, index)
+				delete(inlineStack, named)
+				if err != nil {
+					return err
+				}
+				if len(result.Fields) == before {
+					return fmt.Errorf("configgen: inline field %s contains no managed fields", goPath)
+				}
+				continue
+			}
+
+			if field.Anonymous() {
+				return fmt.Errorf("configgen: embedded field %s must declare kms:\"inline\"", goPath)
+			}
+			if !hasKMS || trimmedKMS == "" {
+				return fmt.Errorf("configgen: exported %s must declare kms:\"-\", kms:\"inline\", or one managed source", location)
+			}
+			if trimmedKMS == "-" {
+				if views, ok := tag.Lookup("kms_views"); ok && strings.TrimSpace(views) != "" {
+					return fmt.Errorf("configgen: excluded field %s must not declare kms_views", goPath)
+				}
+				if _, err := analyzeType(field.Type(), sizes, make(map[types.Type]bool), "excluded field "+goPath); err != nil {
+					return fmt.Errorf("configgen: excluded field %s must be structurally deep-cloneable: %w", goPath, err)
+				}
+				continue
+			}
+
+			clauses, err := parseKMSClauses(goPath, kmsTag)
+			if err != nil {
+				return err
+			}
+			groupAlias, hasGroup := clauses["group"]
+			secretAlias, hasSecret := clauses["secret"]
+			if hasGroup == hasSecret {
+				return fmt.Errorf("configgen: field %s must declare exactly one of group or secret", goPath)
+			}
+			reload, ok := clauses["reload"]
+			if !ok || (reload != "hot" && reload != "restart") {
+				return fmt.Errorf("configgen: field %s must declare reload=hot or reload=restart", goPath)
+			}
+			views, err := parseViews(goPath, tag)
+			if err != nil {
+				return err
+			}
+
+			managed := &fieldIR{GoName: field.Name(), GoPath: goPath, Reload: reload, Views: views, Position: field.Pos(), Index: index}
+			if hasSecret {
+				if !validAlias(secretAlias) {
+					return fmt.Errorf("configgen: field %s has invalid secret alias %q", goPath, secretAlias)
+				}
+				if !isNamedType(field.Type(), kmsclientPath, "Secret") {
+					return fmt.Errorf("configgen: secret field %s must have exact type kmsclient.Secret", goPath)
+				}
+				jsonTag, ok := tag.Lookup("json")
+				if !ok || jsonTag != "-" {
+					return fmt.Errorf("configgen: secret field %s must declare json:\"-\"", goPath)
+				}
+				if previous, duplicate := secretAliases[secretAlias]; duplicate {
+					return fmt.Errorf("configgen: secret alias %q is used by both %s and %s", secretAlias, previous, goPath)
+				}
+				if _, collision := groupByAlias[secretAlias]; collision {
+					return fmt.Errorf("configgen: alias %q is used as both a group and a secret", secretAlias)
+				}
+				secretAliases[secretAlias] = goPath
+				managed.Source = secretAlias
+				managed.Secret = true
+				result.Secrets = append(result.Secrets, managed)
+			} else {
+				if !validAlias(groupAlias) {
+					return fmt.Errorf("configgen: field %s has invalid group alias %q", goPath, groupAlias)
+				}
+				if _, collision := secretAliases[groupAlias]; collision {
+					return fmt.Errorf("configgen: alias %q is used as both a group and a secret", groupAlias)
+				}
+				if isNamedType(field.Type(), kmsclientPath, "ParameterValue") || isNamedType(field.Type(), kmsclientPath, "SecretValue") {
+					return fmt.Errorf("configgen: field %s uses legacy managed type %s; managed config fields must use ordinary values", goPath, types.TypeString(field.Type(), nil))
+				}
+				if isNamedType(field.Type(), kmsclientPath, "Secret") {
+					return fmt.Errorf("configgen: kmsclient.Secret field %s must use secret=, not group=", goPath)
+				}
+				jsonName, err := explicitJSONName(goPath, tag)
+				if err != nil {
+					return err
+				}
+				typeInfo, err := analyzeType(field.Type(), sizes, make(map[types.Type]bool), "field "+goPath)
+				if err != nil {
+					return err
+				}
+				managed.Source = groupAlias
+				managed.JSONName = jsonName
+				managed.Type = typeInfo
+				group := groupByAlias[groupAlias]
+				if group == nil {
+					group = &groupIR{Alias: groupAlias}
+					groupByAlias[groupAlias] = group
+					jsonByGroup[groupAlias] = make(map[string]string)
+				}
+				if previous, duplicate := jsonByGroup[groupAlias][jsonName]; duplicate {
+					return fmt.Errorf("configgen: JSON name %q in group %q is used by both %s and %s", jsonName, groupAlias, previous, goPath)
+				}
+				jsonByGroup[groupAlias][jsonName] = goPath
+				group.Fields = append(group.Fields, managed)
+			}
+			result.Fields = append(result.Fields, managed)
+
+			for _, viewName := range views {
+				view := viewByName[viewName]
+				if view == nil {
+					method := exportedIdentifier(viewName)
+					if previous, collision := viewMethods[method]; collision {
+						return fmt.Errorf("configgen: view %q generates method %s, which collides with %s", viewName, method, previous)
+					}
+					viewMethods[method] = fmt.Sprintf("view %q", viewName)
+					view = &viewIR{Name: viewName, Method: method}
+					viewByName[viewName] = view
+					viewFieldByName[viewName] = make(map[string]string)
+				}
+				if previous, collision := viewFieldByName[viewName][managed.GoName]; collision {
+					return fmt.Errorf("configgen: view %q getter %s is used by both %s and %s", viewName, managed.GoName, previous, goPath)
+				}
+				viewFieldByName[viewName][managed.GoName] = goPath
+				view.Fields = append(view.Fields, managed)
+			}
+		}
+		return nil
+	}
+
+	inlineStack[named] = true
+	if err := walkStruct(rootStruct, nil, nil); err != nil {
+		return nil, err
+	}
+	delete(inlineStack, named)
 	if len(result.Fields) == 0 {
 		return nil, fmt.Errorf("configgen: root type %s has no managed fields", typeName)
 	}
@@ -287,9 +355,19 @@ func validateMethod(root *types.Named) error {
 	if method == nil {
 		return fmt.Errorf("configgen: *%s must implement Validate() error", root.Obj().Name())
 	}
+	if len(method.Index()) != 1 {
+		return fmt.Errorf("configgen: *%s must declare Validate() error directly; a promoted inline-fragment method is not aggregate validation", root.Obj().Name())
+	}
 	sig, ok := method.Obj().Type().(*types.Signature)
 	if !ok || sig.Params().Len() != 0 || sig.Results().Len() != 1 || sig.Variadic() || !types.Identical(sig.Results().At(0).Type(), types.Universe.Lookup("error").Type()) {
 		return fmt.Errorf("configgen: *%s Validate method must have signature Validate() error", root.Obj().Name())
+	}
+	receiver := types.Unalias(sig.Recv().Type())
+	if pointer, ok := receiver.(*types.Pointer); ok {
+		receiver = types.Unalias(pointer.Elem())
+	}
+	if !types.Identical(receiver, root) {
+		return fmt.Errorf("configgen: *%s must declare Validate() error directly", root.Obj().Name())
 	}
 	return nil
 }

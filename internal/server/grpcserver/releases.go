@@ -123,9 +123,13 @@ func (h *configurationReleaseServer) ValidateRelease(ctx context.Context, req *k
 	}
 	out := make([]*kmsv1.ReleaseValidationError, 0, len(errs))
 	for _, e := range errs {
-		out = append(out, &kmsv1.ReleaseValidationError{Alias: e.Alias, Code: e.Code, SchemaPointer: e.SchemaPointer, Message: e.Message})
+		out = append(out, toProtoReleaseValidationError(e))
 	}
 	return &kmsv1.ValidateReleaseResponse{Valid: len(out) == 0, Errors: out}, nil
+}
+
+func toProtoReleaseValidationError(e domain.ReleaseValidationError) *kmsv1.ReleaseValidationError {
+	return &kmsv1.ReleaseValidationError{Alias: e.Alias, Code: e.Code, SchemaPointer: e.SchemaPointer, Message: e.Message}
 }
 
 func (h *configurationReleaseServer) ActivateRelease(ctx context.Context, req *kmsv1.ActivateReleaseRequest) (*kmsv1.ActivateReleaseResponse, error) {

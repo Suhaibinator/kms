@@ -15,6 +15,7 @@ import (
 	"strings"
 	"testing"
 
+	_ "github.com/Suhaibinator/kms/internal/configgen/testdata/composedgenerated"
 	_ "github.com/Suhaibinator/kms/internal/configgen/testdata/generated"
 )
 
@@ -148,6 +149,12 @@ func TestTagAndTypeErrors(t *testing.T) {
 		{"ExcludedOpaque", "structurally deep-cloneable"},
 		{"BadJSONName", "noncanonical JSON property name"},
 		{"BadNestedJSONName", "noncanonical JSON property name"},
+		{"InlineScalar", "must have an exported, non-generic named struct type"},
+		{"InlineViews", "must not declare kms_views"},
+		{"PromotedValidate", "must declare Validate() error directly"},
+		{"EmptyInline", "contains no managed fields"},
+		{"RecursiveInline", "recursive inline configuration"},
+		{"DuplicateViewGetter", "getter Value is used by both"},
 	}
 	root := repoRoot(t)
 	for _, test := range tests {
@@ -159,6 +166,80 @@ func TestTagAndTypeErrors(t *testing.T) {
 				t.Fatalf("error = %v, want substring %q", err, test.want)
 			}
 		})
+	}
+}
+
+func TestGenerateComposesInlineFragments(t *testing.T) {
+	root := repoRoot(t)
+	artifacts, err := Generate(context.Background(), Options{
+		Dir: root, Package: "./internal/configgen/testdata/composed", Type: "Config", BindingPackage: "composedgenerated",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"FieldIndex: []int{0, 0}",
+		"FieldIndex: []int{0, 2, 0}",
+		"candidate.Common.Token = secret0.Clone()",
+		"value.Common == nil",
+		"value.Common.Limits == nil",
+		"func (s Snapshot) Config() *rootconfig.Config",
+	} {
+		if !bytes.Contains(artifacts.Binding, []byte(want)) {
+			t.Fatalf("generated binding is missing %q", want)
+		}
+	}
+
+	var schema map[string]any
+	if err := json.Unmarshal(artifacts.Schema, &schema); err != nil {
+		t.Fatal(err)
+	}
+	properties := schema["properties"].(map[string]any)
+	runtimeFields := properties["runtime"].(map[string]any)["properties"].(map[string]any)
+	if _, ok := runtimeFields["burst"]; !ok {
+		t.Fatal("inline common field burst is missing from the runtime group")
+	}
+	if _, ok := runtimeFields["app_name"]; !ok {
+		t.Fatal("application field app_name is missing from the shared runtime group")
+	}
+
+	var contract struct {
+		Source contractSource `json:"source"`
+		Fields []struct {
+			JSONName string `json:"json_name"`
+			GoName   string `json:"go_name"`
+			GoPath   string `json:"go_path"`
+		} `json:"fields"`
+		Secrets []struct {
+			Alias  string `json:"alias"`
+			GoName string `json:"go_name"`
+			GoPath string `json:"go_path"`
+		} `json:"secrets"`
+	}
+	if err := json.Unmarshal(artifacts.Contract, &contract); err != nil {
+		t.Fatal(err)
+	}
+	if contract.Source.Package != "github.com/Suhaibinator/kms/internal/configgen/testdata/composed" || contract.Source.Type != "Config" {
+		t.Fatalf("contract source = %#v", contract.Source)
+	}
+	fieldPaths := make(map[string]string, len(contract.Fields))
+	for _, field := range contract.Fields {
+		fieldPaths[field.JSONName] = field.GoPath
+		if field.GoName == "" {
+			t.Fatalf("contract field %q lost backward-compatible go_name", field.JSONName)
+		}
+	}
+	if fieldPaths["endpoint"] != "Common.Endpoint" || fieldPaths["burst"] != "Common.Limits.Burst" || fieldPaths["app_name"] != "AppName" {
+		t.Fatalf("contract field go paths = %#v", fieldPaths)
+	}
+	if len(contract.Secrets) != 1 || contract.Secrets[0].Alias != "common_token" || contract.Secrets[0].GoName != "Token" || contract.Secrets[0].GoPath != "Common.Token" {
+		t.Fatalf("contract secrets = %#v", contract.Secrets)
+	}
+
+	if _, err := Generate(context.Background(), Options{
+		Dir: root, Package: "./internal/configgen/testdata/composed", Type: "EmbeddedConfig", BindingPackage: "embeddedgenerated",
+	}); err != nil {
+		t.Fatalf("anonymous inline fragment: %v", err)
 	}
 }
 
@@ -323,6 +404,23 @@ func TestCommittedCompileFixtureIsFresh(t *testing.T) {
 		Contract: filepath.Join(root, "internal/configgen/testdata/generated/runtime.contract.json"),
 	}, artifacts)
 	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestCommittedComposedCompileFixtureIsFresh(t *testing.T) {
+	root := repoRoot(t)
+	artifacts, err := Generate(context.Background(), Options{
+		Dir: root, Package: "./internal/configgen/testdata/composed", Type: "Config", BindingPackage: "composedgenerated",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := Verify(OutputPaths{
+		Binding:  filepath.Join(root, "internal/configgen/testdata/composedgenerated/config.gen.go"),
+		Schema:   filepath.Join(root, "internal/configgen/testdata/composedgenerated/runtime.schema.json"),
+		Contract: filepath.Join(root, "internal/configgen/testdata/composedgenerated/runtime.contract.json"),
+	}, artifacts); err != nil {
 		t.Fatal(err)
 	}
 }

@@ -51,6 +51,41 @@ func TestConfigurationReleaseCoreLifecycleAndHistoricalAck(t *testing.T) {
 	if err != nil || !changed {
 		t.Fatalf("activate=%+v changed=%v err=%v", a1, changed, err)
 	}
+	badSchema, err := svc.CreateConfigurationSchema(ctx, pr, "runtime-invalid", `{"type":"object","properties":{"settings":{"type":"string"}},"required":["settings"]}`, "{}")
+	if err != nil {
+		t.Fatal(err)
+	}
+	badRelease, err := svc.CreateConfigurationRelease(ctx, pr, domain.CreateConfigurationReleaseInput{
+		Namespace: ns, Name: "runtime", SchemaID: badSchema.ID, SchemaVersion: badSchema.Version,
+		Entries: []domain.ReleaseEntrySelector{{Alias: "settings", Kind: domain.ReleaseEntryParameter, Ref: ref, Version: 1}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	beforeRejectedActivation, err := st.CurrentRevision(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	expectV1ForInvalid := r1.Version
+	if _, changed, err := svc.ActivateConfigurationRelease(ctx, pr, ns, "runtime", badRelease.Version, &expectV1ForInvalid); !errors.Is(err, domain.ErrFailedPrecondition) || changed {
+		t.Fatalf("invalid activation changed=%v err=%v", changed, err)
+	} else {
+		var validationFailed *domain.ReleaseValidationFailedError
+		if !errors.As(err, &validationFailed) || len(validationFailed.Violations()) == 0 {
+			t.Fatalf("invalid activation error = %T %v, want structured validation failure", err, err)
+		}
+	}
+	afterRejectedActivation, err := st.CurrentRevision(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if afterRejectedActivation != beforeRejectedActivation {
+		t.Fatalf("invalid activation advanced revision from %d to %d", beforeRejectedActivation, afterRejectedActivation)
+	}
+	stillActive, err := svc.GetActiveConfigurationRelease(ctx, pr, ns, "runtime")
+	if err != nil || stillActive.Release.Version != r1.Version {
+		t.Fatalf("active release after rejected activation = %+v err=%v", stillActive, err)
+	}
 	if _, err := svc.DeleteParameter(ctx, pr, ref); !errors.Is(err, domain.ErrFailedPrecondition) {
 		t.Fatalf("delete active pin err=%v", err)
 	}
@@ -86,6 +121,83 @@ func TestConfigurationReleaseCoreLifecycleAndHistoricalAck(t *testing.T) {
 	err = svc.AcknowledgeConfigurationRelease(ctx, pr, domain.ReleaseAcknowledgement{Namespace: ns, ReleaseName: "runtime", ReleaseVersion: r1.Version, ActivationRevision: a1.ActivationRevision + 999, ClientName: "api", InstanceID: "replica-1", ConnectionID: connectionID, State: domain.ReleaseStateRejected, RejectionCategory: domain.ReleaseRejectSuperseded})
 	if !errors.Is(err, domain.ErrFailedPrecondition) {
 		t.Fatalf("fabricated revision err=%v", err)
+	}
+}
+
+func TestConfigurationReleaseValidationPinsSourceNamespaceIncarnation(t *testing.T) {
+	ctx := context.Background()
+	st, err := storage.Open(filepath.Join(t.TempDir(), "kms.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = st.Close() }()
+
+	source := domain.NamespaceRef{Env: "prod", App: "source"}
+	target := domain.NamespaceRef{Env: "prod", App: "target"}
+	for _, namespace := range []domain.NamespaceRef{source, target} {
+		if _, err := st.CreateNamespace(ctx, domain.Namespace{NamespaceRef: namespace, CreatedBy: "admin"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ref := domain.Ref{NS: source, Key: "config/runtime"}
+	if _, _, err := st.PutParameter(ctx, ref, `{"enabled":true}`, "json", "{}", "admin"); err != nil {
+		t.Fatal(err)
+	}
+
+	svc := New(st, nil, "test")
+	principal := adminPrincipal()
+	release, err := svc.CreateConfigurationRelease(ctx, principal, domain.CreateConfigurationReleaseInput{
+		Namespace: target,
+		Name:      "runtime",
+		Entries: []domain.ReleaseEntrySelector{{
+			Alias: "settings", Kind: domain.ReleaseEntryParameter, Ref: ref, Version: 1,
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if release.Entries[0].ResourceNamespaceID == 0 {
+		t.Fatal("release did not retain its source namespace incarnation")
+	}
+
+	if _, err := st.DeleteParameter(ctx, ref); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.DeleteNamespace(ctx, source); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.CreateNamespace(ctx, domain.Namespace{NamespaceRef: source, CreatedBy: "admin"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := st.PutParameter(ctx, ref, `{"enabled":true}`, "json", "{}", "admin"); err != nil {
+		t.Fatal(err)
+	}
+
+	violations, err := svc.ValidateConfigurationRelease(ctx, principal, target, "runtime", release.Version)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(violations) != 1 || violations[0].Alias != "settings" || violations[0].Code != domain.ReleaseValidationNotFound {
+		t.Fatalf("validation violations = %+v, want settings/not_found", violations)
+	}
+
+	before, err := st.CurrentRevision(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	zero := uint64(0)
+	if _, changed, err := svc.ActivateConfigurationRelease(ctx, principal, target, "runtime", release.Version, &zero); !errors.Is(err, domain.ErrFailedPrecondition) || changed {
+		t.Fatalf("activation against recreated source changed=%v err=%v, want validation failure", changed, err)
+	}
+	after, err := st.CurrentRevision(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after != before {
+		t.Fatalf("rejected activation advanced revision from %d to %d", before, after)
+	}
+	if _, err := svc.GetActiveConfigurationRelease(ctx, principal, target, "runtime"); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("active release after rejected activation err=%v, want ErrNotFound", err)
 	}
 }
 

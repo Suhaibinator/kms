@@ -20,6 +20,7 @@
       "group": "runtime",
       "json_name": "name",
       "go_name": "Name",
+      "go_path": "Name",
       "reload": "hot",
       "encoding": "string",
       "views": [
@@ -32,6 +33,7 @@
       "alias": "token",
       "kind": "secret",
       "go_name": "Token",
+      "go_path": "Token",
       "reload": "hot",
       "encoding": "secret",
       "views": [

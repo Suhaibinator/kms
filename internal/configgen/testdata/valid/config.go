@@ -13,6 +13,7 @@ type Endpoint struct {
 	Host   string              `json:"host"`
 	Ports  []uint16            `json:"ports"`
 	Labels map[string][]string `json:"labels"`
+	Zones  [2]string           `json:"zones"`
 }
 
 type Config struct {

@@ -81,13 +81,7 @@ func (s *server) handleValidateRelease(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, r, err)
 		return
 	}
-	out := make([]releaseValidationErrorDTO, 0, len(errorsOut))
-	for _, validationErr := range errorsOut {
-		out = append(out, releaseValidationErrorDTO{
-			Alias: validationErr.Alias, Code: validationErr.Code,
-			SchemaPointer: validationErr.SchemaPointer, Message: validationErr.Message,
-		})
-	}
+	out := releaseValidationErrorDTOs(errorsOut)
 	writeJSON(w, http.StatusOK, map[string]any{"valid": len(out) == 0, "errors": out})
 }
 

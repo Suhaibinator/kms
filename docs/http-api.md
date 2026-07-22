@@ -432,7 +432,20 @@ rules (a deny still wins).
   `{"release":ConfigurationRelease,"activation_revision":42,
   "previous_version":13,"changed":true}`. Omit `expected_current_version` for
   no CAS guard; an explicit `0` requires that no release is active. A conflict
-  is HTTP 409. Activating the current version is an idempotent no-op.
+  is HTTP 409. Activating the current version is an idempotent no-op. Activation
+  revalidates every pinned entry and the release schema immediately before the
+  active pointer changes. If that validation fails, the active release and
+  revision remain unchanged and the response is HTTP 412 with the same
+  sanitized diagnostics exposed by the validation endpoint:
+  ```json
+  { "error": { "code": "failed_precondition",
+      "message": "release validation failed",
+      "validation_errors": [
+        { "alias": "rate_limits", "code": "schema_violation",
+          "schema_pointer": "/properties/rate_limits/type",
+          "message": "configuration value does not satisfy schema" }
+      ] } }
+  ```
 - `POST /api/v1/configuration-schemas` with
   `{"id":"gradethis/runtime","schema_json":"{...}","metadata_json":"{}"}`
   → `201 {"schema":{"id","version","schema_json","digest",

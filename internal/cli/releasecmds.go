@@ -17,6 +17,7 @@ import (
 	kmsv1 "github.com/Suhaibinator/kms/gen/kmsv1"
 	"github.com/Suhaibinator/kms/internal/domain"
 	"github.com/Suhaibinator/kms/internal/keyutil"
+	"google.golang.org/grpc/status"
 	"gopkg.in/yaml.v3"
 )
 
@@ -241,13 +242,26 @@ func (c *CLI) cmdReleaseValidate(args []string) int {
 		_, _ = fmt.Fprintf(c.Stdout, "Release %s/%s version %d is valid.\n", namespaceDisplay(ns), name, version)
 		return 0
 	}
-	tw := tabwriter.NewWriter(c.Stdout, 0, 4, 2, ' ', 0)
+	printReleaseValidationErrors(c.Stdout, resp.GetErrors())
+	return 1
+}
+
+func printReleaseValidationErrors(w io.Writer, validationErrors []*kmsv1.ReleaseValidationError) {
+	tw := tabwriter.NewWriter(w, 0, 4, 2, ' ', 0)
 	_, _ = fmt.Fprintln(tw, "ALIAS\tCODE\tSCHEMA POINTER\tMESSAGE")
-	for _, validationErr := range resp.GetErrors() {
+	for _, validationErr := range validationErrors {
 		_, _ = fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n", validationErr.GetAlias(), validationErr.GetCode(), validationErr.GetSchemaPointer(), validationErr.GetMessage())
 	}
 	_ = tw.Flush()
-	return 1
+}
+
+func releaseValidationDetails(err error) *kmsv1.ValidateReleaseResponse {
+	for _, detail := range status.Convert(err).Details() {
+		if validation, ok := detail.(*kmsv1.ValidateReleaseResponse); ok {
+			return validation
+		}
+	}
+	return nil
 }
 
 func (c *CLI) cmdReleaseShow(args []string) int {
@@ -519,11 +533,20 @@ func (c *CLI) activateRelease(cf *connFlags, req *kmsv1.ActivateReleaseRequest, 
 	defer cancel()
 	resp, err := kmsv1.NewConfigurationReleaseServiceClient(conn).ActivateRelease(cf.authCtx(ctx), req)
 	if err != nil {
-		return c.fail("release %s: %v", verb, err)
+		return c.failReleaseActivation(verb, err)
 	}
 	_, _ = fmt.Fprintf(c.Stdout, "Active %s/%s version %d (previous %d, revision %d, changed=%t)\n",
 		namespaceDisplay(req.GetNamespace()), req.GetName(), resp.GetCurrentVersion(), resp.GetPreviousVersion(), resp.GetActivationRevision(), resp.GetChanged())
 	return 0
+}
+
+func (c *CLI) failReleaseActivation(verb string, err error) int {
+	if validation := releaseValidationDetails(err); validation != nil {
+		_, _ = fmt.Fprintf(c.Stderr, "error: release %s: configuration release validation failed\n", verb)
+		printReleaseValidationErrors(c.Stderr, validation.GetErrors())
+		return 1
+	}
+	return c.fail("release %s: %v", verb, err)
 }
 
 func (c *CLI) cmdReleaseRollback(args []string) int {
@@ -569,7 +592,7 @@ func (c *CLI) cmdReleaseRollback(args []string) int {
 		Namespace: ns, Name: name, Version: target, ExpectedCurrentVersion: &expected,
 	})
 	if err != nil {
-		return c.fail("release rollback: %v", err)
+		return c.failReleaseActivation("rollback", err)
 	}
 	_, _ = fmt.Fprintf(c.Stdout, "Rolled back %s/%s to version %d (revision %d)\n", namespaceDisplay(ns), name, resp.GetCurrentVersion(), resp.GetActivationRevision())
 	return 0

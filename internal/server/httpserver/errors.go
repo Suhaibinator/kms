@@ -16,8 +16,9 @@ type errorEnvelope struct {
 }
 
 type errorBody struct {
-	Code    string `json:"code"`
-	Message string `json:"message"`
+	Code             string                      `json:"code"`
+	Message          string                      `json:"message"`
+	ValidationErrors []releaseValidationErrorDTO `json:"validation_errors,omitempty"`
 }
 
 // mapError translates a domain sentinel error into an HTTP status, a stable
@@ -63,7 +64,23 @@ func (s *server) writeError(w http.ResponseWriter, r *http.Request, err error) {
 			zap.String("method", r.Method), zap.String("path", r.URL.Path), zap.Int("status", status),
 			zap.String("request_id", requestIDFrom(r.Context())), zap.String("error", err.Error()))
 	}
-	writeJSON(w, status, errorEnvelope{Error: errorBody{Code: code, Message: message}})
+	body := errorBody{Code: code, Message: message}
+	var validationFailed *domain.ReleaseValidationFailedError
+	if errors.As(err, &validationFailed) {
+		body.ValidationErrors = releaseValidationErrorDTOs(validationFailed.Violations())
+	}
+	writeJSON(w, status, errorEnvelope{Error: body})
+}
+
+func releaseValidationErrorDTOs(validationErrors []domain.ReleaseValidationError) []releaseValidationErrorDTO {
+	out := make([]releaseValidationErrorDTO, len(validationErrors))
+	for i, validationErr := range validationErrors {
+		out[i] = releaseValidationErrorDTO{
+			Alias: validationErr.Alias, Code: validationErr.Code,
+			SchemaPointer: validationErr.SchemaPointer, Message: validationErr.Message,
+		}
+	}
+	return out
 }
 
 // writeErrorCode renders an explicit code/message pair (used for rate limiting,
