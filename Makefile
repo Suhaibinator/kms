@@ -55,6 +55,14 @@ check-configgen:
 		-schema-output internal/configstorefixture/runtime.schema.json \
 		-contract-output internal/configstorefixture/runtime.contract.json \
 		-check
+	go run ./cmd/kms-config-gen \
+		-package ./examples/managed-config/config \
+		-type Config \
+		-binding-package configkms \
+		-binding-output examples/managed-config/configkms/config_kms.gen.go \
+		-schema-output examples/managed-config/runtime.schema.json \
+		-contract-output examples/managed-config/runtime.contract.json \
+		-check
 
 # Run every Go test, including integration tests, with the race detector. This
 # remains the convenient all-in-one local regression command.
