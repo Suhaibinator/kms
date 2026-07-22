@@ -7,6 +7,17 @@ supersession, and last-known-good behavior. Generated bindings add strict
 decoding, validation, application-owned defaults, drift policy, immutable
 snapshots, typed consumer views, and deterministic schema artifacts.
 
+For a runnable walkthrough, use:
+
+```bash
+go run ./examples/managed-config
+```
+
+The [`examples/managed-config`](../examples/managed-config) app demonstrates
+typed views, immutable snapshots, atomic hot override, default-divergence
+reporting, restart-required rejection, secret redaction, and last-known-good
+preservation against a deterministic in-process KMS.
+
 Use this layer when a set of configuration fields must change as one release.
 The lower-level `ReleaseLoader`, `RunTypedRelease`, `ParameterValue`, and
 `SecretValue` APIs remain supported.

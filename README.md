@@ -424,7 +424,9 @@ client-side routing resolves deep links on refresh.
 - **Go, generated managed configuration** (`sdk/go/configstore` and
   `cmd/kms-config-gen`) — strict typed group decoding, source-owned defaults,
   immutable snapshots, consumer views, and hot/restart policy; see
-  [`docs/managed-go-configuration.md`](docs/managed-go-configuration.md).
+  [`docs/managed-go-configuration.md`](docs/managed-go-configuration.md) and
+  run the self-contained
+  [`examples/managed-config`](examples/managed-config) walkthrough.
 - **Python** (`sdk/python`, package `kms_paramstore`, distribution
   `kms-paramstore`) — equivalent synchronous release loading with explicit
   decoding; see [`docs/sdk-python.md`](docs/sdk-python.md).
