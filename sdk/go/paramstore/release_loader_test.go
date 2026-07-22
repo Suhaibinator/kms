@@ -20,6 +20,7 @@ import (
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 	"google.golang.org/grpc/test/bufconn"
+	"google.golang.org/protobuf/proto"
 )
 
 type releaseLoaderServer struct {
@@ -257,6 +258,36 @@ func (s *failRejectedAckOnceStream) Send(request *kmsv1.WatchReleaseRequest) err
 		}
 	}
 	return s.ConfigurationReleaseService_WatchReleaseClient.Send(request)
+}
+
+type blockFirstAcknowledgementStream struct {
+	kmsv1.ConfigurationReleaseService_WatchReleaseClient
+	started chan struct{}
+	allow   chan struct{}
+	calls   atomic.Int32
+	mu      sync.Mutex
+	sent    []*kmsv1.ReleaseAcknowledgement
+}
+
+func (s *blockFirstAcknowledgementStream) Send(request *kmsv1.WatchReleaseRequest) error {
+	if s.calls.Add(1) == 1 {
+		close(s.started)
+		<-s.allow
+	}
+	s.mu.Lock()
+	s.sent = append(s.sent, proto.Clone(request.GetAcknowledgement()).(*kmsv1.ReleaseAcknowledgement))
+	s.mu.Unlock()
+	return nil
+}
+
+func (s *blockFirstAcknowledgementStream) acknowledgements() []*kmsv1.ReleaseAcknowledgement {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]*kmsv1.ReleaseAcknowledgement, len(s.sent))
+	for i, acknowledgement := range s.sent {
+		out[i] = proto.Clone(acknowledgement).(*kmsv1.ReleaseAcknowledgement)
+	}
+	return out
 }
 
 type testPreparedRelease struct {
@@ -618,6 +649,59 @@ func TestReleaseLoaderGracefulStopRetriesRejectedAcknowledgementAfterSendFailure
 	case <-done:
 	case <-time.After(2 * time.Second):
 		t.Fatal("release watch did not finish after the successful retry")
+	}
+}
+
+func TestReleaseLoaderDoesNotLoseNewerAcknowledgementForSameCandidate(t *testing.T) {
+	loader := &ReleaseLoader{
+		client:        &Client{clientName: "test-client"},
+		pendingAck:    make(map[string]*kmsv1.ReleaseAcknowledgement),
+		ackGeneration: make(map[string]uint64),
+		dirtyAck:      make(map[string]bool),
+		ackSignal:     make(chan struct{}, 1),
+	}
+	ns := namespaceRef{env: "prod", app: "app"}
+	candidate := releaseCandidate{
+		release:  &kmsv1.ConfigurationRelease{Name: "runtime", Version: 7},
+		revision: 42,
+	}
+	loader.ack(ns, candidate, ReleaseStateRejected, ReleaseRejectResolutionFailed)
+	// Emulate watchSession consuming the signal before it begins sending the
+	// snapshotted acknowledgement, leaving room for the racing update signal.
+	<-loader.ackSignal
+
+	stream := &blockFirstAcknowledgementStream{
+		started: make(chan struct{}),
+		allow:   make(chan struct{}),
+	}
+	firstSend := make(chan error, 1)
+	go func() { firstSend <- loader.sendPendingAcks(stream, false) }()
+	<-stream.started
+
+	// Reconciliation can reject the same immutable candidate again for a newer
+	// reason while the prior acknowledgement is blocked in transport Send.
+	loader.ack(ns, candidate, ReleaseStateRejected, ReleaseRejectPrepareFailed)
+	close(stream.allow)
+	if err := <-firstSend; err != nil {
+		t.Fatalf("send first acknowledgement: %v", err)
+	}
+
+	// Emulate the watch loop consuming the racing update signal. It must send
+	// the newer payload rather than treating the old send as having flushed it.
+	<-loader.ackSignal
+	if err := loader.sendPendingAcks(stream, false); err != nil {
+		t.Fatalf("send newer acknowledgement: %v", err)
+	}
+
+	acknowledgements := stream.acknowledgements()
+	if len(acknowledgements) != 2 {
+		t.Fatalf("sent acknowledgements = %d, want 2", len(acknowledgements))
+	}
+	if got := acknowledgements[0].GetRejectionCategory(); got != ReleaseRejectResolutionFailed {
+		t.Fatalf("first rejection category = %q, want %q", got, ReleaseRejectResolutionFailed)
+	}
+	if got := acknowledgements[1].GetRejectionCategory(); got != ReleaseRejectPrepareFailed {
+		t.Fatalf("newer rejection category = %q, want %q", got, ReleaseRejectPrepareFailed)
 	}
 }
 

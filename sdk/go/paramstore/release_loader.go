@@ -95,10 +95,11 @@ type ReleaseLoader struct {
 	running    atomic.Bool
 	lastSeen   atomic.Uint64
 
-	ackMu      sync.Mutex
-	pendingAck map[string]*kmsv1.ReleaseAcknowledgement
-	dirtyAck   map[string]bool
-	ackSignal  chan struct{}
+	ackMu         sync.Mutex
+	pendingAck    map[string]*kmsv1.ReleaseAcknowledgement
+	ackGeneration map[string]uint64
+	dirtyAck      map[string]bool
+	ackSignal     chan struct{}
 
 	statusMu sync.RWMutex
 	status   ReleaseLoaderStatus
@@ -132,13 +133,14 @@ func NewReleaseLoader(client *Client, cfg ReleaseLoaderConfig) (*ReleaseLoader, 
 		}
 	}
 	return &ReleaseLoader{
-		client:     client,
-		cfg:        cfg,
-		instanceID: instanceID,
-		pendingAck: make(map[string]*kmsv1.ReleaseAcknowledgement),
-		dirtyAck:   make(map[string]bool),
-		ackSignal:  make(chan struct{}, 1),
-		stats:      ReleaseLoaderStats{Rejected: make(map[string]uint64)},
+		client:        client,
+		cfg:           cfg,
+		instanceID:    instanceID,
+		pendingAck:    make(map[string]*kmsv1.ReleaseAcknowledgement),
+		ackGeneration: make(map[string]uint64),
+		dirtyAck:      make(map[string]bool),
+		ackSignal:     make(chan struct{}, 1),
+		stats:         ReleaseLoaderStats{Rejected: make(map[string]uint64)},
 	}, nil
 }
 
@@ -1045,6 +1047,7 @@ func (l *ReleaseLoader) ack(ns namespaceRef, candidate releaseCandidate, state, 
 	l.ackMu.Lock()
 	if current := l.pendingAck[state]; current == nil || current.GetActivationRevision() <= candidate.revision {
 		l.pendingAck[state] = ack
+		l.ackGeneration[state]++
 		l.dirtyAck[state] = true
 	}
 	l.ackMu.Unlock()
@@ -1055,6 +1058,10 @@ func (l *ReleaseLoader) ack(ns namespaceRef, candidate releaseCandidate, state, 
 }
 
 func (l *ReleaseLoader) sendPendingAcks(stream kmsv1.ConfigurationReleaseService_WatchReleaseClient, replay bool) error {
+	type pendingSend struct {
+		ack        *kmsv1.ReleaseAcknowledgement
+		generation uint64
+	}
 	l.ackMu.Lock()
 	states := make([]string, 0, len(l.pendingAck))
 	for state := range l.pendingAck {
@@ -1064,20 +1071,23 @@ func (l *ReleaseLoader) sendPendingAcks(stream kmsv1.ConfigurationReleaseService
 		states = append(states, state)
 	}
 	sort.Strings(states)
-	acks := make([]*kmsv1.ReleaseAcknowledgement, 0, len(states))
+	acks := make([]pendingSend, 0, len(states))
 	for _, state := range states {
-		acks = append(acks, proto.Clone(l.pendingAck[state]).(*kmsv1.ReleaseAcknowledgement))
+		acks = append(acks, pendingSend{
+			ack:        proto.Clone(l.pendingAck[state]).(*kmsv1.ReleaseAcknowledgement),
+			generation: l.ackGeneration[state],
+		})
 	}
 	l.ackMu.Unlock()
-	for _, ack := range acks {
+	for _, pending := range acks {
+		ack := pending.ack
 		if err := stream.Send(&kmsv1.WatchReleaseRequest{Request: &kmsv1.WatchReleaseRequest_Acknowledgement{
 			Acknowledgement: ack,
 		}}); err != nil {
 			return err
 		}
 		l.ackMu.Lock()
-		current := l.pendingAck[ack.GetState()]
-		if current != nil && current.GetActivationRevision() == ack.GetActivationRevision() && current.GetVersion() == ack.GetVersion() {
+		if l.ackGeneration[ack.GetState()] == pending.generation {
 			l.dirtyAck[ack.GetState()] = false
 		}
 		l.ackMu.Unlock()
