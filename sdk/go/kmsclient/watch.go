@@ -1,4 +1,4 @@
-package paramstore
+package kmsclient
 
 import (
 	"context"
@@ -294,7 +294,7 @@ func (m *subManager) run() {
 
 		d := backoffDelay(attempt)
 		attempt++
-		m.client.logf("paramstore: watch stream ended (%v); reconnecting in %s", err, d)
+		m.client.logf("kmsclient: watch stream ended (%v); reconnecting in %s", err, d)
 		t := time.NewTimer(d)
 		select {
 		case <-m.stopCh:
@@ -670,7 +670,7 @@ func (c *Client) WatchNamespace(ctx context.Context, namespace string, fn func(E
 
 func (c *Client) watchNamespace(ctx context.Context, ns namespaceRef, fn func(Event)) (func(), error) {
 	if fn == nil {
-		return nil, errors.New("paramstore: Watch requires a non-nil callback")
+		return nil, errors.New("kmsclient: Watch requires a non-nil callback")
 	}
 	w := c.subs().registerWatcher(ns, fn)
 	// done is closed by stop() so the ctx-watcher goroutine below always exits,

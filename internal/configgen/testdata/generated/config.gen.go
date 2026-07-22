@@ -8,7 +8,7 @@ import (
 	fmt "fmt"
 	rootconfig "github.com/Suhaibinator/kms/internal/configgen/testdata/valid"
 	configstore "github.com/Suhaibinator/kms/sdk/go/configstore"
-	paramstore "github.com/Suhaibinator/kms/sdk/go/paramstore"
+	kmsclient "github.com/Suhaibinator/kms/sdk/go/kmsclient"
 	atomic "sync/atomic"
 	time "time"
 )
@@ -28,7 +28,7 @@ type Options struct {
 	AllowDefaultMismatch bool
 	OnDefaultMismatch    func(configstore.DefaultMismatchReport)
 	OnCandidateRejected  func(configstore.CandidateRejectionReport)
-	SecretTokenProvider  paramstore.SecretTokenProvider
+	SecretTokenProvider  kmsclient.SecretTokenProvider
 	ReconcileInterval    time.Duration
 	MaxConcurrentFetches int
 	InstanceID           string
@@ -59,7 +59,7 @@ type DatabaseHealthView struct{ generation *immutableGeneration }
 type PersistenceHandlerView struct{ generation *immutableGeneration }
 
 // Start synchronously validates and publishes the initial release, then watches in the background.
-func Start(ctx context.Context, client *paramstore.Client, options Options) (*Store, error) {
+func Start(ctx context.Context, client *kmsclient.Client, options Options) (*Store, error) {
 	if options.Defaults == nil {
 		return nil, errors.New("generated config store: Options.Defaults is required")
 	}
@@ -93,7 +93,7 @@ func (s *Store) Status() configstore.Status { return s.manager.Status() }
 func (s *Store) Stats() configstore.Stats   { return s.manager.Stats() }
 func (s *Store) Wait() error                { return s.manager.Wait() }
 
-func (s *Store) prepare(ctx context.Context, snapshot paramstore.ReleaseSnapshot) (configstore.PreparedCandidate, error) {
+func (s *Store) prepare(ctx context.Context, snapshot kmsclient.ReleaseSnapshot) (configstore.PreparedCandidate, error) {
 	if err := ctx.Err(); err != nil {
 		return configstore.PreparedCandidate{}, err
 	}
@@ -209,7 +209,7 @@ func (v PersistenceHandlerView) Endpoint() rootconfig.Endpoint {
 	return cloneValue0(v.generation.config.Endpoint)
 }
 func (v PersistenceHandlerView) Timeout() time.Duration { return v.generation.config.Timeout }
-func (v PersistenceHandlerView) Password() paramstore.Secret {
+func (v PersistenceHandlerView) Password() kmsclient.Secret {
 	return v.generation.config.Password.Clone()
 }
 

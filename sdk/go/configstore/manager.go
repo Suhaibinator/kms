@@ -7,12 +7,12 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/Suhaibinator/kms/sdk/go/paramstore"
+	"github.com/Suhaibinator/kms/sdk/go/kmsclient"
 )
 
 // Manager owns managed release policy and the background lower-level loader.
 type Manager struct {
-	loader  *paramstore.ReleaseLoader
+	loader  *kmsclient.ReleaseLoader
 	options Options
 	prepare PrepareFunc
 
@@ -38,7 +38,7 @@ type Manager struct {
 // published. No Manager is returned before generated Current is usable.
 func Start(
 	ctx context.Context,
-	client *paramstore.Client,
+	client *kmsclient.Client,
 	options Options,
 	prepare PrepareFunc,
 ) (*Manager, error) {
@@ -46,7 +46,7 @@ func Start(
 		return nil, errors.New("configstore: Start requires a context")
 	}
 	if client == nil {
-		return nil, errors.New("configstore: Start requires a paramstore client")
+		return nil, errors.New("configstore: Start requires a kmsclient client")
 	}
 	if prepare == nil {
 		return nil, errors.New("configstore: Start requires a prepare function")
@@ -70,11 +70,11 @@ func Start(
 		done:    make(chan struct{}),
 	}
 	validateManifest := manifestValidator(options.Contract)
-	loader, err := paramstore.NewReleaseLoader(client, paramstore.ReleaseLoaderConfig{
+	loader, err := kmsclient.NewReleaseLoader(client, kmsclient.ReleaseLoaderConfig{
 		Name:                options.Release,
 		ReconcileInterval:   options.ReconcileInterval,
 		SecretTokenProvider: options.SecretTokenProvider,
-		ValidateManifest: func(ctx context.Context, manifest paramstore.ReleaseManifest) error {
+		ValidateManifest: func(ctx context.Context, manifest kmsclient.ReleaseManifest) error {
 			identity := releaseIdentityFromManifest(manifest)
 			manager.mu.Lock()
 			manager.observed = identity
@@ -111,7 +111,7 @@ func Start(
 		// during resolution before prepareWithIdentity gets a chance to clear the
 		// side channel. Return the typed report only when the loader's terminal
 		// candidate was itself rejected for default drift.
-		if startupErr != nil && manager.loader.Status().LastFailureCategory == paramstore.ReleaseRejectDefaultMismatch {
+		if startupErr != nil && manager.loader.Status().LastFailureCategory == kmsclient.ReleaseRejectDefaultMismatch {
 			return nil, startupErr
 		}
 		if waitErr == nil {
@@ -138,16 +138,16 @@ func isContextError(err error) bool {
 
 func (m *Manager) prepareSnapshot(
 	ctx context.Context,
-	snapshot paramstore.ReleaseSnapshot,
-) (paramstore.PreparedRelease, error) {
+	snapshot kmsclient.ReleaseSnapshot,
+) (kmsclient.PreparedRelease, error) {
 	return m.prepareWithIdentity(ctx, snapshot, ReleaseIdentityFromSnapshot(snapshot))
 }
 
 func (m *Manager) prepareWithIdentity(
 	ctx context.Context,
-	snapshot paramstore.ReleaseSnapshot,
+	snapshot kmsclient.ReleaseSnapshot,
 	identity ReleaseIdentity,
-) (paramstore.PreparedRelease, error) {
+) (kmsclient.PreparedRelease, error) {
 	m.mu.Lock()
 	m.observed = identity
 	startup := !m.ready

@@ -1,4 +1,4 @@
-package paramstore
+package kmsclient
 
 import (
 	"context"
@@ -32,14 +32,14 @@ var (
 func (c *Client) Resolve(ctx context.Context, cfg any) error {
 	rv := reflect.ValueOf(cfg)
 	if rv.Kind() != reflect.Pointer {
-		return fmt.Errorf("paramstore: Resolve requires a non-nil pointer to a struct, got %T", cfg)
+		return fmt.Errorf("kmsclient: Resolve requires a non-nil pointer to a struct, got %T", cfg)
 	}
 	if rv.IsNil() {
-		return errors.New("paramstore: Resolve called with a nil pointer")
+		return errors.New("kmsclient: Resolve called with a nil pointer")
 	}
 	elem := rv.Elem()
 	if elem.Kind() != reflect.Struct {
-		return fmt.Errorf("paramstore: Resolve requires a pointer to a struct, got pointer to %s", elem.Kind())
+		return fmt.Errorf("kmsclient: Resolve requires a pointer to a struct, got pointer to %s", elem.Kind())
 	}
 
 	var targets []initializer

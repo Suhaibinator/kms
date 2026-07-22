@@ -1,4 +1,4 @@
-package paramstore
+package kmsclient
 
 import (
 	"context"
@@ -73,7 +73,7 @@ func (v *SecretValue) InitContext(ctx context.Context, client *Client) error {
 			st.value = ev
 			st.fromEnv = true
 			st.initialized = true
-			client.logf("paramstore: secret %q resolved from env %s (store fetch skipped)", v.Key, v.EnvVar)
+			client.logf("kmsclient: secret %q resolved from env %s (store fetch skipped)", v.Key, v.EnvVar)
 			return nil
 		}
 	}
@@ -89,12 +89,12 @@ func (v *SecretValue) InitContext(ctx context.Context, client *Client) error {
 		// value absent (ErrNotFound), but never mask a connectivity/auth error
 		// with it unless the caller opted into FallbackToDefaultsOnError.
 		if v.Default != "" && client.defaultAllowedForErr(err) {
-			client.logf("paramstore: secret %q fetch failed (%v); using Default", v.Key, err)
+			client.logf("kmsclient: secret %q fetch failed (%v); using Default", v.Key, err)
 			st.value = v.Default
 			st.initialized = true
 			return nil
 		}
-		return fmt.Errorf("paramstore: resolve secret %q: %w", v.Key, err)
+		return fmt.Errorf("kmsclient: resolve secret %q: %w", v.Key, err)
 	}
 
 	if v.Default != "" {
@@ -102,7 +102,7 @@ func (v *SecretValue) InitContext(ctx context.Context, client *Client) error {
 		st.initialized = true
 		return nil
 	}
-	return fmt.Errorf("paramstore: secret has no Key, EnvVar, or Default configured")
+	return fmt.Errorf("kmsclient: secret has no Key, EnvVar, or Default configured")
 }
 
 // Value returns the resolved plaintext. It panics if the value has not been
@@ -111,12 +111,12 @@ func (v *SecretValue) InitContext(ctx context.Context, client *Client) error {
 func (v *SecretValue) Value() string {
 	st := v.state
 	if st == nil {
-		panic(fmt.Sprintf("paramstore: SecretValue(%q).Value() called before Init", v.Key))
+		panic(fmt.Sprintf("kmsclient: SecretValue(%q).Value() called before Init", v.Key))
 	}
 	st.mu.RLock()
 	defer st.mu.RUnlock()
 	if !st.initialized {
-		panic(fmt.Sprintf("paramstore: SecretValue(%q).Value() called before Init", v.Key))
+		panic(fmt.Sprintf("kmsclient: SecretValue(%q).Value() called before Init", v.Key))
 	}
 	return st.value
 }
@@ -227,7 +227,7 @@ func (p *ParameterValue) InitContext(ctx context.Context, client *Client) error 
 			st.fromEnv = true
 			st.initialized = true
 			if !p.Static {
-				client.logf("paramstore: parameter %q pinned to env %s; hot reload disabled", p.Key, p.EnvVar)
+				client.logf("kmsclient: parameter %q pinned to env %s; hot reload disabled", p.Key, p.EnvVar)
 			}
 			return nil
 		}
@@ -267,15 +267,15 @@ func (p *ParameterValue) resolveFromStore(ctx context.Context, client *Client, r
 		// See SecretValue.InitContext: Default covers an absent value, not an
 		// unreachable store, unless FallbackToDefaultsOnError is set.
 		if p.Default != "" && client.defaultAllowedForErr(err) {
-			client.logf("paramstore: parameter %q fetch failed (%v); using Default", p.Key, err)
+			client.logf("kmsclient: parameter %q fetch failed (%v); using Default", p.Key, err)
 			return p.Default, nil
 		}
-		return "", fmt.Errorf("paramstore: resolve parameter %q: %w", p.Key, err)
+		return "", fmt.Errorf("kmsclient: resolve parameter %q: %w", p.Key, err)
 	}
 	if p.Default != "" {
 		return p.Default, nil
 	}
-	return "", errors.New("paramstore: parameter has no Key, EnvVar, or Default configured")
+	return "", errors.New("kmsclient: parameter has no Key, EnvVar, or Default configured")
 }
 
 // applyUpdate is invoked by the subscription manager when a new value arrives

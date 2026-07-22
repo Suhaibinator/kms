@@ -1,4 +1,4 @@
-package paramstore
+package kmsclient
 
 import (
 	"crypto/tls"
@@ -49,11 +49,11 @@ func tlsConfig(certFile, keyFile, caFile string) (*tls.Config, error) {
 	if caFile != "" {
 		pem, err := os.ReadFile(caFile)
 		if err != nil {
-			return nil, fmt.Errorf("paramstore: read CA file: %w", err)
+			return nil, fmt.Errorf("kmsclient: read CA file: %w", err)
 		}
 		pool := x509.NewCertPool()
 		if !pool.AppendCertsFromPEM(pem) {
-			return nil, fmt.Errorf("paramstore: no certificates found in %s", caFile)
+			return nil, fmt.Errorf("kmsclient: no certificates found in %s", caFile)
 		}
 		cfg.RootCAs = pool
 	}
@@ -61,7 +61,7 @@ func tlsConfig(certFile, keyFile, caFile string) (*tls.Config, error) {
 	if certFile != "" || keyFile != "" {
 		cert, err := tls.LoadX509KeyPair(certFile, keyFile)
 		if err != nil {
-			return nil, fmt.Errorf("paramstore: load client key pair: %w", err)
+			return nil, fmt.Errorf("kmsclient: load client key pair: %w", err)
 		}
 		cfg.Certificates = []tls.Certificate{cert}
 	}

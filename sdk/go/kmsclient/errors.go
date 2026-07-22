@@ -1,4 +1,4 @@
-package paramstore
+package kmsclient
 
 import (
 	"errors"
@@ -14,31 +14,31 @@ import (
 var (
 	// ErrNotFound is returned when a parameter or secret (or the requested
 	// version/label) does not exist.
-	ErrNotFound = errors.New("paramstore: not found")
+	ErrNotFound = errors.New("kmsclient: not found")
 
 	// ErrPermissionDenied is returned when the caller is authenticated but not
 	// authorized for the requested path or operation.
-	ErrPermissionDenied = errors.New("paramstore: permission denied")
+	ErrPermissionDenied = errors.New("kmsclient: permission denied")
 
 	// ErrUnauthenticated is returned when the client identity token is missing,
 	// invalid, or expired.
-	ErrUnauthenticated = errors.New("paramstore: unauthenticated")
+	ErrUnauthenticated = errors.New("kmsclient: unauthenticated")
 
 	// ErrFailedPrecondition is returned when the request is well-formed but the
 	// server state does not allow it (e.g. mode mismatch on a client-bound
 	// secret).
-	ErrFailedPrecondition = errors.New("paramstore: failed precondition")
+	ErrFailedPrecondition = errors.New("kmsclient: failed precondition")
 
 	// ErrNotInitialized is reserved for compatibility. Declarative values do not
 	// currently return it: SecretValue.Value panics with a descriptive message,
 	// while ParameterValue.Get returns the empty string before Init/Resolve.
-	ErrNotInitialized = errors.New("paramstore: value not initialized")
+	ErrNotInitialized = errors.New("kmsclient: value not initialized")
 
 	// ErrNoNamespace is returned when a relative key must be resolved but no
 	// namespace is available: Config.Namespace is empty and the identity is
 	// unbound (WhoAmI reports no namespace). Set Config.Namespace, bind the
 	// identity to a namespace, or use an absolute "/env/app/key" display path.
-	ErrNoNamespace = errors.New("paramstore: no namespace")
+	ErrNoNamespace = errors.New("kmsclient: no namespace")
 )
 
 // mapError translates a gRPC status error into one of the exported sentinel

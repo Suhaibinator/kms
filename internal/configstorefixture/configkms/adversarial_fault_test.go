@@ -13,8 +13,8 @@ import (
 
 	fixtureconfig "github.com/Suhaibinator/kms/internal/configstorefixture/config"
 	"github.com/Suhaibinator/kms/sdk/go/configstore"
-	"github.com/Suhaibinator/kms/sdk/go/paramstore"
-	"github.com/Suhaibinator/kms/sdk/go/paramstore/paramstoretest"
+	"github.com/Suhaibinator/kms/sdk/go/kmsclient"
+	"github.com/Suhaibinator/kms/sdk/go/kmsclient/kmsclienttest"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -23,14 +23,14 @@ type faultStartOptions struct {
 	reconcileInterval   time.Duration
 	onDefaultMismatch   func(configstore.DefaultMismatchReport)
 	onCandidateRejected func(configstore.CandidateRejectionReport)
-	secretTokenProvider paramstore.SecretTokenProvider
+	secretTokenProvider kmsclient.SecretTokenProvider
 }
 
 // startFaultFixture enters through the generated public API so callback wiring,
 // preparation, and immutable publication all remain in the exercised path.
 func startFaultFixture(t *testing.T, initial releaseData, options faultStartOptions) *runningFixture {
 	t.Helper()
-	server, err := paramstoretest.New()
+	server, err := kmsclienttest.New()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -68,7 +68,7 @@ func startFaultFixture(t *testing.T, initial releaseData, options faultStartOpti
 		t.Fatal(err)
 	}
 	fixture := &runningFixture{server: server, client: client, store: store, sub: sub, cancel: cancel}
-	waitAcknowledgement(t, sub, initial.releaseVersion, paramstore.ReleaseStateApplied)
+	waitAcknowledgement(t, sub, initial.releaseVersion, kmsclient.ReleaseStateApplied)
 	t.Cleanup(func() {
 		cancel()
 		if err := store.Wait(); err != nil {
@@ -111,8 +111,8 @@ func TestFaultReconciliationRetriesTransientResolutionAndDeduplicatesManagedReje
 	if _, err := fixture.server.ActivateConfigurationRelease(releaseSpec(transient), transient.activationRevision); err != nil {
 		t.Fatal(err)
 	}
-	ack := waitAcknowledgement(t, fixture.sub, 2, paramstore.ReleaseStateRejected)
-	if ack.GetRejectionCategory() != paramstore.ReleaseRejectResolutionFailed || ack.GetDiagnostic() != "" {
+	ack := waitAcknowledgement(t, fixture.sub, 2, kmsclient.ReleaseStateRejected)
+	if ack.GetRejectionCategory() != kmsclient.ReleaseRejectResolutionFailed || ack.GetDiagnostic() != "" {
 		t.Fatalf("transient rejection ack = category %q diagnostic %q", ack.GetRejectionCategory(), ack.GetDiagnostic())
 	}
 	if got := fixture.store.Current().Release().Version(); got != 1 {
@@ -130,7 +130,7 @@ func TestFaultReconciliationRetriesTransientResolutionAndDeduplicatesManagedReje
 	// No new activation is sent. A later reconciliation of the same active
 	// identity must retry it after the transient transport failure clears.
 	fixture.server.SetParameterError(fixtureNamespace, databasePath, nil)
-	waitAcknowledgement(t, fixture.sub, 2, paramstore.ReleaseStateApplied)
+	waitAcknowledgement(t, fixture.sub, 2, kmsclient.ReleaseStateApplied)
 	if got := waitAppliedVersion(t, fixture.store, 2).Release().ActivationRevision(); got != 102 {
 		t.Fatalf("reconciled release activation revision = %d, want 102", got)
 	}
@@ -138,7 +138,7 @@ func TestFaultReconciliationRetriesTransientResolutionAndDeduplicatesManagedReje
 	invalid := matchingRelease(3, 103)
 	invalid.databaseDocument = databaseDocument("db.internal", "0s", 20)
 	activate(t, fixture, invalid)
-	ack = waitAcknowledgement(t, fixture.sub, 3, paramstore.ReleaseStateRejected)
+	ack = waitAcknowledgement(t, fixture.sub, 3, kmsclient.ReleaseStateRejected)
 	if ack.GetRejectionCategory() != string(configstore.RejectConfigValidationFailed) || ack.GetDiagnostic() != "" {
 		t.Fatalf("validation rejection ack = category %q diagnostic %q", ack.GetRejectionCategory(), ack.GetDiagnostic())
 	}
@@ -163,7 +163,7 @@ func TestFaultReconciliationRetriesTransientResolutionAndDeduplicatesManagedReje
 
 	recovered := matchingRelease(4, 104)
 	activate(t, fixture, recovered)
-	waitAcknowledgement(t, fixture.sub, 4, paramstore.ReleaseStateApplied)
+	waitAcknowledgement(t, fixture.sub, 4, kmsclient.ReleaseStateApplied)
 	waitAppliedVersion(t, fixture.store, 4)
 }
 
@@ -195,7 +195,7 @@ func TestFaultPrefetchContractFailureReportsIdentityBeforeAnyResourceRead(t *tes
 	if _, err := fixture.server.ActivateConfigurationRelease(spec, bad.activationRevision); err != nil {
 		t.Fatal(err)
 	}
-	ack := waitAcknowledgement(t, fixture.sub, 2, paramstore.ReleaseStateRejected)
+	ack := waitAcknowledgement(t, fixture.sub, 2, kmsclient.ReleaseStateRejected)
 	if ack.GetRejectionCategory() != string(configstore.RejectConfigContractMismatch) || ack.GetDiagnostic() != "" {
 		t.Fatalf("contract rejection ack = category %q diagnostic %q", ack.GetRejectionCategory(), ack.GetDiagnostic())
 	}
@@ -271,7 +271,7 @@ func TestFaultGeneratedDecodeRejectionReportsOnlyCanonicalPathsAndNoInputData(t 
 			candidate := matchingRelease(version, 101+version)
 			test.mutate(&candidate, test.canary)
 			activate(t, fixture, candidate)
-			ack := waitAcknowledgement(t, fixture.sub, version, paramstore.ReleaseStateRejected)
+			ack := waitAcknowledgement(t, fixture.sub, version, kmsclient.ReleaseStateRejected)
 			if ack.GetRejectionCategory() != string(configstore.RejectConfigDecodeFailed) || ack.GetDiagnostic() != "" {
 				t.Fatalf("decode rejection ack = category %q diagnostic %q", ack.GetRejectionCategory(), ack.GetDiagnostic())
 			}
@@ -376,7 +376,7 @@ func TestFaultPanickingRejectionCallbackCannotPublishMixedRestartCandidate(t *te
 	mixed.passwordVersion = 2
 	mixed.passwordValue = []byte(secretCanary)
 	activate(t, fixture, mixed)
-	ack := waitAcknowledgement(t, fixture.sub, 2, paramstore.ReleaseStateRejected)
+	ack := waitAcknowledgement(t, fixture.sub, 2, kmsclient.ReleaseStateRejected)
 	if ack.GetRejectionCategory() != string(configstore.RejectRestartRequired) || ack.GetDiagnostic() != "" {
 		t.Fatalf("mixed rejection ack = category %q diagnostic %q", ack.GetRejectionCategory(), ack.GetDiagnostic())
 	}
@@ -430,7 +430,7 @@ func TestFaultPanickingRejectionCallbackCannotPublishMixedRestartCandidate(t *te
 	// candidate and the loader's ability to publish a later valid generation.
 	recovered := matchingRelease(3, 103)
 	activate(t, fixture, recovered)
-	waitAcknowledgement(t, fixture.sub, 3, paramstore.ReleaseStateApplied)
+	waitAcknowledgement(t, fixture.sub, 3, kmsclient.ReleaseStateApplied)
 	waitAppliedVersion(t, fixture.store, 3)
 }
 
@@ -467,8 +467,8 @@ func TestFaultSameRevisionSameDigestAndStaleEventsRespectAuthoritativeFence(t *t
 		t.Fatal(err)
 	}
 	fixture.sub.PushActivation(sameDigestRelease, 101)
-	ack := waitAcknowledgement(t, fixture.sub, 2, paramstore.ReleaseStateRejected)
-	if ack.GetRejectionCategory() != paramstore.ReleaseRejectSuperseded || ack.GetDiagnostic() != "" {
+	ack := waitAcknowledgement(t, fixture.sub, 2, kmsclient.ReleaseStateRejected)
+	if ack.GetRejectionCategory() != kmsclient.ReleaseRejectSuperseded || ack.GetDiagnostic() != "" {
 		t.Fatalf("same-revision fence ack = category %q diagnostic %q", ack.GetRejectionCategory(), ack.GetDiagnostic())
 	}
 	if got := fixture.store.Current().Release().Version(); got != 1 {
@@ -487,7 +487,7 @@ func TestFaultSameRevisionSameDigestAndStaleEventsRespectAuthoritativeFence(t *t
 
 	next := matchingRelease(3, 102)
 	activate(t, fixture, next)
-	waitAcknowledgement(t, fixture.sub, 3, paramstore.ReleaseStateApplied)
+	waitAcknowledgement(t, fixture.sub, 3, kmsclient.ReleaseStateApplied)
 	waitAppliedVersion(t, fixture.store, 3)
 	// The applied event is the second FIFO barrier. Only it may add a candidate
 	// and perform the two parameter reads after the fenced baseline.

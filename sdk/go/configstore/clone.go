@@ -3,10 +3,10 @@ package configstore
 import (
 	"reflect"
 
-	"github.com/Suhaibinator/kms/sdk/go/paramstore"
+	"github.com/Suhaibinator/kms/sdk/go/kmsclient"
 )
 
-var secretType = reflect.TypeFor[paramstore.Secret]()
+var secretType = reflect.TypeFor[kmsclient.Secret]()
 
 type cloneVisit struct {
 	typ  reflect.Type
@@ -17,7 +17,7 @@ type cloneVisit struct {
 }
 
 // Clone makes a recursive candidate-preparation copy of supported config
-// values. In particular, paramstore.Secret is copied through Secret.Clone so
+// values. In particular, kmsclient.Secret is copied through Secret.Clone so
 // its plaintext backing buffer is never shared. Clone is intended for defaults,
 // candidate construction, and defensive reports—not generated hot-path
 // getters.
@@ -35,7 +35,7 @@ func cloneValue(value reflect.Value, seen map[cloneVisit]reflect.Value) reflect.
 		return reflect.Value{}
 	}
 	if value.Type() == secretType && value.CanInterface() {
-		secret := value.Interface().(paramstore.Secret).Clone()
+		secret := value.Interface().(kmsclient.Secret).Clone()
 		return reflect.ValueOf(secret)
 	}
 

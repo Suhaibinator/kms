@@ -4,7 +4,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/Suhaibinator/kms/sdk/go/paramstore"
+	"github.com/Suhaibinator/kms/sdk/go/kmsclient"
 )
 
 func TestValidateContract(t *testing.T) {
@@ -51,7 +51,7 @@ func TestManifestValidationErrorsAreClassifiedAndRedacted(t *testing.T) {
 	validator := manifestValidator([]ContractEntry{{
 		Alias: "database", Kind: ContractKindParameter, ContentType: "json",
 	}})
-	err := validator(t.Context(), paramstore.ReleaseManifest{})
+	err := validator(t.Context(), kmsclient.ReleaseManifest{})
 	if err == nil {
 		t.Fatal("manifestValidator() unexpectedly succeeded")
 	}

@@ -1,12 +1,12 @@
-package paramstoretest_test
+package kmsclienttest_test
 
 import (
 	"context"
 	"testing"
 	"time"
 
-	"github.com/Suhaibinator/kms/sdk/go/paramstore"
-	"github.com/Suhaibinator/kms/sdk/go/paramstore/paramstoretest"
+	"github.com/Suhaibinator/kms/sdk/go/kmsclient"
+	"github.com/Suhaibinator/kms/sdk/go/kmsclient/kmsclienttest"
 )
 
 type preparedRelease struct {
@@ -17,7 +17,7 @@ func (p *preparedRelease) Commit() { close(p.committed) }
 func (*preparedRelease) Abort()    {}
 
 func TestConfigurationReleaseScripting(t *testing.T) {
-	server, err := paramstoretest.New()
+	server, err := kmsclienttest.New()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -25,11 +25,11 @@ func TestConfigurationReleaseScripting(t *testing.T) {
 
 	server.SetParameterVersion("prod/app", "groups/runtime", `{"enabled":true}`, "json", 7)
 	server.SetSecretVersion("prod/app", "password", []byte("test-secret"), "text/plain", 3)
-	_, err = server.SetActiveRelease(paramstoretest.ReleaseSpec{
+	_, err = server.SetActiveRelease(kmsclienttest.ReleaseSpec{
 		Namespace: "prod/app",
 		Name:      "runtime",
 		Version:   9,
-		Entries: []paramstoretest.ReleaseEntrySpec{
+		Entries: []kmsclienttest.ReleaseEntrySpec{
 			{Alias: "settings", Kind: "parameter", Path: "groups/runtime", Version: 7},
 			{Alias: "password", Kind: "secret", Path: "password", Version: 3},
 		},
@@ -38,16 +38,16 @@ func TestConfigurationReleaseScripting(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	client, err := paramstore.NewClient(paramstore.Config{
+	client, err := kmsclient.NewClient(kmsclient.Config{
 		Namespace:   "prod/app",
-		ClientName:  "paramstoretest-release",
+		ClientName:  "kmsclienttest-release",
 		DialOptions: server.DialOptions(),
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer client.Close()
-	loader, err := paramstore.NewReleaseLoader(client, paramstore.ReleaseLoaderConfig{Name: "runtime"})
+	defer func() { _ = client.Close() }()
+	loader, err := kmsclient.NewReleaseLoader(client, kmsclient.ReleaseLoaderConfig{Name: "runtime"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -57,7 +57,7 @@ func TestConfigurationReleaseScripting(t *testing.T) {
 	committed := make(chan struct{})
 	runErr := make(chan error, 1)
 	go func() {
-		runErr <- loader.Run(ctx, func(_ context.Context, snapshot paramstore.ReleaseSnapshot) (paramstore.PreparedRelease, error) {
+		runErr <- loader.Run(ctx, func(_ context.Context, snapshot kmsclient.ReleaseSnapshot) (kmsclient.PreparedRelease, error) {
 			parameter, ok := snapshot.Parameter("settings")
 			if !ok || parameter.Value() != `{"enabled":true}` || parameter.Entry().Version != 7 {
 				t.Errorf("unexpected parameter: %#v, present=%t", parameter, ok)
@@ -89,7 +89,7 @@ func TestConfigurationReleaseScripting(t *testing.T) {
 		if waitErr != nil {
 			t.Fatal(waitErr)
 		}
-		if ack.GetState() == paramstore.ReleaseStateApplied {
+		if ack.GetState() == kmsclient.ReleaseStateApplied {
 			foundApplied = true
 			break
 		}

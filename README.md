@@ -86,7 +86,7 @@ Consuming service
   |
   | gRPC over TLS/mTLS
   v
-sdk/go/paramstore (Go SDK)
+sdk/go/kmsclient (Go SDK)
   |
   v
 parameter-store — single binary (cmd/parameter-store)
@@ -251,7 +251,7 @@ the client is bound to a namespace and reads by **relative key**. This local
 quickstart uses the token because the server above is plaintext:
 
 ```go
-client, err := paramstore.NewClient(paramstore.Config{
+client, err := kmsclient.NewClient(kmsclient.Config{
     Endpoint:  "localhost:8443",
     Namespace: "prod/gradethis",
     Token:     os.Getenv("GRADETHIS_TOKEN"),
@@ -271,7 +271,7 @@ fmt.Println(secret.StringValue())
 ```
 
 In production, enable server TLS and prefer the issued client certificate:
-set `TLS` to `paramstore.MTLSFromFiles("certs/gradethis-be.crt",
+set `TLS` to `kmsclient.MTLSFromFiles("certs/gradethis-be.crt",
 "certs/gradethis-be.key", "server-ca.crt")` and omit `Token`. Here
 `server-ca.crt` must trust the operator-provided **server** certificate; it is
 not the built-in client-issuing CA returned by `admin ca show`.
@@ -419,7 +419,7 @@ client-side routing resolves deep links on refresh.
 
 ## Client SDKs
 
-- **Go, lower level** (`sdk/go/paramstore`) — declarative values plus the
+- **Go, lower level** (`sdk/go/kmsclient`) — declarative values plus the
   atomic `ReleaseLoader`; see [`docs/sdk-go.md`](docs/sdk-go.md).
 - **Go, generated managed configuration** (`sdk/go/configstore` and
   `cmd/kms-config-gen`) — strict typed group decoding, source-owned defaults,

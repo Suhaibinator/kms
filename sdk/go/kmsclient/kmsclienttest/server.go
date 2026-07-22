@@ -1,11 +1,11 @@
-// Package paramstoretest provides an in-process, scriptable fake of the KMS
+// Package kmsclienttest provides an in-process, scriptable fake of the KMS
 // gRPC services, backed by bufconn. It lets SDK consumers (and the SDK's own
 // tests) exercise Client behaviour end to end without a real server: script
 // parameter/secret values by namespace + relative key (or by display path),
 // inject errors, set the WhoAmI identity, drive the Subscribe stream (snapshots,
 // changes, heartbeats), script exact-version configuration releases and their
 // lifecycle acknowledgements, and forcibly drop streams to test reconnect.
-package paramstoretest
+package kmsclienttest
 
 import (
 	"context"
@@ -233,7 +233,7 @@ func (s *Server) ActivateConfigurationRelease(spec ReleaseSpec, activationRevisi
 
 func (s *Server) buildRelease(spec ReleaseSpec) (*kmsv1.ConfigurationRelease, error) {
 	if spec.Namespace == "" || spec.Name == "" || spec.Version == 0 || len(spec.Entries) == 0 {
-		return nil, errors.New("paramstoretest: release namespace, name, version, and entries are required")
+		return nil, errors.New("kmsclienttest: release namespace, name, version, and entries are required")
 	}
 	release := &kmsv1.ConfigurationRelease{
 		Namespace:     nsProto(spec.Namespace),
@@ -248,10 +248,10 @@ func (s *Server) buildRelease(spec ReleaseSpec) (*kmsv1.ConfigurationRelease, er
 	defer s.mu.Unlock()
 	for _, item := range spec.Entries {
 		if item.Alias == "" || item.Path == "" || item.Version == 0 {
-			return nil, errors.New("paramstoretest: release entry alias, path, and version are required")
+			return nil, errors.New("kmsclienttest: release entry alias, path, and version are required")
 		}
 		if _, ok := seen[item.Alias]; ok {
-			return nil, fmt.Errorf("paramstoretest: duplicate release alias %q", item.Alias)
+			return nil, fmt.Errorf("kmsclienttest: duplicate release alias %q", item.Alias)
 		}
 		seen[item.Alias] = struct{}{}
 		namespace, key := spec.Namespace, item.Path
@@ -274,7 +274,7 @@ func (s *Server) buildRelease(spec ReleaseSpec) (*kmsv1.ConfigurationRelease, er
 		case "parameter":
 			parameter := s.paramVersions[display][item.Version]
 			if parameter == nil {
-				return nil, fmt.Errorf("paramstoretest: parameter %s version %d is unavailable", display, item.Version)
+				return nil, fmt.Errorf("kmsclienttest: parameter %s version %d is unavailable", display, item.Version)
 			}
 			if entry.ContentType == "" {
 				entry.ContentType = parameter.GetContentType()
@@ -284,7 +284,7 @@ func (s *Server) buildRelease(spec ReleaseSpec) (*kmsv1.ConfigurationRelease, er
 		case "secret":
 			secret := s.secretVersions[display][item.Version]
 			if secret == nil {
-				return nil, fmt.Errorf("paramstoretest: secret %s version %d is unavailable", display, item.Version)
+				return nil, fmt.Errorf("kmsclienttest: secret %s version %d is unavailable", display, item.Version)
 			}
 			if entry.ContentType == "" {
 				entry.ContentType = secret.GetContentType()
@@ -298,7 +298,7 @@ func (s *Server) buildRelease(spec ReleaseSpec) (*kmsv1.ConfigurationRelease, er
 	var err error
 	release.Digest, err = deterministicReleaseDigest(release)
 	if err != nil {
-		return nil, fmt.Errorf("paramstoretest: calculate release digest: %w", err)
+		return nil, fmt.Errorf("kmsclienttest: calculate release digest: %w", err)
 	}
 	return release, nil
 }

@@ -7,22 +7,22 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Suhaibinator/kms/sdk/go/paramstore"
-	"github.com/Suhaibinator/kms/sdk/go/paramstore/paramstoretest"
+	"github.com/Suhaibinator/kms/sdk/go/kmsclient"
+	"github.com/Suhaibinator/kms/sdk/go/kmsclient/kmsclienttest"
 )
 
-func startTestClient(t *testing.T) (*paramstore.Client, *paramstoretest.Server) {
+func startTestClient(t *testing.T) (*kmsclient.Client, *kmsclienttest.Server) {
 	t.Helper()
-	server, err := paramstoretest.New()
+	server, err := kmsclienttest.New()
 	if err != nil {
 		t.Fatal(err)
 	}
 	server.SetParameterVersion("prod/app", "groups/runtime", `{"enabled":true}`, "json", 1)
-	_, err = server.SetActiveRelease(paramstoretest.ReleaseSpec{
+	_, err = server.SetActiveRelease(kmsclienttest.ReleaseSpec{
 		Namespace: "prod/app",
 		Name:      "runtime",
 		Version:   1,
-		Entries: []paramstoretest.ReleaseEntrySpec{
+		Entries: []kmsclienttest.ReleaseEntrySpec{
 			{Alias: "settings", Kind: "parameter", Path: "groups/runtime", Version: 1},
 		},
 	}, 1)
@@ -30,7 +30,7 @@ func startTestClient(t *testing.T) (*paramstore.Client, *paramstoretest.Server) 
 		server.Close()
 		t.Fatal(err)
 	}
-	client, err := paramstore.NewClient(paramstore.Config{
+	client, err := kmsclient.NewClient(kmsclient.Config{
 		Namespace:   "prod/app",
 		ClientName:  "configstore-test",
 		DialOptions: server.DialOptions(),
@@ -64,7 +64,7 @@ func TestStartWaitsForInitialPublicationAndWaitNormalizesCancellation(t *testing
 
 	manager, err := Start(ctx, client, startTestOptions(func(DefaultMismatchReport) {
 		t.Error("unexpected mismatch callback")
-	}), func(context.Context, paramstore.ReleaseSnapshot) (PreparedCandidate, error) {
+	}), func(context.Context, kmsclient.ReleaseSnapshot) (PreparedCandidate, error) {
 		return PreparedCandidate{Publish: func() { published.Store(true) }}, nil
 	})
 	if err != nil {
@@ -91,7 +91,7 @@ func TestStartReturnsTypedDefaultMismatchAfterLoaderRedactionBoundary(t *testing
 		if report.Phase() != MismatchStartup || report.Severity() != MismatchFatal {
 			t.Errorf("report = %s/%s", report.Phase(), report.Severity())
 		}
-	}), func(context.Context, paramstore.ReleaseSnapshot) (PreparedCandidate, error) {
+	}), func(context.Context, kmsclient.ReleaseSnapshot) (PreparedCandidate, error) {
 		return PreparedCandidate{
 			Publish: func() { t.Error("mismatched startup candidate published") },
 			Abort:   func() { aborted.Add(1) },

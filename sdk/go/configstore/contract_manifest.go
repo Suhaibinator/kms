@@ -5,7 +5,7 @@ import (
 	"errors"
 	"strings"
 
-	"github.com/Suhaibinator/kms/sdk/go/paramstore"
+	"github.com/Suhaibinator/kms/sdk/go/kmsclient"
 )
 
 func validateContract(contract []ContractEntry) error {
@@ -35,14 +35,14 @@ func validateContract(contract []ContractEntry) error {
 }
 
 // manifestValidator is intentionally isolated in this file: it is the only
-// configstore code coupled to paramstore's optional pre-resolution manifest
+// configstore code coupled to kmsclient's optional pre-resolution manifest
 // validation hook.
-func manifestValidator(contract []ContractEntry) paramstore.ValidateReleaseManifestFunc {
+func manifestValidator(contract []ContractEntry) kmsclient.ValidateReleaseManifestFunc {
 	want := make(map[string]ContractEntry, len(contract))
 	for _, entry := range contract {
 		want[entry.Alias] = entry
 	}
-	return func(ctx context.Context, manifest paramstore.ReleaseManifest) error {
+	return func(ctx context.Context, manifest kmsclient.ReleaseManifest) error {
 		if err := ctx.Err(); err != nil {
 			return err
 		}

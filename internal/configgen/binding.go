@@ -32,7 +32,7 @@ func renderBinding(model *ir, packageName string, contract renderedContract) ([]
 	}
 	for _, imported := range []struct{ path, alias string }{
 		{"context", "context"}, {"errors", "errors"}, {"fmt", "fmt"}, {"sync/atomic", "atomic"}, {"time", "time"},
-		{configstorePath, "configstore"}, {paramstorePath, "paramstore"},
+		{configstorePath, "configstore"}, {kmsclientPath, "kmsclient"},
 	} {
 		r.addImport(imported.path, imported.alias)
 	}
@@ -148,7 +148,7 @@ func (r *bindingRenderer) renderTypes() {
 	r.line("\tAllowDefaultMismatch bool")
 	r.line("\tOnDefaultMismatch func(configstore.DefaultMismatchReport)")
 	r.line("\tOnCandidateRejected func(configstore.CandidateRejectionReport)")
-	r.line("\tSecretTokenProvider paramstore.SecretTokenProvider")
+	r.line("\tSecretTokenProvider kmsclient.SecretTokenProvider")
 	r.line("\tReconcileInterval time.Duration")
 	r.line("\tMaxConcurrentFetches int")
 	r.line("\tInstanceID string")
@@ -178,7 +178,7 @@ func (r *bindingRenderer) renderTypes() {
 
 func (r *bindingRenderer) renderStart() {
 	r.line("// Start synchronously validates and publishes the initial release, then watches in the background.")
-	r.line("func Start(ctx context.Context, client *paramstore.Client, options Options) (*Store, error) {")
+	r.line("func Start(ctx context.Context, client *kmsclient.Client, options Options) (*Store, error) {")
 	r.line("\tif options.Defaults == nil {")
 	r.line("\t\treturn nil, errors.New(%s)", strconv.Quote("generated config store: Options.Defaults is required"))
 	r.line("\t}")
@@ -217,7 +217,7 @@ func (r *bindingRenderer) renderStart() {
 }
 
 func (r *bindingRenderer) renderPrepare() {
-	r.line("func (s *Store) prepare(ctx context.Context, snapshot paramstore.ReleaseSnapshot) (configstore.PreparedCandidate, error) {")
+	r.line("func (s *Store) prepare(ctx context.Context, snapshot kmsclient.ReleaseSnapshot) (configstore.PreparedCandidate, error) {")
 	r.line("\tif err := ctx.Err(); err != nil { return configstore.PreparedCandidate{}, err }")
 	r.line("\tcandidate := cloneRoot(s.defaults)")
 	for groupIndex, group := range r.model.Groups {
@@ -344,7 +344,7 @@ func (r *bindingRenderer) renderSnapshots() {
 	for _, view := range r.model.Views {
 		for _, field := range view.Fields {
 			if field.Secret {
-				r.line("func (v %sView) %s() paramstore.Secret { return v.generation.config.%s.Clone() }", view.Method, field.GoName, field.GoName)
+				r.line("func (v %sView) %s() kmsclient.Secret { return v.generation.config.%s.Clone() }", view.Method, field.GoName, field.GoName)
 				continue
 			}
 			if field.Type.Kind == typePointer {

@@ -8,7 +8,7 @@ import (
 	"errors"
 	"time"
 
-	"github.com/Suhaibinator/kms/sdk/go/paramstore"
+	"github.com/Suhaibinator/kms/sdk/go/kmsclient"
 )
 
 //go:generate go run ../../../cmd/kms-config-gen -package . -type Config -binding-package configkms -binding-output ../configkms/config_kms.gen.go -schema-output ../runtime.schema.json -contract-output ../runtime.contract.json
@@ -30,8 +30,8 @@ type Config struct {
 	Payload      []byte              `json:"payload" kms:"group=runtime,reload=hot" kms_views:"api_handler"`
 	Thresholds   map[string]uint64   `json:"thresholds" kms:"group=runtime,reload=hot" kms_views:"api_handler,background_jobs"`
 	Window       [2]float64          `json:"window" kms:"group=runtime,reload=hot" kms_views:"background_jobs"`
-	Password     paramstore.Secret   `json:"-" kms:"secret=database_password,reload=restart" kms_views:"persistence_handler"`
-	RuntimeToken paramstore.Secret   `json:"-" kms:"secret=runtime_token,reload=hot" kms_views:"api_handler,background_jobs"`
+	Password     kmsclient.Secret    `json:"-" kms:"secret=database_password,reload=restart" kms_views:"persistence_handler"`
+	RuntimeToken kmsclient.Secret    `json:"-" kms:"secret=runtime_token,reload=hot" kms_views:"api_handler,background_jobs"`
 	Local        map[string][]string `kms:"-"`
 }
 

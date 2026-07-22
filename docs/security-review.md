@@ -91,7 +91,7 @@ Ranked by what a maintainer should look at first, not by candidate ID.
 
 | # | Issue | Location | Severity | Evidence | Detail |
 |---|---|---|---|---|---|
-| 1 | Go SDK picks cleartext gRPC when `Config.TLS` is left unset — tokens and secret plaintext ride the wire | `sdk/go/paramstore/client.go:170` | **high** | Traced | [→](security-scan/candidate-details.md#1-go-sdk-selects-insecure-transport-by-default) |
+| 1 | Go SDK picks cleartext gRPC when `Config.TLS` is left unset — tokens and secret plaintext ride the wire | `sdk/go/kmsclient/client.go:170` | **high** | Traced | [→](security-scan/candidate-details.md#1-go-sdk-selects-insecure-transport-by-default) |
 | 2 | Python SDK does the same when `tls=None` | `sdk/python/kms_paramstore/client.py:129` | **high** | Traced | [→](security-scan/candidate-details.md#2-python-sdk-selects-insecure-transport-by-default) |
 | 3 | `ListNamespaces` never runs the per-namespace auth-method gate, so a token client sees an mTLS-only namespace | `internal/core/admin.go:128` | medium | **Demonstrated** | [→](security-scan/candidate-details.md#3-listnamespaces-skips-the-namespace-authentication-method-gate) |
 | 4 | Audit query with `app` omitted skips the method gate and returns rows from mTLS-only namespaces | `internal/core/admin.go:37` | medium | **Demonstrated** | [→](security-scan/candidate-details.md#4-partial-audit-filter-skips-the-method-gate) |
@@ -113,7 +113,7 @@ that is the entire 18 → 14 difference. Full ID mapping is in
 
 ## Start here
 
-1. **Read the two SDK constructors (rows 1–2).** `sdk/go/paramstore/client.go:167-170`
+1. **Read the two SDK constructors (rows 1–2).** `sdk/go/kmsclient/client.go:167-170`
    and `sdk/python/kms_paramstore/client.py:125-130` are a few minutes of reading
    and settle both **high** items outright: decide whether an unset TLS config
    should select cleartext, or whether cleartext should require an explicit

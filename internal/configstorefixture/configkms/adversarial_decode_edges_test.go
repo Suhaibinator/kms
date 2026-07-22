@@ -9,7 +9,7 @@ import (
 	"testing"
 
 	"github.com/Suhaibinator/kms/sdk/go/configstore"
-	"github.com/Suhaibinator/kms/sdk/go/paramstore"
+	"github.com/Suhaibinator/kms/sdk/go/kmsclient"
 )
 
 func TestAdversarialMalformedDuplicateAndMistypedDocumentGauntlet(t *testing.T) {
@@ -112,7 +112,7 @@ func TestAdversarialMalformedDuplicateAndMistypedDocumentGauntlet(t *testing.T) 
 			candidate.runtimeDocument = runtime
 			activate(t, fixture, candidate)
 			ack := waitAdversarialFinalAcknowledgement(t, fixture, version)
-			if ack.state != paramstore.ReleaseStateRejected || ack.category != string(configstore.RejectConfigDecodeFailed) || ack.diagnostic != "" {
+			if ack.state != kmsclient.ReleaseStateRejected || ack.category != string(configstore.RejectConfigDecodeFailed) || ack.diagnostic != "" {
 				t.Fatalf("decode acknowledgement = %+v", ack)
 			}
 			if got := fixture.store.Current().Release().Version(); got != 1 {

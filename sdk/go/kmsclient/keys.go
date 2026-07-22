@@ -1,4 +1,4 @@
-package paramstore
+package kmsclient
 
 import (
 	"fmt"
@@ -66,7 +66,7 @@ func refOf(display string) ref {
 func parseNamespace(s string) (namespaceRef, error) {
 	env, app, ok := strings.Cut(s, "/")
 	if !ok || env == "" || app == "" || strings.Contains(app, "/") {
-		return namespaceRef{}, fmt.Errorf("paramstore: invalid namespace %q, want \"env/app\"", s)
+		return namespaceRef{}, fmt.Errorf("kmsclient: invalid namespace %q, want \"env/app\"", s)
 	}
 	return namespaceRef{env: env, app: app}, nil
 }
@@ -77,11 +77,11 @@ func parseNamespace(s string) (namespaceRef, error) {
 // key's interior slashes as namespace structure.
 func splitDisplayPath(p string) (ref, error) {
 	if !strings.HasPrefix(p, "/") {
-		return ref{}, fmt.Errorf("paramstore: absolute key %q must start with %q", p, "/")
+		return ref{}, fmt.Errorf("kmsclient: absolute key %q must start with %q", p, "/")
 	}
 	parts := strings.SplitN(strings.TrimPrefix(p, "/"), "/", 3)
 	if len(parts) < 3 || parts[0] == "" || parts[1] == "" || parts[2] == "" {
-		return ref{}, fmt.Errorf("paramstore: absolute key %q must have the form \"/env/app/key\"", p)
+		return ref{}, fmt.Errorf("kmsclient: absolute key %q must have the form \"/env/app/key\"", p)
 	}
 	return ref{ns: namespaceRef{env: parts[0], app: parts[1]}, key: parts[2]}, nil
 }

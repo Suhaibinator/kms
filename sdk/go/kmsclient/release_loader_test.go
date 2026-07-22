@@ -1,4 +1,4 @@
-package paramstore
+package kmsclient
 
 import (
 	"context"
@@ -253,7 +253,7 @@ func (s *failRejectedAckOnceStream) Send(request *kmsv1.WatchReleaseRequest) err
 	if ack != nil && ack.GetState() == ReleaseStateRejected {
 		s.attempts <- struct{}{}
 		if s.failed.CompareAndSwap(false, true) {
-			_ = s.ConfigurationReleaseService_WatchReleaseClient.CloseSend()
+			_ = s.CloseSend()
 			return errors.New("injected rejected acknowledgement send failure")
 		}
 	}
@@ -939,7 +939,7 @@ func TestReleaseLoaderChecksBasicEntriesBeforeManifestValidator(t *testing.T) {
 		t.Error("prepare ran for a malformed release entry")
 		return nil, nil
 	})
-	if err == nil || err.Error() != "paramstore: configuration release candidate rejected (resolution_failed)" {
+	if err == nil || err.Error() != "kmsclient: configuration release candidate rejected (resolution_failed)" {
 		t.Fatalf("Run error = %v", err)
 	}
 	server.mu.Lock()
@@ -981,7 +981,7 @@ func TestReleaseLoaderClassifiedManifestFailurePreventsResolutionAndRedactsCause
 	if err == nil {
 		t.Fatal("Run unexpectedly succeeded")
 	}
-	wantText := "paramstore: configuration release candidate rejected (config_contract_mismatch)"
+	wantText := "kmsclient: configuration release candidate rejected (config_contract_mismatch)"
 	for _, rendered := range []string{err.Error(), fmt.Sprintf("%v", err), fmt.Sprintf("%+v", err), fmt.Sprintf("%#v", err)} {
 		if rendered != wantText || strings.Contains(rendered, classified.detail) {
 			t.Errorf("candidate error was not fixed/redacted: %q", rendered)
@@ -1045,7 +1045,7 @@ func TestReleaseLoaderClassifiesOnlyAllowedPreparationErrors(t *testing.T) {
 			if err == nil {
 				t.Fatal("Run unexpectedly succeeded")
 			}
-			wantText := fmt.Sprintf("paramstore: configuration release candidate rejected (%s)", tt.wantCategory)
+			wantText := fmt.Sprintf("kmsclient: configuration release candidate rejected (%s)", tt.wantCategory)
 			for _, rendered := range []string{err.Error(), fmt.Sprintf("%+v", err), fmt.Sprintf("%#v", err)} {
 				if rendered != wantText || strings.Contains(rendered, tt.cause.Error()) {
 					t.Errorf("candidate error was not fixed/redacted: %q", rendered)

@@ -1,4 +1,4 @@
-// Package paramstore is the Go client SDK for the KMS parameter store and
+// Package kmsclient is the Go client SDK for the KMS parameter store and
 // secret management service.
 //
 // It hides gRPC boilerplate behind a small ergonomic surface:
@@ -36,10 +36,10 @@
 //
 // # Quick start
 //
-//	client, err := paramstore.NewClient(paramstore.Config{
+//	client, err := kmsclient.NewClient(kmsclient.Config{
 //	    Endpoint:  "parameter-store.prod.internal:8443",
 //	    Namespace: "prod/payments", // or "" to discover via WhoAmI
-//	    TLS:       paramstore.MTLSFromFiles("client.crt", "client.key", "server-ca.crt"),
+//	    TLS:       kmsclient.MTLSFromFiles("client.crt", "client.key", "server-ca.crt"),
 //	    CacheTTL:  time.Minute,
 //	})
 //	if err != nil {
@@ -52,4 +52,4 @@
 //	    return err
 //	}
 //	_ = dbPassword.Value() // []byte plaintext, never logged
-package paramstore
+package kmsclient

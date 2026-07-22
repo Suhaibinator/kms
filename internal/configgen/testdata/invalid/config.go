@@ -1,6 +1,6 @@
 package invalid
 
-import "github.com/Suhaibinator/kms/sdk/go/paramstore"
+import "github.com/Suhaibinator/kms/sdk/go/kmsclient"
 
 type BothSources struct {
 	Value string `json:"value" kms:"group=one,secret=two,reload=hot" kms_views:"api"`
@@ -50,13 +50,13 @@ type Recursive struct {
 func (*Recursive) Validate() error { return nil }
 
 type Legacy struct {
-	Value paramstore.ParameterValue `json:"value" kms:"group=one,reload=hot" kms_views:"api"`
+	Value kmsclient.ParameterValue `json:"value" kms:"group=one,reload=hot" kms_views:"api"`
 }
 
 func (*Legacy) Validate() error { return nil }
 
 type BadSecret struct {
-	Value paramstore.Secret `json:"value" kms:"secret=secret,reload=hot" kms_views:"api"`
+	Value kmsclient.Secret `json:"value" kms:"secret=secret,reload=hot" kms_views:"api"`
 }
 
 func (*BadSecret) Validate() error { return nil }

@@ -14,7 +14,7 @@ import (
 	fixturekms "github.com/Suhaibinator/kms/internal/configstorefixture/configkms"
 	"github.com/Suhaibinator/kms/internal/domain"
 	"github.com/Suhaibinator/kms/sdk/go/configstore"
-	"github.com/Suhaibinator/kms/sdk/go/paramstore"
+	"github.com/Suhaibinator/kms/sdk/go/kmsclient"
 )
 
 const (
@@ -55,7 +55,7 @@ func (r *managedReporter) snapshot() []configstore.DefaultMismatchReport {
 
 // TestManagedConfigStoreOverRealKMS crosses the production storage, crypto,
 // schema, TLS, gRPC, release-watch, SDK loader, generated decoder, and atomic
-// publication paths. The paramstoretest suite covers the larger error matrix;
+// publication paths. The kmsclienttest suite covers the larger error matrix;
 // this test proves the same policy against a temporary real KMS instance.
 func TestManagedConfigStoreOverRealKMS(t *testing.T) {
 	env := newLoopbackTLSEnv(t)
@@ -164,7 +164,7 @@ func TestManagedConfigStoreOverRealKMS(t *testing.T) {
 	initialRelease := createRelease(pins, true)
 	activate(initialRelease, 0)
 
-	client, err := paramstore.NewClient(paramstore.Config{
+	client, err := kmsclient.NewClient(kmsclient.Config{
 		Endpoint: env.endpoint(), Namespace: managedNamespace, Token: env.adminToken,
 		TLS: env.clientTLS(nil), Timeout: 3 * time.Second, ClientName: "managed-config-integration",
 	})

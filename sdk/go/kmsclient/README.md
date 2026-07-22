@@ -1,21 +1,21 @@
-# paramstore — Go SDK for the KMS parameter store
+# kmsclient — Go SDK for the KMS parameter store
 
-`paramstore` is the Go client for the KMS parameter-store and secret-management
+`kmsclient` is the Go client for the KMS parameter-store and secret-management
 service. It hides gRPC boilerplate behind a small, safe surface: simple reads,
 declarative store-backed config fields, and hot reload of parameters — with
 secret plaintext that never leaks into logs, errors, or string/JSON output.
 
 ```go
-import "github.com/Suhaibinator/kms/sdk/go/paramstore"
+import "github.com/Suhaibinator/kms/sdk/go/kmsclient"
 ```
 
 ## Connect
 
 ```go
-client, err := paramstore.NewClient(paramstore.Config{
+client, err := kmsclient.NewClient(kmsclient.Config{
     Endpoint:  "parameter-store.prod.internal:8443",
     Namespace: "prod/gradethis",                                    // env/app; optional (see below)
-    TLS:       paramstore.MTLSFromFiles("client.crt", "client.key", "server-ca.crt"),
+    TLS:       kmsclient.MTLSFromFiles("client.crt", "client.key", "server-ca.crt"),
     CacheTTL:  time.Minute,                                         // optional in-memory read cache
 })
 if err != nil {
@@ -66,9 +66,9 @@ db.Connect(pw.Value()) // []byte plaintext; pw itself prints "[REDACTED]"
 Read options:
 
 ```go
-client.GetParameter(ctx, key, paramstore.WithVersion(3))
-client.GetSecret(ctx, key, paramstore.WithLabel("previous"))
-client.GetSecret(ctx, key, paramstore.WithSecretToken(tok)) // token-protected / client-bound
+client.GetParameter(ctx, key, kmsclient.WithVersion(3))
+client.GetSecret(ctx, key, kmsclient.WithLabel("previous"))
+client.GetSecret(ctx, key, kmsclient.WithSecretToken(tok)) // token-protected / client-bound
 ```
 
 ## Redaction
@@ -98,20 +98,20 @@ boot on a dev default because the store was briefly unreachable. Set
 
 ```go
 type Config struct {
-    DBPassword paramstore.SecretValue
-    StripeKey  paramstore.SecretValue
-    RateLimit  paramstore.ParameterValue
+    DBPassword kmsclient.SecretValue
+    StripeKey  kmsclient.SecretValue
+    RateLimit  kmsclient.ParameterValue
     Payments   struct { // nested structs are walked too
-        Timeout paramstore.ParameterValue
+        Timeout kmsclient.ParameterValue
     }
 }
 
 cfg := Config{
-    DBPassword: paramstore.SecretValue{Key: "postgres/password"},
-    StripeKey:  paramstore.SecretValue{Key: "stripe/api-key", EnvVar: "STRIPE_KEY"},
-    RateLimit:  paramstore.ParameterValue{Key: "rate-limit"}, // hot-reloads by default
+    DBPassword: kmsclient.SecretValue{Key: "postgres/password"},
+    StripeKey:  kmsclient.SecretValue{Key: "stripe/api-key", EnvVar: "STRIPE_KEY"},
+    RateLimit:  kmsclient.ParameterValue{Key: "rate-limit"}, // hot-reloads by default
 }
-cfg.Payments.Timeout = paramstore.ParameterValue{Key: "timeout", Default: "30s", Static: true}
+cfg.Payments.Timeout = kmsclient.ParameterValue{Key: "timeout", Default: "30s", Static: true}
 
 if err := client.Resolve(ctx, &cfg); err != nil { // batches fetches concurrently
     return err
@@ -154,7 +154,7 @@ cfg.RateLimit.OnChange(func(old, new string) {
 // Watch fires for EVERY change in the client's namespace — there is no key
 // pattern. Filter inside the callback if you only care about a subset. Use
 // client.WatchNamespace(ctx, "env/app", fn) to watch a different namespace.
-stop, _ := client.Watch(ctx, func(ev paramstore.Event) {
+stop, _ := client.Watch(ctx, func(ev kmsclient.Event) {
     if !strings.HasPrefix(ev.Key, "billing/") {
         return
     }
@@ -172,7 +172,7 @@ Use a release loader when related values must be resolved and installed
 together rather than through independent key callbacks:
 
 ```go
-loader, err := paramstore.NewReleaseLoader(client, paramstore.ReleaseLoaderConfig{
+loader, err := kmsclient.NewReleaseLoader(client, kmsclient.ReleaseLoaderConfig{
     Name: "runtime",
     SecretTokenProvider: func(alias, path string) (string, bool) {
         token, ok := localTokens[alias]
@@ -181,8 +181,8 @@ loader, err := paramstore.NewReleaseLoader(client, paramstore.ReleaseLoaderConfi
 })
 if err != nil { return err }
 
-err = loader.Run(ctx, func(ctx context.Context, snapshot paramstore.ReleaseSnapshot) (
-    paramstore.PreparedRelease, error,
+err = loader.Run(ctx, func(ctx context.Context, snapshot kmsclient.ReleaseSnapshot) (
+    kmsclient.PreparedRelease, error,
 ) {
     return decodeValidateAndPrepare(ctx, snapshot)
 })
@@ -214,7 +214,7 @@ Existing `ReleaseLoader`, `RunTypedRelease`, `ParameterValue`, and
 Map gRPC codes to sentinels with `errors.Is`:
 
 ```go
-if errors.Is(err, paramstore.ErrNotFound) { ... }
+if errors.Is(err, kmsclient.ErrNotFound) { ... }
 ```
 
 `ErrNotFound`, `ErrPermissionDenied`, `ErrUnauthenticated`,
@@ -223,18 +223,18 @@ plaintext.
 
 ## Testing against a fake
 
-`paramstore/paramstoretest` provides an in-process, scriptable gRPC fake
+`kmsclient/kmsclienttest` provides an in-process, scriptable gRPC fake
 (bufconn) for your own tests: set values by namespace + relative key (or display
 path), inject errors, set the WhoAmI identity, and drive the Subscribe stream
 (snapshots, changes, heartbeats, forced disconnects).
 
 ```go
-srv, _ := paramstoretest.New()
+srv, _ := kmsclienttest.New()
 defer srv.Close()
 srv.SetParameter("prod/gradethis", "rate-limit", "100")
 srv.SetParameterPath("/prod/gradethis/rate-limit", "100") // equivalent
 
-client, _ := paramstore.NewClient(paramstore.Config{
+client, _ := kmsclient.NewClient(kmsclient.Config{
     Endpoint:    srv.Target(),
     Namespace:   "prod/gradethis",
     DialOptions: srv.DialOptions(),

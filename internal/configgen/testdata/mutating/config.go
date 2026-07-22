@@ -4,15 +4,15 @@ import (
 	"errors"
 	"strings"
 
-	"github.com/Suhaibinator/kms/sdk/go/paramstore"
+	"github.com/Suhaibinator/kms/sdk/go/kmsclient"
 )
 
 // Config is a generation fixture whose validation canonicalizes a field in
 // place. The generated store must compare the two validated copies, not the
 // original unvalidated defaults retained by the Store.
 type Config struct {
-	Name  string            `json:"name" kms:"group=runtime,reload=hot" kms_views:"worker"`
-	Token paramstore.Secret `json:"-" kms:"secret=token,reload=hot" kms_views:"worker"`
+	Name  string           `json:"name" kms:"group=runtime,reload=hot" kms_views:"worker"`
+	Token kmsclient.Secret `json:"-" kms:"secret=token,reload=hot" kms_views:"worker"`
 }
 
 func Defaults() *Config {

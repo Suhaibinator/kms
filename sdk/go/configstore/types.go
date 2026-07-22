@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Suhaibinator/kms/sdk/go/paramstore"
+	"github.com/Suhaibinator/kms/sdk/go/kmsclient"
 )
 
 // Validatable is the minimal validation contract implemented by a managed
@@ -42,7 +42,7 @@ type Options struct {
 	AllowDefaultMismatch bool
 	OnDefaultMismatch    func(DefaultMismatchReport)
 	OnCandidateRejected  func(CandidateRejectionReport)
-	SecretTokenProvider  paramstore.SecretTokenProvider
+	SecretTokenProvider  kmsclient.SecretTokenProvider
 	ReconcileInterval    time.Duration
 	MaxConcurrentFetches int
 	InstanceID           string
@@ -51,7 +51,7 @@ type Options struct {
 // PrepareFunc constructs a complete immutable candidate away from the active
 // generation. Publish must perform the generated binding's atomic pointer
 // swap; Abort releases any candidate-owned resources.
-type PrepareFunc func(context.Context, paramstore.ReleaseSnapshot) (PreparedCandidate, error)
+type PrepareFunc func(context.Context, kmsclient.ReleaseSnapshot) (PreparedCandidate, error)
 
 // PreparedCandidate is generated, validated state ready for policy admission.
 // DefaultDifferences must contain non-secret canonical fields only.
@@ -378,7 +378,7 @@ func (e *CandidateError) Unwrap() error {
 	return e.cause
 }
 
-// ReleaseRejectionCategory is consumed by paramstore.ReleaseLoader without
+// ReleaseRejectionCategory is consumed by kmsclient.ReleaseLoader without
 // importing this package or logging the wrapped diagnostic.
 func (e *CandidateError) ReleaseRejectionCategory() string {
 	if e == nil {
@@ -459,7 +459,7 @@ type ReleaseIdentity struct {
 }
 
 // ReleaseIdentityFromSnapshot copies safe identity fields from snapshot.
-func ReleaseIdentityFromSnapshot(snapshot paramstore.ReleaseSnapshot) ReleaseIdentity {
+func ReleaseIdentityFromSnapshot(snapshot kmsclient.ReleaseSnapshot) ReleaseIdentity {
 	return ReleaseIdentity{
 		namespace:          snapshot.Namespace(),
 		name:               snapshot.Name(),
@@ -471,7 +471,7 @@ func ReleaseIdentityFromSnapshot(snapshot paramstore.ReleaseSnapshot) ReleaseIde
 	}
 }
 
-func releaseIdentityFromManifest(manifest paramstore.ReleaseManifest) ReleaseIdentity {
+func releaseIdentityFromManifest(manifest kmsclient.ReleaseManifest) ReleaseIdentity {
 	return ReleaseIdentity{
 		namespace:          manifest.Namespace(),
 		name:               manifest.Name(),

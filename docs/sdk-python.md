@@ -525,5 +525,5 @@ language's conventions do (see [`sdk-go.md`](sdk-go.md)):
   auth methods — see [`security.md`](security.md).
 - The SDK's own internal test fixtures (`sdk/python/tests/_fake_server.py`)
   are private test infrastructure, not a public testing utility — unlike
-  the Go SDK's `paramstoretest` package, they are not exported by
+  the Go SDK's `kmsclienttest` package, they are not exported by
   `kms_paramstore` and are not part of its public API.

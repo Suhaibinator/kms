@@ -1,4 +1,4 @@
-package paramstore
+package kmsclient
 
 import (
 	"context"
@@ -109,11 +109,11 @@ type ReleaseLoader struct {
 // NewReleaseLoader creates a loader. It does not contact KMS until Run.
 func NewReleaseLoader(client *Client, cfg ReleaseLoaderConfig) (*ReleaseLoader, error) {
 	if client == nil {
-		return nil, errors.New("paramstore: release loader requires a client")
+		return nil, errors.New("kmsclient: release loader requires a client")
 	}
 	cfg.Name = strings.TrimSpace(cfg.Name)
 	if cfg.Name == "" {
-		return nil, errors.New("paramstore: release loader Name is required")
+		return nil, errors.New("kmsclient: release loader Name is required")
 	}
 	if cfg.ReconcileInterval <= 0 {
 		cfg.ReconcileInterval = defaultReleaseReconcileInterval
@@ -122,14 +122,14 @@ func NewReleaseLoader(client *Client, cfg ReleaseLoaderConfig) (*ReleaseLoader, 
 		cfg.MaxConcurrentFetches = defaultReleaseFetchConcurrency
 	}
 	if cfg.MaxConcurrentFetches > 256 {
-		return nil, errors.New("paramstore: MaxConcurrentFetches must not exceed 256")
+		return nil, errors.New("kmsclient: MaxConcurrentFetches must not exceed 256")
 	}
 	instanceID := strings.TrimSpace(cfg.InstanceID)
 	if instanceID == "" {
 		var err error
 		instanceID, err = newReleaseInstanceID()
 		if err != nil {
-			return nil, fmt.Errorf("paramstore: generate release loader instance ID: %w", err)
+			return nil, fmt.Errorf("kmsclient: generate release loader instance ID: %w", err)
 		}
 	}
 	return &ReleaseLoader{
@@ -216,19 +216,19 @@ type releaseResolutionError struct {
 // release remains applied until a later candidate succeeds.
 func (l *ReleaseLoader) Run(ctx context.Context, prepare PrepareReleaseFunc) error {
 	if ctx == nil {
-		return errors.New("paramstore: release loader Run requires a context")
+		return errors.New("kmsclient: release loader Run requires a context")
 	}
 	if prepare == nil {
-		return errors.New("paramstore: release loader Run requires a prepare function")
+		return errors.New("kmsclient: release loader Run requires a prepare function")
 	}
 	if !l.running.CompareAndSwap(false, true) {
-		return errors.New("paramstore: release loader is already running")
+		return errors.New("kmsclient: release loader is already running")
 	}
 	defer l.running.Store(false)
 
 	ns, bound, err := l.client.resolveNamespace(ctx)
 	if err != nil {
-		return fmt.Errorf("paramstore: resolve release namespace: %w", err)
+		return fmt.Errorf("kmsclient: resolve release namespace: %w", err)
 	}
 	if !bound {
 		return ErrNoNamespace
@@ -236,10 +236,10 @@ func (l *ReleaseLoader) Run(ctx context.Context, prepare PrepareReleaseFunc) err
 
 	initial, err := l.getActive(ctx, ns)
 	if err != nil {
-		return fmt.Errorf("paramstore: load initial active release: %w", err)
+		return fmt.Errorf("kmsclient: load initial active release: %w", err)
 	}
 	if initial.release == nil {
-		return errors.New("paramstore: active release response was empty")
+		return errors.New("kmsclient: active release response was empty")
 	}
 	l.lastSeen.Store(initial.revision)
 
@@ -404,10 +404,10 @@ func RunTypedRelease[T any](
 	prepare func(context.Context, T) (PreparedRelease, error),
 ) error {
 	if decode == nil || prepare == nil {
-		return errors.New("paramstore: RunTypedRelease requires decode and prepare functions")
+		return errors.New("kmsclient: RunTypedRelease requires decode and prepare functions")
 	}
 	if loader == nil {
-		return errors.New("paramstore: RunTypedRelease requires a loader")
+		return errors.New("kmsclient: RunTypedRelease requires a loader")
 	}
 	return loader.Run(ctx, func(ctx context.Context, snapshot ReleaseSnapshot) (PreparedRelease, error) {
 		decoded, err := decode(snapshot)
@@ -495,7 +495,7 @@ func (l *ReleaseLoader) processCandidate(
 			candidate: candidate,
 			category:  ReleaseRejectInternal,
 			fatal:     true,
-			err:       errors.New("paramstore: PreparedRelease.Commit panicked; commit must be infallible"),
+			err:       errors.New("kmsclient: PreparedRelease.Commit panicked; commit must be infallible"),
 		}
 	}
 
@@ -523,7 +523,7 @@ type releaseCandidateError struct {
 }
 
 func (e *releaseCandidateError) Error() string {
-	return fmt.Sprintf("paramstore: configuration release candidate rejected (%s)", e.category)
+	return fmt.Sprintf("kmsclient: configuration release candidate rejected (%s)", e.category)
 }
 
 // Format keeps diagnostic formatting on the same fixed, bounded text even for
@@ -886,7 +886,7 @@ func (l *ReleaseLoader) watchLoop(ctx context.Context, ns namespaceRef, events c
 		l.recordReconnect()
 		delay := backoffDelay(attempt)
 		attempt++
-		l.client.logf("paramstore: release watch ended (%v); reconnecting in %s", err, delay)
+		l.client.logf("kmsclient: release watch ended (%v); reconnecting in %s", err, delay)
 		timer := time.NewTimer(delay)
 		select {
 		case <-ctx.Done():

@@ -17,8 +17,8 @@ import (
 	kmsv1 "github.com/Suhaibinator/kms/gen/kmsv1"
 	fixtureconfig "github.com/Suhaibinator/kms/internal/configstorefixture/config"
 	"github.com/Suhaibinator/kms/sdk/go/configstore"
-	"github.com/Suhaibinator/kms/sdk/go/paramstore"
-	"github.com/Suhaibinator/kms/sdk/go/paramstore/paramstoretest"
+	"github.com/Suhaibinator/kms/sdk/go/kmsclient"
+	"github.com/Suhaibinator/kms/sdk/go/kmsclient/kmsclienttest"
 )
 
 const (
@@ -52,10 +52,10 @@ type releaseData struct {
 }
 
 type runningFixture struct {
-	server *paramstoretest.Server
-	client *paramstore.Client
+	server *kmsclienttest.Server
+	client *kmsclient.Client
 	store  *Store
-	sub    *paramstoretest.ReleaseSubscription
+	sub    *kmsclienttest.ReleaseSubscription
 	cancel context.CancelFunc
 }
 
@@ -110,15 +110,15 @@ func mustJSON(value any) string {
 	return string(document)
 }
 
-func scriptResources(server *paramstoretest.Server, data releaseData) {
+func scriptResources(server *kmsclienttest.Server, data releaseData) {
 	server.SetParameterVersion(fixtureNamespace, databasePath, data.databaseDocument, "json", data.databaseVersion)
 	server.SetParameterVersion(fixtureNamespace, runtimePath, data.runtimeDocument, "json", data.runtimeVersion)
 	server.SetSecretVersion(fixtureNamespace, data.passwordPath, data.passwordValue, "text/plain", data.passwordVersion)
 	server.SetSecretVersion(fixtureNamespace, data.runtimeTokenPath, data.runtimeTokenValue, "text/plain", data.runtimeTokenVersion)
 }
 
-func releaseSpec(data releaseData) paramstoretest.ReleaseSpec {
-	entries := []paramstoretest.ReleaseEntrySpec{
+func releaseSpec(data releaseData) kmsclienttest.ReleaseSpec {
+	entries := []kmsclienttest.ReleaseEntrySpec{
 		{Alias: "database", Kind: "parameter", Path: databasePath, Version: data.databaseVersion, ContentType: data.databaseContentType},
 		{Alias: "runtime", Kind: "parameter", Path: runtimePath, Version: data.runtimeVersion, ContentType: data.runtimeContentType},
 		{Alias: "database_password", Kind: "secret", Path: data.passwordPath, Version: data.passwordVersion},
@@ -133,7 +133,7 @@ func releaseSpec(data releaseData) paramstoretest.ReleaseSpec {
 		}
 		entries = filtered
 	}
-	return paramstoretest.ReleaseSpec{
+	return kmsclienttest.ReleaseSpec{
 		Namespace:     fixtureNamespace,
 		Name:          fixtureReleaseName,
 		Version:       data.releaseVersion,
@@ -143,7 +143,7 @@ func releaseSpec(data releaseData) paramstoretest.ReleaseSpec {
 	}
 }
 
-func installInitial(t *testing.T, server *paramstoretest.Server, data releaseData) {
+func installInitial(t *testing.T, server *kmsclienttest.Server, data releaseData) {
 	t.Helper()
 	scriptResources(server, data)
 	if _, err := server.SetActiveRelease(releaseSpec(data), data.activationRevision); err != nil {
@@ -159,9 +159,9 @@ func activate(t *testing.T, fixture *runningFixture, data releaseData) {
 	}
 }
 
-func newFixtureClient(t *testing.T, server *paramstoretest.Server) *paramstore.Client {
+func newFixtureClient(t *testing.T, server *kmsclienttest.Server) *kmsclient.Client {
 	t.Helper()
-	client, err := paramstore.NewClient(paramstore.Config{
+	client, err := kmsclient.NewClient(kmsclient.Config{
 		Namespace:   fixtureNamespace,
 		ClientName:  "managed-fixture-test",
 		DialOptions: server.DialOptions(),
@@ -180,7 +180,7 @@ func startFixture(
 	reporter func(configstore.DefaultMismatchReport),
 ) *runningFixture {
 	t.Helper()
-	server, err := paramstoretest.New()
+	server, err := kmsclienttest.New()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -213,7 +213,7 @@ func startFixture(
 		t.Fatal(err)
 	}
 	fixture := &runningFixture{server: server, client: client, store: store, sub: sub, cancel: cancel}
-	waitAcknowledgement(t, sub, initial.releaseVersion, paramstore.ReleaseStateApplied)
+	waitAcknowledgement(t, sub, initial.releaseVersion, kmsclient.ReleaseStateApplied)
 	t.Cleanup(func() {
 		cancel()
 		if err := store.Wait(); err != nil {
@@ -227,7 +227,7 @@ func startFixture(
 	return fixture
 }
 
-func waitAcknowledgement(t *testing.T, sub *paramstoretest.ReleaseSubscription, version uint64, state string) *kmsv1.ReleaseAcknowledgement {
+func waitAcknowledgement(t *testing.T, sub *kmsclienttest.ReleaseSubscription, version uint64, state string) *kmsv1.ReleaseAcknowledgement {
 	t.Helper()
 	deadline := time.Now().Add(testOperationTimeout)
 	for {
@@ -335,14 +335,14 @@ func TestStartupDefaultMismatchFatalAndBypass(t *testing.T) {
 		const needle = "nonsecret-sensitive-looking-value"
 		initial.runtimeDocument = runtimeDocument([]string{needle}, []byte("fixture-payload"), map[string]uint64{"burst": 100, "steady": 25}, [2]float64{0.25, 0.75})
 
-		server, err := paramstoretest.New()
+		server, err := kmsclienttest.New()
 		if err != nil {
 			t.Fatal(err)
 		}
 		defer server.Close()
 		installInitial(t, server, initial)
 		client := newFixtureClient(t, server)
-		defer client.Close()
+		defer func() { _ = client.Close() }()
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
 		reports := make(chan configstore.DefaultMismatchReport, 1)
@@ -406,7 +406,7 @@ func TestStartupDefaultMismatchFatalAndBypass(t *testing.T) {
 
 		restored := matchingRelease(2, 102)
 		activate(t, fixture, restored)
-		waitAcknowledgement(t, fixture.sub, 2, paramstore.ReleaseStateApplied)
+		waitAcknowledgement(t, fixture.sub, 2, kmsclient.ReleaseStateApplied)
 		waitAppliedVersion(t, fixture.store, 2)
 		if fixture.store.Status().DefaultDivergent || fixture.store.Stats().DefaultDivergent {
 			t.Fatal("restoring defaults did not clear divergence")
@@ -429,7 +429,7 @@ func TestHotOverrideAndRestorationPublishWholeGenerations(t *testing.T) {
 	hot.runtimeDocument = runtimeDocument([]string{"search-v2", "reports-v2"}, []byte("payload-v2"), map[string]uint64{"burst": 200, "steady": 50}, [2]float64{0.5, 1.5})
 	hot.runtimeTokenValue = []byte("hot-token-v2")
 	activate(t, fixture, hot)
-	waitAcknowledgement(t, fixture.sub, 2, paramstore.ReleaseStateApplied)
+	waitAcknowledgement(t, fixture.sub, 2, kmsclient.ReleaseStateApplied)
 	current := waitAppliedVersion(t, fixture.store, 2)
 
 	if oldSnapshot.Release().Version() != 1 || oldSnapshot.DatabaseHealth().Timeout() != 3*time.Second || oldSnapshot.ApiHandler().Features()[0] != "search" || oldSnapshot.ApiHandler().RuntimeToken().StringValue() != defaultTokenPrefix+"1" {
@@ -462,7 +462,7 @@ func TestHotOverrideAndRestorationPublishWholeGenerations(t *testing.T) {
 
 	restored := matchingRelease(3, 103)
 	activate(t, fixture, restored)
-	waitAcknowledgement(t, fixture.sub, 3, paramstore.ReleaseStateApplied)
+	waitAcknowledgement(t, fixture.sub, 3, kmsclient.ReleaseStateApplied)
 	restoredSnapshot := waitAppliedVersion(t, fixture.store, 3)
 	if restoredSnapshot.DatabaseHealth().Timeout() != 3*time.Second || restoredSnapshot.ApiHandler().Features()[0] != "search" {
 		t.Fatal("default restoration did not publish matching values")
@@ -493,7 +493,7 @@ func TestRestartAndMixedCandidatesPreserveLastKnownGood(t *testing.T) {
 	restartParameter := matchingRelease(2, 102)
 	restartParameter.databaseDocument = databaseDocument("db-restart.internal", "3s", 20)
 	activate(t, fixture, restartParameter)
-	ack := waitAcknowledgement(t, fixture.sub, 2, paramstore.ReleaseStateRejected)
+	ack := waitAcknowledgement(t, fixture.sub, 2, kmsclient.ReleaseStateRejected)
 	if ack.GetRejectionCategory() != string(configstore.RejectRestartRequired) || ack.GetDiagnostic() != "" {
 		t.Fatalf("restart rejection ack = category %q diagnostic %q", ack.GetRejectionCategory(), ack.GetDiagnostic())
 	}
@@ -507,7 +507,7 @@ func TestRestartAndMixedCandidatesPreserveLastKnownGood(t *testing.T) {
 	mixed.passwordVersion = 2
 	mixed.passwordValue = []byte(passwordPlaintext) // Same plaintext, different immutable pin.
 	activate(t, fixture, mixed)
-	ack = waitAcknowledgement(t, fixture.sub, 3, paramstore.ReleaseStateRejected)
+	ack = waitAcknowledgement(t, fixture.sub, 3, kmsclient.ReleaseStateRejected)
 	if ack.GetRejectionCategory() != string(configstore.RejectRestartRequired) || ack.GetDiagnostic() != "" {
 		t.Fatalf("mixed rejection ack = category %q diagnostic %q", ack.GetRejectionCategory(), ack.GetDiagnostic())
 	}
@@ -523,7 +523,7 @@ func TestRestartAndMixedCandidatesPreserveLastKnownGood(t *testing.T) {
 	hot.runtimeDocument = runtimeDocument([]string{"accepted-hot"}, []byte("accepted-hot"), map[string]uint64{"burst": 400}, [2]float64{4, 4})
 	hot.runtimeTokenValue = []byte("accepted-hot-token")
 	activate(t, fixture, hot)
-	waitAcknowledgement(t, fixture.sub, 4, paramstore.ReleaseStateApplied)
+	waitAcknowledgement(t, fixture.sub, 4, kmsclient.ReleaseStateApplied)
 	current := waitAppliedVersion(t, fixture.store, 4)
 	if current.PersistenceHandler().Password().Version() != 1 || current.PersistenceHandler().Password().StringValue() != passwordPlaintext {
 		t.Fatal("exact restart-secret pin was not preserved")
@@ -541,7 +541,7 @@ func TestStrictDecodeContractAndValidationRejections(t *testing.T) {
 	badContract := matchingRelease(2, 102)
 	badContract.databaseContentType = "text/plain"
 	activate(t, fixture, badContract)
-	ack := waitAcknowledgement(t, fixture.sub, 2, paramstore.ReleaseStateRejected)
+	ack := waitAcknowledgement(t, fixture.sub, 2, kmsclient.ReleaseStateRejected)
 	if ack.GetRejectionCategory() != string(configstore.RejectConfigContractMismatch) || ack.GetDiagnostic() != "" {
 		t.Fatalf("contract rejection ack = category %q diagnostic %q", ack.GetRejectionCategory(), ack.GetDiagnostic())
 	}
@@ -575,7 +575,7 @@ func TestStrictDecodeContractAndValidationRejections(t *testing.T) {
 			candidate.databaseDocument = test.database
 			candidate.runtimeDocument = test.runtime
 			activate(t, fixture, candidate)
-			ack := waitAcknowledgement(t, fixture.sub, version, paramstore.ReleaseStateRejected)
+			ack := waitAcknowledgement(t, fixture.sub, version, kmsclient.ReleaseStateRejected)
 			if ack.GetRejectionCategory() != string(configstore.RejectConfigDecodeFailed) || ack.GetDiagnostic() != "" {
 				t.Fatalf("decode rejection ack = category %q diagnostic %q", ack.GetRejectionCategory(), ack.GetDiagnostic())
 			}
@@ -590,7 +590,7 @@ func TestStrictDecodeContractAndValidationRejections(t *testing.T) {
 	invalid := matchingRelease(validationVersion, 100+validationVersion)
 	invalid.databaseDocument = databaseDocument("db.internal", "0s", 20)
 	activate(t, fixture, invalid)
-	ack = waitAcknowledgement(t, fixture.sub, validationVersion, paramstore.ReleaseStateRejected)
+	ack = waitAcknowledgement(t, fixture.sub, validationVersion, kmsclient.ReleaseStateRejected)
 	if ack.GetRejectionCategory() != string(configstore.RejectConfigValidationFailed) || ack.GetDiagnostic() != "" {
 		t.Fatalf("validation rejection ack = category %q diagnostic %q", ack.GetRejectionCategory(), ack.GetDiagnostic())
 	}
@@ -679,7 +679,7 @@ func TestConcurrentReadersSeeOnlyCompleteGenerations(t *testing.T) {
 		)
 		candidate.runtimeTokenValue = []byte(fmt.Sprintf("token-%d", version))
 		activate(t, fixture, candidate)
-		waitAcknowledgement(t, fixture.sub, version, paramstore.ReleaseStateApplied)
+		waitAcknowledgement(t, fixture.sub, version, kmsclient.ReleaseStateApplied)
 		waitAppliedVersion(t, fixture.store, version)
 	}
 	close(stop)

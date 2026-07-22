@@ -17,8 +17,8 @@ import (
 
 	fixtureconfig "github.com/Suhaibinator/kms/internal/configstorefixture/config"
 	"github.com/Suhaibinator/kms/sdk/go/configstore"
-	"github.com/Suhaibinator/kms/sdk/go/paramstore"
-	"github.com/Suhaibinator/kms/sdk/go/paramstore/paramstoretest"
+	"github.com/Suhaibinator/kms/sdk/go/kmsclient"
+	"github.com/Suhaibinator/kms/sdk/go/kmsclient/kmsclienttest"
 )
 
 // This file is intentionally adversarial and black-box oriented. Its matrix
@@ -124,7 +124,7 @@ func waitAdversarialFinalAcknowledgement(t *testing.T, fixture *runningFixture, 
 		if ack.GetVersion() != version {
 			continue
 		}
-		if ack.GetState() == paramstore.ReleaseStateApplied || ack.GetState() == paramstore.ReleaseStateRejected {
+		if ack.GetState() == kmsclient.ReleaseStateApplied || ack.GetState() == kmsclient.ReleaseStateRejected {
 			return adversarialAcknowledgement{
 				state:      ack.GetState(),
 				category:   ack.GetRejectionCategory(),
@@ -156,10 +156,10 @@ func TestAdversarialGeneratedSchemaAndRuntimeDecoderHaveIdenticalAcceptance(t *t
 		{name: "fractional int", database: adversarialDatabase(adversarialEndpointDefault, "20.1", `"3s"`), runtime: adversarialRuntimeDefault},
 		{name: "wrong fixed array length", database: adversarialDatabase(`{"host":"db.internal","ports":[5432,5433],"labels":{"role":["primary"]},"zones":["a"]}`, "20", `"3s"`), runtime: adversarialRuntimeDefault},
 		{name: "invalid duration", database: adversarialDatabase(adversarialEndpointDefault, "20", `"three seconds"`), runtime: adversarialRuntimeDefault},
-		{name: "null nested map", database: adversarialDatabase(`{"host":"db.internal","ports":[5432,5433],"labels":null,"zones":["us-west-1a","us-west-1b"]}`, "20", `"3s"`), runtime: adversarialRuntimeDefault, wantSchema: true, wantState: paramstore.ReleaseStateRejected, wantCategory: string(configstore.RejectRestartRequired)},
-		{name: "null slice", database: defaultDatabase, runtime: adversarialRuntime("null", `"Zml4dHVyZS1wYXlsb2Fk"`, `{"burst":100,"steady":25}`, `[0.25,0.75]`), wantSchema: true, wantState: paramstore.ReleaseStateApplied},
-		{name: "null bytes", database: defaultDatabase, runtime: adversarialRuntime(`["search","reports"]`, "null", `{"burst":100,"steady":25}`, `[0.25,0.75]`), wantSchema: true, wantState: paramstore.ReleaseStateApplied},
-		{name: "null map", database: defaultDatabase, runtime: adversarialRuntime(`["search","reports"]`, `"Zml4dHVyZS1wYXlsb2Fk"`, "null", `[0.25,0.75]`), wantSchema: true, wantState: paramstore.ReleaseStateApplied},
+		{name: "null nested map", database: adversarialDatabase(`{"host":"db.internal","ports":[5432,5433],"labels":null,"zones":["us-west-1a","us-west-1b"]}`, "20", `"3s"`), runtime: adversarialRuntimeDefault, wantSchema: true, wantState: kmsclient.ReleaseStateRejected, wantCategory: string(configstore.RejectRestartRequired)},
+		{name: "null slice", database: defaultDatabase, runtime: adversarialRuntime("null", `"Zml4dHVyZS1wYXlsb2Fk"`, `{"burst":100,"steady":25}`, `[0.25,0.75]`), wantSchema: true, wantState: kmsclient.ReleaseStateApplied},
+		{name: "null bytes", database: defaultDatabase, runtime: adversarialRuntime(`["search","reports"]`, "null", `{"burst":100,"steady":25}`, `[0.25,0.75]`), wantSchema: true, wantState: kmsclient.ReleaseStateApplied},
+		{name: "null map", database: defaultDatabase, runtime: adversarialRuntime(`["search","reports"]`, `"Zml4dHVyZS1wYXlsb2Fk"`, "null", `[0.25,0.75]`), wantSchema: true, wantState: kmsclient.ReleaseStateApplied},
 		{name: "noncanonical base64 padding bits", database: defaultDatabase, runtime: adversarialRuntime(`["search","reports"]`, `"Zh=="`, `{"burst":100,"steady":25}`, `[0.25,0.75]`)},
 		{name: "uint64 overflow", database: defaultDatabase, runtime: adversarialRuntime(`["search","reports"]`, `"Zml4dHVyZS1wYXlsb2Fk"`, `{"burst":18446744073709551616,"steady":25}`, `[0.25,0.75]`)},
 		{name: "negative uint64", database: defaultDatabase, runtime: adversarialRuntime(`["search","reports"]`, `"Zml4dHVyZS1wYXlsb2Fk"`, `{"burst":-1,"steady":25}`, `[0.25,0.75]`)},
@@ -182,14 +182,14 @@ func TestAdversarialGeneratedSchemaAndRuntimeDecoderHaveIdenticalAcceptance(t *t
 			wantState := test.wantState
 			wantCategory := test.wantCategory
 			if wantState == "" {
-				wantState = paramstore.ReleaseStateRejected
+				wantState = kmsclient.ReleaseStateRejected
 				wantCategory = string(configstore.RejectConfigDecodeFailed)
 			}
 			if ack.state != wantState || ack.category != wantCategory || ack.diagnostic != "" {
 				t.Fatalf("final acknowledgement = %+v, want state=%q category=%q", ack, wantState, wantCategory)
 			}
 			wantApplied := before
-			if wantState == paramstore.ReleaseStateApplied {
+			if wantState == kmsclient.ReleaseStateApplied {
 				wantApplied = version
 			}
 			if got := fixture.store.Current().Release().Version(); got != wantApplied {
@@ -278,7 +278,7 @@ func TestAdversarialNilAndEmptyCollectionsRemainDistinctAcrossPublication(t *tes
 			empty.runtimeDocument = test.emptyDocument
 			activate(t, fixture, empty)
 			ack := waitAdversarialFinalAcknowledgement(t, fixture, 2)
-			if ack.state != paramstore.ReleaseStateApplied {
+			if ack.state != kmsclient.ReleaseStateApplied {
 				t.Fatalf("empty hot override acknowledgement = %+v", ack)
 			}
 			emptySnapshot := waitAppliedVersion(t, fixture.store, 2)
@@ -297,7 +297,7 @@ func TestAdversarialNilAndEmptyCollectionsRemainDistinctAcrossPublication(t *tes
 			restored := matchingRelease(3, 1503)
 			restored.runtimeDocument = test.nullDocument
 			activate(t, fixture, restored)
-			if ack := waitAdversarialFinalAcknowledgement(t, fixture, 3); ack.state != paramstore.ReleaseStateApplied {
+			if ack := waitAdversarialFinalAcknowledgement(t, fixture, 3); ack.state != kmsclient.ReleaseStateApplied {
 				t.Fatalf("null restoration acknowledgement = %+v", ack)
 			}
 			restoredSnapshot := waitAppliedVersion(t, fixture.store, 3)
@@ -377,7 +377,7 @@ func TestAdversarialCanonicalJSONSpellingsApplyWithoutFalseDrift(t *testing.T) {
 			candidate.runtimeDocument = test.runtime
 			activate(t, fixture, candidate)
 			ack := waitAdversarialFinalAcknowledgement(t, fixture, version)
-			if ack.state != paramstore.ReleaseStateApplied || ack.category != "" || ack.diagnostic != "" {
+			if ack.state != kmsclient.ReleaseStateApplied || ack.category != "" || ack.diagnostic != "" {
 				t.Fatalf("canonical spelling final acknowledgement = %+v", ack)
 			}
 			snapshot := fixture.store.Current()
@@ -399,7 +399,7 @@ func TestAdversarialManifestContractMatrixRejectsBeforeResourceFetch(t *testing.
 
 	type contractCase struct {
 		name   string
-		mutate func(*paramstoretest.Server, *paramstoretest.ReleaseSpec, releaseData)
+		mutate func(*kmsclienttest.Server, *kmsclienttest.ReleaseSpec, releaseData)
 	}
 	cases := []contractCase{
 		{name: "missing database parameter", mutate: omitContractAlias("database")},
@@ -408,8 +408,8 @@ func TestAdversarialManifestContractMatrixRejectsBeforeResourceFetch(t *testing.
 		{name: "missing hot secret", mutate: omitContractAlias("runtime_token")},
 		{
 			name: "unknown extra alias",
-			mutate: func(_ *paramstoretest.Server, spec *paramstoretest.ReleaseSpec, data releaseData) {
-				spec.Entries = append(spec.Entries, paramstoretest.ReleaseEntrySpec{
+			mutate: func(_ *kmsclienttest.Server, spec *kmsclienttest.ReleaseSpec, data releaseData) {
+				spec.Entries = append(spec.Entries, kmsclienttest.ReleaseEntrySpec{
 					Alias: "untrusted_alias_canary", Kind: "parameter", Path: runtimePath,
 					Version: data.runtimeVersion, ContentType: "json",
 				})
@@ -417,20 +417,20 @@ func TestAdversarialManifestContractMatrixRejectsBeforeResourceFetch(t *testing.
 		},
 		{
 			name: "case changed alias",
-			mutate: func(_ *paramstoretest.Server, spec *paramstoretest.ReleaseSpec, _ releaseData) {
+			mutate: func(_ *kmsclienttest.Server, spec *kmsclienttest.ReleaseSpec, _ releaseData) {
 				contractEntry(spec, "runtime").Alias = "Runtime"
 			},
 		},
 		{
 			name: "parameter declared as secret",
-			mutate: func(server *paramstoretest.Server, spec *paramstoretest.ReleaseSpec, data releaseData) {
+			mutate: func(server *kmsclienttest.Server, spec *kmsclienttest.ReleaseSpec, data releaseData) {
 				server.SetSecretVersion(fixtureNamespace, databasePath, []byte("wrong-kind-secret-canary"), "json", data.databaseVersion)
 				contractEntry(spec, "database").Kind = "secret"
 			},
 		},
 		{
 			name: "secret declared as parameter",
-			mutate: func(server *paramstoretest.Server, spec *paramstoretest.ReleaseSpec, data releaseData) {
+			mutate: func(server *kmsclienttest.Server, spec *kmsclienttest.ReleaseSpec, data releaseData) {
 				server.SetParameterVersion(fixtureNamespace, passwordPath, `{}`, "json", data.passwordVersion)
 				entry := contractEntry(spec, "database_password")
 				entry.Kind = "parameter"
@@ -439,7 +439,7 @@ func TestAdversarialManifestContractMatrixRejectsBeforeResourceFetch(t *testing.
 		},
 		{
 			name: "incorrect exact parameter content type",
-			mutate: func(_ *paramstoretest.Server, spec *paramstoretest.ReleaseSpec, _ releaseData) {
+			mutate: func(_ *kmsclienttest.Server, spec *kmsclienttest.ReleaseSpec, _ releaseData) {
 				contractEntry(spec, "runtime").ContentType = "application/json"
 			},
 		},
@@ -457,7 +457,7 @@ func TestAdversarialManifestContractMatrixRejectsBeforeResourceFetch(t *testing.
 				t.Fatal(err)
 			}
 			ack := waitAdversarialFinalAcknowledgement(t, fixture, version)
-			if ack.state != paramstore.ReleaseStateRejected || ack.category != string(configstore.RejectConfigContractMismatch) || ack.diagnostic != "" {
+			if ack.state != kmsclient.ReleaseStateRejected || ack.category != string(configstore.RejectConfigContractMismatch) || ack.diagnostic != "" {
 				t.Fatalf("contract acknowledgement = %+v", ack)
 			}
 			if got := fetches.Load(); got != 0 {
@@ -474,8 +474,8 @@ func TestAdversarialManifestContractMatrixRejectsBeforeResourceFetch(t *testing.
 	}
 }
 
-func omitContractAlias(alias string) func(*paramstoretest.Server, *paramstoretest.ReleaseSpec, releaseData) {
-	return func(_ *paramstoretest.Server, spec *paramstoretest.ReleaseSpec, _ releaseData) {
+func omitContractAlias(alias string) func(*kmsclienttest.Server, *kmsclienttest.ReleaseSpec, releaseData) {
+	return func(_ *kmsclienttest.Server, spec *kmsclienttest.ReleaseSpec, _ releaseData) {
 		entries := spec.Entries[:0]
 		for _, entry := range spec.Entries {
 			if entry.Alias != alias {
@@ -486,7 +486,7 @@ func omitContractAlias(alias string) func(*paramstoretest.Server, *paramstoretes
 	}
 }
 
-func contractEntry(spec *paramstoretest.ReleaseSpec, alias string) *paramstoretest.ReleaseEntrySpec {
+func contractEntry(spec *kmsclienttest.ReleaseSpec, alias string) *kmsclienttest.ReleaseEntrySpec {
 	for index := range spec.Entries {
 		if spec.Entries[index].Alias == alias {
 			return &spec.Entries[index]
@@ -513,7 +513,7 @@ func TestAdversarialSecretPinsPathsAndGetterCopies(t *testing.T) {
 	if _, err := fixture.server.ActivateConfigurationRelease(remappedSpec, remapped.activationRevision); err != nil {
 		t.Fatal(err)
 	}
-	if ack := waitAdversarialFinalAcknowledgement(t, fixture, 2); ack.state != paramstore.ReleaseStateApplied {
+	if ack := waitAdversarialFinalAcknowledgement(t, fixture, 2); ack.state != kmsclient.ReleaseStateApplied {
 		t.Fatalf("operator-owned parameter remap acknowledgement = %+v", ack)
 	}
 	remappedSnapshot := waitAppliedVersion(t, fixture.store, 2)
@@ -529,7 +529,7 @@ func TestAdversarialSecretPinsPathsAndGetterCopies(t *testing.T) {
 	rotated.runtimeTokenPath = hotSecretPathCanary
 	rotated.runtimeTokenValue = []byte(hotSecretValueCanary)
 	activate(t, fixture, rotated)
-	if ack := waitAdversarialFinalAcknowledgement(t, fixture, 3); ack.state != paramstore.ReleaseStateApplied {
+	if ack := waitAdversarialFinalAcknowledgement(t, fixture, 3); ack.state != kmsclient.ReleaseStateApplied {
 		t.Fatalf("hot secret rotation acknowledgement = %+v", ack)
 	}
 	rotatedSnapshot := waitAppliedVersion(t, fixture.store, 3)
@@ -560,7 +560,7 @@ func TestAdversarialSecretPinsPathsAndGetterCopies(t *testing.T) {
 	restart.passwordValue = []byte(passwordPlaintext)
 	activate(t, fixture, restart)
 	ack := waitAdversarialFinalAcknowledgement(t, fixture, 4)
-	if ack.state != paramstore.ReleaseStateRejected || ack.category != string(configstore.RejectRestartRequired) || ack.diagnostic != "" {
+	if ack.state != kmsclient.ReleaseStateRejected || ack.category != string(configstore.RejectRestartRequired) || ack.diagnostic != "" {
 		t.Fatalf("same-plaintext restart-secret acknowledgement = %+v", ack)
 	}
 	if fixture.store.Current().Release().Version() != 3 {
@@ -581,7 +581,7 @@ func TestAdversarialSecretPinsPathsAndGetterCopies(t *testing.T) {
 	if _, err := fixture.server.ActivateConfigurationRelease(releaseSpec(exact), exact.activationRevision); err != nil {
 		t.Fatal(err)
 	}
-	if ack := waitAdversarialFinalAcknowledgement(t, fixture, 5); ack.state != paramstore.ReleaseStateApplied {
+	if ack := waitAdversarialFinalAcknowledgement(t, fixture, 5); ack.state != kmsclient.ReleaseStateApplied {
 		t.Fatalf("exact secret pin acknowledgement = %+v", ack)
 	}
 	exactSnapshot := waitAppliedVersion(t, fixture.store, 5)
@@ -592,15 +592,15 @@ func TestAdversarialSecretPinsPathsAndGetterCopies(t *testing.T) {
 }
 
 func TestAdversarialDefaultSecretsMustBeExactZeroIncludingMetadata(t *testing.T) {
-	server, err := paramstoretest.New()
+	server, err := kmsclienttest.New()
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer server.Close()
 	server.SetSecretVersion(fixtureNamespace, "empty-default-secret", nil, "text/plain", 77)
 	client := newFixtureClient(t, server)
-	defer client.Close()
-	metadataOnly, err := client.GetSecret(context.Background(), "empty-default-secret", paramstore.WithVersion(77))
+	defer func() { _ = client.Close() }()
+	metadataOnly, err := client.GetSecret(context.Background(), "empty-default-secret", kmsclient.WithVersion(77))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -675,7 +675,7 @@ func TestAdversarialConcurrentReadersAcrossRejectedAndAppliedCandidates(t *testi
 		}
 		activate(t, fixture, invalid)
 		invalidAck := waitAdversarialFinalAcknowledgement(t, fixture, invalidVersion)
-		if invalidAck.state != paramstore.ReleaseStateRejected || invalidAck.category != string(configstore.RejectConfigDecodeFailed) {
+		if invalidAck.state != kmsclient.ReleaseStateRejected || invalidAck.category != string(configstore.RejectConfigDecodeFailed) {
 			t.Fatalf("invalid release %d acknowledgement = %+v", invalidVersion, invalidAck)
 		}
 
@@ -690,7 +690,7 @@ func TestAdversarialConcurrentReadersAcrossRejectedAndAppliedCandidates(t *testi
 		valid.runtimeTokenValue = []byte(fmt.Sprintf("token-%d", validVersion))
 		activate(t, fixture, valid)
 		validAck := waitAdversarialFinalAcknowledgement(t, fixture, validVersion)
-		if validAck.state != paramstore.ReleaseStateApplied {
+		if validAck.state != kmsclient.ReleaseStateApplied {
 			t.Fatalf("valid release %d acknowledgement = %+v", validVersion, validAck)
 		}
 		waitAppliedVersion(t, fixture.store, validVersion)

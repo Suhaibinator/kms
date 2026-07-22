@@ -1,4 +1,4 @@
-package paramstoretest
+package kmsclienttest
 
 import (
 	"testing"

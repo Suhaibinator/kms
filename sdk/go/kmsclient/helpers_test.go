@@ -1,4 +1,4 @@
-package paramstore
+package kmsclient
 
 import (
 	"fmt"
@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Suhaibinator/kms/sdk/go/paramstore/paramstoretest"
+	"github.com/Suhaibinator/kms/sdk/go/kmsclient/kmsclienttest"
 )
 
 // testNS is the home namespace most tests bind their client to; relative keys
@@ -16,7 +16,7 @@ const testNS = "prod/app"
 
 // newTestClient starts a fake server and a Client wired to it, bound to testNS
 // unless the caller set a namespace, registering cleanup on t.
-func newTestClient(t *testing.T, cfg Config) (*Client, *paramstoretest.Server) {
+func newTestClient(t *testing.T, cfg Config) (*Client, *kmsclienttest.Server) {
 	t.Helper()
 	if cfg.Namespace == "" {
 		cfg.Namespace = testNS
@@ -26,14 +26,14 @@ func newTestClient(t *testing.T, cfg Config) (*Client, *paramstoretest.Server) {
 
 // newUnboundTestClient is newTestClient without a default namespace, for tests
 // exercising WhoAmI discovery and ErrNoNamespace.
-func newUnboundTestClient(t *testing.T, cfg Config) (*Client, *paramstoretest.Server) {
+func newUnboundTestClient(t *testing.T, cfg Config) (*Client, *kmsclienttest.Server) {
 	t.Helper()
 	return newRawTestClient(t, cfg)
 }
 
-func newRawTestClient(t *testing.T, cfg Config) (*Client, *paramstoretest.Server) {
+func newRawTestClient(t *testing.T, cfg Config) (*Client, *kmsclienttest.Server) {
 	t.Helper()
-	srv, err := paramstoretest.New()
+	srv, err := kmsclienttest.New()
 	if err != nil {
 		t.Fatalf("start fake server: %v", err)
 	}

@@ -1,4 +1,4 @@
-package paramstore
+package kmsclient
 
 import (
 	"context"
@@ -150,7 +150,7 @@ type Client struct {
 // custom transport credentials in Config.DialOptions.
 func NewClient(cfg Config) (*Client, error) {
 	if cfg.Endpoint == "" && len(cfg.DialOptions) == 0 {
-		return nil, errors.New("paramstore: Config.Endpoint is required")
+		return nil, errors.New("kmsclient: Config.Endpoint is required")
 	}
 	if cfg.Timeout <= 0 {
 		cfg.Timeout = defaultTimeout
@@ -174,13 +174,13 @@ func NewClient(cfg Config) (*Client, error) {
 	opts := make([]grpc.DialOption, 0, 4+len(cfg.DialOptions))
 	switch {
 	case cfg.TLS != nil && cfg.Insecure:
-		return nil, errors.New("paramstore: Config.TLS and Config.Insecure are mutually exclusive")
+		return nil, errors.New("kmsclient: Config.TLS and Config.Insecure are mutually exclusive")
 	case cfg.TLS != nil:
 		opts = append(opts, grpc.WithTransportCredentials(credentials.NewTLS(cfg.TLS)))
 	case cfg.Insecure:
 		opts = append(opts, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	case len(cfg.DialOptions) == 0:
-		return nil, errors.New("paramstore: transport security is required; set Config.TLS, or set Config.Insecure only for local development")
+		return nil, errors.New("kmsclient: transport security is required; set Config.TLS, or set Config.Insecure only for local development")
 	}
 	opts = append(opts, grpc.WithKeepaliveParams(keepalive.ClientParameters{
 		Time:                30 * time.Second,
@@ -193,11 +193,11 @@ func NewClient(cfg Config) (*Client, error) {
 
 	target := cfg.Endpoint
 	if target == "" {
-		target = "passthrough:///paramstore"
+		target = "passthrough:///kmsclient"
 	}
 	cc, err := grpc.NewClient(target, opts...)
 	if err != nil {
-		return nil, fmt.Errorf("paramstore: dial %q: %w", target, err)
+		return nil, fmt.Errorf("kmsclient: dial %q: %w", target, err)
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -227,7 +227,7 @@ func defaultClientName() string {
 	if len(os.Args) > 0 && os.Args[0] != "" {
 		return filepath.Base(os.Args[0])
 	}
-	return "paramstore-client"
+	return "kmsclient-client"
 }
 
 // Close releases the connection and stops all background goroutines. It is safe
@@ -506,7 +506,7 @@ func (c *Client) enqueueCallback(path string, fn func()) {
 	case c.cbQueue <- fn:
 	case <-c.closed:
 	default:
-		c.logf("paramstore: callback queue full, dropping change notification for %s", path)
+		c.logf("kmsclient: callback queue full, dropping change notification for %s", path)
 	}
 }
 
@@ -524,7 +524,7 @@ func (c *Client) dispatchCallbacks() {
 func (c *Client) runCallback(fn func()) {
 	defer func() {
 		if r := recover(); r != nil {
-			c.logf("paramstore: recovered panic in change callback: %v", r)
+			c.logf("kmsclient: recovered panic in change callback: %v", r)
 		}
 	}()
 	fn()

@@ -1,4 +1,4 @@
-package paramstore
+package kmsclient
 
 import (
 	"encoding/json"

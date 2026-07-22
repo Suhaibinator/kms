@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/Suhaibinator/kms/sdk/go/paramstore"
+	"github.com/Suhaibinator/kms/sdk/go/kmsclient"
 )
 
 type RetryLimit int16
@@ -21,7 +21,7 @@ type Config struct {
 	Limit    RetryLimit        `json:"limit" kms:"group=rate_limits,reload=hot" kms_views:"api_handler"`
 	Ratio    *float32          `json:"ratio" kms:"group=rate_limits,reload=hot" kms_views:"api_handler"`
 	Payload  []byte            `json:"payload" kms:"group=rate_limits,reload=hot" kms_views:"api_handler"`
-	Password paramstore.Secret `json:"-" kms:"secret=database_password,reload=restart" kms_views:"persistence_handler"`
+	Password kmsclient.Secret  `json:"-" kms:"secret=database_password,reload=restart" kms_views:"persistence_handler"`
 	Local    map[string]string `kms:"-"`
 }
 
@@ -33,7 +33,7 @@ func (c *Config) Validate() error {
 }
 
 type SecretsOnly struct {
-	Token paramstore.Secret `json:"-" kms:"secret=token,reload=hot" kms_views:"worker"`
+	Token kmsclient.Secret `json:"-" kms:"secret=token,reload=hot" kms_views:"worker"`
 }
 
 func (*SecretsOnly) Validate() error { return nil }

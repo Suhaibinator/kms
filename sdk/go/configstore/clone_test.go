@@ -4,14 +4,14 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/Suhaibinator/kms/sdk/go/paramstore"
+	"github.com/Suhaibinator/kms/sdk/go/kmsclient"
 )
 
 type cloneFixture struct {
 	Pointer *int
 	Bytes   []byte
 	Map     map[string][]int
-	Secret  paramstore.Secret
+	Secret  kmsclient.Secret
 }
 
 func TestCloneDeepCopiesMutableValuesAndSecrets(t *testing.T) {
@@ -20,7 +20,7 @@ func TestCloneDeepCopiesMutableValuesAndSecrets(t *testing.T) {
 		Pointer: &number,
 		Bytes:   []byte{1, 2, 3},
 		Map:     map[string][]int{"numbers": {4, 5}},
-		Secret:  paramstore.NewSecret([]byte("secret-canary")),
+		Secret:  kmsclient.NewSecret([]byte("secret-canary")),
 	}
 	cloned := Clone(original)
 

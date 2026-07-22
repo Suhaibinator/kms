@@ -14,7 +14,7 @@ import (
 )
 
 const (
-	paramstorePath  = "github.com/Suhaibinator/kms/sdk/go/paramstore"
+	kmsclientPath   = "github.com/Suhaibinator/kms/sdk/go/kmsclient"
 	configstorePath = "github.com/Suhaibinator/kms/sdk/go/configstore"
 )
 
@@ -192,8 +192,8 @@ func analyzePackage(pkg *types.Package, sizes types.Sizes, typeName string) (*ir
 			if !validAlias(secretAlias) {
 				return nil, fmt.Errorf("configgen: field %s has invalid secret alias %q", field.Name(), secretAlias)
 			}
-			if !isNamedType(field.Type(), paramstorePath, "Secret") {
-				return nil, fmt.Errorf("configgen: secret field %s must have exact type paramstore.Secret", field.Name())
+			if !isNamedType(field.Type(), kmsclientPath, "Secret") {
+				return nil, fmt.Errorf("configgen: secret field %s must have exact type kmsclient.Secret", field.Name())
 			}
 			jsonTag, ok := tag.Lookup("json")
 			if !ok || jsonTag != "-" {
@@ -216,11 +216,11 @@ func analyzePackage(pkg *types.Package, sizes types.Sizes, typeName string) (*ir
 			if _, collision := secretAliases[groupAlias]; collision {
 				return nil, fmt.Errorf("configgen: alias %q is used as both a group and a secret", groupAlias)
 			}
-			if isNamedType(field.Type(), paramstorePath, "ParameterValue") || isNamedType(field.Type(), paramstorePath, "SecretValue") {
+			if isNamedType(field.Type(), kmsclientPath, "ParameterValue") || isNamedType(field.Type(), kmsclientPath, "SecretValue") {
 				return nil, fmt.Errorf("configgen: field %s uses legacy managed type %s; managed config fields must use ordinary values", field.Name(), types.TypeString(field.Type(), nil))
 			}
-			if isNamedType(field.Type(), paramstorePath, "Secret") {
-				return nil, fmt.Errorf("configgen: paramstore.Secret field %s must use secret=, not group=", field.Name())
+			if isNamedType(field.Type(), kmsclientPath, "Secret") {
+				return nil, fmt.Errorf("configgen: kmsclient.Secret field %s must use secret=, not group=", field.Name())
 			}
 			jsonName, err := explicitJSONName(field.Name(), tag)
 			if err != nil {
@@ -379,11 +379,11 @@ func isNamedType(t types.Type, pkgPath, name string) bool {
 
 func analyzeType(t types.Type, sizes types.Sizes, stack map[types.Type]bool, location string) (*typeIR, error) {
 	t = types.Unalias(t)
-	if isNamedType(t, paramstorePath, "ParameterValue") || isNamedType(t, paramstorePath, "SecretValue") {
+	if isNamedType(t, kmsclientPath, "ParameterValue") || isNamedType(t, kmsclientPath, "SecretValue") {
 		return nil, fmt.Errorf("configgen: %s uses unsupported legacy managed type %s", location, types.TypeString(t, nil))
 	}
-	if isNamedType(t, paramstorePath, "Secret") {
-		return nil, fmt.Errorf("configgen: %s contains paramstore.Secret below the root; secrets must be direct root fields", location)
+	if isNamedType(t, kmsclientPath, "Secret") {
+		return nil, fmt.Errorf("configgen: %s contains kmsclient.Secret below the root; secrets must be direct root fields", location)
 	}
 	if isNamedType(t, "time", "Duration") {
 		return &typeIR{Kind: typeDuration, GoType: t, Bits: 64, Named: true, Encoding: "go-duration", SchemaType: "string"}, nil

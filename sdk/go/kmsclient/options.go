@@ -1,4 +1,4 @@
-package paramstore
+package kmsclient
 
 // getOptions is the resolved set of per-call read options.
 type getOptions struct {

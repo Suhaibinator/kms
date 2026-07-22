@@ -1,4 +1,4 @@
-package paramstore
+package kmsclient
 
 import (
 	"context"
@@ -11,7 +11,7 @@ import (
 	"time"
 
 	kmsv1 "github.com/Suhaibinator/kms/gen/kmsv1"
-	"github.com/Suhaibinator/kms/sdk/go/paramstore/paramstoretest"
+	"github.com/Suhaibinator/kms/sdk/go/kmsclient/kmsclienttest"
 	"google.golang.org/grpc"
 )
 
@@ -142,14 +142,14 @@ func TestSnapshotNoSpuriousCallback(t *testing.T) {
 	}
 
 	// Snapshot repeating the current value must not fire OnChange.
-	sub.PushSnapshot(2, paramstoretest.Param(testNS, "rate", "100", 1))
+	sub.PushSnapshot(2, kmsclienttest.Param(testNS, "rate", "100", 1))
 	time.Sleep(150 * time.Millisecond)
 	if n := atomic.LoadInt32(&fires); n != 0 {
 		t.Errorf("OnChange fired %d times on no-op snapshot, want 0", n)
 	}
 
 	// Snapshot with a new value fires once.
-	sub.PushSnapshot(3, paramstoretest.Param(testNS, "rate", "300", 2))
+	sub.PushSnapshot(3, kmsclienttest.Param(testNS, "rate", "300", 2))
 	if !eventually(t, waitTimeout, func() bool { return pv.Get() == "300" }) {
 		t.Fatalf("snapshot value not applied; Get = %q", pv.Get())
 	}
@@ -709,7 +709,7 @@ func TestSnapshotOnlyDeletesInScopeAbsentPaths(t *testing.T) {
 
 	// Snapshot keeps a present but omits b (deleted while disconnected). Both are
 	// in the subscribed namespace, so b must revert while a stays.
-	sub.PushSnapshot(30, paramstoretest.Param(testNS, "a", "a0", 1))
+	sub.PushSnapshot(30, kmsclienttest.Param(testNS, "a", "a0", 1))
 
 	if !eventually(t, waitTimeout, func() bool { return gone.Get() == "b-def" }) {
 		t.Fatalf("in-scope absent param did not revert; Get = %q, want b-def", gone.Get())

@@ -18,7 +18,7 @@ import (
 	kmsv1 "github.com/Suhaibinator/kms/gen/kmsv1"
 	"github.com/Suhaibinator/kms/internal/core"
 	"github.com/Suhaibinator/kms/internal/domain"
-	paramstore "github.com/Suhaibinator/kms/sdk/go/paramstore"
+	kmsclient "github.com/Suhaibinator/kms/sdk/go/kmsclient"
 )
 
 func TestLoopbackSDKRequiresExplicitVerifiedTLS(t *testing.T) {
@@ -38,7 +38,7 @@ func TestLoopbackSDKRequiresExplicitVerifiedTLS(t *testing.T) {
 		t.Fatalf("seed SDK parameter: %v", err)
 	}
 
-	if client, err := paramstore.NewClient(paramstore.Config{
+	if client, err := kmsclient.NewClient(kmsclient.Config{
 		Endpoint: e.endpoint(), Namespace: "prod/sdk-tls", Token: e.adminToken,
 	}); err == nil {
 		_ = client.Close()
@@ -49,7 +49,7 @@ func TestLoopbackSDKRequiresExplicitVerifiedTLS(t *testing.T) {
 
 	// Explicit cleartext remains available for local development, but it cannot
 	// accidentally speak to this TLS-only listener.
-	insecureClient, err := paramstore.NewClient(paramstore.Config{
+	insecureClient, err := kmsclient.NewClient(kmsclient.Config{
 		Endpoint: e.endpoint(), Namespace: "prod/sdk-tls", Token: e.adminToken, Insecure: true,
 		Timeout: time.Second,
 	})
@@ -63,7 +63,7 @@ func TestLoopbackSDKRequiresExplicitVerifiedTLS(t *testing.T) {
 
 	wrongNameTLS := e.clientTLS(nil)
 	wrongNameTLS.ServerName = "not-localhost.invalid"
-	wrongNameClient, err := paramstore.NewClient(paramstore.Config{
+	wrongNameClient, err := kmsclient.NewClient(kmsclient.Config{
 		Endpoint: e.endpoint(), Namespace: "prod/sdk-tls", Token: e.adminToken,
 		TLS: wrongNameTLS, Timeout: time.Second,
 	})
@@ -75,7 +75,7 @@ func TestLoopbackSDKRequiresExplicitVerifiedTLS(t *testing.T) {
 		t.Fatalf("SDK skipped hostname verification and returned %q", value)
 	}
 
-	client, err := paramstore.NewClient(paramstore.Config{
+	client, err := kmsclient.NewClient(kmsclient.Config{
 		Endpoint: e.endpoint(), Namespace: "prod/sdk-tls", Token: e.adminToken,
 		TLS: e.clientTLS(nil), Timeout: 2 * time.Second,
 	})

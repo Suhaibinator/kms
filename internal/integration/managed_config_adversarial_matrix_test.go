@@ -21,7 +21,7 @@ import (
 	fixturekms "github.com/Suhaibinator/kms/internal/configstorefixture/configkms"
 	"github.com/Suhaibinator/kms/internal/domain"
 	"github.com/Suhaibinator/kms/sdk/go/configstore"
-	"github.com/Suhaibinator/kms/sdk/go/paramstore"
+	"github.com/Suhaibinator/kms/sdk/go/kmsclient"
 )
 
 const adversarialReleaseName = "runtime"
@@ -56,7 +56,7 @@ type adversarialManagedPins struct {
 
 type adversarialRunningStore struct {
 	store     *fixturekms.Store
-	client    *paramstore.Client
+	client    *kmsclient.Client
 	cancel    context.CancelFunc
 	closeOnce sync.Once
 }
@@ -262,7 +262,7 @@ func (h *adversarialManagedApp) startStoreWithDefaults(
 	defaults func() *fixtureconfig.Config,
 ) (*adversarialRunningStore, error) {
 	h.t.Helper()
-	client, err := paramstore.NewClient(paramstore.Config{
+	client, err := kmsclient.NewClient(kmsclient.Config{
 		Endpoint: h.env.endpoint(), Namespace: "prod/" + h.app, Token: h.env.adminToken,
 		TLS: h.env.clientTLS(nil), Timeout: 3 * time.Second, ClientName: "adversarial-managed-integration",
 	})

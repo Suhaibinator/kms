@@ -7,8 +7,8 @@ import (
 
 	rootconfig "github.com/Suhaibinator/kms/internal/configgen/testdata/mutating"
 	"github.com/Suhaibinator/kms/sdk/go/configstore"
-	"github.com/Suhaibinator/kms/sdk/go/paramstore"
-	"github.com/Suhaibinator/kms/sdk/go/paramstore/paramstoretest"
+	"github.com/Suhaibinator/kms/sdk/go/kmsclient"
+	"github.com/Suhaibinator/kms/sdk/go/kmsclient/kmsclienttest"
 )
 
 func TestMutatingValidatorDoesNotCreateDefaultDrift(t *testing.T) {
@@ -35,17 +35,17 @@ func testMutatingValidator(t *testing.T, rawName, wantName string) {
 		secretPath  = "secrets/token"
 	)
 
-	server, err := paramstoretest.New()
+	server, err := kmsclienttest.New()
 	if err != nil {
 		t.Fatal(err)
 	}
 	server.SetParameterVersion(namespace, groupPath, `{"name":"`+rawName+`"}`, "json", 1)
 	server.SetSecretVersion(namespace, secretPath, []byte("secret-value"), "text/plain", 1)
-	if _, err := server.SetActiveRelease(paramstoretest.ReleaseSpec{
+	if _, err := server.SetActiveRelease(kmsclienttest.ReleaseSpec{
 		Namespace: namespace,
 		Name:      releaseName,
 		Version:   1,
-		Entries: []paramstoretest.ReleaseEntrySpec{
+		Entries: []kmsclienttest.ReleaseEntrySpec{
 			{Alias: "runtime", Kind: "parameter", Path: groupPath, Version: 1, ContentType: "json"},
 			{Alias: "token", Kind: "secret", Path: secretPath, Version: 1},
 		},
@@ -54,7 +54,7 @@ func testMutatingValidator(t *testing.T, rawName, wantName string) {
 		t.Fatal(err)
 	}
 
-	client, err := paramstore.NewClient(paramstore.Config{
+	client, err := kmsclient.NewClient(kmsclient.Config{
 		Namespace:   namespace,
 		ClientName:  "mutating-validator-test",
 		DialOptions: server.DialOptions(),

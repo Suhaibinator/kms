@@ -1,4 +1,4 @@
-package paramstore_test
+package kmsclient_test
 
 import (
 	"context"
@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Suhaibinator/kms/sdk/go/paramstore"
-	"github.com/Suhaibinator/kms/sdk/go/paramstore/paramstoretest"
+	"github.com/Suhaibinator/kms/sdk/go/kmsclient"
+	"github.com/Suhaibinator/kms/sdk/go/kmsclient/kmsclienttest"
 )
 
 type cacheIsolationPrepared struct{ committed chan struct{} }
@@ -16,17 +16,17 @@ func (p *cacheIsolationPrepared) Commit() { close(p.committed) }
 func (*cacheIsolationPrepared) Abort()    {}
 
 func TestReleaseLoaderSecretSnapshotIgnoresCallerCacheMutation(t *testing.T) {
-	server, err := paramstoretest.New()
+	server, err := kmsclienttest.New()
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer server.Close()
 	server.SetSecretVersion("prod/app", "password", []byte("original"), "text/plain", 3)
-	_, err = server.SetActiveRelease(paramstoretest.ReleaseSpec{
+	_, err = server.SetActiveRelease(kmsclienttest.ReleaseSpec{
 		Namespace: "prod/app",
 		Name:      "runtime",
 		Version:   1,
-		Entries: []paramstoretest.ReleaseEntrySpec{
+		Entries: []kmsclienttest.ReleaseEntrySpec{
 			{Alias: "password", Kind: "secret", Path: "password", Version: 3},
 		},
 	}, 11)
@@ -34,7 +34,7 @@ func TestReleaseLoaderSecretSnapshotIgnoresCallerCacheMutation(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	client, err := paramstore.NewClient(paramstore.Config{
+	client, err := kmsclient.NewClient(kmsclient.Config{
 		Namespace:   "prod/app",
 		ClientName:  "cache-isolation-test",
 		CacheTTL:    time.Minute,
@@ -43,15 +43,15 @@ func TestReleaseLoaderSecretSnapshotIgnoresCallerCacheMutation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
-	primed, err := client.GetSecret(context.Background(), "password", paramstore.WithVersion(3))
+	primed, err := client.GetSecret(context.Background(), "password", kmsclient.WithVersion(3))
 	if err != nil {
 		t.Fatal(err)
 	}
 	primed.Value()[0] = 'X'
 
-	loader, err := paramstore.NewReleaseLoader(client, paramstore.ReleaseLoaderConfig{Name: "runtime"})
+	loader, err := kmsclient.NewReleaseLoader(client, kmsclient.ReleaseLoaderConfig{Name: "runtime"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -61,7 +61,7 @@ func TestReleaseLoaderSecretSnapshotIgnoresCallerCacheMutation(t *testing.T) {
 	resolved := make(chan string, 1)
 	runErr := make(chan error, 1)
 	go func() {
-		runErr <- loader.Run(ctx, func(_ context.Context, snapshot paramstore.ReleaseSnapshot) (paramstore.PreparedRelease, error) {
+		runErr <- loader.Run(ctx, func(_ context.Context, snapshot kmsclient.ReleaseSnapshot) (kmsclient.PreparedRelease, error) {
 			secret, ok := snapshot.Secret("password")
 			if !ok {
 				resolved <- "<missing>"

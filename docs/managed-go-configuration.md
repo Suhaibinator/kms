@@ -1,7 +1,7 @@
 # Managed Go configuration
 
 The managed Go configuration API builds an application-specific, typed store
-on top of `paramstore.ReleaseLoader`. The loader continues to own release
+on top of `kmsclient.ReleaseLoader`. The loader continues to own release
 watching, exact pin resolution, digest checks, acknowledgements,
 supersession, and last-known-good behavior. Generated bindings add strict
 decoding, validation, application-owned defaults, drift policy, immutable
@@ -41,7 +41,7 @@ import (
     "fmt"
     "time"
 
-    "github.com/Suhaibinator/kms/sdk/go/paramstore"
+    "github.com/Suhaibinator/kms/sdk/go/kmsclient"
 )
 
 type Config struct {
@@ -51,7 +51,7 @@ type Config struct {
     DBQueryTimeout time.Duration `json:"db_query_timeout" kms:"group=database,reload=hot" kms_views:"persistence_handler,database_health"`
     RequestLimit   int           `json:"request_limit" kms:"group=rate_limits,reload=hot" kms_views:"api_handler,background_jobs"`
 
-    DBPassword paramstore.Secret `json:"-" kms:"secret=db_password,reload=restart" kms_views:"persistence_handler"`
+    DBPassword kmsclient.Secret `json:"-" kms:"secret=db_password,reload=restart" kms_views:"persistence_handler"`
 
     LocalOnly string `kms:"-"`
 }
@@ -90,7 +90,7 @@ fields. The generator enforces these declaration rules:
 - A parameter field has one `group` alias, one `reload=hot|restart` policy,
   an explicit `json` property name, and at least one `kms_views` membership.
 - A secret field has one `secret` alias, one reload policy, `json:"-"`, at
-  least one view, and the exact type `paramstore.Secret`.
+  least one view, and the exact type `kmsclient.Secret`.
 - JSON tag options such as `omitempty` and `,string` are unsupported on root
   or nested managed fields. Nested struct fields may omit the tag to use their
   Go field name, but explicit names are recommended for a stable contract.
@@ -222,7 +222,7 @@ func Defaults() *commonconfig.Config {
 }
 ```
 
-Every default `paramstore.Secret` field must be its exact zero value: no
+Every default `kmsclient.Secret` field must be its exact zero value: no
 plaintext, path, version, or content type. Generated `Start` rejects a non-zero
 secret default before starting the release loader. Secrets must come only from
 the exact release pins.
@@ -517,7 +517,7 @@ acknowledgements.
 
 ## Testing
 
-`paramstoretest` supports exact-version parameter/secret values and scripted
+`kmsclienttest` supports exact-version parameter/secret values and scripted
 configuration releases in-process. Use `SetParameterVersion`,
 `SetSecretVersion`, `SetActiveRelease`, and
 `ActivateConfigurationRelease`; `WaitForReleaseSubscribe` exposes lifecycle

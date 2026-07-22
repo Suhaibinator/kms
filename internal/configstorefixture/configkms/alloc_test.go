@@ -5,7 +5,7 @@ import (
 	"time"
 
 	fixtureconfig "github.com/Suhaibinator/kms/internal/configstorefixture/config"
-	"github.com/Suhaibinator/kms/sdk/go/paramstore"
+	"github.com/Suhaibinator/kms/sdk/go/kmsclient"
 )
 
 var (
@@ -15,13 +15,13 @@ var (
 	benchmarkDuration        time.Duration
 	benchmarkInteger         int
 	benchmarkEndpoint        fixtureconfig.Endpoint
-	benchmarkSecret          paramstore.Secret
+	benchmarkSecret          kmsclient.Secret
 )
 
 func getterFixture() (*Store, Snapshot) {
 	configuration := fixtureconfig.Defaults()
-	configuration.Password = paramstore.NewSecret([]byte("benchmark-password"))
-	configuration.RuntimeToken = paramstore.NewSecret([]byte("benchmark-token"))
+	configuration.Password = kmsclient.NewSecret([]byte("benchmark-password"))
+	configuration.RuntimeToken = kmsclient.NewSecret([]byte("benchmark-token"))
 	store := &Store{}
 	store.active.Store(&immutableGeneration{config: configuration})
 	return store, store.Current()

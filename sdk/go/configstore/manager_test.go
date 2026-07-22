@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Suhaibinator/kms/sdk/go/paramstore"
+	"github.com/Suhaibinator/kms/sdk/go/kmsclient"
 )
 
 func unitManager(options Options, prepare PrepareFunc) *Manager {
@@ -36,7 +36,7 @@ func TestManagerStrictStartupMismatchIsTypedFatalAndNeverPublishes(t *testing.T)
 	aborted := 0
 	manager := unitManager(Options{
 		OnDefaultMismatch: func(report DefaultMismatchReport) { reports = append(reports, report) },
-	}, func(context.Context, paramstore.ReleaseSnapshot) (PreparedCandidate, error) {
+	}, func(context.Context, kmsclient.ReleaseSnapshot) (PreparedCandidate, error) {
 		return PreparedCandidate{
 			Publish: func() { published++ },
 			Abort:   func() { aborted++ },
@@ -46,7 +46,7 @@ func TestManagerStrictStartupMismatchIsTypedFatalAndNeverPublishes(t *testing.T)
 		}, nil
 	})
 
-	prepared, err := manager.prepareWithIdentity(context.Background(), paramstore.ReleaseSnapshot{}, testIdentity(1, 1))
+	prepared, err := manager.prepareWithIdentity(context.Background(), kmsclient.ReleaseSnapshot{}, testIdentity(1, 1))
 	if prepared != nil || err == nil {
 		t.Fatalf("prepareWithIdentity() = (%v, %v), want rejection", prepared, err)
 	}
@@ -75,7 +75,7 @@ func TestManagerBypassRuntimeDivergenceRestorationAndDeduplication(t *testing.T)
 	manager := unitManager(Options{
 		AllowDefaultMismatch: true,
 		OnDefaultMismatch:    func(report DefaultMismatchReport) { reports = append(reports, report) },
-	}, func(context.Context, paramstore.ReleaseSnapshot) (PreparedCandidate, error) {
+	}, func(context.Context, kmsclient.ReleaseSnapshot) (PreparedCandidate, error) {
 		return next, nil
 	})
 
@@ -86,7 +86,7 @@ func TestManagerBypassRuntimeDivergenceRestorationAndDeduplication(t *testing.T)
 			Path: "group.limit", Expected: 10, Actual: 20,
 		}},
 	}
-	prepared, err := manager.prepareWithIdentity(context.Background(), paramstore.ReleaseSnapshot{}, testIdentity(1, 1))
+	prepared, err := manager.prepareWithIdentity(context.Background(), kmsclient.ReleaseSnapshot{}, testIdentity(1, 1))
 	if err != nil {
 		t.Fatalf("bypassed startup prepare error = %v", err)
 	}
@@ -104,7 +104,7 @@ func TestManagerBypassRuntimeDivergenceRestorationAndDeduplication(t *testing.T)
 			Path: "group.limit", Expected: 10, Actual: 30,
 		}},
 	}
-	prepared, err = manager.prepareWithIdentity(context.Background(), paramstore.ReleaseSnapshot{}, testIdentity(2, 2))
+	prepared, err = manager.prepareWithIdentity(context.Background(), kmsclient.ReleaseSnapshot{}, testIdentity(2, 2))
 	if err != nil {
 		t.Fatalf("runtime mismatch prepare error = %v", err)
 	}
@@ -115,7 +115,7 @@ func TestManagerBypassRuntimeDivergenceRestorationAndDeduplication(t *testing.T)
 
 	// A reconciliation of the identical release candidate must not report a
 	// second time.
-	prepared, err = manager.prepareWithIdentity(context.Background(), paramstore.ReleaseSnapshot{}, testIdentity(2, 2))
+	prepared, err = manager.prepareWithIdentity(context.Background(), kmsclient.ReleaseSnapshot{}, testIdentity(2, 2))
 	if err != nil {
 		t.Fatalf("repeat prepare error = %v", err)
 	}
@@ -125,7 +125,7 @@ func TestManagerBypassRuntimeDivergenceRestorationAndDeduplication(t *testing.T)
 	}
 
 	next = PreparedCandidate{Publish: func() { published++ }}
-	prepared, err = manager.prepareWithIdentity(context.Background(), paramstore.ReleaseSnapshot{}, testIdentity(3, 3))
+	prepared, err = manager.prepareWithIdentity(context.Background(), kmsclient.ReleaseSnapshot{}, testIdentity(3, 3))
 	if err != nil {
 		t.Fatalf("restoration prepare error = %v", err)
 	}
@@ -143,10 +143,10 @@ func TestManagerRejectsWholeRuntimeCandidateForRestartChange(t *testing.T) {
 	manager := unitManager(Options{
 		AllowDefaultMismatch: true,
 		OnDefaultMismatch:    func(DefaultMismatchReport) { reports++ },
-	}, func(context.Context, paramstore.ReleaseSnapshot) (PreparedCandidate, error) { return next, nil })
+	}, func(context.Context, kmsclient.ReleaseSnapshot) (PreparedCandidate, error) { return next, nil })
 
 	next = PreparedCandidate{Publish: func() { published++ }}
-	initial, err := manager.prepareWithIdentity(context.Background(), paramstore.ReleaseSnapshot{}, testIdentity(1, 1))
+	initial, err := manager.prepareWithIdentity(context.Background(), kmsclient.ReleaseSnapshot{}, testIdentity(1, 1))
 	if err != nil {
 		t.Fatalf("initial prepare error = %v", err)
 	}
@@ -160,7 +160,7 @@ func TestManagerRejectsWholeRuntimeCandidateForRestartChange(t *testing.T) {
 		}},
 		RestartRequiredFields: []string{"group.restart"},
 	}
-	prepared, err := manager.prepareWithIdentity(context.Background(), paramstore.ReleaseSnapshot{}, testIdentity(2, 2))
+	prepared, err := manager.prepareWithIdentity(context.Background(), kmsclient.ReleaseSnapshot{}, testIdentity(2, 2))
 	if prepared != nil || err == nil {
 		t.Fatalf("runtime restart prepare = (%v, %v)", prepared, err)
 	}
@@ -182,7 +182,7 @@ func TestManagerRecoversMismatchCallbackPanicAndAborts(t *testing.T) {
 			callbacks++
 			panic("secret callback panic")
 		},
-	}, func(context.Context, paramstore.ReleaseSnapshot) (PreparedCandidate, error) {
+	}, func(context.Context, kmsclient.ReleaseSnapshot) (PreparedCandidate, error) {
 		return PreparedCandidate{
 			Publish:            func() { t.Fatal("candidate was published") },
 			Abort:              func() { aborted++ },
@@ -190,7 +190,7 @@ func TestManagerRecoversMismatchCallbackPanicAndAborts(t *testing.T) {
 		}, nil
 	})
 
-	prepared, err := manager.prepareWithIdentity(context.Background(), paramstore.ReleaseSnapshot{}, testIdentity(1, 1))
+	prepared, err := manager.prepareWithIdentity(context.Background(), kmsclient.ReleaseSnapshot{}, testIdentity(1, 1))
 	if prepared != nil || err == nil {
 		t.Fatalf("callback panic prepare = (%v, %v)", prepared, err)
 	}
@@ -201,7 +201,7 @@ func TestManagerRecoversMismatchCallbackPanicAndAborts(t *testing.T) {
 	if aborted != 1 {
 		t.Fatalf("Abort count = %d", aborted)
 	}
-	prepared, err = manager.prepareWithIdentity(context.Background(), paramstore.ReleaseSnapshot{}, testIdentity(1, 1))
+	prepared, err = manager.prepareWithIdentity(context.Background(), kmsclient.ReleaseSnapshot{}, testIdentity(1, 1))
 	if prepared != nil || err == nil {
 		t.Fatalf("reconciled callback panic prepare = (%v, %v)", prepared, err)
 	}
@@ -213,18 +213,18 @@ func TestManagerRecoversMismatchCallbackPanicAndAborts(t *testing.T) {
 func TestManagerRequiresPublishAndAbortIsIdempotent(t *testing.T) {
 	aborted := 0
 	manager := unitManager(Options{OnDefaultMismatch: func(DefaultMismatchReport) {}},
-		func(context.Context, paramstore.ReleaseSnapshot) (PreparedCandidate, error) {
+		func(context.Context, kmsclient.ReleaseSnapshot) (PreparedCandidate, error) {
 			return PreparedCandidate{Abort: func() { aborted++ }}, nil
 		})
-	prepared, err := manager.prepareWithIdentity(context.Background(), paramstore.ReleaseSnapshot{}, testIdentity(1, 1))
+	prepared, err := manager.prepareWithIdentity(context.Background(), kmsclient.ReleaseSnapshot{}, testIdentity(1, 1))
 	if prepared != nil || err == nil || aborted != 1 {
 		t.Fatalf("missing Publish result = (%v, %v), aborted=%d", prepared, err, aborted)
 	}
 
-	manager.prepare = func(context.Context, paramstore.ReleaseSnapshot) (PreparedCandidate, error) {
+	manager.prepare = func(context.Context, kmsclient.ReleaseSnapshot) (PreparedCandidate, error) {
 		return PreparedCandidate{Publish: func() {}, Abort: func() { aborted++ }}, nil
 	}
-	prepared, err = manager.prepareWithIdentity(context.Background(), paramstore.ReleaseSnapshot{}, testIdentity(2, 2))
+	prepared, err = manager.prepareWithIdentity(context.Background(), kmsclient.ReleaseSnapshot{}, testIdentity(2, 2))
 	if err != nil {
 		t.Fatalf("prepare error = %v", err)
 	}
@@ -236,10 +236,10 @@ func TestManagerRequiresPublishAndAbortIsIdempotent(t *testing.T) {
 }
 
 func TestStartRejectsNilMismatchCallbackBeforeLoaderRuns(t *testing.T) {
-	_, err := Start(context.Background(), &paramstore.Client{}, Options{
+	_, err := Start(context.Background(), &kmsclient.Client{}, Options{
 		Release:  "runtime",
 		Contract: []ContractEntry{{Alias: "group", Kind: ContractKindParameter, ContentType: "json"}},
-	}, func(context.Context, paramstore.ReleaseSnapshot) (PreparedCandidate, error) {
+	}, func(context.Context, kmsclient.ReleaseSnapshot) (PreparedCandidate, error) {
 		return PreparedCandidate{}, nil
 	})
 	if err == nil || !strings.Contains(err.Error(), "OnDefaultMismatch") {
@@ -254,12 +254,12 @@ func TestManagerReportsSafeRestartPathsOncePerCandidate(t *testing.T) {
 		AllowDefaultMismatch: true,
 		OnDefaultMismatch:    func(DefaultMismatchReport) {},
 		OnCandidateRejected:  func(report CandidateRejectionReport) { reports = append(reports, report) },
-	}, func(context.Context, paramstore.ReleaseSnapshot) (PreparedCandidate, error) {
+	}, func(context.Context, kmsclient.ReleaseSnapshot) (PreparedCandidate, error) {
 		return next, nil
 	})
 
 	next = PreparedCandidate{Publish: func() {}}
-	initial, err := manager.prepareWithIdentity(context.Background(), paramstore.ReleaseSnapshot{}, testIdentity(1, 1))
+	initial, err := manager.prepareWithIdentity(context.Background(), kmsclient.ReleaseSnapshot{}, testIdentity(1, 1))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -270,7 +270,7 @@ func TestManagerReportsSafeRestartPathsOncePerCandidate(t *testing.T) {
 		RestartRequiredFields: []string{"database.endpoint", "secret_alias", "unsafe\npath"},
 	}
 	for range 2 {
-		prepared, prepareErr := manager.prepareWithIdentity(context.Background(), paramstore.ReleaseSnapshot{}, testIdentity(2, 2))
+		prepared, prepareErr := manager.prepareWithIdentity(context.Background(), kmsclient.ReleaseSnapshot{}, testIdentity(2, 2))
 		if prepared != nil || prepareErr == nil {
 			t.Fatalf("restart prepare = (%v, %v), want rejection", prepared, prepareErr)
 		}
@@ -300,12 +300,12 @@ func TestManagerCandidateRejectionCallbackPanicCannotChangeAdmissionOrRepeat(t *
 			reports = append(reports, report)
 			panic("callback panic must be isolated")
 		},
-	}, func(context.Context, paramstore.ReleaseSnapshot) (PreparedCandidate, error) {
+	}, func(context.Context, kmsclient.ReleaseSnapshot) (PreparedCandidate, error) {
 		return PreparedCandidate{}, Reject(RejectConfigValidationFailed, errors.New(canary))
 	})
 
 	for range 2 {
-		prepared, err := manager.prepareWithIdentity(context.Background(), paramstore.ReleaseSnapshot{}, testIdentity(7, 11))
+		prepared, err := manager.prepareWithIdentity(context.Background(), kmsclient.ReleaseSnapshot{}, testIdentity(7, 11))
 		if prepared != nil || err == nil {
 			t.Fatalf("validation prepare = (%v, %v), want rejection", prepared, err)
 		}

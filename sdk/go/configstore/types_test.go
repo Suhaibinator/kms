@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Suhaibinator/kms/sdk/go/paramstore"
+	"github.com/Suhaibinator/kms/sdk/go/kmsclient"
 )
 
 func TestCandidateErrorClassifiesUnwrapsAndRedacts(t *testing.T) {
@@ -59,8 +59,8 @@ func TestRejectNormalizesUnknownCategory(t *testing.T) {
 func TestDefaultMismatchReportIsDeeplyImmutableAndSecretFree(t *testing.T) {
 	expected := map[string][]int{"values": {1, 2}}
 	actual := struct {
-		Secret paramstore.Secret
-	}{Secret: paramstore.NewSecret([]byte("plaintext-canary"))}
+		Secret kmsclient.Secret
+	}{Secret: kmsclient.NewSecret([]byte("plaintext-canary"))}
 	report := newDefaultMismatchReport(
 		MismatchStartup,
 		MismatchFatal,
@@ -134,7 +134,7 @@ func TestDefaultMismatchReportNormalizesUnsafeCallerPath(t *testing.T) {
 }
 
 func TestReleaseIdentitySafeZeroRepresentation(t *testing.T) {
-	identity := ReleaseIdentityFromSnapshot(paramstore.ReleaseSnapshot{})
+	identity := ReleaseIdentityFromSnapshot(kmsclient.ReleaseSnapshot{})
 	if !identity.IsZero() || strings.Contains(identity.String(), "[REDACTED]") {
 		t.Fatalf("unexpected zero identity: %s", identity.String())
 	}

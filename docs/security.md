@@ -673,7 +673,7 @@ operations) are eligible without a namespace.
 
 Redaction is enforced by type, not by call-site discipline:
 
-- The Go SDK's `Secret` and `SecretValue` types (`sdk/go/paramstore`) always
+- The Go SDK's `Secret` and `SecretValue` types (`sdk/go/kmsclient`) always
   print `"[REDACTED]"` from `String`, `GoString`, `Format` (every `fmt`
   verb), and `MarshalJSON` — plaintext is reachable only via `Value()`/
   `StringValue()`. This makes accidental logging of a secret a type error
