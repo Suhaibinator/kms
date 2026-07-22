@@ -183,6 +183,82 @@ func newReleaseTestClient(t *testing.T, server *releaseLoaderServer) *Client {
 	return client
 }
 
+type gatedRejectedAckClient struct {
+	kmsv1.ConfigurationReleaseServiceClient
+	started chan struct{}
+	allow   <-chan struct{}
+	once    sync.Once
+}
+
+func (c *gatedRejectedAckClient) WatchRelease(ctx context.Context, opts ...grpc.CallOption) (kmsv1.ConfigurationReleaseService_WatchReleaseClient, error) {
+	stream, err := c.ConfigurationReleaseServiceClient.WatchRelease(ctx, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return &gatedRejectedAckStream{
+		ConfigurationReleaseService_WatchReleaseClient: stream,
+		started: c.started,
+		allow:   c.allow,
+		once:    &c.once,
+	}, nil
+}
+
+type gatedRejectedAckStream struct {
+	kmsv1.ConfigurationReleaseService_WatchReleaseClient
+	started chan struct{}
+	allow   <-chan struct{}
+	once    *sync.Once
+}
+
+func (s *gatedRejectedAckStream) Send(request *kmsv1.WatchReleaseRequest) error {
+	ack := request.GetAcknowledgement()
+	if ack != nil && ack.GetState() == ReleaseStateRejected {
+		s.once.Do(func() { close(s.started) })
+		select {
+		case <-s.allow:
+		case <-s.Context().Done():
+			return s.Context().Err()
+		}
+	}
+	return s.ConfigurationReleaseService_WatchReleaseClient.Send(request)
+}
+
+type failRejectedAckOnceClient struct {
+	kmsv1.ConfigurationReleaseServiceClient
+	failed   atomic.Bool
+	attempts chan struct{}
+}
+
+func (c *failRejectedAckOnceClient) WatchRelease(ctx context.Context, opts ...grpc.CallOption) (kmsv1.ConfigurationReleaseService_WatchReleaseClient, error) {
+	stream, err := c.ConfigurationReleaseServiceClient.WatchRelease(ctx, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return &failRejectedAckOnceStream{
+		ConfigurationReleaseService_WatchReleaseClient: stream,
+		failed:   &c.failed,
+		attempts: c.attempts,
+	}, nil
+}
+
+type failRejectedAckOnceStream struct {
+	kmsv1.ConfigurationReleaseService_WatchReleaseClient
+	failed   *atomic.Bool
+	attempts chan struct{}
+}
+
+func (s *failRejectedAckOnceStream) Send(request *kmsv1.WatchReleaseRequest) error {
+	ack := request.GetAcknowledgement()
+	if ack != nil && ack.GetState() == ReleaseStateRejected {
+		s.attempts <- struct{}{}
+		if s.failed.CompareAndSwap(false, true) {
+			_ = s.ConfigurationReleaseService_WatchReleaseClient.CloseSend()
+			return errors.New("injected rejected acknowledgement send failure")
+		}
+	}
+	return s.ConfigurationReleaseService_WatchReleaseClient.Send(request)
+}
+
 type testPreparedRelease struct {
 	commits atomic.Int32
 	aborts  atomic.Int32
@@ -377,6 +453,171 @@ func TestReleaseLoaderResolvesRedactsCommitsAndAcknowledges(t *testing.T) {
 	cancel()
 	if err := <-runErr; err != context.Canceled {
 		t.Fatalf("Run error = %v, want context.Canceled", err)
+	}
+}
+
+func TestReleaseLoaderStartupRejectionWaitsForRejectedAcknowledgementSend(t *testing.T) {
+	server := newReleaseLoaderServer()
+	release := testRelease(7, 42, `{"enabled":true}`)
+	server.setActive(release, 42)
+	server.parameters["settings"] = &kmsv1.Parameter{Ref: testResource("settings"), Value: `{"enabled":true}`, ContentType: "json", Version: 7}
+	server.secrets["password"] = &kmsv1.GetSecretResponse{Ref: testResource("password"), Version: 7, Value: []byte("secret"), ContentType: "text/plain"}
+	client := newReleaseTestClient(t, server)
+
+	rejectedSendStarted := make(chan struct{})
+	allowRejectedSend := make(chan struct{})
+	sendReleased := false
+	defer func() {
+		if !sendReleased {
+			close(allowRejectedSend)
+		}
+	}()
+	client.releases = &gatedRejectedAckClient{
+		ConfigurationReleaseServiceClient: client.releases,
+		started:                           rejectedSendStarted,
+		allow:                             allowRejectedSend,
+	}
+
+	loader, err := NewReleaseLoader(client, ReleaseLoaderConfig{
+		Name:                "runtime",
+		SecretTokenProvider: func(string, string) (string, bool) { return "token", true },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	allowPrepareFailure := make(chan struct{})
+	runErr := make(chan error, 1)
+	go func() {
+		runErr <- loader.Run(context.Background(), func(context.Context, ReleaseSnapshot) (PreparedRelease, error) {
+			<-allowPrepareFailure
+			return nil, errors.New("reject initial candidate")
+		})
+	}()
+
+	select {
+	case <-server.watchRegs:
+	case <-time.After(2 * time.Second):
+		t.Fatal("release watch did not register before startup rejection")
+	}
+	close(allowPrepareFailure)
+	select {
+	case <-rejectedSendStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("release watch never attempted the rejected acknowledgement")
+	}
+
+	select {
+	case err := <-runErr:
+		t.Fatalf("Run returned %v before the rejected acknowledgement send completed", err)
+	case <-time.After(250 * time.Millisecond):
+	}
+
+	close(allowRejectedSend)
+	sendReleased = true
+	var rejected *kmsv1.ReleaseAcknowledgement
+	deadline := time.After(2 * time.Second)
+	for rejected == nil {
+		select {
+		case ack := <-server.acks:
+			if ack.GetState() == ReleaseStateRejected {
+				rejected = ack
+			}
+		case err := <-runErr:
+			t.Fatalf("Run returned %v before the server recorded the rejected acknowledgement", err)
+		case <-deadline:
+			t.Fatal("server did not record the rejected acknowledgement")
+		}
+	}
+	if rejected.GetRejectionCategory() != ReleaseRejectPrepareFailed {
+		t.Fatalf("rejection category = %q, want %q", rejected.GetRejectionCategory(), ReleaseRejectPrepareFailed)
+	}
+	if err := <-runErr; err == nil || !strings.Contains(err.Error(), ReleaseRejectPrepareFailed) {
+		t.Fatalf("Run error = %v, want %s", err, ReleaseRejectPrepareFailed)
+	}
+}
+
+func TestReleaseLoaderGracefulStopRetriesRejectedAcknowledgementAfterSendFailure(t *testing.T) {
+	server := newReleaseLoaderServer()
+	client := newReleaseTestClient(t, server)
+	attempts := make(chan struct{}, 2)
+	client.releases = &failRejectedAckOnceClient{
+		ConfigurationReleaseServiceClient: client.releases,
+		attempts:                          attempts,
+	}
+	loader, err := NewReleaseLoader(client, ReleaseLoaderConfig{Name: "runtime"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ns, err := parseNamespace("prod/app")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	gracefulStop := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		loader.watchLoop(ctx, ns, make(chan releaseCandidate, 1), gracefulStop)
+		close(done)
+	}()
+
+	select {
+	case <-server.watchRegs:
+	case <-time.After(2 * time.Second):
+		t.Fatal("initial release watch did not register")
+	}
+	loader.ackMu.Lock()
+	loader.pendingAck[ReleaseStateRejected] = &kmsv1.ReleaseAcknowledgement{
+		Namespace:          ns.proto(),
+		Name:               "runtime",
+		Version:            7,
+		ActivationRevision: 42,
+		State:              ReleaseStateRejected,
+		RejectionCategory:  ReleaseRejectPrepareFailed,
+	}
+	loader.dirtyAck[ReleaseStateRejected] = true
+	loader.ackMu.Unlock()
+	close(gracefulStop)
+
+	select {
+	case <-attempts:
+	case <-time.After(2 * time.Second):
+		t.Fatal("graceful stop did not attempt the pending rejected acknowledgement")
+	}
+	select {
+	case <-server.watchRegs:
+	case <-done:
+		t.Fatal("graceful stop abandoned the rejected acknowledgement after one send failure")
+	case <-time.After(2 * time.Second):
+		t.Fatal("graceful stop did not reconnect after the rejected acknowledgement send failure")
+	}
+	select {
+	case <-attempts:
+	case <-done:
+		t.Fatal("graceful stop ended before retrying the rejected acknowledgement")
+	case <-time.After(2 * time.Second):
+		t.Fatal("reconnected watch did not retry the rejected acknowledgement")
+	}
+
+	var rejected *kmsv1.ReleaseAcknowledgement
+	deadline := time.After(2 * time.Second)
+	for rejected == nil {
+		select {
+		case ack := <-server.acks:
+			if ack.GetState() == ReleaseStateRejected {
+				rejected = ack
+			}
+		case <-done:
+			t.Fatal("graceful stop ended before the server recorded the retried acknowledgement")
+		case <-deadline:
+			t.Fatal("server did not record the retried rejected acknowledgement")
+		}
+	}
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("release watch did not finish after the successful retry")
 	}
 }
 

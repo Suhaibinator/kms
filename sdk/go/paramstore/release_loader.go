@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"sort"
 	"strings"
 	"sync"
@@ -241,12 +242,16 @@ func (l *ReleaseLoader) Run(ctx context.Context, prepare PrepareReleaseFunc) err
 	l.lastSeen.Store(initial.revision)
 
 	runCtx, cancelRun := context.WithCancel(ctx)
-	defer cancelRun()
 	events := make(chan releaseCandidate, 1)
+	gracefulWatchStop := make(chan struct{})
 	watchDone := make(chan struct{})
 	go func() {
 		defer close(watchDone)
-		l.watchLoop(runCtx, ns, events)
+		l.watchLoop(runCtx, ns, events, gracefulWatchStop)
+	}()
+	defer func() {
+		cancelRun()
+		<-watchDone
 	}()
 
 	// Preparation callbacks are application code and may not return promptly
@@ -335,7 +340,14 @@ func (l *ReleaseLoader) Run(ctx context.Context, prepare PrepareReleaseFunc) err
 					queue(fresh)
 					continue
 				}
-				cancelRun()
+				// The initial failure is about to terminate the process-facing
+				// loader. Half-close the watch only after flushing lifecycle
+				// acknowledgements, then wait for the server to finish the stream.
+				// This preserves the rejected startup outcome instead of racing it
+				// against deferred context cancellation. A broken transport is
+				// bounded by the client's RPC timeout and cannot hang startup.
+				close(gracefulWatchStop)
+				waitForReleaseWatchStop(ctx, cancelRun, watchDone, l.client.timeout)
 				return result.err
 			}
 			if result.err != nil && result.category != ReleaseRejectSuperseded {
@@ -837,11 +849,33 @@ func (l *ReleaseLoader) getActive(ctx context.Context, ns namespaceRef) (release
 	return releaseCandidate{release: resp.GetRelease(), revision: resp.GetActivationRevision()}, nil
 }
 
-func (l *ReleaseLoader) watchLoop(ctx context.Context, ns namespaceRef, events chan releaseCandidate) {
+func waitForReleaseWatchStop(ctx context.Context, cancel context.CancelFunc, done <-chan struct{}, timeout time.Duration) {
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	select {
+	case <-done:
+		return
+	case <-ctx.Done():
+	case <-timer.C:
+	}
+	cancel()
+	<-done
+}
+
+func (l *ReleaseLoader) watchLoop(ctx context.Context, ns namespaceRef, events chan releaseCandidate, gracefulStop <-chan struct{}) {
 	attempt := 0
+	stopping := false
 	for ctx.Err() == nil {
-		receivedEvent, err := l.watchSession(ctx, ns, events)
+		receivedEvent, stopped, err := l.watchSession(ctx, ns, events, gracefulStop)
+		if stopped {
+			return
+		}
 		if ctx.Err() != nil {
+			return
+		}
+		if stopping {
+			// The one immediate graceful-shutdown reconnect failed. There is
+			// no live stream on which the queued acknowledgement can be sent.
 			return
 		}
 		if receivedEvent {
@@ -856,15 +890,18 @@ func (l *ReleaseLoader) watchLoop(ctx context.Context, ns namespaceRef, events c
 		case <-ctx.Done():
 			timer.Stop()
 			return
+		case <-gracefulStop:
+			timer.Stop()
+			stopping = true
 		case <-timer.C:
 		}
 	}
 }
 
-func (l *ReleaseLoader) watchSession(ctx context.Context, ns namespaceRef, events chan releaseCandidate) (bool, error) {
+func (l *ReleaseLoader) watchSession(ctx context.Context, ns namespaceRef, events chan releaseCandidate, gracefulStop <-chan struct{}) (bool, bool, error) {
 	stream, err := l.client.releases.WatchRelease(l.client.withAuth(ctx, ""))
 	if err != nil {
-		return false, err
+		return false, false, err
 	}
 	if err := stream.Send(&kmsv1.WatchReleaseRequest{Request: &kmsv1.WatchReleaseRequest_Register{
 		Register: &kmsv1.ReleaseWatchRegistration{
@@ -875,10 +912,10 @@ func (l *ReleaseLoader) watchSession(ctx context.Context, ns namespaceRef, event
 			LastSeenRevision: l.lastSeen.Load(),
 		},
 	}}); err != nil {
-		return false, err
+		return false, false, err
 	}
 	if err := l.sendPendingAcks(stream, true); err != nil {
-		return false, err
+		return false, false, err
 	}
 	receivedEvent := false
 
@@ -896,14 +933,47 @@ func (l *ReleaseLoader) watchSession(ctx context.Context, ns namespaceRef, event
 	for {
 		select {
 		case <-ctx.Done():
-			return receivedEvent, ctx.Err()
+			return receivedEvent, false, ctx.Err()
+		case <-gracefulStop:
+			if err := l.sendPendingAcks(stream, false); err != nil {
+				return receivedEvent, false, err
+			}
+			if err := stream.CloseSend(); err != nil {
+				return receivedEvent, false, err
+			}
+			// Client-stream ordering guarantees that the server reads every
+			// acknowledgement sent before EOF. Drain server messages until it
+			// observes that EOF and closes its side of the stream.
+			for {
+				select {
+				case <-ctx.Done():
+					return receivedEvent, true, ctx.Err()
+				case item := <-recv:
+					if item.err != nil {
+						if errors.Is(item.err, io.EOF) {
+							return receivedEvent, true, nil
+						}
+						return receivedEvent, false, item.err
+					}
+					if item.event != nil {
+						receivedEvent = true
+					}
+					go func() {
+						next, recvErr := stream.Recv()
+						recv <- struct {
+							event *kmsv1.WatchReleaseEvent
+							err   error
+						}{event: next, err: recvErr}
+					}()
+				}
+			}
 		case <-l.ackSignal:
 			if err := l.sendPendingAcks(stream, false); err != nil {
-				return receivedEvent, err
+				return receivedEvent, false, err
 			}
 		case item := <-recv:
 			if item.err != nil {
-				return receivedEvent, item.err
+				return receivedEvent, false, item.err
 			}
 			event := item.event
 			if event != nil {
