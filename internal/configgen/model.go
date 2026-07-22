@@ -149,7 +149,7 @@ func analyzePackage(pkg *types.Package, sizes types.Sizes, typeName string) (*ir
 	for i := 0; i < rootStruct.NumFields(); i++ {
 		field := rootStruct.Field(i)
 		if !field.Exported() {
-			continue
+			return nil, fmt.Errorf("configgen: unexported root field %s cannot be isolated by a separate binding package", field.Name())
 		}
 		if field.Anonymous() {
 			return nil, fmt.Errorf("configgen: root field %s is embedded; managed fields must be named", field.Name())
@@ -162,6 +162,9 @@ func analyzePackage(pkg *types.Package, sizes types.Sizes, typeName string) (*ir
 		if strings.TrimSpace(kmsTag) == "-" {
 			if views, ok := tag.Lookup("kms_views"); ok && strings.TrimSpace(views) != "" {
 				return nil, fmt.Errorf("configgen: excluded field %s must not declare kms_views", field.Name())
+			}
+			if _, err := analyzeType(field.Type(), sizes, make(map[types.Type]bool), "excluded field "+field.Name()); err != nil {
+				return nil, fmt.Errorf("configgen: excluded field %s must be structurally deep-cloneable: %w", field.Name(), err)
 			}
 			continue
 		}
@@ -347,6 +350,9 @@ func explicitJSONName(fieldName string, tag reflect.StructTag) (string, error) {
 	if len(parts) != 1 {
 		return "", fmt.Errorf("configgen: parameter field %s has unsupported json tag options", fieldName)
 	}
+	if !validAlias(parts[0]) {
+		return "", fmt.Errorf("configgen: parameter field %s has noncanonical JSON property name %q", fieldName, parts[0])
+	}
 	return parts[0], nil
 }
 
@@ -399,6 +405,13 @@ func analyzeType(t types.Type, sizes types.Sizes, stack map[types.Type]bool, loc
 	if basic, ok := underlying.(*types.Basic); ok {
 		info := basic.Info()
 		bits := int(sizes.Sizeof(t) * 8)
+		// Machine-sized integers use a fixed portable 32-bit contract. This keeps
+		// checked-in schema/contract artifacts deterministic across GOARCH and
+		// guarantees that every schema-valid value fits the generated field on
+		// both 32-bit and 64-bit Go targets.
+		if basic.Kind() == types.Int || basic.Kind() == types.Uint {
+			bits = 32
+		}
 		switch {
 		case info&types.IsBoolean != 0:
 			return &typeIR{Kind: typeBool, GoType: t, Named: named, Encoding: "boolean", SchemaType: "boolean"}, nil
@@ -484,6 +497,9 @@ func analyzeType(t types.Type, sizes types.Sizes, stack map[types.Type]bool, loc
 				jsonName = rawTag
 			}
 			if included {
+				if !validAlias(jsonName) {
+					return nil, fmt.Errorf("configgen: %s.%s has noncanonical JSON property name %q", location, field.Name(), jsonName)
+				}
 				if previous, duplicate := jsonNames[jsonName]; duplicate {
 					return nil, fmt.Errorf("configgen: %s has duplicate JSON name %q on fields %s and %s", location, jsonName, previous, field.Name())
 				}

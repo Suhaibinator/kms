@@ -546,6 +546,9 @@ func TestStrictDecodeContractAndValidationRejections(t *testing.T) {
 		t.Fatalf("contract rejection ack = category %q diagnostic %q", ack.GetRejectionCategory(), ack.GetDiagnostic())
 	}
 	waitRejectedCount(t, fixture.store, configstore.RejectConfigContractMismatch, 1)
+	if status := fixture.store.Status(); status.Observed.Version() != 2 || status.Observed.ActivationRevision() != 102 {
+		t.Fatalf("contract rejection did not advance observed identity: %+v", status)
+	}
 	fixture.server.SetGetParameterHook(nil)
 	if got := fetches.Load(); got != 0 {
 		t.Fatalf("contract mismatch fetched %d parameter resources before rejection", got)

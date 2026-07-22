@@ -9,6 +9,7 @@ import (
 	"errors"
 	"go/parser"
 	"go/token"
+	"go/types"
 	"os"
 	"path/filepath"
 	"strings"
@@ -51,6 +52,11 @@ func TestGenerateIsDeterministicAndCanonical(t *testing.T) {
 	if bytes.Contains(first.Binding, []byte("reflect.")) {
 		t.Fatal("generated binding unexpectedly uses reflection")
 	}
+	if !bytes.Contains(first.Binding, []byte("OnCandidateRejected")) ||
+		!bytes.Contains(first.Binding, []byte("configstore.CandidateRejectionReport")) ||
+		!bytes.Contains(first.Binding, []byte(`configstore.RejectDecode("database", err)`)) {
+		t.Fatal("generated binding does not forward safe candidate rejection diagnostics")
+	}
 
 	var schema map[string]any
 	if err := json.Unmarshal(first.Schema, &schema); err != nil {
@@ -66,15 +72,17 @@ func TestGenerateIsDeterministicAndCanonical(t *testing.T) {
 		t.Fatal("duration schema format missing")
 	}
 	rateLimits := properties["rate_limits"].(map[string]any)["properties"].(map[string]any)
-	if rateLimits["payload"].(map[string]any)["format"] != "kms-base64" {
+	payloadSchema := nullableSchemaBranch(t, rateLimits["payload"], "string")
+	if payloadSchema["format"] != "kms-base64" {
 		t.Fatal("byte schema format missing")
 	}
 	if _, ok := properties["database_password"]; ok {
 		t.Fatal("secret leaked into schema")
 	}
-	if _, ok := rateLimits["ratio"].(map[string]any)["anyOf"]; !ok {
-		t.Fatal("pointer-to-scalar schema is not nullable")
-	}
+	nullableSchemaBranch(t, rateLimits["ratio"], "number")
+	endpointFields := databaseFields["endpoint"].(map[string]any)["properties"].(map[string]any)
+	nullableSchemaBranch(t, endpointFields["ports"], "array")
+	nullableSchemaBranch(t, endpointFields["labels"], "object")
 
 	var contract struct {
 		Format       string `json:"format"`
@@ -88,6 +96,10 @@ func TestGenerateIsDeterministicAndCanonical(t *testing.T) {
 			Alias string `json:"alias"`
 			Kind  string `json:"kind"`
 		} `json:"secrets"`
+		Fields []struct {
+			JSONName string `json:"json_name"`
+			Encoding string `json:"encoding"`
+		} `json:"fields"`
 	}
 	if err := json.Unmarshal(first.Contract, &contract); err != nil {
 		t.Fatal(err)
@@ -101,6 +113,13 @@ func TestGenerateIsDeterministicAndCanonical(t *testing.T) {
 	}
 	if len(contract.Secrets) != 1 || contract.Secrets[0].Alias != "database_password" || contract.Secrets[0].Kind != "secret" {
 		t.Fatalf("unexpected contract secrets: %#v", contract.Secrets)
+	}
+	encodings := make(map[string]string, len(contract.Fields))
+	for _, field := range contract.Fields {
+		encodings[field.JSONName] = field.Encoding
+	}
+	if encodings["payload"] != "nullable-base64" || encodings["ratio"] != "nullable-float32" || encodings["endpoint"] != "object" {
+		t.Fatalf("unexpected nullable contract encodings: %#v", encodings)
 	}
 	for _, forbidden := range []string{"default", "value", "physical_path", "token"} {
 		if strings.Contains(strings.ToLower(string(first.Contract)), `"`+forbidden+`"`) {
@@ -125,6 +144,10 @@ func TestTagAndTypeErrors(t *testing.T) {
 		{"BadSecret", `json:"-"`},
 		{"BadValidate", "Validate method must have signature"},
 		{"ViewCollision", "collides"},
+		{"UnexportedRoot", "unexported root field"},
+		{"ExcludedOpaque", "structurally deep-cloneable"},
+		{"BadJSONName", "noncanonical JSON property name"},
+		{"BadNestedJSONName", "noncanonical JSON property name"},
 	}
 	root := repoRoot(t)
 	for _, test := range tests {
@@ -136,6 +159,79 @@ func TestTagAndTypeErrors(t *testing.T) {
 				t.Fatalf("error = %v, want substring %q", err, test.want)
 			}
 		})
+	}
+}
+
+func nullableSchemaBranch(t *testing.T, value any, wantType string) map[string]any {
+	t.Helper()
+	schema, ok := value.(map[string]any)
+	if !ok {
+		t.Fatalf("schema = %#v, want object", value)
+	}
+	branches, ok := schema["anyOf"].([]any)
+	if !ok || len(branches) != 2 {
+		t.Fatalf("schema = %#v, want two anyOf branches", schema)
+	}
+	var typed map[string]any
+	hasNull := false
+	for _, raw := range branches {
+		branch, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		switch branch["type"] {
+		case wantType:
+			typed = branch
+		case "null":
+			hasNull = true
+		}
+	}
+	if typed == nil || !hasNull {
+		t.Fatalf("schema = %#v, want %s and null branches", schema, wantType)
+	}
+	return typed
+}
+
+func TestGenerateSecretOnlyRootHasValidEmptySchema(t *testing.T) {
+	artifacts, err := Generate(context.Background(), Options{
+		Dir: repoRoot(t), Package: "./internal/configgen/testdata/valid", Type: "SecretsOnly", BindingPackage: "binding",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var schema struct {
+		Required   []string       `json:"required"`
+		Properties map[string]any `json:"properties"`
+	}
+	if err := json.Unmarshal(artifacts.Schema, &schema); err != nil {
+		t.Fatal(err)
+	}
+	if schema.Required == nil || len(schema.Required) != 0 || schema.Properties == nil || len(schema.Properties) != 0 {
+		t.Fatalf("secret-only schema = required:%#v properties:%#v", schema.Required, schema.Properties)
+	}
+	if _, err := parser.ParseFile(token.NewFileSet(), "secret_only.gen.go", artifacts.Binding, parser.AllErrors); err != nil {
+		t.Fatalf("secret-only binding is invalid Go: %v", err)
+	}
+}
+
+func TestGenerateRejectsProgramRootPackage(t *testing.T) {
+	_, err := Generate(context.Background(), Options{
+		Dir: repoRoot(t), Package: "./internal/configgen/testdata/mainconfig", Type: "Config", BindingPackage: "binding",
+	})
+	if err == nil || !strings.Contains(err.Error(), "program") {
+		t.Fatalf("program root error = %v", err)
+	}
+}
+
+func TestMachineSizedIntegerContractIsArchitectureIndependent(t *testing.T) {
+	for _, arch := range []string{"386", "amd64"} {
+		value, err := analyzeType(types.Typ[types.Int], types.SizesFor("gc", arch), make(map[types.Type]bool), "test int")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if value.Bits != 32 || canonicalEncoding(value) != "int32" {
+			t.Fatalf("%s int contract = bits:%d encoding:%s", arch, value.Bits, canonicalEncoding(value))
+		}
 	}
 }
 

@@ -73,3 +73,33 @@ type ViewCollision struct {
 }
 
 func (*ViewCollision) Validate() error { return nil }
+
+type UnexportedRoot struct {
+	hidden []string
+	Value  string `json:"value" kms:"group=one,reload=hot" kms_views:"api"`
+}
+
+func (*UnexportedRoot) Validate() error { return nil }
+
+type ExcludedOpaque struct {
+	Value    string `json:"value" kms:"group=one,reload=hot" kms_views:"api"`
+	Callback func() `kms:"-"`
+}
+
+func (*ExcludedOpaque) Validate() error { return nil }
+
+type BadJSONName struct {
+	Value string `json:"line.break" kms:"group=one,reload=hot" kms_views:"api"`
+}
+
+func (*BadJSONName) Validate() error { return nil }
+
+type BadNestedJSONNameValue struct {
+	Value string `json:"line\nbreak"`
+}
+
+type BadNestedJSONName struct {
+	Value BadNestedJSONNameValue `json:"value" kms:"group=one,reload=hot" kms_views:"api"`
+}
+
+func (*BadNestedJSONName) Validate() error { return nil }

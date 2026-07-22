@@ -13,7 +13,7 @@ import (
 	time "time"
 )
 
-const generatedSchemaSHA256 = "2d9edfabeba74f40bfad9ee037dcaf114dba9133ee138dadab4a904d59ec1b5e"
+const generatedSchemaSHA256 = "928ef5cedf43b88dd4037ffac084a639db7362baa860b6403139c1d70c03cb70"
 
 var generatedContract = []configstore.ContractEntry{
 	{Alias: "database", Kind: configstore.ContractKindParameter, ContentType: "json"},
@@ -28,6 +28,7 @@ type Options struct {
 	Defaults             func() *rootconfig.Config
 	AllowDefaultMismatch bool
 	OnDefaultMismatch    func(configstore.DefaultMismatchReport)
+	OnCandidateRejected  func(configstore.CandidateRejectionReport)
 	SecretTokenProvider  paramstore.SecretTokenProvider
 	ReconcileInterval    time.Duration
 	MaxConcurrentFetches int
@@ -82,6 +83,7 @@ func Start(ctx context.Context, client *paramstore.Client, options Options) (*St
 		Contract:             generatedContract,
 		AllowDefaultMismatch: options.AllowDefaultMismatch,
 		OnDefaultMismatch:    options.OnDefaultMismatch,
+		OnCandidateRejected:  options.OnCandidateRejected,
 		SecretTokenProvider:  options.SecretTokenProvider,
 		ReconcileInterval:    options.ReconcileInterval,
 		MaxConcurrentFetches: options.MaxConcurrentFetches,
@@ -108,14 +110,14 @@ func (s *Store) prepare(ctx context.Context, snapshot paramstore.ReleaseSnapshot
 		return configstore.PreparedCandidate{}, configstore.Reject(configstore.RejectConfigContractMismatch, fmt.Errorf("missing parameter group database"))
 	}
 	if err := configstore.DecodeGroup(parameter0.Value(), candidate, groupFields0); err != nil {
-		return configstore.PreparedCandidate{}, configstore.Reject(configstore.RejectConfigDecodeFailed, fmt.Errorf("decode parameter group database: %w", err))
+		return configstore.PreparedCandidate{}, configstore.RejectDecode("database", err)
 	}
 	parameter1, ok := snapshot.Parameter("runtime")
 	if !ok {
 		return configstore.PreparedCandidate{}, configstore.Reject(configstore.RejectConfigContractMismatch, fmt.Errorf("missing parameter group runtime"))
 	}
 	if err := configstore.DecodeGroup(parameter1.Value(), candidate, groupFields1); err != nil {
-		return configstore.PreparedCandidate{}, configstore.Reject(configstore.RejectConfigDecodeFailed, fmt.Errorf("decode parameter group runtime: %w", err))
+		return configstore.PreparedCandidate{}, configstore.RejectDecode("runtime", err)
 	}
 	secret0, ok := snapshot.Secret("database_password")
 	if !ok {
@@ -184,16 +186,16 @@ func (s *Store) prepare(ctx context.Context, snapshot paramstore.ReleaseSnapshot
 }
 
 var groupFields0 = []configstore.FieldCodec{
-	{JSONName: "endpoint", FieldIndex: []int{0}, Value: configstore.ValueCodec{Kind: configstore.CodecStruct, Fields: []configstore.FieldCodec{{JSONName: "host", FieldIndex: []int{0}, Value: configstore.ValueCodec{Kind: configstore.CodecString}}, {JSONName: "ports", FieldIndex: []int{1}, Value: configstore.ValueCodec{Kind: configstore.CodecSlice, Element: &configstore.ValueCodec{Kind: configstore.CodecUint}}}, {JSONName: "labels", FieldIndex: []int{2}, Value: configstore.ValueCodec{Kind: configstore.CodecMap, Element: &configstore.ValueCodec{Kind: configstore.CodecSlice, Element: &configstore.ValueCodec{Kind: configstore.CodecString}}}}, {JSONName: "zones", FieldIndex: []int{3}, Value: configstore.ValueCodec{Kind: configstore.CodecArray, Element: &configstore.ValueCodec{Kind: configstore.CodecString}}}}}},
-	{JSONName: "max_open", FieldIndex: []int{2}, Value: configstore.ValueCodec{Kind: configstore.CodecPointer, Element: &configstore.ValueCodec{Kind: configstore.CodecInt}}},
+	{JSONName: "endpoint", FieldIndex: []int{0}, Value: configstore.ValueCodec{Kind: configstore.CodecStruct, Fields: []configstore.FieldCodec{{JSONName: "host", FieldIndex: []int{0}, Value: configstore.ValueCodec{Kind: configstore.CodecString}}, {JSONName: "ports", FieldIndex: []int{1}, Value: configstore.ValueCodec{Kind: configstore.CodecSlice, Element: &configstore.ValueCodec{Kind: configstore.CodecUint, Bits: 16}}}, {JSONName: "labels", FieldIndex: []int{2}, Value: configstore.ValueCodec{Kind: configstore.CodecMap, Element: &configstore.ValueCodec{Kind: configstore.CodecSlice, Element: &configstore.ValueCodec{Kind: configstore.CodecString}}}}, {JSONName: "zones", FieldIndex: []int{3}, Value: configstore.ValueCodec{Kind: configstore.CodecArray, Element: &configstore.ValueCodec{Kind: configstore.CodecString}}}}}},
+	{JSONName: "max_open", FieldIndex: []int{2}, Value: configstore.ValueCodec{Kind: configstore.CodecPointer, Element: &configstore.ValueCodec{Kind: configstore.CodecInt, Bits: 32}}},
 	{JSONName: "timeout", FieldIndex: []int{1}, Value: configstore.ValueCodec{Kind: configstore.CodecDuration}},
 }
 
 var groupFields1 = []configstore.FieldCodec{
 	{JSONName: "features", FieldIndex: []int{3}, Value: configstore.ValueCodec{Kind: configstore.CodecSlice, Element: &configstore.ValueCodec{Kind: configstore.CodecString}}},
 	{JSONName: "payload", FieldIndex: []int{4}, Value: configstore.ValueCodec{Kind: configstore.CodecBytes}},
-	{JSONName: "thresholds", FieldIndex: []int{5}, Value: configstore.ValueCodec{Kind: configstore.CodecMap, Element: &configstore.ValueCodec{Kind: configstore.CodecUint}}},
-	{JSONName: "window", FieldIndex: []int{6}, Value: configstore.ValueCodec{Kind: configstore.CodecArray, Element: &configstore.ValueCodec{Kind: configstore.CodecFloat}}},
+	{JSONName: "thresholds", FieldIndex: []int{5}, Value: configstore.ValueCodec{Kind: configstore.CodecMap, Element: &configstore.ValueCodec{Kind: configstore.CodecUint, Bits: 64}}},
+	{JSONName: "window", FieldIndex: []int{6}, Value: configstore.ValueCodec{Kind: configstore.CodecArray, Element: &configstore.ValueCodec{Kind: configstore.CodecFloat, Bits: 64}}},
 }
 
 // Current performs exactly one atomic load and captures that generation.

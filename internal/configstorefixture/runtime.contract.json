@@ -4,7 +4,7 @@
     "package": "github.com/Suhaibinator/kms/internal/configstorefixture/config",
     "type": "Config"
   },
-  "schema_sha256": "2d9edfabeba74f40bfad9ee037dcaf114dba9133ee138dadab4a904d59ec1b5e",
+  "schema_sha256": "928ef5cedf43b88dd4037ffac084a639db7362baa860b6403139c1d70c03cb70",
   "groups": [
     {
       "alias": "database",
@@ -45,7 +45,7 @@
       "json_name": "max_open",
       "go_name": "MaxOpen",
       "reload": "restart",
-      "encoding": "int64",
+      "encoding": "nullable-int32",
       "views": [
         "database_health",
         "persistence_handler"
@@ -67,7 +67,7 @@
       "json_name": "features",
       "go_name": "Features",
       "reload": "hot",
-      "encoding": "array",
+      "encoding": "nullable-array",
       "views": [
         "api_handler",
         "background_jobs"
@@ -78,7 +78,7 @@
       "json_name": "payload",
       "go_name": "Payload",
       "reload": "hot",
-      "encoding": "base64",
+      "encoding": "nullable-base64",
       "views": [
         "api_handler"
       ]
@@ -88,7 +88,7 @@
       "json_name": "thresholds",
       "go_name": "Thresholds",
       "reload": "hot",
-      "encoding": "string-map",
+      "encoding": "nullable-string-map",
       "views": [
         "api_handler",
         "background_jobs"

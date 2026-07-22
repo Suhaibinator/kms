@@ -17,21 +17,42 @@
               "type": "string"
             },
             "labels": {
-              "additionalProperties": {
-                "items": {
-                  "type": "string"
+              "anyOf": [
+                {
+                  "additionalProperties": {
+                    "anyOf": [
+                      {
+                        "items": {
+                          "type": "string"
+                        },
+                        "type": "array"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "type": "object"
                 },
-                "type": "array"
-              },
-              "type": "object"
+                {
+                  "type": "null"
+                }
+              ]
             },
             "ports": {
-              "items": {
-                "maximum": 65535,
-                "minimum": 0,
-                "type": "integer"
-              },
-              "type": "array"
+              "anyOf": [
+                {
+                  "items": {
+                    "maximum": 65535,
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ]
             }
           },
           "required": [
@@ -61,8 +82,15 @@
           "type": "integer"
         },
         "payload": {
-          "format": "kms-base64",
-          "type": "string"
+          "anyOf": [
+            {
+              "format": "kms-base64",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "ratio": {
           "anyOf": [

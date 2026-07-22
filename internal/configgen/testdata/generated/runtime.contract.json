@@ -4,7 +4,7 @@
     "package": "github.com/Suhaibinator/kms/internal/configgen/testdata/valid",
     "type": "Config"
   },
-  "schema_sha256": "b4842904dd5948b3dc2181c207a5c9ae2252cd2abb49e7d741f7bccbd18a0a9c",
+  "schema_sha256": "ac7f66a52d536e87dd131532a865dddf4b1a511e5db547f7598367580df3d49e",
   "groups": [
     {
       "alias": "database",
@@ -64,7 +64,7 @@
       "json_name": "payload",
       "go_name": "Payload",
       "reload": "hot",
-      "encoding": "base64",
+      "encoding": "nullable-base64",
       "views": [
         "api_handler"
       ]
@@ -74,7 +74,7 @@
       "json_name": "ratio",
       "go_name": "Ratio",
       "reload": "hot",
-      "encoding": "float32",
+      "encoding": "nullable-float32",
       "views": [
         "api_handler"
       ]

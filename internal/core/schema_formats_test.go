@@ -54,6 +54,24 @@ func TestCompileSchemaLeavesUnrelatedFormatsAsAnnotations(t *testing.T) {
 	}
 }
 
+func TestCompileSchemaDoesNotRewriteFormatPropertiesInsideConst(t *testing.T) {
+	schema, err := compileSchema(`{
+		"anyOf":[
+			{"type":"string","format":"go-duration"},
+			{"const":{"format":"email","x":1}}
+		]
+	}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := schema.Validate(map[string]any{"format": "email", "x": json.Number("1")}); err != nil {
+		t.Fatalf("const instance was changed while configuring formats: %v", err)
+	}
+	if err := schema.Validate(map[string]any{"x": json.Number("1")}); err == nil {
+		t.Fatal("schema accepted the const value only after its format property was removed")
+	}
+}
+
 func TestCompileSchemaRejectsDuplicatePropertiesAndPreservesNumericBounds(t *testing.T) {
 	if _, err := compileSchema(`{"type":"object","type":"array"}`); err == nil {
 		t.Fatal("duplicate schema property was accepted")

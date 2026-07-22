@@ -57,38 +57,55 @@ func configureKMSFormats(compiler *jsonschema.Compiler, schema any) {
 }
 
 func removeUnassertedFormats(value any) {
-	switch value := value.(type) {
-	case map[string]any:
-		if format, ok := value["format"].(string); ok && format != goDurationFormat && format != kmsBase64Format {
-			delete(value, "format")
-		}
-		for _, child := range value {
-			removeUnassertedFormats(child)
-		}
-	case []any:
-		for _, child := range value {
-			removeUnassertedFormats(child)
-		}
+	object, ok := value.(map[string]any)
+	if !ok {
+		return
 	}
+	if format, ok := object["format"].(string); ok && format != goDurationFormat && format != kmsBase64Format {
+		delete(object, "format")
+	}
+	walkSubschemas(object, removeUnassertedFormats)
 }
 
 func usesKMSFormat(value any) bool {
-	switch value := value.(type) {
-	case map[string]any:
-		if format, ok := value["format"].(string); ok && (format == goDurationFormat || format == kmsBase64Format) {
-			return true
+	object, ok := value.(map[string]any)
+	if !ok {
+		return false
+	}
+	if format, ok := object["format"].(string); ok && (format == goDurationFormat || format == kmsBase64Format) {
+		return true
+	}
+	found := false
+	walkSubschemas(object, func(child any) {
+		if !found && usesKMSFormat(child) {
+			found = true
 		}
-		for _, child := range value {
-			if usesKMSFormat(child) {
-				return true
-			}
-		}
-	case []any:
-		for _, child := range value {
-			if usesKMSFormat(child) {
-				return true
-			}
+	})
+	return found
+}
+
+// walkSubschemas follows only JSON Schema applicator locations. Instance-valued
+// keywords such as const, enum, default, and examples may themselves contain a
+// property named "format" and must never be rewritten.
+func walkSubschemas(schema map[string]any, visit func(any)) {
+	for _, keyword := range []string{
+		"not", "if", "then", "else", "items", "contains", "additionalProperties",
+		"unevaluatedProperties", "propertyNames", "unevaluatedItems", "contentSchema",
+	} {
+		if child, exists := schema[keyword]; exists {
+			visit(child)
 		}
 	}
-	return false
+	for _, keyword := range []string{"allOf", "anyOf", "oneOf", "prefixItems"} {
+		children, _ := schema[keyword].([]any)
+		for _, child := range children {
+			visit(child)
+		}
+	}
+	for _, keyword := range []string{"$defs", "definitions", "properties", "patternProperties", "dependentSchemas"} {
+		children, _ := schema[keyword].(map[string]any)
+		for _, child := range children {
+			visit(child)
+		}
+	}
 }

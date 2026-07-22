@@ -23,6 +23,7 @@ func renderSchema(model *ir) ([]byte, error) {
 		Schema:               "https://json-schema.org/draft/2020-12/schema",
 		Type:                 "object",
 		AdditionalProperties: false,
+		Required:             make([]string, 0, len(model.Groups)),
 		Properties:           make(map[string]map[string]any, len(model.Groups)),
 	}
 	for _, group := range model.Groups {
@@ -67,15 +68,15 @@ func schemaForType(value *typeIR) map[string]any {
 	case typeDuration:
 		return map[string]any{"type": "string", "format": "go-duration"}
 	case typePointer:
-		return map[string]any{"anyOf": []any{schemaForType(value.Elem), map[string]any{"type": "null"}}}
+		return nullableSchema(schemaForType(value.Elem))
 	case typeBytes:
-		return map[string]any{"type": "string", "format": "kms-base64"}
+		return nullableSchema(map[string]any{"type": "string", "format": "kms-base64"})
 	case typeArray:
 		return map[string]any{"type": "array", "items": schemaForType(value.Elem), "minItems": value.Len, "maxItems": value.Len}
 	case typeSlice:
-		return map[string]any{"type": "array", "items": schemaForType(value.Elem)}
+		return nullableSchema(map[string]any{"type": "array", "items": schemaForType(value.Elem)})
 	case typeMap:
-		return map[string]any{"type": "object", "additionalProperties": schemaForType(value.Elem)}
+		return nullableSchema(map[string]any{"type": "object", "additionalProperties": schemaForType(value.Elem)})
 	case typeStruct:
 		required := make([]string, 0, len(value.Fields))
 		properties := make(map[string]any)
@@ -95,6 +96,10 @@ func schemaForType(value *typeIR) map[string]any {
 	default:
 		panic("configgen: invalid normalized type")
 	}
+}
+
+func nullableSchema(value map[string]any) map[string]any {
+	return map[string]any{"anyOf": []any{value, map[string]any{"type": "null"}}}
 }
 
 func signedBounds(bits int) (int64, int64) {
@@ -176,6 +181,10 @@ func renderContract(model *ir, schema []byte) ([]byte, renderedContract, error) 
 		Format:       "kms-config-contract/v1",
 		Source:       contractSource{Package: model.PackagePath, Type: model.TypeName},
 		SchemaSHA256: hashText,
+		Groups:       make([]contractGroup, 0, len(model.Groups)),
+		Fields:       make([]contractField, 0, len(model.Fields)-len(model.Secrets)),
+		Secrets:      make([]contractSecret, 0, len(model.Secrets)),
+		Views:        make([]contractView, 0, len(model.Views)),
 	}
 	rendered := renderedContract{SchemaSHA256: hashText}
 	for _, group := range model.Groups {
@@ -209,10 +218,14 @@ func renderContract(model *ir, schema []byte) ([]byte, renderedContract, error) 
 }
 
 func canonicalEncoding(value *typeIR) string {
-	if value.Kind == typePointer {
-		return canonicalEncoding(value.Elem)
+	switch value.Kind {
+	case typePointer:
+		return "nullable-" + canonicalEncoding(value.Elem)
+	case typeBytes, typeSlice, typeMap:
+		return "nullable-" + value.Encoding
+	default:
+		return value.Encoding
 	}
-	return value.Encoding
 }
 
 func marshalArtifact(value any, name string) ([]byte, error) {

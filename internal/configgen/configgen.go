@@ -102,6 +102,9 @@ func Generate(ctx context.Context, options Options) (Artifacts, error) {
 		return Artifacts{}, fmt.Errorf("configgen: package pattern %q resolved to %d packages; exactly one is required", pattern, len(candidates))
 	}
 	pkg := candidates[0]
+	if pkg.Name == "main" {
+		return Artifacts{}, fmt.Errorf("configgen: root package %q is a program and cannot be imported by a separate binding package", pkg.PkgPath)
+	}
 	normalized, err := analyzePackage(pkg.Types, pkg.TypesSizes, options.Type)
 	if err != nil {
 		return Artifacts{}, err

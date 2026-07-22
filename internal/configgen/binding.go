@@ -147,6 +147,7 @@ func (r *bindingRenderer) renderTypes() {
 	r.line("\tDefaults func() *%s", r.rootTypeString)
 	r.line("\tAllowDefaultMismatch bool")
 	r.line("\tOnDefaultMismatch func(configstore.DefaultMismatchReport)")
+	r.line("\tOnCandidateRejected func(configstore.CandidateRejectionReport)")
 	r.line("\tSecretTokenProvider paramstore.SecretTokenProvider")
 	r.line("\tReconcileInterval time.Duration")
 	r.line("\tMaxConcurrentFetches int")
@@ -196,6 +197,7 @@ func (r *bindingRenderer) renderStart() {
 	r.line("\t\tContract: generatedContract,")
 	r.line("\t\tAllowDefaultMismatch: options.AllowDefaultMismatch,")
 	r.line("\t\tOnDefaultMismatch: options.OnDefaultMismatch,")
+	r.line("\t\tOnCandidateRejected: options.OnCandidateRejected,")
 	r.line("\t\tSecretTokenProvider: options.SecretTokenProvider,")
 	r.line("\t\tReconcileInterval: options.ReconcileInterval,")
 	r.line("\t\tMaxConcurrentFetches: options.MaxConcurrentFetches,")
@@ -224,7 +226,7 @@ func (r *bindingRenderer) renderPrepare() {
 		r.line("\t\treturn configstore.PreparedCandidate{}, configstore.Reject(configstore.RejectConfigContractMismatch, fmt.Errorf(%s))", strconv.Quote("missing parameter group "+group.Alias))
 		r.line("\t}")
 		r.line("\tif err := configstore.DecodeGroup(parameter%d.Value(), candidate, groupFields%d); err != nil {", groupIndex, groupIndex)
-		r.line("\t\treturn configstore.PreparedCandidate{}, configstore.Reject(configstore.RejectConfigDecodeFailed, fmt.Errorf(%s, err))", strconv.Quote("decode parameter group "+group.Alias+": %w"))
+		r.line("\t\treturn configstore.PreparedCandidate{}, configstore.RejectDecode(%s, err)", strconv.Quote(group.Alias))
 		r.line("\t}")
 	}
 	for secretIndex, field := range r.model.Secrets {
@@ -316,6 +318,9 @@ func (r *bindingRenderer) codecLiteral(value *typeIR, indent string) string {
 	}
 	if value.Kind == typePointer || value.Kind == typeArray || value.Kind == typeSlice || value.Kind == typeMap {
 		return fmt.Sprintf("configstore.ValueCodec{Kind: configstore.%s, Element: &%s}", kind, r.codecLiteral(value.Elem, indent+"\t"))
+	}
+	if value.Kind == typeInt || value.Kind == typeUint || value.Kind == typeFloat {
+		return fmt.Sprintf("configstore.ValueCodec{Kind: configstore.%s, Bits: %d}", kind, value.Bits)
 	}
 	return fmt.Sprintf("configstore.ValueCodec{Kind: configstore.%s}", kind)
 }

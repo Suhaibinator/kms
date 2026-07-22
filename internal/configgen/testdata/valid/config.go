@@ -31,3 +31,9 @@ func (c *Config) Validate() error {
 	}
 	return nil
 }
+
+type SecretsOnly struct {
+	Token paramstore.Secret `json:"-" kms:"secret=token,reload=hot" kms_views:"worker"`
+}
+
+func (*SecretsOnly) Validate() error { return nil }
