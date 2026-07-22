@@ -14,7 +14,7 @@ INTEGRATION_COVERAGE_PROFILE ?= integration-coverage.out
 
 .PHONY: build frontend backend test test-unit test-integration \
 	test-integration-race check-integration-coverage test-platform-security \
-	vet check-frontend clean tidy
+	vet check-frontend check-configgen clean tidy
 
 # Default: full build (frontend export + backend with embedded assets).
 build: frontend backend
@@ -43,6 +43,18 @@ check-frontend:
 		exit 1; \
 	fi
 	@echo ">> frontend export present"
+
+# Verify the committed managed-config binding, schema, and contract without
+# rewriting them. Run the same command after changing configuration tags.
+check-configgen:
+	go run ./cmd/kms-config-gen \
+		-package ./internal/configstorefixture/config \
+		-type Config \
+		-binding-package configkms \
+		-binding-output internal/configstorefixture/configkms/config_kms.gen.go \
+		-schema-output internal/configstorefixture/runtime.schema.json \
+		-contract-output internal/configstorefixture/runtime.contract.json \
+		-check
 
 # Run every Go test, including integration tests, with the race detector. This
 # remains the convenient all-in-one local regression command.

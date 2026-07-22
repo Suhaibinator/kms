@@ -52,6 +52,8 @@ jobs:
           go mod tidy
           git diff --exit-code -- go.mod go.sum \
             || { echo "::error::go.mod/go.sum are not tidy; run 'go mod tidy' and commit the result"; exit 1; }
+      - name: Verify generated configuration artifacts
+        run: make check-configgen
       - name: go vet
         run: go vet ./...
       - name: Build
