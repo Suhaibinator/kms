@@ -204,6 +204,10 @@ key client-side; `list` takes a bare `ENV/APP` namespace.
 | `put-parameter /env/app/key VALUE` | `--content-type` (default `string`) | Stores a new parameter version. |
 | `list ENV/APP` | `--prefix` (relative key prefix within the namespace) | Lists parameters and secrets (metadata only) in a namespace as a table: type, `/env/app/key`, current version, content-type/client-bound note. Pages through the full result set. |
 
+Parameter content types are literal KMS tokens: `string`, `integer`, `float`,
+`boolean`, `json`, or `binary`. They are not MIME types. In particular, publish
+a managed JSON group with `--content-type json`; `application/json` is rejected.
+
 A literal `--` ends flag parsing: everything after it is taken as
 positional arguments verbatim, even if it begins with `-`. Use it when a
 value itself looks like a flag, e.g. `parameter-store put-parameter
@@ -284,13 +288,27 @@ per process instance:
 ```bash
 parameter-store release subscribers prod/gradethis runtime \
   --endpoint localhost:8443 --token "$ADMIN_TOKEN" --insecure
-# CLIENT  INSTANCE  RECEIVED  PREPARED  APPLIED  REJECTED  LAG  CONNECTED
+# IDENTITY  CLIENT  INSTANCE  RECEIVED  PREPARED  APPLIED  REJECTED  LAG  CONNECTED
 ```
+
+A rejected cell is rendered as `vVERSION/rREVISION:category`. Categories are
+bounded and contain no application diagnostic or secret material. Use the
+[managed configuration rejection table](managed-go-configuration.md#diagnose-a-rejected-candidate)
+for remediation.
 
 The embedded **Releases** page offers equivalent create, schema, validate,
 diff, activate, rollback, and subscriber views. Its secret entries are
 metadata-only. Full behavior is in
 [`configuration-releases.md`](configuration-releases.md).
+
+Applications using generated Go configuration register the checked-in schema,
+but do not register the generated machine contract. Use that contract to check
+the release's exact aliases, kinds, `json` content types, policies, views, and
+paired schema artifact; physical resource paths and versions remain
+operator-owned. Publish complete `json` group documents and use KMS-only hot
+changes as explicit emergency overrides. Source-owned defaults, restoration,
+restart rejection, startup bypass, and subscriber diagnosis are covered end to
+end in the [managed Go configuration operator workflow](managed-go-configuration.md#operator-workflow).
 
 ## Startup sequence and readiness
 

@@ -187,9 +187,11 @@ return loader.Run(ctx, func(ctx context.Context, snapshot paramstore.ReleaseSnap
 
 Python uses `ReleaseLoader(client, ReleaseLoaderConfig(name="runtime", ...))`
 and synchronous `loader.run(prepare)` with the same resolution, cancellation,
-prepare/commit/abort, last-known-good, and acknowledgement guarantees. Both
-SDKs decode explicitly; native releases do not use reflection or generate
-schemas from application types.
+prepare/commit/abort, last-known-good, and acknowledgement guarantees. The
+lower-level Go and Python loaders decode explicitly and do not infer schemas.
+Go applications may instead opt into the additive
+[`kms-config-gen` managed layer](managed-go-configuration.md), which generates
+strict typed bindings and a release schema from an application root type.
 
 Roll back by reactivating any retained immutable version:
 

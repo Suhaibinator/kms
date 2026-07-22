@@ -389,6 +389,31 @@ within the subscribed **namespaces** that are absent from a snapshot are
 reverted, so a known key in another namespace is never cleared by an unrelated
 snapshot.
 
+## Generated managed configuration
+
+`sdk/go/configstore` and `cmd/kms-config-gen` provide an additive high-level
+integration for applications that want release-wide atomicity without writing
+their own decoder, default comparison, reload policy, atomic generation, and
+typed views. The generated binding owns one immutable active generation;
+`Current` performs one atomic load and captured scalar getters are ordinary
+field access.
+
+The generator emits a separate application binding package that imports the
+root configuration package; the root must not import the binding. Generator
+package selection and output paths are relative to its working directory. See
+the linked guide for reproducible `go:generate`, module-root, and CI commands.
+
+The application remains authoritative for non-secret defaults. Startup fails
+on drift unless the application explicitly supplies a bypass; valid runtime
+hot overrides apply atomically and remain visibly divergent, while any change
+to a restart-bound field rejects the complete candidate. Generated strict
+decoding, declaration tags, supported encodings, snapshot discipline,
+secrets, schema/contract artifacts, testing, and the operator workflow are in
+the [managed Go configuration guide](managed-go-configuration.md).
+
+The lower-level APIs below remain supported and are useful when an application
+needs a custom preparation model.
+
 ## Atomic release loading
 
 Use `ReleaseLoader` when several parameter and secret versions must be
@@ -433,6 +458,14 @@ minute and `MaxConcurrentFetches` to 16. `InstanceID` normally stays empty so
 the loader generates one process-lifetime UUID and reuses it across stream
 reconnects; set it only when the runtime already owns a stable replica ID. The
 client's `Config.ClientName` groups replicas in subscriber views.
+
+`ValidateManifest`, when supplied, receives an immutable `ReleaseManifest`
+after release identity/digest and basic entry checks but before any parameter
+or secret fetch or token-provider call. It can reject an alias/kind/content
+contract without reading an unexpected protected resource. The manifest
+contains only release identity and copied entry metadata; no parameter value,
+secret plaintext, or token. Generated managed bindings install this hook
+automatically.
 
 The `SecretTokenProvider(alias, path)` callback is invoked only for entries
 captured as token-protected or client-bound. Tokens remain local and are sent
@@ -523,6 +556,12 @@ Scripting surface:
 - **Identity:** `SetIdentity(name, kind, namespace, authMethod)` sets the `WhoAmI` response — pass an empty `namespace` for an unbound identity — to drive namespace discovery and `ErrNoNamespace`.
 - **Inspection:** `LastMetadata(method)` (the incoming gRPC metadata of the most recent call), `PutSecretCalls()`, `Revision()`, `SubscribeCount()`, `SetGetParameterHook(func(displayPath string))` (runs at the start of every `GetParameter`, to inject a concurrent event mid-fetch).
 - **Driving the stream:** `WaitForSubscribe(timeout)` returns a `*Subscription` whose requested namespaces are inspectable via `Namespaces`, `HasNamespace(ns)`, and `NamespaceStrings()`. Push events with `PushSnapshot(rev, params...)` (build params with the `paramstoretest.Param(ns, key, value, version)` / `ParamPath(displayPath, value, version)` helpers), `PushChange(rev, ns, key, changeType, value, version)` / `PushChangePath`, `PushSecretChange(rev, ns, key, changeType, version)` / `PushSecretChangePath`, `SendHeartbeat(rev)`, `WaitAck(timeout)`, and `Kill()` (force a disconnect to exercise reconnect and resume-by-revision).
+- **Configuration releases:** store exact values with `SetParameterVersion`
+  and `SetSecretVersion`, install the startup release with
+  `SetActiveRelease`, and publish later candidates with
+  `ActivateConfigurationRelease`. `WaitForReleaseSubscribe` returns a
+  `*ReleaseSubscription` for registration inspection, lifecycle
+  acknowledgements, scripted events, and forced disconnects.
 
 ## What this document does not cover
 

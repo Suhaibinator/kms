@@ -201,6 +201,14 @@ last-known-good state through outages and rejections.
 See [`../../../docs/sdk-go.md`](../../../docs/sdk-go.md#atomic-release-loading)
 for lifecycle, acknowledgement, token-provider, and status details.
 
+For an application-specific store with generated strict group decoders,
+source-owned default drift checks, hot/restart policy, immutable snapshots,
+typed consumer views, and schema/contract generation, use the additive
+[`sdk/go/configstore` managed configuration layer and
+`cmd/kms-config-gen`](../../../docs/managed-go-configuration.md).
+Existing `ReleaseLoader`, `RunTypedRelease`, `ParameterValue`, and
+`SecretValue` integrations do not need to change.
+
 ## Errors
 
 Map gRPC codes to sentinels with `errors.Is`:
