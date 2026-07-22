@@ -91,8 +91,13 @@ content type and parameter digest, rejects malformed JSON, and applies the
 pinned schema when present. It returns structured validation errors rather
 than resource values.
 
-`ActivateRelease` rechecks that every pinned version is still resolvable,
-moves `current`/`previous`, and publishes after commit. The optional-presence
+`ActivateRelease` reruns the same schema and resource validation used by
+`ValidateRelease`. It then transactionally rechecks exact resource identity,
+content type and digest, secret enabled/expiry state, and secret protection
+metadata before moving `current`/`previous`; publication occurs only after
+commit. Validation failure is gRPC `FAILED_PRECONDITION` (HTTP 412) with a
+sanitized structured `ValidateReleaseResponse` detail, and does not allocate an
+activation revision or move either label. The optional-presence
 `expected_current_version` is a compare-and-swap guard: omit it for an
 unguarded activation, set it to `0` to require no current release, or set it
 to the exact current version. A conflict is gRPC `ABORTED` (HTTP 409). An

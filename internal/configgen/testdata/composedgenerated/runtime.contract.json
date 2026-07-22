@@ -1,0 +1,93 @@
+{
+  "format": "kms-config-contract/v1",
+  "source": {
+    "package": "github.com/Suhaibinator/kms/internal/configgen/testdata/composed",
+    "type": "Config"
+  },
+  "schema_sha256": "2f69001e090b3a54d22f33e2d8c096b2a50f731a5d4471364f95a7db5f5bdb60",
+  "groups": [
+    {
+      "alias": "database",
+      "kind": "parameter",
+      "content_type": "json",
+      "fields": [
+        "endpoint"
+      ]
+    },
+    {
+      "alias": "runtime",
+      "kind": "parameter",
+      "content_type": "json",
+      "fields": [
+        "app_name",
+        "burst"
+      ]
+    }
+  ],
+  "fields": [
+    {
+      "group": "database",
+      "json_name": "endpoint",
+      "go_name": "Endpoint",
+      "go_path": "Common.Endpoint",
+      "reload": "restart",
+      "encoding": "string",
+      "views": [
+        "database"
+      ]
+    },
+    {
+      "group": "runtime",
+      "json_name": "app_name",
+      "go_name": "AppName",
+      "go_path": "AppName",
+      "reload": "restart",
+      "encoding": "string",
+      "views": [
+        "worker"
+      ]
+    },
+    {
+      "group": "runtime",
+      "json_name": "burst",
+      "go_name": "Burst",
+      "go_path": "Common.Limits.Burst",
+      "reload": "hot",
+      "encoding": "int32",
+      "views": [
+        "worker"
+      ]
+    }
+  ],
+  "secrets": [
+    {
+      "alias": "common_token",
+      "kind": "secret",
+      "go_name": "Token",
+      "go_path": "Common.Token",
+      "reload": "restart",
+      "encoding": "secret",
+      "views": [
+        "worker"
+      ]
+    }
+  ],
+  "views": [
+    {
+      "name": "database",
+      "method": "Database",
+      "fields": [
+        "database.endpoint"
+      ]
+    },
+    {
+      "name": "worker",
+      "method": "Worker",
+      "fields": [
+        "common_token",
+        "runtime.app_name",
+        "runtime.burst"
+      ]
+    }
+  ]
+}

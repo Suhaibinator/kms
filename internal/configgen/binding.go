@@ -31,7 +31,7 @@ func renderBinding(model *ir, packageName string, contract renderedContract) ([]
 		helperByType: make(map[types.Type]int),
 	}
 	for _, imported := range []struct{ path, alias string }{
-		{"context", "context"}, {"errors", "errors"}, {"fmt", "fmt"}, {"sync/atomic", "atomic"}, {"time", "time"},
+		{"context", "context"}, {"encoding/json", "json"}, {"errors", "errors"}, {"fmt", "fmt"}, {"sync/atomic", "atomic"}, {"time", "time"},
 		{configstorePath, "configstore"}, {kmsclientPath, "kmsclient"},
 	} {
 		r.addImport(imported.path, imported.alias)
@@ -114,15 +114,49 @@ func (r *bindingRenderer) line(format string, args ...any) {
 	r.body.WriteByte('\n')
 }
 
+func (r *bindingRenderer) fieldSelector(base string, field *fieldIR) string {
+	return base + "." + field.GoPath
+}
+
+func fieldIndexLiteral(index []int) string {
+	parts := make([]string, len(index))
+	for i, item := range index {
+		parts[i] = strconv.Itoa(item)
+	}
+	return strings.Join(parts, ", ")
+}
+
 func (r *bindingRenderer) renderBody() {
 	r.renderContract()
 	r.renderTypes()
+	r.renderParameterGroupEncoder()
 	r.renderStart()
 	r.renderPrepare()
 	r.renderGroupCodecs()
 	r.renderSnapshots()
 	r.renderCloneRoot()
+	r.renderInlinePointerValidation()
 	r.renderHelpers()
+}
+
+func (r *bindingRenderer) renderParameterGroupEncoder() {
+	r.line("// EncodeParameterGroups encodes every complete non-secret parameter group from root.")
+	r.line("// The returned documents use the same canonical encodings accepted by the generated store.")
+	r.line("func EncodeParameterGroups(root *%s) (map[string]json.RawMessage, error) {", r.rootTypeString)
+	r.line("\tif err := validateInlinePointers(root); err != nil {")
+	r.line("\t\treturn nil, err")
+	r.line("\t}")
+	r.line("\tgroups := make(map[string]json.RawMessage, %d)", len(r.model.Groups))
+	for groupIndex, group := range r.model.Groups {
+		r.line("\tgroup%d, err := configstore.EncodeGroup(root, groupFields%d)", groupIndex, groupIndex)
+		r.line("\tif err != nil {")
+		r.line("\t\treturn nil, fmt.Errorf(%s, err)", strconv.Quote("generated config store: encode parameter group "+group.Alias+": %w"))
+		r.line("\t}")
+		r.line("\tgroups[%s] = group%d", strconv.Quote(group.Alias), groupIndex)
+	}
+	r.line("\treturn groups, nil")
+	r.line("}")
+	r.line("")
 }
 
 func (r *bindingRenderer) renderContract() {
@@ -186,9 +220,13 @@ func (r *bindingRenderer) renderStart() {
 	r.line("\tif defaults == nil {")
 	r.line("\t\treturn nil, errors.New(%s)", strconv.Quote("generated config store: Options.Defaults returned nil"))
 	r.line("\t}")
+	r.line("\tif err := validateInlinePointers(defaults); err != nil {")
+	r.line("\t\treturn nil, err")
+	r.line("\t}")
 	for _, field := range r.model.Secrets {
-		r.line("\tif !defaults.%s.IsZero() || defaults.%s.Path() != \"\" || defaults.%s.Version() != 0 || defaults.%s.ContentType() != \"\" {", field.GoName, field.GoName, field.GoName, field.GoName)
-		r.line("\t\treturn nil, fmt.Errorf(%s)", strconv.Quote("generated config store: default secret "+field.GoName+" must be zero"))
+		selector := r.fieldSelector("defaults", field)
+		r.line("\tif !%s.IsZero() || %s.Path() != \"\" || %s.Version() != 0 || %s.ContentType() != \"\" {", selector, selector, selector, selector)
+		r.line("\t\treturn nil, fmt.Errorf(%s)", strconv.Quote("generated config store: default secret "+field.GoPath+" must be zero"))
 		r.line("\t}")
 	}
 	r.line("\tstore := &Store{defaults: cloneRoot(defaults)}")
@@ -234,20 +272,26 @@ func (r *bindingRenderer) renderPrepare() {
 		r.line("\tif !ok {")
 		r.line("\t\treturn configstore.PreparedCandidate{}, configstore.Reject(configstore.RejectConfigContractMismatch, fmt.Errorf(%s))", strconv.Quote("missing secret alias "+field.Source))
 		r.line("\t}")
-		r.line("\tcandidate.%s = secret%d.Clone()", field.GoName, secretIndex)
+		r.line("\t%s = secret%d.Clone()", r.fieldSelector("candidate", field), secretIndex)
 	}
 	r.line("\tif err := candidate.Validate(); err != nil {")
 	r.line("\t\treturn configstore.PreparedCandidate{}, configstore.Reject(configstore.RejectConfigValidationFailed, fmt.Errorf(%s, err))", strconv.Quote("validate KMS configuration: %w"))
+	r.line("\t}")
+	r.line("\tif err := validateInlinePointers(candidate); err != nil {")
+	r.line("\t\treturn configstore.PreparedCandidate{}, configstore.Reject(configstore.RejectConfigValidationFailed, err)")
 	r.line("\t}")
 	r.line("\teffectiveDefaults := cloneRoot(s.defaults)")
 	for secretIndex, field := range r.model.Secrets {
 		// Validate the candidate and effective defaults from independent clones
 		// of the same fetched plaintext. Application validation may mutate its
 		// receiver, including Secret.Value() buffers.
-		r.line("\teffectiveDefaults.%s = secret%d.Clone()", field.GoName, secretIndex)
+		r.line("\t%s = secret%d.Clone()", r.fieldSelector("effectiveDefaults", field), secretIndex)
 	}
 	r.line("\tif err := effectiveDefaults.Validate(); err != nil {")
 	r.line("\t\treturn configstore.PreparedCandidate{}, configstore.Reject(configstore.RejectConfigValidationFailed, fmt.Errorf(%s, err))", strconv.Quote("validate effective application defaults: %w"))
+	r.line("\t}")
+	r.line("\tif err := validateInlinePointers(effectiveDefaults); err != nil {")
+	r.line("\t\treturn configstore.PreparedCandidate{}, configstore.Reject(configstore.RejectConfigValidationFailed, err)")
 	r.line("\t}")
 	r.line("\t// Validation is application code and may mutate its receiver. Clone once more before retaining either value.")
 	r.line("\tcandidate = cloneRoot(candidate)")
@@ -258,8 +302,8 @@ func (r *bindingRenderer) renderPrepare() {
 			continue
 		}
 		h := r.helperByType[field.Type.GoType]
-		r.line("\tif !equalValue%d(effectiveDefaults.%s, candidate.%s) {", h, field.GoName, field.GoName)
-		r.line("\t\tdifferences = append(differences, configstore.FieldDifference{Path: %s, Expected: reportValue%d(effectiveDefaults.%s), Actual: reportValue%d(candidate.%s)})", strconv.Quote(field.canonicalName()), h, field.GoName, h, field.GoName)
+		r.line("\tif !equalValue%d(%s, %s) {", h, r.fieldSelector("effectiveDefaults", field), r.fieldSelector("candidate", field))
+		r.line("\t\tdifferences = append(differences, configstore.FieldDifference{Path: %s, Expected: reportValue%d(%s), Actual: reportValue%d(%s)})", strconv.Quote(field.canonicalName()), h, r.fieldSelector("effectiveDefaults", field), h, r.fieldSelector("candidate", field))
 		r.line("\t}")
 	}
 	r.line("\trestartRequired := make([]string, 0)")
@@ -270,10 +314,10 @@ func (r *bindingRenderer) renderPrepare() {
 			continue
 		}
 		if field.Secret {
-			r.line("\t\tif candidate.%s.Path() != active.config.%s.Path() || candidate.%s.Version() != active.config.%s.Version() {", field.GoName, field.GoName, field.GoName, field.GoName)
+			r.line("\t\tif %s.Path() != %s.Path() || %s.Version() != %s.Version() {", r.fieldSelector("candidate", field), r.fieldSelector("active.config", field), r.fieldSelector("candidate", field), r.fieldSelector("active.config", field))
 		} else {
 			h := r.helperByType[field.Type.GoType]
-			r.line("\t\tif !equalValue%d(candidate.%s, active.config.%s) {", h, field.GoName, field.GoName)
+			r.line("\t\tif !equalValue%d(%s, %s) {", h, r.fieldSelector("candidate", field), r.fieldSelector("active.config", field))
 		}
 		r.line("\t\t\trestartRequired = append(restartRequired, %s)", strconv.Quote(field.canonicalName()))
 		r.line("\t\t}")
@@ -294,7 +338,7 @@ func (r *bindingRenderer) renderGroupCodecs() {
 	for groupIndex, group := range r.model.Groups {
 		r.line("var groupFields%d = []configstore.FieldCodec{", groupIndex)
 		for _, field := range group.Fields {
-			r.line("\t{JSONName: %s, FieldIndex: []int{%d}, Value: %s},", strconv.Quote(field.JSONName), field.Index, r.codecLiteral(field.Type, "\t"))
+			r.line("\t{JSONName: %s, FieldIndex: []int{%s}, Value: %s},", strconv.Quote(field.JSONName), fieldIndexLiteral(field.Index), r.codecLiteral(field.Type, "\t"))
 		}
 		r.line("}")
 		r.line("")
@@ -337,33 +381,38 @@ func (r *bindingRenderer) renderSnapshots() {
 	r.line("")
 	r.line("func (s Snapshot) Release() configstore.ReleaseIdentity { return s.generation.release }")
 	r.line("")
+	r.line("// Config returns a defensive copy of this complete immutable generation.")
+	r.line("// Use generated views instead when reading hot configuration in an operation path.")
+	r.line("func (s Snapshot) Config() *%s { return cloneRoot(s.generation.config) }", r.rootTypeString)
+	r.line("")
 	for _, view := range r.model.Views {
 		r.line("func (s Snapshot) %s() %sView { return %sView{generation: s.generation} }", view.Method, view.Method, view.Method)
 	}
 	r.line("")
 	for _, view := range r.model.Views {
 		for _, field := range view.Fields {
+			selector := r.fieldSelector("v.generation.config", field)
 			if field.Secret {
-				r.line("func (v %sView) %s() kmsclient.Secret { return v.generation.config.%s.Clone() }", view.Method, field.GoName, field.GoName)
+				r.line("func (v %sView) %s() kmsclient.Secret { return %s.Clone() }", view.Method, field.GoName, selector)
 				continue
 			}
 			if field.Type.Kind == typePointer {
 				returnType := r.typeString(field.Type.Elem.GoType)
 				r.line("func (v %sView) %s() %s {", view.Method, field.GoName, returnType)
-				r.line("\tif v.generation.config.%s == nil {", field.GoName)
+				r.line("\tif %s == nil {", selector)
 				r.line("\t\tvar zero %s", returnType)
 				r.line("\t\treturn zero")
 				r.line("\t}")
-				r.line("\treturn *v.generation.config.%s", field.GoName)
+				r.line("\treturn *%s", selector)
 				r.line("}")
 				continue
 			}
 			returnType := r.typeString(field.Type.GoType)
 			if field.Type.Mutable {
 				h := r.helperByType[field.Type.GoType]
-				r.line("func (v %sView) %s() %s { return cloneValue%d(v.generation.config.%s) }", view.Method, field.GoName, returnType, h, field.GoName)
+				r.line("func (v %sView) %s() %s { return cloneValue%d(%s) }", view.Method, field.GoName, returnType, h, selector)
 			} else {
-				r.line("func (v %sView) %s() %s { return v.generation.config.%s }", view.Method, field.GoName, returnType, field.GoName)
+				r.line("func (v %sView) %s() %s { return %s }", view.Method, field.GoName, returnType, selector)
 			}
 		}
 		r.line("")
@@ -377,10 +426,23 @@ func (r *bindingRenderer) renderCloneRoot() {
 	r.line("\tout := configstore.Clone(*value)")
 	for _, field := range r.model.Fields {
 		if field.Secret {
-			r.line("\tout.%s = value.%s.Clone()", field.GoName, field.GoName)
+			r.line("\t%s = %s.Clone()", r.fieldSelector("out", field), r.fieldSelector("value", field))
 		}
 	}
 	r.line("\treturn &out")
+	r.line("}")
+	r.line("")
+}
+
+func (r *bindingRenderer) renderInlinePointerValidation() {
+	r.line("func validateInlinePointers(value *%s) error {", r.rootTypeString)
+	r.line("\tif value == nil { return errors.New(%s) }", strconv.Quote("generated config store: configuration root is nil"))
+	for _, path := range r.model.InlinePointers {
+		r.line("\tif value.%s == nil {", path)
+		r.line("\t\treturn fmt.Errorf(%s)", strconv.Quote("generated config store: inline configuration "+path+" must be non-nil"))
+		r.line("\t}")
+	}
+	r.line("\treturn nil")
 	r.line("}")
 	r.line("")
 }

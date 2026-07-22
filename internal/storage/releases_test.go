@@ -2,7 +2,9 @@ package storage
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -25,7 +27,7 @@ func TestConfigurationReleaseActivationCASRollbackAndGuards(t *testing.T) {
 
 	create := func(digest string) domain.ConfigurationRelease {
 		r, err := st.CreateConfigurationRelease(ctx, domain.ConfigurationRelease{Namespace: ns, Name: "runtime", Digest: digest, Metadata: "{}", Entries: []domain.ConfigurationReleaseEntry{
-			{Alias: "config", Kind: domain.ReleaseEntryParameter, Ref: paramRef, Version: 1, ContentType: "json", ParameterDigest: "abc", Metadata: "{}"},
+			{Alias: "config", Kind: domain.ReleaseEntryParameter, Ref: paramRef, Version: 1, ContentType: "json", ParameterDigest: fmt.Sprintf("%x", sha256.Sum256([]byte(`{"n":1}`))), Metadata: "{}"},
 			{Alias: "secret", Kind: domain.ReleaseEntrySecret, Ref: secretRef, Version: 1, Metadata: "{}"},
 		}})
 		if err != nil {
@@ -133,7 +135,7 @@ func TestConfigurationReleaseSourceNamespaceIncarnationIsImmutable(t *testing.T)
 		}
 		release, err := st.CreateConfigurationRelease(ctx, domain.ConfigurationRelease{
 			Namespace: target.NamespaceRef, Name: "runtime", Digest: "digest", Metadata: "{}",
-			Entries: []domain.ConfigurationReleaseEntry{{Alias: "config", Kind: domain.ReleaseEntryParameter, Ref: resource, Version: 1, ContentType: "string", ParameterDigest: "same"}},
+			Entries: []domain.ConfigurationReleaseEntry{{Alias: "config", Kind: domain.ReleaseEntryParameter, Ref: resource, Version: 1, ContentType: "string", ParameterDigest: fmt.Sprintf("%x", sha256.Sum256([]byte("same-value")))}},
 		})
 		if err != nil {
 			t.Fatal(err)
@@ -166,6 +168,11 @@ func TestConfigurationReleaseSourceNamespaceIncarnationIsImmutable(t *testing.T)
 		}
 		if _, _, err := st.ActivateConfigurationRelease(ctx, target.NamespaceRef, release.Name, release.Version, nil); !errors.Is(err, domain.ErrFailedPrecondition) {
 			t.Fatalf("activate old release against recreated source err = %v, want ErrFailedPrecondition", err)
+		} else {
+			var validationFailed *domain.ReleaseValidationFailedError
+			if !errors.As(err, &validationFailed) || len(validationFailed.Violations()) != 1 || validationFailed.Violations()[0].Code != domain.ReleaseValidationNotFound {
+				t.Fatalf("activate old release error = %T %v, want one structured not_found violation", err, err)
+			}
 		}
 	})
 

@@ -143,6 +143,7 @@ type contractField struct {
 	Group    string   `json:"group"`
 	JSONName string   `json:"json_name"`
 	GoName   string   `json:"go_name"`
+	GoPath   string   `json:"go_path"`
 	Reload   string   `json:"reload"`
 	Encoding string   `json:"encoding"`
 	Views    []string `json:"views"`
@@ -152,6 +153,7 @@ type contractSecret struct {
 	Alias    string   `json:"alias"`
 	Kind     string   `json:"kind"`
 	GoName   string   `json:"go_name"`
+	GoPath   string   `json:"go_path"`
 	Reload   string   `json:"reload"`
 	Encoding string   `json:"encoding"`
 	Views    []string `json:"views"`
@@ -192,7 +194,7 @@ func renderContract(model *ir, schema []byte) ([]byte, renderedContract, error) 
 		for _, field := range group.Fields {
 			contractGroup.Fields = append(contractGroup.Fields, field.JSONName)
 			doc.Fields = append(doc.Fields, contractField{
-				Group: group.Alias, JSONName: field.JSONName, GoName: field.GoName,
+				Group: group.Alias, JSONName: field.JSONName, GoName: field.GoName, GoPath: field.GoPath,
 				Reload: field.Reload, Encoding: canonicalEncoding(field.Type), Views: append([]string(nil), field.Views...),
 			})
 		}
@@ -201,7 +203,7 @@ func renderContract(model *ir, schema []byte) ([]byte, renderedContract, error) 
 	}
 	for _, field := range model.Secrets {
 		doc.Secrets = append(doc.Secrets, contractSecret{
-			Alias: field.Source, Kind: "secret", GoName: field.GoName, Reload: field.Reload,
+			Alias: field.Source, Kind: "secret", GoName: field.GoName, GoPath: field.GoPath, Reload: field.Reload,
 			Encoding: "secret", Views: append([]string(nil), field.Views...),
 		})
 		rendered.Entries = append(rendered.Entries, contractEntry{Alias: field.Source, Kind: "secret"})

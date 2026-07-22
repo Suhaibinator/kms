@@ -231,6 +231,23 @@ func (s *Service) ValidateConfigurationRelease(ctx context.Context, pr Principal
 	if err != nil {
 		return nil, err
 	}
+	validation, err := s.validateConfigurationRelease(ctx, pr, rs, ns, name, version, true)
+	if err != nil {
+		return nil, err
+	}
+	decision := "allow"
+	if len(validation) > 0 {
+		decision = "error"
+	}
+	s.auditRefWithNamespaceID(ctx, pr, "configuration_release.validate", domain.ResourceConfigurationRelease, domain.Ref{NS: ns, Key: name}, namespace.ID, version, decision, map[string]string{"error_count": strconv.Itoa(len(validation))})
+	return validation, nil
+}
+
+// validateConfigurationRelease validates an already-authorized immutable
+// release. Keeping this separate from the public validation operation lets
+// activation enforce the same checks without requiring a second, unrelated
+// configuration_release.validate permission.
+func (s *Service) validateConfigurationRelease(ctx context.Context, pr Principal, rs storage.ReleaseStore, ns domain.NamespaceRef, name string, version uint64, authorizeEntries bool) ([]domain.ReleaseValidationError, error) {
 	rel, err := rs.GetConfigurationRelease(ctx, ns, name, version)
 	if err != nil {
 		return nil, err
@@ -238,15 +255,25 @@ func (s *Service) ValidateConfigurationRelease(ctx context.Context, pr Principal
 	validation := make([]domain.ReleaseValidationError, 0)
 	obj := map[string]any{}
 	for _, entry := range rel.Entries {
+		entryCtx, bindErr := storage.BindNamespaceIncarnation(ctx, entry.Ref.NS, entry.ResourceNamespaceID)
+		if bindErr != nil {
+			validation = append(validation, domain.ReleaseValidationError{
+				Alias: entry.Alias, Code: domain.ReleaseValidationNotFound,
+				Message: "release entry references a missing or replaced namespace",
+			})
+			continue
+		}
 		switch entry.Kind {
 		case domain.ReleaseEntryParameter:
-			entryCtx, _, authErr := s.authorize(ctx, pr, domain.OpParameterRead, domain.ResourceParameter, entry.Ref)
-			if authErr != nil {
-				validation = append(validation, validationAuthError(entry.Alias, authErr))
-				continue
+			if authorizeEntries {
+				authorizedCtx, _, authErr := s.authorize(entryCtx, pr, domain.OpParameterRead, domain.ResourceParameter, entry.Ref)
+				if authErr != nil {
+					validation = append(validation, validationAuthError(entry.Alias, authErr))
+					continue
+				}
+				entryCtx = authorizedCtx
 			}
-			ctx = entryCtx
-			p, err := s.store.GetParameter(ctx, entry.Ref, entry.Version, "")
+			p, err := s.store.GetParameter(entryCtx, entry.Ref, entry.Version, "")
 			if err != nil {
 				validation = append(validation, validationReadError(entry.Alias, err))
 				continue
@@ -270,13 +297,15 @@ func (s *Service) ValidateConfigurationRelease(ctx context.Context, pr Principal
 			}
 			obj[entry.Alias] = value
 		case domain.ReleaseEntrySecret:
-			entryCtx, _, authErr := s.authorize(ctx, pr, domain.OpSecretRead, domain.ResourceSecret, entry.Ref)
-			if authErr != nil {
-				validation = append(validation, validationAuthError(entry.Alias, authErr))
-				continue
+			if authorizeEntries {
+				authorizedCtx, _, authErr := s.authorize(entryCtx, pr, domain.OpSecretRead, domain.ResourceSecret, entry.Ref)
+				if authErr != nil {
+					validation = append(validation, validationAuthError(entry.Alias, authErr))
+					continue
+				}
+				entryCtx = authorizedCtx
 			}
-			ctx = entryCtx
-			_, ver, err := s.store.GetSecretVersion(ctx, entry.Ref, entry.Version, "")
+			_, ver, err := s.store.GetSecretVersion(entryCtx, entry.Ref, entry.Version, "")
 			if err != nil {
 				validation = append(validation, validationReadError(entry.Alias, err))
 				continue
@@ -306,11 +335,6 @@ func (s *Service) ValidateConfigurationRelease(ctx context.Context, pr Principal
 			validation = append(validation, sanitizeSchemaErrors(err)...)
 		}
 	}
-	decision := "allow"
-	if len(validation) > 0 {
-		decision = "error"
-	}
-	s.auditRefWithNamespaceID(ctx, pr, "configuration_release.validate", domain.ResourceConfigurationRelease, domain.Ref{NS: ns, Key: name}, namespace.ID, version, decision, map[string]string{"error_count": strconv.Itoa(len(validation))})
 	return validation, nil
 }
 
@@ -329,15 +353,33 @@ func (s *Service) ActivateConfigurationRelease(ctx context.Context, pr Principal
 	if err != nil {
 		return domain.ActiveConfigurationRelease{}, false, err
 	}
+	validation, err := s.validateConfigurationRelease(ctx, pr, rs, ns, name, version, false)
+	if err != nil {
+		s.auditRefWithNamespaceID(ctx, pr, "configuration_release.activate", domain.ResourceConfigurationRelease, domain.Ref{NS: ns, Key: name}, namespace.ID, version, "error", nil)
+		return domain.ActiveConfigurationRelease{}, false, err
+	}
+	if len(validation) > 0 {
+		s.auditRefWithNamespaceID(ctx, pr, "configuration_release.activate", domain.ResourceConfigurationRelease, domain.Ref{NS: ns, Key: name}, namespace.ID, version, "deny", map[string]string{"error_count": strconv.Itoa(len(validation)), "reason": "validation_failed"})
+		return domain.ActiveConfigurationRelease{}, false, domain.NewReleaseValidationFailedError(validation)
+	}
 	active, changed, err := rs.ActivateConfigurationRelease(ctx, ns, name, version, expectedCurrent)
 	if err != nil {
 		decision := "error"
 		event := "configuration_release.activate"
+		metadata := map[string]string(nil)
+		var validationFailed *domain.ReleaseValidationFailedError
+		if errors.As(err, &validationFailed) {
+			decision = "deny"
+			metadata = map[string]string{
+				"error_count": strconv.Itoa(len(validationFailed.Violations())),
+				"reason":      "validation_failed",
+			}
+		}
 		if errors.Is(err, domain.ErrAborted) {
 			event = "configuration_release.cas_conflict"
 			decision = "deny"
 		}
-		s.auditRefWithNamespaceID(ctx, pr, event, domain.ResourceConfigurationRelease, domain.Ref{NS: ns, Key: name}, namespace.ID, version, decision, nil)
+		s.auditRefWithNamespaceID(ctx, pr, event, domain.ResourceConfigurationRelease, domain.Ref{NS: ns, Key: name}, namespace.ID, version, decision, metadata)
 		return domain.ActiveConfigurationRelease{}, false, err
 	}
 	if changed {
@@ -560,14 +602,14 @@ func parameterSchemaValue(value, contentType string) (any, error) {
 }
 func validationAuthError(alias string, err error) domain.ReleaseValidationError {
 	code := domain.ReleaseValidationPermissionDenied
-	if errors.Is(err, domain.ErrNotFound) {
+	if errors.Is(err, domain.ErrNotFound) || errors.Is(err, domain.ErrAborted) {
 		code = domain.ReleaseValidationNotFound
 	}
 	return domain.ReleaseValidationError{Alias: alias, Code: code, Message: "referenced resource is not readable"}
 }
 func validationReadError(alias string, err error) domain.ReleaseValidationError {
 	code := domain.ReleaseValidationUnreadable
-	if errors.Is(err, domain.ErrNotFound) {
+	if errors.Is(err, domain.ErrNotFound) || errors.Is(err, domain.ErrAborted) {
 		code = domain.ReleaseValidationNotFound
 	}
 	return domain.ReleaseValidationError{Alias: alias, Code: code, Message: "referenced resource is unavailable"}

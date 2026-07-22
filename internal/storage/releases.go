@@ -2,7 +2,9 @@ package storage
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"strings"
@@ -57,7 +59,8 @@ func (s *SQLStore) CreateConfigurationRelease(ctx context.Context, release domai
 			}
 			return err
 		}
-		for _, entry := range release.Entries {
+		for index, entry := range release.Entries {
+			release.Entries[index].ResourceNamespaceID = entryNamespaceIDs[entry.Ref.NS]
 			em := configurationReleaseEntryModel{
 				ReleaseID: m.ID, Alias: entry.Alias, Kind: entry.Kind, ResourceNamespaceID: entryNamespaceIDs[entry.Ref.NS],
 				ResourceEnv: entry.Ref.NS.Env, ResourceApp: entry.Ref.NS.App, ResourceKey: entry.Ref.Key,
@@ -125,8 +128,10 @@ func releaseFromModelAndEntries(ns domain.NamespaceRef, m configurationReleaseMo
 	for _, e := range rows {
 		entries = append(entries, domain.ConfigurationReleaseEntry{
 			Alias: e.Alias, Kind: e.Kind,
-			Ref:     domain.Ref{NS: domain.NamespaceRef{Env: e.ResourceEnv, App: e.ResourceApp}, Key: e.ResourceKey},
-			Version: uint64(e.ResourceVersion), ContentType: e.ContentType, Metadata: e.MetadataJSON,
+			Ref:                 domain.Ref{NS: domain.NamespaceRef{Env: e.ResourceEnv, App: e.ResourceApp}, Key: e.ResourceKey},
+			Version:             uint64(e.ResourceVersion),
+			ResourceNamespaceID: e.ResourceNamespaceID,
+			ContentType:         e.ContentType, Metadata: e.MetadataJSON,
 			ParameterDigest: e.ParameterDigest, ClientBound: i2b(e.ClientBound), HasAccessToken: i2b(e.HasAccessToken),
 		})
 	}
@@ -371,18 +376,39 @@ func validateReleasePinsTx(tx *gorm.DB, releaseID int64) error {
 	type pinRow struct {
 		Alias                     string
 		Kind                      string
+		PinnedContentType         string
+		PinnedParameterDigest     string
+		PinnedClientBound         int64
+		PinnedHasAccessToken      int64
 		StoredResourceNamespaceID int64
 		ResourceNamespaceID       sql.NullInt64
 		ParameterVersionID        sql.NullInt64
+		ParameterValue            sql.NullString
+		ParameterContentType      sql.NullString
 		SecretVersionID           sql.NullInt64
 		SecretState               sql.NullString
+		SecretExpiresAt           sql.NullString
+		SecretContentType         sql.NullString
+		SecretClientBound         sql.NullInt64
+		SecretHasAccessToken      sql.NullInt64
 	}
 	var pins []pinRow
 	err := tx.Raw(`SELECT e.alias, e.kind,
+			e.content_type AS pinned_content_type,
+			e.parameter_digest AS pinned_parameter_digest,
+			e.client_bound AS pinned_client_bound,
+			e.has_access_token AS pinned_has_access_token,
 			e.resource_namespace_id AS stored_resource_namespace_id,
 			n.id AS resource_namespace_id,
-			pv.id AS parameter_version_id, sv.id AS secret_version_id,
-			sv.state AS secret_state
+			pv.id AS parameter_version_id,
+			pv.value AS parameter_value,
+			pv.content_type AS parameter_content_type,
+			sv.id AS secret_version_id,
+			sv.state AS secret_state,
+			sv.expires_at AS secret_expires_at,
+			sv.content_type AS secret_content_type,
+			sv.client_bound AS secret_client_bound,
+			sv.has_access_token AS secret_has_access_token
 		FROM configuration_release_entries e
 		LEFT JOIN namespaces n
 			ON e.resource_namespace_id > 0
@@ -403,28 +429,53 @@ func validateReleasePinsTx(tx *gorm.DB, releaseID int64) error {
 	}
 	for _, pin := range pins {
 		if pin.StoredResourceNamespaceID <= 0 {
-			return domain.Errorf(domain.ErrFailedPrecondition, "release alias %q predates immutable namespace pins; recreate the release", pin.Alias)
+			return releasePinValidationError(pin.Alias, domain.ReleaseValidationUnreadable, "release entry predates immutable namespace pins; recreate the release")
 		}
 		if !pin.ResourceNamespaceID.Valid {
-			return domain.Errorf(domain.ErrFailedPrecondition, "release alias %q references a missing or replaced namespace", pin.Alias)
+			return releasePinValidationError(pin.Alias, domain.ReleaseValidationNotFound, "release entry references a missing or replaced namespace")
 		}
 		switch pin.Kind {
 		case domain.ReleaseEntryParameter:
 			if !pin.ParameterVersionID.Valid {
-				return domain.Errorf(domain.ErrFailedPrecondition, "release alias %q references a missing parameter version", pin.Alias)
+				return releasePinValidationError(pin.Alias, domain.ReleaseValidationNotFound, "release entry references a missing parameter version")
+			}
+			if pin.PinnedContentType != "" && (!pin.ParameterContentType.Valid || pin.ParameterContentType.String != pin.PinnedContentType) {
+				return releasePinValidationError(pin.Alias, domain.ReleaseValidationContentType, "parameter content type does not match release pin")
+			}
+			if pin.PinnedParameterDigest != "" {
+				digest := sha256.Sum256([]byte(pin.ParameterValue.String))
+				if !pin.ParameterValue.Valid || hex.EncodeToString(digest[:]) != pin.PinnedParameterDigest {
+					return releasePinValidationError(pin.Alias, domain.ReleaseValidationDigest, "parameter digest does not match release pin")
+				}
 			}
 		case domain.ReleaseEntrySecret:
 			if !pin.SecretVersionID.Valid {
-				return domain.Errorf(domain.ErrFailedPrecondition, "release alias %q references a missing secret version", pin.Alias)
+				return releasePinValidationError(pin.Alias, domain.ReleaseValidationNotFound, "release entry references a missing secret version")
 			}
-			if pin.SecretState.String == domain.StateDestroyed {
-				return domain.Errorf(domain.ErrFailedPrecondition, "release alias %q references a destroyed secret version", pin.Alias)
+			if !pin.SecretState.Valid || pin.SecretState.String != domain.StateEnabled {
+				return releasePinValidationError(pin.Alias, domain.ReleaseValidationUnreadable, "secret version is not readable")
+			}
+			if pin.SecretExpiresAt.Valid {
+				expiresAt := parseTime(pin.SecretExpiresAt.String)
+				if expiresAt.IsZero() || time.Now().After(expiresAt) {
+					return releasePinValidationError(pin.Alias, domain.ReleaseValidationUnreadable, "secret version is expired")
+				}
+			}
+			if pin.PinnedContentType != "" && (!pin.SecretContentType.Valid || pin.SecretContentType.String != pin.PinnedContentType) {
+				return releasePinValidationError(pin.Alias, domain.ReleaseValidationContentType, "secret content type does not match release pin")
+			}
+			if !pin.SecretClientBound.Valid || !pin.SecretHasAccessToken.Valid || pin.SecretClientBound.Int64 != pin.PinnedClientBound || pin.SecretHasAccessToken.Int64 != pin.PinnedHasAccessToken {
+				return releasePinValidationError(pin.Alias, domain.ReleaseValidationUnreadable, "secret protection metadata does not match release pin")
 			}
 		default:
-			return domain.Errorf(domain.ErrFailedPrecondition, "release alias %q has unknown kind", pin.Alias)
+			return releasePinValidationError(pin.Alias, domain.ReleaseValidationUnreadable, "release entry kind is invalid")
 		}
 	}
 	return nil
+}
+
+func releasePinValidationError(alias, code, message string) error {
+	return domain.NewReleaseValidationFailedError([]domain.ReleaseValidationError{{Alias: alias, Code: code, Message: message}})
 }
 
 func (s *SQLStore) CreateConfigurationSchema(ctx context.Context, schema domain.ConfigurationSchema) (domain.ConfigurationSchema, error) {

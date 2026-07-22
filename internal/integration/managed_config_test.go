@@ -121,17 +121,22 @@ func TestManagedConfigStoreOverRealKMS(t *testing.T) {
 	pins.password, pins.token = passwordVersion, runtimeTokenVersion
 
 	releases := kmsv1.NewConfigurationReleaseServiceClient(env.adminConn)
-	createRelease := func(candidate managedPins, wantValid bool) *kmsv1.ConfigurationRelease {
+	createReleaseWithSchema := func(candidate managedPins, wantValid, attachSchema bool) *kmsv1.ConfigurationRelease {
 		t.Helper()
-		response, createErr := releases.CreateRelease(authCtx, &kmsv1.CreateReleaseRequest{
-			Namespace: namespace, Name: managedRelease, SchemaId: managedSchemaID, SchemaVersion: schemaVersion,
+		request := &kmsv1.CreateReleaseRequest{
+			Namespace: namespace, Name: managedRelease,
 			Entries: []*kmsv1.ReleaseEntrySelector{
 				{Alias: "database", Kind: "parameter", Ref: networkRef("prod", "managed-config", "groups/database"), Version: candidate.database},
 				{Alias: "runtime", Kind: "parameter", Ref: networkRef("prod", "managed-config", "groups/runtime"), Version: candidate.runtime},
 				{Alias: "database_password", Kind: "secret", Ref: networkRef("prod", "managed-config", "secrets/database_password"), Version: candidate.password},
 				{Alias: "runtime_token", Kind: "secret", Ref: networkRef("prod", "managed-config", "secrets/runtime_token"), Version: candidate.token},
 			},
-		})
+		}
+		if attachSchema {
+			request.SchemaId = managedSchemaID
+			request.SchemaVersion = schemaVersion
+		}
+		response, createErr := releases.CreateRelease(authCtx, request)
 		if createErr != nil {
 			t.Fatalf("create managed release: %v", createErr)
 		}
@@ -146,6 +151,12 @@ func TestManagedConfigStoreOverRealKMS(t *testing.T) {
 			t.Fatalf("release %d validity = %t errors=%v, want %t", release.GetVersion(), validation.GetValid(), validation.GetErrors(), wantValid)
 		}
 		return release
+	}
+	createRelease := func(candidate managedPins, wantValid bool) *kmsv1.ConfigurationRelease {
+		return createReleaseWithSchema(candidate, wantValid, true)
+	}
+	createUnschematizedRelease := func(candidate managedPins) *kmsv1.ConfigurationRelease {
+		return createReleaseWithSchema(candidate, true, false)
 	}
 	activate := func(release *kmsv1.ConfigurationRelease, expected uint64) uint64 {
 		t.Helper()
@@ -276,7 +287,10 @@ func TestManagedConfigStoreOverRealKMS(t *testing.T) {
 
 	invalidPins := hotPins
 	invalidPins.runtime = putParameter("groups/runtime", managedRuntimeInvalid)
-	invalidRelease := createRelease(invalidPins, false)
+	// Leave this release unschematized so the server can activate it and the
+	// generated client can prove it preserves its last-known-good snapshot when
+	// decoding data that predates activation-time schema enforcement.
+	invalidRelease := createUnschematizedRelease(invalidPins)
 	activate(invalidRelease, hotRelease.GetVersion())
 	waitForManagedState(t, func() bool {
 		status := store.Status()

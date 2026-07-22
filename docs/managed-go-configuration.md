@@ -124,6 +124,57 @@ several views, but it is decoded, validated, compared, and reloaded only once.
 Physical KMS paths remain in the release manifest and are never inferred from
 Go names.
 
+### Compose an application root from shared fragments
+
+The importing application owns the generated store, schema, and contract. A
+library may publish a reusable configuration fragment, but it must not generate
+an independent managed store for that fragment. Compose the library fields into
+the application's one atomic release with `kms:"inline"`:
+
+```go
+package config
+
+import commonconfig "example.com/go-common/pkg/config"
+
+type Config struct {
+    Common *commonconfig.Config `kms:"inline"`
+
+    WorkerCount int `json:"worker_count" kms:"group=workers,reload=restart" kms_views:"workers"`
+}
+
+func (c *Config) Validate() error {
+    if c.Common == nil {
+        return fmt.Errorf("common config is required")
+    }
+    if err := c.Common.Validate(); err != nil {
+        return fmt.Errorf("common config: %w", err)
+    }
+    if c.WorkerCount <= 0 {
+        return fmt.Errorf("worker_count must be positive")
+    }
+    return nil
+}
+```
+
+An inline field may be an exported named struct or a pointer to one. Inline
+composition is recursive. The generator flattens its managed fields into the
+application's global aliases, views, schema, contract, mismatch comparison,
+reload admission, and immutable snapshot; it does not introduce a JSON wrapper
+or a second activation boundary. Alias, view-method, and generated-method
+collisions are checked across the complete composed root.
+
+Pointer fragments must be non-nil in the supplied defaults and in every
+decoded candidate. A value fragment avoids that additional state and is the
+preferred form for new APIs. The application root must declare its own
+`Validate() error` method directly: a promoted fragment method is not aggregate
+validation. Root validation should explicitly delegate to every fragment and
+then enforce application-wide invariants.
+
+Run generation in the importing application whenever either its fields or any
+inline fragment contract changes, including when upgrading the library that
+owns a fragment. Commit the resulting application-owned artifacts and verify
+them with `-check` in that application's CI.
+
 ## Supported encodings
 
 Generated schema and runtime metadata come from one normalized type model:
@@ -257,6 +308,44 @@ must not rely on side effects. The binding clones again after validation so
 even a validator that mutates its receiver cannot mutate saved defaults or a
 published generation.
 
+## Encode baseline parameter groups
+
+The generated binding can turn an application-owned root into the complete
+parameter documents used to seed or restore KMS:
+
+```go
+defaults := appconfig.Defaults()
+groups, err := configkms.EncodeParameterGroups(defaults)
+if err != nil {
+    return err
+}
+
+databaseJSON := groups["database"]
+rateLimitsJSON := groups["rate_limits"]
+```
+
+`EncodeParameterGroups` returns `map[string]json.RawMessage`, keyed by the
+declared parameter-group aliases. Each value is a complete strict group
+document, not a patch. The encoder uses the same generated descriptors as the
+runtime decoder: durations are Go duration strings, byte slices are canonical
+base64, supported named and composite values are encoded recursively, and
+`nil` remains distinct from a non-nil empty slice, map, or byte slice. Inline
+fragment fields are flattened into their declared application-level groups.
+
+The encoder rejects a nil root, a nil pointer-valued inline fragment, values
+outside a generated portable numeric contract, and JSON values that cannot be
+represented, such as `NaN` or infinity. It never emits managed secrets,
+excluded fields, secret aliases, secret metadata, or secret plaintext, even if
+the supplied root is a populated runtime snapshot. It does not call the
+application's `Validate` method; schema validation, release validation, and the
+runtime store still validate the assembled parameter-and-secret candidate.
+
+Use this API in an application-owned baseline/export command or deployment
+tool rather than maintaining duplicate hand-written default JSON. Map each
+alias to an operator-chosen physical KMS parameter path, publish the returned
+document with content type `json`, and pin the resulting immutable version in
+the release manifest. Create and pin secrets separately.
+
 ## Start and consume the store
 
 The generated package presents the application-specific API:
@@ -326,6 +415,17 @@ timeout := persistence.DBQueryTimeout()
 password := persistence.DBPassword()
 release := snapshot.Release()
 ```
+
+When existing startup constructors need the complete root, use the generated
+defensive clone:
+
+```go
+startupConfig := store.Current().Config()
+```
+
+`Config()` is intended for restart-bound startup wiring. Hot consumers should
+capture one snapshot and use a narrow generated view so related reads remain
+within one generation.
 
 Views from one snapshot hold the same immutable generation. Do not call
 `store.Current()` separately for related fields; two loads may cross an
@@ -417,6 +517,14 @@ enforces the generated alias/kind/content-type contract and strict decoder.
 
 ### Register the generated schema
 
+Generate baseline group documents from the exact application build whose
+schema and contract are being deployed. A small application-owned command can
+call `configkms.EncodeParameterGroups(appconfig.Defaults())` and write one file
+per alias for operator tooling. This keeps baseline documents synchronized
+with source defaults and guarantees the runtime's duration, base64, nullable,
+composite, and inline-fragment encodings. Review the generated non-secret
+documents before publishing them; secret values are provisioned separately.
+
 ```bash
 parameter-store release schema create my-service/runtime config/runtime.schema.json \
   --endpoint "$PARAM_STORE_ENDPOINT" --token "$ADMIN_TOKEN" \
@@ -470,6 +578,15 @@ parameter-store release activate prod/my-service runtime 15 \
   --endpoint "$PARAM_STORE_ENDPOINT" --token "$ADMIN_TOKEN" \
   --ca "$PARAM_STORE_SERVER_CA_CERT"
 ```
+
+Activation is validation-gated. KMS repeats release validation immediately
+before moving `current`/`previous`, then rechecks immutable pins, digests,
+content types, secret state and expiry, and protection metadata in the same
+storage transaction that moves the labels. A failed activation returns
+`FAILED_PRECONDITION` (HTTP 412) with the same sanitized structured validation
+errors printed by `release validate`; labels and activation revision remain
+unchanged. Calling `release validate` first remains useful operator preflight,
+but it is not required for safety and does not create a reusable approval.
 
 Rollback reactivates the previous immutable version with an automatic
 compare-and-swap guard, or accepts an explicit retained version:

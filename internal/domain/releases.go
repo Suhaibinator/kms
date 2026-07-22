@@ -49,15 +49,19 @@ const (
 // SHA-256 hex digest of the exact stored parameter bytes and is empty for
 // secrets. Metadata is immutable non-sensitive metadata captured at creation.
 type ConfigurationReleaseEntry struct {
-	Alias           string
-	Kind            string
-	Ref             Ref
-	Version         uint64
-	ContentType     string
-	Metadata        string
-	ParameterDigest string
-	ClientBound     bool
-	HasAccessToken  bool
+	Alias   string
+	Kind    string
+	Ref     Ref
+	Version uint64
+	// ResourceNamespaceID is an internal storage binding for the exact
+	// namespace incarnation pinned when the immutable release was created. It
+	// is deliberately omitted from every public transport and release digest.
+	ResourceNamespaceID int64
+	ContentType         string
+	Metadata            string
+	ParameterDigest     string
+	ClientBound         bool
+	HasAccessToken      bool
 }
 
 // ConfigurationRelease is an immutable namespace-scoped release version.
@@ -112,6 +116,27 @@ type ReleaseValidationError struct {
 	Code          string
 	SchemaPointer string
 	Message       string
+}
+
+// ReleaseValidationFailedError is the bounded, value-free failure returned
+// when activation is refused. Transports may expose its sanitized violations
+// without leaking parameter or secret values.
+type ReleaseValidationFailedError struct {
+	violations []ReleaseValidationError
+}
+
+func NewReleaseValidationFailedError(violations []ReleaseValidationError) *ReleaseValidationFailedError {
+	return &ReleaseValidationFailedError{violations: append([]ReleaseValidationError(nil), violations...)}
+}
+
+func (*ReleaseValidationFailedError) Error() string { return "configuration release validation failed" }
+func (*ReleaseValidationFailedError) Unwrap() error { return ErrFailedPrecondition }
+
+func (e *ReleaseValidationFailedError) Violations() []ReleaseValidationError {
+	if e == nil {
+		return nil
+	}
+	return append([]ReleaseValidationError(nil), e.violations...)
 }
 
 // ConfigurationSchema is one immutable JSON Schema version.

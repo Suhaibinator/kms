@@ -202,15 +202,32 @@ func (h *adversarialManagedApp) createRelease(
 	pins adversarialManagedPins,
 	mutate func([]*kmsv1.ReleaseEntrySelector),
 ) (*kmsv1.ConfigurationRelease, *kmsv1.ValidateReleaseResponse) {
+	return h.createReleaseWithSchema(pins, mutate, true)
+}
+
+func (h *adversarialManagedApp) createUnschematizedRelease(
+	pins adversarialManagedPins,
+	mutate func([]*kmsv1.ReleaseEntrySelector),
+) (*kmsv1.ConfigurationRelease, *kmsv1.ValidateReleaseResponse) {
+	return h.createReleaseWithSchema(pins, mutate, false)
+}
+
+func (h *adversarialManagedApp) createReleaseWithSchema(
+	pins adversarialManagedPins,
+	mutate func([]*kmsv1.ReleaseEntrySelector),
+	attachSchema bool,
+) (*kmsv1.ConfigurationRelease, *kmsv1.ValidateReleaseResponse) {
 	h.t.Helper()
 	entries := h.standardEntries(pins)
 	if mutate != nil {
 		mutate(entries)
 	}
-	created, err := h.releases.CreateRelease(h.authCtx, &kmsv1.CreateReleaseRequest{
-		Namespace: h.namespace, Name: adversarialReleaseName,
-		SchemaId: h.schemaID, SchemaVersion: h.schemaVersion, Entries: entries,
-	})
+	request := &kmsv1.CreateReleaseRequest{Namespace: h.namespace, Name: adversarialReleaseName, Entries: entries}
+	if attachSchema {
+		request.SchemaId = h.schemaID
+		request.SchemaVersion = h.schemaVersion
+	}
+	created, err := h.releases.CreateRelease(h.authCtx, request)
 	if err != nil {
 		h.t.Fatalf("create managed release: %v", err)
 	}
@@ -590,6 +607,12 @@ func TestManagedConfigAdversarialSchemaRuntimeParity(t *testing.T) {
 			}
 			zero := uint64(0)
 			activation, err := app.activate(release, &zero)
+			if !tc.schemaValid {
+				if status.Code(err) != codes.FailedPrecondition || activation != nil {
+					t.Fatalf("schema-invalid activation response=%+v err=%v code=%s, want FailedPrecondition", activation, err, status.Code(err))
+				}
+				return
+			}
 			if err != nil || !activation.GetChanged() {
 				t.Fatalf("activate release changed=%t err=%v", activation.GetChanged(), err)
 			}
@@ -728,11 +751,11 @@ func TestManagedConfigAdversarialPrefetchRecoveryAndRedaction(t *testing.T) {
 	initialSnapshot := running.store.Current()
 	app.providerCalls.Store(0)
 
-	contractRelease, contractValidation := app.createRelease(pins, func(entries []*kmsv1.ReleaseEntrySelector) {
+	contractRelease, contractValidation := app.createUnschematizedRelease(pins, func(entries []*kmsv1.ReleaseEntrySelector) {
 		entries[1].Alias = "runtime_unexpected"
 	})
-	if contractValidation.GetValid() {
-		t.Fatal("wrong-alias release unexpectedly passed registered schema")
+	if !contractValidation.GetValid() {
+		t.Fatalf("unschematized contract-rejection fixture failed server validation: %v", contractValidation.GetErrors())
 	}
 	app.mustActivate(contractRelease, initialRelease.GetVersion())
 	waitForManagedState(t, func() bool {
@@ -753,9 +776,9 @@ func TestManagedConfigAdversarialPrefetchRecoveryAndRedaction(t *testing.T) {
 		"groups/runtime",
 		adversarialRuntimeDocument(`["`+parameterCanary+`"]`, strconv.Quote("AA=="), `{"ok":1}`, `[0.25]`),
 	)
-	invalidRelease, invalidValidation := app.createRelease(invalidPins, nil)
-	if invalidValidation.GetValid() {
-		t.Fatal("wrong-array candidate unexpectedly passed registered schema")
+	invalidRelease, invalidValidation := app.createUnschematizedRelease(invalidPins, nil)
+	if !invalidValidation.GetValid() {
+		t.Fatalf("unschematized decode-rejection fixture failed server validation: %v", invalidValidation.GetErrors())
 	}
 	app.mustActivate(invalidRelease, contractRelease.GetVersion())
 	waitForManagedState(t, func() bool {

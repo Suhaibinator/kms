@@ -8,6 +8,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
+	kmsv1 "github.com/Suhaibinator/kms/gen/kmsv1"
 	"github.com/Suhaibinator/kms/internal/domain"
 )
 
@@ -19,6 +20,20 @@ import (
 func mapError(log *zap.Logger, ctx context.Context, err error) error {
 	if err == nil {
 		return nil
+	}
+	var validationFailed *domain.ReleaseValidationFailedError
+	if errors.As(err, &validationFailed) {
+		violations := validationFailed.Violations()
+		out := make([]*kmsv1.ReleaseValidationError, 0, len(violations))
+		for _, violation := range violations {
+			out = append(out, toProtoReleaseValidationError(violation))
+		}
+		mapped := status.New(codes.FailedPrecondition, validationFailed.Error())
+		withDetails, detailErr := mapped.WithDetails(&kmsv1.ValidateReleaseResponse{Valid: false, Errors: out})
+		if detailErr == nil {
+			return withDetails.Err()
+		}
+		return mapped.Err()
 	}
 	switch {
 	case errors.Is(err, domain.ErrInvalidArgument):

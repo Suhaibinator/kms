@@ -33,6 +33,7 @@
       "group": "database",
       "json_name": "endpoint",
       "go_name": "Endpoint",
+      "go_path": "Endpoint",
       "reload": "restart",
       "encoding": "object",
       "views": [
@@ -44,6 +45,7 @@
       "group": "database",
       "json_name": "max_open",
       "go_name": "MaxOpen",
+      "go_path": "MaxOpen",
       "reload": "restart",
       "encoding": "nullable-int32",
       "views": [
@@ -55,6 +57,7 @@
       "group": "database",
       "json_name": "timeout",
       "go_name": "Timeout",
+      "go_path": "Timeout",
       "reload": "hot",
       "encoding": "go-duration",
       "views": [
@@ -66,6 +69,7 @@
       "group": "runtime",
       "json_name": "features",
       "go_name": "Features",
+      "go_path": "Features",
       "reload": "hot",
       "encoding": "nullable-array",
       "views": [
@@ -77,6 +81,7 @@
       "group": "runtime",
       "json_name": "payload",
       "go_name": "Payload",
+      "go_path": "Payload",
       "reload": "hot",
       "encoding": "nullable-base64",
       "views": [
@@ -87,6 +92,7 @@
       "group": "runtime",
       "json_name": "thresholds",
       "go_name": "Thresholds",
+      "go_path": "Thresholds",
       "reload": "hot",
       "encoding": "nullable-string-map",
       "views": [
@@ -98,6 +104,7 @@
       "group": "runtime",
       "json_name": "window",
       "go_name": "Window",
+      "go_path": "Window",
       "reload": "hot",
       "encoding": "array",
       "views": [
@@ -110,6 +117,7 @@
       "alias": "database_password",
       "kind": "secret",
       "go_name": "Password",
+      "go_path": "Password",
       "reload": "restart",
       "encoding": "secret",
       "views": [
@@ -120,6 +128,7 @@
       "alias": "runtime_token",
       "kind": "secret",
       "go_name": "RuntimeToken",
+      "go_path": "RuntimeToken",
       "reload": "hot",
       "encoding": "secret",
       "views": [

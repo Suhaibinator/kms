@@ -4,6 +4,7 @@ package generated
 
 import (
 	context "context"
+	json "encoding/json"
 	errors "errors"
 	fmt "fmt"
 	rootconfig "github.com/Suhaibinator/kms/internal/configgen/testdata/valid"
@@ -13,7 +14,7 @@ import (
 	time "time"
 )
 
-const generatedSchemaSHA256 = "ac7f66a52d536e87dd131532a865dddf4b1a511e5db547f7598367580df3d49e"
+const generatedSchemaSHA256 = "d38bf503f3c7fcab1a92493cb1a110e970643fb0efdc6b20de2cc59908742688"
 
 var generatedContract = []configstore.ContractEntry{
 	{Alias: "database", Kind: configstore.ContractKindParameter, ContentType: "json"},
@@ -58,6 +59,26 @@ type DatabaseHealthView struct{ generation *immutableGeneration }
 // PersistenceHandlerView is an immutable projection captured from a Snapshot.
 type PersistenceHandlerView struct{ generation *immutableGeneration }
 
+// EncodeParameterGroups encodes every complete non-secret parameter group from root.
+// The returned documents use the same canonical encodings accepted by the generated store.
+func EncodeParameterGroups(root *rootconfig.Config) (map[string]json.RawMessage, error) {
+	if err := validateInlinePointers(root); err != nil {
+		return nil, err
+	}
+	groups := make(map[string]json.RawMessage, 2)
+	group0, err := configstore.EncodeGroup(root, groupFields0)
+	if err != nil {
+		return nil, fmt.Errorf("generated config store: encode parameter group database: %w", err)
+	}
+	groups["database"] = group0
+	group1, err := configstore.EncodeGroup(root, groupFields1)
+	if err != nil {
+		return nil, fmt.Errorf("generated config store: encode parameter group rate_limits: %w", err)
+	}
+	groups["rate_limits"] = group1
+	return groups, nil
+}
+
 // Start synchronously validates and publishes the initial release, then watches in the background.
 func Start(ctx context.Context, client *kmsclient.Client, options Options) (*Store, error) {
 	if options.Defaults == nil {
@@ -66,6 +87,9 @@ func Start(ctx context.Context, client *kmsclient.Client, options Options) (*Sto
 	defaults := options.Defaults()
 	if defaults == nil {
 		return nil, errors.New("generated config store: Options.Defaults returned nil")
+	}
+	if err := validateInlinePointers(defaults); err != nil {
+		return nil, err
 	}
 	if !defaults.Password.IsZero() || defaults.Password.Path() != "" || defaults.Password.Version() != 0 || defaults.Password.ContentType() != "" {
 		return nil, fmt.Errorf("generated config store: default secret Password must be zero")
@@ -120,10 +144,16 @@ func (s *Store) prepare(ctx context.Context, snapshot kmsclient.ReleaseSnapshot)
 	if err := candidate.Validate(); err != nil {
 		return configstore.PreparedCandidate{}, configstore.Reject(configstore.RejectConfigValidationFailed, fmt.Errorf("validate KMS configuration: %w", err))
 	}
+	if err := validateInlinePointers(candidate); err != nil {
+		return configstore.PreparedCandidate{}, configstore.Reject(configstore.RejectConfigValidationFailed, err)
+	}
 	effectiveDefaults := cloneRoot(s.defaults)
 	effectiveDefaults.Password = secret0.Clone()
 	if err := effectiveDefaults.Validate(); err != nil {
 		return configstore.PreparedCandidate{}, configstore.Reject(configstore.RejectConfigValidationFailed, fmt.Errorf("validate effective application defaults: %w", err))
+	}
+	if err := validateInlinePointers(effectiveDefaults); err != nil {
+		return configstore.PreparedCandidate{}, configstore.Reject(configstore.RejectConfigValidationFailed, err)
 	}
 	// Validation is application code and may mutate its receiver. Clone once more before retaining either value.
 	candidate = cloneRoot(candidate)
@@ -132,17 +162,17 @@ func (s *Store) prepare(ctx context.Context, snapshot kmsclient.ReleaseSnapshot)
 	if !equalValue0(effectiveDefaults.Endpoint, candidate.Endpoint) {
 		differences = append(differences, configstore.FieldDifference{Path: "database.endpoint", Expected: reportValue0(effectiveDefaults.Endpoint), Actual: reportValue0(candidate.Endpoint)})
 	}
-	if !equalValue6(effectiveDefaults.Timeout, candidate.Timeout) {
-		differences = append(differences, configstore.FieldDifference{Path: "database.timeout", Expected: reportValue6(effectiveDefaults.Timeout), Actual: reportValue6(candidate.Timeout)})
+	if !equalValue7(effectiveDefaults.Timeout, candidate.Timeout) {
+		differences = append(differences, configstore.FieldDifference{Path: "database.timeout", Expected: reportValue7(effectiveDefaults.Timeout), Actual: reportValue7(candidate.Timeout)})
 	}
-	if !equalValue7(effectiveDefaults.Limit, candidate.Limit) {
-		differences = append(differences, configstore.FieldDifference{Path: "rate_limits.limit", Expected: reportValue7(effectiveDefaults.Limit), Actual: reportValue7(candidate.Limit)})
+	if !equalValue8(effectiveDefaults.Limit, candidate.Limit) {
+		differences = append(differences, configstore.FieldDifference{Path: "rate_limits.limit", Expected: reportValue8(effectiveDefaults.Limit), Actual: reportValue8(candidate.Limit)})
 	}
-	if !equalValue8(effectiveDefaults.Payload, candidate.Payload) {
-		differences = append(differences, configstore.FieldDifference{Path: "rate_limits.payload", Expected: reportValue8(effectiveDefaults.Payload), Actual: reportValue8(candidate.Payload)})
+	if !equalValue9(effectiveDefaults.Payload, candidate.Payload) {
+		differences = append(differences, configstore.FieldDifference{Path: "rate_limits.payload", Expected: reportValue9(effectiveDefaults.Payload), Actual: reportValue9(candidate.Payload)})
 	}
-	if !equalValue9(effectiveDefaults.Ratio, candidate.Ratio) {
-		differences = append(differences, configstore.FieldDifference{Path: "rate_limits.ratio", Expected: reportValue9(effectiveDefaults.Ratio), Actual: reportValue9(candidate.Ratio)})
+	if !equalValue10(effectiveDefaults.Ratio, candidate.Ratio) {
+		differences = append(differences, configstore.FieldDifference{Path: "rate_limits.ratio", Expected: reportValue10(effectiveDefaults.Ratio), Actual: reportValue10(candidate.Ratio)})
 	}
 	restartRequired := make([]string, 0)
 	active := s.active.Load()
@@ -164,7 +194,7 @@ func (s *Store) prepare(ctx context.Context, snapshot kmsclient.ReleaseSnapshot)
 }
 
 var groupFields0 = []configstore.FieldCodec{
-	{JSONName: "endpoint", FieldIndex: []int{0}, Value: configstore.ValueCodec{Kind: configstore.CodecStruct, Fields: []configstore.FieldCodec{{JSONName: "host", FieldIndex: []int{0}, Value: configstore.ValueCodec{Kind: configstore.CodecString}}, {JSONName: "ports", FieldIndex: []int{1}, Value: configstore.ValueCodec{Kind: configstore.CodecSlice, Element: &configstore.ValueCodec{Kind: configstore.CodecUint, Bits: 16}}}, {JSONName: "labels", FieldIndex: []int{2}, Value: configstore.ValueCodec{Kind: configstore.CodecMap, Element: &configstore.ValueCodec{Kind: configstore.CodecSlice, Element: &configstore.ValueCodec{Kind: configstore.CodecString}}}}}}},
+	{JSONName: "endpoint", FieldIndex: []int{0}, Value: configstore.ValueCodec{Kind: configstore.CodecStruct, Fields: []configstore.FieldCodec{{JSONName: "host", FieldIndex: []int{0}, Value: configstore.ValueCodec{Kind: configstore.CodecString}}, {JSONName: "ports", FieldIndex: []int{1}, Value: configstore.ValueCodec{Kind: configstore.CodecSlice, Element: &configstore.ValueCodec{Kind: configstore.CodecUint, Bits: 16}}}, {JSONName: "labels", FieldIndex: []int{2}, Value: configstore.ValueCodec{Kind: configstore.CodecMap, Element: &configstore.ValueCodec{Kind: configstore.CodecSlice, Element: &configstore.ValueCodec{Kind: configstore.CodecString}}}}, {JSONName: "zones", FieldIndex: []int{3}, Value: configstore.ValueCodec{Kind: configstore.CodecArray, Element: &configstore.ValueCodec{Kind: configstore.CodecString}}}}}},
 	{JSONName: "timeout", FieldIndex: []int{1}, Value: configstore.ValueCodec{Kind: configstore.CodecDuration}},
 }
 
@@ -182,6 +212,10 @@ func (s *Store) Current() Snapshot {
 
 func (s Snapshot) Release() configstore.ReleaseIdentity { return s.generation.release }
 
+// Config returns a defensive copy of this complete immutable generation.
+// Use generated views instead when reading hot configuration in an operation path.
+func (s Snapshot) Config() *rootconfig.Config { return cloneRoot(s.generation.config) }
+
 func (s Snapshot) ApiHandler() ApiHandlerView { return ApiHandlerView{generation: s.generation} }
 func (s Snapshot) DatabaseHealth() DatabaseHealthView {
 	return DatabaseHealthView{generation: s.generation}
@@ -191,7 +225,7 @@ func (s Snapshot) PersistenceHandler() PersistenceHandlerView {
 }
 
 func (v ApiHandlerView) Limit() rootconfig.RetryLimit { return v.generation.config.Limit }
-func (v ApiHandlerView) Payload() []byte              { return cloneValue8(v.generation.config.Payload) }
+func (v ApiHandlerView) Payload() []byte              { return cloneValue9(v.generation.config.Payload) }
 func (v ApiHandlerView) Ratio() float32 {
 	if v.generation.config.Ratio == nil {
 		var zero float32
@@ -223,6 +257,13 @@ func cloneRoot(value *rootconfig.Config) *rootconfig.Config {
 	return &out
 }
 
+func validateInlinePointers(value *rootconfig.Config) error {
+	if value == nil {
+		return errors.New("generated config store: configuration root is nil")
+	}
+	return nil
+}
+
 func cloneValue0(value rootconfig.Endpoint) rootconfig.Endpoint {
 	out := value
 	out.Ports = cloneValue2(value.Ports)
@@ -238,6 +279,9 @@ func equalValue0(left, right rootconfig.Endpoint) bool {
 		return false
 	}
 	if !equalValue4(left.Labels, right.Labels) {
+		return false
+	}
+	if !equalValue6(left.Zones, right.Zones) {
 		return false
 	}
 	return true
@@ -353,31 +397,52 @@ func reportValue5(value []string) any {
 	return cloneValue5(value)
 }
 
-func cloneValue6(value time.Duration) time.Duration {
+func cloneValue6(value [2]string) [2]string {
+	out := value
+	for i := range value {
+		out[i] = cloneValue1(value[i])
+	}
+	return out
+}
+
+func equalValue6(left, right [2]string) bool {
+	for i := range left {
+		if !equalValue1(left[i], right[i]) {
+			return false
+		}
+	}
+	return true
+}
+
+func reportValue6(value [2]string) any {
 	return value
 }
 
-func equalValue6(left, right time.Duration) bool {
+func cloneValue7(value time.Duration) time.Duration {
+	return value
+}
+
+func equalValue7(left, right time.Duration) bool {
 	return left == right
 }
 
-func reportValue6(value time.Duration) any {
+func reportValue7(value time.Duration) any {
 	return value
 }
 
-func cloneValue7(value rootconfig.RetryLimit) rootconfig.RetryLimit {
+func cloneValue8(value rootconfig.RetryLimit) rootconfig.RetryLimit {
 	return value
 }
 
-func equalValue7(left, right rootconfig.RetryLimit) bool {
+func equalValue8(left, right rootconfig.RetryLimit) bool {
 	return left == right
 }
 
-func reportValue7(value rootconfig.RetryLimit) any {
+func reportValue8(value rootconfig.RetryLimit) any {
 	return value
 }
 
-func cloneValue8(value []byte) []byte {
+func cloneValue9(value []byte) []byte {
 	if value == nil {
 		return nil
 	}
@@ -386,7 +451,7 @@ func cloneValue8(value []byte) []byte {
 	return out
 }
 
-func equalValue8(left, right []byte) bool {
+func equalValue9(left, right []byte) bool {
 	if (left == nil) != (right == nil) || len(left) != len(right) {
 		return false
 	}
@@ -398,40 +463,40 @@ func equalValue8(left, right []byte) bool {
 	return true
 }
 
-func reportValue8(value []byte) any {
-	return cloneValue8(value)
+func reportValue9(value []byte) any {
+	return cloneValue9(value)
 }
 
-func cloneValue9(value *float32) *float32 {
+func cloneValue10(value *float32) *float32 {
 	if value == nil {
 		return nil
 	}
-	cloned := cloneValue10(*value)
+	cloned := cloneValue11(*value)
 	return (*float32)(&cloned)
 }
 
-func equalValue9(left, right *float32) bool {
+func equalValue10(left, right *float32) bool {
 	if left == nil || right == nil {
 		return left == nil && right == nil
 	}
-	return equalValue10(*left, *right)
+	return equalValue11(*left, *right)
 }
 
-func reportValue9(value *float32) any {
+func reportValue10(value *float32) any {
 	if value == nil {
 		return nil
 	}
 	return *value
 }
 
-func cloneValue10(value float32) float32 {
+func cloneValue11(value float32) float32 {
 	return value
 }
 
-func equalValue10(left, right float32) bool {
+func equalValue11(left, right float32) bool {
 	return left == right
 }
 
-func reportValue10(value float32) any {
+func reportValue11(value float32) any {
 	return value
 }
