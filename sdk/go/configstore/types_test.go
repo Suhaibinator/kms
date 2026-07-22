@@ -1,0 +1,129 @@
+package configstore
+
+import (
+	"encoding/json"
+	"errors"
+	"fmt"
+	"strings"
+	"testing"
+
+	"github.com/Suhaibinator/kms/sdk/go/paramstore"
+)
+
+func TestCandidateErrorClassifiesUnwrapsAndRedacts(t *testing.T) {
+	const canary = "SECRET-CANDIDATE-CAUSE"
+	cause := errors.New(canary)
+	err := Reject(RejectConfigValidationFailed, cause)
+
+	var candidateErr *CandidateError
+	if !errors.As(err, &candidateErr) {
+		t.Fatalf("errors.As(*CandidateError) = false: %v", err)
+	}
+	if !errors.Is(err, cause) {
+		t.Fatal("CandidateError did not unwrap cause")
+	}
+	if got := candidateErr.ReleaseRejectionCategory(); got != string(RejectConfigValidationFailed) {
+		t.Fatalf("ReleaseRejectionCategory() = %q", got)
+	}
+	formats := []string{
+		fmt.Sprintf("%s", err),
+		fmt.Sprintf("%v", err),
+		fmt.Sprintf("%+v", err),
+		fmt.Sprintf("%#v", err),
+		fmt.Sprintf("%q", err),
+	}
+	encoded, marshalErr := json.Marshal(err)
+	if marshalErr != nil {
+		t.Fatalf("json.Marshal() error = %v", marshalErr)
+	}
+	formats = append(formats, string(encoded))
+	for _, output := range formats {
+		if strings.Contains(output, canary) {
+			t.Fatalf("formatted CandidateError leaked cause: %q", output)
+		}
+	}
+}
+
+func TestRejectNormalizesUnknownCategory(t *testing.T) {
+	err := Reject(RejectionCategory("UNBOUNDED-SECRET-CATEGORY"), errors.New("cause"))
+	var candidateErr *CandidateError
+	if !errors.As(err, &candidateErr) {
+		t.Fatal("errors.As(*CandidateError) = false")
+	}
+	if got := candidateErr.ReleaseRejectionCategory(); got != string(RejectInternal) {
+		t.Fatalf("category = %q, want %q", got, RejectInternal)
+	}
+}
+
+func TestDefaultMismatchReportIsDeeplyImmutableAndSecretFree(t *testing.T) {
+	expected := map[string][]int{"values": {1, 2}}
+	actual := struct {
+		Secret paramstore.Secret
+	}{Secret: paramstore.NewSecret([]byte("plaintext-canary"))}
+	report := newDefaultMismatchReport(
+		MismatchStartup,
+		MismatchFatal,
+		ReleaseIdentity{namespace: "prod/app", name: "runtime", version: 3, activationRevision: 9},
+		[]FieldDifference{{Path: "group.field", Expected: expected, Actual: actual}},
+	)
+
+	expected["values"][0] = 99
+	first := report.Fields()
+	first[0].Expected.(map[string][]int)["values"][0] = 88
+	first[0].Path = "changed"
+	second := report.Fields()
+	if second[0].Path != "group.field" || second[0].Expected.(map[string][]int)["values"][0] != 1 {
+		t.Fatalf("report was mutable: %#v", second)
+	}
+	if second[0].Actual != "[REDACTED]" {
+		t.Fatalf("secret-bearing report value was retained: %#v", second[0].Actual)
+	}
+	encoded, err := json.Marshal(report)
+	if err != nil {
+		t.Fatalf("json.Marshal() error = %v", err)
+	}
+	if strings.Contains(string(encoded), "plaintext-canary") {
+		t.Fatalf("report JSON leaked secret: %s", encoded)
+	}
+}
+
+func TestDefaultMismatchErrorFormattingNeverIncludesValues(t *testing.T) {
+	const canary = "NONSECRET-VALUE-CANARY"
+	report := newDefaultMismatchReport(
+		MismatchStartup,
+		MismatchFatal,
+		ReleaseIdentity{name: "runtime", version: 2},
+		[]FieldDifference{{Path: "group.field", Expected: canary, Actual: "other"}},
+	)
+	err := newDefaultMismatchError(report)
+	formats := []string{
+		fmt.Sprintf("%s", err),
+		fmt.Sprintf("%v", err),
+		fmt.Sprintf("%+v", err),
+		fmt.Sprintf("%#v", err),
+		fmt.Sprintf("%q", err),
+		fmt.Sprintf("%#v", any(err)),
+	}
+	for _, output := range formats {
+		if strings.Contains(output, canary) {
+			t.Fatalf("formatted DefaultMismatchError leaked a value: %q", output)
+		}
+	}
+	if got := err.Fields(); got[0].Expected != canary {
+		t.Fatalf("Fields() expected = %#v", got)
+	}
+}
+
+func TestReleaseIdentitySafeZeroRepresentation(t *testing.T) {
+	identity := ReleaseIdentityFromSnapshot(paramstore.ReleaseSnapshot{})
+	if !identity.IsZero() || strings.Contains(identity.String(), "[REDACTED]") {
+		t.Fatalf("unexpected zero identity: %s", identity.String())
+	}
+	encoded, err := json.Marshal(identity)
+	if err != nil {
+		t.Fatalf("json.Marshal() error = %v", err)
+	}
+	if strings.Contains(string(encoded), "entries") || strings.Contains(string(encoded), "metadata") {
+		t.Fatalf("identity JSON contains candidate data: %s", encoded)
+	}
+}
