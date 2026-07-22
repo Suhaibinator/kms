@@ -145,7 +145,9 @@ func (c *cache) getSecret(path string, version uint64, label string) (Secret, bo
 	if !ok || time.Now().After(e.expires) {
 		return Secret{}, false
 	}
-	return e.secret, true
+	// A caller may mutate Secret.Value(). Never let that caller-owned buffer
+	// alias the cache entry shared by later reads.
+	return e.secret.Clone(), true
 }
 
 func (c *cache) putSecret(path string, version uint64, label string, s Secret) {
@@ -163,7 +165,9 @@ func (c *cache) putSecret(path string, version uint64, label string, s Secret) {
 	if _, exists := byKey[sk]; !exists {
 		c.secretCount++
 	}
-	byKey[sk] = secretEntry{secret: s, expires: time.Now().Add(c.ttl)}
+	// Take ownership of an independent plaintext buffer. The caller receives
+	// the original Secret from the RPC path and may mutate it after this call.
+	byKey[sk] = secretEntry{secret: s.Clone(), expires: time.Now().Add(c.ttl)}
 	if c.secretCount > c.maxEntries {
 		c.evictSecretsLocked()
 	}

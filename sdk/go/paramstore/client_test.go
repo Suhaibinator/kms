@@ -178,6 +178,34 @@ func TestCacheTTL(t *testing.T) {
 	}
 }
 
+func TestCachedExactVersionSecretIsMutationIsolated(t *testing.T) {
+	c, srv := newTestClient(t, Config{CacheTTL: time.Minute})
+	srv.SetSecretVersion(testNS, "cached-exact-secret", []byte("original"), "text/plain", 7)
+
+	first, err := c.GetSecret(context.Background(), "cached-exact-secret", WithVersion(7))
+	if err != nil {
+		t.Fatalf("first GetSecret: %v", err)
+	}
+	first.Value()[0] = 'X'
+
+	second, err := c.GetSecret(context.Background(), "cached-exact-secret", WithVersion(7))
+	if err != nil {
+		t.Fatalf("second GetSecret: %v", err)
+	}
+	if got := second.StringValue(); got != "original" {
+		t.Fatalf("caller mutation changed cached exact-version secret: got %q, want %q", got, "original")
+	}
+	second.Value()[0] = 'Y'
+
+	third, err := c.GetSecret(context.Background(), "cached-exact-secret", WithVersion(7))
+	if err != nil {
+		t.Fatalf("third GetSecret: %v", err)
+	}
+	if got := third.StringValue(); got != "original" {
+		t.Fatalf("cache-hit mutation changed later exact-version secret: got %q, want %q", got, "original")
+	}
+}
+
 func TestTokenGatedSecretBypassesCache(t *testing.T) {
 	c, srv := newTestClient(t, Config{CacheTTL: time.Minute})
 	srv.SetSecret(testNS, "bound", []byte("v1"))
