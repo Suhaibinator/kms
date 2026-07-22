@@ -87,6 +87,106 @@ func TestConfigurationReleaseActivationCASRollbackAndGuards(t *testing.T) {
 	}
 }
 
+func TestConfigurationReleaseIdempotentActivationRevalidatesPins(t *testing.T) {
+	ctx := context.Background()
+	st := newStore(t)
+	seedNS(t, st, "prod", "app")
+	ns := nsRef("prod", "app")
+	secretRef := ref("prod", "app", "secret")
+	putSecret(t, st, secretRef, false)
+
+	create := func(digest string, entries []domain.ConfigurationReleaseEntry) domain.ConfigurationRelease {
+		t.Helper()
+		release, err := st.CreateConfigurationRelease(ctx, domain.ConfigurationRelease{
+			Namespace: ns, Name: "runtime", Digest: digest, Metadata: "{}", Entries: entries,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return release
+	}
+	previous := create("previous", nil)
+	if _, changed, err := st.ActivateConfigurationRelease(ctx, ns, "runtime", previous.Version, nil); err != nil || !changed {
+		t.Fatalf("activate previous changed=%v err=%v", changed, err)
+	}
+	current := create("current", []domain.ConfigurationReleaseEntry{{
+		Alias: "secret", Kind: domain.ReleaseEntrySecret, Ref: secretRef, Version: 1, Metadata: "{}",
+	}})
+	activated, changed, err := st.ActivateConfigurationRelease(ctx, ns, "runtime", current.Version, nil)
+	if err != nil || !changed {
+		t.Fatalf("activate current = %+v, changed=%v err=%v", activated, changed, err)
+	}
+
+	// A valid same-version activation remains a no-op.
+	validRevision, err := st.CurrentRevision(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	expectedCurrent := current.Version
+	same, changed, err := st.ActivateConfigurationRelease(ctx, ns, "runtime", current.Version, &expectedCurrent)
+	if err != nil || changed {
+		t.Fatalf("valid idempotent activation = %+v, changed=%v err=%v", same, changed, err)
+	}
+	if same.ActivationRevision != activated.ActivationRevision || same.PreviousVersion != previous.Version {
+		t.Fatalf("valid idempotent activation changed labels: got=%+v original=%+v", same, activated)
+	}
+	afterValidRevision, err := st.CurrentRevision(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if afterValidRevision != validRevision {
+		t.Fatalf("valid idempotent activation appended revision: %d -> %d", validRevision, afterValidRevision)
+	}
+
+	if _, err := st.SetSecretVersionState(ctx, secretRef, 1, domain.StateDisabled); err != nil {
+		t.Fatal(err)
+	}
+	beforeRejectedRevision, err := st.CurrentRevision(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	beforeRejectedActive, err := st.GetActiveConfigurationRelease(ctx, ns, "runtime")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// CAS failure retains precedence over pin validation, even when the current
+	// release has since become unreadable.
+	staleExpected := previous.Version
+	if _, changed, err := st.ActivateConfigurationRelease(ctx, ns, "runtime", current.Version, &staleExpected); !errors.Is(err, domain.ErrAborted) || changed {
+		t.Fatalf("stale CAS idempotent activation changed=%v err=%v, want ErrAborted", changed, err)
+	}
+
+	_, changed, err = st.ActivateConfigurationRelease(ctx, ns, "runtime", current.Version, &expectedCurrent)
+	if !errors.Is(err, domain.ErrFailedPrecondition) || changed {
+		t.Fatalf("invalid idempotent activation changed=%v err=%v, want ErrFailedPrecondition", changed, err)
+	}
+	var validationFailed *domain.ReleaseValidationFailedError
+	if !errors.As(err, &validationFailed) {
+		t.Fatalf("invalid idempotent activation error = %T %v, want structured validation", err, err)
+	}
+	violations := validationFailed.Violations()
+	if len(violations) != 1 || violations[0].Alias != "secret" || violations[0].Code != domain.ReleaseValidationUnreadable {
+		t.Fatalf("invalid idempotent activation violations = %+v, want secret/unreadable", violations)
+	}
+	afterRejectedRevision, err := st.CurrentRevision(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if afterRejectedRevision != beforeRejectedRevision {
+		t.Fatalf("rejected idempotent activation appended revision: %d -> %d", beforeRejectedRevision, afterRejectedRevision)
+	}
+	afterRejectedActive, err := st.GetActiveConfigurationRelease(ctx, ns, "runtime")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if afterRejectedActive.Release.Version != beforeRejectedActive.Release.Version ||
+		afterRejectedActive.ActivationRevision != beforeRejectedActive.ActivationRevision ||
+		afterRejectedActive.PreviousVersion != beforeRejectedActive.PreviousVersion {
+		t.Fatalf("rejected idempotent activation changed active labels: before=%+v after=%+v", beforeRejectedActive, afterRejectedActive)
+	}
+}
+
 func TestConfigurationReleaseActivationHistoryDoesNotCrossNamespaceIncarnations(t *testing.T) {
 	ctx := context.Background()
 	st := newStore(t)

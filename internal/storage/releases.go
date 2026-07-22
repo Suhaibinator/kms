@@ -324,6 +324,13 @@ func (s *SQLStore) ActivateConfigurationRelease(ctx context.Context, ns domain.N
 		if expectedCurrent != nil && *expectedCurrent != currentVersion {
 			return domain.Errorf(domain.ErrAborted, "configuration release current version is %d, expected %d", currentVersion, *expectedCurrent)
 		}
+		// Re-check every immutable resource pin in this write transaction, including
+		// idempotent activations. A pin may have become unreadable after an earlier
+		// preflight validation, and reporting success here would otherwise rely on
+		// stale validation.
+		if err := validateReleasePinsTx(tx, target.ID); err != nil {
+			return err
+		}
 		if currentVersion == version {
 			rel, err := releaseFromModel(tx, ns, target)
 			if err != nil {
@@ -335,11 +342,6 @@ func (s *SQLStore) ActivateConfigurationRelease(ctx context.Context, ns domain.N
 			}
 			out = domain.ActiveConfigurationRelease{Release: rel, ActivationRevision: uint64(current.ActivationRevision), PreviousVersion: uint64(prev.VersionNumber)}
 			return nil
-		}
-		// The target and its immutable entries exist in the same database. Explicitly
-		// re-check every resource pin in this write transaction before moving labels.
-		if err := validateReleasePinsTx(tx, target.ID); err != nil {
-			return err
 		}
 		rev, err := appendChange(tx, &changeLogModel{ResourceType: domain.ResourceConfigurationRelease, Env: ns.Env, App: ns.App, Key: name, ChangeType: "activate", VersionNumber: int64(version)})
 		if err != nil {
