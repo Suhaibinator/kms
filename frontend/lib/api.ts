@@ -38,6 +38,7 @@ import type {
   SecretMetadata,
   ReleaseSubscriberState,
   ReleaseSummary,
+  ReleaseValidationError,
   SubscribersResponse,
   UpdateNamespaceRequest,
   ValidateReleaseResponse,
@@ -52,12 +53,19 @@ export const UNAUTHORIZED_EVENT = "kms:unauthorized";
 export class ApiError extends Error {
   readonly code: string;
   readonly status: number;
+  readonly validationErrors: ReleaseValidationError[];
 
-  constructor(code: string, message: string, status: number) {
+  constructor(
+    code: string,
+    message: string,
+    status: number,
+    validationErrors: ReleaseValidationError[] = [],
+  ) {
     super(message);
     this.name = "ApiError";
     this.code = code;
     this.status = status;
+    this.validationErrors = validationErrors;
   }
 }
 
@@ -181,7 +189,10 @@ async function apiFetch<T>(path: string, opts: FetchOptions = {}): Promise<T> {
     const env = data as ApiErrorEnvelope | null;
     const code = env?.error?.code ?? httpStatusToCode(res.status);
     const message = env?.error?.message ?? res.statusText ?? "Request failed";
-    throw new ApiError(code, message, res.status);
+    const validationErrors = Array.isArray(env?.error?.validation_errors)
+      ? env.error.validation_errors
+      : [];
+    throw new ApiError(code, message, res.status, validationErrors);
   }
 
   return data as T;

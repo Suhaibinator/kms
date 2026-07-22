@@ -63,6 +63,7 @@ export interface ApiErrorEnvelope {
   error: {
     code: string;
     message: string;
+    validation_errors?: ReleaseValidationError[];
   };
 }
 
