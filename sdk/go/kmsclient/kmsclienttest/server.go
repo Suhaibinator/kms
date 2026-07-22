@@ -675,27 +675,26 @@ func (s *Server) WatchRelease(stream kmsv1.ConfigurationReleaseService_WatchRele
 	s.registerReleaseSub(sub)
 	defer s.unregisterReleaseSub(sub)
 
-	recv := make(chan *kmsv1.WatchReleaseRequest, 1)
 	recvErr := make(chan error, 1)
 	go func() {
+		// Publish each acknowledgement before the next Recv so a following EOF
+		// cannot overtake it. This mirrors the production release server.
 		for {
 			request, recvError := stream.Recv()
 			if recvError != nil {
 				recvErr <- recvError
 				return
 			}
-			recv <- request
-		}
-	}()
-	for {
-		select {
-		case request := <-recv:
 			if ack := request.GetAcknowledgement(); ack != nil {
 				select {
 				case sub.acks <- proto.Clone(ack).(*kmsv1.ReleaseAcknowledgement):
 				default:
 				}
 			}
+		}
+	}()
+	for {
+		select {
 		case event := <-sub.send:
 			if err := stream.Send(event); err != nil {
 				return err
