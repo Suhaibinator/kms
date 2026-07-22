@@ -1,0 +1,123 @@
+{
+  "format": "kms-config-contract/v1",
+  "source": {
+    "package": "github.com/Suhaibinator/kms/internal/configgen/testdata/valid",
+    "type": "Config"
+  },
+  "schema_sha256": "b4842904dd5948b3dc2181c207a5c9ae2252cd2abb49e7d741f7bccbd18a0a9c",
+  "groups": [
+    {
+      "alias": "database",
+      "kind": "parameter",
+      "content_type": "json",
+      "fields": [
+        "endpoint",
+        "timeout"
+      ]
+    },
+    {
+      "alias": "rate_limits",
+      "kind": "parameter",
+      "content_type": "json",
+      "fields": [
+        "limit",
+        "payload",
+        "ratio"
+      ]
+    }
+  ],
+  "fields": [
+    {
+      "group": "database",
+      "json_name": "endpoint",
+      "go_name": "Endpoint",
+      "reload": "restart",
+      "encoding": "object",
+      "views": [
+        "database_health",
+        "persistence_handler"
+      ]
+    },
+    {
+      "group": "database",
+      "json_name": "timeout",
+      "go_name": "Timeout",
+      "reload": "hot",
+      "encoding": "go-duration",
+      "views": [
+        "database_health",
+        "persistence_handler"
+      ]
+    },
+    {
+      "group": "rate_limits",
+      "json_name": "limit",
+      "go_name": "Limit",
+      "reload": "hot",
+      "encoding": "int16",
+      "views": [
+        "api_handler"
+      ]
+    },
+    {
+      "group": "rate_limits",
+      "json_name": "payload",
+      "go_name": "Payload",
+      "reload": "hot",
+      "encoding": "base64",
+      "views": [
+        "api_handler"
+      ]
+    },
+    {
+      "group": "rate_limits",
+      "json_name": "ratio",
+      "go_name": "Ratio",
+      "reload": "hot",
+      "encoding": "float32",
+      "views": [
+        "api_handler"
+      ]
+    }
+  ],
+  "secrets": [
+    {
+      "alias": "database_password",
+      "kind": "secret",
+      "go_name": "Password",
+      "reload": "restart",
+      "encoding": "secret",
+      "views": [
+        "persistence_handler"
+      ]
+    }
+  ],
+  "views": [
+    {
+      "name": "api_handler",
+      "method": "ApiHandler",
+      "fields": [
+        "rate_limits.limit",
+        "rate_limits.payload",
+        "rate_limits.ratio"
+      ]
+    },
+    {
+      "name": "database_health",
+      "method": "DatabaseHealth",
+      "fields": [
+        "database.endpoint",
+        "database.timeout"
+      ]
+    },
+    {
+      "name": "persistence_handler",
+      "method": "PersistenceHandler",
+      "fields": [
+        "database.endpoint",
+        "database.timeout",
+        "database_password"
+      ]
+    }
+  ]
+}

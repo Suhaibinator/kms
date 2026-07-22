@@ -1,0 +1,224 @@
+package configgen
+
+import (
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"fmt"
+	"math"
+)
+
+const maxGeneratedSchemaBytes = 256 << 10
+
+type schemaDocument struct {
+	Schema               string                    `json:"$schema"`
+	Type                 string                    `json:"type"`
+	AdditionalProperties bool                      `json:"additionalProperties"`
+	Required             []string                  `json:"required"`
+	Properties           map[string]map[string]any `json:"properties"`
+}
+
+func renderSchema(model *ir) ([]byte, error) {
+	doc := schemaDocument{
+		Schema:               "https://json-schema.org/draft/2020-12/schema",
+		Type:                 "object",
+		AdditionalProperties: false,
+		Properties:           make(map[string]map[string]any, len(model.Groups)),
+	}
+	for _, group := range model.Groups {
+		required := make([]string, 0, len(group.Fields))
+		properties := make(map[string]any, len(group.Fields))
+		for _, field := range group.Fields {
+			required = append(required, field.JSONName)
+			properties[field.JSONName] = schemaForType(field.Type)
+		}
+		doc.Required = append(doc.Required, group.Alias)
+		doc.Properties[group.Alias] = map[string]any{
+			"type":                 "object",
+			"additionalProperties": false,
+			"required":             required,
+			"properties":           properties,
+		}
+	}
+	data, err := marshalArtifact(doc, "schema")
+	if err == nil && len(data) > maxGeneratedSchemaBytes {
+		return nil, fmt.Errorf("configgen: generated schema is %d bytes; maximum is %d", len(data), maxGeneratedSchemaBytes)
+	}
+	return data, err
+}
+
+func schemaForType(value *typeIR) map[string]any {
+	switch value.Kind {
+	case typeBool:
+		return map[string]any{"type": "boolean"}
+	case typeString:
+		return map[string]any{"type": "string"}
+	case typeInt:
+		minimum, maximum := signedBounds(value.Bits)
+		return map[string]any{"type": "integer", "minimum": minimum, "maximum": maximum}
+	case typeUint:
+		return map[string]any{"type": "integer", "minimum": uint64(0), "maximum": unsignedMaximum(value.Bits)}
+	case typeFloat:
+		maximum := math.MaxFloat64
+		if value.Bits == 32 {
+			maximum = math.MaxFloat32
+		}
+		return map[string]any{"type": "number", "minimum": -maximum, "maximum": maximum}
+	case typeDuration:
+		return map[string]any{"type": "string", "format": "go-duration"}
+	case typePointer:
+		return map[string]any{"anyOf": []any{schemaForType(value.Elem), map[string]any{"type": "null"}}}
+	case typeBytes:
+		return map[string]any{"type": "string", "format": "kms-base64"}
+	case typeArray:
+		return map[string]any{"type": "array", "items": schemaForType(value.Elem), "minItems": value.Len, "maxItems": value.Len}
+	case typeSlice:
+		return map[string]any{"type": "array", "items": schemaForType(value.Elem)}
+	case typeMap:
+		return map[string]any{"type": "object", "additionalProperties": schemaForType(value.Elem)}
+	case typeStruct:
+		required := make([]string, 0, len(value.Fields))
+		properties := make(map[string]any)
+		for _, field := range value.Fields {
+			if !field.Included {
+				continue
+			}
+			required = append(required, field.JSONName)
+			properties[field.JSONName] = schemaForType(field.Type)
+		}
+		return map[string]any{
+			"type":                 "object",
+			"additionalProperties": false,
+			"required":             required,
+			"properties":           properties,
+		}
+	default:
+		panic("configgen: invalid normalized type")
+	}
+}
+
+func signedBounds(bits int) (int64, int64) {
+	if bits >= 64 {
+		return math.MinInt64, math.MaxInt64
+	}
+	maximum := int64(1)<<(bits-1) - 1
+	return -maximum - 1, maximum
+}
+
+func unsignedMaximum(bits int) uint64 {
+	if bits >= 64 {
+		return math.MaxUint64
+	}
+	return uint64(1)<<bits - 1
+}
+
+type contractDocument struct {
+	Format       string           `json:"format"`
+	Source       contractSource   `json:"source"`
+	SchemaSHA256 string           `json:"schema_sha256"`
+	Groups       []contractGroup  `json:"groups"`
+	Fields       []contractField  `json:"fields"`
+	Secrets      []contractSecret `json:"secrets"`
+	Views        []contractView   `json:"views"`
+}
+
+type contractSource struct {
+	Package string `json:"package"`
+	Type    string `json:"type"`
+}
+
+type contractGroup struct {
+	Alias       string   `json:"alias"`
+	Kind        string   `json:"kind"`
+	ContentType string   `json:"content_type"`
+	Fields      []string `json:"fields"`
+}
+
+type contractField struct {
+	Group    string   `json:"group"`
+	JSONName string   `json:"json_name"`
+	GoName   string   `json:"go_name"`
+	Reload   string   `json:"reload"`
+	Encoding string   `json:"encoding"`
+	Views    []string `json:"views"`
+}
+
+type contractSecret struct {
+	Alias    string   `json:"alias"`
+	Kind     string   `json:"kind"`
+	GoName   string   `json:"go_name"`
+	Reload   string   `json:"reload"`
+	Encoding string   `json:"encoding"`
+	Views    []string `json:"views"`
+}
+
+type contractView struct {
+	Name   string   `json:"name"`
+	Method string   `json:"method"`
+	Fields []string `json:"fields"`
+}
+
+type renderedContract struct {
+	SchemaSHA256 string
+	Entries      []contractEntry
+}
+
+type contractEntry struct {
+	Alias       string
+	Kind        string
+	ContentType string
+}
+
+func renderContract(model *ir, schema []byte) ([]byte, renderedContract, error) {
+	hash := sha256.Sum256(schema)
+	hashText := hex.EncodeToString(hash[:])
+	doc := contractDocument{
+		Format:       "kms-config-contract/v1",
+		Source:       contractSource{Package: model.PackagePath, Type: model.TypeName},
+		SchemaSHA256: hashText,
+	}
+	rendered := renderedContract{SchemaSHA256: hashText}
+	for _, group := range model.Groups {
+		contractGroup := contractGroup{Alias: group.Alias, Kind: "parameter", ContentType: "json"}
+		for _, field := range group.Fields {
+			contractGroup.Fields = append(contractGroup.Fields, field.JSONName)
+			doc.Fields = append(doc.Fields, contractField{
+				Group: group.Alias, JSONName: field.JSONName, GoName: field.GoName,
+				Reload: field.Reload, Encoding: canonicalEncoding(field.Type), Views: append([]string(nil), field.Views...),
+			})
+		}
+		doc.Groups = append(doc.Groups, contractGroup)
+		rendered.Entries = append(rendered.Entries, contractEntry{Alias: group.Alias, Kind: "parameter", ContentType: "json"})
+	}
+	for _, field := range model.Secrets {
+		doc.Secrets = append(doc.Secrets, contractSecret{
+			Alias: field.Source, Kind: "secret", GoName: field.GoName, Reload: field.Reload,
+			Encoding: "secret", Views: append([]string(nil), field.Views...),
+		})
+		rendered.Entries = append(rendered.Entries, contractEntry{Alias: field.Source, Kind: "secret"})
+	}
+	for _, view := range model.Views {
+		contractView := contractView{Name: view.Name, Method: view.Method}
+		for _, field := range view.Fields {
+			contractView.Fields = append(contractView.Fields, field.canonicalName())
+		}
+		doc.Views = append(doc.Views, contractView)
+	}
+	data, err := marshalArtifact(doc, "contract")
+	return data, rendered, err
+}
+
+func canonicalEncoding(value *typeIR) string {
+	if value.Kind == typePointer {
+		return canonicalEncoding(value.Elem)
+	}
+	return value.Encoding
+}
+
+func marshalArtifact(value any, name string) ([]byte, error) {
+	data, err := json.MarshalIndent(value, "", "  ")
+	if err != nil {
+		return nil, fmt.Errorf("configgen: marshal %s: %w", name, err)
+	}
+	return append(data, '\n'), nil
+}
