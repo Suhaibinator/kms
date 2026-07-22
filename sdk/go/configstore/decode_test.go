@@ -1,6 +1,7 @@
 package configstore
 
 import (
+	"errors"
 	"reflect"
 	"strings"
 	"testing"
@@ -197,7 +198,40 @@ func TestDecodeGroupPreservesExactIntegerBoundaries(t *testing.T) {
 	}
 }
 
+func TestDecodeGroupHonorsGeneratedPortableIntegerWidth(t *testing.T) {
+	type portableInt struct{ Value int }
+	typ := reflect.TypeFor[portableInt]()
+	codecs := []FieldCodec{{
+		JSONName: "value", FieldIndex: fieldIndex(typ, "Value"), Value: ValueCodec{Kind: CodecInt, Bits: 32},
+	}}
+	var got portableInt
+	if err := DecodeGroup(`{"value":2147483647}`, &got, codecs); err != nil || got.Value != 2147483647 {
+		t.Fatalf("portable int maximum decode = %d, %v", got.Value, err)
+	}
+	if err := DecodeGroup(`{"value":2147483648}`, &got, codecs); err == nil {
+		t.Fatal("portable int codec accepted a schema-invalid 64-bit-only value")
+	}
+}
+
 type floatBounds struct{ Value float32 }
+
+type namedIntPointer *int32
+
+func TestDecodeGroupSupportsNamedPointerToScalar(t *testing.T) {
+	type holder struct{ Value namedIntPointer }
+	typ := reflect.TypeFor[holder]()
+	codecs := []FieldCodec{{
+		JSONName: "value", FieldIndex: fieldIndex(typ, "Value"),
+		Value: ValueCodec{Kind: CodecPointer, Element: codecPointer(ValueCodec{Kind: CodecInt, Bits: 32})},
+	}}
+	var got holder
+	if err := DecodeGroup(`{"value":17}`, &got, codecs); err != nil {
+		t.Fatal(err)
+	}
+	if got.Value == nil || *got.Value != 17 {
+		t.Fatalf("named pointer decode = %#v", got.Value)
+	}
+}
 
 func TestDecodeGroupFloatRangeMatchesGeneratedSchemaBoundary(t *testing.T) {
 	typ := reflect.TypeFor[floatBounds]()
@@ -290,5 +324,70 @@ func TestDecodeGroupRejectsInvalidDurationAndBase64WithoutEchoingValues(t *testi
 		if strings.Contains(err.Error(), canary) {
 			t.Fatalf("error leaked raw value: %v", err)
 		}
+	}
+}
+
+func TestDecodeGroupPreservesNilVersusEmptyCollections(t *testing.T) {
+	type nullableCollections struct {
+		Items  []string
+		Labels map[string]int
+		Blob   []byte
+	}
+	typ := reflect.TypeFor[nullableCollections]()
+	codecs := []FieldCodec{
+		{JSONName: "items", FieldIndex: fieldIndex(typ, "Items"), Value: ValueCodec{Kind: CodecSlice, Element: codecPointer(ValueCodec{Kind: CodecString})}},
+		{JSONName: "labels", FieldIndex: fieldIndex(typ, "Labels"), Value: ValueCodec{Kind: CodecMap, Element: codecPointer(ValueCodec{Kind: CodecInt})}},
+		{JSONName: "blob", FieldIndex: fieldIndex(typ, "Blob"), Value: ValueCodec{Kind: CodecBytes}},
+	}
+
+	var nilValues nullableCollections
+	if err := DecodeGroup(`{"items":null,"labels":null,"blob":null}`, &nilValues, codecs); err != nil {
+		t.Fatalf("DecodeGroup(null collections) error = %v", err)
+	}
+	if nilValues.Items != nil || nilValues.Labels != nil || nilValues.Blob != nil {
+		t.Fatalf("null collections did not decode to Go nil: %#v", nilValues)
+	}
+
+	var emptyValues nullableCollections
+	if err := DecodeGroup(`{"items":[],"labels":{},"blob":""}`, &emptyValues, codecs); err != nil {
+		t.Fatalf("DecodeGroup(empty collections) error = %v", err)
+	}
+	if emptyValues.Items == nil || emptyValues.Labels == nil || emptyValues.Blob == nil ||
+		len(emptyValues.Items) != 0 || len(emptyValues.Labels) != 0 || len(emptyValues.Blob) != 0 {
+		t.Fatalf("empty collections did not remain non-nil empty values: %#v", emptyValues)
+	}
+}
+
+func TestRejectDecodeMapsOnlyGeneratedCanonicalPaths(t *testing.T) {
+	tests := []struct {
+		name     string
+		document string
+		group    string
+		want     []string
+	}{
+		{name: "malformed document", document: `{`, group: "runtime", want: []string{"runtime"}},
+		{name: "missing field", document: `{}`, group: "runtime", want: []string{"runtime.value"}},
+		{name: "unknown input name stays at group", document: `{"value":1,"RAW-SECRET-CANARY":2}`, group: "runtime", want: []string{"runtime"}},
+		{name: "invalid caller group is omitted", document: `{}`, group: "runtime\ncanary", want: nil},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var destination oneInt
+			decodeErr := DecodeGroup(test.document, &destination, oneIntCodec())
+			if decodeErr == nil {
+				t.Fatal("DecodeGroup() unexpectedly succeeded")
+			}
+			err := RejectDecode(test.group, decodeErr)
+			var candidateErr *CandidateError
+			if !errors.As(err, &candidateErr) {
+				t.Fatalf("RejectDecode() = %T, want *CandidateError", err)
+			}
+			if got := candidateErr.pathsCopy(); !reflect.DeepEqual(got, test.want) {
+				t.Fatalf("diagnostic paths = %#v, want %#v", got, test.want)
+			}
+			if strings.Contains(strings.Join(candidateErr.pathsCopy(), ","), "RAW-SECRET-CANARY") {
+				t.Fatal("unknown JSON property leaked into canonical path")
+			}
+		})
 	}
 }

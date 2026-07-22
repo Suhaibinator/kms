@@ -41,6 +41,7 @@ type Options struct {
 	Contract             []ContractEntry
 	AllowDefaultMismatch bool
 	OnDefaultMismatch    func(DefaultMismatchReport)
+	OnCandidateRejected  func(CandidateRejectionReport)
 	SecretTokenProvider  paramstore.SecretTokenProvider
 	ReconcileInterval    time.Duration
 	MaxConcurrentFetches int
@@ -245,17 +246,48 @@ const (
 type CandidateError struct {
 	category RejectionCategory
 	cause    error
+	paths    []string
 }
 
 // Reject returns a redacting classified candidate error.
 func Reject(category RejectionCategory, cause error) error {
+	return rejectWithPaths(category, cause, nil)
+}
+
+// RejectDecode classifies a DecodeGroup failure and, when the error came from
+// the strict decoder, translates its private location into a safe canonical
+// group path for OnCandidateRejected. Raw JSON property names are never used.
+func RejectDecode(group string, cause error) error {
+	var paths []string
+	if validDiagnosticSegment(group) {
+		var pathError *decodePathError
+		if errors.As(cause, &pathError) {
+			switch {
+			case pathError.path == "$":
+				paths = []string{group}
+			case strings.HasPrefix(pathError.path, "$."):
+				paths = []string{group + strings.TrimPrefix(pathError.path, "$")}
+			}
+		}
+	}
+	return rejectWithPaths(RejectConfigDecodeFailed, cause, paths)
+}
+
+func rejectWithPaths(category RejectionCategory, cause error, paths []string) error {
 	if !validRejectionCategory(category) {
 		category = RejectInternal
 	}
 	if cause == nil {
 		cause = errors.New("configstore: candidate rejected")
 	}
-	return &CandidateError{category: category, cause: cause}
+	return &CandidateError{category: category, cause: cause, paths: sanitizeDiagnosticPaths(paths)}
+}
+
+func (e *CandidateError) pathsCopy() []string {
+	if e == nil {
+		return nil
+	}
+	return append([]string(nil), e.paths...)
 }
 
 func validRejectionCategory(category RejectionCategory) bool {
@@ -270,6 +302,66 @@ func validRejectionCategory(category RejectionCategory) bool {
 	default:
 		return false
 	}
+}
+
+func sanitizeDiagnosticPaths(paths []string) []string {
+	if len(paths) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(paths))
+	result := make([]string, 0, len(paths))
+	for _, path := range paths {
+		if !validDiagnosticPath(path) {
+			continue
+		}
+		if _, duplicate := seen[path]; duplicate {
+			continue
+		}
+		seen[path] = struct{}{}
+		result = append(result, path)
+	}
+	return result
+}
+
+func validDiagnosticPath(path string) bool {
+	if path == "" || len(path) > 512 {
+		return false
+	}
+	segments := strings.Split(path, ".")
+	if len(segments) > 32 {
+		return false
+	}
+	for _, segment := range segments {
+		base := segment
+		for strings.HasSuffix(base, "[]") || strings.HasSuffix(base, "[*]") {
+			if strings.HasSuffix(base, "[]") {
+				base = strings.TrimSuffix(base, "[]")
+			} else {
+				base = strings.TrimSuffix(base, "[*]")
+			}
+		}
+		if !validDiagnosticSegment(base) {
+			return false
+		}
+	}
+	return true
+}
+
+func validDiagnosticSegment(segment string) bool {
+	if len(segment) == 0 || len(segment) > 64 || !isASCIIAlpha(segment[0]) {
+		return false
+	}
+	for i := 1; i < len(segment); i++ {
+		character := segment[i]
+		if !isASCIIAlpha(character) && (character < '0' || character > '9') && character != '_' && character != '-' {
+			return false
+		}
+	}
+	return true
+}
+
+func isASCIIAlpha(character byte) bool {
+	return character >= 'A' && character <= 'Z' || character >= 'a' && character <= 'z'
 }
 
 func (e *CandidateError) Error() string {
@@ -309,6 +401,51 @@ func (e *CandidateError) MarshalJSON() ([]byte, error) {
 	}{Category: e.category})
 }
 
+// CandidateRejectionReport is a value-free local preparation diagnostic. Paths
+// contains only generated canonical field paths; validation errors carry no
+// paths because application error text is not trusted to be secret-free.
+type CandidateRejectionReport interface {
+	Category() RejectionCategory
+	Release() ReleaseIdentity
+	Paths() []string
+}
+
+type candidateRejectionReport struct {
+	category RejectionCategory
+	release  ReleaseIdentity
+	paths    []string
+}
+
+func newCandidateRejectionReport(category RejectionCategory, release ReleaseIdentity, paths []string) *candidateRejectionReport {
+	return &candidateRejectionReport{category: category, release: release, paths: append([]string(nil), paths...)}
+}
+
+func (r *candidateRejectionReport) Category() RejectionCategory { return r.category }
+func (r *candidateRejectionReport) Release() ReleaseIdentity    { return r.release }
+func (r *candidateRejectionReport) Paths() []string             { return append([]string(nil), r.paths...) }
+
+func (r *candidateRejectionReport) String() string {
+	return fmt.Sprintf("configstore: candidate rejection (%s) for %s fields=%s", r.category, r.release.String(), strings.Join(r.paths, ","))
+}
+
+func (r *candidateRejectionReport) GoString() string { return r.String() }
+
+func (r *candidateRejectionReport) Format(f fmt.State, verb rune) {
+	if verb == 'q' {
+		_, _ = fmt.Fprintf(f, "%q", r.String())
+		return
+	}
+	_, _ = io.WriteString(f, r.String())
+}
+
+func (r *candidateRejectionReport) MarshalJSON() ([]byte, error) {
+	return json.Marshal(struct {
+		Category RejectionCategory `json:"category"`
+		Release  ReleaseIdentity   `json:"release"`
+		Paths    []string          `json:"paths"`
+	}{Category: r.category, Release: r.release, Paths: r.Paths()})
+}
+
 // ReleaseIdentity contains immutable, non-sensitive identity copied from a
 // resolved candidate. It never retains the snapshot or any resolved value.
 type ReleaseIdentity struct {
@@ -331,6 +468,18 @@ func ReleaseIdentityFromSnapshot(snapshot paramstore.ReleaseSnapshot) ReleaseIde
 		schemaID:           snapshot.SchemaID(),
 		schemaVersion:      snapshot.SchemaVersion(),
 		digest:             snapshot.Digest(),
+	}
+}
+
+func releaseIdentityFromManifest(manifest paramstore.ReleaseManifest) ReleaseIdentity {
+	return ReleaseIdentity{
+		namespace:          manifest.Namespace(),
+		name:               manifest.Name(),
+		version:            manifest.Version(),
+		activationRevision: manifest.ActivationRevision(),
+		schemaID:           manifest.SchemaID(),
+		schemaVersion:      manifest.SchemaVersion(),
+		digest:             manifest.Digest(),
 	}
 }
 
@@ -404,8 +553,12 @@ func cloneDifferences(in []FieldDifference) []FieldDifference {
 	}
 	out := make([]FieldDifference, len(in))
 	for i := range in {
+		path := in[i].Path
+		if !validDiagnosticPath(path) {
+			path = "invalid_path"
+		}
 		out[i] = FieldDifference{
-			Path:     in[i].Path,
+			Path:     path,
 			Expected: cloneReportValue(in[i].Expected),
 			Actual:   cloneReportValue(in[i].Actual),
 		}

@@ -12,6 +12,8 @@ type cloneVisit struct {
 	typ  reflect.Type
 	kind reflect.Kind
 	ptr  uintptr
+	len  int
+	cap  int
 }
 
 // Clone makes a recursive candidate-preparation copy of supported config
@@ -68,7 +70,7 @@ func cloneValue(value reflect.Value, seen map[cloneVisit]reflect.Value) reflect.
 		}
 		out := reflect.MakeSlice(value.Type(), value.Len(), value.Cap())
 		if value.Len() > 0 {
-			visit := cloneVisit{typ: value.Type(), kind: value.Kind(), ptr: value.Pointer()}
+			visit := cloneVisit{typ: value.Type(), kind: value.Kind(), ptr: value.Pointer(), len: value.Len(), cap: value.Cap()}
 			if prior, ok := seen[visit]; ok {
 				return prior
 			}
@@ -152,7 +154,7 @@ func valueContainsSecret(value reflect.Value, seen map[cloneVisit]struct{}) bool
 			return false
 		}
 		if value.Len() > 0 {
-			visit := cloneVisit{typ: value.Type(), kind: value.Kind(), ptr: value.Pointer()}
+			visit := cloneVisit{typ: value.Type(), kind: value.Kind(), ptr: value.Pointer(), len: value.Len(), cap: value.Cap()}
 			if _, ok := seen[visit]; ok {
 				return false
 			}

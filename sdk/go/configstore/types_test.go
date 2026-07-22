@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -114,6 +115,24 @@ func TestDefaultMismatchErrorFormattingNeverIncludesValues(t *testing.T) {
 	}
 }
 
+func TestDefaultMismatchReportNormalizesUnsafeCallerPath(t *testing.T) {
+	const unsafe = "field\nLOG-INJECTION"
+	report := newDefaultMismatchReport(
+		MismatchRuntime,
+		MismatchError,
+		ReleaseIdentity{name: "runtime", version: 2},
+		[]FieldDifference{{Path: unsafe, Expected: 1, Actual: 2}},
+	)
+	if got := report.Fields()[0].Path; got != "invalid_path" {
+		t.Fatalf("unsafe path = %q, want normalized placeholder", got)
+	}
+	for _, rendered := range []string{fmt.Sprint(report), fmt.Sprintf("%+v", report), fmt.Sprintf("%#v", report)} {
+		if strings.Contains(rendered, "LOG-INJECTION") || strings.Contains(rendered, "\n") {
+			t.Fatalf("unsafe mismatch path leaked through formatting: %q", rendered)
+		}
+	}
+}
+
 func TestReleaseIdentitySafeZeroRepresentation(t *testing.T) {
 	identity := ReleaseIdentityFromSnapshot(paramstore.ReleaseSnapshot{})
 	if !identity.IsZero() || strings.Contains(identity.String(), "[REDACTED]") {
@@ -125,5 +144,47 @@ func TestReleaseIdentitySafeZeroRepresentation(t *testing.T) {
 	}
 	if strings.Contains(string(encoded), "entries") || strings.Contains(string(encoded), "metadata") {
 		t.Fatalf("identity JSON contains candidate data: %s", encoded)
+	}
+}
+
+func TestCandidateRejectionReportIsImmutableBoundedAndValueFree(t *testing.T) {
+	const canary = "SECRET-REJECTION-CAUSE"
+	err := rejectWithPaths(RejectRestartRequired, errors.New(canary), []string{
+		"database.endpoint.host",
+		"runtime.items[][ *]",
+		"runtime.value\nINJECTED",
+		"database.endpoint.host",
+	})
+	var candidateErr *CandidateError
+	if !errors.As(err, &candidateErr) {
+		t.Fatal("errors.As(*CandidateError) = false")
+	}
+	report := newCandidateRejectionReport(
+		RejectRestartRequired,
+		ReleaseIdentity{namespace: "prod/app", name: "runtime", version: 4, activationRevision: 8},
+		candidateErr.pathsCopy(),
+	)
+	paths := report.Paths()
+	if !reflect.DeepEqual(paths, []string{"database.endpoint.host"}) {
+		t.Fatalf("sanitized paths = %#v", paths)
+	}
+	paths[0] = "mutated"
+	if got := report.Paths(); !reflect.DeepEqual(got, []string{"database.endpoint.host"}) {
+		t.Fatalf("report paths were mutable: %#v", got)
+	}
+
+	encoded, marshalErr := json.Marshal(report)
+	if marshalErr != nil {
+		t.Fatal(marshalErr)
+	}
+	for _, rendered := range []string{
+		fmt.Sprint(report), fmt.Sprintf("%+v", report), fmt.Sprintf("%#v", report), string(encoded),
+	} {
+		if strings.Contains(rendered, canary) || strings.Contains(rendered, "INJECTED") {
+			t.Fatalf("candidate rejection report leaked unsafe data: %q", rendered)
+		}
+	}
+	if report.Category() != RejectRestartRequired || report.Release().Version() != 4 {
+		t.Fatalf("report identity/category = %s/%s", report.Category(), report.Release())
 	}
 }

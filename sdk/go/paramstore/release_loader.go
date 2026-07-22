@@ -178,7 +178,15 @@ type releaseCandidate struct {
 	release  *kmsv1.ConfigurationRelease
 	revision uint64
 	seq      uint64
+	source   releaseCandidateSource
 }
+
+type releaseCandidateSource uint8
+
+const (
+	releaseCandidateSourceActivation releaseCandidateSource = iota
+	releaseCandidateSourceReconciliation
+)
 
 type releaseCandidateResult struct {
 	candidate releaseCandidate
@@ -247,9 +255,9 @@ func (l *ReleaseLoader) Run(ctx context.Context, prepare PrepareReleaseFunc) err
 	// unbounded number of goroutines or prepared resources.
 	results := make(chan releaseCandidateResult, 1)
 	var latestSeq uint64
-	var latestRevision uint64
-	var latestVersion uint64
-	var latestDigest string
+	var latestCandidate releaseCandidate
+	var haveLatestCandidate bool
+	var retryLatestCandidate bool
 	var activeCancel context.CancelFunc
 	var inFlight bool
 	var pending *releaseCandidate
@@ -263,18 +271,14 @@ func (l *ReleaseLoader) Run(ctx context.Context, prepare PrepareReleaseFunc) err
 	}
 
 	queue := func(candidate releaseCandidate) {
-		if candidate.release == nil {
-			return
-		}
-		if candidate.revision < latestRevision ||
-			(candidate.revision == latestRevision && candidate.release.GetVersion() == latestVersion && candidate.release.GetDigest() == latestDigest) {
+		if !shouldQueueReleaseCandidate(candidate, latestCandidate, haveLatestCandidate, retryLatestCandidate) {
 			return
 		}
 		latestSeq++
 		candidate.seq = latestSeq
-		latestRevision = candidate.revision
-		latestVersion = candidate.release.GetVersion()
-		latestDigest = candidate.release.GetDigest()
+		latestCandidate = candidate
+		haveLatestCandidate = true
+		retryLatestCandidate = false
 		l.observe(candidate)
 		if inFlight {
 			if activeCancel != nil {
@@ -327,11 +331,19 @@ func (l *ReleaseLoader) Run(ctx context.Context, prepare PrepareReleaseFunc) err
 				// authoritative release.
 				fresh, freshErr := l.getActive(runCtx, ns)
 				if freshErr == nil && !sameActiveCandidate(result.candidate, fresh) {
+					fresh.source = releaseCandidateSourceReconciliation
 					queue(fresh)
 					continue
 				}
 				cancelRun()
 				return result.err
+			}
+			if result.err != nil && result.category != ReleaseRejectSuperseded {
+				// The active release may have been rejected because of a transient
+				// fetch, validation, or preparation failure. Admit the same identity
+				// again only when a later reconciliation confirms it is still active;
+				// duplicate activation events remain suppressed.
+				retryLatestCandidate = true
 			}
 		case <-ticker.C:
 			candidate, getErr := l.getActive(runCtx, ns)
@@ -340,9 +352,33 @@ func (l *ReleaseLoader) Run(ctx context.Context, prepare PrepareReleaseFunc) err
 				// reconciliation never displaces the last-known-good release.
 				continue
 			}
+			candidate.source = releaseCandidateSourceReconciliation
 			queue(candidate)
 		}
 	}
+}
+
+func shouldQueueReleaseCandidate(candidate, latest releaseCandidate, haveLatest, retryLatest bool) bool {
+	if candidate.release == nil {
+		return false
+	}
+	if !haveLatest {
+		return true
+	}
+	if candidate.revision < latest.revision {
+		return false
+	}
+	if sameQueuedCandidate(candidate, latest) {
+		return retryLatest && candidate.source == releaseCandidateSourceReconciliation
+	}
+	return true
+}
+
+func sameQueuedCandidate(a, b releaseCandidate) bool {
+	return a.release != nil && b.release != nil &&
+		a.revision == b.revision &&
+		a.release.GetVersion() == b.release.GetVersion() &&
+		a.release.GetDigest() == b.release.GetDigest()
 }
 
 // RunTypedRelease explicitly decodes a release snapshot into T and then calls
@@ -874,14 +910,16 @@ func (l *ReleaseLoader) watchSession(ctx context.Context, ns namespaceRef, event
 				receivedEvent = true
 				l.advanceLastSeen(event.GetRevision())
 				var release *kmsv1.ConfigurationRelease
+				source := releaseCandidateSourceActivation
 				switch payload := event.GetEvent().(type) {
 				case *kmsv1.WatchReleaseEvent_Snapshot:
 					release = payload.Snapshot.GetRelease()
+					source = releaseCandidateSourceReconciliation
 				case *kmsv1.WatchReleaseEvent_Activation:
 					release = payload.Activation.GetRelease()
 				}
 				if release != nil {
-					offerLatestCandidate(events, releaseCandidate{release: release, revision: event.GetRevision()})
+					offerLatestCandidate(events, releaseCandidate{release: release, revision: event.GetRevision(), source: source})
 				}
 			}
 			go func() {

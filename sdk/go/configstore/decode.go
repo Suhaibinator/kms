@@ -37,7 +37,11 @@ const (
 // ValueCodec recursively describes one generated Go value. Element is required
 // for arrays, slices, maps, and pointers. Fields is required for structs.
 type ValueCodec struct {
-	Kind    CodecKind
+	Kind CodecKind
+	// Bits fixes the schema/runtime width for numeric codecs. Zero derives the
+	// destination width for hand-authored descriptors. Generated descriptors
+	// always set it, including portable 32-bit contracts for int and uint.
+	Bits    int
 	Element *ValueCodec
 	Fields  []FieldCodec
 }
@@ -78,6 +82,21 @@ const maxJSONDepth = 1_000
 
 var errInvalidJSON = errors.New("configstore: invalid JSON document")
 
+// decodePathError retains a generated canonical location without making the
+// location part of an exported error contract. RejectDecode is the only
+// bridge from these preparation-only diagnostics to a local rejection report.
+type decodePathError struct {
+	path  string
+	cause error
+}
+
+func (e *decodePathError) Error() string { return e.cause.Error() }
+func (e *decodePathError) Unwrap() error { return e.cause }
+
+func decodeDiagnostic(path string, cause error) error {
+	return &decodePathError{path: path, cause: cause}
+}
+
 // DecodeGroup strictly decodes one complete parameter group document into
 // dst. Dst must be a non-nil pointer to a struct. Every described field is
 // required, and every JSON property must be described exactly once.
@@ -87,11 +106,11 @@ var errInvalidJSON = errors.New("configstore: invalid JSON document")
 func DecodeGroup(document string, dst any, fields []FieldCodec) error {
 	root, err := parseJSONDocument(document)
 	if err != nil {
-		return errInvalidJSON
+		return decodeDiagnostic("$", errInvalidJSON)
 	}
 	value := reflect.ValueOf(dst)
 	if !value.IsValid() || value.Kind() != reflect.Pointer || value.IsNil() || value.Elem().Kind() != reflect.Struct {
-		return errors.New("configstore: DecodeGroup destination must be a non-nil pointer to a struct")
+		return decodeDiagnostic("$", errors.New("configstore: DecodeGroup destination must be a non-nil pointer to a struct"))
 	}
 	if err := decodeObject(root, value.Elem(), fields, "$"); err != nil {
 		return err
@@ -216,16 +235,18 @@ func decodeObject(node jsonNode, destination reflect.Value, fields []FieldCodec,
 		property := &node.properties[i]
 		fieldIndex, known := byName[property.name]
 		if !known {
-			return fmt.Errorf("configstore: unknown field at %s", path)
+			return decodeDiagnostic(path, fmt.Errorf("configstore: unknown field at %s", path))
 		}
 		if values[fieldIndex] != nil {
-			return fmt.Errorf("configstore: duplicate field at %s", childPath(path, fields[fieldIndex].JSONName))
+			duplicatePath := childPath(path, fields[fieldIndex].JSONName)
+			return decodeDiagnostic(duplicatePath, fmt.Errorf("configstore: duplicate field at %s", duplicatePath))
 		}
 		values[fieldIndex] = &property.value
 	}
 	for i := range fields {
 		if values[i] == nil {
-			return fmt.Errorf("configstore: missing required field at %s", childPath(path, fields[i].JSONName))
+			missingPath := childPath(path, fields[i].JSONName)
+			return decodeDiagnostic(missingPath, fmt.Errorf("configstore: missing required field at %s", missingPath))
 		}
 	}
 
@@ -257,7 +278,31 @@ func decodeValue(node jsonNode, destination reflect.Value, codec ValueCodec, pat
 		if err := decodeValue(node, item.Elem(), *codec.Element, path); err != nil {
 			return err
 		}
-		destination.Set(item)
+		if item.Type().AssignableTo(destination.Type()) {
+			destination.Set(item)
+		} else if item.Type().ConvertibleTo(destination.Type()) {
+			destination.Set(item.Convert(destination.Type()))
+		} else {
+			return descriptorError(path, "pointer descriptor cannot be assigned to destination")
+		}
+		return nil
+	}
+	if node.kind == nodeNull && (codec.Kind == CodecSlice || codec.Kind == CodecMap || codec.Kind == CodecBytes) {
+		switch codec.Kind {
+		case CodecSlice:
+			if destination.Kind() != reflect.Slice || codec.Element == nil {
+				return descriptorError(path, "slice descriptor does not match destination")
+			}
+		case CodecMap:
+			if destination.Kind() != reflect.Map || destination.Type().Key().Kind() != reflect.String || codec.Element == nil {
+				return descriptorError(path, "map descriptor does not match destination")
+			}
+		case CodecBytes:
+			if destination.Kind() != reflect.Slice || destination.Type().Elem().Kind() != reflect.Uint8 {
+				return descriptorError(path, "byte descriptor does not match destination")
+			}
+		}
+		destination.SetZero()
 		return nil
 	}
 	if node.kind == nodeNull {
@@ -290,7 +335,11 @@ func decodeValue(node jsonNode, destination reflect.Value, codec ValueCodec, pat
 		if !isSignedInteger(destination.Kind()) {
 			return descriptorError(path, "integer descriptor does not match destination")
 		}
-		value, err := parseSignedJSONInteger(node.text, destination.Type().Bits())
+		bits, err := numericCodecBits(codec, destination, path)
+		if err != nil {
+			return err
+		}
+		value, err := parseSignedJSONInteger(node.text, bits)
 		if err != nil {
 			return decodeRangeError(path, "integer")
 		}
@@ -303,7 +352,11 @@ func decodeValue(node jsonNode, destination reflect.Value, codec ValueCodec, pat
 		if !isUnsignedInteger(destination.Kind()) {
 			return descriptorError(path, "unsigned integer descriptor does not match destination")
 		}
-		value, err := parseUnsignedJSONInteger(node.text, destination.Type().Bits())
+		bits, err := numericCodecBits(codec, destination, path)
+		if err != nil {
+			return err
+		}
+		value, err := parseUnsignedJSONInteger(node.text, bits)
 		if err != nil {
 			return decodeRangeError(path, "unsigned integer")
 		}
@@ -316,7 +369,11 @@ func decodeValue(node jsonNode, destination reflect.Value, codec ValueCodec, pat
 		if destination.Kind() != reflect.Float32 && destination.Kind() != reflect.Float64 {
 			return descriptorError(path, "number descriptor does not match destination")
 		}
-		value, err := parseJSONFloat(node.text, destination.Type().Bits())
+		bits, err := numericCodecBits(codec, destination, path)
+		if err != nil {
+			return err
+		}
+		value, err := parseJSONFloat(node.text, bits)
 		if err != nil || math.IsInf(value, 0) || math.IsNaN(value) {
 			return decodeRangeError(path, "number")
 		}
@@ -331,7 +388,7 @@ func decodeValue(node jsonNode, destination reflect.Value, codec ValueCodec, pat
 		}
 		value, err := time.ParseDuration(node.text)
 		if err != nil {
-			return fmt.Errorf("configstore: invalid duration at %s", path)
+			return decodeDiagnostic(path, fmt.Errorf("configstore: invalid duration at %s", path))
 		}
 		destination.SetInt(int64(value))
 
@@ -349,7 +406,7 @@ func decodeValue(node jsonNode, destination reflect.Value, codec ValueCodec, pat
 			return descriptorError(path, "array descriptor does not match destination")
 		}
 		if len(node.elements) != destination.Len() {
-			return fmt.Errorf("configstore: wrong array length at %s", path)
+			return decodeDiagnostic(path, fmt.Errorf("configstore: wrong array length at %s", path))
 		}
 		for i := range node.elements {
 			if err := decodeValue(node.elements[i], destination.Index(i), *codec.Element, path+"[]"); err != nil {
@@ -383,7 +440,7 @@ func decodeValue(node jsonNode, destination reflect.Value, codec ValueCodec, pat
 		seen := make(map[string]struct{}, len(node.properties))
 		for _, property := range node.properties {
 			if _, exists := seen[property.name]; exists {
-				return fmt.Errorf("configstore: duplicate map key at %s", path)
+				return decodeDiagnostic(path, fmt.Errorf("configstore: duplicate map key at %s", path))
 			}
 			seen[property.name] = struct{}{}
 			key := reflect.New(destination.Type().Key()).Elem()
@@ -405,7 +462,7 @@ func decodeValue(node jsonNode, destination reflect.Value, codec ValueCodec, pat
 		}
 		decoded, err := base64.StdEncoding.Strict().DecodeString(node.text)
 		if err != nil || base64.StdEncoding.EncodeToString(decoded) != node.text {
-			return fmt.Errorf("configstore: invalid base64 at %s", path)
+			return decodeDiagnostic(path, fmt.Errorf("configstore: invalid base64 at %s", path))
 		}
 		bytes := reflect.MakeSlice(destination.Type(), len(decoded), len(decoded))
 		reflect.Copy(bytes, reflect.ValueOf(decoded))
@@ -431,6 +488,18 @@ func parseSignedJSONInteger(text string, bits int) (int64, error) {
 		}
 	}
 	return value, nil
+}
+
+func numericCodecBits(codec ValueCodec, destination reflect.Value, path string) (int, error) {
+	destinationBits := destination.Type().Bits()
+	bits := codec.Bits
+	if bits == 0 {
+		bits = destinationBits
+	}
+	if bits <= 0 || bits > destinationBits {
+		return 0, descriptorError(path, "numeric width does not match destination")
+	}
+	return bits, nil
 }
 
 func parseUnsignedJSONInteger(text string, bits int) (uint64, error) {
@@ -575,13 +644,13 @@ func codecName(kind CodecKind) string {
 }
 
 func decodeTypeError(path, expected string) error {
-	return fmt.Errorf("configstore: expected %s at %s", expected, path)
+	return decodeDiagnostic(path, fmt.Errorf("configstore: expected %s at %s", expected, path))
 }
 
 func decodeRangeError(path, expected string) error {
-	return fmt.Errorf("configstore: %s out of range at %s", expected, path)
+	return decodeDiagnostic(path, fmt.Errorf("configstore: %s out of range at %s", expected, path))
 }
 
 func descriptorError(path, problem string) error {
-	return fmt.Errorf("configstore: invalid codec descriptor at %s (%s)", path, problem)
+	return decodeDiagnostic(path, fmt.Errorf("configstore: invalid codec descriptor at %s (%s)", path, problem))
 }

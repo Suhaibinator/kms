@@ -19,6 +19,7 @@ type Manager struct {
 	readyCh   chan struct{}
 	done      chan struct{}
 	readyOnce sync.Once
+	reportMu  sync.Mutex
 
 	mu              sync.RWMutex
 	ready           bool
@@ -26,6 +27,8 @@ type Manager struct {
 	applied         ReleaseIdentity
 	divergent       bool
 	lastReportedKey string
+	lastReportErr   error
+	lastRejectedKey string
 	startupErr      *DefaultMismatchError
 	waitErr         error
 }
@@ -60,11 +63,28 @@ func Start(
 	}
 	options.Contract = append([]ContractEntry(nil), options.Contract...)
 
+	manager := &Manager{
+		options: options,
+		prepare: prepare,
+		readyCh: make(chan struct{}),
+		done:    make(chan struct{}),
+	}
+	validateManifest := manifestValidator(options.Contract)
 	loader, err := paramstore.NewReleaseLoader(client, paramstore.ReleaseLoaderConfig{
-		Name:                 options.Release,
-		ReconcileInterval:    options.ReconcileInterval,
-		SecretTokenProvider:  options.SecretTokenProvider,
-		ValidateManifest:     manifestValidator(options.Contract),
+		Name:                options.Release,
+		ReconcileInterval:   options.ReconcileInterval,
+		SecretTokenProvider: options.SecretTokenProvider,
+		ValidateManifest: func(ctx context.Context, manifest paramstore.ReleaseManifest) error {
+			identity := releaseIdentityFromManifest(manifest)
+			manager.mu.Lock()
+			manager.observed = identity
+			manager.mu.Unlock()
+			err := validateManifest(ctx, manifest)
+			if err != nil {
+				manager.notifyCandidateRejected(identity, err)
+			}
+			return err
+		},
 		MaxConcurrentFetches: options.MaxConcurrentFetches,
 		InstanceID:           options.InstanceID,
 	})
@@ -72,13 +92,7 @@ func Start(
 		return nil, err
 	}
 
-	manager := &Manager{
-		loader:  loader,
-		options: options,
-		prepare: prepare,
-		readyCh: make(chan struct{}),
-		done:    make(chan struct{}),
-	}
+	manager.loader = loader
 	go manager.run(ctx)
 
 	select {
@@ -93,7 +107,11 @@ func Start(
 		if ready {
 			return manager, nil
 		}
-		if startupErr != nil {
+		// A newer startup candidate can supersede a fatal mismatch and then fail
+		// during resolution before prepareWithIdentity gets a chance to clear the
+		// side channel. Return the typed report only when the loader's terminal
+		// candidate was itself rejected for default drift.
+		if startupErr != nil && manager.loader.Status().LastFailureCategory == paramstore.ReleaseRejectDefaultMismatch {
 			return nil, startupErr
 		}
 		if waitErr == nil {
@@ -141,13 +159,16 @@ func (m *Manager) prepareWithIdentity(
 	candidate, err := m.prepare(ctx, snapshot)
 	if err != nil {
 		newAbort(candidate.Abort)()
+		m.notifyCandidateRejected(identity, err)
 		return nil, err
 	}
 	abort := newAbort(candidate.Abort)
 	if candidate.Publish == nil {
 		abort()
-		return nil, Reject(RejectConfigValidationFailed,
+		err := Reject(RejectConfigValidationFailed,
 			errors.New("configstore: prepared candidate Publish is required"))
+		m.notifyCandidateRejected(identity, err)
+		return nil, err
 	}
 	if err := ctx.Err(); err != nil {
 		abort()
@@ -158,7 +179,9 @@ func (m *Manager) prepareWithIdentity(
 	restartFields := append([]string(nil), candidate.RestartRequiredFields...)
 	if !startup && len(restartFields) != 0 {
 		abort()
-		return nil, Reject(RejectRestartRequired, &restartRequiredError{fields: restartFields})
+		err := rejectWithPaths(RejectRestartRequired, &restartRequiredError{fields: restartFields}, restartFields)
+		m.notifyCandidateRejected(identity, err)
+		return nil, err
 	}
 
 	divergent := len(differences) != 0
@@ -174,6 +197,7 @@ func (m *Manager) prepareWithIdentity(
 		report := newDefaultMismatchReport(phase, severity, identity, differences)
 		if err := m.reportOnce(identity, report); err != nil {
 			abort()
+			m.notifyCandidateRejected(identity, err)
 			return nil, err
 		}
 		if severity == MismatchFatal {
@@ -182,7 +206,13 @@ func (m *Manager) prepareWithIdentity(
 			m.startupErr = mismatchErr
 			m.mu.Unlock()
 			abort()
-			return nil, Reject(RejectDefaultMismatch, mismatchErr)
+			paths := make([]string, len(differences))
+			for i := range differences {
+				paths[i] = differences[i].Path
+			}
+			err := rejectWithPaths(RejectDefaultMismatch, mismatchErr, paths)
+			m.notifyCandidateRejected(identity, err)
+			return nil, err
 		}
 	}
 
@@ -195,24 +225,50 @@ func (m *Manager) prepareWithIdentity(
 	}, nil
 }
 
-func (m *Manager) reportOnce(identity ReleaseIdentity, report DefaultMismatchReport) (err error) {
+func (m *Manager) notifyCandidateRejected(identity ReleaseIdentity, err error) {
+	var candidateErr *CandidateError
+	if !errors.As(err, &candidateErr) {
+		return
+	}
+	callback := m.options.OnCandidateRejected
+	if callback == nil {
+		return
+	}
+	category := RejectionCategory(candidateErr.ReleaseRejectionCategory())
 	key := identity.dedupeKey()
 	m.mu.Lock()
-	if m.lastReportedKey == key {
+	if m.lastRejectedKey == key {
 		m.mu.Unlock()
-		return nil
+		return
+	}
+	// Record before invoking application code. A panic must neither alter
+	// candidate admission nor turn reconciliation into a callback storm.
+	m.lastRejectedKey = key
+	m.mu.Unlock()
+
+	report := newCandidateRejectionReport(category, identity, candidateErr.pathsCopy())
+	func() {
+		defer func() { _ = recover() }()
+		callback(report)
+	}()
+}
+
+func (m *Manager) reportOnce(identity ReleaseIdentity, report DefaultMismatchReport) (err error) {
+	key := identity.dedupeKey()
+	m.reportMu.Lock()
+	defer m.reportMu.Unlock()
+	if m.lastReportedKey == key {
+		return m.lastReportErr
 	}
 	callback := m.options.OnDefaultMismatch
-	m.mu.Unlock()
+	m.lastReportedKey = key
 	defer func() {
 		if recover() != nil {
 			err = Reject(RejectInternal, errors.New("configstore: default mismatch callback panicked"))
 		}
+		m.lastReportErr = err
 	}()
 	callback(report)
-	m.mu.Lock()
-	m.lastReportedKey = key
-	m.mu.Unlock()
 	return nil
 }
 
@@ -266,10 +322,21 @@ func (m *Manager) Status() Status {
 	}
 	loaderStatus := m.loader.Status()
 	m.mu.RLock()
+	observed := m.observed
+	if loaderStatus.ObservedVersion != observed.version || loaderStatus.ObservedRevision != observed.activationRevision {
+		// Prefetch contract and resolution failures do not produce a resolved
+		// snapshot. Preserve the safe version/revision observed by ReleaseLoader
+		// while leaving unavailable schema/digest fields empty.
+		observed = ReleaseIdentity{
+			name:               m.options.Release,
+			version:            loaderStatus.ObservedVersion,
+			activationRevision: loaderStatus.ObservedRevision,
+		}
+	}
 	status := Status{
 		State:                 loaderStatus.State,
 		Ready:                 m.ready,
-		Observed:              m.observed,
+		Observed:              observed,
 		Applied:               m.applied,
 		DefaultDivergent:      m.divergent,
 		LastRejectionCategory: RejectionCategory(loaderStatus.LastFailureCategory),

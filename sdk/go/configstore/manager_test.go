@@ -3,6 +3,8 @@ package configstore
 import (
 	"context"
 	"errors"
+	"fmt"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -203,7 +205,7 @@ func TestManagerRecoversMismatchCallbackPanicAndAborts(t *testing.T) {
 	if prepared != nil || err == nil {
 		t.Fatalf("reconciled callback panic prepare = (%v, %v)", prepared, err)
 	}
-	if callbacks != 2 || aborted != 2 {
+	if callbacks != 1 || aborted != 2 {
 		t.Fatalf("reconciliation callbacks=%d aborted=%d", callbacks, aborted)
 	}
 }
@@ -242,5 +244,85 @@ func TestStartRejectsNilMismatchCallbackBeforeLoaderRuns(t *testing.T) {
 	})
 	if err == nil || !strings.Contains(err.Error(), "OnDefaultMismatch") {
 		t.Fatalf("Start() error = %v", err)
+	}
+}
+
+func TestManagerReportsSafeRestartPathsOncePerCandidate(t *testing.T) {
+	var reports []CandidateRejectionReport
+	var next PreparedCandidate
+	manager := unitManager(Options{
+		AllowDefaultMismatch: true,
+		OnDefaultMismatch:    func(DefaultMismatchReport) {},
+		OnCandidateRejected:  func(report CandidateRejectionReport) { reports = append(reports, report) },
+	}, func(context.Context, paramstore.ReleaseSnapshot) (PreparedCandidate, error) {
+		return next, nil
+	})
+
+	next = PreparedCandidate{Publish: func() {}}
+	initial, err := manager.prepareWithIdentity(context.Background(), paramstore.ReleaseSnapshot{}, testIdentity(1, 1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	initial.Commit()
+
+	next = PreparedCandidate{
+		Publish:               func() { t.Fatal("restart candidate published") },
+		RestartRequiredFields: []string{"database.endpoint", "secret_alias", "unsafe\npath"},
+	}
+	for range 2 {
+		prepared, prepareErr := manager.prepareWithIdentity(context.Background(), paramstore.ReleaseSnapshot{}, testIdentity(2, 2))
+		if prepared != nil || prepareErr == nil {
+			t.Fatalf("restart prepare = (%v, %v), want rejection", prepared, prepareErr)
+		}
+	}
+	if len(reports) != 1 {
+		t.Fatalf("candidate rejection callback count = %d, want 1", len(reports))
+	}
+	if reports[0].Category() != RejectRestartRequired || reports[0].Release().Version() != 2 {
+		t.Fatalf("restart report = %s/%s", reports[0].Category(), reports[0].Release())
+	}
+	if got := reports[0].Paths(); !reflect.DeepEqual(got, []string{"database.endpoint", "secret_alias"}) {
+		t.Fatalf("restart paths = %#v", got)
+	}
+	paths := reports[0].Paths()
+	paths[0] = "mutated"
+	if reports[0].Paths()[0] != "database.endpoint" {
+		t.Fatal("candidate rejection callback report was mutable")
+	}
+}
+
+func TestManagerCandidateRejectionCallbackPanicCannotChangeAdmissionOrRepeat(t *testing.T) {
+	const canary = "application-validation-canary"
+	var reports []CandidateRejectionReport
+	manager := unitManager(Options{
+		OnDefaultMismatch: func(DefaultMismatchReport) {},
+		OnCandidateRejected: func(report CandidateRejectionReport) {
+			reports = append(reports, report)
+			panic("callback panic must be isolated")
+		},
+	}, func(context.Context, paramstore.ReleaseSnapshot) (PreparedCandidate, error) {
+		return PreparedCandidate{}, Reject(RejectConfigValidationFailed, errors.New(canary))
+	})
+
+	for range 2 {
+		prepared, err := manager.prepareWithIdentity(context.Background(), paramstore.ReleaseSnapshot{}, testIdentity(7, 11))
+		if prepared != nil || err == nil {
+			t.Fatalf("validation prepare = (%v, %v), want rejection", prepared, err)
+		}
+		var candidateErr *CandidateError
+		if !errors.As(err, &candidateErr) || candidateErr.ReleaseRejectionCategory() != string(RejectConfigValidationFailed) {
+			t.Fatalf("callback panic changed original rejection: %#v", candidateErr)
+		}
+	}
+	if len(reports) != 1 {
+		t.Fatalf("panicking callback count = %d, want 1", len(reports))
+	}
+	if reports[0].Category() != RejectConfigValidationFailed || len(reports[0].Paths()) != 0 {
+		t.Fatalf("validation report = category:%s paths:%#v", reports[0].Category(), reports[0].Paths())
+	}
+	for _, rendered := range []string{fmt.Sprint(reports[0]), fmt.Sprintf("%+v", reports[0]), fmt.Sprintf("%#v", reports[0])} {
+		if strings.Contains(rendered, canary) {
+			t.Fatalf("candidate report leaked validation text: %q", rendered)
+		}
 	}
 }

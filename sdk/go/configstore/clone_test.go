@@ -48,3 +48,23 @@ func TestClonePreservesCycles(t *testing.T) {
 		t.Fatal("clone mutation changed original cycle")
 	}
 }
+
+func TestCloneDistinguishesAliasedSliceHeaders(t *testing.T) {
+	base := make([]int, 3, 5)
+	copy(base, []int{10, 20, 30})
+	original := struct {
+		Long  []int
+		Short []int
+	}{
+		Long:  base[:2:4],
+		Short: base[:1:3],
+	}
+
+	cloned := Clone(original)
+	if !reflect.DeepEqual(cloned.Long, []int{10, 20}) || !reflect.DeepEqual(cloned.Short, []int{10}) {
+		t.Fatalf("aliased slice headers changed during clone: long=%#v short=%#v", cloned.Long, cloned.Short)
+	}
+	if len(cloned.Long) != 2 || cap(cloned.Long) != 4 || len(cloned.Short) != 1 || cap(cloned.Short) != 3 {
+		t.Fatalf("cloned slice headers = long %d/%d short %d/%d", len(cloned.Long), cap(cloned.Long), len(cloned.Short), cap(cloned.Short))
+	}
+}

@@ -208,6 +208,63 @@ func (e *testReleaseRejectionError) Error() string { return e.detail }
 
 func (e *testReleaseRejectionError) ReleaseRejectionCategory() string { return e.category }
 
+func TestShouldQueueReleaseCandidateRetriesOnlyFromReconciliation(t *testing.T) {
+	release := testRelease(2, 2, "two")
+	latest := releaseCandidate{release: release, revision: 2, source: releaseCandidateSourceActivation}
+
+	tests := []struct {
+		name        string
+		candidate   releaseCandidate
+		haveLatest  bool
+		retryLatest bool
+		want        bool
+	}{
+		{name: "first candidate", candidate: latest, want: true},
+		{name: "nil candidate", candidate: releaseCandidate{}, want: false},
+		{
+			name:        "duplicate activation after rejection",
+			candidate:   releaseCandidate{release: release, revision: 2, source: releaseCandidateSourceActivation},
+			haveLatest:  true,
+			retryLatest: true,
+			want:        false,
+		},
+		{
+			name:        "duplicate reconciliation while attempt is not retryable",
+			candidate:   releaseCandidate{release: release, revision: 2, source: releaseCandidateSourceReconciliation},
+			haveLatest:  true,
+			retryLatest: false,
+			want:        false,
+		},
+		{
+			name:        "reconciliation after rejection",
+			candidate:   releaseCandidate{release: release, revision: 2, source: releaseCandidateSourceReconciliation},
+			haveLatest:  true,
+			retryLatest: true,
+			want:        true,
+		},
+		{
+			name:        "stale reconciliation",
+			candidate:   releaseCandidate{release: testRelease(1, 1, "one"), revision: 1, source: releaseCandidateSourceReconciliation},
+			haveLatest:  true,
+			retryLatest: true,
+			want:        false,
+		},
+		{
+			name:       "new activation",
+			candidate:  releaseCandidate{release: testRelease(3, 3, "three"), revision: 3, source: releaseCandidateSourceActivation},
+			haveLatest: true,
+			want:       true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := shouldQueueReleaseCandidate(tt.candidate, latest, tt.haveLatest, tt.retryLatest); got != tt.want {
+				t.Fatalf("shouldQueueReleaseCandidate() = %t, want %t", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestReleaseLoaderResolvesRedactsCommitsAndAcknowledges(t *testing.T) {
 	server := newReleaseLoaderServer()
 	release := testRelease(7, 42, `{"enabled":true}`)
@@ -320,6 +377,127 @@ func TestReleaseLoaderResolvesRedactsCommitsAndAcknowledges(t *testing.T) {
 	cancel()
 	if err := <-runErr; err != context.Canceled {
 		t.Fatalf("Run error = %v, want context.Canceled", err)
+	}
+}
+
+func TestReleaseLoaderRetriesStillActiveCandidateOnReconciliation(t *testing.T) {
+	server := newReleaseLoaderServer()
+	firstRelease := testRelease(1, 1, "one")
+	server.setActive(firstRelease, 1)
+	server.parameters["settings"] = &kmsv1.Parameter{Ref: testResource("settings"), Value: "one", ContentType: "json", Version: 1}
+	server.secrets["password"] = &kmsv1.GetSecretResponse{Ref: testResource("password"), Version: 1, Value: []byte("secret-one"), ContentType: "text/plain"}
+	client := newReleaseTestClient(t, server)
+	loader, err := NewReleaseLoader(client, ReleaseLoaderConfig{
+		Name:                "runtime",
+		ReconcileInterval:   100 * time.Millisecond,
+		SecretTokenProvider: func(string, string) (string, bool) { return "token", true },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	firstPrepared := &testPreparedRelease{done: make(chan struct{})}
+	recoveredPrepared := &testPreparedRelease{done: make(chan struct{})}
+	firstFailureReturned := make(chan struct{})
+	retryStarted := make(chan struct{})
+	allowRecovery := make(chan struct{})
+	var secondAttempts atomic.Int32
+	ctx, cancel := context.WithCancel(context.Background())
+	runErr := make(chan error, 1)
+	go func() {
+		runErr <- loader.Run(ctx, func(candidateCtx context.Context, snapshot ReleaseSnapshot) (PreparedRelease, error) {
+			if snapshot.Version() == 1 {
+				return firstPrepared, nil
+			}
+			if snapshot.Version() != 2 {
+				return nil, fmt.Errorf("unexpected release version %d", snapshot.Version())
+			}
+			switch secondAttempts.Add(1) {
+			case 1:
+				close(firstFailureReturned)
+				return nil, errors.New("transient local preparation failure")
+			case 2:
+				close(retryStarted)
+				select {
+				case <-allowRecovery:
+					return recoveredPrepared, nil
+				case <-candidateCtx.Done():
+					return nil, candidateCtx.Err()
+				}
+			default:
+				return nil, errors.New("unexpected extra preparation attempt")
+			}
+		})
+	}()
+	defer func() {
+		cancel()
+		if err := <-runErr; err != context.Canceled {
+			t.Errorf("Run error = %v, want context.Canceled", err)
+		}
+	}()
+
+	select {
+	case <-firstPrepared.done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("initial release did not commit")
+	}
+	select {
+	case <-server.watchRegs:
+	case <-time.After(2 * time.Second):
+		t.Fatal("release watch did not register")
+	}
+
+	secondRelease := testRelease(2, 2, "two")
+	server.mu.Lock()
+	server.parameters["settings"] = &kmsv1.Parameter{Ref: testResource("settings"), Value: "two", ContentType: "json", Version: 2}
+	server.secrets["password"] = &kmsv1.GetSecretResponse{Ref: testResource("password"), Version: 2, Value: []byte("secret-two"), ContentType: "text/plain"}
+	server.mu.Unlock()
+	server.setActive(secondRelease, 2)
+	activation := &kmsv1.WatchReleaseEvent{
+		Event:    &kmsv1.WatchReleaseEvent_Activation{Activation: &kmsv1.ReleaseActivationEvent{Release: secondRelease}},
+		Revision: 2,
+	}
+	server.watchEvents <- activation
+
+	select {
+	case <-firstFailureReturned:
+	case <-time.After(2 * time.Second):
+		t.Fatal("active candidate did not reach the transient failure")
+	}
+	// Repeated activation delivery must not create an immediate retry loop.
+	server.watchEvents <- activation
+	server.watchEvents <- activation
+
+	select {
+	case <-retryStarted:
+	case <-time.After(3 * time.Second):
+		t.Fatal("still-active candidate was not retried by reconciliation")
+	}
+	if got := secondAttempts.Load(); got != 2 {
+		t.Fatalf("preparation attempts for release 2 = %d, want 2", got)
+	}
+	status := loader.Status()
+	if status.AppliedVersion != 1 || status.LastFailureCategory != ReleaseRejectPrepareFailed {
+		t.Fatalf("last-known-good status during retry = %+v", status)
+	}
+	if got := loader.Stats().Rejected[ReleaseRejectPrepareFailed]; got != 1 {
+		t.Fatalf("prepare-failed rejections = %d, want 1", got)
+	}
+
+	close(allowRecovery)
+	select {
+	case <-recoveredPrepared.done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("reconciled candidate did not commit after recovery")
+	}
+	if !eventually(t, 2*time.Second, func() bool {
+		status := loader.Status()
+		return status.AppliedVersion == 2 && status.AppliedRevision == 2 && status.LastFailureCategory == ""
+	}) {
+		t.Fatalf("final loader status = %+v", loader.Status())
+	}
+	if got := secondAttempts.Load(); got != 2 {
+		t.Fatalf("final preparation attempts for release 2 = %d, want 2", got)
 	}
 }
 
