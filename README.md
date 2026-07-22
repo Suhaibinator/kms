@@ -55,6 +55,12 @@ management.
   last-known-good release on later failures. Optional immutable Draft 2020-12
   JSON Schemas validate the alias-keyed parameter object; secret values and
   per-secret tokens are never stored in a release or watch event.
+- **Generated managed Go configuration**: applications declare an ordinary
+  validated root type with storage, reload-policy, and consumer-view tags.
+  `kms-config-gen` emits strict decoders, immutable atomic snapshots and typed
+  views, a release schema, and a machine contract. Application-owned defaults
+  fail closed on startup drift while explicit hot emergency overrides remain
+  possible. See [`docs/managed-go-configuration.md`](docs/managed-go-configuration.md).
 - **Declarative SDK config** in both Go and Python: `SecretValue`/
   `ParameterValue` fields resolved with one `Resolve`/`resolve` call — env
   override, then store, then dev default, else a startup error naming the
@@ -80,7 +86,7 @@ Consuming service
   |
   | gRPC over TLS/mTLS
   v
-sdk/go/paramstore (Go SDK)
+sdk/go/kmsclient (Go SDK)
   |
   v
 parameter-store — single binary (cmd/parameter-store)
@@ -245,7 +251,7 @@ the client is bound to a namespace and reads by **relative key**. This local
 quickstart uses the token because the server above is plaintext:
 
 ```go
-client, err := paramstore.NewClient(paramstore.Config{
+client, err := kmsclient.NewClient(kmsclient.Config{
     Endpoint:  "localhost:8443",
     Namespace: "prod/gradethis",
     Token:     os.Getenv("GRADETHIS_TOKEN"),
@@ -265,7 +271,7 @@ fmt.Println(secret.StringValue())
 ```
 
 In production, enable server TLS and prefer the issued client certificate:
-set `TLS` to `paramstore.MTLSFromFiles("certs/gradethis-be.crt",
+set `TLS` to `kmsclient.MTLSFromFiles("certs/gradethis-be.crt",
 "certs/gradethis-be.key", "server-ca.crt")` and omit `Token`. Here
 `server-ca.crt` must trust the operator-provided **server** certificate; it is
 not the built-in client-issuing CA returned by `admin ca show`.
@@ -387,7 +393,9 @@ fresh active-release check. The release stream records distinct `received`,
 client name in the UI. This is application apply state; the ordinary namespace
 subscriber acknowledgement remains transport receipt only. See
 [`docs/configuration-releases.md`](docs/configuration-releases.md) and the SDK
-guides.
+guides. Go applications that want generated strict decoding, source-owned
+defaults, typed views, and reload-policy enforcement should use the
+[managed configuration layer](docs/managed-go-configuration.md).
 
 ## Frontend
 
@@ -411,8 +419,14 @@ client-side routing resolves deep links on refresh.
 
 ## Client SDKs
 
-- **Go** (`sdk/go/paramstore`) — declarative values plus the atomic
-  `ReleaseLoader`; see [`docs/sdk-go.md`](docs/sdk-go.md).
+- **Go, lower level** (`sdk/go/kmsclient`) — declarative values plus the
+  atomic `ReleaseLoader`; see [`docs/sdk-go.md`](docs/sdk-go.md).
+- **Go, generated managed configuration** (`sdk/go/configstore` and
+  `cmd/kms-config-gen`) — strict typed group decoding, source-owned defaults,
+  immutable snapshots, consumer views, and hot/restart policy; see
+  [`docs/managed-go-configuration.md`](docs/managed-go-configuration.md) and
+  run the self-contained
+  [`examples/managed-config`](examples/managed-config) walkthrough.
 - **Python** (`sdk/python`, package `kms_paramstore`, distribution
   `kms-paramstore`) — equivalent synchronous release loading with explicit
   decoding; see [`docs/sdk-python.md`](docs/sdk-python.md).
@@ -425,6 +439,8 @@ client-side routing resolves deep links on refresh.
 - [`docs/security.md`](docs/security.md) — the encryption, authentication,
   authorization, and audit model in depth.
 - [`docs/sdk-go.md`](docs/sdk-go.md) — the Go client SDK.
+- [`docs/managed-go-configuration.md`](docs/managed-go-configuration.md) —
+  generated atomic typed configuration, defaults, and operator workflow.
 - [`docs/sdk-python.md`](docs/sdk-python.md) — the Python client SDK.
 - [`docs/http-api.md`](docs/http-api.md) — the JSON HTTP API contract used
   by the embedded frontend.

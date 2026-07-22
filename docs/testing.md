@@ -48,6 +48,31 @@ make test-integration-race
 make test
 ```
 
+Generated managed-configuration artifacts are committed. In this repository,
+regenerate the fixture when its root contract changes and run the same
+read-only verification used by CI:
+
+```bash
+go generate ./internal/configstorefixture/config
+make check-configgen
+```
+
+The Make target passes `-package ./internal/configstorefixture/config` and
+checks the generated binding, schema, and contract without writing them. A
+downstream application invoking the generator from its module root must
+likewise pass its root package with `-package`; relative output paths are
+resolved from the command's working directory. See the
+[generation guide](managed-go-configuration.md#generate-bindings-and-artifacts)
+for the generic command and required separate-package import topology.
+
+Generator package tests cover deterministic output and stale verification.
+Binding tests additionally gate snapshot consistency, defensive composite
+access, zero allocations for `Current`/view/scalar getters, a duplicate-aware
+strict-decode gauntlet, nil-versus-empty drift, transient retry, callback
+redaction/panic isolation, rapid concurrent activations, and the equivalent
+real-KMS TLS/gRPC/SQLite matrix. See the
+[managed configuration testing section](managed-go-configuration.md#testing).
+
 All Make targets use `-count=1` to prevent Go's result cache from masking a
 regression and apply a 10-minute package timeout by default. Override that
 limit for local diagnosis with, for example,

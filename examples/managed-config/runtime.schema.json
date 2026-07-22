@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "runtime",
+    "server"
+  ],
+  "properties": {
+    "runtime": {
+      "additionalProperties": false,
+      "properties": {
+        "greeting": {
+          "type": "string"
+        },
+        "request_limit": {
+          "maximum": 2147483647,
+          "minimum": -2147483648,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "greeting",
+        "request_limit"
+      ],
+      "type": "object"
+    },
+    "server": {
+      "additionalProperties": false,
+      "properties": {
+        "listen_address": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "listen_address"
+      ],
+      "type": "object"
+    }
+  }
+}

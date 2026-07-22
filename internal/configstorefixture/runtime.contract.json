@@ -1,0 +1,172 @@
+{
+  "format": "kms-config-contract/v1",
+  "source": {
+    "package": "github.com/Suhaibinator/kms/internal/configstorefixture/config",
+    "type": "Config"
+  },
+  "schema_sha256": "928ef5cedf43b88dd4037ffac084a639db7362baa860b6403139c1d70c03cb70",
+  "groups": [
+    {
+      "alias": "database",
+      "kind": "parameter",
+      "content_type": "json",
+      "fields": [
+        "endpoint",
+        "max_open",
+        "timeout"
+      ]
+    },
+    {
+      "alias": "runtime",
+      "kind": "parameter",
+      "content_type": "json",
+      "fields": [
+        "features",
+        "payload",
+        "thresholds",
+        "window"
+      ]
+    }
+  ],
+  "fields": [
+    {
+      "group": "database",
+      "json_name": "endpoint",
+      "go_name": "Endpoint",
+      "reload": "restart",
+      "encoding": "object",
+      "views": [
+        "database_health",
+        "persistence_handler"
+      ]
+    },
+    {
+      "group": "database",
+      "json_name": "max_open",
+      "go_name": "MaxOpen",
+      "reload": "restart",
+      "encoding": "nullable-int32",
+      "views": [
+        "database_health",
+        "persistence_handler"
+      ]
+    },
+    {
+      "group": "database",
+      "json_name": "timeout",
+      "go_name": "Timeout",
+      "reload": "hot",
+      "encoding": "go-duration",
+      "views": [
+        "database_health",
+        "persistence_handler"
+      ]
+    },
+    {
+      "group": "runtime",
+      "json_name": "features",
+      "go_name": "Features",
+      "reload": "hot",
+      "encoding": "nullable-array",
+      "views": [
+        "api_handler",
+        "background_jobs"
+      ]
+    },
+    {
+      "group": "runtime",
+      "json_name": "payload",
+      "go_name": "Payload",
+      "reload": "hot",
+      "encoding": "nullable-base64",
+      "views": [
+        "api_handler"
+      ]
+    },
+    {
+      "group": "runtime",
+      "json_name": "thresholds",
+      "go_name": "Thresholds",
+      "reload": "hot",
+      "encoding": "nullable-string-map",
+      "views": [
+        "api_handler",
+        "background_jobs"
+      ]
+    },
+    {
+      "group": "runtime",
+      "json_name": "window",
+      "go_name": "Window",
+      "reload": "hot",
+      "encoding": "array",
+      "views": [
+        "background_jobs"
+      ]
+    }
+  ],
+  "secrets": [
+    {
+      "alias": "database_password",
+      "kind": "secret",
+      "go_name": "Password",
+      "reload": "restart",
+      "encoding": "secret",
+      "views": [
+        "persistence_handler"
+      ]
+    },
+    {
+      "alias": "runtime_token",
+      "kind": "secret",
+      "go_name": "RuntimeToken",
+      "reload": "hot",
+      "encoding": "secret",
+      "views": [
+        "api_handler",
+        "background_jobs"
+      ]
+    }
+  ],
+  "views": [
+    {
+      "name": "api_handler",
+      "method": "ApiHandler",
+      "fields": [
+        "runtime.features",
+        "runtime.payload",
+        "runtime.thresholds",
+        "runtime_token"
+      ]
+    },
+    {
+      "name": "background_jobs",
+      "method": "BackgroundJobs",
+      "fields": [
+        "runtime.features",
+        "runtime.thresholds",
+        "runtime.window",
+        "runtime_token"
+      ]
+    },
+    {
+      "name": "database_health",
+      "method": "DatabaseHealth",
+      "fields": [
+        "database.endpoint",
+        "database.max_open",
+        "database.timeout"
+      ]
+    },
+    {
+      "name": "persistence_handler",
+      "method": "PersistenceHandler",
+      "fields": [
+        "database.endpoint",
+        "database.max_open",
+        "database.timeout",
+        "database_password"
+      ]
+    }
+  ]
+}

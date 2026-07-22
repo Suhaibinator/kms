@@ -483,9 +483,9 @@ SDKs must:
 ### 9.3 SDK Example: Go
 
 ```go
-client, err := paramstore.NewClient(paramstore.Config{
+client, err := kmsclient.NewClient(kmsclient.Config{
     Endpoint: "parameter-store.prod.internal:8443",
-    TLS:      paramstore.MTLSFromFiles("client.crt", "client.key", "server-ca.crt"),
+    TLS:      kmsclient.MTLSFromFiles("client.crt", "client.key", "server-ca.crt"),
     CacheTTL: time.Minute,
 })
 if err != nil {
@@ -540,12 +540,12 @@ Each value type must expose `Init(client)`, so apps that prefer explicit per-fie
 
 ```go
 type Config struct {
-    StripeAPIKey    paramstore.SecretValue
-    OpenAIAPIKey    paramstore.SecretValue
-    RateLimit       paramstore.ParameterValue
+    StripeAPIKey    kmsclient.SecretValue
+    OpenAIAPIKey    kmsclient.SecretValue
+    RateLimit       kmsclient.ParameterValue
 }
 
-func (c *Config) Init(client *paramstore.Client) error {
+func (c *Config) Init(client *kmsclient.Client) error {
     if err := c.StripeAPIKey.Init(client); err != nil { return err }
     if err := c.OpenAIAPIKey.Init(client); err != nil { return err }
     return c.RateLimit.Init(client)
@@ -591,7 +591,7 @@ cfg.RateLimit.OnChange(func(old, new string) {
 })
 
 // 3. Namespace-level watch for advanced use.
-client.Watch(ctx, "/prod/payments/*", func(ev paramstore.Event) { ... })
+client.Watch(ctx, "/prod/payments/*", func(ev kmsclient.Event) { ... })
 ```
 
 Requirements:

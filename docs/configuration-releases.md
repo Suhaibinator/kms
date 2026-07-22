@@ -54,6 +54,17 @@ references. Schema errors return a bounded code, alias when it can be derived,
 optional schema pointer, and sanitized message. Application-specific semantic
 validation still belongs in the loader's prepare callback.
 
+Parameter content types are KMS tokens, not MIME types. The JSON token is the
+literal, case-sensitive `json`; `application/json` is not accepted as a
+parameter content type. Generated managed Go contracts require `json` for every
+group document.
+
+JSON parsing rejects duplicate properties recursively and retains exact JSON
+numbers, so large integer bounds are not rounded through `float64`. Schemas
+emitted by `kms-config-gen` use the asserted KMS formats `go-duration` and
+`kms-base64`; unrelated Draft 2020-12 `format` keywords retain their normal
+annotation behavior.
+
 Validation codes are `not_found`, `permission_denied`, `unreadable`,
 `content_type`, `malformed_json`, `schema_violation`, and `digest_mismatch`.
 
@@ -110,8 +121,16 @@ instances by `(identity, client_name, instance_id)`; different authenticated
 identities and replicas do not overwrite one another.
 
 Bounded rejection categories are `resolution_failed`, `token_unavailable`,
-`version_mismatch`, `digest_mismatch`, `prepare_failed`, `superseded`,
-`active_check_failed`, and `internal`.
+`version_mismatch`, `digest_mismatch`, `prepare_failed`,
+`config_contract_mismatch`, `config_decode_failed`,
+`config_validation_failed`, `default_mismatch`, `restart_required`,
+`superseded`, `active_check_failed`, and `internal`. The managed Go layer uses
+the configuration-specific categories while keeping detailed diagnostics
+local. A default-mismatch callback may intentionally expose expected and actual
+non-secret values, but acknowledgements contain only the bounded category;
+lower-level application preparation failures continue to use `prepare_failed`
+unless explicitly classified. Operator remediation is in the
+[managed configuration workflow](managed-go-configuration.md#diagnose-a-rejected-candidate).
 
 ## Loader lifecycle
 
@@ -145,6 +164,9 @@ Version 1 has no fleet-wide activation barrier, so replicas apply independently.
 
 See [`sdk-go.md`](sdk-go.md#atomic-release-loading) and
 [`sdk-python.md`](sdk-python.md#atomic-release-loading) for application code.
+Generated Go bindings, source-owned defaults, consumer views, and emergency
+override operations are documented in
+[`managed-go-configuration.md`](managed-go-configuration.md).
 
 ## Authorization, retention, and destructive operations
 

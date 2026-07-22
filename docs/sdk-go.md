@@ -1,4 +1,4 @@
-# Go SDK (`sdk/go/paramstore`)
+# Go SDK (`sdk/go/kmsclient`)
 
 The Go SDK hides gRPC plumbing behind a small surface: direct reads
 (`GetParameter`/`GetSecret`), declarative config fields (`SecretValue`/
@@ -13,26 +13,26 @@ The client operates in a **namespace** — a fixed `(env, app)` pair such as
 display path for reaching another namespace. See
 [Namespaces and keys](#namespaces-and-keys).
 
-Package import path: `github.com/Suhaibinator/kms/sdk/go/paramstore`.
+Package import path: `github.com/Suhaibinator/kms/sdk/go/kmsclient`.
 
 This document describes the public API as implemented; every symbol below
-exists in `sdk/go/paramstore/*.go`. For the wire-level HTTP contract used by
+exists in `sdk/go/kmsclient/*.go`. For the wire-level HTTP contract used by
 the frontend, see [`http-api.md`](http-api.md); for namespace/key conventions
 and a worked example, see [`migration.md`](migration.md).
 
 ## Installing
 
 ```bash
-go get github.com/Suhaibinator/kms/sdk/go/paramstore
+go get github.com/Suhaibinator/kms/sdk/go/kmsclient
 ```
 
 ## Connecting
 
 ```go
-client, err := paramstore.NewClient(paramstore.Config{
+client, err := kmsclient.NewClient(kmsclient.Config{
     Endpoint:  "parameter-store.prod.internal:8443",
     Namespace: "prod/gradethis",                                    // env/app; optional (see below)
-    TLS:       paramstore.MTLSFromFiles("client.crt", "client.key", "server-ca.crt"),
+    TLS:       kmsclient.MTLSFromFiles("client.crt", "client.key", "server-ca.crt"),
     CacheTTL:  time.Minute,
 })
 if err != nil {
@@ -48,7 +48,7 @@ identity derives from the cert server-side, so `Token` is not needed. Supply a
 operator-provided **server** certificate. It is not the built-in client CA
 returned by `admin ca show`.
 
-`Config` fields (`sdk/go/paramstore/client.go`):
+`Config` fields (`sdk/go/kmsclient/client.go`):
 
 | Field | Meaning |
 |---|---|
@@ -103,7 +103,7 @@ empty, a relative key cannot be resolved and the call fails with
 
 ```go
 _, err := client.GetParameter(ctx, "rate-limit")
-if errors.Is(err, paramstore.ErrNoNamespace) {
+if errors.Is(err, kmsclient.ErrNoNamespace) {
     // set Config.Namespace, bind the identity to a namespace, or use an
     // absolute "/env/app/key" path
 }
@@ -122,7 +122,7 @@ secret, err := client.GetSecret(ctx, "stripe-api-key")
 // secret.StringValue() (string) for plaintext.
 ```
 
-Both accept `GetOption`s (`sdk/go/paramstore/options.go`):
+Both accept `GetOption`s (`sdk/go/kmsclient/options.go`):
 
 - `WithVersion(n uint64)` — pin to an immutable version (takes precedence over `WithLabel`).
 - `WithLabel(label string)` — read the version a label points at (e.g. `"current"`, `"previous"`); the server default when neither option is given is `"current"`.
@@ -140,10 +140,10 @@ Writes (mainly for tooling, not typical application code):
 
 ```go
 res, err := client.PutParameter(ctx, "rate-limit", "200",
-    paramstore.WithContentType("integer"))
+    kmsclient.WithContentType("integer"))
 
 res, err := client.PutSecret(ctx, "stripe-api-key", []byte("sk_live_..."),
-    paramstore.WithGenerateAccessToken())
+    kmsclient.WithGenerateAccessToken())
 // res.AccessToken is set only when WithGenerateAccessToken() was passed,
 // and is never retrievable again after this call returns.
 ```
@@ -159,19 +159,19 @@ the token for the new version.
 
 ## Errors
 
-`sdk/go/paramstore/errors.go` maps gRPC status codes to sentinel errors
+`sdk/go/kmsclient/errors.go` maps gRPC status codes to sentinel errors
 callers test with `errors.Is`:
 
 ```go
 _, err := client.GetSecret(ctx, "missing")
 switch {
-case errors.Is(err, paramstore.ErrNotFound):
+case errors.Is(err, kmsclient.ErrNotFound):
     // key, version, or label does not exist
-case errors.Is(err, paramstore.ErrPermissionDenied):
+case errors.Is(err, kmsclient.ErrPermissionDenied):
     // authenticated but not authorized
-case errors.Is(err, paramstore.ErrUnauthenticated):
+case errors.Is(err, kmsclient.ErrUnauthenticated):
     // missing/invalid/expired identity token
-case errors.Is(err, paramstore.ErrFailedPrecondition):
+case errors.Is(err, kmsclient.ErrFailedPrecondition):
     // e.g. client_bound mode mismatch on an existing secret
 }
 ```
@@ -190,28 +190,28 @@ error.
 ## Declarative config: `SecretValue` and `ParameterValue`
 
 Declare store-backed fields directly in a config struct
-(`sdk/go/paramstore/values.go`):
+(`sdk/go/kmsclient/values.go`):
 
 ```go
 type Config struct {
-    StripeAPIKey paramstore.SecretValue
-    RateLimit    paramstore.ParameterValue
-    LogFormat    paramstore.ParameterValue
+    StripeAPIKey kmsclient.SecretValue
+    RateLimit    kmsclient.ParameterValue
+    LogFormat    kmsclient.ParameterValue
 }
 
 cfg := Config{
-    StripeAPIKey: paramstore.SecretValue{
+    StripeAPIKey: kmsclient.SecretValue{
         Key:     "stripe-api-key",
         Token:   os.Getenv("STRIPE_API_KEY_TOKEN"), // per-secret token, if required
         EnvVar:  "STRIPE_API_KEY",                  // env override still wins
         Default: "sk_test_dev_only",                // dev-only fallback
     },
-    RateLimit: paramstore.ParameterValue{
+    RateLimit: kmsclient.ParameterValue{
         Key:     "rate-limit",
         Default: "100",
         // hot-reloads by default; read the latest with cfg.RateLimit.Get()
     },
-    LogFormat: paramstore.ParameterValue{
+    LogFormat: kmsclient.ParameterValue{
         Key:    "log-format",
         Static: true, // resolve once at Init, never hot-reload
     },
@@ -264,7 +264,7 @@ if err := client.Resolve(ctx, &cfg); err != nil {
 }
 ```
 
-`Resolve` (`sdk/go/paramstore/resolve.go`) walks `cfg` via reflection —
+`Resolve` (`sdk/go/kmsclient/resolve.go`) walks `cfg` via reflection —
 including nested structs, non-nil struct pointers and pointer chains (with
 cycle detection), and the elements of slices and arrays of those types
 (`[]T`, `[]*T`, `[N]T`) — finds every `SecretValue`/`ParameterValue` field
@@ -323,7 +323,7 @@ cfg.RateLimit.OnChange(func(old, new string) {
 
 // 3. Namespace-level watch for advanced use. Fires for EVERY key in the
 //    namespace; filter inside the callback if you only want a subset.
-stop, err := client.Watch(ctx, func(ev paramstore.Event) {
+stop, err := client.Watch(ctx, func(ev kmsclient.Event) {
     if !strings.HasPrefix(ev.Key, "billing/") {
         return
     }
@@ -350,7 +350,7 @@ empty `Config.Namespace`) `Watch` returns `ErrNoNamespace`. To observe a
 different namespace the client is authorized for, use
 `Client.WatchNamespace(ctx, "env/app", fn)`.
 
-An `Event` (`sdk/go/paramstore/watch.go`) carries `Type`, `Namespace`
+An `Event` (`sdk/go/kmsclient/watch.go`) carries `Type`, `Namespace`
 (`"env/app"`), `Key` (relative), `Value` (for puts), `Version`, `Revision`,
 and the raw `ChangeType`. `Event.Path()` returns the `/env/app/key` display
 path.
@@ -389,6 +389,31 @@ within the subscribed **namespaces** that are absent from a snapshot are
 reverted, so a known key in another namespace is never cleared by an unrelated
 snapshot.
 
+## Generated managed configuration
+
+`sdk/go/configstore` and `cmd/kms-config-gen` provide an additive high-level
+integration for applications that want release-wide atomicity without writing
+their own decoder, default comparison, reload policy, atomic generation, and
+typed views. The generated binding owns one immutable active generation;
+`Current` performs one atomic load and captured scalar getters are ordinary
+field access.
+
+The generator emits a separate application binding package that imports the
+root configuration package; the root must not import the binding. Generator
+package selection and output paths are relative to its working directory. See
+the linked guide for reproducible `go:generate`, module-root, and CI commands.
+
+The application remains authoritative for non-secret defaults. Startup fails
+on drift unless the application explicitly supplies a bypass; valid runtime
+hot overrides apply atomically and remain visibly divergent, while any change
+to a restart-bound field rejects the complete candidate. Generated strict
+decoding, declaration tags, supported encodings, snapshot discipline,
+secrets, schema/contract artifacts, testing, and the operator workflow are in
+the [managed Go configuration guide](managed-go-configuration.md).
+
+The lower-level APIs below remain supported and are useful when an application
+needs a custom preparation model.
+
 ## Atomic release loading
 
 Use `ReleaseLoader` when several parameter and secret versions must be
@@ -397,7 +422,7 @@ client's home namespace; unlike ordinary `ParameterValue` callbacks, a release
 event cannot be permanently lost to callback-queue saturation.
 
 ```go
-loader, err := paramstore.NewReleaseLoader(client, paramstore.ReleaseLoaderConfig{
+loader, err := kmsclient.NewReleaseLoader(client, kmsclient.ReleaseLoaderConfig{
     Name:              "runtime",
     ReconcileInterval: time.Minute, // default
     MaxConcurrentFetches: 16,       // default; maximum 256
@@ -410,8 +435,8 @@ if err != nil {
     return err
 }
 
-err = loader.Run(ctx, func(ctx context.Context, candidate paramstore.ReleaseSnapshot) (
-    paramstore.PreparedRelease, error,
+err = loader.Run(ctx, func(ctx context.Context, candidate kmsclient.ReleaseSnapshot) (
+    kmsclient.PreparedRelease, error,
 ) {
     limits, ok := candidate.Parameter("rate_limits")
     if !ok {
@@ -433,6 +458,14 @@ minute and `MaxConcurrentFetches` to 16. `InstanceID` normally stays empty so
 the loader generates one process-lifetime UUID and reuses it across stream
 reconnects; set it only when the runtime already owns a stable replica ID. The
 client's `Config.ClientName` groups replicas in subscriber views.
+
+`ValidateManifest`, when supplied, receives an immutable `ReleaseManifest`
+after release identity/digest and basic entry checks but before any parameter
+or secret fetch or token-provider call. It can reject an alias/kind/content
+contract without reading an unexpected protected resource. The manifest
+contains only release identity and copied entry metadata; no parameter value,
+secret plaintext, or token. Generated managed bindings install this hook
+automatically.
 
 The `SecretTokenProvider(alias, path)` callback is invoked only for entries
 captured as token-protected or client-bound. Tokens remain local and are sent
@@ -470,11 +503,11 @@ place. A panic in `Commit` is fatal and is never reported as `applied`.
 For an explicit typed decode step without reflection:
 
 ```go
-err = paramstore.RunTypedRelease(ctx, loader,
-    func(snapshot paramstore.ReleaseSnapshot) (RuntimeConfig, error) {
+err = kmsclient.RunTypedRelease(ctx, loader,
+    func(snapshot kmsclient.ReleaseSnapshot) (RuntimeConfig, error) {
         return decodeRuntime(snapshot)
     },
-    func(ctx context.Context, cfg RuntimeConfig) (paramstore.PreparedRelease, error) {
+    func(ctx context.Context, cfg RuntimeConfig) (kmsclient.PreparedRelease, error) {
         return prepareTypedRuntime(ctx, cfg)
     },
 )
@@ -494,19 +527,19 @@ release/schema semantics are documented in
 
 ## Testing against a fake server
 
-`sdk/go/paramstore/paramstoretest` provides an in-process, scriptable fake
+`sdk/go/kmsclient/kmsclienttest` provides an in-process, scriptable fake
 of the gRPC services over `bufconn`, used by the SDK's own tests and
 available to consumers. Values are addressed by namespace + relative key, with
 `*Path` conveniences that take a `/env/app/key` display path:
 
 ```go
-srv, _ := paramstoretest.New()
+srv, _ := kmsclienttest.New()
 defer srv.Close()
 srv.SetParameter("prod/gradethis", "rate-limit", "100")
 srv.SetParameterPath("/prod/gradethis/rate-limit", "100") // equivalent
 srv.SetSecret("prod/gradethis", "stripe-api-key", []byte("sk_test"))
 
-client, _ := paramstore.NewClient(paramstore.Config{
+client, _ := kmsclient.NewClient(kmsclient.Config{
     Namespace:   "prod/gradethis",
     DialOptions: srv.DialOptions(),
 })
@@ -522,7 +555,13 @@ Scripting surface:
 - **Errors:** `SetParameterError(ns, key, err)` / `SetParameterErrorPath`, `SetSecretError` / `SetSecretErrorPath`.
 - **Identity:** `SetIdentity(name, kind, namespace, authMethod)` sets the `WhoAmI` response — pass an empty `namespace` for an unbound identity — to drive namespace discovery and `ErrNoNamespace`.
 - **Inspection:** `LastMetadata(method)` (the incoming gRPC metadata of the most recent call), `PutSecretCalls()`, `Revision()`, `SubscribeCount()`, `SetGetParameterHook(func(displayPath string))` (runs at the start of every `GetParameter`, to inject a concurrent event mid-fetch).
-- **Driving the stream:** `WaitForSubscribe(timeout)` returns a `*Subscription` whose requested namespaces are inspectable via `Namespaces`, `HasNamespace(ns)`, and `NamespaceStrings()`. Push events with `PushSnapshot(rev, params...)` (build params with the `paramstoretest.Param(ns, key, value, version)` / `ParamPath(displayPath, value, version)` helpers), `PushChange(rev, ns, key, changeType, value, version)` / `PushChangePath`, `PushSecretChange(rev, ns, key, changeType, version)` / `PushSecretChangePath`, `SendHeartbeat(rev)`, `WaitAck(timeout)`, and `Kill()` (force a disconnect to exercise reconnect and resume-by-revision).
+- **Driving the stream:** `WaitForSubscribe(timeout)` returns a `*Subscription` whose requested namespaces are inspectable via `Namespaces`, `HasNamespace(ns)`, and `NamespaceStrings()`. Push events with `PushSnapshot(rev, params...)` (build params with the `kmsclienttest.Param(ns, key, value, version)` / `ParamPath(displayPath, value, version)` helpers), `PushChange(rev, ns, key, changeType, value, version)` / `PushChangePath`, `PushSecretChange(rev, ns, key, changeType, version)` / `PushSecretChangePath`, `SendHeartbeat(rev)`, `WaitAck(timeout)`, and `Kill()` (force a disconnect to exercise reconnect and resume-by-revision).
+- **Configuration releases:** store exact values with `SetParameterVersion`
+  and `SetSecretVersion`, install the startup release with
+  `SetActiveRelease`, and publish later candidates with
+  `ActivateConfigurationRelease`. `WaitForReleaseSubscribe` returns a
+  `*ReleaseSubscription` for registration inspection, lifecycle
+  acknowledgements, scripted events, and forced disconnects.
 
 ## What this document does not cover
 

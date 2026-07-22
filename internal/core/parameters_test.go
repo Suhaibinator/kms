@@ -2,6 +2,7 @@ package core
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"testing"
 
@@ -33,6 +34,89 @@ func TestPutParameterValidation(t *testing.T) {
 				t.Fatalf("err = %v, want ErrInvalidArgument", err)
 			}
 		})
+	}
+}
+
+func TestPutParameterJSONRetainsDuplicatePropertyCompatibility(t *testing.T) {
+	ctx := context.Background()
+	s := newTestService(newFakeStore())
+
+	for name, value := range map[string]string{
+		"root":   `{"enabled":true,"enabled":false}`,
+		"nested": `{"outer":{"limit":1,"limit":2}}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			version, _, err := s.PutParameter(ctx, adminPrincipal(), tref("duplicate-"+name), value, "json", "{}")
+			if err != nil {
+				t.Fatalf("PutParameter rejected legacy-compatible duplicate JSON properties: %v", err)
+			}
+			if version != 1 {
+				t.Fatalf("version = %d, want 1", version)
+			}
+		})
+	}
+}
+
+func TestParseJSONParameterRetainsLegacySyntaxAcceptance(t *testing.T) {
+	tests := []struct {
+		name string
+		raw  string
+	}{
+		{name: "object", raw: `{"enabled":true}`},
+		{name: "duplicate root", raw: `{"enabled":true,"enabled":false}`},
+		{name: "duplicate nested", raw: `{"outer":{"limit":1,"limit":2}}`},
+		{name: "large exact integer", raw: `9007199254740993`},
+		{name: "null", raw: `null`},
+		{name: "boolean", raw: `true`},
+		{name: "string", raw: `"value"`},
+		{name: "surrounding whitespace", raw: " \n\t[1,2,3]\r "},
+		{name: "empty", raw: ``},
+		{name: "multiple values", raw: `{} {}`},
+		{name: "trailing junk", raw: `{}x`},
+		{name: "incomplete", raw: `{"enabled":`},
+		{name: "positive float overflow", raw: `1e400`},
+		{name: "negative float overflow", raw: `-1e400`},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			var legacy any
+			legacyErr := json.Unmarshal([]byte(tc.raw), &legacy)
+			_, currentErr := parseParameterValue(tc.raw, "json")
+			if (currentErr == nil) != (legacyErr == nil) {
+				t.Fatalf("acceptance differs from legacy json.Unmarshal: current error = %v, legacy error = %v", currentErr, legacyErr)
+			}
+		})
+	}
+}
+
+func TestManagedParameterSchemaValueRejectsDuplicateJSONProperties(t *testing.T) {
+	for name, value := range map[string]string{
+		"root":                `{"enabled":true,"enabled":false}`,
+		"nested":              `{"outer":{"limit":1,"limit":2}}`,
+		"object inside array": `[{"name":"first","name":"second"}]`,
+		"escaped equivalent":  `{"name":1,"\u006eame":2}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := parameterSchemaValue(value, "json"); err == nil {
+				t.Fatal("managed parameter schema value accepted duplicate JSON properties")
+			}
+		})
+	}
+
+	if _, err := parameterSchemaValue(`{"left":{"name":"first"},"right":{"name":"second"}}`, "json"); err != nil {
+		t.Fatalf("distinct objects reusing a property name were rejected: %v", err)
+	}
+}
+
+func TestManagedParameterSchemaValuePreservesExactNumbers(t *testing.T) {
+	parsed, err := parameterSchemaValue(`{"large":9007199254740993}`, "json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	value, ok := parsed.(map[string]any)["large"].(json.Number)
+	if !ok || value.String() != "9007199254740993" {
+		t.Fatalf("large number = %#v, want exact json.Number", parsed)
 	}
 }
 

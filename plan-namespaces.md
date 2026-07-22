@@ -448,13 +448,13 @@ Frontend (`frontend/`):
 
 ## 11. SDKs
 
-### Go (`sdk/go/paramstore`)
+### Go (`sdk/go/kmsclient`)
 
 ```go
-client, err := paramstore.NewClient(paramstore.Config{
+client, err := kmsclient.NewClient(kmsclient.Config{
     Endpoint: os.Getenv("PARAM_STORE_ENDPOINT"),
     // Preferred: cert-only identity (proof of possession, §7).
-    TLS: paramstore.MTLSFromFiles("app.crt", "app.key", "server-ca.crt"),
+    TLS: kmsclient.MTLSFromFiles("app.crt", "app.key", "server-ca.crt"),
     // Token is optional when a client cert is supplied; required only for
     // token-method identities (and only admitted where the namespace's
     // allowed_auth_methods includes "token").
@@ -463,9 +463,9 @@ client, err := paramstore.NewClient(paramstore.Config{
 })
 
 cfg := Config{
-    StripeAPIKey: paramstore.SecretValue{Key: "stripe-api-key"},
-    RateLimit:    paramstore.ParameterValue{Key: "rate-limit"},          // hot-reloads
-    LogFormat:    paramstore.ParameterValue{Key: "log-format", Static: true},
+    StripeAPIKey: kmsclient.SecretValue{Key: "stripe-api-key"},
+    RateLimit:    kmsclient.ParameterValue{Key: "rate-limit"},          // hot-reloads
+    LogFormat:    kmsclient.ParameterValue{Key: "log-format", Static: true},
 }
 err = client.Resolve(ctx, &cfg)
 ```
@@ -490,7 +490,7 @@ err = client.Resolve(ctx, &cfg)
 - Reconnect/backoff/reconciliation/redaction semantics all carry over.
   Reconciliation pagination is bounded; incomplete scans apply fetched values
   but do not infer deletions.
-- `paramstoretest`: `SetParameter(ns, key, value)` etc.; keep a
+- `kmsclienttest`: `SetParameter(ns, key, value)` etc.; keep a
   `SetParameterPath("/env/app/key", ...)` convenience that splits
   client-side, to keep test call-sites terse.
 
@@ -553,7 +553,7 @@ interceptor + `VerifyClientCertIfGiven`), `internal/server/httpserver`,
 smoke: serve + create namespace + put/get parameter via HTTP, and a
 cert-authenticated gRPC read against an mTLS-only namespace.
 
-**Phase 3 — Go SDK.** `sdk/go/paramstore` (+ `paramstoretest`): Config
+**Phase 3 — Go SDK.** `sdk/go/kmsclient` (+ `kmsclienttest`): Config
 (cert-only identity, optional Token), key resolution, Static flip,
 namespace-wide subscription, WhoAmI discovery, namespace watches,
 reconciliation, README.

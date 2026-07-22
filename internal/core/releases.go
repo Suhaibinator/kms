@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"regexp"
@@ -554,6 +553,9 @@ func releaseDigest(r domain.ConfigurationRelease) (string, error) {
 	return sha256Hex(b), nil
 }
 func parameterSchemaValue(value, contentType string) (any, error) {
+	if contentType == "json" {
+		return decodeStrictJSON(value)
+	}
 	return parseParameterValue(value, contentType)
 }
 func validationAuthError(alias string, err error) domain.ReleaseValidationError {
@@ -571,8 +573,8 @@ func validationReadError(alias string, err error) domain.ReleaseValidationError 
 	return domain.ReleaseValidationError{Alias: alias, Code: code, Message: "referenced resource is unavailable"}
 }
 func compileSchema(raw string) (*jsonschema.Schema, error) {
-	var doc any
-	if err := json.Unmarshal([]byte(raw), &doc); err != nil {
+	doc, err := decodeStrictJSON(raw)
+	if err != nil {
 		return nil, err
 	}
 	if obj, ok := doc.(map[string]any); ok {
@@ -582,6 +584,7 @@ func compileSchema(raw string) (*jsonschema.Schema, error) {
 	}
 	c := jsonschema.NewCompiler()
 	c.DefaultDraft(jsonschema.Draft2020)
+	configureKMSFormats(c, doc)
 	const u = "https://kms.local/configuration-schema.json"
 	if err := c.AddResource(u, doc); err != nil {
 		return nil, err
@@ -625,7 +628,19 @@ func validReleaseState(v string) bool {
 }
 func validRejectCategory(v string) bool {
 	switch v {
-	case domain.ReleaseRejectResolutionFailed, domain.ReleaseRejectTokenUnavailable, domain.ReleaseRejectVersionMismatch, domain.ReleaseRejectDigestMismatch, domain.ReleaseRejectPrepareFailed, domain.ReleaseRejectSuperseded, domain.ReleaseRejectActiveCheck, domain.ReleaseRejectInternal:
+	case domain.ReleaseRejectResolutionFailed,
+		domain.ReleaseRejectTokenUnavailable,
+		domain.ReleaseRejectVersionMismatch,
+		domain.ReleaseRejectDigestMismatch,
+		domain.ReleaseRejectPrepareFailed,
+		domain.ReleaseRejectConfigContractMismatch,
+		domain.ReleaseRejectConfigDecodeFailed,
+		domain.ReleaseRejectConfigValidationFailed,
+		domain.ReleaseRejectDefaultMismatch,
+		domain.ReleaseRejectRestartRequired,
+		domain.ReleaseRejectSuperseded,
+		domain.ReleaseRejectActiveCheck,
+		domain.ReleaseRejectInternal:
 		return true
 	}
 	return false

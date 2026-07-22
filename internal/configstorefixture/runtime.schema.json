@@ -1,0 +1,160 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "database",
+    "runtime"
+  ],
+  "properties": {
+    "database": {
+      "additionalProperties": false,
+      "properties": {
+        "endpoint": {
+          "additionalProperties": false,
+          "properties": {
+            "host": {
+              "type": "string"
+            },
+            "labels": {
+              "anyOf": [
+                {
+                  "additionalProperties": {
+                    "anyOf": [
+                      {
+                        "items": {
+                          "type": "string"
+                        },
+                        "type": "array"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "type": "object"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "ports": {
+              "anyOf": [
+                {
+                  "items": {
+                    "maximum": 65535,
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "zones": {
+              "items": {
+                "type": "string"
+              },
+              "maxItems": 2,
+              "minItems": 2,
+              "type": "array"
+            }
+          },
+          "required": [
+            "host",
+            "ports",
+            "labels",
+            "zones"
+          ],
+          "type": "object"
+        },
+        "max_open": {
+          "anyOf": [
+            {
+              "maximum": 2147483647,
+              "minimum": -2147483648,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "timeout": {
+          "format": "go-duration",
+          "type": "string"
+        }
+      },
+      "required": [
+        "endpoint",
+        "max_open",
+        "timeout"
+      ],
+      "type": "object"
+    },
+    "runtime": {
+      "additionalProperties": false,
+      "properties": {
+        "features": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "payload": {
+          "anyOf": [
+            {
+              "format": "kms-base64",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "thresholds": {
+          "anyOf": [
+            {
+              "additionalProperties": {
+                "maximum": 18446744073709551615,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "window": {
+          "items": {
+            "maximum": 1.7976931348623157e+308,
+            "minimum": -1.7976931348623157e+308,
+            "type": "number"
+          },
+          "maxItems": 2,
+          "minItems": 2,
+          "type": "array"
+        }
+      },
+      "required": [
+        "features",
+        "payload",
+        "thresholds",
+        "window"
+      ],
+      "type": "object"
+    }
+  }
+}

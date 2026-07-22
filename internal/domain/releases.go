@@ -18,14 +18,19 @@ const (
 
 // Bounded rejection categories used by SDK acknowledgements and metrics.
 const (
-	ReleaseRejectResolutionFailed = "resolution_failed"
-	ReleaseRejectTokenUnavailable = "token_unavailable"
-	ReleaseRejectVersionMismatch  = "version_mismatch"
-	ReleaseRejectDigestMismatch   = "digest_mismatch"
-	ReleaseRejectPrepareFailed    = "prepare_failed"
-	ReleaseRejectSuperseded       = "superseded"
-	ReleaseRejectActiveCheck      = "active_check_failed"
-	ReleaseRejectInternal         = "internal"
+	ReleaseRejectResolutionFailed       = "resolution_failed"
+	ReleaseRejectTokenUnavailable       = "token_unavailable"
+	ReleaseRejectVersionMismatch        = "version_mismatch"
+	ReleaseRejectDigestMismatch         = "digest_mismatch"
+	ReleaseRejectPrepareFailed          = "prepare_failed"
+	ReleaseRejectConfigContractMismatch = "config_contract_mismatch"
+	ReleaseRejectConfigDecodeFailed     = "config_decode_failed"
+	ReleaseRejectConfigValidationFailed = "config_validation_failed"
+	ReleaseRejectDefaultMismatch        = "default_mismatch"
+	ReleaseRejectRestartRequired        = "restart_required"
+	ReleaseRejectSuperseded             = "superseded"
+	ReleaseRejectActiveCheck            = "active_check_failed"
+	ReleaseRejectInternal               = "internal"
 )
 
 // Release validation error codes. Messages accompanying these codes must be

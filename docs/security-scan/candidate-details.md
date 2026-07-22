@@ -21,7 +21,7 @@ candidate-ID order.
 
 `CAND-W08-001` · **high** · Traced · confidence 0.98
 
-**Locations:** entrypoint `sdk/go/paramstore/client.go:143` (`NewClient`); root
+**Locations:** entrypoint `sdk/go/kmsclient/client.go:143` (`NewClient`); root
 control `:167`; sink `:170`; credential source `:267` (`withAuth`); plaintext RPC
 `:385`.
 
@@ -46,7 +46,7 @@ accidental network use ✗ (not met)**.
 builder enforcing a TLS 1.2 minimum — it is simply **not the default**. The
 README and docs label nil TLS as development-only, but the scan's position is
 that this is *guidance rather than a runtime opt-in*, and therefore does not
-prevent accidental production use. `go test ./sdk/go/paramstore` passed — that is
+prevent accidental production use. `go test ./sdk/go/kmsclient` passed — that is
 the repository's own baseline suite, not a reproduction of this behaviour.
 
 **Proof gap.** A concrete deployment must actually omit `Config.TLS` **and** place

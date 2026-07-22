@@ -27,10 +27,11 @@ func validateParameterValue(value, contentType string) error {
 	return nil
 }
 
-// parseParameterValue is the canonical content-type conversion used both when
-// writing parameters and when constructing a release's alias-keyed schema
-// document. Binary values remain represented by their base64 text after the
-// encoding has been validated, because JSON Schema has no byte-string type.
+// parseParameterValue is the backward-compatible content-type conversion used
+// when writing parameters. Managed release construction applies its stricter
+// JSON duplicate-property check in parameterSchemaValue. Binary values remain
+// represented by their base64 text after the encoding has been validated,
+// because JSON Schema has no byte-string type.
 func parseParameterValue(value, contentType string) (any, error) {
 	switch contentType {
 	case "string":

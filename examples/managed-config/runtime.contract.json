@@ -1,0 +1,89 @@
+{
+  "format": "kms-config-contract/v1",
+  "source": {
+    "package": "github.com/Suhaibinator/kms/examples/managed-config/config",
+    "type": "Config"
+  },
+  "schema_sha256": "af7d501708d23e1494b16295629087859bda547ea50afa772507c7222aee760b",
+  "groups": [
+    {
+      "alias": "runtime",
+      "kind": "parameter",
+      "content_type": "json",
+      "fields": [
+        "greeting",
+        "request_limit"
+      ]
+    },
+    {
+      "alias": "server",
+      "kind": "parameter",
+      "content_type": "json",
+      "fields": [
+        "listen_address"
+      ]
+    }
+  ],
+  "fields": [
+    {
+      "group": "runtime",
+      "json_name": "greeting",
+      "go_name": "Greeting",
+      "reload": "hot",
+      "encoding": "string",
+      "views": [
+        "request_handler"
+      ]
+    },
+    {
+      "group": "runtime",
+      "json_name": "request_limit",
+      "go_name": "RequestLimit",
+      "reload": "hot",
+      "encoding": "int32",
+      "views": [
+        "request_handler"
+      ]
+    },
+    {
+      "group": "server",
+      "json_name": "listen_address",
+      "go_name": "ListenAddress",
+      "reload": "restart",
+      "encoding": "string",
+      "views": [
+        "http_server"
+      ]
+    }
+  ],
+  "secrets": [
+    {
+      "alias": "api_key",
+      "kind": "secret",
+      "go_name": "APIKey",
+      "reload": "hot",
+      "encoding": "secret",
+      "views": [
+        "request_handler"
+      ]
+    }
+  ],
+  "views": [
+    {
+      "name": "http_server",
+      "method": "HttpServer",
+      "fields": [
+        "server.listen_address"
+      ]
+    },
+    {
+      "name": "request_handler",
+      "method": "RequestHandler",
+      "fields": [
+        "api_key",
+        "runtime.greeting",
+        "runtime.request_limit"
+      ]
+    }
+  ]
+}

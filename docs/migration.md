@@ -57,17 +57,17 @@ code:
 
 ```go
 type Config struct {
-    StripeAPIKey paramstore.SecretValue
-    RateLimit    paramstore.ParameterValue
+    StripeAPIKey kmsclient.SecretValue
+    RateLimit    kmsclient.ParameterValue
 }
 
 func Load(ctx context.Context) (*Config, error) {
-    client, err := paramstore.NewClient(paramstore.Config{
+    client, err := kmsclient.NewClient(kmsclient.Config{
         Endpoint: os.Getenv("PARAM_STORE_ENDPOINT"),
         // Cert-only identity (plan §7): the client certificate authenticates,
         // and the namespace is discovered from the bound identity via WhoAmI.
         // No Token, no Namespace needed here.
-        TLS: paramstore.MTLSFromFiles(
+        TLS: kmsclient.MTLSFromFiles(
             os.Getenv("PARAM_STORE_CLIENT_CERT"),
             os.Getenv("PARAM_STORE_CLIENT_KEY"),
             os.Getenv("PARAM_STORE_SERVER_CA_CERT"), // trusts the operator-provided server cert
@@ -77,13 +77,13 @@ func Load(ctx context.Context) (*Config, error) {
         return nil, err
     }
     cfg := &Config{
-        StripeAPIKey: paramstore.SecretValue{
+        StripeAPIKey: kmsclient.SecretValue{
             Key:     "gradethis-stripe-api-key",    // importer preserves the source prefix
             Token:   os.Getenv("STRIPE_API_KEY_TOKEN"), // per-secret token if the secret requires one (from the import report)
             EnvVar:  "STRIPE_API_KEY",              // env override still wins
             Default: "sk_test_dev_only",            // dev only
         },
-        RateLimit: paramstore.ParameterValue{
+        RateLimit: kmsclient.ParameterValue{
             Key:     "rate-limit",                  // relative
             Default: "100",
             // Hot-reloads by default; read with cfg.RateLimit.Get().
@@ -170,7 +170,7 @@ The Go process replaces manifest watching, parallel ad hoc reads, and apply
 bookkeeping with one loader:
 
 ```go
-loader, err := paramstore.NewReleaseLoader(client, paramstore.ReleaseLoaderConfig{
+loader, err := kmsclient.NewReleaseLoader(client, kmsclient.ReleaseLoaderConfig{
     Name: "runtime",
     SecretTokenProvider: func(alias, path string) (string, bool) {
         token, ok := bootstrapSecretTokens[alias]
@@ -178,8 +178,8 @@ loader, err := paramstore.NewReleaseLoader(client, paramstore.ReleaseLoaderConfi
     },
 })
 if err != nil { return err }
-return loader.Run(ctx, func(ctx context.Context, snapshot paramstore.ReleaseSnapshot) (
-    paramstore.PreparedRelease, error,
+return loader.Run(ctx, func(ctx context.Context, snapshot kmsclient.ReleaseSnapshot) (
+    kmsclient.PreparedRelease, error,
 ) {
     return decodeValidateAndPrepare(ctx, snapshot)
 })
@@ -187,9 +187,11 @@ return loader.Run(ctx, func(ctx context.Context, snapshot paramstore.ReleaseSnap
 
 Python uses `ReleaseLoader(client, ReleaseLoaderConfig(name="runtime", ...))`
 and synchronous `loader.run(prepare)` with the same resolution, cancellation,
-prepare/commit/abort, last-known-good, and acknowledgement guarantees. Both
-SDKs decode explicitly; native releases do not use reflection or generate
-schemas from application types.
+prepare/commit/abort, last-known-good, and acknowledgement guarantees. The
+lower-level Go and Python loaders decode explicitly and do not infer schemas.
+Go applications may instead opt into the additive
+[`kms-config-gen` managed layer](managed-go-configuration.md), which generates
+strict typed bindings and a release schema from an application root type.
 
 Roll back by reactivating any retained immutable version:
 
