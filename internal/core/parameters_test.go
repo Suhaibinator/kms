@@ -18,16 +18,14 @@ func TestPutParameterValidation(t *testing.T) {
 		ref       domain.Ref
 		value, ct string
 	}{
-		"bad env":               {domain.Ref{NS: mkns("PROD", "app"), Key: "p"}, "1", "integer"},
-		"bad key":               {domain.Ref{NS: tns, Key: "/leading"}, "1", "integer"},
-		"unknown content":       {tref("p"), "1", "xml"},
-		"integer not parsing":   {tref("p"), "abc", "integer"},
-		"float not parsing":     {tref("p"), "abc", "float"},
-		"bool not parsing":      {tref("p"), "maybe", "boolean"},
-		"json not valid":        {tref("p"), "{bad", "json"},
-		"json duplicate root":   {tref("p"), `{"enabled":true,"enabled":false}`, "json"},
-		"json duplicate nested": {tref("p"), `{"outer":{"limit":1,"limit":2}}`, "json"},
-		"binary not base64":     {tref("p"), "!!!", "binary"},
+		"bad env":             {domain.Ref{NS: mkns("PROD", "app"), Key: "p"}, "1", "integer"},
+		"bad key":             {domain.Ref{NS: tns, Key: "/leading"}, "1", "integer"},
+		"unknown content":     {tref("p"), "1", "xml"},
+		"integer not parsing": {tref("p"), "abc", "integer"},
+		"float not parsing":   {tref("p"), "abc", "float"},
+		"bool not parsing":    {tref("p"), "maybe", "boolean"},
+		"json not valid":      {tref("p"), "{bad", "json"},
+		"binary not base64":   {tref("p"), "!!!", "binary"},
 	}
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -39,8 +37,80 @@ func TestPutParameterValidation(t *testing.T) {
 	}
 }
 
-func TestParseJSONParameterPreservesExactNumbers(t *testing.T) {
-	parsed, err := parseParameterValue(`{"large":9007199254740993}`, "json")
+func TestPutParameterJSONRetainsDuplicatePropertyCompatibility(t *testing.T) {
+	ctx := context.Background()
+	s := newTestService(newFakeStore())
+
+	for name, value := range map[string]string{
+		"root":   `{"enabled":true,"enabled":false}`,
+		"nested": `{"outer":{"limit":1,"limit":2}}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			version, _, err := s.PutParameter(ctx, adminPrincipal(), tref("duplicate-"+name), value, "json", "{}")
+			if err != nil {
+				t.Fatalf("PutParameter rejected legacy-compatible duplicate JSON properties: %v", err)
+			}
+			if version != 1 {
+				t.Fatalf("version = %d, want 1", version)
+			}
+		})
+	}
+}
+
+func TestParseJSONParameterRetainsLegacySyntaxAcceptance(t *testing.T) {
+	tests := []struct {
+		name string
+		raw  string
+	}{
+		{name: "object", raw: `{"enabled":true}`},
+		{name: "duplicate root", raw: `{"enabled":true,"enabled":false}`},
+		{name: "duplicate nested", raw: `{"outer":{"limit":1,"limit":2}}`},
+		{name: "large exact integer", raw: `9007199254740993`},
+		{name: "null", raw: `null`},
+		{name: "boolean", raw: `true`},
+		{name: "string", raw: `"value"`},
+		{name: "surrounding whitespace", raw: " \n\t[1,2,3]\r "},
+		{name: "empty", raw: ``},
+		{name: "multiple values", raw: `{} {}`},
+		{name: "trailing junk", raw: `{}x`},
+		{name: "incomplete", raw: `{"enabled":`},
+		{name: "positive float overflow", raw: `1e400`},
+		{name: "negative float overflow", raw: `-1e400`},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			var legacy any
+			legacyErr := json.Unmarshal([]byte(tc.raw), &legacy)
+			_, currentErr := parseParameterValue(tc.raw, "json")
+			if (currentErr == nil) != (legacyErr == nil) {
+				t.Fatalf("acceptance differs from legacy json.Unmarshal: current error = %v, legacy error = %v", currentErr, legacyErr)
+			}
+		})
+	}
+}
+
+func TestManagedParameterSchemaValueRejectsDuplicateJSONProperties(t *testing.T) {
+	for name, value := range map[string]string{
+		"root":                `{"enabled":true,"enabled":false}`,
+		"nested":              `{"outer":{"limit":1,"limit":2}}`,
+		"object inside array": `[{"name":"first","name":"second"}]`,
+		"escaped equivalent":  `{"name":1,"\u006eame":2}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := parameterSchemaValue(value, "json"); err == nil {
+				t.Fatal("managed parameter schema value accepted duplicate JSON properties")
+			}
+		})
+	}
+
+	if _, err := parameterSchemaValue(`{"left":{"name":"first"},"right":{"name":"second"}}`, "json"); err != nil {
+		t.Fatalf("distinct objects reusing a property name were rejected: %v", err)
+	}
+}
+
+func TestManagedParameterSchemaValuePreservesExactNumbers(t *testing.T) {
+	parsed, err := parameterSchemaValue(`{"large":9007199254740993}`, "json")
 	if err != nil {
 		t.Fatal(err)
 	}

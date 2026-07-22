@@ -553,6 +553,9 @@ func releaseDigest(r domain.ConfigurationRelease) (string, error) {
 	return sha256Hex(b), nil
 }
 func parameterSchemaValue(value, contentType string) (any, error) {
+	if contentType == "json" {
+		return decodeStrictJSON(value)
+	}
 	return parseParameterValue(value, contentType)
 }
 func validationAuthError(alias string, err error) domain.ReleaseValidationError {
