@@ -10,8 +10,8 @@ import (
 
 // decodeStrictJSON parses one JSON value without rounding numbers through
 // float64 and rejects duplicate object properties at every nesting level.
-// Keeping this lexical check on parameter writes is important because JSON
-// Schema sees an already-decoded object and cannot recover duplicate keys.
+// Keeping this lexical check at managed schema and release-admission boundaries
+// is important because JSON Schema cannot recover duplicate keys after decode.
 func decodeStrictJSON(raw string) (any, error) {
 	decoder := json.NewDecoder(strings.NewReader(raw))
 	decoder.UseNumber()
