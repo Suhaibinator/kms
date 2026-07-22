@@ -74,9 +74,9 @@ func (c *Config) Validate() error {
 	if c.MaxOpen != nil && *c.MaxOpen <= 0 {
 		return errors.New("max_open must be positive")
 	}
-	if len(c.Features) == 0 || len(c.Payload) == 0 || len(c.Thresholds) == 0 {
-		return errors.New("runtime settings are incomplete")
-	}
+	// Collection presence is intentionally unconstrained in this fixture so
+	// integration tests can exercise the distinct valid nil and non-nil-empty
+	// encodings through admission, drift reporting, and restoration.
 	if c.Password.IsZero() || c.RuntimeToken.IsZero() {
 		return errors.New("required secrets are unavailable")
 	}
