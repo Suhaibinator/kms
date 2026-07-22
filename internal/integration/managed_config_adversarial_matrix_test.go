@@ -130,6 +130,22 @@ func (h *adversarialManagedApp) putParameter(key, document string) uint64 {
 	return response.GetVersion()
 }
 
+// seedParameterBypassingWriteValidation is reserved for defense-in-depth
+// integration cases whose documents the public write API correctly rejects.
+// Direct storage seeding models a pre-existing or externally migrated record
+// so the managed schema and generated runtime still see the hostile value.
+func (h *adversarialManagedApp) seedParameterBypassingWriteValidation(key, document string) uint64 {
+	h.t.Helper()
+	version, _, err := h.env.store.PutParameter(h.ctx, domain.Ref{
+		NS:  domain.NamespaceRef{Env: "prod", App: h.app},
+		Key: key,
+	}, document, "json", "{}", "adversarial-integration-seed")
+	if err != nil {
+		h.t.Fatalf("seed parameter %s while bypassing write validation: %v", key, err)
+	}
+	return version
+}
+
 func (h *adversarialManagedApp) putSecret(alias, key, plaintext string) uint64 {
 	h.t.Helper()
 	h.tokenMu.RLock()
@@ -326,13 +342,14 @@ func TestManagedConfigAdversarialSchemaRuntimeParity(t *testing.T) {
 	defaultRuntime := defaultAdversarialRuntimeDocument()
 
 	type parityCase struct {
-		name         string
-		database     string
-		runtime      string
-		schemaValid  bool
-		runtimeApply bool
-		reject       configstore.RejectionCategory
-		check        func(*testing.T, fixturekms.Snapshot)
+		name               string
+		database           string
+		runtime            string
+		runtimeWriteReject codes.Code
+		schemaValid        bool
+		runtimeApply       bool
+		reject             configstore.RejectionCategory
+		check              func(*testing.T, fixturekms.Snapshot)
 	}
 	cases := []parityCase{
 		{name: "default", schemaValid: true, runtimeApply: true},
@@ -416,8 +433,9 @@ func TestManagedConfigAdversarialSchemaRuntimeParity(t *testing.T) {
 		},
 		{
 			name: "float64 overflow", schemaValid: false, runtimeApply: false,
-			runtime: adversarialRuntimeDocument(`["float-overflow"]`, strconv.Quote("AA=="), `{"ok":1}`, `[1.7976931348623159e308,0]`),
-			reject:  configstore.RejectConfigDecodeFailed,
+			runtime:            adversarialRuntimeDocument(`["float-overflow"]`, strconv.Quote("AA=="), `{"ok":1}`, `[1.7976931348623159e308,0]`),
+			runtimeWriteReject: codes.InvalidArgument,
+			reject:             configstore.RejectConfigDecodeFailed,
 		},
 		{
 			name: "float64 underflow rounds consistently", schemaValid: true, runtimeApply: true,
@@ -552,7 +570,20 @@ func TestManagedConfigAdversarialSchemaRuntimeParity(t *testing.T) {
 				runtimeDocument = defaultRuntime
 			}
 			app := newAdversarialManagedApp(t, env, schemaID, schemaVersion, fmt.Sprintf("managed-parity-%02d", i))
-			pins := app.seed(database, runtimeDocument)
+			seedRuntime := runtimeDocument
+			if tc.runtimeWriteReject != codes.OK {
+				seedRuntime = defaultRuntime
+			}
+			pins := app.seed(database, seedRuntime)
+			if tc.runtimeWriteReject != codes.OK {
+				response, err := app.parameters.PutParameter(app.authCtx, &kmsv1.PutParameterRequest{
+					Ref: networkRef("prod", app.app, "groups/runtime"), Value: runtimeDocument, ContentType: "json",
+				})
+				if status.Code(err) != tc.runtimeWriteReject {
+					t.Fatalf("write-layer overflow response=%+v error=%v code=%s, want %s", response, err, status.Code(err), tc.runtimeWriteReject)
+				}
+				pins.runtime = app.seedParameterBypassingWriteValidation("groups/runtime", runtimeDocument)
+			}
 			release, validation := app.createRelease(pins, nil)
 			if validation.GetValid() != tc.schemaValid {
 				t.Fatalf("schema validity = %t errors=%v, want %t", validation.GetValid(), validation.GetErrors(), tc.schemaValid)
