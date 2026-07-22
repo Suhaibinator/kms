@@ -956,6 +956,9 @@ table.data th.mono {
   font-size: 13px;
   color: #ffb3ad;
 }
+.danger-panel .activation-violations {
+  color: var(--text);
+}
 .info-panel {
   background: var(--accent-soft);
   border: 1px solid var(--accent-border);

@@ -11,9 +11,16 @@ import type {
   CreateReleaseRequest,
   ReleaseSubscriberState,
   ReleaseSummary,
+  ReleaseValidationError,
 } from "@/lib/types";
 
 const NO_NS: NamespaceSelection = { env: "", app: "" };
+
+interface ActivationFailure {
+  operation: "Activation" | "Rollback";
+  target: string;
+  violations: ReleaseValidationError[];
+}
 
 function releaseKey(r: ConfigurationRelease): string {
   return `${r.name}@${r.version}`;
@@ -22,6 +29,11 @@ function releaseKey(r: ConfigurationRelease): string {
 function refText(entry: ConfigurationRelease["entries"][number]): string {
   const ns = entry.ref.namespace;
   return displayPath({ env: ns.env, app: ns.app, key: entry.ref.key });
+}
+
+function activationViolations(err: unknown): ReleaseValidationError[] | null {
+  if (!(err instanceof ApiError) || err.code !== "failed_precondition") return null;
+  return err.validationErrors.length > 0 ? err.validationErrors : null;
 }
 
 export default function ReleasesPage() {
@@ -49,6 +61,7 @@ export default function ReleasesPage() {
   const [diffFrom, setDiffFrom] = useState("");
   const [diffTo, setDiffTo] = useState("");
   const [selectedReleaseKey, setSelectedReleaseKey] = useState("");
+  const [activationFailure, setActivationFailure] = useState<ActivationFailure | null>(null);
 
 	const hasNS = Boolean(ns.env && ns.app);
 	const subscriberScope = hasNS && name ? JSON.stringify([ns.env, ns.app, name]) : "";
@@ -60,6 +73,10 @@ export default function ReleasesPage() {
   useEffect(() => {
     if (namespaceError) toast.error(namespaceError, "Failed to load namespaces");
   }, [namespaceError, toast]);
+
+  useEffect(() => {
+    setActivationFailure(null);
+  }, [ns.env, ns.app, name]);
 
 	const refresh = useCallback(async () => {
 		const generation = ++refreshGeneration.current;
@@ -152,6 +169,7 @@ export default function ReleasesPage() {
   }
 
   async function activate(summary: ReleaseSummary) {
+    setActivationFailure(null);
     try {
       let expected = 0;
       try {
@@ -165,19 +183,40 @@ export default function ReleasesPage() {
       toast.success(`Activated ${releaseKey(summary.release)}`);
       await refresh();
     } catch (err) {
+      const violations = activationViolations(err);
+      if (violations) {
+        setActivationFailure({
+          operation: "Activation",
+          target: releaseKey(summary.release),
+          violations,
+        });
+        return;
+      }
       toast.error(err, "Activation failed");
     }
   }
 
   async function rollback() {
     if (!name) return;
+    setActivationFailure(null);
+    let target = name;
     try {
       const active = await api.getActiveRelease(ns, name);
       if (!active.previous_version) throw new Error("No previous release is available");
+      target = `${name}@${active.previous_version}`;
       await api.activateRelease(ns, name, active.previous_version, active.release.version);
       toast.success(`Rolled back ${name} to version ${active.previous_version}`);
       await refresh();
     } catch (err) {
+      const violations = activationViolations(err);
+      if (violations) {
+        setActivationFailure({
+          operation: "Rollback",
+          target,
+          violations,
+        });
+        return;
+      }
       toast.error(err, "Rollback failed");
     }
   }
@@ -263,6 +302,35 @@ export default function ReleasesPage() {
         </div>
         <button className="btn" disabled={!hasNS || !name} onClick={() => void rollback()}>Rollback to previous</button>
       </div>
+
+      {activationFailure ? (
+        <section className="danger-panel mb-16" role="alert" aria-labelledby="activation-failure-title">
+          <div className="between">
+            <div>
+              <h2 id="activation-failure-title" className="text-danger">
+                {activationFailure.operation} blocked for <span className="mono">{activationFailure.target}</span>
+              </h2>
+              <div className="text-sm mt-8">
+                The active release and activation revision were not changed. Resolve the violations below and try again.
+              </div>
+            </div>
+            <button className="btn btn-sm" onClick={() => setActivationFailure(null)}>Dismiss</button>
+          </div>
+          <div className="table-wrap activation-violations mt-12">
+            <table className="data">
+              <thead><tr><th>Alias</th><th>Code</th><th>Schema pointer</th><th>Message</th></tr></thead>
+              <tbody>{activationFailure.violations.map((violation, index) => (
+                <tr key={`${violation.alias}-${violation.code}-${violation.schema_pointer}-${index}`}>
+                  <td className="mono">{violation.alias || <span className="faint">release</span>}</td>
+                  <td><Badge kind="danger">{violation.code}</Badge></td>
+                  <td className="mono">{violation.schema_pointer || <span className="faint">—</span>}</td>
+                  <td>{violation.message}</td>
+                </tr>
+              ))}</tbody>
+            </table>
+          </div>
+        </section>
+      ) : null}
 
       {!hasNS ? (
         <EmptyState title="Choose a namespace">Select a namespace to manage its releases.</EmptyState>
