@@ -3,13 +3,18 @@
 // tests) exercise Client behaviour end to end without a real server: script
 // parameter/secret values by namespace + relative key (or by display path),
 // inject errors, set the WhoAmI identity, drive the Subscribe stream (snapshots,
-// changes, heartbeats), and forcibly drop streams to test reconnect.
+// changes, heartbeats), script exact-version configuration releases and their
+// lifecycle acknowledgements, and forcibly drop streams to test reconnect.
 package paramstoretest
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"errors"
 	"fmt"
 	"net"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -21,6 +26,7 @@ import (
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 	"google.golang.org/grpc/test/bufconn"
+	"google.golang.org/protobuf/proto"
 )
 
 func notFound(display string) error {
@@ -72,25 +78,33 @@ type Server struct {
 	kmsv1.UnimplementedSecretServiceServer
 	kmsv1.UnimplementedWatchServiceServer
 	kmsv1.UnimplementedAdminServiceServer
+	kmsv1.UnimplementedConfigurationReleaseServiceServer
 
 	lis  *bufconn.Listener
 	grpc *grpc.Server
 
-	mu           sync.Mutex
-	params       map[string]*kmsv1.Parameter         // display path -> parameter
-	secretMeta   map[string]*kmsv1.GetSecretResponse // display path -> secret
-	revision     uint64
-	paramErr     map[string]error       // display path -> error
-	secretErr    map[string]error       // display path -> error
-	lastMetadata map[string]metadata.MD // method -> incoming md
-	putSecrets   []PutSecretCall
-	getParamHook func(displayPath string)
-	listHook     func(namespace string)
-	identity     *kmsv1.WhoAmIResponse
+	mu             sync.Mutex
+	params         map[string]*kmsv1.Parameter // display path -> current parameter
+	paramVersions  map[string]map[uint64]*kmsv1.Parameter
+	secretMeta     map[string]*kmsv1.GetSecretResponse // display path -> current secret
+	secretVersions map[string]map[uint64]*kmsv1.GetSecretResponse
+	revision       uint64
+	paramErr       map[string]error       // display path -> error
+	secretErr      map[string]error       // display path -> error
+	lastMetadata   map[string]metadata.MD // method -> incoming md
+	putSecrets     []PutSecretCall
+	getParamHook   func(displayPath string)
+	listHook       func(namespace string)
+	identity       *kmsv1.WhoAmIResponse
 
 	subMu     sync.Mutex
 	subs      []*Subscription
 	subNotify chan *Subscription
+
+	releaseMu        sync.Mutex
+	activeRelease    *kmsv1.GetActiveReleaseResponse
+	releaseSubs      []*ReleaseSubscription
+	releaseSubNotify chan *ReleaseSubscription
 }
 
 // PutSecretCall records a PutSecret invocation for assertions.
@@ -106,20 +120,24 @@ type PutSecretCall struct {
 // New starts a fake server on an in-memory bufconn listener.
 func New() (*Server, error) {
 	s := &Server{
-		lis:          bufconn.Listen(1 << 20),
-		params:       make(map[string]*kmsv1.Parameter),
-		secretMeta:   make(map[string]*kmsv1.GetSecretResponse),
-		paramErr:     make(map[string]error),
-		secretErr:    make(map[string]error),
-		lastMetadata: make(map[string]metadata.MD),
-		identity:     &kmsv1.WhoAmIResponse{Name: "test", Kind: "client"},
-		subNotify:    make(chan *Subscription, 16),
+		lis:              bufconn.Listen(1 << 20),
+		params:           make(map[string]*kmsv1.Parameter),
+		paramVersions:    make(map[string]map[uint64]*kmsv1.Parameter),
+		secretMeta:       make(map[string]*kmsv1.GetSecretResponse),
+		secretVersions:   make(map[string]map[uint64]*kmsv1.GetSecretResponse),
+		paramErr:         make(map[string]error),
+		secretErr:        make(map[string]error),
+		lastMetadata:     make(map[string]metadata.MD),
+		identity:         &kmsv1.WhoAmIResponse{Name: "test", Kind: "client"},
+		subNotify:        make(chan *Subscription, 16),
+		releaseSubNotify: make(chan *ReleaseSubscription, 16),
 	}
 	s.grpc = grpc.NewServer()
 	kmsv1.RegisterParameterServiceServer(s.grpc, s)
 	kmsv1.RegisterSecretServiceServer(s.grpc, s)
 	kmsv1.RegisterWatchServiceServer(s.grpc, s)
 	kmsv1.RegisterAdminServiceServer(s.grpc, s)
+	kmsv1.RegisterConfigurationReleaseServiceServer(s.grpc, s)
 	go func() { _ = s.grpc.Serve(s.lis) }()
 	return s, nil
 }
@@ -142,15 +160,217 @@ func (s *Server) DialOptions() []grpc.DialOption {
 
 // --- scripting API ---------------------------------------------------------
 
+// ReleaseEntrySpec describes one exact resource pin in a scripted
+// configuration release. Path may be relative to ReleaseSpec.Namespace or an
+// absolute /env/app/key display path.
+type ReleaseEntrySpec struct {
+	Alias          string
+	Kind           string
+	Path           string
+	Version        uint64
+	ContentType    string
+	MetadataJSON   string
+	ClientBound    bool
+	HasAccessToken bool
+}
+
+// ReleaseSpec describes an immutable release for ReleaseLoader and generated
+// managed-store tests. Parameter digests and the release digest are calculated
+// by the fake from the exact scripted versions.
+type ReleaseSpec struct {
+	Namespace     string
+	Name          string
+	Version       uint64
+	SchemaID      string
+	SchemaVersion uint64
+	MetadataJSON  string
+	Entries       []ReleaseEntrySpec
+}
+
+// SetActiveRelease builds and installs an active release without notifying
+// existing release streams. Use it before starting a loader.
+func (s *Server) SetActiveRelease(spec ReleaseSpec, activationRevision uint64) (*kmsv1.ConfigurationRelease, error) {
+	release, err := s.buildRelease(spec)
+	if err != nil {
+		return nil, err
+	}
+	s.releaseMu.Lock()
+	s.activeRelease = &kmsv1.GetActiveReleaseResponse{
+		Release:            proto.Clone(release).(*kmsv1.ConfigurationRelease),
+		ActivationRevision: activationRevision,
+	}
+	s.releaseMu.Unlock()
+	return proto.Clone(release).(*kmsv1.ConfigurationRelease), nil
+}
+
+// ActivateConfigurationRelease installs a release and broadcasts one
+// activation event to every current release subscription.
+func (s *Server) ActivateConfigurationRelease(spec ReleaseSpec, activationRevision uint64) (*kmsv1.ConfigurationRelease, error) {
+	release, err := s.SetActiveRelease(spec, activationRevision)
+	if err != nil {
+		return nil, err
+	}
+	s.releaseMu.Lock()
+	var subs []*ReleaseSubscription
+	for _, sub := range s.releaseSubs {
+		registration := sub.Registration
+		if registration.GetName() == spec.Name &&
+			registration.GetNamespace().GetEnv()+"/"+registration.GetNamespace().GetApp() == spec.Namespace {
+			subs = append(subs, sub)
+		}
+	}
+	s.releaseMu.Unlock()
+	for _, sub := range subs {
+		sub.send <- &kmsv1.WatchReleaseEvent{
+			Event: &kmsv1.WatchReleaseEvent_Activation{Activation: &kmsv1.ReleaseActivationEvent{
+				Release: proto.Clone(release).(*kmsv1.ConfigurationRelease),
+			}},
+			Revision: activationRevision,
+		}
+	}
+	return release, nil
+}
+
+func (s *Server) buildRelease(spec ReleaseSpec) (*kmsv1.ConfigurationRelease, error) {
+	if spec.Namespace == "" || spec.Name == "" || spec.Version == 0 || len(spec.Entries) == 0 {
+		return nil, errors.New("paramstoretest: release namespace, name, version, and entries are required")
+	}
+	release := &kmsv1.ConfigurationRelease{
+		Namespace:     nsProto(spec.Namespace),
+		Name:          spec.Name,
+		Version:       spec.Version,
+		SchemaId:      spec.SchemaID,
+		SchemaVersion: spec.SchemaVersion,
+		MetadataJson:  spec.MetadataJSON,
+	}
+	seen := make(map[string]struct{}, len(spec.Entries))
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, item := range spec.Entries {
+		if item.Alias == "" || item.Path == "" || item.Version == 0 {
+			return nil, errors.New("paramstoretest: release entry alias, path, and version are required")
+		}
+		if _, ok := seen[item.Alias]; ok {
+			return nil, fmt.Errorf("paramstoretest: duplicate release alias %q", item.Alias)
+		}
+		seen[item.Alias] = struct{}{}
+		namespace, key := spec.Namespace, item.Path
+		if strings.HasPrefix(item.Path, "/") {
+			namespace, key = splitDisplay(item.Path)
+		}
+		ref := resourceProto(namespace, key)
+		display := displayOf(ref)
+		entry := &kmsv1.ConfigurationReleaseEntry{
+			Alias:          item.Alias,
+			Kind:           item.Kind,
+			Ref:            ref,
+			Version:        item.Version,
+			ContentType:    item.ContentType,
+			MetadataJson:   item.MetadataJSON,
+			ClientBound:    item.ClientBound,
+			HasAccessToken: item.HasAccessToken,
+		}
+		switch item.Kind {
+		case "parameter":
+			parameter := s.paramVersions[display][item.Version]
+			if parameter == nil {
+				return nil, fmt.Errorf("paramstoretest: parameter %s version %d is unavailable", display, item.Version)
+			}
+			if entry.ContentType == "" {
+				entry.ContentType = parameter.GetContentType()
+			}
+			digest := sha256.Sum256([]byte(parameter.GetValue()))
+			entry.ParameterDigest = hex.EncodeToString(digest[:])
+		case "secret":
+			secret := s.secretVersions[display][item.Version]
+			if secret == nil {
+				return nil, fmt.Errorf("paramstoretest: secret %s version %d is unavailable", display, item.Version)
+			}
+			if entry.ContentType == "" {
+				entry.ContentType = secret.GetContentType()
+			}
+		default:
+			// Deliberately allow invalid kinds so callers can test contract
+			// rejection before any resource is fetched.
+		}
+		release.Entries = append(release.Entries, entry)
+	}
+	var err error
+	release.Digest, err = deterministicReleaseDigest(release)
+	if err != nil {
+		return nil, fmt.Errorf("paramstoretest: calculate release digest: %w", err)
+	}
+	return release, nil
+}
+
+func deterministicReleaseDigest(release *kmsv1.ConfigurationRelease) (string, error) {
+	if release == nil || release.GetNamespace() == nil {
+		return "", errors.New("empty release")
+	}
+	projection := &kmsv1.ConfigurationRelease{
+		Namespace:     &kmsv1.NamespaceRef{Env: release.GetNamespace().GetEnv(), App: release.GetNamespace().GetApp()},
+		Name:          release.GetName(),
+		SchemaId:      release.GetSchemaId(),
+		SchemaVersion: release.GetSchemaVersion(),
+		MetadataJson:  release.GetMetadataJson(),
+	}
+	entries := append([]*kmsv1.ConfigurationReleaseEntry(nil), release.GetEntries()...)
+	sort.Slice(entries, func(i, j int) bool { return entries[i].GetAlias() < entries[j].GetAlias() })
+	for _, entry := range entries {
+		if entry == nil || entry.GetRef() == nil || entry.GetRef().GetNamespace() == nil {
+			return "", errors.New("empty release entry")
+		}
+		projection.Entries = append(projection.Entries, &kmsv1.ConfigurationReleaseEntry{
+			Alias:           entry.GetAlias(),
+			Kind:            entry.GetKind(),
+			Ref:             &kmsv1.ResourceRef{Namespace: &kmsv1.NamespaceRef{Env: entry.GetRef().GetNamespace().GetEnv(), App: entry.GetRef().GetNamespace().GetApp()}, Key: entry.GetRef().GetKey()},
+			Version:         entry.GetVersion(),
+			ContentType:     entry.GetContentType(),
+			MetadataJson:    entry.GetMetadataJson(),
+			ParameterDigest: entry.GetParameterDigest(),
+			ClientBound:     entry.GetClientBound(),
+			HasAccessToken:  entry.GetHasAccessToken(),
+		})
+	}
+	b, err := (proto.MarshalOptions{Deterministic: true}).Marshal(projection)
+	if err != nil {
+		return "", err
+	}
+	digest := sha256.Sum256(b)
+	return hex.EncodeToString(digest[:]), nil
+}
+
 // SetParameter stores a parameter value addressed by namespace + relative key
 // and bumps the revision.
 func (s *Server) SetParameter(namespace, key, value string) uint64 {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.revision++
-	ref := resourceProto(namespace, key)
-	s.params[displayOf(ref)] = &kmsv1.Parameter{Ref: ref, Value: value, Version: s.revision}
+	s.setParameterVersionLocked(namespace, key, value, "", s.revision)
 	return s.revision
+}
+
+// SetParameterVersion stores one exact immutable parameter version for release
+// tests. It also makes that version the current value and bumps the fake's
+// global revision. contentType should normally be "json" for managed groups.
+func (s *Server) SetParameterVersion(namespace, key, value, contentType string, version uint64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.revision++
+	s.setParameterVersionLocked(namespace, key, value, contentType, version)
+}
+
+func (s *Server) setParameterVersionLocked(namespace, key, value, contentType string, version uint64) {
+	ref := resourceProto(namespace, key)
+	display := displayOf(ref)
+	p := &kmsv1.Parameter{Ref: ref, Value: value, ContentType: contentType, Version: version}
+	s.params[display] = p
+	versions := s.paramVersions[display]
+	if versions == nil {
+		versions = make(map[uint64]*kmsv1.Parameter)
+		s.paramVersions[display] = versions
+	}
+	versions[version] = p
 }
 
 // SetParameterPath is SetParameter addressed by "/env/app/key" display path.
@@ -179,12 +399,34 @@ func (s *Server) SetSecret(namespace, key string, value []byte) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.revision++
+	s.setSecretVersionLocked(namespace, key, value, "", s.revision)
+}
+
+// SetSecretVersion stores one exact immutable secret version for release
+// tests. The plaintext is copied so later test mutations cannot alter it.
+func (s *Server) SetSecretVersion(namespace, key string, value []byte, contentType string, version uint64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.revision++
+	s.setSecretVersionLocked(namespace, key, value, contentType, version)
+}
+
+func (s *Server) setSecretVersionLocked(namespace, key string, value []byte, contentType string, version uint64) {
 	ref := resourceProto(namespace, key)
-	s.secretMeta[displayOf(ref)] = &kmsv1.GetSecretResponse{
-		Ref:     ref,
-		Version: s.revision,
-		Value:   value,
+	display := displayOf(ref)
+	secret := &kmsv1.GetSecretResponse{
+		Ref:         ref,
+		Version:     version,
+		Value:       append([]byte(nil), value...),
+		ContentType: contentType,
 	}
+	s.secretMeta[display] = secret
+	versions := s.secretVersions[display]
+	if versions == nil {
+		versions = make(map[uint64]*kmsv1.GetSecretResponse)
+		s.secretVersions[display] = versions
+	}
+	versions[version] = secret
 }
 
 // SetSecretPath is SetSecret addressed by display path.
@@ -299,8 +541,11 @@ func (s *Server) GetParameter(ctx context.Context, req *kmsv1.GetParameterReques
 	if err := s.paramErr[display]; err != nil {
 		return nil, err
 	}
-	p, ok := s.params[display]
-	if !ok {
+	p := s.params[display]
+	if req.GetVersion() > 0 {
+		p = s.paramVersions[display][req.GetVersion()]
+	}
+	if p == nil {
 		return nil, notFound(display)
 	}
 	return &kmsv1.GetParameterResponse{Parameter: p}, nil
@@ -347,8 +592,11 @@ func (s *Server) GetSecret(ctx context.Context, req *kmsv1.GetSecretRequest) (*k
 	if err := s.secretErr[display]; err != nil {
 		return nil, err
 	}
-	meta, ok := s.secretMeta[display]
-	if !ok {
+	meta := s.secretMeta[display]
+	if req.GetVersion() > 0 {
+		meta = s.secretVersions[display][req.GetVersion()]
+	}
+	if meta == nil {
 		return nil, notFound(display)
 	}
 	return meta, nil
@@ -384,6 +632,167 @@ func (s *Server) WhoAmI(ctx context.Context, _ *kmsv1.WhoAmIRequest) (*kmsv1.Who
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.identity, nil
+}
+
+// --- ConfigurationReleaseService -----------------------------------------
+
+// GetActiveRelease returns the release installed by SetActiveRelease or
+// ActivateConfigurationRelease.
+func (s *Server) GetActiveRelease(ctx context.Context, req *kmsv1.GetActiveReleaseRequest) (*kmsv1.GetActiveReleaseResponse, error) {
+	s.recordMD(ctx, "GetActiveRelease")
+	s.releaseMu.Lock()
+	defer s.releaseMu.Unlock()
+	active := s.activeRelease
+	if active == nil || active.GetRelease() == nil ||
+		active.GetRelease().GetName() != req.GetName() ||
+		active.GetRelease().GetNamespace().GetEnv() != req.GetNamespace().GetEnv() ||
+		active.GetRelease().GetNamespace().GetApp() != req.GetNamespace().GetApp() {
+		return nil, notFound(req.GetName())
+	}
+	return proto.Clone(active).(*kmsv1.GetActiveReleaseResponse), nil
+}
+
+// WatchRelease captures registrations and acknowledgements and relays events
+// sent through ActivateRelease or the returned ReleaseSubscription handle.
+func (s *Server) WatchRelease(stream kmsv1.ConfigurationReleaseService_WatchReleaseServer) error {
+	s.recordMD(stream.Context(), "WatchRelease")
+	first, err := stream.Recv()
+	if err != nil {
+		return err
+	}
+	registration := first.GetRegister()
+	if registration == nil {
+		return status.Error(codes.InvalidArgument, "first release watch request must register")
+	}
+	md, _ := metadata.FromIncomingContext(stream.Context())
+	sub := &ReleaseSubscription{
+		Registration: proto.Clone(registration).(*kmsv1.ReleaseWatchRegistration),
+		Metadata:     md,
+		send:         make(chan *kmsv1.WatchReleaseEvent, 64),
+		acks:         make(chan *kmsv1.ReleaseAcknowledgement, 64),
+		closeCh:      make(chan struct{}),
+	}
+	s.registerReleaseSub(sub)
+	defer s.unregisterReleaseSub(sub)
+
+	recv := make(chan *kmsv1.WatchReleaseRequest, 1)
+	recvErr := make(chan error, 1)
+	go func() {
+		for {
+			request, recvError := stream.Recv()
+			if recvError != nil {
+				recvErr <- recvError
+				return
+			}
+			recv <- request
+		}
+	}()
+	for {
+		select {
+		case request := <-recv:
+			if ack := request.GetAcknowledgement(); ack != nil {
+				select {
+				case sub.acks <- proto.Clone(ack).(*kmsv1.ReleaseAcknowledgement):
+				default:
+				}
+			}
+		case event := <-sub.send:
+			if err := stream.Send(event); err != nil {
+				return err
+			}
+		case <-sub.closeCh:
+			return status.Error(codes.Unavailable, "release stream closed by test")
+		case err := <-recvErr:
+			return err
+		case <-stream.Context().Done():
+			return stream.Context().Err()
+		}
+	}
+}
+
+func (s *Server) registerReleaseSub(sub *ReleaseSubscription) {
+	s.releaseMu.Lock()
+	s.releaseSubs = append(s.releaseSubs, sub)
+	s.releaseMu.Unlock()
+	select {
+	case s.releaseSubNotify <- sub:
+	default:
+	}
+}
+
+func (s *Server) unregisterReleaseSub(sub *ReleaseSubscription) {
+	s.releaseMu.Lock()
+	defer s.releaseMu.Unlock()
+	for i, existing := range s.releaseSubs {
+		if existing == sub {
+			s.releaseSubs = append(s.releaseSubs[:i], s.releaseSubs[i+1:]...)
+			return
+		}
+	}
+}
+
+// ReleaseSubscribeCount returns the number of open release streams.
+func (s *Server) ReleaseSubscribeCount() int {
+	s.releaseMu.Lock()
+	defer s.releaseMu.Unlock()
+	return len(s.releaseSubs)
+}
+
+// WaitForReleaseSubscribe waits for the next release stream registration.
+func (s *Server) WaitForReleaseSubscribe(timeout time.Duration) (*ReleaseSubscription, error) {
+	select {
+	case sub := <-s.releaseSubNotify:
+		return sub, nil
+	case <-time.After(timeout):
+		return nil, errors.New("timed out waiting for release subscription")
+	}
+}
+
+// ReleaseSubscription is a handle to one open configuration-release stream.
+type ReleaseSubscription struct {
+	Registration *kmsv1.ReleaseWatchRegistration
+	Metadata     metadata.MD
+
+	send    chan *kmsv1.WatchReleaseEvent
+	acks    chan *kmsv1.ReleaseAcknowledgement
+	closeCh chan struct{}
+	closed  sync.Once
+}
+
+// PushSnapshot sends an authoritative release snapshot event.
+func (sub *ReleaseSubscription) PushSnapshot(release *kmsv1.ConfigurationRelease, revision uint64) {
+	sub.send <- &kmsv1.WatchReleaseEvent{
+		Event: &kmsv1.WatchReleaseEvent_Snapshot{Snapshot: &kmsv1.ReleaseSnapshotEvent{
+			Release: proto.Clone(release).(*kmsv1.ConfigurationRelease),
+		}},
+		Revision: revision,
+	}
+}
+
+// PushActivation sends one release activation event without changing the
+// fake's GetActiveRelease response.
+func (sub *ReleaseSubscription) PushActivation(release *kmsv1.ConfigurationRelease, revision uint64) {
+	sub.send <- &kmsv1.WatchReleaseEvent{
+		Event: &kmsv1.WatchReleaseEvent_Activation{Activation: &kmsv1.ReleaseActivationEvent{
+			Release: proto.Clone(release).(*kmsv1.ConfigurationRelease),
+		}},
+		Revision: revision,
+	}
+}
+
+// WaitAcknowledgement returns the next lifecycle acknowledgement.
+func (sub *ReleaseSubscription) WaitAcknowledgement(timeout time.Duration) (*kmsv1.ReleaseAcknowledgement, error) {
+	select {
+	case ack := <-sub.acks:
+		return ack, nil
+	case <-time.After(timeout):
+		return nil, errors.New("timed out waiting for release acknowledgement")
+	}
+}
+
+// Kill forcibly disconnects this release stream.
+func (sub *ReleaseSubscription) Kill() {
+	sub.closed.Do(func() { close(sub.closeCh) })
 }
 
 // --- WatchService ----------------------------------------------------------

@@ -3,7 +3,6 @@ package core
 import (
 	"context"
 	"encoding/base64"
-	"encoding/json"
 	"errors"
 	"strconv"
 	"strings"
@@ -42,11 +41,7 @@ func parseParameterValue(value, contentType string) (any, error) {
 	case "boolean":
 		return strconv.ParseBool(strings.TrimSpace(value))
 	case "json":
-		var decoded any
-		if err := json.Unmarshal([]byte(value), &decoded); err != nil {
-			return nil, err
-		}
-		return decoded, nil
+		return decodeStrictJSON(value)
 	case "binary":
 		if _, err := base64.StdEncoding.DecodeString(value); err != nil {
 			return nil, err

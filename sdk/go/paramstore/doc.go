@@ -9,6 +9,8 @@
 //   - Hot reload of non-secret parameters over the Subscribe stream, with
 //     live [ParameterValue.Get] handles and [ParameterValue.OnChange]
 //     callbacks.
+//   - Atomic multi-resource releases through [ReleaseLoader], with an optional
+//     pre-fetch [ReleaseLoaderConfig.ValidateManifest] contract check.
 //   - TLS / mTLS configuration, per-RPC timeouts, an optional in-memory read
 //     cache, and typed sentinel errors.
 //

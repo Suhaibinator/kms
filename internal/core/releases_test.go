@@ -98,6 +98,23 @@ func TestConfigurationSchemaErrorsAreSanitized(t *testing.T) {
 	}
 }
 
+func TestValidRejectCategoryIncludesManagedConfigurationFailures(t *testing.T) {
+	for _, category := range []string{
+		domain.ReleaseRejectConfigContractMismatch,
+		domain.ReleaseRejectConfigDecodeFailed,
+		domain.ReleaseRejectConfigValidationFailed,
+		domain.ReleaseRejectDefaultMismatch,
+		domain.ReleaseRejectRestartRequired,
+	} {
+		if !validRejectCategory(category) {
+			t.Errorf("validRejectCategory(%q) = false", category)
+		}
+	}
+	if validRejectCategory("field_specific_unbounded_category") {
+		t.Fatal("validRejectCategory accepted an unbounded category")
+	}
+}
+
 func TestConfigurationReleaseSecretPinSurvivesLaterAttributeChanges(t *testing.T) {
 	ctx := context.Background()
 	st, err := storage.Open(filepath.Join(t.TempDir(), "kms.db"))

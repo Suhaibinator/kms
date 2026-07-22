@@ -2,6 +2,7 @@ package core
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"testing"
 
@@ -17,14 +18,16 @@ func TestPutParameterValidation(t *testing.T) {
 		ref       domain.Ref
 		value, ct string
 	}{
-		"bad env":             {domain.Ref{NS: mkns("PROD", "app"), Key: "p"}, "1", "integer"},
-		"bad key":             {domain.Ref{NS: tns, Key: "/leading"}, "1", "integer"},
-		"unknown content":     {tref("p"), "1", "xml"},
-		"integer not parsing": {tref("p"), "abc", "integer"},
-		"float not parsing":   {tref("p"), "abc", "float"},
-		"bool not parsing":    {tref("p"), "maybe", "boolean"},
-		"json not valid":      {tref("p"), "{bad", "json"},
-		"binary not base64":   {tref("p"), "!!!", "binary"},
+		"bad env":               {domain.Ref{NS: mkns("PROD", "app"), Key: "p"}, "1", "integer"},
+		"bad key":               {domain.Ref{NS: tns, Key: "/leading"}, "1", "integer"},
+		"unknown content":       {tref("p"), "1", "xml"},
+		"integer not parsing":   {tref("p"), "abc", "integer"},
+		"float not parsing":     {tref("p"), "abc", "float"},
+		"bool not parsing":      {tref("p"), "maybe", "boolean"},
+		"json not valid":        {tref("p"), "{bad", "json"},
+		"json duplicate root":   {tref("p"), `{"enabled":true,"enabled":false}`, "json"},
+		"json duplicate nested": {tref("p"), `{"outer":{"limit":1,"limit":2}}`, "json"},
+		"binary not base64":     {tref("p"), "!!!", "binary"},
 	}
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -33,6 +36,17 @@ func TestPutParameterValidation(t *testing.T) {
 				t.Fatalf("err = %v, want ErrInvalidArgument", err)
 			}
 		})
+	}
+}
+
+func TestParseJSONParameterPreservesExactNumbers(t *testing.T) {
+	parsed, err := parseParameterValue(`{"large":9007199254740993}`, "json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	value, ok := parsed.(map[string]any)["large"].(json.Number)
+	if !ok || value.String() != "9007199254740993" {
+		t.Fatalf("large number = %#v, want exact json.Number", parsed)
 	}
 }
 

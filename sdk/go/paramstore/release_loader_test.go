@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"strings"
@@ -26,11 +27,13 @@ type releaseLoaderServer struct {
 	kmsv1.UnimplementedSecretServiceServer
 	kmsv1.UnimplementedConfigurationReleaseServiceServer
 
-	mu          sync.Mutex
-	active      *kmsv1.GetActiveReleaseResponse
-	parameters  map[string]*kmsv1.Parameter
-	secrets     map[string]*kmsv1.GetSecretResponse
-	secretToken string
+	mu               sync.Mutex
+	active           *kmsv1.GetActiveReleaseResponse
+	parameters       map[string]*kmsv1.Parameter
+	secrets          map[string]*kmsv1.GetSecretResponse
+	secretToken      string
+	parameterFetches int
+	secretFetches    int
 
 	watchEvents chan *kmsv1.WatchReleaseEvent
 	watchKills  chan struct{}
@@ -56,6 +59,7 @@ func testResource(key string) *kmsv1.ResourceRef {
 func (s *releaseLoaderServer) GetParameter(_ context.Context, req *kmsv1.GetParameterRequest) (*kmsv1.GetParameterResponse, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.parameterFetches++
 	p := s.parameters[req.GetRef().GetKey()]
 	if p == nil {
 		return nil, status.Error(5, "not found")
@@ -66,6 +70,7 @@ func (s *releaseLoaderServer) GetParameter(_ context.Context, req *kmsv1.GetPara
 func (s *releaseLoaderServer) GetSecret(ctx context.Context, req *kmsv1.GetSecretRequest) (*kmsv1.GetSecretResponse, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.secretFetches++
 	md, _ := metadata.FromIncomingContext(ctx)
 	if values := md.Get(mdSecretToken); len(values) > 0 {
 		s.secretToken = values[0]
@@ -194,6 +199,15 @@ func (p *testPreparedRelease) Commit() {
 }
 func (p *testPreparedRelease) Abort() { p.aborts.Add(1) }
 
+type testReleaseRejectionError struct {
+	category string
+	detail   string
+}
+
+func (e *testReleaseRejectionError) Error() string { return e.detail }
+
+func (e *testReleaseRejectionError) ReleaseRejectionCategory() string { return e.category }
+
 func TestReleaseLoaderResolvesRedactsCommitsAndAcknowledges(t *testing.T) {
 	server := newReleaseLoaderServer()
 	release := testRelease(7, 42, `{"enabled":true}`)
@@ -306,6 +320,241 @@ func TestReleaseLoaderResolvesRedactsCommitsAndAcknowledges(t *testing.T) {
 	cancel()
 	if err := <-runErr; err != context.Canceled {
 		t.Fatalf("Run error = %v, want context.Canceled", err)
+	}
+}
+
+func TestReleaseLoaderValidatesImmutableManifestBeforeResolution(t *testing.T) {
+	server := newReleaseLoaderServer()
+	release := testRelease(8, 43, `{"enabled":true}`)
+	release.SchemaId = "app/runtime"
+	release.SchemaVersion = 3
+	release.MetadataJson = `{"owner":"config"}`
+	release.Digest, _ = deterministicReleaseDigest(release)
+	server.setActive(release, 43)
+	server.parameters["settings"] = &kmsv1.Parameter{Ref: testResource("settings"), Value: `{"enabled":true}`, ContentType: "json", Version: 8}
+	server.secrets["password"] = &kmsv1.GetSecretResponse{Ref: testResource("password"), Version: 8, Value: []byte("secret"), ContentType: "text/plain"}
+
+	client := newReleaseTestClient(t, server)
+	var validated atomic.Bool
+	var tokenLookups atomic.Int32
+	loader, err := NewReleaseLoader(client, ReleaseLoaderConfig{
+		Name: "runtime",
+		ValidateManifest: func(ctx context.Context, manifest ReleaseManifest) error {
+			if ctx == nil {
+				t.Error("manifest validator context is nil")
+			}
+			if manifest.Namespace() != "prod/app" || manifest.Name() != "runtime" || manifest.Version() != 8 || manifest.ActivationRevision() != 43 {
+				t.Errorf("unexpected manifest identity: %s", manifest)
+			}
+			if manifest.SchemaID() != "app/runtime" || manifest.SchemaVersion() != 3 || manifest.Digest() != release.GetDigest() || manifest.MetadataJSON() != `{"owner":"config"}` {
+				t.Errorf("unexpected manifest metadata: %s", manifest)
+			}
+			entries := manifest.Entries()
+			if len(entries) != 2 {
+				t.Errorf("manifest entries = %v", entries)
+			}
+			settings, ok := manifest.Entry("settings")
+			if !ok || settings.Kind != "parameter" || settings.Path != "/prod/app/settings" || settings.Version != 8 {
+				t.Errorf("settings entry = %+v, %t", settings, ok)
+			}
+			delete(entries, "password")
+			settings.Alias = "mutated"
+			entries["settings"] = settings
+			unchanged, ok := manifest.Entry("settings")
+			if !ok || unchanged.Alias != "settings" || len(manifest.Entries()) != 2 {
+				t.Error("manifest accessors exposed mutable internal state")
+			}
+			server.mu.Lock()
+			parameterFetches, secretFetches := server.parameterFetches, server.secretFetches
+			server.mu.Unlock()
+			if parameterFetches != 0 || secretFetches != 0 || tokenLookups.Load() != 0 {
+				t.Errorf("resolution ran before validation: parameter=%d secret=%d token=%d", parameterFetches, secretFetches, tokenLookups.Load())
+			}
+			validated.Store(true)
+			return nil
+		},
+		SecretTokenProvider: func(string, string) (string, bool) {
+			if !validated.Load() {
+				t.Error("secret token provider ran before manifest validation")
+			}
+			tokenLookups.Add(1)
+			return "token", true
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	prepared := &testPreparedRelease{done: make(chan struct{})}
+	ctx, cancel := context.WithCancel(context.Background())
+	runErr := make(chan error, 1)
+	go func() {
+		runErr <- loader.Run(ctx, func(context.Context, ReleaseSnapshot) (PreparedRelease, error) {
+			return prepared, nil
+		})
+	}()
+	select {
+	case <-prepared.done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for release commit")
+	}
+	server.mu.Lock()
+	parameterFetches, secretFetches := server.parameterFetches, server.secretFetches
+	server.mu.Unlock()
+	if !validated.Load() || parameterFetches != 1 || secretFetches != 1 || tokenLookups.Load() != 1 {
+		t.Fatalf("validation/resolution counts = validated:%t parameter:%d secret:%d token:%d", validated.Load(), parameterFetches, secretFetches, tokenLookups.Load())
+	}
+	cancel()
+	if err := <-runErr; err != context.Canceled {
+		t.Fatalf("Run error = %v, want context.Canceled", err)
+	}
+}
+
+func TestReleaseLoaderChecksBasicEntriesBeforeManifestValidator(t *testing.T) {
+	server := newReleaseLoaderServer()
+	release := testRelease(9, 44, "settings")
+	release.Entries[1].Kind = "unsupported"
+	release.Digest, _ = deterministicReleaseDigest(release)
+	server.setActive(release, 44)
+	client := newReleaseTestClient(t, server)
+	var validatorCalled atomic.Bool
+	var tokenLookups atomic.Int32
+	loader, err := NewReleaseLoader(client, ReleaseLoaderConfig{
+		Name: "runtime",
+		ValidateManifest: func(context.Context, ReleaseManifest) error {
+			validatorCalled.Store(true)
+			return nil
+		},
+		SecretTokenProvider: func(string, string) (string, bool) {
+			tokenLookups.Add(1)
+			return "token", true
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = loader.Run(context.Background(), func(context.Context, ReleaseSnapshot) (PreparedRelease, error) {
+		t.Error("prepare ran for a malformed release entry")
+		return nil, nil
+	})
+	if err == nil || err.Error() != "paramstore: configuration release candidate rejected (resolution_failed)" {
+		t.Fatalf("Run error = %v", err)
+	}
+	server.mu.Lock()
+	parameterFetches, secretFetches := server.parameterFetches, server.secretFetches
+	server.mu.Unlock()
+	if validatorCalled.Load() || parameterFetches != 0 || secretFetches != 0 || tokenLookups.Load() != 0 {
+		t.Fatalf("invalid entries reached validation/resolution: validator=%t parameter=%d secret=%d token=%d", validatorCalled.Load(), parameterFetches, secretFetches, tokenLookups.Load())
+	}
+}
+
+func TestReleaseLoaderClassifiedManifestFailurePreventsResolutionAndRedactsCause(t *testing.T) {
+	server := newReleaseLoaderServer()
+	release := testRelease(9, 44, "settings")
+	server.setActive(release, 44)
+	client := newReleaseTestClient(t, server)
+	classified := &testReleaseRejectionError{
+		category: ReleaseRejectConfigContractMismatch,
+		detail:   "contract mismatch with sensitive local detail",
+	}
+	var tokenLookups atomic.Int32
+	var prepareCalled atomic.Bool
+	loader, err := NewReleaseLoader(client, ReleaseLoaderConfig{
+		Name: "runtime",
+		ValidateManifest: func(context.Context, ReleaseManifest) error {
+			return classified
+		},
+		SecretTokenProvider: func(string, string) (string, bool) {
+			tokenLookups.Add(1)
+			return "token", true
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = loader.Run(context.Background(), func(context.Context, ReleaseSnapshot) (PreparedRelease, error) {
+		prepareCalled.Store(true)
+		return nil, nil
+	})
+	if err == nil {
+		t.Fatal("Run unexpectedly succeeded")
+	}
+	wantText := "paramstore: configuration release candidate rejected (config_contract_mismatch)"
+	for _, rendered := range []string{err.Error(), fmt.Sprintf("%v", err), fmt.Sprintf("%+v", err), fmt.Sprintf("%#v", err)} {
+		if rendered != wantText || strings.Contains(rendered, classified.detail) {
+			t.Errorf("candidate error was not fixed/redacted: %q", rendered)
+		}
+	}
+	var recovered *testReleaseRejectionError
+	if errors.As(err, &recovered) || errors.Is(err, classified) {
+		t.Fatalf("classified manifest cause escaped loader boundary: %#v", recovered)
+	}
+	server.mu.Lock()
+	parameterFetches, secretFetches := server.parameterFetches, server.secretFetches
+	server.mu.Unlock()
+	if parameterFetches != 0 || secretFetches != 0 || tokenLookups.Load() != 0 || prepareCalled.Load() {
+		t.Fatalf("rejected manifest triggered resolution/preparation: parameter=%d secret=%d token=%d prepare=%t", parameterFetches, secretFetches, tokenLookups.Load(), prepareCalled.Load())
+	}
+	if status := loader.Status(); status.LastFailureCategory != ReleaseRejectConfigContractMismatch {
+		t.Fatalf("status = %+v", status)
+	}
+}
+
+func TestReleaseLoaderClassifiesOnlyAllowedPreparationErrors(t *testing.T) {
+	tests := []struct {
+		name         string
+		cause        error
+		wantCategory string
+	}{
+		{
+			name:         "classified default mismatch",
+			cause:        &testReleaseRejectionError{category: ReleaseRejectDefaultMismatch, detail: "default mismatch sensitive detail"},
+			wantCategory: ReleaseRejectDefaultMismatch,
+		},
+		{
+			name:         "ordinary error",
+			cause:        errors.New("ordinary preparation error with secret plaintext"),
+			wantCategory: ReleaseRejectPrepareFailed,
+		},
+		{
+			name:         "unbounded category",
+			cause:        &testReleaseRejectionError{category: "field_name_from_user", detail: "invalid category sensitive detail"},
+			wantCategory: ReleaseRejectPrepareFailed,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server := newReleaseLoaderServer()
+			release := testRelease(10, 45, "settings")
+			server.setActive(release, 45)
+			server.parameters["settings"] = &kmsv1.Parameter{Ref: testResource("settings"), Value: "settings", ContentType: "json", Version: 10}
+			server.secrets["password"] = &kmsv1.GetSecretResponse{Ref: testResource("password"), Version: 10, Value: []byte("secret"), ContentType: "text/plain"}
+			client := newReleaseTestClient(t, server)
+			loader, err := NewReleaseLoader(client, ReleaseLoaderConfig{
+				Name:                "runtime",
+				SecretTokenProvider: func(string, string) (string, bool) { return "token", true },
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			err = loader.Run(context.Background(), func(context.Context, ReleaseSnapshot) (PreparedRelease, error) {
+				return nil, tt.cause
+			})
+			if err == nil {
+				t.Fatal("Run unexpectedly succeeded")
+			}
+			wantText := fmt.Sprintf("paramstore: configuration release candidate rejected (%s)", tt.wantCategory)
+			for _, rendered := range []string{err.Error(), fmt.Sprintf("%+v", err), fmt.Sprintf("%#v", err)} {
+				if rendered != wantText || strings.Contains(rendered, tt.cause.Error()) {
+					t.Errorf("candidate error was not fixed/redacted: %q", rendered)
+				}
+			}
+			if errors.Is(err, tt.cause) {
+				t.Fatal("preparation cause was exposed through Unwrap")
+			}
+			if status := loader.Status(); status.LastFailureCategory != tt.wantCategory {
+				t.Fatalf("status = %+v", status)
+			}
+		})
 	}
 }
 

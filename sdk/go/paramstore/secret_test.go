@@ -68,6 +68,30 @@ func TestSecretRedactionInStruct(t *testing.T) {
 	}
 }
 
+func TestSecretCloneDeepCopiesPlaintextAndPreservesMetadata(t *testing.T) {
+	original := Secret{
+		value:       []byte("secret"),
+		path:        "/prod/app/password",
+		version:     17,
+		contentType: "text/plain",
+	}
+	clone := original.Clone()
+
+	original.value[0] = 'S'
+	if got := clone.StringValue(); got != "secret" {
+		t.Fatalf("clone plaintext changed with original: %q", got)
+	}
+	clone.value[1] = 'E'
+	if got := original.StringValue(); got != "Secret" {
+		t.Fatalf("original plaintext changed with clone: %q", got)
+	}
+	if clone.Path() != original.Path() || clone.Version() != original.Version() || clone.ContentType() != original.ContentType() {
+		t.Fatalf("clone metadata = (%q, %d, %q), want (%q, %d, %q)",
+			clone.Path(), clone.Version(), clone.ContentType(),
+			original.Path(), original.Version(), original.ContentType())
+	}
+}
+
 func TestSecretValueRedaction(t *testing.T) {
 	sv := SecretValue{Key: "x", Default: leak}
 	// Init via default so it holds plaintext.

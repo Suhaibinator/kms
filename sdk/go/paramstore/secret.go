@@ -41,6 +41,14 @@ func (s Secret) Version() uint64 { return s.version }
 // ContentType returns the declared content type of the secret, if known.
 func (s Secret) ContentType() string { return s.contentType }
 
+// Clone returns an independent copy of the Secret. The plaintext buffer is
+// deep-copied while the immutable path, version, and content-type metadata are
+// preserved.
+func (s Secret) Clone() Secret {
+	s.value = append([]byte(nil), s.value...)
+	return s
+}
+
 // IsZero reports whether the Secret carries no plaintext.
 func (s Secret) IsZero() bool { return len(s.value) == 0 }
 

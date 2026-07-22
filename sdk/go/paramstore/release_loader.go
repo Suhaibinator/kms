@@ -23,14 +23,19 @@ const (
 	ReleaseStateApplied  = "applied"
 	ReleaseStateRejected = "rejected"
 
-	ReleaseRejectResolutionFailed = "resolution_failed"
-	ReleaseRejectTokenUnavailable = "token_unavailable"
-	ReleaseRejectVersionMismatch  = "version_mismatch"
-	ReleaseRejectDigestMismatch   = "digest_mismatch"
-	ReleaseRejectPrepareFailed    = "prepare_failed"
-	ReleaseRejectSuperseded       = "superseded"
-	ReleaseRejectActiveCheck      = "active_check_failed"
-	ReleaseRejectInternal         = "internal"
+	ReleaseRejectResolutionFailed       = "resolution_failed"
+	ReleaseRejectTokenUnavailable       = "token_unavailable"
+	ReleaseRejectVersionMismatch        = "version_mismatch"
+	ReleaseRejectDigestMismatch         = "digest_mismatch"
+	ReleaseRejectPrepareFailed          = "prepare_failed"
+	ReleaseRejectConfigContractMismatch = "config_contract_mismatch"
+	ReleaseRejectConfigDecodeFailed     = "config_decode_failed"
+	ReleaseRejectConfigValidationFailed = "config_validation_failed"
+	ReleaseRejectDefaultMismatch        = "default_mismatch"
+	ReleaseRejectRestartRequired        = "restart_required"
+	ReleaseRejectSuperseded             = "superseded"
+	ReleaseRejectActiveCheck            = "active_check_failed"
+	ReleaseRejectInternal               = "internal"
 
 	defaultReleaseReconcileInterval = time.Minute
 	defaultReleaseFetchConcurrency  = 16
@@ -40,6 +45,11 @@ const (
 // client-bound key share. It is called only for release entries marked as
 // token-protected or client-bound.
 type SecretTokenProvider func(alias, path string) (token string, ok bool)
+
+// ValidateReleaseManifestFunc validates unresolved release identity and entry
+// metadata. It runs before any pinned parameter or secret is fetched and before
+// SecretTokenProvider is called.
+type ValidateReleaseManifestFunc func(context.Context, ReleaseManifest) error
 
 // ReleaseLoaderConfig configures a high-level configuration release loader.
 type ReleaseLoaderConfig struct {
@@ -51,6 +61,10 @@ type ReleaseLoaderConfig struct {
 	// SecretTokenProvider supplies locally held credentials for protected
 	// secret entries. Tokens are sent only to the corresponding GetSecret RPC.
 	SecretTokenProvider SecretTokenProvider
+	// ValidateManifest optionally validates the immutable unresolved manifest.
+	// It runs after release identity, digest, and basic entry validation, but
+	// before any resource fetch or secret-token lookup.
+	ValidateManifest ValidateReleaseManifestFunc
 	// MaxConcurrentFetches bounds parallel pinned resource reads. Values <= 0
 	// use 16; values above 256 are rejected.
 	MaxConcurrentFetches int
@@ -376,6 +390,9 @@ func (l *ReleaseLoader) processCandidate(
 	prepared, prepareErr := prepare(ctx, snapshot)
 	if prepareErr != nil || prepared == nil {
 		category = ReleaseRejectPrepareFailed
+		if classifiedCategory, ok := releaseRejectionCategory(prepareErr); ok {
+			category = classifiedCategory
+		}
 		if ctx.Err() != nil {
 			category = ReleaseRejectSuperseded
 		}
@@ -447,8 +464,67 @@ func sameActiveCandidate(want, got releaseCandidate) bool {
 		want.release.GetDigest() == got.release.GetDigest()
 }
 
+type releaseRejectionCategorizer interface {
+	ReleaseRejectionCategory() string
+}
+
+type releaseCandidateError struct {
+	category string
+}
+
+func (e *releaseCandidateError) Error() string {
+	return fmt.Sprintf("paramstore: configuration release candidate rejected (%s)", e.category)
+}
+
+// Format keeps diagnostic formatting on the same fixed, bounded text even for
+// verbs such as %+v and %#v that might otherwise reflect the wrapped cause.
+func (e *releaseCandidateError) Format(f fmt.State, verb rune) {
+	if verb == 'q' {
+		_, _ = fmt.Fprintf(f, "%q", e.Error())
+		return
+	}
+	_, _ = fmt.Fprint(f, e.Error())
+}
+
+// Candidate causes are deliberately discarded. Even a categorized application
+// error may wrap validation text containing resolved secret material. Higher
+// level APIs that promise a typed local error must preserve it independently
+// rather than routing it through the loader's acknowledgement/error boundary.
 func loaderCandidateError(category string) error {
-	return fmt.Errorf("paramstore: configuration release candidate rejected (%s)", category)
+	return &releaseCandidateError{category: category}
+}
+
+func releaseRejectionCategory(err error) (string, bool) {
+	if err == nil {
+		return "", false
+	}
+	var classified releaseRejectionCategorizer
+	if !errors.As(err, &classified) {
+		return "", false
+	}
+	category := classified.ReleaseRejectionCategory()
+	return category, validReleaseRejectionCategory(category)
+}
+
+func validReleaseRejectionCategory(category string) bool {
+	switch category {
+	case ReleaseRejectResolutionFailed,
+		ReleaseRejectTokenUnavailable,
+		ReleaseRejectVersionMismatch,
+		ReleaseRejectDigestMismatch,
+		ReleaseRejectPrepareFailed,
+		ReleaseRejectConfigContractMismatch,
+		ReleaseRejectConfigDecodeFailed,
+		ReleaseRejectConfigValidationFailed,
+		ReleaseRejectDefaultMismatch,
+		ReleaseRejectRestartRequired,
+		ReleaseRejectSuperseded,
+		ReleaseRejectActiveCheck,
+		ReleaseRejectInternal:
+		return true
+	default:
+		return false
+	}
 }
 
 func (l *ReleaseLoader) resolveCandidate(ctx context.Context, ns namespaceRef, candidate releaseCandidate) (ReleaseSnapshot, string, error) {
@@ -466,6 +542,22 @@ func (l *ReleaseLoader) resolveCandidate(ctx context.Context, ns namespaceRef, c
 	entries := release.GetEntries()
 	if len(entries) == 0 {
 		return ReleaseSnapshot{}, ReleaseRejectResolutionFailed, errors.New("release has no entries")
+	}
+	manifest, err := newReleaseManifest(release, candidate)
+	if err != nil {
+		return ReleaseSnapshot{}, ReleaseRejectResolutionFailed, err
+	}
+	if l.cfg.ValidateManifest != nil {
+		if validateErr := l.cfg.ValidateManifest(ctx, manifest); validateErr != nil {
+			category := ReleaseRejectPrepareFailed
+			if classifiedCategory, ok := releaseRejectionCategory(validateErr); ok {
+				category = classifiedCategory
+			}
+			return ReleaseSnapshot{}, category, validateErr
+		}
+	}
+	if ctx.Err() != nil {
+		return ReleaseSnapshot{}, ReleaseRejectSuperseded, ctx.Err()
 	}
 	jobs := make(chan *kmsv1.ConfigurationReleaseEntry)
 	results := make(chan resolvedReleaseEntry, len(entries))
@@ -508,23 +600,19 @@ func (l *ReleaseLoader) resolveCandidate(ctx context.Context, ns namespaceRef, c
 	}
 
 	snapshot := ReleaseSnapshot{
-		namespace:          release.GetNamespace().GetEnv() + "/" + release.GetNamespace().GetApp(),
-		name:               release.GetName(),
-		version:            release.GetVersion(),
-		activationRevision: candidate.revision,
-		schemaID:           release.GetSchemaId(),
-		schemaVersion:      release.GetSchemaVersion(),
-		digest:             release.GetDigest(),
-		metadataJSON:       release.GetMetadataJson(),
-		entries:            make(map[string]ReleaseEntryMetadata, len(entries)),
+		namespace:          manifest.Namespace(),
+		name:               manifest.Name(),
+		version:            manifest.Version(),
+		activationRevision: manifest.ActivationRevision(),
+		schemaID:           manifest.SchemaID(),
+		schemaVersion:      manifest.SchemaVersion(),
+		digest:             manifest.Digest(),
+		metadataJSON:       manifest.MetadataJSON(),
+		entries:            manifest.Entries(),
 		parameters:         make(map[string]ReleaseParameter),
 		secrets:            make(map[string]Secret),
 	}
 	for item := range results {
-		if _, exists := snapshot.entries[item.entry.Alias]; exists {
-			return ReleaseSnapshot{}, ReleaseRejectResolutionFailed, errors.New("duplicate alias")
-		}
-		snapshot.entries[item.entry.Alias] = item.entry
 		if item.parameter != nil {
 			snapshot.parameters[item.entry.Alias] = *item.parameter
 		}
@@ -533,6 +621,31 @@ func (l *ReleaseLoader) resolveCandidate(ctx context.Context, ns namespaceRef, c
 		}
 	}
 	return snapshot, "", nil
+}
+
+func newReleaseManifest(release *kmsv1.ConfigurationRelease, candidate releaseCandidate) (ReleaseManifest, error) {
+	manifest := ReleaseManifest{
+		namespace:          release.GetNamespace().GetEnv() + "/" + release.GetNamespace().GetApp(),
+		name:               release.GetName(),
+		version:            release.GetVersion(),
+		activationRevision: candidate.revision,
+		schemaID:           release.GetSchemaId(),
+		schemaVersion:      release.GetSchemaVersion(),
+		digest:             release.GetDigest(),
+		metadataJSON:       release.GetMetadataJson(),
+		entries:            make(map[string]ReleaseEntryMetadata, len(release.GetEntries())),
+	}
+	for _, entry := range release.GetEntries() {
+		metadata, err := releaseEntryMetadata(entry)
+		if err != nil {
+			return ReleaseManifest{}, err
+		}
+		if _, exists := manifest.entries[metadata.Alias]; exists {
+			return ReleaseManifest{}, errors.New("duplicate release entry alias")
+		}
+		manifest.entries[metadata.Alias] = metadata
+	}
+	return manifest, nil
 }
 
 // deterministicReleaseDigest mirrors the server's immutable protobuf
@@ -575,13 +688,15 @@ func deterministicReleaseDigest(release *kmsv1.ConfigurationRelease) (string, er
 	return hex.EncodeToString(digest[:]), nil
 }
 
-func (l *ReleaseLoader) resolveEntry(ctx context.Context, entry *kmsv1.ConfigurationReleaseEntry) (resolvedReleaseEntry, string, error) {
-	var out resolvedReleaseEntry
+func releaseEntryMetadata(entry *kmsv1.ConfigurationReleaseEntry) (ReleaseEntryMetadata, error) {
 	if entry == nil || entry.GetRef() == nil || entry.GetRef().GetNamespace() == nil || entry.GetAlias() == "" || entry.GetVersion() == 0 {
-		return out, ReleaseRejectResolutionFailed, errors.New("invalid release entry")
+		return ReleaseEntryMetadata{}, errors.New("invalid release entry")
+	}
+	if entry.GetKind() != "parameter" && entry.GetKind() != "secret" {
+		return ReleaseEntryMetadata{}, errors.New("unknown release entry kind")
 	}
 	r := refFromProto(entry.GetRef())
-	out.entry = ReleaseEntryMetadata{
+	return ReleaseEntryMetadata{
 		Alias:           entry.GetAlias(),
 		Kind:            entry.GetKind(),
 		Path:            r.display(),
@@ -591,7 +706,17 @@ func (l *ReleaseLoader) resolveEntry(ctx context.Context, entry *kmsv1.Configura
 		ParameterDigest: entry.GetParameterDigest(),
 		ClientBound:     entry.GetClientBound(),
 		HasAccessToken:  entry.GetHasAccessToken(),
+	}, nil
+}
+
+func (l *ReleaseLoader) resolveEntry(ctx context.Context, entry *kmsv1.ConfigurationReleaseEntry) (resolvedReleaseEntry, string, error) {
+	var out resolvedReleaseEntry
+	metadata, err := releaseEntryMetadata(entry)
+	if err != nil {
+		return out, ReleaseRejectResolutionFailed, err
 	}
+	r := refFromProto(entry.GetRef())
+	out.entry = metadata
 
 	switch entry.GetKind() {
 	case "parameter":
