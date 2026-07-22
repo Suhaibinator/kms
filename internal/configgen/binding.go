@@ -240,8 +240,11 @@ func (r *bindingRenderer) renderPrepare() {
 	r.line("\t\treturn configstore.PreparedCandidate{}, configstore.Reject(configstore.RejectConfigValidationFailed, fmt.Errorf(%s, err))", strconv.Quote("validate KMS configuration: %w"))
 	r.line("\t}")
 	r.line("\teffectiveDefaults := cloneRoot(s.defaults)")
-	for _, field := range r.model.Secrets {
-		r.line("\teffectiveDefaults.%s = candidate.%s.Clone()", field.GoName, field.GoName)
+	for secretIndex, field := range r.model.Secrets {
+		// Validate the candidate and effective defaults from independent clones
+		// of the same fetched plaintext. Application validation may mutate its
+		// receiver, including Secret.Value() buffers.
+		r.line("\teffectiveDefaults.%s = secret%d.Clone()", field.GoName, secretIndex)
 	}
 	r.line("\tif err := effectiveDefaults.Validate(); err != nil {")
 	r.line("\t\treturn configstore.PreparedCandidate{}, configstore.Reject(configstore.RejectConfigValidationFailed, fmt.Errorf(%s, err))", strconv.Quote("validate effective application defaults: %w"))
@@ -255,8 +258,8 @@ func (r *bindingRenderer) renderPrepare() {
 			continue
 		}
 		h := r.helperByType[field.Type.GoType]
-		r.line("\tif !equalValue%d(s.defaults.%s, candidate.%s) {", h, field.GoName, field.GoName)
-		r.line("\t\tdifferences = append(differences, configstore.FieldDifference{Path: %s, Expected: reportValue%d(s.defaults.%s), Actual: reportValue%d(candidate.%s)})", strconv.Quote(field.canonicalName()), h, field.GoName, h, field.GoName)
+		r.line("\tif !equalValue%d(effectiveDefaults.%s, candidate.%s) {", h, field.GoName, field.GoName)
+		r.line("\t\tdifferences = append(differences, configstore.FieldDifference{Path: %s, Expected: reportValue%d(effectiveDefaults.%s), Actual: reportValue%d(candidate.%s)})", strconv.Quote(field.canonicalName()), h, field.GoName, h, field.GoName)
 		r.line("\t}")
 	}
 	r.line("\trestartRequired := make([]string, 0)")

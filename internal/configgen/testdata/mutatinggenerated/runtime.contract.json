@@ -1,0 +1,52 @@
+{
+  "format": "kms-config-contract/v1",
+  "source": {
+    "package": "github.com/Suhaibinator/kms/internal/configgen/testdata/mutating",
+    "type": "Config"
+  },
+  "schema_sha256": "872d017d50906224ea76ae7d4e63087f5214eda3927cad6d985d2b577162f0bc",
+  "groups": [
+    {
+      "alias": "runtime",
+      "kind": "parameter",
+      "content_type": "json",
+      "fields": [
+        "name"
+      ]
+    }
+  ],
+  "fields": [
+    {
+      "group": "runtime",
+      "json_name": "name",
+      "go_name": "Name",
+      "reload": "hot",
+      "encoding": "string",
+      "views": [
+        "worker"
+      ]
+    }
+  ],
+  "secrets": [
+    {
+      "alias": "token",
+      "kind": "secret",
+      "go_name": "Token",
+      "reload": "hot",
+      "encoding": "secret",
+      "views": [
+        "worker"
+      ]
+    }
+  ],
+  "views": [
+    {
+      "name": "worker",
+      "method": "Worker",
+      "fields": [
+        "runtime.name",
+        "token"
+      ]
+    }
+  ]
+}

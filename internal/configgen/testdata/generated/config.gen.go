@@ -121,7 +121,7 @@ func (s *Store) prepare(ctx context.Context, snapshot paramstore.ReleaseSnapshot
 		return configstore.PreparedCandidate{}, configstore.Reject(configstore.RejectConfigValidationFailed, fmt.Errorf("validate KMS configuration: %w", err))
 	}
 	effectiveDefaults := cloneRoot(s.defaults)
-	effectiveDefaults.Password = candidate.Password.Clone()
+	effectiveDefaults.Password = secret0.Clone()
 	if err := effectiveDefaults.Validate(); err != nil {
 		return configstore.PreparedCandidate{}, configstore.Reject(configstore.RejectConfigValidationFailed, fmt.Errorf("validate effective application defaults: %w", err))
 	}
@@ -129,20 +129,20 @@ func (s *Store) prepare(ctx context.Context, snapshot paramstore.ReleaseSnapshot
 	candidate = cloneRoot(candidate)
 	effectiveDefaults = cloneRoot(effectiveDefaults)
 	differences := make([]configstore.FieldDifference, 0)
-	if !equalValue0(s.defaults.Endpoint, candidate.Endpoint) {
-		differences = append(differences, configstore.FieldDifference{Path: "database.endpoint", Expected: reportValue0(s.defaults.Endpoint), Actual: reportValue0(candidate.Endpoint)})
+	if !equalValue0(effectiveDefaults.Endpoint, candidate.Endpoint) {
+		differences = append(differences, configstore.FieldDifference{Path: "database.endpoint", Expected: reportValue0(effectiveDefaults.Endpoint), Actual: reportValue0(candidate.Endpoint)})
 	}
-	if !equalValue6(s.defaults.Timeout, candidate.Timeout) {
-		differences = append(differences, configstore.FieldDifference{Path: "database.timeout", Expected: reportValue6(s.defaults.Timeout), Actual: reportValue6(candidate.Timeout)})
+	if !equalValue6(effectiveDefaults.Timeout, candidate.Timeout) {
+		differences = append(differences, configstore.FieldDifference{Path: "database.timeout", Expected: reportValue6(effectiveDefaults.Timeout), Actual: reportValue6(candidate.Timeout)})
 	}
-	if !equalValue7(s.defaults.Limit, candidate.Limit) {
-		differences = append(differences, configstore.FieldDifference{Path: "rate_limits.limit", Expected: reportValue7(s.defaults.Limit), Actual: reportValue7(candidate.Limit)})
+	if !equalValue7(effectiveDefaults.Limit, candidate.Limit) {
+		differences = append(differences, configstore.FieldDifference{Path: "rate_limits.limit", Expected: reportValue7(effectiveDefaults.Limit), Actual: reportValue7(candidate.Limit)})
 	}
-	if !equalValue8(s.defaults.Payload, candidate.Payload) {
-		differences = append(differences, configstore.FieldDifference{Path: "rate_limits.payload", Expected: reportValue8(s.defaults.Payload), Actual: reportValue8(candidate.Payload)})
+	if !equalValue8(effectiveDefaults.Payload, candidate.Payload) {
+		differences = append(differences, configstore.FieldDifference{Path: "rate_limits.payload", Expected: reportValue8(effectiveDefaults.Payload), Actual: reportValue8(candidate.Payload)})
 	}
-	if !equalValue9(s.defaults.Ratio, candidate.Ratio) {
-		differences = append(differences, configstore.FieldDifference{Path: "rate_limits.ratio", Expected: reportValue9(s.defaults.Ratio), Actual: reportValue9(candidate.Ratio)})
+	if !equalValue9(effectiveDefaults.Ratio, candidate.Ratio) {
+		differences = append(differences, configstore.FieldDifference{Path: "rate_limits.ratio", Expected: reportValue9(effectiveDefaults.Ratio), Actual: reportValue9(candidate.Ratio)})
 	}
 	restartRequired := make([]string, 0)
 	active := s.active.Load()

@@ -133,8 +133,8 @@ func (s *Store) prepare(ctx context.Context, snapshot paramstore.ReleaseSnapshot
 		return configstore.PreparedCandidate{}, configstore.Reject(configstore.RejectConfigValidationFailed, fmt.Errorf("validate KMS configuration: %w", err))
 	}
 	effectiveDefaults := cloneRoot(s.defaults)
-	effectiveDefaults.Password = candidate.Password.Clone()
-	effectiveDefaults.RuntimeToken = candidate.RuntimeToken.Clone()
+	effectiveDefaults.Password = secret0.Clone()
+	effectiveDefaults.RuntimeToken = secret1.Clone()
 	if err := effectiveDefaults.Validate(); err != nil {
 		return configstore.PreparedCandidate{}, configstore.Reject(configstore.RejectConfigValidationFailed, fmt.Errorf("validate effective application defaults: %w", err))
 	}
@@ -142,26 +142,26 @@ func (s *Store) prepare(ctx context.Context, snapshot paramstore.ReleaseSnapshot
 	candidate = cloneRoot(candidate)
 	effectiveDefaults = cloneRoot(effectiveDefaults)
 	differences := make([]configstore.FieldDifference, 0)
-	if !equalValue0(s.defaults.Endpoint, candidate.Endpoint) {
-		differences = append(differences, configstore.FieldDifference{Path: "database.endpoint", Expected: reportValue0(s.defaults.Endpoint), Actual: reportValue0(candidate.Endpoint)})
+	if !equalValue0(effectiveDefaults.Endpoint, candidate.Endpoint) {
+		differences = append(differences, configstore.FieldDifference{Path: "database.endpoint", Expected: reportValue0(effectiveDefaults.Endpoint), Actual: reportValue0(candidate.Endpoint)})
 	}
-	if !equalValue7(s.defaults.MaxOpen, candidate.MaxOpen) {
-		differences = append(differences, configstore.FieldDifference{Path: "database.max_open", Expected: reportValue7(s.defaults.MaxOpen), Actual: reportValue7(candidate.MaxOpen)})
+	if !equalValue7(effectiveDefaults.MaxOpen, candidate.MaxOpen) {
+		differences = append(differences, configstore.FieldDifference{Path: "database.max_open", Expected: reportValue7(effectiveDefaults.MaxOpen), Actual: reportValue7(candidate.MaxOpen)})
 	}
-	if !equalValue9(s.defaults.Timeout, candidate.Timeout) {
-		differences = append(differences, configstore.FieldDifference{Path: "database.timeout", Expected: reportValue9(s.defaults.Timeout), Actual: reportValue9(candidate.Timeout)})
+	if !equalValue9(effectiveDefaults.Timeout, candidate.Timeout) {
+		differences = append(differences, configstore.FieldDifference{Path: "database.timeout", Expected: reportValue9(effectiveDefaults.Timeout), Actual: reportValue9(candidate.Timeout)})
 	}
-	if !equalValue10(s.defaults.Features, candidate.Features) {
-		differences = append(differences, configstore.FieldDifference{Path: "runtime.features", Expected: reportValue10(s.defaults.Features), Actual: reportValue10(candidate.Features)})
+	if !equalValue10(effectiveDefaults.Features, candidate.Features) {
+		differences = append(differences, configstore.FieldDifference{Path: "runtime.features", Expected: reportValue10(effectiveDefaults.Features), Actual: reportValue10(candidate.Features)})
 	}
-	if !equalValue11(s.defaults.Payload, candidate.Payload) {
-		differences = append(differences, configstore.FieldDifference{Path: "runtime.payload", Expected: reportValue11(s.defaults.Payload), Actual: reportValue11(candidate.Payload)})
+	if !equalValue11(effectiveDefaults.Payload, candidate.Payload) {
+		differences = append(differences, configstore.FieldDifference{Path: "runtime.payload", Expected: reportValue11(effectiveDefaults.Payload), Actual: reportValue11(candidate.Payload)})
 	}
-	if !equalValue12(s.defaults.Thresholds, candidate.Thresholds) {
-		differences = append(differences, configstore.FieldDifference{Path: "runtime.thresholds", Expected: reportValue12(s.defaults.Thresholds), Actual: reportValue12(candidate.Thresholds)})
+	if !equalValue12(effectiveDefaults.Thresholds, candidate.Thresholds) {
+		differences = append(differences, configstore.FieldDifference{Path: "runtime.thresholds", Expected: reportValue12(effectiveDefaults.Thresholds), Actual: reportValue12(candidate.Thresholds)})
 	}
-	if !equalValue14(s.defaults.Window, candidate.Window) {
-		differences = append(differences, configstore.FieldDifference{Path: "runtime.window", Expected: reportValue14(s.defaults.Window), Actual: reportValue14(candidate.Window)})
+	if !equalValue14(effectiveDefaults.Window, candidate.Window) {
+		differences = append(differences, configstore.FieldDifference{Path: "runtime.window", Expected: reportValue14(effectiveDefaults.Window), Actual: reportValue14(candidate.Window)})
 	}
 	restartRequired := make([]string, 0)
 	active := s.active.Load()

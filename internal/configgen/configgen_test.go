@@ -214,6 +214,36 @@ func TestGenerateSecretOnlyRootHasValidEmptySchema(t *testing.T) {
 	}
 }
 
+func TestGeneratedDefaultComparisonUsesValidatedDefaults(t *testing.T) {
+	root := repoRoot(t)
+	artifacts, err := Generate(context.Background(), Options{
+		Dir: root, Package: "./internal/configgen/testdata/mutating", Type: "Config", BindingPackage: "mutatinggenerated",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(artifacts.Binding, []byte("if !equalValue0(effectiveDefaults.Name, candidate.Name)")) {
+		t.Fatal("generated default drift comparison bypasses the validated effective defaults")
+	}
+	if bytes.Contains(artifacts.Binding, []byte("if !equalValue0(s.defaults.Name, candidate.Name)")) {
+		t.Fatal("generated default drift comparison uses the original unvalidated defaults")
+	}
+	if !bytes.Contains(artifacts.Binding, []byte("effectiveDefaults.Token = secret0.Clone()")) {
+		t.Fatal("effective defaults do not receive an independent clone of the raw resolved secret")
+	}
+	if bytes.Contains(artifacts.Binding, []byte("effectiveDefaults.Token = candidate.Token.Clone()")) {
+		t.Fatal("effective defaults receive secret bytes after candidate validation may have mutated them")
+	}
+	err = Verify(OutputPaths{
+		Binding:  filepath.Join(root, "internal/configgen/testdata/mutatinggenerated/config.gen.go"),
+		Schema:   filepath.Join(root, "internal/configgen/testdata/mutatinggenerated/runtime.schema.json"),
+		Contract: filepath.Join(root, "internal/configgen/testdata/mutatinggenerated/runtime.contract.json"),
+	}, artifacts)
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestGenerateRejectsProgramRootPackage(t *testing.T) {
 	_, err := Generate(context.Background(), Options{
 		Dir: repoRoot(t), Package: "./internal/configgen/testdata/mainconfig", Type: "Config", BindingPackage: "binding",
