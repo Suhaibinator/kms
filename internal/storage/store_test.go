@@ -23,9 +23,14 @@ import (
 
 func newStore(t *testing.T) *SQLStore {
 	t.Helper()
-	st, err := Open(filepath.Join(t.TempDir(), "kms.db"))
+	return newStoreWithOptions(t, Options{})
+}
+
+func newStoreWithOptions(t *testing.T, opts Options) *SQLStore {
+	t.Helper()
+	st, err := OpenWithOptions(filepath.Join(t.TempDir(), "kms.db"), opts)
 	if err != nil {
-		t.Fatalf("Open: %v", err)
+		t.Fatalf("OpenWithOptions: %v", err)
 	}
 	t.Cleanup(func() { _ = st.Close() })
 	return st
@@ -2858,7 +2863,12 @@ func TestLimitClamping(t *testing.T) {
 // ---- concurrency ----------------------------------------------------------
 
 func TestConcurrentPutParameterNoLostUpdates(t *testing.T) {
-	st := newStore(t)
+	// This test exercises version and label integrity under heavy contention,
+	// not the production default's five-second lock-wait budget. Race and
+	// coverage instrumentation can starve one of the pooled SQLite writers long
+	// enough to exhaust that default on a loaded runner before its transaction
+	// begins, so give the integrity stress a larger but still bounded budget.
+	st := newStoreWithOptions(t, Options{BusyTimeout: 30 * time.Second})
 	ctx := context.Background()
 	seedNS(t, st, "prod", "app")
 	r := ref("prod", "app", "hot")
