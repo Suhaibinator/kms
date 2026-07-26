@@ -29,6 +29,11 @@ frontend:
 		echo ">> skipping frontend build: $(FRONTEND)/package.json not found"; \
 		echo "   (the Go build embeds frontend/out; a placeholder is served until the UI is built)"; \
 	fi
+	@# `next build` wipes frontend/out, taking the tracked .gitkeep with it.
+	@# That file is what makes the //go:embed directive resolve on a fresh
+	@# clone before this target has ever run, so put it back — otherwise the
+	@# build leaves the working tree with a spurious deletion staged.
+	@mkdir -p $(FRONTEND_OUT) && touch $(FRONTEND_OUT)/.gitkeep
 
 # Compile the Go binary, embedding whatever is in frontend/out.
 backend:
