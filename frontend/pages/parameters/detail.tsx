@@ -12,12 +12,15 @@ import {
   Field,
   JsonView,
   KeyValue,
-  Loading,
   PageHeader,
+  PageTitle,
+  Skeleton,
   Spinner,
+  TableSkeleton,
 } from "@/components/ui";
 import { ConfirmDialog, Modal } from "@/components/Modal";
 import CopyButton from "@/components/CopyButton";
+import { Icon } from "@/components/icons";
 
 export default function ParameterDetailPage() {
   const router = useRouter();
@@ -133,12 +136,56 @@ export default function ParameterDetailPage() {
     ? `/parameters?env=${encodeURIComponent(env)}&app=${encodeURIComponent(app)}`
     : "/parameters";
 
-  if (!ready || loading) return <Loading label="Loading parameter…" />;
+  // The heading and card frames are known from the URL alone, so they render
+  // immediately and only the values fill in — no full-page spinner swap.
+  if (!ready || loading) {
+    return (
+      <>
+        <PageHeader
+          documentTitle={hasRef ? displayPath(ref) : "Parameter"}
+          title={
+            hasRef ? <span className="mono">{displayPath(ref)}</span> : "Parameter"
+          }
+          subtitle={
+            <Link href={backLink} className="text-sm">
+              ← {hasRef ? displayNamespace(ref) : "Parameters"}
+            </Link>
+          }
+        />
+        <div className="card">
+          <div className="card-title">Current value</div>
+          <Skeleton height={72} />
+        </div>
+        <div className="card">
+          <div className="card-title">Metadata</div>
+          <Skeleton height={96} />
+        </div>
+        <div className="card">
+          <div className="card-title">Version history</div>
+          <TableSkeleton
+            headers={["Version", "State", "Created by", "Created"]}
+            rows={3}
+          />
+        </div>
+      </>
+    );
+  }
   if (!hasRef) {
     return (
-      <EmptyState title="No parameter specified">
-        Provide ?env=, ?app=, and ?key= query parameters.
-      </EmptyState>
+      <>
+        <PageTitle title="Parameter" />
+        <EmptyState
+          icon={<Icon.parameter size={20} />}
+          title="No parameter specified"
+          actions={
+            <Link className="btn" href="/parameters">
+              Browse parameters
+            </Link>
+          }
+        >
+          Provide ?env=, ?app=, and ?key= query parameters.
+        </EmptyState>
+      </>
     );
   }
   if (notFound || !meta) {
@@ -152,7 +199,7 @@ export default function ParameterDetailPage() {
             </Link>
           }
         />
-        <EmptyState title="Not found">
+        <EmptyState icon={<Icon.parameter size={20} />} title="Not found">
           No parameter exists at <span className="mono">{displayPath(ref)}</span>.
         </EmptyState>
       </>
@@ -162,6 +209,7 @@ export default function ParameterDetailPage() {
   return (
     <>
       <PageHeader
+        documentTitle={displayPath(ref)}
         title={<span className="mono">{displayPath(ref)}</span>}
         subtitle={
           <Link href={backLink} className="text-sm">
@@ -234,7 +282,7 @@ export default function ParameterDetailPage() {
       <div className="card">
         <div className="card-title">Version history</div>
         {meta.versions.length === 0 ? (
-          <EmptyState title="No versions" />
+          <EmptyState icon={<Icon.parameter size={20} />} title="No versions" />
         ) : (
           <div className="table-wrap">
             <table className="data">

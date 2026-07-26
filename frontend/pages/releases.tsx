@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import NamespacePicker, { type NamespaceSelection } from "@/components/NamespacePicker";
-import { Badge, EmptyState, Loading, PageHeader } from "@/components/ui";
+import { Badge, EmptyState, PageHeader, TableSkeleton } from "@/components/ui";
+import { Icon } from "@/components/icons";
 import { useToast } from "@/context/ToastContext";
 import { api, ApiError } from "@/lib/api";
 import { displayPath } from "@/lib/format";
@@ -333,9 +334,17 @@ export default function ReleasesPage() {
       ) : null}
 
       {!hasNS ? (
-        <EmptyState title="Choose a namespace">Select a namespace to manage its releases.</EmptyState>
-      ) : loading ? <Loading /> : releases.length === 0 ? (
-        <EmptyState title="No releases found">Create an immutable release using the definition editor below.</EmptyState>
+        <EmptyState icon={<Icon.namespace size={20} />} title="Choose a namespace">
+          Select a namespace to manage its releases.
+        </EmptyState>
+      ) : loading ? (
+        <TableSkeleton
+          headers={["Release", "State", "Schema", "Entries", "Digest", "Actions"]}
+        />
+      ) : releases.length === 0 ? (
+        <EmptyState icon={<Icon.parameter size={20} />} title="No releases found">
+          Create an immutable release using the definition editor below.
+        </EmptyState>
       ) : (
         <div className="table-wrap card-table mb-16">
           <table className="data">

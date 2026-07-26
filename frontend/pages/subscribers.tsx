@@ -3,7 +3,8 @@ import { api } from "@/lib/api";
 import type { NamespaceRef, Subscriber } from "@/lib/types";
 import { useToast } from "@/context/ToastContext";
 import { formatRelative, formatUnixMs } from "@/lib/format";
-import { Badge, EmptyState, Loading, PageHeader } from "@/components/ui";
+import { Badge, EmptyState, PageHeader, TableSkeleton } from "@/components/ui";
+import { Icon } from "@/components/icons";
 
 const REFRESH_MS = 5000;
 
@@ -121,9 +122,23 @@ export default function SubscribersPage() {
       </div>
 
       {initialLoading ? (
-        <Loading />
+        <TableSkeleton
+          headers={[
+            "Client",
+            "Identity",
+            "Namespaces",
+            "Remote address",
+            "Connected",
+            "Last heartbeat",
+            "Applied revision",
+          ]}
+          rows={4}
+        />
       ) : subscribers.length === 0 ? (
-        <EmptyState title="No applications are currently subscribed">
+        <EmptyState
+          icon={<Icon.subscribers size={20} />}
+          title="No applications are currently subscribed"
+        >
           Live subscribers appear here once an SDK client connects.
         </EmptyState>
       ) : (

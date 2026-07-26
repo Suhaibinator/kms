@@ -5,7 +5,16 @@ import { PARAMETER_CONTENT_TYPES, type Parameter } from "@/lib/types";
 import { useToast } from "@/context/ToastContext";
 import { useNamespaces, useQueryParams } from "@/lib/hooks";
 import { formatUnixMs, labelEntries } from "@/lib/format";
-import { Badge, EmptyState, Field, Loading, PageHeader, Pagination, Spinner } from "@/components/ui";
+import {
+  Badge,
+  EmptyState,
+  Field,
+  PageHeader,
+  Pagination,
+  Spinner,
+  TableSkeleton,
+} from "@/components/ui";
+import { Icon } from "@/components/icons";
 import { ConfirmDialog, Modal } from "@/components/Modal";
 import NamespacePicker, { type NamespaceSelection } from "@/components/NamespacePicker";
 
@@ -245,13 +254,32 @@ export default function ParametersPage() {
       </form>
 
       {!hasNs ? (
-        <EmptyState title="Choose a namespace">
+        <EmptyState
+          icon={<Icon.namespace size={20} />}
+          title="Choose a namespace"
+        >
           Pick an environment and application above to list its parameters.
         </EmptyState>
       ) : loading ? (
-        <Loading />
+        <TableSkeleton
+          headers={["Key", "Version", "Type", "Labels", "Created"]}
+        />
       ) : rows.length === 0 ? (
-        <EmptyState title="No parameters found">
+        <EmptyState
+          icon={<Icon.parameter size={20} />}
+          title="No parameters found"
+          actions={
+            prefix ? (
+              <button className="btn" onClick={clearFilter}>
+                Clear filter
+              </button>
+            ) : (
+              <button className="btn btn-primary" onClick={openCreate}>
+                New parameter
+              </button>
+            )
+          }
+        >
           {prefix
             ? "No parameters match this key prefix."
             : `No parameters in ${ns.env}/${ns.app} yet.`}

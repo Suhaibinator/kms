@@ -3,7 +3,7 @@ import { useEffect, useState } from "react";
 import { useAuth } from "@/context/AuthContext";
 import { useToast } from "@/context/ToastContext";
 import { getToken } from "@/lib/api";
-import { Spinner } from "@/components/ui";
+import { PageTitle, Spinner } from "@/components/ui";
 
 export default function LoginPage() {
   const router = useRouter();
@@ -42,6 +42,7 @@ export default function LoginPage() {
 
   return (
     <div className="auth-wrap">
+      <PageTitle title="Sign in" />
       <div className="auth-card">
         <div className="auth-brand">
           <div className="logo">K</div>

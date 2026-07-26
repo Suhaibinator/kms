@@ -4,7 +4,16 @@ import type { AuthMethod, CertBundle, Identity, IdentityCert, IdentityKind } fro
 import { useToast } from "@/context/ToastContext";
 import { useNamespaces } from "@/lib/hooks";
 import { displayNamespace, formatUnixMs } from "@/lib/format";
-import { Badge, EmptyState, Field, Loading, PageHeader, Pagination, Spinner } from "@/components/ui";
+import {
+  Badge,
+  EmptyState,
+  Field,
+  PageHeader,
+  Pagination,
+  Spinner,
+  TableSkeleton,
+} from "@/components/ui";
+import { Icon } from "@/components/icons";
 import { ConfirmDialog, Modal } from "@/components/Modal";
 import NamespacePicker, { type NamespaceSelection } from "@/components/NamespacePicker";
 import CopyButton from "@/components/CopyButton";
@@ -277,9 +286,26 @@ export default function IdentitiesPage() {
       </div>
 
       {loading ? (
-        <Loading />
+        <TableSkeleton
+          headers={[
+            "Name",
+            "Kind",
+            "Namespace",
+            "Credentials",
+            "Status",
+            "Created",
+          ]}
+        />
       ) : identities.length === 0 ? (
-        <EmptyState title="No identities yet">
+        <EmptyState
+          icon={<Icon.identity size={20} />}
+          title="No identities yet"
+          actions={
+            <button className="btn btn-primary" onClick={openCreate}>
+              New identity
+            </button>
+          }
+        >
           Create an admin or client identity to issue a token or certificate.
         </EmptyState>
       ) : (
@@ -524,7 +550,12 @@ export default function IdentitiesPage() {
             </div>
 
             {(certsTarget.certs ?? []).length === 0 ? (
-              <EmptyState title="No certificates issued" />
+              <EmptyState
+                icon={<Icon.identity size={20} />}
+                title="No certificates issued"
+              >
+                Issue one above to let this identity authenticate over mTLS.
+              </EmptyState>
             ) : (
               <div className="table-wrap">
                 <table className="data">

@@ -20,13 +20,16 @@ import {
   Field,
   JsonView,
   KeyValue,
-  Loading,
   PageHeader,
+  PageTitle,
   SecretStateBadge,
+  Skeleton,
   Spinner,
+  TableSkeleton,
 } from "@/components/ui";
 import { ConfirmDialog, Modal } from "@/components/Modal";
 import CopyButton from "@/components/CopyButton";
+import { Icon } from "@/components/icons";
 
 const REVEAL_SECONDS = 30;
 
@@ -185,12 +188,54 @@ export default function SecretDetailPage() {
     ? `/secrets?env=${encodeURIComponent(env)}&app=${encodeURIComponent(app)}`
     : "/secrets";
 
-  if (!ready || loading) return <Loading label="Loading secret…" />;
+  // Header and card frames come straight from the URL, so they paint at once
+  // and only the values fill in — no full-page spinner swap.
+  if (!ready || loading) {
+    return (
+      <>
+        <PageHeader
+          documentTitle={hasRef ? displayPath(ref) : "Secret"}
+          title={hasRef ? <span className="mono">{displayPath(ref)}</span> : "Secret"}
+          subtitle={
+            <Link href={backLink} className="text-sm">
+              ← {hasRef ? displayNamespace(ref) : "Secrets"}
+            </Link>
+          }
+        />
+        <div className="card">
+          <div className="card-title">Metadata</div>
+          <Skeleton height={96} />
+        </div>
+        <div className="card">
+          <div className="card-title">Secret value</div>
+          <Skeleton height={64} />
+        </div>
+        <div className="card">
+          <div className="card-title">Versions</div>
+          <TableSkeleton
+            headers={["Version", "State", "Created by", "Created", "Expires"]}
+            rows={3}
+          />
+        </div>
+      </>
+    );
+  }
   if (!hasRef) {
     return (
-      <EmptyState title="No secret specified">
-        Provide ?env=, ?app=, and ?key= query parameters.
-      </EmptyState>
+      <>
+        <PageTitle title="Secret" />
+        <EmptyState
+          icon={<Icon.secret size={20} />}
+          title="No secret specified"
+          actions={
+            <Link className="btn" href="/secrets">
+              Browse secrets
+            </Link>
+          }
+        >
+          Provide ?env=, ?app=, and ?key= query parameters.
+        </EmptyState>
+      </>
     );
   }
   if (notFound || !secret) {
@@ -204,7 +249,7 @@ export default function SecretDetailPage() {
             </Link>
           }
         />
-        <EmptyState title="Not found">
+        <EmptyState icon={<Icon.secret size={20} />} title="Not found">
           No secret exists at <span className="mono">{displayPath(ref)}</span>.
         </EmptyState>
       </>
@@ -217,6 +262,7 @@ export default function SecretDetailPage() {
   return (
     <>
       <PageHeader
+        documentTitle={displayPath(ref)}
         title={<span className="mono">{displayPath(ref)}</span>}
         subtitle={
           <Link href={backLink} className="text-sm">
@@ -378,7 +424,7 @@ export default function SecretDetailPage() {
       <div className="card">
         <div className="card-title">Versions</div>
         {secret.versions.length === 0 ? (
-          <EmptyState title="No versions" />
+          <EmptyState icon={<Icon.secret size={20} />} title="No versions" />
         ) : (
           <div className="table-wrap">
             <table className="data">

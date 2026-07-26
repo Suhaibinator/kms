@@ -1,5 +1,8 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { Spinner } from "./ui";
+
+const FOCUSABLE =
+  'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
 
 export function Modal({
   open,
@@ -19,27 +22,80 @@ export function Modal({
   /** Whether Escape, the backdrop, and the header close button may dismiss. */
   dismissible?: boolean;
 }) {
+  const dialogRef = useRef<HTMLDivElement | null>(null);
+  const titleId = useId();
+
+  // Escape to dismiss, plus a Tab/Shift+Tab cycle confined to the dialog: an
+  // aria-modal dialog whose focus escapes into the page behind it is worse
+  // than no dialog semantics at all.
   useEffect(() => {
     if (!open) return;
     const onKey = (e: KeyboardEvent) => {
-      if (dismissible && e.key === "Escape") onClose();
+      if (dismissible && e.key === "Escape") {
+        onClose();
+        return;
+      }
+      if (e.key !== "Tab") return;
+      const root = dialogRef.current;
+      if (!root) return;
+      const items = Array.from(
+        root.querySelectorAll<HTMLElement>(FOCUSABLE),
+      ).filter((el) => el.offsetParent !== null || el === document.activeElement);
+      if (items.length === 0) {
+        e.preventDefault();
+        root.focus();
+        return;
+      }
+      const first = items[0];
+      const last = items[items.length - 1];
+      const active = document.activeElement;
+      if (e.shiftKey && (active === first || active === root)) {
+        e.preventDefault();
+        last.focus();
+      } else if (!e.shiftKey && active === last) {
+        e.preventDefault();
+        first.focus();
+      }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [open, onClose, dismissible]);
+
+  // Move focus into the dialog on open and restore it to the trigger on close,
+  // so keyboard context is not lost.
+  useEffect(() => {
+    if (!open) return;
+    const restoreTo = document.activeElement as HTMLElement | null;
+    const root = dialogRef.current;
+    const target =
+      root?.querySelector<HTMLElement>(
+        'input:not([disabled]), textarea:not([disabled]), select:not([disabled])',
+      ) ??
+      root?.querySelector<HTMLElement>(FOCUSABLE) ??
+      root;
+    target?.focus();
+    return () => {
+      if (restoreTo && typeof restoreTo.focus === "function") restoreTo.focus();
+    };
+  }, [open]);
 
   if (!open) return null;
 
   return (
     <div className="modal-overlay" onMouseDown={dismissible ? onClose : undefined}>
       <div
+        ref={dialogRef}
         className={`modal ${wide ? "wide" : ""}`}
         role="dialog"
         aria-modal="true"
+        aria-labelledby={titleId}
+        tabIndex={-1}
         onMouseDown={(e) => e.stopPropagation()}
       >
         <div className="modal-header">
-          <div className="modal-title">{title}</div>
+          <div className="modal-title" id={titleId}>
+            {title}
+          </div>
           {dismissible ? (
             <button className="toast-close" aria-label="Close" onClick={onClose}>
               ×

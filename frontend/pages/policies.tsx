@@ -3,7 +3,15 @@ import { api } from "@/lib/api";
 import { POLICY_OPERATIONS, type Policy, type PolicyRule } from "@/lib/types";
 import { useToast } from "@/context/ToastContext";
 import { formatUnixMs } from "@/lib/format";
-import { EmptyState, Field, Loading, PageHeader, Pagination, Spinner } from "@/components/ui";
+import {
+  EmptyState,
+  Field,
+  PageHeader,
+  Pagination,
+  Spinner,
+  TableSkeleton,
+} from "@/components/ui";
+import { Icon } from "@/components/icons";
 import { ConfirmDialog, Modal } from "@/components/Modal";
 
 interface Draft {
@@ -155,9 +163,19 @@ export default function PoliciesPage() {
       />
 
       {loading ? (
-        <Loading />
+        <TableSkeleton
+          headers={["Name", "Subject", "Allow", "Deny", "Updated"]}
+        />
       ) : policies.length === 0 ? (
-        <EmptyState title="No policies yet">
+        <EmptyState
+          icon={<Icon.policy size={20} />}
+          title="No policies yet"
+          actions={
+            <button className="btn btn-primary" onClick={openCreate}>
+              New policy
+            </button>
+          }
+        >
           Create a policy to grant an identity access to parameters or secrets.
         </EmptyState>
       ) : (

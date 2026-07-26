@@ -5,7 +5,14 @@ import type { SecretMetadata } from "@/lib/types";
 import { useToast } from "@/context/ToastContext";
 import { useNamespaces, useQueryParams } from "@/lib/hooks";
 import { formatUnixMs } from "@/lib/format";
-import { Badge, EmptyState, Loading, PageHeader, Pagination } from "@/components/ui";
+import {
+  Badge,
+  EmptyState,
+  PageHeader,
+  Pagination,
+  TableSkeleton,
+} from "@/components/ui";
+import { Icon } from "@/components/icons";
 import NamespacePicker, { type NamespaceSelection } from "@/components/NamespacePicker";
 
 function secretLink(ref: { env: string; app: string; key: string }): string {
@@ -153,13 +160,32 @@ export default function SecretsPage() {
       </form>
 
       {!hasNs ? (
-        <EmptyState title="Choose a namespace">
+        <EmptyState
+          icon={<Icon.namespace size={20} />}
+          title="Choose a namespace"
+        >
           Pick an environment and application above to list its secrets.
         </EmptyState>
       ) : loading ? (
-        <Loading />
+        <TableSkeleton
+          headers={["Key", "Type", "Current", "Versions", "Mode", "Updated"]}
+        />
       ) : secrets.length === 0 ? (
-        <EmptyState title="No secrets found">
+        <EmptyState
+          icon={<Icon.secret size={20} />}
+          title="No secrets found"
+          actions={
+            prefix ? (
+              <button className="btn" onClick={clearFilter}>
+                Clear filter
+              </button>
+            ) : (
+              <Link className="btn btn-primary" href={newSecretLink}>
+                New secret
+              </Link>
+            )
+          }
+        >
           {prefix ? "No secrets match this key prefix." : `No secrets in ${ns.env}/${ns.app} yet.`}
         </EmptyState>
       ) : (

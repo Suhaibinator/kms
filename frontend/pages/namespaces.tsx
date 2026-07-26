@@ -5,7 +5,14 @@ import type { AuthMethod, Namespace } from "@/lib/types";
 import { useToast } from "@/context/ToastContext";
 import { useNamespaces } from "@/lib/hooks";
 import { formatUnixMs } from "@/lib/format";
-import { Badge, EmptyState, Field, Loading, PageHeader } from "@/components/ui";
+import {
+  Badge,
+  EmptyState,
+  Field,
+  PageHeader,
+  TableSkeleton,
+} from "@/components/ui";
+import { Icon } from "@/components/icons";
 import { ConfirmDialog, Modal } from "@/components/Modal";
 
 function parametersLink(ns: { env: string; app: string }): string {
@@ -208,9 +215,26 @@ export default function NamespacesPage() {
       />
 
       {loading ? (
-        <Loading />
+        <TableSkeleton
+          headers={[
+            "Application",
+            "Description",
+            "Auth methods",
+            "Parameters",
+            "Secrets",
+            "Created",
+          ]}
+        />
       ) : namespaces.length === 0 ? (
-        <EmptyState title="No namespaces yet">
+        <EmptyState
+          icon={<Icon.namespace size={20} />}
+          title="No namespaces yet"
+          actions={
+            <button className="btn btn-primary" onClick={() => setCreateOpen(true)}>
+              New namespace
+            </button>
+          }
+        >
           Create a namespace to start storing parameters and secrets for an application.
         </EmptyState>
       ) : (

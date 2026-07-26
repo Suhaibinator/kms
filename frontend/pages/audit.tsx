@@ -4,7 +4,15 @@ import type { AuditEvent, AuditFilters } from "@/lib/types";
 import { useToast } from "@/context/ToastContext";
 import { useNamespaces } from "@/lib/hooks";
 import { datetimeLocalToUnixMs, formatUnixMs, isEmptyJson, prettyJson } from "@/lib/format";
-import { Badge, EmptyState, JsonView, Loading, PageHeader, Pagination } from "@/components/ui";
+import {
+  Badge,
+  EmptyState,
+  JsonView,
+  PageHeader,
+  Pagination,
+  TableSkeleton,
+} from "@/components/ui";
+import { Icon } from "@/components/icons";
 
 interface FilterForm {
   env: string;
@@ -239,9 +247,29 @@ export default function AuditPage() {
       </form>
 
       {loading ? (
-        <Loading />
+        <TableSkeleton
+          headers={[
+            "Time",
+            "Event",
+            "Actor",
+            "Resource",
+            "Decision",
+            "Source IP",
+          ]}
+          rows={8}
+        />
       ) : events.length === 0 ? (
-        <EmptyState title="No audit events">No events match the current filters.</EmptyState>
+        <EmptyState
+          icon={<Icon.audit size={20} />}
+          title="No audit events"
+          actions={
+            <button className="btn" onClick={clear}>
+              Clear filters
+            </button>
+          }
+        >
+          No events match the current filters.
+        </EmptyState>
       ) : (
         <div className="table-wrap card-table">
           <table className="data">

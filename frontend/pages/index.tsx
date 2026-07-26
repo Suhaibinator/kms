@@ -4,7 +4,15 @@ import { api } from "@/lib/api";
 import type { AuditEvent, HealthResponse, Subscriber } from "@/lib/types";
 import { useToast } from "@/context/ToastContext";
 import { formatRelative } from "@/lib/format";
-import { Badge, EmptyState, Loading, PageHeader } from "@/components/ui";
+import {
+  Badge,
+  EmptyState,
+  PageHeader,
+  Spinner,
+  StatSkeleton,
+  TableSkeleton,
+} from "@/components/ui";
+import { Icon } from "@/components/icons";
 
 interface Count {
   value: number;
@@ -101,8 +109,6 @@ export default function DashboardPage() {
     (s) => s.last_acked_revision < data.currentRevision,
   ).length;
 
-  if (loading) return <Loading label="Loading dashboard…" />;
-
   const h = data.health;
 
   return (
@@ -111,74 +117,90 @@ export default function DashboardPage() {
         title="Overview"
         subtitle="Service status and configuration at a glance."
         actions={
-          <button className="btn" onClick={() => void load()}>
-            Refresh
+          <button className="btn" onClick={() => void load()} disabled={loading}>
+            {loading ? <Spinner /> : null}
+            {loading ? "Refreshing…" : "Refresh"}
           </button>
         }
       />
 
-      <div className="card-grid">
-        <div className="stat">
-          <div className="stat-label">Service</div>
-          <div className="row-wrap" style={{ marginTop: 8 }}>
-            <Badge kind={h?.healthy ? "success" : "danger"}>
-              {h?.healthy ? "healthy" : "unhealthy"}
-            </Badge>
-            <Badge kind={h?.ready ? "success" : "warning"}>
-              {h?.ready ? "ready" : "not ready"}
-            </Badge>
-          </div>
-          <div className="stat-sub">{h?.version ? `version ${h.version}` : "version unknown"}</div>
+      {/* The page frame stays mounted across refreshes; only the cells swap to
+          skeletons, so nothing below them shifts when the data lands. */}
+      {loading ? (
+        <div className="card-grid">
+          <StatSkeleton label="Service" />
+          <StatSkeleton label="Current revision" />
+          <StatSkeleton label="Namespaces" />
+          <StatSkeleton label="Parameters" />
+          <StatSkeleton label="Secrets" />
+          <StatSkeleton label="Subscribers" />
         </div>
+      ) : (
+        <div className="card-grid">
+          <div className="stat">
+            <div className="stat-label">Service</div>
+            <div className="stat-badges">
+              <Badge kind={h?.healthy ? "success" : "danger"}>
+                {h?.healthy ? "healthy" : "unhealthy"}
+              </Badge>
+              <Badge kind={h?.ready ? "success" : "warning"}>
+                {h?.ready ? "ready" : "not ready"}
+              </Badge>
+            </div>
+            <div className="stat-sub">
+              {h?.version ? `version ${h.version}` : "version unknown"}
+            </div>
+          </div>
 
-        <div className="stat">
-          <div className="stat-label">Current revision</div>
-          <div className="stat-value">{h?.current_revision ?? data.currentRevision}</div>
-          <div className="stat-sub">latest applied configuration</div>
-        </div>
+          <div className="stat">
+            <div className="stat-label">Current revision</div>
+            <div className="stat-value">{h?.current_revision ?? data.currentRevision}</div>
+            <div className="stat-sub">latest applied configuration</div>
+          </div>
 
-        <div className="stat">
-          <div className="stat-label">Namespaces</div>
-          <div className="stat-value">
-            <CountText c={data.namespaces} />
+          <div className="stat">
+            <div className="stat-label">Namespaces</div>
+            <div className="stat-value">
+              <CountText c={data.namespaces} />
+            </div>
+            <div className="stat-sub">
+              <Link href="/namespaces">Manage →</Link>
+            </div>
           </div>
-          <div className="stat-sub">
-            <Link href="/namespaces">Manage →</Link>
-          </div>
-        </div>
 
-        <div className="stat">
-          <div className="stat-label">Parameters</div>
-          <div className="stat-value">
-            <CountText c={data.parameters} />
+          <div className="stat">
+            <div className="stat-label">Parameters</div>
+            <div className="stat-value">
+              <CountText c={data.parameters} />
+            </div>
+            <div className="stat-sub">
+              <Link href="/parameters">Manage →</Link>
+            </div>
           </div>
-          <div className="stat-sub">
-            <Link href="/parameters">Manage →</Link>
-          </div>
-        </div>
 
-        <div className="stat">
-          <div className="stat-label">Secrets</div>
-          <div className="stat-value">
-            <CountText c={data.secrets} />
+          <div className="stat">
+            <div className="stat-label">Secrets</div>
+            <div className="stat-value">
+              <CountText c={data.secrets} />
+            </div>
+            <div className="stat-sub">
+              <Link href="/secrets">Manage →</Link>
+            </div>
           </div>
-          <div className="stat-sub">
-            <Link href="/secrets">Manage →</Link>
-          </div>
-        </div>
 
-        <div className="stat">
-          <div className="stat-label">Subscribers</div>
-          <div className="stat-value">{data.subscribers.length}</div>
-          <div className="stat-sub">
-            {staleCount > 0 ? (
-              <span className="text-warning">{staleCount} behind latest revision</span>
-            ) : (
-              <span className="text-success">all up to date</span>
-            )}
+          <div className="stat">
+            <div className="stat-label">Subscribers</div>
+            <div className="stat-value">{data.subscribers.length}</div>
+            <div className="stat-sub">
+              {staleCount > 0 ? (
+                <span className="text-warning">{staleCount} behind latest revision</span>
+              ) : (
+                <span className="text-success">all up to date</span>
+              )}
+            </div>
           </div>
         </div>
-      </div>
+      )}
 
       <div className="card mt-24">
         <div className="card-title">
@@ -187,8 +209,15 @@ export default function DashboardPage() {
             View audit log →
           </Link>
         </div>
-        {data.audit.length === 0 ? (
-          <EmptyState title="No recent events" />
+        {loading ? (
+          <TableSkeleton
+            headers={["When", "Event", "Actor", "Resource", "Decision"]}
+            rows={5}
+          />
+        ) : data.audit.length === 0 ? (
+          <EmptyState icon={<Icon.audit size={20} />} title="No recent events">
+            Administrative actions and policy decisions will appear here.
+          </EmptyState>
         ) : (
           <div className="table-wrap">
             <table className="data">
@@ -246,8 +275,18 @@ export default function DashboardPage() {
             View all →
           </Link>
         </div>
-        {data.subscribers.length === 0 ? (
-          <EmptyState title="No applications are currently subscribed" />
+        {loading ? (
+          <TableSkeleton
+            headers={["Client", "Last heartbeat", "Applied revision"]}
+            rows={3}
+          />
+        ) : data.subscribers.length === 0 ? (
+          <EmptyState
+            icon={<Icon.subscribers size={20} />}
+            title="No applications are currently subscribed"
+          >
+            Clients appear here once they open a watch stream.
+          </EmptyState>
         ) : (
           <div className="table-wrap">
             <table className="data">
