@@ -14,7 +14,7 @@
 
   --text: #e6edf3;
   --text-muted: #9aa7b6;
-  --text-faint: #6b7684;
+  --text-faint: #8491a1;
 
   --accent: #5b8cff;
   --accent-hover: #6f9bff;
@@ -50,12 +50,12 @@
   --space-9: 48px;
   --space-10: 64px;
 
-  --mono: ui-monospace, "SFMono-Regular", "SF Mono", Menlo, Consolas,
-    "Liberation Mono", monospace;
+  --mono: ui-monospace, "SFMono-Regular", "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
   /* --font-inter is injected by next/font/local in _app.tsx; the system stack
      behind it covers the pre-hydration paint and any missing glyphs. */
-  --sans: var(--font-inter), -apple-system, BlinkMacSystemFont, "Segoe UI",
-    Roboto, Helvetica, Arial, sans-serif;
+  --sans:
+    var(--font-inter), -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial,
+    sans-serif;
 
   --sidebar-w: 236px;
 }
@@ -132,7 +132,7 @@ pre {
 
 .app-shell {
   display: flex;
-  min-height: 100vh;
+  min-height: 100dvh;
 }
 
 /* Mobile top bar + drawer toggle. Hidden on desktop; shown at <= 768px
@@ -156,7 +156,7 @@ pre {
   flex-direction: column;
   position: sticky;
   top: 0;
-  height: 100vh;
+  height: 100dvh;
   overflow-y: auto;
 }
 
@@ -374,7 +374,10 @@ pre {
   background: var(--surface-2);
   color: var(--text);
   cursor: pointer;
-  transition: background 0.12s ease, border-color 0.12s ease, opacity 0.12s ease;
+  transition:
+    background 0.12s ease,
+    border-color 0.12s ease,
+    opacity 0.12s ease;
   white-space: nowrap;
 }
 .btn:hover {
@@ -433,6 +436,14 @@ pre {
 .field {
   margin-bottom: var(--space-4);
 }
+fieldset.field {
+  min-width: 0;
+  padding: 0;
+  border: 0;
+}
+fieldset.field legend {
+  padding: 0;
+}
 .field-label {
   display: block;
   font-size: 12.5px;
@@ -457,7 +468,9 @@ pre {
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-sm);
   outline: none;
-  transition: border-color 0.12s ease, box-shadow 0.12s ease;
+  transition:
+    border-color 0.12s ease,
+    box-shadow 0.12s ease;
 }
 .input:focus,
 .textarea:focus,
@@ -536,22 +549,14 @@ pre {
      content box, so each edge shadow fades out once that end is reached.
      Purely CSS — no scroll listener needed. */
   background:
-    linear-gradient(to right, var(--surface) 40%, rgba(21, 26, 35, 0)) left
-      center / 32px 100% no-repeat,
-    linear-gradient(to left, var(--surface) 40%, rgba(21, 26, 35, 0)) right
-      center / 32px 100% no-repeat,
-    radial-gradient(
-        farthest-side at 0 50%,
-        rgba(0, 0, 0, 0.4),
-        rgba(0, 0, 0, 0)
-      )
-      left center / 14px 100% no-repeat,
-    radial-gradient(
-        farthest-side at 100% 50%,
-        rgba(0, 0, 0, 0.4),
-        rgba(0, 0, 0, 0)
-      )
-      right center / 14px 100% no-repeat,
+    linear-gradient(to right, var(--surface) 40%, rgba(21, 26, 35, 0)) left center / 32px 100%
+    no-repeat,
+    linear-gradient(to left, var(--surface) 40%, rgba(21, 26, 35, 0)) right center / 32px 100%
+    no-repeat,
+    radial-gradient(farthest-side at 0 50%, rgba(0, 0, 0, 0.4), rgba(0, 0, 0, 0)) left center / 14px
+    100% no-repeat,
+    radial-gradient(farthest-side at 100% 50%, rgba(0, 0, 0, 0.4), rgba(0, 0, 0, 0)) right center /
+    14px 100% no-repeat,
     var(--surface);
   background-attachment: local, local, scroll, scroll;
 }
@@ -708,6 +713,11 @@ table.data th.mono {
   font-size: 16px;
   line-height: 1;
   padding: 0;
+  min-width: 44px;
+  min-height: 44px;
+  display: inline-grid;
+  place-items: center;
+  flex-shrink: 0;
 }
 
 /* ---------- Modal ---------- */
@@ -724,7 +734,14 @@ table.data th.mono {
   padding: 60px 20px;
   overflow-y: auto;
 }
+.modal-backdrop {
+  position: absolute;
+  inset: 0;
+  border: 0;
+  background: transparent;
+}
 .modal {
+  position: relative;
   background: var(--surface);
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-lg);
@@ -732,6 +749,8 @@ table.data th.mono {
   width: 100%;
   max-width: 560px;
   animation: modal-in 0.16s ease;
+  max-height: calc(100dvh - 120px);
+  overflow-y: auto;
 }
 .modal.wide {
   max-width: 720px;
@@ -1018,16 +1037,16 @@ table.data th.mono {
   *,
   *::before,
   *::after {
-    animation-duration: 0.01ms !important;
-    animation-iteration-count: 1 !important;
-    transition-duration: 0.01ms !important;
-    scroll-behavior: auto !important;
+    animation-duration: 0.01ms;
+    animation-iteration-count: 1;
+    transition-duration: 0.01ms;
+    scroll-behavior: auto;
   }
   .spinner {
-    animation: spin 2.4s linear infinite !important;
+    animation: spin 2.4s linear infinite;
   }
   .skeleton {
-    animation: none !important;
+    animation: none;
     background: var(--surface-2);
   }
 }
@@ -1035,16 +1054,12 @@ table.data th.mono {
 /* ---------- Auth / login ---------- */
 
 .auth-wrap {
-  min-height: 100vh;
+  min-height: 100dvh;
   display: grid;
   place-items: center;
   padding: 24px;
-  background: radial-gradient(
-      1200px 600px at 50% -10%,
-      rgba(91, 140, 255, 0.08),
-      transparent
-    ),
-    var(--bg);
+  background:
+    radial-gradient(1200px 600px at 50% -10%, rgba(91, 140, 255, 0.08), transparent), var(--bg);
 }
 .auth-card {
   width: 100%;
@@ -1072,6 +1087,11 @@ table.data th.mono {
   color: #fff;
   font-size: 18px;
 }
+.auth-title {
+  font-size: 18px;
+  font-weight: 700;
+  line-height: 1.25;
+}
 
 /* ---------- Secret reveal ---------- */
 
@@ -1093,23 +1113,12 @@ table.data th.mono {
   color: var(--text);
   transition: filter 0.12s ease;
 }
-.reveal-value.masked {
-  filter: blur(7px);
-  user-select: none;
-  cursor: pointer;
-}
-/* Unmask on hover (mouse), focus (keyboard tab or touch tap via tabindex=0),
-   or active press. This is purely a visual affordance — the plaintext already
-   lives in the DOM behind the blur, the value stays masked by default, and the
-   reveal auto-hide timer is unaffected. */
-.reveal-value.masked:hover,
-.reveal-value.masked:focus,
-.reveal-value.masked:active {
-  filter: none;
-}
-.reveal-value.masked:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
+.secret-concealed {
+  padding: 12px;
+  background: var(--bg);
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius-sm);
+  color: var(--text-muted);
 }
 .reveal-countdown {
   font-size: 12px;
@@ -1292,7 +1301,7 @@ table.data th.mono {
     position: fixed;
     top: 0;
     left: 0;
-    height: 100vh;
+    height: 100dvh;
     width: min(84vw, 300px);
     transform: translateX(-100%);
     transition: transform 0.2s ease;
@@ -1456,6 +1465,9 @@ table.data th.mono {
 
   .modal-overlay {
     padding: 20px 10px;
+  }
+  .modal {
+    max-height: calc(100dvh - 40px);
   }
   .modal-header,
   .modal-body,

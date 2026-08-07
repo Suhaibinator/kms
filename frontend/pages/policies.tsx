@@ -1,18 +1,11 @@
-import { useCallback, useEffect, useState } from "react";
-import { api } from "@/lib/api";
-import { POLICY_OPERATIONS, type Policy, type PolicyRule } from "@/lib/types";
-import { useToast } from "@/context/ToastContext";
-import { formatUnixMs } from "@/lib/format";
-import {
-  EmptyState,
-  Field,
-  PageHeader,
-  Pagination,
-  Spinner,
-  TableSkeleton,
-} from "@/components/ui";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { Icon } from "@/components/icons";
 import { ConfirmDialog, Modal } from "@/components/Modal";
+import { EmptyState, Field, PageHeader, Pagination, Spinner, TableSkeleton } from "@/components/ui";
+import { useToast } from "@/context/ToastContext";
+import { api, isAbortError } from "@/lib/api";
+import { formatUnixMs } from "@/lib/format";
+import { POLICY_OPERATIONS, type Policy, type PolicyRule } from "@/lib/types";
 
 interface Draft {
   name: string;
@@ -37,6 +30,7 @@ export default function PoliciesPage() {
   const [nextToken, setNextToken] = useState("");
   const [pageStack, setPageStack] = useState<string[]>([]);
   const [pageToken, setPageToken] = useState("");
+  const requestRef = useRef<AbortController | null>(null);
 
   const [draft, setDraft] = useState<Draft | null>(null);
   const [saving, setSaving] = useState(false);
@@ -46,15 +40,24 @@ export default function PoliciesPage() {
 
   const load = useCallback(
     async (token: string) => {
+      requestRef.current?.abort();
+      const controller = new AbortController();
+      requestRef.current = controller;
       setLoading(true);
       try {
-        const res = await api.listPolicies(100, token || undefined);
+        const res = await api.listPolicies(100, token || undefined, {
+          signal: controller.signal,
+        });
+        if (requestRef.current !== controller) return;
         setPolicies(res.policies ?? []);
         setNextToken(res.next_page_token ?? "");
       } catch (err) {
-        toast.error(err, "Failed to load policies");
+        if (!isAbortError(err)) toast.error(err, "Failed to load policies");
       } finally {
-        setLoading(false);
+        if (requestRef.current === controller) {
+          requestRef.current = null;
+          setLoading(false);
+        }
       }
     },
     [toast],
@@ -62,12 +65,22 @@ export default function PoliciesPage() {
 
   useEffect(() => {
     void load(pageToken);
+    return () => {
+      requestRef.current?.abort();
+      requestRef.current = null;
+    };
   }, [load, pageToken]);
 
   function goNext() {
     if (!nextToken) return;
     setPageStack((s) => [...s, pageToken]);
     setPageToken(nextToken);
+  }
+  function goPrevious() {
+    const previous = pageStack[pageStack.length - 1];
+    if (previous === undefined) return;
+    setPageStack((s) => s.slice(0, -1));
+    setPageToken(previous);
   }
   function goReset() {
     setPageStack([]);
@@ -163,9 +176,7 @@ export default function PoliciesPage() {
       />
 
       {loading ? (
-        <TableSkeleton
-          headers={["Name", "Subject", "Allow", "Deny", "Updated"]}
-        />
+        <TableSkeleton headers={["Name", "Subject", "Allow", "Deny", "Updated"]} />
       ) : policies.length === 0 ? (
         <EmptyState
           icon={<Icon.policy size={20} />}
@@ -222,6 +233,8 @@ export default function PoliciesPage() {
       <Pagination
         hasNext={!!nextToken}
         onNext={goNext}
+        hasPrevious={pageStack.length > 0}
+        onPrevious={goPrevious}
         onReset={goReset}
         showReset={pageStack.length > 0}
       />
@@ -246,7 +259,10 @@ export default function PoliciesPage() {
         {draft ? (
           <>
             <div className="form-row">
-              <Field label="Name" hint={draft.editing ? "Cannot be changed." : "Unique policy name."}>
+              <Field
+                label="Name"
+                hint={draft.editing ? "Cannot be changed." : "Unique policy name."}
+              >
                 <input
                   className="input mono"
                   value={draft.name}
@@ -314,6 +330,7 @@ function RuleEditor({
   rules: PolicyRule[];
   onChange: (rules: PolicyRule[]) => void;
 }) {
+  const fieldPrefix = useId();
   function update(index: number, patch: Partial<PolicyRule>) {
     onChange(rules.map((r, i) => (i === index ? { ...r, ...patch } : r)));
   }
@@ -341,8 +358,11 @@ function RuleEditor({
           {rules.map((rule, i) => (
             <div key={i} className="rule-row" style={{ flexWrap: "wrap" }}>
               <div className="rule-op">
-                <label className="field-label">Operation</label>
+                <label className="field-label" htmlFor={`${fieldPrefix}-${i}-operation`}>
+                  Operation
+                </label>
                 <select
+                  id={`${fieldPrefix}-${i}-operation`}
                   className="select"
                   value={rule.operation}
                   onChange={(e) => update(i, { operation: e.target.value })}
@@ -355,8 +375,11 @@ function RuleEditor({
                 </select>
               </div>
               <div style={{ width: 110 }}>
-                <label className="field-label">Env</label>
+                <label className="field-label" htmlFor={`${fieldPrefix}-${i}-env`}>
+                  Env
+                </label>
                 <input
+                  id={`${fieldPrefix}-${i}-env`}
                   className="input mono"
                   value={rule.env}
                   onChange={(e) => update(i, { env: e.target.value })}
@@ -364,8 +387,11 @@ function RuleEditor({
                 />
               </div>
               <div style={{ width: 130 }}>
-                <label className="field-label">App</label>
+                <label className="field-label" htmlFor={`${fieldPrefix}-${i}-app`}>
+                  App
+                </label>
                 <input
+                  id={`${fieldPrefix}-${i}-app`}
                   className="input mono"
                   value={rule.app}
                   onChange={(e) => update(i, { app: e.target.value })}

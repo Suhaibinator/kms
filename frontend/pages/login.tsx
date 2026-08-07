@@ -1,9 +1,9 @@
 import { useRouter } from "next/router";
 import { useEffect, useState } from "react";
+import { PageTitle, Spinner } from "@/components/ui";
 import { useAuth } from "@/context/AuthContext";
 import { useToast } from "@/context/ToastContext";
 import { getToken } from "@/lib/api";
-import { PageTitle, Spinner } from "@/components/ui";
 
 export default function LoginPage() {
   const router = useRouter();
@@ -41,20 +41,20 @@ export default function LoginPage() {
   }
 
   return (
-    <div className="auth-wrap">
+    <main className="auth-wrap">
       <PageTitle title="Sign in" />
       <div className="auth-card">
         <div className="auth-brand">
           <div className="logo">K</div>
           <div>
-            <div style={{ fontWeight: 700, fontSize: 18 }}>KMS Console</div>
+            <h1 className="auth-title">KMS Console</h1>
             <div className="faint text-sm">Parameter &amp; Secret Store</div>
           </div>
         </div>
 
         <p className="muted text-sm mb-16">
-          Paste an admin or client identity token to sign in. Tokens are stored
-          only for this browser session.
+          Paste an admin or client identity token to sign in. Tokens are stored only for this
+          browser session.
         </p>
 
         <form onSubmit={onSubmit}>
@@ -71,24 +71,20 @@ export default function LoginPage() {
               placeholder="paste token…"
               value={token}
               onChange={(e) => setTokenValue(e.target.value)}
-              autoFocus
+              aria-describedby="token-hint"
             />
-            <div className="field-hint">
-              Minted by <span className="mono">parameter-store create-admin</span>{" "}
-              or the identities API.
+            <div className="field-hint" id="token-hint">
+              Minted by <span className="mono">parameter-store create-admin</span> or the identities
+              API.
             </div>
           </div>
 
-          <button
-            type="submit"
-            className="btn btn-primary btn-block"
-            disabled={busy}
-          >
+          <button type="submit" className="btn btn-primary btn-block" disabled={busy}>
             {busy ? <Spinner /> : null}
             {busy ? "Signing in…" : "Sign in"}
           </button>
         </form>
       </div>
-    </div>
+    </main>
   );
 }

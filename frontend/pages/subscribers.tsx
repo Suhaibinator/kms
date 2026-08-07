@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { api } from "@/lib/api";
-import type { NamespaceRef, Subscriber } from "@/lib/types";
-import { useToast } from "@/context/ToastContext";
-import { formatRelative, formatUnixMs } from "@/lib/format";
-import { Badge, EmptyState, PageHeader, TableSkeleton } from "@/components/ui";
 import { Icon } from "@/components/icons";
+import { Badge, EmptyState, PageHeader, TableSkeleton } from "@/components/ui";
+import { useToast } from "@/context/ToastContext";
+import { api, isAbortError } from "@/lib/api";
+import { formatRelative, formatUnixMs } from "@/lib/format";
+import type { NamespaceRef, Subscriber } from "@/lib/types";
 
 const REFRESH_MS = 5000;
 
@@ -25,22 +25,27 @@ export default function SubscribersPage() {
   const [currentRevision, setCurrentRevision] = useState(0);
   const [initialLoading, setInitialLoading] = useState(true);
   const [lastUpdated, setLastUpdated] = useState(0);
-  // Re-render the "updated Ns ago" label on a timer without refetching.
-  const [, setTick] = useState(0);
 
   const mounted = useRef(true);
   const erroredRef = useRef(false);
+  const requestRef = useRef<AbortController | null>(null);
 
   const refresh = useCallback(
     async (background: boolean) => {
+      // A manual refresh and the background poll share the same in-flight
+      // guard, so slow responses can never pile up.
+      if (requestRef.current) return;
+      const controller = new AbortController();
+      requestRef.current = controller;
       try {
-        const res = await api.subscribers();
+        const res = await api.subscribers({ signal: controller.signal });
         if (!mounted.current) return;
         setSubscribers(res.subscribers ?? []);
         setCurrentRevision(res.current_revision ?? 0);
         setLastUpdated(Date.now());
         erroredRef.current = false;
       } catch (err) {
+        if (isAbortError(err)) return;
         // Only surface an error once per failure streak to avoid toast spam on
         // the 5s poll.
         if (!background || !erroredRef.current) {
@@ -48,6 +53,7 @@ export default function SubscribersPage() {
         }
         erroredRef.current = true;
       } finally {
+        if (requestRef.current === controller) requestRef.current = null;
         if (mounted.current && !background) setInitialLoading(false);
       }
     },
@@ -56,13 +62,36 @@ export default function SubscribersPage() {
 
   useEffect(() => {
     mounted.current = true;
-    void refresh(false);
-    const poll = window.setInterval(() => void refresh(true), REFRESH_MS);
-    const ticker = window.setInterval(() => setTick((t) => t + 1), 1000);
+    let stopped = false;
+    let pollTimer: number | undefined;
+
+    const schedulePoll = () => {
+      if (stopped || document.hidden || pollTimer !== undefined) return;
+      pollTimer = window.setTimeout(async () => {
+        pollTimer = undefined;
+        await refresh(true);
+        schedulePoll();
+      }, REFRESH_MS);
+    };
+    const onVisibilityChange = () => {
+      if (pollTimer !== undefined) window.clearTimeout(pollTimer);
+      pollTimer = undefined;
+      if (!document.hidden) {
+        void refresh(true).finally(() => {
+          schedulePoll();
+        });
+      }
+    };
+
+    void refresh(false).finally(schedulePoll);
+    document.addEventListener("visibilitychange", onVisibilityChange);
     return () => {
+      stopped = true;
       mounted.current = false;
-      window.clearInterval(poll);
-      window.clearInterval(ticker);
+      if (pollTimer !== undefined) window.clearTimeout(pollTimer);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+      requestRef.current?.abort();
+      requestRef.current = null;
     };
   }, [refresh]);
 
@@ -192,7 +221,9 @@ export default function SubscribersPage() {
                             )}
                           </div>
                         </td>
-                        <td className="mono">{s.remote_addr || <span className="faint">—</span>}</td>
+                        <td className="mono">
+                          {s.remote_addr || <span className="faint">—</span>}
+                        </td>
                         <td className="nowrap" title={formatUnixMs(s.connected_at_unix_ms)}>
                           {formatRelative(s.connected_at_unix_ms)}
                         </td>

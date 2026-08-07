@@ -1,8 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { api } from "@/lib/api";
-import type { HealthResponse, KeyMetadata } from "@/lib/types";
-import { useToast } from "@/context/ToastContext";
-import { formatUnixMs } from "@/lib/format";
+import { Icon } from "@/components/icons";
 import {
   Badge,
   EmptyState,
@@ -11,7 +8,10 @@ import {
   StatSkeleton,
   TableSkeleton,
 } from "@/components/ui";
-import { Icon } from "@/components/icons";
+import { useToast } from "@/context/ToastContext";
+import { api } from "@/lib/api";
+import { formatUnixMs } from "@/lib/format";
+import type { HealthResponse, KeyMetadata } from "@/lib/types";
 
 function keyStateKind(state: string): "success" | "warning" | "neutral" {
   const s = state.toLowerCase();
@@ -63,10 +63,7 @@ export default function HealthPage() {
           </div>
           <div className="card">
             <div className="card-title">Encryption keys</div>
-            <TableSkeleton
-              headers={["ID", "Source", "State", "Created"]}
-              rows={3}
-            />
+            <TableSkeleton headers={["ID", "Source", "State", "Created"]} rows={3} />
           </div>
         </>
       ) : (
@@ -103,12 +100,8 @@ export default function HealthPage() {
           <div className="card">
             <div className="card-title">Encryption keys</div>
             {keys.length === 0 ? (
-              <EmptyState
-                icon={<Icon.health size={20} />}
-                title="No key metadata available"
-              >
-                The service exposes key metadata once a master key provider is
-                configured.
+              <EmptyState icon={<Icon.health size={20} />} title="No key metadata available">
+                The service exposes key metadata once a master key provider is configured.
               </EmptyState>
             ) : (
               <div className="table-wrap">

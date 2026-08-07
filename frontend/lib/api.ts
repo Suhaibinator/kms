@@ -5,12 +5,12 @@ import type {
   ApiErrorEnvelope,
   AuditFilters,
   CaResponse,
-  CreateIdentityRequest,
-  CreateIdentityResponse,
-  CreateReleaseRequest,
   ConfigurationRelease,
   ConfigurationSchema,
+  CreateIdentityRequest,
+  CreateIdentityResponse,
   CreateNamespaceRequest,
+  CreateReleaseRequest,
   CreateSecretRequest,
   CreateSecretResponse,
   HealthResponse,
@@ -32,13 +32,13 @@ import type {
   PromoteSecretResponse,
   PutParameterRequest,
   PutParameterResponse,
+  ReleaseSubscriberState,
+  ReleaseSummary,
+  ReleaseValidationError,
   RevealSecretResponse,
   RevisionResponse,
   RotateIdentityResponse,
   SecretMetadata,
-  ReleaseSubscriberState,
-  ReleaseSummary,
-  ReleaseValidationError,
   SubscribersResponse,
   UpdateNamespaceRequest,
   ValidateReleaseResponse,
@@ -141,31 +141,75 @@ function httpStatusToCode(status: number): string {
   }
 }
 
-interface FetchOptions {
+export interface ApiRequestOptions {
+  signal?: AbortSignal;
+  timeoutMs?: number;
+}
+
+interface FetchOptions extends ApiRequestOptions {
   method?: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
   body?: unknown;
   headers?: Record<string, string>;
   auth?: boolean;
 }
 
-async function apiFetch<T>(path: string, opts: FetchOptions = {}): Promise<T> {
-  const { method = "GET", body, headers = {}, auth = true } = opts;
+const DEFAULT_TIMEOUT_MS = 15_000;
+
+export function isAbortError(error: unknown): boolean {
+  return typeof DOMException !== "undefined" && error instanceof DOMException
+    ? error.name === "AbortError"
+    : error instanceof Error && error.name === "AbortError";
+}
+
+export async function apiFetch<T>(path: string, opts: FetchOptions = {}): Promise<T> {
+  const {
+    method = "GET",
+    body,
+    headers = {},
+    auth = true,
+    signal,
+    timeoutMs = DEFAULT_TIMEOUT_MS,
+  } = opts;
   const finalHeaders: Record<string, string> = { Accept: "application/json", ...headers };
   if (body !== undefined) finalHeaders["Content-Type"] = "application/json";
   if (auth) {
     const token = getToken();
-    if (token) finalHeaders["Authorization"] = `Bearer ${token}`;
+    if (token) finalHeaders.Authorization = `Bearer ${token}`;
   }
 
+  const controller = new AbortController();
+  let timedOut = false;
+  const abortFromCaller = () => controller.abort(signal?.reason);
+  if (signal?.aborted) abortFromCaller();
+  else signal?.addEventListener("abort", abortFromCaller, { once: true });
+  const timeout =
+    timeoutMs > 0
+      ? globalThis.setTimeout(() => {
+          timedOut = true;
+          controller.abort();
+        }, timeoutMs)
+      : undefined;
+
   let res: Response;
+  let text: string;
   try {
     res = await fetch(`${API_BASE}${path}`, {
       method,
       headers: finalHeaders,
       body: body !== undefined ? JSON.stringify(body) : undefined,
+      cache: "no-store",
+      signal: controller.signal,
     });
-  } catch {
+    text = await res.text();
+  } catch (err) {
+    if (timedOut) {
+      throw new ApiError("unavailable", "The server took too long to respond.", 0);
+    }
+    if (controller.signal.aborted) throw err;
     throw new ApiError("unavailable", "Could not reach the server. Check your connection.", 0);
+  } finally {
+    if (timeout !== undefined) globalThis.clearTimeout(timeout);
+    signal?.removeEventListener("abort", abortFromCaller);
   }
 
   if (res.status === 401 && auth) {
@@ -175,7 +219,6 @@ async function apiFetch<T>(path: string, opts: FetchOptions = {}): Promise<T> {
     }
   }
 
-  const text = await res.text();
   let data: unknown = null;
   if (text) {
     try {
@@ -223,21 +266,26 @@ export const api = {
       auth: false,
     });
   },
-  health(): Promise<HealthResponse> {
-    return apiFetch<HealthResponse>("/health", { auth: false });
+  health(request?: ApiRequestOptions): Promise<HealthResponse> {
+    return apiFetch<HealthResponse>("/health", { ...request, auth: false });
   },
-  whoami(): Promise<WhoAmIResponse> {
-    return apiFetch<WhoAmIResponse>("/whoami");
+  whoami(request?: ApiRequestOptions): Promise<WhoAmIResponse> {
+    return apiFetch<WhoAmIResponse>("/whoami", request);
   },
   // Public: the built-in client CA, for validating KMS-issued client certs.
-  ca(): Promise<CaResponse> {
-    return apiFetch<CaResponse>("/ca", { auth: false });
+  ca(request?: ApiRequestOptions): Promise<CaResponse> {
+    return apiFetch<CaResponse>("/ca", { ...request, auth: false });
   },
 
   // --- Namespaces ---
-  listNamespaces(pageSize?: number, pageToken?: string): Promise<ListNamespacesResponse> {
+  listNamespaces(
+    pageSize?: number,
+    pageToken?: string,
+    request?: ApiRequestOptions,
+  ): Promise<ListNamespacesResponse> {
     return apiFetch<ListNamespacesResponse>(
       `/namespaces${qs({ page_size: pageSize, page_token: pageToken })}`,
+      request,
     );
   },
   createNamespace(req: CreateNamespaceRequest): Promise<{ namespace: Namespace }> {
@@ -264,6 +312,7 @@ export const api = {
     keyPrefix?: string,
     pageSize?: number,
     pageToken?: string,
+    request?: ApiRequestOptions,
   ): Promise<ListParametersResponse> {
     return apiFetch<ListParametersResponse>(
       `/parameters${qs({
@@ -273,16 +322,24 @@ export const api = {
         page_size: pageSize,
         page_token: pageToken,
       })}`,
+      request,
     );
   },
-  getParameter(ref: ResourceRef, version?: number, label?: string): Promise<{ parameter: Parameter }> {
+  getParameter(
+    ref: ResourceRef,
+    version?: number,
+    label?: string,
+    request?: ApiRequestOptions,
+  ): Promise<{ parameter: Parameter }> {
     return apiFetch<{ parameter: Parameter }>(
       `/parameters/get${qs({ env: ref.env, app: ref.app, key: ref.key, version, label })}`,
+      request,
     );
   },
-  parameterMetadata(ref: ResourceRef): Promise<ParameterMetadata> {
+  parameterMetadata(ref: ResourceRef, request?: ApiRequestOptions): Promise<ParameterMetadata> {
     return apiFetch<ParameterMetadata>(
       `/parameters/metadata${qs({ env: ref.env, app: ref.app, key: ref.key })}`,
+      request,
     );
   },
   putParameter(req: PutParameterRequest): Promise<PutParameterResponse> {
@@ -301,6 +358,7 @@ export const api = {
     keyPrefix?: string,
     pageSize?: number,
     pageToken?: string,
+    request?: ApiRequestOptions,
   ): Promise<ListSecretsResponse> {
     return apiFetch<ListSecretsResponse>(
       `/secrets${qs({
@@ -310,11 +368,16 @@ export const api = {
         page_size: pageSize,
         page_token: pageToken,
       })}`,
+      request,
     );
   },
-  secretMetadata(ref: ResourceRef): Promise<{ secret: SecretMetadata }> {
+  secretMetadata(
+    ref: ResourceRef,
+    request?: ApiRequestOptions,
+  ): Promise<{ secret: SecretMetadata }> {
     return apiFetch<{ secret: SecretMetadata }>(
       `/secrets/metadata${qs({ env: ref.env, app: ref.app, key: ref.key })}`,
+      request,
     );
   },
   // Creating or updating a secret. For client-bound *updates* the caller must
@@ -355,9 +418,14 @@ export const api = {
   },
 
   // --- Policies ---
-  listPolicies(pageSize?: number, pageToken?: string): Promise<ListPoliciesResponse> {
+  listPolicies(
+    pageSize?: number,
+    pageToken?: string,
+    request?: ApiRequestOptions,
+  ): Promise<ListPoliciesResponse> {
     return apiFetch<ListPoliciesResponse>(
       `/policies${qs({ page_size: pageSize, page_token: pageToken })}`,
+      request,
     );
   },
   createPolicy(policy: Policy): Promise<{ policy: Policy }> {
@@ -371,9 +439,14 @@ export const api = {
   },
 
   // --- Identities ---
-  listIdentities(pageSize?: number, pageToken?: string): Promise<ListIdentitiesResponse> {
+  listIdentities(
+    pageSize?: number,
+    pageToken?: string,
+    request?: ApiRequestOptions,
+  ): Promise<ListIdentitiesResponse> {
     return apiFetch<ListIdentitiesResponse>(
       `/identities${qs({ page_size: pageSize, page_token: pageToken })}`,
+      request,
     );
   },
   createIdentity(req: CreateIdentityRequest): Promise<CreateIdentityResponse> {
@@ -411,7 +484,7 @@ export const api = {
   },
 
   // --- Audit ---
-  listAudit(filters: AuditFilters): Promise<ListAuditResponse> {
+  listAudit(filters: AuditFilters, request?: ApiRequestOptions): Promise<ListAuditResponse> {
     return apiFetch<ListAuditResponse>(
       `/audit${qs({
         env: filters.env,
@@ -424,12 +497,13 @@ export const api = {
         page_size: filters.page_size,
         page_token: filters.page_token,
       })}`,
+      request,
     );
   },
 
   // --- Subscribers ---
-  subscribers(): Promise<SubscribersResponse> {
-    return apiFetch<SubscribersResponse>("/subscribers");
+  subscribers(request?: ApiRequestOptions): Promise<SubscribersResponse> {
+    return apiFetch<SubscribersResponse>("/subscribers", request);
   },
 
   // --- Configuration releases ---
@@ -438,34 +512,85 @@ export const api = {
     name?: string,
     pageSize?: number,
     pageToken?: string,
+    request?: ApiRequestOptions,
   ): Promise<{ releases: ReleaseSummary[]; next_page_token: string }> {
-    return apiFetch(`/releases${qs({ env: ns.env, app: ns.app, name, page_size: pageSize, page_token: pageToken })}`);
+    return apiFetch(
+      `/releases${qs({ env: ns.env, app: ns.app, name, page_size: pageSize, page_token: pageToken })}`,
+      request,
+    );
   },
   createRelease(req: CreateReleaseRequest): Promise<{ release: ConfigurationRelease }> {
     return apiFetch("/releases", { method: "POST", body: req });
   },
-  getRelease(ns: NamespaceRef, name: string, version: number): Promise<{ release: ConfigurationRelease }> {
-    return apiFetch(`/releases/get${qs({ env: ns.env, app: ns.app, name, version })}`);
+  getRelease(
+    ns: NamespaceRef,
+    name: string,
+    version: number,
+    request?: ApiRequestOptions,
+  ): Promise<{ release: ConfigurationRelease }> {
+    return apiFetch(`/releases/get${qs({ env: ns.env, app: ns.app, name, version })}`, request);
   },
-  getActiveRelease(ns: NamespaceRef, name: string): Promise<{ release: ConfigurationRelease; activation_revision: number; previous_version: number }> {
-    return apiFetch(`/releases/active${qs({ env: ns.env, app: ns.app, name })}`);
+  getActiveRelease(
+    ns: NamespaceRef,
+    name: string,
+    request?: ApiRequestOptions,
+  ): Promise<{
+    release: ConfigurationRelease;
+    activation_revision: number;
+    previous_version: number;
+  }> {
+    return apiFetch(`/releases/active${qs({ env: ns.env, app: ns.app, name })}`, request);
   },
-  validateRelease(ns: NamespaceRef, name: string, version: number): Promise<ValidateReleaseResponse> {
-    return apiFetch("/releases/validate", { method: "POST", body: { namespace: ns, name, version } });
+  validateRelease(
+    ns: NamespaceRef,
+    name: string,
+    version: number,
+  ): Promise<ValidateReleaseResponse> {
+    return apiFetch("/releases/validate", {
+      method: "POST",
+      body: { namespace: ns, name, version },
+    });
   },
-  activateRelease(ns: NamespaceRef, name: string, version: number, expected?: number): Promise<{ release: ConfigurationRelease; activation_revision: number; previous_version: number; changed: boolean }> {
+  activateRelease(
+    ns: NamespaceRef,
+    name: string,
+    version: number,
+    expected?: number,
+  ): Promise<{
+    release: ConfigurationRelease;
+    activation_revision: number;
+    previous_version: number;
+    changed: boolean;
+  }> {
     return apiFetch("/releases/activate", {
       method: "POST",
       body: { namespace: ns, name, version, expected_current_version: expected },
     });
   },
-  releaseSubscribers(ns: NamespaceRef, name: string, pageSize?: number, pageToken?: string): Promise<ReleaseSubscribersPage> {
-    return apiFetch(`/release-subscribers${qs({ env: ns.env, app: ns.app, name, page_size: pageSize, page_token: pageToken })}`);
+  releaseSubscribers(
+    ns: NamespaceRef,
+    name: string,
+    pageSize?: number,
+    pageToken?: string,
+    request?: ApiRequestOptions,
+  ): Promise<ReleaseSubscribersPage> {
+    return apiFetch(
+      `/release-subscribers${qs({ env: ns.env, app: ns.app, name, page_size: pageSize, page_token: pageToken })}`,
+      request,
+    );
   },
-  listSchemas(id?: string, pageToken?: string): Promise<{ schemas: ConfigurationSchema[]; next_page_token: string }> {
-    return apiFetch(`/configuration-schemas${qs({ id, page_token: pageToken })}`);
+  listSchemas(
+    id?: string,
+    pageToken?: string,
+    request?: ApiRequestOptions,
+  ): Promise<{ schemas: ConfigurationSchema[]; next_page_token: string }> {
+    return apiFetch(`/configuration-schemas${qs({ id, page_token: pageToken })}`, request);
   },
-  createSchema(id: string, schemaJson: string, metadataJson = "{}"): Promise<{ schema: ConfigurationSchema }> {
+  createSchema(
+    id: string,
+    schemaJson: string,
+    metadataJson = "{}",
+  ): Promise<{ schema: ConfigurationSchema }> {
     return apiFetch("/configuration-schemas", {
       method: "POST",
       body: { id, schema_json: schemaJson, metadata_json: metadataJson },
@@ -473,8 +598,8 @@ export const api = {
   },
 
   // --- Keys ---
-  keys(): Promise<KeysResponse> {
-    return apiFetch<KeysResponse>("/keys");
+  keys(request?: ApiRequestOptions): Promise<KeysResponse> {
+    return apiFetch<KeysResponse>("/keys", request);
   },
 };
 

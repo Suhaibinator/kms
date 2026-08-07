@@ -1,19 +1,9 @@
 import Link from "next/link";
 import { useRouter } from "next/router";
-import { useCallback, useEffect, useMemo, useState } from "react";
-import { api, ApiError, type ResourceRef } from "@/lib/api";
-import type { SecretMetadata, SecretVersion } from "@/lib/types";
-import { useToast } from "@/context/ToastContext";
-import { useQueryParams } from "@/lib/hooks";
-import {
-  displayNamespace,
-  displayPath,
-  formatUnixMs,
-  isEmptyJson,
-  labelEntries,
-  prettyJson,
-} from "@/lib/format";
-import { base64ByteLength, base64ToUtf8, looksLikeText, utf8ToBase64 } from "@/lib/encoding";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import CopyButton from "@/components/CopyButton";
+import { Icon } from "@/components/icons";
+import { ConfirmDialog, Modal } from "@/components/Modal";
 import {
   Badge,
   EmptyState,
@@ -27,9 +17,19 @@ import {
   Spinner,
   TableSkeleton,
 } from "@/components/ui";
-import { ConfirmDialog, Modal } from "@/components/Modal";
-import CopyButton from "@/components/CopyButton";
-import { Icon } from "@/components/icons";
+import { useToast } from "@/context/ToastContext";
+import { ApiError, api, isAbortError, type ResourceRef } from "@/lib/api";
+import { base64ByteLength, base64ToUtf8, looksLikeText, utf8ToBase64 } from "@/lib/encoding";
+import {
+  displayNamespace,
+  displayPath,
+  formatUnixMs,
+  isEmptyJson,
+  labelEntries,
+  prettyJson,
+} from "@/lib/format";
+import { useQueryParams } from "@/lib/hooks";
+import type { SecretMetadata, SecretVersion } from "@/lib/types";
 
 const REVEAL_SECONDS = 30;
 
@@ -53,13 +53,16 @@ export default function SecretDetailPage() {
   const ref = useMemo<ResourceRef>(() => ({ env, app, key }), [env, app, key]);
 
   const [secret, setSecret] = useState<SecretMetadata | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [notFound, setNotFound] = useState(false);
+  const [loadState, setLoadState] = useState<
+    "idle" | "loading" | "success" | "not-found" | "error"
+  >("idle");
+  const loadController = useRef<AbortController | null>(null);
 
   // Reveal flow.
   const [revealTarget, setRevealTarget] = useState<number | null>(null); // version pending confirm
   const [revealBusy, setRevealBusy] = useState(false);
   const [revealed, setRevealed] = useState<Revealed | null>(null);
+  const [valueVisible, setValueVisible] = useState(false);
   const [secondsLeft, setSecondsLeft] = useState(0);
   const [selectedVersion, setSelectedVersion] = useState<number | null>(null);
 
@@ -77,37 +80,49 @@ export default function SecretDetailPage() {
 
   const load = useCallback(async () => {
     if (!hasRef) return;
-    setLoading(true);
-    setNotFound(false);
+    loadController.current?.abort();
+    const controller = new AbortController();
+    loadController.current = controller;
+    setLoadState("loading");
+    setSecret(null);
     try {
-      const res = await api.secretMetadata(ref);
+      const res = await api.secretMetadata(ref, { signal: controller.signal });
+      if (loadController.current !== controller) return;
       setSecret(res.secret);
       const cur = res.secret.labels?.current;
-      setSelectedVersion(typeof cur === "number" ? cur : res.secret.versions?.[0]?.version ?? null);
+      setSelectedVersion(
+        typeof cur === "number" ? cur : (res.secret.versions?.[0]?.version ?? null),
+      );
+      setLoadState("success");
     } catch (err) {
+      if (isAbortError(err) || loadController.current !== controller) return;
       if (err instanceof ApiError && err.status === 404) {
-        setNotFound(true);
+        setLoadState("not-found");
       } else {
+        setLoadState("error");
         toast.error(err, "Failed to load secret");
       }
-    } finally {
-      setLoading(false);
     }
   }, [hasRef, ref, toast]);
 
   useEffect(() => {
-    if (ready && hasRef) void load();
+    if (!ready) return;
+    if (hasRef) {
+      setRevealed(null);
+      setValueVisible(false);
+      void load();
+    } else {
+      setLoadState("idle");
+      setSecret(null);
+    }
+    return () => loadController.current?.abort();
   }, [ready, hasRef, load]);
-
-  // Clear any revealed value when navigating away or reloading the secret.
-  useEffect(() => {
-    return () => setRevealed(null);
-  }, [env, app, key]);
 
   // Auto-hide countdown for the revealed value.
   useEffect(() => {
     if (!revealed) {
       setSecondsLeft(0);
+      setValueVisible(false);
       return;
     }
     const expiresAt = Date.now() + REVEAL_SECONDS * 1000;
@@ -136,6 +151,7 @@ export default function SecretDetailPage() {
           contentType: res.content_type,
           isText: looksLikeText(res.value_base64),
         });
+        setValueVisible(true);
         // No value in the toast — metadata only.
         toast.success(`Revealed version ${res.version}`, "Recorded in the audit log.");
       } catch (err) {
@@ -190,7 +206,7 @@ export default function SecretDetailPage() {
 
   // Header and card frames come straight from the URL, so they paint at once
   // and only the values fill in — no full-page spinner swap.
-  if (!ready || loading) {
+  if (!ready || (hasRef && (loadState === "idle" || loadState === "loading"))) {
     return (
       <>
         <PageHeader
@@ -238,7 +254,7 @@ export default function SecretDetailPage() {
       </>
     );
   }
-  if (notFound || !secret) {
+  if (loadState === "not-found") {
     return (
       <>
         <PageHeader
@@ -251,6 +267,24 @@ export default function SecretDetailPage() {
         />
         <EmptyState icon={<Icon.secret size={20} />} title="Not found">
           No secret exists at <span className="mono">{displayPath(ref)}</span>.
+        </EmptyState>
+      </>
+    );
+  }
+  if (loadState === "error" || !secret) {
+    return (
+      <>
+        <PageHeader
+          title="Could not load secret"
+          actions={
+            <button className="btn btn-primary" onClick={() => void load()}>
+              Try again
+            </button>
+          }
+        />
+        <EmptyState icon={<Icon.secret size={20} />} title="Secret unavailable">
+          The server could not load <span className="mono">{displayPath(ref)}</span>. Check the
+          connection and try again.
         </EmptyState>
       </>
     );
@@ -285,15 +319,29 @@ export default function SecretDetailPage() {
         <div className="card-title">Metadata</div>
         <KeyValue
           rows={[
-            ["Namespace", <span className="mono" key="ns">{displayNamespace(ref)}</span>],
-            ["Key", <span className="mono" key="key">{key}</span>],
+            [
+              "Namespace",
+              <span className="mono" key="ns">
+                {displayNamespace(ref)}
+              </span>,
+            ],
+            [
+              "Key",
+              <span className="mono" key="key">
+                {key}
+              </span>,
+            ],
             ["Content type", secret.content_type || "—"],
             [
               "Mode",
               secret.client_bound ? (
-                <Badge kind="warning">client-bound</Badge>
+                <Badge kind="warning" key="mode">
+                  client-bound
+                </Badge>
               ) : (
-                <Badge kind="neutral">standard (master-key)</Badge>
+                <Badge kind="neutral" key="mode">
+                  standard (master-key)
+                </Badge>
               ),
             ],
             ["Access token", secret.has_access_token ? "yes" : "no"],
@@ -303,7 +351,7 @@ export default function SecretDetailPage() {
             [
               "Labels",
               labelEntries(secret.labels).length ? (
-                <div className="row-wrap">
+                <div className="row-wrap" key="labels">
                   {labelEntries(secret.labels).map(([k, v]) => (
                     <Badge key={k} kind="accent">
                       {k}: v{v}
@@ -331,11 +379,10 @@ export default function SecretDetailPage() {
           <div className="info-panel">
             <strong>Client-bound — value cannot be revealed here.</strong>
             <div className="mt-8">
-              This secret is encrypted with a key derived from the consuming
-              application&apos;s access token, which the server never stores in a
-              recoverable form. The server cannot decrypt it on its own, so there
-              is no reveal flow. Only the application holding the token can read
-              the value.
+              This secret is encrypted with a key derived from the consuming application&apos;s
+              access token, which the server never stores in a recoverable form. The server cannot
+              decrypt it on its own, so there is no reveal flow. Only the application holding the
+              token can read the value.
             </div>
           </div>
         ) : revealed ? (
@@ -346,45 +393,59 @@ export default function SecretDetailPage() {
                 <span className="faint text-sm">{revealed.contentType || "value"}</span>
               </div>
               <div className="row-wrap">
-                <CopyButton
-                  label="Copy value"
-                  value={() =>
-                    revealed.isText ? base64ToUtf8(revealed.valueBase64) : revealed.valueBase64
-                  }
-                />
-                <button className="btn btn-sm" onClick={() => setRevealed(null)}>
-                  Hide now
+                {valueVisible ? (
+                  <CopyButton
+                    label="Copy value"
+                    value={() =>
+                      revealed.isText ? base64ToUtf8(revealed.valueBase64) : revealed.valueBase64
+                    }
+                  />
+                ) : null}
+                <button
+                  className="btn btn-sm"
+                  aria-expanded={valueVisible}
+                  aria-controls="revealed-secret-value"
+                  onClick={() => setValueVisible((visible) => !visible)}
+                >
+                  {valueVisible ? "Hide value" : "Show value"}
+                </button>
+                <button
+                  className="btn btn-sm"
+                  onClick={() => {
+                    setRevealed(null);
+                    setValueVisible(false);
+                  }}
+                >
+                  Forget value
                 </button>
               </div>
             </div>
-            {revealed.isText ? (
-              <div className="reveal-value masked" tabIndex={0} title="Hover, focus, or tap to reveal">
-                {base64ToUtf8(revealed.valueBase64)}
-              </div>
+            {valueVisible ? (
+              revealed.isText ? (
+                <div id="revealed-secret-value" className="reveal-value">
+                  {base64ToUtf8(revealed.valueBase64)}
+                </div>
+              ) : (
+                <div id="revealed-secret-value">
+                  <div className="warn-panel mb-8">
+                    Binary value ({base64ByteLength(revealed.valueBase64)} bytes) — shown
+                    base64-encoded.
+                  </div>
+                  <div className="reveal-value">{revealed.valueBase64}</div>
+                </div>
+              )
             ) : (
-              <div>
-                <div className="warn-panel mb-8">
-                  Binary value ({base64ByteLength(revealed.valueBase64)} bytes) — shown
-                  base64-encoded.
-                </div>
-                <div
-                  className="reveal-value masked"
-                  tabIndex={0}
-                  title="Hover, focus, or tap to reveal"
-                >
-                  {revealed.valueBase64}
-                </div>
+              <div id="revealed-secret-value" className="secret-concealed" aria-live="polite">
+                Value concealed. Choose “Show value” to place the plaintext on screen.
               </div>
             )}
-            <div className="reveal-countdown">
-              Auto-hides in {secondsLeft}s. Value is blurred until you hover, focus, or tap it.
-            </div>
+            <div className="reveal-countdown">Decrypted value is forgotten in {secondsLeft}s.</div>
           </div>
         ) : (
           <div>
             <div className="warn-panel mb-16">
-              Revealing decrypts the secret and records an audit event. The value
-              auto-hides after {REVEAL_SECONDS} seconds.
+              Revealing decrypts the secret and records an audit event. The value auto-hides after{" "}
+              {REVEAL_SECONDS} seconds.
             </div>
             <div className="row-wrap">
               <label className="field-label" htmlFor="reveal-version" style={{ margin: 0 }}>
@@ -464,8 +525,8 @@ export default function SecretDetailPage() {
         message={
           <>
             You are about to decrypt and display version {revealTarget} of{" "}
-            <span className="mono">{displayPath(ref)}</span>. This is recorded in the
-            audit log. The value will auto-hide after {REVEAL_SECONDS} seconds.
+            <span className="mono">{displayPath(ref)}</span>. This is recorded in the audit log. The
+            value will auto-hide after {REVEAL_SECONDS} seconds.
           </>
         }
         confirmLabel="Reveal"
@@ -490,8 +551,8 @@ export default function SecretDetailPage() {
         message={
           confirm?.kind === "delete" ? (
             <>
-              This deletes the secret <span className="mono">{displayPath(ref)}</span> and all
-              of its versions.
+              This deletes the secret <span className="mono">{displayPath(ref)}</span> and all of
+              its versions.
             </>
           ) : confirm?.kind === "promote" ? (
             <>Make version {confirm.version} the current version?</>

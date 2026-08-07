@@ -1,19 +1,13 @@
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
-import { api } from "@/lib/api";
-import type { AuthMethod, Namespace } from "@/lib/types";
-import { useToast } from "@/context/ToastContext";
-import { useNamespaces } from "@/lib/hooks";
-import { formatUnixMs } from "@/lib/format";
-import {
-  Badge,
-  EmptyState,
-  Field,
-  PageHeader,
-  TableSkeleton,
-} from "@/components/ui";
 import { Icon } from "@/components/icons";
 import { ConfirmDialog, Modal } from "@/components/Modal";
+import { Badge, EmptyState, Field, PageHeader, TableSkeleton } from "@/components/ui";
+import { useToast } from "@/context/ToastContext";
+import { api } from "@/lib/api";
+import { formatUnixMs } from "@/lib/format";
+import { useNamespaces } from "@/lib/hooks";
+import type { AuthMethod, Namespace } from "@/lib/types";
 
 function parametersLink(ns: { env: string; app: string }): string {
   return `/parameters?env=${encodeURIComponent(ns.env)}&app=${encodeURIComponent(ns.app)}`;
@@ -73,7 +67,9 @@ function AuthMethodsField({
         />
         <label htmlFor="method-token">
           <strong>Token</strong>
-          <div className="faint text-sm">Bearer tokens. Possession-free — anyone holding the string is the app.</div>
+          <div className="faint text-sm">
+            Bearer tokens. Possession-free — anyone holding the string is the app.
+          </div>
         </label>
       </div>
     </Field>
@@ -130,7 +126,10 @@ export default function NamespacesPage() {
     const envVal = env.trim();
     const appVal = app.trim();
     if (!envVal || !appVal) {
-      toast.error(new Error("Both an environment and an application are required."), "Missing fields");
+      toast.error(
+        new Error("Both an environment and an application are required."),
+        "Missing fields",
+      );
       return;
     }
     if (methods.length === 0) {
@@ -335,7 +334,6 @@ export default function NamespacesPage() {
                 value={env}
                 onChange={(e) => setEnv(e.target.value)}
                 placeholder="prod"
-                autoFocus
               />
             </Field>
             <Field label="Application" hint="e.g. gradethis">
@@ -377,7 +375,11 @@ export default function NamespacesPage() {
         {editTarget ? (
           <form onSubmit={onEdit}>
             <Field label="Namespace">
-              <input className="input mono" value={`${editTarget.env}/${editTarget.app}`} disabled />
+              <input
+                className="input mono"
+                value={`${editTarget.env}/${editTarget.app}`}
+                disabled
+              />
             </Field>
             <Field label="Description" hint="Optional.">
               <input

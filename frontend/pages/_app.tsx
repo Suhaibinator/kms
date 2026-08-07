@@ -1,12 +1,12 @@
 import type { AppProps } from "next/app";
-import { useRouter } from "next/router";
-import { useEffect, type ReactNode } from "react";
-import Head from "next/head";
 import localFont from "next/font/local";
-import { AuthProvider, useAuth } from "@/context/AuthContext";
-import { ToastProvider } from "@/context/ToastContext";
+import Head from "next/head";
+import { useRouter } from "next/router";
+import { type ReactNode, useEffect } from "react";
 import AppShell from "@/components/AppShell";
 import { Loading } from "@/components/ui";
+import { AuthProvider, useAuth } from "@/context/AuthContext";
+import { ToastProvider } from "@/context/ToastContext";
 import { getToken } from "@/lib/api";
 import "@/styles/globals.css";
 
@@ -71,7 +71,7 @@ export default function App({ Component, pageProps }: AppProps) {
   return (
     // `display: contents` puts --font-inter in scope for the whole tree
     // without introducing a box that could affect layout.
-    <div className={inter.variable} style={{ display: "contents" }}>
+    <div className={`${inter.variable} ${inter.className}`} style={{ display: "contents" }}>
       <Head>
         {/* No <title> here on purpose: next/head keeps the *first* title it
             collects, and _app renders above the page, so a fallback here would

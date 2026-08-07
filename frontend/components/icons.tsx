@@ -93,8 +93,7 @@ export const Icon = {
       </>,
       size,
     ),
-  health: ({ size = 16 }: IconProps) =>
-    svg(<path d="M3 12h4l2 6 4-14 2 8h6" />, size),
+  health: ({ size = 16 }: IconProps) => svg(<path d="M3 12h4l2 6 4-14 2 8h6" />, size),
   logout: ({ size = 16 }: IconProps) =>
     svg(
       <>

@@ -116,12 +116,18 @@ CI runs mypy and pytest on the oldest and newest supported Python versions.
 
 ## Frontend
 
-The frontend has compile-time regression checks and a production export:
+The frontend has compile-time checks, lint/format gates, component tests,
+browser smoke tests, and a production export:
 
 ```bash
 cd frontend
 npm ci
 npm run typecheck
+npm run lint
+npm run format:check
+npm run test
+npx playwright install chromium # first run only
+npm run test:e2e
 npm run build
 test -f out/index.html
 ```
@@ -143,8 +149,8 @@ The workflow in `.github/workflows/ci.yml` runs these independent checks:
   native permission and ACL semantics flow through database, backup, restore,
   certificate, and key operations.
 - `Python SDK (pytest & mypy)` — the supported Python-version matrix.
-- `Frontend (typecheck & build)` — locked install, generated types, TypeScript,
-  and static export.
+- `Frontend (quality, tests & build)` — locked install, generated types,
+  TypeScript, linting, formatting, component/browser tests, and static export.
 - Go lint and `govulncheck` remain independent required checks.
 
 The integration job deliberately provisions no external services. If a new

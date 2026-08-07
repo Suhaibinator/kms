@@ -1,15 +1,15 @@
 import Link from "next/link";
 import { useRouter } from "next/router";
 import { useEffect, useRef, useState } from "react";
-import { api } from "@/lib/api";
-import { useToast } from "@/context/ToastContext";
-import { useNamespaces, useQueryParams } from "@/lib/hooks";
-import { datetimeLocalToUnixMs } from "@/lib/format";
-import { utf8ToBase64 } from "@/lib/encoding";
-import { Field, PageHeader, Spinner } from "@/components/ui";
+import CopyButton from "@/components/CopyButton";
 import { Modal } from "@/components/Modal";
 import NamespacePicker, { type NamespaceSelection } from "@/components/NamespacePicker";
-import CopyButton from "@/components/CopyButton";
+import { Field, PageHeader, Spinner } from "@/components/ui";
+import { useToast } from "@/context/ToastContext";
+import { api } from "@/lib/api";
+import { utf8ToBase64 } from "@/lib/encoding";
+import { datetimeLocalToUnixMs } from "@/lib/format";
+import { useNamespaces, useQueryParams } from "@/lib/hooks";
 
 const NO_NS: NamespaceSelection = { env: "", app: "" };
 
@@ -40,7 +40,9 @@ export default function NewSecretPage() {
 
   // Shown once after creation if the server minted an access token.
   const [mintedToken, setMintedToken] = useState<string | null>(null);
-  const [createdRef, setCreatedRef] = useState<{ env: string; app: string; key: string } | null>(null);
+  const [createdRef, setCreatedRef] = useState<{ env: string; app: string; key: string } | null>(
+    null,
+  );
 
   const seeded = useRef(false);
   useEffect(() => {
@@ -139,13 +141,15 @@ export default function NewSecretPage() {
             <NamespacePicker namespaces={namespaces} value={ns} onChange={setNs} />
           </div>
 
-          <Field label="Key" hint="Relative to the namespace, e.g. stripe-api-key or billing/webhook-secret">
+          <Field
+            label="Key"
+            hint="Relative to the namespace, e.g. stripe-api-key or billing/webhook-secret"
+          >
             <input
               className="input mono"
               value={key}
               onChange={(e) => setKey(e.target.value)}
               placeholder="stripe-api-key"
-              autoFocus
             />
           </Field>
 
@@ -207,8 +211,8 @@ export default function NewSecretPage() {
             <label htmlFor="client-bound">
               <strong>Client-bound encryption</strong>
               <div className="faint text-sm">
-                The value is additionally wrapped with a key derived from a client
-                access token. The server alone cannot decrypt it.
+                The value is additionally wrapped with a key derived from a client access token. The
+                server alone cannot decrypt it.
               </div>
             </label>
           </div>
@@ -216,24 +220,29 @@ export default function NewSecretPage() {
           {clientBound ? (
             <>
               <div className="danger-panel mb-16">
-                <strong>Permanent-loss warning.</strong> There is no recovery escrow.
-                Losing <em>either</em> the server master key <em>or</em> this secret&apos;s
-                client access token makes the value <strong>permanently unrecoverable</strong>.
-                Frontend reveal, CLI plaintext output, and admin export are all impossible
-                for client-bound secrets. Opting in is an explicit acceptance of this risk.
+                <strong>Permanent-loss warning.</strong> There is no recovery escrow. Losing{" "}
+                <em>either</em> the server master key <em>or</em> this secret&apos;s client access
+                token makes the value <strong>permanently unrecoverable</strong>. Frontend reveal,
+                CLI plaintext output, and admin export are all impossible for client-bound secrets.
+                Opting in is an explicit acceptance of this risk.
               </div>
 
               <div className="checkbox-row mb-16">
-                <input id="ack" type="checkbox" checked={ack} onChange={(e) => setAck(e.target.checked)} />
+                <input
+                  id="ack"
+                  type="checkbox"
+                  checked={ack}
+                  onChange={(e) => setAck(e.target.checked)}
+                />
                 <label htmlFor="ack">
-                  I understand that loss of the master key or the client access token
-                  destroys this secret with no recovery path.
+                  I understand that loss of the master key or the client access token destroys this
+                  secret with no recovery path.
                 </label>
               </div>
 
               <div className="info-panel mb-16">
-                A new client access token will be generated and shown once after creation.
-                Store it immediately; the server cannot recover it later.
+                A new client access token will be generated and shown once after creation. Store it
+                immediately; the server cannot recover it later.
               </div>
             </>
           ) : (
@@ -275,9 +284,9 @@ export default function NewSecretPage() {
         }
       >
         <div className="danger-panel mb-16">
-          <strong>This token will never be shown again.</strong> Store it in your
-          application&apos;s configuration now. If this is a client-bound secret, losing
-          this token means the value can never be recovered.
+          <strong>This token will never be shown again.</strong> Store it in your application&apos;s
+          configuration now. If this is a client-bound secret, losing this token means the value can
+          never be recovered.
         </div>
         <div className="token-reveal">{mintedToken}</div>
         <div className="row-wrap mt-16">

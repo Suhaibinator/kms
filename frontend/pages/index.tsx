@@ -1,9 +1,6 @@
 import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
-import { api } from "@/lib/api";
-import type { AuditEvent, HealthResponse, Subscriber } from "@/lib/types";
-import { useToast } from "@/context/ToastContext";
-import { formatRelative } from "@/lib/format";
+import { Icon } from "@/components/icons";
 import {
   Badge,
   EmptyState,
@@ -12,7 +9,10 @@ import {
   StatSkeleton,
   TableSkeleton,
 } from "@/components/ui";
-import { Icon } from "@/components/icons";
+import { useToast } from "@/context/ToastContext";
+import { api } from "@/lib/api";
+import { displayAuditResource, formatRelative } from "@/lib/format";
+import type { AuditEvent, HealthResponse, Subscriber } from "@/lib/types";
 
 interface Count {
   value: number;
@@ -50,15 +50,6 @@ function CountText({ c }: { c: Count | null }) {
   );
 }
 
-// Recent-activity resource: full path when a key is present, else namespace.
-function resourceLabel(e: AuditEvent): string | null {
-  if (e.resource_env && e.resource_app && e.resource_key) {
-    return `/${e.resource_env}/${e.resource_app}/${e.resource_key}`;
-  }
-  if (e.resource_env && e.resource_app) return `${e.resource_env}/${e.resource_app}`;
-  return null;
-}
-
 export default function DashboardPage() {
   const toast = useToast();
   const [data, setData] = useState<Dashboard>(EMPTY);
@@ -92,9 +83,9 @@ export default function DashboardPage() {
     if (audit.status === "fulfilled") next.audit = audit.value.events ?? [];
 
     // Surface the first failure (if any) without blocking the rest.
-    const firstError = [health, ns, subs, audit].find(
-      (r) => r.status === "rejected",
-    ) as PromiseRejectedResult | undefined;
+    const firstError = [health, ns, subs, audit].find((r) => r.status === "rejected") as
+      | PromiseRejectedResult
+      | undefined;
     if (firstError) toast.error(firstError.reason, "Some dashboard data failed to load");
 
     setData(next);
@@ -210,10 +201,7 @@ export default function DashboardPage() {
           </Link>
         </div>
         {loading ? (
-          <TableSkeleton
-            headers={["When", "Event", "Actor", "Resource", "Decision"]}
-            rows={5}
-          />
+          <TableSkeleton headers={["When", "Event", "Actor", "Resource", "Decision"]} rows={5} />
         ) : data.audit.length === 0 ? (
           <EmptyState icon={<Icon.audit size={20} />} title="No recent events">
             Administrative actions and policy decisions will appear here.
@@ -232,7 +220,7 @@ export default function DashboardPage() {
               </thead>
               <tbody>
                 {data.audit.map((e) => {
-                  const resource = resourceLabel(e);
+                  const resource = displayAuditResource(e);
                   return (
                     <tr key={e.id}>
                       <td className="nowrap">{formatRelative(e.created_at_unix_ms)}</td>
@@ -243,9 +231,7 @@ export default function DashboardPage() {
                           <span className="faint text-sm"> · {e.actor_type}</span>
                         ) : null}
                       </td>
-                      <td className="cell-path">
-                        {resource || <span className="faint">—</span>}
-                      </td>
+                      <td className="cell-path">{resource || <span className="faint">—</span>}</td>
                       <td>
                         <Badge
                           kind={
@@ -276,10 +262,7 @@ export default function DashboardPage() {
           </Link>
         </div>
         {loading ? (
-          <TableSkeleton
-            headers={["Client", "Last heartbeat", "Applied revision"]}
-            rows={3}
-          />
+          <TableSkeleton headers={["Client", "Last heartbeat", "Applied revision"]} rows={3} />
         ) : data.subscribers.length === 0 ? (
           <EmptyState
             icon={<Icon.subscribers size={20} />}
