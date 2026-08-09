@@ -1,10 +1,24 @@
-import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
-import { api } from "@/lib/api";
-import type { AuditEvent, AuditFilters } from "@/lib/types";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Icon } from "@/components/icons";
+import {
+  Badge,
+  EmptyState,
+  JsonView,
+  PageHeader,
+  Pagination,
+  TableSkeleton,
+} from "@/components/ui";
 import { useToast } from "@/context/ToastContext";
+import { api, isAbortError } from "@/lib/api";
+import {
+  datetimeLocalToUnixMs,
+  displayAuditResource,
+  formatUnixMs,
+  isEmptyJson,
+  prettyJson,
+} from "@/lib/format";
 import { useNamespaces } from "@/lib/hooks";
-import { datetimeLocalToUnixMs, formatUnixMs, isEmptyJson, prettyJson } from "@/lib/format";
-import { Badge, EmptyState, JsonView, Loading, PageHeader, Pagination } from "@/components/ui";
+import type { AuditEvent, AuditFilters } from "@/lib/types";
 
 interface FilterForm {
   env: string;
@@ -32,18 +46,6 @@ function decisionKind(decision: string): "success" | "danger" | "neutral" {
   return "neutral";
 }
 
-// Render the resource an event touched: full path when a key is present,
-// otherwise the namespace, otherwise just the resource type.
-function resourceLabel(e: AuditEvent): string | null {
-  if (e.resource_env && e.resource_app && e.resource_key) {
-    return `/${e.resource_env}/${e.resource_app}/${e.resource_key}`;
-  }
-  if (e.resource_env && e.resource_app) {
-    return `${e.resource_env}/${e.resource_app}`;
-  }
-  return null;
-}
-
 export default function AuditPage() {
   const toast = useToast();
   const { namespaces } = useNamespaces();
@@ -52,6 +54,7 @@ export default function AuditPage() {
   const [nextToken, setNextToken] = useState("");
   const [pageStack, setPageStack] = useState<string[]>([]);
   const [pageToken, setPageToken] = useState("");
+  const requestRef = useRef<AbortController | null>(null);
 
   const [form, setForm] = useState<FilterForm>(EMPTY_FORM);
   const [applied, setApplied] = useState<AuditFilters>({});
@@ -73,15 +76,25 @@ export default function AuditPage() {
 
   const load = useCallback(
     async (token: string, filters: AuditFilters) => {
+      requestRef.current?.abort();
+      const controller = new AbortController();
+      requestRef.current = controller;
       setLoading(true);
       try {
-        const res = await api.listAudit({ ...filters, page_size: 50, page_token: token || undefined });
+        const res = await api.listAudit(
+          { ...filters, page_size: 50, page_token: token || undefined },
+          { signal: controller.signal },
+        );
+        if (requestRef.current !== controller) return;
         setEvents(res.events ?? []);
         setNextToken(res.next_page_token ?? "");
       } catch (err) {
-        toast.error(err, "Failed to load audit events");
+        if (!isAbortError(err)) toast.error(err, "Failed to load audit events");
       } finally {
-        setLoading(false);
+        if (requestRef.current === controller) {
+          requestRef.current = null;
+          setLoading(false);
+        }
       }
     },
     [toast],
@@ -89,6 +102,10 @@ export default function AuditPage() {
 
   useEffect(() => {
     void load(pageToken, applied);
+    return () => {
+      requestRef.current?.abort();
+      requestRef.current = null;
+    };
   }, [load, pageToken, applied]);
 
   function apply(e: React.FormEvent) {
@@ -118,6 +135,12 @@ export default function AuditPage() {
     setPageStack((s) => [...s, pageToken]);
     setPageToken(nextToken);
   }
+  function goPrevious() {
+    const previous = pageStack[pageStack.length - 1];
+    if (previous === undefined) return;
+    setPageStack((s) => s.slice(0, -1));
+    setPageToken(previous);
+  }
   function goReset() {
     setPageStack([]);
     setPageToken("");
@@ -131,7 +154,10 @@ export default function AuditPage() {
 
   return (
     <>
-      <PageHeader title="Audit log" subtitle="Authorization decisions and administrative actions." />
+      <PageHeader
+        title="Audit log"
+        subtitle="Authorization decisions and administrative actions."
+      />
 
       <form className="filters" onSubmit={apply}>
         <div className="field">
@@ -239,9 +265,22 @@ export default function AuditPage() {
       </form>
 
       {loading ? (
-        <Loading />
+        <TableSkeleton
+          headers={["Time", "Event", "Actor", "Resource", "Decision", "Source IP"]}
+          rows={8}
+        />
       ) : events.length === 0 ? (
-        <EmptyState title="No audit events">No events match the current filters.</EmptyState>
+        <EmptyState
+          icon={<Icon.audit size={20} />}
+          title="No audit events"
+          actions={
+            <button className="btn" onClick={clear}>
+              Clear filters
+            </button>
+          }
+        >
+          No events match the current filters.
+        </EmptyState>
       ) : (
         <div className="table-wrap card-table">
           <table className="data">
@@ -260,7 +299,7 @@ export default function AuditPage() {
               {events.map((e) => {
                 const open = expanded === e.id;
                 const hasMeta = !isEmptyJson(e.metadata_json);
-                const resource = resourceLabel(e);
+                const resource = displayAuditResource(e);
                 return (
                   <Fragment key={e.id}>
                     <tr>
@@ -328,6 +367,8 @@ export default function AuditPage() {
       <Pagination
         hasNext={!!nextToken}
         onNext={goNext}
+        hasPrevious={pageStack.length > 0}
+        onPrevious={goPrevious}
         onReset={goReset}
         showReset={pageStack.length > 0}
       />

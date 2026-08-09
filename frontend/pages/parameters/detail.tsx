@@ -1,23 +1,33 @@
 import Link from "next/link";
 import { useRouter } from "next/router";
-import { useCallback, useEffect, useMemo, useState } from "react";
-import { api, ApiError, type ResourceRef } from "@/lib/api";
-import { PARAMETER_CONTENT_TYPES, type Parameter, type ParameterMetadata } from "@/lib/types";
-import { useToast } from "@/context/ToastContext";
-import { useQueryParams } from "@/lib/hooks";
-import { displayNamespace, displayPath, formatUnixMs, isEmptyJson, labelEntries, prettyJson } from "@/lib/format";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import CopyButton from "@/components/CopyButton";
+import { Icon } from "@/components/icons";
+import { ConfirmDialog, Modal } from "@/components/Modal";
 import {
   Badge,
   EmptyState,
   Field,
   JsonView,
   KeyValue,
-  Loading,
   PageHeader,
+  PageTitle,
+  Skeleton,
   Spinner,
+  TableSkeleton,
 } from "@/components/ui";
-import { ConfirmDialog, Modal } from "@/components/Modal";
-import CopyButton from "@/components/CopyButton";
+import { useToast } from "@/context/ToastContext";
+import { ApiError, api, isAbortError, type ResourceRef } from "@/lib/api";
+import {
+  displayNamespace,
+  displayPath,
+  formatUnixMs,
+  isEmptyJson,
+  labelEntries,
+  prettyJson,
+} from "@/lib/format";
+import { useQueryParams } from "@/lib/hooks";
+import { PARAMETER_CONTENT_TYPES, type Parameter, type ParameterMetadata } from "@/lib/types";
 
 export default function ParameterDetailPage() {
   const router = useRouter();
@@ -31,12 +41,16 @@ export default function ParameterDetailPage() {
 
   const [meta, setMeta] = useState<ParameterMetadata | null>(null);
   const [current, setCurrent] = useState<Parameter | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [notFound, setNotFound] = useState(false);
+  const [loadState, setLoadState] = useState<
+    "idle" | "loading" | "success" | "not-found" | "error"
+  >("idle");
+  const loadController = useRef<AbortController | null>(null);
 
-  const [viewed, setViewed] = useState<{ version: number; value: string; contentType: string } | null>(
-    null,
-  );
+  const [viewed, setViewed] = useState<{
+    version: number;
+    value: string;
+    contentType: string;
+  } | null>(null);
 
   const [newVersionOpen, setNewVersionOpen] = useState(false);
   const [value, setValue] = useState("");
@@ -49,25 +63,42 @@ export default function ParameterDetailPage() {
 
   const load = useCallback(async () => {
     if (!hasRef) return;
-    setLoading(true);
-    setNotFound(false);
+    loadController.current?.abort();
+    const controller = new AbortController();
+    loadController.current = controller;
+    setLoadState("loading");
+    setMeta(null);
+    setCurrent(null);
     try {
-      const [m, cur] = await Promise.all([api.parameterMetadata(ref), api.getParameter(ref)]);
+      const [m, cur] = await Promise.all([
+        api.parameterMetadata(ref, { signal: controller.signal }),
+        api.getParameter(ref, undefined, undefined, { signal: controller.signal }),
+      ]);
+      if (loadController.current !== controller) return;
       setMeta(m);
       setCurrent(cur.parameter);
+      setLoadState("success");
     } catch (err) {
+      if (isAbortError(err) || loadController.current !== controller) return;
       if (err instanceof ApiError && err.status === 404) {
-        setNotFound(true);
+        setLoadState("not-found");
       } else {
+        setLoadState("error");
         toast.error(err, "Failed to load parameter");
       }
-    } finally {
-      setLoading(false);
     }
   }, [hasRef, ref, toast]);
 
   useEffect(() => {
-    if (ready && hasRef) void load();
+    if (!ready) return;
+    if (hasRef) {
+      void load();
+    } else {
+      setLoadState("idle");
+      setMeta(null);
+      setCurrent(null);
+    }
+    return () => loadController.current?.abort();
   }, [ready, hasRef, load]);
 
   function openNewVersion() {
@@ -121,7 +152,9 @@ export default function ParameterDetailPage() {
     try {
       await api.deleteParameter(ref);
       toast.success("Parameter deleted", displayPath(ref));
-      await router.push(`/parameters?env=${encodeURIComponent(env)}&app=${encodeURIComponent(app)}`);
+      await router.push(
+        `/parameters?env=${encodeURIComponent(env)}&app=${encodeURIComponent(app)}`,
+      );
     } catch (err) {
       toast.error(err, "Failed to delete parameter");
     } finally {
@@ -133,15 +166,54 @@ export default function ParameterDetailPage() {
     ? `/parameters?env=${encodeURIComponent(env)}&app=${encodeURIComponent(app)}`
     : "/parameters";
 
-  if (!ready || loading) return <Loading label="Loading parameter…" />;
-  if (!hasRef) {
+  // The heading and card frames are known from the URL alone, so they render
+  // immediately and only the values fill in — no full-page spinner swap.
+  if (!ready || (hasRef && (loadState === "idle" || loadState === "loading"))) {
     return (
-      <EmptyState title="No parameter specified">
-        Provide ?env=, ?app=, and ?key= query parameters.
-      </EmptyState>
+      <>
+        <PageHeader
+          documentTitle={hasRef ? displayPath(ref) : "Parameter"}
+          title={hasRef ? <span className="mono">{displayPath(ref)}</span> : "Parameter"}
+          subtitle={
+            <Link href={backLink} className="text-sm">
+              ← {hasRef ? displayNamespace(ref) : "Parameters"}
+            </Link>
+          }
+        />
+        <div className="card">
+          <div className="card-title">Current value</div>
+          <Skeleton height={72} />
+        </div>
+        <div className="card">
+          <div className="card-title">Metadata</div>
+          <Skeleton height={96} />
+        </div>
+        <div className="card">
+          <div className="card-title">Version history</div>
+          <TableSkeleton headers={["Version", "State", "Created by", "Created"]} rows={3} />
+        </div>
+      </>
     );
   }
-  if (notFound || !meta) {
+  if (!hasRef) {
+    return (
+      <>
+        <PageTitle title="Parameter" />
+        <EmptyState
+          icon={<Icon.parameter size={20} />}
+          title="No parameter specified"
+          actions={
+            <Link className="btn" href="/parameters">
+              Browse parameters
+            </Link>
+          }
+        >
+          Provide ?env=, ?app=, and ?key= query parameters.
+        </EmptyState>
+      </>
+    );
+  }
+  if (loadState === "not-found") {
     return (
       <>
         <PageHeader
@@ -152,8 +224,26 @@ export default function ParameterDetailPage() {
             </Link>
           }
         />
-        <EmptyState title="Not found">
+        <EmptyState icon={<Icon.parameter size={20} />} title="Not found">
           No parameter exists at <span className="mono">{displayPath(ref)}</span>.
+        </EmptyState>
+      </>
+    );
+  }
+  if (loadState === "error" || !meta) {
+    return (
+      <>
+        <PageHeader
+          title="Could not load parameter"
+          actions={
+            <button className="btn btn-primary" onClick={() => void load()}>
+              Try again
+            </button>
+          }
+        />
+        <EmptyState icon={<Icon.parameter size={20} />} title="Parameter unavailable">
+          The server could not load <span className="mono">{displayPath(ref)}</span>. Check the
+          connection and try again.
         </EmptyState>
       </>
     );
@@ -162,6 +252,7 @@ export default function ParameterDetailPage() {
   return (
     <>
       <PageHeader
+        documentTitle={displayPath(ref)}
         title={<span className="mono">{displayPath(ref)}</span>}
         subtitle={
           <Link href={backLink} className="text-sm">
@@ -202,15 +293,25 @@ export default function ParameterDetailPage() {
         <div className="card-title">Metadata</div>
         <KeyValue
           rows={[
-            ["Namespace", <span className="mono" key="ns">{displayNamespace(ref)}</span>],
-            ["Key", <span className="mono" key="key">{key}</span>],
+            [
+              "Namespace",
+              <span className="mono" key="ns">
+                {displayNamespace(ref)}
+              </span>,
+            ],
+            [
+              "Key",
+              <span className="mono" key="key">
+                {key}
+              </span>,
+            ],
             ["Content type", meta.content_type || "—"],
             ["Created", formatUnixMs(meta.created_at_unix_ms)],
             ["Updated", formatUnixMs(meta.updated_at_unix_ms)],
             [
               "Labels",
               labelEntries(meta.labels).length ? (
-                <div className="row-wrap">
+                <div className="row-wrap" key="labels">
                   {labelEntries(meta.labels).map(([k, v]) => (
                     <Badge key={k} kind="accent">
                       {k}: v{v}
@@ -234,7 +335,7 @@ export default function ParameterDetailPage() {
       <div className="card">
         <div className="card-title">Version history</div>
         {meta.versions.length === 0 ? (
-          <EmptyState title="No versions" />
+          <EmptyState icon={<Icon.parameter size={20} />} title="No versions" />
         ) : (
           <div className="table-wrap">
             <table className="data">
@@ -254,7 +355,9 @@ export default function ParameterDetailPage() {
                     <tr key={v.version}>
                       <td>v{v.version}</td>
                       <td>
-                        <Badge kind={v.state === "enabled" ? "success" : "neutral"}>{v.state}</Badge>
+                        <Badge kind={v.state === "enabled" ? "success" : "neutral"}>
+                          {v.state}
+                        </Badge>
                       </td>
                       <td>{v.created_by || <span className="faint">—</span>}</td>
                       <td className="nowrap">{formatUnixMs(v.created_at_unix_ms)}</td>

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useToast } from "@/context/ToastContext";
 
 interface CopyButtonProps {
   // A getter so the caller controls exactly what is copied; sensitive values
@@ -9,6 +10,7 @@ interface CopyButtonProps {
 }
 
 export default function CopyButton({ value, label = "Copy", className }: CopyButtonProps) {
+  const toast = useToast();
   const [copied, setCopied] = useState(false);
   const timer = useRef<number | null>(null);
 
@@ -20,8 +22,8 @@ export default function CopyButton({ value, label = "Copy", className }: CopyBut
   );
 
   const onCopy = useCallback(async () => {
-    const text = typeof value === "function" ? value() : value;
     try {
+      const text = typeof value === "function" ? value() : value;
       if (navigator.clipboard?.writeText) {
         await navigator.clipboard.writeText(text);
       } else {
@@ -30,9 +32,14 @@ export default function CopyButton({ value, label = "Copy", className }: CopyBut
         ta.style.position = "fixed";
         ta.style.opacity = "0";
         document.body.appendChild(ta);
-        ta.select();
-        document.execCommand("copy");
-        document.body.removeChild(ta);
+        let copied = false;
+        try {
+          ta.select();
+          copied = document.execCommand("copy");
+        } finally {
+          ta.remove();
+        }
+        if (!copied) throw new Error("Clipboard command was rejected");
       }
       setCopied(true);
       if (timer.current) window.clearTimeout(timer.current);
@@ -41,12 +48,19 @@ export default function CopyButton({ value, label = "Copy", className }: CopyBut
       // Clipboard blocked; leave the button state unchanged rather than
       // surfacing the (potentially sensitive) value anywhere.
       setCopied(false);
+      toast.error(
+        new Error("Your browser blocked clipboard access. Try again or select the text manually."),
+        "Copy failed",
+      );
     }
-  }, [value]);
+  }, [toast, value]);
 
   return (
     <button type="button" className={`btn btn-sm ${className ?? ""}`} onClick={onCopy}>
       {copied ? "Copied" : label}
+      <span className="sr-only" aria-live="polite">
+        {copied ? "Copied to clipboard" : ""}
+      </span>
     </button>
   );
 }

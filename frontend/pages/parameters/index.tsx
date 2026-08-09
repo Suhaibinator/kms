@@ -1,13 +1,22 @@
 import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { api } from "@/lib/api";
-import { PARAMETER_CONTENT_TYPES, type Parameter } from "@/lib/types";
-import { useToast } from "@/context/ToastContext";
-import { useNamespaces, useQueryParams } from "@/lib/hooks";
-import { formatUnixMs, labelEntries } from "@/lib/format";
-import { Badge, EmptyState, Field, Loading, PageHeader, Pagination, Spinner } from "@/components/ui";
+import { Icon } from "@/components/icons";
 import { ConfirmDialog, Modal } from "@/components/Modal";
 import NamespacePicker, { type NamespaceSelection } from "@/components/NamespacePicker";
+import {
+  Badge,
+  EmptyState,
+  Field,
+  PageHeader,
+  Pagination,
+  Spinner,
+  TableSkeleton,
+} from "@/components/ui";
+import { useToast } from "@/context/ToastContext";
+import { api, isAbortError } from "@/lib/api";
+import { formatUnixMs, labelEntries } from "@/lib/format";
+import { useNamespaces, useQueryParams } from "@/lib/hooks";
+import { PARAMETER_CONTENT_TYPES, type Parameter } from "@/lib/types";
 
 function detailLink(ref: { env: string; app: string; key: string }): string {
   return `/parameters/detail?env=${encodeURIComponent(ref.env)}&app=${encodeURIComponent(
@@ -31,8 +40,7 @@ export default function ParametersPage() {
   const [nextToken, setNextToken] = useState("");
   const [pageStack, setPageStack] = useState<string[]>([]);
   const [pageToken, setPageToken] = useState("");
-  const [loadNonce, setLoadNonce] = useState(0);
-  const loadSeq = useRef(0);
+  const loadController = useRef<AbortController | null>(null);
 
   const [createOpen, setCreateOpen] = useState(false);
   const [createNs, setCreateNs] = useState<NamespaceSelection>(NO_NS);
@@ -68,13 +76,15 @@ export default function ParametersPage() {
 
   const load = useCallback(
     async (token: string, selection: NamespaceSelection, activePrefix: string) => {
-      const requestSeq = ++loadSeq.current;
+      loadController.current?.abort();
       if (!selection.env || !selection.app) {
         setRows([]);
         setNextToken("");
         setLoading(false);
         return;
       }
+      const controller = new AbortController();
+      loadController.current = controller;
       setLoading(true);
       try {
         const res = await api.listParameters(
@@ -82,19 +92,23 @@ export default function ParametersPage() {
           activePrefix || undefined,
           100,
           token || undefined,
+          { signal: controller.signal },
         );
-        if (requestSeq === loadSeq.current) {
+        if (loadController.current === controller) {
           setRows(res.parameters ?? []);
           setNextToken(res.next_page_token ?? "");
         }
       } catch (err) {
-        if (requestSeq === loadSeq.current) {
+        if (!isAbortError(err) && loadController.current === controller) {
           setRows([]);
           setNextToken("");
           toast.error(err, "Failed to load parameters");
         }
       } finally {
-        if (requestSeq === loadSeq.current) setLoading(false);
+        if (loadController.current === controller) {
+          loadController.current = null;
+          setLoading(false);
+        }
       }
     },
     [toast],
@@ -102,31 +116,27 @@ export default function ParametersPage() {
 
   useEffect(() => {
     void load(pageToken, ns, prefix);
-  }, [load, loadNonce, pageToken, ns, prefix]);
+    return () => loadController.current?.abort();
+  }, [load, pageToken, ns, prefix]);
 
   function onSelectNamespace(next: NamespaceSelection) {
-    loadSeq.current++;
     setNs(next);
     setRows([]);
     setNextToken("");
     setDeleteTarget(null);
     setPageStack([]);
     setPageToken("");
-    setLoadNonce((n) => n + 1);
   }
   function applyFilter(e: React.FormEvent) {
     e.preventDefault();
-    loadSeq.current++;
     setRows([]);
     setNextToken("");
     setDeleteTarget(null);
     setPageStack([]);
     setPageToken("");
     setPrefix(prefixInput.trim());
-    setLoadNonce((n) => n + 1);
   }
   function clearFilter() {
-    loadSeq.current++;
     setPrefixInput("");
     setRows([]);
     setNextToken("");
@@ -134,12 +144,17 @@ export default function ParametersPage() {
     setPageStack([]);
     setPageToken("");
     setPrefix("");
-    setLoadNonce((n) => n + 1);
   }
   function goNext() {
     if (!nextToken) return;
     setPageStack((s) => [...s, pageToken]);
     setPageToken(nextToken);
+  }
+  function goPrevious() {
+    const previous = pageStack[pageStack.length - 1];
+    if (previous === undefined) return;
+    setPageStack((s) => s.slice(0, -1));
+    setPageToken(previous);
   }
   function goReset() {
     setPageStack([]);
@@ -176,7 +191,10 @@ export default function ParametersPage() {
         content_type: contentType || "string",
         metadata_json: metadataJson.trim() || "{}",
       });
-      toast.success(`Parameter saved (version ${res.version})`, `${createNs.env}/${createNs.app}/${k}`);
+      toast.success(
+        `Parameter saved (version ${res.version})`,
+        `${createNs.env}/${createNs.app}/${k}`,
+      );
       setCreateOpen(false);
       // If the new parameter lands in the currently viewed namespace, refresh.
       if (createNs.env === ns.env && createNs.app === ns.app) {
@@ -245,13 +263,27 @@ export default function ParametersPage() {
       </form>
 
       {!hasNs ? (
-        <EmptyState title="Choose a namespace">
+        <EmptyState icon={<Icon.namespace size={20} />} title="Choose a namespace">
           Pick an environment and application above to list its parameters.
         </EmptyState>
       ) : loading ? (
-        <Loading />
+        <TableSkeleton headers={["Key", "Version", "Type", "Labels", "Created"]} />
       ) : rows.length === 0 ? (
-        <EmptyState title="No parameters found">
+        <EmptyState
+          icon={<Icon.parameter size={20} />}
+          title="No parameters found"
+          actions={
+            prefix ? (
+              <button className="btn" onClick={clearFilter}>
+                Clear filter
+              </button>
+            ) : (
+              <button className="btn btn-primary" onClick={openCreate}>
+                New parameter
+              </button>
+            )
+          }
+        >
           {prefix
             ? "No parameters match this key prefix."
             : `No parameters in ${ns.env}/${ns.app} yet.`}
@@ -298,10 +330,7 @@ export default function ParametersPage() {
                       <Link className="btn btn-sm" href={detailLink(p)}>
                         Details
                       </Link>
-                      <button
-                        className="btn btn-sm btn-danger"
-                        onClick={() => setDeleteTarget(p)}
-                      >
+                      <button className="btn btn-sm btn-danger" onClick={() => setDeleteTarget(p)}>
                         Delete
                       </button>
                     </div>
@@ -316,6 +345,8 @@ export default function ParametersPage() {
       <Pagination
         hasNext={!!nextToken}
         onNext={goNext}
+        hasPrevious={pageStack.length > 0}
+        onPrevious={goPrevious}
         onReset={goReset}
         showReset={pageStack.length > 0}
       />
@@ -346,7 +377,6 @@ export default function ParametersPage() {
               value={key}
               onChange={(e) => setKey(e.target.value)}
               placeholder="rate-limit"
-              autoFocus
             />
           </Field>
           <Field label="Value">

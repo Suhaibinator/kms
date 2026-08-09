@@ -1,12 +1,13 @@
 import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { api } from "@/lib/api";
-import type { SecretMetadata } from "@/lib/types";
-import { useToast } from "@/context/ToastContext";
-import { useNamespaces, useQueryParams } from "@/lib/hooks";
-import { formatUnixMs } from "@/lib/format";
-import { Badge, EmptyState, Loading, PageHeader, Pagination } from "@/components/ui";
+import { Icon } from "@/components/icons";
 import NamespacePicker, { type NamespaceSelection } from "@/components/NamespacePicker";
+import { Badge, EmptyState, PageHeader, Pagination, TableSkeleton } from "@/components/ui";
+import { useToast } from "@/context/ToastContext";
+import { api, isAbortError } from "@/lib/api";
+import { formatUnixMs } from "@/lib/format";
+import { useNamespaces, useQueryParams } from "@/lib/hooks";
+import type { SecretMetadata } from "@/lib/types";
 
 function secretLink(ref: { env: string; app: string; key: string }): string {
   return `/secrets/detail?env=${encodeURIComponent(ref.env)}&app=${encodeURIComponent(
@@ -35,6 +36,7 @@ export default function SecretsPage() {
   const [nextToken, setNextToken] = useState("");
   const [pageStack, setPageStack] = useState<string[]>([]);
   const [pageToken, setPageToken] = useState("");
+  const requestRef = useRef<AbortController | null>(null);
 
   const seeded = useRef(false);
   useEffect(() => {
@@ -58,11 +60,15 @@ export default function SecretsPage() {
 
   const load = useCallback(
     async (token: string, selection: NamespaceSelection, activePrefix: string) => {
+      requestRef.current?.abort();
       if (!selection.env || !selection.app) {
         setSecrets([]);
         setNextToken("");
+        setLoading(false);
         return;
       }
+      const controller = new AbortController();
+      requestRef.current = controller;
       setLoading(true);
       try {
         const res = await api.listSecrets(
@@ -70,13 +76,18 @@ export default function SecretsPage() {
           activePrefix || undefined,
           100,
           token || undefined,
+          { signal: controller.signal },
         );
+        if (requestRef.current !== controller) return;
         setSecrets(res.secrets ?? []);
         setNextToken(res.next_page_token ?? "");
       } catch (err) {
-        toast.error(err, "Failed to load secrets");
+        if (!isAbortError(err)) toast.error(err, "Failed to load secrets");
       } finally {
-        setLoading(false);
+        if (requestRef.current === controller) {
+          requestRef.current = null;
+          setLoading(false);
+        }
       }
     },
     [toast],
@@ -84,6 +95,10 @@ export default function SecretsPage() {
 
   useEffect(() => {
     void load(pageToken, ns, prefix);
+    return () => {
+      requestRef.current?.abort();
+      requestRef.current = null;
+    };
   }, [load, pageToken, ns, prefix]);
 
   function onSelectNamespace(next: NamespaceSelection) {
@@ -107,6 +122,12 @@ export default function SecretsPage() {
     if (!nextToken) return;
     setPageStack((s) => [...s, pageToken]);
     setPageToken(nextToken);
+  }
+  function goPrevious() {
+    const previous = pageStack[pageStack.length - 1];
+    if (previous === undefined) return;
+    setPageStack((s) => s.slice(0, -1));
+    setPageToken(previous);
   }
   function goReset() {
     setPageStack([]);
@@ -153,13 +174,27 @@ export default function SecretsPage() {
       </form>
 
       {!hasNs ? (
-        <EmptyState title="Choose a namespace">
+        <EmptyState icon={<Icon.namespace size={20} />} title="Choose a namespace">
           Pick an environment and application above to list its secrets.
         </EmptyState>
       ) : loading ? (
-        <Loading />
+        <TableSkeleton headers={["Key", "Type", "Current", "Versions", "Mode", "Updated"]} />
       ) : secrets.length === 0 ? (
-        <EmptyState title="No secrets found">
+        <EmptyState
+          icon={<Icon.secret size={20} />}
+          title="No secrets found"
+          actions={
+            prefix ? (
+              <button className="btn" onClick={clearFilter}>
+                Clear filter
+              </button>
+            ) : (
+              <Link className="btn btn-primary" href={newSecretLink}>
+                New secret
+              </Link>
+            )
+          }
+        >
           {prefix ? "No secrets match this key prefix." : `No secrets in ${ns.env}/${ns.app} yet.`}
         </EmptyState>
       ) : (
@@ -216,6 +251,8 @@ export default function SecretsPage() {
       <Pagination
         hasNext={!!nextToken}
         onNext={goNext}
+        hasPrevious={pageStack.length > 0}
+        onPrevious={goPrevious}
         onReset={goReset}
         showReset={pageStack.length > 0}
       />

@@ -182,7 +182,7 @@ jobs:
         run: python -m pytest -q
 
   frontend:
-    name: Frontend (typecheck & build)
+    name: Frontend (quality, tests & build)
     runs-on: ubuntu-latest
     timeout-minutes: 15
     defaults:
@@ -199,6 +199,16 @@ jobs:
         run: npm ci
       - name: Type-check
         run: npm run typecheck
+      - name: Lint
+        run: npm run lint
+      - name: Check formatting
+        run: npm run format:check
+      - name: Unit tests
+        run: npm run test
+      - name: Install browser
+        run: npx playwright install --with-deps chromium
+      - name: Browser smoke tests
+        run: npm run test:e2e
       - name: Build static export
         run: npm run build
       - name: Verify static export produced an entry point

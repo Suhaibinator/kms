@@ -1,9 +1,17 @@
 import { useCallback, useEffect, useState } from "react";
-import { api } from "@/lib/api";
-import type { HealthResponse, KeyMetadata } from "@/lib/types";
+import { Icon } from "@/components/icons";
+import {
+  Badge,
+  EmptyState,
+  PageHeader,
+  Spinner,
+  StatSkeleton,
+  TableSkeleton,
+} from "@/components/ui";
 import { useToast } from "@/context/ToastContext";
+import { api } from "@/lib/api";
 import { formatUnixMs } from "@/lib/format";
-import { Badge, EmptyState, Loading, PageHeader } from "@/components/ui";
+import type { HealthResponse, KeyMetadata } from "@/lib/types";
 
 function keyStateKind(state: string): "success" | "warning" | "neutral" {
   const s = state.toLowerCase();
@@ -38,20 +46,32 @@ export default function HealthPage() {
         title="Health & keys"
         subtitle="Service status and key metadata (never key material)."
         actions={
-          <button className="btn" onClick={() => void load()}>
-            Refresh
+          <button className="btn" onClick={() => void load()} disabled={loading}>
+            {loading ? <Spinner /> : null}
+            {loading ? "Refreshing…" : "Refresh"}
           </button>
         }
       />
 
       {loading ? (
-        <Loading />
+        <>
+          <div className="card-grid mb-16">
+            <StatSkeleton label="Health" />
+            <StatSkeleton label="Readiness" />
+            <StatSkeleton label="Version" />
+            <StatSkeleton label="Current revision" />
+          </div>
+          <div className="card">
+            <div className="card-title">Encryption keys</div>
+            <TableSkeleton headers={["ID", "Source", "State", "Created"]} rows={3} />
+          </div>
+        </>
       ) : (
         <>
           <div className="card-grid mb-16">
             <div className="stat">
               <div className="stat-label">Health</div>
-              <div style={{ marginTop: 8 }}>
+              <div className="stat-badges">
                 <Badge kind={health?.healthy ? "success" : "danger"}>
                   {health?.healthy ? "healthy" : "unhealthy"}
                 </Badge>
@@ -59,7 +79,7 @@ export default function HealthPage() {
             </div>
             <div className="stat">
               <div className="stat-label">Readiness</div>
-              <div style={{ marginTop: 8 }}>
+              <div className="stat-badges">
                 <Badge kind={health?.ready ? "success" : "warning"}>
                   {health?.ready ? "ready" : "not ready"}
                 </Badge>
@@ -80,7 +100,9 @@ export default function HealthPage() {
           <div className="card">
             <div className="card-title">Encryption keys</div>
             {keys.length === 0 ? (
-              <EmptyState title="No key metadata available" />
+              <EmptyState icon={<Icon.health size={20} />} title="No key metadata available">
+                The service exposes key metadata once a master key provider is configured.
+              </EmptyState>
             ) : (
               <div className="table-wrap">
                 <table className="data">

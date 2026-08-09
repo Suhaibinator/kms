@@ -1,28 +1,20 @@
 import { useRouter } from "next/router";
 import {
   createContext,
+  type ReactNode,
   useCallback,
   useContext,
   useEffect,
   useMemo,
   useState,
-  type ReactNode,
 } from "react";
-import {
-  api,
-  clearToken,
-  getToken,
-  loadIdentity,
-  setToken,
-  storeIdentity,
-  UNAUTHORIZED_EVENT,
-} from "@/lib/api";
+import { api, clearToken, getToken, setToken, storeIdentity, UNAUTHORIZED_EVENT } from "@/lib/api";
 import type { Identity } from "@/lib/types";
 
 interface AuthState {
   identity: Identity | null;
-  // ready flips true once we have read sessionStorage on the client, so guards
-  // do not redirect during the first render before hydration completes.
+  // ready flips true once a stored session has been revalidated, so guards do
+  // not redirect during hydration or while whoami is still pending.
   ready: boolean;
   login: (token: string) => Promise<Identity>;
   logout: () => void;
@@ -37,10 +29,37 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     const token = getToken();
-    if (token) {
-      setIdentity(loadIdentity());
+    const controller = new AbortController();
+    let cancelled = false;
+
+    async function restoreSession() {
+      if (!token) {
+        setReady(true);
+        return;
+      }
+
+      try {
+        const current = await api.whoami({ signal: controller.signal });
+        if (cancelled) return;
+        const verifiedIdentity: Identity = {
+          name: current.name,
+          kind: current.kind,
+          namespace: current.namespace,
+        };
+        storeIdentity(verifiedIdentity);
+        setIdentity(verifiedIdentity);
+      } catch {
+        if (cancelled) return;
+        // A restored session is not usable unless the server accepts it. This
+        // also removes stale cached identity data alongside the token.
+        clearToken();
+        setIdentity(null);
+      } finally {
+        if (!cancelled) setReady(true);
+      }
     }
-    setReady(true);
+
+    void restoreSession();
 
     const onUnauthorized = () => {
       setIdentity(null);
@@ -49,10 +68,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       }
     };
     window.addEventListener(UNAUTHORIZED_EVENT, onUnauthorized);
-    return () => window.removeEventListener(UNAUTHORIZED_EVENT, onUnauthorized);
-    // router identity is stable enough; we only want this wired once.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+    return () => {
+      cancelled = true;
+      controller.abort();
+      window.removeEventListener(UNAUTHORIZED_EVENT, onUnauthorized);
+    };
+  }, [router]);
 
   const login = useCallback(async (token: string): Promise<Identity> => {
     // Validate first (login sends the token in the body, not the header), and

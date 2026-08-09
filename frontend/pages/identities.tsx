@@ -1,13 +1,22 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
-import { api } from "@/lib/api";
-import type { AuthMethod, CertBundle, Identity, IdentityCert, IdentityKind } from "@/lib/types";
-import { useToast } from "@/context/ToastContext";
-import { useNamespaces } from "@/lib/hooks";
-import { displayNamespace, formatUnixMs } from "@/lib/format";
-import { Badge, EmptyState, Field, Loading, PageHeader, Pagination, Spinner } from "@/components/ui";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import CopyButton from "@/components/CopyButton";
+import { Icon } from "@/components/icons";
 import { ConfirmDialog, Modal } from "@/components/Modal";
 import NamespacePicker, { type NamespaceSelection } from "@/components/NamespacePicker";
-import CopyButton from "@/components/CopyButton";
+import {
+  Badge,
+  EmptyState,
+  Field,
+  PageHeader,
+  Pagination,
+  Spinner,
+  TableSkeleton,
+} from "@/components/ui";
+import { useToast } from "@/context/ToastContext";
+import { api, isAbortError } from "@/lib/api";
+import { displayNamespace, formatUnixMs } from "@/lib/format";
+import { useNamespaces } from "@/lib/hooks";
+import type { AuthMethod, CertBundle, Identity, IdentityCert, IdentityKind } from "@/lib/types";
 
 const DEFAULT_CERT_DAYS = 90;
 const NO_NS: NamespaceSelection = { env: "", app: "" };
@@ -34,7 +43,8 @@ function certStatus(cert: IdentityCert): { kind: "success" | "warning" | "danger
 
 function validCertCount(id: Identity): number {
   return (id.certs ?? []).filter(
-    (c) => c.revoked_at_unix_ms === 0 && (c.not_after_unix_ms === 0 || c.not_after_unix_ms > Date.now()),
+    (c) =>
+      c.revoked_at_unix_ms === 0 && (c.not_after_unix_ms === 0 || c.not_after_unix_ms > Date.now()),
   ).length;
 }
 
@@ -52,6 +62,7 @@ export default function IdentitiesPage() {
   const [nextToken, setNextToken] = useState("");
   const [pageStack, setPageStack] = useState<string[]>([]);
   const [pageToken, setPageToken] = useState("");
+  const loadController = useRef<AbortController | null>(null);
 
   // Create form.
   const [createOpen, setCreateOpen] = useState(false);
@@ -69,7 +80,9 @@ export default function IdentitiesPage() {
   const [certsTargetName, setCertsTargetName] = useState<string | null>(null);
   const [issueDays, setIssueDays] = useState(String(DEFAULT_CERT_DAYS));
   const [issueBusy, setIssueBusy] = useState(false);
-  const [revokeCertTarget, setRevokeCertTarget] = useState<{ name: string; serial: string } | null>(null);
+  const [revokeCertTarget, setRevokeCertTarget] = useState<{ name: string; serial: string } | null>(
+    null,
+  );
   const [revokeCertBusy, setRevokeCertBusy] = useState(false);
 
   const [rotateTarget, setRotateTarget] = useState<string | null>(null);
@@ -80,15 +93,26 @@ export default function IdentitiesPage() {
 
   const load = useCallback(
     async (token: string) => {
+      loadController.current?.abort();
+      const controller = new AbortController();
+      loadController.current = controller;
       setLoading(true);
       try {
-        const res = await api.listIdentities(100, token || undefined);
+        const res = await api.listIdentities(100, token || undefined, {
+          signal: controller.signal,
+        });
+        if (loadController.current !== controller) return;
         setIdentities(res.identities ?? []);
         setNextToken(res.next_page_token ?? "");
       } catch (err) {
-        toast.error(err, "Failed to load identities");
+        if (!isAbortError(err) && loadController.current === controller) {
+          toast.error(err, "Failed to load identities");
+        }
       } finally {
-        setLoading(false);
+        if (loadController.current === controller) {
+          loadController.current = null;
+          setLoading(false);
+        }
       }
     },
     [toast],
@@ -96,6 +120,7 @@ export default function IdentitiesPage() {
 
   useEffect(() => {
     void load(pageToken);
+    return () => loadController.current?.abort();
   }, [load, pageToken]);
 
   const certsTarget = useMemo(
@@ -107,6 +132,12 @@ export default function IdentitiesPage() {
     if (!nextToken) return;
     setPageStack((s) => [...s, pageToken]);
     setPageToken(nextToken);
+  }
+  function goPrevious() {
+    const previous = pageStack[pageStack.length - 1];
+    if (previous === undefined) return;
+    setPageStack((s) => s.slice(0, -1));
+    setPageToken(previous);
   }
   function goReset() {
     setPageStack([]);
@@ -137,14 +168,15 @@ export default function IdentitiesPage() {
       return;
     }
     if (methods.length === 0) {
-      toast.error(new Error("Select at least one auth method (mTLS, token, or both)."), "No auth method");
+      toast.error(
+        new Error("Select at least one auth method (mTLS, token, or both)."),
+        "No auth method",
+      );
       return;
     }
     const days = Number(certDays);
     const ttlSeconds =
-      methods.includes("mtls") && Number.isFinite(days) && days > 0
-        ? Math.round(days * 86400)
-        : 0;
+      methods.includes("mtls") && Number.isFinite(days) && days > 0 ? Math.round(days * 86400) : 0;
     const namespace = bindNs.env && bindNs.app ? { env: bindNs.env, app: bindNs.app } : null;
 
     setSaving(true);
@@ -237,7 +269,10 @@ export default function IdentitiesPage() {
     try {
       const res = await api.ca();
       downloadText("kms-client-ca.crt", res.cert_pem);
-      toast.success("Client CA certificate downloaded", "Use it to validate KMS-issued client certificates.");
+      toast.success(
+        "Client CA certificate downloaded",
+        "Use it to validate KMS-issued client certificates.",
+      );
     } catch (err) {
       toast.error(err, "Failed to fetch CA certificate");
     } finally {
@@ -270,16 +305,26 @@ export default function IdentitiesPage() {
       />
 
       <div className="info-panel mb-16">
-        An identity <strong>bound to a namespace</strong> may read, list, and subscribe within
-        that namespace with no policy required — the credential <em>is</em> the app (the implicit
+        An identity <strong>bound to a namespace</strong> may read, list, and subscribe within that
+        namespace with no policy required — the credential <em>is</em> the app (the implicit
         home-namespace grant). Writes and any cross-namespace access still need an explicit policy.
         Client certificates prove possession; bearer tokens do not, so prefer mTLS-only namespaces.
       </div>
 
       {loading ? (
-        <Loading />
+        <TableSkeleton
+          headers={["Name", "Kind", "Namespace", "Credentials", "Status", "Created"]}
+        />
       ) : identities.length === 0 ? (
-        <EmptyState title="No identities yet">
+        <EmptyState
+          icon={<Icon.identity size={20} />}
+          title="No identities yet"
+          actions={
+            <button className="btn btn-primary" onClick={openCreate}>
+              New identity
+            </button>
+          }
+        >
           Create an admin or client identity to issue a token or certificate.
         </EmptyState>
       ) : (
@@ -322,9 +367,7 @@ export default function IdentitiesPage() {
                             {certCount} cert{certCount === 1 ? "" : "s"}
                           </Badge>
                         ) : null}
-                        {!id.has_token && certCount === 0 ? (
-                          <span className="faint">—</span>
-                        ) : null}
+                        {!id.has_token && certCount === 0 ? <span className="faint">—</span> : null}
                       </div>
                     </td>
                     <td data-label="Status">
@@ -378,6 +421,8 @@ export default function IdentitiesPage() {
       <Pagination
         hasNext={!!nextToken}
         onNext={goNext}
+        hasPrevious={pageStack.length > 0}
+        onPrevious={goPrevious}
         onReset={goReset}
         showReset={pageStack.length > 0}
       />
@@ -407,7 +452,6 @@ export default function IdentitiesPage() {
                 value={name}
                 onChange={(e) => setName(e.target.value)}
                 placeholder="gradethis-be"
-                autoFocus
               />
             </Field>
             <Field label="Kind">
@@ -484,7 +528,7 @@ export default function IdentitiesPage() {
 
       {/* Manage certificates */}
       <Modal
-        open={certsTarget !== null}
+        open={certsTarget !== null && revokeCertTarget === null}
         wide
         title={certsTarget ? `Certificates — ${certsTarget.name}` : "Certificates"}
         onClose={() => setCertsTargetName(null)}
@@ -512,7 +556,11 @@ export default function IdentitiesPage() {
                     onChange={(e) => setIssueDays(e.target.value)}
                   />
                 </div>
-                <button className="btn btn-primary" onClick={() => void onIssueCert()} disabled={issueBusy}>
+                <button
+                  className="btn btn-primary"
+                  onClick={() => void onIssueCert()}
+                  disabled={issueBusy}
+                >
                   {issueBusy ? <Spinner /> : null}
                   Issue new certificate
                 </button>
@@ -524,7 +572,9 @@ export default function IdentitiesPage() {
             </div>
 
             {(certsTarget.certs ?? []).length === 0 ? (
-              <EmptyState title="No certificates issued" />
+              <EmptyState icon={<Icon.identity size={20} />} title="No certificates issued">
+                Issue one above to let this identity authenticate over mTLS.
+              </EmptyState>
             ) : (
               <div className="table-wrap">
                 <table className="data">
@@ -558,7 +608,10 @@ export default function IdentitiesPage() {
                                 <button
                                   className="btn btn-sm btn-danger"
                                   onClick={() =>
-                                    setRevokeCertTarget({ name: certsTarget.name, serial: cert.serial })
+                                    setRevokeCertTarget({
+                                      name: certsTarget.name,
+                                      serial: cert.serial,
+                                    })
                                   }
                                 >
                                   Revoke
@@ -616,7 +669,8 @@ export default function IdentitiesPage() {
         message={
           <>
             Revoke <span className="mono">{revokeTarget}</span>? Its token and all of its
-            certificates stop working on the next RPC; existing watch streams close on the next heartbeat.
+            certificates stop working on the next RPC; existing watch streams close on the next
+            heartbeat.
           </>
         }
         confirmLabel="Revoke identity"
@@ -674,11 +728,15 @@ function CredentialsModal({
               </div>
               <div className="token-reveal">{credentials.cert.cert_pem}</div>
               <div className="row-wrap mt-8 mb-16">
-                <CopyButton label="Copy certificate" value={() => credentials.cert?.cert_pem ?? ""} />
+                <CopyButton
+                  label="Copy certificate"
+                  value={() => credentials.cert?.cert_pem ?? ""}
+                />
                 <button
                   className="btn btn-sm"
                   onClick={() =>
-                    credentials.cert && downloadText(`${credentials.name}.crt`, credentials.cert.cert_pem)
+                    credentials.cert &&
+                    downloadText(`${credentials.name}.crt`, credentials.cert.cert_pem)
                   }
                 >
                   Download .crt
@@ -696,7 +754,8 @@ function CredentialsModal({
                 <button
                   className="btn btn-sm"
                   onClick={() =>
-                    credentials.cert && downloadText(`${credentials.name}.key`, credentials.cert.key_pem)
+                    credentials.cert &&
+                    downloadText(`${credentials.name}.key`, credentials.cert.key_pem)
                   }
                 >
                   Download .key

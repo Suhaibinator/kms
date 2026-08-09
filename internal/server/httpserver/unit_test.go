@@ -48,6 +48,14 @@ func TestMapErrorUnknownIsInternal(t *testing.T) {
 	}
 }
 
+func TestWriteJSONDisablesCaching(t *testing.T) {
+	w := httptest.NewRecorder()
+	writeJSON(w, http.StatusOK, map[string]string{"value": "sensitive"})
+	if got := w.Header().Get("Cache-Control"); got != "no-store" {
+		t.Fatalf("Cache-Control = %q, want no-store", got)
+	}
+}
+
 func TestClientIP(t *testing.T) {
 	t.Run("forwarded-for honored only when proxy trusted", func(t *testing.T) {
 		r := httptest.NewRequest(http.MethodGet, "/", nil)

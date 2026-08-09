@@ -14,6 +14,24 @@ export function displayNamespace(ns: { env: string; app: string }): string {
   return `${ns.env}/${ns.app}`;
 }
 
+export function displayAuditResource(event: {
+  resource_env?: string;
+  resource_app?: string;
+  resource_key?: string;
+}): string | null {
+  if (event.resource_env && event.resource_app && event.resource_key) {
+    return displayPath({
+      env: event.resource_env,
+      app: event.resource_app,
+      key: event.resource_key,
+    });
+  }
+  if (event.resource_env && event.resource_app) {
+    return displayNamespace({ env: event.resource_env, app: event.resource_app });
+  }
+  return null;
+}
+
 export function formatUnixMs(ms: number | undefined | null): string {
   if (!ms || ms <= 0) return EMPTY;
   const d = new Date(ms);

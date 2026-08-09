@@ -1,11 +1,11 @@
 import {
   createContext,
+  type ReactNode,
   useCallback,
   useContext,
   useMemo,
   useRef,
   useState,
-  type ReactNode,
 } from "react";
 import { ApiError } from "@/lib/api";
 
@@ -82,16 +82,23 @@ export function ToastProvider({ children }: { children: ReactNode }) {
   return (
     <ToastContext.Provider value={api}>
       {children}
-      <div className="toast-stack" aria-live="polite">
+      <div className="toast-stack">
         {toasts.map((t) => (
-          <div key={t.id} className={`toast ${t.kind}`} role="status">
+          <div
+            key={t.id}
+            className={`toast ${t.kind}`}
+            role={t.kind === "error" ? "alert" : "status"}
+            aria-live={t.kind === "error" ? "assertive" : "polite"}
+            aria-atomic="true"
+          >
             <div className="toast-body">
               <div className="toast-title">{t.title}</div>
               {t.message ? <div className="toast-msg">{t.message}</div> : null}
             </div>
             <button
+              type="button"
               className="toast-close"
-              aria-label="Dismiss"
+              aria-label={`Dismiss ${t.title} notification`}
               onClick={() => dismiss(t.id)}
             >
               ×
