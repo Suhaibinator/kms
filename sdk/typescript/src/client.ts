@@ -360,7 +360,7 @@ export class KmsClient {
   async listParameters(namespace?: string, options: ListOptions = {}): Promise<Page<Parameter>> {
     const ns = namespace
       ? parseNamespace(namespace)
-      : await this.requireNamespace("listParameters");
+      : await this.requireNamespace("listParameters", options.signal);
     return this.listParametersInNamespace(ns, options);
   }
 
@@ -439,7 +439,9 @@ export class KmsClient {
   }
 
   async listSecrets(namespace?: string, options: ListOptions = {}): Promise<Page<SecretInfo>> {
-    const ns = namespace ? parseNamespace(namespace) : await this.requireNamespace("listSecrets");
+    const ns = namespace
+      ? parseNamespace(namespace)
+      : await this.requireNamespace("listSecrets", options.signal);
     try {
       const response = await this.#transport.unary(
         SecretServiceService.listSecrets,
