@@ -578,7 +578,13 @@ export class SubscriptionManager {
       ? !previous?.present || previous.value !== value
       : Boolean(previous?.present);
     this.#known.set(path, { value: present ? value : "", present, revision: nextRevision });
-    if (!changed) return;
+    if (!changed) {
+      // An unknown live tombstone still advances the global revision and
+      // invalidates the ordinary read cache in #applyChange, but it must not
+      // create permanent per-path history or invent a value-change callback.
+      if (!present && !this.#parameterHandlers.has(path)) this.#known.delete(path);
+      return;
+    }
 
     this.#host._cache().invalidateParam(path);
     for (const handler of this.#parameterHandlers.get(path) ?? []) handler(value, present);

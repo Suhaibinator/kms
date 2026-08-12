@@ -243,6 +243,29 @@ describe("bounded concurrency and lifecycle stress", () => {
     await client.close();
   });
 
+  it("prunes delete-only tombstones without inventing watcher events", async () => {
+    const transport = new FakeTransport(() => ({ parameters: [], nextPageToken: "" }));
+    const client = new KmsClient({ transport, namespace, logger: { warn: vi.fn() } });
+    let delivered = 0;
+    const stop = await client.watch(() => {
+      delivered += 1;
+    });
+    await waitFor(() => transport.streams.length === 1);
+    const stream = streamAt(transport, 0);
+    await waitFor(() => stream.sent.length === 1);
+
+    const keys = 512;
+    for (let index = 1; index <= keys; index++) {
+      stream.emit(parameterChangeForKey(`deleted-${index}`, "delete", BigInt(index)));
+    }
+    await waitFor(() => client.currentRevision === BigInt(keys));
+    expect(client.watchStatus.trackedParameterCount).toBe(0);
+    expect(delivered).toBe(0);
+
+    stop();
+    await client.close();
+  });
+
   it("keeps sustained snapshot reads coherent while generations swap and reads each source once", async () => {
     interface Policy {
       readonly generation: number;
