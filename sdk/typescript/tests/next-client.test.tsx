@@ -85,6 +85,84 @@ describe("usePublicConfig", () => {
     expect(result.current.error).toBeInstanceOf(Error);
   });
 
+  it("emits redacted refresh and recovery events without trusting observers", async () => {
+    const events: unknown[] = [];
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(new Response(JSON.stringify(wire("2", 12)), { status: 200 }))
+      .mockResolvedValueOnce(new Response("unavailable", { status: 503 }));
+    const { result } = renderHook(() =>
+      usePublicConfig(wire("1", 10), {
+        fetcher,
+        validateConfig: isConfig,
+        refreshOnMount: false,
+        refreshOnFocus: false,
+        onEvent: (event) => {
+          events.push(event);
+          if (events.length === 1) throw new Error("observer throw");
+          if (events.length === 2) return Promise.reject(new Error("observer rejection"));
+        },
+      }),
+    );
+
+    await act(async () => result.current.refresh());
+    expect(result.current.revision).toBe(2n);
+    await act(async () => result.current.refresh());
+    expect(result.current.revision).toBe(2n);
+    expect(result.current.error).toBeInstanceOf(Error);
+    act(() => {
+      expect(
+        result.current.applyServerResult({
+          status: "policy_changed",
+          current: wire("3", 14),
+        }),
+      ).toBe(true);
+    });
+    expect(result.current.revision).toBe(3n);
+    act(() => {
+      expect(
+        result.current.applyServerResult({
+          status: "policy_changed",
+          current: wire("2", 9),
+        }),
+      ).toBe(false);
+    });
+    await Promise.resolve();
+
+    expect(events).toEqual([
+      {
+        type: "refresh_succeeded",
+        revision: "2",
+        changed: true,
+        observedAtUnixMs: expect.any(Number),
+        durationMs: expect.any(Number),
+      },
+      {
+        type: "refresh_failed",
+        revision: "2",
+        observedAtUnixMs: expect.any(Number),
+        durationMs: expect.any(Number),
+      },
+      {
+        type: "policy_recovery_succeeded",
+        previousRevision: "2",
+        revision: "3",
+        observedAtUnixMs: expect.any(Number),
+      },
+      {
+        type: "policy_recovery_rejected",
+        revision: "3",
+        observedAtUnixMs: expect.any(Number),
+      },
+    ]);
+    for (const event of events) {
+      expect(Object.isFrozen(event)).toBe(true);
+      expect(event).not.toHaveProperty("config");
+      expect(event).not.toHaveProperty("error");
+      expect(event).not.toHaveProperty("response");
+    }
+  });
+
   it("aborts and fences out-of-order refreshes", async () => {
     const pending: Array<(response: Response) => void> = [];
     const signals: AbortSignal[] = [];

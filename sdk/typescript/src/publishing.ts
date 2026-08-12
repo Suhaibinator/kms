@@ -292,6 +292,9 @@ export function createPolicyPublisher<
   if (typeof options.validate !== "function") {
     throw new TypeError("policy publisher validate must be a function");
   }
+  if (options.onEvent !== undefined && typeof options.onEvent !== "function") {
+    throw new TypeError("policy publisher onEvent must be a function");
+  }
   const allowedProjectionKeys = captureProjectionKeys(options.projection.keys);
   const observe = createSafeObserver(options.onEvent);
 

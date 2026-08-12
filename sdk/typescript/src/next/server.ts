@@ -7,6 +7,7 @@ import {
   formatPublicConfigEtag,
   normalizePublicConfigWire,
   type PolicyPublisher,
+  type PolicyPublisherObserver,
   type PolicySnapshot,
   type PolicyValidationResult,
   type PublicConfigWire,
@@ -38,6 +39,8 @@ export interface CreateNextKmsOptions<
   readonly initialize: (signal: AbortSignal) => Awaitable<NextKmsResource<TPolicy>>;
   readonly projection: PublicProjection<TPolicy, TConfig>;
   readonly validate: AuthoritativeValidator<TPolicy, TInput, TValidationErrors>;
+  /** Observes redacted publisher events from reads and validation. */
+  readonly onPublisherEvent?: PolicyPublisherObserver;
 }
 
 export type PublicConfigCachePolicy =
@@ -49,7 +52,30 @@ export type PublicConfigCachePolicy =
 
 export interface PublicConfigRouteOptions {
   readonly cache?: PublicConfigCachePolicy;
+  /** Receives frozen, value-free HTTP publication events. */
+  readonly onEvent?: PublicConfigRouteObserver;
 }
+
+export type PublicConfigRouteEvent =
+  | {
+      readonly type: "public_config_served";
+      readonly revision: DecimalRevision;
+      readonly observedAtUnixMs: number;
+      readonly durationMs: number;
+    }
+  | {
+      readonly type: "public_config_not_modified";
+      readonly revision: DecimalRevision;
+      readonly observedAtUnixMs: number;
+      readonly durationMs: number;
+    }
+  | {
+      readonly type: "public_config_unavailable";
+      readonly observedAtUnixMs: number;
+      readonly durationMs: number;
+    };
+
+export type PublicConfigRouteObserver = (event: PublicConfigRouteEvent) => unknown;
 
 export interface PublicConfigProvider<TConfig extends PublicJsonObject> {
   readPublicPolicy(): Awaitable<PublicConfigWire<TConfig> | undefined>;
@@ -150,6 +176,7 @@ export function createNextKms<
           source: initialized.source,
           projection: options.projection,
           validate: options.validate,
+          ...(options.onPublisherEvent === undefined ? {} : { onEvent: options.onPublisherEvent }),
         });
         if (closed) {
           throw new NextKmsClosedError();
@@ -312,11 +339,17 @@ export function createPublicConfigGET<TConfig extends PublicJsonObject>(
     throw new TypeError("public config provider must be a function or adapter");
   }
   const cacheControl = formatCacheControl(options.cache ?? "no-store");
+  if (options.onEvent !== undefined && typeof options.onEvent !== "function") {
+    throw new TypeError("public config route onEvent must be a function");
+  }
+  const observe = createSafeRouteObserver(options.onEvent);
 
   return async (request: Request): Promise<Response> => {
+    const startedAtUnixMs = Date.now();
     try {
       const candidate = await read();
       if (candidate === undefined) {
+        observeRouteEvent(observe, startedAtUnixMs, { type: "public_config_unavailable" });
         return unavailableResponse();
       }
 
@@ -329,6 +362,10 @@ export function createPublicConfigGET<TConfig extends PublicJsonObject>(
       });
 
       if (ifNoneMatchMatches(request.headers.get("If-None-Match"), etag)) {
+        observeRouteEvent(observe, startedAtUnixMs, {
+          type: "public_config_not_modified",
+          revision: current.revision,
+        });
         return new Response(null, {
           status: 304,
           headers: commonHeaders,
@@ -336,12 +373,50 @@ export function createPublicConfigGET<TConfig extends PublicJsonObject>(
       }
 
       commonHeaders.set("Content-Type", "application/json; charset=utf-8");
+      observeRouteEvent(observe, startedAtUnixMs, {
+        type: "public_config_served",
+        revision: current.revision,
+      });
       return new Response(JSON.stringify(current), {
         status: 200,
         headers: commonHeaders,
       });
     } catch {
+      observeRouteEvent(observe, startedAtUnixMs, { type: "public_config_unavailable" });
       return unavailableResponse();
+    }
+  };
+}
+
+type UnstampedRouteEvent =
+  | { readonly type: "public_config_served"; readonly revision: DecimalRevision }
+  | { readonly type: "public_config_not_modified"; readonly revision: DecimalRevision }
+  | { readonly type: "public_config_unavailable" };
+
+function observeRouteEvent(
+  observer: (event: PublicConfigRouteEvent) => void,
+  startedAtUnixMs: number,
+  event: UnstampedRouteEvent,
+): void {
+  const observedAtUnixMs = Date.now();
+  observer(
+    Object.freeze({
+      ...event,
+      observedAtUnixMs,
+      durationMs: Math.max(0, observedAtUnixMs - startedAtUnixMs),
+    }),
+  );
+}
+
+function createSafeRouteObserver(
+  observer: PublicConfigRouteObserver | undefined,
+): (event: PublicConfigRouteEvent) => void {
+  return (event): void => {
+    if (observer === undefined) return;
+    try {
+      Promise.resolve(observer(event)).catch(() => undefined);
+    } catch {
+      // Telemetry must never change the HTTP publication contract.
     }
   };
 }

@@ -157,6 +157,59 @@ describe("Next.js server adapter", () => {
     expect(await failure.json()).toEqual({ status: "unavailable" });
   });
 
+  it("emits redacted route events without trusting observers", async () => {
+    const events: unknown[] = [];
+    const get = createPublicConfigGET(
+      async () => ({ revision: formatRevision(21n), config: { minLength: 16 } }),
+      {
+        onEvent: (event) => {
+          events.push(event);
+          if (events.length === 1) throw new Error("observer throw");
+          if (events.length === 2) return Promise.reject(new Error("observer rejection"));
+        },
+      },
+    );
+
+    const served = await get(new Request("http://local/policy"));
+    expect(served.status).toBe(200);
+    const notModified = await get(
+      new Request("http://local/policy", {
+        headers: { "If-None-Match": served.headers.get("etag") as string },
+      }),
+    );
+    expect(notModified.status).toBe(304);
+    const unavailable = createPublicConfigGET(async () => undefined, {
+      onEvent: (event) => events.push(event),
+    });
+    expect((await unavailable(new Request("http://local/policy"))).status).toBe(503);
+    await Promise.resolve();
+
+    expect(events).toEqual([
+      {
+        type: "public_config_served",
+        revision: "21",
+        observedAtUnixMs: expect.any(Number),
+        durationMs: expect.any(Number),
+      },
+      {
+        type: "public_config_not_modified",
+        revision: "21",
+        observedAtUnixMs: expect.any(Number),
+        durationMs: expect.any(Number),
+      },
+      {
+        type: "public_config_unavailable",
+        observedAtUnixMs: expect.any(Number),
+        durationMs: expect.any(Number),
+      },
+    ]);
+    for (const event of events) {
+      expect(Object.isFrozen(event)).toBe(true);
+      expect(event).not.toHaveProperty("config");
+      expect(event).not.toHaveProperty("error");
+    }
+  });
+
   it("rejects the Edge runtime", async () => {
     vi.stubEnv("NEXT_RUNTIME", "edge");
     expect(() => createPublicConfigGET(async () => undefined)).toThrow(/Node runtime/);

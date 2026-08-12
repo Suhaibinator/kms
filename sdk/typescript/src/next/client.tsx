@@ -23,7 +23,37 @@ export interface UsePublicConfigOptions<TConfig extends PublicJsonObject> {
    */
   readonly navigationKey?: unknown;
   readonly refreshOnNavigation?: boolean;
+  /** Receives frozen, value-free recovery events. Observer failures are ignored. */
+  readonly onEvent?: PublicConfigClientObserver;
 }
+
+export type PublicConfigClientEvent =
+  | {
+      readonly type: "refresh_succeeded";
+      readonly revision: string;
+      readonly changed: boolean;
+      readonly observedAtUnixMs: number;
+      readonly durationMs: number;
+    }
+  | {
+      readonly type: "refresh_failed";
+      readonly revision: string;
+      readonly observedAtUnixMs: number;
+      readonly durationMs: number;
+    }
+  | {
+      readonly type: "policy_recovery_succeeded";
+      readonly previousRevision: string;
+      readonly revision: string;
+      readonly observedAtUnixMs: number;
+    }
+  | {
+      readonly type: "policy_recovery_rejected";
+      readonly revision: string;
+      readonly observedAtUnixMs: number;
+    };
+
+export type PublicConfigClientObserver = (event: PublicConfigClientEvent) => unknown;
 
 export interface UsePublicConfigResult<TConfig extends PublicJsonObject> {
   readonly config: Readonly<TConfig>;
@@ -62,7 +92,22 @@ export function usePublicConfig<TConfig extends PublicJsonObject>(
     refreshOnFocus = true,
     navigationKey,
     refreshOnNavigation = true,
+    onEvent,
   } = options;
+  if (onEvent !== undefined && typeof onEvent !== "function") {
+    throw new TypeError("public config onEvent must be a function");
+  }
+  const observerRef = useRef(onEvent);
+  observerRef.current = onEvent;
+  const observe = useCallback((event: PublicConfigClientEvent): void => {
+    const observer = observerRef.current;
+    if (observer === undefined) return;
+    try {
+      Promise.resolve(observer(Object.freeze(event))).catch(() => undefined);
+    } catch {
+      // Telemetry must never change refresh or recovery behavior.
+    }
+  }, []);
 
   const normalizedInitial = useMemo(
     () => normalizeWireConfig<TConfig>(initial, validateConfig),
@@ -101,6 +146,7 @@ export function usePublicConfig<TConfig extends PublicJsonObject>(
   }, [installIfNewer, normalizedInitial]);
 
   const refresh = useCallback(async (): Promise<void> => {
+    const startedAtUnixMs = Date.now();
     const sequence = requestSequenceRef.current + 1;
     requestSequenceRef.current = sequence;
     requestControllerRef.current?.abort();
@@ -131,6 +177,14 @@ export function usePublicConfig<TConfig extends PublicJsonObject>(
       }
       if (response.status === 304) {
         setError(null);
+        const observedAtUnixMs = Date.now();
+        observe({
+          type: "refresh_succeeded",
+          revision: policyRef.current.revision.toString(10),
+          changed: false,
+          observedAtUnixMs,
+          durationMs: Math.max(0, observedAtUnixMs - startedAtUnixMs),
+        });
         return;
       }
       if (!response.ok) {
@@ -142,20 +196,35 @@ export function usePublicConfig<TConfig extends PublicJsonObject>(
         return;
       }
       const candidate = normalizeWireConfig<TConfig>(body, validateConfig);
-      installIfNewer(candidate);
+      const changed = installIfNewer(candidate);
       setError(null);
+      const observedAtUnixMs = Date.now();
+      observe({
+        type: "refresh_succeeded",
+        revision: policyRef.current.revision.toString(10),
+        changed,
+        observedAtUnixMs,
+        durationMs: Math.max(0, observedAtUnixMs - startedAtUnixMs),
+      });
     } catch (refreshError) {
       if (sequence !== requestSequenceRef.current || !mountedRef.current) {
         return;
       }
       setError(asError(refreshError));
+      const observedAtUnixMs = Date.now();
+      observe({
+        type: "refresh_failed",
+        revision: policyRef.current.revision.toString(10),
+        observedAtUnixMs,
+        durationMs: Math.max(0, observedAtUnixMs - startedAtUnixMs),
+      });
     } finally {
       if (sequence === requestSequenceRef.current && mountedRef.current) {
         requestControllerRef.current = undefined;
         setIsRefreshing(false);
       }
     }
-  }, [endpoint, fetcher, installIfNewer, validateConfig]);
+  }, [endpoint, fetcher, installIfNewer, observe, validateConfig]);
 
   useEffect(() => {
     if (refreshOnMount) {
@@ -190,6 +259,11 @@ export function usePublicConfig<TConfig extends PublicJsonObject>(
       } catch (serverResultError) {
         if (mountedRef.current) {
           setError(asError(serverResultError));
+          observe({
+            type: "policy_recovery_rejected",
+            revision: policyRef.current.revision.toString(10),
+            observedAtUnixMs: Date.now(),
+          });
         }
         return false;
       }
@@ -197,7 +271,14 @@ export function usePublicConfig<TConfig extends PublicJsonObject>(
         return false;
       }
 
-      if (!mountedRef.current || !installIfNewer(policyChanged)) {
+      if (!mountedRef.current) return false;
+      const previousRevision = policyRef.current.revision;
+      if (!installIfNewer(policyChanged)) {
+        observe({
+          type: "policy_recovery_rejected",
+          revision: policyRef.current.revision.toString(10),
+          observedAtUnixMs: Date.now(),
+        });
         return false;
       }
 
@@ -206,9 +287,15 @@ export function usePublicConfig<TConfig extends PublicJsonObject>(
       requestControllerRef.current = undefined;
       setIsRefreshing(false);
       setError(null);
+      observe({
+        type: "policy_recovery_succeeded",
+        previousRevision: previousRevision.toString(10),
+        revision: policyChanged.revision.toString(10),
+        observedAtUnixMs: Date.now(),
+      });
       return true;
     },
-    [installIfNewer, validateConfig],
+    [installIfNewer, observe, validateConfig],
   );
 
   return {
