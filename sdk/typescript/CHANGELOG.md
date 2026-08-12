@@ -16,6 +16,8 @@ a minor release may contain documented breaking changes.
   values, shared watches, reconciliation, and atomic release loading.
 - Explicit public-policy projections, stale-client recovery contracts, and a
   first-class serverful Next.js adapter.
+- Value-free watch health plus publisher, Route Handler, refresh, and recovery
+  observer hooks with revision/correlation timestamps.
 - Runnable core and Next.js integration examples, package security guidance,
   consumer type tests, and full release gates on Node.js 22, 24, and 26.
 - A real Next.js App Router build gate that rejects server-adapter imports from
