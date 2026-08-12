@@ -273,6 +273,10 @@ export class SubscriptionManager {
     this.#controller.abort(new DOMException("KMS watches stopped", "AbortError"));
     this.#sessionController?.abort();
     await Promise.allSettled([this.#runTask, this.#reconcileTask].filter(Boolean));
+    // A session can resume between its awaited registration send and the
+    // abort becoming observable. Reassert the terminal state after every
+    // owned task has settled so shutdown cannot report a stale connection.
+    this.#state = "stopped";
     this.#watchers.clear();
     this.#watcherStops.clear();
     this.#parameterHandlers.clear();

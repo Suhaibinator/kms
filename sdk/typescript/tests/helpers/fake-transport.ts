@@ -59,6 +59,16 @@ export class FakeDuplex<Request, Response> implements DuplexRpc<Request, Respons
   readonly #waiters: ((result: IteratorResult<Response>) => void)[] = [];
   #closed = false;
 
+  /** Test-only lifecycle visibility for stream leak assertions. */
+  get closed(): boolean {
+    return this.#closed;
+  }
+
+  /** Test-only visibility into unresolved async-iterator reads. */
+  get pendingReadCount(): number {
+    return this.#waiters.length;
+  }
+
   async send(request: Request): Promise<void> {
     if (this.#closed) throw new Error("stream closed");
     this.sent.push(request);
