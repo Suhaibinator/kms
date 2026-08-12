@@ -13,8 +13,8 @@ delivery plan. `complete` means the behavior has an automated TypeScript test;
 | Secret redaction and copying | `Secret` | Explicit access only; string/JSON/inspect redaction; no shared buffers | `sdk/typescript/tests/secret.test.ts` | complete |
 | Bounded TTL cache | internal `ReadCache` | `(path,version,label)` keys, 4096 caps, invalidation, secret clones, token bypass | `sdk/typescript/tests/cache.test.ts` | complete |
 | Declarative values and nested resolution | `SecretValue`, `ParameterValue`, `resolve` | env/store/default order, strict fallback, callbacks, hot/static values, cycles | `sdk/typescript/tests/values.test.ts` | complete |
-| Shared parameter watch | `watch`, `watchNamespace` | One bidi stream, union/restart, heartbeats, resume, revision fencing | `sdk/typescript/tests/watch.test.ts` | partial — reconnect/resume fault test pending |
-| Reconciliation | internal subscription manager | Five-minute full sync, page cap, no false deletes, tombstone fences | `sdk/typescript/tests/watch.test.ts` | partial — pagination/tombstone fault matrix pending |
+| Shared parameter watch | `watch`, `watchNamespace` | One bidi stream, union/restart, heartbeats, resume, revision fencing | `sdk/typescript/tests/watch.test.ts` | complete |
+| Reconciliation | internal subscription manager | Five-minute full sync, page cap, no false deletes, tombstone fences | `sdk/typescript/tests/watch.test.ts` | partial — page-cap and tombstone-interleaving fault matrix pending |
 | Immutable release snapshot | `ReleaseManifest`, `ReleaseSnapshot` | Redacted serialization and defensive accessors | `sdk/typescript/tests/releases/types.test.ts` | complete |
 | Release exact resolution and digest | `ReleaseLoader` | Deterministic protobuf digest; ref/version/content/digest verification | `sdk/typescript/tests/releases/digest.test.ts`, `loader.test.ts` | complete |
 | Atomic release lifecycle | `ReleaseLoader.run` | Supersession, prepare/commit/abort, active fence, LKG, reliable acks | `sdk/typescript/tests/releases/loader.test.ts` | complete |
@@ -26,7 +26,7 @@ delivery plan. `complete` means the behavior has an automated TypeScript test;
 | Managed drift/restart policy | `startManagedConfig`, `ManagedConfigManager` | Startup drift, runtime restore, whole-candidate restart rejection | `sdk/typescript/tests/configstore-manager.test.ts` | complete |
 | TypeScript-native generation | `kms-config-gen-ts` | Stable binding/schema/contract output and check mode | `sdk/typescript/tests/configgen.test.ts` | planned |
 | Generated protobuf contract | `src/generated/kms.ts` | Complete service/messages, `uint64` as `bigint`, stale generation check | `npm run check:generated` | complete |
-| Published entry points and examples | package root, `next/server`, `next/client`, `configstore` | Declaration build plus compile-checked consumer and serverful Next.js examples | `sdk/typescript/tests/types`, `npm run build` | complete |
+| Published entry points and examples | package root, `next/server`, `next/client`, `configstore` | Declaration build plus compile-checked consumer and serverful Next.js examples | `sdk/typescript/tests/types`, `sdk/typescript/tests/package`, `npm run test:package` | complete |
 | Supported Node majors | package release gate | Typecheck, lint, tests, consumer types, and build on Node 22 and 26 | `.github/workflows/ci.yml` | complete |
 | TypeScript compiler compatibility | published declarations | TypeScript 5.2+ syntax; pinned compiler release gate | `npm run test:types`, `npm run test:package` | partial — minimum compiler matrix pending |
 | Real-server interoperability | core transport, watches, releases | TLS/mTLS, auth, unary methods, bidi recovery, and releases against a protocol-faithful KMS server | not implemented | planned |
