@@ -1,0 +1,9 @@
+{
+  "extends": "../../tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "types": ["node", "react"]
+  },
+  "include": ["./public-api.ts"],
+  "exclude": []
+}
