@@ -35,9 +35,10 @@ import {
 } from "./refs.js";
 import {
   ReleaseLoader,
-  type ReleaseLoaderOptions,
   type ReleaseTransport,
   type ReleaseWatchStream,
+  type SecretTokenProvider,
+  type ValidateReleaseManifest,
 } from "./releases/loader.js";
 import { Secret } from "./secret.js";
 import {
@@ -129,10 +130,20 @@ export interface ParameterMetadata {
   }[];
 }
 
-export type ClientReleaseLoaderOptions = Omit<ReleaseLoaderOptions, "namespace" | "clientName"> & {
+export interface ClientReleaseLoaderOptions {
+  readonly name: string;
   readonly namespace?: string;
   readonly clientName?: string;
-};
+  readonly instanceId?: string;
+  readonly reconcileIntervalMs?: number;
+  readonly maxConcurrentFetches?: number;
+  readonly secretTokenProvider?: SecretTokenProvider;
+  readonly validateManifest?: ValidateReleaseManifest;
+  /** Injected only for deterministic tests. */
+  readonly now?: () => number;
+  /** Injected only for deterministic full-jitter backoff tests. */
+  readonly random?: () => number;
+}
 
 /** Process-lifetime, concurrency-safe Node.js client. */
 export class KmsClient {
@@ -560,7 +571,7 @@ export class KmsClient {
     const namespace = options.namespace
       ? parseNamespace(options.namespace)
       : await this.requireNamespace("createReleaseLoader");
-    return new ReleaseLoader(this.#releaseTransport(), {
+    return ReleaseLoader._create(this.#releaseTransport(), {
       ...options,
       namespace: toWireNamespace(namespace),
       clientName: options.clientName?.trim() || this.clientName,
@@ -803,18 +814,22 @@ function assertUint64(value: bigint, name: string, positive = false): void {
   }
 }
 
+/** @internal */
 export function toWireNamespace(namespace: NamespaceRef): { env: string; app: string } {
   return { env: namespace.env, app: namespace.app };
 }
 
+/** @internal */
 export function toWireRef(ref: ResourceRef): WireResourceRef {
   return { namespace: toWireNamespace(ref.namespace), key: ref.key };
 }
 
+/** @internal */
 export function fromWireNamespace(namespace: { env: string; app: string }): NamespaceRef {
   return Object.freeze({ env: namespace.env, app: namespace.app });
 }
 
+/** @internal */
 export function fromWireRef(ref: WireResourceRef): ResourceRef {
   if (!ref.namespace) throw new KmsError("internal", "KMS resource reference omitted namespace");
   return Object.freeze({ namespace: fromWireNamespace(ref.namespace), key: ref.key });

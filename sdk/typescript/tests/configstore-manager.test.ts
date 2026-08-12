@@ -252,7 +252,7 @@ function managedClient(transport: FakeReleaseTransport) {
     createReleaseLoader(options: ClientReleaseLoaderOptions): Promise<ReleaseLoader> {
       const selectedNamespace = options.namespace?.split("/");
       return Promise.resolve(
-        new ReleaseLoader(transport, {
+        ReleaseLoader._create(transport, {
           ...options,
           namespace: {
             env: selectedNamespace?.[0] ?? namespace.env,

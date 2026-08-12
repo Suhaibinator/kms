@@ -144,7 +144,7 @@ describe("ReleaseLoader", () => {
     const order: string[] = [];
     const committed = deferred<void>();
     const controller = new AbortController();
-    const loader = new ReleaseLoader(transport, {
+    const loader = ReleaseLoader._create(transport, {
       namespace,
       name: "runtime",
       clientName: "unit-test",
@@ -203,7 +203,7 @@ describe("ReleaseLoader", () => {
     const release = makeRelease(1n, [secretEntry("password", "password", 2n, "string", true)]);
     const transport = new FakeTransport(release);
     let tokenCalls = 0;
-    const loader = new ReleaseLoader(transport, {
+    const loader = ReleaseLoader._create(transport, {
       namespace,
       name: "runtime",
       clientName: "unit-test",
@@ -242,7 +242,7 @@ describe("ReleaseLoader", () => {
     let firstCommits = 0;
     let firstAborts = 0;
     let latestCommits = 0;
-    const loader = new ReleaseLoader(transport, {
+    const loader = ReleaseLoader._create(transport, {
       namespace,
       name: "runtime",
       clientName: "unit-test",
@@ -300,7 +300,7 @@ describe("ReleaseLoader", () => {
     transport.parameters.set("/prod/api/value", parameterResource("value", 1n, "one"));
     const controller = new AbortController();
     const firstCommitted = deferred<void>();
-    const loader = new ReleaseLoader(transport, {
+    const loader = ReleaseLoader._create(transport, {
       namespace,
       name: "runtime",
       clientName: "unit-test",
@@ -353,7 +353,7 @@ describe("ReleaseLoader", () => {
     };
     const controller = new AbortController();
     const committed = deferred<void>();
-    const loader = new ReleaseLoader(transport, {
+    const loader = ReleaseLoader._create(transport, {
       namespace,
       name: "runtime",
       clientName: "unit-test",

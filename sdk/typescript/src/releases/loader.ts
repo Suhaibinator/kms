@@ -35,6 +35,7 @@ const MAX_CONCURRENT_FETCHES = 256;
 const BACKOFF_BASE_MS = 250;
 const BACKOFF_CAP_MS = 30_000;
 
+/** @internal Transport-only exact secret payload. */
 export interface FetchedSecret {
   readonly ref: ResourceRef | undefined;
   readonly version: bigint;
@@ -42,13 +43,14 @@ export interface FetchedSecret {
   readonly contentType: string;
 }
 
+/** @internal Transport-only release stream. */
 export interface ReleaseWatchStream extends AsyncIterable<WatchReleaseEvent> {
   send(request: WatchReleaseRequest): Promise<void>;
   closeSend?(): void | Promise<void>;
   cancel?(): void;
 }
 
-/** Transport boundary implemented by the main KMS client. */
+/** @internal Transport boundary implemented by the main KMS client. */
 export interface ReleaseTransport {
   getActiveRelease(
     namespace: NamespaceRef,
@@ -79,6 +81,7 @@ export type ValidateReleaseManifest = (
   signal: AbortSignal,
 ) => void | Promise<void>;
 
+/** @internal Full transport-bound loader options. Use ClientReleaseLoaderOptions publicly. */
 export interface ReleaseLoaderOptions {
   readonly namespace: NamespaceRef;
   readonly name: string;
@@ -188,9 +191,14 @@ export class ReleaseLoader {
   #ackGeneration = 0n;
   #flushChain: Promise<void> = Promise.resolve();
 
-  constructor(transport: ReleaseTransport, options: ReleaseLoaderOptions) {
+  private constructor(transport: ReleaseTransport, options: ReleaseLoaderOptions) {
     this.#transport = transport;
     this.#options = normalizeOptions(options);
+  }
+
+  /** @internal Construct through KmsClient.createReleaseLoader in application code. */
+  static _create(transport: ReleaseTransport, options: ReleaseLoaderOptions): ReleaseLoader {
+    return new ReleaseLoader(transport, options);
   }
 
   get instanceId(): string {
