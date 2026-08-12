@@ -303,11 +303,18 @@ export function createNextKms<
       let shutdownStarted = false;
 
       const reportError = (error: unknown): void => {
+        let result: unknown;
         try {
-          shutdownOptions.onError?.(error);
+          result = shutdownOptions.onError?.(error);
         } catch {
           // A lifecycle observer must not interfere with cleanup.
+          return;
         }
+        // TypeScript permits an async function where a void-returning callback
+        // is expected. Observe that escaped promise (and hostile thenables) so
+        // an error observer cannot create an unhandled rejection during
+        // shutdown. Completion remains deliberately independent of telemetry.
+        void Promise.resolve(result).catch(() => undefined);
       };
 
       const handlers = uniqueSignals.map((signal) => {

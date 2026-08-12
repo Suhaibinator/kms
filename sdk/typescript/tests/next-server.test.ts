@@ -156,10 +156,13 @@ describe("Next.js server adapter", () => {
     kill.mockRestore();
   });
 
-  it("isolates cleanup-error observers", async () => {
+  it("isolates async-rejecting cleanup-error observers and still completes cleanup", async () => {
     const signal = "SIGUSR2";
     const baseline = process.listenerCount(signal);
     const reported: unknown[] = [];
+    const completed: NodeJS.Signals[] = [];
+    const unhandled = vi.fn();
+    process.on("unhandledRejection", unhandled);
     const adapter = createNextKms<Policy, PublicPolicy, string, readonly string[]>({
       initialize: () => ({
         source: {
@@ -176,18 +179,65 @@ describe("Next.js server adapter", () => {
     const kill = vi.spyOn(process, "kill").mockReturnValue(true);
     adapter.installProcessShutdown({
       signals: [signal],
-      onError: (error) => {
+      async onError(error) {
         reported.push(error);
-        throw new Error("observer failure");
+        throw new Error("async observer failure");
+      },
+      onCleanupComplete(received) {
+        completed.push(received);
       },
     });
     const handler = process.listeners(signal).at(-1);
     handler?.(signal);
-    await vi.waitFor(() => expect(reported).toHaveLength(1));
+    await vi.waitFor(() => expect(completed).toEqual([signal]));
+    await new Promise<void>((resolve) => setImmediate(resolve));
 
+    expect(reported).toHaveLength(1);
+    expect(unhandled).not.toHaveBeenCalled();
     expect(kill).not.toHaveBeenCalled();
     expect(process.listenerCount(signal)).toBe(baseline);
+    process.removeListener("unhandledRejection", unhandled);
     kill.mockRestore();
+  });
+
+  it("isolates cleanup-error observers that return hostile thenables", async () => {
+    const signal = "SIGUSR2";
+    const completed: NodeJS.Signals[] = [];
+    const unhandled = vi.fn();
+    process.on("unhandledRejection", unhandled);
+    const adapter = createNextKms<Policy, PublicPolicy, string, readonly string[]>({
+      initialize: () => ({
+        source: {
+          current: () => ({ revision: 1n, value: { minLength: 8, privateValue: "hidden" } }),
+        },
+        close: () => {
+          throw new Error("cleanup failed");
+        },
+      }),
+      projection,
+      validate: () => ({ valid: true }),
+    });
+    await adapter.start();
+    adapter.installProcessShutdown({
+      signals: [signal],
+      onError: (() =>
+        // biome-ignore lint/suspicious/noThenProperty: exercise a hostile thenable returned through a void callback
+        Object.defineProperty({}, "then", {
+          get() {
+            throw new Error("hostile thenable");
+          },
+        })) as never,
+      onCleanupComplete(received) {
+        completed.push(received);
+      },
+    });
+
+    process.listeners(signal).at(-1)?.(signal);
+    await vi.waitFor(() => expect(completed).toEqual([signal]));
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    expect(unhandled).not.toHaveBeenCalled();
+    process.removeListener("unhandledRejection", unhandled);
   });
 
   it("rejects uncatchable signals without partially installing listeners", async () => {
