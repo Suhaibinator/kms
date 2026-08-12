@@ -14,9 +14,62 @@ import {
   type WhoAmIRequest,
   type WhoAmIResponse,
 } from "../src/generated/kms.js";
-import { KmsClient, KmsError, mtlsFromFiles, tlsFromBytes } from "../src/index.js";
+import { KmsClient, KmsError, mtlsFromFiles, tlsFromBytes, tlsFromFiles } from "../src/index.js";
 
 describe("gRPC TLS integration", () => {
+  it("authenticates a bearer client over server-authenticated TLS", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "kms-sdk-tls-"));
+    const paths = createCertificateFixture(directory);
+    const server = new Server();
+    let calls = 0;
+    const whoAmI: handleUnaryCall<WhoAmIRequest, WhoAmIResponse> = (call, callback) => {
+      calls += 1;
+      expect(call.metadata.get("authorization")).toEqual(["Bearer server-auth-token"]);
+      callback(null, {
+        name: "sdk-token-client",
+        kind: "client",
+        namespace: { env: "prod", app: "api" },
+        authMethod: "token",
+      });
+    };
+    server.addService(AdminServiceService, {
+      whoAmI,
+    } as UntypedServiceImplementation);
+
+    const credentials = ServerCredentials.createSsl(
+      readFileSync(paths.caCert),
+      [
+        {
+          private_key: readFileSync(paths.serverKey),
+          cert_chain: readFileSync(paths.serverCert),
+        },
+      ],
+      false,
+    );
+    const port = await bind(server, credentials);
+    const client = new KmsClient({
+      endpoint: `127.0.0.1:${port}`,
+      token: "server-auth-token",
+      credentials: tlsFromFiles(paths.caCert),
+      timeoutMs: 2_000,
+      channelOptions: localTlsChannelOptions(),
+    });
+
+    try {
+      await expect(client.whoAmI()).resolves.toEqual({
+        identity: "sdk-token-client",
+        kind: "client",
+        namespace: "prod/api",
+        authMethod: "token",
+      });
+      expect(calls).toBe(1);
+    } finally {
+      await client.close();
+      await shutdown(server);
+      rmSync(directory, { recursive: true, force: true });
+    }
+  }, 15_000);
+
   it("authenticates a public client over mTLS and rejects a client without a certificate", async () => {
     const directory = mkdtempSync(join(tmpdir(), "kms-sdk-mtls-"));
     const paths = createCertificateFixture(directory);
