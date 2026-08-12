@@ -446,6 +446,18 @@ line.
 - Declarative resolution walks own object properties and arrays with cycle
   detection. It does not traverse `Map`, weak collections, accessors, or class
   internals. Explicit initialization remains available for dynamic shapes.
+- The TypeScript watch narrows its namespace scope when the last local owner
+  unsubscribes and requests a full snapshot before exposing a newly added
+  scope. The current Go watch keeps an add-only process-lifetime union.
+- Scope growth and authoritative full snapshots invalidate matching read-cache
+  entries, including values that were read before any watch registration. A
+  first unknown tombstone invalidates its point-read cache without inventing a
+  value-change callback.
+- A `ParameterValue` that registers after a newer live update is seeded from
+  that fenced state rather than overwriting it with its earlier point read.
+- Unsubscribe and `ParameterValue.dispose()` fence callbacks already queued by
+  the dispatcher. This is a stronger post-unsubscribe guarantee than the Go
+  dispatcher currently provides.
 - Synchronous CPU-bound callbacks can block the Node event loop. The SDK
   serializes callback settlements behind a bounded queue, catches callback
   failures, and never blocks stream state application; a never-settling

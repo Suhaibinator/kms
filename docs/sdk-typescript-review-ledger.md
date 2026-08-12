@@ -99,6 +99,7 @@ fences, backoff, acknowledgements, and leaks.
 | Growing a namespace union could expose a scope before its full snapshot arrived. | Added expanded-scope snapshots (`3f0a2dd`) and required snapshot delivery before resume (`3379bda`); scope growth also interrupts backoff (`903df95`). | `sdk/typescript/tests/watch.test.ts` |
 | Full snapshots omitted resources without invalidating the ordinary parameter cache, and a first unknown delete could be ignored. | Corrected both behaviors (`97bd23a`) and added a protocol-faithful full-snapshot fixture (`d70bbc0`). | `tests/cache.test.ts`, `tests/watch.test.ts`, `tests/grpc-integration.test.ts` |
 | Reconnect storms, duplicates, out-of-order revisions, failures, and callback pressure needed deterministic evidence. | Added fault and stress coverage (`77964ea`, `e61dd33`, `9697d3e`, `903df95`). | `tests/watch.test.ts`, `tests/stress.test.ts` |
+| Namespace scope, background reconciliation, and deleted-path history were append-only after local unsubscribe or unique-key churn. | Added namespace reference ownership, idle stream/reconcile suspension, tombstone compaction, and a global stale-reconcile fence (`1b90753`). | `tests/stress.test.ts`, `tests/watch.test.ts` |
 | Operators lacked a value-free watch/reconciliation health surface. | Added immutable watch status (`4280d24`); docs require formatting its bigint revision before JSON. | `tests/watch.test.ts`, `docs/sdk-typescript-api.md` |
 
 The shared stream, callback queue, reconnect work, and cleanup are bounded.
@@ -150,7 +151,7 @@ cancellation, stale recovery, and bundle exclusion.
 | Adversarial finding | Resolution and triage | Evidence |
 |---|---|---|
 | A failed shared initialization attempt permanently poisoned later starts. | Made startup retryable (`17a0267`) and coalesced concurrent shutdown (`7842a8a`). | `sdk/typescript/tests/next-server.test.ts` |
-| Signal hooks attempted to preserve termination by re-signalling, unreliable when other listeners remain. | Replaced the initial attempt (`488f4f8`) with cleanup-only, validation/rollback-safe hooks (`b466765`) and corrected the public lifecycle contract (`5663c25`). Applications or supervisors own termination. | `tests/next-server.test.ts`, `docs/sdk-typescript-api.md` |
+| Signal hooks attempted to preserve termination by re-signalling, unreliable when other listeners remain; the first cleanup-only example then had no termination owner. | Replaced the initial attempt (`488f4f8`) with validation/rollback-safe cleanup (`b466765`), added an explicit post-cleanup application callback and child-process exit gate (`715ce1a`), and corrected the public lifecycle contract (`5663c25`). | `tests/next-server.test.ts`, `scripts/test-next-boundaries.mjs`, `examples/next-serverful/instrumentation.ts`, `docs/sdk-typescript-api.md` |
 | Browser policy could remain stale across navigation/focus or after `policy_changed`. | Added navigation refresh (`f98ff02`), structured stale recovery (`223721f`), and recovery observations (`b8361bf`). | `sdk/typescript/tests/next-client.test.tsx` |
 | Unit mocks did not prove server-only imports, instrumentation, or a real App Router build. | Added real Next boundaries (`5593138`), isolated fixtures (`2c37976`), and instrumentation lifecycle (`bd89250`). | `npm run test:next`, `tests/fixtures/next-boundary` |
 | Peer claims and browser behavior were not tested from isolated installed packages. | Added exact Next/React and Chromium gates (`f5672db`) and hardened them to packed, non-symlinked installs plus the minimum compiler (`2634141`). | `.github/workflows/ci.yml`, `npm run test:browser`, `scripts/test-next-peer.mjs`, `scripts/test-typescript-min.mjs` |
@@ -224,8 +225,11 @@ These are accepted support boundaries, not unresolved hidden findings:
 - **Browser matrix.** Chromium is qualified. Other modern browsers with native
   `bigint`, `fetch`, `AbortController`, and focus/navigation events are expected
   to work but are not advertised as matrix-qualified.
-- **Cleanup-only signal hooks.** Next process hooks request bounded cleanup for
-  SIGINT/SIGTERM. Application code or a supervisor owns termination.
+- **Application-owned signal termination.** Next process hooks request
+  cooperative cleanup for SIGINT/SIGTERM. Application code or a supervisor
+  owns termination through the post-cleanup callback; callbacks that ignore
+  cancellation can delay that handoff, so deployments may layer a process
+  supervisor timeout.
 - **Pre-1.0 API stability.** The package is a `0.x` release. The changelog and
   API guide define its compatibility policy; qualification does not imply a
   `1.0` stability promise.
