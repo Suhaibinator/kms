@@ -16,6 +16,7 @@ import {
   ReleaseLoader,
   type ReleaseTransport,
   type ReleaseWatchStream,
+  runTypedRelease,
 } from "../../src/releases/loader.js";
 import { ClassifiedReleaseError } from "../../src/releases/types.js";
 
@@ -81,6 +82,13 @@ class FakeTransport implements ReleaseTransport {
   readonly tokens: string[] = [];
   readonly parameters = new Map<string, Parameter>();
   readonly secrets = new Map<string, FetchedSecret>();
+  getActiveReleaseHook:
+    | ((
+        namespace: NamespaceRef,
+        name: string,
+        signal?: AbortSignal,
+      ) => Promise<GetActiveReleaseResponse>)
+    | undefined;
   fetchParameterHook: (() => Promise<void>) | undefined;
   watchReleaseHook:
     | ((registration: ReleaseWatchRegistration, signal: AbortSignal) => Promise<ReleaseWatchStream>)
@@ -91,11 +99,14 @@ class FakeTransport implements ReleaseTransport {
   }
 
   getActiveRelease(
-    _namespace: NamespaceRef,
-    _name: string,
-    _signal?: AbortSignal,
+    requestedNamespace: NamespaceRef,
+    name: string,
+    signal?: AbortSignal,
   ): Promise<GetActiveReleaseResponse> {
     this.calls.push("active");
+    if (this.getActiveReleaseHook) {
+      return this.getActiveReleaseHook(requestedNamespace, name, signal);
+    }
     return Promise.resolve(this.active);
   }
 
@@ -447,6 +458,213 @@ describe("ReleaseLoader", () => {
     await expect(run).rejects.toMatchObject({ name: "AbortError" });
   });
 
+  it("rejects a later bad digest, acknowledges it, and preserves last-known-good", async () => {
+    const release1 = makeRelease(1n, [parameterEntry("value", "value", 1n, "one")]);
+    const release2 = makeRelease(2n, [parameterEntry("value", "value", 2n, "two")]);
+    release2.digest = "0".repeat(64);
+    const transport = new FakeTransport(release1, 1n);
+    transport.parameters.set("/prod/api/value", parameterResource("value", 1n, "one"));
+    const controller = new AbortController();
+    const firstCommitted = deferred<void>();
+    let preparations = 0;
+    const loader = ReleaseLoader._create(transport, {
+      namespace,
+      name: "runtime",
+      clientName: "unit-test",
+    });
+    const run = loader.run(() => {
+      preparations += 1;
+      return { commit: () => firstCommitted.resolve(), abort: () => undefined };
+    }, controller.signal);
+
+    await firstCommitted.promise;
+    await waitFor(() => loader.status().state === "applied");
+    transport.parameters.set("/prod/api/value", parameterResource("value", 2n, "two"));
+    transport.active = { release: release2, activationRevision: 2n, previousVersion: 1n };
+    transport.stream?.push(activationEvent(release2, 2n));
+    await waitFor(() =>
+      acknowledgements(transport.stream).some(
+        (acknowledgement) =>
+          acknowledgement.version === 2n && acknowledgement.rejectionCategory === "digest_mismatch",
+      ),
+    );
+
+    expect(preparations).toBe(1);
+    expect(loader.status()).toMatchObject({
+      state: "rejected",
+      appliedVersion: 1n,
+      appliedRevision: 1n,
+      lastFailureCategory: "digest_mismatch",
+    });
+    expect(loader.stats()).toMatchObject({ applied: 1n });
+    expect(loader.stats().rejected.digest_mismatch).toBe(1n);
+    expect(rejectedAcknowledgement(transport.stream)).toMatchObject({
+      version: 2n,
+      activationRevision: 2n,
+      rejectionCategory: "digest_mismatch",
+      diagnostic: "",
+    });
+
+    controller.abort();
+    await expect(run).rejects.toMatchObject({ name: "AbortError" });
+  });
+
+  it("fails closed when commit throws without attempting an unsafe abort", async () => {
+    const release = makeRelease(1n, [parameterEntry("value", "value", 1n, "one")]);
+    const transport = new FakeTransport(release);
+    transport.parameters.set("/prod/api/value", parameterResource("value", 1n, "one"));
+    let aborts = 0;
+    const loader = ReleaseLoader._create(transport, {
+      namespace,
+      name: "runtime",
+      clientName: "unit-test",
+    });
+
+    const error = await loader
+      .run(() => ({
+        commit: () => {
+          throw new Error("sensitive partial commit detail");
+        },
+        abort: () => {
+          aborts += 1;
+        },
+      }))
+      .catch((reason: unknown) => reason);
+
+    expect(error).toMatchObject({
+      message: expect.stringContaining("commit() threw; commit must be infallible"),
+    });
+    expect(String(error)).not.toContain("sensitive partial commit detail");
+
+    expect(aborts).toBe(0);
+    expect(loader.status()).toMatchObject({
+      state: "rejected",
+      appliedVersion: 0n,
+      lastFailureCategory: "internal",
+    });
+    expect(loader.stats().rejected.internal).toBe(1n);
+    expect(acknowledgementStates(transport.stream)).not.toContain("applied");
+  });
+
+  it("aborts a prepared candidate exactly once when interrupted before commit", async () => {
+    const release = makeRelease(1n, [parameterEntry("value", "value", 1n, "one")]);
+    const transport = new FakeTransport(release);
+    transport.parameters.set("/prod/api/value", parameterResource("value", 1n, "one"));
+    const activeCheckStarted = deferred<void>();
+    let activeCalls = 0;
+    transport.getActiveReleaseHook = (_requestedNamespace, _name, signal) => {
+      activeCalls += 1;
+      if (activeCalls === 1) return Promise.resolve(transport.active);
+      activeCheckStarted.resolve();
+      return rejectOnAbort(signal);
+    };
+    const controller = new AbortController();
+    let commits = 0;
+    let aborts = 0;
+    const loader = ReleaseLoader._create(transport, {
+      namespace,
+      name: "runtime",
+      clientName: "unit-test",
+    });
+    const run = loader.run(
+      () => ({
+        commit: () => {
+          commits += 1;
+        },
+        abort: () => {
+          aborts += 1;
+        },
+      }),
+      controller.signal,
+    );
+
+    await activeCheckStarted.promise;
+    controller.abort(new DOMException("test interruption", "AbortError"));
+    await expect(run).rejects.toMatchObject({ name: "AbortError" });
+    expect({ commits, aborts }).toEqual({ commits: 0, aborts: 1 });
+    expect(loader.status().appliedVersion).toBe(0n);
+  });
+
+  it("surfaces an abort contract violation as a redacted fatal error", async () => {
+    const release1 = makeRelease(1n, [parameterEntry("value", "value", 1n, "one")]);
+    const release2 = makeRelease(2n, [parameterEntry("value", "value", 2n, "two")]);
+    const transport = new FakeTransport(release1, 1n);
+    transport.parameters.set("/prod/api/value", parameterResource("value", 1n, "one"));
+    let activeCalls = 0;
+    transport.getActiveReleaseHook = () => {
+      activeCalls += 1;
+      return Promise.resolve(
+        activeCalls === 1
+          ? transport.active
+          : { release: release2, activationRevision: 2n, previousVersion: 1n },
+      );
+    };
+    let commits = 0;
+    let aborts = 0;
+    const loader = ReleaseLoader._create(transport, {
+      namespace,
+      name: "runtime",
+      clientName: "unit-test",
+    });
+
+    const error = await loader
+      .run(() => ({
+        commit: () => {
+          commits += 1;
+        },
+        abort: () => {
+          aborts += 1;
+          throw new Error("sensitive rollback detail");
+        },
+      }))
+      .catch((reason: unknown) => reason);
+
+    expect(error).toMatchObject({
+      message: expect.stringContaining("abort() threw; abort must be infallible"),
+    });
+    expect(String(error)).not.toContain("sensitive rollback detail");
+    expect({ commits, aborts }).toEqual({ commits: 0, aborts: 1 });
+    expect(loader.status().lastFailureCategory).toBe("internal");
+    expect(loader.stats().rejected.internal).toBe(1n);
+  });
+
+  it("runTypedRelease decodes before typed preparation and commits the result", async () => {
+    const release = makeRelease(1n, [parameterEntry("value", "value", 1n, "41")]);
+    const transport = new FakeTransport(release);
+    transport.parameters.set("/prod/api/value", parameterResource("value", 1n, "41"));
+    const controller = new AbortController();
+    const committed = deferred<void>();
+    const calls: string[] = [];
+    const loader = ReleaseLoader._create(transport, {
+      namespace,
+      name: "runtime",
+      clientName: "unit-test",
+    });
+    const run = runTypedRelease(
+      loader,
+      (snapshot) => {
+        calls.push("decode");
+        return Number(snapshot.parameter("value")?.value()) + 1;
+      },
+      (value, signal) => {
+        calls.push(`prepare:${value}:${signal.aborted}`);
+        return {
+          commit: () => {
+            calls.push("commit");
+            committed.resolve();
+          },
+          abort: () => undefined,
+        };
+      },
+      controller.signal,
+    );
+
+    await committed.promise;
+    expect(calls).toEqual(["decode", "prepare:42:false", "commit"]);
+    controller.abort();
+    await expect(run).rejects.toMatchObject({ name: "AbortError" });
+  });
+
   it("bounds concurrent resource fetches", async () => {
     const entries = Array.from({ length: 8 }, (_, index) =>
       parameterEntry(`p${index}`, `p${index}`, 1n, `value-${index}`),
@@ -606,6 +824,18 @@ function deferred<T = void>(): {
     resolve = onResolve;
   });
   return { promise, resolve };
+}
+
+function rejectOnAbort(signal: AbortSignal | undefined): Promise<never> {
+  return new Promise((_, reject) => {
+    if (!signal) {
+      reject(new Error("abort signal is required"));
+      return;
+    }
+    const abort = (): void => reject(signal.reason);
+    if (signal.aborted) abort();
+    else signal.addEventListener("abort", abort, { once: true });
+  });
 }
 
 async function waitFor(predicate: () => boolean, timeoutMs = 2_000): Promise<void> {
