@@ -161,6 +161,10 @@ After every stage, run a separate adversarial review pass using multiple indepen
 
 All findings require triage with an explicit resolution, test coverage where applicable, and a documented exception only when the difference is intentional and user-visible. High-risk or disputed areas receive a second independent implementation or test-design review before the stage is accepted.
 
+The completed stage dispositions, adversarial findings, corrective commits,
+test evidence, and intentional release limitations are recorded in the
+[`TypeScript SDK stage-review ledger`](sdk-typescript-review-ledger.md).
+
 ## Parity verification
 
 Maintain a living Go-to-TypeScript parity matrix. For every supported Go feature, record the TypeScript API, supported behavior, intentional differences, test location, and release status. Parity checks must exercise behavior, not only type or method presence.
