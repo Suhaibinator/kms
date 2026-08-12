@@ -62,7 +62,10 @@ export type WatchConnectionState = "idle" | "connecting" | "connected" | "reconn
 
 export type ReconciliationHealth = "not_started" | "healthy" | "degraded";
 
-/** A value-free snapshot suitable for metrics and health endpoints. */
+/**
+ * A value-free snapshot suitable for metrics and health logic. Format
+ * `currentRevision` as decimal text before placing this object in JSON.
+ */
 export interface WatchStatus {
   readonly state: WatchConnectionState;
   readonly reconciliation: ReconciliationHealth;
@@ -150,6 +153,7 @@ export class SubscriptionManager {
   #namespaceGeneration = 0;
   #snapshotGeneration = 0;
   #sessionController: AbortController | undefined;
+  #backoffController: AbortController | undefined;
   #runTask: Promise<void> | undefined;
   #reconcileTask: Promise<void> | undefined;
   #stopped = false;
@@ -273,6 +277,7 @@ export class SubscriptionManager {
     for (const stop of [...this.#watcherStops.values()]) stop();
     this.#controller.abort(new DOMException("KMS watches stopped", "AbortError"));
     this.#sessionController?.abort();
+    this.#backoffController?.abort();
     await Promise.allSettled([this.#runTask, this.#reconcileTask].filter(Boolean));
     // A session can resume between its awaited registration send and the
     // abort becoming observable. Reassert the terminal state after every
@@ -312,6 +317,7 @@ export class SubscriptionManager {
   #restart(): void {
     this.#restartRequested = true;
     this.#sessionController?.abort(new DOMException("KMS namespace set changed", "AbortError"));
+    this.#backoffController?.abort(new DOMException("KMS namespace set changed", "AbortError"));
   }
 
   async #run(): Promise<void> {
@@ -331,7 +337,18 @@ export class SubscriptionManager {
           this.#host.logger.warn(
             `KMS watch stream ended (${safeError(error)}); reconnecting in ${delay}ms`,
           );
-          await this.#sleep(delay, this.#controller.signal).catch(() => undefined);
+          const backoffController = new AbortController();
+          this.#backoffController = backoffController;
+          try {
+            await this.#sleep(
+              delay,
+              AbortSignal.any([this.#controller.signal, backoffController.signal]),
+            ).catch(() => undefined);
+          } finally {
+            if (this.#backoffController === backoffController) {
+              this.#backoffController = undefined;
+            }
+          }
         }
       }
       if (this.#restartRequested) attempt = 0;
@@ -452,7 +469,12 @@ export class SubscriptionManager {
     const ref = wireChangeRef(change.ref);
     if (!ref) return;
     if (change.changeType === "delete") {
-      this.#setValue(displayPath(ref), "", false, change.version, revision, false);
+      const path = displayPath(ref);
+      // A normal point read can populate the cache without registering this
+      // path in #known. Every explicit tombstone still invalidates that cache,
+      // while #setValue preserves value-change-only watch delivery parity.
+      this.#host._cache().invalidateParam(path);
+      this.#setValue(path, "", false, change.version, revision, false);
     } else {
       this.#setValue(displayPath(ref), change.value, true, change.version, revision, false);
     }
@@ -488,7 +510,7 @@ export class SubscriptionManager {
     const nextRevision = previous && previous.revision > revision ? previous.revision : revision;
     const changed = present
       ? !previous?.present || previous.value !== value
-      : previous === undefined || previous.present;
+      : Boolean(previous?.present);
     this.#known.set(path, { value: present ? value : "", present, revision: nextRevision });
     if (!changed) return;
 
@@ -522,7 +544,9 @@ export class SubscriptionManager {
   #fireWatchers(namespace: NamespaceRef, event: WatchEvent): void {
     for (const watcher of this.#watchers.values()) {
       if (!namespaceEquals(watcher.namespace, namespace)) continue;
-      this.#host._dispatch(event.path, () => watcher.callback(event));
+      this.#host._dispatch(event.path, () => {
+        if (this.#watchers.get(watcher.id) === watcher) return watcher.callback(event);
+      });
     }
   }
 

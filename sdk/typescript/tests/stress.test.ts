@@ -115,6 +115,42 @@ describe("bounded concurrency and lifecycle stress", () => {
     expect(stream.pendingReadCount).toBe(0);
   });
 
+  it("serializes callback promises so pending application work remains bounded", async () => {
+    const warnings: string[] = [];
+    const transport = new FakeTransport(() => ({ parameters: [], nextPageToken: "" }));
+    const client = new KmsClient({
+      transport,
+      namespace,
+      logger: { warn: (message) => warnings.push(message) },
+    });
+    let releaseFirst: (() => void) | undefined;
+    const firstPending = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    let delivered = 0;
+    const stop = await client.watch(() => {
+      delivered += 1;
+      return delivered === 1 ? firstPending : undefined;
+    });
+    await waitFor(() => transport.streams.length === 1);
+    const stream = streamAt(transport, 0);
+    await waitFor(() => stream.sent.length === 1);
+    stream.emit(parameterChange(1));
+    await waitFor(() => delivered === 1);
+
+    const burst = 1_100;
+    for (let index = 2; index <= burst; index++) stream.emit(parameterChange(index));
+    await waitFor(() => client.currentRevision === BigInt(burst));
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(delivered).toBe(1);
+    expect(warnings.some((message) => message.includes("callback queue full"))).toBe(true);
+
+    releaseFirst?.();
+    await waitFor(() => delivered > 1);
+    stop();
+    await client.close();
+  });
+
   it("removes watcher AbortSignal listeners across scaled stop, abort, and client-close paths", async () => {
     const transport = new FakeTransport(() => ({ parameters: [], nextPageToken: "" }));
     const client = new KmsClient({

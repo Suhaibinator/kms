@@ -28,6 +28,7 @@ class FakeResolver implements ValueResolver {
   fallbackToDefaultsOnError = false;
   registrationCount = 0;
   disposalCount = 0;
+  callbackQueue: Array<() => void> | undefined;
 
   async getParameter(key: string, options?: ValueReadOptions): Promise<string> {
     this.parameterCalls.push({ key, options });
@@ -64,7 +65,8 @@ class FakeResolver implements ValueResolver {
   }
 
   _enqueueCallback(callback: () => void): void {
-    callback();
+    if (this.callbackQueue === undefined) callback();
+    else this.callbackQueue.push(callback);
   }
 
   update(key: string, value: string, present = true): void {
@@ -225,6 +227,30 @@ describe("ParameterValue", () => {
     removeFirst();
     client.update("rate", "30");
     expect(callback).toHaveBeenCalledTimes(3);
+  });
+
+  it("fences queued callbacks after unsubscribe and disposal", async () => {
+    const client = new FakeResolver();
+    client.parameters.set("rate", "10");
+    client.callbackQueue = [];
+    const value = new ParameterValue("rate");
+    const first = vi.fn();
+    const removeFirst = value.onChange(first);
+    await value.init(client);
+
+    client.update("rate", "20");
+    expect(client.callbackQueue).toHaveLength(1);
+    removeFirst();
+    client.callbackQueue.shift()?.();
+    expect(first).not.toHaveBeenCalled();
+
+    const second = vi.fn();
+    value.onChange(second);
+    client.update("rate", "30");
+    expect(client.callbackQueue).toHaveLength(1);
+    await value.dispose();
+    client.callbackQueue.shift()?.();
+    expect(second).not.toHaveBeenCalled();
   });
 
   it("retains last-known-good after deletion when no default exists", async () => {

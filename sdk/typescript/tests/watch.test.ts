@@ -1,9 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 import { KmsClient, type WatchEvent } from "../src/client.js";
 import type { SubscribeEvent, SubscribeRequest } from "../src/generated/kms.js";
-import { resolveRef } from "../src/refs.js";
+import { parseNamespace, resolveRef } from "../src/refs.js";
 import { ParameterValue } from "../src/values.js";
-import { fullJitterBackoff, revisionAllowsWrite } from "../src/watch.js";
+import { fullJitterBackoff, revisionAllowsWrite, SubscriptionManager } from "../src/watch.js";
 import { type FakeDuplex, FakeTransport, waitFor } from "./helpers/fake-transport.js";
 
 describe("shared watches", () => {
@@ -381,6 +381,76 @@ describe("shared watches", () => {
     await client.close();
   });
 
+  it("fences a watch callback already queued when its watcher stops", async () => {
+    const transport = new FakeTransport(() => ({ parameters: [], nextPageToken: "" }));
+    const client = new KmsClient({ transport, namespace: "prod/api" });
+    const callback = vi.fn();
+    const stop = await client.watch(callback);
+    await waitFor(() => transport.streams.length === 1);
+    const stream = transport.streams[0] as FakeDuplex<SubscribeRequest, SubscribeEvent>;
+    stream.emit({
+      event: {
+        $case: "change",
+        value: {
+          ref: { namespace: { env: "prod", app: "api" }, key: "queued" },
+          changeType: "put",
+          value: "new",
+          contentType: "string",
+          version: 1n,
+          label: "",
+        },
+      },
+      revision: 1n,
+    });
+    for (let index = 0; index < 10 && client.currentRevision !== 1n; index++) {
+      await Promise.resolve();
+    }
+    expect(client.currentRevision).toBe(1n);
+    stop();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(callback).not.toHaveBeenCalled();
+    await client.close();
+  });
+
+  it("interrupts reconnect backoff when the namespace union grows", async () => {
+    const transport = new FakeTransport(() => ({ parameters: [], nextPageToken: "" }));
+    const client = new KmsClient({ transport, namespace: "prod/api" });
+    const sleeps: number[] = [];
+    const manager = new SubscriptionManager(client, {
+      random: () => 1,
+      reconcileIntervalMs: 60_000,
+      sleep: (milliseconds, signal) => {
+        sleeps.push(milliseconds);
+        return new Promise<void>((_resolve, reject) => {
+          if (signal.aborted) reject(signal.reason);
+          else signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+        });
+      },
+    });
+    const stopFirst = manager.watch(parseNamespace("prod/api"), () => undefined);
+    await waitFor(() => transport.streams.length === 1);
+    const first = transport.streams[0] as FakeDuplex<SubscribeRequest, SubscribeEvent>;
+    first.cancel();
+    await waitFor(() => sleeps.includes(1_000));
+
+    const stopSecond = manager.watch(parseNamespace("prod/worker"), () => undefined);
+    await waitFor(() => transport.streams.length === 2, 100);
+    const expanded = transport.streams[1] as FakeDuplex<SubscribeRequest, SubscribeEvent>;
+    await waitFor(() => expanded.sent.length === 1);
+    expect(expanded.sent[0]).toMatchObject({
+      namespaces: [
+        { env: "prod", app: "api" },
+        { env: "prod", app: "worker" },
+      ],
+      lastSeenRevision: 0n,
+    });
+
+    stopFirst();
+    stopSecond();
+    await manager.stop();
+    await client.close();
+  });
+
   it("removes external abort listeners on unwatch and client close", async () => {
     const transport = new FakeTransport(() => ({ parameters: [], nextPageToken: "" }));
     const client = new KmsClient({ transport, namespace: "prod/api" });
@@ -698,7 +768,7 @@ describe("shared watches", () => {
     await client.close();
   });
 
-  it("delivers and deduplicates an unknown live tombstone while invalidating its cache", async () => {
+  it("invalidates an unknown live tombstone without inventing a value-change event", async () => {
     let reads = 0;
     const transport = new FakeTransport((path) => {
       if (path.endsWith("/GetParameter")) {
@@ -738,7 +808,7 @@ describe("shared watches", () => {
       },
       revision: 4n,
     });
-    await waitFor(() => events.length === 1);
+    await waitFor(() => client.currentRevision === 4n);
     stream.emit({
       event: {
         $case: "change",
@@ -754,9 +824,7 @@ describe("shared watches", () => {
       revision: 5n,
     });
     await waitFor(() => client.currentRevision === 5n);
-    expect(events).toEqual([
-      expect.objectContaining({ type: "delete", key: "deleted", revision: 4n }),
-    ]);
+    expect(events).toEqual([]);
     expect(await client.getParameter("deleted")).toBe("after-delete");
     expect(reads).toBe(2);
     stop();

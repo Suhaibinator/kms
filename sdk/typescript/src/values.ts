@@ -17,6 +17,11 @@ export interface SecretReadOptions extends ValueReadOptions {
 export type ParameterUpdateHandler = (value: string, present: boolean) => void;
 export type ChangeCallback = (oldValue: string, newValue: string) => void;
 
+interface ChangeRegistration {
+  readonly callback: ChangeCallback;
+  active: boolean;
+}
+
 export type SubscriptionHandle =
   | undefined
   | void
@@ -296,7 +301,7 @@ export class ParameterValue {
   readonly #envVar: string;
   readonly #default: string;
   readonly #static: boolean;
-  readonly #callbacks: ChangeCallback[] = [];
+  readonly #callbacks: ChangeRegistration[] = [];
   #value = "";
   #initialized = false;
   #pinned = false;
@@ -457,8 +462,12 @@ export class ParameterValue {
     const oldValue = this.#value;
     if (oldValue === newValue) return;
     this.#value = newValue;
-    for (const callback of [...this.#callbacks]) {
-      const invoke = () => callback(oldValue, newValue);
+    for (const registration of [...this.#callbacks]) {
+      const invoke = () => {
+        if (registration.active && !this.#disposed) {
+          registration.callback(oldValue, newValue);
+        }
+      };
       if (this.#client?._enqueueCallback !== undefined) this.#client._enqueueCallback(invoke);
       else if (this.#client?._dispatch !== undefined) this.#client._dispatch(this.#key, invoke);
       else queueMicrotask(invoke);
@@ -467,12 +476,13 @@ export class ParameterValue {
 
   /** Register a callback and return a local callback-unsubscribe function. */
   onChange(callback: ChangeCallback): () => void {
-    this.#callbacks.push(callback);
-    let active = true;
+    if (typeof callback !== "function") throw new TypeError("change callback is required");
+    const registration: ChangeRegistration = { callback, active: true };
+    this.#callbacks.push(registration);
     return () => {
-      if (!active) return;
-      active = false;
-      const index = this.#callbacks.indexOf(callback);
+      if (!registration.active) return;
+      registration.active = false;
+      const index = this.#callbacks.indexOf(registration);
       if (index >= 0) this.#callbacks.splice(index, 1);
     };
   }
@@ -481,6 +491,8 @@ export class ParameterValue {
   async dispose(): Promise<void> {
     if (this.#disposeAttempt !== undefined) return this.#disposeAttempt;
     this.#disposed = true;
+    for (const registration of this.#callbacks) registration.active = false;
+    this.#callbacks.length = 0;
     const pending = this.#disposeAfterInitialization();
     this.#disposeAttempt = pending;
     return pending;

@@ -957,22 +957,37 @@ class CallbackDispatcher {
   }
 
   #drain(): void {
-    this.#scheduled = false;
-    if (this.#closed) return;
+    if (this.#closed) {
+      this.#scheduled = false;
+      return;
+    }
     const item = this.#queue.shift();
-    if (item) {
-      try {
-        Promise.resolve(item.callback()).catch(() => {
-          this.#logger.warn(`KMS change callback rejected for ${item.path}`);
-        });
-      } catch {
-        this.#logger.warn(`KMS change callback threw for ${item.path}`);
-      }
+    if (item === undefined) {
+      this.#scheduled = false;
+      return;
     }
-    if (this.#queue.length > 0) {
-      this.#scheduled = true;
-      setImmediate(() => this.#drain());
+
+    let result: unknown;
+    try {
+      result = item.callback();
+    } catch {
+      this.#logger.warn(`KMS change callback threw for ${item.path}`);
+      this.#scheduleNext();
+      return;
     }
+    void Promise.resolve(result)
+      .catch(() => {
+        this.#logger.warn(`KMS change callback rejected for ${item.path}`);
+      })
+      .then(() => this.#scheduleNext());
+  }
+
+  #scheduleNext(): void {
+    if (this.#closed || this.#queue.length === 0) {
+      this.#scheduled = false;
+      return;
+    }
+    setImmediate(() => this.#drain());
   }
 }
 
