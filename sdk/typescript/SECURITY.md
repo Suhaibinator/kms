@@ -3,8 +3,9 @@
 ## Reporting a vulnerability
 
 Do not disclose a suspected vulnerability, secret value, credential, private
-endpoint, or exploit details in a public issue. Use the repository's private
-security-reporting channel or contact the maintainers privately. Include the
+endpoint, or exploit details in a public issue. Open a
+[private security advisory](https://github.com/Suhaibinator/kms/security/advisories/new)
+or contact the maintainers privately. Include the
 affected package version, Node.js version, a minimal reproduction with all
 credentials and plaintext removed, and the security impact.
 
