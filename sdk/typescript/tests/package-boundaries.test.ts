@@ -9,6 +9,7 @@ interface ConditionalExport {
 }
 
 interface PackageManifest {
+  readonly bin?: Readonly<Record<string, string>>;
   readonly type?: string;
   readonly engines?: Readonly<Record<string, string>>;
   readonly files?: readonly string[];
@@ -26,6 +27,16 @@ describe("published trust boundaries", () => {
 
   it("poisons every server entry outside Node while leaving only next/client browser-safe", () => {
     const exports = manifest.exports ?? {};
+    expect(Object.keys(exports).sort()).toEqual(
+      [
+        ".",
+        "./configgen",
+        "./configstore",
+        "./next/client",
+        "./next/server",
+        "./package.json",
+      ].sort(),
+    );
     expect(exports["."]).toEqual({
       types: "./dist/index.d.ts",
       node: "./dist/index.js",
@@ -34,6 +45,11 @@ describe("published trust boundaries", () => {
     expect(exports["./configstore"]).toEqual({
       types: "./dist/configstore/index.d.ts",
       node: "./dist/configstore/index.js",
+      default: "./dist/unsupported-browser.js",
+    });
+    expect(exports["./configgen"]).toEqual({
+      types: "./dist/configgen/index.d.ts",
+      node: "./dist/configgen/index.js",
       default: "./dist/unsupported-browser.js",
     });
     expect(exports["./next/server"]).toEqual({
@@ -48,6 +64,7 @@ describe("published trust boundaries", () => {
   });
 
   it("keeps browser and server markers effective through packaging", () => {
+    expect(source("../src/bin/kms-config-gen-ts.ts").startsWith("#!/usr/bin/env node")).toBe(true);
     expect(source("../src/next/client.tsx").startsWith('"use client";')).toBe(true);
     expect(source("../src/next/server.ts").startsWith('import "server-only";')).toBe(true);
     expect(source("../src/unsupported-browser.ts")).toContain("Node.js-only SDK");
@@ -63,6 +80,9 @@ describe("published trust boundaries", () => {
   it("ships the documented Node-only package contract", () => {
     expect(manifest.type).toBe("module");
     expect(manifest.engines?.node).toBe(">=22");
+    expect(manifest.bin).toEqual({
+      "kms-config-gen-ts": "./dist/bin/kms-config-gen-ts.js",
+    });
     expect(manifest.files).toEqual(
       expect.arrayContaining(["dist", "README.md", "SECURITY.md", "CHANGELOG.md", "LICENSE"]),
     );

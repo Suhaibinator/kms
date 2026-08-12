@@ -443,10 +443,11 @@ client-side routing resolves deep links on refresh.
   decoding; see [`docs/sdk-python.md`](docs/sdk-python.md).
 - **TypeScript** (`sdk/typescript`, package `@suhaibinator/kms`) — Node.js
   TLS/mTLS client, declarative hot reload, atomic release loading,
-  framework-neutral public-policy publishing, and optional serverful Next.js
-  helpers; see the [`sdk/typescript` guide](sdk/typescript/README.md). The core
-  SDK is not browser-safe; only its explicit `next/client` public-policy hook
-  belongs in a browser bundle.
+  framework-neutral public-policy publishing, generated managed configuration,
+  and optional serverful Next.js helpers; see the
+  [`sdk/typescript` guide](sdk/typescript/README.md). The core SDK is not
+  browser-safe; only its explicit `next/client` public-policy hook belongs in a
+  browser bundle.
 
 ## Documentation
 

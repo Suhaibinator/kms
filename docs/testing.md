@@ -134,7 +134,11 @@ the committed lockfile first.
 CI runs `npm run check` on Node 22 and Node 26. Examples under
 `sdk/typescript/examples` are included in `npm run test:types`, so changes to
 the documented core and serverful Next.js integrations cannot silently drift
-from the public exports.
+from the public exports. The gate also builds declarations, compiles a consumer
+against the built package, and runs `npm pack --dry-run` to verify the
+publishable manifest. Generated managed-configuration fixtures must match the
+descriptor and exercise the emitted `Store`; applications should run their
+`kms-config-gen-ts ... --check` command in CI for the same stale-artifact gate.
 
 ## Frontend
 

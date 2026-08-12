@@ -1,4 +1,6 @@
 import {
+  // @ts-expect-error Digest helpers consume generated messages and are intentionally internal.
+  deterministicReleaseDigest,
   type KmsClient,
   type KmsErrorCode,
   ParameterValue,
@@ -6,20 +8,23 @@ import {
   type PreparedRelease,
   type PublicConfigWire,
   type ReleaseSnapshot,
+  // @ts-expect-error Protocol transport types are internal and must not expose generated messages.
+  type ReleaseTransport,
   type Secret,
   SecretValue,
 } from "@suhaibinator/kms";
-import type { NextKms } from "@suhaibinator/kms/next/server";
+import {
+  type ConfigDescriptor,
+  generate,
+  parseDescriptor,
+  verifyArtifacts,
+} from "@suhaibinator/kms/configgen";
 import {
   type ContractEntry,
   type ManagedPreparedCandidate,
   startManagedConfig,
 } from "@suhaibinator/kms/configstore";
-
-// @ts-expect-error Protocol transport types are internal and must not expose generated messages.
-import type { ReleaseTransport } from "@suhaibinator/kms";
-// @ts-expect-error Digest helpers consume generated messages and are intentionally internal.
-import { deterministicReleaseDigest } from "@suhaibinator/kms";
+import type { NextKms } from "@suhaibinator/kms/next/server";
 
 interface Policy {
   readonly limit: number;
@@ -34,6 +39,19 @@ export const values = {
   secret: new SecretValue("secret"),
   parameter: new ParameterValue("parameter"),
 };
+
+export function generateManagedArtifacts(document: string): void {
+  const descriptor: ConfigDescriptor = parseDescriptor(document);
+  const artifacts = generate(descriptor);
+  void verifyArtifacts(
+    {
+      binding: "src/config.generated.ts",
+      schema: "config/runtime.schema.json",
+      contract: "config/runtime.contract.json",
+    },
+    artifacts,
+  );
+}
 
 void (undefined as ReleaseTransport | undefined);
 void deterministicReleaseDigest;

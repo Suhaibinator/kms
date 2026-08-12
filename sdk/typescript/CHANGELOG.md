@@ -8,8 +8,8 @@ a minor release may contain documented breaking changes.
 
 ### Added
 
-- Stable root, Next.js server, Next.js client, and optional configstore package
-  entry points.
+- Stable root, Next.js server, Next.js client, optional configstore, and
+  TypeScript-native config generator package entry points.
 - Node gRPC transport with TLS/mTLS, bearer and per-secret metadata, bounded
   deadlines, namespace discovery, and exact `bigint` protocol values.
 - Typed errors, defensive redacting secrets, bounded read caching, declarative
@@ -18,6 +18,8 @@ a minor release may contain documented breaking changes.
   first-class serverful Next.js adapter.
 - Runnable core and Next.js integration examples, package security guidance,
   consumer type tests, and Node compatibility CI.
+- `kms-config-gen-ts` deterministic binding, Draft 2020-12 schema, and machine
+  contract generation with non-writing `--check`/`--verify` modes.
 
 ### Compatibility notes
 

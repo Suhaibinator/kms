@@ -12,7 +12,8 @@ receive a fail-fast poison module instead of transport code.
 | Export | Runtime | Responsibility |
 |---|---|---|
 | `@suhaibinator/kms` | Node.js | Client, TLS/mTLS, values, cache/watch, releases, publishing contracts |
-| `@suhaibinator/kms/configstore` | Node.js | Optional strict managed-configuration runtime and generator contracts |
+| `@suhaibinator/kms/configstore` | Node.js | Optional strict managed-configuration runtime and generated-binding contracts |
+| `@suhaibinator/kms/configgen` | Node.js | Descriptor parser and deterministic binding/schema/contract generation library |
 | `@suhaibinator/kms/next/server` | Next.js Node runtime | Process-owned client/release lifecycle, server reads, validation, Route Handler factory |
 | `@suhaibinator/kms/next/client` | Browser/React | Public-policy wire decoding, refresh, and stale-policy recovery only |
 
@@ -162,6 +163,22 @@ differs from allocation-free Go generated scalar/view getters: JavaScript
 managed views favor defensive ownership, represent exact 64-bit
 integers/durations as `bigint`, and use explicit `null` where the generated
 contract permits absence.
+
+### TypeScript-native generator
+
+`@suhaibinator/kms/configgen` parses a versioned
+`kms-config-descriptor/v1` document and deterministically produces a generated
+managed store, Draft 2020-12 parameter schema, and machine contract. The
+`kms-config-gen-ts` executable writes all three explicit outputs or compares
+them without modification in `--check`/`--verify` mode. The descriptor records
+the application root type, parameter groups and field encodings, secret
+aliases, hot/restart policy, and consumer views; it must not contain default or
+secret values.
+
+Generated bindings depend only on the stable package root and `configstore`
+entry point. Generated application artifacts are committed and type-checked;
+CI reruns the generator in check mode so descriptor and output drift fails the
+build.
 
 ## Naming and types
 

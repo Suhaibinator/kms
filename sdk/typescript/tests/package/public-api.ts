@@ -6,19 +6,24 @@ import type {
   ReleaseLoader,
   ReleaseSecret,
   ReleaseSnapshot,
+  // @ts-expect-error Low-level protocol transport types are not part of the package root.
+  ReleaseTransport,
 } from "@suhaibinator/kms";
+import {
+  type ConfigDescriptor,
+  generate,
+  parseDescriptor,
+  verifyArtifacts,
+} from "@suhaibinator/kms/configgen";
 import {
   type ContractEntry,
   type ManagedPreparedCandidate,
   startManagedConfig,
 } from "@suhaibinator/kms/configstore";
-import { usePublicConfig } from "@suhaibinator/kms/next/client";
-import { createNextKms } from "@suhaibinator/kms/next/server";
-
-// @ts-expect-error Low-level protocol transport types are not part of the package root.
-import type { ReleaseTransport } from "@suhaibinator/kms";
 // @ts-expect-error Generated protocol modules are blocked by the package export map.
 import type { ConfigurationRelease } from "@suhaibinator/kms/dist/generated/kms.js";
+import { usePublicConfig } from "@suhaibinator/kms/next/client";
+import { createNextKms } from "@suhaibinator/kms/next/server";
 
 interface PublicPolicy {
   readonly [key: string]: number;
@@ -56,4 +61,17 @@ export async function consumeManagedDeclarations(client: KmsClient): Promise<voi
 }
 
 export const adapterFactories = [createNextKms, usePublicConfig] as const;
+
+export async function consumeConfiggenDeclarations(document: string): Promise<void> {
+  const descriptor: ConfigDescriptor = parseDescriptor(document);
+  await verifyArtifacts(
+    {
+      binding: "src/config.generated.ts",
+      schema: "config/runtime.schema.json",
+      contract: "config/runtime.contract.json",
+    },
+    generate(descriptor),
+  );
+}
+
 void (undefined as ReleaseTransport | ConfigurationRelease | undefined);

@@ -247,24 +247,93 @@ longer than necessary.
 The optional `@suhaibinator/kms/configstore` entry point lets generated
 bindings strictly decode a complete release, compare source-owned defaults,
 publish an immutable typed generation, and reject runtime changes to
-restart-required fields. A normal `KmsClient` is the lifecycle owner:
+restart-required fields. Declare the application-owned root type beside a
+versioned descriptor; the descriptor contains structure and policy, never
+defaults, secret values, or physical KMS paths:
 
 ```ts
-import { startManagedConfig } from "@suhaibinator/kms/configstore";
-import { contract, prepareRuntimeConfig } from "./runtime.kms.js";
+// src/config.ts
+import type { Secret } from "@suhaibinator/kms";
 
-const manager = await startManagedConfig(
+export interface RuntimeConfig {
+  requestTimeoutMs: number;
+  databasePassword: Secret;
+}
+```
+
+```json
+{
+  "format": "kms-config-descriptor/v1",
+  "source": { "module": "./config.js", "type": "RuntimeConfig" },
+  "groups": [
+    {
+      "alias": "runtime",
+      "fields": [
+        {
+          "property": "requestTimeoutMs",
+          "jsonName": "request_timeout_ms",
+          "reload": "hot",
+          "views": ["worker"],
+          "type": { "kind": "integer", "bits": 32 }
+        }
+      ]
+    }
+  ],
+  "secrets": [
+    {
+      "property": "databasePassword",
+      "alias": "database_password",
+      "reload": "restart",
+      "views": ["worker"]
+    }
+  ]
+}
+```
+
+Generate and commit the binding, Draft 2020-12 parameter schema, and machine
+contract:
+
+```bash
+kms-config-gen-ts \
+  --descriptor config.kms.json \
+  --binding-output src/config.generated.ts \
+  --schema-output config/runtime.schema.json \
+  --contract-output config/runtime.contract.json
+```
+
+The generated `Store` accepts source-owned defaults and application validation.
+A normal `KmsClient` owns its release lifecycle:
+
+```ts
+import { Secret } from "@suhaibinator/kms";
+import { Store } from "./config.generated.js";
+
+const store = new Store(
+  {
+    requestTimeoutMs: 3000,
+    // Secret defaults must be the zero Secret; plaintext never belongs here.
+    databasePassword: new Secret(),
+  },
+  (candidate) => {
+    if (candidate.requestTimeoutMs <= 0) {
+      throw new Error("requestTimeoutMs must be positive");
+    }
+  },
+);
+
+const manager = await store.start(
   client,
   {
     release: "runtime",
-    contract,
     onDefaultMismatch(report) {
       // The report is secret-aware and path-bounded. Forward it to local telemetry.
       console.error(String(report));
     },
   },
-  prepareRuntimeConfig,
 );
+
+const active = store.current();
+console.info(active.worker().requestTimeoutMs, active.release.version);
 
 // At shutdown, stop the manager before its client transport.
 manager.stop();
@@ -279,8 +348,9 @@ synchronous `publish` callback. Startup drift fails closed unless
 is rejected as a whole while the last-known-good snapshot remains active.
 
 The generated binding, schema, and contract are application artifacts. Run the
-generator in its check mode in CI so source tags/descriptors cannot drift from
-committed output.
+same command with `--check` (or `--verify`) in CI so the descriptor cannot drift
+from committed output. The library API for custom tooling is available at
+`@suhaibinator/kms/configgen`.
 
 ## Package boundaries and support
 
@@ -288,6 +358,7 @@ committed output.
 |---|---|---|
 | `@suhaibinator/kms` | Node.js 22+ | Core client, values, watches, releases, publishing |
 | `@suhaibinator/kms/configstore` | Node.js 22+ | Optional generated managed-configuration runtime |
+| `@suhaibinator/kms/configgen` | Node.js 22+ | Descriptor parser and deterministic artifact generator |
 | `@suhaibinator/kms/next/server` | Next.js Node runtime | Server-only lifecycle and Route Handlers |
 | `@suhaibinator/kms/next/client` | React browser bundle | Public-policy refresh and stale recovery |
 
