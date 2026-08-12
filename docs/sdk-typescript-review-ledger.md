@@ -62,6 +62,7 @@ metadata, TLS/mTLS, cancellation, discovery retries, and error redaction.
 | Public and wire integer inputs were not uniformly checked before encoding. | Added runtime `uint64`/`int64` checks (`ffbf087`) on top of the bigint design (`12650c9`, `a8d31f9`). | `tests/client.test.ts`, `tests/refs.test.ts`, `tests/secret.test.ts`, `tests/grpc-integration.test.ts` |
 | Namespace discovery needed proof that failure is retryable and an unbound identity is cached. | Added both discovery cases in `4a56f78`. | `sdk/typescript/tests/client.test.ts` |
 | The first caller's cancellation owned a coalesced namespace lookup, per-call deadlines did not bound discovery waits, and parameter access tokens were discarded/cacheable. | Made discovery client-owned with caller-local wait cancellation/deadlines, forwarded parameter tokens, and bypassed cache for protected reads (`46fbbad`). | `tests/client.test.ts`, `tests/grpc-integration.test.ts` |
+| An already-aborted first caller could create unobserved client-owned discovery work whose failure became an unhandled rejection. | Preflight caller cancellation/deadline before creating or joining discovery (`d28f7e0`). | `sdk/typescript/tests/client.test.ts` |
 | Stubs and negative tests did not prove all metadata-bearing reads and mutations over gRPC. | Added generated loopback interoperability (`bf159cd`), positive metadata/mutations (`2655897`), secret writes and one-time access, and deterministic deadlines (`81efbf9`). | `sdk/typescript/tests/grpc-integration.test.ts` |
 | TLS helpers lacked positive evidence for both mutual authentication and server-authenticated TLS. | Added loopback mTLS qualification (`7b5eeab`), server-authenticated `tlsFromFiles` plus bearer qualification (`64ffa2d`), and documented the scope (`c4ab082`). | `sdk/typescript/tests/tls-integration.test.ts` |
 
@@ -119,13 +120,16 @@ terminal acknowledgements, LKG, and sensitive failure text.
 | Bad digests were covered at helper level but not through loader rejection, ACK, and LKG. | Added the complete loader path in `d381c58`. | `tests/releases/digest.test.ts`, `tests/releases/loader.test.ts` |
 | Commit throws, interruption between prepare and commit, and abort-contract failure lacked fatal-path evidence. | Added redacted fail-closed, abort-once, no-unsafe-abort-after-commit, and fatal-contract tests (`d381c58`). | `sdk/typescript/tests/releases/loader.test.ts` |
 | Caller cancellation could let `run()` return and clear exclusivity while a preparation that ignored abort was still pending. | Track and drain every owned candidate task, prevent successor starts after abort, and retain the running guard through settlement (`912fdf6`). | `sdk/typescript/tests/releases/loader.test.ts` |
+| The client release bridge replaced returned resource refs with requested refs, defeating exact-ref verification and potentially polluting the parameter cache. | Release-only raw fetches now preserve missing/mismatched server refs and bypass ordinary caching (`76539e4`). | `sdk/typescript/tests/client-release.test.ts` |
+| TypeScript's `void` callback assignability admitted async commit/abort functions, allowing an applied state before Promise settlement and unhandled rejection. | Callback contracts now return exactly `undefined`; runtime guards observe and reject escaped thenables for both release and managed-config publication (`afad159`). | `tests/releases/loader.test.ts`, `tests/configstore-manager.test.ts`, `tests/types/public-api.ts` |
 | Public release identity constructors accepted invalid runtime values despite TypeScript annotations. | Validated entry/version/revision/schema bigint fields from zero through `UINT64_MAX` (`839c069`, `70ea91a`); added equivalent configstore checks (`421ed78`). | `tests/releases/types.test.ts`, `tests/configstore-runtime.test.ts` |
 | Exported typed-runner and secret helpers lacked direct runtime tests. | Added `runTypedRelease` sequencing (`d381c58`) and `newSecret` defensive-copy coverage (`8c5285d`). | `tests/releases/loader.test.ts`, `tests/secret.test.ts` |
 
-`PreparedRelease.commit()` and `abort()` are contractually infallible. If one
-throws, the loader surfaces a redacted fatal contract error instead of guessing
-whether partial application state can be rolled back. Concurrent `run` calls
-are rejected; sequential reuse is supported and documented in `5663c25`.
+`PreparedRelease.commit()` and `abort()` are contractually synchronous and
+infallible. If one throws or returns anything other than `undefined`, the loader
+surfaces a redacted fatal contract error instead of guessing whether partial
+application state can be rolled back. Concurrent `run` calls are rejected;
+sequential reuse is supported and documented in `5663c25`.
 
 ## Stage 5: framework-neutral publishing primitives
 

@@ -170,10 +170,12 @@ fill and eventually be dropped from the queue without delaying state updates.
 
 ## Atomic configuration releases
 
-`ReleaseLoader` resolves every entry at its exact version, verifies content and
-the deterministic release digest, and calls `prepare` before an infallible
-synchronous `commit`. A newer candidate aborts superseded work. After the first
-successful commit, a rejected candidate preserves the last-known-good value.
+`ReleaseLoader` resolves every entry at its exact version, verifies the
+server-returned resource identity, content, and deterministic release digest,
+and calls `prepare` before an infallible synchronous `commit`. Both `commit`
+and `abort` must return exactly `undefined`; Promise-returning callbacks fail
+closed. A newer candidate aborts superseded work. After the first successful
+commit, a rejected candidate preserves the last-known-good value.
 
 ```ts
 import type { PreparedRelease, ReleaseSnapshot } from "@suhaibinator/kms";

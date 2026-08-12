@@ -127,7 +127,7 @@ method families are:
 |---|---|---|
 | `ReleaseLoader`, `ClientReleaseLoaderOptions` | Class and type | One-concurrent-run exact-version release lifecycle; inspect `instanceId`, `status()`/`stats()`, request `stop()`, and await `run(prepare, signal?)`. Sequential runs are permitted, matching Go. |
 | `runTypedRelease(loader, decode, prepare, signal?)` | Generic function | Split fallible snapshot decoding from application resource preparation without weakening atomic commit. |
-| `PreparedRelease`, `PrepareRelease` | Types | Candidate callback contract: synchronous infallible `commit`, infallible `abort` called at most once, and cooperative `AbortSignal`. |
+| `PreparedRelease`, `PrepareRelease` | Types | Candidate callback contract: synchronous infallible `commit` and at-most-once `abort`, each returning exactly `undefined`, plus cooperative `AbortSignal`. |
 | `SecretTokenProvider`, `ValidateReleaseManifest` | Callback types | Fetch per-entry secret authorization locally and reject a manifest before resource resolution. |
 | `ReleaseManifest`, `ReleaseManifestInit`, `ReleaseSnapshot`, `ReleaseSnapshotInit` | Immutable classes/types | Unresolved identity/entries and fully resolved exact candidate; serialization and inspection omit values. |
 | `ReleaseEntryMetadata`, `ReleaseEntryMetadataInit`, `ReleaseEntryKind` | Immutable class/types | Non-secret alias, resource, version, content, digest, and protection metadata. |
@@ -154,9 +154,10 @@ the caller identity. Parameter and secret reads carrying a `secretToken`
 bypass the shared read cache and never populate it. Lazy namespace discovery
 is coalesced as client-owned work under the default RPC deadline; each caller's
 earlier deadline or cancellation independently bounds its wait without
-poisoning concurrent callers. `RpcTransport`, `UnaryMethod`, `BidiMethod`, and
-`DuplexRpc` are exported for deterministic tests and advanced transport
-integration, but generated protobuf symbols remain internal.
+poisoning concurrent callers; an already-cancelled caller starts no shared
+discovery. `RpcTransport`, `UnaryMethod`, `BidiMethod`, and `DuplexRpc` are
+exported for deterministic tests and advanced transport integration, but
+generated protobuf symbols remain internal.
 
 ### Resources and declarative values
 
@@ -182,18 +183,19 @@ within the protobuf `uint64` range.
 |---|---|
 | `client.watch(callback)` | Observe the home namespace through the shared bidirectional stream and return an unsubscribe function. |
 | `client.watchNamespace(namespace, callback)` | Observe an explicit namespace, subject to authorization. |
-| `client.createReleaseLoader(options)` | Bind an atomic loader to the client's authenticated transport and configured/discovered namespace. |
+| `client.createReleaseLoader(options)` | Bind an atomic loader to the client's authenticated transport and configured/discovered namespace; exact fetches preserve and verify the server-returned resource identity without entering the ordinary read cache. |
 | `ReleaseLoader.run(prepare, signal)` | Resolve one exact, verified candidate at a time; abort superseded work; synchronously commit prepared state; preserve last known good after later rejection. |
 | `ReleaseLoader.status()`, `stats()` | Return copied non-secret loader health and bounded rejection categories. |
 | `ReleaseSnapshot` | Provide immutable parameter access and defensive redacting secret access. JSON and inspection omit all values. |
 | `ClassifiedReleaseError` | Let application decoding map a failure to an allowed acknowledgement category without sending raw error text. |
 
 `prepare` may do fallible parsing, validation, and resource allocation. Its
-returned `commit()` must be synchronous and infallible; `abort()` must release
-candidate-owned resources. A release containing protected secrets supplies a
-local `secretTokenProvider`. `stop()` requests cooperative shutdown; preparation
-work must observe its `AbortSignal`, and callers still await the `run()` promise
-before closing the client.
+returned `commit()` and `abort()` must complete synchronously, return exactly
+`undefined`, and never throw; the declaration and runtime both reject Promise
+or thenable callbacks. `abort()` releases candidate-owned resources. A release
+containing protected secrets supplies a local `secretTokenProvider`. `stop()`
+requests cooperative shutdown; preparation work must observe its `AbortSignal`,
+and callers still await the `run()` promise before closing the client.
 
 ### Public configuration
 
@@ -319,9 +321,9 @@ name and exact generated alias/content-type contract, require a synchronous
 default-drift reporter, and may allow an explicitly reported startup mismatch.
 
 Generated preparation performs strict decode and application validation, then
-returns a synchronous `publish` swap plus optional `abort`, complete
-source-default differences, and the canonical restart-required fields that
-changed. The manager:
+returns a synchronous `publish` swap plus optional `abort`; both must return
+exactly `undefined`. It also returns complete source-default differences and
+the canonical restart-required fields that changed. The manager:
 
 - validates the exact manifest before fetching entries;
 - blocks startup until the first candidate is atomically publishable;
