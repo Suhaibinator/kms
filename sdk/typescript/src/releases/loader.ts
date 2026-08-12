@@ -34,6 +34,7 @@ const DEFAULT_MAX_CONCURRENT_FETCHES = 16;
 const MAX_CONCURRENT_FETCHES = 256;
 const BACKOFF_BASE_MS = 250;
 const BACKOFF_CAP_MS = 30_000;
+const BACKOFF_MIN_MS = 10;
 
 /** @internal Transport-only exact secret payload. */
 export interface FetchedSecret {
@@ -683,9 +684,9 @@ export class ReleaseLoader {
       if (signal.aborted || shouldStopGracefully()) return;
       if (receivedEvent) attempt = 0;
       this.#recordReconnect();
-      const ceiling = Math.min(BACKOFF_CAP_MS, BACKOFF_BASE_MS * 2 ** Math.min(attempt, 30));
+      const reconnectDelay = releaseReconnectBackoff(attempt, this.#options.random);
       attempt += 1;
-      await delay(Math.floor(this.#options.random() * ceiling), signal);
+      await delay(reconnectDelay, signal);
     }
   }
 
@@ -846,6 +847,15 @@ export async function runTypedRelease<T>(
     const value = await decode(snapshot);
     return prepare(value, candidateSignal);
   }, signal);
+}
+
+/** @internal Full-jitter reconnect delay with a floor that prevents hot retry loops. */
+export function releaseReconnectBackoff(attempt: number, random = Math.random): number {
+  const ceiling = Math.min(
+    BACKOFF_CAP_MS,
+    BACKOFF_BASE_MS * 2 ** Math.min(Math.max(0, attempt), 30),
+  );
+  return Math.max(BACKOFF_MIN_MS, Math.floor(random() * ceiling));
 }
 
 function normalizeOptions(options: ReleaseLoaderOptions): NormalizedOptions {

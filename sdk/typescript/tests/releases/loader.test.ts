@@ -16,6 +16,7 @@ import {
   ReleaseLoader,
   type ReleaseTransport,
   type ReleaseWatchStream,
+  releaseReconnectBackoff,
   runTypedRelease,
 } from "../../src/releases/loader.js";
 import { ClassifiedReleaseError } from "../../src/releases/types.js";
@@ -147,6 +148,12 @@ class FakeTransport implements ReleaseTransport {
 }
 
 describe("ReleaseLoader", () => {
+  it("keeps release reconnect full jitter above a positive hot-loop floor", () => {
+    expect(releaseReconnectBackoff(0, () => 0)).toBe(10);
+    expect(releaseReconnectBackoff(1, () => 0)).toBe(10);
+    expect(releaseReconnectBackoff(30, () => 0)).toBe(10);
+  });
+
   it("validates the manifest, resolves exact versions, redacts, commits, and acknowledges", async () => {
     const policy = '{"minLength":14}';
     const release = makeRelease(3n, [

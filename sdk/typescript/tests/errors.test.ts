@@ -1,6 +1,7 @@
-import { status } from "@grpc/grpc-js";
+import { Metadata, status } from "@grpc/grpc-js";
 import { describe, expect, it } from "vitest";
 
+import { KmsClient } from "../src/client.js";
 import {
   ConfigError,
   isKmsError,
@@ -9,9 +10,14 @@ import {
   NoNamespaceError,
   wrapError,
 } from "../src/errors.js";
+import { FakeTransport } from "./helpers/fake-transport.js";
 
 function grpcError(code: status, details: string): Error {
-  return Object.assign(new Error(`${code} ${details}`), { code, details });
+  return Object.assign(new Error(`${code} ${details}`), {
+    code,
+    details,
+    metadata: new Metadata(),
+  });
 }
 
 describe("gRPC error normalization", () => {
@@ -35,7 +41,31 @@ describe("gRPC error normalization", () => {
     const normalized = new KmsError("not_found", "missing");
     expect(mapGrpcError(ordinary)).toBe(ordinary);
     expect(mapGrpcError(normalized)).toBe(normalized);
-    expect(mapGrpcError(Object.assign(new Error("OK"), { code: status.OK }))).toBeUndefined();
+    expect(mapGrpcError(grpcError(status.OK, "OK"))).toBeUndefined();
+  });
+
+  it("does not mistake DOM cancellation or ordinary numeric codes for gRPC status", () => {
+    const cancellation = new DOMException("caller cancelled", "AbortError");
+    const applicationError = Object.assign(new Error("application lookup failed"), {
+      code: status.NOT_FOUND,
+      details: "not a service error",
+    });
+
+    expect(typeof cancellation.code).toBe("number");
+    expect(mapGrpcError(cancellation)).toBe(cancellation);
+    expect(mapGrpcError(applicationError)).toBe(applicationError);
+  });
+
+  it("preserves an injected DOM cancellation through the client RPC boundary", async () => {
+    const cancellation = new DOMException("caller cancelled", "AbortError");
+    const transport = new FakeTransport(() => Promise.reject(cancellation));
+    const client = new KmsClient({ transport, namespace: "prod/api" });
+
+    try {
+      await expect(client.getParameter("flag")).rejects.toBe(cancellation);
+    } finally {
+      await client.close();
+    }
   });
 
   it("provides code-aware narrowing and wrapping", () => {
