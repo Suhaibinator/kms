@@ -404,6 +404,40 @@ describe("TypeScript config generator", () => {
     await expect(stat(paths.contract)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
+  it("rejects invalid UTF-8 descriptors without generating any outputs", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "kms-configgen-descriptor-utf8-"));
+    const descriptorPath = join(directory, "invalid-utf8.kms.json");
+    const paths = outputPaths(directory);
+    const document = Buffer.from(JSON.stringify(fixtureDescriptor), "utf8");
+    const moduleMarker = Buffer.from('"module":"', "utf8");
+    const moduleStart = document.indexOf(moduleMarker);
+    expect(moduleStart).toBeGreaterThanOrEqual(0);
+    const insertion = moduleStart + moduleMarker.byteLength;
+    await writeFile(
+      descriptorPath,
+      Buffer.concat([
+        document.subarray(0, insertion),
+        Buffer.from([0xc3, 0x28]),
+        document.subarray(insertion),
+      ]),
+    );
+
+    await expect(readDescriptor(descriptorPath)).rejects.toThrow(
+      "configgen: descriptor is not valid UTF-8",
+    );
+    const stderr: string[] = [];
+    const code = await runCli(cliArgs(descriptorPath, paths, fixtureImportArgs()), {
+      stdout: () => undefined,
+      stderr: (message) => stderr.push(message),
+    });
+
+    expect(code).toBe(1);
+    expect(stderr).toEqual(["configgen: descriptor is not valid UTF-8\n"]);
+    await expect(stat(paths.binding)).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(stat(paths.schema)).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(stat(paths.contract)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
   it.runIf(process.platform === "linux")(
     "bounded descriptor reads support virtual files whose reported size is zero",
     async () => {

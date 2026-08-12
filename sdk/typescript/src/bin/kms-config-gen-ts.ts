@@ -2,6 +2,7 @@
 
 import { open, realpath } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
+import { TextDecoder } from "node:util";
 
 import { assertDistinctPaths } from "../configgen/files.js";
 import {
@@ -83,7 +84,11 @@ export async function readDescriptor(path: string): Promise<string> {
     if (byteLength > MAX_DESCRIPTOR_BYTES) {
       throw oversizedDescriptor();
     }
-    return Buffer.concat(chunks, byteLength).toString("utf8");
+    try {
+      return new TextDecoder("utf-8", { fatal: true }).decode(Buffer.concat(chunks, byteLength));
+    } catch {
+      throw new TypeError("configgen: descriptor is not valid UTF-8");
+    }
   } finally {
     await handle.close();
   }
