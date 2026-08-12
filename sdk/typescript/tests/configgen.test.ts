@@ -58,6 +58,9 @@ describe("TypeScript config generator", () => {
     expect(first.binding).toContain("restartRequiredFields");
     expect(first.binding).toContain("sameSecretIdentity");
     expect(first.binding).toContain("rejectDecode");
+    expect(first.binding).toContain("assertRootCoverage<RootConfig");
+    expect(first.binding).toContain("exactObject<");
+    expect(first.binding).not.toContain("as unknown as ValueCodec");
 
     await expect(readFile(fixtureBinding, "utf8")).resolves.toBe(first.binding);
     await expect(readFile(fixtureSchema, "utf8")).resolves.toBe(first.schema);
@@ -123,6 +126,60 @@ describe("TypeScript config generator", () => {
         source: { module: "/private/build/config.js", type: "Config" },
       }),
     ).toThrow(/not a physical path/u);
+    expect(() =>
+      generate({
+        ...fixtureDescriptor,
+        source: { module: "./config.js", type: "class" },
+      }),
+    ).toThrow(/non-reserved TypeScript identifier/u);
+    expect(() =>
+      generate(
+        {
+          format: "kms-config-descriptor/v1",
+          source: { module: "./config.js", type: "Config" },
+          groups: [
+            {
+              alias: "runtime",
+              fields: [
+                {
+                  property: "enabled",
+                  jsonName: "enabled",
+                  reload: "hot",
+                  views: ["then"],
+                  type: { kind: "boolean" },
+                },
+              ],
+            },
+          ],
+          secrets: [],
+        },
+        fixtureImports(),
+      ),
+    ).toThrow(/then.*collides.*Promise\.then/u);
+    expect(() => generate(fixtureDescriptor, { runtimeImport: "/private/runtime.js" })).toThrow(
+      /not a physical path/u,
+    );
+    expect(() =>
+      generate({
+        format: "kms-config-descriptor/v1",
+        source: { module: "./config.js", type: "Config" },
+        groups: [
+          {
+            alias: "runtime",
+            fields: [
+              {
+                property: "enabled",
+                jsonName: "enabled",
+                reload: "hot",
+                views: ["worker"],
+                type: { kind: "fixedArray", length: 0, element: { kind: "string" } },
+              },
+            ],
+          },
+        ],
+        secrets: [],
+      }),
+    ).toThrow(/length must be from 1 through 1000000/u);
   });
 
   it("enforces the 256-entry limit before artifact construction", () => {

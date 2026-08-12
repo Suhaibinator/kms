@@ -5,7 +5,7 @@
     "module": "./config.js",
     "type": "Config"
   },
-  "schema_sha256": "573d6f4f2e4606fd332ff8d431a568a88f9c4dee1d79da14b0dbf82abae47cd9",
+  "schema_sha256": "9e0aaef84df7c38bca889552281bd52c133c3cc0743ac96cd424c2917b467e39",
   "groups": [
     {
       "alias": "database",

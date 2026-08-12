@@ -70,6 +70,15 @@
                 }
               },
               {
+                "property": "zones",
+                "jsonName": "zones",
+                "type": {
+                  "kind": "fixedArray",
+                  "element": { "kind": "string" },
+                  "length": 2
+                }
+              },
+              {
                 "property": "host",
                 "jsonName": "host",
                 "type": { "kind": "string" }

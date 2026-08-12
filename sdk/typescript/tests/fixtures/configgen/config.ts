@@ -8,7 +8,16 @@ export interface Config {
   labels: Record<string, string> | null;
   endpoint: {
     host: string;
-    ports: number[] | null;
+    ports: readonly number[] | null;
+    zones: readonly [string, string];
   };
   password: Secret;
+}
+
+export interface GroupsOnly {
+  name: string;
+}
+
+export interface SecretsOnly {
+  token: Secret;
 }

@@ -27,7 +27,8 @@ describe("generated managed configuration binding", () => {
   it("encodes all groups canonically and rejects non-zero secret defaults", () => {
     const defaults = defaultConfig();
     expect(encodeParameterGroups(defaults)).toEqual({
-      database: '{"endpoint":{"host":"db.internal","ports":null},"limit":10}',
+      database:
+        '{"endpoint":{"host":"db.internal","ports":null,"zones":["west","east"]},"limit":10}',
       runtime: '{"enabled":false,"epoch":0,"labels":null,"payload":null}',
     });
     expect(Object.keys(groupCodecs)).toEqual(["database", "runtime"]);
@@ -53,9 +54,11 @@ describe("generated managed configuration binding", () => {
     const loader = new InlineLoader(first);
     const reports: DefaultMismatchReport[] = [];
     const validated: Config[] = [];
-    const store = new Store(defaultConfig(), (config) => {
+    const defaults = defaultConfig();
+    const store = new Store(defaults, (config) => {
       validated.push(config);
-      // A mutating validator is isolated from defaults, candidate and publication.
+      // Validation canonicalization is retained, but each invocation and the
+      // caller-owned defaults remain isolated from subsequent mutation.
       config.endpoint.host = "validator-mutation";
       config.payload = Uint8Array.of(99);
     });
@@ -77,17 +80,18 @@ describe("generated managed configuration binding", () => {
       "runtime.enabled",
       "runtime.epoch",
       "runtime.labels",
-      "runtime.payload",
     ]);
+    expect(defaults.endpoint.host).toBe("db.internal");
+    expect(defaults.payload).toBeNull();
     expect(store.current().release.version).toBe(1n);
-    expect(store.current().databaseHealth().endpoint.host).toBe("db.internal");
+    expect(store.current().databaseHealth().endpoint.host).toBe("validator-mutation");
     expect(store.current().worker().password.text()).toBe("release-secret");
 
     const escaped = store.current().config();
     escaped.endpoint.host = "caller-mutation";
     escaped.payload?.fill(0);
-    expect(store.current().config().endpoint.host).toBe("db.internal");
-    expect(store.current().config().payload).toEqual(Uint8Array.of(1, 2, 3));
+    expect(store.current().config().endpoint.host).toBe("validator-mutation");
+    expect(store.current().config().payload).toEqual(Uint8Array.of(99));
 
     await expect(
       loader.apply(
@@ -117,6 +121,68 @@ describe("generated managed configuration binding", () => {
 
     controller.abort();
     await expect(manager.wait()).resolves.toBeUndefined();
+  });
+
+  it("compares record fields canonically instead of treating insertion order as drift", async () => {
+    const defaults = defaultConfig();
+    defaults.enabled = true;
+    defaults.limit = 12;
+    defaults.epoch = 1n;
+    defaults.payload = Uint8Array.of(1, 2, 3);
+    defaults.labels = { region: "west", zone: "one" };
+    const loader = new InlineLoader(
+      releaseSnapshot({
+        version: 1n,
+        revision: 10n,
+        limit: 12,
+        enabled: true,
+        secretVersion: 7n,
+      }),
+    );
+    const reports: DefaultMismatchReport[] = [];
+    const controller = new AbortController();
+    const store = new Store(defaults, () => undefined);
+    const manager = await store.start(
+      inlineClient(loader),
+      {
+        release: "runtime",
+        onDefaultMismatch: (report) => reports.push(report),
+      },
+      controller.signal,
+    );
+
+    expect(reports).toEqual([]);
+    expect(manager.status().defaultDivergent).toBe(false);
+    controller.abort();
+    await expect(manager.wait()).resolves.toBeUndefined();
+  });
+
+  it("rejects a validator that corrupts a statically typed secret field", async () => {
+    const loader = new InlineLoader(
+      releaseSnapshot({
+        version: 1n,
+        revision: 10n,
+        limit: 12,
+        enabled: true,
+        secretVersion: 7n,
+      }),
+    );
+    const store = new Store(defaultConfig(), (config) => {
+      Object.defineProperty(config, "password", {
+        value: "plaintext-is-not-a-secret",
+        enumerable: true,
+        writable: true,
+        configurable: true,
+      });
+    });
+
+    await expect(
+      store.start(inlineClient(loader), {
+        release: "runtime",
+        allowDefaultMismatch: true,
+        onDefaultMismatch: () => undefined,
+      }),
+    ).rejects.toMatchObject({ category: "config_validation_failed" });
   });
 });
 
@@ -229,7 +295,7 @@ function defaultConfig(): Config {
     epoch: 0n,
     payload: null,
     labels: null,
-    endpoint: { host: "db.internal", ports: null },
+    endpoint: { host: "db.internal", ports: null, zones: ["west", "east"] },
     password: new Secret(),
   };
 }
@@ -268,14 +334,17 @@ function releaseSnapshot(options: SnapshotOptions): ReleaseSnapshot {
       [
         "database",
         new ReleaseParameter(
-          JSON.stringify({ endpoint: { host: "db.internal", ports: null }, limit: options.limit }),
+          JSON.stringify({
+            endpoint: { host: "db.internal", ports: null, zones: ["west", "east"] },
+            limit: options.limit,
+          }),
           database,
         ),
       ],
       [
         "runtime",
         new ReleaseParameter(
-          `{"enabled":${options.enabled},"epoch":${options.version},"labels":{"region":"west"},"payload":"AQID"}`,
+          `{"enabled":${options.enabled},"epoch":${options.version},"labels":{"zone":"one","region":"west"},"payload":"AQID"}`,
           runtime,
         ),
       ],

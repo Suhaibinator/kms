@@ -38,6 +38,62 @@ export interface GroupCodec<T extends object> extends ValueCodec<T> {
   readonly fields: readonly FieldCodec<T>[];
 }
 
+interface ErasedValueCodec {
+  readonly kind: CodecKind;
+  readonly decodeNode: (node: JsonNode, path: string) => unknown;
+  readonly encodeNode: (value: never, path: string) => JsonNode;
+}
+
+type IsAny<T> = 0 extends 1 & T ? true : false;
+type NoExtraKeys<Value, Base> = Exclude<keyof Value, keyof Base> extends never ? true : false;
+type VariableArrayBase<T, TArray extends readonly T[]> = TArray extends T[] ? T[] : readonly T[];
+type IsPlainVariableArray<T, TArray extends readonly T[]> =
+  IsAny<TArray> extends true
+    ? false
+    : [TArray] extends [never]
+      ? false
+      : number extends TArray["length"]
+        ? NoExtraKeys<TArray, VariableArrayBase<T, TArray>> extends true
+          ? VariableArrayBase<T, TArray> extends TArray
+            ? true
+            : false
+          : false
+        : false;
+type VariableArrayValue<T, TArray extends readonly T[]> =
+  IsPlainVariableArray<T, TArray> extends true ? TArray | null : never;
+
+type TupleItems<TArray extends readonly unknown[]> = TArray extends readonly [...infer Items]
+  ? Items
+  : never;
+type FillTuple<Items extends readonly unknown[], T> = { [K in keyof Items]: T };
+type FixedArrayBase<T, TArray extends readonly T[]> = TArray extends T[]
+  ? FillTuple<TupleItems<TArray>, T>
+  : Readonly<FillTuple<TupleItems<TArray>, T>>;
+type IsPlainFixedArray<T, TLength extends number, TArray extends readonly T[]> =
+  IsAny<TArray> extends true
+    ? false
+    : [TArray] extends [never]
+      ? false
+      : number extends TLength
+        ? false
+        : TLength extends 0
+          ? false
+          : number extends TArray["length"]
+            ? false
+            : [TArray["length"]] extends [TLength]
+              ? [TLength] extends [TArray["length"]]
+                ? [FixedArrayBase<T, TArray>] extends [never]
+                  ? false
+                  : NoExtraKeys<TArray, FixedArrayBase<T, TArray>> extends true
+                    ? TArray extends FixedArrayBase<T, TArray>
+                      ? FixedArrayBase<T, TArray> extends TArray
+                        ? true
+                        : false
+                      : false
+                    : false
+                : false
+              : false;
+
 const decodePaths = new WeakMap<ConfigDecodeError, string>();
 
 /**
@@ -234,36 +290,19 @@ export const codecs = Object.freeze({
   object: objectCodec,
 
   /** Variable-length array. JSON null remains distinct from an empty array. */
-  array<T>(element: ValueCodec<T>): ValueCodec<T[] | null> {
-    return arrayCodec(element);
+  array<T, TArray extends readonly T[] = T[]>(
+    element: ValueCodec<T> & (IsPlainVariableArray<T, TArray> extends true ? unknown : never),
+  ): ValueCodec<VariableArrayValue<T, TArray>> {
+    return arrayCodec<T, TArray>(element);
   },
 
-  fixedArray<T>(element: ValueCodec<T>, length: number): ValueCodec<T[]> {
-    if (!Number.isSafeInteger(length) || length < 0) {
-      throw new RangeError("fixed array length must be a non-negative safe integer");
-    }
-    return scalarCodec<T[]>(
-      "array",
-      (node, path) => {
-        if (node.kind !== "array") throw typeError(path, "array");
-        if (node.elements.length !== length) {
-          throw diagnostic(path, `configstore: wrong array length at ${path}`);
-        }
-        return node.elements.map((item) => element.decodeNode(item, `${path}[]`));
-      },
-      (value, path) => {
-        if (!Array.isArray(value)) throw descriptorError(path, "array codec does not match source");
-        if (value.length !== length) {
-          throw diagnostic(path, `configstore: wrong array length at ${path}`);
-        }
-        return { kind: "array", elements: encodeArrayElements(value, element, path) };
-      },
-    );
-  },
+  fixedArray: fixedArrayCodec,
 
   /** String-keyed object map. JSON null remains distinct from an empty map. */
-  record<T>(element: ValueCodec<T>): ValueCodec<Readonly<Record<string, T>> | null> {
-    return recordCodec(element);
+  record<T, TRecord extends Readonly<Record<string, T>> = Readonly<Record<string, T>>>(
+    element: ValueCodec<T> & (Readonly<Record<string, T>> extends TRecord ? unknown : never),
+  ): ValueCodec<Readonly<Record<string, T>> extends TRecord ? TRecord | null : never> {
+    return recordCodec<T, TRecord>(element);
   },
 
   nullable<T>(element: ValueCodec<T>): ValueCodec<T | null> {
@@ -410,14 +449,19 @@ function validateFields<T extends object>(
   return { byName };
 }
 
-function arrayCodec<T>(element: ValueCodec<T>): ValueCodec<T[] | null> {
+function arrayCodec<T, TArray extends readonly T[]>(
+  element: ValueCodec<T>,
+): ValueCodec<VariableArrayValue<T, TArray>> {
   assertElementCodec(element);
-  return scalarCodec<T[] | null>(
+  type ArrayValue = VariableArrayValue<T, TArray>;
+  return scalarCodec<ArrayValue>(
     "array",
     (node, path) => {
-      if (node.kind === "null") return null;
+      if (node.kind === "null") return null as ArrayValue;
       if (node.kind !== "array") throw typeError(path, "array");
-      return node.elements.map((item) => element.decodeNode(item, `${path}[]`));
+      return node.elements.map((item) =>
+        element.decodeNode(item, `${path}[]`),
+      ) as unknown as ArrayValue;
     },
     (value, path) => {
       if (value === null) return { kind: "null" };
@@ -427,12 +471,47 @@ function arrayCodec<T>(element: ValueCodec<T>): ValueCodec<T[] | null> {
   );
 }
 
-function recordCodec<T>(element: ValueCodec<T>): ValueCodec<Readonly<Record<string, T>> | null> {
+function fixedArrayCodec<T>(element: ValueCodec<T>, length: number): ValueCodec<T[]>;
+function fixedArrayCodec<
+  T,
+  const TLength extends number,
+  TArray extends readonly T[] & { readonly length: TLength },
+>(
+  element: ValueCodec<T> & (IsPlainFixedArray<T, TLength, TArray> extends true ? unknown : never),
+  length: TLength,
+): ValueCodec<IsPlainFixedArray<T, TLength, TArray> extends true ? TArray : never>;
+function fixedArrayCodec(element: ErasedValueCodec, length: number): ErasedValueCodec {
+  if (!Number.isSafeInteger(length) || length < 0) {
+    throw new RangeError("fixed array length must be a non-negative safe integer");
+  }
+  return scalarCodec<unknown[]>(
+    "array",
+    (node, path) => {
+      if (node.kind !== "array") throw typeError(path, "array");
+      if (node.elements.length !== length) {
+        throw diagnostic(path, `configstore: wrong array length at ${path}`);
+      }
+      return node.elements.map((item) => element.decodeNode(item, `${path}[]`));
+    },
+    (value, path) => {
+      if (!Array.isArray(value)) throw descriptorError(path, "array codec does not match source");
+      if (value.length !== length) {
+        throw diagnostic(path, `configstore: wrong array length at ${path}`);
+      }
+      return { kind: "array", elements: encodeErasedArrayElements(value, element, path) };
+    },
+  );
+}
+
+function recordCodec<T, TRecord extends Readonly<Record<string, T>>>(
+  element: ValueCodec<T>,
+): ValueCodec<Readonly<Record<string, T>> extends TRecord ? TRecord | null : never> {
   assertElementCodec(element);
-  return scalarCodec<Readonly<Record<string, T>> | null>(
+  type RecordValue = Readonly<Record<string, T>> extends TRecord ? TRecord | null : never;
+  return scalarCodec<RecordValue>(
     "record",
     (node, path) => {
-      if (node.kind === "null") return null;
+      if (node.kind === "null") return null as RecordValue;
       if (node.kind !== "object") throw typeError(path, "object");
       const result: Record<string, T> = Object.create(null) as Record<string, T>;
       for (const property of node.properties) {
@@ -441,7 +520,7 @@ function recordCodec<T>(element: ValueCodec<T>): ValueCodec<Readonly<Record<stri
         }
         result[property.name] = element.decodeNode(property.value, `${path}[*]`);
       }
-      return result;
+      return result as RecordValue;
     },
     (value, path) => {
       if (value === null) return { kind: "null" };
@@ -486,6 +565,22 @@ function encodeArrayElements<T>(
       throw descriptorError(path, "array must be dense and contain no accessors");
     }
     result.push(element.encodeNode(descriptor.value as T, `${path}[]`));
+  }
+  return result;
+}
+
+function encodeErasedArrayElements(
+  value: readonly unknown[],
+  element: ErasedValueCodec,
+  path: string,
+): JsonNode[] {
+  const result: JsonNode[] = [];
+  for (let index = 0; index < value.length; index += 1) {
+    const descriptor = Object.getOwnPropertyDescriptor(value, index);
+    if (!descriptor || !("value" in descriptor)) {
+      throw descriptorError(path, "array must be dense and contain no accessors");
+    }
+    result.push(element.encodeNode(descriptor.value as never, `${path}[]`));
   }
   return result;
 }

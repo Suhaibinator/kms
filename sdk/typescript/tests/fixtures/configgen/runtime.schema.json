@@ -20,7 +20,8 @@
           "additionalProperties": false,
           "required": [
             "host",
-            "ports"
+            "ports",
+            "zones"
           ],
           "properties": {
             "host": {
@@ -40,6 +41,14 @@
                   "type": "null"
                 }
               ]
+            },
+            "zones": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "minItems": 2,
+              "maxItems": 2
             }
           }
         },

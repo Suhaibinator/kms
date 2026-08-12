@@ -6,9 +6,9 @@
       "!dist",
       "!node_modules",
       "!src/generated/kms.ts",
-      "!tests/fixtures/configgen/config.generated.ts",
-      "!tests/fixtures/configgen/runtime.schema.json",
-      "!tests/fixtures/configgen/runtime.contract.json"
+      "!tests/fixtures/configgen/*.generated.ts",
+      "!tests/fixtures/configgen/*.schema.json",
+      "!tests/fixtures/configgen/*.contract.json"
     ]
   },
   "formatter": {

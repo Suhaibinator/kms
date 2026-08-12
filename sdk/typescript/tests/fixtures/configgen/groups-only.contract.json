@@ -1,0 +1,42 @@
+{
+  "format": "kms-config-contract/v1",
+  "source": {
+    "language": "typescript",
+    "module": "./config.js",
+    "type": "GroupsOnly"
+  },
+  "schema_sha256": "3f4f12820905c671ea5b9fc85a4643c5b54d384f00492d2f01f6f34db51de7b6",
+  "groups": [
+    {
+      "alias": "application",
+      "kind": "parameter",
+      "content_type": "json",
+      "fields": [
+        "name"
+      ]
+    }
+  ],
+  "fields": [
+    {
+      "group": "application",
+      "json_name": "name",
+      "ts_name": "name",
+      "ts_path": "name",
+      "reload": "hot",
+      "encoding": "string",
+      "views": [
+        "worker"
+      ]
+    }
+  ],
+  "secrets": [],
+  "views": [
+    {
+      "name": "worker",
+      "method": "worker",
+      "fields": [
+        "application.name"
+      ]
+    }
+  ]
+}

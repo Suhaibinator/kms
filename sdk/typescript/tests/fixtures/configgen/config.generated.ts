@@ -7,30 +7,30 @@ import type { ReleaseSnapshot } from "../../../src/index.js";
 import {
   CandidateError,
   cloneConfig,
+  immutableSnapshot,
+  ReleaseIdentity,
+  startManagedConfig,
   codecs,
   decodeGroup,
   encodeGroup,
   field,
   group,
-  immutableSnapshot,
-  ReleaseIdentity,
   rejectDecode,
-  startManagedConfig,
 } from "../../../src/configstore/index.js";
 import type {
   ConfigSnapshot,
   ContractEntry,
   FieldDifference,
-  GroupCodec,
   ManagedConfigManager,
   ManagedConfigOptions,
   ManagedPreparedCandidate,
   ManagedReleaseClient,
+  GroupCodec,
   ValueCodec,
 } from "../../../src/configstore/index.js";
-import type { Config } from "./config.js";
+import type { Config as RootConfig } from "./config.js";
 
-export const schemaSHA256 = "573d6f4f2e4606fd332ff8d431a568a88f9c4dee1d79da14b0dbf82abae47cd9";
+export const schemaSHA256 = "9e0aaef84df7c38bca889552281bd52c133c3cc0743ac96cd424c2917b467e39";
 
 export const generatedContract = Object.freeze([
   Object.freeze({ alias: "database", kind: "parameter", contentType: "json" }),
@@ -38,32 +38,34 @@ export const generatedContract = Object.freeze([
   Object.freeze({ alias: "database_password", kind: "secret" }),
 ]) satisfies readonly ContractEntry[];
 
-type Group0 = Pick<Config, "endpoint" | "limit">;
-const valueCodec0_0: ValueCodec<Group0["endpoint"]> = codecs.object<Group0["endpoint"]>([field<Group0["endpoint"], "host">("host", "host", codecs.string), field<Group0["endpoint"], "ports">("ports", "ports", codecs.array(codecs.int({ bits: 16, unsigned: true })))]);
+assertRootCoverage<RootConfig, "endpoint" | "limit" | "enabled" | "epoch" | "labels" | "payload" | "password">();
+
+type Group0 = Pick<RootConfig, "endpoint" | "limit">;
+const valueCodec0_0: ValueCodec<Group0["endpoint"]> = exactObject<Group0["endpoint"], "host" | "ports" | "zones">(codecs.object<Group0["endpoint"]>([field<Group0["endpoint"], "host">("host", "host", codecs.string), field<Group0["endpoint"], "ports">("ports", "ports", codecs.array<NonNullable<Group0["endpoint"]["ports"]>[number], NonNullable<Group0["endpoint"]["ports"]>>(codecs.int({ bits: 16, unsigned: true }))), field<Group0["endpoint"], "zones">("zones", "zones", codecs.fixedArray<Group0["endpoint"]["zones"][number], 2, Group0["endpoint"]["zones"]>(codecs.string, 2))]));
 const valueCodec0_1: ValueCodec<Group0["limit"]> = codecs.int({ bits: 32, unsigned: false });
-const groupCodec0: GroupCodec<Group0> = group<Group0>([
+const groupCodec0: GroupCodec<Group0> = exactObject<Group0, "endpoint" | "limit">(group<Group0>([
   field<Group0, "endpoint">("endpoint", "endpoint", valueCodec0_0),
   field<Group0, "limit">("limit", "limit", valueCodec0_1),
-]);
+]));
 
-type Group1 = Pick<Config, "enabled" | "epoch" | "labels" | "payload">;
+type Group1 = Pick<RootConfig, "enabled" | "epoch" | "labels" | "payload">;
 const valueCodec1_0: ValueCodec<Group1["enabled"]> = codecs.boolean;
 const valueCodec1_1: ValueCodec<Group1["epoch"]> = codecs.bigint({ bits: 64, unsigned: true });
-const valueCodec1_2: ValueCodec<Group1["labels"]> = codecs.record(codecs.string);
+const valueCodec1_2: ValueCodec<Group1["labels"]> = codecs.record<NonNullable<Group1["labels"]>[string], NonNullable<Group1["labels"]>>(codecs.string);
 const valueCodec1_3: ValueCodec<Group1["payload"]> = codecs.bytes;
-const groupCodec1: GroupCodec<Group1> = group<Group1>([
+const groupCodec1: GroupCodec<Group1> = exactObject<Group1, "enabled" | "epoch" | "labels" | "payload">(group<Group1>([
   field<Group1, "enabled">("enabled", "enabled", valueCodec1_0),
   field<Group1, "epoch">("epoch", "epoch", valueCodec1_1),
   field<Group1, "labels">("labels", "labels", valueCodec1_2),
   field<Group1, "payload">("payload", "payload", valueCodec1_3),
-]);
+]));
 
 export const groupCodecs = Object.freeze({
   "database": groupCodec0,
   "runtime": groupCodec1,
 });
 
-export function encodeParameterGroups(config: Config): Readonly<Record<string, string>> {
+export function encodeParameterGroups(config: RootConfig): Readonly<Record<string, string>> {
   const source = cloneConfig(config);
   return Object.freeze({
     "database": encodeGroup(source, groupCodec0),
@@ -72,59 +74,59 @@ export function encodeParameterGroups(config: Config): Readonly<Record<string, s
 }
 
 export class DatabaseHealthView {
-  readonly #snapshot: ConfigSnapshot<Config>;
+  readonly #snapshot: ConfigSnapshot<RootConfig>;
 
-  constructor(snapshot: ConfigSnapshot<Config>) {
+  constructor(snapshot: ConfigSnapshot<RootConfig>) {
     this.#snapshot = snapshot;
     Object.freeze(this);
   }
 
-  get ["endpoint"](): Config["endpoint"] {
+  get ["endpoint"](): RootConfig["endpoint"] {
     return this.#snapshot.get("endpoint");
   }
 
-  get ["limit"](): Config["limit"] {
+  get ["limit"](): RootConfig["limit"] {
     return this.#snapshot.get("limit");
   }
 }
 
 export class WorkerView {
-  readonly #snapshot: ConfigSnapshot<Config>;
+  readonly #snapshot: ConfigSnapshot<RootConfig>;
 
-  constructor(snapshot: ConfigSnapshot<Config>) {
+  constructor(snapshot: ConfigSnapshot<RootConfig>) {
     this.#snapshot = snapshot;
     Object.freeze(this);
   }
 
-  get ["limit"](): Config["limit"] {
+  get ["limit"](): RootConfig["limit"] {
     return this.#snapshot.get("limit");
   }
 
-  get ["password"](): Config["password"] {
+  get ["password"](): RootConfig["password"] {
     return this.#snapshot.get("password");
   }
 
-  get ["enabled"](): Config["enabled"] {
+  get ["enabled"](): RootConfig["enabled"] {
     return this.#snapshot.get("enabled");
   }
 
-  get ["epoch"](): Config["epoch"] {
+  get ["epoch"](): RootConfig["epoch"] {
     return this.#snapshot.get("epoch");
   }
 
-  get ["labels"](): Config["labels"] {
+  get ["labels"](): RootConfig["labels"] {
     return this.#snapshot.get("labels");
   }
 
-  get ["payload"](): Config["payload"] {
+  get ["payload"](): RootConfig["payload"] {
     return this.#snapshot.get("payload");
   }
 }
 
 export class Snapshot {
-  readonly #snapshot: ConfigSnapshot<Config>;
+  readonly #snapshot: ConfigSnapshot<RootConfig>;
 
-  constructor(snapshot: ConfigSnapshot<Config>) {
+  constructor(snapshot: ConfigSnapshot<RootConfig>) {
     this.#snapshot = snapshot;
     Object.freeze(this);
   }
@@ -133,7 +135,7 @@ export class Snapshot {
     return this.#snapshot.release;
   }
 
-  config(): Config {
+  config(): RootConfig {
     return this.#snapshot.config();
   }
 
@@ -146,16 +148,16 @@ export class Snapshot {
   }
 }
 
-export type ValidateConfig = (config: Config) => void | Promise<void>;
+export type ValidateConfig = (config: RootConfig) => void | Promise<void>;
 export type StartOptions = Omit<ManagedConfigOptions, "contract">;
 
 export class Store {
-  readonly #defaults: ConfigSnapshot<Config>;
+  readonly #defaults: ConfigSnapshot<RootConfig>;
   readonly #validate: ValidateConfig;
-  #active: ConfigSnapshot<Config> | undefined;
+  #active: ConfigSnapshot<RootConfig> | undefined;
   #started = false;
 
-  constructor(defaults: Config, validate: ValidateConfig) {
+  constructor(defaults: RootConfig, validate: ValidateConfig) {
     if (typeof validate !== "function") throw new TypeError("generated config store: validate callback is required");
     const copiedDefaults = writableClone(defaults);
     assertZeroSecret(copiedDefaults["password"], "database_password");
@@ -188,7 +190,7 @@ export class Store {
     throwIfAborted(signal);
     const candidate = writableClone(this.#defaults.config());
     const parameter0 = snapshot.parameter("database");
-    if (!parameter0) throw contractMismatch();
+    if (!parameter0 || parameter0.entry.alias !== "database" || parameter0.entry.kind !== "parameter" || parameter0.entry.contentType !== "json") throw contractMismatch();
     let decoded0: Group0;
     try {
       decoded0 = decodeGroup(parameter0.value(), groupCodec0);
@@ -198,7 +200,7 @@ export class Store {
     setProperty(candidate, "endpoint", decoded0["endpoint"]);
     setProperty(candidate, "limit", decoded0["limit"]);
     const parameter1 = snapshot.parameter("runtime");
-    if (!parameter1) throw contractMismatch();
+    if (!parameter1 || parameter1.entry.alias !== "runtime" || parameter1.entry.kind !== "parameter" || parameter1.entry.contentType !== "json") throw contractMismatch();
     let decoded1: Group1;
     try {
       decoded1 = decodeGroup(parameter1.value(), groupCodec1);
@@ -210,7 +212,7 @@ export class Store {
     setProperty(candidate, "labels", decoded1["labels"]);
     setProperty(candidate, "payload", decoded1["payload"]);
     const secret0 = snapshot.secret("database_password");
-    if (!secret0) throw contractMismatch();
+    if (!secret0 || secret0.entry.alias !== "database_password" || secret0.entry.kind !== "secret") throw contractMismatch();
     const secretValue0 = new Secret(secret0.bytes(), {
       path: secret0.entry.path,
       version: secret0.entry.version,
@@ -220,31 +222,37 @@ export class Store {
     throwIfAborted(signal);
     const effectiveDefaults = writableClone(this.#defaults.config());
     setProperty(effectiveDefaults, "password", secretValue0.clone());
+    let validatedCandidate: RootConfig;
+    let validatedDefaults: RootConfig;
     try {
-      const validationDefaults = writableClone(effectiveDefaults);
-      await this.#validate(validationDefaults);
+      await this.#validate(candidate);
       throwIfAborted(signal);
-      const validationCandidate = writableClone(candidate);
-      await this.#validate(validationCandidate);
+      await this.#validate(effectiveDefaults);
+      throwIfAborted(signal);
+      assertSecret(candidate["password"], "database_password");
+      assertSecret(effectiveDefaults["password"], "database_password");
+      validatedCandidate = writableClone(candidate);
+      validatedDefaults = writableClone(effectiveDefaults);
     } catch (cause) {
       if (signal.aborted) throw abortReason(signal);
       throw new CandidateError("config_validation_failed", cause);
     }
     throwIfAborted(signal);
     const defaultDifferences: FieldDifference[] = [];
-    appendDifference(defaultDifferences, "database.endpoint", valueCodec0_0, effectiveDefaults["endpoint"], candidate["endpoint"]);
-    appendDifference(defaultDifferences, "database.limit", valueCodec0_1, effectiveDefaults["limit"], candidate["limit"]);
-    appendDifference(defaultDifferences, "runtime.enabled", valueCodec1_0, effectiveDefaults["enabled"], candidate["enabled"]);
-    appendDifference(defaultDifferences, "runtime.epoch", valueCodec1_1, effectiveDefaults["epoch"], candidate["epoch"]);
-    appendDifference(defaultDifferences, "runtime.labels", valueCodec1_2, effectiveDefaults["labels"], candidate["labels"]);
-    appendDifference(defaultDifferences, "runtime.payload", valueCodec1_3, effectiveDefaults["payload"], candidate["payload"]);
+    appendDifference(defaultDifferences, "database.endpoint", valueCodec0_0, validatedDefaults["endpoint"], validatedCandidate["endpoint"]);
+    appendDifference(defaultDifferences, "database.limit", valueCodec0_1, validatedDefaults["limit"], validatedCandidate["limit"]);
+    appendDifference(defaultDifferences, "runtime.enabled", valueCodec1_0, validatedDefaults["enabled"], validatedCandidate["enabled"]);
+    appendDifference(defaultDifferences, "runtime.epoch", valueCodec1_1, validatedDefaults["epoch"], validatedCandidate["epoch"]);
+    appendDifference(defaultDifferences, "runtime.labels", valueCodec1_2, validatedDefaults["labels"], validatedCandidate["labels"]);
+    appendDifference(defaultDifferences, "runtime.payload", valueCodec1_3, validatedDefaults["payload"], validatedCandidate["payload"]);
     const restartRequiredFields: string[] = [];
     const active = this.#active;
     if (active) {
-      appendRestart(restartRequiredFields, "database.endpoint", valueCodec0_0, active.get("endpoint"), candidate["endpoint"]);
-      if (!sameSecretIdentity(active.get("password"), candidate["password"])) restartRequiredFields.push("database_password");
+      appendRestart(restartRequiredFields, "database.endpoint", valueCodec0_0, active.get("endpoint"), validatedCandidate["endpoint"]);
+      if (!sameSecretIdentity(active.get("password"), validatedCandidate["password"])) restartRequiredFields.push("database_password");
     }
-    const prepared = immutableSnapshot(writableClone(candidate), ReleaseIdentity.from(snapshot));
+    restartRequiredFields.sort();
+    const prepared = immutableSnapshot(validatedCandidate, ReleaseIdentity.from(snapshot));
     return {
       defaultDifferences,
       restartRequiredFields,
@@ -256,7 +264,25 @@ export class Store {
   }
 }
 
-function writableClone(value: Config): Config {
+function assertRootCoverage<T extends object, K extends PropertyKey>(
+  ...missing: IsUnion<T> extends true ? [never] : [Exclude<keyof T, K>, Exclude<K, keyof T>] extends [never, never] ? [] : [never]
+): void {
+  void missing;
+}
+
+function exactObject<T extends object, K extends keyof T & string>(
+  codec: IsUnion<T> extends true ? never : Exclude<keyof T, K> extends never ? GroupCodec<T> : never,
+): GroupCodec<T> {
+  return codec;
+}
+
+type IsUnion<T, Whole = T> = T extends unknown
+  ? [Whole] extends [T]
+    ? false
+    : true
+  : never;
+
+function writableClone(value: RootConfig): RootConfig {
   const source = cloneConfig(value);
   const target = Object.create(Object.getPrototypeOf(source)) as object;
   for (const key of Reflect.ownKeys(source)) {
@@ -266,7 +292,7 @@ function writableClone(value: Config): Config {
     }
     Object.defineProperty(target, key, { ...descriptor, writable: true, configurable: true });
   }
-  return target as Config;
+  return target as RootConfig;
 }
 
 function setProperty<T extends object, K extends keyof T>(target: T, key: K, value: T[K]): void {
@@ -278,6 +304,8 @@ function setProperty<T extends object, K extends keyof T>(target: T, key: K, val
     configurable: true,
   });
 }
+
+type EncodedNode = ReturnType<ValueCodec<unknown>["encodeNode"]>;
 
 function appendDifference<T>(
   result: FieldDifference[],
@@ -295,10 +323,25 @@ function appendRestart<T>(result: string[], path: string, codec: ValueCodec<T>, 
 
 function sameEncoded<T>(codec: ValueCodec<T>, left: T, right: T): boolean {
   try {
-    return isDeepStrictEqual(codec.encodeNode(left, "$"), codec.encodeNode(right, "$"));
+    return isDeepStrictEqual(canonicalNode(codec.encodeNode(left, "$")), canonicalNode(codec.encodeNode(right, "$")));
   } catch (cause) {
     throw new CandidateError("config_validation_failed", cause);
   }
+}
+
+function canonicalNode(node: EncodedNode): EncodedNode {
+  if (node.kind === "array") {
+    return { kind: "array", elements: node.elements.map(canonicalNode) };
+  }
+  if (node.kind === "object") {
+    return {
+      kind: "object",
+      properties: node.properties
+        .map(({ name, value }) => ({ name, value: canonicalNode(value) }))
+        .sort((left, right) => left.name < right.name ? -1 : left.name > right.name ? 1 : 0),
+    };
+  }
+  return node;
 }
 
 function sameSecretIdentity(left: unknown, right: unknown): boolean {
@@ -308,6 +351,12 @@ function sameSecretIdentity(left: unknown, right: unknown): boolean {
     left.path === right.path &&
     left.version === right.version
   );
+}
+
+function assertSecret(value: unknown, alias: string): asserts value is Secret {
+  if (!(value instanceof Secret)) {
+    throw new TypeError("generated config store: validated secret " + alias + " must remain a Secret");
+  }
 }
 
 function assertZeroSecret(value: unknown, alias: string): void {

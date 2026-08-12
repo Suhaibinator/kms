@@ -11,6 +11,11 @@
     },
     "types": ["node", "react"]
   },
-  "include": ["./public-api.ts", "../../examples/**/*.ts", "../../examples/**/*.tsx"],
+  "include": [
+    "./public-api.ts",
+    "./configgen-soundness.ts",
+    "../../examples/**/*.ts",
+    "../../examples/**/*.tsx"
+  ],
   "exclude": ["../../dist", "../../node_modules"]
 }
