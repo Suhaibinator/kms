@@ -61,8 +61,9 @@ metadata, TLS/mTLS, cancellation, discovery retries, and error redaction.
 | A unary call could complete after cancellation won the race. | Fenced unary completion (`c0c97d6`) and propagated cancellation through list pagination (`94d99a9`). | `sdk/typescript/tests/transport.test.ts`, `tests/client.test.ts` |
 | Public and wire integer inputs were not uniformly checked before encoding. | Added runtime `uint64`/`int64` checks (`ffbf087`) on top of the bigint design (`12650c9`, `a8d31f9`). | `tests/client.test.ts`, `tests/refs.test.ts`, `tests/secret.test.ts`, `tests/grpc-integration.test.ts` |
 | Namespace discovery needed proof that failure is retryable and an unbound identity is cached. | Added both discovery cases in `4a56f78`. | `sdk/typescript/tests/client.test.ts` |
+| The first caller's cancellation owned a coalesced namespace lookup, per-call deadlines did not bound discovery waits, and parameter access tokens were discarded/cacheable. | Made discovery client-owned with caller-local wait cancellation/deadlines, forwarded parameter tokens, and bypassed cache for protected reads (`46fbbad`). | `tests/client.test.ts`, `tests/grpc-integration.test.ts` |
 | Stubs and negative tests did not prove all metadata-bearing reads and mutations over gRPC. | Added generated loopback interoperability (`bf159cd`), positive metadata/mutations (`2655897`), secret writes and one-time access, and deterministic deadlines (`81efbf9`). | `sdk/typescript/tests/grpc-integration.test.ts` |
-| TLS helpers lacked evidence for mutual authentication. | Added loopback mTLS qualification (`7b5eeab`) and documented its scope (`c4ab082`). | `sdk/typescript/tests/tls-integration.test.ts` |
+| TLS helpers lacked positive evidence for both mutual authentication and server-authenticated TLS. | Added loopback mTLS qualification (`7b5eeab`), server-authenticated `tlsFromFiles` plus bearer qualification (`64ffa2d`), and documented the scope (`c4ab082`). | `sdk/typescript/tests/tls-integration.test.ts` |
 
 The transport fixture is deliberately protocol-faithful and hermetic.
 Qualification against a separately deployed production server is an explicit

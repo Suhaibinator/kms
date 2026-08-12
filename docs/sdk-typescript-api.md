@@ -150,7 +150,11 @@ method families are:
 
 `KmsClientOptions.token` supplies bearer authentication. `GetOptions` and
 secret mutation options accept a separate `secretToken`; it is never used as
-the caller identity. `RpcTransport`, `UnaryMethod`, `BidiMethod`, and
+the caller identity. Parameter and secret reads carrying a `secretToken`
+bypass the shared read cache and never populate it. Lazy namespace discovery
+is coalesced as client-owned work under the default RPC deadline; each caller's
+earlier deadline or cancellation independently bounds its wait without
+poisoning concurrent callers. `RpcTransport`, `UnaryMethod`, `BidiMethod`, and
 `DuplexRpc` are exported for deterministic tests and advanced transport
 integration, but generated protobuf symbols remain internal.
 
