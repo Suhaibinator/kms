@@ -2,7 +2,12 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import type { PublicConfigWire, PublicJsonObject, PublicJsonValue } from "../publishing.js";
+import type {
+  DecimalRevision,
+  PublicConfigWire,
+  PublicJsonObject,
+  PublicJsonValue,
+} from "../publishing.js";
 
 const UINT64_MAX = (1n << 64n) - 1n;
 const CANONICAL_DECIMAL_REVISION = /^(?:0|[1-9][0-9]*)$/;
@@ -30,26 +35,26 @@ export interface UsePublicConfigOptions<TConfig extends PublicJsonObject> {
 export type PublicConfigClientEvent =
   | {
       readonly type: "refresh_succeeded";
-      readonly revision: string;
+      readonly revision: DecimalRevision;
       readonly changed: boolean;
       readonly observedAtUnixMs: number;
       readonly durationMs: number;
     }
   | {
       readonly type: "refresh_failed";
-      readonly revision: string;
+      readonly revision: DecimalRevision;
       readonly observedAtUnixMs: number;
       readonly durationMs: number;
     }
   | {
       readonly type: "policy_recovery_succeeded";
-      readonly previousRevision: string;
-      readonly revision: string;
+      readonly previousRevision: DecimalRevision;
+      readonly revision: DecimalRevision;
       readonly observedAtUnixMs: number;
     }
   | {
       readonly type: "policy_recovery_rejected";
-      readonly revision: string;
+      readonly revision: DecimalRevision;
       readonly observedAtUnixMs: number;
     };
 
@@ -180,7 +185,7 @@ export function usePublicConfig<TConfig extends PublicJsonObject>(
         const observedAtUnixMs = Date.now();
         observe({
           type: "refresh_succeeded",
-          revision: policyRef.current.revision.toString(10),
+          revision: formatClientRevision(policyRef.current.revision),
           changed: false,
           observedAtUnixMs,
           durationMs: Math.max(0, observedAtUnixMs - startedAtUnixMs),
@@ -201,7 +206,7 @@ export function usePublicConfig<TConfig extends PublicJsonObject>(
       const observedAtUnixMs = Date.now();
       observe({
         type: "refresh_succeeded",
-        revision: policyRef.current.revision.toString(10),
+        revision: formatClientRevision(policyRef.current.revision),
         changed,
         observedAtUnixMs,
         durationMs: Math.max(0, observedAtUnixMs - startedAtUnixMs),
@@ -214,7 +219,7 @@ export function usePublicConfig<TConfig extends PublicJsonObject>(
       const observedAtUnixMs = Date.now();
       observe({
         type: "refresh_failed",
-        revision: policyRef.current.revision.toString(10),
+        revision: formatClientRevision(policyRef.current.revision),
         observedAtUnixMs,
         durationMs: Math.max(0, observedAtUnixMs - startedAtUnixMs),
       });
@@ -261,7 +266,7 @@ export function usePublicConfig<TConfig extends PublicJsonObject>(
           setError(asError(serverResultError));
           observe({
             type: "policy_recovery_rejected",
-            revision: policyRef.current.revision.toString(10),
+            revision: formatClientRevision(policyRef.current.revision),
             observedAtUnixMs: Date.now(),
           });
         }
@@ -276,7 +281,7 @@ export function usePublicConfig<TConfig extends PublicJsonObject>(
       if (!installIfNewer(policyChanged)) {
         observe({
           type: "policy_recovery_rejected",
-          revision: policyRef.current.revision.toString(10),
+          revision: formatClientRevision(policyRef.current.revision),
           observedAtUnixMs: Date.now(),
         });
         return false;
@@ -289,8 +294,8 @@ export function usePublicConfig<TConfig extends PublicJsonObject>(
       setError(null);
       observe({
         type: "policy_recovery_succeeded",
-        previousRevision: previousRevision.toString(10),
-        revision: policyChanged.revision.toString(10),
+        previousRevision: formatClientRevision(previousRevision),
+        revision: formatClientRevision(policyChanged.revision),
         observedAtUnixMs: Date.now(),
       });
       return true;
@@ -367,7 +372,11 @@ function parseClientRevision(value: unknown): bigint {
 }
 
 function formatClientEtag(revision: bigint): string {
-  return `"kms-public-config-${revision.toString(10)}"`;
+  return `"kms-public-config-${formatClientRevision(revision)}"`;
+}
+
+function formatClientRevision(revision: bigint): DecimalRevision {
+  return revision.toString(10) as DecimalRevision;
 }
 
 function clonePublicJson(value: unknown, ancestors: WeakSet<object>): PublicJsonValue {
