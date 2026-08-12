@@ -1,5 +1,7 @@
 import { inspect } from "node:util";
 
+const UINT64_MAX = (1n << 64n) - 1n;
+
 export const RELEASE_STATES = ["received", "prepared", "applied", "rejected"] as const;
 export type ReleaseState = (typeof RELEASE_STATES)[number];
 
@@ -47,6 +49,7 @@ export class ReleaseEntryMetadata {
   readonly hasAccessToken: boolean;
 
   constructor(init: ReleaseEntryMetadataInit) {
+    assertUint64(init.version, "release entry version");
     this.alias = init.alias;
     this.kind = init.kind;
     this.path = init.path;
@@ -171,12 +174,16 @@ abstract class ReleaseIdentity {
   readonly #entries: ReadonlyMap<string, ReleaseEntryMetadata>;
 
   protected constructor(init: ReleaseIdentityInit) {
+    assertUint64(init.version, "release version");
+    assertUint64(init.activationRevision, "release activationRevision");
+    const schemaVersion = init.schemaVersion ?? 0n;
+    assertUint64(schemaVersion, "release schemaVersion");
     this.namespace = init.namespace;
     this.name = init.name;
     this.version = init.version;
     this.activationRevision = init.activationRevision;
     this.schemaId = init.schemaId ?? "";
-    this.schemaVersion = init.schemaVersion ?? 0n;
+    this.schemaVersion = schemaVersion;
     this.digest = init.digest;
     this.metadataJson = init.metadataJson ?? "";
     this.#entries = new Map(init.entries);
@@ -350,5 +357,11 @@ export function classifiedReleaseCategory(error: unknown): ReleaseRejectionCateg
       : undefined;
   } catch {
     return undefined;
+  }
+}
+
+function assertUint64(value: unknown, name: string): asserts value is bigint {
+  if (typeof value !== "bigint" || value < 0n || value > UINT64_MAX) {
+    throw new TypeError(`${name} must be a bigint in the uint64 range`);
   }
 }

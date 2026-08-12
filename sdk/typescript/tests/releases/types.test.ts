@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   classifiedReleaseCategory,
   ReleaseEntryMetadata,
+  ReleaseManifest,
   ReleaseParameter,
   ReleaseSecret,
   ReleaseSnapshot,
@@ -60,6 +61,77 @@ describe("release snapshots", () => {
     expect(json).toContain('"activationRevision":"9007199254740993"');
     expect(inspect(snapshot)).not.toContain("sensitive-value");
   });
+
+  it("accepts every uint64 boundary on public release identity objects", () => {
+    const maximum = 18_446_744_073_709_551_615n;
+    const entry = new ReleaseEntryMetadata({
+      alias: "maximum",
+      kind: "parameter",
+      path: "/prod/api/maximum",
+      version: maximum,
+    });
+    const identity = {
+      namespace: "prod/api",
+      name: "runtime",
+      version: maximum,
+      activationRevision: maximum,
+      schemaVersion: maximum,
+      digest: "digest",
+      entries: new Map([[entry.alias, entry]]),
+    };
+
+    expect(entry.version).toBe(maximum);
+    expect(new ReleaseManifest(identity)).toMatchObject({
+      version: maximum,
+      activationRevision: maximum,
+      schemaVersion: maximum,
+    });
+    expect(
+      new ReleaseSnapshot({ ...identity, parameters: new Map(), secrets: new Map() }),
+    ).toMatchObject({
+      version: maximum,
+      activationRevision: maximum,
+      schemaVersion: maximum,
+    });
+  });
+
+  it.each([
+    ["negative", -1n],
+    ["overflow", 18_446_744_073_709_551_616n],
+    ["non-bigint", 1 as unknown as bigint],
+  ])("rejects a %s public release entry version", (_description, version) => {
+    expect(
+      () =>
+        new ReleaseEntryMetadata({
+          alias: "invalid",
+          kind: "parameter",
+          path: "/prod/api/invalid",
+          version,
+        }),
+    ).toThrow(TypeError);
+  });
+
+  it.each(["version", "activationRevision", "schemaVersion"] as const)(
+    "rejects invalid %s values in both public release identity constructors",
+    (field) => {
+      const base = {
+        namespace: "prod/api",
+        name: "runtime",
+        version: 1n,
+        activationRevision: 1n,
+        schemaVersion: 1n,
+        digest: "digest",
+        entries: new Map<string, ReleaseEntryMetadata>(),
+      };
+      for (const invalid of [-1n, 18_446_744_073_709_551_616n, 1 as unknown as bigint]) {
+        const identity = { ...base, [field]: invalid };
+        expect(() => new ReleaseManifest(identity)).toThrow(TypeError);
+        expect(
+          () => new ReleaseSnapshot({ ...identity, parameters: new Map(), secrets: new Map() }),
+        ).toThrow(TypeError);
+      }
+    },
+  );
 });
 
 describe("release rejection classification", () => {
