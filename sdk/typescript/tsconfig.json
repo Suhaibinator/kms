@@ -21,5 +21,12 @@
     "types": ["node", "vitest/globals"]
   },
   "include": ["src/**/*.ts", "src/**/*.tsx", "tests/**/*.ts", "tests/**/*.tsx", "vitest.config.ts"],
-  "exclude": ["dist", "node_modules", "tests/package", "tests/types"]
+  "exclude": [
+    "dist",
+    "node_modules",
+    "tests/package",
+    "tests/types",
+    "tests/fixtures/next-boundary",
+    "tests/fixtures/next-invalid-client-import"
+  ]
 }
