@@ -2,7 +2,7 @@ import { inspect } from "node:util";
 
 import { describe, expect, it } from "vitest";
 
-import { REDACTED, Secret } from "../src/secret.js";
+import { newSecret, REDACTED, Secret } from "../src/secret.js";
 
 describe("Secret", () => {
   it("redacts every implicit rendering surface", () => {
@@ -58,5 +58,24 @@ describe("Secret", () => {
     expect(() => new Secret("secret", { version: -1n })).toThrow(TypeError);
     expect(() => new Secret("secret", { version: 18_446_744_073_709_551_616n })).toThrow(TypeError);
     expect(() => new Secret("secret", { version: 1 as unknown as bigint })).toThrow(TypeError);
+  });
+
+  it("newSecret wraps plaintext with defensive copies and exact metadata", () => {
+    const input = Uint8Array.from([115, 101, 99, 114, 101, 116]);
+    const secret = newSecret(input, {
+      path: "/prod/api/helper",
+      version: 9_007_199_254_740_993n,
+      contentType: "application/octet-stream",
+    });
+    input.fill(0);
+
+    expect(secret).toBeInstanceOf(Secret);
+    expect(secret.text()).toBe("secret");
+    expect(secret).toMatchObject({
+      path: "/prod/api/helper",
+      version: 9_007_199_254_740_993n,
+      contentType: "application/octet-stream",
+    });
+    expect(JSON.stringify(secret)).toBe(`"${REDACTED}"`);
   });
 });
