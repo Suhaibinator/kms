@@ -8,7 +8,7 @@ delivery plan. `complete` means the behavior has an automated TypeScript test;
 |---|---|---|---|---|
 | Secure construction and close | `KmsClient`, `tlsFromFiles`, `mtlsFromFiles` | Fail-closed transport, TLS/mTLS, idempotent bounded cleanup | `sdk/typescript/tests/client.test.ts`, `transport.test.ts`, `tls-integration.test.ts` | complete |
 | Namespace discovery and display paths | `KmsClient.whoAmI`, ref helpers | Lazy retryable discovery, cached unbound result, interior key slashes | `sdk/typescript/tests/refs.test.ts`, `client.test.ts` | complete |
-| Reads/writes and auth metadata | `get/put/list/delete` methods | Bearer and per-secret metadata, deadlines, exact `bigint` values | `sdk/typescript/tests/client.test.ts` | complete |
+| Reads/writes and auth metadata | `get/put/list/delete` methods | Bearer and per-secret metadata, deadlines, exact `bigint` values, and positive protocol request/response coverage for every public metadata/mutation method | `sdk/typescript/tests/client.test.ts`, `sdk/typescript/tests/grpc-integration.test.ts` | complete |
 | Typed errors | `KmsError` | Bounded status mapping without plaintext | `sdk/typescript/tests/errors.test.ts` | complete |
 | Secret redaction and copying | `Secret` | Explicit access only; string/JSON/inspect redaction; no shared buffers | `sdk/typescript/tests/secret.test.ts` | complete |
 | Bounded TTL cache | internal `ReadCache` | `(path,version,label)` keys, 4096 caps, invalidation, secret clones, token bypass | `sdk/typescript/tests/cache.test.ts` | complete |
