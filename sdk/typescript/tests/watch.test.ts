@@ -138,6 +138,159 @@ describe("shared watches", () => {
     await client.close();
   });
 
+  it("requests one full snapshot for a larger namespace union without lowering its fence", async () => {
+    const random = vi.spyOn(Math, "random").mockReturnValue(0);
+    let secretReads = 0;
+    const transport = new FakeTransport((path) => {
+      if (path.endsWith("/GetSecret")) {
+        secretReads += 1;
+        return {
+          ref: { namespace: { env: "prod", app: "worker" }, key: "secret" },
+          version: BigInt(secretReads),
+          value: Buffer.from(`secret-${secretReads}`),
+          contentType: "text/plain",
+          metadataJson: "{}",
+          createdAtUnixMs: 0n,
+        };
+      }
+      return { parameters: [], nextPageToken: "" };
+    });
+    const client = new KmsClient({ transport, namespace: "prod/api", cacheTtlMs: 60_000 });
+    expect((await client.getSecret("/prod/worker/secret")).text()).toBe("secret-1");
+
+    const apiEvents: WatchEvent[] = [];
+    const workerEvents: WatchEvent[] = [];
+    const stopApi = await client.watch((event) => apiEvents.push(event));
+    await waitFor(() => transport.streams.length === 1);
+    const first = transport.streams[0] as FakeDuplex<SubscribeRequest, SubscribeEvent>;
+    await waitFor(() => first.sent.length === 1);
+    first.emit({
+      event: {
+        $case: "change",
+        value: {
+          ref: { namespace: { env: "prod", app: "api" }, key: "flag" },
+          changeType: "put",
+          value: "newer",
+          contentType: "string",
+          version: 5n,
+          label: "",
+        },
+      },
+      revision: 5n,
+    });
+    await waitFor(() => apiEvents.length === 1);
+
+    const stopWorker = client.watchNamespace("prod/worker", (event) => workerEvents.push(event));
+    // Namespace growth invalidates secrets before the snapshot arrives.
+    expect((await client.getSecret("/prod/worker/secret")).text()).toBe("secret-2");
+    await waitFor(() => transport.streams.length === 2);
+    const expanded = transport.streams[1] as FakeDuplex<SubscribeRequest, SubscribeEvent>;
+    await waitFor(() => expanded.sent.length === 1);
+    expect(expanded.sent[0]).toMatchObject({
+      namespaces: [
+        { env: "prod", app: "api" },
+        { env: "prod", app: "worker" },
+      ],
+      lastSeenRevision: 0n,
+    });
+
+    expanded.emit({
+      event: {
+        $case: "snapshot",
+        value: {
+          parameters: [
+            {
+              ref: { namespace: { env: "prod", app: "api" }, key: "flag" },
+              value: "stale",
+              contentType: "string",
+              version: 3n,
+              metadataJson: "{}",
+              createdBy: "test",
+              createdAtUnixMs: 0n,
+              labels: {},
+            },
+            {
+              ref: { namespace: { env: "prod", app: "worker" }, key: "flag" },
+              value: "worker",
+              contentType: "string",
+              version: 3n,
+              metadataJson: "{}",
+              createdBy: "test",
+              createdAtUnixMs: 0n,
+              labels: {},
+            },
+          ],
+        },
+      },
+      revision: 3n,
+    });
+    await waitFor(() => workerEvents.length === 1);
+    expect(apiEvents).toHaveLength(1);
+    expect(apiEvents[0]).toMatchObject({ value: "newer", revision: 5n });
+    expect(workerEvents[0]).toMatchObject({ value: "worker", revision: 3n });
+    expect(client.currentRevision).toBe(5n);
+
+    expanded.cancel();
+    await waitFor(() => transport.streams.length === 3);
+    const resumed = transport.streams[2] as FakeDuplex<SubscribeRequest, SubscribeEvent>;
+    await waitFor(() => resumed.sent.length === 1);
+    expect(resumed.sent[0]).toMatchObject({ lastSeenRevision: 5n });
+
+    stopApi();
+    stopWorker();
+    await client.close();
+    random.mockRestore();
+  });
+
+  it("seeds a late ParameterValue from newer shared-watch state", async () => {
+    const transport = new FakeTransport((path) => {
+      if (path.endsWith("/GetParameter")) {
+        return {
+          parameter: {
+            ref: { namespace: { env: "prod", app: "api" }, key: "flag" },
+            value: "stale-fetch",
+            contentType: "string",
+            version: 1n,
+            metadataJson: "{}",
+            createdBy: "test",
+            createdAtUnixMs: 0n,
+            labels: {},
+          },
+        };
+      }
+      return { parameters: [], nextPageToken: "" };
+    });
+    const client = new KmsClient({ transport, namespace: "prod/api" });
+    const events: WatchEvent[] = [];
+    const stop = await client.watch((event) => events.push(event));
+    await waitFor(() => transport.streams.length === 1);
+    const stream = transport.streams[0] as FakeDuplex<SubscribeRequest, SubscribeEvent>;
+    stream.emit({
+      event: {
+        $case: "change",
+        value: {
+          ref: { namespace: { env: "prod", app: "api" }, key: "flag" },
+          changeType: "put",
+          value: "live-watch",
+          contentType: "string",
+          version: 9n,
+          label: "",
+        },
+      },
+      revision: 9n,
+    });
+    await waitFor(() => events.length === 1);
+
+    const value = new ParameterValue("flag");
+    await value.init(client);
+    expect(value.get()).toBe("live-watch");
+    expect(client.currentRevision).toBe(9n);
+
+    await value.dispose();
+    stop();
+    await client.close();
+  });
+
   it("does not restart the first stream when a live ParameterValue registers", async () => {
     const transport = new FakeTransport(() => ({ parameters: [], nextPageToken: "" }));
     const client = new KmsClient({ transport, namespace: "prod/api" });

@@ -58,12 +58,7 @@ export interface WatchOptions {
   readonly signal?: AbortSignal;
 }
 
-export type WatchConnectionState =
-  | "idle"
-  | "connecting"
-  | "connected"
-  | "reconnecting"
-  | "stopped";
+export type WatchConnectionState = "idle" | "connecting" | "connected" | "reconnecting" | "stopped";
 
 export type ReconciliationHealth = "not_started" | "healthy" | "degraded";
 
@@ -151,6 +146,8 @@ export class SubscriptionManager {
   #lastReconcileFailureAtUnixMs: number | undefined;
   #started = false;
   #restartRequested = false;
+  #namespaceGeneration = 0;
+  #snapshotGeneration = 0;
   #sessionController: AbortController | undefined;
   #runTask: Promise<void> | undefined;
   #reconcileTask: Promise<void> | undefined;
@@ -214,13 +211,19 @@ export class SubscriptionManager {
     handler: ParameterUpdateHandler,
   ): () => void {
     const path = displayPath(ref);
-    this.#known.set(path, { value: initial, present: true, revision: 0n });
+    const known = this.#known.get(path);
+    if (known === undefined) {
+      this.#known.set(path, { value: initial, present: true, revision: 0n });
+    }
     let handlers = this.#parameterHandlers.get(path);
     if (!handlers) {
       handlers = new Set();
       this.#parameterHandlers.set(path, handlers);
     }
     handlers.add(handler);
+    if (known !== undefined) {
+      handler(known.value, known.present);
+    }
     const wasStarted = this.#started;
     const changed = this.#addNamespace(ref.namespace);
     this.#ensureStarted();
@@ -278,7 +281,12 @@ export class SubscriptionManager {
   #addNamespace(namespace: NamespaceRef): boolean {
     const key = namespaceKey(namespace);
     if (this.#namespaces.has(key)) return false;
-    this.#namespaces.set(key, Object.freeze({ ...namespace }));
+    const captured = Object.freeze({ ...namespace });
+    this.#namespaces.set(key, captured);
+    this.#namespaceGeneration += 1;
+    // Cached secrets can predate this namespace's first watch. Invalidate them
+    // immediately rather than waiting for the requested snapshot to arrive.
+    this.#host._cache().invalidateSecretsInNamespaces([captured]);
     return true;
   }
 
@@ -338,12 +346,17 @@ export class SubscriptionManager {
       signal,
     });
     try {
+      const namespaceGeneration = this.#namespaceGeneration;
+      const requestFullSnapshot = namespaceGeneration > this.#snapshotGeneration;
       await stream.send({
         clientName: this.#host.clientName,
         namespaces: namespaces.map((namespace) => ({ ...namespace })),
-        lastSeenRevision: this.#lastRevision,
+        lastSeenRevision: requestFullSnapshot ? 0n : this.#lastRevision,
         ackedRevision: 0n,
       });
+      if (requestFullSnapshot) {
+        this.#snapshotGeneration = Math.max(this.#snapshotGeneration, namespaceGeneration);
+      }
       this.#state = "connected";
       this.#connectedAtUnixMs = Date.now();
       for await (const event of stream) await this.#handleEvent(event, stream.send.bind(stream));
