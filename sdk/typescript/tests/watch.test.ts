@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { KmsClient, type WatchEvent } from "../src/client.js";
 import type { SubscribeEvent, SubscribeRequest } from "../src/generated/kms.js";
 import { resolveRef } from "../src/refs.js";
@@ -7,6 +7,7 @@ import { type FakeDuplex, FakeTransport, waitFor } from "./helpers/fake-transpor
 
 describe("shared watches", () => {
   it("shares a namespace stream, acknowledges heartbeats, fences duplicates, and resumes", async () => {
+    const random = vi.spyOn(Math, "random").mockReturnValue(0);
     const transport = new FakeTransport(() => ({ parameters: [], nextPageToken: "" }));
     const client = new KmsClient({ transport, namespace: "prod/api" });
     const events: WatchEvent[] = [];
@@ -65,9 +66,19 @@ describe("shared watches", () => {
     expect(stream.sent[1]).toMatchObject({ ackedRevision: 5n });
     expect(client.currentRevision).toBe(5n);
 
+    stream.cancel();
+    await waitFor(() => transport.streams.length === 2);
+    const resumed = transport.streams[1] as FakeDuplex<SubscribeRequest, SubscribeEvent>;
+    await waitFor(() => resumed.sent.length === 1);
+    expect(resumed.sent[0]).toMatchObject({
+      namespaces: [{ env: "prod", app: "api" }],
+      lastSeenRevision: 5n,
+    });
+
     stopA();
     stopB();
     await client.close();
+    random.mockRestore();
   });
 
   it("restarts only when the add-only namespace union grows", async () => {
@@ -147,6 +158,58 @@ describe("shared watches", () => {
     await waitFor(() => events.some((event) => event.type === "put"));
     parameters = [];
     await waitFor(() => events.some((event) => event.type === "delete"));
+
+    stop();
+    await client.close();
+  });
+
+  it("does not infer deletions from an incomplete paginated reconciliation", async () => {
+    const parameter = (key: string) => ({
+      ref: { namespace: { env: "prod", app: "api" }, key },
+      value: key,
+      contentType: "string",
+      version: 1n,
+      metadataJson: "{}",
+      createdBy: "test",
+      createdAtUnixMs: 0n,
+      labels: {},
+    });
+    let phase: "initial" | "incomplete" | "deleted" = "initial";
+    const transport = new FakeTransport((_path, request) => {
+      const pageToken = (request as { pageToken?: string }).pageToken ?? "";
+      if (phase === "incomplete" && pageToken === "second") {
+        throw new Error("page failed");
+      }
+      if (pageToken === "second") {
+        return {
+          parameters: phase === "initial" ? [parameter("second")] : [],
+          nextPageToken: "",
+        };
+      }
+      return {
+        parameters: [parameter("first")],
+        nextPageToken: phase === "deleted" ? "" : "second",
+      };
+    });
+    const client = new KmsClient({
+      transport,
+      namespace: "prod/api",
+      reconcileIntervalMs: 5,
+    });
+    const events: WatchEvent[] = [];
+    const stop = await client.watch((event) => events.push(event));
+
+    await waitFor(
+      () =>
+        events.some((event) => event.type === "put" && event.key === "first") &&
+        events.some((event) => event.type === "put" && event.key === "second"),
+    );
+    phase = "incomplete";
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(events).not.toContainEqual(expect.objectContaining({ type: "delete", key: "second" }));
+
+    phase = "deleted";
+    await waitFor(() => events.some((event) => event.type === "delete" && event.key === "second"));
 
     stop();
     await client.close();
