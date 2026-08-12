@@ -165,7 +165,28 @@ export function formatPublicConfigEtag(revision: bigint | DecimalRevision): stri
  * Merely adding a field to an application policy can therefore never publish
  * it. Selector results are recursively checked, cloned, and frozen.
  */
+export function definePublicProjection<TPolicy>(): <
+  const TMap extends PublicProjectionMap<TPolicy>,
+>(
+  allowlist: TMap,
+) => PublicProjection<TPolicy, ProjectionResult<TPolicy, TMap>>;
 export function definePublicProjection<TPolicy, const TMap extends PublicProjectionMap<TPolicy>>(
+  allowlist: TMap,
+): PublicProjection<TPolicy, ProjectionResult<TPolicy, TMap>>;
+export function definePublicProjection<TPolicy, const TMap extends PublicProjectionMap<TPolicy>>(
+  allowlist?: TMap,
+):
+  | PublicProjection<TPolicy, ProjectionResult<TPolicy, TMap>>
+  | (<const TNextMap extends PublicProjectionMap<TPolicy>>(
+      nextAllowlist: TNextMap,
+    ) => PublicProjection<TPolicy, ProjectionResult<TPolicy, TNextMap>>) {
+  if (allowlist === undefined) {
+    return (nextAllowlist) => createPublicProjection(nextAllowlist);
+  }
+  return createPublicProjection(allowlist);
+}
+
+function createPublicProjection<TPolicy, const TMap extends PublicProjectionMap<TPolicy>>(
   allowlist: TMap,
 ): PublicProjection<TPolicy, ProjectionResult<TPolicy, TMap>> {
   const selectors = captureProjectionMap(allowlist);
@@ -386,6 +407,7 @@ function captureProjectionMap<TPolicy>(
   const entries: [string, PublicFieldSelector<TPolicy>][] = [];
   for (const key of keys) {
     assertSafePublicKey(key, `$allowlist.${key}`);
+    assertProjectionKey(key);
     const selector = readDataProperty(allowlist, key, `$allowlist.${key}`);
     if (typeof selector !== "function") {
       throw new TypeError(`public projection selector $.${key} must be a function`);
@@ -406,6 +428,7 @@ function captureProjectionKeys(keys: readonly string[]): readonly string[] {
       throw new TypeError("public projection keys must contain only strings");
     }
     assertSafePublicKey(key, `public projection key ${key}`);
+    assertProjectionKey(key);
     if (seen.has(key)) {
       throw new TypeError(`public projection key ${key} is duplicated`);
     }
@@ -553,5 +576,11 @@ function readDataProperty(object: object, key: string, path: string): unknown {
 function assertSafePublicKey(key: string, path: string): void {
   if (FORBIDDEN_PUBLIC_KEYS.has(key)) {
     throw new TypeError(`${path} uses a forbidden public JSON key`);
+  }
+}
+
+function assertProjectionKey(key: string): void {
+  if (key === "revision") {
+    throw new TypeError("public projection key revision is reserved for the publisher");
   }
 }

@@ -159,6 +159,24 @@ describe("usePublicConfig", () => {
     expect(result.current.revision).toBe(5n);
     expect(result.current.config).toEqual({ minLength: 18 });
     expect(result.current.error).toBeInstanceOf(Error);
+
+    const arrayWithHiddenNumericProperty = [1];
+    Object.defineProperty(arrayWithHiddenNumericProperty, "9007199254740992", {
+      value: 2,
+      enumerable: true,
+    });
+    act(() => {
+      expect(
+        result.current.applyServerResult({
+          status: "policy_changed",
+          current: {
+            revision: "7",
+            config: { minLength: 20, extra: arrayWithHiddenNumericProperty },
+          },
+        }),
+      ).toBe(false);
+    });
+    expect(result.current.revision).toBe(5n);
   });
 
   it("refreshes on focus when enabled", async () => {

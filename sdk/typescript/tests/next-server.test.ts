@@ -64,10 +64,15 @@ describe("Next.js server adapter", () => {
     );
     expect(notModified.status).toBe(304);
     expect(await notModified.text()).toBe("");
+    const malformedWildcard = await get(
+      new Request("http://local/policy", { headers: { "If-None-Match": "*garbage" } }),
+    );
+    expect(malformedWildcard.status).toBe(200);
 
     const unavailable = createPublicConfigGET(async () => undefined);
     const failure = await unavailable(new Request("http://local/policy"));
     expect(failure.status).toBe(503);
+    expect(failure.headers.get("retry-after")).toBe("1");
     expect(await failure.json()).toEqual({ status: "unavailable" });
   });
 

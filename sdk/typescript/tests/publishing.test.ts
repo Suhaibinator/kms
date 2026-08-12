@@ -23,16 +23,21 @@ describe("public configuration publishing", () => {
       internalEndpoint: "private",
       credentials: new Secret("do-not-publish"),
     };
-    const projection = definePublicProjection<
-      typeof privatePolicy,
-      {
-        minLength: (value: Readonly<typeof privatePolicy>) => number;
-      }
-    >({ minLength: (value) => value.minLength });
+    const projection = definePublicProjection<typeof privatePolicy>()({
+      minLength: (value) => value.minLength,
+    });
     const publicPolicy = projection.project(privatePolicy);
     expect(publicPolicy).toEqual({ minLength: 14 });
     expect(publicPolicy).not.toHaveProperty("credentials");
     expect(Object.isFrozen(publicPolicy)).toBe(true);
+  });
+
+  it("reserves the publisher-owned revision field", () => {
+    expect(() =>
+      definePublicProjection<{ internalRevision: string }>()({
+        revision: (value) => value.internalRevision,
+      }),
+    ).toThrow(/reserved/);
   });
 
   it("rejects non-JSON, secret, getter, cycle, and prototype-bearing values", () => {

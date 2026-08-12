@@ -389,6 +389,7 @@ function unavailableResponse(): Response {
     headers: {
       "Cache-Control": "no-store",
       "Content-Type": "application/json; charset=utf-8",
+      "Retry-After": "1",
       "X-Content-Type-Options": "nosniff",
     },
   });
@@ -410,7 +411,16 @@ function ifNoneMatchMatches(header: string | null, current: string): boolean {
       break;
     }
     if (header[offset] === "*") {
-      return true;
+      const wildcardEnd = offset + 1;
+      let next = wildcardEnd;
+      while (next < header.length && /[\t ]/.test(header[next] ?? "")) {
+        next += 1;
+      }
+      if (next === header.length || header[next] === ",") {
+        return true;
+      }
+      offset = skipToNextListMember(header, wildcardEnd);
+      continue;
     }
 
     const tokenStart = offset;

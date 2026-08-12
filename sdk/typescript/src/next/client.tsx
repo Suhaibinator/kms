@@ -314,6 +314,10 @@ function clonePublicArray(
     if (typeof key !== "string" || !/^(?:0|[1-9][0-9]*)$/.test(key)) {
       throw new TypeError("public config array contains a non-index property");
     }
+    const index = Number(key);
+    if (!Number.isSafeInteger(index) || index < 0 || index >= value.length) {
+      throw new TypeError("public config array contains an invalid index");
+    }
     const descriptor = Object.getOwnPropertyDescriptor(value, key);
     if (descriptor === undefined || !("value" in descriptor) || !descriptor.enumerable) {
       throw new TypeError("public config array indices must be enumerable data properties");
