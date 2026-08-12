@@ -61,6 +61,29 @@ export function prepare(snapshot: ReleaseSnapshot): PreparedRelease {
   return { commit() {}, abort() {} };
 }
 
+const asyncCommitIsNotPrepared: PreparedRelease = {
+  // @ts-expect-error release commits must be synchronous
+  async commit() {},
+  abort() {},
+};
+const asyncAbortIsNotPrepared: PreparedRelease = {
+  commit() {},
+  // @ts-expect-error release aborts must be synchronous
+  async abort() {},
+};
+void [asyncCommitIsNotPrepared, asyncAbortIsNotPrepared];
+
+const asyncPublishIsNotManaged: ManagedPreparedCandidate = {
+  // @ts-expect-error managed publication must be synchronous
+  async publish() {},
+};
+const asyncManagedAbortIsNotManaged: ManagedPreparedCandidate = {
+  publish() {},
+  // @ts-expect-error managed cleanup must be synchronous
+  async abort() {},
+};
+void [asyncPublishIsNotManaged, asyncManagedAbortIsNotManaged];
+
 export function acceptsPublicApi(
   client: KmsClient,
   adapter: NextKms<Policy, PublicPolicy, string, string>,

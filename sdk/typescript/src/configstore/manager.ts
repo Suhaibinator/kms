@@ -20,9 +20,9 @@ import { ReleaseIdentity } from "./snapshot.js";
 
 export interface ManagedPreparedCandidate {
   /** Generated binding's atomic active-generation swap. Must be infallible. */
-  readonly publish: () => void;
+  readonly publish: () => undefined;
   /** Releases candidate-owned resources. Must be infallible and is called at most once. */
-  readonly abort?: () => void;
+  readonly abort?: () => undefined;
   /** Complete non-secret comparison against source defaults. */
   readonly defaultDifferences?: readonly FieldDifference[];
   /** Generated canonical fields whose effective value/pin changed after startup. */
@@ -294,19 +294,30 @@ export class ManagedConfigManager {
 
     return {
       commit: () => {
-        candidate.publish();
+        const returned: unknown = candidate.publish();
+        const contractError = synchronousCallbackError(
+          "configstore: prepared candidate publish",
+          returned,
+        );
+        if (contractError) throw contractError;
         this.#applied = identity;
         this.#divergent = divergent;
         this.#ready = true;
         this.#readySignal.resolve();
+        return undefined;
       },
       abort,
     };
   }
 
-  #abortOrInternal(abort: () => void, identity: ReleaseIdentity): void {
+  #abortOrInternal(abort: () => undefined, identity: ReleaseIdentity): void {
     try {
-      abort();
+      const returned: unknown = abort();
+      const contractError = synchronousCallbackError(
+        "configstore: prepared candidate abort",
+        returned,
+      );
+      if (contractError) throw contractError;
     } catch (cause) {
       const error = new CandidateError("internal", cause);
       this.#notifyCandidateRejected(identity, error);
@@ -453,13 +464,19 @@ function requireString(value: unknown, description: string): string {
   return value;
 }
 
-function once(callback: () => void): () => void {
+function once(callback: () => undefined): () => undefined {
   let called = false;
   return () => {
-    if (called) return;
+    if (called) return undefined;
     called = true;
-    callback();
+    return callback();
   };
+}
+
+function synchronousCallbackError(name: string, returned: unknown): Error | undefined {
+  if (returned === undefined) return undefined;
+  void Promise.resolve(returned).catch(() => undefined);
+  return new TypeError(`${name} must return undefined synchronously`);
 }
 
 function isRejectionCategory(error: unknown, category: ReleaseRejectionCategory): boolean {

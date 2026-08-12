@@ -260,6 +260,41 @@ describe("ManagedConfigManager", () => {
     ).rejects.toMatchObject({ category: "internal" });
     expect(aborts).toBe(1);
   });
+
+  it("fails closed and observes asynchronous publish and abort contract violations", async () => {
+    const sensitivePublish = "sensitive async publish failure";
+    const publishTransport = new FakeReleaseTransport(
+      makeRelease(1n, '{"hot":1,"restart":"a"}'),
+      1n,
+    );
+    const publishError = await startManagedConfig(
+      managedClient(publishTransport),
+      options(() => undefined),
+      () => ({
+        publish: (() => Promise.reject(new Error(sensitivePublish))) as unknown as () => undefined,
+      }),
+    ).catch((reason: unknown) => reason);
+    await Promise.resolve();
+    expect(publishError).toMatchObject({
+      message: expect.stringContaining("commit() threw; commit must be infallible"),
+    });
+    expect(String(publishError)).not.toContain(sensitivePublish);
+
+    const sensitiveAbort = "sensitive async abort failure";
+    const abortTransport = new FakeReleaseTransport(makeRelease(1n, '{"hot":2,"restart":"a"}'), 1n);
+    const abortError = await startManagedConfig(
+      managedClient(abortTransport),
+      options(() => undefined),
+      () => ({
+        publish: () => undefined,
+        abort: (() => Promise.reject(new Error(sensitiveAbort))) as unknown as () => undefined,
+        defaultDifferences: [{ path: "settings.hot", expected: 1, actual: 2 }],
+      }),
+    ).catch((reason: unknown) => reason);
+    await Promise.resolve();
+    expect(abortError).toMatchObject({ category: "internal" });
+    expect(String(abortError)).not.toContain(sensitiveAbort);
+  });
 });
 
 function options(onDefaultMismatch: (report: DefaultMismatchReport) => void) {

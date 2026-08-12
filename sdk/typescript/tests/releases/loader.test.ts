@@ -188,7 +188,10 @@ describe("ReleaseLoader", () => {
       expect(snapshot.secret("database")?.stringValue()).toBe("super-secret");
       expect(JSON.stringify(snapshot)).not.toContain("super-secret");
       return {
-        commit: () => committed.resolve(),
+        commit: () => {
+          committed.resolve();
+          return undefined;
+        },
         abort: () => {
           throw new Error("applied release must not be aborted");
         },
@@ -492,7 +495,10 @@ describe("ReleaseLoader", () => {
       sequentialPreparations += 1;
       activePreparations -= 1;
       return {
-        commit: () => secondCommitted.resolve(),
+        commit: () => {
+          secondCommitted.resolve();
+          return undefined;
+        },
         abort: () => undefined,
       };
     }, secondController.signal);
@@ -522,7 +528,13 @@ describe("ReleaseLoader", () => {
       if (snapshot.version === 2n) {
         throw new ClassifiedReleaseError("default_mismatch", "must never leave process");
       }
-      return { commit: () => firstCommitted.resolve(), abort: () => undefined };
+      return {
+        commit: () => {
+          firstCommitted.resolve();
+          return undefined;
+        },
+        abort: () => undefined,
+      };
     }, controller.signal);
 
     await firstCommitted.promise;
@@ -560,7 +572,13 @@ describe("ReleaseLoader", () => {
     });
     const run = loader.run(() => {
       preparations += 1;
-      return { commit: () => firstCommitted.resolve(), abort: () => undefined };
+      return {
+        commit: () => {
+          firstCommitted.resolve();
+          return undefined;
+        },
+        abort: () => undefined,
+      };
     }, controller.signal);
 
     await firstCommitted.promise;
@@ -623,6 +641,38 @@ describe("ReleaseLoader", () => {
     expect(String(error)).not.toContain("sensitive partial commit detail");
 
     expect(aborts).toBe(0);
+    expect(loader.status()).toMatchObject({
+      state: "rejected",
+      appliedVersion: 0n,
+      lastFailureCategory: "internal",
+    });
+    expect(loader.stats().rejected.internal).toBe(1n);
+    expect(acknowledgementStates(transport.stream)).not.toContain("applied");
+  });
+
+  it("fails closed and observes a Promise returned by commit", async () => {
+    const release = makeRelease(1n, [parameterEntry("value", "value", 1n, "one")]);
+    const transport = new FakeTransport(release);
+    transport.parameters.set("/prod/api/value", parameterResource("value", 1n, "one"));
+    const loader = ReleaseLoader._create(transport, {
+      namespace,
+      name: "runtime",
+      clientName: "unit-test",
+    });
+    const sensitiveFailure = "sensitive async commit failure";
+
+    const error = await loader
+      .run(() => ({
+        commit: (() => Promise.reject(new Error(sensitiveFailure))) as unknown as () => undefined,
+        abort: () => undefined,
+      }))
+      .catch((reason: unknown) => reason);
+    await Promise.resolve();
+
+    expect(error).toMatchObject({
+      message: expect.stringContaining("commit() must return undefined synchronously"),
+    });
+    expect(String(error)).not.toContain(sensitiveFailure);
     expect(loader.status()).toMatchObject({
       state: "rejected",
       appliedVersion: 0n,
@@ -714,6 +764,44 @@ describe("ReleaseLoader", () => {
     expect(loader.stats().rejected.internal).toBe(1n);
   });
 
+  it("fails closed and observes a Promise returned by abort", async () => {
+    const release1 = makeRelease(1n, [parameterEntry("value", "value", 1n, "one")]);
+    const release2 = makeRelease(2n, [parameterEntry("value", "value", 2n, "two")]);
+    const transport = new FakeTransport(release1, 1n);
+    transport.parameters.set("/prod/api/value", parameterResource("value", 1n, "one"));
+    let activeCalls = 0;
+    transport.getActiveReleaseHook = () => {
+      activeCalls += 1;
+      return Promise.resolve(
+        activeCalls === 1
+          ? transport.active
+          : { release: release2, activationRevision: 2n, previousVersion: 1n },
+      );
+    };
+    const loader = ReleaseLoader._create(transport, {
+      namespace,
+      name: "runtime",
+      clientName: "unit-test",
+    });
+    const sensitiveFailure = "sensitive async abort failure";
+
+    const error = await loader
+      .run(() => ({
+        commit: () => undefined,
+        abort: (() => Promise.reject(new Error(sensitiveFailure))) as unknown as () => undefined,
+      }))
+      .catch((reason: unknown) => reason);
+    await Promise.resolve();
+
+    expect(error).toMatchObject({
+      message: expect.stringContaining("abort() must return undefined synchronously"),
+    });
+    expect(String(error)).not.toContain(sensitiveFailure);
+    expect(loader.status().lastFailureCategory).toBe("internal");
+    expect(loader.stats().rejected.internal).toBe(1n);
+    expect(acknowledgementStates(transport.stream)).not.toContain("applied");
+  });
+
   it("runTypedRelease decodes before typed preparation and commits the result", async () => {
     const release = makeRelease(1n, [parameterEntry("value", "value", 1n, "41")]);
     const transport = new FakeTransport(release);
@@ -780,7 +868,13 @@ describe("ReleaseLoader", () => {
       maxConcurrentFetches: 3,
     });
     const run = loader.run(
-      () => ({ commit: () => committed.resolve(), abort: () => undefined }),
+      () => ({
+        commit: () => {
+          committed.resolve();
+          return undefined;
+        },
+        abort: () => undefined,
+      }),
       controller.signal,
     );
     await committed.promise;

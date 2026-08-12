@@ -287,8 +287,10 @@ export class ReleaseSnapshot extends ReleaseIdentity {
 
 /** Application-owned resources prepared before an atomic, infallible swap. */
 export interface PreparedRelease {
-  commit(): void;
-  abort(): void;
+  /** Must complete synchronously, return exactly undefined, and never throw. */
+  commit(): undefined;
+  /** Must complete synchronously, return exactly undefined, and never throw. */
+  abort(): undefined;
 }
 
 export type PrepareRelease = (

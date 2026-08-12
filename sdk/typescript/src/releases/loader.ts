@@ -436,8 +436,8 @@ export class ReleaseLoader {
       if (abortedPrepared) return undefined;
       abortedPrepared = true;
       try {
-        prepared.abort();
-        return undefined;
+        const returned: unknown = prepared.abort();
+        return synchronousCallbackError("PreparedRelease.abort()", returned);
       } catch {
         return new Error("PreparedRelease.abort() threw; abort must be infallible");
       }
@@ -478,7 +478,12 @@ export class ReleaseLoader {
     }
 
     try {
-      prepared.commit();
+      const returned: unknown = prepared.commit();
+      const contractError = synchronousCallbackError("PreparedRelease.commit()", returned);
+      if (contractError) {
+        this.#recordRejected("internal");
+        return { candidate, applied: false, category: "internal", fatal: contractError };
+      }
     } catch {
       const fatal = new Error("PreparedRelease.commit() threw; commit must be infallible");
       this.#recordRejected("internal");
@@ -940,6 +945,15 @@ function sameResourceRef(left: ResourceRef | undefined, right: ResourceRef | und
     left.namespace.app === right.namespace.app &&
     left.key === right.key
   );
+}
+
+function synchronousCallbackError(name: string, returned: unknown): Error | undefined {
+  if (returned === undefined) return undefined;
+  // A JavaScript consumer can evade the declaration contract. Attach a
+  // terminal observer before failing closed so a rejected Promise/thenable
+  // cannot become an unhandled process-level rejection.
+  void Promise.resolve(returned).catch(() => undefined);
+  return new Error(`${name} must return undefined synchronously`);
 }
 
 function sameQueuedCandidate(left: Candidate, right: Candidate): boolean {
