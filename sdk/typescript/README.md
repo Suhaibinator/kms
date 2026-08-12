@@ -292,6 +292,11 @@ with Next.js 16 and React 19; the older accepted peer majors are not yet an
 independent CI matrix. Generated protobuf modules are internal and are not a
 compatibility surface.
 
+The `next/client` hook targets modern browsers with native `bigint`, `fetch`,
+`AbortController`, and standard focus events. Its automated tests run in a DOM
+simulation; a cross-browser compatibility matrix is still a release
+qualification gap.
+
 The public exports follow semantic versioning. Before `1.0.0`, minor releases
 may still contain breaking API changes and will document them in the package
 changelog. See the repository's

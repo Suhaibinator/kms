@@ -21,6 +21,7 @@ delivery plan. `complete` means the behavior has an automated TypeScript test;
 | Public projection | `definePublicProjection`, `createPolicyPublisher` | Allowlist-only JSON, one captured snapshot, decimal revisions, stale result | `sdk/typescript/tests/publishing.test.ts` | complete |
 | Next.js adapter | `next/server`, `next/client` | Server-only ownership, safe Route Handler, refresh and stale recovery | `sdk/typescript/tests/next-server.test.ts`, `next-client.test.tsx` | complete |
 | Next.js/React peer majors | optional adapter peers | Intended Next.js 14–16 and React 18–19 compatibility | Next.js 16 / React 19 in `npm run test` | partial — older accepted peer majors need a compatibility matrix |
+| Browser hook compatibility | `next/client` | Native `bigint`, fetch/cancellation, focus/navigation refresh, stale recovery | `sdk/typescript/tests/next-client.test.tsx` (simulated DOM) | partial — real-browser matrix pending |
 | Managed strict decoding | `configstore` | Duplicate/unknown/missing/type/range checks; transactional decoding | `sdk/typescript/tests/configstore-codecs.test.ts` | complete |
 | Managed drift/restart policy | `startManagedConfig`, `ManagedConfigManager` | Startup drift, runtime restore, whole-candidate restart rejection | `sdk/typescript/tests/configstore-manager.test.ts` | complete |
 | TypeScript-native generation | `kms-config-gen-ts` | Stable binding/schema/contract output and check mode | `sdk/typescript/tests/configgen.test.ts` | planned |

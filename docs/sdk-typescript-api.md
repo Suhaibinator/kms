@@ -122,6 +122,11 @@ ETag, fences out-of-order responses, refreshes on mount/focus by default, and
 installs a validated `policy_changed` result through `applyServerResult`.
 It has no KMS credentials, secret types, or transport dependency.
 
+The client hook requires a modern browser with `bigint`, `fetch`,
+`AbortController`, and standard focus events. Current automated coverage uses
+a simulated DOM; it does not yet constitute a real-browser compatibility
+matrix.
+
 The complete compile-checked integration is in the
 [`next-serverful` example](../sdk/typescript/examples/next-serverful).
 
