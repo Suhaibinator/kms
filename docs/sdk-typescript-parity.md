@@ -6,7 +6,7 @@ delivery plan. `complete` means the behavior has an automated TypeScript test;
 
 | Go capability | TypeScript API/module | Required behavior | Test location | Status |
 |---|---|---|---|---|
-| Secure construction and close | `KmsClient`, `tlsFromFiles`, `mtlsFromFiles` | Fail-closed transport, TLS/mTLS, idempotent bounded cleanup | `sdk/typescript/tests/client.test.ts`, `transport.test.ts` | partial — real TLS/mTLS handshake coverage pending |
+| Secure construction and close | `KmsClient`, `tlsFromFiles`, `mtlsFromFiles` | Fail-closed transport, TLS/mTLS, idempotent bounded cleanup | `sdk/typescript/tests/client.test.ts`, `transport.test.ts`, `tls-integration.test.ts` | complete |
 | Namespace discovery and display paths | `KmsClient.whoAmI`, ref helpers | Lazy retryable discovery, cached unbound result, interior key slashes | `sdk/typescript/tests/refs.test.ts`, `client.test.ts` | complete |
 | Reads/writes and auth metadata | `get/put/list/delete` methods | Bearer and per-secret metadata, deadlines, exact `bigint` values | `sdk/typescript/tests/client.test.ts` | complete |
 | Typed errors | `KmsError` | Bounded status mapping without plaintext | `sdk/typescript/tests/errors.test.ts` | complete |
