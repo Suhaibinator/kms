@@ -152,6 +152,17 @@ describe("usePublicConfig", () => {
       expect(
         result.current.applyServerResult({
           status: "policy_changed",
+          current: wire("3", 7),
+        }),
+      ).toBe(false);
+    });
+    expect(result.current.revision).toBe(5n);
+    expect(result.current.config).toEqual({ minLength: 18 });
+
+    act(() => {
+      expect(
+        result.current.applyServerResult({
+          status: "policy_changed",
           current: { revision: "06", config: { minLength: 20 } },
         }),
       ).toBe(false);

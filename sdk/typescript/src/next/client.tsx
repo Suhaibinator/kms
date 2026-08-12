@@ -197,14 +197,15 @@ export function usePublicConfig<TConfig extends PublicJsonObject>(
         return false;
       }
 
+      if (!mountedRef.current || !installIfNewer(policyChanged)) {
+        return false;
+      }
+
       requestSequenceRef.current += 1;
       requestControllerRef.current?.abort();
       requestControllerRef.current = undefined;
-      if (mountedRef.current) {
-        setIsRefreshing(false);
-        installIfNewer(policyChanged);
-        setError(null);
-      }
+      setIsRefreshing(false);
+      setError(null);
       return true;
     },
     [installIfNewer, validateConfig],
