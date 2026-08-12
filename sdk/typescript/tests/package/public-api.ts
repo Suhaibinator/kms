@@ -14,6 +14,7 @@ import type {
   ReleaseTransport,
   // @ts-expect-error Release-loader transport internals are not part of the package root.
   ReleaseWatchStream,
+  ValueResolver,
 } from "@suhaibinator/kms";
 import {
   // @ts-expect-error Digest implementation helpers are not part of the package root.
@@ -91,6 +92,21 @@ export const internalClientHelpersArePrivate: Extract<
 > extends never
   ? true
   : false = true;
+
+export const internalValueResolverHooksArePrivate: Extract<
+  keyof ValueResolver,
+  | "_defaultAllowedForError"
+  | "_resolveRef"
+  | "_registerParameter"
+  | "_enqueueCallback"
+  | "_dispatch"
+  | "_log"
+> extends never
+  ? true
+  : false = true;
+
+export const publicStructuralResolverRemainsAvailable: Pick<ValueResolver, "resolveResourceRef"> =
+  {};
 
 export async function consumeConfiggenDeclarations(document: string): Promise<void> {
   const descriptor: ConfigDescriptor = parseDescriptor(document);
