@@ -163,8 +163,10 @@ const unwatch = await client.watch((event) => {
 unwatch();
 ```
 
-Callbacks run outside the stream-apply path. They should still remain small:
-synchronous CPU work blocks the Node.js event loop.
+Callbacks run outside the stream-apply path and settle serially behind a
+bounded queue. They should still remain small: synchronous CPU work blocks the
+Node.js event loop, while a never-settling promise makes later notifications
+fill and eventually be dropped from the queue without delaying state updates.
 
 ## Atomic configuration releases
 

@@ -60,8 +60,10 @@ source of truth for exact inference.
 `KmsClient` exposes the readonly properties `clientName`, `timeoutMs`,
 `fallbackToDefaultsOnError`, `logger`, `closed`, `currentRevision`, and
 `watchStatus`. The last is safe for health/metrics endpoints and returns a new
-immutable snapshot rather than a live mutable object. Its stable method
-families are:
+immutable snapshot rather than a live mutable object. Because
+`currentRevision` is a `bigint`, JSON endpoints must replace it with
+`formatRevision(status.currentRevision)` before serialization. Its stable
+method families are:
 
 | Methods | Result and contract |
 |---|---|
@@ -123,7 +125,7 @@ families are:
 
 | Export | Kind and signature family | Purpose |
 |---|---|---|
-| `ReleaseLoader`, `ClientReleaseLoaderOptions` | Class and type | Single-run exact-version release lifecycle; inspect `instanceId`, `status()`/`stats()`, request `stop()`, and await `run(prepare, signal?)`. |
+| `ReleaseLoader`, `ClientReleaseLoaderOptions` | Class and type | One-concurrent-run exact-version release lifecycle; inspect `instanceId`, `status()`/`stats()`, request `stop()`, and await `run(prepare, signal?)`. Sequential runs are permitted, matching Go. |
 | `runTypedRelease(loader, decode, prepare, signal?)` | Generic function | Split fallible snapshot decoding from application resource preparation without weakening atomic commit. |
 | `PreparedRelease`, `PrepareRelease` | Types | Candidate callback contract: synchronous infallible `commit`, infallible `abort` called at most once, and cooperative `AbortSignal`. |
 | `SecretTokenProvider`, `ValidateReleaseManifest` | Callback types | Fetch per-entry secret authorization locally and reject a manifest before resource resolution. |
@@ -219,7 +221,7 @@ An unavailable source returns `unavailable`.
 | `createPublicConfigGET(provider, options?)`, `PublicConfigGET`, `PublicConfigProvider` | Function and types | Adapt a safe public-config provider to a Node Route Handler. |
 | `PublicConfigCachePolicy`, `PublicConfigRouteOptions` | Types | Select `no-store` or bounded private-only browser caching. |
 | `PublicConfigRouteEvent`, `PublicConfigRouteObserver` | Types | Frozen, value-free `served`, `not_modified`, or `unavailable` HTTP event with observation time/duration and a decimal revision where available. Throwing/async-rejecting observers are isolated. |
-| `ProcessShutdownOptions` | Type | Select process signals, an isolated cleanup-error callback, and whether the adapter re-sends the signal after cleanup. |
+| `ProcessShutdownOptions` | Type | Select catchable process signals and an isolated cleanup-error callback. Uncatchable signals are rejected before any listener is installed. |
 | `DecimalRevision` | Re-exported type | Canonical decimal `uint64` used at this HTTP boundary. |
 
 The returned `NextKms` operations are `start`, `close`, `readPolicy`,
@@ -227,9 +229,10 @@ The returned `NextKms` operations are `start`, `close`, `readPolicy`,
 `installProcessShutdown`. Reads start lazily; concurrent starts share one
 attempt, a failed attempt may retry, and concurrent closes share permanent
 cleanup. `installProcessShutdown` returns a listener uninstaller and, by
-default, re-sends the received signal after cleanup so Node's normal signal
-termination is preserved. Set `terminateProcess: false` only when the
-application or process supervisor explicitly owns termination.
+design, performs cleanup only. Installing a Node signal listener suppresses
+Node's default handling, so the application or process supervisor must own its
+termination policy; the adapter neither calls `process.exit()` nor re-sends a
+signal whose behavior could be changed by other application listeners.
 
 ### Client entry point
 
@@ -251,8 +254,8 @@ initializer, projection, and validator and returns:
   serializable Server Component prop;
 - `validateAtRevision()` for authoritative Server Action/Route validation;
 - `createPublicConfigGET()` for an ETag-aware App Router Route Handler; and
-- `installProcessShutdown()` for SIGINT/SIGTERM cleanup followed by normal
-  signal termination, with an explicit application-owned opt-out.
+- `installProcessShutdown()` for cleanup-only SIGINT/SIGTERM hooks; the
+  application or supervisor remains responsible for termination.
 
 The Route Handler defaults to `Cache-Control: no-store`. The only alternative
 is bounded private browser caching; it never emits shared/CDN caching.
@@ -385,9 +388,10 @@ slashes are preserved.
   earlier deadline. Long-lived streams do not inherit that unary deadline.
 - One client owns one shared parameter watch stream over an add-only union of
   namespaces. Callbacks never delay applying state.
-- A release loader permits one run, bounds exact-version fetch concurrency,
-  keeps at most one preparation and one replace-latest candidate, and preserves
-  the last known good snapshot after the first commit.
+- A release loader permits one concurrent run (and sequential reuse), bounds
+  exact-version fetch concurrency, keeps at most one preparation and one
+  replace-latest candidate, and preserves the last known good snapshot after
+  the first commit.
 - Next.js initialization coalesces concurrent starts, owns one process-local
   client/loader, and closes loader work before the client transport.
 
@@ -440,7 +444,10 @@ line.
 - Declarative resolution walks own object properties and arrays with cycle
   detection. It does not traverse `Map`, weak collections, accessors, or class
   internals. Explicit initialization remains available for dynamic shapes.
-- Synchronous CPU-bound callbacks can block the Node event loop. The SDK does
-  not await callbacks or callback promises and catches callback failures.
+- Synchronous CPU-bound callbacks can block the Node event loop. The SDK
+  serializes callback settlements behind a bounded queue, catches callback
+  failures, and never blocks stream state application; a never-settling
+  application callback causes later notifications to fill and then be dropped
+  from that bounded queue.
 - Public snapshots use frozen copies and read-only maps rather than Go value
   copies. Every secret accessor still returns an independent `Secret`.

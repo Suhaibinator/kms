@@ -38,8 +38,17 @@ a minor release may contain documented breaking changes.
 - Expanded watch scopes retry a full snapshot until it arrives, preserve
   per-key revision fences, and immediately invalidate newly watched secret
   caches; disposal cannot race a late parameter subscription.
-- Next process shutdown hooks re-send the triggering signal after cleanup so
-  installing the hook cannot accidentally suppress normal process exit.
+- Authoritative snapshots and explicit tombstones invalidate ordinary
+  parameter-cache reads; expanded scopes also interrupt reconnect backoff.
+- Callback promises settle serially behind the bounded dispatcher, and
+  unsubscribe/dispose fences notifications that were already queued.
+- Release and managed-config identities reject non-`bigint` or out-of-range
+  protocol integers at runtime.
+- Publisher observers receive an outcome only after the corresponding public
+  result is safely constructed.
+- Next process signal hooks are explicitly cleanup-only, reject uncatchable
+  signals before installation, and leave termination policy to the owning
+  application or supervisor.
 
 ### Compatibility notes
 
