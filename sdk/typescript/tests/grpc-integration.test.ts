@@ -139,6 +139,10 @@ describe("protocol-faithful gRPC integration", () => {
         watchRegistrations.push(request);
         const streamNumber = watchRegistrations.length;
         if (streamNumber === 1) {
+          call.write({
+            event: { $case: "snapshot", value: { parameters: [] } },
+            revision: 0n,
+          });
           call.write(parameterChange("stream-one", 5n));
           call.write({
             event: { $case: "heartbeat", value: { serverTimeUnixMs: 1n } },
