@@ -1,5 +1,7 @@
 import "server-only";
 
+import { constants as osConstants } from "node:os";
+
 import {
   type AuthoritativeValidator,
   createPolicyPublisher,
@@ -87,12 +89,6 @@ export interface ProcessShutdownOptions {
   readonly signals?: readonly NodeJS.Signals[];
   /** Receives lifecycle errors; the adapter never serializes or logs them. */
   readonly onError?: (error: unknown) => void;
-  /**
-   * Re-send the received signal after cleanup so the process retains normal
-   * signal termination. Defaults to true. Set false only when the application
-   * or process supervisor explicitly owns termination.
-   */
-  readonly terminateProcess?: boolean;
 }
 
 export interface NextKms<
@@ -122,7 +118,7 @@ export interface NextKms<
   /** Creates a Next-compatible public configuration GET Route Handler. */
   createPublicConfigGET(options?: PublicConfigRouteOptions): PublicConfigGET;
 
-  /** Installs graceful SIGINT/SIGTERM cleanup and returns an uninstaller. */
+  /** Installs cleanup-only SIGINT/SIGTERM hooks and returns an uninstaller. */
   installProcessShutdown(options?: ProcessShutdownOptions): () => void;
 }
 
@@ -297,6 +293,7 @@ export function createNextKms<
       }
       const signals = shutdownOptions.signals ?? ["SIGINT", "SIGTERM"];
       const uniqueSignals = [...new Set(signals)];
+      for (const signal of uniqueSignals) assertInstallableSignal(signal);
       let installed = true;
       let shutdownStarted = false;
 
@@ -304,7 +301,7 @@ export function createNextKms<
         try {
           shutdownOptions.onError?.(error);
         } catch {
-          // A lifecycle observer must not prevent cleanup or termination.
+          // A lifecycle observer must not interfere with cleanup.
         }
       };
 
@@ -313,18 +310,8 @@ export function createNextKms<
           if (shutdownStarted) return;
           shutdownStarted = true;
           uninstall();
-          void close()
-            .catch(reportError)
-            .finally(() => {
-              if (shutdownOptions.terminateProcess === false) return;
-              try {
-                process.kill(process.pid, signal);
-              } catch (error) {
-                reportError(error);
-              }
-            });
+          void close().catch(reportError);
         };
-        process.once(signal, handler);
         return [signal, handler] as const;
       });
 
@@ -338,12 +325,28 @@ export function createNextKms<
         }
         shutdownUninstallers.delete(uninstall);
       };
+      try {
+        for (const [signal, handler] of handlers) process.once(signal, handler);
+      } catch (error) {
+        uninstall();
+        throw error;
+      }
       shutdownUninstallers.add(uninstall);
       return uninstall;
     },
   };
 
   return Object.freeze(adapter);
+}
+
+const INSTALLABLE_SIGNALS = new Set(
+  Object.keys(osConstants.signals).filter((signal) => signal !== "SIGKILL" && signal !== "SIGSTOP"),
+);
+
+function assertInstallableSignal(signal: unknown): asserts signal is NodeJS.Signals {
+  if (typeof signal !== "string" || !INSTALLABLE_SIGNALS.has(signal)) {
+    throw new TypeError(`process signal ${JSON.stringify(signal)} cannot install a cleanup hook`);
+  }
 }
 
 /** Creates a Next Route Handler from an adapter or another safe provider. */

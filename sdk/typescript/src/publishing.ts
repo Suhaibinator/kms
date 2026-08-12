@@ -381,15 +381,16 @@ export function createPolicyPublisher<
       }
 
       if (!revisionEquals(clientRevision, snapshot.revision)) {
+        const result = Object.freeze({
+          status: "policy_changed" as const,
+          current: toWire(projectSnapshot(snapshot)),
+        });
         observe({
           type: "policy_revision_rejected",
           currentRevision: formatRevision(snapshot.revision),
           observedAtUnixMs: Date.now(),
         });
-        return Object.freeze({
-          status: "policy_changed",
-          current: toWire(projectSnapshot(snapshot)),
-        });
+        return result;
       }
 
       const decision = options.validate(snapshot.value, input);
@@ -398,25 +399,26 @@ export function createPolicyPublisher<
       }
       const revision = formatRevision(snapshot.revision);
       if (decision.valid) {
+        const result = Object.freeze({ status: "success" as const, revision });
         observe({
           type: "policy_validation_succeeded",
           revision,
           observedAtUnixMs: Date.now(),
         });
-        return Object.freeze({ status: "success", revision });
+        return result;
       }
 
+      const result = Object.freeze({
+        status: "validation_failed" as const,
+        revision,
+        errors: freezePublicJson(decision.errors) as TValidationErrors,
+      });
       observe({
         type: "policy_validation_failed",
         revision,
         observedAtUnixMs: Date.now(),
       });
-
-      return Object.freeze({
-        status: "validation_failed",
-        revision,
-        errors: freezePublicJson(decision.errors) as TValidationErrors,
-      });
+      return result;
     },
   });
 }

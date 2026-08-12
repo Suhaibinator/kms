@@ -126,7 +126,7 @@ describe("Next.js server adapter", () => {
     expect(process.listenerCount("SIGTERM")).toBe(baseline);
   });
 
-  it("cleans up and restores normal signal termination by default", async () => {
+  it("installs cleanup-only hooks and leaves termination to the application", async () => {
     const signal = "SIGUSR2";
     const baseline = process.listenerCount(signal);
     let closes = 0;
@@ -149,14 +149,14 @@ describe("Next.js server adapter", () => {
     expect(handler).toBeTypeOf("function");
 
     handler?.(signal);
-    await vi.waitFor(() => expect(kill).toHaveBeenCalledWith(process.pid, signal));
+    await vi.waitFor(() => expect(closes).toBe(1));
 
-    expect(closes).toBe(1);
+    expect(kill).not.toHaveBeenCalled();
     expect(process.listenerCount(signal)).toBe(baseline);
     kill.mockRestore();
   });
 
-  it("supports application-owned termination and isolates error observers", async () => {
+  it("isolates cleanup-error observers", async () => {
     const signal = "SIGUSR2";
     const baseline = process.listenerCount(signal);
     const reported: unknown[] = [];
@@ -176,7 +176,6 @@ describe("Next.js server adapter", () => {
     const kill = vi.spyOn(process, "kill").mockReturnValue(true);
     adapter.installProcessShutdown({
       signals: [signal],
-      terminateProcess: false,
       onError: (error) => {
         reported.push(error);
         throw new Error("observer failure");
@@ -189,6 +188,25 @@ describe("Next.js server adapter", () => {
     expect(kill).not.toHaveBeenCalled();
     expect(process.listenerCount(signal)).toBe(baseline);
     kill.mockRestore();
+  });
+
+  it("rejects uncatchable signals without partially installing listeners", async () => {
+    const baseline = process.listenerCount("SIGTERM");
+    const adapter = createNextKms<Policy, PublicPolicy, string, readonly string[]>({
+      initialize: () => ({
+        source: {
+          current: () => ({ revision: 1n, value: { minLength: 8, privateValue: "hidden" } }),
+        },
+      }),
+      projection,
+      validate: () => ({ valid: true }),
+    });
+
+    expect(() => adapter.installProcessShutdown({ signals: ["SIGTERM", "SIGKILL"] })).toThrow(
+      /cannot install/,
+    );
+    expect(process.listenerCount("SIGTERM")).toBe(baseline);
+    await adapter.close();
   });
 
   it("emits exact 200, weak/list 304, and redacted 503 contracts", async () => {

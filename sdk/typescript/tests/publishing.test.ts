@@ -156,4 +156,32 @@ describe("public configuration publishing", () => {
       expect(event).not.toHaveProperty("error");
     }
   });
+
+  it("does not emit an outcome before its public result is constructible", () => {
+    const staleEvents: unknown[] = [];
+    const stale = createPolicyPublisher({
+      source: { current: () => ({ revision: 2n, value: { minimum: 8 } }) },
+      projection: definePublicProjection<{ minimum: number }>()({
+        minimum: () => {
+          throw new Error("projection failed");
+        },
+      }),
+      validate: () => ({ valid: true as const }),
+      onEvent: (event) => staleEvents.push(event),
+    });
+    expect(() => stale.validate("1", undefined)).toThrow("projection failed");
+    expect(staleEvents).toEqual([]);
+
+    const validationEvents: unknown[] = [];
+    const invalidErrors = createPolicyPublisher({
+      source: { current: () => ({ revision: 2n, value: { minimum: 8 } }) },
+      projection: definePublicProjection<{ minimum: number }>()({
+        minimum: (policy) => policy.minimum,
+      }),
+      validate: () => ({ valid: false as const, errors: 1n as never }),
+      onEvent: (event) => validationEvents.push(event),
+    });
+    expect(() => invalidErrors.validate("2", undefined)).toThrow(/public JSON/);
+    expect(validationEvents).toEqual([]);
+  });
 });
