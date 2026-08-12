@@ -27,6 +27,7 @@ delivery plan. `complete` means the behavior has an automated TypeScript test;
 | Generated protobuf contract | `src/generated/kms.ts` | Complete service/messages, `uint64` as `bigint`, stale generation check | `npm run check:generated` | complete |
 | Published entry points and examples | package root, `next/server`, `next/client`, `configstore` | Declaration build plus compile-checked consumer and serverful Next.js examples | `sdk/typescript/tests/types`, `npm run build` | complete |
 | Supported Node majors | package release gate | Typecheck, lint, tests, consumer types, and build on Node 22 and 26 | `.github/workflows/ci.yml` | complete |
+| TypeScript compiler compatibility | published declarations | TypeScript 5.2+ syntax; pinned compiler release gate | `npm run test:types`, `npm run test:package` | partial — minimum compiler matrix pending |
 | Real-server interoperability | core transport, watches, releases | TLS/mTLS, auth, unary methods, bidi recovery, and releases against a protocol-faithful KMS server | not implemented | planned |
 
 Intentional differences are documented in

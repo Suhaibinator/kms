@@ -6,10 +6,12 @@ and writes, declarative values, shared hot-reload watches, safe secret wrappers,
 atomic release loading, public-policy publishing primitives, and an optional
 serverful Next.js adapter.
 
-The SDK requires Node.js 22 or newer and is ESM-only. The KMS transport is
-server-only: never import the package root from browser code. The only browser
-entry point is `@suhaibinator/kms/next/client`, which consumes an explicitly
-allowlisted public HTTP projection and never connects to KMS.
+The SDK requires Node.js 22 or newer and is ESM-only. Its declarations use
+TypeScript features available in TypeScript 5.2 and newer; the repository
+release gate currently runs the pinned TypeScript 7 compiler. The KMS transport
+is server-only: never import the package root from browser code. The only
+browser entry point is `@suhaibinator/kms/next/client`, which consumes an
+explicitly allowlisted public HTTP projection and never connects to KMS.
 
 ## Installation
 
