@@ -143,4 +143,28 @@ describe("KmsClient", () => {
     ).resolves.toEqual({ version: 7n, revision: 10n, accessToken: "only-once" });
     await client.close();
   });
+
+  it("rejects out-of-range protobuf integers before making an RPC", async () => {
+    const transport = new FakeTransport(() => {
+      throw new Error("unexpected RPC");
+    });
+    const client = new KmsClient({ transport, namespace: "prod/api" });
+    const uint64Overflow = 1n << 64n;
+    const int64Overflow = 1n << 63n;
+
+    await expect(client.setSecretEnabled("secret", false, { version: -1n })).rejects.toThrow(
+      ConfigError,
+    );
+    await expect(client.destroySecretVersion("secret", uint64Overflow)).rejects.toThrow(
+      ConfigError,
+    );
+    await expect(client.promoteSecretVersion("secret", 0n)).rejects.toThrow(ConfigError);
+    await expect(
+      client.putSecret("secret", "value", { expiresAtUnixMs: int64Overflow }),
+    ).rejects.toThrow(ConfigError);
+    await expect(client.putSecret("secret", 42 as never)).rejects.toThrow(ConfigError);
+
+    expect(transport.calls).toHaveLength(0);
+    await client.close();
+  });
 });

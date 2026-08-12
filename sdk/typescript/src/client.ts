@@ -30,6 +30,7 @@ import {
   parseNamespace,
   type ResourceRef,
   resolveRef,
+  UINT64_MAX,
   type VersionRef,
 } from "./refs.js";
 import {
@@ -57,6 +58,7 @@ import {
 
 const DEFAULT_TIMEOUT_MS = 5_000;
 const CALLBACK_QUEUE_SIZE = 1_024;
+const INT64_MAX = (1n << 63n) - 1n;
 
 export interface Logger {
   warn(message: string): void;
@@ -314,10 +316,19 @@ export class KmsClient {
     value: Uint8Array | string,
     options: PutSecretOptions = {},
   ): Promise<PutSecretResult> {
+    if (typeof value !== "string" && !(value instanceof Uint8Array)) {
+      throw new ConfigError("secret value must be a string or Uint8Array");
+    }
+    const expiresAtUnixMs = options.expiresAtUnixMs ?? 0n;
+    if (
+      typeof expiresAtUnixMs !== "bigint" ||
+      expiresAtUnixMs < 0n ||
+      expiresAtUnixMs > INT64_MAX
+    ) {
+      throw new ConfigError("expiresAtUnixMs must be a bigint in the non-negative int64 range");
+    }
     const ref = await this.resolveResourceRef(key, options.signal);
     const plaintext = typeof value === "string" ? Buffer.from(value) : Buffer.from(value);
-    const expiresAtUnixMs = options.expiresAtUnixMs ?? 0n;
-    if (expiresAtUnixMs < 0n) throw new ConfigError("expiresAtUnixMs must not be negative");
     try {
       const response = await this.#transport.unary(
         SecretServiceService.putSecret,
@@ -481,6 +492,7 @@ export class KmsClient {
     enabled: boolean,
     options: CallOptions & { readonly version?: bigint; readonly secretToken?: string } = {},
   ): Promise<bigint> {
+    assertUint64(options.version ?? 0n, "version");
     const ref = await this.resolveResourceRef(key, options.signal);
     const response = await this.#secretMutation(
       ref,
@@ -497,8 +509,7 @@ export class KmsClient {
     version: bigint,
     options: CallOptions & { readonly secretToken?: string } = {},
   ): Promise<bigint> {
-    if (version <= 0n)
-      throw new ConfigError("destroySecretVersion requires a positive bigint version");
+    assertUint64(version, "destroySecretVersion version", true);
     const ref = await this.resolveResourceRef(key, options.signal);
     const response = await this.#secretMutation(
       ref,
@@ -519,8 +530,7 @@ export class KmsClient {
     readonly previousVersion: bigint;
     readonly revision: bigint;
   }> {
-    if (version <= 0n)
-      throw new ConfigError("promoteSecretVersion requires a positive bigint version");
+    assertUint64(version, "promoteSecretVersion version", true);
     const ref = await this.resolveResourceRef(key, options.signal);
     const response = await this.#secretMutation(
       ref,
@@ -776,6 +786,14 @@ function validPageSize(value = 0): number {
     throw new ConfigError("pageSize must be an integer from 0 through 1000");
   }
   return value;
+}
+
+function assertUint64(value: bigint, name: string, positive = false): void {
+  if (typeof value !== "bigint" || value < (positive ? 1n : 0n) || value > UINT64_MAX) {
+    throw new ConfigError(
+      `${name} must be a ${positive ? "positive " : ""}bigint in the uint64 range`,
+    );
+  }
 }
 
 export function toWireNamespace(namespace: NamespaceRef): { env: string; app: string } {
