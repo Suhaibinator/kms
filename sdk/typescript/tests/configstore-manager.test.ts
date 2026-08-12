@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import type { ClientReleaseLoaderOptions } from "../src/client.js";
 import { codecs, decodeGroup, field, group } from "../src/configstore/codecs.js";
 import {
   type CandidateRejectionReport,
@@ -18,10 +19,11 @@ import {
   type WatchReleaseRequest,
 } from "../src/generated/kms.js";
 import { deterministicReleaseDigest, sha256Hex } from "../src/releases/digest.js";
-import type {
-  FetchedSecret,
-  ReleaseTransport,
-  ReleaseWatchStream,
+import {
+  type FetchedSecret,
+  ReleaseLoader,
+  type ReleaseTransport,
+  type ReleaseWatchStream,
 } from "../src/releases/loader.js";
 
 const namespace: NamespaceRef = { env: "prod", app: "api" };
@@ -37,6 +39,36 @@ const runtimeCodec = group<RuntimeConfig>([
 ]);
 
 describe("ManagedConfigManager", () => {
+  it("creates its loader through the public KmsClient-compatible bridge", async () => {
+    const release = makeRelease(1n, '{"hot":1,"restart":"a"}');
+    const transport = new FakeReleaseTransport(release, 1n);
+    let receivedOptions: ClientReleaseLoaderOptions | undefined;
+    const client = {
+      createReleaseLoader(options: ClientReleaseLoaderOptions): Promise<ReleaseLoader> {
+        receivedOptions = options;
+        return managedClient(transport).createReleaseLoader(options);
+      },
+    };
+    const controller = new AbortController();
+    const manager = await startManagedConfig(
+      client,
+      {
+        release: "runtime",
+        instanceId: "stable-test-instance",
+        contract: [{ alias: "settings", kind: "parameter", contentType: "json" }],
+        onDefaultMismatch: () => undefined,
+      },
+      () => ({ publish: () => undefined }),
+      controller.signal,
+    );
+
+    expect(receivedOptions).toMatchObject({ name: "runtime" });
+    expect(receivedOptions).not.toHaveProperty("namespace");
+    expect(receivedOptions).not.toHaveProperty("clientName");
+    controller.abort();
+    await manager.wait();
+  });
+
   it("returns a typed fatal startup mismatch and never publishes", async () => {
     const release = makeRelease(1n, '{"hot":2,"restart":"a"}');
     const transport = new FakeReleaseTransport(release, 1n);
@@ -45,7 +77,7 @@ describe("ManagedConfigManager", () => {
     const reports: DefaultMismatchReport[] = [];
 
     const start = startManagedConfig(
-      transport,
+      managedClient(transport),
       options((report) => reports.push(report)),
       (snapshot) => {
         const config = decodeGroup(snapshot.parameter("settings")?.value() ?? "", runtimeCodec);
@@ -80,7 +112,7 @@ describe("ManagedConfigManager", () => {
     let aborts = 0;
 
     const manager = await startManagedConfig(
-      transport,
+      managedClient(transport),
       {
         ...options((report) => mismatchReports.push(report)),
         allowDefaultMismatch: true,
@@ -156,7 +188,7 @@ describe("ManagedConfigManager", () => {
 
     await expect(
       startManagedConfig(
-        transport,
+        managedClient(transport),
         {
           ...options(() => undefined),
           onCandidateRejected: (report) => reports.push(report),
@@ -179,7 +211,7 @@ describe("ManagedConfigManager", () => {
 
     await expect(
       startManagedConfig(
-        transport,
+        managedClient(transport),
         {
           ...options(() => {
             callbacks += 1;
@@ -206,12 +238,30 @@ describe("ManagedConfigManager", () => {
 
 function options(onDefaultMismatch: (report: DefaultMismatchReport) => void) {
   return {
-    namespace,
-    name: "runtime",
+    namespace: "prod/api",
+    release: "runtime",
     clientName: "configstore-test",
     instanceId: "stable-test-instance",
     contract: [{ alias: "settings", kind: "parameter" as const, contentType: "json" }],
     onDefaultMismatch,
+  };
+}
+
+function managedClient(transport: FakeReleaseTransport) {
+  return {
+    createReleaseLoader(options: ClientReleaseLoaderOptions): Promise<ReleaseLoader> {
+      const selectedNamespace = options.namespace?.split("/");
+      return Promise.resolve(
+        new ReleaseLoader(transport, {
+          ...options,
+          namespace: {
+            env: selectedNamespace?.[0] ?? namespace.env,
+            app: selectedNamespace?.[1] ?? namespace.app,
+          },
+          clientName: options.clientName ?? "configstore-test",
+        }),
+      );
+    },
   };
 }
 

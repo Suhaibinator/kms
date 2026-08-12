@@ -1,8 +1,5 @@
-import {
-  ReleaseLoader,
-  type ReleaseLoaderOptions,
-  type ReleaseTransport,
-} from "../releases/loader.js";
+import type { ClientReleaseLoaderOptions } from "../client.js";
+import type { ReleaseLoader, ReleaseLoaderOptions } from "../releases/loader.js";
 import type {
   PreparedRelease,
   ReleaseLoaderStatus,
@@ -37,13 +34,28 @@ export type PrepareManagedCandidate = (
   signal: AbortSignal,
 ) => ManagedPreparedCandidate | Promise<ManagedPreparedCandidate>;
 
-export interface ManagedConfigOptions extends Omit<ReleaseLoaderOptions, "validateManifest"> {
+export interface ManagedConfigOptions
+  extends Omit<
+    ClientReleaseLoaderOptions,
+    "name" | "namespace" | "clientName" | "validateManifest"
+  > {
+  /** Release name within the client's home or explicitly selected namespace. */
+  readonly release: string;
+  /** Optional env/app override. Omit to use the KmsClient home namespace. */
+  readonly namespace?: string;
+  /** Optional acknowledgement identity override. */
+  readonly clientName?: string;
   readonly contract: readonly ContractEntry[];
   readonly allowDefaultMismatch?: boolean;
   /** Mandatory: default drift must never become silent. Must be synchronous. */
   readonly onDefaultMismatch: (report: DefaultMismatchReport) => void;
   /** Optional, value-free local diagnostics. Callback failures are isolated. */
   readonly onCandidateRejected?: (report: CandidateRejectionReport) => void;
+}
+
+/** Structural KmsClient subset; transport internals remain private. */
+export interface ManagedReleaseClient {
+  createReleaseLoader(options: ClientReleaseLoaderOptions): Promise<ReleaseLoader>;
 }
 
 export interface ManagedConfigStatus {
@@ -337,17 +349,21 @@ export class ManagedConfigManager {
  * the initial complete candidate has been atomically published.
  */
 export async function startManagedConfig(
-  transport: ReleaseTransport,
+  client: ManagedReleaseClient,
   options: ManagedConfigOptions,
   prepare: PrepareManagedCandidate,
   signal?: AbortSignal,
 ): Promise<ManagedConfigManager> {
-  if (!transport) throw new TypeError("configstore: release transport is required");
+  if (!client || typeof client.createReleaseLoader !== "function") {
+    throw new TypeError("configstore: KmsClient-compatible release client is required");
+  }
   if (typeof prepare !== "function")
     throw new TypeError("configstore: prepare callback is required");
   if (typeof options?.onDefaultMismatch !== "function") {
     throw new TypeError("configstore: onDefaultMismatch callback is required");
   }
+  const release = options.release?.trim();
+  if (!release) throw new TypeError("configstore: release is required");
   const contract = validateContract(options.contract);
   let manager: ManagedConfigManager | undefined;
   const baseManifestValidator = createManifestValidator(contract);
@@ -363,11 +379,13 @@ export async function startManagedConfig(
       throw error;
     }
   };
-  const loader = new ReleaseLoader(transport, copyLoaderOptions(options, validateManifest));
+  const loader = await client.createReleaseLoader(
+    copyLoaderOptions(options, release, validateManifest),
+  );
   manager = new ManagedConfigManager(
     loader,
     {
-      name: options.name.trim(),
+      name: release,
       allowDefaultMismatch: options.allowDefaultMismatch ?? false,
       onDefaultMismatch: options.onDefaultMismatch,
       ...(options.onCandidateRejected ? { onCandidateRejected: options.onCandidateRejected } : {}),
@@ -381,12 +399,13 @@ export async function startManagedConfig(
 
 function copyLoaderOptions(
   options: ManagedConfigOptions,
+  release: string,
   validateManifest: NonNullable<ReleaseLoaderOptions["validateManifest"]>,
-): ReleaseLoaderOptions {
+): ClientReleaseLoaderOptions {
   return {
-    namespace: { ...options.namespace },
-    name: options.name,
-    clientName: options.clientName,
+    name: release,
+    ...(options.namespace ? { namespace: options.namespace } : {}),
+    ...(options.clientName ? { clientName: options.clientName } : {}),
     ...(options.instanceId ? { instanceId: options.instanceId } : {}),
     ...(options.reconcileIntervalMs !== undefined
       ? { reconcileIntervalMs: options.reconcileIntervalMs }

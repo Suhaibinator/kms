@@ -38,6 +38,7 @@ export {
   type ManagedConfigStats,
   type ManagedConfigStatus,
   type ManagedPreparedCandidate,
+  type ManagedReleaseClient,
   type PrepareManagedCandidate,
   startManagedConfig,
 } from "./manager.js";
