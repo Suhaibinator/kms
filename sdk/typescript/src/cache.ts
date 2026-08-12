@@ -26,6 +26,23 @@ interface CacheEntry<T> {
 
 type EntryMap<T> = Map<string, Map<string, CacheEntry<T>>>;
 
+type CacheKind = "parameter" | "secret";
+
+interface GenerationState {
+  epoch: object;
+  readers: number;
+}
+
+interface ReadGeneration {
+  readonly kind: CacheKind;
+  readonly path: string;
+  readonly state: GenerationState;
+  readonly epoch: object;
+  released: boolean;
+}
+
+type GenerationMap = Map<string, GenerationState>;
+
 function selectorKey(selector: VersionRef): string {
   const { version, label } = normalizeVersionRef(selector);
   return `${version}\0${label}`;
@@ -49,6 +66,8 @@ export class ReadCache {
   readonly #now: () => number;
   readonly #parameters: EntryMap<string> = new Map();
   readonly #secrets: EntryMap<Secret> = new Map();
+  readonly #parameterGenerations: GenerationMap = new Map();
+  readonly #secretGenerations: GenerationMap = new Map();
   #parameterCount = 0;
   #secretCount = 0;
 
@@ -95,6 +114,23 @@ export class ReadCache {
     this.setParameter(path, value, positionalSelector(version, label));
   }
 
+  /** Capture the invalidation generation before starting a parameter RPC. */
+  beginParameterRead(path: string): ReadGeneration | undefined {
+    return this.#beginRead(this.#parameterGenerations, "parameter", path);
+  }
+
+  /** Populate the parameter cache only when no invalidation raced the RPC. */
+  cacheParameterIfUnchanged(
+    generation: ReadGeneration,
+    version: bigint,
+    label: string,
+    value: string,
+  ): boolean {
+    if (!this.#isCurrent(this.#parameterGenerations, generation, "parameter")) return false;
+    this.putParam(generation.path, version, label, value);
+    return true;
+  }
+
   getSecret(path: string, selector: VersionRef = {}): Secret | undefined {
     return this.#get(this.#secrets, path, selector, "secret")?.clone();
   }
@@ -114,7 +150,37 @@ export class ReadCache {
     this.setSecret(path, secret, positionalSelector(version, label));
   }
 
+  /** Capture the invalidation generation before starting a secret RPC. */
+  beginSecretRead(path: string): ReadGeneration | undefined {
+    return this.#beginRead(this.#secretGenerations, "secret", path);
+  }
+
+  /** Populate the secret cache only when no invalidation raced the RPC. */
+  cacheSecretIfUnchanged(
+    generation: ReadGeneration,
+    version: bigint,
+    label: string,
+    secret: Secret,
+  ): boolean {
+    if (!this.#isCurrent(this.#secretGenerations, generation, "secret")) return false;
+    this.putSecret(generation.path, version, label, secret);
+    return true;
+  }
+
+  /** Release a read generation after its RPC settles, whether or not it cached. */
+  endRead(generation: ReadGeneration | undefined): void {
+    if (generation === undefined || generation.released) return;
+    generation.released = true;
+    generation.state.readers--;
+    const generations =
+      generation.kind === "parameter" ? this.#parameterGenerations : this.#secretGenerations;
+    if (generation.state.readers === 0 && generations.get(generation.path) === generation.state) {
+      generations.delete(generation.path);
+    }
+  }
+
   invalidateParameter(path: string): void {
+    this.#invalidateGeneration(this.#parameterGenerations, path);
     const entries = this.#parameters.get(path);
     if (entries === undefined) return;
     this.#parameterCount -= entries.size;
@@ -129,12 +195,14 @@ export class ReadCache {
   invalidateParametersInNamespaces(namespaces: Iterable<NamespaceRef | string>): void {
     this.#parameterCount = this.#invalidateNamespaces(
       this.#parameters,
+      this.#parameterGenerations,
       this.#parameterCount,
       namespaces,
     );
   }
 
   invalidateSecret(path: string): void {
+    this.#invalidateGeneration(this.#secretGenerations, path);
     const entries = this.#secrets.get(path);
     if (entries === undefined) return;
     this.#secretCount -= entries.size;
@@ -147,11 +215,17 @@ export class ReadCache {
    * gap for secrets that changed while a subscriber was disconnected.
    */
   invalidateSecretsInNamespaces(namespaces: Iterable<NamespaceRef | string>): void {
-    this.#secretCount = this.#invalidateNamespaces(this.#secrets, this.#secretCount, namespaces);
+    this.#secretCount = this.#invalidateNamespaces(
+      this.#secrets,
+      this.#secretGenerations,
+      this.#secretCount,
+      namespaces,
+    );
   }
 
   #invalidateNamespaces<T>(
     cache: EntryMap<T>,
+    generations: GenerationMap,
     count: number,
     namespaces: Iterable<NamespaceRef | string>,
   ): number {
@@ -163,6 +237,10 @@ export class ReadCache {
     }
     if (scope.size === 0) return count;
 
+    for (const [path, state] of generations) {
+      const ref = refOf(path);
+      if (ref !== undefined && scope.has(namespaceKey(ref.namespace))) state.epoch = {};
+    }
     for (const [path, entries] of cache) {
       const ref = refOf(path);
       if (ref === undefined || !scope.has(namespaceKey(ref.namespace))) continue;
@@ -173,10 +251,41 @@ export class ReadCache {
   }
 
   clear(): void {
+    for (const state of this.#parameterGenerations.values()) state.epoch = {};
+    for (const state of this.#secretGenerations.values()) state.epoch = {};
     this.#parameters.clear();
     this.#secrets.clear();
     this.#parameterCount = 0;
     this.#secretCount = 0;
+  }
+
+  #beginRead(
+    generations: GenerationMap,
+    kind: CacheKind,
+    path: string,
+  ): ReadGeneration | undefined {
+    if (!this.enabled) return undefined;
+    let state = generations.get(path);
+    if (state === undefined) {
+      state = { epoch: {}, readers: 0 };
+      generations.set(path, state);
+    }
+    state.readers++;
+    return { kind, path, state, epoch: state.epoch, released: false };
+  }
+
+  #isCurrent(generations: GenerationMap, generation: ReadGeneration, kind: CacheKind): boolean {
+    return (
+      !generation.released &&
+      generation.kind === kind &&
+      generations.get(generation.path) === generation.state &&
+      generation.state.epoch === generation.epoch
+    );
+  }
+
+  #invalidateGeneration(generations: GenerationMap, path: string): void {
+    const state = generations.get(path);
+    if (state !== undefined) state.epoch = {};
   }
 
   #get<T>(

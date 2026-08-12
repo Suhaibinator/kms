@@ -1,6 +1,6 @@
-import { status } from "@grpc/grpc-js";
+import { Metadata, status } from "@grpc/grpc-js";
 import { describe, expect, it, vi } from "vitest";
-import { KmsClient } from "../src/client.js";
+import { type GetOptions, KmsClient } from "../src/client.js";
 import { ConfigError, KmsError } from "../src/errors.js";
 import { REDACTED } from "../src/secret.js";
 import type { RpcTransport } from "../src/transport.js";
@@ -68,6 +68,7 @@ describe("KmsClient", () => {
           throw Object.assign(new Error("temporarily unavailable"), {
             code: status.UNAVAILABLE,
             details: "temporarily unavailable",
+            metadata: new Metadata(),
           });
         }
         return {
@@ -308,6 +309,7 @@ describe("KmsClient", () => {
     const failure = Object.assign(new Error("denied"), {
       code: status.PERMISSION_DENIED,
       details: "denied",
+      metadata: new Metadata(),
     });
     const transport = new FakeTransport(() => Promise.reject(failure));
     const client = new KmsClient({ transport, namespace: "prod/api" });
@@ -332,6 +334,203 @@ describe("KmsClient", () => {
     await expect(
       client.putSecret("token", "value", { clientBound: true, generateAccessToken: true }),
     ).resolves.toEqual({ version: 7n, revision: 10n, accessToken: "only-once" });
+    await client.close();
+  });
+
+  it("rejects mismatched parameter identities and versions without polluting the cache", async () => {
+    const cases: readonly {
+      readonly name: string;
+      readonly options: GetOptions;
+      readonly invalid: ReturnType<typeof wireParameter>;
+    }[] = [
+      {
+        name: "resource reference",
+        options: {},
+        invalid: wireParameter("other", "poison", 1n),
+      },
+      {
+        name: "namespace",
+        options: {},
+        invalid: wireParameter("target", "poison", 1n, { env: "prod", app: "other" }),
+      },
+      {
+        name: "exact version",
+        options: { version: 7n },
+        invalid: wireParameter("target", "poison", 8n),
+      },
+      {
+        name: "resolved version",
+        options: { label: "previous" },
+        invalid: wireParameter("target", "poison", 0n),
+      },
+      {
+        name: "runtime version",
+        options: {},
+        invalid: wireParameter("target", "poison", 1 as never),
+      },
+    ];
+
+    for (const testCase of cases) {
+      let reads = 0;
+      const transport = new FakeTransport((path) => {
+        if (!path.endsWith("/GetParameter")) throw new Error(`unexpected ${path}`);
+        reads++;
+        return {
+          parameter:
+            reads === 1
+              ? testCase.invalid
+              : wireParameter("target", `safe-${testCase.name}`, testCase.options.version ?? 2n),
+        };
+      });
+      const client = new KmsClient({
+        transport,
+        namespace: "prod/api",
+        cacheTtlMs: 60_000,
+      });
+
+      await expect(client.getParameter("target", testCase.options)).rejects.toMatchObject({
+        code: "internal",
+      });
+      await expect(client.getParameter("target", testCase.options)).resolves.toBe(
+        `safe-${testCase.name}`,
+      );
+      expect(reads).toBe(2);
+      await client.close();
+    }
+  });
+
+  it("rejects missing or mismatched secret identities and versions without cache pollution", async () => {
+    const cases: readonly {
+      readonly name: string;
+      readonly options: GetOptions;
+      readonly invalid: ReturnType<typeof wireSecret>;
+    }[] = [
+      {
+        name: "missing resource reference",
+        options: {},
+        invalid: wireSecret(undefined, "poison", 1n),
+      },
+      {
+        name: "resource reference",
+        options: {},
+        invalid: wireSecret("other", "poison", 1n),
+      },
+      {
+        name: "namespace",
+        options: {},
+        invalid: wireSecret("target", "poison", 1n, { env: "prod", app: "other" }),
+      },
+      {
+        name: "exact version",
+        options: { version: 7n },
+        invalid: wireSecret("target", "poison", 8n),
+      },
+      {
+        name: "resolved version",
+        options: { label: "previous" },
+        invalid: wireSecret("target", "poison", 0n),
+      },
+      {
+        name: "runtime version",
+        options: {},
+        invalid: wireSecret("target", "poison", 1 as never),
+      },
+    ];
+
+    for (const testCase of cases) {
+      let reads = 0;
+      const transport = new FakeTransport((path) => {
+        if (!path.endsWith("/GetSecret")) throw new Error(`unexpected ${path}`);
+        reads++;
+        return reads === 1
+          ? testCase.invalid
+          : wireSecret("target", `safe-${testCase.name}`, testCase.options.version ?? 2n);
+      });
+      const client = new KmsClient({
+        transport,
+        namespace: "prod/api",
+        cacheTtlMs: 60_000,
+      });
+
+      const error = await client
+        .getSecret("target", testCase.options)
+        .catch((reason: unknown) => reason);
+      expect(error).toMatchObject({ code: "internal" });
+      expect(String(error)).not.toContain("poison");
+      await expect(client.getSecret("target", testCase.options)).resolves.toMatchObject({
+        version: testCase.options.version ?? 2n,
+      });
+      expect((await client.getSecret("target", testCase.options)).text()).toBe(
+        `safe-${testCase.name}`,
+      );
+      expect(reads).toBe(2);
+      await client.close();
+    }
+  });
+
+  it("does not let a parameter read repopulate the cache after a successful mutation", async () => {
+    let finishFirstRead!: (response: unknown) => void;
+    const firstRead = new Promise<unknown>((resolve) => {
+      finishFirstRead = resolve;
+    });
+    let reads = 0;
+    const transport = new FakeTransport((path) => {
+      if (path.endsWith("/GetParameter")) {
+        reads++;
+        if (reads === 1) return firstRead;
+        return { parameter: wireParameter("target", "fresh", 2n) };
+      }
+      if (path.endsWith("/PutParameter")) return { version: 2n, revision: 2n };
+      throw new Error(`unexpected ${path}`);
+    });
+    const client = new KmsClient({
+      transport,
+      namespace: "prod/api",
+      cacheTtlMs: 60_000,
+    });
+
+    const stale = client.getParameter("target", { label: "current" });
+    await vi.waitFor(() => expect(reads).toBe(1));
+    await client.putParameter("target", "fresh");
+    finishFirstRead({ parameter: wireParameter("target", "stale", 1n) });
+
+    await expect(stale).resolves.toBe("stale");
+    await expect(client.getParameter("target", { label: "current" })).resolves.toBe("fresh");
+    expect(reads).toBe(2);
+    await client.close();
+  });
+
+  it("does not let a secret read repopulate the cache after a successful mutation", async () => {
+    let finishFirstRead!: (response: unknown) => void;
+    const firstRead = new Promise<unknown>((resolve) => {
+      finishFirstRead = resolve;
+    });
+    let reads = 0;
+    const transport = new FakeTransport((path) => {
+      if (path.endsWith("/GetSecret")) {
+        reads++;
+        if (reads === 1) return firstRead;
+        return wireSecret("target", "fresh", 2n);
+      }
+      if (path.endsWith("/PutSecret")) {
+        return { version: 2n, revision: 2n, accessToken: "" };
+      }
+      throw new Error(`unexpected ${path}`);
+    });
+    const client = new KmsClient({
+      transport,
+      namespace: "prod/api",
+      cacheTtlMs: 60_000,
+    });
+
+    const stale = client.getSecret("target");
+    await vi.waitFor(() => expect(reads).toBe(1));
+    await client.putSecret("target", "fresh");
+    finishFirstRead(wireSecret("target", "stale", 1n));
+
+    expect((await stale).text()).toBe("stale");
+    expect((await client.getSecret("target")).text()).toBe("fresh");
+    expect(reads).toBe(2);
     await client.close();
   });
 
@@ -393,3 +592,37 @@ describe("KmsClient", () => {
     expect(completed).toBe(true);
   });
 });
+
+function wireParameter(
+  key: string,
+  value: string,
+  version: bigint,
+  namespace = { env: "prod", app: "api" },
+) {
+  return {
+    ref: { namespace, key },
+    value,
+    contentType: "string",
+    version,
+    metadataJson: "{}",
+    createdBy: "test",
+    createdAtUnixMs: 0n,
+    labels: {},
+  };
+}
+
+function wireSecret(
+  key: string | undefined,
+  value: string,
+  version: bigint,
+  namespace = { env: "prod", app: "api" },
+) {
+  return {
+    ...(key === undefined ? {} : { ref: { namespace, key } }),
+    version,
+    value: Buffer.from(value),
+    contentType: "text/plain",
+    metadataJson: "{}",
+    createdAtUnixMs: 0n,
+  };
+}

@@ -26,6 +26,7 @@ import {
   displayNamespace,
   displayPath,
   type NamespaceRef,
+  namespaceEquals,
   normalizeVersionRef,
   parseNamespace,
   type ResourceRef,
@@ -268,6 +269,8 @@ export class KmsClient {
     options: GetOptions = {},
   ): Promise<Parameter> {
     this.#assertOpen();
+    const path = displayPath(ref);
+    const generation = options.secretToken ? undefined : this.#cache.beginParameterRead(path);
     try {
       const response = await this.#transport.unary(
         ParameterServiceService.getParameter,
@@ -276,12 +279,20 @@ export class KmsClient {
       );
       if (!response.parameter) throw new KmsError("internal", "KMS parameter response was empty");
       const parameter = parameterFromWire(response.parameter);
-      if (!options.secretToken) {
-        this.#cache.putParam(displayPath(ref), selector.version, selector.label, parameter.value);
+      assertReadIdentity("parameter", ref, response.parameter.ref, parameter.version, selector);
+      if (generation !== undefined) {
+        this.#cache.cacheParameterIfUnchanged(
+          generation,
+          selector.version,
+          selector.label,
+          parameter.value,
+        );
       }
       return parameter;
     } catch (error) {
       throwMapped(error);
+    } finally {
+      this.#cache.endRead(generation);
     }
   }
 
@@ -294,9 +305,16 @@ export class KmsClient {
       if (cached) return cached;
     }
 
-    const secret = await this.fetchSecret(ref, selector, options);
-    if (!options.secretToken) this.#cache.putSecret(path, selector.version, selector.label, secret);
-    return secret;
+    const generation = options.secretToken ? undefined : this.#cache.beginSecretRead(path);
+    try {
+      const secret = await this.fetchSecret(ref, selector, options);
+      if (generation !== undefined) {
+        this.#cache.cacheSecretIfUnchanged(generation, selector.version, selector.label, secret);
+      }
+      return secret;
+    } finally {
+      this.#cache.endRead(generation);
+    }
   }
 
   /** @internal Exact-ref fetch used by the release runtime. */
@@ -312,7 +330,10 @@ export class KmsClient {
         { ref: toWireRef(ref), version: selector.version, label: selector.label },
         this.#callOptions(options.secretToken ?? "", options),
       );
-      const returnedRef = response.ref ? fromWireRef(response.ref) : ref;
+      if (!response.ref)
+        throw new KmsError("internal", "KMS secret response omitted resource reference");
+      const returnedRef = fromWireRef(response.ref);
+      assertReadIdentity("secret", ref, response.ref, response.version, selector);
       return new Secret(response.value, {
         path: displayPath(returnedRef),
         version: response.version,
@@ -910,6 +931,35 @@ function parameterFromWire(parameter: WireParameter): Parameter {
     namespace: displayNamespace(ref.namespace),
     path: displayPath(ref),
   });
+}
+
+function assertReadIdentity(
+  kind: "parameter" | "secret",
+  requestedRef: ResourceRef,
+  returnedWireRef: WireResourceRef | undefined,
+  returnedVersion: bigint,
+  selector: { readonly version: bigint; readonly label: string },
+): void {
+  if (returnedWireRef === undefined) {
+    throw new KmsError("internal", `KMS ${kind} response omitted resource reference`);
+  }
+  const returnedRef = fromWireRef(returnedWireRef);
+  if (
+    returnedRef.key !== requestedRef.key ||
+    !namespaceEquals(returnedRef.namespace, requestedRef.namespace)
+  ) {
+    throw new KmsError("internal", `KMS ${kind} response resource reference did not match request`);
+  }
+  if (
+    typeof returnedVersion !== "bigint" ||
+    returnedVersion <= 0n ||
+    returnedVersion > UINT64_MAX
+  ) {
+    throw new KmsError("internal", `KMS ${kind} response contained an invalid version`);
+  }
+  if (selector.version > 0n && returnedVersion !== selector.version) {
+    throw new KmsError("internal", `KMS ${kind} response version did not match request`);
+  }
 }
 
 function secretInfoFromWire(secret: SecretMetadata): SecretInfo {

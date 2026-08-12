@@ -88,4 +88,89 @@ describe("ReadCache", () => {
     expect(second?.text()).toBe("secret");
     expect(second?.version).toBe(7n);
   });
+
+  it("fences every parameter selector when point invalidation races an in-flight read", () => {
+    const cache = new ReadCache(1_000);
+    const path = "/prod/app/parameter";
+    const reads = [
+      { generation: cache.beginParameterRead(path), version: 0n, label: "" },
+      { generation: cache.beginParameterRead(path), version: 0n, label: "previous" },
+      { generation: cache.beginParameterRead(path), version: 7n, label: "" },
+    ];
+
+    cache.invalidateParam(path);
+    for (const read of reads) {
+      if (read.generation === undefined) throw new Error("cache unexpectedly disabled");
+      expect(
+        cache.cacheParameterIfUnchanged(read.generation, read.version, read.label, "stale"),
+      ).toBe(false);
+      cache.endRead(read.generation);
+    }
+
+    expect(cache.parameterSize).toBe(0);
+  });
+
+  it("fences namespace-scoped parameter and secret reads without fencing later reads", () => {
+    const cache = new ReadCache(1_000);
+    const parameterPath = "/prod/app/parameter";
+    const secretPath = "/prod/app/secret";
+    const staleParameter = cache.beginParameterRead(parameterPath);
+    const staleSecret = cache.beginSecretRead(secretPath);
+    if (staleParameter === undefined || staleSecret === undefined) {
+      throw new Error("cache unexpectedly disabled");
+    }
+
+    cache.invalidateParametersInNamespaces(["prod/app"]);
+    cache.invalidateSecretsInNamespaces(["prod/app"]);
+
+    const freshParameter = cache.beginParameterRead(parameterPath);
+    const freshSecret = cache.beginSecretRead(secretPath);
+    if (freshParameter === undefined || freshSecret === undefined) {
+      throw new Error("cache unexpectedly disabled");
+    }
+    expect(cache.cacheParameterIfUnchanged(staleParameter, 0n, "", "stale")).toBe(false);
+    expect(cache.cacheSecretIfUnchanged(staleSecret, 0n, "", new Secret("stale"))).toBe(false);
+    expect(cache.cacheParameterIfUnchanged(freshParameter, 0n, "", "fresh")).toBe(true);
+    expect(cache.cacheSecretIfUnchanged(freshSecret, 0n, "", new Secret("fresh"))).toBe(true);
+
+    for (const generation of [staleParameter, staleSecret, freshParameter, freshSecret]) {
+      cache.endRead(generation);
+      cache.endRead(generation);
+    }
+    expect(cache.getParameter(parameterPath)).toBe("fresh");
+    expect(cache.getSecret(secretPath)?.text()).toBe("fresh");
+  });
+
+  it("keeps invalidation generations isolated by resource kind and path", () => {
+    const cache = new ReadCache(1_000);
+    const parameter = cache.beginParameterRead("/prod/app/shared");
+    const secret = cache.beginSecretRead("/prod/app/shared");
+    const other = cache.beginParameterRead("/prod/app/other");
+    if (parameter === undefined || secret === undefined || other === undefined) {
+      throw new Error("cache unexpectedly disabled");
+    }
+
+    cache.invalidateParam("/prod/app/shared");
+
+    expect(cache.cacheParameterIfUnchanged(parameter, 0n, "", "stale")).toBe(false);
+    expect(cache.cacheSecretIfUnchanged(secret, 0n, "", new Secret("secret"))).toBe(true);
+    expect(cache.cacheParameterIfUnchanged(other, 0n, "", "other")).toBe(true);
+    for (const generation of [parameter, secret, other]) cache.endRead(generation);
+  });
+
+  it("fences active parameter and secret fills when cleared", () => {
+    const cache = new ReadCache(1_000);
+    const parameter = cache.beginParameterRead("/prod/app/parameter");
+    const secret = cache.beginSecretRead("/prod/app/secret");
+    if (parameter === undefined || secret === undefined) {
+      throw new Error("cache unexpectedly disabled");
+    }
+
+    cache.clear();
+
+    expect(cache.cacheParameterIfUnchanged(parameter, 0n, "", "stale")).toBe(false);
+    expect(cache.cacheSecretIfUnchanged(secret, 0n, "", new Secret("stale"))).toBe(false);
+    cache.endRead(parameter);
+    cache.endRead(secret);
+  });
 });
