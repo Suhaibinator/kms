@@ -192,4 +192,23 @@ describe("usePublicConfig", () => {
     act(() => window.dispatchEvent(new Event("focus")));
     await waitFor(() => expect(fetcher).toHaveBeenCalledTimes(1));
   });
+
+  it("refreshes when an application navigation key changes", async () => {
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(new Response(null, { status: 304 }));
+    const { rerender } = renderHook(
+      ({ pathname }: { pathname: string }) =>
+        usePublicConfig(wire("1", 10), {
+          fetcher,
+          navigationKey: pathname,
+          refreshOnMount: false,
+          refreshOnFocus: false,
+          refreshOnNavigation: true,
+        }),
+      { initialProps: { pathname: "/first" } },
+    );
+
+    expect(fetcher).not.toHaveBeenCalled();
+    rerender({ pathname: "/second" });
+    await waitFor(() => expect(fetcher).toHaveBeenCalledTimes(1));
+  });
 });

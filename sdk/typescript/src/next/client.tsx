@@ -17,6 +17,12 @@ export interface UsePublicConfigOptions<TConfig extends PublicJsonObject> {
   readonly validateConfig?: (config: unknown) => config is TConfig;
   readonly refreshOnMount?: boolean;
   readonly refreshOnFocus?: boolean;
+  /**
+   * Application-owned navigation identity (for example a pathname). When it
+   * changes after mount, the hook refreshes without importing Next routing.
+   */
+  readonly navigationKey?: unknown;
+  readonly refreshOnNavigation?: boolean;
 }
 
 export interface UsePublicConfigResult<TConfig extends PublicJsonObject> {
@@ -54,6 +60,8 @@ export function usePublicConfig<TConfig extends PublicJsonObject>(
     validateConfig,
     refreshOnMount = true,
     refreshOnFocus = true,
+    navigationKey,
+    refreshOnNavigation = true,
   } = options;
 
   const normalizedInitial = useMemo(
@@ -67,6 +75,7 @@ export function usePublicConfig<TConfig extends PublicJsonObject>(
   const requestSequenceRef = useRef(0);
   const requestControllerRef = useRef<AbortController | undefined>(undefined);
   const mountedRef = useRef(false);
+  const previousNavigationKeyRef = useRef(navigationKey);
 
   const installIfNewer = useCallback((candidate: ClientPublicConfig<TConfig>): boolean => {
     if (candidate.revision <= policyRef.current.revision) {
@@ -164,6 +173,14 @@ export function usePublicConfig<TConfig extends PublicJsonObject>(
     window.addEventListener("focus", onFocus);
     return () => window.removeEventListener("focus", onFocus);
   }, [refresh, refreshOnFocus]);
+
+  useEffect(() => {
+    const previous = previousNavigationKeyRef.current;
+    previousNavigationKeyRef.current = navigationKey;
+    if (refreshOnNavigation && !Object.is(previous, navigationKey)) {
+      void refresh();
+    }
+  }, [navigationKey, refresh, refreshOnNavigation]);
 
   const applyServerResult = useCallback(
     (result: unknown): boolean => {
