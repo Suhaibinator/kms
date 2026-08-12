@@ -397,10 +397,11 @@ npm ci
 npm run check
 ```
 
-`npm run check` verifies generated protobufs, types, lint, formatting, tests,
-consumer type contracts, the distributable build, a real Next.js trust-boundary
-build, and the publishable package manifest. The repository Makefile also
-exposes `typescript`, `test-typescript`, and `check-typescript` targets.
+`npm run check` hermetically regenerates and byte-compares the generated
+protobuf binding, then verifies types, lint, formatting, tests, consumer type
+contracts, the distributable build, a real Next.js trust-boundary build, and
+the publishable package manifest. The repository Makefile also exposes
+`typescript`, `test-typescript`, and `check-typescript` targets.
 
 Security reports and deployment guidance are in the package security notice.
 This package is licensed under the included [MIT license](LICENSE).

@@ -1,16 +1,26 @@
-import { createHash } from "node:crypto";
-import { readFile } from "node:fs/promises";
-import { fileURLToPath } from "node:url";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { generateProtobuf, trackedGeneratedFile } from "./proto-generation.mjs";
 
-const protoPath = fileURLToPath(new URL("../../../proto/kms/v1/kms.proto", import.meta.url));
-const generatedPath = fileURLToPath(new URL("../src/generated/kms.ts", import.meta.url));
+const temporaryDirectory = await mkdtemp(join(tmpdir(), "kms-typescript-protobuf-"));
 
-const proto = await readFile(protoPath);
-const generated = await readFile(generatedPath, "utf8").catch(() => "");
-const digest = createHash("sha256").update(proto).digest("hex");
-const marker = `// source-sha256: ${digest}`;
+try {
+  const regeneratedFile = await generateProtobuf(temporaryDirectory);
+  const [tracked, regenerated] = await Promise.all([
+    readFile(trackedGeneratedFile).catch((error) => {
+      if (error?.code === "ENOENT") return undefined;
+      throw error;
+    }),
+    readFile(regeneratedFile),
+  ]);
 
-if (!generated.includes(marker)) {
-  console.error("Generated protobuf bindings are stale. Run `npm run generate` and commit them.");
-  process.exit(1);
+  if (tracked === undefined || !tracked.equals(regenerated)) {
+    console.error(
+      "Generated protobuf bindings are stale. Run `npm run generate` and commit the result.",
+    );
+    process.exitCode = 1;
+  }
+} finally {
+  await rm(temporaryDirectory, { recursive: true, force: true });
 }
