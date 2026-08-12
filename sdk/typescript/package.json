@@ -26,6 +26,9 @@
     "provenance": true
   },
   "type": "module",
+  "bin": {
+    "kms-config-gen-ts": "./dist/bin/kms-config-gen-ts.js"
+  },
   "sideEffects": [
     "./dist/next/client.js",
     "./dist/next/server.js",
@@ -61,6 +64,11 @@
     "./configstore": {
       "types": "./dist/configstore/index.d.ts",
       "node": "./dist/configstore/index.js",
+      "default": "./dist/unsupported-browser.js"
+    },
+    "./configgen": {
+      "types": "./dist/configgen/index.d.ts",
+      "node": "./dist/configgen/index.js",
       "default": "./dist/unsupported-browser.js"
     },
     "./package.json": "./package.json"
