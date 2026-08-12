@@ -4,6 +4,7 @@ import {
   Server,
   ServerCredentials,
   type ServerDuplexStream,
+  status,
   type UntypedServiceImplementation,
 } from "@grpc/grpc-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -39,6 +40,8 @@ import {
   type PromoteSecretVersionResponse,
   type PutParameterRequest,
   type PutParameterResponse,
+  type PutSecretRequest,
+  type PutSecretResponse,
   type SecretMetadata,
   SecretServiceService,
   type SubscribeEvent,
@@ -263,6 +266,7 @@ describe("protocol-faithful gRPC integration", () => {
     const deleteParameterRequests: DeleteParameterRequest[] = [];
     const listSecretsRequests: ListSecretsRequest[] = [];
     const secretMetadataRequests: GetSecretMetadataRequest[] = [];
+    const putSecretRequests: PutSecretRequest[] = [];
     const deleteSecretRequests: DeleteSecretRequest[] = [];
     const disableSecretRequests: DisableSecretRequest[] = [];
     const destroySecretRequests: DestroySecretVersionRequest[] = [];
@@ -341,6 +345,15 @@ describe("protocol-faithful gRPC integration", () => {
       observeMetadata("getSecretMetadata", call);
       callback(null, { secret: secretMetadata });
     };
+    const putSecret: handleUnaryCall<PutSecretRequest, PutSecretResponse> = (call, callback) => {
+      putSecretRequests.push(call.request);
+      observeMetadata("putSecret", call);
+      callback(null, {
+        version: firstExactInteger + 15n,
+        revision: firstExactInteger + 16n,
+        accessToken: "one-time-access-token",
+      });
+    };
     const deleteSecret: handleUnaryCall<DeleteSecretRequest, DeleteSecretResponse> = (
       call,
       callback,
@@ -382,6 +395,7 @@ describe("protocol-faithful gRPC integration", () => {
     server.addService(SecretServiceService, {
       listSecrets,
       getSecretMetadata,
+      putSecret,
       deleteSecret,
       disableSecret,
       destroySecretVersion,
@@ -424,6 +438,23 @@ describe("protocol-faithful gRPC integration", () => {
       expect(Object.isFrozen(metadata.versions)).toBe(true);
       expect(Object.isFrozen(metadata.versions[0])).toBe(true);
       await expect(client.deleteParameter("obsolete")).resolves.toBe(firstExactInteger + 4n);
+
+      const plaintext = Uint8Array.from([0, 1, 254, 255]);
+      const putResult = await client.putSecret("password", plaintext, {
+        contentType: "application/octet-stream",
+        metadataJson: '{"rotation":"integration"}',
+        clientBound: true,
+        generateAccessToken: true,
+        expiresAtUnixMs: firstExactInteger + 100n,
+        secretToken: "put-token",
+      });
+      expect(putResult).toEqual({
+        version: firstExactInteger + 15n,
+        revision: firstExactInteger + 16n,
+        accessToken: "one-time-access-token",
+      });
+      expect(Object.isFrozen(putResult)).toBe(true);
+      expect(plaintext).toEqual(Uint8Array.from([0, 1, 254, 255]));
 
       const secrets = await client.listSecrets("prod/api", {
         keyPrefix: "pass",
@@ -517,6 +548,17 @@ describe("protocol-faithful gRPC integration", () => {
         },
       ]);
       expect(secretMetadataRequests).toEqual([{ ref: { namespace, key: "password" } }]);
+      expect(putSecretRequests).toEqual([
+        {
+          ref: { namespace, key: "password" },
+          value: Buffer.from([0, 1, 254, 255]),
+          contentType: "application/octet-stream",
+          metadataJson: '{"rotation":"integration"}',
+          clientBound: true,
+          generateAccessToken: true,
+          expiresAtUnixMs: firstExactInteger + 100n,
+        },
+      ]);
       expect(deleteSecretRequests).toEqual([{ ref: { namespace, key: "retired" } }]);
       expect(disableSecretRequests).toEqual([
         {
@@ -542,6 +584,11 @@ describe("protocol-faithful gRPC integration", () => {
           rpc: "deleteParameter",
           authorization: ["Bearer integration-token"],
           secretToken: [],
+        },
+        {
+          rpc: "putSecret",
+          authorization: ["Bearer integration-token"],
+          secretToken: ["put-token"],
         },
         {
           rpc: "listSecrets",
@@ -584,6 +631,61 @@ describe("protocol-faithful gRPC integration", () => {
       await shutdown(server);
     }
   }, 15_000);
+
+  it("maps unary deadlines and releases the cancelled server call", async () => {
+    let stalledCallStarted = false;
+    let activeStalledCalls = 0;
+    let cancelledStalledCalls = 0;
+    const server = new Server();
+    const getParameter: handleUnaryCall<GetParameterRequest, GetParameterResponse> = (
+      call,
+      callback,
+    ) => {
+      const key = call.request.ref?.key ?? "";
+      if (key === "warmup") {
+        callback(null, { parameter: wireParameter(key, "ready", 1n) });
+        return;
+      }
+
+      stalledCallStarted = true;
+      activeStalledCalls += 1;
+      call.once("cancelled", () => {
+        cancelledStalledCalls += 1;
+        activeStalledCalls -= 1;
+      });
+      // Intentionally never invoke the callback. The client's absolute deadline
+      // must terminate the RPC and propagate cancellation to the server call.
+    };
+    server.addService(ParameterServiceService, {
+      getParameter,
+    } as UntypedServiceImplementation);
+
+    const port = await bind(server);
+    const client = new KmsClient({
+      endpoint: `127.0.0.1:${port}`,
+      namespace: "prod/api",
+      insecure: true,
+      timeoutMs: 2_000,
+    });
+
+    try {
+      await expect(client.getParameter("warmup")).resolves.toBe("ready");
+      const error = await client
+        .getParameter("stalled", { deadline: new Date(Date.now() + 200) })
+        .catch((reason: unknown) => reason);
+
+      expect(stalledCallStarted).toBe(true);
+      expect(error).toMatchObject({
+        name: "KmsError",
+        code: "deadline_exceeded",
+        grpcCode: status.DEADLINE_EXCEEDED,
+      });
+      await waitFor(() => cancelledStalledCalls === 1 && activeStalledCalls === 0);
+    } finally {
+      await client.close();
+      await shutdown(server);
+    }
+  }, 10_000);
 });
 
 function wireParameter(key: string, value: string, version: bigint) {
