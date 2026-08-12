@@ -1,0 +1,135 @@
+{
+  "format": "kms-config-contract/v1",
+  "source": {
+    "language": "typescript",
+    "module": "./config.js",
+    "type": "Config"
+  },
+  "schema_sha256": "573d6f4f2e4606fd332ff8d431a568a88f9c4dee1d79da14b0dbf82abae47cd9",
+  "groups": [
+    {
+      "alias": "database",
+      "kind": "parameter",
+      "content_type": "json",
+      "fields": [
+        "endpoint",
+        "limit"
+      ]
+    },
+    {
+      "alias": "runtime",
+      "kind": "parameter",
+      "content_type": "json",
+      "fields": [
+        "enabled",
+        "epoch",
+        "labels",
+        "payload"
+      ]
+    }
+  ],
+  "fields": [
+    {
+      "group": "database",
+      "json_name": "endpoint",
+      "ts_name": "endpoint",
+      "ts_path": "endpoint",
+      "reload": "restart",
+      "encoding": "object",
+      "views": [
+        "database_health"
+      ]
+    },
+    {
+      "group": "database",
+      "json_name": "limit",
+      "ts_name": "limit",
+      "ts_path": "limit",
+      "reload": "hot",
+      "encoding": "int32",
+      "views": [
+        "database_health",
+        "worker"
+      ]
+    },
+    {
+      "group": "runtime",
+      "json_name": "enabled",
+      "ts_name": "enabled",
+      "ts_path": "enabled",
+      "reload": "hot",
+      "encoding": "boolean",
+      "views": [
+        "worker"
+      ]
+    },
+    {
+      "group": "runtime",
+      "json_name": "epoch",
+      "ts_name": "epoch",
+      "ts_path": "epoch",
+      "reload": "hot",
+      "encoding": "uint64",
+      "views": [
+        "worker"
+      ]
+    },
+    {
+      "group": "runtime",
+      "json_name": "labels",
+      "ts_name": "labels",
+      "ts_path": "labels",
+      "reload": "hot",
+      "encoding": "nullable-string-map",
+      "views": [
+        "worker"
+      ]
+    },
+    {
+      "group": "runtime",
+      "json_name": "payload",
+      "ts_name": "payload",
+      "ts_path": "payload",
+      "reload": "hot",
+      "encoding": "nullable-base64",
+      "views": [
+        "worker"
+      ]
+    }
+  ],
+  "secrets": [
+    {
+      "alias": "database_password",
+      "kind": "secret",
+      "ts_name": "password",
+      "ts_path": "password",
+      "reload": "restart",
+      "encoding": "secret",
+      "views": [
+        "worker"
+      ]
+    }
+  ],
+  "views": [
+    {
+      "name": "database_health",
+      "method": "databaseHealth",
+      "fields": [
+        "database.endpoint",
+        "database.limit"
+      ]
+    },
+    {
+      "name": "worker",
+      "method": "worker",
+      "fields": [
+        "database.limit",
+        "database_password",
+        "runtime.enabled",
+        "runtime.epoch",
+        "runtime.labels",
+        "runtime.payload"
+      ]
+    }
+  ]
+}

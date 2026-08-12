@@ -1,0 +1,91 @@
+{
+  "format": "kms-config-descriptor/v1",
+  "source": {
+    "module": "./config.js",
+    "type": "Config"
+  },
+  "groups": [
+    {
+      "alias": "runtime",
+      "fields": [
+        {
+          "property": "payload",
+          "jsonName": "payload",
+          "reload": "hot",
+          "views": ["worker"],
+          "type": { "kind": "bytes" }
+        },
+        {
+          "property": "enabled",
+          "jsonName": "enabled",
+          "reload": "hot",
+          "views": ["worker"],
+          "type": { "kind": "boolean" }
+        },
+        {
+          "property": "epoch",
+          "jsonName": "epoch",
+          "reload": "hot",
+          "views": ["worker"],
+          "type": {
+            "kind": "integer",
+            "bits": 64,
+            "unsigned": true,
+            "representation": "bigint"
+          }
+        },
+        {
+          "property": "labels",
+          "jsonName": "labels",
+          "reload": "hot",
+          "views": ["worker"],
+          "type": { "kind": "record", "value": { "kind": "string" } }
+        }
+      ]
+    },
+    {
+      "alias": "database",
+      "fields": [
+        {
+          "property": "limit",
+          "jsonName": "limit",
+          "reload": "hot",
+          "views": ["worker", "database_health"],
+          "type": { "kind": "integer", "bits": 32 }
+        },
+        {
+          "property": "endpoint",
+          "jsonName": "endpoint",
+          "reload": "restart",
+          "views": ["database_health"],
+          "type": {
+            "kind": "object",
+            "fields": [
+              {
+                "property": "ports",
+                "jsonName": "ports",
+                "type": {
+                  "kind": "array",
+                  "element": { "kind": "integer", "bits": 16, "unsigned": true }
+                }
+              },
+              {
+                "property": "host",
+                "jsonName": "host",
+                "type": { "kind": "string" }
+              }
+            ]
+          }
+        }
+      ]
+    }
+  ],
+  "secrets": [
+    {
+      "property": "password",
+      "alias": "database_password",
+      "reload": "restart",
+      "views": ["worker"]
+    }
+  ]
+}

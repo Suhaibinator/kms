@@ -1,7 +1,15 @@
 {
   "$schema": "https://biomejs.dev/schemas/2.5.7/schema.json",
   "files": {
-    "includes": ["**", "!dist", "!node_modules", "!src/generated/kms.ts"]
+    "includes": [
+      "**",
+      "!dist",
+      "!node_modules",
+      "!src/generated/kms.ts",
+      "!tests/fixtures/configgen/config.generated.ts",
+      "!tests/fixtures/configgen/runtime.schema.json",
+      "!tests/fixtures/configgen/runtime.contract.json"
+    ]
   },
   "formatter": {
     "enabled": true,
