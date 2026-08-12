@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 
-import { readFile, realpath } from "node:fs/promises";
+import { open, realpath } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 
+import { assertDistinctPaths } from "../configgen/files.js";
 import {
   generate,
   parseDescriptor,
@@ -10,9 +11,9 @@ import {
   verifyArtifacts,
   writeArtifacts,
 } from "../configgen/index.js";
-import { assertDistinctPaths } from "../configgen/files.js";
 
 const MAX_DESCRIPTOR_BYTES = 1024 * 1024;
+const DESCRIPTOR_READ_CHUNK_BYTES = 64 * 1024;
 
 export interface CliIO {
   readonly stdout: (message: string) => void;
@@ -41,13 +42,8 @@ export async function runCli(
   }
   try {
     await assertCliPathsDistinct(flags);
-    const descriptor = await readFile(flags.descriptor);
-    if (descriptor.byteLength > MAX_DESCRIPTOR_BYTES) {
-      throw new RangeError(
-        `configgen: descriptor is ${descriptor.byteLength} bytes; maximum is ${MAX_DESCRIPTOR_BYTES}`,
-      );
-    }
-    const artifacts = generate(parseDescriptor(descriptor.toString("utf8")), {
+    const descriptor = await readDescriptor(flags.descriptor);
+    const artifacts = generate(parseDescriptor(descriptor), {
       ...(flags.runtimeImport ? { runtimeImport: flags.runtimeImport } : {}),
       ...(flags.coreImport ? { coreImport: flags.coreImport } : {}),
     });
@@ -63,6 +59,41 @@ export async function runCli(
     io.stderr(`${errorMessage(error)}\n`);
     return error instanceof StaleArtifactsError ? 1 : 1;
   }
+}
+
+/** @internal Bounded even when stat reports zero or the file grows while open. */
+export async function readDescriptor(path: string): Promise<string> {
+  const handle = await open(path, "r");
+  try {
+    const info = await handle.stat({ bigint: true });
+    if (info.size > BigInt(MAX_DESCRIPTOR_BYTES)) {
+      throw oversizedDescriptor(info.size);
+    }
+
+    const chunks: Buffer[] = [];
+    let byteLength = 0;
+    while (byteLength <= MAX_DESCRIPTOR_BYTES) {
+      const remaining = MAX_DESCRIPTOR_BYTES + 1 - byteLength;
+      const chunk = Buffer.allocUnsafe(Math.min(DESCRIPTOR_READ_CHUNK_BYTES, remaining));
+      const { bytesRead } = await handle.read(chunk, 0, chunk.byteLength, null);
+      if (bytesRead === 0) break;
+      chunks.push(chunk.subarray(0, bytesRead));
+      byteLength += bytesRead;
+    }
+    if (byteLength > MAX_DESCRIPTOR_BYTES) {
+      throw oversizedDescriptor();
+    }
+    return Buffer.concat(chunks, byteLength).toString("utf8");
+  } finally {
+    await handle.close();
+  }
+}
+
+function oversizedDescriptor(size?: bigint): RangeError {
+  const measured = size === undefined ? " exceeds" : ` is ${size} bytes;`;
+  return new RangeError(
+    `configgen: descriptor${measured} maximum is ${MAX_DESCRIPTOR_BYTES} bytes`,
+  );
 }
 
 interface Flags {

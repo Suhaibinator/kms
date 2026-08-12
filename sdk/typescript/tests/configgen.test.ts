@@ -1,10 +1,20 @@
 import { createHash } from "node:crypto";
-import { chmod, link, mkdir, mkdtemp, readFile, stat, symlink, writeFile } from "node:fs/promises";
+import {
+  chmod,
+  link,
+  mkdir,
+  mkdtemp,
+  readFile,
+  stat,
+  symlink,
+  truncate,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 
-import { isExecutedEntry, runCli } from "../src/bin/kms-config-gen-ts.js";
+import { isExecutedEntry, readDescriptor, runCli } from "../src/bin/kms-config-gen-ts.js";
 import {
   type ConfigDescriptor,
   DescriptorError,
@@ -370,6 +380,38 @@ describe("TypeScript config generator", () => {
     await expect(readFile(descriptorTarget, "utf8")).resolves.toBe(document);
     await expect(stat(paths.schema)).rejects.toMatchObject({ code: "ENOENT" });
   });
+
+  it("rejects an oversized sparse descriptor from metadata before reading its contents", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "kms-configgen-descriptor-size-"));
+    const descriptorPath = join(directory, "huge.kms.json");
+    const paths = outputPaths(directory);
+    await writeFile(descriptorPath, "{}", "utf8");
+    // A logical size beyond Node's ordinary readFile ceiling proves that the
+    // CLI applies its own 1 MiB preflight rather than attempting an unbounded
+    // allocation. truncate creates a sparse file on CI filesystems.
+    await truncate(descriptorPath, 3 * 1024 * 1024 * 1024);
+    const stderr: string[] = [];
+
+    const code = await runCli(cliArgs(descriptorPath, paths, fixtureImportArgs()), {
+      stdout: () => undefined,
+      stderr: (message) => stderr.push(message),
+    });
+
+    expect(code).toBe(1);
+    expect(stderr.join(" ")).toMatch(/descriptor is 3221225472 bytes; maximum is 1048576 bytes/u);
+    await expect(stat(paths.binding)).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(stat(paths.schema)).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(stat(paths.contract)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it.runIf(process.platform === "linux")(
+    "bounded descriptor reads support virtual files whose reported size is zero",
+    async () => {
+      const path = "/proc/self/status";
+      expect((await stat(path)).size).toBe(0);
+      await expect(readDescriptor(path)).resolves.toContain("Name:");
+    },
+  );
 
   it("recognizes a symlinked executable entry", async () => {
     const directory = await mkdtemp(join(tmpdir(), "kms-configgen-entry-"));
