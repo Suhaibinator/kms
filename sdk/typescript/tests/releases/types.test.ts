@@ -1,6 +1,7 @@
 import { inspect } from "node:util";
 import { describe, expect, it } from "vitest";
 import {
+  classifiedReleaseCategory,
   ReleaseEntryMetadata,
   ReleaseParameter,
   ReleaseSecret,
@@ -58,5 +59,29 @@ describe("release snapshots", () => {
     expect(json).not.toContain("min");
     expect(json).toContain('"activationRevision":"9007199254740993"');
     expect(inspect(snapshot)).not.toContain("sensitive-value");
+  });
+});
+
+describe("release rejection classification", () => {
+  it("reads an allowed category once and contains hostile reflection", () => {
+    let reads = 0;
+    const classified = Object.defineProperty({}, "releaseRejectionCategory", {
+      get: () => {
+        reads += 1;
+        return "prepare_failed";
+      },
+    });
+    expect(classifiedReleaseCategory(classified)).toBe("prepare_failed");
+    expect(reads).toBe(1);
+
+    const hostile = new Proxy(
+      {},
+      {
+        get: () => {
+          throw new Error("sensitive proxy failure");
+        },
+      },
+    );
+    expect(classifiedReleaseCategory(hostile)).toBeUndefined();
   });
 });

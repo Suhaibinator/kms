@@ -27,14 +27,17 @@ class FakeWatchStream implements ReleaseWatchStream {
   readonly #waiters: Array<(result: IteratorResult<WatchReleaseEvent>) => void> = [];
   #closed = false;
 
-  constructor(signal: AbortSignal) {
+  constructor(
+    signal: AbortSignal,
+    readonly sendHook?: (request: WatchReleaseRequest) => void | Promise<void>,
+  ) {
     signal.addEventListener("abort", () => this.close(), { once: true });
   }
 
-  send(request: WatchReleaseRequest): Promise<void> {
+  async send(request: WatchReleaseRequest): Promise<void> {
     if (this.#closed) return Promise.reject(new Error("closed"));
+    await this.sendHook?.(request);
     this.sent.push(request);
-    return Promise.resolve();
   }
 
   push(event: WatchReleaseEvent): void {
@@ -79,6 +82,9 @@ class FakeTransport implements ReleaseTransport {
   readonly parameters = new Map<string, Parameter>();
   readonly secrets = new Map<string, FetchedSecret>();
   fetchParameterHook: (() => Promise<void>) | undefined;
+  watchReleaseHook:
+    | ((registration: ReleaseWatchRegistration, signal: AbortSignal) => Promise<ReleaseWatchStream>)
+    | undefined;
 
   constructor(release: ConfigurationRelease, revision = 1n) {
     this.active = { release, activationRevision: revision, previousVersion: 0n };
@@ -118,8 +124,12 @@ class FakeTransport implements ReleaseTransport {
     return Promise.resolve(secret);
   }
 
-  watchRelease(registration: ReleaseWatchRegistration, signal: AbortSignal): ReleaseWatchStream {
+  watchRelease(
+    registration: ReleaseWatchRegistration,
+    signal: AbortSignal,
+  ): ReleaseWatchStream | Promise<ReleaseWatchStream> {
     this.registration = registration;
+    if (this.watchReleaseHook) return this.watchReleaseHook(registration, signal);
     this.stream = new FakeWatchStream(signal);
     return this.stream;
   }
@@ -226,6 +236,112 @@ describe("ReleaseLoader", () => {
       rejectionCategory: "config_contract_mismatch",
       diagnostic: "",
     });
+  });
+
+  it("waits for a delayed watch to flush a rejected startup acknowledgement", async () => {
+    const release = makeRelease(1n, [parameterEntry("value", "value", 1n, "one")]);
+    const transport = new FakeTransport(release);
+    transport.parameters.set("/prod/api/value", parameterResource("value", 1n, "one"));
+    const watchGate = deferred<ReleaseWatchStream>();
+    let watchSignal: AbortSignal | undefined;
+    transport.watchReleaseHook = async (_registration, signal) => {
+      watchSignal = signal;
+      return watchGate.promise;
+    };
+    const loader = ReleaseLoader._create(transport, {
+      namespace,
+      name: "runtime",
+      clientName: "unit-test",
+      acknowledgementTimeoutMs: 500,
+    });
+    let settled = false;
+    const run = loader
+      .run(() => {
+        throw new Error("sensitive startup rejection");
+      })
+      .finally(() => {
+        settled = true;
+      });
+
+    await waitFor(() => loader.status().lastFailureCategory === "prepare_failed");
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(settled).toBe(false);
+    if (!watchSignal) throw new Error("watch was not started");
+    const stream = new FakeWatchStream(watchSignal);
+    transport.stream = stream;
+    watchGate.resolve(stream);
+
+    await expect(run).rejects.toMatchObject({
+      category: "prepare_failed",
+      message: expect.not.stringContaining("sensitive startup rejection"),
+    });
+    expect(rejectedAcknowledgement(stream)).toMatchObject({
+      rejectionCategory: "prepare_failed",
+      diagnostic: "",
+    });
+  });
+
+  it("reconnects to retry a failed rejected startup acknowledgement", async () => {
+    const release = makeRelease(1n, [parameterEntry("value", "value", 1n, "one")]);
+    const transport = new FakeTransport(release);
+    transport.parameters.set("/prod/api/value", parameterResource("value", 1n, "one"));
+    const streams: FakeWatchStream[] = [];
+    let rejectedAttempts = 0;
+    transport.watchReleaseHook = async (_registration, signal) => {
+      const stream = new FakeWatchStream(signal, (request) => {
+        if (
+          request.request?.$case === "acknowledgement" &&
+          request.request.value.state === "rejected"
+        ) {
+          rejectedAttempts += 1;
+          if (rejectedAttempts === 1) throw new Error("injected acknowledgement failure");
+        }
+      });
+      streams.push(stream);
+      transport.stream = stream;
+      return stream;
+    };
+    const loader = ReleaseLoader._create(transport, {
+      namespace,
+      name: "runtime",
+      clientName: "unit-test",
+      acknowledgementTimeoutMs: 500,
+      random: () => 0,
+    });
+
+    await expect(
+      loader.run(() => {
+        throw new Error("reject initial candidate");
+      }),
+    ).rejects.toMatchObject({ category: "prepare_failed" });
+
+    expect(streams).toHaveLength(2);
+    expect(rejectedAttempts).toBe(2);
+    expect(rejectedAcknowledgement(streams[1])).toMatchObject({
+      rejectionCategory: "prepare_failed",
+      diagnostic: "",
+    });
+  });
+
+  it("defaults nonpositive release reconciliation intervals like the Go SDK", () => {
+    const release = makeRelease(1n, [parameterEntry("value", "value", 1n, "one")]);
+    const transport = new FakeTransport(release);
+    expect(() =>
+      ReleaseLoader._create(transport, {
+        namespace,
+        name: "runtime",
+        clientName: "unit-test",
+        reconcileIntervalMs: 0,
+      }),
+    ).not.toThrow();
+    expect(() =>
+      ReleaseLoader._create(transport, {
+        namespace,
+        name: "runtime",
+        clientName: "unit-test",
+        reconcileIntervalMs: -1,
+      }),
+    ).not.toThrow();
   });
 
   it("cancels a superseded preparation, aborts it exactly once, and commits only latest", async () => {

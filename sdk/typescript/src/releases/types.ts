@@ -339,17 +339,16 @@ export class ReleaseCandidateError extends Error {
 }
 
 export function classifiedReleaseCategory(error: unknown): ReleaseRejectionCategory | undefined {
-  if (
-    typeof error !== "object" ||
-    error === null ||
-    !("releaseRejectionCategory" in error) ||
-    typeof error.releaseRejectionCategory !== "string"
-  ) {
+  if (typeof error !== "object" || error === null) {
     return undefined;
   }
-  return (RELEASE_REJECTION_CATEGORIES as readonly string[]).includes(
-    error.releaseRejectionCategory,
-  )
-    ? (error.releaseRejectionCategory as ReleaseRejectionCategory)
-    : undefined;
+  try {
+    const category = Reflect.get(error, "releaseRejectionCategory") as unknown;
+    return typeof category === "string" &&
+      (RELEASE_REJECTION_CATEGORIES as readonly string[]).includes(category)
+      ? (category as ReleaseRejectionCategory)
+      : undefined;
+  } catch {
+    return undefined;
+  }
 }

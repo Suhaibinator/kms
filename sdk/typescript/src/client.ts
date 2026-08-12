@@ -575,6 +575,7 @@ export class KmsClient {
       ...options,
       namespace: toWireNamespace(namespace),
       clientName: options.clientName?.trim() || this.clientName,
+      acknowledgementTimeoutMs: this.timeoutMs,
     });
   }
 

@@ -91,6 +91,8 @@ export interface ReleaseLoaderOptions {
   readonly maxConcurrentFetches?: number;
   readonly secretTokenProvider?: SecretTokenProvider;
   readonly validateManifest?: ValidateReleaseManifest;
+  /** @internal Bound for flushing a terminal startup acknowledgement. */
+  readonly acknowledgementTimeoutMs?: number;
   /** Injected only for deterministic tests. */
   readonly now?: () => number;
   /** Injected only for deterministic full-jitter backoff tests. */
@@ -106,6 +108,7 @@ interface NormalizedOptions {
   readonly maxConcurrentFetches: number;
   readonly secretTokenProvider?: SecretTokenProvider;
   readonly validateManifest?: ValidateReleaseManifest;
+  readonly acknowledgementTimeoutMs: number;
   readonly now: () => number;
   readonly random: () => number;
 }
@@ -123,6 +126,7 @@ interface CandidateResult {
   readonly candidate: Candidate;
   readonly applied: boolean;
   readonly category?: ReleaseRejectionCategory;
+  readonly acknowledgementGeneration?: bigint;
   readonly fatal?: Error;
 }
 
@@ -149,6 +153,7 @@ interface PendingAcknowledgement {
   acknowledgement: ReleaseAcknowledgement;
   generation: bigint;
   dirty: boolean;
+  flushedOn?: ReleaseWatchStream;
 }
 
 class ResolutionError extends Error {
@@ -184,6 +189,7 @@ export class ReleaseLoader {
     reconnects: 0n,
   };
   readonly #pendingAcknowledgements = new Map<ReleaseState, PendingAcknowledgement>();
+  readonly #acknowledgementWaiters = new Map<bigint, (stream: ReleaseWatchStream) => void>();
   #running = false;
   #stopController: AbortController | undefined;
   #currentStream: ReleaseWatchStream | undefined;
@@ -257,6 +263,7 @@ export class ReleaseLoader {
       let pending: Candidate | undefined;
       let processing = false;
       let appliedOnce = false;
+      let gracefulWatchStop = false;
       const finished = deferred<void>();
 
       const start = (candidate: Candidate): void => {
@@ -300,7 +307,28 @@ export class ReleaseLoader {
               } catch {
                 // Preserve the original, redacted startup rejection.
               }
-              await this.#scheduleAckFlush();
+              const acknowledgedStream =
+                result.acknowledgementGeneration === undefined
+                  ? undefined
+                  : await this.#waitForAcknowledgement(
+                      result.acknowledgementGeneration,
+                      runController.signal,
+                    );
+              if (acknowledgedStream) {
+                gracefulWatchStop = true;
+                await settleWithin(
+                  closeStream(acknowledgedStream),
+                  this.#options.acknowledgementTimeoutMs,
+                  runController.signal,
+                );
+                if (watchTask) {
+                  await settleWithin(
+                    watchTask,
+                    this.#options.acknowledgementTimeoutMs,
+                    runController.signal,
+                  );
+                }
+              }
               finished.reject(new ReleaseCandidateError(result.category));
               return;
             }
@@ -340,7 +368,7 @@ export class ReleaseLoader {
         start(candidate);
       };
 
-      watchTask = this.#watchLoop(runController.signal, offer);
+      watchTask = this.#watchLoop(runController.signal, offer, () => gracefulWatchStop);
       reconcileTask = this.#reconcileLoop(runController.signal, offer);
       offer(makeCandidate(initial.release, initial.activationRevision, "reconciliation", 0n));
 
@@ -370,8 +398,8 @@ export class ReleaseLoader {
     } catch (error) {
       this.#status.lastResolutionDurationMs = Math.max(0, this.#options.now() - started);
       const category = resolutionCategory(error, signal);
-      this.#reject(candidate, category);
-      return { candidate, applied: false, category };
+      const acknowledgementGeneration = this.#reject(candidate, category);
+      return { candidate, applied: false, category, acknowledgementGeneration };
     }
     this.#status.lastResolutionDurationMs = Math.max(0, this.#options.now() - started);
     this.#ack(candidate, "received");
@@ -391,8 +419,8 @@ export class ReleaseLoader {
       const category = signal.aborted
         ? "superseded"
         : (classifiedReleaseCategory(error) ?? "prepare_failed");
-      this.#reject(candidate, category);
-      return { candidate, applied: false, category };
+      const acknowledgementGeneration = this.#reject(candidate, category);
+      return { candidate, applied: false, category, acknowledgementGeneration };
     }
 
     let abortedPrepared = false;
@@ -409,10 +437,10 @@ export class ReleaseLoader {
 
     if (signal.aborted) {
       const fatal = abortPrepared();
-      this.#reject(candidate, fatal ? "internal" : "superseded");
+      const acknowledgementGeneration = this.#reject(candidate, fatal ? "internal" : "superseded");
       return fatal
-        ? { candidate, applied: false, category: "internal", fatal }
-        : { candidate, applied: false, category: "superseded" };
+        ? { candidate, applied: false, category: "internal", acknowledgementGeneration, fatal }
+        : { candidate, applied: false, category: "superseded", acknowledgementGeneration };
     }
     this.#ack(candidate, "prepared");
     this.#status.state = "prepared";
@@ -427,18 +455,18 @@ export class ReleaseLoader {
         ? "superseded"
         : "active_check_failed";
       const fatal = abortPrepared();
-      this.#reject(candidate, fatal ? "internal" : category);
+      const acknowledgementGeneration = this.#reject(candidate, fatal ? "internal" : category);
       return fatal
-        ? { candidate, applied: false, category: "internal", fatal }
-        : { candidate, applied: false, category };
+        ? { candidate, applied: false, category: "internal", acknowledgementGeneration, fatal }
+        : { candidate, applied: false, category, acknowledgementGeneration };
     }
 
     if (signal.aborted || !sameActiveCandidate(candidate, active)) {
       const fatal = abortPrepared();
-      this.#reject(candidate, fatal ? "internal" : "superseded");
+      const acknowledgementGeneration = this.#reject(candidate, fatal ? "internal" : "superseded");
       return fatal
-        ? { candidate, applied: false, category: "internal", fatal }
-        : { candidate, applied: false, category: "superseded" };
+        ? { candidate, applied: false, category: "internal", acknowledgementGeneration, fatal }
+        : { candidate, applied: false, category: "superseded", acknowledgementGeneration };
     }
 
     try {
@@ -601,9 +629,13 @@ export class ReleaseLoader {
     };
   }
 
-  async #watchLoop(signal: AbortSignal, offer: (candidate: Candidate) => void): Promise<void> {
+  async #watchLoop(
+    signal: AbortSignal,
+    offer: (candidate: Candidate) => void,
+    shouldStopGracefully: () => boolean,
+  ): Promise<void> {
     let attempt = 0;
-    while (!signal.aborted) {
+    while (!signal.aborted && !shouldStopGracefully()) {
       let stream: ReleaseWatchStream | undefined;
       let receivedEvent = false;
       try {
@@ -635,7 +667,7 @@ export class ReleaseLoader {
         if (this.#currentStream === stream) this.#currentStream = undefined;
         await closeStream(stream);
       }
-      if (signal.aborted) return;
+      if (signal.aborted || shouldStopGracefully()) return;
       if (receivedEvent) attempt = 0;
       this.#recordReconnect();
       const ceiling = Math.min(BACKOFF_CAP_MS, BACKOFF_BASE_MS * 2 ** Math.min(attempt, 30));
@@ -665,9 +697,10 @@ export class ReleaseLoader {
     this.#stats.candidates += 1n;
   }
 
-  #reject(candidate: Candidate, category: ReleaseRejectionCategory): void {
-    this.#ack(candidate, "rejected", category);
+  #reject(candidate: Candidate, category: ReleaseRejectionCategory): bigint {
+    const acknowledgementGeneration = this.#ack(candidate, "rejected", category);
     this.#recordRejected(category);
+    return acknowledgementGeneration;
   }
 
   #recordRejected(category: ReleaseRejectionCategory): void {
@@ -686,7 +719,7 @@ export class ReleaseLoader {
     candidate: Candidate,
     state: ReleaseState,
     rejectionCategory: ReleaseRejectionCategory | "" = "",
-  ): void {
+  ): bigint {
     this.#ackGeneration += 1n;
     const acknowledgement: ReleaseAcknowledgement = {
       namespace: { ...this.#options.namespace },
@@ -709,6 +742,7 @@ export class ReleaseLoader {
       });
     }
     void this.#scheduleAckFlush().catch(() => undefined);
+    return this.#ackGeneration;
   }
 
   #scheduleAckFlush(): Promise<void> {
@@ -734,8 +768,55 @@ export class ReleaseLoader {
         request: { $case: "acknowledgement", value: { ...item.acknowledgement } },
       });
       const current = this.#pendingAcknowledgements.get(item.state);
-      if (current?.generation === item.generation) current.dirty = false;
+      if (current?.generation === item.generation) {
+        current.dirty = false;
+        current.flushedOn = stream;
+        this.#acknowledgementWaiters.get(item.generation)?.(stream);
+        this.#acknowledgementWaiters.delete(item.generation);
+      }
     }
+  }
+
+  #waitForAcknowledgement(
+    generation: bigint,
+    signal: AbortSignal,
+  ): Promise<ReleaseWatchStream | undefined> {
+    for (const item of this.#pendingAcknowledgements.values()) {
+      if (item.generation === generation && !item.dirty) return Promise.resolve(item.flushedOn);
+    }
+    return new Promise<ReleaseWatchStream | undefined>((resolve, reject) => {
+      let settled = false;
+      const finish = (stream: ReleaseWatchStream | undefined): void => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        signal.removeEventListener("abort", abort);
+        this.#acknowledgementWaiters.delete(generation);
+        resolve(stream);
+      };
+      const abort = (): void => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        this.#acknowledgementWaiters.delete(generation);
+        reject(abortReason(signal));
+      };
+      const timer = setTimeout(() => finish(undefined), this.#options.acknowledgementTimeoutMs);
+      timer.unref?.();
+      this.#acknowledgementWaiters.set(generation, finish);
+      signal.addEventListener("abort", abort, { once: true });
+      if (signal.aborted) {
+        abort();
+        return;
+      }
+
+      for (const item of this.#pendingAcknowledgements.values()) {
+        if (item.generation === generation && !item.dirty) {
+          finish(item.flushedOn);
+          break;
+        }
+      }
+    });
   }
 }
 
@@ -763,10 +844,12 @@ function normalizeOptions(options: ReleaseLoaderOptions): NormalizedOptions {
   const clientName = options.clientName.trim();
   if (!clientName) throw new TypeError("release loader clientName is required");
   const instanceId = options.instanceId?.trim() || randomUUID();
-  const reconcileIntervalMs = options.reconcileIntervalMs ?? DEFAULT_RECONCILE_INTERVAL_MS;
-  if (!Number.isFinite(reconcileIntervalMs) || reconcileIntervalMs <= 0) {
-    throw new RangeError("reconcileIntervalMs must be positive");
+  const requestedReconcileIntervalMs = options.reconcileIntervalMs ?? 0;
+  if (!Number.isFinite(requestedReconcileIntervalMs)) {
+    throw new RangeError("reconcileIntervalMs must be finite");
   }
+  const reconcileIntervalMs =
+    requestedReconcileIntervalMs > 0 ? requestedReconcileIntervalMs : DEFAULT_RECONCILE_INTERVAL_MS;
   const maxConcurrentFetches =
     options.maxConcurrentFetches && options.maxConcurrentFetches > 0
       ? options.maxConcurrentFetches
@@ -785,9 +868,20 @@ function normalizeOptions(options: ReleaseLoaderOptions): NormalizedOptions {
     maxConcurrentFetches,
     ...(options.secretTokenProvider ? { secretTokenProvider: options.secretTokenProvider } : {}),
     ...(options.validateManifest ? { validateManifest: options.validateManifest } : {}),
+    acknowledgementTimeoutMs: positiveFinite(
+      options.acknowledgementTimeoutMs ?? 5_000,
+      "acknowledgementTimeoutMs",
+    ),
     now: options.now ?? Date.now,
     random: options.random ?? Math.random,
   };
+}
+
+function positiveFinite(value: number, name: string): number {
+  if (!Number.isFinite(value) || value <= 0) {
+    throw new RangeError(`${name} must be positive`);
+  }
+  return value;
 }
 
 function metadataForEntry(entry: ConfigurationRelease["entries"][number]): ReleaseEntryMetadata {
@@ -954,6 +1048,34 @@ function delay(milliseconds: number, signal: AbortSignal): Promise<void> {
       resolve();
     }
     signal.addEventListener("abort", abort, { once: true });
+  });
+}
+
+function settleWithin(
+  task: Promise<unknown>,
+  milliseconds: number,
+  signal: AbortSignal,
+): Promise<void> {
+  if (signal.aborted) return Promise.reject(abortReason(signal));
+  return new Promise<void>((resolve, reject) => {
+    let settled = false;
+    const finish = (error?: unknown): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      signal.removeEventListener("abort", abort);
+      if (error !== undefined) reject(error);
+      else resolve();
+    };
+    const abort = (): void => finish(abortReason(signal));
+    const timer = setTimeout(() => finish(), milliseconds);
+    timer.unref?.();
+    signal.addEventListener("abort", abort, { once: true });
+    task.then(
+      () => finish(),
+      () => finish(),
+    );
+    if (signal.aborted) abort();
   });
 }
 
