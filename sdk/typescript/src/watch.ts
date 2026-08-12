@@ -354,12 +354,15 @@ export class SubscriptionManager {
         lastSeenRevision: requestFullSnapshot ? 0n : this.#lastRevision,
         ackedRevision: 0n,
       });
-      if (requestFullSnapshot) {
-        this.#snapshotGeneration = Math.max(this.#snapshotGeneration, namespaceGeneration);
-      }
       this.#state = "connected";
       this.#connectedAtUnixMs = Date.now();
-      for await (const event of stream) await this.#handleEvent(event, stream.send.bind(stream));
+      for await (const event of stream) {
+        await this.#handleEvent(
+          event,
+          stream.send.bind(stream),
+          requestFullSnapshot ? namespaceGeneration : undefined,
+        );
+      }
       throw new Error("watch stream ended");
     } finally {
       stream.cancel();
@@ -375,11 +378,18 @@ export class SubscriptionManager {
       lastSeenRevision: bigint;
       ackedRevision: bigint;
     }) => Promise<void>,
+    requestedSnapshotGeneration?: number,
   ): Promise<void> {
     this.#lastEventAtUnixMs = Date.now();
     switch (event.event?.$case) {
       case "snapshot":
         this.#applySnapshot(event.event.value, event.revision);
+        if (requestedSnapshotGeneration !== undefined) {
+          this.#snapshotGeneration = Math.max(
+            this.#snapshotGeneration,
+            requestedSnapshotGeneration,
+          );
+        }
         this.#advanceRevision(event.revision);
         return;
       case "change":

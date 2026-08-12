@@ -44,6 +44,11 @@ describe("shared watches", () => {
     });
 
     stream.emit({
+      event: { $case: "snapshot", value: { parameters: [] } },
+      revision: 0n,
+    });
+
+    stream.emit({
       event: {
         $case: "change",
         value: {
@@ -194,7 +199,15 @@ describe("shared watches", () => {
       lastSeenRevision: 0n,
     });
 
-    expanded.emit({
+    // Merely sending registration is not enough: until the requested snapshot
+    // is delivered, reconnects must continue requesting the full union.
+    expanded.cancel();
+    await waitFor(() => transport.streams.length === 3);
+    const retriedSnapshot = transport.streams[2] as FakeDuplex<SubscribeRequest, SubscribeEvent>;
+    await waitFor(() => retriedSnapshot.sent.length === 1);
+    expect(retriedSnapshot.sent[0]).toMatchObject({ lastSeenRevision: 0n });
+
+    retriedSnapshot.emit({
       event: {
         $case: "snapshot",
         value: {
@@ -230,9 +243,9 @@ describe("shared watches", () => {
     expect(workerEvents[0]).toMatchObject({ value: "worker", revision: 3n });
     expect(client.currentRevision).toBe(5n);
 
-    expanded.cancel();
-    await waitFor(() => transport.streams.length === 3);
-    const resumed = transport.streams[2] as FakeDuplex<SubscribeRequest, SubscribeEvent>;
+    retriedSnapshot.cancel();
+    await waitFor(() => transport.streams.length === 4);
+    const resumed = transport.streams[3] as FakeDuplex<SubscribeRequest, SubscribeEvent>;
     await waitFor(() => resumed.sent.length === 1);
     expect(resumed.sent[0]).toMatchObject({ lastSeenRevision: 5n });
 
