@@ -247,7 +247,7 @@ describe("strict managed-configuration codecs", () => {
     expect(decoded.labels).toEqual({});
   });
 
-  it("matches signed-zero duration and float encoding and accepts mutable array fields", () => {
+  it("normalizes signed-zero duration and floats and accepts mutable array fields", () => {
     interface MutableCollections {
       values: string[] | null;
       fixed: string[];
@@ -267,9 +267,10 @@ describe("strict managed-configuration codecs", () => {
         descriptor,
       );
       expect(decoded.duration).toBe(0n);
-      expect(Object.is(decoded.ratio, -0)).toBe(true);
+      expect(Object.is(decoded.ratio, 0)).toBe(true);
       const encoded = encodeGroup(decoded, descriptor);
-      expect(encoded).toContain('"ratio":-0');
+      expect(encoded).toContain('"ratio":0');
+      expect(encodeGroup({ ...decoded, ratio: -0 }, descriptor)).toBe(encoded);
     }
   });
 

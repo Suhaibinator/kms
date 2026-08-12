@@ -180,12 +180,14 @@ export const codecs = Object.freeze({
         if (compareDecimalMagnitude(node.lexeme, maximum) > 0) throw rangeError(path, "number");
         const value = Number(node.lexeme);
         if (!Number.isFinite(value)) throw rangeError(path, "number");
-        return bits === 32 ? Math.fround(value) : value;
+        const decoded = bits === 32 ? Math.fround(value) : value;
+        return decoded === 0 ? 0 : decoded;
       },
       (value, path) => {
         if (typeof value !== "number" || !Number.isFinite(value)) throw rangeError(path, "number");
-        const encoded = bits === 32 ? Math.fround(value) : value;
-        const lexeme = Object.is(encoded, -0) ? "-0" : String(encoded);
+        const rounded = bits === 32 ? Math.fround(value) : value;
+        const encoded = rounded === 0 ? 0 : rounded;
+        const lexeme = String(encoded);
         if (compareDecimalMagnitude(lexeme, maximum) > 0) throw rangeError(path, "number");
         return { kind: "number", lexeme };
       },
