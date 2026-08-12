@@ -50,12 +50,22 @@ a minor release may contain documented breaking changes.
 - Protected parameter reads now forward their per-resource token and bypass
   shared caching; namespace discovery applies caller-local deadlines and
   cancellation without allowing one caller to poison a coalesced lookup.
+- Ordinary parameter and secret reads now reject missing or mismatched server
+  resource identities and invalid concrete versions before returning or
+  caching data. In-flight tokenless reads are generation-fenced so a response
+  cannot repopulate a path after a newer mutation, watch, namespace, or close
+  invalidation.
+- Local cancellation errors retain their original identity, while genuine
+  gRPC service errors—including errors produced by a separately installed
+  `grpc-js` copy—still normalize to stable SDK error codes.
 - Already-cancelled callers start no shared namespace-discovery work, preventing
   an unobserved WhoAmI failure from becoming an unhandled rejection.
 - Publisher observers receive an outcome only after the corresponding public
   result is safely constructed.
 - A cancelled release run retains exclusivity until every owned preparation
   settles, preventing sequential runs from overlapping abort-insensitive work.
+- Release-watch registration failures cancel the newly created stream before
+  retrying, and reconnect jitter has a positive floor to prevent a hot loop.
 - Exact release fetches preserve the server-returned resource ref, reject wrong
   or missing identities, and never cache a rejected parameter response.
 - Release commit/abort and managed-config publish/abort callbacks must return
@@ -64,6 +74,15 @@ a minor release may contain documented breaking changes.
 - Next process signal hooks are explicitly cleanup-only, reject uncatchable
   signals before installation, and invoke an explicit application-owned
   termination callback after cleanup settles.
+- Client and Next adapter close attempts are published before synchronous abort
+  side effects, making reentrant shutdown idempotent with one shared result.
+  Throwing or asynchronously rejecting application loggers and shutdown error
+  observers are contained without stalling cleanup or callback delivery.
+- Config generation rejects oversized descriptors before unbounded allocation,
+  limits all reads to one byte beyond the 1 MiB ceiling, and fails on malformed
+  UTF-8 instead of silently changing descriptor text.
+- Managed configuration cloning preserves repeated `Secret` and
+  `ReleaseSecret` aliases while retaining detached plaintext backing storage.
 
 ### Compatibility notes
 
