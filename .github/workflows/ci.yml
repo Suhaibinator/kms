@@ -181,6 +181,29 @@ jobs:
       - name: Test (pytest)
         run: python -m pytest -q
 
+  typescript-sdk:
+    name: TypeScript SDK (Node ${{ matrix.node-version }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: sdk/typescript
+    strategy:
+      fail-fast: false
+      matrix:
+        node-version: ["22", "26"]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v6
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: npm
+          cache-dependency-path: sdk/typescript/package-lock.json
+      - name: Install dependencies from lockfile
+        run: npm ci
+      - name: Generated contract, quality, tests, consumer types, and build
+        run: npm run check
+
   frontend:
     name: Frontend (quality, tests & build)
     runs-on: ubuntu-latest

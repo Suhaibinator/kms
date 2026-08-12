@@ -114,6 +114,28 @@ python -m venv .venv
 
 CI runs mypy and pytest on the oldest and newest supported Python versions.
 
+## TypeScript SDK
+
+The Node SDK has strict type checking, Biome lint/format gates, deterministic
+protobuf generation verification, unit and fault-injection tests, compile-only
+consumer/example contracts, and a declaration build:
+
+```bash
+cd sdk/typescript
+npm ci
+npm run check
+```
+
+The equivalent repository targets are `make typescript` for a clean package
+build, `make test-typescript` for runtime and consumer-type tests, and
+`make check-typescript` for the complete release gate. All three install from
+the committed lockfile first.
+
+CI runs `npm run check` on Node 22 and Node 26. Examples under
+`sdk/typescript/examples` are included in `npm run test:types`, so changes to
+the documented core and serverful Next.js integrations cannot silently drift
+from the public exports.
+
 ## Frontend
 
 The frontend has compile-time checks, lint/format gates, component tests,
@@ -149,6 +171,8 @@ The workflow in `.github/workflows/ci.yml` runs these independent checks:
   native permission and ACL semantics flow through database, backup, restore,
   certificate, and key operations.
 - `Python SDK (pytest & mypy)` — the supported Python-version matrix.
+- `TypeScript SDK` — the complete package gate on the oldest and newest
+  supported Node.js majors (22 and 26).
 - `Frontend (quality, tests & build)` — locked install, generated types,
   TypeScript, linting, formatting, component/browser tests, and static export.
 - Go lint and `govulncheck` remain independent required checks.

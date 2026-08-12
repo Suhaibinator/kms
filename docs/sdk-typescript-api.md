@@ -21,6 +21,104 @@ client export never imports gRPC, TLS, credentials, secrets, or a full release
 snapshot. The existing repository frontend remains a static export and is not a
 host for this adapter; consumers need a serverful Next.js deployment.
 
+The package is ESM-only. Node 22 is the oldest supported runtime; CI also runs
+the release gate on Node 26. Next.js and React are optional peers and are needed
+only for their respective adapter entry points.
+
+## Core API reference
+
+### Construction, transport, and lifecycle
+
+| API | Contract |
+|---|---|
+| `createClient(options)`, `new KmsClient(options)` | Create one process-shareable client. Require `credentials`, explicit development-only `insecure: true`, or an injected `RpcTransport`. |
+| `tlsFromFiles(ca)`, `mtlsFromFiles(cert, key, ca)`, `tlsFromBytes(...)` | Build gRPC channel credentials. The CA trusts the operator-provided server certificate. |
+| `client.whoAmI()` | Return bounded identity, namespace, and authentication-method metadata. Namespace discovery is lazy and retryable. |
+| `client.close()` | Idempotently cancel watches, reconciliation, callbacks, and transport work. `Symbol.asyncDispose` delegates to it. |
+| `CallOptions` | Per-call `AbortSignal` and earlier absolute deadline. The default unary deadline is five seconds. |
+
+`KmsClientOptions.token` supplies bearer authentication. `GetOptions` and
+secret mutation options accept a separate `secretToken`; it is never used as
+the caller identity. `RpcTransport`, `UnaryMethod`, `BidiMethod`, and
+`DuplexRpc` are exported for deterministic tests and advanced transport
+integration, but generated protobuf symbols remain internal.
+
+### Resources and declarative values
+
+| API | Contract |
+|---|---|
+| `getParameter`, `getSecret` | Resolve a relative or absolute key at `version` or `label`; return exact `bigint` metadata and a redacting `Secret`. |
+| `putParameter`, `putSecret` | Write an immutable version, invalidate matching cache entries, and return `bigint` version/revision fields. |
+| `listParameters`, `listSecrets` | Return immutable `Page<T>` values with bounded pagination inputs. |
+| `getParameterMetadata`, `getSecretMetadata` | Return non-plaintext history, labels, state, and content metadata. |
+| `deleteParameter`, `deleteSecret`, `setSecretEnabled`, `destroySecretVersion`, `promoteSecretVersion` | Perform the corresponding authorized mutation and return exact revision/version values. |
+| `SecretValue` | Resolve an env override, KMS secret, or allowed default. Plaintext access is explicit and implicit rendering redacts. |
+| `ParameterValue` | Resolve the same precedence and subscribe by default. `static: true` opts out; `onChange` and `dispose` own callback lifecycle. |
+| `client.resolve(object)` / `resolveValues` | Find declarative values through own properties and arrays, detect cycles, and report failures together in `ResolutionError`. |
+
+`parseNamespace`, `splitDisplayPath`, `resolveRef`, and display helpers expose
+the namespace/path rules without a network call. `CURRENT_VERSION` represents
+the server's current selector. All explicit versions must be `bigint` values
+within the protobuf `uint64` range.
+
+### Watches and releases
+
+| API | Contract |
+|---|---|
+| `client.watch(callback)` | Observe the home namespace through the shared bidirectional stream and return an unsubscribe function. |
+| `client.watchNamespace(namespace, callback)` | Observe an explicit namespace, subject to authorization. |
+| `client.createReleaseLoader(options)` | Bind an atomic loader to the client's authenticated transport and configured/discovered namespace. |
+| `ReleaseLoader.run(prepare, signal)` | Resolve one exact, verified candidate at a time; abort superseded work; synchronously commit prepared state; preserve last known good after later rejection. |
+| `ReleaseLoader.status()`, `stats()` | Return copied non-secret loader health and bounded rejection categories. |
+| `ReleaseSnapshot` | Provide immutable parameter access and defensive redacting secret access. JSON and inspection omit all values. |
+| `ClassifiedReleaseError` | Let application decoding map a failure to an allowed acknowledgement category without sending raw error text. |
+
+`prepare` may do fallible parsing, validation, and resource allocation. Its
+returned `commit()` must be synchronous and infallible; `abort()` must release
+candidate-owned resources. A release containing protected secrets supplies a
+local `secretTokenProvider`. `stop()` requests bounded shutdown; callers still
+await the `run()` promise before closing the client.
+
+### Public configuration
+
+| API | Contract |
+|---|---|
+| `definePublicProjection(allowlist)` | Declare explicit public field selectors and recursively clone, validate, and freeze their JSON results. |
+| `createPolicyPublisher(options)` | Read one atomic `PolicySnapshot`, publish its projection, and validate a request against that same generation. |
+| `formatRevision`, `parseRevision` | Convert between internal `bigint` and canonical decimal-string HTTP revisions without precision loss. |
+| `formatPublicConfigEtag` | Produce the revision-keyed strong validator used by the Next.js Route Handler. |
+| `normalizePublicConfigWire` | Strictly validate untrusted public response shape, revision range, keys, and JSON values. |
+
+The authoritative validator returns `success` or `validation_failed` only when
+the client revision is current. A missing or stale revision returns
+`policy_changed` with the public projection from the same captured snapshot.
+An unavailable source returns `unavailable`.
+
+## Next.js adapter reference
+
+`@suhaibinator/kms/next/server` begins with `import "server-only"` and rejects
+Edge runtime execution. `createNextKms` accepts one application-owned
+initializer, projection, and validator and returns:
+
+- `start()` and `close()` for coalesced process-local lifecycle;
+- `readPolicy()` for server-only policy access and `readPublicPolicy()` for a
+  serializable Server Component prop;
+- `validateAtRevision()` for authoritative Server Action/Route validation;
+- `createPublicConfigGET()` for an ETag-aware App Router Route Handler; and
+- `installProcessShutdown()` for SIGINT/SIGTERM cleanup.
+
+The Route Handler defaults to `Cache-Control: no-store`. The only alternative
+is bounded private browser caching; it never emits shared/CDN caching.
+
+`@suhaibinator/kms/next/client` exports `usePublicConfig(initial, options)`.
+The hook retains a last-known-good projection, conditionally refreshes with an
+ETag, fences out-of-order responses, refreshes on mount/focus by default, and
+installs a validated `policy_changed` result through `applyServerResult`.
+It has no KMS credentials, secret types, or transport dependency.
+
+The complete compile-checked integration is in the
+[`next-serverful` example](../sdk/typescript/examples/next-serverful).
+
 ## Naming and types
 
 Public TypeScript names use `PascalCase` for types/classes and `camelCase` for
@@ -76,6 +174,11 @@ Deprecated APIs remain functional for at least one minor-release line and carry
 both a TypeScript `@deprecated` annotation and migration guidance. Generated
 protobuf symbols and modules below `src/generated` are internal and are not a
 stable public surface.
+
+Before `1.0.0`, a minor version may make a documented breaking change. Every
+user-visible change is recorded under `Unreleased` in the package changelog;
+release entries include an ISO date and migration guidance for breaking
+changes. Security fixes are supported on the latest published minor line.
 
 ## Intentional language differences
 

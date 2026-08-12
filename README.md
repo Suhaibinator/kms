@@ -52,7 +52,9 @@ management.
   moves `current`/`previous`, writes one authoritative global revision, and can
   be guarded with compare-and-swap. Go and Python loaders resolve the complete
   candidate, let the application prepare it, fence stale work, and retain the
-  last-known-good release on later failures. Optional immutable Draft 2020-12
+  last-known-good release on later failures. The TypeScript SDK provides the
+  same exact-version, digest, supersession, acknowledgement, and
+  last-known-good lifecycle for Node.js services. Optional immutable Draft 2020-12
   JSON Schemas validate the alias-keyed parameter object; secret values and
   per-secret tokens are never stored in a release or watch event.
 - **Generated managed Go configuration**: applications declare an ordinary
@@ -61,11 +63,12 @@ management.
   views, a release schema, and a machine contract. Application-owned defaults
   fail closed on startup drift while explicit hot emergency overrides remain
   possible. See [`docs/managed-go-configuration.md`](docs/managed-go-configuration.md).
-- **Declarative SDK config** in both Go and Python: `SecretValue`/
+- **Declarative SDK config** in Go, Python, and TypeScript: `SecretValue`/
   `ParameterValue` fields resolved with one `Resolve`/`resolve` call — env
   override, then store, then dev default, else a startup error naming the
-  missing key. See [`docs/sdk-go.md`](docs/sdk-go.md) and
-  [`docs/sdk-python.md`](docs/sdk-python.md).
+  missing key. See [`docs/sdk-go.md`](docs/sdk-go.md),
+  [`docs/sdk-python.md`](docs/sdk-python.md), and
+  [`sdk/typescript/README.md`](sdk/typescript/README.md).
 - **Embedded Next.js admin UI** (static export, no separate frontend
   server) for namespace management (auth methods), parameters, secrets (with
   an explicit reveal flow), policies, identities (with mTLS certificate
@@ -140,6 +143,8 @@ directly, with client-side routing fallback for deep links.
 
 - Go 1.26.5+ (see `go.mod`)
 - Node.js 20.9+ (required by the pinned Next.js version)
+- Node.js 22+ when building or consuming the independently published
+  TypeScript SDK
 
 ### Build
 
@@ -151,6 +156,9 @@ make build   # runs the `frontend` target (npm ci && npm run build -> frontend/o
 `make frontend` and `make backend` are also available individually. `make
 test` runs every Go test with the race detector; `make test-unit` and `make
 test-integration` provide the same unit/integration split enforced by CI.
+For the Node SDK, `make typescript`, `make test-typescript`, and `make
+check-typescript` install from its committed lockfile and run its build,
+tests/consumer type checks, or complete release gate respectively.
 `make check-frontend` fails if `frontend/out/index.html` is missing (useful in
 CI before a release build, so an empty UI never ships silently). See
 [`docs/testing.md`](docs/testing.md) for all local and CI regression commands.
@@ -370,10 +378,11 @@ Consuming applications subscribe to one or more whole namespaces over a single
 long-lived gRPC `Subscribe` stream. The
 server pushes an initial snapshot or a replay from the client's last-seen
 revision, then live changes, interleaved with heartbeats (default 30s; 3
-missed = the subscriber is dropped from the registry). The Go SDK owns the
+missed = the subscriber is dropped from the registry). The Go, Python, and
+TypeScript SDKs own the
 whole lifecycle — reconnect with jittered backoff, resume by revision, and a
 5-minute reconciliation poll as a safety net — so application code just
-reads `value.Get()` or registers `OnChange`. Declarative parameters
+reads the current value or registers a change callback. Declarative parameters
 hot-reload **by default** (opt out with `Static`); every non-static value in
 a namespace shares one namespace-wide subscription. Secret changes are
 pushed as metadata-only notifications (no plaintext over the stream); the SDK
@@ -381,8 +390,10 @@ re-fetches on request. The frontend's **Subscribers** page shows every live
 subscription, its namespaces, and its last acknowledged revision. Revisions
 are global, so a subscriber may appear behind because another namespace
 changed; use the view as a coarse liveness/lag signal, not proof that a
-specific key was applied. See [`docs/sdk-go.md`](docs/sdk-go.md#hot-reload) and
-[`plan-namespaces.md`](plan-namespaces.md) §9 for the full design.
+specific key was applied. See [`docs/sdk-go.md`](docs/sdk-go.md#hot-reload),
+[`docs/sdk-python.md`](docs/sdk-python.md), and the
+[TypeScript SDK guide](sdk/typescript/README.md#declarative-values-and-hot-reload),
+and [`plan-namespaces.md`](plan-namespaces.md) §9 for the full design.
 
 For related values that must change together, use a **configuration release**
 instead of independent key callbacks. A release-aware client observes the
@@ -430,6 +441,12 @@ client-side routing resolves deep links on refresh.
 - **Python** (`sdk/python`, package `kms_paramstore`, distribution
   `kms-paramstore`) — equivalent synchronous release loading with explicit
   decoding; see [`docs/sdk-python.md`](docs/sdk-python.md).
+- **TypeScript** (`sdk/typescript`, package `@suhaibinator/kms`) — Node.js
+  TLS/mTLS client, declarative hot reload, atomic release loading,
+  framework-neutral public-policy publishing, and optional serverful Next.js
+  helpers; see the [`sdk/typescript` guide](sdk/typescript/README.md). The core
+  SDK is not browser-safe; only its explicit `next/client` public-policy hook
+  belongs in a browser bundle.
 
 ## Documentation
 
@@ -442,6 +459,12 @@ client-side routing resolves deep links on refresh.
 - [`docs/managed-go-configuration.md`](docs/managed-go-configuration.md) —
   generated atomic typed configuration, defaults, and operator workflow.
 - [`docs/sdk-python.md`](docs/sdk-python.md) — the Python client SDK.
+- [`sdk/typescript/README.md`](sdk/typescript/README.md) — TypeScript SDK
+  installation, operations, release loading, and serverful Next.js examples.
+- [`docs/sdk-typescript-api.md`](docs/sdk-typescript-api.md) — TypeScript public
+  API, runtime boundaries, compatibility, and versioning policy.
+- [`docs/sdk-typescript-parity.md`](docs/sdk-typescript-parity.md) — the living
+  Go-to-TypeScript behavioral parity and release-status ledger.
 - [`docs/http-api.md`](docs/http-api.md) — the JSON HTTP API contract used
   by the embedded frontend.
 - [`docs/configuration-releases.md`](docs/configuration-releases.md) — release
