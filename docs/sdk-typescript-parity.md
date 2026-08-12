@@ -29,15 +29,20 @@ delivery plan. `complete` means the behavior has an automated TypeScript test;
 | Published entry points and examples | package root, `next/server`, `next/client`, `configstore`, `configgen` | Declaration build plus compile-checked consumer and serverful Next.js examples | `sdk/typescript/tests/types`, `sdk/typescript/tests/package`, `npm run test:package` | complete |
 | Supported Node majors | package release gate | Typecheck, lint, tests, consumer types, and build on Node 22 and 26 | `.github/workflows/ci.yml` | complete |
 | TypeScript compiler compatibility | published declarations | TypeScript 5.2+ syntax; pinned compiler release gate | `npm run test:types`, `npm run test:package` | partial — minimum compiler matrix pending |
-| Real-server interoperability | core transport, watches, releases | TLS/mTLS, auth, unary methods, bidi recovery, and releases against a protocol-faithful KMS server | not implemented | planned |
+| Protocol-faithful server interoperability | core transport, watches, releases | Actual gRPC loopback with TLS/mTLS, auth metadata, unary methods, exact `bigint` values, bidi resume, releases, and applied acknowledgement | `sdk/typescript/tests/grpc-integration.test.ts`, `tls-integration.test.ts` | complete |
 
 Intentional differences are documented in
 [`sdk-typescript-api.md`](sdk-typescript-api.md). The SDK must not claim managed
 configuration parity until all Stage 7 rows are complete.
 
+The interoperability row uses hermetic protocol-faithful loopback gRPC
+services and runtime-generated certificates. It exercises the real transport
+and generated wire contract, but does not claim qualification against a
+separately deployed production server.
+
 The remaining `partial` and `planned` rows are release-visible qualification
 gaps. Unit coverage and a declaration build do not substitute for the required
-real-server, stress, browser, compiler, and peer-major compatibility scenarios.
+stress, browser, compiler, and peer-major compatibility scenarios.
 Until those rows complete, the package may be published as a prerelease
 candidate but must not advertise literal full Go parity or a generally
 available stable release.
