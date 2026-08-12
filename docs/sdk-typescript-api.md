@@ -219,17 +219,17 @@ An unavailable source returns `unavailable`.
 | `createPublicConfigGET(provider, options?)`, `PublicConfigGET`, `PublicConfigProvider` | Function and types | Adapt a safe public-config provider to a Node Route Handler. |
 | `PublicConfigCachePolicy`, `PublicConfigRouteOptions` | Types | Select `no-store` or bounded private-only browser caching. |
 | `PublicConfigRouteEvent`, `PublicConfigRouteObserver` | Types | Frozen, value-free `served`, `not_modified`, or `unavailable` HTTP event with observation time/duration and a decimal revision where available. Throwing/async-rejecting observers are isolated. |
-| `ProcessShutdownOptions` | Type | Select process signals and an error callback for cleanup failures. |
+| `ProcessShutdownOptions` | Type | Select process signals, an isolated cleanup-error callback, and whether the adapter re-sends the signal after cleanup. |
 | `DecimalRevision` | Re-exported type | Canonical decimal `uint64` used at this HTTP boundary. |
 
 The returned `NextKms` operations are `start`, `close`, `readPolicy`,
 `readPublicPolicy`, `validateAtRevision`, `createPublicConfigGET`, and
 `installProcessShutdown`. Reads start lazily; concurrent starts share one
 attempt, a failed attempt may retry, and concurrent closes share permanent
-cleanup. `installProcessShutdown` only requests SDK cleanup and returns a
-listener uninstaller. Because installing a Node signal listener suppresses the
-runtime's default exit behavior, the application remains responsible for its
-termination policy after cleanup.
+cleanup. `installProcessShutdown` returns a listener uninstaller and, by
+default, re-sends the received signal after cleanup so Node's normal signal
+termination is preserved. Set `terminateProcess: false` only when the
+application or process supervisor explicitly owns termination.
 
 ### Client entry point
 
@@ -251,8 +251,8 @@ initializer, projection, and validator and returns:
   serializable Server Component prop;
 - `validateAtRevision()` for authoritative Server Action/Route validation;
 - `createPublicConfigGET()` for an ETag-aware App Router Route Handler; and
-- `installProcessShutdown()` to request SIGINT/SIGTERM cleanup; the application
-  still owns process termination.
+- `installProcessShutdown()` for SIGINT/SIGTERM cleanup followed by normal
+  signal termination, with an explicit application-owned opt-out.
 
 The Route Handler defaults to `Cache-Control: no-store`. The only alternative
 is bounded private browser caching; it never emits shared/CDN caching.

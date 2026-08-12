@@ -87,6 +87,12 @@ export interface ProcessShutdownOptions {
   readonly signals?: readonly NodeJS.Signals[];
   /** Receives lifecycle errors; the adapter never serializes or logs them. */
   readonly onError?: (error: unknown) => void;
+  /**
+   * Re-send the received signal after cleanup so the process retains normal
+   * signal termination. Defaults to true. Set false only when the application
+   * or process supervisor explicitly owns termination.
+   */
+  readonly terminateProcess?: boolean;
 }
 
 export interface NextKms<
@@ -292,12 +298,31 @@ export function createNextKms<
       const signals = shutdownOptions.signals ?? ["SIGINT", "SIGTERM"];
       const uniqueSignals = [...new Set(signals)];
       let installed = true;
+      let shutdownStarted = false;
+
+      const reportError = (error: unknown): void => {
+        try {
+          shutdownOptions.onError?.(error);
+        } catch {
+          // A lifecycle observer must not prevent cleanup or termination.
+        }
+      };
 
       const handlers = uniqueSignals.map((signal) => {
         const handler = (): void => {
-          void close().catch((error: unknown) => {
-            shutdownOptions.onError?.(error);
-          });
+          if (shutdownStarted) return;
+          shutdownStarted = true;
+          uninstall();
+          void close()
+            .catch(reportError)
+            .finally(() => {
+              if (shutdownOptions.terminateProcess === false) return;
+              try {
+                process.kill(process.pid, signal);
+              } catch (error) {
+                reportError(error);
+              }
+            });
         };
         process.once(signal, handler);
         return [signal, handler] as const;

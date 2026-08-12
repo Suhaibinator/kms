@@ -126,6 +126,71 @@ describe("Next.js server adapter", () => {
     expect(process.listenerCount("SIGTERM")).toBe(baseline);
   });
 
+  it("cleans up and restores normal signal termination by default", async () => {
+    const signal = "SIGUSR2";
+    const baseline = process.listenerCount(signal);
+    let closes = 0;
+    const adapter = createNextKms<Policy, PublicPolicy, string, readonly string[]>({
+      initialize: () => ({
+        source: {
+          current: () => ({ revision: 1n, value: { minLength: 8, privateValue: "hidden" } }),
+        },
+        close: () => {
+          closes++;
+        },
+      }),
+      projection,
+      validate: () => ({ valid: true }),
+    });
+    await adapter.start();
+    const kill = vi.spyOn(process, "kill").mockReturnValue(true);
+    adapter.installProcessShutdown({ signals: [signal] });
+    const handler = process.listeners(signal).at(-1);
+    expect(handler).toBeTypeOf("function");
+
+    handler?.(signal);
+    await vi.waitFor(() => expect(kill).toHaveBeenCalledWith(process.pid, signal));
+
+    expect(closes).toBe(1);
+    expect(process.listenerCount(signal)).toBe(baseline);
+    kill.mockRestore();
+  });
+
+  it("supports application-owned termination and isolates error observers", async () => {
+    const signal = "SIGUSR2";
+    const baseline = process.listenerCount(signal);
+    const reported: unknown[] = [];
+    const adapter = createNextKms<Policy, PublicPolicy, string, readonly string[]>({
+      initialize: () => ({
+        source: {
+          current: () => ({ revision: 1n, value: { minLength: 8, privateValue: "hidden" } }),
+        },
+        close: () => {
+          throw new Error("cleanup failed");
+        },
+      }),
+      projection,
+      validate: () => ({ valid: true }),
+    });
+    await adapter.start();
+    const kill = vi.spyOn(process, "kill").mockReturnValue(true);
+    adapter.installProcessShutdown({
+      signals: [signal],
+      terminateProcess: false,
+      onError: (error) => {
+        reported.push(error);
+        throw new Error("observer failure");
+      },
+    });
+    const handler = process.listeners(signal).at(-1);
+    handler?.(signal);
+    await vi.waitFor(() => expect(reported).toHaveLength(1));
+
+    expect(kill).not.toHaveBeenCalled();
+    expect(process.listenerCount(signal)).toBe(baseline);
+    kill.mockRestore();
+  });
+
   it("emits exact 200, weak/list 304, and redacted 503 contracts", async () => {
     const get = createPublicConfigGET(async () => ({
       revision: formatRevision(18_446_744_073_709_551_615n),

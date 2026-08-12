@@ -36,6 +36,8 @@ a minor release may contain documented breaking changes.
 - Expanded watch scopes retry a full snapshot until it arrives, preserve
   per-key revision fences, and immediately invalidate newly watched secret
   caches; disposal cannot race a late parameter subscription.
+- Next process shutdown hooks re-send the triggering signal after cleanup so
+  installing the hook cannot accidentally suppress normal process exit.
 
 ### Compatibility notes
 
