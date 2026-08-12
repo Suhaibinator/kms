@@ -119,6 +119,38 @@ It has no KMS credentials, secret types, or transport dependency.
 The complete compile-checked integration is in the
 [`next-serverful` example](../sdk/typescript/examples/next-serverful).
 
+## Managed configuration reference
+
+`@suhaibinator/kms/configstore` is the optional Stage 7 layer used by generated
+bindings. `startManagedConfig(client, options, prepare, signal)` accepts an
+ordinary `KmsClient` through its public `createReleaseLoader` method; transport
+and generated protobuf types remain private. The options declare the release
+name and exact generated alias/content-type contract, require a synchronous
+default-drift reporter, and may allow an explicitly reported startup mismatch.
+
+Generated preparation performs strict decode and application validation, then
+returns a synchronous `publish` swap plus optional `abort`, complete
+source-default differences, and the canonical restart-required fields that
+changed. The manager:
+
+- validates the exact manifest before fetching entries;
+- blocks startup until the first candidate is atomically publishable;
+- fails closed on unapproved startup default drift and always reports approved
+  drift;
+- rejects a whole runtime candidate if any restart-required field changed;
+- retains the last-known-good snapshot and detects later default restoration;
+- exposes redacted copied status, metrics, mismatch, and rejection reports; and
+- stops through `manager.stop()` followed by `await manager.wait()`.
+
+`codecs`, `field`, `group`, `decodeGroup`, and `encodeGroup` provide
+duplicate-aware, unknown/missing-field rejecting JSON codecs with exact range
+checks. `ConfigSnapshot` and `immutableSnapshot` keep the stored root private
+and defensively clone composite and secret-bearing reads. This deliberately
+differs from allocation-free Go generated scalar/view getters: JavaScript
+managed views favor defensive ownership, represent exact 64-bit
+integers/durations as `bigint`, and use explicit `null` where the generated
+contract permits absence.
+
 ## Naming and types
 
 Public TypeScript names use `PascalCase` for types/classes and `camelCase` for

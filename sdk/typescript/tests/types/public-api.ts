@@ -10,6 +10,11 @@ import {
   SecretValue,
 } from "@suhaibinator/kms";
 import type { NextKms } from "@suhaibinator/kms/next/server";
+import {
+  type ContractEntry,
+  type ManagedPreparedCandidate,
+  startManagedConfig,
+} from "@suhaibinator/kms/configstore";
 
 interface Policy {
   readonly limit: number;
@@ -39,4 +44,22 @@ export function acceptsPublicApi(
 ): readonly unknown[] {
   const secret: Promise<Secret> = client.getSecret("secret");
   return [adapter, wire, snapshot, code, secret];
+}
+
+const managedContract = [
+  { alias: "runtime", kind: "parameter", contentType: "application/json" },
+] as const satisfies readonly ContractEntry[];
+
+export async function startsManagedConfig(client: KmsClient): Promise<void> {
+  const manager = await startManagedConfig(
+    client,
+    {
+      release: "runtime",
+      contract: managedContract,
+      onDefaultMismatch: () => undefined,
+    },
+    (): ManagedPreparedCandidate => ({ publish() {} }),
+  );
+  manager.stop();
+  await manager.wait();
 }

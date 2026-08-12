@@ -233,6 +233,46 @@ application explicitly extracts plaintext, that copy is ordinary application
 memory and must not be logged, serialized, sent to a browser, or retained
 longer than necessary.
 
+## Generated managed configuration
+
+The optional `@suhaibinator/kms/configstore` entry point lets generated
+bindings strictly decode a complete release, compare source-owned defaults,
+publish an immutable typed generation, and reject runtime changes to
+restart-required fields. A normal `KmsClient` is the lifecycle owner:
+
+```ts
+import { startManagedConfig } from "@suhaibinator/kms/configstore";
+import { contract, prepareRuntimeConfig } from "./runtime.kms.js";
+
+const manager = await startManagedConfig(
+  client,
+  {
+    release: "runtime",
+    contract,
+    onDefaultMismatch(report) {
+      // The report is secret-aware and path-bounded. Forward it to local telemetry.
+      console.error(String(report));
+    },
+  },
+  prepareRuntimeConfig,
+);
+
+// At shutdown, stop the manager before its client transport.
+manager.stop();
+await manager.wait();
+await client.close();
+```
+
+Generated preparation must do all fallible decode/validation work before its
+synchronous `publish` callback. Startup drift fails closed unless
+`allowDefaultMismatch: true` is set, and even an allowed mismatch always calls
+`onDefaultMismatch`. A runtime candidate changing any restart-required field
+is rejected as a whole while the last-known-good snapshot remains active.
+
+The generated binding, schema, and contract are application artifacts. Run the
+generator in its check mode in CI so source tags/descriptors cannot drift from
+committed output.
+
 ## Package boundaries and support
 
 | Import | Supported runtime | Purpose |

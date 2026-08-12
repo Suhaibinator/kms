@@ -4,6 +4,7 @@
     "noEmit": true,
     "paths": {
       "@suhaibinator/kms": ["../../src/index.ts"],
+      "@suhaibinator/kms/configstore": ["../../src/configstore/index.ts"],
       "@suhaibinator/kms/next/client": ["../../src/next/client.tsx"],
       "@suhaibinator/kms/next/server": ["../../src/next/server.ts"]
     },

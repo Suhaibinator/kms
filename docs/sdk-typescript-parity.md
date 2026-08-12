@@ -21,7 +21,7 @@ delivery plan. `complete` means the behavior has an automated TypeScript test;
 | Public projection | `definePublicProjection`, `createPolicyPublisher` | Allowlist-only JSON, one captured snapshot, decimal revisions, stale result | `sdk/typescript/tests/publishing.test.ts` | complete |
 | Next.js adapter | `next/server`, `next/client` | Server-only ownership, safe Route Handler, refresh and stale recovery | `sdk/typescript/tests/next-server.test.ts`, `next-client.test.tsx` | complete |
 | Managed strict decoding | `configstore` | Duplicate/unknown/missing/type/range checks; transactional decoding | `sdk/typescript/tests/configstore-codecs.test.ts` | complete |
-| Managed drift/restart policy | `ManagedConfigManager` | Startup drift, runtime restore, whole-candidate restart rejection | `sdk/typescript/tests/configstore-manager.test.ts` | planned |
+| Managed drift/restart policy | `startManagedConfig`, `ManagedConfigManager` | Startup drift, runtime restore, whole-candidate restart rejection | `sdk/typescript/tests/configstore-manager.test.ts` | complete |
 | TypeScript-native generation | `kms-config-gen-ts` | Stable binding/schema/contract output and check mode | `sdk/typescript/tests/configgen.test.ts` | planned |
 | Generated protobuf contract | `src/generated/kms.ts` | Complete service/messages, `uint64` as `bigint`, stale generation check | `npm run check:generated` | complete |
 | Published entry points and examples | package root, `next/server`, `next/client`, `configstore` | Declaration build plus compile-checked consumer and serverful Next.js examples | `sdk/typescript/tests/types`, `npm run build` | complete |
