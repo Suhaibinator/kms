@@ -49,6 +49,8 @@ a minor release may contain documented breaking changes.
   cancellation without allowing one caller to poison a coalesced lookup.
 - Publisher observers receive an outcome only after the corresponding public
   result is safely constructed.
+- A cancelled release run retains exclusivity until every owned preparation
+  settles, preventing sequential runs from overlapping abort-insensitive work.
 - Next process signal hooks are explicitly cleanup-only, reject uncatchable
   signals before installation, and invoke an explicit application-owned
   termination callback after cleanup settles.
