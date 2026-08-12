@@ -341,7 +341,7 @@ function decodeObject<T extends object>(
     }
   }
 
-  const result: Record<string, unknown> = {};
+  const result: Record<string, unknown> = Object.create(null) as Record<string, unknown>;
   for (const descriptor of fields) {
     const nodeValue = values.get(descriptor.jsonName);
     if (!nodeValue) throw descriptorError(path, "field lookup failed");
@@ -365,13 +365,17 @@ function encodeObject<T extends object>(
   return {
     kind: "object",
     properties: fields.map((descriptor) => {
-      if (!Object.hasOwn(source, descriptor.property)) {
+      const propertyDescriptor = Object.getOwnPropertyDescriptor(source, descriptor.property);
+      if (!propertyDescriptor) {
         throw descriptorError(path, "source property is missing");
+      }
+      if (!("value" in propertyDescriptor)) {
+        throw descriptorError(path, "source property is an accessor");
       }
       return {
         name: descriptor.jsonName,
         value: descriptor.value.encodeNode(
-          source[descriptor.property] as unknown,
+          propertyDescriptor.value,
           childPath(path, descriptor.jsonName),
         ),
       };

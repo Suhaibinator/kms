@@ -1,6 +1,8 @@
 import type { ReleaseManifest, ReleaseSnapshot } from "../releases/types.js";
 import { cloneConfig } from "./clone.js";
 
+const UINT64_MAX = (1n << 64n) - 1n;
+
 export interface ReleaseIdentityInit {
   readonly namespace?: string;
   readonly name?: string;
@@ -29,8 +31,15 @@ export class ReleaseIdentity {
     this.schemaId = init.schemaId ?? "";
     this.schemaVersion = init.schemaVersion ?? 0n;
     this.digest = init.digest ?? "";
-    if (this.version < 0n || this.activationRevision < 0n || this.schemaVersion < 0n) {
-      throw new RangeError("configstore: release identity uint64 fields must be non-negative");
+    if (
+      this.version < 0n ||
+      this.version > UINT64_MAX ||
+      this.activationRevision < 0n ||
+      this.activationRevision > UINT64_MAX ||
+      this.schemaVersion < 0n ||
+      this.schemaVersion > UINT64_MAX
+    ) {
+      throw new RangeError("configstore: release identity fields must be in the uint64 range");
     }
     Object.freeze(this);
   }
