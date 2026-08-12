@@ -247,8 +247,8 @@ declared optional peer ranges. Generated protobuf modules are internal and are
 not a compatibility surface.
 
 The public exports follow semantic versioning. Before `1.0.0`, minor releases
-may still contain breaking API changes and will document them in
-[`CHANGELOG.md`](CHANGELOG.md). See the repository's
+may still contain breaking API changes and will document them in the package
+changelog. See the repository's
 [public API policy](../../docs/sdk-typescript-api.md),
 [parity ledger](../../docs/sdk-typescript-parity.md), and
 [migration guide](../../docs/migration.md) for compatibility details.
@@ -266,5 +266,5 @@ npm run check
 consumer type contracts, and the distributable build. The repository Makefile
 also exposes `typescript`, `test-typescript`, and `check-typescript` targets.
 
-Security reports and deployment guidance are in [`SECURITY.md`](SECURITY.md).
+Security reports and deployment guidance are in the package security notice.
 This package is licensed under the repository's [MIT license](../../LICENSE).
