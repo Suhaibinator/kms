@@ -764,36 +764,41 @@ export class KmsClient {
         return this._getActiveRelease(fromWireNamespace(namespace), name, signal ? { signal } : {});
       },
       fetchParameter: async (wireRef, version, signal) => {
-        const ref = fromWireRef(wireRef);
-        const parameter = await this.fetchParameter(
-          ref,
-          { version, label: "" },
-          signal ? { signal } : {},
-        );
-        return {
-          ref: toWireRef(ref),
-          value: parameter.value,
-          contentType: parameter.contentType,
-          version: parameter.version,
-          metadataJson: parameter.metadataJson,
-          createdBy: parameter.createdBy,
-          createdAtUnixMs: parameter.createdAtUnixMs,
-          labels: { ...parameter.labels },
-        };
+        try {
+          const response = await this.#transport.unary(
+            ParameterServiceService.getParameter,
+            { ref: wireRef, version, label: "" },
+            this.#callOptions("", signal ? { signal } : {}),
+          );
+          if (!response.parameter) {
+            throw new KmsError("internal", "KMS parameter response was empty");
+          }
+          // Preserve the server's authoritative ref. The release loader must
+          // compare it with the manifest ref before accepting any bytes, and a
+          // rejected mismatch must never pollute the ordinary read cache.
+          return response.parameter;
+        } catch (error) {
+          throwMapped(error);
+        }
       },
       fetchSecret: async (wireRef, version, secretToken, signal) => {
-        const ref = fromWireRef(wireRef);
-        const secret = await this.fetchSecret(
-          ref,
-          { version, label: "" },
-          { secretToken, ...(signal ? { signal } : {}) },
-        );
-        return {
-          ref: toWireRef(ref),
-          version: secret.version,
-          value: secret.bytes(),
-          contentType: secret.contentType,
-        };
+        try {
+          const response = await this.#transport.unary(
+            SecretServiceService.getSecret,
+            { ref: wireRef, version, label: "" },
+            this.#callOptions(secretToken, signal ? { signal } : {}),
+          );
+          // Do not synthesize a missing ref from the request. Absence and
+          // mismatch are both fail-closed identity violations for a release.
+          return {
+            ref: response.ref,
+            version: response.version,
+            value: Uint8Array.from(response.value),
+            contentType: response.contentType,
+          };
+        } catch (error) {
+          throwMapped(error);
+        }
       },
       watchRelease: async (registration, signal): Promise<ReleaseWatchStream> => {
         const stream = this.#transport.bidi(ConfigurationReleaseServiceService.watchRelease, {
