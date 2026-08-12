@@ -147,9 +147,10 @@ export class SubscriptionManager {
       this.#parameterHandlers.set(path, handlers);
     }
     handlers.add(handler);
+    const wasStarted = this.#started;
     const changed = this.#addNamespace(ref.namespace);
     this.#ensureStarted();
-    if (changed && this.#started) this.#restart();
+    if (wasStarted && changed) this.#restart();
   }
 
   watch(namespace: NamespaceRef, callback: WatchCallback, signal?: AbortSignal): () => void {

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { KmsClient, type WatchEvent } from "../src/client.js";
 import type { SubscribeEvent, SubscribeRequest } from "../src/generated/kms.js";
+import { resolveRef } from "../src/refs.js";
 import { fullJitterBackoff, revisionAllowsWrite } from "../src/watch.js";
 import { type FakeDuplex, FakeTransport, waitFor } from "./helpers/fake-transport.js";
 
@@ -90,6 +91,18 @@ describe("shared watches", () => {
     stopA();
     stopSame();
     stopOther();
+    await client.close();
+  });
+
+  it("does not restart the first stream when a live ParameterValue registers", async () => {
+    const transport = new FakeTransport(() => ({ parameters: [], nextPageToken: "" }));
+    const client = new KmsClient({ transport, namespace: "prod/api" });
+
+    client._registerParameter(resolveRef("flag", "prod/api"), "off", () => undefined);
+    await waitFor(() => transport.streams.length === 1);
+    await new Promise((resolve) => setTimeout(resolve, 5));
+
+    expect(transport.streams).toHaveLength(1);
     await client.close();
   });
 
