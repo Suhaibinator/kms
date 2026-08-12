@@ -40,9 +40,9 @@ services and runtime-generated certificates. It exercises the real transport
 and generated wire contract, but does not claim qualification against a
 separately deployed production server.
 
-The remaining `partial` and `planned` rows are release-visible qualification
-gaps. Unit coverage and a declaration build do not substitute for the required
-stress, browser, compiler, and peer-major compatibility scenarios.
+The remaining `partial` rows are release-visible qualification gaps. Unit
+coverage and a declaration build do not substitute for the required browser,
+compiler, and peer-major compatibility scenarios.
 Until those rows complete, the package may be published as a prerelease
 candidate but must not advertise literal full Go parity or a generally
 available stable release.
