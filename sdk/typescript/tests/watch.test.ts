@@ -106,6 +106,22 @@ describe("shared watches", () => {
     await client.close();
   });
 
+  it("does not create background work for an already-aborted watcher", async () => {
+    const transport = new FakeTransport(() => ({ parameters: [], nextPageToken: "" }));
+    const client = new KmsClient({ transport, namespace: "prod/api" });
+    const controller = new AbortController();
+    controller.abort();
+
+    const stop = client.watchNamespace("prod/api", () => undefined, {
+      signal: controller.signal,
+    });
+    await Promise.resolve();
+    expect(transport.streams).toHaveLength(0);
+
+    stop();
+    await client.close();
+  });
+
   it("reconciles missed deletions for namespace watchers without a ParameterValue", async () => {
     let parameters = [
       {

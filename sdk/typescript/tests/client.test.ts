@@ -1,8 +1,9 @@
 import { status } from "@grpc/grpc-js";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { KmsClient } from "../src/client.js";
 import { ConfigError, KmsError } from "../src/errors.js";
 import { REDACTED } from "../src/secret.js";
+import type { RpcTransport } from "../src/transport.js";
 import { FakeTransport } from "./helpers/fake-transport.js";
 
 describe("KmsClient", () => {
@@ -166,5 +167,39 @@ describe("KmsClient", () => {
 
     expect(transport.calls).toHaveLength(0);
     await client.close();
+  });
+
+  it("coalesces concurrent close calls until transport cleanup completes", async () => {
+    const base = new FakeTransport(() => ({}));
+    let finishClose!: () => void;
+    const closeGate = new Promise<void>((resolve) => {
+      finishClose = resolve;
+    });
+    let closeCalls = 0;
+    const transport: RpcTransport = {
+      unary: base.unary.bind(base),
+      bidi: base.bidi.bind(base),
+      close: () => {
+        closeCalls++;
+        return closeGate;
+      },
+    };
+    const client = new KmsClient({ transport, namespace: "prod/api" });
+
+    const first = client.close();
+    const second = client.close();
+    expect(second).toBe(first);
+    await vi.waitFor(() => expect(closeCalls).toBe(1));
+
+    let completed = false;
+    void second.then(() => {
+      completed = true;
+    });
+    await Promise.resolve();
+    expect(completed).toBe(false);
+
+    finishClose();
+    await Promise.all([first, second]);
+    expect(completed).toBe(true);
   });
 });

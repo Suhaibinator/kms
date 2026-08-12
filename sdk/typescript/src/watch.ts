@@ -156,6 +156,7 @@ export class SubscriptionManager {
   watch(namespace: NamespaceRef, callback: WatchCallback, signal?: AbortSignal): () => void {
     if (typeof callback !== "function") throw new TypeError("watch callback is required");
     if (this.#stopped) throw new KmsError("failed_precondition", "KMS watch manager is stopped");
+    if (signal?.aborted) return () => undefined;
     const watcher: Watcher = { id: this.#nextWatcherId++, namespace, callback };
     this.#watchers.set(watcher.id, watcher);
     const wasStarted = this.#started;

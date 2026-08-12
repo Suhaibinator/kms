@@ -145,6 +145,7 @@ export class KmsClient {
   #discoveredNamespace: NamespaceRef | null | undefined;
   #namespacePromise: Promise<NamespaceRef | undefined> | undefined;
   #subscriptions: SubscriptionManager | undefined;
+  #closeAttempt: Promise<void> | undefined;
   #closed = false;
 
   readonly clientName: string;
@@ -659,14 +660,18 @@ export class KmsClient {
     return release;
   }
 
-  async close(): Promise<void> {
-    if (this.#closed) return;
+  close(): Promise<void> {
+    if (this.#closeAttempt !== undefined) return this.#closeAttempt;
     this.#closed = true;
-    this.#rootController.abort(new DOMException("KMS client closed", "AbortError"));
-    await this.#subscriptions?.stop();
-    this.#dispatcher.close();
-    this.#cache.clear();
-    await this.#transport.close();
+    const attempt = (async (): Promise<void> => {
+      this.#rootController.abort(new DOMException("KMS client closed", "AbortError"));
+      await this.#subscriptions?.stop();
+      this.#dispatcher.close();
+      this.#cache.clear();
+      await this.#transport.close();
+    })();
+    this.#closeAttempt = attempt;
+    return attempt;
   }
 
   async [Symbol.asyncDispose](): Promise<void> {
