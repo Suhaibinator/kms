@@ -1,11 +1,11 @@
 import {
   type CallOptions,
+  type ChannelCredentials,
+  type ChannelOptions,
   Client,
   type ClientDuplexStream,
   credentials,
   Metadata,
-  type ChannelCredentials,
-  type ChannelOptions,
 } from "@grpc/grpc-js";
 
 export interface UnaryMethod<Request, Response> {
@@ -82,7 +82,10 @@ export class GrpcTransport implements RpcTransport {
     return new Promise<Response>((resolve, reject) => {
       const callOptions: CallOptions = {};
       if (options.deadline) callOptions.deadline = options.deadline;
-      const call = this.#client.makeUnaryRequest(
+      let call: { cancel(): void } | undefined;
+      let settled = false;
+      const abort = () => call?.cancel();
+      call = this.#client.makeUnaryRequest(
         method.path,
         method.requestSerialize,
         method.responseDeserialize,
@@ -90,14 +93,19 @@ export class GrpcTransport implements RpcTransport {
         metadataFrom(options.metadata),
         callOptions,
         (error, response) => {
+          settled = true;
           options.signal?.removeEventListener("abort", abort);
           if (error) reject(error);
           else if (response === undefined) reject(new Error("KMS unary RPC returned no response"));
           else resolve(response);
         },
       );
-      const abort = () => call.cancel();
-      options.signal?.addEventListener("abort", abort, { once: true });
+      if (!settled && options.signal) {
+        options.signal.addEventListener("abort", abort, { once: true });
+        // Close the race where the signal aborts after the initial check but
+        // before the listener is installed.
+        if (options.signal.aborted) abort();
+      }
     });
   }
 
