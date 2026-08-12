@@ -6,7 +6,8 @@ and writes, declarative values, shared hot-reload watches, safe secret wrappers,
 atomic release loading, public-policy publishing primitives, and an optional
 serverful Next.js adapter.
 
-The SDK requires Node.js 22 or newer and is ESM-only. Its declarations use
+The SDK requires Node.js 22 or newer and is ESM-only. CI qualifies the complete
+release gate on Node.js 22, 24, and 26. Its declarations use
 TypeScript features available in TypeScript 5.2 and newer; the repository
 release gate currently runs the pinned TypeScript 7 compiler. The KMS transport
 is server-only: never import the package root from browser code. The only

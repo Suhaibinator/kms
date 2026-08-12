@@ -27,7 +27,7 @@ delivery plan. `complete` means the behavior has an automated TypeScript test;
 | TypeScript-native generation | `configgen`, `kms-config-gen-ts` | Stable binding/schema/contract output, emitted store behavior, and check mode | `sdk/typescript/tests/configgen.test.ts`, `configgen-generated.test.ts` | complete |
 | Generated protobuf contract | `src/generated/kms.ts` | Complete service/messages, `uint64` as `bigint`, stale generation check | `npm run check:generated` | complete |
 | Published entry points and examples | package root, `next/server`, `next/client`, `configstore`, `configgen` | Declaration build, built consumer, serverful Next build, browser-bundle inspection, and invalid client-import rejection | `sdk/typescript/tests/types`, `sdk/typescript/tests/package`, `npm run test:next`, `npm run test:package` | complete |
-| Supported Node majors | package release gate | Typecheck, lint, tests, consumer types, and build on Node 22 and 26 | `.github/workflows/ci.yml` | complete |
+| Supported Node majors | package release gate | Typecheck, lint, tests, consumer types, framework boundary builds, and package checks on Node 22, 24, and 26 | `.github/workflows/ci.yml` | complete |
 | TypeScript compiler compatibility | published declarations | TypeScript 5.2+ syntax; pinned compiler release gate | `npm run test:types`, `npm run test:package` | partial — minimum compiler matrix pending |
 | Protocol-faithful server interoperability | core transport, watches, releases | Actual gRPC loopback with TLS/mTLS, auth metadata, unary methods, exact `bigint` values, bidi resume, releases, and applied acknowledgement | `sdk/typescript/tests/grpc-integration.test.ts`, `tls-integration.test.ts` | complete |
 

@@ -22,15 +22,16 @@ client export never imports gRPC, TLS, credentials, secrets, or a full release
 snapshot. The existing repository frontend remains a static export and is not a
 host for this adapter; consumers need a serverful Next.js deployment.
 
-The package is ESM-only. Node 22 is the oldest supported runtime; CI also runs
-the release gate on Node 26. The declaration syntax requires TypeScript 5.2 or
-newer (`const` type parameters and `Symbol.asyncDispose`); the current release
-gate directly qualifies the pinned TypeScript 7 compiler, so minimum-compiler
-matrix coverage remains outstanding. Next.js and React are optional peers and
-are needed only for their respective adapter entry points. The peer ranges express
-intended Next.js 14–16 and React 18–19 compatibility, while the current adapter
-suite directly qualifies Next.js 16 with React 19. Earlier accepted peer majors
-remain a compatibility-qualification gap rather than a matrix-tested claim.
+The package is ESM-only. Node 22 is the oldest supported runtime; CI runs the
+complete release gate on Node 22, 24, and 26. The declaration syntax requires
+TypeScript 5.2 or newer (`const` type parameters and `Symbol.asyncDispose`);
+the current release gate directly qualifies the pinned TypeScript 7 compiler,
+so minimum-compiler matrix coverage remains outstanding. Next.js and React are
+optional peers and are needed only for their respective adapter entry points.
+The peer ranges express intended Next.js 14–16 and React 18–19 compatibility,
+while the current adapter suite directly qualifies Next.js 16 with React 19.
+Earlier accepted peer majors remain a compatibility-qualification gap rather
+than a matrix-tested claim.
 
 ## Core API reference
 

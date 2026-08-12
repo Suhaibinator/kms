@@ -17,7 +17,7 @@ a minor release may contain documented breaking changes.
 - Explicit public-policy projections, stale-client recovery contracts, and a
   first-class serverful Next.js adapter.
 - Runnable core and Next.js integration examples, package security guidance,
-  consumer type tests, and Node compatibility CI.
+  consumer type tests, and full release gates on Node.js 22, 24, and 26.
 - A real Next.js App Router build gate that rejects server-adapter imports from
   Client Components and inspects browser chunks for server-only dependencies.
 - `kms-config-gen-ts` deterministic binding, Draft 2020-12 schema, and machine

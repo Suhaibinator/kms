@@ -131,7 +131,7 @@ build, `make test-typescript` for runtime and consumer-type tests, and
 `make check-typescript` for the complete release gate. All three install from
 the committed lockfile first.
 
-CI runs `npm run check` on Node 22 and Node 26. Examples under
+CI runs `npm run check` on Node 22, Node 24, and Node 26. Examples under
 `sdk/typescript/examples` are included in `npm run test:types`, so changes to
 the documented core and serverful Next.js integrations cannot silently drift
 from the public exports. The gate also builds declarations, compiles a consumer
@@ -178,8 +178,8 @@ The workflow in `.github/workflows/ci.yml` runs these independent checks:
   native permission and ACL semantics flow through database, backup, restore,
   certificate, and key operations.
 - `Python SDK (pytest & mypy)` — the supported Python-version matrix.
-- `TypeScript SDK` — the complete package gate on the oldest and newest
-  supported Node.js majors (22 and 26).
+- `TypeScript SDK` — the complete package gate on supported Node.js majors 22,
+  24, and 26.
 - `Frontend (quality, tests & build)` — locked install, generated types,
   TypeScript, linting, formatting, component/browser tests, and static export.
 - Go lint and `govulncheck` remain independent required checks.
