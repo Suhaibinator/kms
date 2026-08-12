@@ -197,6 +197,52 @@ describe("bounded concurrency and lifecycle stress", () => {
     expect(transport.streams.every((stream) => stream.pendingReadCount === 0)).toBe(true);
   });
 
+  it("releases distinct namespace scopes and idles background work after unsubscribe", async () => {
+    const transport = new FakeTransport(() => ({ parameters: [], nextPageToken: "" }));
+    const client = new KmsClient({ transport, logger: { warn: vi.fn() } });
+    const registrations = Array.from({ length: 256 }, (_, index) =>
+      client.watchNamespace(`prod/app-${index}`, () => undefined),
+    );
+    expect(client.watchStatus).toMatchObject({
+      namespaceCount: 256,
+      watcherCount: 256,
+    });
+
+    for (const stop of registrations) stop();
+    await waitFor(() => client.watchStatus.state === "idle");
+    expect(client.watchStatus).toMatchObject({
+      state: "idle",
+      reconciliation: "not_started",
+      namespaceCount: 0,
+      watcherCount: 0,
+      trackedParameterCount: 0,
+    });
+    expect(transport.streams.every((stream) => stream.closed)).toBe(true);
+    expect(transport.streams.every((stream) => stream.pendingReadCount === 0)).toBe(true);
+    await client.close();
+  });
+
+  it("prunes unique live tombstones instead of retaining path history", async () => {
+    const transport = new FakeTransport(() => ({ parameters: [], nextPageToken: "" }));
+    const client = new KmsClient({ transport, namespace, logger: { warn: vi.fn() } });
+    const stop = await client.watch(() => undefined);
+    await waitFor(() => transport.streams.length === 1);
+    const stream = streamAt(transport, 0);
+    await waitFor(() => stream.sent.length === 1);
+
+    const keys = 512;
+    for (let index = 0; index < keys; index++) {
+      const putRevision = BigInt(index * 2 + 1);
+      stream.emit(parameterChangeForKey(`key-${index}`, "put", putRevision));
+      stream.emit(parameterChangeForKey(`key-${index}`, "delete", putRevision + 1n));
+    }
+    await waitFor(() => client.currentRevision === BigInt(keys * 2));
+    expect(client.watchStatus.trackedParameterCount).toBe(0);
+
+    stop();
+    await client.close();
+  });
+
   it("keeps sustained snapshot reads coherent while generations swap and reads each source once", async () => {
     interface Policy {
       readonly generation: number;
@@ -270,6 +316,27 @@ function parameterChange(revision: number): SubscribeEvent {
       },
     },
     revision: BigInt(revision),
+  };
+}
+
+function parameterChangeForKey(
+  key: string,
+  changeType: "put" | "delete",
+  revision: bigint,
+): SubscribeEvent {
+  return {
+    event: {
+      $case: "change",
+      value: {
+        ref: { namespace: { env: "prod", app: "api" }, key },
+        changeType,
+        value: changeType === "put" ? `value-${revision}` : "",
+        contentType: "string",
+        version: revision,
+        label: "",
+      },
+    },
+    revision,
   };
 }
 

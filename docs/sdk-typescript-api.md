@@ -54,7 +54,7 @@ source of truth for exact inference.
 | `CallOptions`, `GetOptions`, `ListOptions`, `PutParameterOptions`, `PutSecretOptions` | Types | Per-operation cancellation/deadline, selector, pagination, content metadata, and secret-specific options. |
 | `ParameterMetadata`, `Parameter`, `SecretInfo`, `SecretVersion`, `PutResult`, `PutSecretResult`, `Page<T>`, `WhoAmI` | Types | Immutable public response models; every protobuf integer/timestamp/revision field is `bigint`. |
 | `WatchOptions`, `WatchCallback`, `WatchEvent` | Types | Abortable watch registration and the discriminated `put`/`delete`/`secret_change` event union. |
-| `WatchStatus`, `WatchConnectionState`, `ReconciliationHealth` | Types | Frozen, value-free point-in-time watch health: connection/reconciliation state, exact revision, reconnect/scope counts, and optional lifecycle timestamps. |
+| `WatchStatus`, `WatchConnectionState`, `ReconciliationHealth` | Types | Frozen, value-free point-in-time watch health: connection/reconciliation state, exact revision, reconnect/scope/tracked-parameter counts, and optional lifecycle timestamps. |
 | `ClientReleaseLoaderOptions` | Type | Select a release and control identity, reconciliation, fetch concurrency, secret-token lookup, and manifest validation. |
 
 `KmsClient` exposes the readonly properties `clientName`, `timeoutMs`,

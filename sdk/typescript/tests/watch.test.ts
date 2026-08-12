@@ -17,6 +17,7 @@ describe("shared watches", () => {
       currentRevision: 0n,
       reconnectCount: 0,
       namespaceCount: 0,
+      trackedParameterCount: 0,
       watcherCount: 0,
       parameterHandlerCount: 0,
     });

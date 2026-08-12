@@ -72,6 +72,7 @@ export interface WatchStatus {
   readonly currentRevision: bigint;
   readonly reconnectCount: number;
   readonly namespaceCount: number;
+  readonly trackedParameterCount: number;
   readonly watcherCount: number;
   readonly parameterHandlerCount: number;
   readonly connectedAtUnixMs?: number;
@@ -132,6 +133,7 @@ export class SubscriptionManager {
   readonly #sleep: (milliseconds: number, signal: AbortSignal) => Promise<void>;
   readonly #controller = new AbortController();
   readonly #namespaces = new Map<string, NamespaceRef>();
+  readonly #namespaceRefCounts = new Map<string, number>();
   readonly #parameterHandlers = new Map<string, Set<ParameterUpdateHandler>>();
   readonly #known = new Map<string, KnownValue>();
   readonly #watchers = new Map<number, Watcher>();
@@ -154,6 +156,8 @@ export class SubscriptionManager {
   #snapshotGeneration = 0;
   #sessionController: AbortController | undefined;
   #backoffController: AbortController | undefined;
+  #scopeController = new AbortController();
+  readonly #scopeWaiters = new Set<() => void>();
   #runTask: Promise<void> | undefined;
   #reconcileTask: Promise<void> | undefined;
   #stopped = false;
@@ -187,6 +191,7 @@ export class SubscriptionManager {
       currentRevision: this.#lastRevision,
       reconnectCount: this.#reconnectCount,
       namespaceCount: this.#namespaces.size,
+      trackedParameterCount: this.#known.size,
       watcherCount: this.#watchers.size,
       parameterHandlerCount,
       ...(this.#connectedAtUnixMs === undefined
@@ -230,7 +235,7 @@ export class SubscriptionManager {
     }
     handlers.add(handler);
     const wasStarted = this.#started;
-    const changed = this.#addNamespace(ref.namespace);
+    const changed = this.#retainNamespace(ref.namespace);
     this.#ensureStarted();
     if (wasStarted && changed) this.#restart();
 
@@ -239,7 +244,11 @@ export class SubscriptionManager {
       if (!active) return;
       active = false;
       handlers.delete(handler);
-      if (handlers.size === 0) this.#parameterHandlers.delete(path);
+      if (handlers.size === 0) {
+        this.#parameterHandlers.delete(path);
+        if (this.#known.get(path)?.present === false) this.#known.delete(path);
+      }
+      if (this.#releaseNamespace(ref.namespace)) this.#restart();
     };
   }
 
@@ -250,7 +259,7 @@ export class SubscriptionManager {
     const watcher: Watcher = { id: this.#nextWatcherId++, namespace, callback };
     this.#watchers.set(watcher.id, watcher);
     const wasStarted = this.#started;
-    const changed = this.#addNamespace(namespace);
+    const changed = this.#retainNamespace(namespace);
     this.#ensureStarted();
     if (wasStarted && changed) this.#restart();
 
@@ -261,6 +270,7 @@ export class SubscriptionManager {
       this.#watchers.delete(watcher.id);
       this.#watcherStops.delete(watcher.id);
       signal?.removeEventListener("abort", stop);
+      if (this.#releaseNamespace(namespace)) this.#restart();
     };
     this.#watcherStops.set(watcher.id, stop);
     if (signal) {
@@ -286,18 +296,63 @@ export class SubscriptionManager {
     this.#watchers.clear();
     this.#watcherStops.clear();
     this.#parameterHandlers.clear();
+    this.#known.clear();
+    this.#namespaces.clear();
+    this.#namespaceRefCounts.clear();
   }
 
-  #addNamespace(namespace: NamespaceRef): boolean {
+  #retainNamespace(namespace: NamespaceRef): boolean {
     const key = namespaceKey(namespace);
-    if (this.#namespaces.has(key)) return false;
+    const count = this.#namespaceRefCounts.get(key) ?? 0;
+    this.#namespaceRefCounts.set(key, count + 1);
+    if (count > 0) return false;
     const captured = Object.freeze({ ...namespace });
     this.#namespaces.set(key, captured);
-    this.#namespaceGeneration += 1;
+    this.#scopeChanged();
     // Cached secrets can predate this namespace's first watch. Invalidate them
     // immediately rather than waiting for the requested snapshot to arrive.
     this.#host._cache().invalidateSecretsInNamespaces([captured]);
     return true;
+  }
+
+  #releaseNamespace(namespace: NamespaceRef): boolean {
+    const key = namespaceKey(namespace);
+    const count = this.#namespaceRefCounts.get(key);
+    if (count === undefined) return false;
+    if (count > 1) {
+      this.#namespaceRefCounts.set(key, count - 1);
+      return false;
+    }
+    this.#namespaceRefCounts.delete(key);
+    this.#namespaces.delete(key);
+    for (const path of this.#known.keys()) {
+      const ref = refOf(path);
+      if (ref !== undefined && namespaceKey(ref.namespace) === key) this.#known.delete(path);
+    }
+    this.#scopeChanged();
+    return true;
+  }
+
+  #scopeChanged(): void {
+    this.#namespaceGeneration += 1;
+    const previous = this.#scopeController;
+    this.#scopeController = new AbortController();
+    previous.abort(new DOMException("KMS namespace set changed", "AbortError"));
+    for (const wake of [...this.#scopeWaiters]) wake();
+  }
+
+  #waitForNamespace(): Promise<void> {
+    if (this.#namespaces.size > 0 || this.#controller.signal.aborted) return Promise.resolve();
+    return new Promise<void>((resolve) => {
+      const wake = (): void => {
+        this.#scopeWaiters.delete(wake);
+        this.#controller.signal.removeEventListener("abort", wake);
+        resolve();
+      };
+      this.#scopeWaiters.add(wake);
+      this.#controller.signal.addEventListener("abort", wake, { once: true });
+      if (this.#namespaces.size > 0 || this.#controller.signal.aborted) wake();
+    });
   }
 
   #ensureStarted(): void {
@@ -323,6 +378,11 @@ export class SubscriptionManager {
   async #run(): Promise<void> {
     let attempt = 0;
     while (!this.#controller.signal.aborted) {
+      if (this.#namespaces.size === 0) {
+        this.#state = "idle";
+        await this.#waitForNamespace();
+        continue;
+      }
       this.#restartRequested = false;
       this.#state = "connecting";
       try {
@@ -379,6 +439,7 @@ export class SubscriptionManager {
       this.#state = "connected";
       this.#connectedAtUnixMs = Date.now();
       for await (const event of stream) {
+        if (namespaceGeneration !== this.#namespaceGeneration) break;
         await this.#handleEvent(
           event,
           stream.send.bind(stream),
@@ -506,6 +567,11 @@ export class SubscriptionManager {
     reconcile: boolean,
   ): void {
     const previous = this.#known.get(path);
+    // Reconciliation captures a point-in-time global fence before issuing
+    // list RPCs. If any live event advanced the stream while those RPCs were
+    // in flight, none of the older reconciliation values may be installed,
+    // including for a tombstone that has already been compacted.
+    if (reconcile && revision < this.#lastRevision) return;
     if (previous && !revisionAllowsWrite(previous.revision, revision, reconcile)) return;
     const nextRevision = previous && previous.revision > revision ? previous.revision : revision;
     const changed = present
@@ -539,6 +605,7 @@ export class SubscriptionManager {
           changeType: "delete",
         });
     this.#fireWatchers(ref.namespace, event);
+    if (!present && !this.#parameterHandlers.has(path)) this.#known.delete(path);
   }
 
   #fireWatchers(namespace: NamespaceRef, event: WatchEvent): void {
@@ -560,8 +627,18 @@ export class SubscriptionManager {
 
   async #reconcileLoop(): Promise<void> {
     while (!this.#controller.signal.aborted) {
-      await this.#sleep(this.#reconcileIntervalMs, this.#controller.signal);
+      if (this.#namespaces.size === 0) {
+        this.#reconciliation = "not_started";
+        await this.#waitForNamespace();
+        continue;
+      }
+      const scopeController = this.#scopeController;
+      await this.#sleep(
+        this.#reconcileIntervalMs,
+        AbortSignal.any([this.#controller.signal, scopeController.signal]),
+      ).catch(() => undefined);
       if (this.#controller.signal.aborted) return;
+      if (scopeController.signal.aborted) continue;
       this.#lastReconcileAttemptAtUnixMs = Date.now();
       try {
         if (await this.#reconcile()) {
@@ -604,7 +681,8 @@ export class SubscriptionManager {
     }
     return (
       completelyListed.size === namespaces.length &&
-      namespaceGeneration === this.#namespaceGeneration
+      namespaceGeneration === this.#namespaceGeneration &&
+      snapshotRevision === this.#lastRevision
     );
   }
 
