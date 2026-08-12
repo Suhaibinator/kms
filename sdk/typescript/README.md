@@ -14,6 +14,10 @@ is server-only: never import the package root from browser code. The only
 browser entry point is `@suhaibinator/kms/next/client`, which consumes an
 explicitly allowlisted public HTTP projection and never connects to KMS.
 
+The [complete public API and compatibility reference](https://github.com/Suhaibinator/kms/blob/main/docs/sdk-typescript-api.md)
+lists every stable export, lifecycle boundary, and intentional language
+difference.
+
 ## Installation
 
 ```bash

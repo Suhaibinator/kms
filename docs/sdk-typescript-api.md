@@ -16,6 +16,7 @@ receive a fail-fast poison module instead of transport code.
 | `@suhaibinator/kms/configgen` | Node.js | Descriptor parser and deterministic binding/schema/contract generation library |
 | `@suhaibinator/kms/next/server` | Next.js Node runtime | Process-owned client/release lifecycle, server reads, validation, Route Handler factory |
 | `@suhaibinator/kms/next/client` | Browser/React | Public-policy wire decoding, refresh, and stale-policy recovery only |
+| `@suhaibinator/kms/package.json` | Build tooling | Read-only package metadata; no runtime SDK API |
 
 The core never imports Next.js, React, HTTP routing, or application policy. The
 client export never imports gRPC, TLS, credentials, secrets, or a full release
@@ -32,6 +33,103 @@ The peer ranges express intended Next.js 14–16 and React 18–19 compatibility
 while the current adapter suite directly qualifies Next.js 16 with React 19.
 Earlier accepted peer majors remain a compatibility-qualification gap rather
 than a matrix-tested claim.
+
+Only the entry points in this table are stable. Generated protobuf modules,
+files below `dist/` that are not named by the package export map, and source
+subpaths are implementation details even when their declarations are visible
+in a repository checkout.
+
+## Stable export inventory
+
+The tables in this section are exhaustive for the package export map. “Type”
+means a TypeScript-only export with no runtime value. Overloads and generic
+parameters are summarized by family; the emitted declarations remain the
+source of truth for exact inference.
+
+### Package root: client and resource types
+
+| Export | Kind and signature family | Purpose |
+|---|---|---|
+| `createClient`, `KmsClient` | Function `(KmsClientOptions) => KmsClient`; class constructor with the same options | Construct and own one process-shareable Node client. |
+| `KmsClientOptions`, `Logger` | Types | Configure endpoint, authentication/transport, namespace, cache/deadlines, reconciliation, client identity, and bounded logging. |
+| `CallOptions`, `GetOptions`, `ListOptions`, `PutParameterOptions`, `PutSecretOptions` | Types | Per-operation cancellation/deadline, selector, pagination, content metadata, and secret-specific options. |
+| `ParameterMetadata`, `Parameter`, `SecretInfo`, `SecretVersion`, `PutResult`, `PutSecretResult`, `Page<T>`, `WhoAmI` | Types | Immutable public response models; every protobuf integer/timestamp/revision field is `bigint`. |
+| `WatchOptions`, `WatchCallback`, `WatchEvent` | Types | Abortable watch registration and the discriminated `put`/`delete`/`secret_change` event union. |
+| `ClientReleaseLoaderOptions` | Type | Select a release and control identity, reconciliation, fetch concurrency, secret-token lookup, and manifest validation. |
+
+`KmsClient` exposes the readonly properties `clientName`, `timeoutMs`,
+`fallbackToDefaultsOnError`, `logger`, `closed`, and `currentRevision`. Its
+stable method families are:
+
+| Methods | Result and contract |
+|---|---|
+| `whoAmI(options?)` | `Promise<WhoAmI>`; discovers bounded caller/authentication metadata. |
+| `getParameter(key, options?)`, `getParameterInfo(key, options?)` | `Promise<string>` or `Promise<Parameter>` for a current, exact-version, or labeled immutable parameter. |
+| `putParameter(key, value, options?)` | `Promise<PutResult>` and invalidates matching cached reads. |
+| `listParameters(namespace?, options?)`, `getParameterMetadata(key, options?)`, `deleteParameter(key, options?)` | Immutable page, non-plaintext metadata/history, or exact revision. |
+| `getSecret(key, options?)`, `putSecret(key, value, options?)` | Defensive `Secret` read or `PutSecretResult`; secret tokens are separate from bearer identity. |
+| `listSecrets(namespace?, options?)`, `getSecretMetadata(key, options?)`, `deleteSecret(key, options?)` | Immutable non-plaintext inventory/metadata or exact mutation revision. |
+| `setSecretEnabled(key, enabled, options?)`, `destroySecretVersion(key, version, options?)`, `promoteSecretVersion(key, version, options?)` | Authorized version-state mutations; promotion returns current/previous versions and revision as `bigint`. |
+| `watch(callback, options?)`, `watchNamespace(namespace, callback, options?)` | Register on the shared process-client stream and return an idempotent local unsubscriber. Home-namespace discovery makes `watch` asynchronous. |
+| `resolve(config, options?)` | Resolve all reachable declarative values concurrently. |
+| `createReleaseLoader(options)` | Create an independently runnable loader that shares this client’s authenticated transport. |
+| `close()`, `[Symbol.asyncDispose]()` | Idempotent async ownership boundary for transport, streams, reconciliation, and callbacks. |
+
+### Package root: references, errors, secrets, and transport
+
+| Export | Kind and purpose |
+|---|---|
+| `NamespaceRef`, `ResourceRef`, `VersionRef` | Types for explicit namespaces, fully qualified keys, and mutually normalized version/label selection. |
+| `CURRENT_VERSION`, `UINT64_MAX` | Readonly current-selector and exact protobuf `uint64` upper bound. |
+| `parseNamespace`, `splitDisplayPath`, `displayNamespace`, `displayPath`, `resolveRef`, `refOf`, `namespaceEquals`, `namespaceKey`, `normalizeVersionRef` | Pure reference parse/render/compare/normalization helpers. `resolveRef` requires a namespace for a relative key; `refOf` is the tolerant trusted-input parser. |
+| `KmsError`, `ConfigError`, `NoNamespaceError`, `NotInitializedError` | Stable error class hierarchy for remote, configuration, relative-key, and declarative-lifecycle failures. |
+| `KmsErrorCode`, `KmsErrorOptions` | Types for bounded programmatic codes and optional original gRPC status. |
+| `isKmsError`, `mapGrpcError`, `normalizeError`, `wrapError` | Error narrowing, transport normalization (`normalizeError` aliases `mapGrpcError`), and context wrapping that preserves stable codes. |
+| `Secret`, `newSecret`, `REDACTED`, `SecretMetadata` | Redacting, defensive plaintext wrapper; constructor/factory accept bytes or string plus non-sensitive metadata. |
+| `tlsFromFiles`, `mtlsFromFiles`, `tlsFromBytes` | Node credential factories for server-authenticated TLS or mTLS from validated files/bytes. The CA argument always identifies server trust. |
+| `UnaryMethod<Request, Response>`, `BidiMethod<Request, Response>`, `TransportCallOptions`, `DuplexRpc<Request, Response>`, `RpcTransport` | Type-only injectable protocol boundary. Generated service descriptors are intentionally not exported. |
+
+### Package root: declarative values
+
+| Export | Kind and signature family | Purpose |
+|---|---|---|
+| `SecretValue`, `SecretValueOptions`, `SecretReadOptions` | Class and types | Initialize once from env/KMS/default; explicit `value`/`text`/`stringValue`/`bytes`/`secret` access, redacted implicit rendering. |
+| `ParameterValue`, `ParameterValueOptions`, `ValueReadOptions` | Class and types | Initialize a string parameter, subscribe unless `static`, read with `get`, register `onChange`, and end owned subscription with `dispose`. |
+| `ValueResolver`, `SubscriptionHandle`, `ChangeCallback`, `DeclarativeValue` | Structural/callback/union types | Minimal injection surface used by declarative fields and tests without exposing transport internals. |
+| `collectDeclarativeValues(config)` | Function | Discover supported values through own data properties and arrays without invoking getters. |
+| `resolveValues(config, resolver, options?)` | Function | Resolve discovered values concurrently; successful siblings remain initialized if another fails. |
+| `ResolutionError` | `AggregateError` subclass | Carries all field errors from a resolution pass. |
+
+### Package root: publishing
+
+| Export | Kind and signature family | Purpose |
+|---|---|---|
+| `DecimalRevision`, `PublicJsonPrimitive`, `PublicJsonValue`, `PublicJsonObject` | Types | Branded canonical decimal revision and the exact safe JSON domain. |
+| `PolicySnapshot<T>`, `SnapshotReader<T>` | Types | One immutable `{revision, value}` generation and its synchronous atomic read boundary. |
+| `PublicConfig<T>`, `PublicConfigWire<T>` | Types | Internal `bigint` and HTTP/JSON decimal-string representations of the same public generation. |
+| `PublicFieldSelector`, `PublicProjectionMap`, `PublicProjection` | Types | Explicit selector allowlist and its defensively cloned/frozen projection. |
+| `definePublicProjection(allowlist)` | Generic overloaded function | Infer a typed projection while making every published top-level key explicit. |
+| `freezePublicJson(value)`, `normalizePublicConfigWire(value, validateConfig?)` | Functions | Strictly validate, clone, and freeze public JSON or an untrusted wire envelope. |
+| `formatRevision`, `parseRevision`, `formatPublicConfigEtag` | Functions | Lossless `bigint`/canonical-decimal conversion and strong revision ETag formatting. |
+| `ValidationSuccess`, `ValidationFailure`, `ValidationDecision`, `AuthoritativeValidator` | Types | Application validation callback contract against one captured policy. |
+| `PolicyValidationResult` | Type | `success`, `validation_failed`, `policy_changed`, or `unavailable` discriminated result. |
+| `CreatePolicyPublisherOptions`, `PolicyPublisher` | Types | Publisher construction and `read`, `readWire`, `etag`, and `validate` operations. |
+| `createPolicyPublisher(options)` | Function | Couple one atomic source, allowlisted projection, and authoritative validator. |
+
+### Package root: releases
+
+| Export | Kind and signature family | Purpose |
+|---|---|---|
+| `ReleaseLoader`, `ClientReleaseLoaderOptions` | Class and type | Single-run exact-version release lifecycle; inspect `instanceId`, `status()`/`stats()`, request `stop()`, and await `run(prepare, signal?)`. |
+| `runTypedRelease(loader, decode, prepare, signal?)` | Generic function | Split fallible snapshot decoding from application resource preparation without weakening atomic commit. |
+| `PreparedRelease`, `PrepareRelease` | Types | Candidate callback contract: synchronous infallible `commit`, infallible `abort` called at most once, and cooperative `AbortSignal`. |
+| `SecretTokenProvider`, `ValidateReleaseManifest` | Callback types | Fetch per-entry secret authorization locally and reject a manifest before resource resolution. |
+| `ReleaseManifest`, `ReleaseManifestInit`, `ReleaseSnapshot`, `ReleaseSnapshotInit` | Immutable classes/types | Unresolved identity/entries and fully resolved exact candidate; serialization and inspection omit values. |
+| `ReleaseEntryMetadata`, `ReleaseEntryMetadataInit`, `ReleaseEntryKind` | Immutable class/types | Non-secret alias, resource, version, content, digest, and protection metadata. |
+| `ReleaseParameter`, `ReleaseSecret` | Immutable value classes | Exact candidate values; release-secret access returns copies and implicit rendering redacts. |
+| `RELEASE_STATES`, `ReleaseState`, `RELEASE_REJECTION_CATEGORIES`, `ReleaseRejectionCategory` | Readonly values/types | Complete bounded service acknowledgement states and rejection taxonomy. |
+| `ReleaseLoaderStatus`, `ReleaseLoaderStats` | Types | Copied, value-free health and counters including applied/observed revisions and reconnects. |
+| `ClassifiedReleaseError`, `ReleaseCandidateError`, `classifiedReleaseCategory` | Classes/function | Deliberately bounded local classification and safe loader failure reporting. |
 
 ## Core API reference
 
@@ -105,6 +203,40 @@ An unavailable source returns `unavailable`.
 
 ## Next.js adapter reference
 
+### Server entry point
+
+`@suhaibinator/kms/next/server` exports the following complete stable surface:
+
+| Export | Kind and signature family | Purpose |
+|---|---|---|
+| `runtime` | Constant `"nodejs"` | Re-export from a Route module to declare the required Next runtime. |
+| `MAX_PRIVATE_PUBLIC_CONFIG_AGE_SECONDS` | Constant `300` | Hard upper bound accepted for private browser-cache age. |
+| `createNextKms(options)`, `NextKms`, `CreateNextKmsOptions`, `NextKmsResource` | Function and types | Own a lazily/eagerly initialized process resource, its atomic snapshot source, projection, validator, and optional cleanup. |
+| `NextKmsClosedError` | Error class | Signals any start/read/validation operation attempted after permanent close. |
+| `createPublicConfigGET(provider, options?)`, `PublicConfigGET`, `PublicConfigProvider` | Function and types | Adapt a safe public-config provider to a Node Route Handler. |
+| `PublicConfigCachePolicy`, `PublicConfigRouteOptions` | Types | Select `no-store` or bounded private-only browser caching. |
+| `ProcessShutdownOptions` | Type | Select process signals and an error callback for cleanup failures. |
+| `DecimalRevision` | Re-exported type | Canonical decimal `uint64` used at this HTTP boundary. |
+
+The returned `NextKms` operations are `start`, `close`, `readPolicy`,
+`readPublicPolicy`, `validateAtRevision`, `createPublicConfigGET`, and
+`installProcessShutdown`. Reads start lazily; concurrent starts share one
+attempt, a failed attempt may retry, and concurrent closes share permanent
+cleanup. `installProcessShutdown` only requests SDK cleanup and returns a
+listener uninstaller. Because installing a Node signal listener suppresses the
+runtime's default exit behavior, the application remains responsible for its
+termination policy after cleanup.
+
+### Client entry point
+
+`@suhaibinator/kms/next/client` exports exactly:
+
+| Export | Kind and signature family | Purpose |
+|---|---|---|
+| `usePublicConfig(initial, options?)` | React hook | Hold one last-known-good public generation, refresh conditionally, and install a validated newer `policy_changed` result. |
+| `UsePublicConfigOptions<TConfig>` | Type | Configure endpoint/fetch injection, application shape validation, mount/focus/navigation refresh, and navigation identity. |
+| `UsePublicConfigResult<TConfig>` | Type | Read frozen `config`, exact `revision`, refresh/error state, invoke `refresh`, or apply a structured server result. |
+
 `@suhaibinator/kms/next/server` begins with `import "server-only"` and rejects
 Edge runtime execution. `createNextKms` accepts one application-owned
 initializer, projection, and validator and returns:
@@ -114,7 +246,8 @@ initializer, projection, and validator and returns:
   serializable Server Component prop;
 - `validateAtRevision()` for authoritative Server Action/Route validation;
 - `createPublicConfigGET()` for an ETag-aware App Router Route Handler; and
-- `installProcessShutdown()` for SIGINT/SIGTERM cleanup.
+- `installProcessShutdown()` to request SIGINT/SIGTERM cleanup; the application
+  still owns process termination.
 
 The Route Handler defaults to `Cache-Control: no-store`. The only alternative
 is bounded private browser caching; it never emits shared/CDN caching.
@@ -134,6 +267,26 @@ The complete compile-checked integration is in the
 [`next-serverful` example](../sdk/typescript/examples/next-serverful).
 
 ## Managed configuration reference
+
+### Configstore entry-point inventory
+
+`@suhaibinator/kms/configstore` exports the following complete stable surface:
+
+| Export | Kind and signature family | Purpose |
+|---|---|---|
+| `cloneConfig(value)` | Generic function `<T>(T) => T` | Secret-aware defensive deep clone used at managed ownership boundaries. |
+| `ValueCodec`, `FieldCodec`, `GroupCodec`, `IntegerCodecOptions`, `BigIntCodecOptions`, `FloatCodecOptions` | Types | Describe strict generated value/group codecs and numeric range policy. |
+| `codecs`, `field`, `group`, `decodeGroup`, `encodeGroup` | Values/functions | Compose boolean/string/integer/bigint/float/duration/bytes/object/array/fixed-array/record/nullable codecs and strictly decode or deterministically encode one whole group. |
+| `ConfigDecodeError` | Error class | Value-free strict-decoding failure whose message contains only a generated canonical path and fixed diagnostic. |
+| `ContractKind`, `ContractEntry`, `validateContract`, `createManifestValidator` | Types/functions | Validate and copy an alias/content-type contract, then build its pre-fetch manifest hook. |
+| `REJECTION_CATEGORIES`, `RejectionCategory`, `CandidateError`, `reject`, `rejectDecode` | Readonly value, types, class, functions | Bounded managed-candidate classification; decode wrapping retains only safe generated paths. |
+| `FieldDifference`, `MismatchPhase`, `MismatchSeverity` | Types | Non-secret source-default comparison fields and startup/runtime policy. |
+| `DefaultMismatchReport`, `DefaultMismatchError`, `CandidateRejectionReport` | Immutable classes | Secret-aware copied drift reporting, typed fatal startup failure, and value-free local rejection diagnostics. |
+| `ManagedConfigOptions`, `ManagedReleaseClient`, `ManagedPreparedCandidate`, `PrepareManagedCandidate` | Types | Structural client, generated preparation, contract, reporting, default-drift, and release-loader options. |
+| `startManagedConfig(client, options, prepare, signal?)`, `ManagedConfigManager` | Function and class | Validate before fetch, block until initial atomic publication, then expose `stop`, `wait`, `status`, and `stats`. |
+| `ManagedConfigStatus`, `ManagedConfigStats` | Types | Fresh redacted identity/health and bounded counter snapshots. |
+| `ReleaseIdentityInit`, `ReleaseIdentity` | Type and immutable class | Value-free copied release identity; use `ReleaseIdentity.from`, `isZero`, and safe serialization. |
+| `ConfigSnapshot<T>`, `immutableSnapshot(config, release?)` | Class/function | Private immutable generation with defensive `config()` and typed `get(key)` reads. |
 
 `@suhaibinator/kms/configstore` is the optional Stage 7 layer used by generated
 bindings. `startManagedConfig(client, options, prepare, signal)` accepts an
@@ -166,6 +319,20 @@ integers/durations as `bigint`, and use explicit `null` where the generated
 contract permits absence.
 
 ### TypeScript-native generator
+
+`@suhaibinator/kms/configgen` exports the following complete stable library
+surface (the `kms-config-gen-ts` executable is the corresponding CLI):
+
+| Export | Kind and signature family | Purpose |
+|---|---|---|
+| `DESCRIPTOR_FORMAT`, `MAX_RELEASE_ENTRIES` | Constants | Required `kms-config-descriptor/v1` discriminator and 256-entry structural bound. |
+| `ReloadPolicy`, `TypeDescriptor`, `NestedFieldDescriptor`, `FieldDescriptor`, `GroupDescriptor`, `SecretDescriptor`, `ConfigDescriptor` | Types | Complete versioned descriptor model for source type, parameter encodings, reload policy, views, and secret aliases. |
+| `parseDescriptor(document)`, `normalizeDescriptor(value)` | Functions | Duplicate-aware JSON parsing or unknown-value validation followed by deterministic sorting and deep freezing. |
+| `DescriptorError` | Error class | Descriptor syntax, shape, naming, collision, nesting, and range failure. |
+| `CONTRACT_FORMAT`, `MAX_SCHEMA_BYTES` | Constants | Generated machine-contract discriminator and generated schema size bound. |
+| `GenerateOptions`, `GeneratedArtifacts`, `generate(input, options?)` | Types/function | Deterministically produce binding, schema, contract, and schema SHA-256; import specifiers are explicitly configurable. |
+| `OutputPaths`, `verifyArtifacts(paths, artifacts)`, `writeArtifacts(paths, artifacts)` | Type/functions | Name three explicit destinations, compare without mutation, or stage/fsync/replace changed members. Writers must not run concurrently because the three renames are not one filesystem transaction. |
+| `StaleArtifactsError` | Error class | Reports the copied list of generated outputs that differ in verify/check mode. |
 
 `@suhaibinator/kms/configgen` parses a versioned
 `kms-config-descriptor/v1` document and deterministically produces a generated
@@ -217,6 +384,13 @@ map to `not_found`, `permission_denied`, `unauthenticated`, and
 `failed_precondition`; namespace/configuration failures use local bounded codes.
 Unmapped transport status information is preserved without ever including
 caller-supplied secret bytes.
+
+The complete `KmsErrorCode` union is `not_found`, `permission_denied`,
+`unauthenticated`, `failed_precondition`, `not_initialized`, `no_namespace`,
+`invalid_argument`, `cancelled`, `deadline_exceeded`, `already_exists`,
+`resource_exhausted`, `aborted`, `out_of_range`, `unimplemented`, `internal`,
+`unavailable`, `data_loss`, and `unknown`. `grpcCode` is present only when a
+wire status exists; branch on `code`, not message text.
 
 `Secret` stores a private copy of plaintext bytes. `bytes()`, `text()`, and
 `clone()` are the only plaintext access paths; returned byte arrays are fresh
