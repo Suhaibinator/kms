@@ -215,15 +215,15 @@ export class SubscriptionManager {
     if (known === undefined) {
       this.#known.set(path, { value: initial, present: true, revision: 0n });
     }
+    if (known !== undefined) {
+      handler(known.value, known.present);
+    }
     let handlers = this.#parameterHandlers.get(path);
     if (!handlers) {
       handlers = new Set();
       this.#parameterHandlers.set(path, handlers);
     }
     handlers.add(handler);
-    if (known !== undefined) {
-      handler(known.value, known.present);
-    }
     const wasStarted = this.#started;
     const changed = this.#addNamespace(ref.namespace);
     this.#ensureStarted();
