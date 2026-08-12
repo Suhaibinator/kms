@@ -25,7 +25,7 @@ interface Fixture {
   delay: bigint;
   blob: Uint8Array | null;
   nested: Nested;
-  items: readonly Nested[] | null;
+  items: Nested[] | null;
   labels: Readonly<Record<string, number>> | null;
   optional: string | null;
 }
@@ -61,6 +61,23 @@ describe("strict managed-configuration codecs", () => {
       kind: "number",
       lexeme: "18446744073709551615",
     });
+  });
+
+  it("normalizes unmatched JSON surrogates like Go without collapsing valid pairs", () => {
+    const unmatched = parseStrictJson('"\\ud800"');
+    expect(unmatched).toEqual({ kind: "string", value: "\ufffd" });
+    const pair = parseStrictJson('"\\ud83d\\ude00"');
+    expect(pair).toEqual({ kind: "string", value: "😀" });
+
+    interface MapHolder {
+      labels: Readonly<Record<string, string>> | null;
+    }
+    const maps = group<MapHolder>([
+      field<MapHolder, "labels">("labels", "labels", codecs.record(codecs.string)),
+    ]);
+    expect(() => decodeGroup('{"labels":{"\\ud800":"a","\\ufffd":"b"}}', maps)).toThrow(
+      /duplicate map key/u,
+    );
   });
 
   it("decodes composite documents without losing uint64 precision", () => {
@@ -202,5 +219,67 @@ describe("strict managed-configuration codecs", () => {
     expect(decoded.blob).toEqual(new Uint8Array());
     expect(decoded.items).toEqual([]);
     expect(decoded.labels).toEqual({});
+  });
+
+  it("matches signed-zero duration and float encoding and accepts mutable array fields", () => {
+    interface MutableCollections {
+      values: string[] | null;
+      fixed: string[];
+      duration: bigint;
+      ratio: number;
+    }
+    const descriptor = group<MutableCollections>([
+      field<MutableCollections, "values">("values", "values", codecs.array(codecs.string)),
+      field<MutableCollections, "fixed">("fixed", "fixed", codecs.fixedArray(codecs.string, 2)),
+      field<MutableCollections, "duration">("duration", "duration", codecs.duration),
+      field<MutableCollections, "ratio">("ratio", "ratio", codecs.float()),
+    ]);
+
+    for (const duration of ["0", "+0", "-0"]) {
+      const decoded = decodeGroup(
+        `{"values":[],"fixed":["a","b"],"duration":"${duration}","ratio":-0}`,
+        descriptor,
+      );
+      expect(decoded.duration).toBe(0n);
+      expect(Object.is(decoded.ratio, -0)).toBe(true);
+      const encoded = encodeGroup(decoded, descriptor);
+      expect(encoded).toContain('"ratio":-0');
+    }
+  });
+
+  it("rejects sparse or accessor-backed collections without invoking getters", () => {
+    interface Collections {
+      values: string[] | null;
+      labels: Readonly<Record<string, string>> | null;
+    }
+    const descriptor = group<Collections>([
+      field<Collections, "values">("values", "values", codecs.array(codecs.string)),
+      field<Collections, "labels">("labels", "labels", codecs.record(codecs.string)),
+    ]);
+    const sparse = new Array<string>(1);
+    expect(() => encodeGroup({ values: sparse, labels: {} }, descriptor)).toThrow(/dense/u);
+
+    let getterCalls = 0;
+    const values: string[] = [];
+    Object.defineProperty(values, 0, {
+      enumerable: true,
+      get: () => {
+        getterCalls += 1;
+        return "ARRAY-GETTER-CANARY";
+      },
+    });
+    values.length = 1;
+    expect(() => encodeGroup({ values, labels: {} }, descriptor)).toThrow(/accessors/u);
+
+    const labels: Record<string, string> = {};
+    Object.defineProperty(labels, "unsafe", {
+      enumerable: true,
+      get: () => {
+        getterCalls += 1;
+        return "MAP-GETTER-CANARY";
+      },
+    });
+    expect(() => encodeGroup({ values: [], labels }, descriptor)).toThrow(/accessor/u);
+    expect(getterCalls).toBe(0);
   });
 });

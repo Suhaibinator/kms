@@ -165,7 +165,9 @@ class JsonParser {
         const encoded = this.#source.slice(start, this.#offset);
         const decoded: unknown = JSON.parse(encoded);
         if (typeof decoded !== "string") throw new InvalidJsonDocumentError();
-        return decoded;
+        // Go's encoding/json replaces escaped unmatched UTF-16 surrogates
+        // with U+FFFD. JSON.parse preserves the unmatched code unit.
+        return normalizeUnpairedSurrogates(decoded);
       }
       if (code < 0x20) throw new InvalidJsonDocumentError();
       if (code === 0x5c) {
@@ -231,4 +233,25 @@ function isHex(character: string | undefined): boolean {
       (character >= "a" && character <= "f") ||
       (character >= "A" && character <= "F"))
   );
+}
+
+function normalizeUnpairedSurrogates(value: string): string {
+  let result = "";
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index);
+    if (code >= 0xd800 && code <= 0xdbff) {
+      const next = value.charCodeAt(index + 1);
+      if (next >= 0xdc00 && next <= 0xdfff) {
+        result += `${value[index] ?? ""}${value[index + 1] ?? ""}`;
+        index += 1;
+      } else {
+        result += "\ufffd";
+      }
+    } else if (code >= 0xdc00 && code <= 0xdfff) {
+      result += "\ufffd";
+    } else {
+      result += value[index] ?? "";
+    }
+  }
+  return result;
 }

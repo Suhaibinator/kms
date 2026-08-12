@@ -185,7 +185,7 @@ export const codecs = Object.freeze({
       (value, path) => {
         if (typeof value !== "number" || !Number.isFinite(value)) throw rangeError(path, "number");
         const encoded = bits === 32 ? Math.fround(value) : value;
-        const lexeme = String(encoded);
+        const lexeme = Object.is(encoded, -0) ? "-0" : String(encoded);
         if (compareDecimalMagnitude(lexeme, maximum) > 0) throw rangeError(path, "number");
         return { kind: "number", lexeme };
       },
@@ -232,15 +232,15 @@ export const codecs = Object.freeze({
   object: objectCodec,
 
   /** Variable-length array. JSON null remains distinct from an empty array. */
-  array<T>(element: ValueCodec<T>): ValueCodec<readonly T[] | null> {
+  array<T>(element: ValueCodec<T>): ValueCodec<T[] | null> {
     return arrayCodec(element);
   },
 
-  fixedArray<T>(element: ValueCodec<T>, length: number): ValueCodec<readonly T[]> {
+  fixedArray<T>(element: ValueCodec<T>, length: number): ValueCodec<T[]> {
     if (!Number.isSafeInteger(length) || length < 0) {
       throw new RangeError("fixed array length must be a non-negative safe integer");
     }
-    return scalarCodec<readonly T[]>(
+    return scalarCodec<T[]>(
       "array",
       (node, path) => {
         if (node.kind !== "array") throw typeError(path, "array");
@@ -254,10 +254,7 @@ export const codecs = Object.freeze({
         if (value.length !== length) {
           throw diagnostic(path, `configstore: wrong array length at ${path}`);
         }
-        return {
-          kind: "array",
-          elements: value.map((item) => element.encodeNode(item, `${path}[]`)),
-        };
+        return { kind: "array", elements: encodeArrayElements(value, element, path) };
       },
     );
   },
@@ -411,9 +408,9 @@ function validateFields<T extends object>(
   return { byName };
 }
 
-function arrayCodec<T>(element: ValueCodec<T>): ValueCodec<readonly T[] | null> {
+function arrayCodec<T>(element: ValueCodec<T>): ValueCodec<T[] | null> {
   assertElementCodec(element);
-  return scalarCodec<readonly T[] | null>(
+  return scalarCodec<T[] | null>(
     "array",
     (node, path) => {
       if (node.kind === "null") return null;
@@ -423,10 +420,7 @@ function arrayCodec<T>(element: ValueCodec<T>): ValueCodec<readonly T[] | null> 
     (value, path) => {
       if (value === null) return { kind: "null" };
       if (!Array.isArray(value)) throw descriptorError(path, "array codec does not match source");
-      return {
-        kind: "array",
-        elements: value.map((item) => element.encodeNode(item, `${path}[]`)),
-      };
+      return { kind: "array", elements: encodeArrayElements(value, element, path) };
     },
   );
 }
@@ -454,10 +448,13 @@ function recordCodec<T>(element: ValueCodec<T>): ValueCodec<Readonly<Record<stri
       }
       return {
         kind: "object",
-        properties: Object.keys(value).map((name) => ({
-          name,
-          value: element.encodeNode(value[name] as T, `${path}[*]`),
-        })),
+        properties: Object.keys(value).map((name) => {
+          const descriptor = Object.getOwnPropertyDescriptor(value, name);
+          if (!descriptor || !("value" in descriptor)) {
+            throw descriptorError(path, "map property is an accessor");
+          }
+          return { name, value: element.encodeNode(descriptor.value as T, `${path}[*]`) };
+        }),
       };
     },
   );
@@ -467,6 +464,22 @@ function assertElementCodec<T>(codec: ValueCodec<T>): void {
   if (!codec || typeof codec.decodeNode !== "function" || typeof codec.encodeNode !== "function") {
     throw new TypeError("element codec is required");
   }
+}
+
+function encodeArrayElements<T>(
+  value: readonly T[],
+  element: ValueCodec<T>,
+  path: string,
+): JsonNode[] {
+  const result: JsonNode[] = [];
+  for (let index = 0; index < value.length; index += 1) {
+    const descriptor = Object.getOwnPropertyDescriptor(value, index);
+    if (!descriptor || !("value" in descriptor)) {
+      throw descriptorError(path, "array must be dense and contain no accessors");
+    }
+    result.push(element.encodeNode(descriptor.value as T, `${path}[]`));
+  }
+  return result;
 }
 
 function validateBits(bits: number, maximum: number, name: string): void {
@@ -551,6 +564,7 @@ function parseDuration(text: string): bigint | undefined {
   const sign = text.startsWith("-") ? -1n : 1n;
   let remaining = text.startsWith("-") || text.startsWith("+") ? text.slice(1) : text;
   if (!remaining) return undefined;
+  if (remaining === "0") return 0n;
   let total = 0n;
   let consumed = false;
   while (remaining) {
