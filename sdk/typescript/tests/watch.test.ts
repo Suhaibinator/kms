@@ -215,6 +215,121 @@ describe("shared watches", () => {
     await client.close();
   });
 
+  it("bounds pagination without inferring a deletion from a capped listing", async () => {
+    let listCalls = 0;
+    const transport = new FakeTransport((_path, request) => {
+      listCalls += 1;
+      const pageToken = (request as { pageToken?: string }).pageToken ?? "";
+      const page = pageToken === "" ? 0 : Number(pageToken);
+      return { parameters: [], nextPageToken: String(page + 1) };
+    });
+    const client = new KmsClient({
+      transport,
+      namespace: "prod/api",
+      reconcileIntervalMs: 5,
+    });
+    const events: WatchEvent[] = [];
+    const stop = await client.watch((event) => events.push(event));
+    await waitFor(() => transport.streams.length === 1);
+    const stream = transport.streams[0] as FakeDuplex<SubscribeRequest, SubscribeEvent>;
+    stream.emit({
+      event: {
+        $case: "change",
+        value: {
+          ref: { namespace: { env: "prod", app: "api" }, key: "retained" },
+          changeType: "put",
+          value: "present",
+          contentType: "string",
+          version: 1n,
+          label: "",
+        },
+      },
+      revision: 1n,
+    });
+    await waitFor(() => events.some((event) => event.type === "put"));
+
+    await waitFor(() => listCalls >= 100);
+    stop();
+    await client.close();
+
+    expect(listCalls).toBe(100);
+    expect(events).not.toContainEqual(expect.objectContaining({ type: "delete", key: "retained" }));
+  });
+
+  it("fences a stale reconciliation page behind a live tombstone", async () => {
+    let resolveFirstList:
+      | ((response: { parameters: ReturnType<typeof parameter>[]; nextPageToken: string }) => void)
+      | undefined;
+    const parameter = (value: string) => ({
+      ref: { namespace: { env: "prod", app: "api" }, key: "flag" },
+      value,
+      contentType: "string",
+      version: 1n,
+      metadataJson: "{}",
+      createdBy: "test",
+      createdAtUnixMs: 0n,
+      labels: {},
+    });
+    let firstList = true;
+    const transport = new FakeTransport(() => {
+      if (!firstList) return { parameters: [], nextPageToken: "" };
+      firstList = false;
+      return new Promise<{ parameters: ReturnType<typeof parameter>[]; nextPageToken: string }>(
+        (resolve) => {
+          resolveFirstList = resolve;
+        },
+      );
+    });
+    const client = new KmsClient({
+      transport,
+      namespace: "prod/api",
+      reconcileIntervalMs: 5,
+    });
+    const events: WatchEvent[] = [];
+    const stop = await client.watch((event) => events.push(event));
+    await waitFor(() => transport.streams.length === 1);
+    const stream = transport.streams[0] as FakeDuplex<SubscribeRequest, SubscribeEvent>;
+    stream.emit({
+      event: {
+        $case: "change",
+        value: {
+          ref: { namespace: { env: "prod", app: "api" }, key: "flag" },
+          changeType: "put",
+          value: "current",
+          contentType: "string",
+          version: 1n,
+          label: "",
+        },
+      },
+      revision: 5n,
+    });
+    await waitFor(() => events.some((event) => event.type === "put"));
+    await waitFor(() => resolveFirstList !== undefined);
+
+    stream.emit({
+      event: {
+        $case: "change",
+        value: {
+          ref: { namespace: { env: "prod", app: "api" }, key: "flag" },
+          changeType: "delete",
+          value: "",
+          contentType: "",
+          version: 2n,
+          label: "",
+        },
+      },
+      revision: 6n,
+    });
+    await waitFor(() => events.some((event) => event.type === "delete"));
+    resolveFirstList?.({ parameters: [parameter("stale")], nextPageToken: "" });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(events.filter((event) => event.type === "put")).toHaveLength(1);
+    expect(events.at(-1)).toMatchObject({ type: "delete", revision: 6n });
+    stop();
+    await client.close();
+  });
+
   it("invalidates cached secrets on metadata changes without streaming plaintext", async () => {
     let secretReads = 0;
     const transport = new FakeTransport((path) => {
