@@ -897,25 +897,22 @@ function positiveFinite(value: number, name: string): number {
 
 function isolateLogger(logger: Logger): Logger {
   return {
-    warn: (message) => {
-      try {
-        logger.warn(message);
-      } catch {
-        // Logging is observational and must not affect client lifecycle.
-      }
-    },
+    warn: (message) => observeLoggerCall(() => logger.warn(message)),
     ...(logger.error === undefined
       ? {}
       : {
-          error: (message: string) => {
-            try {
-              logger.error?.(message);
-            } catch {
-              // Logging is observational and must not affect client lifecycle.
-            }
-          },
+          error: (message: string) => observeLoggerCall(() => logger.error?.(message)),
         }),
   };
+}
+
+function observeLoggerCall(call: () => unknown): void {
+  try {
+    const returned: unknown = call();
+    void Promise.resolve(returned).catch(() => undefined);
+  } catch {
+    // Logging is observational and must not affect client lifecycle.
+  }
 }
 
 function validPageSize(value = 0): number {

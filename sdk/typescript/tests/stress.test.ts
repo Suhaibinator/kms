@@ -102,6 +102,40 @@ describe("bounded concurrency and lifecycle stress", () => {
     }
   });
 
+  it("observes rejected async logger warnings while recovering a watch", async () => {
+    const random = vi.spyOn(Math, "random").mockReturnValue(0);
+    const transport = new FakeTransport(() => ({ parameters: [], nextPageToken: "" }));
+    let warningCount = 0;
+    const client = new KmsClient({
+      transport,
+      namespace,
+      logger: {
+        warn: async () => {
+          warningCount += 1;
+          throw new Error("async logger failed");
+        },
+      },
+    });
+
+    const unhandled = await captureUnhandledRejections(async () => {
+      const stop = await client.watch(() => undefined);
+      try {
+        await waitFor(() => transport.streams.length === 1);
+        const first = streamAt(transport, 0);
+        await waitFor(() => first.sent.length === 1);
+        first.cancel();
+        await waitFor(() => transport.streams.length === 2 && warningCount > 0);
+      } finally {
+        stop();
+        await client.close();
+        random.mockRestore();
+      }
+    });
+
+    expect(warningCount).toBeGreaterThan(0);
+    expect(unhandled).toEqual([]);
+  });
+
   it("bounds callback backpressure and yields to unrelated event-loop work during a burst", async () => {
     const warnings: string[] = [];
     const logger: Logger = { warn: (message) => warnings.push(message) };
@@ -201,6 +235,48 @@ describe("bounded concurrency and lifecycle stress", () => {
     await waitFor(() => delivered.length === 1);
     expect(delivered).toEqual(["final"]);
     await client.close();
+  });
+
+  it("observes hostile logger thenables while draining callback warnings", async () => {
+    const transport = new FakeTransport(() => ({}));
+    // biome-ignore lint/suspicious/noThenProperty: this regression intentionally uses a hostile thenable.
+    const hostileThenable = Object.defineProperty({}, "then", {
+      get(): never {
+        throw new Error("hostile logger thenable");
+      },
+    });
+    let warningCount = 0;
+    const client = new KmsClient({
+      transport,
+      logger: {
+        warn: () => {
+          warningCount += 1;
+          return warningCount === 1
+            ? hostileThenable
+            : Promise.reject(new Error("async logger failed"));
+        },
+      },
+    });
+    const delivered: string[] = [];
+
+    const unhandled = await captureUnhandledRejections(async () => {
+      client._dispatch("/prod/api/synchronous", () => {
+        throw new Error("callback failed");
+      });
+      client._dispatch("/prod/api/asynchronous", () =>
+        Promise.reject(new Error("callback failed")),
+      );
+      client._dispatch("/prod/api/final", () => {
+        delivered.push("final");
+      });
+
+      await waitFor(() => delivered.length === 1);
+      await client.close();
+    });
+
+    expect(delivered).toEqual(["final"]);
+    expect(warningCount).toBe(2);
+    expect(unhandled).toEqual([]);
   });
 
   it("keeps draining the bounded queue when its overflow warning throws", async () => {
@@ -440,6 +516,21 @@ function parameterChangeForKey(
 
 function abortListenerCalls(calls: readonly (readonly unknown[])[]): number {
   return calls.filter(([type]) => type === "abort").length;
+}
+
+async function captureUnhandledRejections(run: () => Promise<void>): Promise<readonly unknown[]> {
+  const unhandled: unknown[] = [];
+  const listener = (reason: unknown): void => {
+    unhandled.push(reason);
+  };
+  process.on("unhandledRejection", listener);
+  try {
+    await run();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    return unhandled;
+  } finally {
+    process.removeListener("unhandledRejection", listener);
+  }
 }
 
 function generation(index: number): PolicySnapshot<{
