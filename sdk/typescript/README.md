@@ -142,7 +142,7 @@ heartbeats, reconnects with jittered backoff, and periodically reconciles.
 
 ```ts
 const unwatch = await client.watch((event) => {
-  if (event.kind === "parameter_changed") {
+  if (event.type === "put") {
     console.info(event.path, event.revision);
   }
 });
