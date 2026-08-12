@@ -60,5 +60,11 @@ sdk/python/.venv/
 *.egg-info/
 *.py[cod]
 
+# TypeScript SDK local artifacts
+sdk/typescript/node_modules/
+sdk/typescript/dist/
+sdk/typescript/coverage/
+sdk/typescript/.next/
+
 # macOS / editor cruft
 .DS_Store

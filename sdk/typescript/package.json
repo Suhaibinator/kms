@@ -1,0 +1,109 @@
+{
+  "name": "@suhaibinator/kms",
+  "version": "0.1.0",
+  "description": "Framework-neutral Node.js SDK for the KMS parameter store and configuration releases",
+  "keywords": [
+    "kms",
+    "secrets",
+    "parameter-store",
+    "configuration",
+    "grpc",
+    "nextjs"
+  ],
+  "homepage": "https://github.com/Suhaibinator/kms/tree/main/sdk/typescript",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Suhaibinator/kms.git",
+    "directory": "sdk/typescript"
+  },
+  "bugs": {
+    "url": "https://github.com/Suhaibinator/kms/issues"
+  },
+  "license": "MIT",
+  "author": "Suhaib",
+  "type": "module",
+  "sideEffects": [
+    "./dist/next/client.js",
+    "./dist/next/server.js",
+    "./dist/unsupported-browser.js"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "SECURITY.md"
+  ],
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "node": "./dist/index.js",
+      "default": "./dist/unsupported-browser.js"
+    },
+    "./next/server": {
+      "types": "./dist/next/server.d.ts",
+      "node": "./dist/next/server.js",
+      "default": "./dist/unsupported-browser.js"
+    },
+    "./next/client": {
+      "types": "./dist/next/client.d.ts",
+      "default": "./dist/next/client.js"
+    },
+    "./configstore": {
+      "types": "./dist/configstore/index.d.ts",
+      "node": "./dist/configstore/index.js",
+      "default": "./dist/unsupported-browser.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "scripts": {
+    "clean": "node ./scripts/clean.mjs",
+    "generate": "node ./scripts/generate.mjs",
+    "check:generated": "node ./scripts/check-generated.mjs",
+    "build": "npm run clean && tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "lint": "biome lint .",
+    "format": "biome format --write .",
+    "format:check": "biome format .",
+    "test": "vitest run",
+    "test:coverage": "vitest run --coverage",
+    "test:types": "tsc -p tests/types/tsconfig.json --noEmit",
+    "check": "npm run check:generated && npm run typecheck && npm run lint && npm run format:check && npm run test && npm run test:types && npm run build",
+    "prepack": "npm run check"
+  },
+  "peerDependencies": {
+    "next": ">=14 <17",
+    "react": ">=18 <20"
+  },
+  "peerDependenciesMeta": {
+    "next": {
+      "optional": true
+    },
+    "react": {
+      "optional": true
+    }
+  },
+  "dependencies": {
+    "@bufbuild/protobuf": "^2.13.0",
+    "@grpc/grpc-js": "^1.14.4",
+    "server-only": "^0.0.1"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^2.5.8",
+    "@testing-library/react": "^16.3.2",
+    "@types/node": "^26.2.0",
+    "@types/react": "^19.2.18",
+    "@types/react-dom": "^19.2.4",
+    "@vitest/coverage-v8": "^4.1.10",
+    "happy-dom": "^20.11.2",
+    "next": "^16.3.0",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8",
+    "ts-proto": "^2.12.0",
+    "typescript": "^7.0.2",
+    "vitest": "^4.1.10"
+  }
+}
