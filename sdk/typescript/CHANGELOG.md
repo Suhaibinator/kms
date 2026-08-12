@@ -47,8 +47,8 @@ a minor release may contain documented breaking changes.
 - Publisher observers receive an outcome only after the corresponding public
   result is safely constructed.
 - Next process signal hooks are explicitly cleanup-only, reject uncatchable
-  signals before installation, and leave termination policy to the owning
-  application or supervisor.
+  signals before installation, and invoke an explicit application-owned
+  termination callback after cleanup settles.
 
 ### Compatibility notes
 

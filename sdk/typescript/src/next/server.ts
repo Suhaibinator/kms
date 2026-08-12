@@ -89,6 +89,11 @@ export interface ProcessShutdownOptions {
   readonly signals?: readonly NodeJS.Signals[];
   /** Receives lifecycle errors; the adapter never serializes or logs them. */
   readonly onError?: (error: unknown) => void;
+  /**
+   * Runs after the cleanup attempt. Applications that install signal hooks
+   * must use this to enact their explicit termination policy.
+   */
+  readonly onCleanupComplete?: (signal: NodeJS.Signals) => Awaitable<void>;
 }
 
 export interface NextKms<
@@ -310,7 +315,15 @@ export function createNextKms<
           if (shutdownStarted) return;
           shutdownStarted = true;
           uninstall();
-          void close().catch(reportError);
+          void close()
+            .catch(reportError)
+            .then(async () => {
+              try {
+                await shutdownOptions.onCleanupComplete?.(signal);
+              } catch (error) {
+                reportError(error);
+              }
+            });
         };
         return [signal, handler] as const;
       });

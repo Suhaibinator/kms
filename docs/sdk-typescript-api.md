@@ -221,7 +221,7 @@ An unavailable source returns `unavailable`.
 | `createPublicConfigGET(provider, options?)`, `PublicConfigGET`, `PublicConfigProvider` | Function and types | Adapt a safe public-config provider to a Node Route Handler. |
 | `PublicConfigCachePolicy`, `PublicConfigRouteOptions` | Types | Select `no-store` or bounded private-only browser caching. |
 | `PublicConfigRouteEvent`, `PublicConfigRouteObserver` | Types | Frozen, value-free `served`, `not_modified`, or `unavailable` HTTP event with observation time/duration and a decimal revision where available. Throwing/async-rejecting observers are isolated. |
-| `ProcessShutdownOptions` | Type | Select catchable process signals and an isolated cleanup-error callback. Uncatchable signals are rejected before any listener is installed. |
+| `ProcessShutdownOptions` | Type | Select catchable process signals, an isolated cleanup-error callback, and an application-owned post-cleanup termination callback. Uncatchable signals are rejected before any listener is installed. |
 | `DecimalRevision` | Re-exported type | Canonical decimal `uint64` used at this HTTP boundary. |
 
 The returned `NextKms` operations are `start`, `close`, `readPolicy`,
@@ -232,7 +232,9 @@ cleanup. `installProcessShutdown` returns a listener uninstaller and, by
 design, performs cleanup only. Installing a Node signal listener suppresses
 Node's default handling, so the application or process supervisor must own its
 termination policy; the adapter neither calls `process.exit()` nor re-sends a
-signal whose behavior could be changed by other application listeners.
+signal whose behavior could be changed by other application listeners. A
+long-lived server must supply `onCleanupComplete` (as the bundled example does)
+or arrange equivalent supervisor-owned termination.
 
 ### Client entry point
 

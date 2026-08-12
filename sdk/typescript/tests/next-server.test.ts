@@ -209,6 +209,36 @@ describe("Next.js server adapter", () => {
     await adapter.close();
   });
 
+  it("hands termination ownership to the application after cleanup settles", async () => {
+    const signal = "SIGUSR2";
+    const order: string[] = [];
+    const adapter = createNextKms<Policy, PublicPolicy, string, readonly string[]>({
+      initialize: () => ({
+        source: {
+          current: () => ({ revision: 1n, value: { minLength: 8, privateValue: "hidden" } }),
+        },
+        async close() {
+          await Promise.resolve();
+          order.push("closed");
+        },
+      }),
+      projection,
+      validate: () => ({ valid: true }),
+    });
+    await adapter.start();
+    adapter.installProcessShutdown({
+      signals: [signal],
+      onCleanupComplete(received) {
+        order.push(`terminate:${received}`);
+      },
+    });
+
+    const handler = process.listeners(signal).at(-1);
+    handler?.(signal);
+    await vi.waitFor(() => expect(order).toHaveLength(2));
+    expect(order).toEqual(["closed", `terminate:${signal}`]);
+  });
+
   it("emits exact 200, weak/list 304, and redacted 503 contracts", async () => {
     const get = createPublicConfigGET(async () => ({
       revision: formatRevision(18_446_744_073_709_551_615n),

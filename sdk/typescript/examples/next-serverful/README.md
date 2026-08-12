@@ -18,4 +18,7 @@ The deployment must use the Node runtime. Static export and Edge deployments
 cannot host the KMS transport or bidirectional release watch. Production code
 should also expose bounded loader-health metrics and decide whether a startup
 without an initial policy should keep returning `503` or fail process
-readiness.
+readiness. The instrumentation example owns termination explicitly: after the
+adapter's cleanup attempt settles it exits with the conventional SIGINT or
+SIGTERM status. Replace that callback only when your process supervisor has a
+different documented termination contract.
