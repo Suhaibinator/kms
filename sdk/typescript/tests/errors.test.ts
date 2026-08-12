@@ -56,6 +56,21 @@ describe("gRPC error normalization", () => {
     expect(mapGrpcError(applicationError)).toBe(applicationError);
   });
 
+  it("maps genuine gRPC-shaped errors across duplicated grpc-js module instances", () => {
+    const source = Object.assign(new Error("5 NOT_FOUND: missing"), {
+      code: status.NOT_FOUND,
+      details: "missing",
+      // A second installed grpc-js copy has a distinct Metadata constructor,
+      // but retains the stable public Metadata API.
+      metadata: { getMap: () => ({}) },
+    });
+
+    const mapped = mapGrpcError(source);
+    expect(mapped).toBeInstanceOf(KmsError);
+    expect(mapped).toMatchObject({ code: "not_found", grpcCode: status.NOT_FOUND });
+    expect((mapped as Error).cause).toBe(source);
+  });
+
   it("preserves an injected DOM cancellation through the client RPC boundary", async () => {
     const cancellation = new DOMException("caller cancelled", "AbortError");
     const transport = new FakeTransport(() => Promise.reject(cancellation));

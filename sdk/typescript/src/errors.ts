@@ -1,4 +1,4 @@
-import { Metadata, type ServiceError, status } from "@grpc/grpc-js";
+import { type ServiceError, status } from "@grpc/grpc-js";
 
 /** Stable, programmatic error codes exposed by the SDK. */
 export type KmsErrorCode =
@@ -100,8 +100,20 @@ const GRPC_CODES: Readonly<Partial<Record<status, KmsErrorCode>>> = Object.freez
 type GrpcErrorLike = Error & {
   readonly code: number;
   readonly details: string;
-  readonly metadata: Metadata;
+  readonly metadata: GrpcMetadataLike;
 };
+
+type GrpcMetadataLike = {
+  getMap(): unknown;
+};
+
+function isGrpcMetadataLike(metadata: unknown): metadata is GrpcMetadataLike {
+  return (
+    typeof metadata === "object" &&
+    metadata !== null &&
+    typeof (metadata as Partial<GrpcMetadataLike>).getMap === "function"
+  );
+}
 
 function isGrpcErrorLike(error: unknown): error is GrpcErrorLike {
   if (!(error instanceof Error)) return false;
@@ -112,7 +124,7 @@ function isGrpcErrorLike(error: unknown): error is GrpcErrorLike {
     candidate.code >= status.OK &&
     candidate.code <= status.UNAUTHENTICATED &&
     typeof candidate.details === "string" &&
-    candidate.metadata instanceof Metadata
+    isGrpcMetadataLike(candidate.metadata)
   );
 }
 
