@@ -33,7 +33,9 @@
   "files": [
     "dist",
     "README.md",
-    "SECURITY.md"
+    "SECURITY.md",
+    "CHANGELOG.md",
+    "LICENSE"
   ],
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
