@@ -50,7 +50,12 @@ try {
   const signingKey = await client.getSecret("session-signing-key");
 
   console.log({ rateLimit, signingKey }); // signingKey renders as [REDACTED]
-  useSigningKey(signingKey.bytes()); // plaintext access is always explicit
+  const signingKeyBytes = signingKey.bytes(); // plaintext access is explicit
+  try {
+    // Initialize the application signer from signingKeyBytes.
+  } finally {
+    signingKeyBytes.fill(0);
+  }
 } finally {
   await client.close();
 }

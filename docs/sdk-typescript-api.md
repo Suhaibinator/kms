@@ -207,21 +207,22 @@ deliberately stronger than the Go SDK's mutable `Value()` slice.
 
 ## Stability, versioning, and deprecation
 
-The public exports documented here follow semantic versioning. Removing or
-changing a public method, error code, wire response, or TypeScript type in an
-incompatible way requires a major release. New optional fields and new methods
-may ship in a minor release. Security and correctness fixes that preserve the
-contract ship as patches.
+The public exports documented here follow semantic versioning. Before `1.0.0`,
+a minor version may make a documented breaking change. Beginning with `1.0.0`,
+removing or incompatibly changing a public method, error code, wire response,
+or TypeScript type requires a major release. New backward-compatible fields and
+methods may ship in a minor release; compatible security and correctness fixes
+ship as patches.
 
 Deprecated APIs remain functional for at least one minor-release line and carry
 both a TypeScript `@deprecated` annotation and migration guidance. Generated
 protobuf symbols and modules below `src/generated` are internal and are not a
 stable public surface.
 
-Before `1.0.0`, a minor version may make a documented breaking change. Every
-user-visible change is recorded under `Unreleased` in the package changelog;
-release entries include an ISO date and migration guidance for breaking
-changes. Security fixes are supported on the latest published minor line.
+Every user-visible change is recorded under `Unreleased` in the package
+changelog; release entries include an ISO date and migration guidance for
+breaking changes. Security fixes are supported on the latest published minor
+line.
 
 ## Intentional language differences
 
