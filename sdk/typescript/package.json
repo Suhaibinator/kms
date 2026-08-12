@@ -77,16 +77,18 @@
     "clean": "node ./scripts/clean.mjs",
     "generate": "node ./scripts/generate.mjs",
     "check:generated": "node ./scripts/check-generated.mjs",
-    "build": "npm run clean && tsc -p tsconfig.build.json",
-    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "build": "npm run clean && node ./node_modules/typescript/bin/tsc -p tsconfig.build.json",
+    "typecheck": "node ./node_modules/typescript/bin/tsc -p tsconfig.json --noEmit",
     "lint": "biome lint .",
     "format": "biome format --write .",
     "format:check": "biome format .",
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
-    "test:types": "tsc -p tests/types/tsconfig.json --noEmit",
+    "test:types": "node ./node_modules/typescript/bin/tsc -p tests/types/tsconfig.json --noEmit",
+    "test:typescript-min": "node ./node_modules/typescript-5-2/bin/tsc -p tests/package/tsconfig.json --noEmit --pretty false",
     "test:next": "node ./scripts/test-next-boundaries.mjs",
-    "test:package": "tsc -p tests/package/tsconfig.json --noEmit && npm pack --dry-run --ignore-scripts",
+    "test:browser": "node ./scripts/test-next-browser.mjs",
+    "test:package": "node ./node_modules/typescript/bin/tsc -p tests/package/tsconfig.json --noEmit && npm pack --dry-run --ignore-scripts",
     "check": "npm run check:generated && npm run typecheck && npm run lint && npm run format:check && npm run test && npm run test:types && npm run build && npm run test:next && npm run test:package",
     "prepack": "npm run check"
   },
@@ -122,6 +124,7 @@
     "react-dom": "^19.2.8",
     "ts-proto": "^2.12.0",
     "typescript": "^7.0.2",
+    "typescript-5-2": "npm:typescript@5.2.2",
     "vitest": "^4.1.10"
   }
 }

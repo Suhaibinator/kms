@@ -142,6 +142,11 @@ chunks for server transport, TLS, generated-protocol, and credential markers.
 Generated managed-configuration fixtures must match the descriptor and
 exercise the emitted `Store`; applications should run their
 `kms-config-gen-ts ... --check` command in CI for the same stale-artifact gate.
+The compatibility jobs compile the built package with the exact TypeScript
+5.2.2 minimum, build isolated Next.js 14/React 18, Next.js 15/React 18 and 19,
+and Next.js 16/React 19 peer tuples, and launch Chromium against the serverful
+fixture. The browser gate verifies initial hydration, HTTP refresh, exact
+`bigint` revisions, and `policy_changed` recovery without a reload.
 
 ## Frontend
 

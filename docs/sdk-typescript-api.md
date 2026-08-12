@@ -26,13 +26,12 @@ host for this adapter; consumers need a serverful Next.js deployment.
 The package is ESM-only. Node 22 is the oldest supported runtime; CI runs the
 complete release gate on Node 22, 24, and 26. The declaration syntax requires
 TypeScript 5.2 or newer (`const` type parameters and `Symbol.asyncDispose`);
-the current release gate directly qualifies the pinned TypeScript 7 compiler,
-so minimum-compiler matrix coverage remains outstanding. Next.js and React are
+the release gate compiles built-package consumers with both TypeScript 5.2.2
+and the pinned current compiler. Next.js and React are
 optional peers and are needed only for their respective adapter entry points.
-The peer ranges express intended Next.js 14–16 and React 18–19 compatibility,
-while the current adapter suite directly qualifies Next.js 16 with React 19.
-Earlier accepted peer majors remain a compatibility-qualification gap rather
-than a matrix-tested claim.
+The peer ranges cover Next.js 14–16 and React 18–19; isolated exact-tuple builds
+qualify Next.js 14/React 18, Next.js 15/React 18 and 19, and Next.js 16/React
+19.
 
 Only the entry points in this table are stable. Generated protobuf modules,
 files below `dist/` that are not named by the package export map, and source
@@ -273,9 +272,10 @@ installs a validated `policy_changed` result through `applyServerResult`.
 It has no KMS credentials, secret types, or transport dependency.
 
 The client hook requires a modern browser with `bigint`, `fetch`,
-`AbortController`, and standard focus events. Current automated coverage uses
-a simulated DOM; it does not yet constitute a real-browser compatibility
-matrix.
+`AbortController`, and standard focus events. Unit coverage uses a simulated
+DOM, while a real Chromium release gate verifies hydration, refresh,
+out-of-safe-integer revisions, and stale-policy recovery without a reload.
+Chromium is the explicitly qualified browser target.
 
 The complete compile-checked integration is in the
 [`next-serverful` example](../sdk/typescript/examples/next-serverful).

@@ -20,15 +20,15 @@ delivery plan. `complete` means the behavior has an automated TypeScript test;
 | Atomic release lifecycle | `ReleaseLoader.run` | Supersession, prepare/commit/abort, active fence, LKG, reliable acks | `sdk/typescript/tests/releases/loader.test.ts` | complete |
 | Public projection | `definePublicProjection`, `createPolicyPublisher` | Allowlist-only JSON, one captured snapshot, decimal revisions, stale result | `sdk/typescript/tests/publishing.test.ts` | complete |
 | Next.js adapter | `next/server`, `next/client` | Server-only ownership, safe Route Handler, refresh and stale recovery | `sdk/typescript/tests/next-server.test.ts`, `next-client.test.tsx`, `npm run test:next` | complete |
-| Next.js/React peer majors | optional adapter peers | Intended Next.js 14–16 and React 18–19 compatibility | Next.js 16 / React 19 in `npm run test` | partial — older accepted peer majors need a compatibility matrix |
-| Browser hook compatibility | `next/client` | Native `bigint`, fetch/cancellation, focus/navigation refresh, stale recovery | `sdk/typescript/tests/next-client.test.tsx` (simulated DOM) | partial — real-browser matrix pending |
+| Next.js/React peer majors | optional adapter peers | Next.js 14–16 and React 18–19 compatibility where the framework peer ranges intersect | Exact isolated Next.js 14/React 18, Next.js 15/React 18 and 19, and Next.js 16/React 19 builds in `.github/workflows/ci.yml` | complete |
+| Browser hook compatibility | `next/client` | Native `bigint`, fetch/cancellation, focus/navigation refresh, stale recovery | `sdk/typescript/tests/next-client.test.tsx`, `npm run test:browser` (Chromium) | complete |
 | Managed strict decoding | `configstore` | Duplicate/unknown/missing/type/range checks; transactional decoding | `sdk/typescript/tests/configstore-codecs.test.ts` | complete |
 | Managed drift/restart policy | `startManagedConfig`, `ManagedConfigManager` | Startup drift, runtime restore, whole-candidate restart rejection | `sdk/typescript/tests/configstore-manager.test.ts` | complete |
 | TypeScript-native generation | `configgen`, `kms-config-gen-ts` | Stable binding/schema/contract output, emitted store behavior, and check mode | `sdk/typescript/tests/configgen.test.ts`, `configgen-generated.test.ts` | complete |
 | Generated protobuf contract | `src/generated/kms.ts` | Complete service/messages, `uint64` as `bigint`, stale generation check | `npm run check:generated` | complete |
 | Published entry points and examples | package root, `next/server`, `next/client`, `configstore`, `configgen` | Declaration build, built consumer, serverful Next build, browser-bundle inspection, and invalid client-import rejection | `sdk/typescript/tests/types`, `sdk/typescript/tests/package`, `npm run test:next`, `npm run test:package` | complete |
 | Supported Node majors | package release gate | Typecheck, lint, tests, consumer types, framework boundary builds, and package checks on Node 22, 24, and 26 | `.github/workflows/ci.yml` | complete |
-| TypeScript compiler compatibility | published declarations | TypeScript 5.2+ syntax; pinned compiler release gate | `npm run test:types`, `npm run test:package` | partial — minimum compiler matrix pending |
+| TypeScript compiler compatibility | published declarations | Built-package consumption on TypeScript 5.2.2 and the pinned current compiler | `npm run test:typescript-min`, `npm run test:types`, `npm run test:package` | complete |
 | Protocol-faithful server interoperability | core transport, watches, releases | Actual gRPC loopback with TLS/mTLS, auth metadata, unary methods, exact `bigint` values, bidi resume, releases, and applied acknowledgement | `sdk/typescript/tests/grpc-integration.test.ts`, `tls-integration.test.ts` | complete |
 
 Intentional differences are documented in
@@ -40,9 +40,6 @@ services and runtime-generated certificates. It exercises the real transport
 and generated wire contract, but does not claim qualification against a
 separately deployed production server.
 
-The remaining `partial` rows are release-visible qualification gaps. Unit
-coverage and a declaration build do not substitute for the required browser,
-compiler, and peer-major compatibility scenarios.
-Until those rows complete, the package may be published as a prerelease
-candidate but must not advertise literal full Go parity or a generally
-available stable release.
+Every release-visible row is qualified by executable behavior or build gates.
+Adding a supported runtime, compiler, framework, or browser requires extending
+this matrix before the public support claim changes.

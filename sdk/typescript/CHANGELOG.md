@@ -20,6 +20,8 @@ a minor release may contain documented breaking changes.
   consumer type tests, and full release gates on Node.js 22, 24, and 26.
 - A real Next.js App Router build gate that rejects server-adapter imports from
   Client Components and inspects browser chunks for server-only dependencies.
+- Exact Next.js 14–16/React 18–19 peer-tuple builds, TypeScript 5.2.2
+  declaration consumption, and a real Chromium public-policy recovery gate.
 - `kms-config-gen-ts` deterministic binding, Draft 2020-12 schema, and machine
   contract generation with non-writing `--check`/`--verify` modes.
 
@@ -31,6 +33,9 @@ a minor release may contain documented breaking changes.
   canonical decimal strings while retaining whole-value secret redaction.
 - Disposed declarative values unregister their live parameter handlers, and
   watch shutdown removes external abort listeners.
+- Expanded watch scopes retry a full snapshot until it arrives, preserve
+  per-key revision fences, and immediately invalidate newly watched secret
+  caches; disposal cannot race a late parameter subscription.
 
 ### Compatibility notes
 

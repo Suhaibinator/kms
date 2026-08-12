@@ -9,8 +9,8 @@ serverful Next.js adapter.
 The SDK requires Node.js 22 or newer and is ESM-only. CI qualifies the complete
 release gate on Node.js 22, 24, and 26. Its declarations use
 TypeScript features available in TypeScript 5.2 and newer; the repository
-release gate currently runs the pinned TypeScript 7 compiler. The KMS transport
-is server-only: never import the package root from browser code. The only
+release gate compiles built-package consumers with both TypeScript 5.2.2 and
+the pinned current compiler. The KMS transport is server-only: never import the package root from browser code. The only
 browser entry point is `@suhaibinator/kms/next/client`, which consumes an
 explicitly allowlisted public HTTP projection and never connects to KMS.
 
@@ -368,17 +368,18 @@ from committed output. The library API for custom tooling is available at
 | `@suhaibinator/kms/next/client` | React browser bundle | Public-policy refresh and stale recovery |
 
 The package is ESM-only. Next.js 14 through 16 and React 18 through 19 are the
-intended optional peer ranges. The repository currently qualifies the adapter
-with Next.js 16 and React 19; the older accepted peer majors are not yet an
-independent CI matrix. Generated protobuf modules are internal and are not a
-compatibility surface.
+optional peer ranges. CI builds isolated, exact Next.js 14/React 18,
+Next.js 15/React 18 and 19, and Next.js 16/React 19 tuples. Generated protobuf
+modules are internal and are not a compatibility surface.
 
 The `next/client` hook targets modern browsers with native `bigint`, `fetch`,
 `AbortController`, and standard focus events. Its automated tests run in a DOM
 simulation and the release gate builds a real Next.js App Router fixture,
 inspects its browser chunks for server-only dependencies/markers, and rejects a
-Client Component import of `next/server`. A cross-browser behavior matrix is
-still a release qualification gap.
+Client Component import of `next/server`. A real Chromium gate additionally
+exercises hydration, HTTP refresh, lossless `bigint` revisions, and no-reload
+`policy_changed` recovery. Chromium is the qualified browser; other modern
+browsers are expected to work but are not claimed as matrix-qualified.
 
 The public exports follow semantic versioning. Before `1.0.0`, minor releases
 may still contain breaking API changes and will document them in the package
