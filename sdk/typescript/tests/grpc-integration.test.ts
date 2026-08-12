@@ -101,6 +101,9 @@ describe("protocol-faithful gRPC integration", () => {
       call,
       callback,
     ) => {
+      if (call.request.version === 0n) {
+        expect(call.metadata.get("x-kms-secret-token")).toEqual(["parameter-token"]);
+      }
       const selected =
         call.request.version === 0n ? currentParameter : exactParameters.get(call.request.version);
       callback(null, { parameter: selected });
@@ -194,7 +197,9 @@ describe("protocol-faithful gRPC integration", () => {
         namespace: "prod/api",
         authMethod: "token",
       });
-      await expect(client.getParameter("settings")).resolves.toBe("initial");
+      await expect(
+        client.getParameter("settings", { secretToken: "parameter-token" }),
+      ).resolves.toBe("initial");
       await expect(client.putParameter("settings", "updated")).resolves.toEqual({
         version: 8n,
         revision: 9_007_199_254_740_993n,

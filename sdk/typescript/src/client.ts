@@ -246,16 +246,18 @@ export class KmsClient {
   }
 
   async getParameter(key: string, options: GetOptions = {}): Promise<string> {
-    const ref = await this.resolveResourceRef(key, options.signal);
+    const ref = await this.#resolveResourceRefForCall(key, options);
     const selector = normalizeVersionRef(options);
-    const cached = this.#cache.getParam(displayPath(ref), selector.version, selector.label);
+    const cached = options.secretToken
+      ? undefined
+      : this.#cache.getParam(displayPath(ref), selector.version, selector.label);
     if (cached !== undefined) return cached;
     const parameter = await this.fetchParameter(ref, selector, options);
     return parameter.value;
   }
 
   async getParameterInfo(key: string, options: GetOptions = {}): Promise<Parameter> {
-    const ref = await this.resolveResourceRef(key, options.signal);
+    const ref = await this.#resolveResourceRefForCall(key, options);
     return this.fetchParameter(ref, normalizeVersionRef(options), options);
   }
 
@@ -263,18 +265,20 @@ export class KmsClient {
   async fetchParameter(
     ref: ResourceRef,
     selector: { readonly version: bigint; readonly label: string },
-    options: CallOptions = {},
+    options: GetOptions = {},
   ): Promise<Parameter> {
     this.#assertOpen();
     try {
       const response = await this.#transport.unary(
         ParameterServiceService.getParameter,
         { ref: toWireRef(ref), version: selector.version, label: selector.label },
-        this.#callOptions("", options),
+        this.#callOptions(options.secretToken ?? "", options),
       );
       if (!response.parameter) throw new KmsError("internal", "KMS parameter response was empty");
       const parameter = parameterFromWire(response.parameter);
-      this.#cache.putParam(displayPath(ref), selector.version, selector.label, parameter.value);
+      if (!options.secretToken) {
+        this.#cache.putParam(displayPath(ref), selector.version, selector.label, parameter.value);
+      }
       return parameter;
     } catch (error) {
       throwMapped(error);
@@ -282,7 +286,7 @@ export class KmsClient {
   }
 
   async getSecret(key: string, options: GetOptions = {}): Promise<Secret> {
-    const ref = await this.resolveResourceRef(key, options.signal);
+    const ref = await this.#resolveResourceRefForCall(key, options);
     const selector = normalizeVersionRef(options);
     const path = displayPath(ref);
     if (!options.secretToken) {
@@ -324,7 +328,7 @@ export class KmsClient {
     value: string,
     options: PutParameterOptions = {},
   ): Promise<PutResult> {
-    const ref = await this.resolveResourceRef(key, options.signal);
+    const ref = await this.#resolveResourceRefForCall(key, options);
     try {
       const response = await this.#transport.unary(
         ParameterServiceService.putParameter,
@@ -359,7 +363,7 @@ export class KmsClient {
     ) {
       throw new ConfigError("expiresAtUnixMs must be a bigint in the non-negative int64 range");
     }
-    const ref = await this.resolveResourceRef(key, options.signal);
+    const ref = await this.#resolveResourceRefForCall(key, options);
     const plaintext = typeof value === "string" ? Buffer.from(value) : Buffer.from(value);
     try {
       const response = await this.#transport.unary(
@@ -391,7 +395,7 @@ export class KmsClient {
   async listParameters(namespace?: string, options: ListOptions = {}): Promise<Page<Parameter>> {
     const ns = namespace
       ? parseNamespace(namespace)
-      : await this.requireNamespace("listParameters", options.signal);
+      : await this.requireNamespace("listParameters", options);
     return this.listParametersInNamespace(ns, options);
   }
 
@@ -422,7 +426,7 @@ export class KmsClient {
   }
 
   async deleteParameter(key: string, options: CallOptions = {}): Promise<bigint> {
-    const ref = await this.resolveResourceRef(key, options.signal);
+    const ref = await this.#resolveResourceRefForCall(key, options);
     try {
       const response = await this.#transport.unary(
         ParameterServiceService.deleteParameter,
@@ -437,7 +441,7 @@ export class KmsClient {
   }
 
   async getParameterMetadata(key: string, options: CallOptions = {}): Promise<ParameterMetadata> {
-    const ref = await this.resolveResourceRef(key, options.signal);
+    const ref = await this.#resolveResourceRefForCall(key, options);
     try {
       const response = await this.#transport.unary(
         ParameterServiceService.getParameterMetadata,
@@ -473,7 +477,7 @@ export class KmsClient {
   async listSecrets(namespace?: string, options: ListOptions = {}): Promise<Page<SecretInfo>> {
     const ns = namespace
       ? parseNamespace(namespace)
-      : await this.requireNamespace("listSecrets", options.signal);
+      : await this.requireNamespace("listSecrets", options);
     try {
       const response = await this.#transport.unary(
         SecretServiceService.listSecrets,
@@ -495,7 +499,7 @@ export class KmsClient {
   }
 
   async getSecretMetadata(key: string, options: CallOptions = {}): Promise<SecretInfo> {
-    const ref = await this.resolveResourceRef(key, options.signal);
+    const ref = await this.#resolveResourceRefForCall(key, options);
     try {
       const response = await this.#transport.unary(
         SecretServiceService.getSecretMetadata,
@@ -511,7 +515,7 @@ export class KmsClient {
   }
 
   async deleteSecret(key: string, options: CallOptions = {}): Promise<bigint> {
-    const ref = await this.resolveResourceRef(key, options.signal);
+    const ref = await this.#resolveResourceRefForCall(key, options);
     const response = await this.#secretMutation(
       ref,
       SecretServiceService.deleteSecret,
@@ -528,7 +532,7 @@ export class KmsClient {
     options: CallOptions & { readonly version?: bigint; readonly secretToken?: string } = {},
   ): Promise<bigint> {
     assertUint64(options.version ?? 0n, "version");
-    const ref = await this.resolveResourceRef(key, options.signal);
+    const ref = await this.#resolveResourceRefForCall(key, options);
     const response = await this.#secretMutation(
       ref,
       SecretServiceService.disableSecret,
@@ -545,7 +549,7 @@ export class KmsClient {
     options: CallOptions & { readonly secretToken?: string } = {},
   ): Promise<bigint> {
     assertUint64(version, "destroySecretVersion version", true);
-    const ref = await this.resolveResourceRef(key, options.signal);
+    const ref = await this.#resolveResourceRefForCall(key, options);
     const response = await this.#secretMutation(
       ref,
       SecretServiceService.destroySecretVersion,
@@ -566,7 +570,7 @@ export class KmsClient {
     readonly revision: bigint;
   }> {
     assertUint64(version, "promoteSecretVersion version", true);
-    const ref = await this.resolveResourceRef(key, options.signal);
+    const ref = await this.#resolveResourceRefForCall(key, options);
     const response = await this.#secretMutation(
       ref,
       SecretServiceService.promoteSecretVersion,
@@ -578,7 +582,7 @@ export class KmsClient {
   }
 
   async watch(callback: WatchCallback, options: WatchOptions = {}): Promise<() => void> {
-    const namespace = await this.requireNamespace("watch", options.signal);
+    const namespace = await this.requireNamespace("watch", options.signal ?? undefined);
     return this.#subscriptionManager().watch(namespace, callback, options.signal);
   }
 
@@ -612,17 +616,22 @@ export class KmsClient {
   async resolveResourceRef(key: string, signal?: AbortSignal): Promise<ResourceRef> {
     this.#assertOpen();
     if (key.startsWith("/")) return resolveRef(key, undefined);
-    const namespace = await this.discoverNamespace(signal);
+    const namespace = await this.discoverNamespace(signal === undefined ? {} : { signal });
     return resolveRef(key, namespace);
   }
 
   /** @internal Lazy namespace discovery shared by public operations. */
-  async discoverNamespace(signal?: AbortSignal): Promise<NamespaceRef | undefined> {
+  async discoverNamespace(
+    options: CallOptions | AbortSignal = {},
+  ): Promise<NamespaceRef | undefined> {
     this.#assertOpen();
     if (this.#configuredNamespace) return this.#configuredNamespace;
     if (this.#discoveredNamespace !== undefined) return this.#discoveredNamespace ?? undefined;
     if (!this.#namespacePromise) {
-      this.#namespacePromise = this.whoAmI(signal ? { signal } : {})
+      // The coalesced discovery is client-owned. Individual callers race their
+      // own cancellation/deadline below, so one impatient caller cannot abort
+      // namespace discovery for unrelated joiners.
+      this.#namespacePromise = this.whoAmI()
         .then((identity) => {
           const namespace = identity.namespace ? parseNamespace(identity.namespace) : undefined;
           this.#discoveredNamespace = namespace ?? null;
@@ -633,12 +642,16 @@ export class KmsClient {
           throw error;
         });
     }
-    return this.#namespacePromise;
+    const normalized = isAbortSignal(options) ? { signal: options } : options;
+    return awaitCaller(this.#namespacePromise, normalized);
   }
 
   /** @internal Require a resolved namespace for a public operation. */
-  async requireNamespace(operation: string, signal?: AbortSignal): Promise<NamespaceRef> {
-    const namespace = await this.discoverNamespace(signal);
+  async requireNamespace(
+    operation: string,
+    options: CallOptions | AbortSignal = {},
+  ): Promise<NamespaceRef> {
+    const namespace = await this.discoverNamespace(options);
     if (!namespace) throw new KmsError("no_namespace", `${operation} requires a bound namespace`);
     return namespace;
   }
@@ -731,6 +744,13 @@ export class KmsClient {
       );
     }
     return this.#subscriptions;
+  }
+
+  async #resolveResourceRefForCall(key: string, options: CallOptions): Promise<ResourceRef> {
+    this.#assertOpen();
+    if (key.startsWith("/")) return resolveRef(key, undefined);
+    const namespace = await this.discoverNamespace(options);
+    return resolveRef(key, namespace);
   }
 
   #releaseTransport(): ReleaseTransport {
@@ -922,6 +942,54 @@ function frozenRecord(values: Readonly<Record<string, bigint>>): Readonly<Record
 
 function combineSignals(root: AbortSignal, call?: AbortSignal): AbortSignal {
   return call ? AbortSignal.any([root, call]) : root;
+}
+
+function isAbortSignal(value: CallOptions | AbortSignal): value is AbortSignal {
+  return value instanceof AbortSignal;
+}
+
+function awaitCaller<T>(promise: Promise<T>, options: CallOptions): Promise<T> {
+  const signal = options.signal;
+  if (signal?.aborted) {
+    return Promise.reject(signal.reason ?? new DOMException("Aborted", "AbortError"));
+  }
+  const deadlineMs = options.deadline?.getTime();
+  const hasDeadline = deadlineMs !== undefined && Number.isFinite(deadlineMs);
+  if (signal === undefined && !hasDeadline) return promise;
+
+  return new Promise<T>((resolve, reject) => {
+    let settled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const cleanup = (): void => {
+      if (timer !== undefined) clearTimeout(timer);
+      signal?.removeEventListener("abort", abort);
+    };
+    const succeed = (value: T): void => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      resolve(value);
+    };
+    const fail = (error: unknown): void => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      reject(error);
+    };
+    const abort = (): void => {
+      fail(signal?.reason ?? new DOMException("Aborted", "AbortError"));
+    };
+
+    signal?.addEventListener("abort", abort, { once: true });
+    if (hasDeadline) {
+      timer = setTimeout(
+        () => fail(new KmsError("deadline_exceeded", "KMS namespace discovery deadline exceeded")),
+        Math.max(0, (deadlineMs as number) - Date.now()),
+      );
+    }
+    void promise.then(succeed, fail);
+    if (signal?.aborted) abort();
+  });
 }
 
 function throwMapped(error: unknown): never {

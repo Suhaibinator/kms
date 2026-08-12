@@ -125,6 +125,79 @@ describe("KmsClient", () => {
     await client.close();
   });
 
+  it("keeps coalesced discovery independent from each caller's cancellation", async () => {
+    let finishDiscovery!: () => void;
+    const discoveryGate = new Promise<void>((resolve) => {
+      finishDiscovery = resolve;
+    });
+    const transport = new FakeTransport(async (path, request) => {
+      if (path.endsWith("/WhoAmI")) {
+        await discoveryGate;
+        return {
+          name: "app",
+          kind: "client",
+          namespace: { env: "prod", app: "api" },
+          authMethod: "token",
+        };
+      }
+      expect(request).toMatchObject({
+        ref: { namespace: { env: "prod", app: "api" } },
+      });
+      return {
+        parameter: {
+          ref: { namespace: { env: "prod", app: "api" }, key: "second" },
+          value: "resolved",
+          contentType: "string",
+          version: 1n,
+          metadataJson: "{}",
+          createdBy: "test",
+          createdAtUnixMs: 0n,
+          labels: {},
+        },
+      };
+    });
+    const client = new KmsClient({ transport });
+    const firstController = new AbortController();
+    const first = client.getParameter("first", { signal: firstController.signal });
+    const second = client.getParameter("second");
+    await vi.waitFor(() =>
+      expect(transport.calls.filter((call) => call.path.endsWith("/WhoAmI"))).toHaveLength(1),
+    );
+    firstController.abort(new DOMException("caller stopped", "AbortError"));
+    await expect(first).rejects.toMatchObject({ name: "AbortError" });
+
+    finishDiscovery();
+    await expect(second).resolves.toBe("resolved");
+    expect(transport.calls.filter((call) => call.path.endsWith("/WhoAmI"))).toHaveLength(1);
+    await client.close();
+  });
+
+  it("applies an earlier call deadline while waiting for lazy discovery", async () => {
+    let finishDiscovery!: () => void;
+    const discoveryGate = new Promise<void>((resolve) => {
+      finishDiscovery = resolve;
+    });
+    const transport = new FakeTransport(async (path) => {
+      if (!path.endsWith("/WhoAmI")) throw new Error(`unexpected ${path}`);
+      await discoveryGate;
+      return {
+        name: "app",
+        kind: "client",
+        namespace: { env: "prod", app: "api" },
+        authMethod: "token",
+      };
+    });
+    const client = new KmsClient({ transport, timeoutMs: 5_000 });
+
+    await expect(
+      client.getParameter("slow", { deadline: new Date(Date.now() + 10) }),
+    ).rejects.toMatchObject({ code: "deadline_exceeded" });
+    expect(transport.calls).toHaveLength(1);
+    finishDiscovery();
+    await Promise.resolve();
+    await client.close();
+  });
+
   it("splits absolute paths without namespace discovery", async () => {
     const transport = new FakeTransport((_path, request) => {
       expect(request).toMatchObject({
@@ -177,6 +250,43 @@ describe("KmsClient", () => {
     await client.getSecret("db/password", { secretToken: "one-time" });
     expect(reads).toBe(3);
     expect(transport.calls.at(-1)?.options.metadata?.["x-kms-secret-token"]).toBe("one-time");
+    await client.close();
+  });
+
+  it("forwards parameter secret tokens and never promotes protected reads into cache", async () => {
+    let reads = 0;
+    const transport = new FakeTransport((path, request, options) => {
+      if (!path.endsWith("/GetParameter")) throw new Error(`unexpected ${path}`);
+      reads += 1;
+      const key = (request as { ref?: { key?: string } }).ref?.key ?? "missing";
+      return {
+        parameter: {
+          ref: { namespace: { env: "prod", app: "api" }, key },
+          value: `value-${reads}`,
+          contentType: "string",
+          version: BigInt(reads),
+          metadataJson: "{}",
+          createdBy: "test",
+          createdAtUnixMs: 0n,
+          labels: {},
+          observedMetadata: options.metadata,
+        },
+      };
+    });
+    const client = new KmsClient({ transport, namespace: "prod/api", cacheTtlMs: 60_000 });
+
+    await expect(client.getParameter("protected", { secretToken: "read-token" })).resolves.toBe(
+      "value-1",
+    );
+    await expect(
+      client.getParameterInfo("protected", { secretToken: "metadata-token" }),
+    ).resolves.toMatchObject({ value: "value-2" });
+    expect(transport.calls[0]?.options.metadata?.["x-kms-secret-token"]).toBe("read-token");
+    expect(transport.calls[1]?.options.metadata?.["x-kms-secret-token"]).toBe("metadata-token");
+
+    await expect(client.getParameter("protected")).resolves.toBe("value-3");
+    await expect(client.getParameter("protected")).resolves.toBe("value-3");
+    expect(reads).toBe(3);
     await client.close();
   });
 
