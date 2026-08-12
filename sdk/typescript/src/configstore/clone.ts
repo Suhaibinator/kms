@@ -53,29 +53,42 @@ function cloneValue<T>(value: T, seen: Map<object, unknown>): T {
     return result as T;
   }
   if (Array.isArray(value)) {
-    const result: unknown[] = new Array(value.length);
-    seen.set(value, result);
-    for (let index = 0; index < value.length; index += 1) {
-      result[index] = cloneValue(value[index], seen);
+    const lengthDescriptor = Object.getOwnPropertyDescriptor(value, "length");
+    if (!lengthDescriptor || !("value" in lengthDescriptor)) {
+      throw new TypeError("configstore: array length is not a cloneable data property");
     }
+    const result: unknown[] = new Array(lengthDescriptor.value as number);
+    seen.set(value, result);
+    cloneDataProperties(value, result, seen, true);
+    Object.defineProperty(result, "length", lengthDescriptor);
     return result as T;
   }
   if (typeof value === "function") return value;
 
   const result = Object.create(Object.getPrototypeOf(value)) as object;
   seen.set(value, result);
-  for (const key of Reflect.ownKeys(value)) {
-    const descriptor = Object.getOwnPropertyDescriptor(value, key);
+  cloneDataProperties(value, result, seen, false);
+  return result as T;
+}
+
+function cloneDataProperties(
+  source: object,
+  target: object,
+  seen: Map<object, unknown>,
+  skipArrayLength: boolean,
+): void {
+  for (const key of Reflect.ownKeys(source)) {
+    if (skipArrayLength && key === "length") continue;
+    const descriptor = Object.getOwnPropertyDescriptor(source, key);
     if (!descriptor) continue;
     if (!("value" in descriptor)) {
       throw new TypeError("configstore: accessor properties are not cloneable config values");
     }
-    Object.defineProperty(result, key, {
+    Object.defineProperty(target, key, {
       ...descriptor,
       value: cloneValue(descriptor.value, seen),
     });
   }
-  return result as T;
 }
 
 function valueContainsSecret(value: unknown, seen: Set<object>): boolean {
@@ -90,7 +103,7 @@ function valueContainsSecret(value: unknown, seen: Set<object>): boolean {
     }
     return false;
   }
-  if (value instanceof Set || Array.isArray(value)) {
+  if (value instanceof Set) {
     for (const item of value) {
       if (valueContainsSecret(item, seen)) return true;
     }

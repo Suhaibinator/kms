@@ -1,7 +1,7 @@
 import { inspect } from "node:util";
 
 import { describe, expect, it } from "vitest";
-import { cloneConfig } from "../src/configstore/clone.js";
+import { cloneConfig, containsSecret } from "../src/configstore/clone.js";
 import { codecs, decodeGroup, field, group } from "../src/configstore/codecs.js";
 import { createManifestValidator, validateContract } from "../src/configstore/contract.js";
 import {
@@ -44,6 +44,42 @@ describe("configstore defensive values and reports", () => {
     expect(original.map.get("numbers")).toEqual([4, 5]);
     expect(original.secret.text()).toBe("secret-canary");
     expect(cloned.self).toBe(cloned);
+  });
+
+  it("clones array descriptors without invoking accessors", () => {
+    const marker = Symbol("marker");
+    const sparse = new Array<{ value: number } | undefined>(3) as Array<
+      { value: number } | undefined
+    > & { [marker]: { deep: number } };
+    sparse[1] = { value: 4 };
+    Object.defineProperty(sparse, marker, {
+      configurable: true,
+      value: { deep: 5 },
+      writable: true,
+    });
+
+    const cloned = cloneConfig(sparse);
+    expect(0 in cloned).toBe(false);
+    expect(1 in cloned).toBe(true);
+    const clonedItem = cloned[1];
+    if (clonedItem) clonedItem.value = 9;
+    cloned[marker].deep = 10;
+    expect(sparse[1]).toEqual({ value: 4 });
+    expect(sparse[marker]).toEqual({ deep: 5 });
+
+    let getterCalls = 0;
+    const accessorBacked: string[] = [];
+    Object.defineProperty(accessorBacked, 0, {
+      configurable: true,
+      get: () => {
+        getterCalls += 1;
+        return "GETTER-CANARY";
+      },
+    });
+    accessorBacked.length = 1;
+    expect(() => cloneConfig(accessorBacked)).toThrow(/accessor properties/u);
+    expect(containsSecret(accessorBacked)).toBe(false);
+    expect(getterCalls).toBe(0);
   });
 
   it("keeps immutable snapshot state private and returns a fresh clone per view read", () => {
