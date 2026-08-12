@@ -251,6 +251,7 @@ export class ReleaseLoader {
     let watchTask: Promise<void> | undefined;
     let reconcileTask: Promise<void> | undefined;
     let activeController: AbortController | undefined;
+    const candidateTasks = new Set<Promise<void>>();
 
     try {
       const initial = await this.#getActive(runController.signal);
@@ -271,7 +272,7 @@ export class ReleaseLoader {
         const unlinkRun = linkAbort(runController.signal, candidateController);
         activeController = candidateController;
         processing = true;
-        void this.#processCandidate(candidate, prepare, candidateController.signal)
+        const task = this.#processCandidate(candidate, prepare, candidateController.signal)
           .then(async (result) => {
             processing = false;
             activeController = undefined;
@@ -282,7 +283,7 @@ export class ReleaseLoader {
               return;
             }
             if (result.candidate.sequence !== latest?.sequence) {
-              if (pending) {
+              if (pending && !runController.signal.aborted) {
                 const next = pending;
                 pending = undefined;
                 start(next);
@@ -333,7 +334,7 @@ export class ReleaseLoader {
               return;
             }
             if (result.category && result.category !== "superseded") retryLatest = true;
-            if (pending) {
+            if (pending && !runController.signal.aborted) {
               const next = pending;
               pending = undefined;
               start(next);
@@ -345,6 +346,11 @@ export class ReleaseLoader {
             unlinkRun();
             finished.reject(error);
           });
+        candidateTasks.add(task);
+        void task.then(
+          () => candidateTasks.delete(task),
+          () => candidateTasks.delete(task),
+        );
       };
 
       const offer = (incoming: Candidate): void => {
@@ -376,10 +382,12 @@ export class ReleaseLoader {
     } finally {
       activeController?.abort(new DOMException("Release loader stopped", "AbortError"));
       runController.abort(new DOMException("Release loader stopped", "AbortError"));
+      const backgroundTasks = Promise.allSettled([watchTask, reconcileTask].filter(isPromise));
+      await Promise.allSettled([...candidateTasks]);
       await this.#scheduleAckFlush().catch(() => undefined);
       await closeStream(this.#currentStream);
       this.#currentStream = undefined;
-      await Promise.allSettled([watchTask, reconcileTask].filter(isPromise));
+      await backgroundTasks;
       unlinkSignal();
       this.#stopController = undefined;
       this.#running = false;

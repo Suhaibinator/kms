@@ -420,6 +420,92 @@ describe("ReleaseLoader", () => {
     ).toBe(true);
   });
 
+  it("keeps a cancelled run exclusive until its owned preparation settles", async () => {
+    const release = makeRelease(1n, [parameterEntry("value", "value", 1n, "one")]);
+    const transport = new FakeTransport(release);
+    transport.parameters.set("/prod/api/value", parameterResource("value", 1n, "one"));
+    const loader = ReleaseLoader._create(transport, {
+      namespace,
+      name: "runtime",
+      clientName: "unit-test",
+    });
+    const firstController = new AbortController();
+    const firstPrepareStarted = deferred<void>();
+    const releaseFirstPrepare = deferred<void>();
+    let firstRunSettled = false;
+    let firstAborts = 0;
+    let activePreparations = 0;
+    let maximumActivePreparations = 0;
+
+    const firstRun = loader.run(async () => {
+      activePreparations += 1;
+      maximumActivePreparations = Math.max(maximumActivePreparations, activePreparations);
+      firstPrepareStarted.resolve();
+      await releaseFirstPrepare.promise;
+      activePreparations -= 1;
+      return {
+        commit: () => {
+          throw new Error("cancelled preparation must not commit");
+        },
+        abort: () => {
+          firstAborts += 1;
+        },
+      };
+    }, firstController.signal);
+    void firstRun.then(
+      () => {
+        firstRunSettled = true;
+      },
+      () => {
+        firstRunSettled = true;
+      },
+    );
+
+    await firstPrepareStarted.promise;
+    firstController.abort(new DOMException("stop first run", "AbortError"));
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(firstRunSettled).toBe(false);
+
+    let overlappingPreparations = 0;
+    await expect(
+      loader.run(() => {
+        overlappingPreparations += 1;
+        return invalidPrepared();
+      }),
+    ).rejects.toThrow(/already running/);
+    expect(overlappingPreparations).toBe(0);
+
+    releaseFirstPrepare.resolve();
+    await expect(firstRun).rejects.toMatchObject({ name: "AbortError" });
+    expect({ firstAborts, activePreparations, maximumActivePreparations }).toEqual({
+      firstAborts: 1,
+      activePreparations: 0,
+      maximumActivePreparations: 1,
+    });
+
+    const secondController = new AbortController();
+    const secondCommitted = deferred<void>();
+    let sequentialPreparations = 0;
+    const secondRun = loader.run(() => {
+      activePreparations += 1;
+      maximumActivePreparations = Math.max(maximumActivePreparations, activePreparations);
+      sequentialPreparations += 1;
+      activePreparations -= 1;
+      return {
+        commit: () => secondCommitted.resolve(),
+        abort: () => undefined,
+      };
+    }, secondController.signal);
+
+    await secondCommitted.promise;
+    secondController.abort(new DOMException("stop second run", "AbortError"));
+    await expect(secondRun).rejects.toMatchObject({ name: "AbortError" });
+    expect({ sequentialPreparations, maximumActivePreparations }).toEqual({
+      sequentialPreparations: 1,
+      maximumActivePreparations: 1,
+    });
+  });
+
   it("keeps last-known-good after a later preparation rejection", async () => {
     const release1 = makeRelease(1n, [parameterEntry("value", "value", 1n, "one")]);
     const release2 = makeRelease(2n, [parameterEntry("value", "value", 2n, "two")]);
