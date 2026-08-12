@@ -10,43 +10,46 @@ const invalidFixture = resolve(sdkDirectory, "tests/fixtures/next-invalid-client
 
 await clean(validFixture);
 await clean(invalidFixture);
-
-const valid = await build(validFixture);
-if (valid.code !== 0) {
-  process.stderr.write(valid.output);
-  throw new Error("valid Next.js adapter fixture failed to build");
-}
-
-const chunksDirectory = resolve(validFixture, ".next/static/chunks");
-const chunks = await javascriptFiles(chunksDirectory);
-const browserBundle = (await Promise.all(chunks.map((path) => readFile(path, "utf8")))).join("\n");
-for (const forbidden of [
-  "@grpc/grpc-js",
-  "node:tls",
-  "KMS_SERVER_CREDENTIAL_MUST_NOT_REACH_CLIENT",
-  "Next KMS adapter is closed",
-]) {
-  if (browserBundle.includes(forbidden)) {
-    throw new Error(`client chunks contain forbidden server marker: ${forbidden}`);
+try {
+  const valid = await build(validFixture);
+  if (valid.code !== 0) {
+    process.stderr.write(valid.output);
+    throw new Error("valid Next.js adapter fixture failed to build");
   }
-}
-if (!browserBundle.includes("kms-public-config-")) {
-  throw new Error("client hook marker is missing from the built browser chunks");
-}
 
-const invalid = await build(invalidFixture);
-if (invalid.code === 0) {
-  throw new Error("Next.js accepted a Client Component import of next/server");
-}
-if (!/(server-only|unsupported-browser|not exported|Node\.js-only)/iu.test(invalid.output)) {
-  process.stderr.write(invalid.output);
-  throw new Error("invalid Next.js build failed for an unexpected reason");
-}
+  const chunksDirectory = resolve(validFixture, ".next/static/chunks");
+  const chunks = await javascriptFiles(chunksDirectory);
+  const browserBundle = (await Promise.all(chunks.map((path) => readFile(path, "utf8")))).join(
+    "\n",
+  );
+  for (const forbidden of [
+    "@grpc/grpc-js",
+    "node:tls",
+    "KMS_SERVER_CREDENTIAL_MUST_NOT_REACH_CLIENT",
+    "Next KMS adapter is closed",
+  ]) {
+    if (browserBundle.includes(forbidden)) {
+      throw new Error(`client chunks contain forbidden server marker: ${forbidden}`);
+    }
+  }
+  if (!browserBundle.includes("kms-public-config-")) {
+    throw new Error("client hook marker is missing from the built browser chunks");
+  }
 
-await verifySignalShutdown();
+  const invalid = await build(invalidFixture);
+  if (invalid.code === 0) {
+    throw new Error("Next.js accepted a Client Component import of next/server");
+  }
+  if (!/(server-only|unsupported-browser|not exported|Node\.js-only)/iu.test(invalid.output)) {
+    process.stderr.write(invalid.output);
+    throw new Error("invalid Next.js build failed for an unexpected reason");
+  }
 
-await clean(validFixture);
-await clean(invalidFixture);
+  await verifySignalShutdown();
+} finally {
+  await clean(validFixture);
+  await clean(invalidFixture);
+}
 
 async function build(directory) {
   return new Promise((resolveBuild, rejectBuild) => {
