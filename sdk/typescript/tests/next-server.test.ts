@@ -108,6 +108,59 @@ describe("Next.js server adapter", () => {
     expect(closes).toBe(1);
   });
 
+  it("publishes one close attempt before abort listeners can re-enter cleanup", async () => {
+    let finishInitialization!: (resource: {
+      readonly source: { current(): undefined };
+      readonly close: () => void;
+    }) => void;
+    const initialization = new Promise<{
+      readonly source: { current(): undefined };
+      readonly close: () => void;
+    }>((resolve) => {
+      finishInitialization = resolve;
+    });
+    let adapter!: ReturnType<typeof createNextKms<Policy, PublicPolicy, string, readonly string[]>>;
+    let reentrantClose: Promise<void> | undefined;
+    let closeCalls = 0;
+    let signalReady!: () => void;
+    const ready = new Promise<void>((resolve) => {
+      signalReady = resolve;
+    });
+    adapter = createNextKms<Policy, PublicPolicy, string, readonly string[]>({
+      initialize: (signal) => {
+        signal.addEventListener(
+          "abort",
+          () => {
+            reentrantClose = adapter.close();
+          },
+          { once: true },
+        );
+        signalReady();
+        return initialization;
+      },
+      projection,
+      validate: () => ({ valid: true }),
+    });
+    const start = adapter.start().catch(() => undefined);
+    await ready;
+
+    const close = adapter.close();
+    const cleanupError = new Error("cleanup failed");
+    finishInitialization({
+      source: { current: () => undefined },
+      close: () => {
+        closeCalls++;
+        throw cleanupError;
+      },
+    });
+
+    expect(reentrantClose).toBe(close);
+    await expect(close).rejects.toBe(cleanupError);
+    await expect(reentrantClose).rejects.toBe(cleanupError);
+    await start;
+    expect(closeCalls).toBe(1);
+  });
+
   it("removes installed process signal listeners during close", async () => {
     const baseline = process.listenerCount("SIGTERM");
     const adapter = createNextKms<Policy, PublicPolicy, string, readonly string[]>({

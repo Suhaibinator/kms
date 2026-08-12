@@ -226,12 +226,21 @@ export function createNextKms<
       return closeAttempt;
     }
     closed = true;
+    let resolveAttempt!: () => void;
+    let rejectAttempt!: (error: unknown) => void;
+    const attempt = new Promise<void>((resolve, reject) => {
+      resolveAttempt = resolve;
+      rejectAttempt = reject;
+    });
+    // Publish the close attempt before aborting initialization or removing
+    // listeners. Either side effect can synchronously re-enter close().
+    closeAttempt = attempt;
     initializationController?.abort();
     for (const uninstall of [...shutdownUninstallers]) {
       uninstall();
     }
 
-    const attempt = (async (): Promise<void> => {
+    const finish = async (): Promise<void> => {
       try {
         await startAttempt;
       } catch {
@@ -242,8 +251,8 @@ export function createNextKms<
       resource = undefined;
       publisher = undefined;
       await initialized?.close?.();
-    })();
-    closeAttempt = attempt;
+    };
+    void finish().then(resolveAttempt, rejectAttempt);
     return attempt;
   };
 
