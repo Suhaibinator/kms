@@ -654,8 +654,12 @@ export class KmsClient {
   }
 
   /** @internal */
-  _registerParameter(ref: ResourceRef, initial: string, handler: ParameterUpdateHandler): void {
-    this.#subscriptionManager().registerParameter(ref, initial, handler);
+  _registerParameter(
+    ref: ResourceRef,
+    initial: string,
+    handler: ParameterUpdateHandler,
+  ): () => void {
+    return this.#subscriptionManager().registerParameter(ref, initial, handler);
   }
 
   /** @internal */

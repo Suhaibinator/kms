@@ -110,6 +110,7 @@ export class SubscriptionManager {
   readonly #parameterHandlers = new Map<string, Set<ParameterUpdateHandler>>();
   readonly #known = new Map<string, KnownValue>();
   readonly #watchers = new Map<number, Watcher>();
+  readonly #watcherStops = new Map<number, () => void>();
   #streamNamespaces: readonly NamespaceRef[] = [];
   #nextWatcherId = 1;
   #lastRevision = 0n;
@@ -138,7 +139,11 @@ export class SubscriptionManager {
     return this.#lastRevision;
   }
 
-  registerParameter(ref: ResourceRef, initial: string, handler: ParameterUpdateHandler): void {
+  registerParameter(
+    ref: ResourceRef,
+    initial: string,
+    handler: ParameterUpdateHandler,
+  ): () => void {
     const path = displayPath(ref);
     this.#known.set(path, { value: initial, present: true, revision: 0n });
     let handlers = this.#parameterHandlers.get(path);
@@ -151,6 +156,14 @@ export class SubscriptionManager {
     const changed = this.#addNamespace(ref.namespace);
     this.#ensureStarted();
     if (wasStarted && changed) this.#restart();
+
+    let active = true;
+    return () => {
+      if (!active) return;
+      active = false;
+      handlers.delete(handler);
+      if (handlers.size === 0) this.#parameterHandlers.delete(path);
+    };
   }
 
   watch(namespace: NamespaceRef, callback: WatchCallback, signal?: AbortSignal): () => void {
@@ -169,8 +182,10 @@ export class SubscriptionManager {
       if (!active) return;
       active = false;
       this.#watchers.delete(watcher.id);
+      this.#watcherStops.delete(watcher.id);
       signal?.removeEventListener("abort", stop);
     };
+    this.#watcherStops.set(watcher.id, stop);
     if (signal) {
       if (signal.aborted) stop();
       else signal.addEventListener("abort", stop, { once: true });
@@ -181,10 +196,12 @@ export class SubscriptionManager {
   async stop(): Promise<void> {
     if (this.#stopped) return;
     this.#stopped = true;
+    for (const stop of [...this.#watcherStops.values()]) stop();
     this.#controller.abort(new DOMException("KMS watches stopped", "AbortError"));
     this.#sessionController?.abort();
     await Promise.allSettled([this.#runTask, this.#reconcileTask].filter(Boolean));
     this.#watchers.clear();
+    this.#watcherStops.clear();
     this.#parameterHandlers.clear();
   }
 

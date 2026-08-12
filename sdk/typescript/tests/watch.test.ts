@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { KmsClient, type WatchEvent } from "../src/client.js";
 import type { SubscribeEvent, SubscribeRequest } from "../src/generated/kms.js";
 import { resolveRef } from "../src/refs.js";
+import { ParameterValue } from "../src/values.js";
 import { fullJitterBackoff, revisionAllowsWrite } from "../src/watch.js";
 import { type FakeDuplex, FakeTransport, waitFor } from "./helpers/fake-transport.js";
 
@@ -115,6 +116,92 @@ describe("shared watches", () => {
 
     expect(transport.streams).toHaveLength(1);
     await client.close();
+  });
+
+  it("stops real-client ParameterValue updates after disposal", async () => {
+    const transport = new FakeTransport((path) => {
+      if (path.endsWith("/GetParameter")) {
+        return {
+          parameter: {
+            ref: { namespace: { env: "prod", app: "api" }, key: "flag" },
+            value: "off",
+            contentType: "string",
+            version: 1n,
+            metadataJson: "{}",
+            createdBy: "test",
+            createdAtUnixMs: 0n,
+            labels: {},
+          },
+        };
+      }
+      return { parameters: [], nextPageToken: "" };
+    });
+    const client = new KmsClient({ transport, namespace: "prod/api" });
+    const value = new ParameterValue("flag");
+    const callback = vi.fn();
+    value.onChange(callback);
+    await value.init(client);
+    await waitFor(() => transport.streams.length === 1);
+    const stream = transport.streams[0] as FakeDuplex<SubscribeRequest, SubscribeEvent>;
+
+    stream.emit({
+      event: {
+        $case: "change",
+        value: {
+          ref: { namespace: { env: "prod", app: "api" }, key: "flag" },
+          changeType: "put",
+          value: "on",
+          contentType: "string",
+          version: 2n,
+          label: "",
+        },
+      },
+      revision: 1n,
+    });
+    await waitFor(() => value.get() === "on");
+    await value.dispose();
+    await value.dispose();
+
+    stream.emit({
+      event: {
+        $case: "change",
+        value: {
+          ref: { namespace: { env: "prod", app: "api" }, key: "flag" },
+          changeType: "put",
+          value: "after-dispose",
+          contentType: "string",
+          version: 3n,
+          label: "",
+        },
+      },
+      revision: 2n,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 5));
+
+    expect(value.get()).toBe("on");
+    expect(callback).toHaveBeenCalledTimes(1);
+    await client.close();
+  });
+
+  it("removes external abort listeners on unwatch and client close", async () => {
+    const transport = new FakeTransport(() => ({ parameters: [], nextPageToken: "" }));
+    const client = new KmsClient({ transport, namespace: "prod/api" });
+    const unwatchController = new AbortController();
+    const closeController = new AbortController();
+    const unwatchRemove = vi.spyOn(unwatchController.signal, "removeEventListener");
+    const closeRemove = vi.spyOn(closeController.signal, "removeEventListener");
+
+    const unwatch = client.watchNamespace("prod/api", () => undefined, {
+      signal: unwatchController.signal,
+    });
+    client.watchNamespace("prod/api", () => undefined, { signal: closeController.signal });
+    await waitFor(() => transport.streams.length === 1);
+
+    unwatch();
+    unwatch();
+    expect(unwatchRemove).toHaveBeenCalledWith("abort", expect.any(Function));
+    await client.close();
+    expect(closeRemove).toHaveBeenCalledWith("abort", expect.any(Function));
   });
 
   it("does not create background work for an already-aborted watcher", async () => {
