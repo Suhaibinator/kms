@@ -89,4 +89,71 @@ describe("public configuration publishing", () => {
       errors: ["too_short"],
     });
   });
+
+  it("emits redacted publisher events without trusting observers", async () => {
+    const events: unknown[] = [];
+    const source = {
+      current: () => ({ revision: 12n, value: { minimum: 8, privateValue: "do-not-observe" } }),
+    };
+    const observedPublisher = createPolicyPublisher({
+      source,
+      projection: definePublicProjection<{
+        minimum: number;
+        privateValue: string;
+      }>()({ minimum: (policy) => policy.minimum }),
+      validate: (policy, input: number) =>
+        input >= policy.minimum
+          ? { valid: true as const }
+          : { valid: false as const, errors: ["too_small"] },
+      onEvent: (event) => {
+        events.push(event);
+        if (events.length === 1) return Promise.reject(new Error("observer rejection"));
+        if (events.length === 2) throw new Error("observer throw");
+      },
+    });
+
+    expect(observedPublisher.readWire()).toEqual({ revision: "12", config: { minimum: 8 } });
+    expect(observedPublisher.validate("11", -999)).toMatchObject({ status: "policy_changed" });
+    expect(observedPublisher.validate("12", 9)).toEqual({
+      status: "success",
+      revision: "12",
+    });
+    expect(observedPublisher.validate("12", 1)).toEqual({
+      status: "validation_failed",
+      revision: "12",
+      errors: ["too_small"],
+    });
+    await Promise.resolve();
+
+    expect(events).toHaveLength(4);
+    expect(events).toEqual([
+      {
+        type: "public_config_published",
+        revision: "12",
+        observedAtUnixMs: expect.any(Number),
+      },
+      {
+        type: "policy_revision_rejected",
+        currentRevision: "12",
+        observedAtUnixMs: expect.any(Number),
+      },
+      {
+        type: "policy_validation_succeeded",
+        revision: "12",
+        observedAtUnixMs: expect.any(Number),
+      },
+      {
+        type: "policy_validation_failed",
+        revision: "12",
+        observedAtUnixMs: expect.any(Number),
+      },
+    ]);
+    for (const event of events) {
+      expect(Object.isFrozen(event)).toBe(true);
+      expect(event).not.toHaveProperty("privateValue");
+      expect(event).not.toHaveProperty("input");
+      expect(event).not.toHaveProperty("errors");
+      expect(event).not.toHaveProperty("error");
+    }
+  });
 });

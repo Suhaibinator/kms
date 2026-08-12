@@ -55,6 +55,8 @@ export type {
   CreatePolicyPublisherOptions,
   DecimalRevision,
   PolicyPublisher,
+  PolicyPublisherEvent,
+  PolicyPublisherObserver,
   PolicySnapshot,
   PolicyValidationResult,
   PublicConfig,

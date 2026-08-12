@@ -73,6 +73,35 @@ export type AuthoritativeValidator<TPolicy, TInput, TValidationErrors extends Pu
   input: TInput,
 ) => ValidationDecision<TValidationErrors>;
 
+/** Redacted publisher lifecycle events suitable for metrics and tracing. */
+export type PolicyPublisherEvent =
+  | {
+      readonly type: "public_config_published";
+      readonly revision: DecimalRevision;
+      readonly observedAtUnixMs: number;
+    }
+  | {
+      readonly type: "public_config_unavailable";
+      readonly observedAtUnixMs: number;
+    }
+  | {
+      readonly type: "policy_revision_rejected";
+      readonly currentRevision: DecimalRevision;
+      readonly observedAtUnixMs: number;
+    }
+  | {
+      readonly type: "policy_validation_succeeded";
+      readonly revision: DecimalRevision;
+      readonly observedAtUnixMs: number;
+    }
+  | {
+      readonly type: "policy_validation_failed";
+      readonly revision: DecimalRevision;
+      readonly observedAtUnixMs: number;
+    };
+
+export type PolicyPublisherObserver = (event: PolicyPublisherEvent) => unknown;
+
 export type PolicyValidationResult<
   TConfig extends PublicJsonObject,
   TValidationErrors extends PublicJsonValue,
@@ -130,6 +159,8 @@ export interface CreatePolicyPublisherOptions<
   readonly source: SnapshotReader<TPolicy>;
   readonly projection: PublicProjection<TPolicy, TConfig>;
   readonly validate: AuthoritativeValidator<TPolicy, TInput, TValidationErrors>;
+  /** Receives frozen, value-free lifecycle events. Observer failures are ignored. */
+  readonly onEvent?: PolicyPublisherObserver;
 }
 
 /** Parses a canonical decimal uint64 without losing precision. */
@@ -262,6 +293,7 @@ export function createPolicyPublisher<
     throw new TypeError("policy publisher validate must be a function");
   }
   const allowedProjectionKeys = captureProjectionKeys(options.projection.keys);
+  const observe = createSafeObserver(options.onEvent);
 
   const readSnapshot = (): PolicySnapshot<TPolicy> | undefined => {
     const snapshot = options.source.current();
@@ -299,12 +331,32 @@ export function createPolicyPublisher<
   return Object.freeze({
     read(): PublicConfig<TConfig> | undefined {
       const snapshot = readSnapshot();
-      return snapshot === undefined ? undefined : projectSnapshot(snapshot);
+      if (snapshot === undefined) {
+        observe({ type: "public_config_unavailable", observedAtUnixMs: Date.now() });
+        return undefined;
+      }
+      const config = projectSnapshot(snapshot);
+      observe({
+        type: "public_config_published",
+        revision: formatRevision(snapshot.revision),
+        observedAtUnixMs: Date.now(),
+      });
+      return config;
     },
 
     readWire(): PublicConfigWire<TConfig> | undefined {
       const snapshot = readSnapshot();
-      return snapshot === undefined ? undefined : toWire(projectSnapshot(snapshot));
+      if (snapshot === undefined) {
+        observe({ type: "public_config_unavailable", observedAtUnixMs: Date.now() });
+        return undefined;
+      }
+      const config = toWire(projectSnapshot(snapshot));
+      observe({
+        type: "public_config_published",
+        revision: config.revision,
+        observedAtUnixMs: Date.now(),
+      });
+      return config;
     },
 
     etag(revision?: bigint | DecimalRevision): string | undefined {
@@ -321,10 +373,16 @@ export function createPolicyPublisher<
     ): PolicyValidationResult<TConfig, TValidationErrors> {
       const snapshot = readSnapshot();
       if (snapshot === undefined) {
+        observe({ type: "public_config_unavailable", observedAtUnixMs: Date.now() });
         return Object.freeze({ status: "unavailable" });
       }
 
       if (!revisionEquals(clientRevision, snapshot.revision)) {
+        observe({
+          type: "policy_revision_rejected",
+          currentRevision: formatRevision(snapshot.revision),
+          observedAtUnixMs: Date.now(),
+        });
         return Object.freeze({
           status: "policy_changed",
           current: toWire(projectSnapshot(snapshot)),
@@ -337,8 +395,19 @@ export function createPolicyPublisher<
       }
       const revision = formatRevision(snapshot.revision);
       if (decision.valid) {
+        observe({
+          type: "policy_validation_succeeded",
+          revision,
+          observedAtUnixMs: Date.now(),
+        });
         return Object.freeze({ status: "success", revision });
       }
+
+      observe({
+        type: "policy_validation_failed",
+        revision,
+        observedAtUnixMs: Date.now(),
+      });
 
       return Object.freeze({
         status: "validation_failed",
@@ -347,6 +416,17 @@ export function createPolicyPublisher<
       });
     },
   });
+}
+
+function createSafeObserver(observer: PolicyPublisherObserver | undefined) {
+  return (event: PolicyPublisherEvent): void => {
+    if (observer === undefined) return;
+    try {
+      Promise.resolve(observer(Object.freeze(event))).catch(() => undefined);
+    } catch {
+      // Observability must never change publication or validation behavior.
+    }
+  };
 }
 
 function assertUint64Revision(revision: bigint): void {
