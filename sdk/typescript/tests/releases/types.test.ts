@@ -64,6 +64,12 @@ describe("release snapshots", () => {
 
   it("accepts every uint64 boundary on public release identity objects", () => {
     const maximum = 18_446_744_073_709_551_615n;
+    const zeroEntry = new ReleaseEntryMetadata({
+      alias: "zero",
+      kind: "parameter",
+      path: "/prod/api/zero",
+      version: 0n,
+    });
     const entry = new ReleaseEntryMetadata({
       alias: "maximum",
       kind: "parameter",
@@ -80,7 +86,16 @@ describe("release snapshots", () => {
       entries: new Map([[entry.alias, entry]]),
     };
 
+    expect(zeroEntry.version).toBe(0n);
     expect(entry.version).toBe(maximum);
+    expect(
+      new ReleaseManifest({
+        ...identity,
+        version: 0n,
+        activationRevision: 0n,
+        schemaVersion: 0n,
+      }),
+    ).toMatchObject({ version: 0n, activationRevision: 0n, schemaVersion: 0n });
     expect(new ReleaseManifest(identity)).toMatchObject({
       version: maximum,
       activationRevision: maximum,
