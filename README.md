@@ -89,7 +89,7 @@ Consuming service
   |
   | gRPC over TLS/mTLS
   v
-sdk/go/kmsclient (Go SDK)
+client SDK (Go · Python · TypeScript)
   |
   v
 parameter-store — single binary (cmd/parameter-store)

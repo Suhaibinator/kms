@@ -11,7 +11,8 @@ credentials and plaintext removed, and the security impact.
 
 General bugs that do not contain sensitive information may be reported through
 the repository issue tracker. The project-wide threat model and operational
-controls are documented in [`../../docs/security.md`](../../docs/security.md).
+controls are documented in the
+[security guide](https://github.com/Suhaibinator/kms/blob/main/docs/security.md).
 
 ## Supported versions
 

@@ -205,7 +205,9 @@ The optional adapters are split by trust boundary:
   the public HTTP response and can install a `policy_changed` response without
   reloading the page.
 
-See [`examples/next-serverful`](examples/next-serverful) for a minimal App
+See the
+[`next-serverful` example](https://github.com/Suhaibinator/kms/tree/main/sdk/typescript/examples/next-serverful)
+for a minimal App
 Router integration. It intentionally lives outside this repository's embedded
 static-export frontend, which has no Node server runtime.
 
@@ -289,9 +291,10 @@ not a compatibility surface.
 The public exports follow semantic versioning. Before `1.0.0`, minor releases
 may still contain breaking API changes and will document them in the package
 changelog. See the repository's
-[public API policy](../../docs/sdk-typescript-api.md),
-[parity ledger](../../docs/sdk-typescript-parity.md), and
-[migration guide](../../docs/migration.md) for compatibility details.
+[public API policy](https://github.com/Suhaibinator/kms/blob/main/docs/sdk-typescript-api.md),
+[parity ledger](https://github.com/Suhaibinator/kms/blob/main/docs/sdk-typescript-parity.md),
+and [migration guide](https://github.com/Suhaibinator/kms/blob/main/docs/migration.md)
+for compatibility details.
 
 ## Development
 
@@ -307,4 +310,4 @@ consumer type contracts, and the distributable build. The repository Makefile
 also exposes `typescript`, `test-typescript`, and `check-typescript` targets.
 
 Security reports and deployment guidance are in the package security notice.
-This package is licensed under the repository's [MIT license](../../LICENSE).
+This package is licensed under the included [MIT license](LICENSE).
