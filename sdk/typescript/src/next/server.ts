@@ -140,8 +140,7 @@ export function createNextKms<
 
     const controller = new AbortController();
     initializationController = controller;
-    let attempt!: Promise<void>;
-    attempt = (async (): Promise<void> => {
+    const attempt = Promise.resolve().then(async (): Promise<void> => {
       let initialized: NextKmsResource<TPolicy> | undefined;
       try {
         initialized = await options.initialize(controller.signal);
@@ -156,9 +155,16 @@ export function createNextKms<
           throw new NextKmsClosedError();
         }
       } catch (error) {
-        if (initialized !== undefined && resource === initialized && !closed) {
-          resource = undefined;
-          publisher = undefined;
+        if (initialized !== undefined && resource === initialized) {
+          if (!closed) {
+            resource = undefined;
+            publisher = undefined;
+            await initialized.close?.();
+          }
+        } else if (initialized !== undefined) {
+          // Even a malformed resource is initializer-owned state. If its
+          // source validation failed after construction, release any valid
+          // cleanup hook instead of leaking a partially initialized client.
           await initialized.close?.();
         }
         throw error;
@@ -166,12 +172,18 @@ export function createNextKms<
         if (initializationController === controller) {
           initializationController = undefined;
         }
-        if (startAttempt === attempt) {
-          startAttempt = undefined;
-        }
       }
-    })();
+    });
     startAttempt = attempt;
+    const clearAttempt = (): void => {
+      if (startAttempt === attempt) {
+        startAttempt = undefined;
+      }
+    };
+    // Publish the in-flight promise before initialization can execute, then
+    // clear it on either outcome. This preserves retryability even when an
+    // initializer throws synchronously before its first await.
+    void attempt.then(clearAttempt, clearAttempt);
     return attempt;
   };
 

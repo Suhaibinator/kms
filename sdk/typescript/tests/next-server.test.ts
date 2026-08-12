@@ -45,6 +45,87 @@ describe("Next.js server adapter", () => {
     expect(closes).toBe(1);
   });
 
+  it("retries failed initialization and cleans malformed resources", async () => {
+    let starts = 0;
+    let malformedCloses = 0;
+    const adapter = createNextKms<Policy, PublicPolicy, string, readonly string[]>({
+      initialize: () => {
+        starts++;
+        if (starts === 1) throw new Error("transient startup failure");
+        if (starts === 2) {
+          return {
+            source: {} as never,
+            close: () => {
+              malformedCloses++;
+            },
+          };
+        }
+        return {
+          source: {
+            current: () => ({ revision: 1n, value: { minLength: 8, privateValue: "hidden" } }),
+          },
+        };
+      },
+      projection,
+      validate: () => ({ valid: true }),
+    });
+
+    await expect(adapter.start()).rejects.toThrow("transient startup failure");
+    await expect(adapter.start()).rejects.toThrow("invalid resource");
+    expect(malformedCloses).toBe(1);
+    await expect(adapter.start()).resolves.toBeUndefined();
+    expect(starts).toBe(3);
+    await adapter.close();
+  });
+
+  it("closes a resource exactly once when close races initialization", async () => {
+    let releaseInitialization!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      releaseInitialization = resolve;
+    });
+    let closes = 0;
+    const adapter = createNextKms<Policy, PublicPolicy, string, readonly string[]>({
+      initialize: async () => {
+        await gate;
+        return {
+          source: {
+            current: () => ({ revision: 1n, value: { minLength: 8, privateValue: "hidden" } }),
+          },
+          close: () => {
+            closes++;
+          },
+        };
+      },
+      projection,
+      validate: () => ({ valid: true }),
+    });
+
+    const start = adapter.start();
+    const close = adapter.close();
+    releaseInitialization();
+    await expect(start).rejects.toThrow(/closed/);
+    await close;
+    expect(closes).toBe(1);
+  });
+
+  it("removes installed process signal listeners during close", async () => {
+    const baseline = process.listenerCount("SIGTERM");
+    const adapter = createNextKms<Policy, PublicPolicy, string, readonly string[]>({
+      initialize: () => ({
+        source: {
+          current: () => ({ revision: 1n, value: { minLength: 8, privateValue: "hidden" } }),
+        },
+      }),
+      projection,
+      validate: () => ({ valid: true }),
+    });
+    adapter.installProcessShutdown({ signals: ["SIGTERM"] });
+    expect(process.listenerCount("SIGTERM")).toBe(baseline + 1);
+
+    await adapter.close();
+    expect(process.listenerCount("SIGTERM")).toBe(baseline);
+  });
+
   it("emits exact 200, weak/list 304, and redacted 503 contracts", async () => {
     const get = createPublicConfigGET(async () => ({
       revision: formatRevision(18_446_744_073_709_551_615n),
