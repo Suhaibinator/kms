@@ -59,6 +59,72 @@ describe("KmsClient", () => {
     expect(transport.closeCount).toBe(1);
   });
 
+  it("retries namespace discovery after a transient WhoAmI failure", async () => {
+    let discoveries = 0;
+    const transport = new FakeTransport((path, request) => {
+      if (path.endsWith("/WhoAmI")) {
+        discoveries += 1;
+        if (discoveries === 1) {
+          throw Object.assign(new Error("temporarily unavailable"), {
+            code: status.UNAVAILABLE,
+            details: "temporarily unavailable",
+          });
+        }
+        return {
+          name: "app",
+          kind: "client",
+          namespace: { env: "prod", app: "api" },
+          authMethod: "token",
+        };
+      }
+      expect(request).toMatchObject({
+        ref: { namespace: { env: "prod", app: "api" }, key: "limits/max" },
+      });
+      return {
+        parameter: {
+          ref: { namespace: { env: "prod", app: "api" }, key: "limits/max" },
+          value: "42",
+          contentType: "integer",
+          version: 1n,
+          metadataJson: "{}",
+          createdBy: "test",
+          createdAtUnixMs: 0n,
+          labels: {},
+        },
+      };
+    });
+    const client = new KmsClient({ transport });
+
+    await expect(client.getParameter("limits/max")).rejects.toMatchObject({ code: "unavailable" });
+    await expect(client.getParameter("limits/max")).resolves.toBe("42");
+    await expect(client.getParameter("limits/max")).resolves.toBe("42");
+
+    expect(discoveries).toBe(2);
+    await client.close();
+  });
+
+  it("caches an unbound identity and returns no_namespace without repeat discovery", async () => {
+    let discoveries = 0;
+    const transport = new FakeTransport((path) => {
+      if (!path.endsWith("/WhoAmI")) throw new Error(`unexpected ${path}`);
+      discoveries += 1;
+      return {
+        name: "admin-tool",
+        kind: "client",
+        authMethod: "token",
+      };
+    });
+    const client = new KmsClient({ transport });
+
+    for (const key of ["first", "second"]) {
+      await expect(client.getParameter(key)).rejects.toMatchObject({ code: "no_namespace" });
+    }
+
+    expect(discoveries).toBe(1);
+    expect(transport.calls).toHaveLength(1);
+    await client.close();
+  });
+
   it("splits absolute paths without namespace discovery", async () => {
     const transport = new FakeTransport((_path, request) => {
       expect(request).toMatchObject({
