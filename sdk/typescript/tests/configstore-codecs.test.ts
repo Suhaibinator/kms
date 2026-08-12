@@ -51,6 +51,32 @@ const fixture = group<Fixture>([
 ]);
 
 describe("strict managed-configuration codecs", () => {
+  it("encodes records in locale-independent canonical key order", () => {
+    interface RecordHolder {
+      labels: Readonly<Record<string, string>> | null;
+    }
+    const descriptor = group<RecordHolder>([
+      field<RecordHolder, "labels">("labels", "labels", codecs.record(codecs.string)),
+    ]);
+    const first = Object.assign(Object.create(null) as Record<string, string>, {
+      z: "last",
+      ä: "unicode",
+      A: "first",
+    });
+    const second = Object.assign(Object.create(null) as Record<string, string>, {
+      A: "first",
+      ä: "unicode",
+      z: "last",
+    });
+
+    expect(encodeGroup({ labels: first }, descriptor)).toBe(
+      encodeGroup({ labels: second }, descriptor),
+    );
+    expect(encodeGroup({ labels: first }, descriptor)).toBe(
+      '{"labels":{"A":"first","z":"last","ä":"unicode"}}',
+    );
+  });
+
   it("preserves duplicate properties and exact numeric lexemes in the syntax tree", () => {
     const root = parseStrictJson('{"value":1.20e1,"value":18446744073709551615}');
     expect(root.kind).toBe("object");

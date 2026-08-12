@@ -448,16 +448,22 @@ function recordCodec<T>(element: ValueCodec<T>): ValueCodec<Readonly<Record<stri
       }
       return {
         kind: "object",
-        properties: Object.keys(value).map((name) => {
-          const descriptor = Object.getOwnPropertyDescriptor(value, name);
-          if (!descriptor || !("value" in descriptor)) {
-            throw descriptorError(path, "map property is an accessor");
-          }
-          return { name, value: element.encodeNode(descriptor.value as T, `${path}[*]`) };
-        }),
+        properties: Object.keys(value)
+          .sort(compareUtf16)
+          .map((name) => {
+            const descriptor = Object.getOwnPropertyDescriptor(value, name);
+            if (!descriptor || !("value" in descriptor)) {
+              throw descriptorError(path, "map property is an accessor");
+            }
+            return { name, value: element.encodeNode(descriptor.value as T, `${path}[*]`) };
+          }),
       };
     },
   );
+}
+
+function compareUtf16(left: string, right: string): number {
+  return left < right ? -1 : left > right ? 1 : 0;
 }
 
 function assertElementCodec<T>(codec: ValueCodec<T>): void {
