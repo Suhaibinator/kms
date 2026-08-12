@@ -19,9 +19,12 @@ function cloneValue<T>(value: T, seen: Map<object, unknown>): T {
   if (value === null || (typeof value !== "object" && typeof value !== "function")) {
     return value;
   }
-  if (value instanceof Secret || value instanceof ReleaseSecret) return value.clone() as T;
-  const prior = seen.get(value);
-  if (prior !== undefined) return prior as T;
+  if (seen.has(value)) return seen.get(value) as T;
+  if (value instanceof Secret || value instanceof ReleaseSecret) {
+    const result = value.clone();
+    seen.set(value, result);
+    return result as T;
+  }
 
   if (Buffer.isBuffer(value)) {
     const result = Buffer.from(value);

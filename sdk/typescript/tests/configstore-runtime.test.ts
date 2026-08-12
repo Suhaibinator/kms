@@ -12,7 +12,7 @@ import {
   rejectDecode,
 } from "../src/configstore/errors.js";
 import { immutableSnapshot, ReleaseIdentity } from "../src/configstore/snapshot.js";
-import { ReleaseEntryMetadata, ReleaseManifest } from "../src/releases/types.js";
+import { ReleaseEntryMetadata, ReleaseManifest, ReleaseSecret } from "../src/releases/types.js";
 import { Secret } from "../src/secret.js";
 
 describe("configstore defensive values and reports", () => {
@@ -44,6 +44,38 @@ describe("configstore defensive values and reports", () => {
     expect(original.map.get("numbers")).toEqual([4, 5]);
     expect(original.secret.text()).toBe("secret-canary");
     expect(cloned.self).toBe(cloned);
+  });
+
+  it("preserves repeated Secret and ReleaseSecret aliases in the detached clone", () => {
+    const secret = new Secret(Uint8Array.of(1, 2, 3));
+    const entry = new ReleaseEntryMetadata({
+      alias: "token",
+      kind: "secret",
+      path: "tokens/service",
+      version: 7n,
+    });
+    const releaseSecret = new ReleaseSecret(Uint8Array.of(4, 5, 6), entry);
+    const source = {
+      secret,
+      nestedSecret: { value: secret },
+      releaseSecret,
+      releaseSecretList: [releaseSecret],
+    };
+
+    const cloned = cloneConfig(source);
+
+    expect(cloned.secret).not.toBe(secret);
+    expect(cloned.secret).toBe(cloned.nestedSecret.value);
+    expect(cloned.releaseSecret).not.toBe(releaseSecret);
+    expect(cloned.releaseSecret).toBe(cloned.releaseSecretList[0]);
+    const secretBytes = cloned.secret.bytes();
+    const releaseBytes = cloned.releaseSecret.bytes();
+    secretBytes.fill(0);
+    releaseBytes.fill(0);
+    expect(secret.bytes()).toEqual(Uint8Array.of(1, 2, 3));
+    expect(releaseSecret.bytes()).toEqual(Uint8Array.of(4, 5, 6));
+    expect(cloned.secret.bytes()).toEqual(Uint8Array.of(1, 2, 3));
+    expect(cloned.releaseSecret.bytes()).toEqual(Uint8Array.of(4, 5, 6));
   });
 
   it("clones array descriptors without invoking accessors", () => {
