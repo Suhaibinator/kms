@@ -125,6 +125,15 @@ export class ReadCache {
     this.invalidateParameter(path);
   }
 
+  /** Invalidate every cached parameter selector in authoritative snapshot scope. */
+  invalidateParametersInNamespaces(namespaces: Iterable<NamespaceRef | string>): void {
+    this.#parameterCount = this.#invalidateNamespaces(
+      this.#parameters,
+      this.#parameterCount,
+      namespaces,
+    );
+  }
+
   invalidateSecret(path: string): void {
     const entries = this.#secrets.get(path);
     if (entries === undefined) return;
@@ -138,20 +147,29 @@ export class ReadCache {
    * gap for secrets that changed while a subscriber was disconnected.
    */
   invalidateSecretsInNamespaces(namespaces: Iterable<NamespaceRef | string>): void {
-    if (!this.enabled) return;
+    this.#secretCount = this.#invalidateNamespaces(this.#secrets, this.#secretCount, namespaces);
+  }
+
+  #invalidateNamespaces<T>(
+    cache: EntryMap<T>,
+    count: number,
+    namespaces: Iterable<NamespaceRef | string>,
+  ): number {
+    if (!this.enabled) return count;
     const scope = new Set<string>();
     for (const namespace of namespaces) {
       const ref = typeof namespace === "string" ? parseNamespace(namespace) : namespace;
       scope.add(namespaceKey(ref));
     }
-    if (scope.size === 0) return;
+    if (scope.size === 0) return count;
 
-    for (const [path, entries] of this.#secrets) {
+    for (const [path, entries] of cache) {
       const ref = refOf(path);
       if (ref === undefined || !scope.has(namespaceKey(ref.namespace))) continue;
-      this.#secretCount -= entries.size;
-      this.#secrets.delete(path);
+      count -= entries.size;
+      cache.delete(path);
     }
+    return count;
   }
 
   clear(): void {

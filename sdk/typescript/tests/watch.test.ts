@@ -660,6 +660,108 @@ describe("shared watches", () => {
     expect((await client.getSecret("secret")).text()).toBe("value-2");
     await client.close();
   });
+
+  it("invalidates an ordinary cached parameter omitted by a full snapshot", async () => {
+    let reads = 0;
+    const transport = new FakeTransport((path) => {
+      if (path.endsWith("/GetParameter")) {
+        reads++;
+        return {
+          parameter: {
+            ref: { namespace: { env: "prod", app: "api" }, key: "deleted" },
+            value: reads === 1 ? "cached-before-delete" : "current-after-snapshot",
+            contentType: "string",
+            version: BigInt(reads),
+            metadataJson: "{}",
+            createdBy: "test",
+            createdAtUnixMs: 0n,
+            labels: {},
+          },
+        };
+      }
+      return { parameters: [], nextPageToken: "" };
+    });
+    const client = new KmsClient({ transport, namespace: "prod/api", cacheTtlMs: 60_000 });
+    expect(await client.getParameter("deleted")).toBe("cached-before-delete");
+    const stop = await client.watch(() => undefined);
+    await waitFor(() => transport.streams.length === 1);
+    const stream = transport.streams[0] as FakeDuplex<SubscribeRequest, SubscribeEvent>;
+    stream.emit({
+      event: { $case: "snapshot", value: { parameters: [] } },
+      revision: 3n,
+    });
+    await waitFor(() => client.currentRevision === 3n);
+
+    expect(await client.getParameter("deleted")).toBe("current-after-snapshot");
+    expect(reads).toBe(2);
+    stop();
+    await client.close();
+  });
+
+  it("delivers and deduplicates an unknown live tombstone while invalidating its cache", async () => {
+    let reads = 0;
+    const transport = new FakeTransport((path) => {
+      if (path.endsWith("/GetParameter")) {
+        reads++;
+        return {
+          parameter: {
+            ref: { namespace: { env: "prod", app: "api" }, key: "deleted" },
+            value: reads === 1 ? "cached-before-delete" : "after-delete",
+            contentType: "string",
+            version: BigInt(reads),
+            metadataJson: "{}",
+            createdBy: "test",
+            createdAtUnixMs: 0n,
+            labels: {},
+          },
+        };
+      }
+      return { parameters: [], nextPageToken: "" };
+    });
+    const client = new KmsClient({ transport, namespace: "prod/api", cacheTtlMs: 60_000 });
+    expect(await client.getParameter("deleted")).toBe("cached-before-delete");
+    const events: WatchEvent[] = [];
+    const stop = await client.watch((event) => events.push(event));
+    await waitFor(() => transport.streams.length === 1);
+    const stream = transport.streams[0] as FakeDuplex<SubscribeRequest, SubscribeEvent>;
+    stream.emit({
+      event: {
+        $case: "change",
+        value: {
+          ref: { namespace: { env: "prod", app: "api" }, key: "deleted" },
+          changeType: "delete",
+          value: "",
+          contentType: "",
+          version: 9n,
+          label: "",
+        },
+      },
+      revision: 4n,
+    });
+    await waitFor(() => events.length === 1);
+    stream.emit({
+      event: {
+        $case: "change",
+        value: {
+          ref: { namespace: { env: "prod", app: "api" }, key: "deleted" },
+          changeType: "delete",
+          value: "",
+          contentType: "",
+          version: 10n,
+          label: "",
+        },
+      },
+      revision: 5n,
+    });
+    await waitFor(() => client.currentRevision === 5n);
+    expect(events).toEqual([
+      expect.objectContaining({ type: "delete", key: "deleted", revision: 4n }),
+    ]);
+    expect(await client.getParameter("deleted")).toBe("after-delete");
+    expect(reads).toBe(2);
+    stop();
+    await client.close();
+  });
 });
 
 describe("watch reliability helpers", () => {

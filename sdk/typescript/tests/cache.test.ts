@@ -68,6 +68,15 @@ describe("ReadCache", () => {
     expect(cache.getSecret("/prod/other/kept")?.text()).toBe("two");
   });
 
+  it("only invalidates parameters in requested namespaces", () => {
+    const cache = new ReadCache(1_000);
+    cache.setParameter("/prod/app/scoped", "one");
+    cache.setParameter("/prod/other/kept", "two");
+    cache.invalidateParametersInNamespaces([{ env: "prod", app: "app" }]);
+    expect(cache.getParameter("/prod/app/scoped")).toBeUndefined();
+    expect(cache.getParameter("/prod/other/kept")).toBe("two");
+  });
+
   it("returns independent Secret objects", () => {
     const cache = new ReadCache(1_000);
     const original = new Secret("secret", { version: 7n });

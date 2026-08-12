@@ -88,6 +88,7 @@ interface WatchHost {
   _rootSignal(): AbortSignal;
   _cache(): {
     invalidateParam(path: string): void;
+    invalidateParametersInNamespaces(namespaces: Iterable<NamespaceRef>): void;
     invalidateSecret(path: string): void;
     invalidateSecretsInNamespaces(namespaces: Iterable<NamespaceRef>): void;
   };
@@ -421,6 +422,7 @@ export class SubscriptionManager {
   }
 
   #applySnapshot(snapshot: Snapshot, revision: bigint): void {
+    this.#host._cache().invalidateParametersInNamespaces(this.#streamNamespaces);
     this.#host._cache().invalidateSecretsInNamespaces(this.#streamNamespaces);
     const present = new Set<string>();
     for (const parameter of snapshot.parameters) {
@@ -486,7 +488,7 @@ export class SubscriptionManager {
     const nextRevision = previous && previous.revision > revision ? previous.revision : revision;
     const changed = present
       ? !previous?.present || previous.value !== value
-      : Boolean(previous?.present);
+      : previous === undefined || previous.present;
     this.#known.set(path, { value: present ? value : "", present, revision: nextRevision });
     if (!changed) return;
 
@@ -554,6 +556,7 @@ export class SubscriptionManager {
   }
 
   async #reconcile(): Promise<boolean> {
+    const namespaceGeneration = this.#namespaceGeneration;
     const namespaces = [...this.#namespaces.values()];
     // Capture every previously-present path, not only declarative
     // ParameterValue registrations. Namespace watchers must also receive a
@@ -575,7 +578,10 @@ export class SubscriptionManager {
       if (!ref || !completelyListed.has(namespaceKey(ref.namespace))) continue;
       this.#setValue(path, "", false, 0n, snapshotRevision, true);
     }
-    return completelyListed.size === namespaces.length;
+    return (
+      completelyListed.size === namespaces.length &&
+      namespaceGeneration === this.#namespaceGeneration
+    );
   }
 
   async #reconcileNamespace(
