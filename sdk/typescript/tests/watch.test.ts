@@ -106,6 +106,36 @@ describe("shared watches", () => {
     await client.close();
   });
 
+  it("reconciles missed deletions for namespace watchers without a ParameterValue", async () => {
+    let parameters = [
+      {
+        ref: { namespace: { env: "prod", app: "api" }, key: "flag" },
+        value: "on",
+        contentType: "string",
+        version: 1n,
+        metadataJson: "{}",
+        createdBy: "test",
+        createdAtUnixMs: 0n,
+        labels: {},
+      },
+    ];
+    const transport = new FakeTransport(() => ({ parameters, nextPageToken: "" }));
+    const client = new KmsClient({
+      transport,
+      namespace: "prod/api",
+      reconcileIntervalMs: 5,
+    });
+    const events: WatchEvent[] = [];
+    const stop = await client.watch((event) => events.push(event));
+
+    await waitFor(() => events.some((event) => event.type === "put"));
+    parameters = [];
+    await waitFor(() => events.some((event) => event.type === "delete"));
+
+    stop();
+    await client.close();
+  });
+
   it("invalidates cached secrets on metadata changes without streaming plaintext", async () => {
     let secretReads = 0;
     const transport = new FakeTransport((path) => {

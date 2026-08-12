@@ -422,7 +422,11 @@ export class SubscriptionManager {
 
   async #reconcile(): Promise<void> {
     const namespaces = [...this.#namespaces.values()];
-    const parameterPaths = [...this.#parameterHandlers.keys()];
+    // Capture every previously-present path, not only declarative
+    // ParameterValue registrations. Namespace watchers must also receive a
+    // tombstone when reconciliation discovers a deletion that was missed
+    // while the stream was disconnected.
+    const knownPaths = [...this.#known].filter(([, value]) => value.present).map(([path]) => path);
     const snapshotRevision = this.#lastRevision;
     const present = new Set<string>();
     const completelyListed = new Set<string>();
@@ -432,7 +436,7 @@ export class SubscriptionManager {
         completelyListed.add(namespaceKey(namespace));
       }
     }
-    for (const path of parameterPaths) {
+    for (const path of knownPaths) {
       if (present.has(path)) continue;
       const ref = refOf(path);
       if (!ref || !completelyListed.has(namespaceKey(ref.namespace))) continue;
