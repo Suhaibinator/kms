@@ -40,7 +40,8 @@ a minor release may contain documented breaking changes.
   caches; disposal cannot race a late parameter subscription.
 - Authoritative snapshots and explicit tombstones invalidate ordinary
   parameter-cache reads; expanded scopes also interrupt reconnect backoff, and
-  late reconciliation pages cannot repopulate a released namespace.
+  late reconciliation pages cannot repopulate a released namespace. Unknown
+  delete-only paths are pruned without inventing value-change callbacks.
 - Callback promises settle serially behind the bounded dispatcher, and
   unsubscribe/dispose fences notifications that were already queued.
 - Release and managed-config identities reject non-`bigint` or out-of-range

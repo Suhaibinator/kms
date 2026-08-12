@@ -392,8 +392,9 @@ slashes are preserved.
   transport work. New operations fail after close.
 - Unary calls use a five-second default deadline unless the caller supplies an
   earlier deadline. Long-lived streams do not inherit that unary deadline.
-- One client owns one shared parameter watch stream over an add-only union of
-  namespaces. Callbacks never delay applying state.
+- One client owns one shared parameter watch stream over the reference-counted
+  union of namespaces with active local owners. Callbacks never delay applying
+  state.
 - A release loader permits one concurrent run (and sequential reuse), bounds
   exact-version fetch concurrency, keeps at most one preparation and one
   replace-latest candidate, and preserves the last known good snapshot after
