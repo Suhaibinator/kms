@@ -14,6 +14,7 @@ interface PackageManifest {
   readonly files?: readonly string[];
   readonly sideEffects?: boolean | readonly string[];
   readonly exports?: Readonly<Record<string, string | ConditionalExport>>;
+  readonly publishConfig?: Readonly<Record<string, boolean | string>>;
 }
 
 function source(relativePath: string): string {
@@ -62,6 +63,9 @@ describe("published trust boundaries", () => {
   it("ships the documented Node-only package contract", () => {
     expect(manifest.type).toBe("module");
     expect(manifest.engines?.node).toBe(">=22");
-    expect(manifest.files).toEqual(expect.arrayContaining(["dist", "README.md", "SECURITY.md"]));
+    expect(manifest.files).toEqual(
+      expect.arrayContaining(["dist", "README.md", "SECURITY.md", "CHANGELOG.md", "LICENSE"]),
+    );
+    expect(manifest.publishConfig).toEqual({ access: "public", provenance: true });
   });
 });

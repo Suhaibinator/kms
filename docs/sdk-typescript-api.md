@@ -23,7 +23,10 @@ host for this adapter; consumers need a serverful Next.js deployment.
 
 The package is ESM-only. Node 22 is the oldest supported runtime; CI also runs
 the release gate on Node 26. Next.js and React are optional peers and are needed
-only for their respective adapter entry points.
+only for their respective adapter entry points. The peer ranges express
+intended Next.js 14–16 and React 18–19 compatibility, while the current adapter
+suite directly qualifies Next.js 16 with React 19. Earlier accepted peer majors
+remain a compatibility-qualification gap rather than a matrix-tested claim.
 
 ## Core API reference
 

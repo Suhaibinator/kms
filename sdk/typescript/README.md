@@ -285,8 +285,10 @@ committed output.
 | `@suhaibinator/kms/next/client` | React browser bundle | Public-policy refresh and stale recovery |
 
 The package is ESM-only. Next.js 14 through 16 and React 18 through 19 are the
-declared optional peer ranges. Generated protobuf modules are internal and are
-not a compatibility surface.
+intended optional peer ranges. The repository currently qualifies the adapter
+with Next.js 16 and React 19; the older accepted peer majors are not yet an
+independent CI matrix. Generated protobuf modules are internal and are not a
+compatibility surface.
 
 The public exports follow semantic versioning. Before `1.0.0`, minor releases
 may still contain breaking API changes and will document them in the package
