@@ -84,17 +84,8 @@ export {
 } from "./refs.js";
 export type { NamespaceRef, ResourceRef, VersionRef } from "./refs.js";
 
-export {
-  deterministicReleaseDigest,
-  releaseDigestMatches,
-  sha256Hex,
-} from "./releases/digest.js";
 export { ReleaseLoader, runTypedRelease } from "./releases/loader.js";
 export type {
-  FetchedSecret,
-  ReleaseLoaderOptions,
-  ReleaseTransport,
-  ReleaseWatchStream,
   SecretTokenProvider,
   ValidateReleaseManifest,
 } from "./releases/loader.js";

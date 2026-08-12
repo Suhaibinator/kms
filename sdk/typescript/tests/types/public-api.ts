@@ -16,6 +16,11 @@ import {
   startManagedConfig,
 } from "@suhaibinator/kms/configstore";
 
+// @ts-expect-error Protocol transport types are internal and must not expose generated messages.
+import type { ReleaseTransport } from "@suhaibinator/kms";
+// @ts-expect-error Digest helpers consume generated messages and are intentionally internal.
+import { deterministicReleaseDigest } from "@suhaibinator/kms";
+
 interface Policy {
   readonly limit: number;
 }
@@ -29,6 +34,9 @@ export const values = {
   secret: new SecretValue("secret"),
   parameter: new ParameterValue("parameter"),
 };
+
+void (undefined as ReleaseTransport | undefined);
+void deterministicReleaseDigest;
 
 export function prepare(snapshot: ReleaseSnapshot): PreparedRelease {
   snapshot.secret("secret")?.bytes();
