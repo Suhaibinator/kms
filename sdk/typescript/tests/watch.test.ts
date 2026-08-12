@@ -452,6 +452,81 @@ describe("shared watches", () => {
     await client.close();
   });
 
+  it("discards an in-flight reconciliation page after its last scope owner leaves", async () => {
+    let finishList!: (value: {
+      items: readonly {
+        env: string;
+        app: string;
+        key: string;
+        value: string;
+        contentType: string;
+        version: bigint;
+        metadataJson: string;
+        createdBy: string;
+        createdAtUnixMs: bigint;
+        labels: Readonly<Record<string, bigint>>;
+        namespace: string;
+        path: string;
+      }[];
+      nextPageToken: string;
+    }) => void;
+    const listPending = new Promise<Parameters<typeof finishList>[0]>((resolve) => {
+      finishList = resolve;
+    });
+    const transport = new FakeTransport(() => listPending);
+    const client = new KmsClient({ transport, logger: { warn: vi.fn() } });
+    const sleeps: Array<() => void> = [];
+    const manager = new SubscriptionManager(client, {
+      reconcileIntervalMs: 60_000,
+      sleep: (_milliseconds, signal) =>
+        new Promise<void>((resolve, reject) => {
+          if (signal.aborted) reject(signal.reason);
+          else {
+            sleeps.push(resolve);
+            signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+          }
+        }),
+    });
+    const callback = vi.fn();
+    const stop = manager.watch(parseNamespace("prod/api"), callback);
+    await waitFor(() => sleeps.length >= 1);
+    sleeps.shift()?.();
+    await waitFor(() => transport.calls.some((call) => call.path.endsWith("/ListParameters")));
+
+    stop();
+    finishList({
+      items: [
+        Object.freeze({
+          env: "prod",
+          app: "api",
+          key: "late",
+          value: "stale",
+          contentType: "string",
+          version: 1n,
+          metadataJson: "{}",
+          createdBy: "test",
+          createdAtUnixMs: 0n,
+          labels: Object.freeze({}),
+          namespace: "prod/api",
+          path: "/prod/api/late",
+        }),
+      ],
+      nextPageToken: "",
+    });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    expect(manager.status).toMatchObject({
+      state: "idle",
+      reconciliation: "not_started",
+      namespaceCount: 0,
+      trackedParameterCount: 0,
+      watcherCount: 0,
+    });
+    expect(callback).not.toHaveBeenCalled();
+    await manager.stop();
+    await client.close();
+  });
+
   it("removes external abort listeners on unwatch and client close", async () => {
     const transport = new FakeTransport(() => ({ parameters: [], nextPageToken: "" }));
     const client = new KmsClient({ transport, namespace: "prod/api" });

@@ -669,7 +669,9 @@ export class SubscriptionManager {
     const completelyListed = new Set<string>();
 
     for (const namespace of namespaces) {
-      if (await this.#reconcileNamespace(namespace, snapshotRevision, present)) {
+      if (
+        await this.#reconcileNamespace(namespace, snapshotRevision, namespaceGeneration, present)
+      ) {
         completelyListed.add(namespaceKey(namespace));
       }
     }
@@ -689,6 +691,7 @@ export class SubscriptionManager {
   async #reconcileNamespace(
     namespace: NamespaceRef,
     snapshotRevision: bigint,
+    namespaceGeneration: number,
     present: Set<string>,
   ): Promise<boolean> {
     let pageToken = "";
@@ -701,6 +704,12 @@ export class SubscriptionManager {
           signal: this.#controller.signal,
         });
       } catch {
+        return false;
+      }
+      if (
+        namespaceGeneration !== this.#namespaceGeneration ||
+        !this.#namespaces.has(namespaceKey(namespace))
+      ) {
         return false;
       }
       for (const parameter of response.items) {
