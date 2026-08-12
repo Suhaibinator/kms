@@ -114,12 +114,12 @@ export class ReadCache {
     this.setParameter(path, value, positionalSelector(version, label));
   }
 
-  /** Capture the invalidation generation before starting a parameter RPC. */
+  /** @internal Capture the invalidation generation before starting a parameter RPC. */
   beginParameterRead(path: string): ReadGeneration | undefined {
     return this.#beginRead(this.#parameterGenerations, "parameter", path);
   }
 
-  /** Populate the parameter cache only when no invalidation raced the RPC. */
+  /** @internal Populate the parameter cache only when no invalidation raced the RPC. */
   cacheParameterIfUnchanged(
     generation: ReadGeneration,
     version: bigint,
@@ -150,12 +150,12 @@ export class ReadCache {
     this.setSecret(path, secret, positionalSelector(version, label));
   }
 
-  /** Capture the invalidation generation before starting a secret RPC. */
+  /** @internal Capture the invalidation generation before starting a secret RPC. */
   beginSecretRead(path: string): ReadGeneration | undefined {
     return this.#beginRead(this.#secretGenerations, "secret", path);
   }
 
-  /** Populate the secret cache only when no invalidation raced the RPC. */
+  /** @internal Populate the secret cache only when no invalidation raced the RPC. */
   cacheSecretIfUnchanged(
     generation: ReadGeneration,
     version: bigint,
@@ -167,7 +167,7 @@ export class ReadCache {
     return true;
   }
 
-  /** Release a read generation after its RPC settles, whether or not it cached. */
+  /** @internal Release a read generation after its RPC settles, whether or not it cached. */
   endRead(generation: ReadGeneration | undefined): void {
     if (generation === undefined || generation.released) return;
     generation.released = true;

@@ -8,7 +8,8 @@ import {
   type WatchReleaseRequest,
 } from "../src/generated/kms.js";
 import { deterministicReleaseDigest, sha256Hex } from "../src/releases/digest.js";
-import { type FakeDuplex, FakeTransport } from "./helpers/fake-transport.js";
+import type { BidiMethod, DuplexRpc, TransportCallOptions } from "../src/transport.js";
+import { type FakeDuplex, FakeTransport, waitFor } from "./helpers/fake-transport.js";
 
 const namespace = { env: "prod", app: "api" } as const;
 const expectedRef: ResourceRef = { namespace, key: "settings" };
@@ -127,6 +128,52 @@ describe("KmsClient release transport boundary", () => {
     });
     await client.close();
   });
+
+  it("cancels a release stream whose initial registration send fails", async () => {
+    const value = "expected-value";
+    const release = makeRelease({
+      alias: "settings",
+      kind: "parameter",
+      ref: expectedRef,
+      version: 7n,
+      contentType: "text/plain",
+      metadataJson: "",
+      parameterDigest: sha256Hex(value),
+      clientBound: false,
+      hasAccessToken: false,
+    });
+    const transport = new RejectingRegistrationTransport((path) => {
+      if (path.endsWith("/GetActiveRelease")) {
+        return { release, activationRevision: 11n, previousVersion: 0n };
+      }
+      if (path.endsWith("/GetParameter")) {
+        return {
+          parameter: {
+            ref: expectedRef,
+            value,
+            contentType: "text/plain",
+            version: 7n,
+            metadataJson: "",
+            createdBy: "test",
+            createdAtUnixMs: 1n,
+            labels: {},
+          },
+        };
+      }
+      throw new Error(`unexpected ${path}`);
+    });
+    const client = new KmsClient({ transport, namespace: "prod/api" });
+    const loader = await client.createReleaseLoader({ name: "runtime" });
+
+    const run = loader.run(() => ({ commit() {}, abort() {} }));
+    await waitFor(() => transport.cancelCount === 1);
+    loader.stop();
+
+    await expect(run).rejects.toMatchObject({ name: "AbortError" });
+    expect(transport.streamCount).toBe(1);
+    expect(transport.cancelCount).toBe(1);
+    await client.close();
+  });
 });
 
 function makeRelease(entry: ConfigurationReleaseEntry): ConfigurationRelease {
@@ -150,4 +197,33 @@ function rejectedAcknowledgement(transport: FakeTransport) {
       request.request?.$case === "acknowledgement" ? [request.request.value] : [],
     )
     .find((acknowledgement) => acknowledgement.state === "rejected");
+}
+
+class RejectingRegistrationTransport extends FakeTransport {
+  streamCount = 0;
+  cancelCount = 0;
+
+  override bidi<Request, Response>(
+    _method: BidiMethod<Request, Response>,
+    _options: TransportCallOptions = {},
+  ): DuplexRpc<Request, Response> {
+    this.streamCount++;
+    let closed = false;
+    return {
+      send: async () => {
+        throw new Error("registration failed");
+      },
+      closeSend: () => {
+        closed = true;
+      },
+      cancel: () => {
+        if (closed) return;
+        closed = true;
+        this.cancelCount++;
+      },
+      [Symbol.asyncIterator]: () => ({
+        next: () => Promise.resolve({ done: true, value: undefined }),
+      }),
+    };
+  }
 }

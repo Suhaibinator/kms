@@ -171,7 +171,7 @@ export class KmsClient {
     this.timeoutMs = positiveFinite(options.timeoutMs ?? DEFAULT_TIMEOUT_MS, "timeoutMs");
     this.fallbackToDefaultsOnError = options.fallbackToDefaultsOnError ?? false;
     this.clientName = options.clientName?.trim() || basename(process.argv[1] ?? "kms-client");
-    this.logger = options.logger ?? console;
+    this.logger = isolateLogger(options.logger ?? console);
     this.#configuredNamespace = options.namespace ? parseNamespace(options.namespace) : undefined;
     this.#cache = new ReadCache(options.cacheTtlMs ?? 0);
     this.#dispatcher = new CallbackDispatcher(this.logger);
@@ -743,14 +743,14 @@ export class KmsClient {
   close(): Promise<void> {
     if (this.#closeAttempt !== undefined) return this.#closeAttempt;
     this.#closed = true;
-    const attempt = (async (): Promise<void> => {
-      this.#rootController.abort(new DOMException("KMS client closed", "AbortError"));
-      await this.#subscriptions?.stop();
-      this.#dispatcher.close();
-      this.#cache.clear();
-      await this.#transport.close();
-    })();
+    let resolveAttempt!: () => void;
+    let rejectAttempt!: (error: unknown) => void;
+    const attempt = new Promise<void>((resolve, reject) => {
+      resolveAttempt = resolve;
+      rejectAttempt = reject;
+    });
     this.#closeAttempt = attempt;
+    void this.#finishClose().then(resolveAttempt, rejectAttempt);
     return attempt;
   }
 
@@ -826,10 +826,27 @@ export class KmsClient {
           metadata: this._metadata(),
           signal: AbortSignal.any([this.#rootController.signal, signal]),
         });
-        await stream.send({ request: { $case: "register", value: registration } });
-        return stream;
+        try {
+          await stream.send({ request: { $case: "register", value: registration } });
+          return stream;
+        } catch (error) {
+          try {
+            stream.cancel();
+          } catch {
+            // Preserve the registration failure after best-effort cleanup.
+          }
+          throw error;
+        }
       },
     };
+  }
+
+  async #finishClose(): Promise<void> {
+    this.#rootController.abort(new DOMException("KMS client closed", "AbortError"));
+    await this.#subscriptions?.stop();
+    this.#dispatcher.close();
+    this.#cache.clear();
+    await this.#transport.close();
   }
 
   #callOptions(secretToken: string, options: CallOptions): TransportCallOptions {
@@ -876,6 +893,29 @@ export function createClient(options: KmsClientOptions): KmsClient {
 function positiveFinite(value: number, name: string): number {
   if (!Number.isFinite(value) || value <= 0) throw new ConfigError(`${name} must be positive`);
   return value;
+}
+
+function isolateLogger(logger: Logger): Logger {
+  return {
+    warn: (message) => {
+      try {
+        logger.warn(message);
+      } catch {
+        // Logging is observational and must not affect client lifecycle.
+      }
+    },
+    ...(logger.error === undefined
+      ? {}
+      : {
+          error: (message: string) => {
+            try {
+              logger.error?.(message);
+            } catch {
+              // Logging is observational and must not affect client lifecycle.
+            }
+          },
+        }),
+  };
 }
 
 function validPageSize(value = 0): number {
@@ -1081,7 +1121,7 @@ class CallbackDispatcher {
   enqueue(path: string, callback: () => unknown): void {
     if (this.#closed) return;
     if (this.#queue.length >= CALLBACK_QUEUE_SIZE) {
-      this.#logger.warn(`KMS callback queue full; dropped notification for ${path}`);
+      this.#warn(`KMS callback queue full; dropped notification for ${path}`);
       return;
     }
     this.#queue.push({ path, callback });
@@ -1111,15 +1151,17 @@ class CallbackDispatcher {
     try {
       result = item.callback();
     } catch {
-      this.#logger.warn(`KMS change callback threw for ${item.path}`);
+      this.#warn(`KMS change callback threw for ${item.path}`);
       this.#scheduleNext();
       return;
     }
-    void Promise.resolve(result)
-      .catch(() => {
-        this.#logger.warn(`KMS change callback rejected for ${item.path}`);
-      })
-      .then(() => this.#scheduleNext());
+    void Promise.resolve(result).then(
+      () => this.#scheduleNext(),
+      () => {
+        this.#warn(`KMS change callback rejected for ${item.path}`);
+        this.#scheduleNext();
+      },
+    );
   }
 
   #scheduleNext(): void {
@@ -1128,6 +1170,14 @@ class CallbackDispatcher {
       return;
     }
     setImmediate(() => this.#drain());
+  }
+
+  #warn(message: string): void {
+    try {
+      this.#logger.warn(message);
+    } catch {
+      // Logging is observational and must never break callback isolation.
+    }
   }
 }
 

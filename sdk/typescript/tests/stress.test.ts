@@ -75,6 +75,33 @@ describe("bounded concurrency and lifecycle stress", () => {
     expect(transport.streams.every((stream) => stream.pendingReadCount === 0)).toBe(true);
   });
 
+  it("keeps watch recovery alive when the application logger throws", async () => {
+    const random = vi.spyOn(Math, "random").mockReturnValue(0);
+    const transport = new FakeTransport(() => ({ parameters: [], nextPageToken: "" }));
+    const client = new KmsClient({
+      transport,
+      namespace,
+      logger: {
+        warn: () => {
+          throw new Error("logger failed");
+        },
+      },
+    });
+    const stop = await client.watch(() => undefined);
+
+    try {
+      await waitFor(() => transport.streams.length === 1);
+      const first = streamAt(transport, 0);
+      await waitFor(() => first.sent.length === 1);
+      first.cancel();
+      await waitFor(() => transport.streams.length === 2);
+    } finally {
+      stop();
+      await client.close();
+      random.mockRestore();
+    }
+  });
+
   it("bounds callback backpressure and yields to unrelated event-loop work during a burst", async () => {
     const warnings: string[] = [];
     const logger: Logger = { warn: (message) => warnings.push(message) };
@@ -148,6 +175,54 @@ describe("bounded concurrency and lifecycle stress", () => {
     releaseFirst?.();
     await waitFor(() => delivered > 1);
     stop();
+    await client.close();
+  });
+
+  it("continues draining after synchronous and asynchronous callback failures when logging throws", async () => {
+    const transport = new FakeTransport(() => ({}));
+    const client = new KmsClient({
+      transport,
+      logger: {
+        warn: () => {
+          throw new Error("logger failed");
+        },
+      },
+    });
+    const delivered: string[] = [];
+
+    client._dispatch("/prod/api/synchronous", () => {
+      throw new Error("callback failed");
+    });
+    client._dispatch("/prod/api/asynchronous", () => Promise.reject(new Error("callback failed")));
+    client._dispatch("/prod/api/final", () => {
+      delivered.push("final");
+    });
+
+    await waitFor(() => delivered.length === 1);
+    expect(delivered).toEqual(["final"]);
+    await client.close();
+  });
+
+  it("keeps draining the bounded queue when its overflow warning throws", async () => {
+    const transport = new FakeTransport(() => ({}));
+    const client = new KmsClient({
+      transport,
+      logger: {
+        warn: () => {
+          throw new Error("logger failed");
+        },
+      },
+    });
+    let delivered = 0;
+
+    for (let index = 0; index < 1_025; index++) {
+      client._dispatch(`/prod/api/callback-${index}`, () => {
+        delivered++;
+      });
+    }
+
+    await waitFor(() => delivered === 1_024);
+    expect(delivered).toBe(1_024);
     await client.close();
   });
 

@@ -591,6 +591,43 @@ describe("KmsClient", () => {
     await Promise.all([first, second]);
     expect(completed).toBe(true);
   });
+
+  it("installs the shared close attempt before abort listeners can re-enter close", async () => {
+    let client!: KmsClient;
+    let reentrantClose: Promise<void> | undefined;
+    let closeCalls = 0;
+    let requestStarted!: () => void;
+    const started = new Promise<void>((resolve) => {
+      requestStarted = resolve;
+    });
+    const transport: RpcTransport = {
+      unary: (_method, _request, options = {}) =>
+        new Promise((_, reject) => {
+          const abort = () => {
+            reentrantClose = client.close();
+            reject(new Error("transport aborted"));
+          };
+          options.signal?.addEventListener("abort", abort, { once: true });
+          requestStarted();
+        }),
+      bidi: () => {
+        throw new Error("unexpected stream");
+      },
+      close: () => {
+        closeCalls++;
+      },
+    };
+    client = new KmsClient({ transport, namespace: "prod/api" });
+    const read = client.getParameter("pending").catch(() => undefined);
+    await started;
+
+    const close = client.close();
+
+    expect(reentrantClose).toBe(close);
+    await close;
+    await read;
+    expect(closeCalls).toBe(1);
+  });
 });
 
 function wireParameter(
