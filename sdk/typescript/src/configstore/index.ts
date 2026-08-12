@@ -1,4 +1,4 @@
-export { cloneConfig, containsSecret } from "./clone.js";
+export { cloneConfig } from "./clone.js";
 export {
   type BigIntCodecOptions,
   ConfigDecodeError,
@@ -48,10 +48,3 @@ export {
   ReleaseIdentity,
   type ReleaseIdentityInit,
 } from "./snapshot.js";
-export {
-  InvalidJsonDocumentError,
-  type JsonNode,
-  type JsonProperty,
-  parseStrictJson,
-  stringifyJsonNode,
-} from "./strict-json.js";
