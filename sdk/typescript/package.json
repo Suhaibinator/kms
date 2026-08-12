@@ -85,8 +85,9 @@
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
     "test:types": "tsc -p tests/types/tsconfig.json --noEmit",
+    "test:next": "node ./scripts/test-next-boundaries.mjs",
     "test:package": "tsc -p tests/package/tsconfig.json --noEmit && npm pack --dry-run --ignore-scripts",
-    "check": "npm run check:generated && npm run typecheck && npm run lint && npm run format:check && npm run test && npm run test:types && npm run build && npm run test:package",
+    "check": "npm run check:generated && npm run typecheck && npm run lint && npm run format:check && npm run test && npm run test:types && npm run build && npm run test:next && npm run test:package",
     "prepack": "npm run check"
   },
   "peerDependencies": {
