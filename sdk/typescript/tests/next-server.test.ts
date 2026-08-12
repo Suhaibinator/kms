@@ -1,8 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
+
 vi.mock("server-only", () => ({}));
 
-import { definePublicProjection, formatRevision } from "../src/publishing.js";
 import { createNextKms, createPublicConfigGET } from "../src/next/server.js";
+import { definePublicProjection, formatRevision } from "../src/publishing.js";
 
 type Policy = { minLength: number; privateValue: string };
 type PublicPolicy = { readonly minLength: number };
