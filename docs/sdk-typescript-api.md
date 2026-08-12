@@ -82,8 +82,9 @@ within the protobuf `uint64` range.
 `prepare` may do fallible parsing, validation, and resource allocation. Its
 returned `commit()` must be synchronous and infallible; `abort()` must release
 candidate-owned resources. A release containing protected secrets supplies a
-local `secretTokenProvider`. `stop()` requests bounded shutdown; callers still
-await the `run()` promise before closing the client.
+local `secretTokenProvider`. `stop()` requests cooperative shutdown; preparation
+work must observe its `AbortSignal`, and callers still await the `run()` promise
+before closing the client.
 
 ### Public configuration
 
