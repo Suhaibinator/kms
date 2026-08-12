@@ -106,13 +106,20 @@ describe("configstore defensive values and reports", () => {
   });
 
   it("deeply clones mismatch fields and redacts an entire secret-bearing value", () => {
-    const expected = { values: [1, 2] };
+    const expected = { values: [1, 2], exact: 9_007_199_254_740_993n };
     const report = new DefaultMismatchReport(
       "startup",
       "fatal",
       new ReleaseIdentity({ name: "runtime", version: 2n }),
       [
-        { path: "group.field", expected, actual: { nested: new Secret("plaintext-canary") } },
+        {
+          path: "group.field",
+          expected,
+          actual: {
+            exact: 18_446_744_073_709_551_615n,
+            nested: new Secret("plaintext-canary"),
+          },
+        },
         { path: "field\nINJECTION", expected: 1, actual: 2 },
       ],
     );
@@ -124,11 +131,24 @@ describe("configstore defensive values and reports", () => {
 
     expect(report.fields()[0]).toEqual({
       path: "group.field",
-      expected: { values: [1, 2] },
+      expected: { values: [1, 2], exact: 9_007_199_254_740_993n },
       actual: "[REDACTED]",
     });
     expect(report.fields()[1]?.path).toBe("invalid_path");
-    for (const rendered of [String(report), inspect(report), JSON.stringify(report)]) {
+    const encoded = JSON.stringify(report);
+    expect(JSON.parse(encoded)).toMatchObject({
+      release: { version: "2" },
+      differences: [
+        {
+          path: "group.field",
+          expected: { values: [1, 2], exact: "9007199254740993" },
+          actual: "[REDACTED]",
+        },
+        { path: "invalid_path", expected: 1, actual: 2 },
+      ],
+    });
+    expect(JSON.stringify(new DefaultMismatchError(report))).toBe(encoded);
+    for (const rendered of [String(report), inspect(report), encoded]) {
       expect(rendered).not.toContain("plaintext-canary");
       expect(rendered).not.toContain("INJECTION");
     }
@@ -136,7 +156,10 @@ describe("configstore defensive values and reports", () => {
     const error = new DefaultMismatchError(report);
     expect(error.phase).toBe("startup");
     expect(error.severity).toBe("fatal");
-    expect(error.fields()[0]?.expected).toEqual({ values: [1, 2] });
+    expect(error.fields()[0]?.expected).toEqual({
+      values: [1, 2],
+      exact: 9_007_199_254_740_993n,
+    });
     expect(inspect(error)).not.toContain("values");
   });
 

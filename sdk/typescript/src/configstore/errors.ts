@@ -105,7 +105,7 @@ export class DefaultMismatchReport {
       phase: this.phase,
       severity: this.severity,
       release: this.release,
-      differences: this.fields(),
+      differences: this.#differences.map(jsonDifference),
     });
   }
 
@@ -148,8 +148,8 @@ export class DefaultMismatchError extends Error {
     return `${this.name}: ${this.message}`;
   }
 
-  toJSON(): DefaultMismatchReport {
-    return this.#report;
+  toJSON(): Readonly<Record<string, unknown>> {
+    return this.#report.toJSON();
   }
 
   [inspect.custom](): string {
@@ -201,6 +201,50 @@ function cloneDifferences(differences: readonly FieldDifference[]): FieldDiffere
 
 function cloneReportValue(value: unknown): unknown {
   return containsSecret(value) ? "[REDACTED]" : cloneConfig(value);
+}
+
+function jsonDifference(difference: FieldDifference): FieldDifference {
+  return {
+    path: difference.path,
+    expected: jsonReportValue(difference.expected, new Set<object>()),
+    actual: jsonReportValue(difference.actual, new Set<object>()),
+  };
+}
+
+/** Convert cloned report values without invoking caller-provided toJSON methods. */
+function jsonReportValue(value: unknown, ancestors: Set<object>): unknown {
+  if (typeof value === "bigint") return value.toString();
+  if (typeof value === "function" || typeof value === "symbol") return undefined;
+  if (value === null || typeof value !== "object") return value;
+  if (ancestors.has(value)) return "[Circular]";
+
+  ancestors.add(value);
+  try {
+    if (value instanceof Date) {
+      const milliseconds = value.getTime();
+      return Number.isFinite(milliseconds) ? value.toISOString() : null;
+    }
+    if (value instanceof Uint8Array) return [...value];
+    if (value instanceof Map || value instanceof Set) return {};
+    if (Array.isArray(value)) {
+      return Array.from({ length: value.length }, (_, index) => {
+        const descriptor = Object.getOwnPropertyDescriptor(value, String(index));
+        return descriptor && "value" in descriptor
+          ? jsonReportValue(descriptor.value, ancestors)
+          : undefined;
+      });
+    }
+
+    const result: Record<string, unknown> = Object.create(null) as Record<string, unknown>;
+    for (const key of Object.keys(value)) {
+      const descriptor = Object.getOwnPropertyDescriptor(value, key);
+      if (!descriptor || !("value" in descriptor)) continue;
+      result[key] = jsonReportValue(descriptor.value, ancestors);
+    }
+    return result;
+  } finally {
+    ancestors.delete(value);
+  }
 }
 
 function validRejectionCategory(category: string): category is RejectionCategory {
