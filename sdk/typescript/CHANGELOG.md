@@ -39,7 +39,8 @@ a minor release may contain documented breaking changes.
   per-key revision fences, and immediately invalidate newly watched secret
   caches; disposal cannot race a late parameter subscription.
 - Authoritative snapshots and explicit tombstones invalidate ordinary
-  parameter-cache reads; expanded scopes also interrupt reconnect backoff.
+  parameter-cache reads; expanded scopes also interrupt reconnect backoff, and
+  late reconciliation pages cannot repopulate a released namespace.
 - Callback promises settle serially behind the bounded dispatcher, and
   unsubscribe/dispose fences notifications that were already queued.
 - Release and managed-config identities reject non-`bigint` or out-of-range
