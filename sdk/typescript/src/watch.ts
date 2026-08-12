@@ -58,6 +58,32 @@ export interface WatchOptions {
   readonly signal?: AbortSignal;
 }
 
+export type WatchConnectionState =
+  | "idle"
+  | "connecting"
+  | "connected"
+  | "reconnecting"
+  | "stopped";
+
+export type ReconciliationHealth = "not_started" | "healthy" | "degraded";
+
+/** A value-free snapshot suitable for metrics and health endpoints. */
+export interface WatchStatus {
+  readonly state: WatchConnectionState;
+  readonly reconciliation: ReconciliationHealth;
+  readonly currentRevision: bigint;
+  readonly reconnectCount: number;
+  readonly namespaceCount: number;
+  readonly watcherCount: number;
+  readonly parameterHandlerCount: number;
+  readonly connectedAtUnixMs?: number;
+  readonly lastEventAtUnixMs?: number;
+  readonly disconnectedAtUnixMs?: number;
+  readonly lastReconcileAttemptAtUnixMs?: number;
+  readonly lastReconcileSuccessAtUnixMs?: number;
+  readonly lastReconcileFailureAtUnixMs?: number;
+}
+
 interface WatchHost {
   readonly clientName: string;
   readonly timeoutMs: number;
@@ -114,6 +140,15 @@ export class SubscriptionManager {
   #streamNamespaces: readonly NamespaceRef[] = [];
   #nextWatcherId = 1;
   #lastRevision = 0n;
+  #state: WatchConnectionState = "idle";
+  #reconciliation: ReconciliationHealth = "not_started";
+  #reconnectCount = 0;
+  #connectedAtUnixMs: number | undefined;
+  #lastEventAtUnixMs: number | undefined;
+  #disconnectedAtUnixMs: number | undefined;
+  #lastReconcileAttemptAtUnixMs: number | undefined;
+  #lastReconcileSuccessAtUnixMs: number | undefined;
+  #lastReconcileFailureAtUnixMs: number | undefined;
   #started = false;
   #restartRequested = false;
   #sessionController: AbortController | undefined;
@@ -137,6 +172,40 @@ export class SubscriptionManager {
 
   get currentRevision(): bigint {
     return this.#lastRevision;
+  }
+
+  get status(): WatchStatus {
+    let parameterHandlerCount = 0;
+    for (const handlers of this.#parameterHandlers.values()) {
+      parameterHandlerCount += handlers.size;
+    }
+    return Object.freeze({
+      state: this.#state,
+      reconciliation: this.#reconciliation,
+      currentRevision: this.#lastRevision,
+      reconnectCount: this.#reconnectCount,
+      namespaceCount: this.#namespaces.size,
+      watcherCount: this.#watchers.size,
+      parameterHandlerCount,
+      ...(this.#connectedAtUnixMs === undefined
+        ? {}
+        : { connectedAtUnixMs: this.#connectedAtUnixMs }),
+      ...(this.#lastEventAtUnixMs === undefined
+        ? {}
+        : { lastEventAtUnixMs: this.#lastEventAtUnixMs }),
+      ...(this.#disconnectedAtUnixMs === undefined
+        ? {}
+        : { disconnectedAtUnixMs: this.#disconnectedAtUnixMs }),
+      ...(this.#lastReconcileAttemptAtUnixMs === undefined
+        ? {}
+        : { lastReconcileAttemptAtUnixMs: this.#lastReconcileAttemptAtUnixMs }),
+      ...(this.#lastReconcileSuccessAtUnixMs === undefined
+        ? {}
+        : { lastReconcileSuccessAtUnixMs: this.#lastReconcileSuccessAtUnixMs }),
+      ...(this.#lastReconcileFailureAtUnixMs === undefined
+        ? {}
+        : { lastReconcileFailureAtUnixMs: this.#lastReconcileFailureAtUnixMs }),
+    });
   }
 
   registerParameter(
@@ -196,6 +265,7 @@ export class SubscriptionManager {
   async stop(): Promise<void> {
     if (this.#stopped) return;
     this.#stopped = true;
+    this.#state = "stopped";
     for (const stop of [...this.#watcherStops.values()]) stop();
     this.#controller.abort(new DOMException("KMS watches stopped", "AbortError"));
     this.#sessionController?.abort();
@@ -235,11 +305,15 @@ export class SubscriptionManager {
     let attempt = 0;
     while (!this.#controller.signal.aborted) {
       this.#restartRequested = false;
+      this.#state = "connecting";
       try {
         await this.#runSession();
       } catch (error) {
         if (this.#controller.signal.aborted) return;
         if (!this.#restartRequested) {
+          this.#state = "reconnecting";
+          this.#reconnectCount += 1;
+          this.#disconnectedAtUnixMs = Date.now();
           const delay = fullJitterBackoff(attempt++, this.#random);
           this.#host.logger.warn(
             `KMS watch stream ended (${safeError(error)}); reconnecting in ${delay}ms`,
@@ -270,6 +344,8 @@ export class SubscriptionManager {
         lastSeenRevision: this.#lastRevision,
         ackedRevision: 0n,
       });
+      this.#state = "connected";
+      this.#connectedAtUnixMs = Date.now();
       for await (const event of stream) await this.#handleEvent(event, stream.send.bind(stream));
       throw new Error("watch stream ended");
     } finally {
@@ -287,6 +363,7 @@ export class SubscriptionManager {
       ackedRevision: bigint;
     }) => Promise<void>,
   ): Promise<void> {
+    this.#lastEventAtUnixMs = Date.now();
     switch (event.event?.$case) {
       case "snapshot":
         this.#applySnapshot(event.event.value, event.revision);
@@ -432,13 +509,24 @@ export class SubscriptionManager {
     while (!this.#controller.signal.aborted) {
       await this.#sleep(this.#reconcileIntervalMs, this.#controller.signal);
       if (this.#controller.signal.aborted) return;
-      await this.#reconcile().catch((error: unknown) => {
+      this.#lastReconcileAttemptAtUnixMs = Date.now();
+      try {
+        if (await this.#reconcile()) {
+          this.#reconciliation = "healthy";
+          this.#lastReconcileSuccessAtUnixMs = Date.now();
+        } else {
+          this.#reconciliation = "degraded";
+          this.#lastReconcileFailureAtUnixMs = Date.now();
+        }
+      } catch (error) {
+        this.#reconciliation = "degraded";
+        this.#lastReconcileFailureAtUnixMs = Date.now();
         this.#host.logger.warn(`KMS reconciliation failed: ${safeError(error)}`);
-      });
+      }
     }
   }
 
-  async #reconcile(): Promise<void> {
+  async #reconcile(): Promise<boolean> {
     const namespaces = [...this.#namespaces.values()];
     // Capture every previously-present path, not only declarative
     // ParameterValue registrations. Namespace watchers must also receive a
@@ -460,6 +548,7 @@ export class SubscriptionManager {
       if (!ref || !completelyListed.has(namespaceKey(ref.namespace))) continue;
       this.#setValue(path, "", false, 0n, snapshotRevision, true);
     }
+    return completelyListed.size === namespaces.length;
   }
 
   async #reconcileNamespace(

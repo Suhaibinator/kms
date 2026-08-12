@@ -55,6 +55,7 @@ import {
   type WatchCallback,
   type WatchEvent,
   type WatchOptions,
+  type WatchStatus,
 } from "./watch.js";
 
 const DEFAULT_TIMEOUT_MS = 5_000;
@@ -204,6 +205,22 @@ export class KmsClient {
 
   get currentRevision(): bigint {
     return this.#subscriptions?.currentRevision ?? 0n;
+  }
+
+  /** A value-free snapshot of shared watch and reconciliation health. */
+  get watchStatus(): WatchStatus {
+    return (
+      this.#subscriptions?.status ??
+      Object.freeze({
+        state: this.#closed ? "stopped" : "idle",
+        reconciliation: "not_started",
+        currentRevision: 0n,
+        reconnectCount: 0,
+        namespaceCount: 0,
+        watcherCount: 0,
+        parameterHandlerCount: 0,
+      })
+    );
   }
 
   async whoAmI(options: CallOptions = {}): Promise<WhoAmI> {
@@ -959,4 +976,4 @@ class CallbackDispatcher {
   }
 }
 
-export type { WatchCallback, WatchEvent, WatchOptions };
+export type { WatchCallback, WatchEvent, WatchOptions, WatchStatus };

@@ -11,6 +11,15 @@ describe("shared watches", () => {
     const random = vi.spyOn(Math, "random").mockReturnValue(0);
     const transport = new FakeTransport(() => ({ parameters: [], nextPageToken: "" }));
     const client = new KmsClient({ transport, namespace: "prod/api" });
+    expect(client.watchStatus).toEqual({
+      state: "idle",
+      reconciliation: "not_started",
+      currentRevision: 0n,
+      reconnectCount: 0,
+      namespaceCount: 0,
+      watcherCount: 0,
+      parameterHandlerCount: 0,
+    });
     const events: WatchEvent[] = [];
     const second: WatchEvent[] = [];
     const stopA = await client.watch((event) => events.push(event));
@@ -19,6 +28,15 @@ describe("shared watches", () => {
     await waitFor(() => transport.streams.length === 1);
     const stream = transport.streams[0] as FakeDuplex<SubscribeRequest, SubscribeEvent>;
     await waitFor(() => stream.sent.length === 1);
+    expect(client.watchStatus).toMatchObject({
+      state: "connected",
+      reconciliation: "not_started",
+      namespaceCount: 1,
+      watcherCount: 2,
+      reconnectCount: 0,
+      connectedAtUnixMs: expect.any(Number),
+    });
+    expect(Object.isFrozen(client.watchStatus)).toBe(true);
     expect(stream.sent[0]).toMatchObject({
       clientName: expect.any(String),
       namespaces: [{ env: "prod", app: "api" }],
@@ -66,6 +84,10 @@ describe("shared watches", () => {
     await waitFor(() => stream.sent.length === 2);
     expect(stream.sent[1]).toMatchObject({ ackedRevision: 5n });
     expect(client.currentRevision).toBe(5n);
+    expect(client.watchStatus).toMatchObject({
+      currentRevision: 5n,
+      lastEventAtUnixMs: expect.any(Number),
+    });
 
     stream.cancel();
     await waitFor(() => transport.streams.length === 2);
@@ -75,10 +97,20 @@ describe("shared watches", () => {
       namespaces: [{ env: "prod", app: "api" }],
       lastSeenRevision: 5n,
     });
+    expect(client.watchStatus).toMatchObject({
+      state: "connected",
+      reconnectCount: 1,
+      disconnectedAtUnixMs: expect.any(Number),
+    });
 
     stopA();
     stopB();
     await client.close();
+    expect(client.watchStatus).toMatchObject({
+      state: "stopped",
+      watcherCount: 0,
+      currentRevision: 5n,
+    });
     random.mockRestore();
   });
 
@@ -292,11 +324,17 @@ describe("shared watches", () => {
         events.some((event) => event.type === "put" && event.key === "second"),
     );
     phase = "incomplete";
-    await new Promise((resolve) => setTimeout(resolve, 30));
+    await waitFor(() => client.watchStatus.reconciliation === "degraded");
+    expect(client.watchStatus).toMatchObject({
+      lastReconcileAttemptAtUnixMs: expect.any(Number),
+      lastReconcileFailureAtUnixMs: expect.any(Number),
+    });
     expect(events).not.toContainEqual(expect.objectContaining({ type: "delete", key: "second" }));
 
     phase = "deleted";
     await waitFor(() => events.some((event) => event.type === "delete" && event.key === "second"));
+    await waitFor(() => client.watchStatus.reconciliation === "healthy");
+    expect(client.watchStatus.lastReconcileSuccessAtUnixMs).toEqual(expect.any(Number));
 
     stop();
     await client.close();

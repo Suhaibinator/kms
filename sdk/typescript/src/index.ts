@@ -15,7 +15,9 @@ export type {
   WatchCallback,
   WatchEvent,
   WatchOptions,
+  WatchStatus,
 } from "./client.js";
+export type { ReconciliationHealth, WatchConnectionState } from "./watch.js";
 
 export {
   ConfigError,
