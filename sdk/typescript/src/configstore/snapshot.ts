@@ -24,23 +24,22 @@ export class ReleaseIdentity {
   readonly digest: string;
 
   constructor(init: ReleaseIdentityInit = {}) {
+    const version = assertUint64(init.version === undefined ? 0n : init.version, "version");
+    const activationRevision = assertUint64(
+      init.activationRevision === undefined ? 0n : init.activationRevision,
+      "activationRevision",
+    );
+    const schemaVersion = assertUint64(
+      init.schemaVersion === undefined ? 0n : init.schemaVersion,
+      "schemaVersion",
+    );
     this.namespace = init.namespace ?? "";
     this.name = init.name ?? "";
-    this.version = init.version ?? 0n;
-    this.activationRevision = init.activationRevision ?? 0n;
+    this.version = version;
+    this.activationRevision = activationRevision;
     this.schemaId = init.schemaId ?? "";
-    this.schemaVersion = init.schemaVersion ?? 0n;
+    this.schemaVersion = schemaVersion;
     this.digest = init.digest ?? "";
-    if (
-      this.version < 0n ||
-      this.version > UINT64_MAX ||
-      this.activationRevision < 0n ||
-      this.activationRevision > UINT64_MAX ||
-      this.schemaVersion < 0n ||
-      this.schemaVersion > UINT64_MAX
-    ) {
-      throw new RangeError("configstore: release identity fields must be in the uint64 range");
-    }
     Object.freeze(this);
   }
 
@@ -89,6 +88,16 @@ export class ReleaseIdentity {
   dedupeKey(): string {
     return `${this.namespace}\0${this.name}\0${this.version}\0${this.activationRevision}\0${this.digest}`;
   }
+}
+
+function assertUint64(value: unknown, field: string): bigint {
+  if (typeof value !== "bigint") {
+    throw new TypeError(`configstore: release identity ${field} must be a bigint`);
+  }
+  if (value < 0n || value > UINT64_MAX) {
+    throw new RangeError(`configstore: release identity ${field} must be in the uint64 range`);
+  }
+  return value;
 }
 
 /**

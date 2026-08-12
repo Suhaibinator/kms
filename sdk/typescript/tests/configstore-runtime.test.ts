@@ -105,6 +105,30 @@ describe("configstore defensive values and reports", () => {
     expect(snapshot.release).toBe(identity);
   });
 
+  it("requires exact uint64 bigint release identity fields at runtime", () => {
+    const maximum = 18_446_744_073_709_551_615n;
+    expect(
+      new ReleaseIdentity({
+        version: maximum,
+        activationRevision: maximum,
+        schemaVersion: maximum,
+      }),
+    ).toMatchObject({
+      version: maximum,
+      activationRevision: maximum,
+      schemaVersion: maximum,
+    });
+
+    for (const field of ["version", "activationRevision", "schemaVersion"] as const) {
+      for (const value of [1, "1", null]) {
+        expect(() => new ReleaseIdentity({ [field]: value } as never)).toThrow(TypeError);
+      }
+      for (const value of [-1n, maximum + 1n]) {
+        expect(() => new ReleaseIdentity({ [field]: value })).toThrow(RangeError);
+      }
+    }
+  });
+
   it("deeply clones mismatch fields and redacts an entire secret-bearing value", () => {
     const expected = { values: [1, 2], exact: 9_007_199_254_740_993n };
     const report = new DefaultMismatchReport(
