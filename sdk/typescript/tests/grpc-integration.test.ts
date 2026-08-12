@@ -12,17 +12,34 @@ import {
   AdminServiceService,
   ConfigurationRelease,
   ConfigurationReleaseServiceService,
+  type DeleteParameterRequest,
+  type DeleteParameterResponse,
+  type DeleteSecretRequest,
+  type DeleteSecretResponse,
+  type DestroySecretVersionRequest,
+  type DestroySecretVersionResponse,
+  type DisableSecretRequest,
+  type DisableSecretResponse,
   type GetActiveReleaseRequest,
   type GetActiveReleaseResponse,
+  type GetParameterMetadataRequest,
+  type GetParameterMetadataResponse,
   type GetParameterRequest,
   type GetParameterResponse,
+  type GetSecretMetadataRequest,
+  type GetSecretMetadataResponse,
   type GetSecretRequest,
   type GetSecretResponse,
   type ListParametersRequest,
   type ListParametersResponse,
+  type ListSecretsRequest,
+  type ListSecretsResponse,
   ParameterServiceService,
+  type PromoteSecretVersionRequest,
+  type PromoteSecretVersionResponse,
   type PutParameterRequest,
   type PutParameterResponse,
+  type SecretMetadata,
   SecretServiceService,
   type SubscribeEvent,
   type SubscribeRequest,
@@ -235,6 +252,334 @@ describe("protocol-faithful gRPC integration", () => {
       await shutdown(server);
     }
   }, 15_000);
+
+  it("maps metadata and lifecycle mutations without losing bigint precision or exposing plaintext", async () => {
+    const firstExactInteger = 9_007_199_254_740_993n;
+    const parameterMetadataRequests: GetParameterMetadataRequest[] = [];
+    const deleteParameterRequests: DeleteParameterRequest[] = [];
+    const listSecretsRequests: ListSecretsRequest[] = [];
+    const secretMetadataRequests: GetSecretMetadataRequest[] = [];
+    const deleteSecretRequests: DeleteSecretRequest[] = [];
+    const disableSecretRequests: DisableSecretRequest[] = [];
+    const destroySecretRequests: DestroySecretVersionRequest[] = [];
+    const promoteSecretRequests: PromoteSecretVersionRequest[] = [];
+    const observedMetadata: Array<{
+      readonly rpc: string;
+      readonly authorization: readonly unknown[];
+      readonly secretToken: readonly unknown[];
+    }> = [];
+    const observeMetadata = (
+      rpc: string,
+      call: { readonly metadata: { get(name: string): unknown[] } },
+    ): void => {
+      observedMetadata.push({
+        rpc,
+        authorization: call.metadata.get("authorization"),
+        secretToken: call.metadata.get("x-kms-secret-token"),
+      });
+    };
+
+    const parameterMetadata: GetParameterMetadataResponse = {
+      ref: { namespace, key: "settings" },
+      contentType: "application/json",
+      metadataJson: '{"owner":"integration"}',
+      createdAtUnixMs: firstExactInteger,
+      updatedAtUnixMs: firstExactInteger + 1n,
+      labels: { current: firstExactInteger + 2n },
+      versions: [
+        {
+          version: firstExactInteger + 2n,
+          contentType: "application/json",
+          state: "enabled",
+          createdBy: "integration",
+          createdAtUnixMs: firstExactInteger + 3n,
+          metadataJson: '{"revision":"exact"}',
+        },
+      ],
+    };
+    const secretMetadata = wireSecretMetadata("password", firstExactInteger + 10n);
+    const server = new Server();
+
+    const getParameterMetadata: handleUnaryCall<
+      GetParameterMetadataRequest,
+      GetParameterMetadataResponse
+    > = (call, callback) => {
+      parameterMetadataRequests.push(call.request);
+      observeMetadata("getParameterMetadata", call);
+      callback(null, parameterMetadata);
+    };
+    const deleteParameter: handleUnaryCall<DeleteParameterRequest, DeleteParameterResponse> = (
+      call,
+      callback,
+    ) => {
+      deleteParameterRequests.push(call.request);
+      observeMetadata("deleteParameter", call);
+      callback(null, { revision: firstExactInteger + 4n });
+    };
+    server.addService(ParameterServiceService, {
+      getParameterMetadata,
+      deleteParameter,
+    } as UntypedServiceImplementation);
+
+    const listSecrets: handleUnaryCall<ListSecretsRequest, ListSecretsResponse> = (
+      call,
+      callback,
+    ) => {
+      listSecretsRequests.push(call.request);
+      observeMetadata("listSecrets", call);
+      callback(null, { secrets: [secretMetadata], nextPageToken: "next-secret-page" });
+    };
+    const getSecretMetadata: handleUnaryCall<
+      GetSecretMetadataRequest,
+      GetSecretMetadataResponse
+    > = (call, callback) => {
+      secretMetadataRequests.push(call.request);
+      observeMetadata("getSecretMetadata", call);
+      callback(null, { secret: secretMetadata });
+    };
+    const deleteSecret: handleUnaryCall<DeleteSecretRequest, DeleteSecretResponse> = (
+      call,
+      callback,
+    ) => {
+      deleteSecretRequests.push(call.request);
+      observeMetadata("deleteSecret", call);
+      callback(null, { revision: firstExactInteger + 20n });
+    };
+    let disableResponse = 0n;
+    const disableSecret: handleUnaryCall<DisableSecretRequest, DisableSecretResponse> = (
+      call,
+      callback,
+    ) => {
+      disableSecretRequests.push(call.request);
+      observeMetadata("disableSecret", call);
+      disableResponse += 1n;
+      callback(null, { revision: firstExactInteger + 20n + disableResponse });
+    };
+    const destroySecretVersion: handleUnaryCall<
+      DestroySecretVersionRequest,
+      DestroySecretVersionResponse
+    > = (call, callback) => {
+      destroySecretRequests.push(call.request);
+      observeMetadata("destroySecretVersion", call);
+      callback(null, { revision: firstExactInteger + 23n });
+    };
+    const promoteSecretVersion: handleUnaryCall<
+      PromoteSecretVersionRequest,
+      PromoteSecretVersionResponse
+    > = (call, callback) => {
+      promoteSecretRequests.push(call.request);
+      observeMetadata("promoteSecretVersion", call);
+      callback(null, {
+        currentVersion: call.request.version,
+        previousVersion: firstExactInteger + 10n,
+        revision: firstExactInteger + 24n,
+      });
+    };
+    server.addService(SecretServiceService, {
+      listSecrets,
+      getSecretMetadata,
+      deleteSecret,
+      disableSecret,
+      destroySecretVersion,
+      promoteSecretVersion,
+    } as UntypedServiceImplementation);
+
+    const port = await bind(server);
+    const client = new KmsClient({
+      endpoint: `127.0.0.1:${port}`,
+      namespace: "prod/api",
+      token: "integration-token",
+      insecure: true,
+      timeoutMs: 2_000,
+    });
+
+    try {
+      const metadata = await client.getParameterMetadata("settings");
+      expect(metadata).toEqual({
+        ref: { namespace, key: "settings" },
+        contentType: "application/json",
+        metadataJson: '{"owner":"integration"}',
+        createdAtUnixMs: firstExactInteger,
+        updatedAtUnixMs: firstExactInteger + 1n,
+        labels: { current: firstExactInteger + 2n },
+        versions: [
+          {
+            version: firstExactInteger + 2n,
+            contentType: "application/json",
+            state: "enabled",
+            createdBy: "integration",
+            createdAtUnixMs: firstExactInteger + 3n,
+            metadataJson: '{"revision":"exact"}',
+          },
+        ],
+      });
+      expect(Object.isFrozen(metadata)).toBe(true);
+      expect(Object.isFrozen(metadata.ref)).toBe(true);
+      expect(Object.isFrozen(metadata.ref.namespace)).toBe(true);
+      expect(Object.isFrozen(metadata.labels)).toBe(true);
+      expect(Object.isFrozen(metadata.versions)).toBe(true);
+      expect(Object.isFrozen(metadata.versions[0])).toBe(true);
+      await expect(client.deleteParameter("obsolete")).resolves.toBe(firstExactInteger + 4n);
+
+      const secrets = await client.listSecrets("prod/api", {
+        keyPrefix: "pass",
+        pageSize: 17,
+        pageToken: "secret-page",
+      });
+      expect(secrets).toEqual({
+        items: [
+          {
+            env: "prod",
+            app: "api",
+            key: "password",
+            contentType: "application/octet-stream",
+            clientBound: true,
+            hasAccessToken: true,
+            metadataJson: '{"classification":"metadata-only"}',
+            createdAtUnixMs: firstExactInteger + 10n,
+            updatedAtUnixMs: firstExactInteger + 11n,
+            namespace: "prod/api",
+            path: "/prod/api/password",
+            labels: { current: firstExactInteger + 10n },
+            versions: [
+              {
+                version: firstExactInteger + 10n,
+                state: "enabled",
+                createdBy: "integration",
+                createdAtUnixMs: firstExactInteger + 11n,
+                destroyedAtUnixMs: 0n,
+                expiresAtUnixMs: firstExactInteger + 12n,
+                metadataJson: '{"source":"loopback"}',
+              },
+            ],
+          },
+        ],
+        nextPageToken: "next-secret-page",
+      });
+      const listedSecret = secrets.items[0];
+      expect(listedSecret).toBeDefined();
+      expect(Object.isFrozen(secrets)).toBe(true);
+      expect(Object.isFrozen(secrets.items)).toBe(true);
+      expect(Object.isFrozen(listedSecret)).toBe(true);
+      expect(Object.isFrozen(listedSecret?.labels)).toBe(true);
+      expect(Object.isFrozen(listedSecret?.versions)).toBe(true);
+      expect(Object.isFrozen(listedSecret?.versions[0])).toBe(true);
+      expect(listedSecret).not.toHaveProperty("value");
+      expect(listedSecret).not.toHaveProperty("accessToken");
+      expect(listedSecret?.versions[0]).not.toHaveProperty("value");
+
+      const fetchedMetadata = await client.getSecretMetadata("password");
+      expect(fetchedMetadata).toEqual(listedSecret);
+      expect(fetchedMetadata).not.toBe(listedSecret);
+      expect(Object.isFrozen(fetchedMetadata)).toBe(true);
+      expect(Object.isFrozen(fetchedMetadata.labels)).toBe(true);
+      expect(Object.isFrozen(fetchedMetadata.versions)).toBe(true);
+      expect(Object.isFrozen(fetchedMetadata.versions[0])).toBe(true);
+      expect(fetchedMetadata).not.toHaveProperty("value");
+      expect(fetchedMetadata).not.toHaveProperty("accessToken");
+      await expect(client.deleteSecret("retired")).resolves.toBe(firstExactInteger + 20n);
+      await expect(
+        client.setSecretEnabled("password", false, {
+          version: firstExactInteger + 10n,
+          secretToken: "disable-token",
+        }),
+      ).resolves.toBe(firstExactInteger + 21n);
+      await expect(
+        client.setSecretEnabled("password", true, { secretToken: "enable-token" }),
+      ).resolves.toBe(firstExactInteger + 22n);
+      await expect(
+        client.destroySecretVersion("password", firstExactInteger + 10n, {
+          secretToken: "destroy-token",
+        }),
+      ).resolves.toBe(firstExactInteger + 23n);
+      const promoted = await client.promoteSecretVersion("password", firstExactInteger + 12n, {
+        secretToken: "promote-token",
+      });
+      expect(promoted).toEqual({
+        currentVersion: firstExactInteger + 12n,
+        previousVersion: firstExactInteger + 10n,
+        revision: firstExactInteger + 24n,
+      });
+      expect(Object.isFrozen(promoted)).toBe(true);
+
+      expect(parameterMetadataRequests).toEqual([{ ref: { namespace, key: "settings" } }]);
+      expect(deleteParameterRequests).toEqual([{ ref: { namespace, key: "obsolete" } }]);
+      expect(listSecretsRequests).toEqual([
+        {
+          namespace,
+          keyPrefix: "pass",
+          pageSize: 17,
+          pageToken: "secret-page",
+        },
+      ]);
+      expect(secretMetadataRequests).toEqual([{ ref: { namespace, key: "password" } }]);
+      expect(deleteSecretRequests).toEqual([{ ref: { namespace, key: "retired" } }]);
+      expect(disableSecretRequests).toEqual([
+        {
+          ref: { namespace, key: "password" },
+          version: firstExactInteger + 10n,
+          enable: false,
+        },
+        { ref: { namespace, key: "password" }, version: 0n, enable: true },
+      ]);
+      expect(destroySecretRequests).toEqual([
+        { ref: { namespace, key: "password" }, version: firstExactInteger + 10n },
+      ]);
+      expect(promoteSecretRequests).toEqual([
+        { ref: { namespace, key: "password" }, version: firstExactInteger + 12n },
+      ]);
+      expect(observedMetadata).toEqual([
+        {
+          rpc: "getParameterMetadata",
+          authorization: ["Bearer integration-token"],
+          secretToken: [],
+        },
+        {
+          rpc: "deleteParameter",
+          authorization: ["Bearer integration-token"],
+          secretToken: [],
+        },
+        {
+          rpc: "listSecrets",
+          authorization: ["Bearer integration-token"],
+          secretToken: [],
+        },
+        {
+          rpc: "getSecretMetadata",
+          authorization: ["Bearer integration-token"],
+          secretToken: [],
+        },
+        {
+          rpc: "deleteSecret",
+          authorization: ["Bearer integration-token"],
+          secretToken: [],
+        },
+        {
+          rpc: "disableSecret",
+          authorization: ["Bearer integration-token"],
+          secretToken: ["disable-token"],
+        },
+        {
+          rpc: "disableSecret",
+          authorization: ["Bearer integration-token"],
+          secretToken: ["enable-token"],
+        },
+        {
+          rpc: "destroySecretVersion",
+          authorization: ["Bearer integration-token"],
+          secretToken: ["destroy-token"],
+        },
+        {
+          rpc: "promoteSecretVersion",
+          authorization: ["Bearer integration-token"],
+          secretToken: ["promote-token"],
+        },
+      ]);
+    } finally {
+      await client.close();
+      await shutdown(server);
+    }
+  }, 15_000);
 });
 
 function wireParameter(key: string, value: string, version: bigint) {
@@ -247,6 +592,30 @@ function wireParameter(key: string, value: string, version: bigint) {
     createdBy: "integration",
     createdAtUnixMs: 1n,
     labels: { current: version },
+  };
+}
+
+function wireSecretMetadata(key: string, version: bigint): SecretMetadata {
+  return {
+    ref: { namespace, key },
+    contentType: "application/octet-stream",
+    clientBound: true,
+    hasAccessToken: true,
+    metadataJson: '{"classification":"metadata-only"}',
+    createdAtUnixMs: version,
+    updatedAtUnixMs: version + 1n,
+    labels: { current: version },
+    versions: [
+      {
+        version,
+        state: "enabled",
+        createdBy: "integration",
+        createdAtUnixMs: version + 1n,
+        destroyedAtUnixMs: 0n,
+        expiresAtUnixMs: version + 2n,
+        metadataJson: '{"source":"loopback"}',
+      },
+    ],
   };
 }
 
