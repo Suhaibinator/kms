@@ -6,15 +6,15 @@ const inspectCustom = Symbol.for("nodejs.util.inspect.custom");
 
 export interface ValueReadOptions extends VersionRef {
   readonly signal?: AbortSignal;
-  /** Absolute deadline (`Date`) or transport-specific millisecond value. */
-  readonly deadline?: Date | number;
+  /** Absolute RPC deadline. */
+  readonly deadline?: Date;
 }
 
 export interface SecretReadOptions extends ValueReadOptions {
   readonly secretToken?: string;
 }
 
-export type ParameterUpdateHandler = (value: string, present?: boolean) => void;
+export type ParameterUpdateHandler = (value: string, present: boolean) => void;
 export type ChangeCallback = (oldValue: string, newValue: string) => void;
 
 export type SubscriptionHandle =
@@ -49,12 +49,14 @@ export interface ValueResolver {
 
   /** Internal shared-watch integration implemented by the first-party Client. */
   _resolveRef?(key: string): ResourceRef | Promise<ResourceRef>;
+  resolveResourceRef?(key: string, signal?: AbortSignal): ResourceRef | Promise<ResourceRef>;
   _registerParameter?(
     ref: ResourceRef,
     initialValue: string,
     handler: ParameterUpdateHandler,
   ): SubscriptionHandle | Promise<SubscriptionHandle>;
   _enqueueCallback?(callback: () => void): void;
+  _dispatch?(path: string, callback: () => unknown): void;
   _log?(message: string): void;
 }
 
@@ -211,7 +213,7 @@ export class SecretValue {
           ...(this.#token.length === 0 ? {} : { secretToken: this.#token }),
         });
         if (!(secret instanceof Secret)) {
-          throw new TypeError("ValueResolver.getSecret() must return a Secret");
+          throw new ConfigError("ValueResolver.getSecret() must return a Secret");
         }
         this.#resolved = secret.clone();
         return;
@@ -288,7 +290,7 @@ export class ParameterValue {
   readonly #envVar: string;
   readonly #default: string;
   readonly #static: boolean;
-  readonly #callbacks = new Set<ChangeCallback>();
+  readonly #callbacks: ChangeCallback[] = [];
   #value = "";
   #initialized = false;
   #pinned = false;
@@ -377,7 +379,7 @@ export class ParameterValue {
       try {
         value = await client.getParameter(this.#key, readOptions(options));
         if (typeof value !== "string") {
-          throw new TypeError("ValueResolver.getParameter() must return a string");
+          throw new ConfigError("ValueResolver.getParameter() must return a string");
         }
       } catch (error) {
         if (!hasDefault(this.#default) || !fallbackAllowed(client, error)) {
@@ -398,7 +400,7 @@ export class ParameterValue {
     this.#initialized = true;
     if (!this.#static && hasStoreRef) {
       try {
-        this.#subscription = await this.#register(client, value);
+        this.#subscription = await this.#register(client, value, options.signal);
       } catch (error) {
         this.#initialized = false;
         this.#value = "";
@@ -407,11 +409,17 @@ export class ParameterValue {
     }
   }
 
-  async #register(client: ValueResolver, initialValue: string): Promise<SubscriptionHandle> {
+  async #register(
+    client: ValueResolver,
+    initialValue: string,
+    signal?: AbortSignal,
+  ): Promise<SubscriptionHandle> {
     if (client._registerParameter !== undefined) {
       let ref: ResourceRef | undefined;
       if (client._resolveRef !== undefined) ref = await client._resolveRef(this.#key);
-      else if (this.#key.startsWith("/")) ref = splitDisplayPath(this.#key);
+      else if (client.resolveResourceRef !== undefined) {
+        ref = await client.resolveResourceRef(this.#key, signal);
+      } else if (this.#key.startsWith("/")) ref = splitDisplayPath(this.#key);
       if (ref !== undefined) {
         return client._registerParameter(ref, initialValue, (value, present = true) => {
           this.applyUpdate(value, present);
@@ -442,14 +450,21 @@ export class ParameterValue {
     for (const callback of [...this.#callbacks]) {
       const invoke = () => callback(oldValue, newValue);
       if (this.#client?._enqueueCallback !== undefined) this.#client._enqueueCallback(invoke);
+      else if (this.#client?._dispatch !== undefined) this.#client._dispatch(this.#key, invoke);
       else queueMicrotask(invoke);
     }
   }
 
   /** Register a callback and return a local callback-unsubscribe function. */
   onChange(callback: ChangeCallback): () => void {
-    this.#callbacks.add(callback);
-    return () => this.#callbacks.delete(callback);
+    this.#callbacks.push(callback);
+    let active = true;
+    return () => {
+      if (!active) return;
+      active = false;
+      const index = this.#callbacks.indexOf(callback);
+      if (index >= 0) this.#callbacks.splice(index, 1);
+    };
   }
 
   /** Stop this field's subscription when it owns an explicit handle. */

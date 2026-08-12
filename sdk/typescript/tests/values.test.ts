@@ -106,14 +106,15 @@ describe("SecretValue", () => {
     const value = new SecretValue({ key: "secret/key", token: "token" });
     const controller = new AbortController();
 
-    await value.init(client, { signal: controller.signal, deadline: 123 });
+    const deadline = new Date(Date.now() + 1_000);
+    await value.init(client, { signal: controller.signal, deadline });
 
     expect(value.text()).toBe("from-store");
     expect(value.bytes()).toEqual(new TextEncoder().encode("from-store"));
     expect(value.secret()).not.toBe(client.secrets.get("secret/key"));
     expect(client.secretCalls[0]).toEqual({
       key: "secret/key",
-      options: { signal: controller.signal, deadline: 123, secretToken: "token" },
+      options: { signal: controller.signal, deadline, secretToken: "token" },
     });
   });
 
@@ -209,6 +210,21 @@ describe("ParameterValue", () => {
     client.update("rate", "deleted-value-is-ignored", false);
     expect(value.get()).toBe("5");
     expect(changes.at(-1)).toEqual(["20", "5"]);
+  });
+
+  it("preserves duplicate callback registrations like the Go SDK", async () => {
+    const client = new FakeResolver();
+    client.parameters.set("rate", "10");
+    const value = new ParameterValue("rate");
+    const callback = vi.fn();
+    const removeFirst = value.onChange(callback);
+    value.onChange(callback);
+    await value.init(client);
+    client.update("rate", "20");
+    expect(callback).toHaveBeenCalledTimes(2);
+    removeFirst();
+    client.update("rate", "30");
+    expect(callback).toHaveBeenCalledTimes(3);
   });
 
   it("retains last-known-good after deletion when no default exists", async () => {

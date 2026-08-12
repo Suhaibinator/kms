@@ -61,6 +61,9 @@ describe("version references", () => {
 
   it("rejects negative and runtime-number versions", () => {
     expect(() => normalizeVersionRef({ version: -1n })).toThrow(ConfigError);
+    expect(() => normalizeVersionRef({ version: 18_446_744_073_709_551_616n })).toThrow(
+      ConfigError,
+    );
     expect(() => normalizeVersionRef({ version: 1 as unknown as bigint })).toThrow(ConfigError);
   });
 });

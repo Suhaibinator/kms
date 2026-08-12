@@ -19,6 +19,7 @@ export interface VersionRef {
 }
 
 export const CURRENT_VERSION: Readonly<VersionRef> = Object.freeze({});
+export const UINT64_MAX = (1n << 64n) - 1n;
 
 function immutableNamespace(env: string, app: string): NamespaceRef {
   return Object.freeze({ env, app });
@@ -106,8 +107,8 @@ export function normalizeVersionRef(selector: VersionRef = CURRENT_VERSION): {
   readonly label: string;
 } {
   const version = selector.version ?? 0n;
-  if (typeof version !== "bigint" || version < 0n) {
-    throw new ConfigError("version must be a non-negative bigint");
+  if (typeof version !== "bigint" || version < 0n || version > UINT64_MAX) {
+    throw new ConfigError("version must be a bigint in the uint64 range");
   }
   return Object.freeze({
     version,

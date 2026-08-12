@@ -3,6 +3,7 @@ export const REDACTED = "[REDACTED]";
 
 const inspectCustom = Symbol.for("nodejs.util.inspect.custom");
 const encoder = new TextEncoder();
+const UINT64_MAX = (1n << 64n) - 1n;
 
 export interface SecretMetadata {
   readonly path?: string;
@@ -26,8 +27,8 @@ export class Secret {
     this.#value = typeof value === "string" ? encoder.encode(value) : Uint8Array.from(value);
     this.#path = metadata.path ?? "";
     this.#version = metadata.version ?? 0n;
-    if (typeof this.#version !== "bigint" || this.#version < 0n) {
-      throw new TypeError("secret version must be a non-negative bigint");
+    if (typeof this.#version !== "bigint" || this.#version < 0n || this.#version > UINT64_MAX) {
+      throw new TypeError("secret version must be a bigint in the uint64 range");
     }
     this.#contentType = metadata.contentType ?? "";
     Object.freeze(this);

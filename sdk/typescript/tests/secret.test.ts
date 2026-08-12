@@ -53,4 +53,10 @@ describe("Secret", () => {
     expect(clone.isEmpty).toBe(false);
     expect(clone.length).toBe(6);
   });
+
+  it("rejects values outside uint64 version range", () => {
+    expect(() => new Secret("secret", { version: -1n })).toThrow(TypeError);
+    expect(() => new Secret("secret", { version: 18_446_744_073_709_551_616n })).toThrow(TypeError);
+    expect(() => new Secret("secret", { version: 1 as unknown as bigint })).toThrow(TypeError);
+  });
 });
