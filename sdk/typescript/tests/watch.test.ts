@@ -454,10 +454,8 @@ describe("shared watches", () => {
 
   it("discards an in-flight reconciliation page after its last scope owner leaves", async () => {
     let finishList!: (value: {
-      items: readonly {
-        env: string;
-        app: string;
-        key: string;
+      parameters: {
+        ref: { namespace: { env: string; app: string }; key: string };
         value: string;
         contentType: string;
         version: bigint;
@@ -465,8 +463,6 @@ describe("shared watches", () => {
         createdBy: string;
         createdAtUnixMs: bigint;
         labels: Readonly<Record<string, bigint>>;
-        namespace: string;
-        path: string;
       }[];
       nextPageToken: string;
     }) => void;
@@ -495,21 +491,17 @@ describe("shared watches", () => {
 
     stop();
     finishList({
-      items: [
-        Object.freeze({
-          env: "prod",
-          app: "api",
-          key: "late",
+      parameters: [
+        {
+          ref: { namespace: { env: "prod", app: "api" }, key: "late" },
           value: "stale",
           contentType: "string",
           version: 1n,
           metadataJson: "{}",
           createdBy: "test",
           createdAtUnixMs: 0n,
-          labels: Object.freeze({}),
-          namespace: "prod/api",
-          path: "/prod/api/late",
-        }),
+          labels: {},
+        },
       ],
       nextPageToken: "",
     });
@@ -523,6 +515,58 @@ describe("shared watches", () => {
       watcherCount: 0,
     });
     expect(callback).not.toHaveBeenCalled();
+    await manager.stop();
+    await client.close();
+  });
+
+  it("does not apply an old reconcile absence set after namespace remove and re-add", async () => {
+    let finishList!: (value: { parameters: []; nextPageToken: string }) => void;
+    const listPending = new Promise<Parameters<typeof finishList>[0]>((resolve) => {
+      finishList = resolve;
+    });
+    const transport = new FakeTransport(() => listPending);
+    const client = new KmsClient({ transport, logger: { warn: vi.fn() } });
+    const sleeps: Array<() => void> = [];
+    const manager = new SubscriptionManager(client, {
+      reconcileIntervalMs: 60_000,
+      sleep: (_milliseconds, signal) =>
+        new Promise<void>((resolve, reject) => {
+          if (signal.aborted) reject(signal.reason);
+          else {
+            sleeps.push(resolve);
+            signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+          }
+        }),
+    });
+    const ref = resolveRef("flag", "prod/api");
+    const oldHandler = vi.fn();
+    const newHandler = vi.fn();
+    const stopOld = manager.registerParameter(ref, "old", oldHandler);
+    await waitFor(() => sleeps.length >= 1);
+    sleeps.shift()?.();
+    await waitFor(() => transport.calls.some((call) => call.path.endsWith("/ListParameters")));
+
+    let stopNew: (() => void) | undefined;
+    finishList({ parameters: [], nextPageToken: "" });
+    queueMicrotask(() => {
+      stopOld();
+      stopNew = manager.registerParameter(ref, "new", newHandler);
+    });
+    await waitFor(() => stopNew !== undefined);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    expect(oldHandler).not.toHaveBeenCalled();
+    expect(newHandler).not.toHaveBeenCalled();
+    expect(manager.status).toMatchObject({
+      namespaceCount: 1,
+      trackedParameterCount: 1,
+      parameterHandlerCount: 1,
+    });
+    const probe = vi.fn();
+    const stopProbe = manager.registerParameter(ref, "ignored", probe);
+    expect(probe).toHaveBeenCalledWith("new", true);
+    stopProbe();
+    stopNew?.();
     await manager.stop();
     await client.close();
   });

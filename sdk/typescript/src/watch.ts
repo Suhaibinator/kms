@@ -681,10 +681,26 @@ export class SubscriptionManager {
         completelyListed.add(namespaceKey(namespace));
       }
     }
+    // The final page guard in #reconcileNamespace cannot protect the gap
+    // between its Promise resolving and this continuation. A remove/re-add of
+    // the same namespace in that gap is an ABA scope change: never apply the
+    // old absence set to state seeded by the new owner.
+    if (
+      namespaceGeneration !== this.#namespaceGeneration ||
+      snapshotRevision !== this.#lastRevision
+    ) {
+      return false;
+    }
     for (const path of knownPaths) {
       if (present.has(path)) continue;
       const ref = refOf(path);
-      if (!ref || !completelyListed.has(namespaceKey(ref.namespace))) continue;
+      if (
+        !ref ||
+        !this.#namespaces.has(namespaceKey(ref.namespace)) ||
+        !completelyListed.has(namespaceKey(ref.namespace))
+      ) {
+        continue;
+      }
       this.#setValue(path, "", false, 0n, snapshotRevision, true);
     }
     return (
