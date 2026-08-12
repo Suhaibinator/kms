@@ -55,11 +55,14 @@ source of truth for exact inference.
 | `CallOptions`, `GetOptions`, `ListOptions`, `PutParameterOptions`, `PutSecretOptions` | Types | Per-operation cancellation/deadline, selector, pagination, content metadata, and secret-specific options. |
 | `ParameterMetadata`, `Parameter`, `SecretInfo`, `SecretVersion`, `PutResult`, `PutSecretResult`, `Page<T>`, `WhoAmI` | Types | Immutable public response models; every protobuf integer/timestamp/revision field is `bigint`. |
 | `WatchOptions`, `WatchCallback`, `WatchEvent` | Types | Abortable watch registration and the discriminated `put`/`delete`/`secret_change` event union. |
+| `WatchStatus`, `WatchConnectionState`, `ReconciliationHealth` | Types | Frozen, value-free point-in-time watch health: connection/reconciliation state, exact revision, reconnect/scope counts, and optional lifecycle timestamps. |
 | `ClientReleaseLoaderOptions` | Type | Select a release and control identity, reconciliation, fetch concurrency, secret-token lookup, and manifest validation. |
 
 `KmsClient` exposes the readonly properties `clientName`, `timeoutMs`,
-`fallbackToDefaultsOnError`, `logger`, `closed`, and `currentRevision`. Its
-stable method families are:
+`fallbackToDefaultsOnError`, `logger`, `closed`, `currentRevision`, and
+`watchStatus`. The last is safe for health/metrics endpoints and returns a new
+immutable snapshot rather than a live mutable object. Its stable method
+families are:
 
 | Methods | Result and contract |
 |---|---|
@@ -113,7 +116,8 @@ stable method families are:
 | `formatRevision`, `parseRevision`, `formatPublicConfigEtag` | Functions | Lossless `bigint`/canonical-decimal conversion and strong revision ETag formatting. |
 | `ValidationSuccess`, `ValidationFailure`, `ValidationDecision`, `AuthoritativeValidator` | Types | Application validation callback contract against one captured policy. |
 | `PolicyValidationResult` | Type | `success`, `validation_failed`, `policy_changed`, or `unavailable` discriminated result. |
-| `CreatePolicyPublisherOptions`, `PolicyPublisher` | Types | Publisher construction and `read`, `readWire`, `etag`, and `validate` operations. |
+| `PolicyPublisherEvent`, `PolicyPublisherObserver` | Types | Frozen, value-free publication/unavailability/stale-rejection/validation events with decimal revisions and observation timestamps. Async or throwing observers are isolated from policy behavior. |
+| `CreatePolicyPublisherOptions`, `PolicyPublisher` | Types | Publisher construction (including optional `onEvent`) and `read`, `readWire`, `etag`, and `validate` operations. |
 | `createPolicyPublisher(options)` | Function | Couple one atomic source, allowlisted projection, and authoritative validator. |
 
 ### Package root: releases
@@ -211,10 +215,11 @@ An unavailable source returns `unavailable`.
 |---|---|---|
 | `runtime` | Constant `"nodejs"` | Re-export from a Route module to declare the required Next runtime. |
 | `MAX_PRIVATE_PUBLIC_CONFIG_AGE_SECONDS` | Constant `300` | Hard upper bound accepted for private browser-cache age. |
-| `createNextKms(options)`, `NextKms`, `CreateNextKmsOptions`, `NextKmsResource` | Function and types | Own a lazily/eagerly initialized process resource, its atomic snapshot source, projection, validator, and optional cleanup. |
+| `createNextKms(options)`, `NextKms`, `CreateNextKmsOptions`, `NextKmsResource` | Function and types | Own a lazily/eagerly initialized process resource, its atomic snapshot source, projection, validator, optional cleanup, and optional publisher observer. |
 | `NextKmsClosedError` | Error class | Signals any start/read/validation operation attempted after permanent close. |
 | `createPublicConfigGET(provider, options?)`, `PublicConfigGET`, `PublicConfigProvider` | Function and types | Adapt a safe public-config provider to a Node Route Handler. |
 | `PublicConfigCachePolicy`, `PublicConfigRouteOptions` | Types | Select `no-store` or bounded private-only browser caching. |
+| `PublicConfigRouteEvent`, `PublicConfigRouteObserver` | Types | Frozen, value-free `served`, `not_modified`, or `unavailable` HTTP event with observation time/duration and a decimal revision where available. Throwing/async-rejecting observers are isolated. |
 | `ProcessShutdownOptions` | Type | Select process signals and an error callback for cleanup failures. |
 | `DecimalRevision` | Re-exported type | Canonical decimal `uint64` used at this HTTP boundary. |
 
@@ -234,8 +239,9 @@ termination policy after cleanup.
 | Export | Kind and signature family | Purpose |
 |---|---|---|
 | `usePublicConfig(initial, options?)` | React hook | Hold one last-known-good public generation, refresh conditionally, and install a validated newer `policy_changed` result. |
-| `UsePublicConfigOptions<TConfig>` | Type | Configure endpoint/fetch injection, application shape validation, mount/focus/navigation refresh, and navigation identity. |
+| `UsePublicConfigOptions<TConfig>` | Type | Configure endpoint/fetch injection, application shape validation, mount/focus/navigation refresh, navigation identity, and an optional safe observer. |
 | `UsePublicConfigResult<TConfig>` | Type | Read frozen `config`, exact `revision`, refresh/error state, invoke `refresh`, or apply a structured server result. |
+| `PublicConfigClientEvent`, `PublicConfigClientObserver` | Types | Frozen, value-free refresh success/failure and policy-recovery success/rejection events. Revisions are canonical decimal strings; success events include duration/change metadata where applicable. Observer failures are isolated. |
 
 `@suhaibinator/kms/next/server` begins with `import "server-only"` and rejects
 Edge runtime execution. `createNextKms` accepts one application-owned
@@ -251,6 +257,14 @@ initializer, projection, and validator and returns:
 
 The Route Handler defaults to `Cache-Control: no-store`. The only alternative
 is bounded private browser caching; it never emits shared/CDN caching.
+
+`CreateNextKmsOptions.onPublisherEvent`, `PublicConfigRouteOptions.onEvent`,
+and `UsePublicConfigOptions.onEvent` are independent instrumentation points.
+They receive revision/timestamp metadata but never policy fields, validation
+input/errors, HTTP bodies, secret values, credentials, endpoints, or thrown
+error objects. Their timestamps let an application correlate release
+activation, server publication, and client observation without placing that
+telemetry inside the SDK's trust boundary.
 
 `@suhaibinator/kms/next/client` exports `usePublicConfig(initial, options)`.
 The hook retains a last-known-good projection, conditionally refreshes with an
