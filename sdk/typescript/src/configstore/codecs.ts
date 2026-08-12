@@ -45,6 +45,10 @@ interface ErasedValueCodec {
 }
 
 type IsAny<T> = 0 extends 1 & T ? true : false;
+// Keep emitted declarations consumable by TypeScript 5.2. TypeScript 7's
+// standard library makes Uint8Array generic and otherwise prints the explicit
+// type argument into public declarations, which older compilers cannot parse.
+type CompatibleUint8Array = Uint8Array;
 type NoExtraKeys<Value, Base> = Exclude<keyof Value, keyof Base> extends never ? true : false;
 type VariableArrayBase<T, TArray extends readonly T[]> = TArray extends T[] ? T[] : readonly T[];
 type IsPlainVariableArray<T, TArray extends readonly T[]> =
@@ -268,7 +272,7 @@ export const codecs = Object.freeze({
   ),
 
   /** Canonical standard-base64 bytes. JSON null remains distinct from empty. */
-  bytes: scalarCodec<Uint8Array | null>(
+  bytes: scalarCodec<CompatibleUint8Array | null>(
     "bytes",
     (node, path) => {
       if (node.kind === "null") return null;

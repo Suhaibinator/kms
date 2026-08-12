@@ -369,7 +369,7 @@ from committed output. The library API for custom tooling is available at
 
 The package is ESM-only. Next.js 14 through 16 and React 18 through 19 are the
 optional peer ranges. CI builds isolated, exact Next.js 14/React 18,
-Next.js 15/React 18 and 19, and Next.js 16/React 19 tuples. Generated protobuf
+Next.js 15/React 18 and 19, and Next.js 16/React 18 and 19 tuples. Generated protobuf
 modules are internal and are not a compatibility surface.
 
 The `next/client` hook targets modern browsers with native `bigint`, `fetch`,

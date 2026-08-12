@@ -11,33 +11,34 @@ const sdkDirectory = dirname(fileURLToPath(new URL("../package.json", import.met
 const fixture = resolve(sdkDirectory, "tests/fixtures/next-boundary");
 const nextExecutable = resolve(sdkDirectory, "node_modules/next/dist/bin/next");
 
-await clean();
-const build = await run([nextExecutable, "build", fixture]);
-if (build.code !== 0) {
-  process.stderr.write(build.output);
-  throw new Error("browser fixture failed to build");
-}
-
-const port = await availablePort();
-const server = spawn(process.execPath, [nextExecutable, "start", fixture, "-p", String(port)], {
-  cwd: sdkDirectory,
-  env: { ...process.env, NEXT_TELEMETRY_DISABLED: "1" },
-  stdio: ["ignore", "pipe", "pipe"],
-});
+let server;
 let serverOutput = "";
-server.stdout.setEncoding("utf8");
-server.stderr.setEncoding("utf8");
-server.stdout.on("data", (chunk) => {
-  serverOutput += chunk;
-});
-server.stderr.on("data", (chunk) => {
-  serverOutput += chunk;
-});
-
 let browser;
 try {
+  await clean();
+  const build = await run([nextExecutable, "build", fixture]);
+  if (build.code !== 0) {
+    process.stderr.write(build.output);
+    throw new Error("browser fixture failed to build");
+  }
+
+  const port = await availablePort();
+  server = spawn(process.execPath, [nextExecutable, "start", fixture, "-p", String(port)], {
+    cwd: sdkDirectory,
+    env: { ...process.env, NEXT_TELEMETRY_DISABLED: "1" },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  server.stdout.setEncoding("utf8");
+  server.stderr.setEncoding("utf8");
+  server.stdout.on("data", (chunk) => {
+    serverOutput += chunk;
+  });
+  server.stderr.on("data", (chunk) => {
+    serverOutput += chunk;
+  });
+
   const origin = `http://127.0.0.1:${port}`;
-  await waitForServer(origin);
+  await waitForServer(origin, server);
   browser = await chromium.launch({ headless: true });
   const page = await browser.newPage();
   await page.goto(origin, { waitUntil: "networkidle" });
@@ -67,7 +68,7 @@ try {
   throw error;
 } finally {
   await browser?.close();
-  await stopServer(server);
+  if (server !== undefined) await stopServer(server);
   await clean();
 }
 
@@ -104,11 +105,11 @@ async function availablePort() {
   return address.port;
 }
 
-async function waitForServer(origin) {
+async function waitForServer(origin, child) {
   const deadline = Date.now() + 20_000;
   while (Date.now() < deadline) {
-    if (server.exitCode !== null) {
-      throw new Error(`Next browser server exited early (${server.exitCode})`);
+    if (child.exitCode !== null) {
+      throw new Error(`Next browser server exited early (${child.exitCode})`);
     }
     try {
       const response = await fetch(origin);

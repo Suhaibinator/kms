@@ -31,7 +31,7 @@ and the pinned current compiler. Next.js and React are
 optional peers and are needed only for their respective adapter entry points.
 The peer ranges cover Next.js 14–16 and React 18–19; isolated exact-tuple builds
 qualify Next.js 14/React 18, Next.js 15/React 18 and 19, and Next.js 16/React
-19.
+18 and 19.
 
 Only the entry points in this table are stable. Generated protobuf modules,
 files below `dist/` that are not named by the package export map, and source

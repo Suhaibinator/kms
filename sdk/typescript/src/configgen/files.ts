@@ -12,7 +12,7 @@ export interface OutputPaths {
 }
 
 /** @internal Filesystem-identity guard shared with the public CLI. */
-export interface NamedPath {
+interface NamedPath {
   readonly name: string;
   readonly path: string;
 }
@@ -155,6 +155,7 @@ async function validatedOutputs(
  * entry. Existing symlinks and hardlinks are compared by target identity;
  * missing suffixes are resolved below their deepest canonical existing parent.
  */
+/** @internal */
 export async function assertDistinctPaths(paths: readonly NamedPath[]): Promise<void> {
   const identities = await Promise.all(
     paths.map(async ({ name, path }) => ({

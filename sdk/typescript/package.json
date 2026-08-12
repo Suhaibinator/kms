@@ -85,7 +85,7 @@
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
     "test:types": "node ./node_modules/typescript/bin/tsc -p tests/types/tsconfig.json --noEmit",
-    "test:typescript-min": "node ./node_modules/typescript-5-2/bin/tsc -p tests/package/tsconfig.json --noEmit --pretty false",
+    "test:typescript-min": "node ./scripts/test-typescript-min.mjs",
     "test:next": "node ./scripts/test-next-boundaries.mjs",
     "test:browser": "node ./scripts/test-next-browser.mjs",
     "test:package": "node ./node_modules/typescript/bin/tsc -p tests/package/tsconfig.json --noEmit && npm pack --dry-run --ignore-scripts",
@@ -124,7 +124,6 @@
     "react-dom": "^19.2.8",
     "ts-proto": "^2.12.0",
     "typescript": "^7.0.2",
-    "typescript-5-2": "npm:typescript@5.2.2",
     "vitest": "^4.1.10"
   }
 }
