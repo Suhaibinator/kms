@@ -625,6 +625,11 @@ export class KmsClient {
     options: CallOptions | AbortSignal = {},
   ): Promise<NamespaceRef | undefined> {
     this.#assertOpen();
+    const normalized = isAbortSignal(options) ? { signal: options } : options;
+    // Do not create client-owned discovery work for a caller that can no
+    // longer observe it. In particular, a rejected WhoAmI promise would have
+    // no terminal observer when awaitCaller rejects an already-aborted caller.
+    assertCallerActive(normalized);
     if (this.#configuredNamespace) return this.#configuredNamespace;
     if (this.#discoveredNamespace !== undefined) return this.#discoveredNamespace ?? undefined;
     if (!this.#namespacePromise) {
@@ -642,7 +647,6 @@ export class KmsClient {
           throw error;
         });
     }
-    const normalized = isAbortSignal(options) ? { signal: options } : options;
     return awaitCaller(this.#namespacePromise, normalized);
   }
 
@@ -949,10 +953,12 @@ function isAbortSignal(value: CallOptions | AbortSignal): value is AbortSignal {
 }
 
 function awaitCaller<T>(promise: Promise<T>, options: CallOptions): Promise<T> {
-  const signal = options.signal;
-  if (signal?.aborted) {
-    return Promise.reject(signal.reason ?? new DOMException("Aborted", "AbortError"));
+  try {
+    assertCallerActive(options);
+  } catch (error) {
+    return Promise.reject(error);
   }
+  const signal = options.signal;
   const deadlineMs = options.deadline?.getTime();
   const hasDeadline = deadlineMs !== undefined && Number.isFinite(deadlineMs);
   if (signal === undefined && !hasDeadline) return promise;
@@ -990,6 +996,16 @@ function awaitCaller<T>(promise: Promise<T>, options: CallOptions): Promise<T> {
     void promise.then(succeed, fail);
     if (signal?.aborted) abort();
   });
+}
+
+function assertCallerActive(options: CallOptions): void {
+  if (options.signal?.aborted) {
+    throw options.signal.reason ?? new DOMException("Aborted", "AbortError");
+  }
+  const deadlineMs = options.deadline?.getTime();
+  if (deadlineMs !== undefined && Number.isFinite(deadlineMs) && deadlineMs <= Date.now()) {
+    throw new KmsError("deadline_exceeded", "KMS namespace discovery deadline exceeded");
+  }
 }
 
 function throwMapped(error: unknown): never {

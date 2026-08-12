@@ -172,6 +172,20 @@ describe("KmsClient", () => {
     await client.close();
   });
 
+  it("does not start shared discovery for an already-aborted caller", async () => {
+    const transport = new FakeTransport(() => Promise.reject(new Error("discovery failed")));
+    const client = new KmsClient({ transport });
+    const controller = new AbortController();
+    controller.abort(new DOMException("caller stopped", "AbortError"));
+
+    await expect(
+      client.getParameter("cancelled", { signal: controller.signal }),
+    ).rejects.toMatchObject({ name: "AbortError" });
+    await Promise.resolve();
+    expect(transport.calls).toHaveLength(0);
+    await client.close();
+  });
+
   it("applies an earlier call deadline while waiting for lazy discovery", async () => {
     let finishDiscovery!: () => void;
     const discoveryGate = new Promise<void>((resolve) => {
