@@ -241,6 +241,7 @@ export class KmsClient {
     return this.fetchParameter(ref, normalizeVersionRef(options), options);
   }
 
+  /** @internal Exact-ref fetch used by the release/value runtime. */
   async fetchParameter(
     ref: ResourceRef,
     selector: { readonly version: bigint; readonly label: string },
@@ -276,6 +277,7 @@ export class KmsClient {
     return secret;
   }
 
+  /** @internal Exact-ref fetch used by the release runtime. */
   async fetchSecret(
     ref: ResourceRef,
     selector: { readonly version: bigint; readonly label: string },
@@ -375,6 +377,7 @@ export class KmsClient {
     return this.listParametersInNamespace(ns, options);
   }
 
+  /** @internal Namespace-ref listing used by reconciliation. */
   async listParametersInNamespace(
     namespace: NamespaceRef,
     options: ListOptions = {},
@@ -587,6 +590,7 @@ export class KmsClient {
     return this.#subscriptionManager().watch(parseNamespace(namespace), callback, options.signal);
   }
 
+  /** @internal Resolve a key for declarative value/watch integration. */
   async resolveResourceRef(key: string, signal?: AbortSignal): Promise<ResourceRef> {
     this.#assertOpen();
     if (key.startsWith("/")) return resolveRef(key, undefined);
@@ -594,6 +598,7 @@ export class KmsClient {
     return resolveRef(key, namespace);
   }
 
+  /** @internal Lazy namespace discovery shared by public operations. */
   async discoverNamespace(signal?: AbortSignal): Promise<NamespaceRef | undefined> {
     this.#assertOpen();
     if (this.#configuredNamespace) return this.#configuredNamespace;
@@ -613,6 +618,7 @@ export class KmsClient {
     return this.#namespacePromise;
   }
 
+  /** @internal Require a resolved namespace for a public operation. */
   async requireNamespace(operation: string, signal?: AbortSignal): Promise<NamespaceRef> {
     const namespace = await this.discoverNamespace(signal);
     if (!namespace) throw new KmsError("no_namespace", `${operation} requires a bound namespace`);

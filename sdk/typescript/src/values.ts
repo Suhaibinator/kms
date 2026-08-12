@@ -38,6 +38,7 @@ export interface ValueResolver {
   /** Opt in to using a default for remote failures other than not-found. */
   readonly fallbackToDefaultsOnError?: boolean;
   defaultAllowedForError?(error: unknown): boolean;
+  /** @internal Compatibility hook for the first-party client. */
   _defaultAllowedForError?(error: unknown): boolean;
 
   /** Public alternative for clients that expose subscriptions by key. */
@@ -48,15 +49,20 @@ export interface ValueResolver {
   ): SubscriptionHandle | Promise<SubscriptionHandle>;
 
   /** Internal shared-watch integration implemented by the first-party Client. */
+  /** @internal */
   _resolveRef?(key: string): ResourceRef | Promise<ResourceRef>;
   resolveResourceRef?(key: string, signal?: AbortSignal): ResourceRef | Promise<ResourceRef>;
+  /** @internal */
   _registerParameter?(
     ref: ResourceRef,
     initialValue: string,
     handler: ParameterUpdateHandler,
   ): SubscriptionHandle | Promise<SubscriptionHandle>;
+  /** @internal */
   _enqueueCallback?(callback: () => void): void;
+  /** @internal */
   _dispatch?(path: string, callback: () => unknown): void;
+  /** @internal */
   _log?(message: string): void;
 }
 
