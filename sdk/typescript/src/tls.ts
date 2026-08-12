@@ -11,7 +11,11 @@ export function mtlsFromFiles(
   clientKeyFile: string,
   caFile: string,
 ): ChannelCredentials {
-  return tlsCredentials(readFileSync(caFile), readFileSync(clientCertFile), readFileSync(clientKeyFile));
+  return tlsCredentials(
+    readFileSync(caFile),
+    readFileSync(clientCertFile),
+    readFileSync(clientKeyFile),
+  );
 }
 
 export function tlsFromBytes(
