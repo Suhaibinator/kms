@@ -1,13 +1,27 @@
 import type {
   ClientReleaseLoaderOptions,
+  // @ts-expect-error Release-loader transport internals are not part of the package root.
+  FetchedSecret,
   KmsClient,
   PreparedRelease,
   PublicConfigWire,
   ReleaseLoader,
+  // @ts-expect-error Release-loader construction is owned by KmsClient.
+  ReleaseLoaderOptions,
   ReleaseSecret,
   ReleaseSnapshot,
-  // @ts-expect-error Low-level protocol transport types are not part of the package root.
+  // @ts-expect-error Release-loader transport internals are not part of the package root.
   ReleaseTransport,
+  // @ts-expect-error Release-loader transport internals are not part of the package root.
+  ReleaseWatchStream,
+} from "@suhaibinator/kms";
+import {
+  // @ts-expect-error Digest implementation helpers are not part of the package root.
+  deterministicReleaseDigest,
+  // @ts-expect-error Digest implementation helpers are not part of the package root.
+  releaseDigestMatches,
+  // @ts-expect-error Digest implementation helpers are not part of the package root.
+  sha256Hex,
 } from "@suhaibinator/kms";
 import {
   type ConfigDescriptor,
@@ -17,7 +31,11 @@ import {
 } from "@suhaibinator/kms/configgen";
 import {
   type ContractEntry,
+  // @ts-expect-error Internal secret-tree scanner is not a supported configstore export.
+  containsSecret,
   type ManagedPreparedCandidate,
+  // @ts-expect-error Strict JSON parse-tree primitives are internal to codecs and configgen.
+  parseStrictJson,
   startManagedConfig,
 } from "@suhaibinator/kms/configstore";
 // @ts-expect-error Generated protocol modules are blocked by the package export map.
@@ -62,6 +80,18 @@ export async function consumeManagedDeclarations(client: KmsClient): Promise<voi
 
 export const adapterFactories = [createNextKms, usePublicConfig] as const;
 
+export const internalClientHelpersArePrivate: Extract<
+  keyof KmsClient,
+  | "fetchParameter"
+  | "fetchSecret"
+  | "listParametersInNamespace"
+  | "resolveResourceRef"
+  | "discoverNamespace"
+  | "requireNamespace"
+> extends never
+  ? true
+  : false = true;
+
 export async function consumeConfiggenDeclarations(document: string): Promise<void> {
   const descriptor: ConfigDescriptor = parseDescriptor(document);
   await verifyArtifacts(
@@ -74,4 +104,15 @@ export async function consumeConfiggenDeclarations(document: string): Promise<vo
   );
 }
 
-void (undefined as ReleaseTransport | ConfigurationRelease | undefined);
+void (undefined as
+  | FetchedSecret
+  | ReleaseLoaderOptions
+  | ReleaseTransport
+  | ReleaseWatchStream
+  | ConfigurationRelease
+  | undefined);
+void deterministicReleaseDigest;
+void releaseDigestMatches;
+void sha256Hex;
+void containsSecret;
+void parseStrictJson;
