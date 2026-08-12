@@ -23,6 +23,13 @@ a minor release may contain documented breaking changes.
 - `kms-config-gen-ts` deterministic binding, Draft 2020-12 schema, and machine
   contract generation with non-writing `--check`/`--verify` modes.
 
+### Fixed
+
+- Managed float codecs canonicalize signed zero so `-0` and `0` cannot cause a
+  false source-default drift report.
+- Default-mismatch report and error JSON encode nested `bigint` values as
+  canonical decimal strings while retaining whole-value secret redaction.
+
 ### Compatibility notes
 
 - The core SDK is Node-only and ESM-only. Importing it in a browser or Edge
