@@ -14,7 +14,7 @@ delivery plan. `complete` means the behavior has an automated TypeScript test;
 | Bounded TTL cache | internal `ReadCache` | `(path,version,label)` keys, 4096 caps, invalidation, secret clones, token bypass | `sdk/typescript/tests/cache.test.ts` | complete |
 | Declarative values and nested resolution | `SecretValue`, `ParameterValue`, `resolve` | env/store/default order, strict fallback, callbacks, hot/static values, cycles | `sdk/typescript/tests/values.test.ts` | complete |
 | Shared parameter watch | `watch`, `watchNamespace` | One bidi stream, union/restart, heartbeats, resume, revision fencing | `sdk/typescript/tests/watch.test.ts` | complete |
-| Reconciliation | internal subscription manager | Five-minute full sync, page cap, no false deletes, tombstone fences | `sdk/typescript/tests/watch.test.ts` | partial — page-cap and tombstone-interleaving fault matrix pending |
+| Reconciliation | internal subscription manager | Five-minute full sync, page cap, no false deletes, tombstone fences | `sdk/typescript/tests/watch.test.ts` | complete |
 | Immutable release snapshot | `ReleaseManifest`, `ReleaseSnapshot` | Redacted serialization and defensive accessors | `sdk/typescript/tests/releases/types.test.ts` | complete |
 | Release exact resolution and digest | `ReleaseLoader` | Deterministic protobuf digest; ref/version/content/digest verification | `sdk/typescript/tests/releases/digest.test.ts`, `loader.test.ts` | complete |
 | Atomic release lifecycle | `ReleaseLoader.run` | Supersession, prepare/commit/abort, active fence, LKG, reliable acks | `sdk/typescript/tests/releases/loader.test.ts` | complete |
@@ -37,6 +37,7 @@ configuration parity until all Stage 7 rows are complete.
 
 The remaining `partial` and `planned` rows are release-visible qualification
 gaps. Unit coverage and a declaration build do not substitute for the required
-real-server, reconnect/fault, stress, and compatibility scenarios. Until those
-rows complete, the package may be published as a prerelease candidate but must
-not advertise literal full Go parity or a generally available stable release.
+real-server, stress, browser, compiler, and peer-major compatibility scenarios.
+Until those rows complete, the package may be published as a prerelease
+candidate but must not advertise literal full Go parity or a generally
+available stable release.
