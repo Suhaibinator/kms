@@ -1,0 +1,462 @@
+import "server-only";
+
+import {
+  type AuthoritativeValidator,
+  createPolicyPublisher,
+  type DecimalRevision,
+  formatPublicConfigEtag,
+  normalizePublicConfigWire,
+  type PolicyPublisher,
+  type PolicySnapshot,
+  type PolicyValidationResult,
+  type PublicConfigWire,
+  type PublicJsonObject,
+  type PublicJsonValue,
+  type PublicProjection,
+  type SnapshotReader,
+} from "../publishing.js";
+
+/** Re-export this from a Next Route module to make its runtime requirement explicit. */
+export const runtime = "nodejs" as const;
+
+export const MAX_PRIVATE_PUBLIC_CONFIG_AGE_SECONDS = 300;
+
+type Awaitable<T> = PromiseLike<T> | T;
+
+export interface NextKmsResource<TPolicy> {
+  readonly source: SnapshotReader<TPolicy>;
+  readonly close?: () => Awaitable<void>;
+}
+
+export interface CreateNextKmsOptions<
+  TPolicy,
+  TConfig extends PublicJsonObject,
+  TInput,
+  TValidationErrors extends PublicJsonValue,
+> {
+  /** Creates the Node SDK client, release watcher, and active snapshot source. */
+  readonly initialize: (signal: AbortSignal) => Awaitable<NextKmsResource<TPolicy>>;
+  readonly projection: PublicProjection<TPolicy, TConfig>;
+  readonly validate: AuthoritativeValidator<TPolicy, TInput, TValidationErrors>;
+}
+
+export type PublicConfigCachePolicy =
+  | "no-store"
+  | {
+      /** Private browser caching only; shared/CDN caching is never emitted. */
+      readonly privateMaxAgeSeconds: number;
+    };
+
+export interface PublicConfigRouteOptions {
+  readonly cache?: PublicConfigCachePolicy;
+}
+
+export interface PublicConfigProvider<TConfig extends PublicJsonObject> {
+  readPublicPolicy(): Awaitable<PublicConfigWire<TConfig> | undefined>;
+}
+
+export type PublicConfigGET = (request: Request) => Promise<Response>;
+
+export interface ProcessShutdownOptions {
+  readonly signals?: readonly NodeJS.Signals[];
+  /** Receives lifecycle errors; the adapter never serializes or logs them. */
+  readonly onError?: (error: unknown) => void;
+}
+
+export interface NextKms<
+  TPolicy,
+  TConfig extends PublicJsonObject,
+  TInput,
+  TValidationErrors extends PublicJsonValue,
+> extends PublicConfigProvider<TConfig> {
+  /** Concurrent calls share one initialization attempt. Failed attempts may retry. */
+  start(): Promise<void>;
+
+  /** Permanently closes the adapter. Concurrent calls share one cleanup. */
+  close(): Promise<void>;
+
+  /** Captures one raw active policy generation for a Server Component/Action. */
+  readPolicy(): Promise<PolicySnapshot<TPolicy> | undefined>;
+
+  /** Captures one active generation and returns only its public wire projection. */
+  readPublicPolicy(): Promise<PublicConfigWire<TConfig> | undefined>;
+
+  /** Performs authoritative validation against one active generation. */
+  validateAtRevision(
+    revision: unknown,
+    input: TInput,
+  ): Promise<PolicyValidationResult<TConfig, TValidationErrors>>;
+
+  /** Creates a Next-compatible public configuration GET Route Handler. */
+  createPublicConfigGET(options?: PublicConfigRouteOptions): PublicConfigGET;
+
+  /** Installs graceful SIGINT/SIGTERM cleanup and returns an uninstaller. */
+  installProcessShutdown(options?: ProcessShutdownOptions): () => void;
+}
+
+export class NextKmsClosedError extends Error {
+  constructor() {
+    super("Next KMS adapter is closed");
+    this.name = "NextKmsClosedError";
+  }
+}
+
+/**
+ * Owns one process-local KMS lifecycle and exposes low-wiring server helpers.
+ * Reads lazily initialize the resource; applications may call start eagerly.
+ */
+export function createNextKms<
+  TPolicy,
+  TConfig extends PublicJsonObject,
+  TInput,
+  TValidationErrors extends PublicJsonValue,
+>(
+  options: CreateNextKmsOptions<TPolicy, TConfig, TInput, TValidationErrors>,
+): NextKms<TPolicy, TConfig, TInput, TValidationErrors> {
+  assertNodeRuntime();
+  if (typeof options?.initialize !== "function") {
+    throw new TypeError("Next KMS initialize must be a function");
+  }
+
+  let resource: NextKmsResource<TPolicy> | undefined;
+  let publisher: PolicyPublisher<TConfig, TInput, TValidationErrors> | undefined;
+  let initializationController: AbortController | undefined;
+  let startAttempt: Promise<void> | undefined;
+  let closeAttempt: Promise<void> | undefined;
+  let closed = false;
+  const shutdownUninstallers = new Set<() => void>();
+
+  const start = (): Promise<void> => {
+    assertNodeRuntime();
+    if (closed) {
+      return Promise.reject(new NextKmsClosedError());
+    }
+    if (resource !== undefined && publisher !== undefined) {
+      return Promise.resolve();
+    }
+    if (startAttempt !== undefined) {
+      return startAttempt;
+    }
+
+    const controller = new AbortController();
+    initializationController = controller;
+    let attempt!: Promise<void>;
+    attempt = (async (): Promise<void> => {
+      let initialized: NextKmsResource<TPolicy> | undefined;
+      try {
+        initialized = await options.initialize(controller.signal);
+        assertResource(initialized);
+        resource = initialized;
+        publisher = createPolicyPublisher({
+          source: initialized.source,
+          projection: options.projection,
+          validate: options.validate,
+        });
+        if (closed) {
+          throw new NextKmsClosedError();
+        }
+      } catch (error) {
+        if (initialized !== undefined && resource === initialized && !closed) {
+          resource = undefined;
+          publisher = undefined;
+          await initialized.close?.();
+        }
+        throw error;
+      } finally {
+        if (initializationController === controller) {
+          initializationController = undefined;
+        }
+        if (startAttempt === attempt) {
+          startAttempt = undefined;
+        }
+      }
+    })();
+    startAttempt = attempt;
+    return attempt;
+  };
+
+  const close = (): Promise<void> => {
+    if (closeAttempt !== undefined) {
+      return closeAttempt;
+    }
+    closed = true;
+    initializationController?.abort();
+    for (const uninstall of [...shutdownUninstallers]) {
+      uninstall();
+    }
+
+    const attempt = (async (): Promise<void> => {
+      try {
+        await startAttempt;
+      } catch {
+        // Initialization errors do not replace a resource cleanup error.
+      }
+
+      const initialized = resource;
+      resource = undefined;
+      publisher = undefined;
+      await initialized?.close?.();
+    })();
+    closeAttempt = attempt;
+    return attempt;
+  };
+
+  const activeResource = async (): Promise<NextKmsResource<TPolicy>> => {
+    await start();
+    if (closed || resource === undefined) {
+      throw new NextKmsClosedError();
+    }
+    return resource;
+  };
+
+  const activePublisher = async (): Promise<
+    PolicyPublisher<TConfig, TInput, TValidationErrors>
+  > => {
+    await start();
+    if (closed || publisher === undefined) {
+      throw new NextKmsClosedError();
+    }
+    return publisher;
+  };
+
+  const adapter: NextKms<TPolicy, TConfig, TInput, TValidationErrors> = {
+    start,
+    close,
+
+    async readPolicy(): Promise<PolicySnapshot<TPolicy> | undefined> {
+      const initialized = await activeResource();
+      return initialized.source.current();
+    },
+
+    async readPublicPolicy(): Promise<PublicConfigWire<TConfig> | undefined> {
+      const active = await activePublisher();
+      return active.readWire();
+    },
+
+    async validateAtRevision(
+      revision: unknown,
+      input: TInput,
+    ): Promise<PolicyValidationResult<TConfig, TValidationErrors>> {
+      const active = await activePublisher();
+      return active.validate(revision, input);
+    },
+
+    createPublicConfigGET(routeOptions?: PublicConfigRouteOptions): PublicConfigGET {
+      return createPublicConfigGET(adapter, routeOptions);
+    },
+
+    installProcessShutdown(shutdownOptions: ProcessShutdownOptions = {}): () => void {
+      assertNodeRuntime();
+      if (closed) {
+        throw new NextKmsClosedError();
+      }
+      const signals = shutdownOptions.signals ?? ["SIGINT", "SIGTERM"];
+      const uniqueSignals = [...new Set(signals)];
+      let installed = true;
+
+      const handlers = uniqueSignals.map((signal) => {
+        const handler = (): void => {
+          void close().catch((error: unknown) => {
+            shutdownOptions.onError?.(error);
+          });
+        };
+        process.once(signal, handler);
+        return [signal, handler] as const;
+      });
+
+      const uninstall = (): void => {
+        if (!installed) {
+          return;
+        }
+        installed = false;
+        for (const [signal, handler] of handlers) {
+          process.removeListener(signal, handler);
+        }
+        shutdownUninstallers.delete(uninstall);
+      };
+      shutdownUninstallers.add(uninstall);
+      return uninstall;
+    },
+  };
+
+  return Object.freeze(adapter);
+}
+
+/** Creates a Next Route Handler from an adapter or another safe provider. */
+export function createPublicConfigGET<TConfig extends PublicJsonObject>(
+  provider:
+    | PublicConfigProvider<TConfig>
+    | (() => Awaitable<PublicConfigWire<TConfig> | undefined>),
+  options: PublicConfigRouteOptions = {},
+): PublicConfigGET {
+  assertNodeRuntime();
+  const read =
+    typeof provider === "function"
+      ? provider
+      : provider !== null && typeof provider.readPublicPolicy === "function"
+        ? () => provider.readPublicPolicy()
+        : undefined;
+  if (read === undefined) {
+    throw new TypeError("public config provider must be a function or adapter");
+  }
+  const cacheControl = formatCacheControl(options.cache ?? "no-store");
+
+  return async (request: Request): Promise<Response> => {
+    try {
+      const candidate = await read();
+      if (candidate === undefined) {
+        return unavailableResponse();
+      }
+
+      const current = normalizePublicConfigWire<TConfig>(candidate);
+      const etag = formatPublicConfigEtag(current.revision);
+      const commonHeaders = new Headers({
+        "Cache-Control": cacheControl,
+        ETag: etag,
+        "X-Content-Type-Options": "nosniff",
+      });
+
+      if (ifNoneMatchMatches(request.headers.get("If-None-Match"), etag)) {
+        return new Response(null, {
+          status: 304,
+          headers: commonHeaders,
+        });
+      }
+
+      commonHeaders.set("Content-Type", "application/json; charset=utf-8");
+      return new Response(JSON.stringify(current), {
+        status: 200,
+        headers: commonHeaders,
+      });
+    } catch {
+      return unavailableResponse();
+    }
+  };
+}
+
+function assertNodeRuntime(): void {
+  const globalWithEdgeRuntime = globalThis as typeof globalThis & {
+    readonly EdgeRuntime?: unknown;
+  };
+  if (
+    typeof process === "undefined" ||
+    process.versions?.node === undefined ||
+    process.env.NEXT_RUNTIME === "edge" ||
+    globalWithEdgeRuntime.EdgeRuntime !== undefined
+  ) {
+    throw new Error("@suhaibinator/kms/next/server requires the Next.js Node runtime");
+  }
+}
+
+function assertResource<TPolicy>(
+  resource: NextKmsResource<TPolicy>,
+): asserts resource is NextKmsResource<TPolicy> {
+  if (
+    resource === null ||
+    typeof resource !== "object" ||
+    resource.source === null ||
+    typeof resource.source !== "object" ||
+    typeof resource.source.current !== "function" ||
+    (resource.close !== undefined && typeof resource.close !== "function")
+  ) {
+    throw new TypeError("Next KMS initialize returned an invalid resource");
+  }
+}
+
+function formatCacheControl(cache: PublicConfigCachePolicy): string {
+  if (cache === "no-store") {
+    return "no-store";
+  }
+  if (cache === null || typeof cache !== "object") {
+    throw new TypeError("public config cache policy is invalid");
+  }
+  const seconds = cache.privateMaxAgeSeconds;
+  if (
+    !Number.isInteger(seconds) ||
+    seconds < 0 ||
+    seconds > MAX_PRIVATE_PUBLIC_CONFIG_AGE_SECONDS
+  ) {
+    throw new RangeError(
+      `private public config max age must be between 0 and ${MAX_PRIVATE_PUBLIC_CONFIG_AGE_SECONDS} seconds`,
+    );
+  }
+  return `private, max-age=${seconds}, must-revalidate`;
+}
+
+function unavailableResponse(): Response {
+  return new Response('{"status":"unavailable"}', {
+    status: 503,
+    headers: {
+      "Cache-Control": "no-store",
+      "Content-Type": "application/json; charset=utf-8",
+      "X-Content-Type-Options": "nosniff",
+    },
+  });
+}
+
+/** GET If-None-Match uses weak comparison, including for a strong current ETag. */
+function ifNoneMatchMatches(header: string | null, current: string): boolean {
+  if (header === null) {
+    return false;
+  }
+  const target = stripWeakPrefix(current);
+  let offset = 0;
+
+  while (offset < header.length) {
+    while (offset < header.length && /[\t ,]/.test(header[offset] ?? "")) {
+      offset += 1;
+    }
+    if (offset >= header.length) {
+      break;
+    }
+    if (header[offset] === "*") {
+      return true;
+    }
+
+    const tokenStart = offset;
+    if (header.slice(offset, offset + 2) === "W/") {
+      offset += 2;
+    }
+    if (header[offset] !== '"') {
+      offset = skipToNextListMember(header, offset);
+      continue;
+    }
+    offset += 1;
+    while (offset < header.length && header[offset] !== '"') {
+      offset += 1;
+    }
+    if (offset >= header.length) {
+      return false;
+    }
+    offset += 1;
+    const tokenEnd = offset;
+    while (offset < header.length && /[\t ]/.test(header[offset] ?? "")) {
+      offset += 1;
+    }
+    if (offset < header.length && header[offset] !== ",") {
+      offset = skipToNextListMember(header, offset);
+      continue;
+    }
+
+    const token = header.slice(tokenStart, tokenEnd);
+    if (stripWeakPrefix(token) === target) {
+      return true;
+    }
+    if (header[offset] === ",") {
+      offset += 1;
+    }
+  }
+  return false;
+}
+
+function skipToNextListMember(header: string, offset: number): number {
+  const comma = header.indexOf(",", offset);
+  return comma === -1 ? header.length : comma + 1;
+}
+
+function stripWeakPrefix(etag: string): string {
+  return etag.startsWith("W/") ? etag.slice(2) : etag;
+}
+
+// Keep this type reachable from generated declarations without a runtime import.
+export type { DecimalRevision };
