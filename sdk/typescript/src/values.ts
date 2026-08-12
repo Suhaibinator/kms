@@ -303,6 +303,8 @@ export class ParameterValue {
   #client: ValueResolver | undefined;
   #initializing: Promise<void> | undefined;
   #subscription: SubscriptionHandle;
+  #disposeAttempt: Promise<void> | undefined;
+  #disposed = false;
 
   constructor(
     keyOrOptions: string | ParameterValueOptions = {},
@@ -406,7 +408,9 @@ export class ParameterValue {
     this.#initialized = true;
     if (!this.#static && hasStoreRef) {
       try {
-        this.#subscription = await this.#register(client, value, options.signal);
+        const subscription = await this.#register(client, value, options.signal);
+        if (this.#disposed) await disposeSubscription(subscription);
+        else this.#subscription = subscription;
       } catch (error) {
         this.#initialized = false;
         this.#value = "";
@@ -445,7 +449,7 @@ export class ParameterValue {
    * without one, last-known-good is retained.
    */
   applyUpdate(newValue: string, present = true): void {
-    if (!this.#initialized || this.#static || this.#pinned) return;
+    if (this.#disposed || !this.#initialized || this.#static || this.#pinned) return;
     if (!present) {
       if (!hasDefault(this.#default)) return;
       newValue = this.#default;
@@ -475,17 +479,21 @@ export class ParameterValue {
 
   /** Stop this field's subscription when it owns an explicit handle. */
   async dispose(): Promise<void> {
+    if (this.#disposeAttempt !== undefined) return this.#disposeAttempt;
+    this.#disposed = true;
+    const pending = this.#disposeAfterInitialization();
+    this.#disposeAttempt = pending;
+    return pending;
+  }
+
+  async #disposeAfterInitialization(): Promise<void> {
+    // A registration may be awaiting namespace discovery when dispose() wins.
+    // Waiting here, together with the post-registration disposed check above,
+    // guarantees that no late subscription handle can escape cleanup.
+    await this.#initializing?.catch(() => undefined);
     const subscription = this.#subscription;
     this.#subscription = undefined;
-    if (typeof subscription === "function") {
-      await subscription();
-    } else if (subscription?.unsubscribe !== undefined) {
-      await subscription.unsubscribe();
-    } else if (subscription?.dispose !== undefined) {
-      await subscription.dispose();
-    } else if (subscription?.close !== undefined) {
-      await subscription.close();
-    }
+    await disposeSubscription(subscription);
   }
 
   toString(): string {
@@ -498,6 +506,18 @@ export class ParameterValue {
 
   [Symbol.toPrimitive](): string {
     return this.get();
+  }
+}
+
+async function disposeSubscription(subscription: SubscriptionHandle): Promise<void> {
+  if (typeof subscription === "function") {
+    await subscription();
+  } else if (subscription?.unsubscribe !== undefined) {
+    await subscription.unsubscribe();
+  } else if (subscription?.dispose !== undefined) {
+    await subscription.dispose();
+  } else if (subscription?.close !== undefined) {
+    await subscription.close();
   }
 }
 

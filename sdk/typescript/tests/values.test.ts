@@ -260,6 +260,52 @@ describe("ParameterValue", () => {
     expect(client.disposalCount).toBe(1);
   });
 
+  it("releases a subscription whose registration finishes after disposal starts", async () => {
+    let finishRef: ((ref: ResourceRef) => void) | undefined;
+    const refPending = new Promise<ResourceRef>((resolve) => {
+      finishRef = resolve;
+    });
+    let registered = 0;
+    let disposed = 0;
+    let resolveCalls = 0;
+    const resolver: ValueResolver = {
+      getParameter: async () => "initial",
+      getSecret: async () => new Secret("unused"),
+      resolveResourceRef: async () => {
+        resolveCalls++;
+        return refPending;
+      },
+      _registerParameter: () => {
+        registered++;
+        return () => {
+          disposed++;
+        };
+      },
+    };
+    const value = new ParameterValue("race");
+
+    const initializing = value.init(resolver);
+    await vi.waitFor(() => expect(resolveCalls).toBe(1));
+    const disposing = value.dispose();
+    let disposeFinished = false;
+    void disposing.then(() => {
+      disposeFinished = true;
+    });
+    await Promise.resolve();
+    expect(disposeFinished).toBe(false);
+
+    finishRef?.(resolveRef("race", "prod/app"));
+    await Promise.all([initializing, disposing]);
+
+    expect(registered).toBe(1);
+    expect(disposed).toBe(1);
+    expect(value.get()).toBe("initial");
+    value.applyUpdate("late");
+    expect(value.get()).toBe("initial");
+    await value.dispose();
+    expect(disposed).toBe(1);
+  });
+
   it("uses default for missing store value and still subscribes", async () => {
     const client = new FakeResolver();
     const value = new ParameterValue("created-later", { default: "fallback" });
