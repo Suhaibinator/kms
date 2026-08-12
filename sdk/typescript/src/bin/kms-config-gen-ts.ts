@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
-import { readFile } from "node:fs/promises";
-import { pathToFileURL } from "node:url";
+import { readFile, realpath } from "node:fs/promises";
+import { fileURLToPath } from "node:url";
 
 import {
   generate,
@@ -10,6 +10,7 @@ import {
   verifyArtifacts,
   writeArtifacts,
 } from "../configgen/index.js";
+import { assertDistinctPaths } from "../configgen/files.js";
 
 const MAX_DESCRIPTOR_BYTES = 1024 * 1024;
 
@@ -39,6 +40,7 @@ export async function runCli(
     return 0;
   }
   try {
+    await assertCliPathsDistinct(flags);
     const descriptor = await readFile(flags.descriptor);
     if (descriptor.byteLength > MAX_DESCRIPTOR_BYTES) {
       throw new RangeError(
@@ -99,7 +101,7 @@ function parseFlags(args: readonly string[]): Flags {
     if (values.has(name)) throw new TypeError(`kms-config-gen-ts: duplicate option ${name}`);
     const value = inline ?? args[index + 1];
     if (inline === undefined) index += 1;
-    if (!value || value.startsWith("--")) {
+    if (!value || (inline === undefined && value.startsWith("--"))) {
       throw new TypeError(`kms-config-gen-ts: ${name} requires a value`);
     }
     values.set(name, value);
@@ -147,6 +149,15 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : "configgen: generation failed";
 }
 
+async function assertCliPathsDistinct(flags: Flags): Promise<void> {
+  await assertDistinctPaths([
+    { name: "descriptor", path: flags.descriptor },
+    { name: "binding output", path: flags.bindingOutput },
+    { name: "schema output", path: flags.schemaOutput },
+    { name: "contract output", path: flags.contractOutput },
+  ]);
+}
+
 function usage(): string {
   return `Usage: kms-config-gen-ts \\
   --descriptor <config.kms.json> \\
@@ -155,7 +166,16 @@ function usage(): string {
   --contract-output <runtime.contract.json> [options]\n\nOptions:\n  --runtime-import <specifier>  Generated configstore import\n  --core-import <specifier>     Generated core SDK import\n  --check, --verify             Compare outputs without writing\n  --help                        Show this help\n`;
 }
 
-const entry = process.argv[1];
-if (entry && import.meta.url === pathToFileURL(entry).href) {
+/** @internal Exported for executable-boundary regression tests. */
+export async function isExecutedEntry(entry: string | undefined): Promise<boolean> {
+  if (!entry) return false;
+  try {
+    return (await realpath(entry)) === (await realpath(fileURLToPath(import.meta.url)));
+  } catch {
+    return false;
+  }
+}
+
+if (await isExecutedEntry(process.argv[1])) {
   process.exitCode = await runCli(process.argv.slice(2));
 }

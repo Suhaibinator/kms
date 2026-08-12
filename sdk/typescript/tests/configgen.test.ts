@@ -1,10 +1,10 @@
 import { createHash } from "node:crypto";
-import { chmod, mkdir, mkdtemp, readFile, stat, writeFile } from "node:fs/promises";
+import { chmod, link, mkdir, mkdtemp, readFile, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 
-import { runCli } from "../src/bin/kms-config-gen-ts.js";
+import { isExecutedEntry, runCli } from "../src/bin/kms-config-gen-ts.js";
 import {
   type ConfigDescriptor,
   DescriptorError,
@@ -233,6 +233,95 @@ describe("TypeScript config generator", () => {
     await expect(readFile(paths.schema, "utf8")).resolves.toBe("old schema");
   });
 
+  it("rejects output aliases through symlinked parents and hardlinks", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "kms-configgen-identities-"));
+    const canonicalParent = join(directory, "canonical");
+    const linkedParent = join(directory, "linked");
+    await mkdir(canonicalParent);
+    await symlink(canonicalParent, linkedParent, "dir");
+    const artifacts = generate(fixtureDescriptor, fixtureImports());
+
+    await expect(
+      writeArtifacts(
+        {
+          binding: join(canonicalParent, "same-output"),
+          schema: join(linkedParent, "same-output"),
+          contract: join(directory, "contract.json"),
+        },
+        artifacts,
+      ),
+    ).rejects.toThrow(/same filesystem object/u);
+    await expect(stat(join(canonicalParent, "same-output"))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+
+    const firstLink = join(directory, "first-link");
+    const secondLink = join(directory, "second-link");
+    await writeFile(firstLink, "existing", "utf8");
+    await link(firstLink, secondLink);
+    await expect(
+      verifyArtifacts(
+        { binding: firstLink, schema: secondLink, contract: join(directory, "other") },
+        artifacts,
+      ),
+    ).rejects.toThrow(/same filesystem object/u);
+  });
+
+  it("rejects missing output case aliases on case-insensitive filesystems", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "kms-configgen-case-"));
+    const canonicalParent = join(directory, "CaseSensitiveProbe");
+    const caseAliasParent = join(directory, "casesensitiveprobe");
+    await mkdir(canonicalParent);
+    try {
+      await stat(caseAliasParent);
+    } catch {
+      // The host filesystem is case-sensitive, so these are distinct entries.
+      return;
+    }
+    await expect(
+      writeArtifacts(
+        {
+          binding: join(canonicalParent, "Result.TS"),
+          schema: join(caseAliasParent, "result.ts"),
+          contract: join(directory, "contract.json"),
+        },
+        generate(fixtureDescriptor, fixtureImports()),
+      ),
+    ).rejects.toThrow(/same filesystem object/u);
+  });
+
+  it("refuses to overwrite a descriptor through a filesystem alias", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "kms-configgen-descriptor-alias-"));
+    const descriptorTarget = join(directory, "descriptor-target.json");
+    const descriptorAlias = join(directory, "descriptor-alias.json");
+    const document = JSON.stringify(fixtureDescriptor);
+    await writeFile(descriptorTarget, document, "utf8");
+    await symlink(descriptorTarget, descriptorAlias);
+    const paths = {
+      binding: descriptorTarget,
+      schema: join(directory, "schema.json"),
+      contract: join(directory, "contract.json"),
+    };
+    const stderr: string[] = [];
+    const code = await runCli(cliArgs(descriptorAlias, paths, fixtureImportArgs()), {
+      stdout: () => undefined,
+      stderr: (message) => stderr.push(message),
+    });
+
+    expect(code).toBe(1);
+    expect(stderr.join(" ")).toMatch(/descriptor.*binding output.*same filesystem object/u);
+    await expect(readFile(descriptorTarget, "utf8")).resolves.toBe(document);
+    await expect(stat(paths.schema)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("recognizes a symlinked executable entry", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "kms-configgen-entry-"));
+    const target = resolve(import.meta.dirname, "../src/bin/kms-config-gen-ts.ts");
+    const entry = join(directory, "kms-config-gen-ts");
+    await symlink(target, entry);
+    await expect(isExecutedEntry(entry)).resolves.toBe(true);
+  });
+
   it("check mode reports all stale paths with a nonzero exit and never rewrites them", async () => {
     const directory = await mkdtemp(join(tmpdir(), "kms-configgen-check-"));
     const descriptorPath = join(directory, "config.kms.json");
@@ -255,6 +344,22 @@ describe("TypeScript config generator", () => {
     await expect(
       verifyArtifacts(paths, generate(fixtureDescriptor, fixtureImports())),
     ).rejects.toBeInstanceOf(StaleArtifactsError);
+  });
+
+  it("check mode identifies the exact member of a mixed artifact set", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "kms-configgen-mixed-"));
+    const paths = outputPaths(directory);
+    const artifacts = generate(fixtureDescriptor, fixtureImports());
+    await writeArtifacts(paths, artifacts);
+    await writeFile(paths.schema, `${artifacts.schema}stale\n`, "utf8");
+
+    try {
+      await verifyArtifacts(paths, artifacts);
+      throw new Error("expected mixed artifact verification to fail");
+    } catch (error) {
+      expect(error).toBeInstanceOf(StaleArtifactsError);
+      expect((error as StaleArtifactsError).paths).toEqual([paths.schema]);
+    }
   });
 
   it("CLI accepts traversal-resolving explicit paths without interpreting descriptor data as paths", async () => {
