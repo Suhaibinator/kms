@@ -90,10 +90,11 @@ export async function readDescriptor(path: string): Promise<string> {
 }
 
 function oversizedDescriptor(size?: bigint): RangeError {
-  const measured = size === undefined ? " exceeds" : ` is ${size} bytes;`;
-  return new RangeError(
-    `configgen: descriptor${measured} maximum is ${MAX_DESCRIPTOR_BYTES} bytes`,
-  );
+  const detail =
+    size === undefined
+      ? `exceeds the maximum of ${MAX_DESCRIPTOR_BYTES} bytes`
+      : `is ${size} bytes; maximum is ${MAX_DESCRIPTOR_BYTES} bytes`;
+  return new RangeError(`configgen: descriptor ${detail}`);
 }
 
 interface Flags {
