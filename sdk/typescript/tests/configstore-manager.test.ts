@@ -234,6 +234,32 @@ describe("ManagedConfigManager", () => {
     expect(rejectionReports).toHaveLength(1);
     expect(rejectionReports[0]?.category).toBe("internal");
   });
+
+  it("aborts candidate resources when malformed policy metadata cannot be cloned", async () => {
+    const release = makeRelease(1n, '{"hot":1,"restart":"a"}');
+    const transport = new FakeReleaseTransport(release, 1n);
+    let aborts = 0;
+    const unsafeExpected = {};
+    Object.defineProperty(unsafeExpected, "value", {
+      enumerable: true,
+      get: () => "GETTER-CANARY",
+    });
+
+    await expect(
+      startManagedConfig(
+        managedClient(transport),
+        options(() => undefined),
+        () => ({
+          publish: () => undefined,
+          abort: () => {
+            aborts += 1;
+          },
+          defaultDifferences: [{ path: "settings.hot", expected: unsafeExpected, actual: 1 }],
+        }),
+      ),
+    ).rejects.toMatchObject({ category: "internal" });
+    expect(aborts).toBe(1);
+  });
 });
 
 function options(onDefaultMismatch: (report: DefaultMismatchReport) => void) {

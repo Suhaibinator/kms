@@ -245,8 +245,17 @@ export class ManagedConfigManager {
       throw abortReason(signal);
     }
 
-    const differences = cloneDifferences(candidate.defaultDifferences ?? []);
-    const restartFields = [...(candidate.restartRequiredFields ?? [])];
+    let differences: FieldDifference[];
+    let restartFields: string[];
+    try {
+      differences = cloneDifferences(candidate.defaultDifferences ?? []);
+      restartFields = cloneRestartFields(candidate.restartRequiredFields ?? []);
+    } catch (cause) {
+      this.#abortOrInternal(abort, identity);
+      const error = new CandidateError("internal", cause);
+      this.#notifyCandidateRejected(identity, error);
+      throw error;
+    }
     if (!startup && restartFields.length > 0) {
       this.#abortOrInternal(abort, identity);
       const error = new CandidateError(
@@ -421,11 +430,27 @@ function copyLoaderOptions(
 }
 
 function cloneDifferences(differences: readonly FieldDifference[]): FieldDifference[] {
+  if (!Array.isArray(differences)) {
+    throw new TypeError("configstore: default differences must be an array");
+  }
   return differences.map((difference) => ({
-    path: difference.path,
+    path: requireString(difference?.path, "default difference path"),
     expected: cloneConfig(difference.expected),
     actual: cloneConfig(difference.actual),
   }));
+}
+
+function cloneRestartFields(fields: readonly string[]): string[] {
+  if (!Array.isArray(fields)) {
+    throw new TypeError("configstore: restart-required fields must be an array");
+  }
+  return fields.map((path) => requireString(path, "restart-required field path"));
+}
+
+function requireString(value: unknown, description: string): string {
+  if (typeof value !== "string")
+    throw new TypeError(`configstore: ${description} must be a string`);
+  return value;
 }
 
 function once(callback: () => void): () => void {
