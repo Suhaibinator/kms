@@ -18,6 +18,8 @@ a minor release may contain documented breaking changes.
   first-class serverful Next.js adapter.
 - Runnable core and Next.js integration examples, package security guidance,
   consumer type tests, and Node compatibility CI.
+- A real Next.js App Router build gate that rejects server-adapter imports from
+  Client Components and inspects browser chunks for server-only dependencies.
 - `kms-config-gen-ts` deterministic binding, Draft 2020-12 schema, and machine
   contract generation with non-writing `--check`/`--verify` modes.
 

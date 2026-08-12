@@ -370,8 +370,10 @@ compatibility surface.
 
 The `next/client` hook targets modern browsers with native `bigint`, `fetch`,
 `AbortController`, and standard focus events. Its automated tests run in a DOM
-simulation; a cross-browser compatibility matrix is still a release
-qualification gap.
+simulation and the release gate builds a real Next.js App Router fixture,
+inspects its browser chunks for server-only dependencies/markers, and rejects a
+Client Component import of `next/server`. A cross-browser behavior matrix is
+still a release qualification gap.
 
 The public exports follow semantic versioning. Before `1.0.0`, minor releases
 may still contain breaking API changes and will document them in the package
@@ -391,8 +393,9 @@ npm run check
 ```
 
 `npm run check` verifies generated protobufs, types, lint, formatting, tests,
-consumer type contracts, and the distributable build. The repository Makefile
-also exposes `typescript`, `test-typescript`, and `check-typescript` targets.
+consumer type contracts, the distributable build, a real Next.js trust-boundary
+build, and the publishable package manifest. The repository Makefile also
+exposes `typescript`, `test-typescript`, and `check-typescript` targets.
 
 Security reports and deployment guidance are in the package security notice.
 This package is licensed under the included [MIT license](LICENSE).
