@@ -29,6 +29,8 @@ a minor release may contain documented breaking changes.
   false source-default drift report.
 - Default-mismatch report and error JSON encode nested `bigint` values as
   canonical decimal strings while retaining whole-value secret redaction.
+- Disposed declarative values unregister their live parameter handlers, and
+  watch shutdown removes external abort listeners.
 
 ### Compatibility notes
 
