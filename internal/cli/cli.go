@@ -25,6 +25,10 @@ type CLI struct {
 	// positionals holds the non-flag arguments collected by the most recent
 	// parseFlags call (flags may be interspersed with positionals).
 	positionals []string
+	// helpRequested records flag.ErrHelp from a nested command. Command handlers
+	// keep their existing parse-error return path; Run translates this one case
+	// to a successful process exit after the flag package prints command help.
+	helpRequested bool
 }
 
 // New builds a CLI bound to the process standard streams.
@@ -35,6 +39,7 @@ func New() *CLI {
 // Run dispatches a subcommand and returns the process exit code.
 func (c *CLI) Run(args []string) int {
 	c.ConfigPath = os.Getenv("KMS_CONFIG")
+	c.helpRequested = false
 	rest := c.consumeGlobalFlags(args)
 	if len(rest) == 0 {
 		c.usage()
@@ -42,48 +47,53 @@ func (c *CLI) Run(args []string) int {
 	}
 	cmd, cmdArgs := rest[0], rest[1:]
 
+	var code int
 	switch cmd {
 	case "serve":
-		return c.cmdServe(cmdArgs)
+		code = c.cmdServe(cmdArgs)
 	case "init":
-		return c.cmdInit(cmdArgs)
+		code = c.cmdInit(cmdArgs)
 	case "migrate":
-		return c.cmdMigrate(cmdArgs)
+		code = c.cmdMigrate(cmdArgs)
 	case "check":
-		return c.cmdCheck(cmdArgs)
+		code = c.cmdCheck(cmdArgs)
 	case "backup":
-		return c.cmdBackup(cmdArgs)
+		code = c.cmdBackup(cmdArgs)
 	case "restore":
-		return c.cmdRestore(cmdArgs)
+		code = c.cmdRestore(cmdArgs)
 	case "create-admin":
-		return c.cmdCreateAdmin(cmdArgs)
+		code = c.cmdCreateAdmin(cmdArgs)
 	case "rotate-kek":
-		return c.cmdRotateKEK(cmdArgs)
+		code = c.cmdRotateKEK(cmdArgs)
 	case "admin":
-		return c.cmdAdmin(cmdArgs)
+		code = c.cmdAdmin(cmdArgs)
 	case "import":
-		return c.cmdImport(cmdArgs)
+		code = c.cmdImport(cmdArgs)
 	case "put-secret":
-		return c.cmdPutSecret(cmdArgs)
+		code = c.cmdPutSecret(cmdArgs)
 	case "get-secret":
-		return c.cmdGetSecret(cmdArgs)
+		code = c.cmdGetSecret(cmdArgs)
 	case "put-parameter":
-		return c.cmdPutParameter(cmdArgs)
+		code = c.cmdPutParameter(cmdArgs)
 	case "list":
-		return c.cmdList(cmdArgs)
+		code = c.cmdList(cmdArgs)
 	case "release":
-		return c.cmdRelease(cmdArgs)
+		code = c.cmdRelease(cmdArgs)
 	case "version", "--version", "-version":
 		_, _ = fmt.Fprintln(c.Stdout, Version)
-		return 0
+		code = 0
 	case "help", "-h", "--help":
 		c.usage()
-		return 0
+		code = 0
 	default:
 		_, _ = fmt.Fprintf(c.Stderr, "unknown command %q\n\n", cmd)
 		c.usage()
-		return 2
+		code = 2
 	}
+	if c.helpRequested {
+		return 0
+	}
+	return code
 }
 
 // consumeGlobalFlags extracts a leading --config before the subcommand so both
@@ -133,8 +143,16 @@ Administration:
   rotate-kek       Rotate the master key, rewrapping all secrets.
   import           Import data from SuhaibParameterStore.
 
+Application onboarding (talk to a running server over gRPC):
+  Prerequisite: create ./certs and restrict directory access to its owner.
+                   This directory receives one-time application credentials.
+  admin namespace create --env ENV --app APP --auth-methods mtls
+                   Create the application's namespace and allow mTLS.
+  admin identity create NAME --namespace ENV/APP --auth mtls --out ./certs
+                   Create NAME.crt and NAME.key for the application.
+
 Management (talk to a running server over gRPC):
-  admin            Manage namespaces, identities, and the built-in CA.
+  admin            Manage namespaces, application identities, and client certificates.
 
 Convenience (talk to a running server over gRPC):
   put-secret /env/app/key       Store a secret (value from --value-file or stdin).
@@ -168,8 +186,9 @@ func (c *CLI) newFlags(name string) *flag.FlagSet {
 	return fs
 }
 
-// parseFlags parses args, returning false when the caller should exit with
-// code 2 (help requested or bad flags).
+// parseFlags parses args, returning false when the caller should exit through
+// the command's normal usage path. Run maps flag.ErrHelp to exit code 0 while
+// malformed flags retain the command's non-zero usage exit.
 //
 // It supports flags interspersed with positional arguments (the standard flag
 // package stops at the first positional, which would silently drop a trailing
@@ -189,6 +208,9 @@ func (c *CLI) parseFlags(fs *flag.FlagSet, args []string) bool {
 	}
 
 	if err := fs.Parse(args); err != nil {
+		if err == flag.ErrHelp {
+			c.helpRequested = true
+		}
 		return false
 	}
 	positionals := []string{}
@@ -208,6 +230,9 @@ func (c *CLI) parseFlags(fs *flag.FlagSet, args []string) bool {
 		}
 		before := len(rest) - i
 		if err := fs.Parse(rest[i:]); err != nil {
+			if err == flag.ErrHelp {
+				c.helpRequested = true
+			}
 			return false
 		}
 		// Defensive: if a re-parse consumed nothing, we'd loop forever. Bail

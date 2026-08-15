@@ -40,7 +40,9 @@ npm install next react
 
 Production clients should authenticate with mTLS. The CA file below must trust
 the KMS **server** certificate; it is not the service's built-in
-client-certificate issuer.
+client-certificate issuer. Follow the
+[production mTLS onboarding runbook](../../docs/operations.md#connect-a-production-application-with-mtls)
+to create the namespace and identity and deliver these three files.
 
 ```ts
 import { createClient, mtlsFromFiles } from "@suhaibinator/kms";

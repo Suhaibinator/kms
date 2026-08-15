@@ -22,16 +22,26 @@ vendored under `kms_paramstore/_gen/`, so no `protoc` is needed to use the SDK.
 ## Quick start
 
 ```python
-from kms_paramstore import Client, tls_from_files
+from kms_paramstore import Client, mtls_from_files
 
-with Client("parameter-store.prod.internal:8443", namespace="prod/gradethis",
-            token="<client-token>", tls=tls_from_files("server-ca.crt")) as client:
+with Client(
+    "parameter-store.prod.internal:8443",
+    tls=mtls_from_files("app.crt", "app.key", "server-ca.crt"),
+) as client:
     db_password = client.get_secret("postgres-password")   # relative to the namespace
     print(db_password)            # -> [REDACTED]
     connect(db_password.value)    # explicit access to plaintext bytes
 
     rate = client.get_parameter("rate-limit")
 ```
+
+Follow the
+[production mTLS onboarding runbook](../../docs/operations.md#connect-a-production-application-with-mtls)
+to create the application's namespace and identity. `app.crt`/`app.key` are
+the per-application credentials issued by KMS; `server-ca.crt` comes from the
+operator and trusts the KMS serving certificate. A namespace-bound identity
+discovers its namespace through `WhoAmI`, so no token or explicit namespace is
+needed here.
 
 `get_secret` returns a `Secret` that renders as `[REDACTED]` in `str`, `repr`,
 f-strings, `%`-formatting, and logging. Plaintext is only reachable through the

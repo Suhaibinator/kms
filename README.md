@@ -183,16 +183,18 @@ GitHub's npm registry requires an authenticated `@suhaibinator` scope before
 for binary downloads, checksum and provenance verification, npm setup,
 container initialization, and the maintainer release procedure.
 
-### Initialize and run
+### Initialize and run locally
 
 ```bash
 # Create the database and a file-based master key, plus a bootstrap admin.
 ./bin/parameter-store init --db ./kms.db --master-key-file ./master.key --admin ops
 # -> prints the admin identity's bearer token exactly once; save it.
 
-# Start the server (defaults: gRPC :8443, HTTP :8080, both plaintext — fine
-# for local development; see docs/operations.md for TLS/mTLS in production).
-KMS_KEK_FILE=./master.key KMS_SQLITE_PATH=./kms.db ./bin/parameter-store serve
+# Start a plaintext development server on loopback only. Production requires
+# TLS; see "Connect a production application with mTLS" below.
+KMS_KEK_FILE=./master.key KMS_SQLITE_PATH=./kms.db \
+  KMS_GRPC_ADDR=127.0.0.1:8443 KMS_HTTP_ADDR=127.0.0.1:8080 \
+  ./bin/parameter-store serve
 ```
 
 Check readiness: `curl http://localhost:8080/readyz` (`ready`) and
@@ -200,60 +202,33 @@ Check readiness: `curl http://localhost:8080/readyz` (`ready`) and
 `http://localhost:8080/` — log in with the admin token from `init`. Server
 logs should show both `gRPC listening` and `HTTP listening`.
 
-### Create a namespace, a client identity, and (optionally) a policy
+### Local development: connect with a token
 
 Namespace, identity, and policy management is an admin operation, done
 through the `parameter-store admin` CLI subcommands, the HTTP API (used by
-the frontend), or the embedded web UI. First create the namespace the app
-lives in, then a client identity bound to it:
+the frontend), or the embedded web UI. For the loopback-only plaintext server
+above, create an explicitly token-enabled development namespace and a
+token-only identity:
 
 ```bash
 ADMIN_TOKEN=...   # from `init --admin`; admin flags: --endpoint / --token
 
-# Create the namespace. Omitting --auth-methods defaults to mTLS-only (the
-# recommended production posture); here we also allow token auth so the
-# token-based examples below work over --insecure.
-./bin/parameter-store admin namespace create --env prod --app gradethis \
-  --auth-methods mtls,token --endpoint localhost:8443 --insecure --token "$ADMIN_TOKEN"
+./bin/parameter-store admin namespace create --env dev --app gradethis \
+  --auth-methods token --endpoint localhost:8443 --insecure --token "$ADMIN_TOKEN"
 
-# Mint both credentials for this walkthrough: the token works with the local
-# plaintext server, while the certificate is the recommended production
-# credential once server TLS is enabled. Save the printed one-time token as
-# GRADETHIS_TOKEN; the PEM bundle is written into ./certs.
-./bin/parameter-store admin identity create gradethis-be \
-  --namespace prod/gradethis --auth both --ttl 2160h --out ./certs \
+./bin/parameter-store admin identity create gradethis-local \
+  --namespace dev/gradethis --auth token \
   --endpoint localhost:8443 --insecure --token "$ADMIN_TOKEN"
-
-# Optional: fetch the built-in CA that issued the client certificate for
-# out-of-band inspection. This is NOT the CA bundle clients use to verify the
-# operator-provided server certificate.
-./bin/parameter-store admin ca show --endpoint localhost:8443 --insecure > kms-client-ca.crt
-```
-
-To create a token-only identity over the HTTP API instead of the CLI command
-above, use the following request and save the one-time token:
-
-```bash
-curl -s -X POST http://localhost:8080/api/v1/identities \
-  -H "Authorization: Bearer $ADMIN_TOKEN" -H 'Content-Type: application/json' \
-  -d '{"name": "gradethis-be", "kind": "client",
-       "namespace": {"env": "prod", "app": "gradethis"}, "auth_methods": ["token"]}'
-# -> {"identity": {...}, "token": "kms_..."}  (shown once — save it)
+# -> prints the one-time identity token; save it as GRADETHIS_TOKEN
 ```
 
 A namespace-bound identity may already **read and list within its own
 namespace** with no policy (the implicit home-namespace grant), so a read
-policy is only needed for cross-namespace access. Writes always need an
-explicit rule — grant one with the namespace-wide `{operation, env, app}` shape:
-
-```bash
-curl -s -X POST http://localhost:8080/api/v1/policies \
-  -H "Authorization: Bearer $ADMIN_TOKEN" -H 'Content-Type: application/json' \
-  -d '{"policy": {"name": "gradethis-write", "subject": "gradethis-be",
-       "allow": [{"operation": "secret:write", "env": "prod", "app": "gradethis"}]}}'
-```
-
-Full HTTP API contract: [`docs/http-api.md`](docs/http-api.md).
+policy is only needed for cross-namespace access. No policy is needed for this
+read-only application walkthrough: seed the value with the admin credential
+below. If an application must write, grant its identity an explicit
+namespace-wide `{operation, env, app}` rule in the frontend or through the
+[HTTP API](docs/http-api.md).
 
 ### Put and get a secret
 
@@ -264,24 +239,22 @@ The convenience commands take a `/env/app/key` display path (split
 client-side into namespace + key):
 
 ```bash
-echo -n 'sk_test_123' | ./bin/parameter-store put-secret /prod/gradethis/stripe-api-key \
+echo -n 'sk_test_123' | ./bin/parameter-store put-secret /dev/gradethis/stripe-api-key \
   --endpoint localhost:8443 --insecure --token "$ADMIN_TOKEN"
-# -> Stored /prod/gradethis/stripe-api-key version 1 (revision N)
+# -> Stored /dev/gradethis/stripe-api-key version 1 (revision N)
 
-./bin/parameter-store get-secret /prod/gradethis/stripe-api-key \
+./bin/parameter-store get-secret /dev/gradethis/stripe-api-key \
   --endpoint localhost:8443 --insecure --token "$GRADETHIS_TOKEN" --show
 ```
 
-(`--insecure` skips TLS for local development only; see
-[`docs/operations.md`](docs/operations.md#tls-and-mtls) for production TLS/
-mTLS setup.) The equivalent from a consuming application, using the Go SDK:
-the client is bound to a namespace and reads by **relative key**. This local
-quickstart uses the token because the server above is plaintext:
+The equivalent from a consuming application using the Go SDK is below. This
+local example deliberately opts into cleartext and token authentication; do
+not carry either setting into a deployed service:
 
 ```go
 client, err := kmsclient.NewClient(kmsclient.Config{
     Endpoint:  "localhost:8443",
-    Namespace: "prod/gradethis",
+    Namespace: "dev/gradethis",
     Token:     os.Getenv("GRADETHIS_TOKEN"),
     Insecure:  true, // explicit cleartext opt-in for this local server only
 })
@@ -290,7 +263,7 @@ if err != nil {
 }
 defer client.Close()
 
-secret, err := client.GetSecret(context.Background(), "stripe-api-key") // relative to prod/gradethis
+secret, err := client.GetSecret(context.Background(), "stripe-api-key") // relative to dev/gradethis
 if err != nil {
     log.Fatal(err)
 }
@@ -298,15 +271,122 @@ if err != nil {
 fmt.Println(secret.StringValue())
 ```
 
-In production, enable server TLS and prefer the issued client certificate:
-set `TLS` to `kmsclient.MTLSFromFiles("certs/gradethis-be.crt",
-"certs/gradethis-be.key", "server-ca.crt")` and omit `Token`. Here
-`server-ca.crt` must trust the operator-provided **server** certificate; it is
-not the built-in client-issuing CA returned by `admin ca show`.
-
 See [`docs/sdk-go.md`](docs/sdk-go.md) for the full Go SDK guide, including
 the declarative `SecretValue`/`ParameterValue` pattern most applications
 should actually use instead of calling `GetSecret` directly.
+
+### Connect a production application with mTLS
+
+Production uses three distinct certificate roles. Keeping the direction of
+trust clear prevents the most common setup mistake:
+
+| Certificate role | Created and stored by | Used for |
+|---|---|---|
+| **KMS server certificate/key + server trust CA** | The operator obtains the serving certificate from the organization's PKI or another trusted CA, configures `server_cert_file`/`server_key_file`, and distributes a `server-ca.crt` trust bundle to applications. | KMS presents the serving certificate; applications use `server-ca.crt` to verify that they reached the real KMS server. The server private key stays on the KMS host. |
+| **KMS built-in client-issuing CA** | KMS creates this self-signed CA on first startup and stores it in SQLite's `ca_keys` table; the private key is KEK-wrapped. | KMS issues and verifies application client certificates. Applications do **not** use this CA to verify the server. Its public certificate can be exported with `admin ca show` for diagnostics or out-of-band verification only. |
+| **Per-application client certificate/key** | KMS creates one when an mTLS identity is enrolled; its serial/fingerprint enrollment record remains in SQLite and the one-time PEM files go to the operator. | The application presents the certificate and proves possession of its private key; KMS maps its `kms://identity/<name>` URI SAN to the enrolled identity. |
+
+First [enable server TLS](docs/operations.md#tls-and-mtls) with the
+operator-provided serving certificate. Its DNS or IP SAN must match the host
+applications use in `KMS_ENDPOINT` (`kms.internal` in this example), because
+the SDKs perform normal server-name verification. Then create an mTLS-only
+namespace and one identity for the consuming application:
+
+```bash
+ADMIN_TOKEN=...                 # bootstrap or another admin credential
+KMS_ENDPOINT=kms.internal:8443
+SERVER_CA=/etc/parameter-store/trust/server-ca.crt
+
+./bin/parameter-store admin namespace create --env prod --app gradethis \
+  --auth-methods mtls --endpoint "$KMS_ENDPOINT" --ca "$SERVER_CA" \
+  --token "$ADMIN_TOKEN"
+
+# POSIX: create an owner-only output directory.
+install -d -m 0700 ./credentials/gradethis-be
+# PowerShell, from a trusted current-user directory:
+# New-Item -ItemType Directory -Force .\credentials\gradethis-be
+./bin/parameter-store admin identity create gradethis-be \
+  --namespace prod/gradethis --auth mtls --ttl 90d \
+  --out ./credentials/gradethis-be \
+  --endpoint "$KMS_ENDPOINT" --ca "$SERVER_CA" --token "$ADMIN_TOKEN"
+# -> ./credentials/gradethis-be/gradethis-be.crt
+# -> ./credentials/gradethis-be/gradethis-be.key (one-time private key)
+```
+
+On Windows, the CLI protects the generated private key with a
+current-user-only DACL. On every platform, use an output directory controlled
+by the account running the command.
+
+Deploy the application certificate and private key through your secret
+delivery mechanism, and deploy the operator's server CA bundle as trust
+configuration. Restrict the private key to the application account. Do not
+deploy the built-in client-issuing CA, the KMS server key, or an admin token to
+the application.
+
+All three SDKs take the files in the same order conceptually: application
+certificate, application private key, then **server** CA. A namespace-bound
+identity can discover `prod/gradethis` through `WhoAmI`, so these examples need
+neither a bearer token nor an explicit namespace.
+
+Go ([full guide](docs/sdk-go.md)):
+
+```go
+client, err := kmsclient.NewClient(kmsclient.Config{
+    Endpoint: os.Getenv("KMS_ENDPOINT"),
+    TLS: kmsclient.MTLSFromFiles(
+        os.Getenv("KMS_CLIENT_CERT"),
+        os.Getenv("KMS_CLIENT_KEY"),
+        os.Getenv("KMS_SERVER_CA"),
+    ),
+})
+if err != nil {
+    log.Fatal(err)
+}
+defer client.Close()
+```
+
+Python ([full guide](docs/sdk-python.md)):
+
+```python
+import os
+from kms_paramstore import Client, mtls_from_files
+
+with Client(
+    os.environ["KMS_ENDPOINT"],
+    tls=mtls_from_files(
+        os.environ["KMS_CLIENT_CERT"],
+        os.environ["KMS_CLIENT_KEY"],
+        os.environ["KMS_SERVER_CA"],
+    ),
+) as client:
+    identity = client.who_am_i()  # verifies TLS, the client cert, and enrollment
+```
+
+TypeScript/Node.js ([full guide](sdk/typescript/README.md)):
+
+```ts
+import { createClient, mtlsFromFiles } from "@suhaibinator/kms";
+
+const client = createClient({
+  endpoint: process.env.KMS_ENDPOINT!,
+  credentials: mtlsFromFiles(
+    process.env.KMS_CLIENT_CERT!,
+    process.env.KMS_CLIENT_KEY!,
+    process.env.KMS_SERVER_CA!,
+  ),
+});
+
+try {
+  const identity = await client.whoAmI(); // verifies TLS, the client cert, and enrollment
+} finally {
+  await client.close();
+}
+```
+
+The identity's implicit home-namespace grant covers reads and lists. Add a
+policy only for writes or cross-namespace access. Certificate renewal is an
+overlap operation: issue a replacement, deploy it, then revoke the old serial.
+See the complete [application onboarding and rollover runbook](docs/operations.md#connect-a-production-application-with-mtls).
 
 ## Configuration
 

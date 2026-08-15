@@ -1,3 +1,4 @@
+import { X } from "lucide-react";
 import { type ReactNode, useEffect, useId, useRef, useState } from "react";
 import { Spinner } from "./ui";
 
@@ -116,7 +117,7 @@ export function Modal({
               aria-label="Close dialog"
               onClick={onClose}
             >
-              ×
+              <X size={18} aria-hidden />
             </button>
           ) : null}
         </div>

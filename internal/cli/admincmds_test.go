@@ -13,6 +13,60 @@ import (
 	kmsv1 "github.com/Suhaibinator/kms/gen/kmsv1"
 )
 
+func TestAdminHelpExplainsApplicationCredentialRoles(t *testing.T) {
+	c := newTestCLI()
+	if code := c.Run([]string{"admin", "help"}); code != 0 {
+		t.Fatalf("admin help exit = %d", code)
+	}
+	for _, want := range []string{
+		"Create application credentials; mTLS by default",
+		"Applications present NAME.crt and prove possession with NAME.key",
+		"operator-provided KMS server certificate",
+		`"ca show" is NOT that server-trust CA`,
+		"built-in client-issuing CA",
+		"Admin identities always receive a one-time bearer token",
+	} {
+		if !strings.Contains(c.stderr(), want) {
+			t.Fatalf("admin help missing %q: %s", want, c.stderr())
+		}
+	}
+}
+
+func TestIdentityAndCAFlagHelpUseApplicationCredentialTerms(t *testing.T) {
+	tests := []struct {
+		name string
+		args []string
+		want string
+	}{
+		{
+			name: "identity create",
+			args: []string{"admin", "identity", "create", "-h"},
+			want: "directory for one-time application client credentials",
+		},
+		{
+			name: "identity issue-cert",
+			args: []string{"admin", "identity", "issue-cert", "-h"},
+			want: "directory for one-time application client credentials",
+		},
+		{
+			name: "ca show",
+			args: []string{"admin", "ca", "show", "-h"},
+			want: "built-in client-issuing CA",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c := newTestCLI()
+			if code := c.Run(tt.args); code != 0 {
+				t.Fatalf("help exit = %d, want 0", code)
+			}
+			if !strings.Contains(c.stderr(), tt.want) {
+				t.Fatalf("flag help missing %q: %s", tt.want, c.stderr())
+			}
+		})
+	}
+}
+
 func TestWriteCertBundleToDir(t *testing.T) {
 	dir := t.TempDir()
 	c := newTestCLI()
@@ -169,9 +223,194 @@ func TestCreatedIdentityPersistsReservedCertBeforeStatusOutputFailure(t *testing
 	}
 }
 
+func TestWithReservedCertBundlePreservesPublishedCredentialsAfterStatusFailure(t *testing.T) {
+	dir := t.TempDir()
+	c := newTestCLI()
+	c.Stdout = errorWriter{err: io.ErrClosedPipe}
+	bundle := testCertBundle()
+
+	err := c.withReservedCertBundle(dir, "svc", func(output *reservedCertBundle) error {
+		return c.writeCreatedIdentityResult("svc", "client", []string{"mtls"}, output, &kmsv1.CreateIdentityResponse{Cert: bundle})
+	})
+	if !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("withReservedCertBundle error = %v, want closed pipe", err)
+	}
+	for _, want := range []string{"one-time credentials were fully written", "preserve them", "verify the identity/certificate state on the server before retrying"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("published-credential error missing %q: %v", want, err)
+		}
+	}
+	if strings.Contains(err.Error(), "remove") {
+		t.Fatalf("published-credential error incorrectly recommends removal: %v", err)
+	}
+	if got := readFileString(t, filepath.Join(dir, "svc.crt")); got != bundle.CertPem {
+		t.Fatalf("published certificate = %q", got)
+	}
+	if got := readFileString(t, filepath.Join(dir, "svc.key")); got != bundle.KeyPem {
+		t.Fatalf("published private key = %q", got)
+	}
+}
+
+func TestWithReservedCertBundlePreservesPublishedCredentialsAfterGuidanceFailure(t *testing.T) {
+	dir := t.TempDir()
+	c := newTestCLI()
+	stdout := &substringErrorWriter{substring: "Next steps:", err: io.ErrClosedPipe}
+	c.Stdout = stdout
+	bundle := testCertBundle()
+
+	err := c.withReservedCertBundle(dir, "svc", func(output *reservedCertBundle) error {
+		return c.writeCreatedIdentityResult("svc", "client", []string{"mtls"}, output, &kmsv1.CreateIdentityResponse{Cert: bundle})
+	})
+	if !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("withReservedCertBundle error = %v, want guidance closed pipe", err)
+	}
+	if !strings.Contains(err.Error(), "preserve them and verify the identity/certificate state on the server before retrying") {
+		t.Fatalf("guidance error lacks published-credential recovery: %v", err)
+	}
+	if strings.Contains(err.Error(), "remove") {
+		t.Fatalf("guidance error incorrectly recommends credential removal: %v", err)
+	}
+	if !strings.Contains(stdout.written.String(), `Created identity "svc"`) {
+		t.Fatalf("test did not reach post-publication guidance: %s", stdout.written.String())
+	}
+	if got := readFileString(t, filepath.Join(dir, "svc.key")); got != bundle.KeyPem {
+		t.Fatalf("published private key = %q", got)
+	}
+}
+
+func TestWithReservedCertBundleKeepsPartialWriteCleanupGuidance(t *testing.T) {
+	dir := t.TempDir()
+	c := newTestCLI()
+	bundle := testCertBundle()
+
+	err := c.withReservedCertBundle(dir, "svc", func(output *reservedCertBundle) error {
+		// Force a private-key write failure after the certificate write. This is
+		// deliberately not a complete publication and must retain fail-safe
+		// reservation cleanup guidance.
+		if err := output.keyFile.Close(); err != nil {
+			return err
+		}
+		return c.writeCertBundleToOutput(output, bundle)
+	})
+	if err == nil {
+		t.Fatal("expected partial credential write to fail")
+	}
+	if !strings.Contains(err.Error(), "inspect and remove") {
+		t.Fatalf("partial-write error lacks reservation cleanup guidance: %v", err)
+	}
+	if strings.Contains(err.Error(), "one-time credentials were fully written") {
+		t.Fatalf("partial write incorrectly marked published: %v", err)
+	}
+	if got := readFileString(t, filepath.Join(dir, "svc.crt")); got != bundle.CertPem {
+		t.Fatalf("partially written certificate = %q", got)
+	}
+	if info, statErr := os.Stat(filepath.Join(dir, "svc.key")); statErr != nil || info.Size() != 0 {
+		t.Fatalf("partial private-key reservation = %+v, %v", info, statErr)
+	}
+}
+
+func TestCreatedIdentityFileOutputExplainsApplicationNextStepsWithoutLeakingPEM(t *testing.T) {
+	dir := t.TempDir()
+	output, err := reserveCertBundle(dir, "svc")
+	if err != nil {
+		t.Fatalf("reserveCertBundle: %v", err)
+	}
+	defer output.cleanup()
+
+	c := newTestCLI()
+	bundle := testCertBundle()
+	if err := c.writeCreatedIdentityResult("svc", "client", []string{"mtls"}, output, &kmsv1.CreateIdentityResponse{Cert: bundle}); err != nil {
+		t.Fatalf("writeCreatedIdentityResult: %v", err)
+	}
+	out := c.stdout()
+	for _, want := range []string{
+		output.certPath,
+		output.keyPath,
+		"Deploy both files securely to the application",
+		"CA bundle that trusts the operator-provided KMS server certificate",
+		`Do not use "parameter-store admin ca show" for server trust`,
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("identity output missing %q: %s", want, out)
+		}
+	}
+	for _, secret := range []string{bundle.CertPem, bundle.KeyPem} {
+		if strings.Contains(out, secret) {
+			t.Fatalf("file-mode status leaked PEM material: %s", out)
+		}
+	}
+}
+
+func TestCreatedIdentityStdoutPrintsOneTimePEMOnceAndExplainsNextSteps(t *testing.T) {
+	c := newTestCLI()
+	bundle := testCertBundle()
+	if err := c.writeCreatedIdentityResult("svc", "client", []string{"mtls"}, nil, &kmsv1.CreateIdentityResponse{Cert: bundle}); err != nil {
+		t.Fatalf("writeCreatedIdentityResult: %v", err)
+	}
+	out := c.stdout()
+	if got := strings.Count(out, bundle.CertPem); got != 1 {
+		t.Fatalf("certificate PEM count = %d, want 1: %s", got, out)
+	}
+	if got := strings.Count(out, bundle.KeyPem); got != 1 {
+		t.Fatalf("private-key PEM count = %d, want 1: %s", got, out)
+	}
+	for _, want := range []string{
+		"Save the client certificate and private key printed above now",
+		"Deploy both credentials securely to the application",
+		"operator-provided KMS server certificate",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("identity output missing %q: %s", want, out)
+		}
+	}
+}
+
+func TestIssuedCertificateFileOutputExplainsApplicationNextSteps(t *testing.T) {
+	dir := t.TempDir()
+	output, err := reserveCertBundle(dir, "svc")
+	if err != nil {
+		t.Fatalf("reserveCertBundle: %v", err)
+	}
+	defer output.cleanup()
+
+	c := newTestCLI()
+	bundle := testCertBundle()
+	if err := c.writeIssuedIdentityCertificateResult("svc", output, bundle); err != nil {
+		t.Fatalf("writeIssuedIdentityCertificateResult: %v", err)
+	}
+	out := c.stdout()
+	for _, want := range []string{
+		`Issued new mTLS credentials for identity "svc"`,
+		output.certPath,
+		output.keyPath,
+		"Deploy both files securely to the application",
+		"operator-provided KMS server certificate",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("issue-cert output missing %q: %s", want, out)
+		}
+	}
+	if strings.Contains(out, bundle.KeyPem) {
+		t.Fatalf("file-mode status leaked private-key PEM: %s", out)
+	}
+}
+
 type errorWriter struct{ err error }
 
 func (w errorWriter) Write([]byte) (int, error) { return 0, w.err }
+
+type substringErrorWriter struct {
+	substring string
+	err       error
+	written   strings.Builder
+}
+
+func (w *substringErrorWriter) Write(p []byte) (int, error) {
+	if strings.Contains(string(p), w.substring) {
+		return 0, w.err
+	}
+	return w.written.Write(p)
+}
 
 func TestPrintTokenOncePropagatesOutputFailure(t *testing.T) {
 	if err := printTokenOnce(errorWriter{err: io.ErrClosedPipe}, "identity", "svc", "kms_secret"); !errors.Is(err, io.ErrClosedPipe) {

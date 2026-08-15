@@ -1,3 +1,4 @@
+import { RefreshCw } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { Icon } from "@/components/icons";
 import {
@@ -48,6 +49,7 @@ export default function HealthPage() {
         actions={
           <button className="btn" onClick={() => void load()} disabled={loading}>
             {loading ? <Spinner /> : null}
+            {!loading ? <RefreshCw size={16} aria-hidden /> : null}
             {loading ? "Refreshing…" : "Refresh"}
           </button>
         }

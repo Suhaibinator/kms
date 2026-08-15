@@ -1,3 +1,4 @@
+import { ArrowLeft } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/router";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -176,7 +177,7 @@ export default function ParameterDetailPage() {
           title={hasRef ? <span className="mono">{displayPath(ref)}</span> : "Parameter"}
           subtitle={
             <Link href={backLink} className="text-sm">
-              ← {hasRef ? displayNamespace(ref) : "Parameters"}
+              <ArrowLeft size={14} aria-hidden /> {hasRef ? displayNamespace(ref) : "Parameters"}
             </Link>
           }
         />
@@ -220,7 +221,7 @@ export default function ParameterDetailPage() {
           title="Parameter not found"
           actions={
             <Link className="btn" href={backLink}>
-              Back to parameters
+              <ArrowLeft size={16} aria-hidden /> Back to parameters
             </Link>
           }
         />
@@ -256,7 +257,7 @@ export default function ParameterDetailPage() {
         title={<span className="mono">{displayPath(ref)}</span>}
         subtitle={
           <Link href={backLink} className="text-sm">
-            ← {displayNamespace(ref)}
+            <ArrowLeft size={14} aria-hidden /> {displayNamespace(ref)}
           </Link>
         }
         actions={

@@ -1,3 +1,4 @@
+import { ArrowRight, RefreshCw } from "lucide-react";
 import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 import { Icon } from "@/components/icons";
@@ -110,6 +111,7 @@ export default function DashboardPage() {
         actions={
           <button className="btn" onClick={() => void load()} disabled={loading}>
             {loading ? <Spinner /> : null}
+            {!loading ? <RefreshCw size={16} aria-hidden /> : null}
             {loading ? "Refreshing…" : "Refresh"}
           </button>
         }
@@ -155,7 +157,9 @@ export default function DashboardPage() {
               <CountText c={data.namespaces} />
             </div>
             <div className="stat-sub">
-              <Link href="/namespaces">Manage →</Link>
+              <Link href="/namespaces">
+                Manage <ArrowRight size={14} aria-hidden />
+              </Link>
             </div>
           </div>
 
@@ -165,7 +169,9 @@ export default function DashboardPage() {
               <CountText c={data.parameters} />
             </div>
             <div className="stat-sub">
-              <Link href="/parameters">Manage →</Link>
+              <Link href="/parameters">
+                Manage <ArrowRight size={14} aria-hidden />
+              </Link>
             </div>
           </div>
 
@@ -175,7 +181,9 @@ export default function DashboardPage() {
               <CountText c={data.secrets} />
             </div>
             <div className="stat-sub">
-              <Link href="/secrets">Manage →</Link>
+              <Link href="/secrets">
+                Manage <ArrowRight size={14} aria-hidden />
+              </Link>
             </div>
           </div>
 
@@ -197,7 +205,7 @@ export default function DashboardPage() {
         <div className="card-title">
           Recent activity
           <Link href="/audit" className="text-sm">
-            View audit log →
+            View audit log <ArrowRight size={14} aria-hidden />
           </Link>
         </div>
         {loading ? (
@@ -258,7 +266,7 @@ export default function DashboardPage() {
         <div className="card-title">
           Live subscribers
           <Link href="/subscribers" className="text-sm">
-            View all →
+            View all <ArrowRight size={14} aria-hidden />
           </Link>
         </div>
         {loading ? (

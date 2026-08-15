@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { Filter, X } from "lucide-react";
 import { Icon } from "@/components/icons";
 import NamespacePicker, { type NamespaceSelection } from "@/components/NamespacePicker";
 import { Badge, EmptyState, PageHeader, Pagination, TableSkeleton } from "@/components/ui";
@@ -166,9 +167,11 @@ export default function SecretsPage() {
           />
         </div>
         <button type="submit" className="btn" disabled={!hasNs}>
+          <Filter size={15} aria-hidden />
           Filter
         </button>
         <button type="button" className="btn btn-ghost" onClick={clearFilter} disabled={!hasNs}>
+          <X size={15} aria-hidden />
           Clear
         </button>
       </form>
@@ -186,6 +189,7 @@ export default function SecretsPage() {
           actions={
             prefix ? (
               <button className="btn" onClick={clearFilter}>
+                <X size={15} aria-hidden />
                 Clear filter
               </button>
             ) : (

@@ -28,10 +28,14 @@ go get github.com/Suhaibinator/kms/sdk/go/kmsclient
 
 ## Connecting
 
+If the application does not have credentials yet, follow the
+[production mTLS onboarding runbook](operations.md#connect-a-production-application-with-mtls)
+to create its namespace and identity and deliver its client cert/key plus the
+operator's server CA bundle.
+
 ```go
 client, err := kmsclient.NewClient(kmsclient.Config{
     Endpoint:  "parameter-store.prod.internal:8443",
-    Namespace: "prod/gradethis",                                    // env/app; optional (see below)
     TLS:       kmsclient.MTLSFromFiles("client.crt", "client.key", "server-ca.crt"),
     CacheTTL:  time.Minute,
 })
@@ -46,7 +50,9 @@ built-in CA (proof of possession; see [`security.md`](security.md)): the
 identity derives from the cert server-side, so `Token` is not needed. Supply a
 `Token` only for token-method identities. `server-ca.crt` must trust the
 operator-provided **server** certificate. It is not the built-in client CA
-returned by `admin ca show`.
+returned by `admin ca show`. The example omits `Namespace` because an identity
+created with `--namespace prod/gradethis` discovers that binding through
+`WhoAmI`; setting it explicitly is also supported.
 
 `Config` fields (`sdk/go/kmsclient/client.go`):
 

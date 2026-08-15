@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
+import { Pencil, Trash2 } from "lucide-react";
 import { Icon } from "@/components/icons";
 import { ConfirmDialog, Modal } from "@/components/Modal";
 import { Badge, EmptyState, Field, PageHeader, TableSkeleton } from "@/components/ui";
@@ -285,6 +286,7 @@ export default function NamespacesPage() {
                         <td>
                           <div className="row-actions">
                             <button className="btn btn-sm" onClick={() => openEdit(ns)}>
+                              <Pencil size={14} aria-hidden />
                               Edit
                             </button>
                             <button
@@ -297,6 +299,7 @@ export default function NamespacesPage() {
                               }
                               onClick={() => setDeleteTarget(ns)}
                             >
+                              <Trash2 size={14} aria-hidden />
                               Delete
                             </button>
                           </div>

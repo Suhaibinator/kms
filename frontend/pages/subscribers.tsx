@@ -1,3 +1,4 @@
+import { RefreshCw } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Icon } from "@/components/icons";
 import { Badge, EmptyState, PageHeader, TableSkeleton } from "@/components/ui";
@@ -120,6 +121,7 @@ export default function SubscribersPage() {
               live · updated {lastUpdated ? formatRelative(lastUpdated) : "—"}
             </span>
             <button className="btn" onClick={() => void refresh(false)}>
+              <RefreshCw size={16} aria-hidden />
               Refresh
             </button>
           </>

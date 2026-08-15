@@ -40,6 +40,48 @@ func TestRunHelp(t *testing.T) {
 	if !strings.Contains(c.stderr(), "Usage:") {
 		t.Fatalf("help output missing usage: %s", c.stderr())
 	}
+	for _, want := range []string{
+		"Application onboarding",
+		"create ./certs and restrict directory access to its owner",
+		"admin namespace create --env ENV --app APP --auth-methods mtls",
+		"admin identity create NAME --namespace ENV/APP --auth mtls --out ./certs",
+		"Create NAME.crt and NAME.key for the application",
+	} {
+		if !strings.Contains(c.stderr(), want) {
+			t.Fatalf("help output missing %q: %s", want, c.stderr())
+		}
+	}
+}
+
+func TestCommandFlagHelpExitsSuccessfully(t *testing.T) {
+	for _, args := range [][]string{
+		{"admin", "identity", "create", "-h"},
+		{"admin", "identity", "issue-cert", "--help"},
+		{"admin", "ca", "show", "-h"},
+		{"put-secret", "--help"},
+	} {
+		c := newTestCLI()
+		if code := c.Run(args); code != 0 {
+			t.Errorf("Run(%v) exit = %d, want 0; stderr: %s", args, code, c.stderr())
+		}
+	}
+}
+
+func TestRunResetsHelpRequestedBetweenInvocations(t *testing.T) {
+	c := newTestCLI()
+	if code := c.Run([]string{"admin", "ca", "show", "-h"}); code != 0 {
+		t.Fatalf("help exit = %d", code)
+	}
+	if code := c.Run([]string{"frobnicate"}); code != 2 {
+		t.Fatalf("later invalid command exit = %d, want 2", code)
+	}
+}
+
+func TestMalformedCommandFlagStillExitsWithUsageError(t *testing.T) {
+	c := newTestCLI()
+	if code := c.Run([]string{"admin", "identity", "create", "--not-a-real-flag"}); code != 2 {
+		t.Fatalf("malformed flag exit = %d, want 2; stderr: %s", code, c.stderr())
+	}
 }
 
 func TestConsumeGlobalConfigFlag(t *testing.T) {

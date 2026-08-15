@@ -1,3 +1,4 @@
+import { ArrowLeft } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/router";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -214,7 +215,7 @@ export default function SecretDetailPage() {
           title={hasRef ? <span className="mono">{displayPath(ref)}</span> : "Secret"}
           subtitle={
             <Link href={backLink} className="text-sm">
-              ← {hasRef ? displayNamespace(ref) : "Secrets"}
+              <ArrowLeft size={14} aria-hidden /> {hasRef ? displayNamespace(ref) : "Secrets"}
             </Link>
           }
         />
@@ -261,7 +262,7 @@ export default function SecretDetailPage() {
           title="Secret not found"
           actions={
             <Link className="btn" href={backLink}>
-              Back to secrets
+              <ArrowLeft size={16} aria-hidden /> Back to secrets
             </Link>
           }
         />
@@ -300,7 +301,7 @@ export default function SecretDetailPage() {
         title={<span className="mono">{displayPath(ref)}</span>}
         subtitle={
           <Link href={backLink} className="text-sm">
-            ← {displayNamespace(ref)}
+            <ArrowLeft size={14} aria-hidden /> {displayNamespace(ref)}
           </Link>
         }
         actions={

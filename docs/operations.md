@@ -90,6 +90,178 @@ each line carries `ts` (ISO8601, millisecond precision), a lowercase `level`
 `KMS_LOG_LEVEL` sets the minimum level (default `info`). Secret plaintext,
 tokens, and key material never appear in a log line at any level.
 
+## Connect a production application with mTLS
+
+Use one KMS identity and one client certificate/key pair per consuming
+application. Before issuing anything, distinguish the three certificate roles:
+
+| Certificate role | Created and stored by | Used for |
+|---|---|---|
+| **KMS server certificate/key + server trust CA** | The operator obtains the serving certificate from the organization's PKI or another trusted CA, configures `server_cert_file`/`server_key_file`, and distributes a `server-ca.crt` trust bundle to applications. | KMS presents the serving certificate; applications use `server-ca.crt` to verify the KMS server. The server private key stays on the KMS host. |
+| **KMS built-in client-issuing CA** | KMS creates this self-signed CA on first startup and stores it in SQLite's `ca_keys` table; the private key is KEK-wrapped. | KMS issues and verifies application client certificates. Applications do **not** use this CA for server trust. `admin ca show` exports its public certificate for diagnostics or out-of-band verification only. |
+| **Per-application client certificate/key** | KMS creates it when an mTLS identity is enrolled. Its serial/fingerprint enrollment remains in `identity_certs`; the one-time PEM files go to the operator. | The application presents the certificate and proves possession of its private key. KMS maps its `kms://identity/<name>` URI SAN to the enrolled identity and checks its serial, fingerprint, expiry, and revocation state. |
+
+The following secure path assumes the server is already running with
+[`security.tls_enabled: true`](#tls-and-mtls), the operator has the CA bundle
+that trusts its serving certificate, and an admin credential is available.
+The serving certificate's DNS or IP SAN must match the host applications use
+in `KMS_ENDPOINT` (`kms.internal` below), because the SDKs perform normal
+server-name verification. The built-in client CA works with
+`mtls_enabled: false`; that flag is only for adding a separate
+operator-supplied client CA.
+
+### 1. Create the application's namespace
+
+New namespaces default to mTLS-only, but specifying the method makes the
+intended posture visible in scripts and reviews:
+
+```bash
+ADMIN_TOKEN=...                 # bootstrap or another admin credential
+KMS_ENDPOINT=kms.internal:8443
+SERVER_CA=/etc/parameter-store/trust/server-ca.crt
+
+parameter-store admin namespace create --env prod --app gradethis \
+    --auth-methods mtls --endpoint "$KMS_ENDPOINT" --ca "$SERVER_CA" \
+    --token "$ADMIN_TOKEN"
+```
+
+For an existing namespace, inspect and update it with the same secure
+connection flags:
+
+```bash
+parameter-store admin namespace list \
+    --endpoint "$KMS_ENDPOINT" --ca "$SERVER_CA" --token "$ADMIN_TOKEN"
+
+parameter-store admin namespace update --env prod --app gradethis \
+    --auth-methods mtls --endpoint "$KMS_ENDPOINT" --ca "$SERVER_CA" \
+    --token "$ADMIN_TOKEN"
+```
+
+`namespace update` is a full replacement of both the description and auth
+method list, so preserve any existing description intentionally.
+
+### 2. Enroll one identity and issue its client certificate
+
+Prepare an owner-controlled directory, then create a namespace-bound,
+certificate-only identity:
+
+```bash
+# POSIX: create an owner-only output directory.
+install -d -m 0700 ./credentials/gradethis-be
+# PowerShell, from a trusted current-user directory:
+# New-Item -ItemType Directory -Force .\credentials\gradethis-be
+
+parameter-store admin identity create gradethis-be \
+    --namespace prod/gradethis --auth mtls --ttl 90d \
+    --out ./credentials/gradethis-be \
+    --endpoint "$KMS_ENDPOINT" --ca "$SERVER_CA" --token "$ADMIN_TOKEN"
+# writes ./credentials/gradethis-be/gradethis-be.crt (0644)
+#        ./credentials/gradethis-be/gradethis-be.key (0600, written only once)
+```
+
+On Windows, the CLI applies a protected current-user-only DACL to the private
+key. On every platform, the output directory must be controlled by the account
+running the command; see [Secure destination paths](#secure-destination-paths).
+
+The private key cannot be retrieved later. If it is lost, issue another
+certificate rather than trying to recover it. Do not create one shared
+identity for several applications: separate identities make policy, audit,
+rollover, and revocation boundaries explicit.
+
+### 3. Deploy the application credentials and server trust
+
+Deliver these paths to the consuming application through its normal secret
+and configuration mechanism:
+
+```text
+KMS_ENDPOINT     = kms.internal:8443
+KMS_CLIENT_CERT  = /run/credentials/gradethis-be.crt
+KMS_CLIENT_KEY   = /run/credentials/gradethis-be.key
+KMS_SERVER_CA    = /etc/ssl/kms/server-ca.crt
+```
+
+The client certificate is public identity material, but its private key is a
+secret and should be readable only by the application account. The server CA
+bundle is public trust configuration and must come from the operator or the
+organization's PKI. Do **not** deploy the KMS server private key, the built-in
+client-issuing CA, or an admin token to the application. In particular, do not
+substitute output from `admin ca show` for `KMS_SERVER_CA`.
+
+### 4. Configure the SDK
+
+The helpers in all three SDKs take the application certificate, application
+private key, and server CA in that conceptual order. Because this identity is
+bound to `prod/gradethis`, the SDK can discover the namespace through
+`WhoAmI`; no bearer token or explicit namespace is required.
+
+Go ([full guide](sdk-go.md)):
+
+```go
+client, err := kmsclient.NewClient(kmsclient.Config{
+    Endpoint: os.Getenv("KMS_ENDPOINT"),
+    TLS: kmsclient.MTLSFromFiles(
+        os.Getenv("KMS_CLIENT_CERT"),
+        os.Getenv("KMS_CLIENT_KEY"),
+        os.Getenv("KMS_SERVER_CA"),
+    ),
+})
+if err != nil {
+    return err
+}
+defer client.Close()
+```
+
+Python ([full guide](sdk-python.md)):
+
+```python
+import os
+from kms_paramstore import Client, mtls_from_files
+
+with Client(
+    os.environ["KMS_ENDPOINT"],
+    tls=mtls_from_files(
+        os.environ["KMS_CLIENT_CERT"],
+        os.environ["KMS_CLIENT_KEY"],
+        os.environ["KMS_SERVER_CA"],
+    ),
+) as client:
+    identity = client.who_am_i()  # verifies TLS, the client cert, and enrollment
+```
+
+TypeScript/Node.js ([full guide](../sdk/typescript/README.md)):
+
+```ts
+import { createClient, mtlsFromFiles } from "@suhaibinator/kms";
+
+const client = createClient({
+  endpoint: process.env.KMS_ENDPOINT!,
+  credentials: mtlsFromFiles(
+    process.env.KMS_CLIENT_CERT!,
+    process.env.KMS_CLIENT_KEY!,
+    process.env.KMS_SERVER_CA!,
+  ),
+});
+
+try {
+  const identity = await client.whoAmI(); // verifies TLS, the client cert, and enrollment
+} finally {
+  await client.close();
+}
+```
+
+A namespace-bound identity receives an implicit read/list grant in its home
+namespace. Create a policy for writes or cross-namespace access; the policy
+subject is the identity name (`gradethis-be`). For renewal, follow the
+[certificate rollover runbook](#built-in-ca-and-client-certificates): issue a
+new certificate while the old one remains valid, deploy it, then revoke the
+old serial.
+
+For a loopback-only development server, use a separate namespace that
+explicitly allows `token`, a token-only identity, and the SDK's explicit
+`insecure` option. Never use that cleartext path on a networked bind. The root
+[README local quickstart](../README.md#local-development-connect-with-a-token)
+keeps this development workflow separate from production mTLS.
+
 ## Administrative CLI reference
 
 These commands are implemented in `internal/cli` and operate directly on the
@@ -163,7 +335,8 @@ CA on a **running** server over gRPC (unlike the offline `--db` commands
 above). Every admin command shares the connection flags `--endpoint`
 (default `localhost:8443`), `--token` (admin bearer token; env `KMS_TOKEN`),
 `--insecure` (skip TLS, development only), `--ca`, and `--cert`/`--key`
-(mTLS). `admin ca show` needs no credential — the CA certificate is public.
+(mTLS). The diagnostic `admin ca show` command needs no credential because the
+built-in client issuer's certificate is public.
 
 | Command | Args / flags | Purpose |
 |---|---|---|
@@ -177,12 +350,14 @@ above). Every admin command shares the connection flags `--endpoint`
 | `admin identity rotate NAME` | — | Rotate a token identity's bearer token (printed once). |
 | `admin identity revoke NAME` | — | Disable an identity; **all** of its certificates become invalid. |
 | `admin identity list` | — | Table: name, kind, namespace, has-token, cert count, disabled. |
-| `admin ca show` | `--out FILE` | Print (or write) the public built-in **client-issuing** CA certificate for inspection or out-of-band verification of KMS-issued client certificates. This is not the SDK's server-trust CA. |
+| `admin ca show` | `--out FILE` | **Diagnostic/out-of-band only:** print (or write) the public built-in **client-issuing** CA certificate to inspect or independently verify KMS-issued client certificates. This is not the SDK's server-trust CA and is not part of application onboarding. |
 
 `--ttl` accepts a Go duration (`720h`) or a bare day count (`90d`); omitting
 it uses the server's 90-day default. `--auth-methods` and `--auth` values are
-`mtls` and/or `token`. Tokens and certificate private keys are shown exactly
-once and are never retrievable again. `admin namespace`/`identity` map onto
+`mtls` and/or `token`. An admin-kind identity always receives a bearer token;
+requesting `mtls` for an admin adds a certificate rather than replacing that
+token. Tokens and certificate private keys are shown exactly once and are
+never retrievable again. `admin namespace`/`identity` map onto
 the `AdminService` RPCs; see the [built-in CA runbook](#built-in-ca-and-client-certificates)
 below for the certificate lifecycle these commands drive.
 
@@ -430,8 +605,9 @@ listeners with that certificate (`Config.BuildServerTLS`, minimum TLS 1.2).
 `mtls_enabled`.** Whenever TLS is on, the gRPC listener adds the built-in CA
 to its client-CA pool and switches to `tls.VerifyClientCertIfGiven`
 (`grpcServerTLS`, `serve.go`) — so a client presenting a certificate the
-built-in CA issued (fetch the trust root with `admin ca show`) authenticates
-by mTLS, while token-only clients, presenting no certificate, still connect.
+built-in CA issued authenticates by mTLS, while token-only clients, presenting
+no certificate, still connect. The server reads that issuer directly from
+SQLite; application onboarding does not involve `admin ca show`.
 The TLS layer verifies any certificate offered; the per-namespace
 `allowed_auth_methods` gate, not the handshake, decides who is admitted.
 
@@ -518,10 +694,14 @@ concurrently-valid certificates, rollover is zero-downtime — issue the
 replacement *before* the current one expires:
 
 Certificate paths are reserved before the minting RPC. If the RPC or a local
-write fails, the CLI deliberately leaves the exclusive placeholders (and any
-partial private key at `0600`) in place rather than unlinking a pathname that
-could have been replaced concurrently. Inspect and remove those two files
-before retrying.
+write fails **before both credential files are fully written and closed**, the
+CLI deliberately leaves the exclusive placeholders (and any partial private
+key at `0600`) in place rather than unlinking a pathname that could have been
+replaced concurrently. Inspect those incomplete files and remove them before
+retrying. If the CLI instead reports that the one-time credentials were fully
+written, preserve that pair and verify the identity/certificate state on the
+server before retrying—the files may be the only copy of an enrolled private
+key.
 
 ```bash
 # 1. Reserve a fresh directory, then mint an additional cert for the existing

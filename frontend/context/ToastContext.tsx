@@ -1,3 +1,4 @@
+import { X } from "lucide-react";
 import {
   createContext,
   type ReactNode,
@@ -101,7 +102,7 @@ export function ToastProvider({ children }: { children: ReactNode }) {
               aria-label={`Dismiss ${t.title} notification`}
               onClick={() => dismiss(t.id)}
             >
-              ×
+              <X size={18} aria-hidden />
             </button>
           </div>
         ))}

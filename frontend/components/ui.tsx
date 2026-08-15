@@ -1,4 +1,5 @@
 import Head from "next/head";
+import { ArrowLeft, ArrowRight, ChevronsLeft } from "lucide-react";
 import { cloneElement, isValidElement, type ReactElement, type ReactNode, useId } from "react";
 import type { SecretVersionState } from "@/lib/types";
 
@@ -244,11 +245,13 @@ export function Pagination({
     <div className="pagination">
       {showReset && onReset ? (
         <button type="button" className="btn btn-sm" onClick={onReset}>
-          ← First page
+          <ChevronsLeft size={15} aria-hidden />
+          First page
         </button>
       ) : null}
       {hasPrevious && onPrevious ? (
         <button type="button" className="btn btn-sm" onClick={onPrevious}>
+          <ArrowLeft size={15} aria-hidden />
           Previous page
         </button>
       ) : null}
@@ -256,7 +259,8 @@ export function Pagination({
       <div className="spacer" />
       {hasNext ? (
         <button type="button" className="btn btn-sm" onClick={onNext}>
-          Next page →
+          Next page
+          <ArrowRight size={15} aria-hidden />
         </button>
       ) : (
         <span className="text-sm faint">End of results</span>

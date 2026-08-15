@@ -1,3 +1,4 @@
+import { Check, Copy } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useToast } from "@/context/ToastContext";
 
@@ -57,6 +58,7 @@ export default function CopyButton({ value, label = "Copy", className }: CopyBut
 
   return (
     <button type="button" className={`btn btn-sm ${className ?? ""}`} onClick={onCopy}>
+      {copied ? <Check size={15} aria-hidden /> : <Copy size={15} aria-hidden />}
       {copied ? "Copied" : label}
       <span className="sr-only" aria-live="polite">
         {copied ? "Copied to clipboard" : ""}

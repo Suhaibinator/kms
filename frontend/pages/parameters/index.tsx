@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { Eye, Filter, Trash2, X } from "lucide-react";
 import { Icon } from "@/components/icons";
 import { ConfirmDialog, Modal } from "@/components/Modal";
 import NamespacePicker, { type NamespaceSelection } from "@/components/NamespacePicker";
@@ -255,9 +256,11 @@ export default function ParametersPage() {
           />
         </div>
         <button type="submit" className="btn" disabled={!hasNs}>
+          <Filter size={15} aria-hidden />
           Filter
         </button>
         <button type="button" className="btn btn-ghost" onClick={clearFilter} disabled={!hasNs}>
+          <X size={15} aria-hidden />
           Clear
         </button>
       </form>
@@ -275,6 +278,7 @@ export default function ParametersPage() {
           actions={
             prefix ? (
               <button className="btn" onClick={clearFilter}>
+                <X size={15} aria-hidden />
                 Clear filter
               </button>
             ) : (
@@ -328,9 +332,11 @@ export default function ParametersPage() {
                   <td>
                     <div className="row-actions">
                       <Link className="btn btn-sm" href={detailLink(p)}>
+                        <Eye size={14} aria-hidden />
                         Details
                       </Link>
                       <button className="btn btn-sm btn-danger" onClick={() => setDeleteTarget(p)}>
+                        <Trash2 size={14} aria-hidden />
                         Delete
                       </button>
                     </div>

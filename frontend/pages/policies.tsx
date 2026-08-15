@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useId, useRef, useState } from "react";
+import { Pencil, Trash2 } from "lucide-react";
 import { Icon } from "@/components/icons";
 import { ConfirmDialog, Modal } from "@/components/Modal";
 import { EmptyState, Field, PageHeader, Pagination, Spinner, TableSkeleton } from "@/components/ui";
@@ -213,12 +214,14 @@ export default function PoliciesPage() {
                   <td>
                     <div className="row-actions">
                       <button className="btn btn-sm" onClick={() => openEdit(p)}>
+                        <Pencil size={14} aria-hidden />
                         Edit
                       </button>
                       <button
                         className="btn btn-sm btn-danger"
                         onClick={() => setDeleteTarget(p.name)}
                       >
+                        <Trash2 size={14} aria-hidden />
                         Delete
                       </button>
                     </div>

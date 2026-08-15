@@ -502,10 +502,15 @@ jobs:
           mkdir -p "$asset_dir"
           gh release download "$RELEASE_TAG" --dir "$asset_dir"
           cd "$asset_dir"
-          sha256sum --check SHA256SUMS
+          awk '{
+            name = $2
+            sub(/^\*/, "", name)
+            if (name != "RELEASE_COMPLETE.json") print
+          }' SHA256SUMS >"$RUNNER_TEMP/staged-release-checksums"
+          sha256sum --check "$RUNNER_TEMP/staged-release-checksums"
           find . -maxdepth 1 -type f ! -name SHA256SUMS -printf '%f\n' \
             | sort >"$RUNNER_TEMP/actual-release-assets"
-          awk '{ sub(/^\*/, "", $2); if ($2 != "RELEASE_COMPLETE.json") print $2 }' SHA256SUMS \
+          awk '{ sub(/^\*/, "", $2); print $2 }' "$RUNNER_TEMP/staged-release-checksums" \
             | sort >"$RUNNER_TEMP/checksummed-release-assets"
           diff -u \
             "$RUNNER_TEMP/checksummed-release-assets" \

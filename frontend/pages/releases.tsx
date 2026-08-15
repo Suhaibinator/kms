@@ -1,3 +1,4 @@
+import { RefreshCw } from "lucide-react";
 import { type FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Icon } from "@/components/icons";
 import { ConfirmDialog } from "@/components/Modal";
@@ -441,6 +442,7 @@ export default function ReleasesPage() {
             onClick={() => void refresh(true)}
           >
             {releasesLoading || subscribersLoading ? <Spinner /> : null}
+            {!releasesLoading && !subscribersLoading ? <RefreshCw size={16} aria-hidden /> : null}
             Refresh
           </button>
         }

@@ -45,7 +45,7 @@ func (c *CLI) cmdAdmin(args []string) int {
 }
 
 func (c *CLI) adminUsage() {
-	_, _ = fmt.Fprint(c.Stderr, `parameter-store admin — manage a running server over gRPC
+	_, _ = fmt.Fprint(c.Stderr, `parameter-store admin — connect applications and manage a running server over gRPC
 
 Usage:
   parameter-store admin <group> <action> [args] [flags]
@@ -57,15 +57,24 @@ Namespaces:
   namespace list                     List namespaces with parameter/secret counts.
 
 Identities:
-  identity create NAME       Create an identity (--kind, --namespace, --auth, --ttl, --out).
-  identity issue-cert NAME   Mint an additional client certificate (--ttl, --out).
+  identity create NAME       Create application credentials; mTLS by default
+                             (--kind, --namespace, --auth, --ttl, --out).
+  identity issue-cert NAME   Issue replacement/additional application mTLS credentials
+                             (--ttl, --out).
   identity revoke-cert NAME  Revoke one certificate (--serial).
   identity rotate NAME       Rotate a token identity's bearer token.
   identity revoke NAME       Disable an identity (invalidates all its certs).
   identity list              List identities.
 
 CA:
-  ca show                    Print the built-in CA certificate (--out FILE).
+  ca show                    Export the built-in client-issuing CA for inspection or
+                             out-of-band verification (--out FILE).
+
+Certificate roles:
+  Applications present NAME.crt and prove possession with NAME.key; the key stays local.
+  Applications verify the operator-provided KMS server certificate with its CA bundle.
+  "ca show" is NOT that server-trust CA; it exports the CA KMS uses to issue client certs.
+  Admin identities always receive a one-time bearer token, even with --auth mtls or both.
 
 Connection flags (all admin commands):
   --endpoint, --token, --insecure, --ca, --cert, --key
@@ -245,11 +254,11 @@ func (c *CLI) cmdAdminIdentity(args []string) int {
 func (c *CLI) cmdIdentityCreate(args []string) int {
 	fs := c.newFlags("identity create")
 	cf := addConnFlags(fs)
-	kind := fs.String("kind", "client", "identity kind (client|admin)")
+	kind := fs.String("kind", "client", "identity kind (client|admin); admin always also receives a one-time bearer token")
 	namespace := fs.String("namespace", "", "home namespace env/app (optional)")
-	auth := fs.String("auth", "mtls", "auth methods to mint: mtls|token|both")
+	auth := fs.String("auth", "mtls", "application authentication credentials to create: mtls|token|both")
 	ttl := fs.String("ttl", "", "certificate lifetime (e.g. 90d, 720h); default 90d")
-	outDir := fs.String("out", "", "directory to write the one-time cert bundle (NAME.crt/NAME.key)")
+	outDir := fs.String("out", "", "directory for one-time application client credentials (NAME.crt/NAME.key); recommended")
 	if !c.parseFlags(fs, args) {
 		return 2
 	}
@@ -334,6 +343,11 @@ func (c *CLI) writeCreatedIdentityResult(name, kind string, methods []string, ce
 			return fmt.Errorf("writing one-time identity token warning: %w", err)
 		}
 	}
+	if hasAuthMethod(methods, "mtls") {
+		if err := c.writeMTLSCredentialNextSteps(certOutput); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -341,7 +355,7 @@ func (c *CLI) cmdIdentityIssueCert(args []string) int {
 	fs := c.newFlags("identity issue-cert")
 	cf := addConnFlags(fs)
 	ttl := fs.String("ttl", "", "certificate lifetime (e.g. 90d, 720h); default 90d")
-	outDir := fs.String("out", "", "directory to write the one-time cert bundle (NAME.crt/NAME.key)")
+	outDir := fs.String("out", "", "directory for one-time application client credentials (NAME.crt/NAME.key); recommended")
 	if !c.parseFlags(fs, args) {
 		return 2
 	}
@@ -371,12 +385,24 @@ func (c *CLI) cmdIdentityIssueCert(args []string) int {
 		if issueErr != nil {
 			return fmt.Errorf("identity issue-cert: %w", issueErr)
 		}
-		return c.writeCertBundleToOutput(certOutput, resp.Cert)
+		return c.writeIssuedIdentityCertificateResult(name, certOutput, resp.Cert)
 	})
 	if err != nil {
 		return c.fail("%v", err)
 	}
 	return 0
+}
+
+func (c *CLI) writeIssuedIdentityCertificateResult(name string, certOutput *reservedCertBundle, bundle *kmsv1.CertBundle) error {
+	// As with initial identity creation, publish the one-time private key before
+	// emitting status or guidance that could fail on a broken stdout.
+	if err := c.writeCertBundleToOutput(certOutput, bundle); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintf(c.Stdout, "Issued new mTLS credentials for identity %q.\n", name); err != nil {
+		return fmt.Errorf("writing certificate output: %w", err)
+	}
+	return c.writeMTLSCredentialNextSteps(certOutput)
 }
 
 func (c *CLI) cmdIdentityRevokeCert(args []string) int {
@@ -512,7 +538,7 @@ func (c *CLI) cmdAdminCA(args []string) int {
 	}
 	fs := c.newFlags("ca show")
 	cf := addConnFlags(fs)
-	out := fs.String("out", "", "write the CA certificate to this file instead of stdout")
+	out := fs.String("out", "", "export the built-in client-issuing CA to FILE (not the KMS server-trust CA)")
 	if !c.parseFlags(fs, args[1:]) {
 		return 2
 	}
@@ -533,7 +559,8 @@ func (c *CLI) cmdAdminCA(args []string) int {
 		if err := os.WriteFile(*out, []byte(resp.CertPem), 0o644); err != nil {
 			return c.fail("writing --out: %v", err)
 		}
-		_, _ = fmt.Fprintf(c.Stderr, "Wrote CA certificate to %s\n", *out)
+		_, _ = fmt.Fprintf(c.Stderr, "Wrote built-in client-issuing CA certificate to %s\n", *out)
+		_, _ = fmt.Fprintln(c.Stderr, "This is not the CA bundle applications use to verify the KMS server certificate.")
 		return 0
 	}
 	_, _ = fmt.Fprint(c.Stdout, resp.CertPem)
@@ -550,6 +577,10 @@ type reservedCertBundle struct {
 	keyPath  string
 	certFile *os.File
 	keyFile  *os.File
+	// published becomes true only after both one-time credential files have
+	// been completely written and closed. Later status-output failures must not
+	// tell the operator to remove a successfully published, unrecoverable key.
+	published bool
 }
 
 var certOutputNameRE = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$`)
@@ -609,6 +640,9 @@ func (c *CLI) withReservedCertBundle(outDir, name string, use func(*reservedCert
 	}
 	defer output.cleanup()
 	if err := use(output); err != nil {
+		if output.published {
+			return fmt.Errorf("%w (one-time credentials were fully written to %s and %s; preserve them and verify the identity/certificate state on the server before retrying)", err, output.certPath, output.keyPath)
+		}
 		// Reservations and any partial key remain in place. Removing them by name
 		// would be unsafe in a shared writable directory because those names can be
 		// unlinked and replaced while the RPC is in flight.
@@ -660,11 +694,45 @@ func (c *CLI) writeCertBundleToOutput(output *reservedCertBundle, bundle *kmsv1.
 	if err := output.keyFile.Close(); err != nil {
 		return fmt.Errorf("closing private key: %w", err)
 	}
+	output.published = true
 	if _, err := fmt.Fprintf(c.Stdout, "  wrote %s and %s (serial %s)\n", output.certPath, output.keyPath, bundle.Serial); err != nil {
 		return fmt.Errorf("writing certificate status: %w", err)
 	}
 	if _, err := fmt.Fprintln(c.Stdout, "  WARNING: the private key is written once and is never stored server-side."); err != nil {
 		return fmt.Errorf("writing certificate warning: %w", err)
+	}
+	return nil
+}
+
+// writeMTLSCredentialNextSteps explains the two independent trust directions
+// in mTLS without reprinting any one-time private-key material. The application
+// presents the generated pair to KMS; a separate operator-provided CA bundle
+// lets the application verify the KMS server certificate.
+func (c *CLI) writeMTLSCredentialNextSteps(output *reservedCertBundle) error {
+	if output == nil {
+		if _, err := fmt.Fprint(c.Stdout, `
+Next steps:
+  1. Save the client certificate and private key printed above now; the private key cannot be recovered.
+  2. Deploy both credentials securely to the application.
+  3. Configure the application with a CA bundle that trusts the operator-provided KMS server certificate.
+     Do not use "parameter-store admin ca show" for server trust; that built-in CA issues client certificates.
+`); err != nil {
+			return fmt.Errorf("writing certificate guidance: %w", err)
+		}
+		return nil
+	}
+
+	if _, err := fmt.Fprintf(c.Stdout, `
+Application mTLS credentials:
+  client certificate: %s
+  client private key: %s
+
+Next steps:
+  1. Deploy both files securely to the application.
+  2. Configure the application with a CA bundle that trusts the operator-provided KMS server certificate.
+     Do not use "parameter-store admin ca show" for server trust; that built-in CA issues client certificates.
+`, output.certPath, output.keyPath); err != nil {
+		return fmt.Errorf("writing certificate guidance: %w", err)
 	}
 	return nil
 }

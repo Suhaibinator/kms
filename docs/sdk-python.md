@@ -73,6 +73,11 @@ identity on first use, via a single `WhoAmI` call (see
 
 ## Connecting
 
+If the application does not have credentials yet, follow the
+[production mTLS onboarding runbook](operations.md#connect-a-production-application-with-mtls)
+to create its namespace and identity and deliver its client cert/key plus the
+operator's server CA bundle.
+
 ```python
 from kms_paramstore import Client, mtls_from_files
 
