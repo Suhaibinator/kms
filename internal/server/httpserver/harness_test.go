@@ -44,12 +44,16 @@ func newReleaseTestEnv(t *testing.T) *testEnv {
 	}
 	t.Cleanup(func() { _ = store.Close() })
 	ctx := context.Background()
-	if err := store.InsertKeyMetadata(ctx, domain.KeyMetadata{ID: "kek-test", Source: domain.KeySourceFile, State: domain.KeyStateActive, CreatedAt: time.Now().UTC()}); err != nil {
-		t.Fatalf("seed key metadata: %v", err)
-	}
 	kek, err := crypto.NewKEKFromMaterial("kek-test", make([]byte, 32))
 	if err != nil {
 		t.Fatalf("build kek: %v", err)
+	}
+	keyCheck, err := crypto.NewKeyCheck(kek)
+	if err != nil {
+		t.Fatalf("build key check: %v", err)
+	}
+	if err := store.InsertKeyMetadata(ctx, domain.KeyMetadata{ID: "kek-test", Source: domain.KeySourceFile, KeyCheck: keyCheck, State: domain.KeyStateActive, CreatedAt: time.Now().UTC()}); err != nil {
+		t.Fatalf("seed key metadata: %v", err)
 	}
 	svc := core.New(store, zap.NewNop(), "test-version")
 	svc.SetKeyring(crypto.NewKeyring(kek))

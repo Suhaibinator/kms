@@ -1,0 +1,489 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  IMAGE_NAME: ghcr.io/suhaibinator/kms
+  NPM_PACKAGE: "@suhaibinator/kms"
+  NPM_REGISTRY: https://npm.pkg.github.com
+
+jobs:
+  validate:
+    name: Validate release tag
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    outputs:
+      tag: ${{ steps.metadata.outputs.tag }}
+      version: ${{ steps.metadata.outputs.version }}
+      major: ${{ steps.metadata.outputs.major }}
+      minor: ${{ steps.metadata.outputs.minor }}
+      commit: ${{ steps.metadata.outputs.commit }}
+      short_commit: ${{ steps.metadata.outputs.short_commit }}
+      release_state: ${{ steps.release.outputs.state }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: Refresh main branch
+        run: git fetch --no-tags origin "+refs/heads/main:refs/remotes/origin/main"
+      - name: Validate tag and lockstep package versions
+        id: metadata
+        run: ./scripts/release/validate.sh "${GITHUB_REF_NAME}" origin/main
+      - name: Detect an existing release
+        id: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.metadata.outputs.tag }}
+        run: |
+          release_json=$(gh release view "$RELEASE_TAG" --json isDraft 2>/dev/null || true)
+          if [ -z "$release_json" ]; then
+            echo "state=absent" >>"$GITHUB_OUTPUT"
+          elif [ "$(jq -r .isDraft <<<"$release_json")" = true ]; then
+            echo "state=draft" >>"$GITHUB_OUTPUT"
+          else
+            echo "state=published" >>"$GITHUB_OUTPUT"
+            echo "Release $RELEASE_TAG is already published; treating this run as a no-op."
+          fi
+
+  quality-gate:
+    name: Full release CI gate
+    needs: validate
+    if: needs.validate.outputs.release_state != 'published'
+    uses: ./.github/workflows/ci.yml
+
+  build-artifacts:
+    name: Build and attest release artifacts
+    needs: [validate, quality-gate]
+    if: needs.validate.outputs.release_state != 'published'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+      artifact-metadata: write
+    env:
+      RELEASE_VERSION: ${{ needs.validate.outputs.version }}
+      RELEASE_COMMIT: ${{ needs.validate.outputs.commit }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.validate.outputs.commit }}
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+          cache-dependency-path: go.sum
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "26"
+          cache: npm
+          cache-dependency-path: |
+            frontend/package-lock.json
+            sdk/typescript/package-lock.json
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.14"
+          cache: pip
+          cache-dependency-path: sdk/python/pyproject.toml
+
+      - name: Build embedded frontend
+        run: make frontend check-frontend
+      - name: Build native archives
+        run: ./scripts/release/build-binaries.sh "$RELEASE_VERSION" dist/release
+      - name: Verify native archive contents and version
+        run: |
+          for archive in dist/release/kms_*.tar.gz; do
+            root=$(basename "$archive" .tar.gz)
+            for file in parameter-store kms-config-gen README.md LICENSE; do
+              tar -tzf "$archive" "$root/$file" >/dev/null
+            done
+          done
+
+          windows_archive="dist/release/kms_${RELEASE_VERSION}_windows_amd64.zip"
+          windows_root=$(basename "$windows_archive" .zip)
+          for file in parameter-store.exe kms-config-gen.exe README.md LICENSE; do
+            unzip -Z1 "$windows_archive" | grep -Fx "$windows_root/$file" >/dev/null
+          done
+
+          native_dir="$RUNNER_TEMP/native-release-smoke"
+          mkdir -p "$native_dir"
+          tar -xzf "dist/release/kms_${RELEASE_VERSION}_linux_amd64.tar.gz" -C "$native_dir"
+          native_root="$native_dir/kms_${RELEASE_VERSION}_linux_amd64"
+          [ -x "$native_root/parameter-store" ]
+          [ -x "$native_root/kms-config-gen" ]
+          [ "$("$native_root/parameter-store" version)" = "v$RELEASE_VERSION" ]
+
+      - name: Build and verify Python distributions
+        run: |
+          python -m pip install --upgrade build twine
+          python -m build --outdir "$GITHUB_WORKSPACE/dist/release" sdk/python
+          python -m twine check dist/release/kms_paramstore-*
+          python -m venv "$RUNNER_TEMP/python-release-smoke"
+          "$RUNNER_TEMP/python-release-smoke/bin/python" -m pip install dist/release/kms_paramstore-*.whl
+          "$RUNNER_TEMP/python-release-smoke/bin/python" -c 'import kms_paramstore'
+
+      - name: Pack TypeScript distribution
+        id: npm-pack
+        working-directory: sdk/typescript
+        run: |
+          npm ci
+          npm run build
+          npm pkg set "gitHead=$RELEASE_COMMIT"
+          npm pack --ignore-scripts --json \
+            --pack-destination "$GITHUB_WORKSPACE/dist/release" >"$RUNNER_TEMP/npm-pack.json"
+          package_file=$(node -p 'require(process.argv[1])[0].filename' "$RUNNER_TEMP/npm-pack.json")
+          echo "package_file=$package_file" >>"$GITHUB_OUTPUT"
+
+      - name: Test the packed TypeScript distribution
+        env:
+          PACKAGE_FILE: ${{ steps.npm-pack.outputs.package_file }}
+        run: |
+          consumer="$RUNNER_TEMP/typescript-release-consumer"
+          mkdir -p "$consumer"
+          cd "$consumer"
+          npm init --yes >/dev/null
+          npm pkg set type=module
+          npm install --ignore-scripts \
+            "$GITHUB_WORKSPACE/dist/release/$PACKAGE_FILE" \
+            typescript@5.2.2 @types/node@20
+          cat >index.ts <<'EOF'
+          import type { KmsClient, ReleaseSnapshot } from "@suhaibinator/kms";
+          export type PublicReleaseTypes = readonly [KmsClient, ReleaseSnapshot];
+          EOF
+          ./node_modules/.bin/tsc --noEmit --strict --skipLibCheck \
+            --target ES2022 --module NodeNext --moduleResolution NodeNext index.ts
+          node --input-type=module -e 'await import("@suhaibinator/kms")'
+
+      - name: Generate checksums
+        working-directory: dist/release
+        run: |
+          find . -maxdepth 1 -type f ! -name SHA256SUMS -printf '%f\0' \
+            | sort -z \
+            | xargs -0 sha256sum >SHA256SUMS
+          sha256sum --check SHA256SUMS
+
+      - name: Attest downloadable artifacts
+        uses: actions/attest@v4
+        with:
+          subject-path: dist/release/*
+
+      - name: Store staged artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: release-${{ needs.validate.outputs.version }}
+          path: dist/release/*
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0
+
+  draft-release:
+    name: Stage draft GitHub Release
+    needs: [validate, build-artifacts]
+    if: needs.validate.outputs.release_state != 'published'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+      attestations: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RELEASE_TAG: ${{ needs.validate.outputs.tag }}
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: release-${{ needs.validate.outputs.version }}
+          path: dist/release
+      - name: Verify artifact provenance
+        run: |
+          for artifact in dist/release/*; do
+            gh attestation verify "$artifact" --repo "$GITHUB_REPOSITORY"
+          done
+      - name: Create or reuse the draft release
+        run: |
+          if ! gh release view "$RELEASE_TAG" --json isDraft >/dev/null 2>&1; then
+            gh release create "$RELEASE_TAG" \
+              --verify-tag \
+              --draft \
+              --generate-notes \
+              --title "$RELEASE_TAG"
+          fi
+          is_draft=$(gh release view "$RELEASE_TAG" --json isDraft --jq .isDraft)
+          if [ "$is_draft" != true ]; then
+            echo "::error::Refusing to replace assets on an already-published release"
+            exit 1
+          fi
+          gh release upload "$RELEASE_TAG" dist/release/* --clobber
+
+  publish-container:
+    name: Publish immutable container image
+    needs: [validate, quality-gate]
+    if: needs.validate.outputs.release_state != 'published'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+      artifact-metadata: write
+    outputs:
+      digest: ${{ steps.existing-image.outputs.digest || steps.image.outputs.digest }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.validate.outputs.commit }}
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+      - uses: docker/setup-qemu-action@v4
+      - uses: docker/setup-buildx-action@v4
+      - name: Reuse an existing immutable image
+        id: existing-image
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION_TAG: ${{ needs.validate.outputs.version }}
+          COMMIT_TAG: sha-${{ needs.validate.outputs.short_commit }}
+          RELEASE_COMMIT: ${{ needs.validate.outputs.commit }}
+        run: |
+          inspect_digest() {
+            docker buildx imagetools inspect "$1" 2>/dev/null \
+              | awk '$1 == "Digest:" { print $2; exit }'
+          }
+
+          version_digest=$(inspect_digest "$IMAGE_NAME:$VERSION_TAG" || true)
+          commit_digest=$(inspect_digest "$IMAGE_NAME:$COMMIT_TAG" || true)
+          if [ -z "$version_digest" ] && [ -z "$commit_digest" ]; then
+            echo "exists=false" >>"$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [ -z "$version_digest" ] || [ -z "$commit_digest" ]; then
+            echo "::error::Only one immutable container tag exists; refusing a partial overwrite"
+            exit 1
+          fi
+          if [ "$version_digest" != "$commit_digest" ]; then
+            echo "::error::Immutable container tags resolve to different digests"
+            exit 1
+          fi
+
+          gh attestation verify "oci://$IMAGE_NAME@$version_digest" \
+            --repo "$GITHUB_REPOSITORY" \
+            --source-digest "$RELEASE_COMMIT" \
+            --source-ref "$GITHUB_REF"
+          echo "exists=true" >>"$GITHUB_OUTPUT"
+          echo "digest=$version_digest" >>"$GITHUB_OUTPUT"
+          echo "Reusing attested image $IMAGE_NAME@$version_digest"
+      - name: Build and push immutable image tags
+        id: image
+        if: steps.existing-image.outputs.exists != 'true'
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          pull: true
+          provenance: false
+          build-args: VERSION=${{ needs.validate.outputs.tag }}
+          tags: |
+            ${{ env.IMAGE_NAME }}:${{ needs.validate.outputs.version }}
+            ${{ env.IMAGE_NAME }}:sha-${{ needs.validate.outputs.short_commit }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ needs.validate.outputs.commit }}
+            org.opencontainers.image.version=${{ needs.validate.outputs.version }}
+            org.opencontainers.image.ref.name=${{ needs.validate.outputs.tag }}
+            org.opencontainers.image.licenses=MIT
+          cache-from: type=gha,scope=release-container
+          cache-to: type=gha,mode=max,scope=release-container
+      - name: Attest container image
+        if: steps.existing-image.outputs.exists != 'true'
+        uses: actions/attest@v4
+        with:
+          subject-name: ${{ env.IMAGE_NAME }}
+          subject-digest: ${{ steps.image.outputs.digest }}
+          push-to-registry: true
+
+  publish-npm:
+    name: Publish immutable TypeScript package
+    needs: [validate, build-artifacts]
+    if: needs.validate.outputs.release_state != 'published'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      packages: write
+    env:
+      NODE_AUTH_TOKEN: ${{ github.token }}
+      RELEASE_VERSION: ${{ needs.validate.outputs.version }}
+      RELEASE_COMMIT: ${{ needs.validate.outputs.commit }}
+      CANDIDATE_TAG: release-candidate-${{ needs.validate.outputs.version }}
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: release-${{ needs.validate.outputs.version }}
+          path: dist/release
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "26"
+          registry-url: ${{ env.NPM_REGISTRY }}
+          scope: "@suhaibinator"
+      - name: Publish or verify the immutable package version
+        run: |
+          package_file=$(find dist/release -maxdepth 1 -type f -name "suhaibinator-kms-${RELEASE_VERSION}.tgz" -print -quit)
+          if [ -z "$package_file" ]; then
+            echo "::error::Packed TypeScript distribution is missing"
+            exit 1
+          fi
+          local_integrity="sha512-$(openssl dgst -sha512 -binary "$package_file" | openssl base64 -A)"
+
+          if npm view "$NPM_PACKAGE@$RELEASE_VERSION" dist.integrity gitHead \
+            --registry "$NPM_REGISTRY" --json >"$RUNNER_TEMP/npm-existing.json" \
+            2>"$RUNNER_TEMP/npm-view.err"; then
+            existing_integrity=$(jq -r '."dist.integrity" // empty' "$RUNNER_TEMP/npm-existing.json")
+            existing_commit=$(jq -r '.gitHead // empty' "$RUNNER_TEMP/npm-existing.json")
+            if [ "$existing_integrity" != "$local_integrity" ] || [ "$existing_commit" != "$RELEASE_COMMIT" ]; then
+              echo "::error::Existing npm version does not match the staged tarball and source commit"
+              exit 1
+            fi
+            echo "Verified existing $NPM_PACKAGE@$RELEASE_VERSION"
+          else
+            if ! grep -q 'E404' "$RUNNER_TEMP/npm-view.err"; then
+              cat "$RUNNER_TEMP/npm-view.err" >&2
+              exit 1
+            fi
+            npm publish "$package_file" \
+              --registry "$NPM_REGISTRY" \
+              --access public \
+              --tag "$CANDIDATE_TAG"
+          fi
+
+          npm dist-tag add "$NPM_PACKAGE@$RELEASE_VERSION" "$CANDIDATE_TAG" \
+            --registry "$NPM_REGISTRY"
+
+  promote:
+    name: Promote completed release
+    needs: [validate, draft-release, publish-container, publish-npm]
+    if: needs.validate.outputs.release_state != 'published'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write
+      packages: write
+      attestations: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      NODE_AUTH_TOKEN: ${{ github.token }}
+      RELEASE_TAG: ${{ needs.validate.outputs.tag }}
+      RELEASE_VERSION: ${{ needs.validate.outputs.version }}
+      RELEASE_COMMIT: ${{ needs.validate.outputs.commit }}
+      CANDIDATE_TAG: release-candidate-${{ needs.validate.outputs.version }}
+      IMAGE_DIGEST: ${{ needs.publish-container.outputs.digest }}
+    steps:
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "26"
+          registry-url: ${{ env.NPM_REGISTRY }}
+          scope: "@suhaibinator"
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+      - uses: docker/setup-buildx-action@v4
+
+      - name: Promote container aliases
+        run: |
+          docker buildx imagetools create \
+            --tag "$IMAGE_NAME:${{ needs.validate.outputs.minor }}" \
+            --tag "$IMAGE_NAME:${{ needs.validate.outputs.major }}" \
+            --tag "$IMAGE_NAME:latest" \
+            "$IMAGE_NAME@$IMAGE_DIGEST"
+
+      - name: Promote npm latest tag
+        run: |
+          npm dist-tag add "$NPM_PACKAGE@$RELEASE_VERSION" latest --registry "$NPM_REGISTRY"
+          if npm dist-tag ls "$NPM_PACKAGE" --registry "$NPM_REGISTRY" --json \
+            | jq -e --arg candidate "$CANDIDATE_TAG" 'has($candidate)' >/dev/null; then
+            npm dist-tag rm "$NPM_PACKAGE" "$CANDIDATE_TAG" --registry "$NPM_REGISTRY"
+          fi
+
+      - name: Verify published package and image
+        run: |
+          npm_version=$(npm view "$NPM_PACKAGE@$RELEASE_VERSION" version --registry "$NPM_REGISTRY")
+          npm_commit=$(npm view "$NPM_PACKAGE@$RELEASE_VERSION" gitHead --registry "$NPM_REGISTRY")
+          npm_latest=$(npm view "$NPM_PACKAGE@latest" version --registry "$NPM_REGISTRY")
+          [ "$npm_version" = "$RELEASE_VERSION" ]
+          [ "$npm_commit" = "$RELEASE_COMMIT" ]
+          [ "$npm_latest" = "$RELEASE_VERSION" ]
+
+          for image_tag in \
+            "$RELEASE_VERSION" \
+            "sha-${{ needs.validate.outputs.short_commit }}" \
+            "${{ needs.validate.outputs.minor }}" \
+            "${{ needs.validate.outputs.major }}" \
+            latest; do
+            tag_digest=$(docker buildx imagetools inspect "$IMAGE_NAME:$image_tag" \
+              | awk '$1 == "Digest:" { print $2; exit }')
+            [ "$tag_digest" = "$IMAGE_DIGEST" ]
+          done
+
+          docker buildx imagetools inspect "$IMAGE_NAME:$RELEASE_VERSION" --raw \
+            | jq -e '
+                [.manifests[].platform | "\(.os)/\(.architecture)"] as $platforms
+                | ($platforms | index("linux/amd64")) != null
+                and ($platforms | index("linux/arm64")) != null
+              '
+          gh attestation verify "oci://$IMAGE_NAME@$IMAGE_DIGEST" --repo "$GITHUB_REPOSITORY"
+
+      - name: Verify public GitHub package visibility
+        env:
+          OWNER: ${{ github.repository_owner }}
+        run: |
+          curl -fsSL \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2026-03-10" \
+            "https://api.github.com/users/$OWNER/packages?package_type=container&per_page=100" \
+            | jq -e 'any(.name == "kms" and .visibility == "public")'
+          curl -fsSL \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2026-03-10" \
+            "https://api.github.com/users/$OWNER/packages?package_type=npm&per_page=100" \
+            | jq -e 'any((.name == "kms" or .name == "@suhaibinator/kms") and .visibility == "public")'
+
+      - name: Verify staged GitHub Release downloads
+        run: |
+          asset_dir="$RUNNER_TEMP/release-downloads"
+          mkdir -p "$asset_dir"
+          gh release download "$RELEASE_TAG" --dir "$asset_dir"
+          cd "$asset_dir"
+          sha256sum --check SHA256SUMS
+          find . -maxdepth 1 -type f ! -name SHA256SUMS -printf '%f\n' \
+            | sort >"$RUNNER_TEMP/actual-release-assets"
+          awk '{ sub(/^\*/, "", $2); print $2 }' SHA256SUMS \
+            | sort >"$RUNNER_TEMP/checksummed-release-assets"
+          diff -u \
+            "$RUNNER_TEMP/checksummed-release-assets" \
+            "$RUNNER_TEMP/actual-release-assets"
+
+      - name: Publish GitHub Release
+        run: |
+          gh release edit "$RELEASE_TAG" --draft=false --latest
+          gh release view "$RELEASE_TAG" --json isDraft,assets \
+            --jq '(.isDraft == false) and (.assets | any(.name == "SHA256SUMS"))' \
+            | grep -qx true

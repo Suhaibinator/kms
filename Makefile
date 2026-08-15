@@ -5,6 +5,7 @@ BINARY      := bin/parameter-store
 PKG         := ./cmd/parameter-store
 FRONTEND    := frontend
 FRONTEND_OUT:= frontend/out
+TYPESCRIPT_SDK := sdk/typescript
 VERSION     ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 LDFLAGS     := -X github.com/Suhaibinator/kms/internal/cli.Version=$(VERSION)
 GO_TEST_TIMEOUT ?= 10m
@@ -14,7 +15,8 @@ INTEGRATION_COVERAGE_PROFILE ?= integration-coverage.out
 
 .PHONY: build frontend backend test test-unit test-integration \
 	test-integration-race check-integration-coverage test-platform-security \
-	vet check-frontend check-configgen clean tidy
+	vet check-frontend check-configgen typescript test-typescript \
+	check-typescript clean tidy
 
 # Default: full build (frontend export + backend with embedded assets).
 build: frontend backend
@@ -68,6 +70,21 @@ check-configgen:
 		-schema-output examples/managed-config/runtime.schema.json \
 		-contract-output examples/managed-config/runtime.contract.json \
 		-check
+
+# Build and verify the independently published Node.js SDK. These targets use
+# npm ci so they exercise the committed lockfile and behave the same on a fresh
+# clone as they do in CI.
+typescript:
+	@echo ">> building TypeScript SDK"
+	cd $(TYPESCRIPT_SDK) && npm ci && npm run build
+
+test-typescript:
+	@echo ">> testing TypeScript SDK"
+	cd $(TYPESCRIPT_SDK) && npm ci && npm run test && npm run test:types
+
+check-typescript:
+	@echo ">> checking TypeScript SDK"
+	cd $(TYPESCRIPT_SDK) && npm ci && npm run check
 
 # Run every Go test, including integration tests, with the race detector. This
 # remains the convenient all-in-one local regression command.

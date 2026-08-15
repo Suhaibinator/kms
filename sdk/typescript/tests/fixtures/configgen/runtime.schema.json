@@ -1,0 +1,107 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "database",
+    "runtime"
+  ],
+  "properties": {
+    "database": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "endpoint",
+        "limit"
+      ],
+      "properties": {
+        "endpoint": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "host",
+            "ports",
+            "zones"
+          ],
+          "properties": {
+            "host": {
+              "type": "string"
+            },
+            "ports": {
+              "anyOf": [
+                {
+                  "type": "array",
+                  "items": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 65535
+                  }
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "zones": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "minItems": 2,
+              "maxItems": 2
+            }
+          }
+        },
+        "limit": {
+          "type": "integer",
+          "minimum": -2147483648,
+          "maximum": 2147483647
+        }
+      }
+    },
+    "runtime": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "enabled",
+        "epoch",
+        "labels",
+        "payload"
+      ],
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "epoch": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 18446744073709551615
+        },
+        "labels": {
+          "anyOf": [
+            {
+              "type": "object",
+              "additionalProperties": {
+                "type": "string"
+              }
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "payload": {
+          "anyOf": [
+            {
+              "type": "string",
+              "format": "kms-base64"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    }
+  }
+}

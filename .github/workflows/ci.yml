@@ -7,6 +7,7 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_call:
 
 # Least privilege: the jobs only read the repository.
 permissions:
@@ -24,7 +25,7 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-go@v6
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
           cache: true
@@ -32,7 +33,7 @@ jobs:
       - name: golangci-lint
         uses: golangci/golangci-lint-action@v9
         with:
-          version: v2.11.4
+          version: v2.12.2
 
   go-test:
     name: Go build & unit tests (race)
@@ -42,7 +43,7 @@ jobs:
       GOTOOLCHAIN: local
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-go@v6
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
           cache: true
@@ -75,7 +76,7 @@ jobs:
       TZ: UTC
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-go@v6
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
           cache: true
@@ -102,7 +103,7 @@ jobs:
       GOTOOLCHAIN: local
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-go@v6
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
           cache: true
@@ -142,7 +143,7 @@ jobs:
       GOTOOLCHAIN: local
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-go@v6
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
           cache: true
@@ -169,7 +170,7 @@ jobs:
         python-version: ["3.10", "3.14"]
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@v7
         with:
           python-version: ${{ matrix.python-version }}
           cache: pip
@@ -181,6 +182,89 @@ jobs:
       - name: Test (pytest)
         run: python -m pytest -q
 
+  typescript-sdk:
+    name: TypeScript SDK (Node ${{ matrix.node-version }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: sdk/typescript
+    strategy:
+      fail-fast: false
+      matrix:
+        node-version: ["22", "24", "26"]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: npm
+          cache-dependency-path: sdk/typescript/package-lock.json
+      - name: Install dependencies from lockfile
+        run: npm ci
+      - name: Generated contract, quality, tests, consumer types, and build
+        run: npm run check
+
+  typescript-sdk-compatibility:
+    name: TypeScript SDK (compiler minimum & Chromium)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: sdk/typescript
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "26"
+          cache: npm
+          cache-dependency-path: sdk/typescript/package-lock.json
+      - name: Install dependencies from lockfile
+        run: npm ci
+      - name: Build declarations for minimum-compiler consumption
+        run: npm run build
+      - name: TypeScript 5.2 declaration consumer
+        run: npm run test:typescript-min
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+      - name: Next client real-browser behavior
+        run: npm run test:browser
+
+  typescript-sdk-next-peers:
+    name: TypeScript SDK (Next ${{ matrix.next }} / React ${{ matrix.react }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: sdk/typescript
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - next: 14.2.35
+            react: 18.3.1
+          - next: 15.5.23
+            react: 18.3.1
+          - next: 15.5.23
+            react: 19.1.9
+          - next: 16.3.1
+            react: 18.3.1
+          - next: 16.3.1
+            react: 19.2.8
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "26"
+          cache: npm
+          cache-dependency-path: sdk/typescript/package-lock.json
+      - name: Install locked SDK dependencies
+        run: npm ci
+      - name: Build SDK declarations
+        run: npm run build
+      - name: Qualify exact server/client peer tuple in isolation
+        run: node scripts/test-next-peer.mjs ${{ matrix.next }} ${{ matrix.react }}
+
   frontend:
     name: Frontend (quality, tests & build)
     runs-on: ubuntu-latest
@@ -190,7 +274,7 @@ jobs:
         working-directory: frontend
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@v7
         with:
           node-version: "26"
           cache: npm

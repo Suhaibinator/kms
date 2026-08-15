@@ -14,10 +14,10 @@ as a server-side wire or storage field.
 | SuhaibParameterStore | This service |
 |---|---|
 | flat key, e.g. `gradethis_TWILIO_ACCOUNT_SID` | namespace `prod/gradethis` + relative key `gradethis-twilio-account-sid` (`slug` lowercases and replaces `_` with `-`; it does not strip prefixes) |
-| `ParameterStoreKey` | `SecretValue.Key` / `ParameterValue.Key` — a **relative** key (or an absolute `/env/app/key` for cross-namespace reads) |
-| `ParameterStoreSecret` (per-key access secret) | `SecretValue.Token` (per-secret access token) |
-| `EnvironmentVariableKey` | `SecretValue.EnvVar` / `ParameterValue.EnvVar` |
-| `ParameterStoreValue` (dev default) | `SecretValue.Default` / `ParameterValue.Default` |
+| `ParameterStoreKey` | `SecretValue` / `ParameterValue` key — a **relative** key (or an absolute `/env/app/key` for cross-namespace reads) |
+| `ParameterStoreSecret` (per-key access secret) | `SecretValue` token option (per-secret access token) |
+| `EnvironmentVariableKey` | `SecretValue` / `ParameterValue` environment-variable option |
+| `ParameterStoreValue` (dev default) | `SecretValue` / `ParameterValue` default option |
 | application-managed `config/release` manifest | native immutable configuration release + atomic activation revision + Go/Python `ReleaseLoader` |
 | master password entered at startup | master key file, or passphrase (argon2id) at unseal |
 | — (client just held the store secret) | **client identity credential**: a per-client certificate bundle (mTLS, recommended) or a bearer token, presented on connect |
@@ -122,6 +122,55 @@ The Python SDK is the mirror image of this (`namespace="prod/gradethis"`
 optional, `SecretValue("stripe-api-key")`, `ParameterValue("rate-limit")`
 hot-reloading by default) — see [`sdk-python.md`](sdk-python.md).
 
+The Node.js migration uses the same precedence and defaults, with TypeScript
+option names in `camelCase`. Keep the client and non-static parameters alive
+for the process lifetime, and close them during graceful shutdown:
+
+```ts
+import {
+  createClient,
+  mtlsFromFiles,
+  ParameterValue,
+  SecretValue,
+} from "@suhaibinator/kms";
+
+function requiredEnvironment(name: string): string {
+  const value = process.env[name];
+  if (!value) throw new Error(`${name} is required`);
+  return value;
+}
+
+const client = createClient({
+  endpoint: requiredEnvironment("PARAM_STORE_ENDPOINT"),
+  credentials: mtlsFromFiles(
+    requiredEnvironment("PARAM_STORE_CLIENT_CERT"),
+    requiredEnvironment("PARAM_STORE_CLIENT_KEY"),
+    requiredEnvironment("PARAM_STORE_SERVER_CA_CERT"),
+  ),
+  // namespace may be omitted for a namespace-bound identity
+});
+
+const config = {
+  stripeApiKey: new SecretValue("gradethis-stripe-api-key", {
+    ...(process.env.STRIPE_API_KEY_TOKEN
+      ? { token: process.env.STRIPE_API_KEY_TOKEN }
+      : {}),
+    envVar: "STRIPE_API_KEY",
+    default: "sk_test_dev_only",
+  }),
+  rateLimit: new ParameterValue("rate-limit", { default: "100" }),
+};
+
+await client.resolve(config);
+// Explicit plaintext access only at the consumer boundary:
+configureStripe(config.stripeApiKey.text());
+```
+
+See the [TypeScript SDK guide](../sdk/typescript/README.md) for disposal,
+fallback, and secret-redaction rules. Do not import the Node client into a
+browser; a serverful application may publish a deliberately allowlisted
+non-sensitive projection through the optional Next.js adapter.
+
 ## Replacing an application-managed `config/release` manifest
 
 If the application currently watches a parameter such as `config/release`
@@ -192,6 +241,14 @@ lower-level Go and Python loaders decode explicitly and do not infer schemas.
 Go applications may instead opt into the additive
 [`kms-config-gen` managed layer](managed-go-configuration.md), which generates
 strict typed bindings and a release schema from an application root type.
+
+TypeScript uses `await client.createReleaseLoader({ name: "runtime" })` and
+`await loader.run(prepare, signal)`. Decode and validate the complete
+`ReleaseSnapshot` before returning `{ commit, abort }`; keep `commit`
+synchronous and infallible so the application snapshot swaps atomically. Pass
+locally distributed per-secret tokens through `secretTokenProvider`. A complete
+compile-checked example is in
+[`sdk/typescript/examples/release.ts`](../sdk/typescript/examples/release.ts).
 
 Roll back by reactivating any retained immutable version:
 

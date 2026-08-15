@@ -1,0 +1,187 @@
+import { describe, expect, it } from "vitest";
+import {
+  createPolicyPublisher,
+  definePublicProjection,
+  formatRevision,
+  freezePublicJson,
+  parseRevision,
+} from "../src/publishing.js";
+import { Secret } from "../src/secret.js";
+
+describe("public configuration publishing", () => {
+  it("round-trips the entire uint64 range as decimal strings", () => {
+    const max = (1n << 64n) - 1n;
+    expect(parseRevision(formatRevision(max))).toBe(max);
+    for (const invalid of ["", "01", "-1", "+1", "1.0", "18446744073709551616"]) {
+      expect(() => parseRevision(invalid)).toThrow();
+    }
+  });
+
+  it("publishes only declared allowlist selectors and defensively freezes results", () => {
+    const privatePolicy = {
+      minLength: 14,
+      internalEndpoint: "private",
+      credentials: new Secret("do-not-publish"),
+    };
+    const projection = definePublicProjection<typeof privatePolicy>()({
+      minLength: (value) => value.minLength,
+    });
+    const publicPolicy = projection.project(privatePolicy);
+    expect(publicPolicy).toEqual({ minLength: 14 });
+    expect(publicPolicy).not.toHaveProperty("credentials");
+    expect(Object.isFrozen(publicPolicy)).toBe(true);
+  });
+
+  it("reserves the publisher-owned revision field", () => {
+    expect(() =>
+      definePublicProjection<{ internalRevision: string }>()({
+        revision: (value) => value.internalRevision,
+      }),
+    ).toThrow(/reserved/);
+  });
+
+  it("rejects non-JSON, secret, getter, cycle, and prototype-bearing values", () => {
+    expect(() => freezePublicJson(new Secret("hidden"))).toThrow();
+    expect(() => freezePublicJson({ version: 1n })).toThrow();
+    expect(() => freezePublicJson({ date: new Date() })).toThrow();
+    const cycle: Record<string, unknown> = {};
+    cycle.self = cycle;
+    expect(() => freezePublicJson(cycle)).toThrow();
+    const getter = Object.defineProperty({}, "value", { enumerable: true, get: () => 1 });
+    expect(() => freezePublicJson(getter)).toThrow();
+  });
+
+  it("captures the source once for reads and authoritative validation", () => {
+    let calls = 0;
+    let generation = { revision: 9n, value: { minLength: 12 } };
+    const source = {
+      current: () => {
+        calls++;
+        return generation;
+      },
+    };
+    const projection = definePublicProjection<
+      { minLength: number },
+      {
+        minLength: (value: Readonly<{ minLength: number }>) => number;
+      }
+    >({ minLength: (value) => value.minLength });
+    const publisher = createPolicyPublisher({
+      source,
+      projection,
+      validate: (policy, password: string) =>
+        password.length >= policy.minLength
+          ? { valid: true as const }
+          : { valid: false as const, errors: ["too_short"] },
+    });
+
+    expect(publisher.readWire()).toEqual({ revision: "9", config: { minLength: 12 } });
+    expect(calls).toBe(1);
+    generation = { revision: 10n, value: { minLength: 14 } };
+    expect(publisher.validate("9", "long-enough-at-old-policy")).toEqual({
+      status: "policy_changed",
+      current: { revision: "10", config: { minLength: 14 } },
+    });
+    expect(calls).toBe(2);
+    expect(publisher.validate("10", "short")).toEqual({
+      status: "validation_failed",
+      revision: "10",
+      errors: ["too_short"],
+    });
+  });
+
+  it("emits redacted publisher events without trusting observers", async () => {
+    const events: unknown[] = [];
+    const source = {
+      current: () => ({ revision: 12n, value: { minimum: 8, privateValue: "do-not-observe" } }),
+    };
+    const observedPublisher = createPolicyPublisher({
+      source,
+      projection: definePublicProjection<{
+        minimum: number;
+        privateValue: string;
+      }>()({ minimum: (policy) => policy.minimum }),
+      validate: (policy, input: number) =>
+        input >= policy.minimum
+          ? { valid: true as const }
+          : { valid: false as const, errors: ["too_small"] },
+      onEvent: (event) => {
+        events.push(event);
+        if (events.length === 1) return Promise.reject(new Error("observer rejection"));
+        if (events.length === 2) throw new Error("observer throw");
+      },
+    });
+
+    expect(observedPublisher.readWire()).toEqual({ revision: "12", config: { minimum: 8 } });
+    expect(observedPublisher.validate("11", -999)).toMatchObject({ status: "policy_changed" });
+    expect(observedPublisher.validate("12", 9)).toEqual({
+      status: "success",
+      revision: "12",
+    });
+    expect(observedPublisher.validate("12", 1)).toEqual({
+      status: "validation_failed",
+      revision: "12",
+      errors: ["too_small"],
+    });
+    await Promise.resolve();
+
+    expect(events).toHaveLength(4);
+    expect(events).toEqual([
+      {
+        type: "public_config_published",
+        revision: "12",
+        observedAtUnixMs: expect.any(Number),
+      },
+      {
+        type: "policy_revision_rejected",
+        currentRevision: "12",
+        observedAtUnixMs: expect.any(Number),
+      },
+      {
+        type: "policy_validation_succeeded",
+        revision: "12",
+        observedAtUnixMs: expect.any(Number),
+      },
+      {
+        type: "policy_validation_failed",
+        revision: "12",
+        observedAtUnixMs: expect.any(Number),
+      },
+    ]);
+    for (const event of events) {
+      expect(Object.isFrozen(event)).toBe(true);
+      expect(event).not.toHaveProperty("privateValue");
+      expect(event).not.toHaveProperty("input");
+      expect(event).not.toHaveProperty("errors");
+      expect(event).not.toHaveProperty("error");
+    }
+  });
+
+  it("does not emit an outcome before its public result is constructible", () => {
+    const staleEvents: unknown[] = [];
+    const stale = createPolicyPublisher({
+      source: { current: () => ({ revision: 2n, value: { minimum: 8 } }) },
+      projection: definePublicProjection<{ minimum: number }>()({
+        minimum: () => {
+          throw new Error("projection failed");
+        },
+      }),
+      validate: () => ({ valid: true as const }),
+      onEvent: (event) => staleEvents.push(event),
+    });
+    expect(() => stale.validate("1", undefined)).toThrow("projection failed");
+    expect(staleEvents).toEqual([]);
+
+    const validationEvents: unknown[] = [];
+    const invalidErrors = createPolicyPublisher({
+      source: { current: () => ({ revision: 2n, value: { minimum: 8 } }) },
+      projection: definePublicProjection<{ minimum: number }>()({
+        minimum: (policy) => policy.minimum,
+      }),
+      validate: () => ({ valid: false as const, errors: 1n as never }),
+      onEvent: (event) => validationEvents.push(event),
+    });
+    expect(() => invalidErrors.validate("2", undefined)).toThrow(/public JSON/);
+    expect(validationEvents).toEqual([]);
+  });
+});

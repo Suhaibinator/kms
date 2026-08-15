@@ -1,0 +1,22 @@
+{
+  "format": "kms-config-descriptor/v1",
+  "source": {
+    "module": "./config.js",
+    "type": "GroupsOnly"
+  },
+  "groups": [
+    {
+      "alias": "application",
+      "fields": [
+        {
+          "property": "name",
+          "jsonName": "name",
+          "reload": "hot",
+          "views": ["worker"],
+          "type": { "kind": "string" }
+        }
+      ]
+    }
+  ],
+  "secrets": []
+}

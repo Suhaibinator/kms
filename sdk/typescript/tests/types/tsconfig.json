@@ -1,0 +1,21 @@
+{
+  "extends": "../../tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "paths": {
+      "@suhaibinator/kms": ["../../src/index.ts"],
+      "@suhaibinator/kms/configgen": ["../../src/configgen/index.ts"],
+      "@suhaibinator/kms/configstore": ["../../src/configstore/index.ts"],
+      "@suhaibinator/kms/next/client": ["../../src/next/client.tsx"],
+      "@suhaibinator/kms/next/server": ["../../src/next/server.ts"]
+    },
+    "types": ["node", "react"]
+  },
+  "include": [
+    "./public-api.ts",
+    "./configgen-soundness.ts",
+    "../../examples/**/*.ts",
+    "../../examples/**/*.tsx"
+  ],
+  "exclude": ["../../dist", "../../node_modules"]
+}

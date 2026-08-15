@@ -11,10 +11,12 @@ Requires Python 3.10+.
 
 ```bash
 pip install -e sdk/python
-# For a published release: pip install kms-paramstore
+# Published releases are wheel assets on GitHub (replace both versions):
+python -m pip install \
+  https://github.com/Suhaibinator/kms/releases/download/v0.1.0/kms_paramstore-0.1.0-py3-none-any.whl
 ```
 
-Runtime dependencies are `grpcio>=1.81.1` and `protobuf>=6.33.5,<7`. The gRPC stubs are
+Runtime dependencies are `grpcio>=1.83.0` and `protobuf>=7.35.1,<8`. The gRPC stubs are
 vendored under `kms_paramstore/_gen/`, so no `protoc` is needed to use the SDK.
 
 ## Quick start

@@ -114,6 +114,40 @@ python -m venv .venv
 
 CI runs mypy and pytest on the oldest and newest supported Python versions.
 
+## TypeScript SDK
+
+The Node SDK has strict type checking, Biome lint/format gates, deterministic
+protobuf generation verification, unit and fault-injection tests, compile-only
+consumer/example contracts, and a declaration build:
+
+```bash
+cd sdk/typescript
+npm ci
+npm run check
+```
+
+The equivalent repository targets are `make typescript` for a clean package
+build, `make test-typescript` for runtime and consumer-type tests, and
+`make check-typescript` for the complete release gate. All three install from
+the committed lockfile first.
+
+CI runs `npm run check` on Node 22, Node 24, and Node 26. Examples under
+`sdk/typescript/examples` are included in `npm run test:types`, so changes to
+the documented core and serverful Next.js integrations cannot silently drift
+from the public exports. The gate also builds declarations, compiles a consumer
+against the built package, and runs `npm pack --dry-run` to verify the
+publishable manifest. `npm run test:next` performs a real Next.js 16 App Router
+build, rejects a Client Component import of `next/server`, and scans browser
+chunks for server transport, TLS, generated-protocol, and credential markers.
+Generated managed-configuration fixtures must match the descriptor and
+exercise the emitted `Store`; applications should run their
+`kms-config-gen-ts ... --check` command in CI for the same stale-artifact gate.
+The compatibility jobs compile the built package with the exact TypeScript
+5.2.2 minimum, build isolated Next.js 14/React 18, Next.js 15/React 18 and 19,
+and Next.js 16/React 18 and 19 peer tuples, and launch Chromium against the serverful
+fixture. The browser gate verifies initial hydration, HTTP refresh, exact
+`bigint` revisions, and `policy_changed` recovery without a reload.
+
 ## Frontend
 
 The frontend has compile-time checks, lint/format gates, component tests,
@@ -149,6 +183,8 @@ The workflow in `.github/workflows/ci.yml` runs these independent checks:
   native permission and ACL semantics flow through database, backup, restore,
   certificate, and key operations.
 - `Python SDK (pytest & mypy)` — the supported Python-version matrix.
+- `TypeScript SDK` — the complete package gate on supported Node.js majors 22,
+  24, and 26.
 - `Frontend (quality, tests & build)` — locked install, generated types,
   TypeScript, linting, formatting, component/browser tests, and static export.
 - Go lint and `govulncheck` remain independent required checks.
