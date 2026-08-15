@@ -11,22 +11,22 @@ Prerelease tags are intentionally unsupported.
    `npm version X.Y.Z --no-git-tag-version` so `package-lock.json` changes with
    the manifest.
 2. Merge those changes to `main` and wait for its ordinary CI run to pass.
-3. Update local `main`, create an annotated tag, validate it, and push only the
-   tag:
+3. Update local `main`, create a tag, validate it, and push only the tag. Both
+   lightweight and annotated tags are supported:
 
    ```bash
    git switch main
    git pull --ff-only
-   git tag -a vX.Y.Z -m "vX.Y.Z"
+   git tag vX.Y.Z
    ./scripts/release/validate.sh vX.Y.Z origin/main
    git push origin vX.Y.Z
    ```
 
 The tag must match `vX.Y.Z`, point to a commit reachable from `main`, and match
-both SDK manifests and the TypeScript lockfile. A lightweight tag, prerelease,
-or mismatched version fails before the workflow receives publish permissions.
-The first release supported by this pipeline is `v0.1.0`; existing `v0.0.x`
-releases are not backfilled.
+both SDK manifests and the TypeScript lockfile. A prerelease or mismatched
+version fails before the workflow receives publish permissions. The first
+release supported by this pipeline is `v0.1.0`; existing `v0.0.x` releases are
+not backfilled.
 
 ## What CI publishes
 

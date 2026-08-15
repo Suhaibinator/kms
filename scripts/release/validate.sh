@@ -14,11 +14,10 @@ if [[ ! $tag =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
   fail "tag must be a stable semantic version in the form vX.Y.Z (got '$tag')"
 fi
 
-if [[ $(git cat-file -t "refs/tags/$tag" 2>/dev/null || true) != tag ]]; then
-  fail "refs/tags/$tag must be an annotated tag"
+if ! tag_commit=$(git rev-parse --verify "refs/tags/$tag^{commit}" 2>/dev/null); then
+  fail "refs/tags/$tag must exist and point to a commit"
 fi
 
-tag_commit=$(git rev-list -n 1 "refs/tags/$tag")
 if ! git rev-parse --verify --quiet "$main_ref^{commit}" >/dev/null; then
   fail "main ref '$main_ref' does not exist"
 fi
