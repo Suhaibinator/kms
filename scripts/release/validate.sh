@@ -26,14 +26,6 @@ if ! git merge-base --is-ancestor "$tag_commit" "$main_ref"; then
 fi
 
 version=${tag#v}
-python_version=$(python3 -c 'import pathlib, tomllib; print(tomllib.loads(pathlib.Path("sdk/python/pyproject.toml").read_text())["project"]["version"])')
-typescript_version=$(node -p 'require("./sdk/typescript/package.json").version')
-lock_version=$(node -p 'require("./sdk/typescript/package-lock.json").packages[""].version')
-
-[[ $python_version == "$version" ]] || fail "Python version is $python_version; expected $version"
-[[ $typescript_version == "$version" ]] || fail "TypeScript version is $typescript_version; expected $version"
-[[ $lock_version == "$version" ]] || fail "TypeScript lockfile version is $lock_version; expected $version"
-
 major=${version%%.*}
 minor=${version%.*}
 short_commit=${tag_commit:0:12}
@@ -49,4 +41,4 @@ if [[ -n ${GITHUB_OUTPUT:-} ]]; then
   } >>"$GITHUB_OUTPUT"
 fi
 
-printf 'validated %s at %s (package version %s)\n' "$tag" "$tag_commit" "$version"
+printf 'validated %s at %s (release version %s)\n' "$tag" "$tag_commit" "$version"

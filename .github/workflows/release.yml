@@ -38,7 +38,7 @@ jobs:
           fetch-depth: 0
       - name: Refresh main branch
         run: git fetch --no-tags origin "+refs/heads/main:refs/remotes/origin/main"
-      - name: Validate tag and lockstep package versions
+      - name: Validate release tag
         id: metadata
         run: ./scripts/release/validate.sh "${GITHUB_REF_NAME}" origin/main
       - name: Detect an existing release
@@ -47,26 +47,30 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ steps.metadata.outputs.tag }}
         run: |
-          release_json=$(gh release view "$RELEASE_TAG" --json isDraft 2>/dev/null || true)
+          release_json=$(gh release view "$RELEASE_TAG" --json isDraft,assets 2>/dev/null || true)
           if [ -z "$release_json" ]; then
             echo "state=absent" >>"$GITHUB_OUTPUT"
           elif [ "$(jq -r .isDraft <<<"$release_json")" = true ]; then
             echo "state=draft" >>"$GITHUB_OUTPUT"
+          elif jq -e '.assets | any(.name == "RELEASE_COMPLETE.json")' \
+            >/dev/null <<<"$release_json"; then
+            echo "state=complete" >>"$GITHUB_OUTPUT"
+            echo "Release $RELEASE_TAG is already complete; treating this run as a no-op."
           else
             echo "state=published" >>"$GITHUB_OUTPUT"
-            echo "Release $RELEASE_TAG is already published; treating this run as a no-op."
+            echo "Release $RELEASE_TAG is public but incomplete; continuing publication."
           fi
 
   quality-gate:
     name: Full release CI gate
     needs: validate
-    if: needs.validate.outputs.release_state != 'published'
+    if: needs.validate.outputs.release_state != 'complete'
     uses: ./.github/workflows/ci.yml
 
   build-artifacts:
     name: Build and attest release artifacts
     needs: [validate, quality-gate]
-    if: needs.validate.outputs.release_state != 'published'
+    if: needs.validate.outputs.release_state != 'complete'
     runs-on: ubuntu-latest
     timeout-minutes: 45
     permissions:
@@ -99,6 +103,8 @@ jobs:
           cache: pip
           cache-dependency-path: sdk/python/pyproject.toml
 
+      - name: Stamp package versions from release tag
+        run: ./scripts/release/stamp-package-versions.sh "$RELEASE_VERSION"
       - name: Build embedded frontend
         run: make frontend check-frontend
       - name: Build native archives
@@ -167,6 +173,15 @@ jobs:
             --target ES2022 --module NodeNext --moduleResolution NodeNext index.ts
           node --input-type=module -e 'await import("@suhaibinator/kms")'
 
+      - name: Generate release completion record
+        run: |
+          jq -n \
+            --arg tag "v$RELEASE_VERSION" \
+            --arg version "$RELEASE_VERSION" \
+            --arg commit "$RELEASE_COMMIT" \
+            '{tag: $tag, version: $version, commit: $commit}' \
+            >dist/release/RELEASE_COMPLETE.json
+
       - name: Generate checksums
         working-directory: dist/release
         run: |
@@ -190,9 +205,9 @@ jobs:
           compression-level: 0
 
   draft-release:
-    name: Stage draft GitHub Release
+    name: Stage GitHub Release assets
     needs: [validate, build-artifacts]
-    if: needs.validate.outputs.release_state != 'published'
+    if: needs.validate.outputs.release_state != 'complete'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
@@ -211,7 +226,7 @@ jobs:
           for artifact in dist/release/*; do
             gh attestation verify "$artifact" --repo "$GITHUB_REPOSITORY"
           done
-      - name: Create or reuse the draft release
+      - name: Create or reuse the release
         run: |
           if ! gh release view "$RELEASE_TAG" --json isDraft >/dev/null 2>&1; then
             gh release create "$RELEASE_TAG" \
@@ -220,17 +235,18 @@ jobs:
               --generate-notes \
               --title "$RELEASE_TAG"
           fi
-          is_draft=$(gh release view "$RELEASE_TAG" --json isDraft --jq .isDraft)
-          if [ "$is_draft" != true ]; then
-            echo "::error::Refusing to replace assets on an already-published release"
-            exit 1
-          fi
-          gh release upload "$RELEASE_TAG" dist/release/* --clobber
+          release_assets=()
+          for artifact in dist/release/*; do
+            if [ "$(basename "$artifact")" != RELEASE_COMPLETE.json ]; then
+              release_assets+=("$artifact")
+            fi
+          done
+          gh release upload "$RELEASE_TAG" "${release_assets[@]}" --clobber
 
   publish-container:
     name: Publish immutable container image
     needs: [validate, quality-gate]
-    if: needs.validate.outputs.release_state != 'published'
+    if: needs.validate.outputs.release_state != 'complete'
     runs-on: ubuntu-latest
     timeout-minutes: 45
     permissions:
@@ -320,7 +336,7 @@ jobs:
   publish-npm:
     name: Publish immutable TypeScript package
     needs: [validate, build-artifacts]
-    if: needs.validate.outputs.release_state != 'published'
+    if: needs.validate.outputs.release_state != 'complete'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
@@ -377,7 +393,7 @@ jobs:
   promote:
     name: Promote completed release
     needs: [validate, draft-release, publish-container, publish-npm]
-    if: needs.validate.outputs.release_state != 'published'
+    if: needs.validate.outputs.release_state != 'complete'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
@@ -393,6 +409,10 @@ jobs:
       CANDIDATE_TAG: release-candidate-${{ needs.validate.outputs.version }}
       IMAGE_DIGEST: ${{ needs.publish-container.outputs.digest }}
     steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: release-${{ needs.validate.outputs.version }}
+          path: dist/release
       - uses: actions/setup-node@v7
         with:
           node-version: "26"
@@ -475,7 +495,7 @@ jobs:
           sha256sum --check SHA256SUMS
           find . -maxdepth 1 -type f ! -name SHA256SUMS -printf '%f\n' \
             | sort >"$RUNNER_TEMP/actual-release-assets"
-          awk '{ sub(/^\*/, "", $2); print $2 }' SHA256SUMS \
+          awk '{ sub(/^\*/, "", $2); if ($2 != "RELEASE_COMPLETE.json") print $2 }' SHA256SUMS \
             | sort >"$RUNNER_TEMP/checksummed-release-assets"
           diff -u \
             "$RUNNER_TEMP/checksummed-release-assets" \
@@ -487,3 +507,13 @@ jobs:
           gh release view "$RELEASE_TAG" --json isDraft,assets \
             --jq '(.isDraft == false) and (.assets | any(.name == "SHA256SUMS"))' \
             | grep -qx true
+
+          completion_record=dist/release/RELEASE_COMPLETE.json
+          gh attestation verify "$completion_record" --repo "$GITHUB_REPOSITORY"
+          gh release upload "$RELEASE_TAG" "$completion_record" --clobber
+          completion_download="$RUNNER_TEMP/release-completion"
+          mkdir -p "$completion_download"
+          gh release download "$RELEASE_TAG" \
+            --pattern RELEASE_COMPLETE.json \
+            --dir "$completion_download"
+          cmp "$completion_record" "$completion_download/RELEASE_COMPLETE.json"
