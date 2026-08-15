@@ -7,6 +7,7 @@ import (
 	"io"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Suhaibinator/kms/sdk/go/configstore"
 	"github.com/Suhaibinator/kms/sdk/go/kmsclient"
@@ -128,8 +129,25 @@ func TestAdversarialMalformedDuplicateAndMistypedDocumentGauntlet(t *testing.T) 
 		})
 	}
 
-	if got := fixture.store.Stats().Rejected[configstore.RejectConfigDecodeFailed]; got < uint64(len(cases)) {
-		t.Fatalf("decode rejection counter = %d, want at least %d", got, len(cases))
+	// The loader records rejection statistics before publishing the
+	// acknowledgement, so the counter is already visible here. Poll anyway so
+	// the assertion reports a genuine undercount rather than a lost race if that
+	// ordering ever regresses.
+	want := uint64(len(cases))
+	got := waitDecodeRejectionCount(fixture, want)
+	if got < want {
+		t.Fatalf("decode rejection counter = %d, want at least %d", got, want)
+	}
+}
+
+func waitDecodeRejectionCount(fixture *runningFixture, want uint64) uint64 {
+	deadline := time.Now().Add(testOperationTimeout)
+	for {
+		got := fixture.store.Stats().Rejected[configstore.RejectConfigDecodeFailed]
+		if got >= want || time.Now().After(deadline) {
+			return got
+		}
+		time.Sleep(time.Millisecond)
 	}
 }
 

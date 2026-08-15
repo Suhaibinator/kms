@@ -434,8 +434,8 @@ func (l *ReleaseLoader) processCandidate(
 		l.reject(ns, candidate, category)
 		return releaseCandidateResult{candidate: candidate, category: category, err: loaderCandidateError(category)}
 	}
-	l.ack(ns, candidate, ReleaseStateReceived, "")
 	l.setState(ReleaseStateReceived, "")
+	l.ack(ns, candidate, ReleaseStateReceived, "")
 
 	prepared, prepareErr := prepare(ctx, snapshot)
 	if prepareErr != nil || prepared == nil {
@@ -462,8 +462,8 @@ func (l *ReleaseLoader) processCandidate(
 		l.reject(ns, candidate, ReleaseRejectSuperseded)
 		return releaseCandidateResult{candidate: candidate, category: ReleaseRejectSuperseded, err: loaderCandidateError(ReleaseRejectSuperseded)}
 	}
-	l.ack(ns, candidate, ReleaseStatePrepared, "")
 	l.setState(ReleaseStatePrepared, "")
+	l.ack(ns, candidate, ReleaseStatePrepared, "")
 
 	active, activeErr := l.getActive(ctx, ns)
 	if activeErr != nil {
@@ -499,8 +499,8 @@ func (l *ReleaseLoader) processCandidate(
 		}
 	}
 
-	l.ack(ns, candidate, ReleaseStateApplied, "")
 	l.recordApplied(candidate)
+	l.ack(ns, candidate, ReleaseStateApplied, "")
 	return releaseCandidateResult{candidate: candidate, applied: true}
 }
 
@@ -1113,9 +1113,14 @@ func (l *ReleaseLoader) setState(state, failure string) {
 	}
 }
 
+// Local status and statistics are recorded before the acknowledgement is
+// published so that an observer who sees the acknowledgement also sees every
+// counter and status field that describes it. Acknowledgements travel to the
+// server on the watch goroutine, so acking first would let a remote observer
+// race ahead of the local bookkeeping done here.
 func (l *ReleaseLoader) reject(ns namespaceRef, candidate releaseCandidate, category string) {
-	l.ack(ns, candidate, ReleaseStateRejected, category)
 	l.recordRejected(category)
+	l.ack(ns, candidate, ReleaseStateRejected, category)
 }
 
 func (l *ReleaseLoader) recordRejected(category string) {
