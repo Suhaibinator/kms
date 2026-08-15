@@ -4,15 +4,22 @@ on:
   push:
     tags:
       - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing stable release tag to resume
+        required: true
+        type: string
 
 permissions:
   contents: read
 
 concurrency:
-  group: release-${{ github.ref }}
+  group: release-${{ inputs.tag || github.ref }}
   cancel-in-progress: false
 
 env:
+  GH_REPO: ${{ github.repository }}
   IMAGE_NAME: ghcr.io/suhaibinator/kms
   NPM_PACKAGE: "@suhaibinator/kms"
   NPM_REGISTRY: https://npm.pkg.github.com
@@ -40,7 +47,9 @@ jobs:
         run: git fetch --no-tags origin "+refs/heads/main:refs/remotes/origin/main"
       - name: Validate release tag
         id: metadata
-        run: ./scripts/release/validate.sh "${GITHUB_REF_NAME}" origin/main
+        env:
+          RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+        run: ./scripts/release/validate.sh "$RELEASE_TAG" origin/main
       - name: Detect an existing release
         id: release
         env:
@@ -298,8 +307,7 @@ jobs:
 
           gh attestation verify "oci://$IMAGE_NAME@$version_digest" \
             --repo "$GITHUB_REPOSITORY" \
-            --source-digest "$RELEASE_COMMIT" \
-            --source-ref "$GITHUB_REF"
+            --source-digest "$RELEASE_COMMIT"
           echo "exists=true" >>"$GITHUB_OUTPUT"
           echo "digest=$version_digest" >>"$GITHUB_OUTPUT"
           echo "Reusing attested image $IMAGE_NAME@$version_digest"

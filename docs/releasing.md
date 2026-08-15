@@ -39,6 +39,11 @@ public while CI populates it. Failed or interrupted runs can be retried from
 GitHub Actions; CI records a completion marker only after every publisher and
 verification step succeeds.
 
+If the release workflow itself is fixed after a failed release, open
+**Actions**, choose **Release**, select **Run workflow**, and enter the existing
+tag. The manual run uses the current workflow while rebuilding and verifying
+artifacts from the tagged commit.
+
 ## Install from GitHub
 
 Download an archive and verify its checksum and provenance:
