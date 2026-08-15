@@ -481,18 +481,20 @@ jobs:
         env:
           OWNER: ${{ github.repository_owner }}
         run: |
-          curl -fsSL \
-            -H "Authorization: Bearer $GH_TOKEN" \
-            -H "Accept: application/vnd.github+json" \
+          container_package=${IMAGE_NAME##*/}
+          npm_package=${NPM_PACKAGE##*/}
+
+          container_visibility=$(gh api \
             -H "X-GitHub-Api-Version: 2026-03-10" \
-            "https://api.github.com/users/$OWNER/packages?package_type=container&per_page=100" \
-            | jq -e 'any(.name == "kms" and .visibility == "public")'
-          curl -fsSL \
-            -H "Authorization: Bearer $GH_TOKEN" \
-            -H "Accept: application/vnd.github+json" \
+            "/users/$OWNER/packages/container/$container_package" \
+            --jq .visibility)
+          npm_visibility=$(gh api \
             -H "X-GitHub-Api-Version: 2026-03-10" \
-            "https://api.github.com/users/$OWNER/packages?package_type=npm&per_page=100" \
-            | jq -e 'any((.name == "kms" or .name == "@suhaibinator/kms") and .visibility == "public")'
+            "/users/$OWNER/packages/npm/$npm_package" \
+            --jq .visibility)
+
+          [ "$container_visibility" = public ]
+          [ "$npm_visibility" = public ]
 
       - name: Verify staged GitHub Release downloads
         run: |
