@@ -20,7 +20,13 @@ difference.
 
 ## Installation
 
+GitHub's npm registry requires authentication, including for public packages.
+Configure the package scope with a classic personal access token that has
+`read:packages`, then install the SDK:
+
 ```bash
+npm config set @suhaibinator:registry https://npm.pkg.github.com
+npm config set //npm.pkg.github.com/:_authToken "$GITHUB_PACKAGES_TOKEN"
 npm install @suhaibinator/kms
 ```
 

@@ -15,7 +15,7 @@ const validFixture = resolve(temporaryDirectory, "valid");
 const invalidFixture = resolve(temporaryDirectory, "invalid");
 const reactMajor = Number.parseInt(reactVersion, 10);
 const reactMinor = Number.parseInt(reactVersion.split(".")[1] ?? "0", 10);
-const reactTypes = reactMajor === 18 ? "18.3.27" : reactMinor >= 2 ? "19.2.18" : "19.1.17";
+const reactTypes = reactMajor === 18 ? "18.3.31" : reactMinor >= 2 ? "19.2.18" : "19.1.17";
 const reactDomTypes = reactMajor === 18 ? "18.3.7" : reactMinor >= 2 ? "19.2.4" : "19.1.7";
 
 try {

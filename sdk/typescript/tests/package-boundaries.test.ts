@@ -86,6 +86,9 @@ describe("published trust boundaries", () => {
     expect(manifest.files).toEqual(
       expect.arrayContaining(["dist", "README.md", "SECURITY.md", "CHANGELOG.md", "LICENSE"]),
     );
-    expect(manifest.publishConfig).toEqual({ access: "public", provenance: true });
+    expect(manifest.publishConfig).toEqual({
+      access: "public",
+      registry: "https://npm.pkg.github.com",
+    });
   });
 });

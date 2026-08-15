@@ -32,7 +32,7 @@ try {
         },
         devDependencies: {
           "@types/node": "20.14.12",
-          "@types/react": "18.3.3",
+          "@types/react": "18.3.31",
           typescript: "5.2.2",
         },
       },

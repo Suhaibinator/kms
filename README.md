@@ -141,7 +141,7 @@ directly, with client-side routing fallback for deep links.
 
 ### Prerequisites
 
-- Go 1.26.5+ (see `go.mod`)
+- Go 1.26.6+ (see `go.mod`)
 - Node.js 20.9+ (required by the pinned Next.js version)
 - Node.js 22+ when building or consuming the independently published
   TypeScript SDK
@@ -162,6 +162,26 @@ tests/consumer type checks, or complete release gate respectively.
 `make check-frontend` fails if `frontend/out/index.html` is missing (useful in
 CI before a release build, so an empty UI never ships silently). See
 [`docs/testing.md`](docs/testing.md) for all local and CI regression commands.
+
+### Install a release
+
+Stable releases publish native `parameter-store` and `kms-config-gen` archives,
+the Python SDK, the TypeScript SDK, and a multi-platform container image through
+GitHub. For example:
+
+```bash
+# Container image (Linux amd64/arm64).
+docker pull ghcr.io/suhaibinator/kms:0.1.0
+
+# Python SDK wheel from the GitHub Release.
+python -m pip install \
+  https://github.com/Suhaibinator/kms/releases/download/v0.1.0/kms_paramstore-0.1.0-py3-none-any.whl
+```
+
+GitHub's npm registry requires an authenticated `@suhaibinator` scope before
+`npm install @suhaibinator/kms`. See [`docs/releasing.md`](docs/releasing.md)
+for binary downloads, checksum and provenance verification, npm setup,
+container initialization, and the maintainer release procedure.
 
 ### Initialize and run
 

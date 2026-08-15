@@ -23,7 +23,7 @@
   "author": "Suhaib",
   "publishConfig": {
     "access": "public",
-    "provenance": true
+    "registry": "https://npm.pkg.github.com"
   },
   "type": "module",
   "bin": {
@@ -105,7 +105,7 @@
     }
   },
   "dependencies": {
-    "@bufbuild/protobuf": "^2.13.0",
+    "@bufbuild/protobuf": "^2.14.0",
     "@grpc/grpc-js": "^1.14.4",
     "server-only": "^0.0.1"
   },
@@ -118,7 +118,7 @@
     "@types/react-dom": "^19.2.4",
     "@vitest/coverage-v8": "^4.1.10",
     "happy-dom": "^20.11.2",
-    "next": "^16.3.0",
+    "next": "^16.3.1",
     "protoc": "35.1.0",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",

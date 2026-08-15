@@ -22,11 +22,12 @@ namespace/key model, see [`migration.md`](migration.md).
 
 ```bash
 pip install -e sdk/python
-# For a published release, the package name is:
-# pip install kms-paramstore
+# Published releases are wheel assets on GitHub (replace both versions):
+python -m pip install \
+  https://github.com/Suhaibinator/kms/releases/download/v0.1.0/kms_paramstore-0.1.0-py3-none-any.whl
 ```
 
-Runtime dependencies are `grpcio>=1.81.1` and `protobuf>=6.33.5,<7`; the generated
+Runtime dependencies are `grpcio>=1.83.0` and `protobuf>=7.35.1,<8`; the generated
 gRPC stubs are vendored under `kms_paramstore/_gen/`, so `protoc` is not
 needed to use the SDK.
 
