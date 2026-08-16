@@ -1059,36 +1059,3 @@ func TestManagedConfigAdversarialRapidCASAndReaders(t *testing.T) {
 		t.Fatalf("captured initial snapshot mutated: version=%d value=%q", got.Version(), got.StringValue())
 	}
 }
-
-func waitForAdversarialSubscriber(
-	t *testing.T,
-	app *adversarialManagedApp,
-	instanceID string,
-	version uint64,
-	state string,
-) *kmsv1.ReleaseSubscriberState {
-	t.Helper()
-	var last []*kmsv1.ReleaseSubscriberState
-	waitForManagedState(t, func() bool {
-		response, err := app.admin.ListReleaseSubscribers(app.authCtx, &kmsv1.ListReleaseSubscribersRequest{
-			Namespace: app.namespace, ReleaseName: adversarialReleaseName, PageSize: 100,
-		})
-		if err != nil {
-			return false
-		}
-		last = response.GetSubscribers()
-		for _, subscriber := range last {
-			if subscriber.GetInstanceId() == instanceID && subscriber.GetReleaseVersion() == version && subscriber.GetState() == state {
-				return true
-			}
-		}
-		return false
-	}, fmt.Sprintf("subscriber %s release %d state %s (last=%v)", instanceID, version, state, last))
-	for _, subscriber := range last {
-		if subscriber.GetInstanceId() == instanceID && subscriber.GetReleaseVersion() == version && subscriber.GetState() == state {
-			return subscriber
-		}
-	}
-	t.Fatal("subscriber disappeared after successful wait")
-	return nil
-}
