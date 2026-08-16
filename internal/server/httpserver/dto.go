@@ -107,6 +107,62 @@ func authMethodsFromStrings(methods []string) []domain.AuthMethod {
 	return out
 }
 
+// --- applications ---------------------------------------------------------
+
+type applicationDTO struct {
+	Name             string                            `json:"name"`
+	Description      string                            `json:"description"`
+	ReleaseName      string                            `json:"release_name"`
+	SchemaID         string                            `json:"schema_id"`
+	SchemaVersion    uint64                            `json:"schema_version"`
+	Contract         []domain.ApplicationContractField `json:"contract"`
+	CreatedBy        string                            `json:"created_by"`
+	CreatedAtUnixMS  int64                             `json:"created_at_unix_ms"`
+	UpdatedAtUnixMS  int64                             `json:"updated_at_unix_ms"`
+	EnvironmentCount uint64                            `json:"environment_count"`
+}
+
+func toApplicationDTO(app domain.Application) applicationDTO {
+	contract := app.Contract
+	if contract == nil {
+		contract = []domain.ApplicationContractField{}
+	}
+	return applicationDTO{Name: app.Name, Description: app.Description, ReleaseName: app.ReleaseName,
+		SchemaID: app.SchemaID, SchemaVersion: app.SchemaVersion, Contract: contract,
+		CreatedBy: app.CreatedBy, CreatedAtUnixMS: unixMS(app.CreatedAt), UpdatedAtUnixMS: unixMS(app.UpdatedAt), EnvironmentCount: app.EnvironmentCount}
+}
+
+type applicationCellDTO struct {
+	Present        bool   `json:"present"`
+	Value          string `json:"value,omitempty"`
+	ContentType    string `json:"content_type"`
+	Version        uint64 `json:"version"`
+	ClientBound    bool   `json:"client_bound,omitempty"`
+	HasAccessToken bool   `json:"has_access_token,omitempty"`
+}
+
+type applicationRowDTO struct {
+	Key          string                        `json:"key"`
+	Kind         string                        `json:"kind"`
+	Environments map[string]applicationCellDTO `json:"environments"`
+}
+
+func toApplicationDashboardDTO(d domain.ApplicationDashboard) map[string]any {
+	environments := make([]namespaceDTO, 0, len(d.Environments))
+	for _, ns := range d.Environments {
+		environments = append(environments, toNamespaceDTO(ns))
+	}
+	rows := make([]applicationRowDTO, 0, len(d.Rows))
+	for _, row := range d.Rows {
+		cells := make(map[string]applicationCellDTO, len(row.Cells))
+		for env, cell := range row.Cells {
+			cells[env] = applicationCellDTO{Present: cell.Present, Value: cell.Value, ContentType: cell.ContentType, Version: cell.Version, ClientBound: cell.ClientBound, HasAccessToken: cell.HasAccessToken}
+		}
+		rows = append(rows, applicationRowDTO{Key: row.Key, Kind: row.Kind, Environments: cells})
+	}
+	return map[string]any{"application": toApplicationDTO(d.Application), "environments": environments, "rows": rows}
+}
+
 // --- parameters ------------------------------------------------------------
 
 type parameterDTO struct {

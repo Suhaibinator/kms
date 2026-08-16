@@ -101,6 +101,55 @@ export interface UpdateNamespaceRequest {
   allowed_auth_methods: AuthMethod[];
 }
 
+// --- Applications ---
+
+export interface ApplicationContractField {
+  alias: string;
+  kind: "parameter" | "secret";
+  content_type?: string;
+}
+
+export interface Application {
+  name: string;
+  description: string;
+  release_name: string;
+  schema_id: string;
+  schema_version: number;
+  contract: ApplicationContractField[];
+  created_by: string;
+  created_at_unix_ms: number;
+  updated_at_unix_ms: number;
+  environment_count: number;
+}
+
+export interface ApplicationConfigurationCell {
+  present: boolean;
+  value?: string;
+  content_type: string;
+  version: number;
+  client_bound?: boolean;
+  has_access_token?: boolean;
+}
+
+export interface ApplicationConfigurationRow {
+  key: string;
+  kind: "parameter" | "secret";
+  environments: Record<string, ApplicationConfigurationCell>;
+}
+
+export interface ApplicationDashboard {
+  application: Application;
+  environments: Namespace[];
+  rows: ApplicationConfigurationRow[];
+}
+
+export interface ApplicationWriteResult {
+  environment: string;
+  version: number;
+  revision: number;
+  error?: string;
+}
+
 // --- Parameters ---
 
 export interface ParameterLabels {

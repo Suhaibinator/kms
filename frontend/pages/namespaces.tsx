@@ -81,13 +81,6 @@ export default function NamespacesPage() {
   const toast = useToast();
   const { namespaces, loading, error, reload } = useNamespaces();
 
-  const [createOpen, setCreateOpen] = useState(false);
-  const [env, setEnv] = useState("");
-  const [app, setApp] = useState("");
-  const [description, setDescription] = useState("");
-  const [methods, setMethods] = useState<AuthMethod[]>(["mtls"]);
-  const [saving, setSaving] = useState(false);
-
   const [editTarget, setEditTarget] = useState<Namespace | null>(null);
   const [editDescription, setEditDescription] = useState("");
   const [editMethods, setEditMethods] = useState<AuthMethod[]>([]);
@@ -114,47 +107,6 @@ export default function NamespacesPage() {
         list: list.sort((x, y) => x.app.localeCompare(y.app)),
       }));
   }, [namespaces]);
-
-  function resetCreate() {
-    setEnv("");
-    setApp("");
-    setDescription("");
-    setMethods(["mtls"]);
-  }
-
-  async function onCreate(e: React.FormEvent) {
-    e.preventDefault();
-    const envVal = env.trim();
-    const appVal = app.trim();
-    if (!envVal || !appVal) {
-      toast.error(
-        new Error("Both an environment and an application are required."),
-        "Missing fields",
-      );
-      return;
-    }
-    if (methods.length === 0) {
-      toast.error(new Error("Select at least one allowed auth method."), "No auth method");
-      return;
-    }
-    setSaving(true);
-    try {
-      await api.createNamespace({
-        env: envVal,
-        app: appVal,
-        description: description.trim(),
-        allowed_auth_methods: methods,
-      });
-      toast.success("Namespace created", `${envVal}/${appVal}`);
-      setCreateOpen(false);
-      resetCreate();
-      reload();
-    } catch (err) {
-      toast.error(err, "Failed to create namespace");
-    } finally {
-      setSaving(false);
-    }
-  }
 
   function openEdit(ns: Namespace) {
     setEditTarget(ns);
@@ -205,12 +157,12 @@ export default function NamespacesPage() {
   return (
     <>
       <PageHeader
-        title="Namespaces"
-        subtitle="Each namespace is an (environment, application) pair that owns its parameters and secrets."
+        title="Environments"
+        subtitle="Deployment environments are isolated application namespaces. Add them from the owning application."
         actions={
-          <button className="btn btn-primary" onClick={() => setCreateOpen(true)}>
-            New namespace
-          </button>
+          <Link className="btn btn-primary" href="/applications">
+            Open applications
+          </Link>
         }
       />
 
@@ -228,14 +180,14 @@ export default function NamespacesPage() {
       ) : namespaces.length === 0 ? (
         <EmptyState
           icon={<Icon.namespace size={20} />}
-          title="No namespaces yet"
+          title="No environments yet"
           actions={
-            <button className="btn btn-primary" onClick={() => setCreateOpen(true)}>
-              New namespace
-            </button>
+            <Link className="btn btn-primary" href="/applications">
+              Create an application
+            </Link>
           }
         >
-          Create a namespace to start storing parameters and secrets for an application.
+          Create an application, define its shared contract, then add one or more environments.
         </EmptyState>
       ) : (
         grouped.map((group) => (
@@ -313,52 +265,6 @@ export default function NamespacesPage() {
           </div>
         ))
       )}
-
-      <Modal
-        open={createOpen}
-        title="New namespace"
-        onClose={() => setCreateOpen(false)}
-        footer={
-          <>
-            <button className="btn" onClick={() => setCreateOpen(false)} disabled={saving}>
-              Cancel
-            </button>
-            <button className="btn btn-primary" onClick={onCreate} disabled={saving}>
-              {saving ? "Creating…" : "Create namespace"}
-            </button>
-          </>
-        }
-      >
-        <form onSubmit={onCreate}>
-          <div className="form-row">
-            <Field label="Environment" hint="e.g. prod, staging">
-              <input
-                className="input mono"
-                value={env}
-                onChange={(e) => setEnv(e.target.value)}
-                placeholder="prod"
-              />
-            </Field>
-            <Field label="Application" hint="e.g. gradethis">
-              <input
-                className="input mono"
-                value={app}
-                onChange={(e) => setApp(e.target.value)}
-                placeholder="gradethis"
-              />
-            </Field>
-          </div>
-          <Field label="Description" hint="Optional.">
-            <input
-              className="input"
-              value={description}
-              onChange={(e) => setDescription(e.target.value)}
-              placeholder="GradeThis backend configuration"
-            />
-          </Field>
-          <AuthMethodsField methods={methods} onChange={setMethods} />
-        </form>
-      </Modal>
 
       <Modal
         open={editTarget !== null}

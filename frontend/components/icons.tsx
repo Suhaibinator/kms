@@ -1,5 +1,6 @@
 import {
   Activity,
+  Boxes,
   FileText,
   Layers,
   LayoutDashboard,
@@ -26,6 +27,7 @@ function lucide(Component: typeof LayoutDashboard, size: number) {
 export const Icon = {
   dashboard: ({ size = 16 }: IconProps) => lucide(LayoutDashboard, size),
   namespace: ({ size = 16 }: IconProps) => lucide(Layers, size),
+  application: ({ size = 16 }: IconProps) => lucide(Boxes, size),
   parameter: ({ size = 16 }: IconProps) => lucide(List, size),
   secret: ({ size = 16 }: IconProps) => lucide(LockKeyhole, size),
   policy: ({ size = 16 }: IconProps) => lucide(ShieldCheck, size),

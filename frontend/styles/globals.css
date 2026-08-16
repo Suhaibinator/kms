@@ -1431,6 +1431,70 @@ table.data th.mono {
 }
 
 /* namespace management hub: env-grouped tables */
+
+.application-contract {
+  display: grid;
+  grid-template-columns: minmax(140px, 0.7fr) minmax(180px, 1fr) minmax(280px, 2fr);
+  gap: 20px;
+  align-items: start;
+}
+
+.application-contract > div {
+  display: grid;
+  gap: 6px;
+}
+
+.application-matrix {
+  overflow-x: auto;
+}
+
+.application-matrix table {
+  min-width: 760px;
+}
+
+.application-matrix th,
+.application-matrix td {
+  min-width: 160px;
+  vertical-align: top;
+}
+
+.application-matrix .matrix-key {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  min-width: 210px;
+  background: var(--surface, #fff);
+}
+
+.matrix-value {
+  display: grid;
+  gap: 3px;
+  max-width: 260px;
+}
+
+.matrix-value .mono {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.secret-cell {
+  white-space: nowrap;
+}
+
+.environment-check-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 8px;
+  margin-top: 8px;
+}
+
+@media (max-width: 768px) {
+  .application-contract {
+    grid-template-columns: 1fr;
+  }
+}
+
 .ns-group {
   margin-bottom: 22px;
 }

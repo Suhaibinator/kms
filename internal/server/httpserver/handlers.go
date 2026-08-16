@@ -16,6 +16,12 @@ func (s *server) newAPIMux() *http.ServeMux {
 
 	mux.HandleFunc("POST /api/v1/auth/login", s.handleLogin)
 	mux.HandleFunc("GET /api/v1/whoami", s.handleWhoAmI)
+	mux.HandleFunc("GET /api/v1/applications", s.handleListApplications)
+	mux.HandleFunc("POST /api/v1/applications", s.handleCreateApplication)
+	mux.HandleFunc("PATCH /api/v1/applications", s.handleUpdateApplication)
+	mux.HandleFunc("DELETE /api/v1/applications", s.handleDeleteApplication)
+	mux.HandleFunc("GET /api/v1/applications/dashboard", s.handleApplicationDashboard)
+	mux.HandleFunc("PUT /api/v1/applications/parameters", s.handlePutApplicationParameter)
 
 	mux.HandleFunc("GET /api/v1/namespaces", s.handleListNamespaces)
 	mux.HandleFunc("POST /api/v1/namespaces", s.handleCreateNamespace)
@@ -64,6 +70,102 @@ func (s *server) newAPIMux() *http.ServeMux {
 	mux.HandleFunc("GET /api/v1/keys", s.handleListKeys)
 
 	return mux
+}
+
+// --- applications ----------------------------------------------------------
+
+func (s *server) handleListApplications(w http.ResponseWriter, r *http.Request) {
+	items, next, err := s.svc.ListApplications(r.Context(), principalFrom(r.Context()), listPage(r))
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	out := make([]applicationDTO, 0, len(items))
+	for _, app := range items {
+		out = append(out, toApplicationDTO(app))
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"applications": out, "next_page_token": next})
+}
+
+func decodeApplication(w http.ResponseWriter, r *http.Request) (domain.Application, error) {
+	var body struct {
+		Name          string                            `json:"name"`
+		Description   string                            `json:"description"`
+		ReleaseName   string                            `json:"release_name"`
+		SchemaID      string                            `json:"schema_id"`
+		SchemaVersion uint64                            `json:"schema_version"`
+		Contract      []domain.ApplicationContractField `json:"contract"`
+	}
+	if err := decodeJSON(w, r, &body); err != nil {
+		return domain.Application{}, err
+	}
+	return domain.Application{Name: body.Name, Description: body.Description, ReleaseName: body.ReleaseName, SchemaID: body.SchemaID, SchemaVersion: body.SchemaVersion, Contract: body.Contract}, nil
+}
+
+func (s *server) handleCreateApplication(w http.ResponseWriter, r *http.Request) {
+	app, err := decodeApplication(w, r)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	out, err := s.svc.CreateApplication(r.Context(), principalFrom(r.Context()), app)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"application": toApplicationDTO(out)})
+}
+
+func (s *server) handleUpdateApplication(w http.ResponseWriter, r *http.Request) {
+	app, err := decodeApplication(w, r)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	out, err := s.svc.UpdateApplication(r.Context(), principalFrom(r.Context()), app)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"application": toApplicationDTO(out)})
+}
+
+func (s *server) handleDeleteApplication(w http.ResponseWriter, r *http.Request) {
+	if err := s.svc.DeleteApplication(r.Context(), principalFrom(r.Context()), r.URL.Query().Get("name")); err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{})
+}
+
+func (s *server) handleApplicationDashboard(w http.ResponseWriter, r *http.Request) {
+	dashboard, err := s.svc.GetApplicationDashboard(r.Context(), principalFrom(r.Context()), r.URL.Query().Get("name"))
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, toApplicationDashboardDTO(dashboard))
+}
+
+func (s *server) handlePutApplicationParameter(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Application  string   `json:"application"`
+		Key          string   `json:"key"`
+		Value        string   `json:"value"`
+		ContentType  string   `json:"content_type"`
+		MetadataJSON string   `json:"metadata_json"`
+		Environments []string `json:"environments"`
+	}
+	if err := decodeJSON(w, r, &body); err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	results, err := s.svc.PutApplicationParameter(r.Context(), principalFrom(r.Context()), body.Application, body.Key, body.Value, body.ContentType, body.MetadataJSON, body.Environments)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"results": results})
 }
 
 // --- auth & health ---------------------------------------------------------

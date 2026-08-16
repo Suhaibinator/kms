@@ -72,9 +72,9 @@ func TestConfigurationReleaseLifecycle(t *testing.T) {
 		t.Fatalf("ValidateConfigurationRelease v1 errors = %+v, want none", validation)
 	}
 
-	parameterV2, _, err := h.svc.PutParameter(ctx, h.admin, parameterRef, "9", "integer", `{"unit":"workers"}`)
+	parameterInvalid, _, err := h.svc.PutParameter(ctx, h.admin, parameterRef, "0", "integer", `{"unit":"workers"}`)
 	if err != nil {
-		t.Fatalf("PutParameter v2: %v", err)
+		t.Fatalf("PutParameter invalid: %v", err)
 	}
 	const secretV2Plaintext = "release-secret-v2-canary-c77b"
 	secretV2, err := h.svc.PutSecret(ctx, h.admin, core.PutSecretInput{
@@ -88,24 +88,10 @@ func TestConfigurationReleaseLifecycle(t *testing.T) {
 		t.Fatal("ordinary rotation unexpectedly minted a new access token")
 	}
 
-	// The second immutable schema version intentionally conflicts with the
-	// integer parameter. Validation must return a structured, value-free schema
-	// failure without preventing the immutable release from being inspected.
-	schemaV2, err := h.svc.CreateConfigurationSchema(ctx, h.admin, schemaV1.ID, `{
-		"$schema":"https://json-schema.org/draft/2020-12/schema",
-		"type":"object",
-		"properties":{"workers":{"type":"string"}},
-		"required":["workers"],
-		"additionalProperties":false
-	}`, `{"owner":"integration"}`)
-	if err != nil {
-		t.Fatalf("CreateConfigurationSchema v2: %v", err)
-	}
-	if schemaV2.Version != schemaV1.Version+1 {
-		t.Fatalf("schema v2 version = %d, want %d", schemaV2.Version, schemaV1.Version+1)
-	}
+	// The application pins the schema, so invalid data is tested against that
+	// shared schema instead of creating an environment-specific schema version.
 	releaseV2, err := h.svc.CreateConfigurationRelease(ctx, h.admin, domain.CreateConfigurationReleaseInput{
-		Namespace: ns, Name: "runtime", SchemaID: schemaV2.ID, SchemaVersion: schemaV2.Version,
+		Namespace: ns, Name: "runtime", SchemaID: schemaV1.ID, SchemaVersion: schemaV1.Version,
 		Metadata: `{"purpose":"runtime"}`,
 		Entries: []domain.ReleaseEntrySelector{
 			// Empty version/label defaults to current and must still persist the
@@ -117,7 +103,7 @@ func TestConfigurationReleaseLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateConfigurationRelease v2: %v", err)
 	}
-	assertReleasePins(t, releaseV2, parameterV2, secretV2.Version, secretV2Plaintext, secretV1.AccessToken)
+	assertReleasePins(t, releaseV2, parameterInvalid, secretV2.Version, secretV2Plaintext, secretV1.AccessToken)
 	validation, err = h.svc.ValidateConfigurationRelease(ctx, h.admin, ns, "runtime", releaseV2.Version)
 	if err != nil {
 		t.Fatalf("ValidateConfigurationRelease v2: %v", err)
@@ -130,6 +116,10 @@ func TestConfigurationReleaseLifecycle(t *testing.T) {
 		if strings.Contains(validationText, sensitive) {
 			t.Fatalf("release validation leaked sensitive value %q", sensitive)
 		}
+	}
+	parameterV2, _, err := h.svc.PutParameter(ctx, h.admin, parameterRef, "9", "integer", `{"unit":"workers"}`)
+	if err != nil {
+		t.Fatalf("PutParameter v2: %v", err)
 	}
 	releaseV3, err := h.svc.CreateConfigurationRelease(ctx, h.admin, domain.CreateConfigurationReleaseInput{
 		Namespace: ns, Name: "runtime", SchemaID: schemaV1.ID, SchemaVersion: schemaV1.Version,

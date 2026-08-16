@@ -24,7 +24,8 @@ const NAV: NavGroup[] = [
   {
     label: "Configuration",
     items: [
-      { href: "/namespaces", label: "Namespaces", icon: <Icon.namespace /> },
+      { href: "/applications", label: "Applications", icon: <Icon.application />, adminOnly: true },
+      { href: "/namespaces", label: "Environments", icon: <Icon.namespace /> },
       { href: "/parameters", label: "Parameters", icon: <Icon.parameter /> },
       { href: "/secrets", label: "Secrets", icon: <Icon.secret /> },
       { href: "/releases", label: "Releases", icon: <Icon.release /> },

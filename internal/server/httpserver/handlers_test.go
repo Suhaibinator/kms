@@ -690,6 +690,42 @@ func TestNamespaceMethodGate(t *testing.T) {
 	}
 }
 
+func TestApplicationDashboardHTTPWorkflow(t *testing.T) {
+	e := newReleaseTestEnv(t)
+	w := e.admin(http.MethodPost, "/api/v1/applications", map[string]any{
+		"name": "payments-api", "description": "Payments", "release_name": "runtime",
+		"schema_id": "", "schema_version": 0, "contract": []any{},
+	})
+	mustStatus(t, w, http.StatusOK)
+	for _, env := range []string{"dev", "prod-gcp"} {
+		w = e.admin(http.MethodPost, "/api/v1/namespaces", map[string]any{
+			"env": env, "app": "payments-api", "description": "", "allowed_auth_methods": []string{"mtls"},
+		})
+		mustStatus(t, w, http.StatusOK)
+	}
+	w = e.admin(http.MethodPut, "/api/v1/applications/parameters", map[string]any{
+		"application": "payments-api", "key": "rate-limit", "value": "100",
+		"content_type": "integer", "metadata_json": "{}", "environments": []string{"dev", "prod-gcp"},
+	})
+	mustStatus(t, w, http.StatusOK)
+	results, ok := decodeBody(t, w)["results"].([]any)
+	if !ok || len(results) != 2 {
+		t.Fatalf("bulk results = %s", w.Body.String())
+	}
+	w = e.admin(http.MethodGet, "/api/v1/applications/dashboard?name=payments-api", nil)
+	mustStatus(t, w, http.StatusOK)
+	body := decodeBody(t, w)
+	rows, ok := body["rows"].([]any)
+	if !ok || len(rows) != 1 {
+		t.Fatalf("dashboard = %s", w.Body.String())
+	}
+	row := rows[0].(map[string]any)
+	cells := row["environments"].(map[string]any)
+	if cells["dev"].(map[string]any)["value"] != "100" || cells["prod-gcp"].(map[string]any)["value"] != "100" {
+		t.Fatalf("dashboard cells = %s", w.Body.String())
+	}
+}
+
 func TestMethodNotAllowed(t *testing.T) {
 	e := newTestEnv(t)
 	// POST is not registered on /parameters (PUT is).

@@ -12,6 +12,9 @@ import (
 // CreateNamespace stores a namespace. An empty AllowedAuthMethods set defaults
 // to ["mtls"] — the strongest posture.
 func (s *SQLStore) CreateNamespace(ctx context.Context, ns domain.Namespace) (domain.Namespace, error) {
+	if _, err := s.EnsureApplication(ctx, ns.App, ns.CreatedBy); err != nil {
+		return domain.Namespace{}, err
+	}
 	created := ns.CreatedAt
 	if created.IsZero() {
 		created = nowUTC()

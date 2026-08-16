@@ -205,13 +205,6 @@ func (h *adversarialManagedApp) createRelease(
 	return h.createReleaseWithSchema(pins, mutate, true)
 }
 
-func (h *adversarialManagedApp) createUnschematizedRelease(
-	pins adversarialManagedPins,
-	mutate func([]*kmsv1.ReleaseEntrySelector),
-) (*kmsv1.ConfigurationRelease, *kmsv1.ValidateReleaseResponse) {
-	return h.createReleaseWithSchema(pins, mutate, false)
-}
-
 func (h *adversarialManagedApp) createReleaseWithSchema(
 	pins adversarialManagedPins,
 	mutate func([]*kmsv1.ReleaseEntrySelector),
@@ -729,11 +722,11 @@ func TestManagedConfigAdversarialSchemaRuntimeParity(t *testing.T) {
 	}
 }
 
-// TestManagedConfigAdversarialPrefetchRecoveryAndRedaction verifies that a
-// generated contract rejection happens before secret-token lookup, then
-// exercises invalid-candidate recovery, last-known-good, redacted persisted
-// acknowledgement state, and normal terminal cancellation.
-func TestManagedConfigAdversarialPrefetchRecoveryAndRedaction(t *testing.T) {
+// TestManagedConfigAdversarialServerGuardsRecoveryAndRedaction verifies that
+// the application contract rejects shape drift before client secret-token
+// lookup, then exercises schema rejection, recovery, redacted status, and
+// normal terminal cancellation.
+func TestManagedConfigAdversarialServerGuardsRecoveryAndRedaction(t *testing.T) {
 	env := newLoopbackTLSEnv(t)
 	schemaID := "managed-config/adversarial-recovery"
 	schemaVersion := registerAdversarialManagedSchema(t, env, schemaID)
@@ -751,18 +744,14 @@ func TestManagedConfigAdversarialPrefetchRecoveryAndRedaction(t *testing.T) {
 	initialSnapshot := running.store.Current()
 	app.providerCalls.Store(0)
 
-	contractRelease, contractValidation := app.createUnschematizedRelease(pins, func(entries []*kmsv1.ReleaseEntrySelector) {
-		entries[1].Alias = "runtime_unexpected"
-	})
-	if !contractValidation.GetValid() {
-		t.Fatalf("unschematized contract-rejection fixture failed server validation: %v", contractValidation.GetErrors())
+	contractEntries := app.standardEntries(pins)
+	contractEntries[1].Alias = "runtime_unexpected"
+	if _, createErr := app.releases.CreateRelease(app.authCtx, &kmsv1.CreateReleaseRequest{
+		Namespace: app.namespace, Name: adversarialReleaseName, Entries: contractEntries,
+		SchemaId: app.schemaID, SchemaVersion: app.schemaVersion,
+	}); status.Code(createErr) != codes.FailedPrecondition {
+		t.Fatalf("create contract-drift release error = %v, want failed precondition", createErr)
 	}
-	app.mustActivate(contractRelease, initialRelease.GetVersion())
-	waitForManagedState(t, func() bool {
-		status := running.store.Status()
-		return status.Observed.Version() == contractRelease.GetVersion() &&
-			status.LastRejectionCategory == configstore.RejectConfigContractMismatch
-	}, "prefetch contract rejection")
 	if calls := app.providerCalls.Load(); calls != 0 {
 		t.Fatalf("contract-rejected candidate performed %d secret token lookups; want zero prefetch work", calls)
 	}
@@ -776,26 +765,19 @@ func TestManagedConfigAdversarialPrefetchRecoveryAndRedaction(t *testing.T) {
 		"groups/runtime",
 		adversarialRuntimeDocument(`["`+parameterCanary+`"]`, strconv.Quote("AA=="), `{"ok":1}`, `[0.25]`),
 	)
-	invalidRelease, invalidValidation := app.createUnschematizedRelease(invalidPins, nil)
-	if !invalidValidation.GetValid() {
-		t.Fatalf("unschematized decode-rejection fixture failed server validation: %v", invalidValidation.GetErrors())
+	invalidRelease, invalidValidation := app.createRelease(invalidPins, nil)
+	if invalidValidation.GetValid() {
+		t.Fatal("schema-invalid release unexpectedly passed server validation")
 	}
-	app.mustActivate(invalidRelease, contractRelease.GetVersion())
-	waitForManagedState(t, func() bool {
-		status := running.store.Status()
-		return status.Observed.Version() == invalidRelease.GetVersion() &&
-			status.LastRejectionCategory == configstore.RejectConfigDecodeFailed
-	}, "invalid candidate rejection")
+	expectedInitialVersion := initialRelease.GetVersion()
+	if _, activateErr := app.releases.ActivateRelease(app.authCtx, &kmsv1.ActivateReleaseRequest{
+		Namespace: app.namespace, Name: adversarialReleaseName, Version: invalidRelease.GetVersion(),
+		ExpectedCurrentVersion: &expectedInitialVersion,
+	}); status.Code(activateErr) != codes.FailedPrecondition {
+		t.Fatalf("activate schema-invalid release error = %v, want failed precondition", activateErr)
+	}
 	if got := running.store.Current().Release().Version(); got != initialRelease.GetVersion() {
 		t.Fatalf("invalid candidate displaced LKG with release %d", got)
-	}
-
-	subscriber := waitForAdversarialSubscriber(t, app, "adversarial-recovery-instance", invalidRelease.GetVersion(), domain.ReleaseStateRejected)
-	if subscriber.GetRejectionCategory() != string(configstore.RejectConfigDecodeFailed) {
-		t.Fatalf("subscriber category = %q, want %q", subscriber.GetRejectionCategory(), configstore.RejectConfigDecodeFailed)
-	}
-	if subscriber.GetDiagnostic() != "" {
-		t.Fatalf("subscriber diagnostic = %q, want empty", subscriber.GetDiagnostic())
 	}
 	statusSnapshot := running.store.Status()
 	statusJSON, err := json.Marshal(statusSnapshot)
@@ -807,7 +789,7 @@ func TestManagedConfigAdversarialPrefetchRecoveryAndRedaction(t *testing.T) {
 		t.Fatal(err)
 	}
 	serialized := []string{
-		subscriber.String(), fmt.Sprint(statusSnapshot), fmt.Sprintf("%+v", statusSnapshot),
+		fmt.Sprint(invalidValidation.GetErrors()), fmt.Sprint(statusSnapshot), fmt.Sprintf("%+v", statusSnapshot),
 		string(statusJSON), fmt.Sprint(running.store.Stats()), string(statsJSON),
 	}
 	for _, sensitive := range []string{parameterCanary, "adversarial-password-v1", "adversarial-runtime-token-v1"} {
@@ -827,7 +809,7 @@ func TestManagedConfigAdversarialPrefetchRecoveryAndRedaction(t *testing.T) {
 	if !recoveryValidation.GetValid() {
 		t.Fatalf("recovery release invalid: %v", recoveryValidation.GetErrors())
 	}
-	app.mustActivate(recoveryRelease, invalidRelease.GetVersion())
+	app.mustActivate(recoveryRelease, initialRelease.GetVersion())
 	waitForManagedState(t, func() bool {
 		return running.store.Current().Release().Version() == recoveryRelease.GetVersion()
 	}, "valid recovery after rejected candidates")

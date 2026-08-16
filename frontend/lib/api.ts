@@ -2,6 +2,10 @@
 // Everything goes through fetch; there is no server runtime.
 
 import type {
+  Application,
+  ApplicationContractField,
+  ApplicationDashboard,
+  ApplicationWriteResult,
   ApiErrorEnvelope,
   AuditFilters,
   CaResponse,
@@ -275,6 +279,48 @@ export const api = {
   // Public: the built-in client CA, for validating KMS-issued client certs.
   ca(request?: ApiRequestOptions): Promise<CaResponse> {
     return apiFetch<CaResponse>("/ca", { ...request, auth: false });
+  },
+
+  // --- Applications ---
+  listApplications(
+    pageSize?: number,
+    pageToken?: string,
+    request?: ApiRequestOptions,
+  ): Promise<{ applications: Application[]; next_page_token: string }> {
+    return apiFetch(`/applications${qs({ page_size: pageSize, page_token: pageToken })}`, request);
+  },
+  createApplication(req: {
+    name: string;
+    description: string;
+    release_name: string;
+    schema_id: string;
+    schema_version: number;
+    contract: ApplicationContractField[];
+  }): Promise<{ application: Application }> {
+    return apiFetch("/applications", { method: "POST", body: req });
+  },
+  updateApplication(req: {
+    name: string;
+    description: string;
+    release_name: string;
+    schema_id: string;
+    schema_version: number;
+    contract: ApplicationContractField[];
+  }): Promise<{ application: Application }> {
+    return apiFetch("/applications", { method: "PATCH", body: req });
+  },
+  applicationDashboard(name: string, request?: ApiRequestOptions): Promise<ApplicationDashboard> {
+    return apiFetch(`/applications/dashboard${qs({ name })}`, request);
+  },
+  putApplicationParameter(req: {
+    application: string;
+    key: string;
+    value: string;
+    content_type: string;
+    metadata_json: string;
+    environments: string[];
+  }): Promise<{ results: ApplicationWriteResult[] }> {
+    return apiFetch("/applications/parameters", { method: "PUT", body: req });
   },
 
   // --- Namespaces ---

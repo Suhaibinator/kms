@@ -9,6 +9,9 @@ import (
 	"testing"
 	"time"
 
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+
 	kmsv1 "github.com/Suhaibinator/kms/gen/kmsv1"
 	fixtureconfig "github.com/Suhaibinator/kms/internal/configstorefixture/config"
 	fixturekms "github.com/Suhaibinator/kms/internal/configstorefixture/configkms"
@@ -121,20 +124,16 @@ func TestManagedConfigStoreOverRealKMS(t *testing.T) {
 	pins.password, pins.token = passwordVersion, runtimeTokenVersion
 
 	releases := kmsv1.NewConfigurationReleaseServiceClient(env.adminConn)
-	createReleaseWithSchema := func(candidate managedPins, wantValid, attachSchema bool) *kmsv1.ConfigurationRelease {
+	createRelease := func(candidate managedPins, wantValid bool) *kmsv1.ConfigurationRelease {
 		t.Helper()
 		request := &kmsv1.CreateReleaseRequest{
-			Namespace: namespace, Name: managedRelease,
+			Namespace: namespace, Name: managedRelease, SchemaId: managedSchemaID, SchemaVersion: schemaVersion,
 			Entries: []*kmsv1.ReleaseEntrySelector{
 				{Alias: "database", Kind: "parameter", Ref: networkRef("prod", "managed-config", "groups/database"), Version: candidate.database},
 				{Alias: "runtime", Kind: "parameter", Ref: networkRef("prod", "managed-config", "groups/runtime"), Version: candidate.runtime},
 				{Alias: "database_password", Kind: "secret", Ref: networkRef("prod", "managed-config", "secrets/database_password"), Version: candidate.password},
 				{Alias: "runtime_token", Kind: "secret", Ref: networkRef("prod", "managed-config", "secrets/runtime_token"), Version: candidate.token},
 			},
-		}
-		if attachSchema {
-			request.SchemaId = managedSchemaID
-			request.SchemaVersion = schemaVersion
 		}
 		response, createErr := releases.CreateRelease(authCtx, request)
 		if createErr != nil {
@@ -151,12 +150,6 @@ func TestManagedConfigStoreOverRealKMS(t *testing.T) {
 			t.Fatalf("release %d validity = %t errors=%v, want %t", release.GetVersion(), validation.GetValid(), validation.GetErrors(), wantValid)
 		}
 		return release
-	}
-	createRelease := func(candidate managedPins, wantValid bool) *kmsv1.ConfigurationRelease {
-		return createReleaseWithSchema(candidate, wantValid, true)
-	}
-	createUnschematizedRelease := func(candidate managedPins) *kmsv1.ConfigurationRelease {
-		return createReleaseWithSchema(candidate, true, false)
 	}
 	activate := func(release *kmsv1.ConfigurationRelease, expected uint64) uint64 {
 		t.Helper()
@@ -287,15 +280,13 @@ func TestManagedConfigStoreOverRealKMS(t *testing.T) {
 
 	invalidPins := hotPins
 	invalidPins.runtime = putParameter("groups/runtime", managedRuntimeInvalid)
-	// Leave this release unschematized so the server can activate it and the
-	// generated client can prove it preserves its last-known-good snapshot when
-	// decoding data that predates activation-time schema enforcement.
-	invalidRelease := createUnschematizedRelease(invalidPins)
-	activate(invalidRelease, hotRelease.GetVersion())
-	waitForManagedState(t, func() bool {
-		status := store.Status()
-		return status.Observed.Version() == invalidRelease.GetVersion() && status.LastRejectionCategory == configstore.RejectConfigDecodeFailed
-	}, "invalid release rejection")
+	invalidRelease := createRelease(invalidPins, false)
+	expectedHotVersion := hotRelease.GetVersion()
+	if _, activateErr := releases.ActivateRelease(authCtx, &kmsv1.ActivateReleaseRequest{
+		Namespace: namespace, Name: managedRelease, Version: invalidRelease.GetVersion(), ExpectedCurrentVersion: &expectedHotVersion,
+	}); status.Code(activateErr) != codes.FailedPrecondition {
+		t.Fatalf("activate schema-invalid release error = %v, want failed precondition", activateErr)
+	}
 	if store.Current().Release().Version() != hotRelease.GetVersion() {
 		t.Fatal("invalid release displaced last-known-good")
 	}
@@ -303,7 +294,7 @@ func TestManagedConfigStoreOverRealKMS(t *testing.T) {
 	restartPins := hotPins
 	restartPins.database = putParameter("groups/database", managedDatabaseRestart)
 	restartRelease := createRelease(restartPins, true)
-	activate(restartRelease, invalidRelease.GetVersion())
+	activate(restartRelease, hotRelease.GetVersion())
 	waitForManagedState(t, func() bool {
 		status := store.Status()
 		return status.Observed.Version() == restartRelease.GetVersion() && status.LastRejectionCategory == configstore.RejectRestartRequired

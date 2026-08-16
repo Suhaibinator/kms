@@ -32,6 +32,50 @@ create-admin` or the identities API. The frontend flow:
 
 Most management endpoints require `kind == "admin"`.
 
+### Applications
+
+Applications are the environment-independent configuration owners. These
+endpoints are admin-only:
+
+- `GET /api/v1/applications?page_size=&page_token=` lists applications and
+  their environment counts.
+- `POST /api/v1/applications` creates an application; `PATCH` replaces its
+  mutable definition:
+
+  ```json
+  {
+    "name": "payments-api",
+    "description": "Payments service",
+    "release_name": "runtime",
+    "schema_id": "payments-api/runtime",
+    "schema_version": 3,
+    "contract": [
+      {"alias":"runtime","kind":"parameter","content_type":"json"},
+      {"alias":"stripe_key","kind":"secret"}
+    ]
+  }
+  ```
+
+- `DELETE /api/v1/applications?name=` succeeds only after every environment
+  namespace has been deleted.
+- `GET /api/v1/applications/dashboard?name=` returns the application,
+  environment namespaces, and the union of current parameter values and
+  secret metadata as a cross-environment matrix. Secret plaintext is absent.
+- `PUT /api/v1/applications/parameters` writes the same parameter value to
+  selected environments:
+
+  ```json
+  {
+    "application":"payments-api", "key":"rate-limit", "value":"100",
+    "content_type":"integer", "metadata_json":"{}",
+    "environments":["dev","prod-gcp"]
+  }
+  ```
+
+  Each target receives an independent immutable version and result. The
+  response may contain per-environment errors when only some targets succeed;
+  the operation intentionally does not create shared mutable state.
+
 ### Per-namespace allowed auth methods
 
 Each namespace declares which authentication methods admit a caller into it,

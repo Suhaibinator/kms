@@ -10,12 +10,13 @@ import (
 
 // Resource kinds.
 const (
-	ResourceParameter = "parameter"
-	ResourceSecret    = "secret"
-	ResourceNamespace = "namespace"
-	ResourcePolicy    = "policy"
-	ResourceIdentity  = "identity"
-	ResourceKey       = "key"
+	ResourceParameter   = "parameter"
+	ResourceSecret      = "secret"
+	ResourceApplication = "application"
+	ResourceNamespace   = "namespace"
+	ResourcePolicy      = "policy"
+	ResourceIdentity    = "identity"
+	ResourceKey         = "key"
 )
 
 // Version states.
@@ -214,6 +215,33 @@ type Namespace struct {
 	// leave them zero.
 	ParameterCount uint64
 	SecretCount    uint64
+}
+
+// Application is the environment-independent configuration owner. Every
+// namespace whose App component matches Name is one deployment environment of
+// this application. Contract is the canonical release shape shared by all of
+// those environments; values and resource versions remain namespace-local.
+type Application struct {
+	ID               int64
+	Name             string
+	Description      string
+	ReleaseName      string
+	SchemaID         string
+	SchemaVersion    uint64
+	Contract         []ApplicationContractField
+	CreatedBy        string
+	CreatedAt        time.Time
+	UpdatedAt        time.Time
+	EnvironmentCount uint64
+}
+
+// ApplicationContractField describes one stable alias required in every
+// configuration release for an application. Parameter fields also pin their
+// content type. Secret fields leave ContentType empty.
+type ApplicationContractField struct {
+	Alias       string `json:"alias"`
+	Kind        string `json:"kind"`
+	ContentType string `json:"content_type,omitempty"`
 }
 
 // PolicyRule allows or denies one operation on a whole namespace whose Env/App

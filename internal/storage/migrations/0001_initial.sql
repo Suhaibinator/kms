@@ -20,10 +20,23 @@ CREATE TABLE key_metadata (
     created_at TEXT NOT NULL
 );
 
+CREATE TABLE applications (
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    name           TEXT NOT NULL UNIQUE,
+    description    TEXT NOT NULL DEFAULT '',
+    release_name   TEXT NOT NULL DEFAULT 'runtime',
+    schema_id      TEXT NOT NULL DEFAULT '',
+    schema_version INTEGER NOT NULL DEFAULT 0,
+    contract_json  TEXT NOT NULL DEFAULT '[]',
+    created_by     TEXT NOT NULL DEFAULT '',
+    created_at     TEXT NOT NULL,
+    updated_at     TEXT NOT NULL
+);
+
 CREATE TABLE namespaces (
     id                   INTEGER PRIMARY KEY AUTOINCREMENT,
     env                  TEXT NOT NULL,
-    app                  TEXT NOT NULL,
+    app                  TEXT NOT NULL REFERENCES applications(name),
     description          TEXT NOT NULL DEFAULT '',
     allowed_auth_methods TEXT NOT NULL DEFAULT '["mtls"]', -- JSON array: "mtls" | "token"
     created_by           TEXT NOT NULL DEFAULT '',

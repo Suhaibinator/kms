@@ -11,6 +11,30 @@ means only that an SDK received a transport revision. A release subscriber
 reports application lifecycle states (`received`, `prepared`, `applied`, or
 `rejected`) through `ConfigurationReleaseService.WatchRelease`.
 
+## Applications and environments
+
+An application is the environment-independent owner of a configuration shape.
+It records a canonical release name, an optional immutable schema pin, and the
+required release aliases, resource kinds, and parameter content types. Each
+`(env, app)` namespace is one isolated deployment environment of that
+application. Environments never inherit values or share mutable versions.
+
+Release creation and activation compare the complete manifest to the owning
+application record. A release with a different name, schema pin, missing or
+extra alias, wrong resource kind, or wrong parameter content type fails with
+`failed_precondition`. Thus `dev/payments`, `prod/payments`, and
+`prod-gcp/payments` can carry different values while retaining one application
+contract. If an application was created without an explicit contract, its
+first release atomically establishes the canonical schema and alias/type shape;
+concurrent first releases compare against whichever contract wins that write.
+
+The Applications page in the embedded console compares current parameter
+values and secret metadata across every environment. A reviewed multi-target
+parameter write creates a separate immutable version and change-log revision
+in each selected namespace; it never links the resulting values. Partial
+failures are reported per environment. Secret plaintext is never included in
+the matrix and client-bound secrets are not copied by this workflow.
+
 ## Release contents and digest
 
 Creation accepts each entry with either an exact `version` or a movable

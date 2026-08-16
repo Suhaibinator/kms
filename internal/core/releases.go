@@ -146,6 +146,9 @@ func (s *Service) CreateConfigurationRelease(ctx context.Context, pr Principal, 
 		}
 	}
 	sort.Slice(entries, func(i, j int) bool { return entries[i].Alias < entries[j].Alias })
+	if err := s.validateApplicationReleaseContract(ctx, in.Namespace.App, in.Name, in.SchemaID, in.SchemaVersion, entries); err != nil {
+		return domain.ConfigurationRelease{}, err
+	}
 	release := domain.ConfigurationRelease{Namespace: in.Namespace, Name: in.Name, SchemaID: in.SchemaID, SchemaVersion: in.SchemaVersion, Entries: entries, Metadata: metadata, CreatedBy: pr.Identity.Name}
 	release.Digest, err = releaseDigest(release)
 	if err != nil {
@@ -157,6 +160,52 @@ func (s *Service) CreateConfigurationRelease(ctx context.Context, pr Principal, 
 	}
 	s.auditRefWithNamespaceID(ctx, pr, "configuration_release.create", domain.ResourceConfigurationRelease, domain.Ref{NS: in.Namespace, Key: in.Name}, namespace.ID, out.Version, "allow", nil)
 	return out, nil
+}
+
+func (s *Service) validateApplicationReleaseContract(ctx context.Context, appName, releaseName, schemaID string, schemaVersion uint64, entries []domain.ConfigurationReleaseEntry) error {
+	store, ok := s.store.(storage.ApplicationStore)
+	if !ok {
+		return nil
+	}
+	app, err := store.GetApplication(ctx, appName)
+	if err != nil {
+		return err
+	}
+	if app.ReleaseName != "" && releaseName != app.ReleaseName {
+		return domain.Errorf(domain.ErrFailedPrecondition, "application %s requires release name %q", appName, app.ReleaseName)
+	}
+	if app.SchemaID != "" && (schemaID != app.SchemaID || schemaVersion != app.SchemaVersion) {
+		return domain.Errorf(domain.ErrFailedPrecondition, "application %s requires schema %s@%d", appName, app.SchemaID, app.SchemaVersion)
+	}
+	if len(app.Contract) == 0 {
+		fields := make([]domain.ApplicationContractField, 0, len(entries))
+		for _, entry := range entries {
+			field := domain.ApplicationContractField{Alias: entry.Alias, Kind: entry.Kind}
+			if entry.Kind == domain.ReleaseEntryParameter {
+				field.ContentType = entry.ContentType
+			}
+			fields = append(fields, field)
+		}
+		adoptSchemaID, adoptSchemaVersion := app.SchemaID, app.SchemaVersion
+		if adoptSchemaID == "" {
+			adoptSchemaID, adoptSchemaVersion = schemaID, schemaVersion
+		}
+		app, err = store.AdoptApplicationContract(ctx, appName, adoptSchemaID, adoptSchemaVersion, fields)
+		if err != nil {
+			return err
+		}
+	}
+	if len(entries) != len(app.Contract) {
+		return domain.Errorf(domain.ErrFailedPrecondition, "release does not match application %s contract", appName)
+	}
+	for i, field := range app.Contract {
+		entry := entries[i]
+		if field.Alias != entry.Alias || field.Kind != entry.Kind ||
+			(field.Kind == domain.ReleaseEntryParameter && field.ContentType != entry.ContentType) {
+			return domain.Errorf(domain.ErrFailedPrecondition, "release alias %q does not match application %s contract", entry.Alias, appName)
+		}
+	}
+	return nil
 }
 
 func (s *Service) GetConfigurationRelease(ctx context.Context, pr Principal, ns domain.NamespaceRef, name string, version uint64) (domain.ConfigurationRelease, error) {
@@ -250,6 +299,9 @@ func (s *Service) ValidateConfigurationRelease(ctx context.Context, pr Principal
 func (s *Service) validateConfigurationRelease(ctx context.Context, pr Principal, rs storage.ReleaseStore, ns domain.NamespaceRef, name string, version uint64, authorizeEntries bool) ([]domain.ReleaseValidationError, error) {
 	rel, err := rs.GetConfigurationRelease(ctx, ns, name, version)
 	if err != nil {
+		return nil, err
+	}
+	if err := s.validateApplicationReleaseContract(ctx, ns.App, rel.Name, rel.SchemaID, rel.SchemaVersion, rel.Entries); err != nil {
 		return nil, err
 	}
 	validation := make([]domain.ReleaseValidationError, 0)

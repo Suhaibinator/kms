@@ -18,6 +18,13 @@ management.
   `billing/stripe-key`), with the `/env/app/key` form surviving only as a
   display path and client-side SDK/CLI convenience. Values are immutably versioned, with movable labels
   (`current`, `previous`) and version promotion/rollback.
+- **Application-owned configuration contracts**: an application sits above its
+  environment namespaces and owns one canonical release name, optional schema
+  pin, and alias/kind/content-type contract. `dev/payments`, `prod/payments`,
+  and `prod-gcp/payments` keep independent values and versions while release
+  creation and activation reject shape drift. The Applications dashboard shows
+  a cross-environment value matrix and can create independent parameter
+  versions in several selected environments from one reviewed action.
 - **Envelope encryption at rest**: AES-256-GCM, one Data Encryption Key
   (DEK) per secret version, wrapped by a Key Encryption Key (KEK). Secret
   plaintext never touches SQLite, logs, metrics, or audit records.
@@ -70,7 +77,8 @@ management.
   [`docs/sdk-python.md`](docs/sdk-python.md), and
   [`sdk/typescript/README.md`](sdk/typescript/README.md).
 - **Embedded Next.js admin UI** (static export, no separate frontend
-  server) for namespace management (auth methods), parameters, secrets (with
+  server) for application contracts and cross-environment value management,
+  namespace/environment management (auth methods), parameters, secrets (with
   an explicit reveal flow), policies, identities (with mTLS certificate
   issuance), audit log browsing, live subscriber visibility, and key
   metadata.

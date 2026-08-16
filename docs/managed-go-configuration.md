@@ -510,10 +510,12 @@ for rollout review. It deliberately contains no physical paths, exact versions,
 defaults, current values, secret plaintext, or tokens; operators continue to
 choose paths and pins in the release manifest.
 
-The schema ID and immutable registration version are likewise operator-owned
-and may differ by environment. The generated runtime does not hardcode them:
-KMS validates the manifest's pinned schema, while the process independently
-enforces the generated alias/kind/content-type contract and strict decoder.
+The schema ID and immutable registration version are operator-owned and are
+attached to the first-class application record. Every environment release for
+that application must pin that same schema version and match the application's
+alias/kind/content-type contract. The generated runtime does not hardcode the
+registry coordinates: KMS validates the application and manifest pins, while
+the process independently enforces the generated contract and strict decoder.
 
 ### Register the generated schema
 

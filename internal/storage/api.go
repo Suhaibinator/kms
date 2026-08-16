@@ -155,6 +155,20 @@ type ListPage struct {
 	Token string // "" = first page
 }
 
+// ApplicationStore is the application-first management surface. It remains a
+// separate capability so small test stores and data-plane-only integrations do
+// not need to implement admin dashboard aggregation.
+type ApplicationStore interface {
+	EnsureApplication(ctx context.Context, name, createdBy string) (domain.Application, error)
+	CreateApplication(ctx context.Context, app domain.Application) (domain.Application, error)
+	GetApplication(ctx context.Context, name string) (domain.Application, error)
+	AdoptApplicationContract(ctx context.Context, name, schemaID string, schemaVersion uint64, contract []domain.ApplicationContractField) (domain.Application, error)
+	UpdateApplication(ctx context.Context, app domain.Application) (domain.Application, error)
+	DeleteApplication(ctx context.Context, name string) error
+	ListApplications(ctx context.Context, page ListPage) ([]domain.Application, string, error)
+	ListApplicationNamespaces(ctx context.Context, app string) ([]domain.Namespace, error)
+}
+
 // Store is everything the service layer needs from persistence.
 type Store interface {
 	// --- lifecycle -------------------------------------------------------

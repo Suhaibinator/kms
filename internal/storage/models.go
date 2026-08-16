@@ -26,15 +26,33 @@ type keyMetadataModel struct {
 
 func (keyMetadataModel) TableName() string { return "key_metadata" }
 
+// applicationModel -> applications. ContractJSON is a canonical JSON array of
+// domain.ApplicationContractField values.
+type applicationModel struct {
+	ID            int64  `gorm:"column:id;primaryKey;autoIncrement"`
+	Name          string `gorm:"column:name;not null;uniqueIndex"`
+	Description   string `gorm:"column:description;not null;default:''"`
+	ReleaseName   string `gorm:"column:release_name;not null;default:runtime"`
+	SchemaID      string `gorm:"column:schema_id;not null;default:''"`
+	SchemaVersion int64  `gorm:"column:schema_version;not null;default:0"`
+	ContractJSON  string `gorm:"column:contract_json;not null;default:'[]'"`
+	CreatedBy     string `gorm:"column:created_by;not null;default:''"`
+	CreatedAt     string `gorm:"column:created_at;not null"`
+	UpdatedAt     string `gorm:"column:updated_at;not null"`
+}
+
+func (applicationModel) TableName() string { return "applications" }
+
 // namespaceModel -> namespaces. AllowedAuthMethods is a JSON array of strings.
 type namespaceModel struct {
-	ID                 int64  `gorm:"column:id;primaryKey;autoIncrement"`
-	Env                string `gorm:"column:env;not null;uniqueIndex:idx_ns_env_app,priority:1"`
-	App                string `gorm:"column:app;not null;uniqueIndex:idx_ns_env_app,priority:2"`
-	Description        string `gorm:"column:description;not null;default:''"`
-	AllowedAuthMethods string `gorm:"column:allowed_auth_methods;not null;default:[\"mtls\"]"`
-	CreatedBy          string `gorm:"column:created_by;not null;default:''"`
-	CreatedAt          string `gorm:"column:created_at;not null"`
+	ID                 int64            `gorm:"column:id;primaryKey;autoIncrement"`
+	Env                string           `gorm:"column:env;not null;uniqueIndex:idx_ns_env_app,priority:1"`
+	App                string           `gorm:"column:app;not null;uniqueIndex:idx_ns_env_app,priority:2"`
+	Application        applicationModel `gorm:"foreignKey:App;references:Name"`
+	Description        string           `gorm:"column:description;not null;default:''"`
+	AllowedAuthMethods string           `gorm:"column:allowed_auth_methods;not null;default:[\"mtls\"]"`
+	CreatedBy          string           `gorm:"column:created_by;not null;default:''"`
+	CreatedAt          string           `gorm:"column:created_at;not null"`
 }
 
 func (namespaceModel) TableName() string { return "namespaces" }
@@ -359,6 +377,7 @@ func (schemaMigrationModel) TableName() string { return "schema_migrations" }
 // it is created by raw DDL to guarantee AUTOINCREMENT.
 var autoMigrateModels = []any{
 	&keyMetadataModel{},
+	&applicationModel{},
 	&namespaceModel{},
 	&parameterModel{},
 	&parameterVersionModel{},
@@ -415,6 +434,25 @@ func toNamespace(m namespaceModel) domain.Namespace {
 		AllowedAuthMethods: parseAuthMethods(m.AllowedAuthMethods),
 		CreatedBy:          m.CreatedBy,
 		CreatedAt:          parseTime(m.CreatedAt),
+	}
+}
+
+func toApplication(m applicationModel) domain.Application {
+	var contract []domain.ApplicationContractField
+	if err := json.Unmarshal([]byte(m.ContractJSON), &contract); err != nil {
+		contract = nil
+	}
+	return domain.Application{
+		ID:            m.ID,
+		Name:          m.Name,
+		Description:   m.Description,
+		ReleaseName:   m.ReleaseName,
+		SchemaID:      m.SchemaID,
+		SchemaVersion: uint64(m.SchemaVersion),
+		Contract:      contract,
+		CreatedBy:     m.CreatedBy,
+		CreatedAt:     parseTime(m.CreatedAt),
+		UpdatedAt:     parseTime(m.UpdatedAt),
 	}
 }
 

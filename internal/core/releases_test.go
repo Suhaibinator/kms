@@ -27,7 +27,7 @@ func TestConfigurationReleaseCoreLifecycleAndHistoricalAck(t *testing.T) {
 	}
 	svc := New(st, nil, "test")
 	pr := adminPrincipal()
-	schema, err := svc.CreateConfigurationSchema(ctx, pr, "runtime", `{"type":"object","properties":{"settings":{"type":"integer"}},"required":["settings"]}`, "{}")
+	schema, err := svc.CreateConfigurationSchema(ctx, pr, "runtime", `{"type":"object","properties":{"settings":{"type":"integer","minimum":0}},"required":["settings"]}`, "{}")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -51,13 +51,12 @@ func TestConfigurationReleaseCoreLifecycleAndHistoricalAck(t *testing.T) {
 	if err != nil || !changed {
 		t.Fatalf("activate=%+v changed=%v err=%v", a1, changed, err)
 	}
-	badSchema, err := svc.CreateConfigurationSchema(ctx, pr, "runtime-invalid", `{"type":"object","properties":{"settings":{"type":"string"}},"required":["settings"]}`, "{}")
-	if err != nil {
+	if _, _, err := st.PutParameter(ctx, ref, "-1", "integer", "{}", "admin"); err != nil {
 		t.Fatal(err)
 	}
 	badRelease, err := svc.CreateConfigurationRelease(ctx, pr, domain.CreateConfigurationReleaseInput{
-		Namespace: ns, Name: "runtime", SchemaID: badSchema.ID, SchemaVersion: badSchema.Version,
-		Entries: []domain.ReleaseEntrySelector{{Alias: "settings", Kind: domain.ReleaseEntryParameter, Ref: ref, Version: 1}},
+		Namespace: ns, Name: "runtime", SchemaID: schema.ID, SchemaVersion: schema.Version,
+		Entries: []domain.ReleaseEntrySelector{{Alias: "settings", Kind: domain.ReleaseEntryParameter, Ref: ref, Version: 2}},
 	})
 	if err != nil {
 		t.Fatal(err)
