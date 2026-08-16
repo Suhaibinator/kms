@@ -1,4 +1,6 @@
 import { useMemo } from "react";
+import { Field } from "@/components/ui";
+import { AppSelect } from "@/components/ui/app-select";
 import type { Namespace } from "@/lib/types";
 
 export interface NamespaceSelection {
@@ -6,9 +8,10 @@ export interface NamespaceSelection {
   app: string;
 }
 
-// An env → app cascading selector fed by the namespace list. Choosing an env
-// narrows the app options to that env; changing env clears an app that no
-// longer belongs. Both selects are controlled by `value`.
+// An app → environment cascading selector fed by the namespace list. An
+// environment belongs to an application; it is not a KMS-wide choice. Changing
+// application therefore clears an environment that the new application does
+// not have. Both selects are controlled by `value`.
 export default function NamespacePicker({
   namespaces,
   value,
@@ -24,67 +27,49 @@ export default function NamespacePicker({
   envId?: string;
   appId?: string;
 }) {
-  const envs = useMemo(() => {
+  const apps = useMemo(() => {
     const set = new Set<string>();
-    for (const ns of namespaces) set.add(ns.env);
+    for (const ns of namespaces) set.add(ns.app);
     return [...set].sort((a, b) => a.localeCompare(b));
   }, [namespaces]);
 
-  const apps = useMemo(() => {
-    if (!value.env) return [];
+  const envs = useMemo(() => {
+    if (!value.app) return [];
     const set = new Set<string>();
     for (const ns of namespaces) {
-      if (ns.env === value.env) set.add(ns.app);
+      if (ns.app === value.app) set.add(ns.env);
     }
     return [...set].sort((a, b) => a.localeCompare(b));
-  }, [namespaces, value.env]);
+  }, [namespaces, value.app]);
 
-  function onEnv(env: string) {
-    // Keep the app only if it still exists under the new env.
-    const stillValid = namespaces.some((ns) => ns.env === env && ns.app === value.app);
-    onChange({ env, app: stillValid ? value.app : "" });
+  function onApp(app: string) {
+    // Keep the environment only if it exists under the new application.
+    const stillValid = namespaces.some((ns) => ns.app === app && ns.env === value.env);
+    onChange({ app, env: stillValid ? value.env : "" });
   }
 
   return (
     <>
-      <div className="field">
-        <label className="field-label" htmlFor={envId}>
-          Environment
-        </label>
-        <select
-          id={envId}
-          className="select"
-          value={value.env}
-          disabled={disabled}
-          onChange={(e) => onEnv(e.target.value)}
-        >
-          <option value="">Select env…</option>
-          {envs.map((env) => (
-            <option key={env} value={env}>
-              {env}
-            </option>
-          ))}
-        </select>
-      </div>
-      <div className="field">
-        <label className="field-label" htmlFor={appId}>
-          Application
-        </label>
-        <select
+      <Field label="Application" htmlFor={appId}>
+        <AppSelect
           id={appId}
-          className="select"
           value={value.app}
-          disabled={disabled || !value.env}
-          onChange={(e) => onChange({ env: value.env, app: e.target.value })}
-        >
-          <option value="">{value.env ? "Select app…" : "Select env first"}</option>
-          {apps.map((app) => (
-            <option key={app} value={app}>
-              {app}
-            </option>
-          ))}
-        </select>
-      </div>
+          disabled={disabled}
+          onValueChange={onApp}
+          placeholder="Select application…"
+          options={apps.map((app) => ({ value: app, label: app }))}
+        />
+      </Field>
+      <Field label="Environment" htmlFor={envId}>
+        <AppSelect
+          id={envId}
+          value={value.env}
+          disabled={disabled || !value.app}
+          onValueChange={(env) => onChange({ app: value.app, env })}
+          placeholder={value.app ? "Select environment…" : "Select application first"}
+          options={envs.map((env) => ({ value: env, label: env }))}
+        />
+      </Field>
     </>
   );
 }

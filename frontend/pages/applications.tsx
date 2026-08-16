@@ -1,19 +1,43 @@
+import { Button } from "@/components/ui/button";
+import { ArrowLeft, Plus, RefreshCw, SlidersHorizontal } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/router";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { ArrowLeft, Plus, RefreshCw, SlidersHorizontal } from "lucide-react";
 import { Icon } from "@/components/icons";
 import { Modal } from "@/components/Modal";
-import { Badge, EmptyState, Field, PageHeader, Spinner, TableSkeleton } from "@/components/ui";
+import {
+  Badge,
+  Checkbox,
+  EmptyState,
+  Field,
+  Input,
+  PageHeader,
+  Spinner,
+  TableSkeleton,
+  Textarea,
+} from "@/components/ui";
+import { AppSelect } from "@/components/ui/app-select";
 import { useToast } from "@/context/ToastContext";
 import { api, isAbortError } from "@/lib/api";
+import { utf8ToBase64 } from "@/lib/encoding";
 import {
-  PARAMETER_CONTENT_TYPES,
   type Application,
   type ApplicationConfigurationRow,
   type ApplicationContractField,
   type ApplicationDashboard,
+  PARAMETER_CONTENT_TYPES,
 } from "@/lib/types";
+import {
+  firstError,
+  validateApplicationName,
+  validateContract,
+  validateEnv,
+  validateKey,
+  validateParameterValue,
+  validateReleaseName,
+  validateSchemaPin,
+  validateValueSize,
+} from "@/lib/validation";
 
 const EMPTY_CONTRACT = `[
   {"alias":"runtime","kind":"parameter","content_type":"json"}
@@ -23,6 +47,28 @@ function parseContract(raw: string): ApplicationContractField[] {
   const value: unknown = JSON.parse(raw);
   if (!Array.isArray(value)) throw new Error("Contract must be a JSON array.");
   return value as ApplicationContractField[];
+}
+
+/** The fields of the application form that carry their own validation. */
+type CreateField = "name" | "releaseName" | "schemaPin" | "contract";
+
+interface QuickSecretSeed {
+  environment: string;
+  key: string;
+}
+
+/**
+ * Validates the contract textarea: first that it is a JSON array at all, then
+ * that every entry satisfies the server's per-field and duplicate-alias rules.
+ */
+function validateContractText(raw: string): string | null {
+  let fields: ApplicationContractField[];
+  try {
+    fields = parseContract(raw);
+  } catch (cause) {
+    return cause instanceof Error ? cause.message : "Contract must be a JSON array.";
+  }
+  return validateContract(fields);
 }
 
 export default function ApplicationsPage() {
@@ -35,6 +81,7 @@ export default function ApplicationsPage() {
   const [createOpen, setCreateOpen] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
   const [environmentOpen, setEnvironmentOpen] = useState(false);
+  const [secretSeed, setSecretSeed] = useState<QuickSecretSeed | null>(null);
   const [writeRow, setWriteRow] = useState<ApplicationConfigurationRow | null>(null);
   const [saving, setSaving] = useState(false);
 
@@ -75,6 +122,14 @@ export default function ApplicationsPage() {
     await router.push({ pathname: "/applications", query: { app: name } });
   }
 
+  // Derived above the early return below: hooks must run in the same order on
+  // every render, and the list view returns before reaching the detail view.
+  const environments = dashboard?.environments ?? [];
+  const environmentNames = useMemo(
+    () => environments.map((environment) => environment.env),
+    [environments],
+  );
+
   if (!selectedName) {
     return (
       <>
@@ -82,10 +137,10 @@ export default function ApplicationsPage() {
           title="Applications"
           subtitle="One application owns a shared configuration contract; each environment supplies isolated values."
           actions={
-            <button className="btn btn-primary" onClick={() => setCreateOpen(true)}>
+            <Button onClick={() => setCreateOpen(true)}>
               <Plus size={15} />
               New application
-            </button>
+            </Button>
           }
         />
         <div className="info-panel mb-16">
@@ -101,11 +156,7 @@ export default function ApplicationsPage() {
           <EmptyState
             icon={<Icon.application size={20} />}
             title="No applications yet"
-            actions={
-              <button className="btn btn-primary" onClick={() => setCreateOpen(true)}>
-                New application
-              </button>
-            }
+            actions={<Button onClick={() => setCreateOpen(true)}>New application</Button>}
           >
             Define the application-owned shape before adding deployment environments.
           </EmptyState>
@@ -136,12 +187,13 @@ export default function ApplicationsPage() {
                     </td>
                     <td>{app.contract.length} aliases</td>
                     <td>
-                      <button
-                        className="btn btn-sm"
+                      <Button
+                        variant="outline"
+                        size="sm"
                         onClick={() => void selectApplication(app.name)}
                       >
                         Manage
-                      </button>
+                      </Button>
                     </td>
                   </tr>
                 ))}
@@ -174,19 +226,19 @@ export default function ApplicationsPage() {
     );
   }
 
-  const environments = dashboard?.environments ?? [];
   return (
     <>
       <PageHeader
         title={
           <span className="row-wrap">
-            <button
-              className="btn btn-ghost btn-sm"
+            <Button
+              variant="ghost"
+              size="sm"
               aria-label="Back to applications"
               onClick={() => void router.push("/applications")}
             >
               <ArrowLeft size={16} />
-            </button>
+            </Button>
             <span className="mono">{selectedName}</span>
           </span>
         }
@@ -196,18 +248,18 @@ export default function ApplicationsPage() {
         }
         actions={
           <>
-            <button className="btn" onClick={() => void loadDashboard()} disabled={loading}>
+            <Button variant="outline" onClick={() => void loadDashboard()} disabled={loading}>
               <RefreshCw size={15} />
               Refresh
-            </button>
-            <button className="btn" onClick={() => setEditOpen(true)} disabled={!dashboard}>
+            </Button>
+            <Button variant="outline" onClick={() => setEditOpen(true)} disabled={!dashboard}>
               <SlidersHorizontal size={15} />
               Edit contract
-            </button>
-            <button className="btn btn-primary" onClick={() => setEnvironmentOpen(true)}>
+            </Button>
+            <Button onClick={() => setEnvironmentOpen(true)}>
               <Plus size={15} />
               Add environment
-            </button>
+            </Button>
           </>
         }
       />
@@ -218,11 +270,7 @@ export default function ApplicationsPage() {
         <EmptyState
           icon={<Icon.namespace size={20} />}
           title="No environments"
-          actions={
-            <button className="btn btn-primary" onClick={() => setEnvironmentOpen(true)}>
-              Add environment
-            </button>
-          }
+          actions={<Button onClick={() => setEnvironmentOpen(true)}>Add environment</Button>}
         >
           Add dev, staging, production, or a provider-specific environment to begin managing values.
         </EmptyState>
@@ -236,13 +284,19 @@ export default function ApplicationsPage() {
                 creates an independent version in every selected environment.
               </div>
             </div>
-            <button
-              className="btn"
-              onClick={() => setWriteRow({ key: "", kind: "parameter", environments: {} })}
-            >
-              <Plus size={15} />
-              New parameter
-            </button>
+            <div className="row-wrap">
+              <Button variant="outline" onClick={() => setSecretSeed({ environment: "", key: "" })}>
+                <Plus size={15} />
+                New secret
+              </Button>
+              <Button
+                variant="outline"
+                onClick={() => setWriteRow({ key: "", kind: "parameter", environments: {} })}
+              >
+                <Plus size={15} />
+                New parameter
+              </Button>
+            </div>
           </div>
           <div className="table-wrap application-matrix">
             <table className="data">
@@ -265,15 +319,20 @@ export default function ApplicationsPage() {
                     </td>
                     {environments.map((env) => (
                       <td key={env.env}>
-                        <MatrixCell row={row} environment={env.env} app={selectedName} />
+                        <MatrixCell
+                          row={row}
+                          environment={env.env}
+                          app={selectedName}
+                          onAddSecret={(environment, key) => setSecretSeed({ environment, key })}
+                        />
                       </td>
                     ))}
                     <td>
                       {row.kind === "parameter" ? (
-                        <button className="btn btn-sm" onClick={() => setWriteRow(row)}>
+                        <Button variant="outline" size="sm" onClick={() => setWriteRow(row)}>
                           <SlidersHorizontal size={14} />
                           Edit
-                        </button>
+                        </Button>
                       ) : null}
                     </td>
                   </tr>
@@ -333,9 +392,42 @@ export default function ApplicationsPage() {
           }
         }}
       />
+      <QuickSecretModal
+        app={selectedName}
+        environments={environmentNames}
+        seed={secretSeed}
+        saving={saving}
+        onClose={() => setSecretSeed(null)}
+        onSave={async (request) => {
+          setSaving(true);
+          try {
+            const response = await api.createSecret({
+              env: request.environment,
+              app: selectedName,
+              key: request.key,
+              value_base64: utf8ToBase64(request.value),
+              content_type: request.contentType,
+              metadata_json: "{}",
+              client_bound: false,
+              generate_access_token: false,
+              expires_at_unix_ms: 0,
+            });
+            toast.success(
+              `Secret created (version ${response.version})`,
+              `${selectedName} · ${request.environment} · ${request.key}`,
+            );
+            setSecretSeed(null);
+            await loadDashboard();
+          } catch (error) {
+            toast.error(error, "Failed to create secret");
+          } finally {
+            setSaving(false);
+          }
+        }}
+      />
       <BulkParameterModal
         app={selectedName}
-        environments={environments.map((env) => env.env)}
+        environments={environmentNames}
         row={writeRow}
         saving={saving}
         onClose={() => setWriteRow(null)}
@@ -407,13 +499,30 @@ function MatrixCell({
   row,
   environment,
   app,
+  onAddSecret,
 }: {
   row: ApplicationConfigurationRow;
   environment: string;
   app: string;
+  onAddSecret: (environment: string, key: string) => void;
 }) {
   const cell = row.environments[environment];
-  if (!cell?.present) return <span className="badge badge-danger">missing</span>;
+  if (!cell?.present) {
+    if (row.kind === "secret") {
+      return (
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          onClick={() => onAddSecret(environment, row.key)}
+        >
+          <Plus size={13} />
+          Add secret
+        </Button>
+      );
+    }
+    return <Badge kind="danger">missing</Badge>;
+  }
   if (row.kind === "secret")
     return (
       <Link
@@ -464,6 +573,8 @@ function CreateApplicationModal({
   const [schemaVersion, setSchemaVersion] = useState("");
   const [contract, setContract] = useState(EMPTY_CONTRACT);
   const [error, setError] = useState("");
+  const [touched, setTouched] = useState<Partial<Record<CreateField, boolean>>>({});
+  const [submitAttempted, setSubmitAttempted] = useState(false);
   useEffect(() => {
     if (!open) return;
     setName(initial?.name ?? "");
@@ -473,7 +584,28 @@ function CreateApplicationModal({
     setSchemaVersion(initial?.schema_version ? String(initial.schema_version) : "");
     setContract(initial ? JSON.stringify(initial.contract, null, 2) : EMPTY_CONTRACT);
     setError("");
+    setTouched({});
+    setSubmitAttempted(false);
   }, [open, initial]);
+
+  // Three different naming rules meet on this form, so each field is checked
+  // against its own: the application name is a namespace label, the release
+  // name is a relative key, and the contract aliases have their own grammar.
+  const nameProblem = validateApplicationName(name.trim());
+  const releaseNameProblem = validateReleaseName(releaseName.trim());
+  const schemaPinProblem = validateSchemaPin(schemaID, schemaVersion);
+  const contractProblem = validateContractText(contract);
+  const blocking = firstError(
+    // An existing application's name is fixed and its input disabled, so a
+    // legacy name that predates the current rule cannot block an edit here.
+    initial ? null : nameProblem,
+    releaseNameProblem,
+    schemaPinProblem,
+    contractProblem,
+  );
+  const show = (field: CreateField, problem: string | null) =>
+    touched[field] || submitAttempted ? problem : null;
+  const markTouched = (field: CreateField) => setTouched((t) => ({ ...t, [field]: true }));
   return (
     <Modal
       open={open}
@@ -482,13 +614,14 @@ function CreateApplicationModal({
       wide
       footer={
         <>
-          <button className="btn" onClick={onClose} disabled={saving}>
+          <Button variant="outline" onClick={onClose} disabled={saving}>
             Cancel
-          </button>
-          <button
-            className="btn btn-primary"
-            disabled={saving}
+          </Button>
+          <Button
+            disabled={saving || blocking !== null}
             onClick={() => {
+              setSubmitAttempted(true);
+              if (blocking) return;
               try {
                 setError("");
                 void onSave({
@@ -506,7 +639,7 @@ function CreateApplicationModal({
           >
             {saving ? <Spinner /> : null}
             {initial ? "Save contract" : "Create application"}
-          </button>
+          </Button>
         </>
       }
     >
@@ -515,57 +648,70 @@ function CreateApplicationModal({
         schema pin, aliases, kinds, and parameter content types.
       </div>
       <div className="form-row">
-        <Field label="Application name" hint="Lowercase letters, digits, and hyphens.">
-          <input
-            className="input mono"
+        <Field
+          label="Application name"
+          hint="Lowercase letters, digits, and hyphens."
+          error={initial ? null : show("name", nameProblem)}
+        >
+          <Input
+            className="font-mono"
             value={name}
             disabled={Boolean(initial)}
             onChange={(event) => setName(event.target.value)}
+            onBlur={() => markTouched("name")}
             placeholder="payments-api"
           />
         </Field>
-        <Field label="Release name">
-          <input
-            className="input mono"
+        <Field
+          label="Release name"
+          hint="Defaults to runtime when left blank."
+          error={show("releaseName", releaseNameProblem)}
+        >
+          <Input
+            className="font-mono"
             value={releaseName}
             onChange={(event) => setReleaseName(event.target.value)}
+            onBlur={() => markTouched("releaseName")}
           />
         </Field>
       </div>
       <Field label="Description">
-        <input
-          className="input"
-          value={description}
-          onChange={(event) => setDescription(event.target.value)}
-        />
+        <Input value={description} onChange={(event) => setDescription(event.target.value)} />
       </Field>
       <div className="form-row">
-        <Field label="Schema ID" hint="Optional; specify both ID and version.">
-          <input
-            className="input mono"
+        <Field
+          label="Schema ID"
+          hint="Optional; specify both ID and version."
+          error={show("schemaPin", schemaPinProblem)}
+        >
+          <Input
+            className="font-mono"
             value={schemaID}
             onChange={(event) => setSchemaID(event.target.value)}
+            onBlur={() => markTouched("schemaPin")}
           />
         </Field>
         <Field label="Schema version">
-          <input
-            className="input"
+          <Input
             type="number"
             min={1}
             value={schemaVersion}
             onChange={(event) => setSchemaVersion(event.target.value)}
+            onBlur={() => markTouched("schemaPin")}
           />
         </Field>
       </div>
       <Field
         label="Shared release contract"
         hint="JSON array of {alias, kind, content_type}. Secrets omit content_type."
+        error={show("contract", contractProblem)}
       >
-        <textarea
-          className="input mono"
+        <Textarea
+          className="font-mono"
           rows={9}
           value={contract}
           onChange={(event) => setContract(event.target.value)}
+          onBlur={() => markTouched("contract")}
         />
       </Field>
       {error ? <div className="danger-panel">{error}</div> : null}
@@ -593,6 +739,13 @@ function AddEnvironmentModal({
   const [environment, setEnvironment] = useState("");
   const [description, setDescription] = useState("");
   const [token, setToken] = useState(false);
+  const [environmentTouched, setEnvironmentTouched] = useState(false);
+  // An environment is the env half of a namespace, so it follows the label rule.
+  const environmentProblem = validateEnv(environment.trim());
+  useEffect(() => {
+    if (!open) return;
+    setEnvironmentTouched(false);
+  }, [open]);
   return (
     <Modal
       open={open}
@@ -600,47 +753,183 @@ function AddEnvironmentModal({
       onClose={onClose}
       footer={
         <>
-          <button className="btn" onClick={onClose} disabled={saving}>
+          <Button variant="outline" onClick={onClose} disabled={saving}>
             Cancel
-          </button>
-          <button
-            className="btn btn-primary"
-            disabled={saving || !environment}
-            onClick={() =>
-              void onSave(environment, description, token ? ["mtls", "token"] : ["mtls"])
-            }
+          </Button>
+          <Button
+            disabled={saving || environmentProblem !== null}
+            onClick={() => {
+              setEnvironmentTouched(true);
+              if (environmentProblem) return;
+              void onSave(environment, description, token ? ["mtls", "token"] : ["mtls"]);
+            }}
           >
             {saving ? <Spinner /> : null}Add environment
-          </button>
+          </Button>
         </>
       }
     >
-      <Field label="Environment" hint="Examples: dev, staging, prod, prod-gcp">
-        <input
-          className="input mono"
+      <Field
+        label="Environment"
+        hint="Examples: dev, staging, prod, prod-gcp"
+        error={environmentTouched ? environmentProblem : null}
+      >
+        <Input
+          className="font-mono"
           value={environment}
           onChange={(event) => setEnvironment(event.target.value)}
+          onBlur={() => setEnvironmentTouched(true)}
           placeholder="prod-gcp"
         />
       </Field>
       <Field label="Description">
-        <input
-          className="input"
-          value={description}
-          onChange={(event) => setDescription(event.target.value)}
-        />
+        <Input value={description} onChange={(event) => setDescription(event.target.value)} />
       </Field>
-      <label className="checkbox-row">
-        <input
-          type="checkbox"
-          checked={token}
-          onChange={(event) => setToken(event.target.checked)}
-        />
-        <span>
+      <div className="checkbox-row">
+        <Checkbox id="allow-environment-token" checked={token} onCheckedChange={setToken} />
+        <label htmlFor="allow-environment-token">
           <strong>Also allow bearer tokens</strong>
           <span className="faint text-sm">mTLS is always enabled and recommended.</span>
-        </span>
-      </label>
+        </label>
+      </div>
+    </Modal>
+  );
+}
+
+function QuickSecretModal({
+  app,
+  environments,
+  seed,
+  saving,
+  onClose,
+  onSave,
+}: {
+  app: string;
+  environments: string[];
+  seed: QuickSecretSeed | null;
+  saving: boolean;
+  onClose: () => void;
+  onSave: (request: {
+    environment: string;
+    key: string;
+    value: string;
+    contentType: string;
+  }) => Promise<void>;
+}) {
+  const [environment, setEnvironment] = useState("");
+  const [key, setKey] = useState("");
+  const [value, setValue] = useState("");
+  const [contentType, setContentType] = useState("text/plain");
+  const [touched, setTouched] = useState({ key: false, value: false });
+  const [submitAttempted, setSubmitAttempted] = useState(false);
+
+  useEffect(() => {
+    if (!seed) return;
+    setEnvironment(seed.environment || (environments.length === 1 ? environments[0] : ""));
+    setKey(seed.key);
+    setValue("");
+    setContentType("text/plain");
+    setTouched({ key: false, value: false });
+    setSubmitAttempted(false);
+  }, [seed, environments]);
+
+  const keyProblem = validateKey(key.trim());
+  const valueProblem = value ? validateValueSize(value) : "Secret value is required.";
+  const showKeyProblem = touched.key || submitAttempted ? keyProblem : null;
+  const showValueProblem = touched.value || submitAttempted ? valueProblem : null;
+  const blocking =
+    !environment || keyProblem !== null || valueProblem !== null || !contentType.trim();
+  const advancedHref = {
+    pathname: "/secrets/new",
+    query: {
+      ...(environment ? { env: environment } : {}),
+      app,
+      ...(key.trim() ? { key: key.trim() } : {}),
+    },
+  };
+
+  return (
+    <Modal
+      open={seed !== null}
+      title="New secret"
+      onClose={onClose}
+      footer={
+        <>
+          <Button variant="outline" onClick={onClose} disabled={saving}>
+            Cancel
+          </Button>
+          <Button
+            disabled={saving || blocking}
+            onClick={() => {
+              setSubmitAttempted(true);
+              if (blocking) return;
+              void onSave({
+                environment,
+                key: key.trim(),
+                value,
+                contentType: contentType.trim(),
+              });
+            }}
+          >
+            {saving ? <Spinner /> : null}
+            Create secret
+          </Button>
+        </>
+      }
+    >
+      <div className="form-row">
+        <Field label="Application">
+          <Input className="font-mono" value={app} disabled />
+        </Field>
+        <Field label="Environment">
+          <AppSelect
+            className="font-mono"
+            value={environment}
+            onValueChange={setEnvironment}
+            placeholder="Select environment…"
+            options={environments.map((item) => ({ value: item, label: item }))}
+          />
+        </Field>
+      </div>
+      <Field
+        label="Secret key"
+        hint="Examples: stripe-api-key or billing/webhook-secret"
+        error={showKeyProblem}
+      >
+        <Input
+          className="font-mono"
+          value={key}
+          onChange={(event) => setKey(event.target.value)}
+          onBlur={() => setTouched((current) => ({ ...current, key: true }))}
+          placeholder="stripe-api-key"
+        />
+      </Field>
+      <Field
+        label="Secret value"
+        hint="The value is encrypted before it is stored and is never shown in the matrix."
+        error={showValueProblem}
+      >
+        <Textarea
+          className="font-mono"
+          rows={5}
+          value={value}
+          onChange={(event) => setValue(event.target.value)}
+          onBlur={() => setTouched((current) => ({ ...current, value: true }))}
+          spellCheck={false}
+          autoComplete="off"
+        />
+      </Field>
+      <Field label="Content type">
+        <Input
+          className="font-mono"
+          value={contentType}
+          onChange={(event) => setContentType(event.target.value)}
+        />
+      </Field>
+      <div className="quick-secret-advanced text-sm">
+        Need expiration, metadata, an access token, or client-bound protection?{" "}
+        <Link href={advancedHref}>Open advanced secret options</Link>.
+      </div>
     </Modal>
   );
 }
@@ -671,8 +960,12 @@ function BulkParameterModal({
   const [value, setValue] = useState("");
   const [contentType, setContentType] = useState("string");
   const [selected, setSelected] = useState<string[]>([]);
+  const [keyTouched, setKeyTouched] = useState(false);
+  const [valueTouched, setValueTouched] = useState(false);
   useEffect(() => {
     if (!row) return;
+    setKeyTouched(false);
+    setValueTouched(false);
     setKey(row.key);
     const present = environments.filter((environment) => row.environments[environment]?.present);
     setSelected(present.length ? present : environments);
@@ -681,6 +974,15 @@ function BulkParameterModal({
     setContentType(first?.content_type ?? "string");
   }, [row, environments]);
   const allSelected = selected.length === environments.length;
+  // The same value is written to every selected environment, so it only has to
+  // parse once. Memoised because a JSON document may run to a megabyte.
+  const keyProblem = validateKey(key.trim());
+  const valueProblem = useMemo(
+    () => firstError(validateValueSize(value), validateParameterValue(value, contentType)),
+    [value, contentType],
+  );
+  // An existing key's input is disabled, so a legacy key cannot block an edit.
+  const blocking = firstError(row?.key ? null : keyProblem, valueProblem);
   const differing = useMemo(
     () =>
       row
@@ -700,13 +1002,15 @@ function BulkParameterModal({
       wide
       footer={
         <>
-          <button className="btn" onClick={onClose} disabled={saving}>
+          <Button variant="outline" onClick={onClose} disabled={saving}>
             Cancel
-          </button>
-          <button
-            className="btn btn-primary"
-            disabled={saving || !key || selected.length === 0}
-            onClick={() =>
+          </Button>
+          <Button
+            disabled={saving || blocking !== null || selected.length === 0}
+            onClick={() => {
+              setKeyTouched(true);
+              setValueTouched(true);
+              if (blocking) return;
               void onSave({
                 application: app,
                 key,
@@ -714,11 +1018,11 @@ function BulkParameterModal({
                 content_type: contentType,
                 metadata_json: "{}",
                 environments: selected,
-              })
-            }
+              });
+            }}
           >
             {saving ? <Spinner /> : null}Review and apply to {selected.length}
-          </button>
+          </Button>
         </>
       }
     >
@@ -730,62 +1034,62 @@ function BulkParameterModal({
           : ""}
       </div>
       <div className="form-row">
-        <Field label="Key">
-          <input
-            className="input mono"
+        <Field label="Key" error={row?.key ? null : keyTouched ? keyProblem : null}>
+          <Input
+            className="font-mono"
             value={key}
             disabled={Boolean(row?.key)}
             onChange={(event) => setKey(event.target.value)}
+            onBlur={() => setKeyTouched(true)}
           />
         </Field>
         <Field label="Content type">
-          <select
-            className="select"
+          <AppSelect
             value={contentType}
-            onChange={(event) => setContentType(event.target.value)}
-          >
-            {PARAMETER_CONTENT_TYPES.map((type) => (
-              <option key={type} value={type}>
-                {type}
-              </option>
-            ))}
-          </select>
+            onValueChange={setContentType}
+            options={PARAMETER_CONTENT_TYPES.map((type) => ({ value: type, label: type }))}
+          />
         </Field>
       </div>
-      <Field label="Value">
-        <textarea
-          className="input mono"
+      <Field label="Value" error={valueTouched ? valueProblem : null}>
+        <Textarea
+          className="font-mono"
           rows={7}
           value={value}
           onChange={(event) => setValue(event.target.value)}
+          onBlur={() => setValueTouched(true)}
         />
       </Field>
       <Field label="Target environments">
-        <label className="checkbox-row">
-          <input
-            type="checkbox"
+        <div className="checkbox-row">
+          <Checkbox
+            id="all-target-environments"
             checked={allSelected}
-            onChange={(event) => setSelected(event.target.checked ? environments : [])}
+            onCheckedChange={(checked) => setSelected(checked ? environments : [])}
           />
-          <strong>All environments</strong>
-        </label>
+          <label htmlFor="all-target-environments">
+            <strong>All environments</strong>
+          </label>
+        </div>
         <div className="environment-check-grid">
           {environments.map((environment) => (
-            <label className="checkbox-row" key={environment}>
-              <input
-                type="checkbox"
+            <div className="checkbox-row" key={environment}>
+              <Checkbox
+                id={`target-environment-${environment}`}
                 checked={selected.includes(environment)}
-                onChange={(event) =>
+                onCheckedChange={(checked) =>
                   setSelected((current) =>
-                    event.target.checked
+                    checked
                       ? [...current, environment]
                       : current.filter((item) => item !== environment),
                   )
                 }
               />
-              <span className="mono">{environment}</span>
+              <label className="mono" htmlFor={`target-environment-${environment}`}>
+                {environment}
+              </label>
               {environment.includes("prod") ? <Badge kind="warning">production</Badge> : null}
-            </label>
+            </div>
           ))}
         </div>
       </Field>

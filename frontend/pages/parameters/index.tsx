@@ -1,6 +1,7 @@
-import Link from "next/link";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { Button, ButtonLink } from "@/components/ui/button";
 import { Eye, Filter, Trash2, X } from "lucide-react";
+import Link from "next/link";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Icon } from "@/components/icons";
 import { ConfirmDialog, Modal } from "@/components/Modal";
 import NamespacePicker, { type NamespaceSelection } from "@/components/NamespacePicker";
@@ -8,16 +9,28 @@ import {
   Badge,
   EmptyState,
   Field,
+  Input,
   PageHeader,
   Pagination,
   Spinner,
   TableSkeleton,
+  Textarea,
 } from "@/components/ui";
+import { AppSelect } from "@/components/ui/app-select";
 import { useToast } from "@/context/ToastContext";
 import { api, isAbortError } from "@/lib/api";
 import { formatUnixMs, labelEntries } from "@/lib/format";
 import { useNamespaces, useQueryParams } from "@/lib/hooks";
 import { PARAMETER_CONTENT_TYPES, type Parameter } from "@/lib/types";
+import {
+  firstError,
+  validateContentType,
+  validateKey,
+  validateKeyPrefix,
+  validateMetadataJson,
+  validateParameterValue,
+  validateValueSize,
+} from "@/lib/validation";
 
 function detailLink(ref: { env: string; app: string; key: string }): string {
   return `/parameters/detail?env=${encodeURIComponent(ref.env)}&app=${encodeURIComponent(
@@ -27,6 +40,9 @@ function detailLink(ref: { env: string; app: string; key: string }): string {
 
 const NO_NS: NamespaceSelection = { env: "", app: "" };
 
+/** The fields of the new-parameter form that carry their own validation. */
+type CreateField = "key" | "value" | "contentType" | "metadata";
+
 export default function ParametersPage() {
   const toast = useToast();
   const { namespaces, error: nsError } = useNamespaces();
@@ -34,6 +50,7 @@ export default function ParametersPage() {
 
   const [ns, setNs] = useState<NamespaceSelection>(NO_NS);
   const [prefixInput, setPrefixInput] = useState("");
+  const [prefixTouched, setPrefixTouched] = useState(false);
   const [prefix, setPrefix] = useState("");
 
   const [rows, setRows] = useState<Parameter[]>([]);
@@ -50,6 +67,8 @@ export default function ParametersPage() {
   const [contentType, setContentType] = useState("string");
   const [metadataJson, setMetadataJson] = useState("{}");
   const [saving, setSaving] = useState(false);
+  const [touched, setTouched] = useState<Partial<Record<CreateField, boolean>>>({});
+  const [submitAttempted, setSubmitAttempted] = useState(false);
 
   const [deleteTarget, setDeleteTarget] = useState<Parameter | null>(null);
   const [deleting, setDeleting] = useState(false);
@@ -70,10 +89,45 @@ export default function ParametersPage() {
   }, [queryReady, queryValues]);
 
   useEffect(() => {
-    if (nsError) toast.error(nsError, "Failed to load namespaces");
+    if (nsError) toast.error(nsError, "Failed to load environments");
   }, [nsError, toast]);
 
   const hasNs = !!ns.env && !!ns.app;
+
+  // Client-side mirrors of the server's validators (see lib/validation.ts).
+  // They fail fast on input the API is certain to reject; the server still has
+  // the last word, and its errors keep arriving as toasts.
+  const prefixError = validateKeyPrefix(prefixInput.trim());
+  const keyError = validateKey(key.trim());
+  const contentTypeError = validateContentType(contentType);
+  const metadataError = validateMetadataJson(metadataJson);
+  // Re-runs when the content type changes — "1.5" is a valid float but not a
+  // valid integer. Memoised because a value may run to a megabyte.
+  const valueError = useMemo(
+    () => firstError(validateValueSize(value), validateParameterValue(value, contentType)),
+    [value, contentType],
+  );
+
+  // A message stays hidden until the user has left the field or tried to
+  // submit, so a freshly opened form is never already covered in errors.
+  const shownPrefixError = prefixTouched ? prefixError : null;
+  const shownIn = (field: CreateField, error: string | null) =>
+    touched[field] || submitAttempted ? error : null;
+  const shownKeyError = shownIn("key", keyError);
+  const shownValueError = shownIn("value", valueError);
+  const shownContentTypeError = shownIn("contentType", contentTypeError);
+  const shownMetadataError = shownIn("metadata", metadataError);
+  const createError = firstError(keyError, valueError, contentTypeError, metadataError);
+  const shownCreateError = firstError(
+    shownKeyError,
+    shownValueError,
+    shownContentTypeError,
+    shownMetadataError,
+  );
+
+  function markTouched(field: CreateField) {
+    setTouched((t) => ({ ...t, [field]: true }));
+  }
 
   const load = useCallback(
     async (token: string, selection: NamespaceSelection, activePrefix: string) => {
@@ -130,6 +184,8 @@ export default function ParametersPage() {
   }
   function applyFilter(e: React.FormEvent) {
     e.preventDefault();
+    setPrefixTouched(true);
+    if (prefixError) return;
     setRows([]);
     setNextToken("");
     setDeleteTarget(null);
@@ -139,6 +195,7 @@ export default function ParametersPage() {
   }
   function clearFilter() {
     setPrefixInput("");
+    setPrefixTouched(false);
     setRows([]);
     setNextToken("");
     setDeleteTarget(null);
@@ -168,20 +225,21 @@ export default function ParametersPage() {
     setValue("");
     setContentType("string");
     setMetadataJson("{}");
+    setTouched({});
+    setSubmitAttempted(false);
     setCreateOpen(true);
   }
 
   async function onCreate(e: React.FormEvent) {
     e.preventDefault();
+    setSubmitAttempted(true);
     if (!createNs.env || !createNs.app) {
-      toast.error(new Error("Choose a namespace for the parameter."), "Missing namespace");
+      toast.error(new Error("Choose an environment for the parameter."), "Missing environment");
       return;
     }
+    // Every remaining problem now has an inline message next to its field.
+    if (createError) return;
     const k = key.trim();
-    if (!k) {
-      toast.error(new Error("A key is required."), "Missing key");
-      return;
-    }
     setSaving(true);
     try {
       const res = await api.putParameter({
@@ -232,42 +290,41 @@ export default function ParametersPage() {
     <>
       <PageHeader
         title="Parameters"
-        subtitle="Non-secret configuration values, scoped to a namespace and versioned like secrets."
-        actions={
-          <button className="btn btn-primary" onClick={openCreate}>
-            New parameter
-          </button>
-        }
+        subtitle="Non-secret configuration values, isolated by application and environment."
+        actions={<Button onClick={openCreate}>New parameter</Button>}
       />
 
       <form className="filters" onSubmit={applyFilter}>
         <NamespacePicker namespaces={namespaces} value={ns} onChange={onSelectNamespace} />
-        <div className="field filter-grow">
-          <label className="field-label" htmlFor="key-prefix">
-            Key prefix
-          </label>
-          <input
-            id="key-prefix"
-            className="input mono"
-            placeholder="billing/"
-            value={prefixInput}
-            disabled={!hasNs}
-            onChange={(e) => setPrefixInput(e.target.value)}
-          />
+        <div className="filter-grow">
+          {/* A hint would sit under the input and, with `.filters` bottom-aligned,
+              push the Filter and Clear buttons out of line — so the prefix rule
+              rides on the placeholder and the validation message instead. */}
+          <Field label="Key prefix" error={shownPrefixError}>
+            <Input
+              id="key-prefix"
+              className="font-mono"
+              placeholder="billing"
+              value={prefixInput}
+              disabled={!hasNs}
+              onChange={(e) => setPrefixInput(e.target.value)}
+              onBlur={() => setPrefixTouched(true)}
+            />
+          </Field>
         </div>
-        <button type="submit" className="btn" disabled={!hasNs}>
+        <Button type="submit" variant="outline" disabled={!hasNs || shownPrefixError !== null}>
           <Filter size={15} aria-hidden />
           Filter
-        </button>
-        <button type="button" className="btn btn-ghost" onClick={clearFilter} disabled={!hasNs}>
+        </Button>
+        <Button type="button" variant="ghost" onClick={clearFilter} disabled={!hasNs}>
           <X size={15} aria-hidden />
           Clear
-        </button>
+        </Button>
       </form>
 
       {!hasNs ? (
-        <EmptyState icon={<Icon.namespace size={20} />} title="Choose a namespace">
-          Pick an environment and application above to list its parameters.
+        <EmptyState icon={<Icon.namespace size={20} />} title="Choose an environment">
+          Pick an application and environment above to list its parameters.
         </EmptyState>
       ) : loading ? (
         <TableSkeleton headers={["Key", "Version", "Type", "Labels", "Created"]} />
@@ -277,14 +334,12 @@ export default function ParametersPage() {
           title="No parameters found"
           actions={
             prefix ? (
-              <button className="btn" onClick={clearFilter}>
+              <Button variant="outline" onClick={clearFilter}>
                 <X size={15} aria-hidden />
                 Clear filter
-              </button>
+              </Button>
             ) : (
-              <button className="btn btn-primary" onClick={openCreate}>
-                New parameter
-              </button>
+              <Button onClick={openCreate}>New parameter</Button>
             )
           }
         >
@@ -331,14 +386,14 @@ export default function ParametersPage() {
                   </td>
                   <td>
                     <div className="row-actions">
-                      <Link className="btn btn-sm" href={detailLink(p)}>
+                      <ButtonLink variant="outline" size="sm" href={detailLink(p)}>
                         <Eye size={14} aria-hidden />
                         Details
-                      </Link>
-                      <button className="btn btn-sm btn-danger" onClick={() => setDeleteTarget(p)}>
+                      </ButtonLink>
+                      <Button variant="destructive" size="sm" onClick={() => setDeleteTarget(p)}>
                         <Trash2 size={14} aria-hidden />
                         Delete
-                      </button>
+                      </Button>
                     </div>
                   </td>
                 </tr>
@@ -363,13 +418,13 @@ export default function ParametersPage() {
         onClose={() => setCreateOpen(false)}
         footer={
           <>
-            <button className="btn" onClick={() => setCreateOpen(false)} disabled={saving}>
+            <Button variant="outline" onClick={() => setCreateOpen(false)} disabled={saving}>
               Cancel
-            </button>
-            <button className="btn btn-primary" onClick={onCreate} disabled={saving}>
+            </Button>
+            <Button onClick={onCreate} disabled={saving || shownCreateError !== null}>
               {saving ? <Spinner /> : null}
               Save parameter
-            </button>
+            </Button>
           </>
         }
       >
@@ -377,41 +432,48 @@ export default function ParametersPage() {
           <div className="form-row">
             <NamespacePicker namespaces={namespaces} value={createNs} onChange={setCreateNs} />
           </div>
-          <Field label="Key" hint="Relative to the namespace, e.g. rate-limit or billing/timeout">
-            <input
-              className="input mono"
+          <Field
+            label="Key"
+            hint="Relative to the selected environment, e.g. rate-limit or billing/timeout"
+            error={shownKeyError}
+          >
+            <Input
+              className="font-mono"
               value={key}
               onChange={(e) => setKey(e.target.value)}
+              onBlur={() => markTouched("key")}
               placeholder="rate-limit"
             />
           </Field>
-          <Field label="Value">
-            <textarea
-              className="textarea mono"
+          <Field label="Value" error={shownValueError}>
+            <Textarea
+              className="font-mono"
               value={value}
               onChange={(e) => setValue(e.target.value)}
+              onBlur={() => markTouched("value")}
               placeholder="100"
             />
           </Field>
           <div className="form-row">
-            <Field label="Content type">
-              <select
-                className="select"
+            <Field label="Content type" error={shownContentTypeError}>
+              <AppSelect
                 value={contentType}
-                onChange={(e) => setContentType(e.target.value)}
-              >
-                {PARAMETER_CONTENT_TYPES.map((ct) => (
-                  <option key={ct} value={ct}>
-                    {ct}
-                  </option>
-                ))}
-              </select>
+                onValueChange={(nextContentType) => {
+                  setContentType(nextContentType);
+                  markTouched("contentType");
+                }}
+                options={PARAMETER_CONTENT_TYPES.map((contentTypeOption) => ({
+                  value: contentTypeOption,
+                  label: contentTypeOption,
+                }))}
+              />
             </Field>
-            <Field label="Metadata JSON">
-              <input
-                className="input mono"
+            <Field label="Metadata JSON" error={shownMetadataError}>
+              <Input
+                className="font-mono"
                 value={metadataJson}
                 onChange={(e) => setMetadataJson(e.target.value)}
+                onBlur={() => markTouched("metadata")}
               />
             </Field>
           </div>

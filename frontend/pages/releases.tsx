@@ -1,9 +1,21 @@
+import { Button } from "@/components/ui/button";
 import { RefreshCw } from "lucide-react";
 import { type FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Icon } from "@/components/icons";
 import { ConfirmDialog } from "@/components/Modal";
 import NamespacePicker, { type NamespaceSelection } from "@/components/NamespacePicker";
-import { Badge, EmptyState, PageHeader, Pagination, Spinner, TableSkeleton } from "@/components/ui";
+import { AppSelect } from "@/components/ui/app-select";
+import {
+  Badge,
+  EmptyState,
+  Field,
+  Input,
+  PageHeader,
+  Pagination,
+  Spinner,
+  TableSkeleton,
+  Textarea,
+} from "@/components/ui";
 import { useToast } from "@/context/ToastContext";
 import { ApiError, api, isAbortError } from "@/lib/api";
 import { displayPath } from "@/lib/format";
@@ -16,6 +28,7 @@ import type {
   ReleaseSummary,
   ReleaseValidationError,
 } from "@/lib/types";
+import { validateAlias, validateMetadataJson, validateReleaseName } from "@/lib/validation";
 
 const NO_NS: NamespaceSelection = { env: "", app: "" };
 
@@ -44,6 +57,41 @@ function releaseKey(r: ConfigurationRelease): string {
 function refText(entry: ConfigurationRelease["entries"][number]): string {
   const ns = entry.ref.namespace;
   return displayPath({ env: ns.env, app: ns.app, key: entry.ref.key });
+}
+
+/**
+ * Checks the pasted release definition as far as the client can: it must parse,
+ * carry the name and entries `createRelease` needs, and use a name, aliases, and
+ * metadata the server would accept. Everything beyond that — the referenced
+ * versions, the contract, the schema — is the server's to judge.
+ */
+function releaseDefinitionError(definition: string): string | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(definition);
+  } catch (err) {
+    return `Definition must be valid JSON: ${err instanceof Error ? err.message : String(err)}`;
+  }
+  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+    return "Definition must be a JSON object with a name and an entries array.";
+  }
+  const draft = parsed as Record<string, unknown>;
+  if (typeof draft.name !== "string" || draft.name === "" || !Array.isArray(draft.entries)) {
+    return "Definition requires name and entries.";
+  }
+  // `core.validateReleaseAddress` runs the release name through
+  // `keyutil.ValidateKey`; the aliases follow the release-alias rule instead.
+  const nameError = validateReleaseName(draft.name);
+  if (nameError) return nameError;
+  for (const entry of draft.entries as unknown[]) {
+    const record = (entry ?? {}) as Record<string, unknown>;
+    const aliasError = validateAlias(typeof record.alias === "string" ? record.alias : "");
+    if (aliasError) return aliasError;
+  }
+  // `core.validateReleaseMetadata` requires a JSON object here, as everywhere
+  // else metadata is accepted.
+  if (typeof draft.metadata_json === "string") return validateMetadataJson(draft.metadata_json);
+  return null;
 }
 
 function activationViolations(err: unknown): ReleaseValidationError[] | null {
@@ -93,8 +141,31 @@ export default function ReleasesPage() {
   const subscriberPaging = useCursorPagination(subscriberScope);
   const releaseRequestScope = JSON.stringify([releaseScope, releasePaging.pageToken]);
 
+  // A field reports its problem only once the operator has left it or has asked
+  // for the action, so a half-typed definition never looks like a mistake.
+  const [touched, setTouched] = useState({ name: false, definition: false, schema: false });
+  function touch(field: keyof typeof touched) {
+    setTouched((current) => ({ ...current, [field]: true }));
+  }
+
+  // `core.ListConfigurationReleases` skips the filter when it is empty and
+  // otherwise runs it through `keyutil.ValidateKey`, exactly like a release name.
+  const nameFilterError = validateReleaseName(nameDraft.trim());
+  const definitionError = useMemo(() => releaseDefinitionError(definition), [definition]);
+  // A JSON Schema document is not restricted to an object: `core.compileSchema`
+  // compiles the bare `true`/`false` schemas too, so only parseability is checked
+  // here and the server rules on the dialect.
+  const schemaError = useMemo(() => {
+    try {
+      JSON.parse(schemaJSON);
+      return null;
+    } catch (err) {
+      return `Schema must be valid JSON: ${err instanceof Error ? err.message : String(err)}`;
+    }
+  }, [schemaJSON]);
+
   useEffect(() => {
-    if (namespaceError) toast.error(namespaceError, "Failed to load namespaces");
+    if (namespaceError) toast.error(namespaceError, "Failed to load environments");
   }, [namespaceError, toast]);
 
   const loadSchemas = useCallback(async () => {
@@ -210,6 +281,8 @@ export default function ReleasesPage() {
 
   function applyNameFilter(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    touch("name");
+    if (nameFilterError) return;
     setActivationFailure(null);
     setPendingAction(null);
     setName(nameDraft.trim());
@@ -223,6 +296,9 @@ export default function ReleasesPage() {
 
   async function createRelease() {
     if (!hasNS || busyAction) return;
+    touch("definition");
+    // The inline message carries the detail.
+    if (definitionError) return;
     setBusyAction("create-release");
     try {
       const parsed = JSON.parse(definition) as Partial<CreateReleaseRequest>;
@@ -318,6 +394,8 @@ export default function ReleasesPage() {
 
   async function createSchema() {
     if (busyAction) return;
+    touch("schema");
+    if (schemaError) return;
     setBusyAction("create-schema");
     try {
       JSON.parse(schemaJSON);
@@ -435,16 +513,16 @@ export default function ReleasesPage() {
         title="Configuration releases"
         subtitle="Atomically activate exact parameter and secret versions. Secret values and tokens are never displayed."
         actions={
-          <button
+          <Button
             type="button"
-            className="btn"
+            variant="outline"
             disabled={releasesLoading || subscribersLoading || Boolean(busyAction)}
             onClick={() => void refresh(true)}
           >
             {releasesLoading || subscribersLoading ? <Spinner /> : null}
             {!releasesLoading && !subscribersLoading ? <RefreshCw size={16} aria-hidden /> : null}
             Refresh
-          </button>
+          </Button>
         }
       />
 
@@ -456,30 +534,30 @@ export default function ReleasesPage() {
           disabled={Boolean(busyAction)}
         />
         <form className="row-wrap filter-grow" onSubmit={applyNameFilter}>
-          <div className="field filter-grow">
-            <label className="field-label" htmlFor="release-name">
-              Release name
-            </label>
-            <input
-              id="release-name"
-              className="input mono"
-              value={nameDraft}
-              onChange={(event) => setNameDraft(event.target.value)}
-              placeholder="runtime"
-              disabled={!hasNS || Boolean(busyAction)}
-            />
+          <div className="filter-grow">
+            <Field label="Release name" error={touched.name ? nameFilterError : null}>
+              <Input
+                id="release-name"
+                className="font-mono"
+                value={nameDraft}
+                onChange={(event) => setNameDraft(event.target.value)}
+                onBlur={() => touch("name")}
+                placeholder="runtime"
+                disabled={!hasNS || Boolean(busyAction)}
+              />
+            </Field>
           </div>
-          <button
-            className="btn"
+          <Button
+            variant="outline"
             type="submit"
             disabled={!hasNS || nameDraft.trim() === name || releasesLoading || Boolean(busyAction)}
           >
             Apply filter
-          </button>
+          </Button>
         </form>
-        <button
+        <Button
           type="button"
-          className="btn"
+          variant="outline"
           disabled={!currentNamedRelease || !previousNamedRelease || Boolean(busyAction)}
           onClick={() => {
             if (currentNamedRelease && previousNamedRelease) {
@@ -493,7 +571,7 @@ export default function ReleasesPage() {
           }}
         >
           Rollback to previous
-        </button>
+        </Button>
       </div>
 
       {activationFailure ? (
@@ -513,9 +591,14 @@ export default function ReleasesPage() {
                 below and try again.
               </div>
             </div>
-            <button type="button" className="btn btn-sm" onClick={() => setActivationFailure(null)}>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => setActivationFailure(null)}
+            >
               Dismiss
-            </button>
+            </Button>
           </div>
           <div className="table-wrap activation-violations mt-12">
             <table className="data">
@@ -549,8 +632,8 @@ export default function ReleasesPage() {
       ) : null}
 
       {!hasNS ? (
-        <EmptyState icon={<Icon.namespace size={20} />} title="Choose a namespace">
-          Select a namespace to manage its releases.
+        <EmptyState icon={<Icon.namespace size={20} />} title="Choose an environment">
+          Select an application and environment to manage its releases.
         </EmptyState>
       ) : releasesLoading ? (
         <TableSkeleton headers={["Release", "State", "Schema", "Entries", "Digest", "Actions"]} />
@@ -605,31 +688,33 @@ export default function ReleasesPage() {
                       </details>
                     </td>
                     <td className="row-wrap row-actions" data-label="Actions">
-                      <button
+                      <Button
                         type="button"
-                        className="btn btn-sm"
+                        variant="outline"
+                        size="sm"
                         disabled={Boolean(busyAction)}
                         onClick={() => setSelectedReleaseKey(releaseKey(r))}
                       >
                         View
-                      </button>
-                      <button
+                      </Button>
+                      <Button
                         type="button"
-                        className="btn btn-sm"
+                        variant="outline"
+                        size="sm"
                         disabled={Boolean(busyAction)}
                         onClick={() => void validate(r)}
                       >
                         {busyAction === `validate:${releaseKey(r)}` ? <Spinner /> : null}
                         Validate
-                      </button>
-                      <button
+                      </Button>
+                      <Button
                         type="button"
-                        className="btn btn-sm btn-primary"
+                        size="sm"
                         disabled={summary.current || Boolean(busyAction)}
                         onClick={() => setPendingAction({ kind: "activate", summary })}
                       >
                         Activate
-                      </button>
+                      </Button>
                     </td>
                   </tr>
                 );
@@ -713,28 +798,27 @@ export default function ReleasesPage() {
         <section className="card">
           <h2>Create release</h2>
           <p className="text-sm faint">
-            Paste a JSON definition. Relative references should use the selected namespace.
+            Paste a JSON definition. Relative references use the selected environment.
           </p>
-          <label className="field-label" htmlFor="release-definition">
-            Release definition
-          </label>
-          <textarea
-            id="release-definition"
-            className="input mono"
-            rows={14}
-            value={definition}
-            onChange={(event) => setDefinition(event.target.value)}
-          />
+          <Field label="Release definition" error={touched.definition ? definitionError : null}>
+            <Textarea
+              id="release-definition"
+              className="font-mono"
+              rows={14}
+              value={definition}
+              onChange={(event) => setDefinition(event.target.value)}
+              onBlur={() => touch("definition")}
+            />
+          </Field>
           <div className="mt-12">
-            <button
+            <Button
               type="button"
-              className="btn btn-primary"
               disabled={!hasNS || Boolean(busyAction)}
               onClick={() => void createRelease()}
             >
               {busyAction === "create-release" ? <Spinner /> : null}
               Create immutable version
-            </button>
+            </Button>
           </div>
         </section>
         <section className="card">
@@ -742,33 +826,33 @@ export default function ReleasesPage() {
           <label className="field-label" htmlFor="schema-id">
             Schema ID
           </label>
-          <input
+          <Input
             id="schema-id"
-            className="input mono mb-8"
+            className="mb-2 font-mono"
             placeholder="go-common/runtime"
             value={schemaID}
             onChange={(event) => setSchemaID(event.target.value)}
           />
-          <label className="field-label" htmlFor="schema-definition">
-            JSON Schema definition
-          </label>
-          <textarea
-            id="schema-definition"
-            className="input mono"
-            rows={11}
-            value={schemaJSON}
-            onChange={(event) => setSchemaJSON(event.target.value)}
-          />
+          <Field label="JSON Schema definition" error={touched.schema ? schemaError : null}>
+            <Textarea
+              id="schema-definition"
+              className="font-mono"
+              rows={11}
+              value={schemaJSON}
+              onChange={(event) => setSchemaJSON(event.target.value)}
+              onBlur={() => touch("schema")}
+            />
+          </Field>
           <div className="mt-12">
-            <button
+            <Button
               type="button"
-              className="btn"
+              variant="outline"
               disabled={!schemaID.trim() || Boolean(busyAction)}
               onClick={() => void createSchema()}
             >
               {busyAction === "create-schema" ? <Spinner /> : null}
               Register schema version
-            </button>
+            </Button>
           </div>
           <div className="text-sm faint mt-12" aria-live="polite">
             {schemasLoading
@@ -825,43 +909,31 @@ export default function ReleasesPage() {
 
       <section className="card mb-16">
         <h2>Diff versions</h2>
-        <div className="row-wrap mb-12">
-          <div className="field">
-            <label className="field-label" htmlFor="diff-from">
-              From release
-            </label>
-            <select
+        <div className="mb-3 grid max-w-2xl grid-cols-1 gap-4 sm:grid-cols-2">
+          <Field label="From release" htmlFor="diff-from">
+            <AppSelect
               id="diff-from"
-              className="select"
               value={diffFrom}
-              onChange={(event) => setDiffFrom(event.target.value)}
-            >
-              <option value="">From…</option>
-              {releases.map((r) => (
-                <option key={`f-${releaseKey(r.release)}`} value={releaseKey(r.release)}>
-                  {releaseKey(r.release)}
-                </option>
-              ))}
-            </select>
-          </div>
-          <div className="field">
-            <label className="field-label" htmlFor="diff-to">
-              To release
-            </label>
-            <select
+              onValueChange={setDiffFrom}
+              placeholder="Choose a starting release…"
+              options={releases.map((summary) => ({
+                value: releaseKey(summary.release),
+                label: releaseKey(summary.release),
+              }))}
+            />
+          </Field>
+          <Field label="To release" htmlFor="diff-to">
+            <AppSelect
               id="diff-to"
-              className="select"
               value={diffTo}
-              onChange={(event) => setDiffTo(event.target.value)}
-            >
-              <option value="">To…</option>
-              {releases.map((r) => (
-                <option key={`t-${releaseKey(r.release)}`} value={releaseKey(r.release)}>
-                  {releaseKey(r.release)}
-                </option>
-              ))}
-            </select>
-          </div>
+              onValueChange={setDiffTo}
+              placeholder="Choose a comparison release…"
+              options={releases.map((summary) => ({
+                value: releaseKey(summary.release),
+                label: releaseKey(summary.release),
+              }))}
+            />
+          </Field>
         </div>
         {diffFrom && diffTo && diff.length === 0 ? (
           <div className="faint">No manifest differences.</div>

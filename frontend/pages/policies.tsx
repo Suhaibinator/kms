@@ -1,12 +1,30 @@
-import { useCallback, useEffect, useId, useRef, useState } from "react";
+import { Button } from "@/components/ui/button";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Pencil, Trash2 } from "lucide-react";
 import { Icon } from "@/components/icons";
 import { ConfirmDialog, Modal } from "@/components/Modal";
-import { EmptyState, Field, PageHeader, Pagination, Spinner, TableSkeleton } from "@/components/ui";
+import {
+  EmptyState,
+  Field,
+  Input,
+  PageHeader,
+  Pagination,
+  Spinner,
+  TableSkeleton,
+} from "@/components/ui";
+import { AppSelect } from "@/components/ui/app-select";
 import { useToast } from "@/context/ToastContext";
 import { api, isAbortError } from "@/lib/api";
 import { formatUnixMs } from "@/lib/format";
 import { POLICY_OPERATIONS, type Policy, type PolicyRule } from "@/lib/types";
+import {
+  firstError,
+  validatePolicyName,
+  validatePolicyOperation,
+  validatePolicyRuleApp,
+  validatePolicyRuleEnv,
+  validatePolicySubject,
+} from "@/lib/validation";
 
 interface Draft {
   name: string;
@@ -16,12 +34,54 @@ interface Draft {
   editing: boolean;
 }
 
+type RuleKind = "allow" | "deny";
+type RuleField = keyof PolicyRule;
+
 function emptyDraft(): Draft {
   return { name: "", subject: "", allow: [], deny: [], editing: false };
 }
 
 function newRule(): PolicyRule {
   return { operation: "secret:read", env: "*", app: "*" };
+}
+
+/**
+ * Options for the operation picker. An operation the picker does not know — a
+ * server that has learned a new one, say — is offered as-is, so editing an
+ * unrelated part of the policy cannot silently rewrite it.
+ */
+function operationOptions(current: string): string[] {
+  if (current === "" || POLICY_OPERATIONS.includes(current)) return POLICY_OPERATIONS;
+  return [current, ...POLICY_OPERATIONS];
+}
+
+/**
+ * Validation message for one component of a rule. env and app are checked
+ * trimmed because the form sends them trimmed; an empty value is legal and
+ * means "any", exactly like "*" (`policy.normalizeLabel`).
+ */
+function ruleFieldError(rule: PolicyRule, field: RuleField): string | null {
+  switch (field) {
+    case "operation":
+      return validatePolicyOperation(rule.operation);
+    case "env":
+      return validatePolicyRuleEnv(rule.env.trim());
+    case "app":
+      return validatePolicyRuleApp(rule.app.trim());
+  }
+}
+
+/** The first message that would stop the server from accepting the draft. */
+function draftError(draft: Draft): string | null {
+  return firstError(
+    validatePolicyName(draft.name),
+    validatePolicySubject(draft.subject.trim()),
+    ...[...draft.allow, ...draft.deny].flatMap((rule) => [
+      ruleFieldError(rule, "operation"),
+      ruleFieldError(rule, "env"),
+      ruleFieldError(rule, "app"),
+    ]),
+  );
 }
 
 export default function PoliciesPage() {
@@ -35,6 +95,10 @@ export default function PoliciesPage() {
 
   const [draft, setDraft] = useState<Draft | null>(null);
   const [saving, setSaving] = useState(false);
+  // A field's message stays hidden until the user has left it, so a half-typed
+  // value is never called wrong. Attempting to save reveals everything at once.
+  const [touched, setTouched] = useState<ReadonlySet<string>>(new Set());
+  const [submitted, setSubmitted] = useState(false);
 
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
   const [deleting, setDeleting] = useState(false);
@@ -88,10 +152,24 @@ export default function PoliciesPage() {
     setPageToken("");
   }
 
+  function touch(key: string) {
+    setTouched((t) => (t.has(key) ? t : new Set(t).add(key)));
+  }
+  /** The message for `key`, or null while the field is still pristine. */
+  function visibleError(key: string, message: string | null): string | null {
+    return message !== null && (submitted || touched.has(key)) ? message : null;
+  }
+  function resetValidation() {
+    setTouched(new Set());
+    setSubmitted(false);
+  }
+
   function openCreate() {
+    resetValidation();
     setDraft(emptyDraft());
   }
   function openEdit(p: Policy) {
+    resetValidation();
     setDraft({
       name: p.name,
       subject: p.subject,
@@ -103,23 +181,18 @@ export default function PoliciesPage() {
 
   async function save() {
     if (!draft) return;
-    if (!draft.name.trim()) {
-      toast.error(new Error("A policy name is required."), "Missing name");
-      return;
-    }
-    if (!draft.subject.trim()) {
-      toast.error(new Error("A subject is required."), "Missing subject");
-      return;
-    }
-    // Drop incomplete rules; env/app are both required (use "*" for any).
+    setSubmitted(true);
+    // Every problem is now rendered next to the field that has it.
+    if (draftError(draft) !== null) return;
+    // env/app are sent as typed: the server normalizes "" and "*" alike to "*"
+    // (`policy.normalizeLabel`), so a blank component means "any" and the rule
+    // must not be dropped on its way out.
     const clean = (rules: PolicyRule[]) =>
-      rules
-        .filter((r) => r.env.trim() !== "" && r.app.trim() !== "")
-        .map((r) => ({
-          operation: r.operation,
-          env: r.env.trim(),
-          app: r.app.trim(),
-        }));
+      rules.map((r) => ({
+        operation: r.operation,
+        env: r.env.trim(),
+        app: r.app.trim(),
+      }));
 
     const policy: Policy = {
       name: draft.name.trim(),
@@ -169,11 +242,7 @@ export default function PoliciesPage() {
       <PageHeader
         title="Policies"
         subtitle="Allow / deny rules that authorize identities for operations on a namespace."
-        actions={
-          <button className="btn btn-primary" onClick={openCreate}>
-            New policy
-          </button>
-        }
+        actions={<Button onClick={openCreate}>New policy</Button>}
       />
 
       {loading ? (
@@ -182,11 +251,7 @@ export default function PoliciesPage() {
         <EmptyState
           icon={<Icon.policy size={20} />}
           title="No policies yet"
-          actions={
-            <button className="btn btn-primary" onClick={openCreate}>
-              New policy
-            </button>
-          }
+          actions={<Button onClick={openCreate}>New policy</Button>}
         >
           Create a policy to grant an identity access to parameters or secrets.
         </EmptyState>
@@ -213,17 +278,18 @@ export default function PoliciesPage() {
                   <td className="nowrap">{formatUnixMs(p.updated_at_unix_ms)}</td>
                   <td>
                     <div className="row-actions">
-                      <button className="btn btn-sm" onClick={() => openEdit(p)}>
+                      <Button variant="outline" size="sm" onClick={() => openEdit(p)}>
                         <Pencil size={14} aria-hidden />
                         Edit
-                      </button>
-                      <button
-                        className="btn btn-sm btn-danger"
+                      </Button>
+                      <Button
+                        variant="destructive"
+                        size="sm"
                         onClick={() => setDeleteTarget(p.name)}
                       >
                         <Trash2 size={14} aria-hidden />
                         Delete
-                      </button>
+                      </Button>
                     </div>
                   </td>
                 </tr>
@@ -249,13 +315,13 @@ export default function PoliciesPage() {
         onClose={() => setDraft(null)}
         footer={
           <>
-            <button className="btn" onClick={() => setDraft(null)} disabled={saving}>
+            <Button variant="outline" onClick={() => setDraft(null)} disabled={saving}>
               Cancel
-            </button>
-            <button className="btn btn-primary" onClick={save} disabled={saving}>
+            </Button>
+            <Button onClick={save} disabled={saving}>
               {saving ? <Spinner /> : null}
               {draft?.editing ? "Save changes" : "Create policy"}
-            </button>
+            </Button>
           </>
         }
       >
@@ -265,41 +331,54 @@ export default function PoliciesPage() {
               <Field
                 label="Name"
                 hint={draft.editing ? "Cannot be changed." : "Unique policy name."}
+                error={visibleError("name", validatePolicyName(draft.name))}
               >
-                <input
-                  className="input mono"
+                <Input
+                  className="font-mono"
                   value={draft.name}
                   disabled={draft.editing}
                   onChange={(e) => setDraft({ ...draft, name: e.target.value })}
+                  onBlur={() => touch("name")}
                   placeholder="gradethis-read"
                 />
               </Field>
-              <Field label="Subject" hint="The identity this policy applies to.">
-                <input
-                  className="input mono"
+              <Field
+                label="Subject"
+                hint="The identity this policy applies to, or * for every identity."
+                error={visibleError("subject", validatePolicySubject(draft.subject.trim()))}
+              >
+                <Input
+                  className="font-mono"
                   value={draft.subject}
                   onChange={(e) => setDraft({ ...draft, subject: e.target.value })}
+                  onBlur={() => touch("subject")}
                   placeholder="gradethis-be"
                 />
               </Field>
             </div>
 
             <div className="info-panel mb-16">
-              Deny rules always override allow rules. Use <span className="mono">*</span> for env or
-              app to match any. A grant covers the whole namespace — every key in it — since the
-              namespace is the unit of authorization.
+              Deny rules always override allow rules. Environments are application-owned; use
+              <span className="mono"> *</span> for either component to match any. A grant covers the
+              whole namespace — every key in it — since the namespace is the unit of authorization.
             </div>
 
             <RuleEditor
               title="Allow rules"
+              kind="allow"
               rules={draft.allow}
               onChange={(allow) => setDraft({ ...draft, allow })}
+              visibleError={visibleError}
+              onTouch={touch}
             />
             <hr className="divider" />
             <RuleEditor
               title="Deny rules"
+              kind="deny"
               rules={draft.deny}
               onChange={(deny) => setDraft({ ...draft, deny })}
+              visibleError={visibleError}
+              onTouch={touch}
             />
           </>
         ) : null}
@@ -326,14 +405,24 @@ export default function PoliciesPage() {
 
 function RuleEditor({
   title,
+  kind,
   rules,
   onChange,
+  visibleError,
+  onTouch,
 }: {
   title: string;
+  /** Namespaces the touched-field keys so allow and deny rows stay distinct. */
+  kind: RuleKind;
   rules: PolicyRule[];
   onChange: (rules: PolicyRule[]) => void;
+  visibleError: (key: string, message: string | null) => string | null;
+  onTouch: (key: string) => void;
 }) {
-  const fieldPrefix = useId();
+  const fieldKey = (index: number, field: RuleField) => `${kind}-${index}-${field}`;
+  const errorFor = (index: number, rule: PolicyRule, field: RuleField) =>
+    visibleError(fieldKey(index, field), ruleFieldError(rule, field));
+
   function update(index: number, patch: Partial<PolicyRule>) {
     onChange(rules.map((r, i) => (i === index ? { ...r, ...patch } : r)));
   }
@@ -350,9 +439,9 @@ function RuleEditor({
         <div className="field-label" style={{ margin: 0 }}>
           {title}
         </div>
-        <button type="button" className="btn btn-sm" onClick={add}>
+        <Button type="button" variant="outline" size="sm" onClick={add}>
           Add rule
-        </button>
+        </Button>
       </div>
       {rules.length === 0 ? (
         <div className="faint text-sm mb-8">No rules.</div>
@@ -361,54 +450,53 @@ function RuleEditor({
           {rules.map((rule, i) => (
             <div key={i} className="rule-row" style={{ flexWrap: "wrap" }}>
               <div className="rule-op">
-                <label className="field-label" htmlFor={`${fieldPrefix}-${i}-operation`}>
-                  Operation
-                </label>
-                <select
-                  id={`${fieldPrefix}-${i}-operation`}
-                  className="select"
-                  value={rule.operation}
-                  onChange={(e) => update(i, { operation: e.target.value })}
-                >
-                  {POLICY_OPERATIONS.map((op) => (
-                    <option key={op} value={op}>
-                      {op}
-                    </option>
-                  ))}
-                </select>
-              </div>
-              <div style={{ width: 110 }}>
-                <label className="field-label" htmlFor={`${fieldPrefix}-${i}-env`}>
-                  Env
-                </label>
-                <input
-                  id={`${fieldPrefix}-${i}-env`}
-                  className="input mono"
-                  value={rule.env}
-                  onChange={(e) => update(i, { env: e.target.value })}
-                  placeholder="prod"
-                />
+                <Field label="Operation" error={errorFor(i, rule, "operation")}>
+                  <AppSelect
+                    value={rule.operation}
+                    onValueChange={(operation) => update(i, { operation })}
+                    onBlur={() => onTouch(fieldKey(i, "operation"))}
+                    options={operationOptions(rule.operation).map((operation) => ({
+                      value: operation,
+                      label: operation,
+                    }))}
+                  />
+                </Field>
               </div>
               <div style={{ width: 130 }}>
-                <label className="field-label" htmlFor={`${fieldPrefix}-${i}-app`}>
-                  App
-                </label>
-                <input
-                  id={`${fieldPrefix}-${i}-app`}
-                  className="input mono"
-                  value={rule.app}
-                  onChange={(e) => update(i, { app: e.target.value })}
-                  placeholder="gradethis"
-                />
+                <Field label="App" error={errorFor(i, rule, "app")}>
+                  <Input
+                    className="font-mono"
+                    value={rule.app}
+                    onChange={(e) => update(i, { app: e.target.value })}
+                    onBlur={() => onTouch(fieldKey(i, "app"))}
+                    placeholder="gradethis"
+                  />
+                </Field>
               </div>
-              <button
+              <div style={{ width: 110 }}>
+                <Field label="Env" error={errorFor(i, rule, "env")}>
+                  <Input
+                    className="font-mono"
+                    value={rule.env}
+                    onChange={(e) => update(i, { env: e.target.value })}
+                    onBlur={() => onTouch(fieldKey(i, "env"))}
+                    placeholder="prod"
+                  />
+                </Field>
+              </div>
+              <Button
                 type="button"
-                className="btn btn-sm btn-danger rule-remove"
+                variant="destructive"
+                size="sm"
+                className="rule-remove"
+                // The row bottom-aligns its cells, and Field carries a bottom
+                // margin the bare button does not — this keeps it level.
+                style={{ marginBottom: "var(--space-4)" }}
                 onClick={() => remove(i)}
                 aria-label="Remove rule"
               >
                 Remove
-              </button>
+              </Button>
             </div>
           ))}
         </div>

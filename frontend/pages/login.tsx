@@ -1,6 +1,8 @@
+import { Button } from "@/components/ui/button";
+import { LogoMark } from "@/components/LogoMark";
 import { useRouter } from "next/router";
 import { useEffect, useState } from "react";
-import { PageTitle, Spinner } from "@/components/ui";
+import { Input, PageTitle, Spinner } from "@/components/ui";
 import { useAuth } from "@/context/AuthContext";
 import { useToast } from "@/context/ToastContext";
 import { getToken } from "@/lib/api";
@@ -45,7 +47,7 @@ export default function LoginPage() {
       <PageTitle title="Sign in" />
       <div className="auth-card">
         <div className="auth-brand">
-          <div className="logo">K</div>
+          <LogoMark />
           <div>
             <h1 className="auth-title">KMS Console</h1>
             <div className="faint text-sm">Parameter &amp; Secret Store</div>
@@ -62,9 +64,9 @@ export default function LoginPage() {
             <label className="field-label" htmlFor="token">
               Identity token
             </label>
-            <input
+            <Input
               id="token"
-              className="input mono"
+              className="font-mono"
               type="password"
               autoComplete="off"
               spellCheck={false}
@@ -79,10 +81,10 @@ export default function LoginPage() {
             </div>
           </div>
 
-          <button type="submit" className="btn btn-primary btn-block" disabled={busy}>
+          <Button type="submit" className="w-full" disabled={busy}>
             {busy ? <Spinner /> : null}
             {busy ? "Signing in…" : "Sign in"}
-          </button>
+          </Button>
         </form>
       </div>
     </main>

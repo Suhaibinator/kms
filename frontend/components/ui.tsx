@@ -1,10 +1,27 @@
 import Head from "next/head";
 import { ArrowLeft, ArrowRight, ChevronsLeft } from "lucide-react";
 import { cloneElement, isValidElement, type ReactElement, type ReactNode, useId } from "react";
+import { Badge as ShadcnBadge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import {
+  Field as ShadcnField,
+  FieldDescription,
+  FieldError,
+  FieldLabel,
+  FieldLegend,
+  FieldSet,
+} from "@/components/ui/field";
+import { Skeleton as ShadcnSkeleton } from "@/components/ui/skeleton";
+import { Spinner as ShadcnSpinner } from "@/components/ui/spinner";
 import type { SecretVersionState } from "@/lib/types";
 
+export { Checkbox } from "@/components/ui/checkbox";
+export { Button } from "@/components/ui/button";
+export { Input } from "@/components/ui/input";
+export { Textarea } from "@/components/ui/textarea";
+
 export function Spinner() {
-  return <span className="spinner" aria-hidden />;
+  return <ShadcnSpinner className="size-4" aria-hidden />;
 }
 
 export function Loading({ label = "Loading…" }: { label?: string }) {
@@ -85,7 +102,7 @@ export function Skeleton({
   width?: number | string;
   height?: number | string;
 }) {
-  return <span className="skeleton" style={{ width, height }} aria-hidden />;
+  return <ShadcnSkeleton className="inline-block" style={{ width, height }} aria-hidden />;
 }
 
 // Deterministic widths — Math.random() here would differ between the
@@ -139,65 +156,97 @@ export function Field({
   label,
   hint,
   htmlFor,
+  error,
   children,
 }: {
   label: string;
   hint?: ReactNode;
   htmlFor?: string;
+  /**
+   * Validation message for the control. When set, the field renders the message
+   * in an assertive live region and marks the control `aria-invalid`, so screen
+   * readers announce the problem as it appears. Pass null/undefined when valid.
+   */
+  error?: string | null;
   children: ReactNode;
 }) {
   const generatedId = useId();
   const controlId = htmlFor ?? `${generatedId}-control`;
   const labelId = `${generatedId}-label`;
   const hintId = hint ? `${generatedId}-hint` : undefined;
-  const isDirectControl =
+  const errorId = error ? `${generatedId}-error` : undefined;
+  // The error is named first so assistive tech reads the problem before the hint.
+  const describedBy = [errorId, hintId].filter(Boolean).join(" ") || undefined;
+  // shadcn controls are React components rather than literal `input` elements.
+  // A single non-layout child is labelable; groups still use a fieldset/legend.
+  const isLabelableControl =
     isValidElement(children) &&
-    typeof children.type === "string" &&
-    ["input", "select", "textarea"].includes(children.type);
-  const control = isDirectControl
+    (typeof children.type !== "string" ||
+      ["button", "input", "select", "textarea"].includes(children.type));
+  const control = isLabelableControl
     ? cloneElement(children as ReactElement<Record<string, unknown>>, {
         id: (children.props as { id?: string }).id ?? controlId,
         "aria-describedby":
-          [(children.props as { "aria-describedby"?: string })["aria-describedby"], hintId]
+          [(children.props as { "aria-describedby"?: string })["aria-describedby"], describedBy]
             .filter(Boolean)
             .join(" ") || undefined,
+        "aria-invalid": error
+          ? true
+          : ((children.props as { "aria-invalid"?: boolean })["aria-invalid"] ?? undefined),
       })
     : children;
-  const resolvedFor = isDirectControl
+  const resolvedFor = isLabelableControl
     ? ((children as ReactElement<{ id?: string }>).props.id ?? controlId)
     : htmlFor;
 
-  return !isDirectControl && !htmlFor ? (
-    <fieldset className="field" aria-describedby={hintId}>
-      <legend className="field-label" id={labelId}>
+  const messages = (
+    <>
+      {error ? <FieldError id={errorId}>{error}</FieldError> : null}
+      {hint ? <FieldDescription id={hintId}>{hint}</FieldDescription> : null}
+    </>
+  );
+
+  return !isLabelableControl && !htmlFor ? (
+    <FieldSet
+      className={error ? "field field-invalid gap-2" : "field gap-2"}
+      aria-describedby={describedBy}
+      data-invalid={error ? true : undefined}
+    >
+      <FieldLegend variant="label" id={labelId}>
         {label}
-      </legend>
+      </FieldLegend>
       {children}
-      {hint ? (
-        <div className="field-hint" id={hintId}>
-          {hint}
-        </div>
-      ) : null}
-    </fieldset>
+      {messages}
+    </FieldSet>
   ) : (
-    <div className="field">
-      <label className="field-label" htmlFor={resolvedFor} id={labelId}>
+    <ShadcnField
+      className={error ? "field field-invalid gap-1" : "field gap-1"}
+      data-invalid={error ? true : undefined}
+    >
+      <FieldLabel htmlFor={resolvedFor} id={labelId}>
         {label}
-      </label>
+      </FieldLabel>
       {control}
-      {hint ? (
-        <div className="field-hint" id={hintId}>
-          {hint}
-        </div>
-      ) : null}
-    </div>
+      {messages}
+    </ShadcnField>
   );
 }
 
 type BadgeKind = "neutral" | "accent" | "success" | "warning" | "danger";
 
 export function Badge({ kind = "neutral", children }: { kind?: BadgeKind; children: ReactNode }) {
-  return <span className={`badge badge-${kind}`}>{children}</span>;
+  const variant = kind === "accent" ? "default" : kind === "danger" ? "destructive" : "outline";
+  const tone =
+    kind === "success"
+      ? "border-success/40 bg-success/15 text-success"
+      : kind === "warning"
+        ? "border-warning/40 bg-warning/15 text-warning"
+        : undefined;
+  return (
+    <ShadcnBadge variant={variant} className={tone}>
+      {children}
+    </ShadcnBadge>
+  );
 }
 
 export function SecretStateBadge({ state }: { state: SecretVersionState }) {
@@ -244,24 +293,24 @@ export function Pagination({
   return (
     <div className="pagination">
       {showReset && onReset ? (
-        <button type="button" className="btn btn-sm" onClick={onReset}>
+        <Button type="button" variant="outline" size="sm" onClick={onReset}>
           <ChevronsLeft size={15} aria-hidden />
           First page
-        </button>
+        </Button>
       ) : null}
       {hasPrevious && onPrevious ? (
-        <button type="button" className="btn btn-sm" onClick={onPrevious}>
+        <Button type="button" variant="outline" size="sm" onClick={onPrevious}>
           <ArrowLeft size={15} aria-hidden />
           Previous page
-        </button>
+        </Button>
       ) : null}
       {typeof page === "number" ? <span className="text-sm faint">Page {page}</span> : null}
       <div className="spacer" />
       {hasNext ? (
-        <button type="button" className="btn btn-sm" onClick={onNext}>
+        <Button type="button" variant="outline" size="sm" onClick={onNext}>
           Next page
           <ArrowRight size={15} aria-hidden />
-        </button>
+        </Button>
       ) : (
         <span className="text-sm faint">End of results</span>
       )}

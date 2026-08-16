@@ -4,6 +4,7 @@ import { api } from "@/lib/api";
 import type { Namespace } from "@/lib/types";
 import { createStoredZip } from "@/lib/zip";
 import IdentitiesPage from "@/pages/identities";
+import { chooseSelectOption } from "./select-test-utils";
 
 const mocks = vi.hoisted(() => ({
   namespaces: [] as Namespace[],
@@ -46,13 +47,12 @@ async function openWizard() {
   return screen.getByRole("dialog", { name: "Connect application — choose application" });
 }
 
-function selectApplication(dialog: HTMLElement) {
-  fireEvent.change(within(dialog).getByRole("combobox", { name: "Environment" }), {
-    target: { value: "prod" },
-  });
-  fireEvent.change(within(dialog).getByRole("combobox", { name: "Application" }), {
-    target: { value: "billing" },
-  });
+async function selectApplication(dialog: HTMLElement) {
+  await chooseSelectOption(
+    within(dialog).getByRole("combobox", { name: "Application" }),
+    "billing",
+  );
+  await chooseSelectOption(within(dialog).getByRole("combobox", { name: "Environment" }), "prod");
 }
 
 function centralDirectoryModes(buffer: ArrayBuffer): Map<string, { host: number; mode: number }> {
@@ -99,6 +99,48 @@ describe("identity onboarding", () => {
     );
   });
 
+  it("reports a malformed name and a missing namespace inline before advancing", async () => {
+    mocks.namespaces = [namespace(["mtls"])];
+    const createIdentity = vi.spyOn(api, "createIdentity");
+    const dialog = await openWizard();
+    const nameInput = within(dialog).getByRole("textbox", {
+      name: "Application identity name",
+    });
+
+    // A pristine form is never pre-shouted at.
+    expect(within(dialog).queryByRole("alert")).not.toBeInTheDocument();
+
+    fireEvent.change(nameInput, { target: { value: "bad name!" } });
+    fireEvent.blur(nameInput);
+    expect(within(dialog).getByText(/Name must start with a letter or digit/)).toBeVisible();
+    expect(nameInput).toHaveAttribute("aria-invalid", "true");
+
+    const advance = within(dialog).getByRole("button", { name: "Continue to authentication" });
+    fireEvent.click(advance);
+    expect(
+      screen.queryByRole("dialog", { name: "Connect application — authentication" }),
+    ).not.toBeInTheDocument();
+
+    // With the name fixed, the unselected namespace is the remaining blocker.
+    fireEvent.change(nameInput, { target: { value: "billing-api" } });
+    expect(
+      within(dialog).queryByText(/Name must start with a letter or digit/),
+    ).not.toBeInTheDocument();
+    fireEvent.click(advance);
+    expect(within(dialog).getByText("Environment is required.")).toBeVisible();
+    expect(
+      screen.queryByRole("dialog", { name: "Connect application — authentication" }),
+    ).not.toBeInTheDocument();
+
+    await selectApplication(dialog);
+    expect(within(dialog).queryByText("Environment is required.")).not.toBeInTheDocument();
+    fireEvent.click(advance);
+    expect(
+      screen.getByRole("dialog", { name: "Connect application — authentication" }),
+    ).toBeVisible();
+    expect(createIdentity).not.toHaveBeenCalled();
+  });
+
   it("keeps CA export and privileged identity types in clearly labelled advanced areas", async () => {
     vi.spyOn(api, "createIdentity").mockResolvedValue({
       identity: {
@@ -110,18 +152,21 @@ describe("identity onboarding", () => {
       },
       token: "kms_admin_once",
     });
-    const dialog = await openWizard();
-
+    render(<IdentitiesPage />);
+    await screen.findByText("No identities yet");
     expect(screen.queryByRole("button", { name: "Download CA cert" })).not.toBeInTheDocument();
     fireEvent.click(screen.getByText("Advanced identity and CA tools"));
     expect(screen.getByRole("button", { name: "Export client-issuing CA" })).toBeVisible();
     expect(screen.getByText(/applications must not use it to trust the KMS server/i)).toBeVisible();
 
+    fireEvent.click(screen.getAllByRole("button", { name: "Connect application" })[0]);
+    const dialog = screen.getByRole("dialog", {
+      name: "Connect application — choose application",
+    });
+
     fireEvent.click(within(dialog).getByText("Advanced identity type"));
     const identityType = within(dialog).getByRole("combobox", { name: "Identity type" });
-    expect(within(identityType).getByRole("option", { name: "Administrator" })).toBeVisible();
-
-    fireEvent.change(identityType, { target: { value: "admin" } });
+    await chooseSelectOption(identityType, "Administrator");
     fireEvent.change(within(dialog).getByRole("textbox", { name: "Application identity name" }), {
       target: { value: "deploy-admin" },
     });
@@ -131,7 +176,10 @@ describe("identity onboarding", () => {
       name: "Connect application — authentication",
     });
     expect(within(authDialog).getByRole("checkbox", { name: /Bearer token/ })).toBeChecked();
-    expect(within(authDialog).getByRole("checkbox", { name: /Bearer token/ })).toBeDisabled();
+    expect(within(authDialog).getByRole("checkbox", { name: /Bearer token/ })).toHaveAttribute(
+      "aria-disabled",
+      "true",
+    );
 
     fireEvent.click(
       within(authDialog).getByRole("button", { name: "Create identity credentials" }),
@@ -231,9 +279,10 @@ describe("identity onboarding", () => {
     });
     const dialog = await openWizard();
     fireEvent.click(within(dialog).getByText("Advanced identity type"));
-    fireEvent.change(within(dialog).getByRole("combobox", { name: "Identity type" }), {
-      target: { value: "unbound" },
-    });
+    await chooseSelectOption(
+      within(dialog).getByRole("combobox", { name: "Identity type" }),
+      "Unbound client / tooling",
+    );
     fireEvent.change(within(dialog).getByRole("textbox", { name: "Application identity name" }), {
       target: { value: "release-tool" },
     });
@@ -279,7 +328,7 @@ describe("identity onboarding", () => {
     fireEvent.change(within(dialog).getByRole("textbox", { name: "Application identity name" }), {
       target: { value: "billing-api" },
     });
-    selectApplication(dialog);
+    await selectApplication(dialog);
     fireEvent.click(within(dialog).getByRole("button", { name: "Continue to authentication" }));
 
     const authDialog = screen.getByRole("dialog", {
@@ -318,19 +367,23 @@ describe("identity onboarding", () => {
 
     goTab.focus();
     fireEvent.keyDown(goTab, { key: "ArrowRight" });
-    expect(pythonTab).toHaveFocus();
+    // happy-dom does not perform the browser's focus move after Base UI updates
+    // its roving tabindex, so verify the keyboard destination and activate it.
+    expect(pythonTab).toHaveAttribute("tabindex", "0");
+    fireEvent.click(pythonTab);
     expect(pythonTab).toHaveAttribute("aria-selected", "true");
     expect(within(integrationDialog).getByText(/tls_from_files\("server-ca\.crt"\)/)).toBeVisible();
     expect(within(integrationDialog).getByText(/with Client\(/)).toBeVisible();
     expect(within(integrationDialog).getByText(/Application work goes here/)).toBeVisible();
 
     fireEvent.keyDown(pythonTab, { key: "End" });
-    expect(typescriptTab).toHaveFocus();
+    expect(typescriptTab).toHaveAttribute("tabindex", "0");
+    fireEvent.click(typescriptTab);
     expect(within(integrationDialog).getByText(/tlsFromFiles\("server-ca\.crt"\)/)).toBeVisible();
     expect(within(integrationDialog).getByText(/try \{/)).toBeVisible();
     expect(within(integrationDialog).getByText(/finally \{/)).toBeVisible();
     fireEvent.keyDown(typescriptTab, { key: "Home" });
-    expect(goTab).toHaveFocus();
+    expect(goTab).toHaveAttribute("tabindex", "0");
 
     expect(createIdentity).toHaveBeenCalledWith({
       name: "billing-api",
@@ -369,7 +422,7 @@ describe("identity onboarding", () => {
     fireEvent.change(within(dialog).getByRole("textbox", { name: "Application identity name" }), {
       target: { value: "billing-api" },
     });
-    selectApplication(dialog);
+    await selectApplication(dialog);
     fireEvent.click(within(dialog).getByRole("button", { name: "Continue to authentication" }));
     fireEvent.click(
       screen.getByRole("button", {

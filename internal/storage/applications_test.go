@@ -39,7 +39,7 @@ func TestApplicationLifecycleAndEnvironmentOwnership(t *testing.T) {
 		t.Fatalf("namespaces = %+v, err=%v", namespaces, err)
 	}
 	apps, next, err := store.ListApplications(ctx, ListPage{})
-	if err != nil || next != "" || len(apps) != 1 || apps[0].EnvironmentCount != 2 {
+	if err != nil || next != "" || len(apps) != 1 || apps[0].Name != "payments-api" || apps[0].Description != "Payments" || apps[0].ReleaseName != "runtime" || len(apps[0].Contract) != 1 || apps[0].CreatedBy != "admin" || apps[0].EnvironmentCount != 2 {
 		t.Fatalf("applications = %+v next=%q err=%v", apps, next, err)
 	}
 	if err := store.DeleteApplication(ctx, created.Name); !errors.Is(err, domain.ErrFailedPrecondition) {

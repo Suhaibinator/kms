@@ -1,3 +1,4 @@
+import { Button, ButtonLink } from "@/components/ui/button";
 import { ArrowLeft } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/router";
@@ -9,6 +10,7 @@ import {
   Badge,
   EmptyState,
   Field,
+  Input,
   JsonView,
   KeyValue,
   PageHeader,
@@ -16,7 +18,9 @@ import {
   Skeleton,
   Spinner,
   TableSkeleton,
+  Textarea,
 } from "@/components/ui";
+import { AppSelect } from "@/components/ui/app-select";
 import { useToast } from "@/context/ToastContext";
 import { ApiError, api, isAbortError, type ResourceRef } from "@/lib/api";
 import {
@@ -29,6 +33,15 @@ import {
 } from "@/lib/format";
 import { useQueryParams } from "@/lib/hooks";
 import { PARAMETER_CONTENT_TYPES, type Parameter, type ParameterMetadata } from "@/lib/types";
+import {
+  firstError,
+  validateMetadataJson,
+  validateParameterValue,
+  validateValueSize,
+} from "@/lib/validation";
+
+/** The fields of the new-version form that carry their own validation. */
+type VersionField = "value" | "metadata";
 
 export default function ParameterDetailPage() {
   const router = useRouter();
@@ -58,9 +71,34 @@ export default function ParameterDetailPage() {
   const [contentType, setContentType] = useState("string");
   const [metadataJson, setMetadataJson] = useState("{}");
   const [saving, setSaving] = useState(false);
+  const [touched, setTouched] = useState<Partial<Record<VersionField, boolean>>>({});
+  const [submitAttempted, setSubmitAttempted] = useState(false);
 
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [deleting, setDeleting] = useState(false);
+
+  // Client-side mirrors of the server's validators (see lib/validation.ts).
+  // The value is checked against the content type the form will actually send,
+  // which starts as the parameter's own; the server still has the last word.
+  // Memoised because a value may run to a megabyte.
+  const valueError = useMemo(
+    () => firstError(validateValueSize(value), validateParameterValue(value, contentType)),
+    [value, contentType],
+  );
+  const metadataError = validateMetadataJson(metadataJson);
+  const versionError = firstError(valueError, metadataError);
+
+  // A message stays hidden until the user has left the field or tried to save,
+  // so reopening the form on an existing value is never already an error.
+  const shownIn = (field: VersionField, error: string | null) =>
+    touched[field] || submitAttempted ? error : null;
+  const shownValueError = shownIn("value", valueError);
+  const shownMetadataError = shownIn("metadata", metadataError);
+  const shownVersionError = firstError(shownValueError, shownMetadataError);
+
+  function markTouched(field: VersionField) {
+    setTouched((t) => ({ ...t, [field]: true }));
+  }
 
   const load = useCallback(async () => {
     if (!hasRef) return;
@@ -106,12 +144,17 @@ export default function ParameterDetailPage() {
     setValue(current?.value ?? "");
     setContentType(current?.content_type ?? meta?.content_type ?? "string");
     setMetadataJson(!isEmptyJson(meta?.metadata_json) ? prettyJson(meta?.metadata_json) : "{}");
+    setTouched({});
+    setSubmitAttempted(false);
     setNewVersionOpen(true);
   }
 
   async function saveVersion(e: React.FormEvent) {
     e.preventDefault();
     if (!hasRef) return;
+    setSubmitAttempted(true);
+    // Every remaining problem now has an inline message next to its field.
+    if (versionError) return;
     setSaving(true);
     try {
       const res = await api.putParameter({
@@ -204,9 +247,9 @@ export default function ParameterDetailPage() {
           icon={<Icon.parameter size={20} />}
           title="No parameter specified"
           actions={
-            <Link className="btn" href="/parameters">
+            <ButtonLink variant="outline" href="/parameters">
               Browse parameters
-            </Link>
+            </ButtonLink>
           }
         >
           Provide ?env=, ?app=, and ?key= query parameters.
@@ -220,9 +263,9 @@ export default function ParameterDetailPage() {
         <PageHeader
           title="Parameter not found"
           actions={
-            <Link className="btn" href={backLink}>
+            <ButtonLink variant="outline" href={backLink}>
               <ArrowLeft size={16} aria-hidden /> Back to parameters
-            </Link>
+            </ButtonLink>
           }
         />
         <EmptyState icon={<Icon.parameter size={20} />} title="Not found">
@@ -236,11 +279,7 @@ export default function ParameterDetailPage() {
       <>
         <PageHeader
           title="Could not load parameter"
-          actions={
-            <button className="btn btn-primary" onClick={() => void load()}>
-              Try again
-            </button>
-          }
+          actions={<Button onClick={() => void load()}>Try again</Button>}
         />
         <EmptyState icon={<Icon.parameter size={20} />} title="Parameter unavailable">
           The server could not load <span className="mono">{displayPath(ref)}</span>. Check the
@@ -262,12 +301,10 @@ export default function ParameterDetailPage() {
         }
         actions={
           <>
-            <button className="btn btn-primary" onClick={openNewVersion}>
-              New version
-            </button>
-            <button className="btn btn-danger" onClick={() => setDeleteOpen(true)}>
+            <Button onClick={openNewVersion}>New version</Button>
+            <Button variant="destructive" onClick={() => setDeleteOpen(true)}>
               Delete
-            </button>
+            </Button>
           </>
         }
       />
@@ -364,9 +401,13 @@ export default function ParameterDetailPage() {
                       <td className="nowrap">{formatUnixMs(v.created_at_unix_ms)}</td>
                       <td>
                         <div className="row-actions">
-                          <button className="btn btn-sm" onClick={() => viewVersion(v.version)}>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => viewVersion(v.version)}
+                          >
                             View value
-                          </button>
+                          </Button>
                         </div>
                       </td>
                     </tr>
@@ -385,9 +426,9 @@ export default function ParameterDetailPage() {
               </div>
               <div className="row-wrap">
                 <CopyButton label="Copy" value={viewed.value} />
-                <button className="btn btn-sm" onClick={() => setViewed(null)}>
+                <Button variant="outline" size="sm" onClick={() => setViewed(null)}>
                   Close
-                </button>
+                </Button>
               </div>
             </div>
             <pre className="json-block">{viewed.value}</pre>
@@ -401,43 +442,46 @@ export default function ParameterDetailPage() {
         onClose={() => setNewVersionOpen(false)}
         footer={
           <>
-            <button className="btn" onClick={() => setNewVersionOpen(false)} disabled={saving}>
+            <Button variant="outline" onClick={() => setNewVersionOpen(false)} disabled={saving}>
               Cancel
-            </button>
-            <button className="btn btn-primary" onClick={saveVersion} disabled={saving}>
+            </Button>
+            <Button onClick={saveVersion} disabled={saving || shownVersionError !== null}>
               {saving ? <Spinner /> : null}
               Save new version
-            </button>
+            </Button>
           </>
         }
       >
         <form onSubmit={saveVersion}>
-          <Field label="Value" hint="Saving creates a new version and updates the current label.">
-            <textarea
-              className="textarea mono"
+          <Field
+            label="Value"
+            hint="Saving creates a new version and updates the current label."
+            error={shownValueError}
+          >
+            <Textarea
+              className="font-mono"
               value={value}
               onChange={(e) => setValue(e.target.value)}
+              onBlur={() => markTouched("value")}
             />
           </Field>
           <div className="form-row">
             <Field label="Content type">
-              <select
-                className="select"
+              <AppSelect
                 value={contentType}
-                onChange={(e) => setContentType(e.target.value)}
-              >
-                {PARAMETER_CONTENT_TYPES.map((ct) => (
-                  <option key={ct} value={ct}>
-                    {ct}
-                  </option>
-                ))}
-              </select>
+                onValueChange={setContentType}
+                options={PARAMETER_CONTENT_TYPES.map((contentTypeOption) => ({
+                  value: contentTypeOption,
+                  label: contentTypeOption,
+                }))}
+              />
             </Field>
-            <Field label="Metadata JSON">
-              <input
-                className="input mono"
+            <Field label="Metadata JSON" error={shownMetadataError}>
+              <Input
+                className="font-mono"
                 value={metadataJson}
                 onChange={(e) => setMetadataJson(e.target.value)}
+                onBlur={() => markTouched("metadata")}
               />
             </Field>
           </div>

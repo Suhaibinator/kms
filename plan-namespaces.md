@@ -428,12 +428,12 @@ Frontend (`frontend/`):
 
 - `lib/types.ts` / `lib/api.ts`: regenerate shapes; add
   `NamespaceRef`-aware helpers; display-path formatting in one util.
-- **Namespaces page** becomes the management hub: table grouped by env,
+- **Namespaces page** becomes the management hub: table grouped by app,
   create (env, app, description, allowed auth methods — default mTLS-only),
   edit auth methods, delete (disabled unless empty, with explanation),
   per-row parameter/secret counts linking into the pages below.
 - **Parameters / Secrets pages:** replace free-text prefix filter with an
-  env → app cascading picker (from `ListNamespaces`) + a key-prefix
+  app → environment cascading picker (from `ListNamespaces`) + a key-prefix
   browsing box; rows show relative keys; create/edit forms take namespace +
   key.
 - **Identities page:** optional namespace binding + auth methods on

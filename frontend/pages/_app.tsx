@@ -71,7 +71,7 @@ export default function App({ Component, pageProps }: AppProps) {
   return (
     // `display: contents` puts --font-inter in scope for the whole tree
     // without introducing a box that could affect layout.
-    <div className={`${inter.variable} ${inter.className}`} style={{ display: "contents" }}>
+    <div className={`dark ${inter.variable} ${inter.className}`} style={{ display: "contents" }}>
       <Head>
         {/* No <title> here on purpose: next/head keeps the *first* title it
             collects, and _app renders above the page, so a fallback here would

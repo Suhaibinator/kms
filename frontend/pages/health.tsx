@@ -1,3 +1,4 @@
+import { Button } from "@/components/ui/button";
 import { RefreshCw } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { Icon } from "@/components/icons";
@@ -47,11 +48,11 @@ export default function HealthPage() {
         title="Health & keys"
         subtitle="Service status and key metadata (never key material)."
         actions={
-          <button className="btn" onClick={() => void load()} disabled={loading}>
+          <Button variant="outline" onClick={() => void load()} disabled={loading}>
             {loading ? <Spinner /> : null}
             {!loading ? <RefreshCw size={16} aria-hidden /> : null}
             {loading ? "Refreshing…" : "Refresh"}
-          </button>
+          </Button>
         }
       />
 

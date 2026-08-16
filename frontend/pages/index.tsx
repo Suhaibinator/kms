@@ -1,3 +1,4 @@
+import { Button } from "@/components/ui/button";
 import { ArrowRight, RefreshCw } from "lucide-react";
 import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
@@ -109,11 +110,11 @@ export default function DashboardPage() {
         title="Overview"
         subtitle="Service status and configuration at a glance."
         actions={
-          <button className="btn" onClick={() => void load()} disabled={loading}>
+          <Button variant="outline" onClick={() => void load()} disabled={loading}>
             {loading ? <Spinner /> : null}
             {!loading ? <RefreshCw size={16} aria-hidden /> : null}
             {loading ? "Refreshing…" : "Refresh"}
-          </button>
+          </Button>
         }
       />
 

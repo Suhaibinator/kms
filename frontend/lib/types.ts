@@ -5,6 +5,12 @@
 // plus a relative key. The old flat `path` string is gone from the wire;
 // `/env/app/key` survives only as a display format (see lib/format.ts).
 
+import {
+  PARAMETER_CONTENT_TYPES as CONTENT_TYPES,
+  KNOWN_OPERATIONS,
+  OPERATION_WILDCARD_CATEGORIES,
+} from "@/lib/validation";
+
 export type IdentityKind = "admin" | "client";
 
 // Authentication methods a namespace admits and an identity may present.
@@ -517,46 +523,24 @@ export interface KeysResponse {
   keys: KeyMetadata[];
 }
 
-// The operation identifiers recognized by the policy engine (plan §6, §16.1).
+// The operation identifiers recognized by the policy engine (plan §6, §16.1),
+// and the content types the server accepts for a parameter value.
+//
+// Both sets are defined once, in lib/validation.ts, alongside the validators
+// that enforce them — a picker offering an option the validator rejects (or
+// omitting one it accepts) is the drift this indirection exists to prevent.
+// They are re-exported here because that is where the UI has always imported
+// them from.
+//
+// The operation list is ordered for display: the global wildcard, then each
+// category's wildcard followed by its own operations. Membership in it is
+// exactly `policy.validOperationPattern`.
 export const POLICY_OPERATIONS: string[] = [
   "*",
-  "parameter:*",
-  "parameter:read",
-  "parameter:write",
-  "parameter:list",
-  "parameter:delete",
-  "secret:*",
-  "secret:read",
-  "secret:write",
-  "secret:list",
-  "secret:disable",
-  "secret:destroy",
-  "secret:promote",
-  "configuration-release:*",
-  "configuration-release:create",
-  "configuration-release:read",
-  "configuration-release:validate",
-  "configuration-release:activate",
-  "configuration-release:list",
-  "configuration-release:watch",
-  "admin:*",
-  "admin:namespace:create",
-  "admin:namespace:update",
-  "admin:namespace:delete",
-  "admin:identity:cert",
-  "admin:policy:write",
-  "admin:audit:read",
-  "admin:key:rotate",
+  ...OPERATION_WILDCARD_CATEGORIES.flatMap((category) => [
+    `${category}:*`,
+    ...KNOWN_OPERATIONS.filter((op) => op.startsWith(`${category}:`)),
+  ]),
 ];
 
-// The content types the server accepts for a parameter value. Anything outside
-// this allowlist is rejected with invalid_argument, so the UI must offer only
-// these. "string" is the default.
-export const PARAMETER_CONTENT_TYPES: string[] = [
-  "string",
-  "integer",
-  "float",
-  "boolean",
-  "json",
-  "binary",
-];
+export const PARAMETER_CONTENT_TYPES: string[] = [...CONTENT_TYPES];

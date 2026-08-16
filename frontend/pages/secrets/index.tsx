@@ -1,14 +1,24 @@
+import { Button, ButtonLink } from "@/components/ui/button";
+import { Filter, X } from "lucide-react";
 import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Filter, X } from "lucide-react";
 import { Icon } from "@/components/icons";
 import NamespacePicker, { type NamespaceSelection } from "@/components/NamespacePicker";
-import { Badge, EmptyState, PageHeader, Pagination, TableSkeleton } from "@/components/ui";
+import {
+  Badge,
+  EmptyState,
+  Field,
+  Input,
+  PageHeader,
+  Pagination,
+  TableSkeleton,
+} from "@/components/ui";
 import { useToast } from "@/context/ToastContext";
 import { api, isAbortError } from "@/lib/api";
 import { formatUnixMs } from "@/lib/format";
 import { useNamespaces, useQueryParams } from "@/lib/hooks";
 import type { SecretMetadata } from "@/lib/types";
+import { validateKeyPrefix } from "@/lib/validation";
 
 function secretLink(ref: { env: string; app: string; key: string }): string {
   return `/secrets/detail?env=${encodeURIComponent(ref.env)}&app=${encodeURIComponent(
@@ -31,6 +41,7 @@ export default function SecretsPage() {
   const [ns, setNs] = useState<NamespaceSelection>(NO_NS);
   const [prefixInput, setPrefixInput] = useState("");
   const [prefix, setPrefix] = useState("");
+  const [prefixTouched, setPrefixTouched] = useState(false);
 
   const [secrets, setSecrets] = useState<SecretMetadata[]>([]);
   const [loading, setLoading] = useState(false);
@@ -54,10 +65,14 @@ export default function SecretsPage() {
   }, [queryReady, queryValues]);
 
   useEffect(() => {
-    if (nsError) toast.error(nsError, "Failed to load namespaces");
+    if (nsError) toast.error(nsError, "Failed to load environments");
   }, [nsError, toast]);
 
   const hasNs = !!ns.env && !!ns.app;
+
+  // An empty prefix lists the whole namespace; anything else must be a legal key.
+  const prefixError = validateKeyPrefix(prefixInput.trim());
+  const shownPrefixError = prefixTouched ? prefixError : null;
 
   const load = useCallback(
     async (token: string, selection: NamespaceSelection, activePrefix: string) => {
@@ -109,12 +124,15 @@ export default function SecretsPage() {
   }
   function applyFilter(e: React.FormEvent) {
     e.preventDefault();
+    setPrefixTouched(true);
+    if (prefixError) return;
     setPageStack([]);
     setPageToken("");
     setPrefix(prefixInput.trim());
   }
   function clearFilter() {
     setPrefixInput("");
+    setPrefixTouched(false);
     setPageStack([]);
     setPageToken("");
     setPrefix("");
@@ -143,42 +161,38 @@ export default function SecretsPage() {
     <>
       <PageHeader
         title="Secrets"
-        subtitle="Encrypted values, scoped to a namespace. Metadata only is shown here — reveal happens on the detail page."
-        actions={
-          <Link className="btn btn-primary" href={newSecretLink}>
-            New secret
-          </Link>
-        }
+        subtitle="Encrypted values, isolated by application and environment. Values are revealed only on the detail page."
+        actions={<ButtonLink href={newSecretLink}>New secret</ButtonLink>}
       />
 
       <form className="filters" onSubmit={applyFilter}>
         <NamespacePicker namespaces={namespaces} value={ns} onChange={onSelectNamespace} />
-        <div className="field filter-grow">
-          <label className="field-label" htmlFor="key-prefix">
-            Key prefix
-          </label>
-          <input
-            id="key-prefix"
-            className="input mono"
-            placeholder="billing/"
-            value={prefixInput}
-            disabled={!hasNs}
-            onChange={(e) => setPrefixInput(e.target.value)}
-          />
+        <div className="filter-grow">
+          <Field label="Key prefix" error={shownPrefixError}>
+            <Input
+              id="key-prefix"
+              className="font-mono"
+              placeholder="billing"
+              value={prefixInput}
+              disabled={!hasNs}
+              onChange={(e) => setPrefixInput(e.target.value)}
+              onBlur={() => setPrefixTouched(true)}
+            />
+          </Field>
         </div>
-        <button type="submit" className="btn" disabled={!hasNs}>
+        <Button type="submit" variant="outline" disabled={!hasNs || !!shownPrefixError}>
           <Filter size={15} aria-hidden />
           Filter
-        </button>
-        <button type="button" className="btn btn-ghost" onClick={clearFilter} disabled={!hasNs}>
+        </Button>
+        <Button type="button" variant="ghost" onClick={clearFilter} disabled={!hasNs}>
           <X size={15} aria-hidden />
           Clear
-        </button>
+        </Button>
       </form>
 
       {!hasNs ? (
-        <EmptyState icon={<Icon.namespace size={20} />} title="Choose a namespace">
-          Pick an environment and application above to list its secrets.
+        <EmptyState icon={<Icon.namespace size={20} />} title="Choose an environment">
+          Pick an application and environment above to list its secrets.
         </EmptyState>
       ) : loading ? (
         <TableSkeleton headers={["Key", "Type", "Current", "Versions", "Mode", "Updated"]} />
@@ -188,14 +202,12 @@ export default function SecretsPage() {
           title="No secrets found"
           actions={
             prefix ? (
-              <button className="btn" onClick={clearFilter}>
+              <Button variant="outline" onClick={clearFilter}>
                 <X size={15} aria-hidden />
                 Clear filter
-              </button>
+              </Button>
             ) : (
-              <Link className="btn btn-primary" href={newSecretLink}>
-                New secret
-              </Link>
+              <ButtonLink href={newSecretLink}>New secret</ButtonLink>
             )
           }
         >

@@ -1,3 +1,4 @@
+import { Button, ButtonLink } from "@/components/ui/button";
 import { Check, Download } from "lucide-react";
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -7,13 +8,17 @@ import { ConfirmDialog, Modal } from "@/components/Modal";
 import NamespacePicker, { type NamespaceSelection } from "@/components/NamespacePicker";
 import {
   Badge,
+  Checkbox,
   EmptyState,
   Field,
+  Input,
   PageHeader,
   Pagination,
   Spinner,
   TableSkeleton,
 } from "@/components/ui";
+import { AppSelect } from "@/components/ui/app-select";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useToast } from "@/context/ToastContext";
 import { api, isAbortError } from "@/lib/api";
 import { displayNamespace, formatUnixMs } from "@/lib/format";
@@ -26,6 +31,7 @@ import type {
   IdentityKind,
   Namespace,
 } from "@/lib/types";
+import { firstError, validateApp, validateEnv, validateIdentityName } from "@/lib/validation";
 import { createStoredZip } from "@/lib/zip";
 
 const DEFAULT_CERT_DAYS = 90;
@@ -220,6 +226,10 @@ export default function IdentitiesPage() {
   const [methods, setMethods] = useState<AuthMethod[]>(["mtls"]);
   const [certDays, setCertDays] = useState(String(DEFAULT_CERT_DAYS));
   const [saving, setSaving] = useState(false);
+  // Reveal validation only after the user has left the name field or tried to
+  // leave step one; a form opened fresh should not greet them with errors.
+  const [nameTouched, setNameTouched] = useState(false);
+  const [step1Attempted, setStep1Attempted] = useState(false);
 
   // One-time credential display (from create or issue-cert).
   const [credentials, setCredentials] = useState<Credentials | null>(null);
@@ -295,6 +305,17 @@ export default function IdentitiesPage() {
   const authConflict =
     identityMode === "application" && selectedNamespace !== null && incompatibleMethods.length > 0;
 
+  // The name is submitted trimmed, so validate what will actually be sent.
+  // The binding only applies to a namespace-bound identity — admin and unbound
+  // identities carry none, and an empty binding is legal for them.
+  const nameProblem = validateIdentityName(name.trim());
+  const bindProblem =
+    identityMode === "application"
+      ? firstError(validateEnv(bindNs.env), validateApp(bindNs.app))
+      : null;
+  const nameError = nameTouched || step1Attempted ? nameProblem : null;
+  const bindError = step1Attempted ? bindProblem : null;
+
   function goNext() {
     if (!nextToken) return;
     setPageStack((s) => [...s, pageToken]);
@@ -317,6 +338,8 @@ export default function IdentitiesPage() {
     setBindNs(NO_NS);
     setMethods(["mtls"]);
     setCertDays(String(DEFAULT_CERT_DAYS));
+    setNameTouched(false);
+    setStep1Attempted(false);
     setCreateStep(1);
     setCreateOpen(true);
   }
@@ -335,11 +358,14 @@ export default function IdentitiesPage() {
   }
 
   function continueToAuthentication() {
+    setStep1Attempted(true);
     const n = name.trim();
     if (!n) {
       toast.error(new Error("A name is required."), "Missing name");
       return;
     }
+    // A malformed name is reported inline on the field itself.
+    if (nameProblem) return;
     if (identityMode === "application" && namespacesLoading) {
       toast.error(
         new Error("Wait for the namespace list to finish loading."),
@@ -361,6 +387,7 @@ export default function IdentitiesPage() {
       );
       return;
     }
+    if (bindProblem) return;
     if (identityMode === "application" && !selectedNamespace) {
       toast.error(new Error("Choose an existing namespace."), "Unknown namespace");
       return;
@@ -370,8 +397,9 @@ export default function IdentitiesPage() {
 
   async function onCreate() {
     const n = name.trim();
-    if (!n) {
-      toast.error(new Error("A name is required."), "Missing name");
+    if (nameProblem) {
+      toast.error(new Error(nameProblem), "Invalid name");
+      setStep1Attempted(true);
       setCreateStep(1);
       return;
     }
@@ -553,11 +581,7 @@ export default function IdentitiesPage() {
       <PageHeader
         title="Identities"
         subtitle="Connect applications and manage the credentials they use to authenticate to KMS."
-        actions={
-          <button className="btn btn-primary" onClick={openCreate}>
-            Connect application
-          </button>
-        }
+        actions={<Button onClick={openCreate}>Connect application</Button>}
       />
 
       <CertificateRoles />
@@ -587,11 +611,11 @@ export default function IdentitiesPage() {
                 server.
               </div>
             </div>
-            <button className="btn" onClick={() => void downloadCa()} disabled={caBusy}>
+            <Button variant="outline" onClick={() => void downloadCa()} disabled={caBusy}>
               {caBusy ? <Spinner /> : null}
               <Download size={16} aria-hidden />
               Export client-issuing CA
-            </button>
+            </Button>
           </div>
         </div>
       </details>
@@ -604,11 +628,7 @@ export default function IdentitiesPage() {
         <EmptyState
           icon={<Icon.identity size={20} />}
           title="No identities yet"
-          actions={
-            <button className="btn btn-primary" onClick={openCreate}>
-              Connect application
-            </button>
-          }
+          actions={<Button onClick={openCreate}>Connect application</Button>}
         >
           Create an application identity and issue its first client certificate.
         </EmptyState>
@@ -676,8 +696,9 @@ export default function IdentitiesPage() {
                     </td>
                     <td>
                       <div className="row-actions">
-                        <button
-                          className="btn btn-sm"
+                        <Button
+                          variant="outline"
+                          size="sm"
                           disabled={id.disabled}
                           onClick={() => {
                             setIssueDays(String(DEFAULT_CERT_DAYS));
@@ -685,7 +706,7 @@ export default function IdentitiesPage() {
                           }}
                         >
                           Certificates
-                        </button>
+                        </Button>
                         {id.has_token ? (
                           <span
                             className={
@@ -695,8 +716,9 @@ export default function IdentitiesPage() {
                               tokenAvailability === "allowed" ? undefined : tokenRotationReason
                             }
                           >
-                            <button
-                              className="btn btn-sm"
+                            <Button
+                              variant="outline"
+                              size="sm"
                               disabled={id.disabled || tokenAvailability !== "allowed"}
                               aria-describedby={
                                 tokenAvailability === "allowed" ? undefined : tokenReasonId
@@ -704,7 +726,7 @@ export default function IdentitiesPage() {
                               onClick={() => setRotateTarget(id.name)}
                             >
                               Rotate token
-                            </button>
+                            </Button>
                             {tokenAvailability !== "allowed" ? (
                               <span id={tokenReasonId} className="action-unavailable-reason">
                                 Rotation unavailable: {tokenRotationReason}
@@ -712,13 +734,14 @@ export default function IdentitiesPage() {
                             ) : null}
                           </span>
                         ) : null}
-                        <button
-                          className="btn btn-sm btn-danger"
+                        <Button
+                          variant="destructive"
+                          size="sm"
                           disabled={id.disabled}
                           onClick={() => setRevokeTarget(id.name)}
                         >
                           Revoke
-                        </button>
+                        </Button>
                       </div>
                     </td>
                   </tr>
@@ -750,35 +773,39 @@ export default function IdentitiesPage() {
         onClose={saving ? () => undefined : () => setCreateOpen(false)}
         footer={
           <>
-            <button className="btn" onClick={() => setCreateOpen(false)} disabled={saving}>
+            <Button variant="outline" onClick={() => setCreateOpen(false)} disabled={saving}>
               Cancel
-            </button>
+            </Button>
             {createStep === 2 ? (
-              <button className="btn" onClick={() => setCreateStep(1)} disabled={saving}>
+              <Button variant="outline" onClick={() => setCreateStep(1)} disabled={saving}>
                 Back
-              </button>
+              </Button>
             ) : null}
             {createStep === 1 ? (
-              <button
-                className="btn btn-primary"
+              <Button
                 onClick={continueToAuthentication}
                 disabled={
                   identityMode === "application" && (namespacesLoading || Boolean(namespacesError))
                 }
               >
                 Continue to authentication
-              </button>
+              </Button>
             ) : (
-              <button
-                className="btn btn-primary"
+              <Button
                 onClick={() => void onCreate()}
-                disabled={saving || methods.length === 0 || authConflict}
+                disabled={
+                  saving ||
+                  methods.length === 0 ||
+                  authConflict ||
+                  nameProblem !== null ||
+                  bindProblem !== null
+                }
               >
                 {saving ? <Spinner /> : null}
                 {identityMode === "application"
                   ? "Create application credentials"
                   : "Create identity credentials"}
-              </button>
+              </Button>
             )}
           </>
         }
@@ -797,11 +824,16 @@ export default function IdentitiesPage() {
                 Choose the namespace this application belongs to. It receives implicit read, list,
                 and subscribe access within that namespace.
               </div>
-              <Field label="Application identity name" hint="Unique name, e.g. gradethis-be">
-                <input
-                  className="input mono"
+              <Field
+                label="Application identity name"
+                hint="Unique name, e.g. gradethis-be"
+                error={nameError}
+              >
+                <Input
+                  className="font-mono"
                   value={name}
                   onChange={(e) => setName(e.target.value)}
+                  onBlur={() => setNameTouched(true)}
                   placeholder="gradethis-be"
                   required
                   autoComplete="off"
@@ -823,14 +855,15 @@ export default function IdentitiesPage() {
                         Retry the namespace list before connecting an application.
                       </div>
                     </div>
-                    <button className="btn btn-sm" type="button" onClick={reloadNamespaces}>
+                    <Button variant="outline" size="sm" type="button" onClick={reloadNamespaces}>
                       Retry namespace list
-                    </button>
+                    </Button>
                   </div>
                 ) : namespaces.length > 0 ? (
                   <Field
                     label="Application namespace"
                     hint="The credential will be bound to this exact environment/application pair."
+                    error={bindError}
                   >
                     <div className="form-row namespace-picker-row">
                       <NamespacePicker
@@ -845,7 +878,7 @@ export default function IdentitiesPage() {
                 ) : (
                   <div className="warn-panel mb-16">
                     No application namespaces are available.{" "}
-                    <Link href="/namespaces">Create a namespace</Link> before connecting an
+                    <Link href="/environments">Create an environment</Link> before connecting an
                     application, or choose an advanced identity type below.
                   </div>
                 )
@@ -868,15 +901,18 @@ export default function IdentitiesPage() {
                     label="Identity type"
                     hint="Most applications should stay namespace-bound."
                   >
-                    <select
-                      className="select"
+                    <AppSelect
                       value={identityMode}
-                      onChange={(e) => changeIdentityMode(e.target.value as IdentityMode)}
-                    >
-                      <option value="application">Namespace-bound application (recommended)</option>
-                      <option value="unbound">Unbound client / tooling</option>
-                      <option value="admin">Administrator</option>
-                    </select>
+                      onValueChange={(next) => changeIdentityMode(next as IdentityMode)}
+                      options={[
+                        {
+                          value: "application",
+                          label: "Namespace-bound application (recommended)",
+                        },
+                        { value: "unbound", label: "Unbound client / tooling" },
+                        { value: "admin", label: "Administrator" },
+                      ]}
+                    />
                   </Field>
                 </div>
               </details>
@@ -921,11 +957,10 @@ export default function IdentitiesPage() {
               >
                 <div className="auth-choice auth-choice-recommended">
                   <div className="checkbox-row">
-                    <input
+                    <Checkbox
                       id="new-mtls"
-                      type="checkbox"
                       checked={methods.includes("mtls")}
-                      onChange={(e) => toggleMethod("mtls", e.target.checked)}
+                      onCheckedChange={(checked) => toggleMethod("mtls", checked)}
                     />
                     <label htmlFor="new-mtls">
                       <span className="auth-choice-title">
@@ -941,12 +976,11 @@ export default function IdentitiesPage() {
                 </div>
                 <div className="auth-choice">
                   <div className="checkbox-row">
-                    <input
+                    <Checkbox
                       id="new-token"
-                      type="checkbox"
                       checked={methods.includes("token")}
                       disabled={identityMode === "admin"}
-                      onChange={(e) => toggleMethod("token", e.target.checked)}
+                      onCheckedChange={(checked) => toggleMethod("token", checked)}
                     />
                     <label htmlFor="new-token">
                       <span className="auth-choice-title">
@@ -975,8 +1009,7 @@ export default function IdentitiesPage() {
                   label="Certificate lifetime (days)"
                   hint="90 days is the recommended starting point. Issue a replacement before expiry."
                 >
-                  <input
-                    className="input"
+                  <Input
                     type="number"
                     min={1}
                     value={certDays}
@@ -1010,9 +1043,9 @@ export default function IdentitiesPage() {
         title={certsTarget ? `Certificates — ${certsTarget.name}` : "Certificates"}
         onClose={() => setCertsTargetName(null)}
         footer={
-          <button className="btn" onClick={() => setCertsTargetName(null)}>
+          <Button variant="outline" onClick={() => setCertsTargetName(null)}>
             Close
-          </button>
+          </Button>
         }
       >
         {certsTarget ? (
@@ -1030,9 +1063,8 @@ export default function IdentitiesPage() {
                   <label className="field-label" htmlFor="issue-days">
                     New cert lifetime (days)
                   </label>
-                  <input
+                  <Input
                     id="issue-days"
-                    className="input"
                     type="number"
                     min={1}
                     disabled={certIssueAvailability !== "allowed"}
@@ -1041,15 +1073,14 @@ export default function IdentitiesPage() {
                     onChange={(e) => setIssueDays(e.target.value)}
                   />
                 </div>
-                <button
-                  className="btn btn-primary"
+                <Button
                   onClick={() => void onIssueCert()}
                   disabled={issueBusy || certIssueAvailability !== "allowed"}
                   title={certIssueAvailability === "allowed" ? undefined : certIssueReason}
                 >
                   {issueBusy ? <Spinner /> : null}
                   Issue new certificate
-                </button>
+                </Button>
               </div>
             </div>
             <div className="faint text-sm mb-16">
@@ -1091,8 +1122,9 @@ export default function IdentitiesPage() {
                             <td className="nowrap">{formatUnixMs(cert.created_at_unix_ms)}</td>
                             <td>
                               {revocable ? (
-                                <button
-                                  className="btn btn-sm btn-danger"
+                                <Button
+                                  variant="destructive"
+                                  size="sm"
                                   onClick={() =>
                                     setRevokeCertTarget({
                                       name: certsTarget.name,
@@ -1101,7 +1133,7 @@ export default function IdentitiesPage() {
                                   }
                                 >
                                   Revoke
-                                </button>
+                                </Button>
                               ) : null}
                             </td>
                           </tr>
@@ -1305,7 +1337,6 @@ function CredentialsModal({
 }) {
   const [stage, setStage] = useState<3 | 4>(3);
   const [language, setLanguage] = useState<SnippetLanguage>("go");
-  const tabRefs = useRef<Array<HTMLButtonElement | null>>([]);
 
   const snippets = credentials ? integrationSnippets(credentials) : null;
 
@@ -1316,20 +1347,6 @@ function CredentialsModal({
       { name: `${credentials.name}.key`, content: credentials.cert.key_pem, mode: 0o600 },
     ]);
     downloadBlob(`${credentials.name}-mtls-credentials.zip`, archive);
-  }
-
-  function onSnippetTabKeyDown(event: React.KeyboardEvent<HTMLButtonElement>, index: number) {
-    let nextIndex: number | null = null;
-    if (event.key === "ArrowRight") nextIndex = (index + 1) % SNIPPET_LANGUAGES.length;
-    else if (event.key === "ArrowLeft") {
-      nextIndex = (index - 1 + SNIPPET_LANGUAGES.length) % SNIPPET_LANGUAGES.length;
-    } else if (event.key === "Home") nextIndex = 0;
-    else if (event.key === "End") nextIndex = SNIPPET_LANGUAGES.length - 1;
-    if (nextIndex === null) return;
-
-    event.preventDefault();
-    setLanguage(SNIPPET_LANGUAGES[nextIndex]);
-    tabRefs.current[nextIndex]?.focus();
   }
 
   return (
@@ -1347,17 +1364,15 @@ function CredentialsModal({
       onClose={onClose}
       footer={
         stage === 3 ? (
-          <button className="btn btn-primary" onClick={() => setStage(4)}>
+          <Button onClick={() => setStage(4)}>
             I&apos;ve saved {credentials?.cert && credentials.token ? "them" : "it"} — continue
-          </button>
+          </Button>
         ) : (
           <>
-            <button className="btn" onClick={() => setStage(3)}>
+            <Button variant="outline" onClick={() => setStage(3)}>
               Back to credentials
-            </button>
-            <button className="btn btn-primary" onClick={onClose}>
-              Done
-            </button>
+            </Button>
+            <Button onClick={onClose}>Done</Button>
           </>
         )
       }
@@ -1384,10 +1399,10 @@ function CredentialsModal({
                         place it in a browser bundle.
                       </div>
                     </div>
-                    <button className="btn btn-primary" onClick={downloadBoth}>
+                    <Button onClick={downloadBoth}>
                       <Download size={16} aria-hidden />
                       Download both (.zip)
-                    </button>
+                    </Button>
                   </div>
                   <div className="danger-panel mb-16">
                     <strong>The ZIP itself contains the private key.</strong> Your browser may save
@@ -1424,8 +1439,9 @@ function CredentialsModal({
                       label="Copy certificate"
                       value={() => credentials.cert?.cert_pem ?? ""}
                     />
-                    <button
-                      className="btn btn-sm"
+                    <Button
+                      variant="outline"
+                      size="sm"
                       onClick={() =>
                         credentials.cert &&
                         downloadText(`${credentials.name}.crt`, credentials.cert.cert_pem)
@@ -1433,7 +1449,7 @@ function CredentialsModal({
                     >
                       <Download size={14} aria-hidden />
                       Download .crt
-                    </button>
+                    </Button>
                   </div>
 
                   <div className="field-label">Per-application private key (PEM)</div>
@@ -1444,8 +1460,9 @@ function CredentialsModal({
                   <div className="token-reveal credential-pem">{credentials.cert.key_pem}</div>
                   <div className="row-wrap mt-8">
                     <CopyButton label="Copy key" value={() => credentials.cert?.key_pem ?? ""} />
-                    <button
-                      className="btn btn-sm"
+                    <Button
+                      variant="outline"
+                      size="sm"
                       onClick={() =>
                         credentials.cert &&
                         downloadText(`${credentials.name}.key`, credentials.cert.key_pem)
@@ -1453,7 +1470,7 @@ function CredentialsModal({
                     >
                       <Download size={14} aria-hidden />
                       Download .key
-                    </button>
+                    </Button>
                   </div>
                 </div>
               ) : null}
@@ -1479,7 +1496,11 @@ function CredentialsModal({
               ) : null}
 
               {snippets ? (
-                <div className="integration-snippets">
+                <Tabs
+                  className="integration-snippets gap-0"
+                  value={language}
+                  onValueChange={(value) => setLanguage(value as SnippetLanguage)}
+                >
                   <div className="between mb-8">
                     <h2>SDK configuration</h2>
                     <CopyButton
@@ -1487,41 +1508,21 @@ function CredentialsModal({
                       value={() => snippets[language]}
                     />
                   </div>
-                  <div
-                    className="tabs"
-                    role="tablist"
-                    aria-label="SDK language"
-                    aria-orientation="horizontal"
-                  >
-                    {SNIPPET_LANGUAGES.map((item, index) => (
-                      <button
-                        key={item}
-                        ref={(node) => {
-                          tabRefs.current[index] = node;
-                        }}
-                        id={`snippet-tab-${item}`}
-                        className={`tab ${language === item ? "active" : ""}`}
-                        type="button"
-                        role="tab"
-                        tabIndex={language === item ? 0 : -1}
-                        aria-selected={language === item}
-                        aria-controls="integration-snippet"
-                        onClick={() => setLanguage(item)}
-                        onKeyDown={(event) => onSnippetTabKeyDown(event, index)}
-                      >
+                  <TabsList variant="line" aria-label="SDK language" className="mb-4">
+                    {SNIPPET_LANGUAGES.map((item) => (
+                      <TabsTrigger key={item} value={item} className="min-w-24 px-3 py-2">
                         {item === "go" ? "Go" : item === "python" ? "Python" : "TypeScript"}
-                      </button>
+                      </TabsTrigger>
                     ))}
-                  </div>
-                  <pre
-                    id="integration-snippet"
-                    className="integration-code"
-                    role="tabpanel"
-                    aria-labelledby={`snippet-tab-${language}`}
-                  >
-                    <code>{snippets[language]}</code>
-                  </pre>
-                </div>
+                  </TabsList>
+                  {SNIPPET_LANGUAGES.map((item) => (
+                    <TabsContent key={item} value={item}>
+                      <pre className="integration-code">
+                        <code>{snippets[item]}</code>
+                      </pre>
+                    </TabsContent>
+                  ))}
+                </Tabs>
               ) : null}
 
               {credentials.kind === "admin" ? (
@@ -1553,9 +1554,9 @@ function CredentialsModal({
                       )}
                     </div>
                   </div>
-                  <Link className="btn" href="/policies">
+                  <ButtonLink variant="outline" href="/policies">
                     Open policies
-                  </Link>
+                  </ButtonLink>
                 </div>
               )}
             </>

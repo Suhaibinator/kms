@@ -1,3 +1,4 @@
+import { Button, ButtonLink } from "@/components/ui/button";
 import { ArrowLeft } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/router";
@@ -9,6 +10,7 @@ import {
   Badge,
   EmptyState,
   Field,
+  Input,
   JsonView,
   KeyValue,
   PageHeader,
@@ -17,7 +19,9 @@ import {
   Skeleton,
   Spinner,
   TableSkeleton,
+  Textarea,
 } from "@/components/ui";
+import { AppSelect } from "@/components/ui/app-select";
 import { useToast } from "@/context/ToastContext";
 import { ApiError, api, isAbortError, type ResourceRef } from "@/lib/api";
 import { base64ByteLength, base64ToUtf8, looksLikeText, utf8ToBase64 } from "@/lib/encoding";
@@ -31,6 +35,7 @@ import {
 } from "@/lib/format";
 import { useQueryParams } from "@/lib/hooks";
 import type { SecretMetadata, SecretVersion } from "@/lib/types";
+import { validateMetadataJson, validateValueSize } from "@/lib/validation";
 
 const REVEAL_SECONDS = 30;
 
@@ -245,9 +250,9 @@ export default function SecretDetailPage() {
           icon={<Icon.secret size={20} />}
           title="No secret specified"
           actions={
-            <Link className="btn" href="/secrets">
+            <ButtonLink variant="outline" href="/secrets">
               Browse secrets
-            </Link>
+            </ButtonLink>
           }
         >
           Provide ?env=, ?app=, and ?key= query parameters.
@@ -261,9 +266,9 @@ export default function SecretDetailPage() {
         <PageHeader
           title="Secret not found"
           actions={
-            <Link className="btn" href={backLink}>
+            <ButtonLink variant="outline" href={backLink}>
               <ArrowLeft size={16} aria-hidden /> Back to secrets
-            </Link>
+            </ButtonLink>
           }
         />
         <EmptyState icon={<Icon.secret size={20} />} title="Not found">
@@ -277,11 +282,7 @@ export default function SecretDetailPage() {
       <>
         <PageHeader
           title="Could not load secret"
-          actions={
-            <button className="btn btn-primary" onClick={() => void load()}>
-              Try again
-            </button>
-          }
+          actions={<Button onClick={() => void load()}>Try again</Button>}
         />
         <EmptyState icon={<Icon.secret size={20} />} title="Secret unavailable">
           The server could not load <span className="mono">{displayPath(ref)}</span>. Check the
@@ -306,12 +307,12 @@ export default function SecretDetailPage() {
         }
         actions={
           <>
-            <button className="btn" onClick={() => setNewVersionOpen(true)}>
+            <Button variant="outline" onClick={() => setNewVersionOpen(true)}>
               New version
-            </button>
-            <button className="btn btn-danger" onClick={() => setConfirm({ kind: "delete" })}>
+            </Button>
+            <Button variant="destructive" onClick={() => setConfirm({ kind: "delete" })}>
               Delete
-            </button>
+            </Button>
           </>
         }
       />
@@ -402,23 +403,25 @@ export default function SecretDetailPage() {
                     }
                   />
                 ) : null}
-                <button
-                  className="btn btn-sm"
+                <Button
+                  variant="outline"
+                  size="sm"
                   aria-expanded={valueVisible}
                   aria-controls="revealed-secret-value"
                   onClick={() => setValueVisible((visible) => !visible)}
                 >
                   {valueVisible ? "Hide value" : "Show value"}
-                </button>
-                <button
-                  className="btn btn-sm"
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
                   onClick={() => {
                     setRevealed(null);
                     setValueVisible(false);
                   }}
                 >
                   Forget value
-                </button>
+                </Button>
               </div>
             </div>
             {valueVisible ? (
@@ -452,31 +455,24 @@ export default function SecretDetailPage() {
               <label className="field-label" htmlFor="reveal-version" style={{ margin: 0 }}>
                 Version
               </label>
-              <select
+              <AppSelect
                 id="reveal-version"
-                className="select"
-                style={{ width: "auto" }}
-                value={selectedVersion ?? ""}
-                onChange={(e) => setSelectedVersion(Number(e.target.value))}
-              >
-                {enabledVersions.length === 0 ? (
-                  <option value="">no enabled versions</option>
-                ) : (
-                  enabledVersions.map((v) => (
-                    <option key={v.version} value={v.version}>
-                      v{v.version}
-                      {v.version === current ? " (current)" : ""}
-                    </option>
-                  ))
-                )}
-              </select>
-              <button
-                className="btn btn-primary"
+                className="w-44"
+                value={selectedVersion === null ? "" : String(selectedVersion)}
+                disabled={enabledVersions.length === 0}
+                onValueChange={(version) => setSelectedVersion(version ? Number(version) : null)}
+                placeholder="No enabled versions"
+                options={enabledVersions.map((version) => ({
+                  value: String(version.version),
+                  label: `v${version.version}${version.version === current ? " (current)" : ""}`,
+                }))}
+              />
+              <Button
                 disabled={selectedVersion === null || enabledVersions.length === 0}
                 onClick={() => selectedVersion !== null && setRevealTarget(selectedVersion)}
               >
                 Reveal secret
-              </button>
+              </Button>
             </div>
           </div>
         )}
@@ -649,40 +645,44 @@ function VersionRow({
       <td>
         <div className="row-actions">
           {!clientBound && v.state === "enabled" ? (
-            <button className="btn btn-sm" onClick={() => onReveal(v.version)}>
+            <Button variant="outline" size="sm" onClick={() => onReveal(v.version)}>
               Reveal
-            </button>
+            </Button>
           ) : null}
           {!isCurrent && v.state === "enabled" ? (
-            <button
-              className="btn btn-sm"
+            <Button
+              variant="outline"
+              size="sm"
               onClick={() => onConfirm({ kind: "promote", version: v.version })}
             >
               Promote
-            </button>
+            </Button>
           ) : null}
           {v.state === "enabled" ? (
-            <button
-              className="btn btn-sm"
+            <Button
+              variant="outline"
+              size="sm"
               onClick={() => onConfirm({ kind: "disable", version: v.version })}
             >
               Disable
-            </button>
+            </Button>
           ) : v.state === "disabled" ? (
-            <button
-              className="btn btn-sm"
+            <Button
+              variant="outline"
+              size="sm"
               onClick={() => onConfirm({ kind: "enable", version: v.version })}
             >
               Enable
-            </button>
+            </Button>
           ) : null}
           {!destroyed ? (
-            <button
-              className="btn btn-sm btn-danger"
+            <Button
+              variant="destructive"
+              size="sm"
               onClick={() => onConfirm({ kind: "destroy", version: v.version })}
             >
               Destroy
-            </button>
+            </Button>
           ) : null}
         </div>
       </td>
@@ -707,6 +707,10 @@ function NewVersionModal({
   const [metadataJson, setMetadataJson] = useState("{}");
   const [clientToken, setClientToken] = useState("");
   const [saving, setSaving] = useState(false);
+  const [touched, setTouched] = useState({ value: false, metadata: false });
+  function touch(field: keyof typeof touched) {
+    setTouched((t) => ({ ...t, [field]: true }));
+  }
 
   useEffect(() => {
     if (open) {
@@ -714,11 +718,21 @@ function NewVersionModal({
       setContentType(secret.content_type || "text/plain");
       setMetadataJson("{}");
       setClientToken("");
+      setTouched({ value: false, metadata: false });
     }
   }, [open, secret.content_type]);
 
+  // A secret value has no parse rule server-side — only the size cap — and the
+  // message reports the size alone, never the value.
+  const valueError = validateValueSize(value);
+  const metadataError = validateMetadataJson(metadataJson);
+  const shownValueError = touched.value ? valueError : null;
+  const shownMetadataError = touched.metadata ? metadataError : null;
+  const blocked = !!(shownValueError || shownMetadataError);
+
   async function submit(e: React.FormEvent) {
     e.preventDefault();
+    setTouched({ value: true, metadata: true });
     if (!value) {
       toast.error(new Error("Enter a value for the new version."), "Missing value");
       return;
@@ -730,6 +744,8 @@ function NewVersionModal({
       );
       return;
     }
+    // Inline messages carry the detail; the fields are now all touched.
+    if (valueError || metadataError) return;
     setSaving(true);
     try {
       const res = await api.createSecret(
@@ -765,22 +781,27 @@ function NewVersionModal({
       onClose={onClose}
       footer={
         <>
-          <button className="btn" onClick={onClose} disabled={saving}>
+          <Button variant="outline" onClick={onClose} disabled={saving}>
             Cancel
-          </button>
-          <button className="btn btn-primary" onClick={submit} disabled={saving}>
+          </Button>
+          <Button onClick={submit} disabled={saving || blocked}>
             {saving ? <Spinner /> : null}
             Save new version
-          </button>
+          </Button>
         </>
       }
     >
       <form onSubmit={submit}>
-        <Field label="Value" hint="Stored encrypted. The new version becomes current.">
-          <textarea
-            className="textarea mono"
+        <Field
+          label="Value"
+          hint="Stored encrypted. The new version becomes current."
+          error={shownValueError}
+        >
+          <Textarea
+            className="font-mono"
             value={value}
             onChange={(e) => setValue(e.target.value)}
+            onBlur={() => touch("value")}
             placeholder="secret value…"
             autoComplete="off"
             spellCheck={false}
@@ -788,17 +809,14 @@ function NewVersionModal({
         </Field>
         <div className="form-row">
           <Field label="Content type">
-            <input
-              className="input"
-              value={contentType}
-              onChange={(e) => setContentType(e.target.value)}
-            />
+            <Input value={contentType} onChange={(e) => setContentType(e.target.value)} />
           </Field>
-          <Field label="Metadata JSON">
-            <input
-              className="input mono"
+          <Field label="Metadata JSON" error={shownMetadataError}>
+            <Input
+              className="font-mono"
               value={metadataJson}
               onChange={(e) => setMetadataJson(e.target.value)}
+              onBlur={() => touch("metadata")}
             />
           </Field>
         </div>
@@ -807,8 +825,8 @@ function NewVersionModal({
             label="Client access token"
             hint="Required. The existing token re-wraps the new version's key. It is sent once and never stored."
           >
-            <input
-              className="input mono"
+            <Input
+              className="font-mono"
               type="password"
               value={clientToken}
               autoComplete="off"

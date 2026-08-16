@@ -1,13 +1,16 @@
+import { Button } from "@/components/ui/button";
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Icon } from "@/components/icons";
 import {
   Badge,
   EmptyState,
+  Input,
   JsonView,
   PageHeader,
   Pagination,
   TableSkeleton,
 } from "@/components/ui";
+import { AppSelect } from "@/components/ui/app-select";
 import { useToast } from "@/context/ToastContext";
 import { api, isAbortError } from "@/lib/api";
 import {
@@ -60,19 +63,19 @@ export default function AuditPage() {
   const [applied, setApplied] = useState<AuditFilters>({});
   const [expanded, setExpanded] = useState<number | null>(null);
 
-  const envs = useMemo(() => {
+  const apps = useMemo(() => {
     const set = new Set<string>();
-    for (const ns of namespaces) set.add(ns.env);
+    for (const ns of namespaces) set.add(ns.app);
     return [...set].sort((a, b) => a.localeCompare(b));
   }, [namespaces]);
 
-  const apps = useMemo(() => {
+  const envs = useMemo(() => {
     const set = new Set<string>();
     for (const ns of namespaces) {
-      if (!form.env || ns.env === form.env) set.add(ns.app);
+      if (!form.app || ns.app === form.app) set.add(ns.env);
     }
     return [...set].sort((a, b) => a.localeCompare(b));
-  }, [namespaces, form.env]);
+  }, [namespaces, form.app]);
 
   const load = useCallback(
     async (token: string, filters: AuditFilters) => {
@@ -146,10 +149,11 @@ export default function AuditPage() {
     setPageToken("");
   }
 
-  function onEnv(env: string) {
-    // Clear the app if it no longer belongs to the chosen env.
-    const stillValid = !env || namespaces.some((ns) => ns.env === env && ns.app === form.app);
-    setForm({ ...form, env, app: stillValid ? form.app : "" });
+  function onApp(app: string) {
+    // An environment is application-owned; clear it when the new application
+    // does not define that environment.
+    const stillValid = !app || namespaces.some((ns) => ns.app === app && ns.env === form.env);
+    setForm({ ...form, app, env: stillValid ? form.env : "" });
   }
 
   return (
@@ -161,48 +165,37 @@ export default function AuditPage() {
 
       <form className="filters" onSubmit={apply}>
         <div className="field">
-          <label className="field-label" htmlFor="f-env">
-            Environment
-          </label>
-          <select
-            id="f-env"
-            className="select"
-            value={form.env}
-            onChange={(e) => onEnv(e.target.value)}
-          >
-            <option value="">All envs</option>
-            {envs.map((env) => (
-              <option key={env} value={env}>
-                {env}
-              </option>
-            ))}
-          </select>
-        </div>
-        <div className="field">
           <label className="field-label" htmlFor="f-app">
             Application
           </label>
-          <select
+          <AppSelect
             id="f-app"
-            className="select"
             value={form.app}
-            onChange={(e) => setForm({ ...form, app: e.target.value })}
-          >
-            <option value="">All apps</option>
-            {apps.map((app) => (
-              <option key={app} value={app}>
-                {app}
-              </option>
-            ))}
-          </select>
+            onValueChange={onApp}
+            placeholder="All applications"
+            options={apps.map((app) => ({ value: app, label: app }))}
+          />
+        </div>
+        <div className="field">
+          <label className="field-label" htmlFor="f-env">
+            Environment
+          </label>
+          <AppSelect
+            id="f-env"
+            value={form.env}
+            disabled={!form.app}
+            onValueChange={(env) => setForm({ ...form, env })}
+            placeholder={form.app ? "All environments" : "Select application first"}
+            options={envs.map((env) => ({ value: env, label: env }))}
+          />
         </div>
         <div className="field">
           <label className="field-label" htmlFor="f-prefix">
             Key prefix
           </label>
-          <input
+          <Input
             id="f-prefix"
-            className="input mono"
+            className="font-mono"
             value={form.key_prefix}
             onChange={(e) => setForm({ ...form, key_prefix: e.target.value })}
             placeholder="billing/"
@@ -212,9 +205,8 @@ export default function AuditPage() {
           <label className="field-label" htmlFor="f-actor">
             Actor
           </label>
-          <input
+          <Input
             id="f-actor"
-            className="input"
             value={form.actor}
             onChange={(e) => setForm({ ...form, actor: e.target.value })}
             placeholder="gradethis-be"
@@ -224,9 +216,8 @@ export default function AuditPage() {
           <label className="field-label" htmlFor="f-type">
             Event type
           </label>
-          <input
+          <Input
             id="f-type"
-            className="input"
             value={form.event_type}
             onChange={(e) => setForm({ ...form, event_type: e.target.value })}
             placeholder="secret.read"
@@ -236,9 +227,8 @@ export default function AuditPage() {
           <label className="field-label" htmlFor="f-from">
             From
           </label>
-          <input
+          <Input
             id="f-from"
-            className="input"
             type="datetime-local"
             value={form.from}
             onChange={(e) => setForm({ ...form, from: e.target.value })}
@@ -248,20 +238,19 @@ export default function AuditPage() {
           <label className="field-label" htmlFor="f-to">
             To
           </label>
-          <input
+          <Input
             id="f-to"
-            className="input"
             type="datetime-local"
             value={form.to}
             onChange={(e) => setForm({ ...form, to: e.target.value })}
           />
         </div>
-        <button type="submit" className="btn">
+        <Button type="submit" variant="outline">
           Apply
-        </button>
-        <button type="button" className="btn btn-ghost" onClick={clear}>
+        </Button>
+        <Button type="button" variant="ghost" onClick={clear}>
           Clear
-        </button>
+        </Button>
       </form>
 
       {loading ? (
@@ -274,9 +263,9 @@ export default function AuditPage() {
           icon={<Icon.audit size={20} />}
           title="No audit events"
           actions={
-            <button className="btn" onClick={clear}>
+            <Button variant="outline" onClick={clear}>
               Clear filters
-            </button>
+            </Button>
           }
         >
           No events match the current filters.
@@ -335,12 +324,13 @@ export default function AuditPage() {
                       </td>
                       <td>
                         {hasMeta ? (
-                          <button
-                            className="btn btn-sm btn-ghost"
+                          <Button
+                            variant="ghost"
+                            size="sm"
                             onClick={() => setExpanded(open ? null : e.id)}
                           >
                             {open ? "Hide" : "Details"}
-                          </button>
+                          </Button>
                         ) : null}
                       </td>
                     </tr>

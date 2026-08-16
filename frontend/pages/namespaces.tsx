@@ -1,9 +1,18 @@
+import { Button, ButtonLink } from "@/components/ui/button";
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { Pencil, Trash2 } from "lucide-react";
 import { Icon } from "@/components/icons";
 import { ConfirmDialog, Modal } from "@/components/Modal";
-import { Badge, EmptyState, Field, PageHeader, TableSkeleton } from "@/components/ui";
+import {
+  Badge,
+  Checkbox,
+  EmptyState,
+  Field,
+  Input,
+  PageHeader,
+  TableSkeleton,
+} from "@/components/ui";
 import { useToast } from "@/context/ToastContext";
 import { api } from "@/lib/api";
 import { formatUnixMs } from "@/lib/format";
@@ -48,11 +57,10 @@ function AuthMethodsField({
       hint="mTLS is the strongest posture. Adding token permits bearer-token clients into this namespace."
     >
       <div className="checkbox-row">
-        <input
+        <Checkbox
           id="method-mtls"
-          type="checkbox"
           checked={methods.includes("mtls")}
-          onChange={(e) => toggle("mtls", e.target.checked)}
+          onCheckedChange={(checked) => toggle("mtls", checked)}
         />
         <label htmlFor="method-mtls">
           <strong>mTLS</strong>
@@ -60,11 +68,10 @@ function AuthMethodsField({
         </label>
       </div>
       <div className="checkbox-row">
-        <input
+        <Checkbox
           id="method-token"
-          type="checkbox"
           checked={methods.includes("token")}
-          onChange={(e) => toggle("token", e.target.checked)}
+          onCheckedChange={(checked) => toggle("token", checked)}
         />
         <label htmlFor="method-token">
           <strong>Token</strong>
@@ -96,15 +103,15 @@ export default function NamespacesPage() {
   const grouped = useMemo(() => {
     const map = new Map<string, Namespace[]>();
     for (const ns of namespaces) {
-      const list = map.get(ns.env) ?? [];
+      const list = map.get(ns.app) ?? [];
       list.push(ns);
-      map.set(ns.env, list);
+      map.set(ns.app, list);
     }
     return [...map.entries()]
       .sort((a, b) => a[0].localeCompare(b[0]))
-      .map(([groupEnv, list]) => ({
-        env: groupEnv,
-        list: list.sort((x, y) => x.app.localeCompare(y.app)),
+      .map(([groupApp, list]) => ({
+        app: groupApp,
+        list: list.sort((x, y) => x.env.localeCompare(y.env)),
       }));
   }, [namespaces]);
 
@@ -157,19 +164,15 @@ export default function NamespacesPage() {
   return (
     <>
       <PageHeader
-        title="Environments"
+        title="Application environments"
         subtitle="Deployment environments are isolated application namespaces. Add them from the owning application."
-        actions={
-          <Link className="btn btn-primary" href="/applications">
-            Open applications
-          </Link>
-        }
+        actions={<ButtonLink href="/applications">Open applications</ButtonLink>}
       />
 
       {loading ? (
         <TableSkeleton
           headers={[
-            "Application",
+            "Environment",
             "Description",
             "Auth methods",
             "Parameters",
@@ -180,29 +183,25 @@ export default function NamespacesPage() {
       ) : namespaces.length === 0 ? (
         <EmptyState
           icon={<Icon.namespace size={20} />}
-          title="No environments yet"
-          actions={
-            <Link className="btn btn-primary" href="/applications">
-              Create an application
-            </Link>
-          }
+          title="No application environments yet"
+          actions={<ButtonLink href="/applications">Create an application</ButtonLink>}
         >
           Create an application, define its shared contract, then add one or more environments.
         </EmptyState>
       ) : (
         grouped.map((group) => (
-          <div key={group.env} className="ns-group">
+          <div key={group.app} className="ns-group">
             <div className="ns-group-title">
-              <span className="ns-group-env">{group.env}</span>
+              <span className="ns-group-name">{group.app}</span>
               <span className="faint text-sm">
-                {group.list.length} {group.list.length === 1 ? "application" : "applications"}
+                {group.list.length} {group.list.length === 1 ? "environment" : "environments"}
               </span>
             </div>
             <div className="table-wrap card-table">
               <table className="data">
                 <thead>
                   <tr>
-                    <th>Application</th>
+                    <th>Environment</th>
                     <th>Description</th>
                     <th>Auth methods</th>
                     <th>Parameters</th>
@@ -217,8 +216,8 @@ export default function NamespacesPage() {
                     const canDelete = total === 0;
                     return (
                       <tr key={`${ns.env}/${ns.app}`}>
-                        <td className="mono" data-label="Application">
-                          {ns.app}
+                        <td className="mono" data-label="Environment">
+                          {ns.env}
                         </td>
                         <td data-label="Description">
                           {ns.description || <span className="faint">—</span>}
@@ -237,12 +236,13 @@ export default function NamespacesPage() {
                         </td>
                         <td>
                           <div className="row-actions">
-                            <button className="btn btn-sm" onClick={() => openEdit(ns)}>
+                            <Button variant="outline" size="sm" onClick={() => openEdit(ns)}>
                               <Pencil size={14} aria-hidden />
                               Edit
-                            </button>
-                            <button
-                              className="btn btn-sm btn-danger"
+                            </Button>
+                            <Button
+                              variant="destructive"
+                              size="sm"
                               disabled={!canDelete}
                               title={
                                 canDelete
@@ -253,7 +253,7 @@ export default function NamespacesPage() {
                             >
                               <Trash2 size={14} aria-hidden />
                               Delete
-                            </button>
+                            </Button>
                           </div>
                         </td>
                       </tr>
@@ -272,30 +272,22 @@ export default function NamespacesPage() {
         onClose={() => setEditTarget(null)}
         footer={
           <>
-            <button className="btn" onClick={() => setEditTarget(null)} disabled={editSaving}>
+            <Button variant="outline" onClick={() => setEditTarget(null)} disabled={editSaving}>
               Cancel
-            </button>
-            <button className="btn btn-primary" onClick={onEdit} disabled={editSaving}>
+            </Button>
+            <Button onClick={onEdit} disabled={editSaving}>
               {editSaving ? "Saving…" : "Save changes"}
-            </button>
+            </Button>
           </>
         }
       >
         {editTarget ? (
           <form onSubmit={onEdit}>
             <Field label="Namespace">
-              <input
-                className="input mono"
-                value={`${editTarget.env}/${editTarget.app}`}
-                disabled
-              />
+              <Input className="font-mono" value={`${editTarget.env}/${editTarget.app}`} disabled />
             </Field>
             <Field label="Description" hint="Optional.">
-              <input
-                className="input"
-                value={editDescription}
-                onChange={(e) => setEditDescription(e.target.value)}
-              />
+              <Input value={editDescription} onChange={(e) => setEditDescription(e.target.value)} />
             </Field>
             <AuthMethodsField methods={editMethods} onChange={setEditMethods} />
           </form>

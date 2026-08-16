@@ -1,15 +1,17 @@
+import { Button, ButtonLink } from "@/components/ui/button";
 import Link from "next/link";
 import { useRouter } from "next/router";
 import { useEffect, useRef, useState } from "react";
 import CopyButton from "@/components/CopyButton";
 import { Modal } from "@/components/Modal";
 import NamespacePicker, { type NamespaceSelection } from "@/components/NamespacePicker";
-import { Field, PageHeader, Spinner } from "@/components/ui";
+import { Checkbox, Field, Input, PageHeader, Spinner, Textarea } from "@/components/ui";
 import { useToast } from "@/context/ToastContext";
 import { api } from "@/lib/api";
 import { utf8ToBase64 } from "@/lib/encoding";
 import { datetimeLocalToUnixMs } from "@/lib/format";
 import { useNamespaces, useQueryParams } from "@/lib/hooks";
+import { validateKey, validateMetadataJson, validateValueSize } from "@/lib/validation";
 
 const NO_NS: NamespaceSelection = { env: "", app: "" };
 
@@ -23,7 +25,7 @@ export default function NewSecretPage() {
   const router = useRouter();
   const toast = useToast();
   const { namespaces, error: nsError } = useNamespaces();
-  const { values: queryValues, ready: queryReady } = useQueryParams(["env", "app"]);
+  const { values: queryValues, ready: queryReady } = useQueryParams(["env", "app", "key"]);
 
   const [ns, setNs] = useState<NamespaceSelection>(NO_NS);
   const [key, setKey] = useState("");
@@ -38,6 +40,23 @@ export default function NewSecretPage() {
 
   const [saving, setSaving] = useState(false);
 
+  // A field reports its problem only once the operator has left it, so a
+  // half-typed key never looks like a mistake.
+  const [touched, setTouched] = useState({ key: false, value: false, metadata: false });
+  function touch(field: keyof typeof touched) {
+    setTouched((t) => ({ ...t, [field]: true }));
+  }
+
+  // Mirrors of the server's rules. The value has no content-type parse rule —
+  // only the size cap — and no message here ever quotes the value itself.
+  const keyError = validateKey(key.trim());
+  const valueError = validateValueSize(value);
+  const metadataError = validateMetadataJson(metadataJson);
+  const shownKeyError = touched.key ? keyError : null;
+  const shownValueError = touched.value ? valueError : null;
+  const shownMetadataError = touched.metadata ? metadataError : null;
+  const blocked = !!(shownKeyError || shownValueError || shownMetadataError);
+
   // Shown once after creation if the server minted an access token.
   const [mintedToken, setMintedToken] = useState<string | null>(null);
   const [createdRef, setCreatedRef] = useState<{ env: string; app: string; key: string } | null>(
@@ -50,17 +69,20 @@ export default function NewSecretPage() {
     seeded.current = true;
     const env = queryValues.env ?? "";
     const app = queryValues.app ?? "";
+    const requestedKey = queryValues.key ?? "";
     if (env || app) setNs({ env, app });
+    if (requestedKey) setKey(requestedKey);
   }, [queryReady, queryValues]);
 
   useEffect(() => {
-    if (nsError) toast.error(nsError, "Failed to load namespaces");
+    if (nsError) toast.error(nsError, "Failed to load environments");
   }, [nsError, toast]);
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
+    setTouched({ key: true, value: true, metadata: true });
     if (!ns.env || !ns.app) {
-      toast.error(new Error("Choose a namespace for the secret."), "Missing namespace");
+      toast.error(new Error("Choose an environment for the secret."), "Missing environment");
       return;
     }
     const k = key.trim();
@@ -81,6 +103,8 @@ export default function NewSecretPage() {
         return;
       }
     }
+    // Inline messages carry the detail; the fields are now all touched.
+    if (keyError || valueError || metadataError) return;
 
     const expiresMs = datetimeLocalToUnixMs(expires) ?? 0;
 
@@ -143,12 +167,14 @@ export default function NewSecretPage() {
 
           <Field
             label="Key"
-            hint="Relative to the namespace, e.g. stripe-api-key or billing/webhook-secret"
+            hint="Relative to the selected environment, e.g. stripe-api-key or billing/webhook-secret"
+            error={shownKeyError}
           >
-            <input
-              className="input mono"
+            <Input
+              className="font-mono"
               value={key}
               onChange={(e) => setKey(e.target.value)}
+              onBlur={() => touch("key")}
               placeholder="stripe-api-key"
             />
           </Field>
@@ -156,11 +182,13 @@ export default function NewSecretPage() {
           <Field
             label="Value"
             hint="Encrypted at rest with authenticated encryption. Never stored in plaintext."
+            error={shownValueError}
           >
-            <textarea
-              className="textarea mono"
+            <Textarea
+              className="font-mono"
               value={value}
               onChange={(e) => setValue(e.target.value)}
+              onBlur={() => touch("value")}
               placeholder="secret value…"
               autoComplete="off"
               spellCheck={false}
@@ -169,15 +197,10 @@ export default function NewSecretPage() {
 
           <div className="form-row">
             <Field label="Content type">
-              <input
-                className="input"
-                value={contentType}
-                onChange={(e) => setContentType(e.target.value)}
-              />
+              <Input value={contentType} onChange={(e) => setContentType(e.target.value)} />
             </Field>
             <Field label="Expires at" hint="Optional.">
-              <input
-                className="input"
+              <Input
                 type="datetime-local"
                 value={expires}
                 onChange={(e) => setExpires(e.target.value)}
@@ -185,24 +208,24 @@ export default function NewSecretPage() {
             </Field>
           </div>
 
-          <Field label="Metadata JSON">
-            <input
-              className="input mono"
+          <Field label="Metadata JSON" error={shownMetadataError}>
+            <Input
+              className="font-mono"
               value={metadataJson}
               onChange={(e) => setMetadataJson(e.target.value)}
+              onBlur={() => touch("metadata")}
             />
           </Field>
 
           <hr className="divider" />
 
           <div className="checkbox-row mb-16">
-            <input
+            <Checkbox
               id="client-bound"
-              type="checkbox"
               checked={clientBound}
-              onChange={(e) => {
-                setClientBound(e.target.checked);
-                if (!e.target.checked) {
+              onCheckedChange={(checked) => {
+                setClientBound(checked);
+                if (!checked) {
                   setAck(false);
                   setGenerateToken(false);
                 }
@@ -228,12 +251,7 @@ export default function NewSecretPage() {
               </div>
 
               <div className="checkbox-row mb-16">
-                <input
-                  id="ack"
-                  type="checkbox"
-                  checked={ack}
-                  onChange={(e) => setAck(e.target.checked)}
-                />
+                <Checkbox id="ack" checked={ack} onCheckedChange={setAck} />
                 <label htmlFor="ack">
                   I understand that loss of the master key or the client access token destroys this
                   secret with no recovery path.
@@ -247,11 +265,10 @@ export default function NewSecretPage() {
             </>
           ) : (
             <div className="checkbox-row mb-16">
-              <input
+              <Checkbox
                 id="gen-token-std"
-                type="checkbox"
                 checked={generateToken}
-                onChange={(e) => setGenerateToken(e.target.checked)}
+                onCheckedChange={setGenerateToken}
               />
               <label htmlFor="gen-token-std">
                 Also generate a per-secret access token (shown once after creation).
@@ -260,13 +277,13 @@ export default function NewSecretPage() {
           )}
 
           <div className="form-actions">
-            <button type="submit" className="btn btn-primary" disabled={saving}>
+            <Button type="submit" disabled={saving || blocked}>
               {saving ? <Spinner /> : null}
               Create secret
-            </button>
-            <Link href="/secrets" className="btn">
+            </Button>
+            <ButtonLink href="/secrets" variant="outline">
               Cancel
-            </Link>
+            </ButtonLink>
           </div>
         </form>
       </div>
@@ -277,11 +294,7 @@ export default function NewSecretPage() {
         dismissible={false}
         title="Save this access token now"
         onClose={finishTokenReveal}
-        footer={
-          <button className="btn btn-primary" onClick={finishTokenReveal}>
-            I&apos;ve saved it — continue
-          </button>
-        }
+        footer={<Button onClick={finishTokenReveal}>I&apos;ve saved it — continue</Button>}
       >
         <div className="danger-panel mb-16">
           <strong>This token will never be shown again.</strong> Store it in your application&apos;s

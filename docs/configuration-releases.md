@@ -18,6 +18,9 @@ It records a canonical release name, an optional immutable schema pin, and the
 required release aliases, resource kinds, and parameter content types. Each
 `(env, app)` namespace is one isolated deployment environment of that
 application. Environments never inherit values or share mutable versions.
+Environment names are scoped to that application: there is no KMS-wide
+environment record, and two applications may define completely different sets
+of environment names.
 
 Release creation and activation compare the complete manifest to the owning
 application record. A release with a different name, schema pin, missing or

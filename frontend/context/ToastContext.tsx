@@ -1,118 +1,65 @@
-import { X } from "lucide-react";
-import {
-  createContext,
-  type ReactNode,
-  useCallback,
-  useContext,
-  useMemo,
-  useRef,
-  useState,
-} from "react";
+import { createContext, type ReactNode, useContext, useMemo } from "react";
+import { toast } from "sonner";
+import { Toaster } from "@/components/ui/sonner";
 import { ApiError } from "@/lib/api";
 
 type ToastKind = "error" | "success" | "info";
-
-interface Toast {
-  id: number;
-  kind: ToastKind;
-  title: string;
-  message?: string;
-}
 
 interface ToastApi {
   push: (kind: ToastKind, title: string, message?: string) => void;
   success: (title: string, message?: string) => void;
   info: (title: string, message?: string) => void;
-  error: (err: unknown, fallbackTitle?: string) => void;
-  dismiss: (id: number) => void;
+  error: (error: unknown, fallbackTitle?: string) => void;
+  dismiss: (id: number | string) => void;
 }
+
+const TITLE_BY_CODE: Record<string, string> = {
+  permission_denied: "Permission denied",
+  unauthenticated: "Session expired",
+  invalid_argument: "Invalid request",
+  not_found: "Not found",
+  conflict: "Conflict",
+  unavailable: "Service unavailable",
+  failed_precondition: "Action blocked",
+};
 
 const ToastContext = createContext<ToastApi | null>(null);
 
-const TITLE_BY_CODE: Record<string, string> = {
-  invalid_argument: "Invalid request",
-  unauthenticated: "Not authenticated",
-  permission_denied: "Permission denied",
-  not_found: "Not found",
-  already_exists: "Already exists",
-  failed_precondition: "Not allowed",
-  unavailable: "Service unavailable",
-  internal: "Server error",
-};
+function show(kind: ToastKind, title: string, message?: string) {
+  const options = message ? { description: message } : undefined;
+  return toast[kind](title, options);
+}
 
 export function ToastProvider({ children }: { children: ReactNode }) {
-  const [toasts, setToasts] = useState<Toast[]>([]);
-  const nextId = useRef(1);
-
-  const dismiss = useCallback((id: number) => {
-    setToasts((prev) => prev.filter((t) => t.id !== id));
-  }, []);
-
-  const push = useCallback(
-    (kind: ToastKind, title: string, message?: string) => {
-      const id = nextId.current;
-      nextId.current += 1;
-      setToasts((prev) => [...prev, { id, kind, title, message }]);
-      const ttl = kind === "error" ? 8000 : 4500;
-      window.setTimeout(() => dismiss(id), ttl);
-    },
-    [dismiss],
-  );
-
   const api = useMemo<ToastApi>(
     () => ({
-      push,
-      success: (title, message) => push("success", title, message),
-      info: (title, message) => push("info", title, message),
-      error: (err, fallbackTitle) => {
-        // Server error messages never contain secret material (see contract),
-        // so surfacing them is safe.
-        if (err instanceof ApiError) {
-          push("error", TITLE_BY_CODE[err.code] ?? fallbackTitle ?? "Error", err.message);
-        } else if (err instanceof Error) {
-          push("error", fallbackTitle ?? "Error", err.message);
+      push: show,
+      success: (title, message) => show("success", title, message),
+      info: (title, message) => show("info", title, message),
+      error: (error, fallbackTitle) => {
+        if (error instanceof ApiError) {
+          show("error", TITLE_BY_CODE[error.code] ?? fallbackTitle ?? "Error", error.message);
+        } else if (error instanceof Error) {
+          show("error", fallbackTitle ?? "Error", error.message);
         } else {
-          push("error", fallbackTitle ?? "Error", "Something went wrong.");
+          show("error", fallbackTitle ?? "Error", "Something went wrong.");
         }
       },
-      dismiss,
+      dismiss: (id) => toast.dismiss(id),
     }),
-    [push, dismiss],
+    [],
   );
 
   return (
     <ToastContext.Provider value={api}>
       {children}
-      <div className="toast-stack">
-        {toasts.map((t) => (
-          <div
-            key={t.id}
-            className={`toast ${t.kind}`}
-            role={t.kind === "error" ? "alert" : "status"}
-            aria-live={t.kind === "error" ? "assertive" : "polite"}
-            aria-atomic="true"
-          >
-            <div className="toast-body">
-              <div className="toast-title">{t.title}</div>
-              {t.message ? <div className="toast-msg">{t.message}</div> : null}
-            </div>
-            <button
-              type="button"
-              className="toast-close"
-              aria-label={`Dismiss ${t.title} notification`}
-              onClick={() => dismiss(t.id)}
-            >
-              <X size={18} aria-hidden />
-            </button>
-          </div>
-        ))}
-      </div>
+      <Toaster position="top-right" closeButton richColors />
     </ToastContext.Provider>
   );
 }
 
 export function useToast(): ToastApi {
-  const ctx = useContext(ToastContext);
-  if (!ctx) throw new Error("useToast must be used within ToastProvider");
-  return ctx;
+  const context = useContext(ToastContext);
+  if (!context) throw new Error("useToast must be used within ToastProvider");
+  return context;
 }

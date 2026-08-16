@@ -1,3 +1,4 @@
+import { Button } from "@/components/ui/button";
 import { RefreshCw } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Icon } from "@/components/icons";
@@ -116,14 +117,14 @@ export default function SubscribersPage() {
         subtitle="Applications currently live-subscribed to configuration."
         actions={
           <>
-            <span className="badge badge-success">
-              <span className="badge-dot" style={{ background: "var(--success)" }} />
+            <Badge kind="success">
+              <span className="size-1.5 rounded-full bg-success" />
               live · updated {lastUpdated ? formatRelative(lastUpdated) : "—"}
-            </span>
-            <button className="btn" onClick={() => void refresh(false)}>
+            </Badge>
+            <Button variant="outline" onClick={() => void refresh(false)}>
               <RefreshCw size={16} aria-hidden />
               Refresh
-            </button>
+            </Button>
           </>
         }
       />
@@ -176,7 +177,7 @@ export default function SubscribersPage() {
         groups.map(([ns, list]) => (
           <div key={ns} className="ns-group">
             <div className="ns-group-title">
-              <span className="ns-group-env">{ns}</span>
+              <span className="ns-group-name">{ns}</span>
               <span className="faint text-sm">
                 {list.length} {list.length === 1 ? "subscriber" : "subscribers"}
               </span>

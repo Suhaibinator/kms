@@ -1,4 +1,5 @@
-import Link from "next/link";
+import { LogoMark } from "@/components/LogoMark";
+import { ButtonLink } from "@/components/ui/button";
 import { PageTitle } from "@/components/ui";
 
 // Next's built-in 404 renders a light-themed page, which reads as a broken app
@@ -9,7 +10,7 @@ export default function NotFoundPage() {
       <PageTitle title="Page not found" />
       <div className="auth-card">
         <div className="auth-brand">
-          <div className="logo">K</div>
+          <LogoMark />
           <div>
             <h1 className="auth-title">Page not found</h1>
             <div className="faint text-sm">404</div>
@@ -18,9 +19,9 @@ export default function NotFoundPage() {
         <p className="muted text-sm mb-16">
           That page does not exist. It may have been renamed, or the link may be out of date.
         </p>
-        <Link className="btn btn-primary btn-block" href="/">
+        <ButtonLink className="w-full" href="/">
           Back to overview
-        </Link>
+        </ButtonLink>
       </div>
     </main>
   );

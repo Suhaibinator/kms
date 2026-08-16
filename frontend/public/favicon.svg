@@ -1,12 +1,19 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" role="img" aria-label="KMS">
   <defs>
     <linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#5b8cff"/>
-      <stop offset="1" stop-color="#8a6bff"/>
+      <stop offset="0" stop-color="#202a33"/>
+      <stop offset="1" stop-color="#303d47"/>
     </linearGradient>
+    <mask id="keyway" maskUnits="userSpaceOnUse" x="7" y="6" width="20" height="20">
+      <rect x="7" y="6" width="20" height="20" fill="#fff"/>
+      <path d="m15.1 13.35 2.65 2.65-2.65 2.65L12.45 16l2.65-2.65Z" fill="#000"/>
+    </mask>
   </defs>
   <rect width="32" height="32" rx="8" fill="url(#g)"/>
-  <path d="M11 8.5v15M11 16.2l8.4-7.7M13.6 14.1L21.4 23.5"
-        fill="none" stroke="#fff" stroke-width="2.9"
-        stroke-linecap="round" stroke-linejoin="round"/>
+  <rect x=".5" y=".5" width="31" height="31" rx="7.5" fill="none" stroke="#e4b45f" stroke-opacity=".22"/>
+  <g mask="url(#keyway)" fill="#e4b45f">
+    <rect x="7.75" y="6.75" width="4.5" height="18.5" rx="1.35"/>
+    <path d="m11.25 14.65 9-7.9h5.5L15.1 16.2h-3.85v-1.55Z"/>
+    <path d="m14.75 14.75 11.15 10.5h-5.6l-9.05-8.6v-1.9h3.5Z"/>
+  </g>
 </svg>

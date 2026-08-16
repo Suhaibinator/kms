@@ -153,8 +153,17 @@ func (s *SQLStore) ListApplications(ctx context.Context, page ListPage) ([]domai
 		return nil, "", err
 	}
 	type row struct {
-		applicationModel
-		EnvironmentCount int64
+		ID               int64  `gorm:"column:id"`
+		Name             string `gorm:"column:name"`
+		Description      string `gorm:"column:description"`
+		ReleaseName      string `gorm:"column:release_name"`
+		SchemaID         string `gorm:"column:schema_id"`
+		SchemaVersion    int64  `gorm:"column:schema_version"`
+		ContractJSON     string `gorm:"column:contract_json"`
+		CreatedBy        string `gorm:"column:created_by"`
+		CreatedAt        string `gorm:"column:created_at"`
+		UpdatedAt        string `gorm:"column:updated_at"`
+		EnvironmentCount int64  `gorm:"column:environment_count"`
 	}
 	q := s.db.WithContext(ctx).Table("applications AS a").
 		Select("a.*, (SELECT COUNT(*) FROM namespaces n WHERE n.app = a.name) AS environment_count")
@@ -172,7 +181,11 @@ func (s *SQLStore) ListApplications(ctx context.Context, page ListPage) ([]domai
 	}
 	out := make([]domain.Application, 0, len(rows))
 	for _, r := range rows {
-		app := toApplication(r.applicationModel)
+		app := toApplication(applicationModel{
+			ID: r.ID, Name: r.Name, Description: r.Description, ReleaseName: r.ReleaseName,
+			SchemaID: r.SchemaID, SchemaVersion: r.SchemaVersion, ContractJSON: r.ContractJSON,
+			CreatedBy: r.CreatedBy, CreatedAt: r.CreatedAt, UpdatedAt: r.UpdatedAt,
+		})
 		app.EnvironmentCount = uint64(r.EnvironmentCount)
 		out = append(out, app)
 	}
