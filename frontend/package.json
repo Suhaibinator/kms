@@ -5,6 +5,7 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build --webpack",
+    "postbuild": "node scripts/keep-out-placeholder.mjs",
     "start": "next start",
     "typecheck": "next typegen && tsc --noEmit",
     "lint": "biome lint .",
