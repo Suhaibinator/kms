@@ -1,8 +1,8 @@
-import { Button } from "@/components/ui/button";
 import { RefreshCw } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Icon } from "@/components/icons";
-import { Badge, EmptyState, PageHeader, TableSkeleton } from "@/components/ui";
+import { Badge, EmptyState, PageHeader, StatSkeleton, TableSkeleton } from "@/components/ui";
+import { Button } from "@/components/ui/button";
 import { useToast } from "@/context/ToastContext";
 import { api, isAbortError } from "@/lib/api";
 import { formatRelative, formatUnixMs } from "@/lib/format";
@@ -27,6 +27,7 @@ export default function SubscribersPage() {
   const [currentRevision, setCurrentRevision] = useState(0);
   const [initialLoading, setInitialLoading] = useState(true);
   const [lastUpdated, setLastUpdated] = useState(0);
+  const [loadError, setLoadError] = useState<unknown>(null);
 
   const mounted = useRef(true);
   const erroredRef = useRef(false);
@@ -34,9 +35,13 @@ export default function SubscribersPage() {
 
   const refresh = useCallback(
     async (background: boolean) => {
-      // A manual refresh and the background poll share the same in-flight
-      // guard, so slow responses can never pile up.
-      if (requestRef.current) return;
+      // One request in flight at a time, so slow responses never pile up. The
+      // background poll yields to whatever is running; a manual refresh is a
+      // user action, so it preempts an in-flight poll instead of being dropped.
+      if (requestRef.current) {
+        if (background) return;
+        requestRef.current.abort();
+      }
       const controller = new AbortController();
       requestRef.current = controller;
       try {
@@ -45,9 +50,11 @@ export default function SubscribersPage() {
         setSubscribers(res.subscribers ?? []);
         setCurrentRevision(res.current_revision ?? 0);
         setLastUpdated(Date.now());
+        setLoadError(null);
         erroredRef.current = false;
       } catch (err) {
         if (isAbortError(err)) return;
+        if (mounted.current) setLoadError(err);
         // Only surface an error once per failure streak to avoid toast spam on
         // the 5s poll.
         if (!background || !erroredRef.current) {
@@ -117,10 +124,14 @@ export default function SubscribersPage() {
         subtitle="Applications currently live-subscribed to configuration."
         actions={
           <>
-            <Badge kind="success">
-              <span className="size-1.5 rounded-full bg-success" />
-              live · updated {lastUpdated ? formatRelative(lastUpdated) : "—"}
-            </Badge>
+            {loadError ? (
+              <Badge kind="danger">refresh failed</Badge>
+            ) : (
+              <Badge kind="success">
+                <span className="size-1.5 rounded-full bg-success" />
+                live · updated {lastUpdated ? formatRelative(lastUpdated) : "—"}
+              </Badge>
+            )}
             <Button variant="outline" onClick={() => void refresh(false)}>
               <RefreshCw size={16} aria-hidden />
               Refresh
@@ -130,27 +141,37 @@ export default function SubscribersPage() {
       />
 
       <div className="card-grid mb-16">
-        <div className="stat">
-          <div className="stat-label">Current revision</div>
-          <div className="stat-value">{currentRevision}</div>
-          <div className="stat-sub">latest configuration</div>
-        </div>
-        <div className="stat">
-          <div className="stat-label">Connected</div>
-          <div className="stat-value">{subscribers.length}</div>
-          <div className="stat-sub">active subscriptions</div>
-        </div>
-        <div className="stat">
-          <div className="stat-label">Behind latest</div>
-          <div className="stat-value">{staleCount}</div>
-          <div className="stat-sub">
-            {staleCount === 0 ? (
-              <span className="text-success">all applied</span>
-            ) : (
-              <span className="text-warning">need to catch up</span>
-            )}
-          </div>
-        </div>
+        {initialLoading ? (
+          <>
+            <StatSkeleton label="Current revision" />
+            <StatSkeleton label="Connected" />
+            <StatSkeleton label="Behind latest" />
+          </>
+        ) : (
+          <>
+            <div className="stat">
+              <div className="stat-label">Current revision</div>
+              <div className="stat-value">{currentRevision}</div>
+              <div className="stat-sub">latest configuration</div>
+            </div>
+            <div className="stat">
+              <div className="stat-label">Connected</div>
+              <div className="stat-value">{subscribers.length}</div>
+              <div className="stat-sub">active subscriptions</div>
+            </div>
+            <div className="stat">
+              <div className="stat-label">Behind latest</div>
+              <div className="stat-value">{staleCount}</div>
+              <div className="stat-sub">
+                {staleCount === 0 ? (
+                  <span className="text-success">all applied</span>
+                ) : (
+                  <span className="text-warning">need to catch up</span>
+                )}
+              </div>
+            </div>
+          </>
+        )}
       </div>
 
       {initialLoading ? (
@@ -166,6 +187,14 @@ export default function SubscribersPage() {
           ]}
           rows={4}
         />
+      ) : loadError && subscribers.length === 0 ? (
+        <EmptyState
+          icon={<Icon.subscribers size={20} />}
+          title="Could not load subscribers"
+          actions={<Button onClick={() => void refresh(false)}>Try again</Button>}
+        >
+          The subscriber list is unavailable. Check the connection and try again.
+        </EmptyState>
       ) : subscribers.length === 0 ? (
         <EmptyState
           icon={<Icon.subscribers size={20} />}

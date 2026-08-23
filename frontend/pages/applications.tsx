@@ -1,7 +1,7 @@
 import { ArrowLeft, ChevronRight, Plus, RefreshCw, SlidersHorizontal } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/router";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useId, useMemo, useState } from "react";
 import { Icon } from "@/components/icons";
 import { Modal } from "@/components/Modal";
 import {
@@ -16,10 +16,12 @@ import {
   Textarea,
 } from "@/components/ui";
 import { AppSelect } from "@/components/ui/app-select";
-import { Button } from "@/components/ui/button";
+import { Button, ButtonLink } from "@/components/ui/button";
 import { useToast } from "@/context/ToastContext";
-import { api, isAbortError } from "@/lib/api";
+import { ApiError, api, isAbortError } from "@/lib/api";
 import { utf8ToBase64 } from "@/lib/encoding";
+import { useFieldErrors, useLatestRequest } from "@/lib/hooks";
+import { links } from "@/lib/links";
 import {
   type Application,
   type ApplicationConfigurationRow,
@@ -43,6 +45,18 @@ const EMPTY_CONTRACT = `[
   {"alias":"runtime","kind":"parameter","content_type":"json"}
 ]`;
 
+const LIST_HEADERS = ["Application", "Environments", "Release", "Schema", "Contract"];
+
+// A stable empty list: a fresh `[]` per render would re-fire every memo and
+// effect keyed on the environment list whenever no dashboard is loaded.
+const NO_ENVIRONMENTS: ApplicationDashboard["environments"] = [];
+
+/** Matches `prod`, `prod-*`, and `production`, but not `reproduction` or `non-prod`. */
+const PRODUCTION_ENVIRONMENT = /^prod(-|$)|^production$/;
+
+/** Tooltips are not scroll containers; a megabyte JSON value is not a tooltip. */
+const TITLE_MAX_CHARS = 200;
+
 function parseContract(raw: string): ApplicationContractField[] {
   const value: unknown = JSON.parse(raw);
   if (!Array.isArray(value)) throw new Error("Contract must be a JSON array.");
@@ -55,6 +69,20 @@ type CreateField = "name" | "releaseName" | "schemaPin" | "contract";
 interface QuickSecretSeed {
   environment: string;
   key: string;
+}
+
+type DashboardStatus = "loading" | "success" | "not-found" | "error";
+
+/**
+ * The dashboard is keyed by the application it belongs to, so a response that
+ * lands after the user has switched to another application can never be
+ * rendered under the new header. `data` survives a refresh so the matrix does
+ * not collapse to a skeleton while a reload is in flight.
+ */
+interface DashboardSlot {
+  name: string;
+  status: DashboardStatus;
+  data: ApplicationDashboard | null;
 }
 
 /**
@@ -74,43 +102,62 @@ function validateContractText(raw: string): string | null {
 export default function ApplicationsPage() {
   const router = useRouter();
   const toast = useToast();
+  const request = useLatestRequest();
   const selectedName = typeof router.query.app === "string" ? router.query.app : "";
   const [applications, setApplications] = useState<Application[]>([]);
-  const [dashboard, setDashboard] = useState<ApplicationDashboard | null>(null);
+  const [dashboard, setDashboard] = useState<DashboardSlot | null>(null);
   const [loading, setLoading] = useState(true);
   const [createOpen, setCreateOpen] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
   const [environmentOpen, setEnvironmentOpen] = useState(false);
   const [secretSeed, setSecretSeed] = useState<QuickSecretSeed | null>(null);
   const [writeRow, setWriteRow] = useState<ApplicationConfigurationRow | null>(null);
+  const [retryEnvironments, setRetryEnvironments] = useState<string[] | null>(null);
   const [saving, setSaving] = useState(false);
 
   const loadApplications = useCallback(async () => {
+    const run = request.begin();
     setLoading(true);
     try {
-      const response = await api.listApplications(200);
+      const response = await api.listApplications(200, undefined, { signal: run.signal });
+      if (!run.current) return;
       setApplications(response.applications ?? []);
     } catch (error) {
-      if (!isAbortError(error)) toast.error(error, "Failed to load applications");
+      if (run.current && !isAbortError(error)) toast.error(error, "Failed to load applications");
     } finally {
-      setLoading(false);
+      if (run.current) setLoading(false);
     }
-  }, [toast]);
+  }, [request, toast]);
 
   const loadDashboard = useCallback(async () => {
-    if (!selectedName) {
-      setDashboard(null);
-      return;
-    }
+    if (!selectedName) return;
+    const run = request.begin();
     setLoading(true);
+    setDashboard((current) =>
+      current?.name === selectedName
+        ? { ...current, status: "loading" }
+        : { name: selectedName, status: "loading", data: null },
+    );
     try {
-      setDashboard(await api.applicationDashboard(selectedName));
+      const data = await api.applicationDashboard(selectedName, { signal: run.signal });
+      if (!run.current) return;
+      setDashboard({ name: selectedName, status: "success", data });
     } catch (error) {
-      if (!isAbortError(error)) toast.error(error, "Failed to load application");
+      if (!run.current || isAbortError(error)) return;
+      if (error instanceof ApiError && error.status === 404) {
+        setDashboard({ name: selectedName, status: "not-found", data: null });
+        return;
+      }
+      setDashboard((current) => ({
+        name: selectedName,
+        status: "error",
+        data: current?.name === selectedName ? current.data : null,
+      }));
+      toast.error(error, "Failed to load application");
     } finally {
-      setLoading(false);
+      if (run.current) setLoading(false);
     }
-  }, [selectedName, toast]);
+  }, [request, selectedName, toast]);
 
   useEffect(() => {
     if (!router.isReady) return;
@@ -122,13 +169,36 @@ export default function ApplicationsPage() {
     await router.push({ pathname: "/applications", query: { app: name } });
   }
 
-  // Derived above the early return below: hooks must run in the same order on
+  function openWrite(row: ApplicationConfigurationRow) {
+    setRetryEnvironments(null);
+    setWriteRow(row);
+  }
+
+  function closeWrite() {
+    setWriteRow(null);
+    // A partial failure still wrote the environments that succeeded; the
+    // matrix is refreshed once the user is done retrying, not underneath them.
+    if (retryEnvironments) {
+      setRetryEnvironments(null);
+      void loadDashboard();
+    }
+  }
+
+  // Derived above the early returns below: hooks must run in the same order on
   // every render, and the list view returns before reaching the detail view.
-  const environments = dashboard?.environments ?? [];
+  const activeSlot = dashboard?.name === selectedName ? dashboard : null;
+  const activeDashboard = activeSlot?.data ?? null;
+  const environments = activeDashboard?.environments ?? NO_ENVIRONMENTS;
   const environmentNames = useMemo(
     () => environments.map((environment) => environment.env),
     [environments],
   );
+
+  // On a static export the query is empty until the client router hydrates, so
+  // a deep link to one application would paint the list for a frame.
+  if (!router.isReady) {
+    return <TableSkeleton headers={LIST_HEADERS} />;
+  }
 
   if (!selectedName) {
     return (
@@ -149,9 +219,7 @@ export default function ApplicationsPage() {
           another; the application contract keeps their release shape consistent.
         </div>
         {loading ? (
-          <TableSkeleton
-            headers={["Application", "Environments", "Release", "Schema", "Contract"]}
-          />
+          <TableSkeleton headers={LIST_HEADERS} />
         ) : applications.length === 0 ? (
           <EmptyState
             icon={<Icon.application size={20} />}
@@ -165,11 +233,9 @@ export default function ApplicationsPage() {
             <table className="data">
               <thead>
                 <tr>
-                  <th>Application</th>
-                  <th>Environments</th>
-                  <th>Release</th>
-                  <th>Schema</th>
-                  <th>Contract</th>
+                  {LIST_HEADERS.map((header) => (
+                    <th key={header}>{header}</th>
+                  ))}
                   <th />
                 </tr>
               </thead>
@@ -226,6 +292,41 @@ export default function ApplicationsPage() {
     );
   }
 
+  if (activeSlot?.status === "not-found") {
+    return (
+      <>
+        <PageHeader
+          title="Application not found"
+          documentTitle={selectedName}
+          actions={
+            <ButtonLink variant="outline" href={links.applications()}>
+              <ArrowLeft size={16} aria-hidden /> Back to applications
+            </ButtonLink>
+          }
+        />
+        <EmptyState icon={<Icon.application size={20} />} title="Not found">
+          No application named <span className="mono">{selectedName}</span> exists.
+        </EmptyState>
+      </>
+    );
+  }
+
+  if (activeSlot?.status === "error" && !activeDashboard) {
+    return (
+      <>
+        <PageHeader
+          title="Could not load application"
+          documentTitle={selectedName}
+          actions={<Button onClick={() => void loadDashboard()}>Try again</Button>}
+        />
+        <EmptyState icon={<Icon.application size={20} />} title="Application unavailable">
+          The server could not load <span className="mono">{selectedName}</span>. Check the
+          connection and try again.
+        </EmptyState>
+      </>
+    );
+  }
+
   return (
     <>
       <PageHeader
@@ -244,7 +345,8 @@ export default function ApplicationsPage() {
         }
         documentTitle={selectedName}
         subtitle={
-          dashboard?.application.description || "Application configuration across environments."
+          activeDashboard?.application.description ||
+          "Application configuration across environments."
         }
         actions={
           <>
@@ -252,7 +354,7 @@ export default function ApplicationsPage() {
               <RefreshCw size={15} />
               Refresh
             </Button>
-            <Button variant="outline" onClick={() => setEditOpen(true)} disabled={!dashboard}>
+            <Button variant="outline" onClick={() => setEditOpen(true)} disabled={!activeDashboard}>
               <SlidersHorizontal size={15} />
               Edit contract
             </Button>
@@ -263,8 +365,8 @@ export default function ApplicationsPage() {
           </>
         }
       />
-      {dashboard ? <ContractSummary application={dashboard.application} /> : null}
-      {loading && !dashboard ? (
+      {activeDashboard ? <ContractSummary application={activeDashboard.application} /> : null}
+      {!activeDashboard ? (
         <TableSkeleton headers={["Key", "Kind", "Environment"]} />
       ) : environments.length === 0 ? (
         <EmptyState
@@ -291,7 +393,7 @@ export default function ApplicationsPage() {
               </Button>
               <Button
                 variant="outline"
-                onClick={() => setWriteRow({ key: "", kind: "parameter", environments: {} })}
+                onClick={() => openWrite({ key: "", kind: "parameter", environments: {} })}
               >
                 <Plus size={15} />
                 New parameter
@@ -311,7 +413,7 @@ export default function ApplicationsPage() {
                 </tr>
               </thead>
               <tbody>
-                {(dashboard?.rows ?? []).map((row) => (
+                {activeDashboard.rows.map((row) => (
                   <tr key={`${row.kind}:${row.key}`}>
                     <td className="mono matrix-key">{row.key}</td>
                     <td>
@@ -329,7 +431,7 @@ export default function ApplicationsPage() {
                     ))}
                     <td>
                       {row.kind === "parameter" ? (
-                        <Button variant="outline" size="sm" onClick={() => setWriteRow(row)}>
+                        <Button variant="outline" size="sm" onClick={() => openWrite(row)}>
                           <SlidersHorizontal size={14} />
                           Edit
                         </Button>
@@ -337,7 +439,7 @@ export default function ApplicationsPage() {
                     </td>
                   </tr>
                 ))}
-                {(dashboard?.rows ?? []).length === 0 ? (
+                {activeDashboard.rows.length === 0 ? (
                   <tr>
                     <td colSpan={environments.length + 3} className="faint">
                       No parameters or secrets have been created.
@@ -376,7 +478,7 @@ export default function ApplicationsPage() {
       <CreateApplicationModal
         open={editOpen}
         saving={saving}
-        initial={dashboard?.application}
+        initial={activeDashboard?.application}
         onClose={() => setEditOpen(false)}
         onSave={async (application) => {
           setSaving(true);
@@ -429,27 +531,32 @@ export default function ApplicationsPage() {
         app={selectedName}
         environments={environmentNames}
         row={writeRow}
+        retryEnvironments={retryEnvironments}
         saving={saving}
-        onClose={() => setWriteRow(null)}
+        onClose={closeWrite}
         onSave={async (request) => {
           setSaving(true);
           try {
             const response = await api.putApplicationParameter(request);
             const failures = response.results.filter((result) => result.error);
-            if (failures.length)
-              toast.error(
-                new Error(
-                  failures.map((result) => `${result.environment}: ${result.error}`).join("; "),
-                ),
-                "Some environments failed",
-              );
-            else
+            if (failures.length === 0) {
               toast.success(
                 "Values updated",
                 `Created independent versions in ${response.results.length} environment(s).`,
               );
-            if (failures.length === 0) setWriteRow(null);
-            await loadDashboard();
+              setWriteRow(null);
+              setRetryEnvironments(null);
+              await loadDashboard();
+              return;
+            }
+            toast.error(
+              new Error(
+                failures.map((result) => `${result.environment}: ${result.error}`).join("; "),
+              ),
+              "Some environments failed",
+            );
+            // Keep the modal and its edits; narrow the targets to what failed.
+            setRetryEnvironments(failures.map((result) => result.environment));
           } catch (error) {
             toast.error(error, "Failed to update values");
           } finally {
@@ -525,19 +632,19 @@ function MatrixCell({
   }
   if (row.kind === "secret")
     return (
-      <Link
-        href={`/secrets/detail?env=${encodeURIComponent(environment)}&app=${encodeURIComponent(app)}&key=${encodeURIComponent(row.key)}`}
-      >
+      <Link href={links.secretDetail({ env: environment, app, key: row.key })}>
         <span className="secret-cell">
           Secret v{cell.version}
           {cell.client_bound ? " · client-bound" : ""}
         </span>
       </Link>
     );
+  const value = cell.value ?? "";
+  const title = value.length > TITLE_MAX_CHARS ? `${value.slice(0, TITLE_MAX_CHARS)}…` : value;
   return (
     <div className="matrix-value">
-      <span className="mono" title={cell.value}>
-        {cell.value === "" ? "(empty)" : cell.value}
+      <span className="mono" title={title}>
+        {value === "" ? "(empty)" : value}
       </span>
       <span className="faint text-sm">
         v{cell.version} · {cell.content_type}
@@ -573,8 +680,10 @@ function CreateApplicationModal({
   const [schemaVersion, setSchemaVersion] = useState("");
   const [contract, setContract] = useState(EMPTY_CONTRACT);
   const [error, setError] = useState("");
-  const [touched, setTouched] = useState<Partial<Record<CreateField, boolean>>>({});
-  const [submitAttempted, setSubmitAttempted] = useState(false);
+  const { touch, markAllTouched, reset, shown } = useFieldErrors<CreateField>();
+  // The submit button lives in the modal footer, outside the form element; the
+  // HTML `form` attribute is what still makes Enter in the body submit it.
+  const formId = useId();
   useEffect(() => {
     if (!open) return;
     setName(initial?.name ?? "");
@@ -584,9 +693,8 @@ function CreateApplicationModal({
     setSchemaVersion(initial?.schema_version ? String(initial.schema_version) : "");
     setContract(initial ? JSON.stringify(initial.contract, null, 2) : EMPTY_CONTRACT);
     setError("");
-    setTouched({});
-    setSubmitAttempted(false);
-  }, [open, initial]);
+    reset();
+  }, [open, initial, reset]);
 
   // Three different naming rules meet on this form, so each field is checked
   // against its own: the application name is a namespace label, the release
@@ -603,118 +711,128 @@ function CreateApplicationModal({
     schemaPinProblem,
     contractProblem,
   );
-  const show = (field: CreateField, problem: string | null) =>
-    touched[field] || submitAttempted ? problem : null;
-  const markTouched = (field: CreateField) => setTouched((t) => ({ ...t, [field]: true }));
+  const shownSchemaPinProblem = shown("schemaPin", schemaPinProblem);
+
+  function submit() {
+    markAllTouched();
+    if (saving || blocking) return;
+    try {
+      setError("");
+      void onSave({
+        name,
+        description,
+        release_name: releaseName,
+        schema_id: schemaID,
+        schema_version: Number(schemaVersion || 0),
+        contract: parseContract(contract),
+      });
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Invalid contract");
+    }
+  }
+
   return (
     <Modal
       open={open}
       title={initial ? `Edit ${initial.name}` : "New application"}
       onClose={onClose}
+      dismissible={!saving}
       wide
       footer={
         <>
-          <Button variant="outline" onClick={onClose} disabled={saving}>
+          <Button type="button" variant="outline" onClick={onClose} disabled={saving}>
             Cancel
           </Button>
-          <Button
-            disabled={saving || blocking !== null}
-            onClick={() => {
-              setSubmitAttempted(true);
-              if (blocking) return;
-              try {
-                setError("");
-                void onSave({
-                  name,
-                  description,
-                  release_name: releaseName,
-                  schema_id: schemaID,
-                  schema_version: Number(schemaVersion || 0),
-                  contract: parseContract(contract),
-                });
-              } catch (cause) {
-                setError(cause instanceof Error ? cause.message : "Invalid contract");
-              }
-            }}
-          >
+          <Button form={formId} type="submit" disabled={saving || blocking !== null}>
             {saving ? <Spinner /> : null}
             {initial ? "Save contract" : "Create application"}
           </Button>
         </>
       }
     >
-      <div className="info-panel mb-16">
-        The application owns this shape. Every environment release must use the same release name,
-        schema pin, aliases, kinds, and parameter content types.
-      </div>
-      <div className="form-row">
-        <Field
-          label="Application name"
-          hint="Lowercase letters, digits, and hyphens."
-          error={initial ? null : show("name", nameProblem)}
-        >
-          <Input
-            className="font-mono"
-            value={name}
-            disabled={Boolean(initial)}
-            onChange={(event) => setName(event.target.value)}
-            onBlur={() => markTouched("name")}
-            placeholder="payments-api"
-          />
-        </Field>
-        <Field
-          label="Release name"
-          hint="Defaults to runtime when left blank."
-          error={show("releaseName", releaseNameProblem)}
-        >
-          <Input
-            className="font-mono"
-            value={releaseName}
-            onChange={(event) => setReleaseName(event.target.value)}
-            onBlur={() => markTouched("releaseName")}
-          />
-        </Field>
-      </div>
-      <Field label="Description">
-        <Input value={description} onChange={(event) => setDescription(event.target.value)} />
-      </Field>
-      <div className="form-row">
-        <Field
-          label="Schema ID"
-          hint="Optional; specify both ID and version."
-          error={show("schemaPin", schemaPinProblem)}
-        >
-          <Input
-            className="font-mono"
-            value={schemaID}
-            onChange={(event) => setSchemaID(event.target.value)}
-            onBlur={() => markTouched("schemaPin")}
-          />
-        </Field>
-        <Field label="Schema version">
-          <Input
-            type="number"
-            min={1}
-            value={schemaVersion}
-            onChange={(event) => setSchemaVersion(event.target.value)}
-            onBlur={() => markTouched("schemaPin")}
-          />
-        </Field>
-      </div>
-      <Field
-        label="Shared release contract"
-        hint="JSON array of {alias, kind, content_type}. Secrets omit content_type."
-        error={show("contract", contractProblem)}
+      <form
+        id={formId}
+        onSubmit={(event) => {
+          event.preventDefault();
+          submit();
+        }}
       >
-        <Textarea
-          className="font-mono"
-          rows={9}
-          value={contract}
-          onChange={(event) => setContract(event.target.value)}
-          onBlur={() => markTouched("contract")}
-        />
-      </Field>
-      {error ? <div className="danger-panel">{error}</div> : null}
+        <div className="info-panel mb-16">
+          The application owns this shape. Every environment release must use the same release name,
+          schema pin, aliases, kinds, and parameter content types.
+        </div>
+        <div className="form-row">
+          <Field
+            label="Application name"
+            hint="Lowercase letters, digits, and hyphens."
+            error={initial ? null : shown("name", nameProblem)}
+          >
+            <Input
+              className="font-mono"
+              value={name}
+              disabled={Boolean(initial)}
+              onChange={(event) => setName(event.target.value)}
+              onBlur={() => touch("name")}
+              placeholder="payments-api"
+            />
+          </Field>
+          <Field
+            label="Release name"
+            hint="Defaults to runtime when left blank."
+            error={shown("releaseName", releaseNameProblem)}
+          >
+            <Input
+              className="font-mono"
+              value={releaseName}
+              onChange={(event) => setReleaseName(event.target.value)}
+              onBlur={() => touch("releaseName")}
+            />
+          </Field>
+        </div>
+        <Field label="Description">
+          <Input value={description} onChange={(event) => setDescription(event.target.value)} />
+        </Field>
+        <div className="form-row">
+          <Field
+            label="Schema ID"
+            hint="Optional; specify both ID and version."
+            error={shownSchemaPinProblem}
+          >
+            <Input
+              className="font-mono"
+              value={schemaID}
+              onChange={(event) => setSchemaID(event.target.value)}
+              onBlur={() => touch("schemaPin")}
+            />
+          </Field>
+          <Field label="Schema version">
+            <Input
+              type="number"
+              min={1}
+              value={schemaVersion}
+              // The pin is one rule across two inputs; the message sits under
+              // Schema ID, but both controls are part of the invalid pair.
+              aria-invalid={shownSchemaPinProblem ? true : undefined}
+              onChange={(event) => setSchemaVersion(event.target.value)}
+              onBlur={() => touch("schemaPin")}
+            />
+          </Field>
+        </div>
+        <Field
+          label="Shared release contract"
+          hint="JSON array of {alias, kind, content_type}. Secrets omit content_type."
+          error={shown("contract", contractProblem)}
+        >
+          <Textarea
+            className="font-mono"
+            rows={9}
+            value={contract}
+            onChange={(event) => setContract(event.target.value)}
+            onBlur={() => touch("contract")}
+          />
+        </Field>
+        {error ? <div className="danger-panel">{error}</div> : null}
+      </form>
     </Modal>
   );
 }
@@ -739,62 +857,77 @@ function AddEnvironmentModal({
   const [environment, setEnvironment] = useState("");
   const [description, setDescription] = useState("");
   const [token, setToken] = useState(false);
-  const [environmentTouched, setEnvironmentTouched] = useState(false);
+  const { touch, markAllTouched, reset, shown } = useFieldErrors<"environment">();
+  const formId = useId();
   // An environment is the env half of a namespace, so it follows the label rule.
   const environmentProblem = validateEnv(environment.trim());
   useEffect(() => {
     if (!open) return;
-    setEnvironmentTouched(false);
-  }, [open]);
+    setEnvironment("");
+    setDescription("");
+    setToken(false);
+    reset();
+  }, [open, reset]);
+
+  function submit() {
+    markAllTouched();
+    if (saving || environmentProblem) return;
+    void onSave(environment, description, token ? ["mtls", "token"] : ["mtls"]);
+  }
+
   return (
     <Modal
       open={open}
       title={`Add environment to ${app}`}
       onClose={onClose}
+      dismissible={!saving}
       footer={
         <>
-          <Button variant="outline" onClick={onClose} disabled={saving}>
+          <Button type="button" variant="outline" onClick={onClose} disabled={saving}>
             Cancel
           </Button>
-          <Button
-            disabled={saving || environmentProblem !== null}
-            onClick={() => {
-              setEnvironmentTouched(true);
-              if (environmentProblem) return;
-              void onSave(environment, description, token ? ["mtls", "token"] : ["mtls"]);
-            }}
-          >
+          <Button form={formId} type="submit" disabled={saving || environmentProblem !== null}>
             {saving ? <Spinner /> : null}Add environment
           </Button>
         </>
       }
     >
-      <Field
-        label="Environment"
-        hint="Examples: dev, staging, prod, prod-gcp"
-        error={environmentTouched ? environmentProblem : null}
+      <form
+        id={formId}
+        onSubmit={(event) => {
+          event.preventDefault();
+          submit();
+        }}
       >
-        <Input
-          className="font-mono"
-          value={environment}
-          onChange={(event) => setEnvironment(event.target.value)}
-          onBlur={() => setEnvironmentTouched(true)}
-          placeholder="prod-gcp"
-        />
-      </Field>
-      <Field label="Description">
-        <Input value={description} onChange={(event) => setDescription(event.target.value)} />
-      </Field>
-      <div className="checkbox-row">
-        <Checkbox id="allow-environment-token" checked={token} onCheckedChange={setToken} />
-        <label htmlFor="allow-environment-token">
-          <strong>Also allow bearer tokens</strong>
-          <span className="faint text-sm">mTLS is always enabled and recommended.</span>
-        </label>
-      </div>
+        <Field
+          label="Environment"
+          hint="Examples: dev, staging, prod, prod-gcp"
+          error={shown("environment", environmentProblem)}
+        >
+          <Input
+            className="font-mono"
+            value={environment}
+            onChange={(event) => setEnvironment(event.target.value)}
+            onBlur={() => touch("environment")}
+            placeholder="prod-gcp"
+          />
+        </Field>
+        <Field label="Description">
+          <Input value={description} onChange={(event) => setDescription(event.target.value)} />
+        </Field>
+        <div className="checkbox-row">
+          <Checkbox id="allow-environment-token" checked={token} onCheckedChange={setToken} />
+          <label htmlFor="allow-environment-token">
+            <strong>Also allow bearer tokens</strong>
+            <span className="faint text-sm">mTLS is always enabled and recommended.</span>
+          </label>
+        </div>
+      </form>
     </Modal>
   );
 }
+
+type QuickSecretField = "environment" | "key" | "value";
 
 function QuickSecretModal({
   app,
@@ -820,8 +953,8 @@ function QuickSecretModal({
   const [key, setKey] = useState("");
   const [value, setValue] = useState("");
   const [contentType, setContentType] = useState("text/plain");
-  const [touched, setTouched] = useState({ key: false, value: false });
-  const [submitAttempted, setSubmitAttempted] = useState(false);
+  const { touch, markAllTouched, reset, shown } = useFieldErrors<QuickSecretField>();
+  const formId = useId();
 
   useEffect(() => {
     if (!seed) return;
@@ -829,16 +962,13 @@ function QuickSecretModal({
     setKey(seed.key);
     setValue("");
     setContentType("text/plain");
-    setTouched({ key: false, value: false });
-    setSubmitAttempted(false);
-  }, [seed, environments]);
+    reset();
+  }, [seed, environments, reset]);
 
+  const environmentProblem = environment ? null : "Choose an environment.";
   const keyProblem = validateKey(key.trim());
   const valueProblem = value ? validateValueSize(value) : "Secret value is required.";
-  const showKeyProblem = touched.key || submitAttempted ? keyProblem : null;
-  const showValueProblem = touched.value || submitAttempted ? valueProblem : null;
-  const blocking =
-    !environment || keyProblem !== null || valueProblem !== null || !contentType.trim();
+  const blocking = firstError(environmentProblem, keyProblem, valueProblem);
   const advancedHref = {
     pathname: "/secrets/new",
     query: {
@@ -848,88 +978,98 @@ function QuickSecretModal({
     },
   };
 
+  function submit() {
+    markAllTouched();
+    if (saving || blocking) return;
+    void onSave({
+      environment,
+      key: key.trim(),
+      value,
+      // The server defaults a blank content type; the form does not second-guess it.
+      contentType: contentType.trim() || "text/plain",
+    });
+  }
+
   return (
     <Modal
       open={seed !== null}
       title="New secret"
       onClose={onClose}
+      dismissible={!saving}
       footer={
         <>
-          <Button variant="outline" onClick={onClose} disabled={saving}>
+          <Button type="button" variant="outline" onClick={onClose} disabled={saving}>
             Cancel
           </Button>
-          <Button
-            disabled={saving || blocking}
-            onClick={() => {
-              setSubmitAttempted(true);
-              if (blocking) return;
-              void onSave({
-                environment,
-                key: key.trim(),
-                value,
-                contentType: contentType.trim(),
-              });
-            }}
-          >
+          <Button form={formId} type="submit" disabled={saving || blocking !== null}>
             {saving ? <Spinner /> : null}
             Create secret
           </Button>
         </>
       }
     >
-      <div className="form-row">
-        <Field label="Application">
-          <Input className="font-mono" value={app} disabled />
-        </Field>
-        <Field label="Environment">
-          <AppSelect
+      <form
+        id={formId}
+        onSubmit={(event) => {
+          event.preventDefault();
+          submit();
+        }}
+      >
+        <div className="form-row">
+          <Field label="Application">
+            <Input className="font-mono" value={app} disabled />
+          </Field>
+          <Field label="Environment" error={shown("environment", environmentProblem)}>
+            <AppSelect
+              className="font-mono"
+              value={environment}
+              onValueChange={setEnvironment}
+              onBlur={() => touch("environment")}
+              placeholder="Select environment…"
+              options={environments.map((item) => ({ value: item, label: item }))}
+            />
+          </Field>
+        </div>
+        <Field
+          label="Secret key"
+          hint="Examples: stripe-api-key or billing/webhook-secret"
+          error={shown("key", keyProblem)}
+        >
+          <Input
             className="font-mono"
-            value={environment}
-            onValueChange={setEnvironment}
-            placeholder="Select environment…"
-            options={environments.map((item) => ({ value: item, label: item }))}
+            value={key}
+            onChange={(event) => setKey(event.target.value)}
+            onBlur={() => touch("key")}
+            placeholder="stripe-api-key"
           />
         </Field>
-      </div>
-      <Field
-        label="Secret key"
-        hint="Examples: stripe-api-key or billing/webhook-secret"
-        error={showKeyProblem}
-      >
-        <Input
-          className="font-mono"
-          value={key}
-          onChange={(event) => setKey(event.target.value)}
-          onBlur={() => setTouched((current) => ({ ...current, key: true }))}
-          placeholder="stripe-api-key"
-        />
-      </Field>
-      <Field
-        label="Secret value"
-        hint="The value is encrypted before it is stored and is never shown in the matrix."
-        error={showValueProblem}
-      >
-        <Textarea
-          className="font-mono"
-          rows={5}
-          value={value}
-          onChange={(event) => setValue(event.target.value)}
-          onBlur={() => setTouched((current) => ({ ...current, value: true }))}
-          spellCheck={false}
-          autoComplete="off"
-        />
-      </Field>
-      <Field label="Content type">
-        <Input
-          className="font-mono"
-          value={contentType}
-          onChange={(event) => setContentType(event.target.value)}
-        />
-      </Field>
-      <div className="quick-secret-advanced text-sm">
-        Need expiration, metadata, an access token, or client-bound protection?{" "}
-        <Link href={advancedHref}>Open advanced secret options</Link>.
-      </div>
+        <Field
+          label="Secret value"
+          hint="The value is encrypted before it is stored and is never shown in the matrix."
+          error={shown("value", valueProblem)}
+        >
+          <Textarea
+            className="font-mono"
+            rows={5}
+            value={value}
+            onChange={(event) => setValue(event.target.value)}
+            onBlur={() => touch("value")}
+            spellCheck={false}
+            autoComplete="off"
+          />
+        </Field>
+        <Field label="Content type" hint="Defaults to text/plain when left blank.">
+          <Input
+            className="font-mono"
+            value={contentType}
+            onChange={(event) => setContentType(event.target.value)}
+          />
+        </Field>
+        <div className="quick-secret-advanced text-sm">
+          Need expiration, metadata, an access token, or client-bound protection?{" "}
+          <Link href={advancedHref}>Open advanced secret options</Link>.
+        </div>
+      </form>
     </Modal>
   );
 }
@@ -938,6 +1078,7 @@ function BulkParameterModal({
   app,
   environments,
   row,
+  retryEnvironments,
   saving,
   onClose,
   onSave,
@@ -945,6 +1086,8 @@ function BulkParameterModal({
   app: string;
   environments: string[];
   row: ApplicationConfigurationRow | null;
+  /** After a partial failure: the environments still to write. Narrows the selection only. */
+  retryEnvironments: string[] | null;
   saving: boolean;
   onClose: () => void;
   onSave: (request: {
@@ -960,19 +1103,21 @@ function BulkParameterModal({
   const [value, setValue] = useState("");
   const [contentType, setContentType] = useState("string");
   const [selected, setSelected] = useState<string[]>([]);
-  const [keyTouched, setKeyTouched] = useState(false);
-  const [valueTouched, setValueTouched] = useState(false);
+  const { touch, markAllTouched, reset, shown } = useFieldErrors<"key" | "value">();
+  const formId = useId();
   useEffect(() => {
     if (!row) return;
-    setKeyTouched(false);
-    setValueTouched(false);
+    reset();
     setKey(row.key);
     const present = environments.filter((environment) => row.environments[environment]?.present);
     setSelected(present.length ? present : environments);
     const first = present.length ? row.environments[present[0]] : undefined;
     setValue(first?.value ?? "");
     setContentType(first?.content_type ?? "string");
-  }, [row, environments]);
+  }, [row, environments, reset]);
+  useEffect(() => {
+    if (retryEnvironments) setSelected(retryEnvironments);
+  }, [retryEnvironments]);
   const allSelected = selected.length === environments.length;
   // The same value is written to every selected environment, so it only has to
   // parse once. Memoised because a JSON document may run to a megabyte.
@@ -994,105 +1139,119 @@ function BulkParameterModal({
         : false,
     [row, environments],
   );
+
+  function submit() {
+    markAllTouched();
+    if (saving || blocking || selected.length === 0) return;
+    void onSave({
+      application: app,
+      key,
+      value,
+      content_type: contentType,
+      metadata_json: "{}",
+      environments: selected,
+    });
+  }
+
   return (
     <Modal
       open={row !== null}
       title={row?.key ? `Update ${row.key}` : "New parameter"}
       onClose={onClose}
+      dismissible={!saving}
       wide
       footer={
         <>
-          <Button variant="outline" onClick={onClose} disabled={saving}>
+          <Button type="button" variant="outline" onClick={onClose} disabled={saving}>
             Cancel
           </Button>
           <Button
+            form={formId}
+            type="submit"
             disabled={saving || blocking !== null || selected.length === 0}
-            onClick={() => {
-              setKeyTouched(true);
-              setValueTouched(true);
-              if (blocking) return;
-              void onSave({
-                application: app,
-                key,
-                value,
-                content_type: contentType,
-                metadata_json: "{}",
-                environments: selected,
-              });
-            }}
           >
-            {saving ? <Spinner /> : null}Review and apply to {selected.length}
+            {saving ? <Spinner /> : null}Apply to {selected.length} environment(s)
           </Button>
         </>
       }
     >
-      <div className="warn-panel mb-16">
-        <strong>Separate versions will be created.</strong> This does not link environments or
-        create shared mutable state. Verify production targets before applying.
-        {differing
-          ? " Existing values differ; the editor starts from the first selected environment."
-          : ""}
-      </div>
-      <div className="form-row">
-        <Field label="Key" error={row?.key ? null : keyTouched ? keyProblem : null}>
-          <Input
+      <form
+        id={formId}
+        onSubmit={(event) => {
+          event.preventDefault();
+          submit();
+        }}
+      >
+        <div className="warn-panel mb-16">
+          <strong>Separate versions will be created.</strong> This does not link environments or
+          create shared mutable state. Verify production targets before applying.
+          {differing
+            ? " Existing values differ; the editor starts from the first selected environment."
+            : ""}
+        </div>
+        <div className="form-row">
+          <Field label="Key" error={row?.key ? null : shown("key", keyProblem)}>
+            <Input
+              className="font-mono"
+              value={key}
+              disabled={Boolean(row?.key)}
+              onChange={(event) => setKey(event.target.value)}
+              onBlur={() => touch("key")}
+            />
+          </Field>
+          <Field label="Content type">
+            <AppSelect
+              value={contentType}
+              onValueChange={setContentType}
+              options={PARAMETER_CONTENT_TYPES.map((type) => ({ value: type, label: type }))}
+            />
+          </Field>
+        </div>
+        <Field label="Value" error={shown("value", valueProblem)}>
+          <Textarea
             className="font-mono"
-            value={key}
-            disabled={Boolean(row?.key)}
-            onChange={(event) => setKey(event.target.value)}
-            onBlur={() => setKeyTouched(true)}
+            rows={7}
+            value={value}
+            onChange={(event) => setValue(event.target.value)}
+            onBlur={() => touch("value")}
           />
         </Field>
-        <Field label="Content type">
-          <AppSelect
-            value={contentType}
-            onValueChange={setContentType}
-            options={PARAMETER_CONTENT_TYPES.map((type) => ({ value: type, label: type }))}
-          />
+        <Field label="Target environments">
+          <div className="checkbox-row">
+            <Checkbox
+              id="all-target-environments"
+              checked={allSelected}
+              onCheckedChange={(checked) => setSelected(checked ? environments : [])}
+            />
+            <label htmlFor="all-target-environments">
+              <strong>All environments</strong>
+            </label>
+          </div>
+          <div className="environment-check-grid">
+            {environments.map((environment) => (
+              <div className="checkbox-row" key={environment}>
+                <Checkbox
+                  id={`target-environment-${environment}`}
+                  checked={selected.includes(environment)}
+                  onCheckedChange={(checked) =>
+                    setSelected((current) =>
+                      checked
+                        ? [...current, environment]
+                        : current.filter((item) => item !== environment),
+                    )
+                  }
+                />
+                <label className="mono" htmlFor={`target-environment-${environment}`}>
+                  {environment}
+                </label>
+                {PRODUCTION_ENVIRONMENT.test(environment) ? (
+                  <Badge kind="warning">production</Badge>
+                ) : null}
+              </div>
+            ))}
+          </div>
         </Field>
-      </div>
-      <Field label="Value" error={valueTouched ? valueProblem : null}>
-        <Textarea
-          className="font-mono"
-          rows={7}
-          value={value}
-          onChange={(event) => setValue(event.target.value)}
-          onBlur={() => setValueTouched(true)}
-        />
-      </Field>
-      <Field label="Target environments">
-        <div className="checkbox-row">
-          <Checkbox
-            id="all-target-environments"
-            checked={allSelected}
-            onCheckedChange={(checked) => setSelected(checked ? environments : [])}
-          />
-          <label htmlFor="all-target-environments">
-            <strong>All environments</strong>
-          </label>
-        </div>
-        <div className="environment-check-grid">
-          {environments.map((environment) => (
-            <div className="checkbox-row" key={environment}>
-              <Checkbox
-                id={`target-environment-${environment}`}
-                checked={selected.includes(environment)}
-                onCheckedChange={(checked) =>
-                  setSelected((current) =>
-                    checked
-                      ? [...current, environment]
-                      : current.filter((item) => item !== environment),
-                  )
-                }
-              />
-              <label className="mono" htmlFor={`target-environment-${environment}`}>
-                {environment}
-              </label>
-              {environment.includes("prod") ? <Badge kind="warning">production</Badge> : null}
-            </div>
-          ))}
-        </div>
-      </Field>
+      </form>
     </Modal>
   );
 }
