@@ -4,10 +4,11 @@ import Head from "next/head";
 import { useRouter } from "next/router";
 import { type ReactNode, useEffect } from "react";
 import AppShell from "@/components/AppShell";
+import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { Loading } from "@/components/ui";
 import { AuthProvider, useAuth } from "@/context/AuthContext";
 import { ToastProvider } from "@/context/ToastContext";
-import { getToken } from "@/lib/api";
+import { currentPath, loginHref } from "@/lib/returnTo";
 import "@/styles/globals.css";
 
 // Self-hosted so the static export stays hermetic: no build-time fetch from
@@ -37,17 +38,20 @@ const inter = localFont({
 const PUBLIC_ROUTES = new Set<string>(["/login", "/404"]);
 
 function Protected({ children }: { children: ReactNode }) {
-  const { ready } = useAuth();
+  const { ready, authenticated, signedOut } = useAuth();
   const router = useRouter();
-  const hasToken = ready ? !!getToken() : true;
 
+  // The only place in the app that sends an unauthenticated visitor to /login.
+  // AuthContext reports session state; it does not navigate. A sign-out skips
+  // the returnTo round-trip — the user chose to leave.
   useEffect(() => {
-    if (ready && !getToken()) {
-      void router.replace("/login");
-    }
-  }, [ready, router]);
+    if (!ready || authenticated) return;
+    void router.replace(signedOut ? "/login" : loginHref(currentPath()));
+  }, [ready, authenticated, signedOut, router]);
 
-  if (!ready || !hasToken) {
+  // `authenticated` and `ready` both start false, so the prerendered HTML is
+  // still this branch — byte-identical to what the export produced before.
+  if (!ready || !authenticated) {
     return (
       <div className="auth-wrap">
         {/* Titles the pre-auth moment (and therefore the prerendered HTML,
@@ -84,13 +88,17 @@ export default function App({ Component, pageProps }: AppProps) {
       </Head>
       <ToastProvider>
         <AuthProvider>
-          {isPublic ? (
-            <Component {...pageProps} />
-          ) : (
-            <Protected>
+          {/* Tied to the route so navigating away from a crashed page clears
+              the error instead of stranding the visitor on the fallback card. */}
+          <ErrorBoundary resetKey={router.asPath}>
+            {isPublic ? (
               <Component {...pageProps} />
-            </Protected>
-          )}
+            ) : (
+              <Protected>
+                <Component {...pageProps} />
+              </Protected>
+            )}
+          </ErrorBoundary>
         </AuthProvider>
       </ToastProvider>
     </div>

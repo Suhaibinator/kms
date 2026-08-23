@@ -224,22 +224,43 @@ export async function apiFetch<T>(path: string, opts: FetchOptions = {}): Promis
   }
 
   let data: unknown = null;
+  let parseFailed = false;
   if (text) {
     try {
       data = JSON.parse(text);
     } catch {
-      data = null;
+      // Keep `data` null so the !res.ok branch still falls back to the status code.
+      parseFailed = true;
     }
   }
 
   if (!res.ok) {
     const env = data as ApiErrorEnvelope | null;
-    const code = env?.error?.code ?? httpStatusToCode(res.status);
-    const message = env?.error?.message ?? res.statusText ?? "Request failed";
+    let code = env?.error?.code ?? httpStatusToCode(res.status);
+    // A 401 on an unauthenticated request (login) means "bad credentials", not
+    // "your session ended" — the console has no session to lose at that point.
+    if (res.status === 401 && !auth && code === "unauthenticated") {
+      code = "invalid_credentials";
+    }
+    // `||`, not `??`: HTTP/2 always yields an empty statusText, and an envelope
+    // may carry `message: ""`. Both must fall through to the next fallback.
+    const message = env?.error?.message || res.statusText || "Request failed";
     const validationErrors = Array.isArray(env?.error?.validation_errors)
       ? env.error.validation_errors
       : [];
     throw new ApiError(code, message, res.status, validationErrors);
+  }
+
+  // A 2xx body we cannot read is a server/proxy problem (an HTML error page, a
+  // truncated response); returning null would surface as a TypeError in the
+  // caller, far from the cause. An empty body still resolves null, which the
+  // Promise<void> endpoints depend on.
+  if (parseFailed) {
+    throw new ApiError(
+      "internal",
+      "The server returned a response the console could not read.",
+      res.status,
+    );
   }
 
   return data as T;
