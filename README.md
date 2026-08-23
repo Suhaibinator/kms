@@ -149,7 +149,7 @@ directly, with client-side routing fallback for deep links.
 
 ### Prerequisites
 
-- Go 1.26.6+ (see `go.mod`)
+- Go 1.27+ (see `go.mod`)
 - Node.js 20.9+ (required by the pinned Next.js version)
 - Node.js 22+ when building or consuming the independently published
   TypeScript SDK
