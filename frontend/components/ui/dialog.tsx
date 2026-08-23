@@ -102,7 +102,9 @@ function DialogTitle({ className, ...props }: DialogPrimitive.Title.Props) {
   return (
     <DialogPrimitive.Title
       data-slot="dialog-title"
-      className={cn("font-heading text-base leading-none font-medium", className)}
+      // text-base is 1rem = 14px at this root, i.e. body size — a title has to
+      // say so explicitly. The px literal holds at whichever root the app ends on.
+      className={cn("font-heading text-[16px] leading-tight font-semibold", className)}
       {...props}
     />
   );

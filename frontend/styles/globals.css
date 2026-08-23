@@ -935,8 +935,10 @@ table.data th.num {
 }
 .schema-code {
   flex: 1 1 auto;
-  min-height: 360px;
-  max-height: calc(100dvh - 250px);
+  /* The workspace modal is a fixed-height grid whose body row already bounds
+     this element. The old max-height guessed at the header/footer/toolbar
+     chrome and was wrong whenever any of it changed. */
+  min-height: 200px;
   margin: 0;
   padding: var(--space-4);
   overflow: auto;
@@ -994,10 +996,6 @@ table.data th.num {
   }
   .schema-viewer-meta .kv {
     flex-basis: auto;
-  }
-  .schema-code {
-    min-height: 300px;
-    max-height: calc(100dvh - 330px);
   }
 }
 
@@ -1288,6 +1286,13 @@ table.data th.num {
   margin-top: var(--space-2);
 }
 .advanced-panel-modal .field:last-child {
+  margin-bottom: 0;
+}
+/* The modal body's own padding is the bottom gutter; a trailing field must not
+   add a second one. Deliberately not generalised to a bare .field:last-child —
+   page forms rely on that margin before .form-actions. */
+[data-modal-body] > .field:last-child,
+[data-modal-body] > form:last-child > .field:last-child {
   margin-bottom: 0;
 }
 .advanced-ca-action,
