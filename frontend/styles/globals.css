@@ -647,9 +647,6 @@ table.data th.mono {
 .spacer {
   flex: 1;
 }
-.text-sm {
-  font-size: 12.5px;
-}
 .text-danger {
   color: var(--danger);
 }
