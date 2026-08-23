@@ -473,7 +473,7 @@ export default function SecretDetailPage() {
               {REVEAL_SECONDS} seconds.
             </div>
             <div className="row-wrap">
-              <label className="field-label" htmlFor="reveal-version" style={{ margin: 0 }}>
+              <label className="field-label" htmlFor="reveal-version">
                 Version
               </label>
               <AppSelect

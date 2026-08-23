@@ -422,9 +422,7 @@ function RuleEditor({
   return (
     <div>
       <div className="between mb-2">
-        <div className="field-label" style={{ margin: 0 }}>
-          {title}
-        </div>
+        <div className="field-label">{title}</div>
         <Button type="button" variant="outline" size="sm" onClick={add}>
           Add rule
         </Button>
@@ -434,7 +432,7 @@ function RuleEditor({
       ) : (
         <div className="stack">
           {rules.map((rule, i) => (
-            <div key={rule.id} className="rule-row" style={{ flexWrap: "wrap" }}>
+            <div key={rule.id} className="rule-row">
               <div className="rule-op">
                 <Field label="Operation" error={errorFor(rule, "operation")}>
                   <AppSelect
@@ -448,7 +446,7 @@ function RuleEditor({
                   />
                 </Field>
               </div>
-              <div style={{ width: 130 }}>
+              <div className="rule-app">
                 <Field label="App" error={errorFor(rule, "app")}>
                   <Input
                     className="font-mono"
@@ -459,7 +457,7 @@ function RuleEditor({
                   />
                 </Field>
               </div>
-              <div style={{ width: 110 }}>
+              <div className="rule-env">
                 <Field label="Env" error={errorFor(rule, "env")}>
                   <Input
                     className="font-mono"
@@ -475,9 +473,6 @@ function RuleEditor({
                 variant="destructive"
                 size="sm"
                 className="rule-remove"
-                // The row bottom-aligns its cells, and Field carries a bottom
-                // margin the bare button does not — this keeps it level.
-                style={{ marginBottom: "var(--space-4)" }}
                 onClick={() => remove(rule.id)}
                 aria-label={`Remove ${kind} rule ${i + 1}: ${rule.operation}`}
               >

@@ -519,10 +519,28 @@ fieldset.field legend {
 .rule-row {
   display: flex;
   align-items: flex-end;
+  flex-wrap: wrap;
   gap: 10px;
 }
 .rule-op {
   min-width: 180px;
+}
+.rule-app {
+  width: 130px;
+}
+.rule-env {
+  width: 110px;
+}
+/* The row bottom-aligns its cells, and Field carries a bottom margin the bare
+   button does not — this keeps the remove button level with the inputs. */
+.rule-row > .rule-remove {
+  margin-bottom: var(--space-4);
+}
+/* A label used as a row/heading caption, not stacked above its control. Tailwind's
+   m-0 cannot do this: it is layered and loses to the unlayered .field-label rule. */
+.between > .field-label,
+.row-wrap > .field-label {
+  margin: 0;
 }
 /* ---------- Tables ---------- */
 

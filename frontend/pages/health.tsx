@@ -110,9 +110,7 @@ export default function HealthPage() {
             </div>
             <div className="stat">
               <div className="stat-label">Version</div>
-              <div className="stat-value mono" style={{ fontSize: 18 }}>
-                {health?.version || "—"}
-              </div>
+              <div className="stat-value-sm mono">{health?.version || "—"}</div>
             </div>
             <div className="stat">
               <div className="stat-label">Current revision</div>

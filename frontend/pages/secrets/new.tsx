@@ -171,7 +171,7 @@ export default function NewSecretPage() {
         }
       />
 
-      <div className="card" style={{ maxWidth: 720 }}>
+      <div className="card max-w-[720px]">
         <form onSubmit={submit}>
           <div className="form-row">
             <NamespacePicker
