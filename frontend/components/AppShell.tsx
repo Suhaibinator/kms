@@ -105,7 +105,8 @@ function SidebarContent({
           <div className="kind">{identity?.kind ?? "session"}</div>
         </div>
         <Button type="button" variant="ghost" className="w-full" onClick={logout}>
-          <Icon.logout /> Log out
+          <Icon.logout />
+          Log out
         </Button>
       </div>
     </>
@@ -135,6 +136,13 @@ export default function AppShell({ children }: { children: ReactNode }) {
 
   return (
     <div className="app-shell">
+      {/* First focus stop on every page, so keyboard users can jump the nav. */}
+      <a
+        href="#main-content"
+        className="sr-only rounded-md focus:not-sr-only focus:absolute focus:top-2 focus:left-2 focus:z-100 focus:bg-popover focus:px-3 focus:py-2 focus:text-sm focus:ring-1 focus:ring-border"
+      >
+        Skip to content
+      </a>
       <Sheet open={navOpen} onOpenChange={setNavOpen}>
         <header className="mobile-topbar">
           <SheetTrigger
@@ -157,6 +165,7 @@ export default function AppShell({ children }: { children: ReactNode }) {
         </header>
         <SheetContent
           side="left"
+          closeLabel="Close navigation"
           className="mobile-sidebar w-[min(84vw,300px)] max-w-none gap-0 p-0"
         >
           <SheetTitle className="sr-only">Primary navigation</SheetTitle>
@@ -179,7 +188,7 @@ export default function AppShell({ children }: { children: ReactNode }) {
         />
       </aside>
 
-      <main className="main">
+      <main id="main-content" className="main">
         <div className="page">{children}</div>
       </main>
     </div>

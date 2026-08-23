@@ -1,4 +1,6 @@
-import { type ReactNode, useEffect, useState } from "react";
+import type { Dialog as DialogPrimitive } from "@base-ui/react/dialog";
+import { type ReactNode, useEffect, useId, useState } from "react";
+import { Field } from "@/components/ui";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -20,6 +22,7 @@ export function Modal({
   wide,
   workspace,
   dismissible = true,
+  initialFocus,
 }: {
   open: boolean;
   title: ReactNode;
@@ -29,8 +32,14 @@ export function Modal({
   wide?: boolean;
   /** Use the available viewport for data-heavy editors and inspectors. */
   workspace?: boolean;
-  /** Whether Escape, the backdrop, and the header close button may dismiss. */
+  /**
+   * Whether Escape, the backdrop, and the header close button may dismiss.
+   * Pass `dismissible={!busy}` whenever the modal performs an async action, so
+   * a half-finished save cannot be dismissed out from under itself.
+   */
   dismissible?: boolean;
+  /** Element focused when the dialog opens; defaults to Base UI's own choice. */
+  initialFocus?: DialogPrimitive.Popup.Props["initialFocus"];
 }) {
   return (
     <Dialog
@@ -42,17 +51,22 @@ export function Modal({
     >
       <DialogContent
         showCloseButton={dismissible}
+        initialFocus={initialFocus}
         className={cn(
-          "max-h-[calc(100dvh-2rem)] gap-0 overflow-y-auto p-0 sm:max-w-[560px]",
+          // Header and footer are pinned rows; only the middle row scrolls.
+          // Without this the action buttons scroll off the bottom of a long form.
+          "grid max-h-[calc(100dvh-2rem)] grid-rows-[auto_minmax(0,1fr)_auto] gap-0 overflow-hidden p-0 sm:max-w-[560px]",
           wide && "sm:max-w-[720px]",
-          workspace &&
-            "h-[calc(100dvh-2rem)] max-h-[calc(100dvh-2rem)] grid-rows-[auto_minmax(0,1fr)_auto] overflow-hidden sm:max-w-[min(1200px,calc(100vw-2rem))]",
+          // Workspace modals only change their footprint; the row layout is shared.
+          workspace && "h-[calc(100dvh-2rem)] sm:max-w-[min(1200px,calc(100vw-2rem))]",
         )}
       >
         <DialogHeader className="border-b border-border px-5 py-4 pr-14">
           <DialogTitle>{title}</DialogTitle>
         </DialogHeader>
-        <div className={cn("p-5", workspace && "min-h-0 overflow-y-auto")}>{children}</div>
+        <div data-modal-body className="min-h-0 overflow-y-auto p-5">
+          {children}
+        </div>
         {footer ? (
           <DialogFooter className="m-0 rounded-none px-5 py-4">{footer}</DialogFooter>
         ) : null}
@@ -86,6 +100,9 @@ export function ConfirmDialog({
   onCancel: () => void;
 }) {
   const [typed, setTyped] = useState("");
+  // The confirm button lives in the footer row, outside the form element; the
+  // HTML `form` attribute is what still makes Enter in the body submit it.
+  const formId = useId();
 
   useEffect(() => {
     if (open) setTyped("");
@@ -105,9 +122,9 @@ export function ConfirmDialog({
             {cancelLabel}
           </Button>
           <Button
-            type="button"
+            form={formId}
+            type="submit"
             variant={danger ? "destructive-solid" : "default"}
-            onClick={onConfirm}
             disabled={confirmDisabled}
           >
             {busy ? <Spinner /> : null}
@@ -116,22 +133,33 @@ export function ConfirmDialog({
         </>
       }
     >
-      <div className={danger ? "danger-panel" : "info-panel"}>{message}</div>
-      {requireText ? (
-        <div className="field mt-16">
-          <label className="field-label" htmlFor="confirm-text">
-            Type <span className="mono">{requireText}</span> to confirm
-          </label>
-          <Input
-            id="confirm-text"
-            className="font-mono"
-            value={typed}
-            autoComplete="off"
-            spellCheck={false}
-            onChange={(event) => setTyped(event.target.value)}
-          />
-        </div>
-      ) : null}
+      <form
+        id={formId}
+        onSubmit={(event) => {
+          event.preventDefault();
+          if (!confirmDisabled) onConfirm();
+        }}
+      >
+        <div className={danger ? "danger-panel" : "info-panel"}>{message}</div>
+        {requireText ? (
+          <Field
+            label={
+              <>
+                Type <span className="mono">{requireText}</span> to confirm
+              </>
+            }
+            className="mt-4"
+          >
+            <Input
+              className="font-mono"
+              value={typed}
+              autoComplete="off"
+              spellCheck={false}
+              onChange={(event) => setTyped(event.target.value)}
+            />
+          </Field>
+        ) : null}
+      </form>
     </Modal>
   );
 }

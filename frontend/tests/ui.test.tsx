@@ -1,6 +1,8 @@
-import { render, screen } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { cleanup, render, screen } from "@testing-library/react";
+import { afterEach, describe, expect, it } from "vitest";
 import { Field } from "@/components/ui";
+
+afterEach(cleanup);
 
 describe("Field", () => {
   it("associates a generated id and hint with a direct form control", () => {
@@ -28,6 +30,37 @@ describe("Field", () => {
       "id",
       "environment",
     );
+  });
+
+  it("marks a required control without reading the asterisk aloud", () => {
+    render(
+      <Field label="Release name" required>
+        <input />
+      </Field>,
+    );
+
+    const input = screen.getByRole("textbox", { name: "Release name" });
+    expect(input).toHaveAttribute("aria-required", "true");
+    expect(screen.getByText("*", { exact: false, selector: "span" })).toHaveAttribute(
+      "aria-hidden",
+      "true",
+    );
+  });
+
+  it("accepts a composed label", () => {
+    render(
+      <Field
+        label={
+          <>
+            Type <span className="mono">prod</span> to confirm
+          </>
+        }
+      >
+        <input />
+      </Field>,
+    );
+
+    expect(screen.getByRole("textbox", { name: "Type prod to confirm" })).toBeInTheDocument();
   });
 
   it("labels composite fields as accessible groups", () => {

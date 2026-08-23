@@ -14,6 +14,7 @@ import {
 import { Skeleton as ShadcnSkeleton } from "@/components/ui/skeleton";
 import { Spinner as ShadcnSpinner } from "@/components/ui/spinner";
 import type { SecretVersionState } from "@/lib/types";
+import { cn } from "@/lib/utils";
 
 export { Checkbox } from "@/components/ui/checkbox";
 export { Button } from "@/components/ui/button";
@@ -157,9 +158,11 @@ export function Field({
   hint,
   htmlFor,
   error,
+  required,
+  className,
   children,
 }: {
-  label: string;
+  label: ReactNode;
   hint?: ReactNode;
   htmlFor?: string;
   /**
@@ -168,6 +171,9 @@ export function Field({
    * readers announce the problem as it appears. Pass null/undefined when valid.
    */
   error?: string | null;
+  /** Marks the control `aria-required` and appends a decorative asterisk. */
+  required?: boolean;
+  className?: string;
   children: ReactNode;
 }) {
   const generatedId = useId();
@@ -193,6 +199,9 @@ export function Field({
         "aria-invalid": error
           ? true
           : ((children.props as { "aria-invalid"?: boolean })["aria-invalid"] ?? undefined),
+        "aria-required": required
+          ? true
+          : ((children.props as { "aria-required"?: boolean })["aria-required"] ?? undefined),
       })
     : children;
   const resolvedFor = isLabelableControl
@@ -206,25 +215,38 @@ export function Field({
     </>
   );
 
+  // Hidden from the accessibility tree: `aria-required` on the control already
+  // says this, and "Name star" is not how it should be read out.
+  const labelContent = (
+    <>
+      {label}
+      {required ? (
+        <span aria-hidden="true" className="text-danger">
+          {" *"}
+        </span>
+      ) : null}
+    </>
+  );
+
   return !isLabelableControl && !htmlFor ? (
     <FieldSet
-      className={error ? "field field-invalid gap-2" : "field gap-2"}
+      className={cn(error ? "field field-invalid gap-2" : "field gap-2", className)}
       aria-describedby={describedBy}
       data-invalid={error ? true : undefined}
     >
       <FieldLegend variant="label" id={labelId}>
-        {label}
+        {labelContent}
       </FieldLegend>
       {children}
       {messages}
     </FieldSet>
   ) : (
     <ShadcnField
-      className={error ? "field field-invalid gap-1" : "field gap-1"}
+      className={cn(error ? "field field-invalid gap-1" : "field gap-1", className)}
       data-invalid={error ? true : undefined}
     >
       <FieldLabel htmlFor={resolvedFor} id={labelId}>
-        {label}
+        {labelContent}
       </FieldLabel>
       {control}
       {messages}
