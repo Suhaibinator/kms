@@ -224,7 +224,7 @@ export function SchemaRegistry() {
     <>
       <div className="section-toolbar">
         <div>
-          <h2>Schema registry</h2>
+          <h2 className="section-title">Schema registry</h2>
           <p className="text-sm faint">Global, immutable JSON Schema versions used by releases.</p>
         </div>
         <div className="row-wrap">

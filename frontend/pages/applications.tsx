@@ -380,7 +380,7 @@ export default function ApplicationsPage() {
         <>
           <div className="between mb-2">
             <div>
-              <h2>Configuration matrix</h2>
+              <h2 className="section-title">Configuration matrix</h2>
               <div className="faint text-sm">
                 Parameters show current values; secrets show metadata only. A bulk parameter update
                 creates an independent version in every selected environment.

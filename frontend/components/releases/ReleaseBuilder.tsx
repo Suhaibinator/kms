@@ -442,7 +442,7 @@ export function ReleaseBuilder({
 
             <div className="between mb-3 mt-4">
               <div>
-                <h2>Release entries</h2>
+                <h2 className="section-title">Release entries</h2>
                 <p className="text-sm faint">
                   Contract fields are fixed; choose which resource version supplies each alias.
                 </p>

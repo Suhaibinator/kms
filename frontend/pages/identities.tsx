@@ -1484,7 +1484,7 @@ function CredentialsModal({
                   onValueChange={(value) => setLanguage(value as SnippetLanguage)}
                 >
                   <div className="between mb-2">
-                    <h2>SDK configuration</h2>
+                    <h2 className="section-title">SDK configuration</h2>
                     <CopyButton
                       label={`Copy ${language} snippet`}
                       value={() => snippets[language]}
