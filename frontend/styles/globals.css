@@ -65,6 +65,23 @@
 
   --sidebar-w: 236px;
 
+  /* One source for the height of a default-size form control. Tailwind's h-9.5
+     (Button, Input, SelectTrigger) and the hand-written rules below must not
+     drift apart — and after the @theme pin at the bottom of this file they
+     otherwise would, because those rules were written in root-relative rem
+     while the utilities are now --spacing-relative. */
+  --control-h: calc(var(--spacing) * 9.5); /* 38px */
+  --control-h-sm: calc(var(--spacing) * 7.5); /* 30px — Button size="sm" */
+  /* A field label's line box plus the gap to its control: what a label-less
+     button in a filter row has to clear to line up with its neighbours.
+     = text-sm x leading-snug (1.375) + gap-1. Derived, never a literal.
+
+     Safe to reference --text-sm/--spacing here because *we* define them in our
+     own @theme block below, so Tailwind always emits them to :root. Do not do
+     this with a Tailwind built-in theme variable we have not redeclared —
+     unused defaults can be tree-shaken out of the emitted :root. */
+  --label-offset: calc(var(--text-sm) * 1.375 + var(--spacing)); /* 21.19px */
+
   /* shadcn/Base UI semantic palette, mapped to the established KMS surfaces. */
   --background: var(--bg);
   --foreground: var(--text);
@@ -826,7 +843,7 @@ table.data th.mono {
 .release-builder-current {
   display: flex;
   align-items: center;
-  min-height: 2.375rem;
+  min-height: var(--control-h);
 }
 .release-json-editor,
 .schema-editor {
@@ -879,8 +896,9 @@ table.data th.mono {
 .schema-viewer-meta .kv {
   flex: 1 1 620px;
 }
+/* Sits in a row-wrap beside two `sm` CopyButtons, so it matches those. */
 .schema-wrap-toggle {
-  min-height: 2.375rem;
+  min-height: var(--control-h-sm);
   padding: 0 var(--space-2);
   color: var(--text-muted);
 }
@@ -1819,6 +1837,27 @@ table.data th.mono {
   .form-actions [data-slot="button"] {
     flex: 1 1 auto;
   }
+}
+
+/* Tailwind's spacing and type scales are rem-based, so at this file's 14px root
+   every "nominal" number in the shadcn sources is a lie: h-9.5 renders 33.25px,
+   size-4 renders 14px, text-xs renders 10.5px. Everything hand-written above is
+   in px and assumes the nominal scale, so the two systems have been drifting
+   against each other and no number in either was trustworthy.
+
+   Pin the scales rather than moving the root: the geometry lines up with the px
+   CSS, page typography does not move at all, and the legacy .mt-N / .mb-N /
+   .text-sm rules can be deleted with pixel-identical class rewrites.
+
+   This block is deliberately NOT `inline` — the values are literals, and keeping
+   them as real custom properties means --control-h and --label-offset above can
+   derive from them. Do not add --text-sm--line-height / --text-xs--line-height:
+   leaving those at Tailwind's defaults reproduces today's computed line-heights
+   exactly. */
+@theme {
+  --spacing: 4px;
+  --text-sm: 12.5px; /* exactly what the legacy `.text-sm` rule produces */
+  --text-xs: 11.5px; /* was 10.5px — below the 11px floor the rest of the chrome keeps */
 }
 
 @theme inline {
