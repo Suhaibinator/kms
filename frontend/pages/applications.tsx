@@ -334,7 +334,7 @@ export default function ApplicationsPage() {
           <span className="row-wrap">
             <Button
               variant="ghost"
-              size="sm"
+              size="icon-sm"
               aria-label="Back to applications"
               onClick={() => void router.push("/applications")}
             >

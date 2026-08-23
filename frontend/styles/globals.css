@@ -925,12 +925,9 @@ table.data th.num {
 .release-copy-value code {
   overflow-wrap: anywhere;
 }
+/* Everything else comes from .json-block on the same element. */
 .release-metadata-json {
   max-height: 240px;
-  margin: 0;
-  overflow: auto;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
 }
 .schema-viewer {
   display: flex;

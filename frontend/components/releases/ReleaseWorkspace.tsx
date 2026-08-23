@@ -291,7 +291,7 @@ export function ReleaseWorkspace({
               </div>
               <div className="stat">
                 <div className="stat-label">Schema</div>
-                <div className="stat-sub mono mt-2">
+                <div className="stat-value-sm mono">
                   {release.schema_id ? `${release.schema_id}@${release.schema_version}` : "none"}
                 </div>
               </div>
