@@ -75,7 +75,8 @@ export function useLatestRequest(): { begin: () => LoadRun; abort: () => void } 
   }, []);
 
   useEffect(() => abort, [abort]);
-  return { begin, abort };
+  // A stable object, so a loader that lists `request` in its deps keeps its identity.
+  return useMemo(() => ({ begin, abort }), [begin, abort]);
 }
 
 /**
