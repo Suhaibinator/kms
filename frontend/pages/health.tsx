@@ -1,4 +1,3 @@
-import { Button } from "@/components/ui/button";
 import { RefreshCw } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { Icon } from "@/components/icons";
@@ -10,9 +9,11 @@ import {
   StatSkeleton,
   TableSkeleton,
 } from "@/components/ui";
+import { Button } from "@/components/ui/button";
 import { useToast } from "@/context/ToastContext";
 import { api } from "@/lib/api";
 import { formatUnixMs } from "@/lib/format";
+import { useLatestRequest } from "@/lib/hooks";
 import type { HealthResponse, KeyMetadata } from "@/lib/types";
 
 function keyStateKind(state: string): "success" | "warning" | "neutral" {
@@ -27,16 +28,27 @@ export default function HealthPage() {
   const [health, setHealth] = useState<HealthResponse | null>(null);
   const [keys, setKeys] = useState<KeyMetadata[]>([]);
   const [loading, setLoading] = useState(true);
+  const { begin } = useLatestRequest();
 
   const load = useCallback(async () => {
+    const run = begin();
     setLoading(true);
-    const [h, k] = await Promise.allSettled([api.health(), api.keys()]);
+    const [h, k] = await Promise.allSettled([
+      api.health({ signal: run.signal }),
+      api.keys({ signal: run.signal }),
+    ]);
+    if (!run.current) return;
     if (h.status === "fulfilled") setHealth(h.value);
-    else toast.error(h.reason, "Failed to load health");
+    else {
+      // A stale "healthy" from the previous load must not outlive a failed
+      // refresh; null renders as "unknown".
+      setHealth(null);
+      toast.error(h.reason, "Failed to load health");
+    }
     if (k.status === "fulfilled") setKeys(k.value.keys ?? []);
     else toast.error(k.reason, "Failed to load keys");
     setLoading(false);
-  }, [toast]);
+  }, [begin, toast]);
 
   useEffect(() => {
     void load();
@@ -56,7 +68,7 @@ export default function HealthPage() {
         }
       />
 
-      {loading ? (
+      {loading && health === null ? (
         <>
           <div className="card-grid mb-16">
             <StatSkeleton label="Health" />
@@ -75,17 +87,25 @@ export default function HealthPage() {
             <div className="stat">
               <div className="stat-label">Health</div>
               <div className="stat-badges">
-                <Badge kind={health?.healthy ? "success" : "danger"}>
-                  {health?.healthy ? "healthy" : "unhealthy"}
-                </Badge>
+                {health === null ? (
+                  <Badge kind="neutral">unknown</Badge>
+                ) : (
+                  <Badge kind={health.healthy ? "success" : "danger"}>
+                    {health.healthy ? "healthy" : "unhealthy"}
+                  </Badge>
+                )}
               </div>
             </div>
             <div className="stat">
               <div className="stat-label">Readiness</div>
               <div className="stat-badges">
-                <Badge kind={health?.ready ? "success" : "warning"}>
-                  {health?.ready ? "ready" : "not ready"}
-                </Badge>
+                {health === null ? (
+                  <Badge kind="neutral">unknown</Badge>
+                ) : (
+                  <Badge kind={health.ready ? "success" : "warning"}>
+                    {health.ready ? "ready" : "not ready"}
+                  </Badge>
+                )}
               </div>
             </div>
             <div className="stat">

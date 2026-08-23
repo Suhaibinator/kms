@@ -1,10 +1,12 @@
 import { Plus, RefreshCw } from "lucide-react";
 import { type FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import CopyButton from "@/components/CopyButton";
+import { Icon } from "@/components/icons";
 import { Modal } from "@/components/Modal";
 import {
   Button,
   Checkbox,
+  EmptyState,
   Field,
   Input,
   Pagination,
@@ -17,6 +19,11 @@ import { api, isAbortError } from "@/lib/api";
 import { formatUnixMs } from "@/lib/format";
 import { useCursorPagination } from "@/lib/hooks";
 import type { ConfigurationSchema } from "@/lib/types";
+
+const DEFAULT_SCHEMA_JSON = `{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object"
+}`;
 
 function schemaJSONError(value: string): string | null {
   try {
@@ -92,10 +99,7 @@ function RegisterSchemaDialog({
 }) {
   const toast = useToast();
   const [schemaID, setSchemaID] = useState("");
-  const [schemaJSON, setSchemaJSON] = useState(`{
-  "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "type": "object"
-}`);
+  const [schemaJSON, setSchemaJSON] = useState(DEFAULT_SCHEMA_JSON);
   const [attempted, setAttempted] = useState(false);
   const [saving, setSaving] = useState(false);
   const schemaError = useMemo(() => schemaJSONError(schemaJSON), [schemaJSON]);
@@ -103,6 +107,7 @@ function RegisterSchemaDialog({
   useEffect(() => {
     if (!open) return;
     setSchemaID("");
+    setSchemaJSON(DEFAULT_SCHEMA_JSON);
     setAttempted(false);
   }, [open]);
 
@@ -224,11 +229,12 @@ export function SchemaRegistry() {
         </div>
         <div className="row-wrap">
           <Button variant="outline" disabled={loading} onClick={() => void loadSchemas()}>
-            {loading ? <Spinner /> : <RefreshCw size={16} />}
+            {loading ? <Spinner /> : <RefreshCw size={16} aria-hidden />}
             Refresh
           </Button>
           <Button onClick={() => setRegisterOpen(true)}>
-            <Plus size={16} /> Register schema
+            <Plus size={16} aria-hidden />
+            Register schema
           </Button>
         </div>
       </div>
@@ -262,10 +268,13 @@ export function SchemaRegistry() {
       {loading ? (
         <TableSkeleton headers={["Schema", "Digest", "Created by", "Created", ""]} rows={4} />
       ) : schemas.length === 0 ? (
-        <div className="empty-state card">
-          <div className="empty-title">No schemas found</div>
-          <div className="text-sm">Register a schema or clear the exact-ID filter.</div>
-        </div>
+        <EmptyState
+          icon={<Icon.release size={20} />}
+          title="No schemas found"
+          actions={<Button onClick={() => setRegisterOpen(true)}>Register schema</Button>}
+        >
+          Register a schema or clear the exact-ID filter.
+        </EmptyState>
       ) : (
         <div className="table-wrap card-table">
           <table className="data">
@@ -291,10 +300,12 @@ export function SchemaRegistry() {
                     {schema.created_by || "—"}
                   </td>
                   <td data-label="Created">{formatUnixMs(schema.created_at_unix_ms)}</td>
-                  <td className="row-actions" data-label="Actions">
-                    <Button variant="outline" size="sm" onClick={() => setSelectedSchema(schema)}>
-                      View
-                    </Button>
+                  <td data-label="Actions">
+                    <div className="row-actions">
+                      <Button variant="outline" size="sm" onClick={() => setSelectedSchema(schema)}>
+                        View
+                      </Button>
+                    </div>
                   </td>
                 </tr>
               ))}
@@ -320,13 +331,16 @@ export function SchemaRegistry() {
         onClose={() => setRegisterOpen(false)}
         onCreated={(schema) => {
           setSelectedSchema(schema);
-          if (paging.page === 1 && (!filter || filter === schema.id)) void loadSchemas();
+          // An exact-ID filter for another schema would hide the new one;
+          // retarget it rather than leave the registration invisible.
+          if (filter && filter !== schema.id) {
+            setFilterDraft(schema.id);
+            setFilter(schema.id);
+          } else if (paging.page === 1) void loadSchemas();
           else paging.reset();
         }}
       />
-      {selectedSchema ? (
-        <SchemaViewer schema={selectedSchema} onClose={() => setSelectedSchema(null)} />
-      ) : null}
+      <SchemaViewer schema={selectedSchema} onClose={() => setSelectedSchema(null)} />
     </>
   );
 }

@@ -8,7 +8,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useToast } from "@/context/ToastContext";
 import { api, isAbortError } from "@/lib/api";
 import { formatUnixMs } from "@/lib/format";
-import { useCursorPagination } from "@/lib/hooks";
+import { useCursorPagination, useLatestRequest } from "@/lib/hooks";
 import type {
   ConfigurationRelease,
   ReleaseSubscriberState,
@@ -18,7 +18,7 @@ import type {
 import { refText, releaseKey } from "./utils";
 
 export interface ActivationFailure {
-  operation: "Activation" | "Rollback";
+  operation: "Activation" | "Rollback" | "Validation";
   target: string;
   violations: ReleaseValidationError[];
 }
@@ -58,8 +58,14 @@ export function ReleaseWorkspace({
 }) {
   const toast = useToast();
   const release = summary?.release ?? null;
+  // Stable identity for the open release: the summary object is replaced by
+  // every list refresh, and resetting on that would bounce the user back to
+  // Overview after each activation.
+  const key = release ? releaseKey(release) : "";
   const [section, setSection] = useState("overview");
+  // "" means "use the derived default" (the next-lower version, if loaded).
   const [compareKey, setCompareKey] = useState("");
+  const { begin } = useLatestRequest();
   const [subscribers, setSubscribers] = useState<ReleaseSubscriberState[]>([]);
   const [subscriberRevision, setSubscriberRevision] = useState(0);
   const [subscribersLoading, setSubscribersLoading] = useState(false);
@@ -78,19 +84,25 @@ export function ReleaseWorkspace({
     [release, releases],
   );
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: reset per release identity (`key`), not per summary object.
   useEffect(() => {
-    if (!release) return;
     setSection("overview");
-    const previous = sameNameReleases.find(
-      (candidate) => candidate.release.version < release.version,
-    );
-    setCompareKey(previous ? releaseKey(previous.release) : "");
+    setCompareKey("");
     setSubscribers([]);
     setSubscriberRevision(0);
+  }, [key]);
+
+  const defaultCompareKey = useMemo(() => {
+    const previous = release
+      ? sameNameReleases.find((candidate) => candidate.release.version < release.version)
+      : undefined;
+    return previous ? releaseKey(previous.release) : "";
   }, [release, sameNameReleases]);
+  const effectiveCompareKey = compareKey || defaultCompareKey;
 
   const loadSubscribers = useCallback(async () => {
     if (!release) return;
+    const run = begin();
     setSubscribersLoading(true);
     try {
       const response = await api.releaseSubscribers(
@@ -98,23 +110,27 @@ export function ReleaseWorkspace({
         release.name,
         1000,
         subscriberPaging.pageToken || undefined,
+        { signal: run.signal },
       );
+      if (!run.current) return;
       setSubscribers(response.subscribers ?? []);
       setSubscriberRevision(response.current_revision ?? 0);
       subscriberPaging.setNextToken(response.next_page_token ?? "");
     } catch (error) {
-      if (!isAbortError(error)) toast.error(error, "Failed to load rollout status");
+      if (run.current && !isAbortError(error)) {
+        toast.error(error, "Failed to load rollout status");
+      }
     } finally {
-      setSubscribersLoading(false);
+      if (run.current) setSubscribersLoading(false);
     }
-  }, [release, subscriberPaging.pageToken, subscriberPaging.setNextToken, toast]);
+  }, [begin, release, subscriberPaging.pageToken, subscriberPaging.setNextToken, toast]);
 
   useEffect(() => {
     if (section === "rollout" && release) void loadSubscribers();
   }, [loadSubscribers, release, section]);
 
   const comparison = sameNameReleases.find(
-    (candidate) => releaseKey(candidate.release) === compareKey,
+    (candidate) => releaseKey(candidate.release) === effectiveCompareKey,
   )?.release;
   const diff = useMemo(() => {
     if (!release || !comparison) return [];
@@ -214,17 +230,21 @@ export function ReleaseWorkspace({
               <div className="between">
                 <div>
                   <strong>
-                    {activationFailure.operation} blocked for {activationFailure.target}
+                    {activationFailure.operation === "Validation"
+                      ? `${activationFailure.target} failed validation`
+                      : `${activationFailure.operation} blocked for ${activationFailure.target}`}
                   </strong>
                   <div className="text-sm mt-8">
-                    The active release and activation revision were not changed.
+                    {activationFailure.operation === "Validation"
+                      ? "Resolve every violation before activating this release."
+                      : "The active release and activation revision were not changed."}
                   </div>
                 </div>
                 <Button variant="outline" size="sm" onClick={onDismissFailure}>
                   Dismiss
                 </Button>
               </div>
-              <div className="table-wrap mt-12">
+              <div className="table-wrap mt-3">
                 <table className="data">
                   <thead>
                     <tr>
@@ -255,7 +275,7 @@ export function ReleaseWorkspace({
             <div className="release-overview-grid">
               <div className="stat">
                 <div className="stat-label">State</div>
-                <div className="stat-badges mt-8">
+                <div className="stat-badges">
                   {summary.current ? (
                     <Badge kind="success">current · rev {summary.activation_revision}</Badge>
                   ) : summary.previous ? (
@@ -292,7 +312,9 @@ export function ReleaseWorkspace({
               </dd>
               <dt>Metadata</dt>
               <dd>
-                <pre className="release-metadata-json">{release.metadata_json || "{}"}</pre>
+                <pre className="json-block release-metadata-json">
+                  {release.metadata_json || "{}"}
+                </pre>
               </dd>
             </dl>
           </TabsContent>
@@ -341,7 +363,7 @@ export function ReleaseWorkspace({
             <div className="max-w-md mb-16">
               <Field label="Compare with">
                 <AppSelect
-                  value={compareKey}
+                  value={effectiveCompareKey}
                   onValueChange={setCompareKey}
                   placeholder="Choose another version…"
                   options={sameNameReleases
@@ -382,7 +404,7 @@ export function ReleaseWorkspace({
           </TabsContent>
 
           <TabsContent value="rollout">
-            <div className="between mb-12">
+            <div className="between mb-3">
               <div className="text-sm faint">
                 Activation revision {subscriberRevision || "—"} · up to 1,000 state rows per page
               </div>
@@ -392,7 +414,7 @@ export function ReleaseWorkspace({
                 disabled={subscribersLoading}
                 onClick={() => void loadSubscribers()}
               >
-                {subscribersLoading ? <Spinner /> : <RefreshCw size={15} />}
+                {subscribersLoading ? <Spinner /> : <RefreshCw size={15} aria-hidden />}
                 Refresh
               </Button>
             </div>

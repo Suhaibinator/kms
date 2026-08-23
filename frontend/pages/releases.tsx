@@ -24,6 +24,7 @@ import { useToast } from "@/context/ToastContext";
 import { ApiError, api, isAbortError } from "@/lib/api";
 import { useCursorPagination, useNamespaces } from "@/lib/hooks";
 import type { ConfigurationRelease, ReleaseSummary, ReleaseValidationError } from "@/lib/types";
+import { queryValue, useQueryReplace } from "@/lib/url";
 import { validateReleaseName } from "@/lib/validation";
 
 const NO_NS: NamespaceSelection = { env: "", app: "" };
@@ -37,10 +38,6 @@ type BusyReleaseAction = "" | "activate" | "rollback" | `validate:${string}`;
 function activationViolations(error: unknown): ReleaseValidationError[] | null {
   if (!(error instanceof ApiError) || error.code !== "failed_precondition") return null;
   return error.validationErrors.length > 0 ? error.validationErrors : null;
-}
-
-function queryValue(value: string | string[] | undefined): string {
-  return Array.isArray(value) ? (value[0] ?? "") : (value ?? "");
 }
 
 export default function ReleasesPage() {
@@ -59,38 +56,32 @@ export default function ReleasesPage() {
   const [selectedReleaseKey, setSelectedReleaseKey] = useState("");
   const [pendingAction, setPendingAction] = useState<PendingReleaseAction | null>(null);
   const [activationFailure, setActivationFailure] = useState<ActivationFailure | null>(null);
+  // The request scope whose response is currently on screen; gates the empty
+  // state so a deep link never flashes "No releases found" before the first
+  // load has even started.
+  const [loadedScope, setLoadedScope] = useState("");
+  const [seeded, setSeeded] = useState(false);
   const refreshGeneration = useRef(0);
   const loadedReleaseScope = useRef("");
   const refreshController = useRef<AbortController | null>(null);
+  const replaceQuery = useQueryReplace("/releases");
 
   const queryTab = queryValue(router.query.tab);
   const queryApp = queryValue(router.query.app);
   const queryEnv = queryValue(router.query.env);
   const queryName = queryValue(router.query.name);
 
+  // Seed from the URL exactly once. Every later change flows state → URL
+  // through replaceQuery; re-reading the query here would clobber whatever the
+  // user has typed into the name filter since the last Apply.
   useEffect(() => {
-    if (!router.isReady) return;
+    if (!router.isReady || seeded) return;
+    setSeeded(true);
     setActiveTab(queryTab === "schemas" ? "schemas" : "releases");
     setNS({ app: queryApp, env: queryEnv });
     setNameDraft(queryName);
     setName(queryName);
-  }, [queryApp, queryEnv, queryName, queryTab, router.isReady]);
-
-  function replaceQuery(patch: Record<string, string>) {
-    const next: Record<string, string> = {};
-    for (const [key, value] of Object.entries(router.query)) {
-      const normalized = queryValue(value);
-      if (normalized) next[key] = normalized;
-    }
-    for (const [key, value] of Object.entries(patch)) {
-      if (value) next[key] = value;
-      else delete next[key];
-    }
-    void router.replace({ pathname: "/releases", query: next }, undefined, {
-      shallow: true,
-      scroll: false,
-    });
-  }
+  }, [queryApp, queryEnv, queryName, queryTab, router.isReady, seeded]);
 
   function changeTab(value: string | number) {
     const next = value === "schemas" ? "schemas" : "releases";
@@ -113,6 +104,7 @@ export default function ReleasesPage() {
   const releaseScope = hasNS ? JSON.stringify([ns.env, ns.app, name]) : "";
   const releasePaging = useCursorPagination(releaseScope);
   const releaseRequestScope = JSON.stringify([releaseScope, releasePaging.pageToken]);
+  const settled = loadedScope === releaseRequestScope;
   const nameFilterError = validateReleaseName(nameDraft.trim());
 
   useEffect(() => {
@@ -123,11 +115,17 @@ export default function ReleasesPage() {
     async (force = false) => {
       refreshController.current?.abort();
       const generation = ++refreshGeneration.current;
-      if (!hasNS || activeTab !== "releases") {
+      if (!hasNS) {
         refreshController.current = null;
         loadedReleaseScope.current = "";
         setReleases([]);
         releasePaging.setNextToken("");
+        setReleasesLoading(false);
+        return;
+      }
+      // Keep the loaded list across a visit to the Schemas tab; it is
+      // reloaded only if its scope changed in the meantime.
+      if (activeTab !== "releases") {
         setReleasesLoading(false);
         return;
       }
@@ -146,6 +144,7 @@ export default function ReleasesPage() {
         );
         if (generation !== refreshGeneration.current) return;
         loadedReleaseScope.current = releaseRequestScope;
+        setLoadedScope(releaseRequestScope);
         setReleases(response.releases ?? []);
         releasePaging.setNextToken(response.next_page_token ?? "");
       } catch (error) {
@@ -190,25 +189,34 @@ export default function ReleasesPage() {
 
   async function validate(release: ConfigurationRelease) {
     if (busyAction) return;
-    setBusyAction(`validate:${releaseKey(release)}`);
+    const target = releaseKey(release);
+    setBusyAction(`validate:${target}`);
     try {
       const result = await api.validateRelease(release.namespace, release.name, release.version);
-      if (result.valid) toast.success(`${releaseKey(release)} is valid`);
-      else {
-        toast.error(
-          new Error(
-            result.errors
-              .map((error) => `${error.alias || "release"}: ${error.message}`)
-              .join("; "),
-          ),
-          "Validation failed",
-        );
+      if (result.valid) {
+        toast.success(`${target} is valid`);
+        if (activationFailure?.operation === "Validation" && activationFailure.target === target) {
+          setActivationFailure(null);
+        }
+      } else if (result.errors.length > 0) {
+        showViolations({ operation: "Validation", target, violations: result.errors });
+      } else {
+        toast.error(new Error("The release did not validate."), "Validation failed");
       }
     } catch (error) {
-      toast.error(error, "Validation failed");
+      const violations = activationViolations(error);
+      if (violations) showViolations({ operation: "Validation", target, violations });
+      else toast.error(error, "Validation failed");
     } finally {
       setBusyAction("");
     }
+  }
+
+  // Violations are rendered inside the workspace, so open it on the release
+  // they belong to; the table is far more readable than a joined toast string.
+  function showViolations(failure: ActivationFailure) {
+    setSelectedReleaseKey(failure.target);
+    setActivationFailure(failure);
   }
 
   async function performPendingAction() {
@@ -245,10 +253,9 @@ export default function ReleasesPage() {
       const violations = activationViolations(error);
       if (violations) {
         const targetSummary = action.kind === "activate" ? action.summary : action.previous;
-        setSelectedReleaseKey(releaseKey(targetSummary.release));
-        setActivationFailure({
+        showViolations({
           operation: action.kind === "activate" ? "Activation" : "Rollback",
-          target,
+          target: releaseKey(targetSummary.release),
           violations,
         });
         setPendingAction(null);
@@ -293,7 +300,8 @@ export default function ReleasesPage() {
                 Refresh
               </Button>
               <Button disabled={!hasNS || Boolean(busyAction)} onClick={() => setBuilderOpen(true)}>
-                <Plus size={16} aria-hidden /> New release
+                <Plus size={16} aria-hidden />
+                New release
               </Button>
             </>
           ) : null
@@ -374,14 +382,14 @@ export default function ReleasesPage() {
             </div>
           ) : null}
 
-          {!hasNS ? (
+          {seeded && !hasNS ? (
             <EmptyState
               icon={<Icon.namespace size={20} />}
               title="Choose an application and environment"
             >
               Release history and creation are scoped to one isolated environment.
             </EmptyState>
-          ) : releasesLoading ? (
+          ) : !seeded || !settled || releasesLoading ? (
             <TableSkeleton
               headers={["Release", "State", "Schema", "Entries", "Digest", "Actions"]}
             />
@@ -436,33 +444,37 @@ export default function ReleasesPage() {
                         <td className="mono" data-label="Digest">
                           {release.digest.slice(0, 16)}…
                         </td>
-                        <td className="row-wrap row-actions" data-label="Actions">
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            onClick={() => {
-                              setActivationFailure(null);
-                              setSelectedReleaseKey(releaseKey(release));
-                            }}
-                          >
-                            View
-                          </Button>
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            disabled={Boolean(busyAction)}
-                            onClick={() => void validate(release)}
-                          >
-                            {busyAction === `validate:${releaseKey(release)}` ? <Spinner /> : null}
-                            Validate
-                          </Button>
-                          <Button
-                            size="sm"
-                            disabled={summary.current || Boolean(busyAction)}
-                            onClick={() => setPendingAction({ kind: "activate", summary })}
-                          >
-                            Activate
-                          </Button>
+                        <td data-label="Actions">
+                          <div className="row-wrap row-actions">
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={() => {
+                                setActivationFailure(null);
+                                setSelectedReleaseKey(releaseKey(release));
+                              }}
+                            >
+                              View
+                            </Button>
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              disabled={Boolean(busyAction)}
+                              onClick={() => void validate(release)}
+                            >
+                              {busyAction === `validate:${releaseKey(release)}` ? (
+                                <Spinner />
+                              ) : null}
+                              Validate
+                            </Button>
+                            <Button
+                              size="sm"
+                              disabled={summary.current || Boolean(busyAction)}
+                              onClick={() => setPendingAction({ kind: "activate", summary })}
+                            >
+                              Activate
+                            </Button>
+                          </div>
                         </td>
                       </tr>
                     );
@@ -472,7 +484,7 @@ export default function ReleasesPage() {
             </div>
           )}
 
-          {hasNS && !releasesLoading ? (
+          {hasNS && settled && !releasesLoading ? (
             <Pagination
               hasNext={releasePaging.hasNext}
               onNext={releasePaging.next}
@@ -499,6 +511,9 @@ export default function ReleasesPage() {
           setName(release.name);
           loadedReleaseScope.current = "";
           replaceQuery({ name: release.name });
+          // Same name as the active filter → no state changes, so the load
+          // effect would not re-run on its own.
+          if (release.name === name) void refresh(true);
         }}
       />
 

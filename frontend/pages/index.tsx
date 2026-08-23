@@ -1,4 +1,3 @@
-import { Button } from "@/components/ui/button";
 import { ArrowRight, RefreshCw } from "lucide-react";
 import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
@@ -11,9 +10,11 @@ import {
   StatSkeleton,
   TableSkeleton,
 } from "@/components/ui";
+import { Button } from "@/components/ui/button";
 import { useToast } from "@/context/ToastContext";
-import { api } from "@/lib/api";
-import { displayAuditResource, formatRelative } from "@/lib/format";
+import { api, isAbortError } from "@/lib/api";
+import { displayAuditResource, formatRelative, formatUnixMs } from "@/lib/format";
+import { useLatestRequest } from "@/lib/hooks";
 import type { AuditEvent, HealthResponse, Subscriber } from "@/lib/types";
 
 interface Count {
@@ -24,6 +25,9 @@ interface Count {
 
 interface Dashboard {
   health: HealthResponse | null;
+  // true when /health itself could not be reached, which is a console-side
+  // failure and must not be reported as the service being unhealthy.
+  healthFailed: boolean;
   namespaces: Count | null;
   parameters: Count | null;
   secrets: Count | null;
@@ -34,6 +38,7 @@ interface Dashboard {
 
 const EMPTY: Dashboard = {
   health: null,
+  healthFailed: false,
   namespaces: null,
   parameters: null,
   secrets: null,
@@ -56,21 +61,25 @@ export default function DashboardPage() {
   const toast = useToast();
   const [data, setData] = useState<Dashboard>(EMPTY);
   const [loading, setLoading] = useState(true);
+  const { begin } = useLatestRequest();
 
   const load = useCallback(async () => {
+    const run = begin();
     setLoading(true);
     // Parameter/secret totals are cross-namespace overviews, which the
     // namespace-scoped list APIs can't answer directly — they come from the
     // per-namespace counts on ListNamespaces (plan §10).
     const [health, ns, subs, audit] = await Promise.allSettled([
-      api.health(),
-      api.listNamespaces(200),
-      api.subscribers(),
-      api.listAudit({ page_size: 8 }),
+      api.health({ signal: run.signal }),
+      api.listNamespaces(200, undefined, { signal: run.signal }),
+      api.subscribers({ signal: run.signal }),
+      api.listAudit({ page_size: 8 }, { signal: run.signal }),
     ]);
+    if (!run.current) return;
 
     const next: Dashboard = { ...EMPTY };
     if (health.status === "fulfilled") next.health = health.value;
+    else next.healthFailed = true;
     if (ns.status === "fulfilled") {
       const list = ns.value.namespaces ?? [];
       const more = !!ns.value.next_page_token;
@@ -88,11 +97,13 @@ export default function DashboardPage() {
     const firstError = [health, ns, subs, audit].find((r) => r.status === "rejected") as
       | PromiseRejectedResult
       | undefined;
-    if (firstError) toast.error(firstError.reason, "Some dashboard data failed to load");
+    if (firstError && !isAbortError(firstError.reason)) {
+      toast.error(firstError.reason, "Some dashboard data failed to load");
+    }
 
     setData(next);
     setLoading(false);
-  }, [toast]);
+  }, [begin, toast]);
 
   useEffect(() => {
     void load();
@@ -133,17 +144,28 @@ export default function DashboardPage() {
         <div className="card-grid">
           <div className="stat">
             <div className="stat-label">Service</div>
-            <div className="stat-badges">
-              <Badge kind={h?.healthy ? "success" : "danger"}>
-                {h?.healthy ? "healthy" : "unhealthy"}
-              </Badge>
-              <Badge kind={h?.ready ? "success" : "warning"}>
-                {h?.ready ? "ready" : "not ready"}
-              </Badge>
-            </div>
-            <div className="stat-sub">
-              {h?.version ? `version ${h.version}` : "version unknown"}
-            </div>
+            {data.healthFailed ? (
+              <>
+                <div className="stat-badges">
+                  <Badge kind="neutral">unknown</Badge>
+                </div>
+                <div className="stat-sub">could not reach the API</div>
+              </>
+            ) : (
+              <>
+                <div className="stat-badges">
+                  <Badge kind={h?.healthy ? "success" : "danger"}>
+                    {h?.healthy ? "healthy" : "unhealthy"}
+                  </Badge>
+                  <Badge kind={h?.ready ? "success" : "warning"}>
+                    {h?.ready ? "ready" : "not ready"}
+                  </Badge>
+                </div>
+                <div className="stat-sub">
+                  {h?.version ? `version ${h.version}` : "version unknown"}
+                </div>
+              </>
+            )}
           </div>
 
           <div className="stat">
@@ -232,7 +254,9 @@ export default function DashboardPage() {
                   const resource = displayAuditResource(e);
                   return (
                     <tr key={e.id}>
-                      <td className="nowrap">{formatRelative(e.created_at_unix_ms)}</td>
+                      <td className="nowrap" title={formatUnixMs(e.created_at_unix_ms)}>
+                        {formatRelative(e.created_at_unix_ms)}
+                      </td>
                       <td className="mono">{e.event_type}</td>
                       <td>
                         {e.actor_identity || <span className="faint">—</span>}
@@ -293,14 +317,16 @@ export default function DashboardPage() {
                 {data.subscribers.slice(0, 6).map((s) => {
                   const behind = data.currentRevision - s.last_acked_revision;
                   return (
-                    <tr key={s.instance_id || s.client_name}>
+                    <tr key={s.instance_id || `${s.client_name}-${s.remote_addr}`}>
                       <td>
                         {s.client_name}
                         {s.instance_id ? (
                           <span className="faint text-sm"> · {s.instance_id}</span>
                         ) : null}
                       </td>
-                      <td className="nowrap">{formatRelative(s.last_heartbeat_unix_ms)}</td>
+                      <td className="nowrap" title={formatUnixMs(s.last_heartbeat_unix_ms)}>
+                        {formatRelative(s.last_heartbeat_unix_ms)}
+                      </td>
                       <td>
                         {behind > 0 ? (
                           <Badge kind="warning">{behind} behind</Badge>

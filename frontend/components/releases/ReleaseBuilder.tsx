@@ -14,7 +14,7 @@ import type {
   ReleaseEntryKind,
 } from "@/lib/types";
 import { validateAlias, validateMetadataJson, validateReleaseName } from "@/lib/validation";
-import { releaseDefinitionError } from "./utils";
+import { parseReleaseDefinition, releaseDefinitionError } from "./utils";
 
 type SelectorKind = "current" | "label" | "version";
 
@@ -151,6 +151,9 @@ export function ReleaseBuilder({
   const toast = useToast();
   const [dashboard, setDashboard] = useState<ApplicationDashboard | null>(null);
   const [loading, setLoading] = useState(false);
+  const [loadError, setLoadError] = useState<unknown>(null);
+  // Bumped by Retry so the load effect re-runs without reopening the modal.
+  const [loadAttempt, setLoadAttempt] = useState(0);
   const [saving, setSaving] = useState(false);
   const [mode, setMode] = useState<"guided" | "json">("guided");
   const [modeMessage, setModeMessage] = useState("");
@@ -162,12 +165,19 @@ export function ReleaseBuilder({
   const [jsonText, setJSONText] = useState("");
   const [attempted, setAttempted] = useState(false);
   const generation = useRef(0);
+  // Per-entry generation + controller so a second resource selection
+  // supersedes the first one's metadata response instead of racing it.
+  const metadataLoads = useRef(
+    new Map<number, { generation: number; controller: AbortController }>(),
+  );
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: `loadAttempt` exists only to re-run this load from Retry.
   useEffect(() => {
     if (!open) return;
     const controller = new AbortController();
     const currentGeneration = ++generation.current;
     setLoading(true);
+    setLoadError(null);
     setAttempted(false);
     setMode("guided");
     setModeMessage("");
@@ -197,14 +207,29 @@ export function ReleaseBuilder({
         setEntries(nextEntries.length ? nextEntries : [blankEntry(false)]);
         setMetadataJSON("{}");
       })
-      .catch((error) => {
-        if (!isAbortError(error)) toast.error(error, "Failed to load the release builder");
+      .catch((error: unknown) => {
+        if (generation.current !== currentGeneration || isAbortError(error)) return;
+        // Never present the previous application's contract as this one's.
+        setDashboard(null);
+        setName("");
+        setSchemaID("");
+        setSchemaVersion("");
+        setEntries([blankEntry(false)]);
+        setMetadataJSON("{}");
+        setLoadError(error);
+        toast.error(error, "Failed to load the release builder");
       })
       .finally(() => {
         if (generation.current === currentGeneration) setLoading(false);
       });
     return () => controller.abort();
-  }, [namespace.app, namespace.env, open, toast]);
+  }, [loadAttempt, namespace.app, namespace.env, open, toast]);
+
+  useEffect(() => {
+    if (open) return;
+    for (const load of metadataLoads.current.values()) load.controller.abort();
+    metadataLoads.current.clear();
+  }, [open]);
 
   const guidedProblem = useMemo(
     () => builderError(name, schemaID, schemaVersion, entries, metadataJSON),
@@ -223,27 +248,34 @@ export function ReleaseBuilder({
   }
 
   async function loadSelectorMetadata(entry: BuilderEntry) {
-    if (!entry.key || entry.metadataLoading) return;
+    if (!entry.key) return;
+    const previous = metadataLoads.current.get(entry.id);
+    previous?.controller.abort();
+    const mine = (previous?.generation ?? 0) + 1;
+    const controller = new AbortController();
+    metadataLoads.current.set(entry.id, { generation: mine, controller });
+    const current = () => metadataLoads.current.get(entry.id)?.generation === mine;
     updateEntry(entry.id, { metadataLoading: true });
     try {
+      const ref = { ...namespace, key: entry.key };
+      const request = { signal: controller.signal };
+      let labels: string[];
+      let versions: number[];
       if (entry.kind === "parameter") {
-        const metadata = await api.parameterMetadata({ ...namespace, key: entry.key });
-        updateEntry(entry.id, {
-          labels: Object.keys(metadata.labels ?? {}).sort(),
-          versions: (metadata.versions ?? []).map((version) => version.version),
-          metadataLoading: false,
-        });
+        const metadata = await api.parameterMetadata(ref, request);
+        labels = Object.keys(metadata.labels ?? {}).sort();
+        versions = (metadata.versions ?? []).map((version) => version.version);
       } else {
-        const response = await api.secretMetadata({ ...namespace, key: entry.key });
-        updateEntry(entry.id, {
-          labels: Object.keys(response.secret.labels ?? {}).sort(),
-          versions: (response.secret.versions ?? [])
-            .filter((version) => version.state === "enabled")
-            .map((version) => version.version),
-          metadataLoading: false,
-        });
+        const response = await api.secretMetadata(ref, request);
+        labels = Object.keys(response.secret.labels ?? {}).sort();
+        versions = (response.secret.versions ?? [])
+          .filter((version) => version.state === "enabled")
+          .map((version) => version.version);
       }
+      if (!current()) return;
+      updateEntry(entry.id, { labels, versions, metadataLoading: false });
     } catch (error) {
+      if (!current() || isAbortError(error)) return;
       updateEntry(entry.id, { metadataLoading: false });
       toast.error(error, `Failed to load versions for ${entry.key}`);
     }
@@ -286,7 +318,7 @@ export function ReleaseBuilder({
         return {
           ...blankEntry(Boolean(field)),
           alias: entry.alias,
-          kind: entry.kind,
+          kind: entry.kind === "secret" ? "secret" : "parameter",
           contentType: field?.content_type ?? "",
           key: entry.ref?.key ?? "",
           selector: entry.label ? "label" : entry.version ? "version" : "current",
@@ -302,16 +334,8 @@ export function ReleaseBuilder({
     setAttempted(true);
     if (mode === "guided" && guidedProblem) return;
     if (mode === "json" && jsonProblem) return;
-    let request: CreateReleaseRequest;
-    if (mode === "guided") request = guidedRequest();
-    else {
-      const parsed = JSON.parse(jsonText) as CreateReleaseRequest;
-      request = {
-        ...parsed,
-        namespace,
-        metadata_json: parsed.metadata_json ?? "{}",
-      };
-    }
+    const request: CreateReleaseRequest =
+      mode === "guided" ? guidedRequest() : { ...parseReleaseDefinition(jsonText), namespace };
     setSaving(true);
     try {
       const result = await api.createRelease(request);
@@ -325,7 +349,10 @@ export function ReleaseBuilder({
     }
   }
 
-  const blockingProblem = mode === "guided" ? guidedProblem : jsonProblem;
+  // Guided mode stays clickable so the click can reveal guidedProblem inline;
+  // JSON mode already shows its error unconditionally, so it keeps the disable.
+  const createDisabled =
+    saving || loading || Boolean(loadError) || (mode === "json" && Boolean(jsonProblem));
 
   return (
     <Modal
@@ -339,10 +366,7 @@ export function ReleaseBuilder({
           <Button variant="outline" onClick={onClose} disabled={saving}>
             Cancel
           </Button>
-          <Button
-            onClick={() => void createRelease()}
-            disabled={saving || Boolean(blockingProblem)}
-          >
+          <Button onClick={() => void createRelease()} disabled={createDisabled}>
             {saving ? <Spinner /> : null}
             Create immutable version
           </Button>
@@ -352,6 +376,24 @@ export function ReleaseBuilder({
       {loading ? (
         <div className="loading-block" role="status">
           <Spinner /> Loading application contract…
+        </div>
+      ) : loadError ? (
+        <div className="danger-panel" role="alert">
+          <div className="between">
+            <div>
+              <strong>Could not load the application contract</strong>
+              <div className="text-sm mt-8">
+                {loadError instanceof Error ? loadError.message : String(loadError)}
+              </div>
+            </div>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setLoadAttempt((attempt) => attempt + 1)}
+            >
+              Retry
+            </Button>
+          </div>
         </div>
       ) : (
         <Tabs value={mode} onValueChange={switchMode}>
@@ -398,7 +440,7 @@ export function ReleaseBuilder({
               </Field>
             </div>
 
-            <div className="between mb-12 mt-16">
+            <div className="between mb-3 mt-16">
               <div>
                 <h2>Release entries</h2>
                 <p className="text-sm faint">
@@ -411,7 +453,8 @@ export function ReleaseBuilder({
                   size="sm"
                   onClick={() => setEntries((current) => [...current, blankEntry(false)])}
                 >
-                  <Plus size={15} /> Add entry
+                  <Plus size={15} aria-hidden />
+                  Add entry
                 </Button>
               )}
             </div>
@@ -530,13 +573,15 @@ export function ReleaseBuilder({
                     {entry.contractOwned ? null : (
                       <Button
                         variant="ghost"
-                        size="icon-sm"
+                        size="icon"
                         aria-label={`Remove ${entry.alias || "entry"}`}
-                        onClick={() =>
-                          setEntries((current) => current.filter((item) => item.id !== entry.id))
-                        }
+                        onClick={() => {
+                          metadataLoads.current.get(entry.id)?.controller.abort();
+                          metadataLoads.current.delete(entry.id);
+                          setEntries((current) => current.filter((item) => item.id !== entry.id));
+                        }}
                       >
-                        <Trash2 size={15} />
+                        <Trash2 size={15} aria-hidden />
                       </Button>
                     )}
                   </div>

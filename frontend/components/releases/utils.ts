@@ -1,6 +1,11 @@
 import { displayPath } from "@/lib/format";
 import type { ConfigurationRelease, CreateReleaseRequest } from "@/lib/types";
-import { validateAlias, validateMetadataJson, validateReleaseName } from "@/lib/validation";
+import {
+  validateAlias,
+  validateKey,
+  validateMetadataJson,
+  validateReleaseName,
+} from "@/lib/validation";
 
 export function releaseKey(release: ConfigurationRelease): string {
   return `${release.name}@${release.version}`;
@@ -29,8 +34,15 @@ export function releaseDefinitionError(definition: string): string | null {
   if (nameError) return nameError;
   for (const entry of draft.entries as unknown[]) {
     const record = (entry ?? {}) as Record<string, unknown>;
-    const aliasError = validateAlias(typeof record.alias === "string" ? record.alias : "");
+    const alias = typeof record.alias === "string" ? record.alias : "";
+    const aliasError = validateAlias(alias);
     if (aliasError) return aliasError;
+    if (record.kind !== "parameter" && record.kind !== "secret") {
+      return `Entry ${alias} kind must be parameter or secret.`;
+    }
+    const ref = (record.ref ?? {}) as Record<string, unknown>;
+    const keyError = validateKey(typeof ref.key === "string" ? ref.key : "");
+    if (keyError) return `Entry ${alias} needs a resource key: ${keyError}`;
   }
   if (typeof draft.metadata_json === "string") return validateMetadataJson(draft.metadata_json);
   return null;
