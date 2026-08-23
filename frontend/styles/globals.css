@@ -46,8 +46,10 @@
   --on-destructive: #1a0605;
 
   --radius: 8px;
-  --radius-sm: 6px;
-  --radius-lg: 12px;
+  /* --radius-sm/-md/-lg/-xl live in the @theme block at the bottom of this
+     file, which is the single owner of the scale. Redefining them here
+     silently desynced hand-written var(--radius-lg) (12px) from the
+     `rounded-lg` utility (8px). */
 
   --shadow: 0 8px 30px rgba(0, 0, 0, 0.45);
   --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.35);
@@ -715,8 +717,12 @@ table.data th.mono {
 .filter-grow > .field {
   width: 100%;
 }
+/* A label-less button in a filter row drops by exactly one label block so its
+   control edge lines up with its labelled neighbours'. `align-items: flex-end`
+   would look right until a field shows a validation message, at which point
+   the button would follow the message down — hence flex-start above. */
 .filters > [data-slot="button"] {
-  margin-top: 1.5rem;
+  margin-top: var(--label-offset);
 }
 
 /* ---------- Configuration releases workspace ---------- */
@@ -1853,13 +1859,16 @@ table.data th.mono {
   --color-card: var(--card);
   --color-foreground: var(--foreground);
   --color-background: var(--background);
-  --radius-sm: calc(var(--radius) * 0.6);
-  --radius-md: calc(var(--radius) * 0.8);
-  --radius-lg: var(--radius);
-  --radius-xl: calc(var(--radius) * 1.4);
-  --radius-2xl: calc(var(--radius) * 1.8);
-  --radius-3xl: calc(var(--radius) * 2.2);
-  --radius-4xl: calc(var(--radius) * 2.6);
+  /* 6 chips · 8 controls · 12 cards and popovers · 16 dialogs. Literals, not a
+     calc chain off --radius: the hand-written var(--radius-sm)/var(--radius-lg)
+     users and the rounded-* utilities have to name the same numbers. */
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --radius-xl: 16px;
+  --radius-2xl: 20px;
+  --radius-3xl: 24px;
+  --radius-4xl: 999px;
 }
 
 .dark {
