@@ -197,7 +197,7 @@ export default function ApplicationsPage() {
   // On a static export the query is empty until the client router hydrates, so
   // a deep link to one application would paint the list for a frame.
   if (!router.isReady) {
-    return <TableSkeleton headers={LIST_HEADERS} />;
+    return <TableSkeleton headers={LIST_HEADERS} rowHeight={62} />;
   }
 
   if (!selectedName) {
@@ -219,7 +219,7 @@ export default function ApplicationsPage() {
           another; the application contract keeps their release shape consistent.
         </div>
         {loading ? (
-          <TableSkeleton headers={LIST_HEADERS} />
+          <TableSkeleton headers={LIST_HEADERS} rowHeight={62} />
         ) : applications.length === 0 ? (
           <EmptyState
             icon={<Icon.application size={20} />}

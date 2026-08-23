@@ -169,6 +169,12 @@ a:not([data-slot="button"]) {
   color: var(--primary);
   text-decoration: none;
 }
+/* lucide renders an inline <svg>, which sits on the text baseline and leaves a
+   descender-sized gap under it. Inside a flex container (Button, .row) this
+   never shows; inside a text run it does. */
+a:not([data-slot="button"]) svg {
+  vertical-align: -0.15em;
+}
 a:not([data-slot="button"]):hover {
   color: var(--accent-hover);
   text-decoration: underline;
@@ -290,8 +296,12 @@ pre {
   color: var(--text);
 }
 .nav-link .nav-icon {
+  /* The 16px box exactly fits the size-4 icon inside it; centring it as a flex
+     container beats text-align, which cannot centre an inline svg vertically. */
+  display: flex;
+  align-items: center;
+  justify-content: center;
   width: 16px;
-  text-align: center;
   opacity: 0.9;
 }
 
@@ -379,6 +389,13 @@ pre {
   gap: var(--space-3);
   flex-wrap: wrap;
 }
+/* Preflight resets heading sizes to `inherit`, so a bare <h2> is just bold body
+   text. The levels the app actually uses have to opt back in; 15px separates a
+   section from the copy under it. */
+.section-title {
+  font-size: 15px;
+  font-weight: 600;
+}
 .card-grid {
   display: grid;
   gap: var(--space-4);
@@ -412,6 +429,17 @@ pre {
   letter-spacing: -0.02em;
   font-variant-numeric: tabular-nums;
 }
+/* A stat card whose "value" is a string rather than a number — same box, so a
+   row of cards keeps one baseline. */
+.stat .stat-value-sm {
+  display: flex;
+  align-items: center;
+  min-height: 35px;
+  margin-top: var(--space-1);
+  font-size: 15px;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
 /* Stat cards showing badges instead of a number reserve the same box height,
    so the row of cards keeps one baseline. */
 .stat .stat-badges {
@@ -441,12 +469,17 @@ fieldset.field {
 fieldset.field legend {
   padding: 0;
 }
+/* Must render identically to <Field>'s [data-slot=field-label]: forms that mix
+   the two (audit filters, secrets/detail, policies) otherwise misalign, and
+   --label-offset assumes a single height. The line-height is the part that
+   matters — the inherited 1.5 made this block 1.56px taller than <Field>'s. */
 .field-label {
   display: block;
-  font-size: 12.5px;
+  font-size: var(--text-sm);
+  line-height: 1.375;
   font-weight: 600;
   color: var(--text-muted);
-  margin-bottom: var(--space-1);
+  margin-bottom: var(--spacing);
 }
 .field-hint {
   font-size: 12px;
@@ -540,8 +573,15 @@ table.data td {
 table.data tr:last-child td {
   border-bottom: none;
 }
-table.data tbody tr:hover {
+/* A hover tint that leads nowhere reads as a broken affordance. Only rows that
+   actually contain something clickable get one. */
+table.data tbody tr:has(a, button):hover,
+table.data tbody tr.application-row:hover {
   background: var(--surface-hover);
+}
+/* Composes with the hover above, which an inline style could never do. */
+table.data tbody tr.stale {
+  background: var(--warning-soft);
 }
 table.data tbody tr.application-row {
   position: relative;
@@ -552,9 +592,16 @@ table.data tbody tr.application-row:focus-within {
   outline: 2px solid var(--primary);
   outline-offset: -2px;
 }
-.application-row-link {
+/* The row is the affordance; the link inside it must not paint itself blue,
+   underline on hover, or draw a second ring — tr:focus-within above already
+   rings the whole row. The base a:not([data-slot=button]) rules are (0,1,1),
+   so a bare class cannot beat them; the element qualifier is load-bearing. */
+a.application-row-link,
+a.application-row-link:hover {
   color: inherit;
   text-decoration: none;
+}
+a.application-row-link:focus-visible {
   outline: none;
 }
 .application-row-link::after {
@@ -567,6 +614,10 @@ table.data td.application-row-chevron {
   color: var(--text-faint);
   text-align: right;
   white-space: nowrap;
+}
+table.data td.application-row-chevron > svg {
+  display: block;
+  margin-left: auto;
 }
 .application-row-chevron svg {
   transition:
@@ -582,6 +633,12 @@ table.data td.mono,
 table.data th.mono {
   font-family: var(--mono);
   font-size: 12.5px;
+}
+/* table.data already sets tabular-nums. Apply per table, to every numeric
+   column at once — right-aligning one column of five reads as a mistake. */
+table.data td.num,
+table.data th.num {
+  text-align: right;
 }
 .cell-path {
   font-family: var(--mono);
@@ -730,16 +787,14 @@ table.data th.mono {
 .releases-page-tabs {
   min-width: 0;
 }
+/* Six other pages render a bare .filters row above their table; only this one
+   boxed it in a card. */
 .release-context-bar {
   display: flex;
   align-items: flex-start;
   gap: var(--space-3);
   flex-wrap: wrap;
-  padding: var(--space-4);
   margin-bottom: var(--space-4);
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
 }
 .release-context-bar .field {
   margin-bottom: 0;
@@ -989,35 +1044,14 @@ table.data th.mono {
    card/table frame mounted and filling only the cells avoids the layout jump
    of swapping the whole page for a centred spinner. */
 
-.skeleton {
-  display: block;
-  border-radius: var(--radius-sm);
-  background: linear-gradient(
-    90deg,
-    var(--surface-2) 25%,
-    var(--surface-hover) 37%,
-    var(--surface-2) 63%
-  );
-  background-size: 400% 100%;
-  animation: skeleton-sweep 1.4s ease infinite;
-}
-@keyframes skeleton-sweep {
-  from {
-    background-position: 100% 50%;
-  }
-  to {
-    background-position: 0 50%;
-  }
-}
-.skeleton-stat {
-  height: 28px;
-  width: 60%;
-  margin-top: var(--space-1);
-}
 /* Skeleton rows sit inside a real <table>, so the cell padding and column
    widths already match the loaded state. */
 .skeleton-row td {
   padding: var(--space-3) var(--space-4);
+  /* Match the tallest common real row — one carrying `sm` action buttons — so
+     the table does not resize when data arrives. Tables with taller rows pass
+     TableSkeleton an explicit rowHeight instead. */
+  height: calc(var(--space-3) * 2 + var(--control-h-sm));
 }
 
 .loading-block {
@@ -1030,7 +1064,7 @@ table.data th.mono {
 }
 /* ---------- Reduced motion ----------
    Honour the OS-level preference: drop the toast/modal entrances, the skeleton
-   sweep, and the drawer slide. The spinner keeps turning (it is the only cue
+   pulse, and the drawer slide. The spinner keeps turning (it is the only cue
    that work is in flight) but slowly enough not to provoke discomfort. */
 
 @media (prefers-reduced-motion: reduce) {
@@ -1051,10 +1085,8 @@ table.data th.mono {
     animation-duration: 2.4s;
     animation-iteration-count: infinite;
   }
-  .skeleton {
-    animation: none;
-    background: var(--surface-2);
-  }
+  /* Skeletons use Tailwind's animate-pulse, which the `*` rule above already
+     freezes at full opacity. */
 }
 
 /* ---------- Auth / login ---------- */
@@ -1189,10 +1221,6 @@ table.data th.mono {
   gap: var(--space-3);
   margin-bottom: var(--space-3);
   flex-wrap: wrap;
-}
-.certificate-map-heading h2,
-.integration-snippets h2 {
-  font-size: 14px;
 }
 .certificate-role-grid {
   display: grid;
@@ -1464,6 +1492,14 @@ table.data th.mono {
   z-index: 1;
   min-width: 210px;
   background: var(--surface);
+}
+/* The sticky column paints over the row beneath it, so it has to repeat both
+   the header tint and the row hover itself. */
+.application-matrix th.matrix-key {
+  background: var(--bg-elev);
+}
+.application-matrix tbody tr:hover .matrix-key {
+  background: var(--surface-hover);
 }
 
 .matrix-value {
@@ -1745,6 +1781,11 @@ table.data th.mono {
     justify-content: flex-start;
     flex-wrap: wrap;
     margin-top: 8px;
+  }
+  /* The chevron is lifted out of flow and pinned right; the card's own content
+     has to stay clear of it. */
+  .table-wrap.card-table tr.application-row {
+    padding-right: 40px;
   }
   .table-wrap.card-table td.application-row-chevron {
     position: absolute;

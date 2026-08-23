@@ -112,7 +112,17 @@ const SKELETON_WIDTHS = ["72%", "45%", "60%", "38%", "54%", "66%"];
 
 /** Placeholder rows rendered inside a real table, so the column layout and
  *  cell padding match the loaded state exactly and nothing shifts on arrival. */
-export function TableSkeleton({ headers, rows = 5 }: { headers: string[]; rows?: number }) {
+export function TableSkeleton({
+  headers,
+  rows = 5,
+  rowHeight,
+}: {
+  headers: string[];
+  rows?: number;
+  /** Override for tables whose real rows are taller than the common
+   *  one-line-plus-actions case `.skeleton-row td` is sized for. */
+  rowHeight?: number | string;
+}) {
   return (
     <div className="table-wrap" aria-busy="true">
       <span className="sr-only">Loading…</span>
@@ -126,7 +136,11 @@ export function TableSkeleton({ headers, rows = 5 }: { headers: string[]; rows?:
         </thead>
         <tbody>
           {Array.from({ length: rows }, (_, r) => (
-            <tr key={r} className="skeleton-row">
+            <tr
+              key={r}
+              className="skeleton-row"
+              style={rowHeight === undefined ? undefined : { height: rowHeight }}
+            >
               {headers.map((h, c) => (
                 <td key={h}>
                   <Skeleton width={SKELETON_WIDTHS[(r + c) % SKELETON_WIDTHS.length]} />
@@ -145,7 +159,11 @@ export function StatSkeleton({ label }: { label: string }) {
   return (
     <div className="stat" aria-busy="true">
       <div className="stat-label">{label}</div>
-      <div className="skeleton skeleton-stat" aria-hidden />
+      {/* Wrapped in .stat-value so the placeholder reserves the same line box
+          the real number occupies and the card does not resize on arrival. */}
+      <div className="stat-value">
+        <Skeleton width="60%" height={28} />
+      </div>
       <div className="stat-sub">
         <Skeleton width="50%" height={9} />
       </div>
@@ -234,7 +252,9 @@ export function Field({
       aria-describedby={describedBy}
       data-invalid={error ? true : undefined}
     >
-      <FieldLegend variant="label" id={labelId}>
+      {/* Muted + 600 matches the app's own .field-label, so forms that mix the
+          two label systems render identically. */}
+      <FieldLegend variant="label" id={labelId} className="font-semibold text-muted-foreground">
         {labelContent}
       </FieldLegend>
       {children}
@@ -245,7 +265,11 @@ export function Field({
       className={cn(error ? "field field-invalid gap-1" : "field gap-1", className)}
       data-invalid={error ? true : undefined}
     >
-      <FieldLabel htmlFor={resolvedFor} id={labelId}>
+      <FieldLabel
+        htmlFor={resolvedFor}
+        id={labelId}
+        className="font-semibold text-muted-foreground"
+      >
         {labelContent}
       </FieldLabel>
       {control}

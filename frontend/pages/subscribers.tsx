@@ -231,7 +231,7 @@ export default function SubscribersPage() {
                     return (
                       <tr
                         key={s.instance_id || `${s.client_name}-${s.remote_addr}`}
-                        style={stale ? { background: "var(--warning-soft)" } : undefined}
+                        className={stale ? "stale" : undefined}
                       >
                         <td>
                           {s.client_name}
