@@ -1,7 +1,10 @@
 import { useRouter } from "next/router";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, getToken, isAbortError } from "./api";
 import type { Namespace } from "./types";
+
+const first = (raw: string | string[] | undefined): string | null =>
+  (Array.isArray(raw) ? raw[0] : raw) ?? null;
 
 // Reads a single query-string parameter. On a static export, router.query is
 // empty until the client router hydrates, so callers must wait for `ready`
@@ -9,28 +12,103 @@ import type { Namespace } from "./types";
 export function useQueryParam(key: string): { value: string | null; ready: boolean } {
   const router = useRouter();
   if (!router.isReady) return { value: null, ready: false };
-  const raw = router.query[key];
-  const value = Array.isArray(raw) ? raw[0] : (raw ?? null);
-  return { value: value ?? null, ready: true };
+  return { value: first(router.query[key]), ready: true };
 }
 
 // Reads several query-string parameters at once. Same hydration caveat as
-// useQueryParam: values are null until `ready`.
+// useQueryParam: values are null until `ready`. `values` is referentially
+// stable while the requested keys resolve to the same strings, so it is safe
+// in effect dependency arrays.
 export function useQueryParams<K extends string>(
   keys: readonly K[],
 ): { values: Record<K, string | null>; ready: boolean } {
   const router = useRouter();
-  const values = {} as Record<K, string | null>;
   const ready = router.isReady;
-  for (const key of keys) {
-    if (!ready) {
-      values[key] = null;
-      continue;
-    }
-    const raw = router.query[key];
-    values[key] = (Array.isArray(raw) ? raw[0] : raw) ?? null;
-  }
+  const query = router.query;
+  // `keys` and `router.query` are fresh objects on every render, so the memo
+  // keys on a string that encodes both. "\u0000" cannot appear in a URL.
+  const signature = keys
+    .map((key) => `${key}=${(ready && first(query[key])) ?? ""}`)
+    .join("\u0000");
+  // biome-ignore lint/correctness/useExhaustiveDependencies: `signature` encodes `keys`, `ready` and the relevant slice of `query`.
+  const values = useMemo(() => {
+    const next = {} as Record<K, string | null>;
+    for (const key of keys) next[key] = ready ? first(query[key]) : null;
+    return next;
+  }, [signature]);
   return { values, ready };
+}
+
+export interface LoadRun {
+  readonly signal: AbortSignal;
+  /** False once a newer run has begun, abort() was called, or the component unmounted. */
+  readonly current: boolean;
+}
+
+/**
+ * Serialises a component's loads. begin() aborts the previous request and hands back a
+ * token whose `current` flips to false as soon as a newer load starts or the component
+ * unmounts. Guard every setState after an await with `if (!run.current) return;`.
+ * `current` is a getter — read it through the token, never destructure it.
+ */
+export function useLatestRequest(): { begin: () => LoadRun; abort: () => void } {
+  const controller = useRef<AbortController | null>(null);
+  const generation = useRef(0);
+
+  const abort = useCallback(() => {
+    generation.current += 1;
+    controller.current?.abort();
+    controller.current = null;
+  }, []);
+
+  const begin = useCallback((): LoadRun => {
+    controller.current?.abort();
+    const next = new AbortController();
+    controller.current = next;
+    const mine = ++generation.current;
+    return {
+      signal: next.signal,
+      get current() {
+        return generation.current === mine;
+      },
+    };
+  }, []);
+
+  useEffect(() => abort, [abort]);
+  return { begin, abort };
+}
+
+/**
+ * Tracks which form fields may show their validation message: a field reveals its
+ * error once blurred (`touch`) or once a submit has been attempted (`markAllTouched`).
+ */
+export function useFieldErrors<F extends string = string>(): {
+  /** Reveal this field's message (call from onBlur). */
+  touch: (field: F) => void;
+  /** Reveal every message (call at the top of submit). */
+  markAllTouched: () => void;
+  /** Clear everything (call when a form/modal opens). */
+  reset: () => void;
+  /** The message, or null while the field is still pristine. */
+  shown: (field: F, error: string | null | undefined) => string | null;
+  submitted: boolean;
+} {
+  const [touched, setTouched] = useState<ReadonlySet<F>>(() => new Set());
+  const [submitted, setSubmitted] = useState(false);
+  const touch = useCallback((field: F) => {
+    setTouched((current) => (current.has(field) ? current : new Set(current).add(field)));
+  }, []);
+  const markAllTouched = useCallback(() => setSubmitted(true), []);
+  const reset = useCallback(() => {
+    setTouched(new Set());
+    setSubmitted(false);
+  }, []);
+  const shown = useCallback(
+    (field: F, error: string | null | undefined) =>
+      error && (submitted || touched.has(field)) ? error : null,
+    [submitted, touched],
+  );
+  return { touch, markAllTouched, reset, shown, submitted };
 }
 
 interface CursorState {

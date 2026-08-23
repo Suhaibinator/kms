@@ -1,5 +1,5 @@
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import ApplicationsPage from "@/pages/applications";
 
 const mocks = vi.hoisted(() => ({
@@ -46,10 +46,6 @@ describe("ApplicationsPage", () => {
     mocks.createSecret.mockReset();
     mocks.toast.error.mockClear();
   });
-
-  // Without this, each render leaks into the next and role queries match the
-  // previous test's DOM as well as this one's.
-  afterEach(cleanup);
 
   /** Opens the "New application" modal and returns it. */
   async function openCreateModal(): Promise<HTMLElement> {

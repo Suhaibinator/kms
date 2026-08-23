@@ -50,15 +50,16 @@ export function formatRelative(ms: number | undefined | null): string {
   if (!ms || ms <= 0) return EMPTY;
   const diff = Date.now() - ms;
   const abs = Math.abs(diff);
-  const sec = Math.round(abs / 1000);
+  // Floor at every unit so 90s reads "1m", not "2m", and 45m never becomes "1h".
+  const sec = Math.floor(abs / 1000);
   const suffix = diff >= 0 ? "ago" : "from now";
   if (sec < 5) return "just now";
   if (sec < 60) return `${sec}s ${suffix}`;
-  const min = Math.round(sec / 60);
+  const min = Math.floor(sec / 60);
   if (min < 60) return `${min}m ${suffix}`;
-  const hr = Math.round(min / 60);
+  const hr = Math.floor(min / 60);
   if (hr < 24) return `${hr}h ${suffix}`;
-  const day = Math.round(hr / 24);
+  const day = Math.floor(hr / 24);
   return `${day}d ${suffix}`;
 }
 

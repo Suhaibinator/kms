@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { api } from "@/lib/api";
 import type { Namespace } from "@/lib/types";
@@ -18,14 +18,18 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("@/context/ToastContext", () => ({ useToast: () => mocks.toast }));
-vi.mock("@/lib/hooks", () => ({
-  useNamespaces: () => ({
-    namespaces: mocks.namespaces,
-    loading: mocks.namespacesLoading,
-    error: mocks.namespacesError,
-    reload: mocks.reloadNamespaces,
-  }),
-}));
+vi.mock("@/lib/hooks", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/hooks")>();
+  return {
+    ...actual,
+    useNamespaces: () => ({
+      namespaces: mocks.namespaces,
+      loading: mocks.namespacesLoading,
+      error: mocks.namespacesError,
+      reload: mocks.reloadNamespaces,
+    }),
+  };
+});
 
 function namespace(methods: Namespace["allowed_auth_methods"], app = "billing"): Namespace {
   return {
@@ -81,7 +85,6 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  cleanup();
   vi.restoreAllMocks();
 });
 

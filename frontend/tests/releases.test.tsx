@@ -1,5 +1,5 @@
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import ReleasesPage from "@/pages/releases";
 
 const mocks = vi.hoisted(() => ({
@@ -119,8 +119,6 @@ describe("ReleasesPage", () => {
       next_page_token: "",
     });
   });
-
-  afterEach(cleanup);
 
   it("loads the URL-selected schema tab lazily and keeps schema JSON out of the table", async () => {
     mocks.query = { tab: "schemas" };

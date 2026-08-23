@@ -1,5 +1,5 @@
-import { cleanup, render, screen } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { render, screen } from "@testing-library/react";
+import { describe, expect, it, vi } from "vitest";
 import NamespacePicker from "@/components/NamespacePicker";
 import type { Namespace } from "@/lib/types";
 import { chooseSelectOption, visibleSelectOptions } from "./select-test-utils";
@@ -22,8 +22,6 @@ const namespaces = [
   namespace("billing", "prod"),
   namespace("search", "preview"),
 ];
-
-afterEach(cleanup);
 
 describe("NamespacePicker", () => {
   it("selects an application before offering only its environments", async () => {
@@ -66,5 +64,42 @@ describe("NamespacePicker", () => {
 
     await chooseSelectOption(screen.getByRole("combobox", { name: "Application" }), "search");
     expect(onChange).toHaveBeenCalledWith({ app: "search", env: "" });
+  });
+
+  it("keeps a value that is not in the list selected and labels it as not found", async () => {
+    render(
+      <NamespacePicker
+        namespaces={namespaces}
+        value={{ app: "ghost", env: "staging" }}
+        onChange={vi.fn()}
+      />,
+    );
+
+    const app = screen.getByRole("combobox", { name: "Application" });
+    const env = screen.getByRole("combobox", { name: "Environment" });
+    expect(app).toHaveTextContent("ghost (not found)");
+    expect(env).toHaveTextContent("staging (not found)");
+    expect(await visibleSelectOptions(app)).toEqual(["ghost (not found)", "billing", "search"]);
+    expect(await visibleSelectOptions(env)).toEqual(["staging (not found)"]);
+  });
+
+  it("renders field errors inline and marks the control invalid", () => {
+    render(
+      <NamespacePicker
+        namespaces={namespaces}
+        value={{ app: "billing", env: "" }}
+        onChange={vi.fn()}
+        envError="Choose an environment."
+      />,
+    );
+
+    expect(screen.getByRole("alert")).toHaveTextContent("Choose an environment.");
+    expect(screen.getByRole("combobox", { name: "Environment" })).toHaveAttribute(
+      "aria-invalid",
+      "true",
+    );
+    expect(screen.getByRole("combobox", { name: "Application" })).not.toHaveAttribute(
+      "aria-invalid",
+    );
   });
 });
