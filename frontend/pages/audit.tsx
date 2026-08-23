@@ -1,16 +1,19 @@
-import { Button } from "@/components/ui/button";
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { RefreshCw } from "lucide-react";
+import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
 import { Icon } from "@/components/icons";
 import {
   Badge,
   EmptyState,
+  Field,
   Input,
   JsonView,
   PageHeader,
   Pagination,
+  Spinner,
   TableSkeleton,
 } from "@/components/ui";
 import { AppSelect } from "@/components/ui/app-select";
+import { Button } from "@/components/ui/button";
 import { useToast } from "@/context/ToastContext";
 import { api, isAbortError } from "@/lib/api";
 import {
@@ -20,8 +23,9 @@ import {
   isEmptyJson,
   prettyJson,
 } from "@/lib/format";
-import { useNamespaces } from "@/lib/hooks";
+import { useCursorPagination, useFieldErrors, useLatestRequest, useNamespaces } from "@/lib/hooks";
 import type { AuditEvent, AuditFilters } from "@/lib/types";
+import { validateKeyPrefix } from "@/lib/validation";
 
 interface FilterForm {
   env: string;
@@ -49,19 +53,27 @@ function decisionKind(decision: string): "success" | "danger" | "neutral" {
   return "neutral";
 }
 
+/** "End must be after start." once both bounds are set the wrong way round. */
+function rangeError(from: string, to: string): string | null {
+  const fromMs = datetimeLocalToUnixMs(from);
+  const toMs = datetimeLocalToUnixMs(to);
+  if (fromMs === undefined || toMs === undefined) return null;
+  return fromMs > toMs ? "End must be after start." : null;
+}
+
 export default function AuditPage() {
   const toast = useToast();
   const { namespaces } = useNamespaces();
   const [events, setEvents] = useState<AuditEvent[]>([]);
   const [loading, setLoading] = useState(true);
-  const [nextToken, setNextToken] = useState("");
-  const [pageStack, setPageStack] = useState<string[]>([]);
-  const [pageToken, setPageToken] = useState("");
-  const requestRef = useRef<AbortController | null>(null);
+  const { begin } = useLatestRequest();
 
   const [form, setForm] = useState<FilterForm>(EMPTY_FORM);
   const [applied, setApplied] = useState<AuditFilters>({});
   const [expanded, setExpanded] = useState<number | null>(null);
+  const filterErrors = useFieldErrors<"key_prefix">();
+  // Scoping the cursor on the applied filters resets it to page 1 whenever they change.
+  const paging = useCursorPagination(JSON.stringify(applied));
 
   const apps = useMemo(() => {
     const set = new Set<string>();
@@ -77,44 +89,40 @@ export default function AuditPage() {
     return [...set].sort((a, b) => a.localeCompare(b));
   }, [namespaces, form.app]);
 
+  const prefixProblem = validateKeyPrefix(form.key_prefix.trim());
+  const rangeProblem = rangeError(form.from, form.to);
+  const hasFilters = Object.values(applied).some((v) => v !== undefined && v !== "");
+
+  const { setNextToken } = paging;
   const load = useCallback(
     async (token: string, filters: AuditFilters) => {
-      requestRef.current?.abort();
-      const controller = new AbortController();
-      requestRef.current = controller;
+      const run = begin();
       setLoading(true);
       try {
         const res = await api.listAudit(
           { ...filters, page_size: 50, page_token: token || undefined },
-          { signal: controller.signal },
+          { signal: run.signal },
         );
-        if (requestRef.current !== controller) return;
+        if (!run.current) return;
         setEvents(res.events ?? []);
         setNextToken(res.next_page_token ?? "");
       } catch (err) {
-        if (!isAbortError(err)) toast.error(err, "Failed to load audit events");
+        if (run.current && !isAbortError(err)) toast.error(err, "Failed to load audit events");
       } finally {
-        if (requestRef.current === controller) {
-          requestRef.current = null;
-          setLoading(false);
-        }
+        if (run.current) setLoading(false);
       }
     },
-    [toast],
+    [begin, setNextToken, toast],
   );
 
   useEffect(() => {
-    void load(pageToken, applied);
-    return () => {
-      requestRef.current?.abort();
-      requestRef.current = null;
-    };
-  }, [load, pageToken, applied]);
+    void load(paging.pageToken, applied);
+  }, [load, paging.pageToken, applied]);
 
   function apply(e: React.FormEvent) {
     e.preventDefault();
-    setPageStack([]);
-    setPageToken("");
+    filterErrors.markAllTouched();
+    if (prefixProblem || rangeProblem) return;
     setExpanded(null);
     setApplied({
       env: form.env.trim() || undefined,
@@ -128,25 +136,9 @@ export default function AuditPage() {
   }
   function clear() {
     setForm(EMPTY_FORM);
-    setPageStack([]);
-    setPageToken("");
+    filterErrors.reset();
     setExpanded(null);
     setApplied({});
-  }
-  function goNext() {
-    if (!nextToken) return;
-    setPageStack((s) => [...s, pageToken]);
-    setPageToken(nextToken);
-  }
-  function goPrevious() {
-    const previous = pageStack[pageStack.length - 1];
-    if (previous === undefined) return;
-    setPageStack((s) => s.slice(0, -1));
-    setPageToken(previous);
-  }
-  function goReset() {
-    setPageStack([]);
-    setPageToken("");
   }
 
   function onApp(app: string) {
@@ -161,13 +153,20 @@ export default function AuditPage() {
       <PageHeader
         title="Audit log"
         subtitle="Authorization decisions and administrative actions."
+        actions={
+          <Button
+            variant="outline"
+            onClick={() => void load(paging.pageToken, applied)}
+            disabled={loading}
+          >
+            {loading ? <Spinner /> : <RefreshCw size={16} aria-hidden />}
+            {loading ? "Refreshing…" : "Refresh"}
+          </Button>
+        }
       />
 
       <form className="filters" onSubmit={apply}>
-        <div className="field">
-          <label className="field-label" htmlFor="f-app">
-            Application
-          </label>
+        <Field label="Application" htmlFor="f-app">
           <AppSelect
             id="f-app"
             value={form.app}
@@ -175,11 +174,8 @@ export default function AuditPage() {
             placeholder="All applications"
             options={apps.map((app) => ({ value: app, label: app }))}
           />
-        </div>
-        <div className="field">
-          <label className="field-label" htmlFor="f-env">
-            Environment
-          </label>
+        </Field>
+        <Field label="Environment" htmlFor="f-env">
           <AppSelect
             id="f-env"
             value={form.env}
@@ -188,64 +184,58 @@ export default function AuditPage() {
             placeholder={form.app ? "All environments" : "Select application first"}
             options={envs.map((env) => ({ value: env, label: env }))}
           />
-        </div>
-        <div className="field">
-          <label className="field-label" htmlFor="f-prefix">
-            Key prefix
-          </label>
+        </Field>
+        <Field
+          label="Key prefix"
+          htmlFor="f-prefix"
+          error={filterErrors.shown("key_prefix", prefixProblem)}
+        >
           <Input
             id="f-prefix"
             className="font-mono"
             value={form.key_prefix}
             onChange={(e) => setForm({ ...form, key_prefix: e.target.value })}
-            placeholder="billing/"
+            onBlur={() => filterErrors.touch("key_prefix")}
+            placeholder="billing"
           />
-        </div>
-        <div className="field">
-          <label className="field-label" htmlFor="f-actor">
-            Actor
-          </label>
+        </Field>
+        <Field label="Actor" htmlFor="f-actor">
           <Input
             id="f-actor"
             value={form.actor}
             onChange={(e) => setForm({ ...form, actor: e.target.value })}
             placeholder="gradethis-be"
           />
-        </div>
-        <div className="field">
-          <label className="field-label" htmlFor="f-type">
-            Event type
-          </label>
+        </Field>
+        <Field label="Event type" htmlFor="f-type">
           <Input
             id="f-type"
             value={form.event_type}
             onChange={(e) => setForm({ ...form, event_type: e.target.value })}
             placeholder="secret.read"
           />
-        </div>
-        <div className="field">
-          <label className="field-label" htmlFor="f-from">
-            From
-          </label>
+        </Field>
+        <Field label="From" htmlFor="f-from">
           <Input
             id="f-from"
             type="datetime-local"
             value={form.from}
             onChange={(e) => setForm({ ...form, from: e.target.value })}
           />
-        </div>
-        <div className="field">
-          <label className="field-label" htmlFor="f-to">
-            To
-          </label>
+        </Field>
+        <Field label="To" htmlFor="f-to" hint="End is exclusive" error={rangeProblem}>
           <Input
             id="f-to"
             type="datetime-local"
             value={form.to}
             onChange={(e) => setForm({ ...form, to: e.target.value })}
           />
-        </div>
-        <Button type="submit" variant="outline">
+        </Field>
+        <Button
+          type="submit"
+          variant="outline"
+          disabled={prefixProblem !== null || rangeProblem !== null}
+        >
           Apply
         </Button>
         <Button type="button" variant="ghost" onClick={clear}>
@@ -263,12 +253,16 @@ export default function AuditPage() {
           icon={<Icon.audit size={20} />}
           title="No audit events"
           actions={
-            <Button variant="outline" onClick={clear}>
-              Clear filters
-            </Button>
+            hasFilters ? (
+              <Button variant="outline" onClick={clear}>
+                Clear filters
+              </Button>
+            ) : undefined
           }
         >
-          No events match the current filters.
+          {hasFilters
+            ? "No events match the current filters."
+            : "No audit events have been recorded yet."}
         </EmptyState>
       ) : (
         <div className="table-wrap card-table">
@@ -289,6 +283,7 @@ export default function AuditPage() {
                 const open = expanded === e.id;
                 const hasMeta = !isEmptyJson(e.metadata_json);
                 const resource = displayAuditResource(e);
+                const metaId = `audit-meta-${e.id}`;
                 return (
                   <Fragment key={e.id}>
                     <tr>
@@ -327,6 +322,8 @@ export default function AuditPage() {
                           <Button
                             variant="ghost"
                             size="sm"
+                            aria-expanded={open}
+                            aria-controls={metaId}
                             onClick={() => setExpanded(open ? null : e.id)}
                           >
                             {open ? "Hide" : "Details"}
@@ -335,7 +332,7 @@ export default function AuditPage() {
                       </td>
                     </tr>
                     {open && hasMeta ? (
-                      <tr>
+                      <tr id={metaId}>
                         <td colSpan={7}>
                           <JsonView raw={prettyJson(e.metadata_json)} />
                           {e.request_id ? (
@@ -355,12 +352,13 @@ export default function AuditPage() {
       )}
 
       <Pagination
-        hasNext={!!nextToken}
-        onNext={goNext}
-        hasPrevious={pageStack.length > 0}
-        onPrevious={goPrevious}
-        onReset={goReset}
-        showReset={pageStack.length > 0}
+        hasNext={paging.hasNext}
+        onNext={paging.next}
+        hasPrevious={paging.hasPrevious}
+        onPrevious={paging.previous}
+        onReset={paging.reset}
+        showReset={paging.hasPrevious}
+        page={paging.page}
       />
     </>
   );

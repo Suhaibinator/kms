@@ -1,7 +1,6 @@
-import { Button, ButtonLink } from "@/components/ui/button";
 import { Check, Download } from "lucide-react";
 import Link from "next/link";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import CopyButton from "@/components/CopyButton";
 import { Icon } from "@/components/icons";
 import { ConfirmDialog, Modal } from "@/components/Modal";
@@ -18,11 +17,12 @@ import {
   TableSkeleton,
 } from "@/components/ui";
 import { AppSelect } from "@/components/ui/app-select";
+import { Button, ButtonLink } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useToast } from "@/context/ToastContext";
 import { api, isAbortError } from "@/lib/api";
 import { displayNamespace, formatUnixMs } from "@/lib/format";
-import { useNamespaces } from "@/lib/hooks";
+import { useCursorPagination, useFieldErrors, useLatestRequest, useNamespaces } from "@/lib/hooks";
 import type {
   AuthMethod,
   CertBundle,
@@ -35,7 +35,21 @@ import { firstError, validateApp, validateEnv, validateIdentityName } from "@/li
 import { createStoredZip } from "@/lib/zip";
 
 const DEFAULT_CERT_DAYS = 90;
+const MAX_CERT_DAYS = 3650;
 const NO_NS: NamespaceSelection = { env: "", app: "" };
+
+/**
+ * Validation message for a certificate lifetime typed in days. Anything that is
+ * not a positive whole number would reach the server as a TTL of 0, which it
+ * silently replaces with its own default.
+ */
+function certDaysError(raw: string): string | null {
+  if (raw.trim() === "") return "Enter a certificate lifetime in days.";
+  const n = Number(raw);
+  if (!Number.isInteger(n) || n <= 0) return "Certificate lifetime must be a whole number of days.";
+  if (n > MAX_CERT_DAYS) return `Certificate lifetime must be ${MAX_CERT_DAYS} days or fewer.`;
+  return null;
+}
 
 function downloadBlob(filename: string, blob: Blob) {
   const url = URL.createObjectURL(blob);
@@ -212,10 +226,9 @@ export default function IdentitiesPage() {
   } = useNamespaces();
   const [identities, setIdentities] = useState<Identity[]>([]);
   const [loading, setLoading] = useState(true);
-  const [nextToken, setNextToken] = useState("");
-  const [pageStack, setPageStack] = useState<string[]>([]);
-  const [pageToken, setPageToken] = useState("");
-  const loadController = useRef<AbortController | null>(null);
+  // The list is unfiltered, so the cursor scope never changes.
+  const paging = useCursorPagination("identities");
+  const { begin } = useLatestRequest();
 
   // Create form.
   const [createOpen, setCreateOpen] = useState(false);
@@ -226,18 +239,18 @@ export default function IdentitiesPage() {
   const [methods, setMethods] = useState<AuthMethod[]>(["mtls"]);
   const [certDays, setCertDays] = useState(String(DEFAULT_CERT_DAYS));
   const [saving, setSaving] = useState(false);
-  // Reveal validation only after the user has left the name field or tried to
-  // leave step one; a form opened fresh should not greet them with errors.
-  const [nameTouched, setNameTouched] = useState(false);
-  const [step1Attempted, setStep1Attempted] = useState(false);
+  const wizardErrors = useFieldErrors<"name" | "bind" | "certDays">();
 
   // One-time credential display (from create or issue-cert).
   const [credentials, setCredentials] = useState<Credentials | null>(null);
 
-  // Manage-certs modal (by identity name; certs read from the live list).
-  const [certsTargetName, setCertsTargetName] = useState<string | null>(null);
+  // Manage-certs modal. The identity is snapshotted when the modal opens so a
+  // reload that drops it from the current page (or fails) cannot close the
+  // modal under the user; the live row is preferred whenever it is present.
+  const [certsSnapshot, setCertsSnapshot] = useState<Identity | null>(null);
   const [issueDays, setIssueDays] = useState(String(DEFAULT_CERT_DAYS));
   const [issueBusy, setIssueBusy] = useState(false);
+  const issueErrors = useFieldErrors<"days">();
   const [revokeCertTarget, setRevokeCertTarget] = useState<{ name: string; serial: string } | null>(
     null,
   );
@@ -249,41 +262,39 @@ export default function IdentitiesPage() {
 
   const [caBusy, setCaBusy] = useState(false);
 
+  const { setNextToken } = paging;
+  /** Resolves to the fetched page, or null when the load failed or was superseded. */
   const load = useCallback(
-    async (token: string) => {
-      loadController.current?.abort();
-      const controller = new AbortController();
-      loadController.current = controller;
+    async (token: string): Promise<Identity[] | null> => {
+      const run = begin();
       setLoading(true);
       try {
-        const res = await api.listIdentities(100, token || undefined, {
-          signal: controller.signal,
-        });
-        if (loadController.current !== controller) return;
-        setIdentities(res.identities ?? []);
+        const res = await api.listIdentities(100, token || undefined, { signal: run.signal });
+        if (!run.current) return null;
+        const list = res.identities ?? [];
+        setIdentities(list);
         setNextToken(res.next_page_token ?? "");
+        return list;
       } catch (err) {
-        if (!isAbortError(err) && loadController.current === controller) {
-          toast.error(err, "Failed to load identities");
-        }
+        if (run.current && !isAbortError(err)) toast.error(err, "Failed to load identities");
+        return null;
       } finally {
-        if (loadController.current === controller) {
-          loadController.current = null;
-          setLoading(false);
-        }
+        if (run.current) setLoading(false);
       }
     },
-    [toast],
+    [begin, setNextToken, toast],
   );
 
   useEffect(() => {
-    void load(pageToken);
-    return () => loadController.current?.abort();
-  }, [load, pageToken]);
+    void load(paging.pageToken);
+  }, [load, paging.pageToken]);
 
   const certsTarget = useMemo(
-    () => identities.find((id) => id.name === certsTargetName) ?? null,
-    [identities, certsTargetName],
+    () =>
+      certsSnapshot
+        ? (identities.find((id) => id.name === certsSnapshot.name) ?? certsSnapshot)
+        : null,
+    [identities, certsSnapshot],
   );
   const certIssueAvailability = certsTarget
     ? identityMethodAvailability(
@@ -311,26 +322,18 @@ export default function IdentitiesPage() {
   const nameProblem = validateIdentityName(name.trim());
   const bindProblem =
     identityMode === "application"
-      ? firstError(validateEnv(bindNs.env), validateApp(bindNs.app))
+      ? !bindNs.env && !bindNs.app
+        ? "Choose the namespace this application will use."
+        : (firstError(validateEnv(bindNs.env), validateApp(bindNs.app)) ??
+          (selectedNamespace ? null : "Choose an existing namespace."))
       : null;
-  const nameError = nameTouched || step1Attempted ? nameProblem : null;
-  const bindError = step1Attempted ? bindProblem : null;
+  const methodsProblem = methods.length === 0 ? "Select at least one credential method." : null;
+  const certDaysProblem = methods.includes("mtls") ? certDaysError(certDays) : null;
+  const nameError = wizardErrors.shown("name", nameProblem);
+  const bindError = wizardErrors.submitted ? bindProblem : null;
+  const certDaysShown = wizardErrors.shown("certDays", certDaysProblem);
 
-  function goNext() {
-    if (!nextToken) return;
-    setPageStack((s) => [...s, pageToken]);
-    setPageToken(nextToken);
-  }
-  function goPrevious() {
-    const previous = pageStack[pageStack.length - 1];
-    if (previous === undefined) return;
-    setPageStack((s) => s.slice(0, -1));
-    setPageToken(previous);
-  }
-  function goReset() {
-    setPageStack([]);
-    setPageToken("");
-  }
+  const issueDaysProblem = certDaysError(issueDays);
 
   function openCreate() {
     setName("");
@@ -338,10 +341,15 @@ export default function IdentitiesPage() {
     setBindNs(NO_NS);
     setMethods(["mtls"]);
     setCertDays(String(DEFAULT_CERT_DAYS));
-    setNameTouched(false);
-    setStep1Attempted(false);
+    wizardErrors.reset();
     setCreateStep(1);
     setCreateOpen(true);
+  }
+
+  function openCertificates(identity: Identity) {
+    setIssueDays(String(DEFAULT_CERT_DAYS));
+    issueErrors.reset();
+    setCertsSnapshot(identity);
   }
 
   function changeIdentityMode(mode: IdentityMode) {
@@ -358,75 +366,24 @@ export default function IdentitiesPage() {
   }
 
   function continueToAuthentication() {
-    setStep1Attempted(true);
-    const n = name.trim();
-    if (!n) {
-      toast.error(new Error("A name is required."), "Missing name");
-      return;
-    }
-    // A malformed name is reported inline on the field itself.
-    if (nameProblem) return;
-    if (identityMode === "application" && namespacesLoading) {
-      toast.error(
-        new Error("Wait for the namespace list to finish loading."),
-        "Namespaces loading",
-      );
-      return;
-    }
-    if (identityMode === "application" && namespacesError) {
-      toast.error(
-        new Error("Retry loading namespaces before continuing."),
-        "Namespaces unavailable",
-      );
-      return;
-    }
-    if (identityMode === "application" && (!bindNs.env || !bindNs.app)) {
-      toast.error(
-        new Error("Choose the namespace this application will use."),
-        "Missing namespace",
-      );
-      return;
-    }
-    if (bindProblem) return;
-    if (identityMode === "application" && !selectedNamespace) {
-      toast.error(new Error("Choose an existing namespace."), "Unknown namespace");
-      return;
-    }
+    // Every step-one problem is rendered inline next to its field; the namespace
+    // loading/error states already disable the Continue button.
+    wizardErrors.markAllTouched();
+    if (nameProblem || bindProblem) return;
+    if (identityMode === "application" && (namespacesLoading || namespacesError)) return;
     setCreateStep(2);
   }
 
   async function onCreate() {
     const n = name.trim();
-    if (nameProblem) {
-      toast.error(new Error(nameProblem), "Invalid name");
-      setStep1Attempted(true);
+    wizardErrors.markAllTouched();
+    if (nameProblem || bindProblem) {
       setCreateStep(1);
       return;
     }
-    if (methods.length === 0) {
-      toast.error(
-        new Error("Select at least one auth method (mTLS, token, or both)."),
-        "No auth method",
-      );
-      return;
-    }
-    if (identityMode === "application" && (!selectedNamespace || authConflict)) {
-      toast.error(
-        new Error("Select a credential method accepted by the application namespace."),
-        "Incompatible authentication",
-      );
-      return;
-    }
-    const days = Number(certDays);
-    if (methods.includes("mtls") && (!Number.isFinite(days) || days <= 0)) {
-      toast.error(
-        new Error("Certificate lifetime must be a positive number of days."),
-        "Invalid certificate lifetime",
-      );
-      return;
-    }
-    const ttlSeconds =
-      methods.includes("mtls") && Number.isFinite(days) && days > 0 ? Math.round(days * 86400) : 0;
+    // Each of these is shown inline and disables the Create button.
+    if (methodsProblem || authConflict || certDaysProblem) return;
+    const ttlSeconds = methods.includes("mtls") ? Number(certDays) * 86400 : 0;
     const namespace =
       identityMode === "application" && bindNs.env && bindNs.app
         ? { env: bindNs.env, app: bindNs.app }
@@ -465,24 +422,24 @@ export default function IdentitiesPage() {
   }
 
   async function onIssueCert() {
-    if (!certsTargetName) return;
+    if (!certsTarget) return;
     if (certIssueAvailability !== "allowed") {
       toast.error(new Error(certIssueReason), "Certificate issuance unavailable");
       return;
     }
-    const days = Number(issueDays);
-    const ttlSeconds = Number.isFinite(days) && days > 0 ? Math.round(days * 86400) : 0;
+    issueErrors.markAllTouched();
+    if (issueDaysProblem) return;
+    const ttlSeconds = Number(issueDays) * 86400;
     setIssueBusy(true);
     try {
-      const res = await api.issueCert(certsTargetName, ttlSeconds);
+      const res = await api.issueCert(certsTarget.name, ttlSeconds);
       // Close the manage modal so the one-time bundle takes focus, then refresh.
-      const name = certsTargetName;
-      const namespace = certsTarget?.namespace ?? null;
-      const kind = certsTarget?.kind ?? "client";
-      setCertsTargetName(null);
+      const { name, kind } = certsTarget;
+      const namespace = certsTarget.namespace ?? null;
+      setCertsSnapshot(null);
       setCredentials({ name, kind, cert: res.cert, namespace });
       toast.success("Certificate issued", "Save the PEM bundle below.");
-      await load(pageToken);
+      await load(paging.pageToken);
     } catch (err) {
       toast.error(err, "Failed to issue certificate");
     } finally {
@@ -497,7 +454,7 @@ export default function IdentitiesPage() {
       await api.revokeCert(revokeCertTarget.name, revokeCertTarget.serial);
       toast.success("Certificate revoked", revokeCertTarget.serial);
       setRevokeCertTarget(null);
-      await load(pageToken);
+      await load(paging.pageToken);
     } catch (err) {
       toast.error(err, "Failed to revoke certificate");
     } finally {
@@ -546,7 +503,9 @@ export default function IdentitiesPage() {
       await api.revokeIdentity(revokeTarget);
       toast.success("Identity revoked", revokeTarget);
       setRevokeTarget(null);
-      await load(pageToken);
+      // Revoking the last row on a later page would otherwise leave an empty page.
+      const remaining = await load(paging.pageToken);
+      if (remaining !== null && remaining.length === 0 && paging.hasPrevious) paging.previous();
     } catch (err) {
       toast.error(err, "Failed to revoke identity");
     } finally {
@@ -572,7 +531,7 @@ export default function IdentitiesPage() {
 
   async function closeCredentials() {
     setCredentials(null);
-    goReset();
+    paging.reset();
     await load("");
   }
 
@@ -700,10 +659,7 @@ export default function IdentitiesPage() {
                           variant="outline"
                           size="sm"
                           disabled={id.disabled}
-                          onClick={() => {
-                            setIssueDays(String(DEFAULT_CERT_DAYS));
-                            setCertsTargetName(id.name);
-                          }}
+                          onClick={() => openCertificates(id)}
                         >
                           Certificates
                         </Button>
@@ -753,12 +709,13 @@ export default function IdentitiesPage() {
       )}
 
       <Pagination
-        hasNext={!!nextToken}
-        onNext={goNext}
-        hasPrevious={pageStack.length > 0}
-        onPrevious={goPrevious}
-        onReset={goReset}
-        showReset={pageStack.length > 0}
+        hasNext={paging.hasNext}
+        onNext={paging.next}
+        hasPrevious={paging.hasPrevious}
+        onPrevious={paging.previous}
+        onReset={paging.reset}
+        showReset={paging.hasPrevious}
+        page={paging.page}
       />
 
       {/* Connect application */}
@@ -767,10 +724,15 @@ export default function IdentitiesPage() {
         wide
         title={
           createStep === 1
-            ? "Connect application — choose application"
-            : "Connect application — authentication"
+            ? identityMode === "application"
+              ? "Connect application — choose application"
+              : "New identity — choose type"
+            : identityMode === "application"
+              ? "Connect application — authentication"
+              : "New identity — authentication"
         }
-        onClose={saving ? () => undefined : () => setCreateOpen(false)}
+        onClose={() => setCreateOpen(false)}
+        dismissible={!saving}
         footer={
           <>
             <Button variant="outline" onClick={() => setCreateOpen(false)} disabled={saving}>
@@ -795,8 +757,9 @@ export default function IdentitiesPage() {
                 onClick={() => void onCreate()}
                 disabled={
                   saving ||
-                  methods.length === 0 ||
+                  methodsProblem !== null ||
                   authConflict ||
+                  certDaysProblem !== null ||
                   nameProblem !== null ||
                   bindProblem !== null
                 }
@@ -833,9 +796,8 @@ export default function IdentitiesPage() {
                   className="font-mono"
                   value={name}
                   onChange={(e) => setName(e.target.value)}
-                  onBlur={() => setNameTouched(true)}
+                  onBlur={() => wizardErrors.touch("name")}
                   placeholder="gradethis-be"
-                  required
                   autoComplete="off"
                   spellCheck={false}
                 />
@@ -878,8 +840,9 @@ export default function IdentitiesPage() {
                 ) : (
                   <div className="warn-panel mb-16">
                     No application namespaces are available.{" "}
-                    <Link href="/environments">Create an environment</Link> before connecting an
-                    application, or choose an advanced identity type below.
+                    <Link href="/applications">Create an application</Link> and add an environment
+                    to it before connecting an application, or choose an advanced identity type
+                    below.
                   </div>
                 )
               ) : identityMode === "admin" ? (
@@ -949,6 +912,7 @@ export default function IdentitiesPage() {
 
               <Field
                 label="Credential method"
+                error={methodsProblem}
                 hint={
                   identityMode === "admin"
                     ? "Administrators always receive a bearer token; optionally issue a client certificate too."
@@ -1008,13 +972,16 @@ export default function IdentitiesPage() {
                 <Field
                   label="Certificate lifetime (days)"
                   hint="90 days is the recommended starting point. Issue a replacement before expiry."
+                  error={certDaysShown}
                 >
                   <Input
                     type="number"
                     min={1}
+                    max={MAX_CERT_DAYS}
+                    step={1}
                     value={certDays}
                     onChange={(e) => setCertDays(e.target.value)}
-                    required
+                    onBlur={() => wizardErrors.touch("certDays")}
                   />
                 </Field>
               ) : null}
@@ -1038,12 +1005,15 @@ export default function IdentitiesPage() {
 
       {/* Manage certificates */}
       <Modal
-        open={certsTarget !== null && revokeCertTarget === null}
+        // Stays open under the revoke confirmation (Base UI stacks portalled
+        // dialogs in DOM order) so the user can see which row they are revoking.
+        open={certsTarget !== null}
         wide
         title={certsTarget ? `Certificates — ${certsTarget.name}` : "Certificates"}
-        onClose={() => setCertsTargetName(null)}
+        onClose={() => setCertsSnapshot(null)}
+        dismissible={!issueBusy}
         footer={
-          <Button variant="outline" onClick={() => setCertsTargetName(null)}>
+          <Button variant="outline" onClick={() => setCertsSnapshot(null)} disabled={issueBusy}>
             Close
           </Button>
         }
@@ -1051,38 +1021,50 @@ export default function IdentitiesPage() {
         {certsTarget ? (
           <>
             {certIssueAvailability !== "allowed" ? (
-              <div className="danger-panel mb-16" role="alert">
+              <div id="cert-issue-reason" className="danger-panel mb-16" role="alert">
                 <strong>New certificate issuance is disabled.</strong> {certIssueReason} Update the
                 bound namespace to accept mTLS before issuing another certificate. Existing
                 certificates can still be inspected and revoked below.
               </div>
             ) : null}
-            <div className="between mb-16">
-              <div className="row-wrap" style={{ alignItems: "flex-end" }}>
-                <div className="field" style={{ marginBottom: 0 }}>
-                  <label className="field-label" htmlFor="issue-days">
-                    New cert lifetime (days)
-                  </label>
-                  <Input
-                    id="issue-days"
-                    type="number"
-                    min={1}
-                    disabled={certIssueAvailability !== "allowed"}
-                    style={{ width: 140 }}
-                    value={issueDays}
-                    onChange={(e) => setIssueDays(e.target.value)}
-                  />
-                </div>
-                <Button
-                  onClick={() => void onIssueCert()}
-                  disabled={issueBusy || certIssueAvailability !== "allowed"}
-                  title={certIssueAvailability === "allowed" ? undefined : certIssueReason}
-                >
-                  {issueBusy ? <Spinner /> : null}
-                  Issue new certificate
-                </Button>
-              </div>
-            </div>
+            {/* `.filters` is the app's label-above-control-beside-button row layout. */}
+            <form
+              className="filters"
+              onSubmit={(event) => {
+                event.preventDefault();
+                void onIssueCert();
+              }}
+            >
+              <Field
+                label="New cert lifetime (days)"
+                htmlFor="issue-days"
+                error={issueErrors.shown("days", issueDaysProblem)}
+              >
+                <Input
+                  id="issue-days"
+                  type="number"
+                  min={1}
+                  max={MAX_CERT_DAYS}
+                  step={1}
+                  disabled={certIssueAvailability !== "allowed"}
+                  value={issueDays}
+                  onChange={(e) => setIssueDays(e.target.value)}
+                  onBlur={() => issueErrors.touch("days")}
+                />
+              </Field>
+              <Button
+                type="submit"
+                disabled={
+                  issueBusy || certIssueAvailability !== "allowed" || issueDaysProblem !== null
+                }
+                aria-describedby={
+                  certIssueAvailability === "allowed" ? undefined : "cert-issue-reason"
+                }
+              >
+                {issueBusy ? <Spinner /> : null}
+                Issue new certificate
+              </Button>
+            </form>
             <div className="faint text-sm mb-16">
               Issue a fresh certificate before an old one expires for zero-downtime rollover.
               Multiple valid certificates can coexist.

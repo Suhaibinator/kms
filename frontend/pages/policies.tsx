@@ -1,6 +1,5 @@
-import { Button } from "@/components/ui/button";
-import { useCallback, useEffect, useRef, useState } from "react";
 import { Pencil, Trash2 } from "lucide-react";
+import { useCallback, useEffect, useState } from "react";
 import { Icon } from "@/components/icons";
 import { ConfirmDialog, Modal } from "@/components/Modal";
 import {
@@ -13,9 +12,11 @@ import {
   TableSkeleton,
 } from "@/components/ui";
 import { AppSelect } from "@/components/ui/app-select";
+import { Button } from "@/components/ui/button";
 import { useToast } from "@/context/ToastContext";
 import { api, isAbortError } from "@/lib/api";
 import { formatUnixMs } from "@/lib/format";
+import { useCursorPagination, useFieldErrors, useLatestRequest } from "@/lib/hooks";
 import { POLICY_OPERATIONS, type Policy, type PolicyRule } from "@/lib/types";
 import {
   firstError,
@@ -26,23 +27,35 @@ import {
   validatePolicySubject,
 } from "@/lib/validation";
 
+/**
+ * A rule being edited carries a client-side id so React keys and touched-field
+ * keys follow the rule when an earlier one is removed; `save()` strips it.
+ */
+type DraftRule = PolicyRule & { id: number };
+
 interface Draft {
   name: string;
   subject: string;
-  allow: PolicyRule[];
-  deny: PolicyRule[];
+  allow: DraftRule[];
+  deny: DraftRule[];
   editing: boolean;
 }
 
 type RuleKind = "allow" | "deny";
 type RuleField = keyof PolicyRule;
 
+let ruleID = 0;
+
 function emptyDraft(): Draft {
   return { name: "", subject: "", allow: [], deny: [], editing: false };
 }
 
-function newRule(): PolicyRule {
-  return { operation: "secret:read", env: "*", app: "*" };
+function newRule(): DraftRule {
+  return { id: ++ruleID, operation: "secret:read", env: "*", app: "*" };
+}
+
+function draftRules(rules: PolicyRule[] | null | undefined): DraftRule[] {
+  return rules ? rules.map((r) => ({ ...r, id: ++ruleID })) : [];
 }
 
 /**
@@ -88,106 +101,68 @@ export default function PoliciesPage() {
   const toast = useToast();
   const [policies, setPolicies] = useState<Policy[]>([]);
   const [loading, setLoading] = useState(true);
-  const [nextToken, setNextToken] = useState("");
-  const [pageStack, setPageStack] = useState<string[]>([]);
-  const [pageToken, setPageToken] = useState("");
-  const requestRef = useRef<AbortController | null>(null);
+  const paging = useCursorPagination("policies");
+  const { begin } = useLatestRequest();
 
   const [draft, setDraft] = useState<Draft | null>(null);
   const [saving, setSaving] = useState(false);
-  // A field's message stays hidden until the user has left it, so a half-typed
-  // value is never called wrong. Attempting to save reveals everything at once.
-  const [touched, setTouched] = useState<ReadonlySet<string>>(new Set());
-  const [submitted, setSubmitted] = useState(false);
+  // Keys are composite (`allow-<rule id>-app`), hence the plain string form.
+  const fieldErrors = useFieldErrors<string>();
 
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
   const [deleting, setDeleting] = useState(false);
 
+  const { setNextToken } = paging;
+  /** Resolves to the fetched page, or null when the load failed or was superseded. */
   const load = useCallback(
-    async (token: string) => {
-      requestRef.current?.abort();
-      const controller = new AbortController();
-      requestRef.current = controller;
+    async (token: string): Promise<Policy[] | null> => {
+      const run = begin();
       setLoading(true);
       try {
-        const res = await api.listPolicies(100, token || undefined, {
-          signal: controller.signal,
-        });
-        if (requestRef.current !== controller) return;
-        setPolicies(res.policies ?? []);
+        const res = await api.listPolicies(100, token || undefined, { signal: run.signal });
+        if (!run.current) return null;
+        const list = res.policies ?? [];
+        setPolicies(list);
         setNextToken(res.next_page_token ?? "");
+        return list;
       } catch (err) {
-        if (!isAbortError(err)) toast.error(err, "Failed to load policies");
+        if (run.current && !isAbortError(err)) toast.error(err, "Failed to load policies");
+        return null;
       } finally {
-        if (requestRef.current === controller) {
-          requestRef.current = null;
-          setLoading(false);
-        }
+        if (run.current) setLoading(false);
       }
     },
-    [toast],
+    [begin, setNextToken, toast],
   );
 
   useEffect(() => {
-    void load(pageToken);
-    return () => {
-      requestRef.current?.abort();
-      requestRef.current = null;
-    };
-  }, [load, pageToken]);
-
-  function goNext() {
-    if (!nextToken) return;
-    setPageStack((s) => [...s, pageToken]);
-    setPageToken(nextToken);
-  }
-  function goPrevious() {
-    const previous = pageStack[pageStack.length - 1];
-    if (previous === undefined) return;
-    setPageStack((s) => s.slice(0, -1));
-    setPageToken(previous);
-  }
-  function goReset() {
-    setPageStack([]);
-    setPageToken("");
-  }
-
-  function touch(key: string) {
-    setTouched((t) => (t.has(key) ? t : new Set(t).add(key)));
-  }
-  /** The message for `key`, or null while the field is still pristine. */
-  function visibleError(key: string, message: string | null): string | null {
-    return message !== null && (submitted || touched.has(key)) ? message : null;
-  }
-  function resetValidation() {
-    setTouched(new Set());
-    setSubmitted(false);
-  }
+    void load(paging.pageToken);
+  }, [load, paging.pageToken]);
 
   function openCreate() {
-    resetValidation();
+    fieldErrors.reset();
     setDraft(emptyDraft());
   }
   function openEdit(p: Policy) {
-    resetValidation();
+    fieldErrors.reset();
     setDraft({
       name: p.name,
       subject: p.subject,
-      allow: p.allow ? p.allow.map((r) => ({ ...r })) : [],
-      deny: p.deny ? p.deny.map((r) => ({ ...r })) : [],
+      allow: draftRules(p.allow),
+      deny: draftRules(p.deny),
       editing: true,
     });
   }
 
   async function save() {
     if (!draft) return;
-    setSubmitted(true);
+    fieldErrors.markAllTouched();
     // Every problem is now rendered next to the field that has it.
     if (draftError(draft) !== null) return;
     // env/app are sent as typed: the server normalizes "" and "*" alike to "*"
     // (`policy.normalizeLabel`), so a blank component means "any" and the rule
     // must not be dropped on its way out.
-    const clean = (rules: PolicyRule[]) =>
+    const clean = (rules: DraftRule[]): PolicyRule[] =>
       rules.map((r) => ({
         operation: r.operation,
         env: r.env.trim(),
@@ -213,7 +188,7 @@ export default function PoliciesPage() {
         toast.success("Policy created", policy.name);
       }
       setDraft(null);
-      goReset();
+      paging.reset();
       await load("");
     } catch (err) {
       toast.error(err, "Failed to save policy");
@@ -229,7 +204,9 @@ export default function PoliciesPage() {
       await api.deletePolicy(deleteTarget);
       toast.success("Policy deleted", deleteTarget);
       setDeleteTarget(null);
-      await load(pageToken);
+      // Deleting the last row on a later page would otherwise leave an empty page.
+      const remaining = await load(paging.pageToken);
+      if (remaining !== null && remaining.length === 0 && paging.hasPrevious) paging.previous();
     } catch (err) {
       toast.error(err, "Failed to delete policy");
     } finally {
@@ -300,12 +277,13 @@ export default function PoliciesPage() {
       )}
 
       <Pagination
-        hasNext={!!nextToken}
-        onNext={goNext}
-        hasPrevious={pageStack.length > 0}
-        onPrevious={goPrevious}
-        onReset={goReset}
-        showReset={pageStack.length > 0}
+        hasNext={paging.hasNext}
+        onNext={paging.next}
+        hasPrevious={paging.hasPrevious}
+        onPrevious={paging.previous}
+        onReset={paging.reset}
+        showReset={paging.hasPrevious}
+        page={paging.page}
       />
 
       <Modal
@@ -313,6 +291,7 @@ export default function PoliciesPage() {
         wide
         title={draft?.editing ? `Edit policy: ${draft.name}` : "New policy"}
         onClose={() => setDraft(null)}
+        dismissible={!saving}
         footer={
           <>
             <Button variant="outline" onClick={() => setDraft(null)} disabled={saving}>
@@ -326,32 +305,37 @@ export default function PoliciesPage() {
         }
       >
         {draft ? (
-          <>
+          <form
+            onSubmit={(event) => {
+              event.preventDefault();
+              void save();
+            }}
+          >
             <div className="form-row">
               <Field
                 label="Name"
                 hint={draft.editing ? "Cannot be changed." : "Unique policy name."}
-                error={visibleError("name", validatePolicyName(draft.name))}
+                error={fieldErrors.shown("name", validatePolicyName(draft.name))}
               >
                 <Input
                   className="font-mono"
                   value={draft.name}
                   disabled={draft.editing}
                   onChange={(e) => setDraft({ ...draft, name: e.target.value })}
-                  onBlur={() => touch("name")}
+                  onBlur={() => fieldErrors.touch("name")}
                   placeholder="gradethis-read"
                 />
               </Field>
               <Field
                 label="Subject"
                 hint="The identity this policy applies to, or * for every identity."
-                error={visibleError("subject", validatePolicySubject(draft.subject.trim()))}
+                error={fieldErrors.shown("subject", validatePolicySubject(draft.subject.trim()))}
               >
                 <Input
                   className="font-mono"
                   value={draft.subject}
                   onChange={(e) => setDraft({ ...draft, subject: e.target.value })}
-                  onBlur={() => touch("subject")}
+                  onBlur={() => fieldErrors.touch("subject")}
                   placeholder="gradethis-be"
                 />
               </Field>
@@ -368,8 +352,8 @@ export default function PoliciesPage() {
               kind="allow"
               rules={draft.allow}
               onChange={(allow) => setDraft({ ...draft, allow })}
-              visibleError={visibleError}
-              onTouch={touch}
+              visibleError={fieldErrors.shown}
+              onTouch={fieldErrors.touch}
             />
             <hr className="divider" />
             <RuleEditor
@@ -377,10 +361,12 @@ export default function PoliciesPage() {
               kind="deny"
               rules={draft.deny}
               onChange={(deny) => setDraft({ ...draft, deny })}
-              visibleError={visibleError}
-              onTouch={touch}
+              visibleError={fieldErrors.shown}
+              onTouch={fieldErrors.touch}
             />
-          </>
+            {/* Lets Enter submit from any input; the visible submit lives in the footer. */}
+            <button type="submit" className="sr-only" tabIndex={-1} aria-hidden />
+          </form>
         ) : null}
       </Modal>
 
@@ -414,20 +400,20 @@ function RuleEditor({
   title: string;
   /** Namespaces the touched-field keys so allow and deny rows stay distinct. */
   kind: RuleKind;
-  rules: PolicyRule[];
-  onChange: (rules: PolicyRule[]) => void;
+  rules: DraftRule[];
+  onChange: (rules: DraftRule[]) => void;
   visibleError: (key: string, message: string | null) => string | null;
   onTouch: (key: string) => void;
 }) {
-  const fieldKey = (index: number, field: RuleField) => `${kind}-${index}-${field}`;
-  const errorFor = (index: number, rule: PolicyRule, field: RuleField) =>
-    visibleError(fieldKey(index, field), ruleFieldError(rule, field));
+  const fieldKey = (rule: DraftRule, field: RuleField) => `${kind}-${rule.id}-${field}`;
+  const errorFor = (rule: DraftRule, field: RuleField) =>
+    visibleError(fieldKey(rule, field), ruleFieldError(rule, field));
 
-  function update(index: number, patch: Partial<PolicyRule>) {
-    onChange(rules.map((r, i) => (i === index ? { ...r, ...patch } : r)));
+  function update(id: number, patch: Partial<PolicyRule>) {
+    onChange(rules.map((r) => (r.id === id ? { ...r, ...patch } : r)));
   }
-  function remove(index: number) {
-    onChange(rules.filter((_, i) => i !== index));
+  function remove(id: number) {
+    onChange(rules.filter((r) => r.id !== id));
   }
   function add() {
     onChange([...rules, newRule()]);
@@ -448,13 +434,13 @@ function RuleEditor({
       ) : (
         <div className="stack">
           {rules.map((rule, i) => (
-            <div key={i} className="rule-row" style={{ flexWrap: "wrap" }}>
+            <div key={rule.id} className="rule-row" style={{ flexWrap: "wrap" }}>
               <div className="rule-op">
-                <Field label="Operation" error={errorFor(i, rule, "operation")}>
+                <Field label="Operation" error={errorFor(rule, "operation")}>
                   <AppSelect
                     value={rule.operation}
-                    onValueChange={(operation) => update(i, { operation })}
-                    onBlur={() => onTouch(fieldKey(i, "operation"))}
+                    onValueChange={(operation) => update(rule.id, { operation })}
+                    onBlur={() => onTouch(fieldKey(rule, "operation"))}
                     options={operationOptions(rule.operation).map((operation) => ({
                       value: operation,
                       label: operation,
@@ -463,23 +449,23 @@ function RuleEditor({
                 </Field>
               </div>
               <div style={{ width: 130 }}>
-                <Field label="App" error={errorFor(i, rule, "app")}>
+                <Field label="App" error={errorFor(rule, "app")}>
                   <Input
                     className="font-mono"
                     value={rule.app}
-                    onChange={(e) => update(i, { app: e.target.value })}
-                    onBlur={() => onTouch(fieldKey(i, "app"))}
+                    onChange={(e) => update(rule.id, { app: e.target.value })}
+                    onBlur={() => onTouch(fieldKey(rule, "app"))}
                     placeholder="gradethis"
                   />
                 </Field>
               </div>
               <div style={{ width: 110 }}>
-                <Field label="Env" error={errorFor(i, rule, "env")}>
+                <Field label="Env" error={errorFor(rule, "env")}>
                   <Input
                     className="font-mono"
                     value={rule.env}
-                    onChange={(e) => update(i, { env: e.target.value })}
-                    onBlur={() => onTouch(fieldKey(i, "env"))}
+                    onChange={(e) => update(rule.id, { env: e.target.value })}
+                    onBlur={() => onTouch(fieldKey(rule, "env"))}
                     placeholder="prod"
                   />
                 </Field>
@@ -492,8 +478,8 @@ function RuleEditor({
                 // The row bottom-aligns its cells, and Field carries a bottom
                 // margin the bare button does not — this keeps it level.
                 style={{ marginBottom: "var(--space-4)" }}
-                onClick={() => remove(i)}
-                aria-label="Remove rule"
+                onClick={() => remove(rule.id)}
+                aria-label={`Remove ${kind} rule ${i + 1}: ${rule.operation}`}
               >
                 Remove
               </Button>

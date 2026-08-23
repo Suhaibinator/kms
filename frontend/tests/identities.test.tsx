@@ -1,7 +1,7 @@
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { api } from "@/lib/api";
-import type { Namespace } from "@/lib/types";
+import type { Identity, IdentityCert, Namespace } from "@/lib/types";
 import { createStoredZip } from "@/lib/zip";
 import IdentitiesPage from "@/pages/identities";
 import { chooseSelectOption } from "./select-test-utils";
@@ -130,13 +130,17 @@ describe("identity onboarding", () => {
       within(dialog).queryByText(/Name must start with a letter or digit/),
     ).not.toBeInTheDocument();
     fireEvent.click(advance);
-    expect(within(dialog).getByText("Environment is required.")).toBeVisible();
+    expect(
+      within(dialog).getByText("Choose the namespace this application will use."),
+    ).toBeVisible();
     expect(
       screen.queryByRole("dialog", { name: "Connect application — authentication" }),
     ).not.toBeInTheDocument();
 
     await selectApplication(dialog);
-    expect(within(dialog).queryByText("Environment is required.")).not.toBeInTheDocument();
+    expect(
+      within(dialog).queryByText("Choose the namespace this application will use."),
+    ).not.toBeInTheDocument();
     fireEvent.click(advance);
     expect(
       screen.getByRole("dialog", { name: "Connect application — authentication" }),
@@ -176,7 +180,7 @@ describe("identity onboarding", () => {
     fireEvent.click(within(dialog).getByRole("button", { name: "Continue to authentication" }));
 
     const authDialog = screen.getByRole("dialog", {
-      name: "Connect application — authentication",
+      name: "New identity — authentication",
     });
     expect(within(authDialog).getByRole("checkbox", { name: /Bearer token/ })).toBeChecked();
     expect(within(authDialog).getByRole("checkbox", { name: /Bearer token/ })).toHaveAttribute(
@@ -292,7 +296,7 @@ describe("identity onboarding", () => {
     fireEvent.click(within(dialog).getByRole("button", { name: "Continue to authentication" }));
 
     const authDialog = screen.getByRole("dialog", {
-      name: "Connect application — authentication",
+      name: "New identity — authentication",
     });
     fireEvent.click(within(authDialog).getByRole("checkbox", { name: /mTLS client certificate/ }));
     fireEvent.click(within(authDialog).getByRole("checkbox", { name: /Bearer token/ }));
@@ -497,5 +501,216 @@ describe("identity onboarding", () => {
     );
 
     await waitFor(() => expect(mocks.toast.success).toHaveBeenCalled());
+  });
+});
+
+function identity(name: string, overrides: Partial<Identity> = {}): Identity {
+  return {
+    name,
+    kind: "client",
+    namespace: { env: "prod", app: "billing" },
+    has_token: false,
+    certs: [],
+    ...overrides,
+  };
+}
+
+function cert(serial: string): IdentityCert {
+  return {
+    serial,
+    fingerprint: `fp-${serial}`,
+    not_after_unix_ms: 4_102_444_800_000,
+    created_at_unix_ms: 1,
+    revoked_at_unix_ms: 0,
+  };
+}
+
+describe("identity wizard validation", () => {
+  it("points at the applications page when no namespaces exist", async () => {
+    const dialog = await openWizard();
+    expect(within(dialog).getByRole("link", { name: "Create an application" })).toHaveAttribute(
+      "href",
+      "/applications",
+    );
+  });
+
+  it("reports an empty name inline instead of toasting", async () => {
+    mocks.namespaces = [namespace(["mtls"])];
+    const dialog = await openWizard();
+    fireEvent.click(within(dialog).getByRole("button", { name: "Continue to authentication" }));
+    expect(mocks.toast.error).not.toHaveBeenCalled();
+    expect(within(dialog).getByText("Name is required.")).toBeVisible();
+    expect(
+      screen.queryByRole("dialog", { name: "Connect application — authentication" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("uses a mode-aware title for advanced identity types", async () => {
+    const dialog = await openWizard();
+    fireEvent.click(within(dialog).getByText("Advanced identity type"));
+    await chooseSelectOption(
+      within(dialog).getByRole("combobox", { name: "Identity type" }),
+      "Administrator",
+    );
+    expect(screen.getByRole("dialog", { name: "New identity — choose type" })).toBeVisible();
+  });
+
+  it("rejects an invalid certificate lifetime inline and disables Create", async () => {
+    mocks.namespaces = [namespace(["mtls"])];
+    const createIdentity = vi.spyOn(api, "createIdentity");
+    const dialog = await openWizard();
+    fireEvent.change(within(dialog).getByRole("textbox", { name: "Application identity name" }), {
+      target: { value: "billing-api" },
+    });
+    await selectApplication(dialog);
+    fireEvent.click(within(dialog).getByRole("button", { name: "Continue to authentication" }));
+
+    const authDialog = screen.getByRole("dialog", {
+      name: "Connect application — authentication",
+    });
+    const days = within(authDialog).getByLabelText("Certificate lifetime (days)");
+    expect(days).not.toHaveAttribute("required");
+    const create = within(authDialog).getByRole("button", {
+      name: "Create application credentials",
+    });
+    expect(create).toBeEnabled();
+
+    fireEvent.change(days, { target: { value: "0" } });
+    fireEvent.blur(days);
+    expect(
+      within(authDialog).getByText("Certificate lifetime must be a whole number of days."),
+    ).toBeVisible();
+    expect(days).toHaveAttribute("aria-invalid", "true");
+    expect(create).toBeDisabled();
+
+    fireEvent.change(days, { target: { value: "" } });
+    expect(within(authDialog).getByText("Enter a certificate lifetime in days.")).toBeVisible();
+    expect(create).toBeDisabled();
+
+    fireEvent.change(days, { target: { value: "30" } });
+    expect(within(authDialog).queryByRole("alert")).not.toBeInTheDocument();
+    expect(create).toBeEnabled();
+    expect(mocks.toast.error).not.toHaveBeenCalled();
+    expect(createIdentity).not.toHaveBeenCalled();
+  });
+
+  it("explains a disabled Create when no credential method is selected", async () => {
+    mocks.namespaces = [namespace(["mtls", "token"])];
+    const dialog = await openWizard();
+    fireEvent.change(within(dialog).getByRole("textbox", { name: "Application identity name" }), {
+      target: { value: "billing-api" },
+    });
+    await selectApplication(dialog);
+    fireEvent.click(within(dialog).getByRole("button", { name: "Continue to authentication" }));
+    const authDialog = screen.getByRole("dialog", {
+      name: "Connect application — authentication",
+    });
+    fireEvent.click(within(authDialog).getByRole("checkbox", { name: /mTLS client certificate/ }));
+    expect(within(authDialog).getByText("Select at least one credential method.")).toBeVisible();
+    expect(
+      within(authDialog).getByRole("button", { name: "Create application credentials" }),
+    ).toBeDisabled();
+  });
+});
+
+describe("identity list", () => {
+  it("pages forward with the server token and shows the page number", async () => {
+    const listIdentities = vi
+      .mocked(api.listIdentities)
+      .mockImplementation(async (_size, token) =>
+        token === "page-2"
+          ? { identities: [identity("second")], next_page_token: "" }
+          : { identities: [identity("first")], next_page_token: "page-2" },
+      );
+    render(<IdentitiesPage />);
+    await screen.findByText("first");
+
+    fireEvent.click(screen.getByRole("button", { name: "Next page" }));
+    await screen.findByText("second");
+    expect(screen.getByText("Page 2")).toBeVisible();
+    expect(listIdentities).toHaveBeenLastCalledWith(100, "page-2", expect.anything());
+  });
+
+  it("steps back to page 1 after revoking the last identity on page 2", async () => {
+    let revoked = false;
+    const listIdentities = vi
+      .mocked(api.listIdentities)
+      .mockImplementation(async (_size, token) => {
+        if (token === "page-2") {
+          return { identities: revoked ? [] : [identity("second")], next_page_token: "" };
+        }
+        return { identities: [identity("first")], next_page_token: revoked ? "" : "page-2" };
+      });
+    vi.spyOn(api, "revokeIdentity").mockImplementation(async () => {
+      revoked = true;
+      return {};
+    });
+    render(<IdentitiesPage />);
+    await screen.findByText("first");
+    fireEvent.click(screen.getByRole("button", { name: "Next page" }));
+    const row = (await screen.findByText("second")).closest("tr") as HTMLElement;
+
+    fireEvent.click(within(row).getByRole("button", { name: "Revoke" }));
+    const confirm = screen.getByRole("dialog", { name: "Revoke identity?" });
+    fireEvent.click(within(confirm).getByRole("button", { name: "Revoke identity" }));
+
+    await screen.findByText("first");
+    await waitFor(() => expect(screen.queryByText("Page 2")).not.toBeInTheDocument());
+    expect(listIdentities).toHaveBeenLastCalledWith(100, undefined, expect.anything());
+    expect(api.revokeIdentity).toHaveBeenCalledWith("second");
+  });
+
+  it("keeps the certificates modal open beneath the revoke confirmation", async () => {
+    const withCert = identity("cert-owner", { certs: [cert("1234")] });
+    vi.mocked(api.listIdentities).mockResolvedValue({
+      identities: [withCert],
+      next_page_token: "",
+    });
+    mocks.namespaces = [namespace(["mtls"])];
+    const revokeCert = vi.spyOn(api, "revokeCert").mockResolvedValue({});
+    render(<IdentitiesPage />);
+    const row = (await screen.findByText("cert-owner")).closest("tr") as HTMLElement;
+    fireEvent.click(within(row).getByRole("button", { name: "Certificates" }));
+    const certsDialog = screen.getByRole("dialog", { name: "Certificates — cert-owner" });
+    expect(within(certsDialog).getByText("fp-1234")).toBeVisible();
+
+    fireEvent.click(within(certsDialog).getByRole("button", { name: "Revoke" }));
+    const confirm = screen.getByRole("dialog", { name: "Revoke certificate?" });
+    // Base UI keeps the lower dialog mounted (and may mark it inert) while the
+    // confirmation is on top, so the query has to include hidden elements.
+    expect(
+      screen.getByRole("dialog", { name: "Certificates — cert-owner", hidden: true }),
+    ).toBeInTheDocument();
+
+    fireEvent.click(within(confirm).getByRole("button", { name: "Revoke certificate" }));
+    await waitFor(() => expect(revokeCert).toHaveBeenCalledWith("cert-owner", "1234"));
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog", { name: "Revoke certificate?" })).not.toBeInTheDocument(),
+    );
+    expect(screen.getByRole("dialog", { name: "Certificates — cert-owner" })).toBeInTheDocument();
+  });
+
+  it("validates the issue-certificate lifetime inline", async () => {
+    vi.mocked(api.listIdentities).mockResolvedValue({
+      identities: [identity("cert-owner")],
+      next_page_token: "",
+    });
+    mocks.namespaces = [namespace(["mtls"])];
+    const issueCert = vi.spyOn(api, "issueCert");
+    render(<IdentitiesPage />);
+    const row = (await screen.findByText("cert-owner")).closest("tr") as HTMLElement;
+    fireEvent.click(within(row).getByRole("button", { name: "Certificates" }));
+    const certsDialog = screen.getByRole("dialog", { name: "Certificates — cert-owner" });
+    const days = within(certsDialog).getByLabelText("New cert lifetime (days)");
+    const issue = within(certsDialog).getByRole("button", { name: "Issue new certificate" });
+    expect(issue).toBeEnabled();
+
+    fireEvent.change(days, { target: { value: "99999" } });
+    fireEvent.blur(days);
+    expect(
+      within(certsDialog).getByText("Certificate lifetime must be 3650 days or fewer."),
+    ).toBeVisible();
+    expect(issue).toBeDisabled();
+    expect(issueCert).not.toHaveBeenCalled();
   });
 });
