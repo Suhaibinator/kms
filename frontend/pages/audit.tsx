@@ -336,7 +336,7 @@ export default function AuditPage() {
                         <td colSpan={7}>
                           <JsonView raw={prettyJson(e.metadata_json)} />
                           {e.request_id ? (
-                            <div className="faint text-sm mt-8">
+                            <div className="faint text-sm mt-2">
                               request id: <span className="mono">{e.request_id}</span>
                             </div>
                           ) : null}

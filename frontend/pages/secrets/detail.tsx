@@ -388,7 +388,7 @@ export default function SecretDetailPage() {
           ]}
         />
         {!isEmptyJson(secret.metadata_json) ? (
-          <div className="mt-16">
+          <div className="mt-4">
             <div className="field-label">Metadata JSON</div>
             <JsonView raw={prettyJson(secret.metadata_json)} />
           </div>
@@ -401,7 +401,7 @@ export default function SecretDetailPage() {
         {secret.client_bound ? (
           <div className="info-panel">
             <strong>Client-bound — value cannot be revealed here.</strong>
-            <div className="mt-8">
+            <div className="mt-2">
               This secret is encrypted with a key derived from the consuming application&apos;s
               access token, which the server never stores in a recoverable form. The server cannot
               decrypt it on its own, so there is no reveal flow. Only the application holding the
@@ -410,7 +410,7 @@ export default function SecretDetailPage() {
           </div>
         ) : revealed ? (
           <div className="reveal-box">
-            <div className="between mb-8">
+            <div className="between mb-2">
               <div className="row-wrap">
                 <Badge kind="accent">version {revealed.version}</Badge>
                 <span className="faint text-sm">{revealed.contentType || "value"}</span>
@@ -452,7 +452,7 @@ export default function SecretDetailPage() {
                 </div>
               ) : (
                 <div id="revealed-secret-value">
-                  <div className="warn-panel mb-8">
+                  <div className="warn-panel mb-2">
                     Binary value ({base64ByteLength(revealed.valueBase64)} bytes) — shown
                     base64-encoded.
                   </div>
@@ -468,7 +468,7 @@ export default function SecretDetailPage() {
           </div>
         ) : (
           <div>
-            <div className="warn-panel mb-16">
+            <div className="warn-panel mb-4">
               Revealing decrypts the secret and records an audit event. The value auto-hides after{" "}
               {REVEAL_SECONDS} seconds.
             </div>
@@ -606,7 +606,7 @@ export default function SecretDetailPage() {
             <span className="mono">{displayPath(ref)}</span> permanently erases its key material.
             The value can never be recovered. This cannot be undone.
             {confirm?.kind === "destroy" && confirm.version === current ? (
-              <div className="mt-8">
+              <div className="mt-2">
                 <strong>This is the current version</strong> — applications reading it will start
                 failing.
               </div>

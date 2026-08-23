@@ -348,7 +348,7 @@ export default function ReleasesPage() {
           </div>
 
           {name && currentNamedRelease ? (
-            <div className="release-status-strip mb-16">
+            <div className="release-status-strip mb-4">
               <div>
                 <span className="faint text-sm">Current release</span>
                 <strong className="mono">{releaseKey(currentNamedRelease.release)}</strong>

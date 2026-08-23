@@ -545,14 +545,14 @@ export default function IdentitiesPage() {
 
       <CertificateRoles />
 
-      <div className="info-panel mb-16">
+      <div className="info-panel mb-4">
         An identity <strong>bound to a namespace</strong> may read, list, and subscribe within that
         namespace with no policy required — the credential <em>is</em> the app (the implicit
         home-namespace grant). Writes and any cross-namespace access still need an explicit policy.
         Client certificates prove possession; bearer tokens do not, so prefer mTLS-only namespaces.
       </div>
 
-      <details className="advanced-panel mb-16">
+      <details className="advanced-panel mb-4">
         <summary>Advanced identity and CA tools</summary>
         <div className="advanced-panel-content">
           <div>
@@ -805,12 +805,12 @@ export default function IdentitiesPage() {
 
               {identityMode === "application" ? (
                 namespacesLoading ? (
-                  <div className="info-panel loading-inline mb-16" role="status">
+                  <div className="info-panel loading-inline mb-4" role="status">
                     <Spinner />
                     Loading application namespaces…
                   </div>
                 ) : namespacesError ? (
-                  <div className="danger-panel namespace-load-error mb-16" role="alert">
+                  <div className="danger-panel namespace-load-error mb-4" role="alert">
                     <div>
                       <strong>Could not load application namespaces.</strong>
                       <div className="text-sm">
@@ -838,7 +838,7 @@ export default function IdentitiesPage() {
                     </div>
                   </Field>
                 ) : (
-                  <div className="warn-panel mb-16">
+                  <div className="warn-panel mb-4">
                     No application namespaces are available.{" "}
                     <Link href="/applications">Create an application</Link> and add an environment
                     to it before connecting an application, or choose an advanced identity type
@@ -846,12 +846,12 @@ export default function IdentitiesPage() {
                   </div>
                 )
               ) : identityMode === "admin" ? (
-                <div className="danger-panel mb-16">
+                <div className="danger-panel mb-4">
                   Administrator identities are unbound and receive a bearer token with full admin
                   authority. Create one only for trusted operators or automation.
                 </div>
               ) : (
-                <div className="warn-panel mb-16">
+                <div className="warn-panel mb-4">
                   This client identity will be unbound. It receives no implicit namespace access;
                   every operation must be granted by an explicit policy.
                 </div>
@@ -960,7 +960,7 @@ export default function IdentitiesPage() {
               </Field>
 
               {authConflict ? (
-                <div className="danger-panel mb-16" role="alert">
+                <div className="danger-panel mb-4" role="alert">
                   <strong>Every selected method must be accepted by this namespace.</strong>{" "}
                   Deselect {incompatibleMethods.join(" and ")} or update the namespace before
                   creating credentials. KMS will not issue credentials that this application cannot
@@ -1021,7 +1021,7 @@ export default function IdentitiesPage() {
         {certsTarget ? (
           <>
             {certIssueAvailability !== "allowed" ? (
-              <div id="cert-issue-reason" className="danger-panel mb-16" role="alert">
+              <div id="cert-issue-reason" className="danger-panel mb-4" role="alert">
                 <strong>New certificate issuance is disabled.</strong> {certIssueReason} Update the
                 bound namespace to accept mTLS before issuing another certificate. Existing
                 certificates can still be inspected and revoked below.
@@ -1065,7 +1065,7 @@ export default function IdentitiesPage() {
                 Issue new certificate
               </Button>
             </form>
-            <div className="faint text-sm mb-16">
+            <div className="faint text-sm mb-4">
               Issue a fresh certificate before an old one expires for zero-downtime rollover.
               Multiple valid certificates can coexist.
             </div>
@@ -1364,14 +1364,14 @@ function CredentialsModal({
           <WizardProgress current={stage} />
           {stage === 3 ? (
             <>
-              <div className="warn-panel mb-16">
+              <div className="warn-panel mb-4">
                 <strong>Shown once and never retrievable again.</strong> Store these credentials
                 securely for <span className="mono">{credentials.name}</span> before continuing.
               </div>
 
               {credentials.cert ? (
                 <>
-                  <div className="credential-deployment mb-8">
+                  <div className="credential-deployment mb-2">
                     <div>
                       <strong>Download and deploy the application credential pair</strong>
                       <div className="faint text-sm">
@@ -1386,7 +1386,7 @@ function CredentialsModal({
                       Download both (.zip)
                     </Button>
                   </div>
-                  <div className="danger-panel mb-16">
+                  <div className="danger-panel mb-4">
                     <strong>The ZIP itself contains the private key.</strong> Your browser may save
                     the archive with default file permissions. Protect it immediately, extract it
                     only in a secure location, and delete the ZIP after secure deployment.
@@ -1395,14 +1395,14 @@ function CredentialsModal({
               ) : null}
 
               {credentials.token ? (
-                <div className="mb-16">
+                <div className="mb-4">
                   <div className="field-label">Bearer token</div>
-                  <div className="faint text-sm mb-8">
+                  <div className="faint text-sm mb-2">
                     Store this as <code>KMS_TOKEN</code> in the workload&apos;s secret manager.
                     Never expose it to browser code or source control.
                   </div>
                   <div className="token-reveal">{credentials.token}</div>
-                  <div className="row-wrap mt-8">
+                  <div className="row-wrap mt-2">
                     <CopyButton label="Copy token" value={() => credentials.token ?? ""} />
                   </div>
                 </div>
@@ -1411,12 +1411,12 @@ function CredentialsModal({
               {credentials.cert ? (
                 <div>
                   <div className="field-label">Per-application client certificate (PEM)</div>
-                  <div className="faint text-sm mb-8">
+                  <div className="faint text-sm mb-2">
                     Serial <span className="mono">{credentials.cert.serial}</span> · expires{" "}
                     {formatUnixMs(credentials.cert.not_after_unix_ms)}
                   </div>
                   <div className="token-reveal credential-pem">{credentials.cert.cert_pem}</div>
-                  <div className="row-wrap mt-8 mb-16">
+                  <div className="row-wrap mt-2 mb-4">
                     <CopyButton
                       label="Copy certificate"
                       value={() => credentials.cert?.cert_pem ?? ""}
@@ -1435,12 +1435,12 @@ function CredentialsModal({
                   </div>
 
                   <div className="field-label">Per-application private key (PEM)</div>
-                  <div className="danger-panel mb-8">
+                  <div className="danger-panel mb-2">
                     The private key is never stored server-side. If you lose it, revoke this
                     certificate and issue a new one.
                   </div>
                   <div className="token-reveal credential-pem">{credentials.cert.key_pem}</div>
-                  <div className="row-wrap mt-8">
+                  <div className="row-wrap mt-2">
                     <CopyButton label="Copy key" value={() => credentials.cert?.key_pem ?? ""} />
                     <Button
                       variant="outline"
@@ -1461,7 +1461,7 @@ function CredentialsModal({
             <>
               {credentials.cert ? <CertificateRoles compact /> : <TokenCredentialRoles compact />}
 
-              <div className={credentials.cert ? "danger-panel mb-16" : "info-panel mb-16"}>
+              <div className={credentials.cert ? "danger-panel mb-4" : "info-panel mb-4"}>
                 <strong>You still need the KMS server CA.</strong> Obtain <code>server-ca.crt</code>{" "}
                 from the operator who configured the KMS server certificate. The built-in
                 client-issuing CA exported from this page is not server trust
@@ -1469,7 +1469,7 @@ function CredentialsModal({
               </div>
 
               {!credentials.namespace && credentials.kind === "client" ? (
-                <div className="warn-panel mb-16">
+                <div className="warn-panel mb-4">
                   <strong>An unbound client has no default namespace.</strong> The snippets below
                   use <code>prod/app</code> as an explicit placeholder; replace it with the target
                   namespace. Alternatively, use absolute keys such as <code>/prod/app/key</code>. A
@@ -1483,7 +1483,7 @@ function CredentialsModal({
                   value={language}
                   onValueChange={(value) => setLanguage(value as SnippetLanguage)}
                 >
-                  <div className="between mb-8">
+                  <div className="between mb-2">
                     <h2>SDK configuration</h2>
                     <CopyButton
                       label={`Copy ${language} snippet`}

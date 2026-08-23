@@ -226,7 +226,7 @@ export function ReleaseWorkspace({
           </div>
 
           {activationFailure ? (
-            <section className="danger-panel mb-16" role="alert">
+            <section className="danger-panel mb-4" role="alert">
               <div className="between">
                 <div>
                   <strong>
@@ -234,7 +234,7 @@ export function ReleaseWorkspace({
                       ? `${activationFailure.target} failed validation`
                       : `${activationFailure.operation} blocked for ${activationFailure.target}`}
                   </strong>
-                  <div className="text-sm mt-8">
+                  <div className="text-sm mt-2">
                     {activationFailure.operation === "Validation"
                       ? "Resolve every violation before activating this release."
                       : "The active release and activation revision were not changed."}
@@ -291,12 +291,12 @@ export function ReleaseWorkspace({
               </div>
               <div className="stat">
                 <div className="stat-label">Schema</div>
-                <div className="stat-sub mono mt-8">
+                <div className="stat-sub mono mt-2">
                   {release.schema_id ? `${release.schema_id}@${release.schema_version}` : "none"}
                 </div>
               </div>
             </div>
-            <dl className="kv card mt-16">
+            <dl className="kv card mt-4">
               <dt>Namespace</dt>
               <dd className="mono">
                 {release.namespace.env}/{release.namespace.app}
@@ -360,7 +360,7 @@ export function ReleaseWorkspace({
           </TabsContent>
 
           <TabsContent value="compare">
-            <div className="max-w-md mb-16">
+            <div className="max-w-md mb-4">
               <Field label="Compare with">
                 <AppSelect
                   value={effectiveCompareKey}

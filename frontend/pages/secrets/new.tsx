@@ -239,7 +239,7 @@ export default function NewSecretPage() {
 
           <hr className="divider" />
 
-          <div className="checkbox-row mb-16">
+          <div className="checkbox-row mb-4">
             <Checkbox
               id="client-bound"
               checked={clientBound}
@@ -262,7 +262,7 @@ export default function NewSecretPage() {
 
           {clientBound ? (
             <>
-              <div className="danger-panel mb-16">
+              <div className="danger-panel mb-4">
                 <strong>Permanent-loss warning.</strong> There is no recovery escrow. Losing{" "}
                 <em>either</em> the server master key <em>or</em> this secret&apos;s client access
                 token makes the value <strong>permanently unrecoverable</strong>. Frontend reveal,
@@ -270,7 +270,7 @@ export default function NewSecretPage() {
                 Opting in is an explicit acceptance of this risk.
               </div>
 
-              <div className="mb-16">
+              <div className="mb-4">
                 <div className="checkbox-row">
                   <Checkbox id="ack" checked={ack} onCheckedChange={setAck} />
                   <label htmlFor="ack">
@@ -285,13 +285,13 @@ export default function NewSecretPage() {
                 ) : null}
               </div>
 
-              <div className="info-panel mb-16">
+              <div className="info-panel mb-4">
                 A new client access token will be generated and shown once after creation. Store it
                 immediately; the server cannot recover it later.
               </div>
             </>
           ) : (
-            <div className="checkbox-row mb-16">
+            <div className="checkbox-row mb-4">
               <Checkbox
                 id="gen-token-std"
                 checked={generateToken}
@@ -323,13 +323,13 @@ export default function NewSecretPage() {
         onClose={finishTokenReveal}
         footer={<Button onClick={finishTokenReveal}>I&apos;ve saved it — continue</Button>}
       >
-        <div className="danger-panel mb-16">
+        <div className="danger-panel mb-4">
           <strong>This token will never be shown again.</strong> Store it in your application&apos;s
           configuration now. If this is a client-bound secret, losing this token means the value can
           never be recovered.
         </div>
         <div className="token-reveal">{mintedToken}</div>
-        <div className="row-wrap mt-16">
+        <div className="row-wrap mt-4">
           <CopyButton label="Copy token" value={() => mintedToken ?? ""} />
         </div>
       </Modal>

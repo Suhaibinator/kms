@@ -65,7 +65,7 @@ export default function LoginPage() {
           </div>
         </div>
 
-        <p className="muted text-sm mb-16">
+        <p className="muted text-sm mb-4">
           Paste an admin or client identity token to sign in. Tokens are stored only for this
           browser session.
         </p>

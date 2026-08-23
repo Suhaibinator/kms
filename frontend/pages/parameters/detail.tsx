@@ -342,7 +342,7 @@ export default function ParameterDetailPage() {
         </div>
         {current ? (
           <>
-            <div className="between mb-8">
+            <div className="between mb-2">
               <span className="faint text-sm">{current.content_type || "value"}</span>
               <CopyButton label="Copy value" value={current.value} />
             </div>
@@ -391,7 +391,7 @@ export default function ParameterDetailPage() {
           ]}
         />
         {!isEmptyJson(meta.metadata_json) ? (
-          <div className="mt-16">
+          <div className="mt-4">
             <div className="field-label">Metadata JSON</div>
             <JsonView raw={prettyJson(meta.metadata_json)} />
           </div>
@@ -458,8 +458,8 @@ export default function ParameterDetailPage() {
         )}
 
         {viewed ? (
-          <div className="mt-16">
-            <div className="between mb-8">
+          <div className="mt-4">
+            <div className="between mb-2">
               <div className="row-wrap">
                 <Badge kind="accent">v{viewed.version}</Badge>
                 <span className="faint text-sm">{viewed.contentType || "value"}</span>

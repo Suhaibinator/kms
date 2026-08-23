@@ -213,7 +213,7 @@ export default function ApplicationsPage() {
             </Button>
           }
         />
-        <div className="info-panel mb-16">
+        <div className="info-panel mb-4">
           Create an application once, then add environments such as <code>dev</code>,{" "}
           <code>prod</code>, and <code>prod-gcp</code>. Environments never inherit values from one
           another; the application contract keeps their release shape consistent.
@@ -378,7 +378,7 @@ export default function ApplicationsPage() {
         </EmptyState>
       ) : (
         <>
-          <div className="between mb-8">
+          <div className="between mb-2">
             <div>
               <h2>Configuration matrix</h2>
               <div className="faint text-sm">
@@ -570,7 +570,7 @@ export default function ApplicationsPage() {
 
 function ContractSummary({ application }: { application: Application }) {
   return (
-    <div className="card mb-16 application-contract">
+    <div className="card mb-4 application-contract">
       <div>
         <span className="faint text-sm">Canonical release</span>
         <strong className="mono">{application.release_name}</strong>
@@ -757,7 +757,7 @@ function CreateApplicationModal({
           submit();
         }}
       >
-        <div className="info-panel mb-16">
+        <div className="info-panel mb-4">
           The application owns this shape. Every environment release must use the same release name,
           schema pin, aliases, kinds, and parameter content types.
         </div>
@@ -1182,7 +1182,7 @@ function BulkParameterModal({
           submit();
         }}
       >
-        <div className="warn-panel mb-16">
+        <div className="warn-panel mb-4">
           <strong>Separate versions will be created.</strong> This does not link environments or
           create shared mutable state. Verify production targets before applying.
           {differing

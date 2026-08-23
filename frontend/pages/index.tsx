@@ -224,7 +224,7 @@ export default function DashboardPage() {
         </div>
       )}
 
-      <div className="card mt-24">
+      <div className="card mt-6">
         <div className="card-title">
           Recent activity
           <Link href="/audit" className="text-sm">

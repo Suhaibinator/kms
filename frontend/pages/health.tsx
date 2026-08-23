@@ -70,7 +70,7 @@ export default function HealthPage() {
 
       {loading && health === null ? (
         <>
-          <div className="card-grid mb-16">
+          <div className="card-grid mb-4">
             <StatSkeleton label="Health" />
             <StatSkeleton label="Readiness" />
             <StatSkeleton label="Version" />
@@ -83,7 +83,7 @@ export default function HealthPage() {
         </>
       ) : (
         <>
-          <div className="card-grid mb-16">
+          <div className="card-grid mb-4">
             <div className="stat">
               <div className="stat-label">Health</div>
               <div className="stat-badges">

@@ -16,7 +16,7 @@ export default function NotFoundPage() {
             <div className="faint text-sm">404</div>
           </div>
         </div>
-        <p className="muted text-sm mb-16">
+        <p className="muted text-sm mb-4">
           That page does not exist. It may have been renamed, or the link may be out of date.
         </p>
         <ButtonLink className="w-full" href="/">

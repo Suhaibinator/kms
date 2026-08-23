@@ -341,7 +341,7 @@ export default function PoliciesPage() {
               </Field>
             </div>
 
-            <div className="info-panel mb-16">
+            <div className="info-panel mb-4">
               Deny rules always override allow rules. Environments are application-owned; use
               <span className="mono"> *</span> for either component to match any. A grant covers the
               whole namespace — every key in it — since the namespace is the unit of authorization.
@@ -421,7 +421,7 @@ function RuleEditor({
 
   return (
     <div>
-      <div className="between mb-8">
+      <div className="between mb-2">
         <div className="field-label" style={{ margin: 0 }}>
           {title}
         </div>
@@ -430,7 +430,7 @@ function RuleEditor({
         </Button>
       </div>
       {rules.length === 0 ? (
-        <div className="faint text-sm mb-8">No rules.</div>
+        <div className="faint text-sm mb-2">No rules.</div>
       ) : (
         <div className="stack">
           {rules.map((rule, i) => (

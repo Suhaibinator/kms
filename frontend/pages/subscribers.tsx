@@ -140,7 +140,7 @@ export default function SubscribersPage() {
         }
       />
 
-      <div className="card-grid mb-16">
+      <div className="card-grid mb-4">
         {initialLoading ? (
           <>
             <StatSkeleton label="Current revision" />

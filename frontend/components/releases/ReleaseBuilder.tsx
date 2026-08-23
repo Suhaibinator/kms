@@ -382,7 +382,7 @@ export function ReleaseBuilder({
           <div className="between">
             <div>
               <strong>Could not load the application contract</strong>
-              <div className="text-sm mt-8">
+              <div className="text-sm mt-2">
                 {loadError instanceof Error ? loadError.message : String(loadError)}
               </div>
             </div>
@@ -409,7 +409,7 @@ export function ReleaseBuilder({
           </div>
 
           {modeMessage ? (
-            <div className="warn-panel mb-16" role="alert">
+            <div className="warn-panel mb-4" role="alert">
               {modeMessage}
             </div>
           ) : null}
@@ -440,7 +440,7 @@ export function ReleaseBuilder({
               </Field>
             </div>
 
-            <div className="between mb-3 mt-16">
+            <div className="between mb-3 mt-4">
               <div>
                 <h2>Release entries</h2>
                 <p className="text-sm faint">
@@ -589,7 +589,7 @@ export function ReleaseBuilder({
               })}
             </div>
 
-            <details className="advanced-panel mt-16">
+            <details className="advanced-panel mt-4">
               <summary>Advanced release metadata</summary>
               <Field
                 label="Metadata JSON"
@@ -606,12 +606,12 @@ export function ReleaseBuilder({
             </details>
 
             {attempted && guidedProblem ? (
-              <div className="danger-panel mt-16" role="alert">
+              <div className="danger-panel mt-4" role="alert">
                 {guidedProblem}
               </div>
             ) : null}
 
-            <div className="release-builder-review mt-16">
+            <div className="release-builder-review mt-4">
               <strong>Ready to create</strong>
               <span className="text-sm faint">
                 {name || "Unnamed release"} · {entries.length} immutable pins

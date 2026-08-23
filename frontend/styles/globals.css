@@ -647,24 +647,6 @@ table.data th.mono {
 .spacer {
   flex: 1;
 }
-.mt-0 {
-  margin-top: 0;
-}
-.mt-8 {
-  margin-top: 8px;
-}
-.mt-16 {
-  margin-top: 16px;
-}
-.mt-24 {
-  margin-top: 24px;
-}
-.mb-8 {
-  margin-bottom: 8px;
-}
-.mb-16 {
-  margin-bottom: 16px;
-}
 .text-sm {
   font-size: 12.5px;
 }
