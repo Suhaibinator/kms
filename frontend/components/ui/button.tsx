@@ -11,7 +11,7 @@ const buttonVariants = cva(
     variants: {
       variant: {
         default:
-          "bg-primary text-primary-foreground hover:bg-[#6f9bff] hover:text-primary-foreground",
+          "bg-primary text-primary-foreground hover:bg-(--accent-hover) hover:text-primary-foreground",
         outline:
           "border-input bg-secondary text-secondary-foreground hover:border-input hover:bg-muted hover:text-foreground aria-expanded:bg-muted aria-expanded:text-foreground",
         secondary:
@@ -19,9 +19,9 @@ const buttonVariants = cva(
         ghost:
           "text-muted-foreground hover:bg-muted hover:text-foreground aria-expanded:bg-muted aria-expanded:text-foreground",
         destructive:
-          "border-destructive bg-transparent text-destructive hover:border-[#ff6b62] hover:bg-destructive/15 hover:text-[#ff6b62] focus-visible:border-destructive focus-visible:ring-destructive/25",
+          "border-destructive bg-transparent text-destructive hover:border-(--danger-hover) hover:bg-destructive/15 hover:text-(--danger-hover) focus-visible:border-destructive focus-visible:ring-destructive/25",
         "destructive-solid":
-          "border-destructive bg-destructive text-[#1a0605] hover:border-[#ff6b62] hover:bg-[#ff6b62] hover:text-[#1a0605] focus-visible:border-destructive focus-visible:ring-destructive/25",
+          "border-destructive bg-destructive text-(--on-destructive) hover:border-(--danger-hover) hover:bg-(--danger-hover) hover:text-(--on-destructive) focus-visible:border-destructive focus-visible:ring-destructive/25",
         link: "text-primary underline-offset-4 hover:underline",
       },
       size: {
@@ -29,15 +29,17 @@ const buttonVariants = cva(
         // hand-written px rules there cannot drift from these utilities.
         default:
           "h-(--control-h) gap-1.5 px-3.5 has-data-[icon=inline-end]:pr-3 has-data-[icon=inline-start]:pl-3",
-        xs: "h-6 gap-1 rounded-[min(var(--radius-md),10px)] px-2 text-xs in-data-[slot=button-group]:rounded-lg has-data-[icon=inline-end]:pr-1.5 has-data-[icon=inline-start]:pl-1.5 [&_svg:not([class*='size-'])]:size-3",
-        sm: "h-(--control-h-sm) gap-1 rounded-md px-2.5 text-xs in-data-[slot=button-group]:rounded-md has-data-[icon=inline-end]:pr-2 has-data-[icon=inline-start]:pl-2 [&_svg:not([class*='size-'])]:size-3.5",
+        // Spinner ships its own `size-4`, so the `:not([class*='size-'])`
+        // guard on the base class skips it — it needs an explicit override.
+        xs: "h-6 gap-1 rounded-[min(var(--radius-md),10px)] px-2 text-xs in-data-[slot=button-group]:rounded-lg has-data-[icon=inline-end]:pr-1.5 has-data-[icon=inline-start]:pl-1.5 [&_svg:not([class*='size-'])]:size-3 [&_[data-slot=spinner]]:size-3",
+        sm: "h-(--control-h-sm) gap-1 rounded-md px-2.5 text-xs in-data-[slot=button-group]:rounded-md has-data-[icon=inline-end]:pr-2 has-data-[icon=inline-start]:pl-2 [&_svg:not([class*='size-'])]:size-3.5 [&_[data-slot=spinner]]:size-3.5",
         lg: "h-11 gap-2 px-4 has-data-[icon=inline-end]:pr-3.5 has-data-[icon=inline-start]:pl-3.5",
         icon: "size-(--control-h)",
         "icon-xs":
           "size-6 rounded-[min(var(--radius-md),10px)] in-data-[slot=button-group]:rounded-lg [&_svg:not([class*='size-'])]:size-3",
         "icon-sm":
           "size-7 rounded-[min(var(--radius-md),12px)] in-data-[slot=button-group]:rounded-lg",
-        "icon-lg": "size-9",
+        "icon-lg": "size-11",
       },
     },
     defaultVariants: {

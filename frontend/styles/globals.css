@@ -22,6 +22,9 @@
   --text-muted: #9aa7b6;
   --text-faint: #8491a1;
 
+  /* shadcn's `--accent` is the *hover surface* token (bg-accent /
+     text-accent-foreground), not the brand accent. The brand blue lives in
+     --primary and --accent-hover/-soft/-border. */
   --accent: #1f2733;
   --accent-hover: #6f9bff;
   --accent-soft: rgba(91, 140, 255, 0.14);
@@ -35,6 +38,12 @@
   --danger-hover: #ff6b62;
   --danger-soft: rgba(248, 81, 73, 0.14);
   --info: #58b3d6;
+
+  /* Foreground text on the tinted panels, and on a solid destructive button. */
+  --warning-fg: #f0d489;
+  --danger-fg: #ffb3ad;
+  --info-fg: #b9ccff;
+  --on-destructive: #1a0605;
 
   --radius: 8px;
   --radius-sm: 6px;
@@ -140,20 +149,18 @@ body {
 
 /* One focus ring for every interactive surface. :focus-visible keeps it off
    mouse clicks while guaranteeing keyboard users can always see where they
-   are. */
+   are.
+
+   The app has two deliberate recipes, not three: this `outline` for links,
+   rows, nav and summaries, and shadcn's inset `ring` for form controls. Text
+   fields additionally keep a border + glow on plain :focus, wanted on mouse
+   click too, unlike buttons. */
 .nav-link:focus-visible,
-.reveal-value:focus-visible,
 a:not([data-slot="button"]):focus-visible,
 summary:focus-visible {
   outline: 2px solid var(--primary);
   outline-offset: 2px;
   border-radius: var(--radius-sm);
-}
-/* Text fields keep their own border + glow treatment on plain :focus (wanted
-   on mouse click too, unlike buttons). Only the checkbox lacks one. */
-input[type="checkbox"]:focus-visible {
-  outline: 2px solid var(--primary);
-  outline-offset: 2px;
 }
 
 a:not([data-slot="button"]) {
@@ -341,6 +348,9 @@ pre {
 }
 .page-actions {
   display: flex;
+  /* Mixed-height actions (a status Badge beside a Button) otherwise stretch to
+     the top of the row. */
+  align-items: center;
   gap: var(--space-2);
   flex-shrink: 0;
   flex-wrap: wrap;
@@ -479,11 +489,6 @@ fieldset.field legend {
 .rule-op {
   min-width: 180px;
 }
-.rule-path {
-  flex: 1;
-  min-width: 0;
-}
-
 /* ---------- Tables ---------- */
 
 .table-wrap {
@@ -602,20 +607,6 @@ table.data th.mono {
 }
 
 /* ---------- Utility / misc ---------- */
-
-/* Visible to screen readers only — used to announce loading regions that are
-   represented visually by skeleton geometry. */
-.sr-only {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  padding: 0;
-  margin: -1px;
-  overflow: hidden;
-  clip-path: inset(50%);
-  white-space: nowrap;
-  border: 0;
-}
 
 .muted {
   color: var(--text-muted);
@@ -795,7 +786,7 @@ table.data th.mono {
   overflow-wrap: anywhere;
 }
 .release-status-strip strong {
-  margin-top: 3px;
+  margin-top: var(--space-1);
 }
 .section-toolbar,
 .release-workspace-toolbar,
@@ -847,7 +838,7 @@ table.data th.mono {
 }
 .release-json-editor,
 .schema-editor {
-  min-height: 60vh;
+  min-height: 60dvh;
   resize: vertical;
   tab-size: 2;
 }
@@ -1033,9 +1024,6 @@ table.data th.mono {
     background-position: 0 50%;
   }
 }
-.skeleton-text {
-  height: 11px;
-}
 .skeleton-stat {
   height: 28px;
   width: 60%;
@@ -1047,16 +1035,6 @@ table.data th.mono {
   padding: var(--space-3) var(--space-4);
 }
 
-/* spinner */
-.spinner {
-  width: 18px;
-  height: 18px;
-  border: 2px solid var(--border-strong);
-  border-top-color: var(--primary);
-  border-radius: 50%;
-  animation: spin 0.7s linear infinite;
-  display: inline-block;
-}
 .loading-block {
   display: flex;
   align-items: center;
@@ -1065,12 +1043,6 @@ table.data th.mono {
   padding: 40px;
   justify-content: center;
 }
-@keyframes spin {
-  to {
-    transform: rotate(360deg);
-  }
-}
-
 /* ---------- Reduced motion ----------
    Honour the OS-level preference: drop the toast/modal entrances, the skeleton
    sweep, and the drawer slide. The spinner keeps turning (it is the only cue
@@ -1085,8 +1057,14 @@ table.data th.mono {
     transition-duration: 0.01ms;
     scroll-behavior: auto;
   }
-  .spinner {
-    animation: spin 2.4s linear infinite;
+  /* The spinner is the only signal that a request is still in flight, so it
+     keeps turning — slowly enough not to provoke discomfort. Specificity
+     (0,1,0) beats the `*` rule above, and being unlayered it also beats
+     Tailwind's animate-spin. */
+  [data-slot="spinner"],
+  .animate-spin {
+    animation-duration: 2.4s;
+    animation-iteration-count: infinite;
   }
   .skeleton {
     animation: none;
@@ -1175,7 +1153,7 @@ table.data th.mono {
   border-radius: var(--radius);
   padding: 13px 15px;
   font-size: 13px;
-  color: #f0d489;
+  color: var(--warning-fg);
 }
 .danger-panel {
   background: var(--danger-soft);
@@ -1183,10 +1161,7 @@ table.data th.mono {
   border-radius: var(--radius);
   padding: 13px 15px;
   font-size: 13px;
-  color: #ffb3ad;
-}
-.danger-panel .activation-violations {
-  color: var(--text);
+  color: var(--danger-fg);
 }
 .info-panel {
   background: var(--accent-soft);
@@ -1194,7 +1169,20 @@ table.data th.mono {
   border-radius: var(--radius);
   padding: 13px 15px;
   font-size: 13px;
-  color: #b9ccff;
+  color: var(--info-fg);
+}
+
+/* The panels size themselves with padding; a leading or trailing <p> must not
+   add its own UA margin on top of that. */
+.warn-panel > :first-child,
+.danger-panel > :first-child,
+.info-panel > :first-child {
+  margin-top: 0;
+}
+.warn-panel > :last-child,
+.danger-panel > :last-child,
+.info-panel > :last-child {
+  margin-bottom: 0;
 }
 
 /* application identity onboarding */
@@ -1427,9 +1415,6 @@ table.data th.mono {
 .integration-snippets {
   margin-bottom: var(--space-4);
 }
-.integration-snippets .tabs {
-  margin-bottom: 0;
-}
 .integration-code {
   max-height: 360px;
   margin: 0;
@@ -1493,12 +1478,12 @@ table.data th.mono {
   left: 0;
   z-index: 1;
   min-width: 210px;
-  background: var(--surface, #fff);
+  background: var(--surface);
 }
 
 .matrix-value {
   display: grid;
-  gap: 3px;
+  gap: var(--space-1);
   max-width: 260px;
 }
 
@@ -1603,27 +1588,16 @@ table.data th.mono {
     font-size: 13px;
   }
 
+  /* Everything except the touch target comes from <Button variant="outline"
+     size="icon"> in AppShell: border, background, hover, radius, cursor,
+     padding and the centring. Re-declaring them here also stacked a second
+     focus indicator on top of the Button's ring. */
   .nav-toggle {
     display: inline-flex;
-    align-items: center;
-    justify-content: center;
     width: 44px;
     height: 44px;
     min-width: 44px;
-    border-radius: var(--radius-sm);
-    border: 1px solid var(--border-strong);
-    background: var(--surface-2);
-    color: var(--text);
-    cursor: pointer;
     flex-shrink: 0;
-    padding: 0;
-  }
-  .nav-toggle:hover {
-    background: var(--surface-hover);
-  }
-  .nav-toggle:focus-visible {
-    outline: 2px solid var(--primary);
-    outline-offset: 2px;
   }
 
   .desktop-sidebar {
@@ -1863,6 +1837,9 @@ table.data th.mono {
 @theme inline {
   --font-heading: var(--sans);
   --font-sans: var(--sans);
+  /* Unmapped, `className="font-mono"` would fall back to Tailwind's own stack
+     while `className="mono"` used --mono. */
+  --font-mono: var(--mono);
   --color-sidebar-ring: var(--sidebar-ring);
   --color-sidebar-border: var(--sidebar-border);
   --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
