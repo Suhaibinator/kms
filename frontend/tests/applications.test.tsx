@@ -109,13 +109,10 @@ describe("ApplicationsPage", () => {
     render(<ApplicationsPage />);
     expect(await screen.findByText("payments-api")).toBeVisible();
     expect(screen.getByText("payments/runtime@3")).toBeVisible();
-    fireEvent.click(screen.getByRole("button", { name: "Manage" }));
-    await waitFor(() =>
-      expect(mocks.push).toHaveBeenCalledWith({
-        pathname: "/applications",
-        query: { app: "payments-api" },
-      }),
-    );
+    const applicationLink = screen.getByRole("link", { name: "Manage payments-api" });
+    expect(applicationLink).toHaveAttribute("href", "/applications?app=payments-api");
+    expect(applicationLink.closest("tr")).toHaveClass("application-row");
+    expect(screen.queryByRole("button", { name: "Manage" })).toBeNull();
   });
 
   it("renders values and missing state across environments", async () => {

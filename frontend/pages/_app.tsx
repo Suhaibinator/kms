@@ -69,10 +69,12 @@ export default function App({ Component, pageProps }: AppProps) {
   const isPublic = PUBLIC_ROUTES.has(router.pathname);
 
   return (
-    // `display: contents` puts --font-inter in scope for the whole tree
-    // without introducing a box that could affect layout.
-    <div className={`dark ${inter.variable} ${inter.className}`} style={{ display: "contents" }}>
+    <div className={`${inter.variable} ${inter.className}`} style={{ display: "contents" }}>
       <Head>
+        {/* next/font scopes its CSS variable to the class above. Expose the
+            generated family at the document root as well so third-party and
+            Base UI portals mounted under body inherit the exact same font. */}
+        <style>{`:root { --font-inter: ${inter.style.fontFamily}; }`}</style>
         {/* No <title> here on purpose: next/head keeps the *first* title it
             collects, and _app renders above the page, so a fallback here would
             always beat the per-page one. Every page sets its own through

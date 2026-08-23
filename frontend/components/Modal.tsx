@@ -18,6 +18,7 @@ export function Modal({
   children,
   footer,
   wide,
+  workspace,
   dismissible = true,
 }: {
   open: boolean;
@@ -26,6 +27,8 @@ export function Modal({
   children: ReactNode;
   footer?: ReactNode;
   wide?: boolean;
+  /** Use the available viewport for data-heavy editors and inspectors. */
+  workspace?: boolean;
   /** Whether Escape, the backdrop, and the header close button may dismiss. */
   dismissible?: boolean;
 }) {
@@ -42,12 +45,14 @@ export function Modal({
         className={cn(
           "max-h-[calc(100dvh-2rem)] gap-0 overflow-y-auto p-0 sm:max-w-[560px]",
           wide && "sm:max-w-[720px]",
+          workspace &&
+            "h-[calc(100dvh-2rem)] max-h-[calc(100dvh-2rem)] grid-rows-[auto_minmax(0,1fr)_auto] overflow-hidden sm:max-w-[min(1200px,calc(100vw-2rem))]",
         )}
       >
         <DialogHeader className="border-b border-border px-5 py-4 pr-14">
           <DialogTitle>{title}</DialogTitle>
         </DialogHeader>
-        <div className="p-5">{children}</div>
+        <div className={cn("p-5", workspace && "min-h-0 overflow-y-auto")}>{children}</div>
         {footer ? (
           <DialogFooter className="m-0 rounded-none px-5 py-4">{footer}</DialogFooter>
         ) : null}

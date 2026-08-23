@@ -297,9 +297,8 @@ export default function ParametersPage() {
       <form className="filters" onSubmit={applyFilter}>
         <NamespacePicker namespaces={namespaces} value={ns} onChange={onSelectNamespace} />
         <div className="filter-grow">
-          {/* A hint would sit under the input and, with `.filters` bottom-aligned,
-              push the Filter and Clear buttons out of line — so the prefix rule
-              rides on the placeholder and the validation message instead. */}
+          {/* Keep this toolbar compact; the prefix rule rides on the placeholder
+              and validation message instead of a permanently visible hint. */}
           <Field label="Key prefix" error={shownPrefixError}>
             <Input
               id="key-prefix"

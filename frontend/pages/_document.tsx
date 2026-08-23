@@ -2,7 +2,7 @@ import { Head, Html, Main, NextScript } from "next/document";
 
 export default function Document() {
   return (
-    <Html lang="en">
+    <Html lang="en" className="dark">
       <Head>
         {/* public/ is copied verbatim into the static export, so the embedded
             binary answers /favicon.svg with no extra routing. */}

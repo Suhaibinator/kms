@@ -59,9 +59,9 @@
   --mono: ui-monospace, "SFMono-Regular", "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
   /* --font-inter is injected by next/font/local in _app.tsx; the system stack
      behind it covers the pre-hydration paint and any missing glyphs. */
-  --sans:
-    var(--font-inter), -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial,
-    sans-serif;
+  --sans-fallback:
+    -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --sans: var(--font-inter, var(--sans-fallback));
 
   --sidebar-w: 236px;
 
@@ -435,6 +435,10 @@ fieldset.field legend {
   gap: 10px;
 }
 .checkbox-row label {
+  display: inline-flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: var(--space-1);
   font-size: 13px;
   cursor: pointer;
 }
@@ -514,6 +518,41 @@ table.data tr:last-child td {
 }
 table.data tbody tr:hover {
   background: var(--surface-hover);
+}
+table.data tbody tr.application-row {
+  position: relative;
+  cursor: pointer;
+}
+table.data tbody tr.application-row:focus-within {
+  background: var(--surface-hover);
+  outline: 2px solid var(--primary);
+  outline-offset: -2px;
+}
+.application-row-link {
+  color: inherit;
+  text-decoration: none;
+  outline: none;
+}
+.application-row-link::after {
+  position: absolute;
+  inset: 0;
+  content: "";
+}
+table.data td.application-row-chevron {
+  width: 1%;
+  color: var(--text-faint);
+  text-align: right;
+  white-space: nowrap;
+}
+.application-row-chevron svg {
+  transition:
+    color 0.12s ease,
+    transform 0.12s ease;
+}
+.application-row:hover .application-row-chevron svg,
+.application-row:focus-within .application-row-chevron svg {
+  color: var(--text);
+  transform: translateX(2px);
 }
 table.data td.mono,
 table.data th.mono {
@@ -671,15 +710,246 @@ table.data th.mono {
   display: flex;
   gap: var(--space-3);
   flex-wrap: wrap;
-  align-items: flex-end;
+  align-items: flex-start;
   margin-bottom: var(--space-4);
 }
 .filters .field {
   margin-bottom: 0;
 }
+.filters > .field {
+  flex: 0 1 220px;
+  width: 220px;
+  min-width: 0;
+}
 .filter-grow {
   flex: 1;
   min-width: 180px;
+}
+.filter-grow > .field {
+  width: 100%;
+}
+.filters > [data-slot="button"] {
+  margin-top: 1.5rem;
+}
+
+/* ---------- Configuration releases workspace ---------- */
+
+.releases-page-tabs {
+  min-width: 0;
+}
+.release-context-bar {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+  padding: var(--space-4);
+  margin-bottom: var(--space-4);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+}
+.release-context-bar .field {
+  margin-bottom: 0;
+}
+.release-context-bar > .field {
+  flex: 0 1 220px;
+  width: 220px;
+  min-width: 0;
+}
+.release-context-bar .filters {
+  margin-bottom: 0;
+}
+.release-status-strip {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr)) auto;
+  align-items: center;
+  gap: var(--space-4);
+  padding: var(--space-4) var(--space-5);
+  background: var(--accent-soft);
+  border: 1px solid var(--accent-border);
+  border-radius: var(--radius-lg);
+}
+.release-status-strip > div {
+  min-width: 0;
+}
+.release-status-strip span,
+.release-status-strip strong {
+  display: block;
+  overflow-wrap: anywhere;
+}
+.release-status-strip strong {
+  margin-top: 3px;
+}
+.section-toolbar,
+.release-workspace-toolbar,
+.schema-viewer-meta {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: var(--space-4);
+  flex-wrap: wrap;
+  margin-bottom: var(--space-4);
+}
+.section-toolbar h2,
+.release-builder-entry .field,
+.release-builder-basics .field {
+  margin-bottom: 0;
+}
+.schema-filters > .field {
+  flex-basis: 360px;
+  width: min(360px, 100%);
+}
+.release-builder-basics {
+  display: grid;
+  grid-template-columns: minmax(220px, 1.3fr) minmax(220px, 1fr) minmax(140px, 0.55fr);
+  gap: var(--space-4);
+}
+.release-builder-entries {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+}
+.release-builder-entry {
+  display: grid;
+  grid-template-columns:
+    minmax(130px, 0.9fr) minmax(115px, 0.65fr) minmax(190px, 1.3fr)
+    minmax(145px, 0.8fr) minmax(145px, 0.8fr) auto;
+  align-items: end;
+  gap: var(--space-3);
+  padding: var(--space-4);
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+}
+.release-builder-entry:last-child {
+  border-bottom: none;
+}
+.release-builder-current {
+  display: flex;
+  align-items: center;
+  min-height: 2.375rem;
+}
+.release-json-editor,
+.schema-editor {
+  min-height: 60vh;
+  resize: vertical;
+  tab-size: 2;
+}
+.release-builder-review {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--space-4);
+  align-items: center;
+  padding: var(--space-4);
+  background: var(--accent-soft);
+  border: 1px solid var(--accent-border);
+  border-radius: var(--radius-lg);
+}
+.release-overview-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--space-4);
+}
+.release-copy-value {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-3);
+  min-width: 0;
+}
+.release-copy-value code {
+  overflow-wrap: anywhere;
+}
+.release-metadata-json {
+  max-height: 240px;
+  margin: 0;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.schema-viewer {
+  display: flex;
+  min-height: 0;
+  height: 100%;
+  flex-direction: column;
+}
+.schema-viewer-meta {
+  flex: 0 0 auto;
+  align-items: flex-end;
+}
+.schema-viewer-meta .kv {
+  flex: 1 1 620px;
+}
+.schema-wrap-toggle {
+  min-height: 2.375rem;
+  padding: 0 var(--space-2);
+  color: var(--text-muted);
+}
+.schema-code {
+  flex: 1 1 auto;
+  min-height: 360px;
+  max-height: calc(100dvh - 250px);
+  margin: 0;
+  padding: var(--space-4);
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 12.5px;
+  line-height: 1.55;
+  white-space: pre;
+  tab-size: 2;
+}
+.schema-code-wrap {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 1000px) {
+  .release-status-strip {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+  .release-status-strip > [data-slot="button"] {
+    grid-column: 1 / -1;
+    justify-self: start;
+  }
+  .release-builder-basics,
+  .release-builder-entry {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 640px) {
+  .release-status-strip,
+  .release-builder-basics,
+  .release-builder-entry,
+  .release-overview-grid {
+    grid-template-columns: 1fr;
+  }
+  .release-status-strip > [data-slot="button"] {
+    width: 100%;
+  }
+  .release-workspace-toolbar,
+  .section-toolbar,
+  .schema-viewer-meta,
+  .release-builder-review,
+  .release-copy-value {
+    align-items: stretch;
+    flex-direction: column;
+  }
+  .release-workspace-toolbar [data-slot="tabs-list"] {
+    width: 100%;
+    overflow-x: auto;
+    justify-content: flex-start;
+  }
+  .schema-viewer-meta .kv {
+    flex-basis: auto;
+  }
+  .schema-code {
+    min-height: 300px;
+    max-height: calc(100dvh - 330px);
+  }
 }
 
 .empty-state {
@@ -1418,8 +1688,19 @@ table.data th.mono {
     width: 100%;
     min-width: 0;
   }
-  .filters > button {
+  .filters > [data-slot="button"] {
     width: 100%;
+    margin-top: 0;
+  }
+  .release-context-bar {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .release-context-bar > .field,
+  .release-context-bar .filter-grow,
+  .release-context-bar [data-slot="button"] {
+    width: 100%;
+    min-width: 0;
   }
 
   /* Policy rule editor: stack operation / path / remove instead of a fixed
@@ -1460,6 +1741,10 @@ table.data th.mono {
   .table-wrap.card-table tbody tr:hover {
     background: none;
   }
+  .table-wrap.card-table tbody tr.application-row:hover,
+  .table-wrap.card-table tbody tr.application-row:focus-within {
+    background: var(--surface-hover);
+  }
   .table-wrap.card-table td {
     display: block;
     border-bottom: none;
@@ -1483,6 +1768,13 @@ table.data th.mono {
     justify-content: flex-start;
     flex-wrap: wrap;
     margin-top: 8px;
+  }
+  .table-wrap.card-table td.application-row-chevron {
+    position: absolute;
+    top: 50%;
+    right: 14px;
+    width: auto;
+    transform: translateY(-50%);
   }
   .table-wrap.card-table .action-unavailable {
     align-items: flex-start;

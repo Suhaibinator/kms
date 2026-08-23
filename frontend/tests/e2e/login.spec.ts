@@ -1,4 +1,29 @@
-import { expect, test } from "@playwright/test";
+import { expect, test, type Page } from "@playwright/test";
+
+async function mockAuthenticatedConsole(page: Page, namespaces: Record<string, unknown>[] = []) {
+  await page.addInitScript(() => {
+    sessionStorage.setItem("kms_token", "kms_e2e_token");
+  });
+  await page.route("**/api/v1/**", async (route) => {
+    const path = new URL(route.request().url()).pathname;
+    const payload = path.endsWith("/whoami")
+      ? { name: "e2e-client", kind: "client", namespace: { env: "prod", app: "billing" } }
+      : path.endsWith("/health")
+        ? { healthy: true, ready: true, version: "e2e", current_revision: 0 }
+        : path.endsWith("/namespaces")
+          ? { namespaces, next_page_token: "" }
+          : path.endsWith("/subscribers")
+            ? { subscribers: [], current_revision: 0 }
+            : path.endsWith("/audit")
+              ? { events: [], next_page_token: "" }
+              : {};
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify(payload),
+    });
+  });
+}
 
 test("login exposes a labelled identity-token form with the intended font", async ({ page }) => {
   await page.goto("/login");
@@ -13,33 +38,73 @@ test("login exposes a labelled identity-token form with the intended font", asyn
   expect(fontFamily.toLowerCase()).not.toContain("times");
 });
 
+test("portalled dropdowns and filter controls stay visually consistent", async ({
+  page,
+}, testInfo) => {
+  await mockAuthenticatedConsole(page, [
+    {
+      app: "billing",
+      env: "prod",
+      description: "",
+      allowed_auth_methods: ["mtls"],
+      created_by: "admin",
+      created_at_unix_ms: 1,
+      parameter_count: 0,
+      secret_count: 0,
+    },
+  ]);
+  await page.goto("/parameters");
+
+  const trigger = page.getByRole("combobox", { name: "Application" });
+  await expect(trigger).toBeVisible();
+  const triggerFont = await trigger.evaluate((element) => getComputedStyle(element).fontFamily);
+
+  await trigger.click();
+  const option = page.getByRole("option", { name: "billing" });
+  await expect(option).toBeVisible();
+  const optionFont = await option.evaluate((element) => getComputedStyle(element).fontFamily);
+
+  expect(optionFont).toBe(triggerFont);
+
+  await page.keyboard.press("Escape");
+  const controls = [
+    trigger,
+    page.getByRole("combobox", { name: "Environment" }),
+    page.getByRole("textbox", { name: "Key prefix" }),
+    page.getByRole("button", { name: "Filter" }),
+    page.getByRole("button", { name: "Clear" }),
+  ];
+  const boxes = await Promise.all(controls.map((control) => control.boundingBox()));
+  expect(boxes.every(Boolean)).toBe(true);
+  const visibleBoxes = boxes.filter((box) => box !== null);
+
+  if (testInfo.project.name === "mobile-chromium") {
+    expect(
+      Math.max(...visibleBoxes.map((box) => box.width)) -
+        Math.min(...visibleBoxes.map((box) => box.width)),
+    ).toBeLessThanOrEqual(1);
+    expect(
+      await page.evaluate(
+        () => document.documentElement.scrollWidth <= document.documentElement.clientWidth,
+      ),
+    ).toBe(true);
+  } else {
+    expect(
+      Math.max(...visibleBoxes.map((box) => box.y)) - Math.min(...visibleBoxes.map((box) => box.y)),
+    ).toBeLessThanOrEqual(1);
+    expect(
+      Math.max(...visibleBoxes.map((box) => box.height)) -
+        Math.min(...visibleBoxes.map((box) => box.height)),
+    ).toBeLessThanOrEqual(1);
+  }
+});
+
 test("mobile navigation is isolated, focus-managed, and capability-aware", async ({
   page,
 }, testInfo) => {
   test.skip(testInfo.project.name !== "mobile-chromium", "mobile-only drawer behavior");
 
-  await page.addInitScript(() => {
-    sessionStorage.setItem("kms_token", "kms_e2e_token");
-  });
-  await page.route("**/api/v1/**", async (route) => {
-    const path = new URL(route.request().url()).pathname;
-    const payload = path.endsWith("/whoami")
-      ? { name: "e2e-client", kind: "client", namespace: { env: "prod", app: "billing" } }
-      : path.endsWith("/health")
-        ? { healthy: true, ready: true, version: "e2e", current_revision: 0 }
-        : path.endsWith("/namespaces")
-          ? { namespaces: [], next_page_token: "" }
-          : path.endsWith("/subscribers")
-            ? { subscribers: [], current_revision: 0 }
-            : path.endsWith("/audit")
-              ? { events: [], next_page_token: "" }
-              : {};
-    await route.fulfill({
-      status: 200,
-      contentType: "application/json",
-      body: JSON.stringify(payload),
-    });
-  });
+  await mockAuthenticatedConsole(page);
 
   await page.goto("/");
   const toggle = page.getByRole("button", { name: "Open navigation" });
@@ -51,6 +116,10 @@ test("mobile navigation is isolated, focus-managed, and capability-aware", async
 
   await toggle.click();
   await expect(drawer).toBeVisible();
+
+  const shellFont = await shell.evaluate((element) => getComputedStyle(element).fontFamily);
+  const drawerFont = await drawer.evaluate((element) => getComputedStyle(element).fontFamily);
+  expect(drawerFont).toBe(shellFont);
 
   // The drawer is a modal portalled outside the shell, so the whole shell —
   // topbar, desktop sidebar, and main — leaves the accessibility tree while it

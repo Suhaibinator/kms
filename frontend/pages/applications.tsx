@@ -1,5 +1,4 @@
-import { Button } from "@/components/ui/button";
-import { ArrowLeft, Plus, RefreshCw, SlidersHorizontal } from "lucide-react";
+import { ArrowLeft, ChevronRight, Plus, RefreshCw, SlidersHorizontal } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/router";
 import { useCallback, useEffect, useMemo, useState } from "react";
@@ -17,6 +16,7 @@ import {
   Textarea,
 } from "@/components/ui";
 import { AppSelect } from "@/components/ui/app-select";
+import { Button } from "@/components/ui/button";
 import { useToast } from "@/context/ToastContext";
 import { api, isAbortError } from "@/lib/api";
 import { utf8ToBase64 } from "@/lib/encoding";
@@ -175,9 +175,15 @@ export default function ApplicationsPage() {
               </thead>
               <tbody>
                 {applications.map((app) => (
-                  <tr key={app.name}>
+                  <tr key={app.name} className="application-row">
                     <td>
-                      <strong className="mono">{app.name}</strong>
+                      <Link
+                        className="application-row-link"
+                        href={{ pathname: "/applications", query: { app: app.name } }}
+                        aria-label={`Manage ${app.name}`}
+                      >
+                        <strong className="mono">{app.name}</strong>
+                      </Link>
                       <div className="faint text-sm">{app.description || "No description"}</div>
                     </td>
                     <td>{app.environment_count}</td>
@@ -186,14 +192,8 @@ export default function ApplicationsPage() {
                       {app.schema_id ? `${app.schema_id}@${app.schema_version}` : "—"}
                     </td>
                     <td>{app.contract.length} aliases</td>
-                    <td>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => void selectApplication(app.name)}
-                      >
-                        Manage
-                      </Button>
+                    <td className="application-row-chevron" aria-hidden="true">
+                      <ChevronRight size={18} />
                     </td>
                   </tr>
                 ))}
