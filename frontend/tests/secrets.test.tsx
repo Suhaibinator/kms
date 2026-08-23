@@ -12,6 +12,7 @@ const mocks = vi.hoisted(() => ({
     isReady: true,
     query: {} as Record<string, string>,
     push: vi.fn(),
+    replace: vi.fn(),
   },
   toast: {
     error: vi.fn(),
@@ -61,6 +62,7 @@ beforeEach(() => {
   mocks.router.isReady = true;
   mocks.router.query = {};
   mocks.router.push.mockReset();
+  mocks.router.replace.mockReset();
   mocks.toast.error.mockReset();
   mocks.toast.success.mockReset();
   vi.spyOn(api, "listNamespaces").mockResolvedValue({
@@ -125,6 +127,55 @@ describe("secret list filter validation", () => {
     expect(listSecrets.mock.lastCall?.[1]).toBe("billing");
   });
 
+  it("clears the rows it was showing when the next load fails", async () => {
+    const listSecrets = vi
+      .spyOn(api, "listSecrets")
+      .mockResolvedValue({ secrets: [SECRET], next_page_token: "" });
+    render(<SecretsPage />);
+    await chooseNamespace();
+    expect(await screen.findByText(SECRET.key)).toBeVisible();
+
+    // A failed reload must not leave the previous result on screen: those rows
+    // would read as the current filter's answer.
+    listSecrets.mockRejectedValue(new Error("offline"));
+    const prefix = screen.getByLabelText("Key prefix");
+    fireEvent.change(prefix, { target: { value: "billing" } });
+    fireEvent.submit(prefix.closest("form") as HTMLFormElement);
+
+    expect(await screen.findByText("No secrets found")).toBeVisible();
+    expect(screen.queryByText(SECRET.key)).not.toBeInTheDocument();
+    expect(mocks.toast.error).toHaveBeenCalled();
+  });
+
+  it("writes the namespace and prefix back to the URL", async () => {
+    vi.spyOn(api, "listSecrets").mockResolvedValue({ secrets: [], next_page_token: "" });
+    render(<SecretsPage />);
+    await chooseNamespace();
+
+    expect(mocks.router.replace).toHaveBeenLastCalledWith(
+      { pathname: "/secrets", query: { env: NAMESPACE.env, app: NAMESPACE.app } },
+      undefined,
+      { shallow: true, scroll: false },
+    );
+
+    const prefix = screen.getByLabelText("Key prefix");
+    fireEvent.change(prefix, { target: { value: "billing" } });
+    fireEvent.submit(prefix.closest("form") as HTMLFormElement);
+    expect(mocks.router.replace).toHaveBeenLastCalledWith(
+      { pathname: "/secrets", query: { key_prefix: "billing" } },
+      undefined,
+      { shallow: true, scroll: false },
+    );
+
+    // An empty value drops the key rather than writing `key_prefix=`.
+    fireEvent.click(screen.getByRole("button", { name: "Clear" }));
+    expect(mocks.router.replace).toHaveBeenLastCalledWith(
+      { pathname: "/secrets", query: {} },
+      undefined,
+      { shallow: true, scroll: false },
+    );
+  });
+
   it("treats an empty prefix as the whole namespace", async () => {
     vi.spyOn(api, "listSecrets").mockResolvedValue({ secrets: [], next_page_token: "" });
     render(<SecretsPage />);
@@ -150,6 +201,41 @@ describe("new secret validation", () => {
       target: { value: "a value" },
     });
   }
+
+  it("reports missing required fields inline, not as toasts", async () => {
+    const createSecret = vi.spyOn(api, "createSecret");
+    render(<NewSecretPage />);
+
+    const form = screen
+      .getByRole("button", { name: "Create secret" })
+      .closest("form") as HTMLFormElement;
+    fireEvent.submit(form);
+
+    expect(createSecret).not.toHaveBeenCalled();
+    expect(mocks.toast.error).not.toHaveBeenCalled();
+    expect(screen.getByText("Choose an application.")).toBeVisible();
+    expect(screen.getByText("Choose an environment.")).toBeVisible();
+    expect(screen.getByText("Key is required.")).toBeVisible();
+    expect(screen.getByText("A secret value is required.")).toBeVisible();
+  });
+
+  it("blocks an expiry that is already in the past", async () => {
+    const createSecret = vi
+      .spyOn(api, "createSecret")
+      .mockResolvedValue({ version: 1, revision: 1 });
+    await renderReadyForm();
+    const expires = screen.getByLabelText("Expires at");
+
+    // The `min` bound is a convenience; the inline check is what blocks submit.
+    expect(expires).toHaveAttribute("min");
+
+    fireEvent.change(expires, { target: { value: "2000-01-01T00:00" } });
+    fireEvent.blur(expires);
+    expect(screen.getByText("Expiry must be in the future.")).toBeVisible();
+
+    fireEvent.submit(expires.closest("form") as HTMLFormElement);
+    expect(createSecret).not.toHaveBeenCalled();
+  });
 
   it("blocks a create on a key the API would reject", async () => {
     const createSecret = vi

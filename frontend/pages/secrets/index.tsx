@@ -1,7 +1,6 @@
-import { Button, ButtonLink } from "@/components/ui/button";
 import { Filter, X } from "lucide-react";
 import Link from "next/link";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Icon } from "@/components/icons";
 import NamespacePicker, { type NamespaceSelection } from "@/components/NamespacePicker";
 import {
@@ -13,18 +12,15 @@ import {
   Pagination,
   TableSkeleton,
 } from "@/components/ui";
+import { Button, ButtonLink } from "@/components/ui/button";
 import { useToast } from "@/context/ToastContext";
 import { api, isAbortError } from "@/lib/api";
 import { formatUnixMs } from "@/lib/format";
-import { useNamespaces, useQueryParams } from "@/lib/hooks";
+import { useCursorPagination, useLatestRequest, useNamespaces, useQueryParams } from "@/lib/hooks";
+import { links } from "@/lib/links";
 import type { SecretMetadata } from "@/lib/types";
+import { useQueryReplace } from "@/lib/url";
 import { validateKeyPrefix } from "@/lib/validation";
-
-function secretLink(ref: { env: string; app: string; key: string }): string {
-  return `/secrets/detail?env=${encodeURIComponent(ref.env)}&app=${encodeURIComponent(
-    ref.app,
-  )}&key=${encodeURIComponent(ref.key)}`;
-}
 
 function currentVersion(s: SecretMetadata): number | null {
   const c = s.labels?.current;
@@ -33,10 +29,17 @@ function currentVersion(s: SecretMetadata): number | null {
 
 const NO_NS: NamespaceSelection = { env: "", app: "" };
 
+/** Identifies the list a response belongs to, so a stale one cannot mark a
+ *  different namespace/prefix/page as loaded. */
+function requestScope(selection: NamespaceSelection, prefix: string, token: string): string {
+  return JSON.stringify([selection.env, selection.app, prefix, token]);
+}
+
 export default function SecretsPage() {
   const toast = useToast();
   const { namespaces, error: nsError } = useNamespaces();
   const { values: queryValues, ready: queryReady } = useQueryParams(["env", "app", "key_prefix"]);
+  const replaceQuery = useQueryReplace("/secrets");
 
   const [ns, setNs] = useState<NamespaceSelection>(NO_NS);
   const [prefixInput, setPrefixInput] = useState("");
@@ -45,15 +48,16 @@ export default function SecretsPage() {
 
   const [secrets, setSecrets] = useState<SecretMetadata[]>([]);
   const [loading, setLoading] = useState(false);
-  const [nextToken, setNextToken] = useState("");
-  const [pageStack, setPageStack] = useState<string[]>([]);
-  const [pageToken, setPageToken] = useState("");
-  const requestRef = useRef<AbortController | null>(null);
+  const [loadedScope, setLoadedScope] = useState("");
+  const request = useLatestRequest();
 
-  const seeded = useRef(false);
+  const paging = useCursorPagination(JSON.stringify([ns.env, ns.app, prefix]));
+  const { pageToken, setNextToken } = paging;
+
+  const [seeded, setSeeded] = useState(false);
   useEffect(() => {
-    if (!queryReady || seeded.current) return;
-    seeded.current = true;
+    if (!queryReady || seeded) return;
+    setSeeded(true);
     const env = queryValues.env ?? "";
     const app = queryValues.app ?? "";
     const kp = queryValues.key_prefix ?? "";
@@ -62,7 +66,7 @@ export default function SecretsPage() {
       setPrefixInput(kp);
       setPrefix(kp);
     }
-  }, [queryReady, queryValues]);
+  }, [queryReady, queryValues, seeded]);
 
   useEffect(() => {
     if (nsError) toast.error(nsError, "Failed to load environments");
@@ -76,15 +80,15 @@ export default function SecretsPage() {
 
   const load = useCallback(
     async (token: string, selection: NamespaceSelection, activePrefix: string) => {
-      requestRef.current?.abort();
+      const run = request.begin();
+      const scope = requestScope(selection, activePrefix, token);
       if (!selection.env || !selection.app) {
         setSecrets([]);
         setNextToken("");
         setLoading(false);
+        setLoadedScope(scope);
         return;
       }
-      const controller = new AbortController();
-      requestRef.current = controller;
       setLoading(true);
       try {
         const res = await api.listSecrets(
@@ -92,70 +96,62 @@ export default function SecretsPage() {
           activePrefix || undefined,
           100,
           token || undefined,
-          { signal: controller.signal },
+          { signal: run.signal },
         );
-        if (requestRef.current !== controller) return;
+        if (!run.current) return;
         setSecrets(res.secrets ?? []);
         setNextToken(res.next_page_token ?? "");
+        setLoadedScope(scope);
       } catch (err) {
-        if (!isAbortError(err)) toast.error(err, "Failed to load secrets");
+        if (!run.current || isAbortError(err)) return;
+        // Leaving the previous namespace's rows on screen under the new header
+        // is worse than an empty table: they look like this namespace's secrets.
+        setSecrets([]);
+        setNextToken("");
+        setLoadedScope(scope);
+        toast.error(err, "Failed to load secrets");
       } finally {
-        if (requestRef.current === controller) {
-          requestRef.current = null;
-          setLoading(false);
-        }
+        if (run.current) setLoading(false);
       }
     },
-    [toast],
+    [request, setNextToken, toast],
   );
 
   useEffect(() => {
     void load(pageToken, ns, prefix);
-    return () => {
-      requestRef.current?.abort();
-      requestRef.current = null;
-    };
   }, [load, pageToken, ns, prefix]);
 
   function onSelectNamespace(next: NamespaceSelection) {
     setNs(next);
-    setPageStack([]);
-    setPageToken("");
+    setSecrets([]);
+    replaceQuery({ env: next.env, app: next.app });
   }
   function applyFilter(e: React.FormEvent) {
     e.preventDefault();
     setPrefixTouched(true);
     if (prefixError) return;
-    setPageStack([]);
-    setPageToken("");
-    setPrefix(prefixInput.trim());
+    const next = prefixInput.trim();
+    setSecrets([]);
+    setPrefix(next);
+    replaceQuery({ key_prefix: next });
   }
   function clearFilter() {
     setPrefixInput("");
     setPrefixTouched(false);
-    setPageStack([]);
-    setPageToken("");
+    setSecrets([]);
     setPrefix("");
-  }
-  function goNext() {
-    if (!nextToken) return;
-    setPageStack((s) => [...s, pageToken]);
-    setPageToken(nextToken);
-  }
-  function goPrevious() {
-    const previous = pageStack[pageStack.length - 1];
-    if (previous === undefined) return;
-    setPageStack((s) => s.slice(0, -1));
-    setPageToken(previous);
-  }
-  function goReset() {
-    setPageStack([]);
-    setPageToken("");
+    replaceQuery({ key_prefix: "" });
   }
 
-  const newSecretLink = hasNs
-    ? `/secrets/new?env=${encodeURIComponent(ns.env)}&app=${encodeURIComponent(ns.app)}`
-    : "/secrets/new";
+  const newSecretLink = hasNs ? links.newSecret(ns) : links.newSecret();
+
+  // A deep link's env/app land one frame after mount, so "Choose an
+  // environment" would flash before the list it asked for.
+  const awaitingDeepLink = !seeded && (!queryReady || !!queryValues.env || !!queryValues.app);
+  // A response has arrived for exactly this namespace/prefix/page. Gating on
+  // this rather than on `loading` keeps the empty state from flashing before
+  // the first request has even started.
+  const settled = loadedScope === requestScope(ns, prefix, pageToken);
 
   return (
     <>
@@ -190,11 +186,13 @@ export default function SecretsPage() {
         </Button>
       </form>
 
-      {!hasNs ? (
+      {awaitingDeepLink ? (
+        <TableSkeleton headers={["Key", "Type", "Current", "Versions", "Mode", "Updated"]} />
+      ) : !hasNs ? (
         <EmptyState icon={<Icon.namespace size={20} />} title="Choose an environment">
           Pick an application and environment above to list its secrets.
         </EmptyState>
-      ) : loading ? (
+      ) : !settled || loading ? (
         <TableSkeleton headers={["Key", "Type", "Current", "Versions", "Mode", "Updated"]} />
       ) : secrets.length === 0 ? (
         <EmptyState
@@ -232,7 +230,7 @@ export default function SecretsPage() {
                 return (
                   <tr key={s.key}>
                     <td data-label="Key">
-                      <Link className="cell-path" href={secretLink(s)}>
+                      <Link className="cell-path" href={links.secretDetail(s)}>
                         {s.key}
                       </Link>
                     </td>
@@ -265,12 +263,13 @@ export default function SecretsPage() {
       )}
 
       <Pagination
-        hasNext={!!nextToken}
-        onNext={goNext}
-        hasPrevious={pageStack.length > 0}
-        onPrevious={goPrevious}
-        onReset={goReset}
-        showReset={pageStack.length > 0}
+        hasNext={paging.hasNext}
+        onNext={paging.next}
+        hasPrevious={paging.hasPrevious}
+        onPrevious={paging.previous}
+        onReset={paging.reset}
+        showReset={paging.hasPrevious}
+        page={paging.page}
       />
     </>
   );

@@ -1,8 +1,7 @@
-import { Button, ButtonLink } from "@/components/ui/button";
 import { ArrowLeft } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/router";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import CopyButton from "@/components/CopyButton";
 import { Icon } from "@/components/icons";
 import { ConfirmDialog, Modal } from "@/components/Modal";
@@ -22,6 +21,7 @@ import {
   Textarea,
 } from "@/components/ui";
 import { AppSelect } from "@/components/ui/app-select";
+import { Button, ButtonLink } from "@/components/ui/button";
 import { useToast } from "@/context/ToastContext";
 import { ApiError, api, isAbortError, type ResourceRef } from "@/lib/api";
 import { base64ByteLength, base64ToUtf8, looksLikeText, utf8ToBase64 } from "@/lib/encoding";
@@ -33,7 +33,8 @@ import {
   labelEntries,
   prettyJson,
 } from "@/lib/format";
-import { useQueryParams } from "@/lib/hooks";
+import { useFieldErrors, useLatestRequest, useQueryParams } from "@/lib/hooks";
+import { links } from "@/lib/links";
 import type { SecretMetadata, SecretVersion } from "@/lib/types";
 import { validateMetadataJson, validateValueSize } from "@/lib/validation";
 
@@ -62,7 +63,10 @@ export default function SecretDetailPage() {
   const [loadState, setLoadState] = useState<
     "idle" | "loading" | "success" | "not-found" | "error"
   >("idle");
-  const loadController = useRef<AbortController | null>(null);
+  // A reload triggered by an action refreshes in place; only a first load (or a
+  // change of ref) is allowed to blank the page.
+  const [refreshing, setRefreshing] = useState(false);
+  const request = useLatestRequest();
 
   // Reveal flow.
   const [revealTarget, setRevealTarget] = useState<number | null>(null); // version pending confirm
@@ -84,32 +88,46 @@ export default function SecretDetailPage() {
   // New version modal.
   const [newVersionOpen, setNewVersionOpen] = useState(false);
 
-  const load = useCallback(async () => {
-    if (!hasRef) return;
-    loadController.current?.abort();
-    const controller = new AbortController();
-    loadController.current = controller;
-    setLoadState("loading");
-    setSecret(null);
-    try {
-      const res = await api.secretMetadata(ref, { signal: controller.signal });
-      if (loadController.current !== controller) return;
-      setSecret(res.secret);
-      const cur = res.secret.labels?.current;
-      setSelectedVersion(
-        typeof cur === "number" ? cur : (res.secret.versions?.[0]?.version ?? null),
-      );
-      setLoadState("success");
-    } catch (err) {
-      if (isAbortError(err) || loadController.current !== controller) return;
-      if (err instanceof ApiError && err.status === 404) {
-        setLoadState("not-found");
-      } else {
-        setLoadState("error");
-        toast.error(err, "Failed to load secret");
+  const load = useCallback(
+    async (options?: { background?: boolean }) => {
+      if (!hasRef) return;
+      const run = request.begin();
+      const background = options?.background === true;
+      if (background) setRefreshing(true);
+      else {
+        setLoadState("loading");
+        setSecret(null);
       }
-    }
-  }, [hasRef, ref, toast]);
+      try {
+        const res = await api.secretMetadata(ref, { signal: run.signal });
+        if (!run.current) return;
+        setSecret(res.secret);
+        // The reveal select only offers enabled versions, so defaulting to a
+        // disabled `current` would leave it blank with Reveal still enabled.
+        const enabled = (res.secret.versions ?? []).filter((v) => v.state === "enabled");
+        const cur = res.secret.labels?.current;
+        setSelectedVersion(
+          typeof cur === "number" && enabled.some((v) => v.version === cur)
+            ? cur
+            : ([...enabled].sort((a, b) => b.version - a.version)[0]?.version ?? null),
+        );
+        setLoadState("success");
+      } catch (err) {
+        if (!run.current || isAbortError(err)) return;
+        if (err instanceof ApiError && err.status === 404) {
+          setLoadState("not-found");
+        } else {
+          // A failed background refresh keeps the data it already has; only a
+          // foreground load has nothing to fall back to.
+          if (!background) setLoadState("error");
+          toast.error(err, "Failed to load secret");
+        }
+      } finally {
+        if (run.current) setRefreshing(false);
+      }
+    },
+    [hasRef, ref, request, toast],
+  );
 
   useEffect(() => {
     if (!ready) return;
@@ -121,8 +139,8 @@ export default function SecretDetailPage() {
       setLoadState("idle");
       setSecret(null);
     }
-    return () => loadController.current?.abort();
-  }, [ready, hasRef, load]);
+    return () => request.abort();
+  }, [ready, hasRef, load, request]);
 
   // Auto-hide countdown for the revealed value.
   useEffect(() => {
@@ -178,7 +196,7 @@ export default function SecretDetailPage() {
         await api.deleteSecret(ref);
         toast.success("Secret deleted", displayPath(ref));
         setConfirm(null);
-        await router.push(`/secrets?env=${encodeURIComponent(env)}&app=${encodeURIComponent(app)}`);
+        await router.push(links.secrets({ env, app }));
         return;
       }
       if (confirm.kind === "promote") {
@@ -198,7 +216,7 @@ export default function SecretDetailPage() {
         if (!enable) setRevealed((r) => (r && r.version === confirm.version ? null : r));
       }
       setConfirm(null);
-      await load();
+      await load({ background: true });
     } catch (err) {
       toast.error(err, "Action failed");
     } finally {
@@ -206,9 +224,7 @@ export default function SecretDetailPage() {
     }
   }, [hasRef, ref, env, app, confirm, toast, load, router]);
 
-  const backLink = hasRef
-    ? `/secrets?env=${encodeURIComponent(env)}&app=${encodeURIComponent(app)}`
-    : "/secrets";
+  const backLink = hasRef ? links.secrets({ env, app }) : links.secrets();
 
   // Header and card frames come straight from the URL, so they paint at once
   // and only the values fill in — no full-page spinner swap.
@@ -250,7 +266,7 @@ export default function SecretDetailPage() {
           icon={<Icon.secret size={20} />}
           title="No secret specified"
           actions={
-            <ButtonLink variant="outline" href="/secrets">
+            <ButtonLink variant="outline" href={links.secrets()}>
               Browse secrets
             </ButtonLink>
           }
@@ -299,7 +315,12 @@ export default function SecretDetailPage() {
     <>
       <PageHeader
         documentTitle={displayPath(ref)}
-        title={<span className="mono">{displayPath(ref)}</span>}
+        title={
+          <span className="row-wrap">
+            <span className="mono">{displayPath(ref)}</span>
+            {refreshing ? <Spinner /> : null}
+          </span>
+        }
         subtitle={
           <Link href={backLink} className="text-sm">
             <ArrowLeft size={14} aria-hidden /> {displayNamespace(ref)}
@@ -581,8 +602,15 @@ export default function SecretDetailPage() {
         requireText="DESTROY"
         message={
           <>
-            Destroying version {confirm?.kind === "destroy" ? confirm.version : ""} permanently
-            erases its key material. The value can never be recovered. This cannot be undone.
+            Destroying version {confirm?.kind === "destroy" ? confirm.version : ""} of{" "}
+            <span className="mono">{displayPath(ref)}</span> permanently erases its key material.
+            The value can never be recovered. This cannot be undone.
+            {confirm?.kind === "destroy" && confirm.version === current ? (
+              <div className="mt-8">
+                <strong>This is the current version</strong> — applications reading it will start
+                failing.
+              </div>
+            ) : null}
           </>
         }
         confirmLabel="Destroy version"
@@ -597,7 +625,7 @@ export default function SecretDetailPage() {
         onClose={() => setNewVersionOpen(false)}
         onSaved={() => {
           setNewVersionOpen(false);
-          void load();
+          void load({ background: true });
         }}
       />
     </>
@@ -622,6 +650,7 @@ function VersionRow({
   ) => void;
 }) {
   const destroyed = v.state === "destroyed";
+  const expired = v.expires_at_unix_ms > 0 && v.expires_at_unix_ms <= Date.now();
   return (
     <tr>
       <td>
@@ -637,7 +666,10 @@ function VersionRow({
       <td className="nowrap">{formatUnixMs(v.created_at_unix_ms)}</td>
       <td className="nowrap">
         {v.expires_at_unix_ms > 0 ? (
-          formatUnixMs(v.expires_at_unix_ms)
+          <div className="row-wrap">
+            {formatUnixMs(v.expires_at_unix_ms)}
+            {expired ? <Badge kind="warning">expired</Badge> : null}
+          </div>
         ) : (
           <span className="faint">never</span>
         )}
@@ -707,10 +739,8 @@ function NewVersionModal({
   const [metadataJson, setMetadataJson] = useState("{}");
   const [clientToken, setClientToken] = useState("");
   const [saving, setSaving] = useState(false);
-  const [touched, setTouched] = useState({ value: false, metadata: false });
-  function touch(field: keyof typeof touched) {
-    setTouched((t) => ({ ...t, [field]: true }));
-  }
+  const errors = useFieldErrors<"value" | "metadata" | "token">();
+  const { reset: resetErrors } = errors;
 
   useEffect(() => {
     if (open) {
@@ -718,34 +748,29 @@ function NewVersionModal({
       setContentType(secret.content_type || "text/plain");
       setMetadataJson("{}");
       setClientToken("");
-      setTouched({ value: false, metadata: false });
+      resetErrors();
     }
-  }, [open, secret.content_type]);
+  }, [open, secret.content_type, resetErrors]);
 
   // A secret value has no parse rule server-side — only the size cap — and the
-  // message reports the size alone, never the value.
-  const valueError = validateValueSize(value);
+  // message reports the size alone, never the value. validateValueSize accepts
+  // "", so the required rule lives here.
+  const valueError = value ? validateValueSize(value) : "Enter a value for the new version.";
   const metadataError = validateMetadataJson(metadataJson);
-  const shownValueError = touched.value ? valueError : null;
-  const shownMetadataError = touched.metadata ? metadataError : null;
-  const blocked = !!(shownValueError || shownMetadataError);
+  const tokenError =
+    secret.client_bound && !clientToken.trim()
+      ? "The client access token is required to add a version to a client-bound secret."
+      : null;
+  const shownValueError = errors.shown("value", valueError);
+  const shownMetadataError = errors.shown("metadata", metadataError);
+  const shownTokenError = errors.shown("token", tokenError);
+  const blocked = !!(shownValueError || shownMetadataError || shownTokenError);
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
-    setTouched({ value: true, metadata: true });
-    if (!value) {
-      toast.error(new Error("Enter a value for the new version."), "Missing value");
-      return;
-    }
-    if (secret.client_bound && !clientToken.trim()) {
-      toast.error(
-        new Error("The client access token is required to add a version to a client-bound secret."),
-        "Missing client token",
-      );
-      return;
-    }
-    // Inline messages carry the detail; the fields are now all touched.
-    if (valueError || metadataError) return;
+    errors.markAllTouched();
+    // Every problem now has an inline message beside the field that caused it.
+    if (valueError || metadataError || tokenError) return;
     setSaving(true);
     try {
       const res = await api.createSecret(
@@ -779,6 +804,7 @@ function NewVersionModal({
       open={open}
       title="New secret version"
       onClose={onClose}
+      dismissible={!saving}
       footer={
         <>
           <Button variant="outline" onClick={onClose} disabled={saving}>
@@ -801,7 +827,7 @@ function NewVersionModal({
             className="font-mono"
             value={value}
             onChange={(e) => setValue(e.target.value)}
-            onBlur={() => touch("value")}
+            onBlur={() => errors.touch("value")}
             placeholder="secret value…"
             autoComplete="off"
             spellCheck={false}
@@ -816,7 +842,7 @@ function NewVersionModal({
               className="font-mono"
               value={metadataJson}
               onChange={(e) => setMetadataJson(e.target.value)}
-              onBlur={() => touch("metadata")}
+              onBlur={() => errors.touch("metadata")}
             />
           </Field>
         </div>
@@ -824,6 +850,7 @@ function NewVersionModal({
           <Field
             label="Client access token"
             hint="Required. The existing token re-wraps the new version's key. It is sent once and never stored."
+            error={shownTokenError}
           >
             <Input
               className="font-mono"
@@ -832,6 +859,7 @@ function NewVersionModal({
               autoComplete="off"
               spellCheck={false}
               onChange={(e) => setClientToken(e.target.value)}
+              onBlur={() => errors.touch("token")}
               placeholder="client access token"
             />
           </Field>

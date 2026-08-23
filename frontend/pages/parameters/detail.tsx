@@ -1,8 +1,7 @@
-import { Button, ButtonLink } from "@/components/ui/button";
 import { ArrowLeft } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/router";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import CopyButton from "@/components/CopyButton";
 import { Icon } from "@/components/icons";
 import { ConfirmDialog, Modal } from "@/components/Modal";
@@ -21,6 +20,7 @@ import {
   Textarea,
 } from "@/components/ui";
 import { AppSelect } from "@/components/ui/app-select";
+import { Button, ButtonLink } from "@/components/ui/button";
 import { useToast } from "@/context/ToastContext";
 import { ApiError, api, isAbortError, type ResourceRef } from "@/lib/api";
 import {
@@ -31,7 +31,8 @@ import {
   labelEntries,
   prettyJson,
 } from "@/lib/format";
-import { useQueryParams } from "@/lib/hooks";
+import { useLatestRequest, useQueryParams } from "@/lib/hooks";
+import { links } from "@/lib/links";
 import { PARAMETER_CONTENT_TYPES, type Parameter, type ParameterMetadata } from "@/lib/types";
 import {
   firstError,
@@ -58,13 +59,19 @@ export default function ParameterDetailPage() {
   const [loadState, setLoadState] = useState<
     "idle" | "loading" | "success" | "not-found" | "error"
   >("idle");
-  const loadController = useRef<AbortController | null>(null);
+  // A reload triggered by a save refreshes in place; only a first load (or a
+  // change of ref) is allowed to blank the page.
+  const [refreshing, setRefreshing] = useState(false);
+  const request = useLatestRequest();
+  // The version viewer loads independently of the page, so it gets its own token.
+  const viewRequest = useLatestRequest();
 
   const [viewed, setViewed] = useState<{
     version: number;
     value: string;
     contentType: string;
   } | null>(null);
+  const [viewingVersion, setViewingVersion] = useState<number | null>(null);
 
   const [newVersionOpen, setNewVersionOpen] = useState(false);
   const [value, setValue] = useState("");
@@ -100,33 +107,42 @@ export default function ParameterDetailPage() {
     setTouched((t) => ({ ...t, [field]: true }));
   }
 
-  const load = useCallback(async () => {
-    if (!hasRef) return;
-    loadController.current?.abort();
-    const controller = new AbortController();
-    loadController.current = controller;
-    setLoadState("loading");
-    setMeta(null);
-    setCurrent(null);
-    try {
-      const [m, cur] = await Promise.all([
-        api.parameterMetadata(ref, { signal: controller.signal }),
-        api.getParameter(ref, undefined, undefined, { signal: controller.signal }),
-      ]);
-      if (loadController.current !== controller) return;
-      setMeta(m);
-      setCurrent(cur.parameter);
-      setLoadState("success");
-    } catch (err) {
-      if (isAbortError(err) || loadController.current !== controller) return;
-      if (err instanceof ApiError && err.status === 404) {
-        setLoadState("not-found");
-      } else {
-        setLoadState("error");
-        toast.error(err, "Failed to load parameter");
+  const load = useCallback(
+    async (options?: { background?: boolean }) => {
+      if (!hasRef) return;
+      const run = request.begin();
+      const background = options?.background === true;
+      if (background) setRefreshing(true);
+      else {
+        setLoadState("loading");
+        setMeta(null);
+        setCurrent(null);
       }
-    }
-  }, [hasRef, ref, toast]);
+      try {
+        const [m, cur] = await Promise.all([
+          api.parameterMetadata(ref, { signal: run.signal }),
+          api.getParameter(ref, undefined, undefined, { signal: run.signal }),
+        ]);
+        if (!run.current) return;
+        setMeta(m);
+        setCurrent(cur.parameter);
+        setLoadState("success");
+      } catch (err) {
+        if (!run.current || isAbortError(err)) return;
+        if (err instanceof ApiError && err.status === 404) {
+          setLoadState("not-found");
+        } else {
+          // A failed background refresh keeps the data it already has; only a
+          // foreground load has nothing to fall back to.
+          if (!background) setLoadState("error");
+          toast.error(err, "Failed to load parameter");
+        }
+      } finally {
+        if (run.current) setRefreshing(false);
+      }
+    },
+    [hasRef, ref, request, toast],
+  );
 
   useEffect(() => {
     if (!ready) return;
@@ -137,8 +153,8 @@ export default function ParameterDetailPage() {
       setMeta(null);
       setCurrent(null);
     }
-    return () => loadController.current?.abort();
-  }, [ready, hasRef, load]);
+    return () => request.abort();
+  }, [ready, hasRef, load, request]);
 
   function openNewVersion() {
     setValue(current?.value ?? "");
@@ -168,7 +184,7 @@ export default function ParameterDetailPage() {
       toast.success(`Saved version ${res.version}`, displayPath(ref));
       setNewVersionOpen(false);
       setViewed(null);
-      await load();
+      await load({ background: true });
     } catch (err) {
       toast.error(err, "Failed to save version");
     } finally {
@@ -178,15 +194,21 @@ export default function ParameterDetailPage() {
 
   async function viewVersion(version: number) {
     if (!hasRef) return;
+    const run = viewRequest.begin();
+    setViewingVersion(version);
     try {
-      const res = await api.getParameter(ref, version);
+      const res = await api.getParameter(ref, version, undefined, { signal: run.signal });
+      if (!run.current) return;
       setViewed({
         version: res.parameter.version,
         value: res.parameter.value,
         contentType: res.parameter.content_type,
       });
     } catch (err) {
+      if (!run.current || isAbortError(err)) return;
       toast.error(err, "Failed to load version value");
+    } finally {
+      if (run.current) setViewingVersion(null);
     }
   }
 
@@ -196,9 +218,10 @@ export default function ParameterDetailPage() {
     try {
       await api.deleteParameter(ref);
       toast.success("Parameter deleted", displayPath(ref));
-      await router.push(
-        `/parameters?env=${encodeURIComponent(env)}&app=${encodeURIComponent(app)}`,
-      );
+      // Closed before navigating, so a back-navigation cannot land on an open
+      // confirmation for a parameter that no longer exists.
+      setDeleteOpen(false);
+      await router.push(links.parameters({ env, app }));
     } catch (err) {
       toast.error(err, "Failed to delete parameter");
     } finally {
@@ -206,9 +229,7 @@ export default function ParameterDetailPage() {
     }
   }
 
-  const backLink = hasRef
-    ? `/parameters?env=${encodeURIComponent(env)}&app=${encodeURIComponent(app)}`
-    : "/parameters";
+  const backLink = hasRef ? links.parameters({ env, app }) : links.parameters();
 
   // The heading and card frames are known from the URL alone, so they render
   // immediately and only the values fill in — no full-page spinner swap.
@@ -247,7 +268,7 @@ export default function ParameterDetailPage() {
           icon={<Icon.parameter size={20} />}
           title="No parameter specified"
           actions={
-            <ButtonLink variant="outline" href="/parameters">
+            <ButtonLink variant="outline" href={links.parameters()}>
               Browse parameters
             </ButtonLink>
           }
@@ -293,7 +314,12 @@ export default function ParameterDetailPage() {
     <>
       <PageHeader
         documentTitle={displayPath(ref)}
-        title={<span className="mono">{displayPath(ref)}</span>}
+        title={
+          <span className="row-wrap">
+            <span className="mono">{displayPath(ref)}</span>
+            {refreshing ? <Spinner /> : null}
+          </span>
+        }
         subtitle={
           <Link href={backLink} className="text-sm">
             <ArrowLeft size={14} aria-hidden /> {displayNamespace(ref)}
@@ -320,7 +346,9 @@ export default function ParameterDetailPage() {
               <span className="faint text-sm">{current.content_type || "value"}</span>
               <CopyButton label="Copy value" value={current.value} />
             </div>
-            <pre className="json-block">{current.value}</pre>
+            <pre className="json-block">
+              {current.content_type === "json" ? prettyJson(current.value) : current.value}
+            </pre>
           </>
         ) : (
           <span className="faint">No current value.</span>
@@ -390,8 +418,18 @@ export default function ParameterDetailPage() {
                 {[...meta.versions]
                   .sort((a, b) => b.version - a.version)
                   .map((v) => (
-                    <tr key={v.version}>
-                      <td>v{v.version}</td>
+                    <tr
+                      key={v.version}
+                      aria-current={viewed?.version === v.version ? "true" : undefined}
+                    >
+                      <td>
+                        <div className="row-wrap">
+                          v{v.version}
+                          {viewed?.version === v.version ? (
+                            <Badge kind="accent">viewing</Badge>
+                          ) : null}
+                        </div>
+                      </td>
                       <td>
                         <Badge kind={v.state === "enabled" ? "success" : "neutral"}>
                           {v.state}
@@ -404,8 +442,10 @@ export default function ParameterDetailPage() {
                           <Button
                             variant="outline"
                             size="sm"
+                            disabled={viewingVersion === v.version}
                             onClick={() => viewVersion(v.version)}
                           >
+                            {viewingVersion === v.version ? <Spinner /> : null}
                             View value
                           </Button>
                         </div>
@@ -431,7 +471,9 @@ export default function ParameterDetailPage() {
                 </Button>
               </div>
             </div>
-            <pre className="json-block">{viewed.value}</pre>
+            <pre className="json-block">
+              {viewed.contentType === "json" ? prettyJson(viewed.value) : viewed.value}
+            </pre>
           </div>
         ) : null}
       </div>
@@ -440,6 +482,7 @@ export default function ParameterDetailPage() {
         open={newVersionOpen}
         title="New parameter version"
         onClose={() => setNewVersionOpen(false)}
+        dismissible={!saving}
         footer={
           <>
             <Button variant="outline" onClick={() => setNewVersionOpen(false)} disabled={saving}>

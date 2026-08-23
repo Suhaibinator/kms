@@ -1,7 +1,6 @@
-import { Button, ButtonLink } from "@/components/ui/button";
 import { Eye, Filter, Trash2, X } from "lucide-react";
 import Link from "next/link";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Icon } from "@/components/icons";
 import { ConfirmDialog, Modal } from "@/components/Modal";
 import NamespacePicker, { type NamespaceSelection } from "@/components/NamespacePicker";
@@ -17,11 +16,20 @@ import {
   Textarea,
 } from "@/components/ui";
 import { AppSelect } from "@/components/ui/app-select";
+import { Button, ButtonLink } from "@/components/ui/button";
 import { useToast } from "@/context/ToastContext";
 import { api, isAbortError } from "@/lib/api";
 import { formatUnixMs, labelEntries } from "@/lib/format";
-import { useNamespaces, useQueryParams } from "@/lib/hooks";
+import {
+  useCursorPagination,
+  useFieldErrors,
+  useLatestRequest,
+  useNamespaces,
+  useQueryParams,
+} from "@/lib/hooks";
+import { links } from "@/lib/links";
 import { PARAMETER_CONTENT_TYPES, type Parameter } from "@/lib/types";
+import { useQueryReplace } from "@/lib/url";
 import {
   firstError,
   validateContentType,
@@ -32,21 +40,22 @@ import {
   validateValueSize,
 } from "@/lib/validation";
 
-function detailLink(ref: { env: string; app: string; key: string }): string {
-  return `/parameters/detail?env=${encodeURIComponent(ref.env)}&app=${encodeURIComponent(
-    ref.app,
-  )}&key=${encodeURIComponent(ref.key)}`;
-}
-
 const NO_NS: NamespaceSelection = { env: "", app: "" };
 
 /** The fields of the new-parameter form that carry their own validation. */
 type CreateField = "key" | "value" | "contentType" | "metadata";
 
+/** Identifies the list a response belongs to, so a stale one cannot mark a
+ *  different namespace/prefix/page as loaded. */
+function requestScope(selection: NamespaceSelection, prefix: string, token: string): string {
+  return JSON.stringify([selection.env, selection.app, prefix, token]);
+}
+
 export default function ParametersPage() {
   const toast = useToast();
   const { namespaces, error: nsError } = useNamespaces();
   const { values: queryValues, ready: queryReady } = useQueryParams(["env", "app", "key_prefix"]);
+  const replaceQuery = useQueryReplace("/parameters");
 
   const [ns, setNs] = useState<NamespaceSelection>(NO_NS);
   const [prefixInput, setPrefixInput] = useState("");
@@ -55,10 +64,11 @@ export default function ParametersPage() {
 
   const [rows, setRows] = useState<Parameter[]>([]);
   const [loading, setLoading] = useState(false);
-  const [nextToken, setNextToken] = useState("");
-  const [pageStack, setPageStack] = useState<string[]>([]);
-  const [pageToken, setPageToken] = useState("");
-  const loadController = useRef<AbortController | null>(null);
+  const [loadedScope, setLoadedScope] = useState("");
+  const request = useLatestRequest();
+
+  const paging = useCursorPagination(JSON.stringify([ns.env, ns.app, prefix]));
+  const { pageToken, setNextToken } = paging;
 
   const [createOpen, setCreateOpen] = useState(false);
   const [createNs, setCreateNs] = useState<NamespaceSelection>(NO_NS);
@@ -67,17 +77,16 @@ export default function ParametersPage() {
   const [contentType, setContentType] = useState("string");
   const [metadataJson, setMetadataJson] = useState("{}");
   const [saving, setSaving] = useState(false);
-  const [touched, setTouched] = useState<Partial<Record<CreateField, boolean>>>({});
-  const [submitAttempted, setSubmitAttempted] = useState(false);
+  const errors = useFieldErrors<CreateField>();
 
   const [deleteTarget, setDeleteTarget] = useState<Parameter | null>(null);
   const [deleting, setDeleting] = useState(false);
 
   // Seed the selection from deep-link query params exactly once.
-  const seeded = useRef(false);
+  const [seeded, setSeeded] = useState(false);
   useEffect(() => {
-    if (!queryReady || seeded.current) return;
-    seeded.current = true;
+    if (!queryReady || seeded) return;
+    setSeeded(true);
     const env = queryValues.env ?? "";
     const app = queryValues.app ?? "";
     const kp = queryValues.key_prefix ?? "";
@@ -86,7 +95,7 @@ export default function ParametersPage() {
       setPrefixInput(kp);
       setPrefix(kp);
     }
-  }, [queryReady, queryValues]);
+  }, [queryReady, queryValues, seeded]);
 
   useEffect(() => {
     if (nsError) toast.error(nsError, "Failed to load environments");
@@ -111,35 +120,38 @@ export default function ParametersPage() {
   // A message stays hidden until the user has left the field or tried to
   // submit, so a freshly opened form is never already covered in errors.
   const shownPrefixError = prefixTouched ? prefixError : null;
-  const shownIn = (field: CreateField, error: string | null) =>
-    touched[field] || submitAttempted ? error : null;
-  const shownKeyError = shownIn("key", keyError);
-  const shownValueError = shownIn("value", valueError);
-  const shownContentTypeError = shownIn("contentType", contentTypeError);
-  const shownMetadataError = shownIn("metadata", metadataError);
+  const shownKeyError = errors.shown("key", keyError);
+  const shownValueError = errors.shown("value", valueError);
+  const shownContentTypeError = errors.shown("contentType", contentTypeError);
+  const shownMetadataError = errors.shown("metadata", metadataError);
+  // The namespace selects have no blur of their own, so they surface on submit.
+  const shownCreateAppError = errors.submitted && !createNs.app ? "Choose an application." : null;
+  const shownCreateEnvError = errors.submitted && !createNs.env ? "Choose an environment." : null;
   const createError = firstError(keyError, valueError, contentTypeError, metadataError);
   const shownCreateError = firstError(
     shownKeyError,
     shownValueError,
     shownContentTypeError,
     shownMetadataError,
+    shownCreateAppError,
+    shownCreateEnvError,
   );
 
-  function markTouched(field: CreateField) {
-    setTouched((t) => ({ ...t, [field]: true }));
-  }
-
   const load = useCallback(
-    async (token: string, selection: NamespaceSelection, activePrefix: string) => {
-      loadController.current?.abort();
+    async (
+      token: string,
+      selection: NamespaceSelection,
+      activePrefix: string,
+    ): Promise<Parameter[] | null> => {
+      const run = request.begin();
+      const scope = requestScope(selection, activePrefix, token);
       if (!selection.env || !selection.app) {
         setRows([]);
         setNextToken("");
         setLoading(false);
-        return;
+        setLoadedScope(scope);
+        return [];
       }
-      const controller = new AbortController();
-      loadController.current = controller;
       setLoading(true);
       try {
         const res = await api.listParameters(
@@ -147,76 +159,55 @@ export default function ParametersPage() {
           activePrefix || undefined,
           100,
           token || undefined,
-          { signal: controller.signal },
+          { signal: run.signal },
         );
-        if (loadController.current === controller) {
-          setRows(res.parameters ?? []);
-          setNextToken(res.next_page_token ?? "");
-        }
+        if (!run.current) return null;
+        const loaded = res.parameters ?? [];
+        setRows(loaded);
+        setNextToken(res.next_page_token ?? "");
+        setLoadedScope(scope);
+        return loaded;
       } catch (err) {
-        if (!isAbortError(err) && loadController.current === controller) {
-          setRows([]);
-          setNextToken("");
-          toast.error(err, "Failed to load parameters");
-        }
+        if (!run.current || isAbortError(err)) return null;
+        setRows([]);
+        setNextToken("");
+        setLoadedScope(scope);
+        toast.error(err, "Failed to load parameters");
+        return null;
       } finally {
-        if (loadController.current === controller) {
-          loadController.current = null;
-          setLoading(false);
-        }
+        if (run.current) setLoading(false);
       }
     },
-    [toast],
+    [request, setNextToken, toast],
   );
 
   useEffect(() => {
     void load(pageToken, ns, prefix);
-    return () => loadController.current?.abort();
   }, [load, pageToken, ns, prefix]);
 
   function onSelectNamespace(next: NamespaceSelection) {
     setNs(next);
     setRows([]);
-    setNextToken("");
     setDeleteTarget(null);
-    setPageStack([]);
-    setPageToken("");
+    replaceQuery({ env: next.env, app: next.app });
   }
   function applyFilter(e: React.FormEvent) {
     e.preventDefault();
     setPrefixTouched(true);
     if (prefixError) return;
+    const next = prefixInput.trim();
     setRows([]);
-    setNextToken("");
     setDeleteTarget(null);
-    setPageStack([]);
-    setPageToken("");
-    setPrefix(prefixInput.trim());
+    setPrefix(next);
+    replaceQuery({ key_prefix: next });
   }
   function clearFilter() {
     setPrefixInput("");
     setPrefixTouched(false);
     setRows([]);
-    setNextToken("");
     setDeleteTarget(null);
-    setPageStack([]);
-    setPageToken("");
     setPrefix("");
-  }
-  function goNext() {
-    if (!nextToken) return;
-    setPageStack((s) => [...s, pageToken]);
-    setPageToken(nextToken);
-  }
-  function goPrevious() {
-    const previous = pageStack[pageStack.length - 1];
-    if (previous === undefined) return;
-    setPageStack((s) => s.slice(0, -1));
-    setPageToken(previous);
-  }
-  function goReset() {
-    setPageStack([]);
-    setPageToken("");
+    replaceQuery({ key_prefix: "" });
   }
 
   function openCreate() {
@@ -225,20 +216,15 @@ export default function ParametersPage() {
     setValue("");
     setContentType("string");
     setMetadataJson("{}");
-    setTouched({});
-    setSubmitAttempted(false);
+    errors.reset();
     setCreateOpen(true);
   }
 
   async function onCreate(e: React.FormEvent) {
     e.preventDefault();
-    setSubmitAttempted(true);
-    if (!createNs.env || !createNs.app) {
-      toast.error(new Error("Choose an environment for the parameter."), "Missing environment");
-      return;
-    }
-    // Every remaining problem now has an inline message next to its field.
-    if (createError) return;
+    errors.markAllTouched();
+    // Every problem now has an inline message beside the field that caused it.
+    if (!createNs.env || !createNs.app || createError) return;
     const k = key.trim();
     setSaving(true);
     try {
@@ -257,7 +243,7 @@ export default function ParametersPage() {
       setCreateOpen(false);
       // If the new parameter lands in the currently viewed namespace, refresh.
       if (createNs.env === ns.env && createNs.app === ns.app) {
-        goReset();
+        paging.reset();
         await load("", ns, prefix);
       }
     } catch (err) {
@@ -278,13 +264,24 @@ export default function ParametersPage() {
       });
       toast.success("Parameter deleted", deleteTarget.key);
       setDeleteTarget(null);
-      await load(pageToken, ns, prefix);
+      // Deleting the last row of page N would otherwise strand the operator on
+      // an empty page with no way forward.
+      const remaining = await load(pageToken, ns, prefix);
+      if (remaining !== null && remaining.length === 0 && paging.hasPrevious) paging.previous();
     } catch (err) {
       toast.error(err, "Failed to delete parameter");
     } finally {
       setDeleting(false);
     }
   }
+
+  // A deep link's env/app land one frame after mount, so "Choose an
+  // environment" would flash before the list it asked for.
+  const awaitingDeepLink = !seeded && (!queryReady || !!queryValues.env || !!queryValues.app);
+  // A response has arrived for exactly this namespace/prefix/page. Gating on
+  // this rather than on `loading` keeps the empty state from flashing before
+  // the first request has even started.
+  const settled = loadedScope === requestScope(ns, prefix, pageToken);
 
   return (
     <>
@@ -295,7 +292,15 @@ export default function ParametersPage() {
       />
 
       <form className="filters" onSubmit={applyFilter}>
-        <NamespacePicker namespaces={namespaces} value={ns} onChange={onSelectNamespace} />
+        {/* The create modal mounts a second picker, so both need their own ids
+            or a <label for> resolves to whichever control rendered first. */}
+        <NamespacePicker
+          namespaces={namespaces}
+          value={ns}
+          onChange={onSelectNamespace}
+          appId="filter-app"
+          envId="filter-env"
+        />
         <div className="filter-grow">
           {/* Keep this toolbar compact; the prefix rule rides on the placeholder
               and validation message instead of a permanently visible hint. */}
@@ -321,11 +326,13 @@ export default function ParametersPage() {
         </Button>
       </form>
 
-      {!hasNs ? (
+      {awaitingDeepLink ? (
+        <TableSkeleton headers={["Key", "Version", "Type", "Labels", "Created"]} />
+      ) : !hasNs ? (
         <EmptyState icon={<Icon.namespace size={20} />} title="Choose an environment">
           Pick an application and environment above to list its parameters.
         </EmptyState>
-      ) : loading ? (
+      ) : !settled || loading ? (
         <TableSkeleton headers={["Key", "Version", "Type", "Labels", "Created"]} />
       ) : rows.length === 0 ? (
         <EmptyState
@@ -363,7 +370,7 @@ export default function ParametersPage() {
               {rows.map((p) => (
                 <tr key={p.key}>
                   <td data-label="Key">
-                    <Link className="cell-path" href={detailLink(p)}>
+                    <Link className="cell-path" href={links.parameterDetail(p)}>
                       {p.key}
                     </Link>
                   </td>
@@ -385,7 +392,7 @@ export default function ParametersPage() {
                   </td>
                   <td>
                     <div className="row-actions">
-                      <ButtonLink variant="outline" size="sm" href={detailLink(p)}>
+                      <ButtonLink variant="outline" size="sm" href={links.parameterDetail(p)}>
                         <Eye size={14} aria-hidden />
                         Details
                       </ButtonLink>
@@ -403,18 +410,20 @@ export default function ParametersPage() {
       )}
 
       <Pagination
-        hasNext={!!nextToken}
-        onNext={goNext}
-        hasPrevious={pageStack.length > 0}
-        onPrevious={goPrevious}
-        onReset={goReset}
-        showReset={pageStack.length > 0}
+        hasNext={paging.hasNext}
+        onNext={paging.next}
+        hasPrevious={paging.hasPrevious}
+        onPrevious={paging.previous}
+        onReset={paging.reset}
+        showReset={paging.hasPrevious}
+        page={paging.page}
       />
 
       <Modal
         open={createOpen}
         title="New parameter"
         onClose={() => setCreateOpen(false)}
+        dismissible={!saving}
         footer={
           <>
             <Button variant="outline" onClick={() => setCreateOpen(false)} disabled={saving}>
@@ -429,7 +438,15 @@ export default function ParametersPage() {
       >
         <form onSubmit={onCreate}>
           <div className="form-row">
-            <NamespacePicker namespaces={namespaces} value={createNs} onChange={setCreateNs} />
+            <NamespacePicker
+              namespaces={namespaces}
+              value={createNs}
+              onChange={setCreateNs}
+              appId="create-app"
+              envId="create-env"
+              appError={shownCreateAppError}
+              envError={shownCreateEnvError}
+            />
           </div>
           <Field
             label="Key"
@@ -440,7 +457,7 @@ export default function ParametersPage() {
               className="font-mono"
               value={key}
               onChange={(e) => setKey(e.target.value)}
-              onBlur={() => markTouched("key")}
+              onBlur={() => errors.touch("key")}
               placeholder="rate-limit"
             />
           </Field>
@@ -449,7 +466,7 @@ export default function ParametersPage() {
               className="font-mono"
               value={value}
               onChange={(e) => setValue(e.target.value)}
-              onBlur={() => markTouched("value")}
+              onBlur={() => errors.touch("value")}
               placeholder="100"
             />
           </Field>
@@ -459,7 +476,7 @@ export default function ParametersPage() {
                 value={contentType}
                 onValueChange={(nextContentType) => {
                   setContentType(nextContentType);
-                  markTouched("contentType");
+                  errors.touch("contentType");
                 }}
                 options={PARAMETER_CONTENT_TYPES.map((contentTypeOption) => ({
                   value: contentTypeOption,
@@ -472,7 +489,7 @@ export default function ParametersPage() {
                 className="font-mono"
                 value={metadataJson}
                 onChange={(e) => setMetadataJson(e.target.value)}
-                onBlur={() => markTouched("metadata")}
+                onBlur={() => errors.touch("metadata")}
               />
             </Field>
           </div>
