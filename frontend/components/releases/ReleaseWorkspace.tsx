@@ -1,34 +1,17 @@
-import { RefreshCw } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import CopyButton from "@/components/CopyButton";
+import { NamespaceIdent, ReleaseIdent } from "@/components/Ident";
 import { Modal } from "@/components/Modal";
-import { Badge, Button, Field, Pagination, Spinner } from "@/components/ui";
+import { RolloutPanel } from "@/components/ship/RolloutPanel";
+import { Badge, Button, Field, Spinner } from "@/components/ui";
 import { AppSelect } from "@/components/ui/app-select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { useToast } from "@/context/ToastContext";
-import { api, isAbortError } from "@/lib/api";
 import { formatUnixMs } from "@/lib/format";
-import { useCursorPagination, useLatestRequest } from "@/lib/hooks";
-import { groupSubscriberLifecycles } from "@/lib/subscribers";
-import type { ConfigurationRelease, ReleaseSubscriberState, ReleaseSummary } from "@/lib/types";
+import type { ConfigurationRelease, ReleaseSummary } from "@/lib/types";
 import { refText, releaseKey } from "./utils";
 import { type ActivationFailure, ActivationFailurePanel } from "./ViolationTable";
 
 export type { ActivationFailure } from "./ViolationTable";
-
-function lifecycleCell(state: ReleaseSubscriberState | undefined) {
-  if (!state) return <span className="faint">—</span>;
-  const prefix =
-    state.state === "rejected" && state.rejection_category ? `${state.rejection_category} · ` : "";
-  const summary = `${prefix}v${state.release_version} · r${state.activation_revision}`;
-  if (!state.diagnostic) return summary;
-  return (
-    <details>
-      <summary>{summary}</summary>
-      <div className="text-sm">{state.diagnostic}</div>
-    </details>
-  );
-}
 
 export function ReleaseWorkspace({
   summary,
@@ -39,6 +22,7 @@ export function ReleaseWorkspace({
   onClose,
   onValidate,
   onActivate,
+  onRollback,
 }: {
   summary: ReleaseSummary | null;
   releases: ReleaseSummary[];
@@ -48,8 +32,9 @@ export function ReleaseWorkspace({
   onClose: () => void;
   onValidate: (release: ConfigurationRelease) => void;
   onActivate: (summary: ReleaseSummary) => void;
+  /** Roll back to the previous version of this name; shown only for the current release. */
+  onRollback?: (current: ReleaseSummary, previous: ReleaseSummary) => void;
 }) {
-  const toast = useToast();
   const release = summary?.release ?? null;
   // Stable identity for the open release: the summary object is replaced by
   // every list refresh, and resetting on that would bounce the user back to
@@ -58,14 +43,6 @@ export function ReleaseWorkspace({
   const [section, setSection] = useState("overview");
   // "" means "use the derived default" (the next-lower version, if loaded).
   const [compareKey, setCompareKey] = useState("");
-  const { begin } = useLatestRequest();
-  const [subscribers, setSubscribers] = useState<ReleaseSubscriberState[]>([]);
-  const [subscriberRevision, setSubscriberRevision] = useState(0);
-  const [subscribersLoading, setSubscribersLoading] = useState(false);
-  const subscriberScope = release
-    ? JSON.stringify([release.namespace.env, release.namespace.app, release.name])
-    : "";
-  const subscriberPaging = useCursorPagination(subscriberScope);
 
   const sameNameReleases = useMemo(
     () =>
@@ -81,8 +58,6 @@ export function ReleaseWorkspace({
   useEffect(() => {
     setSection("overview");
     setCompareKey("");
-    setSubscribers([]);
-    setSubscriberRevision(0);
   }, [key]);
 
   const defaultCompareKey = useMemo(() => {
@@ -92,35 +67,6 @@ export function ReleaseWorkspace({
     return previous ? releaseKey(previous.release) : "";
   }, [release, sameNameReleases]);
   const effectiveCompareKey = compareKey || defaultCompareKey;
-
-  const loadSubscribers = useCallback(async () => {
-    if (!release) return;
-    const run = begin();
-    setSubscribersLoading(true);
-    try {
-      const response = await api.releaseSubscribers(
-        release.namespace,
-        release.name,
-        1000,
-        subscriberPaging.pageToken || undefined,
-        { signal: run.signal },
-      );
-      if (!run.current) return;
-      setSubscribers(response.subscribers ?? []);
-      setSubscriberRevision(response.current_revision ?? 0);
-      subscriberPaging.setNextToken(response.next_page_token ?? "");
-    } catch (error) {
-      if (run.current && !isAbortError(error)) {
-        toast.error(error, "Failed to load rollout status");
-      }
-    } finally {
-      if (run.current) setSubscribersLoading(false);
-    }
-  }, [begin, release, subscriberPaging.pageToken, subscriberPaging.setNextToken, toast]);
-
-  useEffect(() => {
-    if (section === "rollout" && release) void loadSubscribers();
-  }, [loadSubscribers, release, section]);
 
   const comparison = sameNameReleases.find(
     (candidate) => releaseKey(candidate.release) === effectiveCompareKey,
@@ -143,7 +89,9 @@ export function ReleaseWorkspace({
     });
   }, [comparison, release]);
 
-  const subscriberInstances = useMemo(() => groupSubscriberLifecycles(subscribers), [subscribers]);
+  const previousSummary = summary?.current
+    ? sameNameReleases.find((candidate) => candidate.previous)
+    : undefined;
 
   return (
     <Modal
@@ -171,6 +119,16 @@ export function ReleaseWorkspace({
                 {busyAction === `validate:${releaseKey(release)}` ? <Spinner /> : null}
                 Validate
               </Button>
+              {onRollback && summary.current && previousSummary ? (
+                <Button
+                  variant="destructive"
+                  size="sm"
+                  disabled={Boolean(busyAction)}
+                  onClick={() => onRollback(summary, previousSummary)}
+                >
+                  Roll back to previous
+                </Button>
+              ) : null}
               <Button
                 size="sm"
                 disabled={summary.current || Boolean(busyAction)}
@@ -212,8 +170,12 @@ export function ReleaseWorkspace({
             </div>
             <dl className="kv card mt-4">
               <dt>Namespace</dt>
-              <dd className="mono">
-                {release.namespace.env}/{release.namespace.app}
+              <dd>
+                <NamespaceIdent ns={release.namespace} />
+              </dd>
+              <dt>Release</dt>
+              <dd>
+                <ReleaseIdent name={release.name} version={release.version} />
               </dd>
               <dt>Created</dt>
               <dd>{formatUnixMs(release.created_at_unix_ms)}</dd>
@@ -318,78 +280,23 @@ export function ReleaseWorkspace({
           </TabsContent>
 
           <TabsContent value="rollout">
-            <div className="between mb-3">
-              <div className="text-sm faint">
-                Activation revision {subscriberRevision || "—"} · up to 1,000 state rows per page
-              </div>
-              <Button
-                variant="outline"
-                size="sm"
-                disabled={subscribersLoading}
-                onClick={() => void loadSubscribers()}
-              >
-                {subscribersLoading ? <Spinner /> : <RefreshCw size={15} aria-hidden />}
-                Refresh
-              </Button>
-            </div>
-            {subscribersLoading ? (
-              <div className="loading-block" role="status">
-                <Spinner /> Loading rollout status…
-              </div>
-            ) : subscriberInstances.length === 0 ? (
-              <div className="faint">No subscriber state recorded.</div>
-            ) : (
-              <div className="table-wrap">
-                <table className="data">
-                  <thead>
-                    <tr>
-                      <th>Identity</th>
-                      <th>Client</th>
-                      <th>Instance</th>
-                      <th>Received</th>
-                      <th>Prepared</th>
-                      <th>Applied</th>
-                      <th>Rejected</th>
-                      <th>Connection</th>
-                      <th>Lag</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {subscriberInstances.map((instance) => (
-                      <tr
-                        key={JSON.stringify([
-                          instance.identity,
-                          instance.client_name,
-                          instance.instance_id,
-                        ])}
-                      >
-                        <td>{instance.identity}</td>
-                        <td>{instance.client_name}</td>
-                        <td className="mono">{instance.instance_id}</td>
-                        <td className="mono">{lifecycleCell(instance.states.received)}</td>
-                        <td className="mono">{lifecycleCell(instance.states.prepared)}</td>
-                        <td className="mono">{lifecycleCell(instance.states.applied)}</td>
-                        <td className="mono">{lifecycleCell(instance.states.rejected)}</td>
-                        <td>
-                          <Badge kind={instance.connected ? "success" : "neutral"}>
-                            {instance.connected ? "connected" : "disconnected"}
-                          </Badge>
-                        </td>
-                        <td>{Math.max(0, subscriberRevision - instance.latestRevision)}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
-            <Pagination
-              hasNext={!subscribersLoading && subscriberPaging.hasNext}
-              onNext={subscriberPaging.next}
-              hasPrevious={!subscribersLoading && subscriberPaging.hasPrevious}
-              onPrevious={subscriberPaging.previous}
-              onReset={subscriberPaging.reset}
-              showReset={!subscribersLoading && subscriberPaging.hasPrevious}
-              page={subscriberPaging.page}
+            {/* The hook streams (or polls) only while this tab is open. */}
+            <RolloutPanel
+              namespace={release.namespace}
+              releaseName={release.name}
+              activationRevision={summary.activation_revision}
+              enabled={section === "rollout"}
+              caption={
+                summary.current
+                  ? "Live state for every instance subscribed to this release name, up to 1,000 rows."
+                  : "This version is not active; instances report against the current activation. Up to 1,000 rows."
+              }
+              onRollback={
+                onRollback && summary.current && previousSummary
+                  ? () => onRollback(summary, previousSummary)
+                  : undefined
+              }
+              rollbackDisabled={Boolean(busyAction)}
             />
           </TabsContent>
         </Tabs>

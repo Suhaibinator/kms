@@ -1,6 +1,422 @@
 /* Feature styles for the ship surfaces. Append only; every rule stays inside
-   the layer so Tailwind utilities keep winning. */
+   the layer so Tailwind utilities keep winning. Families: .ship-* (modal,
+   editor, preview, outcomes), .rollout-* (rollout panel), .conflict-* (CAS
+   conflict panel), .rollback-* (rollback dialog). Colours come from the
+   theme tokens only, so light and dark need no separate rules. */
 
 @layer components {
-  /* owned by lane F-ship */
+  /* --- Modal chrome ------------------------------------------------------ */
+  .ship-modal {
+    display: grid;
+    gap: var(--space-5);
+  }
+  .ship-title {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
+    flex-wrap: wrap;
+  }
+  .ship-mode-row {
+    display: flex;
+    justify-content: flex-end;
+    margin-bottom: calc(var(--space-3) * -1);
+  }
+  .ship-mode-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
+    color: var(--text-muted);
+    font-size: 12.5px;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  .ship-steps .wizard-steps {
+    margin-bottom: var(--space-3);
+  }
+  .ship-step-blurb {
+    margin: 0;
+    padding: var(--space-3) var(--space-4);
+    background: var(--bg-elev);
+    border: 1px solid var(--border);
+    border-left: 3px solid var(--primary);
+    border-radius: var(--radius);
+    color: var(--text-muted);
+    font-size: 13px;
+    line-height: 1.5;
+  }
+  .ship-section-title {
+    margin: 0;
+    font-size: 14px;
+    font-weight: 700;
+    color: var(--text);
+  }
+  .ship-subtitle {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    margin: 0 0 var(--space-2);
+    color: var(--text-muted);
+    font-size: 11.5px;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+  }
+  .ship-link {
+    color: var(--primary);
+    font-weight: 600;
+    text-decoration: underline;
+    text-underline-offset: 3px;
+  }
+
+  /* --- Change step (editor) ---------------------------------------------- */
+  .ship-editor {
+    display: grid;
+    gap: var(--space-4);
+  }
+  .ship-env-row {
+    display: flex;
+    align-items: flex-end;
+    gap: var(--space-4);
+    flex-wrap: wrap;
+  }
+  .ship-env-field {
+    flex: 1 1 220px;
+    max-width: 320px;
+    margin-bottom: 0;
+  }
+  .ship-env-summary {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    flex-wrap: wrap;
+    padding-bottom: 6px;
+  }
+  .ship-blockers,
+  .ship-rows,
+  .ship-writes,
+  .ship-optins,
+  .conflict-written {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: grid;
+    gap: var(--space-3);
+  }
+  .ship-blocker {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    padding: var(--space-3) var(--space-4);
+    background: var(--danger-soft, color-mix(in oklab, var(--danger) 12%, transparent));
+    border: 1px solid var(--danger);
+    border-radius: var(--radius);
+  }
+  .ship-blocker-body {
+    flex: 1 1 auto;
+    min-width: 0;
+    font-size: 13px;
+    line-height: 1.5;
+  }
+  .ship-row {
+    display: grid;
+    gap: var(--space-3);
+    padding: var(--space-4);
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+  }
+  .ship-row .field {
+    margin-bottom: 0;
+  }
+  .ship-row-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-3);
+    flex-wrap: wrap;
+  }
+  .ship-row-idents,
+  .ship-row-meta {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    flex-wrap: wrap;
+    min-width: 0;
+  }
+  .ship-row-type {
+    font-family: var(--font-mono);
+    text-transform: none;
+  }
+  .ship-row-reuse {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-3);
+    font-size: 13px;
+  }
+  .ship-row-tools {
+    display: flex;
+    justify-content: flex-end;
+  }
+  .ship-value-editor {
+    min-height: 88px;
+    resize: vertical;
+    tab-size: 2;
+  }
+  .ship-add-row {
+    max-width: 320px;
+  }
+  .ship-empty-rows {
+    margin: 0;
+  }
+
+  /* --- Preview step ------------------------------------------------------ */
+  .ship-preview {
+    display: grid;
+    gap: var(--space-4);
+    padding: var(--space-4);
+    background: var(--bg-elev);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    transition: opacity 120ms ease;
+  }
+  .ship-preview.is-stale .ship-preview-body {
+    opacity: 0.55;
+  }
+  .ship-preview-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-3);
+    flex-wrap: wrap;
+  }
+  .ship-preview-status {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    flex-wrap: wrap;
+  }
+  .ship-preview-body {
+    display: grid;
+    gap: var(--space-4);
+  }
+  .ship-preview-section > p {
+    margin: 0 0 var(--space-2);
+  }
+  .ship-write {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    font-size: 13px;
+  }
+  .ship-entries tr.ship-entry-changed td {
+    background: color-mix(in oklab, var(--primary) 9%, transparent);
+  }
+  .ship-entries tr.ship-entry-changed td:first-child {
+    box-shadow: inset 3px 0 0 var(--primary);
+  }
+  .ship-optin {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
+    font-size: 13px;
+    cursor: pointer;
+  }
+  .ship-optin code {
+    color: var(--text);
+  }
+  .ship-facts {
+    display: grid;
+    grid-template-columns: max-content 1fr;
+    gap: var(--space-2) var(--space-4);
+    margin: 0;
+    font-size: 13px;
+  }
+  .ship-facts dt {
+    color: var(--text-muted);
+    font-weight: 600;
+  }
+  .ship-facts dd {
+    margin: 0;
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+  .ship-valid {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+  }
+  .ship-warnings {
+    margin: 0;
+  }
+
+  /* --- Ship step (confirm + outcomes) ------------------------------------ */
+  .ship-confirm {
+    max-width: 320px;
+    margin-bottom: 0;
+  }
+  .ship-outcome {
+    display: grid;
+    gap: var(--space-3);
+  }
+  .ship-outcome p {
+    margin: 0;
+  }
+  .ship-outcome-actions,
+  .conflict-actions {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: var(--space-2);
+    flex-wrap: wrap;
+  }
+  .ship-activation-line {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    flex-wrap: wrap;
+  }
+
+  /* --- Conflict panel ---------------------------------------------------- */
+  .conflict-panel {
+    display: grid;
+    gap: var(--space-3);
+  }
+  .conflict-head strong {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    flex-wrap: wrap;
+    line-height: 1.6;
+  }
+  .conflict-detail {
+    margin: var(--space-2) 0 0;
+    color: var(--text-muted);
+  }
+  .conflict-facts {
+    display: grid;
+    grid-template-columns: max-content 1fr;
+    gap: var(--space-2) var(--space-4);
+    margin: 0;
+    font-size: 13px;
+  }
+  .conflict-facts dt {
+    color: var(--text-muted);
+    font-weight: 600;
+  }
+  .conflict-facts dd {
+    margin: 0;
+  }
+  .conflict-written li {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+  }
+
+  /* --- Rollout panel ----------------------------------------------------- */
+  .rollout-panel {
+    display: grid;
+    gap: var(--space-3);
+  }
+  .rollout-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-3);
+    flex-wrap: wrap;
+  }
+  .rollout-progress {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    flex-wrap: wrap;
+    font-size: 15px;
+  }
+  .rollout-tools {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    flex-wrap: wrap;
+  }
+  .rollout-caption,
+  .rollout-empty {
+    margin: 0;
+  }
+  .rollout-instance,
+  .rollout-state {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    flex-wrap: wrap;
+  }
+  .rollout-table tr.rollout-rejected td {
+    background: color-mix(in oklab, var(--danger) 8%, transparent);
+  }
+  .rollout-table tr.rollout-rejected td:first-child {
+    box-shadow: inset 3px 0 0 var(--danger);
+  }
+  .rollout-category {
+    font-family: var(--font-mono);
+    text-transform: none;
+    cursor: help;
+  }
+  .rollout-category-tip {
+    display: inline-flex;
+    border-radius: var(--radius);
+  }
+  .rollout-remedy {
+    display: grid;
+    gap: 4px;
+  }
+  .rollout-diagnostic {
+    color: var(--text-muted);
+    font-size: 12px;
+    overflow-wrap: anywhere;
+  }
+
+  /* --- Rollback dialog --------------------------------------------------- */
+  .rollback-dialog {
+    display: grid;
+    gap: var(--space-3);
+  }
+  .rollback-check {
+    min-height: 24px;
+  }
+  .rollback-check .row-wrap {
+    align-items: center;
+  }
+
+  /* --- Mobile ------------------------------------------------------------ */
+  @media (max-width: 640px) {
+    .ship-env-field,
+    .ship-add-row,
+    .ship-confirm {
+      max-width: none;
+    }
+    .ship-facts,
+    .conflict-facts {
+      grid-template-columns: 1fr;
+      gap: var(--space-1);
+    }
+    .ship-facts dt,
+    .conflict-facts dt {
+      margin-top: var(--space-2);
+    }
+    .ship-row-reuse,
+    .ship-blocker {
+      flex-direction: column;
+      align-items: flex-start;
+    }
+    .rollout-progress {
+      font-size: 14px;
+    }
+    .ship-outcome-actions,
+    .conflict-actions {
+      justify-content: stretch;
+    }
+    .ship-outcome-actions > *,
+    .conflict-actions > * {
+      flex: 1 1 auto;
+    }
+  }
 }

@@ -1,5 +1,6 @@
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { ApiError } from "@/lib/api";
 import ReleasesPage from "@/pages/releases";
 
 const mocks = vi.hoisted(() => ({
@@ -10,6 +11,9 @@ const mocks = vi.hoisted(() => ({
   getActiveRelease: vi.fn(),
   activateRelease: vi.fn(),
   releaseSubscribers: vi.fn(),
+  subscriberStream: vi.fn(),
+  getRelease: vi.fn(),
+  rollbackRelease: vi.fn(),
   applicationDashboard: vi.fn(),
   parameterMetadata: vi.fn(),
   secretMetadata: vi.fn(),
@@ -63,6 +67,9 @@ vi.mock("@/lib/api", async (importOriginal) => {
       getActiveRelease: mocks.getActiveRelease,
       activateRelease: mocks.activateRelease,
       releaseSubscribers: mocks.releaseSubscribers,
+      subscriberStream: mocks.subscriberStream,
+      getRelease: mocks.getRelease,
+      rollbackRelease: mocks.rollbackRelease,
       applicationDashboard: mocks.applicationDashboard,
       parameterMetadata: mocks.parameterMetadata,
       secretMetadata: mocks.secretMetadata,
@@ -152,6 +159,8 @@ describe("ReleasesPage", () => {
       current_revision: 0,
       next_page_token: "",
     });
+    // No stream endpoint: the rollout hook falls back to polling at once.
+    mocks.subscriberStream.mockRejectedValue(new ApiError("unimplemented", "no stream", 404));
   });
 
   it("loads the URL-selected schema tab lazily and keeps schema JSON out of the table", async () => {
@@ -223,7 +232,8 @@ describe("ReleasesPage", () => {
     expect(within(dialog).getByText(/new-digest/)).toBeVisible();
 
     fireEvent.click(within(dialog).getByRole("tab", { name: "Rollout status" }));
-    expect(await within(dialog).findByText("api-1")).toBeVisible();
+    expect(await within(dialog).findByText("api/api-1")).toBeVisible();
+    expect(within(dialog).getByTestId("rollout-progress")).toHaveTextContent("1/1 applied");
     expect(mocks.releaseSubscribers).toHaveBeenCalledWith(
       releaseV2.namespace,
       "runtime",
@@ -485,5 +495,148 @@ describe("ReleasesPage", () => {
     dialog = await screen.findByRole("dialog", { name: "Register JSON Schema" });
     const reopened = within(dialog).getByRole("textbox", { name: "JSON Schema definition" });
     expect((reopened as HTMLTextAreaElement).value).toContain('"type": "object"');
+  });
+  it("renders release, schema and revision identifiers as typed chips with breadcrumbs", async () => {
+    mocks.query = { app: "payments", env: "prod", name: "runtime" };
+    mocks.listReleases.mockResolvedValue({
+      releases: [
+        { release: releaseV2, current: true, previous: false, activation_revision: 8 },
+        { release: releaseV1, current: false, previous: true, activation_revision: 7 },
+      ],
+      next_page_token: "",
+    });
+
+    render(<ReleasesPage />);
+    await screen.findAllByText("runtime@2");
+    const table = screen.getByRole("table");
+    const chips = table.querySelectorAll(".ident.ident-release");
+    expect(chips).toHaveLength(2);
+    expect(chips[0]).toHaveTextContent("runtime@2");
+    expect(table.querySelector(".ident.ident-schema")).toHaveTextContent("payments/runtime@1");
+
+    const nav = screen.getByRole("navigation", { name: "Breadcrumb" });
+    expect(nav).toHaveTextContent("Applications");
+    expect(nav.querySelector(".ident-app")).toHaveTextContent("payments");
+    expect(nav.querySelector(".ident-env")).toHaveTextContent("prod");
+  });
+
+  it("opens a ?release= deep link that is not in the loaded page by fetching it", async () => {
+    mocks.query = { app: "payments", env: "prod", name: "runtime", release: "runtime@1" };
+    mocks.listReleases.mockResolvedValue({
+      releases: [{ release: releaseV2, current: true, previous: false, activation_revision: 8 }],
+      next_page_token: "",
+    });
+    mocks.getRelease.mockResolvedValue({ release: releaseV1 });
+    mocks.getActiveRelease.mockResolvedValue({
+      release: releaseV2,
+      activation_revision: 8,
+      previous_version: 1,
+    });
+
+    render(<ReleasesPage />);
+    const dialog = await screen.findByRole("dialog", { name: "Release runtime@1" });
+    expect(mocks.getRelease).toHaveBeenCalledWith({ env: "prod", app: "payments" }, "runtime", 1);
+    expect(within(dialog).getByText("previous")).toBeVisible();
+
+    // Closing writes the parameter back out of the URL.
+    fireEvent.click(within(dialog).getByRole("button", { name: "Dismiss dialog" }));
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog", { name: "Release runtime@1" })).toBeNull(),
+    );
+    expect(mocks.replace).toHaveBeenLastCalledWith(
+      {
+        pathname: "/releases",
+        query: { app: "payments", env: "prod", name: "runtime" },
+      },
+      undefined,
+      { shallow: true, scroll: false },
+    );
+  });
+
+  it("writes ?release= when a release is viewed from the table", async () => {
+    mocks.query = { app: "payments", env: "prod", name: "runtime" };
+    mocks.listReleases.mockResolvedValue({
+      releases: [{ release: releaseV2, current: true, previous: false, activation_revision: 8 }],
+      next_page_token: "",
+    });
+    render(<ReleasesPage />);
+    fireEvent.click(await screen.findByRole("button", { name: "View" }));
+    expect(mocks.replace).toHaveBeenLastCalledWith(
+      {
+        pathname: "/releases",
+        query: { app: "payments", env: "prod", name: "runtime", release: "runtime@2" },
+      },
+      undefined,
+      { shallow: true, scroll: false },
+    );
+  });
+
+  it("rolls back through the RollbackDialog with pre-validation and a CAS guard", async () => {
+    mocks.query = { app: "payments", env: "prod", name: "runtime" };
+    mocks.listReleases.mockResolvedValue({
+      releases: [
+        { release: releaseV2, current: true, previous: false, activation_revision: 8 },
+        { release: releaseV1, current: false, previous: true, activation_revision: 7 },
+      ],
+      next_page_token: "",
+    });
+    mocks.validateRelease.mockResolvedValue({ valid: true, errors: [] });
+    mocks.rollbackRelease.mockResolvedValue({
+      release: releaseV1,
+      activation_revision: 9,
+      previous_version: 2,
+      rolled_back_from: 2,
+      changed: true,
+    });
+
+    render(<ReleasesPage />);
+    fireEvent.click(await screen.findByRole("button", { name: "Roll back to previous" }));
+    const dialog = await screen.findByRole("dialog", { name: "Roll back release?" });
+    await waitFor(() =>
+      expect(mocks.validateRelease).toHaveBeenCalledWith(
+        { env: "prod", app: "payments" },
+        "runtime",
+        1,
+      ),
+    );
+    await within(dialog).findByText("is valid and can be activated.");
+    const confirm = within(dialog).getByTestId("rollback-confirm");
+    expect(confirm).toBeDisabled();
+    fireEvent.change(within(dialog).getByTestId("rollback-confirm-env"), {
+      target: { value: "prod" },
+    });
+    expect(confirm).toBeEnabled();
+    fireEvent.click(confirm);
+
+    await waitFor(() =>
+      expect(mocks.rollbackRelease).toHaveBeenCalledWith({
+        env: "prod",
+        app: "payments",
+        name: "runtime",
+        expected_current_version: 2,
+      }),
+    );
+    // The legacy activate-based rollback is gone: no getActiveRelease/activateRelease round trip.
+    expect(mocks.activateRelease).not.toHaveBeenCalled();
+    await waitFor(() => expect(mocks.listReleases).toHaveBeenCalledTimes(2));
+    expect(mocks.toast.success).toHaveBeenCalledWith("Rolled back runtime to version 1");
+  });
+
+  it("offers Roll back to previous inside the workspace of the current release", async () => {
+    mocks.query = { app: "payments", env: "prod", name: "runtime" };
+    mocks.listReleases.mockResolvedValue({
+      releases: [
+        { release: releaseV2, current: true, previous: false, activation_revision: 8 },
+        { release: releaseV1, current: false, previous: true, activation_revision: 7 },
+      ],
+      next_page_token: "",
+    });
+    mocks.validateRelease.mockResolvedValue({ valid: true, errors: [] });
+
+    render(<ReleasesPage />);
+    fireEvent.click((await screen.findAllByRole("button", { name: "View" }))[0]);
+    const workspace = screen.getByRole("dialog", { name: "Release runtime@2" });
+    fireEvent.click(within(workspace).getByRole("button", { name: "Roll back to previous" }));
+    expect(await screen.findByRole("dialog", { name: "Roll back release?" })).toBeVisible();
   });
 });
