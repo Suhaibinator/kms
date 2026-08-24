@@ -1,72 +1,75 @@
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { ShipModalProps } from "@/components/applications/contracts";
+import { ApiError } from "@/lib/api";
+import type { ApplicationOverview, EnvironmentOverview } from "@/lib/types";
 import ApplicationsPage from "@/pages/applications";
+import incidentJson from "./fixtures/backend/overview-incident.json";
+import readyJson from "./fixtures/backend/overview-ready.json";
+import setupJson from "./fixtures/backend/overview-setup.json";
 
-const mocks = vi.hoisted(() => {
-  class ApiError extends Error {
-    readonly code: string;
-    readonly status: number;
-    constructor(code: string, message: string, status: number) {
-      super(message);
-      this.name = "ApiError";
-      this.code = code;
-      this.status = status;
-    }
-  }
-  return {
-    ApiError,
-    query: {} as Record<string, string>,
-    isReady: true,
-    push: vi.fn(async () => true),
-    listApplications: vi.fn(),
-    applicationDashboard: vi.fn(),
-    createApplication: vi.fn(),
-    createSecret: vi.fn(),
-    putApplicationParameter: vi.fn(),
-    toast: { success: vi.fn(), info: vi.fn(), error: vi.fn() },
-  };
-});
+const mocks = vi.hoisted(() => ({
+  query: {} as Record<string, string>,
+  isReady: true,
+  push: vi.fn(async () => true),
+  replace: vi.fn(async () => true),
+  listApplications: vi.fn(),
+  applicationOverview: vi.fn(),
+  createNamespace: vi.fn(),
+  createSecret: vi.fn(),
+  putApplicationParameter: vi.fn(),
+  health: vi.fn(),
+  shipModal: vi.fn(),
+  toast: { success: vi.fn(), info: vi.fn(), error: vi.fn() },
+}));
 
 vi.mock("next/router", () => ({
-  useRouter: () => ({ query: mocks.query, isReady: mocks.isReady, push: mocks.push }),
+  useRouter: () => ({
+    query: mocks.query,
+    pathname: "/applications",
+    isReady: mocks.isReady,
+    push: mocks.push,
+    replace: mocks.replace,
+  }),
 }));
 vi.mock("@/context/ToastContext", () => ({ useToast: () => mocks.toast }));
-vi.mock("@/lib/api", () => ({
-  ApiError: mocks.ApiError,
-  isAbortError: () => false,
-  api: {
-    listApplications: mocks.listApplications,
-    applicationDashboard: mocks.applicationDashboard,
-    createApplication: mocks.createApplication,
-    createSecret: mocks.createSecret,
-    putApplicationParameter: mocks.putApplicationParameter,
+vi.mock("@/lib/api", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/api")>();
+  return {
+    ...actual,
+    isAbortError: () => false,
+    api: {
+      ...actual.api,
+      listApplications: mocks.listApplications,
+      applicationOverview: mocks.applicationOverview,
+      createNamespace: mocks.createNamespace,
+      createSecret: mocks.createSecret,
+      putApplicationParameter: mocks.putApplicationParameter,
+      health: mocks.health,
+    },
+  };
+});
+vi.mock("@/components/ship/ShipModal", () => ({
+  default: (props: ShipModalProps) => {
+    mocks.shipModal(props);
+    return props.open ? (
+      <div role="dialog" aria-label="Ship">
+        {props.initialEnvironment}:{props.initialAlias ?? ""}
+      </div>
+    ) : null;
   },
 }));
 
-const application = {
-  name: "payments-api",
-  description: "Payments",
-  release_name: "runtime",
-  schema_id: "payments/runtime",
-  schema_version: 3,
-  contract: [{ alias: "runtime", kind: "parameter" as const, content_type: "json" }],
-  created_by: "admin",
-  created_at_unix_ms: 1,
-  updated_at_unix_ms: 1,
-  environment_count: 2,
-};
+const ready = readyJson as unknown as ApplicationOverview;
+const incident = incidentJson as unknown as ApplicationOverview;
+const setup = setupJson as unknown as ApplicationOverview;
 
-function environment(env: string, parameterCount = 0) {
-  return {
-    env,
-    app: "payments-api",
-    description: "",
-    allowed_auth_methods: ["mtls"],
-    created_by: "admin",
-    created_at_unix_ms: 1,
-    parameter_count: parameterCount,
-    secret_count: 0,
-  };
+const clone = <T,>(value: T): T => JSON.parse(JSON.stringify(value)) as T;
+
+function env(overview: ApplicationOverview, name: string): EnvironmentOverview {
+  const found = overview.environments.find((environment) => environment.namespace.env === name);
+  if (!found) throw new Error(`fixture has no ${name} environment`);
+  return found;
 }
 
 describe("ApplicationsPage", () => {
@@ -74,172 +77,210 @@ describe("ApplicationsPage", () => {
     mocks.query = {};
     mocks.isReady = true;
     mocks.push.mockClear();
+    mocks.replace.mockClear();
     mocks.listApplications.mockReset();
-    mocks.applicationDashboard.mockReset();
-    mocks.createApplication.mockReset();
+    mocks.applicationOverview.mockReset();
+    mocks.createNamespace.mockReset();
     mocks.createSecret.mockReset();
     mocks.putApplicationParameter.mockReset();
+    mocks.health.mockReset().mockRejectedValue(new Error("offline"));
+    mocks.shipModal.mockClear();
     mocks.toast.error.mockClear();
     mocks.toast.success.mockClear();
+    Element.prototype.scrollIntoView = vi.fn();
   });
 
-  /** Opens the "New application" modal and returns it. */
-  async function openCreateModal(): Promise<HTMLElement> {
-    mocks.listApplications.mockResolvedValue({ applications: [application], next_page_token: "" });
+  it("lists applications and opens the creation wizard", async () => {
+    mocks.listApplications.mockResolvedValue({
+      applications: [ready.application],
+      next_page_token: "",
+    });
     render(<ApplicationsPage />);
-    expect(await screen.findByText("payments-api")).toBeVisible();
+    expect(await screen.findByText(ready.application.name)).toBeVisible();
+    expect(screen.getByRole("link", { name: `Manage ${ready.application.name}` })).toHaveAttribute(
+      "href",
+      `/applications?app=${ready.application.name}`,
+    );
     fireEvent.click(screen.getByRole("button", { name: "New application" }));
-    return screen.getByRole("dialog");
-  }
-
-  it("blocks an application name that breaks the label rule", async () => {
-    const modal = await openCreateModal();
-    const name = within(modal).getByLabelText("Application name");
-    // Uppercase and underscores are legal in a release alias but not in the
-    // app half of a namespace, which is the rule this field follows.
-    fireEvent.change(name, { target: { value: "Payments_API" } });
-    fireEvent.blur(name);
-    expect(within(modal).getByRole("alert").textContent).toContain("lowercase");
-    expect(name).toHaveAttribute("aria-invalid", "true");
-    expect(within(modal).getByRole("button", { name: /Create application/ })).toBeDisabled();
-
-    fireEvent.change(name, { target: { value: "payments-api" } });
-    expect(within(modal).queryByRole("alert")).toBeNull();
-    expect(within(modal).getByRole("button", { name: /Create application/ })).toBeEnabled();
-  });
-
-  it("catches a duplicate contract alias before the server does", async () => {
-    const modal = await openCreateModal();
-    const contract = within(modal).getByLabelText("Shared release contract");
-    fireEvent.change(contract, {
-      target: {
-        value: JSON.stringify([
-          { alias: "runtime", kind: "parameter", content_type: "json" },
-          { alias: "runtime", kind: "secret" },
-        ]),
-      },
-    });
-    fireEvent.blur(contract);
-    expect(within(modal).getByRole("alert").textContent).toContain("Duplicate contract alias");
-    expect(within(modal).getByRole("button", { name: /Create application/ })).toBeDisabled();
-  });
-
-  it("rejects a contract parameter with no content type", async () => {
-    const modal = await openCreateModal();
-    const contract = within(modal).getByLabelText("Shared release contract");
-    // A parameter entry must pin a content type; only secrets may omit one.
-    fireEvent.change(contract, {
-      target: { value: JSON.stringify([{ alias: "runtime", kind: "parameter" }]) },
-    });
-    fireEvent.blur(contract);
-    expect(within(modal).getByRole("alert").textContent).toContain("Content type");
-    expect(within(modal).getByRole("button", { name: /Create application/ })).toBeDisabled();
-  });
-
-  it("marks both schema pin inputs invalid when only one half is set", async () => {
-    const modal = await openCreateModal();
-    const schemaId = within(modal).getByLabelText("Schema ID");
-    fireEvent.change(schemaId, { target: { value: "payments/runtime" } });
-    fireEvent.blur(schemaId);
-    expect(within(modal).getByRole("alert")).toBeVisible();
-    expect(schemaId).toHaveAttribute("aria-invalid", "true");
-    expect(within(modal).getByLabelText("Schema version")).toHaveAttribute("aria-invalid", "true");
-  });
-
-  it("submits the New-application form from the keyboard", async () => {
-    mocks.createApplication.mockResolvedValue({ application: { ...application, name: "orders" } });
-    const modal = await openCreateModal();
-    fireEvent.change(within(modal).getByLabelText("Application name"), {
-      target: { value: "orders" },
-    });
-    const form = modal.querySelector("form");
-    expect(form).not.toBeNull();
-    fireEvent.submit(form as HTMLFormElement);
-    await waitFor(() => expect(mocks.createApplication).toHaveBeenCalledTimes(1));
-    expect(mocks.createApplication.mock.calls[0][0]).toMatchObject({ name: "orders" });
-  });
-
-  it("lists application-owned contracts", async () => {
-    mocks.listApplications.mockResolvedValue({ applications: [application], next_page_token: "" });
-    render(<ApplicationsPage />);
-    expect(await screen.findByText("payments-api")).toBeVisible();
-    expect(screen.getByText("payments/runtime@3")).toBeVisible();
-    const applicationLink = screen.getByRole("link", { name: "Manage payments-api" });
-    expect(applicationLink).toHaveAttribute("href", "/applications?app=payments-api");
-    expect(applicationLink.closest("tr")).toHaveClass("application-row");
-    expect(screen.queryByRole("button", { name: "Manage" })).toBeNull();
+    const modal = screen.getByRole("dialog");
+    expect(within(modal).getByLabelText("Application name")).toBeVisible();
+    expect(within(modal).getByRole("list", { name: "New application progress" })).toBeVisible();
   });
 
   it("shows a skeleton instead of the list until the router has hydrated", () => {
     mocks.isReady = false;
-    mocks.query = { app: "payments-api" };
+    mocks.query = { app: ready.application.name };
     render(<ApplicationsPage />);
     expect(screen.queryByRole("button", { name: "New application" })).toBeNull();
-    expect(screen.getByText("Loading…")).toBeInTheDocument();
     expect(mocks.listApplications).not.toHaveBeenCalled();
-    expect(mocks.applicationDashboard).not.toHaveBeenCalled();
+    expect(mocks.applicationOverview).not.toHaveBeenCalled();
   });
 
-  it("renders values and missing state across environments", async () => {
-    mocks.query = { app: "payments-api" };
-    mocks.applicationDashboard.mockResolvedValue({
-      application,
-      environments: [environment("dev", 1), environment("prod-gcp")],
-      rows: [
-        {
-          key: "rate-limit",
-          kind: "parameter",
-          environments: {
-            dev: { present: true, value: "100", content_type: "integer", version: 2 },
-          },
-        },
-      ],
-    });
+  it("renders the application header, breadcrumbs and readiness status", async () => {
+    mocks.query = { app: ready.application.name };
+    mocks.applicationOverview.mockResolvedValue(ready);
     render(<ApplicationsPage />);
-    expect(await screen.findByText("rate-limit")).toBeVisible();
-    expect(screen.getByText("100")).toBeVisible();
-    expect(screen.getByText("missing")).toBeVisible();
-    expect(screen.getByRole("button", { name: "Edit contract" })).toBeEnabled();
+    await screen.findByRole("region", { name: "Definition" });
+    const heading = screen.getByRole("heading", { level: 1 });
+    expect(heading).toHaveTextContent(ready.application.name);
+    expect(within(heading).getByText("Ready")).toBeVisible();
+    const trail = screen.getByRole("navigation", { name: "Breadcrumb" });
+    expect(within(trail).getByRole("link", { name: "Applications" })).toHaveAttribute(
+      "href",
+      "/applications",
+    );
+    expect(mocks.applicationOverview).toHaveBeenCalledWith(
+      ready.application.name,
+      undefined,
+      expect.anything(),
+    );
+    // One column per environment, production last.
+    const columns = screen.getAllByRole("region", { name: /environment$/ });
+    expect(columns.map((column) => column.getAttribute("data-env"))).toEqual(["dev", "prod"]);
+    expect(columns[1]).toHaveClass("pipeline-column-prod");
+    expect(screen.getByRole("button", { name: "Quick change" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Edit definition" })).toBeEnabled();
   });
 
-  it("never renders a dashboard that arrives after the app has changed", async () => {
-    let resolveFirst: (value: unknown) => void = () => undefined;
-    mocks.applicationDashboard.mockImplementationOnce(
-      () =>
-        new Promise((resolve) => {
-          resolveFirst = resolve;
-        }),
+  it("shows unreleased changes as drift with a ship call to action", async () => {
+    mocks.query = { app: incident.application.name };
+    mocks.applicationOverview.mockResolvedValue(incident);
+    render(<ApplicationsPage />);
+    const prod = await screen.findByRole("region", { name: "prod environment" });
+    const drifted = env(incident, "prod").values.find(
+      (value) => value.present && (value.current_version ?? 0) > (value.pinned_version ?? 0),
     );
-    mocks.query = { app: "payments-api" };
-    const { rerender } = render(<ApplicationsPage />);
-    expect(mocks.applicationDashboard).toHaveBeenCalledWith("payments-api", expect.anything());
+    expect(drifted).toBeDefined();
+    expect(within(prod).getByText(`v${drifted?.current_version} unreleased`)).toBeVisible();
+    expect(within(prod).getByRole("button", { name: /unreleased change.*Ship/ })).toBeEnabled();
+    expect(within(prod).getByText("Degraded")).toBeVisible();
+  });
 
-    mocks.applicationDashboard.mockResolvedValueOnce({
-      application: { ...application, name: "orders" },
-      environments: [environment("dev")],
-      rows: [{ key: "orders-key", kind: "parameter", environments: {} }],
+  it("opens the parameter write for a missing value targeting only its environment", async () => {
+    const overview = clone(ready);
+    const dev = env(overview, "dev");
+    const database = dev.values.find((value) => value.alias === "database");
+    if (!database) throw new Error("fixture has no database alias");
+    database.present = false;
+    database.key = undefined;
+    database.current_version = undefined;
+    database.pinned_version = undefined;
+    dev.values_state = "incomplete";
+    mocks.query = { app: overview.application.name };
+    mocks.applicationOverview.mockResolvedValue(overview);
+    render(<ApplicationsPage />);
+    fireEvent.click(await screen.findByRole("button", { name: "Add value" }));
+    const modal = screen.getByRole("dialog");
+    expect(within(modal).getByText("Update database")).toBeVisible();
+    expect(within(modal).getByRole("checkbox", { name: "dev" })).toHaveAttribute(
+      "aria-checked",
+      "true",
+    );
+    expect(within(modal).getByRole("checkbox", { name: "prod" })).toHaveAttribute(
+      "aria-checked",
+      "false",
+    );
+    expect(within(modal).getByRole("button", { name: "Apply to 1 environment(s)" })).toBeVisible();
+  });
+
+  it("disables Create first release until every value exists, and says why", async () => {
+    const overview = clone(ready);
+    const dev = env(overview, "dev");
+    dev.release = { latest_version: 0, release_count: 0 };
+    dev.release_state = "none";
+    dev.status = "incomplete";
+    dev.values_state = "incomplete";
+    const secret = dev.values.find((value) => value.kind === "secret");
+    if (!secret) throw new Error("fixture has no secret alias");
+    secret.present = false;
+    mocks.query = { app: overview.application.name };
+    mocks.applicationOverview.mockResolvedValue(overview);
+    render(<ApplicationsPage />);
+    const column = await screen.findByRole("region", { name: "dev environment" });
+    const create = within(column).getByRole("button", { name: "Create first release" });
+    expect(create).toBeDisabled();
+    expect(within(column).getByText(`Add values for \`${secret.alias}\` first.`)).toBeVisible();
+    expect(within(column).getByRole("button", { name: "Add secret" })).toBeEnabled();
+  });
+
+  it("focuses the ?env column", async () => {
+    mocks.query = { app: ready.application.name, env: "prod" };
+    mocks.applicationOverview.mockResolvedValue(ready);
+    render(<ApplicationsPage />);
+    const prod = await screen.findByRole("region", { name: "prod environment" });
+    expect(prod).toHaveClass("pipeline-column-focused");
+    expect(screen.getByRole("region", { name: "dev environment" })).not.toHaveClass(
+      "pipeline-column-focused",
+    );
+    await waitFor(() => expect(Element.prototype.scrollIntoView).toHaveBeenCalled());
+  });
+
+  it("?ship=alias opens the ship modal prefilled for the first non-production environment", async () => {
+    mocks.query = { app: ready.application.name, ship: "rate_limits" };
+    mocks.applicationOverview.mockResolvedValue(ready);
+    render(<ApplicationsPage />);
+    const dialog = await screen.findByRole("dialog", { name: "Ship" });
+    expect(dialog).toHaveTextContent("dev:rate_limits");
+    const props = mocks.shipModal.mock.calls.at(-1)?.[0] as ShipModalProps;
+    expect(props).toMatchObject({
+      open: true,
+      initialEnvironment: "dev",
+      initialAlias: "rate_limits",
+      application: expect.objectContaining({ name: ready.application.name }),
     });
-    mocks.query = { app: "orders" };
-    rerender(<ApplicationsPage />);
-    expect(await screen.findByText("orders-key")).toBeVisible();
+    expect(props.environments).toHaveLength(ready.environments.length);
+    // Closing clears the param from the URL, from the handler.
+    props.onClose();
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Ship" })).toBeNull());
+    expect(mocks.replace).toHaveBeenCalledWith(
+      { pathname: "/applications", query: { app: ready.application.name } },
+      undefined,
+      { shallow: true, scroll: false },
+    );
+  });
 
-    // The first request was aborted when the second began.
-    const firstSignal = mocks.applicationDashboard.mock.calls[0][1].signal as AbortSignal;
-    expect(firstSignal.aborted).toBe(true);
+  it("Quick change opens the ship modal for the focused environment", async () => {
+    mocks.query = { app: ready.application.name, env: "prod" };
+    mocks.applicationOverview.mockResolvedValue(ready);
+    render(<ApplicationsPage />);
+    fireEvent.click(await screen.findByRole("button", { name: "Quick change" }));
+    expect(await screen.findByRole("dialog", { name: "Ship" })).toHaveTextContent("prod:");
+  });
 
-    resolveFirst({
-      application,
-      environments: [environment("dev")],
-      rows: [{ key: "payments-key", kind: "parameter", environments: {} }],
-    });
-    await waitFor(() => expect(screen.getByText("orders-key")).toBeVisible());
-    expect(screen.queryByText("payments-key")).toBeNull();
+  it("renders the matrix tab from the overview rows", async () => {
+    mocks.query = { app: ready.application.name, tab: "matrix" };
+    mocks.applicationOverview.mockResolvedValue(ready);
+    render(<ApplicationsPage />);
+    expect(await screen.findByRole("heading", { name: "Configuration matrix" })).toBeVisible();
+    const table = screen.getByRole("table");
+    for (const row of ready.rows) {
+      expect(within(table).getByText(row.key)).toBeVisible();
+    }
+    expect(screen.queryByRole("region", { name: "dev environment" })).toBeNull();
+    fireEvent.click(screen.getByRole("tab", { name: "Environments" }));
+    expect(mocks.replace).toHaveBeenCalledWith(
+      { pathname: "/applications", query: { app: ready.application.name } },
+      undefined,
+      { shallow: true, scroll: false },
+    );
+  });
+
+  it("explains a non-admin deep link instead of a bare error", async () => {
+    mocks.query = { app: "gradethis" };
+    mocks.applicationOverview.mockRejectedValue(new ApiError("forbidden", "admin only", 403));
+    render(<ApplicationsPage />);
+    expect(await screen.findByRole("heading", { name: "Not permitted" })).toBeVisible();
+    expect(screen.getByRole("link", { name: "Open namespaces" })).toHaveAttribute(
+      "href",
+      "/namespaces",
+    );
+    expect(mocks.toast.error).not.toHaveBeenCalled();
   });
 
   it("explains an unknown application instead of offering to add environments", async () => {
     mocks.query = { app: "ghost" };
-    mocks.applicationDashboard.mockRejectedValue(
-      new mocks.ApiError("not_found", "application not found", 404),
+    mocks.applicationOverview.mockRejectedValue(
+      new ApiError("not_found", "application not found", 404),
     );
     render(<ApplicationsPage />);
     expect(await screen.findByRole("heading", { name: "Application not found" })).toBeVisible();
@@ -251,166 +292,98 @@ describe("ApplicationsPage", () => {
     expect(mocks.toast.error).not.toHaveBeenCalled();
   });
 
-  it("offers a retry when the dashboard cannot be loaded", async () => {
-    mocks.query = { app: "payments-api" };
-    mocks.applicationDashboard.mockRejectedValueOnce(new Error("offline"));
+  it("offers a retry when the overview cannot be loaded", async () => {
+    mocks.query = { app: ready.application.name };
+    mocks.applicationOverview.mockRejectedValueOnce(new Error("offline"));
     render(<ApplicationsPage />);
     expect(
       await screen.findByRole("heading", { name: "Could not load application" }),
     ).toBeVisible();
-    expect(screen.queryByRole("button", { name: "Add environment" })).toBeNull();
-
-    mocks.applicationDashboard.mockResolvedValueOnce({
-      application,
-      environments: [environment("dev")],
-      rows: [],
-    });
+    expect(mocks.toast.error).toHaveBeenCalledTimes(1);
+    mocks.applicationOverview.mockResolvedValueOnce(ready);
     fireEvent.click(screen.getByRole("button", { name: "Try again" }));
-    expect(await screen.findByText("No parameters or secrets have been created.")).toBeVisible();
+    expect(await screen.findByRole("region", { name: "dev environment" })).toBeVisible();
   });
 
-  it("resets the Add-environment form between openings", async () => {
-    mocks.query = { app: "payments-api" };
-    mocks.applicationDashboard.mockResolvedValue({
-      application,
-      environments: [environment("dev")],
-      rows: [],
-    });
-    render(<ApplicationsPage />);
-    fireEvent.click(await screen.findByRole("button", { name: "Add environment" }));
-    let modal = screen.getByRole("dialog");
-    fireEvent.change(within(modal).getByLabelText("Environment"), {
-      target: { value: "prod-gcp" },
-    });
-    fireEvent.change(within(modal).getByLabelText("Description"), {
-      target: { value: "GCP production" },
-    });
-    fireEvent.click(within(modal).getByRole("button", { name: "Cancel" }));
-    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  it("never renders an overview that arrives after the app has changed", async () => {
+    let resolveFirst: (value: unknown) => void = () => undefined;
+    mocks.applicationOverview.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveFirst = resolve;
+        }),
+    );
+    mocks.query = { app: ready.application.name };
+    const { rerender } = render(<ApplicationsPage />);
+    expect(mocks.applicationOverview).toHaveBeenCalledWith(
+      ready.application.name,
+      undefined,
+      expect.anything(),
+    );
 
-    fireEvent.click(screen.getByRole("button", { name: "Add environment" }));
-    modal = await screen.findByRole("dialog");
-    expect(within(modal).getByLabelText("Environment")).toHaveValue("");
-    expect(within(modal).getByLabelText("Description")).toHaveValue("");
-    expect(within(modal).queryByRole("alert")).toBeNull();
+    const orders = clone(ready);
+    orders.application.name = "orders";
+    orders.application.description = "Order intake";
+    mocks.applicationOverview.mockResolvedValueOnce(orders);
+    mocks.query = { app: "orders" };
+    rerender(<ApplicationsPage />);
+    expect(await screen.findByText("Order intake")).toBeVisible();
+
+    // The first request was aborted when the second began.
+    const firstSignal = mocks.applicationOverview.mock.calls[0][2].signal as AbortSignal;
+    expect(firstSignal.aborted).toBe(true);
+
+    resolveFirst(ready);
+    await waitFor(() => expect(screen.getByText("Order intake")).toBeVisible());
+    expect(screen.queryByText(ready.application.description)).toBeNull();
   });
 
-  it("creates a standard secret without leaving the application workspace", async () => {
-    mocks.query = { app: "payments-api" };
-    const dashboard = {
-      application,
-      environments: [environment("dev")],
-      rows: [],
-    };
-    mocks.applicationDashboard.mockResolvedValue(dashboard);
-    mocks.createSecret.mockResolvedValue({ version: 1, revision: 4 });
-
+  it("shows the definition and setup findings for an application with no environments", async () => {
+    mocks.query = { app: setup.application.name };
+    mocks.applicationOverview.mockResolvedValue(setup);
     render(<ApplicationsPage />);
-    fireEvent.click(await screen.findByRole("button", { name: "New secret" }));
+    await screen.findByRole("region", { name: "Definition" });
+    const heading = screen.getByRole("heading", { level: 1 });
+    expect(within(heading).getByText("Setup")).toBeVisible();
+    expect(screen.getByText("No environments")).toBeVisible();
+    const definition = screen.getByRole("region", { name: "Definition" });
+    expect(within(definition).getByText("Not pinned")).toBeVisible();
+    expect(within(definition).getByRole("button", { name: "Register schema" })).toBeEnabled();
+    expect(within(definition).getByText(/No schema is pinned/)).toBeVisible();
+    fireEvent.click(within(definition).getByRole("button", { name: "Pin schema" }));
+    const dialog = screen.getByRole("dialog");
+    expect(within(dialog).getByText("Derive schema from contract")).toBeVisible();
+    expect(within(dialog).getByLabelText("Schema ID")).toHaveValue(
+      `${setup.application.name}-${setup.application.release_name}`,
+    );
+    expect((within(dialog).getByLabelText("Schema JSON") as HTMLTextAreaElement).value).toContain(
+      '"additionalProperties": false',
+    );
+  });
+
+  it("creates a secret from a pipeline row without leaving the page", async () => {
+    const overview = clone(ready);
+    const prod = env(overview, "prod");
+    const secret = prod.values.find((value) => value.kind === "secret");
+    if (!secret) throw new Error("fixture has no secret alias");
+    secret.present = false;
+    mocks.query = { app: overview.application.name };
+    mocks.applicationOverview.mockResolvedValue(overview);
+    mocks.createSecret.mockResolvedValue({ version: 1, revision: 9 });
+    render(<ApplicationsPage />);
+    fireEvent.click(await screen.findByRole("button", { name: "Add secret" }));
     const modal = screen.getByRole("dialog");
-    expect(within(modal).getByLabelText("Application")).toHaveValue("payments-api");
-    expect(within(modal).getByLabelText("Environment")).toHaveTextContent("dev");
-
-    fireEvent.change(within(modal).getByLabelText("Secret key"), {
-      target: { value: "stripe-api-key" },
-    });
+    expect(within(modal).getByLabelText("Secret key")).toHaveValue(secret.alias);
     fireEvent.change(within(modal).getByLabelText("Secret value"), {
-      target: { value: "super-secret" },
+      target: { value: "hunter2" },
     });
-    // A blank content type is the server's default, not a validation error.
-    fireEvent.change(within(modal).getByLabelText("Content type"), { target: { value: "  " } });
     fireEvent.click(within(modal).getByRole("button", { name: "Create secret" }));
-
-    await waitFor(() =>
-      expect(mocks.createSecret).toHaveBeenCalledWith({
-        env: "dev",
-        app: "payments-api",
-        key: "stripe-api-key",
-        value_base64: "c3VwZXItc2VjcmV0",
-        content_type: "text/plain",
-        metadata_json: "{}",
-        client_bound: false,
-        generate_access_token: false,
-        expires_at_unix_ms: 0,
-      }),
-    );
-    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
-    expect(mocks.push).not.toHaveBeenCalled();
-  });
-
-  it("asks for an environment inline when several are available", async () => {
-    mocks.query = { app: "payments-api" };
-    mocks.applicationDashboard.mockResolvedValue({
-      application,
-      environments: [environment("dev"), environment("prod")],
-      rows: [],
+    await waitFor(() => expect(mocks.createSecret).toHaveBeenCalledTimes(1));
+    expect(mocks.createSecret.mock.calls[0][0]).toMatchObject({
+      env: "prod",
+      app: overview.application.name,
+      key: secret.alias,
     });
-    render(<ApplicationsPage />);
-    fireEvent.click(await screen.findByRole("button", { name: "New secret" }));
-    const modal = screen.getByRole("dialog");
-    fireEvent.change(within(modal).getByLabelText("Secret key"), { target: { value: "k" } });
-    fireEvent.change(within(modal).getByLabelText("Secret value"), { target: { value: "v" } });
-    fireEvent.submit(modal.querySelector("form") as HTMLFormElement);
-    expect(within(modal).getByRole("alert").textContent).toContain("Choose an environment.");
-    expect(mocks.createSecret).not.toHaveBeenCalled();
-  });
-
-  it("keeps the bulk edit open and narrows the targets after a partial failure", async () => {
-    mocks.query = { app: "payments-api" };
-    mocks.applicationDashboard.mockResolvedValue({
-      application,
-      environments: [environment("dev", 1), environment("prod-gcp", 1), environment("non-prod", 1)],
-      rows: [
-        {
-          key: "rate-limit",
-          kind: "parameter",
-          environments: {
-            dev: { present: true, value: "100", content_type: "integer", version: 2 },
-            "prod-gcp": { present: true, value: "100", content_type: "integer", version: 1 },
-            "non-prod": { present: true, value: "100", content_type: "integer", version: 1 },
-          },
-        },
-      ],
-    });
-    mocks.putApplicationParameter.mockResolvedValue({
-      results: [
-        { environment: "dev", version: 3 },
-        { environment: "prod-gcp", error: "permission denied" },
-        { environment: "non-prod", version: 2 },
-      ],
-    });
-    render(<ApplicationsPage />);
-    fireEvent.click(await screen.findByRole("button", { name: "Edit" }));
-    const modal = screen.getByRole("dialog");
-    // Only names that start with prod (or are exactly production) are flagged.
-    expect(within(modal).getAllByText("production")).toHaveLength(1);
-    expect(
-      within(modal).getByRole("checkbox", { name: "prod-gcp" }).parentElement,
-    ).toContainElement(within(modal).getByText("production"));
-
-    fireEvent.change(within(modal).getByLabelText("Value"), { target: { value: "250" } });
-    fireEvent.click(within(modal).getByRole("button", { name: "Apply to 3 environment(s)" }));
-    await waitFor(() => expect(mocks.toast.error).toHaveBeenCalledTimes(1));
-    expect(mocks.putApplicationParameter.mock.calls[0][0]).toMatchObject({
-      environments: ["dev", "prod-gcp", "non-prod"],
-    });
-
-    expect(screen.getByRole("dialog")).toBeVisible();
-    expect(within(modal).getByLabelText("Value")).toHaveValue("250");
-    expect(within(modal).getByRole("checkbox", { name: "dev" })).toHaveAttribute(
-      "aria-checked",
-      "false",
-    );
-    expect(within(modal).getByRole("checkbox", { name: "non-prod" })).toHaveAttribute(
-      "aria-checked",
-      "false",
-    );
-    expect(within(modal).getByRole("checkbox", { name: "prod-gcp" })).toHaveAttribute(
-      "aria-checked",
-      "true",
-    );
-    expect(within(modal).getByRole("button", { name: "Apply to 1 environment(s)" })).toBeEnabled();
-    // The matrix is not reloaded underneath an edit that is still in progress.
-    expect(mocks.applicationDashboard).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(mocks.applicationOverview).toHaveBeenCalledTimes(2));
   });
 });

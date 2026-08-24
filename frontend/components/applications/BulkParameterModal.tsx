@@ -4,6 +4,7 @@ import { Badge, Checkbox, Field, Input, Spinner, Textarea } from "@/components/u
 import { AppSelect } from "@/components/ui/app-select";
 import { Button } from "@/components/ui/button";
 import { useFieldErrors } from "@/lib/hooks";
+import { isProductionEnvironment } from "@/lib/readiness";
 import { type ApplicationConfigurationRow, PARAMETER_CONTENT_TYPES } from "@/lib/types";
 import {
   firstError,
@@ -11,12 +12,12 @@ import {
   validateParameterValue,
   validateValueSize,
 } from "@/lib/validation";
-import { PRODUCTION_ENVIRONMENT } from "./shared";
 
 export function BulkParameterModal({
   app,
   environments,
   row,
+  initialEnvironments,
   retryEnvironments,
   saving,
   onClose,
@@ -25,6 +26,8 @@ export function BulkParameterModal({
   app: string;
   environments: string[];
   row: ApplicationConfigurationRow | null;
+  /** Preselect these targets instead of every environment the key is present in. */
+  initialEnvironments?: string[] | null;
   /** After a partial failure: the environments still to write. Narrows the selection only. */
   retryEnvironments: string[] | null;
   saving: boolean;
@@ -49,11 +52,14 @@ export function BulkParameterModal({
     reset();
     setKey(row.key);
     const present = environments.filter((environment) => row.environments[environment]?.present);
-    setSelected(present.length ? present : environments);
+    const initial = initialEnvironments?.filter((environment) =>
+      environments.includes(environment),
+    );
+    setSelected(initial?.length ? initial : present.length ? present : environments);
     const first = present.length ? row.environments[present[0]] : undefined;
     setValue(first?.value ?? "");
     setContentType(first?.content_type ?? "string");
-  }, [row, environments, reset]);
+  }, [row, environments, initialEnvironments, reset]);
   useEffect(() => {
     if (retryEnvironments) setSelected(retryEnvironments);
   }, [retryEnvironments]);
@@ -183,7 +189,7 @@ export function BulkParameterModal({
                 <label className="mono" htmlFor={`target-environment-${environment}`}>
                   {environment}
                 </label>
-                {PRODUCTION_ENVIRONMENT.test(environment) ? (
+                {isProductionEnvironment(environment) ? (
                   <Badge kind="warning">production</Badge>
                 ) : null}
               </div>
