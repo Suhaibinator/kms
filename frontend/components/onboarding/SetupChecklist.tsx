@@ -100,6 +100,7 @@ export default function SetupChecklist({
         if (!step.informational) number += 1;
         const primary = step.state === "current";
         const action = step.action;
+        const hasItemActions = step.items?.some((item) => item.action) ?? false;
         return (
           <li
             key={step.id}
@@ -127,7 +128,7 @@ export default function SetupChecklist({
                 </ul>
               ) : null}
             </div>
-            {action && (primary || step.optional) ? (
+            {action && !hasItemActions && (primary || step.optional) ? (
               <Button
                 type="button"
                 variant={primary ? "default" : "outline"}

@@ -82,6 +82,7 @@ describe("SetupChecklist", () => {
     const total = ready.environments[0]?.values.length ?? 0;
     expect(rows[1]).toHaveTextContent(`${total - 1} of ${total} set`);
     expect(rows[1]?.querySelector(".ident-env")).toHaveClass("ident-prod");
+    expect(screen.getAllByRole("button", { name: "Fill values" })).toHaveLength(1);
 
     fireEvent.click(within(rows[1] as HTMLElement).getByRole("button", { name: "Fill values" }));
     expect(onAction).toHaveBeenCalledWith({ kind: "fill-values", env: "prod", alias: "database" });
