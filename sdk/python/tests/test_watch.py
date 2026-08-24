@@ -215,7 +215,7 @@ def test_deleted_param_reverts_via_reconcile_notfound(server):
     addr, store = server
     c = Client(addr, namespace=NS, insecure=True)
     try:
-        store.put_param(NS_ENV, NS_APP, "dp/rl", value="5")
+        _, initial_rev = store.put_param(NS_ENV, NS_APP, "dp/rl", value="5")
 
         class Cfg:
             rate = ParameterValue("dp/rl", default="1")
@@ -225,6 +225,10 @@ def test_deleted_param_reverts_via_reconcile_notfound(server):
         c.resolve(cfg)
         cfg.rate.on_change(lambda old, new: changes.append((old, new)))
         assert wait_until(lambda: len(store.subs) >= 1)
+        # Server-side registration happens before the initial snapshot is
+        # delivered. Wait until the client has applied that snapshot so this
+        # test isolates a deletion missed *after* initial synchronization.
+        assert wait_until(lambda: c._subs()._get_rev() >= initial_rev)
 
         # Delete server-side (missed by the stream), then run reconcile directly.
         with store.lock:
