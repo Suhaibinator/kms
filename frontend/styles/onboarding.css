@@ -16,9 +16,9 @@
   .setup-card-icon {
     display: inline-grid;
     place-items: center;
-    width: 36px;
-    height: 36px;
-    flex: 0 0 36px;
+    width: var(--space-9);
+    height: var(--space-9);
+    flex: 0 0 var(--space-9);
     border-radius: var(--radius);
     background: var(--accent-soft);
     color: var(--accent-hover);
@@ -96,7 +96,7 @@
     border: 1px solid var(--border);
     border-radius: 999px;
     color: var(--text-faint);
-    font-size: 10.5px;
+    font-size: 11px;
     font-weight: 600;
     letter-spacing: 0.04em;
     text-transform: uppercase;
@@ -137,7 +137,7 @@
     display: flex;
     align-items: center;
     gap: var(--space-2);
-    min-height: 28px;
+    min-height: calc(var(--spacing) * 7);
     padding: 2px var(--space-2);
     border-radius: var(--radius-sm);
     background: var(--bg-elev);
@@ -192,15 +192,13 @@
     background: var(--bg-elev);
     overflow: hidden;
   }
+  /* Motion is neutralised by the global prefers-reduced-motion rule. */
   .setup-panel-meter-fill {
     display: block;
     height: 100%;
     border-radius: inherit;
     background: var(--success);
     transition: width 240ms ease;
-  }
-  .setup-panel[data-complete="true"] .setup-panel-meter-fill {
-    background: var(--success);
   }
   .setup-panel-content {
     padding-top: var(--space-2);
@@ -304,7 +302,7 @@
     align-items: center;
     justify-content: space-between;
     gap: var(--space-2);
-    min-height: 28px;
+    min-height: calc(var(--spacing) * 7);
     padding: 0 var(--space-2);
     border-radius: var(--radius-sm);
   }
@@ -335,9 +333,9 @@
     margin-left: var(--space-1);
     padding: 0 5px;
     border: 1px solid var(--warning);
-    border-radius: 999px;
+    border-radius: var(--radius-4xl);
     color: var(--warning-fg);
-    font-size: 9.5px;
+    font-size: 10.5px;
     font-weight: 700;
     letter-spacing: 0.06em;
     text-transform: uppercase;
@@ -362,6 +360,9 @@
   .fleet-card-rejected-some {
     color: var(--danger);
     font-weight: 600;
+  }
+  .fleet-card-activated {
+    white-space: nowrap;
   }
   .fleet-note {
     margin-top: var(--space-3);
@@ -518,11 +519,6 @@
     }
     .setup-panel-meter {
       flex-basis: 72px;
-    }
-  }
-  @media (prefers-reduced-motion: reduce) {
-    .setup-panel-meter-fill {
-      transition: none;
     }
   }
 }

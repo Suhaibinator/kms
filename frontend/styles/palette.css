@@ -22,7 +22,7 @@
   .palette-input {
     flex: 1;
     min-width: 0;
-    height: 46px;
+    height: calc(var(--control-h) + var(--space-2)); /* 46px */
     border: 0;
     background: transparent;
     color: var(--text);
@@ -61,23 +61,22 @@
     letter-spacing: 0.06em;
     text-transform: uppercase;
   }
-  .palette-group-list {
-    margin: 0;
-    padding: 0;
-    list-style: none;
-  }
   .palette-item {
     display: flex;
     align-items: center;
     gap: var(--space-2);
-    min-height: 36px;
+    min-height: var(--space-9); /* 36px */
     padding: var(--space-1) var(--space-2);
     border-radius: var(--radius-sm);
     color: var(--text);
     font-size: 13px;
     cursor: pointer;
   }
-  .palette-item-active {
+  .palette-item:hover {
+    background: var(--surface-hover);
+  }
+  .palette-item-active,
+  .palette-item-active:hover {
     background: var(--accent-soft);
   }
   .palette-item-title {
@@ -120,12 +119,13 @@
       height: 100%;
       max-height: none;
     }
+    /* 16px stops iOS zooming the field; 52/44px are the touch rows. */
     .palette-input {
-      height: 52px;
+      height: calc(var(--spacing) * 13);
       font-size: 16px;
     }
     .palette-item {
-      min-height: 44px;
+      min-height: calc(var(--spacing) * 11);
     }
     .palette-item-title {
       max-width: none;

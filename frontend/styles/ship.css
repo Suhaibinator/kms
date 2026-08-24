@@ -2,7 +2,8 @@
    the layer so Tailwind utilities keep winning. Families: .ship-* (modal,
    editor, preview, outcomes), .rollout-* (rollout panel), .conflict-* (CAS
    conflict panel), .rollback-* (rollback dialog). Colours come from the
-   theme tokens only, so light and dark need no separate rules. */
+   theme tokens only, so light and dark need no separate rules. Type sizes
+   follow the console scale: 12.5px (--text-sm) copy, 11.5px captions. */
 
 @layer components {
   /* --- Modal chrome ------------------------------------------------------ */
@@ -41,7 +42,7 @@
     border-left: 3px solid var(--primary);
     border-radius: var(--radius);
     color: var(--text-muted);
-    font-size: 13px;
+    font-size: var(--text-sm);
     line-height: 1.5;
   }
   .ship-section-title {
@@ -84,12 +85,14 @@
     max-width: 320px;
     margin-bottom: 0;
   }
+  /* Sits beside the environment select: the same control height keeps the
+     text centred on the select rather than hanging off its bottom edge. */
   .ship-env-summary {
     display: flex;
     align-items: center;
     gap: var(--space-2);
     flex-wrap: wrap;
-    padding-bottom: 6px;
+    min-height: var(--control-h);
   }
   .ship-blockers,
   .ship-rows,
@@ -107,14 +110,15 @@
     align-items: center;
     gap: var(--space-3);
     padding: var(--space-3) var(--space-4);
-    background: var(--danger-soft, color-mix(in oklab, var(--danger) 12%, transparent));
+    background: var(--danger-soft);
     border: 1px solid var(--danger);
     border-radius: var(--radius);
+    color: var(--danger-fg);
   }
   .ship-blocker-body {
     flex: 1 1 auto;
     min-width: 0;
-    font-size: 13px;
+    font-size: var(--text-sm);
     line-height: 1.5;
   }
   .ship-row {
@@ -144,7 +148,7 @@
     min-width: 0;
   }
   .ship-row-type {
-    font-family: var(--font-mono);
+    font-family: var(--mono);
     text-transform: none;
   }
   .ship-row-reuse {
@@ -152,7 +156,12 @@
     align-items: center;
     justify-content: space-between;
     gap: var(--space-3);
-    font-size: 13px;
+  }
+  .ship-row-loading {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    min-height: var(--control-h-sm);
   }
   .ship-row-tools {
     display: flex;
@@ -207,10 +216,10 @@
     display: flex;
     align-items: center;
     gap: var(--space-3);
-    font-size: 13px;
+    font-size: var(--text-sm);
   }
   .ship-entries tr.ship-entry-changed td {
-    background: color-mix(in oklab, var(--primary) 9%, transparent);
+    background: var(--accent-soft);
   }
   .ship-entries tr.ship-entry-changed td:first-child {
     box-shadow: inset 3px 0 0 var(--primary);
@@ -219,7 +228,7 @@
     display: inline-flex;
     align-items: center;
     gap: var(--space-2);
-    font-size: 13px;
+    font-size: var(--text-sm);
     cursor: pointer;
   }
   .ship-optin code {
@@ -230,7 +239,7 @@
     grid-template-columns: max-content 1fr;
     gap: var(--space-2) var(--space-4);
     margin: 0;
-    font-size: 13px;
+    font-size: var(--text-sm);
   }
   .ship-facts dt {
     color: var(--text-muted);
@@ -285,7 +294,7 @@
   .conflict-head strong {
     display: inline-flex;
     align-items: center;
-    gap: 5px;
+    gap: var(--space-1);
     flex-wrap: wrap;
     line-height: 1.6;
   }
@@ -298,7 +307,7 @@
     grid-template-columns: max-content 1fr;
     gap: var(--space-2) var(--space-4);
     margin: 0;
-    font-size: 13px;
+    font-size: var(--text-sm);
   }
   .conflict-facts dt {
     color: var(--text-muted);
@@ -310,7 +319,7 @@
   .conflict-written li {
     display: inline-flex;
     align-items: center;
-    gap: 5px;
+    gap: var(--space-1);
   }
 
   /* --- Rollout panel ----------------------------------------------------- */
@@ -350,23 +359,32 @@
     flex-wrap: wrap;
   }
   .rollout-table tr.rollout-rejected td {
-    background: color-mix(in oklab, var(--danger) 8%, transparent);
+    background: var(--danger-soft);
   }
   .rollout-table tr.rollout-rejected td:first-child {
     box-shadow: inset 3px 0 0 var(--danger);
   }
   .rollout-category {
-    font-family: var(--font-mono);
+    font-family: var(--mono);
     text-transform: none;
     cursor: help;
   }
+  /* A plain <button> around the category badge: no shadcn slot, so it takes
+     the console's outline ring, shaped to the pill it wraps. */
   .rollout-category-tip {
     display: inline-flex;
-    border-radius: var(--radius);
+    padding: 0;
+    border: 0;
+    border-radius: var(--radius-4xl);
+    background: none;
+  }
+  .rollout-category-tip:focus-visible {
+    outline: 2px solid var(--primary);
+    outline-offset: 2px;
   }
   .rollout-remedy {
     display: grid;
-    gap: 4px;
+    gap: var(--space-1);
   }
   .rollout-diagnostic {
     color: var(--text-muted);
@@ -380,7 +398,7 @@
     gap: var(--space-3);
   }
   .rollback-check {
-    min-height: 24px;
+    min-height: var(--space-6);
   }
   .rollback-check .row-wrap {
     align-items: center;

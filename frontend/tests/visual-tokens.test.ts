@@ -76,6 +76,32 @@ describe("globals.css stays out of Tailwind's way", () => {
     }
   });
 
+  // Feature sheets read tokens only: a literal colour would render one theme's
+  // ink on the other theme's ground. (globals.css owns the literals.)
+  it.each(
+    sheets.filter((sheet) => sheet.file !== "globals.css").map((s) => [s.file, s.css] as const),
+  )("%s takes every colour from a token", (_file, source) => {
+    expect(source.match(/#[0-9a-fA-F]{3,8}\b/g) ?? []).toEqual([]);
+    expect(source.match(/\b(?:rgba?|hsla?|color-mix)\(/g) ?? []).toEqual([]);
+  });
+
+  it("defines each simple class selector in exactly one sheet", () => {
+    // A recipe defined twice (once per lane) silently drifts; a shared one
+    // belongs in globals.css. Only bare `.name {` openers count — compound
+    // selectors are legitimately repeated for overrides.
+    const owners = new Map<string, string[]>();
+    for (const sheet of sheets) {
+      for (const match of sheet.css.matchAll(/^ {2}\.([a-z][\w-]*) \{$/gm)) {
+        const name = match[1] ?? "";
+        owners.set(name, [...(owners.get(name) ?? []), sheet.file]);
+      }
+    }
+    const shared = [...owners.entries()].filter(([, files]) => new Set(files).size > 1);
+    expect(shared).toEqual([]);
+    expect(owners.get("menu-popup")).toEqual(["globals.css"]);
+    expect(owners.get("menu-item")).toEqual(["globals.css"]);
+  });
+
   it("defines every --ident-* token on both :root and .dark", () => {
     const light = tokenNames(block(css, ":root"));
     const dark = tokenNames(block(css, ".dark"));

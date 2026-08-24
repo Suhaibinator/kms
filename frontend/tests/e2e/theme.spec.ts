@@ -35,3 +35,30 @@ test("the OS preference is honoured when nothing is stored", async ({ browser })
   await expect(page.locator("html")).toHaveClass(/\bdark\b/);
   await context.close();
 });
+
+// The typed-chip tokens are defined on both :root and .dark (the unit guard
+// checks parity); this checks the dark set actually wins once `.dark` is set,
+// i.e. the chips do not keep their light ink on the dark ground.
+test("ident chip tokens re-point in dark mode", async ({ page }) => {
+  await page.goto("/login");
+  const read = () =>
+    page.evaluate(() => {
+      const style = getComputedStyle(document.documentElement);
+      return ["app", "env", "alias", "release", "identity"].map((kind) => [
+        style.getPropertyValue(`--ident-${kind}`).trim(),
+        style.getPropertyValue(`--ident-${kind}-soft`).trim(),
+      ]);
+    });
+  const light = await read();
+  for (const [fg, soft] of light) {
+    expect(fg).not.toBe("");
+    expect(soft).not.toBe("");
+  }
+  await page.getByTitle("Dark").click();
+  await expect(page.locator("html")).toHaveClass(/\bdark\b/);
+  const dark = await read();
+  for (let i = 0; i < light.length; i += 1) {
+    expect(dark[i]?.[0]).not.toBe(light[i]?.[0]);
+    expect(dark[i]?.[1]).not.toBe(light[i]?.[1]);
+  }
+});

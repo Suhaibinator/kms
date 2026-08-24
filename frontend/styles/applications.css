@@ -10,37 +10,8 @@
     min-width: 0;
   }
 
-  /* ---------- Action menus (components/applications/ActionMenu.tsx) ---------- */
-
-  .menu-popup {
-    min-width: 180px;
-    padding: var(--space-1);
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    box-shadow: var(--shadow);
-    outline: none;
-  }
-  .menu-item {
-    display: flex;
-    align-items: center;
-    gap: var(--space-2);
-    padding: var(--space-2) var(--space-3);
-    border-radius: var(--radius-sm);
-    color: var(--text);
-    font-size: 13px;
-    cursor: default;
-    text-decoration: none;
-    outline: none;
-    user-select: none;
-  }
-  .menu-item[data-highlighted] {
-    background: var(--surface-hover);
-  }
-  .menu-item[data-disabled] {
-    color: var(--text-faint);
-    pointer-events: none;
-  }
+  /* Action menus (.menu-popup/.menu-item) live in globals.css: the recipe is
+     shared with every other dropdown in the console. */
 
   /* ---------- Definition card ---------- */
 
@@ -88,6 +59,21 @@
     flex-wrap: wrap;
     align-items: center;
     gap: var(--space-2);
+  }
+  /* Severity marker: a dot before the issue, coloured like the finding list. */
+  .definition-issue::before {
+    content: "";
+    flex: 0 0 auto;
+    width: 7px;
+    height: 7px;
+    border-radius: 999px;
+    background: var(--text-faint);
+  }
+  .definition-issue-error::before {
+    background: var(--danger);
+  }
+  .definition-issue-warning::before {
+    background: var(--warning);
   }
   .definition-notes {
     display: grid;
@@ -188,6 +174,11 @@
   }
   .pipeline-cta-ok {
     font-weight: 600;
+  }
+  /* The disabled CTA's reason wraps under the button rather than beside it. */
+  .pipeline-cta-reason {
+    flex: 1 1 100%;
+    line-height: 1.4;
   }
   .pipeline-pills {
     display: flex;
