@@ -169,6 +169,69 @@ test -f out/index.html
 `npm ci` consumes the committed lockfile, and CI rejects a build that does not
 produce the embedded entry point.
 
+### Console fixtures and journeys
+
+The console renders readiness state computed by the Go server, so the two
+sides share one set of fixtures rather than two hand-written copies. A Go
+test writes them from the real DTO encoders:
+
+```bash
+go test ./internal/server/httpserver -run TestConsoleFixtures -update
+```
+
+This regenerates `frontend/tests/fixtures/backend/{overview-ready,
+overview-incident,overview-setup,ship-preview,ship-conflict,
+readiness-cases}.json`: three `ApplicationOverview` responses (a ready
+application, an incident with a rejected instance and drift, and a
+half-configured application in `setup`), a Ship dry-run preview, a Ship
+`conflict` result, and the readiness cases that pin the environment/app
+status precedence and the schema-type ↔ content-type mapping on both sides.
+Without `-update` the same test compares its output byte-for-byte with the
+committed files and fails on drift, which is how CI runs it (`make test-unit`
+covers it). `frontend/tests/fixtures.test.ts` loads every fixture with
+`satisfies` against the TypeScript types in `frontend/lib/types.ts`, so a DTO
+field renamed in Go fails the frontend suite, and a type changed in
+TypeScript fails against the committed JSON. Regenerate and commit the
+fixtures in the same change as any DTO or readiness edit.
+
+The vitest suites added with the application-centred console are grouped by
+the lane that owns them:
+
+- shared (`lib/`, shell, chips): `links`, `ident`, `breadcrumbs`,
+  `app-shell`, `contract-derive`, `subscribers`, `sse`,
+  `use-release-subscribers`, `fixtures`, `api`, `visual-tokens` (widened to
+  every `styles/*.css` file with the `--ident-*` light/dark parity check);
+- application page: `applications`, `contract-editor`,
+  `create-application-wizard`, `environment-pipeline`, `add-environment-clone`;
+- ship and rollback: `ship-modal` (dry-run call, changed rows, stale-preview
+  gating, one-click non-production ship with `expected_active_version`,
+  production type-to-confirm gating on partial text, the `rejected`,
+  `release_created_not_activated`, and `conflict` phases, drift opt-in,
+  guided versus express default, missing-secret blocker), `rollback-dialog`
+  (pre-validation, CAS, production confirm, 409), `releases`;
+- onboarding and palette: `dashboard`, `setup-steps`, `setup-checklist`,
+  `connect-sdk-panel`, `command-palette`, `identities-prefill`, `login`.
+
+Two Playwright journeys under `frontend/tests/e2e/` drive the exported site
+against the in-memory fake API in `tests/e2e/fakes/console-api.ts`, which
+answers `page.route("**/api/v1/**")` from mutable state and returns 404 for
+the subscriber stream so the polling fallback is what the browser exercises:
+
+- `onboarding.spec.ts` — a fresh admin with zero applications: first-run
+  checklist → create-application wizard → first Ship → checklist steps
+  turning done → the pipeline stacking on a Pixel 7 viewport without
+  horizontal overflow.
+- `incident.spec.ts` — `⌘K` to a production alias → Ship with the typed
+  environment name → a rejected instance with its remediation → Roll back
+  with pre-validation → the column back on the previous release.
+
+`npm run test:e2e` runs both alongside the existing `login.spec.ts` and
+`theme.spec.ts` on Chromium desktop and the Pixel 7 profile. The server-side
+counterpart of the stream fallback is `internal/server/httpserver/
+subscribers_stream_test.go`, which uses `httptest.NewServer` to assert the
+initial snapshot, keep-alive comments, the `end` event, and the per-identity
+and global caps.
+
 ## CI jobs
 
 The workflow in `.github/workflows/ci.yml` runs these independent checks:

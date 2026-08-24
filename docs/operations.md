@@ -140,6 +140,16 @@ parameter-store admin namespace update --env prod --app gradethis \
 `namespace update` is a full replacement of both the description and auth
 method list, so preserve any existing description intentionally.
 
+The embedded console performs the same step from the application page. **Add
+environment** creates the namespace with an explicit auth-method choice
+(production names are detected and outlined), and can **copy values from**
+an existing environment through `POST /api/v1/applications/environments/clone`:
+parameters are copied as new versions in the target, keys that already exist
+there are left untouched, and secrets are never copied — each is listed as
+needing a value so it is provisioned deliberately per environment. Use that
+path for the second and later environments of an application; the CLI
+commands above remain the scriptable form.
+
 ### 2. Enroll one identity and issue its client certificate
 
 Prepare an owner-controlled directory, then create a namespace-bound,
@@ -248,6 +258,15 @@ try {
   await client.close();
 }
 ```
+
+The application page's **Connect SDK** panel renders these Go and
+TypeScript snippets pre-filled with the server's gRPC address (from
+`GET /api/v1/health`), the namespace, the release name, and the first alias,
+links to identity creation with the namespace prefilled, and warns when the
+server reports `tls_enabled: false`. Its troubleshooting list covers the
+three usual failures: an identity that is not bound to the namespace, an
+auth method the namespace does not allow, and a loader release name that
+differs from the application's `release_name`.
 
 A namespace-bound identity receives an implicit read/list grant in its home
 namespace. Create a policy for writes or cross-namespace access; the policy
@@ -455,6 +474,16 @@ parameter-store release rollback prod/gradethis runtime 1 \
   --endpoint localhost:8443 --token "$ADMIN_TOKEN" --insecure
 ```
 
+`POST /api/v1/releases/rollback` is the HTTP form of the first recipe: it
+targets the active release's `previous` version, carries the same
+`expected_current_version` compare-and-swap guard, re-validates before moving
+the labels, and returns `failed_precondition` when there is no previous
+version. The console's Roll back button (application page, Ship rollout
+panel, and Releases page) calls it after validating the previous version so
+violations are visible before the operator confirms; activating any other
+retained version stays on the activate endpoint. See
+[`http-api.md`](http-api.md#rollback).
+
 `show` and `diff` print aliases, references, exact versions, content types,
 and parameter digests only. They never read or render secret plaintext or
 tokens. `subscribers` is admin-only and pivots the per-state rows into one line
@@ -473,8 +502,11 @@ for remediation.
 
 The embedded **Releases** page offers equivalent create, schema, validate,
 diff, activate, rollback, and subscriber views. Its secret entries are
-metadata-only. Full behavior is in
-[`configuration-releases.md`](configuration-releases.md).
+metadata-only. The application page's **Ship** modal composes a parameter
+change, a release, and its activation into one confirmed step
+(`POST /api/v1/applications/ship`); an operator changing one production value
+during an incident uses it instead of the four commands above. Full behavior
+is in [`configuration-releases.md`](configuration-releases.md#management-surfaces).
 
 Applications using generated Go configuration register the checked-in schema,
 but do not register the generated machine contract. Use that contract to check
@@ -887,8 +919,17 @@ generating a new key file. Every rotation is audited as `key.rotate`.
   refreshed on a 5s interval by default
   (`grpcserver.Config.HealthRefreshInterval`).
 - `GET /api/v1/health` (authenticated-exempt) returns
-  `{"healthy","ready","version","current_revision"}` — `current_revision`
-  is useful as a coarse "is anything moving" signal.
+  `{"healthy","ready","version","current_revision","grpc_addr","tls_enabled"}`
+  — `current_revision` is useful as a coarse "is anything moving" signal;
+  `tls_enabled: false` is what makes the console show its insecure-listener
+  warning, so alert on it for any networked bind.
+- The console's **Overview** and application pages are backed by
+  `GET /api/v1/applications/overview`, which computes a per-environment
+  status (`blocked`, `empty`, `incomplete`, `unreleased`, `degraded`,
+  `rolling`, `drift`, `ready`) and a list of findings on the server. The
+  per-application form is bounded at 64 environments (pass `env=` beyond
+  that); the fleet form carries no rows or subscriber detail. See the
+  [readiness model](http-api.md#readiness-model).
 - The frontend's **Subscribers** page (`/subscribers`, backed by `GET
   /api/v1/subscribers`) is the operational way to confirm a configuration
   subscription: it lists every live-subscribed application, its watched
@@ -901,6 +942,20 @@ generating a new key file. Every rotation is audited as `key.rotate`.
   applied, and rejected release identities, current connection state, and lag
   against that release name's active activation revision. Registration is
   visible immediately, before the first lifecycle acknowledgement.
+- The console's rollout views (application page columns, the Ship rollout
+  panel, and the Releases workspace) follow the same rows live over
+  `GET /api/v1/release-subscribers/stream`, a server-sent-events endpoint
+  that sends a snapshot on connect and after every acknowledgement,
+  connection change, or activation. Streams are capped at **4 per identity
+  and 64 per server** (a refusal is HTTP 429 and audited), live at most five
+  minutes before the server sends `event: end` and the client reconnects, and
+  write a keep-alive comment every 15 s. A reverse proxy in front of the HTTP
+  listener must not buffer that path (`X-Accel-Buffering: no` is set) and
+  must allow idle connections of at least that lifetime. When the stream is
+  unavailable — a proxy that buffers, the cap, or two consecutive failures —
+  the console falls back to polling `GET /api/v1/release-subscribers` every
+  5 s while the tab is visible and shows a `polling` transport badge, so a
+  misconfigured proxy degrades to a slower view rather than a blank one.
 - The **Audit** page / `GET /api/v1/audit` is the record of every secret
   access, write, admin action, and authorization denial — see
   [`security.md`](security.md#audit-guarantees) for exactly what is and

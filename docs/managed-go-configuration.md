@@ -517,6 +517,49 @@ alias/kind/content-type contract. The generated runtime does not hardcode the
 registry coordinates: KMS validates the application and manifest pins, while
 the process independently enforces the generated contract and strict decoder.
 
+### Import the artifacts into the console
+
+The console's **Create application** wizard accepts both generated artifacts
+directly, so an application onboarded from `kms-config-gen` does not need its
+contract typed by hand:
+
+1. **Schema step.** Paste or import `runtime.schema.json`. The wizard
+   registers it as a new immutable version under the schema ID you choose
+   when you advance to the next step, before the application record exists,
+   so a rejected schema leaves nothing behind. Picking an already-registered
+   `id@version` is equally valid.
+2. **Contract step.** **Import** accepts the `kms-config-contract/v1`
+   envelope (`format`, `source`, `schema_sha256`, `groups`, `fields`,
+   `secrets`, `views`) or a bare array of `{alias, kind, content_type}`
+   entries. From the envelope, each `groups[]` entry becomes a parameter
+   alias with content type `json` and each `secrets[]` entry becomes a secret
+   alias; `fields`, `views`, and reload policies are informational to KMS and
+   are not stored on the application. Rows that came from the artifact are
+   marked *from artifact*; any row you edit afterwards is marked *diverged*
+   so a reviewer can see that the application no longer matches the
+   generated contract.
+3. **Pairing check.** `schema_sha256` is the SHA-256 of the exact bytes of
+   the schema file the generator wrote alongside the contract. When both
+   artifacts are supplied, the wizard hashes the schema text you imported and
+   shows whether it matches the contract's `schema_sha256`. Import the file
+   as generated — reformatting or re-serialising it changes the hash and the
+   check reports a mismatch even though the schema is semantically the same.
+   A mismatch usually means the two files come from different builds; rerun
+   generation and import the pair together.
+4. **Environments step.** Add each environment (production names are
+   outlined); an existing namespace with the application's name is attached
+   rather than reported as a conflict.
+
+When the schema is imported without the contract, the wizard prefills the
+contract from the schema with the
+[schema type ↔ content type mapping](configuration-releases.md#schema-type--content-type);
+the reverse derivation is offered when only a contract is supplied. After
+creation the application page's definition card keeps checking that the
+contract and pinned schema agree and offers the same derive fixes. The
+generated runtime still enforces its embedded contract independently, so a
+diverged application record is caught by the process as
+`config_contract_mismatch` at the latest.
+
 ### Register the generated schema
 
 Generate baseline group documents from the exact application build whose

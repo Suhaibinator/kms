@@ -240,3 +240,98 @@ creation, validation, diff, activation, rollback, schema registration/listing,
 and per-instance subscriber status. Secret rows show metadata only. See
 [`operations.md`](operations.md#configuration-release-commands) and
 [`http-api.md`](http-api.md#configuration-releases-and-schemas).
+
+### Application-centred console
+
+The console is organised around the application rather than around the five
+underlying resources. Its surfaces are thin views over the server-side
+aggregates in [`http-api.md`](http-api.md#console-aggregates); the browser
+renders readiness state and never recomputes it.
+
+- **Overview** (`/`). An admin with no applications and no namespaces sees a
+  first-run checklist (keep the one-time admin token safe, create an
+  application, add an environment, set values, activate a first release,
+  connect an SDK, see it applied). Otherwise a fleet grid shows one card per
+  application with an application status, one status dot per environment
+  (production marked), the active release per environment, the rejected
+  instance count, and the last activation. Existing namespaces with no owning
+  application are offered for adoption: creating application `X` attaches
+  every `*/X` namespace.
+- **Application page** (`/applications?app=`). A definition card shows the
+  release name, schema pin, and contract aliases, and an alignment row that
+  compares the contract with the pinned schema and offers one-click fixes
+  (derive the contract from the schema, derive a schema from the contract, or
+  edit the contract). A setup panel lists the remaining steps while the
+  application is in `setup`. The default **pipeline** tab shows one column
+  per environment, non-production first, production outlined: a *Values*
+  section with one row per contract alias (present version, drift badge when
+  the current version is newer than the active pin, Edit & ship), a *Release*
+  section (active release and revision, previous version, Roll back, and a
+  call to action naming the number of unreleased changes), and a
+  *Subscribers* section (connected/applied/prepared/received/rejected counts
+  with rejected instances expandable to their bounded category and the
+  remediation from the
+  [managed configuration table](managed-go-configuration.md#diagnose-a-rejected-candidate)).
+  The *Matrix* tab keeps the cross-environment value table and the reviewed
+  multi-target parameter write.
+- **Ship** (Quick change). One modal composes parameter changes for one
+  environment, previews them with a server dry run (writes, release entries
+  with changed rows highlighted, unreleased changes offered for opt-in, the
+  schema pin, the activation it will perform, and the validation result), and
+  ships with one confirmation. Environments whose name matches
+  `^prod(-|$)` or `^production$` require typing the environment name. The
+  server writes the parameter versions, creates the release, and activates it
+  under a compare-and-swap guard frozen from the preview; the four possible
+  outcomes (`activated`, `rejected` before any write, release created but not
+  activated, and a lost race) are shown with the exact next action, and the
+  modal never offers "activate anyway". A rollout panel then follows
+  per-instance acknowledgements live. The modal has a guided mode with a
+  four-step header for applications that have never had an active release and
+  an express mode afterwards.
+- **Roll back**. The rollback dialog validates the previous version first, so
+  an un-activatable previous release (a disabled or expired secret, an edited
+  contract) is shown as violations rather than discovered on confirm. It uses
+  `POST /api/v1/releases/rollback` with the CAS guard, reports a concurrent
+  change as "changed meanwhile", and applies production type-to-confirm.
+- **Add environment / clone**. A new environment can start empty or copy
+  parameter values from an existing environment. Clone never overwrites a key
+  that already exists in the target and never copies a secret value; each
+  secret is listed as needing a value with an Add secret button.
+- **Connect SDK** shows Go and TypeScript snippets templated from the server's
+  gRPC address, the namespace, the release name, and the first alias, links to
+  identity creation and the mTLS runbook, and warns when the server reports
+  `tls_enabled: false`.
+- **Command palette** (`⌘K` / `Ctrl+K`) indexes applications, environments,
+  aliases (as "Ship a change"), pages, and actions such as "Roll back".
+
+### Alias → key resolution
+
+A contract alias is a release-level name; the physical parameter or secret
+key is chosen per environment. Readiness, Ship, and clone resolve an alias to
+a key with one shared rule, in order: the active release's entry for that
+alias → the latest release's entry → a resource in the namespace whose key
+equals the alias → the key another environment's active release uses for
+that alias → unresolved. The console shows both identifiers, and an
+unresolved alias becomes a "Create parameter" action that can also pick an
+existing key.
+
+### Schema type ↔ content type
+
+When the console derives a contract from a pinned schema (or a schema from a
+contract) it uses one mapping, implemented once in Go and mirrored in the
+frontend, and pinned by a shared fixture:
+
+| schema `type` | parameter content type |
+|---|---|
+| `object`, `array` | `json` |
+| `string` | `string` (`format: kms-base64` → `binary`) |
+| `integer` | `integer` |
+| `number` | `float` |
+| `boolean` | `boolean` |
+| union or absent | `json` |
+
+The reverse direction emits `{}` for `json`, `{"type": …}` otherwise, lists
+every parameter alias in `required`, and sets `additionalProperties: false`.
+Secrets are never part of the schema. The full table, with the readiness
+states and finding codes the console renders, is in
+[`http-api.md`](http-api.md#readiness-model).
