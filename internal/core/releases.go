@@ -60,6 +60,14 @@ func validateReleaseAddress(ns domain.NamespaceRef, name string) error {
 	return nil
 }
 
+// releaseCandidateValue substitutes an unsaved parameter value for one alias
+// during in-memory validation so a dry-run can check what a caller intends to
+// write without persisting it.
+type releaseCandidateValue struct {
+	value       []byte
+	contentType string
+}
+
 func (s *Service) CreateConfigurationRelease(ctx context.Context, pr Principal, in domain.CreateConfigurationReleaseInput) (domain.ConfigurationRelease, error) {
 	if err := validateReleaseAddress(in.Namespace, in.Name); err != nil {
 		return domain.ConfigurationRelease{}, err
@@ -82,77 +90,10 @@ func (s *Service) CreateConfigurationRelease(ctx context.Context, pr Principal, 
 	if err != nil {
 		return domain.ConfigurationRelease{}, err
 	}
-	if in.SchemaID != "" {
-		if _, err := rs.GetConfigurationSchema(ctx, in.SchemaID, in.SchemaVersion); err != nil {
-			return domain.ConfigurationRelease{}, err
-		}
-	}
-
-	seen := make(map[string]struct{}, len(in.Entries))
-	entries := make([]domain.ConfigurationReleaseEntry, 0, len(in.Entries))
-	for _, sel := range in.Entries {
-		if len(sel.Alias) == 0 || len(sel.Alias) > maxReleaseAliasBytes || !releaseAliasRE.MatchString(sel.Alias) {
-			return domain.ConfigurationRelease{}, domain.Errorf(domain.ErrInvalidArgument, "invalid release alias %q", sel.Alias)
-		}
-		if _, ok := seen[sel.Alias]; ok {
-			return domain.ConfigurationRelease{}, domain.Errorf(domain.ErrInvalidArgument, "duplicate release alias %q", sel.Alias)
-		}
-		seen[sel.Alias] = struct{}{}
-		if sel.Version > 0 && sel.Label != "" {
-			return domain.ConfigurationRelease{}, domain.Errorf(domain.ErrInvalidArgument, "release alias %q specifies both version and label", sel.Alias)
-		}
-		if sel.Ref.NS == (domain.NamespaceRef{}) {
-			sel.Ref.NS = in.Namespace
-		}
-		if err := validateRef(sel.Ref); err != nil {
-			return domain.ConfigurationRelease{}, err
-		}
-		label := sel.Label
-		if sel.Version == 0 && label == "" {
-			label = domain.LabelCurrent
-		}
-		switch sel.Kind {
-		case domain.ReleaseEntryParameter:
-			ctx, _, err = s.authorize(ctx, pr, domain.OpParameterRead, domain.ResourceParameter, sel.Ref)
-			if err != nil {
-				return domain.ConfigurationRelease{}, err
-			}
-			p, err := s.store.GetParameter(ctx, sel.Ref, sel.Version, label)
-			if err != nil {
-				return domain.ConfigurationRelease{}, err
-			}
-			if len(p.Metadata) > maxReleaseMetadataBytes {
-				return domain.ConfigurationRelease{}, domain.Errorf(domain.ErrFailedPrecondition, "release alias %q metadata exceeds release limit", sel.Alias)
-			}
-			entries = append(entries, domain.ConfigurationReleaseEntry{Alias: sel.Alias, Kind: sel.Kind, Ref: sel.Ref, Version: p.Version, ContentType: p.ContentType, Metadata: p.Metadata, ParameterDigest: sha256Hex([]byte(p.Value))})
-		case domain.ReleaseEntrySecret:
-			ctx, _, err = s.authorize(ctx, pr, domain.OpSecretRead, domain.ResourceSecret, sel.Ref)
-			if err != nil {
-				return domain.ConfigurationRelease{}, err
-			}
-			_, ver, err := s.store.GetSecretVersion(ctx, sel.Ref, sel.Version, label)
-			if err != nil {
-				return domain.ConfigurationRelease{}, err
-			}
-			if ver.State == domain.StateDestroyed {
-				return domain.ConfigurationRelease{}, domain.Errorf(domain.ErrFailedPrecondition, "release alias %q references a destroyed secret version", sel.Alias)
-			}
-			if len(ver.Metadata) > maxReleaseMetadataBytes {
-				return domain.ConfigurationRelease{}, domain.Errorf(domain.ErrFailedPrecondition, "release alias %q metadata exceeds release limit", sel.Alias)
-			}
-			entries = append(entries, domain.ConfigurationReleaseEntry{Alias: sel.Alias, Kind: sel.Kind, Ref: sel.Ref, Version: ver.Version, ContentType: ver.ContentType, Metadata: ver.Metadata, ClientBound: ver.ClientBound, HasAccessToken: ver.HasAccessToken})
-		default:
-			return domain.ConfigurationRelease{}, domain.Errorf(domain.ErrInvalidArgument, "release alias %q has unknown kind %q", sel.Alias, sel.Kind)
-		}
-	}
-	sort.Slice(entries, func(i, j int) bool { return entries[i].Alias < entries[j].Alias })
-	if err := s.validateApplicationReleaseContract(ctx, in.Namespace.App, in.Name, in.SchemaID, in.SchemaVersion, entries); err != nil {
-		return domain.ConfigurationRelease{}, err
-	}
-	release := domain.ConfigurationRelease{Namespace: in.Namespace, Name: in.Name, SchemaID: in.SchemaID, SchemaVersion: in.SchemaVersion, Entries: entries, Metadata: metadata, CreatedBy: pr.Identity.Name}
-	release.Digest, err = releaseDigest(release)
+	in.Metadata = metadata
+	ctx, release, _, err := s.resolveReleaseCandidate(ctx, pr, rs, in, false)
 	if err != nil {
-		return domain.ConfigurationRelease{}, fmt.Errorf("calculate configuration release digest: %w", err)
+		return domain.ConfigurationRelease{}, err
 	}
 	out, err := rs.CreateConfigurationRelease(ctx, release)
 	if err != nil {
@@ -162,7 +103,141 @@ func (s *Service) CreateConfigurationRelease(ctx context.Context, pr Principal, 
 	return out, nil
 }
 
-func (s *Service) validateApplicationReleaseContract(ctx context.Context, appName, releaseName, schemaID string, schemaVersion uint64, entries []domain.ConfigurationReleaseEntry) error {
+// resolveReleaseCandidate turns entry selectors into an exactly pinned,
+// digested, contract-checked release WITHOUT persisting it. The caller must
+// already hold an authorized context for the release itself; per-entry read
+// authorization happens here and the returned context carries every namespace
+// incarnation binding the persist step relies on.
+//
+// With collectErrors=false the first per-alias resolution failure aborts (the
+// historical CreateConfigurationRelease behaviour). With collectErrors=true
+// per-alias failures (missing, unreadable, denied, destroyed, oversized) are
+// reported as sanitized ReleaseValidationErrors instead; when any were
+// collected the contract check is skipped and the partially resolved candidate
+// is returned alongside them. collectErrors=true is the dry-run mode, so the
+// contract check also runs with adopt=false and nothing is ever written.
+// Structural input errors (bad alias, duplicate, unknown kind, invalid ref)
+// always abort.
+func (s *Service) resolveReleaseCandidate(ctx context.Context, pr Principal, rs storage.ReleaseStore, in domain.CreateConfigurationReleaseInput, collectErrors bool) (context.Context, domain.ConfigurationRelease, []domain.ReleaseValidationError, error) {
+	if in.SchemaID != "" {
+		if _, err := rs.GetConfigurationSchema(ctx, in.SchemaID, in.SchemaVersion); err != nil {
+			return ctx, domain.ConfigurationRelease{}, nil, err
+		}
+	}
+	var validation []domain.ReleaseValidationError
+	collect := func(alias string, verr domain.ReleaseValidationError, err error) error {
+		if !collectErrors {
+			return err
+		}
+		verr.Alias = alias
+		validation = append(validation, verr)
+		return nil
+	}
+	seen := make(map[string]struct{}, len(in.Entries))
+	entries := make([]domain.ConfigurationReleaseEntry, 0, len(in.Entries))
+	for _, sel := range in.Entries {
+		if len(sel.Alias) == 0 || len(sel.Alias) > maxReleaseAliasBytes || !releaseAliasRE.MatchString(sel.Alias) {
+			return ctx, domain.ConfigurationRelease{}, nil, domain.Errorf(domain.ErrInvalidArgument, "invalid release alias %q", sel.Alias)
+		}
+		if _, ok := seen[sel.Alias]; ok {
+			return ctx, domain.ConfigurationRelease{}, nil, domain.Errorf(domain.ErrInvalidArgument, "duplicate release alias %q", sel.Alias)
+		}
+		seen[sel.Alias] = struct{}{}
+		if sel.Version > 0 && sel.Label != "" {
+			return ctx, domain.ConfigurationRelease{}, nil, domain.Errorf(domain.ErrInvalidArgument, "release alias %q specifies both version and label", sel.Alias)
+		}
+		if sel.Ref.NS == (domain.NamespaceRef{}) {
+			sel.Ref.NS = in.Namespace
+		}
+		if err := validateRef(sel.Ref); err != nil {
+			return ctx, domain.ConfigurationRelease{}, nil, err
+		}
+		label := sel.Label
+		if sel.Version == 0 && label == "" {
+			label = domain.LabelCurrent
+		}
+		switch sel.Kind {
+		case domain.ReleaseEntryParameter:
+			authorizedCtx, _, err := s.authorize(ctx, pr, domain.OpParameterRead, domain.ResourceParameter, sel.Ref)
+			if err != nil {
+				if err := collect(sel.Alias, validationAuthError(sel.Alias, err), err); err != nil {
+					return ctx, domain.ConfigurationRelease{}, nil, err
+				}
+				continue
+			}
+			ctx = authorizedCtx
+			p, err := s.store.GetParameter(ctx, sel.Ref, sel.Version, label)
+			if err != nil {
+				if err := collect(sel.Alias, validationReadError(sel.Alias, err), err); err != nil {
+					return ctx, domain.ConfigurationRelease{}, nil, err
+				}
+				continue
+			}
+			if len(p.Metadata) > maxReleaseMetadataBytes {
+				err := domain.Errorf(domain.ErrFailedPrecondition, "release alias %q metadata exceeds release limit", sel.Alias)
+				if err := collect(sel.Alias, domain.ReleaseValidationError{Code: domain.ReleaseValidationUnreadable, Message: "resource metadata exceeds release limit"}, err); err != nil {
+					return ctx, domain.ConfigurationRelease{}, nil, err
+				}
+				continue
+			}
+			entries = append(entries, domain.ConfigurationReleaseEntry{Alias: sel.Alias, Kind: sel.Kind, Ref: sel.Ref, Version: p.Version, ContentType: p.ContentType, Metadata: p.Metadata, ParameterDigest: sha256Hex([]byte(p.Value))})
+		case domain.ReleaseEntrySecret:
+			authorizedCtx, _, err := s.authorize(ctx, pr, domain.OpSecretRead, domain.ResourceSecret, sel.Ref)
+			if err != nil {
+				if err := collect(sel.Alias, validationAuthError(sel.Alias, err), err); err != nil {
+					return ctx, domain.ConfigurationRelease{}, nil, err
+				}
+				continue
+			}
+			ctx = authorizedCtx
+			_, ver, err := s.store.GetSecretVersion(ctx, sel.Ref, sel.Version, label)
+			if err != nil {
+				if err := collect(sel.Alias, validationReadError(sel.Alias, err), err); err != nil {
+					return ctx, domain.ConfigurationRelease{}, nil, err
+				}
+				continue
+			}
+			if ver.State == domain.StateDestroyed {
+				err := domain.Errorf(domain.ErrFailedPrecondition, "release alias %q references a destroyed secret version", sel.Alias)
+				if err := collect(sel.Alias, domain.ReleaseValidationError{Code: domain.ReleaseValidationUnreadable, Message: "secret version is not readable"}, err); err != nil {
+					return ctx, domain.ConfigurationRelease{}, nil, err
+				}
+				continue
+			}
+			if len(ver.Metadata) > maxReleaseMetadataBytes {
+				err := domain.Errorf(domain.ErrFailedPrecondition, "release alias %q metadata exceeds release limit", sel.Alias)
+				if err := collect(sel.Alias, domain.ReleaseValidationError{Code: domain.ReleaseValidationUnreadable, Message: "resource metadata exceeds release limit"}, err); err != nil {
+					return ctx, domain.ConfigurationRelease{}, nil, err
+				}
+				continue
+			}
+			entries = append(entries, domain.ConfigurationReleaseEntry{Alias: sel.Alias, Kind: sel.Kind, Ref: sel.Ref, Version: ver.Version, ContentType: ver.ContentType, Metadata: ver.Metadata, ClientBound: ver.ClientBound, HasAccessToken: ver.HasAccessToken})
+		default:
+			return ctx, domain.ConfigurationRelease{}, nil, domain.Errorf(domain.ErrInvalidArgument, "release alias %q has unknown kind %q", sel.Alias, sel.Kind)
+		}
+	}
+	sort.Slice(entries, func(i, j int) bool { return entries[i].Alias < entries[j].Alias })
+	release := domain.ConfigurationRelease{Namespace: in.Namespace, Name: in.Name, SchemaID: in.SchemaID, SchemaVersion: in.SchemaVersion, Entries: entries, Metadata: in.Metadata, CreatedBy: pr.Identity.Name}
+	if len(validation) > 0 {
+		return ctx, release, validation, nil
+	}
+	if err := s.validateApplicationReleaseContract(ctx, in.Namespace.App, in.Name, in.SchemaID, in.SchemaVersion, entries, !collectErrors); err != nil {
+		return ctx, domain.ConfigurationRelease{}, nil, err
+	}
+	var err error
+	release.Digest, err = releaseDigest(release)
+	if err != nil {
+		return ctx, domain.ConfigurationRelease{}, nil, fmt.Errorf("calculate configuration release digest: %w", err)
+	}
+	return ctx, release, nil, nil
+}
+
+// validateApplicationReleaseContract checks a release against its
+// application's contract. When the application has no contract yet, adopt=true
+// derives one from the entries (the first-release adoption rule); adopt=false
+// treats the entries as matching without writing anything so dry-run paths
+// never mutate the application.
+func (s *Service) validateApplicationReleaseContract(ctx context.Context, appName, releaseName, schemaID string, schemaVersion uint64, entries []domain.ConfigurationReleaseEntry, adopt bool) error {
 	store, ok := s.store.(storage.ApplicationStore)
 	if !ok {
 		return nil
@@ -178,6 +253,9 @@ func (s *Service) validateApplicationReleaseContract(ctx context.Context, appNam
 		return domain.Errorf(domain.ErrFailedPrecondition, "application %s requires schema %s@%d", appName, app.SchemaID, app.SchemaVersion)
 	}
 	if len(app.Contract) == 0 {
+		if !adopt {
+			return nil
+		}
 		fields := make([]domain.ApplicationContractField, 0, len(entries))
 		for _, entry := range entries {
 			field := domain.ApplicationContractField{Alias: entry.Alias, Kind: entry.Kind}
@@ -301,19 +379,35 @@ func (s *Service) validateConfigurationRelease(ctx context.Context, pr Principal
 	if err != nil {
 		return nil, err
 	}
-	if err := s.validateApplicationReleaseContract(ctx, ns.App, rel.Name, rel.SchemaID, rel.SchemaVersion, rel.Entries); err != nil {
+	return s.validateReleaseEntries(ctx, pr, rs, rel, nil, authorizeEntries, true)
+}
+
+// validateReleaseEntries validates an in-memory release: every pinned entry
+// must still resolve to the same content, and the assembled parameter object
+// must satisfy the release schema. overrides substitutes unsaved values for
+// parameter aliases (dry-run of an edit) — those aliases skip the stored
+// lookup and digest check and the override is what the schema sees. adopt is
+// forwarded to the contract check; dry-run callers pass false so validation
+// never writes. Entries with a zero ResourceNamespaceID (never persisted) are
+// read through the caller's already-bound context instead of re-binding.
+func (s *Service) validateReleaseEntries(ctx context.Context, pr Principal, rs storage.ReleaseStore, rel domain.ConfigurationRelease, overrides map[string]releaseCandidateValue, authorizeEntries, adopt bool) ([]domain.ReleaseValidationError, error) {
+	if err := s.validateApplicationReleaseContract(ctx, rel.Namespace.App, rel.Name, rel.SchemaID, rel.SchemaVersion, rel.Entries, adopt); err != nil {
 		return nil, err
 	}
 	validation := make([]domain.ReleaseValidationError, 0)
 	obj := map[string]any{}
 	for _, entry := range rel.Entries {
-		entryCtx, bindErr := storage.BindNamespaceIncarnation(ctx, entry.Ref.NS, entry.ResourceNamespaceID)
-		if bindErr != nil {
-			validation = append(validation, domain.ReleaseValidationError{
-				Alias: entry.Alias, Code: domain.ReleaseValidationNotFound,
-				Message: "release entry references a missing or replaced namespace",
-			})
-			continue
+		entryCtx := ctx
+		if entry.ResourceNamespaceID > 0 {
+			bound, bindErr := storage.BindNamespaceIncarnation(ctx, entry.Ref.NS, entry.ResourceNamespaceID)
+			if bindErr != nil {
+				validation = append(validation, domain.ReleaseValidationError{
+					Alias: entry.Alias, Code: domain.ReleaseValidationNotFound,
+					Message: "release entry references a missing or replaced namespace",
+				})
+				continue
+			}
+			entryCtx = bound
 		}
 		switch entry.Kind {
 		case domain.ReleaseEntryParameter:
@@ -325,23 +419,29 @@ func (s *Service) validateConfigurationRelease(ctx context.Context, pr Principal
 				}
 				entryCtx = authorizedCtx
 			}
-			p, err := s.store.GetParameter(entryCtx, entry.Ref, entry.Version, "")
-			if err != nil {
-				validation = append(validation, validationReadError(entry.Alias, err))
-				continue
+			rawValue, contentType := "", entry.ContentType
+			if override, ok := overrides[entry.Alias]; ok {
+				rawValue, contentType = string(override.value), override.contentType
+			} else {
+				p, err := s.store.GetParameter(entryCtx, entry.Ref, entry.Version, "")
+				if err != nil {
+					validation = append(validation, validationReadError(entry.Alias, err))
+					continue
+				}
+				if got := sha256Hex([]byte(p.Value)); got != entry.ParameterDigest {
+					validation = append(validation, domain.ReleaseValidationError{Alias: entry.Alias, Code: domain.ReleaseValidationDigest, Message: "parameter digest does not match release pin"})
+					continue
+				}
+				rawValue, contentType = p.Value, p.ContentType
 			}
-			if got := sha256Hex([]byte(p.Value)); got != entry.ParameterDigest {
-				validation = append(validation, domain.ReleaseValidationError{Alias: entry.Alias, Code: domain.ReleaseValidationDigest, Message: "parameter digest does not match release pin"})
-				continue
-			}
-			if p.ContentType != entry.ContentType {
+			if contentType != entry.ContentType {
 				validation = append(validation, domain.ReleaseValidationError{Alias: entry.Alias, Code: domain.ReleaseValidationContentType, Message: "parameter content type does not match release pin"})
 				continue
 			}
-			value, err := parameterSchemaValue(p.Value, entry.ContentType)
+			value, err := parameterSchemaValue(rawValue, entry.ContentType)
 			if err != nil {
 				code := domain.ReleaseValidationContentType
-				if p.ContentType == "json" {
+				if contentType == "json" {
 					code = domain.ReleaseValidationMalformedJSON
 				}
 				validation = append(validation, domain.ReleaseValidationError{Alias: entry.Alias, Code: code, Message: "parameter does not match its declared content type"})

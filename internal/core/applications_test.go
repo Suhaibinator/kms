@@ -129,3 +129,57 @@ func TestFirstReleaseAdoptsApplicationContract(t *testing.T) {
 		t.Fatalf("divergent second environment error = %v", err)
 	}
 }
+
+func TestResolveContractRefs(t *testing.T) {
+	app := domain.Application{Name: "worker", Contract: []domain.ApplicationContractField{
+		{Alias: "from_active", Kind: domain.ReleaseEntryParameter, ContentType: "string"},
+		{Alias: "from_latest", Kind: domain.ReleaseEntryParameter, ContentType: "string"},
+		{Alias: "by_key", Kind: domain.ReleaseEntryParameter, ContentType: "string"},
+		{Alias: "by_key_wrong_kind", Kind: domain.ReleaseEntrySecret},
+		{Alias: "from_other_env", Kind: domain.ReleaseEntryParameter, ContentType: "string"},
+		{Alias: "unresolved", Kind: domain.ReleaseEntryParameter, ContentType: "string"},
+	}}
+	prod := domain.NamespaceRef{Env: "prod", App: "worker"}
+	shared := domain.NamespaceRef{Env: "shared", App: "worker"}
+	active := &domain.ConfigurationRelease{Entries: []domain.ConfigurationReleaseEntry{
+		{Alias: "from_active", Kind: domain.ReleaseEntryParameter, Ref: domain.Ref{NS: shared, Key: "active-key"}},
+	}}
+	latest := &domain.ConfigurationRelease{Entries: []domain.ConfigurationReleaseEntry{
+		{Alias: "from_active", Kind: domain.ReleaseEntryParameter, Ref: domain.Ref{NS: prod, Key: "should-lose-to-active"}},
+		{Alias: "from_latest", Kind: domain.ReleaseEntryParameter, Ref: domain.Ref{NS: prod, Key: "latest-key"}},
+	}}
+	rows := []domain.ApplicationConfigurationRow{
+		{Key: "by_key", Kind: domain.ResourceParameter, Cells: map[string]domain.ApplicationConfigurationCell{"prod": {Present: true}}},
+		{Key: "by_key_wrong_kind", Kind: domain.ResourceParameter, Cells: map[string]domain.ApplicationConfigurationCell{"prod": {Present: true}}},
+		{Key: "from_other_env", Kind: domain.ResourceParameter, Cells: map[string]domain.ApplicationConfigurationCell{"dev": {Present: true}}},
+	}
+	otherActive := map[string]domain.ConfigurationRelease{
+		"prod":    {Entries: []domain.ConfigurationReleaseEntry{{Alias: "unresolved", Ref: domain.Ref{NS: prod, Key: "must-not-use-own-env"}}}},
+		"staging": {Entries: []domain.ConfigurationReleaseEntry{{Alias: "from_other_env", Ref: domain.Ref{NS: domain.NamespaceRef{Env: "staging", App: "worker"}, Key: "staging-key"}}}},
+		"dev":     {Entries: []domain.ConfigurationReleaseEntry{{Alias: "from_other_env", Ref: domain.Ref{NS: domain.NamespaceRef{Env: "dev", App: "worker"}, Key: "dev-key"}}}},
+	}
+	got := resolveContractRefs(app, "prod", active, latest, otherActive, rows)
+	want := map[string]domain.Ref{
+		"from_active":    {NS: shared, Key: "active-key"},
+		"from_latest":    {NS: prod, Key: "latest-key"},
+		"by_key":         {NS: prod, Key: "by_key"},
+		"from_other_env": {NS: prod, Key: "dev-key"}, // sorted env order: dev before staging
+	}
+	if len(got) != len(want) {
+		t.Fatalf("resolved = %+v, want %+v", got, want)
+	}
+	for alias, ref := range want {
+		if got[alias] != ref {
+			t.Fatalf("alias %s = %+v, want %+v", alias, got[alias], ref)
+		}
+	}
+	if _, ok := got["unresolved"]; ok {
+		t.Fatalf("unresolved alias must be absent: %+v", got)
+	}
+	if _, ok := got["by_key_wrong_kind"]; ok {
+		t.Fatalf("key of a different kind must not resolve: %+v", got)
+	}
+	if got := resolveContractRefs(app, "prod", nil, nil, nil, nil); len(got) != 0 {
+		t.Fatalf("nothing to resolve from: %+v", got)
+	}
+}

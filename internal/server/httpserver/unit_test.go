@@ -116,3 +116,37 @@ func TestHealthzReadyz(t *testing.T) {
 	w = ne.do(http.MethodGet, "/readyz", nil, nil)
 	mustStatus(t, w, http.StatusServiceUnavailable)
 }
+
+func TestStatusRecorderUnwrapAndFlush(t *testing.T) {
+	rec := httptest.NewRecorder()
+	sr := &statusRecorder{ResponseWriter: rec, status: http.StatusOK}
+	if sr.Unwrap() != rec {
+		t.Fatal("Unwrap must return the underlying writer")
+	}
+	// http.ResponseController reaches Flush through Unwrap.
+	if err := http.NewResponseController(sr).Flush(); err != nil {
+		t.Fatalf("ResponseController.Flush: %v", err)
+	}
+	if !rec.Flushed {
+		t.Fatal("flush was not forwarded to the underlying writer")
+	}
+	// Flushing commits the (default) status: a later WriteHeader must not
+	// rewrite the recorded status.
+	sr.WriteHeader(http.StatusInternalServerError)
+	if sr.status != http.StatusOK {
+		t.Fatalf("status after flush+WriteHeader = %d, want 200", sr.status)
+	}
+
+	// Direct Flush on a writer without Flusher support is a no-op.
+	plain := &statusRecorder{ResponseWriter: nopWriter{}, status: http.StatusOK}
+	plain.Flush()
+	if plain.wroteHeader {
+		t.Fatal("flush on a non-flusher must not mark the header written")
+	}
+}
+
+type nopWriter struct{}
+
+func (nopWriter) Header() http.Header         { return http.Header{} }
+func (nopWriter) Write(b []byte) (int, error) { return len(b), nil }
+func (nopWriter) WriteHeader(int)             {}

@@ -264,7 +264,11 @@ this DTO. Creation selectors use the same `ref` shape, plus either `version` or
 - `POST /api/v1/auth/login` — no auth — body `{"token": "..."}` →
   `{"identity": {"name": "...", "kind": "admin|client"}}`
 - `GET /api/v1/health` — no auth →
-  `{"healthy": true, "ready": true, "version": "...", "current_revision": 42}`
+  `{"healthy": true, "ready": true, "version": "...", "current_revision": 42,
+    "grpc_addr": "0.0.0.0:8443", "tls_enabled": true}`
+  `grpc_addr` is the configured gRPC listen address (empty when the gRPC
+  server is not wired); `tls_enabled` is true when the server was started with
+  TLS or the request itself arrived over TLS.
 - `GET /api/v1/whoami` →
   `{"name": "...", "kind": "admin|client",
     "namespace": {"env": "...", "app": "..."} | null, "auth_method": "mtls|token"}`

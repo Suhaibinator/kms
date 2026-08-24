@@ -169,13 +169,28 @@ func (s *Service) GetApplicationDashboard(ctx context.Context, pr Principal, nam
 	if err != nil {
 		return domain.ApplicationDashboard{}, err
 	}
+	rows, _, err := s.collectApplicationRows(ctx, environments)
+	if err != nil {
+		return domain.ApplicationDashboard{}, err
+	}
+	return domain.ApplicationDashboard{Application: app, Environments: environments, Rows: rows}, nil
+}
+
+// collectApplicationRows lists every parameter and secret in the given
+// environments and folds them into one row per (kind, key) with a cell per
+// environment, sorted by key then kind. The secret records are also returned
+// per environment keyed by secret key so callers needing label/version detail
+// (readiness, ship) do not have to list again. It performs no authorization:
+// callers are admin-gated.
+func (s *Service) collectApplicationRows(ctx context.Context, environments []domain.Namespace) ([]domain.ApplicationConfigurationRow, map[string]map[string]domain.Secret, error) {
 	rows := make(map[string]*domain.ApplicationConfigurationRow)
+	secretsByEnv := make(map[string]map[string]domain.Secret, len(environments))
 	for _, ns := range environments {
 		var token string
 		for {
 			parameters, next, err := s.store.ListParameters(ctx, ns.NamespaceRef, "", storage.ListPage{Limit: 1000, Token: token})
 			if err != nil {
-				return domain.ApplicationDashboard{}, err
+				return nil, nil, err
 			}
 			for _, parameter := range parameters {
 				rowKey := domain.ResourceParameter + "\x00" + parameter.Ref.Key
@@ -192,12 +207,15 @@ func (s *Service) GetApplicationDashboard(ctx context.Context, pr Principal, nam
 			token = next
 		}
 		token = ""
+		secrets := make(map[string]domain.Secret)
+		secretsByEnv[ns.Env] = secrets
 		for {
-			secrets, next, err := s.store.ListSecrets(ctx, ns.NamespaceRef, "", storage.ListPage{Limit: 1000, Token: token})
+			page, next, err := s.store.ListSecrets(ctx, ns.NamespaceRef, "", storage.ListPage{Limit: 1000, Token: token})
 			if err != nil {
-				return domain.ApplicationDashboard{}, err
+				return nil, nil, err
 			}
-			for _, secret := range secrets {
+			for _, secret := range page {
+				secrets[secret.Ref.Key] = secret
 				rowKey := domain.ResourceSecret + "\x00" + secret.Ref.Key
 				row := rows[rowKey]
 				if row == nil {
@@ -222,7 +240,67 @@ func (s *Service) GetApplicationDashboard(ctx context.Context, pr Principal, nam
 		}
 		return ordered[i].Key < ordered[j].Key
 	})
-	return domain.ApplicationDashboard{Application: app, Environments: environments, Rows: ordered}, nil
+	return ordered, secretsByEnv, nil
+}
+
+// resolveContractRefs maps every contract alias of app to the physical
+// resource it denotes in env, using the rule shared by readiness, ship and
+// clone: the env's active release entry → the latest release entry → an
+// existing resource in env whose key equals the alias (same kind) → the key
+// another environment's active release uses for that alias (rebased into env)
+// → unresolved (absent from the result). otherActive is keyed by environment
+// and is consulted in sorted order so the result is deterministic.
+func resolveContractRefs(app domain.Application, env string, active, latest *domain.ConfigurationRelease, otherActive map[string]domain.ConfigurationRelease, rows []domain.ApplicationConfigurationRow) map[string]domain.Ref {
+	out := make(map[string]domain.Ref, len(app.Contract))
+	entryRef := func(rel *domain.ConfigurationRelease, alias string) (domain.Ref, bool) {
+		if rel == nil {
+			return domain.Ref{}, false
+		}
+		for _, entry := range rel.Entries {
+			if entry.Alias == alias {
+				return entry.Ref, true
+			}
+		}
+		return domain.Ref{}, false
+	}
+	otherEnvs := make([]string, 0, len(otherActive))
+	for name := range otherActive {
+		if name != env {
+			otherEnvs = append(otherEnvs, name)
+		}
+	}
+	sort.Strings(otherEnvs)
+	here := domain.NamespaceRef{Env: env, App: app.Name}
+	for _, field := range app.Contract {
+		if ref, ok := entryRef(active, field.Alias); ok {
+			out[field.Alias] = ref
+			continue
+		}
+		if ref, ok := entryRef(latest, field.Alias); ok {
+			out[field.Alias] = ref
+			continue
+		}
+		resolved := false
+		for _, row := range rows {
+			if row.Kind == field.Kind && row.Key == field.Alias && row.Cells[env].Present {
+				out[field.Alias] = domain.Ref{NS: here, Key: field.Alias}
+				resolved = true
+				break
+			}
+		}
+		if resolved {
+			continue
+		}
+		for _, otherEnv := range otherEnvs {
+			rel := otherActive[otherEnv]
+			if ref, ok := entryRef(&rel, field.Alias); ok {
+				out[field.Alias] = domain.Ref{NS: here, Key: ref.Key}
+				resolved = true
+				break
+			}
+		}
+	}
+	return out
 }
 
 func (s *Service) PutApplicationParameter(ctx context.Context, pr Principal, app, key, value, contentType, metadata string, environments []string) ([]domain.ApplicationParameterWriteResult, error) {

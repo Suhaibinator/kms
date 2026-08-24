@@ -161,7 +161,9 @@ func (c *CLI) cmdServe(args []string) int {
 	}
 
 	var grpcSrv GRPCServer
+	grpcAddr := ""
 	if GRPCFactory != nil {
+		grpcAddr = cfg.Server.GRPCAddr
 		// The gRPC listener authenticates machine clients by mTLS: add the built-in
 		// CA to its client-CA pool and verify a presented client certificate, but do
 		// not require one (VerifyClientCertIfGiven) — token-only clients still
@@ -198,6 +200,8 @@ func (c *CLI) cmdServe(args []string) int {
 		Frontend:          webRoot,
 		Version:           Version,
 		TrustProxyHeaders: cfg.Security.TrustProxyHeaders,
+		GRPCAddr:          grpcAddr,
+		TLSEnabled:        tlsCfg != nil,
 	})
 	if err != nil {
 		return c.fail("building HTTP server: %v", err)

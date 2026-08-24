@@ -840,3 +840,36 @@ func TestPruneConfigurationReleasesRetainsInactiveCountBeyondLabels(t *testing.T
 		}
 	}
 }
+
+func TestCountConfigurationReleases(t *testing.T) {
+	ctx := context.Background()
+	st := newStore(t)
+	seedNS(t, st, "prod", "app")
+	seedNS(t, st, "dev", "app")
+	ns := nsRef("prod", "app")
+	paramRef := ref("prod", "app", "config")
+	if _, _, err := st.PutParameter(ctx, paramRef, "1", "integer", "{}", "admin"); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := st.CountConfigurationReleases(ctx, ns, ""); err != nil || n != 0 {
+		t.Fatalf("empty count = %d, %v", n, err)
+	}
+	if _, err := st.CountConfigurationReleases(ctx, nsRef("prod", "missing"), ""); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("missing namespace count error = %v", err)
+	}
+	entries := []domain.ConfigurationReleaseEntry{{Alias: "config", Kind: domain.ReleaseEntryParameter, Ref: paramRef, Version: 1, ContentType: "integer", ParameterDigest: fmt.Sprintf("%x", sha256.Sum256([]byte("1"))), Metadata: "{}"}}
+	for i, name := range []string{"runtime", "runtime", "batch"} {
+		if _, err := st.CreateConfigurationRelease(ctx, domain.ConfigurationRelease{Namespace: ns, Name: name, Digest: fmt.Sprintf("d%d", i), Metadata: "{}", Entries: entries}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if n, err := st.CountConfigurationReleases(ctx, ns, "runtime"); err != nil || n != 2 {
+		t.Fatalf("runtime count = %d, %v", n, err)
+	}
+	if n, err := st.CountConfigurationReleases(ctx, ns, ""); err != nil || n != 3 {
+		t.Fatalf("namespace count = %d, %v", n, err)
+	}
+	if n, err := st.CountConfigurationReleases(ctx, nsRef("dev", "app"), "runtime"); err != nil || n != 0 {
+		t.Fatalf("other namespace count = %d, %v", n, err)
+	}
+}

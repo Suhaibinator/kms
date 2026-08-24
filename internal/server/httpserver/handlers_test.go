@@ -1,8 +1,10 @@
 package httpserver
 
 import (
+	"crypto/tls"
 	"encoding/base64"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 )
@@ -731,4 +733,33 @@ func TestMethodNotAllowed(t *testing.T) {
 	// POST is not registered on /parameters (PUT is).
 	w := e.admin(http.MethodPost, "/api/v1/parameters", nil)
 	mustStatus(t, w, http.StatusMethodNotAllowed)
+}
+
+func TestHealthReportsListenerDetails(t *testing.T) {
+	e := newTestEnv(t)
+	body := decodeBody(t, e.do(http.MethodGet, "/api/v1/health", nil, nil))
+	if body["grpc_addr"] != "" || body["tls_enabled"] != false {
+		t.Fatalf("default health listener fields = %v", body)
+	}
+
+	srv, err := New(e.svc, Config{Addr: ":0", Version: "test-version", GRPCAddr: "0.0.0.0:8443", TLSEnabled: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	w := httptest.NewRecorder()
+	srv.Handler.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/v1/health", nil))
+	mustStatus(t, w, http.StatusOK)
+	body = decodeBody(t, w)
+	if body["grpc_addr"] != "0.0.0.0:8443" || body["tls_enabled"] != true {
+		t.Fatalf("configured health listener fields = %v", body)
+	}
+
+	// A request that actually arrived over TLS reports tls_enabled regardless of config.
+	r := httptest.NewRequest(http.MethodGet, "/api/v1/health", nil)
+	r.TLS = &tls.ConnectionState{}
+	w = httptest.NewRecorder()
+	e.handler.ServeHTTP(w, r)
+	if body := decodeBody(t, w); body["tls_enabled"] != true {
+		t.Fatalf("tls request health = %v", body)
+	}
 }

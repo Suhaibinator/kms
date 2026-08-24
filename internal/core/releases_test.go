@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/Suhaibinator/kms/internal/domain"
@@ -290,5 +291,150 @@ func TestConfigurationReleaseSecretPinSurvivesLaterAttributeChanges(t *testing.T
 	}
 	if got := stored.Entries[0]; got.ContentType != "text/plain" || got.HasAccessToken {
 		t.Fatalf("stored release pin changed: %+v", got)
+	}
+}
+
+func TestReleaseCandidateValidationIsDryRunSafe(t *testing.T) {
+	ctx := context.Background()
+	st, err := storage.Open(filepath.Join(t.TempDir(), "kms.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = st.Close() }()
+	svc := New(st, nil, "test")
+	pr := adminPrincipal()
+	if _, err := svc.CreateApplication(ctx, pr, domain.Application{Name: "worker", ReleaseName: "runtime"}); err != nil {
+		t.Fatal(err)
+	}
+	ns := domain.NamespaceRef{Env: "dev", App: "worker"}
+	if _, err := svc.CreateNamespace(ctx, pr, ns, "", []domain.AuthMethod{domain.AuthMethodToken}); err != nil {
+		t.Fatal(err)
+	}
+	ref := domain.Ref{NS: ns, Key: "settings"}
+	if _, _, err := svc.PutParameter(ctx, pr, ref, "7", "integer", "{}"); err != nil {
+		t.Fatal(err)
+	}
+	schema, err := svc.CreateConfigurationSchema(ctx, pr, "runtime", `{"type":"object","properties":{"settings":{"type":"integer","minimum":0}},"required":["settings"]}`, "{}")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rs, err := svc.releaseStore()
+	if err != nil {
+		t.Fatal(err)
+	}
+	authCtx, _, err := svc.authorize(ctx, pr, domain.OpConfigurationReleaseCreate, domain.ResourceConfigurationRelease, domain.Ref{NS: ns, Key: "runtime"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	input := domain.CreateConfigurationReleaseInput{
+		Namespace: ns, Name: "runtime", SchemaID: schema.ID, SchemaVersion: schema.Version, Metadata: "{}",
+		Entries: []domain.ReleaseEntrySelector{{Alias: "settings", Kind: domain.ReleaseEntryParameter, Ref: ref}},
+	}
+	candCtx, candidate, resolution, err := svc.resolveReleaseCandidate(authCtx, pr, rs, input, true)
+	if err != nil || len(resolution) != 0 {
+		t.Fatalf("resolve candidate: %+v err=%v", resolution, err)
+	}
+	if len(candidate.Entries) != 1 || candidate.Entries[0].Version != 1 || candidate.Digest == "" || candidate.Version != 0 {
+		t.Fatalf("candidate not resolved in memory: %+v", candidate)
+	}
+
+	// The stored value satisfies the schema; validation must not adopt a contract.
+	validation, err := svc.validateReleaseEntries(candCtx, pr, rs, candidate, nil, false, false)
+	if err != nil || len(validation) != 0 {
+		t.Fatalf("stored-value validation = %+v err=%v", validation, err)
+	}
+	app, err := svc.GetApplication(ctx, pr, "worker")
+	if err != nil || len(app.Contract) != 0 {
+		t.Fatalf("dry-run validation adopted a contract: %+v err=%v", app.Contract, err)
+	}
+
+	// The override is what the schema sees: minimum is violated only by it.
+	overrides := map[string]releaseCandidateValue{"settings": {value: []byte("-1"), contentType: "integer"}}
+	validation, err = svc.validateReleaseEntries(candCtx, pr, rs, candidate, overrides, false, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(validation) != 1 || validation[0].Alias != "settings" || validation[0].Code != domain.ReleaseValidationSchema || validation[0].SchemaPointer != "/minimum" {
+		t.Fatalf("override validation = %+v", validation)
+	}
+	for _, v := range validation {
+		if strings.Contains(v.Message, "-1") || strings.Contains(v.Message, "7") {
+			t.Fatalf("validation message leaks a value: %q", v.Message)
+		}
+	}
+	// An override with a different content type is a content-type violation.
+	validation, err = svc.validateReleaseEntries(candCtx, pr, rs, candidate, map[string]releaseCandidateValue{"settings": {value: []byte("x"), contentType: "string"}}, false, false)
+	if err != nil || len(validation) != 1 || validation[0].Code != domain.ReleaseValidationContentType {
+		t.Fatalf("content-type override validation = %+v err=%v", validation, err)
+	}
+	if got, _ := st.GetParameter(ctx, ref, 0, domain.LabelCurrent); got.Value != "7" || got.Version != 1 {
+		t.Fatalf("dry-run wrote the parameter: %+v", got)
+	}
+	app, err = svc.GetApplication(ctx, pr, "worker")
+	if err != nil || len(app.Contract) != 0 {
+		t.Fatalf("override validation adopted a contract: %+v err=%v", app.Contract, err)
+	}
+	if n, err := rs.CountConfigurationReleases(ctx, ns, ""); err != nil || n != 0 {
+		t.Fatalf("dry-run persisted a release: count=%d err=%v", n, err)
+	}
+
+	// Persisting through the public path still adopts the contract (adopt=true).
+	if _, err := svc.CreateConfigurationRelease(ctx, pr, input); err != nil {
+		t.Fatal(err)
+	}
+	app, err = svc.GetApplication(ctx, pr, "worker")
+	if err != nil || len(app.Contract) != 1 || app.Contract[0].Alias != "settings" {
+		t.Fatalf("create did not adopt the contract: %+v err=%v", app.Contract, err)
+	}
+}
+
+func TestResolveReleaseCandidateCollectsPerAliasErrors(t *testing.T) {
+	ctx := context.Background()
+	st, err := storage.Open(filepath.Join(t.TempDir(), "kms.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = st.Close() }()
+	svc := New(st, nil, "test")
+	pr := adminPrincipal()
+	ns := domain.NamespaceRef{Env: "dev", App: "worker"}
+	if _, err := svc.CreateNamespace(ctx, pr, ns, "", []domain.AuthMethod{domain.AuthMethodToken}); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := svc.PutParameter(ctx, pr, domain.Ref{NS: ns, Key: "present"}, "1", "integer", "{}"); err != nil {
+		t.Fatal(err)
+	}
+	rs, err := svc.releaseStore()
+	if err != nil {
+		t.Fatal(err)
+	}
+	authCtx, _, err := svc.authorize(ctx, pr, domain.OpConfigurationReleaseCreate, domain.ResourceConfigurationRelease, domain.Ref{NS: ns, Key: "runtime"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	input := domain.CreateConfigurationReleaseInput{Namespace: ns, Name: "runtime", Metadata: "{}", Entries: []domain.ReleaseEntrySelector{
+		{Alias: "missing_a", Kind: domain.ReleaseEntryParameter, Ref: domain.Ref{NS: ns, Key: "nope"}},
+		{Alias: "present", Kind: domain.ReleaseEntryParameter, Ref: domain.Ref{NS: ns, Key: "present"}},
+		{Alias: "missing_b", Kind: domain.ReleaseEntrySecret, Ref: domain.Ref{NS: ns, Key: "nope"}},
+	}}
+	_, candidate, validation, err := svc.resolveReleaseCandidate(authCtx, pr, rs, input, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(validation) != 2 || validation[0].Alias != "missing_a" || validation[1].Alias != "missing_b" ||
+		validation[0].Code != domain.ReleaseValidationNotFound || validation[1].Code != domain.ReleaseValidationNotFound {
+		t.Fatalf("collected validation = %+v", validation)
+	}
+	if len(candidate.Entries) != 1 || candidate.Entries[0].Alias != "present" || candidate.Digest != "" {
+		t.Fatalf("partial candidate = %+v", candidate)
+	}
+	if _, _, _, err := svc.resolveReleaseCandidate(authCtx, pr, rs, input, false); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("abort-on-first error = %v", err)
+	}
+	// Structural errors abort in both modes.
+	bad := input
+	bad.Entries = []domain.ReleaseEntrySelector{{Alias: "bad alias", Kind: domain.ReleaseEntryParameter, Ref: domain.Ref{NS: ns, Key: "present"}}}
+	if _, _, _, err := svc.resolveReleaseCandidate(authCtx, pr, rs, bad, true); !errors.Is(err, domain.ErrInvalidArgument) {
+		t.Fatalf("structural error in collect mode = %v", err)
 	}
 }

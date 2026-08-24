@@ -170,6 +170,25 @@ func (s *SQLStore) GetActiveConfigurationRelease(ctx context.Context, ns domain.
 	return out, err
 }
 
+func (s *SQLStore) CountConfigurationReleases(ctx context.Context, ns domain.NamespaceRef, name string) (uint64, error) {
+	var count int64
+	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		nsID, err := resolveNamespaceID(tx, ns)
+		if err != nil {
+			return err
+		}
+		q := tx.Model(&configurationReleaseModel{}).Where("namespace_id = ?", nsID)
+		if name != "" {
+			q = q.Where("name = ?", name)
+		}
+		return q.Count(&count).Error
+	})
+	if err != nil {
+		return 0, err
+	}
+	return uint64(count), nil
+}
+
 func (s *SQLStore) ListConfigurationReleases(ctx context.Context, ns domain.NamespaceRef, name string, page ListPage) ([]domain.ConfigurationReleaseSummary, string, error) {
 	limit := clampLimit(page.Limit)
 	after, err := decodeIntToken(page.Token)

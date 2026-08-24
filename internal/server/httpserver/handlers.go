@@ -201,6 +201,8 @@ func (s *server) handleHealth(w http.ResponseWriter, r *http.Request) {
 		"ready":            ready,
 		"version":          s.version(),
 		"current_revision": rev,
+		"grpc_addr":        s.cfg.GRPCAddr,
+		"tls_enabled":      s.cfg.TLSEnabled || r.TLS != nil,
 	})
 }
 

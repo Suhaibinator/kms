@@ -42,6 +42,14 @@ type Config struct {
 	// the header to evade the login/auth throttle and forge audit source IPs.
 	// Default false: the real TCP peer address is always used.
 	TrustProxyHeaders bool
+	// GRPCAddr is the advertised gRPC listen address, reported by the health
+	// endpoint so the console can show SDK connection details. Empty when the
+	// gRPC server is not wired.
+	GRPCAddr string
+	// TLSEnabled records that the caller starts this server's listener with
+	// TLS. The health endpoint reports it (or a TLS request connection) as
+	// tls_enabled so the console can warn about cleartext listeners.
+	TLSEnabled bool
 }
 
 // maxBodyBytes bounds request bodies. A 1 MiB secret value base64-encodes to
@@ -277,6 +285,20 @@ func (r *statusRecorder) WriteHeader(code int) {
 func (r *statusRecorder) Write(b []byte) (int, error) {
 	r.wroteHeader = true
 	return r.ResponseWriter.Write(b)
+}
+
+// Unwrap exposes the underlying writer so http.ResponseController can reach
+// optional interfaces (SetWriteDeadline, Flush) through the recorder.
+func (r *statusRecorder) Unwrap() http.ResponseWriter { return r.ResponseWriter }
+
+// Flush forwards to the underlying writer when it supports flushing, which
+// streaming responses (server-sent events) rely on. Flushing commits the
+// status, so it is recorded as written.
+func (r *statusRecorder) Flush() {
+	if f, ok := r.ResponseWriter.(http.Flusher); ok {
+		r.wroteHeader = true
+		f.Flush()
+	}
 }
 
 // --- helpers ---------------------------------------------------------------

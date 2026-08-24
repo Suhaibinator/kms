@@ -24,6 +24,9 @@ type ReleaseStore interface {
 	GetConfigurationRelease(ctx context.Context, ns domain.NamespaceRef, name string, version uint64) (domain.ConfigurationRelease, error)
 	GetActiveConfigurationRelease(ctx context.Context, ns domain.NamespaceRef, name string) (domain.ActiveConfigurationRelease, error)
 	ListConfigurationReleases(ctx context.Context, ns domain.NamespaceRef, name string, page ListPage) ([]domain.ConfigurationReleaseSummary, string, error)
+	// CountConfigurationReleases reports how many immutable release versions
+	// exist in ns; an empty name counts every release name.
+	CountConfigurationReleases(ctx context.Context, ns domain.NamespaceRef, name string) (uint64, error)
 	ActivateConfigurationRelease(ctx context.Context, ns domain.NamespaceRef, name string, version uint64, expectedCurrent *uint64) (active domain.ActiveConfigurationRelease, changed bool, err error)
 	ConfigurationReleaseActivationExists(ctx context.Context, ns domain.NamespaceRef, name string, version, revision uint64) (bool, error)
 
