@@ -767,7 +767,7 @@ func TestPruneConfigurationReleasesProtectsReplayDependencies(t *testing.T) {
 	seedNS(t, st, "prod", "app")
 	ns := nsRef("prod", "app")
 	var releases []domain.ConfigurationRelease
-	for i := 0; i < 4; i++ {
+	for i := range 4 {
 		r, err := st.CreateConfigurationRelease(ctx, domain.ConfigurationRelease{Namespace: ns, Name: "runtime", Digest: string(rune('a' + i)), Metadata: "{}"})
 		if err != nil {
 			t.Fatal(err)
@@ -811,7 +811,7 @@ func TestPruneConfigurationReleasesRetainsInactiveCountBeyondLabels(t *testing.T
 	seedNS(t, st, "prod", "app")
 	ns := nsRef("prod", "app")
 	var releases []domain.ConfigurationRelease
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		release, err := st.CreateConfigurationRelease(ctx, domain.ConfigurationRelease{Namespace: ns, Name: "runtime", Digest: string(rune('a' + i)), Metadata: "{}"})
 		if err != nil {
 			t.Fatal(err)

@@ -2,6 +2,7 @@ package httpserver
 
 import (
 	"context"
+	"maps"
 	"sort"
 	"strings"
 	"sync"
@@ -878,9 +879,7 @@ func keyHasPrefix(key, keyPrefix string) bool {
 
 func cloneLabels(m map[string]uint64) map[string]uint64 {
 	out := make(map[string]uint64, len(m))
-	for k, v := range m {
-		out[k] = v
-	}
+	maps.Copy(out, m)
 	return out
 }
 

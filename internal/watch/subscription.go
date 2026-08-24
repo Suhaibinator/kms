@@ -1,6 +1,7 @@
 package watch
 
 import (
+	"slices"
 	"sync"
 	"time"
 
@@ -209,10 +210,5 @@ func (s *Subscription) matches(entry domain.ChangeLogEntry) bool {
 
 // namespaceMatchAny reports whether ns is in the subscribed set.
 func namespaceMatchAny(namespaces []domain.NamespaceRef, ns domain.NamespaceRef) bool {
-	for _, n := range namespaces {
-		if n == ns {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(namespaces, ns)
 }

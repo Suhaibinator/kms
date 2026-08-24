@@ -93,7 +93,7 @@ func ValidateKey(key string) error {
 	if strings.HasPrefix(key, "/") || strings.HasSuffix(key, "/") {
 		return fmt.Errorf("key %q must not have a leading or trailing slash", key)
 	}
-	for _, seg := range strings.Split(key, "/") {
+	for seg := range strings.SplitSeq(key, "/") {
 		if err := validateKeySegment(seg); err != nil {
 			return fmt.Errorf("key %q: %w", key, err)
 		}

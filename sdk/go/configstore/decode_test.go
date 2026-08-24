@@ -31,8 +31,6 @@ type decodeFixture struct {
 	Optional *string
 }
 
-func codecPointer(codec ValueCodec) *ValueCodec { return &codec }
-
 func fieldIndex(typ reflect.Type, name string) []int {
 	field, ok := typ.FieldByName(name)
 	if !ok {
@@ -46,7 +44,7 @@ func nestedCodec() ValueCodec {
 	return ValueCodec{Kind: CodecStruct, Fields: []FieldCodec{
 		{JSONName: "count", FieldIndex: fieldIndex(typ, "Count"), Value: ValueCodec{Kind: CodecInt}},
 		{JSONName: "note", FieldIndex: fieldIndex(typ, "Note"), Value: ValueCodec{
-			Kind: CodecPointer, Element: codecPointer(ValueCodec{Kind: CodecString}),
+			Kind: CodecPointer, Element: new(ValueCodec{Kind: CodecString}),
 		}},
 	}}
 }
@@ -67,13 +65,13 @@ func fixtureCodecs() []FieldCodec {
 			Kind: CodecSlice, Element: &nested,
 		}},
 		{JSONName: "pair", FieldIndex: fieldIndex(typ, "Pair"), Value: ValueCodec{
-			Kind: CodecArray, Element: codecPointer(ValueCodec{Kind: CodecString}),
+			Kind: CodecArray, Element: new(ValueCodec{Kind: CodecString}),
 		}},
 		{JSONName: "labels", FieldIndex: fieldIndex(typ, "Labels"), Value: ValueCodec{
-			Kind: CodecMap, Element: codecPointer(ValueCodec{Kind: CodecInt}),
+			Kind: CodecMap, Element: new(ValueCodec{Kind: CodecInt}),
 		}},
 		{JSONName: "optional", FieldIndex: fieldIndex(typ, "Optional"), Value: ValueCodec{
-			Kind: CodecPointer, Element: codecPointer(ValueCodec{Kind: CodecString}),
+			Kind: CodecPointer, Element: new(ValueCodec{Kind: CodecString}),
 		}},
 	}
 }
@@ -222,7 +220,7 @@ func TestDecodeGroupSupportsNamedPointerToScalar(t *testing.T) {
 	typ := reflect.TypeFor[holder]()
 	codecs := []FieldCodec{{
 		JSONName: "value", FieldIndex: fieldIndex(typ, "Value"),
-		Value: ValueCodec{Kind: CodecPointer, Element: codecPointer(ValueCodec{Kind: CodecInt, Bits: 32})},
+		Value: ValueCodec{Kind: CodecPointer, Element: new(ValueCodec{Kind: CodecInt, Bits: 32})},
 	}}
 	var got holder
 	if err := DecodeGroup(`{"value":17}`, &got, codecs); err != nil {
@@ -279,13 +277,13 @@ func TestDecodeGroupRejectsRecursiveShapeErrors(t *testing.T) {
 		"array length": {
 			document: `{"pair":["only-one"]}`,
 			codec: FieldCodec{JSONName: "pair", FieldIndex: fieldIndex(typ, "Pair"), Value: ValueCodec{
-				Kind: CodecArray, Element: codecPointer(ValueCodec{Kind: CodecString}),
+				Kind: CodecArray, Element: new(ValueCodec{Kind: CodecString}),
 			}},
 		},
 		"duplicate map key": {
 			document: `{"labels":{"same":1,"same":2}}`,
 			codec: FieldCodec{JSONName: "labels", FieldIndex: fieldIndex(typ, "Labels"), Value: ValueCodec{
-				Kind: CodecMap, Element: codecPointer(ValueCodec{Kind: CodecInt}),
+				Kind: CodecMap, Element: new(ValueCodec{Kind: CodecInt}),
 			}},
 		},
 	}
@@ -335,8 +333,8 @@ func TestDecodeGroupPreservesNilVersusEmptyCollections(t *testing.T) {
 	}
 	typ := reflect.TypeFor[nullableCollections]()
 	codecs := []FieldCodec{
-		{JSONName: "items", FieldIndex: fieldIndex(typ, "Items"), Value: ValueCodec{Kind: CodecSlice, Element: codecPointer(ValueCodec{Kind: CodecString})}},
-		{JSONName: "labels", FieldIndex: fieldIndex(typ, "Labels"), Value: ValueCodec{Kind: CodecMap, Element: codecPointer(ValueCodec{Kind: CodecInt})}},
+		{JSONName: "items", FieldIndex: fieldIndex(typ, "Items"), Value: ValueCodec{Kind: CodecSlice, Element: new(ValueCodec{Kind: CodecString})}},
+		{JSONName: "labels", FieldIndex: fieldIndex(typ, "Labels"), Value: ValueCodec{Kind: CodecMap, Element: new(ValueCodec{Kind: CodecInt})}},
 		{JSONName: "blob", FieldIndex: fieldIndex(typ, "Blob"), Value: ValueCodec{Kind: CodecBytes}},
 	}
 

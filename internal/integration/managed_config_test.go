@@ -212,9 +212,7 @@ func TestManagedConfigStoreOverRealKMS(t *testing.T) {
 	readerErr := make(chan string, 1)
 	var readers sync.WaitGroup
 	for range 12 {
-		readers.Add(1)
-		go func() {
-			defer readers.Done()
+		readers.Go(func() {
 			for !stopReaders.Load() {
 				snapshot := store.Current()
 				api, jobs := snapshot.ApiHandler(), snapshot.BackgroundJobs()
@@ -231,7 +229,7 @@ func TestManagedConfigStoreOverRealKMS(t *testing.T) {
 					return
 				}
 			}
-		}()
+		})
 	}
 	activate(hotRelease, initialRelease.GetVersion())
 	waitForManagedState(t, func() bool { return store.Current().Release().Version() == hotRelease.GetVersion() }, "hot release publication")

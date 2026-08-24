@@ -103,8 +103,7 @@ func TestStartReturnsTypedDefaultMismatchAfterLoaderRedactionBoundary(t *testing
 	if manager != nil || err == nil {
 		t.Fatalf("Start() = (%v, %v), want typed mismatch", manager, err)
 	}
-	var mismatch *DefaultMismatchError
-	if !errors.As(err, &mismatch) {
+	if _, ok := errors.AsType[*DefaultMismatchError](err); !ok {
 		t.Fatalf("errors.As(*DefaultMismatchError) = false: %T %v", err, err)
 	}
 	if reported.Load() != 1 || aborted.Load() != 1 {

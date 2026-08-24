@@ -31,7 +31,7 @@ func (s *server) insecureListener(r *http.Request) bool {
 func environmentsFromQuery(values []string) []string {
 	var out []string
 	for _, value := range values {
-		for _, env := range strings.Split(value, ",") {
+		for env := range strings.SplitSeq(value, ",") {
 			if env = strings.TrimSpace(env); env != "" {
 				out = append(out, env)
 			}

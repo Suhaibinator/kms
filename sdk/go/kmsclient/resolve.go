@@ -9,8 +9,8 @@ import (
 )
 
 var (
-	secretValueType = reflect.TypeOf(SecretValue{})
-	paramValueType  = reflect.TypeOf(ParameterValue{})
+	secretValueType = reflect.TypeFor[SecretValue]()
+	paramValueType  = reflect.TypeFor[ParameterValue]()
 )
 
 // Resolve walks cfg (which must be a non-nil pointer to a struct) and

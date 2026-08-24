@@ -30,6 +30,22 @@ type unknownDefault struct{}
 // nilDefault marks an explicit nil literal.
 type nilDefault struct{}
 
+// zeroDefault marks a value known to be the zero value of its type, such as
+// the pointee of new(T).
+type zeroDefault struct{}
+
+// maxInlineDepth bounds how many zero-argument helper calls the evaluator
+// follows while reading a defaults literal.
+const maxInlineDepth = 4
+
+// defaultsEvaluator reads literal expressions with the package's type
+// information, following zero-argument helpers and the new builtin.
+type defaultsEvaluator struct {
+	info  *types.Info
+	files []*ast.File
+	depth int
+}
+
 // constDefault is a compile-time constant with its Go type.
 type constDefault struct {
 	value constant.Value
@@ -97,7 +113,7 @@ func collectAnnotations(files []*ast.File, info *types.Info, rootType string, de
 		}
 		return result, nil
 	}
-	tree, err := evaluateDefaults(decl, info, rootType)
+	tree, err := evaluateDefaults(decl, info, files, rootType)
 	if err != nil {
 		if explicit {
 			return result, err
@@ -143,7 +159,7 @@ func findFunc(files []*ast.File, name string) *ast.FuncDecl {
 // and returns the literal as a tree keyed by Go field names. A function that
 // builds its value imperatively cannot be evaluated without running it, and
 // guessing would put wrong defaults in the schema, so only the literal counts.
-func evaluateDefaults(decl *ast.FuncDecl, info *types.Info, rootType string) (map[string]any, error) {
+func evaluateDefaults(decl *ast.FuncDecl, info *types.Info, files []*ast.File, rootType string) (map[string]any, error) {
 	name := decl.Name.Name
 	if decl.Type.Params != nil && decl.Type.Params.NumFields() != 0 {
 		return nil, fmt.Errorf("configgen: defaults function %s must take no parameters", name)
@@ -172,14 +188,15 @@ func evaluateDefaults(decl *ast.FuncDecl, info *types.Info, rootType string) (ma
 	if named, ok := types.Unalias(litType).(*types.Named); !ok || named.Obj() == nil || named.Obj().Name() != rootType {
 		return nil, fmt.Errorf("configgen: defaults function %s must return a %s composite literal", name, rootType)
 	}
-	tree, ok := evalStructLiteral(lit, info)
+	ev := &defaultsEvaluator{info: info, files: files}
+	tree, ok := ev.structLiteral(lit)
 	if !ok {
 		return nil, fmt.Errorf("configgen: defaults function %s must use keyed fields in its %s literal", name, rootType)
 	}
 	return tree, nil
 }
 
-func evalStructLiteral(lit *ast.CompositeLit, info *types.Info) (map[string]any, bool) {
+func (ev *defaultsEvaluator) structLiteral(lit *ast.CompositeLit) (map[string]any, bool) {
 	tree := make(map[string]any, len(lit.Elts))
 	for _, elt := range lit.Elts {
 		kv, ok := elt.(*ast.KeyValueExpr)
@@ -190,14 +207,38 @@ func evalStructLiteral(lit *ast.CompositeLit, info *types.Info) (map[string]any,
 		if !ok {
 			return nil, false
 		}
-		tree[key.Name] = evalExpr(kv.Value, info)
+		tree[key.Name] = ev.eval(kv.Value)
 	}
 	return tree, true
 }
 
-func evalExpr(expr ast.Expr, info *types.Info) any {
+// returnedLiteral reads the composite literal a zero-argument helper returns
+// as its last statement, or nil when the helper has any other shape.
+func (ev *defaultsEvaluator) returnedLiteral(decl *ast.FuncDecl) *ast.CompositeLit {
+	if decl.Recv != nil || (decl.Type.Params != nil && decl.Type.Params.NumFields() != 0) {
+		return nil
+	}
+	if decl.Type.Results == nil || decl.Type.Results.NumFields() != 1 {
+		return nil
+	}
+	if decl.Body == nil || len(decl.Body.List) == 0 {
+		return nil
+	}
+	ret, ok := decl.Body.List[len(decl.Body.List)-1].(*ast.ReturnStmt)
+	if !ok || len(ret.Results) != 1 {
+		return nil
+	}
+	expr := ast.Unparen(ret.Results[0])
+	if unary, ok := expr.(*ast.UnaryExpr); ok && unary.Op == token.AND {
+		expr = ast.Unparen(unary.X)
+	}
+	lit, _ := expr.(*ast.CompositeLit)
+	return lit
+}
+
+func (ev *defaultsEvaluator) eval(expr ast.Expr) any {
 	expr = ast.Unparen(expr)
-	if tv, ok := info.Types[expr]; ok {
+	if tv, ok := ev.info.Types[expr]; ok {
 		if tv.Value != nil {
 			return constDefault{value: tv.Value, typ: tv.Type}
 		}
@@ -208,16 +249,18 @@ func evalExpr(expr ast.Expr, info *types.Info) any {
 	switch value := expr.(type) {
 	case *ast.UnaryExpr:
 		if value.Op == token.AND {
-			return evalExpr(value.X, info)
+			return ev.eval(value.X)
 		}
+	case *ast.CallExpr:
+		return ev.call(value)
 	case *ast.CompositeLit:
-		underlying := info.TypeOf(value)
+		underlying := ev.info.TypeOf(value)
 		if underlying == nil {
 			return unknownDefault{}
 		}
-		switch t := types.Unalias(underlying).Underlying().(type) {
+		switch types.Unalias(underlying).Underlying().(type) {
 		case *types.Struct:
-			tree, ok := evalStructLiteral(value, info)
+			tree, ok := ev.structLiteral(value)
 			if !ok {
 				return unknownDefault{}
 			}
@@ -228,7 +271,7 @@ func evalExpr(expr ast.Expr, info *types.Info) any {
 				if _, keyed := elt.(*ast.KeyValueExpr); keyed {
 					return unknownDefault{}
 				}
-				items = append(items, evalExpr(elt, info))
+				items = append(items, ev.eval(elt))
 			}
 			return items
 		case *types.Map:
@@ -238,16 +281,49 @@ func evalExpr(expr ast.Expr, info *types.Info) any {
 				if !ok {
 					return unknownDefault{}
 				}
-				keyValue, ok := evalExpr(kv.Key, info).(constDefault)
+				keyValue, ok := ev.eval(kv.Key).(constDefault)
 				if !ok || keyValue.value.Kind() != constant.String {
 					return unknownDefault{}
 				}
-				entries[constant.StringVal(keyValue.value)] = evalExpr(kv.Value, info)
+				entries[constant.StringVal(keyValue.value)] = ev.eval(kv.Value)
 			}
 			return entries
-		default:
-			_ = t
 		}
+	}
+	return unknownDefault{}
+}
+
+// call evaluates the two call shapes a defaults literal commonly uses: the
+// new builtin (new(T) is a pointer to T's zero value, new(v) a pointer to v)
+// and a zero-argument helper in the same package that returns a literal.
+func (ev *defaultsEvaluator) call(call *ast.CallExpr) any {
+	ident, ok := ast.Unparen(call.Fun).(*ast.Ident)
+	if !ok {
+		return unknownDefault{}
+	}
+	switch obj := ev.info.Uses[ident].(type) {
+	case *types.Builtin:
+		if obj.Name() != "new" || len(call.Args) != 1 {
+			return unknownDefault{}
+		}
+		if tv, ok := ev.info.Types[call.Args[0]]; ok && tv.IsType() {
+			return zeroDefault{}
+		}
+		return ev.eval(call.Args[0])
+	case *types.Func:
+		if len(call.Args) != 0 || ev.depth >= maxInlineDepth {
+			return unknownDefault{}
+		}
+		decl := findFunc(ev.files, ident.Name)
+		if decl == nil {
+			return unknownDefault{}
+		}
+		lit := ev.returnedLiteral(decl)
+		if lit == nil {
+			return unknownDefault{}
+		}
+		nested := &defaultsEvaluator{info: ev.info, files: ev.files, depth: ev.depth + 1}
+		return nested.eval(lit)
 	}
 	return unknownDefault{}
 }
@@ -260,6 +336,11 @@ func schemaDefault(value *typeIR, raw any) (any, bool) {
 	case unknownDefault:
 		return nil, false
 	case nilDefault:
+		raw = nil
+	case zeroDefault:
+		if value.Kind == typePointer {
+			return schemaDefault(value.Elem, nil)
+		}
 		raw = nil
 	}
 	switch value.Kind {
@@ -396,7 +477,7 @@ func managedFieldDefault(tree map[string]any, goPath string) any {
 		return unknownDefault{}
 	}
 	var current any = tree
-	for _, segment := range strings.Split(goPath, ".") {
+	for segment := range strings.SplitSeq(goPath, ".") {
 		switch node := current.(type) {
 		case map[string]any:
 			next, ok := node[segment]
@@ -404,8 +485,8 @@ func managedFieldDefault(tree map[string]any, goPath string) any {
 				return nil
 			}
 			current = next
-		case nil, nilDefault:
-			// An omitted or nil inline struct leaves its fields at zero.
+		case nil, nilDefault, zeroDefault:
+			// An omitted, nil, or new(T) inline struct leaves its fields at zero.
 			return nil
 		default:
 			return unknownDefault{}

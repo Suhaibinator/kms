@@ -343,8 +343,7 @@ func TestStartupDefaultMismatchFatalAndBypass(t *testing.T) {
 		installInitial(t, server, initial)
 		client := newFixtureClient(t, server)
 		defer func() { _ = client.Close() }()
-		ctx, cancel := context.WithCancel(context.Background())
-		defer cancel()
+		ctx := t.Context()
 		reports := make(chan configstore.DefaultMismatchReport, 1)
 		store, startErr := Start(ctx, client, Options{
 			Release:           fixtureReleaseName,
@@ -616,9 +615,7 @@ func TestConcurrentReadersSeeOnlyCompleteGenerations(t *testing.T) {
 		}
 	}
 	for range readerCount {
-		readers.Add(1)
-		go func() {
-			defer readers.Done()
+		readers.Go(func() {
 			for {
 				select {
 				case <-stop:
@@ -665,7 +662,7 @@ func TestConcurrentReadersSeeOnlyCompleteGenerations(t *testing.T) {
 					return
 				}
 			}
-		}()
+		})
 	}
 
 	for version := uint64(2); version <= lastVersion; version++ {

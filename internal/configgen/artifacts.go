@@ -107,7 +107,7 @@ func annotateStructProperties(value *typeIR, schema map[string]any, raw any, doc
 		switch raw.(type) {
 		case unknownDefault:
 			child = unknownDefault{}
-		case nil, nilDefault:
+		case nil, nilDefault, zeroDefault:
 			child = nil
 		default:
 			if tree == nil {

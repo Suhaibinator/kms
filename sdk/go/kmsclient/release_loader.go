@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"sort"
 	"strings"
 	"sync"
@@ -171,9 +172,7 @@ func (l *ReleaseLoader) Stats() ReleaseLoaderStats {
 	defer l.statusMu.RUnlock()
 	out := l.stats
 	out.Rejected = make(map[string]uint64, len(l.stats.Rejected))
-	for category, count := range l.stats.Rejected {
-		out.Rejected[category] = count
-	}
+	maps.Copy(out.Rejected, l.stats.Rejected)
 	return out
 }
 

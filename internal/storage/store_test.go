@@ -951,10 +951,8 @@ func TestCreateSecretVersionConcurrentExpectedAbsentOnlyOneWins(t *testing.T) {
 	start := make(chan struct{})
 	results := make(chan result, 2)
 	var wg sync.WaitGroup
-	for i := 0; i < 2; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+	for range 2 {
+		wg.Go(func() {
 			<-start
 			version, _, err := st.CreateSecretVersion(ctx, CreateSecretParams{
 				Ref:         r,
@@ -963,7 +961,7 @@ func TestCreateSecretVersionConcurrentExpectedAbsentOnlyOneWins(t *testing.T) {
 				Encrypt:     encryptStub(nil),
 			})
 			results <- result{version: version, err: err}
-		}()
+		})
 	}
 	close(start)
 	wg.Wait()
@@ -1015,7 +1013,7 @@ func TestCreateSecretVersionConcurrentTokenRotationsOnlyOneWins(t *testing.T) {
 	start := make(chan struct{})
 	results := make(chan result, 2)
 	var wg sync.WaitGroup
-	for i := 0; i < 2; i++ {
+	for i := range 2 {
 		newHash := []byte(fmt.Sprintf("hash-v%d", i+2))
 		wg.Add(1)
 		go func(newHash []byte) {
@@ -2384,7 +2382,7 @@ func TestAuditTimeRangeFractionalSeconds(t *testing.T) {
 func TestAuditPagination(t *testing.T) {
 	st := newStore(t)
 	ctx := context.Background()
-	for i := 0; i < 5; i++ {
+	for range 5 {
 		if err := st.AppendAudit(ctx, domain.AuditEvent{EventType: "e", ResourceKey: "p"}); err != nil {
 			t.Fatal(err)
 		}
@@ -2414,7 +2412,7 @@ func TestRevisionMonotonicAfterPruneAll(t *testing.T) {
 	ctx := context.Background()
 	seedNS(t, st, "prod", "app")
 	r := ref("prod", "app", "p")
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		if _, _, err := st.PutParameter(ctx, r, strconv.Itoa(i), "", "", "u"); err != nil {
 			t.Fatal(err)
 		}
@@ -2474,7 +2472,7 @@ func TestListChangesSince(t *testing.T) {
 func TestPruneChangeLogRetentionMath(t *testing.T) {
 	insert := func(st *SQLStore, n int, age time.Duration) {
 		now := time.Now()
-		for i := 0; i < n; i++ {
+		for range n {
 			if err := st.db.Create(&changeLogModel{
 				ResourceType: "parameter", Env: "prod", App: "app", Key: "p", ChangeType: "put",
 				CreatedAt: fmtTime(now.Add(-age)),
@@ -2877,11 +2875,11 @@ func TestConcurrentPutParameterNoLostUpdates(t *testing.T) {
 	errCh := make(chan error, workers*iters)
 	verCh := make(chan uint64, workers*iters)
 
-	for w := 0; w < workers; w++ {
+	for w := range workers {
 		wg.Add(1)
 		go func(w int) {
 			defer wg.Done()
-			for i := 0; i < iters; i++ {
+			for i := range iters {
 				v, _, err := st.PutParameter(ctx, r, fmt.Sprintf("w%d-i%d", w, i), "", "", "u")
 				if err != nil {
 					errCh <- err

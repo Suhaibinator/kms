@@ -69,7 +69,7 @@ func TestAuditEventCoverage(t *testing.T) {
 	const path = "/prod/app/covered"
 	ref := h.ensureNS(path)
 
-	for i := 0; i < 3; i++ {
+	for range 3 {
 		if _, err := h.svc.PutSecret(ctx, h.admin, h.stdSecret(path, "v")); err != nil {
 			t.Fatalf("PutSecret: %v", err)
 		}

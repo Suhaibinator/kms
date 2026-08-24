@@ -430,7 +430,7 @@ func (s *Service) validateReleaseEntries(ctx context.Context, pr Principal, rs s
 				}
 				entryCtx = authorizedCtx
 			}
-			rawValue, contentType := "", entry.ContentType
+			var rawValue, contentType string
 			if override, ok := overrides[entry.Alias]; ok {
 				rawValue, contentType = string(override.value), override.contentType
 			} else {
@@ -530,8 +530,7 @@ func (s *Service) ActivateConfigurationRelease(ctx context.Context, pr Principal
 		decision := "error"
 		event := "configuration_release.activate"
 		metadata := map[string]string(nil)
-		var validationFailed *domain.ReleaseValidationFailedError
-		if errors.As(err, &validationFailed) {
+		if validationFailed, ok := errors.AsType[*domain.ReleaseValidationFailedError](err); ok {
 			decision = "deny"
 			metadata = map[string]string{
 				"error_count": strconv.Itoa(len(validationFailed.Violations())),

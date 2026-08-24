@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/Suhaibinator/kms/internal/crypto"
@@ -80,12 +81,7 @@ func validateListScope(ns domain.NamespaceRef, keyPrefix string) error {
 
 // authMethodAllowed reports whether method is in the namespace's allowed set.
 func authMethodAllowed(allowed []domain.AuthMethod, method domain.AuthMethod) bool {
-	for _, m := range allowed {
-		if m == method {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(allowed, method)
 }
 
 // normalizeAuthMethods validates a requested auth-method set and applies the

@@ -355,7 +355,7 @@ func TestNewClientTransportControls(t *testing.T) {
 // TestConcurrentCloseAndSubscribe proves the L5 fix: Close and the first subs()
 // no longer race on the c.sub field. Run under -race to detect a regression.
 func TestConcurrentCloseAndSubscribe(t *testing.T) {
-	for i := 0; i < 30; i++ {
+	for range 30 {
 		c, _ := newTestClient(t, Config{})
 		var wg sync.WaitGroup
 		wg.Add(2)

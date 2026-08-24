@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"math/rand/v2"
+	"slices"
 	"sort"
 	"sync"
 	"sync/atomic"
@@ -416,12 +417,7 @@ func (m *subManager) absentKnownPaths(present map[string]struct{}) []string {
 // snapshot — as deleted.
 func (m *subManager) pathInScopeLocked(path string) bool {
 	ns := refOf(path).ns
-	for _, s := range m.streamNamespaces {
-		if s == ns {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(m.streamNamespaces, ns)
 }
 
 func (m *subManager) applyChange(c *kmsv1.ParameterChange, rev uint64) {
@@ -468,10 +464,7 @@ func (m *subManager) setValue(path, value string, present bool, version, rev uin
 		m.mu.Unlock()
 		return
 	}
-	newRev := rev
-	if prev.rev > newRev {
-		newRev = prev.rev
-	}
+	newRev := max(prev.rev, rev)
 	var changed bool
 	if present {
 		changed = !had || prev.value != value || !prev.present
@@ -613,7 +606,7 @@ func (m *subManager) reconcile() {
 // caller does not mistake a fetch failure for a deletion).
 func (m *subManager) reconcileNamespace(ctx context.Context, ns namespaceRef, snapRev uint64, present map[string]struct{}) bool {
 	pageToken := ""
-	for i := 0; i < maxReconcilePages; i++ { // bounded to avoid runaway loops
+	for range maxReconcilePages { // bounded to avoid runaway loops
 		cctx, cancel := m.client.callCtx(ctx, "")
 		resp, err := m.client.params.ListParameters(cctx, &kmsv1.ListParametersRequest{
 			Namespace: ns.proto(),
@@ -709,9 +702,6 @@ func backoffDelay(attempt int) time.Duration {
 		}
 	}
 	// Full jitter: uniform in (0, d], with a small floor to avoid a hot loop.
-	j := time.Duration(rand.Int64N(int64(d)))
-	if j < 10*time.Millisecond {
-		j = 10 * time.Millisecond
-	}
+	j := max(time.Duration(rand.Int64N(int64(d))), 10*time.Millisecond)
 	return j
 }

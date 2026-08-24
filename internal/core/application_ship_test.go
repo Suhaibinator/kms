@@ -85,8 +85,6 @@ func seedConsoleEnv(t *testing.T, svc *Service, pr Principal, env string) {
 	}
 }
 
-func str(v string) *string { return &v }
-
 func previewEntry(t *testing.T, r domain.ShipResult, alias string) domain.ShipPreviewEntry {
 	t.Helper()
 	for _, e := range r.Preview.Entries {
@@ -106,7 +104,7 @@ func TestShipApplicationChangeDryRunNeverWrites(t *testing.T) {
 	ns := domain.NamespaceRef{Env: "dev", App: "gradethis"}
 	rs, _ := svc.releaseStore()
 
-	result, err := svc.ShipApplicationChange(ctx, pr, domain.ShipInput{Application: "gradethis", Environment: "dev", DryRun: true, Changes: []domain.ShipChange{{Alias: "rate_limits", Value: str("7")}}})
+	result, err := svc.ShipApplicationChange(ctx, pr, domain.ShipInput{Application: "gradethis", Environment: "dev", DryRun: true, Changes: []domain.ShipChange{{Alias: "rate_limits", Value: new("7")}}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -123,7 +121,7 @@ func TestShipApplicationChangeDryRunNeverWrites(t *testing.T) {
 		t.Fatalf("secret entry = %+v", e)
 	}
 	// Schema sees the unsaved value.
-	bad, err := svc.ShipApplicationChange(ctx, pr, domain.ShipInput{Application: "gradethis", Environment: "dev", DryRun: true, Changes: []domain.ShipChange{{Alias: "rate_limits", Value: str("-1")}}})
+	bad, err := svc.ShipApplicationChange(ctx, pr, domain.ShipInput{Application: "gradethis", Environment: "dev", DryRun: true, Changes: []domain.ShipChange{{Alias: "rate_limits", Value: new("-1")}}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -155,7 +153,7 @@ func TestShipApplicationChangeExecuteAndPinOptIn(t *testing.T) {
 	ns := domain.NamespaceRef{Env: "dev", App: "gradethis"}
 	rs, _ := svc.releaseStore()
 
-	result, err := svc.ShipApplicationChange(ctx, pr, domain.ShipInput{Application: "gradethis", Environment: "dev", Changes: []domain.ShipChange{{Alias: "rate_limits", Value: str("7")}}, Metadata: `{"ticket":"KMS-1"}`})
+	result, err := svc.ShipApplicationChange(ctx, pr, domain.ShipInput{Application: "gradethis", Environment: "dev", Changes: []domain.ShipChange{{Alias: "rate_limits", Value: new("7")}}, Metadata: `{"ticket":"KMS-1"}`})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -185,7 +183,7 @@ func TestShipApplicationChangeExecuteAndPinOptIn(t *testing.T) {
 	if _, _, err := svc.PutParameter(ctx, pr, domain.Ref{NS: ns, Key: "rate_limits"}, "9", "integer", "{}"); err != nil {
 		t.Fatal(err)
 	}
-	preview, err := svc.ShipApplicationChange(ctx, pr, domain.ShipInput{Application: "gradethis", Environment: "dev", DryRun: true, Changes: []domain.ShipChange{{Alias: "database", Value: str(`{"host":"db2"}`)}}})
+	preview, err := svc.ShipApplicationChange(ctx, pr, domain.ShipInput{Application: "gradethis", Environment: "dev", DryRun: true, Changes: []domain.ShipChange{{Alias: "database", Value: new(`{"host":"db2"}`)}}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -201,7 +199,7 @@ func TestShipApplicationChangeExecuteAndPinOptIn(t *testing.T) {
 	// Opt in by pinning the newer version explicitly, guarded by CAS.
 	expected := uint64(1)
 	shipped, err := svc.ShipApplicationChange(ctx, pr, domain.ShipInput{Application: "gradethis", Environment: "dev", ExpectedActiveVersion: &expected, Changes: []domain.ShipChange{
-		{Alias: "database", Value: str(`{"host":"db2"}`)}, {Alias: "rate_limits", Version: 3},
+		{Alias: "database", Value: new(`{"host":"db2"}`)}, {Alias: "rate_limits", Version: 3},
 	}})
 	if err != nil || shipped.Status != domain.ShipStatusActivated || shipped.Release.Version != 2 || shipped.Activation.PreviousVersion != 1 {
 		t.Fatalf("opt-in ship = %+v err=%v", shipped, err)
@@ -216,7 +214,7 @@ func TestShipApplicationChangeExecuteAndPinOptIn(t *testing.T) {
 		}
 	}
 	stale := uint64(1)
-	if _, err := svc.ShipApplicationChange(ctx, pr, domain.ShipInput{Application: "gradethis", Environment: "dev", ExpectedActiveVersion: &stale, Changes: []domain.ShipChange{{Alias: "rate_limits", Value: str("1")}}}); !errors.Is(err, domain.ErrAborted) {
+	if _, err := svc.ShipApplicationChange(ctx, pr, domain.ShipInput{Application: "gradethis", Environment: "dev", ExpectedActiveVersion: &stale, Changes: []domain.ShipChange{{Alias: "rate_limits", Value: new("1")}}}); !errors.Is(err, domain.ErrAborted) {
 		t.Fatalf("stale expected_active_version error = %v", err)
 	}
 	events, _, err := st.ListAudit(ctx, domain.AuditFilter{EventType: "application.ship"}, storage.ListPage{Limit: 10})
@@ -238,7 +236,7 @@ func TestShipApplicationChangeRejectedWritesNothing(t *testing.T) {
 	ns := domain.NamespaceRef{Env: "dev", App: "gradethis"}
 	rs, _ := svc.releaseStore()
 
-	result, err := svc.ShipApplicationChange(ctx, pr, domain.ShipInput{Application: "gradethis", Environment: "dev", Changes: []domain.ShipChange{{Alias: "rate_limits", Value: str("-3")}}})
+	result, err := svc.ShipApplicationChange(ctx, pr, domain.ShipInput{Application: "gradethis", Environment: "dev", Changes: []domain.ShipChange{{Alias: "rate_limits", Value: new("-3")}}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -271,13 +269,13 @@ func TestShipApplicationChangePreflight(t *testing.T) {
 		want    error
 	}{
 		"no changes":            {nil, domain.ErrInvalidArgument},
-		"unknown alias":         {[]domain.ShipChange{{Alias: "nope", Value: str("1")}}, domain.ErrInvalidArgument},
-		"secret value":          {[]domain.ShipChange{{Alias: "db_password", Value: str("x")}}, domain.ErrInvalidArgument},
-		"value and version":     {[]domain.ShipChange{{Alias: "rate_limits", Value: str("1"), Version: 1}}, domain.ErrInvalidArgument},
+		"unknown alias":         {[]domain.ShipChange{{Alias: "nope", Value: new("1")}}, domain.ErrInvalidArgument},
+		"secret value":          {[]domain.ShipChange{{Alias: "db_password", Value: new("x")}}, domain.ErrInvalidArgument},
+		"value and version":     {[]domain.ShipChange{{Alias: "rate_limits", Value: new("1"), Version: 1}}, domain.ErrInvalidArgument},
 		"neither":               {[]domain.ShipChange{{Alias: "rate_limits"}}, domain.ErrInvalidArgument},
-		"content type mismatch": {[]domain.ShipChange{{Alias: "rate_limits", Value: str("1"), ContentType: "string"}}, domain.ErrInvalidArgument},
-		"malformed value":       {[]domain.ShipChange{{Alias: "rate_limits", Value: str("abc")}}, domain.ErrInvalidArgument},
-		"duplicate alias":       {[]domain.ShipChange{{Alias: "rate_limits", Value: str("1")}, {Alias: "rate_limits", Version: 1}}, domain.ErrInvalidArgument},
+		"content type mismatch": {[]domain.ShipChange{{Alias: "rate_limits", Value: new("1"), ContentType: "string"}}, domain.ErrInvalidArgument},
+		"malformed value":       {[]domain.ShipChange{{Alias: "rate_limits", Value: new("abc")}}, domain.ErrInvalidArgument},
+		"duplicate alias":       {[]domain.ShipChange{{Alias: "rate_limits", Value: new("1")}, {Alias: "rate_limits", Version: 1}}, domain.ErrInvalidArgument},
 		"secret pin ok":         {[]domain.ShipChange{{Alias: "db_password", Version: 1}}, nil},
 	}
 	for name, c := range cases {
@@ -289,16 +287,16 @@ func TestShipApplicationChangePreflight(t *testing.T) {
 			t.Errorf("%s: error = %v, want %v", name, err, c.want)
 		}
 	}
-	if _, err := svc.ShipApplicationChange(ctx, pr, domain.ShipInput{Application: "gradethis", Environment: "staging", DryRun: true, Changes: []domain.ShipChange{{Alias: "rate_limits", Value: str("1")}}}); !errors.Is(err, domain.ErrNotFound) {
+	if _, err := svc.ShipApplicationChange(ctx, pr, domain.ShipInput{Application: "gradethis", Environment: "staging", DryRun: true, Changes: []domain.ShipChange{{Alias: "rate_limits", Value: new("1")}}}); !errors.Is(err, domain.ErrNotFound) {
 		t.Fatalf("missing namespace error = %v", err)
 	}
-	if _, err := svc.ShipApplicationChange(ctx, clientPrincipal("client"), domain.ShipInput{Application: "gradethis", Environment: "dev", DryRun: true, Changes: []domain.ShipChange{{Alias: "rate_limits", Value: str("1")}}}); !errors.Is(err, domain.ErrPermissionDenied) {
+	if _, err := svc.ShipApplicationChange(ctx, clientPrincipal("client"), domain.ShipInput{Application: "gradethis", Environment: "dev", DryRun: true, Changes: []domain.ShipChange{{Alias: "rate_limits", Value: new("1")}}}); !errors.Is(err, domain.ErrPermissionDenied) {
 		t.Fatalf("non-admin error = %v", err)
 	}
 	if _, err := svc.CreateApplication(ctx, pr, domain.Application{Name: "empty", ReleaseName: "runtime"}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := svc.ShipApplicationChange(ctx, pr, domain.ShipInput{Application: "empty", Environment: "dev", DryRun: true, Changes: []domain.ShipChange{{Alias: "x", Value: str("1")}}}); !errors.Is(err, domain.ErrFailedPrecondition) {
+	if _, err := svc.ShipApplicationChange(ctx, pr, domain.ShipInput{Application: "empty", Environment: "dev", DryRun: true, Changes: []domain.ShipChange{{Alias: "x", Value: new("1")}}}); !errors.Is(err, domain.ErrFailedPrecondition) {
 		t.Fatalf("empty contract error = %v", err)
 	}
 }
@@ -313,7 +311,7 @@ func TestShipApplicationChangeFirstReleaseWithMissingAlias(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Nothing exists in staging: edited aliases become new keys, the rest are missing.
-	result, err := svc.ShipApplicationChange(ctx, pr, domain.ShipInput{Application: "gradethis", Environment: "staging", DryRun: true, Changes: []domain.ShipChange{{Alias: "rate_limits", Value: str("1")}}})
+	result, err := svc.ShipApplicationChange(ctx, pr, domain.ShipInput{Application: "gradethis", Environment: "staging", DryRun: true, Changes: []domain.ShipChange{{Alias: "rate_limits", Value: new("1")}}})
 	if err != nil {
 		t.Fatal(err)
 	}

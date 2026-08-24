@@ -65,8 +65,7 @@ func (s *server) writeError(w http.ResponseWriter, r *http.Request, err error) {
 			zap.String("request_id", requestIDFrom(r.Context())), zap.String("error", err.Error()))
 	}
 	body := errorBody{Code: code, Message: message}
-	var validationFailed *domain.ReleaseValidationFailedError
-	if errors.As(err, &validationFailed) {
+	if validationFailed, ok := errors.AsType[*domain.ReleaseValidationFailedError](err); ok {
 		body.ValidationErrors = releaseValidationErrorDTOs(validationFailed.Violations())
 	}
 	writeJSON(w, status, errorEnvelope{Error: body})

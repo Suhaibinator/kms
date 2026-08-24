@@ -28,8 +28,25 @@ type Config struct {
 	// MaxIdle is optional; nil means unlimited.
 	MaxIdle *int `json:"max_idle" kms:"group=runtime,reload=hot" kms_views:"http"`
 	// Tags label the deployment.
-	Tags   []string         `json:"tags" kms:"group=runtime,reload=hot" kms_views:"http"`
-	APIKey kmsclient.Secret `json:"-" kms:"secret=api_key,reload=hot" kms_views:"http"`
+	Tags []string `json:"tags" kms:"group=runtime,reload=hot" kms_views:"http"`
+	// Verbose enables debug logging.
+	Verbose *bool `json:"verbose" kms:"group=runtime,reload=hot" kms_views:"http"`
+	// Burst is a pointer to a zero value by default.
+	Burst *int `json:"burst" kms:"group=runtime,reload=hot" kms_views:"http"`
+	// Fallback is built by a helper that returns a literal.
+	Fallback Retry `json:"fallback" kms:"group=runtime,reload=hot" kms_views:"http"`
+	// Computed is built by a helper the generator cannot evaluate.
+	Computed Retry            `json:"computed" kms:"group=runtime,reload=hot" kms_views:"http"`
+	APIKey   kmsclient.Secret `json:"-" kms:"secret=api_key,reload=hot" kms_views:"http"`
+}
+
+func defaultFallback() Retry {
+	return Retry{Attempts: 5, Backoff: time.Second}
+}
+
+func computedRetry() Retry {
+	attempts := 2
+	return Retry{Attempts: attempts, Backoff: time.Second}
 }
 
 const defaultRequestLimit = 100
@@ -44,6 +61,10 @@ func Defaults() *Config {
 		Retry:         Retry{Attempts: 3, Backoff: 250 * time.Millisecond},
 		MaxIdle:       &maxIdle,
 		Tags:          []string{"blue", "canary"},
+		Verbose:       new(true),
+		Burst:         new(int),
+		Fallback:      defaultFallback(),
+		Computed:      computedRetry(),
 	}
 }
 

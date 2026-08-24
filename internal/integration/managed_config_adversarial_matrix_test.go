@@ -994,9 +994,7 @@ func TestManagedConfigAdversarialRapidCASAndReaders(t *testing.T) {
 	readerFailures := make(chan string, 1)
 	var readers sync.WaitGroup
 	for range 24 {
-		readers.Add(1)
-		go func() {
-			defer readers.Done()
+		readers.Go(func() {
 			for !stopReaders.Load() {
 				snapshot := running.store.Current()
 				want, ok := expected[snapshot.Release().Version()]
@@ -1028,7 +1026,7 @@ func TestManagedConfigAdversarialRapidCASAndReaders(t *testing.T) {
 					return
 				}
 			}
-		}()
+		})
 	}
 	stopReadersAndWait := func() {
 		stopReaders.Store(true)

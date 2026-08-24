@@ -454,14 +454,12 @@ func TestReserveCertBundleConcurrentCallersExactlyOneOwnsPair(t *testing.T) {
 	start := make(chan struct{})
 	results := make(chan result, callers)
 	var wg sync.WaitGroup
-	for i := 0; i < callers; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+	for range callers {
+		wg.Go(func() {
 			<-start
 			output, err := reserveCertBundle(dir, "svc")
 			results <- result{output: output, err: err}
-		}()
+		})
 	}
 	close(start)
 	wg.Wait()

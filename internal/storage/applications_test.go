@@ -23,7 +23,7 @@ func TestApplicationLifecycleAndEnvironmentOwnership(t *testing.T) {
 		t.Fatalf("created = %+v", created)
 	}
 	for _, env := range []string{"dev", "prod-gcp"} {
-		if _, err := store.CreateNamespace(ctx, domain.Namespace{NamespaceRef: domain.NamespaceRef{Env: env, App: created.Name}, CreatedBy: "admin"}); err != nil {
+		if _, err := store.CreateNamespace(ctx, domain.Namespace{Env: env, App: created.Name, CreatedBy: "admin"}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -50,7 +50,7 @@ func TestApplicationLifecycleAndEnvironmentOwnership(t *testing.T) {
 func TestCreateNamespaceEnsuresApplication(t *testing.T) {
 	ctx := context.Background()
 	store := newStore(t)
-	if _, err := store.CreateNamespace(ctx, domain.Namespace{NamespaceRef: domain.NamespaceRef{Env: "dev", App: "worker"}, CreatedBy: "admin"}); err != nil {
+	if _, err := store.CreateNamespace(ctx, domain.Namespace{Env: "dev", App: "worker", CreatedBy: "admin"}); err != nil {
 		t.Fatal(err)
 	}
 	app, err := store.GetApplication(ctx, "worker")

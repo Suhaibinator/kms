@@ -647,9 +647,7 @@ func TestAdversarialConcurrentReadersAcrossRejectedAndAppliedCandidates(t *testi
 	}
 
 	for range 24 {
-		readers.Add(1)
-		go func() {
-			defer readers.Done()
+		readers.Go(func() {
 			for !stop.Load() {
 				snapshot := fixture.store.Current()
 				if problem := adversarialSnapshotProblem(snapshot); problem != "" {
@@ -657,7 +655,7 @@ func TestAdversarialConcurrentReadersAcrossRejectedAndAppliedCandidates(t *testi
 					return
 				}
 			}
-		}()
+		})
 	}
 	stopReadersAndWait := func() {
 		stop.Store(true)

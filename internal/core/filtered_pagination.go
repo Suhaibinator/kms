@@ -172,10 +172,10 @@ func (s *Service) openFilteredCursor(token, kind, scope string) (string, error) 
 
 func filteredCursorScope(pr Principal, filter any) string {
 	payload, _ := json.Marshal(struct {
-		IdentityID int64       `json:"identity_id"`
-		Identity   string      `json:"identity"`
-		Method     string      `json:"method"`
-		Filter     interface{} `json:"filter"`
+		IdentityID int64  `json:"identity_id"`
+		Identity   string `json:"identity"`
+		Method     string `json:"method"`
+		Filter     any    `json:"filter"`
 	}{IdentityID: pr.Identity.ID, Identity: pr.Identity.Name, Method: string(pr.Method), Filter: filter})
 	sum := sha256.Sum256(payload)
 	return base64.RawURLEncoding.EncodeToString(sum[:])

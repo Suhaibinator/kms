@@ -428,8 +428,8 @@ func toIdentity(m identityModel) domain.Identity {
 
 func toNamespace(m namespaceModel) domain.Namespace {
 	return domain.Namespace{
-		ID:                 m.ID,
-		NamespaceRef:       domain.NamespaceRef{Env: m.Env, App: m.App},
+		ID:  m.ID,
+		Env: m.Env, App: m.App,
 		Description:        m.Description,
 		AllowedAuthMethods: parseAuthMethods(m.AllowedAuthMethods),
 		CreatedBy:          m.CreatedBy,

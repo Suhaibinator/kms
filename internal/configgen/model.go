@@ -376,7 +376,7 @@ func validateMethod(root *types.Named) error {
 
 func parseKMSClauses(fieldName, raw string) (map[string]string, error) {
 	result := make(map[string]string)
-	for _, rawClause := range strings.Split(raw, ",") {
+	for rawClause := range strings.SplitSeq(raw, ",") {
 		clause := strings.TrimSpace(rawClause)
 		if clause == "" {
 			return nil, fmt.Errorf("configgen: field %s has an empty kms tag clause", fieldName)
@@ -403,7 +403,7 @@ func parseViews(fieldName string, tag reflect.StructTag) ([]string, error) {
 	}
 	seen := make(map[string]bool)
 	var result []string
-	for _, item := range strings.Split(raw, ",") {
+	for item := range strings.SplitSeq(raw, ",") {
 		name := strings.TrimSpace(item)
 		if !validAlias(name) {
 			return nil, fmt.Errorf("configgen: field %s has invalid view name %q", fieldName, name)

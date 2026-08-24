@@ -260,8 +260,7 @@ func Reject(category RejectionCategory, cause error) error {
 func RejectDecode(group string, cause error) error {
 	var paths []string
 	if validDiagnosticSegment(group) {
-		var pathError *decodePathError
-		if errors.As(cause, &pathError) {
+		if pathError, ok := errors.AsType[*decodePathError](cause); ok {
 			switch {
 			case pathError.path == "$":
 				paths = []string{group}
@@ -334,8 +333,8 @@ func validDiagnosticPath(path string) bool {
 	for _, segment := range segments {
 		base := segment
 		for strings.HasSuffix(base, "[]") || strings.HasSuffix(base, "[*]") {
-			if strings.HasSuffix(base, "[]") {
-				base = strings.TrimSuffix(base, "[]")
+			if before, ok := strings.CutSuffix(base, "[]"); ok {
+				base = before
 			} else {
 				base = strings.TrimSuffix(base, "[*]")
 			}

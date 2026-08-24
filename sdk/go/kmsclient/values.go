@@ -316,7 +316,6 @@ func (p *ParameterValue) dispatch(oldVal, newVal string) {
 		return
 	}
 	for _, cb := range cbs {
-		cb := cb
 		client.enqueueCallback(p.Key, func() { cb(oldVal, newVal) })
 	}
 }

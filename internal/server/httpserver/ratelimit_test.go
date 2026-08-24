@@ -11,7 +11,7 @@ func TestLoginRateLimit(t *testing.T) {
 
 	// The login limiter allows a burst of 10. Ten bad attempts return 401; the
 	// eleventh is throttled to 429.
-	for i := 0; i < 10; i++ {
+	for i := range 10 {
 		w := e.do(http.MethodPost, "/api/v1/auth/login", map[string]any{"token": "bad"}, nil)
 		if w.Code != http.StatusUnauthorized {
 			t.Fatalf("attempt %d: status = %d, want 401", i+1, w.Code)
@@ -32,7 +32,7 @@ func TestForwardedForCannotEvadeLoginThrottle(t *testing.T) {
 	// ignored and the real peer keeps hitting the same bucket: the throttle
 	// still engages.
 	saw429 := false
-	for i := 0; i < 40; i++ {
+	for i := range 40 {
 		hdr := map[string]string{"X-Forwarded-For": "203.0.113." + itoa(i)}
 		w := e.do(http.MethodPost, "/api/v1/auth/login", map[string]any{"token": "bad"}, hdr)
 		if w.Code == http.StatusTooManyRequests {
@@ -62,7 +62,7 @@ func TestFailedAuthThrottled(t *testing.T) {
 	// Bad tokens on a protected route also consume the login bucket; after the
 	// burst is exhausted the response becomes 429.
 	saw429 := false
-	for i := 0; i < 12; i++ {
+	for i := range 12 {
 		w := e.do(http.MethodGet, "/api/v1/namespaces", nil, map[string]string{"Authorization": "Bearer bad"})
 		if w.Code == http.StatusTooManyRequests {
 			saw429 = true
@@ -79,7 +79,7 @@ func TestFailedAuthThrottled(t *testing.T) {
 
 func TestFailedAuthLimiterRunsBeforeAuthentication(t *testing.T) {
 	e := newTestEnv(t)
-	for i := 0; i < 10; i++ {
+	for i := range 10 {
 		w := e.do(http.MethodGet, "/api/v1/namespaces", nil, map[string]string{"Authorization": "Bearer bad"})
 		if w.Code != http.StatusUnauthorized {
 			t.Fatalf("attempt %d: status = %d, want 401", i+1, w.Code)

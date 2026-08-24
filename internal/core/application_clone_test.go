@@ -66,7 +66,7 @@ func TestCloneApplicationEnvironment(t *testing.T) {
 	}
 
 	// Without copy_values parameters become needs_value; a source gap is reported.
-	if _, err := st.CreateNamespace(ctx, domain.Namespace{NamespaceRef: domain.NamespaceRef{Env: "qa", App: "gradethis"}, CreatedBy: "admin", AllowedAuthMethods: []domain.AuthMethod{domain.AuthMethodToken}}); err != nil {
+	if _, err := st.CreateNamespace(ctx, domain.Namespace{Env: "qa", App: "gradethis", CreatedBy: "admin", AllowedAuthMethods: []domain.AuthMethod{domain.AuthMethodToken}}); err != nil {
 		t.Fatal(err)
 	}
 	if _, _, err := st.PutParameter(ctx, domain.Ref{NS: domain.NamespaceRef{Env: "qa", App: "gradethis"}, Key: "database"}, `{}`, "json", "{}", "admin"); err != nil {

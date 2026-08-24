@@ -124,10 +124,7 @@ type Argon2Params struct {
 // DefaultArgon2Params follows RFC 9106's second recommended option
 // (64 MiB, t=3) — memory-hard but reasonable on small servers.
 func DefaultArgon2Params() Argon2Params {
-	threads := runtime.NumCPU()
-	if threads > 4 {
-		threads = 4
-	}
+	threads := min(runtime.NumCPU(), 4)
 	if threads < 1 {
 		threads = 1
 	}

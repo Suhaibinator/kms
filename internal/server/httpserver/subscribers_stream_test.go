@@ -78,10 +78,13 @@ func TestReleaseSubscriberStream(t *testing.T) {
 		}
 		return resp
 	}
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	resp := open(ctx)
-	defer resp.Body.Close()
+	defer func() {
+		if err := resp.Body.Close(); err != nil {
+			t.Errorf("close stream response body: %v", err)
+		}
+	}()
 	if resp.StatusCode != http.StatusOK || !strings.HasPrefix(resp.Header.Get("Content-Type"), "text/event-stream") || resp.Header.Get("Cache-Control") != "no-store" || resp.Header.Get("X-Accel-Buffering") != "no" {
 		t.Fatalf("stream response = %d %v", resp.StatusCode, resp.Header)
 	}
@@ -104,7 +107,9 @@ func TestReleaseSubscriberStream(t *testing.T) {
 	if second.StatusCode != http.StatusTooManyRequests {
 		t.Fatalf("second stream status = %d", second.StatusCode)
 	}
-	second.Body.Close()
+	if err := second.Body.Close(); err != nil {
+		t.Fatalf("close second stream response body: %v", err)
+	}
 
 	// A subscriber connecting wakes the stream into a fresh snapshot.
 	ns := domain.NamespaceRef{Env: "dev", App: "gradethis"}
@@ -149,7 +154,9 @@ func TestReleaseSubscriberStream(t *testing.T) {
 	if third.StatusCode != http.StatusOK {
 		t.Fatalf("stream after release status = %d", third.StatusCode)
 	}
-	third.Body.Close()
+	if err := third.Body.Close(); err != nil {
+		t.Fatalf("close third stream response body: %v", err)
+	}
 }
 
 func waitFor(t *testing.T, cond func() bool) {

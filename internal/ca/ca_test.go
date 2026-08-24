@@ -2,6 +2,7 @@ package ca
 
 import (
 	"crypto/x509"
+	"slices"
 	"testing"
 	"time"
 )
@@ -170,7 +171,7 @@ func TestCertSignedByDifferentCARejected(t *testing.T) {
 func TestSerialsAreUnique(t *testing.T) {
 	c := mustGenerate(t)
 	seen := make(map[string]bool)
-	for i := 0; i < 200; i++ {
+	for i := range 200 {
 		issued, err := c.IssueClientCert("app", time.Hour)
 		if err != nil {
 			t.Fatalf("IssueClientCert %d: %v", i, err)
@@ -217,10 +218,5 @@ func parseLeaf(t *testing.T, certPEM []byte) *x509.Certificate {
 }
 
 func hasClientAuth(cert *x509.Certificate) bool {
-	for _, eku := range cert.ExtKeyUsage {
-		if eku == x509.ExtKeyUsageClientAuth {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(cert.ExtKeyUsage, x509.ExtKeyUsageClientAuth)
 }

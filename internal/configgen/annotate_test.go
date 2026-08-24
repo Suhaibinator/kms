@@ -74,6 +74,22 @@ func TestSchemaCarriesDocCommentsAndLiteralDefaults(t *testing.T) {
 	if _, has := maxIdle["default"]; has {
 		t.Fatalf("a default taken from a local variable must be omitted, got %v", maxIdle["default"])
 	}
+	if verbose := property(t, schema, "runtime", "verbose"); verbose["default"] != true {
+		t.Fatalf("new(true) should default to true, got %v", verbose["default"])
+	}
+	if burst := property(t, schema, "runtime", "burst"); burst["default"] != float64(0) {
+		t.Fatalf("new(int) should default to the zero value, got %v", burst["default"])
+	}
+	if got, _ := json.Marshal(property(t, schema, "runtime", "fallback")["default"]); string(got) != `{"attempts":5,"backoff":"1s"}` {
+		t.Fatalf("helper returning a literal should be inlined, got %s", got)
+	}
+	computed := property(t, schema, "runtime", "computed")
+	if _, has := computed["default"]; has {
+		t.Fatalf("helper using a local must yield no object default, got %v", computed["default"])
+	}
+	if backoff := property(t, schema, "runtime", "computed", "backoff"); backoff["default"] != "1s" {
+		t.Fatalf("the evaluable part of an inlined helper still contributes, got %v", backoff["default"])
+	}
 	tags := property(t, schema, "runtime", "tags")
 	if got, _ := json.Marshal(tags["default"]); string(got) != `["blue","canary"]` {
 		t.Fatalf("tags default = %s", got)

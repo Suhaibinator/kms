@@ -133,8 +133,8 @@ func TestSnapshotNoSpuriousCallback(t *testing.T) {
 	if err := pv.Init(c); err != nil {
 		t.Fatalf("Init: %v", err)
 	}
-	var fires int32
-	pv.OnChange(func(old, new string) { atomic.AddInt32(&fires, 1) })
+	var fires atomic.Int32
+	pv.OnChange(func(old, new string) { fires.Add(1) })
 
 	sub, err := srv.WaitForSubscribe(waitTimeout)
 	if err != nil {
@@ -144,7 +144,7 @@ func TestSnapshotNoSpuriousCallback(t *testing.T) {
 	// Snapshot repeating the current value must not fire OnChange.
 	sub.PushSnapshot(2, kmsclienttest.Param(testNS, "rate", "100", 1))
 	time.Sleep(150 * time.Millisecond)
-	if n := atomic.LoadInt32(&fires); n != 0 {
+	if n := fires.Load(); n != 0 {
 		t.Errorf("OnChange fired %d times on no-op snapshot, want 0", n)
 	}
 
@@ -153,8 +153,8 @@ func TestSnapshotNoSpuriousCallback(t *testing.T) {
 	if !eventually(t, waitTimeout, func() bool { return pv.Get() == "300" }) {
 		t.Fatalf("snapshot value not applied; Get = %q", pv.Get())
 	}
-	if !eventually(t, waitTimeout, func() bool { return atomic.LoadInt32(&fires) == 1 }) {
-		t.Errorf("OnChange fired %d times, want 1", atomic.LoadInt32(&fires))
+	if !eventually(t, waitTimeout, func() bool { return fires.Load() == 1 }) {
+		t.Errorf("OnChange fired %d times, want 1", fires.Load())
 	}
 }
 
@@ -227,8 +227,8 @@ func TestIdempotentEventApplication(t *testing.T) {
 	if err := pv.Init(c); err != nil {
 		t.Fatalf("Init: %v", err)
 	}
-	var fires int32
-	pv.OnChange(func(old, new string) { atomic.AddInt32(&fires, 1) })
+	var fires atomic.Int32
+	pv.OnChange(func(old, new string) { fires.Add(1) })
 
 	sub, err := srv.WaitForSubscribe(waitTimeout)
 	if err != nil {
@@ -251,7 +251,7 @@ func TestIdempotentEventApplication(t *testing.T) {
 	if !eventually(t, waitTimeout, func() bool { return pv.Get() == "D" }) {
 		t.Fatalf("newer change not applied; Get = %q", pv.Get())
 	}
-	if n := atomic.LoadInt32(&fires); n != 2 {
+	if n := fires.Load(); n != 2 {
 		t.Errorf("OnChange fired %d times, want 2 (A and D)", n)
 	}
 }
@@ -777,7 +777,7 @@ func TestWatchStopEndsCtxWatcherGoroutine(t *testing.T) {
 	// ctx-watcher goroutines.
 	const n = 40
 	stops := []func(){first}
-	for i := 0; i < n; i++ {
+	for i := range n {
 		stop, err := c.Watch(context.Background(), func(Event) {})
 		if err != nil {
 			t.Fatalf("Watch %d: %v", i, err)

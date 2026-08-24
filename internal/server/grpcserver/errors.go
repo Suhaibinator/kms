@@ -21,8 +21,7 @@ func mapError(log *zap.Logger, ctx context.Context, err error) error {
 	if err == nil {
 		return nil
 	}
-	var validationFailed *domain.ReleaseValidationFailedError
-	if errors.As(err, &validationFailed) {
+	if validationFailed, ok := errors.AsType[*domain.ReleaseValidationFailedError](err); ok {
 		violations := validationFailed.Violations()
 		out := make([]*kmsv1.ReleaseValidationError, 0, len(violations))
 		for _, violation := range violations {

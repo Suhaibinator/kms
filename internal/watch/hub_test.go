@@ -898,7 +898,7 @@ func TestWake_Coalesces(t *testing.T) {
 	store := &fakeStore{}
 	h := newTestHub(t, store, Options{})
 	// Fill the wake channel, then hammer Wake; must never block.
-	for i := 0; i < 1000; i++ {
+	for range 1000 {
 		h.Wake()
 	}
 	// The buffered channel holds exactly one pending wake.
@@ -1029,7 +1029,7 @@ func TestLiveness_AckKeepsAlive(t *testing.T) {
 	defer sub.Close()
 
 	// Keep acking within the window; must stay alive.
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		clock.advance(10 * time.Millisecond)
 		sub.Ack(uint64(i))
 		time.Sleep(10 * time.Millisecond)
@@ -1165,7 +1165,7 @@ func TestNoGoroutineLeak(t *testing.T) {
 	<-h.Started()
 
 	// Churn subscribers: subscribe, deliver, then drop them.
-	for i := 0; i < 25; i++ {
+	for i := range 25 {
 		sub, err := h.Subscribe(context.Background(), Registration{
 			Namespaces: []domain.NamespaceRef{nsr("prod", "app")},
 		})

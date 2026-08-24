@@ -92,7 +92,7 @@ func TestOpenRejectsTamper(t *testing.T) {
 func TestSealFreshNoncePerCall(t *testing.T) {
 	key := bytes.Repeat([]byte{0x33}, keySize)
 	seen := make(map[string]bool)
-	for i := 0; i < 256; i++ {
+	for i := range 256 {
 		nonce, _, err := seal(key, []byte("x"), nil)
 		if err != nil {
 			t.Fatalf("seal #%d: %v", i, err)

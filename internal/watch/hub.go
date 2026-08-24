@@ -12,6 +12,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"maps"
 	"sync"
 	"time"
 
@@ -399,9 +400,7 @@ func (h *Hub) Subscribe(ctx context.Context, reg Registration) (*Subscription, e
 	// fields so a caller cannot mutate the authorized names/IDs after validation.
 	reg.Namespaces = append([]domain.NamespaceRef(nil), reg.Namespaces...)
 	ids := make(map[domain.NamespaceRef]int64, len(reg.NamespaceIDs))
-	for ns, id := range reg.NamespaceIDs {
-		ids[ns] = id
-	}
+	maps.Copy(ids, reg.NamespaceIDs)
 	reg.NamespaceIDs = ids
 	if len(reg.Namespaces) == 0 {
 		return nil, domain.Errorf(domain.ErrInvalidArgument, "at least one namespace incarnation is required")

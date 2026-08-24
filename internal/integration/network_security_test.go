@@ -498,7 +498,7 @@ func TestLoopbackConcurrentClientBoundWritesCommitExactlyOneWinner(t *testing.T)
 		start := make(chan struct{})
 		results := make(chan writeResult, count)
 		var wg sync.WaitGroup
-		for i := 0; i < count; i++ {
+		for i := range count {
 			wg.Add(1)
 			go func(i int) {
 				defer wg.Done()

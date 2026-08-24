@@ -187,8 +187,8 @@ func valueContainsSecret(value reflect.Value, seen map[cloneVisit]struct{}) bool
 			}
 		}
 	case reflect.Struct:
-		for i := range value.NumField() {
-			if valueContainsSecret(value.Field(i), seen) {
+		for _, field := range value.Fields() {
+			if valueContainsSecret(field, seen) {
 				return true
 			}
 		}

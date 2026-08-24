@@ -2,6 +2,7 @@ package storage
 
 import (
 	"context"
+	"maps"
 
 	"github.com/Suhaibinator/kms/internal/domain"
 )
@@ -35,9 +36,7 @@ func BindNamespaceIncarnation(ctx context.Context, ns domain.NamespaceRef, id in
 	bindings := make(namespaceIncarnations)
 	if existing, ok := ctx.Value(namespaceIncarnationContextKey{}).(namespaceIncarnations); ok {
 		bindings = make(namespaceIncarnations, len(existing)+1)
-		for ref, expected := range existing {
-			bindings[ref] = expected
-		}
+		maps.Copy(bindings, existing)
 	}
 	bindings[ns] = id
 	return context.WithValue(ctx, namespaceIncarnationContextKey{}, bindings), nil

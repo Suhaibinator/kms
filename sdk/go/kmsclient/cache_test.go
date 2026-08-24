@@ -14,7 +14,7 @@ func TestCacheBoundedSize(t *testing.T) {
 	c.maxEntries = 8
 
 	const inserts = 1000
-	for i := 0; i < inserts; i++ {
+	for i := range inserts {
 		c.putParam("/p/"+strconv.Itoa(i), uint64(i), "", "v")
 		c.putSecret("/s/"+strconv.Itoa(i), uint64(i), "", Secret{})
 	}
@@ -43,12 +43,12 @@ func TestCacheEvictionSweepsExpired(t *testing.T) {
 	c := newCache(20 * time.Millisecond)
 	c.maxEntries = 50
 
-	for i := 0; i < 50; i++ {
+	for i := range 50 {
 		c.putParam("/old/"+strconv.Itoa(i), uint64(i), "", "v")
 	}
 	time.Sleep(40 * time.Millisecond) // let the first batch expire
 
-	for i := 0; i < 50; i++ {
+	for i := range 50 {
 		c.putParam("/new/"+strconv.Itoa(i), uint64(i), "", "v")
 	}
 

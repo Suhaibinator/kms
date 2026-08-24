@@ -16,7 +16,7 @@ func TestReleaseSubscriberNotifierCoalescesAndScopes(t *testing.T) {
 	ch, cancel := n.Subscribe(ns, "runtime")
 	other, cancelOther := n.Subscribe(ns, "batch")
 	defer cancelOther()
-	for i := 0; i < 5; i++ {
+	for range 5 {
 		n.Notify(ns, "runtime")
 	}
 	select {

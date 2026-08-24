@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"text/tabwriter"
@@ -738,12 +739,7 @@ Next steps:
 }
 
 func hasAuthMethod(methods []string, want string) bool {
-	for _, method := range methods {
-		if method == want {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(methods, want)
 }
 
 // namespaceFromFlags validates and assembles a NamespaceRef from --env/--app.
@@ -765,7 +761,7 @@ func parseAuthMethods(s string) ([]string, error) {
 		return nil, nil
 	}
 	var out []string
-	for _, part := range strings.Split(s, ",") {
+	for part := range strings.SplitSeq(s, ",") {
 		m := strings.TrimSpace(part)
 		if m != "mtls" && m != "token" {
 			return nil, fmt.Errorf("unknown auth method %q (want mtls or token)", m)

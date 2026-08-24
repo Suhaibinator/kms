@@ -2,6 +2,7 @@ package grpcserver
 
 import (
 	"context"
+	"slices"
 	"testing"
 	"time"
 
@@ -352,10 +353,8 @@ func waitForSubscriber(t *testing.T, env *testEnv, pred func(*kmsv1.Subscriber) 
 	for time.Now().Before(deadline) {
 		resp, err := env.admin().ListSubscribers(adminCtx(), &kmsv1.ListSubscribersRequest{})
 		if err == nil {
-			for _, s := range resp.GetSubscribers() {
-				if pred(s) {
-					return
-				}
+			if slices.ContainsFunc(resp.GetSubscribers(), pred) {
+				return
 			}
 		}
 		time.Sleep(10 * time.Millisecond)

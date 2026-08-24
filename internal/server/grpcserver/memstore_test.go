@@ -3,6 +3,7 @@ package grpcserver
 import (
 	"context"
 	"encoding/hex"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -663,12 +664,7 @@ func (m *memStore) SnapshotParameters(_ context.Context, namespaces []domain.Nam
 }
 
 func namespaceMatchAny(namespaces []domain.NamespaceRef, ns domain.NamespaceRef) bool {
-	for _, n := range namespaces {
-		if n == ns {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(namespaces, ns)
 }
 
 // --- key metadata (unused: KEK rotation not exercised here) ---

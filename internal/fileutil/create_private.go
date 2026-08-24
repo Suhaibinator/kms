@@ -21,7 +21,7 @@ func OpenPrivateExclusive(path string) (*os.File, error) {
 
 // CreatePrivateTemp atomically creates a random owner-only staging file.
 func CreatePrivateTemp(dir, prefix string) (*os.File, error) {
-	for i := 0; i < 100; i++ {
+	for range 100 {
 		name, err := privateTempName(prefix)
 		if err != nil {
 			return nil, err
@@ -42,7 +42,7 @@ func MkdirPrivateTemp(dir, prefix string) (string, error) {
 		return "", err
 	}
 	stableDir := filepath.Dir(stableCheck)
-	for i := 0; i < 100; i++ {
+	for range 100 {
 		name, err := privateTempName(prefix)
 		if err != nil {
 			return "", err

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"maps"
 	"sort"
 	"strconv"
 	"strings"
@@ -175,9 +176,7 @@ func (s *Service) ShipApplicationChange(ctx context.Context, pr Principal, in do
 	sort.Strings(aliases)
 	auditMeta := func(extra map[string]string) map[string]string {
 		meta := map[string]string{"environment": ns.Env, "aliases": strings.Join(aliases, ","), "activated": "false", "previous_version": strconv.FormatUint(activeVersion, 10)}
-		for k, v := range extra {
-			meta[k] = v
-		}
+		maps.Copy(meta, extra)
 		return meta
 	}
 	audit := func(decision string, extra map[string]string) {

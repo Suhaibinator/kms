@@ -112,9 +112,7 @@ func TestManagedConfigAdversarialAtomicLifecycle(t *testing.T) {
 	oldSeen := make([]atomic.Bool, adversarialReaderCount)
 	hotSeen := make([]atomic.Bool, adversarialReaderCount)
 	for readerIndex := range adversarialReaderCount {
-		readerWG.Add(1)
-		go func() {
-			defer readerWG.Done()
+		readerWG.Go(func() {
 			for {
 				select {
 				case <-stopReaders:
@@ -142,7 +140,7 @@ func TestManagedConfigAdversarialAtomicLifecycle(t *testing.T) {
 					return
 				}
 			}
-		}()
+		})
 	}
 	var stopReadersOnce sync.Once
 	stopReadersAndWait := func() {

@@ -581,8 +581,7 @@ func TestReleaseLoaderGracefulStopRetriesRejectedAcknowledgementAfterSendFailure
 	if err != nil {
 		t.Fatal(err)
 	}
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	gracefulStop := make(chan struct{})
 	done := make(chan struct{})
 	go func() {

@@ -72,7 +72,7 @@ func TestConfigurationReleaseGRPCLifecycleAndWatch(t *testing.T) {
 	if created.GetRelease().GetVersion() != 1 || created.GetRelease().GetDigest() == "" {
 		t.Fatalf("created=%+v", created.GetRelease())
 	}
-	active, err := releases.ActivateRelease(adminCtx(), &kmsv1.ActivateReleaseRequest{Namespace: pNS("prod", "app"), Name: "runtime", Version: 1, ExpectedCurrentVersion: ptrUint64(0)})
+	active, err := releases.ActivateRelease(adminCtx(), &kmsv1.ActivateReleaseRequest{Namespace: pNS("prod", "app"), Name: "runtime", Version: 1, ExpectedCurrentVersion: new(0)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -83,7 +83,7 @@ func TestConfigurationReleaseGRPCLifecycleAndWatch(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := releases.ActivateRelease(adminCtx(), &kmsv1.ActivateReleaseRequest{Namespace: pNS("prod", "app"), Name: "runtime", Version: createdV2.GetRelease().GetVersion(), ExpectedCurrentVersion: ptrUint64(0)}); status.Code(err) != codes.Aborted {
+	if _, err := releases.ActivateRelease(adminCtx(), &kmsv1.ActivateReleaseRequest{Namespace: pNS("prod", "app"), Name: "runtime", Version: createdV2.GetRelease().GetVersion(), ExpectedCurrentVersion: new(0)}); status.Code(err) != codes.Aborted {
 		t.Fatalf("stale CAS code=%s err=%v, want Aborted", status.Code(err), err)
 	}
 	stream, err := releases.WatchRelease(adminCtx())
@@ -179,8 +179,6 @@ func TestConfigurationReleaseGRPCLifecycleAndWatch(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 }
-
-func ptrUint64(v uint64) *uint64 { return &v }
 
 func TestReleaseConnectionOverlapDoesNotReportPrematureDisconnect(t *testing.T) {
 	h := &configurationReleaseServer{connections: make(map[releaseConnectionKey]*releaseConnectionState)}
