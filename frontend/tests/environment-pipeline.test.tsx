@@ -55,7 +55,7 @@ describe("EnvironmentPipeline", () => {
     const columns = screen.getAllByRole("region", { name: /environment$/ });
     expect(columns.map((column) => column.getAttribute("data-env"))).toEqual(["dev", "prod"]);
     expect(columns[1]).toHaveClass("pipeline-column-prod");
-    expect(within(columns[1]).getByText("production")).toBeVisible();
+    expect(within(columns[1]).getByTitle(/\(production\)$/)).toBeVisible();
   });
 
   it("marks values newer than the active pins as unreleased, with the pin in the tooltip trigger", () => {

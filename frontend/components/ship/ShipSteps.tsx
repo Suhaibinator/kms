@@ -29,7 +29,7 @@ export function ShipSteps({ current }: { current: ShipStepId }) {
               <span className="wizard-step-number" aria-hidden="true">
                 {index + 1}
               </span>
-              <span className="wizard-step-title">{step.title}</span>
+              <span>{step.title}</span>
             </li>
           );
         })}

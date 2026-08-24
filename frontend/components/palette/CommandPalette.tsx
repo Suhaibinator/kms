@@ -17,6 +17,7 @@ import { api, getToken, isAbortError } from "@/lib/api";
 import { useNamespaces } from "@/lib/hooks";
 import { buildPaletteIndex, groupResults, type PaletteItem, searchPalette } from "@/lib/palette";
 import type { Application } from "@/lib/types";
+import { cn } from "@/lib/utils";
 
 export type { CommandPaletteProps };
 
@@ -186,7 +187,7 @@ function PaletteBody({ onClose }: { onClose: () => void }) {
                   aria-selected={selected}
                   data-index={mine}
                   data-item={item.id}
-                  className={`palette-item ${selected ? "palette-item-active" : ""}`}
+                  className={cn("palette-item", selected && "palette-item-active")}
                   onMouseEnter={() => setActive(mine)}
                   onClick={() => navigate(item)}
                   onKeyDown={(event) => {

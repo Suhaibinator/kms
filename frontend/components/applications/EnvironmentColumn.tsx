@@ -2,7 +2,6 @@ import { MoreHorizontal } from "lucide-react";
 import { useEffect, useRef } from "react";
 import { Ident } from "@/components/Ident";
 import { StatusChip } from "@/components/StatusChip";
-import { Badge } from "@/components/ui";
 import { Button } from "@/components/ui/button";
 import { links } from "@/lib/links";
 import type { Application, ApplicationConfigurationRow, EnvironmentOverview } from "@/lib/types";
@@ -73,7 +72,6 @@ export function EnvironmentColumn({
         <div className="row-wrap">
           <Ident kind="env" value={ns.env} production={environment.production} />
           <StatusChip status={environment.status} production={environment.production} />
-          {environment.production ? <Badge kind="warning">production</Badge> : null}
         </div>
         <ActionMenu
           label={`${ns.env} links`}
