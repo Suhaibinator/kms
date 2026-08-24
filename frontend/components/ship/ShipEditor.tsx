@@ -1,14 +1,18 @@
 import { Trash2 } from "lucide-react";
 import { useId } from "react";
 import { Ident } from "@/components/Ident";
+import { SchemaForm } from "@/components/SchemaForm";
 import { Badge, Button, Field, Input, Textarea } from "@/components/ui";
 import { AppSelect } from "@/components/ui/app-select";
+import { aliasSchema, buildForm, type JsonSchema } from "@/lib/schema-form";
 import type { Application, EnvironmentOverview } from "@/lib/types";
 import { addableAliases, rowError, type ShipRow, valueFor } from "./model";
 
 export interface ShipEditorProps {
   application: Application;
   environments: EnvironmentOverview[];
+  /** Pinned schema JSON; enables the field-by-field editor for json aliases. */
+  schemaJson?: string;
   environment: string;
   env: EnvironmentOverview | null;
   rows: ShipRow[];
@@ -87,12 +91,14 @@ function ValueEditor({
 function RowCard({
   row,
   env,
+  schema,
   disabled,
   onChange,
   onRemove,
 }: {
   row: ShipRow;
   env: EnvironmentOverview | null;
+  schema: JsonSchema | null;
   disabled: boolean;
   onChange: (patch: Partial<ShipRow>) => void;
   onRemove: () => void;
@@ -101,6 +107,7 @@ function RowCard({
   const error = row.loaded ? rowError(row) : null;
   const pinned = current?.pinned_version;
   const currentVersion = current?.current_version;
+  const structured = schema !== null && buildForm(schema) !== null;
   return (
     <li className="ship-row" data-testid={`ship-row-${row.alias}`} data-alias={row.alias}>
       <div className="ship-row-head">
@@ -158,14 +165,28 @@ function RowCard({
           error={error}
           hint={row.loadError ? `Could not load the current value: ${row.loadError}` : undefined}
         >
-          <ValueEditor
-            row={row}
-            disabled={disabled}
-            onChange={(value) => onChange({ value, reuseVersion: undefined })}
-          />
+          {structured && schema ? (
+            <SchemaForm
+              schema={schema}
+              value={row.value}
+              disabled={disabled}
+              jsonLabel={`${row.alias} value`}
+              rows={6}
+              onChange={(value) => onChange({ value, reuseVersion: undefined })}
+            />
+          ) : (
+            <ValueEditor
+              row={row}
+              disabled={disabled}
+              onChange={(value) => onChange({ value, reuseVersion: undefined })}
+            />
+          )}
         </Field>
       )}
-      {row.loaded && row.reuseVersion === undefined && row.content_type === "json" ? (
+      {row.loaded &&
+      row.reuseVersion === undefined &&
+      row.content_type === "json" &&
+      !structured ? (
         <div className="ship-row-tools">
           <Button
             type="button"
@@ -186,6 +207,7 @@ function RowCard({
 export function ShipEditor({
   application,
   environments,
+  schemaJson,
   environment,
   env,
   rows,
@@ -266,6 +288,7 @@ export function ShipEditor({
               key={row.alias}
               row={row}
               env={env}
+              schema={row.content_type === "json" ? aliasSchema(schemaJson, row.alias) : null}
               disabled={disabled}
               onChange={(patch) => onRowChange(row.alias, patch)}
               onRemove={() => onRemoveRow(row.alias)}

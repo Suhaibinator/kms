@@ -1,10 +1,12 @@
 import { useEffect, useId, useMemo, useState } from "react";
 import { Modal } from "@/components/Modal";
+import { SchemaForm } from "@/components/SchemaForm";
 import { Badge, Checkbox, Field, Input, Spinner, Textarea } from "@/components/ui";
 import { AppSelect } from "@/components/ui/app-select";
 import { Button } from "@/components/ui/button";
 import { useFieldErrors } from "@/lib/hooks";
 import { isProductionEnvironment } from "@/lib/readiness";
+import { aliasSchema, buildForm } from "@/lib/schema-form";
 import { type ApplicationConfigurationRow, PARAMETER_CONTENT_TYPES } from "@/lib/types";
 import {
   firstError,
@@ -19,6 +21,7 @@ export function BulkParameterModal({
   row,
   initialEnvironments,
   retryEnvironments,
+  schemaJson,
   saving,
   onClose,
   onSave,
@@ -30,6 +33,8 @@ export function BulkParameterModal({
   initialEnvironments?: string[] | null;
   /** After a partial failure: the environments still to write. Narrows the selection only. */
   retryEnvironments: string[] | null;
+  /** Pinned schema JSON; enables the field-by-field editor for json values. */
+  schemaJson?: string | null;
   saving: boolean;
   onClose: () => void;
   onSave: (request: {
@@ -73,6 +78,11 @@ export function BulkParameterModal({
   );
   // An existing key's input is disabled, so a legacy key cannot block an edit.
   const blocking = firstError(row?.key ? null : keyProblem, valueProblem);
+  const schema = useMemo(
+    () => (contentType === "json" ? aliasSchema(schemaJson, key.trim()) : null),
+    [schemaJson, contentType, key],
+  );
+  const structured = schema !== null && buildForm(schema) !== null;
   const differing = useMemo(
     () =>
       row
@@ -153,13 +163,23 @@ export function BulkParameterModal({
           </Field>
         </div>
         <Field label="Value" error={shown("value", valueProblem)}>
-          <Textarea
-            className="font-mono"
-            rows={7}
-            value={value}
-            onChange={(event) => setValue(event.target.value)}
-            onBlur={() => touch("value")}
-          />
+          {structured && schema ? (
+            <SchemaForm
+              schema={schema}
+              value={value}
+              onChange={setValue}
+              onBlur={() => touch("value")}
+              jsonLabel="Value"
+            />
+          ) : (
+            <Textarea
+              className="font-mono"
+              rows={7}
+              value={value}
+              onChange={(event) => setValue(event.target.value)}
+              onBlur={() => touch("value")}
+            />
+          )}
         </Field>
         <Field label="Target environments">
           <div className="checkbox-row">

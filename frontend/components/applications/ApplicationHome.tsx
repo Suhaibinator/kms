@@ -393,6 +393,7 @@ export function ApplicationHome({
       <ShipModal
         application={application}
         environments={environments}
+        schemaJson={overview.schema_json}
         initialEnvironment={shipTarget?.env}
         initialAlias={shipTarget?.alias}
         open={shipTarget !== null}
@@ -530,6 +531,7 @@ export function ApplicationHome({
       <BulkParameterModal
         app={application.name}
         environments={environmentNames}
+        schemaJson={overview.schema_json}
         row={writeRow}
         initialEnvironments={writeTargets}
         retryEnvironments={retryEnvironments}

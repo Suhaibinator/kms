@@ -27,6 +27,8 @@ export type SetupAction =
 export interface ShipModalProps {
   application: Application;
   environments: EnvironmentOverview[];
+  /** Pinned schema JSON; enables the field-by-field editor for json aliases. */
+  schemaJson?: string;
   /** Defaults to the focused column, else the first non-prod environment. */
   initialEnvironment?: string;
   /** Prefills one row (`?ship=alias`, the Values row's Edit & ship). */

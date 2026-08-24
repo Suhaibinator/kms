@@ -70,6 +70,7 @@ function newRequestId(): string {
 export default function ShipModal({
   application,
   environments,
+  schemaJson,
   initialEnvironment,
   initialAlias,
   open,
@@ -486,6 +487,7 @@ export default function ShipModal({
               <ShipEditor
                 application={application}
                 environments={environments}
+                schemaJson={schemaJson}
                 environment={environment}
                 env={env}
                 rows={rows}
