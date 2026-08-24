@@ -2,6 +2,7 @@ import { createContext, type ReactNode, useContext, useMemo } from "react";
 import { toast } from "sonner";
 import { Toaster } from "@/components/ui/sonner";
 import { ApiError, isAbortError } from "@/lib/api";
+import { useTheme } from "@/lib/theme";
 
 type ToastKind = "error" | "success" | "info";
 
@@ -55,6 +56,7 @@ function show(kind: ToastKind, title: string, message?: string, options?: ToastO
 }
 
 export function ToastProvider({ children }: { children: ReactNode }) {
+  const { resolved } = useTheme();
   const api = useMemo<ToastApi>(
     () => ({
       push: show,
@@ -101,7 +103,7 @@ export function ToastProvider({ children }: { children: ReactNode }) {
   return (
     <ToastContext.Provider value={api}>
       {children}
-      <Toaster position="top-right" closeButton richColors />
+      <Toaster theme={resolved} position="top-right" closeButton richColors />
     </ToastContext.Provider>
   );
 }

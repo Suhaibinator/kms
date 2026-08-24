@@ -4,8 +4,11 @@
 
 @custom-variant dark (&:is(.dark *));
 
-/* KMS admin console — dark, professional design system.
-   Single global stylesheet; class-based, no runtime CSS deps. */
+/* KMS admin console design system. Single global stylesheet, no runtime CSS
+   deps. Light is the default palette on :root; `.dark` on <html> (set before
+   first paint by the boot script in pages/_document.tsx, toggled by
+   lib/theme.tsx) swaps the same tokens for the dark set. Everything below the
+   two token blocks reads tokens only, so it renders in either theme. */
 
 /* Layering: every rule in this file lives in a Tailwind layer, so a utility on
    the element (`mb-0`, `min-h-[60dvh]`) always wins over component CSS. Rules
@@ -13,42 +16,42 @@
    came to mean 16px instead of 64px. Only the token blocks stay unlayered. */
 
 :root {
-  color-scheme: dark;
+  color-scheme: light;
 
-  --bg: #0b0e14;
-  --bg-elev: #10141c;
-  --surface: #151a23;
-  --surface-2: #1b212c;
-  --surface-hover: #1f2733;
-  --border: #232a36;
-  --border-strong: #313b4a;
+  --bg: #f4f6f9;
+  --bg-elev: #eceff4;
+  --surface: #ffffff;
+  --surface-2: #f5f7fa;
+  --surface-hover: #e8ecf2;
+  --border: #dde2ea;
+  --border-strong: #c4cdd9;
 
-  --text: #e6edf3;
-  --text-muted: #9aa7b6;
-  --text-faint: #8491a1;
+  --text: #171d27;
+  --text-muted: #55617a;
+  --text-faint: #6b7689;
 
   /* shadcn's `--accent` is the *hover surface* token (bg-accent /
      text-accent-foreground), not the brand accent. The brand blue lives in
      --primary and --accent-hover/-soft/-border. */
-  --accent: #1f2733;
-  --accent-hover: #6f9bff;
-  --accent-soft: rgba(91, 140, 255, 0.14);
-  --accent-border: rgba(91, 140, 255, 0.4);
+  --accent: #e8ecf2;
+  --accent-hover: #2450c2;
+  --accent-soft: rgba(47, 95, 214, 0.1);
+  --accent-border: rgba(47, 95, 214, 0.35);
 
-  --success: #3fb950;
-  --success-soft: rgba(63, 185, 80, 0.14);
-  --warning: #e3b341;
-  --warning-soft: rgba(227, 179, 65, 0.14);
-  --danger: #f85149;
-  --danger-hover: #ff6b62;
-  --danger-soft: rgba(248, 81, 73, 0.14);
-  --info: #58b3d6;
+  --success: #1e7f3c;
+  --success-soft: rgba(30, 127, 60, 0.12);
+  --warning: #8f6512;
+  --warning-soft: rgba(196, 140, 26, 0.16);
+  --danger: #c62f2a;
+  --danger-hover: #ad231f;
+  --danger-soft: rgba(198, 47, 42, 0.1);
+  --info: #1d7ea3;
 
   /* Foreground text on the tinted panels, and on a solid destructive button. */
-  --warning-fg: #f0d489;
-  --danger-fg: #ffb3ad;
-  --info-fg: #b9ccff;
-  --on-destructive: #1a0605;
+  --warning-fg: #5d4200;
+  --danger-fg: #7d1a15;
+  --info-fg: #1c3f96;
+  --on-destructive: #ffffff;
 
   --radius: 8px;
   /* --radius-sm/-md/-lg/-xl live in the @theme block at the bottom of this
@@ -56,8 +59,10 @@
      silently desynced hand-written var(--radius-lg) (12px) from the
      `rounded-lg` utility (8px). */
 
-  --shadow: 0 8px 30px rgba(0, 0, 0, 0.45);
-  --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.35);
+  --shadow: 0 8px 30px rgba(23, 29, 39, 0.14);
+  --shadow-sm: 0 2px 8px rgba(23, 29, 39, 0.1);
+  /* Edge fade on horizontally scrollable tables. */
+  --scroll-shadow: rgba(23, 29, 39, 0.16);
 
   /* Spacing scale on a 4px grid, derived from Tailwind's --spacing (pinned in
      the @theme block at the bottom of this file) so the hand-written rules and
@@ -106,8 +111,8 @@
   --card-foreground: var(--text);
   --popover: var(--surface);
   --popover-foreground: var(--text);
-  --primary: #5b8cff;
-  --primary-foreground: #071018;
+  --primary: #2f5fd6;
+  --primary-foreground: #ffffff;
   --secondary: var(--surface-2);
   --secondary-foreground: var(--text);
   --muted: var(--surface-hover);
@@ -132,6 +137,44 @@
   --sidebar-accent-foreground: var(--text);
   --sidebar-border: var(--border);
   --sidebar-ring: var(--ring);
+}
+
+/* Dark theme: the same tokens, re-pointed. Keep this list and :root in
+   lockstep — a token defined in only one of them renders one theme's text on
+   the other theme's ground. */
+.dark {
+  color-scheme: dark;
+  --bg: #0b0e14;
+  --bg-elev: #10141c;
+  --surface: #151a23;
+  --surface-2: #1b212c;
+  --surface-hover: #1f2733;
+  --border: #232a36;
+  --border-strong: #313b4a;
+  --text: #e6edf3;
+  --text-muted: #9aa7b6;
+  --text-faint: #8491a1;
+  --accent: #1f2733;
+  --accent-hover: #6f9bff;
+  --accent-soft: rgba(91, 140, 255, 0.14);
+  --accent-border: rgba(91, 140, 255, 0.4);
+  --success: #3fb950;
+  --success-soft: rgba(63, 185, 80, 0.14);
+  --warning: #e3b341;
+  --warning-soft: rgba(227, 179, 65, 0.14);
+  --danger: #f85149;
+  --danger-hover: #ff6b62;
+  --danger-soft: rgba(248, 81, 73, 0.14);
+  --info: #58b3d6;
+  --warning-fg: #f0d489;
+  --danger-fg: #ffb3ad;
+  --info-fg: #b9ccff;
+  --on-destructive: #1a0605;
+  --shadow: 0 8px 30px rgba(0, 0, 0, 0.45);
+  --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.35);
+  --scroll-shadow: rgba(0, 0, 0, 0.4);
+  --primary: #5b8cff;
+  --primary-foreground: #071018;
 }
 
 @layer base {
@@ -573,14 +616,12 @@
        content box, so each edge shadow fades out once that end is reached.
        Purely CSS — no scroll listener needed. */
     background:
-      linear-gradient(to right, var(--surface) 40%, rgba(21, 26, 35, 0)) left center / 32px 100%
-      no-repeat,
-      linear-gradient(to left, var(--surface) 40%, rgba(21, 26, 35, 0)) right center / 32px 100%
-      no-repeat,
-      radial-gradient(farthest-side at 0 50%, rgba(0, 0, 0, 0.4), rgba(0, 0, 0, 0)) left center /
+      linear-gradient(to right, var(--surface) 40%, transparent) left center / 32px 100% no-repeat,
+      linear-gradient(to left, var(--surface) 40%, transparent) right center / 32px 100% no-repeat,
+      radial-gradient(farthest-side at 0 50%, var(--scroll-shadow), transparent) left center / 14px
+      100% no-repeat,
+      radial-gradient(farthest-side at 100% 50%, var(--scroll-shadow), transparent) right center /
       14px 100% no-repeat,
-      radial-gradient(farthest-side at 100% 50%, rgba(0, 0, 0, 0.4), rgba(0, 0, 0, 0)) right center
-      / 14px 100% no-repeat,
       var(--surface);
     background-attachment: local, local, scroll, scroll;
   }
@@ -1130,7 +1171,12 @@
     place-items: center;
     padding: 24px;
     background:
-      radial-gradient(1200px 600px at 50% -10%, rgba(91, 140, 255, 0.08), transparent), var(--bg);
+      radial-gradient(
+        1200px 600px at 50% -10%,
+        color-mix(in srgb, var(--primary) 8%, transparent),
+        transparent
+      ),
+      var(--bg);
   }
   .auth-card {
     width: 100%;
@@ -1199,7 +1245,7 @@
 
   .warn-panel {
     background: var(--warning-soft);
-    border: 1px solid rgba(227, 179, 65, 0.4);
+    border: 1px solid color-mix(in srgb, var(--warning) 40%, transparent);
     border-radius: var(--radius);
     padding: 13px 15px;
     font-size: 13px;
@@ -1207,7 +1253,7 @@
   }
   .danger-panel {
     background: var(--danger-soft);
-    border: 1px solid rgba(248, 81, 73, 0.4);
+    border: 1px solid color-mix(in srgb, var(--danger) 40%, transparent);
     border-radius: var(--radius);
     padding: 13px 15px;
     font-size: 13px;
@@ -1374,7 +1420,7 @@
   .wizard-step-current .wizard-step-number {
     background: var(--primary);
     border-color: var(--primary);
-    color: #071018;
+    color: var(--primary-foreground);
   }
   .wizard-step-complete {
     color: var(--success);
@@ -1882,6 +1928,62 @@
      derive from them. Do not add --text-sm--line-height / --text-xs--line-height:
      leaving those at Tailwind's defaults reproduces today's computed line-heights
      exactly. */
+  /* ---------- Theme switch ---------- */
+  .theme-switch {
+    margin: 0;
+    display: inline-flex;
+    gap: 2px;
+    padding: 2px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+  }
+  .theme-switch-option {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 24px;
+    border: 0;
+    border-radius: 4px;
+    background: transparent;
+    color: var(--text-faint);
+    cursor: pointer;
+  }
+  .theme-switch-option:hover {
+    color: var(--text);
+    background: var(--surface-hover);
+  }
+  .theme-switch-option:has(input:checked) {
+    color: var(--text);
+    background: var(--surface-hover);
+    box-shadow: inset 0 0 0 1px var(--border-strong);
+  }
+  .theme-switch-option:has(input:focus-visible) {
+    outline: 2px solid var(--primary);
+    outline-offset: 1px;
+  }
+  .sidebar-theme {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-2);
+    margin-bottom: var(--space-2);
+    padding: 0 2px;
+    font-size: 12px;
+    color: var(--text-muted);
+  }
+  .auth-foot {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-2);
+    margin-top: 18px;
+    padding-top: 14px;
+    border-top: 1px solid var(--border);
+    font-size: 12px;
+    color: var(--text-muted);
+  }
 }
 
 @theme {
@@ -1940,8 +2042,4 @@
   --radius-2xl: 20px;
   --radius-3xl: 24px;
   --radius-4xl: 999px;
-}
-
-.dark {
-  color-scheme: dark;
 }

@@ -9,6 +9,7 @@ import { Loading } from "@/components/ui";
 import { AuthProvider, useAuth } from "@/context/AuthContext";
 import { ToastProvider } from "@/context/ToastContext";
 import { currentPath, loginHref } from "@/lib/returnTo";
+import { ThemeProvider } from "@/lib/theme";
 import "@/styles/globals.css";
 
 // Self-hosted so the static export stays hermetic: no build-time fetch from
@@ -86,21 +87,23 @@ export default function App({ Component, pageProps }: AppProps) {
         <meta name="viewport" content="width=device-width, initial-scale=1" />
         <meta name="robots" content="noindex, nofollow" />
       </Head>
-      <ToastProvider>
-        <AuthProvider>
-          {/* Tied to the route so navigating away from a crashed page clears
+      <ThemeProvider>
+        <ToastProvider>
+          <AuthProvider>
+            {/* Tied to the route so navigating away from a crashed page clears
               the error instead of stranding the visitor on the fallback card. */}
-          <ErrorBoundary resetKey={router.asPath}>
-            {isPublic ? (
-              <Component {...pageProps} />
-            ) : (
-              <Protected>
+            <ErrorBoundary resetKey={router.asPath}>
+              {isPublic ? (
                 <Component {...pageProps} />
-              </Protected>
-            )}
-          </ErrorBoundary>
-        </AuthProvider>
-      </ToastProvider>
+              ) : (
+                <Protected>
+                  <Component {...pageProps} />
+                </Protected>
+              )}
+            </ErrorBoundary>
+          </AuthProvider>
+        </ToastProvider>
+      </ThemeProvider>
     </div>
   );
 }

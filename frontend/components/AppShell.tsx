@@ -1,11 +1,12 @@
-import { Button } from "@/components/ui/button";
-import { Sheet, SheetContent, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
 import Link from "next/link";
 import { useRouter } from "next/router";
 import { type ReactNode, useEffect, useMemo, useState } from "react";
+import { Button } from "@/components/ui/button";
+import { Sheet, SheetContent, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
 import { useAuth } from "@/context/AuthContext";
 import { Icon } from "./icons";
 import { LogoMark } from "./LogoMark";
+import { ThemeSwitch } from "./ThemeSwitch";
 
 interface NavItem {
   href: string;
@@ -100,6 +101,10 @@ function SidebarContent({
       </nav>
 
       <div className="sidebar-footer">
+        <div className="sidebar-theme">
+          <span>Appearance</span>
+          <ThemeSwitch />
+        </div>
         <div className="identity-card">
           <div className="who">{identity?.name ?? "Unknown"}</div>
           <div className="kind">{identity?.kind ?? "session"}</div>

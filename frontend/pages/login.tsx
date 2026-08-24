@@ -1,6 +1,7 @@
 import { useRouter } from "next/router";
 import { useEffect, useState } from "react";
 import { LogoMark } from "@/components/LogoMark";
+import { ThemeSwitch } from "@/components/ThemeSwitch";
 import { Field, Input, PageTitle, Spinner } from "@/components/ui";
 import { Button } from "@/components/ui/button";
 import { useAuth } from "@/context/AuthContext";
@@ -99,6 +100,10 @@ export default function LoginPage() {
             {busy ? "Signing in…" : "Sign in"}
           </Button>
         </form>
+        <div className="auth-foot">
+          <span>Appearance</span>
+          <ThemeSwitch />
+        </div>
       </div>
     </main>
   );
