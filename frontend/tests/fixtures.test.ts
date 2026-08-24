@@ -192,7 +192,11 @@ describe("backend fixtures", () => {
     expect(readyJson.status).toBe("ready");
     expect(readyJson.environments.map((env) => env.status)).toEqual(["ready", "ready"]);
     expect(readyJson.environments.every((env) => env.rollout.rejected === 0)).toBe(true);
-    expect(readyJson.findings.map((f) => f.code)).toEqual(["production"]);
+    // `production` is env-scoped only; the application level carries nothing.
+    expect(readyJson.findings).toEqual([]);
+    const prod = readyJson.environments.find((env) => env.namespace.env === "prod");
+    expect(prod?.findings.map((f) => f.code)).toEqual(["production", "previous_unavailable"]);
+    expect(prod?.findings.every((f) => f.severity === "info")).toBe(true);
   });
 
   it("overview-incident: prod drift plus one rejected config_validation_failed instance", () => {
@@ -207,9 +211,10 @@ describe("backend fixtures", () => {
     );
     const drift = prod?.values.find((v) => v.alias === "rate_limits");
     expect(drift?.current_version).toBeGreaterThan(drift?.pinned_version ?? 0);
+    // Within a severity, emission order is values → release → rollout.
     expect(prod?.findings.map((f) => f.code)).toEqual([
-      "instance_rejected",
       "unreleased_changes",
+      "instance_rejected",
       "production",
     ]);
   });
@@ -240,9 +245,10 @@ describe("backend fixtures", () => {
 
   it("fleet: the rows-free form with per-environment status", () => {
     assertFleet(fleetJson);
+    // Store order: alphabetical by application name.
     expect(fleetJson.applications.map((a) => [a.application.name, a.status])).toEqual([
-      ["gradethis", "attention"],
       ["billing", "setup"],
+      ["gradethis", "attention"],
       ["reports", "ready"],
     ]);
   });
