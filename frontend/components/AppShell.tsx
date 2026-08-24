@@ -151,7 +151,7 @@ export default function AppShell({ children }: { children: ReactNode }) {
                 type="button"
                 variant="outline"
                 size="icon"
-                className="nav-toggle"
+                className="hidden shrink-0 max-md:inline-flex max-md:size-11 max-md:min-w-11"
                 aria-label="Open navigation"
               />
             }

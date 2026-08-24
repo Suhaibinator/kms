@@ -627,7 +627,7 @@ export function ReleaseBuilder({
               error={attempted || jsonProblem ? jsonProblem : null}
             >
               <Textarea
-                className="release-json-editor font-mono"
+                className="release-json-editor min-h-[60dvh] font-mono"
                 value={jsonText}
                 onChange={(event) => {
                   setJSONText(event.target.value);

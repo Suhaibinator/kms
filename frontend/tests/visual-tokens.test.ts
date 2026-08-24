@@ -20,6 +20,31 @@ describe("globals.css stays out of Tailwind's way", () => {
     expect(css).toMatch(/--text-xs:\s*11\.5px/);
   });
 
+  it("keeps every rule inside a Tailwind layer", () => {
+    // Column-0 openers are the file's top-level blocks. Anything that is not a
+    // token block or a layer is a rule that would silently outrank every
+    // utility, so the list of allowed openers is closed on purpose.
+    const openers = css
+      .split("\n")
+      .filter((line) => /^\S.*\{\s*$/.test(line))
+      .map((line) => line.replace(/\s*\{\s*$/, ""));
+    const allowed = new Set([
+      ":root",
+      ".dark",
+      "@theme",
+      "@theme inline",
+      "@layer base",
+      "@layer components",
+    ]);
+    expect(openers.filter((o) => !allowed.has(o))).toEqual([]);
+    expect(openers).toContain("@layer components");
+  });
+
+  it("derives the --space-* scale from --spacing", () => {
+    expect(css).toMatch(/--space-4:\s*calc\(var\(--spacing\) \* 4\)/);
+    expect(css).not.toMatch(/--space-\d+:\s*\d+px/);
+  });
+
   it("derives control height and label offset instead of hand-computing them", () => {
     expect(css).toMatch(/--control-h:\s*calc\(var\(--spacing\)/);
     expect(css).toMatch(/--control-h-sm:\s*calc\(var\(--spacing\)/);

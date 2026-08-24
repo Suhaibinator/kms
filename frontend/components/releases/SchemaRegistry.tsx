@@ -163,7 +163,7 @@ function RegisterSchemaDialog({
       </Field>
       <Field label="JSON Schema definition" error={attempted || schemaError ? schemaError : null}>
         <Textarea
-          className="schema-editor font-mono"
+          className="schema-editor min-h-[60dvh] font-mono"
           value={schemaJSON}
           onChange={(event) => setSchemaJSON(event.target.value)}
           spellCheck={false}

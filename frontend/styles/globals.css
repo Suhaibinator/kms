@@ -7,6 +7,11 @@
 /* KMS admin console — dark, professional design system.
    Single global stylesheet; class-based, no runtime CSS deps. */
 
+/* Layering: every rule in this file lives in a Tailwind layer, so a utility on
+   the element (`mb-0`, `min-h-[60dvh]`) always wins over component CSS. Rules
+   outside a layer would silently beat every utility, which is how `.mb-16` once
+   came to mean 16px instead of 64px. Only the token blocks stay unlayered. */
+
 :root {
   color-scheme: dark;
 
@@ -54,18 +59,19 @@
   --shadow: 0 8px 30px rgba(0, 0, 0, 0.45);
   --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.35);
 
-  /* Spacing scale on a 4px grid. Prefer these over ad-hoc pixel values so
-     vertical rhythm stays consistent across pages. */
-  --space-1: 4px;
-  --space-2: 8px;
-  --space-3: 12px;
-  --space-4: 16px;
-  --space-5: 20px;
-  --space-6: 24px;
-  --space-7: 32px;
-  --space-8: 40px;
-  --space-9: 48px;
-  --space-10: 64px;
+  /* Spacing scale on a 4px grid, derived from Tailwind's --spacing (pinned in
+     the @theme block at the bottom of this file) so the hand-written rules and
+     the utilities can never drift apart. Prefer these over ad-hoc pixels. */
+  --space-1: calc(var(--spacing) * 1);
+  --space-2: calc(var(--spacing) * 2);
+  --space-3: calc(var(--spacing) * 3);
+  --space-4: calc(var(--spacing) * 4);
+  --space-5: calc(var(--spacing) * 5);
+  --space-6: calc(var(--spacing) * 6);
+  --space-7: calc(var(--spacing) * 8);
+  --space-8: calc(var(--spacing) * 10);
+  --space-9: calc(var(--spacing) * 12);
+  --space-10: calc(var(--spacing) * 16);
 
   --mono: ui-monospace, "SFMono-Regular", "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
   /* --font-inter is injected by next/font/local in _app.tsx; the system stack
@@ -128,1752 +134,1756 @@
   --sidebar-ring: var(--ring);
 }
 
-* {
-  box-sizing: border-box;
-}
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  body {
+    @apply bg-background text-foreground;
+  }
+  button:not(:disabled),
+  [role="button"]:not(:disabled) {
+    cursor: pointer;
+  }
+  html {
+    @apply font-sans;
+  }
 
-html,
-body {
-  margin: 0;
-  padding: 0;
-  background: var(--bg);
-  color: var(--text);
-  font-family: var(--sans);
-  font-size: 14px;
-  line-height: 1.5;
-  -webkit-font-smoothing: antialiased;
-}
+  * {
+    box-sizing: border-box;
+  }
 
-::selection {
-  background: var(--accent-soft);
-  color: var(--text);
-}
+  html,
+  body {
+    margin: 0;
+    padding: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--sans);
+    font-size: 14px;
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+  }
 
-/* One focus ring for every interactive surface. :focus-visible keeps it off
-   mouse clicks while guaranteeing keyboard users can always see where they
-   are.
+  ::selection {
+    background: var(--accent-soft);
+    color: var(--text);
+  }
 
-   The app has two deliberate recipes, not three: this `outline` for links,
-   rows, nav and summaries, and shadcn's inset `ring` for form controls. Text
-   fields additionally keep a border + glow on plain :focus, wanted on mouse
-   click too, unlike buttons. */
-.nav-link:focus-visible,
-a:not([data-slot="button"]):focus-visible,
-summary:focus-visible {
-  outline: 2px solid var(--primary);
-  outline-offset: 2px;
-  border-radius: var(--radius-sm);
-}
+  /* One focus ring for every interactive surface. :focus-visible keeps it off
+     mouse clicks while guaranteeing keyboard users can always see where they
+     are.
 
-a:not([data-slot="button"]) {
-  color: var(--primary);
-  text-decoration: none;
-}
-/* lucide renders an inline <svg>, which sits on the text baseline and leaves a
-   descender-sized gap under it. Inside a flex container (Button, .row) this
-   never shows; inside a text run it does. */
-a:not([data-slot="button"]) svg {
-  vertical-align: -0.15em;
-}
-a:not([data-slot="button"]):hover {
-  color: var(--accent-hover);
-  text-decoration: underline;
-}
+     The app has two deliberate recipes, not three: this `outline` for links,
+     rows, nav and summaries, and shadcn's inset `ring` for form controls. Text
+     fields additionally keep a border + glow on plain :focus, wanted on mouse
+     click too, unlike buttons. */
+  .nav-link:focus-visible,
+  a:not([data-slot="button"]):focus-visible,
+  summary:focus-visible {
+    outline: 2px solid var(--primary);
+    outline-offset: 2px;
+    border-radius: var(--radius-sm);
+  }
 
-h1,
-h2,
-h3,
-h4 {
-  margin: 0;
-  font-weight: 600;
-  color: var(--text);
-  letter-spacing: -0.01em;
-}
+  a:not([data-slot="button"]) {
+    color: var(--primary);
+    text-decoration: none;
+  }
+  /* lucide renders an inline <svg>, which sits on the text baseline and leaves a
+     descender-sized gap under it. Inside a flex container (Button, .row) this
+     never shows; inside a text run it does. */
+  a:not([data-slot="button"]) svg {
+    vertical-align: -0.15em;
+  }
+  a:not([data-slot="button"]):hover {
+    color: var(--accent-hover);
+    text-decoration: underline;
+  }
 
-code,
-kbd,
-pre {
-  font-family: var(--mono);
-}
+  h1,
+  h2,
+  h3,
+  h4 {
+    margin: 0;
+    font-weight: 600;
+    color: var(--text);
+    letter-spacing: -0.01em;
+  }
 
-/* ---------- App shell / layout ---------- */
-
-.app-shell {
-  display: flex;
-  min-height: 100dvh;
-}
-
-/* Mobile top bar + drawer toggle. Hidden on desktop; shown at <= 768px
-   (see the media query near the bottom of this file). */
-.mobile-topbar {
-  display: none;
-}
-.nav-toggle {
-  display: none;
-}
-
-.sidebar {
-  width: var(--sidebar-w);
-  flex-shrink: 0;
-  background: var(--bg-elev);
-  border-right: 1px solid var(--border);
-  display: flex;
-  flex-direction: column;
-  position: sticky;
-  top: 0;
-  height: 100dvh;
-  overflow-y: auto;
-}
-
-.sidebar-brand {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  padding: var(--space-4) var(--space-4) var(--space-3);
-  border-bottom: 1px solid var(--border);
-}
-.sidebar-brand .logo {
-  width: 28px;
-  height: 28px;
-  border-radius: 7px;
-  background: linear-gradient(145deg, var(--brand-mark-start), var(--brand-mark-end));
-  display: grid;
-  place-items: center;
-  font-weight: 700;
-  color: var(--brand-mark-foreground);
-  font-size: 14px;
-}
-.logo {
-  box-shadow: inset 0 0 0 1px rgba(228, 180, 95, 0.22);
-}
-.logo svg {
-  display: block;
-  width: 100%;
-  height: 100%;
-}
-.sidebar-brand .brand-name {
-  font-weight: 700;
-  font-size: 15px;
-  letter-spacing: 0.02em;
-}
-.sidebar-brand .brand-sub {
-  font-size: 11px;
-  color: var(--text-faint);
-}
-
-.nav {
-  padding: var(--space-3) var(--space-2);
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  flex: 1;
-}
-.nav-section-label {
-  font-size: 10.5px;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-  color: var(--text-faint);
-  padding: var(--space-3) var(--space-3) var(--space-1);
-}
-.nav-link {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  padding: var(--space-2) var(--space-3);
-  border-radius: var(--radius-sm);
-  color: var(--text-muted);
-  font-weight: 500;
-  font-size: 13.5px;
-  cursor: pointer;
-}
-.nav-link:hover {
-  background: var(--surface-hover);
-  color: var(--text);
-  text-decoration: none;
-}
-.nav-link.active {
-  background: var(--accent-soft);
-  color: var(--text);
-}
-.nav-link .nav-icon {
-  /* The 16px box exactly fits the size-4 icon inside it; centring it as a flex
-     container beats text-align, which cannot centre an inline svg vertically. */
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 16px;
-  opacity: 0.9;
-}
-
-.sidebar-footer {
-  border-top: 1px solid var(--border);
-  padding: 12px;
-}
-.identity-card {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  padding: 8px 10px;
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  margin-bottom: 8px;
-}
-.identity-card .who {
-  font-weight: 600;
-  font-size: 13px;
-  overflow-wrap: anywhere;
-}
-.identity-card .kind {
-  font-size: 11px;
-  color: var(--text-faint);
-}
-
-.main {
-  flex: 1;
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-}
-.page {
-  padding: var(--space-6) var(--space-7) var(--space-10);
-  max-width: 1200px;
-  width: 100%;
-  margin: 0 auto;
-}
-.page-header {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: var(--space-4);
-  margin-bottom: var(--space-6);
-  flex-wrap: wrap;
-}
-.page-title {
-  font-size: 22px;
-  overflow-wrap: anywhere;
-}
-.page-subtitle {
-  color: var(--text-muted);
-  margin-top: var(--space-1);
-  font-size: 13.5px;
-}
-.page-actions {
-  display: flex;
-  /* Mixed-height actions (a status Badge beside a Button) otherwise stretch to
-     the top of the row. */
-  align-items: center;
-  gap: var(--space-2);
-  flex-shrink: 0;
-  flex-wrap: wrap;
-}
-
-/* ---------- Cards ---------- */
-
-.card {
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
-  padding: var(--space-4) var(--space-5);
-}
-.card + .card {
-  margin-top: var(--space-4);
-}
-.card-title {
-  font-size: 14px;
-  font-weight: 600;
-  margin-bottom: var(--space-3);
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--space-3);
-  flex-wrap: wrap;
-}
-/* Preflight resets heading sizes to `inherit`, so a bare <h2> is just bold body
-   text. The levels the app actually uses have to opt back in; 15px separates a
-   section from the copy under it. */
-.section-title {
-  font-size: 15px;
-  font-weight: 600;
-}
-.card-grid {
-  display: grid;
-  gap: var(--space-4);
-  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
-}
-/* Cap the stat row at three columns. auto-fit alone fits five across at the
-   1200px page width, which strands a lone sixth card on its own row. */
-@media (min-width: 900px) {
-  .card-grid {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+  code,
+  kbd,
+  pre {
+    font-family: var(--mono);
   }
 }
 
-.stat {
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
-  padding: var(--space-4) var(--space-5);
-}
-.stat .stat-label {
-  font-size: 12px;
-  color: var(--text-muted);
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-}
-.stat .stat-value {
-  font-size: 28px;
-  font-weight: 700;
-  line-height: 1.25;
-  margin-top: var(--space-1);
-  letter-spacing: -0.02em;
-  font-variant-numeric: tabular-nums;
-}
-/* A stat card whose "value" is a string rather than a number — same box, so a
-   row of cards keeps one baseline. */
-.stat .stat-value-sm {
-  display: flex;
-  align-items: center;
-  min-height: 35px;
-  margin-top: var(--space-1);
-  font-size: 15px;
-  font-weight: 600;
-  overflow-wrap: anywhere;
-}
-/* Stat cards showing badges instead of a number reserve the same box height,
-   so the row of cards keeps one baseline. */
-.stat .stat-badges {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  flex-wrap: wrap;
-  min-height: 35px;
-  margin-top: var(--space-1);
-}
-.stat .stat-sub {
-  font-size: 12px;
-  color: var(--text-faint);
-  margin-top: var(--space-1);
-}
+@layer components {
+  /* ---------- App shell / layout ---------- */
 
-/* ---------- Forms ---------- */
-
-.field {
-  margin-bottom: var(--space-4);
-}
-fieldset.field {
-  min-width: 0;
-  padding: 0;
-  border: 0;
-}
-fieldset.field legend {
-  padding: 0;
-}
-/* Must render identically to <Field>'s [data-slot=field-label]: forms that mix
-   the two (audit filters, secrets/detail, policies) otherwise misalign, and
-   --label-offset assumes a single height. The line-height is the part that
-   matters — the inherited 1.5 made this block 1.56px taller than <Field>'s. */
-.field-label {
-  display: block;
-  font-size: var(--text-sm);
-  line-height: 1.375;
-  font-weight: 600;
-  color: var(--text-muted);
-  margin-bottom: var(--spacing);
-}
-.field-hint {
-  font-size: 12px;
-  color: var(--text-faint);
-  margin-top: var(--space-1);
-}
-.field-error {
-  font-size: 12px;
-  color: var(--danger);
-  margin-top: var(--space-1);
-}
-.checkbox-row {
-  display: flex;
-  align-items: flex-start;
-  gap: 10px;
-}
-.checkbox-row label {
-  display: inline-flex;
-  align-items: baseline;
-  flex-wrap: wrap;
-  gap: var(--space-1);
-  font-size: 13px;
-  cursor: pointer;
-}
-.form-row {
-  display: grid;
-  gap: var(--space-4);
-  grid-template-columns: 1fr 1fr;
-}
-.form-actions {
-  display: flex;
-  gap: var(--space-2);
-  margin-top: var(--space-2);
-  flex-wrap: wrap;
-}
-
-.rule-row {
-  display: flex;
-  align-items: flex-end;
-  flex-wrap: wrap;
-  gap: 10px;
-}
-.rule-op {
-  min-width: 180px;
-}
-.rule-app {
-  width: 130px;
-}
-.rule-env {
-  width: 110px;
-}
-/* The row bottom-aligns its cells, and Field carries a bottom margin the bare
-   button does not — this keeps the remove button level with the inputs. */
-.rule-row > .rule-remove {
-  margin-bottom: var(--space-4);
-}
-/* A label used as a row/heading caption, not stacked above its control. Tailwind's
-   m-0 cannot do this: it is layered and loses to the unlayered .field-label rule. */
-.between > .field-label,
-.row-wrap > .field-label {
-  margin: 0;
-}
-/* ---------- Tables ---------- */
-
-.table-wrap {
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
-  overflow-x: auto;
-  overflow-y: hidden;
-  -webkit-overflow-scrolling: touch;
-  /* Scroll affordance: the two `local` layers are painted in the scrolling
-     content box, so each edge shadow fades out once that end is reached.
-     Purely CSS — no scroll listener needed. */
-  background:
-    linear-gradient(to right, var(--surface) 40%, rgba(21, 26, 35, 0)) left center / 32px 100%
-    no-repeat,
-    linear-gradient(to left, var(--surface) 40%, rgba(21, 26, 35, 0)) right center / 32px 100%
-    no-repeat,
-    radial-gradient(farthest-side at 0 50%, rgba(0, 0, 0, 0.4), rgba(0, 0, 0, 0)) left center / 14px
-    100% no-repeat,
-    radial-gradient(farthest-side at 100% 50%, rgba(0, 0, 0, 0.4), rgba(0, 0, 0, 0)) right center /
-    14px 100% no-repeat,
-    var(--surface);
-  background-attachment: local, local, scroll, scroll;
-}
-table.data {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: 13px;
-  font-variant-numeric: tabular-nums;
-}
-table.data th {
-  text-align: left;
-  font-weight: 600;
-  font-size: 11.5px;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  color: var(--text-faint);
-  padding: var(--space-3) var(--space-4);
-  background: var(--bg-elev);
-  border-bottom: 1px solid var(--border);
-  white-space: nowrap;
-}
-table.data td {
-  padding: var(--space-3) var(--space-4);
-  border-bottom: 1px solid var(--border);
-  vertical-align: middle;
-}
-table.data tr:last-child td {
-  border-bottom: none;
-}
-/* A hover tint that leads nowhere reads as a broken affordance. Only rows that
-   actually contain something clickable get one. */
-table.data tbody tr:has(a, button):hover,
-table.data tbody tr.application-row:hover {
-  background: var(--surface-hover);
-}
-/* Composes with the hover above, which an inline style could never do. */
-table.data tbody tr.stale {
-  background: var(--warning-soft);
-}
-table.data tbody tr.application-row {
-  position: relative;
-  cursor: pointer;
-}
-table.data tbody tr.application-row:focus-within {
-  background: var(--surface-hover);
-  outline: 2px solid var(--primary);
-  outline-offset: -2px;
-}
-/* The row is the affordance; the link inside it must not paint itself blue,
-   underline on hover, or draw a second ring — tr:focus-within above already
-   rings the whole row. The base a:not([data-slot=button]) rules are (0,1,1),
-   so a bare class cannot beat them; the element qualifier is load-bearing. */
-a.application-row-link,
-a.application-row-link:hover {
-  color: inherit;
-  text-decoration: none;
-}
-a.application-row-link:focus-visible {
-  outline: none;
-}
-.application-row-link::after {
-  position: absolute;
-  inset: 0;
-  content: "";
-}
-table.data td.application-row-chevron {
-  width: 1%;
-  color: var(--text-faint);
-  text-align: right;
-  white-space: nowrap;
-}
-table.data td.application-row-chevron > svg {
-  display: block;
-  margin-left: auto;
-}
-.application-row-chevron svg {
-  transition:
-    color 0.12s ease,
-    transform 0.12s ease;
-}
-.application-row:hover .application-row-chevron svg,
-.application-row:focus-within .application-row-chevron svg {
-  color: var(--text);
-  transform: translateX(2px);
-}
-table.data td.mono,
-table.data th.mono {
-  font-family: var(--mono);
-  font-size: 12.5px;
-}
-/* table.data already sets tabular-nums. Apply per table, to every numeric
-   column at once — right-aligning one column of five reads as a mistake. */
-table.data td.num,
-table.data th.num {
-  text-align: right;
-}
-.cell-path {
-  font-family: var(--mono);
-  font-size: 12.5px;
-  color: var(--text);
-  overflow-wrap: anywhere;
-}
-.row-actions {
-  display: flex;
-  gap: 6px;
-  justify-content: flex-end;
-}
-.action-unavailable {
-  display: flex;
-  max-width: 220px;
-  flex-direction: column;
-  align-items: flex-end;
-  gap: var(--space-1);
-}
-.action-unavailable-reason {
-  color: var(--warning);
-  font-size: 10.5px;
-  line-height: 1.35;
-  text-align: right;
-}
-
-/* ---------- Utility / misc ---------- */
-
-.muted {
-  color: var(--text-muted);
-}
-.faint {
-  color: var(--text-faint);
-}
-.mono {
-  font-family: var(--mono);
-}
-.nowrap {
-  white-space: nowrap;
-}
-.row {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  flex-wrap: wrap;
-}
-.row-wrap {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex-wrap: wrap;
-}
-.between {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  flex-wrap: wrap;
-}
-.stack {
-  display: flex;
-  flex-direction: column;
-  gap: 14px;
-}
-.spacer {
-  flex: 1;
-}
-.text-danger {
-  color: var(--danger);
-}
-.text-success {
-  color: var(--success);
-}
-.text-warning {
-  color: var(--warning);
-}
-
-.json-block {
-  background: var(--bg-elev);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  padding: 12px 14px;
-  font-family: var(--mono);
-  font-size: 12.5px;
-  color: var(--text-muted);
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-  max-height: 320px;
-  overflow: auto;
-  margin: 0;
-}
-
-.kv {
-  display: grid;
-  grid-template-columns: 160px 1fr;
-  gap: 8px 18px;
-  font-size: 13px;
-}
-.kv dt {
-  color: var(--text-faint);
-}
-.kv dd {
-  margin: 0;
-  overflow-wrap: anywhere;
-}
-
-.divider {
-  height: 1px;
-  background: var(--border);
-  margin: 18px 0;
-  border: none;
-}
-
-.filters {
-  display: flex;
-  gap: var(--space-3);
-  flex-wrap: wrap;
-  align-items: flex-start;
-  margin-bottom: var(--space-4);
-}
-.filters .field {
-  margin-bottom: 0;
-}
-.filters > .field {
-  flex: 0 1 220px;
-  width: 220px;
-  min-width: 0;
-}
-.filter-grow {
-  flex: 1;
-  min-width: 180px;
-}
-.filter-grow > .field {
-  width: 100%;
-}
-/* A label-less button in a filter row drops by exactly one label block so its
-   control edge lines up with its labelled neighbours'. `align-items: flex-end`
-   would look right until a field shows a validation message, at which point
-   the button would follow the message down — hence flex-start above. */
-.filters > [data-slot="button"] {
-  margin-top: var(--label-offset);
-}
-
-/* ---------- Configuration releases workspace ---------- */
-
-.releases-page-tabs {
-  min-width: 0;
-}
-/* Six other pages render a bare .filters row above their table; only this one
-   boxed it in a card. */
-.release-context-bar {
-  display: flex;
-  align-items: flex-start;
-  gap: var(--space-3);
-  flex-wrap: wrap;
-  margin-bottom: var(--space-4);
-}
-.release-context-bar .field {
-  margin-bottom: 0;
-}
-.release-context-bar > .field {
-  flex: 0 1 220px;
-  width: 220px;
-  min-width: 0;
-}
-.release-context-bar .filters {
-  margin-bottom: 0;
-}
-.release-status-strip {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr)) auto;
-  align-items: center;
-  gap: var(--space-4);
-  padding: var(--space-4) var(--space-5);
-  background: var(--accent-soft);
-  border: 1px solid var(--accent-border);
-  border-radius: var(--radius-lg);
-}
-.release-status-strip > div {
-  min-width: 0;
-}
-.release-status-strip span,
-.release-status-strip strong {
-  display: block;
-  overflow-wrap: anywhere;
-}
-.release-status-strip strong {
-  margin-top: var(--space-1);
-}
-.section-toolbar,
-.release-workspace-toolbar,
-.schema-viewer-meta {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: var(--space-4);
-  flex-wrap: wrap;
-  margin-bottom: var(--space-4);
-}
-.section-toolbar h2,
-.release-builder-entry .field,
-.release-builder-basics .field {
-  margin-bottom: 0;
-}
-.schema-filters > .field {
-  flex-basis: 360px;
-  width: min(360px, 100%);
-}
-.release-builder-basics {
-  display: grid;
-  grid-template-columns: minmax(220px, 1.3fr) minmax(220px, 1fr) minmax(140px, 0.55fr);
-  gap: var(--space-4);
-}
-.release-builder-entries {
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
-  overflow: hidden;
-}
-.release-builder-entry {
-  display: grid;
-  grid-template-columns:
-    minmax(130px, 0.9fr) minmax(115px, 0.65fr) minmax(190px, 1.3fr)
-    minmax(145px, 0.8fr) minmax(145px, 0.8fr) auto;
-  align-items: end;
-  gap: var(--space-3);
-  padding: var(--space-4);
-  border-bottom: 1px solid var(--border);
-  background: var(--surface);
-}
-.release-builder-entry:last-child {
-  border-bottom: none;
-}
-.release-builder-current {
-  display: flex;
-  align-items: center;
-  min-height: var(--control-h);
-}
-.release-json-editor,
-.schema-editor {
-  min-height: 60dvh;
-  resize: vertical;
-  tab-size: 2;
-}
-.release-builder-review {
-  display: flex;
-  justify-content: space-between;
-  gap: var(--space-4);
-  align-items: center;
-  padding: var(--space-4);
-  background: var(--accent-soft);
-  border: 1px solid var(--accent-border);
-  border-radius: var(--radius-lg);
-}
-.release-overview-grid {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: var(--space-4);
-}
-.release-copy-value {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: var(--space-3);
-  min-width: 0;
-}
-.release-copy-value code {
-  overflow-wrap: anywhere;
-}
-/* Everything else comes from .json-block on the same element. */
-.release-metadata-json {
-  max-height: 240px;
-}
-.schema-viewer {
-  display: flex;
-  min-height: 0;
-  height: 100%;
-  flex-direction: column;
-}
-.schema-viewer-meta {
-  flex: 0 0 auto;
-  align-items: flex-end;
-}
-.schema-viewer-meta .kv {
-  flex: 1 1 620px;
-}
-/* Sits in a row-wrap beside two `sm` CopyButtons, so it matches those. */
-.schema-wrap-toggle {
-  min-height: var(--control-h-sm);
-  padding: 0 var(--space-2);
-  color: var(--text-muted);
-}
-.schema-code {
-  flex: 1 1 auto;
-  /* The workspace modal is a fixed-height grid whose body row already bounds
-     this element. The old max-height guessed at the header/footer/toolbar
-     chrome and was wrong whenever any of it changed. */
-  min-height: 200px;
-  margin: 0;
-  padding: var(--space-4);
-  overflow: auto;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
-  background: var(--bg);
-  color: var(--text);
-  font-family: var(--mono);
-  font-size: 12.5px;
-  line-height: 1.55;
-  white-space: pre;
-  tab-size: 2;
-}
-.schema-code-wrap {
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-}
-
-@media (max-width: 1000px) {
-  .release-status-strip {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-  }
-  .release-status-strip > [data-slot="button"] {
-    grid-column: 1 / -1;
-    justify-self: start;
-  }
-  .release-builder-basics,
-  .release-builder-entry {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-}
-
-@media (max-width: 640px) {
-  .release-status-strip,
-  .release-builder-basics,
-  .release-builder-entry,
-  .release-overview-grid {
-    grid-template-columns: 1fr;
-  }
-  .release-status-strip > [data-slot="button"] {
-    width: 100%;
-  }
-  .release-workspace-toolbar,
-  .section-toolbar,
-  .schema-viewer-meta,
-  .release-builder-review,
-  .release-copy-value {
-    align-items: stretch;
-    flex-direction: column;
-  }
-  .release-workspace-toolbar [data-slot="tabs-list"] {
-    width: 100%;
-    overflow-x: auto;
-    justify-content: flex-start;
-  }
-  .schema-viewer-meta .kv {
-    flex-basis: auto;
-  }
-}
-
-.empty-state {
-  text-align: center;
-  padding: var(--space-9) var(--space-5);
-  color: var(--text-faint);
-}
-.empty-state .empty-icon {
-  display: grid;
-  place-items: center;
-  width: 44px;
-  height: 44px;
-  margin: 0 auto var(--space-3);
-  border-radius: 50%;
-  background: var(--surface-2);
-  border: 1px solid var(--border);
-  color: var(--text-faint);
-}
-.empty-state .empty-title {
-  font-size: 15px;
-  color: var(--text-muted);
-  font-weight: 600;
-  margin-bottom: var(--space-1);
-}
-.empty-state .empty-actions {
-  display: flex;
-  gap: var(--space-2);
-  justify-content: center;
-  flex-wrap: wrap;
-  margin-top: var(--space-4);
-}
-
-.pagination {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  margin-top: 16px;
-  flex-wrap: wrap;
-}
-
-/* ---------- Skeletons ----------
-   Placeholder geometry shown while a page's data loads. Keeping the real
-   card/table frame mounted and filling only the cells avoids the layout jump
-   of swapping the whole page for a centred spinner. */
-
-/* Skeleton rows sit inside a real <table>, so the cell padding and column
-   widths already match the loaded state. */
-.skeleton-row td {
-  padding: var(--space-3) var(--space-4);
-  /* Match the tallest common real row — one carrying `sm` action buttons — so
-     the table does not resize when data arrives. Tables with taller rows pass
-     TableSkeleton an explicit rowHeight instead. */
-  height: calc(var(--space-3) * 2 + var(--control-h-sm));
-}
-
-.loading-block {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  color: var(--text-muted);
-  padding: 40px;
-  justify-content: center;
-}
-/* ---------- Reduced motion ----------
-   Honour the OS-level preference: drop the toast/modal entrances, the skeleton
-   pulse, and the drawer slide. The spinner keeps turning (it is the only cue
-   that work is in flight) but slowly enough not to provoke discomfort. */
-
-@media (prefers-reduced-motion: reduce) {
-  *,
-  *::before,
-  *::after {
-    animation-duration: 0.01ms;
-    animation-iteration-count: 1;
-    transition-duration: 0.01ms;
-    scroll-behavior: auto;
-  }
-  /* The spinner is the only signal that a request is still in flight, so it
-     keeps turning — slowly enough not to provoke discomfort. Specificity
-     (0,1,0) beats the `*` rule above, and being unlayered it also beats
-     Tailwind's animate-spin. */
-  [data-slot="spinner"],
-  .animate-spin {
-    animation-duration: 2.4s;
-    animation-iteration-count: infinite;
-  }
-  /* Skeletons use Tailwind's animate-pulse, which the `*` rule above already
-     freezes at full opacity. */
-}
-
-/* ---------- Auth / login ---------- */
-
-.auth-wrap {
-  min-height: 100dvh;
-  display: grid;
-  place-items: center;
-  padding: 24px;
-  background:
-    radial-gradient(1200px 600px at 50% -10%, rgba(91, 140, 255, 0.08), transparent), var(--bg);
-}
-.auth-card {
-  width: 100%;
-  max-width: 420px;
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
-  padding: 30px 28px;
-  box-shadow: var(--shadow);
-}
-.auth-brand {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  margin-bottom: 22px;
-}
-.auth-brand .logo {
-  width: 38px;
-  height: 38px;
-  border-radius: 9px;
-  background: linear-gradient(145deg, var(--brand-mark-start), var(--brand-mark-end));
-  display: grid;
-  place-items: center;
-  font-weight: 700;
-  color: var(--brand-mark-foreground);
-  font-size: 18px;
-}
-.auth-title {
-  font-size: 18px;
-  font-weight: 700;
-  line-height: 1.25;
-}
-
-/* ---------- Secret reveal ---------- */
-
-.reveal-box {
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius);
-  background: var(--bg-elev);
-  padding: 14px;
-}
-.reveal-value {
-  font-family: var(--mono);
-  font-size: 13.5px;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-  padding: 10px 12px;
-  background: var(--bg);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  color: var(--text);
-  transition: filter 0.12s ease;
-}
-.secret-concealed {
-  padding: 12px;
-  background: var(--bg);
-  border: 1px dashed var(--border-strong);
-  border-radius: var(--radius-sm);
-  color: var(--text-muted);
-}
-.reveal-countdown {
-  font-size: 12px;
-  color: var(--warning);
-  margin-top: 8px;
-}
-
-.warn-panel {
-  background: var(--warning-soft);
-  border: 1px solid rgba(227, 179, 65, 0.4);
-  border-radius: var(--radius);
-  padding: 13px 15px;
-  font-size: 13px;
-  color: var(--warning-fg);
-}
-.danger-panel {
-  background: var(--danger-soft);
-  border: 1px solid rgba(248, 81, 73, 0.4);
-  border-radius: var(--radius);
-  padding: 13px 15px;
-  font-size: 13px;
-  color: var(--danger-fg);
-}
-.info-panel {
-  background: var(--accent-soft);
-  border: 1px solid var(--accent-border);
-  border-radius: var(--radius);
-  padding: 13px 15px;
-  font-size: 13px;
-  color: var(--info-fg);
-}
-
-/* The panels size themselves with padding; a leading or trailing <p> must not
-   add its own UA margin on top of that. */
-.warn-panel > :first-child,
-.danger-panel > :first-child,
-.info-panel > :first-child {
-  margin-top: 0;
-}
-.warn-panel > :last-child,
-.danger-panel > :last-child,
-.info-panel > :last-child {
-  margin-bottom: 0;
-}
-
-/* application identity onboarding */
-.certificate-map {
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
-  padding: var(--space-4);
-  margin-bottom: var(--space-4);
-}
-.certificate-map-compact {
-  background: var(--bg-elev);
-  border-radius: var(--radius);
-}
-.certificate-map-heading {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: var(--space-3);
-  margin-bottom: var(--space-3);
-  flex-wrap: wrap;
-}
-.certificate-role-grid {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: var(--space-3);
-}
-.certificate-role-grid-token {
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-}
-.certificate-role {
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-1);
-  padding: var(--space-3);
-  background: var(--bg-elev);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  color: var(--text-muted);
-  font-size: 12.5px;
-}
-.certificate-map-compact .certificate-role {
-  background: var(--surface);
-}
-.certificate-role strong {
-  color: var(--text);
-  font-size: 13px;
-}
-.certificate-role code,
-.advanced-panel code,
-.credential-deployment code,
-.policy-next-step code {
-  color: var(--text);
-  overflow-wrap: anywhere;
-}
-.certificate-role-label {
-  color: var(--accent-hover);
-  font-size: 10.5px;
-  font-weight: 700;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-}
-
-.advanced-panel {
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-}
-.advanced-panel > summary {
-  padding: 11px 14px;
-  color: var(--text-muted);
-  cursor: pointer;
-  font-weight: 600;
-}
-.advanced-panel[open] > summary {
-  border-bottom: 1px solid var(--border);
-  color: var(--text);
-}
-.advanced-panel-content {
-  display: grid;
-  gap: var(--space-4);
-  padding: var(--space-4);
-}
-.advanced-panel-modal {
-  margin-top: var(--space-2);
-}
-.advanced-panel-modal .field:last-child {
-  margin-bottom: 0;
-}
-/* The modal body's own padding is the bottom gutter; a trailing field must not
-   add a second one. Deliberately not generalised to a bare .field:last-child —
-   page forms rely on that margin before .form-actions. */
-[data-modal-body] > .field:last-child,
-[data-modal-body] > form:last-child > .field:last-child {
-  margin-bottom: 0;
-}
-.advanced-ca-action,
-.credential-deployment,
-.policy-next-step {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--space-4);
-}
-
-.wizard-steps {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: var(--space-2);
-  list-style: none;
-  padding: 0;
-  margin: 0 0 var(--space-5);
-}
-.wizard-step {
-  min-width: 0;
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  color: var(--text-faint);
-  font-size: 11.5px;
-  font-weight: 600;
-}
-.wizard-step-number {
-  width: 23px;
-  height: 23px;
-  flex: 0 0 23px;
-  display: inline-grid;
-  place-items: center;
-  background: var(--bg-elev);
-  border: 1px solid var(--border-strong);
-  border-radius: 50%;
-  color: var(--text-muted);
-  font-size: 11px;
-}
-.wizard-step-current {
-  color: var(--text);
-}
-.wizard-step-current .wizard-step-number {
-  background: var(--primary);
-  border-color: var(--primary);
-  color: #071018;
-}
-.wizard-step-complete {
-  color: var(--success);
-}
-.wizard-step-complete .wizard-step-number {
-  background: var(--success-soft);
-  border-color: var(--success);
-  color: var(--success);
-}
-.wizard-intro {
-  color: var(--text-muted);
-  margin-bottom: var(--space-4);
-}
-.namespace-picker-row .field {
-  margin-bottom: 0;
-}
-.wizard-selection-summary {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: var(--space-3);
-  padding: var(--space-3);
-  margin-bottom: var(--space-3);
-  background: var(--bg-elev);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-}
-.wizard-selection-summary > div {
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-}
-.wizard-selection-summary strong {
-  overflow-wrap: anywhere;
-}
-.namespace-auth-summary {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--space-3);
-  margin-bottom: var(--space-4);
-  color: var(--text-muted);
-  font-size: 12.5px;
-}
-.loading-inline,
-.namespace-load-error {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-}
-.namespace-load-error {
-  justify-content: space-between;
-}
-.auth-choice {
-  padding: var(--space-3);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  background: var(--bg-elev);
-}
-.auth-choice + .auth-choice {
-  margin-top: var(--space-2);
-}
-.auth-choice-recommended {
-  border-color: var(--accent-border);
-  background: var(--accent-soft);
-}
-.auth-choice label {
-  display: flex;
-  min-width: 0;
-  flex-direction: column;
-  gap: 2px;
-}
-.auth-choice-title {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  flex-wrap: wrap;
-}
-.credential-deployment,
-.policy-next-step {
-  padding: var(--space-3);
-  background: var(--bg-elev);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-}
-.credential-pem {
-  max-height: 180px;
-  overflow: auto;
-  white-space: pre-wrap;
-  word-break: normal;
-}
-.integration-snippets {
-  margin-bottom: var(--space-4);
-}
-.integration-code {
-  max-height: 360px;
-  margin: 0;
-  padding: var(--space-4);
-  overflow: auto;
-  background: var(--bg);
-  border: 1px solid var(--border);
-  border-top: 0;
-  border-radius: 0 0 var(--radius) var(--radius);
-  color: var(--text);
-  font-size: 12.5px;
-  line-height: 1.6;
-  white-space: pre;
-}
-.policy-next-step {
-  border-color: var(--accent-border);
-}
-
-.token-reveal {
-  font-family: var(--mono);
-  font-size: 13px;
-  background: var(--bg);
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-sm);
-  padding: 12px;
-  overflow-wrap: anywhere;
-  word-break: break-all;
-  color: var(--text);
-}
-
-/* namespace management hub: application-grouped environment tables */
-
-.application-contract {
-  display: grid;
-  grid-template-columns: minmax(140px, 0.7fr) minmax(180px, 1fr) minmax(280px, 2fr);
-  gap: 20px;
-  align-items: start;
-}
-
-.application-contract > div {
-  display: grid;
-  gap: 6px;
-}
-
-.application-matrix {
-  overflow-x: auto;
-}
-
-.application-matrix table {
-  min-width: 760px;
-}
-
-.application-matrix th,
-.application-matrix td {
-  min-width: 160px;
-  vertical-align: top;
-}
-
-.application-matrix .matrix-key {
-  position: sticky;
-  left: 0;
-  z-index: 1;
-  min-width: 210px;
-  background: var(--surface);
-}
-/* The sticky column paints over the row beneath it, so it has to repeat both
-   the header tint and the row hover itself. */
-.application-matrix th.matrix-key {
-  background: var(--bg-elev);
-}
-.application-matrix tbody tr:hover .matrix-key {
-  background: var(--surface-hover);
-}
-
-.matrix-value {
-  display: grid;
-  gap: var(--space-1);
-  max-width: 260px;
-}
-
-.matrix-value .mono {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.secret-cell {
-  white-space: nowrap;
-}
-
-.quick-secret-advanced {
-  margin-top: var(--space-3);
-  padding-top: var(--space-3);
-  color: var(--text-muted);
-  border-top: 1px solid var(--border);
-}
-
-.environment-check-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-  gap: 8px;
-  margin-top: 8px;
-}
-
-@media (max-width: 768px) {
-  .application-contract {
-    grid-template-columns: 1fr;
-  }
-}
-
-.ns-group {
-  margin-bottom: 22px;
-}
-.ns-group-title {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 12px;
-  margin-bottom: 8px;
-}
-.ns-group-name {
-  font-family: var(--mono);
-  font-size: 13px;
-  font-weight: 700;
-  letter-spacing: 0.03em;
-  text-transform: uppercase;
-  color: var(--text-muted);
-}
-
-/* small inline chip for namespace bindings, cert state, etc. */
-.chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  font-family: var(--mono);
-  font-size: 12px;
-  padding: 2px 8px;
-  border-radius: 999px;
-  background: var(--bg-elev);
-  border: 1px solid var(--border);
-  color: var(--text-muted);
-}
-
-/* ---------- Mobile (<= 768px): drawer navigation, single-column layout ---------- */
-
-@media (max-width: 768px) {
   .app-shell {
-    flex-direction: column;
+    display: flex;
+    min-height: 100dvh;
   }
 
+  /* Mobile top bar + drawer toggle. Hidden on desktop; shown at <= 768px
+     (see the media query near the bottom of this file). */
   .mobile-topbar {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    padding: 10px 14px;
+    display: none;
+  }
+  .sidebar {
+    width: var(--sidebar-w);
+    flex-shrink: 0;
     background: var(--bg-elev);
-    border-bottom: 1px solid var(--border);
+    border-right: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
     position: sticky;
     top: 0;
-    z-index: 40;
+    height: 100dvh;
+    overflow-y: auto;
   }
-  .mobile-topbar-brand {
+
+  .sidebar-brand {
     display: flex;
     align-items: center;
-    gap: 8px;
-    font-weight: 700;
-    font-size: 14px;
-    letter-spacing: 0.02em;
+    gap: var(--space-2);
+    padding: var(--space-4) var(--space-4) var(--space-3);
+    border-bottom: 1px solid var(--border);
   }
-  .mobile-topbar-brand .logo {
-    width: 26px;
-    height: 26px;
-    border-radius: 6px;
+  .sidebar-brand .logo {
+    width: 28px;
+    height: 28px;
+    border-radius: 7px;
     background: linear-gradient(145deg, var(--brand-mark-start), var(--brand-mark-end));
     display: grid;
     place-items: center;
     font-weight: 700;
     color: var(--brand-mark-foreground);
-    font-size: 13px;
+    font-size: 14px;
+  }
+  .logo {
+    box-shadow: inset 0 0 0 1px rgba(228, 180, 95, 0.22);
+  }
+  .logo svg {
+    display: block;
+    width: 100%;
+    height: 100%;
+  }
+  .sidebar-brand .brand-name {
+    font-weight: 700;
+    font-size: 15px;
+    letter-spacing: 0.02em;
+  }
+  .sidebar-brand .brand-sub {
+    font-size: 11px;
+    color: var(--text-faint);
   }
 
-  /* Everything except the touch target comes from <Button variant="outline"
-     size="icon"> in AppShell: border, background, hover, radius, cursor,
-     padding and the centring. Re-declaring them here also stacked a second
-     focus indicator on top of the Button's ring. */
-  .nav-toggle {
-    display: inline-flex;
-    width: 44px;
-    height: 44px;
-    min-width: 44px;
-    flex-shrink: 0;
+  .nav {
+    padding: var(--space-3) var(--space-2);
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    flex: 1;
   }
-
-  .desktop-sidebar {
-    display: none;
+  .nav-section-label {
+    font-size: 10.5px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--text-faint);
+    padding: var(--space-3) var(--space-3) var(--space-1);
   }
-  .mobile-sidebar {
-    overflow-y: auto;
-  }
-  .mobile-sidebar .sidebar-brand {
-    padding-right: 52px;
-  }
-
-  /* Larger touch targets inside the drawer. */
   .nav-link {
-    padding: 12px 14px;
-    font-size: 14.5px;
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    padding: var(--space-2) var(--space-3);
+    border-radius: var(--radius-sm);
+    color: var(--text-muted);
+    font-weight: 500;
+    font-size: 13.5px;
+    cursor: pointer;
   }
-  .mobile-sidebar .sidebar-footer [data-slot="button"] {
-    min-height: 44px;
+  .nav-link:hover {
+    background: var(--surface-hover);
+    color: var(--text);
+    text-decoration: none;
+  }
+  .nav-link.active {
+    background: var(--accent-soft);
+    color: var(--text);
+  }
+  .nav-link .nav-icon {
+    /* The 16px box exactly fits the size-4 icon inside it; centring it as a flex
+       container beats text-align, which cannot centre an inline svg vertically. */
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 16px;
+    opacity: 0.9;
+  }
+
+  .sidebar-footer {
+    border-top: 1px solid var(--border);
+    padding: 12px;
+  }
+  .identity-card {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding: 8px 10px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    margin-bottom: 8px;
+  }
+  .identity-card .who {
+    font-weight: 600;
+    font-size: 13px;
+    overflow-wrap: anywhere;
+  }
+  .identity-card .kind {
+    font-size: 11px;
+    color: var(--text-faint);
   }
 
   .main {
-    width: 100%;
+    flex: 1;
     min-width: 0;
+    display: flex;
+    flex-direction: column;
+  }
+  .page {
+    padding: var(--space-6) var(--space-7) var(--space-10);
+    max-width: 1200px;
+    width: 100%;
+    margin: 0 auto;
+  }
+  .page-header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: var(--space-4);
+    margin-bottom: var(--space-6);
+    flex-wrap: wrap;
+  }
+  .page-title {
+    font-size: 22px;
+    overflow-wrap: anywhere;
+  }
+  .page-subtitle {
+    color: var(--text-muted);
+    margin-top: var(--space-1);
+    font-size: 13.5px;
+  }
+  .page-actions {
+    display: flex;
+    /* Mixed-height actions (a status Badge beside a Button) otherwise stretch to
+       the top of the row. */
+    align-items: center;
+    gap: var(--space-2);
+    flex-shrink: 0;
+    flex-wrap: wrap;
   }
 
-  .page {
-    padding: 20px 16px 48px;
+  /* ---------- Cards ---------- */
+
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    padding: var(--space-4) var(--space-5);
   }
-  .form-row {
-    grid-template-columns: 1fr;
+  .card + .card {
+    margin-top: var(--space-4);
   }
-  .kv {
-    grid-template-columns: 1fr;
-    gap: 2px 0;
+  .card-title {
+    font-size: 14px;
+    font-weight: 600;
+    margin-bottom: var(--space-3);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-3);
+    flex-wrap: wrap;
   }
-  .kv dt {
-    margin-top: 8px;
+  /* Preflight resets heading sizes to `inherit`, so a bare <h2> is just bold body
+     text. The levels the app actually uses have to opt back in; 15px separates a
+     section from the copy under it. */
+  .section-title {
+    font-size: 15px;
+    font-weight: 600;
   }
   .card-grid {
-    grid-template-columns: 1fr;
+    display: grid;
+    gap: var(--space-4);
+    grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  }
+  /* Cap the stat row at three columns. auto-fit alone fits five across at the
+     1200px page width, which strands a lone sixth card on its own row. */
+  @media (min-width: 900px) {
+    .card-grid {
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+    }
+  }
+
+  .stat {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    padding: var(--space-4) var(--space-5);
+  }
+  .stat .stat-label {
+    font-size: 12px;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+  .stat .stat-value {
+    font-size: 28px;
+    font-weight: 700;
+    line-height: 1.25;
+    margin-top: var(--space-1);
+    letter-spacing: -0.02em;
+    font-variant-numeric: tabular-nums;
+  }
+  /* A stat card whose "value" is a string rather than a number — same box, so a
+     row of cards keeps one baseline. */
+  .stat .stat-value-sm {
+    display: flex;
+    align-items: center;
+    min-height: 35px;
+    margin-top: var(--space-1);
+    font-size: 15px;
+    font-weight: 600;
+    overflow-wrap: anywhere;
+  }
+  /* Stat cards showing badges instead of a number reserve the same box height,
+     so the row of cards keeps one baseline. */
+  .stat .stat-badges {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    flex-wrap: wrap;
+    min-height: 35px;
+    margin-top: var(--space-1);
+  }
+  .stat .stat-sub {
+    font-size: 12px;
+    color: var(--text-faint);
+    margin-top: var(--space-1);
+  }
+
+  /* ---------- Forms ---------- */
+
+  .field {
+    margin-bottom: var(--space-4);
+  }
+  fieldset.field {
+    min-width: 0;
+    padding: 0;
+    border: 0;
+  }
+  fieldset.field legend {
+    padding: 0;
+  }
+  /* Must render identically to <Field>'s [data-slot=field-label]: forms that mix
+     the two (audit filters, secrets/detail, policies) otherwise misalign, and
+     --label-offset assumes a single height. The line-height is the part that
+     matters — the inherited 1.5 made this block 1.56px taller than <Field>'s. */
+  .field-label {
+    display: block;
+    font-size: var(--text-sm);
+    line-height: 1.375;
+    font-weight: 600;
+    color: var(--text-muted);
+    margin-bottom: var(--spacing);
+  }
+  .field-hint {
+    font-size: 12px;
+    color: var(--text-faint);
+    margin-top: var(--space-1);
+  }
+  .field-error {
+    font-size: 12px;
+    color: var(--danger);
+    margin-top: var(--space-1);
+  }
+  .checkbox-row {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+  }
+  .checkbox-row label {
+    display: inline-flex;
+    align-items: baseline;
+    flex-wrap: wrap;
+    gap: var(--space-1);
+    font-size: 13px;
+    cursor: pointer;
+  }
+  .form-row {
+    display: grid;
+    gap: var(--space-4);
+    grid-template-columns: 1fr 1fr;
+  }
+  .form-actions {
+    display: flex;
+    gap: var(--space-2);
+    margin-top: var(--space-2);
+    flex-wrap: wrap;
+  }
+
+  .rule-row {
+    display: flex;
+    align-items: flex-end;
+    flex-wrap: wrap;
+    gap: 10px;
+  }
+  .rule-op {
+    min-width: 180px;
+  }
+  .rule-app {
+    width: 130px;
+  }
+  .rule-env {
+    width: 110px;
+  }
+  /* The row bottom-aligns its cells, and Field carries a bottom margin the bare
+     button does not — this keeps the remove button level with the inputs. */
+  .rule-row > .rule-remove {
+    margin-bottom: var(--space-4);
+  }
+  /* A label used as a row/heading caption, not stacked above its control. Tailwind's
+     m-0 cannot do this: it is layered and loses to the unlayered .field-label rule. */
+  .between > .field-label,
+  .row-wrap > .field-label {
+    margin: 0;
+  }
+  /* ---------- Tables ---------- */
+
+  .table-wrap {
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    overflow-x: auto;
+    overflow-y: hidden;
+    -webkit-overflow-scrolling: touch;
+    /* Scroll affordance: the two `local` layers are painted in the scrolling
+       content box, so each edge shadow fades out once that end is reached.
+       Purely CSS — no scroll listener needed. */
+    background:
+      linear-gradient(to right, var(--surface) 40%, rgba(21, 26, 35, 0)) left center / 32px 100%
+      no-repeat,
+      linear-gradient(to left, var(--surface) 40%, rgba(21, 26, 35, 0)) right center / 32px 100%
+      no-repeat,
+      radial-gradient(farthest-side at 0 50%, rgba(0, 0, 0, 0.4), rgba(0, 0, 0, 0)) left center /
+      14px 100% no-repeat,
+      radial-gradient(farthest-side at 100% 50%, rgba(0, 0, 0, 0.4), rgba(0, 0, 0, 0)) right center
+      / 14px 100% no-repeat,
+      var(--surface);
+    background-attachment: local, local, scroll, scroll;
+  }
+  table.data {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+    font-variant-numeric: tabular-nums;
+  }
+  table.data th {
+    text-align: left;
+    font-weight: 600;
+    font-size: 11.5px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--text-faint);
+    padding: var(--space-3) var(--space-4);
+    background: var(--bg-elev);
+    border-bottom: 1px solid var(--border);
+    white-space: nowrap;
+  }
+  table.data td {
+    padding: var(--space-3) var(--space-4);
+    border-bottom: 1px solid var(--border);
+    vertical-align: middle;
+  }
+  table.data tr:last-child td {
+    border-bottom: none;
+  }
+  /* A hover tint that leads nowhere reads as a broken affordance. Only rows that
+     actually contain something clickable get one. */
+  table.data tbody tr:has(a, button):hover,
+  table.data tbody tr.application-row:hover {
+    background: var(--surface-hover);
+  }
+  /* Composes with the hover above, which an inline style could never do. */
+  table.data tbody tr.stale {
+    background: var(--warning-soft);
+  }
+  table.data tbody tr.application-row {
+    position: relative;
+    cursor: pointer;
+  }
+  table.data tbody tr.application-row:focus-within {
+    background: var(--surface-hover);
+    outline: 2px solid var(--primary);
+    outline-offset: -2px;
+  }
+  /* The row is the affordance; the link inside it must not paint itself blue,
+     underline on hover, or draw a second ring — tr:focus-within above already
+     rings the whole row. The base a:not([data-slot=button]) rules are (0,1,1),
+     so a bare class cannot beat them; the element qualifier is load-bearing. */
+  a.application-row-link,
+  a.application-row-link:hover {
+    color: inherit;
+    text-decoration: none;
+  }
+  a.application-row-link:focus-visible {
+    outline: none;
+  }
+  .application-row-link::after {
+    position: absolute;
+    inset: 0;
+    content: "";
+  }
+  table.data td.application-row-chevron {
+    width: 1%;
+    color: var(--text-faint);
+    text-align: right;
+    white-space: nowrap;
+  }
+  table.data td.application-row-chevron > svg {
+    display: block;
+    margin-left: auto;
+  }
+  .application-row-chevron svg {
+    transition:
+      color 0.12s ease,
+      transform 0.12s ease;
+  }
+  .application-row:hover .application-row-chevron svg,
+  .application-row:focus-within .application-row-chevron svg {
+    color: var(--text);
+    transform: translateX(2px);
+  }
+  table.data td.mono,
+  table.data th.mono {
+    font-family: var(--mono);
+    font-size: 12.5px;
+  }
+  /* table.data already sets tabular-nums. Apply per table, to every numeric
+     column at once — right-aligning one column of five reads as a mistake. */
+  table.data td.num,
+  table.data th.num {
+    text-align: right;
+  }
+  .cell-path {
+    font-family: var(--mono);
+    font-size: 12.5px;
+    color: var(--text);
+    overflow-wrap: anywhere;
+  }
+  .row-actions {
+    display: flex;
+    gap: 6px;
+    justify-content: flex-end;
+  }
+  .action-unavailable {
+    display: flex;
+    max-width: 220px;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: var(--space-1);
+  }
+  .action-unavailable-reason {
+    color: var(--warning);
+    font-size: 10.5px;
+    line-height: 1.35;
+    text-align: right;
+  }
+
+  /* ---------- Utility / misc ---------- */
+
+  .muted {
+    color: var(--text-muted);
+  }
+  .faint {
+    color: var(--text-faint);
+  }
+  .mono {
+    font-family: var(--mono);
+  }
+  .nowrap {
+    white-space: nowrap;
+  }
+  .row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+  }
+  .row-wrap {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+  .between {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    flex-wrap: wrap;
+  }
+  .stack {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+  }
+  .spacer {
+    flex: 1;
+  }
+  .text-danger {
+    color: var(--danger);
+  }
+  .text-success {
+    color: var(--success);
+  }
+  .text-warning {
+    color: var(--warning);
+  }
+
+  .json-block {
+    background: var(--bg-elev);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    padding: 12px 14px;
+    font-family: var(--mono);
+    font-size: 12.5px;
+    color: var(--text-muted);
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    max-height: 320px;
+    overflow: auto;
+    margin: 0;
+  }
+
+  .kv {
+    display: grid;
+    grid-template-columns: 160px 1fr;
+    gap: 8px 18px;
+    font-size: 13px;
+  }
+  .kv dt {
+    color: var(--text-faint);
+  }
+  .kv dd {
+    margin: 0;
+    overflow-wrap: anywhere;
+  }
+
+  .divider {
+    height: 1px;
+    background: var(--border);
+    margin: 18px 0;
+    border: none;
+  }
+
+  .filters {
+    display: flex;
+    gap: var(--space-3);
+    flex-wrap: wrap;
+    align-items: flex-start;
+    margin-bottom: var(--space-4);
+  }
+  .filters .field {
+    margin-bottom: 0;
+  }
+  .filters > .field {
+    flex: 0 1 220px;
+    width: 220px;
+    min-width: 0;
+  }
+  .filter-grow {
+    flex: 1;
+    min-width: 180px;
+  }
+  .filter-grow > .field {
+    width: 100%;
+  }
+  /* A label-less button in a filter row drops by exactly one label block so its
+     control edge lines up with its labelled neighbours'. `align-items: flex-end`
+     would look right until a field shows a validation message, at which point
+     the button would follow the message down — hence flex-start above. */
+  .filters > [data-slot="button"] {
+    margin-top: var(--label-offset);
+  }
+
+  /* ---------- Configuration releases workspace ---------- */
+
+  .releases-page-tabs {
+    min-width: 0;
+  }
+  /* Six other pages render a bare .filters row above their table; only this one
+     boxed it in a card. */
+  .release-context-bar {
+    display: flex;
+    align-items: flex-start;
+    gap: var(--space-3);
+    flex-wrap: wrap;
+    margin-bottom: var(--space-4);
+  }
+  .release-context-bar .field {
+    margin-bottom: 0;
+  }
+  .release-context-bar > .field {
+    flex: 0 1 220px;
+    width: 220px;
+    min-width: 0;
+  }
+  .release-context-bar .filters {
+    margin-bottom: 0;
+  }
+  .release-status-strip {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr)) auto;
+    align-items: center;
+    gap: var(--space-4);
+    padding: var(--space-4) var(--space-5);
+    background: var(--accent-soft);
+    border: 1px solid var(--accent-border);
+    border-radius: var(--radius-lg);
+  }
+  .release-status-strip > div {
+    min-width: 0;
+  }
+  .release-status-strip span,
+  .release-status-strip strong {
+    display: block;
+    overflow-wrap: anywhere;
+  }
+  .release-status-strip strong {
+    margin-top: var(--space-1);
+  }
+  .section-toolbar,
+  .release-workspace-toolbar,
+  .schema-viewer-meta {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: var(--space-4);
+    flex-wrap: wrap;
+    margin-bottom: var(--space-4);
+  }
+  .section-toolbar h2,
+  .release-builder-entry .field,
+  .release-builder-basics .field {
+    margin-bottom: 0;
+  }
+  .schema-filters > .field {
+    flex-basis: 360px;
+    width: min(360px, 100%);
+  }
+  .release-builder-basics {
+    display: grid;
+    grid-template-columns: minmax(220px, 1.3fr) minmax(220px, 1fr) minmax(140px, 0.55fr);
+    gap: var(--space-4);
+  }
+  .release-builder-entries {
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    overflow: hidden;
+  }
+  .release-builder-entry {
+    display: grid;
+    grid-template-columns:
+      minmax(130px, 0.9fr) minmax(115px, 0.65fr) minmax(190px, 1.3fr)
+      minmax(145px, 0.8fr) minmax(145px, 0.8fr) auto;
+    align-items: end;
+    gap: var(--space-3);
+    padding: var(--space-4);
+    border-bottom: 1px solid var(--border);
+    background: var(--surface);
+  }
+  .release-builder-entry:last-child {
+    border-bottom: none;
+  }
+  .release-builder-current {
+    display: flex;
+    align-items: center;
+    min-height: var(--control-h);
+  }
+  /* The 60dvh minimum lives on the element as `min-h-[60dvh]`: a utility, so it
+     can beat Textarea's own min-h-16 utility. Layered component CSS cannot. */
+  .release-json-editor,
+  .schema-editor {
+    resize: vertical;
+    tab-size: 2;
+  }
+  .release-builder-review {
+    display: flex;
+    justify-content: space-between;
+    gap: var(--space-4);
+    align-items: center;
+    padding: var(--space-4);
+    background: var(--accent-soft);
+    border: 1px solid var(--accent-border);
+    border-radius: var(--radius-lg);
+  }
+  .release-overview-grid {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: var(--space-4);
+  }
+  .release-copy-value {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: var(--space-3);
+    min-width: 0;
+  }
+  .release-copy-value code {
+    overflow-wrap: anywhere;
+  }
+  /* Everything else comes from .json-block on the same element. */
+  .release-metadata-json {
+    max-height: 240px;
+  }
+  .schema-viewer {
+    display: flex;
+    min-height: 0;
+    height: 100%;
+    flex-direction: column;
+  }
+  .schema-viewer-meta {
+    flex: 0 0 auto;
+    align-items: flex-end;
+  }
+  .schema-viewer-meta .kv {
+    flex: 1 1 620px;
+  }
+  /* Sits in a row-wrap beside two `sm` CopyButtons, so it matches those. */
+  .schema-wrap-toggle {
+    min-height: var(--control-h-sm);
+    padding: 0 var(--space-2);
+    color: var(--text-muted);
+  }
+  .schema-code {
+    flex: 1 1 auto;
+    /* The workspace modal is a fixed-height grid whose body row already bounds
+       this element. The old max-height guessed at the header/footer/toolbar
+       chrome and was wrong whenever any of it changed. */
+    min-height: 200px;
+    margin: 0;
+    padding: var(--space-4);
+    overflow: auto;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--mono);
+    font-size: 12.5px;
+    line-height: 1.55;
+    white-space: pre;
+    tab-size: 2;
+  }
+  .schema-code-wrap {
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
+
+  @media (max-width: 1000px) {
+    .release-status-strip {
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+    }
+    .release-status-strip > [data-slot="button"] {
+      grid-column: 1 / -1;
+      justify-self: start;
+    }
+    .release-builder-basics,
+    .release-builder-entry {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+  }
+
+  @media (max-width: 640px) {
+    .release-status-strip,
+    .release-builder-basics,
+    .release-builder-entry,
+    .release-overview-grid {
+      grid-template-columns: 1fr;
+    }
+    .release-status-strip > [data-slot="button"] {
+      width: 100%;
+    }
+    .release-workspace-toolbar,
+    .section-toolbar,
+    .schema-viewer-meta,
+    .release-builder-review,
+    .release-copy-value {
+      align-items: stretch;
+      flex-direction: column;
+    }
+    .release-workspace-toolbar [data-slot="tabs-list"] {
+      width: 100%;
+      overflow-x: auto;
+      justify-content: flex-start;
+    }
+    .schema-viewer-meta .kv {
+      flex-basis: auto;
+    }
+  }
+
+  .empty-state {
+    text-align: center;
+    padding: var(--space-9) var(--space-5);
+    color: var(--text-faint);
+  }
+  .empty-state .empty-icon {
+    display: grid;
+    place-items: center;
+    width: 44px;
+    height: 44px;
+    margin: 0 auto var(--space-3);
+    border-radius: 50%;
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    color: var(--text-faint);
+  }
+  .empty-state .empty-title {
+    font-size: 15px;
+    color: var(--text-muted);
+    font-weight: 600;
+    margin-bottom: var(--space-1);
+  }
+  .empty-state .empty-actions {
+    display: flex;
+    gap: var(--space-2);
+    justify-content: center;
+    flex-wrap: wrap;
+    margin-top: var(--space-4);
+  }
+
+  .pagination {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-top: 16px;
+    flex-wrap: wrap;
+  }
+
+  /* ---------- Skeletons ----------
+     Placeholder geometry shown while a page's data loads. Keeping the real
+     card/table frame mounted and filling only the cells avoids the layout jump
+     of swapping the whole page for a centred spinner. */
+
+  /* Skeleton rows sit inside a real <table>, so the cell padding and column
+     widths already match the loaded state. */
+  .skeleton-row td {
+    padding: var(--space-3) var(--space-4);
+    /* Match the tallest common real row — one carrying `sm` action buttons — so
+       the table does not resize when data arrives. Tables with taller rows pass
+       TableSkeleton an explicit rowHeight instead. */
+    height: calc(var(--space-3) * 2 + var(--control-h-sm));
+  }
+
+  .loading-block {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    color: var(--text-muted);
+    padding: 40px;
+    justify-content: center;
+  }
+  /* ---------- Reduced motion ----------
+     Honour the OS-level preference: drop the toast/modal entrances, the skeleton
+     pulse, and the drawer slide. The spinner keeps turning (it is the only cue
+     that work is in flight) but slowly enough not to provoke discomfort. */
+
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms;
+      animation-iteration-count: 1;
+      transition-duration: 0.01ms;
+      scroll-behavior: auto;
+    }
+    /* The spinner is the only signal that a request is still in flight, so it
+       keeps turning — slowly enough not to provoke discomfort. Specificity
+       (0,1,0) beats the `*` rule above, and being unlayered it also beats
+       Tailwind's animate-spin. */
+    [data-slot="spinner"],
+    .animate-spin {
+      animation-duration: 2.4s;
+      animation-iteration-count: infinite;
+    }
+    /* Skeletons use Tailwind's animate-pulse, which the `*` rule above already
+       freezes at full opacity. */
+  }
+
+  /* ---------- Auth / login ---------- */
+
+  .auth-wrap {
+    min-height: 100dvh;
+    display: grid;
+    place-items: center;
+    padding: 24px;
+    background:
+      radial-gradient(1200px 600px at 50% -10%, rgba(91, 140, 255, 0.08), transparent), var(--bg);
+  }
+  .auth-card {
+    width: 100%;
+    max-width: 420px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    padding: 30px 28px;
+    box-shadow: var(--shadow);
+  }
+  .auth-brand {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 22px;
+  }
+  .auth-brand .logo {
+    width: 38px;
+    height: 38px;
+    border-radius: 9px;
+    background: linear-gradient(145deg, var(--brand-mark-start), var(--brand-mark-end));
+    display: grid;
+    place-items: center;
+    font-weight: 700;
+    color: var(--brand-mark-foreground);
+    font-size: 18px;
+  }
+  .auth-title {
+    font-size: 18px;
+    font-weight: 700;
+    line-height: 1.25;
+  }
+
+  /* ---------- Secret reveal ---------- */
+
+  .reveal-box {
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius);
+    background: var(--bg-elev);
+    padding: 14px;
+  }
+  .reveal-value {
+    font-family: var(--mono);
+    font-size: 13.5px;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    padding: 10px 12px;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    color: var(--text);
+    transition: filter 0.12s ease;
+  }
+  .secret-concealed {
+    padding: 12px;
+    background: var(--bg);
+    border: 1px dashed var(--border-strong);
+    border-radius: var(--radius-sm);
+    color: var(--text-muted);
+  }
+  .reveal-countdown {
+    font-size: 12px;
+    color: var(--warning);
+    margin-top: 8px;
+  }
+
+  .warn-panel {
+    background: var(--warning-soft);
+    border: 1px solid rgba(227, 179, 65, 0.4);
+    border-radius: var(--radius);
+    padding: 13px 15px;
+    font-size: 13px;
+    color: var(--warning-fg);
+  }
+  .danger-panel {
+    background: var(--danger-soft);
+    border: 1px solid rgba(248, 81, 73, 0.4);
+    border-radius: var(--radius);
+    padding: 13px 15px;
+    font-size: 13px;
+    color: var(--danger-fg);
+  }
+  .info-panel {
+    background: var(--accent-soft);
+    border: 1px solid var(--accent-border);
+    border-radius: var(--radius);
+    padding: 13px 15px;
+    font-size: 13px;
+    color: var(--info-fg);
+  }
+
+  /* The panels size themselves with padding; a leading or trailing <p> must not
+     add its own UA margin on top of that. */
+  .warn-panel > :first-child,
+  .danger-panel > :first-child,
+  .info-panel > :first-child {
+    margin-top: 0;
+  }
+  .warn-panel > :last-child,
+  .danger-panel > :last-child,
+  .info-panel > :last-child {
+    margin-bottom: 0;
+  }
+
+  /* application identity onboarding */
+  .certificate-map {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    padding: var(--space-4);
+    margin-bottom: var(--space-4);
+  }
+  .certificate-map-compact {
+    background: var(--bg-elev);
+    border-radius: var(--radius);
+  }
+  .certificate-map-heading {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: var(--space-3);
+    margin-bottom: var(--space-3);
+    flex-wrap: wrap;
   }
   .certificate-role-grid {
-    grid-template-columns: 1fr;
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: var(--space-3);
   }
-  .wizard-steps {
+  .certificate-role-grid-token {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .certificate-role {
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-1);
+    padding: var(--space-3);
+    background: var(--bg-elev);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    color: var(--text-muted);
+    font-size: 12.5px;
+  }
+  .certificate-map-compact .certificate-role {
+    background: var(--surface);
+  }
+  .certificate-role strong {
+    color: var(--text);
+    font-size: 13px;
+  }
+  .certificate-role code,
+  .advanced-panel code,
+  .credential-deployment code,
+  .policy-next-step code {
+    color: var(--text);
+    overflow-wrap: anywhere;
+  }
+  .certificate-role-label {
+    color: var(--accent-hover);
+    font-size: 10.5px;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+  }
+
+  .advanced-panel {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+  }
+  .advanced-panel > summary {
+    padding: 11px 14px;
+    color: var(--text-muted);
+    cursor: pointer;
+    font-weight: 600;
+  }
+  .advanced-panel[open] > summary {
+    border-bottom: 1px solid var(--border);
+    color: var(--text);
+  }
+  .advanced-panel-content {
+    display: grid;
+    gap: var(--space-4);
+    padding: var(--space-4);
+  }
+  .advanced-panel-modal {
+    margin-top: var(--space-2);
+  }
+  .advanced-panel-modal .field:last-child {
+    margin-bottom: 0;
+  }
+  /* The modal body's own padding is the bottom gutter; a trailing field must not
+     add a second one. Deliberately not generalised to a bare .field:last-child —
+     page forms rely on that margin before .form-actions. */
+  [data-modal-body] > .field:last-child,
+  [data-modal-body] > form:last-child > .field:last-child {
+    margin-bottom: 0;
   }
   .advanced-ca-action,
   .credential-deployment,
   .policy-next-step {
-    align-items: stretch;
-    flex-direction: column;
-  }
-  .advanced-ca-action [data-slot="button"],
-  .credential-deployment [data-slot="button"],
-  .policy-next-step [data-slot="button"] {
-    width: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-4);
   }
 
-  /* Touch targets: buttons and inputs get comfortably tappable. */
-  .page [data-slot="button"][data-size="default"],
-  .page [data-slot="button"][data-size="icon"] {
-    min-height: 44px;
-  }
-  .page [data-slot="button"][data-size="sm"] {
-    min-height: 40px;
-  }
-  [data-slot="input"],
-  [data-slot="select-trigger"] {
-    min-height: 44px;
-  }
-  /* Filters and the audit filter row: one full-width field per line. */
-  .filters {
-    flex-direction: column;
-    align-items: stretch;
-  }
-  .filters .field,
-  .filters .filter-grow {
-    width: 100%;
-    min-width: 0;
-  }
-  .filters > [data-slot="button"] {
-    width: 100%;
-    margin-top: 0;
-  }
-  .release-context-bar {
-    flex-direction: column;
-    align-items: stretch;
-  }
-  .release-context-bar > .field,
-  .release-context-bar .filter-grow,
-  .release-context-bar [data-slot="button"] {
-    width: 100%;
-    min-width: 0;
-  }
-
-  /* Policy rule editor: stack operation / path / remove instead of a fixed
-     180px + flex row that doesn't fit at narrow widths. */
-  .rule-row {
-    flex-direction: column;
-    align-items: stretch;
-    gap: 8px;
-  }
-  .rule-op {
-    min-width: 0;
-    width: 100%;
-  }
-  .rule-remove {
-    width: 100%;
-  }
-}
-
-/* ---------- <= 640px: card-style tables for the highest-traffic lists ---------- */
-
-@media (max-width: 640px) {
-  .table-wrap.card-table thead {
-    display: none;
-  }
-  .table-wrap.card-table table.data,
-  .table-wrap.card-table tbody,
-  .table-wrap.card-table tr {
-    display: block;
-    width: 100%;
-  }
-  .table-wrap.card-table tr {
-    border-bottom: 1px solid var(--border);
-    padding: 12px 14px;
-  }
-  .table-wrap.card-table tr:last-child {
-    border-bottom: none;
-  }
-  .table-wrap.card-table tbody tr:hover {
-    background: none;
-  }
-  .table-wrap.card-table tbody tr.application-row:hover,
-  .table-wrap.card-table tbody tr.application-row:focus-within {
-    background: var(--surface-hover);
-  }
-  .table-wrap.card-table td {
-    display: block;
-    border-bottom: none;
-    padding: 4px 0;
-    white-space: normal;
-  }
-  .table-wrap.card-table td[data-label] {
-    padding-top: 6px;
-  }
-  .table-wrap.card-table td[data-label]::before {
-    content: attr(data-label);
-    display: block;
-    font-size: 10.5px;
-    font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 0.06em;
-    color: var(--text-faint);
-    margin-bottom: 3px;
-  }
-  .table-wrap.card-table .row-actions {
-    justify-content: flex-start;
-    flex-wrap: wrap;
-    margin-top: 8px;
-  }
-  /* The chevron is lifted out of flow and pinned right; the card's own content
-     has to stay clear of it. */
-  .table-wrap.card-table tr.application-row {
-    padding-right: 40px;
-  }
-  .table-wrap.card-table td.application-row-chevron {
-    position: absolute;
-    top: 50%;
-    right: 14px;
-    width: auto;
-    transform: translateY(-50%);
-  }
-  .table-wrap.card-table .action-unavailable {
-    align-items: flex-start;
-  }
-  .table-wrap.card-table .action-unavailable-reason {
-    text-align: left;
-  }
-
-  .rule-row {
-    padding: 12px;
-    background: var(--bg-elev);
-    border: 1px solid var(--border);
-    border-radius: var(--radius-sm);
-  }
-}
-
-/* ---------- <= 480px: tighter spacing ---------- */
-
-@media (max-width: 480px) {
-  .page-title {
-    font-size: 19px;
-  }
-  .card,
-  .stat {
-    padding: 14px 16px;
-  }
-
-  .wizard-selection-summary {
-    grid-template-columns: 1fr;
+  .wizard-steps {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: var(--space-2);
+    list-style: none;
+    padding: 0;
+    margin: 0 0 var(--space-5);
   }
   .wizard-step {
+    min-width: 0;
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    color: var(--text-faint);
+    font-size: 11.5px;
+    font-weight: 600;
+  }
+  .wizard-step-number {
+    width: 23px;
+    height: 23px;
+    flex: 0 0 23px;
+    display: inline-grid;
+    place-items: center;
+    background: var(--bg-elev);
+    border: 1px solid var(--border-strong);
+    border-radius: 50%;
+    color: var(--text-muted);
     font-size: 11px;
   }
+  .wizard-step-current {
+    color: var(--text);
+  }
+  .wizard-step-current .wizard-step-number {
+    background: var(--primary);
+    border-color: var(--primary);
+    color: #071018;
+  }
+  .wizard-step-complete {
+    color: var(--success);
+  }
+  .wizard-step-complete .wizard-step-number {
+    background: var(--success-soft);
+    border-color: var(--success);
+    color: var(--success);
+  }
+  .wizard-intro {
+    color: var(--text-muted);
+    margin-bottom: var(--space-4);
+  }
+  .namespace-picker-row .field {
+    margin-bottom: 0;
+  }
+  .wizard-selection-summary {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: var(--space-3);
+    padding: var(--space-3);
+    margin-bottom: var(--space-3);
+    background: var(--bg-elev);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+  }
+  .wizard-selection-summary > div {
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+  }
+  .wizard-selection-summary strong {
+    overflow-wrap: anywhere;
+  }
+  .namespace-auth-summary {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-3);
+    margin-bottom: var(--space-4);
+    color: var(--text-muted);
+    font-size: 12.5px;
+  }
+  .loading-inline,
+  .namespace-load-error {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+  }
+  .namespace-load-error {
+    justify-content: space-between;
+  }
+  .auth-choice {
+    padding: var(--space-3);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    background: var(--bg-elev);
+  }
+  .auth-choice + .auth-choice {
+    margin-top: var(--space-2);
+  }
+  .auth-choice-recommended {
+    border-color: var(--accent-border);
+    background: var(--accent-soft);
+  }
+  .auth-choice label {
+    display: flex;
+    min-width: 0;
+    flex-direction: column;
+    gap: 2px;
+  }
+  .auth-choice-title {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    flex-wrap: wrap;
+  }
+  .credential-deployment,
+  .policy-next-step {
+    padding: var(--space-3);
+    background: var(--bg-elev);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+  }
+  .credential-pem {
+    max-height: 180px;
+    overflow: auto;
+    white-space: pre-wrap;
+    word-break: normal;
+  }
+  .integration-snippets {
+    margin-bottom: var(--space-4);
+  }
+  .integration-code {
+    max-height: 360px;
+    margin: 0;
+    padding: var(--space-4);
+    overflow: auto;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-top: 0;
+    border-radius: 0 0 var(--radius) var(--radius);
+    color: var(--text);
+    font-size: 12.5px;
+    line-height: 1.6;
+    white-space: pre;
+  }
+  .policy-next-step {
+    border-color: var(--accent-border);
+  }
 
-  .auth-wrap {
-    padding: 16px;
-  }
-  .auth-card {
-    padding: 22px 18px;
+  .token-reveal {
+    font-family: var(--mono);
+    font-size: 13px;
+    background: var(--bg);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-sm);
+    padding: 12px;
+    overflow-wrap: anywhere;
+    word-break: break-all;
+    color: var(--text);
   }
 
-  .form-actions [data-slot="button"] {
-    flex: 1 1 auto;
+  /* namespace management hub: application-grouped environment tables */
+
+  .application-contract {
+    display: grid;
+    grid-template-columns: minmax(140px, 0.7fr) minmax(180px, 1fr) minmax(280px, 2fr);
+    gap: 20px;
+    align-items: start;
   }
+
+  .application-contract > div {
+    display: grid;
+    gap: 6px;
+  }
+
+  .application-matrix {
+    overflow-x: auto;
+  }
+
+  .application-matrix table {
+    min-width: 760px;
+  }
+
+  .application-matrix th,
+  .application-matrix td {
+    min-width: 160px;
+    vertical-align: top;
+  }
+
+  .application-matrix .matrix-key {
+    position: sticky;
+    left: 0;
+    z-index: 1;
+    min-width: 210px;
+    background: var(--surface);
+  }
+  /* The sticky column paints over the row beneath it, so it has to repeat both
+     the header tint and the row hover itself. */
+  .application-matrix th.matrix-key {
+    background: var(--bg-elev);
+  }
+  .application-matrix tbody tr:hover .matrix-key {
+    background: var(--surface-hover);
+  }
+
+  .matrix-value {
+    display: grid;
+    gap: var(--space-1);
+    max-width: 260px;
+  }
+
+  .matrix-value .mono {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .secret-cell {
+    white-space: nowrap;
+  }
+
+  .quick-secret-advanced {
+    margin-top: var(--space-3);
+    padding-top: var(--space-3);
+    color: var(--text-muted);
+    border-top: 1px solid var(--border);
+  }
+
+  .environment-check-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 8px;
+    margin-top: 8px;
+  }
+
+  @media (max-width: 768px) {
+    .application-contract {
+      grid-template-columns: 1fr;
+    }
+  }
+
+  .ns-group {
+    margin-bottom: 22px;
+  }
+  .ns-group-title {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 8px;
+  }
+  .ns-group-name {
+    font-family: var(--mono);
+    font-size: 13px;
+    font-weight: 700;
+    letter-spacing: 0.03em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+  }
+
+  /* small inline chip for namespace bindings, cert state, etc. */
+  .chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-family: var(--mono);
+    font-size: 12px;
+    padding: 2px 8px;
+    border-radius: 999px;
+    background: var(--bg-elev);
+    border: 1px solid var(--border);
+    color: var(--text-muted);
+  }
+
+  /* ---------- Mobile (<= 768px): drawer navigation, single-column layout ---------- */
+
+  @media (max-width: 768px) {
+    .app-shell {
+      flex-direction: column;
+    }
+
+    .mobile-topbar {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 10px 14px;
+      background: var(--bg-elev);
+      border-bottom: 1px solid var(--border);
+      position: sticky;
+      top: 0;
+      z-index: 40;
+    }
+    .mobile-topbar-brand {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-weight: 700;
+      font-size: 14px;
+      letter-spacing: 0.02em;
+    }
+    .mobile-topbar-brand .logo {
+      width: 26px;
+      height: 26px;
+      border-radius: 6px;
+      background: linear-gradient(145deg, var(--brand-mark-start), var(--brand-mark-end));
+      display: grid;
+      place-items: center;
+      font-weight: 700;
+      color: var(--brand-mark-foreground);
+      font-size: 13px;
+    }
+
+    .desktop-sidebar {
+      display: none;
+    }
+    .mobile-sidebar {
+      overflow-y: auto;
+    }
+    .mobile-sidebar .sidebar-brand {
+      padding-right: 52px;
+    }
+
+    /* Larger touch targets inside the drawer. */
+    .nav-link {
+      padding: 12px 14px;
+      font-size: 14.5px;
+    }
+    .mobile-sidebar .sidebar-footer [data-slot="button"] {
+      min-height: 44px;
+    }
+
+    .main {
+      width: 100%;
+      min-width: 0;
+    }
+
+    .page {
+      padding: 20px 16px 48px;
+    }
+    .form-row {
+      grid-template-columns: 1fr;
+    }
+    .kv {
+      grid-template-columns: 1fr;
+      gap: 2px 0;
+    }
+    .kv dt {
+      margin-top: 8px;
+    }
+    .card-grid {
+      grid-template-columns: 1fr;
+    }
+    .certificate-role-grid {
+      grid-template-columns: 1fr;
+    }
+    .wizard-steps {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+    .advanced-ca-action,
+    .credential-deployment,
+    .policy-next-step {
+      align-items: stretch;
+      flex-direction: column;
+    }
+    .advanced-ca-action [data-slot="button"],
+    .credential-deployment [data-slot="button"],
+    .policy-next-step [data-slot="button"] {
+      width: 100%;
+    }
+
+    /* Touch targets: buttons and inputs get comfortably tappable. */
+    .page [data-slot="button"][data-size="default"],
+    .page [data-slot="button"][data-size="icon"] {
+      min-height: 44px;
+    }
+    .page [data-slot="button"][data-size="sm"] {
+      min-height: 40px;
+    }
+    [data-slot="input"],
+    [data-slot="select-trigger"] {
+      min-height: 44px;
+    }
+    /* Filters and the audit filter row: one full-width field per line. */
+    .filters {
+      flex-direction: column;
+      align-items: stretch;
+    }
+    .filters .field,
+    .filters .filter-grow {
+      width: 100%;
+      min-width: 0;
+    }
+    .filters > [data-slot="button"] {
+      width: 100%;
+      margin-top: 0;
+    }
+    .release-context-bar {
+      flex-direction: column;
+      align-items: stretch;
+    }
+    .release-context-bar > .field,
+    .release-context-bar .filter-grow,
+    .release-context-bar [data-slot="button"] {
+      width: 100%;
+      min-width: 0;
+    }
+
+    /* Policy rule editor: stack operation / path / remove instead of a fixed
+       180px + flex row that doesn't fit at narrow widths. */
+    .rule-row {
+      flex-direction: column;
+      align-items: stretch;
+      gap: 8px;
+    }
+    .rule-op {
+      min-width: 0;
+      width: 100%;
+    }
+    .rule-remove {
+      width: 100%;
+    }
+  }
+
+  /* ---------- <= 640px: card-style tables for the highest-traffic lists ---------- */
+
+  @media (max-width: 640px) {
+    .table-wrap.card-table thead {
+      display: none;
+    }
+    .table-wrap.card-table table.data,
+    .table-wrap.card-table tbody,
+    .table-wrap.card-table tr {
+      display: block;
+      width: 100%;
+    }
+    .table-wrap.card-table tr {
+      border-bottom: 1px solid var(--border);
+      padding: 12px 14px;
+    }
+    .table-wrap.card-table tr:last-child {
+      border-bottom: none;
+    }
+    .table-wrap.card-table tbody tr:hover {
+      background: none;
+    }
+    .table-wrap.card-table tbody tr.application-row:hover,
+    .table-wrap.card-table tbody tr.application-row:focus-within {
+      background: var(--surface-hover);
+    }
+    .table-wrap.card-table td {
+      display: block;
+      border-bottom: none;
+      padding: 4px 0;
+      white-space: normal;
+    }
+    .table-wrap.card-table td[data-label] {
+      padding-top: 6px;
+    }
+    .table-wrap.card-table td[data-label]::before {
+      content: attr(data-label);
+      display: block;
+      font-size: 10.5px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      color: var(--text-faint);
+      margin-bottom: 3px;
+    }
+    .table-wrap.card-table .row-actions {
+      justify-content: flex-start;
+      flex-wrap: wrap;
+      margin-top: 8px;
+    }
+    /* The chevron is lifted out of flow and pinned right; the card's own content
+       has to stay clear of it. */
+    .table-wrap.card-table tr.application-row {
+      padding-right: 40px;
+    }
+    .table-wrap.card-table td.application-row-chevron {
+      position: absolute;
+      top: 50%;
+      right: 14px;
+      width: auto;
+      transform: translateY(-50%);
+    }
+    .table-wrap.card-table .action-unavailable {
+      align-items: flex-start;
+    }
+    .table-wrap.card-table .action-unavailable-reason {
+      text-align: left;
+    }
+
+    .rule-row {
+      padding: 12px;
+      background: var(--bg-elev);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+    }
+  }
+
+  /* ---------- <= 480px: tighter spacing ---------- */
+
+  @media (max-width: 480px) {
+    .page-title {
+      font-size: 19px;
+    }
+    .card,
+    .stat {
+      padding: 14px 16px;
+    }
+
+    .wizard-selection-summary {
+      grid-template-columns: 1fr;
+    }
+    .wizard-step {
+      font-size: 11px;
+    }
+
+    .auth-wrap {
+      padding: 16px;
+    }
+    .auth-card {
+      padding: 22px 18px;
+    }
+
+    .form-actions [data-slot="button"] {
+      flex: 1 1 auto;
+    }
+  }
+
+  /* Tailwind's spacing and type scales are rem-based, so at this file's 14px root
+     every "nominal" number in the shadcn sources is a lie: h-9.5 renders 33.25px,
+     size-4 renders 14px, text-xs renders 10.5px. Everything hand-written above is
+     in px and assumes the nominal scale, so the two systems have been drifting
+     against each other and no number in either was trustworthy.
+
+     Pin the scales rather than moving the root: the geometry lines up with the px
+     CSS, page typography does not move at all, and the legacy .mt-N / .mb-N /
+     .text-sm rules can be deleted with pixel-identical class rewrites.
+
+     This block is deliberately NOT `inline` — the values are literals, and keeping
+     them as real custom properties means --control-h and --label-offset above can
+     derive from them. Do not add --text-sm--line-height / --text-xs--line-height:
+     leaving those at Tailwind's defaults reproduces today's computed line-heights
+     exactly. */
 }
 
-/* Tailwind's spacing and type scales are rem-based, so at this file's 14px root
-   every "nominal" number in the shadcn sources is a lie: h-9.5 renders 33.25px,
-   size-4 renders 14px, text-xs renders 10.5px. Everything hand-written above is
-   in px and assumes the nominal scale, so the two systems have been drifting
-   against each other and no number in either was trustworthy.
-
-   Pin the scales rather than moving the root: the geometry lines up with the px
-   CSS, page typography does not move at all, and the legacy .mt-N / .mb-N /
-   .text-sm rules can be deleted with pixel-identical class rewrites.
-
-   This block is deliberately NOT `inline` — the values are literals, and keeping
-   them as real custom properties means --control-h and --label-offset above can
-   derive from them. Do not add --text-sm--line-height / --text-xs--line-height:
-   leaving those at Tailwind's defaults reproduces today's computed line-heights
-   exactly. */
 @theme {
   --spacing: 4px;
   --text-sm: 12.5px; /* exactly what the legacy `.text-sm` rule produces */
@@ -1934,20 +1944,4 @@ table.data th.num {
 
 .dark {
   color-scheme: dark;
-}
-
-@layer base {
-  * {
-    @apply border-border outline-ring/50;
-  }
-  body {
-    @apply bg-background text-foreground;
-  }
-  button:not(:disabled),
-  [role="button"]:not(:disabled) {
-    cursor: pointer;
-  }
-  html {
-    @apply font-sans;
-  }
 }
