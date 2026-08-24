@@ -278,7 +278,9 @@ renders readiness state and never recomputes it.
   environment, previews them with a server dry run (writes, release entries
   with changed rows highlighted, unreleased changes offered for opt-in, the
   schema pin, the activation it will perform, and the validation result), and
-  ships with one confirmation. Environments whose name matches
+  ships with one confirmation. Aliases the operator did not touch keep
+  their active pin; a newer unreleased version is offered as a per-alias
+  opt-in rather than picked up silently. Environments whose name matches
   `^prod(-|$)` or `^production$` require typing the environment name. The
   server writes the parameter versions, creates the release, and activates it
   under a compare-and-swap guard frozen from the preview; the four possible

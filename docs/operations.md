@@ -477,8 +477,9 @@ parameter-store release rollback prod/gradethis runtime 1 \
 `POST /api/v1/releases/rollback` is the HTTP form of the first recipe: it
 targets the active release's `previous` version, carries the same
 `expected_current_version` compare-and-swap guard, re-validates before moving
-the labels, and returns `failed_precondition` when there is no previous
-version. The console's Roll back button (application page, Ship rollout
+the labels, and returns `failed_precondition` when the release name has no
+active version or the active version has no previous one. The console's
+Roll back button (application page, Ship rollout
 panel, and Releases page) calls it after validating the previous version so
 violations are visible before the operator confirms; activating any other
 retained version stays on the activate endpoint. See
@@ -927,9 +928,10 @@ generating a new key file. Every rotation is audited as `key.rotate`.
   `GET /api/v1/applications/overview`, which computes a per-environment
   status (`blocked`, `empty`, `incomplete`, `unreleased`, `degraded`,
   `rolling`, `drift`, `ready`) and a list of findings on the server. The
-  per-application form is bounded at 64 environments (pass `env=` beyond
-  that); the fleet form carries no rows or subscriber detail. See the
-  [readiness model](http-api.md#readiness-model).
+  per-application form is bounded at 64 environments (pass `env=`, repeated
+  or comma-joined, beyond that); the fleet form carries no rows or subscriber
+  detail, so it never reports `degraded` or `rolling` — open the application
+  for those. See the [readiness model](http-api.md#readiness-model).
 - The frontend's **Subscribers** page (`/subscribers`, backed by `GET
   /api/v1/subscribers`) is the operational way to confirm a configuration
   subscription: it lists every live-subscribed application, its watched
@@ -945,11 +947,12 @@ generating a new key file. Every rotation is audited as `key.rotate`.
 - The console's rollout views (application page columns, the Ship rollout
   panel, and the Releases workspace) follow the same rows live over
   `GET /api/v1/release-subscribers/stream`, a server-sent-events endpoint
-  that sends a snapshot on connect and after every acknowledgement,
-  connection change, or activation. Streams are capped at **4 per identity
-  and 64 per server** (a refusal is HTTP 429 and audited), live at most five
-  minutes before the server sends `event: end` and the client reconnects, and
-  write a keep-alive comment every 15 s. A reverse proxy in front of the HTTP
+  that sends a snapshot on connect, after every acknowledgement, connection
+  change, or activation (coalesced over 250 ms), and on a 5 s safety
+  re-query. Streams are capped at **4 per identity and 64 per server** (a
+  refusal is HTTP 429 and audited as a `configuration_release.subscribers_stream`
+  deny), live at most five minutes before the server sends `event: end` and
+  the client reconnects, and write a keep-alive comment every 15 s. A reverse proxy in front of the HTTP
   listener must not buffer that path (`X-Accel-Buffering: no` is set) and
   must allow idle connections of at least that lifetime. When the stream is
   unavailable — a proxy that buffers, the cap, or two consecutive failures —

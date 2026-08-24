@@ -78,24 +78,16 @@ endpoints are admin-only:
 
 ### Console aggregates
 
-<!-- TODO reconcile with fixtures: this section was written from plan §3
-     (contracts) while Lane B was implementing. Diff every JSON example against
-     frontend/tests/fixtures/backend/{overview-ready,overview-incident,
-     overview-setup,ship-preview,ship-conflict,readiness-cases}.json once
-     `go test ./internal/server/httpserver -run TestConsoleFixtures -update`
-     has produced them. Shapes were cross-checked against the frozen
-     frontend/lib/types.ts. Known open behaviours: whether the fleet form
-     consults subscriber state for env status, the exact `error.code` values
-     on ShipResult, and the 10-minute `request_id` window. -->
-
 The console's application page, fleet overview, Ship modal, and rollout view
 each need one round-trip. These admin-only endpoints compute the aggregate on
 the server so the frontend renders state rather than deriving it. Their
 response shapes are pinned by Go-generated fixtures under
 `frontend/tests/fixtures/backend/` (see
-[`testing.md`](testing.md#console-fixtures-and-journeys)). Nothing in this
-section ever returns a parameter value the caller did not just send, secret
-plaintext, or a token.
+[`testing.md`](testing.md#console-fixtures-and-journeys)); the DTOs in
+`internal/server/httpserver/dto_console.go` mirror the "Console aggregates"
+block of `frontend/lib/types.ts` field for field. Nothing in this section
+returns a parameter value the caller did not just send, secret plaintext, or
+a token.
 
 - `GET /api/v1/applications/get?name=` → `{"application": Application}`
   (404 when the application does not exist). `Application` is the object
@@ -107,17 +99,23 @@ plaintext, or a token.
   { "applications": [
       { "application": Application, "status": "attention",
         "environments": [
-          { "env": "dev",  "status": "ready",    "production": false },
-          { "env": "prod", "status": "degraded", "production": true } ] } ] }
+          { "env": "dev",  "status": "ready", "production": false },
+          { "env": "prod", "status": "drift", "production": true } ] } ] }
   ```
-  This is the cheap listing: it carries no configuration rows, findings, or
-  subscriber detail. The console uses it for the fleet grid and fetches the
-  per-application form for at most 25 applications to fill in cards.
+  This is the cheap listing: per-environment status is computed from the
+  configuration rows and the active/latest release only, without subscriber
+  acknowledgements and without re-validating the active release's pins. It
+  therefore never reports `degraded`, `rolling`, or a `release_pin_stale`
+  block; those appear only in the per-application form, which the console
+  fetches for at most 25 applications to fill in the fleet cards. Every
+  application is listed (no paging).
 - `GET /api/v1/applications/overview?name=[&env=]` — **per-application
-  form** → `ApplicationOverview` (below). Every environment is included unless
-  `env=` selects one. An application with more than **64 environments**
-  returns `failed_precondition` (412); pass `env=` to read one environment at
-  a time.
+  form** → `ApplicationOverview` (below). All environments are included
+  unless `env=` selects some: it may be repeated (`env=dev&env=prod`) or
+  comma-joined (`env=dev,prod`); an environment the application does not
+  have is 404. More than **64 environments** in one response is
+  `failed_precondition` (412) — narrow with `env=`. Subscriber state is
+  folded from at most 1,000 acknowledgement rows per environment.
 - `POST /api/v1/applications/ship` → `ShipResult` — write values, create a
   release, and activate it in one call ([Ship](#ship)).
 - `POST /api/v1/applications/environments/clone` → `CloneEnvironmentResponse`
@@ -129,51 +127,64 @@ plaintext, or a token.
 
 #### ApplicationOverview
 
+Taken from the `overview-incident.json` fixture (abridged):
+
 ```json
 {
   "application": Application,
   "status": "attention",
-  "findings": [
-    { "code": "schema_unpinned", "severity": "info", "scope": {}, "params": {} }
-  ],
-  "schema_json": "{\"type\":\"object\",…}",
-  "rows": [ … ],
+  "findings": [],
+  "schema_json": "{\"type\":\"object\",\"properties\":{…},\"required\":[…],\"additionalProperties\":false}",
+  "rows": [ ApplicationConfigurationRow ],
   "environments": [
     {
       "namespace": Namespace,
       "production": true,
-      "status": "drift",
+      "status": "degraded",
       "values_state": "complete",
       "release_state": "drift",
-      "rollout_state": "applied",
+      "rollout_state": "degraded",
       "values": [
-        { "alias": "rate_limits", "kind": "parameter", "key": "config/rate-limits",
+        { "alias": "database", "kind": "parameter", "key": "database",
           "present": true, "content_type": "json",
-          "current_version": 10, "pinned_version": 9 },
-        { "alias": "db_password", "kind": "secret", "key": "db-password",
+          "current_version": 1, "pinned_version": 1 },
+        { "alias": "db_password", "kind": "secret", "key": "db_password",
           "present": true, "content_type": "text/plain",
-          "current_version": 3, "pinned_version": 3, "client_bound": false }
+          "current_version": 1, "pinned_version": 1 },
+        { "alias": "rate_limits", "kind": "parameter", "key": "rate_limits",
+          "present": true, "content_type": "integer",
+          "current_version": 4, "pinned_version": 3 }
       ],
       "release": {
         "active": {
-          "name": "runtime", "version": 12, "activation_revision": 41,
-          "previous_version": 11, "created_by": "admin",
-          "created_at_unix_ms": 1710000000000, "is_rolled_back": false,
-          "schema_id": "gradethis/runtime", "schema_version": 1,
+          "name": "runtime", "version": 2, "activation_revision": 12,
+          "previous_version": 1, "created_by": "admin",
+          "created_at_unix_ms": 1755000000000, "is_rolled_back": false,
+          "schema_id": "runtime", "schema_version": 1,
           "digest": "<sha256 hex>", "entries": [ ConfigurationReleaseEntry ]
         },
-        "latest_version": 12,
-        "release_count": 12
+        "latest_version": 2,
+        "release_count": 2
       },
       "rollout": {
-        "total": 5, "connected": 5, "applied_current": 5, "rejected": 0,
+        "total": 3, "connected": 3, "applied_current": 2, "rejected": 1,
         "pending": 0, "stale": 0, "other_release_names": [],
-        "rejected_instances": [], "truncated": false
+        "rejected_instances": [
+          { "identity": "admin", "client_name": "api", "instance_id": "prod-3",
+            "state": "rejected", "release_version": 2, "activation_revision": 12,
+            "rejection_category": "config_validation_failed", "diagnostic": "",
+            "connected": true, "server_timestamp_unix_ms": 1755000000000 }
+        ],
+        "truncated": false
       },
       "findings": [
         { "code": "unreleased_changes", "severity": "warning",
           "scope": { "env": "prod", "alias": "rate_limits" },
-          "params": { "current": 10, "pinned": 9 } },
+          "params": { "alias": "rate_limits", "current": 4, "pinned": 3 } },
+        { "code": "instance_rejected", "severity": "warning",
+          "scope": { "env": "prod", "instance": "prod-3" },
+          "params": { "category": "config_validation_failed", "client_name": "api",
+                      "identity": "admin", "instance_id": "prod-3" } },
         { "code": "production", "severity": "info",
           "scope": { "env": "prod" }, "params": {} }
       ]
@@ -183,72 +194,79 @@ plaintext, or a token.
 ```
 
 `rows` is the same cross-environment matrix returned by
-`GET /api/v1/applications/dashboard` (the Matrix tab); `schema_json` is the
-pinned schema document when the application pins one. `release.active` is
-absent when nothing is active. `rollout.rejected_instances` holds at most 50
-instances and `truncated` says whether more were dropped; the full list comes
-from `GET /api/v1/release-subscribers`. Each instance is the effective
-lifecycle row for one `(identity, client_name, instance_id)` — the per-state
-subscriber rows collapsed to the latest one, as the Subscribers view groups
-them:
-
-```json
-{ "identity": "gradethis-be", "client_name": "gradethis-be",
-  "instance_id": "gradethis-be-8f3a", "state": "rejected",
-  "release_version": 13, "activation_revision": 119,
-  "rejection_category": "config_validation_failed", "diagnostic": "",
-  "connected": true, "server_timestamp_unix_ms": 1710000000000 }
-```
-
-`diagnostic` is the persisted redaction marker, never the client's text (see
-[`configuration-releases.md`](configuration-releases.md#release-contents-and-digest)). `other_release_names` lists release names
-that connected instances of this namespace subscribe to other than the
-application's `release_name` (an SDK configured with the wrong name).
+`GET /api/v1/applications/dashboard` (the Matrix tab), restricted to the
+selected environments. `schema_json` is present only when the application
+pins a schema the registry still has. `release.active` is absent when nothing
+is active; `values[].key`, `content_type`, `current_version`,
+`pinned_version`, and `client_bound` are omitted when zero or empty.
+`rollout.rejected_instances` holds at most 50 instances and `truncated` says
+whether more were dropped; the full list comes from
+`GET /api/v1/release-subscribers`. Each instance is the effective lifecycle
+row for one `(identity, client_name, instance_id)`: the per-state subscriber
+rows collapsed to the highest lifecycle state at the instance's newest
+activation revision, `connected` if any row is, sorted by identity, client,
+instance (the same grouping as `frontend/lib/subscribers.ts`). `diagnostic`
+is the persisted redaction marker, never the client's text (see
+[`configuration-releases.md`](configuration-releases.md#release-contents-and-digest)).
+`other_release_names` lists release names, sorted, that instances of this
+namespace subscribe to other than the application's `release_name` (an SDK
+configured with the wrong name).
 
 #### Readiness model
 
-Readiness is computed on the server per environment from: the application
-contract and schema pin, the namespace's parameter and secret rows, the active
-release and its entries, the latest release version, and the grouped
-subscriber instances. The frontend renders these states and never re-derives
-them.
+Readiness is computed on the server per environment
+(`internal/core/application_readiness.go`, pure functions over data the
+overview already fetched) from: the application contract and schema pin, the
+namespace's parameter and secret rows, the `current` state of each contract
+secret, the active release and its entries (re-validated in memory), the
+latest release version and count, and the namespace's grouped subscriber
+instances. The frontend renders these states and never re-derives them.
 
-Contract aliases are resolved to keys with one rule shared by readiness, Ship,
-and clone (**alias → key resolution**): the active release's entry for the
-alias → the latest release's entry → a resource whose key equals the alias in
-this namespace → the key another environment's active release uses for that
-alias → unresolved. `values[].key` carries the resolved key so the UI can show
-both; an unresolved alias has no `key` and `present: false`.
+Contract aliases are resolved to keys with one rule shared by readiness,
+Ship, and clone (**alias → key resolution**): the active release's entry for
+the alias → the latest release's entry → a resource whose key equals the
+alias in this namespace → the key another environment's active release uses
+for that alias → unresolved. `values[].key` carries the resolved key so the
+UI can show both; an unresolved alias has no `key` and `present: false`. A
+pin into another namespace counts as present only through the active entry,
+since the matrix rows cover this application alone.
 
 Three column states per environment:
 
 | field | values | meaning |
 |---|---|---|
 | `values_state` | `empty` | the namespace has no parameter or secret rows at all |
-| | `incomplete` | any contract alias is unresolved, absent, of the wrong kind, or a parameter whose `content_type` differs from the contract |
-| | `complete` | every contract alias resolves to a matching resource |
+| | `incomplete` | any contract alias is unresolved or absent (`resource_missing`), exists under the other kind (`kind_mismatch`), is a parameter whose content type differs from the contract (`content_type_mismatch`), or is a secret whose `current` version is disabled, destroyed, or expired (`secret_unreadable`) |
+| | `complete` | every contract alias resolves to a matching, readable resource |
 | `release_state` | `none` | no active release |
-| | `active` | active release pins exactly the current resource versions |
-| | `drift` | any active entry pins a version other than the resource's `current`, or a contract alias is absent from the active release |
-| | `blocked` | `contract_release_mismatch`, `release_pin_stale`, or `schema_missing` (activation cannot succeed until fixed) |
+| | `active` | the active release matches the contract and pins the current version of every alias |
+| | `drift` | a contract alias is missing from the active release (`alias_not_in_release`), or an active entry pins a version other than the resource's current one (`unreleased_changes`) |
+| | `blocked` | the pinned schema is missing from the registry (`schema_missing`), the active release's aliases/kinds/content types no longer match the contract (`contract_release_mismatch`), or an active pin fails re-validation (`release_pin_stale`); takes precedence over `drift` |
 | `rollout_state` | `no_subscribers` | no instance has registered for this release name |
-| | `applied` | every connected instance applied the current activation revision |
-| | `rolling` | any connected instance is below `applied` at the current revision |
-| | `degraded` | any connected instance rejected the current activation revision |
-| | `stale` | any instance has been disconnected for more than 90 s and last applied a revision below the current one |
+| | `applied` | every instance applied the current activation revision |
+| | `degraded` | any instance rejected the current activation revision |
+| | `rolling` | otherwise, any instance is below `applied` at the current revision and is connected or was seen within the last 90 s (`rollout.pending`) |
+| | `stale` | otherwise, any instance has been disconnected for more than 90 s without applying the current revision (`rollout.stale`) |
 
-`rollout_state` is only reported when `release_state` is `active` or `drift`.
+`rollout` counts and `rollout_state` are always populated, but rollout
+**findings** (`no_subscribers`, `subscriber_other_release`, `instance_*`) are
+emitted only while `release_state` is `active` or `drift`, and at most 50
+instance findings per environment.
 
 Environment `status` is the first match in this order:
-`blocked` → `empty` → `incomplete` → `unreleased` → `degraded` → `rolling` →
-`drift` → `ready` (`unreleased` = values complete but no active release).
+`blocked` (release state blocked) → `empty` → `incomplete` → `unreleased`
+(values complete, no active release) → `degraded` → `rolling` → `drift` →
+`ready`.
 
-Application `status` is: `blocked` when any environment is blocked or the
-schema pin cannot be loaded (`schema_missing`); otherwise `setup` when there
-are no environments or every environment is `empty`, `incomplete`, or
-`unreleased`; otherwise `attention` when any environment is `incomplete`,
-`unreleased`, `degraded`, `rolling`, or `drift`, or any warning finding
-exists; otherwise `ready`.
+Application `status` is: `blocked` when any environment is blocked or any
+application-level finding is blocking (`schema_missing`,
+`schema_required_missing_alias`); otherwise `setup` when there are no
+environments or every environment is `empty`, `incomplete`, or `unreleased`;
+otherwise `attention` when any environment is `incomplete`, `unreleased`,
+`degraded`, `rolling`, or `drift`, or any warning finding exists at either
+level — except `insecure_listener`, which is reported but deliberately kept
+out of the status so a loopback development install is not permanently
+"attention"; otherwise `ready`.
 
 `release.active.is_rolled_back` is `previous_version > 0 &&
 active.version < previous_version` — the active release is older than the one
@@ -257,46 +275,48 @@ that state.
 
 **Findings.** A finding is `{code, severity, scope, params}`. `severity` is
 `blocking`, `warning`, or `info`; `scope` names the `env`, `alias`, and/or
-`instance` the finding applies to (empty for application-wide findings);
-`params` carries only the numbers and identifiers the frontend needs to
-render copy (versions, categories, counts) — display text lives in
+`instance` the finding applies to (empty keys are omitted; application-level
+findings have `{}` or `{alias}`); `params` carries only names and numbers the
+frontend needs to render copy — display text lives in
 `frontend/lib/readiness.ts`, and no finding ever carries a value, secret
-material, or a client diagnostic string.
+material, or a client diagnostic string. Each `findings` list is sorted
+blocking → warning → info and, within a severity, in emission order
+(values → release → rollout).
 
 | code | severity | scope | params | console fix action |
 |---|---|---|---|---|
 | `no_environments` | warning | app | — | add environment |
 | `contract_empty` | warning | app | — | edit contract (offers derive-from-active-release) |
 | `schema_unpinned` | info | app | — | pin schema |
-| `schema_missing` | blocking | app | — | pin schema (pinned schema cannot be loaded) |
-| `schema_property_missing_alias` | warning | app + alias | — | edit contract (derive) |
-| `schema_required_missing_alias` | blocking | app + alias | — | edit contract (derive) |
-| `alias_not_in_schema` | warning | app + alias | — | edit contract (derive) |
-| `contract_type_mismatch` | warning | app + alias | — | edit contract (derive) |
+| `schema_missing` | blocking | app | `schema_id`, `schema_version` | pin schema (the pinned version is no longer in the registry) |
+| `schema_property_missing_alias` | warning | alias | `alias` | edit contract (derive) — schema has no property for a parameter alias and is open (`additionalProperties` not `false`) |
+| `alias_not_in_schema` | warning | alias | `alias` | edit contract (derive) — same, but the schema is closed |
+| `schema_required_missing_alias` | blocking | alias | `alias` | edit contract (derive) — schema requires a name that is not a parameter alias |
+| `contract_type_mismatch` | warning | alias | `alias`, `content_type`, `schema_type` | edit contract (derive) |
 | `contract_release_mismatch` | blocking | env | — | edit contract / open release |
-| `release_pin_stale` | blocking | env, alias | — | ship |
-| `resource_missing` | blocking | alias | — | create parameter / create secret |
-| `kind_mismatch` | blocking | alias | — | open resource |
-| `content_type_mismatch` | blocking | alias | — | open resource |
-| `secret_unreadable` | blocking | alias | — | open secret (disabled, expired, or destroyed) |
-| `secret_token_required` | info | alias | — | open secret |
+| `release_pin_stale` | blocking | env + alias | `alias`, `reason` (a validation code) | ship |
+| `resource_missing` | blocking | env + alias | `alias`, `kind` | create parameter / create secret |
+| `kind_mismatch` | blocking | env + alias | `alias`, `kind`, `found` | open resource |
+| `content_type_mismatch` | blocking | env + alias | `alias`, `content_type`, `found` | open resource |
+| `secret_unreadable` | blocking | env + alias | `alias`, `state` (`disabled`, `destroyed`, `expired`) | open secret |
+| `secret_token_required` | info | env + alias | `alias` | open secret |
 | `no_active_release` | warning | env | — | ship |
-| `unreleased_changes` | warning | alias | `current`, `pinned` | ship |
-| `alias_not_in_release` | warning | alias | — | ship |
+| `unreleased_changes` | warning | env + alias | `alias`, `current`, `pinned` | ship |
+| `alias_not_in_release` | warning | env + alias | `alias` | ship |
 | `no_subscribers` | info | env | — | connect SDK |
-| `subscriber_other_release` | warning | env | — | connect SDK |
-| `instance_rejected` | warning | instance | `category` | open subscribers |
-| `instance_pending` | info | instance | — | open subscribers |
-| `instance_stale` | info | instance | — | open subscribers |
-| `rolled_back` | info | env | — | open release |
-| `previous_unavailable` | info | env | — | — |
+| `subscriber_other_release` | warning | env | `count`, `names` | connect SDK |
+| `instance_rejected` | warning | env + instance | `client_name`, `instance_id`, `identity`, `category` | open subscribers |
+| `instance_pending` | info | env + instance | `client_name`, `instance_id`, `identity` | open subscribers |
+| `instance_stale` | info | env + instance | `client_name`, `instance_id`, `identity` | open subscribers |
+| `rolled_back` | info | env | `from` | open release |
+| `previous_unavailable` | info | env | — | — (no `previous` label yet) |
 | `production` | info | env | — | — |
-| `insecure_listener` | warning | app | — | open health (`tls_enabled` is false) |
+| `insecure_listener` | warning | app | — | open health (the request reached a cleartext listener) |
 
 **JSON schema type ↔ parameter content type.** The console derives a contract
-from a schema (and a schema from a contract) with one mapping, implemented as
-a Go table and mirrored in TypeScript, pinned by the shared
-`readiness-cases.json` fixture:
+from a schema (and a schema from a contract) with one mapping,
+`JSONTypeToContentType` in Go, mirrored in `frontend/lib/contract-derive.ts`
+and pinned by the `type_mapping` block of the `readiness-cases.json` fixture:
 
 | schema `type` | content type | notes |
 |---|---|---|
@@ -305,7 +325,7 @@ a Go table and mirrored in TypeScript, pinned by the shared
 | `integer` | `integer` | |
 | `number` | `float` | |
 | `boolean` | `boolean` | |
-| union, absent | `json` | |
+| anything else, or no `type` | `json` | |
 
 The reverse mapping emits `{}` for `json` and `{"type": …}` for the others;
 a derived schema lists every parameter alias in `required` and sets
@@ -324,108 +344,134 @@ them, and activate it with a compare-and-swap guard.
   "application": "gradethis",
   "environment": "prod",
   "changes": [
-    { "alias": "rate_limits", "value": "{\"request_limit\":2000}", "content_type": "json" },
-    { "alias": "database", "version": 12 },
+    { "alias": "rate_limits", "value": "20", "content_type": "integer" },
+    { "alias": "database", "version": 3 },
     { "alias": "db_password", "label": "current" }
   ],
   "metadata_json": "{}",
   "dry_run": false,
-  "expected_active_version": 12,
+  "expected_active_version": 7,
   "request_id": "8f3a2c1e-…"
 }
 ```
 
-Each `changes[]` item names a contract alias and exactly one of:
+Each `changes[]` item names a contract alias (once) and exactly one of:
 
-- `value` (+ optional `content_type`, defaulting to the contract's) — write a
-  **new parameter version** and pin it. Only contract **parameter** aliases
-  may carry a value; sending a value for a secret alias is
-  `invalid_argument` (400) — secret plaintext is never shipped.
-- `version` or `label` — **pin without writing**. This is how the console
-  opts an existing unreleased change (`database v12`) into the release, pins
-  a secret (`db_password` at `current`), or retries with a parameter version
+- `value` (+ optional `content_type`, which defaults to the contract's and
+  must equal it) — write a **new parameter version** and pin it. Only
+  contract **parameter** aliases may carry a value; a value for a secret
+  alias is `invalid_argument` (400) — secret plaintext is never shipped. The
+  value is checked against its content type (size, JSON, numeric, boolean,
+  base64) before anything else happens.
+- `version` or `label` (not both) — **pin without writing**. This is how the
+  console opts an unreleased version (`database v3`) into the release, pins a
+  secret (`db_password` at `current`), or retries with a parameter version
   written by an earlier attempt.
 
-Aliases not listed keep their **base** pin: the active release's entry, or
-the resource's `current` label when no release is active (a first release
-therefore needs every parameter alias either listed or already present).
-`metadata_json` is stored on the created release, merged with
-`{"source":"console.ship"}`. `expected_active_version` freezes the release
-version the caller previewed (`0` = expect no active release; omit for no
-guard). `request_id` is an optional idempotency key: a repeat with the same
-id within 10 minutes returns the original result instead of shipping twice.
+Aliases not listed keep their **base** pin — the active release's entry, or
+the resource's `current` label when nothing is active — and are reported as
+`included` in the preview. A newer unreleased version of an untouched alias
+is **not** silently picked up: it is reported as an `unreleased_changes`
+warning in `preview.warnings`, and the console offers a per-alias opt-in
+that resends it as `{alias, version}`. A first release therefore needs every
+parameter alias either listed with a value or already present.
+`metadata_json` must be a JSON object; it is stored on the created release
+with `"source": "console.ship"` added. `expected_active_version` is a
+pre-write guard: omit it for none, `0` to require that nothing is active, or
+the version the caller previewed. `request_id` is accepted for forward
+compatibility but **not used**: there is no idempotency window, and a repeat
+ships again.
 
 **Preflight** runs before anything is written and is the **only** source of
-4xx responses: admin required (403); application and target namespace must
-exist (404); the contract must be non-empty (412); every alias must be in the
-contract, each change must be well-formed, and content types must match
-(400); and, when `expected_active_version` is given, the currently active
-version must still match — otherwise `aborted` (409) with no write. After
-preflight the server builds the candidate release and **validates it in
-memory** (resource identity, content types, readable secrets, and the pinned
-schema against the edited values) before touching storage.
+non-200 responses on a well-formed call: admin required (403; audited as
+`application.ship` deny); the application and the target namespace must
+exist (404); the contract must be non-empty (412); every alias must be in
+the contract, listed once, with a well-formed change and matching content
+type, and `metadata_json` must be an object (400); and, when
+`expected_active_version` is given, the currently active version must still
+match — otherwise `aborted` (409) with nothing written. After preflight the
+server builds the candidate from the base pins plus the changes, resolves
+the explicit pins, checks the candidate against the contract, and
+**validates it in memory** (resource identity, content types, readable
+secrets, digests, and the pinned schema against the unsaved values) before
+touching storage. Those checks fill `preview.validation`; a contract
+mismatch surfaces there as code `contract_mismatch`, and an alias that
+resolves to no resource as `not_found` with `preview.entries[].change:
+"missing"`.
 
 Every evaluated outcome is **HTTP 200** with `ShipResult.status`:
 
-| `status` | parameters written | release created | activated | notes |
+| `status` | parameters written | release created | activated | `error.code` |
 |---|---|---|---|---|
-| `preview` | no | no | no | `dry_run: true`; not audited |
-| `rejected` | no | no | no | in-memory validation failed; `error.validation_errors` |
-| `activated` | yes | yes | yes | `activation.changed` is true and a revision was allocated |
-| `release_created_not_activated` | yes | yes | no | activation's own re-validation failed (e.g. a secret was disabled or the contract changed between preview and ship); `error.validation_errors` |
-| `conflict` | yes | yes | no | another activation moved the active version between preflight and activation; `error.current_version` is the version now active |
+| `preview` | no | no | no | — (`dry_run: true`; not audited) |
+| `rejected` | no | no | no | `failed_precondition` + `validation_errors` — in-memory validation failed |
+| `activated` | yes | yes | yes | — |
+| `release_created_not_activated` | yes | yes | no | `failed_precondition` + `validation_errors` — activation's own re-validation failed (a secret disabled, the contract edited, … between preview and ship) |
+| `conflict` | yes | yes | no | `aborted` + `current_version` (the version now active) — another activation moved the release between the preflight read and activation |
 
-Execution is sequential — re-validate, `PutParameter` per value change,
-`CreateConfigurationRelease`, then `ActivateConfigurationRelease` with the
-CAS guard — with **no compensation**: each step is already atomic, and a
-parameter version or release left behind by a later failure is inspectable,
-harmless, and reusable. The console's "Fix and retry" ships again with
-`changes[].version` set to the versions reported in `parameters[]`, so the
-value is not written twice.
+Execution is sequential — `PutParameter` per value change,
+`CreateConfigurationRelease`, then `ActivateConfigurationRelease` with a CAS
+guard on the version observed at preflight (so `conflict` can occur even when
+the caller sent no `expected_active_version`) — with **no compensation**:
+each step is already atomic, and a parameter version or release left behind
+by a later failure is inspectable, harmless, and reusable. A storage or
+authorization failure in the middle of execution is returned as an ordinary
+error response after the audit event; parameter versions already written
+persist. The console's "Fix and retry" ships again with `changes[].version`
+set to the versions reported in `parameters[]`, so a value is never written
+twice.
+
+Response for an `activated` ship (the `ship-conflict.json` fixture shows the
+`conflict` shape):
 
 ```json
 {
   "status": "activated",
   "preview": {
-    "base_version": 12, "release_name": "runtime",
-    "schema_id": "gradethis/runtime", "schema_version": 1,
+    "base_version": 7, "release_name": "runtime",
+    "schema_id": "runtime", "schema_version": 1,
     "entries": [
-      { "alias": "rate_limits", "kind": "parameter", "key": "config/rate-limits",
-        "from_version": 9, "to_version": 10, "change": "edited" },
-      { "alias": "database", "kind": "parameter", "key": "config/database",
-        "from_version": 11, "to_version": 12, "change": "included" },
-      { "alias": "db_password", "kind": "secret", "key": "db-password",
-        "from_version": 3, "to_version": 3, "change": "pinned" }
+      { "alias": "database",    "kind": "parameter", "key": "database",
+        "from_version": 3, "to_version": 3,  "change": "pinned" },
+      { "alias": "db_password", "kind": "secret",    "key": "db_password",
+        "from_version": 2, "to_version": 2,  "change": "pinned" },
+      { "alias": "rate_limits", "kind": "parameter", "key": "rate_limits",
+        "from_version": 10, "to_version": 11, "change": "edited" }
     ],
     "validation": { "valid": true, "errors": [] },
-    "warnings": [ Finding ]
+    "warnings": []
   },
   "parameters": [
-    { "alias": "rate_limits", "key": "config/rate-limits", "version": 10, "revision": 118 }
+    { "alias": "rate_limits", "key": "rate_limits", "version": 11, "revision": 52 }
   ],
-  "release": { "name": "runtime", "version": 13, "digest": "<sha256 hex>" },
-  "activation": { "activation_revision": 119, "previous_version": 12, "changed": true }
+  "release": { "name": "runtime", "version": 9, "digest": "<sha256 hex>" },
+  "activation": { "activation_revision": 53, "previous_version": 7, "changed": true }
 }
 ```
 
-`preview` is always present (a `dry_run` response contains only `preview`).
-`preview.entries[].change` is `edited` (a value was written), `pinned`
-(explicit version/label), `included` (an unreleased current version the
-caller opted in), or `missing` (a contract alias with no resolvable resource —
-the preview is then invalid). `base_version` is the active release the
-candidate was built from (`0` for a first release). `validation` has the
-shape of `POST /api/v1/releases/validate`; when it is invalid the console
-disables Ship. `parameters` lists the versions written, `release` the created
-release, and `activation` the activation result; each is present only when
-that step happened. `error` is present for `rejected`,
-`release_created_not_activated`, and `conflict`, with `code`, `message`, and
-either `validation_errors` or `current_version`.
+`preview` is always present (a `dry_run` response is `preview` plus an empty
+`parameters` list). `preview.entries` has one row per contract alias, sorted
+by alias, with `change` = `edited` (a value is written; `to_version` is the
+predicted next version until the write happens, then the real one), `pinned`
+(explicit version/label), `included` (untouched alias at its base pin), or
+`missing` (nothing resolves; the preview is invalid). `from_version` is the
+active pin (omitted for a first release); `base_version` is the active
+release the candidate was built on (`0` for a first release). `validation`
+has the shape of `POST /api/v1/releases/validate`; when invalid, the console
+disables Ship. `parameters` lists the versions written; `release` and
+`activation` are present only when that step happened. `error` is present
+for `rejected`, `release_created_not_activated`, and `conflict`.
 
-Every non-`dry_run` call is audited as one `application.ship` event
-(`decision` allow/deny/error; metadata `environment`, `aliases`,
-`activated`, `previous_version`, and `reason` on failure) in addition to the
+Every non-`dry_run` call is audited as one `application.ship` event on the
+application in the target namespace: `allow` when activated, `deny` for
+`rejected` (`reason: validation_failed`, nothing written),
+`release_created_not_activated` (`activation_validation_failed`) and
+`conflict` (`cas_conflict`), or `error` when a step failed; metadata carries
+`environment`, `aliases` (comma-joined, sorted), `activated`,
+`previous_version`, `release_version` once one exists, and `reason`. The
 ordinary per-step events for the parameter writes,
-`configuration_release.create`, and `configuration_release.activate`.
+`configuration_release.create`, and `configuration_release.activate` are
+recorded as well.
 
 #### Clone an environment
 
@@ -444,36 +490,46 @@ environment for an application, optionally seeded from an existing one:
   "namespace": Namespace,
   "namespace_created": true,
   "items": [
-    { "alias": "rate_limits", "key": "config/rate-limits", "kind": "parameter",
-      "action": "copied", "source_version": 9, "target_version": 1 },
-    { "alias": "database", "key": "config/database", "kind": "parameter",
-      "action": "exists", "target_version": 4 },
-    { "alias": "db_password", "key": "db-password", "kind": "secret",
-      "action": "needs_value" }
+    { "alias": "rate_limits", "key": "rate_limits", "kind": "parameter",
+      "action": "copied", "source_version": 2, "target_version": 1 },
+    { "alias": "database", "key": "database", "kind": "parameter",
+      "action": "exists", "source_version": 1, "target_version": 4 },
+    { "alias": "db_password", "key": "db_password", "kind": "secret",
+      "action": "needs_value", "source_version": 1 }
   ],
   "needs_value": ["db_password"]
 }
 ```
 
-The target namespace is created when missing, with the source's
-`allowed_auth_methods` unless `auth_methods` is given; an existing target
-namespace is attached, not an error. The alias set is the application
-contract (or every source parameter when the contract is empty), resolved to
-keys with the alias → key rule above. Per item, `action` is:
+`source_env` and `target_env` must differ (400) and the source namespace
+must exist (404). The target namespace is created when missing, with the
+source's `allowed_auth_methods` unless `auth_methods` is given; an existing
+target namespace is attached (`namespace_created: false`), not an error. The
+item list is the application contract resolved to keys with the alias → key
+rule in the source environment, or — when the contract is empty — every
+parameter and secret present in the source, keyed by its own name. Per item,
+`action` is decided in this order:
 
-- `copied` — a new parameter version was written in the target with the
-  source's current value and content type;
-- `exists` — the key already exists in the target and was **left untouched**
-  (clone never overwrites);
-- `needs_value` — a secret; secret values are never copied, so the operator
+- `exists` — the key already exists in the target (whatever its kind) and is
+  **left untouched**; clone never overwrites;
+- `needs_value` — a secret: secret values are never copied, so the operator
   must add one in the target (the console offers an Add secret button per
-  entry). Also used for parameters when `copy_values` is false;
-- `missing_in_source` — the alias does not resolve in the source;
-- `error` — the write failed; `error` carries a bounded message.
+  entry);
+- `missing_in_source` — the alias does not resolve to a present resource in
+  the source;
+- `needs_value` — a parameter when `copy_values` is false;
+- `copied` — a new parameter version was written in the target with the
+  source's current value and content type (`target_version` is the new
+  version);
+- `error` — the write failed; `error` carries a bounded message and the
+  remaining items are still processed.
 
-`needs_value` repeats the aliases that still need a value. Partial failure is
-reported per item, not as a 4xx. Audited as `application.environment_clone`
-plus the ordinary namespace-create and parameter-write events.
+`source_version` is set whenever the source has the key. `needs_value`
+repeats the aliases that still need a value. Partial failure is reported per
+item, not as a 4xx. Audited as `application.environment_clone` on the target
+namespace (metadata `source_env`, `target_env`, `namespace_created`,
+`copied`, `needs_value` counts) plus the ordinary namespace-create and
+parameter-write events.
 
 #### Rollback
 
@@ -493,16 +549,19 @@ version. It requires `configuration-release:activate`, like activate.
 
 `rolled_back_from` is the version that was active when the request was
 evaluated; `previous_version` is the new `previous` label, which after a
-successful rollback is that same version. Semantics match
-`POST /api/v1/releases/activate`: `expected_current_version` is a CAS guard
-(omit for none; a mismatch is `aborted`, 409); the target is re-validated
-immediately before the labels move, and a failure is `failed_precondition`
-(412) with the same `validation_errors` envelope documented under activate
-(the previous release can be un-activatable when a pinned secret was disabled
-or expired, or the contract was edited); `changed: false` means the target was
-already active and no revision was allocated. When there is no `previous`
-label the response is `failed_precondition` (412, "no previous release")
-without `validation_errors`. The event is audited as
+successful rollback is that same version. The response is
+`failed_precondition` (412) when the release name has **no active version**
+or the active version has **no previous** (`previous_version` is 0); neither
+carries `validation_errors`. `expected_current_version` is a CAS guard (omit
+for none): a mismatch is `aborted` (409) and audited as
+`configuration_release.cas_conflict`. The activation itself then runs with
+a CAS on the observed current version and the same semantics as
+`POST /api/v1/releases/activate`: the target is re-validated immediately
+before the labels move, and a failure is `failed_precondition` (412) with
+the `validation_errors` envelope documented under activate (the previous
+release can be un-activatable when a pinned secret was disabled or expired,
+or the contract was edited); `changed: false` means the target was already
+active and no revision was allocated. The activation is audited as
 `configuration_release.rollback`. The console's Rollback dialog calls
 `POST /api/v1/releases/validate` on the previous version first so the
 operator sees violations before confirming; to activate any other retained
@@ -512,26 +571,33 @@ version use `POST /api/v1/releases/activate`.
 
 `GET /api/v1/release-subscribers/stream?env=&app=&name=` pushes the
 per-instance lifecycle state of one release name as **server-sent events**
-(`Content-Type: text/event-stream`, `Cache-Control: no-store`,
-`X-Accel-Buffering: no`). It is the live transport behind the console's
-rollout view; `GET /api/v1/release-subscribers` remains the paged,
-poll-friendly form.
+(`Content-Type: text/event-stream; charset=utf-8`, `Cache-Control:
+no-store`, `X-Accel-Buffering: no`). It is the live transport behind the
+console's rollout view; `GET /api/v1/release-subscribers` remains the paged,
+poll-friendly form. Admin-only, like the list.
 
 - Authentication is the same bearer header as every other endpoint. The
   browser `EventSource` API cannot set request headers, so consume the stream
   with `fetch` and read the body as a stream (`frontend/lib/sse.ts` does
   this); there is no cookie or query-string token form.
-- The first event is an immediate `snapshot`; later `snapshot` events follow
-  lifecycle acknowledgements, connect/disconnect transitions, and activations
-  for that release name, coalesced so bursts produce one event (about 250 ms
-  apart at most), with a periodic safety re-query about every 5 s.
+- The first event is an immediate `snapshot`. A new `snapshot` follows
+  whenever an acknowledgement, a connect/disconnect transition, or an
+  activation touches that release name — the server-side notifier wakes the
+  stream and a 250 ms debounce coalesces bursts into one event — and on a
+  5 s safety re-query in case a change was not signalled.
 - A comment line `: keep-alive` is written every 15 s so idle proxies keep
   the connection open.
-- A stream lives at most **5 minutes**; the server then sends `event: end`
-  and closes. Clients reconnect (the console uses a 1 → 30 s jittered
-  backoff) — every reconnect starts with a fresh snapshot, so nothing is lost.
+- A stream lives at most **5 minutes**; the server then sends
+  `event: end` with `data: {"reason":"lifetime"}` and closes, so clients
+  periodically re-authenticate by reconnecting (the console uses a 1 → 30 s
+  jittered backoff). Every reconnect starts with a fresh snapshot, so
+  nothing is lost.
 - Limits: **4** concurrent streams per identity and **64** per server. Beyond
-  either, the response is `rate_limited` (429) and the refusal is audited.
+  either, the response is `rate_limited` (429) and the refusal is audited as
+  `configuration_release.subscribers_stream` deny with reason
+  `identity_stream_limit` or `global_stream_limit`. The first snapshot is
+  authorized and read before the slot is taken, so an unauthorized or
+  malformed request gets its ordinary 4xx rather than a 429.
 - After two consecutive failures the console falls back to polling
   `GET /api/v1/release-subscribers` every 5 s while the tab is visible and
   shows the transport badge as `polling`; a stream that stops delivering is
@@ -539,21 +605,24 @@ poll-friendly form.
 
 ```text
 event: snapshot
-data: {"summary":{"total":5,"connected":5,"applied_current":4,"rejected":1,"pending":0,"stale":0,"other_release_names":[],"rejected_instances":[…],"truncated":false},"subscribers":[ReleaseSubscriberState…],"current_revision":119,"server_time_unix_ms":1710000000000}
+data: {"summary":{"total":3,"connected":3,"applied_current":2,"rejected":1,"pending":0,"stale":0,"other_release_names":[],"rejected_instances":[…],"truncated":false},"subscribers":[ReleaseSubscriberState…],"current_revision":12,"server_time_unix_ms":1755000000000}
 
 : keep-alive
 
 event: end
-data: {}
+data: {"reason":"lifetime"}
 ```
 
-`summary` has the shape of `EnvironmentOverview.rollout`; `subscribers` are
-the rows of `GET /api/v1/release-subscribers`, ungrouped. Reverse proxies in
-front of the HTTP listener must not buffer this path (`X-Accel-Buffering: no`
-covers nginx; disable `proxy_buffering`/equivalent elsewhere) and must allow
-idle connections of at least the 5-minute lifetime. The handler clears the
-server's write deadline for its lifetime; every other route keeps the normal
-60 s timeout.
+`summary` has the shape of `EnvironmentOverview.rollout`, computed over at
+most 1,000 acknowledgement rows for that release name; `subscribers` are
+those raw rows, as returned by `GET /api/v1/release-subscribers`, ungrouped;
+`current_revision` is the release name's active activation revision (`0`
+when nothing is active). Reverse proxies in front of the HTTP listener must
+not buffer this path (`X-Accel-Buffering: no` covers nginx; disable
+`proxy_buffering`/equivalent elsewhere) and must allow idle connections of
+at least the 5-minute lifetime. The handler clears the server's write
+deadline for its own response; every other route keeps the normal 60 s
+timeout.
 
 ### Per-namespace allowed auth methods
 

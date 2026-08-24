@@ -172,35 +172,43 @@ produce the embedded entry point.
 ### Console fixtures and journeys
 
 The console renders readiness state computed by the Go server, so the two
-sides share one set of fixtures rather than two hand-written copies. A Go
-test writes them from the real DTO encoders:
+sides share one set of fixtures rather than two hand-written copies. Go tests
+write them from the real readiness functions and DTO encoders:
 
 ```bash
-go test ./internal/server/httpserver -run TestConsoleFixtures -update
+go test ./internal/core ./internal/server/httpserver -run TestConsoleFixtures -update
 ```
 
-This regenerates `frontend/tests/fixtures/backend/{overview-ready,
-overview-incident,overview-setup,ship-preview,ship-conflict,
-readiness-cases}.json`: three `ApplicationOverview` responses (a ready
-application, an incident with a rejected instance and drift, and a
-half-configured application in `setup`), a Ship dry-run preview, a Ship
-`conflict` result, and the readiness cases that pin the environment/app
-status precedence and the schema-type ↔ content-type mapping on both sides.
-Without `-update` the same test compares its output byte-for-byte with the
-committed files and fails on drift, which is how CI runs it (`make test-unit`
-covers it). `frontend/tests/fixtures.test.ts` loads every fixture with
-`satisfies` against the TypeScript types in `frontend/lib/types.ts`, so a DTO
-field renamed in Go fails the frontend suite, and a type changed in
+`TestConsoleFixtures` in `internal/server/httpserver/fixtures_test.go` drives
+a real in-process server and writes `frontend/tests/fixtures/backend/
+{fleet,overview-ready,overview-incident,overview-setup,ship-preview,
+ship-conflict}.json`: the fleet form, three `ApplicationOverview` responses
+(a ready application, an incident with a rejected instance and drift, and an
+application with no environments yet), a Ship dry-run preview, and a Ship
+`conflict` result. `TestConsoleFixturesReadiness` in
+`internal/core/consolefixtures_test.go` writes `readiness-cases.json`: 14
+named readiness cases (each an `input` of contract, schema pin, values,
+active release, latest version, and instances, with the `expected` column
+states, environment and application status, and finding codes) plus the
+`type_mapping` block that pins the schema-type ↔ content-type table on both
+sides. Without `-update` both tests compare their output byte-for-byte with
+the committed files and fail on drift, which is how CI runs them
+(`make test-unit` covers both packages).
+`frontend/tests/fixtures.test.ts` loads every fixture with `satisfies`
+against the TypeScript types in `frontend/lib/types.ts` and replays the
+readiness cases through the frontend's own status/finding vocabulary, so a
+DTO field renamed in Go fails the frontend suite, and a type changed in
 TypeScript fails against the committed JSON. Regenerate and commit the
 fixtures in the same change as any DTO or readiness edit.
 
 The vitest suites added with the application-centred console are grouped by
 the lane that owns them:
 
-- shared (`lib/`, shell, chips): `links`, `ident`, `breadcrumbs`,
-  `app-shell`, `contract-derive`, `subscribers`, `sse`,
-  `use-release-subscribers`, `fixtures`, `api`, `visual-tokens` (widened to
-  every `styles/*.css` file with the `--ident-*` light/dark parity check);
+- shared (`lib/`, shell, chips): `links`, `ident`, `status-chip`,
+  `breadcrumbs`, `app-shell`, `contract-derive`, `subscribers`, `sse`,
+  `use-release-subscribers`, `fixtures`, `api-console`, `release-utils`,
+  `visual-tokens` (widened to every `styles/*.css` file with the `--ident-*`
+  light/dark parity check);
 - application page: `applications`, `contract-editor`,
   `create-application-wizard`, `environment-pipeline`, `add-environment-clone`;
 - ship and rollback: `ship-modal` (dry-run call, changed rows, stale-preview
@@ -210,10 +218,10 @@ the lane that owns them:
   guided versus express default, missing-secret blocker), `rollback-dialog`
   (pre-validation, CAS, production confirm, 409), `releases`;
 - onboarding and palette: `dashboard`, `setup-steps`, `setup-checklist`,
-  `connect-sdk-panel`, `command-palette`, `identities-prefill`, `login`.
+  `connect-sdk-panel`, `command-palette`, `identities`, `login`.
 
 Two Playwright journeys under `frontend/tests/e2e/` drive the exported site
-against the in-memory fake API in `tests/e2e/fakes/console-api.ts`, which
+against an in-memory fake API (`tests/e2e/fakes/console-api.ts`) that
 answers `page.route("**/api/v1/**")` from mutable state and returns 404 for
 the subscriber stream so the polling fallback is what the browser exercises:
 
@@ -227,10 +235,10 @@ the subscriber stream so the polling fallback is what the browser exercises:
 
 `npm run test:e2e` runs both alongside the existing `login.spec.ts` and
 `theme.spec.ts` on Chromium desktop and the Pixel 7 profile. The server-side
-counterpart of the stream fallback is `internal/server/httpserver/
-subscribers_stream_test.go`, which uses `httptest.NewServer` to assert the
-initial snapshot, keep-alive comments, the `end` event, and the per-identity
-and global caps.
+counterpart of the stream fallback is
+`internal/server/httpserver/subscribers_stream_test.go`, which uses
+`httptest.NewServer` to assert the initial snapshot, keep-alive comments, the
+`end` event, and the per-identity and global caps.
 
 ## CI jobs
 
