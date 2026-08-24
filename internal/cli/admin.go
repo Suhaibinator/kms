@@ -232,6 +232,56 @@ func (c *CLI) cmdCreateAdmin(args []string) int {
 	return 0
 }
 
+// --- rotate-admin ----------------------------------------------------------
+
+func (c *CLI) cmdRotateAdmin(args []string) int {
+	fs := c.newFlags("rotate-admin")
+	db := fs.String("db", "./kms.db", "database file path")
+	name := fs.String("name", "", "admin identity name")
+	if !c.parseFlags(fs, args) {
+		return 2
+	}
+	if *name == "" {
+		return c.fail("--name is required")
+	}
+
+	// Direct store access makes this the recovery path when no usable admin
+	// credential remains. WAL mode allows a running server to observe the new
+	// hash immediately, but the operator must coordinate concurrent identity
+	// administration.
+	ctx := context.Background()
+	store, err := storage.Open(*db)
+	if err != nil {
+		return c.fail("opening database: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+
+	identity, err := store.GetIdentityByName(ctx, *name)
+	if err != nil {
+		return c.fail("loading admin identity: %v", err)
+	}
+	if identity.Kind != domain.IdentityKindAdmin {
+		return c.fail("identity %s is not an admin", *name)
+	}
+	if identity.Disabled {
+		return c.fail("admin identity %s is disabled; refusing to re-enable it", *name)
+	}
+	if !identity.HasToken {
+		return c.fail("admin identity %s has no token to rotate", *name)
+	}
+
+	svc := core.New(store, c.quietLogger(), Version)
+	localAdmin := core.Principal{Identity: domain.Identity{Name: "cli", Kind: domain.IdentityKindAdmin}}
+	token, err := svc.RotateIdentityToken(ctx, localAdmin, *name)
+	if err != nil {
+		return c.fail("rotating admin token: %v", err)
+	}
+	if err := printRotatedTokenOnce(c.Stdout, "admin identity", *name, token); err != nil {
+		return c.fail("writing one-time admin token: %v", err)
+	}
+	return 0
+}
+
 // --- rotate-kek ------------------------------------------------------------
 
 func (c *CLI) cmdRotateKEK(args []string) int {
@@ -330,6 +380,19 @@ func (c *CLI) buildNewKEK(newKeyFile string) (domain.KeyMetadata, []byte, error)
 // printTokenOnce prints a freshly minted token with a clear one-time warning.
 func printTokenOnce(w io.Writer, kind, name, token string) error {
 	if _, err := fmt.Fprintf(w, "Created %s %q.\n", kind, name); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintf(w, "  token: %s\n", token); err != nil {
+		return err
+	}
+	_, err := fmt.Fprintln(w, "  WARNING: this token is shown once and cannot be recovered. Store it securely.")
+	return err
+}
+
+// printRotatedTokenOnce prints a replacement token without implying that the
+// identity itself was recreated.
+func printRotatedTokenOnce(w io.Writer, kind, name, token string) error {
+	if _, err := fmt.Fprintf(w, "Rotated %s %q.\n", kind, name); err != nil {
 		return err
 	}
 	if _, err := fmt.Fprintf(w, "  token: %s\n", token); err != nil {

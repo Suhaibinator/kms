@@ -8,7 +8,7 @@ For the encryption and authorization design behind these procedures, see
 
 > **Status note.** Every command below matches the CLI implemented in
 > `internal/cli`. The offline commands (`init`, `migrate`, `check`, `backup`,
-> `restore`, `create-admin`, `rotate-kek`, `import`) operate directly on the
+> `restore`, `create-admin`, `rotate-admin`, `rotate-kek`, `import`) operate directly on the
 > SQLite file; the `admin` command group and the convenience commands
 > (`put-secret`, `get-secret`, `put-parameter`, `list`, `release`) talk to a running
 > server over gRPC. `make build` produces a working `bin/parameter-store`,
@@ -285,8 +285,8 @@ keeps this development workflow separate from production mTLS.
 
 These commands are implemented in `internal/cli` and operate directly on the
 SQLite file passed via `--db` — they do not require a running server (except
-`create-admin`'s underlying identity, which a running `serve` process reads
-immediately via its shared database). All flags are the standard library
+`create-admin` and `rotate-admin` identity changes, which a running `serve`
+process reads immediately via its shared database). All flags are the standard library
 `flag` package's double-dash-or-single-dash form (e.g. `--db` or `-db`).
 
 | Command | Flags | Purpose |
@@ -297,6 +297,7 @@ immediately via its shared database). All flags are the standard library
 | `backup` | `--db`, `--out` (required, must not already exist) | Writes a consistent online backup through owner-only staging and atomic no-replace publication. Prints a reminder that the master key is not included. |
 | `restore` | `--db` (destination), `--in` (required, source backup), `--force` (overwrite an existing destination) | Validates the input is a KMS SQLite backup, stages an owner-only copy, publishes it atomically, removes stale `-wal`/`-shm` sidecars, then opens (and migrates) it. Without `--force`, publication never replaces an existing or concurrently created entry. |
 | `create-admin` | `--db`, `--name` (required) | Creates an admin identity directly against the database file and prints its token once. Uses WAL mode's concurrent-reader support, but coordinating this against a live `serve` process is the operator's responsibility. |
+| `rotate-admin` | `--db`, `--name` (required) | Recovery command that directly replaces an existing enabled admin identity's token hash and prints the new token once. The old token becomes invalid immediately; a disabled admin, client identity, missing identity, or identity without a token is rejected without mutation. It does not require the old token, master key, or a running server. If output is lost, rerun the command to mint another replacement. A running server observes the shared-database update immediately, but operators must coordinate concurrent identity administration. |
 | `rotate-kek` | `--db`, `--key-file` (current key, omit to use the current passphrase), `--new-key-file` (new key, omit to enter a new passphrase) | Unseals with the current key, generates or loads the new key, and calls the same `Service.RotateKEK` used internally — rewrapping every **non-destroyed** secret version's DEK and every built-in CA key under the new KEK in one transaction. Prints both counts (`N secret versions and M CA keys rewrapped`). Run with `serve` stopped; a live process retains the old keyring. |
 | `import` | `--from` (JSON file or SuhaibParameterStore SQLite export), `--namespace env/app` **or** `--env`/`--app`, `--db` (default `./kms.db`), `--master-key-file`, `--dry-run`, `--report FILE` | Maps flat source keys to **relative slug keys** (`slug(key)`, e.g. `TWILIO_SID` → `twilio-sid`) in the destination namespace, **auto-creates the namespace** if it does not exist, writes each as a new secret via a ref-based `PutSecret` with a freshly minted per-secret access token, and emits a mapping report (old key → `/env/app/key` display path → token, written once). Distinct source keys that slug to the same key are reported as a collision rather than silently overwriting. `--dry-run` reports the mapping without writing or minting tokens. Pass either `--namespace` or `--env`/`--app`, not both. See [`migration.md`](migration.md) for the full gradethis walkthrough. |
 

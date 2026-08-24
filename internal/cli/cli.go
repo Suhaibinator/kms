@@ -63,6 +63,8 @@ func (c *CLI) Run(args []string) int {
 		code = c.cmdRestore(cmdArgs)
 	case "create-admin":
 		code = c.cmdCreateAdmin(cmdArgs)
+	case "rotate-admin":
+		code = c.cmdRotateAdmin(cmdArgs)
 	case "rotate-kek":
 		code = c.cmdRotateKEK(cmdArgs)
 	case "admin":
@@ -140,6 +142,7 @@ Administration:
   backup           Write a consistent online database backup.
   restore          Restore a database file (server must be stopped).
   create-admin     Create an admin identity and print its token once.
+  rotate-admin     Recover an existing admin by rotating its token directly.
   rotate-kek       Rotate the master key, rewrapping all secrets.
   import           Import data from SuhaibParameterStore.
 

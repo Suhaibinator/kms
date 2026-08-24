@@ -103,7 +103,7 @@ client SDK (Go · Python · TypeScript)
 parameter-store — single binary (cmd/parameter-store)
   |
   internal/cli — command dispatch: serve, init, migrate, backup,
-  |              restore, create-admin, rotate-kek, import, ...
+  |              restore, create-admin, rotate-admin, rotate-kek, import, ...
   |
   +--- grpcserver ---------------+--- httpserver -------------------+
   |    ParameterService, Secret- |    /api/v1/*  (frontend + admin) |
