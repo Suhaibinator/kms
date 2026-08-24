@@ -1,0 +1,196 @@
+import { useEffect, useId, useMemo, useState } from "react";
+import { Modal } from "@/components/Modal";
+import { Badge, Checkbox, Field, Input, Spinner, Textarea } from "@/components/ui";
+import { AppSelect } from "@/components/ui/app-select";
+import { Button } from "@/components/ui/button";
+import { useFieldErrors } from "@/lib/hooks";
+import { type ApplicationConfigurationRow, PARAMETER_CONTENT_TYPES } from "@/lib/types";
+import {
+  firstError,
+  validateKey,
+  validateParameterValue,
+  validateValueSize,
+} from "@/lib/validation";
+import { PRODUCTION_ENVIRONMENT } from "./shared";
+
+export function BulkParameterModal({
+  app,
+  environments,
+  row,
+  retryEnvironments,
+  saving,
+  onClose,
+  onSave,
+}: {
+  app: string;
+  environments: string[];
+  row: ApplicationConfigurationRow | null;
+  /** After a partial failure: the environments still to write. Narrows the selection only. */
+  retryEnvironments: string[] | null;
+  saving: boolean;
+  onClose: () => void;
+  onSave: (request: {
+    application: string;
+    key: string;
+    value: string;
+    content_type: string;
+    metadata_json: string;
+    environments: string[];
+  }) => Promise<void>;
+}) {
+  const [key, setKey] = useState("");
+  const [value, setValue] = useState("");
+  const [contentType, setContentType] = useState("string");
+  const [selected, setSelected] = useState<string[]>([]);
+  const { touch, markAllTouched, reset, shown } = useFieldErrors<"key" | "value">();
+  const formId = useId();
+  useEffect(() => {
+    if (!row) return;
+    reset();
+    setKey(row.key);
+    const present = environments.filter((environment) => row.environments[environment]?.present);
+    setSelected(present.length ? present : environments);
+    const first = present.length ? row.environments[present[0]] : undefined;
+    setValue(first?.value ?? "");
+    setContentType(first?.content_type ?? "string");
+  }, [row, environments, reset]);
+  useEffect(() => {
+    if (retryEnvironments) setSelected(retryEnvironments);
+  }, [retryEnvironments]);
+  const allSelected = selected.length === environments.length;
+  // The same value is written to every selected environment, so it only has to
+  // parse once. Memoised because a JSON document may run to a megabyte.
+  const keyProblem = validateKey(key.trim());
+  const valueProblem = useMemo(
+    () => firstError(validateValueSize(value), validateParameterValue(value, contentType)),
+    [value, contentType],
+  );
+  // An existing key's input is disabled, so a legacy key cannot block an edit.
+  const blocking = firstError(row?.key ? null : keyProblem, valueProblem);
+  const differing = useMemo(
+    () =>
+      row
+        ? new Set(
+            environments
+              .map((environment) => row.environments[environment]?.value)
+              .filter((item) => item !== undefined),
+          ).size > 1
+        : false,
+    [row, environments],
+  );
+
+  function submit() {
+    markAllTouched();
+    if (saving || blocking || selected.length === 0) return;
+    void onSave({
+      application: app,
+      key,
+      value,
+      content_type: contentType,
+      metadata_json: "{}",
+      environments: selected,
+    });
+  }
+
+  return (
+    <Modal
+      open={row !== null}
+      title={row?.key ? `Update ${row.key}` : "New parameter"}
+      onClose={onClose}
+      dismissible={!saving}
+      wide
+      footer={
+        <>
+          <Button type="button" variant="outline" onClick={onClose} disabled={saving}>
+            Cancel
+          </Button>
+          <Button
+            form={formId}
+            type="submit"
+            disabled={saving || blocking !== null || selected.length === 0}
+          >
+            {saving ? <Spinner /> : null}Apply to {selected.length} environment(s)
+          </Button>
+        </>
+      }
+    >
+      <form
+        id={formId}
+        onSubmit={(event) => {
+          event.preventDefault();
+          submit();
+        }}
+      >
+        <div className="warn-panel mb-4">
+          <strong>Separate versions will be created.</strong> This does not link environments or
+          create shared mutable state. Verify production targets before applying.
+          {differing
+            ? " Existing values differ; the editor starts from the first selected environment."
+            : ""}
+        </div>
+        <div className="form-row">
+          <Field label="Key" error={row?.key ? null : shown("key", keyProblem)}>
+            <Input
+              className="font-mono"
+              value={key}
+              disabled={Boolean(row?.key)}
+              onChange={(event) => setKey(event.target.value)}
+              onBlur={() => touch("key")}
+            />
+          </Field>
+          <Field label="Content type">
+            <AppSelect
+              value={contentType}
+              onValueChange={setContentType}
+              options={PARAMETER_CONTENT_TYPES.map((type) => ({ value: type, label: type }))}
+            />
+          </Field>
+        </div>
+        <Field label="Value" error={shown("value", valueProblem)}>
+          <Textarea
+            className="font-mono"
+            rows={7}
+            value={value}
+            onChange={(event) => setValue(event.target.value)}
+            onBlur={() => touch("value")}
+          />
+        </Field>
+        <Field label="Target environments">
+          <div className="checkbox-row">
+            <Checkbox
+              id="all-target-environments"
+              checked={allSelected}
+              onCheckedChange={(checked) => setSelected(checked ? environments : [])}
+            />
+            <label htmlFor="all-target-environments">
+              <strong>All environments</strong>
+            </label>
+          </div>
+          <div className="environment-check-grid">
+            {environments.map((environment) => (
+              <div className="checkbox-row" key={environment}>
+                <Checkbox
+                  id={`target-environment-${environment}`}
+                  checked={selected.includes(environment)}
+                  onCheckedChange={(checked) =>
+                    setSelected((current) =>
+                      checked
+                        ? [...current, environment]
+                        : current.filter((item) => item !== environment),
+                    )
+                  }
+                />
+                <label className="mono" htmlFor={`target-environment-${environment}`}>
+                  {environment}
+                </label>
+                {PRODUCTION_ENVIRONMENT.test(environment) ? (
+                  <Badge kind="warning">production</Badge>
+                ) : null}
+              </div>
+            ))}
+          </div>
+        </Field>
+      </form>
+    </Modal>
+  );
+}
