@@ -574,8 +574,12 @@ value as a form instead of a JSON box:
   literal element that is a compile-time constant — including named constants,
   nested struct literals, slices, arrays, and maps of constants — is emitted at
   the property it sets, and fields omitted from the literal get Go's zero
-  value. Elements the generator cannot evaluate statically (a local variable,
-  a function call, a `[]byte` conversion) simply have no `default`, and a
+  value. `new(v)` reads as a pointer to `v` and `new(T)` as a pointer to the
+  zero value, and a call to a zero-argument function in the same package
+  whose last statement returns a literal is followed (up to four levels
+  deep), so `Timeouts: defaultTimeouts()` contributes its literal too.
+  Elements the generator cannot evaluate statically (a local variable, a
+  call with arguments, a `[]byte` conversion) simply have no `default`, and a
   group only gets an object-level `default` when every one of its fields is
   known. Secrets never appear in the schema.
 - `-defaults NAME` selects a different function and requires it to exist;
