@@ -253,7 +253,7 @@ export function ApplicationHome({
   );
 
   return (
-    <>
+    <div className="application-home">
       <PageHeader
         breadcrumbs={crumbs.application(application.name)}
         title={
@@ -565,6 +565,6 @@ export function ApplicationHome({
           }
         }}
       />
-    </>
+    </div>
   );
 }

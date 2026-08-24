@@ -2,6 +2,14 @@
    the layer so Tailwind utilities keep winning. */
 
 @layer components {
+  /* ---------- Application page frame ---------- */
+
+  /* The page is a flex child of the shell; without min-width: 0 a wide pipeline
+     or a long mono value widens the page instead of scrolling inside it. */
+  .application-home {
+    min-width: 0;
+  }
+
   /* ---------- Action menus (components/applications/ActionMenu.tsx) ---------- */
 
   .menu-popup {
@@ -104,6 +112,7 @@
   }
   .pipeline-column {
     display: grid;
+    min-width: 0;
     gap: var(--space-4);
     padding: var(--space-4);
     background: var(--surface);
@@ -280,8 +289,22 @@
   }
 
   @media (max-width: 768px) {
+    /* .page-actions is flex-shrink: 0, so six actions keep their ~800px
+       max-content width and overflow the viewport; at full row width the
+       buttons wrap onto as many lines as they need instead. */
+    .application-home .page-actions {
+      flex-shrink: 1;
+      width: 100%;
+      min-width: 0;
+    }
+    .application-home .page-header > div:first-child {
+      min-width: 0;
+    }
     .definition-grid {
       grid-template-columns: 1fr;
+    }
+    .pipeline-scroll {
+      overflow-x: visible;
     }
     .pipeline {
       grid-auto-flow: row;
