@@ -25,10 +25,41 @@ function listLink(base: string, ns?: NamespaceRef, keyPrefix?: string): string {
   return `${base}?${nsQuery(ns)}${prefix}`;
 }
 
+export interface ApplicationLinkOptions {
+  /** Focus (scroll to) this environment's pipeline column. */
+  env?: string;
+  /** Open the Ship modal: an alias prefills a row, `true` opens it empty. */
+  ship?: string | boolean;
+  /** `matrix` swaps the pipeline for the classic per-key table. */
+  tab?: "matrix";
+  /** Open the Roll back environment menu. */
+  rollback?: boolean;
+}
+
 export const links = {
+  overview: (): string => "/",
   applications: (): string => "/applications",
-  application: (name: string): string => `/applications?app=${encodeURIComponent(name)}`,
+  // Param order is app, env, ship, tab, rollback — the application page reads
+  // all five and the palette/overview deep-link into every combination.
+  application: (name: string, opts?: ApplicationLinkOptions): string => {
+    const params = [`app=${encodeURIComponent(name)}`];
+    if (opts?.env) params.push(`env=${encodeURIComponent(opts.env)}`);
+    if (opts?.ship) {
+      params.push(`ship=${opts.ship === true ? "1" : encodeURIComponent(opts.ship)}`);
+    }
+    if (opts?.tab) params.push(`tab=${opts.tab}`);
+    if (opts?.rollback) params.push("rollback=1");
+    return `/applications?${params.join("&")}`;
+  },
   namespaces: (): string => "/namespaces",
+  // `env`/`app` prefill the binding; `new` opens the create form directly.
+  identities: (opts?: { env?: string; app?: string; new?: boolean }): string => {
+    const params: string[] = [];
+    if (opts?.env) params.push(`env=${encodeURIComponent(opts.env)}`);
+    if (opts?.app) params.push(`app=${encodeURIComponent(opts.app)}`);
+    if (opts?.new) params.push("new=1");
+    return params.length > 0 ? `/identities?${params.join("&")}` : "/identities";
+  },
   secrets: (ns?: NamespaceRef, keyPrefix?: string): string => listLink("/secrets", ns, keyPrefix),
   secretDetail: (ref: ResourceRef): string => `/secrets/detail?${refQuery(ref)}`,
   newSecret: (ns?: NamespaceRef, key?: string): string => {
@@ -39,12 +70,20 @@ export const links = {
   parameters: (ns?: NamespaceRef, keyPrefix?: string): string =>
     listLink("/parameters", ns, keyPrefix),
   parameterDetail: (ref: ResourceRef): string => `/parameters/detail?${refQuery(ref)}`,
-  releases: (opts?: { app?: string; env?: string; name?: string; tab?: "schemas" }): string => {
+  releases: (opts?: {
+    app?: string;
+    env?: string;
+    name?: string;
+    tab?: "schemas";
+    /** Open one release's workspace, as `name@version` (e.g. `runtime@12`). */
+    release?: string;
+  }): string => {
     const params: string[] = [];
     if (opts?.app) params.push(`app=${encodeURIComponent(opts.app)}`);
     if (opts?.env) params.push(`env=${encodeURIComponent(opts.env)}`);
     if (opts?.name) params.push(`name=${encodeURIComponent(opts.name)}`);
     if (opts?.tab) params.push(`tab=${opts.tab}`);
+    if (opts?.release) params.push(`release=${encodeURIComponent(opts.release)}`);
     return params.length > 0 ? `/releases?${params.join("&")}` : "/releases";
   },
 };

@@ -1,23 +1,25 @@
-import Head from "next/head";
 import { ArrowLeft, ArrowRight, ChevronsLeft } from "lucide-react";
+import Head from "next/head";
 import { cloneElement, isValidElement, type ReactElement, type ReactNode, useId } from "react";
+import { Breadcrumbs } from "@/components/Breadcrumbs";
 import { Badge as ShadcnBadge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
-  Field as ShadcnField,
   FieldDescription,
   FieldError,
   FieldLabel,
   FieldLegend,
   FieldSet,
+  Field as ShadcnField,
 } from "@/components/ui/field";
 import { Skeleton as ShadcnSkeleton } from "@/components/ui/skeleton";
 import { Spinner as ShadcnSpinner } from "@/components/ui/spinner";
+import type { Crumb } from "@/lib/crumbs";
 import type { SecretVersionState } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
-export { Checkbox } from "@/components/ui/checkbox";
 export { Button } from "@/components/ui/button";
+export { Checkbox } from "@/components/ui/checkbox";
 export { Input } from "@/components/ui/input";
 export { Textarea } from "@/components/ui/textarea";
 
@@ -72,6 +74,7 @@ export function PageHeader({
   subtitle,
   actions,
   documentTitle,
+  breadcrumbs,
 }: {
   title: ReactNode;
   subtitle?: ReactNode;
@@ -79,11 +82,14 @@ export function PageHeader({
   /** Tab title. Defaults to `title` when it is a plain string; pass this
    *  explicitly when the heading is composed JSX. */
   documentTitle?: string;
+  /** Trail rendered above the header (see lib/crumbs.ts). */
+  breadcrumbs?: Crumb[];
 }) {
   const docTitle = documentTitle ?? (typeof title === "string" ? title : undefined);
   return (
     <>
       {docTitle ? <PageTitle title={docTitle} /> : null}
+      {breadcrumbs && breadcrumbs.length > 0 ? <Breadcrumbs items={breadcrumbs} /> : null}
       <div className="page-header">
         <div>
           <h1 className="page-title">{title}</h1>
@@ -278,9 +284,19 @@ export function Field({
   );
 }
 
-type BadgeKind = "neutral" | "accent" | "success" | "warning" | "danger";
+export type BadgeKind = "neutral" | "accent" | "success" | "warning" | "danger";
 
-export function Badge({ kind = "neutral", children }: { kind?: BadgeKind; children: ReactNode }) {
+export function Badge({
+  kind = "neutral",
+  className,
+  title,
+  children,
+}: {
+  kind?: BadgeKind;
+  className?: string;
+  title?: string;
+  children: ReactNode;
+}) {
   const variant = kind === "accent" ? "default" : kind === "danger" ? "destructive" : "outline";
   const tone =
     kind === "success"
@@ -289,7 +305,7 @@ export function Badge({ kind = "neutral", children }: { kind?: BadgeKind; childr
         ? "border-warning/40 bg-warning/15 text-warning"
         : undefined;
   return (
-    <ShadcnBadge variant={variant} className={tone}>
+    <ShadcnBadge variant={variant} className={cn(tone, className)} title={title}>
       {children}
     </ShadcnBadge>
   );

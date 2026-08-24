@@ -1,6 +1,10 @@
 @import "tailwindcss";
 @import "tw-animate-css";
 @import "shadcn/tailwind.css";
+@import "./applications.css";
+@import "./ship.css";
+@import "./onboarding.css";
+@import "./palette.css";
 
 @custom-variant dark (&:is(.dark *));
 
@@ -86,6 +90,32 @@
   --sans: var(--font-inter, var(--sans-fallback));
 
   --sidebar-w: 236px;
+
+  /* Typed identifier chips (components/Ident.tsx): one foreground and one
+     tinted background per kind. Keep the list in lockstep with .dark — the
+     guard test checks parity. */
+  --ident-app: #2450c2;
+  --ident-app-soft: rgba(47, 95, 214, 0.12);
+  --ident-env: #0f766e;
+  --ident-env-soft: rgba(15, 118, 110, 0.12);
+  --ident-ns: #475569;
+  --ident-ns-soft: rgba(71, 85, 105, 0.12);
+  --ident-alias: #6d28d9;
+  --ident-alias-soft: rgba(109, 40, 217, 0.12);
+  --ident-key: #55617a;
+  --ident-key-soft: rgba(85, 97, 122, 0.12);
+  --ident-release: #1e7f3c;
+  --ident-release-soft: rgba(30, 127, 60, 0.12);
+  --ident-schema: #8f6512;
+  --ident-schema-soft: rgba(196, 140, 26, 0.16);
+  --ident-version: #55617a;
+  --ident-version-soft: rgba(85, 97, 122, 0.12);
+  --ident-revision: #55617a;
+  --ident-revision-soft: rgba(85, 97, 122, 0.12);
+  --ident-identity: #3730a3;
+  --ident-identity-soft: rgba(79, 70, 229, 0.12);
+  --ident-instance: #55617a;
+  --ident-instance-soft: rgba(85, 97, 122, 0.12);
 
   /* One source for the height of a default-size form control. Tailwind's h-9.5
      (Button, Input, SelectTrigger) and the hand-written rules below must not
@@ -175,6 +205,29 @@
   --scroll-shadow: rgba(0, 0, 0, 0.4);
   --primary: #5b8cff;
   --primary-foreground: #071018;
+
+  --ident-app: #8ab4ff;
+  --ident-app-soft: rgba(91, 140, 255, 0.16);
+  --ident-env: #5eead4;
+  --ident-env-soft: rgba(94, 234, 212, 0.14);
+  --ident-ns: #cbd5e1;
+  --ident-ns-soft: rgba(148, 163, 184, 0.16);
+  --ident-alias: #c4b5fd;
+  --ident-alias-soft: rgba(167, 139, 250, 0.16);
+  --ident-key: #9aa7b6;
+  --ident-key-soft: rgba(154, 167, 182, 0.14);
+  --ident-release: #3fb950;
+  --ident-release-soft: rgba(63, 185, 80, 0.14);
+  --ident-schema: #e3b341;
+  --ident-schema-soft: rgba(227, 179, 65, 0.14);
+  --ident-version: #9aa7b6;
+  --ident-version-soft: rgba(154, 167, 182, 0.14);
+  --ident-revision: #9aa7b6;
+  --ident-revision-soft: rgba(154, 167, 182, 0.14);
+  --ident-identity: #a5b4fc;
+  --ident-identity-soft: rgba(129, 140, 248, 0.16);
+  --ident-instance: #9aa7b6;
+  --ident-instance-soft: rgba(154, 167, 182, 0.14);
 }
 
 @layer base {
@@ -1655,6 +1708,318 @@
     background: var(--bg-elev);
     border: 1px solid var(--border);
     color: var(--text-muted);
+  }
+
+  /* ---------- Typed identifier chips (components/Ident.tsx) ---------- */
+
+  .ident {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-1);
+    max-width: 100%;
+    height: calc(var(--control-h-sm) - var(--space-2)); /* 22px */
+    padding: 0 var(--space-2);
+    border: 1px solid transparent;
+    border-radius: var(--radius-sm);
+    background: var(--ident-soft, var(--bg-elev));
+    color: var(--ident-fg, var(--text));
+    font-family: var(--mono);
+    font-size: 12px;
+    line-height: 1;
+    white-space: nowrap;
+    vertical-align: middle;
+  }
+  .ident-kind {
+    font-family: var(--sans);
+    font-size: 10.5px;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    opacity: 0.75;
+  }
+  .ident-value {
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .ident-app {
+    --ident-fg: var(--ident-app);
+    --ident-soft: var(--ident-app-soft);
+  }
+  .ident-env {
+    --ident-fg: var(--ident-env);
+    --ident-soft: var(--ident-env-soft);
+  }
+  .ident-ns {
+    --ident-fg: var(--ident-ns);
+    --ident-soft: var(--ident-ns-soft);
+  }
+  .ident-alias {
+    --ident-fg: var(--ident-alias);
+    --ident-soft: var(--ident-alias-soft);
+  }
+  .ident-key {
+    --ident-fg: var(--ident-key);
+    --ident-soft: var(--ident-key-soft);
+  }
+  .ident-release {
+    --ident-fg: var(--ident-release);
+    --ident-soft: var(--ident-release-soft);
+  }
+  .ident-schema {
+    --ident-fg: var(--ident-schema);
+    --ident-soft: var(--ident-schema-soft);
+  }
+  .ident-version {
+    --ident-fg: var(--ident-version);
+    --ident-soft: var(--ident-version-soft);
+  }
+  .ident-revision {
+    --ident-fg: var(--ident-revision);
+    --ident-soft: var(--ident-revision-soft);
+  }
+  .ident-identity {
+    --ident-fg: var(--ident-identity);
+    --ident-soft: var(--ident-identity-soft);
+  }
+  .ident-instance {
+    --ident-fg: var(--ident-instance);
+    --ident-soft: var(--ident-instance-soft);
+  }
+  /* Production environments carry the warning ring wherever they are named. */
+  .ident-prod {
+    border-color: var(--warning);
+  }
+  .ident-link {
+    display: inline-flex;
+    max-width: 100%;
+    text-decoration: none;
+  }
+  .ident-link:hover {
+    text-decoration: none;
+  }
+  .ident-link:hover .ident {
+    border-color: currentColor;
+  }
+  .ident-tip {
+    display: inline-flex;
+    max-width: 100%;
+  }
+
+  /* ---------- Breadcrumbs (components/Breadcrumbs.tsx) ---------- */
+
+  .crumbs-nav {
+    margin-bottom: var(--space-3);
+  }
+  .crumbs {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-1) var(--space-2);
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    font-size: 12.5px;
+    color: var(--text-muted);
+  }
+  .crumb {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
+    min-width: 0;
+  }
+  .crumb + .crumb::before {
+    content: "›";
+    color: var(--text-faint);
+  }
+  .crumb-link {
+    color: var(--text-muted);
+  }
+  .crumb-link:hover {
+    color: var(--text);
+  }
+  .crumb[aria-current="page"] .crumb-label {
+    color: var(--text);
+    font-weight: 600;
+  }
+
+  /* ---------- Readiness status (components/StatusChip.tsx) ---------- */
+
+  .status-ready {
+    --status-color: var(--success);
+  }
+  .status-attention,
+  .status-incomplete,
+  .status-drift {
+    --status-color: var(--warning);
+  }
+  .status-blocked,
+  .status-degraded {
+    --status-color: var(--danger);
+  }
+  .status-rolling,
+  .status-unreleased {
+    --status-color: var(--primary);
+  }
+  .status-setup,
+  .status-empty {
+    --status-color: var(--text-faint);
+  }
+  .status-chip.status-prod {
+    border-color: var(--warning);
+  }
+  .status-dot {
+    display: inline-block;
+    width: 10px;
+    height: 10px;
+    border-radius: 999px;
+    background: var(--status-color, var(--text-faint));
+    box-shadow: 0 0 0 2px var(--surface);
+    vertical-align: middle;
+  }
+  .status-dot.status-prod {
+    outline: 1px solid var(--warning);
+    outline-offset: 2px;
+  }
+
+  /* ---------- Keyboard hint + sidebar search ---------- */
+
+  .kbd {
+    display: inline-flex;
+    align-items: center;
+    height: 18px;
+    padding: 0 var(--space-1);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-sm);
+    background: var(--surface);
+    box-shadow: inset 0 -1px 0 var(--border);
+    color: var(--text-muted);
+    font-family: var(--sans);
+    font-size: 11px;
+    font-weight: 600;
+    line-height: 1;
+  }
+  .nav-search {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    height: var(--control-h-sm);
+    margin: 0 var(--space-3) var(--space-1);
+    padding: 0 var(--space-3);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: var(--surface);
+    color: var(--text-faint);
+    font-size: 12.5px;
+    text-align: left;
+    cursor: pointer;
+  }
+  .nav-search:hover {
+    border-color: var(--border-strong);
+    color: var(--text-muted);
+  }
+  .nav-search-label {
+    flex: 1;
+  }
+
+  /* ---------- Client-identity strip under the top bar ---------- */
+
+  .identity-strip {
+    padding: var(--space-2) var(--space-7);
+    border-bottom: 1px solid var(--border);
+    background: var(--accent-soft);
+    color: var(--text-muted);
+    font-size: 12.5px;
+  }
+
+  /* ---------- Rollout transport (components/TransportBadge.tsx) ---------- */
+
+  .transport-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-1);
+    height: calc(var(--control-h-sm) - var(--space-2));
+    padding: 0 var(--space-2);
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    background: var(--surface);
+    color: var(--text-muted);
+    font-size: 11.5px;
+    white-space: nowrap;
+  }
+  .transport-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 999px;
+    background: var(--text-faint);
+  }
+  .transport-stream .transport-dot {
+    background: var(--success);
+    box-shadow: 0 0 0 3px var(--success-soft);
+  }
+  .transport-poll .transport-dot {
+    background: var(--info);
+  }
+  .transport-badge.is-stale {
+    border-color: var(--warning);
+    background: var(--warning-soft);
+    color: var(--warning-fg);
+  }
+  .transport-badge.is-stale .transport-dot {
+    background: var(--warning);
+    box-shadow: none;
+  }
+  .transport-time {
+    color: var(--text-faint);
+  }
+
+  /* ---------- Readiness findings (components/FindingList.tsx) ---------- */
+
+  .finding-list {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+  .finding {
+    display: flex;
+    align-items: flex-start;
+    gap: var(--space-3);
+    padding: var(--space-2) var(--space-3);
+    border: 1px solid var(--border);
+    border-left-width: 3px;
+    border-radius: var(--radius-sm);
+    background: var(--surface);
+    font-size: 12.5px;
+  }
+  .finding-blocking {
+    border-left-color: var(--danger);
+  }
+  .finding-warning {
+    border-left-color: var(--warning);
+  }
+  .finding-info {
+    border-left-color: var(--info);
+  }
+  .finding-severity {
+    flex-shrink: 0;
+    text-transform: capitalize;
+  }
+  .finding-body {
+    display: flex;
+    flex: 1;
+    flex-direction: column;
+    gap: var(--space-1);
+    min-width: 0;
+  }
+  .finding-scope {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-1);
+  }
+  .finding-fix {
+    flex-shrink: 0;
   }
 
   /* ---------- Mobile (<= 768px): drawer navigation, single-column layout ---------- */

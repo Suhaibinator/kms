@@ -1,0 +1,114 @@
+{
+  "applications": [
+    {
+      "application": {
+        "name": "gradethis",
+        "description": "Grading API",
+        "release_name": "runtime",
+        "schema_id": "gradethis-runtime",
+        "schema_version": 3,
+        "contract": [
+          {
+            "alias": "database",
+            "kind": "parameter",
+            "content_type": "json"
+          },
+          {
+            "alias": "rate_limits",
+            "kind": "parameter",
+            "content_type": "json"
+          },
+          {
+            "alias": "db_password",
+            "kind": "secret"
+          }
+        ],
+        "created_by": "admin",
+        "created_at_unix_ms": 1755000000000,
+        "updated_at_unix_ms": 1755600000000,
+        "environment_count": 2
+      },
+      "status": "attention",
+      "environments": [
+        {
+          "env": "dev",
+          "status": "ready",
+          "production": false
+        },
+        {
+          "env": "prod",
+          "status": "degraded",
+          "production": true
+        }
+      ]
+    },
+    {
+      "application": {
+        "name": "billing",
+        "description": "Invoicing worker",
+        "release_name": "runtime",
+        "schema_id": "",
+        "schema_version": 0,
+        "contract": [
+          {
+            "alias": "database",
+            "kind": "parameter",
+            "content_type": "json"
+          },
+          {
+            "alias": "rate_limits",
+            "kind": "parameter",
+            "content_type": "json"
+          },
+          {
+            "alias": "db_password",
+            "kind": "secret"
+          }
+        ],
+        "created_by": "admin",
+        "created_at_unix_ms": 1755000000000,
+        "updated_at_unix_ms": 1755000000000,
+        "environment_count": 0
+      },
+      "status": "setup",
+      "environments": []
+    },
+    {
+      "application": {
+        "name": "reports",
+        "description": "Nightly reports",
+        "release_name": "runtime",
+        "schema_id": "gradethis-runtime",
+        "schema_version": 3,
+        "contract": [
+          {
+            "alias": "database",
+            "kind": "parameter",
+            "content_type": "json"
+          },
+          {
+            "alias": "rate_limits",
+            "kind": "parameter",
+            "content_type": "json"
+          },
+          {
+            "alias": "db_password",
+            "kind": "secret"
+          }
+        ],
+        "created_by": "admin",
+        "created_at_unix_ms": 1755000000000,
+        "updated_at_unix_ms": 1755600000000,
+        "environment_count": 1
+      },
+      "status": "ready",
+      "environments": [
+        {
+          "env": "prod-eu",
+          "status": "ready",
+          "production": true
+        }
+      ]
+    }
+  ]
+}

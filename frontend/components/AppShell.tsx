@@ -1,9 +1,15 @@
+import { Search } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/router";
 import { type ReactNode, useEffect, useMemo, useState } from "react";
+import CommandPalette from "@/components/palette/CommandPalette";
 import { Button } from "@/components/ui/button";
+import { Kbd } from "@/components/ui/kbd";
 import { Sheet, SheetContent, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
+import { TooltipProvider } from "@/components/ui/tooltip";
 import { useAuth } from "@/context/AuthContext";
+import { displayNamespace } from "@/lib/format";
+import type { Identity } from "@/lib/types";
 import { Icon } from "./icons";
 import { LogoMark } from "./LogoMark";
 import { ThemeSwitch } from "./ThemeSwitch";
@@ -21,14 +27,20 @@ interface NavGroup {
   items: NavItem[];
 }
 
-const NAV: NavGroup[] = [
+// Applications is the primary destination, so it stands alone above the
+// per-resource "Browse" pages that are entered from an application page.
+export const NAV: NavGroup[] = [
   {
     items: [{ href: "/", label: "Overview", icon: <Icon.dashboard />, exact: true }],
   },
   {
-    label: "Configuration",
     items: [
       { href: "/applications", label: "Applications", icon: <Icon.application />, adminOnly: true },
+    ],
+  },
+  {
+    label: "Browse",
+    items: [
       { href: "/namespaces", label: "App environments", icon: <Icon.namespace /> },
       { href: "/parameters", label: "Parameters", icon: <Icon.parameter /> },
       { href: "/secrets", label: "Secrets", icon: <Icon.secret /> },
@@ -63,12 +75,14 @@ function SidebarContent({
   identity,
   logout,
   onNavigate,
+  onSearch,
 }: {
   groups: NavGroup[];
   pathname: string;
   identity: { name: string; kind: string } | null;
   logout: () => void;
   onNavigate?: () => void;
+  onSearch: () => void;
 }) {
   return (
     <>
@@ -79,6 +93,17 @@ function SidebarContent({
           <div className="brand-sub">Parameter &amp; Secret Store</div>
         </div>
       </div>
+
+      <button
+        type="button"
+        className="nav-search"
+        onClick={onSearch}
+        aria-keyshortcuts="Meta+K Control+K"
+      >
+        <Search size={15} strokeWidth={1.9} aria-hidden />
+        <span className="nav-search-label">Search…</span>
+        <Kbd>⌘K</Kbd>
+      </button>
 
       <nav className="nav" aria-label="Primary navigation">
         {groups.map((group) => (
@@ -118,10 +143,30 @@ function SidebarContent({
   );
 }
 
+/** The strip a client identity sees: what it is bound to, and why admin pages are missing. */
+function IdentityStrip({ identity }: { identity: Identity }) {
+  const method = identity.auth_method ? ` (${identity.auth_method})` : "";
+  const binding = identity.namespace
+    ? ` bound to ${displayNamespace(identity.namespace)}`
+    : ", not bound to an environment";
+  return (
+    <div className="identity-strip" role="note">
+      Signed in as client identity <span className="mono">{identity.name}</span>
+      {method}
+      {binding}. Application management requires an admin identity.
+    </div>
+  );
+}
+
+export function isPaletteShortcut(event: KeyboardEvent): boolean {
+  return (event.metaKey || event.ctrlKey) && !event.altKey && event.key.toLowerCase() === "k";
+}
+
 export default function AppShell({ children }: { children: ReactNode }) {
   const router = useRouter();
   const { identity, logout } = useAuth();
   const [navOpen, setNavOpen] = useState(false);
+  const [paletteOpen, setPaletteOpen] = useState(false);
   const visibleNav = useMemo(
     () =>
       NAV.map((group) => ({
@@ -139,63 +184,85 @@ export default function AppShell({ children }: { children: ReactNode }) {
     return () => router.events.off("routeChangeStart", close);
   }, [router.events]);
 
+  // ⌘K / Ctrl+K toggles the command palette from anywhere in the shell.
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (!isPaletteShortcut(event)) return;
+      event.preventDefault();
+      setPaletteOpen((open) => !open);
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, []);
+
+  const openPalette = () => setPaletteOpen(true);
+
   return (
-    <div className="app-shell">
-      {/* First focus stop on every page, so keyboard users can jump the nav. */}
-      <a
-        href="#main-content"
-        className="sr-only rounded-md focus:not-sr-only focus:absolute focus:top-2 focus:left-2 focus:z-100 focus:bg-popover focus:px-3 focus:py-2 focus:text-sm focus:ring-1 focus:ring-border"
-      >
-        Skip to content
-      </a>
-      <Sheet open={navOpen} onOpenChange={setNavOpen}>
-        <header className="mobile-topbar">
-          <SheetTrigger
-            render={
-              <Button
-                type="button"
-                variant="outline"
-                size="icon"
-                className="hidden shrink-0 max-md:inline-flex max-md:size-11 max-md:min-w-11"
-                aria-label="Open navigation"
-              />
-            }
-          >
-            <Icon.menu />
-          </SheetTrigger>
-          <div className="mobile-topbar-brand">
-            <LogoMark />
-            <span>KMS</span>
-          </div>
-        </header>
-        <SheetContent
-          side="left"
-          closeLabel="Close navigation"
-          className="mobile-sidebar w-[min(84vw,300px)] max-w-none gap-0 p-0"
+    <TooltipProvider delay={300}>
+      <div className="app-shell">
+        {/* First focus stop on every page, so keyboard users can jump the nav. */}
+        <a
+          href="#main-content"
+          className="sr-only rounded-md focus:not-sr-only focus:absolute focus:top-2 focus:left-2 focus:z-100 focus:bg-popover focus:px-3 focus:py-2 focus:text-sm focus:ring-1 focus:ring-border"
         >
-          <SheetTitle className="sr-only">Primary navigation</SheetTitle>
+          Skip to content
+        </a>
+        <Sheet open={navOpen} onOpenChange={setNavOpen}>
+          <header className="mobile-topbar">
+            <SheetTrigger
+              render={
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="icon"
+                  className="hidden shrink-0 max-md:inline-flex max-md:size-11 max-md:min-w-11"
+                  aria-label="Open navigation"
+                />
+              }
+            >
+              <Icon.menu />
+            </SheetTrigger>
+            <div className="mobile-topbar-brand">
+              <LogoMark />
+              <span>KMS</span>
+            </div>
+          </header>
+          <SheetContent
+            side="left"
+            closeLabel="Close navigation"
+            className="mobile-sidebar w-[min(84vw,300px)] max-w-none gap-0 p-0"
+          >
+            <SheetTitle className="sr-only">Primary navigation</SheetTitle>
+            <SidebarContent
+              groups={visibleNav}
+              pathname={router.pathname}
+              identity={identity}
+              logout={logout}
+              onNavigate={() => setNavOpen(false)}
+              onSearch={() => {
+                setNavOpen(false);
+                openPalette();
+              }}
+            />
+          </SheetContent>
+        </Sheet>
+
+        <aside className="sidebar desktop-sidebar">
           <SidebarContent
             groups={visibleNav}
             pathname={router.pathname}
             identity={identity}
             logout={logout}
-            onNavigate={() => setNavOpen(false)}
+            onSearch={openPalette}
           />
-        </SheetContent>
-      </Sheet>
+        </aside>
 
-      <aside className="sidebar desktop-sidebar">
-        <SidebarContent
-          groups={visibleNav}
-          pathname={router.pathname}
-          identity={identity}
-          logout={logout}
-        />
-      </aside>
-
-      <main id="main-content" className="main">
-        <div className="page">{children}</div>
-      </main>
-    </div>
+        <main id="main-content" className="main">
+          {identity && identity.kind !== "admin" ? <IdentityStrip identity={identity} /> : null}
+          <div className="page">{children}</div>
+        </main>
+        <CommandPalette open={paletteOpen} onOpenChange={setPaletteOpen} />
+      </div>
+    </TooltipProvider>
   );
 }

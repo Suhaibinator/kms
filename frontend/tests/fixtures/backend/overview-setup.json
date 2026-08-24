@@ -1,0 +1,46 @@
+{
+  "application": {
+    "name": "billing",
+    "description": "Invoicing worker",
+    "release_name": "runtime",
+    "schema_id": "",
+    "schema_version": 0,
+    "contract": [
+      {
+        "alias": "database",
+        "kind": "parameter",
+        "content_type": "json"
+      },
+      {
+        "alias": "rate_limits",
+        "kind": "parameter",
+        "content_type": "json"
+      },
+      {
+        "alias": "db_password",
+        "kind": "secret"
+      }
+    ],
+    "created_by": "admin",
+    "created_at_unix_ms": 1755000000000,
+    "updated_at_unix_ms": 1755000000000,
+    "environment_count": 0
+  },
+  "status": "setup",
+  "findings": [
+    {
+      "code": "no_environments",
+      "severity": "warning",
+      "scope": {},
+      "params": {}
+    },
+    {
+      "code": "schema_unpinned",
+      "severity": "info",
+      "scope": {},
+      "params": {}
+    }
+  ],
+  "environments": [],
+  "rows": []
+}

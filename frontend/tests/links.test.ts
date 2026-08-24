@@ -5,10 +5,52 @@ const ns = { env: "prod", app: "billing api" };
 const ref = { ...ns, key: "db/password" };
 
 describe("links", () => {
+  it("overview", () => {
+    expect(links.overview()).toBe("/");
+  });
+
   it("applications", () => {
     expect(links.applications()).toBe("/applications");
     expect(links.application("payments-api")).toBe("/applications?app=payments-api");
     expect(links.application("a b")).toBe("/applications?app=a%20b");
+  });
+
+  it("application deep links keep the app, env, ship, tab, rollback order", () => {
+    expect(links.application("gradethis", {})).toBe("/applications?app=gradethis");
+    expect(links.application("gradethis", { env: "prod" })).toBe(
+      "/applications?app=gradethis&env=prod",
+    );
+    expect(links.application("gradethis", { env: "prod-eu", ship: "rate_limits" })).toBe(
+      "/applications?app=gradethis&env=prod-eu&ship=rate_limits",
+    );
+    expect(links.application("gradethis", { ship: true })).toBe(
+      "/applications?app=gradethis&ship=1",
+    );
+    expect(links.application("gradethis", { ship: false })).toBe("/applications?app=gradethis");
+    expect(links.application("gradethis", { ship: "a b" })).toBe(
+      "/applications?app=gradethis&ship=a%20b",
+    );
+    expect(links.application("gradethis", { tab: "matrix" })).toBe(
+      "/applications?app=gradethis&tab=matrix",
+    );
+    expect(links.application("gradethis", { env: "prod", rollback: true })).toBe(
+      "/applications?app=gradethis&env=prod&rollback=1",
+    );
+    expect(links.application("a b", { env: "dev", ship: "x", tab: "matrix", rollback: true })).toBe(
+      "/applications?app=a%20b&env=dev&ship=x&tab=matrix&rollback=1",
+    );
+  });
+
+  it("identities", () => {
+    expect(links.identities()).toBe("/identities");
+    expect(links.identities({})).toBe("/identities");
+    expect(links.identities({ env: "prod", app: "billing api" })).toBe(
+      "/identities?env=prod&app=billing%20api",
+    );
+    expect(links.identities({ env: "prod", app: "gradethis", new: true })).toBe(
+      "/identities?env=prod&app=gradethis&new=1",
+    );
+    expect(links.identities({ new: true })).toBe("/identities?new=1");
   });
 
   it("namespaces", () => {
@@ -59,5 +101,9 @@ describe("links", () => {
       "/releases?app=billing&env=prod&name=run%20time&tab=schemas",
     );
     expect(links.releases({ tab: "schemas" })).toBe("/releases?tab=schemas");
+    expect(
+      links.releases({ app: "gradethis", env: "prod", name: "runtime", release: "runtime@12" }),
+    ).toBe("/releases?app=gradethis&env=prod&name=runtime&release=runtime%4012");
+    expect(links.releases({ release: "run time@1" })).toBe("/releases?release=run%20time%401");
   });
 });

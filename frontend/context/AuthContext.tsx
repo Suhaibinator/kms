@@ -9,8 +9,8 @@ import {
 } from "react";
 import { useToast } from "@/context/ToastContext";
 import {
-  api,
   ApiError,
+  api,
   clearToken,
   getToken,
   isAbortError,
@@ -73,6 +73,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           name: current.name,
           kind: current.kind,
           namespace: current.namespace,
+          auth_method: current.auth_method,
         };
         storeIdentity(verifiedIdentity);
         setIdentity(verifiedIdentity);
@@ -126,7 +127,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       // /auth/login omits the bound namespace, which the shell needs to scope
       // navigation. A failure here is not fatal — the next load fills it in.
       const me = await api.whoami();
-      id = { name: me.name, kind: me.kind, namespace: me.namespace };
+      id = { name: me.name, kind: me.kind, namespace: me.namespace, auth_method: me.auth_method };
     } catch (err) {
       if (!getToken()) throw err; // whoami 401'd and cleared it: not a real session
     }

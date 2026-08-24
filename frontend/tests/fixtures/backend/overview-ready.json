@@ -1,0 +1,360 @@
+{
+  "application": {
+    "name": "gradethis",
+    "description": "Grading API",
+    "release_name": "runtime",
+    "schema_id": "gradethis-runtime",
+    "schema_version": 3,
+    "contract": [
+      {
+        "alias": "database",
+        "kind": "parameter",
+        "content_type": "json"
+      },
+      {
+        "alias": "rate_limits",
+        "kind": "parameter",
+        "content_type": "json"
+      },
+      {
+        "alias": "db_password",
+        "kind": "secret"
+      }
+    ],
+    "created_by": "admin",
+    "created_at_unix_ms": 1755000000000,
+    "updated_at_unix_ms": 1755600000000,
+    "environment_count": 2
+  },
+  "status": "ready",
+  "findings": [
+    {
+      "code": "production",
+      "severity": "info",
+      "scope": {
+        "env": "prod"
+      },
+      "params": {}
+    }
+  ],
+  "environments": [
+    {
+      "namespace": {
+        "env": "dev",
+        "app": "gradethis",
+        "description": "Developer sandbox",
+        "allowed_auth_methods": ["token"],
+        "created_by": "admin",
+        "created_at_unix_ms": 1755000001000,
+        "parameter_count": 2,
+        "secret_count": 1
+      },
+      "production": false,
+      "status": "ready",
+      "values_state": "complete",
+      "release_state": "active",
+      "rollout_state": "applied",
+      "values": [
+        {
+          "alias": "database",
+          "kind": "parameter",
+          "key": "database",
+          "present": true,
+          "content_type": "json",
+          "current_version": 8,
+          "pinned_version": 8
+        },
+        {
+          "alias": "rate_limits",
+          "kind": "parameter",
+          "key": "rate_limits",
+          "present": true,
+          "content_type": "json",
+          "current_version": 9,
+          "pinned_version": 9
+        },
+        {
+          "alias": "db_password",
+          "kind": "secret",
+          "key": "db_password",
+          "present": true,
+          "current_version": 2,
+          "client_bound": false,
+          "pinned_version": 2
+        }
+      ],
+      "release": {
+        "active": {
+          "name": "runtime",
+          "version": 12,
+          "activation_revision": 41,
+          "previous_version": 11,
+          "created_by": "admin",
+          "created_at_unix_ms": 1755700000000,
+          "is_rolled_back": false,
+          "schema_id": "gradethis-runtime",
+          "schema_version": 3,
+          "digest": "sha256:5c1d7b3a1e8f4d2c9b0a6e7f8d9c0b1a",
+          "entries": [
+            {
+              "alias": "database",
+              "kind": "parameter",
+              "ref": {
+                "namespace": {
+                  "env": "dev",
+                  "app": "gradethis"
+                },
+                "key": "database"
+              },
+              "version": 8,
+              "content_type": "json",
+              "metadata_json": "{}",
+              "parameter_digest": "sha256:1f0e3dad99908345f7439f8ffabdffc4",
+              "client_bound": false,
+              "has_access_token": false
+            },
+            {
+              "alias": "db_password",
+              "kind": "secret",
+              "ref": {
+                "namespace": {
+                  "env": "dev",
+                  "app": "gradethis"
+                },
+                "key": "db_password"
+              },
+              "version": 2,
+              "content_type": "",
+              "metadata_json": "{}",
+              "parameter_digest": "",
+              "client_bound": false,
+              "has_access_token": false
+            },
+            {
+              "alias": "rate_limits",
+              "kind": "parameter",
+              "ref": {
+                "namespace": {
+                  "env": "dev",
+                  "app": "gradethis"
+                },
+                "key": "rate_limits"
+              },
+              "version": 9,
+              "content_type": "json",
+              "metadata_json": "{}",
+              "parameter_digest": "sha256:9a0364b9e99bb480dd25e1f0284c8555",
+              "client_bound": false,
+              "has_access_token": false
+            }
+          ]
+        },
+        "latest_version": 12,
+        "release_count": 12
+      },
+      "rollout": {
+        "total": 2,
+        "connected": 2,
+        "applied_current": 2,
+        "rejected": 0,
+        "pending": 0,
+        "stale": 0,
+        "other_release_names": [],
+        "rejected_instances": [],
+        "truncated": false
+      },
+      "findings": []
+    },
+    {
+      "namespace": {
+        "env": "prod",
+        "app": "gradethis",
+        "description": "Production",
+        "allowed_auth_methods": ["mtls"],
+        "created_by": "admin",
+        "created_at_unix_ms": 1755000001000,
+        "parameter_count": 2,
+        "secret_count": 1
+      },
+      "production": true,
+      "status": "ready",
+      "values_state": "complete",
+      "release_state": "active",
+      "rollout_state": "applied",
+      "values": [
+        {
+          "alias": "database",
+          "kind": "parameter",
+          "key": "database",
+          "present": true,
+          "content_type": "json",
+          "current_version": 5,
+          "pinned_version": 5
+        },
+        {
+          "alias": "rate_limits",
+          "kind": "parameter",
+          "key": "rate_limits",
+          "present": true,
+          "content_type": "json",
+          "current_version": 6,
+          "pinned_version": 6
+        },
+        {
+          "alias": "db_password",
+          "kind": "secret",
+          "key": "db_password",
+          "present": true,
+          "current_version": 3,
+          "client_bound": false,
+          "pinned_version": 3
+        }
+      ],
+      "release": {
+        "active": {
+          "name": "runtime",
+          "version": 7,
+          "activation_revision": 44,
+          "previous_version": 6,
+          "created_by": "admin",
+          "created_at_unix_ms": 1755700000000,
+          "is_rolled_back": false,
+          "schema_id": "gradethis-runtime",
+          "schema_version": 3,
+          "digest": "sha256:5c1d7b3a1e8f4d2c9b0a6e7f8d9c0b1a",
+          "entries": [
+            {
+              "alias": "database",
+              "kind": "parameter",
+              "ref": {
+                "namespace": {
+                  "env": "prod",
+                  "app": "gradethis"
+                },
+                "key": "database"
+              },
+              "version": 5,
+              "content_type": "json",
+              "metadata_json": "{}",
+              "parameter_digest": "sha256:1f0e3dad99908345f7439f8ffabdffc4",
+              "client_bound": false,
+              "has_access_token": false
+            },
+            {
+              "alias": "db_password",
+              "kind": "secret",
+              "ref": {
+                "namespace": {
+                  "env": "prod",
+                  "app": "gradethis"
+                },
+                "key": "db_password"
+              },
+              "version": 3,
+              "content_type": "",
+              "metadata_json": "{}",
+              "parameter_digest": "",
+              "client_bound": false,
+              "has_access_token": false
+            },
+            {
+              "alias": "rate_limits",
+              "kind": "parameter",
+              "ref": {
+                "namespace": {
+                  "env": "prod",
+                  "app": "gradethis"
+                },
+                "key": "rate_limits"
+              },
+              "version": 6,
+              "content_type": "json",
+              "metadata_json": "{}",
+              "parameter_digest": "sha256:9a0364b9e99bb480dd25e1f0284c8555",
+              "client_bound": false,
+              "has_access_token": false
+            }
+          ]
+        },
+        "latest_version": 7,
+        "release_count": 7
+      },
+      "rollout": {
+        "total": 5,
+        "connected": 5,
+        "applied_current": 5,
+        "rejected": 0,
+        "pending": 0,
+        "stale": 0,
+        "other_release_names": [],
+        "rejected_instances": [],
+        "truncated": false
+      },
+      "findings": [
+        {
+          "code": "production",
+          "severity": "info",
+          "scope": {
+            "env": "prod"
+          },
+          "params": {}
+        }
+      ]
+    }
+  ],
+  "rows": [
+    {
+      "key": "database",
+      "kind": "parameter",
+      "environments": {
+        "dev": {
+          "present": true,
+          "content_type": "json",
+          "version": 8
+        },
+        "prod": {
+          "present": true,
+          "content_type": "json",
+          "version": 5
+        }
+      }
+    },
+    {
+      "key": "rate_limits",
+      "kind": "parameter",
+      "environments": {
+        "dev": {
+          "present": true,
+          "content_type": "json",
+          "version": 9
+        },
+        "prod": {
+          "present": true,
+          "content_type": "json",
+          "version": 6
+        }
+      }
+    },
+    {
+      "key": "db_password",
+      "kind": "secret",
+      "environments": {
+        "dev": {
+          "present": true,
+          "content_type": "",
+          "version": 2,
+          "client_bound": false,
+          "has_access_token": false
+        },
+        "prod": {
+          "present": true,
+          "content_type": "",
+          "version": 3,
+          "client_bound": false,
+          "has_access_token": false
+        }
+      }
+    }
+  ],
+  "schema_json": "{\"$schema\": \"https://json-schema.org/draft/2020-12/schema\", \"type\": \"object\", \"additionalProperties\": false, \"required\": [\"database\", \"rate_limits\"], \"properties\": {\"database\": {\"type\": \"object\"}, \"rate_limits\": {\"type\": \"object\"}}}"
+}

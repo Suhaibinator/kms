@@ -1,14 +1,19 @@
 // Single source of truth for talking to the KMS HTTP API (docs/http-api.md).
 // Everything goes through fetch; there is no server runtime.
 
+import { readEventStream } from "./sse";
 import type {
+  ActivateReleaseResponse,
+  ApiErrorEnvelope,
   Application,
   ApplicationContractField,
   ApplicationDashboard,
+  ApplicationOverview,
   ApplicationWriteResult,
-  ApiErrorEnvelope,
   AuditFilters,
   CaResponse,
+  CloneEnvironmentRequest,
+  CloneEnvironmentResponse,
   ConfigurationRelease,
   ConfigurationSchema,
   CreateIdentityRequest,
@@ -17,6 +22,7 @@ import type {
   CreateReleaseRequest,
   CreateSecretRequest,
   CreateSecretResponse,
+  FleetOverview,
   HealthResponse,
   Identity,
   IssueCertResponse,
@@ -41,8 +47,13 @@ import type {
   ReleaseValidationError,
   RevealSecretResponse,
   RevisionResponse,
+  RollbackRequest,
+  RollbackResponse,
   RotateIdentityResponse,
   SecretMetadata,
+  ShipRequest,
+  ShipResult,
+  SubscriberStreamSnapshot,
   SubscribersResponse,
   UpdateNamespaceRequest,
   ValidateReleaseResponse,
@@ -71,6 +82,13 @@ export class ApiError extends Error {
     this.status = status;
     this.validationErrors = validationErrors;
   }
+}
+
+// 409 arrives as code `already_exists` (see httpStatusToCode) whatever the
+// server meant by it — a duplicate name or a compare-and-swap that lost. The
+// status is the reliable signal, so ship/rollback/clone callers test this.
+export function isConflict(err: unknown): boolean {
+  return err instanceof ApiError && err.status === 409;
 }
 
 // --- Token + cached identity (memory + sessionStorage) ---
@@ -332,6 +350,31 @@ export const api = {
   },
   applicationDashboard(name: string, request?: ApiRequestOptions): Promise<ApplicationDashboard> {
     return apiFetch(`/applications/dashboard${qs({ name })}`, request);
+  },
+  getApplication(name: string, request?: ApiRequestOptions): Promise<{ application: Application }> {
+    return apiFetch(`/applications/get${qs({ name })}`, request);
+  },
+  // The application page's read model: status, findings and one
+  // EnvironmentOverview per environment (or only `envs` when given).
+  applicationOverview(
+    name: string,
+    envs?: string[],
+    request?: ApiRequestOptions,
+  ): Promise<ApplicationOverview> {
+    const env = envs && envs.length > 0 ? envs.join(",") : undefined;
+    return apiFetch(`/applications/overview${qs({ name, env })}`, request);
+  },
+  // The rows-free fleet form: every application with per-environment status.
+  fleetOverview(request?: ApiRequestOptions): Promise<FleetOverview> {
+    return apiFetch("/applications/overview", request);
+  },
+  // Write values, create a release and activate it in one call. Every
+  // evaluated outcome is a 200 with `status`; only preflight errors throw.
+  ship(req: ShipRequest): Promise<ShipResult> {
+    return apiFetch("/applications/ship", { method: "POST", body: req });
+  },
+  cloneEnvironment(req: CloneEnvironmentRequest): Promise<CloneEnvironmentResponse> {
+    return apiFetch("/applications/environments/clone", { method: "POST", body: req });
   },
   putApplicationParameter(req: {
     application: string;
@@ -623,16 +666,17 @@ export const api = {
     name: string,
     version: number,
     expected?: number,
-  ): Promise<{
-    release: ConfigurationRelease;
-    activation_revision: number;
-    previous_version: number;
-    changed: boolean;
-  }> {
+  ): Promise<ActivateReleaseResponse> {
     return apiFetch("/releases/activate", {
       method: "POST",
       body: { namespace: ns, name, version, expected_current_version: expected },
     });
+  },
+  // Re-activates the previous version of `name`. A 409 means the active
+  // version moved past `expected_current_version`; `changed: false` means the
+  // previous version was already active.
+  rollbackRelease(req: RollbackRequest): Promise<RollbackResponse> {
+    return apiFetch("/releases/rollback", { method: "POST", body: req });
   },
   releaseSubscribers(
     ns: NamespaceRef,
@@ -644,6 +688,20 @@ export const api = {
     return apiFetch(
       `/release-subscribers${qs({ env: ns.env, app: ns.app, name, page_size: pageSize, page_token: pageToken })}`,
       request,
+    );
+  },
+  // Live rollout state for one release name. Resolves when the server ends the
+  // stream (event `end`) or closes it; rejects with an AbortError when `signal`
+  // fires, and with ApiError("unimplemented") when the server has no stream
+  // endpoint, so callers can fall back to polling releaseSubscribers.
+  subscriberStream(
+    ns: NamespaceRef,
+    name: string,
+    opts: { signal?: AbortSignal; onSnapshot: (snapshot: SubscriberStreamSnapshot) => void },
+  ): Promise<void> {
+    return openSubscriberStream(
+      `/release-subscribers/stream${qs({ env: ns.env, app: ns.app, name })}`,
+      opts,
     );
   },
   listSchemas(
@@ -669,6 +727,72 @@ export const api = {
     return apiFetch<KeysResponse>("/keys", request);
   },
 };
+
+const UNIMPLEMENTED_MESSAGE = "Live subscriber updates are not available on this server.";
+
+async function openSubscriberStream(
+  path: string,
+  {
+    signal,
+    onSnapshot,
+  }: { signal?: AbortSignal; onSnapshot: (s: SubscriberStreamSnapshot) => void },
+): Promise<void> {
+  const headers: Record<string, string> = { Accept: "text/event-stream" };
+  const token = getToken();
+  if (token) headers.Authorization = `Bearer ${token}`;
+
+  let res: Response;
+  try {
+    // No timeout: a healthy stream stays open indefinitely and the server
+    // sends a keep-alive comment every 15 s. `signal` is the only way out.
+    res = await fetch(`${API_BASE}${path}`, { headers, cache: "no-store", signal });
+  } catch (err) {
+    if (signal?.aborted) throw err;
+    throw new ApiError("unavailable", "Could not reach the server. Check your connection.", 0);
+  }
+
+  if (res.status === 401) {
+    clearToken();
+    if (typeof window !== "undefined") window.dispatchEvent(new Event(UNAUTHORIZED_EVENT));
+    throw new ApiError("unauthenticated", "Your session has ended.", 401);
+  }
+  if (res.status === 404 || res.status === 405 || res.status === 501) {
+    throw new ApiError("unimplemented", UNIMPLEMENTED_MESSAGE, res.status);
+  }
+  if (!res.ok) {
+    let env: ApiErrorEnvelope | null = null;
+    try {
+      env = JSON.parse(await res.text()) as ApiErrorEnvelope;
+    } catch {
+      env = null;
+    }
+    throw new ApiError(
+      env?.error?.code ?? httpStatusToCode(res.status),
+      env?.error?.message || res.statusText || "Request failed",
+      res.status,
+      Array.isArray(env?.error?.validation_errors) ? env.error.validation_errors : [],
+    );
+  }
+  const contentType = res.headers.get("content-type") ?? "";
+  if (!contentType.toLowerCase().startsWith("text/event-stream")) {
+    throw new ApiError("unimplemented", UNIMPLEMENTED_MESSAGE, res.status);
+  }
+  if (!res.body) {
+    throw new ApiError("internal", "The server returned an empty stream.", res.status);
+  }
+
+  await readEventStream(
+    res.body,
+    (message) => {
+      if (message.event === "end") return "stop";
+      if (message.event === "snapshot") {
+        onSnapshot(JSON.parse(message.data) as SubscriberStreamSnapshot);
+      }
+      return undefined;
+    },
+    signal,
+  );
+}
 
 export interface ReleaseSubscribersPage {
   subscribers: ReleaseSubscriberState[];

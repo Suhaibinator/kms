@@ -11,6 +11,18 @@ export function releaseKey(release: ConfigurationRelease): string {
   return `${release.name}@${release.version}`;
 }
 
+/** Inverse of releaseKey: `runtime@12` → {name, version}; null when malformed. */
+export function parseReleaseKey(key: string): { name: string; version: number } | null {
+  const at = key.lastIndexOf("@");
+  if (at <= 0 || at === key.length - 1) return null;
+  const name = key.slice(0, at);
+  const digits = key.slice(at + 1);
+  if (!/^\d+$/.test(digits)) return null;
+  const version = Number(digits);
+  if (!Number.isSafeInteger(version) || version < 1) return null;
+  return { name, version };
+}
+
 export function refText(entry: ConfigurationRelease["entries"][number]): string {
   const namespace = entry.ref.namespace;
   return displayPath({ env: namespace.env, app: namespace.app, key: entry.ref.key });

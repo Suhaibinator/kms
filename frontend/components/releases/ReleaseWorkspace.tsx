@@ -9,19 +9,12 @@ import { useToast } from "@/context/ToastContext";
 import { api, isAbortError } from "@/lib/api";
 import { formatUnixMs } from "@/lib/format";
 import { useCursorPagination, useLatestRequest } from "@/lib/hooks";
-import type {
-  ConfigurationRelease,
-  ReleaseSubscriberState,
-  ReleaseSummary,
-  ReleaseValidationError,
-} from "@/lib/types";
+import { groupSubscriberLifecycles } from "@/lib/subscribers";
+import type { ConfigurationRelease, ReleaseSubscriberState, ReleaseSummary } from "@/lib/types";
 import { refText, releaseKey } from "./utils";
+import { type ActivationFailure, ActivationFailurePanel } from "./ViolationTable";
 
-export interface ActivationFailure {
-  operation: "Activation" | "Rollback" | "Validation";
-  target: string;
-  violations: ReleaseValidationError[];
-}
+export type { ActivationFailure } from "./ViolationTable";
 
 function lifecycleCell(state: ReleaseSubscriberState | undefined) {
   if (!state) return <span className="faint">—</span>;
@@ -150,44 +143,7 @@ export function ReleaseWorkspace({
     });
   }, [comparison, release]);
 
-  const subscriberInstances = useMemo(() => {
-    const grouped = new Map<
-      string,
-      {
-        identity: string;
-        client: string;
-        instance: string;
-        connected: boolean;
-        states: Partial<
-          Record<"received" | "prepared" | "applied" | "rejected", ReleaseSubscriberState>
-        >;
-        latestRevision: number;
-      }
-    >();
-    for (const state of subscribers) {
-      const key = JSON.stringify([state.identity, state.client_name, state.instance_id]);
-      const row = grouped.get(key) ?? {
-        identity: state.identity,
-        client: state.client_name,
-        instance: state.instance_id,
-        connected: false,
-        states: {},
-        latestRevision: 0,
-      };
-      if (["received", "prepared", "applied", "rejected"].includes(state.state)) {
-        row.states[state.state as keyof typeof row.states] = state;
-      }
-      row.connected ||= state.connected;
-      row.latestRevision = Math.max(row.latestRevision, state.activation_revision);
-      grouped.set(key, row);
-    }
-    return [...grouped.values()].sort(
-      (a, b) =>
-        a.identity.localeCompare(b.identity) ||
-        a.client.localeCompare(b.client) ||
-        a.instance.localeCompare(b.instance),
-    );
-  }, [subscribers]);
+  const subscriberInstances = useMemo(() => groupSubscriberLifecycles(subscribers), [subscribers]);
 
   return (
     <Modal
@@ -226,49 +182,7 @@ export function ReleaseWorkspace({
           </div>
 
           {activationFailure ? (
-            <section className="danger-panel mb-4" role="alert">
-              <div className="between">
-                <div>
-                  <strong>
-                    {activationFailure.operation === "Validation"
-                      ? `${activationFailure.target} failed validation`
-                      : `${activationFailure.operation} blocked for ${activationFailure.target}`}
-                  </strong>
-                  <div className="text-sm mt-2">
-                    {activationFailure.operation === "Validation"
-                      ? "Resolve every violation before activating this release."
-                      : "The active release and activation revision were not changed."}
-                  </div>
-                </div>
-                <Button variant="outline" size="sm" onClick={onDismissFailure}>
-                  Dismiss
-                </Button>
-              </div>
-              <div className="table-wrap mt-3">
-                <table className="data">
-                  <thead>
-                    <tr>
-                      <th>Alias</th>
-                      <th>Code</th>
-                      <th>Schema pointer</th>
-                      <th>Message</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {activationFailure.violations.map((violation) => (
-                      <tr key={JSON.stringify(violation)}>
-                        <td className="mono">{violation.alias || "release"}</td>
-                        <td>
-                          <Badge kind="danger">{violation.code}</Badge>
-                        </td>
-                        <td className="mono">{violation.schema_pointer || "—"}</td>
-                        <td>{violation.message}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </section>
+            <ActivationFailurePanel failure={activationFailure} onDismiss={onDismissFailure} />
           ) : null}
 
           <TabsContent value="overview">
@@ -445,13 +359,13 @@ export function ReleaseWorkspace({
                       <tr
                         key={JSON.stringify([
                           instance.identity,
-                          instance.client,
-                          instance.instance,
+                          instance.client_name,
+                          instance.instance_id,
                         ])}
                       >
                         <td>{instance.identity}</td>
-                        <td>{instance.client}</td>
-                        <td className="mono">{instance.instance}</td>
+                        <td>{instance.client_name}</td>
+                        <td className="mono">{instance.instance_id}</td>
                         <td className="mono">{lifecycleCell(instance.states.received)}</td>
                         <td className="mono">{lifecycleCell(instance.states.prepared)}</td>
                         <td className="mono">{lifecycleCell(instance.states.applied)}</td>

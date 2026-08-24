@@ -1,0 +1,67 @@
+{
+  "status": "conflict",
+  "preview": {
+    "base_version": 7,
+    "release_name": "runtime",
+    "schema_id": "gradethis-runtime",
+    "schema_version": 3,
+    "entries": [
+      {
+        "alias": "database",
+        "kind": "parameter",
+        "key": "database",
+        "from_version": 5,
+        "to_version": 5,
+        "change": "included"
+      },
+      {
+        "alias": "db_password",
+        "kind": "secret",
+        "key": "db_password",
+        "from_version": 3,
+        "to_version": 3,
+        "change": "included"
+      },
+      {
+        "alias": "rate_limits",
+        "kind": "parameter",
+        "key": "rate_limits",
+        "from_version": 6,
+        "to_version": 11,
+        "change": "edited"
+      }
+    ],
+    "validation": {
+      "valid": true,
+      "errors": []
+    },
+    "warnings": [
+      {
+        "code": "production",
+        "severity": "info",
+        "scope": {
+          "env": "prod"
+        },
+        "params": {}
+      }
+    ]
+  },
+  "parameters": [
+    {
+      "alias": "rate_limits",
+      "key": "rate_limits",
+      "version": 11,
+      "revision": 52
+    }
+  ],
+  "release": {
+    "name": "runtime",
+    "version": 9,
+    "digest": "sha256:7d8c1a2b3e4f5061728394a5b6c7d8e9"
+  },
+  "error": {
+    "code": "already_exists",
+    "message": "prod/gradethis runtime moved to version 8 (expected 7); release 9 was created but not activated",
+    "current_version": 8
+  }
+}

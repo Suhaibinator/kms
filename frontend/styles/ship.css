@@ -1,0 +1,6 @@
+/* Feature styles for the ship surfaces. Append only; every rule stays inside
+   the layer so Tailwind utilities keep winning. */
+
+@layer components {
+  /* owned by lane F-ship */
+}

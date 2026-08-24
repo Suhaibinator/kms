@@ -29,6 +29,9 @@ export interface Identity {
   created_at_unix_ms?: number;
   // Bound namespace, or null/absent for unbound (admin/tooling) identities.
   namespace?: NamespaceRef | null;
+  // How the current session authenticated ("mtls" | "token"); only set on the
+  // signed-in identity, from /whoami.
+  auth_method?: string;
   has_token?: boolean;
   certs?: IdentityCert[];
 }
@@ -63,6 +66,10 @@ export interface HealthResponse {
   ready: boolean;
   version: string;
   current_revision: number;
+  // The gRPC listener SDKs connect to, and whether it serves TLS. Surfaced by
+  // the Connect SDK panel; `tls_enabled: false` is a warning, not a detail.
+  grpc_addr: string;
+  tls_enabled: boolean;
 }
 
 export interface ApiErrorEnvelope {
@@ -494,6 +501,13 @@ export interface ConfigurationSchema {
   created_at_unix_ms: number;
 }
 
+export interface ActivateReleaseResponse {
+  release: ConfigurationRelease;
+  activation_revision: number;
+  previous_version: number;
+  changed: boolean;
+}
+
 export interface ReleaseSubscriberState {
   namespace: NamespaceRef;
   release_name: string;
@@ -544,3 +558,289 @@ export const POLICY_OPERATIONS: string[] = [
 ];
 
 export const PARAMETER_CONTENT_TYPES: string[] = [...CONTENT_TYPES];
+
+// --- Console aggregates ------------------------------------------------------
+//
+// Read-model endpoints the console composes its application, fleet and ship
+// surfaces from. The backend computes every state and finding (readiness state
+// machine, plan §3.1); the frontend only renders. Copy for finding codes lives
+// in lib/readiness.ts, keyed by `code` — `params` carry numbers and names,
+// never values.
+
+export type AppStatus = "blocked" | "setup" | "attention" | "ready";
+
+export type EnvStatus =
+  | "blocked"
+  | "empty"
+  | "incomplete"
+  | "unreleased"
+  | "degraded"
+  | "rolling"
+  | "drift"
+  | "ready";
+
+export type ValuesState = "empty" | "incomplete" | "complete";
+
+export type ReleaseState = "none" | "active" | "drift" | "blocked";
+
+export type RolloutState = "no_subscribers" | "applied" | "rolling" | "degraded" | "stale";
+
+export type FindingCode =
+  | "no_environments"
+  | "contract_empty"
+  | "schema_unpinned"
+  | "schema_missing"
+  | "schema_property_missing_alias"
+  | "schema_required_missing_alias"
+  | "alias_not_in_schema"
+  | "contract_type_mismatch"
+  | "contract_release_mismatch"
+  | "release_pin_stale"
+  | "resource_missing"
+  | "kind_mismatch"
+  | "content_type_mismatch"
+  | "secret_unreadable"
+  | "secret_token_required"
+  | "no_active_release"
+  | "unreleased_changes"
+  | "alias_not_in_release"
+  | "no_subscribers"
+  | "subscriber_other_release"
+  | "instance_rejected"
+  | "instance_pending"
+  | "instance_stale"
+  | "rolled_back"
+  | "previous_unavailable"
+  | "production"
+  | "insecure_listener";
+
+export type FindingSeverity = "blocking" | "warning" | "info";
+
+export interface Finding {
+  code: FindingCode;
+  severity: FindingSeverity;
+  scope: {
+    env?: string;
+    alias?: string;
+    instance?: string;
+  };
+  params: Record<string, string | number>;
+}
+
+// One contract alias resolved against an environment (plan §3.1 alias → key
+// resolution). `key` is absent when the alias resolved to nothing.
+export interface OverviewValue {
+  alias: string;
+  kind: ReleaseEntryKind;
+  key?: string;
+  present: boolean;
+  content_type?: string;
+  current_version?: number;
+  pinned_version?: number;
+  client_bound?: boolean;
+}
+
+export interface OverviewActiveRelease {
+  name: string;
+  version: number;
+  activation_revision: number;
+  previous_version: number;
+  created_by: string;
+  created_at_unix_ms: number;
+  is_rolled_back: boolean;
+  schema_id: string;
+  schema_version: number;
+  digest: string;
+  entries: ConfigurationReleaseEntry[];
+}
+
+// The effective lifecycle row for one (identity, client, instance) triple —
+// see lib/subscribers.ts for how the raw state rows collapse into it.
+export interface SubscriberInstance {
+  identity: string;
+  client_name: string;
+  instance_id: string;
+  state: ReleaseSubscriberState["state"];
+  release_version: number;
+  activation_revision: number;
+  rejection_category: string;
+  diagnostic: string;
+  connected: boolean;
+  server_timestamp_unix_ms: number;
+}
+
+export interface OverviewRollout {
+  total: number;
+  connected: number;
+  applied_current: number;
+  rejected: number;
+  pending: number;
+  stale: number;
+  other_release_names: string[];
+  // At most 50; `truncated` says whether more were dropped.
+  rejected_instances: SubscriberInstance[];
+  truncated: boolean;
+}
+
+export interface EnvironmentOverview {
+  namespace: Namespace;
+  production: boolean;
+  status: EnvStatus;
+  values_state: ValuesState;
+  release_state: ReleaseState;
+  // Only meaningful while release_state is active or drift.
+  rollout_state: RolloutState;
+  values: OverviewValue[];
+  release: {
+    active?: OverviewActiveRelease;
+    latest_version: number;
+    release_count: number;
+  };
+  rollout: OverviewRollout;
+  findings: Finding[];
+}
+
+export interface ApplicationOverview {
+  application: Application;
+  status: AppStatus;
+  findings: Finding[];
+  environments: EnvironmentOverview[];
+  // The matrix tab's rows, unchanged from ApplicationDashboard.
+  rows: ApplicationConfigurationRow[];
+  schema_json?: string;
+}
+
+export interface FleetEnvironment {
+  env: string;
+  status: EnvStatus;
+  production: boolean;
+}
+
+export interface FleetApplication {
+  application: Application;
+  status: AppStatus;
+  environments: FleetEnvironment[];
+}
+
+export interface FleetOverview {
+  applications: FleetApplication[];
+}
+
+// One row of a ship request. `value` writes a new parameter version;
+// `version`/`label` pins an existing one without writing (drift opt-in, retry
+// reuse). Secrets accept version/label only — their values never travel here.
+export interface ShipChange {
+  alias: string;
+  value?: string;
+  content_type?: string;
+  version?: number;
+  label?: string;
+}
+
+export interface ShipRequest {
+  application: string;
+  environment: string;
+  changes: ShipChange[];
+  metadata_json?: string;
+  dry_run?: boolean;
+  expected_active_version?: number;
+  request_id?: string;
+}
+
+export type ShipEntryChange = "edited" | "pinned" | "included" | "missing";
+
+export interface ShipPreviewEntry {
+  alias: string;
+  kind: ReleaseEntryKind;
+  key: string;
+  from_version?: number;
+  to_version?: number;
+  change: ShipEntryChange;
+}
+
+export interface ShipPreview {
+  // The release the preview was built on: the active pins, or 0 when nothing
+  // is active yet (then the base is `current`).
+  base_version: number;
+  release_name: string;
+  schema_id: string;
+  schema_version: number;
+  entries: ShipPreviewEntry[];
+  validation: ValidateReleaseResponse;
+  warnings: Finding[];
+}
+
+export type ShipStatus =
+  | "preview"
+  | "activated"
+  | "rejected"
+  | "release_created_not_activated"
+  | "conflict";
+
+export interface ShipResult {
+  // 200 for every "we evaluated it" outcome; the status says what happened.
+  status: ShipStatus;
+  preview: ShipPreview;
+  parameters: Array<{ alias: string; key: string; version: number; revision: number }>;
+  release?: { name: string; version: number; digest: string };
+  activation?: { activation_revision: number; previous_version: number; changed: boolean };
+  error?: {
+    code: string;
+    message: string;
+    validation_errors?: ReleaseValidationError[];
+    current_version?: number;
+  };
+}
+
+export interface CloneEnvironmentRequest {
+  application: string;
+  source_env: string;
+  target_env: string;
+  copy_values: boolean;
+  auth_methods?: AuthMethod[];
+  description?: string;
+}
+
+export type CloneItemAction = "copied" | "needs_value" | "exists" | "missing_in_source" | "error";
+
+export interface CloneEnvironmentItem {
+  alias: string;
+  key: string;
+  kind: ReleaseEntryKind;
+  // Existing target keys are never overwritten → "exists". Secrets are never
+  // copied → "needs_value".
+  action: CloneItemAction;
+  source_version?: number;
+  target_version?: number;
+  error?: string;
+}
+
+export interface CloneEnvironmentResponse {
+  namespace: Namespace;
+  namespace_created: boolean;
+  items: CloneEnvironmentItem[];
+  needs_value: string[];
+}
+
+export interface RollbackRequest {
+  env: string;
+  app: string;
+  name: string;
+  expected_current_version?: number;
+}
+
+export interface RollbackResponse {
+  release: ConfigurationRelease;
+  activation_revision: number;
+  previous_version: number;
+  rolled_back_from: number;
+  changed: boolean;
+}
+
+// One `snapshot` frame on GET /release-subscribers/stream.
+export interface SubscriberStreamSnapshot {
+  summary: OverviewRollout;
+  subscribers: ReleaseSubscriberState[];
+  current_revision: number;
+  server_time_unix_ms: number;
+}
