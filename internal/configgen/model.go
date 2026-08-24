@@ -32,6 +32,7 @@ type ir struct {
 	Fields         []*fieldIR
 	Views          []*viewIR
 	InlinePointers []string
+	Annotations    annotations
 }
 
 type groupIR struct {
@@ -102,6 +103,7 @@ type nestedFieldIR struct {
 	Included bool
 	Type     *typeIR
 	Index    int
+	Position token.Pos
 }
 
 func analyzePackage(pkg *types.Package, sizes types.Sizes, typeName string) (*ir, error) {
@@ -587,7 +589,7 @@ func analyzeType(t types.Type, sizes types.Sizes, stack map[types.Type]bool, loc
 			if err != nil {
 				return nil, err
 			}
-			result.Fields = append(result.Fields, &nestedFieldIR{GoName: field.Name(), JSONName: jsonName, Included: included, Type: fieldType, Index: i})
+			result.Fields = append(result.Fields, &nestedFieldIR{GoName: field.Name(), JSONName: jsonName, Included: included, Type: fieldType, Index: i, Position: field.Pos()})
 			result.Mutable = result.Mutable || fieldType.Mutable
 		}
 		return result, nil

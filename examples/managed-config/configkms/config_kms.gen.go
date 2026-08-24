@@ -14,7 +14,7 @@ import (
 	time "time"
 )
 
-const generatedSchemaSHA256 = "af7d501708d23e1494b16295629087859bda547ea50afa772507c7222aee760b"
+const generatedSchemaSHA256 = "708295816e1990cad1d79648b2434c073acbca9e8e81a174c7182e13679418d4"
 
 var generatedContract = []configstore.ContractEntry{
 	{Alias: "runtime", Kind: configstore.ContractKindParameter, ContentType: "json"},

@@ -64,6 +64,29 @@ describe("schema-form model", () => {
     expect(root?.allowsExtra).toBe(false);
   });
 
+  it("sees through the generator's nullable wrapper", () => {
+    const wrapped: JsonSchema = {
+      type: "object",
+      properties: {
+        max_idle: {
+          anyOf: [{ type: "integer", minimum: 0 }, { type: "null" }],
+          description: "nil means unlimited",
+          default: null,
+        },
+        tags: { anyOf: [{ type: "array", items: { type: "string" } }, { type: "null" }] },
+      },
+    };
+    const root = buildForm(wrapped);
+    const maxIdle = root?.fields?.find((f) => f.name === "max_idle");
+    expect(maxIdle?.kind).toBe("number");
+    expect(maxIdle?.nullable).toBe(true);
+    expect(maxIdle?.description).toBe("nil means unlimited");
+    expect(root?.fields?.find((f) => f.name === "tags")?.kind).toBe("list");
+    expect(validateValue(wrapped, { max_idle: null, tags: null })).toEqual([]);
+    expect(validateValue(wrapped, { max_idle: -1 })[0]?.message).toBe("must be at least 0");
+    expect(validateValue(wrapped, { max_idle: "x" })[0]?.message).toContain("must be integer");
+  });
+
   it("returns null for a root that is not an object with properties", () => {
     expect(buildForm({ type: "object" })).toBeNull();
     expect(buildForm({ type: "integer" })).toBeNull();

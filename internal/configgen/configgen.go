@@ -22,6 +22,10 @@ type Options struct {
 	Type           string
 	BindingPackage string
 	Env            []string
+	// DefaultsFunc names the package-level function whose returned literal
+	// supplies schema defaults. Empty looks for Defaults when present; "-"
+	// disables the lookup; any other name is required to exist.
+	DefaultsFunc string
 }
 
 // Artifacts contains the three complete, newline-terminated generated files.
@@ -106,6 +110,12 @@ func Generate(ctx context.Context, options Options) (Artifacts, error) {
 		return Artifacts{}, fmt.Errorf("configgen: root package %q is a program and cannot be imported by a separate binding package", pkg.PkgPath)
 	}
 	normalized, err := analyzePackage(pkg.Types, pkg.TypesSizes, options.Type)
+	if err != nil {
+		return Artifacts{}, err
+	}
+	defaultsFunc := strings.TrimSpace(options.DefaultsFunc)
+	explicitDefaults := defaultsFunc != "" && defaultsFunc != "-"
+	normalized.Annotations, err = collectAnnotations(pkg.Syntax, pkg.TypesInfo, normalized.TypeName, defaultsFunc, explicitDefaults)
 	if err != nil {
 		return Artifacts{}, err
 	}

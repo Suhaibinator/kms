@@ -32,9 +32,8 @@ describe("parseContractFile", () => {
       { alias: "server", kind: "parameter", content_type: "json" },
       { alias: "api_key", kind: "secret" },
     ]);
-    expect(parsed.schema_sha256).toBe(
-      "af7d501708d23e1494b16295629087859bda547ea50afa772507c7222aee760b",
-    );
+    // The exact digest is checked against the sibling schema file in the sha256Hex suite.
+    expect(parsed.schema_sha256).toMatch(/^[0-9a-f]{64}$/);
   });
 
   it("accepts a bare array", () => {

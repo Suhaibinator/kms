@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"go/token"
 	"math"
 )
 
@@ -12,6 +13,7 @@ const maxGeneratedSchemaBytes = 256 << 10
 
 type schemaDocument struct {
 	Schema               string                    `json:"$schema"`
+	Description          string                    `json:"description,omitempty"`
 	Type                 string                    `json:"type"`
 	AdditionalProperties bool                      `json:"additionalProperties"`
 	Required             []string                  `json:"required"`
@@ -21,6 +23,7 @@ type schemaDocument struct {
 func renderSchema(model *ir) ([]byte, error) {
 	doc := schemaDocument{
 		Schema:               "https://json-schema.org/draft/2020-12/schema",
+		Description:          model.Annotations.rootDoc,
 		Type:                 "object",
 		AdditionalProperties: false,
 		Required:             make([]string, 0, len(model.Groups)),
@@ -29,23 +32,92 @@ func renderSchema(model *ir) ([]byte, error) {
 	for _, group := range model.Groups {
 		required := make([]string, 0, len(group.Fields))
 		properties := make(map[string]any, len(group.Fields))
+		groupDefault := make(map[string]any, len(group.Fields))
+		groupComplete := true
 		for _, field := range group.Fields {
 			required = append(required, field.JSONName)
-			properties[field.JSONName] = schemaForType(field.Type)
+			raw := managedFieldDefault(model.Annotations.defaults, field.GoPath)
+			property := annotatedSchema(field.Type, model.Annotations.docs[field.Position], raw, model.Annotations.docs)
+			properties[field.JSONName] = property
+			if value, known := property["default"]; known {
+				groupDefault[field.JSONName] = value
+			} else {
+				groupComplete = false
+			}
 		}
 		doc.Required = append(doc.Required, group.Alias)
-		doc.Properties[group.Alias] = map[string]any{
+		schema := map[string]any{
 			"type":                 "object",
 			"additionalProperties": false,
 			"required":             required,
 			"properties":           properties,
 		}
+		if groupComplete && model.Annotations.defaults != nil {
+			schema["default"] = groupDefault
+		}
+		doc.Properties[group.Alias] = schema
 	}
 	data, err := marshalArtifact(doc, "schema")
 	if err == nil && len(data) > maxGeneratedSchemaBytes {
 		return nil, fmt.Errorf("configgen: generated schema is %d bytes; maximum is %d", len(data), maxGeneratedSchemaBytes)
 	}
 	return data, err
+}
+
+// annotatedSchema renders a property schema and adds the source-level
+// description and the evaluated default when they are known. Nested struct
+// properties are annotated the same way so a form can show help and defaults
+// per field, not just per group.
+func annotatedSchema(value *typeIR, description string, raw any, docs map[token.Pos]string) map[string]any {
+	schema := schemaForType(value)
+	inner := schema
+	if nullable, ok := schema["anyOf"].([]any); ok && len(nullable) == 2 {
+		if first, ok := nullable[0].(map[string]any); ok {
+			inner = first
+		}
+	}
+	if value.Kind == typePointer {
+		annotateStructProperties(value.Elem, inner, raw, docs)
+	} else {
+		annotateStructProperties(value, inner, raw, docs)
+	}
+	if description != "" {
+		schema["description"] = description
+	}
+	if converted, known := schemaDefault(value, raw); known {
+		schema["default"] = converted
+	}
+	return schema
+}
+
+func annotateStructProperties(value *typeIR, schema map[string]any, raw any, docs map[token.Pos]string) {
+	if value.Kind != typeStruct {
+		return
+	}
+	properties, ok := schema["properties"].(map[string]any)
+	if !ok {
+		return
+	}
+	tree, _ := raw.(map[string]any)
+	for _, field := range value.Fields {
+		if !field.Included {
+			continue
+		}
+		var child any
+		switch raw.(type) {
+		case unknownDefault:
+			child = unknownDefault{}
+		case nil, nilDefault:
+			child = nil
+		default:
+			if tree == nil {
+				child = unknownDefault{}
+			} else {
+				child = tree[field.GoName]
+			}
+		}
+		properties[field.JSONName] = annotatedSchema(field.Type, docs[field.Position], child, docs)
+	}
 }
 
 func schemaForType(value *typeIR) map[string]any {

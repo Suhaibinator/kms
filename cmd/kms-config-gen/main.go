@@ -23,6 +23,7 @@ func run(args []string) int {
 	flags.StringVar(&options.Type, "type", "", "root configuration struct type")
 	flags.StringVar(&options.Package, "package", ".", "Go package pattern containing the root type")
 	flags.StringVar(&options.BindingPackage, "binding-package", "", "package name for the generated Go binding")
+	flags.StringVar(&options.DefaultsFunc, "defaults", "", "package-level defaults function whose returned literal supplies schema defaults (default: Defaults when present; \"-\" disables)")
 	flags.StringVar(&paths.Binding, "binding-output", "", "generated Go binding path")
 	flags.StringVar(&paths.Schema, "schema-output", "", "generated JSON Schema path")
 	flags.StringVar(&paths.Contract, "contract-output", "", "generated contract path")

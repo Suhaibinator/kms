@@ -1,5 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Config is decoded and published as one immutable release generation.",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -9,11 +10,17 @@
   "properties": {
     "runtime": {
       "additionalProperties": false,
+      "default": {
+        "greeting": "hello from application defaults",
+        "request_limit": 100
+      },
       "properties": {
         "greeting": {
+          "default": "hello from application defaults",
           "type": "string"
         },
         "request_limit": {
+          "default": 100,
           "maximum": 2147483647,
           "minimum": -2147483648,
           "type": "integer"
@@ -27,8 +34,12 @@
     },
     "server": {
       "additionalProperties": false,
+      "default": {
+        "listen_address": "127.0.0.1:8080"
+      },
       "properties": {
         "listen_address": {
+          "default": "127.0.0.1:8080",
           "type": "string"
         }
       },

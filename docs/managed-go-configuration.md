@@ -560,6 +560,32 @@ generated runtime still enforces its embedded contract independently, so a
 diverged application record is caught by the process as
 `config_contract_mismatch` at the latest.
 
+### Descriptions and defaults in the schema
+
+The generator makes the schema self-describing so the console can render a
+value as a form instead of a JSON box:
+
+- A managed field's doc comment (or trailing `//` comment) becomes that
+  property's `description`, collapsed to one line. Nested struct fields are
+  annotated the same way. The root type's doc comment becomes the schema's
+  top-level `description`.
+- A package-level `Defaults` function whose last statement is `return
+  &Config{...}` (or `return Config{...}`) supplies `default` values: every
+  literal element that is a compile-time constant — including named constants,
+  nested struct literals, slices, arrays, and maps of constants — is emitted at
+  the property it sets, and fields omitted from the literal get Go's zero
+  value. Elements the generator cannot evaluate statically (a local variable,
+  a function call, a `[]byte` conversion) simply have no `default`, and a
+  group only gets an object-level `default` when every one of its fields is
+  known. Secrets never appear in the schema.
+- `-defaults NAME` selects a different function and requires it to exist;
+  `-defaults -` disables default extraction. With no flag, `Defaults` is used
+  when present.
+
+Because defaults are read from the same literal the application returns at
+runtime, the schema cannot drift from source defaults; a `Defaults` function
+that builds its value imperatively yields no defaults rather than wrong ones.
+
 ### Register the generated schema
 
 Generate baseline group documents from the exact application build whose
