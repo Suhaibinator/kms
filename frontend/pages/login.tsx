@@ -6,7 +6,7 @@ import { Field, Input, PageTitle, Spinner } from "@/components/ui";
 import { Button } from "@/components/ui/button";
 import { useAuth } from "@/context/AuthContext";
 import { useToast } from "@/context/ToastContext";
-import { getToken } from "@/lib/api";
+import { ApiError, getToken } from "@/lib/api";
 import { useQueryParam } from "@/lib/hooks";
 import { safeReturnTo } from "@/lib/returnTo";
 
@@ -19,6 +19,8 @@ export default function LoginPage() {
   // Turns the required-token message on only once the user has actually tried
   // to submit, so an untouched form does not open with an error on it.
   const [submitted, setSubmitted] = useState(false);
+  // Why the last attempt failed, shown under the field; cleared on edit.
+  const [authError, setAuthError] = useState<string | null>(null);
   // Where the guard wanted the visitor to go before it bounced them here.
   // Re-validated on read: the value survived a page load inside an editable URL.
   const { value: returnTo } = useQueryParam("returnTo");
@@ -36,6 +38,7 @@ export default function LoginPage() {
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
     setSubmitted(true);
+    setAuthError(null);
     const trimmed = token.trim();
     // An empty field is a form error, not an incident: it belongs under the
     // input, not in a toast the user has to dismiss.
@@ -48,7 +51,22 @@ export default function LoginPage() {
       toast.success("Signed in", `Welcome, ${identity.name}`);
       await router.replace(destination);
     } catch (err) {
-      toast.error(err, "Sign-in failed");
+      const status = err instanceof ApiError ? err.status : 0;
+      const code = err instanceof ApiError ? err.code : "";
+      if (status === 503 || (status !== 401 && code === "unavailable" && status !== 0)) {
+        // The server answers but is not serving yet: still starting, or the
+        // store is sealed until the master key is supplied.
+        setAuthError("The server is starting or sealed. Try again in a moment.");
+        toast.error(
+          new Error("The server is starting or sealed. Try again in a moment."),
+          "Server unavailable",
+        );
+      } else if (status === 401 || code === "invalid_credentials") {
+        setAuthError("That token was not recognised. Check it was copied completely.");
+        toast.error(err, "Sign-in failed");
+      } else {
+        toast.error(err, "Sign-in failed");
+      }
     } finally {
       setBusy(false);
     }
@@ -74,7 +92,7 @@ export default function LoginPage() {
         <form onSubmit={onSubmit}>
           <Field
             label="Identity token"
-            error={missingToken ? "Enter a token to continue." : null}
+            error={missingToken ? "Enter a token to continue." : authError}
             hint={
               <>
                 Minted by <span className="mono">parameter-store create-admin</span> or the
@@ -91,7 +109,10 @@ export default function LoginPage() {
               spellCheck={false}
               placeholder="paste token…"
               value={token}
-              onChange={(e) => setTokenValue(e.target.value)}
+              onChange={(e) => {
+                setTokenValue(e.target.value);
+                setAuthError(null);
+              }}
             />
           </Field>
 

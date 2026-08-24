@@ -97,6 +97,37 @@ describe("LoginPage", () => {
     expect(mocks.replace).not.toHaveBeenCalled();
   });
 
+  it("explains a starting or sealed server on 503 instead of blaming the token", async () => {
+    const error = new ApiError("unavailable", "store sealed", 503);
+    mocks.login.mockRejectedValue(error);
+
+    render(<LoginPage />);
+    submit("kms_admin_token");
+
+    await waitFor(() =>
+      expect(mocks.toast.error).toHaveBeenCalledWith(expect.any(Error), "Server unavailable"),
+    );
+    const reported = mocks.toast.error.mock.calls[0]?.[0] as Error;
+    expect(reported.message).toBe("The server is starting or sealed. Try again in a moment.");
+    expect(screen.getByRole("alert")).toHaveTextContent("The server is starting or sealed.");
+    expect(mocks.replace).not.toHaveBeenCalled();
+  });
+
+  it("marks an unrecognised token inline on 401 and clears it on edit", async () => {
+    const error = new ApiError("invalid_credentials", "token not recognised", 401);
+    mocks.login.mockRejectedValue(error);
+
+    render(<LoginPage />);
+    submit("bad-token");
+
+    await waitFor(() => expect(mocks.toast.error).toHaveBeenCalledWith(error, "Sign-in failed"));
+    expect(screen.getByRole("alert")).toHaveTextContent("That token was not recognised.");
+    expect(screen.getByLabelText("Identity token")).toHaveAttribute("aria-invalid", "true");
+
+    fireEvent.change(screen.getByLabelText("Identity token"), { target: { value: "x" } });
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
   it("skips the form when a session is already stored", async () => {
     mocks.token = "already-signed-in";
     mocks.query = { returnTo: "/audit" };

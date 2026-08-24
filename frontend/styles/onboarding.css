@@ -2,5 +2,527 @@
    the layer so Tailwind utilities keep winning. */
 
 @layer components {
-  /* owned by lane F-onboard */
+  /* ---------- Setup checklist (first run + application SetupPanel) ---------- */
+
+  .setup-card {
+    margin-top: var(--space-5);
+  }
+  .setup-card-head {
+    display: flex;
+    align-items: flex-start;
+    gap: var(--space-3);
+    margin-bottom: var(--space-4);
+  }
+  .setup-card-icon {
+    display: inline-grid;
+    place-items: center;
+    width: 36px;
+    height: 36px;
+    flex: 0 0 36px;
+    border-radius: var(--radius);
+    background: var(--accent-soft);
+    color: var(--accent-hover);
+  }
+  .setup-card-sub {
+    margin-top: 2px;
+    color: var(--text-muted);
+    font-size: 12.5px;
+    max-width: 60ch;
+  }
+
+  .setup-steps {
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+  .setup-step {
+    position: relative;
+    display: grid;
+    grid-template-columns: 23px minmax(0, 1fr) auto;
+    align-items: start;
+    gap: var(--space-2) var(--space-3);
+    padding: var(--space-3) 0;
+    color: var(--text);
+    border-top: 1px solid var(--border);
+  }
+  .setup-step:first-child {
+    border-top: 0;
+  }
+  /* The connector line between step circles. */
+  .setup-step::before {
+    content: "";
+    position: absolute;
+    left: 11px;
+    top: calc(var(--space-3) + 23px);
+    bottom: calc(-1 * var(--space-3));
+    width: 1px;
+    background: var(--border);
+  }
+  .setup-step:last-child::before {
+    display: none;
+  }
+  .setup-step .wizard-step-number {
+    position: relative;
+    z-index: 1;
+    margin-top: 1px;
+  }
+  .setup-step-info {
+    background: var(--accent-soft);
+    border-color: var(--accent-border);
+    color: var(--accent-hover);
+  }
+  .setup-step-body {
+    min-width: 0;
+  }
+  .setup-step-title {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    font-size: 13.5px;
+    font-weight: 600;
+    line-height: 23px;
+  }
+  .setup-step-done .setup-step-title {
+    color: var(--text-muted);
+  }
+  .setup-step-todo .setup-step-title {
+    color: var(--text-muted);
+  }
+  .setup-step-tag {
+    padding: 0 6px;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    color: var(--text-faint);
+    font-size: 10.5px;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    line-height: 16px;
+  }
+  .setup-step-detail {
+    margin-top: 2px;
+    color: var(--text-muted);
+    font-size: 12.5px;
+    line-height: 1.5;
+    max-width: 68ch;
+  }
+  .setup-step-todo .setup-step-detail {
+    color: var(--text-faint);
+  }
+  .setup-code {
+    font-family: var(--mono);
+    font-size: 11.5px;
+    padding: 1px 4px;
+    border-radius: var(--radius-sm);
+    background: var(--bg-elev);
+    color: var(--text);
+  }
+  .setup-step-action {
+    align-self: center;
+    justify-self: end;
+  }
+
+  .setup-items {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-1);
+    margin: var(--space-2) 0 0;
+    padding: 0;
+    list-style: none;
+  }
+  .setup-item {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    min-height: 28px;
+    padding: 2px var(--space-2);
+    border-radius: var(--radius-sm);
+    background: var(--bg-elev);
+    font-size: 12px;
+  }
+  .setup-item-mark {
+    display: inline-grid;
+    place-items: center;
+    width: 16px;
+    height: 16px;
+    flex: 0 0 16px;
+    border: 1px solid var(--border-strong);
+    border-radius: 50%;
+    color: var(--success);
+  }
+  .setup-item-done .setup-item-mark {
+    background: var(--success-soft);
+    border-color: var(--success);
+  }
+  .setup-item-detail {
+    flex: 1;
+    min-width: 0;
+    color: var(--text-muted);
+  }
+  .setup-item-done .setup-item-detail {
+    color: var(--text-faint);
+  }
+  .setup-item-action {
+    margin-left: auto;
+  }
+
+  /* Compact variant inside the application page panel. */
+  .setup-steps-compact .setup-step {
+    padding: var(--space-2) 0;
+  }
+  .setup-steps-compact .setup-step-title {
+    font-size: 13px;
+  }
+  .setup-steps-compact .setup-step-detail {
+    font-size: 12px;
+  }
+
+  .setup-panel-summary {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+  }
+  .setup-panel-meter {
+    flex: 0 0 120px;
+    height: 5px;
+    border-radius: 999px;
+    background: var(--bg-elev);
+    overflow: hidden;
+  }
+  .setup-panel-meter-fill {
+    display: block;
+    height: 100%;
+    border-radius: inherit;
+    background: var(--success);
+    transition: width 240ms ease;
+  }
+  .setup-panel[data-complete="true"] .setup-panel-meter-fill {
+    background: var(--success);
+  }
+  .setup-panel-content {
+    padding-top: var(--space-2);
+  }
+
+  /* ---------- Overview: service strip + fleet grid ---------- */
+
+  .stat-strip {
+    display: grid;
+    grid-template-columns: repeat(6, minmax(0, 1fr));
+    gap: var(--space-3);
+  }
+  .stat-strip .stat {
+    padding: var(--space-3) var(--space-4);
+  }
+  .stat-strip .stat .stat-label {
+    font-size: 11px;
+  }
+  .stat-strip .stat .stat-value {
+    font-size: 22px;
+  }
+  .stat-strip .stat .stat-badges {
+    min-height: 28px;
+    gap: var(--space-1);
+  }
+  .stat-strip .stat .stat-sub {
+    font-size: 11.5px;
+  }
+
+  .fleet-section {
+    margin-top: var(--space-6);
+  }
+  .fleet-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-3);
+    margin-bottom: var(--space-3);
+  }
+  .fleet-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+    gap: var(--space-4);
+  }
+  .fleet-card {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+    min-width: 0;
+    padding: var(--space-4) var(--space-5);
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-left-width: 3px;
+    border-radius: var(--radius-lg);
+  }
+  .fleet-card-ready {
+    border-left-color: var(--success);
+  }
+  .fleet-card-attention {
+    border-left-color: var(--warning);
+  }
+  .fleet-card-blocked {
+    border-left-color: var(--danger);
+  }
+  .fleet-card-setup {
+    border-left-color: var(--border-strong);
+  }
+  .fleet-card-skeleton {
+    min-height: 150px;
+    border-left-width: 1px;
+    background: linear-gradient(90deg, var(--surface), var(--bg-elev), var(--surface));
+  }
+  .fleet-card-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-2);
+  }
+  .fleet-card-desc {
+    margin-top: calc(-1 * var(--space-2));
+    color: var(--text-muted);
+    font-size: 12.5px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .fleet-card-empty {
+    color: var(--text-faint);
+    font-size: 12.5px;
+  }
+  .fleet-envs {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-1);
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+  .fleet-env {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-2);
+    min-height: 28px;
+    padding: 0 var(--space-2);
+    border-radius: var(--radius-sm);
+  }
+  .fleet-env:hover {
+    background: var(--surface-hover);
+  }
+  .fleet-env-link {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
+    min-width: 0;
+    color: var(--text);
+    font-size: 12.5px;
+    font-weight: 500;
+    text-decoration: none;
+  }
+  .fleet-env-link:hover {
+    text-decoration: underline;
+    text-underline-offset: 3px;
+  }
+  .fleet-env-name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .fleet-env-prod .fleet-env-name::after {
+    content: "prod";
+    margin-left: var(--space-1);
+    padding: 0 5px;
+    border: 1px solid var(--warning);
+    border-radius: 999px;
+    color: var(--warning-fg);
+    font-size: 9.5px;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    vertical-align: 1px;
+  }
+  .fleet-env-release {
+    flex-shrink: 0;
+    font-size: 12px;
+  }
+  .fleet-card-foot {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-2);
+    margin-top: auto;
+    padding-top: var(--space-2);
+    border-top: 1px solid var(--border);
+    color: var(--text-faint);
+    font-size: 11.5px;
+    font-variant-numeric: tabular-nums;
+  }
+  .fleet-card-rejected-some {
+    color: var(--danger);
+    font-weight: 600;
+  }
+  .fleet-note {
+    margin-top: var(--space-3);
+  }
+
+  /* ---------- Connect SDK panel ---------- */
+
+  .connect-panel {
+    display: grid;
+    gap: var(--space-4);
+  }
+  .connect-sub {
+    margin-top: var(--space-1);
+    color: var(--text-muted);
+    font-size: 12.5px;
+    line-height: 1.7;
+  }
+  .connect-warning {
+    display: flex;
+    gap: var(--space-3);
+    padding: var(--space-3) var(--space-4);
+    border: 1px solid var(--warning);
+    border-radius: var(--radius);
+    background: var(--warning-soft);
+    color: var(--warning-fg);
+    font-size: 12.5px;
+    line-height: 1.5;
+  }
+  .connect-warning svg {
+    flex-shrink: 0;
+    margin-top: 2px;
+  }
+  .connect-endpoint {
+    margin-bottom: 0;
+  }
+  .connect-endpoint-row {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    font-size: 12.5px;
+  }
+  .connect-endpoint-label {
+    color: var(--text-muted);
+  }
+  .connect-endpoint-value {
+    font-family: var(--mono);
+    font-size: 12px;
+    padding: 2px 6px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: var(--bg-elev);
+    overflow-wrap: anywhere;
+  }
+  .connect-snippet {
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    background: var(--bg-elev);
+    overflow: hidden;
+  }
+  .connect-snippet-bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-2);
+    padding: var(--space-2) var(--space-3);
+    border-bottom: 1px solid var(--border);
+    background: var(--surface);
+  }
+  .connect-snippet-lang {
+    color: var(--text-muted);
+    font-size: 11.5px;
+    font-weight: 600;
+  }
+  .connect-code {
+    margin: 0;
+    padding: var(--space-3) var(--space-4);
+    max-height: 340px;
+    overflow: auto;
+    font-family: var(--mono);
+    font-size: 11.5px;
+    line-height: 1.55;
+    color: var(--text);
+    tab-size: 4;
+  }
+  .connect-links {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-3) var(--space-5);
+    font-size: 12.5px;
+  }
+  .connect-link {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-1);
+    color: var(--accent-hover);
+    font-weight: 500;
+  }
+  .connect-trouble {
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    background: var(--surface);
+  }
+  .connect-trouble > summary {
+    padding: var(--space-2) var(--space-3);
+    color: var(--text-muted);
+    font-size: 12.5px;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  .connect-trouble[open] > summary {
+    border-bottom: 1px solid var(--border);
+    color: var(--text);
+  }
+  .connect-trouble-list {
+    display: grid;
+    gap: var(--space-2);
+    margin: 0;
+    padding: var(--space-3) var(--space-3) var(--space-3) var(--space-6);
+    color: var(--text-muted);
+    font-size: 12.5px;
+    line-height: 1.5;
+  }
+  .connect-trouble-list strong {
+    color: var(--text);
+  }
+
+  /* ---------- Responsive ---------- */
+
+  @media (max-width: 1100px) {
+    .stat-strip {
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+    }
+  }
+  @media (max-width: 768px) {
+    .stat-strip {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+    .fleet-grid {
+      grid-template-columns: 1fr;
+    }
+    .setup-step {
+      grid-template-columns: 23px minmax(0, 1fr);
+    }
+    .setup-step-action {
+      grid-column: 2;
+      justify-self: start;
+    }
+    .setup-item {
+      flex-wrap: wrap;
+    }
+    .setup-item-action {
+      width: 100%;
+      margin-left: 0;
+    }
+    .setup-panel-meter {
+      flex-basis: 72px;
+    }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .setup-panel-meter-fill {
+      transition: none;
+    }
+  }
 }

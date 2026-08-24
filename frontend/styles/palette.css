@@ -2,5 +2,139 @@
    the layer so Tailwind utilities keep winning. */
 
 @layer components {
-  /* owned by lane F-onboard */
+  .palette {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    max-height: min(70vh, 560px);
+  }
+  .palette-input-row {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    padding: 0 var(--space-4);
+    border-bottom: 1px solid var(--border);
+  }
+  .palette-input-icon {
+    flex-shrink: 0;
+    color: var(--text-faint);
+  }
+  .palette-input {
+    flex: 1;
+    min-width: 0;
+    height: 46px;
+    border: 0;
+    background: transparent;
+    color: var(--text);
+    font-size: 14px;
+    outline: none;
+  }
+  .palette-input::placeholder {
+    color: var(--text-faint);
+  }
+  .palette-esc {
+    flex-shrink: 0;
+  }
+  .palette-list {
+    flex: 1;
+    min-height: 0;
+    margin: 0;
+    padding: var(--space-2);
+    list-style: none;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+  }
+  .palette-empty {
+    padding: var(--space-5) var(--space-3);
+    color: var(--text-faint);
+    font-size: 12.5px;
+    text-align: center;
+  }
+  .palette-group + .palette-group {
+    margin-top: var(--space-2);
+  }
+  .palette-group-label {
+    padding: var(--space-1) var(--space-2);
+    color: var(--text-faint);
+    font-size: 10.5px;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+  }
+  .palette-group-list {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+  .palette-item {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    min-height: 36px;
+    padding: var(--space-1) var(--space-2);
+    border-radius: var(--radius-sm);
+    color: var(--text);
+    font-size: 13px;
+    cursor: pointer;
+  }
+  .palette-item-active {
+    background: var(--accent-soft);
+  }
+  .palette-item-title {
+    flex-shrink: 0;
+    max-width: 60%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-weight: 500;
+  }
+  .palette-item-sub {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--text-faint);
+    font-size: 12px;
+  }
+  .palette-item-enter {
+    flex-shrink: 0;
+    color: var(--text-faint);
+  }
+  .palette-foot {
+    display: flex;
+    gap: var(--space-4);
+    padding: var(--space-2) var(--space-4);
+    border-top: 1px solid var(--border);
+    color: var(--text-faint);
+    font-size: 11.5px;
+  }
+  .palette-foot > span {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-1);
+  }
+
+  @media (max-width: 768px) {
+    .palette {
+      height: 100%;
+      max-height: none;
+    }
+    .palette-input {
+      height: 52px;
+      font-size: 16px;
+    }
+    .palette-item {
+      min-height: 44px;
+    }
+    .palette-item-title {
+      max-width: none;
+    }
+    .palette-item-sub {
+      display: none;
+    }
+    .palette-foot {
+      display: none;
+    }
+  }
 }

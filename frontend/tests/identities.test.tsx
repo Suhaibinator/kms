@@ -7,6 +7,7 @@ import IdentitiesPage from "@/pages/identities";
 import { chooseSelectOption } from "./select-test-utils";
 
 const mocks = vi.hoisted(() => ({
+  query: {} as Record<string, string>,
   namespaces: [] as Namespace[],
   namespacesLoading: false,
   namespacesError: null as unknown,
@@ -17,6 +18,14 @@ const mocks = vi.hoisted(() => ({
   },
 }));
 
+vi.mock("next/router", () => ({
+  useRouter: () => ({
+    pathname: "/identities",
+    query: mocks.query,
+    isReady: true,
+    events: { on: vi.fn(), off: vi.fn() },
+  }),
+}));
 vi.mock("@/context/ToastContext", () => ({ useToast: () => mocks.toast }));
 vi.mock("@/lib/hooks", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/hooks")>();
@@ -75,6 +84,7 @@ function centralDirectoryModes(buffer: ArrayBuffer): Map<string, { host: number;
 }
 
 beforeEach(() => {
+  mocks.query = {};
   mocks.namespaces = [];
   mocks.namespacesLoading = false;
   mocks.namespacesError = null;
@@ -712,5 +722,31 @@ describe("identity list", () => {
     ).toBeVisible();
     expect(issue).toBeDisabled();
     expect(issueCert).not.toHaveBeenCalled();
+  });
+});
+
+describe("IdentitiesPage query prefill", () => {
+  it("opens the create flow with the namespace prefilled from ?new=1&env=&app=", async () => {
+    mocks.query = { new: "1", env: "prod", app: "billing" };
+    mocks.namespaces = [namespace(["mtls", "token"])];
+    vi.mocked(api.listIdentities).mockResolvedValue({ identities: [], next_page_token: "" });
+
+    render(<IdentitiesPage />);
+    const dialog = await screen.findByRole("dialog", {
+      name: "Connect application — choose application",
+    });
+    expect(within(dialog).getByRole("combobox", { name: "Application" })).toHaveTextContent(
+      "billing",
+    );
+    expect(within(dialog).getByRole("combobox", { name: "Environment" })).toHaveTextContent("prod");
+  });
+
+  it("stays on the list without the new flag even when env/app are present", async () => {
+    mocks.query = { env: "prod", app: "billing" };
+    vi.mocked(api.listIdentities).mockResolvedValue({ identities: [], next_page_token: "" });
+
+    render(<IdentitiesPage />);
+    await screen.findByText("No identities yet");
+    expect(screen.queryByRole("dialog")).toBeNull();
   });
 });

@@ -1,6 +1,6 @@
 import { Check, Download } from "lucide-react";
 import Link from "next/link";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import CopyButton from "@/components/CopyButton";
 import { Icon } from "@/components/icons";
 import { ConfirmDialog, Modal } from "@/components/Modal";
@@ -22,7 +22,13 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useToast } from "@/context/ToastContext";
 import { api, isAbortError } from "@/lib/api";
 import { displayNamespace, formatUnixMs } from "@/lib/format";
-import { useCursorPagination, useFieldErrors, useLatestRequest, useNamespaces } from "@/lib/hooks";
+import {
+  useCursorPagination,
+  useFieldErrors,
+  useLatestRequest,
+  useNamespaces,
+  useQueryParams,
+} from "@/lib/hooks";
 import type {
   AuthMethod,
   CertBundle,
@@ -335,16 +341,27 @@ export default function IdentitiesPage() {
 
   const issueDaysProblem = certDaysError(issueDays);
 
-  function openCreate() {
+  function openCreate(prefill?: NamespaceSelection) {
     setName("");
     setIdentityMode("application");
-    setBindNs(NO_NS);
+    setBindNs(prefill ?? NO_NS);
     setMethods(["mtls"]);
     setCertDays(String(DEFAULT_CERT_DAYS));
     wizardErrors.reset();
     setCreateStep(1);
     setCreateOpen(true);
   }
+
+  // `?new=1&env=&app=` (the Connect SDK panel's "Create identity" link) opens
+  // the create flow once with the namespace prefilled.
+  const { values: prefill, ready: prefillReady } = useQueryParams(["new", "env", "app"]);
+  const prefillConsumed = useRef(false);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: openCreate is a plain function of state setters; run once per prefill.
+  useEffect(() => {
+    if (!prefillReady || prefillConsumed.current || prefill.new !== "1") return;
+    prefillConsumed.current = true;
+    openCreate({ env: prefill.env ?? "", app: prefill.app ?? "" });
+  }, [prefillReady, prefill]);
 
   function openCertificates(identity: Identity) {
     setIssueDays(String(DEFAULT_CERT_DAYS));
@@ -540,7 +557,7 @@ export default function IdentitiesPage() {
       <PageHeader
         title="Identities"
         subtitle="Connect applications and manage the credentials they use to authenticate to KMS."
-        actions={<Button onClick={openCreate}>Connect application</Button>}
+        actions={<Button onClick={() => openCreate()}>Connect application</Button>}
       />
 
       <CertificateRoles />
@@ -587,7 +604,7 @@ export default function IdentitiesPage() {
         <EmptyState
           icon={<Icon.identity size={20} />}
           title="No identities yet"
-          actions={<Button onClick={openCreate}>Connect application</Button>}
+          actions={<Button onClick={() => openCreate()}>Connect application</Button>}
         >
           Create an application identity and issue its first client certificate.
         </EmptyState>
