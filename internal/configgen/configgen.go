@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"go/ast"
 	"go/token"
 	"os"
 	"path/filepath"
@@ -115,7 +116,7 @@ func Generate(ctx context.Context, options Options) (Artifacts, error) {
 	}
 	defaultsFunc := strings.TrimSpace(options.DefaultsFunc)
 	explicitDefaults := defaultsFunc != "" && defaultsFunc != "-"
-	normalized.Annotations, err = collectAnnotations(pkg.Syntax, pkg.TypesInfo, normalized.TypeName, defaultsFunc, explicitDefaults)
+	normalized.Annotations, err = collectAnnotations(pkg.Syntax, loadedSyntax(pkg), pkg.TypesInfo, normalized.TypeName, defaultsFunc, explicitDefaults)
 	if err != nil {
 		return Artifacts{}, err
 	}
@@ -132,6 +133,34 @@ func Generate(ctx context.Context, options Options) (Artifacts, error) {
 		return Artifacts{}, err
 	}
 	return Artifacts{Binding: binding, Schema: schema, Contract: contract}, nil
+}
+
+// loadedSyntax returns the parsed files of the root package and everything it
+// imports, transitively. go/packages type-checks dependencies from source when
+// type information is requested, so their syntax is already in memory; walking
+// it lets doc comments on inlined or nested types from other modules reach the
+// schema.
+func loadedSyntax(root *packages.Package) []*ast.File {
+	seen := make(map[string]bool)
+	var files []*ast.File
+	var walk func(*packages.Package)
+	walk = func(pkg *packages.Package) {
+		if pkg == nil || seen[pkg.ID] {
+			return
+		}
+		seen[pkg.ID] = true
+		files = append(files, pkg.Syntax...)
+		paths := make([]string, 0, len(pkg.Imports))
+		for path := range pkg.Imports {
+			paths = append(paths, path)
+		}
+		sort.Strings(paths)
+		for _, path := range paths {
+			walk(pkg.Imports[path])
+		}
+	}
+	walk(root)
+	return files
 }
 
 // Write writes all artifacts atomically. Existing files whose content already

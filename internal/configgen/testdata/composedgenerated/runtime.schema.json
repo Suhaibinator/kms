@@ -11,6 +11,7 @@
       "additionalProperties": false,
       "properties": {
         "endpoint": {
+          "description": "Endpoint is the database address shared by every service.",
           "type": "string"
         }
       },
@@ -26,6 +27,7 @@
           "type": "string"
         },
         "burst": {
+          "description": "Burst is the number of requests allowed above the steady rate.",
           "maximum": 2147483647,
           "minimum": -2147483648,
           "type": "integer"

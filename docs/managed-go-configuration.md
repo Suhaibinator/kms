@@ -567,8 +567,12 @@ value as a form instead of a JSON box:
 
 - A managed field's doc comment (or trailing `//` comment) becomes that
   property's `description`, collapsed to one line. Nested struct fields are
-  annotated the same way. The root type's doc comment becomes the schema's
-  top-level `description`.
+  annotated the same way, and so are fields of types inlined or nested from
+  other packages and modules (a shared `go-common` config, say) — their doc
+  comments are read from the loaded sources. The root type's doc comment
+  becomes the schema's top-level `description`. A section-header comment
+  placed directly above a field is that field's doc comment as far as Go is
+  concerned; leave a blank line after headers.
 - A package-level `Defaults` function whose last statement is `return
   &Config{...}` (or `return Config{...}`) supplies `default` values: every
   literal element that is a compile-time constant — including named constants,

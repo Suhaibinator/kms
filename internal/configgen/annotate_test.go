@@ -132,3 +132,22 @@ func TestUndocumentedRootStaysMinimal(t *testing.T) {
 		t.Fatal("a root without comments or a defaults function must not gain annotations")
 	}
 }
+
+func TestSchemaReadsDocCommentsFromInlinedPackages(t *testing.T) {
+	artifacts, err := Generate(context.Background(), Options{
+		Dir: repoRoot(t), Package: "./internal/configgen/testdata/composed", Type: "Config", BindingPackage: "composedgenerated",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var schema map[string]any
+	if err := json.Unmarshal(artifacts.Schema, &schema); err != nil {
+		t.Fatal(err)
+	}
+	if got := property(t, schema, "database", "endpoint")["description"]; got != "Endpoint is the database address shared by every service." {
+		t.Fatalf("inlined package field description = %v", got)
+	}
+	if got := property(t, schema, "runtime", "burst")["description"]; got != "Burst is the number of requests allowed above the steady rate." {
+		t.Fatalf("nested inlined field description = %v", got)
+	}
+}

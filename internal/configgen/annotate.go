@@ -56,9 +56,12 @@ type constDefault struct {
 // is named explicitly.
 const DefaultsFuncName = "Defaults"
 
-func collectAnnotations(files []*ast.File, info *types.Info, rootType string, defaultsFunc string, explicit bool) (annotations, error) {
+// collectAnnotations gathers field docs from every loaded package (inlined
+// and nested types often live in shared modules) and the root doc plus the
+// defaults literal from the root package's own files.
+func collectAnnotations(files []*ast.File, allFiles []*ast.File, info *types.Info, rootType string, defaultsFunc string, explicit bool) (annotations, error) {
 	result := annotations{docs: make(map[token.Pos]string)}
-	for _, file := range files {
+	for _, file := range allFiles {
 		if file == nil {
 			continue
 		}
@@ -81,6 +84,11 @@ func collectAnnotations(files []*ast.File, info *types.Info, rootType string, de
 			}
 			return true
 		})
+	}
+	for _, file := range files {
+		if file == nil {
+			continue
+		}
 		for _, decl := range file.Decls {
 			gen, ok := decl.(*ast.GenDecl)
 			if !ok || gen.Tok != token.TYPE {
