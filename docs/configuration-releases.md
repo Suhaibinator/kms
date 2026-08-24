@@ -57,7 +57,7 @@ timestamps, creator identity, activation revision, and movable labels. SDK
 snapshots use the same projection to verify the release before preparation.
 
 Limits are 256 entries, 64 bytes per alias, 1 MiB per stored parameter
-document, 256 KiB per schema, and 64 KiB for release or captured entry
+document, 1 MiB per schema, and 64 KiB for release or captured entry
 metadata. Aliases start with an ASCII letter and then contain only ASCII
 letters, digits, `_`, or `-`. Release client names and instance IDs are each
 limited to 128 bytes; acknowledgement diagnostics are accepted up to 1,024
@@ -68,7 +68,7 @@ bytes but persisted only as a redaction marker.
 `ConfigurationSchemaService` provides immutable `CreateSchema`, `GetSchema`,
 and `ListSchemas` operations. Schema IDs are global and each successful create
 allocates the next version. Registration is admin-managed and accepts at most
-256 KiB of JSON. KMS compiles schemas with `jsonschema/v6` as Draft 2020-12;
+1 MiB of JSON. KMS compiles schemas with `jsonschema/v6` as Draft 2020-12;
 an explicit `$schema` must name that dialect.
 
 A release either pins both `schema_id` and `schema_version`, or neither. During

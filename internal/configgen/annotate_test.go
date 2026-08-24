@@ -90,6 +90,21 @@ func TestSchemaCarriesDocCommentsAndLiteralDefaults(t *testing.T) {
 	if backoff := property(t, schema, "runtime", "computed", "backoff"); backoff["default"] != "1s" {
 		t.Fatalf("the evaluable part of an inlined helper still contributes, got %v", backoff["default"])
 	}
+	policies := property(t, schema, "runtime", "policies")
+	policiesInner := policies["anyOf"].([]any)[0].(map[string]any)
+	policyField := policiesInner["additionalProperties"].(map[string]any)["properties"].(map[string]any)["attempts"].(map[string]any)
+	if policyField["description"] != "Attempts is the number of tries before giving up." {
+		t.Fatalf("map value struct fields should be described, got %v", policyField)
+	}
+	if _, has := policyField["default"]; has {
+		t.Fatal("map value struct fields carry no defaults")
+	}
+	history := property(t, schema, "runtime", "history")
+	historyInner := history["anyOf"].([]any)[0].(map[string]any)
+	historyField := historyInner["items"].(map[string]any)["properties"].(map[string]any)["backoff"].(map[string]any)
+	if historyField["description"] != "Backoff is the initial delay between tries." {
+		t.Fatalf("list item struct fields should be described, got %v", historyField)
+	}
 	tags := property(t, schema, "runtime", "tags")
 	if got, _ := json.Marshal(tags["default"]); string(got) != `["blue","canary"]` {
 		t.Fatalf("tags default = %s", got)

@@ -9,7 +9,7 @@ import (
 	"math"
 )
 
-const maxGeneratedSchemaBytes = 256 << 10
+const maxGeneratedSchemaBytes = 1 << 20
 
 type schemaDocument struct {
 	Schema               string                    `json:"$schema"`
@@ -76,9 +76,18 @@ func annotatedSchema(value *typeIR, description string, raw any, docs map[token.
 			inner = first
 		}
 	}
-	if value.Kind == typePointer {
+	switch value.Kind {
+	case typePointer:
 		annotateStructProperties(value.Elem, inner, raw, docs)
-	} else {
+	case typeMap:
+		if elem, ok := inner["additionalProperties"].(map[string]any); ok {
+			annotateElementDocs(value.Elem, elem, docs)
+		}
+	case typeSlice, typeArray:
+		if elem, ok := inner["items"].(map[string]any); ok {
+			annotateElementDocs(value.Elem, elem, docs)
+		}
+	default:
 		annotateStructProperties(value, inner, raw, docs)
 	}
 	if description != "" {
@@ -88,6 +97,31 @@ func annotatedSchema(value *typeIR, description string, raw any, docs map[token.
 		schema["default"] = converted
 	}
 	return schema
+}
+
+// annotateElementDocs adds descriptions (never defaults — elements have no
+// single default) to struct fields reached through a map value or list item.
+func annotateElementDocs(value *typeIR, schema map[string]any, docs map[token.Pos]string) {
+	inner := schema
+	if nullable, ok := schema["anyOf"].([]any); ok && len(nullable) == 2 {
+		if first, ok := nullable[0].(map[string]any); ok {
+			inner = first
+		}
+	}
+	switch value.Kind {
+	case typePointer:
+		annotateElementDocs(value.Elem, inner, docs)
+	case typeMap:
+		if elem, ok := inner["additionalProperties"].(map[string]any); ok {
+			annotateElementDocs(value.Elem, elem, docs)
+		}
+	case typeSlice, typeArray:
+		if elem, ok := inner["items"].(map[string]any); ok {
+			annotateElementDocs(value.Elem, elem, docs)
+		}
+	case typeStruct:
+		annotateStructProperties(value, inner, unknownDefault{}, docs)
+	}
 }
 
 func annotateStructProperties(value *typeIR, schema map[string]any, raw any, docs map[token.Pos]string) {

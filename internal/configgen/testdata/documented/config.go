@@ -36,8 +36,12 @@ type Config struct {
 	// Fallback is built by a helper that returns a literal.
 	Fallback Retry `json:"fallback" kms:"group=runtime,reload=hot" kms_views:"http"`
 	// Computed is built by a helper the generator cannot evaluate.
-	Computed Retry            `json:"computed" kms:"group=runtime,reload=hot" kms_views:"http"`
-	APIKey   kmsclient.Secret `json:"-" kms:"secret=api_key,reload=hot" kms_views:"http"`
+	Computed Retry `json:"computed" kms:"group=runtime,reload=hot" kms_views:"http"`
+	// Policies maps a provider name to its retry policy.
+	Policies map[string]Retry `json:"policies" kms:"group=runtime,reload=hot" kms_views:"http"`
+	// History lists past retry policies.
+	History []Retry          `json:"history" kms:"group=runtime,reload=hot" kms_views:"http"`
+	APIKey  kmsclient.Secret `json:"-" kms:"secret=api_key,reload=hot" kms_views:"http"`
 }
 
 func defaultFallback() Retry {

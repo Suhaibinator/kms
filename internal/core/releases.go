@@ -24,7 +24,7 @@ const (
 	maxReleaseEntries       = 256
 	maxReleaseAliasBytes    = 64
 	maxReleaseMetadataBytes = 64 << 10
-	maxSchemaBytes          = 256 << 10
+	maxSchemaBytes          = 1 << 20
 	maxAckDiagnosticBytes   = 1024
 	maxReleaseClientIDBytes = 128
 )
