@@ -438,3 +438,60 @@ func TestResolveReleaseCandidateCollectsPerAliasErrors(t *testing.T) {
 		t.Fatalf("structural error in collect mode = %v", err)
 	}
 }
+
+func TestRollbackConfigurationRelease(t *testing.T) {
+	ctx := context.Background()
+	st, err := storage.Open(filepath.Join(t.TempDir(), "kms.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = st.Close() }()
+	ns := domain.NamespaceRef{Env: "prod", App: "app"}
+	if _, err := st.CreateNamespace(ctx, domain.Namespace{NamespaceRef: ns, CreatedBy: "admin"}); err != nil {
+		t.Fatal(err)
+	}
+	ref := domain.Ref{NS: ns, Key: "config"}
+	svc := New(st, nil, "test")
+	pr := adminPrincipal()
+	if _, err := svc.RollbackConfigurationRelease(ctx, pr, ns, "runtime", nil); !errors.Is(err, domain.ErrFailedPrecondition) {
+		t.Fatalf("rollback without active = %v", err)
+	}
+	create := func(value string) domain.ConfigurationRelease {
+		if _, _, err := st.PutParameter(ctx, ref, value, "integer", "{}", "admin"); err != nil {
+			t.Fatal(err)
+		}
+		r, err := svc.CreateConfigurationRelease(ctx, pr, domain.CreateConfigurationReleaseInput{Namespace: ns, Name: "runtime", Entries: []domain.ReleaseEntrySelector{{Alias: "config", Kind: domain.ReleaseEntryParameter, Ref: ref}}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return r
+	}
+	r1, r2 := create("1"), create("2")
+	if _, _, err := svc.ActivateConfigurationRelease(ctx, pr, ns, "runtime", r1.Version, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.RollbackConfigurationRelease(ctx, pr, ns, "runtime", nil); !errors.Is(err, domain.ErrFailedPrecondition) {
+		t.Fatalf("rollback without previous = %v", err)
+	}
+	if _, _, err := svc.ActivateConfigurationRelease(ctx, pr, ns, "runtime", r2.Version, nil); err != nil {
+		t.Fatal(err)
+	}
+	wrong := uint64(1)
+	if _, err := svc.RollbackConfigurationRelease(ctx, pr, ns, "runtime", &wrong); !errors.Is(err, domain.ErrAborted) {
+		t.Fatalf("rollback CAS error = %v", err)
+	}
+	expected := uint64(2)
+	result, err := svc.RollbackConfigurationRelease(ctx, pr, ns, "runtime", &expected)
+	if err != nil || !result.Changed || result.RolledBackFrom != 2 || result.Active.Release.Version != 1 || result.Active.PreviousVersion != 2 {
+		t.Fatalf("rollback = %+v err=%v", result, err)
+	}
+	events, _, err := st.ListAudit(ctx, domain.AuditFilter{EventType: "configuration_release.rollback"}, storage.ListPage{Limit: 10})
+	if err != nil || len(events) != 1 || events[0].ResourceVersion != 1 {
+		t.Fatalf("rollback audit = %+v err=%v", events, err)
+	}
+	// Rolling back again re-activates the newer version (previous is now v2).
+	again, err := svc.RollbackConfigurationRelease(ctx, pr, ns, "runtime", nil)
+	if err != nil || again.Active.Release.Version != 2 || again.RolledBackFrom != 1 {
+		t.Fatalf("second rollback = %+v err=%v", again, err)
+	}
+}

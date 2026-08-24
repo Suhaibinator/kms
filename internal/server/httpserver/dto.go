@@ -152,15 +152,19 @@ func toApplicationDashboardDTO(d domain.ApplicationDashboard) map[string]any {
 	for _, ns := range d.Environments {
 		environments = append(environments, toNamespaceDTO(ns))
 	}
-	rows := make([]applicationRowDTO, 0, len(d.Rows))
-	for _, row := range d.Rows {
+	return map[string]any{"application": toApplicationDTO(d.Application), "environments": environments, "rows": toApplicationRowDTOs(d.Rows)}
+}
+
+func toApplicationRowDTOs(in []domain.ApplicationConfigurationRow) []applicationRowDTO {
+	rows := make([]applicationRowDTO, 0, len(in))
+	for _, row := range in {
 		cells := make(map[string]applicationCellDTO, len(row.Cells))
 		for env, cell := range row.Cells {
 			cells[env] = applicationCellDTO{Present: cell.Present, Value: cell.Value, ContentType: cell.ContentType, Version: cell.Version, ClientBound: cell.ClientBound, HasAccessToken: cell.HasAccessToken}
 		}
 		rows = append(rows, applicationRowDTO{Key: row.Key, Kind: row.Kind, Environments: cells})
 	}
-	return map[string]any{"application": toApplicationDTO(d.Application), "environments": environments, "rows": rows}
+	return rows
 }
 
 // --- parameters ------------------------------------------------------------

@@ -1,46 +1,46 @@
 {
   "application": {
-    "name": "billing",
-    "description": "Invoicing worker",
-    "release_name": "runtime",
-    "schema_id": "",
-    "schema_version": 0,
     "contract": [
       {
         "alias": "database",
-        "kind": "parameter",
-        "content_type": "json"
-      },
-      {
-        "alias": "rate_limits",
-        "kind": "parameter",
-        "content_type": "json"
+        "content_type": "json",
+        "kind": "parameter"
       },
       {
         "alias": "db_password",
         "kind": "secret"
+      },
+      {
+        "alias": "rate_limits",
+        "content_type": "integer",
+        "kind": "parameter"
       }
     ],
-    "created_by": "admin",
     "created_at_unix_ms": 1755000000000,
-    "updated_at_unix_ms": 1755000000000,
-    "environment_count": 0
+    "created_by": "admin",
+    "description": "Grading API",
+    "environment_count": 0,
+    "name": "gradethis",
+    "release_name": "runtime",
+    "schema_id": "",
+    "schema_version": 0,
+    "updated_at_unix_ms": 1755000000000
   },
-  "status": "setup",
+  "environments": [],
   "findings": [
     {
       "code": "no_environments",
-      "severity": "warning",
+      "params": {},
       "scope": {},
-      "params": {}
+      "severity": "warning"
     },
     {
       "code": "schema_unpinned",
-      "severity": "info",
+      "params": {},
       "scope": {},
-      "params": {}
+      "severity": "info"
     }
   ],
-  "environments": [],
-  "rows": []
+  "rows": [],
+  "status": "setup"
 }

@@ -150,3 +150,22 @@ type nopWriter struct{}
 func (nopWriter) Header() http.Header         { return http.Header{} }
 func (nopWriter) Write(b []byte) (int, error) { return len(b), nil }
 func (nopWriter) WriteHeader(int)             {}
+
+func TestConsoleRoutesMethodNotAllowed(t *testing.T) {
+	e := newTestEnv(t)
+	cases := []struct{ method, path string }{
+		{http.MethodPost, "/api/v1/applications/get"},
+		{http.MethodPost, "/api/v1/applications/overview"},
+		{http.MethodGet, "/api/v1/applications/ship"},
+		{http.MethodGet, "/api/v1/applications/environments/clone"},
+		{http.MethodGet, "/api/v1/releases/rollback"},
+		{http.MethodPost, "/api/v1/release-subscribers/stream"},
+		{http.MethodDelete, "/api/v1/applications/overview"},
+	}
+	for _, c := range cases {
+		w := e.admin(c.method, c.path, nil)
+		if w.Code != http.StatusMethodNotAllowed {
+			t.Errorf("%s %s = %d, want 405", c.method, c.path, w.Code)
+		}
+	}
+}

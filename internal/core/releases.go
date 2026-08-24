@@ -124,6 +124,29 @@ func (s *Service) resolveReleaseCandidate(ctx context.Context, pr Principal, rs 
 			return ctx, domain.ConfigurationRelease{}, nil, err
 		}
 	}
+	ctx, entries, validation, err := s.resolveReleaseEntries(ctx, pr, in, collectErrors)
+	if err != nil {
+		return ctx, domain.ConfigurationRelease{}, nil, err
+	}
+	release := domain.ConfigurationRelease{Namespace: in.Namespace, Name: in.Name, SchemaID: in.SchemaID, SchemaVersion: in.SchemaVersion, Entries: entries, Metadata: in.Metadata, CreatedBy: pr.Identity.Name}
+	if len(validation) > 0 {
+		return ctx, release, validation, nil
+	}
+	if err := s.validateApplicationReleaseContract(ctx, in.Namespace.App, in.Name, in.SchemaID, in.SchemaVersion, entries, !collectErrors); err != nil {
+		return ctx, domain.ConfigurationRelease{}, nil, err
+	}
+	release.Digest, err = releaseDigest(release)
+	if err != nil {
+		return ctx, domain.ConfigurationRelease{}, nil, fmt.Errorf("calculate configuration release digest: %w", err)
+	}
+	return ctx, release, nil, nil
+}
+
+// resolveReleaseEntries is the selector → exact pin step of
+// resolveReleaseCandidate without the contract check or digest, so callers
+// assembling a candidate from mixed sources (ship: stored pins plus unsaved
+// values) can reuse it. Entries come back sorted by alias.
+func (s *Service) resolveReleaseEntries(ctx context.Context, pr Principal, in domain.CreateConfigurationReleaseInput, collectErrors bool) (context.Context, []domain.ConfigurationReleaseEntry, []domain.ReleaseValidationError, error) {
 	var validation []domain.ReleaseValidationError
 	collect := func(alias string, verr domain.ReleaseValidationError, err error) error {
 		if !collectErrors {
@@ -137,20 +160,20 @@ func (s *Service) resolveReleaseCandidate(ctx context.Context, pr Principal, rs 
 	entries := make([]domain.ConfigurationReleaseEntry, 0, len(in.Entries))
 	for _, sel := range in.Entries {
 		if len(sel.Alias) == 0 || len(sel.Alias) > maxReleaseAliasBytes || !releaseAliasRE.MatchString(sel.Alias) {
-			return ctx, domain.ConfigurationRelease{}, nil, domain.Errorf(domain.ErrInvalidArgument, "invalid release alias %q", sel.Alias)
+			return ctx, nil, nil, domain.Errorf(domain.ErrInvalidArgument, "invalid release alias %q", sel.Alias)
 		}
 		if _, ok := seen[sel.Alias]; ok {
-			return ctx, domain.ConfigurationRelease{}, nil, domain.Errorf(domain.ErrInvalidArgument, "duplicate release alias %q", sel.Alias)
+			return ctx, nil, nil, domain.Errorf(domain.ErrInvalidArgument, "duplicate release alias %q", sel.Alias)
 		}
 		seen[sel.Alias] = struct{}{}
 		if sel.Version > 0 && sel.Label != "" {
-			return ctx, domain.ConfigurationRelease{}, nil, domain.Errorf(domain.ErrInvalidArgument, "release alias %q specifies both version and label", sel.Alias)
+			return ctx, nil, nil, domain.Errorf(domain.ErrInvalidArgument, "release alias %q specifies both version and label", sel.Alias)
 		}
 		if sel.Ref.NS == (domain.NamespaceRef{}) {
 			sel.Ref.NS = in.Namespace
 		}
 		if err := validateRef(sel.Ref); err != nil {
-			return ctx, domain.ConfigurationRelease{}, nil, err
+			return ctx, nil, nil, err
 		}
 		label := sel.Label
 		if sel.Version == 0 && label == "" {
@@ -161,7 +184,7 @@ func (s *Service) resolveReleaseCandidate(ctx context.Context, pr Principal, rs 
 			authorizedCtx, _, err := s.authorize(ctx, pr, domain.OpParameterRead, domain.ResourceParameter, sel.Ref)
 			if err != nil {
 				if err := collect(sel.Alias, validationAuthError(sel.Alias, err), err); err != nil {
-					return ctx, domain.ConfigurationRelease{}, nil, err
+					return ctx, nil, nil, err
 				}
 				continue
 			}
@@ -169,14 +192,14 @@ func (s *Service) resolveReleaseCandidate(ctx context.Context, pr Principal, rs 
 			p, err := s.store.GetParameter(ctx, sel.Ref, sel.Version, label)
 			if err != nil {
 				if err := collect(sel.Alias, validationReadError(sel.Alias, err), err); err != nil {
-					return ctx, domain.ConfigurationRelease{}, nil, err
+					return ctx, nil, nil, err
 				}
 				continue
 			}
 			if len(p.Metadata) > maxReleaseMetadataBytes {
 				err := domain.Errorf(domain.ErrFailedPrecondition, "release alias %q metadata exceeds release limit", sel.Alias)
 				if err := collect(sel.Alias, domain.ReleaseValidationError{Code: domain.ReleaseValidationUnreadable, Message: "resource metadata exceeds release limit"}, err); err != nil {
-					return ctx, domain.ConfigurationRelease{}, nil, err
+					return ctx, nil, nil, err
 				}
 				continue
 			}
@@ -185,7 +208,7 @@ func (s *Service) resolveReleaseCandidate(ctx context.Context, pr Principal, rs 
 			authorizedCtx, _, err := s.authorize(ctx, pr, domain.OpSecretRead, domain.ResourceSecret, sel.Ref)
 			if err != nil {
 				if err := collect(sel.Alias, validationAuthError(sel.Alias, err), err); err != nil {
-					return ctx, domain.ConfigurationRelease{}, nil, err
+					return ctx, nil, nil, err
 				}
 				continue
 			}
@@ -193,43 +216,31 @@ func (s *Service) resolveReleaseCandidate(ctx context.Context, pr Principal, rs 
 			_, ver, err := s.store.GetSecretVersion(ctx, sel.Ref, sel.Version, label)
 			if err != nil {
 				if err := collect(sel.Alias, validationReadError(sel.Alias, err), err); err != nil {
-					return ctx, domain.ConfigurationRelease{}, nil, err
+					return ctx, nil, nil, err
 				}
 				continue
 			}
 			if ver.State == domain.StateDestroyed {
 				err := domain.Errorf(domain.ErrFailedPrecondition, "release alias %q references a destroyed secret version", sel.Alias)
 				if err := collect(sel.Alias, domain.ReleaseValidationError{Code: domain.ReleaseValidationUnreadable, Message: "secret version is not readable"}, err); err != nil {
-					return ctx, domain.ConfigurationRelease{}, nil, err
+					return ctx, nil, nil, err
 				}
 				continue
 			}
 			if len(ver.Metadata) > maxReleaseMetadataBytes {
 				err := domain.Errorf(domain.ErrFailedPrecondition, "release alias %q metadata exceeds release limit", sel.Alias)
 				if err := collect(sel.Alias, domain.ReleaseValidationError{Code: domain.ReleaseValidationUnreadable, Message: "resource metadata exceeds release limit"}, err); err != nil {
-					return ctx, domain.ConfigurationRelease{}, nil, err
+					return ctx, nil, nil, err
 				}
 				continue
 			}
 			entries = append(entries, domain.ConfigurationReleaseEntry{Alias: sel.Alias, Kind: sel.Kind, Ref: sel.Ref, Version: ver.Version, ContentType: ver.ContentType, Metadata: ver.Metadata, ClientBound: ver.ClientBound, HasAccessToken: ver.HasAccessToken})
 		default:
-			return ctx, domain.ConfigurationRelease{}, nil, domain.Errorf(domain.ErrInvalidArgument, "release alias %q has unknown kind %q", sel.Alias, sel.Kind)
+			return ctx, nil, nil, domain.Errorf(domain.ErrInvalidArgument, "release alias %q has unknown kind %q", sel.Alias, sel.Kind)
 		}
 	}
 	sort.Slice(entries, func(i, j int) bool { return entries[i].Alias < entries[j].Alias })
-	release := domain.ConfigurationRelease{Namespace: in.Namespace, Name: in.Name, SchemaID: in.SchemaID, SchemaVersion: in.SchemaVersion, Entries: entries, Metadata: in.Metadata, CreatedBy: pr.Identity.Name}
-	if len(validation) > 0 {
-		return ctx, release, validation, nil
-	}
-	if err := s.validateApplicationReleaseContract(ctx, in.Namespace.App, in.Name, in.SchemaID, in.SchemaVersion, entries, !collectErrors); err != nil {
-		return ctx, domain.ConfigurationRelease{}, nil, err
-	}
-	var err error
-	release.Digest, err = releaseDigest(release)
-	if err != nil {
-		return ctx, domain.ConfigurationRelease{}, nil, fmt.Errorf("calculate configuration release digest: %w", err)
-	}
-	return ctx, release, nil, nil
+	return ctx, entries, validation, nil
 }
 
 // validateApplicationReleaseContract checks a release against its
@@ -541,8 +552,47 @@ func (s *Service) ActivateConfigurationRelease(ctx context.Context, pr Principal
 		}
 		s.auditRefWithNamespaceID(ctx, pr, event, domain.ResourceConfigurationRelease, domain.Ref{NS: ns, Key: name}, namespace.ID, version, "allow", map[string]string{"previous_version": strconv.FormatUint(active.PreviousVersion, 10)})
 		s.getHub().Wake()
+		s.notifyReleaseSubscribers(ns, name)
 	}
 	return active, changed, nil
+}
+
+// RollbackConfigurationRelease re-activates the previous release of a name,
+// guarded by an optional expectation on the currently active version. It is
+// authorized like activation and audited by activation's event classification
+// (configuration_release.rollback).
+func (s *Service) RollbackConfigurationRelease(ctx context.Context, pr Principal, ns domain.NamespaceRef, name string, expectedCurrent *uint64) (domain.RollbackResult, error) {
+	if err := validateReleaseAddress(ns, name); err != nil {
+		return domain.RollbackResult{}, err
+	}
+	ctx, namespace, err := s.authorize(ctx, pr, domain.OpConfigurationReleaseActivate, domain.ResourceConfigurationRelease, domain.Ref{NS: ns, Key: name})
+	if err != nil {
+		return domain.RollbackResult{}, err
+	}
+	rs, err := s.releaseStore()
+	if err != nil {
+		return domain.RollbackResult{}, err
+	}
+	active, err := rs.GetActiveConfigurationRelease(ctx, ns, name)
+	if errors.Is(err, domain.ErrNotFound) {
+		return domain.RollbackResult{}, domain.Errorf(domain.ErrFailedPrecondition, "release %s has no active version to roll back", name)
+	}
+	if err != nil {
+		return domain.RollbackResult{}, err
+	}
+	if active.PreviousVersion == 0 {
+		return domain.RollbackResult{}, domain.Errorf(domain.ErrFailedPrecondition, "release %s has no previous version to roll back to", name)
+	}
+	current := active.Release.Version
+	if expectedCurrent != nil && *expectedCurrent != current {
+		s.auditRefWithNamespaceID(ctx, pr, "configuration_release.cas_conflict", domain.ResourceConfigurationRelease, domain.Ref{NS: ns, Key: name}, namespace.ID, active.PreviousVersion, "deny", map[string]string{"reason": "rollback"})
+		return domain.RollbackResult{}, domain.Errorf(domain.ErrAborted, "release %s is at version %d, expected %d", name, current, *expectedCurrent)
+	}
+	next, changed, err := s.ActivateConfigurationRelease(ctx, pr, ns, name, active.PreviousVersion, &current)
+	if err != nil {
+		return domain.RollbackResult{}, err
+	}
+	return domain.RollbackResult{Active: next, RolledBackFrom: current, Changed: changed}, nil
 }
 
 func (s *Service) AuthorizeReleaseWatch(ctx context.Context, pr Principal, ns domain.NamespaceRef, name string) error {
@@ -623,6 +673,7 @@ func (s *Service) AcknowledgeConfigurationRelease(ctx context.Context, pr Princi
 	if err := rs.UpsertReleaseAcknowledgement(ctx, ack); err != nil {
 		return err
 	}
+	s.notifyReleaseSubscribers(ack.Namespace, ack.ReleaseName)
 	s.auditRefWithNamespaceID(ctx, pr, "configuration_release.acknowledge", domain.ResourceConfigurationRelease, domain.Ref{NS: ack.Namespace, Key: ack.ReleaseName}, namespace.ID, ack.ReleaseVersion, "allow", map[string]string{"state": ack.State, "category": ack.RejectionCategory, "client_name": ack.ClientName, "instance_id": ack.InstanceID})
 	return nil
 }
@@ -632,10 +683,14 @@ func (s *Service) SetReleaseSubscriberConnected(ctx context.Context, ns domain.N
 	if err != nil {
 		return err
 	}
-	return rs.SetReleaseInstanceConnected(ctx, domain.ReleaseSubscriberConnection{
+	if err := rs.SetReleaseInstanceConnected(ctx, domain.ReleaseSubscriberConnection{
 		Namespace: ns, ReleaseName: name, ClientName: clientName, InstanceID: instanceID,
 		Identity: identity, ConnectionID: connectionID, Connected: connected, ServerTimestamp: s.now(),
-	})
+	}); err != nil {
+		return err
+	}
+	s.notifyReleaseSubscribers(ns, name)
+	return nil
 }
 
 // ResetReleaseSubscriberConnections clears transport liveness left by an

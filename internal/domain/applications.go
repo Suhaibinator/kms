@@ -1,5 +1,7 @@
 package domain
 
+import "time"
+
 // ApplicationConfigurationCell is the current value or secret metadata for
 // one environment in the application dashboard. SecretValue is never present;
 // Value is populated only for parameters.
@@ -32,4 +34,230 @@ type ApplicationParameterWriteResult struct {
 	Version     uint64 `json:"version"`
 	Revision    uint64 `json:"revision"`
 	Error       string `json:"error,omitempty"`
+}
+
+// --- console read models ----------------------------------------------------
+
+// OverviewValue is one contract alias resolved against an environment. Key is
+// empty when the alias resolved to nothing.
+type OverviewValue struct {
+	Alias          string
+	Kind           string
+	Key            string
+	Present        bool
+	ContentType    string
+	CurrentVersion uint64
+	PinnedVersion  uint64
+	ClientBound    bool
+}
+
+// OverviewActiveRelease is the active release of one environment plus the
+// activation facts the console shows next to it.
+type OverviewActiveRelease struct {
+	Release            ConfigurationRelease
+	ActivationRevision uint64
+	PreviousVersion    uint64
+	IsRolledBack       bool
+}
+
+// SubscriberInstance is the effective lifecycle row for one
+// (identity, client, instance) triple, folded from the per-state
+// acknowledgement rows.
+type SubscriberInstance struct {
+	Identity           string
+	ClientName         string
+	InstanceID         string
+	State              string
+	ReleaseVersion     uint64
+	ActivationRevision uint64
+	RejectionCategory  string
+	Diagnostic         string
+	Connected          bool
+	ServerTimestamp    time.Time
+}
+
+// RolloutSummary aggregates subscriber instances against the current
+// activation revision.
+type RolloutSummary struct {
+	Total             int
+	Connected         int
+	AppliedCurrent    int
+	Rejected          int
+	Pending           int
+	Stale             int
+	OtherReleaseNames []string
+	RejectedInstances []SubscriberInstance
+	Truncated         bool
+}
+
+type EnvironmentOverview struct {
+	Namespace     Namespace
+	Production    bool
+	Status        string
+	ValuesState   string
+	ReleaseState  string
+	RolloutState  string
+	Values        []OverviewValue
+	Active        *OverviewActiveRelease
+	LatestVersion uint64
+	ReleaseCount  uint64
+	Rollout       RolloutSummary
+	Findings      []Finding
+}
+
+type ApplicationOverview struct {
+	Application  Application
+	Status       string
+	Findings     []Finding
+	Environments []EnvironmentOverview
+	Rows         []ApplicationConfigurationRow
+	SchemaJSON   string
+}
+
+type FleetEnvironment struct {
+	Env        string
+	Status     string
+	Production bool
+}
+
+type FleetApplication struct {
+	Application  Application
+	Status       string
+	Environments []FleetEnvironment
+}
+
+// --- ship -------------------------------------------------------------------
+
+// ShipChange is one row of a ship request: Value writes a new parameter
+// version; Version/Label pins an existing one without writing. Secrets accept
+// Version/Label only.
+type ShipChange struct {
+	Alias       string
+	Value       *string
+	ContentType string
+	Version     uint64
+	Label       string
+}
+
+type ShipInput struct {
+	Application           string
+	Environment           string
+	Changes               []ShipChange
+	Metadata              string
+	DryRun                bool
+	ExpectedActiveVersion *uint64
+	RequestID             string
+}
+
+const (
+	ShipEntryEdited   = "edited"
+	ShipEntryPinned   = "pinned"
+	ShipEntryIncluded = "included"
+	ShipEntryMissing  = "missing"
+
+	ShipStatusPreview                    = "preview"
+	ShipStatusActivated                  = "activated"
+	ShipStatusRejected                   = "rejected"
+	ShipStatusReleaseCreatedNotActivated = "release_created_not_activated"
+	ShipStatusConflict                   = "conflict"
+)
+
+type ShipPreviewEntry struct {
+	Alias       string
+	Kind        string
+	Key         string
+	FromVersion uint64
+	ToVersion   uint64
+	Change      string
+}
+
+type ShipPreview struct {
+	BaseVersion   uint64
+	ReleaseName   string
+	SchemaID      string
+	SchemaVersion uint64
+	Entries       []ShipPreviewEntry
+	Validation    []ReleaseValidationError
+	Warnings      []Finding
+}
+
+type ShipParameterWrite struct {
+	Alias    string
+	Key      string
+	Version  uint64
+	Revision uint64
+}
+
+type ShipActivation struct {
+	ActivationRevision uint64
+	PreviousVersion    uint64
+	Changed            bool
+}
+
+type ShipError struct {
+	Code             string
+	Message          string
+	ValidationErrors []ReleaseValidationError
+	CurrentVersion   uint64
+}
+
+type ShipResult struct {
+	Status     string
+	Preview    ShipPreview
+	Parameters []ShipParameterWrite
+	Release    *ConfigurationRelease
+	Activation *ShipActivation
+	Error      *ShipError
+}
+
+// --- clone ------------------------------------------------------------------
+
+type CloneEnvironmentInput struct {
+	Application string
+	SourceEnv   string
+	TargetEnv   string
+	CopyValues  bool
+	AuthMethods []AuthMethod
+	Description string
+}
+
+const (
+	CloneItemCopied          = "copied"
+	CloneItemNeedsValue      = "needs_value"
+	CloneItemExists          = "exists"
+	CloneItemMissingInSource = "missing_in_source"
+	CloneItemError           = "error"
+)
+
+type CloneEnvironmentItem struct {
+	Alias         string
+	Key           string
+	Kind          string
+	Action        string
+	SourceVersion uint64
+	TargetVersion uint64
+	Error         string
+}
+
+type CloneEnvironmentResult struct {
+	Namespace        Namespace
+	NamespaceCreated bool
+	Items            []CloneEnvironmentItem
+	NeedsValue       []string
+}
+
+// --- rollback ---------------------------------------------------------------
+
+type RollbackResult struct {
+	Active         ActiveConfigurationRelease
+	RolledBackFrom uint64
+	Changed        bool
+}
+
+// SubscriberStreamSnapshot is one frame of the live rollout stream.
+type SubscriberStreamSnapshot struct {
+	Summary         RolloutSummary
+	Subscribers     []ReleaseAcknowledgement
+	CurrentRevision uint64
+	ServerTime      time.Time
 }

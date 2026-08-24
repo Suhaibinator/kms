@@ -1,15 +1,4 @@
 {
-  "type_mapping": {
-    "object": "json",
-    "array": "json",
-    "string": "string",
-    "string+kms-base64": "binary",
-    "integer": "integer",
-    "number": "float",
-    "boolean": "boolean",
-    "union": "json",
-    "absent": "json"
-  },
   "cases": [
     {
       "name": "no rows at all",
@@ -23,7 +12,7 @@
           {
             "alias": "rate_limits",
             "kind": "parameter",
-            "content_type": "json"
+            "content_type": "integer"
           },
           {
             "alias": "db_password",
@@ -79,7 +68,7 @@
           {
             "alias": "rate_limits",
             "kind": "parameter",
-            "content_type": "json"
+            "content_type": "integer"
           },
           {
             "alias": "db_password",
@@ -99,14 +88,13 @@
           {
             "alias": "rate_limits",
             "kind": "parameter",
-            "present": true,
-            "content_type": "json",
-            "current_version": 9
+            "present": false
           },
           {
             "alias": "db_password",
             "kind": "secret",
-            "present": false
+            "present": true,
+            "current_version": 2
           }
         ],
         "active": null,
@@ -119,7 +107,10 @@
         "rollout_state": "no_subscribers",
         "env_status": "incomplete",
         "app_status": "setup",
-        "finding_codes": ["resource_missing", "no_active_release"]
+        "finding_codes": [
+          "resource_missing",
+          "no_active_release"
+        ]
       }
     },
     {
@@ -134,7 +125,7 @@
           {
             "alias": "rate_limits",
             "kind": "parameter",
-            "content_type": "json"
+            "content_type": "integer"
           },
           {
             "alias": "db_password",
@@ -175,7 +166,10 @@
         "rollout_state": "no_subscribers",
         "env_status": "incomplete",
         "app_status": "setup",
-        "finding_codes": ["content_type_mismatch", "no_active_release"]
+        "finding_codes": [
+          "content_type_mismatch",
+          "no_active_release"
+        ]
       }
     },
     {
@@ -190,7 +184,7 @@
           {
             "alias": "rate_limits",
             "kind": "parameter",
-            "content_type": "json"
+            "content_type": "integer"
           },
           {
             "alias": "db_password",
@@ -211,7 +205,7 @@
             "alias": "rate_limits",
             "kind": "parameter",
             "present": true,
-            "content_type": "json",
+            "content_type": "integer",
             "current_version": 9
           },
           {
@@ -231,7 +225,68 @@
         "rollout_state": "no_subscribers",
         "env_status": "unreleased",
         "app_status": "setup",
-        "finding_codes": ["no_active_release"]
+        "finding_codes": [
+          "no_active_release"
+        ]
+      }
+    },
+    {
+      "name": "schema not pinned",
+      "input": {
+        "contract": [
+          {
+            "alias": "database",
+            "kind": "parameter",
+            "content_type": "json"
+          },
+          {
+            "alias": "rate_limits",
+            "kind": "parameter",
+            "content_type": "integer"
+          },
+          {
+            "alias": "db_password",
+            "kind": "secret"
+          }
+        ],
+        "schema_pinned": false,
+        "schema_exists": false,
+        "values": [
+          {
+            "alias": "database",
+            "kind": "parameter",
+            "present": true,
+            "content_type": "json",
+            "current_version": 8
+          },
+          {
+            "alias": "rate_limits",
+            "kind": "parameter",
+            "present": true,
+            "content_type": "integer",
+            "current_version": 9
+          },
+          {
+            "alias": "db_password",
+            "kind": "secret",
+            "present": true,
+            "current_version": 2
+          }
+        ],
+        "active": null,
+        "latest_version": 0,
+        "instances": []
+      },
+      "expected": {
+        "values_state": "complete",
+        "release_state": "none",
+        "rollout_state": "no_subscribers",
+        "env_status": "unreleased",
+        "app_status": "setup",
+        "finding_codes": [
+          "schema_unpinned",
+          "no_active_release"
+        ]
       }
     },
     {
@@ -246,7 +301,7 @@
           {
             "alias": "rate_limits",
             "kind": "parameter",
-            "content_type": "json"
+            "content_type": "integer"
           },
           {
             "alias": "db_password",
@@ -267,7 +322,7 @@
             "alias": "rate_limits",
             "kind": "parameter",
             "present": true,
-            "content_type": "json",
+            "content_type": "integer",
             "current_version": 9
           },
           {
@@ -283,8 +338,8 @@
           "previous_version": 11,
           "pins": {
             "database": 8,
-            "rate_limits": 9,
-            "db_password": 2
+            "db_password": 2,
+            "rate_limits": 9
           }
         },
         "latest_version": 12,
@@ -296,7 +351,9 @@
         "rollout_state": "no_subscribers",
         "env_status": "ready",
         "app_status": "ready",
-        "finding_codes": ["no_subscribers"]
+        "finding_codes": [
+          "no_subscribers"
+        ]
       }
     },
     {
@@ -311,7 +368,7 @@
           {
             "alias": "rate_limits",
             "kind": "parameter",
-            "content_type": "json"
+            "content_type": "integer"
           },
           {
             "alias": "db_password",
@@ -332,7 +389,7 @@
             "alias": "rate_limits",
             "kind": "parameter",
             "present": true,
-            "content_type": "json",
+            "content_type": "integer",
             "current_version": 9
           },
           {
@@ -348,8 +405,8 @@
           "previous_version": 11,
           "pins": {
             "database": 8,
-            "rate_limits": 9,
-            "db_password": 2
+            "db_password": 2,
+            "rate_limits": 9
           }
         },
         "latest_version": 12,
@@ -389,7 +446,7 @@
           {
             "alias": "rate_limits",
             "kind": "parameter",
-            "content_type": "json"
+            "content_type": "integer"
           },
           {
             "alias": "db_password",
@@ -410,7 +467,7 @@
             "alias": "rate_limits",
             "kind": "parameter",
             "present": true,
-            "content_type": "json",
+            "content_type": "integer",
             "current_version": 10
           },
           {
@@ -426,8 +483,8 @@
           "previous_version": 11,
           "pins": {
             "database": 8,
-            "rate_limits": 9,
-            "db_password": 2
+            "db_password": 2,
+            "rate_limits": 9
           }
         },
         "latest_version": 12,
@@ -452,11 +509,13 @@
         "rollout_state": "applied",
         "env_status": "drift",
         "app_status": "attention",
-        "finding_codes": ["unreleased_changes"]
+        "finding_codes": [
+          "unreleased_changes"
+        ]
       }
     },
     {
-      "name": "instance rejected at the current revision",
+      "name": "active release missing a contract alias",
       "input": {
         "contract": [
           {
@@ -467,7 +526,7 @@
           {
             "alias": "rate_limits",
             "kind": "parameter",
-            "content_type": "json"
+            "content_type": "integer"
           },
           {
             "alias": "db_password",
@@ -488,7 +547,7 @@
             "alias": "rate_limits",
             "kind": "parameter",
             "present": true,
-            "content_type": "json",
+            "content_type": "integer",
             "current_version": 9
           },
           {
@@ -504,8 +563,75 @@
           "previous_version": 11,
           "pins": {
             "database": 8,
-            "rate_limits": 9,
             "db_password": 2
+          }
+        },
+        "latest_version": 12,
+        "instances": []
+      },
+      "expected": {
+        "values_state": "complete",
+        "release_state": "blocked",
+        "rollout_state": "no_subscribers",
+        "env_status": "blocked",
+        "app_status": "blocked",
+        "finding_codes": [
+          "contract_release_mismatch",
+          "alias_not_in_release"
+        ]
+      }
+    },
+    {
+      "name": "instance rejected at the current revision",
+      "input": {
+        "contract": [
+          {
+            "alias": "database",
+            "kind": "parameter",
+            "content_type": "json"
+          },
+          {
+            "alias": "rate_limits",
+            "kind": "parameter",
+            "content_type": "integer"
+          },
+          {
+            "alias": "db_password",
+            "kind": "secret"
+          }
+        ],
+        "schema_pinned": true,
+        "schema_exists": true,
+        "values": [
+          {
+            "alias": "database",
+            "kind": "parameter",
+            "present": true,
+            "content_type": "json",
+            "current_version": 8
+          },
+          {
+            "alias": "rate_limits",
+            "kind": "parameter",
+            "present": true,
+            "content_type": "integer",
+            "current_version": 9
+          },
+          {
+            "alias": "db_password",
+            "kind": "secret",
+            "present": true,
+            "current_version": 2
+          }
+        ],
+        "active": {
+          "version": 12,
+          "activation_revision": 41,
+          "previous_version": 11,
+          "pins": {
+            "database": 8,
+            "db_password": 2,
+            "rate_limits": 9
           }
         },
         "latest_version": 12,
@@ -542,7 +668,9 @@
         "rollout_state": "degraded",
         "env_status": "degraded",
         "app_status": "attention",
-        "finding_codes": ["instance_rejected"]
+        "finding_codes": [
+          "instance_rejected"
+        ]
       }
     },
     {
@@ -557,7 +685,7 @@
           {
             "alias": "rate_limits",
             "kind": "parameter",
-            "content_type": "json"
+            "content_type": "integer"
           },
           {
             "alias": "db_password",
@@ -578,7 +706,7 @@
             "alias": "rate_limits",
             "kind": "parameter",
             "present": true,
-            "content_type": "json",
+            "content_type": "integer",
             "current_version": 9
           },
           {
@@ -594,8 +722,8 @@
           "previous_version": 11,
           "pins": {
             "database": 8,
-            "rate_limits": 9,
-            "db_password": 2
+            "db_password": 2,
+            "rate_limits": 9
           }
         },
         "latest_version": 12,
@@ -620,7 +748,169 @@
         "rollout_state": "rolling",
         "env_status": "rolling",
         "app_status": "attention",
-        "finding_codes": ["instance_pending"]
+        "finding_codes": [
+          "instance_pending"
+        ]
+      }
+    },
+    {
+      "name": "instance disconnected before applying",
+      "input": {
+        "contract": [
+          {
+            "alias": "database",
+            "kind": "parameter",
+            "content_type": "json"
+          },
+          {
+            "alias": "rate_limits",
+            "kind": "parameter",
+            "content_type": "integer"
+          },
+          {
+            "alias": "db_password",
+            "kind": "secret"
+          }
+        ],
+        "schema_pinned": true,
+        "schema_exists": true,
+        "values": [
+          {
+            "alias": "database",
+            "kind": "parameter",
+            "present": true,
+            "content_type": "json",
+            "current_version": 8
+          },
+          {
+            "alias": "rate_limits",
+            "kind": "parameter",
+            "present": true,
+            "content_type": "integer",
+            "current_version": 9
+          },
+          {
+            "alias": "db_password",
+            "kind": "secret",
+            "present": true,
+            "current_version": 2
+          }
+        ],
+        "active": {
+          "version": 12,
+          "activation_revision": 41,
+          "previous_version": 11,
+          "pins": {
+            "database": 8,
+            "db_password": 2,
+            "rate_limits": 9
+          }
+        },
+        "latest_version": 12,
+        "instances": [
+          {
+            "identity": "gradethis-dev",
+            "client_name": "grader-api",
+            "instance_id": "grader-api-1",
+            "state": "applied",
+            "release_version": 11,
+            "activation_revision": 40,
+            "rejection_category": "",
+            "diagnostic": "",
+            "connected": false,
+            "server_timestamp_unix_ms": 1755800000000
+          }
+        ]
+      },
+      "expected": {
+        "values_state": "complete",
+        "release_state": "active",
+        "rollout_state": "stale",
+        "env_status": "ready",
+        "app_status": "ready",
+        "finding_codes": [
+          "instance_stale"
+        ]
+      }
+    },
+    {
+      "name": "rolled back to the previous version",
+      "input": {
+        "contract": [
+          {
+            "alias": "database",
+            "kind": "parameter",
+            "content_type": "json"
+          },
+          {
+            "alias": "rate_limits",
+            "kind": "parameter",
+            "content_type": "integer"
+          },
+          {
+            "alias": "db_password",
+            "kind": "secret"
+          }
+        ],
+        "schema_pinned": true,
+        "schema_exists": true,
+        "values": [
+          {
+            "alias": "database",
+            "kind": "parameter",
+            "present": true,
+            "content_type": "json",
+            "current_version": 8
+          },
+          {
+            "alias": "rate_limits",
+            "kind": "parameter",
+            "present": true,
+            "content_type": "integer",
+            "current_version": 9
+          },
+          {
+            "alias": "db_password",
+            "kind": "secret",
+            "present": true,
+            "current_version": 2
+          }
+        ],
+        "active": {
+          "version": 11,
+          "activation_revision": 41,
+          "previous_version": 12,
+          "pins": {
+            "database": 8,
+            "db_password": 2,
+            "rate_limits": 9
+          }
+        },
+        "latest_version": 12,
+        "instances": [
+          {
+            "identity": "gradethis-dev",
+            "client_name": "grader-api",
+            "instance_id": "grader-api-1",
+            "state": "applied",
+            "release_version": 12,
+            "activation_revision": 41,
+            "rejection_category": "",
+            "diagnostic": "",
+            "connected": true,
+            "server_timestamp_unix_ms": 1755800000000
+          }
+        ]
+      },
+      "expected": {
+        "values_state": "complete",
+        "release_state": "active",
+        "rollout_state": "applied",
+        "env_status": "ready",
+        "app_status": "ready",
+        "finding_codes": [
+          "rolled_back"
+        ]
       }
     },
     {
@@ -635,7 +925,7 @@
           {
             "alias": "rate_limits",
             "kind": "parameter",
-            "content_type": "json"
+            "content_type": "integer"
           },
           {
             "alias": "db_password",
@@ -656,7 +946,7 @@
             "alias": "rate_limits",
             "kind": "parameter",
             "present": true,
-            "content_type": "json",
+            "content_type": "integer",
             "current_version": 9
           },
           {
@@ -672,8 +962,8 @@
           "previous_version": 11,
           "pins": {
             "database": 8,
-            "rate_limits": 9,
-            "db_password": 2
+            "db_password": 2,
+            "rate_limits": 9
           }
         },
         "latest_version": 12,
@@ -685,8 +975,21 @@
         "rollout_state": "no_subscribers",
         "env_status": "blocked",
         "app_status": "blocked",
-        "finding_codes": ["schema_missing", "no_subscribers"]
+        "finding_codes": [
+          "schema_missing"
+        ]
       }
     }
-  ]
+  ],
+  "type_mapping": {
+    "absent": "json",
+    "array": "json",
+    "boolean": "boolean",
+    "integer": "integer",
+    "number": "float",
+    "object": "json",
+    "string": "string",
+    "string+kms-base64": "binary",
+    "union": "json"
+  }
 }

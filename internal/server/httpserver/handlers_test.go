@@ -763,3 +763,42 @@ func TestHealthReportsListenerDetails(t *testing.T) {
 		t.Fatalf("tls request health = %v", body)
 	}
 }
+
+func TestRollbackReleaseHTTP(t *testing.T) {
+	e := newReleaseTestEnv(t)
+	e.createNS("prod", "app")
+	create := func(value string) {
+		w := e.admin(http.MethodPut, "/api/v1/parameters", map[string]any{"env": "prod", "app": "app", "key": "config", "value": value, "content_type": "integer"})
+		mustStatus(t, w, http.StatusOK)
+		w = e.admin(http.MethodPost, "/api/v1/releases", map[string]any{
+			"namespace": map[string]any{"env": "prod", "app": "app"}, "name": "runtime",
+			"entries": []map[string]any{{"alias": "config", "kind": "parameter", "ref": map[string]any{"namespace": map[string]any{"env": "prod", "app": "app"}, "key": "config"}}},
+		})
+		mustStatus(t, w, http.StatusCreated)
+	}
+	activate := func(version int) {
+		w := e.admin(http.MethodPost, "/api/v1/releases/activate", map[string]any{"namespace": map[string]any{"env": "prod", "app": "app"}, "name": "runtime", "version": version})
+		mustStatus(t, w, http.StatusOK)
+	}
+	w := e.admin(http.MethodPost, "/api/v1/releases/rollback", map[string]any{"env": "prod", "app": "app", "name": "runtime"})
+	mustStatus(t, w, http.StatusPreconditionFailed)
+	create("1")
+	create("2")
+	activate(1)
+	w = e.admin(http.MethodPost, "/api/v1/releases/rollback", map[string]any{"env": "prod", "app": "app", "name": "runtime"})
+	mustStatus(t, w, http.StatusPreconditionFailed)
+	activate(2)
+	w = e.admin(http.MethodPost, "/api/v1/releases/rollback", map[string]any{"env": "prod", "app": "app", "name": "runtime", "expected_current_version": 1})
+	mustStatus(t, w, http.StatusConflict)
+	if errCode(t, w) != "aborted" {
+		t.Fatalf("code = %s", errCode(t, w))
+	}
+	w = e.admin(http.MethodPost, "/api/v1/releases/rollback", map[string]any{"env": "prod", "app": "app", "name": "runtime", "expected_current_version": 2})
+	mustStatus(t, w, http.StatusOK)
+	body := decodeBody(t, w)
+	if body["rolled_back_from"].(float64) != 2 || body["changed"] != true || body["previous_version"].(float64) != 2 || body["release"].(map[string]any)["version"].(float64) != 1 {
+		t.Fatalf("rollback body = %v", body)
+	}
+	w = e.do(http.MethodPost, "/api/v1/releases/rollback", map[string]any{"env": "prod", "app": "app", "name": "runtime"}, nil)
+	mustStatus(t, w, http.StatusUnauthorized)
+}

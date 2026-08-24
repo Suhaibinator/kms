@@ -63,32 +63,45 @@ type server struct {
 	loginLimiter *rateLimiter
 	static       *staticHandler
 	apiMux       *http.ServeMux
+	stream       streamLimits
+	streams      streamRegistry
 }
 
 // New builds the HTTP server. The returned *http.Server has its Handler and
 // Addr set; the caller starts it with ListenAndServe / Serve (and Shutdown for
 // graceful stop).
 func New(svc *core.Service, cfg Config) (*http.Server, error) {
-	s := &server{
-		svc:          svc,
-		cfg:          cfg,
-		log:          svc.Logger(),
-		loginLimiter: newRateLimiter(5, 10),
-	}
-	if cfg.FrontendEnabled && cfg.Frontend != nil {
-		s.static = newStaticHandler(cfg.Frontend)
-	}
-	s.apiMux = s.newAPIMux()
-
+	s := newServer(svc, cfg)
 	return &http.Server{
 		Addr:              cfg.Addr,
-		Handler:           s.logging(http.HandlerFunc(s.route)),
+		Handler:           s.handler(),
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       30 * time.Second,
 		WriteTimeout:      60 * time.Second,
 		IdleTimeout:       120 * time.Second,
 	}, nil
 }
+
+// newServer wires the request pipeline without binding it to an *http.Server,
+// so tests can tune the server (stream limits) before taking its handler.
+func newServer(svc *core.Service, cfg Config) *server {
+	s := &server{
+		svc:          svc,
+		cfg:          cfg,
+		log:          svc.Logger(),
+		loginLimiter: newRateLimiter(5, 10),
+		stream:       defaultStreamLimits(),
+		streams:      newStreamRegistry(),
+	}
+	if cfg.FrontendEnabled && cfg.Frontend != nil {
+		s.static = newStaticHandler(cfg.Frontend)
+	}
+	s.apiMux = s.newAPIMux()
+	return s
+}
+
+// handler is the full middleware chain around the dispatcher.
+func (s *server) handler() http.Handler { return s.logging(http.HandlerFunc(s.route)) }
 
 // route is the top-level dispatcher: health/readiness probes, the JSON API, or
 // the static frontend.

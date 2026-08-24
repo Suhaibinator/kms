@@ -20,7 +20,11 @@ func (s *server) newAPIMux() *http.ServeMux {
 	mux.HandleFunc("POST /api/v1/applications", s.handleCreateApplication)
 	mux.HandleFunc("PATCH /api/v1/applications", s.handleUpdateApplication)
 	mux.HandleFunc("DELETE /api/v1/applications", s.handleDeleteApplication)
+	mux.HandleFunc("GET /api/v1/applications/get", s.handleGetApplication)
 	mux.HandleFunc("GET /api/v1/applications/dashboard", s.handleApplicationDashboard)
+	mux.HandleFunc("GET /api/v1/applications/overview", s.handleApplicationOverview)
+	mux.HandleFunc("POST /api/v1/applications/ship", s.handleShipApplication)
+	mux.HandleFunc("POST /api/v1/applications/environments/clone", s.handleCloneEnvironment)
 	mux.HandleFunc("PUT /api/v1/applications/parameters", s.handlePutApplicationParameter)
 
 	mux.HandleFunc("GET /api/v1/namespaces", s.handleListNamespaces)
@@ -58,6 +62,7 @@ func (s *server) newAPIMux() *http.ServeMux {
 	mux.HandleFunc("GET /api/v1/audit", s.handleListAudit)
 	mux.HandleFunc("GET /api/v1/subscribers", s.handleListSubscribers)
 	mux.HandleFunc("GET /api/v1/release-subscribers", s.handleListReleaseSubscribers)
+	mux.HandleFunc("GET /api/v1/release-subscribers/stream", s.handleReleaseSubscriberStream)
 
 	mux.HandleFunc("GET /api/v1/releases", s.handleListReleases)
 	mux.HandleFunc("POST /api/v1/releases", s.handleCreateRelease)
@@ -65,6 +70,7 @@ func (s *server) newAPIMux() *http.ServeMux {
 	mux.HandleFunc("GET /api/v1/releases/active", s.handleGetActiveRelease)
 	mux.HandleFunc("POST /api/v1/releases/validate", s.handleValidateRelease)
 	mux.HandleFunc("POST /api/v1/releases/activate", s.handleActivateRelease)
+	mux.HandleFunc("POST /api/v1/releases/rollback", s.handleRollbackRelease)
 	mux.HandleFunc("GET /api/v1/configuration-schemas", s.handleListConfigurationSchemas)
 	mux.HandleFunc("POST /api/v1/configuration-schemas", s.handleCreateConfigurationSchema)
 	mux.HandleFunc("GET /api/v1/keys", s.handleListKeys)

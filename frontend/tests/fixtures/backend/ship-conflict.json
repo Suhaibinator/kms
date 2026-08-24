@@ -1,67 +1,58 @@
 {
-  "status": "conflict",
-  "preview": {
-    "base_version": 7,
-    "release_name": "runtime",
-    "schema_id": "gradethis-runtime",
-    "schema_version": 3,
-    "entries": [
-      {
-        "alias": "database",
-        "kind": "parameter",
-        "key": "database",
-        "from_version": 5,
-        "to_version": 5,
-        "change": "included"
-      },
-      {
-        "alias": "db_password",
-        "kind": "secret",
-        "key": "db_password",
-        "from_version": 3,
-        "to_version": 3,
-        "change": "included"
-      },
-      {
-        "alias": "rate_limits",
-        "kind": "parameter",
-        "key": "rate_limits",
-        "from_version": 6,
-        "to_version": 11,
-        "change": "edited"
-      }
-    ],
-    "validation": {
-      "valid": true,
-      "errors": []
-    },
-    "warnings": [
-      {
-        "code": "production",
-        "severity": "info",
-        "scope": {
-          "env": "prod"
-        },
-        "params": {}
-      }
-    ]
+  "error": {
+    "code": "aborted",
+    "current_version": 8,
+    "message": "the active release changed while shipping; the new release was created but not activated"
   },
   "parameters": [
     {
       "alias": "rate_limits",
       "key": "rate_limits",
-      "version": 11,
-      "revision": 52
+      "revision": 52,
+      "version": 11
     }
   ],
-  "release": {
-    "name": "runtime",
-    "version": 9,
-    "digest": "sha256:7d8c1a2b3e4f5061728394a5b6c7d8e9"
+  "preview": {
+    "base_version": 7,
+    "entries": [
+      {
+        "alias": "database",
+        "change": "included",
+        "from_version": 3,
+        "key": "database",
+        "kind": "parameter",
+        "to_version": 3
+      },
+      {
+        "alias": "db_password",
+        "change": "included",
+        "from_version": 2,
+        "key": "db_password",
+        "kind": "secret",
+        "to_version": 2
+      },
+      {
+        "alias": "rate_limits",
+        "change": "edited",
+        "from_version": 10,
+        "key": "rate_limits",
+        "kind": "parameter",
+        "to_version": 11
+      }
+    ],
+    "release_name": "runtime",
+    "schema_id": "runtime",
+    "schema_version": 1,
+    "validation": {
+      "errors": [],
+      "valid": true
+    },
+    "warnings": []
   },
-  "error": {
-    "code": "already_exists",
-    "message": "prod/gradethis runtime moved to version 8 (expected 7); release 9 was created but not activated",
-    "current_version": 8
-  }
+  "release": {
+    "digest": "3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "name": "runtime",
+    "version": 9
+  },
+  "status": "conflict"
 }

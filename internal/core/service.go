@@ -110,6 +110,9 @@ type Service struct {
 	log          *zap.Logger
 	version      string
 	now          func() time.Time
+	// releaseNotify fans out "subscriber state changed" wakeups to the
+	// console's live rollout streams.
+	releaseNotify *releaseSubscriberNotifier
 	// filteredPageKey encrypts continuation state for authorization-filtered
 	// listings. Raw storage cursors can contain hidden namespace names and must
 	// never be returned to delegated callers.
@@ -124,7 +127,7 @@ func New(store storage.Store, logger *zap.Logger, version string) *Service {
 	if logger == nil {
 		logger = zap.NewNop()
 	}
-	s := &Service{store: store, log: logger, version: version, now: func() time.Time { return time.Now().UTC() }, filteredPageKey: mustNewFilteredPageKey()}
+	s := &Service{store: store, log: logger, version: version, now: func() time.Time { return time.Now().UTC() }, filteredPageKey: mustNewFilteredPageKey(), releaseNotify: newReleaseSubscriberNotifier()}
 	s.auditEnabled.Store(true)
 	var h Hub = noopHub{}
 	s.hub.Store(&h)

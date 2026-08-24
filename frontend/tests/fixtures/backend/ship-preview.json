@@ -1,41 +1,41 @@
 {
-  "status": "preview",
+  "parameters": [],
   "preview": {
-    "base_version": 12,
-    "release_name": "runtime",
-    "schema_id": "gradethis-runtime",
-    "schema_version": 3,
+    "base_version": 1,
     "entries": [
       {
         "alias": "database",
-        "kind": "parameter",
+        "change": "included",
+        "from_version": 1,
         "key": "database",
-        "from_version": 8,
-        "to_version": 8,
-        "change": "included"
+        "kind": "parameter",
+        "to_version": 1
       },
       {
         "alias": "db_password",
-        "kind": "secret",
+        "change": "included",
+        "from_version": 1,
         "key": "db_password",
-        "from_version": 2,
-        "to_version": 2,
-        "change": "included"
+        "kind": "secret",
+        "to_version": 1
       },
       {
         "alias": "rate_limits",
-        "kind": "parameter",
+        "change": "edited",
+        "from_version": 2,
         "key": "rate_limits",
-        "from_version": 9,
-        "to_version": 10,
-        "change": "edited"
+        "kind": "parameter",
+        "to_version": 3
       }
     ],
+    "release_name": "runtime",
+    "schema_id": "runtime",
+    "schema_version": 1,
     "validation": {
-      "valid": true,
-      "errors": []
+      "errors": [],
+      "valid": true
     },
     "warnings": []
   },
-  "parameters": []
+  "status": "preview"
 }

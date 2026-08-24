@@ -157,3 +157,26 @@ func (s *server) handleListReleaseSubscribers(w http.ResponseWriter, r *http.Req
 		"subscribers": out, "next_page_token": next, "current_revision": revision,
 	})
 }
+
+func (s *server) handleRollbackRelease(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Env                    string  `json:"env"`
+		App                    string  `json:"app"`
+		Name                   string  `json:"name"`
+		ExpectedCurrentVersion *uint64 `json:"expected_current_version"`
+	}
+	if err := decodeJSON(w, r, &body); err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	result, err := s.svc.RollbackConfigurationRelease(r.Context(), principalFrom(r.Context()),
+		domain.NamespaceRef{Env: body.Env, App: body.App}, body.Name, body.ExpectedCurrentVersion)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"release": toReleaseDTO(result.Active.Release), "activation_revision": result.Active.ActivationRevision,
+		"previous_version": result.Active.PreviousVersion, "rolled_back_from": result.RolledBackFrom, "changed": result.Changed,
+	})
+}
