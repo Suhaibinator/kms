@@ -6,6 +6,7 @@ import type { ReleaseSnapshot } from "../../../src/index.js";
 import {
   CandidateError,
   cloneConfig,
+  encodeDefaultsArtifact as encodeDefaultsArtifactWire,
   immutableSnapshot,
   ReleaseIdentity,
   startManagedConfig,
@@ -51,6 +52,15 @@ export function encodeParameterGroups(config: RootConfig): Readonly<Record<strin
   const source = cloneConfig(config);
   return Object.freeze({
     "application": encodeGroup(source, groupCodec0),
+  });
+}
+
+export function encodeDefaultsArtifact(profile: string, config: RootConfig): string {
+  return encodeDefaultsArtifactWire({
+    profile,
+    schemaSHA256,
+    contract: generatedContract,
+    parameters: encodeParameterGroups(config),
   });
 }
 

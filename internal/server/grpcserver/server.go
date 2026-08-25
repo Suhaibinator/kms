@@ -23,6 +23,7 @@ import (
 	kmsv1 "github.com/Suhaibinator/kms/gen/kmsv1"
 	"github.com/Suhaibinator/kms/internal/core"
 	"github.com/Suhaibinator/kms/internal/watch"
+	"github.com/Suhaibinator/kms/sdk/go/configstore"
 )
 
 // Config configures the gRPC server.
@@ -47,6 +48,11 @@ const (
 	defaultKeepaliveTime         = 30 * time.Second
 	defaultKeepaliveMinTime      = 10 * time.Second
 	defaultHealthRefreshInterval = 5 * time.Second
+	// The artifact itself remains capped by configstore at exactly 4 MiB. The
+	// transport needs room for protobuf field framing plus the namespace,
+	// execution options, and plan digest carried beside those bytes.
+	defaultsProtobufEnvelopeHeadroom = 64 << 10
+	maxReceiveMessageBytes           = configstore.MaxDefaultsArtifactSize + defaultsProtobufEnvelopeHeadroom
 )
 
 // Server wraps a *grpc.Server wired to the core service and watch hub.
@@ -90,6 +96,7 @@ func New(svc *core.Service, hub *watch.Hub, cfg Config) (*Server, error) {
 	}
 
 	opts := []grpc.ServerOption{
+		grpc.MaxRecvMsgSize(maxReceiveMessageBytes),
 		grpc.ChainUnaryInterceptor(s.unaryInterceptor),
 		grpc.ChainStreamInterceptor(s.streamInterceptor),
 		grpc.KeepaliveParams(keepalive.ServerParameters{

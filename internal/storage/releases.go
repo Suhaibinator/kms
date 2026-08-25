@@ -17,8 +17,19 @@ import (
 )
 
 var _ ReleaseStore = (*SQLStore)(nil)
+var _ FirstReleaseStore = (*SQLStore)(nil)
 
 func (s *SQLStore) CreateConfigurationRelease(ctx context.Context, release domain.ConfigurationRelease) (domain.ConfigurationRelease, error) {
+	return s.createConfigurationRelease(ctx, release, false)
+}
+
+// CreateFirstConfigurationRelease atomically creates version one or aborts if
+// the release stream is already established.
+func (s *SQLStore) CreateFirstConfigurationRelease(ctx context.Context, release domain.ConfigurationRelease) (domain.ConfigurationRelease, error) {
+	return s.createConfigurationRelease(ctx, release, true)
+}
+
+func (s *SQLStore) createConfigurationRelease(ctx context.Context, release domain.ConfigurationRelease, requireFirst bool) (domain.ConfigurationRelease, error) {
 	var out domain.ConfigurationRelease
 	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		nsID, err := resolveNamespaceID(tx, release.Namespace)
@@ -46,6 +57,9 @@ func (s *SQLStore) CreateConfigurationRelease(ctx context.Context, release domai
 			Select("COALESCE(MAX(version_number), 0)").Scan(&maxVersion).Error; err != nil {
 			return err
 		}
+		if requireFirst && maxVersion != 0 {
+			return domain.Errorf(domain.ErrAborted, "configuration release %s/%s is already established", release.Namespace, release.Name)
+		}
 		now := nowUTC()
 		m := configurationReleaseModel{
 			NamespaceID: nsID, Name: release.Name, VersionNumber: maxVersion + 1,
@@ -55,6 +69,9 @@ func (s *SQLStore) CreateConfigurationRelease(ctx context.Context, release domai
 		}
 		if err := tx.Omit(clause.Associations).Create(&m).Error; err != nil {
 			if isUniqueErr(err) {
+				if requireFirst {
+					return domain.Errorf(domain.ErrAborted, "configuration release %s/%s is already established", release.Namespace, release.Name)
+				}
 				return domain.Errorf(domain.ErrAlreadyExists, "configuration release %s/%s version %d", release.Namespace, release.Name, maxVersion+1)
 			}
 			return err

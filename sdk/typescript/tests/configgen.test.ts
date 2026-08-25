@@ -65,6 +65,9 @@ describe("TypeScript config generator", () => {
     });
     expect(first.contract).not.toMatch(/"(?:default|value|physical_path|token)"/iu);
     expect(first.binding).toContain("export class Store");
+    expect(first.binding).toContain("encodeDefaultsArtifact as encodeDefaultsArtifactWire");
+    expect(first.binding).toContain('from "../../../src/configstore/index.js";');
+    expect(first.binding).not.toContain('from "../../../src/configgen/index.js"');
     expect(first.binding).toContain("restartRequiredFields");
     expect(first.binding).toContain("sameSecretIdentity");
     expect(first.binding).toContain("rejectDecode");
@@ -516,7 +519,10 @@ describe("TypeScript config generator", () => {
   });
 });
 
-function fixtureImports(): { runtimeImport: string; coreImport: string } {
+function fixtureImports(): {
+  runtimeImport: string;
+  coreImport: string;
+} {
   return {
     runtimeImport: "../../../src/configstore/index.js",
     coreImport: "../../../src/index.js",

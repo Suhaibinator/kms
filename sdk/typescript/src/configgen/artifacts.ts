@@ -306,6 +306,7 @@ function renderBinding(
   const runtimeValues = [
     "CandidateError",
     "cloneConfig",
+    "encodeDefaultsArtifact as encodeDefaultsArtifactWire",
     "immutableSnapshot",
     "ReleaseIdentity",
     "startManagedConfig",
@@ -400,6 +401,15 @@ function renderBinding(
   for (const [index, groupDescriptor] of descriptor.groups.entries()) {
     line(`    ${quote(groupDescriptor.alias)}: encodeGroup(source, groupCodec${index}),`);
   }
+  line("  });");
+  line("}");
+  line();
+  line(`export function encodeDefaultsArtifact(profile: string, config: ${root}): string {`);
+  line("  return encodeDefaultsArtifactWire({");
+  line("    profile,");
+  line("    schemaSHA256,");
+  line("    contract: generatedContract,");
+  line("    parameters: encodeParameterGroups(config),");
   line("  });");
   line("}");
   line();

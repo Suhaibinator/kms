@@ -24,6 +24,7 @@ func (s *server) newAPIMux() *http.ServeMux {
 	mux.HandleFunc("GET /api/v1/applications/dashboard", s.handleApplicationDashboard)
 	mux.HandleFunc("GET /api/v1/applications/overview", s.handleApplicationOverview)
 	mux.HandleFunc("POST /api/v1/applications/ship", s.handleShipApplication)
+	mux.HandleFunc("POST /api/v1/applications/defaults", s.handleApplicationDefaults)
 	mux.HandleFunc("POST /api/v1/applications/environments/clone", s.handleCloneEnvironment)
 	mux.HandleFunc("PUT /api/v1/applications/parameters", s.handlePutApplicationParameter)
 

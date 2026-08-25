@@ -67,6 +67,33 @@ func EncodeParameterGroups(root *rootconfig.Config) (map[string]json.RawMessage,
 	return groups, nil
 }
 
+// EncodeDefaultsArtifact encodes a complete parameter-only defaults artifact for profile.
+// Secret contract metadata is included, but secret values are structurally excluded.
+func EncodeDefaultsArtifact(profile string, root *rootconfig.Config) ([]byte, error) {
+	groups, err := EncodeParameterGroups(root)
+	if err != nil {
+		return nil, err
+	}
+	parameters := make([]configstore.DefaultsParameter, 0, len(groups))
+	for _, entry := range generatedContract {
+		if entry.Kind != configstore.ContractKindParameter {
+			continue
+		}
+		value, ok := groups[entry.Alias]
+		if !ok {
+			return nil, fmt.Errorf("generated config store: missing encoded parameter group %s", entry.Alias)
+		}
+		parameters = append(parameters, configstore.DefaultsParameter{Alias: entry.Alias, ContentType: entry.ContentType, Value: string(value)})
+	}
+	return configstore.EncodeDefaultsArtifact(configstore.DefaultsArtifact{
+		Format:       configstore.DefaultsArtifactFormat,
+		Profile:      profile,
+		SchemaSHA256: generatedSchemaSHA256,
+		Contract:     generatedContract,
+		Parameters:   parameters,
+	})
+}
+
 // Start synchronously validates and publishes the initial release, then watches in the background.
 func Start(ctx context.Context, client *kmsclient.Client, options Options) (*Store, error) {
 	if options.Defaults == nil {

@@ -20,6 +20,18 @@ export {
   validateContract,
 } from "./contract.js";
 export {
+  DEFAULTS_ARTIFACT_FORMAT,
+  DefaultsArtifactError,
+  type DefaultsArtifact,
+  type DefaultsArtifactContractEntry,
+  type DefaultsArtifactParameter,
+  type EncodeDefaultsArtifactInput,
+  encodeDefaultsArtifact,
+  MAX_DEFAULT_PARAMETER_VALUE_BYTES,
+  MAX_DEFAULTS_ARTIFACT_BYTES,
+  parseDefaultsArtifact,
+} from "./defaults-artifact.js";
+export {
   CandidateError,
   CandidateRejectionReport,
   DefaultMismatchError,

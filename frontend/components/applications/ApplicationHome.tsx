@@ -1,4 +1,4 @@
-import { Cable, Plus, RefreshCw, RotateCcw, Send, SlidersHorizontal } from "lucide-react";
+import { Cable, FileUp, Plus, RefreshCw, RotateCcw, Send, SlidersHorizontal } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import type { SetupAction } from "@/components/applications/contracts";
 import { Ident } from "@/components/Ident";
@@ -28,6 +28,7 @@ import { ConfigurationMatrix } from "./ConfigurationMatrix";
 import { DefinitionCard } from "./DefinitionCard";
 import { DeriveSchemaDialog } from "./DeriveSchemaDialog";
 import { EnvironmentPipeline } from "./EnvironmentPipeline";
+import { ImportDefaultsModal } from "./ImportDefaultsModal";
 import { QuickSecretModal } from "./QuickSecretModal";
 import type { CloneSeed, QuickSecretSeed } from "./shared";
 
@@ -138,6 +139,7 @@ export function ApplicationHome({
   const [connectEnv, setConnectEnv] = useState<string | null>(null);
   const [health, setHealth] = useState<HealthResponse | null>(null);
   const [secretSeed, setSecretSeed] = useState<QuickSecretSeed | null>(null);
+  const [defaultsEnv, setDefaultsEnv] = useState<string | null>(null);
   const [secretSaving, setSecretSaving] = useState(false);
   const [writeRow, setWriteRow] = useState<ApplicationConfigurationRow | null>(null);
   const [writeTargets, setWriteTargets] = useState<string[] | null>(null);
@@ -274,6 +276,12 @@ export function ApplicationHome({
               <Send size={15} />
               Quick change
             </Button>
+            <EnvironmentAction
+              label="Import defaults"
+              icon={<FileUp size={15} />}
+              environments={environmentNames}
+              onPick={setDefaultsEnv}
+            />
             <EnvironmentAction
               label="Roll back"
               icon={<RotateCcw size={15} />}
@@ -527,6 +535,17 @@ export function ApplicationHome({
             setSecretSaving(false);
           }
         }}
+      />
+      <ImportDefaultsModal
+        application={application.name}
+        environment={defaultsEnv ?? ""}
+        production={
+          environments.find((candidate) => candidate.namespace.env === defaultsEnv)?.production ??
+          false
+        }
+        open={defaultsEnv !== null}
+        onClose={() => setDefaultsEnv(null)}
+        onImported={reload}
       />
       <BulkParameterModal
         app={application.name}

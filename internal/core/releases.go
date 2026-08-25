@@ -95,7 +95,16 @@ func (s *Service) CreateConfigurationRelease(ctx context.Context, pr Principal, 
 	if err != nil {
 		return domain.ConfigurationRelease{}, err
 	}
-	out, err := rs.CreateConfigurationRelease(ctx, release)
+	var out domain.ConfigurationRelease
+	if in.RequireFirst {
+		firstStore, ok := rs.(storage.FirstReleaseStore)
+		if !ok {
+			return domain.ConfigurationRelease{}, domain.Errorf(domain.ErrFailedPrecondition, "atomic first-release creation is unavailable")
+		}
+		out, err = firstStore.CreateFirstConfigurationRelease(ctx, release)
+	} else {
+		out, err = rs.CreateConfigurationRelease(ctx, release)
+	}
 	if err != nil {
 		return domain.ConfigurationRelease{}, err
 	}

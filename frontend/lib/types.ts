@@ -710,6 +710,32 @@ export interface ApplicationOverview {
   schema_json?: string;
 }
 
+export type DefaultsApplyStatus = "create" | "unchanged" | "update" | "blocked";
+
+/** Opaque artifact bytes. Consumers must not decode or normalize this payload. */
+export type DefaultsArtifactBody = ArrayBuffer;
+
+export interface DefaultsApplyEntry {
+  alias: string;
+  key: string;
+  content_type: string;
+  status: DefaultsApplyStatus;
+  current_version: number;
+  applied_version: number;
+  revision: number;
+}
+
+/** Value-free preview/result returned by the managed-defaults import endpoint. */
+export interface DefaultsApplyResponse {
+  profile: string;
+  schema_sha256: string;
+  artifact_digest: string;
+  plan_digest: string;
+  entries: DefaultsApplyEntry[];
+  missing_secrets: string[];
+  executed: boolean;
+}
+
 export interface FleetEnvironment {
   env: string;
   status: EnvStatus;

@@ -4,6 +4,7 @@ package config
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 
 	"github.com/Suhaibinator/kms/sdk/go/kmsclient"
@@ -33,6 +34,14 @@ func Defaults() *Config {
 		Greeting:      defaultGreeting,
 		RequestLimit:  defaultRequestLimit,
 	}
+}
+
+// ManagedReleaseDefaults selects the source-owned baseline exported to KMS.
+func ManagedReleaseDefaults(profile string) (*Config, error) {
+	if profile != "default" {
+		return nil, fmt.Errorf("profile must be %q, got %q", "default", profile)
+	}
+	return Defaults(), nil
 }
 
 // Validate rejects an incomplete or unsafe candidate before publication.

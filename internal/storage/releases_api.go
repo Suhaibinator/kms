@@ -43,3 +43,9 @@ type ReleaseStore interface {
 	PruneConfigurationReleases(ctx context.Context, retainDuration time.Duration, retainVersions int) (int, error)
 	PruneReleaseAcknowledgements(ctx context.Context, disconnectedBefore time.Time) (int, error)
 }
+
+// FirstReleaseStore is the additive atomic primitive used by zero-edit Ship.
+// It prevents two concurrent first-release requests from creating v1 and v2.
+type FirstReleaseStore interface {
+	CreateFirstConfigurationRelease(ctx context.Context, release domain.ConfigurationRelease) (domain.ConfigurationRelease, error)
+}

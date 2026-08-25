@@ -567,6 +567,8 @@ client-side routing resolves deep links on refresh.
 - [`docs/sdk-go.md`](docs/sdk-go.md) — the Go client SDK.
 - [`docs/managed-go-configuration.md`](docs/managed-go-configuration.md) —
   generated atomic typed configuration, defaults, and operator workflow.
+- [`docs/managed-defaults.md`](docs/managed-defaults.md) — export source-owned
+  parameter defaults and atomically preview/apply them to an existing app.
 - [`docs/sdk-python.md`](docs/sdk-python.md) — the Python client SDK.
 - [`sdk/typescript/README.md`](sdk/typescript/README.md) — TypeScript SDK
   installation, operations, release loading, and serverful Next.js examples.

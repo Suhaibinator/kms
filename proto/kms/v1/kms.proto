@@ -585,6 +585,7 @@ service AdminService {
   rpc ListAuditEvents(ListAuditEventsRequest) returns (ListAuditEventsResponse);
   rpc ListSubscribers(ListSubscribersRequest) returns (ListSubscribersResponse);
   rpc ListReleaseSubscribers(ListReleaseSubscribersRequest) returns (ListReleaseSubscribersResponse);
+  rpc ApplyApplicationDefaults(ApplyApplicationDefaultsRequest) returns (ApplyApplicationDefaultsResponse);
   rpc Health(HealthRequest) returns (HealthResponse);
 }
 
@@ -667,6 +668,37 @@ message ListNamespacesRequest {
 message ListNamespacesResponse {
   repeated Namespace namespaces = 1;
   string next_page_token = 2;
+}
+
+// ApplyApplicationDefaults previews or atomically applies a parameter-only
+// kms-config-defaults/v1 artifact. Secret values are structurally absent from
+// both the artifact contract and this API.
+message ApplyApplicationDefaultsRequest {
+  NamespaceRef namespace = 1;
+  bytes artifact = 2;
+  bool overwrite = 3;
+  bool execute = 4;
+  string plan_digest = 5;
+}
+
+message DefaultsApplyEntry {
+  string alias = 1;
+  string key = 2;
+  string content_type = 3;
+  string status = 4; // create | unchanged | update | blocked
+  uint64 current_version = 5;
+  uint64 applied_version = 6;
+  uint64 revision = 7;
+}
+
+message ApplyApplicationDefaultsResponse {
+  string profile = 1;
+  string schema_sha256 = 2;
+  string artifact_digest = 3;
+  string plan_digest = 4;
+  repeated DefaultsApplyEntry entries = 5;
+  repeated string missing_secrets = 6;
+  bool executed = 7;
 }
 
 // PolicyRule grants or denies one operation on a whole namespace. Authorization

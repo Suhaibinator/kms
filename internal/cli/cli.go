@@ -29,6 +29,9 @@ type CLI struct {
 	// keep their existing parse-error return path; Run translates this one case
 	// to a successful process exit after the flag package prints command help.
 	helpRequested bool
+	// defaultsDial is replaced by defaults command tests with an in-memory gRPC
+	// transport. Production callers leave it nil and use connFlags.dial.
+	defaultsDial defaultsDialFunc
 }
 
 // New builds a CLI bound to the process standard streams.
@@ -81,6 +84,8 @@ func (c *CLI) Run(args []string) int {
 		code = c.cmdList(cmdArgs)
 	case "release":
 		code = c.cmdRelease(cmdArgs)
+	case "defaults":
+		code = c.cmdDefaults(cmdArgs)
 	case "version", "--version", "-version":
 		_, _ = fmt.Fprintln(c.Stdout, Version)
 		code = 0
@@ -163,6 +168,7 @@ Convenience (talk to a running server over gRPC):
   put-parameter /env/app/key V  Store a parameter value.
   list env/app                  List parameters and secrets in a namespace (--prefix).
   release                       Manage configuration releases and schemas.
+  defaults                      Preview or apply generated application defaults.
 
 Other:
   version          Print the build version.

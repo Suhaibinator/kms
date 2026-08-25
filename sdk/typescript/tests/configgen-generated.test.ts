@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import type { ClientReleaseLoaderOptions } from "../src/client.js";
 import type { DefaultMismatchReport } from "../src/configstore/errors.js";
 import type { ManagedReleaseClient } from "../src/configstore/manager.js";
+import { parseDefaultsArtifact } from "../src/configstore/index.js";
 import type { ReleaseLoader } from "../src/releases/loader.js";
 import {
   type PrepareRelease,
@@ -16,6 +17,7 @@ import {
 } from "../src/releases/types.js";
 import { Secret } from "../src/secret.js";
 import {
+  encodeDefaultsArtifact,
   encodeParameterGroups,
   generatedContract,
   groupCodecs,
@@ -37,6 +39,18 @@ describe("generated managed configuration binding", () => {
       { alias: "runtime", kind: "parameter", contentType: "json" },
       { alias: "database_password", kind: "secret" },
     ]);
+    expect(parseDefaultsArtifact(encodeDefaultsArtifact("local", defaults))).toMatchObject({
+      profile: "local",
+      contract: [
+        { alias: "database", kind: "parameter", contentType: "json" },
+        { alias: "database_password", kind: "secret", contentType: "" },
+        { alias: "runtime", kind: "parameter", contentType: "json" },
+      ],
+      parameters: [
+        { alias: "database", contentType: "json" },
+        { alias: "runtime", contentType: "json" },
+      ],
+    });
 
     expect(
       () => new Store({ ...defaults, password: new Secret("not-allowed") }, () => undefined),

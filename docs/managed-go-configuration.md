@@ -18,6 +18,11 @@ typed views, immutable snapshots, atomic hot override, default-divergence
 reporting, restart-required rejection, secret redaction, and last-known-good
 preservation against a deterministic in-process KMS.
 
+To populate a new application's existing namespaces from these source-owned
+values, use the generated defaults encoder and KMS-owned exporter/import flow
+described in [`managed-defaults.md`](managed-defaults.md). Secret provisioning
+remains a separate manual operation.
+
 Use this layer when a set of configuration fields must change as one release.
 The lower-level `ReleaseLoader`, `RunTypedRelease`, `ParameterValue`, and
 `SecretValue` APIs remain supported.

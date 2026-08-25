@@ -58,6 +58,16 @@ func TestGenerateIsDeterministicAndCanonical(t *testing.T) {
 		!bytes.Contains(first.Binding, []byte(`configstore.RejectDecode("database", err)`)) {
 		t.Fatal("generated binding does not forward safe candidate rejection diagnostics")
 	}
+	for _, want := range [][]byte{
+		[]byte("func EncodeDefaultsArtifact(profile string, root *rootconfig.Config) ([]byte, error)"),
+		[]byte("Format:       configstore.DefaultsArtifactFormat"),
+		[]byte("SchemaSHA256: generatedSchemaSHA256"),
+		[]byte("Contract:     generatedContract"),
+	} {
+		if !bytes.Contains(first.Binding, want) {
+			t.Fatalf("generated defaults encoder is missing %q", want)
+		}
+	}
 
 	var schema map[string]any
 	if err := json.Unmarshal(first.Schema, &schema); err != nil {

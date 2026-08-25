@@ -663,6 +663,40 @@ export interface ListNamespacesResponse {
 }
 
 /**
+ * ApplyApplicationDefaults previews or atomically applies a parameter-only
+ * kms-config-defaults/v1 artifact. Secret values are structurally absent from
+ * both the artifact contract and this API.
+ */
+export interface ApplyApplicationDefaultsRequest {
+  namespace: NamespaceRef | undefined;
+  artifact: Buffer;
+  overwrite: boolean;
+  execute: boolean;
+  planDigest: string;
+}
+
+export interface DefaultsApplyEntry {
+  alias: string;
+  key: string;
+  contentType: string;
+  /** create | unchanged | update | blocked */
+  status: string;
+  currentVersion: bigint;
+  appliedVersion: bigint;
+  revision: bigint;
+}
+
+export interface ApplyApplicationDefaultsResponse {
+  profile: string;
+  schemaSha256: string;
+  artifactDigest: string;
+  planDigest: string;
+  entries: DefaultsApplyEntry[];
+  missingSecrets: string[];
+  executed: boolean;
+}
+
+/**
  * PolicyRule grants or denies one operation on a whole namespace. Authorization
  * is namespace-level: there is no per-key scoping.
  */
@@ -9979,6 +10013,499 @@ export const ListNamespacesResponse: MessageFns<ListNamespacesResponse> = {
   },
 };
 
+function createBaseApplyApplicationDefaultsRequest(): ApplyApplicationDefaultsRequest {
+  return { namespace: undefined, artifact: Buffer.alloc(0), overwrite: false, execute: false, planDigest: "" };
+}
+
+export const ApplyApplicationDefaultsRequest: MessageFns<ApplyApplicationDefaultsRequest> = {
+  encode(message: ApplyApplicationDefaultsRequest, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.namespace !== undefined) {
+      NamespaceRef.encode(message.namespace, writer.uint32(10).fork()).join();
+    }
+    if (message.artifact.length !== 0) {
+      writer.uint32(18).bytes(message.artifact);
+    }
+    if (message.overwrite !== false) {
+      writer.uint32(24).bool(message.overwrite);
+    }
+    if (message.execute !== false) {
+      writer.uint32(32).bool(message.execute);
+    }
+    if (message.planDigest !== "") {
+      writer.uint32(42).string(message.planDigest);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): ApplyApplicationDefaultsRequest {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBaseApplyApplicationDefaultsRequest();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+        case 1: {
+          if (tag !== 10) {
+            break;
+          }
+
+          message.namespace = NamespaceRef.decode(reader, reader.uint32());
+          continue;
+        }
+        case 2: {
+          if (tag !== 18) {
+            break;
+          }
+
+          message.artifact = Buffer.from(reader.bytes());
+          continue;
+        }
+        case 3: {
+          if (tag !== 24) {
+            break;
+          }
+
+          message.overwrite = reader.bool();
+          continue;
+        }
+        case 4: {
+          if (tag !== 32) {
+            break;
+          }
+
+          message.execute = reader.bool();
+          continue;
+        }
+        case 5: {
+          if (tag !== 42) {
+            break;
+          }
+
+          message.planDigest = reader.string();
+          continue;
+        }
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skip(tag & 7);
+    }
+    return message;
+  },
+
+  fromJSON(object: any): ApplyApplicationDefaultsRequest {
+    return {
+      namespace: isSet(object.namespace) ? NamespaceRef.fromJSON(object.namespace) : undefined,
+      artifact: isSet(object.artifact) ? Buffer.from(bytesFromBase64(object.artifact)) : Buffer.alloc(0),
+      overwrite: isSet(object.overwrite) ? globalThis.Boolean(object.overwrite) : false,
+      execute: isSet(object.execute) ? globalThis.Boolean(object.execute) : false,
+      planDigest: isSet(object.planDigest)
+        ? globalThis.String(object.planDigest)
+        : isSet(object.plan_digest)
+        ? globalThis.String(object.plan_digest)
+        : "",
+    };
+  },
+
+  toJSON(message: ApplyApplicationDefaultsRequest): unknown {
+    const obj: any = {};
+    if (message.namespace !== undefined) {
+      obj.namespace = NamespaceRef.toJSON(message.namespace);
+    }
+    if (message.artifact.length !== 0) {
+      obj.artifact = base64FromBytes(message.artifact);
+    }
+    if (message.overwrite !== false) {
+      obj.overwrite = message.overwrite;
+    }
+    if (message.execute !== false) {
+      obj.execute = message.execute;
+    }
+    if (message.planDigest !== "") {
+      obj.planDigest = message.planDigest;
+    }
+    return obj;
+  },
+
+  create(base?: DeepPartial<ApplyApplicationDefaultsRequest>): ApplyApplicationDefaultsRequest {
+    return ApplyApplicationDefaultsRequest.fromPartial(base ?? {});
+  },
+  fromPartial(object: DeepPartial<ApplyApplicationDefaultsRequest>): ApplyApplicationDefaultsRequest {
+    const message = createBaseApplyApplicationDefaultsRequest();
+    message.namespace = (object.namespace !== undefined && object.namespace !== null)
+      ? NamespaceRef.fromPartial(object.namespace)
+      : undefined;
+    message.artifact = object.artifact ?? Buffer.alloc(0);
+    message.overwrite = object.overwrite ?? false;
+    message.execute = object.execute ?? false;
+    message.planDigest = object.planDigest ?? "";
+    return message;
+  },
+};
+
+function createBaseDefaultsApplyEntry(): DefaultsApplyEntry {
+  return { alias: "", key: "", contentType: "", status: "", currentVersion: 0n, appliedVersion: 0n, revision: 0n };
+}
+
+export const DefaultsApplyEntry: MessageFns<DefaultsApplyEntry> = {
+  encode(message: DefaultsApplyEntry, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.alias !== "") {
+      writer.uint32(10).string(message.alias);
+    }
+    if (message.key !== "") {
+      writer.uint32(18).string(message.key);
+    }
+    if (message.contentType !== "") {
+      writer.uint32(26).string(message.contentType);
+    }
+    if (message.status !== "") {
+      writer.uint32(34).string(message.status);
+    }
+    if (message.currentVersion !== 0n) {
+      if (BigInt.asUintN(64, message.currentVersion) !== message.currentVersion) {
+        throw new globalThis.Error("value provided for field message.currentVersion of type uint64 too large");
+      }
+      writer.uint32(40).uint64(message.currentVersion);
+    }
+    if (message.appliedVersion !== 0n) {
+      if (BigInt.asUintN(64, message.appliedVersion) !== message.appliedVersion) {
+        throw new globalThis.Error("value provided for field message.appliedVersion of type uint64 too large");
+      }
+      writer.uint32(48).uint64(message.appliedVersion);
+    }
+    if (message.revision !== 0n) {
+      if (BigInt.asUintN(64, message.revision) !== message.revision) {
+        throw new globalThis.Error("value provided for field message.revision of type uint64 too large");
+      }
+      writer.uint32(56).uint64(message.revision);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): DefaultsApplyEntry {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBaseDefaultsApplyEntry();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+        case 1: {
+          if (tag !== 10) {
+            break;
+          }
+
+          message.alias = reader.string();
+          continue;
+        }
+        case 2: {
+          if (tag !== 18) {
+            break;
+          }
+
+          message.key = reader.string();
+          continue;
+        }
+        case 3: {
+          if (tag !== 26) {
+            break;
+          }
+
+          message.contentType = reader.string();
+          continue;
+        }
+        case 4: {
+          if (tag !== 34) {
+            break;
+          }
+
+          message.status = reader.string();
+          continue;
+        }
+        case 5: {
+          if (tag !== 40) {
+            break;
+          }
+
+          message.currentVersion = reader.uint64() as bigint;
+          continue;
+        }
+        case 6: {
+          if (tag !== 48) {
+            break;
+          }
+
+          message.appliedVersion = reader.uint64() as bigint;
+          continue;
+        }
+        case 7: {
+          if (tag !== 56) {
+            break;
+          }
+
+          message.revision = reader.uint64() as bigint;
+          continue;
+        }
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skip(tag & 7);
+    }
+    return message;
+  },
+
+  fromJSON(object: any): DefaultsApplyEntry {
+    return {
+      alias: isSet(object.alias) ? globalThis.String(object.alias) : "",
+      key: isSet(object.key) ? globalThis.String(object.key) : "",
+      contentType: isSet(object.contentType)
+        ? globalThis.String(object.contentType)
+        : isSet(object.content_type)
+        ? globalThis.String(object.content_type)
+        : "",
+      status: isSet(object.status) ? globalThis.String(object.status) : "",
+      currentVersion: isSet(object.currentVersion)
+        ? BigInt(object.currentVersion)
+        : isSet(object.current_version)
+        ? BigInt(object.current_version)
+        : 0n,
+      appliedVersion: isSet(object.appliedVersion)
+        ? BigInt(object.appliedVersion)
+        : isSet(object.applied_version)
+        ? BigInt(object.applied_version)
+        : 0n,
+      revision: isSet(object.revision) ? BigInt(object.revision) : 0n,
+    };
+  },
+
+  toJSON(message: DefaultsApplyEntry): unknown {
+    const obj: any = {};
+    if (message.alias !== "") {
+      obj.alias = message.alias;
+    }
+    if (message.key !== "") {
+      obj.key = message.key;
+    }
+    if (message.contentType !== "") {
+      obj.contentType = message.contentType;
+    }
+    if (message.status !== "") {
+      obj.status = message.status;
+    }
+    if (message.currentVersion !== 0n) {
+      obj.currentVersion = message.currentVersion.toString();
+    }
+    if (message.appliedVersion !== 0n) {
+      obj.appliedVersion = message.appliedVersion.toString();
+    }
+    if (message.revision !== 0n) {
+      obj.revision = message.revision.toString();
+    }
+    return obj;
+  },
+
+  create(base?: DeepPartial<DefaultsApplyEntry>): DefaultsApplyEntry {
+    return DefaultsApplyEntry.fromPartial(base ?? {});
+  },
+  fromPartial(object: DeepPartial<DefaultsApplyEntry>): DefaultsApplyEntry {
+    const message = createBaseDefaultsApplyEntry();
+    message.alias = object.alias ?? "";
+    message.key = object.key ?? "";
+    message.contentType = object.contentType ?? "";
+    message.status = object.status ?? "";
+    message.currentVersion = (object.currentVersion !== undefined && object.currentVersion !== null)
+      ? BigInt(object.currentVersion)
+      : 0n;
+    message.appliedVersion = (object.appliedVersion !== undefined && object.appliedVersion !== null)
+      ? BigInt(object.appliedVersion)
+      : 0n;
+    message.revision = (object.revision !== undefined && object.revision !== null) ? BigInt(object.revision) : 0n;
+    return message;
+  },
+};
+
+function createBaseApplyApplicationDefaultsResponse(): ApplyApplicationDefaultsResponse {
+  return {
+    profile: "",
+    schemaSha256: "",
+    artifactDigest: "",
+    planDigest: "",
+    entries: [],
+    missingSecrets: [],
+    executed: false,
+  };
+}
+
+export const ApplyApplicationDefaultsResponse: MessageFns<ApplyApplicationDefaultsResponse> = {
+  encode(message: ApplyApplicationDefaultsResponse, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.profile !== "") {
+      writer.uint32(10).string(message.profile);
+    }
+    if (message.schemaSha256 !== "") {
+      writer.uint32(18).string(message.schemaSha256);
+    }
+    if (message.artifactDigest !== "") {
+      writer.uint32(26).string(message.artifactDigest);
+    }
+    if (message.planDigest !== "") {
+      writer.uint32(34).string(message.planDigest);
+    }
+    for (const v of message.entries) {
+      DefaultsApplyEntry.encode(v!, writer.uint32(42).fork()).join();
+    }
+    for (const v of message.missingSecrets) {
+      writer.uint32(50).string(v!);
+    }
+    if (message.executed !== false) {
+      writer.uint32(56).bool(message.executed);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): ApplyApplicationDefaultsResponse {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBaseApplyApplicationDefaultsResponse();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+        case 1: {
+          if (tag !== 10) {
+            break;
+          }
+
+          message.profile = reader.string();
+          continue;
+        }
+        case 2: {
+          if (tag !== 18) {
+            break;
+          }
+
+          message.schemaSha256 = reader.string();
+          continue;
+        }
+        case 3: {
+          if (tag !== 26) {
+            break;
+          }
+
+          message.artifactDigest = reader.string();
+          continue;
+        }
+        case 4: {
+          if (tag !== 34) {
+            break;
+          }
+
+          message.planDigest = reader.string();
+          continue;
+        }
+        case 5: {
+          if (tag !== 42) {
+            break;
+          }
+
+          message.entries.push(DefaultsApplyEntry.decode(reader, reader.uint32()));
+          continue;
+        }
+        case 6: {
+          if (tag !== 50) {
+            break;
+          }
+
+          message.missingSecrets.push(reader.string());
+          continue;
+        }
+        case 7: {
+          if (tag !== 56) {
+            break;
+          }
+
+          message.executed = reader.bool();
+          continue;
+        }
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skip(tag & 7);
+    }
+    return message;
+  },
+
+  fromJSON(object: any): ApplyApplicationDefaultsResponse {
+    return {
+      profile: isSet(object.profile) ? globalThis.String(object.profile) : "",
+      schemaSha256: isSet(object.schemaSha256)
+        ? globalThis.String(object.schemaSha256)
+        : isSet(object.schema_sha256)
+        ? globalThis.String(object.schema_sha256)
+        : "",
+      artifactDigest: isSet(object.artifactDigest)
+        ? globalThis.String(object.artifactDigest)
+        : isSet(object.artifact_digest)
+        ? globalThis.String(object.artifact_digest)
+        : "",
+      planDigest: isSet(object.planDigest)
+        ? globalThis.String(object.planDigest)
+        : isSet(object.plan_digest)
+        ? globalThis.String(object.plan_digest)
+        : "",
+      entries: globalThis.Array.isArray(object?.entries)
+        ? object.entries.map((e: any) => DefaultsApplyEntry.fromJSON(e))
+        : [],
+      missingSecrets: globalThis.Array.isArray(object?.missingSecrets)
+        ? object.missingSecrets.map((e: any) => globalThis.String(e))
+        : globalThis.Array.isArray(object?.missing_secrets)
+        ? object.missing_secrets.map((e: any) => globalThis.String(e))
+        : [],
+      executed: isSet(object.executed) ? globalThis.Boolean(object.executed) : false,
+    };
+  },
+
+  toJSON(message: ApplyApplicationDefaultsResponse): unknown {
+    const obj: any = {};
+    if (message.profile !== "") {
+      obj.profile = message.profile;
+    }
+    if (message.schemaSha256 !== "") {
+      obj.schemaSha256 = message.schemaSha256;
+    }
+    if (message.artifactDigest !== "") {
+      obj.artifactDigest = message.artifactDigest;
+    }
+    if (message.planDigest !== "") {
+      obj.planDigest = message.planDigest;
+    }
+    if (message.entries?.length) {
+      obj.entries = message.entries.map((e) => DefaultsApplyEntry.toJSON(e));
+    }
+    if (message.missingSecrets?.length) {
+      obj.missingSecrets = message.missingSecrets;
+    }
+    if (message.executed !== false) {
+      obj.executed = message.executed;
+    }
+    return obj;
+  },
+
+  create(base?: DeepPartial<ApplyApplicationDefaultsResponse>): ApplyApplicationDefaultsResponse {
+    return ApplyApplicationDefaultsResponse.fromPartial(base ?? {});
+  },
+  fromPartial(object: DeepPartial<ApplyApplicationDefaultsResponse>): ApplyApplicationDefaultsResponse {
+    const message = createBaseApplyApplicationDefaultsResponse();
+    message.profile = object.profile ?? "";
+    message.schemaSha256 = object.schemaSha256 ?? "";
+    message.artifactDigest = object.artifactDigest ?? "";
+    message.planDigest = object.planDigest ?? "";
+    message.entries = object.entries?.map((e) => DefaultsApplyEntry.fromPartial(e)) || [];
+    message.missingSecrets = object.missingSecrets?.map((e) => e) || [];
+    message.executed = object.executed ?? false;
+    return message;
+  },
+};
+
 function createBasePolicyRule(): PolicyRule {
   return { operation: "", env: "", app: "" };
 }
@@ -14175,6 +14702,19 @@ export const AdminServiceService = {
     responseDeserialize: (value: Buffer): ListReleaseSubscribersResponse =>
       ListReleaseSubscribersResponse.decode(value),
   },
+  applyApplicationDefaults: {
+    path: "/kms.v1.AdminService/ApplyApplicationDefaults" as const,
+    requestStream: false as const,
+    responseStream: false as const,
+    requestSerialize: (value: ApplyApplicationDefaultsRequest): Buffer =>
+      Buffer.from(ApplyApplicationDefaultsRequest.encode(value).finish()),
+    requestDeserialize: (value: Buffer): ApplyApplicationDefaultsRequest =>
+      ApplyApplicationDefaultsRequest.decode(value),
+    responseSerialize: (value: ApplyApplicationDefaultsResponse): Buffer =>
+      Buffer.from(ApplyApplicationDefaultsResponse.encode(value).finish()),
+    responseDeserialize: (value: Buffer): ApplyApplicationDefaultsResponse =>
+      ApplyApplicationDefaultsResponse.decode(value),
+  },
   health: {
     path: "/kms.v1.AdminService/Health" as const,
     requestStream: false as const,
@@ -14206,6 +14746,7 @@ export interface AdminServiceServer extends UntypedServiceImplementation {
   listAuditEvents: handleUnaryCall<ListAuditEventsRequest, ListAuditEventsResponse>;
   listSubscribers: handleUnaryCall<ListSubscribersRequest, ListSubscribersResponse>;
   listReleaseSubscribers: handleUnaryCall<ListReleaseSubscribersRequest, ListReleaseSubscribersResponse>;
+  applyApplicationDefaults: handleUnaryCall<ApplyApplicationDefaultsRequest, ApplyApplicationDefaultsResponse>;
   health: handleUnaryCall<HealthRequest, HealthResponse>;
 }
 
@@ -14243,5 +14784,5 @@ export interface MessageFns<T> {
   fromPartial(object: DeepPartial<T>): T;
 }
 
-// source-sha256: fbfe9507a2a2c497b9396c83bd54148f762b8c9feef6b2e2fab5550ae5e2b3cd
+// source-sha256: 9386f65944b091b26908c330695c8eb3b76ddf9743c616acf9361672353e78dd
 // generation-sha256: fb24e28290cd273c548cecb15f2bf04129d95aff1c255d744ea21c87c5b004d3

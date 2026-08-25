@@ -18,6 +18,7 @@ const mocks = vi.hoisted(() => ({
   createNamespace: vi.fn(),
   createSecret: vi.fn(),
   putApplicationParameter: vi.fn(),
+  importApplicationDefaults: vi.fn(),
   health: vi.fn(),
   shipModal: vi.fn(),
   toast: { success: vi.fn(), info: vi.fn(), error: vi.fn() },
@@ -45,6 +46,7 @@ vi.mock("@/lib/api", async (importOriginal) => {
       createNamespace: mocks.createNamespace,
       createSecret: mocks.createSecret,
       putApplicationParameter: mocks.putApplicationParameter,
+      importApplicationDefaults: mocks.importApplicationDefaults,
       health: mocks.health,
     },
   };
@@ -83,6 +85,7 @@ describe("ApplicationsPage", () => {
     mocks.createNamespace.mockReset();
     mocks.createSecret.mockReset();
     mocks.putApplicationParameter.mockReset();
+    mocks.importApplicationDefaults.mockReset();
     mocks.health.mockReset().mockRejectedValue(new Error("offline"));
     mocks.shipModal.mockClear();
     mocks.toast.error.mockClear();
@@ -245,6 +248,21 @@ describe("ApplicationsPage", () => {
     render(<ApplicationsPage />);
     fireEvent.click(await screen.findByRole("button", { name: "Quick change" }));
     expect(await screen.findByRole("dialog", { name: "Ship" })).toHaveTextContent("prod:");
+  });
+
+  it("opens the defaults importer for a selected application environment", async () => {
+    mocks.query = { app: ready.application.name };
+    mocks.applicationOverview.mockResolvedValue(ready);
+    render(<ApplicationsPage />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Import defaults" }));
+    const menu = await screen.findByRole("menu", { name: "Import defaults" });
+    fireEvent.click(within(menu).getByRole("menuitem", { name: "dev" }));
+
+    const dialog = await screen.findByRole("dialog");
+    expect(within(dialog).getByText("Import defaults to dev")).toBeVisible();
+    expect(within(dialog).getByText(`dev/${ready.application.name}`)).toBeVisible();
+    expect(within(dialog).getByLabelText("Defaults artifact")).toBeEnabled();
   });
 
   it("renders the matrix tab from the overview rows", async () => {

@@ -97,3 +97,39 @@ func TestEncodeParameterGroupsReturnsJSONError(t *testing.T) {
 		t.Fatalf("error = %T: %v, want wrapped *json.UnsupportedValueError", err, err)
 	}
 }
+
+func TestEncodeDefaultsArtifactIncludesCompleteContractWithoutSecretValues(t *testing.T) {
+	root := &rootconfig.Config{
+		Timeout: time.Second,
+		Password: kmsclient.NewSecret(
+			[]byte("must-never-appear-in-defaults-artifact"),
+		),
+	}
+	data, err := EncodeDefaultsArtifact("dev", root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if data[len(data)-1] != '\n' {
+		t.Fatal("defaults artifact is not newline terminated")
+	}
+	if strings.Contains(string(data), "must-never-appear-in-defaults-artifact") {
+		t.Fatal("defaults artifact exposed a secret value")
+	}
+	artifact, err := configstore.ParseDefaultsArtifact(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if artifact.Profile != "dev" || artifact.SchemaSHA256 != generatedSchemaSHA256 {
+		t.Fatalf("artifact identity = profile:%q schema:%q", artifact.Profile, artifact.SchemaSHA256)
+	}
+	if len(artifact.Contract) != 3 || artifact.Contract[0].Alias != "database" || artifact.Contract[1].Alias != "database_password" || artifact.Contract[1].Kind != configstore.ContractKindSecret || artifact.Contract[2].Alias != "rate_limits" {
+		t.Fatalf("artifact contract = %#v", artifact.Contract)
+	}
+	groups, err := EncodeParameterGroups(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(artifact.Parameters) != 2 || artifact.Parameters[0].Alias != "database" || artifact.Parameters[0].Value != string(groups["database"]) || artifact.Parameters[1].Alias != "rate_limits" || artifact.Parameters[1].Value != string(groups["rate_limits"]) {
+		t.Fatalf("artifact parameters = %#v", artifact.Parameters)
+	}
+}

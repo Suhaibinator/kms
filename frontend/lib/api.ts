@@ -22,6 +22,8 @@ import type {
   CreateReleaseRequest,
   CreateSecretRequest,
   CreateSecretResponse,
+  DefaultsArtifactBody,
+  DefaultsApplyResponse,
   FleetOverview,
   HealthResponse,
   Identity,
@@ -171,6 +173,8 @@ export interface ApiRequestOptions {
 interface FetchOptions extends ApiRequestOptions {
   method?: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
   body?: unknown;
+  /** Opaque bytes which must be sent byte-for-byte instead of stringified. */
+  rawBody?: DefaultsArtifactBody;
   headers?: Record<string, string>;
   auth?: boolean;
 }
@@ -187,13 +191,15 @@ export async function apiFetch<T>(path: string, opts: FetchOptions = {}): Promis
   const {
     method = "GET",
     body,
+    rawBody,
     headers = {},
     auth = true,
     signal,
     timeoutMs = DEFAULT_TIMEOUT_MS,
   } = opts;
   const finalHeaders: Record<string, string> = { Accept: "application/json", ...headers };
-  if (body !== undefined) finalHeaders["Content-Type"] = "application/json";
+  if (body !== undefined || rawBody !== undefined)
+    finalHeaders["Content-Type"] = "application/json";
   if (auth) {
     const token = getToken();
     if (token) finalHeaders.Authorization = `Bearer ${token}`;
@@ -218,7 +224,7 @@ export async function apiFetch<T>(path: string, opts: FetchOptions = {}): Promis
     res = await fetch(`${API_BASE}${path}`, {
       method,
       headers: finalHeaders,
-      body: body !== undefined ? JSON.stringify(body) : undefined,
+      body: rawBody ?? (body !== undefined ? JSON.stringify(body) : undefined),
       cache: "no-store",
       signal: controller.signal,
     });
@@ -385,6 +391,25 @@ export const api = {
     environments: string[];
   }): Promise<{ results: ApplicationWriteResult[] }> {
     return apiFetch("/applications/parameters", { method: "PUT", body: req });
+  },
+  importApplicationDefaults(req: {
+    env: string;
+    app: string;
+    artifact: DefaultsArtifactBody;
+    overwrite?: boolean;
+    execute?: boolean;
+    planDigest?: string;
+  }): Promise<DefaultsApplyResponse> {
+    return apiFetch(
+      `/applications/defaults${qs({
+        env: req.env,
+        app: req.app,
+        overwrite: req.overwrite ? "true" : undefined,
+        execute: req.execute ? "true" : undefined,
+        plan_digest: req.planDigest,
+      })}`,
+      { method: "POST", rawBody: req.artifact },
+    );
   },
 
   // --- Namespaces ---

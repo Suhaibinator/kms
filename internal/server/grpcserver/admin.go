@@ -67,6 +67,32 @@ func (h *adminServer) ListNamespaces(ctx context.Context, req *kmsv1.ListNamespa
 	return &kmsv1.ListNamespacesResponse{Namespaces: out, NextPageToken: next}, nil
 }
 
+func (h *adminServer) ApplyApplicationDefaults(ctx context.Context, req *kmsv1.ApplyApplicationDefaultsRequest) (*kmsv1.ApplyApplicationDefaultsResponse, error) {
+	pr, err := requirePrincipal(ctx)
+	if err != nil {
+		return nil, err
+	}
+	result, err := h.s.svc.ApplyApplicationDefaults(ctx, pr, domain.DefaultsApplyInput{
+		Namespace: nsRefFromProto(req.GetNamespace()), Artifact: req.GetArtifact(),
+		Overwrite: req.GetOverwrite(), Execute: req.GetExecute(), PlanDigest: req.GetPlanDigest(),
+	})
+	if err != nil {
+		return nil, h.s.mapErr(ctx, err)
+	}
+	entries := make([]*kmsv1.DefaultsApplyEntry, 0, len(result.Entries))
+	for _, entry := range result.Entries {
+		entries = append(entries, &kmsv1.DefaultsApplyEntry{
+			Alias: entry.Alias, Key: entry.Key, ContentType: entry.ContentType, Status: entry.Status,
+			CurrentVersion: entry.CurrentVersion, AppliedVersion: entry.AppliedVersion, Revision: entry.Revision,
+		})
+	}
+	return &kmsv1.ApplyApplicationDefaultsResponse{
+		Profile: result.Profile, SchemaSha256: result.SchemaSHA256,
+		ArtifactDigest: result.ArtifactDigest, PlanDigest: result.PlanDigest,
+		Entries: entries, MissingSecrets: result.MissingSecrets, Executed: result.Executed,
+	}, nil
+}
+
 // --- policies --------------------------------------------------------------
 
 func (h *adminServer) CreatePolicy(ctx context.Context, req *kmsv1.CreatePolicyRequest) (*kmsv1.CreatePolicyResponse, error) {

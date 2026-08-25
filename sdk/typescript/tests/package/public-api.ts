@@ -26,8 +26,11 @@ import {
 } from "@suhaibinator/kms";
 import {
   type ConfigDescriptor,
+  encodeDefaultsArtifact,
   generate,
+  parseDefaultsArtifact,
   parseDescriptor,
+  runDefaultsExporter,
   verifyArtifacts,
 } from "@suhaibinator/kms/configgen";
 import {
@@ -35,6 +38,7 @@ import {
   // @ts-expect-error Internal secret-tree scanner is not a supported configstore export.
   containsSecret,
   type ManagedPreparedCandidate,
+  parseDefaultsArtifact as parseRuntimeDefaultsArtifact,
   // @ts-expect-error Strict JSON parse-tree primitives are internal to codecs and configgen.
   parseStrictJson,
   startManagedConfig,
@@ -120,6 +124,28 @@ export async function consumeConfiggenDeclarations(document: string): Promise<vo
   );
 }
 
+export async function consumeDefaultsDeclarations(): Promise<void> {
+  const artifact = encodeDefaultsArtifact({
+    profile: "local",
+    schemaSHA256: "0".repeat(64),
+    contract: [{ alias: "runtime", kind: "parameter", contentType: "json" }],
+    parameters: { runtime: "{}" },
+  });
+  parseDefaultsArtifact(artifact);
+  await runDefaultsExporter(
+    ["--profile", "local", "--output", "-"],
+    () => ({ runtime: "{}" }),
+    (profile, parameters) =>
+      encodeDefaultsArtifact({
+        profile,
+        schemaSHA256: "0".repeat(64),
+        contract: [{ alias: "runtime", kind: "parameter", contentType: "json" }],
+        parameters,
+      }),
+    { stdout: () => undefined, stderr: () => undefined },
+  );
+}
+
 void (undefined as
   | FetchedSecret
   | ReleaseLoaderOptions
@@ -132,3 +158,4 @@ void releaseDigestMatches;
 void sha256Hex;
 void containsSecret;
 void parseStrictJson;
+void parseRuntimeDefaultsArtifact;

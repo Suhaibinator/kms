@@ -228,6 +228,50 @@ func TestShipApplicationChangeExecuteAndPinOptIn(t *testing.T) {
 	}
 }
 
+func TestShipApplicationChangeZeroEditOnlyCreatesFirstRelease(t *testing.T) {
+	ctx := context.Background()
+	svc, _ := newConsoleTestService(t)
+	pr := adminPrincipal()
+	seedConsoleApp(t, svc, pr)
+	ns := domain.NamespaceRef{Env: "dev", App: "gradethis"}
+	rs, _ := svc.releaseStore()
+
+	preview, err := svc.ShipApplicationChange(ctx, pr, domain.ShipInput{
+		Application: "gradethis", Environment: "dev", DryRun: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if preview.Status != domain.ShipStatusPreview || preview.Preview.BaseVersion != 0 || len(preview.Preview.Validation) != 0 {
+		t.Fatalf("zero-edit preview = %+v", preview)
+	}
+	for _, alias := range []string{"database", "rate_limits", "db_password"} {
+		if entry := previewEntry(t, preview, alias); entry.Change != domain.ShipEntryIncluded || entry.ToVersion != 1 {
+			t.Fatalf("first release entry %s = %+v", alias, entry)
+		}
+	}
+
+	result, err := svc.ShipApplicationChange(ctx, pr, domain.ShipInput{
+		Application: "gradethis", Environment: "dev",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != domain.ShipStatusActivated || result.Release == nil || result.Release.Version != 1 || len(result.Parameters) != 0 {
+		t.Fatalf("zero-edit ship = %+v", result)
+	}
+	active, err := rs.GetActiveConfigurationRelease(ctx, ns, "runtime")
+	if err != nil || len(active.Release.Entries) != 3 {
+		t.Fatalf("active first release = %+v err=%v", active, err)
+	}
+
+	if _, err := svc.ShipApplicationChange(ctx, pr, domain.ShipInput{
+		Application: "gradethis", Environment: "dev", DryRun: true,
+	}); !errors.Is(err, domain.ErrInvalidArgument) {
+		t.Fatalf("established zero-edit ship error = %v, want invalid argument", err)
+	}
+}
+
 func TestShipApplicationChangeRejectedWritesNothing(t *testing.T) {
 	ctx := context.Background()
 	svc, st := newConsoleTestService(t)
@@ -268,7 +312,6 @@ func TestShipApplicationChangePreflight(t *testing.T) {
 		changes []domain.ShipChange
 		want    error
 	}{
-		"no changes":            {nil, domain.ErrInvalidArgument},
 		"unknown alias":         {[]domain.ShipChange{{Alias: "nope", Value: new("1")}}, domain.ErrInvalidArgument},
 		"secret value":          {[]domain.ShipChange{{Alias: "db_password", Value: new("x")}}, domain.ErrInvalidArgument},
 		"value and version":     {[]domain.ShipChange{{Alias: "rate_limits", Value: new("1"), Version: 1}}, domain.ErrInvalidArgument},

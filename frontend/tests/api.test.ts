@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { apiFetch, clearToken, getToken, setToken, UNAUTHORIZED_EVENT } from "@/lib/api";
+import { api, apiFetch, clearToken, getToken, setToken, UNAUTHORIZED_EVENT } from "@/lib/api";
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -7,6 +7,58 @@ afterEach(() => {
 });
 
 describe("apiFetch", () => {
+  it("sends BOM and invalid UTF-8 artifact bytes as the exact raw request body", async () => {
+    const artifact = Uint8Array.from([
+      0xef,
+      0xbb,
+      0xbf, // UTF-8 BOM
+      0x7b,
+      0x22,
+      0xc3,
+      0x28, // invalid UTF-8 sequence
+      0xff, // invalid UTF-8 byte
+      0x22,
+      0x7d,
+    ]).buffer;
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          profile: "dév",
+          schema_sha256: "abc",
+          artifact_digest: "def",
+          plan_digest: "plan",
+          entries: [],
+          missing_secrets: [],
+          executed: false,
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      ),
+    );
+
+    await api.importApplicationDefaults({
+      env: "prod",
+      app: "grades",
+      artifact,
+      overwrite: true,
+      execute: true,
+      planDigest: "plan",
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/v1/applications/defaults?env=prod&app=grades&overwrite=true&execute=true&plan_digest=plan",
+      expect.objectContaining({
+        method: "POST",
+        body: expect.any(ArrayBuffer),
+        headers: expect.objectContaining({ "Content-Type": "application/json" }),
+      }),
+    );
+    const sent = fetchMock.mock.calls[0]?.[1]?.body;
+    expect(sent).toBe(artifact);
+    expect(Array.from(new Uint8Array(sent as ArrayBuffer))).toEqual(
+      Array.from(new Uint8Array(artifact)),
+    );
+  });
+
   it("sends authenticated API requests with browser caching disabled", async () => {
     setToken("kms_test_token");
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(

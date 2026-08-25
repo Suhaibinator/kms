@@ -112,6 +112,9 @@ type CreateConfigurationReleaseInput struct {
 	SchemaVersion uint64
 	Entries       []ReleaseEntrySelector
 	Metadata      string
+	// RequireFirst is an internal management-flow guard. Storage atomically
+	// rejects creation if this release stream already has any version.
+	RequireFirst bool
 }
 
 type ReleaseValidationError struct {

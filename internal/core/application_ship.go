@@ -74,14 +74,22 @@ func (s *Service) ShipApplicationChange(ctx context.Context, pr Principal, in do
 	if err != nil {
 		return domain.ShipResult{}, err
 	}
-	changes, err := validateShipChanges(app, in.Changes)
-	if err != nil {
-		return domain.ShipResult{}, err
+	var changes []domain.ShipChange
+	if len(in.Changes) > 0 {
+		changes, err = validateShipChanges(app, in.Changes, false)
+		if err != nil {
+			return domain.ShipResult{}, err
+		}
 	}
-
 	facts, err := s.loadEnvironmentReleaseFacts(ctx, rs, ns, app.ReleaseName, false)
 	if err != nil {
 		return domain.ShipResult{}, err
+	}
+	if len(in.Changes) == 0 {
+		changes, err = validateShipChanges(app, nil, facts.Count == 0)
+		if err != nil {
+			return domain.ShipResult{}, err
+		}
 	}
 	var activeVersion uint64
 	var activeRelease *domain.ConfigurationRelease
@@ -205,6 +213,7 @@ func (s *Service) ShipApplicationChange(ctx context.Context, pr Principal, in do
 	}
 	release, err := s.CreateConfigurationRelease(ctx, pr, domain.CreateConfigurationReleaseInput{
 		Namespace: ns, Name: app.ReleaseName, SchemaID: app.SchemaID, SchemaVersion: app.SchemaVersion, Entries: selectors, Metadata: metadata,
+		RequireFirst: len(changes) == 0,
 	})
 	if err != nil {
 		audit("error", map[string]string{"reason": "release_create_failed"})
@@ -260,8 +269,8 @@ func shipReleaseMetadata(raw string) (string, error) {
 
 // validateShipChanges checks the request rows against the contract and
 // normalises content types. Errors are InvalidArgument (preflight).
-func validateShipChanges(app domain.Application, changes []domain.ShipChange) ([]domain.ShipChange, error) {
-	if len(changes) == 0 {
+func validateShipChanges(app domain.Application, changes []domain.ShipChange, allowEmpty bool) ([]domain.ShipChange, error) {
+	if len(changes) == 0 && !allowEmpty {
 		return nil, domain.Errorf(domain.ErrInvalidArgument, "at least one change is required")
 	}
 	fields := make(map[string]domain.ApplicationContractField, len(app.Contract))

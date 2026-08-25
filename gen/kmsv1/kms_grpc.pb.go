@@ -1283,6 +1283,7 @@ const (
 	AdminService_ListAuditEvents_FullMethodName           = "/kms.v1.AdminService/ListAuditEvents"
 	AdminService_ListSubscribers_FullMethodName           = "/kms.v1.AdminService/ListSubscribers"
 	AdminService_ListReleaseSubscribers_FullMethodName    = "/kms.v1.AdminService/ListReleaseSubscribers"
+	AdminService_ApplyApplicationDefaults_FullMethodName  = "/kms.v1.AdminService/ApplyApplicationDefaults"
 	AdminService_Health_FullMethodName                    = "/kms.v1.AdminService/Health"
 )
 
@@ -1309,6 +1310,7 @@ type AdminServiceClient interface {
 	ListAuditEvents(ctx context.Context, in *ListAuditEventsRequest, opts ...grpc.CallOption) (*ListAuditEventsResponse, error)
 	ListSubscribers(ctx context.Context, in *ListSubscribersRequest, opts ...grpc.CallOption) (*ListSubscribersResponse, error)
 	ListReleaseSubscribers(ctx context.Context, in *ListReleaseSubscribersRequest, opts ...grpc.CallOption) (*ListReleaseSubscribersResponse, error)
+	ApplyApplicationDefaults(ctx context.Context, in *ApplyApplicationDefaultsRequest, opts ...grpc.CallOption) (*ApplyApplicationDefaultsResponse, error)
 	Health(ctx context.Context, in *HealthRequest, opts ...grpc.CallOption) (*HealthResponse, error)
 }
 
@@ -1510,6 +1512,16 @@ func (c *adminServiceClient) ListReleaseSubscribers(ctx context.Context, in *Lis
 	return out, nil
 }
 
+func (c *adminServiceClient) ApplyApplicationDefaults(ctx context.Context, in *ApplyApplicationDefaultsRequest, opts ...grpc.CallOption) (*ApplyApplicationDefaultsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ApplyApplicationDefaultsResponse)
+	err := c.cc.Invoke(ctx, AdminService_ApplyApplicationDefaults_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *adminServiceClient) Health(ctx context.Context, in *HealthRequest, opts ...grpc.CallOption) (*HealthResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(HealthResponse)
@@ -1543,6 +1555,7 @@ type AdminServiceServer interface {
 	ListAuditEvents(context.Context, *ListAuditEventsRequest) (*ListAuditEventsResponse, error)
 	ListSubscribers(context.Context, *ListSubscribersRequest) (*ListSubscribersResponse, error)
 	ListReleaseSubscribers(context.Context, *ListReleaseSubscribersRequest) (*ListReleaseSubscribersResponse, error)
+	ApplyApplicationDefaults(context.Context, *ApplyApplicationDefaultsRequest) (*ApplyApplicationDefaultsResponse, error)
 	Health(context.Context, *HealthRequest) (*HealthResponse, error)
 	mustEmbedUnimplementedAdminServiceServer()
 }
@@ -1610,6 +1623,9 @@ func (UnimplementedAdminServiceServer) ListSubscribers(context.Context, *ListSub
 }
 func (UnimplementedAdminServiceServer) ListReleaseSubscribers(context.Context, *ListReleaseSubscribersRequest) (*ListReleaseSubscribersResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ListReleaseSubscribers not implemented")
+}
+func (UnimplementedAdminServiceServer) ApplyApplicationDefaults(context.Context, *ApplyApplicationDefaultsRequest) (*ApplyApplicationDefaultsResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ApplyApplicationDefaults not implemented")
 }
 func (UnimplementedAdminServiceServer) Health(context.Context, *HealthRequest) (*HealthResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method Health not implemented")
@@ -1977,6 +1993,24 @@ func _AdminService_ListReleaseSubscribers_Handler(srv interface{}, ctx context.C
 	return interceptor(ctx, in, info, handler)
 }
 
+func _AdminService_ApplyApplicationDefaults_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ApplyApplicationDefaultsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AdminServiceServer).ApplyApplicationDefaults(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AdminService_ApplyApplicationDefaults_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AdminServiceServer).ApplyApplicationDefaults(ctx, req.(*ApplyApplicationDefaultsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _AdminService_Health_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(HealthRequest)
 	if err := dec(in); err != nil {
@@ -2077,6 +2111,10 @@ var AdminService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ListReleaseSubscribers",
 			Handler:    _AdminService_ListReleaseSubscribers_Handler,
+		},
+		{
+			MethodName: "ApplyApplicationDefaults",
+			Handler:    _AdminService_ApplyApplicationDefaults_Handler,
 		},
 		{
 			MethodName: "Health",

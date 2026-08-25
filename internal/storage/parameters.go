@@ -41,90 +41,82 @@ func setParamLabel(tx *gorm.DB, paramID int64, label string, version uint64) err
 func (s *SQLStore) PutParameter(ctx context.Context, ref domain.Ref, value, contentType, metadata, createdBy string) (version, revision uint64, err error) {
 	contentType = zeroOr(contentType, "string")
 	metadata = zeroOr(metadata, "{}")
-	now := fmtTime(time.Now())
 
 	err = s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		nsID, err := resolveNamespaceID(tx, ref.NS)
-		if err != nil {
-			return err
-		}
-		var p parameterModel
-		e := tx.Where("namespace_id = ? AND name = ?", nsID, ref.Key).First(&p).Error
-		switch {
-		case errors.Is(e, gorm.ErrRecordNotFound):
-			p = parameterModel{NamespaceID: nsID, Name: ref.Key, ContentType: contentType, MetadataJSON: metadata, CreatedAt: now, UpdatedAt: now}
-			if err := tx.Omit(clause.Associations).Create(&p).Error; err != nil {
-				return err
-			}
-		case e != nil:
-			return e
-		default:
-			if err := tx.Model(&parameterModel{}).Where("id = ?", p.ID).Updates(map[string]any{
-				"content_type":  contentType,
-				"metadata_json": metadata,
-				"updated_at":    now,
-			}).Error; err != nil {
-				return err
-			}
-		}
-
-		var maxVer int64
-		if err := tx.Model(&parameterVersionModel{}).Where("parameter_id = ?", p.ID).
-			Select("COALESCE(MAX(version_number), 0)").Scan(&maxVer).Error; err != nil {
-			return err
-		}
-		newVer := uint64(maxVer) + 1
-
-		pv := parameterVersionModel{
-			ParameterID:   p.ID,
-			VersionNumber: int64(newVer),
-			Value:         value,
-			ContentType:   contentType,
-			State:         domain.StateEnabled,
-			CreatedBy:     createdBy,
-			CreatedAt:     now,
-			MetadataJSON:  metadata,
-		}
-		if err := tx.Omit(clause.Associations).Create(&pv).Error; err != nil {
-			return err
-		}
-
-		labels, err := loadParamLabels(tx, p.ID)
-		if err != nil {
-			return err
-		}
-		if err := setParamLabel(tx, p.ID, domain.LabelCurrent, newVer); err != nil {
-			return err
-		}
-		if oldCur, ok := labels[domain.LabelCurrent]; ok && oldCur != newVer {
-			if err := setParamLabel(tx, p.ID, domain.LabelPrevious, oldCur); err != nil {
-				return err
-			}
-		}
-
-		val := value
-		rev, err := appendChange(tx, &changeLogModel{
-			ResourceType:  domain.ResourceParameter,
-			Env:           ref.NS.Env,
-			App:           ref.NS.App,
-			Key:           ref.Key,
-			ChangeType:    domain.ChangePut,
-			Value:         &val,
-			ContentType:   contentType,
-			VersionNumber: int64(newVer),
-			Label:         domain.LabelCurrent,
-			CreatedAt:     now,
-		})
-		if err != nil {
-			return err
-		}
-		version, revision = newVer, rev
-		return nil
+		var writeErr error
+		version, revision, writeErr = putParameterTx(tx, ref, value, contentType, metadata, createdBy, fmtTime(time.Now()))
+		return writeErr
 	})
 	if err != nil {
 		return 0, 0, err
 	}
 	return version, revision, nil
+}
+
+// putParameterTx is the single implementation used by ordinary writes and
+// parameter-only defaults imports. The caller owns the surrounding
+// transaction, which lets a defaults import commit every version and change
+// log row atomically.
+func putParameterTx(tx *gorm.DB, ref domain.Ref, value, contentType, metadata, createdBy, now string) (version, revision uint64, err error) {
+	nsID, err := resolveNamespaceID(tx, ref.NS)
+	if err != nil {
+		return 0, 0, err
+	}
+	var p parameterModel
+	e := tx.Where("namespace_id = ? AND name = ?", nsID, ref.Key).First(&p).Error
+	switch {
+	case errors.Is(e, gorm.ErrRecordNotFound):
+		p = parameterModel{NamespaceID: nsID, Name: ref.Key, ContentType: contentType, MetadataJSON: metadata, CreatedAt: now, UpdatedAt: now}
+		if err := tx.Omit(clause.Associations).Create(&p).Error; err != nil {
+			return 0, 0, err
+		}
+	case e != nil:
+		return 0, 0, e
+	default:
+		if err := tx.Model(&parameterModel{}).Where("id = ?", p.ID).Updates(map[string]any{
+			"content_type": contentType, "metadata_json": metadata, "updated_at": now,
+		}).Error; err != nil {
+			return 0, 0, err
+		}
+	}
+
+	var maxVer int64
+	if err := tx.Model(&parameterVersionModel{}).Where("parameter_id = ?", p.ID).
+		Select("COALESCE(MAX(version_number), 0)").Scan(&maxVer).Error; err != nil {
+		return 0, 0, err
+	}
+	newVer := uint64(maxVer) + 1
+	pv := parameterVersionModel{
+		ParameterID: p.ID, VersionNumber: int64(newVer), Value: value,
+		ContentType: contentType, State: domain.StateEnabled, CreatedBy: createdBy,
+		CreatedAt: now, MetadataJSON: metadata,
+	}
+	if err := tx.Omit(clause.Associations).Create(&pv).Error; err != nil {
+		return 0, 0, err
+	}
+	labels, err := loadParamLabels(tx, p.ID)
+	if err != nil {
+		return 0, 0, err
+	}
+	if err := setParamLabel(tx, p.ID, domain.LabelCurrent, newVer); err != nil {
+		return 0, 0, err
+	}
+	if oldCur, ok := labels[domain.LabelCurrent]; ok && oldCur != newVer {
+		if err := setParamLabel(tx, p.ID, domain.LabelPrevious, oldCur); err != nil {
+			return 0, 0, err
+		}
+	}
+	val := value
+	rev, err := appendChange(tx, &changeLogModel{
+		ResourceType: domain.ResourceParameter, Env: ref.NS.Env, App: ref.NS.App,
+		Key: ref.Key, ChangeType: domain.ChangePut, Value: &val,
+		ContentType: contentType, VersionNumber: int64(newVer),
+		Label: domain.LabelCurrent, CreatedAt: now,
+	})
+	if err != nil {
+		return 0, 0, err
+	}
+	return newVer, rev, nil
 }
 
 // resolveParamVersion returns the version number selected by version (>0) or

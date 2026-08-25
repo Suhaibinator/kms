@@ -36,6 +36,44 @@ type ApplicationParameterWriteResult struct {
 	Error       string `json:"error,omitempty"`
 }
 
+// Defaults import is intentionally parameter-only. The artifact contract may
+// name secrets so operators can see which ones still need to be provisioned,
+// but no request or result type has a field capable of carrying secret bytes.
+const (
+	DefaultsStatusCreate    = "create"
+	DefaultsStatusUnchanged = "unchanged"
+	DefaultsStatusUpdate    = "update"
+	DefaultsStatusBlocked   = "blocked"
+)
+
+type DefaultsApplyInput struct {
+	Namespace  NamespaceRef
+	Artifact   []byte
+	Overwrite  bool
+	Execute    bool
+	PlanDigest string
+}
+
+type DefaultsApplyEntry struct {
+	Alias          string
+	Key            string
+	ContentType    string
+	Status         string
+	CurrentVersion uint64
+	AppliedVersion uint64
+	Revision       uint64
+}
+
+type DefaultsApplyResult struct {
+	Profile        string
+	SchemaSHA256   string
+	ArtifactDigest string
+	PlanDigest     string
+	Entries        []DefaultsApplyEntry
+	MissingSecrets []string
+	Executed       bool
+}
+
 // --- console read models ----------------------------------------------------
 
 // OverviewValue is one contract alias resolved against an environment. Key is

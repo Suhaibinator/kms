@@ -76,3 +76,46 @@ func TestConfigurationReleaseConcurrentActivationCAS(t *testing.T) {
 		t.Fatalf("concurrent CAS appended %d revisions, want 1", after-before)
 	}
 }
+
+func TestCreateFirstConfigurationReleaseConcurrentGuard(t *testing.T) {
+	ctx := context.Background()
+	st := newStore(t)
+	seedNS(t, st, "dev", "app")
+	ns := nsRef("dev", "app")
+
+	start := make(chan struct{})
+	errs := make(chan error, 2)
+	var wg sync.WaitGroup
+	for range 2 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			_, err := st.CreateFirstConfigurationRelease(ctx, domain.ConfigurationRelease{
+				Namespace: ns, Name: "runtime", Digest: "same", Metadata: "{}",
+			})
+			errs <- err
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(errs)
+
+	var created, aborted int
+	for err := range errs {
+		switch {
+		case err == nil:
+			created++
+		case errors.Is(err, domain.ErrAborted):
+			aborted++
+		default:
+			t.Fatalf("unexpected create-first result: %v", err)
+		}
+	}
+	if created != 1 || aborted != 1 {
+		t.Fatalf("created=%d aborted=%d, want 1/1", created, aborted)
+	}
+	if count, err := st.CountConfigurationReleases(ctx, ns, "runtime"); err != nil || count != 1 {
+		t.Fatalf("release count = %d err=%v, want 1", count, err)
+	}
+}

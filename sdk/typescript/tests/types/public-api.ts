@@ -15,13 +15,18 @@ import {
 } from "@suhaibinator/kms";
 import {
   type ConfigDescriptor,
+  type DefaultsArtifact,
+  encodeDefaultsArtifact,
   generate,
+  parseDefaultsArtifact,
   parseDescriptor,
+  runDefaultsExporter,
   verifyArtifacts,
 } from "@suhaibinator/kms/configgen";
 import {
   type ContractEntry,
   type ManagedPreparedCandidate,
+  parseDefaultsArtifact as parseRuntimeDefaultsArtifact,
   startManagedConfig,
 } from "@suhaibinator/kms/configstore";
 import type { NextKms } from "@suhaibinator/kms/next/server";
@@ -52,6 +57,35 @@ export function generateManagedArtifacts(document: string): void {
     artifacts,
   );
 }
+
+export async function exportManagedDefaults(): Promise<DefaultsArtifact> {
+  type Profile = "local" | "production";
+  const provider = (profile: Profile): { runtime: string } => ({
+    runtime: JSON.stringify({ profile }),
+  });
+  await runDefaultsExporter(
+    ["--profile", "local", "--output", "-"],
+    provider,
+    (profile, defaults) =>
+      encodeDefaultsArtifact({
+        profile,
+        schemaSHA256: "0".repeat(64),
+        contract: [{ alias: "runtime", kind: "parameter", contentType: "json" }],
+        parameters: defaults,
+      }),
+    { stdout: () => undefined, stderr: () => undefined },
+  );
+  return parseDefaultsArtifact(
+    encodeDefaultsArtifact({
+      profile: "local",
+      schemaSHA256: "0".repeat(64),
+      contract: [{ alias: "runtime", kind: "parameter", contentType: "json" }],
+      parameters: { runtime: "{}" },
+    }),
+  );
+}
+
+void parseRuntimeDefaultsArtifact;
 
 void (undefined as ReleaseTransport | undefined);
 void deterministicReleaseDigest;

@@ -46,3 +46,20 @@ contract:
 ```bash
 go generate ./examples/managed-config/config
 ```
+
+Export the source-owned parameter baseline (secret values are never included):
+
+```bash
+go run ./examples/managed-config/cmd/export-defaults \
+  --profile default \
+  --output /tmp/managed-config.defaults.json
+```
+
+Preview it against an application and namespace that already exist:
+
+```bash
+parameter-store defaults apply dev/managed-config \
+  --from /tmp/managed-config.defaults.json \
+  --endpoint localhost:8443 \
+  --token "$KMS_TOKEN"
+```
