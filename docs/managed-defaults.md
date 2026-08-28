@@ -2,8 +2,9 @@
 
 Managed defaults let an application publish its source-owned, non-secret
 configuration baseline to an existing KMS application namespace. KMS owns the
-artifact format, validation, preview, conflict detection, and atomic write.
-The application owns only its defaults provider and a tiny exporter command.
+artifact format, validation, transport, preview, conflict detection, and atomic
+write. The application owns only its defaults provider, profile-to-namespace
+mapping, and a tiny wrapper command.
 
 Secrets are deliberately outside this workflow. Add or rotate them with the
 normal secret-management commands or console before creating the first
@@ -49,7 +50,66 @@ schema SHA-256, complete contract, and exact encoded value for every parameter
 alias. Entries are sorted. Commit the generated schema and contract as usual;
 the defaults artifact itself may be generated when an operator needs it.
 
-## Preview and apply
+## Preview and apply directly from an application
+
+Most Go applications do not need to write an artifact or invoke the
+`parameter-store` binary. `RunDefaultsApplier` generates the artifact in
+memory, resolves the application-owned profile to a namespace, connects to
+KMS, performs a fresh preview, and optionally executes that exact plan:
+
+```go
+package main
+
+import (
+    "os"
+
+    appconfig "example.com/service/config"
+    "example.com/service/configkms"
+    "github.com/Suhaibinator/kms/sdk/go/configstore"
+)
+
+func main() {
+    os.Exit(configstore.RunDefaultsApplier(
+        os.Args[1:], os.Stdout, os.Stderr,
+        configstore.DefaultsApplierConfig[appconfig.Profile, appconfig.Config]{
+            Provider: appconfig.ManagedReleaseDefaults,
+            Encoder:  configkms.EncodeDefaultsArtifact,
+            Namespace: appconfig.KMSNamespaceForProfile,
+        },
+    ))
+}
+```
+
+Preview is the default. The runner reads the admin identity token from
+`KMS_TOKEN`; it deliberately has no token flag, keeping bearer credentials out
+of process listings and shell history:
+
+```bash
+export KMS_TOKEN
+go run ./cmd/apply-kms-defaults \
+  --profile dev \
+  --endpoint localhost:8443 \
+  --insecure
+```
+
+Execute the fresh preview plan with `--execute`. Existing identical values are
+reported as `unchanged` and create no versions or revisions. Differing values
+remain blocked until the operator also passes `--overwrite`:
+
+```bash
+go run ./cmd/apply-kms-defaults \
+  --profile dev \
+  --endpoint localhost:8443 \
+  --insecure \
+  --overwrite \
+  --execute
+```
+
+TLS uses system roots by default, or `--ca`; mTLS additionally uses `--cert`
+and `--key`. Production execution requires
+`--confirm-production <environment>`.
+
+## Preview and apply an exported artifact
 
 The application and target namespace must already exist. Preview is the safe
 default:

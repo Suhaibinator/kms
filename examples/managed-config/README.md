@@ -55,11 +55,23 @@ go run ./examples/managed-config/cmd/export-defaults \
   --output /tmp/managed-config.defaults.json
 ```
 
-Preview it against an application and namespace that already exist:
+Or preview and apply it directly through the application-owned thin wrapper.
+The application and namespace must already exist, and `KMS_TOKEN` must carry an
+administrative identity:
 
 ```bash
-parameter-store defaults apply dev/managed-config \
-  --from /tmp/managed-config.defaults.json \
+go run ./examples/managed-config/cmd/apply-defaults \
+  --profile default \
   --endpoint localhost:8443 \
-  --token "$KMS_TOKEN"
+  --insecure
+
+go run ./examples/managed-config/cmd/apply-defaults \
+  --profile default \
+  --endpoint localhost:8443 \
+  --insecure \
+  --execute
 ```
+
+The second invocation is idempotent: identical values are reported as
+`unchanged` without creating new versions. Add `--overwrite` only when a
+differing current parameter should be replaced.

@@ -137,6 +137,7 @@ func TestErrorMapping(t *testing.T) {
 		{codes.PermissionDenied, ErrPermissionDenied},
 		{codes.Unauthenticated, ErrUnauthenticated},
 		{codes.FailedPrecondition, ErrFailedPrecondition},
+		{codes.Aborted, ErrAborted},
 	}
 	for _, tc := range cases {
 		key := "err/" + tc.code.String()

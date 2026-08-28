@@ -29,6 +29,10 @@ var (
 	// secret).
 	ErrFailedPrecondition = errors.New("kmsclient: failed precondition")
 
+	// ErrAborted is returned when an optimistic concurrency guard fails. The
+	// caller should obtain a fresh preview before retrying the operation.
+	ErrAborted = errors.New("kmsclient: aborted")
+
 	// ErrNotInitialized is reserved for compatibility. Declarative values do not
 	// currently return it: SecretValue.Value panics with a descriptive message,
 	// while ParameterValue.Get returns the empty string before Init/Resolve.
@@ -63,6 +67,8 @@ func mapError(err error) error {
 		return fmt.Errorf("%w: %s", ErrUnauthenticated, st.Message())
 	case codes.FailedPrecondition:
 		return fmt.Errorf("%w: %s", ErrFailedPrecondition, st.Message())
+	case codes.Aborted:
+		return fmt.Errorf("%w: %s", ErrAborted, st.Message())
 	default:
 		// Preserve the original status error (code + message) for everything
 		// else (Unavailable, DeadlineExceeded, Internal, ...).

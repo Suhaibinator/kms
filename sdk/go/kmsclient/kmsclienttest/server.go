@@ -93,6 +93,8 @@ type Server struct {
 	secretErr      map[string]error       // display path -> error
 	lastMetadata   map[string]metadata.MD // method -> incoming md
 	putSecrets     []PutSecretCall
+	defaultsCalls  []*kmsv1.ApplyApplicationDefaultsRequest
+	defaultsQueue  []scriptedDefaultsResponse
 	getParamHook   func(displayPath string)
 	listHook       func(namespace string)
 	identity       *kmsv1.WhoAmIResponse
@@ -105,6 +107,11 @@ type Server struct {
 	activeRelease    *kmsv1.GetActiveReleaseResponse
 	releaseSubs      []*ReleaseSubscription
 	releaseSubNotify chan *ReleaseSubscription
+}
+
+type scriptedDefaultsResponse struct {
+	response *kmsv1.ApplyApplicationDefaultsResponse
+	err      error
 }
 
 // PutSecretCall records a PutSecret invocation for assertions.
@@ -511,6 +518,30 @@ func (s *Server) PutSecretCalls() []PutSecretCall {
 	return out
 }
 
+// QueueApplicationDefaultsResponse scripts one ApplyApplicationDefaults RPC.
+// Calls consume responses in order; response and err are cloned/retained by the
+// fake so callers may safely mutate their inputs afterward.
+func (s *Server) QueueApplicationDefaultsResponse(response *kmsv1.ApplyApplicationDefaultsResponse, err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var cloned *kmsv1.ApplyApplicationDefaultsResponse
+	if response != nil {
+		cloned = proto.Clone(response).(*kmsv1.ApplyApplicationDefaultsResponse)
+	}
+	s.defaultsQueue = append(s.defaultsQueue, scriptedDefaultsResponse{response: cloned, err: err})
+}
+
+// ApplicationDefaultsCalls returns a deep copy of defaults apply requests.
+func (s *Server) ApplicationDefaultsCalls() []*kmsv1.ApplyApplicationDefaultsRequest {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	result := make([]*kmsv1.ApplyApplicationDefaultsRequest, len(s.defaultsCalls))
+	for index, call := range s.defaultsCalls {
+		result[index] = proto.Clone(call).(*kmsv1.ApplyApplicationDefaultsRequest)
+	}
+	return result
+}
+
 // Revision returns the current global revision.
 func (s *Server) Revision() uint64 {
 	s.mu.Lock()
@@ -632,6 +663,26 @@ func (s *Server) WhoAmI(ctx context.Context, _ *kmsv1.WhoAmIRequest) (*kmsv1.Who
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.identity, nil
+}
+
+// ApplyApplicationDefaults returns the next scripted preview or execution.
+func (s *Server) ApplyApplicationDefaults(ctx context.Context, request *kmsv1.ApplyApplicationDefaultsRequest) (*kmsv1.ApplyApplicationDefaultsResponse, error) {
+	s.recordMD(ctx, "ApplyApplicationDefaults")
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.defaultsCalls = append(s.defaultsCalls, proto.Clone(request).(*kmsv1.ApplyApplicationDefaultsRequest))
+	if len(s.defaultsQueue) == 0 {
+		return nil, status.Error(codes.Unimplemented, "application defaults response is not scripted")
+	}
+	next := s.defaultsQueue[0]
+	s.defaultsQueue = s.defaultsQueue[1:]
+	if next.err != nil {
+		return nil, next.err
+	}
+	if next.response == nil {
+		return nil, nil
+	}
+	return proto.Clone(next.response).(*kmsv1.ApplyApplicationDefaultsResponse), nil
 }
 
 // --- ConfigurationReleaseService -----------------------------------------
