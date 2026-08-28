@@ -1,9 +1,11 @@
 package core
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"regexp"
@@ -754,6 +756,11 @@ func (s *Service) CreateConfigurationSchema(ctx context.Context, pr Principal, i
 	if err != nil {
 		return domain.ConfigurationSchema{}, err
 	}
+	var compactSchema bytes.Buffer
+	if err := json.Compact(&compactSchema, []byte(schemaJSON)); err != nil {
+		return domain.ConfigurationSchema{}, domain.Errorf(domain.ErrInvalidArgument, "invalid Draft 2020-12 JSON Schema")
+	}
+	schemaJSON = compactSchema.String()
 	if _, err := compileSchema(schemaJSON); err != nil {
 		return domain.ConfigurationSchema{}, domain.Errorf(domain.ErrInvalidArgument, "invalid Draft 2020-12 JSON Schema")
 	}

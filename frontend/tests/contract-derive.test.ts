@@ -11,6 +11,7 @@ import {
   parseContractFile,
   SCHEMA_2020_12,
   sha256Hex,
+  schemaSha256Hex,
 } from "@/lib/contract-derive";
 
 const examples = resolve(process.cwd(), "..", "examples", "managed-config");
@@ -295,8 +296,11 @@ describe("checkContractAlignment", () => {
 
 describe("sha256Hex", () => {
   it("matches the artifact's schema_sha256 for the sibling schema file", async () => {
-    await expect(sha256Hex(schemaFile)).resolves.toBe(
+    await expect(schemaSha256Hex(schemaFile)).resolves.toBe(
       parseContractFile(contractFile).schema_sha256,
+    );
+    await expect(schemaSha256Hex(` { "maximum" : 18446744073709551615 } `)).resolves.toBe(
+      await schemaSha256Hex('{"maximum":18446744073709551615}'),
     );
     await expect(sha256Hex("")).resolves.toBe(
       "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",

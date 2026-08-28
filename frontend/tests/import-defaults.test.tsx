@@ -66,6 +66,8 @@ function response(
     ],
     missing_secrets: ["database_password"],
     executed: false,
+    definition_changed: false,
+    definition_updated: false,
     ...overrides,
   };
 }
@@ -111,6 +113,7 @@ describe("ImportDefaultsModal", () => {
       app: "gradethis",
       artifact: expect.any(ArrayBuffer),
       overwrite: false,
+      updateDefinition: false,
     });
     expectArtifactBytes(0);
     const preview = screen.getByLabelText("Defaults import preview");
@@ -139,6 +142,7 @@ describe("ImportDefaultsModal", () => {
       app: "gradethis",
       artifact: expect.any(ArrayBuffer),
       overwrite: true,
+      updateDefinition: false,
     });
     expectArtifactBytes(-1);
     expect(mocks.importDefaults).toHaveBeenCalledTimes(2);
@@ -191,6 +195,7 @@ describe("ImportDefaultsModal", () => {
       app: "gradethis",
       artifact: expect.any(ArrayBuffer),
       overwrite: false,
+      updateDefinition: false,
       execute: true,
       planDigest: preview.plan_digest,
     });
@@ -200,5 +205,24 @@ describe("ImportDefaultsModal", () => {
       "dev/gradethis: 1 value(s) written.",
     );
     expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it("requires a fresh opt-in preview before updating the application definition", async () => {
+    mocks.importDefaults
+      .mockResolvedValueOnce(response("unchanged", { definition_changed: true }))
+      .mockResolvedValueOnce(response("unchanged", { definition_changed: true }));
+    renderModal();
+    await uploadArtifact();
+
+    fireEvent.click(screen.getByRole("checkbox", { name: /Update application definition/ }));
+
+    await waitFor(() => expect(mocks.importDefaults).toHaveBeenCalledTimes(2));
+    expect(mocks.importDefaults).toHaveBeenLastCalledWith({
+      env: "dev",
+      app: "gradethis",
+      artifact: expect.any(ArrayBuffer),
+      overwrite: false,
+      updateDefinition: true,
+    });
   });
 });

@@ -75,19 +75,19 @@ func TestRunDefaultsApplierPreviewsWithoutWriting(t *testing.T) {
 
 func TestRunDefaultsApplierExecutesFreshPreviewPlan(t *testing.T) {
 	client := &fakeDefaultsApplyClient{results: []kmsclient.ApplicationDefaultsApplyResult{
-		{Profile: "dev", PlanDigest: "fresh-plan", Entries: []kmsclient.ApplicationDefaultsApplyEntry{{Alias: "runtime", Key: "runtime", Status: "update"}}},
-		{Profile: "dev", PlanDigest: "fresh-plan", Executed: true, Entries: []kmsclient.ApplicationDefaultsApplyEntry{{Alias: "runtime", Key: "runtime", Status: "update", AppliedVersion: 4}}},
+		{Profile: "dev", PlanDigest: "fresh-plan", DefinitionChanged: true, Entries: []kmsclient.ApplicationDefaultsApplyEntry{{Alias: "runtime", Key: "runtime", Status: "update"}}},
+		{Profile: "dev", PlanDigest: "fresh-plan", Executed: true, DefinitionChanged: true, DefinitionUpdated: true, Entries: []kmsclient.ApplicationDefaultsApplyEntry{{Alias: "runtime", Key: "runtime", Status: "update", AppliedVersion: 4}}},
 	}}
 	var stdout, stderr bytes.Buffer
 	exitCode := runDefaultsApplier(
-		[]string{"--profile", "dev", "--insecure", "--overwrite", "--execute"},
+		[]string{"--profile", "dev", "--insecure", "--overwrite", "--update-definition", "--execute"},
 		&stdout, &stderr, defaultsApplierTestConfig("dev/app"),
 		func(kmsclient.Config) (defaultsApplyClient, error) { return client, nil },
 	)
 	if exitCode != 0 || stderr.Len() != 0 || len(client.calls) != 2 {
 		t.Fatalf("exit=%d calls=%#v stderr=%q", exitCode, client.calls, stderr.String())
 	}
-	if !client.calls[0].Overwrite || client.calls[0].Execute || !client.calls[1].Overwrite ||
+	if !client.calls[0].Overwrite || !client.calls[0].UpdateDefinition || client.calls[0].Execute || !client.calls[1].Overwrite || !client.calls[1].UpdateDefinition ||
 		!client.calls[1].Execute || client.calls[1].PlanDigest != "fresh-plan" {
 		t.Fatalf("calls = %#v", client.calls)
 	}
@@ -108,6 +108,22 @@ func TestRunDefaultsApplierBlocksDriftWithoutOverwrite(t *testing.T) {
 		func(kmsclient.Config) (defaultsApplyClient, error) { return client, nil },
 	)
 	if exitCode != 1 || len(client.calls) != 1 || !strings.Contains(stderr.String(), "pass --overwrite") {
+		t.Fatalf("exit=%d calls=%#v stderr=%q", exitCode, client.calls, stderr.String())
+	}
+}
+
+func TestRunDefaultsApplierBlocksDefinitionDriftWithoutOptIn(t *testing.T) {
+	client := &fakeDefaultsApplyClient{results: []kmsclient.ApplicationDefaultsApplyResult{{
+		Profile: "dev", PlanDigest: "plan", DefinitionChanged: true,
+		Entries: []kmsclient.ApplicationDefaultsApplyEntry{{Alias: "runtime", Key: "runtime", Status: "unchanged"}},
+	}}}
+	var stdout, stderr bytes.Buffer
+	exitCode := runDefaultsApplier(
+		[]string{"--profile", "dev", "--insecure", "--execute"},
+		&stdout, &stderr, defaultsApplierTestConfig("dev/app"),
+		func(kmsclient.Config) (defaultsApplyClient, error) { return client, nil },
+	)
+	if exitCode != 1 || len(client.calls) != 1 || !strings.Contains(stderr.String(), "pass --update-definition") {
 		t.Fatalf("exit=%d calls=%#v stderr=%q", exitCode, client.calls, stderr.String())
 	}
 }

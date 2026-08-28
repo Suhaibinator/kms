@@ -665,7 +665,8 @@ export interface ListNamespacesResponse {
 /**
  * ApplyApplicationDefaults previews or atomically applies a parameter-only
  * kms-config-defaults/v1 artifact. Secret values are structurally absent from
- * both the artifact contract and this API.
+ * both the artifact contract and this API. update_definition may replace the
+ * owning application's contract and repin an already registered schema.
  */
 export interface ApplyApplicationDefaultsRequest {
   namespace: NamespaceRef | undefined;
@@ -673,6 +674,7 @@ export interface ApplyApplicationDefaultsRequest {
   overwrite: boolean;
   execute: boolean;
   planDigest: string;
+  updateDefinition: boolean;
 }
 
 export interface DefaultsApplyEntry {
@@ -694,6 +696,8 @@ export interface ApplyApplicationDefaultsResponse {
   entries: DefaultsApplyEntry[];
   missingSecrets: string[];
   executed: boolean;
+  definitionChanged: boolean;
+  definitionUpdated: boolean;
 }
 
 /**
@@ -10014,7 +10018,14 @@ export const ListNamespacesResponse: MessageFns<ListNamespacesResponse> = {
 };
 
 function createBaseApplyApplicationDefaultsRequest(): ApplyApplicationDefaultsRequest {
-  return { namespace: undefined, artifact: Buffer.alloc(0), overwrite: false, execute: false, planDigest: "" };
+  return {
+    namespace: undefined,
+    artifact: Buffer.alloc(0),
+    overwrite: false,
+    execute: false,
+    planDigest: "",
+    updateDefinition: false,
+  };
 }
 
 export const ApplyApplicationDefaultsRequest: MessageFns<ApplyApplicationDefaultsRequest> = {
@@ -10033,6 +10044,9 @@ export const ApplyApplicationDefaultsRequest: MessageFns<ApplyApplicationDefault
     }
     if (message.planDigest !== "") {
       writer.uint32(42).string(message.planDigest);
+    }
+    if (message.updateDefinition !== false) {
+      writer.uint32(48).bool(message.updateDefinition);
     }
     return writer;
   },
@@ -10084,6 +10098,14 @@ export const ApplyApplicationDefaultsRequest: MessageFns<ApplyApplicationDefault
           message.planDigest = reader.string();
           continue;
         }
+        case 6: {
+          if (tag !== 48) {
+            break;
+          }
+
+          message.updateDefinition = reader.bool();
+          continue;
+        }
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -10104,6 +10126,11 @@ export const ApplyApplicationDefaultsRequest: MessageFns<ApplyApplicationDefault
         : isSet(object.plan_digest)
         ? globalThis.String(object.plan_digest)
         : "",
+      updateDefinition: isSet(object.updateDefinition)
+        ? globalThis.Boolean(object.updateDefinition)
+        : isSet(object.update_definition)
+        ? globalThis.Boolean(object.update_definition)
+        : false,
     };
   },
 
@@ -10124,6 +10151,9 @@ export const ApplyApplicationDefaultsRequest: MessageFns<ApplyApplicationDefault
     if (message.planDigest !== "") {
       obj.planDigest = message.planDigest;
     }
+    if (message.updateDefinition !== false) {
+      obj.updateDefinition = message.updateDefinition;
+    }
     return obj;
   },
 
@@ -10139,6 +10169,7 @@ export const ApplyApplicationDefaultsRequest: MessageFns<ApplyApplicationDefault
     message.overwrite = object.overwrite ?? false;
     message.execute = object.execute ?? false;
     message.planDigest = object.planDigest ?? "";
+    message.updateDefinition = object.updateDefinition ?? false;
     return message;
   },
 };
@@ -10333,6 +10364,8 @@ function createBaseApplyApplicationDefaultsResponse(): ApplyApplicationDefaultsR
     entries: [],
     missingSecrets: [],
     executed: false,
+    definitionChanged: false,
+    definitionUpdated: false,
   };
 }
 
@@ -10358,6 +10391,12 @@ export const ApplyApplicationDefaultsResponse: MessageFns<ApplyApplicationDefaul
     }
     if (message.executed !== false) {
       writer.uint32(56).bool(message.executed);
+    }
+    if (message.definitionChanged !== false) {
+      writer.uint32(64).bool(message.definitionChanged);
+    }
+    if (message.definitionUpdated !== false) {
+      writer.uint32(72).bool(message.definitionUpdated);
     }
     return writer;
   },
@@ -10425,6 +10464,22 @@ export const ApplyApplicationDefaultsResponse: MessageFns<ApplyApplicationDefaul
           message.executed = reader.bool();
           continue;
         }
+        case 8: {
+          if (tag !== 64) {
+            break;
+          }
+
+          message.definitionChanged = reader.bool();
+          continue;
+        }
+        case 9: {
+          if (tag !== 72) {
+            break;
+          }
+
+          message.definitionUpdated = reader.bool();
+          continue;
+        }
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -10461,6 +10516,16 @@ export const ApplyApplicationDefaultsResponse: MessageFns<ApplyApplicationDefaul
         ? object.missing_secrets.map((e: any) => globalThis.String(e))
         : [],
       executed: isSet(object.executed) ? globalThis.Boolean(object.executed) : false,
+      definitionChanged: isSet(object.definitionChanged)
+        ? globalThis.Boolean(object.definitionChanged)
+        : isSet(object.definition_changed)
+        ? globalThis.Boolean(object.definition_changed)
+        : false,
+      definitionUpdated: isSet(object.definitionUpdated)
+        ? globalThis.Boolean(object.definitionUpdated)
+        : isSet(object.definition_updated)
+        ? globalThis.Boolean(object.definition_updated)
+        : false,
     };
   },
 
@@ -10487,6 +10552,12 @@ export const ApplyApplicationDefaultsResponse: MessageFns<ApplyApplicationDefaul
     if (message.executed !== false) {
       obj.executed = message.executed;
     }
+    if (message.definitionChanged !== false) {
+      obj.definitionChanged = message.definitionChanged;
+    }
+    if (message.definitionUpdated !== false) {
+      obj.definitionUpdated = message.definitionUpdated;
+    }
     return obj;
   },
 
@@ -10502,6 +10573,8 @@ export const ApplyApplicationDefaultsResponse: MessageFns<ApplyApplicationDefaul
     message.entries = object.entries?.map((e) => DefaultsApplyEntry.fromPartial(e)) || [];
     message.missingSecrets = object.missingSecrets?.map((e) => e) || [];
     message.executed = object.executed ?? false;
+    message.definitionChanged = object.definitionChanged ?? false;
+    message.definitionUpdated = object.definitionUpdated ?? false;
     return message;
   },
 };
@@ -14784,5 +14857,5 @@ export interface MessageFns<T> {
   fromPartial(object: DeepPartial<T>): T;
 }
 
-// source-sha256: 9386f65944b091b26908c330695c8eb3b76ddf9743c616acf9361672353e78dd
+// source-sha256: 31f70198af61b59a91b25dd4d22dc87b0a8f8e1ddb33a1e662eb7965c9c95191
 // generation-sha256: fb24e28290cd273c548cecb15f2bf04129d95aff1c255d744ea21c87c5b004d3

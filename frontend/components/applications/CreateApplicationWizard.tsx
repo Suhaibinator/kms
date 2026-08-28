@@ -7,7 +7,11 @@ import { AppSelect } from "@/components/ui/app-select";
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/context/ToastContext";
 import { api, isConflict } from "@/lib/api";
-import { type ContractEntry, deriveContractFromSchema, sha256Hex } from "@/lib/contract-derive";
+import {
+  type ContractEntry,
+  deriveContractFromSchema,
+  schemaSha256Hex,
+} from "@/lib/contract-derive";
 import { useFieldErrors } from "@/lib/hooks";
 import { isProductionEnvironment } from "@/lib/readiness";
 import type { Application, ConfigurationSchema } from "@/lib/types";
@@ -86,7 +90,7 @@ function parseSchemaObject(text: string): string | null {
 
 async function safeSha(text: string): Promise<string | null> {
   try {
-    return await sha256Hex(text);
+    return await schemaSha256Hex(text);
   } catch {
     return null;
   }

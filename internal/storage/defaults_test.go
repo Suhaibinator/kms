@@ -35,7 +35,9 @@ func TestApplyDefaultsRollsBackEveryVersionAndChange(t *testing.T) {
 			{Alias: "a", Key: "a", Value: "first", ContentType: "string", Write: true},
 			{Alias: "b", Key: "b", Value: "second", ContentType: "string", Write: true},
 		},
-		CreatedBy: "admin",
+		CreatedBy:        "admin",
+		UpdateDefinition: true,
+		DesiredContract:  []domain.ApplicationContractField{{Alias: "replacement", Kind: domain.ReleaseEntryParameter, ContentType: "string"}},
 	}
 	if _, err := store.ApplyDefaults(ctx, in); err == nil {
 		t.Fatal("ApplyDefaults succeeded despite forced second-write failure")
@@ -47,6 +49,10 @@ func TestApplyDefaultsRollsBackEveryVersionAndChange(t *testing.T) {
 	}
 	if revision, err := store.CurrentRevision(ctx); err != nil || revision != 0 {
 		t.Fatalf("revision after rollback = %d err=%v", revision, err)
+	}
+	unchanged, err := store.GetApplication(ctx, "worker")
+	if err != nil || len(unchanged.Contract) != 2 || unchanged.Contract[0].Alias != "a" {
+		t.Fatalf("application definition survived rollback incorrectly: %+v err=%v", unchanged, err)
 	}
 }
 

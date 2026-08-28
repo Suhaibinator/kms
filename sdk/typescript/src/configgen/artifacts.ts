@@ -34,14 +34,17 @@ export function generate(
   options: GenerateOptions = {},
 ): GeneratedArtifacts {
   const descriptor = normalizeDescriptor(input);
-  const schema = renderSchema(descriptor);
+  const schemaDocument = buildSchema(descriptor);
+  const schema = prettyJson(schemaDocument);
   const byteLength = Buffer.byteLength(schema, "utf8");
   if (byteLength > MAX_SCHEMA_BYTES) {
     throw new RangeError(
       `configgen: generated schema is ${byteLength} bytes; maximum is ${MAX_SCHEMA_BYTES}`,
     );
   }
-  const schemaSHA256 = createHash("sha256").update(schema, "utf8").digest("hex");
+  const schemaSHA256 = createHash("sha256")
+    .update(compactJson(schemaDocument), "utf8")
+    .digest("hex");
   const contract = renderContract(descriptor, schemaSHA256);
   const binding = renderBinding(descriptor, schemaSHA256, options);
   return Object.freeze({ binding, schema, contract, schemaSHA256 });
@@ -60,7 +63,7 @@ type JsonValue =
   | readonly JsonValue[]
   | { readonly [key: string]: JsonValue };
 
-function renderSchema(descriptor: ConfigDescriptor): string {
+function buildSchema(descriptor: ConfigDescriptor): JsonValue {
   const required: JsonValue[] = [];
   const properties: Record<string, JsonValue> = Object.create(null) as Record<string, JsonValue>;
   for (const group of descriptor.groups) {
@@ -81,13 +84,13 @@ function renderSchema(descriptor: ConfigDescriptor): string {
       properties: groupProperties,
     };
   }
-  return prettyJson({
+  return {
     $schema: "https://json-schema.org/draft/2020-12/schema",
     type: "object",
     additionalProperties: false,
     required,
     properties,
-  });
+  };
 }
 
 function schemaForType(type: TypeDescriptor): JsonValue {
@@ -812,6 +815,18 @@ function quote(value: string): string {
 
 function prettyJson(value: JsonValue): string {
   return `${renderJson(value, 0)}\n`;
+}
+
+function compactJson(value: JsonValue): string {
+  if (value === null || typeof value === "boolean" || typeof value === "number") {
+    return JSON.stringify(value);
+  }
+  if (typeof value === "string") return JSON.stringify(value);
+  if (isRawNumber(value)) return value.raw;
+  if (Array.isArray(value)) return `[${value.map(compactJson).join(",")}]`;
+  return `{${Object.entries(value)
+    .map(([key, item]) => `${JSON.stringify(key)}:${compactJson(item)}`)
+    .join(",")}}`;
 }
 
 function renderJson(value: JsonValue, depth: number): string {

@@ -17,16 +17,17 @@ func TestApplyApplicationDefaults(t *testing.T) {
 		Entries: []*kmsv1.DefaultsApplyEntry{{
 			Alias: "database", Key: "database", ContentType: "json", Status: "unchanged", CurrentVersion: 3,
 		}},
-		MissingSecrets: []string{"db_password"},
+		MissingSecrets:    []string{"db_password"},
+		DefinitionChanged: true,
 	}, nil)
 
 	result, err := client.ApplyApplicationDefaults(context.Background(), ApplicationDefaultsApplyOptions{
-		Namespace: "dev/gradethis", Artifact: []byte("artifact"), Overwrite: true,
+		Namespace: "dev/gradethis", Artifact: []byte("artifact"), Overwrite: true, UpdateDefinition: true,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.Profile != "dev" || result.PlanDigest != "plan" || result.Executed ||
+	if result.Profile != "dev" || result.PlanDigest != "plan" || result.Executed || !result.DefinitionChanged || result.DefinitionUpdated ||
 		len(result.Entries) != 1 || result.Entries[0].Status != "unchanged" ||
 		len(result.MissingSecrets) != 1 || result.MissingSecrets[0] != "db_password" {
 		t.Fatalf("result = %#v", result)
@@ -34,6 +35,7 @@ func TestApplyApplicationDefaults(t *testing.T) {
 	calls := server.ApplicationDefaultsCalls()
 	if len(calls) != 1 || calls[0].GetNamespace().GetEnv() != "dev" ||
 		calls[0].GetNamespace().GetApp() != "gradethis" || !calls[0].GetOverwrite() ||
+		!calls[0].GetUpdateDefinition() ||
 		string(calls[0].GetArtifact()) != "artifact" {
 		t.Fatalf("calls = %#v", calls)
 	}
@@ -59,6 +61,12 @@ func TestApplyApplicationDefaultsValidatesInputsAndResponses(t *testing.T) {
 	}, nil)
 	if _, err := client.ApplyApplicationDefaults(context.Background(), ApplicationDefaultsApplyOptions{Namespace: "dev/app", Artifact: []byte("x")}); err == nil {
 		t.Fatal("response with unknown status succeeded")
+	}
+	server.QueueApplicationDefaultsResponse(&kmsv1.ApplyApplicationDefaultsResponse{
+		PlanDigest: "plan", DefinitionUpdated: true,
+	}, nil)
+	if _, err := client.ApplyApplicationDefaults(context.Background(), ApplicationDefaultsApplyOptions{Namespace: "dev/app", Artifact: []byte("x")}); err == nil {
+		t.Fatal("response with impossible definition state succeeded")
 	}
 }
 

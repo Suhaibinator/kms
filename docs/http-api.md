@@ -75,15 +75,18 @@ endpoints are admin-only:
   Each target receives an independent immutable version and result. The
   response may contain per-environment errors when only some targets succeed;
   the operation intentionally does not create shared mutable state.
-- `POST /api/v1/applications/defaults?env=ENV&app=APP&overwrite=false&execute=false&plan_digest=`
+- `POST /api/v1/applications/defaults?env=ENV&app=APP&overwrite=false&update_definition=false&execute=false&plan_digest=`
   accepts a raw `kms-config-defaults/v1` JSON artifact. Preview is the default.
   The response contains the artifact profile and schema digest, an opaque plan
   digest, value-free alias rows (`create`, `unchanged`, `update`, or `blocked`),
-  and missing secret names. To execute, submit the same artifact with
+  missing secret names, and whether the application definition differs. To
+  execute, submit the same artifact with
   `execute=true` and the fresh preview's `plan_digest`; differing current
-  values additionally require `overwrite=true`. The server revalidates every
-  dependency and writes parameter versions atomically. This operation never
-  creates applications, namespaces, schemas, secrets, or releases. See
+  values additionally require `overwrite=true`, while definition drift
+  requires `update_definition=true`. The latter replaces the existing
+  contract and repins an already registered schema selected by canonical
+  digest in the same transaction as the parameter writes. This operation
+  never creates applications, namespaces, schemas, secrets, or releases. See
   [`managed-defaults.md`](managed-defaults.md).
 
 ### Console aggregates

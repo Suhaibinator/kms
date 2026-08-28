@@ -543,13 +543,12 @@ contract typed by hand:
    marked *from artifact*; any row you edit afterwards is marked *diverged*
    so a reviewer can see that the application no longer matches the
    generated contract.
-3. **Pairing check.** `schema_sha256` is the SHA-256 of the exact bytes of
-   the schema file the generator wrote alongside the contract. When both
-   artifacts are supplied, the wizard hashes the schema text you imported and
-   shows whether it matches the contract's `schema_sha256`. Import the file
-   as generated — reformatting or re-serialising it changes the hash and the
-   check reports a mismatch even though the schema is semantically the same.
-   A mismatch usually means the two files come from different builds; rerun
+3. **Pairing check.** `schema_sha256` is the SHA-256 of the schema JSON with
+   insignificant whitespace removed. KMS registration and both generators use
+   the same representation, so formatting the JSON does not change its digest.
+   When both artifacts are supplied, the wizard hashes the schema text you
+   imported and shows whether it matches the contract's `schema_sha256`. A
+   mismatch usually means the two files come from different builds; rerun
    generation and import the pair together.
 4. **Environments step.** Add each environment (production names are
    outlined); an existing namespace with the application's name is attached

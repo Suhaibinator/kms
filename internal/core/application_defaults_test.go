@@ -3,6 +3,7 @@ package core
 import (
 	"context"
 	"errors"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -159,6 +160,83 @@ func TestApplicationDefaultsMissingSecretsFreshImportAndAuthorization(t *testing
 	client := clientPrincipal("client")
 	if _, err := svc.ApplyApplicationDefaults(ctx, client, domain.DefaultsApplyInput{Namespace: ns, Artifact: artifact}); !errors.Is(err, domain.ErrPermissionDenied) {
 		t.Fatalf("client defaults error = %v", err)
+	}
+}
+
+func TestApplicationDefaultsExplicitDefinitionUpdateRepinsMatchingSchema(t *testing.T) {
+	ctx := context.Background()
+	svc, store := newConsoleTestService(t)
+	admin := adminPrincipal()
+	oldSchema, err := svc.CreateConfigurationSchema(ctx, admin, "gradethis/runtime", `{"type":"object"}`, "{}")
+	if err != nil {
+		t.Fatal(err)
+	}
+	matchingSchema, err := svc.CreateConfigurationSchema(ctx, admin, "gradethis/runtime", " \n "+consoleSchema+" \n", "{}")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if matchingSchema.Schema != consoleSchema || matchingSchema.Digest != sha256Hex([]byte(consoleSchema)) {
+		t.Fatalf("schema was not canonicalized: %+v", matchingSchema)
+	}
+	oldContract := []domain.ApplicationContractField{{Alias: "database", Kind: domain.ReleaseEntryParameter, ContentType: "json"}}
+	if _, err := svc.CreateApplication(ctx, admin, domain.Application{
+		Name: "gradethis", ReleaseName: "runtime", SchemaID: oldSchema.ID, SchemaVersion: oldSchema.Version, Contract: oldContract,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	ns := domain.NamespaceRef{Env: "dev", App: "gradethis"}
+	if _, err := svc.CreateNamespace(ctx, admin, ns, "", nil); err != nil {
+		t.Fatal(err)
+	}
+	artifact := consoleDefaultsArtifact(t, `{"host":"localhost"}`, "5")
+	readOnlyPreview, err := svc.ApplyApplicationDefaults(ctx, admin, domain.DefaultsApplyInput{Namespace: ns, Artifact: artifact})
+	if err != nil || !readOnlyPreview.DefinitionChanged {
+		t.Fatalf("definition drift preview = %+v err=%v", readOnlyPreview, err)
+	}
+	if _, err := svc.ApplyApplicationDefaults(ctx, admin, domain.DefaultsApplyInput{
+		Namespace: ns, Artifact: artifact, Execute: true, PlanDigest: readOnlyPreview.PlanDigest,
+	}); !errors.Is(err, domain.ErrFailedPrecondition) {
+		t.Fatalf("definition drift execute without opt-in error = %v", err)
+	}
+
+	preview, err := svc.ApplyApplicationDefaults(ctx, admin, domain.DefaultsApplyInput{
+		Namespace: ns, Artifact: artifact, UpdateDefinition: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !preview.DefinitionChanged || preview.DefinitionUpdated || preview.Executed {
+		t.Fatalf("definition preview = %+v", preview)
+	}
+	before, err := store.GetApplication(ctx, "gradethis")
+	if err != nil || !reflect.DeepEqual(before.Contract, oldContract) || before.SchemaVersion != oldSchema.Version {
+		t.Fatalf("preview mutated definition: %+v err=%v", before, err)
+	}
+
+	applied, err := svc.ApplyApplicationDefaults(ctx, admin, domain.DefaultsApplyInput{
+		Namespace: ns, Artifact: artifact, UpdateDefinition: true, Execute: true, PlanDigest: preview.PlanDigest,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !applied.Executed || !applied.DefinitionChanged || !applied.DefinitionUpdated {
+		t.Fatalf("definition apply = %+v", applied)
+	}
+	updated, err := store.GetApplication(ctx, "gradethis")
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed, err := configstore.ParseDefaultsArtifact(artifact)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantContract := applicationContractFromArtifact(parsed.Contract)
+	if !reflect.DeepEqual(updated.Contract, wantContract) || updated.SchemaID != matchingSchema.ID || updated.SchemaVersion != matchingSchema.Version {
+		t.Fatalf("updated definition = %+v, want schema=%s@%d contract=%+v", updated, matchingSchema.ID, matchingSchema.Version, wantContract)
+	}
+	retry, err := svc.ApplyApplicationDefaults(ctx, admin, domain.DefaultsApplyInput{Namespace: ns, Artifact: artifact})
+	if err != nil || retry.DefinitionChanged {
+		t.Fatalf("aligned retry = %+v err=%v", retry, err)
 	}
 }
 

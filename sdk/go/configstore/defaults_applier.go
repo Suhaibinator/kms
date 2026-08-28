@@ -34,6 +34,7 @@ type defaultsApplierFlags struct {
 	profile           string
 	endpoint          string
 	overwrite         bool
+	updateDefinition  bool
 	execute           bool
 	confirmProduction string
 	insecure          bool
@@ -45,7 +46,8 @@ type defaultsApplierFlags struct {
 // RunDefaultsApplier runs a complete source-defaults preview or apply command.
 // The importing application's main normally passes os.Args[1:], standard I/O,
 // its defaults provider, generated artifact encoder, and profile-to-namespace
-// resolver. The KMS identity token is read from KMS_TOKEN.
+// resolver. The KMS identity token is read from KMS_TOKEN. Definition drift
+// is previewed read-only and requires --update-definition for execution.
 func RunDefaultsApplier[P ~string, T any](
 	args []string,
 	stdout io.Writer,
@@ -126,6 +128,7 @@ func runDefaultsApplier[P ~string, T any](
 	ctx := context.Background()
 	preview, err := client.ApplyApplicationDefaults(ctx, kmsclient.ApplicationDefaultsApplyOptions{
 		Namespace: namespace, Artifact: artifactData, Overwrite: flags.overwrite,
+		UpdateDefinition: flags.updateDefinition,
 	})
 	if err != nil {
 		writeDefaultsApplierError(stderr, "preview defaults", err)
@@ -142,10 +145,15 @@ func runDefaultsApplier[P ~string, T any](
 		writeDefaultsApplierError(stderr, "apply defaults", fmt.Errorf("%d parameter default(s) are blocked; pass --overwrite and retry", blocked))
 		return 1
 	}
+	if preview.DefinitionChanged && !flags.updateDefinition {
+		writeDefaultsApplierError(stderr, "apply defaults", errors.New("application definition differs; pass --update-definition and retry"))
+		return 1
+	}
 
 	applied, err := client.ApplyApplicationDefaults(ctx, kmsclient.ApplicationDefaultsApplyOptions{
 		Namespace: namespace, Artifact: artifactData, Overwrite: flags.overwrite,
-		Execute: true, PlanDigest: preview.PlanDigest,
+		UpdateDefinition: flags.updateDefinition,
+		Execute:          true, PlanDigest: preview.PlanDigest,
 	})
 	if err != nil {
 		writeDefaultsApplierError(stderr, "apply defaults", err)
@@ -165,6 +173,7 @@ func parseDefaultsApplierFlags(args []string, stdout, stderr io.Writer) (default
 	set.StringVar(&result.profile, "profile", "", "application defaults profile")
 	set.StringVar(&result.endpoint, "endpoint", "localhost:8443", "KMS gRPC endpoint")
 	set.BoolVar(&result.overwrite, "overwrite", false, "permit differing parameter values to be updated")
+	set.BoolVar(&result.updateDefinition, "update-definition", false, "permit the application contract and schema pin to be updated")
 	set.BoolVar(&result.execute, "execute", false, "apply after a fresh preview")
 	set.StringVar(&result.confirmProduction, "confirm-production", "", "production environment name confirmation")
 	set.BoolVar(&result.insecure, "insecure", false, "disable TLS for local development")
@@ -198,6 +207,7 @@ func defaultsApplierUsage() string {
 		"  --profile <profile>       Application defaults profile (required)\n" +
 		"  --endpoint <host:port>    KMS gRPC endpoint (default localhost:8443)\n" +
 		"  --overwrite               Permit differing parameter values to be updated\n" +
+		"  --update-definition       Permit the application contract and schema pin to be updated\n" +
 		"  --execute                 Apply after a fresh preview\n" +
 		"  --confirm-production ENV  Required with --execute for production environments\n" +
 		"  --insecure                Disable TLS for local development\n" +
@@ -256,7 +266,7 @@ func writeDefaultsApplyResult(writer io.Writer, heading string, result kmsclient
 	})
 	missingSecrets := append([]string(nil), result.MissingSecrets...)
 	sort.Strings(missingSecrets)
-	if _, err := fmt.Fprintf(writer, "%s defaults\nProfile: %s\nPlan digest: %s\n", heading, result.Profile, result.PlanDigest); err != nil {
+	if _, err := fmt.Fprintf(writer, "%s defaults\nProfile: %s\nPlan digest: %s\nDefinition changed: %t\nDefinition updated: %t\n", heading, result.Profile, result.PlanDigest, result.DefinitionChanged, result.DefinitionUpdated); err != nil {
 		return err
 	}
 	table := tabwriter.NewWriter(writer, 0, 4, 2, ' ', 0)

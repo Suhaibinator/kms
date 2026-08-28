@@ -71,6 +71,11 @@ allocates the next version. Registration is admin-managed and accepts at most
 1 MiB of JSON. KMS compiles schemas with `jsonschema/v6` as Draft 2020-12;
 an explicit `$schema` must name that dialect.
 
+Schema registration compacts JSON before storing it and computing its digest.
+The generator uses the same compact representation, so whitespace and file
+formatting cannot make a generated defaults artifact disagree with the
+registered schema.
+
 A release either pins both `schema_id` and `schema_version`, or neither. During
 validation, KMS parses each parameter according to its declared content type
 and builds one object keyed by release alias. JSON parameters become JSON

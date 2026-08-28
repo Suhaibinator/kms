@@ -397,6 +397,7 @@ export const api = {
     app: string;
     artifact: DefaultsArtifactBody;
     overwrite?: boolean;
+    updateDefinition?: boolean;
     execute?: boolean;
     planDigest?: string;
   }): Promise<DefaultsApplyResponse> {
@@ -405,6 +406,7 @@ export const api = {
         env: req.env,
         app: req.app,
         overwrite: req.overwrite ? "true" : undefined,
+        update_definition: req.updateDefinition ? "true" : undefined,
         execute: req.execute ? "true" : undefined,
         plan_digest: req.planDigest,
       })}`,

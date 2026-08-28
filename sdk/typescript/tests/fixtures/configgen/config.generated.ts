@@ -31,7 +31,7 @@ import type {
 } from "../../../src/configstore/index.js";
 import type { Config as RootConfig } from "./config.js";
 
-export const schemaSHA256 = "9e0aaef84df7c38bca889552281bd52c133c3cc0743ac96cd424c2917b467e39";
+export const schemaSHA256 = "53ba1cdc7b814182e41c2d1c2271689c856c3018bb6cd88075d66e13612a954a";
 
 export const generatedContract = Object.freeze([
   Object.freeze({ alias: "database", kind: "parameter", contentType: "json" }),

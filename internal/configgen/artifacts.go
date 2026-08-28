@@ -1,6 +1,7 @@
 package configgen
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -283,7 +284,11 @@ type contractEntry struct {
 }
 
 func renderContract(model *ir, schema []byte) ([]byte, renderedContract, error) {
-	hash := sha256.Sum256(schema)
+	var compactSchema bytes.Buffer
+	if err := json.Compact(&compactSchema, schema); err != nil {
+		return nil, renderedContract{}, fmt.Errorf("compact generated schema: %w", err)
+	}
+	hash := sha256.Sum256(compactSchema.Bytes())
 	hashText := hex.EncodeToString(hash[:])
 	doc := contractDocument{
 		Format:       "kms-config-contract/v1",

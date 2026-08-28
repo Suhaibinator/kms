@@ -457,3 +457,33 @@ export async function sha256Hex(text: string): Promise<string> {
   const digest = await subtle.digest("SHA-256", new TextEncoder().encode(text));
   return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
 }
+
+/** SHA-256 of JSON with insignificant whitespace removed, matching KMS schema registration. */
+export async function schemaSha256Hex(text: string): Promise<string> {
+  // Validate first. The lexical compaction below deliberately preserves number
+  // spellings that JSON.parse/JSON.stringify could round in JavaScript.
+  JSON.parse(text);
+  let compact = "";
+  let inString = false;
+  let escaped = false;
+  for (const character of text) {
+    if (inString) {
+      compact += character;
+      if (escaped) {
+        escaped = false;
+      } else if (character === "\\") {
+        escaped = true;
+      } else if (character === '"') {
+        inString = false;
+      }
+      continue;
+    }
+    if (character === '"') {
+      inString = true;
+      compact += character;
+    } else if (!/\s/u.test(character)) {
+      compact += character;
+    }
+  }
+  return sha256Hex(compact);
+}

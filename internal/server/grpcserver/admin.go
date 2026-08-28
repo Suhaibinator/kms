@@ -74,7 +74,8 @@ func (h *adminServer) ApplyApplicationDefaults(ctx context.Context, req *kmsv1.A
 	}
 	result, err := h.s.svc.ApplyApplicationDefaults(ctx, pr, domain.DefaultsApplyInput{
 		Namespace: nsRefFromProto(req.GetNamespace()), Artifact: req.GetArtifact(),
-		Overwrite: req.GetOverwrite(), Execute: req.GetExecute(), PlanDigest: req.GetPlanDigest(),
+		Overwrite: req.GetOverwrite(), UpdateDefinition: req.GetUpdateDefinition(),
+		Execute: req.GetExecute(), PlanDigest: req.GetPlanDigest(),
 	})
 	if err != nil {
 		return nil, h.s.mapErr(ctx, err)
@@ -90,6 +91,7 @@ func (h *adminServer) ApplyApplicationDefaults(ctx context.Context, req *kmsv1.A
 		Profile: result.Profile, SchemaSha256: result.SchemaSHA256,
 		ArtifactDigest: result.ArtifactDigest, PlanDigest: result.PlanDigest,
 		Entries: entries, MissingSecrets: result.MissingSecrets, Executed: result.Executed,
+		DefinitionChanged: result.DefinitionChanged, DefinitionUpdated: result.DefinitionUpdated,
 	}, nil
 }
 

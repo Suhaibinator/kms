@@ -4,7 +4,7 @@
     "package": "github.com/Suhaibinator/kms/internal/configgen/testdata/valid",
     "type": "Config"
   },
-  "schema_sha256": "d38bf503f3c7fcab1a92493cb1a110e970643fb0efdc6b20de2cc59908742688",
+  "schema_sha256": "6df39ac76b54af644e4067329e2073c54baf9a70e3fa7a5c10fc0d23e637d941",
   "groups": [
     {
       "alias": "database",

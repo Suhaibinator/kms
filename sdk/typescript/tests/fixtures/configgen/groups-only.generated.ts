@@ -30,7 +30,7 @@ import type {
 } from "../../../src/configstore/index.js";
 import type { GroupsOnly as RootConfig } from "./config.js";
 
-export const schemaSHA256 = "3f4f12820905c671ea5b9fc85a4643c5b54d384f00492d2f01f6f34db51de7b6";
+export const schemaSHA256 = "6a642a8a90dbaf7fb7174c55cebe715acd1a28271e43b612f57622294b34462e";
 
 export const generatedContract = Object.freeze([
   Object.freeze({ alias: "application", kind: "parameter", contentType: "json" }),

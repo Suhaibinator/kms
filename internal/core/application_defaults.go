@@ -41,17 +41,21 @@ type defaultsPlanDigestEntry struct {
 }
 
 type defaultsPlanDigestInput struct {
-	ArtifactDigest string                             `json:"artifact_digest"`
-	NamespaceID    int64                              `json:"namespace_id"`
-	ReleaseName    string                             `json:"release_name"`
-	SchemaID       string                             `json:"schema_id"`
-	SchemaVersion  uint64                             `json:"schema_version"`
-	Contract       []domain.ApplicationContractField  `json:"contract"`
-	Resolution     []storage.DefaultsResolutionState  `json:"resolution"`
-	Resources      []storage.DefaultsResourceIdentity `json:"resources"`
-	Entries        []defaultsPlanDigestEntry          `json:"entries"`
-	MissingSecrets []string                           `json:"missing_secrets"`
-	Overwrite      bool                               `json:"overwrite"`
+	ArtifactDigest       string                             `json:"artifact_digest"`
+	NamespaceID          int64                              `json:"namespace_id"`
+	ReleaseName          string                             `json:"release_name"`
+	SchemaID             string                             `json:"schema_id"`
+	SchemaVersion        uint64                             `json:"schema_version"`
+	Contract             []domain.ApplicationContractField  `json:"contract"`
+	DesiredSchemaID      string                             `json:"desired_schema_id"`
+	DesiredSchemaVersion uint64                             `json:"desired_schema_version"`
+	DesiredContract      []domain.ApplicationContractField  `json:"desired_contract"`
+	UpdateDefinition     bool                               `json:"update_definition"`
+	Resolution           []storage.DefaultsResolutionState  `json:"resolution"`
+	Resources            []storage.DefaultsResourceIdentity `json:"resources"`
+	Entries              []defaultsPlanDigestEntry          `json:"entries"`
+	MissingSecrets       []string                           `json:"missing_secrets"`
+	Overwrite            bool                               `json:"overwrite"`
 }
 
 func (s *Service) defaultsApplyStore() (storage.DefaultsApplyStore, error) {
@@ -63,8 +67,10 @@ func (s *Service) defaultsApplyStore() (storage.DefaultsApplyStore, error) {
 }
 
 // ApplyApplicationDefaults previews or atomically executes a parameter-only
-// defaults artifact. Applications, namespaces, schemas, releases and secrets
-// must already exist and are never mutated by this operation.
+// defaults artifact. Applications, namespaces and schemas must already exist.
+// An explicit UpdateDefinition request may atomically replace the existing
+// application contract and repin an already registered matching schema;
+// namespaces, schemas, releases and secrets are never mutated.
 func (s *Service) ApplyApplicationDefaults(ctx context.Context, pr Principal, in domain.DefaultsApplyInput) (domain.DefaultsApplyResult, error) {
 	if err := keyutil.ValidateNamespace(in.Namespace); err != nil {
 		return domain.DefaultsApplyResult{}, domain.Errorf(domain.ErrInvalidArgument, "%v", err)
@@ -95,6 +101,10 @@ func (s *Service) ApplyApplicationDefaults(ctx context.Context, pr Principal, in
 		s.auditDefaults(ctx, pr, in.Namespace, plan, "application.defaults.apply", "deny")
 		return domain.DefaultsApplyResult{}, domain.Errorf(domain.ErrFailedPrecondition, "%d parameter defaults differ; use overwrite and preview again", plan.blocked)
 	}
+	if plan.result.DefinitionChanged && !in.UpdateDefinition {
+		s.auditDefaults(ctx, pr, in.Namespace, plan, "application.defaults.apply", "deny")
+		return domain.DefaultsApplyResult{}, domain.Errorf(domain.ErrFailedPrecondition, "application definition differs; use update_definition and preview again")
+	}
 	store, err := s.defaultsApplyStore()
 	if err != nil {
 		return domain.DefaultsApplyResult{}, err
@@ -115,8 +125,9 @@ func (s *Service) ApplyApplicationDefaults(ctx context.Context, pr Principal, in
 		}
 	}
 	plan.result.Executed = true
+	plan.result.DefinitionUpdated = plan.result.DefinitionChanged
 	s.auditDefaults(ctx, pr, in.Namespace, plan, "application.defaults.apply", "allow")
-	if len(writes) > 0 {
+	if len(writes) > 0 || plan.result.DefinitionUpdated {
 		s.getHub().Wake()
 	}
 	return plan.result, nil
@@ -134,8 +145,11 @@ func (s *Service) buildDefaultsPlan(ctx context.Context, in domain.DefaultsApply
 	if err != nil {
 		return defaultsPlan{}, err
 	}
-	if !artifactContractMatchesApplication(artifact.Contract, app.Contract) {
-		return defaultsPlan{}, domain.Errorf(domain.ErrFailedPrecondition, "defaults artifact contract does not match application contract")
+	desiredApp := app
+	desiredContract := applicationContractFromArtifact(artifact.Contract)
+	contractChanged := !reflect.DeepEqual(desiredContract, app.Contract)
+	if contractChanged {
+		desiredApp.Contract = desiredContract
 	}
 	for _, parameter := range artifact.Parameters {
 		if err := validateParameterValue(parameter.Value, parameter.ContentType); err != nil {
@@ -146,28 +160,30 @@ func (s *Service) buildDefaultsPlan(ctx context.Context, in domain.DefaultsApply
 	if err != nil {
 		return defaultsPlan{}, err
 	}
+	releaseStore, err := s.releaseStore()
+	if err != nil {
+		return defaultsPlan{}, err
+	}
 	if app.SchemaID != "" {
-		releaseStore, err := s.releaseStore()
-		if err != nil {
-			return defaultsPlan{}, err
+		schema, schemaErr := releaseStore.GetConfigurationSchema(ctx, app.SchemaID, app.SchemaVersion)
+		schemaMatches := schemaErr == nil && schema.Digest == artifact.SchemaSHA256
+		if schemaErr != nil && !errors.Is(schemaErr, domain.ErrNotFound) {
+			return defaultsPlan{}, schemaErr
 		}
-		schema, err := releaseStore.GetConfigurationSchema(ctx, app.SchemaID, app.SchemaVersion)
-		if err != nil {
-			return defaultsPlan{}, err
-		}
-		if schema.Digest != artifact.SchemaSHA256 {
-			return defaultsPlan{}, domain.Errorf(domain.ErrFailedPrecondition, "defaults artifact schema does not match the application schema")
+		if !schemaMatches {
+			matching, err := findConfigurationSchemaByDigest(ctx, releaseStore, app.SchemaID, artifact.SchemaSHA256)
+			if err != nil {
+				return defaultsPlan{}, err
+			}
+			desiredApp.SchemaVersion = matching.Version
 		}
 	}
+	definitionChanged := contractChanged || desiredApp.SchemaID != app.SchemaID || desiredApp.SchemaVersion != app.SchemaVersion
 	environments, err := appStore.ListApplicationNamespaces(ctx, app.Name)
 	if err != nil {
 		return defaultsPlan{}, err
 	}
 	rows, _, err := s.collectApplicationRows(ctx, environments)
-	if err != nil {
-		return defaultsPlan{}, err
-	}
-	releaseStore, err := s.releaseStore()
 	if err != nil {
 		return defaultsPlan{}, err
 	}
@@ -214,18 +230,22 @@ func (s *Service) buildDefaultsPlan(ctx context.Context, in domain.DefaultsApply
 			}
 		}
 	}
-	refs := resolveContractRefs(app, in.Namespace.Env, targetActive, targetLatest, otherActive, rows)
+	refs := resolveContractRefs(desiredApp, in.Namespace.Env, targetActive, targetLatest, otherActive, rows)
 	artifactDigest := sha256Hex(in.Artifact)
 	result := domain.DefaultsApplyResult{
 		Profile: artifact.Profile, SchemaSHA256: artifact.SchemaSHA256,
-		ArtifactDigest: artifactDigest,
-		Entries:        make([]domain.DefaultsApplyEntry, 0, len(artifact.Parameters)),
-		MissingSecrets: []string{},
+		ArtifactDigest:    artifactDigest,
+		Entries:           make([]domain.DefaultsApplyEntry, 0, len(artifact.Parameters)),
+		MissingSecrets:    []string{},
+		DefinitionChanged: definitionChanged,
 	}
 	transaction := storage.DefaultsApplyTransaction{
 		Namespace: in.Namespace, NamespaceID: namespace.ID, ReleaseName: app.ReleaseName,
 		SchemaID: app.SchemaID, SchemaVersion: app.SchemaVersion,
 		SchemaDigest: artifact.SchemaSHA256, Contract: append([]domain.ApplicationContractField(nil), app.Contract...),
+		UpdateDefinition: definitionChanged && in.UpdateDefinition,
+		DesiredSchemaID:  desiredApp.SchemaID, DesiredSchemaVersion: desiredApp.SchemaVersion,
+		DesiredContract: append([]domain.ApplicationContractField(nil), desiredApp.Contract...),
 		ResolutionState: resolution, Resources: resources,
 	}
 	digestEntries := make([]defaultsPlanDigestEntry, 0, len(artifact.Parameters))
@@ -277,7 +297,7 @@ func (s *Service) buildDefaultsPlan(ctx context.Context, in domain.DefaultsApply
 			CurrentVersion: entry.CurrentVersion, CurrentDigest: currentDigest, CurrentType: currentType,
 		})
 	}
-	for _, field := range app.Contract {
+	for _, field := range desiredApp.Contract {
 		if field.Kind != domain.ReleaseEntrySecret {
 			continue
 		}
@@ -301,6 +321,8 @@ func (s *Service) buildDefaultsPlan(ctx context.Context, in domain.DefaultsApply
 	digestInput := defaultsPlanDigestInput{
 		ArtifactDigest: artifactDigest, NamespaceID: namespace.ID, ReleaseName: app.ReleaseName,
 		SchemaID: app.SchemaID, SchemaVersion: app.SchemaVersion, Contract: app.Contract,
+		DesiredSchemaID: desiredApp.SchemaID, DesiredSchemaVersion: desiredApp.SchemaVersion,
+		DesiredContract: desiredApp.Contract, UpdateDefinition: in.UpdateDefinition,
 		Resolution: resolution, Resources: resources, Entries: digestEntries,
 		MissingSecrets: result.MissingSecrets, Overwrite: in.Overwrite,
 	}
@@ -312,15 +334,31 @@ func (s *Service) buildDefaultsPlan(ctx context.Context, in domain.DefaultsApply
 	return defaultsPlan{result: result, transaction: transaction, blocked: blocked}, nil
 }
 
-func artifactContractMatchesApplication(artifact []configstore.ContractEntry, contract []domain.ApplicationContractField) bool {
-	if len(artifact) != len(contract) {
-		return false
-	}
+func applicationContractFromArtifact(artifact []configstore.ContractEntry) []domain.ApplicationContractField {
 	converted := make([]domain.ApplicationContractField, len(artifact))
 	for index, entry := range artifact {
 		converted[index] = domain.ApplicationContractField{Alias: entry.Alias, Kind: string(entry.Kind), ContentType: entry.ContentType}
 	}
-	return reflect.DeepEqual(converted, contract)
+	return converted
+}
+
+func findConfigurationSchemaByDigest(ctx context.Context, store storage.ReleaseStore, id, digest string) (domain.ConfigurationSchema, error) {
+	page := storage.ListPage{Limit: 100}
+	for {
+		schemas, next, err := store.ListConfigurationSchemas(ctx, id, page)
+		if err != nil {
+			return domain.ConfigurationSchema{}, err
+		}
+		for _, schema := range schemas {
+			if schema.Digest == digest {
+				return schema, nil
+			}
+		}
+		if next == "" {
+			return domain.ConfigurationSchema{}, domain.Errorf(domain.ErrFailedPrecondition, "register the generated schema under %q before updating the application definition", id)
+		}
+		page.Token = next
+	}
 }
 
 func (s *Service) auditDefaults(ctx context.Context, pr Principal, ns domain.NamespaceRef, plan defaultsPlan, eventType, decision string) {
@@ -334,6 +372,7 @@ func (s *Service) auditDefaults(ctx context.Context, pr Principal, ns domain.Nam
 		"update_count":         strconv.Itoa(counts[domain.DefaultsStatusUpdate]),
 		"blocked_count":        strconv.Itoa(counts[domain.DefaultsStatusBlocked]),
 		"missing_secret_count": strconv.Itoa(len(plan.result.MissingSecrets)),
+		"definition_changed":   strconv.FormatBool(plan.result.DefinitionChanged),
 	}
 	namespaceID := plan.transaction.NamespaceID
 	s.auditRefWithNamespaceID(ctx, pr, eventType, domain.ResourceApplication, domain.Ref{NS: ns, Key: "defaults"}, namespaceID, 0, decision, meta)

@@ -672,13 +672,15 @@ message ListNamespacesResponse {
 
 // ApplyApplicationDefaults previews or atomically applies a parameter-only
 // kms-config-defaults/v1 artifact. Secret values are structurally absent from
-// both the artifact contract and this API.
+// both the artifact contract and this API. update_definition may replace the
+// owning application's contract and repin an already registered schema.
 message ApplyApplicationDefaultsRequest {
   NamespaceRef namespace = 1;
   bytes artifact = 2;
   bool overwrite = 3;
   bool execute = 4;
   string plan_digest = 5;
+  bool update_definition = 6;
 }
 
 message DefaultsApplyEntry {
@@ -699,6 +701,8 @@ message ApplyApplicationDefaultsResponse {
   repeated DefaultsApplyEntry entries = 5;
   repeated string missing_secrets = 6;
   bool executed = 7;
+  bool definition_changed = 8;
+  bool definition_updated = 9;
 }
 
 // PolicyRule grants or denies one operation on a whole namespace. Authorization

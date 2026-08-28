@@ -115,7 +115,11 @@ func TestGenerateIsDeterministicAndCanonical(t *testing.T) {
 	if err := json.Unmarshal(first.Contract, &contract); err != nil {
 		t.Fatal(err)
 	}
-	wantHash := sha256.Sum256(first.Schema)
+	var compactSchema bytes.Buffer
+	if err := json.Compact(&compactSchema, first.Schema); err != nil {
+		t.Fatal(err)
+	}
+	wantHash := sha256.Sum256(compactSchema.Bytes())
 	if contract.Format != "kms-config-contract/v1" || contract.SchemaSHA256 != hex.EncodeToString(wantHash[:]) {
 		t.Fatalf("unexpected contract identity: %#v", contract)
 	}

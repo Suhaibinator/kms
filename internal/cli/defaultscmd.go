@@ -43,6 +43,7 @@ Commands:
 Apply flags:
   --from FILE|-              Defaults artifact file, or - for stdin (required).
   --overwrite                Permit differing existing parameters to be updated.
+  --update-definition        Permit the application contract and schema pin to be updated.
   --execute                  Apply after a fresh preview (preview is the default).
   --confirm-production ENV   Required for --execute against a production ENV.
 
@@ -66,6 +67,7 @@ func (c *CLI) cmdDefaultsApply(args []string) int {
 	cf := addConnFlags(fs)
 	from := fs.String("from", "", "defaults artifact file, or - for stdin")
 	overwrite := fs.Bool("overwrite", false, "permit updates to differing existing parameters")
+	updateDefinition := fs.Bool("update-definition", false, "permit application contract and schema pin updates")
 	execute := fs.Bool("execute", false, "apply after a fresh preview")
 	confirmProduction := fs.String("confirm-production", "", "production environment name confirmation")
 	if !c.parseFlags(fs, args) {
@@ -101,9 +103,10 @@ func (c *CLI) cmdDefaultsApply(args []string) int {
 	pns := &kmsv1.NamespaceRef{Env: ns.Env, App: ns.App}
 
 	preview, err := client.ApplyApplicationDefaults(cf.authCtx(ctx), &kmsv1.ApplyApplicationDefaultsRequest{
-		Namespace: pns,
-		Artifact:  artifact,
-		Overwrite: *overwrite,
+		Namespace:        pns,
+		Artifact:         artifact,
+		Overwrite:        *overwrite,
+		UpdateDefinition: *updateDefinition,
 	})
 	if err != nil {
 		return c.fail("previewing defaults: %v", err)
@@ -120,13 +123,17 @@ func (c *CLI) cmdDefaultsApply(args []string) int {
 	if blocked := countDefaultsStatus(preview.GetEntries(), "blocked"); blocked > 0 {
 		return c.fail("%d parameter default(s) are blocked; pass --overwrite and preview again", blocked)
 	}
+	if preview.GetDefinitionChanged() && !*updateDefinition {
+		return c.fail("application definition differs; pass --update-definition and preview again")
+	}
 
 	applied, err := client.ApplyApplicationDefaults(cf.authCtx(ctx), &kmsv1.ApplyApplicationDefaultsRequest{
-		Namespace:  pns,
-		Artifact:   artifact,
-		Overwrite:  *overwrite,
-		Execute:    true,
-		PlanDigest: preview.GetPlanDigest(),
+		Namespace:        pns,
+		Artifact:         artifact,
+		Overwrite:        *overwrite,
+		UpdateDefinition: *updateDefinition,
+		Execute:          true,
+		PlanDigest:       preview.GetPlanDigest(),
 	})
 	if err != nil {
 		return c.fail("applying defaults: %v", err)
@@ -200,6 +207,9 @@ func validateDefaultsResponse(resp *kmsv1.ApplyApplicationDefaultsResponse, exec
 	if resp.GetExecuted() != execute {
 		return fmt.Errorf("executed state does not match request")
 	}
+	if resp.GetDefinitionUpdated() != (execute && resp.GetDefinitionChanged()) {
+		return fmt.Errorf("definition state does not match request")
+	}
 	for index, entry := range resp.GetEntries() {
 		if entry == nil {
 			return fmt.Errorf("entry %d is empty", index)
@@ -237,7 +247,7 @@ func (c *CLI) writeDefaultsResult(heading string, resp *kmsv1.ApplyApplicationDe
 	missingSecrets := append([]string(nil), resp.GetMissingSecrets()...)
 	sort.Strings(missingSecrets)
 
-	if _, err := fmt.Fprintf(c.Stdout, "%s defaults\nProfile: %s\nPlan digest: %s\n", heading, resp.GetProfile(), resp.GetPlanDigest()); err != nil {
+	if _, err := fmt.Fprintf(c.Stdout, "%s defaults\nProfile: %s\nPlan digest: %s\nDefinition changed: %t\nDefinition updated: %t\n", heading, resp.GetProfile(), resp.GetPlanDigest(), resp.GetDefinitionChanged(), resp.GetDefinitionUpdated()); err != nil {
 		return err
 	}
 	tw := tabwriter.NewWriter(c.Stdout, 0, 4, 2, ' ', 0)

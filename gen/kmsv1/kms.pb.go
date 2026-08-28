@@ -5202,16 +5202,18 @@ func (x *ListNamespacesResponse) GetNextPageToken() string {
 
 // ApplyApplicationDefaults previews or atomically applies a parameter-only
 // kms-config-defaults/v1 artifact. Secret values are structurally absent from
-// both the artifact contract and this API.
+// both the artifact contract and this API. update_definition may replace the
+// owning application's contract and repin an already registered schema.
 type ApplyApplicationDefaultsRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Namespace     *NamespaceRef          `protobuf:"bytes,1,opt,name=namespace,proto3" json:"namespace,omitempty"`
-	Artifact      []byte                 `protobuf:"bytes,2,opt,name=artifact,proto3" json:"artifact,omitempty"`
-	Overwrite     bool                   `protobuf:"varint,3,opt,name=overwrite,proto3" json:"overwrite,omitempty"`
-	Execute       bool                   `protobuf:"varint,4,opt,name=execute,proto3" json:"execute,omitempty"`
-	PlanDigest    string                 `protobuf:"bytes,5,opt,name=plan_digest,json=planDigest,proto3" json:"plan_digest,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state            protoimpl.MessageState `protogen:"open.v1"`
+	Namespace        *NamespaceRef          `protobuf:"bytes,1,opt,name=namespace,proto3" json:"namespace,omitempty"`
+	Artifact         []byte                 `protobuf:"bytes,2,opt,name=artifact,proto3" json:"artifact,omitempty"`
+	Overwrite        bool                   `protobuf:"varint,3,opt,name=overwrite,proto3" json:"overwrite,omitempty"`
+	Execute          bool                   `protobuf:"varint,4,opt,name=execute,proto3" json:"execute,omitempty"`
+	PlanDigest       string                 `protobuf:"bytes,5,opt,name=plan_digest,json=planDigest,proto3" json:"plan_digest,omitempty"`
+	UpdateDefinition bool                   `protobuf:"varint,6,opt,name=update_definition,json=updateDefinition,proto3" json:"update_definition,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
 }
 
 func (x *ApplyApplicationDefaultsRequest) Reset() {
@@ -5277,6 +5279,13 @@ func (x *ApplyApplicationDefaultsRequest) GetPlanDigest() string {
 		return x.PlanDigest
 	}
 	return ""
+}
+
+func (x *ApplyApplicationDefaultsRequest) GetUpdateDefinition() bool {
+	if x != nil {
+		return x.UpdateDefinition
+	}
+	return false
 }
 
 type DefaultsApplyEntry struct {
@@ -5372,16 +5381,18 @@ func (x *DefaultsApplyEntry) GetRevision() uint64 {
 }
 
 type ApplyApplicationDefaultsResponse struct {
-	state          protoimpl.MessageState `protogen:"open.v1"`
-	Profile        string                 `protobuf:"bytes,1,opt,name=profile,proto3" json:"profile,omitempty"`
-	SchemaSha256   string                 `protobuf:"bytes,2,opt,name=schema_sha256,json=schemaSha256,proto3" json:"schema_sha256,omitempty"`
-	ArtifactDigest string                 `protobuf:"bytes,3,opt,name=artifact_digest,json=artifactDigest,proto3" json:"artifact_digest,omitempty"`
-	PlanDigest     string                 `protobuf:"bytes,4,opt,name=plan_digest,json=planDigest,proto3" json:"plan_digest,omitempty"`
-	Entries        []*DefaultsApplyEntry  `protobuf:"bytes,5,rep,name=entries,proto3" json:"entries,omitempty"`
-	MissingSecrets []string               `protobuf:"bytes,6,rep,name=missing_secrets,json=missingSecrets,proto3" json:"missing_secrets,omitempty"`
-	Executed       bool                   `protobuf:"varint,7,opt,name=executed,proto3" json:"executed,omitempty"`
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
+	state             protoimpl.MessageState `protogen:"open.v1"`
+	Profile           string                 `protobuf:"bytes,1,opt,name=profile,proto3" json:"profile,omitempty"`
+	SchemaSha256      string                 `protobuf:"bytes,2,opt,name=schema_sha256,json=schemaSha256,proto3" json:"schema_sha256,omitempty"`
+	ArtifactDigest    string                 `protobuf:"bytes,3,opt,name=artifact_digest,json=artifactDigest,proto3" json:"artifact_digest,omitempty"`
+	PlanDigest        string                 `protobuf:"bytes,4,opt,name=plan_digest,json=planDigest,proto3" json:"plan_digest,omitempty"`
+	Entries           []*DefaultsApplyEntry  `protobuf:"bytes,5,rep,name=entries,proto3" json:"entries,omitempty"`
+	MissingSecrets    []string               `protobuf:"bytes,6,rep,name=missing_secrets,json=missingSecrets,proto3" json:"missing_secrets,omitempty"`
+	Executed          bool                   `protobuf:"varint,7,opt,name=executed,proto3" json:"executed,omitempty"`
+	DefinitionChanged bool                   `protobuf:"varint,8,opt,name=definition_changed,json=definitionChanged,proto3" json:"definition_changed,omitempty"`
+	DefinitionUpdated bool                   `protobuf:"varint,9,opt,name=definition_updated,json=definitionUpdated,proto3" json:"definition_updated,omitempty"`
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
 }
 
 func (x *ApplyApplicationDefaultsResponse) Reset() {
@@ -5459,6 +5470,20 @@ func (x *ApplyApplicationDefaultsResponse) GetMissingSecrets() []string {
 func (x *ApplyApplicationDefaultsResponse) GetExecuted() bool {
 	if x != nil {
 		return x.Executed
+	}
+	return false
+}
+
+func (x *ApplyApplicationDefaultsResponse) GetDefinitionChanged() bool {
+	if x != nil {
+		return x.DefinitionChanged
+	}
+	return false
+}
+
+func (x *ApplyApplicationDefaultsResponse) GetDefinitionUpdated() bool {
+	if x != nil {
+		return x.DefinitionUpdated
 	}
 	return false
 }
@@ -8050,14 +8075,15 @@ const file_kms_v1_kms_proto_rawDesc = "" +
 	"\n" +
 	"namespaces\x18\x01 \x03(\v2\x11.kms.v1.NamespaceR\n" +
 	"namespaces\x12&\n" +
-	"\x0fnext_page_token\x18\x02 \x01(\tR\rnextPageToken\"\xca\x01\n" +
+	"\x0fnext_page_token\x18\x02 \x01(\tR\rnextPageToken\"\xf7\x01\n" +
 	"\x1fApplyApplicationDefaultsRequest\x122\n" +
 	"\tnamespace\x18\x01 \x01(\v2\x14.kms.v1.NamespaceRefR\tnamespace\x12\x1a\n" +
 	"\bartifact\x18\x02 \x01(\fR\bartifact\x12\x1c\n" +
 	"\toverwrite\x18\x03 \x01(\bR\toverwrite\x12\x18\n" +
 	"\aexecute\x18\x04 \x01(\bR\aexecute\x12\x1f\n" +
 	"\vplan_digest\x18\x05 \x01(\tR\n" +
-	"planDigest\"\xe5\x01\n" +
+	"planDigest\x12+\n" +
+	"\x11update_definition\x18\x06 \x01(\bR\x10updateDefinition\"\xe5\x01\n" +
 	"\x12DefaultsApplyEntry\x12\x14\n" +
 	"\x05alias\x18\x01 \x01(\tR\x05alias\x12\x10\n" +
 	"\x03key\x18\x02 \x01(\tR\x03key\x12!\n" +
@@ -8065,7 +8091,7 @@ const file_kms_v1_kms_proto_rawDesc = "" +
 	"\x06status\x18\x04 \x01(\tR\x06status\x12'\n" +
 	"\x0fcurrent_version\x18\x05 \x01(\x04R\x0ecurrentVersion\x12'\n" +
 	"\x0fapplied_version\x18\x06 \x01(\x04R\x0eappliedVersion\x12\x1a\n" +
-	"\brevision\x18\a \x01(\x04R\brevision\"\xa6\x02\n" +
+	"\brevision\x18\a \x01(\x04R\brevision\"\x84\x03\n" +
 	" ApplyApplicationDefaultsResponse\x12\x18\n" +
 	"\aprofile\x18\x01 \x01(\tR\aprofile\x12#\n" +
 	"\rschema_sha256\x18\x02 \x01(\tR\fschemaSha256\x12'\n" +
@@ -8074,7 +8100,9 @@ const file_kms_v1_kms_proto_rawDesc = "" +
 	"planDigest\x124\n" +
 	"\aentries\x18\x05 \x03(\v2\x1a.kms.v1.DefaultsApplyEntryR\aentries\x12'\n" +
 	"\x0fmissing_secrets\x18\x06 \x03(\tR\x0emissingSecrets\x12\x1a\n" +
-	"\bexecuted\x18\a \x01(\bR\bexecuted\"N\n" +
+	"\bexecuted\x18\a \x01(\bR\bexecuted\x12-\n" +
+	"\x12definition_changed\x18\b \x01(\bR\x11definitionChanged\x12-\n" +
+	"\x12definition_updated\x18\t \x01(\bR\x11definitionUpdated\"N\n" +
 	"\n" +
 	"PolicyRule\x12\x1c\n" +
 	"\toperation\x18\x01 \x01(\tR\toperation\x12\x10\n" +

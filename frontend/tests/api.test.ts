@@ -30,6 +30,8 @@ describe("apiFetch", () => {
           entries: [],
           missing_secrets: [],
           executed: false,
+          definition_changed: false,
+          definition_updated: false,
         }),
         { status: 200, headers: { "Content-Type": "application/json" } },
       ),
@@ -40,12 +42,13 @@ describe("apiFetch", () => {
       app: "grades",
       artifact,
       overwrite: true,
+      updateDefinition: true,
       execute: true,
       planDigest: "plan",
     });
 
     expect(fetchMock).toHaveBeenCalledWith(
-      "/api/v1/applications/defaults?env=prod&app=grades&overwrite=true&execute=true&plan_digest=plan",
+      "/api/v1/applications/defaults?env=prod&app=grades&overwrite=true&update_definition=true&execute=true&plan_digest=plan",
       expect.objectContaining({
         method: "POST",
         body: expect.any(ArrayBuffer),

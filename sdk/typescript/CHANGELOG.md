@@ -29,6 +29,9 @@ a minor release may contain documented breaking changes.
 
 ### Fixed
 
+- Generated schema digests now hash the same whitespace-compacted JSON that
+  KMS stores at registration, including schemas with integer bounds beyond
+  JavaScript's safe integer range.
 - Managed float codecs canonicalize signed zero so `-0` and `0` cannot cause a
   false source-default drift report.
 - Default-mismatch report and error JSON encode nested `bigint` values as

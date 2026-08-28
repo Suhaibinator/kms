@@ -28,6 +28,18 @@ func (s *SQLStore) ApplyDefaults(ctx context.Context, in DefaultsApplyTransactio
 		if err := verifyDefaultsParameters(tx, in); err != nil {
 			return err
 		}
+		if in.UpdateDefinition {
+			contract, err := contractJSON(in.DesiredContract)
+			if err != nil {
+				return err
+			}
+			if err := tx.Model(&applicationModel{}).Where("name = ?", in.Namespace.App).Updates(map[string]any{
+				"schema_id": in.DesiredSchemaID, "schema_version": in.DesiredSchemaVersion,
+				"contract_json": contract, "updated_at": fmtTime(nowUTC()),
+			}).Error; err != nil {
+				return err
+			}
+		}
 		now := fmtTime(nowUTC())
 		for _, parameter := range in.Parameters {
 			if !parameter.Write {
@@ -76,9 +88,13 @@ func verifyDefaultsApplication(tx *gorm.DB, in DefaultsApplyTransaction) error {
 		}
 		return err
 	}
-	if in.SchemaID != "" {
+	schemaID, schemaVersion := in.SchemaID, in.SchemaVersion
+	if in.UpdateDefinition {
+		schemaID, schemaVersion = in.DesiredSchemaID, in.DesiredSchemaVersion
+	}
+	if schemaID != "" {
 		var schema configurationSchemaModel
-		if err := tx.Where("id = ? AND version_number = ?", in.SchemaID, in.SchemaVersion).First(&schema).Error; err != nil {
+		if err := tx.Where("id = ? AND version_number = ?", schemaID, schemaVersion).First(&schema).Error; err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) {
 				return defaultsStale()
 			}

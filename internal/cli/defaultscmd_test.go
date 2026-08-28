@@ -36,7 +36,7 @@ func (s *defaultsAdminStub) ApplyApplicationDefaults(ctx context.Context, req *k
 	copyReq := &kmsv1.ApplyApplicationDefaultsRequest{
 		Namespace: &kmsv1.NamespaceRef{Env: req.GetNamespace().GetEnv(), App: req.GetNamespace().GetApp()},
 		Artifact:  append([]byte(nil), req.GetArtifact()...), Overwrite: req.GetOverwrite(),
-		Execute: req.GetExecute(), PlanDigest: req.GetPlanDigest(),
+		Execute: req.GetExecute(), PlanDigest: req.GetPlanDigest(), UpdateDefinition: req.GetUpdateDefinition(),
 	}
 	s.calls = append(s.calls, copyReq)
 	md, _ := metadata.FromIncomingContext(ctx)
@@ -101,7 +101,7 @@ func TestDefaultsApplyPreviewFromFileIsValueFreeAndAuthenticated(t *testing.T) {
 	c.defaultsDial = dial
 	code := c.Run([]string{
 		"defaults", "apply", "dev/my-app", "--from", writeDefaultsInput(t, artifact),
-		"--overwrite", "--insecure", "--token", "admin-token",
+		"--overwrite", "--update-definition", "--insecure", "--token", "admin-token",
 	})
 	if code != 0 {
 		t.Fatalf("preview exit = %d, stderr=%s", code, c.stderr())
@@ -112,7 +112,7 @@ func TestDefaultsApplyPreviewFromFileIsValueFreeAndAuthenticated(t *testing.T) {
 		t.Fatalf("calls = %d, want 1", len(stub.calls))
 	}
 	request := stub.calls[0]
-	if request.GetExecute() || !request.GetOverwrite() || request.GetPlanDigest() != "" {
+	if request.GetExecute() || !request.GetOverwrite() || !request.GetUpdateDefinition() || request.GetPlanDigest() != "" {
 		t.Fatalf("preview request = %#v", request)
 	}
 	if got := string(request.GetArtifact()); got != artifact {

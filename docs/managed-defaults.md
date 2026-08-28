@@ -94,7 +94,9 @@ go run ./cmd/apply-kms-defaults \
 
 Execute the fresh preview plan with `--execute`. Existing identical values are
 reported as `unchanged` and create no versions or revisions. Differing values
-remain blocked until the operator also passes `--overwrite`:
+remain blocked until the operator also passes `--overwrite`. If preview reports
+that the application definition differs, execution additionally requires
+`--update-definition`:
 
 ```bash
 go run ./cmd/apply-kms-defaults \
@@ -102,6 +104,7 @@ go run ./cmd/apply-kms-defaults \
   --endpoint localhost:8443 \
   --insecure \
   --overwrite \
+  --update-definition \
   --execute
 ```
 
@@ -125,12 +128,20 @@ Each parameter is reported as `create`, `unchanged`, `update`, or `blocked`.
 Existing identical values are skipped. A differing value is blocked unless
 the operator explicitly supplies `--overwrite`.
 
+If the artifact contract or schema digest differs from the existing
+application definition, preview reports the definition change but never writes
+it. Register the generated schema under the application's existing schema ID,
+then pass `--update-definition` to explicitly allow execution to replace the
+contract and repin the matching registered schema version. KMS selects by
+digest; callers never guess a version number.
+
 Execute uses a fresh server preview and its opaque plan digest:
 
 ```bash
 parameter-store defaults apply dev/payments \
   --from defaults.dev.json \
   --overwrite \
+  --update-definition \
   --execute \
   --endpoint localhost:8443 \
   --token "$KMS_TOKEN"
@@ -141,10 +152,13 @@ environments additionally require `--confirm-production ENV` with the exact
 target environment name.
 
 Apply never creates applications, namespaces, schemas, secrets, or releases.
-The server verifies the exact application contract, any pinned schema digest,
-alias resolution, namespace incarnation, and current parameter versions. All
-created or updated parameter versions commit in one transaction; a stale plan
-writes nothing and must be previewed again.
+With explicit definition-update permission, the server can replace the
+existing application's contract and repin an already registered schema whose
+canonical digest matches the artifact. That definition update and all created
+or updated parameter versions commit in one transaction. The server also
+verifies alias resolution, namespace incarnation, release state, resource
+inventory, and current parameter versions; a stale plan writes nothing and
+must be previewed again.
 
 After defaults are applied and required secrets have been added manually, the
 console can Ship with zero edits to create and activate the first release. An

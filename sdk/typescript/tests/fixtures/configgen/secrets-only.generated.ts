@@ -21,7 +21,7 @@ import type {
 } from "../../../src/configstore/index.js";
 import type { SecretsOnly as RootConfig } from "./config.js";
 
-export const schemaSHA256 = "146e65546b336addb57f5077cc566c90707d7349ac4d754975b1f26f2e1c4172";
+export const schemaSHA256 = "93abdf79e846e56f4c9946edc3f5960292701a28ab5619219747888e7022626c";
 
 export const generatedContract = Object.freeze([
   Object.freeze({ alias: "worker_token", kind: "secret" }),

@@ -34,6 +34,26 @@ const fixtureDescriptor = parseDescriptor(
   await readFile(join(fixtureDirectory, "config.kms.json"), "utf8"),
 );
 
+function compactJsonText(text: string): string {
+  let compact = "";
+  let inString = false;
+  let escaped = false;
+  for (const character of text) {
+    if (inString) {
+      compact += character;
+      if (escaped) escaped = false;
+      else if (character === "\\") escaped = true;
+      else if (character === '"') inString = false;
+    } else if (character === '"') {
+      inString = true;
+      compact += character;
+    } else if (!/\s/u.test(character)) {
+      compact += character;
+    }
+  }
+  return compact;
+}
+
 describe("TypeScript config generator", () => {
   it("normalizes unordered input and deterministically emits binding, Draft 2020-12 schema and v1 contract", async () => {
     const normalized = parseDescriptor(JSON.stringify(fixtureDescriptor));
@@ -46,7 +66,7 @@ describe("TypeScript config generator", () => {
     expect(first.schema.endsWith("\n")).toBe(true);
     expect(first.contract.endsWith("\n")).toBe(true);
     expect(first.schemaSHA256).toBe(
-      createHash("sha256").update(first.schema, "utf8").digest("hex"),
+      createHash("sha256").update(compactJsonText(first.schema), "utf8").digest("hex"),
     );
 
     const schema = JSON.parse(first.schema) as Record<string, unknown>;

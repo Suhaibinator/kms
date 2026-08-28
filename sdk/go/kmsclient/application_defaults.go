@@ -10,11 +10,12 @@ import (
 // ApplicationDefaultsApplyOptions describes one preview or execution of a
 // generated, parameter-only application defaults artifact.
 type ApplicationDefaultsApplyOptions struct {
-	Namespace  string
-	Artifact   []byte
-	Overwrite  bool
-	Execute    bool
-	PlanDigest string
+	Namespace        string
+	Artifact         []byte
+	Overwrite        bool
+	UpdateDefinition bool
+	Execute          bool
+	PlanDigest       string
 }
 
 // ApplicationDefaultsApplyEntry reports the disposition of one parameter
@@ -32,13 +33,15 @@ type ApplicationDefaultsApplyEntry struct {
 // ApplicationDefaultsApplyResult is the validated server response for an
 // application defaults preview or execution.
 type ApplicationDefaultsApplyResult struct {
-	Profile        string
-	SchemaSHA256   string
-	ArtifactDigest string
-	PlanDigest     string
-	Entries        []ApplicationDefaultsApplyEntry
-	MissingSecrets []string
-	Executed       bool
+	Profile           string
+	SchemaSHA256      string
+	ArtifactDigest    string
+	PlanDigest        string
+	Entries           []ApplicationDefaultsApplyEntry
+	MissingSecrets    []string
+	Executed          bool
+	DefinitionChanged bool
+	DefinitionUpdated bool
 }
 
 // ApplyApplicationDefaults previews or atomically applies a generated
@@ -59,11 +62,12 @@ func (c *Client) ApplyApplicationDefaults(
 	cctx, cancel := c.callCtx(ctx, "")
 	defer cancel()
 	response, err := c.admin.ApplyApplicationDefaults(cctx, &kmsv1.ApplyApplicationDefaultsRequest{
-		Namespace:  namespace.proto(),
-		Artifact:   options.Artifact,
-		Overwrite:  options.Overwrite,
-		Execute:    options.Execute,
-		PlanDigest: options.PlanDigest,
+		Namespace:        namespace.proto(),
+		Artifact:         options.Artifact,
+		Overwrite:        options.Overwrite,
+		UpdateDefinition: options.UpdateDefinition,
+		Execute:          options.Execute,
+		PlanDigest:       options.PlanDigest,
 	})
 	if err != nil {
 		return ApplicationDefaultsApplyResult{}, mapError(err)
@@ -74,15 +78,20 @@ func (c *Client) ApplyApplicationDefaults(
 	if response.GetExecuted() != options.Execute {
 		return ApplicationDefaultsApplyResult{}, fmt.Errorf("kmsclient: defaults response execution state mismatch")
 	}
+	if response.GetDefinitionUpdated() != (options.Execute && response.GetDefinitionChanged()) {
+		return ApplicationDefaultsApplyResult{}, fmt.Errorf("kmsclient: defaults response definition state mismatch")
+	}
 
 	result := ApplicationDefaultsApplyResult{
-		Profile:        response.GetProfile(),
-		SchemaSHA256:   response.GetSchemaSha256(),
-		ArtifactDigest: response.GetArtifactDigest(),
-		PlanDigest:     response.GetPlanDigest(),
-		Entries:        make([]ApplicationDefaultsApplyEntry, 0, len(response.GetEntries())),
-		MissingSecrets: append([]string(nil), response.GetMissingSecrets()...),
-		Executed:       response.GetExecuted(),
+		Profile:           response.GetProfile(),
+		SchemaSHA256:      response.GetSchemaSha256(),
+		ArtifactDigest:    response.GetArtifactDigest(),
+		PlanDigest:        response.GetPlanDigest(),
+		Entries:           make([]ApplicationDefaultsApplyEntry, 0, len(response.GetEntries())),
+		MissingSecrets:    append([]string(nil), response.GetMissingSecrets()...),
+		Executed:          response.GetExecuted(),
+		DefinitionChanged: response.GetDefinitionChanged(),
+		DefinitionUpdated: response.GetDefinitionUpdated(),
 	}
 	for index, entry := range response.GetEntries() {
 		if entry == nil {

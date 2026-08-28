@@ -47,11 +47,12 @@ const (
 )
 
 type DefaultsApplyInput struct {
-	Namespace  NamespaceRef
-	Artifact   []byte
-	Overwrite  bool
-	Execute    bool
-	PlanDigest string
+	Namespace        NamespaceRef
+	Artifact         []byte
+	Overwrite        bool
+	UpdateDefinition bool
+	Execute          bool
+	PlanDigest       string
 }
 
 type DefaultsApplyEntry struct {
@@ -65,13 +66,15 @@ type DefaultsApplyEntry struct {
 }
 
 type DefaultsApplyResult struct {
-	Profile        string
-	SchemaSHA256   string
-	ArtifactDigest string
-	PlanDigest     string
-	Entries        []DefaultsApplyEntry
-	MissingSecrets []string
-	Executed       bool
+	Profile           string
+	SchemaSHA256      string
+	ArtifactDigest    string
+	PlanDigest        string
+	Entries           []DefaultsApplyEntry
+	MissingSecrets    []string
+	Executed          bool
+	DefinitionChanged bool
+	DefinitionUpdated bool
 }
 
 // --- console read models ----------------------------------------------------

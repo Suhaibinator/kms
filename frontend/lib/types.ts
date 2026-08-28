@@ -734,6 +734,8 @@ export interface DefaultsApplyResponse {
   entries: DefaultsApplyEntry[];
   missing_secrets: string[];
   executed: boolean;
+  definition_changed: boolean;
+  definition_updated: boolean;
 }
 
 export interface FleetEnvironment {
