@@ -513,12 +513,6 @@ func revAllowsWrite(prevRev, rev uint64, reconcile bool) bool {
 	return rev == 0 || rev > prevRev
 }
 
-func (m *subManager) watcherCount() int {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	return len(m.watchers)
-}
-
 func (m *subManager) matchingWatchers(ns namespaceRef) []*watcher {
 	m.mu.Lock()
 	defer m.mu.Unlock()

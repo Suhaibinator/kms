@@ -41,7 +41,7 @@ func TestIsTrustedWindowsOwnerRejectsDifferentServiceSID(t *testing.T) {
 	}
 }
 
-func TestRequireStableParentRejectsDeleteChildGrant(t *testing.T) {
+func TestResolveStablePathRejectsDeleteChildGrant(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "shared")
 	if err := windows.CreateDirectory(windows.StringToUTF16Ptr(dir), nil); err != nil {
 		t.Fatal(err)
@@ -76,7 +76,7 @@ func TestRequireStableParentRejectsDeleteChildGrant(t *testing.T) {
 		nil, nil, acl, nil); err != nil {
 		t.Fatal(err)
 	}
-	if err := RequireStableParent(filepath.Join(dir, "output.db")); err == nil {
+	if _, err := ResolveStablePath(filepath.Join(dir, "output.db")); err == nil {
 		t.Fatal("parent granting Everyone FILE_DELETE_CHILD was accepted")
 	}
 }
@@ -139,7 +139,7 @@ func TestRequireStableParentInspectsReparseEntryDACL(t *testing.T) {
 		nil, nil, acl, nil); err != nil {
 		t.Fatal(err)
 	}
-	if err := RequireStableParent(filepath.Join(link, "output.db")); err == nil {
+	if _, err := ResolveStablePath(filepath.Join(link, "output.db")); err == nil {
 		t.Fatal("reparse entry granting Everyone GENERIC_WRITE was accepted")
 	}
 }

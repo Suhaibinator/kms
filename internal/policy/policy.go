@@ -123,17 +123,6 @@ func operationMatches(pattern, op string) bool {
 	return pattern == op
 }
 
-// MayListUnder reports whether at least one allow rule grants operation on ns
-// for this subject. Because authorization is namespace-level, a subject that may
-// list a namespace may see every key in it. Deny rules are intentionally not
-// consulted here — core applies deny precedence per item via Authorize; this is
-// only the "may the subject enumerate this namespace at all" gate. It does not
-// consult the implicit home-namespace grant; core short-circuits home-namespace
-// lists separately.
-func MayListUnder(policies []domain.Policy, operation string, ns domain.NamespaceRef) bool {
-	return allowedBy(policies, operation, ns)
-}
-
 // ValidateRules canonicalizes every rule in the policy (operation against the
 // known set; env/app normalized and validated) and returns the normalized
 // policy or an error naming the offending rule. An empty env or app component

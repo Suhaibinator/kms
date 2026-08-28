@@ -652,16 +652,6 @@ func (c *CLI) withReservedCertBundle(outDir, name string, use func(*reservedCert
 	return nil
 }
 
-// writeCertBundle prints or writes the one-time certificate + private key. When
-// outDir is empty it prints the PEM blocks to stdout with a one-time warning;
-// otherwise it exclusively reserves NAME.crt and NAME.key (the key mode is
-// 0600) before publishing the bundle.
-func (c *CLI) writeCertBundle(outDir, name string, bundle *kmsv1.CertBundle) error {
-	return c.withReservedCertBundle(outDir, name, func(output *reservedCertBundle) error {
-		return c.writeCertBundleToOutput(output, bundle)
-	})
-}
-
 func (c *CLI) writeCertBundleToOutput(output *reservedCertBundle, bundle *kmsv1.CertBundle) error {
 	if bundle == nil {
 		return fmt.Errorf("server returned no certificate bundle")

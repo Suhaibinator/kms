@@ -5,15 +5,6 @@ import (
 	"path/filepath"
 )
 
-// RequireStableParent rejects a destination whose directory entries can be
-// renamed or replaced by another OS account. Sensitive pathname-based creators
-// such as SQLite VACUUM INTO cannot be made safe by chmodding the child after
-// creation: the parent entry must remain stable for the whole operation.
-func RequireStableParent(path string) error {
-	_, err := ResolveStablePath(path)
-	return err
-}
-
 // ResolveStablePath validates path's parent and returns the same basename under
 // the canonical validated parent. Callers must perform subsequent pathname
 // operations on the returned path; using the pre-resolution spelling would

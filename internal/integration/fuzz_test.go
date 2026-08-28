@@ -62,7 +62,6 @@ func FuzzValidateRules(f *testing.F) {
 		ns := domain.NamespaceRef{Env: "prod", App: "app"}
 		_ = policy.Authorize([]domain.Policy{normalized}, nil, op, ns)
 		_ = policy.Authorize([]domain.Policy{normalized}, nil, "secret:read", ns)
-		_ = policy.MayListUnder([]domain.Policy{normalized}, op, ns)
 	})
 }
 

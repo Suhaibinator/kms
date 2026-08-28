@@ -7,14 +7,14 @@ import (
 	"testing"
 )
 
-func TestRequireStableParentAcceptsPrivateDirectory(t *testing.T) {
+func TestResolveStablePathAcceptsPrivateDirectory(t *testing.T) {
 	dir := t.TempDir()
-	if err := RequireStableParent(filepath.Join(dir, "output.db")); err != nil {
-		t.Fatalf("RequireStableParent: %v", err)
+	if _, err := ResolveStablePath(filepath.Join(dir, "output.db")); err != nil {
+		t.Fatalf("ResolveStablePath: %v", err)
 	}
 }
 
-func TestRequireStableParentRejectsSharedMutableDirectory(t *testing.T) {
+func TestResolveStablePathRejectsSharedMutableDirectory(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("Windows DACL rejection is covered by its platform test")
 	}
@@ -25,12 +25,12 @@ func TestRequireStableParentRejectsSharedMutableDirectory(t *testing.T) {
 	if err := os.Chmod(dir, 0o777); err != nil {
 		t.Fatal(err)
 	}
-	if err := RequireStableParent(filepath.Join(dir, "output.db")); err == nil {
+	if _, err := ResolveStablePath(filepath.Join(dir, "output.db")); err == nil {
 		t.Fatal("group/other-writable non-sticky parent was accepted")
 	}
 }
 
-func TestRequireStableParentAcceptsOwnedStickyDirectory(t *testing.T) {
+func TestResolveStablePathAcceptsOwnedStickyDirectory(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("POSIX sticky directories do not apply on Windows")
 	}
@@ -41,7 +41,7 @@ func TestRequireStableParentAcceptsOwnedStickyDirectory(t *testing.T) {
 	if err := os.Chmod(dir, os.ModeSticky|0o777); err != nil {
 		t.Fatal(err)
 	}
-	if err := RequireStableParent(filepath.Join(dir, "output.db")); err != nil {
+	if _, err := ResolveStablePath(filepath.Join(dir, "output.db")); err != nil {
 		t.Fatalf("owned sticky parent: %v", err)
 	}
 }

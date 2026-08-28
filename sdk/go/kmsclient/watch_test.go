@@ -17,6 +17,12 @@ import (
 
 const waitTimeout = 5 * time.Second
 
+func watcherCountForTest(m *subManager) int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return len(m.watchers)
+}
+
 // TestDefaultHotReload proves the flipped default: a ParameterValue with no
 // Static flag hot-reloads over the shared, namespace-level subscription.
 func TestDefaultHotReload(t *testing.T) {
@@ -542,7 +548,7 @@ func TestWatchStopViaContextCancel(t *testing.T) {
 	}
 	// Cancelling the context should unregister the watcher.
 	cancel()
-	if !eventually(t, waitTimeout, func() bool { return c.sub.watcherCount() == 0 }) {
+	if !eventually(t, waitTimeout, func() bool { return watcherCountForTest(c.sub) == 0 }) {
 		t.Error("watcher not removed after context cancel")
 	}
 }

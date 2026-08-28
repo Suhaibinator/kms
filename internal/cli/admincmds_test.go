@@ -13,6 +13,12 @@ import (
 	kmsv1 "github.com/Suhaibinator/kms/gen/kmsv1"
 )
 
+func writeCertBundleForTest(c *testCLI, outDir, name string, bundle *kmsv1.CertBundle) error {
+	return c.withReservedCertBundle(outDir, name, func(output *reservedCertBundle) error {
+		return c.writeCertBundleToOutput(output, bundle)
+	})
+}
+
 func TestAdminHelpExplainsApplicationCredentialRoles(t *testing.T) {
 	c := newTestCLI()
 	if code := c.Run([]string{"admin", "help"}); code != 0 {
@@ -76,7 +82,7 @@ func TestWriteCertBundleToDir(t *testing.T) {
 		Serial:         "7f3a",
 		NotAfterUnixMs: 1893456000000,
 	}
-	if err := c.writeCertBundle(dir, "svc", bundle); err != nil {
+	if err := writeCertBundleForTest(c, dir, "svc", bundle); err != nil {
 		t.Fatalf("writeCertBundle: %v", err)
 	}
 	certPath := filepath.Join(dir, "svc.crt")
@@ -115,7 +121,7 @@ func TestWriteCertBundleRefusesPreexistingPrivateKey(t *testing.T) {
 
 	c := newTestCLI()
 	bundle := &kmsv1.CertBundle{CertPem: "CERT\n", KeyPem: "PRIVATE KEY\n", Serial: "s1"}
-	if err := c.writeCertBundle(dir, "svc", bundle); err == nil {
+	if err := writeCertBundleForTest(c, dir, "svc", bundle); err == nil {
 		t.Fatal("expected pre-existing private-key path to be refused")
 	}
 	if got := readFileString(t, keyPath); got != "attacker-controlled" {
@@ -148,7 +154,7 @@ func TestWriteCertBundleRefusesPrivateKeySymlink(t *testing.T) {
 
 	c := newTestCLI()
 	bundle := &kmsv1.CertBundle{CertPem: "CERT\n", KeyPem: "PRIVATE KEY\n", Serial: "s1"}
-	if err := c.writeCertBundle(dir, "svc", bundle); err == nil {
+	if err := writeCertBundleForTest(c, dir, "svc", bundle); err == nil {
 		t.Fatal("expected private-key symlink to be refused")
 	}
 	if got := readFileString(t, target); got != "unchanged" {
@@ -171,7 +177,7 @@ func TestWriteCertBundleRefusesPreexistingCertificateWithoutCreatingKey(t *testi
 
 	c := newTestCLI()
 	bundle := &kmsv1.CertBundle{CertPem: "NEW CERT\n", KeyPem: "PRIVATE KEY\n", Serial: "s1"}
-	if err := c.writeCertBundle(dir, "svc", bundle); err == nil {
+	if err := writeCertBundleForTest(c, dir, "svc", bundle); err == nil {
 		t.Fatal("expected pre-existing certificate path to be refused")
 	}
 	if got := readFileString(t, certPath); got != "existing certificate" {
@@ -185,7 +191,7 @@ func TestWriteCertBundleRefusesPreexistingCertificateWithoutCreatingKey(t *testi
 func TestWriteCertBundleToStdout(t *testing.T) {
 	c := newTestCLI()
 	bundle := &kmsv1.CertBundle{CertPem: "CERT\n", KeyPem: "KEY\n", Serial: "s1"}
-	if err := c.writeCertBundle("", "svc", bundle); err != nil {
+	if err := writeCertBundleForTest(c, "", "svc", bundle); err != nil {
 		t.Fatalf("writeCertBundle: %v", err)
 	}
 	out := c.stdout()
@@ -197,7 +203,7 @@ func TestWriteCertBundleToStdout(t *testing.T) {
 func TestWriteCertBundlePropagatesStdoutFailure(t *testing.T) {
 	c := newTestCLI()
 	c.Stdout = errorWriter{err: io.ErrClosedPipe}
-	if err := c.writeCertBundle("", "svc", testCertBundle()); !errors.Is(err, io.ErrClosedPipe) {
+	if err := writeCertBundleForTest(c, "", "svc", testCertBundle()); !errors.Is(err, io.ErrClosedPipe) {
 		t.Fatalf("writeCertBundle stdout error = %v, want closed pipe", err)
 	}
 }
