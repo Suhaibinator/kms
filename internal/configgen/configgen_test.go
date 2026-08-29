@@ -12,6 +12,7 @@ import (
 	"go/types"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -53,10 +54,33 @@ func TestGenerateIsDeterministicAndCanonical(t *testing.T) {
 	if bytes.Contains(first.Binding, []byte("reflect.")) {
 		t.Fatal("generated binding unexpectedly uses reflection")
 	}
-	if !bytes.Contains(first.Binding, []byte("OnCandidateRejected")) ||
-		!bytes.Contains(first.Binding, []byte("configstore.CandidateRejectionReport")) ||
-		!bytes.Contains(first.Binding, []byte(`configstore.RejectDecode("database", err)`)) {
+	// Observers are supplied through the embedded configstore.Callbacks and
+	// forwarded as one value; the removed startup bypass must not resurface.
+	if !bytes.Contains(first.Binding, []byte("\tconfigstore.Callbacks\n")) ||
+		!regexp.MustCompile(`Callbacks:\s+options\.Callbacks,`).Match(first.Binding) {
+		t.Fatal("generated Options does not embed and forward configstore.Callbacks")
+	}
+	if bytes.Contains(first.Binding, []byte("AllowDefaultMismatch")) {
+		t.Fatal("generated binding still references the removed AllowDefaultMismatch option")
+	}
+	if !bytes.Contains(first.Binding, []byte(`configstore.RejectDecode("database", err)`)) {
 		t.Fatal("generated binding does not forward safe candidate rejection diagnostics")
+	}
+	// Reload change lists compare against the previously applied generation,
+	// never against source defaults, and every candidate exposes its groups.
+	changeAgainstActive := regexp.MustCompile(`configstore\.FieldChange\{Path: "database\.timeout", Previous: reportValue\d+\(active\.config\.Timeout\), Current: reportValue\d+\(candidate\.Timeout\)\}`)
+	changeAgainstDefaults := regexp.MustCompile(`configstore\.FieldChange\{Path: "[^"]+", Previous: reportValue\d+\(effectiveDefaults\.`)
+	if !changeAgainstActive.Match(first.Binding) || changeAgainstDefaults.Match(first.Binding) {
+		t.Fatal("generated change list is not computed against the previously applied generation")
+	}
+	if !bytes.Contains(first.Binding, []byte(`configstore.FieldChange{Path: "database_password"}`)) {
+		t.Fatal("generated change list does not report secret rotation path-only")
+	}
+	if !regexp.MustCompile(`Groups:\s+func\(\) \(map\[string\]json\.RawMessage, error\)`).Match(first.Binding) {
+		t.Fatal("generated candidate does not set Groups")
+	}
+	if !bytes.Contains(first.Binding, []byte("func VerifyReleaseDefaults(")) {
+		t.Fatal("generated binding does not emit VerifyReleaseDefaults")
 	}
 	for _, want := range [][]byte{
 		[]byte("func EncodeDefaultsArtifact(profile string, root *rootconfig.Config) ([]byte, error)"),
