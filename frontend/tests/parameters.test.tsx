@@ -1,7 +1,9 @@
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { api } from "@/lib/api";
+import { lastNamespace, resetNamespaceMemory } from "@/lib/namespace-memory";
 import type { Namespace, Parameter } from "@/lib/types";
+import { MAX_KEY_LENGTH } from "@/lib/validation";
 import ParametersPage from "@/pages/parameters/index";
 import { chooseSelectOption } from "./select-test-utils";
 
@@ -57,6 +59,7 @@ beforeEach(() => {
   mocks.router.replace.mockReset();
   mocks.toast.error.mockReset();
   mocks.toast.success.mockReset();
+  resetNamespaceMemory();
   vi.spyOn(api, "listNamespaces").mockResolvedValue({
     namespaces: [NAMESPACE],
     next_page_token: "",
@@ -135,7 +138,11 @@ describe("parameters page", () => {
     expect(await screen.findByText(BETA.key)).toBeVisible();
     expect(screen.getByText("Page 2")).toBeVisible();
 
-    fireEvent.click(screen.getByRole("button", { name: "Delete" }));
+    // Delete lives behind the row's menu, out of reach of a stray click.
+    fireEvent.click(screen.getByRole("button", { name: `More actions for ${BETA.key}` }));
+    // Base UI names the popup after its trigger.
+    const menu = await screen.findByRole("menu", { name: `More actions for ${BETA.key}` });
+    fireEvent.click(within(menu).getByRole("menuitem", { name: "Delete" }));
     const confirm = await screen.findByRole("dialog", { name: "Delete parameter?" });
     fireEvent.click(within(confirm).getByRole("button", { name: "Delete parameter" }));
 
@@ -143,6 +150,80 @@ describe("parameters page", () => {
     expect(await screen.findByText(ALPHA.key)).toBeVisible();
     expect(screen.getByText("Page 1")).toBeVisible();
     expect(listParameters).toHaveBeenCalledTimes(4);
+  });
+
+  it("shows the environment trail and remembers the namespace once chosen", async () => {
+    vi.spyOn(api, "listParameters").mockResolvedValue({ parameters: [], next_page_token: "" });
+    render(<ParametersPage />);
+    expect(screen.queryByRole("navigation", { name: "Breadcrumb" })).toBeNull();
+    expect(lastNamespace()).toBeNull();
+
+    await chooseNamespace();
+    const nav = await screen.findByRole("navigation", { name: "Breadcrumb" });
+    expect(within(nav).getByRole("link", { name: /billing/ })).toHaveAttribute(
+      "href",
+      "/applications?app=billing",
+    );
+    expect(nav).toHaveTextContent("prod");
+    expect(lastNamespace()).toEqual({ env: NAMESPACE.env, app: NAMESPACE.app });
+  });
+
+  it("focuses the key on open, caps its length and counts down near the limit", async () => {
+    vi.spyOn(api, "listParameters").mockResolvedValue({ parameters: [], next_page_token: "" });
+    render(<ParametersPage />);
+    fireEvent.click(screen.getByRole("button", { name: "New parameter" }));
+    const dialog = await screen.findByRole("dialog", { name: "New parameter" });
+    const key = within(dialog).getByRole("textbox", { name: "Key" });
+    await waitFor(() => expect(key).toHaveFocus());
+    expect(key).toHaveAttribute("maxlength", String(MAX_KEY_LENGTH));
+    expect(within(dialog).queryByTestId("key-counter")).toBeNull();
+
+    fireEvent.change(key, { target: { value: "a".repeat(210) } });
+    expect(within(dialog).getByTestId("key-counter")).toHaveTextContent(`210/${MAX_KEY_LENGTH}`);
+  });
+
+  it("offers to clear a value the new content type rejects", async () => {
+    vi.spyOn(api, "listParameters").mockResolvedValue({ parameters: [], next_page_token: "" });
+    render(<ParametersPage />);
+    fireEvent.click(screen.getByRole("button", { name: "New parameter" }));
+    const dialog = await screen.findByRole("dialog", { name: "New parameter" });
+    fireEvent.change(within(dialog).getByRole("textbox", { name: "Value" }), {
+      target: { value: "abc" },
+    });
+    await chooseSelectOption(
+      within(dialog).getByRole("combobox", { name: "Content type" }),
+      "integer",
+    );
+    expect(within(dialog).getByText(/The current value is not valid/)).toBeVisible();
+    fireEvent.click(within(dialog).getByRole("button", { name: "Clear value" }));
+    expect(within(dialog).getByRole("textbox", { name: "Value" })).toHaveValue("");
+    expect(within(dialog).queryByText(/The current value is not valid/)).toBeNull();
+  });
+
+  it("moves focus to the first invalid field on a blocked create", async () => {
+    vi.spyOn(api, "listParameters").mockResolvedValue({ parameters: [], next_page_token: "" });
+    render(<ParametersPage />);
+    fireEvent.click(screen.getByRole("button", { name: "New parameter" }));
+    const dialog = await screen.findByRole("dialog", { name: "New parameter" });
+    fireEvent.submit(
+      within(dialog).getByRole("textbox", { name: "Key" }).closest("form") as HTMLFormElement,
+    );
+    // The application select is the first control flagged invalid.
+    expect(within(dialog).getByRole("combobox", { name: "Application" })).toHaveFocus();
+  });
+
+  it("asks before discarding a half-typed parameter", async () => {
+    vi.spyOn(api, "listParameters").mockResolvedValue({ parameters: [], next_page_token: "" });
+    render(<ParametersPage />);
+    fireEvent.click(screen.getByRole("button", { name: "New parameter" }));
+    const dialog = await screen.findByRole("dialog", { name: "New parameter" });
+    fireEvent.change(within(dialog).getByRole("textbox", { name: "Key" }), {
+      target: { value: "rate-limit" },
+    });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    expect(
+      await screen.findByRole("dialog", { name: "Discard changes?", hidden: true }),
+    ).toBeInTheDocument();
   });
 
   it("writes the chosen namespace back to the URL", async () => {

@@ -2,7 +2,7 @@
 // DOM or the API, so the row/change/outcome logic is unit-testable on its own
 // and the components stay presentational.
 
-import { canonicalParameterValue } from "@/lib/json-text";
+import { canonicalParameterValue, valuesEquivalent } from "@/lib/json-text";
 import { isProductionEnvironment } from "@/lib/readiness";
 import type {
   Application,
@@ -41,6 +41,10 @@ export interface ShipRow {
   loadError?: string;
   /** A version written by an earlier attempt; shipped as a pin until the row is edited. */
   reuseVersion?: number;
+  /** The value the editor was prefilled with, for Revert and Show diff. */
+  originalValue?: string;
+  /** The operator has typed in this row; validation stays quiet until then. */
+  touched?: boolean;
 }
 
 export function contractParameters(application: Application): Application["contract"] {
@@ -118,6 +122,23 @@ export function rowError(row: ShipRow): string | null {
   if (row.reuseVersion !== undefined) return null;
   if (!row.loaded) return "Loading the current value…";
   return validateParameterValue(row.value, row.content_type) ?? validateValueSize(row.value);
+}
+
+/**
+ * The message the row should display. A row the operator has not touched
+ * yet keeps its problem to itself — a freshly added integer row is empty by
+ * construction, not by mistake — unless it was prefilled with a value the
+ * contract's content type now rejects, which is worth seeing at once.
+ */
+export function shownRowError(row: ShipRow): string | null {
+  if (row.touched || (!row.missing && row.loaded && !row.loadError)) return rowError(row);
+  return null;
+}
+
+/** Whether the row's value differs from what it was prefilled with. */
+export function rowChanged(row: ShipRow): boolean {
+  if (row.originalValue === undefined) return row.touched === true;
+  return !valuesEquivalent(row.value, row.originalValue, row.content_type);
 }
 
 export function rowsParse(rows: readonly ShipRow[]): boolean {

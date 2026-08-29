@@ -13,9 +13,22 @@
 //     table cases are copied from the Go tests for exactly this reason.
 //
 // Each validator returns a human-readable message, or null when the value is
-// acceptable. Empty-string handling is deliberately per-field: some fields are
+// acceptable.
+//
+// JSON syntax is checked with lib/json-text's `checkJson` rather than
+// `JSON.parse`, so the message here carries the same line/column as the
+// editor's gutter and the two never disagree. (json-text imports `byteLength`
+// from this module; the cycle is safe because neither side uses the other at
+// module-evaluation time.) Empty-string handling is deliberately per-field: some fields are
 // optional, so "required" checks live at the call site unless the Go validator
 // itself rejects empty.
+
+import { checkJson, type JsonProblem } from "@/lib/json-text";
+
+/** `line 3, col 5: Expected ","` — the wording the JSON editor's status line uses. */
+function describeProblem(problem: JsonProblem): string {
+  return `line ${problem.line}, col ${problem.column}: ${problem.message}`;
+}
 
 /** Max bytes for an env or app label (`keyutil.MaxLabelLength`). */
 export const MAX_LABEL_LENGTH = 64;
@@ -243,13 +256,10 @@ export function validateParameterValue(value: string, contentType: string): stri
       return GO_BOOL_LITERALS.has(value.trim())
         ? null
         : "Value must be true or false (also accepted: 1, 0, t, f).";
-    case "json":
-      try {
-        JSON.parse(value);
-        return null;
-      } catch (err) {
-        return `Value must be valid JSON: ${err instanceof Error ? err.message : String(err)}`;
-      }
+    case "json": {
+      const problem = checkJson(value);
+      return problem ? `Value must be valid JSON (${describeProblem(problem)}).` : null;
+    }
     case "binary":
       // Go's base64 decoder ignores CR and LF, so wrapped base64 — how key and
       // certificate material is almost always pasted — is valid input. Strip
@@ -286,12 +296,9 @@ export function formatBytes(n: number): string {
  */
 export function validateMetadataJson(metadata: string): string | null {
   if (metadata.trim() === "") return null;
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(metadata);
-  } catch (err) {
-    return `Metadata must be valid JSON: ${err instanceof Error ? err.message : String(err)}`;
-  }
+  const problem = checkJson(metadata);
+  if (problem) return `Metadata must be valid JSON (${describeProblem(problem)}).`;
+  const parsed: unknown = JSON.parse(metadata);
   if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
     return "Metadata must be a JSON object.";
   }

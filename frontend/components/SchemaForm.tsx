@@ -1,17 +1,20 @@
-import { Plus, Trash2 } from "lucide-react";
+import { ChevronDown, Plus, Trash2 } from "lucide-react";
 import { type ReactNode, type Ref, useCallback, useEffect, useId, useMemo, useState } from "react";
 import { JsonEditor } from "@/components/JsonEditor";
 import { Button, Checkbox, Field, Input, Textarea } from "@/components/ui";
 import { AppSelect } from "@/components/ui/app-select";
 import { assignRef } from "@/lib/forms";
+import { checkJson } from "@/lib/json-text";
 import {
   buildForm,
+  describeConstraints,
   extraKeys,
   type FormField,
   formatIssuePath,
   getAt,
   initialValue,
   isJsonObject,
+  itemAt,
   type JsonObject,
   type JsonSchema,
   parseNumberDraft,
@@ -28,7 +31,7 @@ export interface SchemaFormProps {
   value: string;
   onChange: (text: string) => void;
   disabled?: boolean;
-  /** Accessible name for the raw JSON editor. */
+  /** Accessible name for the raw JSON editor and, in form mode, the field group. */
   jsonLabel?: string;
   rows?: number;
   onBlur?: () => void;
@@ -50,21 +53,48 @@ export interface SchemaFormProps {
 
 type Mode = "form" | "json";
 
+/** Where the operator's last Form/JSON choice is kept (same pattern as the ship modal's mode). */
+export const VALUE_EDITOR_MODE_STORAGE_KEY = "kms-value-editor-mode";
+
+export function readStoredEditorMode(): Mode | null {
+  try {
+    const raw = window.localStorage.getItem(VALUE_EDITOR_MODE_STORAGE_KEY);
+    return raw === "form" || raw === "json" ? raw : null;
+  } catch {
+    return null;
+  }
+}
+
+export function storeEditorMode(mode: Mode): void {
+  try {
+    window.localStorage.setItem(VALUE_EDITOR_MODE_STORAGE_KEY, mode);
+  } catch {
+    /* storage unavailable; the toggle still works for this open */
+  }
+}
+
 function serialize(value: unknown): string {
   return value === undefined ? "" : JSON.stringify(value, null, 2);
 }
 
 function parseText(text: string): { ok: true; data: unknown } | { ok: false; error: string } {
   if (text.trim() === "") return { ok: true, data: undefined };
-  try {
-    return { ok: true, data: JSON.parse(text) };
-  } catch (error) {
-    return { ok: false, error: error instanceof Error ? error.message : String(error) };
+  const problem = checkJson(text);
+  if (problem) {
+    return {
+      ok: false,
+      error: `must be valid JSON (line ${problem.line}, col ${problem.column}: ${problem.message})`,
+    };
   }
+  return { ok: true, data: JSON.parse(text) };
 }
 
 function fieldLabel(field: FormField): string {
   return field.name;
+}
+
+function sameJson(a: unknown, b: unknown): boolean {
+  return JSON.stringify(a) === JSON.stringify(b);
 }
 
 /**
@@ -93,7 +123,7 @@ export function SchemaForm({
   const baseId = useId();
   // Form mode has no single control; the first field's input stands in for it.
   const firstControlRef = useCallback(
-    (node: HTMLDivElement | null) => {
+    (node: HTMLElement | null) => {
       const first = node
         ? Array.from(
             node.querySelectorAll<HTMLElement>(
@@ -109,12 +139,19 @@ export function SchemaForm({
   const parsed = useMemo(() => parseText(value), [value]);
   const formable =
     root !== null && parsed.ok && (parsed.data === undefined || isJsonObject(parsed.data));
-  // A pinned schema opens on its fields; an inferred one is a convenience, so
-  // the JSON the operator already knows comes first.
-  const [mode, setMode] = useState<Mode>(() =>
-    root && formable && captionSource === "pinned" ? "form" : "json",
-  );
+  // The operator's last choice wins; otherwise a pinned schema opens on its
+  // fields and an inferred one — a convenience — behind the JSON they know.
+  const [mode, setModeState] = useState<Mode>(() => {
+    if (!root || !formable) return "json";
+    return readStoredEditorMode() ?? (captionSource === "pinned" ? "form" : "json");
+  });
+  const setMode = (next: Mode) => {
+    setModeState(next);
+    storeEditorMode(next);
+  };
   const [drafts, setDrafts] = useState<Record<string, string>>({});
+  // Object groups the operator folded; a group with a problem inside stays open.
+  const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(() => new Set());
   const effectiveMode: Mode = mode === "form" && formable ? "form" : "json";
 
   // A brand-new value starts from the schema's shape so required fields are visible.
@@ -134,6 +171,7 @@ export function SchemaForm({
     }
     return map;
   }, [issues]);
+  const issueKeys = useMemo(() => [...issueByPath.keys()], [issueByPath]);
 
   function commit(path: string[], next: unknown) {
     onChange(serialize(setAt(data, path, next)));
@@ -151,7 +189,40 @@ export function SchemaForm({
     const messages = issueByPath.get(pathKey(field.path));
     return messages ? messages.join("; ") : null;
   }
+  /** Whether any issue sits at or below this group's path. */
+  function hasIssueWithin(key: string): boolean {
+    return issueKeys.some((issueKey) => issueKey === key || issueKey.startsWith(`${key} `));
+  }
+  /** Description, default and stated constraints, with a reset when the value left the default. */
+  function hintFor(field: FormField, current: unknown): ReactNode {
+    const parts: string[] = [];
+    if (field.description) parts.push(field.description);
+    if (field.schema.format === "go-duration") parts.push("Go duration, e.g. 1m30s.");
+    const hasDefault = "default" in field.schema;
+    if (hasDefault) parts.push(`Default: ${JSON.stringify(field.schema.default)}`);
+    parts.push(...describeConstraints(field.schema));
+    const canReset = hasDefault && !disabled && !sameJson(current, field.schema.default);
+    if (parts.length === 0 && !canReset) return undefined;
+    return (
+      <>
+        {parts.join(" · ")}
+        {canReset ? (
+          <Button
+            type="button"
+            variant="link"
+            size="xs"
+            className="schema-form-reset"
+            onClick={() => commit(field.path, field.schema.default)}
+          >
+            Reset to default
+          </Button>
+        ) : null}
+      </>
+    );
+  }
 
+  const showSummary =
+    root !== null && parsed.ok && formable && issues.length > 0 && captionSource !== "inferred";
   const toolbar = (
     <div className="schema-form-toolbar">
       <fieldset className="schema-form-toggle" aria-label="Value editor">
@@ -188,6 +259,12 @@ export function SchemaForm({
                   : "Fields from the pinned schema. Editing a field rewrites the JSON with standard formatting."
                 : "Switch to Form to edit by field."}
       </span>
+      {showSummary ? (
+        <span className="schema-form-summary" data-testid="schema-form-summary" role="status">
+          {issues.length} schema issue{issues.length === 1 ? "" : "s"} — checked again at release
+          time.
+        </span>
+      ) : null}
     </div>
   );
 
@@ -221,45 +298,81 @@ export function SchemaForm({
   const extrasValue = Object.fromEntries(extras.map((key) => [key, data[key]]));
   const extrasText =
     extrasDraft ?? (extras.length === 0 ? "" : JSON.stringify(extrasValue, null, 2));
+  const extrasParsed = extrasDraft === undefined ? null : parseText(extrasDraft);
   const extrasError =
-    extrasDraft !== undefined && parseText(extrasDraft).ok === false
-      ? "must be valid JSON"
-      : extrasDraft !== undefined &&
-          parseText(extrasDraft).ok &&
-          !isJsonObject((parseText(extrasDraft) as { data: unknown }).data) &&
-          extrasDraft.trim() !== ""
+    extrasParsed && !extrasParsed.ok
+      ? extrasParsed.error
+      : extrasParsed?.ok &&
+          extrasParsed.data !== undefined &&
+          !isJsonObject(extrasParsed.data) &&
+          extrasDraft?.trim() !== ""
         ? "must be a JSON object"
         : null;
 
   function renderField(field: FormField): React.ReactNode {
     const key = pathKey(field.path);
-    const controlId = `${baseId}-${key.replace(/\s+/g, "-")}`;
+    const controlId = `${baseId}-${key.replace(/[\s\0]+/g, "-")}`;
     const current = getAt(data, field.path);
     const label = fieldLabel(field);
     switch (field.kind) {
-      case "object":
+      case "object": {
+        const forcedOpen = hasIssueWithin(key);
+        const open = forcedOpen || !collapsed.has(key);
+        const count = field.fields?.length ?? 0;
         return (
-          <fieldset key={key} className="schema-form-group" data-path={key}>
+          <fieldset
+            key={key}
+            className="schema-form-group"
+            data-path={key}
+            data-open={open ? "true" : "false"}
+          >
             <legend className="schema-form-legend">
-              {label}
-              {field.required ? (
-                <span aria-hidden="true" className="text-danger">
-                  {" *"}
-                </span>
-              ) : null}
+              <button
+                type="button"
+                className="schema-form-group-toggle"
+                aria-expanded={open}
+                disabled={forcedOpen}
+                onClick={() =>
+                  setCollapsed((current) => {
+                    const next = new Set(current);
+                    if (next.has(key)) next.delete(key);
+                    else next.add(key);
+                    return next;
+                  })
+                }
+              >
+                <ChevronDown size={14} aria-hidden />
+                {label}
+                {field.required ? (
+                  <span aria-hidden="true" className="text-danger">
+                    {" *"}
+                  </span>
+                ) : null}
+                {!open ? (
+                  <span aria-hidden="true" className="schema-form-group-count">
+                    · {count} {count === 1 ? "field" : "fields"}
+                  </span>
+                ) : null}
+              </button>
             </legend>
-            {field.description ? <p className="faint text-sm">{field.description}</p> : null}
-            {errorFor(field, null) ? (
-              <p className="field-error" role="alert">
-                {errorFor(field, null)}
-              </p>
+            {open ? (
+              <>
+                {field.description ? <p className="faint text-sm">{field.description}</p> : null}
+                {errorFor(field, null) ? (
+                  <p className="field-error" role="alert">
+                    {errorFor(field, null)}
+                  </p>
+                ) : null}
+                <div className="schema-form-fields">{(field.fields ?? []).map(renderField)}</div>
+              </>
             ) : null}
-            <div className="schema-form-fields">{(field.fields ?? []).map(renderField)}</div>
           </fieldset>
         );
+      }
       case "boolean": {
         const checked = current === true;
         const error = errorFor(field, null);
+        const hint = hintFor(field, current);
         return (
           <div key={key} className="schema-form-boolean" data-path={key}>
             <div className="checkbox-row">
@@ -280,7 +393,7 @@ export function SchemaForm({
                 ) : null}
               </label>
             </div>
-            {field.description ? <p className="field-hint">{field.description}</p> : null}
+            {hint ? <p className="field-hint">{hint}</p> : null}
             {error ? (
               <p className="field-error" role="alert">
                 {error}
@@ -292,6 +405,7 @@ export function SchemaForm({
       case "string": {
         const text = typeof current === "string" ? current : "";
         const error = errorFor(field, null);
+        const hint = hintFor(field, current);
         if (field.enumValues) {
           const options = field.enumValues.map((option) => ({
             value: String(option),
@@ -303,7 +417,7 @@ export function SchemaForm({
               label={label}
               htmlFor={controlId}
               required={field.required}
-              hint={field.description}
+              hint={hint}
               error={error}
             >
               <AppSelect
@@ -322,10 +436,8 @@ export function SchemaForm({
         const long =
           (typeof field.schema.maxLength === "number" && field.schema.maxLength > 200) ||
           field.schema.format === "kms-base64";
-        const hint =
-          field.schema.format === "go-duration"
-            ? `${field.description ? `${field.description} ` : ""}Go duration, e.g. 1m30s.`
-            : field.description;
+        const maxLength =
+          typeof field.schema.maxLength === "number" ? field.schema.maxLength : undefined;
         return (
           <Field key={key} label={label} required={field.required} hint={hint} error={error}>
             {long ? (
@@ -336,6 +448,7 @@ export function SchemaForm({
                 value={text}
                 disabled={disabled}
                 spellCheck={false}
+                maxLength={maxLength}
                 onChange={(event) => commit(field.path, event.target.value)}
                 onBlur={onBlur}
               />
@@ -347,6 +460,7 @@ export function SchemaForm({
                 disabled={disabled}
                 autoComplete="off"
                 spellCheck={false}
+                maxLength={maxLength}
                 onChange={(event) => commit(field.path, event.target.value)}
                 onBlur={onBlur}
               />
@@ -360,6 +474,7 @@ export function SchemaForm({
         const draftProblem =
           draft === undefined ? null : parseNumberDraft(draft, Boolean(field.integer)).error;
         const error = errorFor(field, draftProblem);
+        const hint = hintFor(field, current);
         if (field.enumValues) {
           const options = field.enumValues.map((option) => ({
             value: String(option),
@@ -371,7 +486,7 @@ export function SchemaForm({
               label={label}
               htmlFor={controlId}
               required={field.required}
-              hint={field.description}
+              hint={hint}
               error={error}
             >
               <AppSelect
@@ -388,13 +503,7 @@ export function SchemaForm({
           );
         }
         return (
-          <Field
-            key={key}
-            label={label}
-            required={field.required}
-            hint={field.description}
-            error={error}
-          >
+          <Field key={key} label={label} required={field.required} hint={hint} error={error}>
             <Input
               id={controlId}
               className="font-mono"
@@ -422,14 +531,51 @@ export function SchemaForm({
       case "list": {
         const items = Array.isArray(current) ? current : [];
         const error = errorFor(field, null);
+        const hint = hintFor(field, current);
+        const removeItem = (index: number) =>
+          commit(
+            field.path,
+            items.filter((_, position) => position !== index),
+          );
+        if (field.item === "object" && field.itemField) {
+          const itemField = field.itemField;
+          return (
+            <Field key={key} label={label} required={field.required} hint={hint} error={error}>
+              <ul className="schema-form-list" aria-label={`${label} items`}>
+                {items.map((_, index) => {
+                  const item = itemAt(field, index);
+                  if (!item) return null;
+                  return (
+                    <li key={pathKey(item.path)} className="schema-form-list-item">
+                      {renderField(item)}
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon-sm"
+                        aria-label={`Remove ${label} item ${index + 1}`}
+                        disabled={disabled}
+                        onClick={() => removeItem(index)}
+                      >
+                        <Trash2 size={14} aria-hidden />
+                      </Button>
+                    </li>
+                  );
+                })}
+              </ul>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                disabled={disabled}
+                onClick={() => commit(field.path, [...items, initialValue(itemField) ?? {}])}
+              >
+                <Plus size={14} aria-hidden /> Add {label} item
+              </Button>
+            </Field>
+          );
+        }
         return (
-          <Field
-            key={key}
-            label={label}
-            required={field.required}
-            hint={field.description}
-            error={error}
-          >
+          <Field key={key} label={label} required={field.required} hint={hint} error={error}>
             <ul className="schema-form-list" aria-label={`${label} items`}>
               {items.map((item, index) => {
                 const itemKey = pathKey([...field.path, String(index)]);
@@ -508,12 +654,7 @@ export function SchemaForm({
                       size="icon-sm"
                       aria-label={`Remove ${label} item ${index + 1}`}
                       disabled={disabled}
-                      onClick={() =>
-                        commit(
-                          field.path,
-                          items.filter((_, position) => position !== index),
-                        )
-                      }
+                      onClick={() => removeItem(index)}
                     >
                       <Trash2 size={14} aria-hidden />
                     </Button>
@@ -549,7 +690,7 @@ export function SchemaForm({
         const draft = drafts[key];
         const text = draft ?? (current === undefined ? "" : JSON.stringify(current, null, 2));
         const draftResult = draft === undefined ? null : parseText(draft);
-        const draftProblem = draftResult && !draftResult.ok ? "must be valid JSON" : null;
+        const draftProblem = draftResult && !draftResult.ok ? draftResult.error : null;
         const error = errorFor(field, draftProblem);
         return (
           <Field
@@ -557,7 +698,7 @@ export function SchemaForm({
             label={label}
             required={field.required}
             hint={
-              field.description ??
+              hintFor(field, current) ??
               `Edited as JSON — this property ${field.reason ?? "cannot be rendered as fields"}.`
             }
             error={error}
@@ -590,8 +731,19 @@ export function SchemaForm({
     (issue) => issue.path.length > 0 && extras.includes(issue.path[0]),
   );
 
+  // A fieldset, so the group carries the wrapping Field's label as its name
+  // (a <label for> cannot point at a div) and the invalid flag lands on the
+  // frame the focus-first-invalid helper looks for.
   return (
-    <div id={id} ref={firstControlRef} className={cn("schema-form", className)} data-mode="form">
+    <fieldset
+      ref={firstControlRef}
+      className={cn("schema-form", className)}
+      data-mode="form"
+      aria-describedby={ariaDescribedBy}
+      data-required={ariaRequired ? "true" : undefined}
+      data-invalid={ariaInvalid ? "true" : undefined}
+    >
+      <legend className="sr-only">{jsonLabel}</legend>
       {toolbar}
       {rootField.description ? <p className="faint text-sm">{rootField.description}</p> : null}
       <div className="schema-form-fields">{(rootField.fields ?? []).map(renderField)}</div>
@@ -641,12 +793,6 @@ export function SchemaForm({
           {rootIssues.join("; ")}
         </p>
       ) : null}
-      {issues.length > 0 && captionSource !== "inferred" ? (
-        <p className="schema-form-summary faint text-sm" data-testid="schema-form-summary">
-          {issues.length} schema issue{issues.length === 1 ? "" : "s"} — checked again at release
-          time.
-        </p>
-      ) : null}
-    </div>
+    </fieldset>
   );
 }

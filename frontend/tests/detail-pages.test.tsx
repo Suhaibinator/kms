@@ -1,5 +1,6 @@
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { VALUE_EDITOR_MODE_STORAGE_KEY } from "@/components/SchemaForm";
 import { ApiError, api } from "@/lib/api";
 import type {
   ApplicationOverview,
@@ -36,6 +37,7 @@ beforeEach(() => {
   mocks.router.push.mockReset();
   mocks.toast.error.mockReset();
   mocks.toast.success.mockReset();
+  window.localStorage.removeItem(VALUE_EDITOR_MODE_STORAGE_KEY);
 });
 
 afterEach(() => {
@@ -338,6 +340,10 @@ describe("new parameter version validation", () => {
   it("blocks a save on metadata that is not a JSON object", async () => {
     const putParameter = vi.spyOn(api, "putParameter");
     const dialog = await openNewVersion();
+    // Metadata is almost always `{}`, so it sits behind a disclosure.
+    const disclosure = within(dialog).getByRole("button", { name: /^Metadata JSON/ });
+    expect(disclosure).toHaveAttribute("aria-expanded", "false");
+    fireEvent.click(disclosure);
     const metadata = within(dialog).getByRole("textbox", { name: "Metadata JSON" });
 
     fireEvent.change(metadata, { target: { value: '["owner"]' } });
@@ -427,5 +433,206 @@ describe("new parameter version editor", () => {
     fireEvent.change(value, { target: { value: '{"max": 3, "name": "x"}' } });
     expect(within(dialog).getByTestId("version-unchanged")).toBeVisible();
     expect(screen.getByRole("button", { name: "Save new version" })).toBeDisabled();
+  });
+});
+
+describe("detail page navigation", () => {
+  it("shows a breadcrumb trail on the parameter and secret pages", async () => {
+    mocks.router.query = { env: PARAMETER.env, app: PARAMETER.app, key: PARAMETER.key };
+    vi.spyOn(api, "parameterMetadata").mockResolvedValue(PARAMETER_META);
+    vi.spyOn(api, "getParameter").mockResolvedValue({ parameter: PARAMETER });
+    const { unmount } = render(<ParameterDetailPage />);
+    await screen.findByRole("button", { name: "Copy value" });
+    const nav = screen.getByRole("navigation", { name: "Breadcrumb" });
+    expect(within(nav).getByRole("link", { name: "Parameters" })).toHaveAttribute(
+      "href",
+      "/parameters?env=prod&app=billing",
+    );
+    expect(within(nav).getByRole("link", { name: /billing/ })).toHaveAttribute(
+      "href",
+      "/applications?app=billing",
+    );
+    expect(nav).toHaveTextContent("retries");
+    unmount();
+
+    mocks.router.query = { env: SECRET.env, app: SECRET.app, key: SECRET.key };
+    vi.spyOn(api, "secretMetadata").mockResolvedValue({ secret: SECRET });
+    render(<SecretDetailPage />);
+    await screen.findByText("Content type");
+    const secretNav = screen.getByRole("navigation", { name: "Breadcrumb" });
+    expect(within(secretNav).getByRole("link", { name: "Secrets" })).toHaveAttribute(
+      "href",
+      "/secrets?env=prod&app=billing",
+    );
+    expect(secretNav).toHaveTextContent("api-key");
+  });
+});
+
+describe("parameter version history", () => {
+  const OLDER = { ...PARAMETER, value: "2", version: 1 };
+  const HISTORY: ParameterMetadata = {
+    ...PARAMETER_META,
+    versions: [
+      PARAMETER_META.versions[0],
+      { ...PARAMETER_META.versions[0], version: 1, created_at_unix_ms: 1 },
+    ],
+  };
+
+  function renderHistory() {
+    mocks.router.query = { env: PARAMETER.env, app: PARAMETER.app, key: PARAMETER.key };
+    vi.spyOn(api, "parameterMetadata").mockResolvedValue(HISTORY);
+    vi.spyOn(api, "getParameter").mockImplementation(async (_ref, version) => ({
+      parameter: version === 1 ? OLDER : PARAMETER,
+    }));
+    render(<ParameterDetailPage />);
+    return screen.findByRole("button", { name: "Copy value" });
+  }
+
+  function row(version: number): HTMLElement {
+    const cell = screen.getByText(`v${version}`, { selector: "td div" });
+    const tr = cell.closest("tr");
+    if (!tr) throw new Error(`row v${version} not found`);
+    return tr;
+  }
+
+  it("marks the current version and diffs a viewed version against it", async () => {
+    await renderHistory();
+    expect(within(row(2)).getByText("current")).toBeVisible();
+    expect(within(row(1)).queryByText("current")).toBeNull();
+
+    fireEvent.click(within(row(1)).getByRole("button", { name: "View value" }));
+    const panel = await screen.findByTestId("version-panel");
+    expect(panel).toHaveTextContent("v1");
+    expect(panel.querySelector(".json-block")?.textContent).toBe("2");
+    expect(within(row(1)).getByText("viewing")).toBeVisible();
+
+    fireEvent.click(within(panel).getByRole("button", { name: "Compare with current" }));
+    const diff = await within(panel).findByTestId("json-diff");
+    expect(diff).toHaveTextContent("+1 −1");
+    expect(diff.querySelector('[data-op="del"].json-diff-text')?.textContent).toBe("2");
+    expect(diff.querySelector('[data-op="add"].json-diff-text')?.textContent).toBe("3");
+    expect(within(row(2)).getByText("comparing")).toBeVisible();
+
+    fireEvent.click(within(panel).getByRole("button", { name: "Close compare" }));
+    expect(within(panel).queryByTestId("json-diff")).toBeNull();
+    expect(panel.querySelector(".json-block")?.textContent).toBe("2");
+  });
+
+  it("restores an older version by prefilling the new-version dialog", async () => {
+    const putParameter = vi
+      .spyOn(api, "putParameter")
+      .mockResolvedValue({ version: 3, revision: 9 });
+    await renderHistory();
+    expect(within(row(2)).queryByRole("button", { name: /Restore/ })).toBeNull();
+
+    fireEvent.click(within(row(1)).getByRole("button", { name: "Restore v1" }));
+    const dialog = await screen.findByRole("dialog", { name: "New parameter version" });
+    expect(within(dialog).getByTestId("restore-note")).toHaveTextContent("Prefilled from v1");
+    expect(within(dialog).getByRole("textbox", { name: "Value" })).toHaveValue("2");
+
+    const save = screen.getByRole("button", { name: "Save new version" });
+    expect(save).toBeEnabled();
+    fireEvent.click(save);
+    await waitFor(() => expect(putParameter).toHaveBeenCalledTimes(1));
+    expect(putParameter.mock.calls[0][0]).toMatchObject({ value: "2", content_type: "integer" });
+  });
+});
+
+describe("new parameter version dialog", () => {
+  it("puts the content type above the value and focuses the value on open", async () => {
+    const dialog = await openNewVersion();
+    const type = within(dialog).getByRole("combobox", { name: "Content type" });
+    const value = within(dialog).getByRole("textbox", { name: "Value" });
+    expect(type.compareDocumentPosition(value) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    await waitFor(() => expect(value).toHaveFocus());
+    expect(dialog).toHaveAccessibleDescription("Saving creates v3 and makes it current.");
+  });
+
+  it("shows what changed against the current version", async () => {
+    const dialog = await openNewVersion({ parameter: JSON_PARAMETER });
+    expect(within(dialog).queryByRole("button", { name: /Show changes/ })).toBeNull();
+
+    fireEvent.change(within(dialog).getByRole("textbox", { name: "Value" }), {
+      target: { value: '{"max":4,"name":"x"}' },
+    });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Show changes since v2" }));
+    const diff = within(dialog).getByTestId("json-diff");
+    expect(diff).toHaveTextContent("+1 −1");
+    expect(diff.querySelector('[data-op="add"].json-diff-text')?.textContent).toBe('  "max": 4,');
+  });
+
+  it("asks before discarding an edit, from Cancel and from the close button", async () => {
+    const dialog = await openNewVersion();
+    fireEvent.change(within(dialog).getByRole("textbox", { name: "Value" }), {
+      target: { value: "4" },
+    });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    const confirm = await screen.findByRole("dialog", { name: "Discard changes?", hidden: true });
+    fireEvent.click(within(confirm).getByRole("button", { name: "Keep editing", hidden: true }));
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog", { name: "Discard changes?", hidden: true })).toBeNull(),
+    );
+    expect(screen.getByRole("dialog", { name: "New parameter version" })).toBeInTheDocument();
+
+    fireEvent.click(
+      within(screen.getByRole("dialog", { name: "New parameter version" })).getByRole("button", {
+        name: "Dismiss dialog",
+        hidden: true,
+      }),
+    );
+    const again = await screen.findByRole("dialog", { name: "Discard changes?", hidden: true });
+    fireEvent.click(within(again).getByRole("button", { name: "Discard", hidden: true }));
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog", { name: "New parameter version" })).toBeNull(),
+    );
+  });
+
+  it("closes without asking when nothing changed", async () => {
+    const dialog = await openNewVersion();
+    fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog", { name: "New parameter version" })).toBeNull(),
+    );
+    expect(screen.queryByRole("dialog", { name: "Discard changes?", hidden: true })).toBeNull();
+  });
+
+  it("moves focus to the invalid value on a blocked save", async () => {
+    const putParameter = vi.spyOn(api, "putParameter");
+    const dialog = await openNewVersion();
+    const value = within(dialog).getByRole("textbox", { name: "Value" });
+    fireEvent.change(value, { target: { value: "3.5" } });
+    // Not touched yet, so nothing is shown and Save is still live.
+    within(dialog).getByRole("combobox", { name: "Content type" }).focus();
+    const save = screen.getByRole("button", { name: "Save new version" });
+    expect(save).toBeEnabled();
+    fireEvent.click(save);
+    expect(within(dialog).getByText("Value must be a whole number.")).toBeVisible();
+    expect(value).toHaveFocus();
+    expect(putParameter).not.toHaveBeenCalled();
+  });
+
+  it("offers a schema that arrives after the operator has started typing", async () => {
+    let release: (() => void) | undefined;
+    const dialog = await openNewVersion({
+      parameter: JSON_PARAMETER,
+      overview: new Promise((resolve) => {
+        release = () => resolve(OVERVIEW);
+      }) as unknown as ApplicationOverview,
+    });
+    expect(within(dialog).getByText(/Looking for a schema/)).toBeInTheDocument();
+    fireEvent.change(within(dialog).getByRole("textbox", { name: "Value" }), {
+      target: { value: '{"max":4,"name":"x"}' },
+    });
+
+    release?.();
+    const adopt = await within(dialog).findByRole("button", { name: "Use schema form" });
+    // The late schema did not swap the editor out from under the edit…
+    expect(within(dialog).getByRole("textbox", { name: "Value" })).toHaveValue(
+      '{"max":4,"name":"x"}',
+    );
+    fireEvent.click(adopt);
+    // …but one click adopts it, keeping the edited value.
+    expect(await within(dialog).findByRole("textbox", { name: "max" })).toHaveValue("4");
+    expect(within(dialog).getByText("cfg@3")).toBeVisible();
   });
 });

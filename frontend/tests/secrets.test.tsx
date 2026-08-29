@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { api } from "@/lib/api";
 import type { Namespace, SecretMetadata } from "@/lib/types";
@@ -321,5 +321,119 @@ describe("new secret version validation", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Save new version" }));
     expect(createSecret).not.toHaveBeenCalled();
+  });
+});
+
+describe("new secret value tools", () => {
+  async function renderReadyForm(): Promise<void> {
+    render(<NewSecretPage />);
+    await chooseNamespace();
+    fireEvent.change(screen.getByLabelText("Key"), { target: { value: "api-key" } });
+  }
+
+  it("edits metadata in a JSON editor and puts Cancel before Create", async () => {
+    await renderReadyForm();
+    const metadata = screen.getByRole("textbox", { name: "Metadata JSON" });
+    expect(metadata.tagName).toBe("TEXTAREA");
+    expect(screen.getByRole("button", { name: "Format" })).toBeInTheDocument();
+
+    const cancel = screen.getByRole("link", { name: "Cancel" });
+    const create = screen.getByRole("button", { name: "Create secret" });
+    expect(cancel.compareDocumentPosition(create) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it("masks the value until revealed", async () => {
+    await renderReadyForm();
+    const value = screen.getByRole("textbox", { name: "Value" });
+    expect(value).toHaveAttribute("data-masked", "true");
+    fireEvent.click(screen.getByRole("button", { name: "Show value" }));
+    expect(value).toHaveAttribute("data-masked", "false");
+    fireEvent.click(screen.getByRole("button", { name: "Hide value" }));
+    expect(value).toHaveAttribute("data-masked", "true");
+  });
+
+  it("generates a random value and reveals it", async () => {
+    await renderReadyForm();
+    fireEvent.click(screen.getByRole("button", { name: "Generate…" }));
+    const menu = await screen.findByRole("menu", { name: "Generate…" });
+    fireEvent.click(within(menu).getByRole("menuitem", { name: "32 bytes, hex" }));
+    const value = screen.getByRole("textbox", { name: "Value" }) as HTMLTextAreaElement;
+    expect(value.value).toMatch(/^[0-9a-f]{64}$/);
+    expect(value).toHaveAttribute("data-masked", "false");
+  });
+
+  it("passes an already-base64 value through untouched", async () => {
+    const createSecret = vi
+      .spyOn(api, "createSecret")
+      .mockResolvedValue({ version: 1, revision: 1 });
+    await renderReadyForm();
+    const value = screen.getByRole("textbox", { name: "Value" });
+    fireEvent.click(screen.getByRole("checkbox", { name: "Value is already base64" }));
+
+    fireEvent.change(value, { target: { value: "not base64!" } });
+    fireEvent.blur(value);
+    expect(screen.getByRole("alert")).toHaveTextContent("standard base64");
+
+    fireEvent.change(value, { target: { value: "aGk=\n" } });
+    fireEvent.submit(value.closest("form") as HTMLFormElement);
+    await waitFor(() => expect(createSecret).toHaveBeenCalledTimes(1));
+    expect(createSecret.mock.calls[0][0]).toMatchObject({ value_base64: "aGk=" });
+  });
+
+  it("offers a content-type list with a free-text escape", async () => {
+    const createSecret = vi
+      .spyOn(api, "createSecret")
+      .mockResolvedValue({ version: 1, revision: 1 });
+    await renderReadyForm();
+    fireEvent.change(screen.getByRole("textbox", { name: "Value" }), {
+      target: { value: "a value" },
+    });
+    const type = screen.getByRole("combobox", { name: "Content type" });
+    expect(type).toHaveTextContent("text/plain");
+    await chooseSelectOption(type, "Other…");
+    fireEvent.change(screen.getByRole("textbox", { name: "Custom content type" }), {
+      target: { value: "application/x-foo" },
+    });
+    fireEvent.submit(type.closest("form") as HTMLFormElement);
+    await waitFor(() => expect(createSecret).toHaveBeenCalledTimes(1));
+    expect(createSecret.mock.calls[0][0]).toMatchObject({ content_type: "application/x-foo" });
+  });
+});
+
+describe("new secret version dialog", () => {
+  it("states which version becomes current and focuses the value", async () => {
+    const dialog = await openNewVersion();
+    expect(dialog).toHaveAccessibleDescription("Saving creates v2 and makes it current.");
+    expect(within(dialog).getByTestId("version-transition")).toHaveTextContent("v1 → v2");
+    await waitFor(() =>
+      expect(within(dialog).getByRole("textbox", { name: "Value" })).toHaveFocus(),
+    );
+    // Metadata uses the same editor as the parameter forms.
+    expect(within(dialog).getByRole("button", { name: "Format" })).toBeInTheDocument();
+  });
+
+  it("asks before discarding a typed value", async () => {
+    const dialog = await openNewVersion();
+    fireEvent.change(within(dialog).getByRole("textbox", { name: "Value" }), {
+      target: { value: "a value" },
+    });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    expect(
+      await screen.findByRole("dialog", { name: "Discard changes?", hidden: true }),
+    ).toBeInTheDocument();
+  });
+
+  it("sends a pasted base64 value as-is", async () => {
+    const createSecret = vi
+      .spyOn(api, "createSecret")
+      .mockResolvedValue({ version: 2, revision: 3 });
+    const dialog = await openNewVersion();
+    fireEvent.click(within(dialog).getByRole("checkbox", { name: "Value is already base64" }));
+    fireEvent.change(within(dialog).getByRole("textbox", { name: "Value" }), {
+      target: { value: "AQID" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save new version" }));
+    await waitFor(() => expect(createSecret).toHaveBeenCalledTimes(1));
+    expect(createSecret.mock.calls[0][0]).toMatchObject({ value_base64: "AQID" });
   });
 });

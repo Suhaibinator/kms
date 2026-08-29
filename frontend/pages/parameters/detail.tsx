@@ -1,18 +1,17 @@
-import { ArrowLeft } from "lucide-react";
-import Link from "next/link";
+import { ArrowLeft, ChevronDown } from "lucide-react";
 import { useRouter } from "next/router";
-import { useCallback, useEffect, useMemo, useState } from "react";
-import CopyButton from "@/components/CopyButton";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Ident } from "@/components/Ident";
 import { Icon } from "@/components/icons";
+import { JsonDiff } from "@/components/JsonDiff";
 import { JsonEditor } from "@/components/JsonEditor";
+import { JsonView, ValueView } from "@/components/JsonView";
 import { ConfirmDialog, Modal } from "@/components/Modal";
-import { ParameterValueInput } from "@/components/ParameterValueInput";
+import { ContentTypeSelect, ParameterValueInput } from "@/components/ParameterValueInput";
 import {
   Badge,
   EmptyState,
   Field,
-  JsonView,
   KeyValue,
   PageHeader,
   PageTitle,
@@ -20,10 +19,10 @@ import {
   Spinner,
   TableSkeleton,
 } from "@/components/ui";
-import { AppSelect } from "@/components/ui/app-select";
 import { Button, ButtonLink } from "@/components/ui/button";
 import { useToast } from "@/context/ToastContext";
 import { ApiError, api, isAbortError, type ResourceRef } from "@/lib/api";
+import { crumbs } from "@/lib/crumbs";
 import {
   displayNamespace,
   displayPath,
@@ -32,6 +31,7 @@ import {
   labelEntries,
   prettyJson,
 } from "@/lib/format";
+import { useFocusFirstInvalid } from "@/lib/forms";
 import { useLatestRequest, useQueryParams } from "@/lib/hooks";
 import {
   canonicalParameterValue,
@@ -40,7 +40,7 @@ import {
   valuesEquivalent,
 } from "@/lib/json-text";
 import { links } from "@/lib/links";
-import { PARAMETER_CONTENT_TYPES, type Parameter, type ParameterMetadata } from "@/lib/types";
+import type { Parameter, ParameterMetadata } from "@/lib/types";
 import { type ParameterSchema, useParameterSchema } from "@/lib/useParameterSchema";
 import {
   firstError,
@@ -51,6 +51,13 @@ import {
 
 /** The fields of the new-version form that carry their own validation. */
 type VersionField = "value" | "metadata";
+
+/** One fetched version, for the viewer and the compare slot. */
+interface LoadedVersion {
+  version: number;
+  value: string;
+  contentType: string;
+}
 
 export default function ParameterDetailPage() {
   const router = useRouter();
@@ -74,12 +81,11 @@ export default function ParameterDetailPage() {
   // The version viewer loads independently of the page, so it gets its own token.
   const viewRequest = useLatestRequest();
 
-  const [viewed, setViewed] = useState<{
-    version: number;
-    value: string;
-    contentType: string;
-  } | null>(null);
-  const [viewingVersion, setViewingVersion] = useState<number | null>(null);
+  const [viewed, setViewed] = useState<LoadedVersion | null>(null);
+  // A second version beside the viewed one turns the panel into a diff.
+  const [compare, setCompare] = useState<LoadedVersion | null>(null);
+  const [busyVersion, setBusyVersion] = useState<number | null>(null);
+  const panelRef = useRef<HTMLDivElement | null>(null);
 
   const [newVersionOpen, setNewVersionOpen] = useState(false);
   const [value, setValue] = useState("");
@@ -91,9 +97,15 @@ export default function ParameterDetailPage() {
   const [versionSchema, setVersionSchema] = useState<ParameterSchema | null>(null);
   const [contentType, setContentType] = useState("string");
   const [metadataJson, setMetadataJson] = useState("{}");
+  const [metadataOpen, setMetadataOpen] = useState(false);
+  const [showChanges, setShowChanges] = useState(false);
+  // The version whose value the form was prefilled from, when opened via Restore.
+  const [restoredFrom, setRestoredFrom] = useState<number | null>(null);
   const [saving, setSaving] = useState(false);
   const [touched, setTouched] = useState<Partial<Record<VersionField, boolean>>>({});
   const [submitAttempted, setSubmitAttempted] = useState(false);
+  const valueRef = useRef<HTMLElement | null>(null);
+  const { formRef, requestFocus } = useFocusFirstInvalid();
 
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [deleting, setDeleting] = useState(false);
@@ -133,6 +145,9 @@ export default function ParameterDetailPage() {
     contentType === (current.content_type || "string") &&
     valuesEquivalent(value, current.value, contentType) &&
     jsonEquivalent(metadataJson.trim() || "{}", meta?.metadata_json?.trim() || "{}");
+  // Anything that would be lost by closing: an edit against the current
+  // version, or — with no current version to compare to — any typed value.
+  const dirty = current !== null ? !unchanged : value.trim() !== "" || !isEmptyJson(metadataJson);
 
   function markTouched(field: VersionField) {
     setTouched((t) => ({ ...t, [field]: true }));
@@ -187,17 +202,34 @@ export default function ParameterDetailPage() {
     return () => request.abort();
   }, [ready, hasRef, load, request]);
 
-  function openNewVersion() {
-    const type = current?.content_type ?? meta?.content_type ?? "string";
-    const raw = current?.value ?? "";
+  // The viewer renders below the whole table; bring it into view when it
+  // opens or changes, so a long history does not hide what was just asked for.
+  const panelKey = viewed ? `${viewed.version}:${compare?.version ?? ""}` : null;
+  useEffect(() => {
+    if (panelKey === null) return;
+    panelRef.current?.scrollIntoView?.({ block: "nearest", behavior: "smooth" });
+  }, [panelKey]);
+
+  function openNewVersion(prefill?: {
+    value: string;
+    contentType: string;
+    metadataJson?: string;
+    restoredFrom: number;
+  }) {
+    const type = prefill?.contentType ?? current?.content_type ?? meta?.content_type ?? "string";
+    const raw = prefill?.value ?? current?.value ?? "";
     const opened = type === "json" ? (formatJson(raw) ?? raw) : raw;
+    const metadata = prefill?.metadataJson ?? meta?.metadata_json;
     setValue(opened);
     setOpenedValue(opened);
     setVersionSchema(
       schemaLookup.status === "idle" || schemaLookup.status === "loading" ? null : schemaLookup,
     );
     setContentType(type);
-    setMetadataJson(!isEmptyJson(meta?.metadata_json) ? prettyJson(meta?.metadata_json) : "{}");
+    setMetadataJson(!isEmptyJson(metadata) ? prettyJson(metadata) : "{}");
+    setMetadataOpen(!isEmptyJson(metadata));
+    setShowChanges(false);
+    setRestoredFrom(prefill?.restoredFrom ?? null);
     setTouched({});
     setSubmitAttempted(false);
     setNewVersionOpen(true);
@@ -207,8 +239,14 @@ export default function ParameterDetailPage() {
     e?.preventDefault();
     if (!hasRef || saving) return;
     setSubmitAttempted(true);
-    // Every remaining problem now has an inline message next to its field.
-    if (versionError || unchanged) return;
+    // Every remaining problem now has an inline message next to its field;
+    // move focus there so the button never looks dead.
+    if (versionError) {
+      if (metadataError && !valueError) setMetadataOpen(true);
+      requestFocus();
+      return;
+    }
+    if (unchanged) return;
     setSaving(true);
     try {
       const res = await api.putParameter({
@@ -222,6 +260,7 @@ export default function ParameterDetailPage() {
       toast.success(`Saved version ${res.version}`, displayPath(ref));
       setNewVersionOpen(false);
       setViewed(null);
+      setCompare(null);
       await load({ background: true });
     } catch (err) {
       toast.error(err, "Failed to save version");
@@ -230,24 +269,60 @@ export default function ParameterDetailPage() {
     }
   }
 
-  async function viewVersion(version: number) {
-    if (!hasRef) return;
+  /** Fetches one version's value; null when the request was superseded or failed. */
+  async function loadVersion(version: number): Promise<LoadedVersion | null> {
+    if (!hasRef) return null;
     const run = viewRequest.begin();
-    setViewingVersion(version);
+    setBusyVersion(version);
     try {
       const res = await api.getParameter(ref, version, undefined, { signal: run.signal });
-      if (!run.current) return;
-      setViewed({
+      if (!run.current) return null;
+      return {
         version: res.parameter.version,
         value: res.parameter.value,
         contentType: res.parameter.content_type,
-      });
+      };
     } catch (err) {
-      if (!run.current || isAbortError(err)) return;
+      if (!run.current || isAbortError(err)) return null;
       toast.error(err, "Failed to load version value");
+      return null;
     } finally {
-      if (run.current) setViewingVersion(null);
+      if (run.current) setBusyVersion(null);
     }
+  }
+
+  async function viewVersion(version: number) {
+    const loaded = await loadVersion(version);
+    if (!loaded) return;
+    setViewed(loaded);
+    // A compare slot that now equals the viewed version has nothing to show.
+    setCompare((slot) => (slot && slot.version === loaded.version ? null : slot));
+  }
+
+  async function compareVersion(version: number) {
+    // The current value is already on the page; everything else is fetched.
+    if (current && current.version === version) {
+      setCompare({
+        version: current.version,
+        value: current.value,
+        contentType: current.content_type,
+      });
+      return;
+    }
+    const loaded = await loadVersion(version);
+    if (loaded) setCompare(loaded);
+  }
+
+  async function restoreVersion(version: number) {
+    const loaded = await loadVersion(version);
+    if (!loaded) return;
+    const entry = meta?.versions.find((v) => v.version === version);
+    openNewVersion({
+      value: loaded.value,
+      contentType: loaded.contentType,
+      metadataJson: entry?.metadata_json,
+      restoredFrom: version,
+    });
   }
 
   async function onDelete() {
@@ -268,6 +343,7 @@ export default function ParameterDetailPage() {
   }
 
   const backLink = hasRef ? links.parameters({ env, app }) : links.parameters();
+  const trail = hasRef ? crumbs.parameter(ref) : undefined;
 
   // The heading and card frames are known from the URL alone, so they render
   // immediately and only the values fill in — no full-page spinner swap.
@@ -277,11 +353,7 @@ export default function ParameterDetailPage() {
         <PageHeader
           documentTitle={hasRef ? displayPath(ref) : "Parameter"}
           title={hasRef ? <span className="mono">{displayPath(ref)}</span> : "Parameter"}
-          subtitle={
-            <Link href={backLink} className="text-sm">
-              <ArrowLeft size={14} aria-hidden /> {hasRef ? displayNamespace(ref) : "Parameters"}
-            </Link>
-          }
+          breadcrumbs={trail}
         />
         <div className="card">
           <div className="card-title">Current value</div>
@@ -321,6 +393,7 @@ export default function ParameterDetailPage() {
       <>
         <PageHeader
           title="Parameter not found"
+          breadcrumbs={trail}
           actions={
             <ButtonLink variant="outline" href={backLink}>
               <ArrowLeft size={16} aria-hidden /> Back to parameters
@@ -338,6 +411,7 @@ export default function ParameterDetailPage() {
       <>
         <PageHeader
           title="Could not load parameter"
+          breadcrumbs={trail}
           actions={<Button onClick={() => void load()}>Try again</Button>}
         />
         <EmptyState icon={<Icon.parameter size={20} />} title="Parameter unavailable">
@@ -347,6 +421,15 @@ export default function ParameterDetailPage() {
       </>
     );
   }
+
+  // The diff reads oldest on the left.
+  const diffPair =
+    viewed && compare
+      ? viewed.version < compare.version
+        ? ([viewed, compare] as const)
+        : ([compare, viewed] as const)
+      : null;
+  const nextVersion = Math.max(0, ...meta.versions.map((v) => v.version)) + 1;
 
   return (
     <>
@@ -358,14 +441,11 @@ export default function ParameterDetailPage() {
             {refreshing ? <Spinner /> : null}
           </span>
         }
-        subtitle={
-          <Link href={backLink} className="text-sm">
-            <ArrowLeft size={14} aria-hidden /> {displayNamespace(ref)}
-          </Link>
-        }
+        subtitle={displayNamespace(ref)}
+        breadcrumbs={trail}
         actions={
           <>
-            <Button onClick={openNewVersion}>New version</Button>
+            <Button onClick={() => openNewVersion()}>New version</Button>
             <Button variant="destructive" onClick={() => setDeleteOpen(true)}>
               Delete
             </Button>
@@ -379,17 +459,12 @@ export default function ParameterDetailPage() {
           {current ? <Badge kind="accent">v{current.version}</Badge> : null}
         </div>
         {current ? (
-          <>
-            <div className="between mb-2">
-              <span className="faint text-sm">{current.content_type || "value"}</span>
-              <CopyButton label="Copy value" value={current.value} />
-            </div>
-            {current.content_type === "json" ? (
-              <JsonView raw={prettyJson(current.value)} />
-            ) : (
-              <pre className="json-block">{current.value}</pre>
-            )}
-          </>
+          <ValueView
+            value={current.value}
+            contentType={current.content_type}
+            copyLabel="Copy value"
+            tools={<span className="faint text-sm mono">{current.content_type || "value"}</span>}
+          />
         ) : (
           <span className="faint">No current value.</span>
         )}
@@ -433,7 +508,7 @@ export default function ParameterDetailPage() {
         {!isEmptyJson(meta.metadata_json) ? (
           <div className="mt-4">
             <div className="field-label">Metadata JSON</div>
-            <JsonView raw={prettyJson(meta.metadata_json)} />
+            <JsonView raw={prettyJson(meta.metadata_json)} copyLabel="Copy metadata" />
           </div>
         ) : null}
       </div>
@@ -457,64 +532,142 @@ export default function ParameterDetailPage() {
               <tbody>
                 {[...meta.versions]
                   .sort((a, b) => b.version - a.version)
-                  .map((v) => (
-                    <tr
-                      key={v.version}
-                      aria-current={viewed?.version === v.version ? "true" : undefined}
-                    >
-                      <td>
-                        <div className="row-wrap">
-                          v{v.version}
-                          {viewed?.version === v.version ? (
-                            <Badge kind="accent">viewing</Badge>
-                          ) : null}
-                        </div>
-                      </td>
-                      <td>
-                        <Badge kind={v.state === "enabled" ? "success" : "neutral"}>
-                          {v.state}
-                        </Badge>
-                      </td>
-                      <td>{v.created_by || <span className="faint">—</span>}</td>
-                      <td className="nowrap">{formatUnixMs(v.created_at_unix_ms)}</td>
-                      <td>
-                        <div className="row-actions">
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            disabled={viewingVersion === v.version}
-                            onClick={() => viewVersion(v.version)}
-                          >
-                            {viewingVersion === v.version ? <Spinner /> : null}
-                            View value
-                          </Button>
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
+                  .map((v) => {
+                    const isCurrent = current?.version === v.version;
+                    const isViewed = viewed?.version === v.version;
+                    const isCompared = compare?.version === v.version;
+                    const busy = busyVersion === v.version;
+                    return (
+                      <tr key={v.version} aria-current={isViewed ? "true" : undefined}>
+                        <td>
+                          <div className="row-wrap">
+                            v{v.version}
+                            {isCurrent ? <Badge kind="accent">current</Badge> : null}
+                            {isViewed ? <Badge kind="neutral">viewing</Badge> : null}
+                            {isCompared ? <Badge kind="neutral">comparing</Badge> : null}
+                          </div>
+                        </td>
+                        <td>
+                          <Badge kind={v.state === "enabled" ? "success" : "neutral"}>
+                            {v.state}
+                          </Badge>
+                        </td>
+                        <td>{v.created_by || <span className="faint">—</span>}</td>
+                        <td className="nowrap">{formatUnixMs(v.created_at_unix_ms)}</td>
+                        <td>
+                          <div className="row-actions">
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              loading={busy}
+                              disabled={busyVersion !== null || isViewed}
+                              onClick={() => void viewVersion(v.version)}
+                            >
+                              View value
+                            </Button>
+                            {viewed && !isViewed ? (
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                aria-label={`Compare v${v.version} with v${viewed.version}`}
+                                disabled={busyVersion !== null || isCompared}
+                                onClick={() => void compareVersion(v.version)}
+                              >
+                                Compare
+                              </Button>
+                            ) : null}
+                            {!isCurrent ? (
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                aria-label={`Restore v${v.version}`}
+                                disabled={busyVersion !== null}
+                                onClick={() => void restoreVersion(v.version)}
+                              >
+                                Restore
+                              </Button>
+                            ) : null}
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
               </tbody>
             </table>
           </div>
         )}
 
         {viewed ? (
-          <div className="mt-4">
-            <div className="between mb-2">
-              <div className="row-wrap">
-                <Badge kind="accent">v{viewed.version}</Badge>
-                <span className="faint text-sm">{viewed.contentType || "value"}</span>
+          <div className="version-panel" ref={panelRef} data-testid="version-panel">
+            <div className="version-panel-head">
+              <div className="version-panel-title">
+                {diffPair ? (
+                  <>
+                    <Badge kind="accent">v{diffPair[0].version}</Badge>
+                    <span className="version-arrow" aria-hidden>
+                      →
+                    </span>
+                    <Badge kind="accent">v{diffPair[1].version}</Badge>
+                    <span className="faint text-sm">changes</span>
+                  </>
+                ) : (
+                  <>
+                    <Badge kind="accent">v{viewed.version}</Badge>
+                    <span className="faint text-sm">{viewed.contentType || "value"}</span>
+                  </>
+                )}
               </div>
-              <div className="row-wrap">
-                <CopyButton label="Copy" value={viewed.value} />
-                <Button variant="outline" size="sm" onClick={() => setViewed(null)}>
+              <div className="version-panel-actions">
+                {!diffPair && current && current.version !== viewed.version ? (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => void compareVersion(current.version)}
+                  >
+                    Compare with current
+                  </Button>
+                ) : null}
+                {current && current.version !== viewed.version ? (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    disabled={busyVersion !== null}
+                    onClick={() => void restoreVersion(viewed.version)}
+                  >
+                    Restore v{viewed.version}
+                  </Button>
+                ) : null}
+                {diffPair ? (
+                  <Button variant="outline" size="sm" onClick={() => setCompare(null)}>
+                    Close compare
+                  </Button>
+                ) : null}
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => {
+                    setViewed(null);
+                    setCompare(null);
+                  }}
+                >
                   Close
                 </Button>
               </div>
             </div>
-            {viewed.contentType === "json" ? (
-              <JsonView raw={prettyJson(viewed.value)} />
+            {diffPair ? (
+              <JsonDiff
+                before={diffPair[0].value}
+                after={diffPair[1].value}
+                beforeLabel={`v${diffPair[0].version}`}
+                afterLabel={`v${diffPair[1].version}`}
+                contentType={
+                  diffPair[0].contentType === "json" && diffPair[1].contentType === "json"
+                    ? "json"
+                    : diffPair[1].contentType
+                }
+              />
             ) : (
-              <pre className="json-block">{viewed.value}</pre>
+              <ValueView value={viewed.value} contentType={viewed.contentType} />
             )}
           </div>
         ) : null}
@@ -523,41 +676,54 @@ export default function ParameterDetailPage() {
       <Modal
         open={newVersionOpen}
         title="New parameter version"
+        description={`Saving creates v${nextVersion} and makes it current.`}
         onClose={() => setNewVersionOpen(false)}
         dismissible={!saving}
+        dirty={dirty}
+        initialFocus={valueRef}
         wide
-        footer={
+        footer={(close) => (
           <>
             {unchanged && current ? (
-              <span
-                className="faint text-sm self-center sm:mr-auto"
-                data-testid="version-unchanged"
-              >
+              <p className="footer-note" role="status" data-testid="version-unchanged">
                 Nothing changed since v{current.version}.
-              </span>
+              </p>
             ) : null}
-            <Button variant="outline" onClick={() => setNewVersionOpen(false)} disabled={saving}>
+            <Button variant="outline" onClick={close} disabled={saving}>
               Cancel
             </Button>
             <Button
               onClick={saveVersion}
-              disabled={saving || shownVersionError !== null || unchanged}
+              loading={saving}
+              disabled={shownVersionError !== null || unchanged}
             >
-              {saving ? <Spinner /> : null}
               Save new version
             </Button>
           </>
-        }
+        )}
       >
-        <form onSubmit={saveVersion}>
-          <Field
-            label="Value"
-            hint="Saving creates a new version and updates the current label."
-            error={shownValueError}
-          >
+        <form ref={formRef} onSubmit={saveVersion}>
+          {restoredFrom !== null ? (
+            <div className="info-panel mb-4 value-restore-note" data-testid="restore-note">
+              <span>
+                Prefilled from <span className="mono">v{restoredFrom}</span>. Saving creates a new
+                version with this value; v{restoredFrom} itself is untouched.
+              </span>
+            </div>
+          ) : null}
+          <Field label="Content type" className="value-type-field">
+            <ContentTypeSelect
+              value={contentType}
+              currentValue={value}
+              onValueChange={setContentType}
+              onClearValue={() => setValue("")}
+            />
+          </Field>
+          <Field label="Value" error={shownValueError}>
             <ParameterValueInput
               contentType={contentType}
               value={value}
+              inputRef={valueRef}
               schema={contentType === "json" ? (versionSchema?.schema ?? null) : null}
               schemaLabel={
                 versionSchema?.status === "ready" ? (
@@ -577,11 +743,20 @@ export default function ParameterDetailPage() {
             />
           </Field>
           {contentType === "json" && versionSchema === null ? (
-            <p className="faint text-xs mt-1" role="status">
+            <p className="faint text-xs mt-1 row-wrap" role="status">
               {schemaLookup.status === "ready" ? (
                 <>
-                  A schema for <span className="mono">{schemaLookup.alias}</span> is available;
-                  reopen the form to edit by field.
+                  <span>
+                    A schema for <span className="mono">{schemaLookup.alias}</span> is available.
+                  </span>
+                  <Button
+                    type="button"
+                    variant="link"
+                    size="xs"
+                    onClick={() => setVersionSchema(schemaLookup)}
+                  >
+                    Use schema form
+                  </Button>
                 </>
               ) : (
                 <>
@@ -590,29 +765,66 @@ export default function ParameterDetailPage() {
               )}
             </p>
           ) : null}
-          <div className="form-row">
-            <Field label="Content type">
-              <AppSelect
-                value={contentType}
-                onValueChange={setContentType}
-                options={PARAMETER_CONTENT_TYPES.map((contentTypeOption) => ({
-                  value: contentTypeOption,
-                  label: contentTypeOption,
-                }))}
-              />
-            </Field>
+          {current && !unchanged ? (
+            <div className="value-disclosure">
+              <button
+                type="button"
+                className="value-disclosure-toggle"
+                aria-expanded={showChanges}
+                aria-controls="version-changes"
+                onClick={() => setShowChanges((open) => !open)}
+              >
+                <ChevronDown size={14} aria-hidden />
+                {showChanges ? "Hide changes" : "Show changes"} since v{current.version}
+              </button>
+              {showChanges ? (
+                <div id="version-changes" className="value-disclosure-body">
+                  <JsonDiff
+                    before={current.value}
+                    after={value}
+                    beforeLabel={`v${current.version}`}
+                    afterLabel="This version"
+                    contentType={
+                      contentType === "json" && current.content_type === "json"
+                        ? "json"
+                        : contentType
+                    }
+                    maxHeight="40vh"
+                  />
+                </div>
+              ) : null}
+            </div>
+          ) : null}
+          <div className="value-disclosure">
+            <button
+              type="button"
+              className="value-disclosure-toggle"
+              aria-expanded={metadataOpen || shownMetadataError !== null}
+              aria-controls="version-metadata"
+              onClick={() => setMetadataOpen((open) => !open)}
+            >
+              <ChevronDown size={14} aria-hidden />
+              Metadata JSON
+              {!metadataOpen && !isEmptyJson(metadataJson) ? (
+                <span className="faint">(set)</span>
+              ) : null}
+            </button>
+            {metadataOpen || shownMetadataError !== null ? (
+              <div id="version-metadata" className="value-disclosure-body">
+                <Field label="Metadata JSON" error={shownMetadataError}>
+                  <JsonEditor
+                    toolbar="minimal"
+                    rows={3}
+                    maxHeight="30vh"
+                    value={metadataJson}
+                    onChange={setMetadataJson}
+                    onBlur={() => markTouched("metadata")}
+                    onSubmit={() => void saveVersion()}
+                  />
+                </Field>
+              </div>
+            ) : null}
           </div>
-          <Field label="Metadata JSON" error={shownMetadataError}>
-            <JsonEditor
-              toolbar="minimal"
-              rows={3}
-              maxHeight="30vh"
-              value={metadataJson}
-              onChange={setMetadataJson}
-              onBlur={() => markTouched("metadata")}
-              onSubmit={() => void saveVersion()}
-            />
-          </Field>
         </form>
       </Modal>
 

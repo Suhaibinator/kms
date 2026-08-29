@@ -1,10 +1,12 @@
 import { ArrowLeft } from "lucide-react";
-import Link from "next/link";
 import { useRouter } from "next/router";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import CopyButton from "@/components/CopyButton";
 import { Icon } from "@/components/icons";
+import { JsonEditor } from "@/components/JsonEditor";
 import { ConfirmDialog, Modal } from "@/components/Modal";
+import { SecretContentTypeSelect } from "@/components/secrets/SecretContentTypeSelect";
+import { SecretValueField } from "@/components/secrets/SecretValueField";
 import {
   Badge,
   EmptyState,
@@ -18,13 +20,19 @@ import {
   Skeleton,
   Spinner,
   TableSkeleton,
-  Textarea,
 } from "@/components/ui";
 import { AppSelect } from "@/components/ui/app-select";
 import { Button, ButtonLink } from "@/components/ui/button";
 import { useToast } from "@/context/ToastContext";
 import { ApiError, api, isAbortError, type ResourceRef } from "@/lib/api";
-import { base64ByteLength, base64ToUtf8, looksLikeText, utf8ToBase64 } from "@/lib/encoding";
+import { crumbs } from "@/lib/crumbs";
+import {
+  base64ByteLength,
+  base64ToUtf8,
+  looksLikeText,
+  secretValueBase64,
+  validateSecretValue,
+} from "@/lib/encoding";
 import {
   displayNamespace,
   displayPath,
@@ -33,10 +41,11 @@ import {
   labelEntries,
   prettyJson,
 } from "@/lib/format";
+import { useFocusFirstInvalid } from "@/lib/forms";
 import { useFieldErrors, useLatestRequest, useQueryParams } from "@/lib/hooks";
 import { links } from "@/lib/links";
 import type { SecretMetadata, SecretVersion } from "@/lib/types";
-import { validateMetadataJson, validateValueSize } from "@/lib/validation";
+import { validateMetadataJson } from "@/lib/validation";
 
 const REVEAL_SECONDS = 30;
 
@@ -225,6 +234,7 @@ export default function SecretDetailPage() {
   }, [hasRef, ref, env, app, confirm, toast, load, router]);
 
   const backLink = hasRef ? links.secrets({ env, app }) : links.secrets();
+  const trail = hasRef ? crumbs.secret(ref) : undefined;
 
   // Header and card frames come straight from the URL, so they paint at once
   // and only the values fill in — no full-page spinner swap.
@@ -234,11 +244,7 @@ export default function SecretDetailPage() {
         <PageHeader
           documentTitle={hasRef ? displayPath(ref) : "Secret"}
           title={hasRef ? <span className="mono">{displayPath(ref)}</span> : "Secret"}
-          subtitle={
-            <Link href={backLink} className="text-sm">
-              <ArrowLeft size={14} aria-hidden /> {hasRef ? displayNamespace(ref) : "Secrets"}
-            </Link>
-          }
+          breadcrumbs={trail}
         />
         <div className="card">
           <div className="card-title">Metadata</div>
@@ -281,6 +287,7 @@ export default function SecretDetailPage() {
       <>
         <PageHeader
           title="Secret not found"
+          breadcrumbs={trail}
           actions={
             <ButtonLink variant="outline" href={backLink}>
               <ArrowLeft size={16} aria-hidden /> Back to secrets
@@ -298,6 +305,7 @@ export default function SecretDetailPage() {
       <>
         <PageHeader
           title="Could not load secret"
+          breadcrumbs={trail}
           actions={<Button onClick={() => void load()}>Try again</Button>}
         />
         <EmptyState icon={<Icon.secret size={20} />} title="Secret unavailable">
@@ -321,11 +329,8 @@ export default function SecretDetailPage() {
             {refreshing ? <Spinner /> : null}
           </span>
         }
-        subtitle={
-          <Link href={backLink} className="text-sm">
-            <ArrowLeft size={14} aria-hidden /> {displayNamespace(ref)}
-          </Link>
-        }
+        subtitle={displayNamespace(ref)}
+        breadcrumbs={trail}
         actions={
           <>
             <Button variant="outline" onClick={() => setNewVersionOpen(true)}>
@@ -390,7 +395,7 @@ export default function SecretDetailPage() {
         {!isEmptyJson(secret.metadata_json) ? (
           <div className="mt-4">
             <div className="field-label">Metadata JSON</div>
-            <JsonView raw={prettyJson(secret.metadata_json)} />
+            <JsonView raw={prettyJson(secret.metadata_json)} copyLabel="Copy metadata" />
           </div>
         ) : null}
       </div>
@@ -735,16 +740,20 @@ function NewVersionModal({
 }) {
   const toast = useToast();
   const [value, setValue] = useState("");
+  const [alreadyBase64, setAlreadyBase64] = useState(false);
   const [contentType, setContentType] = useState(secret.content_type || "text/plain");
   const [metadataJson, setMetadataJson] = useState("{}");
   const [clientToken, setClientToken] = useState("");
   const [saving, setSaving] = useState(false);
   const errors = useFieldErrors<"value" | "metadata" | "token">();
   const { reset: resetErrors } = errors;
+  const valueRef = useRef<HTMLElement | null>(null);
+  const { formRef, requestFocus } = useFocusFirstInvalid();
 
   useEffect(() => {
     if (open) {
       setValue("");
+      setAlreadyBase64(false);
       setContentType(secret.content_type || "text/plain");
       setMetadataJson("{}");
       setClientToken("");
@@ -752,10 +761,10 @@ function NewVersionModal({
     }
   }, [open, secret.content_type, resetErrors]);
 
-  // A secret value has no parse rule server-side — only the size cap — and the
-  // message reports the size alone, never the value. validateValueSize accepts
-  // "", so the required rule lives here.
-  const valueError = value ? validateValueSize(value) : "Enter a value for the new version.";
+  // A secret value has no parse rule server-side — only the size cap (and the
+  // base64 alphabet when passed through) — and the message reports the size
+  // alone, never the value.
+  const valueError = validateSecretValue(value, alreadyBase64);
   const metadataError = validateMetadataJson(metadataJson);
   const tokenError =
     secret.client_bound && !clientToken.trim()
@@ -765,12 +774,24 @@ function NewVersionModal({
   const shownMetadataError = errors.shown("metadata", metadataError);
   const shownTokenError = errors.shown("token", tokenError);
   const blocked = !!(shownValueError || shownMetadataError || shownTokenError);
+  const dirty =
+    value !== "" ||
+    clientToken !== "" ||
+    !isEmptyJson(metadataJson) ||
+    contentType !== (secret.content_type || "text/plain");
+  const currentVersion = secret.labels?.current;
+  const nextVersion = Math.max(0, ...secret.versions.map((v) => v.version)) + 1;
 
-  async function submit(e: React.FormEvent) {
-    e.preventDefault();
+  async function submit(e?: React.SyntheticEvent) {
+    e?.preventDefault();
+    if (saving) return;
     errors.markAllTouched();
-    // Every problem now has an inline message beside the field that caused it.
-    if (valueError || metadataError || tokenError) return;
+    // Every problem now has an inline message beside the field that caused it;
+    // move focus there so the button never looks dead.
+    if (valueError || metadataError || tokenError) {
+      requestFocus();
+      return;
+    }
     setSaving(true);
     try {
       const res = await api.createSecret(
@@ -778,7 +799,7 @@ function NewVersionModal({
           env: secret.env,
           app: secret.app,
           key: secret.key,
-          value_base64: utf8ToBase64(value),
+          value_base64: secretValueBase64(value, alreadyBase64),
           content_type: contentType.trim() || "text/plain",
           metadata_json: metadataJson.trim() || "{}",
           client_bound: secret.client_bound,
@@ -803,49 +824,66 @@ function NewVersionModal({
     <Modal
       open={open}
       title="New secret version"
+      description={`Saving creates v${nextVersion} and makes it current.`}
       onClose={onClose}
       dismissible={!saving}
-      footer={
+      dirty={dirty}
+      initialFocus={valueRef}
+      footer={(close) => (
         <>
-          <Button variant="outline" onClick={onClose} disabled={saving}>
+          <Button variant="outline" onClick={close} disabled={saving}>
             Cancel
           </Button>
-          <Button onClick={submit} disabled={saving || blocked}>
-            {saving ? <Spinner /> : null}
+          <Button onClick={submit} loading={saving} disabled={blocked}>
             Save new version
           </Button>
         </>
-      }
+      )}
     >
-      <form onSubmit={submit}>
+      <form ref={formRef} onSubmit={submit}>
         <Field
           label="Value"
-          hint="Stored encrypted. The new version becomes current."
+          hint={
+            <>
+              Stored encrypted.{" "}
+              {typeof currentVersion === "number" ? (
+                <span className="mono" data-testid="version-transition">
+                  v{currentVersion} → v{nextVersion}
+                </span>
+              ) : (
+                <span className="mono" data-testid="version-transition">
+                  v{nextVersion}
+                </span>
+              )}{" "}
+              becomes current.
+              {alreadyBase64 ? " Sent as-is: standard base64, decoded by the server." : ""}
+            </>
+          }
           error={shownValueError}
         >
-          <Textarea
-            className="font-mono"
+          <SecretValueField
             value={value}
-            onChange={(e) => setValue(e.target.value)}
+            onChange={setValue}
+            base64={alreadyBase64}
+            onBase64Change={setAlreadyBase64}
+            inputRef={valueRef}
             onBlur={() => errors.touch("value")}
-            placeholder="secret value…"
-            autoComplete="off"
-            spellCheck={false}
           />
         </Field>
-        <div className="form-row">
-          <Field label="Content type">
-            <Input value={contentType} onChange={(e) => setContentType(e.target.value)} />
-          </Field>
-          <Field label="Metadata JSON" error={shownMetadataError}>
-            <Input
-              className="font-mono"
-              value={metadataJson}
-              onChange={(e) => setMetadataJson(e.target.value)}
-              onBlur={() => errors.touch("metadata")}
-            />
-          </Field>
-        </div>
+        <Field label="Content type" className="value-type-field">
+          <SecretContentTypeSelect value={contentType} onValueChange={setContentType} />
+        </Field>
+        <Field label="Metadata JSON" error={shownMetadataError}>
+          <JsonEditor
+            toolbar="minimal"
+            rows={3}
+            maxHeight="30vh"
+            value={metadataJson}
+            onChange={setMetadataJson}
+            onBlur={() => errors.touch("metadata")}
+            onSubmit={() => void submit()}
+          />
+        </Field>
         {secret.client_bound ? (
           <Field
             label="Client access token"

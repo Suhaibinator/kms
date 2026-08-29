@@ -14,33 +14,40 @@ export interface JsonHighlightProps {
    * `textContent` equals `text`.
    */
   trailingNewline?: boolean;
+  /** Keep the per-line structure (and numbering) but colour nothing — for text that is not JSON. */
+  plain?: boolean;
   className?: string;
 }
 
-const JsonLine = memo(function JsonLine({
+/** One line of JSON-ish text, tokenised on its own. Exported for the diff view. */
+export const JsonLine = memo(function JsonLine({
   text,
-  error,
-  newline,
+  error = false,
+  newline = false,
+  plain = false,
 }: {
   text: string;
-  error: boolean;
-  newline: boolean;
+  error?: boolean;
+  newline?: boolean;
+  plain?: boolean;
 }) {
   // Strings never span a line break, so each line tokenizes on its own and a
   // keystroke re-renders only the line it touched.
-  const tokens = tokenizeJson(text);
+  const tokens = plain ? null : tokenizeJson(text);
   return (
     <span className={cn("json-line", error && "is-error")}>
-      {tokens.map((token) => {
-        const slice = text.slice(token.start, token.end);
-        return token.kind === "ws" ? (
-          slice
-        ) : (
-          <span key={token.start} className={`tok-${token.kind}`}>
-            {slice}
-          </span>
-        );
-      })}
+      {tokens
+        ? tokens.map((token) => {
+            const slice = text.slice(token.start, token.end);
+            return token.kind === "ws" ? (
+              slice
+            ) : (
+              <span key={token.start} className={`tok-${token.kind}`}>
+                {slice}
+              </span>
+            );
+          })
+        : text}
       {newline ? "\n" : null}
     </span>
   );
@@ -56,15 +63,16 @@ export function JsonHighlight({
   lineNumbers = false,
   errorLine = null,
   trailingNewline = false,
+  plain = false,
   className,
 }: JsonHighlightProps) {
   const lines = useMemo(() => text.split("\n"), [text]);
-  const plain = overHighlightCap(text);
+  const overCap = overHighlightCap(text);
   const gutterChars = String(lines.length).length;
   const style = lineNumbers
     ? ({ "--json-gutter-chars": String(gutterChars) } as React.CSSProperties)
     : undefined;
-  if (plain) {
+  if (overCap) {
     return (
       <span className={cn("json-highlight", className)} data-plain="true">
         {text}
@@ -85,6 +93,7 @@ export function JsonHighlight({
           text={line}
           error={errorLine === index + 1}
           newline={index < lines.length - 1 || trailingNewline}
+          plain={plain}
         />
       ))}
     </span>

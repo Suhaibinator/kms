@@ -21,7 +21,6 @@ import {
   lineCount,
   minifyJson,
 } from "@/lib/json-text";
-import { cn } from "@/lib/utils";
 import { byteLength, formatBytes } from "@/lib/validation";
 
 export interface JsonEditorProps {
@@ -33,19 +32,16 @@ export interface JsonEditorProps {
   "aria-describedby"?: string;
   "aria-invalid"?: boolean;
   "aria-required"?: boolean;
-  name?: string;
   /** The `<textarea>`, e.g. for a modal's `initialFocus`. */
   inputRef?: React.Ref<HTMLElement>;
   disabled?: boolean;
-  readOnly?: boolean;
   placeholder?: string;
-  className?: string;
   /** Minimum height in lines. */
   rows?: number;
   /** CSS length; the body scrolls beyond it. */
   maxHeight?: string;
   /** `full`: Format, Minify, Wrap, Copy and a size readout. `minimal`: Format and the readout. */
-  toolbar?: "full" | "minimal" | "none";
+  toolbar?: "full" | "minimal";
   onBlur?: () => void;
   /** Cmd/Ctrl+Enter. Defaults to submitting the enclosing form. */
   onSubmit?: () => void;
@@ -68,11 +64,8 @@ export function JsonEditor({
   "aria-describedby": ariaDescribedBy,
   "aria-invalid": ariaInvalid,
   "aria-required": ariaRequired,
-  name,
   disabled = false,
-  readOnly = false,
   placeholder,
-  className,
   rows = 12,
   maxHeight = "60vh",
   toolbar = "full",
@@ -84,6 +77,7 @@ export function JsonEditor({
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const pendingCaret = useRef<number | null>(null);
   const [wrap, setWrap] = useState(true);
+  const [focused, setFocused] = useState(false);
   const [copied, setCopied] = useState(false);
   const copyTimer = useRef<number | null>(null);
   useEffect(
@@ -146,7 +140,7 @@ export function JsonEditor({
       else textarea.form?.requestSubmit();
       return;
     }
-    if (readOnly || disabled) return;
+    if (disabled) return;
     if (
       event.key === "Tab" &&
       !event.shiftKey &&
@@ -177,67 +171,64 @@ export function JsonEditor({
   }
 
   const invalid = ariaInvalid === true;
-  const showToolbar = toolbar !== "none";
   const describedBy = [ariaDescribedBy, hintId].filter(Boolean).join(" ");
 
   return (
     <div
-      className={cn("json-editor", className)}
+      className="json-editor"
       data-wrap={wrap ? "on" : "off"}
       data-disabled={disabled ? "true" : undefined}
       data-invalid={invalid ? "true" : undefined}
       data-plain={plain ? "true" : undefined}
     >
-      {showToolbar ? (
-        <div className="json-editor-toolbar">
-          <div className="json-editor-tools">
-            <Button
-              type="button"
-              variant="ghost"
-              size="sm"
-              disabled={disabled || readOnly || problem !== null || value.trim() === ""}
-              onClick={() => rewrite(formatJson)}
-            >
-              <AlignLeft size={14} aria-hidden /> Format
-            </Button>
-            {toolbar === "full" ? (
-              <>
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="sm"
-                  disabled={disabled || readOnly || problem !== null || value.trim() === ""}
-                  onClick={() => rewrite(minifyJson)}
-                >
-                  <Minimize2 size={14} aria-hidden /> Minify
-                </Button>
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="sm"
-                  aria-pressed={wrap}
-                  onClick={() => setWrap((current) => !current)}
-                >
-                  <WrapText size={14} aria-hidden /> Wrap
-                </Button>
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="sm"
-                  aria-label={copied ? "Copied" : "Copy"}
-                  onClick={() => void copy()}
-                >
-                  {copied ? <Check size={14} aria-hidden /> : <Copy size={14} aria-hidden />}
-                  {copied ? "Copied" : "Copy"}
-                </Button>
-              </>
-            ) : null}
-          </div>
-          <span className="json-editor-size faint text-xs">
-            {lines} {lines === 1 ? "line" : "lines"} · {formatBytes(bytes)}
-          </span>
+      <div className="json-editor-toolbar">
+        <div className="json-editor-tools">
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            disabled={disabled || problem !== null || value.trim() === ""}
+            onClick={() => rewrite(formatJson)}
+          >
+            <AlignLeft size={14} aria-hidden /> Format
+          </Button>
+          {toolbar === "full" ? (
+            <>
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                disabled={disabled || problem !== null || value.trim() === ""}
+                onClick={() => rewrite(minifyJson)}
+              >
+                <Minimize2 size={14} aria-hidden /> Minify
+              </Button>
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                aria-pressed={wrap}
+                onClick={() => setWrap((current) => !current)}
+              >
+                <WrapText size={14} aria-hidden /> Wrap
+              </Button>
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                aria-label={copied ? "Copied" : "Copy"}
+                onClick={() => void copy()}
+              >
+                {copied ? <Check size={14} aria-hidden /> : <Copy size={14} aria-hidden />}
+                {copied ? "Copied" : "Copy"}
+              </Button>
+            </>
+          ) : null}
         </div>
-      ) : null}
+        <span className="json-editor-size faint text-xs">
+          {lines} {lines === 1 ? "line" : "lines"} · {formatBytes(bytes)}
+        </span>
+      </div>
       <div
         className="json-editor-body"
         style={{ "--json-rows": rows, maxHeight } as React.CSSProperties}
@@ -262,11 +253,9 @@ export function JsonEditor({
               assignRef(inputRef, node);
             }}
             id={id}
-            name={name}
             className="json-editor-input"
             value={value}
             disabled={disabled}
-            readOnly={readOnly}
             placeholder={placeholder}
             spellCheck={false}
             autoComplete="off"
@@ -279,18 +268,29 @@ export function JsonEditor({
             aria-required={ariaRequired}
             onChange={(event) => onChange(event.target.value)}
             onKeyDown={onKeyDown}
-            onBlur={onBlur}
+            onFocus={() => setFocused(true)}
+            onBlur={() => {
+              setFocused(false);
+              onBlur?.();
+            }}
           />
         </div>
       </div>
+      {/* One message per problem: while a wrapping Field flags the control invalid
+          it is already showing the positioned message (see validateParameterValue),
+          so the status slot yields to it and only the gutter marks the line. */}
       <div className="json-editor-status" role="status">
-        {problem ? (
+        {problem && !invalid ? (
           <span className="json-editor-problem">
             line {problem.line}, col {problem.column}: {problem.message}
           </span>
         ) : plain ? (
           <span className="faint">
             Highlighting is off above {formatBytes(HIGHLIGHT_MAX_BYTES)}.
+          </span>
+        ) : focused && !problem ? (
+          <span className="faint json-editor-keys">
+            Tab inserts two spaces · Shift+Tab moves focus out · Ctrl+Enter submits
           </span>
         ) : null}
       </div>

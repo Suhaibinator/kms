@@ -711,6 +711,50 @@
     font-weight: 600;
     color: var(--text);
   }
+  /* The legend's text is the disclosure button, so the group name stays the
+     group's accessible name and clicking it folds the branch. */
+  .schema-form-group-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-1);
+    margin: 0;
+    padding: 0;
+    border: 0;
+    background: none;
+    font: inherit;
+    color: inherit;
+    cursor: pointer;
+  }
+  .schema-form-group-toggle:focus-visible {
+    outline: 2px solid var(--primary);
+    outline-offset: 2px;
+    border-radius: var(--radius-sm);
+  }
+  .schema-form-group-toggle svg {
+    color: var(--text-faint);
+    transition: transform 120ms;
+  }
+  .schema-form-group[data-open="false"] .schema-form-group-toggle svg {
+    transform: rotate(-90deg);
+  }
+  .schema-form-group-count {
+    font-family: var(--sans);
+    font-weight: 500;
+    color: var(--text-faint);
+  }
+  .schema-form-list-item {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: start;
+    gap: var(--space-2);
+  }
+  .schema-form-list-item > .schema-form-group {
+    margin: 0;
+  }
+  .schema-form-reset {
+    margin-left: var(--space-1);
+    vertical-align: baseline;
+  }
   .schema-form-boolean {
     display: grid;
     gap: var(--space-1);
@@ -731,8 +775,13 @@
   .schema-form-list-error {
     grid-column: 1 / -1;
   }
+  /* Lives in the toolbar beside the caption, so it stays in view above a long form. */
   .schema-form-summary {
     margin: 0;
+    margin-left: auto;
+    font-size: var(--text-xs);
+    color: var(--warning-fg);
+    white-space: nowrap;
   }
 
   /* ---------- JSON highlighting + editor (components/JsonHighlight.tsx, JsonEditor.tsx) ---------- */
@@ -935,6 +984,9 @@
     color: var(--danger);
     font-family: var(--mono);
   }
+  .json-editor-keys {
+    font-family: var(--mono);
+  }
   @media (max-width: 768px) {
     /* 16px stops iOS from zooming the page on focus; both layers inherit it. */
     .json-editor-body {
@@ -963,11 +1015,15 @@
   .rule-op {
     min-width: 180px;
   }
+  /* Wide enough for a namespace label plus the unknown-namespace hint; the
+     row wraps, so they may grow but never shrink below their caption. */
   .rule-app {
-    width: 130px;
+    flex: 1 1 130px;
+    min-width: 130px;
   }
   .rule-env {
-    width: 110px;
+    flex: 1 1 110px;
+    min-width: 110px;
   }
   /* The row bottom-aligns its cells, and Field carries a bottom margin the bare
      button does not — this keeps the remove button level with the inputs. */
@@ -1202,6 +1258,350 @@
     margin: 0;
   }
 
+  /* ---------- Read-only value viewer (components/JsonView.tsx) ---------- */
+  .json-view {
+    display: grid;
+    gap: var(--space-2);
+    min-width: 0;
+  }
+  .json-view-toolbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-2);
+    flex-wrap: wrap;
+  }
+  .json-view-tools {
+    display: flex;
+    align-items: center;
+    gap: var(--space-1);
+    flex-wrap: wrap;
+  }
+  .json-view-size {
+    font-family: var(--mono);
+    white-space: nowrap;
+  }
+  .json-view-body {
+    color: var(--text);
+    line-height: 1.55;
+  }
+  .json-view[data-wrap="off"] .json-view-body {
+    white-space: pre;
+    overflow-wrap: normal;
+  }
+
+  /* ---------- Side-by-side line diff (components/JsonDiff.tsx) ---------- */
+  .json-diff {
+    display: grid;
+    gap: var(--space-2);
+    min-width: 0;
+  }
+  .json-diff-toolbar {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    flex-wrap: wrap;
+  }
+  .json-diff-summary {
+    font-family: var(--mono);
+  }
+  .json-diff-added {
+    color: var(--success);
+    font-weight: 600;
+  }
+  .json-diff-removed {
+    color: var(--danger);
+    font-weight: 600;
+  }
+  .json-diff-scroll {
+    max-height: 60vh;
+    overflow: auto;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: var(--bg-elev);
+  }
+  .json-diff-table {
+    width: 100%;
+    border-collapse: collapse;
+    table-layout: fixed;
+    font-family: var(--mono);
+    font-size: var(--text-sm);
+    line-height: 1.55;
+    tab-size: 2;
+  }
+  .json-diff-table th {
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    padding: var(--space-1) var(--space-3);
+    background: var(--surface-2);
+    border-bottom: 1px solid var(--border);
+    font-family: var(--sans);
+    font-size: var(--text-xs);
+    font-weight: 600;
+    color: var(--text-muted);
+    text-align: left;
+  }
+  .json-diff-table th + th {
+    border-left: 1px solid var(--border);
+  }
+  .json-diff-num {
+    width: 3.5ch;
+    padding: 0 var(--space-2);
+    color: var(--syntax-line-no);
+    text-align: right;
+    user-select: none;
+    vertical-align: top;
+  }
+  .json-diff-text {
+    padding: 0 var(--space-3) 0 var(--space-1);
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    vertical-align: top;
+    color: var(--text);
+  }
+  /* Each side's number cell opens a column; the right side gets a divider. */
+  .json-diff-num + .json-diff-text + .json-diff-num {
+    border-left: 1px solid var(--border);
+  }
+  .json-diff-num[data-op="del"],
+  .json-diff-text[data-op="del"] {
+    background: var(--danger-soft);
+  }
+  .json-diff-num[data-op="add"],
+  .json-diff-text[data-op="add"] {
+    background: var(--success-soft);
+  }
+  .json-diff-text[data-op="del"] {
+    box-shadow: inset 2px 0 0 var(--danger);
+  }
+  .json-diff-text[data-op="add"] {
+    box-shadow: inset 2px 0 0 var(--success);
+  }
+  .json-diff-num[data-op="empty"],
+  .json-diff-text[data-op="empty"] {
+    background: var(--surface-2);
+  }
+  .json-diff-text .json-line {
+    display: inline;
+    min-height: 0;
+  }
+  .json-diff-fold td {
+    padding: 0;
+    background: var(--surface-2);
+    border-block: 1px solid var(--border);
+  }
+  .json-diff-fold-button {
+    display: block;
+    width: 100%;
+    padding: var(--space-1) var(--space-3);
+    border: 0;
+    background: none;
+    font-family: var(--sans);
+    font-size: var(--text-xs);
+    color: var(--primary);
+    text-align: center;
+    cursor: pointer;
+  }
+  .json-diff-fold-button:hover {
+    background: var(--surface-hover);
+  }
+  .json-diff-fold-button:focus-visible {
+    outline: 2px solid var(--primary);
+    outline-offset: -2px;
+  }
+
+  /* ---------- Value inputs (components/ParameterValueInput.tsx) ---------- */
+  .value-input-row {
+    display: flex;
+    align-items: flex-start;
+    gap: var(--space-1);
+    min-width: 0;
+  }
+  .value-input-row > :first-child {
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+  .value-input-toggle {
+    margin-top: calc((var(--control-h) - var(--control-h-sm)) / 2);
+    color: var(--text-faint);
+  }
+  .value-boolean {
+    display: grid;
+    gap: var(--space-1);
+    justify-items: start;
+  }
+  .value-segment {
+    display: inline-flex;
+    border: 1px solid var(--input);
+    border-radius: var(--radius-sm);
+    overflow: hidden;
+    background: var(--surface);
+  }
+  .value-segment[aria-invalid="true"] {
+    border-color: var(--destructive);
+  }
+  .value-segment[data-disabled] {
+    opacity: 0.5;
+  }
+  /* Each half is a label wrapping a visually hidden native radio, so the
+     arrow keys and the checked state come from the browser. */
+  .value-segment-button {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-height: var(--control-h);
+    min-width: 5rem;
+    padding: 0 var(--space-4);
+    font-family: var(--mono);
+    font-size: var(--text-sm);
+    font-weight: 600;
+    color: var(--text-muted);
+    background: transparent;
+    cursor: pointer;
+  }
+  .value-segment-button + .value-segment-button {
+    border-left: 1px solid var(--border);
+  }
+  .value-segment-button:has(input:checked) {
+    color: var(--primary);
+    background: var(--accent-soft);
+  }
+  .value-segment-button:has(input:disabled) {
+    cursor: not-allowed;
+  }
+  .value-segment-button:has(input:focus-visible) {
+    outline: 2px solid var(--primary);
+    outline-offset: -2px;
+  }
+  .value-literal code {
+    color: var(--text);
+  }
+  .value-binary {
+    display: grid;
+    gap: var(--space-2);
+  }
+  .value-binary-tools {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-2);
+    flex-wrap: wrap;
+  }
+  .value-type {
+    display: grid;
+    gap: var(--space-1);
+  }
+  .value-type-field {
+    max-width: 260px;
+  }
+  .value-type-offer {
+    margin: 0;
+    color: var(--warning-fg);
+  }
+  .value-type-clear {
+    height: auto;
+    padding: 0;
+    font-size: inherit;
+  }
+  /* "Show changes" / "Metadata JSON" disclosures inside the version dialog. */
+  .value-disclosure {
+    display: grid;
+    gap: var(--space-2);
+    margin-top: var(--space-4);
+  }
+  .value-disclosure-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-1);
+    justify-self: start;
+    margin: 0;
+    padding: 0;
+    border: 0;
+    background: none;
+    font-size: var(--text-sm);
+    font-weight: 600;
+    color: var(--text-muted);
+    cursor: pointer;
+  }
+  .value-disclosure-toggle:hover {
+    color: var(--text);
+  }
+  .value-disclosure-toggle:focus-visible {
+    outline: 2px solid var(--primary);
+    outline-offset: 2px;
+    border-radius: var(--radius-sm);
+  }
+  .value-disclosure-toggle svg {
+    transition: transform 120ms;
+  }
+  .value-disclosure-toggle[aria-expanded="false"] svg {
+    transform: rotate(-90deg);
+  }
+  .value-disclosure-body {
+    min-width: 0;
+  }
+  .value-disclosure-body .field {
+    margin-bottom: 0;
+  }
+  /* Secret value field (components/secrets/SecretValueField.tsx). The mask is
+     a text-security rule so the control stays a multi-line textbox; browsers
+     without it simply show the text, and the toggle label says which. */
+  .value-secret {
+    display: grid;
+    gap: var(--space-2);
+  }
+  .value-secret-masked {
+    -webkit-text-security: disc;
+  }
+  .value-secret-tools {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2) var(--space-3);
+    flex-wrap: wrap;
+  }
+  .value-secret-tools .checkbox-row {
+    align-items: center;
+    margin-left: auto;
+  }
+  .value-restore-note {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    flex-wrap: wrap;
+  }
+
+  /* ---------- Version history viewer (pages/parameters/detail.tsx) ---------- */
+  .version-panel {
+    margin-top: var(--space-4);
+    padding-top: var(--space-4);
+    border-top: 1px solid var(--border);
+    scroll-margin-top: var(--space-4);
+  }
+  .version-panel-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-3);
+    flex-wrap: wrap;
+    margin-bottom: var(--space-2);
+  }
+  .version-panel-title {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    flex-wrap: wrap;
+  }
+  .version-panel-actions {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    flex-wrap: wrap;
+  }
+  .version-arrow {
+    color: var(--text-faint);
+  }
+
   .kv {
     display: grid;
     grid-template-columns: 160px 1fr;
@@ -1349,11 +1749,6 @@
   }
   /* The 60dvh minimum lives on the element as `min-h-[60dvh]`: a utility, so it
      can beat Textarea's own min-h-16 utility. Layered component CSS cannot. */
-  .release-json-editor,
-  .schema-editor {
-    resize: vertical;
-    tab-size: 2;
-  }
   .release-builder-review {
     display: flex;
     justify-content: space-between;
@@ -2211,7 +2606,7 @@
   .crumb-link:hover {
     color: var(--text);
   }
-  .crumb[aria-current="page"] .crumb-label {
+  .crumb-label[aria-current="page"] {
     color: var(--text);
     font-weight: 600;
   }

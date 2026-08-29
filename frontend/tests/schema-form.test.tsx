@@ -1,18 +1,25 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { useState } from "react";
-import { describe, expect, it } from "vitest";
-import { SchemaForm } from "@/components/SchemaForm";
+import { beforeEach, describe, expect, it } from "vitest";
+import { SchemaForm, VALUE_EDITOR_MODE_STORAGE_KEY } from "@/components/SchemaForm";
 import {
   aliasSchema,
   buildForm,
   extraKeys,
+  getAt,
   initialValue,
+  itemAt,
   type JsonSchema,
   parseNumberDraft,
   setAt,
   validateValue,
 } from "@/lib/schema-form";
 import { chooseSelectOption } from "./select-test-utils";
+
+// The editor remembers the last Form/JSON choice; each test starts without one.
+beforeEach(() => {
+  window.localStorage.removeItem(VALUE_EDITOR_MODE_STORAGE_KEY);
+});
 
 const schema: JsonSchema = {
   type: "object",
@@ -29,15 +36,41 @@ const schema: JsonSchema = {
   },
 };
 
-function Harness({ initial = "", disabled = false }: { initial?: string; disabled?: boolean }) {
+function Harness({
+  initial = "",
+  disabled = false,
+  schema: overrideSchema = schema,
+}: {
+  initial?: string;
+  disabled?: boolean;
+  schema?: JsonSchema;
+}) {
   const [value, setValue] = useState(initial);
   return (
     <>
-      <SchemaForm schema={schema} value={value} onChange={setValue} disabled={disabled} />
+      <SchemaForm schema={overrideSchema} value={value} onChange={setValue} disabled={disabled} />
       <pre data-testid="out">{value}</pre>
     </>
   );
 }
+
+/** A list of objects and a couple of fields with defaults and bounds. */
+const richSchema: JsonSchema = {
+  type: "object",
+  properties: {
+    region: { type: "string", default: "eu", description: "Where it runs" },
+    replicas: { type: "integer", minimum: 1, maximum: 10 },
+    code: { type: "string", pattern: "^[a-z]+$", minLength: 2, maxLength: 8 },
+    endpoints: {
+      type: "array",
+      items: {
+        type: "object",
+        required: ["host"],
+        properties: { host: { type: "string" }, port: { type: "integer" } },
+      },
+    },
+  },
+};
 
 function out(): unknown {
   const text = screen.getByTestId("out").textContent ?? "";
@@ -191,7 +224,8 @@ describe("SchemaForm", () => {
     expect(out()).toMatchObject({ tags: [] });
 
     fireEvent.change(screen.getByLabelText(/^custom/), { target: { value: "{bad" } });
-    expect(screen.getByText("must be valid JSON")).toBeInTheDocument();
+    // The same positioned wording as the editor's own status line.
+    expect(screen.getByText(/^must be valid JSON \(line 1, col 2/)).toBeInTheDocument();
     fireEvent.change(screen.getByLabelText(/^custom/), { target: { value: '"ok"' } });
     expect(out()).toMatchObject({ custom: "ok" });
   });
@@ -230,6 +264,110 @@ describe("SchemaForm", () => {
     render(<Harness initial='{"name":"a","limits":{"rps":1}}' disabled />);
     expect(screen.getByLabelText(/^name/)).toBeDisabled();
     expect(screen.getByRole("button", { name: "JSON" })).toBeDisabled();
+  });
+
+  it("folds an object group, but keeps one with a problem inside open", () => {
+    const { unmount } = render(<Harness initial='{"name":"a","limits":{"rps":1}}' />);
+    const toggle = within(screen.getByRole("group", { name: /^limits/ })).getByRole("button", {
+      name: /^limits/,
+    });
+    expect(toggle).toHaveAttribute("aria-expanded", "true");
+    fireEvent.click(toggle);
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByLabelText(/^rps/)).toBeNull();
+    fireEvent.click(toggle);
+    expect(screen.getByLabelText(/^rps/)).toBeInTheDocument();
+    unmount();
+
+    // `rps` is required and missing: the group cannot be folded over the error.
+    render(<Harness initial='{"name":"a","limits":{}}' />);
+    const forced = within(screen.getByRole("group", { name: /^limits/ })).getByRole("button", {
+      name: /^limits/,
+    });
+    expect(forced).toHaveAttribute("aria-expanded", "true");
+    expect(forced).toBeDisabled();
+    expect(screen.getByLabelText(/^rps/)).toBeInTheDocument();
+  });
+
+  it("states defaults and bounds in the hint and resets a field to its default", () => {
+    render(<Harness schema={richSchema} initial='{"region":"us","replicas":3}' />);
+    const region = screen.getByLabelText(/^region/);
+    expect(region).toHaveAccessibleDescription(/Where it runs · Default: "eu"/);
+    expect(screen.getByLabelText(/^replicas/)).toHaveAccessibleDescription("Range: 1–10");
+    expect(screen.getByLabelText(/^code/)).toHaveAccessibleDescription(
+      "2–8 characters · Pattern: ^[a-z]+$",
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Reset to default" }));
+    expect(out()).toMatchObject({ region: "eu" });
+    // Back at the default there is nothing to reset.
+    expect(screen.queryByRole("button", { name: "Reset to default" })).toBeNull();
+  });
+
+  it("keeps the issue count in the toolbar, above the fields", () => {
+    render(<Harness />);
+    const summary = screen.getByTestId("schema-form-summary");
+    expect(summary.closest(".schema-form-toolbar")).not.toBeNull();
+    expect(summary).toHaveTextContent("3 schema issues");
+  });
+
+  it("renders a list of objects as repeated sub-forms", () => {
+    render(<Harness schema={richSchema} initial='{"endpoints":[{"host":"a","port":1}]}' />);
+    expect(screen.getByRole("group", { name: /^endpoints 1/ })).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText(/^host/), { target: { value: "b" } });
+    expect(out()).toMatchObject({ endpoints: [{ host: "b", port: 1 }] });
+
+    fireEvent.click(screen.getByRole("button", { name: "Add endpoints item" }));
+    expect(screen.getByRole("group", { name: /^endpoints 2/ })).toBeInTheDocument();
+    // A new item starts from the item schema: required `host` seeded, nothing else.
+    expect(out()).toMatchObject({ endpoints: [{ host: "b", port: 1 }, { host: "" }] });
+    // The missing-required check reaches into each item.
+    fireEvent.change(screen.getAllByLabelText(/^host/)[1], { target: { value: "c" } });
+    expect(out()).toMatchObject({ endpoints: [{ host: "b", port: 1 }, { host: "c" }] });
+
+    fireEvent.click(screen.getByRole("button", { name: "Remove endpoints item 1" }));
+    expect(out()).toMatchObject({ endpoints: [{ host: "c" }] });
+  });
+
+  it("remembers the last Form/JSON choice", () => {
+    const { unmount } = render(<Harness initial='{"name":"a","limits":{"rps":1}}' />);
+    fireEvent.click(screen.getByRole("button", { name: "JSON" }));
+    expect(window.localStorage.getItem(VALUE_EDITOR_MODE_STORAGE_KEY)).toBe("json");
+    unmount();
+
+    render(<Harness initial='{"name":"a","limits":{"rps":1}}' />);
+    expect(screen.getByRole("button", { name: "JSON" })).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it("names the form-mode group after the field", () => {
+    render(<Harness initial='{"name":"a","limits":{"rps":1}}' />);
+    const group = screen.getByRole("group", { name: "Value" });
+    expect(group.tagName).toBe("FIELDSET");
+    expect(group).toHaveAttribute("data-mode", "form");
+  });
+});
+
+describe("object lists in the model", () => {
+  it("builds an item form for a list of objects and re-roots it per index", () => {
+    const root = buildForm(richSchema);
+    const endpoints = root?.fields?.find((field) => field.name === "endpoints");
+    expect(endpoints?.kind).toBe("list");
+    expect(endpoints?.item).toBe("object");
+    const second = endpoints ? itemAt(endpoints, 1) : null;
+    expect(second?.name).toBe("endpoints 2");
+    expect(second?.path).toEqual(["endpoints", "1"]);
+    expect(second?.fields?.map((field) => field.path)).toEqual([
+      ["endpoints", "1", "host"],
+      ["endpoints", "1", "port"],
+    ]);
+  });
+
+  it("reads and writes through array indices", () => {
+    const data = { endpoints: [{ host: "a" }, { host: "b" }] };
+    expect(getAt(data, ["endpoints", "1", "host"])).toBe("b");
+    const next = setAt(data, ["endpoints", "1", "port"], 8) as typeof data;
+    expect(next).toEqual({ endpoints: [{ host: "a" }, { host: "b", port: 8 }] });
+    expect(data.endpoints[1]).toEqual({ host: "b" });
   });
 });
 

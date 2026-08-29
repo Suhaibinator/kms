@@ -1,11 +1,12 @@
-import { Eye, Filter, Trash2, X } from "lucide-react";
+import { ChevronDown, Eye, Filter, MoreHorizontal, X } from "lucide-react";
 import Link from "next/link";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { ActionMenu } from "@/components/applications/ActionMenu";
 import { Icon } from "@/components/icons";
 import { JsonEditor } from "@/components/JsonEditor";
 import { ConfirmDialog, Modal } from "@/components/Modal";
 import NamespacePicker, { type NamespaceSelection } from "@/components/NamespacePicker";
-import { ParameterValueInput } from "@/components/ParameterValueInput";
+import { ContentTypeSelect, ParameterValueInput } from "@/components/ParameterValueInput";
 import {
   Badge,
   EmptyState,
@@ -13,14 +14,14 @@ import {
   Input,
   PageHeader,
   Pagination,
-  Spinner,
   TableSkeleton,
 } from "@/components/ui";
-import { AppSelect } from "@/components/ui/app-select";
 import { Button, ButtonLink } from "@/components/ui/button";
 import { useToast } from "@/context/ToastContext";
 import { api, isAbortError } from "@/lib/api";
-import { formatUnixMs, labelEntries } from "@/lib/format";
+import { crumbs } from "@/lib/crumbs";
+import { formatUnixMs, isEmptyJson, labelEntries } from "@/lib/format";
+import { useFocusFirstInvalid } from "@/lib/forms";
 import {
   useCursorPagination,
   useFieldErrors,
@@ -30,11 +31,13 @@ import {
 } from "@/lib/hooks";
 import { canonicalParameterValue } from "@/lib/json-text";
 import { links } from "@/lib/links";
-import { PARAMETER_CONTENT_TYPES, type Parameter } from "@/lib/types";
+import { rememberNamespace } from "@/lib/namespace-memory";
+import type { Parameter } from "@/lib/types";
 import { useQueryReplace } from "@/lib/url";
 import { useParameterSchema } from "@/lib/useParameterSchema";
 import {
   firstError,
+  MAX_KEY_LENGTH,
   validateContentType,
   validateKey,
   validateKeyPrefix,
@@ -44,6 +47,9 @@ import {
 } from "@/lib/validation";
 
 const NO_NS: NamespaceSelection = { env: "", app: "" };
+
+/** The key-length counter appears once a key is within this many characters of the cap. */
+const KEY_COUNTER_FROM = MAX_KEY_LENGTH - 56;
 
 /** The fields of the new-parameter form that carry their own validation. */
 type CreateField = "key" | "value" | "contentType" | "metadata";
@@ -79,8 +85,11 @@ export default function ParametersPage() {
   const [value, setValue] = useState("");
   const [contentType, setContentType] = useState("string");
   const [metadataJson, setMetadataJson] = useState("{}");
+  const [metadataOpen, setMetadataOpen] = useState(false);
   const [saving, setSaving] = useState(false);
   const errors = useFieldErrors<CreateField>();
+  const keyRef = useRef<HTMLInputElement | null>(null);
+  const { formRef, requestFocus } = useFocusFirstInvalid();
   // A json value in a namespace with a pinned schema can be edited by field.
   const createSchema = useParameterSchema({
     env: createNs.env,
@@ -112,6 +121,11 @@ export default function ParametersPage() {
   }, [nsError, toast]);
 
   const hasNs = !!ns.env && !!ns.app;
+
+  // The sidebar carries the settled namespace to the other list pages.
+  useEffect(() => {
+    if (hasNs) rememberNamespace({ env: ns.env, app: ns.app });
+  }, [hasNs, ns.env, ns.app]);
 
   // Client-side mirrors of the server's validators (see lib/validation.ts).
   // They fail fast on input the API is certain to reject; the server still has
@@ -146,6 +160,8 @@ export default function ParametersPage() {
     shownCreateAppError,
     shownCreateEnvError,
   );
+  const createDirty =
+    key !== "" || value !== "" || contentType !== "string" || !isEmptyJson(metadataJson);
 
   const load = useCallback(
     async (
@@ -226,6 +242,7 @@ export default function ParametersPage() {
     setValue("");
     setContentType("string");
     setMetadataJson("{}");
+    setMetadataOpen(false);
     errors.reset();
     setCreateOpen(true);
   }
@@ -233,8 +250,13 @@ export default function ParametersPage() {
   async function onCreate(e: React.FormEvent) {
     e.preventDefault();
     errors.markAllTouched();
-    // Every problem now has an inline message beside the field that caused it.
-    if (!createNs.env || !createNs.app || createError) return;
+    // Every problem now has an inline message beside the field that caused it;
+    // move focus there so the button never looks dead.
+    if (!createNs.env || !createNs.app || createError) {
+      if (metadataError) setMetadataOpen(true);
+      requestFocus();
+      return;
+    }
     const k = key.trim();
     setSaving(true);
     try {
@@ -292,12 +314,14 @@ export default function ParametersPage() {
   // this rather than on `loading` keeps the empty state from flashing before
   // the first request has even started.
   const settled = loadedScope === requestScope(ns, prefix, pageToken);
+  const keyLength = [...key].length;
 
   return (
     <>
       <PageHeader
         title="Parameters"
         subtitle="Non-secret configuration values, isolated by application and environment."
+        breadcrumbs={hasNs ? crumbs.environment(ns) : undefined}
         actions={<Button onClick={openCreate}>New parameter</Button>}
       />
 
@@ -406,10 +430,27 @@ export default function ParametersPage() {
                         <Eye size={14} aria-hidden />
                         Details
                       </ButtonLink>
-                      <Button variant="destructive" size="sm" onClick={() => setDeleteTarget(p)}>
-                        <Trash2 size={14} aria-hidden />
-                        Delete
-                      </Button>
+                      {/* Delete is the only destructive row action; it sits
+                          behind a menu so a stray click cannot reach it. */}
+                      <ActionMenu
+                        label={`Actions for ${p.key}`}
+                        trigger={
+                          <Button
+                            variant="ghost"
+                            size="icon-sm"
+                            aria-label={`More actions for ${p.key}`}
+                          >
+                            <MoreHorizontal size={15} aria-hidden />
+                          </Button>
+                        }
+                        items={[
+                          {
+                            key: "delete",
+                            label: "Delete",
+                            onSelect: () => setDeleteTarget(p),
+                          },
+                        ]}
+                      />
                     </div>
                   </td>
                 </tr>
@@ -427,26 +468,31 @@ export default function ParametersPage() {
         onReset={paging.reset}
         showReset={paging.hasPrevious}
         page={paging.page}
+        count={rows.length}
+        loading={!settled}
+        noun="parameters"
       />
 
       <Modal
         open={createOpen}
         title="New parameter"
+        description="Saving creates the parameter's first version and makes it current."
         onClose={() => setCreateOpen(false)}
         dismissible={!saving}
-        footer={
+        dirty={createDirty}
+        initialFocus={keyRef}
+        footer={(close) => (
           <>
-            <Button variant="outline" onClick={() => setCreateOpen(false)} disabled={saving}>
+            <Button variant="outline" onClick={close} disabled={saving}>
               Cancel
             </Button>
-            <Button onClick={onCreate} disabled={saving || shownCreateError !== null}>
-              {saving ? <Spinner /> : null}
+            <Button onClick={onCreate} loading={saving} disabled={shownCreateError !== null}>
               Save parameter
             </Button>
           </>
-        }
+        )}
       >
-        <form onSubmit={onCreate}>
+        <form ref={formRef} onSubmit={onCreate}>
           <div className="form-row">
             <NamespacePicker
               namespaces={namespaces}
@@ -458,19 +504,44 @@ export default function ParametersPage() {
               envError={shownCreateEnvError}
             />
           </div>
-          <Field
-            label="Key"
-            hint="Relative to the selected environment, e.g. rate-limit or billing/timeout"
-            error={shownKeyError}
-          >
-            <Input
-              className="font-mono"
-              value={key}
-              onChange={(e) => setKey(e.target.value)}
-              onBlur={() => errors.touch("key")}
-              placeholder="rate-limit"
-            />
-          </Field>
+          <div className="form-row">
+            <Field
+              label="Key"
+              hint={
+                <>
+                  Relative to the selected environment, e.g. rate-limit or billing/timeout
+                  {keyLength >= KEY_COUNTER_FROM ? (
+                    <span className="mono" data-testid="key-counter">
+                      {" "}
+                      · {keyLength}/{MAX_KEY_LENGTH}
+                    </span>
+                  ) : null}
+                </>
+              }
+              error={shownKeyError}
+            >
+              <Input
+                ref={keyRef}
+                className="font-mono"
+                value={key}
+                maxLength={MAX_KEY_LENGTH}
+                onChange={(e) => setKey(e.target.value)}
+                onBlur={() => errors.touch("key")}
+                placeholder="rate-limit"
+              />
+            </Field>
+            <Field label="Content type" error={shownContentTypeError}>
+              <ContentTypeSelect
+                value={contentType}
+                currentValue={value}
+                onValueChange={(nextContentType) => {
+                  setContentType(nextContentType);
+                  errors.touch("contentType");
+                }}
+                onClearValue={() => setValue("")}
+              />
+            </Field>
+          </div>
           <Field label="Value" error={shownValueError}>
             <ParameterValueInput
               contentType={contentType}
@@ -479,34 +550,37 @@ export default function ParametersPage() {
               rows={8}
               onChange={setValue}
               onBlur={() => errors.touch("value")}
-              placeholder={contentType === "json" ? "{}" : "100"}
             />
           </Field>
-          <div className="form-row">
-            <Field label="Content type" error={shownContentTypeError}>
-              <AppSelect
-                value={contentType}
-                onValueChange={(nextContentType) => {
-                  setContentType(nextContentType);
-                  errors.touch("contentType");
-                }}
-                options={PARAMETER_CONTENT_TYPES.map((contentTypeOption) => ({
-                  value: contentTypeOption,
-                  label: contentTypeOption,
-                }))}
-              />
-            </Field>
+          <div className="value-disclosure">
+            <button
+              type="button"
+              className="value-disclosure-toggle"
+              aria-expanded={metadataOpen || shownMetadataError !== null}
+              aria-controls="create-metadata"
+              onClick={() => setMetadataOpen((open) => !open)}
+            >
+              <ChevronDown size={14} aria-hidden />
+              Metadata JSON
+              {!metadataOpen && !isEmptyJson(metadataJson) ? (
+                <span className="faint">(set)</span>
+              ) : null}
+            </button>
+            {metadataOpen || shownMetadataError !== null ? (
+              <div id="create-metadata" className="value-disclosure-body">
+                <Field label="Metadata JSON" error={shownMetadataError}>
+                  <JsonEditor
+                    toolbar="minimal"
+                    rows={3}
+                    maxHeight="30vh"
+                    value={metadataJson}
+                    onChange={setMetadataJson}
+                    onBlur={() => errors.touch("metadata")}
+                  />
+                </Field>
+              </div>
+            ) : null}
           </div>
-          <Field label="Metadata JSON" error={shownMetadataError}>
-            <JsonEditor
-              toolbar="minimal"
-              rows={3}
-              maxHeight="30vh"
-              value={metadataJson}
-              onChange={setMetadataJson}
-              onBlur={() => errors.touch("metadata")}
-            />
-          </Field>
         </form>
       </Modal>
 

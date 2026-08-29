@@ -15,9 +15,11 @@ import {
 import { Button, ButtonLink } from "@/components/ui/button";
 import { useToast } from "@/context/ToastContext";
 import { api, isAbortError } from "@/lib/api";
+import { crumbs } from "@/lib/crumbs";
 import { formatUnixMs } from "@/lib/format";
 import { useCursorPagination, useLatestRequest, useNamespaces, useQueryParams } from "@/lib/hooks";
 import { links } from "@/lib/links";
+import { rememberNamespace } from "@/lib/namespace-memory";
 import type { SecretMetadata } from "@/lib/types";
 import { useQueryReplace } from "@/lib/url";
 import { validateKeyPrefix } from "@/lib/validation";
@@ -73,6 +75,11 @@ export default function SecretsPage() {
   }, [nsError, toast]);
 
   const hasNs = !!ns.env && !!ns.app;
+
+  // The sidebar carries the settled namespace to the other list pages.
+  useEffect(() => {
+    if (hasNs) rememberNamespace({ env: ns.env, app: ns.app });
+  }, [hasNs, ns.env, ns.app]);
 
   // An empty prefix lists the whole namespace; anything else must be a legal key.
   const prefixError = validateKeyPrefix(prefixInput.trim());
@@ -158,6 +165,7 @@ export default function SecretsPage() {
       <PageHeader
         title="Secrets"
         subtitle="Encrypted values, isolated by application and environment. Values are revealed only on the detail page."
+        breadcrumbs={hasNs ? crumbs.environment(ns) : undefined}
         actions={<ButtonLink href={newSecretLink}>New secret</ButtonLink>}
       />
 
@@ -270,6 +278,9 @@ export default function SecretsPage() {
         onReset={paging.reset}
         showReset={paging.hasPrevious}
         page={paging.page}
+        count={secrets.length}
+        loading={!settled}
+        noun="secrets"
       />
     </>
   );

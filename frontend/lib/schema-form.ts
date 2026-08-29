@@ -31,8 +31,10 @@ export interface FormField {
   fields?: FormField[];
   /** Object fields: whether keys outside `fields` are allowed. */
   allowsExtra?: boolean;
-  /** List fields: the scalar item kind. */
-  item?: "string" | "number" | "boolean";
+  /** List fields: the item kind. Object items render as repeated sub-forms. */
+  item?: "string" | "number" | "boolean" | "object";
+  /** List fields with object items: the item's form, rooted at a placeholder path (see `itemAt`). */
+  itemField?: FormField;
   /** JSON fallback fields: why the subtree is not rendered as inputs. */
   reason?: string;
   /** The schema allows `null` as well (generator wrapper for pointers, slices, maps). */
@@ -204,6 +206,14 @@ function buildField(
     case "array": {
       const items = isSchema(schema.items) ? schema.items : null;
       const item = items ? scalarItem(items) : null;
+      if (items && !item) {
+        // A list of objects: each item is its own sub-form, built once here at
+        // a placeholder index and re-rooted per item with `itemAt`.
+        const itemField = buildField(name, [...path, ITEM_PLACEHOLDER], items, true, depth + 1);
+        if (itemField.kind === "object") {
+          return { ...base, kind: "list", item: "object", itemField };
+        }
+      }
       if (!items || !item) return { ...base, reason: "is a list of non-scalar items" };
       const itemSchema = unwrapNullable(items) ?? items;
       return {
@@ -217,6 +227,26 @@ function buildField(
     default:
       return { ...base, reason: `has type ${type}` };
   }
+}
+
+const ITEM_PLACEHOLDER = "\0item";
+
+/** Re-roots a field tree built at `from` so its paths start at `to` instead. */
+function rebase(field: FormField, from: string[], to: string[]): FormField {
+  const path = [...to, ...field.path.slice(from.length)];
+  return {
+    ...field,
+    path,
+    fields: field.fields?.map((child) => rebase(child, from, to)),
+    itemField: field.itemField ? rebase(field.itemField, from, to) : undefined,
+  };
+}
+
+/** The sub-form for item `index` of an object list: `field.itemField` with real paths. */
+export function itemAt(field: FormField, index: number): FormField | null {
+  if (field.kind !== "list" || !field.itemField) return null;
+  const item = rebase(field.itemField, field.itemField.path, [...field.path, String(index)]);
+  return { ...item, name: `${field.name} ${index + 1}` };
 }
 
 /** The root field for an alias, or null when the alias cannot be rendered as a form at all. */
@@ -261,19 +291,38 @@ export function initialValue(field: FormField): unknown {
   }
 }
 
+function isIndex(key: string): boolean {
+  return /^(?:0|[1-9]\d*)$/.test(key);
+}
+
+/** Reads `path` out of `value`; a numeric segment indexes into an array. */
 export function getAt(value: unknown, path: string[]): unknown {
   let cursor: unknown = value;
   for (const key of path) {
-    if (!isObject(cursor)) return undefined;
-    cursor = cursor[key];
+    if (Array.isArray(cursor) && isIndex(key)) {
+      cursor = cursor[Number(key)];
+    } else if (isObject(cursor)) {
+      cursor = cursor[key];
+    } else {
+      return undefined;
+    }
   }
   return cursor;
 }
 
-/** Returns a copy with `path` set to `next`; `undefined` removes the key. */
+/**
+ * Returns a copy with `path` set to `next`; `undefined` removes an object key
+ * (and leaves an array item in place as `undefined` — callers drop array
+ * items by writing the filtered array).
+ */
 export function setAt(value: unknown, path: string[], next: unknown): unknown {
   if (path.length === 0) return next;
   const [head, ...rest] = path;
+  if (Array.isArray(value) && isIndex(head)) {
+    const copy = [...value];
+    copy[Number(head)] = setAt(copy[Number(head)], rest, next);
+    return copy;
+  }
   const base: JsonObject = isObject(value) ? { ...value } : {};
   const child = setAt(base[head], rest, next);
   if (child === undefined) {
@@ -310,6 +359,32 @@ function checkType(schema: JsonSchema, value: unknown): string | null {
     return type === actual;
   });
   return ok ? null : `must be ${allowed.join(" or ")}, got ${actual}`;
+}
+
+/** The range, pattern and length limits a schema states, in the order a hint lists them. */
+export function describeConstraints(schema: JsonSchema): string[] {
+  const out: string[] = [];
+  const { minimum, maximum, exclusiveMinimum, exclusiveMaximum, multipleOf } = schema;
+  const low = typeof minimum === "number" ? minimum : undefined;
+  const high = typeof maximum === "number" ? maximum : undefined;
+  const lowX = typeof exclusiveMinimum === "number" ? exclusiveMinimum : undefined;
+  const highX = typeof exclusiveMaximum === "number" ? exclusiveMaximum : undefined;
+  if (low !== undefined && high !== undefined) out.push(`Range: ${low}–${high}`);
+  else if (low !== undefined) out.push(`Minimum: ${low}`);
+  else if (high !== undefined) out.push(`Maximum: ${high}`);
+  if (lowX !== undefined) out.push(`Greater than ${lowX}`);
+  if (highX !== undefined) out.push(`Less than ${highX}`);
+  if (typeof multipleOf === "number" && multipleOf > 0) out.push(`Multiple of ${multipleOf}`);
+  const { minLength, maxLength, pattern } = schema;
+  if (typeof minLength === "number" && typeof maxLength === "number") {
+    out.push(`${minLength}–${maxLength} characters`);
+  } else if (typeof minLength === "number" && minLength > 0) {
+    out.push(`At least ${minLength} characters`);
+  } else if (typeof maxLength === "number") {
+    out.push(`At most ${maxLength} characters`);
+  }
+  if (typeof pattern === "string") out.push(`Pattern: ${pattern}`);
+  return out;
 }
 
 /**

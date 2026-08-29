@@ -1,14 +1,14 @@
-import { useEffect, useId, useMemo, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { Modal } from "@/components/Modal";
-import { ParameterValueInput } from "@/components/ParameterValueInput";
-import { Badge, Checkbox, Field, Input, Spinner } from "@/components/ui";
-import { AppSelect } from "@/components/ui/app-select";
+import { ContentTypeSelect, ParameterValueInput } from "@/components/ParameterValueInput";
+import { Badge, Checkbox, Field, Input } from "@/components/ui";
 import { Button } from "@/components/ui/button";
+import { useFocusFirstInvalid } from "@/lib/forms";
 import { useFieldErrors } from "@/lib/hooks";
-import { canonicalParameterValue } from "@/lib/json-text";
+import { canonicalParameterValue, valuesEquivalent } from "@/lib/json-text";
 import { isProductionEnvironment } from "@/lib/readiness";
 import { aliasSchema } from "@/lib/schema-form";
-import { type ApplicationConfigurationRow, PARAMETER_CONTENT_TYPES } from "@/lib/types";
+import type { ApplicationConfigurationRow } from "@/lib/types";
 import {
   firstError,
   validateKey,
@@ -51,8 +51,17 @@ export function BulkParameterModal({
   const [value, setValue] = useState("");
   const [contentType, setContentType] = useState("string");
   const [selected, setSelected] = useState<string[]>([]);
+  // What the form opened with, so a dismissal only asks when something changed.
+  const [opened, setOpened] = useState<{ value: string; contentType: string; key: string }>({
+    value: "",
+    contentType: "string",
+    key: "",
+  });
   const { touch, markAllTouched, reset, shown } = useFieldErrors<"key" | "value">();
   const formId = useId();
+  const keyRef = useRef<HTMLInputElement | null>(null);
+  const valueRef = useRef<HTMLElement | null>(null);
+  const { formRef, requestFocus } = useFocusFirstInvalid();
   useEffect(() => {
     if (!row) return;
     reset();
@@ -65,6 +74,11 @@ export function BulkParameterModal({
     const first = present.length ? row.environments[present[0]] : undefined;
     setValue(first?.value ?? "");
     setContentType(first?.content_type ?? "string");
+    setOpened({
+      value: first?.value ?? "",
+      contentType: first?.content_type ?? "string",
+      key: row.key,
+    });
   }, [row, environments, initialEnvironments, reset]);
   useEffect(() => {
     if (retryEnvironments) setSelected(retryEnvironments);
@@ -95,9 +109,20 @@ export function BulkParameterModal({
     [row, environments],
   );
 
+  const dirty =
+    key !== opened.key ||
+    contentType !== opened.contentType ||
+    !valuesEquivalent(value, opened.value, contentType);
+
   function submit() {
     markAllTouched();
-    if (saving || blocking || selected.length === 0) return;
+    if (saving) return;
+    if (blocking) {
+      // The message is now beside its field; put focus there too.
+      requestFocus();
+      return;
+    }
+    if (selected.length === 0) return;
     void onSave({
       application: app,
       key,
@@ -114,24 +139,33 @@ export function BulkParameterModal({
       title={row?.key ? `Update ${row.key}` : "New parameter"}
       onClose={onClose}
       dismissible={!saving}
+      dirty={dirty}
+      initialFocus={row?.key ? valueRef : keyRef}
       wide
-      footer={
+      footer={(close) => (
         <>
-          <Button type="button" variant="outline" onClick={onClose} disabled={saving}>
+          {selected.length === 0 ? (
+            <p className="footer-note" role="status">
+              Choose at least one target environment.
+            </p>
+          ) : null}
+          <Button type="button" variant="outline" onClick={close} disabled={saving}>
             Cancel
           </Button>
           <Button
             form={formId}
             type="submit"
-            disabled={saving || blocking !== null || selected.length === 0}
+            loading={saving}
+            disabled={blocking !== null || selected.length === 0}
           >
-            {saving ? <Spinner /> : null}Apply to {selected.length} environment(s)
+            Apply to {selected.length} {selected.length === 1 ? "environment" : "environments"}
           </Button>
         </>
-      }
+      )}
     >
       <form
         id={formId}
+        ref={formRef}
         onSubmit={(event) => {
           event.preventDefault();
           submit();
@@ -147,6 +181,7 @@ export function BulkParameterModal({
         <div className="form-row">
           <Field label="Key" error={row?.key ? null : shown("key", keyProblem)}>
             <Input
+              ref={keyRef}
               className="font-mono"
               value={key}
               disabled={Boolean(row?.key)}
@@ -155,10 +190,11 @@ export function BulkParameterModal({
             />
           </Field>
           <Field label="Content type">
-            <AppSelect
+            <ContentTypeSelect
               value={contentType}
+              currentValue={value}
               onValueChange={setContentType}
-              options={PARAMETER_CONTENT_TYPES.map((type) => ({ value: type, label: type }))}
+              onClearValue={() => setValue("")}
             />
           </Field>
         </div>
@@ -167,6 +203,7 @@ export function BulkParameterModal({
             contentType={contentType}
             value={value}
             schema={schema}
+            inputRef={valueRef}
             rows={7}
             onChange={setValue}
             onBlur={() => touch("value")}

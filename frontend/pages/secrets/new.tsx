@@ -1,18 +1,22 @@
-import Link from "next/link";
 import { useRouter } from "next/router";
 import { useEffect, useMemo, useRef, useState } from "react";
 import CopyButton from "@/components/CopyButton";
+import { JsonEditor } from "@/components/JsonEditor";
 import { Modal } from "@/components/Modal";
 import NamespacePicker, { type NamespaceSelection } from "@/components/NamespacePicker";
-import { Checkbox, Field, Input, PageHeader, Spinner, Textarea } from "@/components/ui";
+import { SecretContentTypeSelect } from "@/components/secrets/SecretContentTypeSelect";
+import { SecretValueField } from "@/components/secrets/SecretValueField";
+import { Checkbox, Field, Input, PageHeader } from "@/components/ui";
 import { Button, ButtonLink } from "@/components/ui/button";
 import { useToast } from "@/context/ToastContext";
 import { api } from "@/lib/api";
-import { utf8ToBase64 } from "@/lib/encoding";
+import { crumbs } from "@/lib/crumbs";
+import { secretValueBase64, validateSecretValue } from "@/lib/encoding";
 import { datetimeLocalToUnixMs } from "@/lib/format";
+import { useFocusFirstInvalid } from "@/lib/forms";
 import { useFieldErrors, useNamespaces, useQueryParams } from "@/lib/hooks";
 import { links } from "@/lib/links";
-import { validateKey, validateMetadataJson, validateValueSize } from "@/lib/validation";
+import { validateKey, validateMetadataJson } from "@/lib/validation";
 
 const NO_NS: NamespaceSelection = { env: "", app: "" };
 
@@ -37,6 +41,7 @@ export default function NewSecretPage() {
   const [ns, setNs] = useState<NamespaceSelection>(NO_NS);
   const [key, setKey] = useState("");
   const [value, setValue] = useState("");
+  const [alreadyBase64, setAlreadyBase64] = useState(false);
   const [contentType, setContentType] = useState("text/plain");
   const [metadataJson, setMetadataJson] = useState("{}");
   const [expires, setExpires] = useState("");
@@ -46,17 +51,17 @@ export default function NewSecretPage() {
   const [generateToken, setGenerateToken] = useState(false);
 
   const [saving, setSaving] = useState(false);
+  const { formRef, requestFocus } = useFocusFirstInvalid();
 
   // A field reports its problem only once the operator has left it, so a
   // half-typed key never looks like a mistake.
   const errors = useFieldErrors<"key" | "value" | "metadata" | "expires">();
 
   // Mirrors of the server's rules. The value has no content-type parse rule —
-  // only the size cap — and no message here ever quotes the value itself.
+  // only the size cap (and the base64 alphabet when passed through) — and no
+  // message here ever quotes the value itself.
   const keyError = validateKey(key.trim());
-  // validateValueSize accepts "" (it only caps the size), so the required rule
-  // lives here.
-  const valueError = value ? validateValueSize(value) : "A secret value is required.";
+  const valueError = validateSecretValue(value, alreadyBase64);
   const metadataError = validateMetadataJson(metadataJson);
   const expiresError =
     expires && (datetimeLocalToUnixMs(expires) ?? 0) <= Date.now()
@@ -109,10 +114,20 @@ export default function NewSecretPage() {
   async function submit(e: React.FormEvent) {
     e.preventDefault();
     errors.markAllTouched();
-    // Every problem now has an inline message beside the field that caused it.
-    if (!ns.env || !ns.app) return;
-    if (clientBound && !ack) return;
-    if (keyError || valueError || metadataError || expiresError) return;
+    // Every problem now has an inline message beside the field that caused it;
+    // move focus there so the button never looks dead.
+    if (
+      !ns.env ||
+      !ns.app ||
+      (clientBound && !ack) ||
+      keyError ||
+      valueError ||
+      metadataError ||
+      expiresError
+    ) {
+      requestFocus();
+      return;
+    }
 
     const k = key.trim();
     const expiresMs = datetimeLocalToUnixMs(expires) ?? 0;
@@ -123,7 +138,7 @@ export default function NewSecretPage() {
         env: ns.env,
         app: ns.app,
         key: k,
-        value_base64: utf8ToBase64(value),
+        value_base64: secretValueBase64(value, alreadyBase64),
         content_type: contentType.trim() || "text/plain",
         metadata_json: metadataJson.trim() || "{}",
         client_bound: clientBound,
@@ -158,21 +173,23 @@ export default function NewSecretPage() {
   }
 
   // Back and Cancel return to the list the operator came from, not the unfiltered one.
-  const listLink = links.secrets(ns.env && ns.app ? ns : undefined);
+  const hasNs = !!ns.env && !!ns.app;
+  const listLink = links.secrets(hasNs ? ns : undefined);
 
   return (
     <>
       <PageHeader
         title="New secret"
-        subtitle={
-          <Link href={listLink} className="text-sm">
-            ← All secrets
-          </Link>
+        subtitle="Encrypted at rest with authenticated encryption; never stored in plaintext."
+        breadcrumbs={
+          hasNs
+            ? [...crumbs.environment(ns), { label: "Secrets", href: listLink }, { label: "New" }]
+            : undefined
         }
       />
 
       <div className="card max-w-[720px]">
-        <form onSubmit={submit}>
+        <form ref={formRef} onSubmit={submit}>
           <div className="form-row">
             <NamespacePicker
               namespaces={namespaces}
@@ -197,25 +214,9 @@ export default function NewSecretPage() {
             />
           </Field>
 
-          <Field
-            label="Value"
-            hint="Encrypted at rest with authenticated encryption. Never stored in plaintext."
-            error={shownValueError}
-          >
-            <Textarea
-              className="font-mono"
-              value={value}
-              onChange={(e) => setValue(e.target.value)}
-              onBlur={() => errors.touch("value")}
-              placeholder="secret value…"
-              autoComplete="off"
-              spellCheck={false}
-            />
-          </Field>
-
           <div className="form-row">
             <Field label="Content type">
-              <Input value={contentType} onChange={(e) => setContentType(e.target.value)} />
+              <SecretContentTypeSelect value={contentType} onValueChange={setContentType} />
             </Field>
             <Field label="Expires at" hint="Optional." error={shownExpiresError}>
               <Input
@@ -228,11 +229,31 @@ export default function NewSecretPage() {
             </Field>
           </div>
 
+          <Field
+            label="Value"
+            hint={
+              alreadyBase64
+                ? "Sent as-is: standard base64, decoded by the server. Line breaks are ignored."
+                : "Typed text is stored as UTF-8. Generate a random token, or tick the box below to paste base64."
+            }
+            error={shownValueError}
+          >
+            <SecretValueField
+              value={value}
+              onChange={setValue}
+              base64={alreadyBase64}
+              onBase64Change={setAlreadyBase64}
+              onBlur={() => errors.touch("value")}
+            />
+          </Field>
+
           <Field label="Metadata JSON" error={shownMetadataError}>
-            <Input
-              className="font-mono"
+            <JsonEditor
+              toolbar="minimal"
+              rows={3}
+              maxHeight="30vh"
               value={metadataJson}
-              onChange={(e) => setMetadataJson(e.target.value)}
+              onChange={setMetadataJson}
               onBlur={() => errors.touch("metadata")}
             />
           </Field>
@@ -272,7 +293,12 @@ export default function NewSecretPage() {
 
               <div className="mb-4">
                 <div className="checkbox-row">
-                  <Checkbox id="ack" checked={ack} onCheckedChange={setAck} />
+                  <Checkbox
+                    id="ack"
+                    checked={ack}
+                    aria-invalid={shownAckError ? true : undefined}
+                    onCheckedChange={setAck}
+                  />
                   <label htmlFor="ack">
                     I understand that loss of the master key or the client access token destroys
                     this secret with no recovery path.
@@ -304,13 +330,12 @@ export default function NewSecretPage() {
           )}
 
           <div className="form-actions">
-            <Button type="submit" disabled={saving || blocked}>
-              {saving ? <Spinner /> : null}
-              Create secret
-            </Button>
             <ButtonLink href={listLink} variant="outline">
               Cancel
             </ButtonLink>
+            <Button type="submit" loading={saving} disabled={blocked}>
+              Create secret
+            </Button>
           </div>
         </form>
       </div>

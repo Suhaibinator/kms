@@ -2,8 +2,10 @@ import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { useState } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { JsonEditor } from "@/components/JsonEditor";
+import { ValueView } from "@/components/JsonView";
 import { Field, JsonView } from "@/components/ui";
-import { HIGHLIGHT_MAX_BYTES } from "@/lib/json-text";
+import { formatJson, HIGHLIGHT_MAX_BYTES } from "@/lib/json-text";
+import { validateParameterValue } from "@/lib/validation";
 
 vi.mock("@/context/ToastContext", () => ({
   useToast: () => ({ error: vi.fn(), success: vi.fn() }),
@@ -18,7 +20,7 @@ function Harness({
 }: {
   initial: string;
   onSubmit?: () => void;
-  toolbar?: "full" | "minimal" | "none";
+  toolbar?: "full" | "minimal";
 }) {
   const [value, setValue] = useState(initial);
   return (
@@ -105,14 +107,43 @@ describe("JsonEditor", () => {
     expect(onSubmit).toHaveBeenCalledTimes(2);
   });
 
-  it("shows only Format in the minimal toolbar and nothing with none", () => {
-    const { unmount } = render(<Harness initial="{}" toolbar="minimal" />);
+  it("shows only Format in the minimal toolbar", () => {
+    render(<Harness initial="{}" toolbar="minimal" />);
     expect(screen.getByRole("button", { name: "Format" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Minify" })).toBeNull();
     expect(screen.getByText(/1 line · 2 bytes/)).toBeInTheDocument();
-    unmount();
-    render(<Harness initial="{}" toolbar="none" />);
-    expect(screen.queryByRole("button", { name: "Format" })).toBeNull();
+  });
+
+  it("shows the key hints in the status slot while focused and valid", () => {
+    render(<Harness initial="{}" />);
+    expect(screen.getByRole("status")).toHaveTextContent("");
+    fireEvent.focus(textbox());
+    expect(screen.getByRole("status")).toHaveTextContent(/Tab inserts two spaces/);
+    // A problem takes the slot back; the hint returns once the JSON is whole.
+    fireEvent.change(textbox(), { target: { value: "{" } });
+    expect(screen.getByRole("status")).toHaveTextContent(/Unexpected end of input/);
+    fireEvent.blur(textbox());
+    fireEvent.change(textbox(), { target: { value: "{}" } });
+    expect(screen.getByRole("status")).toHaveTextContent("");
+  });
+
+  it("yields its problem line to a Field that is already showing it", () => {
+    function Validated() {
+      const [value, setValue] = useState('{"a":1,}');
+      return (
+        <Field label="Value" error={validateParameterValue(value, "json")}>
+          <JsonEditor value={value} onChange={setValue} />
+        </Field>
+      );
+    }
+    render(<Validated />);
+    // One message: the Field's, carrying the editor's line and column.
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      'Value must be valid JSON (line 1, col 8: Trailing comma before "}").',
+    );
+    expect(screen.getByRole("status")).toHaveTextContent("");
+    // The gutter still marks the line.
+    expect(document.querySelector(".json-line.is-error")).not.toBeNull();
   });
 
   it("drops the highlight layer above the size cap", () => {
@@ -147,5 +178,36 @@ describe("JsonView", () => {
     const block = document.querySelector(".json-block");
     expect(block?.textContent).toBe("not json");
     expect(block?.querySelector("[class^=tok-]")).toBeNull();
+  });
+
+  it("numbers the lines and offers wrap, copy and a size readout", () => {
+    render(<JsonView raw={'{\n  "a": 1\n}'} copyLabel="Copy value" />);
+    expect(document.querySelector(".json-highlight")).toHaveAttribute("data-line-numbers", "true");
+    expect(screen.getByText("3 lines · 12 bytes")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Copy value" })).toBeInTheDocument();
+
+    const wrap = screen.getByRole("button", { name: "Wrap" });
+    expect(wrap).toHaveAttribute("aria-pressed", "true");
+    expect(document.querySelector(".json-view")).toHaveAttribute("data-wrap", "on");
+    fireEvent.click(wrap);
+    expect(document.querySelector(".json-view")).toHaveAttribute("data-wrap", "off");
+  });
+});
+
+describe("ValueView", () => {
+  it("pretty-prints json and copies the stored form", () => {
+    const stored = '{"a":1,"b":[2]}';
+    render(<ValueView value={stored} contentType="json" />);
+    expect(document.querySelector(".json-block")?.textContent).toBe(formatJson(stored));
+    expect(document.querySelector(".tok-key")).not.toBeNull();
+  });
+
+  it("shows other content types verbatim with line numbers and no colouring", () => {
+    render(<ValueView value={"first\nsecond"} contentType="string" />);
+    const block = document.querySelector(".json-block");
+    expect(block?.textContent).toBe("first\nsecond");
+    expect(block?.querySelectorAll(".json-line")).toHaveLength(2);
+    expect(block?.querySelector("[class^=tok-]")).toBeNull();
+    expect(screen.getByText("2 lines · 12 bytes")).toBeInTheDocument();
   });
 });
