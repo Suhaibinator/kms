@@ -87,15 +87,13 @@ func TestCreateFirstConfigurationReleaseConcurrentGuard(t *testing.T) {
 	errs := make(chan error, 2)
 	var wg sync.WaitGroup
 	for range 2 {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			<-start
 			_, err := st.CreateFirstConfigurationRelease(ctx, domain.ConfigurationRelease{
 				Namespace: ns, Name: "runtime", Digest: "same", Metadata: "{}",
 			})
 			errs <- err
-		}()
+		})
 	}
 	close(start)
 	wg.Wait()

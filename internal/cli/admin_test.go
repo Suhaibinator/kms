@@ -243,7 +243,7 @@ func TestRotateAdminRejectsInvalidTargetsWithoutMutation(t *testing.T) {
 
 func tokenFromCLIOutput(t *testing.T, output string) string {
 	t.Helper()
-	for _, line := range strings.Split(output, "\n") {
+	for line := range strings.SplitSeq(output, "\n") {
 		if token, ok := strings.CutPrefix(strings.TrimSpace(line), "token: "); ok && token != "" {
 			return token
 		}
