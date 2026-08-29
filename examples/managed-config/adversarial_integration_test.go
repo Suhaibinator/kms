@@ -585,7 +585,7 @@ func assertAppliedReport(
 		report.Release().Version() != values.releaseVersion || report.Release().ActivationRevision() != values.activationRevision {
 		t.Fatalf("unexpected applied report: %s (want phase=%s divergent=%t release=%d#%d)", report, phase, divergent, values.releaseVersion, values.activationRevision)
 	}
-	if paths := changePaths(report); !reflect.DeepEqual(paths, wantPaths) && !(len(paths) == 0 && len(wantPaths) == 0) {
+	if paths := changePaths(report); !reflect.DeepEqual(paths, wantPaths) && (len(paths) != 0 || len(wantPaths) != 0) {
 		t.Fatalf("applied change paths = %v, want %v", paths, wantPaths)
 	}
 	for _, rendered := range []string{fmt.Sprint(report), fmt.Sprintf("%+v", report), fmt.Sprintf("%#v", report)} {

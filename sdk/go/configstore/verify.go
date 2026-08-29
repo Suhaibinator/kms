@@ -90,11 +90,11 @@ func (r VerifyResult) Report() string {
 	entries := append([]VerifyEntryResult(nil), r.Entries...)
 	sort.Slice(entries, func(i, j int) bool { return entries[i].Alias < entries[j].Alias })
 	table := tabwriter.NewWriter(&out, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(table, "VERDICT\tALIAS\tCONTENT_TYPE")
+	_, _ = fmt.Fprintln(table, "VERDICT\tALIAS\tCONTENT_TYPE")
 	counts := map[string]int{}
 	for _, entry := range entries {
 		counts[entry.Verdict]++
-		fmt.Fprintf(table, "%s\t%s\t%s\n", entry.Verdict, entry.Alias, entry.ContentType)
+		_, _ = fmt.Fprintf(table, "%s\t%s\t%s\n", entry.Verdict, entry.Alias, entry.ContentType)
 	}
 	_ = table.Flush()
 	fmt.Fprintf(&out, "summary: match=%d differs=%d missing_in_release=%d unknown_alias=%d secret_alias=%d unsupported_content_type=%d unverified=%d\n",

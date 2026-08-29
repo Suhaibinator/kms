@@ -70,8 +70,8 @@ func parsePolicyRule(raw string) (*kmsv1.PolicyRule, error) {
 		return nil, fmt.Errorf("rule %q has no operation", raw)
 	}
 	env, app := "*", "*"
-	switch {
-	case scope == "*" || scope == "":
+	switch scope {
+	case "*", "":
 	default:
 		parts := strings.Split(scope, "/")
 		if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
