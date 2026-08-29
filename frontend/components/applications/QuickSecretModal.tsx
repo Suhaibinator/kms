@@ -1,9 +1,10 @@
 import Link from "next/link";
-import { useEffect, useId, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { Modal } from "@/components/Modal";
-import { Field, Input, Spinner, Textarea } from "@/components/ui";
+import { Field, Input, Textarea } from "@/components/ui";
 import { AppSelect } from "@/components/ui/app-select";
 import { Button } from "@/components/ui/button";
+import { useFocusFirstInvalid } from "@/lib/forms";
 import { useFieldErrors } from "@/lib/hooks";
 import { firstError, validateKey, validateValueSize } from "@/lib/validation";
 import type { QuickSecretSeed } from "./shared";
@@ -34,15 +35,24 @@ export function QuickSecretModal({
   const [key, setKey] = useState("");
   const [value, setValue] = useState("");
   const [contentType, setContentType] = useState("text/plain");
+  // What the seed opened with, so `dirty` tracks the user's own edits only.
+  const [seeded, setSeeded] = useState({ environment: "", key: "" });
   const { touch, markAllTouched, reset, shown } = useFieldErrors<QuickSecretField>();
+  const { formRef, requestFocus } = useFocusFirstInvalid();
+  const environmentRef = useRef<HTMLButtonElement>(null);
+  const keyRef = useRef<HTMLInputElement>(null);
+  const valueRef = useRef<HTMLTextAreaElement>(null);
   const formId = useId();
 
   useEffect(() => {
     if (!seed) return;
-    setEnvironment(seed.environment || (environments.length === 1 ? environments[0] : ""));
+    const initialEnvironment =
+      seed.environment || (environments.length === 1 ? environments[0] : "");
+    setEnvironment(initialEnvironment);
     setKey(seed.key);
     setValue("");
     setContentType("text/plain");
+    setSeeded({ environment: initialEnvironment, key: seed.key });
     reset();
   }, [seed, environments, reset]);
 
@@ -50,6 +60,9 @@ export function QuickSecretModal({
   const keyProblem = validateKey(key.trim());
   const valueProblem = value ? validateValueSize(value) : "Secret value is required.";
   const blocking = firstError(environmentProblem, keyProblem, valueProblem);
+  const dirty = value !== "" || key !== seeded.key || environment !== seeded.environment;
+  // The first control the user still has to fill.
+  const initialFocus = !seeded.environment ? environmentRef : !seeded.key ? keyRef : valueRef;
   const advancedHref = {
     pathname: "/secrets/new",
     query: {
@@ -61,7 +74,11 @@ export function QuickSecretModal({
 
   function submit() {
     markAllTouched();
-    if (saving || blocking) return;
+    if (saving) return;
+    if (blocking) {
+      requestFocus();
+      return;
+    }
     void onSave({
       environment,
       key: key.trim(),
@@ -77,20 +94,22 @@ export function QuickSecretModal({
       title="New secret"
       onClose={onClose}
       dismissible={!saving}
-      footer={
+      dirty={dirty && !saving}
+      initialFocus={initialFocus}
+      footer={(close) => (
         <>
-          <Button type="button" variant="outline" onClick={onClose} disabled={saving}>
+          <Button type="button" variant="outline" onClick={close} disabled={saving}>
             Cancel
           </Button>
-          <Button form={formId} type="submit" disabled={saving || blocking !== null}>
-            {saving ? <Spinner /> : null}
+          <Button form={formId} type="submit" loading={saving}>
             Create secret
           </Button>
         </>
-      }
+      )}
     >
       <form
         id={formId}
+        ref={formRef}
         onSubmit={(event) => {
           event.preventDefault();
           submit();
@@ -102,6 +121,7 @@ export function QuickSecretModal({
           </Field>
           <Field label="Environment" error={shown("environment", environmentProblem)}>
             <AppSelect
+              ref={environmentRef}
               className="font-mono"
               value={environment}
               onValueChange={setEnvironment}
@@ -117,6 +137,7 @@ export function QuickSecretModal({
           error={shown("key", keyProblem)}
         >
           <Input
+            ref={keyRef}
             className="font-mono"
             value={key}
             onChange={(event) => setKey(event.target.value)}
@@ -130,6 +151,7 @@ export function QuickSecretModal({
           error={shown("value", valueProblem)}
         >
           <Textarea
+            ref={valueRef}
             className="font-mono"
             rows={5}
             value={value}

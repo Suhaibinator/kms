@@ -1,8 +1,9 @@
-import { useEffect, useId, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { Modal } from "@/components/Modal";
-import { Checkbox, Field, Input, Spinner } from "@/components/ui";
+import { Checkbox, Field, Input } from "@/components/ui";
 import { AppSelect } from "@/components/ui/app-select";
 import { Button } from "@/components/ui/button";
+import { useFocusFirstInvalid } from "@/lib/forms";
 import { useFieldErrors } from "@/lib/hooks";
 import { isProductionEnvironment } from "@/lib/readiness";
 import { validateEnv } from "@/lib/validation";
@@ -38,10 +39,13 @@ export function AddEnvironmentModal({
   const [token, setToken] = useState(false);
   const [startFrom, setStartFrom] = useState(EMPTY);
   const { touch, markAllTouched, reset, shown } = useFieldErrors<"environment">();
+  const { formRef, requestFocus } = useFocusFirstInvalid();
+  const environmentRef = useRef<HTMLInputElement>(null);
   const formId = useId();
   // An environment is the env half of a namespace, so it follows the label rule.
   const environmentProblem = validateEnv(environment.trim());
   const production = isProductionEnvironment(environment.trim());
+  const dirty = environment !== "" || description !== "" || token || startFrom !== EMPTY;
   useEffect(() => {
     if (!open) return;
     setEnvironment("");
@@ -53,7 +57,11 @@ export function AddEnvironmentModal({
 
   function submit() {
     markAllTouched();
-    if (saving || environmentProblem) return;
+    if (saving) return;
+    if (environmentProblem) {
+      requestFocus();
+      return;
+    }
     const methods: ("mtls" | "token")[] = token ? ["mtls", "token"] : ["mtls"];
     if (startFrom !== EMPTY && onClone) {
       onClone({ source: startFrom, target: environment.trim(), description, methods });
@@ -68,20 +76,22 @@ export function AddEnvironmentModal({
       title={`Add environment to ${app}`}
       onClose={onClose}
       dismissible={!saving}
-      footer={
+      dirty={dirty && !saving}
+      initialFocus={environmentRef}
+      footer={(close) => (
         <>
-          <Button type="button" variant="outline" onClick={onClose} disabled={saving}>
+          <Button type="button" variant="outline" onClick={close} disabled={saving}>
             Cancel
           </Button>
-          <Button form={formId} type="submit" disabled={saving || environmentProblem !== null}>
-            {saving ? <Spinner /> : null}
+          <Button form={formId} type="submit" loading={saving}>
             {startFrom !== EMPTY ? "Continue" : "Add environment"}
           </Button>
         </>
-      }
+      )}
     >
       <form
         id={formId}
+        ref={formRef}
         onSubmit={(event) => {
           event.preventDefault();
           submit();
@@ -93,6 +103,7 @@ export function AddEnvironmentModal({
           error={shown("environment", environmentProblem)}
         >
           <Input
+            ref={environmentRef}
             className="font-mono"
             value={environment}
             onChange={(event) => setEnvironment(event.target.value)}

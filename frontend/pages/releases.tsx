@@ -1,14 +1,15 @@
 import { Plus, RefreshCw } from "lucide-react";
 import { useRouter } from "next/router";
 import { type FormEvent, useCallback, useEffect, useRef, useState } from "react";
-import { Icon } from "@/components/icons";
 import { Ident, ReleaseIdent } from "@/components/Ident";
+import { Icon } from "@/components/icons";
 import { ConfirmDialog } from "@/components/Modal";
 import NamespacePicker, { type NamespaceSelection } from "@/components/NamespacePicker";
 import { ReleaseBuilder } from "@/components/releases/ReleaseBuilder";
 import { type ActivationFailure, ReleaseWorkspace } from "@/components/releases/ReleaseWorkspace";
 import { SchemaRegistry } from "@/components/releases/SchemaRegistry";
 import { parseReleaseKey, releaseKey } from "@/components/releases/utils";
+import { entryHrefResolver } from "@/components/releases/ViolationTable";
 import RollbackDialog from "@/components/ship/RollbackDialog";
 import {
   Badge,
@@ -18,7 +19,6 @@ import {
   Input,
   PageHeader,
   Pagination,
-  Spinner,
   TableSkeleton,
 } from "@/components/ui";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -26,6 +26,8 @@ import { useToast } from "@/context/ToastContext";
 import { ApiError, api, isAbortError } from "@/lib/api";
 import { crumbs } from "@/lib/crumbs";
 import { useCursorPagination, useNamespaces } from "@/lib/hooks";
+import { links } from "@/lib/links";
+import { isProductionEnvironment } from "@/lib/readiness";
 import type {
   ConfigurationRelease,
   OverviewActiveRelease,
@@ -72,7 +74,7 @@ function activeFromSummaries(
 export default function ReleasesPage() {
   const router = useRouter();
   const toast = useToast();
-  const { namespaces, error: namespaceError } = useNamespaces();
+  const { namespaces, loading: namespacesLoading, error: namespaceError } = useNamespaces();
   const [activeTab, setActiveTab] = useState<"releases" | "schemas">("releases");
   const [ns, setNS] = useState<NamespaceSelection>(NO_NS);
   const [nameDraft, setNameDraft] = useState("");
@@ -382,10 +384,11 @@ export default function ReleasesPage() {
             <>
               <Button
                 variant="outline"
-                disabled={!hasNS || releasesLoading || Boolean(busyAction)}
+                disabled={!hasNS || Boolean(busyAction)}
+                loading={releasesLoading}
                 onClick={() => void refresh(true)}
               >
-                {releasesLoading ? <Spinner /> : <RefreshCw size={16} aria-hidden />}
+                {releasesLoading ? null : <RefreshCw size={16} aria-hidden />}
                 Refresh
               </Button>
               <Button disabled={!hasNS || Boolean(busyAction)} onClick={() => setBuilderOpen(true)}>
@@ -410,6 +413,7 @@ export default function ReleasesPage() {
               value={ns}
               onChange={changeNamespace}
               disabled={Boolean(busyAction)}
+              loading={namespacesLoading}
             />
             <form className="filters filter-grow" onSubmit={applyNameFilter}>
               <div className="filter-grow">
@@ -559,11 +563,9 @@ export default function ReleasesPage() {
                               variant="outline"
                               size="sm"
                               disabled={Boolean(busyAction)}
+                              loading={busyAction === `validate:${releaseKey(release)}`}
                               onClick={() => void validate(release)}
                             >
-                              {busyAction === `validate:${releaseKey(release)}` ? (
-                                <Spinner />
-                              ) : null}
                               Validate
                             </Button>
                             <Button
@@ -622,6 +624,15 @@ export default function ReleasesPage() {
         busyAction={busyAction}
         activationFailure={activationFailure}
         onDismissFailure={() => setActivationFailure(null)}
+        resolveHref={
+          selectedSummary
+            ? entryHrefResolver(
+                selectedSummary.release.entries,
+                selectedSummary.release.namespace,
+                links,
+              )
+            : undefined
+        }
         onClose={closeWorkspace}
         onValidate={(release) => void validate(release)}
         onActivate={(summary) => setPendingAction({ kind: "activate", summary })}
@@ -651,6 +662,8 @@ export default function ReleasesPage() {
           ) : null
         }
         confirmLabel="Activate release"
+        danger={isProductionEnvironment(ns.env)}
+        requireText={isProductionEnvironment(ns.env) ? ns.env : undefined}
         busy={busyAction === "activate"}
         onConfirm={() => void performActivation()}
         onCancel={() => setPendingAction(null)}

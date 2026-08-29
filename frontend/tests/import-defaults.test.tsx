@@ -96,6 +96,13 @@ async function uploadArtifact() {
 }
 
 describe("ImportDefaultsModal", () => {
+  it("opens with focus on the artifact picker button", async () => {
+    renderModal();
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Choose artifact…" })).toHaveFocus(),
+    );
+  });
+
   beforeEach(() => {
     mocks.importDefaults.mockReset();
     mocks.toast.success.mockReset();
@@ -151,15 +158,40 @@ describe("ImportDefaultsModal", () => {
   it("requires the exact environment name before importing to production", async () => {
     mocks.importDefaults.mockResolvedValue(response());
     renderModal({ environment: "prod", production: true });
-    await uploadArtifact();
     const button = screen.getByRole("button", { name: "Import defaults" });
+    // A disabled Import always says why.
+    expect(button).toBeDisabled();
+    expect(screen.getByRole("status")).toHaveTextContent("Select a defaults artifact to preview.");
+    expect(screen.getByRole("button", { name: "Choose artifact…" })).toBeVisible();
+    await uploadArtifact();
     const confirmation = screen.getByLabelText(/Type prod to confirm production import/);
 
     expect(button).toBeDisabled();
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "Type prod to confirm the production import.",
+    );
     fireEvent.change(confirmation, { target: { value: "production" } });
     expect(button).toBeDisabled();
     fireEvent.change(confirmation, { target: { value: "prod" } });
     expect(button).toBeEnabled();
+    expect(screen.queryByRole("status")).toBeNull();
+  });
+
+  it("explains a blocked plan beside the button and guards a chosen artifact on close", async () => {
+    mocks.importDefaults.mockResolvedValue(response("blocked"));
+    const { onClose } = renderModal();
+    await uploadArtifact();
+    expect(screen.getByRole("button", { name: "Import defaults" })).toBeDisabled();
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "Enable overwrite to replace the differing values.",
+    );
+    expect(screen.getByText("defaults.json")).toBeVisible();
+
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    const confirm = await screen.findByRole("dialog", { name: "Discard changes?", hidden: true });
+    expect(onClose).not.toHaveBeenCalled();
+    fireEvent.click(within(confirm).getByRole("button", { name: "Discard", hidden: true }));
+    expect(onClose).toHaveBeenCalledTimes(1);
   });
 
   it("invalidates a stale plan and requires another preview", async () => {

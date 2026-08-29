@@ -1,6 +1,7 @@
-import { Pencil, Trash2 } from "lucide-react";
+import { MoreHorizontal, Pencil } from "lucide-react";
 import Link from "next/link";
-import { useEffect, useId, useMemo, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
+import { ActionMenu } from "@/components/applications/ActionMenu";
 import { Icon } from "@/components/icons";
 import { ConfirmDialog, Modal } from "@/components/Modal";
 import {
@@ -10,7 +11,6 @@ import {
   Field,
   Input,
   PageHeader,
-  Spinner,
   TableSkeleton,
 } from "@/components/ui";
 import { Button, ButtonLink } from "@/components/ui/button";
@@ -18,8 +18,15 @@ import { useToast } from "@/context/ToastContext";
 import { api } from "@/lib/api";
 import { formatUnixMs } from "@/lib/format";
 import { useFieldErrors, useNamespaces } from "@/lib/hooks";
+import { identitiesRelyingOn, methodLabel } from "@/lib/identity-methods";
 import { links } from "@/lib/links";
-import type { AuthMethod, Namespace } from "@/lib/types";
+import type { AuthMethod, Identity, Namespace } from "@/lib/types";
+
+const MAX_IDENTITY_PAGES = 10;
+
+function sameMethods(a: readonly AuthMethod[], b: readonly AuthMethod[]): boolean {
+  return a.length === b.length && a.every((method) => b.includes(method));
+}
 
 const TABLE_HEADERS = [
   "Environment",
@@ -103,6 +110,13 @@ export default function NamespacesPage() {
   // The Save button sits in the modal footer, outside the form element; the
   // HTML `form` attribute is what lets Enter in the body submit it.
   const editFormId = useId();
+  const descriptionRef = useRef<HTMLInputElement>(null);
+  // Identities bound anywhere, loaded when the editor opens so removing an
+  // auth method can say which of them it breaks. null = could not be checked.
+  const [identities, setIdentities] = useState<Identity[] | null>(null);
+  const [identitiesLoading, setIdentitiesLoading] = useState(false);
+  const identitiesRun = useRef(0);
+  const [confirmRemoval, setConfirmRemoval] = useState(false);
 
   const [deleteTarget, setDeleteTarget] = useState<Namespace | null>(null);
   const [deleting, setDeleting] = useState(false);
@@ -128,6 +142,58 @@ export default function NamespacesPage() {
 
   const methodsError = editMethods.length === 0 ? "Select at least one allowed auth method." : null;
   const shownMethodsError = editErrors.shown("methods", methodsError);
+  const editDirty =
+    editTarget !== null &&
+    (editDescription !== editTarget.description ||
+      !sameMethods(editMethods, editTarget.allowed_auth_methods ?? []));
+
+  useEffect(() => {
+    if (!editTarget) return;
+    const controller = new AbortController();
+    const run = ++identitiesRun.current;
+    setIdentities(null);
+    setIdentitiesLoading(true);
+    void (async () => {
+      try {
+        const all: Identity[] = [];
+        let token: string | undefined;
+        for (let page = 0; page < MAX_IDENTITY_PAGES; page += 1) {
+          const res = await api.listIdentities(200, token, { signal: controller.signal });
+          all.push(...(res.identities ?? []));
+          token = res.next_page_token || undefined;
+          if (!token) break;
+        }
+        if (run !== identitiesRun.current) return;
+        setIdentities(all);
+      } catch {
+        // Unknown is shown as such; the save is still allowed.
+        if (run === identitiesRun.current) setIdentities(null);
+      } finally {
+        if (run === identitiesRun.current) setIdentitiesLoading(false);
+      }
+    })();
+    return () => {
+      identitiesRun.current += 1;
+      controller.abort();
+    };
+  }, [editTarget]);
+
+  const removedMethods = editTarget
+    ? (editTarget.allowed_auth_methods ?? []).filter((method) => !editMethods.includes(method))
+    : [];
+  const affected =
+    editTarget && identities
+      ? removedMethods
+          .map((method) => ({
+            method,
+            identities: identitiesRelyingOn(identities, editTarget, method),
+          }))
+          .filter((entry) => entry.identities.length > 0)
+      : [];
+  const affectedNames = [
+    ...new Set(affected.flatMap((entry) => entry.identities.map((i) => i.name))),
+  ];
+  const affectedCount = affectedNames.length;
 
   function openEdit(ns: Namespace) {
     setEditTarget(ns);
@@ -136,11 +202,21 @@ export default function NamespacesPage() {
     editErrors.reset();
   }
 
-  async function onEdit(e: React.FormEvent) {
+  function onEdit(e: React.FormEvent) {
     e.preventDefault();
     if (!editTarget) return;
     editErrors.markAllTouched();
     if (methodsError) return;
+    // Removing a method identities rely on is a fleet-affecting change: confirm first.
+    if (affectedCount > 0) {
+      setConfirmRemoval(true);
+      return;
+    }
+    void saveEdit();
+  }
+
+  async function saveEdit() {
+    if (!editTarget) return;
     setEditSaving(true);
     try {
       await api.updateNamespace({
@@ -150,6 +226,7 @@ export default function NamespacesPage() {
         allowed_auth_methods: editMethods,
       });
       toast.success("Namespace updated", `${editTarget.env}/${editTarget.app}`);
+      setConfirmRemoval(false);
       setEditTarget(null);
       reload();
     } catch (err) {
@@ -252,26 +329,36 @@ export default function NamespacesPage() {
                                 <Pencil size={14} aria-hidden />
                                 Edit
                               </Button>
-                              <span
-                                className={canDelete ? undefined : "action-unavailable"}
-                                title={canDelete ? undefined : deleteReason}
-                              >
-                                <Button
-                                  variant="destructive"
-                                  size="sm"
-                                  disabled={!canDelete}
-                                  aria-describedby={canDelete ? undefined : deleteReasonId}
-                                  onClick={() => setDeleteTarget(ns)}
-                                >
-                                  <Trash2 size={14} aria-hidden />
-                                  Delete
-                                </Button>
-                                {canDelete ? null : (
-                                  <span id={deleteReasonId} className="action-unavailable-reason">
-                                    {deleteReason}
-                                  </span>
-                                )}
-                              </span>
+                              <ActionMenu
+                                label={`More for ${ns.env}/${ns.app}`}
+                                trigger={
+                                  <Button
+                                    type="button"
+                                    variant="ghost"
+                                    size="icon-sm"
+                                    aria-label={`More for ${ns.env}/${ns.app}`}
+                                  >
+                                    <MoreHorizontal size={16} />
+                                  </Button>
+                                }
+                                items={[
+                                  {
+                                    key: "delete",
+                                    label: canDelete ? (
+                                      "Delete environment"
+                                    ) : (
+                                      <>
+                                        <span>Delete environment</span>
+                                        <span id={deleteReasonId} className="faint text-xs">
+                                          {deleteReason}
+                                        </span>
+                                      </>
+                                    ),
+                                    disabled: !canDelete,
+                                    onSelect: () => setDeleteTarget(ns),
+                                  },
+                                ]}
+                              />
                             </div>
                           </td>
                         </tr>
@@ -290,22 +377,28 @@ export default function NamespacesPage() {
         title={editTarget ? `Edit ${editTarget.env}/${editTarget.app}` : "Edit namespace"}
         onClose={() => setEditTarget(null)}
         dismissible={!editSaving}
-        footer={
+        dirty={editDirty}
+        initialFocus={descriptionRef}
+        footer={(close) => (
           <>
-            <Button
-              type="button"
-              variant="outline"
-              onClick={() => setEditTarget(null)}
-              disabled={editSaving}
-            >
+            {methodsError ? (
+              <p className="footer-note" role="status">
+                {methodsError}
+              </p>
+            ) : null}
+            <Button type="button" variant="outline" onClick={close} disabled={editSaving}>
               Cancel
             </Button>
-            <Button form={editFormId} type="submit" disabled={editSaving || methodsError !== null}>
-              {editSaving ? <Spinner /> : null}
+            <Button
+              form={editFormId}
+              type="submit"
+              disabled={methodsError !== null}
+              loading={editSaving}
+            >
               Save changes
             </Button>
           </>
-        }
+        )}
       >
         {editTarget ? (
           <form id={editFormId} onSubmit={onEdit}>
@@ -313,7 +406,11 @@ export default function NamespacesPage() {
               <Input className="font-mono" value={`${editTarget.env}/${editTarget.app}`} disabled />
             </Field>
             <Field label="Description" hint="Optional.">
-              <Input value={editDescription} onChange={(e) => setEditDescription(e.target.value)} />
+              <Input
+                ref={descriptionRef}
+                value={editDescription}
+                onChange={(e) => setEditDescription(e.target.value)}
+              />
             </Field>
             <AuthMethodsField
               methods={editMethods}
@@ -323,9 +420,50 @@ export default function NamespacesPage() {
               }}
               error={shownMethodsError}
             />
+            {removedMethods.length > 0 && identitiesLoading ? (
+              <p className="faint text-sm" role="status">
+                Checking identities…
+              </p>
+            ) : null}
+            {removedMethods.length > 0 && !identitiesLoading && identities === null ? (
+              <p className="faint text-sm" role="status">
+                Could not check which identities rely on the removed method.
+              </p>
+            ) : null}
+            {affected.map((entry) => (
+              <div key={entry.method} className="warn-panel text-sm" role="status">
+                <strong>
+                  Removing {methodLabel(entry.method)} authentication breaks{" "}
+                  {entry.identities.length}{" "}
+                  {entry.identities.length === 1 ? "identity" : "identities"}:
+                </strong>{" "}
+                <span className="mono">{entry.identities.map((i) => i.name).join(", ")}</span>.{" "}
+                {entry.identities.length === 1 ? "It stops" : "They stop"} authenticating on the
+                next RPC.
+              </div>
+            ))}
           </form>
         ) : null}
       </Modal>
+
+      <ConfirmDialog
+        open={confirmRemoval}
+        title="Remove authentication method?"
+        danger
+        message={
+          <>
+            Saving removes {removedMethods.map(methodLabel).join(" and ")} authentication from{" "}
+            <span className="mono">{editTarget ? `${editTarget.env}/${editTarget.app}` : ""}</span>.{" "}
+            {affectedCount} {affectedCount === 1 ? "identity stops" : "identities stop"}{" "}
+            authenticating on the next RPC: <span className="mono">{affectedNames.join(", ")}</span>
+            .
+          </>
+        }
+        confirmLabel={`Save and break ${affectedCount} ${affectedCount === 1 ? "identity" : "identities"}`}
+        busy={editSaving}
+        onConfirm={() => void saveEdit()}
+        onCancel={() => setConfirmRemoval(false)}
+      />
 
       <ConfirmDialog
         open={deleteTarget !== null}

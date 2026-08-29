@@ -2,6 +2,7 @@ import { useEffect, useId, useRef, useState } from "react";
 import { Modal } from "@/components/Modal";
 import { Badge, Checkbox, Field, Input, KeyValue, Spinner } from "@/components/ui";
 import { Button } from "@/components/ui/button";
+import { FileInput } from "@/components/ui/file-input";
 import { useToast } from "@/context/ToastContext";
 import { ApiError, api } from "@/lib/api";
 import type { DefaultsApplyResponse, DefaultsApplyStatus, DefaultsArtifactBody } from "@/lib/types";
@@ -42,6 +43,7 @@ export function ImportDefaultsModal({
   const toast = useToast();
   const fileInputId = useId();
   const requestSequence = useRef(0);
+  const chooseRef = useRef<HTMLButtonElement>(null);
   const [artifact, setArtifact] = useState<DefaultsArtifactBody | null>(null);
   const [fileName, setFileName] = useState("");
   const [overwrite, setOverwrite] = useState(false);
@@ -174,6 +176,24 @@ export function ImportDefaultsModal({
   const productionConfirmed = !production || confirmation === environment;
   const canExecute =
     Boolean(preview) && !blocked && definitionReady && productionConfirmed && busy === null;
+  // Why Import defaults is disabled, in the order the user will resolve it.
+  const blockedReason = canExecute
+    ? null
+    : !artifact
+      ? "Select a defaults artifact to preview."
+      : busy === "reading" || busy === "preview"
+        ? "Previewing…"
+        : busy === "execute"
+          ? null
+          : !preview
+            ? "Preview the artifact again before importing."
+            : blocked
+              ? "Enable overwrite to replace the differing values."
+              : !definitionReady
+                ? "Enable definition update or use an artifact that matches the definition."
+                : !productionConfirmed
+                  ? `Type ${environment} to confirm the production import.`
+                  : null;
 
   return (
     <Modal
@@ -181,10 +201,17 @@ export function ImportDefaultsModal({
       title={`Import defaults to ${environment}`}
       onClose={onClose}
       dismissible={busy === null}
+      dirty={artifact !== null && busy === null}
+      initialFocus={chooseRef}
       workspace
-      footer={
+      footer={(close) => (
         <>
-          <Button type="button" variant="outline" onClick={onClose} disabled={busy !== null}>
+          {blockedReason ? (
+            <p className="footer-note" role="status">
+              {blockedReason}
+            </p>
+          ) : null}
+          <Button type="button" variant="outline" onClick={close} disabled={busy !== null}>
             Cancel
           </Button>
           {artifact && !preview ? (
@@ -193,17 +220,21 @@ export function ImportDefaultsModal({
               variant="outline"
               onClick={() => void previewArtifact(artifact, overwrite, updateDefinition)}
               disabled={busy !== null}
+              loading={busy === "preview"}
             >
-              {busy === "preview" ? <Spinner /> : null}
               Preview again
             </Button>
           ) : null}
-          <Button type="button" onClick={() => void execute()} disabled={!canExecute}>
-            {busy === "execute" ? <Spinner /> : null}
+          <Button
+            type="button"
+            onClick={() => void execute()}
+            disabled={!canExecute}
+            loading={busy === "execute"}
+          >
             Import defaults
           </Button>
         </>
-      }
+      )}
     >
       <div className="stack">
         <div className="info-panel text-sm">
@@ -226,12 +257,14 @@ export function ImportDefaultsModal({
           }
           error={error && !artifact ? error : null}
         >
-          <input
+          <FileInput
             id={fileInputId}
-            type="file"
             accept="application/json,.json"
             disabled={busy !== null}
-            onChange={(event) => void selectFile(event.currentTarget.files?.[0])}
+            fileName={fileName}
+            buttonLabel="Choose artifact…"
+            buttonRef={chooseRef}
+            onFile={(file) => void selectFile(file)}
           />
         </Field>
 

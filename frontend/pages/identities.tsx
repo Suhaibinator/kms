@@ -1,6 +1,6 @@
-import { Check, Download } from "lucide-react";
+import { Check, Download, Eye, EyeOff } from "lucide-react";
 import Link from "next/link";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import CopyButton from "@/components/CopyButton";
 import { Icon } from "@/components/icons";
 import { ConfirmDialog, Modal } from "@/components/Modal";
@@ -20,8 +20,9 @@ import { AppSelect } from "@/components/ui/app-select";
 import { Button, ButtonLink } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useToast } from "@/context/ToastContext";
-import { api, isAbortError } from "@/lib/api";
+import { ApiError, api, isAbortError } from "@/lib/api";
 import { displayNamespace, formatUnixMs } from "@/lib/format";
+import { useFocusFirstInvalid } from "@/lib/forms";
 import {
   useCursorPagination,
   useFieldErrors,
@@ -29,20 +30,34 @@ import {
   useNamespaces,
   useQueryParams,
 } from "@/lib/hooks";
-import type {
-  AuthMethod,
-  CertBundle,
-  Identity,
-  IdentityCert,
-  IdentityKind,
-  Namespace,
-} from "@/lib/types";
-import { firstError, validateApp, validateEnv, validateIdentityName } from "@/lib/validation";
+import {
+  identityMethodAvailability,
+  unavailableMethodReason,
+  validCertCount,
+} from "@/lib/identity-methods";
+import type { AuthMethod, CertBundle, Identity, IdentityCert, IdentityKind } from "@/lib/types";
+import {
+  firstError,
+  MAX_IDENTITY_NAME_LENGTH,
+  validateApp,
+  validateEnv,
+  validateIdentityName,
+} from "@/lib/validation";
 import { createStoredZip } from "@/lib/zip";
 
 const DEFAULT_CERT_DAYS = 90;
 const MAX_CERT_DAYS = 3650;
 const NO_NS: NamespaceSelection = { env: "", app: "" };
+/** Stands in for a bearer token until the user reveals it; never derived from the token. */
+const MASKED_TOKEN = "•".repeat(24);
+/** Enough of a certificate serial to match a row against the revoke confirmation. */
+const SERIAL_PREVIEW_LENGTH = 12;
+
+function shortSerial(serial: string): string {
+  return serial.length > SERIAL_PREVIEW_LENGTH
+    ? `${serial.slice(0, SERIAL_PREVIEW_LENGTH)}…`
+    : serial;
+}
 
 /**
  * Validation message for a certificate lifetime typed in days. Anything that is
@@ -68,9 +83,9 @@ function downloadBlob(filename: string, blob: Blob) {
   URL.revokeObjectURL(url);
 }
 
-// Trigger a client-side download of text content (cert/key PEM bundles).
-function downloadText(filename: string, content: string) {
-  downloadBlob(filename, new Blob([content], { type: "application/x-pem-file" }));
+// Trigger a client-side download of text content (cert/key PEM bundles, tokens).
+function downloadText(filename: string, content: string, type = "application/x-pem-file") {
+  downloadBlob(filename, new Blob([content], { type }));
 }
 
 function certStatus(cert: IdentityCert): { kind: "success" | "warning" | "danger"; label: string } {
@@ -78,43 +93,6 @@ function certStatus(cert: IdentityCert): { kind: "success" | "warning" | "danger
   if (cert.not_after_unix_ms > 0 && cert.not_after_unix_ms < Date.now())
     return { kind: "warning", label: "expired" };
   return { kind: "success", label: "valid" };
-}
-
-function validCertCount(id: Identity): number {
-  return (id.certs ?? []).filter(
-    (c) =>
-      c.revoked_at_unix_ms === 0 && (c.not_after_unix_ms === 0 || c.not_after_unix_ms > Date.now()),
-  ).length;
-}
-
-type MethodAvailability = "allowed" | "rejected" | "unknown";
-
-function identityMethodAvailability(
-  identity: Identity,
-  method: AuthMethod,
-  namespaces: Namespace[],
-  namespacesLoading: boolean,
-  namespacesError: unknown,
-): MethodAvailability {
-  if (identity.kind === "admin") return "allowed";
-  if (!identity.namespace) return "allowed";
-  if (namespacesLoading || namespacesError) return "unknown";
-  const home = namespaces.find(
-    (namespace) =>
-      namespace.env === identity.namespace?.env && namespace.app === identity.namespace?.app,
-  );
-  if (!home) return "unknown";
-  return home.allowed_auth_methods.includes(method) ? "allowed" : "rejected";
-}
-
-function unavailableMethodReason(method: AuthMethod, availability: MethodAvailability): string {
-  if (availability === "rejected") {
-    return `The bound namespace does not accept ${method === "mtls" ? "mTLS" : "token"} authentication.`;
-  }
-  if (availability === "unknown") {
-    return "KMS Console could not verify the bound namespace authentication methods.";
-  }
-  return "";
 }
 
 interface Credentials {
@@ -245,7 +223,13 @@ export default function IdentitiesPage() {
   const [methods, setMethods] = useState<AuthMethod[]>(["mtls"]);
   const [certDays, setCertDays] = useState(String(DEFAULT_CERT_DAYS));
   const [saving, setSaving] = useState(false);
+  // The server's own verdict on the name (a duplicate), cleared on every edit.
+  const [serverNameError, setServerNameError] = useState<string | null>(null);
+  // What the binding was when the wizard opened, for the dirty check.
+  const [openedBind, setOpenedBind] = useState<NamespaceSelection>(NO_NS);
   const wizardErrors = useFieldErrors<"name" | "bind" | "certDays">();
+  const wizardFocus = useFocusFirstInvalid();
+  const nameInputRef = useRef<HTMLInputElement>(null);
 
   // One-time credential display (from create or issue-cert).
   const [credentials, setCredentials] = useState<Credentials | null>(null);
@@ -257,9 +241,13 @@ export default function IdentitiesPage() {
   const [issueDays, setIssueDays] = useState(String(DEFAULT_CERT_DAYS));
   const [issueBusy, setIssueBusy] = useState(false);
   const issueErrors = useFieldErrors<"days">();
-  const [revokeCertTarget, setRevokeCertTarget] = useState<{ name: string; serial: string } | null>(
-    null,
-  );
+  const issueFocus = useFocusFirstInvalid();
+  const issueDaysRef = useRef<HTMLInputElement>(null);
+  const [revokeCertTarget, setRevokeCertTarget] = useState<{
+    name: string;
+    serial: string;
+    fingerprint: string;
+  } | null>(null);
   const [revokeCertBusy, setRevokeCertBusy] = useState(false);
 
   const [rotateTarget, setRotateTarget] = useState<string | null>(null);
@@ -335,16 +323,40 @@ export default function IdentitiesPage() {
       : null;
   const methodsProblem = methods.length === 0 ? "Select at least one credential method." : null;
   const certDaysProblem = methods.includes("mtls") ? certDaysError(certDays) : null;
-  const nameError = wizardErrors.shown("name", nameProblem);
-  const bindError = wizardErrors.submitted ? bindProblem : null;
+  const nameError = wizardErrors.shown("name", nameProblem) ?? serverNameError;
+  const bindError = wizardErrors.shown("bind", bindProblem);
   const certDaysShown = wizardErrors.shown("certDays", certDaysProblem);
+  // Why Create is disabled, in the order the user would fix things.
+  const createBlockedReason = saving
+    ? null
+    : (methodsProblem ??
+      (authConflict
+        ? "Deselect the methods this namespace rejects before creating credentials."
+        : null) ??
+      certDaysProblem ??
+      nameProblem ??
+      bindProblem);
+  const defaultMethods: AuthMethod[] = identityMode === "admin" ? ["token"] : ["mtls"];
+  const methodsChanged =
+    methods.length !== defaultMethods.length ||
+    methods.some((method) => !defaultMethods.includes(method));
+  const wizardDirty =
+    createOpen &&
+    (name !== "" ||
+      createStep === 2 ||
+      identityMode !== "application" ||
+      bindNs.env !== openedBind.env ||
+      bindNs.app !== openedBind.app ||
+      methodsChanged);
 
   const issueDaysProblem = certDaysError(issueDays);
 
   function openCreate(prefill?: NamespaceSelection) {
     setName("");
+    setServerNameError(null);
     setIdentityMode("application");
     setBindNs(prefill ?? NO_NS);
+    setOpenedBind(prefill ?? NO_NS);
     setMethods(["mtls"]);
     setCertDays(String(DEFAULT_CERT_DAYS));
     wizardErrors.reset();
@@ -354,7 +366,7 @@ export default function IdentitiesPage() {
 
   // `?new=1&env=&app=` (the Connect SDK panel's "Create identity" link) opens
   // the create flow once with the namespace prefilled.
-  const { values: prefill, ready: prefillReady } = useQueryParams(["new", "env", "app"]);
+  const { values: prefill, ready: prefillReady } = useQueryParams(["new", "env", "app", "name"]);
   const prefillConsumed = useRef(false);
   // biome-ignore lint/correctness/useExhaustiveDependencies: openCreate is a plain function of state setters; run once per prefill.
   useEffect(() => {
@@ -362,6 +374,21 @@ export default function IdentitiesPage() {
     prefillConsumed.current = true;
     openCreate({ env: prefill.env ?? "", app: prefill.app ?? "" });
   }, [prefillReady, prefill]);
+
+  // `?name=` (a subscriber row's identity link) marks that row and scrolls it
+  // into view once the page holding it has loaded. The highlight stays while
+  // the URL names the row, so a reload lands on the same spot.
+  const linkedName = prefillReady ? prefill.name : null;
+  const scrolledTo = useRef<string | null>(null);
+  useEffect(() => {
+    if (!linkedName || loading || scrolledTo.current === linkedName) return;
+    const row = document.querySelector<HTMLElement>(
+      `tr[data-identity="${CSS.escape(linkedName)}"]`,
+    );
+    if (!row) return;
+    scrolledTo.current = linkedName;
+    row.scrollIntoView?.({ block: "center" });
+  }, [linkedName, loading]);
 
   function openCertificates(identity: Identity) {
     setIssueDays(String(DEFAULT_CERT_DAYS));
@@ -386,7 +413,10 @@ export default function IdentitiesPage() {
     // Every step-one problem is rendered inline next to its field; the namespace
     // loading/error states already disable the Continue button.
     wizardErrors.markAllTouched();
-    if (nameProblem || bindProblem) return;
+    if (nameProblem || bindProblem || serverNameError) {
+      wizardFocus.requestFocus();
+      return;
+    }
     if (identityMode === "application" && (namespacesLoading || namespacesError)) return;
     setCreateStep(2);
   }
@@ -396,10 +426,14 @@ export default function IdentitiesPage() {
     wizardErrors.markAllTouched();
     if (nameProblem || bindProblem) {
       setCreateStep(1);
+      wizardFocus.requestFocus();
       return;
     }
     // Each of these is shown inline and disables the Create button.
-    if (methodsProblem || authConflict || certDaysProblem) return;
+    if (methodsProblem || authConflict || certDaysProblem) {
+      wizardFocus.requestFocus();
+      return;
+    }
     const ttlSeconds = methods.includes("mtls") ? Number(certDays) * 86400 : 0;
     const namespace =
       identityMode === "application" && bindNs.env && bindNs.app
@@ -432,7 +466,14 @@ export default function IdentitiesPage() {
         "Save the credentials below.",
       );
     } catch (err) {
-      toast.error(err, "Failed to create identity");
+      if (err instanceof ApiError && err.code === "already_exists") {
+        // The name lives on step 1: send the user back to the field, not to a toast.
+        setServerNameError(`An identity named ${n} already exists.`);
+        setCreateStep(1);
+        wizardFocus.requestFocus();
+      } else {
+        toast.error(err, "Failed to create identity");
+      }
     } finally {
       setSaving(false);
     }
@@ -445,7 +486,10 @@ export default function IdentitiesPage() {
       return;
     }
     issueErrors.markAllTouched();
-    if (issueDaysProblem) return;
+    if (issueDaysProblem) {
+      issueFocus.requestFocus();
+      return;
+    }
     const ttlSeconds = Number(issueDays) * 86400;
     setIssueBusy(true);
     try {
@@ -587,8 +631,7 @@ export default function IdentitiesPage() {
                 server.
               </div>
             </div>
-            <Button variant="outline" onClick={() => void downloadCa()} disabled={caBusy}>
-              {caBusy ? <Spinner /> : null}
+            <Button variant="outline" onClick={() => void downloadCa()} loading={caBusy}>
               <Download size={16} aria-hidden />
               Export client-issuing CA
             </Button>
@@ -635,7 +678,11 @@ export default function IdentitiesPage() {
                 const tokenRotationReason = unavailableMethodReason("token", tokenAvailability);
                 const tokenReasonId = `token-rotation-${id.name}`;
                 return (
-                  <tr key={id.name}>
+                  <tr
+                    key={id.name}
+                    data-identity={id.name}
+                    aria-current={linkedName === id.name ? "true" : undefined}
+                  >
                     <td className="mono" data-label="Name">
                       {id.name}
                     </td>
@@ -684,9 +731,6 @@ export default function IdentitiesPage() {
                           <span
                             className={
                               tokenAvailability === "allowed" ? undefined : "action-unavailable"
-                            }
-                            title={
-                              tokenAvailability === "allowed" ? undefined : tokenRotationReason
                             }
                           >
                             <Button
@@ -750,9 +794,16 @@ export default function IdentitiesPage() {
         }
         onClose={() => setCreateOpen(false)}
         dismissible={!saving}
-        footer={
+        dirty={wizardDirty}
+        initialFocus={nameInputRef}
+        footer={(close) => (
           <>
-            <Button variant="outline" onClick={() => setCreateOpen(false)} disabled={saving}>
+            {createStep === 2 && createBlockedReason ? (
+              <p className="footer-note" role="status">
+                {createBlockedReason}
+              </p>
+            ) : null}
+            <Button variant="outline" onClick={close} disabled={saving}>
               Cancel
             </Button>
             {createStep === 2 ? (
@@ -772,26 +823,20 @@ export default function IdentitiesPage() {
             ) : (
               <Button
                 onClick={() => void onCreate()}
-                disabled={
-                  saving ||
-                  methodsProblem !== null ||
-                  authConflict ||
-                  certDaysProblem !== null ||
-                  nameProblem !== null ||
-                  bindProblem !== null
-                }
+                disabled={createBlockedReason !== null}
+                loading={saving}
               >
-                {saving ? <Spinner /> : null}
                 {identityMode === "application"
                   ? "Create application credentials"
                   : "Create identity credentials"}
               </Button>
             )}
           </>
-        }
+        )}
       >
         <WizardProgress current={createStep} />
         <form
+          ref={wizardFocus.formRef}
           onSubmit={(event) => {
             event.preventDefault();
             if (createStep === 1) continueToAuthentication();
@@ -806,13 +851,18 @@ export default function IdentitiesPage() {
               </div>
               <Field
                 label="Application identity name"
-                hint="Unique name, e.g. gradethis-be"
+                hint={`Unique name, e.g. gradethis-be · ${name.length}/${MAX_IDENTITY_NAME_LENGTH}`}
                 error={nameError}
               >
                 <Input
+                  ref={nameInputRef}
                   className="font-mono"
                   value={name}
-                  onChange={(e) => setName(e.target.value)}
+                  maxLength={MAX_IDENTITY_NAME_LENGTH}
+                  onChange={(e) => {
+                    setName(e.target.value);
+                    setServerNameError(null);
+                  }}
                   onBlur={() => wizardErrors.touch("name")}
                   placeholder="gradethis-be"
                   autoComplete="off"
@@ -839,11 +889,7 @@ export default function IdentitiesPage() {
                     </Button>
                   </div>
                 ) : namespaces.length > 0 ? (
-                  <Field
-                    label="Application namespace"
-                    hint="The credential will be bound to this exact environment/application pair."
-                    error={bindError}
-                  >
+                  <>
                     <div className="form-row namespace-picker-row">
                       <NamespacePicker
                         namespaces={namespaces}
@@ -851,9 +897,15 @@ export default function IdentitiesPage() {
                         onChange={setBindNs}
                         envId="bind-env"
                         appId="bind-app"
+                        appError={bindError && !bindNs.app ? bindError : null}
+                        envError={bindError && bindNs.app ? bindError : null}
+                        onBlur={() => wizardErrors.touch("bind")}
                       />
                     </div>
-                  </Field>
+                    <p className="faint text-sm mb-4">
+                      The credential will be bound to this exact environment/application pair.
+                    </p>
+                  </>
                 ) : (
                   <div className="warn-panel mb-4">
                     No application namespaces are available.{" "}
@@ -1029,6 +1081,7 @@ export default function IdentitiesPage() {
         title={certsTarget ? `Certificates — ${certsTarget.name}` : "Certificates"}
         onClose={() => setCertsSnapshot(null)}
         dismissible={!issueBusy}
+        initialFocus={certIssueAvailability === "allowed" ? issueDaysRef : undefined}
         footer={
           <Button variant="outline" onClick={() => setCertsSnapshot(null)} disabled={issueBusy}>
             Close
@@ -1046,6 +1099,7 @@ export default function IdentitiesPage() {
             ) : null}
             {/* `.filters` is the app's label-above-control-beside-button row layout. */}
             <form
+              ref={issueFocus.formRef}
               className="filters"
               onSubmit={(event) => {
                 event.preventDefault();
@@ -1058,6 +1112,7 @@ export default function IdentitiesPage() {
                 error={issueErrors.shown("days", issueDaysProblem)}
               >
                 <Input
+                  ref={issueDaysRef}
                   id="issue-days"
                   type="number"
                   min={1}
@@ -1069,16 +1124,16 @@ export default function IdentitiesPage() {
                   onBlur={() => issueErrors.touch("days")}
                 />
               </Field>
+              {/* A bad lifetime keeps the button live: the click reveals the message
+                  next to the field instead of greying out silently. */}
               <Button
                 type="submit"
-                disabled={
-                  issueBusy || certIssueAvailability !== "allowed" || issueDaysProblem !== null
-                }
+                disabled={certIssueAvailability !== "allowed"}
+                loading={issueBusy}
                 aria-describedby={
                   certIssueAvailability === "allowed" ? undefined : "cert-issue-reason"
                 }
               >
-                {issueBusy ? <Spinner /> : null}
                 Issue new certificate
               </Button>
             </form>
@@ -1097,6 +1152,7 @@ export default function IdentitiesPage() {
                   <thead>
                     <tr>
                       <th>Fingerprint</th>
+                      <th>Serial</th>
                       <th>State</th>
                       <th>Expires</th>
                       <th>Issued</th>
@@ -1111,8 +1167,12 @@ export default function IdentitiesPage() {
                         const revocable = status.label === "valid";
                         return (
                           <tr key={cert.serial}>
-                            <td className="mono text-sm" title={`serial ${cert.serial}`}>
-                              {cert.fingerprint}
+                            <td className="mono text-sm">{cert.fingerprint}</td>
+                            <td className="mono text-sm">
+                              <span className="row-wrap">
+                                <span>{shortSerial(cert.serial)}</span>
+                                <CopyButton label="Copy serial" value={cert.serial} />
+                              </span>
                             </td>
                             <td>
                               <Badge kind={status.kind}>{status.label}</Badge>
@@ -1128,6 +1188,7 @@ export default function IdentitiesPage() {
                                     setRevokeCertTarget({
                                       name: certsTarget.name,
                                       serial: cert.serial,
+                                      fingerprint: cert.fingerprint,
                                     })
                                   }
                                 >
@@ -1152,7 +1213,8 @@ export default function IdentitiesPage() {
         danger
         message={
           <>
-            Revoke certificate <span className="mono">{revokeCertTarget?.serial}</span> for{" "}
+            Revoke certificate <span className="mono">{revokeCertTarget?.serial}</span> (fingerprint{" "}
+            <span className="mono">{revokeCertTarget?.fingerprint}</span>) for{" "}
             <span className="mono">{revokeCertTarget?.name}</span>? It stops authenticating on the
             next RPC. Other certificates for this identity keep working.
           </>
@@ -1166,6 +1228,7 @@ export default function IdentitiesPage() {
       <ConfirmDialog
         open={rotateTarget !== null}
         title="Rotate token?"
+        danger
         message={
           <>
             Rotating issues a new bearer token for <span className="mono">{rotateTarget}</span>. The
@@ -1191,6 +1254,7 @@ export default function IdentitiesPage() {
           </>
         }
         confirmLabel="Revoke identity"
+        requireText={revokeTarget ?? ""}
         busy={actionBusy}
         onConfirm={() => void onRevokeIdentity()}
         onCancel={() => setRevokeTarget(null)}
@@ -1336,6 +1400,11 @@ function CredentialsModal({
 }) {
   const [stage, setStage] = useState<3 | 4>(3);
   const [language, setLanguage] = useState<SnippetLanguage>("go");
+  // The token is masked until asked for, so a shared screen does not leak it.
+  const [revealToken, setRevealToken] = useState(false);
+  // Continue waits for an explicit acknowledgement: nothing here is retrievable later.
+  const [stored, setStored] = useState(false);
+  const storedId = useId();
 
   const snippets = credentials ? integrationSnippets(credentials) : null;
 
@@ -1363,9 +1432,16 @@ function CredentialsModal({
       onClose={onClose}
       footer={
         stage === 3 ? (
-          <Button onClick={() => setStage(4)}>
-            I&apos;ve saved {credentials?.cert && credentials.token ? "them" : "it"} — continue
-          </Button>
+          <>
+            {!stored ? (
+              <p className="footer-note" role="status">
+                Confirm the credentials are stored to continue.
+              </p>
+            ) : null}
+            <Button onClick={() => setStage(4)} disabled={!stored}>
+              I&apos;ve saved {credentials?.cert && credentials.token ? "them" : "it"} — continue
+            </Button>
+          </>
         ) : (
           <>
             <Button variant="outline" onClick={() => setStage(3)}>
@@ -1418,9 +1494,35 @@ function CredentialsModal({
                     Store this as <code>KMS_TOKEN</code> in the workload&apos;s secret manager.
                     Never expose it to browser code or source control.
                   </div>
-                  <div className="token-reveal">{credentials.token}</div>
+                  <div className="token-reveal" data-testid="token-value">
+                    {revealToken ? credentials.token : MASKED_TOKEN}
+                  </div>
                   <div className="row-wrap mt-2">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      aria-pressed={revealToken}
+                      onClick={() => setRevealToken((current) => !current)}
+                    >
+                      {revealToken ? (
+                        <EyeOff size={14} aria-hidden />
+                      ) : (
+                        <Eye size={14} aria-hidden />
+                      )}
+                      {revealToken ? "Hide token" : "Reveal token"}
+                    </Button>
                     <CopyButton label="Copy token" value={() => credentials.token ?? ""} />
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() =>
+                        credentials.token &&
+                        downloadText(`${credentials.name}.token`, credentials.token, "text/plain")
+                      }
+                    >
+                      <Download size={14} aria-hidden />
+                      Download .token
+                    </Button>
                   </div>
                 </div>
               ) : null}
@@ -1473,6 +1575,20 @@ function CredentialsModal({
                   </div>
                 </div>
               ) : null}
+
+              <div className="checkbox-row mt-4">
+                <Checkbox
+                  id={storedId}
+                  checked={stored}
+                  onCheckedChange={(checked) => setStored(checked === true)}
+                />
+                <label htmlFor={storedId}>
+                  <strong>I have stored this credential securely</strong>
+                  <span className="faint text-sm">
+                    Nothing on this screen can be shown again after you continue.
+                  </span>
+                </label>
+              </div>
             </>
           ) : (
             <>

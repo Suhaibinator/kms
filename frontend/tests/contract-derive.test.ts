@@ -10,8 +10,8 @@ import {
   jsonTypeToContentType,
   parseContractFile,
   SCHEMA_2020_12,
-  sha256Hex,
   schemaSha256Hex,
+  sha256Hex,
 } from "@/lib/contract-derive";
 
 const examples = resolve(process.cwd(), "..", "examples", "managed-config");

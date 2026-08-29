@@ -1,11 +1,14 @@
 import { Plus, Trash2 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { JsonEditor } from "@/components/JsonEditor";
 import { Modal } from "@/components/Modal";
-import { Button, Field, Input, Spinner, Textarea } from "@/components/ui";
+import { Button, Field, Input, Spinner } from "@/components/ui";
 import { AppSelect } from "@/components/ui/app-select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useToast } from "@/context/ToastContext";
 import { api, isAbortError } from "@/lib/api";
+import { useFocusFirstInvalid } from "@/lib/forms";
+import { useFieldErrors } from "@/lib/hooks";
 import type {
   ApplicationDashboard,
   ConfigurationRelease,
@@ -31,6 +34,14 @@ interface BuilderEntry {
   versions: number[];
   metadataLoading: boolean;
   contractOwned: boolean;
+}
+
+/** One entry's problems, keyed by the field that shows them. */
+export interface EntryProblems {
+  alias?: string;
+  key?: string;
+  label?: string;
+  version?: string;
 }
 
 let entryID = 0;
@@ -97,11 +108,40 @@ function requestFromEntries(
   };
 }
 
+/**
+ * Problems that belong to one entry, so each can be shown on the row that
+ * has it. A duplicate alias is reported on the later entry — the first one
+ * to claim the name is the one that keeps it.
+ */
+function entryProblems(entries: readonly BuilderEntry[]): Map<number, EntryProblems> {
+  const problems = new Map<number, EntryProblems>();
+  const aliases = new Set<string>();
+  for (const entry of entries) {
+    const mine: EntryProblems = {};
+    const alias = entry.alias.trim();
+    const aliasError = validateAlias(alias);
+    if (aliasError) mine.alias = aliasError;
+    else if (aliases.has(alias)) mine.alias = `Duplicate release alias: ${alias}`;
+    else aliases.add(alias);
+    if (!entry.key.trim()) mine.key = "Choose a resource.";
+    if (entry.selector === "label" && !entry.label) mine.label = "Choose a label.";
+    if (
+      entry.selector === "version" &&
+      (!Number.isInteger(Number(entry.version)) || Number(entry.version) < 1)
+    ) {
+      mine.version = "Choose a valid version.";
+    }
+    if (Object.keys(mine).length > 0) problems.set(entry.id, mine);
+  }
+  return problems;
+}
+
+/** The release-level checks: name, schema pin, metadata and the entry count. */
 function builderError(
   name: string,
   schemaID: string,
   schemaVersion: string,
-  entries: BuilderEntry[],
+  entries: readonly BuilderEntry[],
   metadataJSON: string,
 ): string | null {
   const nameError = validateReleaseName(name.trim());
@@ -117,24 +157,29 @@ function builderError(
   }
   const metadataError = validateMetadataJson(metadataJSON.trim() || "{}");
   if (metadataError) return metadataError;
-  const aliases = new Set<string>();
-  for (const entry of entries) {
-    const aliasError = validateAlias(entry.alias.trim());
-    if (aliasError) return aliasError;
-    if (aliases.has(entry.alias.trim())) return `Duplicate release alias: ${entry.alias.trim()}`;
-    aliases.add(entry.alias.trim());
-    if (!entry.key.trim()) return `Choose a resource for ${entry.alias.trim() || "each entry"}.`;
-    if (entry.selector === "label" && !entry.label) {
-      return `Choose a label for ${entry.alias.trim()}.`;
-    }
-    if (
-      entry.selector === "version" &&
-      (!Number.isInteger(Number(entry.version)) || Number(entry.version) < 1)
-    ) {
-      return `Choose a valid version for ${entry.alias.trim()}.`;
-    }
-  }
+  if (entries.length === 0) return "Add at least one entry.";
   return null;
+}
+
+interface GuidedSnapshot {
+  name: string;
+  schemaID: string;
+  schemaVersion: string;
+  entries: string;
+  metadataJSON: string;
+}
+
+function entriesKey(entries: readonly BuilderEntry[]): string {
+  return JSON.stringify(
+    entries.map((entry) => [
+      entry.alias,
+      entry.kind,
+      entry.key,
+      entry.selector,
+      entry.label,
+      entry.version,
+    ]),
+  );
 }
 
 export function ReleaseBuilder({
@@ -164,12 +209,20 @@ export function ReleaseBuilder({
   const [metadataJSON, setMetadataJSON] = useState("{}");
   const [jsonText, setJSONText] = useState("");
   const [attempted, setAttempted] = useState(false);
+  // What the load put on screen; the dirty guard compares against it.
+  const [snapshot, setSnapshot] = useState<GuidedSnapshot | null>(null);
   const generation = useRef(0);
   // Per-entry generation + controller so a second resource selection
   // supersedes the first one's metadata response instead of racing it.
   const metadataLoads = useRef(
     new Map<number, { generation: number; controller: AbortController }>(),
   );
+  // Keys are composite (`<entry id>-alias`), hence the plain string form.
+  const entryErrors = useFieldErrors<string>();
+  const resetEntryErrors = entryErrors.reset;
+  const { formRef, requestFocus } = useFocusFirstInvalid<HTMLDivElement>();
+  const schemaIDRef = useRef<HTMLInputElement>(null);
+  const firstResourceRef = useRef<HTMLButtonElement>(null);
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: `loadAttempt` exists only to re-run this load from Retry.
   useEffect(() => {
@@ -179,18 +232,21 @@ export function ReleaseBuilder({
     setLoading(true);
     setLoadError(null);
     setAttempted(false);
+    resetEntryErrors();
     setMode("guided");
     setModeMessage("");
+    setJSONText("");
+    setSnapshot(null);
     void api
       .applicationDashboard(namespace.app, { signal: controller.signal })
       .then((result) => {
         if (generation.current !== currentGeneration) return;
         setDashboard(result);
-        setName(result.application.release_name || "runtime");
-        setSchemaID(result.application.schema_id || "");
-        setSchemaVersion(
-          result.application.schema_id ? String(result.application.schema_version) : "",
-        );
+        const nextName = result.application.release_name || "runtime";
+        const nextSchemaID = result.application.schema_id || "";
+        const nextSchemaVersion = result.application.schema_id
+          ? String(result.application.schema_version)
+          : "";
         const nextEntries = result.application.contract.map((field) => {
           const candidates = result.rows.filter(
             (row) => row.kind === field.kind && row.environments[namespace.env]?.present,
@@ -204,8 +260,19 @@ export function ReleaseBuilder({
             key: directMatch?.key ?? "",
           };
         });
-        setEntries(nextEntries.length ? nextEntries : [blankEntry(false)]);
+        const seeded = nextEntries.length ? nextEntries : [blankEntry(false)];
+        setName(nextName);
+        setSchemaID(nextSchemaID);
+        setSchemaVersion(nextSchemaVersion);
+        setEntries(seeded);
         setMetadataJSON("{}");
+        setSnapshot({
+          name: nextName,
+          schemaID: nextSchemaID,
+          schemaVersion: nextSchemaVersion,
+          entries: entriesKey(seeded),
+          metadataJSON: "{}",
+        });
       })
       .catch((error: unknown) => {
         if (generation.current !== currentGeneration || isAbortError(error)) return;
@@ -214,8 +281,16 @@ export function ReleaseBuilder({
         setName("");
         setSchemaID("");
         setSchemaVersion("");
-        setEntries([blankEntry(false)]);
+        const seeded = [blankEntry(false)];
+        setEntries(seeded);
         setMetadataJSON("{}");
+        setSnapshot({
+          name: "",
+          schemaID: "",
+          schemaVersion: "",
+          entries: entriesKey(seeded),
+          metadataJSON: "{}",
+        });
         setLoadError(error);
         toast.error(error, "Failed to load the release builder");
       })
@@ -231,11 +306,24 @@ export function ReleaseBuilder({
     metadataLoads.current.clear();
   }, [open]);
 
-  const guidedProblem = useMemo(
+  const problems = useMemo(() => entryProblems(entries), [entries]);
+  const releaseProblem = useMemo(
     () => builderError(name, schemaID, schemaVersion, entries, metadataJSON),
     [entries, metadataJSON, name, schemaID, schemaVersion],
   );
+  const guidedProblem = releaseProblem ?? (problems.size > 0 ? "entries" : null);
   const jsonProblem = useMemo(() => releaseDefinitionError(jsonText), [jsonText]);
+
+  const dirty =
+    snapshot !== null &&
+    !saving &&
+    (mode === "json"
+      ? jsonText !== prettyDefinitionFor(snapshot, namespace)
+      : name !== snapshot.name ||
+        schemaID !== snapshot.schemaID ||
+        schemaVersion !== snapshot.schemaVersion ||
+        entriesKey(entries) !== snapshot.entries ||
+        metadataJSON !== snapshot.metadataJSON);
 
   function guidedRequest(): CreateReleaseRequest {
     return requestFromEntries(namespace, name, schemaID, schemaVersion, entries, metadataJSON);
@@ -332,8 +420,11 @@ export function ReleaseBuilder({
 
   async function createRelease() {
     setAttempted(true);
-    if (mode === "guided" && guidedProblem) return;
-    if (mode === "json" && jsonProblem) return;
+    entryErrors.markAllTouched();
+    if ((mode === "guided" && guidedProblem) || (mode === "json" && jsonProblem)) {
+      requestFocus();
+      return;
+    }
     const request: CreateReleaseRequest =
       mode === "guided" ? guidedRequest() : { ...parseReleaseDefinition(jsonText), namespace };
     setSaving(true);
@@ -349,29 +440,33 @@ export function ReleaseBuilder({
     }
   }
 
-  // Guided mode stays clickable so the click can reveal guidedProblem inline;
+  // Guided mode stays clickable so the click can reveal every problem inline;
   // JSON mode already shows its error unconditionally, so it keeps the disable.
-  const createDisabled =
-    saving || loading || Boolean(loadError) || (mode === "json" && Boolean(jsonProblem));
+  const createDisabled = loading || Boolean(loadError) || (mode === "json" && Boolean(jsonProblem));
+  const schemaEditable = !dashboard?.application.schema_id;
+  const entryCount = entries.length;
+  const problemCount = problems.size;
 
   return (
     <Modal
       open={open}
       workspace
       dismissible={!saving}
+      dirty={dirty}
       title={`New release · ${namespace.env}/${namespace.app}`}
+      description="Releases are immutable: every create allocates the next version."
       onClose={onClose}
-      footer={
+      initialFocus={schemaEditable ? schemaIDRef : firstResourceRef}
+      footer={(close) => (
         <>
-          <Button variant="outline" onClick={onClose} disabled={saving}>
+          <Button variant="outline" onClick={close} disabled={saving}>
             Cancel
           </Button>
-          <Button onClick={() => void createRelease()} disabled={createDisabled}>
-            {saving ? <Spinner /> : null}
-            Create immutable version
+          <Button onClick={() => void createRelease()} disabled={createDisabled} loading={saving}>
+            Create release
           </Button>
         </>
-      }
+      )}
     >
       {loading ? (
         <div className="loading-block" role="status">
@@ -403,8 +498,8 @@ export function ReleaseBuilder({
               <TabsTrigger value="json">JSON</TabsTrigger>
             </TabsList>
             <div className="text-sm faint">
-              {entries.length} {entries.length === 1 ? "entry" : "entries"} · selectors are resolved
-              when the release is created
+              {entryCount} {entryCount === 1 ? "entry" : "entries"} · selectors are resolved when
+              the release is created
             </div>
           </div>
 
@@ -415,208 +510,223 @@ export function ReleaseBuilder({
           ) : null}
 
           <TabsContent value="guided">
-            <div className="release-builder-basics">
-              <Field label="Release name" hint="Owned by the selected application.">
-                <Input className="font-mono" value={name} disabled />
-              </Field>
-              <Field label="Schema ID" hint="Leave both schema fields empty for no schema.">
-                <Input
-                  className="font-mono"
-                  value={schemaID}
-                  disabled={Boolean(dashboard?.application.schema_id)}
-                  onChange={(event) => setSchemaID(event.target.value)}
-                  placeholder="go-common/runtime"
-                />
-              </Field>
-              <Field label="Schema version">
-                <Input
-                  className="font-mono"
-                  inputMode="numeric"
-                  value={schemaVersion}
-                  disabled={Boolean(dashboard?.application.schema_id)}
-                  onChange={(event) => setSchemaVersion(event.target.value)}
-                  placeholder="1"
-                />
-              </Field>
-            </div>
-
-            <div className="between mb-3 mt-4">
-              <div>
-                <h2 className="section-title">Release entries</h2>
-                <p className="text-sm faint">
-                  Contract fields are fixed; choose which resource version supplies each alias.
-                </p>
+            <div ref={formRef}>
+              <div className="release-builder-basics">
+                <Field label="Release name" hint="Owned by the selected application.">
+                  <Input className="font-mono" value={name} disabled />
+                </Field>
+                <Field label="Schema ID" hint="Leave both schema fields empty for no schema.">
+                  <Input
+                    ref={schemaIDRef}
+                    className="font-mono"
+                    value={schemaID}
+                    disabled={!schemaEditable}
+                    onChange={(event) => setSchemaID(event.target.value)}
+                    placeholder="go-common/runtime"
+                  />
+                </Field>
+                <Field label="Schema version">
+                  <Input
+                    className="font-mono"
+                    inputMode="numeric"
+                    value={schemaVersion}
+                    disabled={!schemaEditable}
+                    onChange={(event) => setSchemaVersion(event.target.value)}
+                    placeholder="1"
+                  />
+                </Field>
               </div>
-              {dashboard?.application.contract.length ? null : (
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => setEntries((current) => [...current, blankEntry(false)])}
-                >
-                  <Plus size={15} aria-hidden />
-                  Add entry
-                </Button>
-              )}
-            </div>
 
-            <div className="release-builder-entries">
-              {entries.map((entry) => {
-                const resources = (dashboard?.rows ?? [])
-                  .filter(
-                    (row) =>
-                      row.kind === entry.kind &&
-                      row.environments[namespace.env]?.present &&
-                      (!entry.contentType ||
-                        row.environments[namespace.env]?.content_type === entry.contentType),
-                  )
-                  .map((row) => ({ value: row.key, label: row.key }));
-                if (entry.key && !resources.some((resource) => resource.value === entry.key)) {
-                  resources.unshift({ value: entry.key, label: entry.key });
-                }
-                return (
-                  <div className="release-builder-entry" key={entry.id}>
-                    <Field label="Alias">
-                      <Input
-                        className="font-mono"
-                        value={entry.alias}
-                        disabled={entry.contractOwned}
-                        onChange={(event) => updateEntry(entry.id, { alias: event.target.value })}
-                      />
-                    </Field>
-                    <Field label="Kind">
-                      <AppSelect
-                        value={entry.kind}
-                        disabled={entry.contractOwned}
-                        onValueChange={(kind) =>
-                          updateEntry(entry.id, {
-                            kind: kind as ReleaseEntryKind,
-                            key: "",
-                            labels: [],
-                            versions: [],
-                          })
-                        }
-                        options={[
-                          { value: "parameter", label: "Parameter" },
-                          { value: "secret", label: "Secret" },
-                        ]}
-                      />
-                    </Field>
-                    <Field label="Resource">
-                      <AppSelect
-                        value={entry.key}
-                        onValueChange={(key) => {
-                          updateEntry(entry.id, {
-                            key,
-                            label: "",
-                            version: "",
-                            labels: [],
-                            versions: [],
-                          });
-                          if (entry.selector !== "current") {
-                            void loadSelectorMetadata({
-                              ...entry,
+              <div className="between mb-3 mt-4">
+                <div>
+                  <h2 className="section-title">Release entries</h2>
+                  <p className="text-sm faint">
+                    Contract fields are fixed; choose which resource version supplies each alias.
+                  </p>
+                </div>
+                {dashboard?.application.contract.length ? null : (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setEntries((current) => [...current, blankEntry(false)])}
+                  >
+                    <Plus size={15} aria-hidden />
+                    Add entry
+                  </Button>
+                )}
+              </div>
+
+              <div className="release-builder-entries">
+                {entries.map((entry, index) => {
+                  const resources = (dashboard?.rows ?? [])
+                    .filter(
+                      (row) =>
+                        row.kind === entry.kind &&
+                        row.environments[namespace.env]?.present &&
+                        (!entry.contentType ||
+                          row.environments[namespace.env]?.content_type === entry.contentType),
+                    )
+                    .map((row) => ({ value: row.key, label: row.key }));
+                  if (entry.key && !resources.some((resource) => resource.value === entry.key)) {
+                    resources.unshift({ value: entry.key, label: entry.key });
+                  }
+                  const mine = problems.get(entry.id) ?? {};
+                  const errorFor = (field: keyof EntryProblems) =>
+                    entryErrors.shown(`${entry.id}-${field}`, mine[field]);
+                  const touch = (field: keyof EntryProblems) =>
+                    entryErrors.touch(`${entry.id}-${field}`);
+                  return (
+                    <div className="release-builder-entry" key={entry.id}>
+                      <Field label="Alias" error={errorFor("alias")}>
+                        <Input
+                          className="font-mono"
+                          value={entry.alias}
+                          disabled={entry.contractOwned}
+                          onChange={(event) => updateEntry(entry.id, { alias: event.target.value })}
+                          onBlur={() => touch("alias")}
+                        />
+                      </Field>
+                      <Field label="Kind">
+                        <AppSelect
+                          value={entry.kind}
+                          disabled={entry.contractOwned}
+                          onValueChange={(kind) =>
+                            updateEntry(entry.id, {
+                              kind: kind as ReleaseEntryKind,
+                              key: "",
+                              labels: [],
+                              versions: [],
+                            })
+                          }
+                          options={[
+                            { value: "parameter", label: "Parameter" },
+                            { value: "secret", label: "Secret" },
+                          ]}
+                        />
+                      </Field>
+                      <Field label="Resource" error={errorFor("key")}>
+                        <AppSelect
+                          ref={index === 0 ? firstResourceRef : undefined}
+                          value={entry.key}
+                          onValueChange={(key) => {
+                            updateEntry(entry.id, {
                               key,
                               label: "",
                               version: "",
                               labels: [],
                               versions: [],
                             });
-                          }
-                        }}
-                        placeholder={`Choose ${entry.kind}…`}
-                        options={resources}
-                      />
-                    </Field>
-                    <Field label="Selector">
-                      <AppSelect
-                        value={entry.selector}
-                        onValueChange={(selector) => {
-                          const next = selector as SelectorKind;
-                          updateEntry(entry.id, { selector: next, label: "", version: "" });
-                          if (next !== "current") void loadSelectorMetadata(entry);
-                        }}
-                        options={[
-                          { value: "current", label: "Current" },
-                          { value: "label", label: "Label" },
-                          { value: "version", label: "Exact version" },
-                        ]}
-                      />
-                    </Field>
-                    {entry.selector === "label" ? (
-                      <Field label="Label">
-                        <AppSelect
-                          value={entry.label}
-                          onValueChange={(label) => updateEntry(entry.id, { label })}
-                          disabled={entry.metadataLoading}
-                          placeholder={entry.metadataLoading ? "Loading…" : "Choose label…"}
-                          options={entry.labels.map((label) => ({ value: label, label }))}
+                            if (entry.selector !== "current") {
+                              void loadSelectorMetadata({
+                                ...entry,
+                                key,
+                                label: "",
+                                version: "",
+                                labels: [],
+                                versions: [],
+                              });
+                            }
+                          }}
+                          onBlur={() => touch("key")}
+                          placeholder={`Choose ${entry.kind}…`}
+                          options={resources}
                         />
                       </Field>
-                    ) : entry.selector === "version" ? (
-                      <Field label="Version">
+                      <Field label="Selector">
                         <AppSelect
-                          value={entry.version}
-                          onValueChange={(version) => updateEntry(entry.id, { version })}
-                          disabled={entry.metadataLoading}
-                          placeholder={entry.metadataLoading ? "Loading…" : "Choose version…"}
-                          options={entry.versions.map((version) => ({
-                            value: String(version),
-                            label: `v${version}`,
-                          }))}
+                          value={entry.selector}
+                          onValueChange={(selector) => {
+                            const next = selector as SelectorKind;
+                            updateEntry(entry.id, { selector: next, label: "", version: "" });
+                            if (next !== "current") void loadSelectorMetadata(entry);
+                          }}
+                          options={[
+                            { value: "current", label: "Current" },
+                            { value: "label", label: "Label" },
+                            { value: "version", label: "Exact version" },
+                          ]}
                         />
                       </Field>
-                    ) : (
-                      <div className="release-builder-current faint text-sm">
-                        Resolved at creation
-                      </div>
-                    )}
-                    {entry.contractOwned ? null : (
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        aria-label={`Remove ${entry.alias || "entry"}`}
-                        onClick={() => {
-                          metadataLoads.current.get(entry.id)?.controller.abort();
-                          metadataLoads.current.delete(entry.id);
-                          setEntries((current) => current.filter((item) => item.id !== entry.id));
-                        }}
-                      >
-                        <Trash2 size={15} aria-hidden />
-                      </Button>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
-
-            <details className="advanced-panel mt-4">
-              <summary>Advanced release metadata</summary>
-              <Field
-                label="Metadata JSON"
-                error={attempted ? validateMetadataJson(metadataJSON) : null}
-              >
-                <Textarea
-                  className="font-mono"
-                  rows={4}
-                  value={metadataJSON}
-                  onChange={(event) => setMetadataJSON(event.target.value)}
-                  spellCheck={false}
-                />
-              </Field>
-            </details>
-
-            {attempted && guidedProblem ? (
-              <div className="danger-panel mt-4" role="alert">
-                {guidedProblem}
+                      {entry.selector === "label" ? (
+                        <Field label="Label" error={errorFor("label")}>
+                          <AppSelect
+                            value={entry.label}
+                            onValueChange={(label) => updateEntry(entry.id, { label })}
+                            onBlur={() => touch("label")}
+                            disabled={entry.metadataLoading}
+                            placeholder={entry.metadataLoading ? "Loading…" : "Choose label…"}
+                            options={entry.labels.map((label) => ({ value: label, label }))}
+                          />
+                        </Field>
+                      ) : entry.selector === "version" ? (
+                        <Field label="Version" error={errorFor("version")}>
+                          <AppSelect
+                            value={entry.version}
+                            onValueChange={(version) => updateEntry(entry.id, { version })}
+                            onBlur={() => touch("version")}
+                            disabled={entry.metadataLoading}
+                            placeholder={entry.metadataLoading ? "Loading…" : "Choose version…"}
+                            options={entry.versions.map((version) => ({
+                              value: String(version),
+                              label: `v${version}`,
+                            }))}
+                          />
+                        </Field>
+                      ) : (
+                        <div className="release-builder-current faint text-sm">
+                          Resolved at creation
+                        </div>
+                      )}
+                      {entry.contractOwned ? null : (
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          aria-label={`Remove ${entry.alias || "entry"}`}
+                          onClick={() => {
+                            metadataLoads.current.get(entry.id)?.controller.abort();
+                            metadataLoads.current.delete(entry.id);
+                            setEntries((current) => current.filter((item) => item.id !== entry.id));
+                          }}
+                        >
+                          <Trash2 size={15} aria-hidden />
+                        </Button>
+                      )}
+                    </div>
+                  );
+                })}
               </div>
-            ) : null}
 
-            <div className="release-builder-review mt-4">
-              <strong>Ready to create</strong>
-              <span className="text-sm faint">
-                {name || "Unnamed release"} · {entries.length} immutable pins
-                {schemaID ? ` · ${schemaID}@${schemaVersion}` : " · no schema"}
-              </span>
+              <details className="advanced-panel mt-4">
+                <summary>Advanced release metadata</summary>
+                <Field
+                  label="Metadata JSON"
+                  error={attempted ? validateMetadataJson(metadataJSON) : null}
+                >
+                  <JsonEditor
+                    value={metadataJSON}
+                    onChange={setMetadataJSON}
+                    toolbar="minimal"
+                    rows={4}
+                    maxHeight="30vh"
+                    onSubmit={() => void createRelease()}
+                  />
+                </Field>
+              </details>
+
+              {attempted && guidedProblem ? (
+                <div className="danger-panel mt-4" role="alert">
+                  {releaseProblem ??
+                    `${problemCount} ${problemCount === 1 ? "entry needs" : "entries need"} attention.`}
+                </div>
+              ) : null}
+
+              <div className="release-builder-review mt-4">
+                <strong>Ready to create</strong>
+                <span className="text-sm faint">
+                  {name || "Unnamed release"} · {entryCount} immutable pins
+                  {schemaID ? ` · ${schemaID}@${schemaVersion}` : " · no schema"}
+                </span>
+              </div>
             </div>
           </TabsContent>
 
@@ -626,14 +736,15 @@ export function ReleaseBuilder({
               hint="JSON mode supports the complete API shape, including cross-namespace references."
               error={attempted || jsonProblem ? jsonProblem : null}
             >
-              <Textarea
-                className="release-json-editor min-h-[60dvh] font-mono"
+              <JsonEditor
                 value={jsonText}
-                onChange={(event) => {
-                  setJSONText(event.target.value);
+                onChange={(text) => {
+                  setJSONText(text);
                   setModeMessage("");
                 }}
-                spellCheck={false}
+                rows={24}
+                maxHeight="60dvh"
+                onSubmit={() => void createRelease()}
               />
             </Field>
           </TabsContent>
@@ -641,4 +752,33 @@ export function ReleaseBuilder({
       )}
     </Modal>
   );
+}
+
+/** The JSON tab's text for an untouched guided form, so switching tabs alone is not "dirty". */
+function prettyDefinitionFor(snapshot: GuidedSnapshot, namespace: NamespaceRef): string {
+  const entries = JSON.parse(snapshot.entries) as Array<
+    [string, ReleaseEntryKind, string, SelectorKind, string, string]
+  >;
+  const { namespace: _namespace, ...request } = requestFromEntries(
+    namespace,
+    snapshot.name,
+    snapshot.schemaID,
+    snapshot.schemaVersion,
+    entries.map(([alias, kind, key, selector, label, version]) => ({
+      id: 0,
+      alias,
+      kind,
+      contentType: "",
+      key,
+      selector,
+      label,
+      version,
+      labels: [],
+      versions: [],
+      metadataLoading: false,
+      contractOwned: false,
+    })),
+    snapshot.metadataJSON,
+  );
+  return prettyDefinition(request);
 }

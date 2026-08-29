@@ -1,6 +1,7 @@
-import { useEffect, useId, useMemo, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
+import { JsonEditor } from "@/components/JsonEditor";
 import { Modal } from "@/components/Modal";
-import { Field, Input, Spinner, Textarea } from "@/components/ui";
+import { Field, Input } from "@/components/ui";
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/context/ToastContext";
 import { api } from "@/lib/api";
@@ -32,17 +33,24 @@ export function DeriveSchemaDialog({
 }) {
   const toast = useToast();
   const formId = useId();
+  const schemaIdRef = useRef<HTMLInputElement>(null);
   const derived = useMemo(
     () => deriveSchemaFromContract(application.contract, existingSchemaJson),
     [application.contract, existingSchemaJson],
   );
   const [schemaId, setSchemaId] = useState("");
   const [schemaJson, setSchemaJson] = useState("");
+  const [opened, setOpened] = useState({ schemaId: "", schemaJson: "" });
   const [saving, setSaving] = useState(false);
   useEffect(() => {
     if (!open) return;
-    setSchemaId(application.schema_id || defaultSchemaId(application));
-    setSchemaJson(derived.schemaJson);
+    const initial = {
+      schemaId: application.schema_id || defaultSchemaId(application),
+      schemaJson: derived.schemaJson,
+    };
+    setSchemaId(initial.schemaId);
+    setSchemaJson(initial.schemaJson);
+    setOpened(initial);
     setSaving(false);
   }, [open, application, derived.schemaJson]);
 
@@ -58,6 +66,7 @@ export function DeriveSchemaDialog({
   }, [schemaJson]);
   const idProblem = schemaId.trim() ? null : "Schema ID is required.";
   const blocking = idProblem ?? jsonProblem;
+  const dirty = schemaId !== opened.schemaId || schemaJson !== opened.schemaJson;
 
   async function submit() {
     if (saving || blocking) return;
@@ -87,18 +96,24 @@ export function DeriveSchemaDialog({
       title="Derive schema from contract"
       onClose={onClose}
       dismissible={!saving}
+      dirty={dirty && !saving}
+      initialFocus={schemaIdRef}
       wide
-      footer={
+      footer={(close) => (
         <>
-          <Button type="button" variant="outline" onClick={onClose} disabled={saving}>
+          {blocking && !saving ? (
+            <p className="footer-note" role="status">
+              {blocking}
+            </p>
+          ) : null}
+          <Button type="button" variant="outline" onClick={close} disabled={saving}>
             Cancel
           </Button>
-          <Button form={formId} type="submit" disabled={saving || blocking !== null}>
-            {saving ? <Spinner /> : null}
+          <Button form={formId} type="submit" loading={saving} disabled={blocking !== null}>
             Register and pin
           </Button>
         </>
-      }
+      )}
     >
       <form
         id={formId}
@@ -120,18 +135,19 @@ export function DeriveSchemaDialog({
         ) : null}
         <Field label="Schema ID" error={idProblem}>
           <Input
+            ref={schemaIdRef}
             className="font-mono"
             value={schemaId}
             onChange={(event) => setSchemaId(event.target.value)}
           />
         </Field>
         <Field label="Schema JSON" error={jsonProblem}>
-          <Textarea
-            className="font-mono"
-            rows={14}
+          <JsonEditor
             value={schemaJson}
-            onChange={(event) => setSchemaJson(event.target.value)}
-            spellCheck={false}
+            onChange={setSchemaJson}
+            rows={14}
+            maxHeight="50vh"
+            onSubmit={() => void submit()}
           />
         </Field>
       </form>

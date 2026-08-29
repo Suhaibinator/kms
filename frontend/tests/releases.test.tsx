@@ -1,6 +1,7 @@
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ApiError } from "@/lib/api";
+import { links } from "@/lib/links";
 import ReleasesPage from "@/pages/releases";
 
 const mocks = vi.hoisted(() => ({
@@ -40,6 +41,16 @@ vi.mock("@/lib/hooks", async (importOriginal) => {
       namespaces: [
         {
           env: "prod",
+          app: "payments",
+          description: "",
+          allowed_auth_methods: [],
+          created_by: "admin",
+          created_at_unix_ms: 1,
+          parameter_count: 1,
+          secret_count: 0,
+        },
+        {
+          env: "dev",
           app: "payments",
           description: "",
           allowed_auth_methods: [],
@@ -281,6 +292,8 @@ describe("ReleasesPage", () => {
 
     fireEvent.click(within(dialog).getByRole("button", { name: "Activate" }));
     const confirm = await screen.findByRole("dialog", { name: "Activate release?" });
+    // prod asks for the environment name before activating.
+    fireEvent.change(within(confirm).getByRole("textbox"), { target: { value: "prod" } });
     fireEvent.click(within(confirm).getByRole("button", { name: "Activate release" }));
     await waitFor(() => expect(mocks.listReleases).toHaveBeenCalledTimes(2));
 
@@ -321,7 +334,58 @@ describe("ReleasesPage", () => {
     expect(panel).toHaveTextContent("runtime@2 failed validation");
     expect(within(panel).getByText("expected boolean")).toBeVisible();
     expect(within(panel).getByText("/properties/enabled")).toBeVisible();
+    // The violation row links to the parameter the alias pins.
+    expect(within(panel).getByRole("link", { name: "Open runtime" })).toHaveAttribute(
+      "href",
+      links.parameterDetail({ env: "prod", app: "payments", key: "runtime" }),
+    );
     expect(mocks.toast.error).not.toHaveBeenCalled();
+  });
+
+  it("requires the environment name to activate into production, but not elsewhere", async () => {
+    mocks.query = { app: "payments", env: "prod", name: "runtime" };
+    mocks.listReleases.mockResolvedValue({
+      releases: [{ release: releaseV2, current: false, previous: false, activation_revision: 0 }],
+      next_page_token: "",
+    });
+    mocks.getActiveRelease.mockRejectedValue(new ApiError("not_found", "none", 404));
+    mocks.activateRelease.mockResolvedValue({
+      release: releaseV2,
+      activation_revision: 1,
+      previous_version: 0,
+      changed: true,
+    });
+
+    const { unmount } = render(<ReleasesPage />);
+    fireEvent.click(await screen.findByRole("button", { name: "Activate" }));
+    const confirm = await screen.findByRole("dialog", { name: "Activate release?" });
+    const activate = within(confirm).getByRole("button", { name: "Activate release" });
+    expect(activate).toBeDisabled();
+    fireEvent.change(within(confirm).getByRole("textbox"), { target: { value: "production" } });
+    expect(activate).toBeDisabled();
+    fireEvent.change(within(confirm).getByRole("textbox"), { target: { value: "prod" } });
+    expect(activate).toBeEnabled();
+    fireEvent.click(activate);
+    await waitFor(() => expect(mocks.activateRelease).toHaveBeenCalledTimes(1));
+    unmount();
+
+    mocks.query = { app: "payments", env: "dev", name: "runtime" };
+    mocks.listReleases.mockResolvedValue({
+      releases: [
+        {
+          release: { ...releaseV2, namespace: { env: "dev", app: "payments" } },
+          current: false,
+          previous: false,
+          activation_revision: 0,
+        },
+      ],
+      next_page_token: "",
+    });
+    render(<ReleasesPage />);
+    fireEvent.click(await screen.findByRole("button", { name: "Activate" }));
+    const devConfirm = await screen.findByRole("dialog", { name: "Activate release?" });
+    expect(within(devConfirm).queryByRole("textbox")).toBeNull();
+    expect(within(devConfirm).getByRole("button", { name: "Activate release" })).toBeEnabled();
   });
 
   it("refreshes the list after creating a release that matches the active name filter", async () => {
@@ -335,7 +399,7 @@ describe("ReleasesPage", () => {
     fireEvent.click(screen.getAllByRole("button", { name: "New release" })[0]);
     const dialog = await screen.findByRole("dialog", { name: "New release · prod/payments" });
     await within(dialog).findByRole("textbox", { name: "Release name" });
-    fireEvent.click(within(dialog).getByRole("button", { name: "Create immutable version" }));
+    fireEvent.click(within(dialog).getByRole("button", { name: "Create release" }));
 
     await waitFor(() => expect(mocks.createRelease).toHaveBeenCalledTimes(1));
     await waitFor(() => expect(mocks.listReleases).toHaveBeenCalledTimes(2));
@@ -374,7 +438,7 @@ describe("ReleasesPage", () => {
     expect(await within(dialog).findByRole("textbox", { name: "Release name" })).toBeDisabled();
     expect(within(dialog).getByRole("textbox", { name: "Schema ID" })).toBeDisabled();
 
-    fireEvent.click(within(dialog).getByRole("button", { name: "Create immutable version" }));
+    fireEvent.click(within(dialog).getByRole("button", { name: "Create release" }));
     await waitFor(() =>
       expect(mocks.createRelease).toHaveBeenCalledWith({
         namespace: { env: "prod", app: "payments" },
@@ -409,7 +473,7 @@ describe("ReleasesPage", () => {
       target: { value: "{" },
     });
     expect(within(dialog).getByText(/Definition must be valid JSON/)).toBeVisible();
-    expect(within(dialog).getByRole("button", { name: "Create immutable version" })).toBeDisabled();
+    expect(within(dialog).getByRole("button", { name: "Create release" })).toBeDisabled();
 
     fireEvent.click(within(dialog).getByRole("tab", { name: "Guided" }));
     expect(
@@ -431,12 +495,48 @@ describe("ReleasesPage", () => {
     await within(dialog).findByRole("textbox", { name: "Alias" });
     expect(within(dialog).queryByRole("alert")).toBeNull();
 
-    const create = within(dialog).getByRole("button", { name: "Create immutable version" });
+    const create = within(dialog).getByRole("button", { name: "Create release" });
     expect(create).toBeEnabled();
     fireEvent.click(create);
 
-    expect(within(dialog).getByRole("alert")).toHaveTextContent("Alias is required.");
+    // The alias field carries its own message; the panel counts the rows.
+    const alerts = within(dialog)
+      .getAllByRole("alert")
+      .map((alert) => alert.textContent);
+    expect(alerts).toContain("Alias is required.");
+    expect(alerts).toContain("Choose a resource.");
+    expect(alerts).toContain("1 entry needs attention.");
+    expect(within(dialog).getByRole("textbox", { name: "Alias" })).toHaveAttribute(
+      "aria-invalid",
+      "true",
+    );
     expect(mocks.createRelease).not.toHaveBeenCalled();
+  });
+
+  it("refuses a release with no entries and asks before discarding an edit", async () => {
+    mocks.query = { app: "payments", env: "prod" };
+    mocks.applicationDashboard.mockResolvedValue(dashboardWithoutContract);
+
+    render(<ReleasesPage />);
+    await screen.findByText("No releases found");
+    fireEvent.click(screen.getAllByRole("button", { name: "New release" })[0]);
+    const dialog = await screen.findByRole("dialog", { name: "New release · prod/payments" });
+    await within(dialog).findByRole("textbox", { name: "Alias" });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Remove entry" }));
+    fireEvent.click(within(dialog).getByRole("button", { name: "Create release" }));
+    expect(within(dialog).getByRole("alert")).toHaveTextContent("Add at least one entry.");
+    expect(mocks.createRelease).not.toHaveBeenCalled();
+
+    // Removing the seeded entry is an edit: closing asks first.
+    fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    const discard = await screen.findByRole("dialog", { name: "Discard changes?", hidden: true });
+    fireEvent.click(within(discard).getByRole("button", { name: "Keep editing", hidden: true }));
+    await waitFor(() =>
+      expect(
+        screen.queryByRole("dialog", { name: "Discard changes?", hidden: true }),
+      ).not.toBeInTheDocument(),
+    );
+    expect(screen.getByRole("dialog", { name: "New release · prod/payments" })).toBeInTheDocument();
   });
 
   it("rejects an unknown entry kind in JSON mode", async () => {
@@ -458,7 +558,7 @@ describe("ReleasesPage", () => {
       },
     });
     expect(within(dialog).getByText(/kind must be parameter or secret/)).toBeVisible();
-    expect(within(dialog).getByRole("button", { name: "Create immutable version" })).toBeDisabled();
+    expect(within(dialog).getByRole("button", { name: "Create release" })).toBeDisabled();
   });
 
   it("clears the form and offers Retry when the application contract fails to load", async () => {
@@ -474,7 +574,7 @@ describe("ReleasesPage", () => {
     const panel = await within(dialog).findByRole("alert");
     expect(panel).toHaveTextContent("gateway timeout");
     expect(within(dialog).queryByRole("textbox", { name: "Release name" })).toBeNull();
-    expect(within(dialog).getByRole("button", { name: "Create immutable version" })).toBeDisabled();
+    expect(within(dialog).getByRole("button", { name: "Create release" })).toBeDisabled();
 
     fireEvent.click(within(panel).getByRole("button", { name: "Retry" }));
     expect(await within(dialog).findByRole("textbox", { name: "Release name" })).toHaveValue(
@@ -492,12 +592,37 @@ describe("ReleasesPage", () => {
     const editor = within(dialog).getByRole("textbox", { name: "JSON Schema definition" });
     fireEvent.change(editor, { target: { value: "{" } });
     expect(editor).toHaveValue("{");
+    // An edited definition is guarded: Cancel asks before discarding.
     fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    const discard = await screen.findByRole("dialog", { name: "Discard changes?", hidden: true });
+    fireEvent.click(within(discard).getByRole("button", { name: "Discard", hidden: true }));
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog", { name: "Register JSON Schema" })).toBeNull(),
+    );
 
     fireEvent.click(screen.getAllByRole("button", { name: "Register schema" })[0]);
     dialog = await screen.findByRole("dialog", { name: "Register JSON Schema" });
     const reopened = within(dialog).getByRole("textbox", { name: "JSON Schema definition" });
     expect((reopened as HTMLTextAreaElement).value).toContain('"type": "object"');
+  });
+
+  it("reveals the missing schema ID on Register instead of an inert button", async () => {
+    mocks.query = { tab: "schemas" };
+
+    render(<ReleasesPage />);
+    await screen.findByText("No schemas found");
+    fireEvent.click(screen.getAllByRole("button", { name: "Register schema" })[0]);
+    const dialog = await screen.findByRole("dialog", { name: "Register JSON Schema" });
+    expect(within(dialog).queryByRole("alert")).toBeNull();
+    const register = within(dialog).getByRole("button", { name: "Register schema" });
+    expect(register).toBeEnabled();
+    fireEvent.click(register);
+    expect(within(dialog).getByRole("alert")).toHaveTextContent("Schema ID is required.");
+    expect(within(dialog).getByRole("textbox", { name: "Schema ID" })).toHaveAttribute(
+      "aria-invalid",
+      "true",
+    );
+    expect(mocks.createSchema).not.toHaveBeenCalled();
   });
   it("renders release, schema and revision identifiers as typed chips with breadcrumbs", async () => {
     mocks.query = { app: "payments", env: "prod", name: "runtime" };

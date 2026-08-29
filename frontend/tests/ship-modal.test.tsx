@@ -156,6 +156,124 @@ function realShips(): ShipRequest[] {
     .filter((request) => request.dry_run !== true);
 }
 
+describe("ship editor rows", () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    window.localStorage.removeItem(SHIP_MODE_STORAGE_KEY);
+    for (const mock of Object.values(mocks)) mock.mockReset();
+    mocks.getParameter.mockResolvedValue({
+      parameter: {
+        env: "dev",
+        app: app.name,
+        key: "rate_limits",
+        value: CURRENT,
+        content_type: rateLimitsType,
+        version: 9,
+        metadata_json: "{}",
+        created_by: "admin",
+        created_at_unix_ms: 1,
+        labels: {},
+      },
+    });
+    mocks.ship.mockImplementation(async (request: ShipRequest) =>
+      request.dry_run ? preview : activated,
+    );
+    mocks.releaseSubscribers.mockResolvedValue({
+      subscribers: [],
+      current_revision: 119,
+      next_page_token: "",
+    });
+    mocks.subscriberStream.mockRejectedValue(new ApiError("unimplemented", "no stream", 404));
+    mocks.validateRelease.mockResolvedValue({ valid: true, errors: [] });
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  /** An environment with no resources at all: every parameter alias becomes a fresh row. */
+  function emptyEnvironments(): EnvironmentOverview[] {
+    return [
+      {
+        ...dev,
+        status: "empty",
+        values_state: "empty",
+        release_state: "none",
+        rollout_state: "no_subscribers",
+        release: { latest_version: 0, release_count: 0 },
+        values: dev.values.map((value) => ({
+          ...value,
+          present: false,
+          key: undefined,
+          current_version: undefined,
+          pinned_version: undefined,
+        })),
+      },
+    ];
+  }
+
+  it("keeps a fresh row quiet until the operator types in it", async () => {
+    renderModal({ environments: emptyEnvironments(), initialAlias: undefined });
+    const row = within(dialog()).getByTestId("ship-row-rate_limits");
+    expect(within(row).queryByRole("alert")).toBeNull();
+    const editor = within(row).getByRole("textbox", { name: "rate_limits value" });
+    fireEvent.change(editor, { target: { value: "x" } });
+    fireEvent.change(editor, { target: { value: "" } });
+    expect(within(row).getByRole("alert")).toBeInTheDocument();
+  });
+
+  it("marks an edited row, shows its diff against the current value, and reverts it", async () => {
+    renderModal();
+    const editor = await editRateLimits();
+    const row = within(dialog()).getByTestId("ship-row-rate_limits");
+    expect(row).toHaveAttribute("data-changed", "true");
+    expect(within(row).getByText("changed")).toBeVisible();
+
+    fireEvent.click(within(row).getByRole("button", { name: "Show diff for rate_limits" }));
+    const diff = within(row).getByTestId("ship-row-diff-rate_limits");
+    // The baseline is labelled with the overview's current version, not the fetch's.
+    const devRateLimits = dev.values.find((value) => value.alias === "rate_limits");
+    expect(diff).toHaveTextContent(`current v${devRateLimits?.current_version}`);
+    expect(diff.querySelector('[data-op="del"].json-diff-text')).not.toBeNull();
+    expect(diff.querySelector('[data-op="add"].json-diff-text')).not.toBeNull();
+
+    fireEvent.click(within(row).getByRole("button", { name: "Revert rate_limits" }));
+    expect(editor).toHaveValue(CURRENT);
+    expect(row).toHaveAttribute("data-changed", "false");
+    expect(within(row).queryByTestId("ship-row-diff-rate_limits")).toBeNull();
+    expect(within(row).getByRole("button", { name: "Revert rate_limits" })).toBeDisabled();
+  });
+
+  it("folds rows to a one-line summary when there are more than three", async () => {
+    const extras = ["extra_a", "extra_b"];
+    const wide = {
+      ...app,
+      contract: [
+        ...app.contract,
+        ...extras.map((alias) => ({ alias, kind: "parameter" as const, content_type: "string" })),
+      ],
+    };
+    renderModal({ application: wide, environments: emptyEnvironments(), initialAlias: undefined });
+    const rows = within(dialog())
+      .getAllByRole("listitem")
+      .filter((item) => item.getAttribute("data-testid")?.startsWith("ship-row-"));
+    expect(rows).toHaveLength(4);
+    for (const row of rows) expect(row).toHaveAttribute("data-open", "false");
+    expect(within(dialog()).queryByRole("textbox", { name: "extra_a value" })).toBeNull();
+
+    const extraA = within(dialog()).getByTestId("ship-row-extra_a");
+    fireEvent.click(within(extraA).getByRole("button", { name: "Edit" }));
+    expect(extraA).toHaveAttribute("data-open", "true");
+    const editor = within(extraA).getByRole("textbox", { name: "extra_a value" });
+    fireEvent.change(editor, { target: { value: "hello" } });
+    // A row with an edit in progress stays open; the others stay folded.
+    expect(within(dialog()).getByTestId("ship-row-extra_b")).toHaveAttribute("data-open", "false");
+    fireEvent.click(within(extraA).getByRole("button", { name: "Collapse" }));
+    expect(extraA).toHaveAttribute("data-open", "false");
+    expect(extraA).toHaveTextContent("hello");
+  });
+});
+
 describe("ShipModal", () => {
   beforeEach(() => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
@@ -437,7 +555,7 @@ describe("ShipModal", () => {
     expect(realShips()).toHaveLength(1);
   });
 
-  it("closes on Discard after a conflict", async () => {
+  it("asks before closing a conflict that already wrote versions, then closes", async () => {
     mocks.ship.mockImplementation(async (request: ShipRequest) =>
       request.dry_run ? preview : conflict,
     );
@@ -447,8 +565,223 @@ describe("ShipModal", () => {
     await waitFor(() => expect(shipButton()).toBeEnabled());
     fireEvent.click(shipButton());
     const panel = await within(dialog()).findByTestId("ship-conflict");
-    fireEvent.click(within(panel).getByRole("button", { name: "Discard" }));
-    expect(props.onClose).toHaveBeenCalled();
+    expect(within(panel).queryByRole("button", { name: "Discard" })).toBeNull();
+    fireEvent.click(within(panel).getByRole("button", { name: "Close without re-previewing" }));
+    // The written version is named so the user knows it survives the close.
+    const confirm = await screen.findByRole("dialog", {
+      name: "Close without re-previewing?",
+      hidden: true,
+    });
+    expect(confirm).toHaveTextContent(`rate_limits v${conflictWritten}`);
+    expect(props.onClose).not.toHaveBeenCalled();
+    fireEvent.click(within(confirm).getByRole("button", { name: "Keep editing", hidden: true }));
+    await waitFor(() =>
+      expect(
+        screen.queryByRole("dialog", { name: "Close without re-previewing?", hidden: true }),
+      ).toBeNull(),
+    );
+    expect(props.onClose).not.toHaveBeenCalled();
+
+    fireEvent.click(within(panel).getByRole("button", { name: "Close without re-previewing" }));
+    const again = await screen.findByRole("dialog", {
+      name: "Close without re-previewing?",
+      hidden: true,
+    });
+    fireEvent.click(within(again).getByRole("button", { name: "Close", hidden: true }));
+    expect(props.onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it("closes a conflict directly when nothing was written", async () => {
+    const preflight: ShipResult = { ...conflict, parameters: [], release: undefined };
+    mocks.ship.mockImplementation(async (request: ShipRequest) =>
+      request.dry_run ? preview : preflight,
+    );
+    const { props } = renderModal();
+    await editRateLimits();
+    await settlePreview();
+    await waitFor(() => expect(shipButton()).toBeEnabled());
+    fireEvent.click(shipButton());
+    const panel = await within(dialog()).findByTestId("ship-conflict");
+    expect(panel).toHaveTextContent("nothing was written");
+    fireEvent.click(within(panel).getByRole("button", { name: "Close without re-previewing" }));
+    expect(
+      screen.queryByRole("dialog", { name: "Close without re-previewing?", hidden: true }),
+    ).toBeNull();
+    expect(props.onClose).toHaveBeenCalledTimes(1);
+  });
+
+  describe("disabled Ship explains itself", () => {
+    const note = () => within(dialog()).queryByTestId("ship-blocked-reason");
+
+    it("says the values must parse first, then that the preview is pending", async () => {
+      renderModal();
+      // The row is still loading its current value: nothing parses yet.
+      expect(note()).toHaveTextContent("Fix the values above to ship.");
+      expect(shipButton()).toBeDisabled();
+      await editRateLimits();
+      // Parsed, debounce running: the dry run has not been asked for yet.
+      expect(note()).toHaveTextContent("Waiting for the preview.");
+      let release: (value: ShipResult) => void = () => undefined;
+      mocks.ship.mockImplementation(
+        () =>
+          new Promise<ShipResult>((resolve) => {
+            release = resolve;
+          }),
+      );
+      await settlePreview();
+      await waitFor(() => expect(note()).toHaveTextContent("Previewing…"));
+      expect(shipButton()).toBeDisabled();
+      await act(async () => {
+        release(preview);
+      });
+      await waitFor(() => expect(shipButton()).toBeEnabled());
+      expect(note()).toBeNull();
+    });
+
+    it("names the missing secret", async () => {
+      const withoutSecret: EnvironmentOverview[] = incident.environments.map((env) =>
+        env.namespace.env === "prod"
+          ? {
+              ...env,
+              values: env.values.map((value) =>
+                value.alias === "db_password"
+                  ? { ...value, present: false, key: undefined }
+                  : value,
+              ),
+            }
+          : env,
+      );
+      renderModal({ environments: withoutSecret, initialEnvironment: "prod" });
+      await editRateLimits();
+      expect(note()).toHaveTextContent("Add the missing secret first: db_password.");
+      expect(shipButton()).toBeDisabled();
+    });
+
+    it("says the preview is stale after an edit", async () => {
+      renderModal();
+      await editRateLimits();
+      await settlePreview();
+      await waitFor(() => expect(shipButton()).toBeEnabled());
+      await editRateLimits(EDIT_B);
+      expect(note()).toHaveTextContent("Edited since the last preview; it re-runs automatically.");
+      expect(shipButton()).toBeDisabled();
+    });
+
+    it("says the candidate release is invalid", async () => {
+      const invalid: ShipResult = {
+        ...preview,
+        preview: {
+          ...preview.preview,
+          validation: {
+            valid: false,
+            errors: [
+              {
+                alias: "rate_limits",
+                code: "schema_violation",
+                schema_pointer: "/properties/rate_limits",
+                message: "per_minute must be > 0",
+              },
+            ],
+          },
+        },
+      };
+      mocks.ship.mockImplementation(async () => invalid);
+      renderModal();
+      await editRateLimits();
+      await settlePreview();
+      await waitFor(() => expect(note()).toHaveTextContent("The candidate release is invalid."));
+      expect(shipButton()).toBeDisabled();
+    });
+
+    it("says there is nothing to ship when no value changed", async () => {
+      const unchanged: ShipResult = { ...preview, preview: { ...preview.preview } };
+      mocks.ship.mockImplementation(async () => unchanged);
+      // dev has an active release and every value present: no row opens.
+      renderModal({ initialAlias: undefined });
+      expect(within(dialog()).queryByRole("textbox")).toBeNull();
+      await settlePreview();
+      await waitFor(() => expect(dryRuns()).toHaveLength(1));
+      await waitFor(() => expect(note()).toHaveTextContent("Nothing to ship: no value changed."));
+      expect(shipButton()).toBeDisabled();
+    });
+
+    it("asks for the production name", async () => {
+      renderModal({ initialEnvironment: "prod" });
+      await editRateLimits();
+      await settlePreview();
+      await waitFor(() => expect(dryRuns()).toHaveLength(1));
+      await waitFor(() => expect(note()).toHaveTextContent("Type prod to ship to production."));
+      expect(shipButton()).toBeDisabled();
+      fireEvent.change(within(dialog()).getByTestId("ship-confirm-env"), {
+        target: { value: "prod" },
+      });
+      expect(shipButton()).toBeEnabled();
+      expect(note()).toBeNull();
+    });
+  });
+
+  it("asks before discarding an edited value", async () => {
+    const { props } = renderModal();
+    const editor = await editRateLimits();
+    // The prefilled value is not an edit; only a change is.
+    fireEvent.change(editor, { target: { value: CURRENT } });
+    fireEvent.click(within(dialog()).getByRole("button", { name: "Cancel" }));
+    expect(props.onClose).toHaveBeenCalledTimes(1);
+    fireEvent.change(editor, { target: { value: EDIT_B } });
+    fireEvent.click(within(dialog()).getByRole("button", { name: "Cancel" }));
+    expect(props.onClose).toHaveBeenCalledTimes(1);
+    const confirm = await screen.findByRole("dialog", { name: "Discard changes?", hidden: true });
+    fireEvent.click(within(confirm).getByRole("button", { name: "Keep editing", hidden: true }));
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog", { name: "Discard changes?", hidden: true })).toBeNull(),
+    );
+    expect(props.onClose).toHaveBeenCalledTimes(1);
+    fireEvent.click(within(dialog()).getByRole("button", { name: "Cancel" }));
+    const again = await screen.findByRole("dialog", { name: "Discard changes?", hidden: true });
+    fireEvent.click(within(again).getByRole("button", { name: "Discard", hidden: true }));
+    expect(props.onClose).toHaveBeenCalledTimes(2);
+  });
+
+  it("jumps from a rejected violation back to the value editor", async () => {
+    const rejected: ShipResult = {
+      status: "rejected",
+      preview: preview.preview,
+      parameters: [],
+      error: {
+        code: "failed_precondition",
+        message: "invalid",
+        validation_errors: [
+          {
+            alias: "rate_limits",
+            code: "schema_violation",
+            schema_pointer: "/properties/rate_limits",
+            message: "per_minute must be > 0",
+          },
+        ],
+      },
+    };
+    mocks.ship.mockImplementation(async (request: ShipRequest) =>
+      request.dry_run ? preview : rejected,
+    );
+    Element.prototype.scrollIntoView ??= vi.fn();
+    renderModal();
+    await editRateLimits();
+    await settlePreview();
+    await waitFor(() => expect(shipButton()).toBeEnabled());
+    fireEvent.click(shipButton());
+    const panel = await within(dialog()).findByTestId("ship-rejected");
+    const row = within(panel).getByRole("row", { name: /rate_limits/ });
+    expect(within(row).getByRole("link", { name: "Open rate_limits" })).toHaveAttribute(
+      "href",
+      `/parameters/detail?env=dev&app=${encodeURIComponent(app.name)}&key=rate_limits`,
+    );
+    fireEvent.click(within(row).getByRole("button", { name: "Edit this value" }));
+    expect(within(dialog()).getByTestId("ship-modal")).toHaveAttribute("data-phase", "compose");
+    await waitFor(() =>
+      expect(within(dialog()).getByTestId("ship-row-rate_limits")).toContainElement(
+        document.activeElement as HTMLElement,
+      ),
+    );
   });
 
   it("lists unreleased changes as opt-ins that pin the current label", async () => {

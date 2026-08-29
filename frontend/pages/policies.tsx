@@ -1,22 +1,16 @@
-import { Pencil, Trash2 } from "lucide-react";
-import { useCallback, useEffect, useState } from "react";
+import { Copy, Pencil, Trash2 } from "lucide-react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import { Icon } from "@/components/icons";
 import { ConfirmDialog, Modal } from "@/components/Modal";
-import {
-  EmptyState,
-  Field,
-  Input,
-  PageHeader,
-  Pagination,
-  Spinner,
-  TableSkeleton,
-} from "@/components/ui";
+import { EmptyState, Field, Input, PageHeader, Pagination, TableSkeleton } from "@/components/ui";
 import { AppSelect } from "@/components/ui/app-select";
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/context/ToastContext";
 import { api, isAbortError } from "@/lib/api";
 import { formatUnixMs } from "@/lib/format";
-import { useCursorPagination, useFieldErrors, useLatestRequest } from "@/lib/hooks";
+import { useFocusFirstInvalid } from "@/lib/forms";
+import { useCursorPagination, useFieldErrors, useLatestRequest, useNamespaces } from "@/lib/hooks";
+import type { Namespace } from "@/lib/types";
 import { POLICY_OPERATIONS, type Policy, type PolicyRule } from "@/lib/types";
 import {
   firstError,
@@ -50,12 +44,28 @@ function emptyDraft(): Draft {
   return { name: "", subject: "", allow: [], deny: [], editing: false };
 }
 
+/**
+ * A new rule has no operation, so it cannot be saved without a considered
+ * choice; env/app default to "any" because that is the common grant shape.
+ */
 function newRule(): DraftRule {
-  return { id: ++ruleID, operation: "secret:read", env: "*", app: "*" };
+  return { id: ++ruleID, operation: "", env: "*", app: "*" };
 }
 
 function draftRules(rules: PolicyRule[] | null | undefined): DraftRule[] {
   return rules ? rules.map((r) => ({ ...r, id: ++ruleID })) : [];
+}
+
+/** The rules as the server sees them, so two drafts can be compared regardless of ids. */
+function draftShape(draft: Draft): string {
+  const strip = (rules: DraftRule[]) =>
+    rules.map(({ operation, env, app }) => ({ operation, env, app }));
+  return JSON.stringify({
+    name: draft.name,
+    subject: draft.subject,
+    allow: strip(draft.allow),
+    deny: strip(draft.deny),
+  });
 }
 
 /**
@@ -97,17 +107,144 @@ function draftError(draft: Draft): string | null {
   );
 }
 
+// --- effective permissions ---------------------------------------------------
+//
+// Mirrors the server's matching for the summary panel: "" and "*" both mean
+// any label, and an operation pattern `x:*` covers every `x:` operation.
+
+function isAnyLabel(label: string): boolean {
+  const trimmed = label.trim();
+  return trimmed === "" || trimmed === "*";
+}
+
+/** Whether a rule's label component (env or app) covers another rule's. */
+function labelCovers(wide: string, narrow: string): boolean {
+  return isAnyLabel(wide) || wide.trim() === narrow.trim();
+}
+
+/** Whether `pattern` (an operation or wildcard) covers `operation`. */
+export function operationCovers(pattern: string, operation: string): boolean {
+  if (pattern === "*") return true;
+  if (pattern.endsWith(":*")) {
+    const category = pattern.slice(0, -2);
+    return operation === pattern || operation.startsWith(`${category}:`);
+  }
+  return pattern === operation;
+}
+
+/** Whether a deny rule cancels an allow rule (same or wider scope, covering operation). */
+export function denyCancels(deny: PolicyRule, allow: PolicyRule): boolean {
+  return (
+    labelCovers(deny.app, allow.app) &&
+    labelCovers(deny.env, allow.env) &&
+    operationCovers(deny.operation, allow.operation)
+  );
+}
+
+export function scopeLabel(rule: PolicyRule): string {
+  const app = isAnyLabel(rule.app) ? "any" : rule.app.trim();
+  const env = isAnyLabel(rule.env) ? "any" : rule.env.trim();
+  return `${env}/${app}`;
+}
+
+export interface EffectiveScope {
+  scope: string;
+  operations: Array<{ operation: string; cancelled: boolean }>;
+}
+
+export interface EffectiveSummary {
+  allows: EffectiveScope[];
+  denies: EffectiveScope[];
+}
+
+/** The read-only "what does this policy grant" data behind the summary panel. */
+export function effectiveSummary(draft: {
+  allow: readonly PolicyRule[];
+  deny: readonly PolicyRule[];
+}): EffectiveSummary {
+  const group = (
+    rules: readonly PolicyRule[],
+    cancelled: (rule: PolicyRule) => boolean,
+  ): EffectiveScope[] => {
+    const scopes = new Map<string, EffectiveScope>();
+    for (const rule of rules) {
+      if (rule.operation === "") continue;
+      const scope = scopeLabel(rule);
+      const entry = scopes.get(scope) ?? { scope, operations: [] };
+      if (!entry.operations.some((item) => item.operation === rule.operation)) {
+        entry.operations.push({ operation: rule.operation, cancelled: cancelled(rule) });
+      }
+      scopes.set(scope, entry);
+    }
+    return [...scopes.values()];
+  };
+  const denies = draft.deny.filter((rule) => rule.operation !== "");
+  return {
+    allows: group(draft.allow, (allow) => denies.some((deny) => denyCancels(deny, allow))),
+    denies: group(draft.deny, () => false),
+  };
+}
+
+function EffectivePermissions({ draft }: { draft: Draft }) {
+  const summary = useMemo(() => effectiveSummary(draft), [draft]);
+  const empty = summary.allows.length === 0 && summary.denies.length === 0;
+  return (
+    <section className="info-panel mt-4 text-sm" aria-label="Effective permissions">
+      <strong>Effective permissions</strong>
+      {empty ? (
+        <div className="faint">No rules yet.</div>
+      ) : (
+        <>
+          {summary.allows.map((scope) => (
+            <div key={`allow-${scope.scope}`}>
+              Allows on <span className="mono">{scope.scope}</span>:{" "}
+              {scope.operations.map((item, index) => (
+                <span key={item.operation}>
+                  {index > 0 ? ", " : ""}
+                  <span className="mono">{item.operation}</span>
+                  {item.cancelled ? <span className="faint"> (cancelled by deny)</span> : null}
+                </span>
+              ))}
+            </div>
+          ))}
+          {summary.denies.map((scope) => (
+            <div key={`deny-${scope.scope}`}>
+              Denied (overrides allow) on <span className="mono">{scope.scope}</span>:{" "}
+              {scope.operations.map((item, index) => (
+                <span key={item.operation}>
+                  {index > 0 ? ", " : ""}
+                  <span className="mono">{item.operation}</span>
+                </span>
+              ))}
+            </div>
+          ))}
+        </>
+      )}
+    </section>
+  );
+}
+
+const MAX_IDENTITY_PAGES = 10;
+
 export default function PoliciesPage() {
   const toast = useToast();
+  const { namespaces, loading: namespacesLoading } = useNamespaces();
   const [policies, setPolicies] = useState<Policy[]>([]);
   const [loading, setLoading] = useState(true);
   const paging = useCursorPagination("policies");
   const { begin } = useLatestRequest();
 
   const [draft, setDraft] = useState<Draft | null>(null);
+  // What the editor opened with, so dismissal can tell an untouched draft apart.
+  const [opened, setOpened] = useState("");
   const [saving, setSaving] = useState(false);
   // Keys are composite (`allow-<rule id>-app`), hence the plain string form.
   const fieldErrors = useFieldErrors<string>();
+  const { formRef, requestFocus } = useFocusFirstInvalid();
+  const nameRef = useRef<HTMLInputElement>(null);
+  const subjectRef = useRef<HTMLInputElement>(null);
+  const [identityNames, setIdentityNames] = useState<string[]>([]);
+  const subjectListId = useId();
 
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
   const [deleting, setDeleting] = useState(false);
@@ -139,26 +276,59 @@ export default function PoliciesPage() {
     void load(paging.pageToken);
   }, [load, paging.pageToken]);
 
+  // Identity names for the Subject combobox, fetched per editor open. A
+  // failure is silent: the field still accepts any name.
+  const editorOpen = draft !== null;
+  useEffect(() => {
+    if (!editorOpen) return;
+    const controller = new AbortController();
+    void (async () => {
+      const names: string[] = [];
+      let token = "";
+      try {
+        for (let page = 0; page < MAX_IDENTITY_PAGES; page += 1) {
+          const res = await api.listIdentities(200, token || undefined, {
+            signal: controller.signal,
+          });
+          names.push(...(res.identities ?? []).map((identity) => identity.name));
+          token = res.next_page_token ?? "";
+          if (!token) break;
+        }
+        if (!controller.signal.aborted) setIdentityNames(names.sort((a, b) => a.localeCompare(b)));
+      } catch {
+        // Leave whatever was loaded; the combobox is a convenience.
+      }
+    })();
+    return () => controller.abort();
+  }, [editorOpen]);
+
   function openCreate() {
     fieldErrors.reset();
-    setDraft(emptyDraft());
+    const next = emptyDraft();
+    setOpened(draftShape(next));
+    setDraft(next);
   }
   function openEdit(p: Policy) {
     fieldErrors.reset();
-    setDraft({
+    const next: Draft = {
       name: p.name,
       subject: p.subject,
       allow: draftRules(p.allow),
       deny: draftRules(p.deny),
       editing: true,
-    });
+    };
+    setOpened(draftShape(next));
+    setDraft(next);
   }
 
   async function save() {
     if (!draft) return;
     fieldErrors.markAllTouched();
     // Every problem is now rendered next to the field that has it.
-    if (draftError(draft) !== null) return;
+    if (draftError(draft) !== null) {
+      requestFocus();
+      return;
+    }
     // env/app are sent as typed: the server normalizes "" and "*" alike to "*"
     // (`policy.normalizeLabel`), so a blank component means "any" and the rule
     // must not be dropped on its way out.
@@ -213,6 +383,12 @@ export default function PoliciesPage() {
       setDeleting(false);
     }
   }
+
+  const dirty = draft !== null && draftShape(draft) !== opened;
+  const subjectOptions = useMemo(
+    () => ["*", ...identityNames.filter((name) => name !== "*")],
+    [identityNames],
+  );
 
   return (
     <>
@@ -292,20 +468,22 @@ export default function PoliciesPage() {
         title={draft?.editing ? `Edit policy: ${draft.name}` : "New policy"}
         onClose={() => setDraft(null)}
         dismissible={!saving}
-        footer={
+        dirty={dirty}
+        initialFocus={draft?.editing ? subjectRef : nameRef}
+        footer={(close) => (
           <>
-            <Button variant="outline" onClick={() => setDraft(null)} disabled={saving}>
+            <Button variant="outline" onClick={close} disabled={saving}>
               Cancel
             </Button>
-            <Button onClick={save} disabled={saving}>
-              {saving ? <Spinner /> : null}
+            <Button onClick={save} loading={saving}>
               {draft?.editing ? "Save changes" : "Create policy"}
             </Button>
           </>
-        }
+        )}
       >
         {draft ? (
           <form
+            ref={formRef}
             onSubmit={(event) => {
               event.preventDefault();
               void save();
@@ -318,6 +496,7 @@ export default function PoliciesPage() {
                 error={fieldErrors.shown("name", validatePolicyName(draft.name))}
               >
                 <Input
+                  ref={nameRef}
                   className="font-mono"
                   value={draft.name}
                   disabled={draft.editing}
@@ -332,13 +511,21 @@ export default function PoliciesPage() {
                 error={fieldErrors.shown("subject", validatePolicySubject(draft.subject.trim()))}
               >
                 <Input
+                  ref={subjectRef}
                   className="font-mono"
                   value={draft.subject}
+                  list={subjectListId}
                   onChange={(e) => setDraft({ ...draft, subject: e.target.value })}
                   onBlur={() => fieldErrors.touch("subject")}
                   placeholder="gradethis-be"
+                  autoComplete="off"
                 />
               </Field>
+              <datalist id={subjectListId}>
+                {subjectOptions.map((name) => (
+                  <option key={name} value={name} />
+                ))}
+              </datalist>
             </div>
 
             <div className="info-panel mb-4">
@@ -351,6 +538,8 @@ export default function PoliciesPage() {
               title="Allow rules"
               kind="allow"
               rules={draft.allow}
+              namespaces={namespaces}
+              namespacesLoading={namespacesLoading}
               onChange={(allow) => setDraft({ ...draft, allow })}
               visibleError={fieldErrors.shown}
               onTouch={fieldErrors.touch}
@@ -360,10 +549,13 @@ export default function PoliciesPage() {
               title="Deny rules"
               kind="deny"
               rules={draft.deny}
+              namespaces={namespaces}
+              namespacesLoading={namespacesLoading}
               onChange={(deny) => setDraft({ ...draft, deny })}
               visibleError={fieldErrors.shown}
               onTouch={fieldErrors.touch}
             />
+            <EffectivePermissions draft={draft} />
             {/* Lets Enter submit from any input; the visible submit lives in the footer. */}
             <button type="submit" className="sr-only" tabIndex={-1} aria-hidden />
           </form>
@@ -389,10 +581,38 @@ export default function PoliciesPage() {
   );
 }
 
+/** Non-blocking hint when a typed app/env matches no existing namespace. */
+function unknownNamespaceWarning(
+  rule: PolicyRule,
+  field: "app" | "env",
+  namespaces: Namespace[],
+  loading: boolean,
+): string | null {
+  if (loading) return null;
+  const app = rule.app.trim();
+  const env = rule.env.trim();
+  if (field === "app") {
+    if (isAnyLabel(app)) return null;
+    return namespaces.some((ns) => ns.app === app)
+      ? null
+      : `No namespace for application ${app} exists yet; this rule will match nothing until it does.`;
+  }
+  if (isAnyLabel(env)) return null;
+  const inApp = isAnyLabel(app)
+    ? namespaces.some((ns) => ns.env === env)
+    : namespaces.some((ns) => ns.env === env && ns.app === app);
+  if (inApp) return null;
+  return isAnyLabel(app)
+    ? `No environment named ${env} exists yet; this rule will match nothing until it does.`
+    : `No namespace named ${env}/${app} exists yet; this rule will match nothing until it does.`;
+}
+
 function RuleEditor({
   title,
   kind,
   rules,
+  namespaces,
+  namespacesLoading,
   onChange,
   visibleError,
   onTouch,
@@ -401,19 +621,40 @@ function RuleEditor({
   /** Namespaces the touched-field keys so allow and deny rows stay distinct. */
   kind: RuleKind;
   rules: DraftRule[];
+  namespaces: Namespace[];
+  namespacesLoading: boolean;
   onChange: (rules: DraftRule[]) => void;
   visibleError: (key: string, message: string | null) => string | null;
   onTouch: (key: string) => void;
 }) {
+  const listId = useId();
   const fieldKey = (rule: DraftRule, field: RuleField) => `${kind}-${rule.id}-${field}`;
   const errorFor = (rule: DraftRule, field: RuleField) =>
     visibleError(fieldKey(rule, field), ruleFieldError(rule, field));
+
+  const apps = useMemo(
+    () => ["*", ...[...new Set(namespaces.map((ns) => ns.app))].sort((a, b) => a.localeCompare(b))],
+    [namespaces],
+  );
+  const envsFor = (app: string): string[] => {
+    const trimmed = app.trim();
+    const scoped = namespaces.some((ns) => ns.app === trimmed)
+      ? namespaces.filter((ns) => ns.app === trimmed)
+      : namespaces;
+    return ["*", ...[...new Set(scoped.map((ns) => ns.env))].sort((a, b) => a.localeCompare(b))];
+  };
 
   function update(id: number, patch: Partial<PolicyRule>) {
     onChange(rules.map((r) => (r.id === id ? { ...r, ...patch } : r)));
   }
   function remove(id: number) {
     onChange(rules.filter((r) => r.id !== id));
+  }
+  function duplicate(id: number) {
+    const index = rules.findIndex((r) => r.id === id);
+    if (index === -1) return;
+    const copy: DraftRule = { ...rules[index], id: ++ruleID };
+    onChange([...rules.slice(0, index + 1), copy, ...rules.slice(index + 1)]);
   }
   function add() {
     onChange([...rules, newRule()]);
@@ -427,59 +668,99 @@ function RuleEditor({
           Add rule
         </Button>
       </div>
+      <datalist id={`${listId}-apps`}>
+        {apps.map((app) => (
+          <option key={app} value={app} />
+        ))}
+      </datalist>
       {rules.length === 0 ? (
         <div className="faint text-sm mb-2">No rules.</div>
       ) : (
         <div className="stack">
-          {rules.map((rule, i) => (
-            <div key={rule.id} className="rule-row">
-              <div className="rule-op">
-                <Field label="Operation" error={errorFor(rule, "operation")}>
-                  <AppSelect
-                    value={rule.operation}
-                    onValueChange={(operation) => update(rule.id, { operation })}
-                    onBlur={() => onTouch(fieldKey(rule, "operation"))}
-                    options={operationOptions(rule.operation).map((operation) => ({
-                      value: operation,
-                      label: operation,
-                    }))}
-                  />
-                </Field>
+          {rules.map((rule, i) => {
+            const operationName = rule.operation || "unset operation";
+            const appWarning = unknownNamespaceWarning(rule, "app", namespaces, namespacesLoading);
+            const envWarning = unknownNamespaceWarning(rule, "env", namespaces, namespacesLoading);
+            const envListId = `${listId}-envs-${rule.id}`;
+            return (
+              <div key={rule.id} className="rule-row">
+                <div className="rule-op">
+                  <Field label="Operation" error={errorFor(rule, "operation")}>
+                    <AppSelect
+                      value={rule.operation}
+                      onValueChange={(operation) => update(rule.id, { operation })}
+                      onBlur={() => onTouch(fieldKey(rule, "operation"))}
+                      placeholder="Select operation…"
+                      options={operationOptions(rule.operation).map((operation) => ({
+                        value: operation,
+                        label: operation,
+                      }))}
+                    />
+                  </Field>
+                </div>
+                <div className="rule-app">
+                  <Field
+                    label="App"
+                    error={errorFor(rule, "app")}
+                    hint={appWarning ? <span className="text-warning">{appWarning}</span> : null}
+                  >
+                    <Input
+                      className="font-mono"
+                      value={rule.app}
+                      list={`${listId}-apps`}
+                      autoComplete="off"
+                      onChange={(e) => update(rule.id, { app: e.target.value })}
+                      onBlur={() => onTouch(fieldKey(rule, "app"))}
+                      placeholder="gradethis"
+                    />
+                  </Field>
+                </div>
+                <div className="rule-env">
+                  <Field
+                    label="Env"
+                    error={errorFor(rule, "env")}
+                    hint={envWarning ? <span className="text-warning">{envWarning}</span> : null}
+                  >
+                    <Input
+                      className="font-mono"
+                      value={rule.env}
+                      list={envListId}
+                      autoComplete="off"
+                      onChange={(e) => update(rule.id, { env: e.target.value })}
+                      onBlur={() => onTouch(fieldKey(rule, "env"))}
+                      placeholder="prod"
+                    />
+                  </Field>
+                  <datalist id={envListId}>
+                    {envsFor(rule.app).map((env) => (
+                      <option key={env} value={env} />
+                    ))}
+                  </datalist>
+                </div>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="rule-remove"
+                  onClick={() => duplicate(rule.id)}
+                  aria-label={`Duplicate ${kind} rule ${i + 1}`}
+                >
+                  <Copy size={14} aria-hidden />
+                  Duplicate
+                </Button>
+                <Button
+                  type="button"
+                  variant="destructive"
+                  size="sm"
+                  className="rule-remove"
+                  onClick={() => remove(rule.id)}
+                  aria-label={`Remove ${kind} rule ${i + 1}: ${operationName}`}
+                >
+                  Remove
+                </Button>
               </div>
-              <div className="rule-app">
-                <Field label="App" error={errorFor(rule, "app")}>
-                  <Input
-                    className="font-mono"
-                    value={rule.app}
-                    onChange={(e) => update(rule.id, { app: e.target.value })}
-                    onBlur={() => onTouch(fieldKey(rule, "app"))}
-                    placeholder="gradethis"
-                  />
-                </Field>
-              </div>
-              <div className="rule-env">
-                <Field label="Env" error={errorFor(rule, "env")}>
-                  <Input
-                    className="font-mono"
-                    value={rule.env}
-                    onChange={(e) => update(rule.id, { env: e.target.value })}
-                    onBlur={() => onTouch(fieldKey(rule, "env"))}
-                    placeholder="prod"
-                  />
-                </Field>
-              </div>
-              <Button
-                type="button"
-                variant="destructive"
-                size="sm"
-                className="rule-remove"
-                onClick={() => remove(rule.id)}
-                aria-label={`Remove ${kind} rule ${i + 1}: ${rule.operation}`}
-              >
-                Remove
-              </Button>
-            </div>
-          ))}
+            );
+          })}
         </div>
       )}
     </div>

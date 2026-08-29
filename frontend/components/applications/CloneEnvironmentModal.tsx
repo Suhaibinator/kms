@@ -1,12 +1,13 @@
 import { Plus } from "lucide-react";
-import { useEffect, useId, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import type { CloneEnvironmentModalProps } from "@/components/applications/contracts";
 import { ConfirmDialog, Modal } from "@/components/Modal";
-import { Badge, Checkbox, Field, Input, Spinner } from "@/components/ui";
+import { Badge, Checkbox, Field, Input } from "@/components/ui";
 import { AppSelect } from "@/components/ui/app-select";
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/context/ToastContext";
 import { api } from "@/lib/api";
+import { useFocusFirstInvalid } from "@/lib/forms";
 import { useFieldErrors } from "@/lib/hooks";
 import { isProductionEnvironment } from "@/lib/readiness";
 import type { CloneEnvironmentItem, CloneEnvironmentResponse } from "@/lib/types";
@@ -64,14 +65,26 @@ export default function CloneEnvironmentModal({
   const [confirming, setConfirming] = useState(false);
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<CloneEnvironmentResponse | null>(null);
-  const { touch, markAllTouched, reset, shown } = useFieldErrors<"target">();
+  // What the form opened with, so `dirty` tracks the user's own edits only.
+  const [opened, setOpened] = useState({ source: "", target: "", description: "", token: false });
+  const { touch, markAllTouched, reset, shown } = useFieldErrors<"target" | "source">();
+  const { formRef, requestFocus } = useFocusFirstInvalid();
+  const sourceRef = useRef<HTMLButtonElement>(null);
+  const targetRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (!open) return;
-    setSource(seed?.source ?? environments[0]?.namespace.env ?? "");
-    setTarget(seed?.target ?? "");
-    setDescription(seed?.description ?? "");
-    setToken(seed?.methods.includes("token") ?? false);
+    const initial = {
+      source: seed?.source ?? environments[0]?.namespace.env ?? "",
+      target: seed?.target ?? "",
+      description: seed?.description ?? "",
+      token: seed?.methods.includes("token") ?? false,
+    };
+    setSource(initial.source);
+    setTarget(initial.target);
+    setDescription(initial.description);
+    setToken(initial.token);
+    setOpened(initial);
     setCopyValues(true);
     setConfirming(false);
     setBusy(false);
@@ -87,10 +100,21 @@ export default function CloneEnvironmentModal({
   const sourceProblem = source ? null : "Choose a source environment.";
   const blocking = sourceProblem ?? targetProblem;
   const production = isProductionEnvironment(target.trim());
+  const dirty =
+    result === null &&
+    (source !== opened.source ||
+      target !== opened.target ||
+      description !== opened.description ||
+      token !== opened.token ||
+      !copyValues);
 
   function submit() {
     markAllTouched();
-    if (busy || blocking) return;
+    if (busy) return;
+    if (blocking) {
+      requestFocus();
+      return;
+    }
     if (production) setConfirming(true);
     else void run();
   }
@@ -131,19 +155,25 @@ export default function CloneEnvironmentModal({
         title={result ? `${result.namespace.env} created from ${source}` : "Copy an environment"}
         onClose={onClose}
         dismissible={!busy}
+        dirty={dirty && !busy}
+        initialFocus={opened.source ? targetRef : sourceRef}
         wide
-        footer={
+        footer={(close) =>
           result ? (
             <Button type="button" onClick={() => onCreated(result)}>
               Done
             </Button>
           ) : (
             <>
-              <Button type="button" variant="outline" onClick={onClose} disabled={busy}>
+              {blocking && !busy ? (
+                <p className="footer-note" role="status">
+                  {blocking}
+                </p>
+              ) : null}
+              <Button type="button" variant="outline" onClick={close} disabled={busy}>
                 Cancel
               </Button>
-              <Button form={formId} type="submit" disabled={busy || blocking !== null}>
-                {busy ? <Spinner /> : null}
+              <Button form={formId} type="submit" loading={busy} disabled={blocking !== null}>
                 {production ? "Create production environment…" : "Create environment"}
               </Button>
             </>
@@ -214,6 +244,7 @@ export default function CloneEnvironmentModal({
         ) : (
           <form
             id={formId}
+            ref={formRef}
             onSubmit={(event) => {
               event.preventDefault();
               submit();
@@ -224,11 +255,13 @@ export default function CloneEnvironmentModal({
               kept. Secrets are listed as needing a value.
             </div>
             <div className="form-row">
-              <Field label="Copy values from" error={shown("target", sourceProblem)}>
+              <Field label="Copy values from" error={shown("source", sourceProblem)}>
                 <AppSelect
+                  ref={sourceRef}
                   className="font-mono"
                   value={source}
                   onValueChange={setSource}
+                  onBlur={() => touch("source")}
                   options={sourceOptions}
                   placeholder="Select environment…"
                 />
@@ -239,6 +272,7 @@ export default function CloneEnvironmentModal({
                 error={shown("target", targetProblem)}
               >
                 <Input
+                  ref={targetRef}
                   className="font-mono"
                   value={target}
                   onChange={(event) => setTarget(event.target.value)}

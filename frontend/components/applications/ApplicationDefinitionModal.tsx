@@ -1,10 +1,11 @@
-import { useEffect, useId, useMemo, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { Modal } from "@/components/Modal";
-import { Field, Input, Spinner } from "@/components/ui";
+import { Field, Input } from "@/components/ui";
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/context/ToastContext";
 import { api } from "@/lib/api";
 import type { ContractEntry } from "@/lib/contract-derive";
+import { useFocusFirstInvalid } from "@/lib/forms";
 import { useFieldErrors } from "@/lib/hooks";
 import type { Application, ConfigurationReleaseEntry, EnvironmentOverview } from "@/lib/types";
 import {
@@ -66,6 +67,7 @@ export function ApplicationDefinitionModal({
 }) {
   const toast = useToast();
   const formId = useId();
+  const releaseNameRef = useRef<HTMLInputElement>(null);
   const [description, setDescription] = useState("");
   const [releaseName, setReleaseName] = useState("runtime");
   const [schemaID, setSchemaID] = useState("");
@@ -73,6 +75,7 @@ export function ApplicationDefinitionModal({
   const [contract, setContract] = useState<ContractEntry[]>([]);
   const [saving, setSaving] = useState(false);
   const { touch, markAllTouched, reset, shown } = useFieldErrors<DefinitionField>();
+  const { formRef, requestFocus } = useFocusFirstInvalid();
 
   useEffect(() => {
     if (!open) return;
@@ -94,10 +97,20 @@ export function ApplicationDefinitionModal({
     () => divergingEnvironments(contract, environments),
     [contract, environments],
   );
+  const dirty =
+    description !== application.description ||
+    releaseName !== application.release_name ||
+    schemaID !== application.schema_id ||
+    schemaVersion !== (application.schema_version ? String(application.schema_version) : "") ||
+    JSON.stringify(contract) !== JSON.stringify(application.contract);
 
   async function submit() {
     markAllTouched();
-    if (saving || blocking) return;
+    if (saving) return;
+    if (blocking) {
+      requestFocus();
+      return;
+    }
     setSaving(true);
     try {
       const { application: updated } = await api.updateApplication({
@@ -123,21 +136,23 @@ export function ApplicationDefinitionModal({
       title={`Edit ${application.name}`}
       onClose={onClose}
       dismissible={!saving}
+      dirty={dirty && !saving}
+      initialFocus={releaseNameRef}
       wide
-      footer={
+      footer={(close) => (
         <>
-          <Button type="button" variant="outline" onClick={onClose} disabled={saving}>
+          <Button type="button" variant="outline" onClick={close} disabled={saving}>
             Cancel
           </Button>
-          <Button form={formId} type="submit" disabled={saving || blocking !== null}>
-            {saving ? <Spinner /> : null}
+          <Button form={formId} type="submit" loading={saving}>
             Save definition
           </Button>
         </>
-      }
+      )}
     >
       <form
         id={formId}
+        ref={formRef}
         onSubmit={(event) => {
           event.preventDefault();
           void submit();
@@ -153,6 +168,7 @@ export function ApplicationDefinitionModal({
             error={shown("releaseName", releaseNameProblem)}
           >
             <Input
+              ref={releaseNameRef}
               className="font-mono"
               value={releaseName}
               onChange={(event) => setReleaseName(event.target.value)}

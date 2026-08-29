@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { RollbackDialogProps } from "@/components/applications/contracts";
 import RollbackDialog from "@/components/ship/RollbackDialog";
 import { ApiError } from "@/lib/api";
+import { links } from "@/lib/links";
 import type { ApplicationOverview, OverviewActiveRelease } from "@/lib/types";
 import incidentJson from "./fixtures/backend/overview-incident.json";
 
@@ -123,6 +124,12 @@ describe("RollbackDialog", () => {
     expect(
       within(check).getByRole("link", { name: "Activate a different version…" }),
     ).toHaveAttribute("href", `/releases?app=${incident.application.name}&env=prod&name=${name}`);
+    // The violation row links to the secret it names, keyed from the active release's entries.
+    const entry = active.entries.find((candidate) => candidate.alias === "db_password");
+    expect(within(check).getByRole("link", { name: "Open db_password" })).toHaveAttribute(
+      "href",
+      links.secretDetail({ ...prodNs, key: entry?.ref.key ?? "" }),
+    );
     expect(confirmButton()).toBeDisabled();
     expect(within(dialog()).queryByTestId("rollback-confirm-env")).toBeNull();
   });
@@ -178,7 +185,9 @@ describe("RollbackDialog", () => {
     const props = renderDialog({ namespace: devNs });
     await within(dialog()).findByText("is valid and can be activated.");
     fireEvent.click(confirmButton());
-    expect(await within(dialog()).findByRole("status")).toHaveTextContent("is already active");
+    await waitFor(() =>
+      expect(within(dialog()).getByText(/is already active/)).toBeInTheDocument(),
+    );
     expect(props.onDone).toHaveBeenCalledWith({ ...rolledBack, changed: false });
     expect(confirmButton()).toBeDisabled();
     expect(within(dialog()).getByRole("button", { name: "Close" })).toBeVisible();

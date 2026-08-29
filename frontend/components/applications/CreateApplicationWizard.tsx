@@ -1,10 +1,12 @@
 import { Check, Plus, Trash2 } from "lucide-react";
-import { useEffect, useId, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import type { CreateApplicationWizardProps } from "@/components/applications/contracts";
+import { JsonEditor } from "@/components/JsonEditor";
 import { Modal } from "@/components/Modal";
-import { Badge, Checkbox, Field, Input, Spinner, Textarea } from "@/components/ui";
+import { Badge, Checkbox, Field, Input } from "@/components/ui";
 import { AppSelect } from "@/components/ui/app-select";
 import { Button } from "@/components/ui/button";
+import { FileInput } from "@/components/ui/file-input";
 import { useToast } from "@/context/ToastContext";
 import { api, isConflict } from "@/lib/api";
 import {
@@ -12,6 +14,7 @@ import {
   deriveContractFromSchema,
   schemaSha256Hex,
 } from "@/lib/contract-derive";
+import { useFocusFirstInvalid } from "@/lib/forms";
 import { useFieldErrors } from "@/lib/hooks";
 import { isProductionEnvironment } from "@/lib/readiness";
 import type { Application, ConfigurationSchema } from "@/lib/types";
@@ -116,6 +119,9 @@ export default function CreateApplicationWizard({
   const [description, setDescription] = useState("");
   const [releaseName, setReleaseName] = useState("runtime");
   const basics = useFieldErrors<"name" | "releaseName">();
+  const schemaFields = useFieldErrors<"schemaId" | "schemaJson" | "existing">();
+  const { formRef, requestFocus } = useFocusFirstInvalid();
+  const nameRef = useRef<HTMLInputElement>(null);
 
   const [schemaMode, setSchemaMode] = useState<SchemaMode>("none");
   const [schemas, setSchemas] = useState<ConfigurationSchema[] | null>(null);
@@ -137,6 +143,7 @@ export default function CreateApplicationWizard({
   const [busy, setBusy] = useState(false);
 
   const resetBasics = basics.reset;
+  const resetSchemaFields = schemaFields.reset;
   useEffect(() => {
     if (!open) return;
     setStep(1);
@@ -144,6 +151,7 @@ export default function CreateApplicationWizard({
     setDescription("");
     setReleaseName("runtime");
     resetBasics();
+    resetSchemaFields();
     setSchemaMode("none");
     setSchemas(null);
     setExistingPick("");
@@ -160,7 +168,7 @@ export default function CreateApplicationWizard({
     setResults({});
     setCreated(null);
     setBusy(false);
-  }, [open, resetBasics]);
+  }, [open, resetBasics, resetSchemaFields]);
 
   // The registry is only needed once the Schema step is reached.
   useEffect(() => {
@@ -188,15 +196,12 @@ export default function CreateApplicationWizard({
   const existing = (schemas ?? []).find(
     (schema) => `${schema.id}@${schema.version}` === existingPick,
   );
-  const newSchemaProblem =
-    schemaMode === "new"
-      ? firstError(
-          newSchemaId.trim() ? null : "Schema ID is required.",
-          parseSchemaObject(newSchemaJson),
-        )
-      : null;
-  const schemaBlocking =
-    schemaMode === "existing" && !existing ? "Pick a registered schema." : newSchemaProblem;
+  const newSchemaIdProblem =
+    schemaMode === "new" && !newSchemaId.trim() ? "Schema ID is required." : null;
+  const newSchemaJsonProblem = schemaMode === "new" ? parseSchemaObject(newSchemaJson) : null;
+  const existingProblem =
+    schemaMode === "existing" && !existing ? "Pick a registered schema." : null;
+  const schemaBlocking = firstError(existingProblem, newSchemaIdProblem, newSchemaJsonProblem);
   const pinned: PinnedSchema | null =
     schemaMode === "existing" && existing
       ? { id: existing.id, version: existing.version, json: existing.schema_json }
@@ -223,7 +228,11 @@ export default function CreateApplicationWizard({
   }
 
   async function leaveSchemaStep() {
-    if (schemaBlocking) return;
+    schemaFields.markAllTouched();
+    if (schemaBlocking) {
+      requestFocus();
+      return;
+    }
     let json: string | null = null;
     if (schemaMode === "existing" && existing) {
       json = existing.schema_json;
@@ -252,15 +261,22 @@ export default function CreateApplicationWizard({
   }
 
   function next() {
+    if (busy) return;
     if (step === 1) {
       basics.markAllTouched();
-      if (basicsBlocking) return;
+      if (basicsBlocking) {
+        requestFocus();
+        return;
+      }
       if (!newSchemaId) setNewSchemaId(`${name.trim()}-${releaseName.trim()}`);
       setStep(2);
     } else if (step === 2) {
       void leaveSchemaStep();
     } else if (step === 3) {
-      if (contractProblem) return;
+      if (contractProblem) {
+        requestFocus();
+        return;
+      }
       setStep(4);
     }
   }
@@ -292,7 +308,11 @@ export default function CreateApplicationWizard({
   }
 
   async function create(indices?: number[]) {
-    if (busy || rowsBlocking) return;
+    if (busy) return;
+    if (rowsBlocking) {
+      requestFocus();
+      return;
+    }
     setBusy(true);
     try {
       let app = created;
@@ -336,19 +356,29 @@ export default function CreateApplicationWizard({
     setRows((current) => current.map((row, at) => (at === index ? { ...row, ...patch } : row)));
   }
 
+  // Once the application exists, every dismissal hands it to the parent so
+  // the page can show it: nothing typed here is lost any more.
+  const dirty =
+    !created && (step > 1 || name !== "" || description !== "" || releaseName !== "runtime");
+  function dismiss() {
+    if (created) onCreated(created);
+    else onClose();
+  }
+
   return (
     <Modal
       open={open}
       title={created ? `${created.name} created` : "New application"}
-      onClose={onClose}
+      onClose={dismiss}
       dismissible={!busy}
+      dirty={dirty && !busy}
+      initialFocus={nameRef}
       wide
-      footer={
+      footer={(close) =>
         created ? (
           <>
             {failed ? (
-              <Button type="button" variant="outline" onClick={() => void create()} disabled={busy}>
-                {busy ? <Spinner /> : null}
+              <Button type="button" variant="outline" onClick={() => void create()} loading={busy}>
                 Retry failed
               </Button>
             ) : null}
@@ -358,7 +388,7 @@ export default function CreateApplicationWizard({
           </>
         ) : (
           <>
-            <Button type="button" variant="outline" onClick={onClose} disabled={busy}>
+            <Button type="button" variant="outline" onClick={close} disabled={busy}>
               Cancel
             </Button>
             {step > 1 ? (
@@ -372,22 +402,11 @@ export default function CreateApplicationWizard({
               </Button>
             ) : null}
             {step < 4 ? (
-              <Button
-                form={formId}
-                type="submit"
-                disabled={
-                  busy ||
-                  (step === 1 && basicsBlocking !== null) ||
-                  (step === 2 && schemaBlocking !== null) ||
-                  (step === 3 && contractProblem !== null)
-                }
-              >
-                {busy ? <Spinner /> : null}
+              <Button form={formId} type="submit" loading={busy}>
                 {step === 2 && schemaMode === "new" ? "Register and continue" : "Next"}
               </Button>
             ) : (
-              <Button form={formId} type="submit" disabled={busy || rowsBlocking !== null}>
-                {busy ? <Spinner /> : null}
+              <Button form={formId} type="submit" loading={busy}>
                 Create application
               </Button>
             )}
@@ -398,6 +417,7 @@ export default function CreateApplicationWizard({
       <WizardProgress current={created ? 4 : step} />
       <form
         id={formId}
+        ref={formRef}
         onSubmit={(event) => {
           event.preventDefault();
           if (step < 4) next();
@@ -416,6 +436,7 @@ export default function CreateApplicationWizard({
                 error={basics.shown("name", nameProblem)}
               >
                 <Input
+                  ref={nameRef}
                   className="font-mono"
                   value={name}
                   onChange={(event) => setName(event.target.value)}
@@ -459,12 +480,17 @@ export default function CreateApplicationWizard({
               <Field
                 label="Registered schema"
                 hint={schemas === null ? "Loading the registry…" : undefined}
-                error={existingPick === "" ? null : existing ? null : "Unknown schema."}
+                error={
+                  existingPick !== "" && !existing
+                    ? "Unknown schema."
+                    : schemaFields.shown("existing", existingProblem)
+                }
               >
                 <AppSelect
                   className="font-mono"
                   value={existingPick}
                   onValueChange={setExistingPick}
+                  onBlur={() => schemaFields.touch("existing")}
                   options={schemaOptions}
                   placeholder={
                     schemas?.length === 0 ? "No schemas registered" : "Select id@version…"
@@ -475,38 +501,36 @@ export default function CreateApplicationWizard({
             ) : null}
             {schemaMode === "new" ? (
               <>
-                <Field
-                  label="Schema ID"
-                  error={newSchemaId.trim() ? null : "Schema ID is required."}
-                >
+                <Field label="Schema ID" error={schemaFields.shown("schemaId", newSchemaIdProblem)}>
                   <Input
                     className="font-mono"
                     value={newSchemaId}
                     onChange={(event) => setNewSchemaId(event.target.value)}
+                    onBlur={() => schemaFields.touch("schemaId")}
                   />
                 </Field>
                 <Field
                   label="Schema JSON"
                   hint="Paste runtime.schema.json or load the file. Registered when you continue."
-                  error={newSchemaJson.trim() ? parseSchemaObject(newSchemaJson) : null}
+                  error={schemaFields.shown("schemaJson", newSchemaJsonProblem)}
                 >
-                  <Textarea
-                    className="font-mono"
-                    rows={10}
+                  <JsonEditor
                     value={newSchemaJson}
-                    spellCheck={false}
-                    onChange={(event) => setNewSchemaJson(event.target.value)}
+                    onChange={setNewSchemaJson}
+                    rows={12}
+                    maxHeight="45vh"
+                    onBlur={() => schemaFields.touch("schemaJson")}
                   />
                 </Field>
-                <input
-                  type="file"
-                  accept=".json,application/json"
-                  aria-label="Schema file"
-                  onChange={(event) => {
-                    const file = event.target.files?.[0];
-                    if (file) void file.text().then(setNewSchemaJson);
-                  }}
-                />
+                <Field label="Schema file" hint="…or drop a .json file here">
+                  <FileInput
+                    accept=".json,application/json"
+                    buttonLabel="Load schema file…"
+                    onFile={(file) => {
+                      if (file) void file.text().then(setNewSchemaJson);
+                    }}
+                  />
+                </Field>
                 {registered ? (
                   <div className="info-panel mt-4 text-sm">
                     Registered as{" "}
@@ -641,7 +665,7 @@ export default function CreateApplicationWizard({
                         <Button
                           type="button"
                           variant="ghost"
-                          size="icon-sm"
+                          size="sm"
                           aria-label={`Remove environment ${row.env || index + 1}`}
                           onClick={() =>
                             setRows((current) => current.filter((_, at) => at !== index))

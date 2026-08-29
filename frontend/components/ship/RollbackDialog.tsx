@@ -3,7 +3,7 @@ import { useCallback, useEffect, useId, useState } from "react";
 import type { RollbackDialogProps } from "@/components/applications/contracts";
 import { Ident, ReleaseIdent } from "@/components/Ident";
 import { Modal } from "@/components/Modal";
-import { ViolationTable } from "@/components/releases/ViolationTable";
+import { entryHrefResolver, ViolationTable } from "@/components/releases/ViolationTable";
 import { Badge, Button, Field, Input, Spinner } from "@/components/ui";
 import { ApiError, api, isAbortError, isConflict } from "@/lib/api";
 import { links } from "@/lib/links";
@@ -157,6 +157,7 @@ export default function RollbackDialog({
 
   const previous = target?.previous_version ?? 0;
   const releasesHref = links.releases({ app: namespace.app, env: namespace.env, name });
+  const resolveHref = entryHrefResolver(active?.entries ?? [], namespace, links);
 
   return (
     <Modal
@@ -179,9 +180,9 @@ export default function RollbackDialog({
             type="submit"
             variant="destructive-solid"
             disabled={confirmDisabled}
+            loading={busy}
             data-testid="rollback-confirm"
           >
-            {busy ? <Spinner /> : null}
             Confirm
           </Button>
         </>
@@ -228,7 +229,7 @@ export default function RollbackDialog({
                 <Badge kind="danger">invalid</Badge>
                 <ReleaseIdent name={name} version={previous} /> can no longer be activated.
               </div>
-              <ViolationTable violations={check.violations} />
+              <ViolationTable violations={check.violations} resolveHref={resolveHref} />
               <div className="text-sm mt-3">
                 <Link href={releasesHref} className="ship-link">
                   Activate a different version…

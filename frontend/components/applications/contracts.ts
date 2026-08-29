@@ -13,6 +13,7 @@ import type {
   RollbackResponse,
   ShipResult,
 } from "@/lib/types";
+import { validateContractField } from "@/lib/validation";
 
 /** What a setup-panel step (or a finding's Fix) asks the application page to do. */
 export type SetupAction =
@@ -82,4 +83,25 @@ export interface ConnectSdkPanelProps {
 export interface CommandPaletteProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
+}
+
+// --- contract editor helpers ---------------------------------------------------
+
+/**
+ * One validation message per contract row, or null where the row is fine.
+ * `validateContract` in lib/validation stops at the first failure; the editor
+ * needs every row's problem so it can mark each offending input. A duplicate
+ * alias is reported on the later row, the one that introduced it.
+ */
+export function contractProblems(
+  fields: ReadonlyArray<{ alias: string; kind: string; content_type?: string }>,
+): Array<string | null> {
+  const seen = new Set<string>();
+  return fields.map((field) => {
+    const problem = validateContractField(field);
+    if (problem) return problem;
+    if (seen.has(field.alias)) return `Duplicate contract alias '${field.alias}'.`;
+    seen.add(field.alias);
+    return null;
+  });
 }

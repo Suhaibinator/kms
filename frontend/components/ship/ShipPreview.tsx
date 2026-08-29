@@ -1,7 +1,7 @@
 import { RefreshCw } from "lucide-react";
 import { FindingList } from "@/components/FindingList";
 import { Ident, ReleaseIdent } from "@/components/Ident";
-import { ViolationTable } from "@/components/releases/ViolationTable";
+import { ViolationTable, type ViolationTableProps } from "@/components/releases/ViolationTable";
 import { Badge, Button, Checkbox, Spinner } from "@/components/ui";
 import type { FixAction } from "@/lib/readiness";
 import type { Finding, ShipEntryChange, ShipPreview as ShipPreviewData } from "@/lib/types";
@@ -24,6 +24,10 @@ export interface ShipPreviewProps {
   onToggleOptIn: (alias: string, include: boolean) => void;
   onRefresh: () => void;
   onFix: (action: FixAction, finding: Finding) => void;
+  /** Links a violation's alias to its resource page. */
+  resolveHref?: ViolationTableProps["resolveHref"];
+  /** Jumps to the alias's editor row from a violation. */
+  onEditAlias?: ViolationTableProps["onEdit"];
 }
 
 const CHANGE_TONE: Record<ShipEntryChange, "accent" | "warning" | "danger" | "neutral"> = {
@@ -53,6 +57,8 @@ export function ShipPreview({
   onToggleOptIn,
   onRefresh,
   onFix,
+  resolveHref,
+  onEditAlias,
 }: ShipPreviewProps) {
   const nextVersion = preview ? preview.base_version + 1 : null;
   const writes = preview?.entries.filter((entry) => entry.change === "edited") ?? [];
@@ -228,7 +234,11 @@ export function ShipPreview({
               <div className="danger-panel" role="alert">
                 <strong>The candidate release is invalid; Ship stays disabled.</strong>
                 {preview.validation.errors.length > 0 ? (
-                  <ViolationTable violations={preview.validation.errors} />
+                  <ViolationTable
+                    violations={preview.validation.errors}
+                    resolveHref={resolveHref}
+                    onEdit={onEditAlias}
+                  />
                 ) : (
                   <div className="text-sm mt-2">
                     The server reported no violations; refresh the preview.

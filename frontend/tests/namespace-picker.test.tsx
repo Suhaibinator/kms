@@ -83,6 +83,35 @@ describe("NamespacePicker", () => {
     expect(await visibleSelectOptions(env)).toEqual(["staging (not found)"]);
   });
 
+  it("says the list is loading instead of looking empty or not found", () => {
+    const { rerender } = render(
+      <NamespacePicker namespaces={[]} value={{ app: "", env: "" }} onChange={vi.fn()} loading />,
+    );
+    const app = screen.getByRole("combobox", { name: "Application" });
+    const env = screen.getByRole("combobox", { name: "Environment" });
+    expect(app).toBeDisabled();
+    expect(env).toBeDisabled();
+    expect(app).toHaveTextContent("Loading applications…");
+    expect(env).toHaveTextContent("Loading environments…");
+
+    // A deep-linked value is shown as-is while the list that would confirm it loads.
+    rerender(
+      <NamespacePicker
+        namespaces={[]}
+        value={{ app: "billing", env: "prod" }}
+        onChange={vi.fn()}
+        loading
+      />,
+    );
+    expect(screen.getByRole("combobox", { name: "Application" })).toHaveTextContent("billing");
+    expect(screen.getByRole("combobox", { name: "Application" })).not.toHaveTextContent(
+      "not found",
+    );
+    expect(screen.getByRole("combobox", { name: "Environment" })).not.toHaveTextContent(
+      "not found",
+    );
+  });
+
   it("renders field errors inline and marks the control invalid", () => {
     render(
       <NamespacePicker

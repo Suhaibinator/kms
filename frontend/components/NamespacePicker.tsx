@@ -17,21 +17,27 @@ export default function NamespacePicker({
   value,
   onChange,
   disabled,
+  loading = false,
   envId = "ns-env",
   appId = "ns-app",
   appError,
   envError,
+  onBlur,
 }: {
   namespaces: Namespace[];
   value: NamespaceSelection;
   onChange: (next: NamespaceSelection) => void;
   disabled?: boolean;
+  /** The namespace list is still loading (`useNamespaces().loading`): the selects say so instead of looking empty. */
+  loading?: boolean;
   envId?: string;
   appId?: string;
   /** Validation message for the application select (rendered by its Field). */
   appError?: string | null;
   /** Validation message for the environment select (rendered by its Field). */
   envError?: string | null;
+  /** Fires when either select loses focus, so a form can reveal its message. */
+  onBlur?: () => void;
 }) {
   const apps = useMemo(() => {
     const set = new Set<string>();
@@ -54,18 +60,24 @@ export default function NamespacePicker({
   const appOptions = useMemo(() => {
     const options = apps.map((app) => ({ value: app, label: app }));
     if (value.app && !apps.includes(value.app)) {
-      options.unshift({ value: value.app, label: `${value.app} (not found)` });
+      options.unshift({
+        value: value.app,
+        label: loading ? value.app : `${value.app} (not found)`,
+      });
     }
     return options;
-  }, [apps, value.app]);
+  }, [apps, value.app, loading]);
 
   const envOptions = useMemo(() => {
     const options = envs.map((env) => ({ value: env, label: env }));
     if (value.env && !envs.includes(value.env)) {
-      options.unshift({ value: value.env, label: `${value.env} (not found)` });
+      options.unshift({
+        value: value.env,
+        label: loading ? value.env : `${value.env} (not found)`,
+      });
     }
     return options;
-  }, [envs, value.env]);
+  }, [envs, value.env, loading]);
 
   function onApp(app: string) {
     // Keep the environment only if it exists under the new application.
@@ -73,15 +85,18 @@ export default function NamespacePicker({
     onChange({ app, env: stillValid ? value.env : "" });
   }
 
+  const emptyList = loading && namespaces.length === 0;
+
   return (
     <>
       <Field label="Application" htmlFor={appId} error={appError}>
         <AppSelect
           id={appId}
           value={value.app}
-          disabled={disabled}
+          disabled={disabled || emptyList}
           onValueChange={onApp}
-          placeholder="Select application…"
+          onBlur={onBlur}
+          placeholder={emptyList ? "Loading applications…" : "Select application…"}
           options={appOptions}
         />
       </Field>
@@ -89,9 +104,16 @@ export default function NamespacePicker({
         <AppSelect
           id={envId}
           value={value.env}
-          disabled={disabled || !value.app}
+          disabled={disabled || emptyList || !value.app}
           onValueChange={(env) => onChange({ app: value.app, env })}
-          placeholder={value.app ? "Select environment…" : "Select application first"}
+          onBlur={onBlur}
+          placeholder={
+            emptyList
+              ? "Loading environments…"
+              : value.app
+                ? "Select environment…"
+                : "Select application first"
+          }
           options={envOptions}
         />
       </Field>

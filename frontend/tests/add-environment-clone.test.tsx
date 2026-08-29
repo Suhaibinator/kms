@@ -73,6 +73,29 @@ describe("AddEnvironmentModal with Start from", () => {
     expect(onSave).not.toHaveBeenCalled();
   });
 
+  it("reveals the environment error on submit instead of a dead button", async () => {
+    const onSave = vi.fn(async () => undefined);
+    render(
+      <AddEnvironmentModal
+        app={ready.application.name}
+        open
+        saving={false}
+        onClose={() => undefined}
+        onSave={onSave}
+      />,
+    );
+    const modal = screen.getByRole("dialog");
+    await waitFor(() => expect(within(modal).getByLabelText("Environment")).toHaveFocus());
+    const add = within(modal).getByRole("button", { name: "Add environment" });
+    expect(add).toBeEnabled();
+    expect(within(modal).queryByRole("alert")).toBeNull();
+    fireEvent.click(add);
+    expect(within(modal).getByRole("alert")).toHaveTextContent(/required/i);
+    expect(within(modal).getByLabelText("Environment")).toHaveAttribute("aria-invalid", "true");
+    expect(within(modal).getByLabelText("Environment")).toHaveFocus();
+    expect(onSave).not.toHaveBeenCalled();
+  });
+
   it("still creates an empty environment by default", () => {
     const onSave = vi.fn(async () => undefined);
     render(
@@ -175,5 +198,26 @@ describe("CloneEnvironmentModal", () => {
       target_env: "staging",
       auth_methods: ["mtls"],
     });
+  });
+
+  it("reports a missing source on the source field and explains the disabled button", () => {
+    render(
+      <CloneEnvironmentModal
+        application={ready.application}
+        environments={environments}
+        seed={{ source: "", target: "", description: "", methods: ["mtls"] }}
+        open
+        onClose={() => undefined}
+        onCreated={vi.fn()}
+      />,
+    );
+    const modal = screen.getByRole("dialog", { name: "Copy an environment" });
+    expect(within(modal).queryByRole("alert")).toBeNull();
+    expect(within(modal).getByRole("status")).toHaveTextContent("Choose a source environment.");
+    const source = within(modal).getByLabelText("Copy values from");
+    fireEvent.blur(source);
+    expect(within(modal).getByRole("alert")).toHaveTextContent("Choose a source environment.");
+    expect(source).toHaveAttribute("aria-invalid", "true");
+    expect(within(modal).getByRole("button", { name: "Create environment" })).toBeDisabled();
   });
 });

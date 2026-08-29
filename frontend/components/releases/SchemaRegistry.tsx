@@ -2,6 +2,7 @@ import { Plus, RefreshCw } from "lucide-react";
 import { type FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import CopyButton from "@/components/CopyButton";
 import { Icon } from "@/components/icons";
+import { JsonEditor } from "@/components/JsonEditor";
 import { JsonHighlight } from "@/components/JsonHighlight";
 import { Modal } from "@/components/Modal";
 import {
@@ -11,14 +12,13 @@ import {
   Field,
   Input,
   Pagination,
-  Spinner,
   TableSkeleton,
-  Textarea,
 } from "@/components/ui";
 import { useToast } from "@/context/ToastContext";
 import { api, isAbortError } from "@/lib/api";
 import { formatUnixMs } from "@/lib/format";
-import { useCursorPagination } from "@/lib/hooks";
+import { useFocusFirstInvalid } from "@/lib/forms";
+import { useCursorPagination, useFieldErrors } from "@/lib/hooks";
 import type { ConfigurationSchema } from "@/lib/types";
 
 const DEFAULT_SCHEMA_JSON = `{
@@ -105,18 +105,29 @@ function RegisterSchemaDialog({
   const [schemaJSON, setSchemaJSON] = useState(DEFAULT_SCHEMA_JSON);
   const [attempted, setAttempted] = useState(false);
   const [saving, setSaving] = useState(false);
+  const idErrors = useFieldErrors<"id">();
+  const { formRef, requestFocus } = useFocusFirstInvalid<HTMLDivElement>();
+  const idRef = useRef<HTMLInputElement>(null);
   const schemaError = useMemo(() => schemaJSONError(schemaJSON), [schemaJSON]);
+  const idProblem = schemaID.trim() ? null : "Schema ID is required.";
+  const dirty = schemaID !== "" || schemaJSON !== DEFAULT_SCHEMA_JSON;
 
+  const resetIdErrors = idErrors.reset;
   useEffect(() => {
     if (!open) return;
     setSchemaID("");
     setSchemaJSON(DEFAULT_SCHEMA_JSON);
     setAttempted(false);
-  }, [open]);
+    resetIdErrors();
+  }, [open, resetIdErrors]);
 
   async function register() {
     setAttempted(true);
-    if (!schemaID.trim() || schemaError) return;
+    idErrors.markAllTouched();
+    if (idProblem || schemaError) {
+      requestFocus();
+      return;
+    }
     setSaving(true);
     try {
       const result = await api.createSchema(schemaID.trim(), schemaJSON);
@@ -135,43 +146,43 @@ function RegisterSchemaDialog({
       open={open}
       workspace
       dismissible={!saving}
+      dirty={dirty}
       title="Register JSON Schema"
+      description="Each registration allocates the next immutable version of the schema ID."
       onClose={onClose}
-      footer={
+      initialFocus={idRef}
+      footer={(close) => (
         <>
-          <Button variant="outline" onClick={onClose} disabled={saving}>
+          <Button variant="outline" onClick={close} disabled={saving}>
             Cancel
           </Button>
-          <Button
-            disabled={saving || !schemaID.trim() || Boolean(schemaError)}
-            onClick={() => void register()}
-          >
-            {saving ? <Spinner /> : null}
-            Register immutable version
+          <Button loading={saving} onClick={() => void register()}>
+            Register schema
           </Button>
         </>
-      }
+      )}
     >
-      <Field
-        label="Schema ID"
-        hint="Each successful registration allocates the next immutable version."
-        error={attempted && !schemaID.trim() ? "Schema ID is required." : null}
-      >
-        <Input
-          className="font-mono"
-          value={schemaID}
-          onChange={(event) => setSchemaID(event.target.value)}
-          placeholder="go-common/runtime"
-        />
-      </Field>
-      <Field label="JSON Schema definition" error={attempted || schemaError ? schemaError : null}>
-        <Textarea
-          className="schema-editor min-h-[60dvh] font-mono"
-          value={schemaJSON}
-          onChange={(event) => setSchemaJSON(event.target.value)}
-          spellCheck={false}
-        />
-      </Field>
+      <div ref={formRef}>
+        <Field label="Schema ID" error={idErrors.shown("id", idProblem)}>
+          <Input
+            ref={idRef}
+            className="font-mono"
+            value={schemaID}
+            onChange={(event) => setSchemaID(event.target.value)}
+            onBlur={() => idErrors.touch("id")}
+            placeholder="go-common/runtime"
+          />
+        </Field>
+        <Field label="JSON Schema definition" error={attempted || schemaError ? schemaError : null}>
+          <JsonEditor
+            value={schemaJSON}
+            onChange={setSchemaJSON}
+            rows={24}
+            maxHeight="60dvh"
+            onSubmit={() => void register()}
+          />
+        </Field>
+      </div>
     </Modal>
   );
 }
@@ -231,8 +242,8 @@ export function SchemaRegistry() {
           <p className="text-sm faint">Global, immutable JSON Schema versions used by releases.</p>
         </div>
         <div className="row-wrap">
-          <Button variant="outline" disabled={loading} onClick={() => void loadSchemas()}>
-            {loading ? <Spinner /> : <RefreshCw size={16} aria-hidden />}
+          <Button variant="outline" loading={loading} onClick={() => void loadSchemas()}>
+            {loading ? null : <RefreshCw size={16} aria-hidden />}
             Refresh
           </Button>
           <Button onClick={() => setRegisterOpen(true)}>

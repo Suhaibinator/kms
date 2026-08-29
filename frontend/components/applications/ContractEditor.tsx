@@ -4,6 +4,7 @@ import CopyButton from "@/components/CopyButton";
 import { Badge, Textarea } from "@/components/ui";
 import { AppSelect } from "@/components/ui/app-select";
 import { Button } from "@/components/ui/button";
+import { FileInput } from "@/components/ui/file-input";
 import { Input } from "@/components/ui/input";
 import {
   CONTRACT_FILE_FORMAT,
@@ -13,7 +14,8 @@ import {
   type ParsedContractFile,
   parseContractFile,
 } from "@/lib/contract-derive";
-import { PARAMETER_CONTENT_TYPES, validateContract } from "@/lib/validation";
+import { PARAMETER_CONTENT_TYPES } from "@/lib/validation";
+import { contractProblems } from "./contracts";
 
 export interface ContractEditorProps {
   value: ContractEntry[];
@@ -87,7 +89,9 @@ export function ContractEditor({
   const [importText, setImportText] = useState("");
   const [importError, setImportError] = useState("");
 
-  const problem = validateContract(value);
+  const problems = useMemo(() => contractProblems(value), [value]);
+  const problemCount = problems.filter((entry) => entry !== null).length;
+  const problem = problems.find((entry) => entry !== null) ?? null;
   const alignment = useMemo(
     () => (schemaJson ? checkContractAlignment(value, schemaJson) : null),
     [value, schemaJson],
@@ -156,67 +160,93 @@ export function ContractEditor({
     setImportText(await file.text());
   }
 
+  const headers = ["Alias", "Kind", "Content type"];
+
   return (
     <div className="contract-editor">
       {value.length === 0 ? (
         <div className="faint text-sm">No aliases yet. Add one or import a contract file.</div>
       ) : (
-        <ul className="contract-editor-rows" aria-label="Contract aliases">
-          {value.map((entry, index) => {
-            const origin = originOf(index, entry);
-            return (
-              <li className="contract-editor-row" key={index}>
-                <Input
-                  className="font-mono"
-                  aria-label={`Alias ${index + 1}`}
-                  value={entry.alias}
-                  disabled={disabled}
-                  placeholder="alias"
-                  onChange={(event) => update(index, { alias: event.target.value })}
-                />
-                <AppSelect
-                  id={`${id}-kind-${index}`}
-                  value={entry.kind}
-                  disabled={disabled}
-                  options={KIND_OPTIONS}
-                  onValueChange={(kind) =>
-                    update(index, { kind: kind === "secret" ? "secret" : "parameter" })
-                  }
-                />
-                {entry.kind === "parameter" ? (
-                  <AppSelect
-                    id={`${id}-type-${index}`}
-                    value={entry.content_type ?? ""}
+        <>
+          {/* Visually names the three columns; each input already carries its own accessible label. */}
+          <div
+            className="contract-editor-row contract-editor-head text-xs font-semibold text-muted-foreground"
+            aria-hidden="true"
+          >
+            {headers.map((header) => (
+              <span key={header}>{header}</span>
+            ))}
+            <span />
+            <span />
+          </div>
+          <ul className="contract-editor-rows" aria-label="Contract aliases">
+            {value.map((entry, index) => {
+              const origin = originOf(index, entry);
+              const rowId = ids.current[index] ?? String(index);
+              const rowProblem = problems[index] ?? null;
+              const problemId = `${id}-problem-${rowId}`;
+              return (
+                <li className="contract-editor-row" key={rowId}>
+                  <Input
+                    className="font-mono"
+                    aria-label={`Alias ${index + 1}`}
+                    aria-invalid={rowProblem ? true : undefined}
+                    aria-describedby={rowProblem ? problemId : undefined}
+                    value={entry.alias}
                     disabled={disabled}
-                    placeholder="content type"
-                    options={CONTENT_TYPE_OPTIONS}
-                    onValueChange={(contentType) => update(index, { content_type: contentType })}
+                    placeholder="alias"
+                    onChange={(event) => update(index, { alias: event.target.value })}
                   />
-                ) : (
-                  <span className="faint text-sm contract-editor-secret">no content type</span>
-                )}
-                <span className="contract-editor-origin">
-                  {origin === "artifact" ? <Badge kind="accent">from artifact</Badge> : null}
-                  {origin === "diverged" ? <Badge kind="warning">diverged</Badge> : null}
-                </span>
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="icon-sm"
-                  disabled={disabled}
-                  aria-label={`Remove ${entry.alias || `row ${index + 1}`}`}
-                  onClick={() => remove(index)}
-                >
-                  <Trash2 size={14} />
-                </Button>
-              </li>
-            );
-          })}
-        </ul>
+                  <AppSelect
+                    id={`${id}-kind-${index}`}
+                    value={entry.kind}
+                    disabled={disabled}
+                    options={KIND_OPTIONS}
+                    onValueChange={(kind) =>
+                      update(index, { kind: kind === "secret" ? "secret" : "parameter" })
+                    }
+                  />
+                  {entry.kind === "parameter" ? (
+                    <AppSelect
+                      id={`${id}-type-${index}`}
+                      value={entry.content_type ?? ""}
+                      disabled={disabled}
+                      placeholder="content type"
+                      options={CONTENT_TYPE_OPTIONS}
+                      onValueChange={(contentType) => update(index, { content_type: contentType })}
+                    />
+                  ) : (
+                    <span className="faint text-sm contract-editor-secret">no content type</span>
+                  )}
+                  <span className="contract-editor-origin">
+                    {origin === "artifact" ? <Badge kind="accent">from artifact</Badge> : null}
+                    {origin === "diverged" ? <Badge kind="warning">diverged</Badge> : null}
+                  </span>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    disabled={disabled}
+                    aria-label={`Remove ${entry.alias || `row ${index + 1}`}`}
+                    onClick={() => remove(index)}
+                  >
+                    <Trash2 size={14} />
+                  </Button>
+                  {rowProblem ? (
+                    <span id={problemId} className="col-span-full text-danger text-xs">
+                      {rowProblem}
+                    </span>
+                  ) : null}
+                </li>
+              );
+            })}
+          </ul>
+        </>
       )}
       {problem ? (
         <div className="text-danger text-sm" role="alert">
           {problem}
+          {problemCount > 1 ? ` · ${problemCount} rows need attention` : ""}
         </div>
       ) : null}
       <div className="contract-editor-actions">
@@ -260,13 +290,13 @@ export function ContractEditor({
             spellCheck={false}
             onChange={(event) => setImportText(event.target.value)}
           />
+          <FileInput
+            accept=".json,application/json"
+            aria-label="Contract file"
+            buttonLabel="Load file…"
+            onFile={(file) => void readFile(file)}
+          />
           <div className="row-wrap">
-            <input
-              type="file"
-              accept=".json,application/json"
-              aria-label="Contract file"
-              onChange={(event) => void readFile(event.target.files?.[0])}
-            />
             <Button type="button" size="sm" disabled={!importText.trim()} onClick={applyImport}>
               Apply import
             </Button>

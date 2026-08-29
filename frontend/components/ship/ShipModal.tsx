@@ -2,8 +2,8 @@ import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react"
 import type { ShipModalProps } from "@/components/applications/contracts";
 import { Ident, ReleaseIdent } from "@/components/Ident";
 import { Modal } from "@/components/Modal";
-import { ViolationTable } from "@/components/releases/ViolationTable";
-import { Badge, Button, Checkbox, Field, Input, Spinner } from "@/components/ui";
+import { entryHrefResolver, ViolationTable } from "@/components/releases/ViolationTable";
+import { Badge, Button, Checkbox, Field, Input } from "@/components/ui";
 import { ButtonLink } from "@/components/ui/button";
 import { api, isAbortError, isConflict } from "@/lib/api";
 import type { ShipStepId } from "@/lib/glossary";
@@ -17,7 +17,7 @@ import type {
   ShipPreview as ShipPreviewData,
   ShipResult,
 } from "@/lib/types";
-import { type ShipConflict, ConflictPanel } from "./ConflictPanel";
+import { ConflictPanel, type ShipConflict } from "./ConflictPanel";
 import {
   buildChanges,
   changesKey,
@@ -101,6 +101,11 @@ export default function ShipModal({
   // prefill that lands late is dropped instead of overwriting fresh rows.
   const loadGeneration = useRef(0);
   const loadingAliases = useRef(new Set<string>());
+  // What each row's editor started from, so the dirty guard only fires on a
+  // real edit: the prefilled current value, or "" for a row with no value yet.
+  const prefilled = useRef(new Map<string, string>());
+  // The environment select is the first real control; the dialog opens on it.
+  const environmentSelectRef = useRef<HTMLElement | null>(null);
   const confirmId = useId();
 
   const env = useMemo(
@@ -128,7 +133,11 @@ export default function ShipModal({
       const nextEnv =
         environments.find((candidate) => candidate.namespace.env === nextEnvironment) ?? null;
       setEnvironment(nextEnvironment);
-      setRows(initialRows(application, nextEnv, initialAlias));
+      const nextRows = initialRows(application, nextEnv, initialAlias);
+      prefilled.current = new Map(
+        nextRows.filter((row) => row.loaded).map((row) => [row.alias, ""]),
+      );
+      setRows(nextRows);
       setOptIns([]);
       setPreview(null);
       setPreviewChanges([]);
@@ -171,7 +180,12 @@ export default function ShipModal({
       void api
         .getParameter({ env: environment, app: application.name, key })
         .then(
-          ({ parameter }) => ({ value: parameter.value, loaded: true }) as Partial<ShipRow>,
+          ({ parameter }) =>
+            ({
+              value: parameter.value,
+              originalValue: parameter.value,
+              loaded: true,
+            }) as Partial<ShipRow>,
           (error: unknown) =>
             isAbortError(error)
               ? null
@@ -180,6 +194,7 @@ export default function ShipModal({
         .then((patch) => {
           if (generation !== loadGeneration.current || !patch) return;
           loadingAliases.current.delete(alias);
+          prefilled.current.set(alias, patch.value ?? "");
           setRows((current) =>
             current.map((candidate) =>
               candidate.alias === alias && !candidate.loaded
@@ -236,6 +251,7 @@ export default function ShipModal({
   function addRow(alias: string) {
     const row = makeRow(application, env, alias);
     if (!row) return;
+    if (row.loaded) prefilled.current.set(alias, "");
     setRows((current) => (current.some((r) => r.alias === alias) ? current : [...current, row]));
     setOptIns((current) => current.filter((candidate) => candidate !== alias));
   }
@@ -271,6 +287,84 @@ export default function ShipModal({
     blockers.length === 0 &&
     (previewChanges.length > 0 || !hasActive) &&
     (!production || confirmText === environment);
+
+  // The same conjuncts as canShip, in the order the user can act on them, so
+  // a disabled Ship always says why.
+  const shipBlockedReason: string | null =
+    phase !== "compose" || canShip
+      ? null
+      : !ready
+        ? "Fix the values above to ship."
+        : blockers.length > 0
+          ? `Add the missing ${blockers.length === 1 ? "secret" : "secrets"} first: ${blockers.join(", ")}.`
+          : previewLoading
+            ? "Previewing…"
+            : preview === null
+              ? "Waiting for the preview."
+              : stale
+                ? "Edited since the last preview; it re-runs automatically."
+                : !preview.validation.valid
+                  ? "The candidate release is invalid."
+                  : previewChanges.length === 0 && hasActive
+                    ? "Nothing to ship: no value changed."
+                    : production && confirmText !== environment
+                      ? `Type ${environment} to ship to production.`
+                      : null;
+
+  // Unsaved edits only matter while composing; once shipped (or in conflict)
+  // the values were sent and closing loses nothing.
+  const dirty =
+    phase === "compose" &&
+    (rows.some(
+      (row) =>
+        row.loaded &&
+        row.reuseVersion === undefined &&
+        row.value !== (prefilled.current.get(row.alias) ?? ""),
+    ) ||
+      optIns.length > 0 ||
+      confirmText !== "");
+
+  const parameterAliases = useMemo(
+    () => new Set(application.contract.filter((f) => f.kind === "parameter").map((f) => f.alias)),
+    [application.contract],
+  );
+  const resolveHref = useMemo(
+    () => (preview ? entryHrefResolver(preview.entries, namespace, links) : undefined),
+    [preview, namespace],
+  );
+
+  /** "Edit this value" on a violation: back to compose, add the row if needed, scroll to it. */
+  function editAlias(alias: string) {
+    if (!parameterAliases.has(alias)) return;
+    if (!rows.some((row) => row.alias === alias)) addRow(alias);
+    if (phase !== "compose") backToCompose();
+    // The button that was clicked unmounts with its panel, and the dialog's
+    // focus manager then parks focus on its first tabbable control a tick
+    // later — so keep re-asserting the row focus until it sticks.
+    let attempts = 0;
+    const attempt = () => {
+      const row = document.querySelector<HTMLElement>(
+        `[data-testid="ship-editor"] [data-alias="${CSS.escape(alias)}"]`,
+      );
+      if (row) {
+        if (attempts === 0) row.scrollIntoView?.({ block: "center" });
+        // The value control first; the row head's buttons (Revert, Show diff)
+        // come earlier in DOM order and may be disabled.
+        const control =
+          row.querySelector<HTMLElement>('textarea, input:not([type="hidden"]), select') ??
+          row.querySelector<HTMLElement>(
+            'button:not([disabled]), [tabindex]:not([tabindex="-1"]):not([aria-disabled="true"])',
+          );
+        (control ?? row).focus?.({ preventScroll: true });
+      }
+      attempts += 1;
+      if (attempts < 6 && !row?.contains(document.activeElement)) {
+        window.setTimeout(attempt, 30);
+      }
+    };
+    window.setTimeout(attempt, 0);
+  }
+  const onEditAlias = parameterAliases.size > 0 ? editAlias : undefined;
 
   function enterRollout(shipped: ShipResult, next: Activation) {
     setActivation(next);
@@ -422,7 +516,9 @@ export default function ShipModal({
         title={title}
         onClose={handleClose}
         dismissible={phase !== "shipping"}
-        footer={
+        initialFocus={environmentSelectRef}
+        dirty={dirty}
+        footer={(close) =>
           phase === "rollout" ? (
             <>
               {activation && activation.previousVersion > 0 ? (
@@ -442,22 +538,27 @@ export default function ShipModal({
             </>
           ) : phase === "compose" || phase === "shipping" ? (
             <>
-              <Button type="button" variant="outline" onClick={handleClose} disabled={disabled}>
+              {shipBlockedReason ? (
+                <p className="footer-note" role="status" data-testid="ship-blocked-reason">
+                  {shipBlockedReason}
+                </p>
+              ) : null}
+              <Button type="button" variant="outline" onClick={close} disabled={disabled}>
                 Cancel
               </Button>
               <Button
                 type="button"
                 variant={production ? "destructive-solid" : "default"}
                 disabled={!canShip}
+                loading={phase === "shipping"}
                 onClick={() => void ship()}
                 data-testid="ship-submit"
               >
-                {phase === "shipping" ? <Spinner /> : null}
                 Ship
               </Button>
             </>
           ) : (
-            <Button type="button" variant="outline" onClick={handleClose}>
+            <Button type="button" variant="outline" onClick={close}>
               Close
             </Button>
           )
@@ -487,6 +588,7 @@ export default function ShipModal({
               <ShipEditor
                 application={application}
                 environments={environments}
+                initialFocusRef={environmentSelectRef}
                 schemaJson={schemaJson}
                 environment={environment}
                 env={env}
@@ -511,6 +613,8 @@ export default function ShipModal({
                 onToggleOptIn={toggleOptIn}
                 onRefresh={() => void runPreview()}
                 onFix={handleFix}
+                resolveHref={resolveHref}
+                onEditAlias={onEditAlias}
               />
               {production ? (
                 <Field
@@ -544,7 +648,13 @@ export default function ShipModal({
                 Validation failed, so no parameter version or release was created. Fix the values
                 and ship again.
               </p>
-              {violations.length > 0 ? <ViolationTable violations={violations} /> : null}
+              {violations.length > 0 ? (
+                <ViolationTable
+                  violations={violations}
+                  resolveHref={resolveHref}
+                  onEdit={onEditAlias}
+                />
+              ) : null}
               <div className="ship-outcome-actions">
                 <Button type="button" onClick={backToCompose}>
                   Edit changes
@@ -587,7 +697,13 @@ export default function ShipModal({
                   . A retry pins these versions instead of writing them again.
                 </p>
               ) : null}
-              {violations.length > 0 ? <ViolationTable violations={violations} /> : null}
+              {violations.length > 0 ? (
+                <ViolationTable
+                  violations={violations}
+                  resolveHref={resolveHref}
+                  onEdit={onEditAlias}
+                />
+              ) : null}
               <div className="ship-outcome-actions">
                 <Button type="button" onClick={backToCompose} disabled={retrying}>
                   Fix and retry
@@ -601,10 +717,9 @@ export default function ShipModal({
                   <Button
                     type="button"
                     variant="outline"
-                    disabled={retrying}
+                    loading={retrying}
                     onClick={() => void retryActivation()}
                   >
-                    {retrying ? <Spinner /> : null}
                     Retry activation
                   </Button>
                 ) : null}

@@ -3,13 +3,17 @@ import CopyButton from "@/components/CopyButton";
 import { NamespaceIdent, ReleaseIdent } from "@/components/Ident";
 import { Modal } from "@/components/Modal";
 import { RolloutPanel } from "@/components/ship/RolloutPanel";
-import { Badge, Button, Field, JsonView, Spinner } from "@/components/ui";
+import { Badge, Button, Field, JsonView } from "@/components/ui";
 import { AppSelect } from "@/components/ui/app-select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { formatUnixMs } from "@/lib/format";
 import type { ConfigurationRelease, ReleaseSummary } from "@/lib/types";
 import { refText, releaseKey } from "./utils";
-import { type ActivationFailure, ActivationFailurePanel } from "./ViolationTable";
+import {
+  type ActivationFailure,
+  ActivationFailurePanel,
+  type ViolationTableProps,
+} from "./ViolationTable";
 
 export type { ActivationFailure } from "./ViolationTable";
 
@@ -19,6 +23,7 @@ export function ReleaseWorkspace({
   busyAction,
   activationFailure,
   onDismissFailure,
+  resolveHref,
   onClose,
   onValidate,
   onActivate,
@@ -29,6 +34,8 @@ export function ReleaseWorkspace({
   busyAction: string;
   activationFailure: ActivationFailure | null;
   onDismissFailure: () => void;
+  /** Links each violation's alias to the resource it pins. */
+  resolveHref?: ViolationTableProps["resolveHref"];
   onClose: () => void;
   onValidate: (release: ConfigurationRelease) => void;
   onActivate: (summary: ReleaseSummary) => void;
@@ -114,9 +121,9 @@ export function ReleaseWorkspace({
                 variant="outline"
                 size="sm"
                 disabled={Boolean(busyAction)}
+                loading={busyAction === `validate:${releaseKey(release)}`}
                 onClick={() => onValidate(release)}
               >
-                {busyAction === `validate:${releaseKey(release)}` ? <Spinner /> : null}
                 Validate
               </Button>
               {onRollback && summary.current && previousSummary ? (
@@ -140,7 +147,11 @@ export function ReleaseWorkspace({
           </div>
 
           {activationFailure ? (
-            <ActivationFailurePanel failure={activationFailure} onDismiss={onDismissFailure} />
+            <ActivationFailurePanel
+              failure={activationFailure}
+              onDismiss={onDismissFailure}
+              resolveHref={resolveHref}
+            />
           ) : null}
 
           <TabsContent value="overview">

@@ -71,15 +71,61 @@ describe("ContractEditor", () => {
     ]);
     fireEvent.change(screen.getByLabelText("Alias 2"), { target: { value: "database" } });
     expect(screen.getByRole("alert")).toHaveTextContent("Duplicate contract alias");
+    // The offending row is marked, not just the summary.
+    expect(screen.getByLabelText("Alias 2")).toHaveAttribute("aria-invalid", "true");
+    expect(screen.getByLabelText("Alias 2")).toHaveAccessibleDescription(
+      /Duplicate contract alias/,
+    );
+    expect(screen.getByLabelText("Alias 1")).not.toHaveAttribute("aria-invalid");
     fireEvent.click(screen.getAllByRole("button", { name: "Remove database" })[1]);
     expect(rows()).toHaveLength(1);
     expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it("names the columns and keeps row identity when an earlier row is removed", () => {
+    render(
+      <Harness
+        initial={[
+          { alias: "database", kind: "parameter", content_type: "json" },
+          { alias: "timeout", kind: "parameter", content_type: "integer" },
+        ]}
+      />,
+    );
+    const head = document.querySelector(".contract-editor-head") as HTMLElement;
+    expect(head).not.toBeNull();
+    expect(head).toHaveTextContent("Alias");
+    expect(head).toHaveTextContent("Kind");
+    expect(head).toHaveTextContent("Content type");
+
+    const second = rows()[1];
+    fireEvent.click(screen.getByRole("button", { name: "Remove database" }));
+    expect(rows()).toHaveLength(1);
+    expect(rows()[0]).toBe(second);
+    expect(screen.getByLabelText("Alias 1")).toHaveValue("timeout");
+  });
+
+  it("counts every broken row in the summary and marks each one", () => {
+    render(
+      <Harness
+        initial={[
+          { alias: "bad alias!", kind: "parameter", content_type: "json" },
+          { alias: "ok", kind: "parameter", content_type: "json" },
+          { alias: "ok", kind: "secret" },
+        ]}
+      />,
+    );
+    expect(screen.getByRole("alert")).toHaveTextContent("2 rows need attention");
+    expect(screen.getByLabelText("Alias 1")).toHaveAttribute("aria-invalid", "true");
+    expect(screen.getByLabelText("Alias 2")).not.toHaveAttribute("aria-invalid");
+    expect(screen.getByLabelText("Alias 3")).toHaveAttribute("aria-invalid", "true");
   });
 
   it("imports the generated envelope, marks rows as from the artifact, and reports the schema hash", () => {
     const onImport = vi.fn();
     render(<Harness initial={[]} onImport={onImport} />);
     fireEvent.click(screen.getByRole("button", { name: "Import" }));
+    expect(screen.getByLabelText("Contract file")).toHaveAttribute("type", "file");
+    expect(screen.getByRole("button", { name: "Load file…" })).toBeVisible();
     fireEvent.change(screen.getByLabelText(/Paste a/), { target: { value: ENVELOPE } });
     fireEvent.click(screen.getByRole("button", { name: "Apply import" }));
     expect(onImport).toHaveBeenCalledWith(

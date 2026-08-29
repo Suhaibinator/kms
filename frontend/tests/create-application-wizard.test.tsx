@@ -81,7 +81,15 @@ describe("CreateApplicationWizard", () => {
   it("walks Basics → Schema → Contract → Environments and attaches existing namespaces", async () => {
     const onCreated = vi.fn();
     render(<CreateApplicationWizard open onClose={() => undefined} onCreated={onCreated} />);
-    expect(within(dialog()).getByRole("button", { name: "Next" })).toBeDisabled();
+    // Next is never a dead button: a blocked submit reveals the reason inline.
+    expect(within(dialog()).getByRole("button", { name: "Next" })).toBeEnabled();
+    next();
+    expect(within(dialog()).getByText("Name is required.")).toBeVisible();
+    expect(within(dialog()).getByLabelText("Application name")).toHaveAttribute(
+      "aria-invalid",
+      "true",
+    );
+    expect(mocks.createApplication).not.toHaveBeenCalled();
     await fillBasics();
     await toEnvironments();
     // The default contract row carried through.
@@ -173,5 +181,50 @@ describe("CreateApplicationWizard", () => {
     expect(await within(dialog()).findByRole("alert")).toHaveTextContent("schema invalid");
     expect(within(dialog()).getByLabelText("Schema JSON")).toBeVisible();
     expect(mocks.createApplication).not.toHaveBeenCalled();
+  });
+
+  it("waits for a blocked submit before showing schema errors, and loads a schema file", async () => {
+    render(<CreateApplicationWizard open onClose={() => undefined} onCreated={vi.fn()} />);
+    await fillBasics();
+    await chooseSelectOption(within(dialog()).getByLabelText("Schema"), "Register a new schema");
+    // Choosing the mode does not shout; the empty JSON only errors once Next is tried.
+    expect(within(dialog()).queryByRole("alert")).toBeNull();
+    expect(within(dialog()).getByRole("button", { name: "Register and continue" })).toBeEnabled();
+    next();
+    expect(within(dialog()).getByText(/Schema is not valid JSON/)).toBeVisible();
+    expect(mocks.createSchema).not.toHaveBeenCalled();
+
+    const file = new File([SCHEMA], "runtime.schema.json", { type: "application/json" });
+    fireEvent.change(within(dialog()).getByLabelText("Schema file"), {
+      target: { files: [file] },
+    });
+    await waitFor(() => expect(within(dialog()).getByLabelText("Schema JSON")).toHaveValue(SCHEMA));
+    expect(within(dialog()).getByText("runtime.schema.json")).toBeVisible();
+    expect(within(dialog()).queryByText(/Schema is not valid JSON/)).toBeNull();
+  });
+
+  it("asks before discarding typed basics, and forwards the created application on dismissal", async () => {
+    const onClose = vi.fn();
+    const onCreated = vi.fn();
+    mocks.createNamespace.mockRejectedValueOnce(new Error("quota exceeded"));
+    render(<CreateApplicationWizard open onClose={onClose} onCreated={onCreated} />);
+    await waitFor(() => expect(within(dialog()).getByLabelText("Application name")).toHaveFocus());
+    fireEvent.change(within(dialog()).getByLabelText("Application name"), {
+      target: { value: "payments-api" },
+    });
+    fireEvent.click(within(dialog()).getByRole("button", { name: "Cancel" }));
+    const confirm = await screen.findByRole("dialog", { name: "Discard changes?", hidden: true });
+    fireEvent.click(within(confirm).getByRole("button", { name: "Keep editing", hidden: true }));
+    expect(onClose).not.toHaveBeenCalled();
+
+    next();
+    await screen.findByLabelText("Schema");
+    await toEnvironments();
+    fireEvent.click(within(dialog()).getByRole("button", { name: "Create application" }));
+    expect(await within(dialog()).findByText("failed")).toBeVisible();
+    // The application exists now: closing hands it over instead of dropping it.
+    fireEvent.click(within(dialog()).getByRole("button", { name: "Dismiss dialog" }));
+    expect(onCreated).toHaveBeenCalledWith(created);
+    expect(onClose).not.toHaveBeenCalled();
   });
 });
