@@ -230,6 +230,72 @@ describe("ReleaseLoader", () => {
     expect(loader.stats().applied).toBe(1n);
   });
 
+  it("carries a bounded divergence summary on applied acknowledgements only", async () => {
+    const policy = '{"minLength":14}';
+    const release = makeRelease(3n, [parameterEntry("policy", "policy", 7n, policy, "json")]);
+    const transport = new FakeTransport(release, 22n);
+    transport.parameters.set("/prod/api/policy", parameterResource("policy", 7n, policy, "json"));
+    const controller = new AbortController();
+    const loader = ReleaseLoader._create(transport, {
+      namespace,
+      name: "runtime",
+      clientName: "unit-test",
+    });
+
+    const run = loader.run(
+      () => ({
+        commit: () => undefined,
+        abort: () => undefined,
+        releaseDivergence: () => ({ divergent: true, fieldCount: 70_000.9 }),
+      }),
+      controller.signal,
+    );
+    await waitFor(() => acknowledgementStates(transport.stream).includes("applied"));
+    controller.abort();
+    await expect(run).rejects.toMatchObject({ name: "AbortError" });
+
+    const acks = acknowledgements(transport.stream);
+    expect(acks.find((ack) => ack.state === "applied")).toMatchObject({
+      appliedDivergent: true,
+      divergentFieldCount: 65_535,
+    });
+    for (const ack of acks.filter((candidate) => candidate.state !== "applied")) {
+      expect(ack).toMatchObject({ appliedDivergent: false, divergentFieldCount: 0 });
+    }
+
+    for (const reporter of [
+      () => ({ divergent: false, fieldCount: 3 }),
+      () => {
+        throw new Error("reporter failure must not affect the acknowledgement");
+      },
+      () => "not-a-report",
+    ]) {
+      const again = new FakeTransport(release, 22n);
+      again.parameters.set("/prod/api/policy", parameterResource("policy", 7n, policy, "json"));
+      const stop = new AbortController();
+      const secondLoader = ReleaseLoader._create(again, {
+        namespace,
+        name: "runtime",
+        clientName: "unit-test",
+      });
+      const secondRun = secondLoader.run(
+        () => ({
+          commit: () => undefined,
+          abort: () => undefined,
+          releaseDivergence: reporter as () => { divergent: boolean; fieldCount: number },
+        }),
+        stop.signal,
+      );
+      await waitFor(() => acknowledgementStates(again.stream).includes("applied"));
+      stop.abort();
+      await expect(secondRun).rejects.toMatchObject({ name: "AbortError" });
+      expect(acknowledgements(again.stream).find((ack) => ack.state === "applied")).toMatchObject({
+        appliedDivergent: false,
+        divergentFieldCount: 0,
+      });
+    }
+  });
+
   it("runs manifest validation before fetch or token lookup and redacts its failure", async () => {
     const release = makeRelease(1n, [secretEntry("password", "password", 2n, "string", true)]);
     const transport = new FakeTransport(release);
