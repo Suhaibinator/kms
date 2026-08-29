@@ -316,6 +316,7 @@ The complete compile-checked integration is in the
 | `ReleaseIdentityInit`, `ReleaseIdentity` | Type and immutable class | Value-free copied release identity; use `ReleaseIdentity.from`, `isZero`, and safe serialization. |
 | `ConfigSnapshot<T>`, `immutableSnapshot(config, release?)` | Class/function | Private immutable generation with defensive `config()` and typed `get(key)` reads. |
 | `canonicalParameterValue(contentType, value)`, `parameterHash(contentType, value)` | Functions | Canonical bytes and lowercase-hex SHA-256 shared with the Go SDK and the server: strict single-document JSON with UTF-8-byte-sorted keys, verbatim number literals, minimal string escaping, duplicate-key and invalid-UTF-8 rejection; other content types byte-for-byte. |
+| `DEFAULTS_ARTIFACT_FORMAT`, `MAX_DEFAULTS_ARTIFACT_BYTES`, `MAX_DEFAULT_PARAMETER_VALUE_BYTES`, `DefaultsArtifact`, `DefaultsArtifactContractEntry`, `DefaultsArtifactParameter`, `EncodeDefaultsArtifactInput`, `encodeDefaultsArtifact(input)`, `parseDefaultsArtifact(document)`, `DefaultsArtifactError` | Constants/types/functions/error class | The `kms-config-defaults/v1` parameter-only defaults artifact: deterministic sorted encoding, strict parsing with size bounds, and its value-free error. |
 | `verifyDefaults(client, input, options)`, `VerifyClient`, `VerifyInput`, `VerifyOptions`, `VerifyEntryResult`, `VerifyResult` | Function/types/class | Hash every parameter group of a generated contract, call `verifyReleaseDefaults`, and return `passed()`, `failures()`, and a value-free CI `report()` (header, sorted `VERDICT ALIAS CONTENT_TYPE` table, summary counts including unverified aliases). Secret entries are never sent. |
 
 `@suhaibinator/kms/configstore` is the optional Stage 7 layer used by generated
@@ -374,6 +375,7 @@ surface (the `kms-config-gen-ts` executable is the corresponding CLI):
 | `GenerateOptions`, `GeneratedArtifacts`, `generate(input, options?)` | Types/function | Deterministically produce binding, schema, contract, and schema SHA-256; import specifiers are explicitly configurable. |
 | `OutputPaths`, `verifyArtifacts(paths, artifacts)`, `writeArtifacts(paths, artifacts)` | Type/functions | Name three explicit destinations, compare without mutation, or stage/fsync/replace changed members. Writers must not run concurrently because the three renames are not one filesystem transaction. |
 | `StaleArtifactsError` | Error class | Reports the copied list of generated outputs that differ in verify/check mode. |
+| `runDefaultsExporter(args, provider, encoder, io?)`, `DefaultsProvider`, `DefaultsEncoder`, `DefaultsExporterIO` | Function/types | Command-line runner that resolves a profile's defaults through the application-owned provider, encodes the defaults artifact with the generated encoder, and writes it to stdout or a file. |
 
 `@suhaibinator/kms/configgen` parses a versioned
 `kms-config-descriptor/v1` document and deterministically produces a generated

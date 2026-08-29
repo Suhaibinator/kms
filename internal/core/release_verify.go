@@ -249,7 +249,10 @@ func (s *Service) verifyDefaultsEntry(ctx context.Context, pr Principal, release
 	// by authorize) so the verdict set stays closed.
 	if entry.Ref.NS != releaseNS && !pr.IsAdmin() {
 		if _, _, err := s.authorize(ctx, pr, domain.OpConfigurationReleaseVerifyDefaults, domain.ResourceParameter, entry.Ref); err != nil {
-			return "", err
+			// authorize has audited the denial; the caller must not learn which
+			// namespace the pin targets, whether it still exists, or which auth
+			// methods it allows, so every failure collapses to the neutral text.
+			return "", domain.Errorf(domain.ErrPermissionDenied, "access denied")
 		}
 	}
 	entryCtx := ctx

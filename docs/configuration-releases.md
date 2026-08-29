@@ -278,8 +278,8 @@ retained for 30 days by default. Configure these with
 ## Management surfaces
 
 The gRPC CLI provides `parameter-store release` commands for `create`,
-`validate`, `show`, `list`, `diff`, `activate`, `rollback`, and `subscribers`,
-plus `release schema create|show|list`. The embedded Releases page exposes
+`validate`, `show`, `list`, `diff`, `activate`, `rollback`, `subscribers`, and
+`verify-defaults`, plus `release schema create|show|list`. The embedded Releases page exposes
 creation, validation, diff, activation, rollback, schema registration/listing,
 and per-instance subscriber status. Secret rows show metadata only. See
 [`operations.md`](operations.md#configuration-release-commands) and

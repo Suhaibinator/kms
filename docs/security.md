@@ -714,7 +714,7 @@ authentication failure, authorization denial, KEK rotation, schema
 registration, release create/validate/activate/rollback, CAS conflict,
 release lifecycle acknowledgement, defaults verification (counts only), and
 blocked release-reference destruction is audited
-(`internal/core/*.go`, `Service.audit`/`auditOp`/`auditStrict`) into
+(`internal/core/*.go`, `Service.audit`/`auditRef`/`auditRefWithNamespaceID`/`auditStrict`) into
 `audit_events`. Audit records carry actor identity/kind, the resource's
 `env`/`app`/`key`/version and immutable namespace-incarnation ID (denormalized
 with no foreign key, so the history stays readable after a namespace is

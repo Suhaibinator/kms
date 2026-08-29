@@ -554,3 +554,51 @@ func TestVerifyReleaseDefaultsCrossNamespaceRequiresVerifyGrantThere(t *testing.
 		t.Fatalf("cross-namespace probe with a grant there: out=%+v err=%v", out, err)
 	}
 }
+
+func TestVerifyReleaseDefaultsCrossNamespaceDenialIsNeutral(t *testing.T) {
+	f := newVerifyFixture(t)
+	ctx := context.Background()
+	// The pinned namespace admits mTLS only, so a token identity holding the
+	// verify operation there is still refused by the auth-method gate. That
+	// refusal must read exactly like "no policy" and never name the namespace.
+	locked := domain.NamespaceRef{Env: "locked", App: "platform"}
+	if _, err := f.st.CreateNamespace(ctx, domain.Namespace{NamespaceRef: locked, AllowedAuthMethods: []domain.AuthMethod{domain.AuthMethodMTLS}, CreatedBy: "admin"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := f.st.PutParameter(ctx, domain.Ref{NS: locked, Key: "flags"}, `{"x":true}`, "json", "{}", "admin"); err != nil {
+		t.Fatal(err)
+	}
+	other := domain.NamespaceRef{Env: "stage", App: "yapp"}
+	if _, err := f.st.CreateNamespace(ctx, domain.Namespace{NamespaceRef: other, AllowedAuthMethods: []domain.AuthMethod{domain.AuthMethodToken}, CreatedBy: "admin"}); err != nil {
+		t.Fatal(err)
+	}
+	rel, err := f.svc.CreateConfigurationRelease(ctx, f.admin, domain.CreateConfigurationReleaseInput{
+		Namespace: other, Name: "runtime",
+		Entries: []domain.ReleaseEntrySelector{{Alias: "flags", Kind: domain.ReleaseEntryParameter, Ref: domain.Ref{NS: locked, Key: "flags"}}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := f.svc.ActivateConfigurationRelease(ctx, f.admin, other, "runtime", rel.Version, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.st.CreatePolicy(ctx, domain.Policy{Name: "ci-both", Subject: "ci", Allow: []domain.PolicyRule{
+		{Operation: domain.OpConfigurationReleaseVerifyDefaults, Env: "stage", App: "yapp"},
+		{Operation: domain.OpConfigurationReleaseVerifyDefaults, Env: "locked", App: "platform"},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	out, err := f.svc.VerifyReleaseDefaults(ctx, clientPrincipal("ci"), domain.VerifyReleaseDefaultsInput{
+		Namespace: other,
+		Entries:   []domain.VerifyDefaultsEntry{{Alias: "flags", ContentType: "json", SHA256: mustHash(t, "json", `{"x":true}`)}},
+	})
+	if !errors.Is(err, domain.ErrPermissionDenied) || len(out.Entries) != 0 {
+		t.Fatalf("method-gated pin: out=%+v err=%v", out, err)
+	}
+	if strings.Contains(err.Error(), "locked") || strings.Contains(err.Error(), "platform") || strings.Contains(err.Error(), "mtls") {
+		t.Fatalf("denial leaks the pinned namespace: %v", err)
+	}
+	if err.Error() != "access denied: permission denied" {
+		t.Fatalf("denial text = %q, want the neutral access-denied text", err.Error())
+	}
+}

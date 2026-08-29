@@ -509,9 +509,10 @@ that logs through `log/slog`:
 |---|---|---|---|
 | default mismatch | `ERROR` | `kms config diverges from source defaults` | `component`, `phase`, `release`, `fields` |
 | initial generation applied | `INFO` | `kms config applied` | `component`, `phase`, `release`, `release_version`, `activation_revision`, `default_divergent` |
-| per parameter group at startup | `INFO` | `kms config group` | `alias`, `values` (canonical non-secret JSON), `release_version`, `activation_revision` |
+| per parameter group at startup | `INFO` | `kms config group` | `component`, `alias`, `values` (canonical non-secret JSON), `release_version`, `activation_revision` |
+| group documents unavailable | `ERROR` | `kms config groups unavailable` | `component`, `release`, `error` |
 | reload applied | `INFO` | `kms config reloaded` | `component`, `release`, `default_divergent`, `changed_count` |
-| per changed field on reload | `INFO` | `kms config field changed` | `path`, `previous`, `current` |
+| per changed field on reload | `INFO` | `kms config field changed` | `component`, `release`, `path`, `previous`, `current` |
 | candidate rejected | `ERROR` | `kms config candidate rejected` | `component`, `category`, `release`, `paths` |
 
 `SlogOptions.Component` sets the `component` attribute (default

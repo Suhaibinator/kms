@@ -89,7 +89,7 @@ log:
 `mtls_enabled` requires `tls_enabled`; `tls_enabled` requires
 `server_cert_file`/`server_key_file` to exist; `mtls_enabled` requires
 `client_ca_file` to exist; every `server.verify_defaults.*` budget is
-positive. `Config.Redacted()` is what the server logs at
+positive and `mismatch_budget_per_hour` is at least 300. `Config.Redacted()` is what the server logs at
 startup — addresses, paths, and feature flags, deliberately never a
 wholesale dump of the file (so nothing sensitive that might end up in the
 YAML by mistake gets logged).
@@ -499,8 +499,10 @@ violations are visible before the operator confirms; activating any other
 retained version stays on the activate endpoint. See
 [`http-api.md`](http-api.md#rollback).
 
-`verify-defaults` checks a generated defaults artifact (the file
-`kms-config-gen` emits) against the active release **by hash only**: the CLI
+`verify-defaults ENV/APP --artifact FILE|- [--release NAME]` checks a
+generated defaults artifact (the file the generated exporter emits) against
+the active release (`--release` defaults to the application's release name)
+**by hash only**: the CLI
 canonicalizes and hashes every parameter locally and sends aliases, content
 types, and digests, so no parameter value leaves the machine and none comes
 back. It prints one verdict per alias and a summary, exits `0` when every
@@ -508,7 +510,9 @@ alias matches and the artifact's schema digest matches the registered
 schema, `1` on any `differs`/`missing_in_release`/`unknown_alias`/
 `secret_alias`/`unsupported_content_type` verdict, schema mismatch, or RPC
 failure, and `2` on usage errors. `unverified` (release aliases the artifact
-does not mention) is reported but does not fail the check.
+does not mention) is reported but does not fail the check; an artifact
+without `schema_sha256` prints `schema not checked` and the schema does not
+participate in the exit code.
 
 ```bash
 KMS_TOKEN="$VERIFY_TOKEN" parameter-store release verify-defaults prod/gradethis \
