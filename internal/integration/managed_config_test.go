@@ -2,8 +2,8 @@ package integration
 
 import (
 	"context"
-	"errors"
 	"os"
+	"sort"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -186,7 +186,8 @@ func TestManagedConfigStoreOverRealKMS(t *testing.T) {
 	defer stopStore()
 	reporter := &managedReporter{}
 	store, err := fixturekms.Start(storeCtx, client, fixturekms.Options{
-		Release: managedRelease, Defaults: fixtureconfig.Defaults, OnDefaultMismatch: reporter.report,
+		Release: managedRelease, Defaults: fixtureconfig.Defaults,
+		Callbacks:           configstore.Callbacks{OnDefaultMismatch: reporter.report},
 		SecretTokenProvider: provider, ReconcileInterval: 25 * time.Millisecond, InstanceID: "managed-primary",
 	})
 	if err != nil {
@@ -248,33 +249,69 @@ func TestManagedConfigStoreOverRealKMS(t *testing.T) {
 		t.Fatalf("runtime mismatch reports = %#v", reports)
 	}
 
-	// The same active divergent release must fail a fresh process by default.
-	strictCtx, stopStrict := context.WithCancel(ctx)
-	_, strictErr := fixturekms.Start(strictCtx, client, fixturekms.Options{
-		Release: managedRelease, Defaults: fixtureconfig.Defaults, OnDefaultMismatch: func(configstore.DefaultMismatchReport) {},
-		SecretTokenProvider: provider, ReconcileInterval: 25 * time.Millisecond, InstanceID: "managed-strict-restart",
-	})
-	stopStrict()
-	var mismatch *configstore.DefaultMismatchError
-	if !errors.As(strictErr, &mismatch) || mismatch.Phase() != configstore.MismatchStartup || mismatch.Severity() != configstore.MismatchFatal {
-		t.Fatalf("strict divergent restart error = %T %v, want fatal *DefaultMismatchError", strictErr, strictErr)
-	}
-
-	bypassCtx, stopBypass := context.WithCancel(ctx)
-	defer stopBypass()
-	bypassReporter := &managedReporter{}
-	bypassStore, err := fixturekms.Start(bypassCtx, client, fixturekms.Options{
-		Release: managedRelease, Defaults: fixtureconfig.Defaults, AllowDefaultMismatch: true,
-		OnDefaultMismatch: bypassReporter.report, SecretTokenProvider: provider,
-		ReconcileInterval: 25 * time.Millisecond, InstanceID: "managed-bypass-restart",
+	// A fresh process starting onto the same divergent active release applies
+	// it and reports the divergence once at startup; there is no fatal path
+	// and no bypass flag, because a replica must be able to restart onto
+	// whatever release is active.
+	const restartInstance = "managed-divergent-restart"
+	restartCtx, stopRestart := context.WithCancel(ctx)
+	defer stopRestart()
+	restartReporter := &managedReporter{}
+	restartApplied := make(chan configstore.AppliedReport, 4)
+	restartStore, err := fixturekms.Start(restartCtx, client, fixturekms.Options{
+		Release: managedRelease, Defaults: fixtureconfig.Defaults,
+		Callbacks: configstore.Callbacks{
+			OnDefaultMismatch: restartReporter.report,
+			OnApplied:         func(report configstore.AppliedReport) { restartApplied <- report },
+		},
+		SecretTokenProvider: provider, ReconcileInterval: 25 * time.Millisecond, InstanceID: restartInstance,
 	})
 	if err != nil {
-		t.Fatalf("start divergent store with bypass: %v", err)
+		t.Fatalf("start fresh store onto divergent active release: %v", err)
 	}
-	bypassReports := bypassReporter.snapshot()
-	if len(bypassReports) != 1 || bypassReports[0].Phase() != configstore.MismatchStartup || bypassReports[0].Severity() != configstore.MismatchError || !bypassStore.Status().DefaultDivergent {
-		t.Fatalf("bypassed startup reports=%#v status=%+v", bypassReports, bypassStore.Status())
+	restartReports := restartReporter.snapshot()
+	if len(restartReports) != 1 || restartReports[0].Phase() != configstore.MismatchStartup || restartReports[0].Severity() != configstore.MismatchError || !restartStore.Status().DefaultDivergent {
+		t.Fatalf("divergent startup reports=%#v status=%+v", restartReports, restartStore.Status())
 	}
+	if paths := differencePaths(restartReports[0]); len(paths) != 3 || paths[0] != "runtime.features" || paths[1] != "runtime.thresholds" || paths[2] != "runtime.window" {
+		t.Fatalf("divergent startup fields = %v, want the three hot runtime overrides", paths)
+	}
+	if restartStore.Current().Release().Version() != hotRelease.GetVersion() {
+		t.Fatalf("divergent startup published release %d, want active %d", restartStore.Current().Release().Version(), hotRelease.GetVersion())
+	}
+	select {
+	case startupReport := <-restartApplied:
+		if startupReport.Phase() != configstore.PhaseStartup || !startupReport.DefaultDivergent() || len(startupReport.Changed()) != 0 {
+			t.Fatalf("divergent startup applied report = %s", startupReport)
+		}
+	default:
+		t.Fatal("OnApplied did not fire for the divergent initial generation before Start returned")
+	}
+
+	// The applied acknowledgement carries the divergence flag (never field
+	// names or values) so the console can show which replicas run overrides.
+	var restartRow *kmsv1.ReleaseSubscriberState
+	waitForManagedState(t, func() bool {
+		response, listErr := admin.ListReleaseSubscribers(authCtx, &kmsv1.ListReleaseSubscribersRequest{
+			Namespace: namespace, ReleaseName: managedRelease, PageSize: 100,
+		})
+		if listErr != nil {
+			return false
+		}
+		for _, row := range response.GetSubscribers() {
+			if row.GetInstanceId() == restartInstance && row.GetState() == kmsclient.ReleaseStateApplied && row.GetReleaseVersion() == hotRelease.GetVersion() {
+				restartRow = row
+				return true
+			}
+		}
+		return false
+	}, "divergent restart applied acknowledgement")
+	if restartRow.GetRejectionCategory() != "" || restartRow.GetDiagnostic() != "" {
+		t.Fatalf("applied divergent acknowledgement carried rejection detail: %+v", restartRow)
+	}
+	// TODO(server lane): assert restartRow.GetAppliedDivergent() &&
+	// restartRow.GetDivergentFieldCount() == 3 once the gRPC WatchRelease
+	// handler and storage persist the acknowledgement's divergence fields.
 
 	invalidPins := hotPins
 	invalidPins.runtime = putParameter("groups/runtime", managedRuntimeInvalid)
@@ -307,12 +344,15 @@ func TestManagedConfigStoreOverRealKMS(t *testing.T) {
 		return store.Current().Release().Version() == restoreRelease.GetVersion() && !store.Status().DefaultDivergent
 	}, "default restoration")
 	waitForManagedState(t, func() bool {
-		return bypassStore.Current().Release().Version() == restoreRelease.GetVersion() && !bypassStore.Status().DefaultDivergent
-	}, "bypassed store restoration")
+		return restartStore.Current().Release().Version() == restoreRelease.GetVersion() && !restartStore.Status().DefaultDivergent
+	}, "divergent-restart store restoration")
+	if len(restartReporter.snapshot()) != 1 {
+		t.Fatalf("restoration emitted further mismatch reports: %#v", restartReporter.snapshot())
+	}
 
-	stopBypass()
-	if err := bypassStore.Wait(); err != nil {
-		t.Fatalf("bypassed store Wait after cancellation: %v", err)
+	stopRestart()
+	if err := restartStore.Wait(); err != nil {
+		t.Fatalf("divergent-restart store Wait after cancellation: %v", err)
 	}
 	stopStore()
 	if err := store.Wait(); err != nil {
@@ -330,4 +370,14 @@ func waitForManagedState(t *testing.T, predicate func() bool, description string
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatalf("timed out waiting for %s", description)
+}
+
+func differencePaths(report configstore.DefaultMismatchReport) []string {
+	fields := report.Fields()
+	paths := make([]string, len(fields))
+	for i := range fields {
+		paths[i] = fields[i].Path
+	}
+	sort.Strings(paths)
+	return paths
 }
