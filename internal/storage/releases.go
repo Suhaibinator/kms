@@ -639,10 +639,10 @@ func (s *SQLStore) UpsertReleaseAcknowledgement(ctx context.Context, ack domain.
 			return err
 		}
 
-		m := releaseSubscriberStateModel{NamespaceID: nsID, ReleaseName: ack.ReleaseName, ClientName: ack.ClientName, InstanceID: ack.InstanceID, State: ack.State, Identity: ack.Identity, ReleaseVersion: int64(ack.ReleaseVersion), ActivationRevision: int64(ack.ActivationRevision), RejectionCategory: ack.RejectionCategory, Diagnostic: ack.Diagnostic, ClientTimestamp: fmtTime(ack.ClientTimestamp), ServerTimestamp: fmtTime(ack.ServerTimestamp), Connected: 1}
+		m := releaseSubscriberStateModel{NamespaceID: nsID, ReleaseName: ack.ReleaseName, ClientName: ack.ClientName, InstanceID: ack.InstanceID, State: ack.State, Identity: ack.Identity, ReleaseVersion: int64(ack.ReleaseVersion), ActivationRevision: int64(ack.ActivationRevision), RejectionCategory: ack.RejectionCategory, Diagnostic: ack.Diagnostic, ClientTimestamp: fmtTime(ack.ClientTimestamp), ServerTimestamp: fmtTime(ack.ServerTimestamp), Connected: 1, AppliedDivergent: b2i(ack.AppliedDivergent), DivergentFieldCount: int64(ack.DivergentFieldCount)}
 		return tx.Clauses(clause.OnConflict{
 			Columns:   []clause.Column{{Name: "namespace_id"}, {Name: "release_name"}, {Name: "client_name"}, {Name: "instance_id"}, {Name: "identity"}, {Name: "state"}},
-			DoUpdates: clause.AssignmentColumns([]string{"release_version", "activation_revision", "rejection_category", "diagnostic", "client_timestamp", "server_timestamp", "connected", "disconnected_at"}),
+			DoUpdates: clause.AssignmentColumns([]string{"release_version", "activation_revision", "rejection_category", "diagnostic", "client_timestamp", "server_timestamp", "connected", "disconnected_at", "applied_divergent", "divergent_field_count"}),
 			Where:     clause.Where{Exprs: []clause.Expression{clause.Expr{SQL: "excluded.activation_revision > release_subscriber_states.activation_revision OR (excluded.activation_revision = release_subscriber_states.activation_revision AND excluded.server_timestamp >= release_subscriber_states.server_timestamp)"}}},
 		}).Create(&m).Error
 	})
@@ -655,24 +655,27 @@ func (s *SQLStore) ListReleaseAcknowledgements(ctx context.Context, ns domain.Na
 		return nil, "", err
 	}
 	type acknowledgementRow struct {
-		ReleaseName        string
-		ReleaseVersion     int64
-		ActivationRevision int64
-		ClientName         string
-		InstanceID         string
-		Identity           string
-		State              string
-		RejectionCategory  string
-		Diagnostic         string
-		ClientTimestamp    string
-		ServerTimestamp    string
-		Connected          int64
+		ReleaseName         string
+		ReleaseVersion      int64
+		ActivationRevision  int64
+		ClientName          string
+		InstanceID          string
+		Identity            string
+		State               string
+		RejectionCategory   string
+		Diagnostic          string
+		ClientTimestamp     string
+		ServerTimestamp     string
+		Connected           int64
+		AppliedDivergent    int64
+		DivergentFieldCount int64
 	}
 	query := `WITH subscriber_rows AS (
 		SELECT s.release_name, s.release_version, s.activation_revision,
 			s.client_name, s.instance_id, s.identity, s.state,
 			s.rejection_category, s.diagnostic, s.client_timestamp,
-			s.server_timestamp, COALESCE(c.connected, s.connected) AS connected
+			s.server_timestamp, COALESCE(c.connected, s.connected) AS connected,
+			s.applied_divergent, s.divergent_field_count
 		FROM release_subscriber_states s
 		LEFT JOIN release_subscriber_connections c
 			ON c.namespace_id = s.namespace_id
@@ -683,7 +686,7 @@ func (s *SQLStore) ListReleaseAcknowledgements(ctx context.Context, ns domain.Na
 		WHERE s.namespace_id = ? AND (? = '' OR s.release_name = ?)
 		UNION ALL
 		SELECT c.release_name, 0, 0, c.client_name, c.instance_id,
-			c.identity, '', '', '', '', c.server_timestamp, c.connected
+			c.identity, '', '', '', '', c.server_timestamp, c.connected, 0, 0
 		FROM release_subscriber_connections c
 		WHERE c.namespace_id = ? AND (? = '' OR c.release_name = ?)
 			AND NOT EXISTS (
@@ -722,7 +725,7 @@ func (s *SQLStore) ListReleaseAcknowledgements(ctx context.Context, ns domain.Na
 		}
 		out = make([]domain.ReleaseAcknowledgement, 0, len(rows))
 		for _, row := range rows {
-			out = append(out, domain.ReleaseAcknowledgement{Namespace: ns, ReleaseName: row.ReleaseName, ReleaseVersion: uint64(row.ReleaseVersion), ActivationRevision: uint64(row.ActivationRevision), ClientName: row.ClientName, InstanceID: row.InstanceID, Identity: row.Identity, State: row.State, RejectionCategory: row.RejectionCategory, Diagnostic: row.Diagnostic, ClientTimestamp: parseTime(row.ClientTimestamp), ServerTimestamp: parseTime(row.ServerTimestamp), Connected: i2b(row.Connected)})
+			out = append(out, domain.ReleaseAcknowledgement{Namespace: ns, ReleaseName: row.ReleaseName, ReleaseVersion: uint64(row.ReleaseVersion), ActivationRevision: uint64(row.ActivationRevision), ClientName: row.ClientName, InstanceID: row.InstanceID, Identity: row.Identity, State: row.State, RejectionCategory: row.RejectionCategory, Diagnostic: row.Diagnostic, ClientTimestamp: parseTime(row.ClientTimestamp), ServerTimestamp: parseTime(row.ServerTimestamp), Connected: i2b(row.Connected), AppliedDivergent: i2b(row.AppliedDivergent), DivergentFieldCount: uint32(row.DivergentFieldCount)})
 		}
 		if hasMore {
 			last := rows[len(rows)-1]

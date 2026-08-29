@@ -1073,8 +1073,12 @@ rules (a deny still wins).
   `{"subscribers":[{"namespace","release_name","client_name","instance_id",
   "identity","state","release_version","activation_revision",
   "rejection_category","diagnostic","client_timestamp_unix_ms",
-  "server_timestamp_unix_ms","connected"}],"next_page_token":"",
-  "current_revision":42}`.
+  "server_timestamp_unix_ms","connected","applied_divergent",
+  "divergent_field_count"}],"next_page_token":"",
+  "current_revision":42}`. `applied_divergent` is true only on an `applied`
+  row whose running generation differs from the application's source-owned
+  defaults, and `divergent_field_count` is how many fields differ; both are
+  `false`/`0` on every other state and on connection-only rows.
 - `POST /api/v1/releases/rollback` re-activates the `previous` version with
   the same CAS and validation-failure semantics as activate; see
   [Rollback](#rollback) under Console aggregates.

@@ -50,6 +50,8 @@ func mapError(log *zap.Logger, ctx context.Context, err error) error {
 		return status.Error(codes.FailedPrecondition, err.Error())
 	case errors.Is(err, domain.ErrAborted):
 		return status.Error(codes.Aborted, err.Error())
+	case errors.Is(err, domain.ErrResourceExhausted):
+		return status.Error(codes.ResourceExhausted, err.Error())
 	case errors.Is(err, domain.ErrNotReady):
 		return status.Error(codes.Unavailable, "service not ready")
 	case errors.Is(err, domain.ErrDecryptFailed):

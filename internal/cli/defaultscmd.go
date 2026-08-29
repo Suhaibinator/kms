@@ -15,7 +15,8 @@ import (
 	"google.golang.org/grpc"
 )
 
-type defaultsDialFunc func(*connFlags) (*grpc.ClientConn, error)
+// dialFunc opens the gRPC connection a server-backed command uses.
+type dialFunc func(*connFlags) (*grpc.ClientConn, error)
 
 func (c *CLI) cmdDefaults(args []string) int {
 	if len(args) == 0 {
@@ -92,7 +93,7 @@ func (c *CLI) cmdDefaultsApply(args []string) int {
 		return c.fail("reading defaults artifact: %v", err)
 	}
 
-	conn, err := c.dialDefaults(cf)
+	conn, err := c.dialConn(cf)
 	if err != nil {
 		return c.fail("%v", err)
 	}
@@ -147,9 +148,11 @@ func (c *CLI) cmdDefaultsApply(args []string) int {
 	return 0
 }
 
-func (c *CLI) dialDefaults(cf *connFlags) (*grpc.ClientConn, error) {
-	if c.defaultsDial != nil {
-		return c.defaultsDial(cf)
+// dialConn honours the test transport override, otherwise dials the
+// endpoint named by the connection flags.
+func (c *CLI) dialConn(cf *connFlags) (*grpc.ClientConn, error) {
+	if c.dialOverride != nil {
+		return c.dialOverride(cf)
 	}
 	return cf.dial()
 }

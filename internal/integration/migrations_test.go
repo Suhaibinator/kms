@@ -50,8 +50,8 @@ func TestMigrationsFreshAndIdempotent(t *testing.T) {
 	if err := db.QueryRow("SELECT MAX(version) FROM schema_migrations").Scan(&version); err != nil {
 		t.Fatalf("read schema_migrations: %v", err)
 	}
-	if version != 6 {
-		t.Errorf("schema version = %d, want 6", version)
+	if version != 7 {
+		t.Errorf("schema version = %d, want 7", version)
 	}
 
 	var ddl string
@@ -267,8 +267,8 @@ func TestMigrationRepairsPartialSubscriberSchemaDespiteCurrentStamp(t *testing.T
 	if err := db.QueryRow("SELECT MAX(version) FROM schema_migrations").Scan(&version); err != nil {
 		t.Fatal(err)
 	}
-	if version != 6 {
-		t.Fatalf("partial database schema stamp = %d, want current v6", version)
+	if version != 7 {
+		t.Fatalf("partial database schema stamp = %d, want current v7", version)
 	}
 	if err := db.Close(); err != nil {
 		t.Fatal(err)
@@ -517,4 +517,91 @@ func TestMigrationV1ToV2AddsConfigurationReleaseTables(t *testing.T) {
 			t.Errorf("schema-v2 table %q missing: count=%d err=%v", table, count, err)
 		}
 	}
+}
+
+// Schema v7 adds applied_divergent / divergent_field_count to the subscriber
+// lifecycle table. That table is never AutoMigrate'd once it exists, so a v6
+// database must gain the columns through the explicit ALTER TABLE path, keep
+// its rows (reading as not-divergent), and accept divergent acknowledgements
+// afterwards.
+func TestMigrationV6ToV7AddsSubscriberDivergence(t *testing.T) {
+	ctx := context.Background()
+	dbPath := filepath.Join(t.TempDir(), "kms-v6-divergence.db")
+	store, err := storage.Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ns := domain.NamespaceRef{Env: "prod", App: "app"}
+	if _, err := store.CreateNamespace(ctx, domain.Namespace{NamespaceRef: ns}); err != nil {
+		t.Fatal(err)
+	}
+	at := time.Now().UTC()
+	if err := store.SetReleaseInstanceConnected(ctx, domain.ReleaseSubscriberConnection{
+		Namespace: ns, ReleaseName: "runtime", ClientName: "api", InstanceID: "replica-1",
+		Identity: "alice", ConnectionID: "alice-1", Connected: true, ServerTimestamp: at,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.UpsertReleaseAcknowledgement(ctx, domain.ReleaseAcknowledgement{
+		Namespace: ns, ReleaseName: "runtime", ReleaseVersion: 1, ActivationRevision: 7,
+		ClientName: "api", InstanceID: "replica-1", Identity: "alice", ConnectionID: "alice-1",
+		State: domain.ReleaseStateApplied, ClientTimestamp: at, ServerTimestamp: at,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, statement := range []string{
+		`ALTER TABLE release_subscriber_states DROP COLUMN applied_divergent`,
+		`ALTER TABLE release_subscriber_states DROP COLUMN divergent_field_count`,
+		`UPDATE schema_migrations SET version = 6`,
+	} {
+		if _, err := db.Exec(statement); err != nil {
+			_ = db.Close()
+			t.Fatalf("prepare v6 subscriber schema: %v", err)
+		}
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	upgraded, err := storage.Open(dbPath)
+	if err != nil {
+		t.Fatalf("upgrade v6 subscriber schema: %v", err)
+	}
+	defer func() { _ = upgraded.Close() }()
+	rows, _, err := upgraded.ListReleaseAcknowledgements(ctx, ns, "runtime", storage.ListPage{})
+	if err != nil || len(rows) != 1 {
+		t.Fatalf("subscriber rows after v7 migration = %+v err=%v", rows, err)
+	}
+	if rows[0].State != domain.ReleaseStateApplied || rows[0].AppliedDivergent || rows[0].DivergentFieldCount != 0 {
+		t.Fatalf("legacy applied row should read as not divergent: %+v", rows[0])
+	}
+	if err := upgraded.UpsertReleaseAcknowledgement(ctx, domain.ReleaseAcknowledgement{
+		Namespace: ns, ReleaseName: "runtime", ReleaseVersion: 1, ActivationRevision: 8,
+		ClientName: "api", InstanceID: "replica-1", Identity: "alice", ConnectionID: "alice-1",
+		State: domain.ReleaseStateApplied, AppliedDivergent: true, DivergentFieldCount: 2,
+		ClientTimestamp: time.Now().UTC(), ServerTimestamp: time.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("divergent ack after migration: %v", err)
+	}
+	rows, _, err = upgraded.ListReleaseAcknowledgements(ctx, ns, "runtime", storage.ListPage{})
+	if err != nil || len(rows) != 1 || !rows[0].AppliedDivergent || rows[0].DivergentFieldCount != 2 {
+		t.Fatalf("divergent row after v7 migration = %+v err=%v", rows, err)
+	}
+
+	// Reopening a v7 database is idempotent: the ALTER path is skipped.
+	if err := upgraded.Close(); err != nil {
+		t.Fatal(err)
+	}
+	again, err := storage.Open(dbPath)
+	if err != nil {
+		t.Fatalf("reopen v7: %v", err)
+	}
+	_ = again.Close()
 }

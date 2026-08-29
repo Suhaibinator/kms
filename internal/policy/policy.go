@@ -68,7 +68,9 @@ func allowedBy(policies []domain.Policy, operation string, ns domain.NamespaceRe
 // reads and lists. Subscribe is authorized by core as a continuous
 // parameter:read within the home namespace and therefore rides on the same
 // grant. Writes, deletes, disables, destroys, and promotes always require an
-// explicit allow rule.
+// explicit allow rule, and so does configuration-release:verify-defaults: the
+// verification oracle is deliberately opt-in per identity even for the home
+// namespace.
 var implicitHomeOps = map[string]bool{
 	domain.OpParameterRead:             true,
 	domain.OpParameterList:             true,
@@ -192,7 +194,8 @@ var knownOperations = map[string]bool{
 	domain.OpConfigurationReleaseCreate: true, domain.OpConfigurationReleaseRead: true,
 	domain.OpConfigurationReleaseValidate: true, domain.OpConfigurationReleaseActivate: true,
 	domain.OpConfigurationReleaseList: true, domain.OpConfigurationReleaseWatch: true,
-	domain.OpAdminNamespaceCreate: true, domain.OpAdminNamespaceUpdate: true,
+	domain.OpConfigurationReleaseVerifyDefaults: true,
+	domain.OpAdminNamespaceCreate:               true, domain.OpAdminNamespaceUpdate: true,
 	domain.OpAdminNamespaceDelete: true, domain.OpAdminIdentityCert: true,
 	domain.OpAdminPolicyWrite: true, domain.OpAdminAuditRead: true,
 	domain.OpAdminKeyRotate: true,

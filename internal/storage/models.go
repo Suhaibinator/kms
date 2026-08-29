@@ -343,6 +343,12 @@ type releaseSubscriberStateModel struct {
 	ServerTimestamp    string         `gorm:"column:server_timestamp;not null;index:idx_release_subscriber_server_time;index:idx_release_subscriber_page,priority:3"`
 	Connected          int64          `gorm:"column:connected;not null;default:0"`
 	DisconnectedAt     *string        `gorm:"column:disconnected_at;index:idx_release_subscriber_disconnected"`
+	// AppliedDivergent / DivergentFieldCount (schema v7) record that an applied
+	// generation differs from the application's source-owned defaults. They are
+	// added by an explicit ALTER TABLE in migrate because this table is never
+	// AutoMigrate'd once it exists.
+	AppliedDivergent    int64 `gorm:"column:applied_divergent;not null;default:0"`
+	DivergentFieldCount int64 `gorm:"column:divergent_field_count;not null;default:0"`
 }
 
 func (releaseSubscriberStateModel) TableName() string { return "release_subscriber_states" }

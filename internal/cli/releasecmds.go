@@ -31,6 +31,8 @@ func (c *CLI) cmdRelease(args []string) int {
 		return c.cmdReleaseCreate(args[1:])
 	case "validate":
 		return c.cmdReleaseValidate(args[1:])
+	case "verify-defaults":
+		return c.cmdReleaseVerifyDefaults(args[1:])
 	case "show":
 		return c.cmdReleaseShow(args[1:])
 	case "list":
@@ -59,6 +61,8 @@ func (c *CLI) releaseUsage() {
 Commands:
   create FILE                         Create an immutable release from strict JSON/YAML.
   validate ENV/APP NAME VERSION       Validate resource pins and optional schema.
+  verify-defaults ENV/APP             Compare a generated defaults artifact (--artifact FILE|-)
+                                      with the active release by hash only (--release NAME).
   show ENV/APP NAME VERSION           Show manifest metadata (never secret values).
   list ENV/APP [NAME]                 List immutable release versions.
   diff ENV/APP NAME FROM TO           Diff aliases, pins, and parameter digests.

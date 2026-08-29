@@ -26,6 +26,12 @@ result. Defaults come from `internal/config.Default()`.
 server:
   grpc_addr: "0.0.0.0:8443"
   http_addr: "0.0.0.0:8080"
+  # Per-identity budgets for the value-free VerifyReleaseDefaults oracle
+  # (see security.md#defaults-verification-oracle). Enforced per instance.
+  verify_defaults:
+    requests_per_hour: 60          # request bucket refill rate
+    burst: 10                      # request bucket capacity
+    mismatch_budget_per_hour: 500  # non-match verdicts one identity may obtain per hour
 
 storage:
   sqlite_path: "/var/lib/parameter-store/kms.db"
@@ -73,13 +79,17 @@ log:
 | `KMS_TRUST_PROXY_HEADERS` | `security.trust_proxy_headers` (parsed with `strconv.ParseBool`) — honor `X-Forwarded-For` for the rate-limit key and audit source IP; enable only behind a trusted reverse proxy (see [TLS and mTLS](#tls-and-mtls)) |
 | `KMS_FRONTEND_ENABLED` | `frontend.enabled` |
 | `KMS_AUDIT_ENABLED` | `audit.enabled` |
+| `KMS_VERIFY_DEFAULTS_REQUESTS_PER_HOUR` | `server.verify_defaults.requests_per_hour` (integer) |
+| `KMS_VERIFY_DEFAULTS_BURST` | `server.verify_defaults.burst` (integer) |
+| `KMS_VERIFY_DEFAULTS_MISMATCH_BUDGET_PER_HOUR` | `server.verify_defaults.mismatch_budget_per_hour` (integer) |
 | `KMS_LOG_LEVEL` | `log.level` |
 | `KMS_MASTER_PASSPHRASE` | Supplies the master passphrase without a TTY prompt (see below) |
 
 `Config.Validate()` enforces: both listen addresses set; `sqlite_path` set;
 `mtls_enabled` requires `tls_enabled`; `tls_enabled` requires
 `server_cert_file`/`server_key_file` to exist; `mtls_enabled` requires
-`client_ca_file` to exist. `Config.Redacted()` is what the server logs at
+`client_ca_file` to exist; every `server.verify_defaults.*` budget is
+positive. `Config.Redacted()` is what the server logs at
 startup — addresses, paths, and feature flags, deliberately never a
 wholesale dump of the file (so nothing sensitive that might end up in the
 YAML by mistake gets logged).
@@ -370,6 +380,9 @@ built-in client issuer's certificate is public.
 | `admin identity rotate NAME` | — | Rotate a token identity's bearer token (printed once). |
 | `admin identity revoke NAME` | — | Disable an identity; **all** of its certificates become invalid. |
 | `admin identity list` | — | Table: name, kind, namespace, has-token, cert count, disabled. |
+| `admin policy create NAME` | `--subject IDENTITY` (or `*`), `--allow OP@ENV/APP` (repeatable), `--deny OP@ENV/APP` (repeatable) | Create a namespace-level policy. Either label may be `*`; a bare `OP` means every namespace. Operations and labels are validated by the server (`policy.ValidateRules`). |
+| `admin policy list` | `--page-size` | Table: name, subject, allow rules, deny rules (`op@env/app`). |
+| `admin policy delete NAME` | — | Delete a policy. |
 | `admin ca show` | `--out FILE` | **Diagnostic/out-of-band only:** print (or write) the public built-in **client-issuing** CA certificate to inspect or independently verify KMS-issued client certificates. This is not the SDK's server-trust CA and is not part of application onboarding. |
 
 `--ttl` accepts a Go duration (`720h`) or a bare day count (`90d`); omitting
@@ -485,6 +498,50 @@ panel, and Releases page) calls it after validating the previous version so
 violations are visible before the operator confirms; activating any other
 retained version stays on the activate endpoint. See
 [`http-api.md`](http-api.md#rollback).
+
+`verify-defaults` checks a generated defaults artifact (the file
+`kms-config-gen` emits) against the active release **by hash only**: the CLI
+canonicalizes and hashes every parameter locally and sends aliases, content
+types, and digests, so no parameter value leaves the machine and none comes
+back. It prints one verdict per alias and a summary, exits `0` when every
+alias matches and the artifact's schema digest matches the registered
+schema, `1` on any `differs`/`missing_in_release`/`unknown_alias`/
+`secret_alias`/`unsupported_content_type` verdict, schema mismatch, or RPC
+failure, and `2` on usage errors. `unverified` (release aliases the artifact
+does not mention) is reported but does not fail the check.
+
+```bash
+parameter-store release verify-defaults prod/gradethis \
+  --artifact ./gen/defaults.json \
+  --endpoint kms.example.com:8443 --token "$VERIFY_TOKEN"
+# ALIAS        VERDICT
+# database     match
+# rate_limits  differs
+# Release runtime version 7 (revision 91): 1 match, 1 differs, 0 missing_in_release,
+#   0 unknown_alias, 0 secret_alias, 0 unsupported_content_type, 0 unverified; schema match
+```
+
+The RPC behind it is budgeted per identity (`server.verify_defaults.*`,
+`RESOURCE_EXHAUSTED` / exit 1 when spent) and requires the
+`configuration-release:verify-defaults` operation, which is **never** part of
+the implicit home-namespace grant. Mint a dedicated verify-only identity for
+CI **without** `--namespace` (an unbound token identity has no implicit
+access at all) and grant exactly that one operation on the target namespace.
+The target namespace must allow `token` authentication for the identity to
+reach it:
+
+```bash
+# once: the namespace must accept token auth (mtls,token keeps applications on mTLS)
+parameter-store admin namespace update --env prod --app gradethis --auth-methods mtls,token \
+  --endpoint kms.example.com:8443 --token "$ADMIN_TOKEN"
+
+# a verify-only credential: unbound, token-only, one policy rule
+parameter-store admin identity create gradethis-ci-verify --auth token \
+  --endpoint kms.example.com:8443 --token "$ADMIN_TOKEN"
+parameter-store admin policy create gradethis-ci-verify --subject gradethis-ci-verify \
+  --allow configuration-release:verify-defaults@prod/gradethis \
+  --endpoint kms.example.com:8443 --token "$ADMIN_TOKEN"
+```
 
 `show` and `diff` print aliases, references, exact versions, content types,
 and parameter digests only. They never read or render secret plaintext or

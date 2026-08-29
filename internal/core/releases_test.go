@@ -495,3 +495,73 @@ func TestRollbackConfigurationRelease(t *testing.T) {
 		t.Fatalf("second rollback = %+v err=%v", again, err)
 	}
 }
+
+// Divergence rides only on applied acknowledgements, is bounded, persists,
+// and is visible through the admin subscriber listing.
+func TestAcknowledgeConfigurationReleaseDivergence(t *testing.T) {
+	ctx := context.Background()
+	st, err := storage.Open(filepath.Join(t.TempDir(), "kms.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = st.Close() }()
+	ns := domain.NamespaceRef{Env: "prod", App: "app"}
+	if _, err := st.CreateNamespace(ctx, domain.Namespace{NamespaceRef: ns, CreatedBy: "admin"}); err != nil {
+		t.Fatal(err)
+	}
+	ref := domain.Ref{NS: ns, Key: "config/runtime"}
+	if _, _, err := st.PutParameter(ctx, ref, "7", "integer", "{}", "admin"); err != nil {
+		t.Fatal(err)
+	}
+	svc := New(st, nil, "test")
+	pr := adminPrincipal()
+	rel, err := svc.CreateConfigurationRelease(ctx, pr, domain.CreateConfigurationReleaseInput{Namespace: ns, Name: "runtime", Entries: []domain.ReleaseEntrySelector{{Alias: "settings", Kind: domain.ReleaseEntryParameter, Ref: ref, Label: "current"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	active, _, err := svc.ActivateConfigurationRelease(ctx, pr, ns, "runtime", rel.Version, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const connectionID = "divergence-connection"
+	if err := svc.SetReleaseSubscriberConnected(ctx, ns, "runtime", "api", "replica-1", pr.Identity.Name, connectionID, true); err != nil {
+		t.Fatal(err)
+	}
+	base := domain.ReleaseAcknowledgement{Namespace: ns, ReleaseName: "runtime", ReleaseVersion: rel.Version, ActivationRevision: active.ActivationRevision, ClientName: "api", InstanceID: "replica-1", ConnectionID: connectionID}
+
+	prepared := base
+	prepared.State, prepared.AppliedDivergent, prepared.DivergentFieldCount = domain.ReleaseStatePrepared, true, 1
+	if err := svc.AcknowledgeConfigurationRelease(ctx, pr, prepared); !errors.Is(err, domain.ErrInvalidArgument) {
+		t.Fatalf("divergent prepared ack err=%v, want invalid argument", err)
+	}
+	countOnly := base
+	countOnly.State, countOnly.DivergentFieldCount = domain.ReleaseStateApplied, 2
+	if err := svc.AcknowledgeConfigurationRelease(ctx, pr, countOnly); !errors.Is(err, domain.ErrInvalidArgument) {
+		t.Fatalf("count without flag err=%v, want invalid argument", err)
+	}
+	huge := base
+	huge.State, huge.AppliedDivergent, huge.DivergentFieldCount = domain.ReleaseStateApplied, true, 65536
+	if err := svc.AcknowledgeConfigurationRelease(ctx, pr, huge); !errors.Is(err, domain.ErrInvalidArgument) {
+		t.Fatalf("oversized count err=%v, want invalid argument", err)
+	}
+
+	applied := base
+	applied.State, applied.AppliedDivergent, applied.DivergentFieldCount = domain.ReleaseStateApplied, true, 3
+	if err := svc.AcknowledgeConfigurationRelease(ctx, pr, applied); err != nil {
+		t.Fatalf("divergent applied ack: %v", err)
+	}
+	acks, _, _, err := svc.ListReleaseSubscribers(ctx, pr, ns, "runtime", storage.ListPage{})
+	if err != nil || len(acks) != 1 {
+		t.Fatalf("acks=%+v err=%v", acks, err)
+	}
+	if acks[0].State != domain.ReleaseStateApplied || !acks[0].AppliedDivergent || acks[0].DivergentFieldCount != 3 {
+		t.Fatalf("persisted divergence = %+v", acks[0])
+	}
+	events, _, err := st.ListAudit(ctx, domain.AuditFilter{EventType: "configuration_release.acknowledge"}, storage.ListPage{Limit: 10})
+	if err != nil || len(events) != 1 {
+		t.Fatalf("audit events=%+v err=%v", events, err)
+	}
+	if !strings.Contains(events[0].Metadata, `"divergent":"true"`) {
+		t.Fatalf("audit metadata missing divergent flag: %s", events[0].Metadata)
+	}
+}

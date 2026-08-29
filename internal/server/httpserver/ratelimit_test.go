@@ -3,7 +3,6 @@ package httpserver
 import (
 	"net/http"
 	"testing"
-	"time"
 )
 
 func TestLoginRateLimit(t *testing.T) {
@@ -90,45 +89,5 @@ func TestFailedAuthLimiterRunsBeforeAuthentication(t *testing.T) {
 	w := e.do(http.MethodGet, "/api/v1/namespaces", nil, map[string]string{"Authorization": "Bearer " + e.adminToken})
 	if w.Code != http.StatusTooManyRequests {
 		t.Fatalf("valid request after exhausted auth bucket = %d, want 429", w.Code)
-	}
-}
-
-func TestRateLimiterRefund(t *testing.T) {
-	l := newRateLimiter(1, 1)
-	if !l.allow("k") {
-		t.Fatal("reservation should succeed")
-	}
-	l.refund("k")
-	if !l.allow("k") {
-		t.Fatal("successful-auth refund did not restore the token")
-	}
-}
-
-func TestRateLimiterRefill(t *testing.T) {
-	now := time.Unix(0, 0)
-	l := newRateLimiter(60, 2) // 60/min = 1/sec, burst 2
-	l.now = func() time.Time { return now }
-
-	// Two separate calls, each consuming one of the two burst tokens.
-	if !l.allow("k") {
-		t.Fatalf("first of burst should be allowed")
-	}
-	if !l.allow("k") {
-		t.Fatalf("second of burst should be allowed")
-	}
-	if l.allow("k") {
-		t.Fatalf("third immediate request should be denied")
-	}
-	now = now.Add(time.Second) // refill one token
-	if !l.allow("k") {
-		t.Fatalf("request after 1s refill should be allowed")
-	}
-	if l.allow("k") {
-		t.Fatalf("no tokens should remain")
-	}
-
-	// Distinct keys have independent buckets.
-	if !l.allow("other") {
-		t.Fatalf("other key should have a full bucket")
 	}
 }

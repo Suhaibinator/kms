@@ -873,3 +873,55 @@ func TestCountConfigurationReleases(t *testing.T) {
 		t.Fatalf("other namespace count = %d, %v", n, err)
 	}
 }
+
+// Divergence persists on applied rows, is updated in place, and the
+// connection-only UNION branch (a registered instance with no lifecycle row)
+// reports it as false/0 rather than failing to scan.
+func TestReleaseAcknowledgementDivergencePersistsAndUnionBranchDefaults(t *testing.T) {
+	ctx := context.Background()
+	st := newStore(t)
+	seedNS(t, st, "prod", "app")
+	ns := nsRef("prod", "app")
+	connect := func(instance string) {
+		t.Helper()
+		if err := st.SetReleaseInstanceConnected(ctx, domain.ReleaseSubscriberConnection{Namespace: ns, ReleaseName: "runtime", ClientName: "api", InstanceID: instance, Identity: "client", ConnectionID: "one", Connected: true, ServerTimestamp: time.Now()}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	connect("replica-1")
+	connect("registered-only")
+	ack := domain.ReleaseAcknowledgement{Namespace: ns, ReleaseName: "runtime", ReleaseVersion: 1, ActivationRevision: 7, ClientName: "api", InstanceID: "replica-1", Identity: "client", ConnectionID: "one", State: domain.ReleaseStateApplied, AppliedDivergent: true, DivergentFieldCount: 3, ClientTimestamp: time.Now(), ServerTimestamp: time.Now()}
+	if err := st.UpsertReleaseAcknowledgement(ctx, ack); err != nil {
+		t.Fatal(err)
+	}
+	rows, _, err := st.ListReleaseAcknowledgements(ctx, ns, "runtime", ListPage{})
+	if err != nil || len(rows) != 2 {
+		t.Fatalf("acks=%+v err=%v", rows, err)
+	}
+	byInstance := map[string]domain.ReleaseAcknowledgement{}
+	for _, row := range rows {
+		byInstance[row.InstanceID] = row
+	}
+	if got := byInstance["replica-1"]; !got.AppliedDivergent || got.DivergentFieldCount != 3 {
+		t.Fatalf("applied row divergence = %+v", got)
+	}
+	if got := byInstance["registered-only"]; got.State != "" || got.AppliedDivergent || got.DivergentFieldCount != 0 {
+		t.Fatalf("connection-only row = %+v, want empty state and no divergence", got)
+	}
+
+	// A later applied acknowledgement at a newer revision clears divergence.
+	ack.ActivationRevision, ack.AppliedDivergent, ack.DivergentFieldCount = 8, false, 0
+	ack.ServerTimestamp = time.Now()
+	if err := st.UpsertReleaseAcknowledgement(ctx, ack); err != nil {
+		t.Fatal(err)
+	}
+	rows, _, err = st.ListReleaseAcknowledgements(ctx, ns, "runtime", ListPage{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, row := range rows {
+		if row.InstanceID == "replica-1" && (row.AppliedDivergent || row.DivergentFieldCount != 0 || row.ActivationRevision != 8) {
+			t.Fatalf("divergence not cleared on upsert: %+v", row)
+		}
+	}
+}
