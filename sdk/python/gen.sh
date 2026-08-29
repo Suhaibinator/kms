@@ -18,7 +18,7 @@ out_pkg="$sdk_dir/kms_paramstore/_gen"
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 
-python -m grpc_tools.protoc \
+python3 -m grpc_tools.protoc \
   -I"$proto_dir" \
   --python_out="$tmp" \
   --grpc_python_out="$tmp" \

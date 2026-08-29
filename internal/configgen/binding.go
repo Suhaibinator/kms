@@ -131,6 +131,7 @@ func (r *bindingRenderer) renderBody() {
 	r.renderTypes()
 	r.renderParameterGroupEncoder()
 	r.renderDefaultsArtifactEncoder()
+	r.renderVerify()
 	r.renderStart()
 	r.renderPrepare()
 	r.renderGroupCodecs()
@@ -166,6 +167,23 @@ func (r *bindingRenderer) renderDefaultsArtifactEncoder() {
 	r.line("\t\tContract: generatedContract,")
 	r.line("\t\tParameters: parameters,")
 	r.line("\t})")
+	r.line("}")
+	r.line("")
+}
+
+func (r *bindingRenderer) renderVerify() {
+	r.line("// VerifyReleaseDefaults asks KMS which parameter groups of root differ from the active release of")
+	r.line("// opts.Namespace. Only canonical content hashes travel over the wire; no value is ever sent or returned.")
+	r.line("func VerifyReleaseDefaults(ctx context.Context, client *kmsclient.Client, root *%s, opts configstore.VerifyOptions) (configstore.VerifyResult, error) {", r.rootTypeString)
+	r.line("\tgroups, err := EncodeParameterGroups(root)")
+	r.line("\tif err != nil {")
+	r.line("\t\treturn configstore.VerifyResult{}, err")
+	r.line("\t}")
+	r.line("\treturn configstore.VerifyDefaults(ctx, client, configstore.VerifyInput{")
+	r.line("\t\tSchemaSHA256: generatedSchemaSHA256,")
+	r.line("\t\tContract: generatedContract,")
+	r.line("\t\tGroups: groups,")
+	r.line("\t}, opts)")
 	r.line("}")
 	r.line("")
 }
@@ -210,9 +228,8 @@ func (r *bindingRenderer) renderTypes() {
 	r.line("type Options struct {")
 	r.line("\tRelease string")
 	r.line("\tDefaults func() *%s", r.rootTypeString)
-	r.line("\tAllowDefaultMismatch bool")
-	r.line("\tOnDefaultMismatch func(configstore.DefaultMismatchReport)")
-	r.line("\tOnCandidateRejected func(configstore.CandidateRejectionReport)")
+	r.line("\t// Callbacks observe mismatches, applied generations and rejections; configstore.SlogCallbacks is a ready-made implementation.")
+	r.line("\tconfigstore.Callbacks")
 	r.line("\tSecretTokenProvider kmsclient.SecretTokenProvider")
 	r.line("\tReconcileInterval time.Duration")
 	r.line("\tMaxConcurrentFetches int")
@@ -264,9 +281,7 @@ func (r *bindingRenderer) renderStart() {
 	r.line("\tmanager, err := configstore.Start(ctx, client, configstore.Options{")
 	r.line("\t\tRelease: options.Release,")
 	r.line("\t\tContract: generatedContract,")
-	r.line("\t\tAllowDefaultMismatch: options.AllowDefaultMismatch,")
-	r.line("\t\tOnDefaultMismatch: options.OnDefaultMismatch,")
-	r.line("\t\tOnCandidateRejected: options.OnCandidateRejected,")
+	r.line("\t\tCallbacks: options.Callbacks,")
 	r.line("\t\tSecretTokenProvider: options.SecretTokenProvider,")
 	r.line("\t\tReconcileInterval: options.ReconcileInterval,")
 	r.line("\t\tMaxConcurrentFetches: options.MaxConcurrentFetches,")
@@ -338,6 +353,7 @@ func (r *bindingRenderer) renderPrepare() {
 		r.line("\t}")
 	}
 	r.line("\trestartRequired := make([]string, 0)")
+	r.line("\tchanged := make([]configstore.FieldChange, 0)")
 	r.line("\tactive := s.active.Load()")
 	r.line("\tif active != nil {")
 	for _, field := range r.model.Fields {
@@ -353,6 +369,19 @@ func (r *bindingRenderer) renderPrepare() {
 		r.line("\t\t\trestartRequired = append(restartRequired, %s)", strconv.Quote(field.canonicalName()))
 		r.line("\t\t}")
 	}
+	r.line("\t\t// Changed fields versus the previously applied generation feed OnApplied. Secrets are path-only.")
+	for _, field := range r.model.Fields {
+		if field.Secret {
+			r.line("\t\tif %s.Path() != %s.Path() || %s.Version() != %s.Version() {", r.fieldSelector("candidate", field), r.fieldSelector("active.config", field), r.fieldSelector("candidate", field), r.fieldSelector("active.config", field))
+			r.line("\t\t\tchanged = append(changed, configstore.FieldChange{Path: %s})", strconv.Quote(field.canonicalName()))
+			r.line("\t\t}")
+			continue
+		}
+		h := r.helperByType[field.Type.GoType]
+		r.line("\t\tif !equalValue%d(%s, %s) {", h, r.fieldSelector("candidate", field), r.fieldSelector("active.config", field))
+		r.line("\t\t\tchanged = append(changed, configstore.FieldChange{Path: %s, Previous: reportValue%d(%s), Current: reportValue%d(%s)})", strconv.Quote(field.canonicalName()), h, r.fieldSelector("active.config", field), h, r.fieldSelector("candidate", field))
+		r.line("\t\t}")
+	}
 	r.line("\t}")
 	r.line("\tgeneration := &immutableGeneration{config: candidate, release: configstore.ReleaseIdentityFromSnapshot(snapshot)}")
 	r.line("\treturn configstore.PreparedCandidate{")
@@ -360,6 +389,8 @@ func (r *bindingRenderer) renderPrepare() {
 	r.line("\t\tAbort: func() {},")
 	r.line("\t\tDefaultDifferences: differences,")
 	r.line("\t\tRestartRequiredFields: restartRequired,")
+	r.line("\t\tChanged: changed,")
+	r.line("\t\tGroups: func() (map[string]json.RawMessage, error) { return EncodeParameterGroups(generation.config) },")
 	r.line("\t}, nil")
 	r.line("}")
 	r.line("")

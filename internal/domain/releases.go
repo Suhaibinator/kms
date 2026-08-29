@@ -48,6 +48,61 @@ const (
 	ReleaseValidationContract = "contract_mismatch"
 )
 
+// Bounded per-alias verdicts returned by VerifyReleaseDefaults. They never
+// carry values, digests, or hashes.
+const (
+	VerifyVerdictMatch                  = "match"
+	VerifyVerdictDiffers                = "differs"
+	VerifyVerdictMissingInRelease       = "missing_in_release"
+	VerifyVerdictUnknownAlias           = "unknown_alias"
+	VerifyVerdictSecretAlias            = "secret_alias"
+	VerifyVerdictUnsupportedContentType = "unsupported_content_type"
+)
+
+// VerifyDefaultsEntry is one caller-supplied alias hash.
+type VerifyDefaultsEntry struct {
+	Alias       string
+	ContentType string
+	SHA256      string
+}
+
+// VerifyReleaseDefaultsInput is the value-free verification request.
+type VerifyReleaseDefaultsInput struct {
+	Namespace    NamespaceRef
+	ReleaseName  string
+	Profile      string
+	SchemaSHA256 string
+	Entries      []VerifyDefaultsEntry
+}
+
+// VerifyEntryVerdict is the bounded verdict for one requested alias.
+type VerifyEntryVerdict struct {
+	Alias   string
+	Verdict string
+}
+
+// VerifyDefaultsSummary counts verdicts by kind. Unverified counts release
+// parameter aliases the request did not mention.
+type VerifyDefaultsSummary struct {
+	Match                  int
+	Differs                int
+	MissingInRelease       int
+	UnknownAlias           int
+	SecretAlias            int
+	UnsupportedContentType int
+	Unverified             int
+}
+
+// VerifyReleaseDefaultsResult is the value-free verification response.
+type VerifyReleaseDefaultsResult struct {
+	ReleaseName        string
+	ReleaseVersion     uint64
+	ActivationRevision uint64
+	SchemaMatches      bool
+	Entries            []VerifyEntryVerdict
+	Summary            VerifyDefaultsSummary
+}
+
 // ConfigurationReleaseEntry is one exact resource pin. ParameterDigest is a
 // SHA-256 hex digest of the exact stored parameter bytes and is empty for
 // secrets. Metadata is immutable non-sensitive metadata captured at creation.
@@ -176,6 +231,11 @@ type ReleaseAcknowledgement struct {
 	ClientTimestamp   time.Time
 	ServerTimestamp   time.Time
 	Connected         bool
+	// AppliedDivergent reports that the applied generation differs from the
+	// application's source-owned defaults; DivergentFieldCount is the number of
+	// differing canonical fields. Both are only meaningful for applied state.
+	AppliedDivergent    bool
+	DivergentFieldCount uint32
 }
 
 // ReleaseSubscriberConnection is transport liveness for one process instance.

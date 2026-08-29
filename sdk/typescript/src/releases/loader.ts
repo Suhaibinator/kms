@@ -746,6 +746,8 @@ export class ReleaseLoader {
       rejectionCategory,
       diagnostic: "",
       timestampUnixMs: BigInt(Math.trunc(this.#options.now())),
+      appliedDivergent: false,
+      divergentFieldCount: 0,
     };
     const current = this.#pendingAcknowledgements.get(state);
     if (!current || current.acknowledgement.activationRevision <= candidate.revision) {

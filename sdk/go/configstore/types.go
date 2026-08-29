@@ -35,13 +35,29 @@ type ContractEntry struct {
 	ContentType string
 }
 
+// Callbacks groups the application-owned observers of a managed store.
+// OnDefaultMismatch is required; the others are optional. Every callback runs
+// synchronously on the loader goroutine and must not block; a panic is
+// isolated and never affects candidate admission. SlogCallbacks returns a
+// ready-made implementation.
+type Callbacks struct {
+	// OnDefaultMismatch reports every candidate whose non-secret values differ
+	// from source defaults, at startup and on every reload. The candidate is
+	// still applied; the report is the signal to reconcile code and KMS.
+	OnDefaultMismatch func(DefaultMismatchReport)
+	// OnApplied fires after each generation is published, including the
+	// initial one, carrying the fields that changed since the previously
+	// applied generation.
+	OnApplied func(AppliedReport)
+	// OnCandidateRejected reports a candidate that was not admitted.
+	OnCandidateRejected func(CandidateRejectionReport)
+}
+
 // Options configures a managed configuration manager.
 type Options struct {
-	Release              string
-	Contract             []ContractEntry
-	AllowDefaultMismatch bool
-	OnDefaultMismatch    func(DefaultMismatchReport)
-	OnCandidateRejected  func(CandidateRejectionReport)
+	Release  string
+	Contract []ContractEntry
+	Callbacks
 	SecretTokenProvider  kmsclient.SecretTokenProvider
 	ReconcileInterval    time.Duration
 	MaxConcurrentFetches int
@@ -54,29 +70,130 @@ type Options struct {
 type PrepareFunc func(context.Context, kmsclient.ReleaseSnapshot) (PreparedCandidate, error)
 
 // PreparedCandidate is generated, validated state ready for policy admission.
-// DefaultDifferences must contain non-secret canonical fields only.
+// DefaultDifferences and Changed must contain non-secret canonical fields
+// only (secret entries in Changed are path-only). Groups, when set, lazily
+// encodes the candidate's non-secret parameter groups for observability.
 type PreparedCandidate struct {
 	Publish               func()
 	Abort                 func()
 	DefaultDifferences    []FieldDifference
 	RestartRequiredFields []string
+	// Changed lists fields that differ from the previously applied generation.
+	// It is ignored for the initial generation.
+	Changed []FieldChange
+	// Groups returns the canonical non-secret parameter group documents of the
+	// candidate, keyed by alias. It must never include secret values.
+	Groups func() (map[string]json.RawMessage, error)
 }
 
-// MismatchPhase identifies when code defaults were compared with a candidate.
-type MismatchPhase string
+// Phase identifies whether a candidate was the initial generation or a reload.
+type Phase string
 
 const (
-	MismatchStartup MismatchPhase = "startup"
-	MismatchRuntime MismatchPhase = "runtime"
+	PhaseStartup Phase = "startup"
+	PhaseRuntime Phase = "runtime"
 )
 
-// MismatchSeverity describes the required handling of a default mismatch.
+// MismatchPhase is retained for callback code written against earlier SDK
+// versions; it is identical to Phase.
+type MismatchPhase = Phase
+
+const (
+	MismatchStartup = PhaseStartup
+	MismatchRuntime = PhaseRuntime
+)
+
+// MismatchSeverity describes the handling of a default mismatch. Since
+// mismatches are applied and reported rather than refused, the only value is
+// MismatchError; the type is retained so existing callback code keeps
+// compiling.
 type MismatchSeverity string
 
 const (
-	MismatchFatal MismatchSeverity = "fatal"
 	MismatchError MismatchSeverity = "error"
 )
+
+// FieldChange is one non-secret field that differs between the previously
+// applied generation and a newly applied one. Secret rotations are reported
+// path-only with nil Previous and Current.
+type FieldChange struct {
+	Path     string `json:"path"`
+	Previous any    `json:"previous"`
+	Current  any    `json:"current"`
+}
+
+// AppliedReport is an immutable view of one published generation. Changed and
+// Groups return fresh copies on every call; Groups is empty when the
+// generated binding did not supply group documents.
+type AppliedReport interface {
+	Phase() Phase
+	Release() ReleaseIdentity
+	DefaultDivergent() bool
+	Changed() []FieldChange
+	Groups() (map[string]json.RawMessage, error)
+}
+
+type appliedReport struct {
+	phase     Phase
+	release   ReleaseIdentity
+	divergent bool
+	changes   []FieldChange
+	groups    func() (map[string]json.RawMessage, error)
+}
+
+func newAppliedReport(phase Phase, release ReleaseIdentity, divergent bool, changes []FieldChange, groups func() (map[string]json.RawMessage, error)) *appliedReport {
+	return &appliedReport{phase: phase, release: release, divergent: divergent, changes: cloneChanges(changes), groups: groups}
+}
+
+func (r *appliedReport) Phase() Phase             { return r.phase }
+func (r *appliedReport) Release() ReleaseIdentity { return r.release }
+func (r *appliedReport) DefaultDivergent() bool   { return r.divergent }
+func (r *appliedReport) Changed() []FieldChange   { return cloneChanges(r.changes) }
+
+func (r *appliedReport) Groups() (map[string]json.RawMessage, error) {
+	if r.groups == nil {
+		return map[string]json.RawMessage{}, nil
+	}
+	groups, err := r.groups()
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[string]json.RawMessage, len(groups))
+	for alias, document := range groups {
+		out[alias] = append(json.RawMessage(nil), document...)
+	}
+	return out, nil
+}
+
+// String lists only canonical field paths. Previous and current values remain
+// available explicitly through Changed.
+func (r *appliedReport) String() string {
+	paths := make([]string, len(r.changes))
+	for i := range r.changes {
+		paths[i] = r.changes[i].Path
+	}
+	return fmt.Sprintf("configstore: applied (%s) %s divergent=%t changed=%s",
+		r.phase, r.release.String(), r.divergent, strings.Join(paths, ","))
+}
+
+func (r *appliedReport) GoString() string { return r.String() }
+
+func (r *appliedReport) Format(f fmt.State, verb rune) {
+	if verb == 'q' {
+		_, _ = fmt.Fprintf(f, "%q", r.String())
+		return
+	}
+	_, _ = io.WriteString(f, r.String())
+}
+
+func (r *appliedReport) MarshalJSON() ([]byte, error) {
+	return json.Marshal(struct {
+		Phase            Phase           `json:"phase"`
+		Release          ReleaseIdentity `json:"release"`
+		DefaultDivergent bool            `json:"default_divergent"`
+		Changed          []FieldChange   `json:"changed"`
+	}{Phase: r.phase, Release: r.release, DefaultDivergent: r.divergent, Changed: r.Changed()})
+}
 
 // FieldDifference contains one canonical, non-secret default comparison.
 type FieldDifference struct {
@@ -155,79 +272,6 @@ func (r *defaultMismatchReport) MarshalJSON() ([]byte, error) {
 	})
 }
 
-// DefaultMismatchError is returned when initial code defaults and KMS values
-// differ and startup admission was not explicitly bypassed.
-type DefaultMismatchError struct {
-	report *defaultMismatchReport
-}
-
-func newDefaultMismatchError(report *defaultMismatchReport) *DefaultMismatchError {
-	return &DefaultMismatchError{report: report}
-}
-
-func (e *DefaultMismatchError) Error() string {
-	if e == nil || e.report == nil {
-		return "configstore: startup default mismatch"
-	}
-	return e.report.String()
-}
-
-func (e *DefaultMismatchError) String() string   { return e.Error() }
-func (e *DefaultMismatchError) GoString() string { return e.Error() }
-
-// Format prevents detailed reflection of the private report for %+v and %#v.
-func (e *DefaultMismatchError) Format(f fmt.State, verb rune) {
-	if verb == 'q' {
-		_, _ = fmt.Fprintf(f, "%q", e.Error())
-		return
-	}
-	_, _ = io.WriteString(f, e.Error())
-}
-
-func (e *DefaultMismatchError) Phase() MismatchPhase {
-	if e == nil || e.report == nil {
-		return MismatchStartup
-	}
-	return e.report.Phase()
-}
-
-func (e *DefaultMismatchError) Severity() MismatchSeverity {
-	if e == nil || e.report == nil {
-		return MismatchFatal
-	}
-	return e.report.Severity()
-}
-
-func (e *DefaultMismatchError) Release() ReleaseIdentity {
-	if e == nil || e.report == nil {
-		return ReleaseIdentity{}
-	}
-	return e.report.Release()
-}
-
-func (e *DefaultMismatchError) Fields() []FieldDifference {
-	if e == nil || e.report == nil {
-		return nil
-	}
-	return e.report.Fields()
-}
-
-// Report returns the same immutable report that was delivered to the startup
-// callback.
-func (e *DefaultMismatchError) Report() DefaultMismatchReport {
-	if e == nil {
-		return nil
-	}
-	return e.report
-}
-
-func (e *DefaultMismatchError) MarshalJSON() ([]byte, error) {
-	if e == nil || e.report == nil {
-		return []byte("null"), nil
-	}
-	return e.report.MarshalJSON()
-}
-
 // RejectionCategory is a bounded release acknowledgement and metrics label.
 type RejectionCategory string
 
@@ -235,9 +279,12 @@ const (
 	RejectConfigContractMismatch RejectionCategory = "config_contract_mismatch"
 	RejectConfigDecodeFailed     RejectionCategory = "config_decode_failed"
 	RejectConfigValidationFailed RejectionCategory = "config_validation_failed"
-	RejectDefaultMismatch        RejectionCategory = "default_mismatch"
-	RejectRestartRequired        RejectionCategory = "restart_required"
-	RejectInternal               RejectionCategory = "internal"
+	// RejectDefaultMismatch is a legacy category: current managers apply and
+	// report divergent candidates instead of rejecting them. It remains a valid
+	// bounded wire value so older acknowledgements keep their category.
+	RejectDefaultMismatch RejectionCategory = "default_mismatch"
+	RejectRestartRequired RejectionCategory = "restart_required"
+	RejectInternal        RejectionCategory = "internal"
 )
 
 // CandidateError classifies a candidate without exposing its underlying
@@ -560,6 +607,25 @@ func cloneDifferences(in []FieldDifference) []FieldDifference {
 			Path:     path,
 			Expected: cloneReportValue(in[i].Expected),
 			Actual:   cloneReportValue(in[i].Actual),
+		}
+	}
+	return out
+}
+
+func cloneChanges(in []FieldChange) []FieldChange {
+	if in == nil {
+		return nil
+	}
+	out := make([]FieldChange, len(in))
+	for i := range in {
+		path := in[i].Path
+		if !validDiagnosticPath(path) {
+			path = "invalid_path"
+		}
+		out[i] = FieldChange{
+			Path:     path,
+			Previous: cloneReportValue(in[i].Previous),
+			Current:  cloneReportValue(in[i].Current),
 		}
 	}
 	return out

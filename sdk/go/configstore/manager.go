@@ -2,6 +2,7 @@ package configstore
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -29,7 +30,6 @@ type Manager struct {
 	lastReportedKey string
 	lastReportErr   error
 	lastRejectedKey string
-	startupErr      *DefaultMismatchError
 	waitErr         error
 }
 
@@ -101,18 +101,10 @@ func Start(
 	case <-manager.done:
 		manager.mu.RLock()
 		ready := manager.ready
-		startupErr := manager.startupErr
 		waitErr := manager.waitErr
 		manager.mu.RUnlock()
 		if ready {
 			return manager, nil
-		}
-		// A newer startup candidate can supersede a fatal mismatch and then fail
-		// during resolution before prepareWithIdentity gets a chance to clear the
-		// side channel. Return the typed report only when the loader's terminal
-		// candidate was itself rejected for default drift.
-		if startupErr != nil && manager.loader.Status().LastFailureCategory == kmsclient.ReleaseRejectDefaultMismatch {
-			return nil, startupErr
 		}
 		if waitErr == nil {
 			waitErr = errors.New("configstore: release loader stopped before initial publication")
@@ -151,9 +143,6 @@ func (m *Manager) prepareWithIdentity(
 	m.mu.Lock()
 	m.observed = identity
 	startup := !m.ready
-	if startup {
-		m.startupErr = nil
-	}
 	m.mu.Unlock()
 
 	candidate, err := m.prepare(ctx, snapshot)
@@ -186,42 +175,35 @@ func (m *Manager) prepareWithIdentity(
 
 	divergent := len(differences) != 0
 	if divergent {
-		phase := MismatchRuntime
-		severity := MismatchError
+		// Divergence from source defaults is reported, never refused: a process
+		// must be able to restart onto whatever release is active. The report is
+		// the operator's signal to reconcile code and KMS.
+		phase := PhaseRuntime
 		if startup {
-			phase = MismatchStartup
-			if !m.options.AllowDefaultMismatch {
-				severity = MismatchFatal
-			}
+			phase = PhaseStartup
 		}
-		report := newDefaultMismatchReport(phase, severity, identity, differences)
+		report := newDefaultMismatchReport(phase, MismatchError, identity, differences)
 		if err := m.reportOnce(identity, report); err != nil {
 			abort()
 			m.notifyCandidateRejected(identity, err)
 			return nil, err
 		}
-		if severity == MismatchFatal {
-			mismatchErr := newDefaultMismatchError(report)
-			m.mu.Lock()
-			m.startupErr = mismatchErr
-			m.mu.Unlock()
-			abort()
-			paths := make([]string, len(differences))
-			for i := range differences {
-				paths[i] = differences[i].Path
-			}
-			err := rejectWithPaths(RejectDefaultMismatch, mismatchErr, paths)
-			m.notifyCandidateRejected(identity, err)
-			return nil, err
-		}
 	}
 
+	var changes []FieldChange
+	if !startup {
+		changes = cloneChanges(candidate.Changed)
+	}
 	return &managedPrepared{
-		manager:   m,
-		publish:   candidate.Publish,
-		abort:     abort,
-		identity:  identity,
-		divergent: divergent,
+		manager:    m,
+		publish:    candidate.Publish,
+		abort:      abort,
+		identity:   identity,
+		divergent:  divergent,
+		fieldCount: len(differences),
+		startup:    startup,
+		changes:    changes,
+		groups:     candidate.Groups,
 	}, nil
 }
 
@@ -278,11 +260,15 @@ func (r ReleaseIdentity) dedupeKey() string {
 }
 
 type managedPrepared struct {
-	manager   *Manager
-	publish   func()
-	abort     func()
-	identity  ReleaseIdentity
-	divergent bool
+	manager    *Manager
+	publish    func()
+	abort      func()
+	identity   ReleaseIdentity
+	divergent  bool
+	fieldCount int
+	startup    bool
+	changes    []FieldChange
+	groups     func() (map[string]json.RawMessage, error)
 }
 
 func (p *managedPrepared) Commit() {
@@ -294,7 +280,32 @@ func (p *managedPrepared) Commit() {
 	p.manager.divergent = p.divergent
 	p.manager.ready = true
 	p.manager.mu.Unlock()
+	p.manager.notifyApplied(p)
 	p.manager.readyOnce.Do(func() { close(p.manager.readyCh) })
+}
+
+// ReleaseDivergence implements kmsclient.ReleaseDivergenceReporter so the
+// applied acknowledgement carries divergence without any field detail.
+func (p *managedPrepared) ReleaseDivergence() (bool, int) {
+	return p.divergent, p.fieldCount
+}
+
+func (m *Manager) notifyApplied(p *managedPrepared) {
+	callback := m.options.OnApplied
+	if callback == nil {
+		return
+	}
+	phase := PhaseRuntime
+	if p.startup {
+		phase = PhaseStartup
+	}
+	report := newAppliedReport(phase, p.identity, p.divergent, p.changes, p.groups)
+	// Commit must be infallible for the loader; a callback panic must never
+	// turn a published generation into a fatal loader failure.
+	func() {
+		defer func() { _ = recover() }()
+		callback(report)
+	}()
 }
 
 func (p *managedPrepared) Abort() { p.abort() }

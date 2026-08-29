@@ -81,6 +81,11 @@ const (
 	OpConfigurationReleaseActivate = "configuration-release:activate"
 	OpConfigurationReleaseList     = "configuration-release:list"
 	OpConfigurationReleaseWatch    = "configuration-release:watch"
+	// OpConfigurationReleaseVerifyDefaults authorizes value-free comparison of
+	// source-owned default hashes with the active release. It is deliberately
+	// outside the implicit home-namespace grant so a CI identity can hold it
+	// without any read access.
+	OpConfigurationReleaseVerifyDefaults = "configuration-release:verify-defaults"
 
 	OpAdminNamespaceCreate = "admin:namespace:create"
 	OpAdminNamespaceUpdate = "admin:namespace:update"

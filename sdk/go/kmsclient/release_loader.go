@@ -82,6 +82,14 @@ type PreparedRelease interface {
 	Abort()
 }
 
+// ReleaseDivergenceReporter is optionally implemented by a PreparedRelease
+// that knows whether the candidate differs from the application's
+// source-owned defaults. When present, the applied acknowledgement carries
+// the divergence flag and field count; no field names or values are sent.
+type ReleaseDivergenceReporter interface {
+	ReleaseDivergence() (divergent bool, fieldCount int)
+}
+
 // PrepareReleaseFunc validates a candidate and constructs resources before it
 // becomes visible. The context is canceled when a newer release supersedes the
 // candidate.
@@ -499,7 +507,11 @@ func (l *ReleaseLoader) processCandidate(
 	}
 
 	l.recordApplied(candidate)
-	l.ack(ns, candidate, ReleaseStateApplied, "")
+	var divergence ackDivergence
+	if reporter, ok := prepared.(ReleaseDivergenceReporter); ok {
+		divergence = divergenceFromReporter(reporter)
+	}
+	l.ackWithDivergence(ns, candidate, ReleaseStateApplied, "", divergence)
 	return releaseCandidateResult{candidate: candidate, applied: true}
 }
 
@@ -1029,7 +1041,40 @@ func (l *ReleaseLoader) advanceLastSeen(revision uint64) {
 	}
 }
 
+// ackDivergence is the bounded divergence summary attached to applied acks.
+type ackDivergence struct {
+	divergent  bool
+	fieldCount uint32
+}
+
+const maxAckDivergentFieldCount = 65535
+
+func divergenceFromReporter(reporter ReleaseDivergenceReporter) ackDivergence {
+	var result ackDivergence
+	func() {
+		defer func() { _ = recover() }()
+		divergent, count := reporter.ReleaseDivergence()
+		if !divergent {
+			return
+		}
+		result.divergent = true
+		switch {
+		case count < 0:
+			result.fieldCount = 0
+		case count > maxAckDivergentFieldCount:
+			result.fieldCount = maxAckDivergentFieldCount
+		default:
+			result.fieldCount = uint32(count)
+		}
+	}()
+	return result
+}
+
 func (l *ReleaseLoader) ack(ns namespaceRef, candidate releaseCandidate, state, rejectionCategory string) {
+	l.ackWithDivergence(ns, candidate, state, rejectionCategory, ackDivergence{})
+}
+
+func (l *ReleaseLoader) ackWithDivergence(ns namespaceRef, candidate releaseCandidate, state, rejectionCategory string, divergence ackDivergence) {
 	ack := &kmsv1.ReleaseAcknowledgement{
 		Namespace:          ns.proto(),
 		Name:               l.cfg.Name,
@@ -1042,6 +1087,10 @@ func (l *ReleaseLoader) ack(ns namespaceRef, candidate releaseCandidate, state, 
 		TimestampUnixMs:    time.Now().UnixMilli(),
 		// Diagnostic is intentionally empty: arbitrary application errors may
 		// contain secret plaintext and therefore are never forwarded implicitly.
+	}
+	if state == ReleaseStateApplied && divergence.divergent {
+		ack.AppliedDivergent = true
+		ack.DivergentFieldCount = divergence.fieldCount
 	}
 	l.ackMu.Lock()
 	if current := l.pendingAck[state]; current == nil || current.GetActivationRevision() <= candidate.revision {

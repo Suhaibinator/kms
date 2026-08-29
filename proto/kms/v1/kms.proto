@@ -294,6 +294,15 @@ service ConfigurationReleaseService {
   rpc GetActiveRelease(GetActiveReleaseRequest) returns (GetActiveReleaseResponse);
   rpc ListReleases(ListReleasesRequest) returns (ListReleasesResponse);
   rpc WatchRelease(stream WatchReleaseRequest) returns (stream WatchReleaseEvent);
+  // VerifyReleaseDefaults compares caller-supplied canonical content hashes of
+  // an application's source-owned defaults with the parameters pinned by the
+  // active release. The request and response are value-free: only aliases,
+  // content types, hashes, and bounded verdicts travel over the wire, and the
+  // server never echoes a stored value, digest, or hash. Secret aliases are
+  // structurally excluded and reported as secret_alias. Requires the
+  // configuration-release:verify-defaults operation and is rate limited per
+  // identity.
+  rpc VerifyReleaseDefaults(VerifyReleaseDefaultsRequest) returns (VerifyReleaseDefaultsResponse);
 }
 
 // ReleaseEntrySelector is accepted only when creating a release. Exactly one
@@ -420,6 +429,46 @@ message ListReleasesResponse {
   string next_page_token = 2;
 }
 
+// VerifyEntry is one parameter alias with the lowercase hex SHA-256 of its
+// canonical encoded value (see configstore.ParameterHash).
+message VerifyEntry {
+  string alias = 1;
+  string content_type = 2;
+  string sha256 = 3;
+}
+
+message VerifyReleaseDefaultsRequest {
+  NamespaceRef namespace = 1;
+  string name = 2;          // empty selects the application's release name
+  string profile = 3;       // informational label, bounded, never audited
+  string schema_sha256 = 4; // generated contract schema digest; empty skips the schema check
+  repeated VerifyEntry entries = 5;
+}
+
+// VerifyEntryVerdict carries a bounded verdict for one requested alias:
+// match | differs | missing_in_release | unknown_alias | secret_alias |
+// unsupported_content_type.
+message VerifyEntryVerdict {
+  string alias = 1;
+  string verdict = 2;
+}
+
+message VerifyReleaseDefaultsResponse {
+  string name = 1;
+  uint64 version = 2;
+  uint64 activation_revision = 3;
+  bool schema_matches = 4;
+  repeated VerifyEntryVerdict entries = 5;
+  uint32 match_count = 6;
+  uint32 differs_count = 7;
+  uint32 missing_in_release_count = 8;
+  uint32 unknown_alias_count = 9;
+  uint32 secret_alias_count = 10;
+  uint32 unsupported_content_type_count = 11;
+  // Parameter aliases pinned by the release that the request did not mention.
+  uint32 unverified_count = 12;
+}
+
 message ReleaseWatchRegistration {
   NamespaceRef namespace = 1;
   string name = 2;
@@ -439,6 +488,10 @@ message ReleaseAcknowledgement {
   string rejection_category = 8;
   string diagnostic = 9;         // bounded, redacted application text
   int64 timestamp_unix_ms = 10;
+  // applied_divergent reports that the applied generation differs from the
+  // application's source-owned defaults. Only valid with state applied.
+  bool applied_divergent = 11;
+  uint32 divergent_field_count = 12;
 }
 
 message WatchReleaseRequest {
@@ -909,6 +962,8 @@ message ReleaseSubscriberState {
   int64 client_timestamp_unix_ms = 11;
   int64 server_timestamp_unix_ms = 12;
   bool connected = 13;
+  bool applied_divergent = 14;
+  uint32 divergent_field_count = 15;
 }
 
 message ListReleaseSubscribersRequest {

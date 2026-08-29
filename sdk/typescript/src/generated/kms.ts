@@ -420,6 +420,55 @@ export interface ListReleasesResponse {
   nextPageToken: string;
 }
 
+/**
+ * VerifyEntry is one parameter alias with the lowercase hex SHA-256 of its
+ * canonical encoded value (see configstore.ParameterHash).
+ */
+export interface VerifyEntry {
+  alias: string;
+  contentType: string;
+  sha256: string;
+}
+
+export interface VerifyReleaseDefaultsRequest {
+  namespace:
+    | NamespaceRef
+    | undefined;
+  /** empty selects the application's release name */
+  name: string;
+  /** informational label, bounded, never audited */
+  profile: string;
+  /** generated contract schema digest; empty skips the schema check */
+  schemaSha256: string;
+  entries: VerifyEntry[];
+}
+
+/**
+ * VerifyEntryVerdict carries a bounded verdict for one requested alias:
+ * match | differs | missing_in_release | unknown_alias | secret_alias |
+ * unsupported_content_type.
+ */
+export interface VerifyEntryVerdict {
+  alias: string;
+  verdict: string;
+}
+
+export interface VerifyReleaseDefaultsResponse {
+  name: string;
+  version: bigint;
+  activationRevision: bigint;
+  schemaMatches: boolean;
+  entries: VerifyEntryVerdict[];
+  matchCount: number;
+  differsCount: number;
+  missingInReleaseCount: number;
+  unknownAliasCount: number;
+  secretAliasCount: number;
+  unsupportedContentTypeCount: number;
+  /** Parameter aliases pinned by the release that the request did not mention. */
+  unverifiedCount: number;
+}
+
 export interface ReleaseWatchRegistration {
   namespace: NamespaceRef | undefined;
   name: string;
@@ -441,6 +490,12 @@ export interface ReleaseAcknowledgement {
   /** bounded, redacted application text */
   diagnostic: string;
   timestampUnixMs: bigint;
+  /**
+   * applied_divergent reports that the applied generation differs from the
+   * application's source-owned defaults. Only valid with state applied.
+   */
+  appliedDivergent: boolean;
+  divergentFieldCount: number;
 }
 
 export interface WatchReleaseRequest {
@@ -952,6 +1007,8 @@ export interface ReleaseSubscriberState {
   clientTimestampUnixMs: bigint;
   serverTimestampUnixMs: bigint;
   connected: boolean;
+  appliedDivergent: boolean;
+  divergentFieldCount: number;
 }
 
 export interface ListReleaseSubscribersRequest {
@@ -7190,6 +7247,639 @@ export const ListReleasesResponse: MessageFns<ListReleasesResponse> = {
   },
 };
 
+function createBaseVerifyEntry(): VerifyEntry {
+  return { alias: "", contentType: "", sha256: "" };
+}
+
+export const VerifyEntry: MessageFns<VerifyEntry> = {
+  encode(message: VerifyEntry, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.alias !== "") {
+      writer.uint32(10).string(message.alias);
+    }
+    if (message.contentType !== "") {
+      writer.uint32(18).string(message.contentType);
+    }
+    if (message.sha256 !== "") {
+      writer.uint32(26).string(message.sha256);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): VerifyEntry {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const previousRecursionDepth = (reader as any).__tsProtoDecodeDepth ?? 0;
+    if (previousRecursionDepth >= 100) {
+      throw new globalThis.Error("protobuf decode recursion limit exceeded");
+    }
+    (reader as any).__tsProtoDecodeDepth = previousRecursionDepth + 1;
+    try {
+      const end = length === undefined ? reader.len : reader.pos + length;
+      const message = createBaseVerifyEntry();
+      while (reader.pos < end) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+          case 1: {
+            if (tag !== 10) {
+              break;
+            }
+
+            message.alias = reader.string();
+            continue;
+          }
+          case 2: {
+            if (tag !== 18) {
+              break;
+            }
+
+            message.contentType = reader.string();
+            continue;
+          }
+          case 3: {
+            if (tag !== 26) {
+              break;
+            }
+
+            message.sha256 = reader.string();
+            continue;
+          }
+        }
+        if ((tag & 7) === 4 || tag === 0) {
+          break;
+        }
+        reader.skip(tag & 7);
+      }
+      return message;
+    } finally {
+      (reader as any).__tsProtoDecodeDepth = previousRecursionDepth;
+    }
+  },
+
+  fromJSON(object: any): VerifyEntry {
+    return {
+      alias: isSet(object.alias) ? globalThis.String(object.alias) : "",
+      contentType: isSet(object.contentType)
+        ? globalThis.String(object.contentType)
+        : isSet(object.content_type)
+        ? globalThis.String(object.content_type)
+        : "",
+      sha256: isSet(object.sha256) ? globalThis.String(object.sha256) : "",
+    };
+  },
+
+  toJSON(message: VerifyEntry): unknown {
+    const obj: any = {};
+    if (message.alias !== "") {
+      obj.alias = message.alias;
+    }
+    if (message.contentType !== "") {
+      obj.contentType = message.contentType;
+    }
+    if (message.sha256 !== "") {
+      obj.sha256 = message.sha256;
+    }
+    return obj;
+  },
+
+  create(base?: DeepPartial<VerifyEntry>): VerifyEntry {
+    return VerifyEntry.fromPartial(base ?? {});
+  },
+  fromPartial(object: DeepPartial<VerifyEntry>): VerifyEntry {
+    const message = createBaseVerifyEntry();
+    message.alias = object.alias ?? "";
+    message.contentType = object.contentType ?? "";
+    message.sha256 = object.sha256 ?? "";
+    return message;
+  },
+};
+
+function createBaseVerifyReleaseDefaultsRequest(): VerifyReleaseDefaultsRequest {
+  return { namespace: undefined, name: "", profile: "", schemaSha256: "", entries: [] };
+}
+
+export const VerifyReleaseDefaultsRequest: MessageFns<VerifyReleaseDefaultsRequest> = {
+  encode(message: VerifyReleaseDefaultsRequest, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.namespace !== undefined) {
+      NamespaceRef.encode(message.namespace, writer.uint32(10).fork()).join();
+    }
+    if (message.name !== "") {
+      writer.uint32(18).string(message.name);
+    }
+    if (message.profile !== "") {
+      writer.uint32(26).string(message.profile);
+    }
+    if (message.schemaSha256 !== "") {
+      writer.uint32(34).string(message.schemaSha256);
+    }
+    for (const v of message.entries) {
+      VerifyEntry.encode(v!, writer.uint32(42).fork()).join();
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): VerifyReleaseDefaultsRequest {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const previousRecursionDepth = (reader as any).__tsProtoDecodeDepth ?? 0;
+    if (previousRecursionDepth >= 100) {
+      throw new globalThis.Error("protobuf decode recursion limit exceeded");
+    }
+    (reader as any).__tsProtoDecodeDepth = previousRecursionDepth + 1;
+    try {
+      const end = length === undefined ? reader.len : reader.pos + length;
+      const message = createBaseVerifyReleaseDefaultsRequest();
+      while (reader.pos < end) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+          case 1: {
+            if (tag !== 10) {
+              break;
+            }
+
+            message.namespace = NamespaceRef.decode(reader, reader.uint32());
+            continue;
+          }
+          case 2: {
+            if (tag !== 18) {
+              break;
+            }
+
+            message.name = reader.string();
+            continue;
+          }
+          case 3: {
+            if (tag !== 26) {
+              break;
+            }
+
+            message.profile = reader.string();
+            continue;
+          }
+          case 4: {
+            if (tag !== 34) {
+              break;
+            }
+
+            message.schemaSha256 = reader.string();
+            continue;
+          }
+          case 5: {
+            if (tag !== 42) {
+              break;
+            }
+
+            message.entries.push(VerifyEntry.decode(reader, reader.uint32()));
+            continue;
+          }
+        }
+        if ((tag & 7) === 4 || tag === 0) {
+          break;
+        }
+        reader.skip(tag & 7);
+      }
+      return message;
+    } finally {
+      (reader as any).__tsProtoDecodeDepth = previousRecursionDepth;
+    }
+  },
+
+  fromJSON(object: any): VerifyReleaseDefaultsRequest {
+    return {
+      namespace: isSet(object.namespace) ? NamespaceRef.fromJSON(object.namespace) : undefined,
+      name: isSet(object.name) ? globalThis.String(object.name) : "",
+      profile: isSet(object.profile) ? globalThis.String(object.profile) : "",
+      schemaSha256: isSet(object.schemaSha256)
+        ? globalThis.String(object.schemaSha256)
+        : isSet(object.schema_sha256)
+        ? globalThis.String(object.schema_sha256)
+        : "",
+      entries: globalThis.Array.isArray(object?.entries) ? object.entries.map((e: any) => VerifyEntry.fromJSON(e)) : [],
+    };
+  },
+
+  toJSON(message: VerifyReleaseDefaultsRequest): unknown {
+    const obj: any = {};
+    if (message.namespace !== undefined) {
+      obj.namespace = NamespaceRef.toJSON(message.namespace);
+    }
+    if (message.name !== "") {
+      obj.name = message.name;
+    }
+    if (message.profile !== "") {
+      obj.profile = message.profile;
+    }
+    if (message.schemaSha256 !== "") {
+      obj.schemaSha256 = message.schemaSha256;
+    }
+    if (message.entries?.length) {
+      obj.entries = message.entries.map((e) => VerifyEntry.toJSON(e));
+    }
+    return obj;
+  },
+
+  create(base?: DeepPartial<VerifyReleaseDefaultsRequest>): VerifyReleaseDefaultsRequest {
+    return VerifyReleaseDefaultsRequest.fromPartial(base ?? {});
+  },
+  fromPartial(object: DeepPartial<VerifyReleaseDefaultsRequest>): VerifyReleaseDefaultsRequest {
+    const message = createBaseVerifyReleaseDefaultsRequest();
+    message.namespace = (object.namespace !== undefined && object.namespace !== null)
+      ? NamespaceRef.fromPartial(object.namespace)
+      : undefined;
+    message.name = object.name ?? "";
+    message.profile = object.profile ?? "";
+    message.schemaSha256 = object.schemaSha256 ?? "";
+    message.entries = object.entries?.map((e) => VerifyEntry.fromPartial(e)) || [];
+    return message;
+  },
+};
+
+function createBaseVerifyEntryVerdict(): VerifyEntryVerdict {
+  return { alias: "", verdict: "" };
+}
+
+export const VerifyEntryVerdict: MessageFns<VerifyEntryVerdict> = {
+  encode(message: VerifyEntryVerdict, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.alias !== "") {
+      writer.uint32(10).string(message.alias);
+    }
+    if (message.verdict !== "") {
+      writer.uint32(18).string(message.verdict);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): VerifyEntryVerdict {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const previousRecursionDepth = (reader as any).__tsProtoDecodeDepth ?? 0;
+    if (previousRecursionDepth >= 100) {
+      throw new globalThis.Error("protobuf decode recursion limit exceeded");
+    }
+    (reader as any).__tsProtoDecodeDepth = previousRecursionDepth + 1;
+    try {
+      const end = length === undefined ? reader.len : reader.pos + length;
+      const message = createBaseVerifyEntryVerdict();
+      while (reader.pos < end) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+          case 1: {
+            if (tag !== 10) {
+              break;
+            }
+
+            message.alias = reader.string();
+            continue;
+          }
+          case 2: {
+            if (tag !== 18) {
+              break;
+            }
+
+            message.verdict = reader.string();
+            continue;
+          }
+        }
+        if ((tag & 7) === 4 || tag === 0) {
+          break;
+        }
+        reader.skip(tag & 7);
+      }
+      return message;
+    } finally {
+      (reader as any).__tsProtoDecodeDepth = previousRecursionDepth;
+    }
+  },
+
+  fromJSON(object: any): VerifyEntryVerdict {
+    return {
+      alias: isSet(object.alias) ? globalThis.String(object.alias) : "",
+      verdict: isSet(object.verdict) ? globalThis.String(object.verdict) : "",
+    };
+  },
+
+  toJSON(message: VerifyEntryVerdict): unknown {
+    const obj: any = {};
+    if (message.alias !== "") {
+      obj.alias = message.alias;
+    }
+    if (message.verdict !== "") {
+      obj.verdict = message.verdict;
+    }
+    return obj;
+  },
+
+  create(base?: DeepPartial<VerifyEntryVerdict>): VerifyEntryVerdict {
+    return VerifyEntryVerdict.fromPartial(base ?? {});
+  },
+  fromPartial(object: DeepPartial<VerifyEntryVerdict>): VerifyEntryVerdict {
+    const message = createBaseVerifyEntryVerdict();
+    message.alias = object.alias ?? "";
+    message.verdict = object.verdict ?? "";
+    return message;
+  },
+};
+
+function createBaseVerifyReleaseDefaultsResponse(): VerifyReleaseDefaultsResponse {
+  return {
+    name: "",
+    version: 0n,
+    activationRevision: 0n,
+    schemaMatches: false,
+    entries: [],
+    matchCount: 0,
+    differsCount: 0,
+    missingInReleaseCount: 0,
+    unknownAliasCount: 0,
+    secretAliasCount: 0,
+    unsupportedContentTypeCount: 0,
+    unverifiedCount: 0,
+  };
+}
+
+export const VerifyReleaseDefaultsResponse: MessageFns<VerifyReleaseDefaultsResponse> = {
+  encode(message: VerifyReleaseDefaultsResponse, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.name !== "") {
+      writer.uint32(10).string(message.name);
+    }
+    if (message.version !== 0n) {
+      if (BigInt.asUintN(64, message.version) !== message.version) {
+        throw new globalThis.Error("value provided for field message.version of type uint64 too large");
+      }
+      writer.uint32(16).uint64(message.version);
+    }
+    if (message.activationRevision !== 0n) {
+      if (BigInt.asUintN(64, message.activationRevision) !== message.activationRevision) {
+        throw new globalThis.Error("value provided for field message.activationRevision of type uint64 too large");
+      }
+      writer.uint32(24).uint64(message.activationRevision);
+    }
+    if (message.schemaMatches !== false) {
+      writer.uint32(32).bool(message.schemaMatches);
+    }
+    for (const v of message.entries) {
+      VerifyEntryVerdict.encode(v!, writer.uint32(42).fork()).join();
+    }
+    if (message.matchCount !== 0) {
+      writer.uint32(48).uint32(message.matchCount);
+    }
+    if (message.differsCount !== 0) {
+      writer.uint32(56).uint32(message.differsCount);
+    }
+    if (message.missingInReleaseCount !== 0) {
+      writer.uint32(64).uint32(message.missingInReleaseCount);
+    }
+    if (message.unknownAliasCount !== 0) {
+      writer.uint32(72).uint32(message.unknownAliasCount);
+    }
+    if (message.secretAliasCount !== 0) {
+      writer.uint32(80).uint32(message.secretAliasCount);
+    }
+    if (message.unsupportedContentTypeCount !== 0) {
+      writer.uint32(88).uint32(message.unsupportedContentTypeCount);
+    }
+    if (message.unverifiedCount !== 0) {
+      writer.uint32(96).uint32(message.unverifiedCount);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): VerifyReleaseDefaultsResponse {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const previousRecursionDepth = (reader as any).__tsProtoDecodeDepth ?? 0;
+    if (previousRecursionDepth >= 100) {
+      throw new globalThis.Error("protobuf decode recursion limit exceeded");
+    }
+    (reader as any).__tsProtoDecodeDepth = previousRecursionDepth + 1;
+    try {
+      const end = length === undefined ? reader.len : reader.pos + length;
+      const message = createBaseVerifyReleaseDefaultsResponse();
+      while (reader.pos < end) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+          case 1: {
+            if (tag !== 10) {
+              break;
+            }
+
+            message.name = reader.string();
+            continue;
+          }
+          case 2: {
+            if (tag !== 16) {
+              break;
+            }
+
+            message.version = reader.uint64() as bigint;
+            continue;
+          }
+          case 3: {
+            if (tag !== 24) {
+              break;
+            }
+
+            message.activationRevision = reader.uint64() as bigint;
+            continue;
+          }
+          case 4: {
+            if (tag !== 32) {
+              break;
+            }
+
+            message.schemaMatches = reader.bool();
+            continue;
+          }
+          case 5: {
+            if (tag !== 42) {
+              break;
+            }
+
+            message.entries.push(VerifyEntryVerdict.decode(reader, reader.uint32()));
+            continue;
+          }
+          case 6: {
+            if (tag !== 48) {
+              break;
+            }
+
+            message.matchCount = reader.uint32();
+            continue;
+          }
+          case 7: {
+            if (tag !== 56) {
+              break;
+            }
+
+            message.differsCount = reader.uint32();
+            continue;
+          }
+          case 8: {
+            if (tag !== 64) {
+              break;
+            }
+
+            message.missingInReleaseCount = reader.uint32();
+            continue;
+          }
+          case 9: {
+            if (tag !== 72) {
+              break;
+            }
+
+            message.unknownAliasCount = reader.uint32();
+            continue;
+          }
+          case 10: {
+            if (tag !== 80) {
+              break;
+            }
+
+            message.secretAliasCount = reader.uint32();
+            continue;
+          }
+          case 11: {
+            if (tag !== 88) {
+              break;
+            }
+
+            message.unsupportedContentTypeCount = reader.uint32();
+            continue;
+          }
+          case 12: {
+            if (tag !== 96) {
+              break;
+            }
+
+            message.unverifiedCount = reader.uint32();
+            continue;
+          }
+        }
+        if ((tag & 7) === 4 || tag === 0) {
+          break;
+        }
+        reader.skip(tag & 7);
+      }
+      return message;
+    } finally {
+      (reader as any).__tsProtoDecodeDepth = previousRecursionDepth;
+    }
+  },
+
+  fromJSON(object: any): VerifyReleaseDefaultsResponse {
+    return {
+      name: isSet(object.name) ? globalThis.String(object.name) : "",
+      version: isSet(object.version) ? BigInt(object.version) : 0n,
+      activationRevision: isSet(object.activationRevision)
+        ? BigInt(object.activationRevision)
+        : isSet(object.activation_revision)
+        ? BigInt(object.activation_revision)
+        : 0n,
+      schemaMatches: isSet(object.schemaMatches)
+        ? globalThis.Boolean(object.schemaMatches)
+        : isSet(object.schema_matches)
+        ? globalThis.Boolean(object.schema_matches)
+        : false,
+      entries: globalThis.Array.isArray(object?.entries)
+        ? object.entries.map((e: any) => VerifyEntryVerdict.fromJSON(e))
+        : [],
+      matchCount: isSet(object.matchCount)
+        ? globalThis.Number(object.matchCount)
+        : isSet(object.match_count)
+        ? globalThis.Number(object.match_count)
+        : 0,
+      differsCount: isSet(object.differsCount)
+        ? globalThis.Number(object.differsCount)
+        : isSet(object.differs_count)
+        ? globalThis.Number(object.differs_count)
+        : 0,
+      missingInReleaseCount: isSet(object.missingInReleaseCount)
+        ? globalThis.Number(object.missingInReleaseCount)
+        : isSet(object.missing_in_release_count)
+        ? globalThis.Number(object.missing_in_release_count)
+        : 0,
+      unknownAliasCount: isSet(object.unknownAliasCount)
+        ? globalThis.Number(object.unknownAliasCount)
+        : isSet(object.unknown_alias_count)
+        ? globalThis.Number(object.unknown_alias_count)
+        : 0,
+      secretAliasCount: isSet(object.secretAliasCount)
+        ? globalThis.Number(object.secretAliasCount)
+        : isSet(object.secret_alias_count)
+        ? globalThis.Number(object.secret_alias_count)
+        : 0,
+      unsupportedContentTypeCount: isSet(object.unsupportedContentTypeCount)
+        ? globalThis.Number(object.unsupportedContentTypeCount)
+        : isSet(object.unsupported_content_type_count)
+        ? globalThis.Number(object.unsupported_content_type_count)
+        : 0,
+      unverifiedCount: isSet(object.unverifiedCount)
+        ? globalThis.Number(object.unverifiedCount)
+        : isSet(object.unverified_count)
+        ? globalThis.Number(object.unverified_count)
+        : 0,
+    };
+  },
+
+  toJSON(message: VerifyReleaseDefaultsResponse): unknown {
+    const obj: any = {};
+    if (message.name !== "") {
+      obj.name = message.name;
+    }
+    if (message.version !== 0n) {
+      obj.version = message.version.toString();
+    }
+    if (message.activationRevision !== 0n) {
+      obj.activationRevision = message.activationRevision.toString();
+    }
+    if (message.schemaMatches !== false) {
+      obj.schemaMatches = message.schemaMatches;
+    }
+    if (message.entries?.length) {
+      obj.entries = message.entries.map((e) => VerifyEntryVerdict.toJSON(e));
+    }
+    if (message.matchCount !== 0) {
+      obj.matchCount = Math.round(message.matchCount);
+    }
+    if (message.differsCount !== 0) {
+      obj.differsCount = Math.round(message.differsCount);
+    }
+    if (message.missingInReleaseCount !== 0) {
+      obj.missingInReleaseCount = Math.round(message.missingInReleaseCount);
+    }
+    if (message.unknownAliasCount !== 0) {
+      obj.unknownAliasCount = Math.round(message.unknownAliasCount);
+    }
+    if (message.secretAliasCount !== 0) {
+      obj.secretAliasCount = Math.round(message.secretAliasCount);
+    }
+    if (message.unsupportedContentTypeCount !== 0) {
+      obj.unsupportedContentTypeCount = Math.round(message.unsupportedContentTypeCount);
+    }
+    if (message.unverifiedCount !== 0) {
+      obj.unverifiedCount = Math.round(message.unverifiedCount);
+    }
+    return obj;
+  },
+
+  create(base?: DeepPartial<VerifyReleaseDefaultsResponse>): VerifyReleaseDefaultsResponse {
+    return VerifyReleaseDefaultsResponse.fromPartial(base ?? {});
+  },
+  fromPartial(object: DeepPartial<VerifyReleaseDefaultsResponse>): VerifyReleaseDefaultsResponse {
+    const message = createBaseVerifyReleaseDefaultsResponse();
+    message.name = object.name ?? "";
+    message.version = (object.version !== undefined && object.version !== null) ? BigInt(object.version) : 0n;
+    message.activationRevision = (object.activationRevision !== undefined && object.activationRevision !== null)
+      ? BigInt(object.activationRevision)
+      : 0n;
+    message.schemaMatches = object.schemaMatches ?? false;
+    message.entries = object.entries?.map((e) => VerifyEntryVerdict.fromPartial(e)) || [];
+    message.matchCount = object.matchCount ?? 0;
+    message.differsCount = object.differsCount ?? 0;
+    message.missingInReleaseCount = object.missingInReleaseCount ?? 0;
+    message.unknownAliasCount = object.unknownAliasCount ?? 0;
+    message.secretAliasCount = object.secretAliasCount ?? 0;
+    message.unsupportedContentTypeCount = object.unsupportedContentTypeCount ?? 0;
+    message.unverifiedCount = object.unverifiedCount ?? 0;
+    return message;
+  },
+};
+
 function createBaseReleaseWatchRegistration(): ReleaseWatchRegistration {
   return { namespace: undefined, name: "", clientName: "", instanceId: "", lastSeenRevision: 0n };
 }
@@ -7354,6 +8044,8 @@ function createBaseReleaseAcknowledgement(): ReleaseAcknowledgement {
     rejectionCategory: "",
     diagnostic: "",
     timestampUnixMs: 0n,
+    appliedDivergent: false,
+    divergentFieldCount: 0,
   };
 }
 
@@ -7397,6 +8089,12 @@ export const ReleaseAcknowledgement: MessageFns<ReleaseAcknowledgement> = {
         throw new globalThis.Error("value provided for field message.timestampUnixMs of type int64 too large");
       }
       writer.uint32(80).int64(message.timestampUnixMs);
+    }
+    if (message.appliedDivergent !== false) {
+      writer.uint32(88).bool(message.appliedDivergent);
+    }
+    if (message.divergentFieldCount !== 0) {
+      writer.uint32(96).uint32(message.divergentFieldCount);
     }
     return writer;
   },
@@ -7494,6 +8192,22 @@ export const ReleaseAcknowledgement: MessageFns<ReleaseAcknowledgement> = {
             message.timestampUnixMs = reader.int64() as bigint;
             continue;
           }
+          case 11: {
+            if (tag !== 88) {
+              break;
+            }
+
+            message.appliedDivergent = reader.bool();
+            continue;
+          }
+          case 12: {
+            if (tag !== 96) {
+              break;
+            }
+
+            message.divergentFieldCount = reader.uint32();
+            continue;
+          }
         }
         if ((tag & 7) === 4 || tag === 0) {
           break;
@@ -7538,6 +8252,16 @@ export const ReleaseAcknowledgement: MessageFns<ReleaseAcknowledgement> = {
         : isSet(object.timestamp_unix_ms)
         ? BigInt(object.timestamp_unix_ms)
         : 0n,
+      appliedDivergent: isSet(object.appliedDivergent)
+        ? globalThis.Boolean(object.appliedDivergent)
+        : isSet(object.applied_divergent)
+        ? globalThis.Boolean(object.applied_divergent)
+        : false,
+      divergentFieldCount: isSet(object.divergentFieldCount)
+        ? globalThis.Number(object.divergentFieldCount)
+        : isSet(object.divergent_field_count)
+        ? globalThis.Number(object.divergent_field_count)
+        : 0,
     };
   },
 
@@ -7573,6 +8297,12 @@ export const ReleaseAcknowledgement: MessageFns<ReleaseAcknowledgement> = {
     if (message.timestampUnixMs !== 0n) {
       obj.timestampUnixMs = message.timestampUnixMs.toString();
     }
+    if (message.appliedDivergent !== false) {
+      obj.appliedDivergent = message.appliedDivergent;
+    }
+    if (message.divergentFieldCount !== 0) {
+      obj.divergentFieldCount = Math.round(message.divergentFieldCount);
+    }
     return obj;
   },
 
@@ -7597,6 +8327,8 @@ export const ReleaseAcknowledgement: MessageFns<ReleaseAcknowledgement> = {
     message.timestampUnixMs = (object.timestampUnixMs !== undefined && object.timestampUnixMs !== null)
       ? BigInt(object.timestampUnixMs)
       : 0n;
+    message.appliedDivergent = object.appliedDivergent ?? false;
+    message.divergentFieldCount = object.divergentFieldCount ?? 0;
     return message;
   },
 };
@@ -14606,6 +15338,8 @@ function createBaseReleaseSubscriberState(): ReleaseSubscriberState {
     clientTimestampUnixMs: 0n,
     serverTimestampUnixMs: 0n,
     connected: false,
+    appliedDivergent: false,
+    divergentFieldCount: 0,
   };
 }
 
@@ -14661,6 +15395,12 @@ export const ReleaseSubscriberState: MessageFns<ReleaseSubscriberState> = {
     }
     if (message.connected !== false) {
       writer.uint32(104).bool(message.connected);
+    }
+    if (message.appliedDivergent !== false) {
+      writer.uint32(112).bool(message.appliedDivergent);
+    }
+    if (message.divergentFieldCount !== 0) {
+      writer.uint32(120).uint32(message.divergentFieldCount);
     }
     return writer;
   },
@@ -14782,6 +15522,22 @@ export const ReleaseSubscriberState: MessageFns<ReleaseSubscriberState> = {
             message.connected = reader.bool();
             continue;
           }
+          case 14: {
+            if (tag !== 112) {
+              break;
+            }
+
+            message.appliedDivergent = reader.bool();
+            continue;
+          }
+          case 15: {
+            if (tag !== 120) {
+              break;
+            }
+
+            message.divergentFieldCount = reader.uint32();
+            continue;
+          }
         }
         if ((tag & 7) === 4 || tag === 0) {
           break;
@@ -14841,6 +15597,16 @@ export const ReleaseSubscriberState: MessageFns<ReleaseSubscriberState> = {
         ? BigInt(object.server_timestamp_unix_ms)
         : 0n,
       connected: isSet(object.connected) ? globalThis.Boolean(object.connected) : false,
+      appliedDivergent: isSet(object.appliedDivergent)
+        ? globalThis.Boolean(object.appliedDivergent)
+        : isSet(object.applied_divergent)
+        ? globalThis.Boolean(object.applied_divergent)
+        : false,
+      divergentFieldCount: isSet(object.divergentFieldCount)
+        ? globalThis.Number(object.divergentFieldCount)
+        : isSet(object.divergent_field_count)
+        ? globalThis.Number(object.divergent_field_count)
+        : 0,
     };
   },
 
@@ -14885,6 +15651,12 @@ export const ReleaseSubscriberState: MessageFns<ReleaseSubscriberState> = {
     if (message.connected !== false) {
       obj.connected = message.connected;
     }
+    if (message.appliedDivergent !== false) {
+      obj.appliedDivergent = message.appliedDivergent;
+    }
+    if (message.divergentFieldCount !== 0) {
+      obj.divergentFieldCount = Math.round(message.divergentFieldCount);
+    }
     return obj;
   },
 
@@ -14918,6 +15690,8 @@ export const ReleaseSubscriberState: MessageFns<ReleaseSubscriberState> = {
         ? BigInt(object.serverTimestampUnixMs)
         : 0n;
     message.connected = object.connected ?? false;
+    message.appliedDivergent = object.appliedDivergent ?? false;
+    message.divergentFieldCount = object.divergentFieldCount ?? 0;
     return message;
   },
 };
@@ -15640,6 +16414,27 @@ export const ConfigurationReleaseServiceService = {
     responseSerialize: (value: WatchReleaseEvent): Buffer => Buffer.from(WatchReleaseEvent.encode(value).finish()),
     responseDeserialize: (value: Buffer): WatchReleaseEvent => WatchReleaseEvent.decode(value),
   },
+  /**
+   * VerifyReleaseDefaults compares caller-supplied canonical content hashes of
+   * an application's source-owned defaults with the parameters pinned by the
+   * active release. The request and response are value-free: only aliases,
+   * content types, hashes, and bounded verdicts travel over the wire, and the
+   * server never echoes a stored value, digest, or hash. Secret aliases are
+   * structurally excluded and reported as secret_alias. Requires the
+   * configuration-release:verify-defaults operation and is rate limited per
+   * identity.
+   */
+  verifyReleaseDefaults: {
+    path: "/kms.v1.ConfigurationReleaseService/VerifyReleaseDefaults" as const,
+    requestStream: false as const,
+    responseStream: false as const,
+    requestSerialize: (value: VerifyReleaseDefaultsRequest): Buffer =>
+      Buffer.from(VerifyReleaseDefaultsRequest.encode(value).finish()),
+    requestDeserialize: (value: Buffer): VerifyReleaseDefaultsRequest => VerifyReleaseDefaultsRequest.decode(value),
+    responseSerialize: (value: VerifyReleaseDefaultsResponse): Buffer =>
+      Buffer.from(VerifyReleaseDefaultsResponse.encode(value).finish()),
+    responseDeserialize: (value: Buffer): VerifyReleaseDefaultsResponse => VerifyReleaseDefaultsResponse.decode(value),
+  },
 } as const;
 
 export interface ConfigurationReleaseServiceServer extends UntypedServiceImplementation {
@@ -15650,6 +16445,17 @@ export interface ConfigurationReleaseServiceServer extends UntypedServiceImpleme
   getActiveRelease: handleUnaryCall<GetActiveReleaseRequest, GetActiveReleaseResponse>;
   listReleases: handleUnaryCall<ListReleasesRequest, ListReleasesResponse>;
   watchRelease: handleBidiStreamingCall<WatchReleaseRequest, WatchReleaseEvent>;
+  /**
+   * VerifyReleaseDefaults compares caller-supplied canonical content hashes of
+   * an application's source-owned defaults with the parameters pinned by the
+   * active release. The request and response are value-free: only aliases,
+   * content types, hashes, and bounded verdicts travel over the wire, and the
+   * server never echoes a stored value, digest, or hash. Secret aliases are
+   * structurally excluded and reported as secret_alias. Requires the
+   * configuration-release:verify-defaults operation and is rate limited per
+   * identity.
+   */
+  verifyReleaseDefaults: handleUnaryCall<VerifyReleaseDefaultsRequest, VerifyReleaseDefaultsResponse>;
 }
 
 export type ConfigurationSchemaServiceService = typeof ConfigurationSchemaServiceService;
@@ -15982,5 +16788,5 @@ export interface MessageFns<T> {
   fromPartial(object: DeepPartial<T>): T;
 }
 
-// source-sha256: 31f70198af61b59a91b25dd4d22dc87b0a8f8e1ddb33a1e662eb7965c9c95191
+// source-sha256: ce657215263c039800b4e4a8dccb9e79104251f635790c43caf4089388906e1d
 // generation-sha256: c3e69d40e38671d5381cfa50a679b45232adc3ecd3df927c51285f1901aa09ef

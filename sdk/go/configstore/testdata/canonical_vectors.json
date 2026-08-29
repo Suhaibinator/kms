@@ -1,0 +1,170 @@
+[
+  {
+    "name": "key_reorder",
+    "content_type": "json",
+    "input": "{\"b\":1,\"a\":2}",
+    "canonical": "{\"a\":2,\"b\":1}",
+    "sha256": "d3626ac30a87e6f7a6428233b3c68299976865fa5508e4267c5415c76af7a772"
+  },
+  {
+    "name": "nested_whitespace",
+    "content_type": "json",
+    "input": " { \"z\" : [ 1 , { \"y\" : null , \"x\" : true } ] , \"a\" : { } } ",
+    "canonical": "{\"a\":{},\"z\":[1,{\"x\":true,\"y\":null}]}",
+    "sha256": "91ab756baaf8c31569125d576ca02c7205209bfd6c3a1d81eeb3678daf527820"
+  },
+  {
+    "name": "numbers_verbatim",
+    "content_type": "json",
+    "input": "{\"n\":[1.0,1e2,-0,10000000000000000000000,0.10,1E+2,123456789012345678901234567890.000000000001]}",
+    "canonical": "{\"n\":[1.0,1e2,-0,10000000000000000000000,0.10,1E+2,123456789012345678901234567890.000000000001]}",
+    "sha256": "2198e73992c739dec672afb6582f750a573986fb7dfe5bc1dc31860d0c15e7ef"
+  },
+  {
+    "name": "unicode_escaped_input",
+    "content_type": "json",
+    "input": "{\"s\":\"\\u00e9\"}",
+    "canonical": "{\"s\":\"\u00e9\"}",
+    "sha256": "86028b41ba792eaf82aa26a45b218f6734f7f1096a86f1746c8296e088a0ccb4"
+  },
+  {
+    "name": "unicode_raw_input",
+    "content_type": "json",
+    "input": "{\"s\":\"\u00e9\"}",
+    "canonical": "{\"s\":\"\u00e9\"}",
+    "sha256": "86028b41ba792eaf82aa26a45b218f6734f7f1096a86f1746c8296e088a0ccb4"
+  },
+  {
+    "name": "minimal_escaping",
+    "content_type": "json",
+    "input": "{\"s\":\"a\\u0001b\\tc\\\"d\\\\e\\/f\\u001f\\u007f<>&\"}",
+    "canonical": "{\"s\":\"a\\u0001b\\tc\\\"d\\\\e/f\\u001f\u007f<>&\"}",
+    "sha256": "198b2a2479601ec2684f9807f1da099d314e226f5572e03e690f3a180204c6cb"
+  },
+  {
+    "name": "line_separator_raw",
+    "content_type": "json",
+    "input": "{\"s\":\"\\u2028\\u2029\"}",
+    "canonical": "{\"s\":\"\u2028\u2029\"}",
+    "sha256": "37291683554efe5b232ef434c7f2ed8b3f39ce37f4a2d8db100eb4224e48edcd"
+  },
+  {
+    "name": "astral_key_order_utf8",
+    "content_type": "json",
+    "input": "{\"\ud83d\ude00\":1,\"\uffff\":2,\"a\":3}",
+    "canonical": "{\"a\":3,\"\uffff\":2,\"\ud83d\ude00\":1}",
+    "sha256": "48f8c136ce1b1fb6cc384c2a496fcab8d870f137c9ef71a97d7c4475f6d0eb5d"
+  },
+  {
+    "name": "top_level_scalar_string",
+    "content_type": "json",
+    "input": "  \"str\"  ",
+    "canonical": "\"str\"",
+    "sha256": "72495b0e1f3c6c961f46d3f249ce968ac758c43b88e50d32aa138681f8a38804"
+  },
+  {
+    "name": "top_level_number",
+    "content_type": "json",
+    "input": " 42 ",
+    "canonical": "42",
+    "sha256": "73475cb40a568e8da8a045ced110137e159f890ac4da883b6b17dc651b3a8049"
+  },
+  {
+    "name": "top_level_null",
+    "content_type": "json",
+    "input": "null",
+    "canonical": "null",
+    "sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b"
+  },
+  {
+    "name": "empty_object",
+    "content_type": "json",
+    "input": " {} ",
+    "canonical": "{}",
+    "sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+    "name": "empty_array",
+    "content_type": "json",
+    "input": "[ ]",
+    "canonical": "[]",
+    "sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+  },
+  {
+    "name": "null_property",
+    "content_type": "json",
+    "input": "{\"a\":null}",
+    "canonical": "{\"a\":null}",
+    "sha256": "d091f9c83c091f79652fe8786375b3fe4ce0861a56f5bfbafedbe431877ff0e8"
+  },
+  {
+    "name": "absent_property",
+    "content_type": "json",
+    "input": "{}",
+    "canonical": "{}",
+    "sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+    "name": "string_passthrough",
+    "content_type": "string",
+    "input": "hello\n",
+    "canonical": "hello\n",
+    "sha256": "5891b5b522d5df086d0ff0b110fbd9d21bb4fc7163af34d08286a2e846f6be03"
+  },
+  {
+    "name": "string_passthrough_json_like",
+    "content_type": "string",
+    "input": "{\"b\":1,\"a\":2}",
+    "canonical": "{\"b\":1,\"a\":2}",
+    "sha256": "a1d46c3cdb4e5795c8d637f80daeb578ebb1a9a65dc1ed5f11f51794c3c89f3a"
+  },
+  {
+    "name": "boolean_passthrough",
+    "content_type": "boolean",
+    "input": "true",
+    "canonical": "true",
+    "sha256": "b5bea41b6c623f7c09f1bf24dcae58ebab3c0cdd90ad966bc43a45b44867e12b"
+  },
+  {
+    "name": "duplicate_key",
+    "content_type": "json",
+    "input": "{\"a\":1,\"a\":2}",
+    "error": true
+  },
+  {
+    "name": "nested_duplicate_key",
+    "content_type": "json",
+    "input": "{\"a\":{\"b\":1,\"b\":2}}",
+    "error": true
+  },
+  {
+    "name": "trailing_garbage",
+    "content_type": "json",
+    "input": "{\"a\":1} x",
+    "error": true
+  },
+  {
+    "name": "two_documents",
+    "content_type": "json",
+    "input": "{\"a\":1}{\"b\":2}",
+    "error": true
+  },
+  {
+    "name": "empty_document",
+    "content_type": "json",
+    "input": "",
+    "error": true
+  },
+  {
+    "name": "whitespace_only",
+    "content_type": "json",
+    "input": "   ",
+    "error": true
+  },
+  {
+    "name": "invalid_json",
+    "content_type": "json",
+    "input": "{\"a\":}",
+    "error": true
+  }
+]

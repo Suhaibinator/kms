@@ -24,11 +24,10 @@ var generatedContract = []configstore.ContractEntry{
 
 // Options configures the generated managed configuration store.
 type Options struct {
-	Release              string
-	Defaults             func() *rootconfig.Config
-	AllowDefaultMismatch bool
-	OnDefaultMismatch    func(configstore.DefaultMismatchReport)
-	OnCandidateRejected  func(configstore.CandidateRejectionReport)
+	Release  string
+	Defaults func() *rootconfig.Config
+	// Callbacks observe mismatches, applied generations and rejections; configstore.SlogCallbacks is a ready-made implementation.
+	configstore.Callbacks
 	SecretTokenProvider  kmsclient.SecretTokenProvider
 	ReconcileInterval    time.Duration
 	MaxConcurrentFetches int
@@ -103,6 +102,20 @@ func EncodeDefaultsArtifact(profile string, root *rootconfig.Config) ([]byte, er
 	})
 }
 
+// VerifyReleaseDefaults asks KMS which parameter groups of root differ from the active release of
+// opts.Namespace. Only canonical content hashes travel over the wire; no value is ever sent or returned.
+func VerifyReleaseDefaults(ctx context.Context, client *kmsclient.Client, root *rootconfig.Config, opts configstore.VerifyOptions) (configstore.VerifyResult, error) {
+	groups, err := EncodeParameterGroups(root)
+	if err != nil {
+		return configstore.VerifyResult{}, err
+	}
+	return configstore.VerifyDefaults(ctx, client, configstore.VerifyInput{
+		SchemaSHA256: generatedSchemaSHA256,
+		Contract:     generatedContract,
+		Groups:       groups,
+	}, opts)
+}
+
 // Start synchronously validates and publishes the initial release, then watches in the background.
 func Start(ctx context.Context, client *kmsclient.Client, options Options) (*Store, error) {
 	if options.Defaults == nil {
@@ -122,9 +135,7 @@ func Start(ctx context.Context, client *kmsclient.Client, options Options) (*Sto
 	manager, err := configstore.Start(ctx, client, configstore.Options{
 		Release:              options.Release,
 		Contract:             generatedContract,
-		AllowDefaultMismatch: options.AllowDefaultMismatch,
-		OnDefaultMismatch:    options.OnDefaultMismatch,
-		OnCandidateRejected:  options.OnCandidateRejected,
+		Callbacks:            options.Callbacks,
 		SecretTokenProvider:  options.SecretTokenProvider,
 		ReconcileInterval:    options.ReconcileInterval,
 		MaxConcurrentFetches: options.MaxConcurrentFetches,
@@ -193,6 +204,7 @@ func (s *Store) prepare(ctx context.Context, snapshot kmsclient.ReleaseSnapshot)
 		differences = append(differences, configstore.FieldDifference{Path: "runtime.burst", Expected: reportValue1(effectiveDefaults.Common.Limits.Burst), Actual: reportValue1(candidate.Common.Limits.Burst)})
 	}
 	restartRequired := make([]string, 0)
+	changed := make([]configstore.FieldChange, 0)
 	active := s.active.Load()
 	if active != nil {
 		if candidate.Common.Token.Path() != active.config.Common.Token.Path() || candidate.Common.Token.Version() != active.config.Common.Token.Version() {
@@ -204,6 +216,19 @@ func (s *Store) prepare(ctx context.Context, snapshot kmsclient.ReleaseSnapshot)
 		if !equalValue0(candidate.AppName, active.config.AppName) {
 			restartRequired = append(restartRequired, "runtime.app_name")
 		}
+		// Changed fields versus the previously applied generation feed OnApplied. Secrets are path-only.
+		if candidate.Common.Token.Path() != active.config.Common.Token.Path() || candidate.Common.Token.Version() != active.config.Common.Token.Version() {
+			changed = append(changed, configstore.FieldChange{Path: "common_token"})
+		}
+		if !equalValue0(candidate.Common.Endpoint, active.config.Common.Endpoint) {
+			changed = append(changed, configstore.FieldChange{Path: "database.endpoint", Previous: reportValue0(active.config.Common.Endpoint), Current: reportValue0(candidate.Common.Endpoint)})
+		}
+		if !equalValue0(candidate.AppName, active.config.AppName) {
+			changed = append(changed, configstore.FieldChange{Path: "runtime.app_name", Previous: reportValue0(active.config.AppName), Current: reportValue0(candidate.AppName)})
+		}
+		if !equalValue1(candidate.Common.Limits.Burst, active.config.Common.Limits.Burst) {
+			changed = append(changed, configstore.FieldChange{Path: "runtime.burst", Previous: reportValue1(active.config.Common.Limits.Burst), Current: reportValue1(candidate.Common.Limits.Burst)})
+		}
 	}
 	generation := &immutableGeneration{config: candidate, release: configstore.ReleaseIdentityFromSnapshot(snapshot)}
 	return configstore.PreparedCandidate{
@@ -211,6 +236,8 @@ func (s *Store) prepare(ctx context.Context, snapshot kmsclient.ReleaseSnapshot)
 		Abort:                 func() {},
 		DefaultDifferences:    differences,
 		RestartRequiredFields: restartRequired,
+		Changed:               changed,
+		Groups:                func() (map[string]json.RawMessage, error) { return EncodeParameterGroups(generation.config) },
 	}, nil
 }
 
