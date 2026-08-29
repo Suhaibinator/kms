@@ -31,3 +31,9 @@ if (typeof window.localStorage?.getItem !== "function") {
     Object.defineProperty(target, "localStorage", { value: memoryStorage, configurable: true });
   }
 }
+
+// happy-dom >= 20.12 implements the Web Animations API, so Base UI no longer
+// short-circuits its "wait for exit animations" path and closed dialogs, tab
+// panels and popups linger for a frame before unmounting. Base UI's documented
+// test switch restores synchronous unmounts so queries see the final DOM.
+(globalThis as { BASE_UI_ANIMATIONS_DISABLED?: boolean }).BASE_UI_ANIMATIONS_DISABLED = true;
