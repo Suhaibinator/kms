@@ -21,6 +21,7 @@ import (
 
 	"github.com/Suhaibinator/kms/internal/core"
 	"github.com/Suhaibinator/kms/internal/domain"
+	"github.com/Suhaibinator/kms/internal/ratelimit"
 )
 
 // Config configures the HTTP server.
@@ -60,7 +61,7 @@ type server struct {
 	svc          *core.Service
 	cfg          Config
 	log          *zap.Logger
-	loginLimiter *rateLimiter
+	loginLimiter *ratelimit.Limiter
 	static       *staticHandler
 	apiMux       *http.ServeMux
 	stream       streamLimits
@@ -89,7 +90,7 @@ func newServer(svc *core.Service, cfg Config) *server {
 		svc:          svc,
 		cfg:          cfg,
 		log:          svc.Logger(),
-		loginLimiter: newRateLimiter(5, 10),
+		loginLimiter: ratelimit.New(5, 10),
 		stream:       defaultStreamLimits(),
 		streams:      newStreamRegistry(),
 	}
@@ -146,7 +147,7 @@ func (s *server) serveAPI(w http.ResponseWriter, r *http.Request) {
 		s.handleCA(w, r)
 		return
 	case "/api/v1/auth/login":
-		if !s.loginLimiter.allow(ip) {
+		if !s.loginLimiter.Allow(ip) {
 			writeErrorCode(w, http.StatusTooManyRequests, "rate_limited", "too many requests; slow down")
 			return
 		}
@@ -162,7 +163,7 @@ func (s *server) serveAPI(w http.ResponseWriter, r *http.Request) {
 	// Reserve from the failed-auth bucket before doing credential work. A
 	// successful authentication refunds the reservation; a failed one keeps it.
 	// This makes throttling effective even while the bucket is exhausted.
-	if !s.loginLimiter.allow(ip) {
+	if !s.loginLimiter.Allow(ip) {
 		writeErrorCode(w, http.StatusTooManyRequests, "rate_limited", "too many requests; slow down")
 		return
 	}
@@ -171,7 +172,7 @@ func (s *server) serveAPI(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, r, err)
 		return
 	}
-	s.loginLimiter.refund(ip)
+	s.loginLimiter.Refund(ip)
 	ctx = context.WithValue(r.Context(), principalKey, pr)
 	s.apiMux.ServeHTTP(w, r.WithContext(ctx))
 }
