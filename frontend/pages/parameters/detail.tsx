@@ -3,13 +3,15 @@ import Link from "next/link";
 import { useRouter } from "next/router";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import CopyButton from "@/components/CopyButton";
+import { Ident } from "@/components/Ident";
 import { Icon } from "@/components/icons";
+import { JsonEditor } from "@/components/JsonEditor";
 import { ConfirmDialog, Modal } from "@/components/Modal";
+import { ParameterValueInput } from "@/components/ParameterValueInput";
 import {
   Badge,
   EmptyState,
   Field,
-  Input,
   JsonView,
   KeyValue,
   PageHeader,
@@ -17,7 +19,6 @@ import {
   Skeleton,
   Spinner,
   TableSkeleton,
-  Textarea,
 } from "@/components/ui";
 import { AppSelect } from "@/components/ui/app-select";
 import { Button, ButtonLink } from "@/components/ui/button";
@@ -32,8 +33,15 @@ import {
   prettyJson,
 } from "@/lib/format";
 import { useLatestRequest, useQueryParams } from "@/lib/hooks";
+import {
+  canonicalParameterValue,
+  formatJson,
+  jsonEquivalent,
+  valuesEquivalent,
+} from "@/lib/json-text";
 import { links } from "@/lib/links";
 import { PARAMETER_CONTENT_TYPES, type Parameter, type ParameterMetadata } from "@/lib/types";
+import { type ParameterSchema, useParameterSchema } from "@/lib/useParameterSchema";
 import {
   firstError,
   validateMetadataJson,
@@ -75,6 +83,12 @@ export default function ParameterDetailPage() {
 
   const [newVersionOpen, setNewVersionOpen] = useState(false);
   const [value, setValue] = useState("");
+  // The value the form opened with; a schema that arrives late may only take
+  // over the editor while nothing has been typed yet.
+  const [openedValue, setOpenedValue] = useState("");
+  // Snapshot of the schema lookup taken when the form opened, so a late result
+  // cannot flip an open editor between Form and JSON under the operator.
+  const [versionSchema, setVersionSchema] = useState<ParameterSchema | null>(null);
   const [contentType, setContentType] = useState("string");
   const [metadataJson, setMetadataJson] = useState("{}");
   const [saving, setSaving] = useState(false);
@@ -83,6 +97,17 @@ export default function ParameterDetailPage() {
 
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [deleting, setDeleting] = useState(false);
+
+  // The application's pinned schema, looked up in the background from the page
+  // load so it is usually in hand before the form opens. Absence is silent.
+  const schemaLookup = useParameterSchema({ env, app, key, enabled: ready && hasRef });
+  useEffect(() => {
+    if (!newVersionOpen || versionSchema !== null) return;
+    if (schemaLookup.status === "idle" || schemaLookup.status === "loading") return;
+    // "none" never changes the editor; a real schema only steps in while the
+    // value is still untouched.
+    if (schemaLookup.status === "none" || value === openedValue) setVersionSchema(schemaLookup);
+  }, [newVersionOpen, versionSchema, schemaLookup, value, openedValue]);
 
   // Client-side mirrors of the server's validators (see lib/validation.ts).
   // The value is checked against the content type the form will actually send,
@@ -102,6 +127,12 @@ export default function ParameterDetailPage() {
   const shownValueError = shownIn("value", valueError);
   const shownMetadataError = shownIn("metadata", metadataError);
   const shownVersionError = firstError(shownValueError, shownMetadataError);
+  // Saving identical content would only add a whitespace-for-whitespace version.
+  const unchanged =
+    current !== null &&
+    contentType === (current.content_type || "string") &&
+    valuesEquivalent(value, current.value, contentType) &&
+    jsonEquivalent(metadataJson.trim() || "{}", meta?.metadata_json?.trim() || "{}");
 
   function markTouched(field: VersionField) {
     setTouched((t) => ({ ...t, [field]: true }));
@@ -157,27 +188,34 @@ export default function ParameterDetailPage() {
   }, [ready, hasRef, load, request]);
 
   function openNewVersion() {
-    setValue(current?.value ?? "");
-    setContentType(current?.content_type ?? meta?.content_type ?? "string");
+    const type = current?.content_type ?? meta?.content_type ?? "string";
+    const raw = current?.value ?? "";
+    const opened = type === "json" ? (formatJson(raw) ?? raw) : raw;
+    setValue(opened);
+    setOpenedValue(opened);
+    setVersionSchema(
+      schemaLookup.status === "idle" || schemaLookup.status === "loading" ? null : schemaLookup,
+    );
+    setContentType(type);
     setMetadataJson(!isEmptyJson(meta?.metadata_json) ? prettyJson(meta?.metadata_json) : "{}");
     setTouched({});
     setSubmitAttempted(false);
     setNewVersionOpen(true);
   }
 
-  async function saveVersion(e: React.FormEvent) {
-    e.preventDefault();
-    if (!hasRef) return;
+  async function saveVersion(e?: React.SyntheticEvent) {
+    e?.preventDefault();
+    if (!hasRef || saving) return;
     setSubmitAttempted(true);
     // Every remaining problem now has an inline message next to its field.
-    if (versionError) return;
+    if (versionError || unchanged) return;
     setSaving(true);
     try {
       const res = await api.putParameter({
         env,
         app,
         key,
-        value,
+        value: canonicalParameterValue(value, contentType),
         content_type: contentType || "string",
         metadata_json: metadataJson.trim() || "{}",
       });
@@ -346,9 +384,11 @@ export default function ParameterDetailPage() {
               <span className="faint text-sm">{current.content_type || "value"}</span>
               <CopyButton label="Copy value" value={current.value} />
             </div>
-            <pre className="json-block">
-              {current.content_type === "json" ? prettyJson(current.value) : current.value}
-            </pre>
+            {current.content_type === "json" ? (
+              <JsonView raw={prettyJson(current.value)} />
+            ) : (
+              <pre className="json-block">{current.value}</pre>
+            )}
           </>
         ) : (
           <span className="faint">No current value.</span>
@@ -471,9 +511,11 @@ export default function ParameterDetailPage() {
                 </Button>
               </div>
             </div>
-            <pre className="json-block">
-              {viewed.contentType === "json" ? prettyJson(viewed.value) : viewed.value}
-            </pre>
+            {viewed.contentType === "json" ? (
+              <JsonView raw={prettyJson(viewed.value)} />
+            ) : (
+              <pre className="json-block">{viewed.value}</pre>
+            )}
           </div>
         ) : null}
       </div>
@@ -483,12 +525,24 @@ export default function ParameterDetailPage() {
         title="New parameter version"
         onClose={() => setNewVersionOpen(false)}
         dismissible={!saving}
+        wide
         footer={
           <>
+            {unchanged && current ? (
+              <span
+                className="faint text-sm self-center sm:mr-auto"
+                data-testid="version-unchanged"
+              >
+                Nothing changed since v{current.version}.
+              </span>
+            ) : null}
             <Button variant="outline" onClick={() => setNewVersionOpen(false)} disabled={saving}>
               Cancel
             </Button>
-            <Button onClick={saveVersion} disabled={saving || shownVersionError !== null}>
+            <Button
+              onClick={saveVersion}
+              disabled={saving || shownVersionError !== null || unchanged}
+            >
               {saving ? <Spinner /> : null}
               Save new version
             </Button>
@@ -501,13 +555,41 @@ export default function ParameterDetailPage() {
             hint="Saving creates a new version and updates the current label."
             error={shownValueError}
           >
-            <Textarea
-              className="font-mono"
+            <ParameterValueInput
+              contentType={contentType}
               value={value}
-              onChange={(e) => setValue(e.target.value)}
+              schema={contentType === "json" ? (versionSchema?.schema ?? null) : null}
+              schemaLabel={
+                versionSchema?.status === "ready" ? (
+                  <>
+                    <Ident
+                      kind="schema"
+                      value={`${versionSchema.schemaId}@${versionSchema.schemaVersion}`}
+                    />
+                    <Ident kind="alias" value={versionSchema.alias} />
+                  </>
+                ) : undefined
+              }
+              rows={12}
+              onChange={setValue}
               onBlur={() => markTouched("value")}
+              onSubmit={() => void saveVersion()}
             />
           </Field>
+          {contentType === "json" && versionSchema === null ? (
+            <p className="faint text-xs mt-1" role="status">
+              {schemaLookup.status === "ready" ? (
+                <>
+                  A schema for <span className="mono">{schemaLookup.alias}</span> is available;
+                  reopen the form to edit by field.
+                </>
+              ) : (
+                <>
+                  <Spinner /> Looking for a schema…
+                </>
+              )}
+            </p>
+          ) : null}
           <div className="form-row">
             <Field label="Content type">
               <AppSelect
@@ -519,15 +601,18 @@ export default function ParameterDetailPage() {
                 }))}
               />
             </Field>
-            <Field label="Metadata JSON" error={shownMetadataError}>
-              <Input
-                className="font-mono"
-                value={metadataJson}
-                onChange={(e) => setMetadataJson(e.target.value)}
-                onBlur={() => markTouched("metadata")}
-              />
-            </Field>
           </div>
+          <Field label="Metadata JSON" error={shownMetadataError}>
+            <JsonEditor
+              toolbar="minimal"
+              rows={3}
+              maxHeight="30vh"
+              value={metadataJson}
+              onChange={setMetadataJson}
+              onBlur={() => markTouched("metadata")}
+              onSubmit={() => void saveVersion()}
+            />
+          </Field>
         </form>
       </Modal>
 

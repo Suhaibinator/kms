@@ -485,7 +485,8 @@ describe("ShipModal", () => {
     await settlePreview();
     await waitFor(() => expect(dryRuns()).toHaveLength(2));
     expect(dryRuns()[1].changes).toEqual([
-      { alias: "database", value: '{"host": "db"}', content_type: "json" },
+      // JSON values travel minified; the editor text keeps its whitespace.
+      { alias: "database", value: '{"host":"db"}', content_type: "json" },
       { alias: "rate_limits", label: "current" },
     ]);
   });

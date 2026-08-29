@@ -167,6 +167,17 @@
   --sidebar-accent-foreground: var(--text);
   --sidebar-border: var(--border);
   --sidebar-ring: var(--ring);
+
+  /* Syntax colours for JSON viewers and editors (components/JsonHighlight.tsx).
+     Aliases of the identifier palette, so .dark needs no copies. */
+  --syntax-key: var(--ident-app);
+  --syntax-string: var(--ident-release);
+  --syntax-number: var(--ident-schema);
+  --syntax-literal: var(--ident-alias);
+  --syntax-punct: var(--text-faint);
+  --syntax-error: var(--danger);
+  --syntax-error-soft: var(--danger-soft);
+  --syntax-line-no: var(--text-faint);
 }
 
 /* Dark theme: the same tokens, re-pointed. Keep this list and :root in
@@ -668,6 +679,12 @@
   .schema-form-caption {
     font-size: var(--text-xs);
   }
+  .schema-form-label {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-1);
+    flex-wrap: wrap;
+  }
   .schema-form-fields {
     display: grid;
     gap: var(--space-3);
@@ -713,6 +730,213 @@
   }
   .schema-form-summary {
     margin: 0;
+  }
+
+  /* ---------- JSON highlighting + editor (components/JsonHighlight.tsx, JsonEditor.tsx) ---------- */
+  .json-highlight {
+    display: block;
+    counter-reset: json-line;
+  }
+  .json-line {
+    display: block;
+    position: relative;
+    min-height: 1lh;
+    counter-increment: json-line;
+  }
+  .json-highlight[data-line-numbers],
+  .json-editor-stack {
+    --json-gutter: calc(var(--json-gutter-chars, 2) * 1ch + var(--space-5));
+  }
+  .json-highlight[data-line-numbers] {
+    padding-left: var(--json-gutter);
+  }
+  .json-highlight[data-line-numbers] .json-line::before {
+    content: counter(json-line);
+    position: absolute;
+    left: calc(-1 * var(--json-gutter));
+    width: calc(var(--json-gutter) - var(--space-3));
+    text-align: right;
+    color: var(--syntax-line-no);
+    user-select: none;
+  }
+  .json-line.is-error {
+    background: var(--syntax-error-soft);
+    box-shadow: inset 2px 0 0 var(--syntax-error);
+  }
+  .json-highlight[data-line-numbers] .json-line.is-error::before {
+    color: var(--syntax-error);
+    font-weight: 600;
+  }
+  .tok-key {
+    color: var(--syntax-key);
+  }
+  .tok-string {
+    color: var(--syntax-string);
+  }
+  .tok-number {
+    color: var(--syntax-number);
+  }
+  .tok-boolean,
+  .tok-null {
+    color: var(--syntax-literal);
+  }
+  .tok-punct {
+    color: var(--syntax-punct);
+  }
+  .tok-error {
+    color: var(--syntax-error);
+    text-decoration: underline wavy var(--syntax-error);
+    text-underline-offset: 2px;
+  }
+
+  .json-editor {
+    display: grid;
+    gap: var(--space-2);
+    min-width: 0;
+  }
+  .json-editor-toolbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-2);
+    flex-wrap: wrap;
+  }
+  .json-editor-tools {
+    display: flex;
+    align-items: center;
+    gap: var(--space-1);
+    flex-wrap: wrap;
+  }
+  .json-editor-size {
+    font-family: var(--mono);
+    white-space: nowrap;
+  }
+  /* Every font metric lives here; both layers inherit, so they cannot drift. */
+  .json-editor-body {
+    --json-line-height: 1.55;
+    position: relative;
+    overflow: auto;
+    resize: vertical;
+    min-height: calc(
+      var(--json-rows, 12) *
+      var(--json-line-height) *
+      var(--text-sm) +
+      2 *
+      var(--space-3) +
+      2px
+    );
+    padding: var(--space-3);
+    border: 1px solid var(--input);
+    border-radius: var(--radius-sm);
+    background: var(--bg-elev);
+    font-family: var(--mono);
+    font-size: var(--text-sm);
+    line-height: var(--json-line-height);
+    tab-size: 2;
+    letter-spacing: 0;
+    word-spacing: 0;
+    font-variant-ligatures: none;
+    font-kerning: none;
+    hyphens: none;
+    transition:
+      border-color 120ms,
+      box-shadow 120ms;
+  }
+  .json-editor-body:focus-within {
+    border-color: var(--ring);
+    box-shadow: 0 0 0 3px color-mix(in oklab, var(--ring) 50%, transparent);
+  }
+  .json-editor[data-invalid] .json-editor-body {
+    border-color: var(--destructive);
+  }
+  .json-editor[data-invalid] .json-editor-body:focus-within {
+    box-shadow: 0 0 0 3px color-mix(in oklab, var(--destructive) 20%, transparent);
+  }
+  .json-editor[data-disabled] .json-editor-body {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+  .json-editor-stack {
+    display: grid;
+    grid-template-columns: minmax(100%, max-content);
+    min-width: 100%;
+  }
+  .json-editor[data-plain] .json-editor-stack {
+    --json-gutter: 0px;
+  }
+  .json-editor-highlight,
+  .json-editor-input {
+    grid-area: 1 / 1;
+    margin: 0;
+    border: 0;
+    padding: 0;
+    text-indent: 0;
+    font: inherit;
+    letter-spacing: inherit;
+    word-spacing: inherit;
+    tab-size: inherit;
+    color: var(--text);
+    background: transparent;
+    min-width: 0;
+  }
+  .json-editor-highlight {
+    pointer-events: none;
+    overflow: visible;
+  }
+  .json-editor-input {
+    display: block;
+    width: 100%;
+    height: 100%;
+    padding-left: var(--json-gutter, 0px);
+    resize: none;
+    overflow: hidden;
+    outline: none;
+    appearance: none;
+    border-radius: 0;
+    box-shadow: none;
+    color: transparent;
+    -webkit-text-fill-color: transparent;
+    caret-color: var(--text);
+  }
+  .json-editor-input::selection {
+    background: var(--accent-soft);
+    color: transparent;
+  }
+  .json-editor-input::placeholder {
+    color: var(--text-faint);
+    -webkit-text-fill-color: var(--text-faint);
+    opacity: 1;
+  }
+  .json-editor[data-plain] .json-editor-input {
+    color: var(--text);
+    -webkit-text-fill-color: var(--text);
+  }
+  .json-editor[data-wrap="on"] .json-editor-highlight,
+  .json-editor[data-wrap="on"] .json-editor-input {
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    word-break: normal;
+  }
+  .json-editor[data-wrap="off"] .json-editor-highlight,
+  .json-editor[data-wrap="off"] .json-editor-input {
+    white-space: pre;
+    overflow-wrap: normal;
+  }
+  .json-editor-status {
+    font-size: var(--text-xs);
+  }
+  .json-editor-status:empty {
+    display: none;
+  }
+  .json-editor-problem {
+    color: var(--danger);
+    font-family: var(--mono);
+  }
+  @media (max-width: 768px) {
+    /* 16px stops iOS from zooming the page on focus; both layers inherit it. */
+    .json-editor-body {
+      font-size: 16px;
+    }
   }
 
   .form-row {
@@ -951,6 +1175,7 @@
     font-family: var(--mono);
     font-size: 12.5px;
     color: var(--text-muted);
+    tab-size: 2;
     white-space: pre-wrap;
     overflow-wrap: anywhere;
     max-height: 320px;
@@ -1134,10 +1359,6 @@
   }
   .release-copy-value code {
     overflow-wrap: anywhere;
-  }
-  /* Everything else comes from .json-block on the same element. */
-  .release-metadata-json {
-    max-height: 240px;
   }
   .schema-viewer {
     display: flex;

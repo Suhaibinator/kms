@@ -187,7 +187,10 @@ describe("ReleasesPage", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "View" }));
     const dialog = screen.getByRole("dialog", { name: "Schema payments/runtime@3" });
-    expect(within(dialog).getByText(/"enabled":/)).toBeVisible();
+    // The viewer colour-codes tokens, so the text is spread across spans.
+    const code = dialog.querySelector(".schema-code");
+    expect(code?.textContent).toContain('"enabled": {');
+    expect(code?.querySelector(".tok-key")?.textContent).toBe('"type"');
     expect(within(dialog).getByRole("checkbox", { name: "Wrap lines" })).toBeChecked();
   });
 

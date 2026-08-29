@@ -2,6 +2,7 @@
 // DOM or the API, so the row/change/outcome logic is unit-testable on its own
 // and the components stay presentational.
 
+import { canonicalParameterValue } from "@/lib/json-text";
 import { isProductionEnvironment } from "@/lib/readiness";
 import type {
   Application,
@@ -158,7 +159,11 @@ export function buildChanges(rows: readonly ShipRow[], optIns: readonly string[]
   const changes: ShipChange[] = rows.map((row) =>
     row.reuseVersion !== undefined
       ? { alias: row.alias, version: row.reuseVersion }
-      : { alias: row.alias, value: row.value, content_type: row.content_type },
+      : {
+          alias: row.alias,
+          value: canonicalParameterValue(row.value, row.content_type),
+          content_type: row.content_type,
+        },
   );
   for (const alias of optIns) changes.push({ alias, label: "current" });
   return changes;

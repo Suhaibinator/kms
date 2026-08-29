@@ -1,12 +1,13 @@
 import { useEffect, useId, useMemo, useState } from "react";
 import { Modal } from "@/components/Modal";
-import { SchemaForm } from "@/components/SchemaForm";
-import { Badge, Checkbox, Field, Input, Spinner, Textarea } from "@/components/ui";
+import { ParameterValueInput } from "@/components/ParameterValueInput";
+import { Badge, Checkbox, Field, Input, Spinner } from "@/components/ui";
 import { AppSelect } from "@/components/ui/app-select";
 import { Button } from "@/components/ui/button";
 import { useFieldErrors } from "@/lib/hooks";
+import { canonicalParameterValue } from "@/lib/json-text";
 import { isProductionEnvironment } from "@/lib/readiness";
-import { aliasSchema, buildForm } from "@/lib/schema-form";
+import { aliasSchema } from "@/lib/schema-form";
 import { type ApplicationConfigurationRow, PARAMETER_CONTENT_TYPES } from "@/lib/types";
 import {
   firstError,
@@ -82,7 +83,6 @@ export function BulkParameterModal({
     () => (contentType === "json" ? aliasSchema(schemaJson, key.trim()) : null),
     [schemaJson, contentType, key],
   );
-  const structured = schema !== null && buildForm(schema) !== null;
   const differing = useMemo(
     () =>
       row
@@ -101,7 +101,7 @@ export function BulkParameterModal({
     void onSave({
       application: app,
       key,
-      value,
+      value: canonicalParameterValue(value, contentType),
       content_type: contentType,
       metadata_json: "{}",
       environments: selected,
@@ -163,23 +163,15 @@ export function BulkParameterModal({
           </Field>
         </div>
         <Field label="Value" error={shown("value", valueProblem)}>
-          {structured && schema ? (
-            <SchemaForm
-              schema={schema}
-              value={value}
-              onChange={setValue}
-              onBlur={() => touch("value")}
-              jsonLabel="Value"
-            />
-          ) : (
-            <Textarea
-              className="font-mono"
-              rows={7}
-              value={value}
-              onChange={(event) => setValue(event.target.value)}
-              onBlur={() => touch("value")}
-            />
-          )}
+          <ParameterValueInput
+            contentType={contentType}
+            value={value}
+            schema={schema}
+            rows={7}
+            onChange={setValue}
+            onBlur={() => touch("value")}
+            onSubmit={submit}
+          />
         </Field>
         <Field label="Target environments">
           <div className="checkbox-row">

@@ -272,7 +272,8 @@ export function validateValueSize(value: string): string | null {
   return null;
 }
 
-function formatBytes(n: number): string {
+/** Human-readable byte count (bytes, KiB, MiB). */
+export function formatBytes(n: number): string {
   if (n >= 1 << 20) return `${(n / (1 << 20)).toFixed(1)} MiB`;
   if (n >= 1 << 10) return `${(n / (1 << 10)).toFixed(1)} KiB`;
   return `${n} bytes`;

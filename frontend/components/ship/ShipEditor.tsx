@@ -1,10 +1,10 @@
 import { Trash2 } from "lucide-react";
 import { useId } from "react";
 import { Ident } from "@/components/Ident";
-import { SchemaForm } from "@/components/SchemaForm";
-import { Badge, Button, Field, Input, Textarea } from "@/components/ui";
+import { ParameterValueInput } from "@/components/ParameterValueInput";
+import { Badge, Button, Field } from "@/components/ui";
 import { AppSelect } from "@/components/ui/app-select";
-import { aliasSchema, buildForm, type JsonSchema } from "@/lib/schema-form";
+import { aliasSchema, type JsonSchema } from "@/lib/schema-form";
 import type { Application, EnvironmentOverview } from "@/lib/types";
 import { addableAliases, rowError, type ShipRow, valueFor } from "./model";
 
@@ -26,68 +26,6 @@ export interface ShipEditorProps {
   onAddSecret: (env: string, alias: string) => void;
 }
 
-function formatJson(value: string): string {
-  try {
-    return JSON.stringify(JSON.parse(value), null, 2);
-  } catch {
-    return value;
-  }
-}
-
-function ValueEditor({
-  row,
-  disabled,
-  onChange,
-}: {
-  row: ShipRow;
-  disabled: boolean;
-  onChange: (value: string) => void;
-}) {
-  const label = `${row.alias} value`;
-  switch (row.content_type) {
-    case "boolean":
-      return (
-        <AppSelect
-          value={row.value.trim()}
-          onValueChange={onChange}
-          disabled={disabled}
-          placeholder="Choose…"
-          options={[
-            { value: "true", label: "true" },
-            { value: "false", label: "false" },
-          ]}
-          className="font-mono"
-        />
-      );
-    case "integer":
-    case "float":
-      return (
-        <Input
-          className="font-mono"
-          inputMode={row.content_type === "integer" ? "numeric" : "decimal"}
-          aria-label={label}
-          value={row.value}
-          disabled={disabled}
-          autoComplete="off"
-          spellCheck={false}
-          onChange={(event) => onChange(event.target.value)}
-        />
-      );
-    default:
-      return (
-        <Textarea
-          className="font-mono ship-value-editor"
-          aria-label={label}
-          value={row.value}
-          disabled={disabled}
-          spellCheck={false}
-          rows={row.content_type === "json" ? 6 : 3}
-          onChange={(event) => onChange(event.target.value)}
-        />
-      );
-  }
-}
-
 function RowCard({
   row,
   env,
@@ -107,7 +45,6 @@ function RowCard({
   const error = row.loaded ? rowError(row) : null;
   const pinned = current?.pinned_version;
   const currentVersion = current?.current_version;
-  const structured = schema !== null && buildForm(schema) !== null;
   return (
     <li className="ship-row" data-testid={`ship-row-${row.alias}`} data-alias={row.alias}>
       <div className="ship-row-head">
@@ -165,40 +102,17 @@ function RowCard({
           error={error}
           hint={row.loadError ? `Could not load the current value: ${row.loadError}` : undefined}
         >
-          {structured && schema ? (
-            <SchemaForm
-              schema={schema}
-              value={row.value}
-              disabled={disabled}
-              jsonLabel={`${row.alias} value`}
-              rows={6}
-              onChange={(value) => onChange({ value, reuseVersion: undefined })}
-            />
-          ) : (
-            <ValueEditor
-              row={row}
-              disabled={disabled}
-              onChange={(value) => onChange({ value, reuseVersion: undefined })}
-            />
-          )}
+          <ParameterValueInput
+            contentType={row.content_type}
+            value={row.value}
+            schema={schema}
+            disabled={disabled}
+            aria-label={`${row.alias} value`}
+            rows={6}
+            onChange={(value) => onChange({ value, reuseVersion: undefined })}
+          />
         </Field>
       )}
-      {row.loaded &&
-      row.reuseVersion === undefined &&
-      row.content_type === "json" &&
-      !structured ? (
-        <div className="ship-row-tools">
-          <Button
-            type="button"
-            variant="ghost"
-            size="sm"
-            disabled={disabled || rowError(row) !== null}
-            onClick={() => onChange({ value: formatJson(row.value) })}
-          >
-            Format
-          </Button>
-        </div>
-      ) : null}
     </li>
   );
 }

@@ -2,8 +2,10 @@ import { Eye, Filter, Trash2, X } from "lucide-react";
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Icon } from "@/components/icons";
+import { JsonEditor } from "@/components/JsonEditor";
 import { ConfirmDialog, Modal } from "@/components/Modal";
 import NamespacePicker, { type NamespaceSelection } from "@/components/NamespacePicker";
+import { ParameterValueInput } from "@/components/ParameterValueInput";
 import {
   Badge,
   EmptyState,
@@ -13,7 +15,6 @@ import {
   Pagination,
   Spinner,
   TableSkeleton,
-  Textarea,
 } from "@/components/ui";
 import { AppSelect } from "@/components/ui/app-select";
 import { Button, ButtonLink } from "@/components/ui/button";
@@ -27,9 +28,11 @@ import {
   useNamespaces,
   useQueryParams,
 } from "@/lib/hooks";
+import { canonicalParameterValue } from "@/lib/json-text";
 import { links } from "@/lib/links";
 import { PARAMETER_CONTENT_TYPES, type Parameter } from "@/lib/types";
 import { useQueryReplace } from "@/lib/url";
+import { useParameterSchema } from "@/lib/useParameterSchema";
 import {
   firstError,
   validateContentType,
@@ -78,6 +81,13 @@ export default function ParametersPage() {
   const [metadataJson, setMetadataJson] = useState("{}");
   const [saving, setSaving] = useState(false);
   const errors = useFieldErrors<CreateField>();
+  // A json value in a namespace with a pinned schema can be edited by field.
+  const createSchema = useParameterSchema({
+    env: createNs.env,
+    app: createNs.app,
+    key: key.trim(),
+    enabled: createOpen && contentType === "json" && !!createNs.env && !!createNs.app,
+  });
 
   const [deleteTarget, setDeleteTarget] = useState<Parameter | null>(null);
   const [deleting, setDeleting] = useState(false);
@@ -232,7 +242,7 @@ export default function ParametersPage() {
         env: createNs.env,
         app: createNs.app,
         key: k,
-        value,
+        value: canonicalParameterValue(value, contentType),
         content_type: contentType || "string",
         metadata_json: metadataJson.trim() || "{}",
       });
@@ -462,12 +472,14 @@ export default function ParametersPage() {
             />
           </Field>
           <Field label="Value" error={shownValueError}>
-            <Textarea
-              className="font-mono"
+            <ParameterValueInput
+              contentType={contentType}
               value={value}
-              onChange={(e) => setValue(e.target.value)}
+              schema={createSchema.status === "ready" ? createSchema.schema : null}
+              rows={8}
+              onChange={setValue}
               onBlur={() => errors.touch("value")}
-              placeholder="100"
+              placeholder={contentType === "json" ? "{}" : "100"}
             />
           </Field>
           <div className="form-row">
@@ -484,15 +496,17 @@ export default function ParametersPage() {
                 }))}
               />
             </Field>
-            <Field label="Metadata JSON" error={shownMetadataError}>
-              <Input
-                className="font-mono"
-                value={metadataJson}
-                onChange={(e) => setMetadataJson(e.target.value)}
-                onBlur={() => errors.touch("metadata")}
-              />
-            </Field>
           </div>
+          <Field label="Metadata JSON" error={shownMetadataError}>
+            <JsonEditor
+              toolbar="minimal"
+              rows={3}
+              maxHeight="30vh"
+              value={metadataJson}
+              onChange={setMetadataJson}
+              onBlur={() => errors.touch("metadata")}
+            />
+          </Field>
         </form>
       </Modal>
 

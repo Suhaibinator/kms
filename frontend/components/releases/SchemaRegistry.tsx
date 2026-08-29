@@ -2,6 +2,7 @@ import { Plus, RefreshCw } from "lucide-react";
 import { type FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import CopyButton from "@/components/CopyButton";
 import { Icon } from "@/components/icons";
+import { JsonHighlight } from "@/components/JsonHighlight";
 import { Modal } from "@/components/Modal";
 import {
   Button,
@@ -81,7 +82,9 @@ function SchemaViewer({
               <CopyButton value={schema.digest} label="Copy digest" />
             </div>
           </div>
-          <pre className={`schema-code ${wrap ? "schema-code-wrap" : ""}`}>{pretty}</pre>
+          <pre className={`schema-code ${wrap ? "schema-code-wrap" : ""}`}>
+            <JsonHighlight text={pretty} lineNumbers />
+          </pre>
         </div>
       ) : null}
     </Modal>

@@ -11,25 +11,6 @@
     display: grid;
     gap: var(--space-5);
   }
-  /* Grid items default to `min-width: auto`, so one wide child — the preview
-     table with its unbreakable mono aliases and keys — widens the shared
-     column and every sibling (blurb, blocker cards) stretches with it, which
-     makes the modal body scroll sideways. Zero the minimum at every grid
-     level in the modal so wide content scrolls inside its own .table-wrap
-     instead of pushing the layout out. */
-  .ship-modal > *,
-  .ship-editor > *,
-  .ship-rows > *,
-  .ship-row > *,
-  .ship-preview > *,
-  .ship-preview-body > *,
-  .ship-outcome > *,
-  .conflict-panel > *,
-  .rollout-panel > *,
-  .rollout-remedy > *,
-  .rollback-dialog > * {
-    min-width: 0;
-  }
   .ship-title {
     display: inline-flex;
     align-items: center;
@@ -185,11 +166,6 @@
   .ship-row-tools {
     display: flex;
     justify-content: flex-end;
-  }
-  .ship-value-editor {
-    min-height: 88px;
-    resize: vertical;
-    tab-size: 2;
   }
   .ship-add-row {
     max-width: 320px;

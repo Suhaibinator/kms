@@ -232,3 +232,38 @@ describe("SchemaForm", () => {
     expect(screen.getByRole("button", { name: "JSON" })).toBeDisabled();
   });
 });
+
+describe("SchemaForm as a labelled control", () => {
+  it("forwards the field wiring to the JSON textarea", () => {
+    render(
+      <SchemaForm
+        schema={schema}
+        value="[1]"
+        onChange={() => undefined}
+        id="value-control"
+        aria-invalid
+        aria-describedby="value-hint"
+        jsonLabel="Value"
+      />,
+    );
+    const textarea = screen.getByRole("textbox", { name: "Value" });
+    expect(textarea).toHaveAttribute("id", "value-control");
+    expect(textarea).toHaveAttribute("aria-invalid", "true");
+    expect(textarea.getAttribute("aria-describedby")).toContain("value-hint");
+  });
+
+  it("opens an inferred schema on the JSON view and says where the fields came from", () => {
+    render(
+      <SchemaForm
+        schema={schema}
+        value='{"name":"svc","replicas":2,"enabled":true,"limits":{"rps":1}}'
+        onChange={() => undefined}
+        captionSource="inferred"
+      />,
+    );
+    expect(screen.getByRole("button", { name: "JSON" })).toHaveAttribute("aria-pressed", "true");
+    fireEvent.click(screen.getByRole("button", { name: "Form" }));
+    expect(screen.getByText(/Fields inferred from the current value/)).toBeVisible();
+    expect(screen.queryByTestId("schema-form-summary")).toBeNull();
+  });
+});

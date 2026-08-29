@@ -1,7 +1,12 @@
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { api } from "@/lib/api";
-import type { Parameter, ParameterMetadata, SecretMetadata } from "@/lib/types";
+import { ApiError, api } from "@/lib/api";
+import type {
+  ApplicationOverview,
+  Parameter,
+  ParameterMetadata,
+  SecretMetadata,
+} from "@/lib/types";
 import ParameterDetailPage from "@/pages/parameters/detail";
 import SecretDetailPage from "@/pages/secrets/detail";
 import { chooseSelectOption } from "./select-test-utils";
@@ -22,6 +27,10 @@ vi.mock("next/router", () => ({ useRouter: () => mocks.router }));
 vi.mock("@/context/ToastContext", () => ({ useToast: () => mocks.toast }));
 
 beforeEach(() => {
+  // Every parameter page looks for a pinned schema; by default there is none.
+  vi.spyOn(api, "applicationOverview").mockRejectedValue(
+    new ApiError("not_found", "application not found", 404),
+  );
   mocks.router.isReady = true;
   mocks.router.query = {};
   mocks.router.push.mockReset();
@@ -102,10 +111,65 @@ const SECRET: SecretMetadata = {
 };
 
 /** Renders the parameter detail page and opens its new-version form. */
-async function openNewVersion(): Promise<HTMLElement> {
-  mocks.router.query = { env: PARAMETER.env, app: PARAMETER.app, key: PARAMETER.key };
-  vi.spyOn(api, "parameterMetadata").mockResolvedValue(PARAMETER_META);
-  vi.spyOn(api, "getParameter").mockResolvedValue({ parameter: PARAMETER });
+const JSON_PARAMETER: Parameter = {
+  ...PARAMETER,
+  value: '{"max":3,"name":"x"}',
+  content_type: "json",
+};
+
+/** billing's pinned schema describes `retries` under the alias `retries_alias`. */
+const OVERVIEW = {
+  application: {
+    name: "billing",
+    description: "",
+    release_name: "billing",
+    schema_id: "cfg",
+    schema_version: 3,
+    contract: [{ alias: "retries_alias", kind: "parameter", content_type: "json" }],
+    created_by: "admin",
+    created_at_unix_ms: 1,
+    updated_at_unix_ms: 1,
+    environment_count: 1,
+  },
+  status: "ready",
+  findings: [],
+  rows: [],
+  environments: [
+    {
+      namespace: { env: "prod", app: "billing" },
+      values: [
+        {
+          alias: "retries_alias",
+          kind: "parameter",
+          key: "retries",
+          present: true,
+          content_type: "json",
+        },
+      ],
+    },
+  ],
+  schema_json: JSON.stringify({
+    type: "object",
+    properties: {
+      retries_alias: {
+        type: "object",
+        properties: { max: { type: "integer", description: "Attempts" }, name: { type: "string" } },
+      },
+    },
+  }),
+} as unknown as ApplicationOverview;
+
+async function openNewVersion(options?: { parameter?: Parameter; overview?: ApplicationOverview }) {
+  const parameter = options?.parameter ?? PARAMETER;
+  mocks.router.query = { env: parameter.env, app: parameter.app, key: parameter.key };
+  vi.spyOn(api, "parameterMetadata").mockResolvedValue({
+    ...PARAMETER_META,
+    content_type: parameter.content_type,
+  });
+  vi.spyOn(api, "getParameter").mockResolvedValue({ parameter });
+  const overview = vi.spyOn(api, "applicationOverview");
+  if (options?.overview) overview.mockResolvedValue(options.overview);
+  else overview.mockRejectedValue(new ApiError("not_found", "application not found", 404));
 
   render(<ParameterDetailPage />);
   fireEvent.click(await screen.findByRole("button", { name: "New version" }));
@@ -282,5 +346,86 @@ describe("new parameter version validation", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Save new version" }));
     expect(putParameter).not.toHaveBeenCalled();
+  });
+});
+
+describe("new parameter version editor", () => {
+  it("looks the schema up for the parameter's environment and opens on its fields", async () => {
+    const dialog = await openNewVersion({ parameter: JSON_PARAMETER, overview: OVERVIEW });
+    expect(api.applicationOverview).toHaveBeenCalledWith("billing", ["prod"], expect.anything());
+
+    // The alias came from the overview's resolved key, not from the key itself.
+    expect(within(dialog).getByText("cfg@3")).toBeVisible();
+    expect(within(dialog).getByText("retries_alias")).toBeVisible();
+    expect(within(dialog).getByRole("button", { name: "Form" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    const max = within(dialog).getByRole("textbox", { name: "max" });
+    expect(max).toHaveValue("3");
+    expect(max).toHaveAccessibleDescription("Attempts");
+    expect(mocks.toast.error).not.toHaveBeenCalled();
+  });
+
+  it("saves the minified JSON edited through the form", async () => {
+    const putParameter = vi
+      .spyOn(api, "putParameter")
+      .mockResolvedValue({ version: 3, revision: 9 });
+    const dialog = await openNewVersion({ parameter: JSON_PARAMETER, overview: OVERVIEW });
+    const save = screen.getByRole("button", { name: "Save new version" });
+    expect(save).toBeDisabled();
+    expect(within(dialog).getByTestId("version-unchanged")).toHaveTextContent(
+      "Nothing changed since v2.",
+    );
+
+    fireEvent.change(within(dialog).getByRole("textbox", { name: "max" }), {
+      target: { value: "5" },
+    });
+    expect(within(dialog).queryByTestId("version-unchanged")).toBeNull();
+    expect(save).toBeEnabled();
+    fireEvent.click(save);
+    await waitFor(() => expect(putParameter).toHaveBeenCalledTimes(1));
+    expect(putParameter.mock.calls[0][0]).toMatchObject({
+      env: "prod",
+      app: "billing",
+      key: "retries",
+      value: '{"max":5,"name":"x"}',
+      content_type: "json",
+      metadata_json: "{}",
+    });
+  });
+
+  it("falls back to a pretty-printed JSON editor when the namespace has no application", async () => {
+    const dialog = await openNewVersion({ parameter: JSON_PARAMETER });
+    const value = within(dialog).getByRole("textbox", { name: "Value" });
+    expect(value).toHaveValue('{\n  "max": 3,\n  "name": "x"\n}');
+    // The shape of the value still offers a form, one click away.
+    expect(within(dialog).getByRole("button", { name: "JSON" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    expect(within(dialog).getByRole("button", { name: "Form" })).toBeEnabled();
+    expect(within(dialog).queryByText("cfg@3")).toBeNull();
+    expect(mocks.toast.error).not.toHaveBeenCalled();
+  });
+
+  it("saves from the JSON editor on Ctrl+Enter, minified", async () => {
+    const putParameter = vi
+      .spyOn(api, "putParameter")
+      .mockResolvedValue({ version: 3, revision: 9 });
+    const dialog = await openNewVersion({ parameter: JSON_PARAMETER });
+    const value = within(dialog).getByRole("textbox", { name: "Value" });
+    fireEvent.change(value, { target: { value: '{\n  "max": 4\n}' } });
+    fireEvent.keyDown(value, { key: "Enter", ctrlKey: true });
+    await waitFor(() => expect(putParameter).toHaveBeenCalledTimes(1));
+    expect(putParameter.mock.calls[0][0]).toMatchObject({ value: '{"max":4}' });
+  });
+
+  it("treats a whitespace-only difference as unchanged", async () => {
+    const dialog = await openNewVersion({ parameter: JSON_PARAMETER });
+    const value = within(dialog).getByRole("textbox", { name: "Value" });
+    fireEvent.change(value, { target: { value: '{"max": 3, "name": "x"}' } });
+    expect(within(dialog).getByTestId("version-unchanged")).toBeVisible();
+    expect(screen.getByRole("button", { name: "Save new version" })).toBeDisabled();
   });
 });

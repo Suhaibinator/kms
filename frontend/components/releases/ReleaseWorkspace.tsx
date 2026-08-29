@@ -3,7 +3,7 @@ import CopyButton from "@/components/CopyButton";
 import { NamespaceIdent, ReleaseIdent } from "@/components/Ident";
 import { Modal } from "@/components/Modal";
 import { RolloutPanel } from "@/components/ship/RolloutPanel";
-import { Badge, Button, Field, Spinner } from "@/components/ui";
+import { Badge, Button, Field, JsonView, Spinner } from "@/components/ui";
 import { AppSelect } from "@/components/ui/app-select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { formatUnixMs } from "@/lib/format";
@@ -188,9 +188,7 @@ export function ReleaseWorkspace({
               </dd>
               <dt>Metadata</dt>
               <dd>
-                <pre className="json-block release-metadata-json">
-                  {release.metadata_json || "{}"}
-                </pre>
+                <JsonView raw={release.metadata_json || "{}"} />
               </dd>
             </dl>
           </TabsContent>
