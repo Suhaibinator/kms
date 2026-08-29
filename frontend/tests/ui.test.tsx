@@ -1,6 +1,6 @@
 import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
-import { Field } from "@/components/ui";
+import { Button, Field } from "@/components/ui";
 
 afterEach(cleanup);
 
@@ -77,5 +77,25 @@ describe("Field", () => {
     expect(
       screen.getByRole("group", { name: "Authentication methods" }),
     ).toHaveAccessibleDescription("Choose at least one method.");
+  });
+});
+
+describe("Button", () => {
+  it("marks an in-flight action busy and keeps its label", () => {
+    render(<Button loading>Save</Button>);
+    const button = screen.getByRole("button", { name: /Save/ });
+    expect(button).toBeDisabled();
+    expect(button).toHaveAttribute("aria-busy", "true");
+    expect(button).toHaveAttribute("data-loading", "true");
+    expect(button.querySelector("[data-slot=spinner]")).not.toBeNull();
+    expect(button).toHaveTextContent("Save");
+  });
+
+  it("renders plainly when not loading", () => {
+    render(<Button>Save</Button>);
+    const button = screen.getByRole("button", { name: "Save" });
+    expect(button).toBeEnabled();
+    expect(button).not.toHaveAttribute("aria-busy");
+    expect(button.querySelector("[data-slot=spinner]")).toBeNull();
   });
 });

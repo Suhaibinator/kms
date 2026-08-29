@@ -12,6 +12,7 @@ import {
 } from "react";
 import { JsonHighlight } from "@/components/JsonHighlight";
 import { Button } from "@/components/ui/button";
+import { assignRef } from "@/lib/forms";
 import {
   checkJson,
   formatJson,
@@ -33,6 +34,8 @@ export interface JsonEditorProps {
   "aria-invalid"?: boolean;
   "aria-required"?: boolean;
   name?: string;
+  /** The `<textarea>`, e.g. for a modal's `initialFocus`. */
+  inputRef?: React.Ref<HTMLElement>;
   disabled?: boolean;
   readOnly?: boolean;
   placeholder?: string;
@@ -75,6 +78,7 @@ export function JsonEditor({
   toolbar = "full",
   onBlur,
   onSubmit,
+  inputRef,
 }: JsonEditorProps) {
   const hintId = useId();
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
@@ -253,7 +257,10 @@ export function JsonEditor({
             </pre>
           )}
           <textarea
-            ref={textareaRef}
+            ref={(node) => {
+              textareaRef.current = node;
+              assignRef(inputRef, node);
+            }}
             id={id}
             name={name}
             className="json-editor-input"

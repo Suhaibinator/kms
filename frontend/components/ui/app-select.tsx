@@ -1,3 +1,4 @@
+import type { FocusEventHandler, Ref } from "react";
 import {
   Select,
   SelectContent,
@@ -6,7 +7,6 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
-import type { FocusEventHandler } from "react";
 
 export interface AppSelectOption {
   value: string;
@@ -25,6 +25,7 @@ export function AppSelect({
   id,
   className,
   onBlur,
+  ref,
   "aria-describedby": ariaDescribedBy,
   "aria-invalid": ariaInvalid,
 }: {
@@ -38,6 +39,8 @@ export function AppSelect({
   id?: string;
   className?: string;
   onBlur?: FocusEventHandler<HTMLButtonElement>;
+  /** The trigger button, e.g. for a modal's `initialFocus`. */
+  ref?: Ref<HTMLButtonElement>;
   "aria-describedby"?: string;
   "aria-invalid"?: boolean;
 }) {
@@ -56,6 +59,7 @@ export function AppSelect({
       name={name}
     >
       <SelectTrigger
+        ref={ref}
         id={id}
         className={cn("w-full", className)}
         onBlur={onBlur}

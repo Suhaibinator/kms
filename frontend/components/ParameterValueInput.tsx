@@ -1,9 +1,10 @@
-import type { ReactNode } from "react";
+import type { ReactNode, Ref } from "react";
 import { useMemo, useRef } from "react";
 import { JsonEditor } from "@/components/JsonEditor";
 import { SchemaForm } from "@/components/SchemaForm";
 import { Input, Textarea } from "@/components/ui";
 import { AppSelect } from "@/components/ui/app-select";
+import { assignRef } from "@/lib/forms";
 import { inferSchema } from "@/lib/json-text";
 import { buildForm, type JsonSchema } from "@/lib/schema-form";
 
@@ -22,6 +23,8 @@ export interface ParameterValueInputProps {
   "aria-describedby"?: string;
   "aria-invalid"?: boolean;
   "aria-required"?: boolean;
+  /** Whichever control renders for the type, e.g. for a modal's `initialFocus`. */
+  inputRef?: Ref<HTMLElement>;
   disabled?: boolean;
   onBlur?: () => void;
   /** Cmd/Ctrl+Enter in a text editor. */
@@ -66,6 +69,7 @@ export function ParameterValueInput({
   "aria-describedby": ariaDescribedBy,
   "aria-invalid": ariaInvalid,
   "aria-required": ariaRequired,
+  inputRef,
   disabled = false,
   onBlur,
   onSubmit,
@@ -86,6 +90,7 @@ export function ParameterValueInput({
       return (
         <AppSelect
           {...aria}
+          ref={(node) => assignRef(inputRef, node)}
           className="font-mono"
           value={value.trim()}
           disabled={disabled}
@@ -103,6 +108,7 @@ export function ParameterValueInput({
       return (
         <Input
           {...aria}
+          ref={(node) => assignRef(inputRef, node)}
           className="font-mono"
           inputMode={contentType === "integer" ? "numeric" : "decimal"}
           value={value}
@@ -127,6 +133,7 @@ export function ParameterValueInput({
             captionSource={pinned ? "pinned" : "inferred"}
             schemaLabel={pinned ? schemaLabel : undefined}
             jsonLabel={ariaLabel}
+            inputRef={inputRef}
             value={value}
             disabled={disabled}
             rows={rows}
@@ -139,6 +146,7 @@ export function ParameterValueInput({
       return (
         <JsonEditor
           {...aria}
+          inputRef={inputRef}
           value={value}
           disabled={disabled}
           rows={rows}
@@ -153,6 +161,7 @@ export function ParameterValueInput({
       return (
         <Textarea
           {...aria}
+          ref={(node) => assignRef(inputRef, node)}
           className="font-mono"
           rows={rows ?? (contentType === "binary" ? 6 : 3)}
           value={value}

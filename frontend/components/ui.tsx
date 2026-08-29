@@ -2,7 +2,6 @@ import { ArrowLeft, ArrowRight, ChevronsLeft } from "lucide-react";
 import Head from "next/head";
 import { cloneElement, isValidElement, type ReactElement, type ReactNode, useId } from "react";
 import { Breadcrumbs } from "@/components/Breadcrumbs";
-import { JsonHighlight } from "@/components/JsonHighlight";
 import { Badge as ShadcnBadge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -16,10 +15,10 @@ import {
 import { Skeleton as ShadcnSkeleton } from "@/components/ui/skeleton";
 import { Spinner as ShadcnSpinner } from "@/components/ui/spinner";
 import type { Crumb } from "@/lib/crumbs";
-import { checkJson, overHighlightCap } from "@/lib/json-text";
 import type { SecretVersionState } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
+export { JsonView } from "@/components/JsonView";
 export { Button } from "@/components/ui/button";
 export { Checkbox } from "@/components/ui/checkbox";
 export { Input } from "@/components/ui/input";
@@ -317,12 +316,6 @@ export function SecretStateBadge({ state }: { state: SecretVersionState }) {
   const kind: BadgeKind =
     state === "enabled" ? "success" : state === "disabled" ? "warning" : "danger";
   return <Badge kind={kind}>{state}</Badge>;
-}
-
-/** A read-only JSON block; colour-coded when the text is well-formed JSON. */
-export function JsonView({ raw, highlight = true }: { raw: string; highlight?: boolean }) {
-  const coloured = highlight && !overHighlightCap(raw) && checkJson(raw) === null;
-  return <pre className="json-block">{coloured ? <JsonHighlight text={raw} /> : raw}</pre>;
 }
 
 export function KeyValue({ rows }: { rows: Array<[string, ReactNode]> }) {

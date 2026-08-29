@@ -3,6 +3,7 @@ import { cva, type VariantProps } from "class-variance-authority";
 import Link from "next/link";
 import type { ComponentProps } from "react";
 
+import { Spinner } from "@/components/ui/spinner";
 import { cn } from "@/lib/utils";
 
 const buttonVariants = cva(
@@ -53,16 +54,29 @@ function Button({
   className,
   variant = "default",
   size = "default",
+  loading = false,
+  disabled,
+  children,
   ...props
-}: ButtonPrimitive.Props & VariantProps<typeof buttonVariants>) {
+}: ButtonPrimitive.Props &
+  VariantProps<typeof buttonVariants> & {
+    /** An in-flight action: shows a spinner, disables the button and marks it busy. The label stays. */
+    loading?: boolean;
+  }) {
   return (
     <ButtonPrimitive
       data-slot="button"
       data-size={size}
       data-variant={variant}
+      data-loading={loading || undefined}
+      aria-busy={loading || undefined}
+      disabled={disabled || loading}
       className={cn(buttonVariants({ variant, size, className }))}
       {...props}
-    />
+    >
+      {loading ? <Spinner /> : null}
+      {children}
+    </ButtonPrimitive>
   );
 }
 

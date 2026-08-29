@@ -32,7 +32,7 @@
 
   --text: #171d27;
   --text-muted: #55617a;
-  --text-faint: #6b7689;
+  --text-faint: #5f6a7d;
 
   /* shadcn's `--accent` is the *hover surface* token (bg-accent /
      text-accent-foreground), not the brand accent. The brand blue lives in
@@ -195,6 +195,9 @@
   --text: #e6edf3;
   --text-muted: #9aa7b6;
   --text-faint: #8491a1;
+  --brand-mark-start: #2a3441;
+  --brand-mark-end: #3b4757;
+  --brand-mark-foreground: #e4b45f;
   --accent: #1f2733;
   --accent-hover: #6f9bff;
   --accent-soft: rgba(91, 140, 255, 0.14);
@@ -1111,9 +1114,25 @@
   }
   .action-unavailable-reason {
     color: var(--warning);
-    font-size: 10.5px;
+    font-size: var(--text-xs);
     line-height: 1.35;
     text-align: right;
+  }
+
+  /* A short status beside a modal's footer buttons: why the primary action is
+     disabled, or that nothing changed. Sits left of the buttons on wide
+     screens and above them when the footer stacks. */
+  .footer-note {
+    margin: 0;
+    align-self: center;
+    font-size: var(--text-xs);
+    line-height: 1.4;
+    color: var(--text-muted);
+  }
+  @media (min-width: 640px) {
+    .footer-note {
+      margin-right: auto;
+    }
   }
 
   /* ---------- Utility / misc ---------- */
@@ -2512,12 +2531,16 @@
     }
 
     /* Touch targets: buttons and inputs get comfortably tappable. */
-    .page [data-slot="button"][data-size="default"],
-    .page [data-slot="button"][data-size="icon"] {
+    [data-slot="button"][data-size="default"],
+    [data-slot="button"][data-size="icon"] {
       min-height: 44px;
     }
-    .page [data-slot="button"][data-size="sm"] {
+    [data-slot="button"][data-size="sm"] {
       min-height: 40px;
+    }
+    [data-slot="button"][data-size="icon-sm"] {
+      min-height: 40px;
+      min-width: 40px;
     }
     [data-slot="input"],
     [data-slot="select-trigger"] {

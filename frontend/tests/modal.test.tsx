@@ -80,6 +80,80 @@ describe("Modal", () => {
     await waitFor(() => expect(screen.getByLabelText("Second")).toHaveFocus());
   });
 
+  it("names the description for assistive tech", () => {
+    render(
+      <Modal open title="Edit" description="Changes apply on save." onClose={() => undefined}>
+        <p>Body copy</p>
+      </Modal>,
+    );
+    const dialog = popupOf("Edit");
+    expect(dialog).toHaveAccessibleDescription("Changes apply on save.");
+    expect(within(dialog).getByText("Changes apply on save.")).toBeVisible();
+  });
+
+  it("closes straight away from the footer's close when nothing is dirty", () => {
+    const onClose = vi.fn();
+    render(
+      <Modal
+        open
+        title="Edit"
+        onClose={onClose}
+        footer={(close) => (
+          <button type="button" onClick={close}>
+            Cancel
+          </button>
+        )}
+      >
+        <p>Body copy</p>
+      </Modal>,
+    );
+    fireEvent.click(within(popupOf("Edit")).getByRole("button", { name: "Cancel" }));
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it("asks before discarding when dirty, from Cancel and from the close button", async () => {
+    const onClose = vi.fn();
+    render(
+      <Modal
+        open
+        dirty
+        title="Edit"
+        onClose={onClose}
+        footer={(close) => (
+          <button type="button" onClick={close}>
+            Cancel
+          </button>
+        )}
+      >
+        <p>Body copy</p>
+      </Modal>,
+    );
+    const dialog = popupOf("Edit");
+
+    fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    expect(onClose).not.toHaveBeenCalled();
+    // The nested confirm hides the parent from the accessibility tree while open.
+    const confirm = await screen.findByRole("dialog", { name: "Discard changes?", hidden: true });
+    expect(
+      within(confirm).getByText("Your edits in this dialog have not been saved."),
+    ).toBeInTheDocument();
+
+    fireEvent.click(within(confirm).getByRole("button", { name: "Keep editing", hidden: true }));
+    await waitFor(() =>
+      expect(
+        screen.queryByRole("dialog", { name: "Discard changes?", hidden: true }),
+      ).not.toBeInTheDocument(),
+    );
+    expect(onClose).not.toHaveBeenCalled();
+
+    fireEvent.click(
+      within(popupOf("Edit")).getByRole("button", { name: "Dismiss dialog", hidden: true }),
+    );
+    const again = await screen.findByRole("dialog", { name: "Discard changes?", hidden: true });
+    fireEvent.click(within(again).getByRole("button", { name: "Discard", hidden: true }));
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
   it("hides the close button when it is not dismissible", () => {
     const { rerender } = render(
       <Modal open title="Edit" onClose={() => undefined}>
@@ -148,6 +222,11 @@ describe("ConfirmDialog", () => {
 
     expect(onConfirm).not.toHaveBeenCalled();
     expect(within(dialog).getByRole("button", { name: "Confirm" })).toBeDisabled();
+  });
+
+  it("focuses the confirmation input on open", async () => {
+    const { dialog } = renderConfirm();
+    await waitFor(() => expect(within(dialog).getByRole("textbox")).toHaveFocus());
   });
 
   it("gives each mounted confirm input its own id", () => {
