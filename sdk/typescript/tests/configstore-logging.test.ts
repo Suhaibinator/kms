@@ -55,7 +55,10 @@ describe("consoleCallbacks", () => {
           component: "api",
           phase: "startup",
           release: "prod/api/runtime@4#9",
-          fields: ["runtime.limit", "database.password"],
+          fields: [
+            { path: "runtime.limit", expected: 1, actual: 2 },
+            { path: "database.password", expected: "[REDACTED]", actual: 3 },
+          ],
         },
       },
     ]);

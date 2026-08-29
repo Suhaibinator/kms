@@ -404,8 +404,13 @@ func groupSubscriberInstances(acks []domain.ReleaseAcknowledgement) []domain.Sub
 			inst.ActivationRevision = ack.ActivationRevision
 			inst.RejectionCategory = ack.RejectionCategory
 			inst.Diagnostic = ack.Diagnostic
-			inst.AppliedDivergent = ack.AppliedDivergent
-			inst.DivergentFieldCount = ack.DivergentFieldCount
+			// Divergence is only meaningful on an applied row; never let a stale
+			// prepared/rejected row's flag leak into the instance.
+			inst.AppliedDivergent = ack.State == domain.ReleaseStateApplied && ack.AppliedDivergent
+			inst.DivergentFieldCount = 0
+			if inst.AppliedDivergent {
+				inst.DivergentFieldCount = ack.DivergentFieldCount
+			}
 		}
 	}
 	out := make([]domain.SubscriberInstance, 0, len(order))

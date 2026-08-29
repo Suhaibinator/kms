@@ -64,7 +64,7 @@ export function consoleCallbacks(
         ...base(),
         phase: report.phase,
         release: String(report.release),
-        fields: report.fields().map(({ path }) => path),
+        fields: report.fields(),
       });
     },
     onApplied(report: AppliedReport): void {

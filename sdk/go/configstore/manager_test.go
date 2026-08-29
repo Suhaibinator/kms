@@ -336,8 +336,9 @@ func TestManagerRejectsWholeRuntimeCandidateForRestartChange(t *testing.T) {
 	}
 }
 
-func TestManagerRecoversMismatchCallbackPanicAndAborts(t *testing.T) {
+func TestManagerIsolatesMismatchCallbackPanicAndAdmitsCandidate(t *testing.T) {
 	aborted := 0
+	published := 0
 	callbacks := 0
 	manager := unitManager(Options{Callbacks: Callbacks{
 		OnDefaultMismatch: func(DefaultMismatchReport) {
@@ -346,29 +347,63 @@ func TestManagerRecoversMismatchCallbackPanicAndAborts(t *testing.T) {
 		},
 	}}, func(context.Context, kmsclient.ReleaseSnapshot) (PreparedCandidate, error) {
 		return PreparedCandidate{
-			Publish:            func() { t.Fatal("candidate was published") },
+			Publish:            func() { published++ },
 			Abort:              func() { aborted++ },
 			DefaultDifferences: []FieldDifference{{Path: "group.field", Expected: 1, Actual: 2}},
 		}, nil
 	})
 
 	prepared, err := manager.prepareWithIdentity(context.Background(), kmsclient.ReleaseSnapshot{}, testIdentity(1, 1))
-	if prepared != nil || err == nil {
-		t.Fatalf("callback panic prepare = (%v, %v)", prepared, err)
+	if err != nil || prepared == nil {
+		t.Fatalf("a panicking observer must not reject the candidate: (%v, %v)", prepared, err)
 	}
-	var candidateErr *CandidateError
-	if !errors.As(err, &candidateErr) || candidateErr.ReleaseRejectionCategory() != string(RejectInternal) {
-		t.Fatalf("callback panic category = %#v", candidateErr)
+	prepared.Commit()
+	if published != 1 || aborted != 0 || callbacks != 1 {
+		t.Fatalf("published=%d aborted=%d callbacks=%d", published, aborted, callbacks)
 	}
-	if aborted != 1 {
-		t.Fatalf("Abort count = %d", aborted)
+	if !manager.divergent {
+		t.Fatal("divergence must still be visible in status")
 	}
+	// Reconciling the same release neither re-reports nor re-panics.
 	prepared, err = manager.prepareWithIdentity(context.Background(), kmsclient.ReleaseSnapshot{}, testIdentity(1, 1))
-	if prepared != nil || err == nil {
-		t.Fatalf("reconciled callback panic prepare = (%v, %v)", prepared, err)
+	if err != nil || prepared == nil {
+		t.Fatalf("reconciled prepare = (%v, %v)", prepared, err)
 	}
-	if callbacks != 1 || aborted != 2 {
-		t.Fatalf("reconciliation callbacks=%d aborted=%d", callbacks, aborted)
+	if callbacks != 1 {
+		t.Fatalf("reconciliation re-reported: callbacks=%d", callbacks)
+	}
+}
+
+func TestManagerReportsDivergenceAgainAfterCleanGeneration(t *testing.T) {
+	reports := 0
+	divergent := true
+	manager := unitManager(Options{Callbacks: Callbacks{
+		OnDefaultMismatch: func(DefaultMismatchReport) { reports++ },
+	}}, func(context.Context, kmsclient.ReleaseSnapshot) (PreparedCandidate, error) {
+		candidate := PreparedCandidate{Publish: func() {}}
+		if divergent {
+			candidate.DefaultDifferences = []FieldDifference{{Path: "group.field", Expected: 1, Actual: 2}}
+		}
+		return candidate, nil
+	})
+	commit := func(version uint64) {
+		t.Helper()
+		prepared, err := manager.prepareWithIdentity(context.Background(), kmsclient.ReleaseSnapshot{}, testIdentity(version, version))
+		if err != nil {
+			t.Fatal(err)
+		}
+		prepared.Commit()
+	}
+	commit(1) // divergent A: reported
+	divergent = false
+	commit(2) // clean B: clears the dedupe key
+	divergent = true
+	commit(1) // A again: must be reported again
+	if reports != 2 {
+		t.Fatalf("reports = %d, want 2 (rollback onto a divergent release must be reported)", reports)
+	}
+	if !manager.divergent {
+		t.Fatal("status must be divergent after rolling back onto A")
 	}
 }
 

@@ -145,6 +145,7 @@ func (c *Client) VerifyReleaseDefaults(
 	if len(response.GetEntries()) != len(entries) {
 		return VerifyReleaseDefaultsResult{}, fmt.Errorf("kmsclient: verify response has %d verdicts for %d entries", len(response.GetEntries()), len(entries))
 	}
+	answered := make(map[string]struct{}, len(entries))
 	for index, verdict := range response.GetEntries() {
 		if verdict == nil {
 			return VerifyReleaseDefaultsResult{}, fmt.Errorf("kmsclient: verify response entry %d is empty", index)
@@ -152,6 +153,10 @@ func (c *Client) VerifyReleaseDefaults(
 		if _, known := seen[verdict.GetAlias()]; !known {
 			return VerifyReleaseDefaultsResult{}, fmt.Errorf("kmsclient: verify response names unknown alias %q", verdict.GetAlias())
 		}
+		if _, duplicate := answered[verdict.GetAlias()]; duplicate {
+			return VerifyReleaseDefaultsResult{}, fmt.Errorf("kmsclient: verify response repeats alias %q", verdict.GetAlias())
+		}
+		answered[verdict.GetAlias()] = struct{}{}
 		switch verdict.GetVerdict() {
 		case VerifyVerdictMatch, VerifyVerdictDiffers, VerifyVerdictMissingInRelease,
 			VerifyVerdictUnknownAlias, VerifyVerdictSecretAlias, VerifyVerdictUnsupportedContentType:

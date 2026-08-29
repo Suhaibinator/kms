@@ -101,7 +101,7 @@ func ParseEnv(prefix string) Env {
 		Endpoint:  get(EnvEndpoint),
 		Token:     get(EnvToken),
 		CAFile:    get(EnvCAFile),
-		CAPEM:     os.Getenv(prefix + EnvCAPEM),
+		CAPEM:     strings.TrimSpace(os.Getenv(prefix + EnvCAPEM)),
 		Profile:   get(EnvProfile),
 		Namespace: get(EnvNamespace),
 		Release:   get(EnvRelease),

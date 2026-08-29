@@ -163,7 +163,7 @@ func TestParseEnvReadsPrefixedVariables(t *testing.T) {
 	env := ParseEnv("APP_")
 	want := Env{
 		Endpoint: "kms.example.com:8443", Token: "token-value", CAFile: "/etc/kms/ca.pem",
-		CAPEM: "-----BEGIN CERTIFICATE-----\n", Profile: "staging", Namespace: "staging/app",
+		CAPEM: "-----BEGIN CERTIFICATE-----", Profile: "staging", Namespace: "staging/app",
 		Release: "canary", Required: true, Insecure: true,
 	}
 	if env != want {

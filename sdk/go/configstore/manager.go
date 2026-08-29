@@ -28,7 +28,6 @@ type Manager struct {
 	applied         ReleaseIdentity
 	divergent       bool
 	lastReportedKey string
-	lastReportErr   error
 	lastRejectedKey string
 	waitErr         error
 }
@@ -182,12 +181,7 @@ func (m *Manager) prepareWithIdentity(
 		if startup {
 			phase = PhaseStartup
 		}
-		report := newDefaultMismatchReport(phase, MismatchError, identity, differences)
-		if err := m.reportOnce(identity, report); err != nil {
-			abort()
-			m.notifyCandidateRejected(identity, err)
-			return nil, err
-		}
+		m.reportOnce(identity, newDefaultMismatchReport(phase, MismatchError, identity, differences))
 	}
 
 	var changes []FieldChange
@@ -235,23 +229,34 @@ func (m *Manager) notifyCandidateRejected(identity ReleaseIdentity, err error) {
 	}()
 }
 
-func (m *Manager) reportOnce(identity ReleaseIdentity, report DefaultMismatchReport) (err error) {
+// reportOnce delivers a mismatch report at most once per release identity.
+// The callback is an observer: a panic is swallowed and never influences
+// candidate admission, so a broken logger cannot refuse a restart.
+func (m *Manager) reportOnce(identity ReleaseIdentity, report DefaultMismatchReport) {
 	key := identity.dedupeKey()
 	m.reportMu.Lock()
-	defer m.reportMu.Unlock()
 	if m.lastReportedKey == key {
-		return m.lastReportErr
+		m.reportMu.Unlock()
+		return
 	}
-	callback := m.options.OnDefaultMismatch
 	m.lastReportedKey = key
-	defer func() {
-		if recover() != nil {
-			err = Reject(RejectInternal, errors.New("configstore: default mismatch callback panicked"))
-		}
-		m.lastReportErr = err
+	m.reportMu.Unlock()
+	callback := m.options.OnDefaultMismatch
+	if callback == nil {
+		return
+	}
+	func() {
+		defer func() { _ = recover() }()
+		callback(report)
 	}()
-	callback(report)
-	return nil
+}
+
+// clearReported forgets the last reported identity so that re-activating a
+// previously reported divergent release after a clean one is reported again.
+func (m *Manager) clearReported() {
+	m.reportMu.Lock()
+	m.lastReportedKey = ""
+	m.reportMu.Unlock()
 }
 
 func (r ReleaseIdentity) dedupeKey() string {
@@ -280,6 +285,9 @@ func (p *managedPrepared) Commit() {
 	p.manager.divergent = p.divergent
 	p.manager.ready = true
 	p.manager.mu.Unlock()
+	if !p.divergent {
+		p.manager.clearReported()
+	}
 	p.manager.notifyApplied(p)
 	p.manager.readyOnce.Do(func() { close(p.manager.readyCh) })
 }

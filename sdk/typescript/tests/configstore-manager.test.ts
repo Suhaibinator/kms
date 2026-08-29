@@ -320,36 +320,39 @@ describe("ManagedConfigManager", () => {
     expect(reports[0]?.paths()).toEqual([]);
   });
 
-  it("turns a throwing default callback into an internal rejection and deduplicates it", async () => {
+  it("isolates a throwing default callback, admits the candidate and reports once", async () => {
     const release = makeRelease(1n, '{"hot":2,"restart":"a"}');
     const transport = new FakeReleaseTransport(release, 1n);
     let callbacks = 0;
     let aborts = 0;
+    let publishes = 0;
     const rejectionReports: CandidateRejectionReport[] = [];
 
-    await expect(
-      startManagedConfig(
-        managedClient(transport),
-        {
-          ...options(() => {
-            callbacks += 1;
-            throw new Error("callback-canary");
-          }),
-          onCandidateRejected: (report) => rejectionReports.push(report),
-        },
-        () => ({
-          publish: () => undefined,
-          abort: () => {
-            aborts += 1;
-          },
-          defaultDifferences: [{ path: "settings.hot", expected: 1, actual: 2 }],
+    const manager = await startManagedConfig(
+      managedClient(transport),
+      {
+        ...options(async () => {
+          callbacks += 1;
+          throw new Error("callback-canary");
         }),
-      ),
-    ).rejects.toMatchObject({ category: "internal" });
+        onCandidateRejected: (report) => rejectionReports.push(report),
+      },
+      () => ({
+        publish: () => {
+          publishes += 1;
+        },
+        abort: () => {
+          aborts += 1;
+        },
+        defaultDifferences: [{ path: "settings.hot", expected: 1, actual: 2 }],
+      }),
+    );
     expect(callbacks).toBe(1);
-    expect(aborts).toBe(1);
-    expect(rejectionReports).toHaveLength(1);
-    expect(rejectionReports[0]?.category).toBe("internal");
+    expect(publishes).toBe(1);
+    expect(aborts).toBe(0);
+    expect(rejectionReports).toHaveLength(0);
+    expect(manager.status().defaultDivergent).toBe(true);
+    await manager.stop();
   });
 
   it("aborts candidate resources when malformed policy metadata cannot be cloned", async () => {

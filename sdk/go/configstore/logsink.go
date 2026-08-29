@@ -82,22 +82,25 @@ func (s *LogSink) emit(startup bool, level slog.Level, message string, attrs ...
 		return
 	}
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	logger := s.logger.Load()
-	if logger != nil {
-		logger.LogAttrs(context.Background(), level, message, attrs...)
+	if logger == nil {
+		defer s.mu.Unlock()
+		if !startup {
+			return
+		}
+		if len(s.buffered) >= logSinkBufferLimit {
+			s.dropped++
+			return
+		}
+		record := slog.NewRecord(time.Now(), level, message, 0)
+		record.AddAttrs(attrs...)
+		s.buffered = append(s.buffered, record)
 		return
 	}
-	if !startup {
-		return
-	}
-	if len(s.buffered) >= logSinkBufferLimit {
-		s.dropped++
-		return
-	}
-	record := slog.NewRecord(time.Now(), level, message, 0)
-	record.AddAttrs(attrs...)
-	s.buffered = append(s.buffered, record)
+	// Release the lock before running application handler code so a handler
+	// that itself calls Set (or logs through the sink) cannot deadlock.
+	s.mu.Unlock()
+	logger.LogAttrs(context.Background(), level, message, attrs...)
 }
 
 // SlogOptions tunes SlogCallbacks. The zero value logs everything.

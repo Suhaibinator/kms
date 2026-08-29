@@ -137,8 +137,9 @@ func VerifyDefaults(ctx context.Context, client VerifyClient, in VerifyInput, op
 		if err != nil {
 			return VerifyResult{}, fmt.Errorf("configstore: verify: hash parameter group %s: %w", entry.Alias, err)
 		}
-		entries = append(entries, kmsclient.VerifyDefaultsEntry{Alias: entry.Alias, ContentType: entry.ContentType, SHA256: hash})
-		contentTypes[entry.Alias] = entry.ContentType
+		alias := strings.TrimSpace(entry.Alias)
+		entries = append(entries, kmsclient.VerifyDefaultsEntry{Alias: alias, ContentType: entry.ContentType, SHA256: hash})
+		contentTypes[alias] = entry.ContentType
 	}
 	response, err := client.VerifyReleaseDefaults(ctx, kmsclient.VerifyReleaseDefaultsOptions{
 		Namespace:    opts.Namespace,

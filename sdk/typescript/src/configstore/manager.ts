@@ -130,7 +130,6 @@ export class ManagedConfigManager {
   #applied = new ReleaseIdentity();
   #divergent = false;
   #lastReportedKey = "";
-  #lastReportError: CandidateError | undefined;
   #lastRejectedKey = "";
 
   /** @internal Use startManagedConfig. */
@@ -300,12 +299,7 @@ export class ManagedConfigManager {
     const divergent = differences.length > 0;
     if (divergent) {
       const report = new DefaultMismatchReport(phase, "error", identity, differences);
-      const reportError = this.#reportOnce(identity, report);
-      if (reportError) {
-        this.#abortOrInternal(abort, identity);
-        this.#notifyCandidateRejected(identity, reportError);
-        throw reportError;
-      }
+      this.#reportOnce(identity, report);
     }
 
     return {
@@ -319,6 +313,9 @@ export class ManagedConfigManager {
         this.#applied = identity;
         this.#divergent = divergent;
         this.#ready = true;
+        // A clean generation forgets the last reported identity so rolling back
+        // onto a previously reported divergent release is reported again.
+        if (!divergent) this.#lastReportedKey = "";
         this.#readySignal.resolve();
         this.#notifyApplied(phase, identity, divergent, changes, groups);
         return undefined;
@@ -381,24 +378,21 @@ export class ManagedConfigManager {
     }
   }
 
-  #reportOnce(
-    identity: ReleaseIdentity,
-    report: DefaultMismatchReport,
-  ): CandidateError | undefined {
+  /**
+   * Deliver a mismatch report at most once per release identity. The callback
+   * is an observer: a throw or a returned promise is isolated and never
+   * influences candidate admission, so a broken logger cannot refuse startup.
+   */
+  #reportOnce(identity: ReleaseIdentity, report: DefaultMismatchReport): void {
     const key = identity.dedupeKey();
-    if (this.#lastReportedKey === key) return this.#lastReportError;
+    if (this.#lastReportedKey === key) return;
     this.#lastReportedKey = key;
     try {
       const result = callUnknown(this.#options.onDefaultMismatch, report);
-      if (isPromiseLike(result)) {
-        discardPromise(result);
-        throw new TypeError("configstore: default mismatch callback must be synchronous");
-      }
-      this.#lastReportError = undefined;
-    } catch (cause) {
-      this.#lastReportError = new CandidateError("internal", cause);
+      if (isPromiseLike(result)) discardPromise(result);
+    } catch {
+      // Isolated: observers never affect admission.
     }
-    return this.#lastReportError;
   }
 }
 

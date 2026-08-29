@@ -309,9 +309,9 @@ func TestManagedConfigStoreOverRealKMS(t *testing.T) {
 	if restartRow.GetRejectionCategory() != "" || restartRow.GetDiagnostic() != "" {
 		t.Fatalf("applied divergent acknowledgement carried rejection detail: %+v", restartRow)
 	}
-	// TODO(server lane): assert restartRow.GetAppliedDivergent() &&
-	// restartRow.GetDivergentFieldCount() == 3 once the gRPC WatchRelease
-	// handler and storage persist the acknowledgement's divergence fields.
+	if !restartRow.GetAppliedDivergent() || restartRow.GetDivergentFieldCount() != 3 {
+		t.Fatalf("applied divergent acknowledgement must carry divergence (flag=%t count=%d)", restartRow.GetAppliedDivergent(), restartRow.GetDivergentFieldCount())
+	}
 
 	invalidPins := hotPins
 	invalidPins.runtime = putParameter("groups/runtime", managedRuntimeInvalid)

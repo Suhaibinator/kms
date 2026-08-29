@@ -640,11 +640,14 @@ function renderBinding(
     );
   }
   line("    }");
+  line(
+    "    // Group documents feed observability only; an encoding failure must never reject a candidate.",
+  );
   line("    let groups: Readonly<Record<string, string>>;");
   line("    try {");
   line("      groups = encodeParameterGroups(validatedCandidate);");
-  line("    } catch (cause) {");
-  line('      throw new CandidateError("config_validation_failed", cause);');
+  line("    } catch {");
+  line("      groups = {};");
   line("    }");
   line(
     "    const prepared = immutableSnapshot(validatedCandidate, ReleaseIdentity.from(snapshot));",

@@ -20,7 +20,8 @@ import (
 //
 // For contentType "json" the document is decoded strictly (exactly one value,
 // no trailing data, duplicate object keys rejected, valid UTF-8 required) and
-// re-encoded compactly with object keys sorted by their UTF-8 bytes. Number
+// re-encoded compactly with object keys sorted by their UTF-8 bytes; container
+// nesting deeper than 1000 levels below the root is rejected. Number
 // literals are preserved verbatim (1.0 and 1 remain distinct), strings are
 // emitted with the minimal JSON escaping (only ", \, and U+0000–U+001F are
 // escaped; everything else, including U+2028, is raw UTF-8), and null, true
@@ -34,7 +35,7 @@ func CanonicalParameterValue(contentType string, value []byte) ([]byte, error) {
 	}
 	decoder := json.NewDecoder(bytes.NewReader(value))
 	decoder.UseNumber()
-	node, err := readCanonicalValue(decoder)
+	node, err := readCanonicalValue(decoder, 0)
 	if err != nil {
 		return nil, fmt.Errorf("configstore: canonical json: %w", err)
 	}
@@ -59,7 +60,15 @@ func ParameterHash(contentType string, value []byte) (string, error) {
 	return hex.EncodeToString(sum[:]), nil
 }
 
-func readCanonicalValue(decoder *json.Decoder) (any, error) {
+// maxCanonicalDepth bounds container nesting (the root value is depth 0) so
+// both SDKs reject the same documents; the TypeScript strict parser uses the
+// same limit.
+const maxCanonicalDepth = 1000
+
+func readCanonicalValue(decoder *json.Decoder, depth int) (any, error) {
+	if depth > maxCanonicalDepth {
+		return nil, errors.New("nesting too deep")
+	}
 	token, err := decoder.Token()
 	if err != nil {
 		if errors.Is(err, io.EOF) {
@@ -86,7 +95,7 @@ func readCanonicalValue(decoder *json.Decoder) (any, error) {
 			if _, duplicate := object[name]; duplicate {
 				return nil, fmt.Errorf("duplicate object key %q", name)
 			}
-			child, err := readCanonicalValue(decoder)
+			child, err := readCanonicalValue(decoder, depth+1)
 			if err != nil {
 				return nil, err
 			}
@@ -99,7 +108,7 @@ func readCanonicalValue(decoder *json.Decoder) (any, error) {
 	case '[':
 		array := make([]any, 0)
 		for decoder.More() {
-			child, err := readCanonicalValue(decoder)
+			child, err := readCanonicalValue(decoder, depth+1)
 			if err != nil {
 				return nil, err
 			}

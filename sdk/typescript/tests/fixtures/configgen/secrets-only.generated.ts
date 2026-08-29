@@ -180,11 +180,12 @@ export class Store {
     if (active) {
       if (!sameSecretIdentity(active.get("token"), validatedCandidate["token"])) changed.push({ path: "worker_token", previous: null, current: null });
     }
+    // Group documents feed observability only; an encoding failure must never reject a candidate.
     let groups: Readonly<Record<string, string>>;
     try {
       groups = encodeParameterGroups(validatedCandidate);
-    } catch (cause) {
-      throw new CandidateError("config_validation_failed", cause);
+    } catch {
+      groups = {};
     }
     const prepared = immutableSnapshot(validatedCandidate, ReleaseIdentity.from(snapshot));
     return {
