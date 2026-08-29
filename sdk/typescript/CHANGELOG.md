@@ -6,7 +6,33 @@ a minor release may contain documented breaking changes.
 
 ## [Unreleased]
 
+### Changed
+
+- **Breaking (configstore):** a startup default mismatch is no longer fatal.
+  The candidate is applied and reported through `onDefaultMismatch` with
+  severity `"error"`; `allowDefaultMismatch`, the `"fatal"` severity, and
+  `DefaultMismatchError` are removed. `MismatchSeverity` keeps its single
+  `"error"` value and `MismatchPhase` is now an alias of the new `Phase` type.
+  Migration: delete `allowDefaultMismatch: true` and any `DefaultMismatchError`
+  handling around `startManagedConfig`/`Store.start`; drift is observable
+  through the report, `status().defaultDivergent`, and the new `onApplied`
+  callback.
+
 ### Added
+
+- `onApplied(report: AppliedReport)` managed-store callback with immutable
+  `phase`, `release`, `defaultDivergent`, `changed()` (`FieldChange` list,
+  secrets path-only) and `groups()` (canonical non-secret parameter documents);
+  generated bindings compute both, and applied acknowledgements now carry a
+  value-free divergence flag and field count.
+- `canonicalParameterValue` and `parameterHash` implementing the canonical JSON
+  hashing shared with the Go SDK and the server, verified against the shared
+  `canonical_vectors.json` test vectors.
+- `KmsClient.verifyReleaseDefaults`, `configstore.verifyDefaults`, the
+  generated `verifyReleaseDefaults` helper, and `RateLimitedError` for
+  value-free CI verification of source defaults against the active release.
+- `consoleCallbacks(logger, options?)` structured-logging `Callbacks`
+  implementation mirroring the Go SDK's `SlogCallbacks`.
 
 - Stable root, Next.js server, Next.js client, optional configstore, and
   TypeScript-native config generator package entry points.
