@@ -1014,7 +1014,7 @@ func TestCreateSecretVersionConcurrentTokenRotationsOnlyOneWins(t *testing.T) {
 	results := make(chan result, 2)
 	var wg sync.WaitGroup
 	for i := range 2 {
-		newHash := []byte(fmt.Sprintf("hash-v%d", i+2))
+		newHash := fmt.Appendf(nil, "hash-v%d", i+2)
 		wg.Add(1)
 		go func(newHash []byte) {
 			defer wg.Done()
