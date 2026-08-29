@@ -33,6 +33,8 @@ func (c *CLI) cmdAdmin(args []string) int {
 		return c.cmdAdminNamespace(rest)
 	case "identity", "id":
 		return c.cmdAdminIdentity(rest)
+	case "policy":
+		return c.cmdAdminPolicy(rest)
 	case "ca":
 		return c.cmdAdminCA(rest)
 	case "help", "-h", "--help":
@@ -66,6 +68,15 @@ Identities:
   identity rotate NAME       Rotate a token identity's bearer token.
   identity revoke NAME       Disable an identity (invalidates all its certs).
   identity list              List identities.
+
+Policies:
+  policy create NAME --subject IDENTITY --allow OP@ENV/APP [--allow ...] [--deny OP@ENV/APP ...]
+                             Create a namespace-level policy. Either label may be *, and a
+                             bare OP means every namespace. Example: grant a CI identity the
+                             verification oracle only:
+                               --allow configuration-release:verify-defaults@prod/gradethis
+  policy list                List policies with their allow and deny rules.
+  policy delete NAME         Delete a policy.
 
 CA:
   ca show                    Export the built-in client-issuing CA for inspection or

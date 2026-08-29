@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"errors"
 	"io"
 	"os"
@@ -11,6 +12,11 @@ import (
 	"testing"
 
 	kmsv1 "github.com/Suhaibinator/kms/gen/kmsv1"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 )
 
 func writeCertBundleForTest(c *testCLI, outDir, name string, bundle *kmsv1.CertBundle) error {
@@ -746,6 +752,210 @@ func TestParseTTLSeconds(t *testing.T) {
 	for _, bad := range []string{"0d", "-5h", "abc"} {
 		if _, err := parseTTLSeconds(bad); err == nil {
 			t.Fatalf("parseTTLSeconds(%q) should error", bad)
+		}
+	}
+}
+
+type policyAdminStub struct {
+	kmsv1.UnimplementedAdminServiceServer
+	mu       sync.Mutex
+	created  []*kmsv1.Policy
+	deleted  []string
+	listed   int
+	auth     []string
+	policies []*kmsv1.Policy
+	err      error
+}
+
+func (s *policyAdminStub) record(ctx context.Context) {
+	md, _ := metadata.FromIncomingContext(ctx)
+	s.auth = append(s.auth, strings.Join(md.Get("authorization"), ","))
+}
+
+func (s *policyAdminStub) CreatePolicy(ctx context.Context, req *kmsv1.CreatePolicyRequest) (*kmsv1.CreatePolicyResponse, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.record(ctx)
+	if s.err != nil {
+		return nil, s.err
+	}
+	p := proto.Clone(req.GetPolicy()).(*kmsv1.Policy)
+	s.created = append(s.created, p)
+	return &kmsv1.CreatePolicyResponse{Policy: p}, nil
+}
+
+func (s *policyAdminStub) ListPolicies(ctx context.Context, req *kmsv1.ListPoliciesRequest) (*kmsv1.ListPoliciesResponse, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.record(ctx)
+	s.listed++
+	// Two pages: the first returns one policy and a token, the second the rest.
+	if req.GetPageToken() == "" && len(s.policies) > 1 {
+		return &kmsv1.ListPoliciesResponse{Policies: s.policies[:1], NextPageToken: "more"}, nil
+	}
+	if req.GetPageToken() == "more" {
+		return &kmsv1.ListPoliciesResponse{Policies: s.policies[1:]}, nil
+	}
+	return &kmsv1.ListPoliciesResponse{Policies: s.policies}, nil
+}
+
+func (s *policyAdminStub) DeletePolicy(ctx context.Context, req *kmsv1.DeletePolicyRequest) (*kmsv1.DeletePolicyResponse, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.record(ctx)
+	if s.err != nil {
+		return nil, s.err
+	}
+	s.deleted = append(s.deleted, req.GetName())
+	return &kmsv1.DeletePolicyResponse{}, nil
+}
+
+func TestParsePolicyRule(t *testing.T) {
+	cases := []struct {
+		raw     string
+		op, env string
+		app     string
+		wantErr bool
+	}{
+		{raw: "configuration-release:verify-defaults@prod/gradethis", op: "configuration-release:verify-defaults", env: "prod", app: "gradethis"},
+		{raw: "secret:*@prod/*", op: "secret:*", env: "prod", app: "*"},
+		{raw: "parameter:read@*/billing", op: "parameter:read", env: "*", app: "billing"},
+		{raw: "admin:audit:read", op: "admin:audit:read", env: "*", app: "*"},
+		{raw: "*@*", op: "*", env: "*", app: "*"},
+		{raw: " secret:read@prod/app ", op: "secret:read", env: "prod", app: "app"},
+		{raw: "", wantErr: true},
+		{raw: "@prod/app", wantErr: true},
+		{raw: "secret:read@prod", wantErr: true},
+		{raw: "secret:read@prod/", wantErr: true},
+		{raw: "secret:read@prod/app/key", wantErr: true},
+	}
+	for _, tc := range cases {
+		rule, err := parsePolicyRule(tc.raw)
+		if tc.wantErr {
+			if err == nil {
+				t.Errorf("%q: expected error, got %+v", tc.raw, rule)
+			}
+			continue
+		}
+		if err != nil {
+			t.Errorf("%q: %v", tc.raw, err)
+			continue
+		}
+		if rule.GetOperation() != tc.op || rule.GetEnv() != tc.env || rule.GetApp() != tc.app {
+			t.Errorf("%q = %+v, want %s@%s/%s", tc.raw, rule, tc.op, tc.env, tc.app)
+		}
+	}
+}
+
+func TestAdminPolicyCreateListDelete(t *testing.T) {
+	stub := &policyAdminStub{policies: []*kmsv1.Policy{
+		{Name: "ci-verify", Subject: "ci", Allow: []*kmsv1.PolicyRule{{Operation: "configuration-release:verify-defaults", Env: "prod", App: "gradethis"}}},
+		{Name: "lockdown", Subject: "*", Deny: []*kmsv1.PolicyRule{{Operation: "secret:*", Env: "prod", App: "*"}}},
+	}}
+	dial := startStubGRPC(t, func(s *grpc.Server) { kmsv1.RegisterAdminServiceServer(s, stub) })
+
+	c := newTestCLI()
+	c.dialOverride = dial
+	code := c.Run([]string{"admin", "policy", "create", "ci-verify", "--subject", "ci",
+		"--allow", "configuration-release:verify-defaults@prod/gradethis",
+		"--allow", "configuration-release:read@prod/gradethis",
+		"--deny", "secret:*@prod/*",
+		"--insecure", "--token", "admin-token"})
+	if code != 0 {
+		t.Fatalf("create exit=%d stderr=%s", code, c.stderr())
+	}
+	stub.mu.Lock()
+	if len(stub.created) != 1 || stub.auth[0] != "Bearer admin-token" {
+		stub.mu.Unlock()
+		t.Fatalf("created=%v auth=%v", stub.created, stub.auth)
+	}
+	created := stub.created[0]
+	stub.mu.Unlock()
+	if created.GetName() != "ci-verify" || created.GetSubject() != "ci" || len(created.GetAllow()) != 2 || len(created.GetDeny()) != 1 {
+		t.Fatalf("created policy = %+v", created)
+	}
+	if a := created.GetAllow()[0]; a.GetOperation() != "configuration-release:verify-defaults" || a.GetEnv() != "prod" || a.GetApp() != "gradethis" {
+		t.Fatalf("allow[0] = %+v", a)
+	}
+	if d := created.GetDeny()[0]; d.GetOperation() != "secret:*" || d.GetEnv() != "prod" || d.GetApp() != "*" {
+		t.Fatalf("deny[0] = %+v", d)
+	}
+	if !strings.Contains(c.stdout(), "Created policy ci-verify for subject ci") || !strings.Contains(c.stdout(), "configuration-release:verify-defaults@prod/gradethis") {
+		t.Fatalf("create stdout = %s", c.stdout())
+	}
+
+	c = newTestCLI()
+	c.dialOverride = dial
+	if code := c.Run([]string{"admin", "policy", "list", "--insecure", "--token", "admin-token"}); code != 0 {
+		t.Fatalf("list exit=%d stderr=%s", code, c.stderr())
+	}
+	for _, want := range []string{"NAME", "SUBJECT", "ALLOW", "DENY", "ci-verify", "configuration-release:verify-defaults@prod/gradethis", "lockdown", "secret:*@prod/*"} {
+		if !strings.Contains(c.stdout(), want) {
+			t.Fatalf("list stdout missing %q:\n%s", want, c.stdout())
+		}
+	}
+	stub.mu.Lock()
+	listed := stub.listed
+	stub.mu.Unlock()
+	if listed != 2 {
+		t.Fatalf("list did not page through both pages: %d calls", listed)
+	}
+
+	c = newTestCLI()
+	c.dialOverride = dial
+	if code := c.Run([]string{"admin", "policy", "delete", "lockdown", "--insecure", "--token", "admin-token"}); code != 0 {
+		t.Fatalf("delete exit=%d stderr=%s", code, c.stderr())
+	}
+	stub.mu.Lock()
+	deleted := append([]string(nil), stub.deleted...)
+	stub.mu.Unlock()
+	if len(deleted) != 1 || deleted[0] != "lockdown" || !strings.Contains(c.stdout(), "Deleted policy lockdown") {
+		t.Fatalf("deleted=%v stdout=%s", deleted, c.stdout())
+	}
+}
+
+func TestAdminPolicyUsageErrorsDoNotReachServer(t *testing.T) {
+	stub := &policyAdminStub{}
+	dial := startStubGRPC(t, func(s *grpc.Server) { kmsv1.RegisterAdminServiceServer(s, stub) })
+	for _, args := range [][]string{
+		{"admin", "policy"},
+		{"admin", "policy", "create"},
+		{"admin", "policy", "create", "p", "--allow", "secret:read@prod/app"},                // no --subject
+		{"admin", "policy", "create", "p", "--subject", "ci"},                                // no rules
+		{"admin", "policy", "create", "p", "--subject", "ci", "--allow", "secret:read@prod"}, // malformed rule
+		{"admin", "policy", "delete"},
+	} {
+		c := newTestCLI()
+		c.dialOverride = dial
+		if code := c.Run(args); code != 2 {
+			t.Fatalf("%v exit = %d, want 2 (stderr=%s)", args, code, c.stderr())
+		}
+	}
+	stub.mu.Lock()
+	defer stub.mu.Unlock()
+	if len(stub.created) != 0 || len(stub.deleted) != 0 || stub.listed != 0 {
+		t.Fatalf("usage errors reached the server: %+v", stub)
+	}
+}
+
+func TestAdminPolicyServerErrorIsReported(t *testing.T) {
+	stub := &policyAdminStub{err: status.Error(codes.InvalidArgument, `policy "p" allow rule 0: unknown operation "bogus:op"`)}
+	c := newTestCLI()
+	c.dialOverride = startStubGRPC(t, func(s *grpc.Server) { kmsv1.RegisterAdminServiceServer(s, stub) })
+	code := c.Run([]string{"admin", "policy", "create", "p", "--subject", "ci", "--allow", "bogus:op@prod/app", "--insecure"})
+	if code != 1 || !strings.Contains(c.stderr(), "unknown operation") {
+		t.Fatalf("exit=%d stderr=%s", code, c.stderr())
+	}
+}
+
+func TestAdminHelpListsPolicyCommands(t *testing.T) {
+	c := newTestCLI()
+	if code := c.Run([]string{"admin", "help"}); code != 0 {
+		t.Fatalf("admin help exit = %d", code)
+	}
+	for _, want := range []string{"policy create NAME --subject IDENTITY --allow OP@ENV/APP", "policy list", "policy delete NAME", "configuration-release:verify-defaults@prod/gradethis"} {
+		if !strings.Contains(c.stderr(), want) {
+			t.Fatalf("admin help missing %q: %s", want, c.stderr())
 		}
 	}
 }

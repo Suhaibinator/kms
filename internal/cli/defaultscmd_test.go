@@ -51,7 +51,7 @@ func (s *defaultsAdminStub) ApplyApplicationDefaults(ctx context.Context, req *k
 	return s.responses[index], nil
 }
 
-func startDefaultsAdminServer(t *testing.T, stub *defaultsAdminStub) defaultsDialFunc {
+func startDefaultsAdminServer(t *testing.T, stub *defaultsAdminStub) dialFunc {
 	t.Helper()
 	listener := bufconn.Listen(1 << 20)
 	server := grpc.NewServer()
@@ -98,7 +98,7 @@ func TestDefaultsApplyPreviewFromFileIsValueFreeAndAuthenticated(t *testing.T) {
 	stub := &defaultsAdminStub{responses: []*kmsv1.ApplyApplicationDefaultsResponse{defaultsPreviewResponse()}}
 	dial := startDefaultsAdminServer(t, stub)
 	c := newTestCLI()
-	c.defaultsDial = dial
+	c.dialOverride = dial
 	code := c.Run([]string{
 		"defaults", "apply", "dev/my-app", "--from", writeDefaultsInput(t, artifact),
 		"--overwrite", "--update-definition", "--insecure", "--token", "admin-token",
@@ -166,7 +166,7 @@ func TestDefaultsApplyExecuteReadsStdinAndUsesFreshPlan(t *testing.T) {
 	defer func() { _ = read.Close() }()
 	c := newTestCLI()
 	c.Stdin = read
-	c.defaultsDial = dial
+	c.dialOverride = dial
 	code := c.Run([]string{
 		"defaults", "apply", "dev/app", "--from", "-", "--execute", "--overwrite",
 		"--insecure",
@@ -209,7 +209,7 @@ func TestDefaultsApplyExecuteNoOpSucceeds(t *testing.T) {
 	stub := &defaultsAdminStub{responses: []*kmsv1.ApplyApplicationDefaultsResponse{preview, applied}}
 	dial := startDefaultsAdminServer(t, stub)
 	c := newTestCLI()
-	c.defaultsDial = dial
+	c.dialOverride = dial
 	if code := c.Run([]string{"defaults", "apply", "dev/app", "--from", writeDefaultsInput(t, "{}"), "--execute", "--insecure"}); code != 0 {
 		t.Fatalf("no-op execute exit = %d, stderr=%s", code, c.stderr())
 	}
@@ -221,7 +221,7 @@ func TestDefaultsApplyBlockedPreviewDoesNotExecute(t *testing.T) {
 	stub := &defaultsAdminStub{responses: []*kmsv1.ApplyApplicationDefaultsResponse{preview}}
 	dial := startDefaultsAdminServer(t, stub)
 	c := newTestCLI()
-	c.defaultsDial = dial
+	c.dialOverride = dial
 	code := c.Run([]string{"defaults", "apply", "dev/app", "--from", writeDefaultsInput(t, "{}"), "--execute", "--insecure"})
 	if code != 1 || !strings.Contains(c.stderr(), "blocked") {
 		t.Fatalf("blocked exit=%d stderr=%s", code, c.stderr())
@@ -251,7 +251,7 @@ func TestDefaultsApplyProductionConfirmation(t *testing.T) {
 			stub := &defaultsAdminStub{responses: []*kmsv1.ApplyApplicationDefaultsResponse{defaultsPreviewResponse()}}
 			dial := startDefaultsAdminServer(t, stub)
 			c := newTestCLI()
-			c.defaultsDial = dial
+			c.dialOverride = dial
 			args := []string{"defaults", "apply", test.env + "/app", "--from", artifact, "--insecure"}
 			args = append(args, test.args...)
 			if code := c.Run(args); code != test.want {
@@ -266,7 +266,7 @@ func TestDefaultsApplyProductionConfirmation(t *testing.T) {
 	stub := &defaultsAdminStub{responses: []*kmsv1.ApplyApplicationDefaultsResponse{preview, applied}}
 	dial := startDefaultsAdminServer(t, stub)
 	c := newTestCLI()
-	c.defaultsDial = dial
+	c.dialOverride = dial
 	if code := c.Run([]string{
 		"defaults", "apply", "prod/app", "--from", artifact, "--execute", "--confirm-production", "prod",
 		"--insecure",
@@ -313,7 +313,7 @@ func TestDefaultsApplyHandlesServerAndMalformedResponses(t *testing.T) {
 			stub := &defaultsAdminStub{responses: []*kmsv1.ApplyApplicationDefaultsResponse{test.response}, errs: []error{test.err}}
 			dial := startDefaultsAdminServer(t, stub)
 			c := newTestCLI()
-			c.defaultsDial = dial
+			c.dialOverride = dial
 			code := c.Run([]string{"defaults", "apply", "dev/app", "--from", writeDefaultsInput(t, "malformed artifact"), "--insecure"})
 			if code != 1 || !strings.Contains(c.stderr(), test.want) {
 				t.Fatalf("exit=%d stderr=%s, want %q", code, c.stderr(), test.want)
