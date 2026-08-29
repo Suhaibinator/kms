@@ -1,10 +1,14 @@
 import { describe, expect, it } from "vitest";
 
 import type { ClientReleaseLoaderOptions } from "../src/client.js";
-import type { DefaultMismatchReport } from "../src/configstore/errors.js";
+import type { AppliedReport, DefaultMismatchReport } from "../src/configstore/errors.js";
 import type { ManagedReleaseClient } from "../src/configstore/manager.js";
-import { parseDefaultsArtifact } from "../src/configstore/index.js";
+import { parameterHash, parseDefaultsArtifact } from "../src/configstore/index.js";
 import type { ReleaseLoader } from "../src/releases/loader.js";
+import type {
+  VerifyReleaseDefaultsOptions,
+  VerifyReleaseDefaultsResult,
+} from "../src/releases/verify.js";
 import {
   type PrepareRelease,
   ReleaseEntryMetadata,
@@ -21,9 +25,12 @@ import {
   encodeParameterGroups,
   generatedContract,
   groupCodecs,
+  schemaSHA256,
   Store,
+  verifyReleaseDefaults,
 } from "./fixtures/configgen/config.generated.js";
 import type { Config } from "./fixtures/configgen/config.js";
+import { Store as SecretsOnlyStore } from "./fixtures/configgen/secrets-only.generated.js";
 
 describe("generated managed configuration binding", () => {
   it("encodes all groups canonically and rejects non-zero secret defaults", () => {
@@ -67,6 +74,7 @@ describe("generated managed configuration binding", () => {
     });
     const loader = new InlineLoader(first);
     const reports: DefaultMismatchReport[] = [];
+    const applied: AppliedReport[] = [];
     const validated: Config[] = [];
     const defaults = defaultConfig();
     const store = new Store(defaults, (config) => {
@@ -81,8 +89,8 @@ describe("generated managed configuration binding", () => {
       inlineClient(loader),
       {
         release: "runtime",
-        allowDefaultMismatch: true,
         onDefaultMismatch: (report) => reports.push(report),
+        onApplied: (report) => applied.push(report),
       },
       controller.signal,
     );
@@ -95,6 +103,22 @@ describe("generated managed configuration binding", () => {
       "runtime.epoch",
       "runtime.labels",
     ]);
+    expect(applied).toHaveLength(1);
+    expect(applied[0]).toMatchObject({ phase: "startup", defaultDivergent: true });
+    expect(applied[0]?.changed()).toEqual([]);
+    const startupGroups = applied[0]?.groups() ?? {};
+    expect(Object.keys(startupGroups)).toEqual(["database", "runtime"]);
+    expect(JSON.parse(startupGroups.database ?? "")).toEqual({
+      endpoint: { host: "validator-mutation", ports: null, zones: ["west", "east"] },
+      limit: 12,
+    });
+    expect(JSON.parse(startupGroups.runtime ?? "")).toEqual({
+      enabled: true,
+      epoch: 1,
+      labels: { region: "west", zone: "one" },
+      payload: "Yw==",
+    });
+    expect(JSON.stringify(startupGroups)).not.toContain("release-secret");
     expect(defaults.endpoint.host).toBe("db.internal");
     expect(defaults.payload).toBeNull();
     expect(store.current().release.version).toBe(1n);
@@ -120,6 +144,7 @@ describe("generated managed configuration binding", () => {
     ).rejects.toMatchObject({ category: "restart_required" });
     expect(store.current().release.version).toBe(1n);
     expect(store.current().worker().limit).toBe(12);
+    expect(applied).toHaveLength(1);
 
     await loader.apply(
       releaseSnapshot({
@@ -132,9 +157,128 @@ describe("generated managed configuration binding", () => {
     );
     expect(store.current().release.version).toBe(3n);
     expect(store.current().worker().limit).toBe(14);
+    expect(applied).toHaveLength(2);
+    expect(applied[1]).toMatchObject({ phase: "runtime", defaultDivergent: true });
+    expect(applied[1]?.release.version).toBe(3n);
+    expect(applied[1]?.changed()).toEqual([
+      { path: "database.limit", previous: 12, current: 14 },
+      { path: "runtime.epoch", previous: 1n, current: 3n },
+    ]);
+    expect(JSON.parse(applied[1]?.groups().database ?? "")).toMatchObject({ limit: 14 });
 
     controller.abort();
     await expect(manager.wait()).resolves.toBeUndefined();
+  });
+
+  it("reports hot secret rotations path-only through onApplied", async () => {
+    const snapshot = (version: bigint, secretVersion: bigint, plaintext: string) => {
+      const token = entry("worker_token", "secret", secretVersion, "string", "secrets/worker");
+      return new ReleaseSnapshot({
+        namespace: "prod/api",
+        name: "runtime",
+        version,
+        activationRevision: version,
+        digest: `digest-${version}`,
+        entries: new Map([[token.alias, token]]),
+        parameters: new Map(),
+        secrets: new Map([["worker_token", new ReleaseSecret(Buffer.from(plaintext), token)]]),
+      });
+    };
+    const loader = new InlineLoader(snapshot(1n, 7n, "first-secret"));
+    const applied: AppliedReport[] = [];
+    const store = new SecretsOnlyStore({ token: new Secret() }, () => undefined);
+    const controller = new AbortController();
+    const manager = await store.start(
+      inlineClient(loader),
+      {
+        release: "runtime",
+        onDefaultMismatch: () => undefined,
+        onApplied: (report) => applied.push(report),
+      },
+      controller.signal,
+    );
+    expect(applied[0]?.groups()).toEqual({});
+
+    await loader.apply(snapshot(2n, 7n, "first-secret"));
+    expect(applied[1]?.changed()).toEqual([]);
+    await loader.apply(snapshot(3n, 8n, "second-secret"));
+    expect(applied).toHaveLength(3);
+    expect(applied[2]?.changed()).toEqual([
+      { path: "worker_token", previous: null, current: null },
+    ]);
+    expect(store.current().worker().token.text()).toBe("second-secret");
+    for (const report of applied) {
+      for (const rendered of [String(report), JSON.stringify(report)]) {
+        expect(rendered).not.toContain("first-secret");
+        expect(rendered).not.toContain("second-secret");
+      }
+    }
+
+    controller.abort();
+    await expect(manager.wait()).resolves.toBeUndefined();
+  });
+
+  it("verifies source defaults through canonical hashes without sending values", async () => {
+    const defaults = defaultConfig();
+    const groups = encodeParameterGroups(defaults);
+    const requests: VerifyReleaseDefaultsOptions[] = [];
+    const client = {
+      verifyReleaseDefaults: (options: VerifyReleaseDefaultsOptions) => {
+        requests.push(options);
+        const result: VerifyReleaseDefaultsResult = {
+          releaseName: "runtime",
+          releaseVersion: 9n,
+          activationRevision: 12n,
+          schemaMatches: true,
+          entries: [
+            { alias: "database", verdict: "match" },
+            { alias: "runtime", verdict: "differs" },
+          ],
+          matchCount: 1,
+          differsCount: 1,
+          missingCount: 0,
+          unknownAliasCount: 0,
+          secretAliasCount: 0,
+          unsupportedCount: 0,
+          unverifiedCount: 1,
+          passed: () => false,
+        };
+        return Promise.resolve(result);
+      },
+    };
+
+    const result = await verifyReleaseDefaults(client, defaults, {
+      namespace: "prod/api",
+      release: "runtime",
+      profile: "local",
+    });
+
+    expect(requests).toHaveLength(1);
+    expect(requests[0]).toMatchObject({
+      namespace: "prod/api",
+      release: "runtime",
+      profile: "local",
+      schemaSha256: schemaSHA256,
+      entries: [
+        {
+          alias: "database",
+          contentType: "json",
+          sha256: parameterHash("json", groups.database ?? ""),
+        },
+        {
+          alias: "runtime",
+          contentType: "json",
+          sha256: parameterHash("json", groups.runtime ?? ""),
+        },
+      ],
+    });
+    expect(JSON.stringify(requests[0])).not.toContain("db.internal");
+    expect(result.passed()).toBe(false);
+    expect(result.failures()).toEqual([
+      { alias: "runtime", contentType: "json", verdict: "differs" },
+    ]);
+    expect(result.report()).toContain("differs  runtime   json");
+    expect(result.report()).not.toContain("db.internal");
   });
 
   it("compares record fields canonically instead of treating insertion order as drift", async () => {
@@ -193,7 +337,6 @@ describe("generated managed configuration binding", () => {
     await expect(
       store.start(inlineClient(loader), {
         release: "runtime",
-        allowDefaultMismatch: true,
         onDefaultMismatch: () => undefined,
       }),
     ).rejects.toMatchObject({ category: "config_validation_failed" });

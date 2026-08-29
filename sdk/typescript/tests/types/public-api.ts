@@ -24,11 +24,24 @@ import {
   verifyArtifacts,
 } from "@suhaibinator/kms/configgen";
 import {
+  type AppliedReport,
+  type Callbacks,
+  canonicalParameterValue,
+  consoleCallbacks,
   type ContractEntry,
+  // @ts-expect-error Startup default mismatches are applied and reported; the fatal error type was removed.
+  DefaultMismatchError,
+  type FieldChange,
   type ManagedPreparedCandidate,
+  type MismatchSeverity,
+  parameterHash,
   parseDefaultsArtifact as parseRuntimeDefaultsArtifact,
+  type Phase,
   startManagedConfig,
+  type VerifyResult,
+  verifyDefaults,
 } from "@suhaibinator/kms/configstore";
+import { RateLimitedError, type VerifyReleaseDefaultsResult } from "@suhaibinator/kms";
 import type { NextKms } from "@suhaibinator/kms/next/server";
 
 interface Policy {
@@ -134,15 +147,63 @@ const managedContract = [
 ] as const satisfies readonly ContractEntry[];
 
 export async function startsManagedConfig(client: KmsClient): Promise<void> {
+  const callbacks: Callbacks = consoleCallbacks(console, { component: "api" });
   const manager = await startManagedConfig(
     client,
     {
       release: "runtime",
       contract: managedContract,
-      onDefaultMismatch: () => undefined,
+      ...callbacks,
+      onApplied(report: AppliedReport) {
+        const phase: Phase = report.phase;
+        const changes: FieldChange[] = report.changed();
+        const groups: Readonly<Record<string, string>> = report.groups();
+        void [phase, changes, groups, report.defaultDivergent];
+      },
     },
-    (): ManagedPreparedCandidate => ({ publish() {} }),
+    (): ManagedPreparedCandidate => ({
+      publish() {},
+      changed: [{ path: "runtime.limit", previous: 1, current: 2 }],
+      groups: { runtime: "{}" },
+    }),
   );
   manager.stop();
   await manager.wait();
+}
+
+void startManagedConfig(
+  undefined as unknown as KmsClient,
+  {
+    release: "runtime",
+    contract: managedContract,
+    onDefaultMismatch: () => undefined,
+    // @ts-expect-error startup drift is always applied and reported; the bypass flag no longer exists
+    allowDefaultMismatch: true,
+  },
+  (): ManagedPreparedCandidate => ({ publish() {} }),
+);
+
+const onlySeverity: MismatchSeverity = "error";
+// @ts-expect-error the fatal severity was removed together with startup refusal
+const fatalSeverity: MismatchSeverity = "fatal";
+void [onlySeverity, fatalSeverity, DefaultMismatchError];
+
+export async function verifiesDefaults(client: KmsClient): Promise<string> {
+  const wire: VerifyReleaseDefaultsResult = await client.verifyReleaseDefaults({
+    namespace: "prod/api",
+    entries: [{ alias: "runtime", contentType: "json", sha256: parameterHash("json", "{}") }],
+  });
+  const result: VerifyResult = await verifyDefaults(
+    client,
+    { schemaSha256: "0".repeat(64), contract: managedContract, groups: { runtime: "{}" } },
+    { namespace: "prod/api" },
+  );
+  const canonical: Uint8Array = canonicalParameterValue("json", "{}");
+  void [wire.passed(), canonical, RateLimitedError];
+  return result.passed()
+    ? result.report()
+    : result
+        .failures()
+        .map((f) => f.alias)
+        .join(",");
 }

@@ -35,6 +35,34 @@ const MAX_CONCURRENT_FETCHES = 256;
 const BACKOFF_BASE_MS = 250;
 const BACKOFF_CAP_MS = 30_000;
 const BACKOFF_MIN_MS = 10;
+const MAX_ACK_DIVERGENT_FIELD_COUNT = 65_535;
+
+/** Bounded divergence summary attached to applied acknowledgements. */
+interface AckDivergence {
+  readonly divergent: boolean;
+  readonly fieldCount: number;
+}
+
+const NO_DIVERGENCE: AckDivergence = Object.freeze({ divergent: false, fieldCount: 0 });
+
+/** Read an optional divergence reporter; a misbehaving reporter never affects the ack. */
+function divergenceOf(prepared: PreparedRelease): AckDivergence {
+  if (typeof prepared.releaseDivergence !== "function") return NO_DIVERGENCE;
+  try {
+    const reported: unknown = prepared.releaseDivergence();
+    if (typeof reported !== "object" || reported === null) return NO_DIVERGENCE;
+    const { divergent, fieldCount } = reported as Partial<AckDivergence>;
+    if (divergent !== true) return NO_DIVERGENCE;
+    const count =
+      typeof fieldCount === "number" && Number.isFinite(fieldCount) ? Math.trunc(fieldCount) : 0;
+    return {
+      divergent: true,
+      fieldCount: Math.min(Math.max(count, 0), MAX_ACK_DIVERGENT_FIELD_COUNT),
+    };
+  } catch {
+    return NO_DIVERGENCE;
+  }
+}
 
 /** @internal Transport-only exact secret payload. */
 export interface FetchedSecret {
@@ -491,7 +519,7 @@ export class ReleaseLoader {
       return { candidate, applied: false, category: "internal", fatal };
     }
 
-    this.#ack(candidate, "applied");
+    this.#ack(candidate, "applied", "", divergenceOf(prepared));
     this.#status.state = "applied";
     this.#status.appliedVersion = candidate.release.version;
     this.#status.appliedRevision = candidate.revision;
@@ -733,8 +761,10 @@ export class ReleaseLoader {
     candidate: Candidate,
     state: ReleaseState,
     rejectionCategory: ReleaseRejectionCategory | "" = "",
+    divergence: AckDivergence = NO_DIVERGENCE,
   ): bigint {
     this.#ackGeneration += 1n;
+    const applied = state === "applied" && divergence.divergent;
     const acknowledgement: ReleaseAcknowledgement = {
       namespace: { ...this.#options.namespace },
       name: this.#options.name,
@@ -746,8 +776,8 @@ export class ReleaseLoader {
       rejectionCategory,
       diagnostic: "",
       timestampUnixMs: BigInt(Math.trunc(this.#options.now())),
-      appliedDivergent: false,
-      divergentFieldCount: 0,
+      appliedDivergent: applied,
+      divergentFieldCount: applied ? divergence.fieldCount : 0,
     };
     const current = this.#pendingAcknowledgements.get(state);
     if (!current || current.acknowledgement.activationRevision <= candidate.revision) {

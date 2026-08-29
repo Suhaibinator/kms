@@ -66,6 +66,18 @@ export class NoNamespaceError extends KmsError {
   }
 }
 
+/**
+ * The server exhausted a per-identity budget for the requested operation
+ * (for example `verifyReleaseDefaults`). Wait for the window to reset instead
+ * of retrying in a tight loop. `code` is `resource_exhausted`.
+ */
+export class RateLimitedError extends KmsError {
+  constructor(message: string, options: KmsErrorOptions = {}) {
+    super("resource_exhausted", message, options);
+    this.name = "RateLimitedError";
+  }
+}
+
 /** A declarative secret was accessed before it had been resolved. */
 export class NotInitializedError extends KmsError {
   constructor(kind: "SecretValue" | "ParameterValue", key: string, options: ErrorOptions = {}) {

@@ -9,15 +9,20 @@ import {
   immutableSnapshot,
   ReleaseIdentity,
   startManagedConfig,
+  verifyDefaults,
 } from "../../../src/configstore/index.js";
 import type {
   ConfigSnapshot,
   ContractEntry,
+  FieldChange,
   FieldDifference,
   ManagedConfigManager,
   ManagedConfigOptions,
   ManagedPreparedCandidate,
   ManagedReleaseClient,
+  VerifyClient,
+  VerifyOptions,
+  VerifyResult,
 } from "../../../src/configstore/index.js";
 import type { SecretsOnly as RootConfig } from "./config.js";
 
@@ -45,6 +50,23 @@ export function encodeDefaultsArtifact(profile: string, config: RootConfig): str
     contract: generatedContract,
     parameters: encodeParameterGroups(config),
   });
+}
+
+/**
+ * Ask KMS which parameter groups of config differ from the active release of
+ * options.namespace. Only canonical content hashes travel over the wire; no
+ * value is ever sent or returned.
+ */
+export function verifyReleaseDefaults(
+  client: VerifyClient,
+  config: RootConfig,
+  options: VerifyOptions,
+): Promise<VerifyResult> {
+  return verifyDefaults(
+    client,
+    { schemaSha256: schemaSHA256, contract: generatedContract, groups: encodeParameterGroups(config) },
+    options,
+  );
 }
 
 export class WorkerView {
@@ -153,10 +175,23 @@ export class Store {
     if (active) {
     }
     restartRequiredFields.sort();
+    // Changed fields versus the previously applied generation feed onApplied. Secrets are path-only.
+    const changed: FieldChange[] = [];
+    if (active) {
+      if (!sameSecretIdentity(active.get("token"), validatedCandidate["token"])) changed.push({ path: "worker_token", previous: null, current: null });
+    }
+    let groups: Readonly<Record<string, string>>;
+    try {
+      groups = encodeParameterGroups(validatedCandidate);
+    } catch (cause) {
+      throw new CandidateError("config_validation_failed", cause);
+    }
     const prepared = immutableSnapshot(validatedCandidate, ReleaseIdentity.from(snapshot));
     return {
       defaultDifferences,
       restartRequiredFields,
+      changed,
+      groups,
       publish: () => {
         this.#active = prepared;
       },
@@ -198,6 +233,15 @@ function setProperty<T extends object, K extends keyof T>(target: T, key: K, val
     writable: true,
     configurable: true,
   });
+}
+
+function sameSecretIdentity(left: unknown, right: unknown): boolean {
+  return (
+    left instanceof Secret &&
+    right instanceof Secret &&
+    left.path === right.path &&
+    left.version === right.version
+  );
 }
 
 function assertSecret(value: unknown, alias: string): asserts value is Secret {

@@ -77,6 +77,7 @@ method families are:
 | `watch(callback, options?)`, `watchNamespace(namespace, callback, options?)` | Register on the shared process-client stream and return an idempotent local unsubscriber. Home-namespace discovery makes `watch` asynchronous. |
 | `resolve(config, options?)` | Resolve all reachable declarative values concurrently. |
 | `createReleaseLoader(options)` | Create an independently runnable loader that shares this client’s authenticated transport. |
+| `verifyReleaseDefaults(options)` | `Promise<VerifyReleaseDefaultsResult>`; value-free comparison of canonical alias hashes against the active release. Validates aliases, lowercase-hex digests, verdict vocabulary, alias echo, and count consistency; `RESOURCE_EXHAUSTED` becomes `RateLimitedError`. |
 | `close()`, `[Symbol.asyncDispose]()` | Idempotent async ownership boundary for transport, streams, reconciliation, and callbacks. |
 
 ### Package root: references, errors, secrets, and transport
@@ -86,7 +87,7 @@ method families are:
 | `NamespaceRef`, `ResourceRef`, `VersionRef` | Types for explicit namespaces, fully qualified keys, and mutually normalized version/label selection. |
 | `CURRENT_VERSION`, `UINT64_MAX` | Readonly current-selector and exact protobuf `uint64` upper bound. |
 | `parseNamespace`, `splitDisplayPath`, `displayNamespace`, `displayPath`, `resolveRef`, `refOf`, `namespaceEquals`, `namespaceKey`, `normalizeVersionRef` | Pure reference parse/render/compare/normalization helpers. `resolveRef` requires a namespace for a relative key; `refOf` is the tolerant trusted-input parser. |
-| `KmsError`, `ConfigError`, `NoNamespaceError`, `NotInitializedError` | Stable error class hierarchy for remote, configuration, relative-key, and declarative-lifecycle failures. |
+| `KmsError`, `ConfigError`, `NoNamespaceError`, `NotInitializedError`, `RateLimitedError` | Stable error class hierarchy for remote, configuration, relative-key, declarative-lifecycle, and exhausted per-identity budget (`resource_exhausted`) failures. |
 | `KmsErrorCode`, `KmsErrorOptions` | Types for bounded programmatic codes and optional original gRPC status. |
 | `isKmsError`, `mapGrpcError`, `normalizeError`, `wrapError` | Error narrowing, transport normalization (`normalizeError` aliases `mapGrpcError`), and context wrapping that preserves stable codes. |
 | `Secret`, `newSecret`, `REDACTED`, `SecretMetadata` | Redacting, defensive plaintext wrapper; constructor/factory accept bytes or string plus non-sensitive metadata. |
@@ -127,7 +128,8 @@ method families are:
 |---|---|---|
 | `ReleaseLoader`, `ClientReleaseLoaderOptions` | Class and type | One-concurrent-run exact-version release lifecycle; inspect `instanceId`, `status()`/`stats()`, request `stop()`, and await `run(prepare, signal?)`. Sequential runs are permitted, matching Go. |
 | `runTypedRelease(loader, decode, prepare, signal?)` | Generic function | Split fallible snapshot decoding from application resource preparation without weakening atomic commit. |
-| `PreparedRelease`, `PrepareRelease` | Types | Candidate callback contract: synchronous infallible `commit` and at-most-once `abort`, each returning exactly `undefined`, plus cooperative `AbortSignal`. |
+| `PreparedRelease`, `PrepareRelease`, `ReleaseDivergence` | Types | Candidate callback contract: synchronous infallible `commit` and at-most-once `abort`, each returning exactly `undefined`, plus cooperative `AbortSignal`. An optional `releaseDivergence()` puts a bounded divergence flag and field count on the applied acknowledgement only. |
+| `VERIFY_VERDICTS`, `VerifyVerdict`, `VerifyDefaultsEntry`, `VerifyReleaseDefaultsOptions`, `VerifyDefaultsVerdict`, `VerifyReleaseDefaultsResult` | Readonly value/types | Bounded verdict vocabulary (`match`, `differs`, `missing_in_release`, `unknown_alias`, `secret_alias`, `unsupported_content_type`), the value-free verify request, and the frozen validated result with `passed()`. |
 | `SecretTokenProvider`, `ValidateReleaseManifest` | Callback types | Fetch per-entry secret authorization locally and reject a manifest before resource resolution. |
 | `ReleaseManifest`, `ReleaseManifestInit`, `ReleaseSnapshot`, `ReleaseSnapshotInit` | Immutable classes/types | Unresolved identity/entries and fully resolved exact candidate; serialization and inspection omit values. |
 | `ReleaseEntryMetadata`, `ReleaseEntryMetadataInit`, `ReleaseEntryKind` | Immutable class/types | Non-secret alias, resource, version, content, digest, and protection metadata. |
@@ -305,34 +307,48 @@ The complete compile-checked integration is in the
 | `ConfigDecodeError` | Error class | Value-free strict-decoding failure whose message contains only a generated canonical path and fixed diagnostic. |
 | `ContractKind`, `ContractEntry`, `validateContract`, `createManifestValidator` | Types/functions | Validate and copy an alias/content-type contract, then build its pre-fetch manifest hook. |
 | `REJECTION_CATEGORIES`, `RejectionCategory`, `CandidateError`, `reject`, `rejectDecode` | Readonly value, types, class, functions | Bounded managed-candidate classification; decode wrapping retains only safe generated paths. |
-| `FieldDifference`, `MismatchPhase`, `MismatchSeverity` | Types | Non-secret source-default comparison fields and startup/runtime policy. |
-| `DefaultMismatchReport`, `DefaultMismatchError`, `CandidateRejectionReport` | Immutable classes | Secret-aware copied drift reporting, typed fatal startup failure, and value-free local rejection diagnostics. |
-| `ManagedConfigOptions`, `ManagedReleaseClient`, `ManagedPreparedCandidate`, `PrepareManagedCandidate` | Types | Structural client, generated preparation, contract, reporting, default-drift, and release-loader options. |
+| `FieldDifference`, `FieldChange`, `Phase`, `MismatchPhase`, `MismatchSeverity` | Types | Non-secret source-default comparison fields, previous/current change records (secrets path-only), the startup/runtime phase (`MismatchPhase` is an alias), and the single `"error"` severity. |
+| `DefaultMismatchReport`, `AppliedReport`, `CandidateRejectionReport` | Immutable classes | Secret-aware copied drift reporting, the per-generation applied view (`changed()` and `groups()` return fresh redacted copies; `toString` lists paths only), and value-free local rejection diagnostics. |
+| `Callbacks`, `ManagedConfigOptions`, `ManagedReleaseClient`, `ManagedPreparedCandidate`, `PrepareManagedCandidate` | Types | Application observers (`onDefaultMismatch` required, `onApplied` and `onCandidateRejected` optional; all synchronous, failures isolated), structural client, generated preparation (including `changed` and `groups`), contract, and release-loader options. |
+| `consoleCallbacks(logger, options?)`, `ConsoleLogger`, `ConsoleCallbacksOptions` | Function/types | Ready-made `Callbacks` rendering fixed structured log records (`kms config diverges from source defaults`, `kms config applied`, `kms config group`, `kms config reloaded`, `kms config field changed`, `kms config candidate rejected`) with an optional `component` attribute and snapshot/change toggles. |
 | `startManagedConfig(client, options, prepare, signal?)`, `ManagedConfigManager` | Function and class | Validate before fetch, block until initial atomic publication, then expose `stop`, `wait`, `status`, and `stats`. |
 | `ManagedConfigStatus`, `ManagedConfigStats` | Types | Fresh redacted identity/health and bounded counter snapshots. |
 | `ReleaseIdentityInit`, `ReleaseIdentity` | Type and immutable class | Value-free copied release identity; use `ReleaseIdentity.from`, `isZero`, and safe serialization. |
 | `ConfigSnapshot<T>`, `immutableSnapshot(config, release?)` | Class/function | Private immutable generation with defensive `config()` and typed `get(key)` reads. |
+| `canonicalParameterValue(contentType, value)`, `parameterHash(contentType, value)` | Functions | Canonical bytes and lowercase-hex SHA-256 shared with the Go SDK and the server: strict single-document JSON with UTF-8-byte-sorted keys, verbatim number literals, minimal string escaping, duplicate-key and invalid-UTF-8 rejection; other content types byte-for-byte. |
+| `verifyDefaults(client, input, options)`, `VerifyClient`, `VerifyInput`, `VerifyOptions`, `VerifyEntryResult`, `VerifyResult` | Function/types/class | Hash every parameter group of a generated contract, call `verifyReleaseDefaults`, and return `passed()`, `failures()`, and a value-free CI `report()` (header, sorted `VERDICT ALIAS CONTENT_TYPE` table, summary counts including unverified aliases). Secret entries are never sent. |
 
 `@suhaibinator/kms/configstore` is the optional Stage 7 layer used by generated
 bindings. `startManagedConfig(client, options, prepare, signal)` accepts an
 ordinary `KmsClient` through its public `createReleaseLoader` method; transport
 and generated protobuf types remain private. The options declare the release
 name and exact generated alias/content-type contract, require a synchronous
-default-drift reporter, and may allow an explicitly reported startup mismatch.
+default-drift reporter, and may add `onApplied` and `onCandidateRejected`
+observers; `consoleCallbacks` supplies all three.
 
 Generated preparation performs strict decode and application validation, then
 returns a synchronous `publish` swap plus optional `abort`; both must return
-exactly `undefined`. It also returns complete source-default differences and
-the canonical restart-required fields that changed. The manager:
+exactly `undefined`. It also returns complete source-default differences, the
+canonical restart-required fields that changed, the fields that changed since
+the previously applied generation, and the canonical non-secret group
+documents. The manager:
 
 - validates the exact manifest before fetching entries;
 - blocks startup until the first candidate is atomically publishable;
-- fails closed on unapproved startup default drift and always reports approved
-  drift;
+- applies and reports every default divergence (severity `"error"`, startup
+  and runtime) instead of refusing startup, and puts only a divergence flag and
+  field count on the applied acknowledgement;
+- fires `onApplied` after each publication with an immutable, redacted
+  `AppliedReport` whose change list is empty for the initial generation;
 - rejects a whole runtime candidate if any restart-required field changed;
 - retains the last-known-good snapshot and detects later default restoration;
 - exposes redacted copied status, metrics, mismatch, and rejection reports; and
 - stops through `manager.stop()` followed by `await manager.wait()`.
+
+Generated bindings additionally export `verifyReleaseDefaults(client, config,
+options)`, which wires the generated schema digest, contract, and
+`encodeParameterGroups(config)` into `verifyDefaults`. Only canonical content
+hashes travel over the wire in either direction.
 
 `codecs`, `field`, `group`, `decodeGroup`, and `encodeGroup` provide
 duplicate-aware, unknown/missing-field rejecting JSON codecs with exact range

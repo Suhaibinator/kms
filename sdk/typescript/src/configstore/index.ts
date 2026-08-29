@@ -1,3 +1,4 @@
+export { canonicalParameterValue, parameterHash } from "./canonical.js";
 export { cloneConfig } from "./clone.js";
 export {
   type BigIntCodecOptions,
@@ -32,19 +33,27 @@ export {
   parseDefaultsArtifact,
 } from "./defaults-artifact.js";
 export {
+  AppliedReport,
   CandidateError,
   CandidateRejectionReport,
-  DefaultMismatchError,
   DefaultMismatchReport,
+  type FieldChange,
   type FieldDifference,
   type MismatchPhase,
   type MismatchSeverity,
+  type Phase,
   REJECTION_CATEGORIES,
   type RejectionCategory,
   reject,
   rejectDecode,
 } from "./errors.js";
 export {
+  type ConsoleCallbacksOptions,
+  type ConsoleLogger,
+  consoleCallbacks,
+} from "./logging.js";
+export {
+  type Callbacks,
   ManagedConfigManager,
   type ManagedConfigOptions,
   type ManagedConfigStats,
@@ -60,3 +69,11 @@ export {
   ReleaseIdentity,
   type ReleaseIdentityInit,
 } from "./snapshot.js";
+export {
+  type VerifyClient,
+  type VerifyEntryResult,
+  type VerifyInput,
+  type VerifyOptions,
+  VerifyResult,
+  verifyDefaults,
+} from "./verify.js";

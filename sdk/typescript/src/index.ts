@@ -27,6 +27,7 @@ export {
   NoNamespaceError,
   normalizeError,
   NotInitializedError,
+  RateLimitedError,
   wrapError,
 } from "./errors.js";
 export type { KmsErrorCode, KmsErrorOptions } from "./errors.js";
@@ -108,6 +109,7 @@ export {
 export type {
   PreparedRelease,
   PrepareRelease,
+  ReleaseDivergence,
   ReleaseEntryKind,
   ReleaseEntryMetadataInit,
   ReleaseLoaderStats,
@@ -117,6 +119,14 @@ export type {
   ReleaseSnapshotInit,
   ReleaseState,
 } from "./releases/types.js";
+export { VERIFY_VERDICTS } from "./releases/verify.js";
+export type {
+  VerifyDefaultsEntry,
+  VerifyDefaultsVerdict,
+  VerifyReleaseDefaultsOptions,
+  VerifyReleaseDefaultsResult,
+  VerifyVerdict,
+} from "./releases/verify.js";
 
 export { newSecret, REDACTED, Secret } from "./secret.js";
 export type { SecretMetadata } from "./secret.js";

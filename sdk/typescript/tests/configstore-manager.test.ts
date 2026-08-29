@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest";
 import type { ClientReleaseLoaderOptions } from "../src/client.js";
 import { codecs, decodeGroup, field, group } from "../src/configstore/codecs.js";
-import {
-  type CandidateRejectionReport,
-  DefaultMismatchError,
-  type DefaultMismatchReport,
+import type {
+  AppliedReport,
+  CandidateRejectionReport,
+  DefaultMismatchReport,
 } from "../src/configstore/errors.js";
 import { startManagedConfig } from "../src/configstore/manager.js";
 import {
@@ -69,16 +69,21 @@ describe("ManagedConfigManager", () => {
     await manager.wait();
   });
 
-  it("returns a typed fatal startup mismatch and never publishes", async () => {
+  it("applies and reports startup drift, notifies onApplied, and acknowledges divergence", async () => {
     const release = makeRelease(1n, '{"hot":2,"restart":"a"}');
     const transport = new FakeReleaseTransport(release, 1n);
     let published = 0;
     let aborted = 0;
     const reports: DefaultMismatchReport[] = [];
+    const applied: AppliedReport[] = [];
+    const controller = new AbortController();
 
-    const start = startManagedConfig(
+    const manager = await startManagedConfig(
       managedClient(transport),
-      options((report) => reports.push(report)),
+      {
+        ...options((report) => reports.push(report)),
+        onApplied: (report) => applied.push(report),
+      },
       (snapshot) => {
         const config = decodeGroup(snapshot.parameter("settings")?.value() ?? "", runtimeCodec);
         return {
@@ -89,24 +94,43 @@ describe("ManagedConfigManager", () => {
             aborted += 1;
           },
           defaultDifferences: [{ path: "settings.hot", expected: 1, actual: config.hot }],
+          // Ignored for the initial generation: there is nothing to compare against.
+          changed: [{ path: "settings.hot", previous: 1, current: config.hot }],
+          groups: { settings: '{"hot":2,"restart":"a"}' },
         };
       },
+      controller.signal,
     );
 
-    await expect(start).rejects.toBeInstanceOf(DefaultMismatchError);
-    expect(published).toBe(0);
-    expect(aborted).toBe(1);
+    expect(published).toBe(1);
+    expect(aborted).toBe(0);
     expect(reports).toHaveLength(1);
-    expect(reports[0]).toMatchObject({ phase: "startup", severity: "fatal" });
+    expect(reports[0]).toMatchObject({ phase: "startup", severity: "error" });
+    expect(manager.status()).toMatchObject({ ready: true, defaultDivergent: true });
+    expect(applied).toHaveLength(1);
+    expect(applied[0]).toMatchObject({ phase: "startup", defaultDivergent: true });
+    expect(applied[0]?.release.version).toBe(1n);
+    expect(applied[0]?.changed()).toEqual([]);
+    expect(applied[0]?.groups()).toEqual({ settings: '{"hot":2,"restart":"a"}' });
+    await waitFor(() => appliedAcknowledgements(transport).length === 1);
+    expect(appliedAcknowledgements(transport)[0]).toMatchObject({
+      state: "applied",
+      appliedDivergent: true,
+      divergentFieldCount: 1,
+    });
     expect(transport.calls.filter((call) => call.startsWith("parameter:"))).toHaveLength(1);
+
+    controller.abort();
+    await expect(manager.wait()).resolves.toBeUndefined();
   });
 
-  it("admits bypassed startup drift, hot updates and restoration, but rejects restart changes", async () => {
+  it("admits startup drift, hot updates and restoration, but rejects restart changes", async () => {
     const release1 = makeRelease(1n, '{"hot":2,"restart":"a"}');
     const transport = new FakeReleaseTransport(release1, 1n);
     const controller = new AbortController();
     const mismatchReports: DefaultMismatchReport[] = [];
     const rejectionReports: CandidateRejectionReport[] = [];
+    const applied: AppliedReport[] = [];
     let active: RuntimeConfig | undefined;
     let preparedAgainst: RuntimeConfig | undefined;
     let aborts = 0;
@@ -115,7 +139,7 @@ describe("ManagedConfigManager", () => {
       managedClient(transport),
       {
         ...options((report) => mismatchReports.push(report)),
-        allowDefaultMismatch: true,
+        onApplied: (report) => applied.push(report),
         onCandidateRejected: (report) => rejectionReports.push(report),
       },
       (snapshot) => {
@@ -125,6 +149,10 @@ describe("ManagedConfigManager", () => {
           candidate.hot === 1 ? [] : [{ path: "settings.hot", expected: 1, actual: candidate.hot }];
         const restartRequiredFields =
           active && active.restart !== candidate.restart ? ["settings.restart"] : [];
+        const changed =
+          active && active.hot !== candidate.hot
+            ? [{ path: "settings.hot", previous: active.hot, current: candidate.hot }]
+            : [];
         return {
           publish: () => {
             active = candidate;
@@ -134,6 +162,7 @@ describe("ManagedConfigManager", () => {
           },
           defaultDifferences: differences,
           restartRequiredFields,
+          changed,
         };
       },
       controller.signal,
@@ -143,12 +172,18 @@ describe("ManagedConfigManager", () => {
     expect(manager.status()).toMatchObject({ ready: true, defaultDivergent: true });
     expect(mismatchReports).toHaveLength(1);
     expect(mismatchReports[0]).toMatchObject({ phase: "startup", severity: "error" });
+    expect(applied).toHaveLength(1);
+    expect(applied[0]).toMatchObject({ phase: "startup", defaultDivergent: true });
+    expect(applied[0]?.groups()).toEqual({});
 
     transport.activate(makeRelease(2n, '{"hot":3,"restart":"a"}'), 2n);
     await waitFor(() => manager.status().applied.version === 2n);
     expect(active).toEqual({ hot: 3, restart: "a" });
     expect(mismatchReports).toHaveLength(2);
     expect(mismatchReports[1]).toMatchObject({ phase: "runtime", severity: "error" });
+    expect(applied).toHaveLength(2);
+    expect(applied[1]).toMatchObject({ phase: "runtime", defaultDivergent: true });
+    expect(applied[1]?.changed()).toEqual([{ path: "settings.hot", previous: 2, current: 3 }]);
 
     transport.activate(makeRelease(3n, '{"hot":4,"restart":"b"}'), 3n);
     await waitFor(() => manager.status().lastRejectionCategory === "restart_required");
@@ -159,21 +194,104 @@ describe("ManagedConfigManager", () => {
     expect(rejectionReports).toHaveLength(1);
     expect(rejectionReports[0]?.category).toBe("restart_required");
     expect(rejectionReports[0]?.paths()).toEqual(["settings.restart"]);
+    expect(applied).toHaveLength(2);
 
     transport.activate(makeRelease(4n, '{"hot":1,"restart":"a"}'), 4n);
     await waitFor(() => manager.status().applied.version === 4n);
     expect(active).toEqual({ hot: 1, restart: "a" });
     expect(manager.status().defaultDivergent).toBe(false);
     expect(mismatchReports).toHaveLength(2);
+    expect(applied).toHaveLength(3);
+    expect(applied[2]).toMatchObject({ phase: "runtime", defaultDivergent: false });
+    expect(applied[2]?.changed()).toEqual([{ path: "settings.hot", previous: 3, current: 1 }]);
     expect(manager.stats()).toMatchObject({
       applied: 3n,
       defaultDivergent: false,
       appliedReleaseVersion: 4n,
       appliedActivationRevision: 4n,
     });
+    await waitFor(() => appliedAcknowledgements(transport).length === 3);
+    expect(
+      appliedAcknowledgements(transport).map((acknowledgement) => [
+        acknowledgement.version,
+        acknowledgement.appliedDivergent,
+        acknowledgement.divergentFieldCount,
+      ]),
+    ).toEqual([
+      [1n, true, 1],
+      [2n, true, 1],
+      [4n, false, 0],
+    ]);
 
     controller.abort();
     await expect(manager.wait()).resolves.toBeUndefined();
+  });
+
+  it("isolates throwing and asynchronous onApplied callbacks from publication", async () => {
+    const transport = new FakeReleaseTransport(makeRelease(1n, '{"hot":1,"restart":"a"}'), 1n);
+    const controller = new AbortController();
+    let calls = 0;
+    let active: RuntimeConfig | undefined;
+
+    const manager = await startManagedConfig(
+      managedClient(transport),
+      {
+        ...options(() => undefined),
+        onApplied: (() => {
+          calls += 1;
+          if (calls === 1) throw new Error("applied-callback-canary");
+          return Promise.reject(new Error("async-applied-canary"));
+        }) as unknown as (report: AppliedReport) => void,
+      },
+      (snapshot) => {
+        const candidate = decodeGroup(snapshot.parameter("settings")?.value() ?? "", runtimeCodec);
+        return {
+          publish: () => {
+            active = candidate;
+          },
+        };
+      },
+      controller.signal,
+    );
+
+    expect(calls).toBe(1);
+    expect(active).toEqual({ hot: 1, restart: "a" });
+    expect(manager.status()).toMatchObject({ ready: true, state: "applied" });
+
+    transport.activate(makeRelease(2n, '{"hot":2,"restart":"a"}'), 2n);
+    await waitFor(() => manager.status().applied.version === 2n);
+    await Promise.resolve();
+    expect(calls).toBe(2);
+    expect(active).toEqual({ hot: 2, restart: "a" });
+    expect(manager.status().lastRejectionCategory).toBeUndefined();
+
+    controller.abort();
+    await expect(manager.wait()).resolves.toBeUndefined();
+  });
+
+  it("rejects malformed changed fields and group documents as internal before publication", async () => {
+    for (const malformed of [
+      { changed: [{ path: 7 as unknown as string, previous: 1, current: 2 }] },
+      { groups: { settings: 42 as unknown as string } },
+      { groups: ["settings"] as unknown as Record<string, string> },
+    ]) {
+      const transport = new FakeReleaseTransport(makeRelease(1n, '{"hot":1,"restart":"a"}'), 1n);
+      let aborts = 0;
+      await expect(
+        startManagedConfig(
+          managedClient(transport),
+          options(() => undefined),
+          () => ({
+            publish: () => undefined,
+            abort: () => {
+              aborts += 1;
+            },
+            ...malformed,
+          }),
+        ),
+      ).rejects.toMatchObject({ category: "internal" });
+      expect(aborts).toBe(1);
+    }
   });
 
   it("enforces the manifest contract before parameter fetch and reports once", async () => {
@@ -217,7 +335,6 @@ describe("ManagedConfigManager", () => {
             callbacks += 1;
             throw new Error("callback-canary");
           }),
-          allowDefaultMismatch: true,
           onCandidateRejected: (report) => rejectionReports.push(report),
         },
         () => ({
@@ -288,7 +405,8 @@ describe("ManagedConfigManager", () => {
       () => ({
         publish: () => undefined,
         abort: (() => Promise.reject(new Error(sensitiveAbort))) as unknown as () => undefined,
-        defaultDifferences: [{ path: "settings.hot", expected: 1, actual: 2 }],
+        // A malformed restart field forces the manager onto its abort path.
+        restartRequiredFields: [7 as unknown as string],
       }),
     ).catch((reason: unknown) => reason);
     await Promise.resolve();
@@ -476,6 +594,14 @@ function parameterEntry(
 function pathOf(ref: ResourceRef): string {
   if (!ref.namespace) return "";
   return `/${ref.namespace.env}/${ref.namespace.app}/${ref.key}`;
+}
+
+function appliedAcknowledgements(transport: FakeReleaseTransport) {
+  return (transport.stream?.sent ?? [])
+    .flatMap((request) =>
+      request.request?.$case === "acknowledgement" ? [request.request.value] : [],
+    )
+    .filter((acknowledgement) => acknowledgement.state === "applied");
 }
 
 async function waitFor(predicate: () => boolean, timeoutMs = 2_000): Promise<void> {

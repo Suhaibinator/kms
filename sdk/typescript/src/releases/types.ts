@@ -285,12 +285,24 @@ export class ReleaseSnapshot extends ReleaseIdentity {
   }
 }
 
+/** Bounded divergence summary carried by an applied acknowledgement. */
+export interface ReleaseDivergence {
+  readonly divergent: boolean;
+  readonly fieldCount: number;
+}
+
 /** Application-owned resources prepared before an atomic, infallible swap. */
 export interface PreparedRelease {
   /** Must complete synchronously, return exactly undefined, and never throw. */
   commit(): undefined;
   /** Must complete synchronously, return exactly undefined, and never throw. */
   abort(): undefined;
+  /**
+   * Optional: whether the candidate differs from the application's
+   * source-owned defaults. When present, the applied acknowledgement carries
+   * the flag and field count; no field names or values are sent.
+   */
+  releaseDivergence?(): ReleaseDivergence;
 }
 
 export type PrepareRelease = (
