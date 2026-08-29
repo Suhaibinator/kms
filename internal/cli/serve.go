@@ -104,6 +104,11 @@ func (c *CLI) cmdServe(args []string) int {
 
 	svc := core.New(store, logger, Version)
 	svc.SetAuditEnabled(cfg.Audit.Enabled)
+	svc.SetVerifyDefaultsLimits(core.VerifyDefaultsLimits{
+		RequestsPerHour:       cfg.Server.VerifyDefaults.RequestsPerHour,
+		Burst:                 cfg.Server.VerifyDefaults.Burst,
+		MismatchBudgetPerHour: cfg.Server.VerifyDefaults.MismatchBudgetPerHour,
+	})
 
 	// Unseal before starting listeners. In interactive mode this blocks on the
 	// passphrase prompt; no network listener exists until unseal succeeds.

@@ -25,6 +25,8 @@ func TestMapError_SentinelCodes(t *testing.T) {
 		{"unauth", domain.Errorf(domain.ErrUnauthenticated, "bad creds"), codes.Unauthenticated, "unauthenticated"},
 		{"denied", domain.Errorf(domain.ErrPermissionDenied, "no"), codes.PermissionDenied, ""},
 		{"precond", domain.Errorf(domain.ErrFailedPrecondition, "state"), codes.FailedPrecondition, ""},
+		{"aborted", domain.Errorf(domain.ErrAborted, "cas"), codes.Aborted, ""},
+		{"exhausted", domain.Errorf(domain.ErrResourceExhausted, "budget"), codes.ResourceExhausted, ""},
 		{"notready", domain.Errorf(domain.ErrNotReady, "starting"), codes.Unavailable, "service not ready"},
 		{"decrypt", domain.ErrDecryptFailed, codes.Internal, "internal error"},
 		{"wrapped-decrypt", domain.Errorf(domain.ErrDecryptFailed, "secret /a v1"), codes.Internal, "internal error"},

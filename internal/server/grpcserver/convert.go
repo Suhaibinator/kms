@@ -333,6 +333,30 @@ func toProtoReleaseSubscriber(a domain.ReleaseAcknowledgement) *kmsv1.ReleaseSub
 	return &kmsv1.ReleaseSubscriberState{Namespace: nsRefToProto(a.Namespace), ReleaseName: a.ReleaseName, ClientName: a.ClientName, InstanceId: a.InstanceID, Identity: a.Identity, State: a.State, ReleaseVersion: a.ReleaseVersion, ActivationRevision: a.ActivationRevision, RejectionCategory: a.RejectionCategory, Diagnostic: a.Diagnostic, ClientTimestampUnixMs: unixMS(a.ClientTimestamp), ServerTimestampUnixMs: unixMS(a.ServerTimestamp), Connected: a.Connected, AppliedDivergent: a.AppliedDivergent, DivergentFieldCount: a.DivergentFieldCount}
 }
 
+// toProtoVerifyReleaseDefaults renders the value-free verification result.
+// Counts are clamped through uint32 conversion; the request is bounded to 256
+// entries so they can never overflow in practice.
+func toProtoVerifyReleaseDefaults(r domain.VerifyReleaseDefaultsResult) *kmsv1.VerifyReleaseDefaultsResponse {
+	entries := make([]*kmsv1.VerifyEntryVerdict, 0, len(r.Entries))
+	for _, e := range r.Entries {
+		entries = append(entries, &kmsv1.VerifyEntryVerdict{Alias: e.Alias, Verdict: e.Verdict})
+	}
+	return &kmsv1.VerifyReleaseDefaultsResponse{
+		Name:                        r.ReleaseName,
+		Version:                     r.ReleaseVersion,
+		ActivationRevision:          r.ActivationRevision,
+		SchemaMatches:               r.SchemaMatches,
+		Entries:                     entries,
+		MatchCount:                  uint32(r.Summary.Match),
+		DiffersCount:                uint32(r.Summary.Differs),
+		MissingInReleaseCount:       uint32(r.Summary.MissingInRelease),
+		UnknownAliasCount:           uint32(r.Summary.UnknownAlias),
+		SecretAliasCount:            uint32(r.Summary.SecretAlias),
+		UnsupportedContentTypeCount: uint32(r.Summary.UnsupportedContentType),
+		UnverifiedCount:             uint32(r.Summary.Unverified),
+	}
+}
+
 // --- watch events ----------------------------------------------------------
 
 // toSubscribeEvent converts a change-log entry into a wire event. Parameter

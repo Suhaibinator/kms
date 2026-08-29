@@ -117,6 +117,9 @@ type Service struct {
 	// listings. Raw storage cursors can contain hidden namespace names and must
 	// never be returned to delegated callers.
 	filteredPageKey [32]byte
+	// verifyLimits holds the per-identity request and mismatch budgets for
+	// VerifyReleaseDefaults (see release_verify.go). Process-local.
+	verifyLimits atomic.Pointer[verifyLimiters]
 }
 
 // New constructs a Service. The keyring is attached later via SetKeyring
@@ -129,6 +132,7 @@ func New(store storage.Store, logger *zap.Logger, version string) *Service {
 	}
 	s := &Service{store: store, log: logger, version: version, now: func() time.Time { return time.Now().UTC() }, filteredPageKey: mustNewFilteredPageKey(), releaseNotify: newReleaseSubscriberNotifier()}
 	s.auditEnabled.Store(true)
+	s.verifyLimits.Store(newVerifyLimiters(DefaultVerifyDefaultsLimits()))
 	var h Hub = noopHub{}
 	s.hub.Store(&h)
 	return s
