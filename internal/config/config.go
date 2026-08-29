@@ -41,6 +41,12 @@ type ServerConfig struct {
 
 // VerifyDefaultsConfig bounds the value-free VerifyReleaseDefaults oracle per
 // calling identity. RequestsPerHour and Burst form the request token bucket;
+// MinVerifyDefaultsMismatchBudget is the smallest accepted mismatch budget.
+// The budget doubles as the bucket capacity, so anything below one maximal
+// request (256 entries plus the schema bit) would make some valid requests
+// permanently refusable.
+const MinVerifyDefaultsMismatchBudget = 300
+
 // MismatchBudgetPerHour caps how many non-matching verdicts one identity may
 // obtain per hour, so an attacker cannot use the endpoint to test candidate
 // values at scale. All budgets are enforced per server instance.
@@ -244,8 +250,8 @@ func (c Config) Validate() error {
 	if c.Server.VerifyDefaults.Burst <= 0 {
 		return fmt.Errorf("server.verify_defaults.burst must be positive")
 	}
-	if c.Server.VerifyDefaults.MismatchBudgetPerHour <= 0 {
-		return fmt.Errorf("server.verify_defaults.mismatch_budget_per_hour must be positive")
+	if c.Server.VerifyDefaults.MismatchBudgetPerHour < MinVerifyDefaultsMismatchBudget {
+		return fmt.Errorf("server.verify_defaults.mismatch_budget_per_hour must be at least %d (one full 256-entry request plus a schema mismatch, with headroom)", MinVerifyDefaultsMismatchBudget)
 	}
 	if c.Security.MTLSEnabled && !c.Security.TLSEnabled {
 		return fmt.Errorf("security.mtls_enabled requires security.tls_enabled")

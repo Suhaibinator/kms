@@ -246,9 +246,12 @@ Namespaced policy operations are `configuration-release:create`, `read`,
 `configuration-release:*` is the category wildcard. The implicit
 home-namespace grant includes only release `read` and `watch`;
 `verify-defaults` always needs an explicit allow rule, even for the caller's
-own namespace. Release access never grants access to a referenced
-parameter or secret: create, validate, and loaders all perform independent
-resource authorization, including cross-namespace references.
+own namespace (existing `configuration-release:*` and `*` rules cover it —
+review them when upgrading). Release access never grants access to a
+referenced parameter or secret: create, validate, and loaders all perform
+independent resource authorization, including cross-namespace references,
+and `verify-defaults` denies the whole call unless the caller also holds
+the verify operation on every namespace the release pins parameters from.
 
 Current and previous releases protect their referenced parameter versions and
 secret versions. Parameter deletion, secret deletion, and secret-version

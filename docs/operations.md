@@ -31,7 +31,7 @@ server:
   verify_defaults:
     requests_per_hour: 60          # request bucket refill rate
     burst: 10                      # request bucket capacity
-    mismatch_budget_per_hour: 500  # non-match verdicts one identity may obtain per hour
+    mismatch_budget_per_hour: 500  # non-match verdicts one identity may obtain per hour (minimum 300)
 
 storage:
   sqlite_path: "/var/lib/parameter-store/kms.db"
@@ -511,9 +511,9 @@ failure, and `2` on usage errors. `unverified` (release aliases the artifact
 does not mention) is reported but does not fail the check.
 
 ```bash
-parameter-store release verify-defaults prod/gradethis \
+KMS_TOKEN="$VERIFY_TOKEN" parameter-store release verify-defaults prod/gradethis \
   --artifact ./gen/defaults.json \
-  --endpoint kms.example.com:8443 --token "$VERIFY_TOKEN"
+  --endpoint kms.example.com:8443
 # ALIAS        VERDICT
 # database     match
 # rate_limits  differs
@@ -522,11 +522,13 @@ parameter-store release verify-defaults prod/gradethis \
 ```
 
 The RPC behind it is budgeted per identity (`server.verify_defaults.*`,
-`RESOURCE_EXHAUSTED` / exit 1 when spent) and requires the
+`RESOURCE_EXHAUSTED` / exit 1 when spent; a refusal drains the identity's
+budgets, so do not retry in a loop) and requires the
 `configuration-release:verify-defaults` operation, which is **never** part of
 the implicit home-namespace grant. Mint a dedicated verify-only identity for
 CI **without** `--namespace` (an unbound token identity has no implicit
-access at all) and grant exactly that one operation on the target namespace.
+access at all) and grant exactly that one operation on the target namespace
+(and on any namespace whose parameters the release pins cross-namespace).
 The target namespace must allow `token` authentication for the identity to
 reach it:
 

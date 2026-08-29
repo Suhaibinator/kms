@@ -108,3 +108,25 @@ func TestBoundedMapDeniesWhenFull(t *testing.T) {
 		t.Fatal("idle buckets should have been swept to admit a new key")
 	}
 }
+
+func TestDrainEmptiesBucketUntilRefill(t *testing.T) {
+	l := New(60, 10)
+	now := time.Unix(1_000, 0)
+	l.SetNow(func() time.Time { return now })
+	if !l.Take("k", 3) {
+		t.Fatal("initial take should succeed")
+	}
+	l.Drain("k")
+	if l.Take("k", 1) {
+		t.Fatal("drained bucket must refuse even a single token")
+	}
+	now = now.Add(time.Second) // 60/min refills one token per second
+	if !l.Take("k", 1) {
+		t.Fatal("refill after drain should admit one token")
+	}
+	// Draining an unknown key creates an empty bucket rather than failing.
+	l.Drain("fresh")
+	if l.Take("fresh", 1) {
+		t.Fatal("drained fresh key must start empty")
+	}
+}

@@ -647,12 +647,31 @@ one-bit-per-alias oracle over parameter contents, so it is hardened as one:
   atomically with the number of non-`match` verdicts a response would
   contain. If the mismatch budget cannot cover the whole response the caller
   gets `RESOURCE_EXHAUSTED` (HTTP 429 `rate_limited`) and **no verdicts**, so
-  a guessing attack cannot obtain partial answers. Matching verdicts cost
+  a guessing attack cannot obtain partial answers. A refusal is not free:
+  it drains both of the identity's buckets, because "more than my remaining
+  budget differ" is itself an answer and would otherwise let a caller probe
+  around the threshold at no cost. A `schema_sha256` that does not match is
+  charged as one non-match for the same reason. Matching verdicts cost
   nothing, which keeps a healthy CI pipeline unthrottled while bounding what
   an attacker with a leaked verify-only credential can learn to roughly
-  `mismatch_budget_per_hour` bits per hour. Both buckets are in-memory and
+  `mismatch_budget_per_hour` bits per hour (plus at most one request's
+  worth of refill after each refusal). `mismatch_budget_per_hour` must be at
+  least 300 so one maximal request (256 entries plus the schema bit) is
+  always affordable from a full bucket. Both buckets are in-memory and
   process-local: each server instance enforces the budget independently and
   a restart resets it.
+- **Cross-namespace pins.** Release access never grants access to a
+  referenced parameter: when the active release pins a parameter from
+  another namespace, a non-admin caller must also hold
+  `configuration-release:verify-defaults` on *that* namespace, otherwise the
+  whole call is denied (audited as `authz.denial`) and no verdict is
+  returned. Grant the verify operation there rather than `parameter:read`;
+  it is the least privilege that still lets CI cover shared parameters.
+- **Upgrade note.** Existing allow rules for the category wildcard
+  `configuration-release:*` (or the global `*`) cover the new operation
+  automatically. Review identities holding those wildcards before upgrading
+  if they should not be able to run the hash oracle; the implicit
+  home-namespace grant is unaffected.
 - **Counts-only audit.** Every call (allowed, budget-refused, or failing on a
   missing application/release) writes `configuration_release.verify_defaults`
   with `decision` `allow`/`deny`/`error` and metadata limited to

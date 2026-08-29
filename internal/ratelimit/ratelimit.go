@@ -82,6 +82,17 @@ func (l *Limiter) Take(key string, n float64) bool {
 	return false
 }
 
+// Drain empties key's bucket so the next Take must wait for refill. It is
+// the penalty for a refused all-or-nothing Take: without it a refusal would
+// be a free answer to "is n larger than my remaining budget?".
+func (l *Limiter) Drain(key string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if b, ok := l.lookup(key); ok {
+		b.tokens = 0
+	}
+}
+
 // lookup returns the refilled bucket for key, creating it when absent. It
 // reports false when the map is full of actively-throttled keys and no bucket
 // can be admitted. Caller holds mu.

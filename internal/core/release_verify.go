@@ -16,9 +16,10 @@ import (
 const (
 	// maxVerifyEntries mirrors the release entry ceiling: a request can never
 	// usefully mention more aliases than a release can pin.
-	maxVerifyEntries      = maxReleaseEntries
-	maxVerifyProfileBytes = 64
-	sha256HexBytes        = 64
+	maxVerifyEntries          = maxReleaseEntries
+	maxVerifyProfileBytes     = 64
+	maxVerifyContentTypeBytes = 64
+	sha256HexBytes            = 64
 )
 
 // VerifyDefaultsLimits are the per-identity budgets applied to
@@ -168,7 +169,7 @@ func (s *Service) VerifyReleaseDefaults(ctx context.Context, pr Principal, in do
 	mentioned := make(map[string]struct{}, len(in.Entries))
 	for _, req := range in.Entries {
 		mentioned[req.Alias] = struct{}{}
-		verdict, err := s.verifyDefaultsEntry(ctx, req, releaseEntries, contract)
+		verdict, err := s.verifyDefaultsEntry(ctx, pr, in.Namespace, req, releaseEntries, contract)
 		if err != nil {
 			return domain.VerifyReleaseDefaultsResult{}, err
 		}
@@ -203,7 +204,17 @@ func (s *Service) VerifyReleaseDefaults(ctx context.Context, pr Principal, in do
 	// (or the release shape). Charge them against the identity's mismatch
 	// budget atomically: either the whole response is affordable or the caller
 	// learns nothing beyond "budget exhausted".
-	if nonMatch := len(in.Entries) - summary.Match; nonMatch > 0 && !limits.mismatches.Take(identity, float64(nonMatch)) {
+	// A schema mismatch is a bit about the pinned schema and is charged too.
+	nonMatch := len(in.Entries) - summary.Match
+	if in.SchemaSHA256 != "" && !schemaMatches {
+		nonMatch++
+	}
+	if nonMatch > 0 && !limits.mismatches.Take(identity, float64(nonMatch)) {
+		// A refusal is itself an answer ("more than my remaining budget
+		// differ"), so it must not be free: empty both buckets so the caller
+		// can neither retry immediately nor probe around the threshold.
+		limits.mismatches.Drain(identity)
+		limits.requests.Drain(identity)
 		counts.limited = true
 		s.auditVerifyDefaults(ctx, pr, auditRef, namespace.ID, release.Version, "deny", counts)
 		return domain.VerifyReleaseDefaultsResult{}, domain.Errorf(domain.ErrResourceExhausted, "verify-defaults mismatch budget exhausted for identity")
@@ -221,7 +232,7 @@ func (s *Service) VerifyReleaseDefaults(ctx context.Context, pr Principal, in do
 
 // verifyDefaultsEntry produces the verdict for one requested alias. It reads
 // parameters only; a secret alias is answered before any storage access.
-func (s *Service) verifyDefaultsEntry(ctx context.Context, req domain.VerifyDefaultsEntry, releaseEntries map[string]domain.ConfigurationReleaseEntry, contract map[string]struct{}) (string, error) {
+func (s *Service) verifyDefaultsEntry(ctx context.Context, pr Principal, releaseNS domain.NamespaceRef, req domain.VerifyDefaultsEntry, releaseEntries map[string]domain.ConfigurationReleaseEntry, contract map[string]struct{}) (string, error) {
 	entry, ok := releaseEntries[req.Alias]
 	if !ok {
 		if _, inContract := contract[req.Alias]; inContract {
@@ -231,6 +242,15 @@ func (s *Service) verifyDefaultsEntry(ctx context.Context, req domain.VerifyDefa
 	}
 	if entry.Kind != domain.ReleaseEntryParameter {
 		return domain.VerifyVerdictSecretAlias, nil
+	}
+	// Release access never grants access to a referenced parameter. A pin
+	// from another namespace is only probed when the caller also holds the
+	// verify operation there; otherwise the whole call is denied (and audited
+	// by authorize) so the verdict set stays closed.
+	if entry.Ref.NS != releaseNS && !pr.IsAdmin() {
+		if _, _, err := s.authorize(ctx, pr, domain.OpConfigurationReleaseVerifyDefaults, domain.ResourceParameter, entry.Ref); err != nil {
+			return "", err
+		}
 	}
 	entryCtx := ctx
 	if entry.ResourceNamespaceID > 0 {
@@ -295,6 +315,9 @@ func validateVerifyDefaultsInput(in domain.VerifyReleaseDefaultsInput) error {
 			return domain.Errorf(domain.ErrInvalidArgument, "duplicate verify alias %q", entry.Alias)
 		}
 		seen[entry.Alias] = struct{}{}
+		if len(entry.ContentType) > maxVerifyContentTypeBytes {
+			return domain.Errorf(domain.ErrInvalidArgument, "verify entry %q content type exceeds %d bytes", entry.Alias, maxVerifyContentTypeBytes)
+		}
 		if !isLowerHexSHA256(entry.SHA256) {
 			return domain.Errorf(domain.ErrInvalidArgument, "verify entry %q sha256 must be 64 lowercase hex characters", entry.Alias)
 		}

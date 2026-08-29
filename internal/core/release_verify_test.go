@@ -390,27 +390,58 @@ func TestVerifyReleaseDefaultsBudgets(t *testing.T) {
 		if len(out.Entries) != 0 || out.ReleaseName != "" {
 			t.Fatalf("limited response leaked verdicts: %+v", out)
 		}
-		// A single remaining token still serves a one-mismatch request, and
-		// matches never cost anything.
+		// A refusal is not free: it drains both buckets, so the one token that
+		// was left no longer serves a one-mismatch request and even an
+		// all-match request is refused until the request bucket refills.
 		one := domain.VerifyReleaseDefaultsInput{Namespace: f.ns, Entries: []domain.VerifyDefaultsEntry{
 			{Alias: "text_cfg", ContentType: "string", SHA256: mustHash(t, "string", "hello")},
 			{Alias: "num_cfg", ContentType: "integer", SHA256: wrong},
 		}}
-		if out, err := f.svc.VerifyReleaseDefaults(ctx, f.admin, one); err != nil || out.Summary.Match != 1 || out.Summary.Differs != 1 {
-			t.Fatalf("one-mismatch: out=%+v err=%v", out, err)
+		if _, err := f.svc.VerifyReleaseDefaults(ctx, f.admin, one); !errors.Is(err, domain.ErrResourceExhausted) {
+			t.Fatalf("after a refusal the leftover token must be gone: err = %v", err)
 		}
 		allMatch := domain.VerifyReleaseDefaultsInput{Namespace: f.ns, Entries: []domain.VerifyDefaultsEntry{
 			{Alias: "text_cfg", ContentType: "string", SHA256: mustHash(t, "string", "hello")},
 		}}
+		if _, err := f.svc.VerifyReleaseDefaults(ctx, f.admin, allMatch); !errors.Is(err, domain.ErrResourceExhausted) {
+			t.Fatalf("after a refusal the request bucket must be drained too: err = %v", err)
+		}
+
+		// With fresh buckets: a single remaining token still serves a
+		// one-mismatch request, and matches never cost anything.
+		f.svc.SetVerifyDefaultsLimits(VerifyDefaultsLimits{RequestsPerHour: 1000, Burst: 1000, MismatchBudgetPerHour: 1})
+		if out, err := f.svc.VerifyReleaseDefaults(ctx, f.admin, one); err != nil || out.Summary.Match != 1 || out.Summary.Differs != 1 {
+			t.Fatalf("one-mismatch: out=%+v err=%v", out, err)
+		}
 		if out, err := f.svc.VerifyReleaseDefaults(ctx, f.admin, allMatch); err != nil || out.Summary.Match != 1 {
 			t.Fatalf("all-match with empty mismatch budget: out=%+v err=%v", out, err)
 		}
 		// Budgets are per identity: another identity has its own bucket.
+		f.svc.SetVerifyDefaultsLimits(VerifyDefaultsLimits{RequestsPerHour: 1000, Burst: 1000, MismatchBudgetPerHour: 3})
+		if _, err := f.svc.VerifyReleaseDefaults(ctx, f.admin, in); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := f.svc.VerifyReleaseDefaults(ctx, f.admin, in); !errors.Is(err, domain.ErrResourceExhausted) {
+			t.Fatalf("admin refusal err = %v", err)
+		}
 		if _, err := f.st.CreatePolicy(ctx, domain.Policy{Name: "ci-verify", Subject: "ci", Allow: []domain.PolicyRule{{Operation: domain.OpConfigurationReleaseVerifyDefaults, Env: "*", App: "*"}}}); err != nil {
 			t.Fatal(err)
 		}
 		if out, err := f.svc.VerifyReleaseDefaults(ctx, clientPrincipal("ci"), in); err != nil || out.Summary.Differs != 2 {
 			t.Fatalf("other identity: out=%+v err=%v", out, err)
+		}
+	})
+
+	t.Run("schema mismatch is charged", func(t *testing.T) {
+		f.svc.SetVerifyDefaultsLimits(VerifyDefaultsLimits{RequestsPerHour: 1000, Burst: 1000, MismatchBudgetPerHour: 1})
+		allMatchWrongSchema := domain.VerifyReleaseDefaultsInput{Namespace: f.ns, SchemaSHA256: strings.Repeat("2", 64), Entries: []domain.VerifyDefaultsEntry{
+			{Alias: "text_cfg", ContentType: "string", SHA256: mustHash(t, "string", "hello")},
+		}}
+		if out, err := f.svc.VerifyReleaseDefaults(ctx, f.admin, allMatchWrongSchema); err != nil || out.SchemaMatches {
+			t.Fatalf("first schema probe: out=%+v err=%v", out, err)
+		}
+		if _, err := f.svc.VerifyReleaseDefaults(ctx, f.admin, allMatchWrongSchema); !errors.Is(err, domain.ErrResourceExhausted) {
+			t.Fatalf("second schema probe must be refused: err = %v", err)
 		}
 	})
 
@@ -437,8 +468,11 @@ func TestVerifyReleaseDefaultsBudgets(t *testing.T) {
 			t.Fatalf("limited audit decision = %q, want deny: %+v", ev.Decision, ev)
 		}
 	}
-	if limited != 2 {
-		t.Fatalf("limited audit events = %d, want 2", limited)
+	// Refusals audited above: the second call, the drained one-mismatch and
+	// all-match calls, the admin refusal in the per-identity block, the
+	// second schema probe, and the request-budget refusal.
+	if limited != 6 {
+		t.Fatalf("limited audit events = %d, want 6", limited)
 	}
 }
 
@@ -458,18 +492,65 @@ func TestVerifyDefaultsEntryUnsupportedContentType(t *testing.T) {
 	entries := map[string]domain.ConfigurationReleaseEntry{
 		"broken": {Alias: "broken", Kind: domain.ReleaseEntryParameter, Ref: ref, Version: 1, ContentType: "json", ParameterDigest: sha256Hex([]byte(raw))},
 	}
-	verdict, err := s.verifyDefaultsEntry(ctx, domain.VerifyDefaultsEntry{Alias: "broken", ContentType: "json", SHA256: strings.Repeat("0", 64)}, entries, nil)
+	verdict, err := s.verifyDefaultsEntry(ctx, adminPrincipal(), ns, domain.VerifyDefaultsEntry{Alias: "broken", ContentType: "json", SHA256: strings.Repeat("0", 64)}, entries, nil)
 	if err != nil || verdict != domain.VerifyVerdictUnsupportedContentType {
 		t.Fatalf("verdict = %q err=%v", verdict, err)
 	}
 	// A pin whose stored bytes drifted from the release digest is differs, and
 	// a pin whose parameter vanished is missing_in_release.
 	entries["broken"] = domain.ConfigurationReleaseEntry{Alias: "broken", Kind: domain.ReleaseEntryParameter, Ref: ref, Version: 1, ContentType: "json", ParameterDigest: "stale"}
-	if verdict, err := s.verifyDefaultsEntry(ctx, domain.VerifyDefaultsEntry{Alias: "broken", ContentType: "json", SHA256: strings.Repeat("0", 64)}, entries, nil); err != nil || verdict != domain.VerifyVerdictDiffers {
+	if verdict, err := s.verifyDefaultsEntry(ctx, adminPrincipal(), ns, domain.VerifyDefaultsEntry{Alias: "broken", ContentType: "json", SHA256: strings.Repeat("0", 64)}, entries, nil); err != nil || verdict != domain.VerifyVerdictDiffers {
 		t.Fatalf("digest drift verdict = %q err=%v", verdict, err)
 	}
 	entries["gone"] = domain.ConfigurationReleaseEntry{Alias: "gone", Kind: domain.ReleaseEntryParameter, Ref: domain.Ref{NS: ns, Key: "gone"}, Version: 1, ContentType: "string"}
-	if verdict, err := s.verifyDefaultsEntry(ctx, domain.VerifyDefaultsEntry{Alias: "gone", ContentType: "string", SHA256: strings.Repeat("0", 64)}, entries, nil); err != nil || verdict != domain.VerifyVerdictMissingInRelease {
+	if verdict, err := s.verifyDefaultsEntry(ctx, adminPrincipal(), ns, domain.VerifyDefaultsEntry{Alias: "gone", ContentType: "string", SHA256: strings.Repeat("0", 64)}, entries, nil); err != nil || verdict != domain.VerifyVerdictMissingInRelease {
 		t.Fatalf("vanished parameter verdict = %q err=%v", verdict, err)
+	}
+}
+
+func TestVerifyReleaseDefaultsCrossNamespaceRequiresVerifyGrantThere(t *testing.T) {
+	f := newVerifyFixture(t)
+	ctx := context.Background()
+	shared := domain.NamespaceRef{Env: "shared", App: "platform"}
+	if _, err := f.st.CreateNamespace(ctx, domain.Namespace{NamespaceRef: shared, AllowedAuthMethods: []domain.AuthMethod{domain.AuthMethodToken}, CreatedBy: "admin"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := f.st.PutParameter(ctx, domain.Ref{NS: shared, Key: "flags"}, `{"x":true}`, "json", "{}", "admin"); err != nil {
+		t.Fatal(err)
+	}
+	other := domain.NamespaceRef{Env: "stage", App: "xapp"}
+	if _, err := f.st.CreateNamespace(ctx, domain.Namespace{NamespaceRef: other, AllowedAuthMethods: []domain.AuthMethod{domain.AuthMethodToken}, CreatedBy: "admin"}); err != nil {
+		t.Fatal(err)
+	}
+	rel, err := f.svc.CreateConfigurationRelease(ctx, f.admin, domain.CreateConfigurationReleaseInput{
+		Namespace: other, Name: "runtime",
+		Entries: []domain.ReleaseEntrySelector{{Alias: "flags", Kind: domain.ReleaseEntryParameter, Ref: domain.Ref{NS: shared, Key: "flags"}}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := f.svc.ActivateConfigurationRelease(ctx, f.admin, other, "runtime", rel.Version, nil); err != nil {
+		t.Fatal(err)
+	}
+	in := domain.VerifyReleaseDefaultsInput{
+		Namespace: other,
+		Entries:   []domain.VerifyDefaultsEntry{{Alias: "flags", ContentType: "json", SHA256: mustHash(t, "json", `{"x":true}`)}},
+	}
+	// Verify grant on the release namespace only: the cross-namespace pin must
+	// not be probed, and the whole call is denied without any verdict.
+	if _, err := f.st.CreatePolicy(ctx, domain.Policy{Name: "ci-stage", Subject: "ci", Allow: []domain.PolicyRule{{Operation: domain.OpConfigurationReleaseVerifyDefaults, Env: "stage", App: "xapp"}}}); err != nil {
+		t.Fatal(err)
+	}
+	out, err := f.svc.VerifyReleaseDefaults(ctx, clientPrincipal("ci"), in)
+	if !errors.Is(err, domain.ErrPermissionDenied) || len(out.Entries) != 0 {
+		t.Fatalf("cross-namespace probe without a grant there: out=%+v err=%v", out, err)
+	}
+	// Granting verify on the pinned namespace (not parameter:read) is enough.
+	if _, err := f.st.CreatePolicy(ctx, domain.Policy{Name: "ci-shared", Subject: "ci", Allow: []domain.PolicyRule{{Operation: domain.OpConfigurationReleaseVerifyDefaults, Env: "shared", App: "platform"}}}); err != nil {
+		t.Fatal(err)
+	}
+	out, err = f.svc.VerifyReleaseDefaults(ctx, clientPrincipal("ci"), in)
+	if err != nil || out.Summary.Match != 1 {
+		t.Fatalf("cross-namespace probe with a grant there: out=%+v err=%v", out, err)
 	}
 }
