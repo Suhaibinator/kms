@@ -1291,3 +1291,153 @@ func TestReleaseLoaderRejectsReturnedResourceReferenceMismatch(t *testing.T) {
 		})
 	}
 }
+
+// divergentPreparedRelease is a PreparedRelease that also reports divergence
+// from source defaults, as configstore's managed candidate does.
+type divergentPreparedRelease struct {
+	testPreparedRelease
+	divergent bool
+	count     int
+	panics    bool
+}
+
+func (p *divergentPreparedRelease) ReleaseDivergence() (bool, int) {
+	if p.panics {
+		panic("divergence reporter panic")
+	}
+	return p.divergent, p.count
+}
+
+func collectLifecycleAcks(t *testing.T, server *releaseLoaderServer) map[string]*kmsv1.ReleaseAcknowledgement {
+	t.Helper()
+	acks := make(map[string]*kmsv1.ReleaseAcknowledgement)
+	deadline := time.After(3 * time.Second)
+	for len(acks) < 3 {
+		select {
+		case ack := <-server.acks:
+			acks[ack.GetState()] = ack
+		case <-deadline:
+			t.Fatalf("acks = %v, want received/prepared/applied", acks)
+		}
+	}
+	return acks
+}
+
+func newDivergenceTestLoader(t *testing.T, version uint64, revision uint64) (*releaseLoaderServer, *ReleaseLoader) {
+	t.Helper()
+	server := newReleaseLoaderServer()
+	release := testRelease(version, `{"enabled":true}`)
+	server.setActive(release, revision)
+	server.parameters["settings"] = &kmsv1.Parameter{Ref: testResource("settings"), Value: `{"enabled":true}`, ContentType: "json", Version: version}
+	server.secrets["password"] = &kmsv1.GetSecretResponse{Ref: testResource("password"), Version: version, Value: []byte("secret"), ContentType: "text/plain"}
+	client := newReleaseTestClient(t, server)
+	loader, err := NewReleaseLoader(client, ReleaseLoaderConfig{
+		Name:                "runtime",
+		SecretTokenProvider: func(string, string) (string, bool) { return "token", true },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return server, loader
+}
+
+func TestReleaseLoaderAppliedAckCarriesDivergenceFromReporter(t *testing.T) {
+	tests := []struct {
+		name      string
+		prepared  *divergentPreparedRelease
+		wantFlag  bool
+		wantCount uint32
+	}{
+		{name: "divergent", prepared: &divergentPreparedRelease{divergent: true, count: 3}, wantFlag: true, wantCount: 3},
+		{name: "divergent count is capped", prepared: &divergentPreparedRelease{divergent: true, count: 1 << 20}, wantFlag: true, wantCount: 65535},
+		{name: "divergent negative count", prepared: &divergentPreparedRelease{divergent: true, count: -1}, wantFlag: true, wantCount: 0},
+		{name: "not divergent ignores count", prepared: &divergentPreparedRelease{divergent: false, count: 9}},
+		{name: "panicking reporter is not divergent", prepared: &divergentPreparedRelease{divergent: true, count: 2, panics: true}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server, loader := newDivergenceTestLoader(t, 3, 30)
+			tt.prepared.done = make(chan struct{})
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			runErr := make(chan error, 1)
+			go func() {
+				runErr <- loader.Run(ctx, func(context.Context, ReleaseSnapshot) (PreparedRelease, error) {
+					return tt.prepared, nil
+				})
+			}()
+			select {
+			case <-tt.prepared.done:
+			case <-time.After(3 * time.Second):
+				t.Fatal("timed out waiting for release commit")
+			}
+			acks := collectLifecycleAcks(t, server)
+			for _, state := range []string{ReleaseStateReceived, ReleaseStatePrepared} {
+				if acks[state].GetAppliedDivergent() || acks[state].GetDivergentFieldCount() != 0 {
+					t.Fatalf("%s ack carried divergence: %+v", state, acks[state])
+				}
+			}
+			applied := acks[ReleaseStateApplied]
+			if applied.GetAppliedDivergent() != tt.wantFlag || applied.GetDivergentFieldCount() != tt.wantCount {
+				t.Fatalf("applied ack divergence = (%v, %d), want (%v, %d)",
+					applied.GetAppliedDivergent(), applied.GetDivergentFieldCount(), tt.wantFlag, tt.wantCount)
+			}
+			if applied.GetDiagnostic() != "" || applied.GetActivationRevision() != 30 {
+				t.Fatalf("applied ack = %+v", applied)
+			}
+			if status := loader.Status(); status.AppliedVersion != 3 || status.LastFailureCategory != "" {
+				t.Fatalf("reporter changed loader outcome: %+v", status)
+			}
+			cancel()
+			select {
+			case <-runErr:
+			case <-time.After(3 * time.Second):
+				t.Fatal("loader did not stop")
+			}
+		})
+	}
+}
+
+func TestReleaseLoaderPlainPreparedReleaseAckHasNoDivergence(t *testing.T) {
+	server, loader := newDivergenceTestLoader(t, 4, 40)
+	prepared := &testPreparedRelease{done: make(chan struct{})}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() {
+		_ = loader.Run(ctx, func(context.Context, ReleaseSnapshot) (PreparedRelease, error) { return prepared, nil })
+	}()
+	select {
+	case <-prepared.done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for release commit")
+	}
+	acks := collectLifecycleAcks(t, server)
+	for state, ack := range acks {
+		if ack.GetAppliedDivergent() || ack.GetDivergentFieldCount() != 0 {
+			t.Fatalf("%s ack carried divergence without a reporter: %+v", state, ack)
+		}
+	}
+}
+
+func TestReleaseLoaderRejectedAckNeverCarriesDivergence(t *testing.T) {
+	server, loader := newDivergenceTestLoader(t, 5, 50)
+	err := loader.Run(context.Background(), func(context.Context, ReleaseSnapshot) (PreparedRelease, error) {
+		return nil, &testReleaseRejectionError{category: ReleaseRejectDefaultMismatch, detail: "detail"}
+	})
+	if err == nil {
+		t.Fatal("Run unexpectedly succeeded")
+	}
+	deadline := time.After(3 * time.Second)
+	sawRejected := false
+	for !sawRejected {
+		select {
+		case ack := <-server.acks:
+			if ack.GetAppliedDivergent() || ack.GetDivergentFieldCount() != 0 {
+				t.Fatalf("%s ack carried divergence: %+v", ack.GetState(), ack)
+			}
+			sawRejected = ack.GetState() == ReleaseStateRejected
+		case <-deadline:
+			t.Fatal("timed out waiting for rejected ack")
+		}
+	}
+}
