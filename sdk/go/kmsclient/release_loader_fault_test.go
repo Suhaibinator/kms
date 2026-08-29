@@ -10,7 +10,7 @@ import (
 
 func TestFaultRunCancellationDuringPreparationAbortsLateCandidateAndKeepsLKG(t *testing.T) {
 	server := newReleaseLoaderServer()
-	firstRelease := testRelease(1, 1, "one")
+	firstRelease := testRelease(1, "one")
 	server.setActive(firstRelease, 1)
 	server.parameters["settings"] = &kmsv1.Parameter{Ref: testResource("settings"), Value: "one", ContentType: "json", Version: 1}
 	server.secrets["password"] = &kmsv1.GetSecretResponse{Ref: testResource("password"), Version: 1, Value: []byte("secret-one"), ContentType: "text/plain"}
@@ -60,7 +60,7 @@ func TestFaultRunCancellationDuringPreparationAbortsLateCandidateAndKeepsLKG(t *
 		t.Fatal("release watch did not register")
 	}
 
-	secondRelease := testRelease(2, 2, "two")
+	secondRelease := testRelease(2, "two")
 	server.mu.Lock()
 	server.parameters["settings"] = &kmsv1.Parameter{Ref: testResource("settings"), Value: "two", ContentType: "json", Version: 2}
 	server.secrets["password"] = &kmsv1.GetSecretResponse{Ref: testResource("password"), Version: 2, Value: []byte("secret-two"), ContentType: "text/plain"}

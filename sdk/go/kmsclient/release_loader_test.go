@@ -135,7 +135,7 @@ func (s *releaseLoaderServer) setActive(release *kmsv1.ConfigurationRelease, rev
 	s.mu.Unlock()
 }
 
-func testRelease(version, revision uint64, parameterValue string) *kmsv1.ConfigurationRelease {
+func testRelease(version uint64, parameterValue string) *kmsv1.ConfigurationRelease {
 	digest := sha256.Sum256([]byte(parameterValue))
 	release := &kmsv1.ConfigurationRelease{
 		Namespace: &kmsv1.NamespaceRef{Env: "prod", App: "app"},
@@ -315,7 +315,7 @@ func (e *testReleaseRejectionError) Error() string { return e.detail }
 func (e *testReleaseRejectionError) ReleaseRejectionCategory() string { return e.category }
 
 func TestShouldQueueReleaseCandidateRetriesOnlyFromReconciliation(t *testing.T) {
-	release := testRelease(2, 2, "two")
+	release := testRelease(2, "two")
 	latest := releaseCandidate{release: release, revision: 2, source: releaseCandidateSourceActivation}
 
 	tests := []struct {
@@ -350,14 +350,14 @@ func TestShouldQueueReleaseCandidateRetriesOnlyFromReconciliation(t *testing.T) 
 		},
 		{
 			name:        "stale reconciliation",
-			candidate:   releaseCandidate{release: testRelease(1, 1, "one"), revision: 1, source: releaseCandidateSourceReconciliation},
+			candidate:   releaseCandidate{release: testRelease(1, "one"), revision: 1, source: releaseCandidateSourceReconciliation},
 			haveLatest:  true,
 			retryLatest: true,
 			want:        false,
 		},
 		{
 			name:       "new activation",
-			candidate:  releaseCandidate{release: testRelease(3, 3, "three"), revision: 3, source: releaseCandidateSourceActivation},
+			candidate:  releaseCandidate{release: testRelease(3, "three"), revision: 3, source: releaseCandidateSourceActivation},
 			haveLatest: true,
 			want:       true,
 		},
@@ -373,7 +373,7 @@ func TestShouldQueueReleaseCandidateRetriesOnlyFromReconciliation(t *testing.T) 
 
 func TestReleaseLoaderResolvesRedactsCommitsAndAcknowledges(t *testing.T) {
 	server := newReleaseLoaderServer()
-	release := testRelease(7, 42, `{"enabled":true}`)
+	release := testRelease(7, `{"enabled":true}`)
 	server.setActive(release, 42)
 	server.parameters["settings"] = &kmsv1.Parameter{Ref: testResource("settings"), Value: `{"enabled":true}`, ContentType: "json", Version: 7}
 	server.secrets["password"] = &kmsv1.GetSecretResponse{Ref: testResource("password"), Version: 7, Value: []byte("very-secret"), ContentType: "text/plain"}
@@ -488,7 +488,7 @@ func TestReleaseLoaderResolvesRedactsCommitsAndAcknowledges(t *testing.T) {
 
 func TestReleaseLoaderStartupRejectionWaitsForRejectedAcknowledgementSend(t *testing.T) {
 	server := newReleaseLoaderServer()
-	release := testRelease(7, 42, `{"enabled":true}`)
+	release := testRelease(7, `{"enabled":true}`)
 	server.setActive(release, 42)
 	server.parameters["settings"] = &kmsv1.Parameter{Ref: testResource("settings"), Value: `{"enabled":true}`, ContentType: "json", Version: 7}
 	server.secrets["password"] = &kmsv1.GetSecretResponse{Ref: testResource("password"), Version: 7, Value: []byte("secret"), ContentType: "text/plain"}
@@ -703,7 +703,7 @@ func TestReleaseLoaderDoesNotLoseNewerAcknowledgementForSameCandidate(t *testing
 
 func TestReleaseLoaderRetriesStillActiveCandidateOnReconciliation(t *testing.T) {
 	server := newReleaseLoaderServer()
-	firstRelease := testRelease(1, 1, "one")
+	firstRelease := testRelease(1, "one")
 	server.setActive(firstRelease, 1)
 	server.parameters["settings"] = &kmsv1.Parameter{Ref: testResource("settings"), Value: "one", ContentType: "json", Version: 1}
 	server.secrets["password"] = &kmsv1.GetSecretResponse{Ref: testResource("password"), Version: 1, Value: []byte("secret-one"), ContentType: "text/plain"}
@@ -768,7 +768,7 @@ func TestReleaseLoaderRetriesStillActiveCandidateOnReconciliation(t *testing.T) 
 		t.Fatal("release watch did not register")
 	}
 
-	secondRelease := testRelease(2, 2, "two")
+	secondRelease := testRelease(2, "two")
 	server.mu.Lock()
 	server.parameters["settings"] = &kmsv1.Parameter{Ref: testResource("settings"), Value: "two", ContentType: "json", Version: 2}
 	server.secrets["password"] = &kmsv1.GetSecretResponse{Ref: testResource("password"), Version: 2, Value: []byte("secret-two"), ContentType: "text/plain"}
@@ -824,7 +824,7 @@ func TestReleaseLoaderRetriesStillActiveCandidateOnReconciliation(t *testing.T) 
 
 func TestReleaseLoaderValidatesImmutableManifestBeforeResolution(t *testing.T) {
 	server := newReleaseLoaderServer()
-	release := testRelease(8, 43, `{"enabled":true}`)
+	release := testRelease(8, `{"enabled":true}`)
 	release.SchemaId = "app/runtime"
 	release.SchemaVersion = 3
 	release.MetadataJson = `{"owner":"config"}`
@@ -910,7 +910,7 @@ func TestReleaseLoaderValidatesImmutableManifestBeforeResolution(t *testing.T) {
 
 func TestReleaseLoaderChecksBasicEntriesBeforeManifestValidator(t *testing.T) {
 	server := newReleaseLoaderServer()
-	release := testRelease(9, 44, "settings")
+	release := testRelease(9, "settings")
 	release.Entries[1].Kind = "unsupported"
 	release.Digest, _ = deterministicReleaseDigest(release)
 	server.setActive(release, 44)
@@ -948,7 +948,7 @@ func TestReleaseLoaderChecksBasicEntriesBeforeManifestValidator(t *testing.T) {
 
 func TestReleaseLoaderClassifiedManifestFailurePreventsResolutionAndRedactsCause(t *testing.T) {
 	server := newReleaseLoaderServer()
-	release := testRelease(9, 44, "settings")
+	release := testRelease(9, "settings")
 	server.setActive(release, 44)
 	client := newReleaseTestClient(t, server)
 	classified := &testReleaseRejectionError{
@@ -1023,7 +1023,7 @@ func TestReleaseLoaderClassifiesOnlyAllowedPreparationErrors(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			server := newReleaseLoaderServer()
-			release := testRelease(10, 45, "settings")
+			release := testRelease(10, "settings")
 			server.setActive(release, 45)
 			server.parameters["settings"] = &kmsv1.Parameter{Ref: testResource("settings"), Value: "settings", ContentType: "json", Version: 10}
 			server.secrets["password"] = &kmsv1.GetSecretResponse{Ref: testResource("password"), Version: 10, Value: []byte("secret"), ContentType: "text/plain"}
@@ -1059,7 +1059,7 @@ func TestReleaseLoaderClassifiesOnlyAllowedPreparationErrors(t *testing.T) {
 
 func TestReleaseLoaderAbortsSupersededPreparedCandidateExactlyOnce(t *testing.T) {
 	server := newReleaseLoaderServer()
-	firstRelease := testRelease(1, 1, "one")
+	firstRelease := testRelease(1, "one")
 	server.setActive(firstRelease, 1)
 	server.parameters["settings"] = &kmsv1.Parameter{Ref: testResource("settings"), Value: "one", ContentType: "json", Version: 1}
 	server.secrets["password"] = &kmsv1.GetSecretResponse{Ref: testResource("password"), Version: 1, Value: []byte("secret-one"), ContentType: "text/plain"}
@@ -1093,7 +1093,7 @@ func TestReleaseLoaderAbortsSupersededPreparedCandidateExactlyOnce(t *testing.T)
 	case <-time.After(2 * time.Second):
 		t.Fatal("release watch did not register")
 	}
-	secondRelease := testRelease(2, 2, "two")
+	secondRelease := testRelease(2, "two")
 	server.mu.Lock()
 	server.parameters["settings"] = &kmsv1.Parameter{Ref: testResource("settings"), Value: "two", ContentType: "json", Version: 2}
 	server.secrets["password"] = &kmsv1.GetSecretResponse{Ref: testResource("password"), Version: 2, Value: []byte("secret-two"), ContentType: "text/plain"}
@@ -1122,7 +1122,7 @@ func TestReleaseLoaderAbortsSupersededPreparedCandidateExactlyOnce(t *testing.T)
 
 func TestReleaseLoaderBoundsNonCooperativePreparationAndKeepsLatest(t *testing.T) {
 	server := newReleaseLoaderServer()
-	firstRelease := testRelease(1, 1, "one")
+	firstRelease := testRelease(1, "one")
 	server.setActive(firstRelease, 1)
 	server.parameters["settings"] = &kmsv1.Parameter{Ref: testResource("settings"), Value: "one", ContentType: "json", Version: 1}
 	server.secrets["password"] = &kmsv1.GetSecretResponse{Ref: testResource("password"), Version: 1, Value: []byte("secret-one"), ContentType: "text/plain"}
@@ -1177,7 +1177,7 @@ func TestReleaseLoaderBoundsNonCooperativePreparationAndKeepsLatest(t *testing.T
 		value   string
 	}{{2, "two"}, {3, "three"}} {
 		version, value := activation.version, activation.value
-		release := testRelease(version, version, value)
+		release := testRelease(version, value)
 		server.mu.Lock()
 		server.parameters["settings"] = &kmsv1.Parameter{Ref: testResource("settings"), Value: value, ContentType: "json", Version: version}
 		server.secrets["password"] = &kmsv1.GetSecretResponse{Ref: testResource("password"), Version: version, Value: []byte("secret-" + value), ContentType: "text/plain"}
@@ -1209,7 +1209,7 @@ func TestReleaseLoaderBoundsNonCooperativePreparationAndKeepsLatest(t *testing.T
 
 func TestReleaseLoaderFailsStartupOnDigestMismatch(t *testing.T) {
 	server := newReleaseLoaderServer()
-	release := testRelease(3, 9, "expected")
+	release := testRelease(3, "expected")
 	server.setActive(release, 9)
 	server.parameters["settings"] = &kmsv1.Parameter{Ref: testResource("settings"), Value: "tampered", ContentType: "json", Version: 3}
 	server.secrets["password"] = &kmsv1.GetSecretResponse{Ref: testResource("password"), Version: 3, Value: []byte("secret"), ContentType: "text/plain"}
@@ -1233,7 +1233,7 @@ func TestReleaseLoaderFailsStartupOnDigestMismatch(t *testing.T) {
 
 func TestReleaseLoaderFailsStartupOnReleaseProjectionDigestMismatch(t *testing.T) {
 	server := newReleaseLoaderServer()
-	release := testRelease(3, 9, "expected")
+	release := testRelease(3, "expected")
 	release.Digest = strings.Repeat("0", 64)
 	server.setActive(release, 9)
 	client := newReleaseTestClient(t, server)
@@ -1265,7 +1265,7 @@ func TestReleaseLoaderRejectsReturnedResourceReferenceMismatch(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			server := newReleaseLoaderServer()
-			release := testRelease(4, 11, "settings-value")
+			release := testRelease(4, "settings-value")
 			server.setActive(release, 11)
 			parameterRef := testResource("settings")
 			secretRef := testResource("password")
