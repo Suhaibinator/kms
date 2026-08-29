@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -50,15 +51,21 @@ func TestManagedConfigAdversarialAtomicLifecycle(t *testing.T) {
 
 	mismatches := make(chan configstore.DefaultMismatchReport, 8)
 	rejections := make(chan configstore.CandidateRejectionReport, 8)
+	applied := make(chan configstore.AppliedReport, 8)
 	storeCtx, stopStore := context.WithCancel(ctx)
 	store, err := configkms.Start(storeCtx, demo.client, configkms.Options{
 		Release:  exampleRelease,
 		Defaults: appconfig.Defaults,
-		OnDefaultMismatch: func(report configstore.DefaultMismatchReport) {
-			mismatches <- report
-		},
-		OnCandidateRejected: func(report configstore.CandidateRejectionReport) {
-			rejections <- report
+		Callbacks: configstore.Callbacks{
+			OnDefaultMismatch: func(report configstore.DefaultMismatchReport) {
+				mismatches <- report
+			},
+			OnApplied: func(report configstore.AppliedReport) {
+				applied <- report
+			},
+			OnCandidateRejected: func(report configstore.CandidateRejectionReport) {
+				rejections <- report
+			},
 		},
 		// Keep counter and callback assertions deterministic. A short interval
 		// would deliberately retry the same rejected active release.
@@ -95,6 +102,21 @@ func TestManagedConfigAdversarialAtomicLifecycle(t *testing.T) {
 	}
 	assertNoMismatch(t, mismatches, "matching initial release")
 	assertNoRejection(t, rejections, "matching initial release")
+	startupReport := receiveAppliedForTest(t, ctx, applied)
+	assertAppliedReport(t, startupReport, configstore.PhaseStartup, initial, false, nil)
+	groups, err := startupReport.Groups()
+	if err != nil {
+		t.Fatalf("startup applied report groups: %v", err)
+	}
+	if len(groups) != 2 || len(groups["server"]) == 0 || len(groups["runtime"]) == 0 {
+		t.Fatalf("startup applied report groups = %v, want the server and runtime parameter groups", groups)
+	}
+	for alias, document := range groups {
+		if strings.Contains(string(document), initial.apiKeyPlaintext) {
+			t.Fatalf("startup group %s exposes secret plaintext", alias)
+		}
+	}
+	assertNoApplied(t, applied, "matching initial release")
 
 	// Secret getters must clone their byte buffer. Mutating one returned pin
 	// must not mutate either the captured generation or a future getter.
@@ -193,6 +215,25 @@ func TestManagedConfigAdversarialAtomicLifecycle(t *testing.T) {
 	})
 	assertNoMismatch(t, mismatches, "one hot release")
 	assertNoRejection(t, rejections, "accepted hot release")
+	hotApplied := receiveAppliedForTest(t, ctx, applied)
+	assertAppliedReport(t, hotApplied, configstore.PhaseRuntime, hot, true, []string{"api_key", "runtime.greeting", "runtime.request_limit"})
+	for _, change := range hotApplied.Changed() {
+		switch change.Path {
+		case "runtime.greeting":
+			if change.Previous != initial.greeting || change.Current != hot.greeting {
+				t.Fatalf("runtime.greeting change = %#v, want %q -> %q", change, initial.greeting, hot.greeting)
+			}
+		case "runtime.request_limit":
+			if change.Previous != initial.requestLimit || change.Current != hot.requestLimit {
+				t.Fatalf("runtime.request_limit change = %#v, want %d -> %d", change, initial.requestLimit, hot.requestLimit)
+			}
+		case "api_key":
+			if change.Previous != nil || change.Current != nil {
+				t.Fatalf("secret rotation change carried values: %#v", change)
+			}
+		}
+	}
+	assertNoApplied(t, applied, "one hot release")
 
 	// Release 3 changes every hot value and a restart-bound value. Admission
 	// must reject the complete candidate, including its newly pinned secret.
@@ -222,6 +263,7 @@ func TestManagedConfigAdversarialAtomicLifecycle(t *testing.T) {
 	assertGeneration(t, store.Current(), hot)
 	assertNoMismatch(t, mismatches, "rejected mixed restart/hot release")
 	assertNoRejection(t, rejections, "one rejected release")
+	assertNoApplied(t, applied, "rejected mixed restart/hot release")
 
 	// A later release uses the restart pin from the last-known-good generation,
 	// not the rejected active KMS release, and restores all source defaults.
@@ -249,6 +291,9 @@ func TestManagedConfigAdversarialAtomicLifecycle(t *testing.T) {
 	assertGeneration(t, oldSnapshot, initial)
 	assertNoMismatch(t, mismatches, "default restoration")
 	assertNoRejection(t, rejections, "default restoration")
+	restoredApplied := receiveAppliedForTest(t, ctx, applied)
+	assertAppliedReport(t, restoredApplied, configstore.PhaseRuntime, restored, false, []string{"api_key", "runtime.greeting", "runtime.request_limit"})
+	assertNoApplied(t, applied, "default restoration")
 
 	shutdownStore()
 	if shutdownStoreErr != nil {
@@ -505,6 +550,56 @@ func assertNoRejection(t *testing.T, reports <-chan configstore.CandidateRejecti
 	select {
 	case report := <-reports:
 		t.Fatalf("unexpected candidate rejection during %s: category=%s release=%s paths=%v", phase, report.Category(), report.Release(), report.Paths())
+	default:
+	}
+}
+
+func receiveAppliedForTest(
+	t *testing.T,
+	ctx context.Context,
+	reports <-chan configstore.AppliedReport,
+) configstore.AppliedReport {
+	t.Helper()
+	select {
+	case report := <-reports:
+		return report
+	case <-ctx.Done():
+		t.Fatalf("wait for applied report: %v", ctx.Err())
+		return nil
+	}
+}
+
+// assertAppliedReport checks the phase, release identity, divergence flag,
+// and the sorted canonical change paths of one OnApplied report. Secret
+// plaintext must never appear through ordinary formatting.
+func assertAppliedReport(
+	t *testing.T,
+	report configstore.AppliedReport,
+	phase configstore.Phase,
+	values releaseValues,
+	divergent bool,
+	wantPaths []string,
+) {
+	t.Helper()
+	if report.Phase() != phase || report.DefaultDivergent() != divergent ||
+		report.Release().Version() != values.releaseVersion || report.Release().ActivationRevision() != values.activationRevision {
+		t.Fatalf("unexpected applied report: %s (want phase=%s divergent=%t release=%d#%d)", report, phase, divergent, values.releaseVersion, values.activationRevision)
+	}
+	if paths := changePaths(report); !reflect.DeepEqual(paths, wantPaths) && !(len(paths) == 0 && len(wantPaths) == 0) {
+		t.Fatalf("applied change paths = %v, want %v", paths, wantPaths)
+	}
+	for _, rendered := range []string{fmt.Sprint(report), fmt.Sprintf("%+v", report), fmt.Sprintf("%#v", report)} {
+		if strings.Contains(rendered, values.apiKeyPlaintext) {
+			t.Fatalf("applied report formatting exposed secret plaintext: %q", rendered)
+		}
+	}
+}
+
+func assertNoApplied(t *testing.T, reports <-chan configstore.AppliedReport, phase string) {
+	t.Helper()
+	select {
+	case report := <-reports:
+		t.Fatalf("unexpected applied report during %s: %s", phase, report)
 	default:
 	}
 }
