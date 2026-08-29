@@ -115,14 +115,22 @@ type SubscriberInstance struct {
 	Diagnostic         string
 	Connected          bool
 	ServerTimestamp    time.Time
+	// AppliedDivergent reports an applied generation that differs from the
+	// application's source-owned defaults (see ReleaseAcknowledgement).
+	AppliedDivergent    bool
+	DivergentFieldCount uint32
 }
 
 // RolloutSummary aggregates subscriber instances against the current
 // activation revision.
 type RolloutSummary struct {
-	Total             int
-	Connected         int
-	AppliedCurrent    int
+	Total          int
+	Connected      int
+	AppliedCurrent int
+	// AppliedDivergent counts instances applied at the current revision whose
+	// generation diverges from source defaults. Divergence is a warning, not a
+	// rollout failure.
+	AppliedDivergent  int
 	Rejected          int
 	Pending           int
 	Stale             int

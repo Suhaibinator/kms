@@ -561,6 +561,66 @@ class ListReleasesResponse(_message.Message):
     next_page_token: str
     def __init__(self, releases: _Optional[_Iterable[_Union[ReleaseSummary, _Mapping]]] = ..., next_page_token: _Optional[str] = ...) -> None: ...
 
+class VerifyEntry(_message.Message):
+    __slots__ = ("alias", "content_type", "sha256")
+    ALIAS_FIELD_NUMBER: _ClassVar[int]
+    CONTENT_TYPE_FIELD_NUMBER: _ClassVar[int]
+    SHA256_FIELD_NUMBER: _ClassVar[int]
+    alias: str
+    content_type: str
+    sha256: str
+    def __init__(self, alias: _Optional[str] = ..., content_type: _Optional[str] = ..., sha256: _Optional[str] = ...) -> None: ...
+
+class VerifyReleaseDefaultsRequest(_message.Message):
+    __slots__ = ("namespace", "name", "profile", "schema_sha256", "entries")
+    NAMESPACE_FIELD_NUMBER: _ClassVar[int]
+    NAME_FIELD_NUMBER: _ClassVar[int]
+    PROFILE_FIELD_NUMBER: _ClassVar[int]
+    SCHEMA_SHA256_FIELD_NUMBER: _ClassVar[int]
+    ENTRIES_FIELD_NUMBER: _ClassVar[int]
+    namespace: NamespaceRef
+    name: str
+    profile: str
+    schema_sha256: str
+    entries: _containers.RepeatedCompositeFieldContainer[VerifyEntry]
+    def __init__(self, namespace: _Optional[_Union[NamespaceRef, _Mapping]] = ..., name: _Optional[str] = ..., profile: _Optional[str] = ..., schema_sha256: _Optional[str] = ..., entries: _Optional[_Iterable[_Union[VerifyEntry, _Mapping]]] = ...) -> None: ...
+
+class VerifyEntryVerdict(_message.Message):
+    __slots__ = ("alias", "verdict")
+    ALIAS_FIELD_NUMBER: _ClassVar[int]
+    VERDICT_FIELD_NUMBER: _ClassVar[int]
+    alias: str
+    verdict: str
+    def __init__(self, alias: _Optional[str] = ..., verdict: _Optional[str] = ...) -> None: ...
+
+class VerifyReleaseDefaultsResponse(_message.Message):
+    __slots__ = ("name", "version", "activation_revision", "schema_matches", "entries", "match_count", "differs_count", "missing_in_release_count", "unknown_alias_count", "secret_alias_count", "unsupported_content_type_count", "unverified_count")
+    NAME_FIELD_NUMBER: _ClassVar[int]
+    VERSION_FIELD_NUMBER: _ClassVar[int]
+    ACTIVATION_REVISION_FIELD_NUMBER: _ClassVar[int]
+    SCHEMA_MATCHES_FIELD_NUMBER: _ClassVar[int]
+    ENTRIES_FIELD_NUMBER: _ClassVar[int]
+    MATCH_COUNT_FIELD_NUMBER: _ClassVar[int]
+    DIFFERS_COUNT_FIELD_NUMBER: _ClassVar[int]
+    MISSING_IN_RELEASE_COUNT_FIELD_NUMBER: _ClassVar[int]
+    UNKNOWN_ALIAS_COUNT_FIELD_NUMBER: _ClassVar[int]
+    SECRET_ALIAS_COUNT_FIELD_NUMBER: _ClassVar[int]
+    UNSUPPORTED_CONTENT_TYPE_COUNT_FIELD_NUMBER: _ClassVar[int]
+    UNVERIFIED_COUNT_FIELD_NUMBER: _ClassVar[int]
+    name: str
+    version: int
+    activation_revision: int
+    schema_matches: bool
+    entries: _containers.RepeatedCompositeFieldContainer[VerifyEntryVerdict]
+    match_count: int
+    differs_count: int
+    missing_in_release_count: int
+    unknown_alias_count: int
+    secret_alias_count: int
+    unsupported_content_type_count: int
+    unverified_count: int
+    def __init__(self, name: _Optional[str] = ..., version: _Optional[int] = ..., activation_revision: _Optional[int] = ..., schema_matches: _Optional[bool] = ..., entries: _Optional[_Iterable[_Union[VerifyEntryVerdict, _Mapping]]] = ..., match_count: _Optional[int] = ..., differs_count: _Optional[int] = ..., missing_in_release_count: _Optional[int] = ..., unknown_alias_count: _Optional[int] = ..., secret_alias_count: _Optional[int] = ..., unsupported_content_type_count: _Optional[int] = ..., unverified_count: _Optional[int] = ...) -> None: ...
+
 class ReleaseWatchRegistration(_message.Message):
     __slots__ = ("namespace", "name", "client_name", "instance_id", "last_seen_revision")
     NAMESPACE_FIELD_NUMBER: _ClassVar[int]
@@ -576,7 +636,7 @@ class ReleaseWatchRegistration(_message.Message):
     def __init__(self, namespace: _Optional[_Union[NamespaceRef, _Mapping]] = ..., name: _Optional[str] = ..., client_name: _Optional[str] = ..., instance_id: _Optional[str] = ..., last_seen_revision: _Optional[int] = ...) -> None: ...
 
 class ReleaseAcknowledgement(_message.Message):
-    __slots__ = ("namespace", "name", "version", "activation_revision", "client_name", "instance_id", "state", "rejection_category", "diagnostic", "timestamp_unix_ms")
+    __slots__ = ("namespace", "name", "version", "activation_revision", "client_name", "instance_id", "state", "rejection_category", "diagnostic", "timestamp_unix_ms", "applied_divergent", "divergent_field_count")
     NAMESPACE_FIELD_NUMBER: _ClassVar[int]
     NAME_FIELD_NUMBER: _ClassVar[int]
     VERSION_FIELD_NUMBER: _ClassVar[int]
@@ -587,6 +647,8 @@ class ReleaseAcknowledgement(_message.Message):
     REJECTION_CATEGORY_FIELD_NUMBER: _ClassVar[int]
     DIAGNOSTIC_FIELD_NUMBER: _ClassVar[int]
     TIMESTAMP_UNIX_MS_FIELD_NUMBER: _ClassVar[int]
+    APPLIED_DIVERGENT_FIELD_NUMBER: _ClassVar[int]
+    DIVERGENT_FIELD_COUNT_FIELD_NUMBER: _ClassVar[int]
     namespace: NamespaceRef
     name: str
     version: int
@@ -597,7 +659,9 @@ class ReleaseAcknowledgement(_message.Message):
     rejection_category: str
     diagnostic: str
     timestamp_unix_ms: int
-    def __init__(self, namespace: _Optional[_Union[NamespaceRef, _Mapping]] = ..., name: _Optional[str] = ..., version: _Optional[int] = ..., activation_revision: _Optional[int] = ..., client_name: _Optional[str] = ..., instance_id: _Optional[str] = ..., state: _Optional[str] = ..., rejection_category: _Optional[str] = ..., diagnostic: _Optional[str] = ..., timestamp_unix_ms: _Optional[int] = ...) -> None: ...
+    applied_divergent: bool
+    divergent_field_count: int
+    def __init__(self, namespace: _Optional[_Union[NamespaceRef, _Mapping]] = ..., name: _Optional[str] = ..., version: _Optional[int] = ..., activation_revision: _Optional[int] = ..., client_name: _Optional[str] = ..., instance_id: _Optional[str] = ..., state: _Optional[str] = ..., rejection_category: _Optional[str] = ..., diagnostic: _Optional[str] = ..., timestamp_unix_ms: _Optional[int] = ..., applied_divergent: _Optional[bool] = ..., divergent_field_count: _Optional[int] = ...) -> None: ...
 
 class WatchReleaseRequest(_message.Message):
     __slots__ = ("register", "acknowledgement")
@@ -882,6 +946,62 @@ class ListNamespacesResponse(_message.Message):
     namespaces: _containers.RepeatedCompositeFieldContainer[Namespace]
     next_page_token: str
     def __init__(self, namespaces: _Optional[_Iterable[_Union[Namespace, _Mapping]]] = ..., next_page_token: _Optional[str] = ...) -> None: ...
+
+class ApplyApplicationDefaultsRequest(_message.Message):
+    __slots__ = ("namespace", "artifact", "overwrite", "execute", "plan_digest", "update_definition")
+    NAMESPACE_FIELD_NUMBER: _ClassVar[int]
+    ARTIFACT_FIELD_NUMBER: _ClassVar[int]
+    OVERWRITE_FIELD_NUMBER: _ClassVar[int]
+    EXECUTE_FIELD_NUMBER: _ClassVar[int]
+    PLAN_DIGEST_FIELD_NUMBER: _ClassVar[int]
+    UPDATE_DEFINITION_FIELD_NUMBER: _ClassVar[int]
+    namespace: NamespaceRef
+    artifact: bytes
+    overwrite: bool
+    execute: bool
+    plan_digest: str
+    update_definition: bool
+    def __init__(self, namespace: _Optional[_Union[NamespaceRef, _Mapping]] = ..., artifact: _Optional[bytes] = ..., overwrite: _Optional[bool] = ..., execute: _Optional[bool] = ..., plan_digest: _Optional[str] = ..., update_definition: _Optional[bool] = ...) -> None: ...
+
+class DefaultsApplyEntry(_message.Message):
+    __slots__ = ("alias", "key", "content_type", "status", "current_version", "applied_version", "revision")
+    ALIAS_FIELD_NUMBER: _ClassVar[int]
+    KEY_FIELD_NUMBER: _ClassVar[int]
+    CONTENT_TYPE_FIELD_NUMBER: _ClassVar[int]
+    STATUS_FIELD_NUMBER: _ClassVar[int]
+    CURRENT_VERSION_FIELD_NUMBER: _ClassVar[int]
+    APPLIED_VERSION_FIELD_NUMBER: _ClassVar[int]
+    REVISION_FIELD_NUMBER: _ClassVar[int]
+    alias: str
+    key: str
+    content_type: str
+    status: str
+    current_version: int
+    applied_version: int
+    revision: int
+    def __init__(self, alias: _Optional[str] = ..., key: _Optional[str] = ..., content_type: _Optional[str] = ..., status: _Optional[str] = ..., current_version: _Optional[int] = ..., applied_version: _Optional[int] = ..., revision: _Optional[int] = ...) -> None: ...
+
+class ApplyApplicationDefaultsResponse(_message.Message):
+    __slots__ = ("profile", "schema_sha256", "artifact_digest", "plan_digest", "entries", "missing_secrets", "executed", "definition_changed", "definition_updated")
+    PROFILE_FIELD_NUMBER: _ClassVar[int]
+    SCHEMA_SHA256_FIELD_NUMBER: _ClassVar[int]
+    ARTIFACT_DIGEST_FIELD_NUMBER: _ClassVar[int]
+    PLAN_DIGEST_FIELD_NUMBER: _ClassVar[int]
+    ENTRIES_FIELD_NUMBER: _ClassVar[int]
+    MISSING_SECRETS_FIELD_NUMBER: _ClassVar[int]
+    EXECUTED_FIELD_NUMBER: _ClassVar[int]
+    DEFINITION_CHANGED_FIELD_NUMBER: _ClassVar[int]
+    DEFINITION_UPDATED_FIELD_NUMBER: _ClassVar[int]
+    profile: str
+    schema_sha256: str
+    artifact_digest: str
+    plan_digest: str
+    entries: _containers.RepeatedCompositeFieldContainer[DefaultsApplyEntry]
+    missing_secrets: _containers.RepeatedScalarFieldContainer[str]
+    executed: bool
+    definition_changed: bool
+    definition_updated: bool
+    def __init__(self, profile: _Optional[str] = ..., schema_sha256: _Optional[str] = ..., artifact_digest: _Optional[str] = ..., plan_digest: _Optional[str] = ..., entries: _Optional[_Iterable[_Union[DefaultsApplyEntry, _Mapping]]] = ..., missing_secrets: _Optional[_Iterable[str]] = ..., executed: _Optional[bool] = ..., definition_changed: _Optional[bool] = ..., definition_updated: _Optional[bool] = ...) -> None: ...
 
 class PolicyRule(_message.Message):
     __slots__ = ("operation", "env", "app")
@@ -1170,7 +1290,7 @@ class ListSubscribersResponse(_message.Message):
     def __init__(self, subscribers: _Optional[_Iterable[_Union[Subscriber, _Mapping]]] = ..., current_revision: _Optional[int] = ...) -> None: ...
 
 class ReleaseSubscriberState(_message.Message):
-    __slots__ = ("namespace", "release_name", "client_name", "instance_id", "identity", "state", "release_version", "activation_revision", "rejection_category", "diagnostic", "client_timestamp_unix_ms", "server_timestamp_unix_ms", "connected")
+    __slots__ = ("namespace", "release_name", "client_name", "instance_id", "identity", "state", "release_version", "activation_revision", "rejection_category", "diagnostic", "client_timestamp_unix_ms", "server_timestamp_unix_ms", "connected", "applied_divergent", "divergent_field_count")
     NAMESPACE_FIELD_NUMBER: _ClassVar[int]
     RELEASE_NAME_FIELD_NUMBER: _ClassVar[int]
     CLIENT_NAME_FIELD_NUMBER: _ClassVar[int]
@@ -1184,6 +1304,8 @@ class ReleaseSubscriberState(_message.Message):
     CLIENT_TIMESTAMP_UNIX_MS_FIELD_NUMBER: _ClassVar[int]
     SERVER_TIMESTAMP_UNIX_MS_FIELD_NUMBER: _ClassVar[int]
     CONNECTED_FIELD_NUMBER: _ClassVar[int]
+    APPLIED_DIVERGENT_FIELD_NUMBER: _ClassVar[int]
+    DIVERGENT_FIELD_COUNT_FIELD_NUMBER: _ClassVar[int]
     namespace: NamespaceRef
     release_name: str
     client_name: str
@@ -1197,7 +1319,9 @@ class ReleaseSubscriberState(_message.Message):
     client_timestamp_unix_ms: int
     server_timestamp_unix_ms: int
     connected: bool
-    def __init__(self, namespace: _Optional[_Union[NamespaceRef, _Mapping]] = ..., release_name: _Optional[str] = ..., client_name: _Optional[str] = ..., instance_id: _Optional[str] = ..., identity: _Optional[str] = ..., state: _Optional[str] = ..., release_version: _Optional[int] = ..., activation_revision: _Optional[int] = ..., rejection_category: _Optional[str] = ..., diagnostic: _Optional[str] = ..., client_timestamp_unix_ms: _Optional[int] = ..., server_timestamp_unix_ms: _Optional[int] = ..., connected: _Optional[bool] = ...) -> None: ...
+    applied_divergent: bool
+    divergent_field_count: int
+    def __init__(self, namespace: _Optional[_Union[NamespaceRef, _Mapping]] = ..., release_name: _Optional[str] = ..., client_name: _Optional[str] = ..., instance_id: _Optional[str] = ..., identity: _Optional[str] = ..., state: _Optional[str] = ..., release_version: _Optional[int] = ..., activation_revision: _Optional[int] = ..., rejection_category: _Optional[str] = ..., diagnostic: _Optional[str] = ..., client_timestamp_unix_ms: _Optional[int] = ..., server_timestamp_unix_ms: _Optional[int] = ..., connected: _Optional[bool] = ..., applied_divergent: _Optional[bool] = ..., divergent_field_count: _Optional[int] = ...) -> None: ...
 
 class ListReleaseSubscribersRequest(_message.Message):
     __slots__ = ("namespace", "release_name", "page_size", "page_token")

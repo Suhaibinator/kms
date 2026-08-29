@@ -29,9 +29,9 @@ type CLI struct {
 	// keep their existing parse-error return path; Run translates this one case
 	// to a successful process exit after the flag package prints command help.
 	helpRequested bool
-	// defaultsDial is replaced by defaults command tests with an in-memory gRPC
+	// dialOverride is replaced by command tests with an in-memory gRPC
 	// transport. Production callers leave it nil and use connFlags.dial.
-	defaultsDial defaultsDialFunc
+	dialOverride dialFunc
 }
 
 // New builds a CLI bound to the process standard streams.
@@ -160,7 +160,7 @@ Application onboarding (talk to a running server over gRPC):
                    Create NAME.crt and NAME.key for the application.
 
 Management (talk to a running server over gRPC):
-  admin            Manage namespaces, application identities, and client certificates.
+  admin            Manage namespaces, application identities, policies, and client certificates.
 
 Convenience (talk to a running server over gRPC):
   put-secret /env/app/key       Store a secret (value from --value-file or stdin).

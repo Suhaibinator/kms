@@ -346,6 +346,11 @@ const manager = await store.start(
       // The report is secret-aware and path-bounded. Forward it to local telemetry.
       console.error(String(report));
     },
+    onApplied(report) {
+      // Fires after every published generation: startup (with the canonical
+      // non-secret group documents) and each reload (with the changed fields).
+      console.info(String(report), report.phase === "runtime" ? report.changed() : report.groups());
+    },
   },
 );
 
@@ -358,11 +363,46 @@ await manager.wait();
 await client.close();
 ```
 
+`consoleCallbacks(logger, { component })` from `@suhaibinator/kms/configstore`
+is a ready-made `Callbacks` implementation (mirroring Go's `SlogCallbacks`)
+that renders mismatches, applied generations, per-group startup snapshots,
+per-field reload changes, and rejections as fixed structured log records:
+
+```ts
+import { consoleCallbacks } from "@suhaibinator/kms/configstore";
+
+const manager = await store.start(client, {
+  release: "runtime",
+  ...consoleCallbacks(console, { component: "api" }),
+});
+```
+
 Generated preparation must do all fallible decode/validation work before its
-synchronous `publish` callback. Startup drift fails closed unless
-`allowDefaultMismatch: true` is set, and even an allowed mismatch always calls
-`onDefaultMismatch`. A runtime candidate changing any restart-required field
+synchronous `publish` callback. Divergence from source defaults is never a
+startup failure: the candidate is applied and `onDefaultMismatch` reports it
+(severity `"error"`, at startup and on every reload), so a process can always
+restart onto whatever release is active while the report signals that code and
+KMS need reconciling. The applied acknowledgement carries only a divergence
+flag and field count. A runtime candidate changing any restart-required field
 is rejected as a whole while the last-known-good snapshot remains active.
+
+The generated binding also exports `verifyReleaseDefaults(client, defaults,
+{ namespace, release?, profile? })` for CI: it hashes every parameter group
+with `parameterHash` (the canonical JSON form shared with the Go SDK and the
+server) and asks KMS which aliases of the active release differ. No value
+travels in either direction; the `VerifyResult` exposes `passed()`,
+`failures()`, and a value-free `report()`. The RPC requires the
+`configuration-release:verify-defaults` operation and is rate limited per
+identity; `RateLimitedError` means the budget is spent, so wait for the window
+to reset instead of retrying.
+
+```ts
+import { verifyReleaseDefaults } from "./config.generated.js";
+
+const result = await verifyReleaseDefaults(client, defaults, { namespace: "prod/api" });
+console.info(result.report());
+if (!result.passed()) process.exitCode = 1;
+```
 
 The generated binding, schema, and contract are application artifacts. Run the
 same command with `--check` (or `--verify`) in CI so the descriptor cannot drift

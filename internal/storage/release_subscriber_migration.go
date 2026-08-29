@@ -84,6 +84,10 @@ func ensureReleaseSubscriberIdentityKeys(db *gorm.DB) error {
 	})
 }
 
+// rebuildReleaseSubscriberStates rewrites a pre-v3 table with the current
+// primary key. The source table predates the v7 divergence columns, so they
+// are created with their defaults rather than copied; a future rebuild of a
+// v7 table must extend the INSERT/SELECT to carry them.
 func rebuildReleaseSubscriberStates(tx *gorm.DB) error {
 	statements := []string{
 		`CREATE TABLE release_subscriber_states_v3 (
@@ -94,6 +98,7 @@ func rebuildReleaseSubscriberStates(tx *gorm.DB) error {
 			rejection_category text NOT NULL DEFAULT "", diagnostic text NOT NULL DEFAULT "",
 			client_timestamp text NOT NULL, server_timestamp text NOT NULL,
 			connected integer NOT NULL DEFAULT 0, disconnected_at text,
+			applied_divergent integer NOT NULL DEFAULT 0, divergent_field_count integer NOT NULL DEFAULT 0,
 			PRIMARY KEY (namespace_id,release_name,client_name,instance_id,identity,state),
 			CONSTRAINT fk_release_subscriber_states_namespace FOREIGN KEY (namespace_id) REFERENCES namespaces(id))`,
 		`INSERT INTO release_subscriber_states_v3 (

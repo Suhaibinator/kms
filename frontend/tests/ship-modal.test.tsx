@@ -96,6 +96,8 @@ const rejectedInstance: ReleaseSubscriberState = {
   diagnostic: "rate_limits.per_minute must be greater than zero",
   client_timestamp_unix_ms: 1,
   server_timestamp_unix_ms: 1,
+  applied_divergent: false,
+  divergent_field_count: 0,
   connected: true,
 };
 

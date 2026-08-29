@@ -522,6 +522,11 @@ export interface ReleaseSubscriberState {
   client_timestamp_unix_ms: number;
   server_timestamp_unix_ms: number;
   connected: boolean;
+  // Only meaningful for `applied`: the generation the instance runs differs
+  // from the application's source-owned defaults (a hot override, or code
+  // that has not adopted the release values yet).
+  applied_divergent: boolean;
+  divergent_field_count: number;
 }
 
 // --- Keys ---
@@ -607,6 +612,7 @@ export type FindingCode =
   | "no_subscribers"
   | "subscriber_other_release"
   | "instance_rejected"
+  | "instance_divergent"
   | "instance_pending"
   | "instance_stale"
   | "rolled_back"
@@ -667,12 +673,17 @@ export interface SubscriberInstance {
   diagnostic: string;
   connected: boolean;
   server_timestamp_unix_ms: number;
+  applied_divergent: boolean;
+  divergent_field_count: number;
 }
 
 export interface OverviewRollout {
   total: number;
   connected: number;
   applied_current: number;
+  // Applied at the current revision but diverging from source defaults; a
+  // warning, never a rollout failure.
+  applied_divergent: number;
   rejected: number;
   pending: number;
   stale: number;

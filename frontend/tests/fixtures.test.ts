@@ -121,7 +121,15 @@ function assertEnvironment(env: unknown): asserts env is EnvironmentOverview {
     expect(Array.isArray(active.entries)).toBe(true);
   }
   const rollout = e.rollout as Json;
-  for (const key of ["total", "connected", "applied_current", "rejected", "pending", "stale"]) {
+  for (const key of [
+    "total",
+    "connected",
+    "applied_current",
+    "applied_divergent",
+    "rejected",
+    "pending",
+    "stale",
+  ]) {
     expect(typeof rollout[key]).toBe("number");
   }
   expect(Array.isArray(rollout.other_release_names)).toBe(true);

@@ -136,7 +136,7 @@ func waitAdversarialFinalAcknowledgement(t *testing.T, fixture *runningFixture, 
 
 func TestAdversarialGeneratedSchemaAndRuntimeDecoderHaveIdenticalAcceptance(t *testing.T) {
 	schema := compileAdversarialFixtureSchema(t)
-	fixture := startFixture(t, matchingRelease(1, 1001), fixtureDefaults, false, nil)
+	fixture := startFixture(t, matchingRelease(1, 1001), fixtureDefaults, nil)
 
 	defaultDatabase := adversarialDatabase(adversarialEndpointDefault, "20", `"3s"`)
 	tests := []struct {
@@ -269,7 +269,7 @@ func TestAdversarialNilAndEmptyCollectionsRemainDistinctAcrossPublication(t *tes
 				defaults := fixtureDefaults()
 				test.setNilDefault(defaults)
 				return defaults
-			}, false, func(report configstore.DefaultMismatchReport) { reports <- report })
+			}, func(report configstore.DefaultMismatchReport) { reports <- report })
 			if !test.isNil(fixture.store.Current()) {
 				t.Fatal("JSON null did not publish as the Go nil value")
 			}
@@ -315,7 +315,7 @@ func TestAdversarialNilAndEmptyCollectionsRemainDistinctAcrossPublication(t *tes
 
 func TestAdversarialCanonicalJSONSpellingsApplyWithoutFalseDrift(t *testing.T) {
 	schema := compileAdversarialFixtureSchema(t)
-	fixture := startFixture(t, matchingRelease(1, 2001), fixtureDefaults, false, nil)
+	fixture := startFixture(t, matchingRelease(1, 2001), fixtureDefaults, nil)
 
 	tests := []struct {
 		name     string
@@ -392,7 +392,7 @@ func TestAdversarialCanonicalJSONSpellingsApplyWithoutFalseDrift(t *testing.T) {
 }
 
 func TestAdversarialManifestContractMatrixRejectsBeforeResourceFetch(t *testing.T) {
-	fixture := startFixture(t, matchingRelease(1, 3001), fixtureDefaults, false, nil)
+	fixture := startFixture(t, matchingRelease(1, 3001), fixtureDefaults, nil)
 	var fetches atomic.Int64
 	fixture.server.SetGetParameterHook(func(string) { fetches.Add(1) })
 	t.Cleanup(func() { fixture.server.SetGetParameterHook(nil) })
@@ -496,7 +496,7 @@ func contractEntry(spec *kmsclienttest.ReleaseSpec, alias string) *kmsclienttest
 }
 
 func TestAdversarialSecretPinsPathsAndGetterCopies(t *testing.T) {
-	fixture := startFixture(t, matchingRelease(1, 4001), fixtureDefaults, false, nil)
+	fixture := startFixture(t, matchingRelease(1, 4001), fixtureDefaults, nil)
 	initial := fixture.store.Current()
 
 	// Parameter paths are operator-owned. Moving both groups without changing
@@ -617,9 +617,9 @@ func TestAdversarialDefaultSecretsMustBeExactZeroIncludingMetadata(t *testing.T)
 				defaults.RuntimeToken = metadataOnly
 			}
 			store, startErr := Start(context.Background(), client, Options{
-				Release:           fixtureReleaseName,
-				Defaults:          func() *fixtureconfig.Config { return defaults },
-				OnDefaultMismatch: func(configstore.DefaultMismatchReport) {},
+				Release:   fixtureReleaseName,
+				Defaults:  func() *fixtureconfig.Config { return defaults },
+				Callbacks: configstore.Callbacks{OnDefaultMismatch: func(configstore.DefaultMismatchReport) {}},
 			})
 			if store != nil || startErr == nil || !strings.Contains(startErr.Error(), "must be zero") {
 				t.Fatalf("metadata-bearing default secret Start = (%v, %v), want exact-zero rejection", store, startErr)
@@ -634,7 +634,7 @@ func TestAdversarialDefaultSecretsMustBeExactZeroIncludingMetadata(t *testing.T)
 }
 
 func TestAdversarialConcurrentReadersAcrossRejectedAndAppliedCandidates(t *testing.T) {
-	fixture := startFixture(t, matchingRelease(1, 5001), fixtureDefaults, false, nil)
+	fixture := startFixture(t, matchingRelease(1, 5001), fixtureDefaults, nil)
 	oldSnapshot := fixture.store.Current()
 	var stop atomic.Bool
 	var readers sync.WaitGroup

@@ -81,13 +81,15 @@ export function groupSubscriberInstances(
       diagnostic: row.diagnostic,
       connected,
       server_timestamp_unix_ms: row.server_timestamp_unix_ms,
+      applied_divergent: row.state === "applied" && row.applied_divergent,
+      divergent_field_count: row.state === "applied" ? row.divergent_field_count : 0,
     }))
     .sort(byIdentity);
 }
 
 export type SubscriberCounts = Pick<
   OverviewRollout,
-  "total" | "connected" | "applied_current" | "rejected" | "pending" | "stale"
+  "total" | "connected" | "applied_current" | "applied_divergent" | "rejected" | "pending" | "stale"
 >;
 
 /**
@@ -104,6 +106,7 @@ export function countSubscribers(
     total: instances.length,
     connected: 0,
     applied_current: 0,
+    applied_divergent: 0,
     rejected: 0,
     pending: 0,
     stale: 0,
@@ -116,8 +119,10 @@ export function countSubscribers(
       continue;
     }
     counts.connected += 1;
-    if (applied) counts.applied_current += 1;
-    else if (instance.state === "rejected" && atCurrent) counts.rejected += 1;
+    if (applied) {
+      counts.applied_current += 1;
+      if (instance.applied_divergent) counts.applied_divergent += 1;
+    } else if (instance.state === "rejected" && atCurrent) counts.rejected += 1;
     else counts.pending += 1;
   }
   return counts;

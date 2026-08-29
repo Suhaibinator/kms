@@ -751,13 +751,14 @@ var WatchService_ServiceDesc = grpc.ServiceDesc{
 }
 
 const (
-	ConfigurationReleaseService_CreateRelease_FullMethodName    = "/kms.v1.ConfigurationReleaseService/CreateRelease"
-	ConfigurationReleaseService_ValidateRelease_FullMethodName  = "/kms.v1.ConfigurationReleaseService/ValidateRelease"
-	ConfigurationReleaseService_ActivateRelease_FullMethodName  = "/kms.v1.ConfigurationReleaseService/ActivateRelease"
-	ConfigurationReleaseService_GetRelease_FullMethodName       = "/kms.v1.ConfigurationReleaseService/GetRelease"
-	ConfigurationReleaseService_GetActiveRelease_FullMethodName = "/kms.v1.ConfigurationReleaseService/GetActiveRelease"
-	ConfigurationReleaseService_ListReleases_FullMethodName     = "/kms.v1.ConfigurationReleaseService/ListReleases"
-	ConfigurationReleaseService_WatchRelease_FullMethodName     = "/kms.v1.ConfigurationReleaseService/WatchRelease"
+	ConfigurationReleaseService_CreateRelease_FullMethodName         = "/kms.v1.ConfigurationReleaseService/CreateRelease"
+	ConfigurationReleaseService_ValidateRelease_FullMethodName       = "/kms.v1.ConfigurationReleaseService/ValidateRelease"
+	ConfigurationReleaseService_ActivateRelease_FullMethodName       = "/kms.v1.ConfigurationReleaseService/ActivateRelease"
+	ConfigurationReleaseService_GetRelease_FullMethodName            = "/kms.v1.ConfigurationReleaseService/GetRelease"
+	ConfigurationReleaseService_GetActiveRelease_FullMethodName      = "/kms.v1.ConfigurationReleaseService/GetActiveRelease"
+	ConfigurationReleaseService_ListReleases_FullMethodName          = "/kms.v1.ConfigurationReleaseService/ListReleases"
+	ConfigurationReleaseService_WatchRelease_FullMethodName          = "/kms.v1.ConfigurationReleaseService/WatchRelease"
+	ConfigurationReleaseService_VerifyReleaseDefaults_FullMethodName = "/kms.v1.ConfigurationReleaseService/VerifyReleaseDefaults"
 )
 
 // ConfigurationReleaseServiceClient is the client API for ConfigurationReleaseService service.
@@ -775,6 +776,15 @@ type ConfigurationReleaseServiceClient interface {
 	GetActiveRelease(ctx context.Context, in *GetActiveReleaseRequest, opts ...grpc.CallOption) (*GetActiveReleaseResponse, error)
 	ListReleases(ctx context.Context, in *ListReleasesRequest, opts ...grpc.CallOption) (*ListReleasesResponse, error)
 	WatchRelease(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[WatchReleaseRequest, WatchReleaseEvent], error)
+	// VerifyReleaseDefaults compares caller-supplied canonical content hashes of
+	// an application's source-owned defaults with the parameters pinned by the
+	// active release. The request and response are value-free: only aliases,
+	// content types, hashes, and bounded verdicts travel over the wire, and the
+	// server never echoes a stored value, digest, or hash. Secret aliases are
+	// structurally excluded and reported as secret_alias. Requires the
+	// configuration-release:verify-defaults operation and is rate limited per
+	// identity.
+	VerifyReleaseDefaults(ctx context.Context, in *VerifyReleaseDefaultsRequest, opts ...grpc.CallOption) (*VerifyReleaseDefaultsResponse, error)
 }
 
 type configurationReleaseServiceClient struct {
@@ -858,6 +868,16 @@ func (c *configurationReleaseServiceClient) WatchRelease(ctx context.Context, op
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type ConfigurationReleaseService_WatchReleaseClient = grpc.BidiStreamingClient[WatchReleaseRequest, WatchReleaseEvent]
 
+func (c *configurationReleaseServiceClient) VerifyReleaseDefaults(ctx context.Context, in *VerifyReleaseDefaultsRequest, opts ...grpc.CallOption) (*VerifyReleaseDefaultsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(VerifyReleaseDefaultsResponse)
+	err := c.cc.Invoke(ctx, ConfigurationReleaseService_VerifyReleaseDefaults_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // ConfigurationReleaseServiceServer is the server API for ConfigurationReleaseService service.
 // All implementations must embed UnimplementedConfigurationReleaseServiceServer
 // for forward compatibility.
@@ -873,6 +893,15 @@ type ConfigurationReleaseServiceServer interface {
 	GetActiveRelease(context.Context, *GetActiveReleaseRequest) (*GetActiveReleaseResponse, error)
 	ListReleases(context.Context, *ListReleasesRequest) (*ListReleasesResponse, error)
 	WatchRelease(grpc.BidiStreamingServer[WatchReleaseRequest, WatchReleaseEvent]) error
+	// VerifyReleaseDefaults compares caller-supplied canonical content hashes of
+	// an application's source-owned defaults with the parameters pinned by the
+	// active release. The request and response are value-free: only aliases,
+	// content types, hashes, and bounded verdicts travel over the wire, and the
+	// server never echoes a stored value, digest, or hash. Secret aliases are
+	// structurally excluded and reported as secret_alias. Requires the
+	// configuration-release:verify-defaults operation and is rate limited per
+	// identity.
+	VerifyReleaseDefaults(context.Context, *VerifyReleaseDefaultsRequest) (*VerifyReleaseDefaultsResponse, error)
 	mustEmbedUnimplementedConfigurationReleaseServiceServer()
 }
 
@@ -903,6 +932,9 @@ func (UnimplementedConfigurationReleaseServiceServer) ListReleases(context.Conte
 }
 func (UnimplementedConfigurationReleaseServiceServer) WatchRelease(grpc.BidiStreamingServer[WatchReleaseRequest, WatchReleaseEvent]) error {
 	return status.Error(codes.Unimplemented, "method WatchRelease not implemented")
+}
+func (UnimplementedConfigurationReleaseServiceServer) VerifyReleaseDefaults(context.Context, *VerifyReleaseDefaultsRequest) (*VerifyReleaseDefaultsResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method VerifyReleaseDefaults not implemented")
 }
 func (UnimplementedConfigurationReleaseServiceServer) mustEmbedUnimplementedConfigurationReleaseServiceServer() {
 }
@@ -1041,6 +1073,24 @@ func _ConfigurationReleaseService_WatchRelease_Handler(srv interface{}, stream g
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type ConfigurationReleaseService_WatchReleaseServer = grpc.BidiStreamingServer[WatchReleaseRequest, WatchReleaseEvent]
 
+func _ConfigurationReleaseService_VerifyReleaseDefaults_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(VerifyReleaseDefaultsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ConfigurationReleaseServiceServer).VerifyReleaseDefaults(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ConfigurationReleaseService_VerifyReleaseDefaults_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ConfigurationReleaseServiceServer).VerifyReleaseDefaults(ctx, req.(*VerifyReleaseDefaultsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // ConfigurationReleaseService_ServiceDesc is the grpc.ServiceDesc for ConfigurationReleaseService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -1071,6 +1121,10 @@ var ConfigurationReleaseService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ListReleases",
 			Handler:    _ConfigurationReleaseService_ListReleases_Handler,
+		},
+		{
+			MethodName: "VerifyReleaseDefaults",
+			Handler:    _ConfigurationReleaseService_VerifyReleaseDefaults_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{

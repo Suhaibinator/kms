@@ -29,6 +29,7 @@ const (
 	maxSchemaBytes          = 1 << 20
 	maxAckDiagnosticBytes   = 1024
 	maxReleaseClientIDBytes = 128
+	maxDivergentFieldCount  = 65535
 )
 
 var releaseAliasRE = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_-]*$`)
@@ -660,6 +661,18 @@ func (s *Service) AcknowledgeConfigurationRelease(ctx context.Context, pr Princi
 	} else if ack.RejectionCategory != "" {
 		return domain.Errorf(domain.ErrInvalidArgument, "rejection category is only valid for rejected state")
 	}
+	// Divergence is a property of an applied generation only: it reports that
+	// the running configuration differs from source-owned defaults, never that
+	// a candidate was refused. The count is bounded so the column stays small.
+	if (ack.AppliedDivergent || ack.DivergentFieldCount > 0) && ack.State != domain.ReleaseStateApplied {
+		return domain.Errorf(domain.ErrInvalidArgument, "applied_divergent is only valid for applied state")
+	}
+	if ack.DivergentFieldCount > 0 && !ack.AppliedDivergent {
+		return domain.Errorf(domain.ErrInvalidArgument, "divergent_field_count requires applied_divergent")
+	}
+	if ack.DivergentFieldCount > maxDivergentFieldCount {
+		return domain.Errorf(domain.ErrInvalidArgument, "divergent_field_count exceeds %d", maxDivergentFieldCount)
+	}
 	ack.Diagnostic = sanitizeDiagnostic(ack.Diagnostic)
 	ack.Identity = pr.Identity.Name
 	ack.ServerTimestamp = s.now()
@@ -684,7 +697,7 @@ func (s *Service) AcknowledgeConfigurationRelease(ctx context.Context, pr Princi
 		return err
 	}
 	s.notifyReleaseSubscribers(ack.Namespace, ack.ReleaseName)
-	s.auditRefWithNamespaceID(ctx, pr, "configuration_release.acknowledge", domain.ResourceConfigurationRelease, domain.Ref{NS: ack.Namespace, Key: ack.ReleaseName}, namespace.ID, ack.ReleaseVersion, "allow", map[string]string{"state": ack.State, "category": ack.RejectionCategory, "client_name": ack.ClientName, "instance_id": ack.InstanceID})
+	s.auditRefWithNamespaceID(ctx, pr, "configuration_release.acknowledge", domain.ResourceConfigurationRelease, domain.Ref{NS: ack.Namespace, Key: ack.ReleaseName}, namespace.ID, ack.ReleaseVersion, "allow", map[string]string{"state": ack.State, "category": ack.RejectionCategory, "client_name": ack.ClientName, "instance_id": ack.InstanceID, "divergent": strconv.FormatBool(ack.AppliedDivergent)})
 	return nil
 }
 

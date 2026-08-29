@@ -266,7 +266,7 @@ export const REJECTION_CATEGORIES: Record<RejectionCategory, RejectionGuidance> 
   default_mismatch: {
     summary: "Source-owned defaults differ from what the release carries.",
     response:
-      "Restore the source-owned defaults. An application-owned startup bypass is temporary emergency admission, not a release repair.",
+      "The instance keeps running the release. Adopt the release values in code (the CI defaults check flags the drift) or restore the source-owned defaults with a new release.",
   },
   restart_required: {
     summary: "The change is restart-bound; running replicas keep last-known-good.",

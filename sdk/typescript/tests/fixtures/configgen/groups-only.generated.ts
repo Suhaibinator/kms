@@ -10,6 +10,7 @@ import {
   immutableSnapshot,
   ReleaseIdentity,
   startManagedConfig,
+  verifyDefaults,
   codecs,
   decodeGroup,
   encodeGroup,
@@ -20,11 +21,15 @@ import {
 import type {
   ConfigSnapshot,
   ContractEntry,
+  FieldChange,
   FieldDifference,
   ManagedConfigManager,
   ManagedConfigOptions,
   ManagedPreparedCandidate,
   ManagedReleaseClient,
+  VerifyClient,
+  VerifyOptions,
+  VerifyResult,
   GroupCodec,
   ValueCodec,
 } from "../../../src/configstore/index.js";
@@ -62,6 +67,23 @@ export function encodeDefaultsArtifact(profile: string, config: RootConfig): str
     contract: generatedContract,
     parameters: encodeParameterGroups(config),
   });
+}
+
+/**
+ * Ask KMS which parameter groups of config differ from the active release of
+ * options.namespace. Only canonical content hashes travel over the wire; no
+ * value is ever sent or returned.
+ */
+export function verifyReleaseDefaults(
+  client: VerifyClient,
+  config: RootConfig,
+  options: VerifyOptions,
+): Promise<VerifyResult> {
+  return verifyDefaults(
+    client,
+    { schemaSha256: schemaSHA256, contract: generatedContract, groups: encodeParameterGroups(config) },
+    options,
+  );
 }
 
 export class WorkerView {
@@ -170,10 +192,24 @@ export class Store {
     if (active) {
     }
     restartRequiredFields.sort();
+    // Changed fields versus the previously applied generation feed onApplied. Secrets are path-only.
+    const changed: FieldChange[] = [];
+    if (active) {
+      appendChange(changed, "application.name", valueCodec0_0, active.get("name"), validatedCandidate["name"]);
+    }
+    // Group documents feed observability only; an encoding failure must never reject a candidate.
+    let groups: Readonly<Record<string, string>>;
+    try {
+      groups = encodeParameterGroups(validatedCandidate);
+    } catch {
+      groups = {};
+    }
     const prepared = immutableSnapshot(validatedCandidate, ReleaseIdentity.from(snapshot));
     return {
       defaultDifferences,
       restartRequiredFields,
+      changed,
+      groups,
       publish: () => {
         this.#active = prepared;
       },
@@ -233,6 +269,16 @@ function appendDifference<T>(
   actual: T,
 ): void {
   if (!sameEncoded(codec, expected, actual)) result.push({ path, expected, actual });
+}
+
+function appendChange<T>(
+  result: FieldChange[],
+  path: string,
+  codec: ValueCodec<T>,
+  previous: T,
+  current: T,
+): void {
+  if (!sameEncoded(codec, previous, current)) result.push({ path, previous, current });
 }
 
 function sameEncoded<T>(codec: ValueCodec<T>, left: T, right: T): boolean {

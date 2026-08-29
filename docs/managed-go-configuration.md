@@ -35,12 +35,14 @@ review and deploy with the application; a KMS-only hot change is an emergency
 override.
 
 At startup, the generated store resolves and validates the active release and
-compares every non-secret field with the application defaults. A mismatch
-fails startup unless the application explicitly passes a bypass. A bypassed
-startup is still reported at error severity and remains visibly divergent.
-After startup, valid changes to `reload=hot` fields apply atomically and are
-reported as divergent when they differ from source defaults. A later release
-that restores all defaults clears divergence.
+compares every non-secret field with the application defaults. A mismatch is
+applied and reported once at error severity, and the process remains visibly
+divergent through status, the applied acknowledgement, and metrics; a replica
+must always be able to restart onto the active release. After startup, valid
+changes to `reload=hot` fields apply atomically and are reported as divergent
+when they differ from source defaults. A later release that restores all
+defaults clears divergence. A CI verify test compares the defaults in code
+with the active release before a build ships.
 
 Changes to any `reload=restart` field reject the complete runtime candidate.
 No hot subset is applied. The active generation remains last-known-good.
@@ -356,28 +358,11 @@ the release manifest. Create and pin secrets separately.
 The generated package presents the application-specific API:
 
 ```go
+sink := configstore.NewLogSink(nil) // buffers startup records until Set
 store, err := configkms.Start(ctx, client, configkms.Options{
-    Release:             "runtime",
-    Defaults:            appconfig.Defaults,
-    AllowDefaultMismatch: flags.AllowKMSDefaultMismatch,
-    OnDefaultMismatch: func(report configstore.DefaultMismatchReport) {
-        switch report.Severity() {
-        case configstore.MismatchFatal:
-            logger.Error("KMS defaults mismatch",
-                zap.String("release", report.Release().String()),
-                zap.Any("differences", report.Fields()))
-        case configstore.MismatchError:
-            logger.Error("KMS emergency override active",
-                zap.String("release", report.Release().String()),
-                zap.Any("differences", report.Fields()))
-        }
-    },
-    OnCandidateRejected: func(report configstore.CandidateRejectionReport) {
-        logger.Warn("KMS candidate rejected",
-            zap.String("category", string(report.Category())),
-            zap.String("release", report.Release().String()),
-            zap.Strings("paths", report.Paths()))
-    },
+    Release:   "runtime",
+    Defaults:  appconfig.Defaults,
+    Callbacks: configstore.SlogCallbacks(sink, configstore.SlogOptions{Component: "kms"}),
     SecretTokenProvider: func(alias, path string) (string, bool) {
         token, ok := bootstrapSecretTokens[alias]
         return token, ok
@@ -386,13 +371,63 @@ store, err := configkms.Start(ctx, client, configkms.Options{
 if err != nil {
     return err
 }
+logger := buildLogger(store.Current()) // the logger usually depends on config
+sink.Set(logger)                       // replays the buffered startup records
+```
+
+`Options` embeds `configstore.Callbacks`, so an application that wants its own
+observers writes them out; only `OnDefaultMismatch` is required:
+
+```go
+store, err := configkms.Start(ctx, client, configkms.Options{
+    Release:  "runtime",
+    Defaults: appconfig.Defaults,
+    Callbacks: configstore.Callbacks{
+        OnDefaultMismatch: func(report configstore.DefaultMismatchReport) {
+            // Applied anyway; this is the reconciliation signal.
+            logger.Error("KMS release diverges from source defaults",
+                zap.String("phase", string(report.Phase())),
+                zap.String("release", report.Release().String()),
+                zap.Any("differences", report.Fields()))
+        },
+        OnApplied: func(report configstore.AppliedReport) {
+            for _, change := range report.Changed() {
+                logger.Info("KMS config field changed",
+                    zap.String("path", change.Path),
+                    zap.Any("previous", change.Previous),
+                    zap.Any("current", change.Current))
+            }
+            logger.Info("KMS config applied",
+                zap.String("phase", string(report.Phase())),
+                zap.String("release", report.Release().String()),
+                zap.Bool("divergent", report.DefaultDivergent()))
+        },
+        OnCandidateRejected: func(report configstore.CandidateRejectionReport) {
+            logger.Warn("KMS candidate rejected",
+                zap.String("category", string(report.Category())),
+                zap.String("release", report.Release().String()),
+                zap.Strings("paths", report.Paths()))
+        },
+    },
+})
 ```
 
 `Start` synchronously resolves, decodes, validates, compares, and publishes the
 initial release. It returns only after `Current` is usable, then watches in the
-background until the context is canceled. A mismatch callback is mandatory so
-divergence cannot be silent. When a fatal callback records instead of exiting,
-`Start` returns a typed `DefaultMismatchError` and publishes nothing.
+background until the context is canceled. `Start` fails only on transport,
+contract, decode, and validation errors; there is no typed startup error for
+default divergence. A divergent active release is applied and reported, so a
+replica can always restart onto whatever is active. A mismatch callback is
+mandatory so divergence cannot be silent.
+
+`OnApplied` fires after every published generation, including the initial one.
+Its immutable `AppliedReport` carries the phase (`startup` or `runtime`), the
+release identity, `DefaultDivergent()`, `Changed()` (every non-secret field
+whose canonical value differs from the previously applied generation, with
+`Previous` and `Current`; a rotated secret appears path-only with nil values;
+the initial generation has an empty list), and `Groups()` (the canonical
+non-secret parameter group documents of the generation, keyed by alias).
+Ordinary formatting of a report prints paths only.
 
 `OnCandidateRejected` is optional local diagnostics. Its immutable report
 contains only a bounded category, safe release identity, and generated
@@ -403,9 +438,7 @@ once per distinct candidate, and a callback panic is isolated from admission
 and last-known-good behavior. Server acknowledgements still contain only the
 bounded category.
 
-The application owns any process flag and passes its value through
-`AllowDefaultMismatch`; the SDK never registers flags. The bypass changes only
-startup admission and never suppresses reporting.
+Every callback runs synchronously on the loader goroutine and must not block.
 
 Capture one snapshot at the boundary of a request, job, message, or other
 logical operation:
@@ -461,38 +494,135 @@ err := store.Wait()
 the store became ready is normal shutdown and returns `nil`.
 
 `Status` contains redacted point-in-time state: readiness, observed and applied
-release identities, divergence, the last bounded rejection category and time,
-and reconnect count. `Stats` contains cumulative candidate, applied, rejection,
-and reconnect counters plus divergence and the applied version and activation
-revision. Applications may export them with this low-cardinality mapping; the
-SDK does not register a metrics backend:
+release identities, `DefaultDivergent`, the last bounded rejection category and
+time, and reconnect count. `Stats` contains cumulative candidate, applied,
+rejection, and reconnect counters plus divergence and the applied version and
+activation revision. Neither contains aliases, paths, values, or secret
+metadata; see [Export metrics](#export-metrics) for the ready-made collector.
 
-| Store value | Suggested metric |
+## Log the applied configuration
+
+`configstore.SlogCallbacks(sink, opts)` returns a complete `Callbacks` value
+that logs through `log/slog`:
+
+| Event | Level | Message | Attributes |
+|---|---|---|---|
+| default mismatch | `ERROR` | `kms config diverges from source defaults` | `component`, `phase`, `release`, `fields` |
+| initial generation applied | `INFO` | `kms config applied` | `component`, `phase`, `release`, `release_version`, `activation_revision`, `default_divergent` |
+| per parameter group at startup | `INFO` | `kms config group` | `component`, `alias`, `values` (canonical non-secret JSON), `release_version`, `activation_revision` |
+| group documents unavailable | `ERROR` | `kms config groups unavailable` | `component`, `release`, `error` |
+| reload applied | `INFO` | `kms config reloaded` | `component`, `release`, `default_divergent`, `changed_count` |
+| per changed field on reload | `INFO` | `kms config field changed` | `component`, `release`, `path`, `previous`, `current` |
+| candidate rejected | `ERROR` | `kms config candidate rejected` | `component`, `category`, `release`, `paths` |
+
+`SlogOptions.Component` sets the `component` attribute (default
+`configstore`); `DisableStartupSnapshot` and `DisableReloadChanges` suppress
+the per-group and per-field records. Values are the report values, which the
+manager has already redacted of secret content, and no attribute key names
+secret material.
+
+The logger usually cannot exist before the configuration that shapes it has
+been loaded. `configstore.NewLogSink(nil)` therefore returns a `LogSink` with
+no logger: startup records (the initial mismatch report, the applied notice,
+the group snapshot, and any candidate rejected before the first generation)
+are buffered, bounded, and replayed in order on the first `sink.Set(logger)`.
+Runtime records emitted while no logger is installed are dropped. `Set` may be
+called again to swap loggers; `Logger()` returns the current one.
+
+Applications logging through zap wrap their logger with
+`go.uber.org/zap/exp/zapslog` and pass the resulting `*slog.Logger` to `Set`.
+
+## Export metrics
+
+`sdk/go/kmsmetrics` reads `Status` and `Stats` on every scrape, so it needs no
+bookkeeping in the application:
+
+```go
+registry.MustRegister(kmsmetrics.NewCollector("myapp", store))
+```
+
+| Metric | Type | Meaning |
+|---|---|---|
+| `<ns>_kms_config_default_divergent` | gauge | 1 while the applied generation differs from source defaults |
+| `<ns>_kms_config_ready` | gauge | 1 once an initial generation has been applied |
+| `<ns>_kms_config_applied_release_version` | gauge | version of the applied release |
+| `<ns>_kms_config_applied_activation_revision` | gauge | activation revision of the applied release |
+| `<ns>_kms_config_candidates_total` | counter | release candidates received |
+| `<ns>_kms_config_candidates_applied_total` | counter | candidates applied |
+| `<ns>_kms_config_candidates_rejected_total{category}` | counter | candidates rejected, by bounded category (every category is always present) |
+| `<ns>_kms_config_reconnects_total` | counter | release stream reconnects |
+
+The namespace is sanitized to a valid metric identifier; an empty namespace
+yields bare `kms_config_*` names. No alias, field path, value, or secret
+metadata is ever exported, and release names and digests are not labels.
+
+## Verify defaults in CI
+
+Runtime reporting tells a running replica that it diverges. The CI verify test
+closes the loop before a release is cut: it hashes the source-owned defaults
+and asks KMS whether the active release still matches them, without either
+side sending a value. The generated binding exposes
+`VerifyReleaseDefaults(ctx, client, root, opts)`; `sdk/go/kmsverify` wraps it
+in a test entry point driven by the environment:
+
+```go
+func TestReleaseMatchesSourceDefaults(t *testing.T) {
+    kmsverify.Run(t, kmsverify.Spec[appconfig.Config]{
+        Defaults:  appconfig.ManagedReleaseDefaults,     // func(profile string) (*Config, error)
+        Verify:    configkms.VerifyReleaseDefaults,      // generated
+        Namespace: appconfig.KMSNamespaceForProfile,     // optional: profile -> "env/app"
+    })
+}
+```
+
+| Variable | Meaning |
 |---|---|
-| `Stats.Candidates` | `config_store_candidates_total` |
-| `Stats.Applied` | `config_store_applied_total` |
-| `Stats.Rejected[reason]` | `config_store_rejected_total{reason}` |
-| `Stats.Reconnects` | `config_store_reconnects_total` |
-| `Stats.DefaultDivergent` | `config_store_default_divergent` gauge |
-| applied release version/revision | `config_store_applied_release_version` / `config_store_applied_activation_revision` gauges |
+| `KMS_VERIFY_ENDPOINT` | KMS gRPC `host:port`. Unset: the test **skips** (or fails when `KMS_VERIFY_REQUIRED` is truthy). |
+| `KMS_VERIFY_TOKEN` | Token of the verification identity. |
+| `KMS_VERIFY_CA_FILE` / `KMS_VERIFY_CA_PEM` | CA bundle as a path or as the PEM text; mutually exclusive. System roots when both are empty. |
+| `KMS_VERIFY_PROFILE` | Defaults profile passed to `Spec.Defaults` and `Spec.Namespace`. |
+| `KMS_VERIFY_NAMESPACE` | `env/app` to compare; overrides `Spec.Namespace`. |
+| `KMS_VERIFY_RELEASE` | Release name; default `runtime`. |
+| `KMS_VERIFY_REQUIRED` | Truthy makes a missing endpoint a failure instead of a skip. Set it in release pipelines. |
+| `KMS_VERIFY_INSECURE` | Cleartext connection; accepted for loopback endpoints only. |
 
-Do not turn release names, digests, aliases, paths, field names, values, or
-secret metadata into metric labels.
+A passing run logs the value-free report; a failing run prints it and fails
+the test. Each parameter alias receives one bounded verdict (`match`,
+`differs`, `missing_in_release`, `unknown_alias`, `secret_alias`,
+`unsupported_content_type`); `unverified` counts parameter aliases pinned by
+the release that the contract did not mention; a schema digest mismatch fails
+the run as well. `kmsverify.Verify` is the script-friendly form that returns
+the `VerifyResult` instead of driving `testing.TB`. The call requires the
+`configuration-release:verify-defaults` operation and is rate limited per
+identity; `kmsclient.ErrRateLimited` is returned when the budget is spent.
+Identity bootstrap and a workflow template are in the
+[consumer adoption guide](consumer-adoption.md).
 
 ## Drift and reload behavior
 
-At startup with matching values, the candidate is published and acknowledged
-as applied. With differences and no bypass, the callback receives fatal
-severity, `Start` returns `DefaultMismatchError`, no generation is published,
-and the release is rejected with the bounded `default_mismatch` category. With
-the bypass, the same candidate is published, reported at error severity, and
-status becomes divergent.
+At startup the candidate is compared with the validated source defaults. With
+matching values it is published and acknowledged as applied. With differences
+it is **still published**: `OnDefaultMismatch` receives one report at
+`PhaseStartup`, `Status().DefaultDivergent` and `Stats().DefaultDivergent`
+become true, `OnApplied` reports the generation with `DefaultDivergent()`
+true, and the applied acknowledgement carries `applied_divergent` and a field
+count (never field names or values) so the console can show which replicas run
+overrides. There is no fatal startup path and no bypass flag; a replica must
+be able to restart onto whatever release is active, and the report is the
+signal to reconcile code and KMS.
 
 After startup, a valid candidate that changes only hot fields is prepared in a
-fresh root and published with one atomic swap. A difference from source
-defaults is always reported at error severity and applied; this is the
-emergency override path. Reports are deduplicated per distinct release
-candidate. Restoring every non-secret default clears divergent status.
+fresh root and published with one atomic swap. `OnApplied` lists the changed
+canonical paths with previous and current values (path-only for rotated
+secrets). A difference from source defaults is always reported at error
+severity and applied; this is the emergency override path. Reports are
+deduplicated per distinct release candidate. Restoring every non-secret
+default clears divergent status and appears in the next `OnApplied` change
+list.
+
+The CI verify test ([Verify defaults in CI](#verify-defaults-in-ci)) is the
+tripwire that catches a release left divergent after an override, before the
+next deployment ships code that no longer matches it.
 
 If any restart field changes, the entire runtime candidate is rejected as
 `restart_required`. Restart-bound secrets compare their pinned resource
@@ -702,16 +832,18 @@ sent to the server:
 | `config_contract_mismatch` | Compare aliases, kinds, and literal `json` content types with the generated contract. This check happens before resource fetches. |
 | `config_decode_failed` | Publish a new complete group document fixing missing, unknown, duplicate, mistyped, out-of-range, or noncanonical values. |
 | `config_validation_failed` | Check the application's local `Validate` diagnostic and fix either the complete candidate or application validation. |
-| `default_mismatch` | Restore the source-owned defaults. An application-owned startup bypass is temporary emergency admission, not a release repair. |
+| `default_mismatch` | Legacy category from SDKs that refused divergent startup. Current SDKs apply and report divergence instead (`applied_divergent` on the acknowledgement); restore the source-owned defaults or update them in code. |
 | `restart_required` | Keep last-known-good serving and roll or restart replicas that are intended to adopt the restart-bound change. |
 | `superseded` | Usually no action; a newer activation replaced preparation of this candidate. |
 | `active_check_failed` | Check KMS connectivity and authorization for the final freshness read. After readiness the loader reconciles again; if startup returned an error, restart `Start` after recovery. |
 | `prepare_failed` / `internal` | Inspect local application logs and the deployed build; managed configuration normally emits a more specific category. |
 
 A hot emergency override is applied by running processes and reported as
-divergent. A later process start fails unless the application explicitly
-supplies its mismatch bypass. Restore the source default in another complete
-parameter version and activate a new release to clear divergence.
+divergent; a process that starts later applies the same release and reports
+the divergence once at startup. The subscriber view marks such replicas as
+applied-divergent. Restore the source default in another complete parameter
+version and activate a new release to clear divergence, or change the source
+defaults to adopt the override and let the CI verify test confirm the match.
 
 A running process rejects restart-bound changes and keeps last-known-good. For
 a code-first rolling deployment, activate the release matching the upcoming
@@ -734,7 +866,7 @@ configuration releases in-process. Use `SetParameterVersion`,
 `ActivateConfigurationRelease`; `WaitForReleaseSubscribe` exposes lifecycle
 acknowledgements and disconnect controls.
 
-Generated bindings should be tested for strict decoding, default admission,
+Generated bindings should be tested for strict decoding, divergent startup reporting,
 runtime override/restoration, restart rejection, secret pin comparison,
 last-known-good, composite mutation protection, concurrent snapshot
 consistency, and zero-allocation scalar access. Keep one hermetic integration

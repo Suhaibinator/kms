@@ -2,6 +2,7 @@ package configstore
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -27,9 +28,7 @@ type Manager struct {
 	applied         ReleaseIdentity
 	divergent       bool
 	lastReportedKey string
-	lastReportErr   error
 	lastRejectedKey string
-	startupErr      *DefaultMismatchError
 	waitErr         error
 }
 
@@ -101,18 +100,10 @@ func Start(
 	case <-manager.done:
 		manager.mu.RLock()
 		ready := manager.ready
-		startupErr := manager.startupErr
 		waitErr := manager.waitErr
 		manager.mu.RUnlock()
 		if ready {
 			return manager, nil
-		}
-		// A newer startup candidate can supersede a fatal mismatch and then fail
-		// during resolution before prepareWithIdentity gets a chance to clear the
-		// side channel. Return the typed report only when the loader's terminal
-		// candidate was itself rejected for default drift.
-		if startupErr != nil && manager.loader.Status().LastFailureCategory == kmsclient.ReleaseRejectDefaultMismatch {
-			return nil, startupErr
 		}
 		if waitErr == nil {
 			waitErr = errors.New("configstore: release loader stopped before initial publication")
@@ -151,9 +142,6 @@ func (m *Manager) prepareWithIdentity(
 	m.mu.Lock()
 	m.observed = identity
 	startup := !m.ready
-	if startup {
-		m.startupErr = nil
-	}
 	m.mu.Unlock()
 
 	candidate, err := m.prepare(ctx, snapshot)
@@ -186,42 +174,30 @@ func (m *Manager) prepareWithIdentity(
 
 	divergent := len(differences) != 0
 	if divergent {
-		phase := MismatchRuntime
-		severity := MismatchError
+		// Divergence from source defaults is reported, never refused: a process
+		// must be able to restart onto whatever release is active. The report is
+		// the operator's signal to reconcile code and KMS.
+		phase := PhaseRuntime
 		if startup {
-			phase = MismatchStartup
-			if !m.options.AllowDefaultMismatch {
-				severity = MismatchFatal
-			}
+			phase = PhaseStartup
 		}
-		report := newDefaultMismatchReport(phase, severity, identity, differences)
-		if err := m.reportOnce(identity, report); err != nil {
-			abort()
-			m.notifyCandidateRejected(identity, err)
-			return nil, err
-		}
-		if severity == MismatchFatal {
-			mismatchErr := newDefaultMismatchError(report)
-			m.mu.Lock()
-			m.startupErr = mismatchErr
-			m.mu.Unlock()
-			abort()
-			paths := make([]string, len(differences))
-			for i := range differences {
-				paths[i] = differences[i].Path
-			}
-			err := rejectWithPaths(RejectDefaultMismatch, mismatchErr, paths)
-			m.notifyCandidateRejected(identity, err)
-			return nil, err
-		}
+		m.reportOnce(identity, newDefaultMismatchReport(phase, MismatchError, identity, differences))
 	}
 
+	var changes []FieldChange
+	if !startup {
+		changes = cloneChanges(candidate.Changed)
+	}
 	return &managedPrepared{
-		manager:   m,
-		publish:   candidate.Publish,
-		abort:     abort,
-		identity:  identity,
-		divergent: divergent,
+		manager:    m,
+		publish:    candidate.Publish,
+		abort:      abort,
+		identity:   identity,
+		divergent:  divergent,
+		fieldCount: len(differences),
+		startup:    startup,
+		changes:    changes,
+		groups:     candidate.Groups,
 	}, nil
 }
 
@@ -253,23 +229,34 @@ func (m *Manager) notifyCandidateRejected(identity ReleaseIdentity, err error) {
 	}()
 }
 
-func (m *Manager) reportOnce(identity ReleaseIdentity, report DefaultMismatchReport) (err error) {
+// reportOnce delivers a mismatch report at most once per release identity.
+// The callback is an observer: a panic is swallowed and never influences
+// candidate admission, so a broken logger cannot refuse a restart.
+func (m *Manager) reportOnce(identity ReleaseIdentity, report DefaultMismatchReport) {
 	key := identity.dedupeKey()
 	m.reportMu.Lock()
-	defer m.reportMu.Unlock()
 	if m.lastReportedKey == key {
-		return m.lastReportErr
+		m.reportMu.Unlock()
+		return
 	}
-	callback := m.options.OnDefaultMismatch
 	m.lastReportedKey = key
-	defer func() {
-		if recover() != nil {
-			err = Reject(RejectInternal, errors.New("configstore: default mismatch callback panicked"))
-		}
-		m.lastReportErr = err
+	m.reportMu.Unlock()
+	callback := m.options.OnDefaultMismatch
+	if callback == nil {
+		return
+	}
+	func() {
+		defer func() { _ = recover() }()
+		callback(report)
 	}()
-	callback(report)
-	return nil
+}
+
+// clearReported forgets the last reported identity so that re-activating a
+// previously reported divergent release after a clean one is reported again.
+func (m *Manager) clearReported() {
+	m.reportMu.Lock()
+	m.lastReportedKey = ""
+	m.reportMu.Unlock()
 }
 
 func (r ReleaseIdentity) dedupeKey() string {
@@ -278,11 +265,15 @@ func (r ReleaseIdentity) dedupeKey() string {
 }
 
 type managedPrepared struct {
-	manager   *Manager
-	publish   func()
-	abort     func()
-	identity  ReleaseIdentity
-	divergent bool
+	manager    *Manager
+	publish    func()
+	abort      func()
+	identity   ReleaseIdentity
+	divergent  bool
+	fieldCount int
+	startup    bool
+	changes    []FieldChange
+	groups     func() (map[string]json.RawMessage, error)
 }
 
 func (p *managedPrepared) Commit() {
@@ -294,7 +285,35 @@ func (p *managedPrepared) Commit() {
 	p.manager.divergent = p.divergent
 	p.manager.ready = true
 	p.manager.mu.Unlock()
+	if !p.divergent {
+		p.manager.clearReported()
+	}
+	p.manager.notifyApplied(p)
 	p.manager.readyOnce.Do(func() { close(p.manager.readyCh) })
+}
+
+// ReleaseDivergence implements kmsclient.ReleaseDivergenceReporter so the
+// applied acknowledgement carries divergence without any field detail.
+func (p *managedPrepared) ReleaseDivergence() (bool, int) {
+	return p.divergent, p.fieldCount
+}
+
+func (m *Manager) notifyApplied(p *managedPrepared) {
+	callback := m.options.OnApplied
+	if callback == nil {
+		return
+	}
+	phase := PhaseRuntime
+	if p.startup {
+		phase = PhaseStartup
+	}
+	report := newAppliedReport(phase, p.identity, p.divergent, p.changes, p.groups)
+	// Commit must be infallible for the loader; a callback panic must never
+	// turn a published generation into a fatal loader failure.
+	func() {
+		defer func() { _ = recover() }()
+		callback(report)
+	}()
 }
 
 func (p *managedPrepared) Abort() { p.abort() }

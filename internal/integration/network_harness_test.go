@@ -12,6 +12,7 @@ import (
 	"errors"
 	"math/big"
 	"net"
+	"os"
 	"path/filepath"
 	"sync"
 	"testing"
@@ -51,6 +52,7 @@ type loopbackTLSEnv struct {
 	listener   net.Listener
 	serveDone  chan error
 	serverPool *x509.CertPool
+	serverPEM  []byte
 	adminToken string
 	adminConn  *grpc.ClientConn
 
@@ -157,6 +159,7 @@ func newLoopbackTLSEnv(t *testing.T) *loopbackTLSEnv {
 		listener:   listener,
 		serveDone:  make(chan error, 1),
 		serverPool: serverPool,
+		serverPEM:  pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: serverCert.Certificate[0]}),
 		adminToken: adminToken,
 	}
 	go func() { e.serveDone <- server.Serve(listener) }()
@@ -223,6 +226,17 @@ func (e *loopbackTLSEnv) shutdown() {
 }
 
 func (e *loopbackTLSEnv) endpoint() string { return e.listener.Addr().String() }
+
+// caFile writes the loopback server certificate to a PEM file and returns its
+// path, for clients that take a CA bundle path rather than a *tls.Config.
+func (e *loopbackTLSEnv) caFile(t *testing.T) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "kms-ca.pem")
+	if err := os.WriteFile(path, e.serverPEM, 0o600); err != nil {
+		t.Fatalf("write loopback CA file: %v", err)
+	}
+	return path
+}
 
 func (e *loopbackTLSEnv) clientTLS(clientCert *tls.Certificate) *tls.Config {
 	cfg := &tls.Config{

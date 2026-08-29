@@ -45,6 +45,8 @@ func mapError(err error) (status int, code, message string) {
 		return http.StatusConflict, "aborted", err.Error()
 	case errors.Is(err, domain.ErrFailedPrecondition):
 		return http.StatusPreconditionFailed, "failed_precondition", err.Error()
+	case errors.Is(err, domain.ErrResourceExhausted):
+		return http.StatusTooManyRequests, "rate_limited", err.Error()
 	case errors.Is(err, domain.ErrNotReady):
 		return http.StatusServiceUnavailable, "unavailable", err.Error()
 	case errors.Is(err, domain.ErrDecryptFailed):

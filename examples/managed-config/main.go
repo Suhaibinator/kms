@@ -35,17 +35,26 @@ func run(parent context.Context, output io.Writer) error {
 	}
 	defer demo.close()
 
+	// Channel-backed callbacks keep the transcript deterministic. A real
+	// service normally passes configstore.SlogCallbacks(sink, ...) instead and
+	// installs its logger on the sink once configuration has built it.
 	mismatches := make(chan configstore.DefaultMismatchReport, 4)
 	rejections := make(chan configstore.CandidateRejectionReport, 4)
+	applied := make(chan configstore.AppliedReport, 8)
 	storeCtx, stopStore := context.WithCancel(ctx)
 	store, err := configkms.Start(storeCtx, demo.client, configkms.Options{
 		Release:  exampleRelease,
 		Defaults: appconfig.Defaults,
-		OnDefaultMismatch: func(report configstore.DefaultMismatchReport) {
-			mismatches <- report
-		},
-		OnCandidateRejected: func(report configstore.CandidateRejectionReport) {
-			rejections <- report
+		Callbacks: configstore.Callbacks{
+			OnDefaultMismatch: func(report configstore.DefaultMismatchReport) {
+				mismatches <- report
+			},
+			OnApplied: func(report configstore.AppliedReport) {
+				applied <- report
+			},
+			OnCandidateRejected: func(report configstore.CandidateRejectionReport) {
+				rejections <- report
+			},
 		},
 		ReconcileInterval: time.Hour,
 		InstanceID:        "managed-config-example-1",
@@ -60,6 +69,9 @@ func run(parent context.Context, output io.Writer) error {
 	}()
 
 	if err := demo.waitForInitial(ctx, initial.releaseVersion); err != nil {
+		return err
+	}
+	if err := printApplied(ctx, output, applied); err != nil {
 		return err
 	}
 
@@ -79,6 +91,9 @@ func run(parent context.Context, output io.Writer) error {
 	}
 	mismatch, err := receiveMismatch(ctx, mismatches)
 	if err != nil {
+		return err
+	}
+	if err := printApplied(ctx, output, applied); err != nil {
 		return err
 	}
 	hotSnapshot := store.Current()
@@ -135,6 +150,9 @@ func run(parent context.Context, output io.Writer) error {
 	if _, err := demo.activate(ctx, restored, kmsclient.ReleaseStateApplied); err != nil {
 		return err
 	}
+	if err := printApplied(ctx, output, applied); err != nil {
+		return err
+	}
 	restoredSnapshot := store.Current()
 	restoredHandler := restoredSnapshot.RequestHandler()
 	restoredAPIKey := restoredHandler.APIKey()
@@ -145,6 +163,35 @@ func run(parent context.Context, output io.Writer) error {
 	}
 
 	return nil
+}
+
+// printApplied consumes the OnApplied report for the generation that was just
+// published. The report names canonical paths and, for non-secret fields,
+// previous and current values; the transcript prints paths only. Secret
+// rotations appear path-only (nil previous and current) by construction.
+func printApplied(ctx context.Context, output io.Writer, reports <-chan configstore.AppliedReport) error {
+	var report configstore.AppliedReport
+	select {
+	case report = <-reports:
+	case <-ctx.Done():
+		return fmt.Errorf("wait for applied report: %w", ctx.Err())
+	}
+	changed := "(none)"
+	if paths := changePaths(report); len(paths) != 0 {
+		changed = strings.Join(paths, ",")
+	}
+	_, err := fmt.Fprintf(output, "applied: phase=%s release=%s divergent=%t changed=%s\n",
+		report.Phase(), report.Release(), report.DefaultDivergent(), changed)
+	return err
+}
+
+func changePaths(report configstore.AppliedReport) []string {
+	changes := report.Changed()
+	paths := make([]string, len(changes))
+	for index := range changes {
+		paths[index] = changes[index].Path
+	}
+	return sortedStrings(paths)
 }
 
 func receiveMismatch(

@@ -148,7 +148,7 @@ func TestImplicitHomeGrant(t *testing.T) {
 	}
 
 	// Writes and other mutations are NOT implicitly granted.
-	for _, op := range []string{domain.OpParameterWrite, domain.OpSecretWrite, domain.OpSecretDestroy, domain.OpParameterDelete, domain.OpConfigurationReleaseCreate, domain.OpConfigurationReleaseValidate, domain.OpConfigurationReleaseActivate, domain.OpConfigurationReleaseList} {
+	for _, op := range []string{domain.OpParameterWrite, domain.OpSecretWrite, domain.OpSecretDestroy, domain.OpParameterDelete, domain.OpConfigurationReleaseCreate, domain.OpConfigurationReleaseValidate, domain.OpConfigurationReleaseActivate, domain.OpConfigurationReleaseList, domain.OpConfigurationReleaseVerifyDefaults} {
 		if Authorize(nil, home, op, ns("prod", "gradethis")) {
 			t.Errorf("implicit grant wrongly allowed mutation %s", op)
 		}
@@ -166,10 +166,37 @@ func TestImplicitHomeGrant(t *testing.T) {
 }
 
 func TestConfigurationReleaseOperationsAreValidPolicyRules(t *testing.T) {
-	for _, op := range []string{domain.OpConfigurationReleaseCreate, domain.OpConfigurationReleaseRead, domain.OpConfigurationReleaseValidate, domain.OpConfigurationReleaseActivate, domain.OpConfigurationReleaseList, domain.OpConfigurationReleaseWatch, "configuration-release:*"} {
+	for _, op := range []string{domain.OpConfigurationReleaseCreate, domain.OpConfigurationReleaseRead, domain.OpConfigurationReleaseValidate, domain.OpConfigurationReleaseActivate, domain.OpConfigurationReleaseList, domain.OpConfigurationReleaseWatch, domain.OpConfigurationReleaseVerifyDefaults, "configuration-release:*"} {
 		if !validOperationPattern(op) {
 			t.Errorf("release operation %q rejected", op)
 		}
+	}
+}
+
+// The verification oracle never rides the implicit home grant: a bound
+// identity needs an explicit allow rule (which is a valid, normalizable rule)
+// and an explicit deny still wins over that allow.
+func TestVerifyDefaultsRequiresExplicitAllow(t *testing.T) {
+	home := &domain.NamespaceRef{Env: "prod", App: "gradethis"}
+	if Authorize(nil, home, domain.OpConfigurationReleaseVerifyDefaults, ns("prod", "gradethis")) {
+		t.Fatal("verify-defaults was implicitly granted in the home namespace")
+	}
+	p, err := ValidateRules(domain.Policy{Name: "verify", Subject: "ci", Allow: []domain.PolicyRule{rule(domain.OpConfigurationReleaseVerifyDefaults, "prod", "gradethis")}})
+	if err != nil {
+		t.Fatalf("ValidateRules: %v", err)
+	}
+	if !Authorize([]domain.Policy{p}, home, domain.OpConfigurationReleaseVerifyDefaults, ns("prod", "gradethis")) {
+		t.Fatal("explicit allow for verify-defaults was not honored")
+	}
+	if !Authorize([]domain.Policy{p}, nil, domain.OpConfigurationReleaseVerifyDefaults, ns("prod", "gradethis")) {
+		t.Fatal("unbound identity with an explicit allow was denied")
+	}
+	if Authorize([]domain.Policy{p}, nil, domain.OpConfigurationReleaseVerifyDefaults, ns("prod", "other")) {
+		t.Fatal("allow leaked into another namespace")
+	}
+	denied := policyWith("deny", nil, []domain.PolicyRule{rule("configuration-release:*", "prod", "*")})
+	if Authorize([]domain.Policy{p, denied}, home, domain.OpConfigurationReleaseVerifyDefaults, ns("prod", "gradethis")) {
+		t.Fatal("category deny did not override the explicit allow")
 	}
 }
 

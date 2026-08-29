@@ -32,10 +32,28 @@ type Config struct {
 	Log        LogConfig        `yaml:"log"`
 }
 
-// ServerConfig holds listener addresses.
+// ServerConfig holds listener addresses and per-operation server budgets.
 type ServerConfig struct {
-	GRPCAddr string `yaml:"grpc_addr"`
-	HTTPAddr string `yaml:"http_addr"`
+	GRPCAddr       string               `yaml:"grpc_addr"`
+	HTTPAddr       string               `yaml:"http_addr"`
+	VerifyDefaults VerifyDefaultsConfig `yaml:"verify_defaults"`
+}
+
+// VerifyDefaultsConfig bounds the value-free VerifyReleaseDefaults oracle per
+// calling identity. RequestsPerHour and Burst form the request token bucket;
+// MinVerifyDefaultsMismatchBudget is the smallest accepted mismatch budget.
+// The budget doubles as the bucket capacity, so anything below one maximal
+// request (256 entries plus the schema bit) would make some valid requests
+// permanently refusable.
+const MinVerifyDefaultsMismatchBudget = 300
+
+// MismatchBudgetPerHour caps how many non-matching verdicts one identity may
+// obtain per hour, so an attacker cannot use the endpoint to test candidate
+// values at scale. All budgets are enforced per server instance.
+type VerifyDefaultsConfig struct {
+	RequestsPerHour       int `yaml:"requests_per_hour"`
+	Burst                 int `yaml:"burst"`
+	MismatchBudgetPerHour int `yaml:"mismatch_budget_per_hour"`
 }
 
 // StorageConfig holds the SQLite location.
@@ -93,6 +111,11 @@ func Default() Config {
 		Server: ServerConfig{
 			GRPCAddr: "0.0.0.0:8443",
 			HTTPAddr: "0.0.0.0:8080",
+			VerifyDefaults: VerifyDefaultsConfig{
+				RequestsPerHour:       60,
+				Burst:                 10,
+				MismatchBudgetPerHour: 500,
+			},
 		},
 		Storage: StorageConfig{
 			SQLitePath: "./kms.db",
@@ -147,6 +170,19 @@ func (c *Config) ApplyEnv() error {
 	setStr(&c.Security.ClientCAFile, "KMS_CLIENT_CA_FILE")
 	setStr(&c.Log.Level, "KMS_LOG_LEVEL")
 
+	for _, n := range []struct {
+		dst *int
+		key string
+	}{
+		{&c.Server.VerifyDefaults.RequestsPerHour, "KMS_VERIFY_DEFAULTS_REQUESTS_PER_HOUR"},
+		{&c.Server.VerifyDefaults.Burst, "KMS_VERIFY_DEFAULTS_BURST"},
+		{&c.Server.VerifyDefaults.MismatchBudgetPerHour, "KMS_VERIFY_DEFAULTS_MISMATCH_BUDGET_PER_HOUR"},
+	} {
+		if err := setInt(n.dst, n.key); err != nil {
+			return err
+		}
+	}
+
 	for _, b := range []struct {
 		dst *bool
 		key string
@@ -168,6 +204,19 @@ func setStr(dst *string, key string) {
 	if v, ok := os.LookupEnv(key); ok {
 		*dst = v
 	}
+}
+
+func setInt(dst *int, key string) error {
+	v, ok := os.LookupEnv(key)
+	if !ok {
+		return nil
+	}
+	n, err := strconv.Atoi(strings.TrimSpace(v))
+	if err != nil {
+		return fmt.Errorf("%s=%q is not a valid integer", key, v)
+	}
+	*dst = n
+	return nil
 }
 
 func setBool(dst *bool, key string) error {
@@ -194,6 +243,15 @@ func (c Config) Validate() error {
 	}
 	if c.Storage.SQLitePath == "" {
 		return fmt.Errorf("storage.sqlite_path must not be empty")
+	}
+	if c.Server.VerifyDefaults.RequestsPerHour <= 0 {
+		return fmt.Errorf("server.verify_defaults.requests_per_hour must be positive")
+	}
+	if c.Server.VerifyDefaults.Burst <= 0 {
+		return fmt.Errorf("server.verify_defaults.burst must be positive")
+	}
+	if c.Server.VerifyDefaults.MismatchBudgetPerHour < MinVerifyDefaultsMismatchBudget {
+		return fmt.Errorf("server.verify_defaults.mismatch_budget_per_hour must be at least %d (one full 256-entry request plus a schema mismatch, with headroom)", MinVerifyDefaultsMismatchBudget)
 	}
 	if c.Security.MTLSEnabled && !c.Security.TLSEnabled {
 		return fmt.Errorf("security.mtls_enabled requires security.tls_enabled")
@@ -289,13 +347,16 @@ func (c Config) Redacted() string {
 	}
 	return fmt.Sprintf(
 		"grpc_addr=%s http_addr=%s sqlite_path=%s tls=%t mtls=%t kek_file=%s frontend=%t audit=%t "+
-			"heartbeat=%s retain_duration=%s retain_rows=%d release_retain_duration=%s release_retain_versions=%d release_subscriber_retain_duration=%s log_level=%s",
+			"heartbeat=%s retain_duration=%s retain_rows=%d release_retain_duration=%s release_retain_versions=%d release_subscriber_retain_duration=%s "+
+			"verify_defaults_requests_per_hour=%d verify_defaults_burst=%d verify_defaults_mismatch_budget_per_hour=%d log_level=%s",
 		c.Server.GRPCAddr, c.Server.HTTPAddr, c.Storage.SQLitePath,
 		c.Security.TLSEnabled, c.Security.MTLSEnabled, kek,
 		c.Frontend.Enabled, c.Audit.Enabled,
 		time.Duration(c.Watch.HeartbeatInterval), time.Duration(c.Watch.RetainDuration),
 		c.Watch.RetainRows, time.Duration(c.Watch.ReleaseRetainDuration), c.Watch.ReleaseRetainVersions,
-		time.Duration(c.Watch.ReleaseSubscriberRetainDuration), c.Log.Level)
+		time.Duration(c.Watch.ReleaseSubscriberRetainDuration),
+		c.Server.VerifyDefaults.RequestsPerHour, c.Server.VerifyDefaults.Burst, c.Server.VerifyDefaults.MismatchBudgetPerHour,
+		c.Log.Level)
 }
 
 // LogLevel maps the configured level string to a zapcore.Level, defaulting to

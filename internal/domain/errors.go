@@ -33,6 +33,10 @@ var (
 	// ErrAborted: a compare-and-swap or other concurrency guard conflicted.
 	ErrAborted = errors.New("aborted")
 
+	// ErrResourceExhausted is returned when a per-identity budget (request or
+	// mismatch) for a rate-limited operation has been spent.
+	ErrResourceExhausted = errors.New("resource exhausted")
+
 	// ErrDecryptFailed: a value could not be decrypted. Callers other than
 	// admins receive it without further detail so a wrong client token and a
 	// corrupted ciphertext are indistinguishable.

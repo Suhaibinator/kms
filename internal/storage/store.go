@@ -23,7 +23,7 @@ import (
 
 // schemaVersion is the schema version this build supports. Opening a database
 // stamped with a higher version is refused.
-const schemaVersion = 6
+const schemaVersion = 7
 
 // tsLayout is a fixed-width RFC3339 UTC layout with nanosecond precision. Unlike
 // time.RFC3339Nano it never trims trailing zeros, so every stored timestamp has
@@ -290,6 +290,21 @@ func (s *SQLStore) migrate() error {
 	}
 	if err := verifyReleaseSubscriberIdentityKeys(s.db); err != nil {
 		return fmt.Errorf("verify release subscriber identity keys: %w", err)
+	}
+	// v7: applied-generation divergence on subscriber lifecycle rows. The
+	// states table is created only when absent (see above), so an existing
+	// table gains the columns through explicit DDL. Legacy rows read as
+	// not-divergent, which is the correct pre-v7 meaning.
+	for _, column := range []struct{ field, ddl string }{
+		{"AppliedDivergent", "ALTER TABLE release_subscriber_states ADD COLUMN applied_divergent INTEGER NOT NULL DEFAULT 0"},
+		{"DivergentFieldCount", "ALTER TABLE release_subscriber_states ADD COLUMN divergent_field_count INTEGER NOT NULL DEFAULT 0"},
+	} {
+		if s.db.Migrator().HasColumn(&releaseSubscriberStateModel{}, column.field) {
+			continue
+		}
+		if err := s.db.Exec(column.ddl).Error; err != nil {
+			return fmt.Errorf("add release subscriber divergence column %s: %w", column.field, err)
+		}
 	}
 	if needsSecretVersionAttributeBackfill {
 		// v2 makes content/protection metadata immutable per secret version.

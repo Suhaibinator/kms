@@ -15,7 +15,7 @@ import (
 
 func TestAdversarialMalformedDuplicateAndMistypedDocumentGauntlet(t *testing.T) {
 	schema := compileAdversarialFixtureSchema(t)
-	fixture := startFixture(t, matchingRelease(1, 6001), fixtureDefaults, false, nil)
+	fixture := startFixture(t, matchingRelease(1, 6001), fixtureDefaults, nil)
 	validDatabase := adversarialDatabase(adversarialEndpointDefault, "20", `"3s"`)
 	validRuntime := adversarialRuntimeDefault
 	if !adversarialStrictSchemaAccepts(schema, validDatabase, validRuntime) {

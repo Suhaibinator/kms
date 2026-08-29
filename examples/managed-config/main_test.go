@@ -19,14 +19,17 @@ func TestRunDemonstratesManagedConfigurationLifecycle(t *testing.T) {
 
 	transcript := output.String()
 	for _, milestone := range []string{
+		"applied: phase=startup release=dev/managed-config-example/runtime@1#1 divergent=false changed=(none)",
 		"initial typed snapshot: release=1",
 		"api_key=[REDACTED] api_key_version=1",
+		"applied: phase=runtime release=dev/managed-config-example/runtime@2#2 divergent=true changed=api_key,runtime.greeting,runtime.request_limit",
 		"atomic hot override: release=2",
 		"api_key=[REDACTED] api_key_version=2 divergent=true",
 		"default divergence: phase=runtime severity=error fields=runtime.greeting,runtime.request_limit",
 		"old snapshot is immutable: release=1",
 		"restart-required candidate: release=3 category=restart_required fields=server.listen_address",
 		"last-known-good after whole-candidate rejection: release=2",
+		"applied: phase=runtime release=dev/managed-config-example/runtime@4#4 divergent=false changed=api_key,runtime.greeting,runtime.request_limit",
 		"restored application defaults: release=4",
 		"api_key=[REDACTED] api_key_version=4 divergent=false",
 	} {

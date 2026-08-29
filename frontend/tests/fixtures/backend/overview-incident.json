@@ -123,6 +123,7 @@
       "release_state": "active",
       "rollout": {
         "applied_current": 1,
+        "applied_divergent": 0,
         "connected": 1,
         "other_release_names": [],
         "pending": 0,
@@ -288,6 +289,7 @@
       "release_state": "drift",
       "rollout": {
         "applied_current": 2,
+        "applied_divergent": 0,
         "connected": 3,
         "other_release_names": [],
         "pending": 0,
@@ -295,9 +297,11 @@
         "rejected_instances": [
           {
             "activation_revision": 12,
+            "applied_divergent": false,
             "client_name": "api",
             "connected": true,
             "diagnostic": "",
+            "divergent_field_count": 0,
             "identity": "admin",
             "instance_id": "prod-3",
             "rejection_category": "config_validation_failed",

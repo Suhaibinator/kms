@@ -291,7 +291,6 @@ function renderBinding(
   const hasRestartFields = descriptor.groups.some((groupDescriptor) =>
     groupDescriptor.fields.some((fieldDescriptor) => fieldDescriptor.reload === "restart"),
   );
-  const hasRestartSecrets = descriptor.secrets.some((secret) => secret.reload === "restart");
   const lines: string[] = [];
   const line = (text = ""): void => {
     lines.push(text);
@@ -313,6 +312,7 @@ function renderBinding(
     "immutableSnapshot",
     "ReleaseIdentity",
     "startManagedConfig",
+    "verifyDefaults",
   ];
   if (hasGroups) {
     runtimeValues.push("codecs", "decodeGroup", "encodeGroup", "field", "group", "rejectDecode");
@@ -325,11 +325,15 @@ function renderBinding(
   const runtimeTypes = [
     "ConfigSnapshot",
     "ContractEntry",
+    "FieldChange",
     "FieldDifference",
     "ManagedConfigManager",
     "ManagedConfigOptions",
     "ManagedPreparedCandidate",
     "ManagedReleaseClient",
+    "VerifyClient",
+    "VerifyOptions",
+    "VerifyResult",
   ];
   if (hasGroups) runtimeTypes.push("GroupCodec", "ValueCodec");
   for (const name of runtimeTypes) {
@@ -414,6 +418,25 @@ function renderBinding(
   line("    contract: generatedContract,");
   line("    parameters: encodeParameterGroups(config),");
   line("  });");
+  line("}");
+  line();
+  line("/**");
+  line(" * Ask KMS which parameter groups of config differ from the active release of");
+  line(" * options.namespace. Only canonical content hashes travel over the wire; no");
+  line(" * value is ever sent or returned.");
+  line(" */");
+  line("export function verifyReleaseDefaults(");
+  line("  client: VerifyClient,");
+  line(`  config: ${root},`);
+  line("  options: VerifyOptions,");
+  line("): Promise<VerifyResult> {");
+  line("  return verifyDefaults(");
+  line("    client,");
+  line(
+    "    { schemaSha256: schemaSHA256, contract: generatedContract, groups: encodeParameterGroups(config) },",
+  );
+  line("    options,");
+  line("  );");
   line("}");
   line();
 
@@ -600,11 +623,40 @@ function renderBinding(
   line("    }");
   line("    restartRequiredFields.sort();");
   line(
+    "    // Changed fields versus the previously applied generation feed onApplied. Secrets are path-only.",
+  );
+  line("    const changed: FieldChange[] = [];");
+  line("    if (active) {");
+  for (const [groupIndex, groupDescriptor] of descriptor.groups.entries()) {
+    for (const [fieldIndex, fieldDescriptor] of groupDescriptor.fields.entries()) {
+      line(
+        `      appendChange(changed, ${quote(`${groupDescriptor.alias}.${fieldDescriptor.jsonName}`)}, valueCodec${groupIndex}_${fieldIndex}, active.get(${quote(fieldDescriptor.property)}), validatedCandidate[${quote(fieldDescriptor.property)}]);`,
+      );
+    }
+  }
+  for (const secret of descriptor.secrets) {
+    line(
+      `      if (!sameSecretIdentity(active.get(${quote(secret.property)}), validatedCandidate[${quote(secret.property)}])) changed.push({ path: ${quote(secret.alias)}, previous: null, current: null });`,
+    );
+  }
+  line("    }");
+  line(
+    "    // Group documents feed observability only; an encoding failure must never reject a candidate.",
+  );
+  line("    let groups: Readonly<Record<string, string>>;");
+  line("    try {");
+  line("      groups = encodeParameterGroups(validatedCandidate);");
+  line("    } catch {");
+  line("      groups = {};");
+  line("    }");
+  line(
     "    const prepared = immutableSnapshot(validatedCandidate, ReleaseIdentity.from(snapshot));",
   );
   line("    return {");
   line("      defaultDifferences,");
   line("      restartRequiredFields,");
+  line("      changed,");
+  line("      groups,");
   line("      publish: () => {");
   line("        this.#active = prepared;");
   line("      },");
@@ -681,6 +733,16 @@ function renderBinding(
     line("  if (!sameEncoded(codec, expected, actual)) result.push({ path, expected, actual });");
     line("}");
     line();
+    line("function appendChange<T>(");
+    line("  result: FieldChange[],");
+    line("  path: string,");
+    line("  codec: ValueCodec<T>,");
+    line("  previous: T,");
+    line("  current: T,");
+    line("): void {");
+    line("  if (!sameEncoded(codec, previous, current)) result.push({ path, previous, current });");
+    line("}");
+    line();
     if (hasRestartFields) {
       line(
         "function appendRestart<T>(result: string[], path: string, codec: ValueCodec<T>, active: T, candidate: T): void {",
@@ -717,7 +779,7 @@ function renderBinding(
     line("}");
     line();
   }
-  if (hasRestartSecrets) {
+  if (hasSecrets) {
     line("function sameSecretIdentity(left: unknown, right: unknown): boolean {");
     line("  return (");
     line("    left instanceof Secret &&");

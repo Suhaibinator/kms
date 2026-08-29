@@ -128,6 +128,29 @@ func (h *configurationReleaseServer) ValidateRelease(ctx context.Context, req *k
 	return &kmsv1.ValidateReleaseResponse{Valid: len(out) == 0, Errors: out}, nil
 }
 
+// VerifyReleaseDefaults is the value-free defaults oracle. The wire request
+// and response carry aliases, content types, caller hashes and bounded
+// verdicts only; core enforces the operation, the per-identity budgets, and
+// the audit record.
+func (h *configurationReleaseServer) VerifyReleaseDefaults(ctx context.Context, req *kmsv1.VerifyReleaseDefaultsRequest) (*kmsv1.VerifyReleaseDefaultsResponse, error) {
+	pr, err := requirePrincipal(ctx)
+	if err != nil {
+		return nil, err
+	}
+	entries := make([]domain.VerifyDefaultsEntry, 0, len(req.GetEntries()))
+	for _, e := range req.GetEntries() {
+		entries = append(entries, domain.VerifyDefaultsEntry{Alias: e.GetAlias(), ContentType: e.GetContentType(), SHA256: e.GetSha256()})
+	}
+	out, err := h.s.svc.VerifyReleaseDefaults(ctx, pr, domain.VerifyReleaseDefaultsInput{
+		Namespace: nsRefFromProto(req.GetNamespace()), ReleaseName: req.GetName(),
+		Profile: req.GetProfile(), SchemaSHA256: req.GetSchemaSha256(), Entries: entries,
+	})
+	if err != nil {
+		return nil, h.s.mapErr(ctx, err)
+	}
+	return toProtoVerifyReleaseDefaults(out), nil
+}
+
 func toProtoReleaseValidationError(e domain.ReleaseValidationError) *kmsv1.ReleaseValidationError {
 	return &kmsv1.ReleaseValidationError{Alias: e.Alias, Code: e.Code, SchemaPointer: e.SchemaPointer, Message: e.Message}
 }
@@ -282,7 +305,7 @@ func (h *configurationReleaseServer) WatchRelease(stream kmsv1.ConfigurationRele
 				recvErr <- domain.Errorf(domain.ErrInvalidArgument, "acknowledgement does not match registration")
 				return
 			}
-			err = h.s.svc.AcknowledgeConfigurationRelease(ctx, pr, domain.ReleaseAcknowledgement{Namespace: ns, ReleaseName: a.GetName(), ReleaseVersion: a.GetVersion(), ActivationRevision: a.GetActivationRevision(), ClientName: a.GetClientName(), InstanceID: a.GetInstanceId(), ConnectionID: connectionIDText, State: a.GetState(), RejectionCategory: a.GetRejectionCategory(), Diagnostic: a.GetDiagnostic(), ClientTimestamp: unixMSToTime(a.GetTimestampUnixMs())})
+			err = h.s.svc.AcknowledgeConfigurationRelease(ctx, pr, domain.ReleaseAcknowledgement{Namespace: ns, ReleaseName: a.GetName(), ReleaseVersion: a.GetVersion(), ActivationRevision: a.GetActivationRevision(), ClientName: a.GetClientName(), InstanceID: a.GetInstanceId(), ConnectionID: connectionIDText, State: a.GetState(), RejectionCategory: a.GetRejectionCategory(), Diagnostic: a.GetDiagnostic(), ClientTimestamp: unixMSToTime(a.GetTimestampUnixMs()), AppliedDivergent: a.GetAppliedDivergent(), DivergentFieldCount: a.GetDivergentFieldCount()})
 			if err != nil {
 				recvErr <- err
 				return

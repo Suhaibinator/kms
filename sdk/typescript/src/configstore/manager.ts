@@ -9,11 +9,12 @@ import type {
 import { cloneConfig } from "./clone.js";
 import { type ContractEntry, createManifestValidator, validateContract } from "./contract.js";
 import {
+  AppliedReport,
   CandidateError,
   CandidateRejectionReport,
   candidateErrorPaths,
-  DefaultMismatchError,
   DefaultMismatchReport,
+  type FieldChange,
   type FieldDifference,
 } from "./errors.js";
 import { ReleaseIdentity } from "./snapshot.js";
@@ -27,6 +28,13 @@ export interface ManagedPreparedCandidate {
   readonly defaultDifferences?: readonly FieldDifference[];
   /** Generated canonical fields whose effective value/pin changed after startup. */
   readonly restartRequiredFields?: readonly string[];
+  /**
+   * Fields that differ from the previously applied generation; secret entries
+   * must be path-only. Ignored for the initial generation.
+   */
+  readonly changed?: readonly FieldChange[];
+  /** Canonical non-secret parameter group documents keyed by alias. Never secrets. */
+  readonly groups?: Readonly<Record<string, string>>;
 }
 
 export type PrepareManagedCandidate = (
@@ -34,11 +42,35 @@ export type PrepareManagedCandidate = (
   signal: AbortSignal,
 ) => ManagedPreparedCandidate | Promise<ManagedPreparedCandidate>;
 
+/**
+ * Application-owned observers of a managed store. `onDefaultMismatch` is
+ * required; the others are optional. Every callback runs synchronously on the
+ * loader's candidate path and must not block; thrown errors are isolated and
+ * returned promises are discarded. `consoleCallbacks` is a ready-made
+ * implementation.
+ */
+export interface Callbacks {
+  /**
+   * Reports every candidate whose non-secret values differ from source
+   * defaults, at startup and on every reload. The candidate is still applied;
+   * the report is the signal to reconcile code and KMS. Must be synchronous.
+   */
+  readonly onDefaultMismatch: (report: DefaultMismatchReport) => void;
+  /**
+   * Fires after each generation is published, including the initial one,
+   * carrying the fields that changed since the previously applied generation.
+   */
+  readonly onApplied?: (report: AppliedReport) => void;
+  /** Optional, value-free local diagnostics. Callback failures are isolated. */
+  readonly onCandidateRejected?: (report: CandidateRejectionReport) => void;
+}
+
 export interface ManagedConfigOptions
   extends Omit<
-    ClientReleaseLoaderOptions,
-    "name" | "namespace" | "clientName" | "validateManifest"
-  > {
+      ClientReleaseLoaderOptions,
+      "name" | "namespace" | "clientName" | "validateManifest"
+    >,
+    Callbacks {
   /** Release name within the client's home or explicitly selected namespace. */
   readonly release: string;
   /** Optional env/app override. Omit to use the KmsClient home namespace. */
@@ -46,11 +78,6 @@ export interface ManagedConfigOptions
   /** Optional acknowledgement identity override. */
   readonly clientName?: string;
   readonly contract: readonly ContractEntry[];
-  readonly allowDefaultMismatch?: boolean;
-  /** Mandatory: default drift must never become silent. Must be synchronous. */
-  readonly onDefaultMismatch: (report: DefaultMismatchReport) => void;
-  /** Optional, value-free local diagnostics. Callback failures are isolated. */
-  readonly onCandidateRejected?: (report: CandidateRejectionReport) => void;
 }
 
 /** Structural KmsClient subset; transport internals remain private. */
@@ -79,11 +106,8 @@ export interface ManagedConfigStats {
   readonly appliedActivationRevision: bigint;
 }
 
-interface PolicyOptions {
+interface PolicyOptions extends Callbacks {
   readonly name: string;
-  readonly allowDefaultMismatch: boolean;
-  readonly onDefaultMismatch: (report: DefaultMismatchReport) => void;
-  readonly onCandidateRejected?: (report: CandidateRejectionReport) => void;
 }
 
 interface Completion {
@@ -106,9 +130,7 @@ export class ManagedConfigManager {
   #applied = new ReleaseIdentity();
   #divergent = false;
   #lastReportedKey = "";
-  #lastReportError: CandidateError | undefined;
   #lastRejectedKey = "";
-  #startupError: DefaultMismatchError | undefined;
 
   /** @internal Use startManagedConfig. */
   constructor(loader: ReleaseLoader, options: PolicyOptions, prepare: PrepareManagedCandidate) {
@@ -142,7 +164,7 @@ export class ManagedConfigManager {
     );
   }
 
-  /** @internal Wait for the first atomic publication or typed startup failure. */
+  /** @internal Wait for the first atomic publication or the loader's startup failure. */
   async waitUntilReady(): Promise<void> {
     const completion = this.#completion;
     if (!completion) throw new Error("configstore: manager is not started");
@@ -151,9 +173,6 @@ export class ManagedConfigManager {
       completion.then((result) => ({ ready: false, result }) as const),
     ]);
     if (outcome.ready) return;
-    if (this.#startupError && isRejectionCategory(outcome.result.error, "default_mismatch")) {
-      throw this.#startupError;
-    }
     throw (
       outcome.result.error ?? new Error("configstore: release loader stopped before publication")
     );
@@ -221,7 +240,6 @@ export class ManagedConfigManager {
     const identity = ReleaseIdentity.from(snapshot);
     this.#observed = identity;
     const startup = !this.#ready;
-    if (startup) this.#startupError = undefined;
 
     let candidate: ManagedPreparedCandidate;
     try {
@@ -247,9 +265,16 @@ export class ManagedConfigManager {
 
     let differences: FieldDifference[];
     let restartFields: string[];
+    let changes: FieldChange[];
+    let groups: Record<string, string>;
     try {
       differences = cloneDifferences(candidate.defaultDifferences ?? []);
       restartFields = cloneRestartFields(candidate.restartRequiredFields ?? []);
+      // Always validate the binding's contract; the initial generation has no
+      // previous generation, so its change list is discarded rather than reported.
+      const candidateChanges = cloneChanges(candidate.changed ?? []);
+      changes = startup ? [] : candidateChanges;
+      groups = cloneGroups(candidate.groups ?? {});
     } catch (cause) {
       this.#abortOrInternal(abort, identity);
       const error = new CandidateError("internal", cause);
@@ -267,29 +292,14 @@ export class ManagedConfigManager {
       throw error;
     }
 
+    // Divergence from source defaults is reported, never refused: a process
+    // must be able to restart onto whatever release is active. The report is
+    // the operator's signal to reconcile code and KMS.
+    const phase = startup ? "startup" : "runtime";
     const divergent = differences.length > 0;
     if (divergent) {
-      const phase = startup ? "startup" : "runtime";
-      const severity = startup && !this.#options.allowDefaultMismatch ? "fatal" : "error";
-      const report = new DefaultMismatchReport(phase, severity, identity, differences);
-      const reportError = this.#reportOnce(identity, report);
-      if (reportError) {
-        this.#abortOrInternal(abort, identity);
-        this.#notifyCandidateRejected(identity, reportError);
-        throw reportError;
-      }
-      if (severity === "fatal") {
-        const mismatch = new DefaultMismatchError(report);
-        this.#startupError = mismatch;
-        this.#abortOrInternal(abort, identity);
-        const error = new CandidateError(
-          "default_mismatch",
-          mismatch,
-          differences.map(({ path }) => path),
-        );
-        this.#notifyCandidateRejected(identity, error);
-        throw error;
-      }
+      const report = new DefaultMismatchReport(phase, "error", identity, differences);
+      this.#reportOnce(identity, report);
     }
 
     return {
@@ -303,10 +313,15 @@ export class ManagedConfigManager {
         this.#applied = identity;
         this.#divergent = divergent;
         this.#ready = true;
+        // A clean generation forgets the last reported identity so rolling back
+        // onto a previously reported divergent release is reported again.
+        if (!divergent) this.#lastReportedKey = "";
         this.#readySignal.resolve();
+        this.#notifyApplied(phase, identity, divergent, changes, groups);
         return undefined;
       },
       abort,
+      releaseDivergence: () => ({ divergent, fieldCount: differences.length }),
     };
   }
 
@@ -322,6 +337,26 @@ export class ManagedConfigManager {
       const error = new CandidateError("internal", cause);
       this.#notifyCandidateRejected(identity, error);
       throw error;
+    }
+  }
+
+  #notifyApplied(
+    phase: "startup" | "runtime",
+    identity: ReleaseIdentity,
+    divergent: boolean,
+    changes: readonly FieldChange[],
+    groups: Readonly<Record<string, string>>,
+  ): void {
+    const callback = this.#options.onApplied;
+    if (!callback) return;
+    // commit must stay infallible for the loader; a callback failure must
+    // never turn a published generation into a fatal loader failure.
+    try {
+      const report = new AppliedReport(phase, identity, divergent, changes, groups);
+      const result = callUnknown(callback, report);
+      discardPromise(result);
+    } catch {
+      // Diagnostics cannot affect an already published generation.
     }
   }
 
@@ -343,24 +378,21 @@ export class ManagedConfigManager {
     }
   }
 
-  #reportOnce(
-    identity: ReleaseIdentity,
-    report: DefaultMismatchReport,
-  ): CandidateError | undefined {
+  /**
+   * Deliver a mismatch report at most once per release identity. The callback
+   * is an observer: a throw or a returned promise is isolated and never
+   * influences candidate admission, so a broken logger cannot refuse startup.
+   */
+  #reportOnce(identity: ReleaseIdentity, report: DefaultMismatchReport): void {
     const key = identity.dedupeKey();
-    if (this.#lastReportedKey === key) return this.#lastReportError;
+    if (this.#lastReportedKey === key) return;
     this.#lastReportedKey = key;
     try {
       const result = callUnknown(this.#options.onDefaultMismatch, report);
-      if (isPromiseLike(result)) {
-        discardPromise(result);
-        throw new TypeError("configstore: default mismatch callback must be synchronous");
-      }
-      this.#lastReportError = undefined;
-    } catch (cause) {
-      this.#lastReportError = new CandidateError("internal", cause);
+      if (isPromiseLike(result)) discardPromise(result);
+    } catch {
+      // Isolated: observers never affect admission.
     }
-    return this.#lastReportError;
   }
 }
 
@@ -381,6 +413,9 @@ export async function startManagedConfig(
     throw new TypeError("configstore: prepare callback is required");
   if (typeof options?.onDefaultMismatch !== "function") {
     throw new TypeError("configstore: onDefaultMismatch callback is required");
+  }
+  if (options.onApplied !== undefined && typeof options.onApplied !== "function") {
+    throw new TypeError("configstore: onApplied must be a function when provided");
   }
   const release = options.release?.trim();
   if (!release) throw new TypeError("configstore: release is required");
@@ -406,8 +441,8 @@ export async function startManagedConfig(
     loader,
     {
       name: release,
-      allowDefaultMismatch: options.allowDefaultMismatch ?? false,
       onDefaultMismatch: options.onDefaultMismatch,
+      ...(options.onApplied ? { onApplied: options.onApplied } : {}),
       ...(options.onCandidateRejected ? { onCandidateRejected: options.onCandidateRejected } : {}),
     },
     prepare,
@@ -451,6 +486,32 @@ function cloneDifferences(differences: readonly FieldDifference[]): FieldDiffere
   }));
 }
 
+function cloneChanges(changes: readonly FieldChange[]): FieldChange[] {
+  if (!Array.isArray(changes)) {
+    throw new TypeError("configstore: changed fields must be an array");
+  }
+  return changes.map((change) => ({
+    path: requireString(change?.path, "changed field path"),
+    previous: cloneConfig(change.previous),
+    current: cloneConfig(change.current),
+  }));
+}
+
+function cloneGroups(groups: Readonly<Record<string, string>>): Record<string, string> {
+  if (typeof groups !== "object" || groups === null || Array.isArray(groups)) {
+    throw new TypeError("configstore: parameter groups must be a record of documents");
+  }
+  const result: Record<string, string> = Object.create(null) as Record<string, string>;
+  for (const alias of Object.keys(groups)) {
+    const descriptor = Object.getOwnPropertyDescriptor(groups, alias);
+    if (!descriptor || !("value" in descriptor)) {
+      throw new TypeError("configstore: parameter group documents must be data properties");
+    }
+    result[alias] = requireString(descriptor.value, "parameter group document");
+  }
+  return result;
+}
+
 function cloneRestartFields(fields: readonly string[]): string[] {
   if (!Array.isArray(fields)) {
     throw new TypeError("configstore: restart-required fields must be an array");
@@ -477,15 +538,6 @@ function synchronousCallbackError(name: string, returned: unknown): Error | unde
   if (returned === undefined) return undefined;
   void Promise.resolve(returned).catch(() => undefined);
   return new TypeError(`${name} must return undefined synchronously`);
-}
-
-function isRejectionCategory(error: unknown, category: ReleaseRejectionCategory): boolean {
-  return (
-    typeof error === "object" &&
-    error !== null &&
-    "category" in error &&
-    error.category === category
-  );
 }
 
 function isAbortError(error: unknown): boolean {

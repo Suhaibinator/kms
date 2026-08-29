@@ -24,11 +24,10 @@ var generatedContract = []configstore.ContractEntry{
 
 // Options configures the generated managed configuration store.
 type Options struct {
-	Release              string
-	Defaults             func() *rootconfig.Config
-	AllowDefaultMismatch bool
-	OnDefaultMismatch    func(configstore.DefaultMismatchReport)
-	OnCandidateRejected  func(configstore.CandidateRejectionReport)
+	Release  string
+	Defaults func() *rootconfig.Config
+	// Callbacks observe mismatches, applied generations and rejections; configstore.SlogCallbacks is a ready-made implementation.
+	configstore.Callbacks
 	SecretTokenProvider  kmsclient.SecretTokenProvider
 	ReconcileInterval    time.Duration
 	MaxConcurrentFetches int
@@ -106,6 +105,20 @@ func EncodeDefaultsArtifact(profile string, root *rootconfig.Config) ([]byte, er
 	})
 }
 
+// VerifyReleaseDefaults asks KMS which parameter groups of root differ from the active release of
+// opts.Namespace. Only canonical content hashes travel over the wire; no value is ever sent or returned.
+func VerifyReleaseDefaults(ctx context.Context, client *kmsclient.Client, root *rootconfig.Config, opts configstore.VerifyOptions) (configstore.VerifyResult, error) {
+	groups, err := EncodeParameterGroups(root)
+	if err != nil {
+		return configstore.VerifyResult{}, err
+	}
+	return configstore.VerifyDefaults(ctx, client, configstore.VerifyInput{
+		SchemaSHA256: generatedSchemaSHA256,
+		Contract:     generatedContract,
+		Groups:       groups,
+	}, opts)
+}
+
 // Start synchronously validates and publishes the initial release, then watches in the background.
 func Start(ctx context.Context, client *kmsclient.Client, options Options) (*Store, error) {
 	if options.Defaults == nil {
@@ -125,9 +138,7 @@ func Start(ctx context.Context, client *kmsclient.Client, options Options) (*Sto
 	manager, err := configstore.Start(ctx, client, configstore.Options{
 		Release:              options.Release,
 		Contract:             generatedContract,
-		AllowDefaultMismatch: options.AllowDefaultMismatch,
-		OnDefaultMismatch:    options.OnDefaultMismatch,
-		OnCandidateRejected:  options.OnCandidateRejected,
+		Callbacks:            options.Callbacks,
 		SecretTokenProvider:  options.SecretTokenProvider,
 		ReconcileInterval:    options.ReconcileInterval,
 		MaxConcurrentFetches: options.MaxConcurrentFetches,
@@ -202,6 +213,7 @@ func (s *Store) prepare(ctx context.Context, snapshot kmsclient.ReleaseSnapshot)
 		differences = append(differences, configstore.FieldDifference{Path: "rate_limits.ratio", Expected: reportValue10(effectiveDefaults.Ratio), Actual: reportValue10(candidate.Ratio)})
 	}
 	restartRequired := make([]string, 0)
+	changed := make([]configstore.FieldChange, 0)
 	active := s.active.Load()
 	if active != nil {
 		if !equalValue0(candidate.Endpoint, active.config.Endpoint) {
@@ -210,6 +222,25 @@ func (s *Store) prepare(ctx context.Context, snapshot kmsclient.ReleaseSnapshot)
 		if candidate.Password.Path() != active.config.Password.Path() || candidate.Password.Version() != active.config.Password.Version() {
 			restartRequired = append(restartRequired, "database_password")
 		}
+		// Changed fields versus the previously applied generation feed OnApplied. Secrets are path-only.
+		if !equalValue0(candidate.Endpoint, active.config.Endpoint) {
+			changed = append(changed, configstore.FieldChange{Path: "database.endpoint", Previous: reportValue0(active.config.Endpoint), Current: reportValue0(candidate.Endpoint)})
+		}
+		if !equalValue7(candidate.Timeout, active.config.Timeout) {
+			changed = append(changed, configstore.FieldChange{Path: "database.timeout", Previous: reportValue7(active.config.Timeout), Current: reportValue7(candidate.Timeout)})
+		}
+		if candidate.Password.Path() != active.config.Password.Path() || candidate.Password.Version() != active.config.Password.Version() {
+			changed = append(changed, configstore.FieldChange{Path: "database_password"})
+		}
+		if !equalValue8(candidate.Limit, active.config.Limit) {
+			changed = append(changed, configstore.FieldChange{Path: "rate_limits.limit", Previous: reportValue8(active.config.Limit), Current: reportValue8(candidate.Limit)})
+		}
+		if !equalValue9(candidate.Payload, active.config.Payload) {
+			changed = append(changed, configstore.FieldChange{Path: "rate_limits.payload", Previous: reportValue9(active.config.Payload), Current: reportValue9(candidate.Payload)})
+		}
+		if !equalValue10(candidate.Ratio, active.config.Ratio) {
+			changed = append(changed, configstore.FieldChange{Path: "rate_limits.ratio", Previous: reportValue10(active.config.Ratio), Current: reportValue10(candidate.Ratio)})
+		}
 	}
 	generation := &immutableGeneration{config: candidate, release: configstore.ReleaseIdentityFromSnapshot(snapshot)}
 	return configstore.PreparedCandidate{
@@ -217,6 +248,8 @@ func (s *Store) prepare(ctx context.Context, snapshot kmsclient.ReleaseSnapshot)
 		Abort:                 func() {},
 		DefaultDifferences:    differences,
 		RestartRequiredFields: restartRequired,
+		Changed:               changed,
+		Groups:                func() (map[string]json.RawMessage, error) { return EncodeParameterGroups(generation.config) },
 	}, nil
 }
 

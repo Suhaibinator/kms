@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"reflect"
 	"sort"
@@ -176,8 +175,20 @@ func startFixture(
 	t *testing.T,
 	initial releaseData,
 	defaults func() *fixtureconfig.Config,
-	allowDefaultMismatch bool,
 	reporter func(configstore.DefaultMismatchReport),
+) *runningFixture {
+	t.Helper()
+	return startFixtureWithCallbacks(t, initial, defaults, configstore.Callbacks{OnDefaultMismatch: reporter})
+}
+
+// startFixtureWithCallbacks enters through the generated public API. A
+// divergent initial release is applied and reported, never refused, so the
+// helper only fails on transport, contract, decode, or validation errors.
+func startFixtureWithCallbacks(
+	t *testing.T,
+	initial releaseData,
+	defaults func() *fixtureconfig.Config,
+	callbacks configstore.Callbacks,
 ) *runningFixture {
 	t.Helper()
 	server, err := kmsclienttest.New()
@@ -187,16 +198,15 @@ func startFixture(
 	installInitial(t, server, initial)
 	client := newFixtureClient(t, server)
 	ctx, cancel := context.WithCancel(context.Background())
-	if reporter == nil {
-		reporter = func(configstore.DefaultMismatchReport) {}
+	if callbacks.OnDefaultMismatch == nil {
+		callbacks.OnDefaultMismatch = func(configstore.DefaultMismatchReport) {}
 	}
 	store, err := Start(ctx, client, Options{
-		Release:              fixtureReleaseName,
-		Defaults:             defaults,
-		AllowDefaultMismatch: allowDefaultMismatch,
-		OnDefaultMismatch:    reporter,
-		ReconcileInterval:    time.Hour,
-		InstanceID:           "managed-fixture-instance",
+		Release:           fixtureReleaseName,
+		Defaults:          defaults,
+		Callbacks:         callbacks,
+		ReconcileInterval: time.Hour,
+		InstanceID:        "managed-fixture-instance",
 	})
 	if err != nil {
 		cancel()
@@ -274,7 +284,7 @@ func waitRejectedCount(t *testing.T, store *Store, category configstore.Rejectio
 func TestGeneratedStoreStartupViewsAndDefensiveGetters(t *testing.T) {
 	initial := matchingRelease(1, 101)
 	sourceDefaults := fixtureconfig.Defaults()
-	fixture := startFixture(t, initial, func() *fixtureconfig.Config { return sourceDefaults }, false, nil)
+	fixture := startFixture(t, initial, func() *fixtureconfig.Config { return sourceDefaults }, nil)
 
 	// The generated store must own defaults, including excluded composites.
 	sourceDefaults.Local["owners"][0] = "mutated-by-caller"
@@ -329,98 +339,295 @@ func TestGeneratedStoreStartupViewsAndDefensiveGetters(t *testing.T) {
 	}
 }
 
-func TestStartupDefaultMismatchFatalAndBypass(t *testing.T) {
-	t.Run("fatal typed error and immutable report", func(t *testing.T) {
-		initial := matchingRelease(1, 101)
-		const needle = "nonsecret-sensitive-looking-value"
-		initial.runtimeDocument = runtimeDocument([]string{needle}, []byte("fixture-payload"), map[string]uint64{"burst": 100, "steady": 25}, [2]float64{0.25, 0.75})
+func TestStartupDefaultMismatchIsAppliedAndReported(t *testing.T) {
+	initial := matchingRelease(1, 101)
+	const needle = "nonsecret-sensitive-looking-value"
+	initial.runtimeDocument = runtimeDocument([]string{needle}, []byte("fixture-payload"), map[string]uint64{"burst": 100, "steady": 25}, [2]float64{0.25, 0.75})
 
-		server, err := kmsclienttest.New()
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer server.Close()
-		installInitial(t, server, initial)
-		client := newFixtureClient(t, server)
-		defer func() { _ = client.Close() }()
-		ctx := t.Context()
-		reports := make(chan configstore.DefaultMismatchReport, 1)
-		store, startErr := Start(ctx, client, Options{
-			Release:           fixtureReleaseName,
-			Defaults:          fixtureconfig.Defaults,
-			OnDefaultMismatch: func(report configstore.DefaultMismatchReport) { reports <- report },
-			ReconcileInterval: time.Hour,
-		})
-		if store != nil || startErr == nil {
-			t.Fatalf("Start = (%v, %v), want nil store and mismatch error", store, startErr)
-		}
-		var mismatch *configstore.DefaultMismatchError
-		if !errors.As(startErr, &mismatch) {
-			t.Fatalf("Start error type = %T (%v), want *configstore.DefaultMismatchError", startErr, startErr)
-		}
-		if mismatch.Phase() != configstore.MismatchStartup || mismatch.Severity() != configstore.MismatchFatal {
-			t.Fatalf("unexpected mismatch classification: phase=%s severity=%s", mismatch.Phase(), mismatch.Severity())
-		}
-		if mismatch.Release().Version() != 1 || mismatch.Release().ActivationRevision() != 101 {
-			t.Fatalf("unexpected mismatch release: %s", mismatch.Release())
-		}
-		report := <-reports
-		if report != mismatch.Report() {
-			t.Fatal("callback and returned error did not share the same immutable report")
-		}
-		fields := report.Fields()
-		if len(fields) != 1 || fields[0].Path != "runtime.features" {
-			t.Fatalf("unexpected mismatch fields: %#v", fields)
-		}
-		actual, ok := fields[0].Actual.([]string)
-		if !ok || len(actual) != 1 || actual[0] != needle {
-			t.Fatalf("unexpected explicit actual value: %#v", fields[0].Actual)
-		}
-		actual[0] = "mutated"
-		if got := report.Fields()[0].Actual.([]string)[0]; got != needle {
-			t.Fatalf("report Fields did not return a defensive copy: %q", got)
-		}
-		for _, rendered := range []string{fmt.Sprint(report), fmt.Sprintf("%+v", report), fmt.Sprintf("%#v", report), fmt.Sprint(startErr), fmt.Sprintf("%+v", startErr), fmt.Sprintf("%#v", startErr)} {
-			if strings.Contains(rendered, needle) {
-				t.Fatalf("ordinary formatting exposed mismatch value: %q", rendered)
-			}
-		}
+	mismatches := make(chan configstore.DefaultMismatchReport, 4)
+	applied := make(chan configstore.AppliedReport, 4)
+	fixture := startFixtureWithCallbacks(t, initial, fixtureconfig.Defaults, configstore.Callbacks{
+		OnDefaultMismatch: func(report configstore.DefaultMismatchReport) { mismatches <- report },
+		OnApplied:         func(report configstore.AppliedReport) { applied <- report },
 	})
 
-	t.Run("explicit bypass publishes divergent startup", func(t *testing.T) {
-		initial := matchingRelease(1, 101)
-		initial.runtimeDocument = runtimeDocument([]string{"kms-override"}, []byte("fixture-payload"), map[string]uint64{"burst": 100, "steady": 25}, [2]float64{0.25, 0.75})
-		reports := make(chan configstore.DefaultMismatchReport, 2)
-		fixture := startFixture(t, initial, fixtureconfig.Defaults, true, func(report configstore.DefaultMismatchReport) { reports <- report })
-		if got := fixture.store.Current().ApiHandler().Features(); !reflect.DeepEqual(got, []string{"kms-override"}) {
-			t.Fatalf("bypassed startup did not publish KMS values: %#v", got)
-		}
-		report := <-reports
-		if report.Phase() != configstore.MismatchStartup || report.Severity() != configstore.MismatchError {
-			t.Fatalf("unexpected bypass report: %s/%s", report.Phase(), report.Severity())
-		}
-		if !fixture.store.Status().DefaultDivergent || !fixture.store.Stats().DefaultDivergent {
-			t.Fatal("bypassed startup did not expose default divergence")
-		}
+	// A divergent active release is published as-is: a process must be able to
+	// restart onto whatever is active, and the report is the reconciliation
+	// signal.
+	if got := fixture.store.Current().ApiHandler().Features(); !reflect.DeepEqual(got, []string{needle}) {
+		t.Fatalf("divergent startup did not publish KMS values: %#v", got)
+	}
+	if !fixture.store.Status().DefaultDivergent || !fixture.store.Stats().DefaultDivergent {
+		t.Fatal("divergent startup did not expose default divergence")
+	}
 
-		restored := matchingRelease(2, 102)
-		activate(t, fixture, restored)
-		waitAcknowledgement(t, fixture.sub, 2, kmsclient.ReleaseStateApplied)
-		waitAppliedVersion(t, fixture.store, 2)
-		if fixture.store.Status().DefaultDivergent || fixture.store.Stats().DefaultDivergent {
-			t.Fatal("restoring defaults did not clear divergence")
+	var report configstore.DefaultMismatchReport
+	select {
+	case report = <-mismatches:
+	default:
+		t.Fatal("divergent startup emitted no mismatch report before Start returned")
+	}
+	select {
+	case extra := <-mismatches:
+		t.Fatalf("divergent startup emitted more than one mismatch report: %v", extra)
+	default:
+	}
+	if report.Phase() != configstore.PhaseStartup || report.Severity() != configstore.MismatchError {
+		t.Fatalf("unexpected mismatch classification: phase=%s severity=%s", report.Phase(), report.Severity())
+	}
+	if report.Release().Version() != 1 || report.Release().ActivationRevision() != 101 {
+		t.Fatalf("unexpected mismatch release: %s", report.Release())
+	}
+	fields := report.Fields()
+	if len(fields) != 1 || fields[0].Path != "runtime.features" {
+		t.Fatalf("unexpected mismatch fields: %#v", fields)
+	}
+	if expected, ok := fields[0].Expected.([]string); !ok || !reflect.DeepEqual(expected, []string{"search", "reports"}) {
+		t.Fatalf("unexpected explicit expected value: %#v", fields[0].Expected)
+	}
+	actual, ok := fields[0].Actual.([]string)
+	if !ok || len(actual) != 1 || actual[0] != needle {
+		t.Fatalf("unexpected explicit actual value: %#v", fields[0].Actual)
+	}
+	actual[0] = "mutated"
+	if got := report.Fields()[0].Actual.([]string)[0]; got != needle {
+		t.Fatalf("report Fields did not return a defensive copy: %q", got)
+	}
+	for _, rendered := range []string{fmt.Sprint(report), fmt.Sprintf("%+v", report), fmt.Sprintf("%#v", report), fmt.Sprintf("%q", report)} {
+		if strings.Contains(rendered, needle) {
+			t.Fatalf("ordinary formatting exposed mismatch value: %q", rendered)
 		}
-		select {
-		case extra := <-reports:
-			t.Fatalf("restoration emitted an unexpected mismatch report: %v", extra)
-		default:
+	}
+
+	var startup configstore.AppliedReport
+	select {
+	case startup = <-applied:
+	default:
+		t.Fatal("OnApplied did not fire for the initial generation before Start returned")
+	}
+	if startup.Phase() != configstore.PhaseStartup || !startup.DefaultDivergent() {
+		t.Fatalf("unexpected startup applied report: phase=%s divergent=%t", startup.Phase(), startup.DefaultDivergent())
+	}
+	if startup.Release().Version() != 1 || startup.Release().ActivationRevision() != 101 {
+		t.Fatalf("unexpected applied release: %s", startup.Release())
+	}
+	if changed := startup.Changed(); len(changed) != 0 {
+		t.Fatalf("initial generation reported changes against no previous generation: %#v", changed)
+	}
+	groups, err := startup.Groups()
+	if err != nil {
+		t.Fatalf("startup Groups: %v", err)
+	}
+	wantAliases := make([]string, 0)
+	for _, entry := range generatedContract {
+		if entry.Kind == configstore.ContractKindParameter {
+			wantAliases = append(wantAliases, entry.Alias)
 		}
+	}
+	gotAliases := make([]string, 0, len(groups))
+	for alias, document := range groups {
+		gotAliases = append(gotAliases, alias)
+		if !json.Valid(document) {
+			t.Fatalf("group %s is not a JSON document: %s", alias, document)
+		}
+		if strings.Contains(string(document), passwordPlaintext) || strings.Contains(string(document), defaultTokenPrefix) {
+			t.Fatalf("group %s exposes secret material: %s", alias, document)
+		}
+	}
+	sort.Strings(wantAliases)
+	sort.Strings(gotAliases)
+	if !reflect.DeepEqual(gotAliases, wantAliases) {
+		t.Fatalf("startup Groups aliases = %v, want every contract parameter alias %v", gotAliases, wantAliases)
+	}
+	if !strings.Contains(string(groups["runtime"]), needle) {
+		t.Fatalf("runtime group does not carry the applied (divergent) value: %s", groups["runtime"])
+	}
+	for _, rendered := range []string{fmt.Sprint(startup), fmt.Sprintf("%+v", startup), fmt.Sprintf("%#v", startup)} {
+		if strings.Contains(rendered, needle) {
+			t.Fatalf("ordinary applied-report formatting exposed a value: %q", rendered)
+		}
+	}
+
+	// Restoring the source defaults clears divergence without a further
+	// mismatch report; the reload is visible through OnApplied instead.
+	restored := matchingRelease(2, 102)
+	activate(t, fixture, restored)
+	waitAcknowledgement(t, fixture.sub, 2, kmsclient.ReleaseStateApplied)
+	waitAppliedVersion(t, fixture.store, 2)
+	if fixture.store.Status().DefaultDivergent || fixture.store.Stats().DefaultDivergent {
+		t.Fatal("restoring defaults did not clear divergence")
+	}
+	select {
+	case extra := <-mismatches:
+		t.Fatalf("restoration emitted an unexpected mismatch report: %v", extra)
+	default:
+	}
+	reload := receiveApplied(t, applied)
+	if reload.Phase() != configstore.PhaseRuntime || reload.DefaultDivergent() || reload.Release().Version() != 2 {
+		t.Fatalf("unexpected restoration applied report: %s", reload)
+	}
+	if got := changePaths(reload); !reflect.DeepEqual(got, []string{"runtime.features", "runtime_token"}) {
+		t.Fatalf("restoration change paths = %v, want runtime.features and the rotated runtime_token", got)
+	}
+}
+
+func TestHotReloadReportsChangedFields(t *testing.T) {
+	mismatches := make(chan configstore.DefaultMismatchReport, 8)
+	applied := make(chan configstore.AppliedReport, 8)
+	fixture := startFixtureWithCallbacks(t, matchingRelease(1, 101), fixtureconfig.Defaults, configstore.Callbacks{
+		OnDefaultMismatch: func(report configstore.DefaultMismatchReport) { mismatches <- report },
+		OnApplied:         func(report configstore.AppliedReport) { applied <- report },
 	})
+	startup := receiveApplied(t, applied)
+	if startup.Phase() != configstore.PhaseStartup || startup.DefaultDivergent() || len(startup.Changed()) != 0 {
+		t.Fatalf("unexpected startup applied report: %s", startup)
+	}
+
+	// Hot non-secret changes only: the same secret pins are carried forward so
+	// the change list names exactly the two canonical parameter paths.
+	hot := matchingRelease(2, 102)
+	hot.databaseDocument = databaseDocument("db.internal", "750ms", 20)
+	hot.runtimeDocument = runtimeDocument([]string{"hot-search"}, []byte("fixture-payload"), map[string]uint64{"burst": 100, "steady": 25}, [2]float64{0.25, 0.75})
+	hot.runtimeTokenVersion = 1
+	hot.runtimeTokenValue = []byte(defaultTokenPrefix + "1")
+	activate(t, fixture, hot)
+	waitAcknowledgement(t, fixture.sub, 2, kmsclient.ReleaseStateApplied)
+	waitAppliedVersion(t, fixture.store, 2)
+	hotReport := receiveApplied(t, applied)
+	if hotReport.Phase() != configstore.PhaseRuntime || !hotReport.DefaultDivergent() || hotReport.Release().Version() != 2 {
+		t.Fatalf("unexpected hot applied report: %s", hotReport)
+	}
+	hotChanges := changesByPath(hotReport)
+	if got := changePaths(hotReport); !reflect.DeepEqual(got, []string{"database.timeout", "runtime.features"}) {
+		t.Fatalf("hot change paths = %v, want database.timeout and runtime.features", got)
+	}
+	if change := hotChanges["database.timeout"]; change.Previous != 3*time.Second || change.Current != 750*time.Millisecond {
+		t.Fatalf("database.timeout change = %#v, want 3s -> 750ms", change)
+	}
+	if change := hotChanges["runtime.features"]; !reflect.DeepEqual(change.Previous, []string{"search", "reports"}) || !reflect.DeepEqual(change.Current, []string{"hot-search"}) {
+		t.Fatalf("runtime.features change = %#v, want defaults -> hot-search", change)
+	}
+	// Changed returns fresh copies; mutating one must not alter the report.
+	hotReport.Changed()[1].Current.([]string)[0] = "mutated"
+	if got := changesByPath(hotReport)["runtime.features"].Current.([]string)[0]; got != "hot-search" {
+		t.Fatalf("Changed did not return a defensive copy: %q", got)
+	}
+	if mismatch := receiveMismatch(t, mismatches); mismatch.Phase() != configstore.PhaseRuntime || !reflect.DeepEqual(differencePaths(mismatch), []string{"database.timeout", "runtime.features"}) {
+		t.Fatalf("hot mismatch report = %s", mismatch)
+	}
+
+	// Rotating a hot secret produces a path-only entry: never previous or
+	// current plaintext, and no non-secret path because nothing else moved.
+	rotated := hot
+	rotated.releaseVersion, rotated.activationRevision = 3, 103
+	rotated.databaseVersion, rotated.runtimeVersion = hot.databaseVersion, hot.runtimeVersion
+	rotated.runtimeTokenVersion = 3
+	rotated.runtimeTokenValue = []byte("rotated-token-v3")
+	activate(t, fixture, rotated)
+	waitAcknowledgement(t, fixture.sub, 3, kmsclient.ReleaseStateApplied)
+	waitAppliedVersion(t, fixture.store, 3)
+	rotatedReport := receiveApplied(t, applied)
+	if rotatedReport.Phase() != configstore.PhaseRuntime || !rotatedReport.DefaultDivergent() || rotatedReport.Release().Version() != 3 {
+		t.Fatalf("unexpected rotation applied report: %s", rotatedReport)
+	}
+	rotatedChanges := rotatedReport.Changed()
+	if len(rotatedChanges) != 1 || rotatedChanges[0].Path != "runtime_token" || rotatedChanges[0].Previous != nil || rotatedChanges[0].Current != nil {
+		t.Fatalf("secret rotation changes = %#v, want one path-only runtime_token entry", rotatedChanges)
+	}
+	for _, rendered := range []string{fmt.Sprint(rotatedReport), fmt.Sprintf("%+v", rotatedReport), fmt.Sprintf("%#v", rotatedReport)} {
+		if strings.Contains(rendered, "rotated-token-v3") || strings.Contains(rendered, defaultTokenPrefix) {
+			t.Fatalf("applied report formatting exposed secret plaintext: %q", rendered)
+		}
+	}
+	if got := fixture.store.Current().ApiHandler().RuntimeToken(); got.StringValue() != "rotated-token-v3" || got.Version() != 3 {
+		t.Fatalf("rotated secret did not publish: version=%d", got.Version())
+	}
+	// The rotation release is a distinct candidate carrying the same hot
+	// override, so it is reported divergent once more.
+	if mismatch := receiveMismatch(t, mismatches); mismatch.Release().Version() != 3 {
+		t.Fatalf("rotation mismatch report = %s", mismatch)
+	}
+
+	// Restoring the defaults lists the reverted paths and clears divergence.
+	restored := matchingRelease(4, 104)
+	restored.runtimeTokenVersion = 3
+	restored.runtimeTokenValue = []byte("rotated-token-v3")
+	activate(t, fixture, restored)
+	waitAcknowledgement(t, fixture.sub, 4, kmsclient.ReleaseStateApplied)
+	waitAppliedVersion(t, fixture.store, 4)
+	restoredReport := receiveApplied(t, applied)
+	if restoredReport.Phase() != configstore.PhaseRuntime || restoredReport.DefaultDivergent() || restoredReport.Release().Version() != 4 {
+		t.Fatalf("unexpected restoration applied report: %s", restoredReport)
+	}
+	if got := changePaths(restoredReport); !reflect.DeepEqual(got, []string{"database.timeout", "runtime.features"}) {
+		t.Fatalf("restoration change paths = %v, want the two reverted paths", got)
+	}
+	restoredChanges := changesByPath(restoredReport)
+	if change := restoredChanges["database.timeout"]; change.Previous != 750*time.Millisecond || change.Current != 3*time.Second {
+		t.Fatalf("database.timeout restoration = %#v, want 750ms -> 3s", change)
+	}
+	if change := restoredChanges["runtime.features"]; !reflect.DeepEqual(change.Previous, []string{"hot-search"}) || !reflect.DeepEqual(change.Current, []string{"search", "reports"}) {
+		t.Fatalf("runtime.features restoration = %#v, want hot-search -> defaults", change)
+	}
+	if fixture.store.Status().DefaultDivergent || fixture.store.Stats().DefaultDivergent {
+		t.Fatal("default restoration did not clear divergence")
+	}
+	select {
+	case extra := <-mismatches:
+		t.Fatalf("matching restoration emitted a drift report: %v", extra)
+	default:
+	}
+	select {
+	case extra := <-applied:
+		t.Fatalf("unexpected additional applied report: %s", extra)
+	default:
+	}
+}
+
+func receiveApplied(t *testing.T, reports <-chan configstore.AppliedReport) configstore.AppliedReport {
+	t.Helper()
+	select {
+	case report := <-reports:
+		return report
+	case <-time.After(testOperationTimeout):
+		t.Fatal("timed out waiting for an applied report")
+		return nil
+	}
+}
+
+func receiveMismatch(t *testing.T, reports <-chan configstore.DefaultMismatchReport) configstore.DefaultMismatchReport {
+	t.Helper()
+	select {
+	case report := <-reports:
+		return report
+	case <-time.After(testOperationTimeout):
+		t.Fatal("timed out waiting for a default mismatch report")
+		return nil
+	}
+}
+
+func changePaths(report configstore.AppliedReport) []string {
+	changes := report.Changed()
+	paths := make([]string, len(changes))
+	for i := range changes {
+		paths[i] = changes[i].Path
+	}
+	sort.Strings(paths)
+	return paths
+}
+
+func changesByPath(report configstore.AppliedReport) map[string]configstore.FieldChange {
+	changes := report.Changed()
+	byPath := make(map[string]configstore.FieldChange, len(changes))
+	for _, change := range changes {
+		byPath[change.Path] = change
+	}
+	return byPath
 }
 
 func TestHotOverrideAndRestorationPublishWholeGenerations(t *testing.T) {
 	reports := make(chan configstore.DefaultMismatchReport, 4)
-	fixture := startFixture(t, matchingRelease(1, 101), fixtureconfig.Defaults, false, func(report configstore.DefaultMismatchReport) { reports <- report })
+	fixture := startFixture(t, matchingRelease(1, 101), fixtureconfig.Defaults, func(report configstore.DefaultMismatchReport) { reports <- report })
 	oldSnapshot := fixture.store.Current()
 
 	hot := matchingRelease(2, 102)
@@ -487,7 +694,7 @@ func differencePaths(report configstore.DefaultMismatchReport) []string {
 }
 
 func TestRestartAndMixedCandidatesPreserveLastKnownGood(t *testing.T) {
-	fixture := startFixture(t, matchingRelease(1, 101), fixtureconfig.Defaults, false, nil)
+	fixture := startFixture(t, matchingRelease(1, 101), fixtureconfig.Defaults, nil)
 
 	restartParameter := matchingRelease(2, 102)
 	restartParameter.databaseDocument = databaseDocument("db-restart.internal", "3s", 20)
@@ -533,7 +740,7 @@ func TestRestartAndMixedCandidatesPreserveLastKnownGood(t *testing.T) {
 }
 
 func TestStrictDecodeContractAndValidationRejections(t *testing.T) {
-	fixture := startFixture(t, matchingRelease(1, 101), fixtureconfig.Defaults, false, nil)
+	fixture := startFixture(t, matchingRelease(1, 101), fixtureconfig.Defaults, nil)
 
 	var fetches atomic.Int64
 	fixture.server.SetGetParameterHook(func(string) { fetches.Add(1) })
@@ -600,7 +807,7 @@ func TestStrictDecodeContractAndValidationRejections(t *testing.T) {
 }
 
 func TestConcurrentReadersSeeOnlyCompleteGenerations(t *testing.T) {
-	fixture := startFixture(t, matchingRelease(1, 101), fixtureconfig.Defaults, false, nil)
+	fixture := startFixture(t, matchingRelease(1, 101), fixtureconfig.Defaults, nil)
 	const (
 		readerCount = 12
 		lastVersion = 25

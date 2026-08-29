@@ -4,7 +4,8 @@
 // parameter/secret values by namespace + relative key (or by display path),
 // inject errors, set the WhoAmI identity, drive the Subscribe stream (snapshots,
 // changes, heartbeats), script exact-version configuration releases and their
-// lifecycle acknowledgements, and forcibly drop streams to test reconnect.
+// lifecycle acknowledgements (including applied divergence), script value-free
+// VerifyReleaseDefaults verdicts, and forcibly drop streams to test reconnect.
 package kmsclienttest
 
 import (
@@ -95,6 +96,8 @@ type Server struct {
 	putSecrets     []PutSecretCall
 	defaultsCalls  []*kmsv1.ApplyApplicationDefaultsRequest
 	defaultsQueue  []scriptedDefaultsResponse
+	verifyCalls    []*kmsv1.VerifyReleaseDefaultsRequest
+	verifyQueue    []scriptedVerifyResponse
 	getParamHook   func(displayPath string)
 	listHook       func(namespace string)
 	identity       *kmsv1.WhoAmIResponse
@@ -111,6 +114,11 @@ type Server struct {
 
 type scriptedDefaultsResponse struct {
 	response *kmsv1.ApplyApplicationDefaultsResponse
+	err      error
+}
+
+type scriptedVerifyResponse struct {
+	response *kmsv1.VerifyReleaseDefaultsResponse
 	err      error
 }
 
@@ -542,6 +550,34 @@ func (s *Server) ApplicationDefaultsCalls() []*kmsv1.ApplyApplicationDefaultsReq
 	return result
 }
 
+// QueueVerifyReleaseDefaultsResponse scripts one VerifyReleaseDefaults RPC.
+// Calls consume responses in order; response and err are cloned/retained by the
+// fake so callers may safely mutate their inputs afterward. An unscripted call
+// fails with codes.Unimplemented. The fake performs no hash comparison of its
+// own: verdicts are whatever the test scripted.
+func (s *Server) QueueVerifyReleaseDefaultsResponse(response *kmsv1.VerifyReleaseDefaultsResponse, err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var cloned *kmsv1.VerifyReleaseDefaultsResponse
+	if response != nil {
+		cloned = proto.Clone(response).(*kmsv1.VerifyReleaseDefaultsResponse)
+	}
+	s.verifyQueue = append(s.verifyQueue, scriptedVerifyResponse{response: cloned, err: err})
+}
+
+// VerifyReleaseDefaultsCalls returns a deep copy of every VerifyReleaseDefaults
+// request received, in order. Requests carry only aliases, content types and
+// hashes, never values.
+func (s *Server) VerifyReleaseDefaultsCalls() []*kmsv1.VerifyReleaseDefaultsRequest {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	result := make([]*kmsv1.VerifyReleaseDefaultsRequest, len(s.verifyCalls))
+	for index, call := range s.verifyCalls {
+		result[index] = proto.Clone(call).(*kmsv1.VerifyReleaseDefaultsRequest)
+	}
+	return result
+}
+
 // Revision returns the current global revision.
 func (s *Server) Revision() uint64 {
 	s.mu.Lock()
@@ -686,6 +722,27 @@ func (s *Server) ApplyApplicationDefaults(ctx context.Context, request *kmsv1.Ap
 }
 
 // --- ConfigurationReleaseService -----------------------------------------
+
+// VerifyReleaseDefaults records the request and returns the next scripted
+// verdict response.
+func (s *Server) VerifyReleaseDefaults(ctx context.Context, request *kmsv1.VerifyReleaseDefaultsRequest) (*kmsv1.VerifyReleaseDefaultsResponse, error) {
+	s.recordMD(ctx, "VerifyReleaseDefaults")
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.verifyCalls = append(s.verifyCalls, proto.Clone(request).(*kmsv1.VerifyReleaseDefaultsRequest))
+	if len(s.verifyQueue) == 0 {
+		return nil, status.Error(codes.Unimplemented, "verify release defaults response is not scripted")
+	}
+	next := s.verifyQueue[0]
+	s.verifyQueue = s.verifyQueue[1:]
+	if next.err != nil {
+		return nil, next.err
+	}
+	if next.response == nil {
+		return nil, nil
+	}
+	return proto.Clone(next.response).(*kmsv1.VerifyReleaseDefaultsResponse), nil
+}
 
 // GetActiveRelease returns the release installed by SetActiveRelease or
 // ActivateConfigurationRelease.

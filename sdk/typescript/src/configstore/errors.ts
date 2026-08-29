@@ -15,13 +15,31 @@ export const REJECTION_CATEGORIES = [
 ] as const;
 export type RejectionCategory = (typeof REJECTION_CATEGORIES)[number];
 
-export type MismatchPhase = "startup" | "runtime";
-export type MismatchSeverity = "fatal" | "error";
+/** Whether a candidate was the initial generation or a reload. */
+export type Phase = "startup" | "runtime";
+/** Retained for callback code written against earlier SDK versions; identical to Phase. */
+export type MismatchPhase = Phase;
+/**
+ * Default mismatches are applied and reported rather than refused, so the only
+ * severity is "error". The type is retained so existing callback code compiles.
+ */
+export type MismatchSeverity = "error";
 
 export interface FieldDifference {
   readonly path: string;
   readonly expected: unknown;
   readonly actual: unknown;
+}
+
+/**
+ * One field that differs between the previously applied generation and a
+ * newly applied one. Secret rotations are reported path-only with null
+ * previous and current values.
+ */
+export interface FieldChange {
+  readonly path: string;
+  readonly previous: unknown;
+  readonly current: unknown;
 }
 
 const candidatePaths = new WeakMap<CandidateError, readonly string[]>();
@@ -114,42 +132,55 @@ export class DefaultMismatchReport {
   }
 }
 
-/** Typed startup failure returned after the loader's redaction boundary. */
-export class DefaultMismatchError extends Error {
-  readonly #report: DefaultMismatchReport;
+/**
+ * Immutable view of one published generation. `changed()` and `groups()`
+ * return fresh copies on every call; `groups()` is empty when the generated
+ * binding did not supply parameter group documents.
+ */
+export class AppliedReport {
+  readonly phase: Phase;
+  readonly release: ReleaseIdentity;
+  readonly defaultDivergent: boolean;
+  readonly #changes: readonly FieldChange[];
+  readonly #groups: Readonly<Record<string, string>>;
 
-  constructor(report: DefaultMismatchReport) {
-    super(report.toString());
-    this.name = "DefaultMismatchError";
-    this.#report = report;
+  constructor(
+    phase: Phase,
+    release: ReleaseIdentity,
+    defaultDivergent: boolean,
+    changes: readonly FieldChange[] = [],
+    groups: Readonly<Record<string, string>> = {},
+  ) {
+    this.phase = phase;
+    this.release = release;
+    this.defaultDivergent = defaultDivergent;
+    this.#changes = Object.freeze(cloneChanges(changes));
+    this.#groups = Object.freeze(copyGroups(groups));
+    Object.freeze(this);
   }
 
-  get phase(): MismatchPhase {
-    return this.#report.phase;
+  /** Fields that differ from the previously applied generation; empty at startup. */
+  changed(): FieldChange[] {
+    return cloneChanges(this.#changes);
   }
 
-  get severity(): MismatchSeverity {
-    return this.#report.severity;
+  /** Canonical non-secret parameter group documents keyed by alias. */
+  groups(): Readonly<Record<string, string>> {
+    return Object.freeze(copyGroups(this.#groups));
   }
 
-  get release(): ReleaseIdentity {
-    return this.#report.release;
-  }
-
-  fields(): readonly FieldDifference[] {
-    return this.#report.fields();
-  }
-
-  report(): DefaultMismatchReport {
-    return this.#report;
-  }
-
-  override toString(): string {
-    return `${this.name}: ${this.message}`;
+  /** Lists only canonical field paths; values remain available through changed(). */
+  toString(): string {
+    return `configstore: applied (${this.phase}) ${this.release} divergent=${this.defaultDivergent} changed=${this.#changes.map(({ path }) => path).join(",")}`;
   }
 
   toJSON(): Readonly<Record<string, unknown>> {
-    return this.#report.toJSON();
+    return Object.freeze({
+      phase: this.phase,
+      release: this.release,
+      defaultDivergent: this.defaultDivergent,
+      changed: this.#changes.map(jsonChange),
+    });
   }
 
   [inspect.custom](): string {
@@ -199,8 +230,33 @@ function cloneDifferences(differences: readonly FieldDifference[]): FieldDiffere
   }));
 }
 
+function cloneChanges(changes: readonly FieldChange[]): FieldChange[] {
+  return changes.map((change) => ({
+    path: validDiagnosticPath(change.path) ? change.path : "invalid_path",
+    previous: cloneReportValue(change.previous),
+    current: cloneReportValue(change.current),
+  }));
+}
+
+function copyGroups(groups: Readonly<Record<string, string>>): Record<string, string> {
+  const result: Record<string, string> = Object.create(null) as Record<string, string>;
+  for (const alias of Object.keys(groups).sort()) {
+    const document = groups[alias];
+    if (typeof document === "string") result[alias] = document;
+  }
+  return result;
+}
+
 function cloneReportValue(value: unknown): unknown {
   return containsSecret(value) ? "[REDACTED]" : cloneConfig(value);
+}
+
+function jsonChange(change: FieldChange): FieldChange {
+  return {
+    path: change.path,
+    previous: jsonReportValue(change.previous, new Set<object>()),
+    current: jsonReportValue(change.current, new Set<object>()),
+  };
 }
 
 function jsonDifference(difference: FieldDifference): FieldDifference {

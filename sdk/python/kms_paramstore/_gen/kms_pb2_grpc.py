@@ -5,7 +5,7 @@ import warnings
 
 from kms_paramstore._gen import kms_pb2 as kms_dot_v1_dot_kms__pb2
 
-GRPC_GENERATED_VERSION = '1.83.0'
+GRPC_GENERATED_VERSION = '1.83.1'
 GRPC_VERSION = grpc.__version__
 _version_not_supported = False
 
@@ -820,6 +820,11 @@ class ConfigurationReleaseServiceStub:
                 request_serializer=kms_dot_v1_dot_kms__pb2.WatchReleaseRequest.SerializeToString,
                 response_deserializer=kms_dot_v1_dot_kms__pb2.WatchReleaseEvent.FromString,
                 _registered_method=True)
+        self.VerifyReleaseDefaults = channel.unary_unary(
+                '/kms.v1.ConfigurationReleaseService/VerifyReleaseDefaults',
+                request_serializer=kms_dot_v1_dot_kms__pb2.VerifyReleaseDefaultsRequest.SerializeToString,
+                response_deserializer=kms_dot_v1_dot_kms__pb2.VerifyReleaseDefaultsResponse.FromString,
+                _registered_method=True)
 
 
 class ConfigurationReleaseServiceServicer:
@@ -874,6 +879,20 @@ class ConfigurationReleaseServiceServicer:
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
+    def VerifyReleaseDefaults(self, request, context):
+        """VerifyReleaseDefaults compares caller-supplied canonical content hashes of
+        an application's source-owned defaults with the parameters pinned by the
+        active release. The request and response are value-free: only aliases,
+        content types, hashes, and bounded verdicts travel over the wire, and the
+        server never echoes a stored value, digest, or hash. Secret aliases are
+        structurally excluded and reported as secret_alias. Requires the
+        configuration-release:verify-defaults operation and is rate limited per
+        identity.
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
 
 def add_ConfigurationReleaseServiceServicer_to_server(servicer, server):
     rpc_method_handlers = {
@@ -911,6 +930,11 @@ def add_ConfigurationReleaseServiceServicer_to_server(servicer, server):
                     servicer.WatchRelease,
                     request_deserializer=kms_dot_v1_dot_kms__pb2.WatchReleaseRequest.FromString,
                     response_serializer=kms_dot_v1_dot_kms__pb2.WatchReleaseEvent.SerializeToString,
+            ),
+            'VerifyReleaseDefaults': grpc.unary_unary_rpc_method_handler(
+                    servicer.VerifyReleaseDefaults,
+                    request_deserializer=kms_dot_v1_dot_kms__pb2.VerifyReleaseDefaultsRequest.FromString,
+                    response_serializer=kms_dot_v1_dot_kms__pb2.VerifyReleaseDefaultsResponse.SerializeToString,
             ),
     }
     generic_handler = grpc.method_handlers_generic_handler(
@@ -1109,6 +1133,33 @@ class ConfigurationReleaseService:
             '/kms.v1.ConfigurationReleaseService/WatchRelease',
             kms_dot_v1_dot_kms__pb2.WatchReleaseRequest.SerializeToString,
             kms_dot_v1_dot_kms__pb2.WatchReleaseEvent.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def VerifyReleaseDefaults(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/kms.v1.ConfigurationReleaseService/VerifyReleaseDefaults',
+            kms_dot_v1_dot_kms__pb2.VerifyReleaseDefaultsRequest.SerializeToString,
+            kms_dot_v1_dot_kms__pb2.VerifyReleaseDefaultsResponse.FromString,
             options,
             channel_credentials,
             insecure,
@@ -1398,6 +1449,11 @@ class AdminServiceStub:
                 request_serializer=kms_dot_v1_dot_kms__pb2.ListReleaseSubscribersRequest.SerializeToString,
                 response_deserializer=kms_dot_v1_dot_kms__pb2.ListReleaseSubscribersResponse.FromString,
                 _registered_method=True)
+        self.ApplyApplicationDefaults = channel.unary_unary(
+                '/kms.v1.AdminService/ApplyApplicationDefaults',
+                request_serializer=kms_dot_v1_dot_kms__pb2.ApplyApplicationDefaultsRequest.SerializeToString,
+                response_deserializer=kms_dot_v1_dot_kms__pb2.ApplyApplicationDefaultsResponse.FromString,
+                _registered_method=True)
         self.Health = channel.unary_unary(
                 '/kms.v1.AdminService/Health',
                 request_serializer=kms_dot_v1_dot_kms__pb2.HealthRequest.SerializeToString,
@@ -1526,6 +1582,12 @@ class AdminServiceServicer:
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
+    def ApplyApplicationDefaults(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
     def Health(self, request, context):
         """Missing associated documentation comment in .proto file."""
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
@@ -1629,6 +1691,11 @@ def add_AdminServiceServicer_to_server(servicer, server):
                     servicer.ListReleaseSubscribers,
                     request_deserializer=kms_dot_v1_dot_kms__pb2.ListReleaseSubscribersRequest.FromString,
                     response_serializer=kms_dot_v1_dot_kms__pb2.ListReleaseSubscribersResponse.SerializeToString,
+            ),
+            'ApplyApplicationDefaults': grpc.unary_unary_rpc_method_handler(
+                    servicer.ApplyApplicationDefaults,
+                    request_deserializer=kms_dot_v1_dot_kms__pb2.ApplyApplicationDefaultsRequest.FromString,
+                    response_serializer=kms_dot_v1_dot_kms__pb2.ApplyApplicationDefaultsResponse.SerializeToString,
             ),
             'Health': grpc.unary_unary_rpc_method_handler(
                     servicer.Health,
@@ -2153,6 +2220,33 @@ class AdminService:
             '/kms.v1.AdminService/ListReleaseSubscribers',
             kms_dot_v1_dot_kms__pb2.ListReleaseSubscribersRequest.SerializeToString,
             kms_dot_v1_dot_kms__pb2.ListReleaseSubscribersResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def ApplyApplicationDefaults(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/kms.v1.AdminService/ApplyApplicationDefaults',
+            kms_dot_v1_dot_kms__pb2.ApplyApplicationDefaultsRequest.SerializeToString,
+            kms_dot_v1_dot_kms__pb2.ApplyApplicationDefaultsResponse.FromString,
             options,
             channel_credentials,
             insecure,

@@ -5,9 +5,9 @@ import { cloneConfig, containsSecret } from "../src/configstore/clone.js";
 import { codecs, decodeGroup, field, group } from "../src/configstore/codecs.js";
 import { createManifestValidator, validateContract } from "../src/configstore/contract.js";
 import {
+  AppliedReport,
   CandidateError,
   CandidateRejectionReport,
-  DefaultMismatchError,
   DefaultMismatchReport,
   rejectDecode,
 } from "../src/configstore/errors.js";
@@ -165,7 +165,7 @@ describe("configstore defensive values and reports", () => {
     const expected = { values: [1, 2], exact: 9_007_199_254_740_993n };
     const report = new DefaultMismatchReport(
       "startup",
-      "fatal",
+      "error",
       new ReleaseIdentity({ name: "runtime", version: 2n }),
       [
         {
@@ -203,20 +203,71 @@ describe("configstore defensive values and reports", () => {
         { path: "invalid_path", expected: 1, actual: 2 },
       ],
     });
-    expect(JSON.stringify(new DefaultMismatchError(report))).toBe(encoded);
     for (const rendered of [String(report), inspect(report), encoded]) {
       expect(rendered).not.toContain("plaintext-canary");
       expect(rendered).not.toContain("INJECTION");
     }
+  });
 
-    const error = new DefaultMismatchError(report);
-    expect(error.phase).toBe("startup");
-    expect(error.severity).toBe("fatal");
-    expect(error.fields()[0]?.expected).toEqual({
-      values: [1, 2],
-      exact: 9_007_199_254_740_993n,
+  it("deeply clones applied changes, redacts secret-bearing values, and copies groups", () => {
+    const previous = { values: [1, 2], exact: 9_007_199_254_740_993n };
+    const groups = { runtime: '{"limit":2}', database: '{"host":"db"}' };
+    const release = new ReleaseIdentity({ name: "runtime", version: 2n });
+    const report = new AppliedReport(
+      "runtime",
+      release,
+      true,
+      [
+        { path: "group.field", previous, current: { nested: new Secret("plaintext-canary") } },
+        { path: "field\nINJECTION", previous: 1, current: 2 },
+        { path: "database_password", previous: null, current: null },
+      ],
+      groups,
+    );
+    previous.values[0] = 99;
+    groups.runtime = "mutated";
+    const firstChange = report.changed()[0];
+    if (!firstChange) throw new Error("missing test change");
+    (firstChange.previous as { values: number[] }).values[0] = 88;
+
+    expect(report.changed()).toEqual([
+      {
+        path: "group.field",
+        previous: { values: [1, 2], exact: 9_007_199_254_740_993n },
+        current: "[REDACTED]",
+      },
+      { path: "invalid_path", previous: 1, current: 2 },
+      { path: "database_password", previous: null, current: null },
+    ]);
+    expect(report.groups()).toEqual({ database: '{"host":"db"}', runtime: '{"limit":2}' });
+    expect(Object.keys(report.groups())).toEqual(["database", "runtime"]);
+    expect(Object.isFrozen(report.groups())).toBe(true);
+    expect(Object.isFrozen(report)).toBe(true);
+    expect(report).toMatchObject({ phase: "runtime", defaultDivergent: true, release });
+    expect(String(report)).toBe(
+      `configstore: applied (runtime) ${release} divergent=true changed=group.field,invalid_path,database_password`,
+    );
+    const encoded = JSON.stringify(report);
+    expect(JSON.parse(encoded)).toMatchObject({
+      phase: "runtime",
+      release: { version: "2" },
+      defaultDivergent: true,
+      changed: [
+        {
+          path: "group.field",
+          previous: { values: [1, 2], exact: "9007199254740993" },
+          current: "[REDACTED]",
+        },
+        { path: "invalid_path", previous: 1, current: 2 },
+        { path: "database_password", previous: null, current: null },
+      ],
     });
-    expect(inspect(error)).not.toContain("values");
+    for (const rendered of [String(report), inspect(report), encoded]) {
+      expect(rendered).not.toContain("plaintext-canary");
+      expect(rendered).not.toContain("INJECTION");
+    }
+    expect(inspect(report)).not.toContain("values");
+    expect(new AppliedReport("startup", release, false).groups()).toEqual({});
   });
 
   it("classifies candidate errors without rendering their causes", () => {

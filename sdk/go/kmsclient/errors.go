@@ -43,6 +43,11 @@ var (
 	// unbound (WhoAmI reports no namespace). Set Config.Namespace, bind the
 	// identity to a namespace, or use an absolute "/env/app/key" display path.
 	ErrNoNamespace = errors.New("kmsclient: no namespace")
+
+	// ErrRateLimited is returned when the server has exhausted a per-identity
+	// budget for the requested operation (for example VerifyReleaseDefaults).
+	// Retry after the window resets; do not retry in a tight loop.
+	ErrRateLimited = errors.New("kmsclient: rate limited")
 )
 
 // mapError translates a gRPC status error into one of the exported sentinel
@@ -69,6 +74,8 @@ func mapError(err error) error {
 		return fmt.Errorf("%w: %s", ErrFailedPrecondition, st.Message())
 	case codes.Aborted:
 		return fmt.Errorf("%w: %s", ErrAborted, st.Message())
+	case codes.ResourceExhausted:
+		return fmt.Errorf("%w: %s", ErrRateLimited, st.Message())
 	default:
 		// Preserve the original status error (code + message) for everything
 		// else (Unavailable, DeadlineExceeded, Internal, ...).
