@@ -114,6 +114,7 @@ service ConfigurationReleaseService {
   rpc GetActiveRelease(GetActiveReleaseRequest) returns (GetActiveReleaseResponse);
   rpc ListReleases(ListReleasesRequest) returns (ListReleasesResponse);
   rpc WatchRelease(stream WatchReleaseRequest) returns (stream WatchReleaseEvent);
+  rpc VerifyReleaseDefaults(VerifyReleaseDefaultsRequest) returns (VerifyReleaseDefaultsResponse);
 }
 ```
 
@@ -156,6 +157,39 @@ transport connection state. A newly registered instance is therefore visible
 as connected before it has acknowledged any lifecycle state. UIs group
 instances by `(identity, client_name, instance_id)`; different authenticated
 identities and replicas do not overwrite one another.
+
+An `applied` acknowledgement may additionally carry `applied_divergent` and
+`divergent_field_count`: the managed Go layer sets them when the generation it
+applied differs from the application's source-owned defaults. Divergence is a
+warning, not a rollout failure — the release was applied — and it is only
+accepted on the `applied` state (`divergent_field_count` requires the flag and
+is capped at 65535; any other combination is `INVALID_ARGUMENT`). The
+subscriber listing and rollout summaries surface both fields so operators can
+see which instances run a configuration that no longer matches what the
+source tree declares, and the acknowledgement audit event records
+`divergent=true|false`.
+
+### Verifying source defaults against the active release
+
+`VerifyReleaseDefaults` is a value-free oracle for CI and the managed Go
+binding: the caller hashes each parameter of its generated defaults artifact
+locally (`configstore.ParameterHash`, sorted-key compact JSON for the `json`
+content type, exact bytes otherwise) and sends only aliases, content types,
+and hashes, optionally with the artifact's `schema_sha256`. The server
+resolves the application's active release (the request's `name` defaults to
+the application's release name), recomputes the same canonical hash for every
+pinned parameter, and answers with one bounded verdict per alias — `match`,
+`differs`, `missing_in_release` (in the application contract but not pinned),
+`unknown_alias`, `secret_alias` (secret aliases are answered structurally and
+never read), or `unsupported_content_type` — plus per-verdict counts,
+`schema_matches` (constant-time comparison against the registered schema
+digest), and `unverified_count`, the number of release parameter aliases the
+request did not mention. No stored value, digest, or hash is ever returned.
+The operation is `configuration-release:verify-defaults` (never implicit) and
+is budgeted per identity; see the
+[security note](security.md#defaults-verification-oracle) and the
+[`release verify-defaults`](operations.md#configuration-release-commands)
+command.
 
 Bounded rejection categories are `resolution_failed`, `token_unavailable`,
 `version_mismatch`, `digest_mismatch`, `prepare_failed`,
@@ -208,9 +242,11 @@ override operations are documented in
 ## Authorization, retention, and destructive operations
 
 Namespaced policy operations are `configuration-release:create`, `read`,
-`validate`, `activate`, `list`, and `watch`; `configuration-release:*` is the
-category wildcard. The implicit home-namespace grant includes only release
-`read` and `watch`. Release access never grants access to a referenced
+`validate`, `activate`, `list`, `watch`, and `verify-defaults`;
+`configuration-release:*` is the category wildcard. The implicit
+home-namespace grant includes only release `read` and `watch`;
+`verify-defaults` always needs an explicit allow rule, even for the caller's
+own namespace. Release access never grants access to a referenced
 parameter or secret: create, validate, and loaders all perform independent
 resource authorization, including cross-namespace references.
 

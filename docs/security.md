@@ -438,8 +438,9 @@ the same rules to activation replay and live events.
 ## Login and failed-authentication rate limiting
 
 The HTTP server throttles credential guessing with a per-IP token-bucket
-limiter (`internal/server/httpserver/ratelimit.go`), shared by two call
-sites: every request to `POST /api/v1/auth/login`, and every failed
+limiter (`internal/ratelimit`, the same bounded limiter that backs the
+[defaults verification budgets](#defaults-verification-oracle)), shared by
+two call sites: every request to `POST /api/v1/auth/login`, and every failed
 authentication on any other endpoint (`serveAPI`,
 `internal/server/httpserver/server.go`) — so an attacker can't dodge the
 throttle by hitting arbitrary API paths with bad credentials instead of
@@ -484,7 +485,7 @@ no per-key scoping. Each rule is an `(operation, env, app)` tuple:
   known operations are
   `parameter:{read,write,list,delete}`,
   `secret:{read,write,list,disable,destroy,promote}`,
-  `configuration-release:{create,read,validate,activate,list,watch}`, and
+  `configuration-release:{create,read,validate,activate,list,watch,verify-defaults}`, and
   `admin:{namespace:create,namespace:update,namespace:delete,identity:cert,policy:write,audit:read,key:rotate}`
   (`domain.Op*` constants).
 - **`env` / `app`**: an exact label or `"*"` (`policy.labelMatches`). There is
@@ -511,7 +512,9 @@ subscribe rides on the same grant (it is authorized once, as a namespace-level
 `parameter:read`, when the stream registers). It applies **only** to the
 caller's own namespace — access to any *other* namespace, and every write,
 delete, disable, destroy, and promote, always requires an explicit `allow`
-rule (itself namespace-level). Deny rules still override the implicit grant
+rule (itself namespace-level). `configuration-release:verify-defaults` is
+likewise never implicit: the verification oracle is opt-in per identity even
+in the home namespace. Deny rules still override the implicit grant
 (step 1 precedes step 2), so a policy author can carve out a whole namespace —
 but not a single key. `policy.Authorize` with a nil home namespace is the
 rule-only form used where the implicit grant must not apply.
@@ -603,7 +606,66 @@ namespace-stream transport acknowledgement. `prepared`, `applied`, and
 `rejected` describe application lifecycle. Rejection diagnostics supplied by
 applications are stored only as `[redacted]`; operators diagnose from the
 bounded category. Connection state is stored separately, so registration does
-not fabricate a lifecycle acknowledgement.
+not fabricate a lifecycle acknowledgement. An `applied` acknowledgement may
+flag `applied_divergent` with a bounded `divergent_field_count`; the flag is
+accepted only on the applied state and carries no values.
+
+## Defaults verification oracle
+
+`ConfigurationReleaseService.VerifyReleaseDefaults`
+(`internal/core/release_verify.go`) lets a CI job or the managed Go binding
+ask whether its source-owned defaults still equal what the active release
+pins, without either side revealing a value. It is, by construction, a
+one-bit-per-alias oracle over parameter contents, so it is hardened as one:
+
+- **Value-free in both directions.** The request carries aliases, content
+  types, and caller-computed SHA-256 digests; the response carries one
+  bounded verdict per alias (`match`, `differs`, `missing_in_release`,
+  `unknown_alias`, `secret_alias`, `unsupported_content_type`), counts, and
+  `schema_matches`. The server never echoes a stored value, the release's
+  parameter digest, or its own computed hash. Secret aliases are answered
+  structurally as `secret_alias` before any secret storage is touched.
+- **Canonical hashing.** Both sides hash with
+  `configstore.ParameterHash`: for the `json` content type the document is
+  parsed strictly and re-encoded compactly with sorted keys (number
+  literals verbatim), so formatting differences do not register as drift;
+  every other content type hashes the exact bytes. Digests must be exactly
+  64 lowercase hex characters — uppercase is rejected rather than
+  normalized. Hash and schema-digest comparisons use
+  `crypto/subtle.ConstantTimeCompare`.
+- **Explicit authorization.** The operation is
+  `configuration-release:verify-defaults` on the release's namespace. It is
+  deliberately absent from the implicit home-namespace grant, so even a
+  namespace-bound identity needs an explicit allow rule. Input is validated
+  before authorization, and denials are audited as `authz.denial` like any
+  other operation.
+- **Per-identity budgets, admins included.** Two token buckets keyed by
+  identity name gate the call (`server.verify_defaults.*`, see
+  [`operations.md`](operations.md#configuration)): a request bucket
+  (`requests_per_hour` refill, `burst` capacity) checked before any storage
+  access, and a mismatch bucket (`mismatch_budget_per_hour`) charged
+  atomically with the number of non-`match` verdicts a response would
+  contain. If the mismatch budget cannot cover the whole response the caller
+  gets `RESOURCE_EXHAUSTED` (HTTP 429 `rate_limited`) and **no verdicts**, so
+  a guessing attack cannot obtain partial answers. Matching verdicts cost
+  nothing, which keeps a healthy CI pipeline unthrottled while bounding what
+  an attacker with a leaked verify-only credential can learn to roughly
+  `mismatch_budget_per_hour` bits per hour. Both buckets are in-memory and
+  process-local: each server instance enforces the budget independently and
+  a restart resets it.
+- **Counts-only audit.** Every call (allowed, budget-refused, or failing on a
+  missing application/release) writes `configuration_release.verify_defaults`
+  with `decision` `allow`/`deny`/`error` and metadata limited to
+  `entry_count`, the per-verdict counts, `unverified_count`,
+  `schema_matches`, and `limited`. Aliases, hashes, and the informational
+  `profile` label are never audited.
+
+Verify-only credentials should be minted as unbound token identities
+(`admin identity create NAME --auth token` without `--namespace`) with a
+single allow rule for the operation on the target namespace, and the target
+namespace must permit token authentication; the
+[operations recipe](operations.md#configuration-release-commands) shows the
+exact commands.
 
 ## Namespace and key validation
 
@@ -631,8 +693,8 @@ Every secret read, secret reveal, secret/parameter write, version
 promotion, disable, destroy, policy change, namespace change,
 authentication failure, authorization denial, KEK rotation, schema
 registration, release create/validate/activate/rollback, CAS conflict,
-release lifecycle acknowledgement, and blocked release-reference destruction
-is audited
+release lifecycle acknowledgement, defaults verification (counts only), and
+blocked release-reference destruction is audited
 (`internal/core/*.go`, `Service.audit`/`auditOp`/`auditStrict`) into
 `audit_events`. Audit records carry actor identity/kind, the resource's
 `env`/`app`/`key`/version and immutable namespace-incarnation ID (denormalized
