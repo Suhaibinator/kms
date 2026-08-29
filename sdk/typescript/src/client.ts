@@ -1,7 +1,7 @@
 import { basename } from "node:path";
 import type { ChannelCredentials, ChannelOptions } from "@grpc/grpc-js";
 import { ReadCache } from "./cache.js";
-import { ConfigError, KmsError, mapGrpcError, wrapError } from "./errors.js";
+import { ConfigError, KmsError, mapGrpcError, RateLimitedError, wrapError } from "./errors.js";
 import {
   AdminServiceService,
   type ConfigurationRelease,
@@ -41,6 +41,12 @@ import {
   type SecretTokenProvider,
   type ValidateReleaseManifest,
 } from "./releases/loader.js";
+import {
+  type VerifyReleaseDefaultsOptions,
+  type VerifyReleaseDefaultsResult,
+  validLowerHex64,
+  verifyResultFromWire,
+} from "./releases/verify.js";
 import { Secret } from "./secret.js";
 import {
   GrpcTransport,
@@ -623,6 +629,72 @@ export class KmsClient {
       clientName: options.clientName?.trim() || this.clientName,
       acknowledgementTimeoutMs: this.timeoutMs,
     });
+  }
+
+  /**
+   * Ask the server which of the supplied alias hashes differ from the
+   * parameters pinned by the active release. Neither direction carries values.
+   * Requires the configuration-release:verify-defaults operation and is rate
+   * limited per identity; `RateLimitedError` is thrown when a budget is spent.
+   */
+  async verifyReleaseDefaults(
+    options: VerifyReleaseDefaultsOptions,
+  ): Promise<VerifyReleaseDefaultsResult> {
+    this.#assertOpen();
+    const namespace = parseNamespace(options.namespace);
+    const entries: { alias: string; contentType: string; sha256: string }[] = [];
+    const seen = new Set<string>();
+    if (!Array.isArray(options.entries)) {
+      throw new ConfigError("verify entries must be an array");
+    }
+    for (const [index, entry] of options.entries.entries()) {
+      const alias = typeof entry?.alias === "string" ? entry.alias.trim() : "";
+      if (!alias) throw new ConfigError(`verify entry ${index} has an empty alias`);
+      if (seen.has(alias))
+        throw new ConfigError(`verify entry ${JSON.stringify(alias)} is duplicated`);
+      seen.add(alias);
+      if (typeof entry.sha256 !== "string" || !validLowerHex64(entry.sha256)) {
+        throw new ConfigError(`verify entry ${JSON.stringify(alias)} has an invalid sha256`);
+      }
+      entries.push({
+        alias,
+        contentType: typeof entry.contentType === "string" ? entry.contentType : "",
+        sha256: entry.sha256,
+      });
+    }
+    const schemaSha256 = options.schemaSha256 ?? "";
+    if (schemaSha256 !== "" && !validLowerHex64(schemaSha256)) {
+      throw new ConfigError("invalid schema sha256");
+    }
+    try {
+      const response = await this.#transport.unary(
+        ConfigurationReleaseServiceService.verifyReleaseDefaults,
+        {
+          namespace: toWireNamespace(namespace),
+          name: options.release ?? "",
+          profile: options.profile ?? "",
+          schemaSha256,
+          entries,
+        },
+        this.#callOptions("", options),
+      );
+      if (!response) throw new KmsError("internal", "KMS verify response was empty");
+      return verifyResultFromWire(response, seen, (message) => {
+        throw new KmsError("internal", message);
+      });
+    } catch (error) {
+      const mapped = mapGrpcError(error);
+      if (mapped instanceof KmsError && mapped.code === "resource_exhausted") {
+        throw new RateLimitedError(
+          `${mapped.message} (the per-identity budget is spent; wait for the window to reset instead of retrying)`,
+          {
+            cause: error,
+            ...(mapped.grpcCode === undefined ? {} : { grpcCode: mapped.grpcCode }),
+          },
+        );
+      }
+      throwMapped(error);
+    }
   }
 
   watchNamespace(
