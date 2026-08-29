@@ -175,10 +175,12 @@ func TestSlogCallbacksLogsRuntimeReloadWithFieldChanges(t *testing.T) {
 	callbacks.OnApplied(newAppliedReport(PhaseRuntime, logTestIdentity(), false, []FieldChange{
 		{Path: "limits.rate", Previous: 10, Current: 20},
 		{Path: "database.password", Previous: nil, Current: nil},
-	}, func() (map[string]json.RawMessage, error) { t.Fatal("Groups called on reload"); return nil, nil }))
+	}, func() (map[string]json.RawMessage, error) {
+		return map[string]json.RawMessage{"limits": json.RawMessage(`{"rate":20}`)}, nil
+	}))
 
 	lines := decodeLogLines(t, buffer)
-	if got := messagesOf(lines); strings.Join(got, "|") != "kms config reloaded|kms config field changed|kms config field changed" {
+	if got := messagesOf(lines); strings.Join(got, "|") != "kms config reloaded|kms config field changed|kms config field changed|kms config group" {
 		t.Fatalf("messages = %v", got)
 	}
 	reloaded := lines[0]
@@ -338,4 +340,45 @@ func TestSlogCallbacksToleratesNilSink(t *testing.T) {
 	callbacks.OnApplied(newAppliedReport(PhaseStartup, logTestIdentity(), false, nil, nil))
 	callbacks.OnDefaultMismatch(newDefaultMismatchReport(PhaseRuntime, MismatchError, logTestIdentity(), nil))
 	callbacks.OnCandidateRejected(newCandidateRejectionReport(RejectInternal, logTestIdentity(), nil))
+}
+
+func TestSlogCallbacksLogsReloadSnapshotUnlessDisabled(t *testing.T) {
+	groups := map[string]json.RawMessage{
+		"limits":   json.RawMessage(`{"rate":20}`),
+		"database": json.RawMessage(`{"host":"db","port":5432}`),
+	}
+	report := func() AppliedReport {
+		return newAppliedReport(PhaseRuntime, testIdentity(5, 12), true,
+			[]FieldChange{{Path: "limits.rate", Previous: 10, Current: 20}},
+			func() (map[string]json.RawMessage, error) { return groups, nil })
+	}
+
+	logger, buffer := newJSONLogger(slog.LevelInfo)
+	SlogCallbacks(NewLogSink(logger), SlogOptions{}).OnApplied(report())
+	lines := decodeLogLines(t, buffer)
+	want := []string{"kms config reloaded", "kms config field changed", "kms config group", "kms config group"}
+	if got := messagesOf(lines); strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Fatalf("messages = %v, want %v", got, want)
+	}
+	// Groups are sorted by alias and carry the generation identity so a log
+	// line's activation_revision resolves to a complete configuration.
+	if lines[2]["alias"] != "database" || lines[3]["alias"] != "limits" ||
+		lines[3]["activation_revision"] != float64(12) || lines[3]["release_version"] != float64(5) {
+		t.Fatalf("group records = %v %v", lines[2], lines[3])
+	}
+	if values, ok := lines[3]["values"].(map[string]any); !ok || values["rate"] != float64(20) {
+		t.Fatalf("group values = %v", lines[3]["values"])
+	}
+
+	logger, buffer = newJSONLogger(slog.LevelInfo)
+	SlogCallbacks(NewLogSink(logger), SlogOptions{DisableReloadSnapshot: true}).OnApplied(report())
+	if got := messagesOf(decodeLogLines(t, buffer)); strings.Join(got, "|") != "kms config reloaded|kms config field changed" {
+		t.Fatalf("messages with reload snapshot disabled = %v", got)
+	}
+
+	logger, buffer = newJSONLogger(slog.LevelInfo)
+	SlogCallbacks(NewLogSink(logger), SlogOptions{DisableReloadChanges: true}).OnApplied(report())
+	if got := messagesOf(decodeLogLines(t, buffer)); strings.Join(got, "|") != "kms config reloaded|kms config group|kms config group" {
+		t.Fatalf("messages with reload changes disabled = %v", got)
+	}
 }

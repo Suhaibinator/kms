@@ -513,13 +513,23 @@ that logs through `log/slog`:
 | group documents unavailable | `ERROR` | `kms config groups unavailable` | `component`, `release`, `error` |
 | reload applied | `INFO` | `kms config reloaded` | `component`, `release`, `default_divergent`, `changed_count` |
 | per changed field on reload | `INFO` | `kms config field changed` | `component`, `release`, `path`, `previous`, `current` |
+| per parameter group after a reload | `INFO` | `kms config group` | same as at startup — every applied generation is dumped in full |
 | candidate rejected | `ERROR` | `kms config candidate rejected` | `component`, `category`, `release`, `paths` |
 
 `SlogOptions.Component` sets the `component` attribute (default
-`configstore`); `DisableStartupSnapshot` and `DisableReloadChanges` suppress
+`configstore`); `DisableStartupSnapshot`, `DisableReloadChanges` and
+`DisableReloadSnapshot` suppress
 the per-group and per-field records. Values are the report values, which the
 manager has already redacted of secret content, and no attribute key names
 secret material.
+
+To reconstruct the configuration behind any log line, stamp request and job
+loggers with the generation that was sampled for that operation (its
+`activation_revision` is the unique key — a rollback re-activates an old
+version under a new revision) and look up the matching `kms config group`
+records, which are emitted for every applied generation. The same revision
+also identifies the immutable release in KMS (`parameter-store release show`),
+so the log dump is a convenience rather than the only source of truth.
 
 The logger usually cannot exist before the configuration that shapes it has
 been loaded. `configstore.NewLogSink(nil)` therefore returns a `LogSink` with

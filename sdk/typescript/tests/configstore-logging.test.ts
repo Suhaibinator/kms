@@ -135,15 +135,32 @@ describe("consoleCallbacks", () => {
         message: "kms config field changed",
         attrs: { component: "worker", path: "database_password", previous: null, current: null },
       },
+      {
+        level: "info",
+        message: "kms config group",
+        attrs: {
+          component: "worker",
+          alias: "runtime",
+          values: { limit: 3 },
+          release_version: "4",
+          activation_revision: "9",
+        },
+      },
     ]);
   });
 
   it("honours the snapshot and change toggles and logs rejections", () => {
     const { records, logger } = recorder();
-    const callbacks = consoleCallbacks(logger, { startupSnapshot: false, reloadChanges: false });
+    const callbacks = consoleCallbacks(logger, {
+      startupSnapshot: false,
+      reloadChanges: false,
+      reloadSnapshot: false,
+    });
     callbacks.onApplied?.(new AppliedReport("startup", release, false, [], { runtime: "{}" }));
     callbacks.onApplied?.(
-      new AppliedReport("runtime", release, false, [{ path: "a.b", previous: 1, current: 2 }]),
+      new AppliedReport("runtime", release, false, [{ path: "a.b", previous: 1, current: 2 }], {
+        runtime: '{"a":{"b":2}}',
+      }),
     );
     callbacks.onCandidateRejected?.(
       new CandidateRejectionReport("restart_required", release, ["runtime.restart"]),

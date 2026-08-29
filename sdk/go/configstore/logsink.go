@@ -117,6 +117,11 @@ type SlogOptions struct {
 	// reloaded" record. Field records carry previous and current non-secret
 	// values.
 	DisableReloadChanges bool
+	// DisableReloadSnapshot suppresses the one "kms config group" record per
+	// parameter group after each reloaded generation. By default every applied
+	// generation is dumped in full so any log line can be correlated with the
+	// complete configuration in effect at that activation revision.
+	DisableReloadSnapshot bool
 }
 
 // Attribute keys used by SlogCallbacks. None of them name secret material,
@@ -154,7 +159,9 @@ const (
 //   - OnApplied at runtime: INFO "kms config reloaded" with component,
 //     release, default_divergent and changed_count, followed (unless
 //     DisableReloadChanges) by INFO "kms config field changed" per field
-//     with path, previous and current.
+//     with path, previous and current, then (unless DisableReloadSnapshot) by
+//     the same INFO "kms config group" records as at startup, so every
+//     generation's full configuration is in the log.
 //   - OnCandidateRejected: ERROR "kms config candidate rejected" with
 //     component, category, release and paths.
 //
@@ -203,7 +210,7 @@ func SlogCallbacks(sink *LogSink, opts SlogOptions) Callbacks {
 					slog.Bool(logKeyDefaultDivergent, report.DefaultDivergent()),
 				)
 				if !opts.DisableStartupSnapshot {
-					logStartupSnapshot(sink, componentAttr, release, report)
+					logSnapshot(sink, true, componentAttr, release, report)
 				}
 				return
 			}
@@ -215,17 +222,19 @@ func SlogCallbacks(sink *LogSink, opts SlogOptions) Callbacks {
 				slog.Bool(logKeyDefaultDivergent, report.DefaultDivergent()),
 				slog.Int(logKeyChangedCount, len(changes)),
 			)
-			if opts.DisableReloadChanges {
-				return
+			if !opts.DisableReloadChanges {
+				for _, change := range changes {
+					sink.emit(false, slog.LevelInfo, "kms config field changed",
+						componentAttr,
+						slog.String(logKeyRelease, release.String()),
+						slog.String(logKeyPath, change.Path),
+						slog.Any(logKeyPrevious, change.Previous),
+						slog.Any(logKeyCurrent, change.Current),
+					)
+				}
 			}
-			for _, change := range changes {
-				sink.emit(false, slog.LevelInfo, "kms config field changed",
-					componentAttr,
-					slog.String(logKeyRelease, release.String()),
-					slog.String(logKeyPath, change.Path),
-					slog.Any(logKeyPrevious, change.Previous),
-					slog.Any(logKeyCurrent, change.Current),
-				)
+			if !opts.DisableReloadSnapshot {
+				logSnapshot(sink, false, componentAttr, release, report)
 			}
 		},
 		OnCandidateRejected: func(report CandidateRejectionReport) {
@@ -242,10 +251,12 @@ func SlogCallbacks(sink *LogSink, opts SlogOptions) Callbacks {
 	}
 }
 
-func logStartupSnapshot(sink *LogSink, componentAttr slog.Attr, release ReleaseIdentity, report AppliedReport) {
+// logSnapshot emits one "kms config group" record per parameter group of the
+// applied generation. startup selects buffering when no logger is installed.
+func logSnapshot(sink *LogSink, startup bool, componentAttr slog.Attr, release ReleaseIdentity, report AppliedReport) {
 	groups, err := report.Groups()
 	if err != nil {
-		sink.emit(true, slog.LevelError, "kms config groups unavailable",
+		sink.emit(startup, slog.LevelError, "kms config groups unavailable",
 			componentAttr,
 			slog.String(logKeyRelease, release.String()),
 			slog.String(logKeyError, err.Error()),
@@ -262,7 +273,7 @@ func logStartupSnapshot(sink *LogSink, componentAttr slog.Attr, release ReleaseI
 		if len(values) == 0 {
 			values = json.RawMessage("null")
 		}
-		sink.emit(true, slog.LevelInfo, "kms config group",
+		sink.emit(startup, slog.LevelInfo, "kms config group",
 			componentAttr,
 			slog.String(logKeyAlias, alias),
 			slog.Any(logKeyValues, values),

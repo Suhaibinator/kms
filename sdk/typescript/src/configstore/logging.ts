@@ -14,6 +14,12 @@ export interface ConsoleCallbacksOptions {
   readonly startupSnapshot?: boolean;
   /** Log one `kms config field changed` record per changed field after a reload. Default true. */
   readonly reloadChanges?: boolean;
+  /**
+   * Log one `kms config group` record per parameter group after every reloaded
+   * generation, so any log line can be correlated with the full configuration
+   * in effect at that activation revision. Default true.
+   */
+  readonly reloadSnapshot?: boolean;
 }
 
 /**
@@ -33,6 +39,7 @@ export function consoleCallbacks(
   const component = options.component;
   const startupSnapshot = options.startupSnapshot ?? true;
   const reloadChanges = options.reloadChanges ?? true;
+  const reloadSnapshot = options.reloadSnapshot ?? true;
   const base = (): Record<string, unknown> => (component ? { component } : {});
   const releaseAttrs = (
     report: AppliedReport | DefaultMismatchReport,
@@ -58,6 +65,19 @@ export function consoleCallbacks(
     }
   };
 
+  const logSnapshot = (report: AppliedReport): void => {
+    const groups = report.groups();
+    for (const alias of Object.keys(groups).sort()) {
+      info("kms config group", {
+        ...base(),
+        alias,
+        values: parseDocument(groups[alias] ?? ""),
+        release_version: report.release.version.toString(),
+        activation_revision: report.release.activationRevision.toString(),
+      });
+    }
+  };
+
   return Object.freeze({
     onDefaultMismatch(report: DefaultMismatchReport): void {
       error("kms config diverges from source defaults", {
@@ -73,17 +93,7 @@ export function consoleCallbacks(
           ...releaseAttrs(report),
           default_divergent: report.defaultDivergent,
         });
-        if (!startupSnapshot) return;
-        const groups = report.groups();
-        for (const alias of Object.keys(groups).sort()) {
-          info("kms config group", {
-            ...base(),
-            alias,
-            values: parseDocument(groups[alias] ?? ""),
-            release_version: report.release.version.toString(),
-            activation_revision: report.release.activationRevision.toString(),
-          });
-        }
+        if (startupSnapshot) logSnapshot(report);
         return;
       }
       const changed = report.changed();
@@ -92,15 +102,17 @@ export function consoleCallbacks(
         default_divergent: report.defaultDivergent,
         changed_count: changed.length,
       });
-      if (!reloadChanges) return;
-      for (const change of changed) {
-        info("kms config field changed", {
-          ...base(),
-          path: change.path,
-          previous: change.previous,
-          current: change.current,
-        });
+      if (reloadChanges) {
+        for (const change of changed) {
+          info("kms config field changed", {
+            ...base(),
+            path: change.path,
+            previous: change.previous,
+            current: change.current,
+          });
+        }
       }
+      if (reloadSnapshot) logSnapshot(report);
     },
     onCandidateRejected(report: CandidateRejectionReport): void {
       error("kms config candidate rejected", {
