@@ -92,6 +92,7 @@ export const FIX_FOR: Record<FindingCode, FixAction | null> = {
   no_subscribers: "connect_sdk",
   subscriber_other_release: "connect_sdk",
   instance_rejected: "open_subscribers",
+  instance_divergent: "open_subscribers",
   instance_pending: "open_subscribers",
   instance_stale: "open_subscribers",
   rolled_back: "open_release",
@@ -170,6 +171,10 @@ export const FINDING_COPY: Record<FindingCode, (p: Params) => string> = {
   },
   instance_rejected: (p) =>
     `An instance rejected the active release (${str(p, "category") ?? "unknown category"}) and is still serving the previous one.`,
+  instance_divergent: (p) => {
+    const n = Number(p.divergent_fields ?? 0);
+    return `An instance applied the active release but runs values that differ from its source-owned defaults${n ? ` (${plural(n, "field", "fields")})` : ""}. Adopt the release values in code or restore the defaults.`;
+  },
   instance_pending: () => "An instance is connected but has not applied the active release yet.",
   instance_stale: () => "An instance disconnected before applying the active release.",
   rolled_back: (p) =>

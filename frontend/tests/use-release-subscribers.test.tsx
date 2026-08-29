@@ -36,6 +36,8 @@ const row = (patch: Partial<ReleaseSubscriberState>): ReleaseSubscriberState => 
   diagnostic: "",
   client_timestamp_unix_ms: 1,
   server_timestamp_unix_ms: 1,
+  applied_divergent: false,
+  divergent_field_count: 0,
   connected: true,
   ...patch,
 });
@@ -48,6 +50,7 @@ const snapshot = (
     total: subscribers.length,
     connected: subscribers.length,
     applied_current: 0,
+    applied_divergent: 0,
     rejected: 0,
     pending: 0,
     stale: 0,

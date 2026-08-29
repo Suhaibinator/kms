@@ -76,6 +76,7 @@ const (
 	FindingNoSubscribers              = "no_subscribers"
 	FindingSubscriberOtherRelease     = "subscriber_other_release"
 	FindingInstanceRejected           = "instance_rejected"
+	FindingInstanceDivergent          = "instance_divergent"
 	FindingInstancePending            = "instance_pending"
 	FindingInstanceStale              = "instance_stale"
 	FindingRolledBack                 = "rolled_back"

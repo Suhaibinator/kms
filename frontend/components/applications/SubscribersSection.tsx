@@ -22,6 +22,7 @@ export function SubscribersSection({
     (finding) => finding.code === "subscriber_other_release",
   );
   const otherNames = rollout.other_release_names;
+  const divergentGuidance = rejectionGuidance("default_mismatch");
   return (
     <section className="pipeline-section" aria-label={`Subscribers in ${env}`}>
       <h3 className="pipeline-section-title">Subscribers</h3>
@@ -37,6 +38,18 @@ export function SubscribersSection({
         <div className="pipeline-pills">
           <Badge kind="neutral">connected {rollout.connected}</Badge>
           <Badge kind="success">applied {rollout.applied_current}</Badge>
+          {rollout.applied_divergent > 0 ? (
+            <Tooltip>
+              <TooltipTrigger render={<span className="pipeline-category" />}>
+                <Badge kind="warning">divergent {rollout.applied_divergent}</Badge>
+              </TooltipTrigger>
+              <TooltipContent>
+                <span>
+                  <strong>{divergentGuidance.summary}</strong> {divergentGuidance.response}
+                </span>
+              </TooltipContent>
+            </Tooltip>
+          ) : null}
           {rollout.pending > 0 ? <Badge kind="accent">pending {rollout.pending}</Badge> : null}
           {rollout.rejected > 0 ? <Badge kind="danger">rejected {rollout.rejected}</Badge> : null}
           {rollout.stale > 0 ? <Badge kind="warning">stale {rollout.stale}</Badge> : null}

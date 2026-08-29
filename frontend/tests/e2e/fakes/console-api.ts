@@ -187,6 +187,8 @@ export function incidentState(): ConsoleState {
           diagnostic: "",
           connected: true,
           server_timestamp_unix_ms: now(),
+          applied_divergent: false,
+          divergent_field_count: 0,
         }),
       );
     }
@@ -215,6 +217,8 @@ function instanceRow(
     diagnostic: instance.diagnostic,
     client_timestamp_unix_ms: instance.server_timestamp_unix_ms,
     server_timestamp_unix_ms: instance.server_timestamp_unix_ms,
+    applied_divergent: instance.applied_divergent,
+    divergent_field_count: instance.divergent_field_count,
     connected: instance.connected,
   };
 }
@@ -265,6 +269,7 @@ function rolloutOf(ns: FakeNamespace): OverviewRollout {
     total: ns.subscribers.length,
     connected: 0,
     applied_current: 0,
+    applied_divergent: 0,
     rejected: 0,
     pending: 0,
     stale: 0,
@@ -294,6 +299,8 @@ function rolloutOf(ns: FakeNamespace): OverviewRollout {
         diagnostic: row.diagnostic,
         connected: row.connected,
         server_timestamp_unix_ms: row.server_timestamp_unix_ms,
+        applied_divergent: row.applied_divergent,
+        divergent_field_count: row.divergent_field_count,
       });
     } else rollout.pending += 1;
   }

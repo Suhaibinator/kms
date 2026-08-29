@@ -29,9 +29,11 @@ export interface RolloutPanelProps {
 function stateTone(
   instance: SubscriberInstance,
   atCurrent: boolean,
-): "success" | "danger" | "accent" | "neutral" {
+): "success" | "danger" | "accent" | "neutral" | "warning" {
   if (instance.state === "rejected" && atCurrent) return "danger";
-  if (instance.state === "applied" && atCurrent) return "success";
+  if (instance.state === "applied" && atCurrent) {
+    return instance.applied_divergent ? "warning" : "success";
+  }
   if (!instance.connected) return "neutral";
   return "accent";
 }
@@ -40,6 +42,7 @@ function stateLabel(instance: SubscriberInstance, atCurrent: boolean): string {
   if (!atCurrent) {
     return instance.state === "applied" ? "pending" : instance.state || "connected";
   }
+  if (instance.state === "applied" && instance.applied_divergent) return "applied · divergent";
   return instance.state || "connected";
 }
 
@@ -65,6 +68,7 @@ export function RolloutPanel({
   }, [refreshToken, refresh]);
   const counts = countSubscribers(live.instances, activationRevision);
   const ordered = sortForRollout(live.instances, activationRevision);
+  const divergentGuidance = rejectionGuidance("default_mismatch");
 
   return (
     <section className="rollout-panel" data-testid="ship-rollout" aria-label="Rollout">
@@ -78,6 +82,9 @@ export function RolloutPanel({
                 {counts.applied_current}/{counts.total} applied
               </strong>
               {counts.rejected > 0 ? <Badge kind="danger">{counts.rejected} rejected</Badge> : null}
+              {counts.applied_divergent > 0 ? (
+                <Badge kind="warning">{counts.applied_divergent} divergent</Badge>
+              ) : null}
               {counts.pending > 0 ? <Badge kind="accent">{counts.pending} pending</Badge> : null}
               {counts.stale > 0 ? <Badge>{counts.stale} stale</Badge> : null}
             </>
@@ -197,6 +204,17 @@ export function RolloutPanel({
                           {instance.diagnostic ? (
                             <div className="rollout-diagnostic mono">{instance.diagnostic}</div>
                           ) : null}
+                        </div>
+                      ) : atCurrent &&
+                        instance.state === "applied" &&
+                        instance.applied_divergent ? (
+                        <div className="rollout-remedy" data-testid="rollout-divergent">
+                          <div className="text-sm">
+                            {instance.divergent_field_count > 0
+                              ? `${instance.divergent_field_count} ${instance.divergent_field_count === 1 ? "field differs" : "fields differ"} from source defaults. `
+                              : "Values differ from source defaults. "}
+                            {divergentGuidance.response}
+                          </div>
                         </div>
                       ) : (
                         <span className="faint text-sm">

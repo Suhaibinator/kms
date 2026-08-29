@@ -123,6 +123,7 @@
       "release_state": "active",
       "rollout": {
         "applied_current": 1,
+        "applied_divergent": 0,
         "connected": 1,
         "other_release_names": [],
         "pending": 0,
@@ -269,6 +270,7 @@
       "release_state": "active",
       "rollout": {
         "applied_current": 2,
+        "applied_divergent": 0,
         "connected": 2,
         "other_release_names": [],
         "pending": 0,

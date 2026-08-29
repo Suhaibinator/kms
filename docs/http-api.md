@@ -180,13 +180,14 @@ Taken from the `overview-incident.json` fixture (abridged):
         "release_count": 2
       },
       "rollout": {
-        "total": 3, "connected": 3, "applied_current": 2, "rejected": 1,
-        "pending": 0, "stale": 0, "other_release_names": [],
+        "total": 3, "connected": 3, "applied_current": 2, "applied_divergent": 0,
+        "rejected": 1, "pending": 0, "stale": 0, "other_release_names": [],
         "rejected_instances": [
           { "identity": "admin", "client_name": "api", "instance_id": "prod-3",
             "state": "rejected", "release_version": 2, "activation_revision": 12,
             "rejection_category": "config_validation_failed", "diagnostic": "",
-            "connected": true, "server_timestamp_unix_ms": 1755000000000 }
+            "connected": true, "server_timestamp_unix_ms": 1755000000000,
+            "applied_divergent": false, "divergent_field_count": 0 }
         ],
         "truncated": false
       },
@@ -212,6 +213,11 @@ selected environments. `schema_json` is present only when the application
 pins a schema the registry still has. `release.active` is absent when nothing
 is active; `values[].key`, `content_type`, `current_version`,
 `pinned_version`, and `client_bound` are omitted when zero or empty.
+`rollout.applied_divergent` counts instances that applied the current
+revision while reporting `applied_divergent` (their generation differs from
+the application's source-owned defaults); it is a warning that never degrades
+the rollout state. Each instance carries `applied_divergent` and
+`divergent_field_count` (field names and values are never sent).
 `rollout.rejected_instances` holds at most 50 instances and `truncated` says
 whether more were dropped; the full list comes from
 `GET /api/v1/release-subscribers`. Each instance is the effective lifecycle
@@ -319,6 +325,7 @@ blocking → warning → info and, within a severity, in emission order
 | `no_subscribers` | info | env | — | connect SDK |
 | `subscriber_other_release` | warning | env | `count`, `names` | connect SDK |
 | `instance_rejected` | warning | env + instance | `client_name`, `instance_id`, `identity`, `category` | open subscribers |
+| `instance_divergent` | warning | env + instance | `client_name`, `instance_id`, `identity`, `divergent_fields` | open subscribers |
 | `instance_pending` | info | env + instance | `client_name`, `instance_id`, `identity` | open subscribers |
 | `instance_stale` | info | env + instance | `client_name`, `instance_id`, `identity` | open subscribers |
 | `rolled_back` | info | env | `from` | open release |

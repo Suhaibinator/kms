@@ -109,6 +109,36 @@ func TestComputeEnvironmentReadinessStates(t *testing.T) {
 		}
 	})
 
+	t.Run("applied but divergent from source defaults", func(t *testing.T) {
+		in := base("prod")
+		in.Active = readinessActive("prod", 3, 42, 2, 1, 1)
+		in.Acks = []domain.ReleaseAcknowledgement{
+			ack("drifted", domain.ReleaseStateApplied, 3, 42, true, readinessNow),
+			ack("clean", domain.ReleaseStateApplied, 3, 42, true, readinessNow),
+		}
+		in.Acks[0].AppliedDivergent = true
+		in.Acks[0].DivergentFieldCount = 4
+		out := computeEnvironmentReadiness(in)
+		r := out.Rollout
+		if r.Total != 2 || r.AppliedCurrent != 2 || r.AppliedDivergent != 1 || r.Rejected != 0 {
+			t.Fatalf("rollout = %+v", r)
+		}
+		if out.RolloutState != domain.RolloutStateApplied {
+			t.Fatalf("divergence must not degrade the rollout: %s", out.RolloutState)
+		}
+		f, ok := hasFinding(out.Findings, domain.FindingInstanceDivergent)
+		if !ok || f.Scope.Instance != "drifted" || f.Severity != domain.FindingWarning || f.Params["divergent_fields"] != 4 {
+			t.Fatalf("instance_divergent = %+v", f)
+		}
+		if _, ok := hasFinding(out.Findings, domain.FindingInstanceRejected); ok {
+			t.Fatalf("divergent instance must not be reported as rejected: %v", findingCodes(out.Findings))
+		}
+		instances := groupSubscriberInstances(in.Acks)
+		if len(instances) != 2 || !instances[1].AppliedDivergent || instances[1].DivergentFieldCount != 4 || instances[0].AppliedDivergent {
+			t.Fatalf("grouped instances = %+v", instances)
+		}
+	})
+
 	t.Run("degraded, rolling and stale", func(t *testing.T) {
 		in := base("prod")
 		in.Active = readinessActive("prod", 3, 42, 2, 1, 1)

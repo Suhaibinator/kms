@@ -68,12 +68,15 @@ type subscriberInstanceDTO struct {
 	Diagnostic            string `json:"diagnostic"`
 	Connected             bool   `json:"connected"`
 	ServerTimestampUnixMS int64  `json:"server_timestamp_unix_ms"`
+	AppliedDivergent      bool   `json:"applied_divergent"`
+	DivergentFieldCount   uint32 `json:"divergent_field_count"`
 }
 
 type rolloutDTO struct {
 	Total             int                     `json:"total"`
 	Connected         int                     `json:"connected"`
 	AppliedCurrent    int                     `json:"applied_current"`
+	AppliedDivergent  int                     `json:"applied_divergent"`
 	Rejected          int                     `json:"rejected"`
 	Pending           int                     `json:"pending"`
 	Stale             int                     `json:"stale"`
@@ -94,9 +97,10 @@ func toRolloutDTO(r domain.RolloutSummary) rolloutDTO {
 			ReleaseVersion: inst.ReleaseVersion, ActivationRevision: inst.ActivationRevision,
 			RejectionCategory: inst.RejectionCategory, Diagnostic: inst.Diagnostic, Connected: inst.Connected,
 			ServerTimestampUnixMS: unixMS(inst.ServerTimestamp),
+			AppliedDivergent:      inst.AppliedDivergent, DivergentFieldCount: inst.DivergentFieldCount,
 		})
 	}
-	return rolloutDTO{Total: r.Total, Connected: r.Connected, AppliedCurrent: r.AppliedCurrent, Rejected: r.Rejected, Pending: r.Pending, Stale: r.Stale, OtherReleaseNames: names, RejectedInstances: rejected, Truncated: r.Truncated}
+	return rolloutDTO{Total: r.Total, Connected: r.Connected, AppliedCurrent: r.AppliedCurrent, AppliedDivergent: r.AppliedDivergent, Rejected: r.Rejected, Pending: r.Pending, Stale: r.Stale, OtherReleaseNames: names, RejectedInstances: rejected, Truncated: r.Truncated}
 }
 
 type environmentReleaseDTO struct {

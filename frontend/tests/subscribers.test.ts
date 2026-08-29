@@ -20,6 +20,8 @@ const base: ReleaseSubscriberState = {
   client_timestamp_unix_ms: 1_000,
   server_timestamp_unix_ms: 1_000,
   connected: true,
+  applied_divergent: false,
+  divergent_field_count: 0,
 };
 
 const row = (patch: Partial<ReleaseSubscriberState>): ReleaseSubscriberState => ({
@@ -114,6 +116,7 @@ describe("countSubscribers", () => {
       total: 9,
       connected: 6,
       applied_current: 1,
+      applied_divergent: 0,
       rejected: 1,
       pending: 4,
       stale: 2,
@@ -125,10 +128,66 @@ describe("countSubscribers", () => {
       total: 0,
       connected: 0,
       applied_current: 0,
+      applied_divergent: 0,
       rejected: 0,
       pending: 0,
       stale: 0,
     });
+  });
+});
+
+describe("divergent applied instances", () => {
+  it("carries divergence only from applied rows and counts it as a warning, not a failure", () => {
+    const instances = groupSubscriberInstances([
+      row({
+        instance_id: "drifted",
+        state: "applied",
+        applied_divergent: true,
+        divergent_field_count: 3,
+      }),
+      // A stale prepared row for the same instance must not leak its flag.
+      row({
+        instance_id: "drifted",
+        state: "prepared",
+        server_timestamp_unix_ms: 999,
+        applied_divergent: true,
+        divergent_field_count: 9,
+      }),
+      row({ instance_id: "clean", state: "applied" }),
+      // Divergence on a non-applied row is meaningless and dropped.
+      row({
+        instance_id: "rejecting",
+        state: "rejected",
+        rejection_category: "restart_required",
+        applied_divergent: true,
+        divergent_field_count: 2,
+      }),
+    ]);
+    const drifted = instances.find((i) => i.instance_id === "drifted");
+    expect(drifted?.applied_divergent).toBe(true);
+    expect(drifted?.divergent_field_count).toBe(3);
+    expect(instances.find((i) => i.instance_id === "rejecting")?.applied_divergent).toBe(false);
+    expect(countSubscribers(instances, 41)).toEqual({
+      total: 3,
+      connected: 3,
+      applied_current: 2,
+      applied_divergent: 1,
+      rejected: 1,
+      pending: 0,
+      stale: 0,
+    });
+  });
+
+  it("does not count divergence for an instance still behind the current revision", () => {
+    const instances = groupSubscriberInstances([
+      row({
+        state: "applied",
+        activation_revision: 40,
+        applied_divergent: true,
+        divergent_field_count: 1,
+      }),
+    ]);
+    expect(countSubscribers(instances, 41).applied_divergent).toBe(0);
   });
 });
 

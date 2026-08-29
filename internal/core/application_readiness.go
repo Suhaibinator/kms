@@ -270,6 +270,14 @@ func computeEnvironmentReadiness(in environmentReadinessInput) domain.Environmen
 			scope := domain.FindingScope{Env: env, Instance: inst.InstanceID}
 			params := map[string]any{"client_name": inst.ClientName, "instance_id": inst.InstanceID, "identity": inst.Identity}
 			switch class {
+			case instanceApplied:
+				// An applied instance is only worth a finding when the generation it
+				// runs diverges from the application's source-owned defaults.
+				if !inst.AppliedDivergent {
+					continue
+				}
+				params["divergent_fields"] = int(inst.DivergentFieldCount)
+				add(finding(domain.FindingInstanceDivergent, domain.FindingWarning, scope, params))
 			case instanceRejected:
 				params["category"] = inst.RejectionCategory
 				add(finding(domain.FindingInstanceRejected, domain.FindingWarning, scope, params))
@@ -396,6 +404,8 @@ func groupSubscriberInstances(acks []domain.ReleaseAcknowledgement) []domain.Sub
 			inst.ActivationRevision = ack.ActivationRevision
 			inst.RejectionCategory = ack.RejectionCategory
 			inst.Diagnostic = ack.Diagnostic
+			inst.AppliedDivergent = ack.AppliedDivergent
+			inst.DivergentFieldCount = ack.DivergentFieldCount
 		}
 	}
 	out := make([]domain.SubscriberInstance, 0, len(order))
@@ -464,6 +474,9 @@ func computeRollout(acks []domain.ReleaseAcknowledgement, releaseName string, cu
 		switch classifyInstance(inst, currentRevision, now) {
 		case instanceApplied:
 			summary.AppliedCurrent++
+			if inst.AppliedDivergent {
+				summary.AppliedDivergent++
+			}
 		case instanceRejected:
 			summary.Rejected++
 			if len(summary.RejectedInstances) < maxRolloutInstanceFindings {
