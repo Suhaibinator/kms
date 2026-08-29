@@ -34,14 +34,21 @@ import {
   verifyArtifacts,
 } from "@suhaibinator/kms/configgen";
 import {
+  type AppliedReport,
   type ContractEntry,
   // @ts-expect-error Internal secret-tree scanner is not a supported configstore export.
   containsSecret,
+  consoleCallbacks,
+  // @ts-expect-error Startup default mismatches are applied and reported; the fatal error type was removed.
+  DefaultMismatchError,
   type ManagedPreparedCandidate,
+  parameterHash,
   parseDefaultsArtifact as parseRuntimeDefaultsArtifact,
   // @ts-expect-error Strict JSON parse-tree primitives are internal to codecs and configgen.
   parseStrictJson,
   startManagedConfig,
+  type VerifyResult,
+  verifyDefaults,
 } from "@suhaibinator/kms/configstore";
 // @ts-expect-error Generated protocol modules are blocked by the package export map.
 import type { ConfigurationRelease } from "@suhaibinator/kms/dist/generated/kms.js";
@@ -75,12 +82,25 @@ export async function consumeManagedDeclarations(client: KmsClient): Promise<voi
     {
       release: "runtime",
       contract,
-      onDefaultMismatch: () => undefined,
+      ...consoleCallbacks(console),
+      onApplied: (report: AppliedReport) => void report.changed(),
     },
-    (): ManagedPreparedCandidate => ({ publish() {} }),
+    (): ManagedPreparedCandidate => ({ publish() {}, changed: [], groups: {} }),
   );
   manager.stop();
   await manager.wait();
+}
+
+export async function consumeVerifyDeclarations(client: KmsClient): Promise<VerifyResult> {
+  await client.verifyReleaseDefaults({
+    namespace: "prod/api",
+    entries: [{ alias: "runtime", contentType: "json", sha256: parameterHash("json", "{}") }],
+  });
+  return verifyDefaults(
+    client,
+    { schemaSha256: "0".repeat(64), contract, groups: { runtime: "{}" } },
+    { namespace: "prod/api" },
+  );
 }
 
 export const adapterFactories = [createNextKms, usePublicConfig] as const;
@@ -159,3 +179,4 @@ void sha256Hex;
 void containsSecret;
 void parseStrictJson;
 void parseRuntimeDefaultsArtifact;
+void DefaultMismatchError;

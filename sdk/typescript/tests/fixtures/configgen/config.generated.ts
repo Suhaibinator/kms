@@ -11,6 +11,7 @@ import {
   immutableSnapshot,
   ReleaseIdentity,
   startManagedConfig,
+  verifyDefaults,
   codecs,
   decodeGroup,
   encodeGroup,
@@ -21,11 +22,15 @@ import {
 import type {
   ConfigSnapshot,
   ContractEntry,
+  FieldChange,
   FieldDifference,
   ManagedConfigManager,
   ManagedConfigOptions,
   ManagedPreparedCandidate,
   ManagedReleaseClient,
+  VerifyClient,
+  VerifyOptions,
+  VerifyResult,
   GroupCodec,
   ValueCodec,
 } from "../../../src/configstore/index.js";
@@ -81,6 +86,23 @@ export function encodeDefaultsArtifact(profile: string, config: RootConfig): str
     contract: generatedContract,
     parameters: encodeParameterGroups(config),
   });
+}
+
+/**
+ * Ask KMS which parameter groups of config differ from the active release of
+ * options.namespace. Only canonical content hashes travel over the wire; no
+ * value is ever sent or returned.
+ */
+export function verifyReleaseDefaults(
+  client: VerifyClient,
+  config: RootConfig,
+  options: VerifyOptions,
+): Promise<VerifyResult> {
+  return verifyDefaults(
+    client,
+    { schemaSha256: schemaSHA256, contract: generatedContract, groups: encodeParameterGroups(config) },
+    options,
+  );
 }
 
 export class DatabaseHealthView {
@@ -262,10 +284,29 @@ export class Store {
       if (!sameSecretIdentity(active.get("password"), validatedCandidate["password"])) restartRequiredFields.push("database_password");
     }
     restartRequiredFields.sort();
+    // Changed fields versus the previously applied generation feed onApplied. Secrets are path-only.
+    const changed: FieldChange[] = [];
+    if (active) {
+      appendChange(changed, "database.endpoint", valueCodec0_0, active.get("endpoint"), validatedCandidate["endpoint"]);
+      appendChange(changed, "database.limit", valueCodec0_1, active.get("limit"), validatedCandidate["limit"]);
+      appendChange(changed, "runtime.enabled", valueCodec1_0, active.get("enabled"), validatedCandidate["enabled"]);
+      appendChange(changed, "runtime.epoch", valueCodec1_1, active.get("epoch"), validatedCandidate["epoch"]);
+      appendChange(changed, "runtime.labels", valueCodec1_2, active.get("labels"), validatedCandidate["labels"]);
+      appendChange(changed, "runtime.payload", valueCodec1_3, active.get("payload"), validatedCandidate["payload"]);
+      if (!sameSecretIdentity(active.get("password"), validatedCandidate["password"])) changed.push({ path: "database_password", previous: null, current: null });
+    }
+    let groups: Readonly<Record<string, string>>;
+    try {
+      groups = encodeParameterGroups(validatedCandidate);
+    } catch (cause) {
+      throw new CandidateError("config_validation_failed", cause);
+    }
     const prepared = immutableSnapshot(validatedCandidate, ReleaseIdentity.from(snapshot));
     return {
       defaultDifferences,
       restartRequiredFields,
+      changed,
+      groups,
       publish: () => {
         this.#active = prepared;
       },
@@ -325,6 +366,16 @@ function appendDifference<T>(
   actual: T,
 ): void {
   if (!sameEncoded(codec, expected, actual)) result.push({ path, expected, actual });
+}
+
+function appendChange<T>(
+  result: FieldChange[],
+  path: string,
+  codec: ValueCodec<T>,
+  previous: T,
+  current: T,
+): void {
+  if (!sameEncoded(codec, previous, current)) result.push({ path, previous, current });
 }
 
 function appendRestart<T>(result: string[], path: string, codec: ValueCodec<T>, active: T, candidate: T): void {
