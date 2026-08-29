@@ -72,6 +72,12 @@ export default function ConnectSdkPanel({
     if (editable) setTyped(readStoredEndpoint());
   }, [editable]);
 
+  const commitEndpoint = () => {
+    const trimmed = typed.trim();
+    if (trimmed !== typed) setTyped(trimmed);
+    storeEndpoint(trimmed);
+  };
+
   const endpoint = serverEndpoint || typed;
   const tls = health?.tls_enabled !== false;
   const input: SnippetInput = useMemo(
@@ -131,9 +137,12 @@ export default function ConnectSdkPanel({
             placeholder={ENDPOINT_PLACEHOLDER}
             value={typed}
             spellCheck={false}
-            onChange={(event) => {
-              setTyped(event.target.value);
-              storeEndpoint(event.target.value.trim());
+            onChange={(event) => setTyped(event.target.value)}
+            // Persist a settled value, not every keystroke: a half-typed
+            // `kms.inter` must not be what the next session reloads.
+            onBlur={commitEndpoint}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") commitEndpoint();
             }}
           />
         </Field>

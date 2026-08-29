@@ -145,9 +145,22 @@ describe("ConnectSdkPanel", () => {
     expect(input.value).toBe("remembered:9443");
     expect(snippet()).toContain('Endpoint:  "remembered:9443"');
 
-    fireEvent.change(input, { target: { value: "typed:1234" } });
-    expect(snippet()).toContain('Endpoint:  "typed:1234"');
+    // Typing updates the snippet at once but is not persisted until the value
+    // settles: a half-typed host must not be what the next session reloads.
+    fireEvent.change(input, { target: { value: "typed:12" } });
+    expect(snippet()).toContain('Endpoint:  "typed:12"');
+    expect(window.localStorage.getItem(ENDPOINT_STORAGE_KEY)).toBe("remembered:9443");
+
+    fireEvent.change(input, { target: { value: "  typed:1234 " } });
+    fireEvent.blur(input);
     expect(window.localStorage.getItem(ENDPOINT_STORAGE_KEY)).toBe("typed:1234");
+    expect(input.value).toBe("typed:1234");
+    expect(snippet()).toContain('Endpoint:  "typed:1234"');
+
+    // Enter commits too, and clearing the field forgets the endpoint.
+    fireEvent.change(input, { target: { value: "" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(window.localStorage.getItem(ENDPOINT_STORAGE_KEY)).toBeNull();
   });
 
   it("lists the three usual failures", () => {

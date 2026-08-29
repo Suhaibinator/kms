@@ -3,7 +3,7 @@
 // comes back. Scoring is token-prefix / substring / subsequence per query
 // token; every token must match somewhere or the item drops out.
 
-import { links } from "@/lib/links";
+import { links, type NamespaceRef } from "@/lib/links";
 import type { Application, Namespace } from "@/lib/types";
 
 export type PaletteGroup = "Applications" | "Environments" | "Aliases" | "Pages" | "Actions";
@@ -70,6 +70,9 @@ export const PALETTE_PAGES: ReadonlyArray<{
 ];
 
 export const NEW_APPLICATION_HREF = "/applications?new=1";
+
+/** How many ranked matches the palette renders before asking for a narrower query. */
+export const PALETTE_RESULT_LIMIT = 12;
 
 function nsLabel(ns: { env: string; app: string }): string {
   return `${ns.env}/${ns.app}`;
@@ -218,12 +221,8 @@ const EMPTY_QUERY_ORDER: readonly PaletteGroup[] = [
   "Aliases",
 ];
 
-/** Best `limit` matches, highest score first; ties keep group order then index order. */
-export function searchPalette(
-  index: readonly PaletteItem[],
-  query: string,
-  limit = 12,
-): PaletteItem[] {
+/** Every match, highest score first; ties keep group order then index order. */
+export function rankPalette(index: readonly PaletteItem[], query: string): PaletteItem[] {
   const trimmed = query.trim();
   if (!trimmed) {
     return [...index]
@@ -233,7 +232,6 @@ export function searchPalette(
           EMPTY_QUERY_ORDER.indexOf(a.item.group) - EMPTY_QUERY_ORDER.indexOf(b.item.group) ||
           a.position - b.position,
       )
-      .slice(0, limit)
       .map(({ item }) => item);
   }
   return index
@@ -245,8 +243,46 @@ export function searchPalette(
         groupRank(a.item.group) - groupRank(b.item.group) ||
         a.position - b.position,
     )
-    .slice(0, limit)
     .map(({ item }) => item);
+}
+
+/** Best `limit` matches of `rankPalette`. */
+export function searchPalette(
+  index: readonly PaletteItem[],
+  query: string,
+  limit = PALETTE_RESULT_LIMIT,
+): PaletteItem[] {
+  return rankPalette(index, query).slice(0, limit);
+}
+
+/**
+ * Parameter and secret keys are namespace-scoped and unbounded, so they are
+ * not indexed; instead a non-empty query gets two fall-through actions that
+ * hand it to the list pages as a key prefix. Rendered after the ranked
+ * results, outside the cap, so they are always reachable.
+ */
+export function fallthroughActions(query: string, ns: NamespaceRef | null): PaletteItem[] {
+  const trimmed = query.trim();
+  if (!trimmed || !ns) return [];
+  const where = nsLabel(ns);
+  return [
+    {
+      id: "action:search-parameters",
+      group: "Actions",
+      title: `Search parameters for "${trimmed}"`,
+      subtitle: `Keys starting with ${trimmed} · ${where}`,
+      href: links.parameters(ns, trimmed),
+      keywords: [],
+    },
+    {
+      id: "action:search-secrets",
+      group: "Actions",
+      title: `Search secrets for "${trimmed}"`,
+      subtitle: `Keys starting with ${trimmed} · ${where}`,
+      href: links.secrets(ns, trimmed),
+      keywords: [],
+    },
+  ];
 }
 
 /** Groups a result list for rendering, preserving the ranked order inside each group. */

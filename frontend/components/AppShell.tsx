@@ -9,6 +9,8 @@ import { Sheet, SheetContent, SheetTitle, SheetTrigger } from "@/components/ui/s
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { useAuth } from "@/context/AuthContext";
 import { displayNamespace } from "@/lib/format";
+import { links } from "@/lib/links";
+import { type NamespaceRef, useLastNamespace } from "@/lib/namespace-memory";
 import type { Identity } from "@/lib/types";
 import { Icon } from "./icons";
 import { LogoMark } from "./LogoMark";
@@ -20,6 +22,11 @@ interface NavItem {
   icon: ReactNode;
   exact?: boolean;
   adminOnly?: boolean;
+  /**
+   * Deep link into the page with the operator's last namespace, so the picker
+   * does not reset on every lateral move. `href` stays bare for active matching.
+   */
+  withNamespace?: (ns: NamespaceRef) => string;
 }
 
 interface NavGroup {
@@ -42,9 +49,24 @@ export const NAV: NavGroup[] = [
     label: "Browse",
     items: [
       { href: "/namespaces", label: "App environments", icon: <Icon.namespace /> },
-      { href: "/parameters", label: "Parameters", icon: <Icon.parameter /> },
-      { href: "/secrets", label: "Secrets", icon: <Icon.secret /> },
-      { href: "/releases", label: "Releases", icon: <Icon.release /> },
+      {
+        href: "/parameters",
+        label: "Parameters",
+        icon: <Icon.parameter />,
+        withNamespace: (ns) => links.parameters(ns),
+      },
+      {
+        href: "/secrets",
+        label: "Secrets",
+        icon: <Icon.secret />,
+        withNamespace: (ns) => links.secrets(ns),
+      },
+      {
+        href: "/releases",
+        label: "Releases",
+        icon: <Icon.release />,
+        withNamespace: (ns) => links.releases({ app: ns.app, env: ns.env }),
+      },
     ],
   },
   {
@@ -69,6 +91,29 @@ function isActive(pathname: string, item: NavItem): boolean {
   return pathname === item.href || pathname.startsWith(`${item.href}/`);
 }
 
+const MAC_SHORTCUT_LABEL = "⌘K";
+const OTHER_SHORTCUT_LABEL = "Ctrl K";
+
+/** True on macOS and iOS, where the palette shortcut is the Command key. */
+export function isApplePlatform(nav: Navigator = navigator): boolean {
+  const withHints = nav as Navigator & { userAgentData?: { platform?: string } };
+  const platform = withHints.userAgentData?.platform || nav.platform || "";
+  return /mac|iphone|ipad|ipod/i.test(platform);
+}
+
+/**
+ * The visible shortcut chip. The server has no platform to ask, so it renders
+ * the Mac label and the client corrects it after hydration — swapping in an
+ * effect rather than during render keeps the two markups identical.
+ */
+function useShortcutLabel(): string {
+  const [label, setLabel] = useState(MAC_SHORTCUT_LABEL);
+  useEffect(() => {
+    if (!isApplePlatform()) setLabel(OTHER_SHORTCUT_LABEL);
+  }, []);
+  return label;
+}
+
 function SidebarContent({
   groups,
   pathname,
@@ -76,6 +121,8 @@ function SidebarContent({
   logout,
   onNavigate,
   onSearch,
+  shortcutLabel,
+  namespace,
 }: {
   groups: NavGroup[];
   pathname: string;
@@ -83,6 +130,8 @@ function SidebarContent({
   logout: () => void;
   onNavigate?: () => void;
   onSearch: () => void;
+  shortcutLabel: string;
+  namespace: NamespaceRef | null;
 }) {
   return (
     <>
@@ -102,7 +151,7 @@ function SidebarContent({
       >
         <Search size={15} strokeWidth={1.9} aria-hidden />
         <span className="nav-search-label">Search…</span>
-        <Kbd>⌘K</Kbd>
+        <Kbd>{shortcutLabel}</Kbd>
       </button>
 
       <nav className="nav" aria-label="Primary navigation">
@@ -112,7 +161,7 @@ function SidebarContent({
             {group.items.map((item) => (
               <Link
                 key={item.href}
-                href={item.href}
+                href={namespace && item.withNamespace ? item.withNamespace(namespace) : item.href}
                 className={`nav-link ${isActive(pathname, item) ? "active" : ""}`}
                 aria-current={isActive(pathname, item) ? "page" : undefined}
                 onClick={onNavigate}
@@ -167,6 +216,8 @@ export default function AppShell({ children }: { children: ReactNode }) {
   const { identity, logout } = useAuth();
   const [navOpen, setNavOpen] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
+  const shortcutLabel = useShortcutLabel();
+  const namespace = useLastNamespace();
   const visibleNav = useMemo(
     () =>
       NAV.map((group) => ({
@@ -243,6 +294,8 @@ export default function AppShell({ children }: { children: ReactNode }) {
                 setNavOpen(false);
                 openPalette();
               }}
+              shortcutLabel={shortcutLabel}
+              namespace={namespace}
             />
           </SheetContent>
         </Sheet>
@@ -254,10 +307,14 @@ export default function AppShell({ children }: { children: ReactNode }) {
             identity={identity}
             logout={logout}
             onSearch={openPalette}
+            shortcutLabel={shortcutLabel}
+            namespace={namespace}
           />
         </aside>
 
-        <main id="main-content" className="main">
+        {/* tabIndex lets the skip link land focus here in every browser, not just
+            move the scroll. */}
+        <main id="main-content" className="main" tabIndex={-1}>
           {identity && identity.kind !== "admin" ? <IdentityStrip identity={identity} /> : null}
           <div className="page">{children}</div>
         </main>

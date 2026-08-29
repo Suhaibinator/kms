@@ -3,11 +3,16 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { NAV } from "@/components/AppShell";
 import CommandPalette, { resetPaletteCache } from "@/components/palette/CommandPalette";
 import { links } from "@/lib/links";
+import { rememberNamespace, resetNamespaceMemory } from "@/lib/namespace-memory";
 import {
   buildPaletteIndex,
+  fallthroughActions,
   fuzzyScore,
+  NEW_APPLICATION_HREF,
   PALETTE_PAGES,
+  PALETTE_RESULT_LIMIT,
   type PaletteItem,
+  rankPalette,
   searchPalette,
 } from "@/lib/palette";
 import type { Application, Identity, Namespace } from "@/lib/types";
@@ -115,9 +120,11 @@ describe("palette index", () => {
       subtitle: "Ship a change · prod/gradethis",
       href: links.application("gradethis", { env: "prod", ship: "rate_limits" }),
     });
-    expect(index.find((item) => item.id === "action:new-application")?.href).toBe(
-      "/applications?new=1",
-    );
+    // The applications page opens the create wizard on `?new=1`.
+    const newApplication = index.find((item) => item.id === "action:new-application");
+    expect(newApplication?.href).toBe(NEW_APPLICATION_HREF);
+    expect(newApplication?.href).toBe("/applications?new=1");
+    expect(newApplication?.href).toContain("?new=1");
     expect(index.find((item) => item.id === "action:rollback:prod/gradethis")?.href).toBe(
       links.application("gradethis", { env: "prod", rollback: true }),
     );
@@ -156,15 +163,46 @@ describe("fuzzyScore / searchPalette", () => {
 
   it("caps results at 12 and leads with pages and actions when nothing is typed", () => {
     const results = searchPalette(index, "");
+    expect(PALETTE_RESULT_LIMIT).toBe(12);
     expect(results).toHaveLength(12);
     expect(results[0]?.group).toBe("Pages");
     expect(searchPalette(index, "", 3)).toHaveLength(3);
+  });
+
+  it("ranks every match so the palette can say how many the cap hid", () => {
+    const all = rankPalette(index, "");
+    expect(all).toHaveLength(index.length);
+    expect(all.slice(0, 12)).toEqual(searchPalette(index, ""));
+    const matches = rankPalette(index, "gradethis");
+    expect(matches.length).toBeGreaterThan(0);
+    expect(matches.every((item) => fuzzyScore("gradethis", item) > 0)).toBe(true);
+    expect(rankPalette(index, "zzzz-nothing")).toEqual([]);
+  });
+
+  it("offers parameter and secret key searches for a query inside a namespace", () => {
+    const ns = { env: "prod", app: "gradethis" };
+    expect(fallthroughActions("", ns)).toEqual([]);
+    expect(fallthroughActions("db", null)).toEqual([]);
+    const actions = fallthroughActions("  db/host ", ns);
+    expect(actions.map((item) => item.group)).toEqual(["Actions", "Actions"]);
+    expect(actions[0]).toMatchObject({
+      id: "action:search-parameters",
+      title: 'Search parameters for "db/host"',
+      href: links.parameters(ns, "db/host"),
+    });
+    expect(actions[1]).toMatchObject({
+      id: "action:search-secrets",
+      title: 'Search secrets for "db/host"',
+      href: links.secrets(ns, "db/host"),
+    });
+    expect(actions[0]?.href).toBe("/parameters?env=prod&app=gradethis&key_prefix=db%2Fhost");
   });
 });
 
 describe("CommandPalette", () => {
   beforeEach(() => {
     resetPaletteCache();
+    resetNamespaceMemory();
     mocks.push.mockClear();
     mocks.listApplications.mockReset();
     mocks.listApplications.mockResolvedValue({ applications, next_page_token: "" });
@@ -256,6 +294,105 @@ describe("CommandPalette", () => {
     expect(options[0]).toHaveTextContent("prod/legacy");
     fireEvent.keyDown(input, { key: "Enter" });
     expect(mocks.push).toHaveBeenCalledWith(links.parameters({ env: "prod", app: "legacy" }));
+  });
+
+  it("labels each result group so the listbox owns its options", async () => {
+    render(<CommandPalette open onOpenChange={vi.fn()} />);
+    const input = await screen.findByRole("combobox");
+    fireEvent.change(input, { target: { value: "gradethis" } });
+    await screen.findAllByRole("option");
+    const listbox = screen.getByRole("listbox");
+    const groups = within(listbox).getAllByRole("group");
+    expect(groups.length).toBeGreaterThan(1);
+    for (const group of groups) {
+      const label = document.getElementById(group.getAttribute("aria-labelledby") ?? "");
+      expect(label).not.toBeNull();
+      expect(label).toHaveClass("palette-group-label");
+      expect(label).not.toHaveAttribute("role");
+      expect(within(group).getAllByRole("option").length).toBeGreaterThan(0);
+    }
+    expect(within(listbox).getByRole("group", { name: "Applications" })).toBeVisible();
+  });
+
+  it("says how many matches the cap hid, and drops the line once the query narrows", async () => {
+    render(<CommandPalette open onOpenChange={vi.fn()} />);
+    const input = await screen.findByRole("combobox");
+    await waitFor(() => expect(mocks.listApplications).toHaveBeenCalled());
+    // With nothing typed the whole index is a match; the fixture has more than 12 items.
+    const total = rankPalette(
+      buildPaletteIndex({ applications, namespaces, isAdmin: true }),
+      "",
+    ).length;
+    expect(total).toBeGreaterThan(12);
+    await waitFor(() => expect(screen.getAllByRole("option")).toHaveLength(12));
+    const more = screen.getByTestId("palette-more");
+    expect(more).toHaveTextContent(`12 of ${total} — type to narrow`);
+    expect(more).toHaveClass("palette-empty");
+
+    fireEvent.change(input, { target: { value: "identities" } });
+    await waitFor(() => expect(screen.queryByTestId("palette-more")).toBeNull());
+  });
+
+  it("phrases the cap line as matches once something is typed", async () => {
+    render(<CommandPalette open onOpenChange={vi.fn()} />);
+    const input = await screen.findByRole("combobox");
+    await waitFor(() => expect(mocks.listApplications).toHaveBeenCalled());
+    const index = buildPaletteIndex({ applications, namespaces, isAdmin: true });
+    // "e" is in almost everything; only assert the phrasing when the cap really hits.
+    const total = rankPalette(index, "e").length;
+    expect(total).toBeGreaterThan(12);
+    fireEvent.change(input, { target: { value: "e" } });
+    await waitFor(() =>
+      expect(screen.getByTestId("palette-more")).toHaveTextContent(
+        `12 of ${total} matches — keep typing`,
+      ),
+    );
+  });
+
+  it("falls through to a parameter or secret key search in the remembered namespace", async () => {
+    rememberNamespace({ env: "prod", app: "gradethis" });
+    render(<CommandPalette open onOpenChange={vi.fn()} />);
+    const input = await screen.findByRole("combobox");
+    // Nothing typed: no fall-through.
+    expect(screen.queryByText(/Search parameters for/)).toBeNull();
+
+    fireEvent.change(input, { target: { value: "db/host" } });
+    const options = await screen.findAllByRole("option");
+    // Beyond the cap and always last: the two searches close the list.
+    expect(options.length).toBeLessThanOrEqual(PALETTE_RESULT_LIMIT + 2);
+    const parameters = screen.getByRole("option", { name: /Search parameters for "db\/host"/ });
+    const secrets = screen.getByRole("option", { name: /Search secrets for "db\/host"/ });
+    expect(options.at(-2)).toBe(parameters);
+    expect(options.at(-1)).toBe(secrets);
+    expect(
+      within(screen.getByRole("listbox")).getByRole("group", { name: "Actions" }),
+    ).toContainElement(parameters);
+
+    fireEvent.keyDown(input, { key: "End" });
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(mocks.push).toHaveBeenCalledWith(
+      links.secrets({ env: "prod", app: "gradethis" }, "db/host"),
+    );
+  });
+
+  it("scopes the fall-through to a client identity's bound namespace", async () => {
+    mocks.identity = client;
+    render(<CommandPalette open onOpenChange={vi.fn()} />);
+    const input = await screen.findByRole("combobox");
+    fireEvent.change(input, { target: { value: "rate" } });
+    const option = await screen.findByRole("option", { name: /Search parameters for "rate"/ });
+    fireEvent.click(option);
+    expect(mocks.push).toHaveBeenCalledWith(
+      links.parameters({ env: "prod", app: "gradethis" }, "rate"),
+    );
+  });
+
+  it("offers no key search without a namespace in play", async () => {
+    render(<CommandPalette open onOpenChange={vi.fn()} />);
+    const input = await screen.findByRole("combobox");
+    fireEvent.change(input, { target: { value: "zzzz-nothing" } });
+    expect(await screen.findByText(/No matches for/)).toBeVisible();
+    expect(screen.queryByRole("option", { name: /Search parameters/ })).toBeNull();
   });
 
   it("shows keyboard hints in the footer", async () => {

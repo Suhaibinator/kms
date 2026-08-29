@@ -15,7 +15,15 @@ import { Kbd } from "@/components/ui/kbd";
 import { useAuth } from "@/context/AuthContext";
 import { api, getToken, isAbortError } from "@/lib/api";
 import { useNamespaces } from "@/lib/hooks";
-import { buildPaletteIndex, groupResults, type PaletteItem, searchPalette } from "@/lib/palette";
+import { useLastNamespace } from "@/lib/namespace-memory";
+import {
+  buildPaletteIndex,
+  fallthroughActions,
+  groupResults,
+  PALETTE_RESULT_LIMIT,
+  type PaletteItem,
+  rankPalette,
+} from "@/lib/palette";
 import type { Application } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
@@ -70,9 +78,23 @@ function PaletteBody({ onClose }: { onClose: () => void }) {
     [applications, namespaces, isAdmin],
   );
 
+  // The namespace the operator last worked in (or the one a client identity
+  // is bound to) scopes the "Search parameters/secrets for …" fall-throughs.
+  const remembered = useLastNamespace();
+  const scope = remembered ?? identity?.namespace ?? null;
+
   const [query, setQuery] = useState("");
   const [active, setActive] = useState(0);
-  const results = useMemo(() => searchPalette(index, query), [index, query]);
+  const ranked = useMemo(() => rankPalette(index, query), [index, query]);
+  const total = ranked.length;
+  const capped = total > PALETTE_RESULT_LIMIT;
+  const results = useMemo(
+    () => [
+      ...(capped ? ranked.slice(0, PALETTE_RESULT_LIMIT) : ranked),
+      ...fallthroughActions(query, scope),
+    ],
+    [ranked, capped, query, scope],
+  );
   const groups = useMemo(() => groupResults(results), [results]);
   const listId = useId();
   const inputRef = useRef<HTMLInputElement>(null);
@@ -130,6 +152,7 @@ function PaletteBody({ onClose }: { onClose: () => void }) {
   };
 
   const optionId = (position: number) => `${listId}-option-${position}`;
+  const groupLabelId = (group: string) => `${listId}-group-${group.toLowerCase()}`;
   let position = -1;
 
   return (
@@ -164,14 +187,20 @@ function PaletteBody({ onClose }: { onClose: () => void }) {
         className="palette-list"
         onMouseDown={(event) => event.preventDefault()}
       >
-        {results.length === 0 ? (
+        {total === 0 ? (
           <div className="palette-empty">
             No matches for <span className="mono">{query.trim()}</span>.
           </div>
         ) : null}
         {groups.map((group) => (
-          <div key={group.group} className="palette-group">
-            <div className="palette-group-label" role="presentation">
+          // biome-ignore lint/a11y/useSemanticElements: a listbox owns options and ARIA groups of options; a fieldset has no place inside it.
+          <div
+            key={group.group}
+            className="palette-group"
+            role="group"
+            aria-labelledby={groupLabelId(group.group)}
+          >
+            <div id={groupLabelId(group.group)} className="palette-group-label">
               {group.group}
             </div>
             {group.items.map((item) => {
@@ -205,6 +234,12 @@ function PaletteBody({ onClose }: { onClose: () => void }) {
           </div>
         ))}
       </div>
+      {capped ? (
+        <div className="palette-empty palette-more" data-testid="palette-more">
+          {PALETTE_RESULT_LIMIT} of {total}{" "}
+          {query.trim() ? "matches — keep typing" : "— type to narrow"}
+        </div>
+      ) : null}
       <div className="palette-foot">
         <span>
           <Kbd>↑</Kbd>
@@ -232,7 +267,7 @@ export default function CommandPalette({ open, onOpenChange }: CommandPalettePro
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
         showCloseButton={false}
-        className="palette-dialog top-[12vh] translate-y-0 gap-0 p-0 sm:max-w-xl max-md:inset-0 max-md:top-0 max-md:left-0 max-md:h-full max-md:max-w-none max-md:translate-x-0 max-md:rounded-none"
+        className="palette-dialog top-[12dvh] translate-y-0 gap-0 p-0 sm:max-w-xl max-md:inset-0 max-md:top-0 max-md:left-0 max-md:h-full max-md:max-w-none max-md:translate-x-0 max-md:rounded-none"
         aria-describedby={undefined}
       >
         <DialogTitle className="sr-only">Command palette</DialogTitle>

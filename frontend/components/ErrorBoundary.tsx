@@ -1,6 +1,6 @@
 import { Component, type ErrorInfo, type ReactNode } from "react";
 import { LogoMark } from "@/components/LogoMark";
-import { Button } from "@/components/ui/button";
+import { Button, ButtonLink } from "@/components/ui/button";
 
 interface ErrorBoundaryProps {
   /**
@@ -60,12 +60,25 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
               <div className="faint text-sm">The rest of the console still works.</div>
             </div>
           </div>
-          <pre className="json-block mb-4">{error.message || String(error)}</pre>
-          {/* A class component has no router, and a full reload is the surer
-              way back from a render tree that has already failed once. */}
-          <Button className="w-full" onClick={() => window.location.reload()} type="button">
-            Reload
-          </Button>
+          {/* The exception text is for whoever files the bug, not the operator
+              reading the card, so it stays folded. */}
+          <details className="advanced-panel mb-4">
+            <summary>Technical details</summary>
+            <div className="advanced-panel-content">
+              <pre className="json-block">{error.message || String(error)}</pre>
+            </div>
+          </details>
+          <div className="flex gap-2">
+            {/* A class component has no router, and a full reload is the surer
+                way back from a render tree that has already failed once; the
+                overview link is the escape that keeps the session. */}
+            <Button className="flex-1" onClick={() => window.location.reload()} type="button">
+              Reload
+            </Button>
+            <ButtonLink href="/" variant="outline" className="flex-1">
+              Back to overview
+            </ButtonLink>
+          </div>
         </div>
       </main>
     );

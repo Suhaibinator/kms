@@ -6,7 +6,7 @@
     display: flex;
     flex-direction: column;
     min-height: 0;
-    max-height: min(70vh, 560px);
+    max-height: min(70dvh, 560px);
   }
   .palette-input-row {
     display: flex;
@@ -49,6 +49,13 @@
     color: var(--text-faint);
     font-size: 12.5px;
     text-align: center;
+  }
+  /* "12 of 47 matches" sits between the list and the key hints, outside the
+     scroll region so it stays put while the results scroll. */
+  .palette-more {
+    flex-shrink: 0;
+    padding: var(--space-2) var(--space-3);
+    border-top: 1px solid var(--border);
   }
   .palette-group + .palette-group {
     margin-top: var(--space-2);

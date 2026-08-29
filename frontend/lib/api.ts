@@ -22,8 +22,8 @@ import type {
   CreateReleaseRequest,
   CreateSecretRequest,
   CreateSecretResponse,
-  DefaultsArtifactBody,
   DefaultsApplyResponse,
+  DefaultsArtifactBody,
   FleetOverview,
   HealthResponse,
   Identity,
@@ -91,6 +91,15 @@ export class ApiError extends Error {
 // status is the reliable signal, so ship/rollback/clone callers test this.
 export function isConflict(err: unknown): boolean {
   return err instanceof ApiError && err.status === 409;
+}
+
+/**
+ * True when the request never reached the server (network failure or client
+ * timeout): `ApiError("unavailable", …, 0)`. Every in-flight call fails this
+ * way at once when the connection drops, so callers collapse them.
+ */
+export function isUnreachableError(err: unknown): err is ApiError {
+  return err instanceof ApiError && err.code === "unavailable" && err.status === 0;
 }
 
 // --- Token + cached identity (memory + sessionStorage) ---

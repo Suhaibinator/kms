@@ -1,7 +1,7 @@
 import { createContext, type ReactNode, useContext, useMemo } from "react";
 import { toast } from "sonner";
 import { Toaster } from "@/components/ui/sonner";
-import { ApiError, isAbortError } from "@/lib/api";
+import { ApiError, isAbortError, isUnreachableError } from "@/lib/api";
 import { useTheme } from "@/lib/theme";
 
 type ToastKind = "error" | "success" | "info";
@@ -41,6 +41,7 @@ const TITLE_BY_CODE: Record<string, string> = {
 // Four seconds is not long enough to read a server-supplied message.
 const ERROR_DURATION_MS = 8_000;
 const SESSION_EXPIRED_TOAST_ID = "session-expired";
+const UNREACHABLE_TOAST_ID = "server-unreachable";
 
 const ToastContext = createContext<ToastApi | null>(null);
 
@@ -77,6 +78,21 @@ export function ToastProvider({ children }: { children: ReactNode }) {
             ...opts,
             id: opts.id ?? SESSION_EXPIRED_TOAST_ID,
           });
+        }
+
+        if (isUnreachableError(error)) {
+          // Dropping the connection fails every in-flight request the same way
+          // (a dashboard refresh alone is four calls, the fleet grid up to 25
+          // more). One fixed id turns the wall of identical toasts into one.
+          return show(
+            "error",
+            fallbackTitle ?? TITLE_BY_CODE.unavailable ?? "Error",
+            error.message,
+            {
+              ...opts,
+              id: opts.id ?? UNREACHABLE_TOAST_ID,
+            },
+          );
         }
 
         // The caller's title names the action that failed ("Delete failed"),

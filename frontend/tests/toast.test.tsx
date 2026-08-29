@@ -74,6 +74,49 @@ describe("ToastContext", () => {
     }
   });
 
+  it("collapses every request that failed to reach the server onto one toast", () => {
+    // Dropping the connection fails a dashboard refresh (4 calls) and the fleet
+    // grid (up to 25) at once; a fixed id makes sonner replace, not stack.
+    withToast((toast) => {
+      toast.error(new ApiError("unavailable", "Could not reach the server.", 0));
+      toast.error(
+        new ApiError("unavailable", "The server took too long to respond.", 0),
+        "Load failed",
+      );
+      toast.error(new ApiError("unavailable", "Could not reach the server.", 0), undefined, {
+        id: "mine",
+      });
+    });
+
+    expect(sonnerMocks.error).toHaveBeenCalledTimes(3);
+    expect(sonnerMocks.error.mock.calls[0]).toEqual([
+      "Service unavailable",
+      expect.objectContaining({
+        id: "server-unreachable",
+        description: "Could not reach the server.",
+      }),
+    ]);
+    // The caller's title still wins; only the id is pinned.
+    expect(sonnerMocks.error.mock.calls[1]).toEqual([
+      "Load failed",
+      expect.objectContaining({
+        id: "server-unreachable",
+        description: "The server took too long to respond.",
+        duration: 8_000,
+      }),
+    ]);
+    // An explicit id is respected.
+    expect(sonnerMocks.error.mock.calls[2]?.[1]).toMatchObject({ id: "mine" });
+  });
+
+  it("does not collapse a server-side 503 with a network failure", () => {
+    withToast((toast) => toast.error(new ApiError("unavailable", "maintenance", 503)));
+    expect(sonnerMocks.error).toHaveBeenCalledWith(
+      "Service unavailable",
+      expect.not.objectContaining({ id: expect.anything() }),
+    );
+  });
+
   it("prefers the caller's title over the error code's", () => {
     withToast((toast) => toast.error(new ApiError("conflict", "dup", 409), "Delete failed"));
 

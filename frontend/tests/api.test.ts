@@ -1,5 +1,14 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { api, apiFetch, clearToken, getToken, setToken, UNAUTHORIZED_EVENT } from "@/lib/api";
+import {
+  ApiError,
+  api,
+  apiFetch,
+  clearToken,
+  getToken,
+  isUnreachableError,
+  setToken,
+  UNAUTHORIZED_EVENT,
+} from "@/lib/api";
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -229,5 +238,20 @@ describe("apiFetch", () => {
     } finally {
       window.removeEventListener(UNAUTHORIZED_EVENT, onUnauthorized);
     }
+  });
+});
+
+describe("isUnreachableError", () => {
+  it("is true only for a status-0 unavailable error", () => {
+    expect(isUnreachableError(new ApiError("unavailable", "offline", 0))).toBe(true);
+    expect(isUnreachableError(new ApiError("unavailable", "maintenance", 503))).toBe(false);
+    expect(isUnreachableError(new ApiError("internal", "boom", 0))).toBe(false);
+    expect(isUnreachableError(new Error("offline"))).toBe(false);
+    expect(isUnreachableError(undefined)).toBe(false);
+  });
+
+  it("classifies what apiFetch throws when fetch rejects", async () => {
+    vi.spyOn(globalThis, "fetch").mockRejectedValue(new TypeError("Failed to fetch"));
+    await expect(apiFetch("/v1/health")).rejects.toSatisfy(isUnreachableError);
   });
 });

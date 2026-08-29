@@ -42,8 +42,29 @@ describe("ErrorBoundary", () => {
     );
 
     expect(screen.getByText("This page hit an unexpected error")).toBeVisible();
-    expect(screen.getByText("state of the union is broken")).toBeVisible();
     expect(screen.getByRole("button", { name: "Reload" })).toBeVisible();
+    expect(screen.getByRole("link", { name: "Back to overview" })).toHaveAttribute("href", "/");
+
+    // The raw exception is for a bug report, so it starts folded.
+    const details = document.querySelector("details.advanced-panel") as HTMLDetailsElement;
+    expect(details.open).toBe(false);
+    expect(screen.getByText("state of the union is broken")).not.toBeVisible();
+    fireEvent.click(screen.getByText("Technical details"));
+    expect(details.open).toBe(true);
+    expect(screen.getByText("state of the union is broken")).toBeVisible();
+  });
+
+  it("falls back to the stringified error when the message is empty", () => {
+    function Blank(): React.ReactNode {
+      throw new Error("");
+    }
+    render(
+      <ErrorBoundary>
+        <Blank />
+      </ErrorBoundary>,
+    );
+    fireEvent.click(screen.getByText("Technical details"));
+    expect(document.querySelector("pre.json-block")).toHaveTextContent("Error");
   });
 
   it("renders the page untouched when nothing throws", () => {
