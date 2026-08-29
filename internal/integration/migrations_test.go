@@ -50,8 +50,8 @@ func TestMigrationsFreshAndIdempotent(t *testing.T) {
 	if err := db.QueryRow("SELECT MAX(version) FROM schema_migrations").Scan(&version); err != nil {
 		t.Fatalf("read schema_migrations: %v", err)
 	}
-	if version != 6 {
-		t.Errorf("schema version = %d, want 6", version)
+	if version != 7 {
+		t.Errorf("schema version = %d, want 7", version)
 	}
 
 	var ddl string
@@ -267,8 +267,8 @@ func TestMigrationRepairsPartialSubscriberSchemaDespiteCurrentStamp(t *testing.T
 	if err := db.QueryRow("SELECT MAX(version) FROM schema_migrations").Scan(&version); err != nil {
 		t.Fatal(err)
 	}
-	if version != 6 {
-		t.Fatalf("partial database schema stamp = %d, want current v6", version)
+	if version != 7 {
+		t.Fatalf("partial database schema stamp = %d, want current v7", version)
 	}
 	if err := db.Close(); err != nil {
 		t.Fatal(err)
