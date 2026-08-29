@@ -63,7 +63,7 @@ func TestDefaultMismatchReportIsDeeplyImmutableAndSecretFree(t *testing.T) {
 	}{Secret: kmsclient.NewSecret([]byte("plaintext-canary"))}
 	report := newDefaultMismatchReport(
 		MismatchStartup,
-		MismatchFatal,
+		MismatchError,
 		ReleaseIdentity{namespace: "prod/app", name: "runtime", version: 3, activationRevision: 9},
 		[]FieldDifference{{Path: "group.field", Expected: expected, Actual: actual}},
 	)
@@ -88,30 +88,81 @@ func TestDefaultMismatchReportIsDeeplyImmutableAndSecretFree(t *testing.T) {
 	}
 }
 
-func TestDefaultMismatchErrorFormattingNeverIncludesValues(t *testing.T) {
+func TestDefaultMismatchReportFormattingNeverIncludesValues(t *testing.T) {
 	const canary = "NONSECRET-VALUE-CANARY"
 	report := newDefaultMismatchReport(
 		MismatchStartup,
-		MismatchFatal,
+		MismatchError,
 		ReleaseIdentity{name: "runtime", version: 2},
 		[]FieldDifference{{Path: "group.field", Expected: canary, Actual: "other"}},
 	)
-	err := newDefaultMismatchError(report)
 	formats := []string{
-		fmt.Sprintf("%s", err),
-		fmt.Sprintf("%v", err),
-		fmt.Sprintf("%+v", err),
-		fmt.Sprintf("%#v", err),
-		fmt.Sprintf("%q", err),
-		fmt.Sprintf("%#v", any(err)),
+		fmt.Sprintf("%s", report),
+		fmt.Sprintf("%v", report),
+		fmt.Sprintf("%+v", report),
+		fmt.Sprintf("%#v", report),
+		fmt.Sprintf("%q", report),
+		fmt.Sprintf("%#v", any(report)),
 	}
 	for _, output := range formats {
 		if strings.Contains(output, canary) {
-			t.Fatalf("formatted DefaultMismatchError leaked a value: %q", output)
+			t.Fatalf("formatted DefaultMismatchReport leaked a value: %q", output)
 		}
 	}
-	if got := err.Fields(); got[0].Expected != canary {
+	if got := report.Fields(); got[0].Expected != canary {
 		t.Fatalf("Fields() expected = %#v", got)
+	}
+}
+
+func TestAppliedReportFormattingNeverIncludesValues(t *testing.T) {
+	const canary = "NONSECRET-CHANGE-CANARY"
+	const secretCanary = "plaintext-secret-canary"
+	groups := map[string]json.RawMessage{"group": json.RawMessage(`{"field":"` + canary + `"}`)}
+	report := newAppliedReport(
+		PhaseRuntime,
+		ReleaseIdentity{namespace: "prod/app", name: "runtime", version: 5, activationRevision: 12},
+		true,
+		[]FieldChange{
+			{Path: "group.field", Previous: "old", Current: canary},
+			{Path: "group.secret", Previous: nil, Current: kmsclient.NewSecret([]byte(secretCanary))},
+			{Path: "bad path\n", Previous: 1, Current: 2},
+		},
+		func() (map[string]json.RawMessage, error) { return groups, nil },
+	)
+	encoded, err := json.Marshal(report)
+	if err != nil {
+		t.Fatalf("json.Marshal() error = %v", err)
+	}
+	formats := []string{
+		fmt.Sprintf("%s", report),
+		fmt.Sprintf("%v", report),
+		fmt.Sprintf("%+v", report),
+		fmt.Sprintf("%#v", report),
+		fmt.Sprintf("%q", report),
+		fmt.Sprintf("%#v", any(report)),
+	}
+	for _, output := range formats {
+		if strings.Contains(output, canary) || strings.Contains(output, secretCanary) || strings.Contains(output, "\n") {
+			t.Fatalf("formatted AppliedReport leaked a value: %q", output)
+		}
+		if !strings.Contains(output, "prod/app/runtime@5#12") || !strings.Contains(output, "group.field") {
+			t.Fatalf("formatted AppliedReport lacks identity or paths: %q", output)
+		}
+	}
+	// JSON is the explicit structured form: non-secret values are present,
+	// secret values are redacted, unsafe paths are normalized.
+	if strings.Contains(string(encoded), secretCanary) || strings.Contains(string(encoded), "bad path") {
+		t.Fatalf("AppliedReport JSON leaked unsafe data: %s", encoded)
+	}
+	if !strings.Contains(string(encoded), canary) || !strings.Contains(string(encoded), `"invalid_path"`) {
+		t.Fatalf("AppliedReport JSON = %s", encoded)
+	}
+	changes := report.Changed()
+	if len(changes) != 3 || changes[0].Current != canary || changes[1].Current != "[REDACTED]" || changes[2].Path != "invalid_path" {
+		t.Fatalf("Changed() = %#v", changes)
+	}
+	if report.Phase() != PhaseRuntime || !report.DefaultDivergent() || report.Release().Version() != 5 {
+		t.Fatalf("report accessors = %s/%v/%s", report.Phase(), report.DefaultDivergent(), report.Release())
 	}
 }
 
