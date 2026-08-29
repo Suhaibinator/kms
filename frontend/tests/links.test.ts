@@ -51,6 +51,31 @@ describe("links", () => {
       "/identities?env=prod&app=gradethis&new=1",
     );
     expect(links.identities({ new: true })).toBe("/identities?new=1");
+    expect(links.identities({ name: "billing api" })).toBe("/identities?name=billing%20api");
+  });
+
+  it("static pages", () => {
+    expect(links.subscribers()).toBe("/subscribers");
+    expect(links.health()).toBe("/health");
+    expect(links.audit()).toBe("/audit");
+  });
+
+  it("audit resources resolve by resource_type", () => {
+    const base = { resource_env: "prod", resource_app: "billing api", resource_key: "db/password" };
+    expect(links.auditResource({ ...base, resource_type: "secret" })).toBe(links.secretDetail(ref));
+    expect(links.auditResource({ ...base, resource_type: "parameter" })).toBe(
+      links.parameterDetail(ref),
+    );
+    expect(
+      links.auditResource({ ...base, resource_type: "configuration_release", resource_key: "run" }),
+    ).toBe("/releases?app=billing%20api&env=prod&name=run");
+    // A namespace-only resource lands on the application focused on that environment.
+    expect(
+      links.auditResource({ resource_type: "namespace", resource_env: "prod", resource_app: "x" }),
+    ).toBe("/applications?app=x&env=prod");
+    // Unknown shapes render as text.
+    expect(links.auditResource({ ...base, resource_type: "policy" })).toBeNull();
+    expect(links.auditResource({ resource_type: "identity", resource_key: "root" })).toBeNull();
   });
 
   it("namespaces", () => {

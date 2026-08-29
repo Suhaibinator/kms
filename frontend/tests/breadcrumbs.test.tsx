@@ -51,7 +51,10 @@ describe("Breadcrumbs", () => {
       "/applications?app=gradethis",
     );
     expect(items[1]?.querySelector(".ident-app")).not.toBeNull();
-    expect(items[2]).toHaveAttribute("aria-current", "page");
+    // aria-current sits on the crumb's content (what assistive tech reads),
+    // not on the list item.
+    expect(items[2]).not.toHaveAttribute("aria-current");
+    expect(items[2]?.querySelector("[aria-current='page']")).not.toBeNull();
     expect(within(items[2] as HTMLElement).queryByRole("link")).toBeNull();
     expect(items[2]?.querySelector(".ident-env.ident-prod")).not.toBeNull();
   });

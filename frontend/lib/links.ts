@@ -52,13 +52,43 @@ export const links = {
     return `/applications?${params.join("&")}`;
   },
   namespaces: (): string => "/namespaces",
-  // `env`/`app` prefill the binding; `new` opens the create form directly.
-  identities: (opts?: { env?: string; app?: string; new?: boolean }): string => {
+  // `env`/`app` prefill the binding; `new` opens the create form directly;
+  // `name` points at one identity (subscriber rows link here).
+  identities: (opts?: { env?: string; app?: string; new?: boolean; name?: string }): string => {
     const params: string[] = [];
     if (opts?.env) params.push(`env=${encodeURIComponent(opts.env)}`);
     if (opts?.app) params.push(`app=${encodeURIComponent(opts.app)}`);
     if (opts?.new) params.push("new=1");
+    if (opts?.name) params.push(`name=${encodeURIComponent(opts.name)}`);
     return params.length > 0 ? `/identities?${params.join("&")}` : "/identities";
+  },
+  subscribers: (): string => "/subscribers",
+  health: (): string => "/health",
+  audit: (): string => "/audit",
+  /**
+   * Where an audit row's resource lives, keyed off the backend's
+   * `resource_type` (internal/domain: parameter, secret, configuration_release,
+   * namespace, …). A namespace-only resource goes to the application page
+   * focused on that environment; unknown shapes return null and render as text.
+   */
+  auditResource: (event: {
+    resource_type?: string;
+    resource_env?: string;
+    resource_app?: string;
+    resource_key?: string;
+  }): string | null => {
+    const env = event.resource_env ?? "";
+    const app = event.resource_app ?? "";
+    const key = event.resource_key ?? "";
+    if (!env || !app) return null;
+    const type = event.resource_type ?? "";
+    if (key) {
+      if (type === "secret") return links.secretDetail({ env, app, key });
+      if (type === "parameter") return links.parameterDetail({ env, app, key });
+      if (type === "configuration_release") return links.releases({ app, env, name: key });
+      return null;
+    }
+    return links.application(app, { env });
   },
   secrets: (ns?: NamespaceRef, keyPrefix?: string): string => listLink("/secrets", ns, keyPrefix),
   secretDetail: (ref: ResourceRef): string => `/secrets/detail?${refQuery(ref)}`,

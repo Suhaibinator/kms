@@ -15,8 +15,9 @@ import type { ApplicationOverview, Finding, FindingCode } from "@/lib/types";
 import { ActionMenu } from "./ActionMenu";
 
 // App-level findings that belong to the contract ⇄ schema relationship and so
-// render in the Alignment row rather than anywhere else.
-const ALIGNMENT_CODES: ReadonlySet<FindingCode> = new Set<FindingCode>([
+// render in the Alignment row rather than anywhere else (ApplicationHome
+// excludes them from its own finding list).
+export const ALIGNMENT_CODES: ReadonlySet<FindingCode> = new Set<FindingCode>([
   "contract_empty",
   "schema_unpinned",
   "schema_missing",

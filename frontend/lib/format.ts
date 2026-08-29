@@ -46,9 +46,11 @@ export function formatUnixMs(ms: number | undefined | null): string {
   });
 }
 
-export function formatRelative(ms: number | undefined | null): string {
+// `now` lets a ticking clock (lib/useNow.ts) drive re-renders; it defaults to
+// the wall clock so one-off callers need not pass it.
+export function formatRelative(ms: number | undefined | null, now: number = Date.now()): string {
   if (!ms || ms <= 0) return EMPTY;
-  const diff = Date.now() - ms;
+  const diff = now - ms;
   const abs = Math.abs(diff);
   // Floor at every unit so 90s reads "1m", not "2m", and 45m never becomes "1h".
   const sec = Math.floor(abs / 1000);

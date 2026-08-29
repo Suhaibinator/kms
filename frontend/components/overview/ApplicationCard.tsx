@@ -9,11 +9,13 @@ export interface ApplicationCardProps {
   fleet: FleetApplication;
   /** The per-app overview when it was fetched (first 25 apps); null on failure, undefined when skipped. */
   overview?: ApplicationOverview | null;
+  /** A ticking clock (lib/useNow.ts) so "activated 2m ago" stays honest. */
+  now?: number;
 }
 
 /** One fleet card: app chip, status, a status dot per environment, the active
  *  release per environment, rejected instances, and the last activation. */
-export default function ApplicationCard({ fleet, overview }: ApplicationCardProps) {
+export default function ApplicationCard({ fleet, overview, now }: ApplicationCardProps) {
   const name = fleet.application.name;
   const envOverviews = new Map(
     (overview?.environments ?? []).map((env) => [env.namespace.env, env] as const),
@@ -81,7 +83,7 @@ export default function ApplicationCard({ fleet, overview }: ApplicationCardProp
           className="fleet-card-activated"
           title={lastActivation ? formatUnixMs(lastActivation) : undefined}
         >
-          {lastActivation ? `activated ${formatRelative(lastActivation)}` : "never activated"}
+          {lastActivation ? `activated ${formatRelative(lastActivation, now)}` : "never activated"}
         </span>
       </footer>
     </article>

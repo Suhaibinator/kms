@@ -1,12 +1,21 @@
 import { Plus, SlidersHorizontal } from "lucide-react";
 import Link from "next/link";
+import CopyButton from "@/components/CopyButton";
+import { Ident } from "@/components/Ident";
 import { Badge } from "@/components/ui";
 import { Button } from "@/components/ui/button";
 import { links } from "@/lib/links";
-import type { ApplicationConfigurationRow, ApplicationDashboard } from "@/lib/types";
+import { isProductionEnvironment } from "@/lib/readiness";
+import type { ApplicationConfigurationRow } from "@/lib/types";
 
 /** Tooltips are not scroll containers; a megabyte JSON value is not a tooltip. */
 const TITLE_MAX_CHARS = 200;
+
+export interface MatrixEnvironment {
+  env: string;
+  /** Rings the column header; inferred from the name when omitted. */
+  production?: boolean;
+}
 
 export function ConfigurationMatrix({
   app,
@@ -16,7 +25,7 @@ export function ConfigurationMatrix({
   onEdit,
 }: {
   app: string;
-  environments: ApplicationDashboard["environments"];
+  environments: MatrixEnvironment[];
   rows: ApplicationConfigurationRow[];
   onAddSecret: (environment: string, key: string) => void;
   onEdit: (row: ApplicationConfigurationRow) => void;
@@ -29,7 +38,14 @@ export function ConfigurationMatrix({
             <th className="matrix-key">Key</th>
             <th>Kind</th>
             {environments.map((env) => (
-              <th key={env.env}>{env.env}</th>
+              <th key={env.env} scope="col">
+                <Ident
+                  kind="env"
+                  value={env.env}
+                  production={env.production ?? isProductionEnvironment(env.env)}
+                  tooltip={false}
+                />
+              </th>
             ))}
             <th />
           </tr>
@@ -39,7 +55,9 @@ export function ConfigurationMatrix({
             <tr key={`${row.kind}:${row.key}`}>
               <td className="mono matrix-key">{row.key}</td>
               <td>
-                <Badge kind={row.kind === "secret" ? "warning" : "accent"}>{row.kind}</Badge>
+                {/* Kind is a classification, not a state: neutral either way so
+                    warning stays reserved for something being wrong. */}
+                <Badge kind="neutral">{row.kind}</Badge>
               </td>
               {environments.map((env) => (
                 <td key={env.env}>
@@ -108,13 +126,22 @@ function MatrixCell({
     );
   const value = cell.value ?? "";
   const title = value.length > TITLE_MAX_CHARS ? `${value.slice(0, TITLE_MAX_CHARS)}…` : value;
+  const detail = links.parameterDetail({ env: environment, app, key: row.key });
   return (
     <div className="matrix-value">
-      <span className="mono" title={title}>
+      <Link
+        href={detail}
+        className="mono matrix-value-link"
+        title={title}
+        aria-label={`Open ${row.key} in ${environment}`}
+      >
         {value === "" ? "(empty)" : value}
-      </span>
-      <span className="faint text-sm">
-        v{cell.version} · {cell.content_type}
+      </Link>
+      <span className="matrix-value-meta faint text-sm">
+        <span>
+          v{cell.version} · {cell.content_type}
+        </span>
+        <CopyButton value={value} label="Copy" className="matrix-copy" />
       </span>
     </div>
   );

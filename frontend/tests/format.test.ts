@@ -36,6 +36,12 @@ describe("formatRelative", () => {
     expect(formatRelative(NOW + 3 * DAY)).toBe("3d from now");
   });
 
+  it("measures against an explicit clock when one is given", () => {
+    const later = NOW + 10 * MINUTE;
+    expect(formatRelative(NOW - MINUTE, later)).toBe("11m ago");
+    expect(formatRelative(NOW - MINUTE)).toBe("1m ago");
+  });
+
   it("renders an em dash for missing timestamps", () => {
     expect(formatRelative(0)).toBe("—");
     expect(formatRelative(null)).toBe("—");

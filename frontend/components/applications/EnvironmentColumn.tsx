@@ -1,10 +1,18 @@
 import { MoreHorizontal } from "lucide-react";
-import { useEffect, useRef } from "react";
+import { useEffect, useMemo, useRef } from "react";
+import { FindingList } from "@/components/FindingList";
 import { Ident } from "@/components/Ident";
 import { StatusChip } from "@/components/StatusChip";
 import { Button } from "@/components/ui/button";
 import { links } from "@/lib/links";
-import type { Application, ApplicationConfigurationRow, EnvironmentOverview } from "@/lib/types";
+import type { FixAction } from "@/lib/readiness";
+import type {
+  Application,
+  ApplicationConfigurationRow,
+  EnvironmentOverview,
+  Finding,
+  FindingCode,
+} from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { ActionMenu } from "./ActionMenu";
 import { ReleaseSection } from "./ReleaseSection";
@@ -17,6 +25,8 @@ export interface EnvironmentCallbacks {
   onShip: (env: string, alias?: string) => void;
   onRollback: (env: string) => void;
   onConnect: (env: string) => void;
+  /** A finding's Fix button (lib/readiness.ts FIX_FOR). */
+  onFix: (action: FixAction, finding: Finding) => void;
 }
 
 /** Parameters present in this environment that no contract alias resolves to. */
@@ -31,6 +41,27 @@ export function countOtherKeys(
   return rows.filter(
     (row) => row.kind === "parameter" && row.environments[env]?.present && !resolved.has(row.key),
   ).length;
+}
+
+// Findings the column's own sections already show in a richer form (the drift
+// badge, the Add value button, the rejected-instance panel, …) or that are
+// chrome rather than problems. Everything else would otherwise be invisible
+// outside the setup checklist and the Ship preview.
+const SURFACED_BY_SECTIONS: ReadonlySet<FindingCode> = new Set<FindingCode>([
+  "production",
+  "previous_unavailable",
+  "unreleased_changes",
+  "resource_missing",
+  "no_active_release",
+  "no_subscribers",
+  "subscriber_other_release",
+  "instance_rejected",
+  "rolled_back",
+]);
+
+/** The environment's findings that need their own line in the column. */
+export function columnFindings(environment: EnvironmentOverview): Finding[] {
+  return environment.findings.filter((finding) => !SURFACED_BY_SECTIONS.has(finding.code));
 }
 
 export function EnvironmentColumn({
@@ -48,12 +79,13 @@ export function EnvironmentColumn({
 }) {
   const ns = environment.namespace;
   const column = useRef<HTMLElement>(null);
-  // `?env=` deep links land on the column: scroll it into view once and move
-  // focus so the next Tab reaches its first action.
+  const findings = useMemo(() => columnFindings(environment), [environment]);
+  // `?env=` deep links land on the column: scroll it into view. Focus stays
+  // where it is — the ring (.pipeline-column-focused) marks the target, and a
+  // query-only navigation is not a request to move the keyboard cursor.
   useEffect(() => {
     if (!focused || !column.current) return;
     column.current.scrollIntoView?.({ block: "nearest", inline: "center" });
-    column.current.focus({ preventScroll: true });
   }, [focused]);
 
   return (
@@ -94,6 +126,7 @@ export function EnvironmentColumn({
       {ns.description ? (
         <div className="pipeline-description faint text-sm">{ns.description}</div>
       ) : null}
+      <FindingList findings={findings} onFix={callbacks.onFix} className="pipeline-findings" />
       <ValuesSection
         environment={environment}
         otherKeys={countOtherKeys(environment, rows)}

@@ -117,11 +117,17 @@ export function Skeleton({
 // prerendered HTML and the client render and trip a hydration mismatch.
 const SKELETON_WIDTHS = ["72%", "45%", "60%", "38%", "54%", "66%"];
 
+/** The row count a list skeleton reserves when the caller has no better
+ *  estimate. List pages fetch 50–100 rows, so a handful of placeholder rows
+ *  would let the page grow by hundreds of pixels under the cursor on arrival. */
+export const SKELETON_ROWS_DEFAULT = 20;
+
 /** Placeholder rows rendered inside a real table, so the column layout and
- *  cell padding match the loaded state exactly and nothing shifts on arrival. */
+ *  cell padding match the loaded state exactly and nothing shifts on arrival.
+ *  Pass `rows` ≈ the last-known row count where the page has one. */
 export function TableSkeleton({
   headers,
-  rows = 5,
+  rows = SKELETON_ROWS_DEFAULT,
   rowHeight,
 }: {
   headers: string[];
@@ -331,6 +337,16 @@ export function KeyValue({ rows }: { rows: Array<[string, ReactNode]> }) {
   );
 }
 
+/** "12 events" / "1 event" from a plural noun; good enough for the console's
+ *  nouns (events, parameters, secrets, applications, identities, policies). */
+function countNoun(count: number, plural: string): string {
+  if (count === 1) {
+    if (plural.endsWith("ies")) return `${plural.slice(0, -3)}y`;
+    if (plural.endsWith("s")) return plural.slice(0, -1);
+  }
+  return plural;
+}
+
 export function Pagination({
   onNext,
   hasNext,
@@ -339,6 +355,9 @@ export function Pagination({
   onReset,
   showReset,
   page,
+  count,
+  loading = false,
+  noun = "results",
 }: {
   onNext: () => void;
   hasNext: boolean;
@@ -347,8 +366,22 @@ export function Pagination({
   onReset?: () => void;
   showReset?: boolean;
   page?: number;
+  /** Rows on the current page; renders "{count} {noun} · Page {n}" and a
+   *  polite status line so screen readers hear each settled page. */
+  count?: number;
+  /** True while the page is being fetched: "End of results" is withheld and
+   *  the status line reads "Loading…" instead of a stale count. */
+  loading?: boolean;
+  /** Plural noun for `count` ("events"). */
+  noun?: string;
 }) {
-  if (!hasNext && !hasPrevious && !showReset) return null;
+  const hasCount = typeof count === "number";
+  const showSummary = hasCount && count > 0;
+  if (!hasNext && !hasPrevious && !showReset && !showSummary) return null;
+  const summary = hasCount ? `${count} ${countNoun(count, noun)}` : null;
+  const status = loading
+    ? "Loading…"
+    : [summary, typeof page === "number" ? `page ${page}` : null].filter(Boolean).join(", ");
   return (
     <div className="pagination">
       {showReset && onReset ? (
@@ -363,14 +396,28 @@ export function Pagination({
           Previous page
         </Button>
       ) : null}
-      {typeof page === "number" ? <span className="text-sm faint">Page {page}</span> : null}
+      {summary || typeof page === "number" ? (
+        // "Page n" keeps its own element so it stays findable on its own.
+        <span className="text-sm faint pagination-summary">
+          {summary ? (
+            <>
+              <span>{summary}</span>
+              {typeof page === "number" ? " · " : null}
+            </>
+          ) : null}
+          {typeof page === "number" ? <span>Page {page}</span> : null}
+        </span>
+      ) : null}
+      <span className="sr-only" role="status" aria-live="polite">
+        {status}
+      </span>
       <div className="spacer" />
       {hasNext ? (
-        <Button type="button" variant="outline" size="sm" onClick={onNext}>
+        <Button type="button" variant="outline" size="sm" onClick={onNext} disabled={loading}>
           Next page
           <ArrowRight size={15} aria-hidden />
         </Button>
-      ) : (
+      ) : loading ? null : (
         <span className="text-sm faint">End of results</span>
       )}
     </div>

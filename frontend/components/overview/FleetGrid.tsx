@@ -5,10 +5,12 @@ export interface FleetGridProps {
   applications: FleetApplication[];
   /** Per-app overviews keyed by name; absent = not fetched, null = failed. */
   overviews: Record<string, ApplicationOverview | null>;
+  /** A ticking clock (lib/useNow.ts) for the cards' relative times. */
+  now?: number;
 }
 
 /** One card per application, blocked/attention first so trouble is at the top. */
-export default function FleetGrid({ applications, overviews }: FleetGridProps) {
+export default function FleetGrid({ applications, overviews, now }: FleetGridProps) {
   const rank: Record<FleetApplication["status"], number> = {
     blocked: 0,
     attention: 1,
@@ -26,6 +28,7 @@ export default function FleetGrid({ applications, overviews }: FleetGridProps) {
           key={fleet.application.name}
           fleet={fleet}
           overview={overviews[fleet.application.name]}
+          now={now}
         />
       ))}
     </div>

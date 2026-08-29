@@ -15,6 +15,9 @@ export interface ServiceStripProps {
   /** true when /health itself could not be reached — a console-side failure,
    *  never reported as the service being unhealthy. */
   healthFailed: boolean;
+  /** true when the namespace list failed, so the three totals are unknown
+   *  rather than zero. */
+  countsFailed?: boolean;
   currentRevision: number;
   namespaces: Count | null;
   parameters: Count | null;
@@ -50,6 +53,7 @@ export default function ServiceStrip({
   loading,
   health,
   healthFailed,
+  countsFailed = false,
   currentRevision,
   namespaces,
   parameters,
@@ -109,6 +113,7 @@ export default function ServiceStrip({
           <CountText c={namespaces} />
         </div>
         <div className="stat-sub">
+          {countsFailed ? <span className="text-danger">not loaded · </span> : null}
           <Link href="/namespaces">
             Manage <ArrowRight size={14} aria-hidden />
           </Link>
@@ -121,6 +126,7 @@ export default function ServiceStrip({
           <CountText c={parameters} />
         </div>
         <div className="stat-sub">
+          {countsFailed ? <span className="text-danger">not loaded · </span> : null}
           <Link href="/parameters">
             Manage <ArrowRight size={14} aria-hidden />
           </Link>
@@ -133,6 +139,7 @@ export default function ServiceStrip({
           <CountText c={secrets} />
         </div>
         <div className="stat-sub">
+          {countsFailed ? <span className="text-danger">not loaded · </span> : null}
           <Link href="/secrets">
             Manage <ArrowRight size={14} aria-hidden />
           </Link>

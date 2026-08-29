@@ -5,7 +5,8 @@ import {
   EnvironmentPipeline,
   orderEnvironments,
 } from "@/components/applications/EnvironmentPipeline";
-import type { ApplicationOverview, EnvironmentOverview } from "@/lib/types";
+import { findingCopy } from "@/lib/readiness";
+import type { ApplicationOverview, EnvironmentOverview, Finding } from "@/lib/types";
 import incidentJson from "./fixtures/backend/overview-incident.json";
 
 const incident = incidentJson as unknown as ApplicationOverview;
@@ -23,6 +24,7 @@ const callbacks: EnvironmentCallbacks = {
   onShip: vi.fn(),
   onRollback: vi.fn(),
   onConnect: vi.fn(),
+  onFix: vi.fn(),
 };
 
 function renderPipeline(overview: ApplicationOverview, focusEnv?: string) {
@@ -219,12 +221,38 @@ describe("EnvironmentPipeline", () => {
     expect(within(prodColumn).getByText("legacy")).toBeVisible();
   });
 
-  it("scrolls the focused column into view", () => {
+  it("scrolls the focused column into view without moving keyboard focus", () => {
     renderPipeline(incident, "prod");
-    expect(screen.getByRole("region", { name: "prod environment" })).toHaveClass(
-      "pipeline-column-focused",
-    );
+    const prod = screen.getByRole("region", { name: "prod environment" });
+    expect(prod).toHaveClass("pipeline-column-focused");
     expect(Element.prototype.scrollIntoView).toHaveBeenCalledTimes(1);
+    // A `?env=` deep link is a place to look, not a request to move the cursor.
+    expect(document.activeElement).not.toBe(prod);
+  });
+
+  it("lists the findings its sections do not already show, with their Fix action", () => {
+    const overview = clone(incident);
+    const prod = env(overview, "prod");
+    const unreadable: Finding = {
+      code: "secret_unreadable",
+      severity: "blocking",
+      scope: { env: "prod", alias: "db_password" },
+      params: { alias: "db_password", state: "disabled" },
+    };
+    prod.findings.push(unreadable);
+    renderPipeline(overview);
+    const column = screen.getByRole("region", { name: "prod environment" });
+    const item = within(column).getByText(findingCopy(unreadable)).closest("li");
+    expect(item).toHaveClass("finding-blocking");
+    fireEvent.click(within(item as HTMLElement).getByRole("button", { name: "Open secret" }));
+    expect(callbacks.onFix).toHaveBeenCalledWith("open_secret", unreadable);
+    // Drift, the rejected instance and the production notice are rendered by
+    // the Values / Subscribers sections and the ring already — not repeated.
+    for (const finding of prod.findings.filter((candidate) => candidate !== unreadable)) {
+      expect(within(column).queryByText(findingCopy(finding))).toBeNull();
+    }
+    const dev = screen.getByRole("region", { name: "dev environment" });
+    expect(dev.querySelector(".finding-list")).toBeNull();
   });
 
   it("offers the namespace pages from the column menu", async () => {

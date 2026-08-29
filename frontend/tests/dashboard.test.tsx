@@ -1,7 +1,8 @@
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { formatUnixMs } from "@/lib/format";
 import { links } from "@/lib/links";
-import type { ApplicationOverview, FleetOverview, Identity } from "@/lib/types";
+import type { ApplicationOverview, AuditEvent, FleetOverview, Identity } from "@/lib/types";
 import HealthPage from "@/pages/health";
 import DashboardPage from "@/pages/index";
 import fleetJson from "./fixtures/backend/fleet.json";
@@ -166,8 +167,59 @@ describe("DashboardPage", () => {
     expect(screen.queryByText("not ready")).toBeNull();
     expect(mocks.toast.error).toHaveBeenCalledWith(
       expect.any(Error),
-      "Some dashboard data failed to load",
+      "Could not load service health",
     );
+    expect(screen.getByRole("status")).toHaveTextContent("Stale");
+  });
+
+  it("names every failed section and marks the affected cards", async () => {
+    mocks.identity = client;
+    mocks.subscribers.mockRejectedValue(new Error("boom"));
+    mocks.listAudit.mockRejectedValue(new Error("boom"));
+    mocks.listNamespaces.mockRejectedValue(new Error("boom"));
+    render(<DashboardPage />);
+    expect(await screen.findByText("Could not load recent activity")).toBeVisible();
+    expect(screen.getByText("Could not load subscribers")).toBeVisible();
+    expect(screen.getAllByText(/not loaded/)).toHaveLength(3);
+    expect(mocks.toast.error).toHaveBeenCalledWith(
+      expect.any(Error),
+      "Could not load namespace counts, live subscribers and recent activity",
+    );
+    expect(screen.queryByText("No recent events")).toBeNull();
+    fireEvent.click(screen.getAllByRole("button", { name: "Try again" })[0] as HTMLElement);
+    await waitFor(() => expect(mocks.listAudit).toHaveBeenCalledTimes(2));
+  });
+
+  it("links recent activity to the resource and shows how long ago it happened", async () => {
+    mocks.identity = client;
+    const event: AuditEvent = {
+      id: 1,
+      event_type: "secret.read",
+      actor_identity: "billing-api",
+      actor_type: "client",
+      resource_type: "secret",
+      resource_env: "prod",
+      resource_app: "billing",
+      resource_key: "db/password",
+      resource_version: 1,
+      decision: "allow",
+      source_ip: "",
+      user_agent: "",
+      request_id: "",
+      created_at_unix_ms: Date.now() - 2 * 60_000,
+      metadata_json: "",
+    };
+    mocks.listAudit.mockResolvedValue({ events: [event], next_page_token: "" });
+    render(<DashboardPage />);
+    const link = await screen.findByRole("link", { name: "/prod/billing/db/password" });
+    expect(link).toHaveAttribute(
+      "href",
+      links.secretDetail({ env: "prod", app: "billing", key: "db/password" }),
+    );
+    const when = screen.getByText("2m ago");
+    expect(when).toHaveAttribute("title", formatUnixMs(event.created_at_unix_ms));
+    expect(screen.getByRole("heading", { level: 2, name: /Recent activity/ })).toBeVisible();
+    expect(screen.getByRole("heading", { level: 2, name: /Live subscribers/ })).toBeVisible();
   });
 
   it("reports the service status when /health responds", async () => {
@@ -269,9 +321,12 @@ describe("DashboardPage", () => {
     const devLink = within(gradethis).getByRole("link", { name: "dev: ready" });
     expect(devLink.querySelector(".status-dot")).toHaveClass("status-ready");
     expect(devLink.querySelector(".status-dot")).not.toHaveClass("status-prod");
-    for (const label of readyReleases) {
-      expect(within(gradethis).getAllByText(label).length).toBeGreaterThan(0);
-    }
+    // Release detail arrives after the grid has painted.
+    await waitFor(() => {
+      for (const label of readyReleases) {
+        expect(within(gradethis).getAllByText(label).length).toBeGreaterThan(0);
+      }
+    });
     expect(within(gradethis).getByText("2 rejected")).toHaveClass("fleet-card-rejected-some");
     expect(within(gradethis).getByText(/^activated /)).toBeVisible();
 
@@ -284,8 +339,55 @@ describe("DashboardPage", () => {
     const reports = grid.querySelector("[data-app='reports']") as HTMLElement;
     expect(within(reports).getByText("no release")).toBeVisible();
     expect(within(reports).getByText("—")).toBeVisible();
+
+    // The status chips narrow the grid; a second click on the active one clears it.
+    const filter = screen.getByRole("group", { name: "Filter applications by status" });
+    expect(within(filter).getByRole("button", { name: /^All/ })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    fireEvent.click(within(filter).getByRole("button", { name: /Needs attention/ }));
+    expect(
+      Array.from(grid.querySelectorAll(".fleet-card")).map((card) => card.getAttribute("data-app")),
+    ).toEqual(["gradethis"]);
+    expect(within(filter).getByRole("button", { name: /Needs attention/ })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    fireEvent.click(within(filter).getByRole("button", { name: /Needs attention/ }));
+    expect(grid.querySelectorAll(".fleet-card")).toHaveLength(3);
     expect(screen.getByText("Recent activity")).toBeVisible();
     expect(screen.queryByText("Live subscribers")).toBeNull();
+  });
+
+  it("paints the grid from the fleet overview before any per-app overview resolves", async () => {
+    mocks.listApplications.mockResolvedValue({
+      applications: fleet.applications.map((entry) => entry.application),
+      next_page_token: "",
+    });
+    mocks.fleetOverview.mockResolvedValue(fleet);
+    const pending = deferred<ApplicationOverview>();
+    mocks.applicationOverview.mockReturnValue(pending.promise);
+
+    render(<DashboardPage />);
+    const grid = await screen.findByRole("region", { name: "Applications" });
+    await waitFor(() => expect(grid.querySelectorAll(".fleet-card")).toHaveLength(3));
+    const gradethis = grid.querySelector("[data-app='gradethis']") as HTMLElement;
+    expect(within(gradethis).getByText("Needs attention")).toBeVisible();
+    expect(
+      within(gradethis).getByRole("link", { name: "prod: degraded (production)" }),
+    ).toBeVisible();
+    // Release and rejected counts are still unknown, shown as dashes — not "no release".
+    expect(within(gradethis).queryByText("no release")).toBeNull();
+    expect(within(gradethis).getAllByText("—").length).toBeGreaterThan(0);
+    expect(screen.getByRole("status")).toHaveTextContent("Loaded");
+
+    pending.resolve(ready);
+    await waitFor(() => {
+      for (const label of readyReleases) {
+        expect(within(gradethis).getAllByText(label).length).toBeGreaterThan(0);
+      }
+    });
   });
 
   it("caps per-application overview calls at 25", async () => {
@@ -322,6 +424,18 @@ describe("DashboardPage", () => {
 });
 
 describe("HealthPage", () => {
+  it("renders key ages relative to now with the absolute time in the tooltip", async () => {
+    const created = Date.now() - 3 * 60 * 60_000;
+    mocks.keys.mockResolvedValue({
+      keys: [{ id: "k1", source: "file", state: "active", created_at_unix_ms: created }],
+    });
+    render(<HealthPage />);
+    const cell = await screen.findByText("3h ago");
+    expect(cell).toHaveAttribute("title", formatUnixMs(created));
+    expect(screen.getByRole("heading", { level: 2, name: "Encryption keys" })).toBeVisible();
+    expect(screen.getByRole("heading", { level: 2, name: "Backup & recovery" })).toBeVisible();
+  });
+
   it("shows unknown badges when /health cannot be reached", async () => {
     mocks.health.mockRejectedValue(new Error("connection refused"));
 

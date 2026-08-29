@@ -12,9 +12,10 @@ import {
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/context/ToastContext";
 import { api } from "@/lib/api";
-import { formatUnixMs } from "@/lib/format";
+import { formatRelative, formatUnixMs } from "@/lib/format";
 import { useLatestRequest } from "@/lib/hooks";
 import type { HealthResponse, KeyMetadata } from "@/lib/types";
+import { useNow } from "@/lib/useNow";
 
 function keyStateKind(state: string): "success" | "warning" | "neutral" {
   const s = state.toLowerCase();
@@ -28,6 +29,7 @@ export default function HealthPage() {
   const [health, setHealth] = useState<HealthResponse | null>(null);
   const [keys, setKeys] = useState<KeyMetadata[]>([]);
   const [loading, setLoading] = useState(true);
+  const now = useNow();
   const { begin } = useLatestRequest();
 
   const load = useCallback(async () => {
@@ -77,7 +79,7 @@ export default function HealthPage() {
             <StatSkeleton label="Current revision" />
           </div>
           <div className="card">
-            <div className="card-title">Encryption keys</div>
+            <h2 className="card-title">Encryption keys</h2>
             <TableSkeleton headers={["ID", "Source", "State", "Created"]} rows={3} />
           </div>
         </>
@@ -119,7 +121,7 @@ export default function HealthPage() {
           </div>
 
           <div className="card">
-            <div className="card-title">Encryption keys</div>
+            <h2 className="card-title">Encryption keys</h2>
             {keys.length === 0 ? (
               <EmptyState icon={<Icon.health size={20} />} title="No key metadata available">
                 The service exposes key metadata once a master key provider is configured.
@@ -143,7 +145,9 @@ export default function HealthPage() {
                         <td>
                           <Badge kind={keyStateKind(k.state)}>{k.state || "unknown"}</Badge>
                         </td>
-                        <td className="nowrap">{formatUnixMs(k.created_at_unix_ms)}</td>
+                        <td className="nowrap" title={formatUnixMs(k.created_at_unix_ms)}>
+                          {formatRelative(k.created_at_unix_ms, now)}
+                        </td>
                       </tr>
                     ))}
                   </tbody>
@@ -153,7 +157,7 @@ export default function HealthPage() {
           </div>
 
           <div className="card">
-            <div className="card-title">Backup &amp; recovery</div>
+            <h2 className="card-title">Backup &amp; recovery</h2>
             <div className="info-panel">
               <p className="mt-0">
                 Back up the SQLite database <strong>and</strong> the master key file together, and

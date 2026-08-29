@@ -1,6 +1,17 @@
-import { Cable, FileUp, Plus, RefreshCw, RotateCcw, Send, SlidersHorizontal } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import {
+  Cable,
+  FileUp,
+  MoreHorizontal,
+  Plus,
+  RefreshCw,
+  RotateCcw,
+  Send,
+  SlidersHorizontal,
+} from "lucide-react";
+import { useRouter } from "next/router";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { SetupAction } from "@/components/applications/contracts";
+import { FindingList } from "@/components/FindingList";
 import { Ident } from "@/components/Ident";
 import { Icon } from "@/components/icons";
 import { Modal } from "@/components/Modal";
@@ -9,6 +20,7 @@ import SetupPanel from "@/components/onboarding/SetupPanel";
 import { StatusChip } from "@/components/StatusChip";
 import RollbackDialog from "@/components/ship/RollbackDialog";
 import ShipModal from "@/components/ship/ShipModal";
+import { TransportBadge } from "@/components/TransportBadge";
 import { EmptyState, PageHeader } from "@/components/ui";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -17,32 +29,42 @@ import { api } from "@/lib/api";
 import type { ContractEntry } from "@/lib/contract-derive";
 import { crumbs } from "@/lib/crumbs";
 import { utf8ToBase64 } from "@/lib/encoding";
-import type { ApplicationConfigurationRow, ApplicationOverview, HealthResponse } from "@/lib/types";
+import { links } from "@/lib/links";
+import type { FixAction } from "@/lib/readiness";
+import type {
+  ApplicationConfigurationRow,
+  ApplicationOverview,
+  Finding,
+  HealthResponse,
+} from "@/lib/types";
 import { useQueryReplace } from "@/lib/url";
-import { ActionMenu } from "./ActionMenu";
+import { ActionMenu, type ActionMenuItem } from "./ActionMenu";
 import { AddEnvironmentModal } from "./AddEnvironmentModal";
 import { ApplicationDefinitionModal } from "./ApplicationDefinitionModal";
 import { BulkParameterModal } from "./BulkParameterModal";
 import CloneEnvironmentModal from "./CloneEnvironmentModal";
 import { ConfigurationMatrix } from "./ConfigurationMatrix";
-import { DefinitionCard } from "./DefinitionCard";
+import { ALIGNMENT_CODES, DefinitionCard } from "./DefinitionCard";
 import { DeriveSchemaDialog } from "./DeriveSchemaDialog";
 import { EnvironmentPipeline } from "./EnvironmentPipeline";
 import { ImportDefaultsModal } from "./ImportDefaultsModal";
 import { QuickSecretModal } from "./QuickSecretModal";
 import type { CloneSeed, QuickSecretSeed } from "./shared";
+import type { OverviewFreshness } from "./useApplicationOverview";
 
 export interface ApplicationHomeProps {
   overview: ApplicationOverview;
   loading: boolean;
   reload: () => Promise<void>;
+  /** When the overview was loaded and whether it is known to be behind. */
+  freshness?: OverviewFreshness;
   /** `?env=`: the pipeline column to focus and the default Ship environment. */
   env: string | null;
-  /** `?ship=`: `1` opens the Ship modal, an alias also prefills a row. Seeded once. */
+  /** `?ship=`: `1` opens the Ship modal, an alias also prefills a row. Each new value seeds once. */
   ship: string | null;
   /** `?tab=matrix` shows the per-key table instead of the pipeline. */
   tab: string | null;
-  /** `?rollback=1` opens Roll back for `?env`, or the environment menu. Seeded once. */
+  /** `?rollback=1` opens Roll back for `?env`, or the environment menu. Each new value seeds once. */
   rollback: string | null;
 }
 
@@ -98,16 +120,48 @@ function EnvironmentAction({
   );
 }
 
+/** A "More" menu entry that needs an environment: a submenu when there are
+ *  several, a direct item for one, disabled for none. */
+function environmentItem(
+  key: string,
+  label: React.ReactNode,
+  environments: string[],
+  onPick: (env: string) => void,
+): ActionMenuItem {
+  if (environments.length <= 1) {
+    const only = environments[0];
+    return { key, label, disabled: !only, onSelect: () => only && onPick(only) };
+  }
+  return {
+    key,
+    label,
+    children: environments.map((env) => ({
+      key: `${key}:${env}`,
+      label: <Ident kind="env" value={env} tooltip={false} />,
+      onSelect: () => onPick(env),
+    })),
+  };
+}
+
+/** App-level findings that are not the Definition card's alignment row. */
+export function applicationFindings(overview: ApplicationOverview): Finding[] {
+  return overview.findings.filter(
+    (finding) => !finding.scope.env && !ALIGNMENT_CODES.has(finding.code),
+  );
+}
+
 export function ApplicationHome({
   overview,
   loading,
   reload,
+  freshness,
   env,
   ship,
   tab,
   rollback,
 }: ApplicationHomeProps) {
   const toast = useToast();
+  const router = useRouter();
   const replaceQuery = useQueryReplace("/applications");
   const application = overview.application;
   const environments = overview.environments;
@@ -124,8 +178,12 @@ export function ApplicationHome({
     () => environments.filter((environment) => environment.release.active),
     [environments],
   );
-  const activeNames = activeEnvironments.map((environment) => environment.namespace.env);
+  const activeNames = useMemo(
+    () => activeEnvironments.map((environment) => environment.namespace.env),
+    [activeEnvironments],
+  );
   const aliases = application.contract.map((field) => field.alias);
+  const findings = useMemo(() => applicationFindings(overview), [overview]);
 
   const [shipTarget, setShipTarget] = useState<ShipTarget | null>(null);
   const [rollbackEnv, setRollbackEnv] = useState<string | null>(null);
@@ -145,17 +203,25 @@ export function ApplicationHome({
   const [writeTargets, setWriteTargets] = useState<string[] | null>(null);
   const [retryEnvironments, setRetryEnvironments] = useState<string[] | null>(null);
   const [writeSaving, setWriteSaving] = useState(false);
-  const [seeded, setSeeded] = useState(false);
 
-  // Seed the modals from the URL exactly once. Closing them clears the params
-  // through replaceQuery (from the handlers), never the other way round.
+  // Seed the modals from the URL once per value: a palette action that sets
+  // `?ship=` while already on this page must open the modal, and closing it
+  // (which clears the param through replaceQuery) must not reopen it. The
+  // refs remember which value was consumed, so a reload between the close and
+  // the router update cannot re-seed from the still-present param.
+  const seededShip = useRef<string | null>(null);
+  const seededRollback = useRef<string | null>(null);
   useEffect(() => {
-    if (seeded) return;
-    setSeeded(true);
-    if (ship) {
+    if (!ship) {
+      seededShip.current = null;
+    } else if (seededShip.current !== ship) {
+      seededShip.current = ship;
       setShipTarget({ env: focusEnv ?? defaultShipEnv, alias: ship === "1" ? undefined : ship });
     }
-    if (rollback === "1") {
+    if (rollback !== "1") {
+      seededRollback.current = null;
+    } else if (seededRollback.current !== rollback) {
+      seededRollback.current = rollback;
       const target =
         focusEnv && activeNames.includes(focusEnv)
           ? focusEnv
@@ -165,7 +231,7 @@ export function ApplicationHome({
       if (target) setRollbackEnv(target);
       else if (activeNames.length > 1) setRollbackMenuOpen(true);
     }
-  }, [seeded, ship, rollback, focusEnv, defaultShipEnv, activeNames]);
+  }, [ship, rollback, focusEnv, defaultShipEnv, activeNames]);
 
   // Health only matters to the Connect SDK panel (endpoint + TLS warning).
   useEffect(() => {
@@ -250,9 +316,115 @@ export function ApplicationHome({
     }
   }
 
+  /** The key a finding's alias resolves to in its environment (falls back to the alias). */
+  function keyFor(finding: Finding): string {
+    const alias = finding.scope.alias ?? "";
+    const environment = environments.find(
+      (candidate) => candidate.namespace.env === finding.scope.env,
+    );
+    return environment?.values.find((value) => value.alias === alias)?.key ?? alias;
+  }
+
+  // Every FixAction in lib/readiness.ts lands somewhere on this page or on the
+  // resource the finding names.
+  function onFix(action: FixAction, finding: Finding) {
+    const scopeEnv = finding.scope.env ?? defaultShipEnv;
+    const ns = { env: scopeEnv ?? "", app: application.name };
+    switch (action) {
+      case "add_environment":
+        setEnvironmentOpen(true);
+        break;
+      case "edit_contract":
+        setDefinition({ prefill: null });
+        break;
+      case "pin_schema":
+        setDeriveOpen(true);
+        break;
+      case "ship":
+        setShipTarget({ env: scopeEnv, alias: finding.scope.alias });
+        break;
+      case "create_parameter":
+        if (scopeEnv && finding.scope.alias) openAddValue(scopeEnv, finding.scope.alias);
+        else setShipTarget({ env: scopeEnv });
+        break;
+      case "create_secret":
+        openSecret(scopeEnv ?? "", finding.scope.alias ?? "");
+        break;
+      case "open_resource":
+        void router.push(links.parameterDetail({ ...ns, key: keyFor(finding) }));
+        break;
+      case "open_secret":
+        void router.push(links.secretDetail({ ...ns, key: keyFor(finding) }));
+        break;
+      case "open_release": {
+        const active = environments.find((candidate) => candidate.namespace.env === scopeEnv)
+          ?.release.active;
+        void router.push(
+          links.releases({
+            app: application.name,
+            env: scopeEnv,
+            name: application.release_name,
+            release: active ? `${active.name}@${active.version}` : undefined,
+          }),
+        );
+        break;
+      }
+      case "connect_sdk":
+        setConnectEnv(scopeEnv ?? null);
+        break;
+      case "open_subscribers":
+        void router.push(links.subscribers());
+        break;
+      case "open_health":
+        void router.push(links.health());
+        break;
+    }
+  }
+
   const rollbackTarget = activeEnvironments.find(
     (environment) => environment.namespace.env === rollbackEnv,
   );
+
+  const moreItems: ActionMenuItem[] = [
+    environmentItem(
+      "import-defaults",
+      <>
+        <FileUp size={15} aria-hidden />
+        Import defaults
+      </>,
+      environmentNames,
+      setDefaultsEnv,
+    ),
+    {
+      key: "add-environment",
+      label: (
+        <>
+          <Plus size={15} aria-hidden />
+          Add environment
+        </>
+      ),
+      onSelect: () => setEnvironmentOpen(true),
+    },
+    {
+      key: "edit-definition",
+      label: (
+        <>
+          <SlidersHorizontal size={15} aria-hidden />
+          Edit definition
+        </>
+      ),
+      onSelect: () => setDefinition({ prefill: null }),
+    },
+    environmentItem(
+      "connect-sdk",
+      <>
+        <Cable size={15} aria-hidden />
+        Connect SDK
+      </>,
+      environmentNames,
+      setConnectEnv,
+    ),
+  ];
 
   return (
     <div className="application-home">
@@ -268,6 +440,30 @@ export function ApplicationHome({
         subtitle={application.description || "Application configuration across environments."}
         actions={
           <>
+            {freshness ? (
+              <TransportBadge
+                transport="poll"
+                stale={freshness.staleReason !== null}
+                lastUpdatedAt={freshness.lastLoadedAt}
+                title="Checked every 30 seconds while this tab is visible; changes are announced, not applied."
+                staleTitle={
+                  freshness.staleReason === "changed"
+                    ? "A release was activated since this loaded. Refresh to see it."
+                    : "The last refresh failed; what is shown may be behind."
+                }
+              />
+            ) : null}
+            <Button
+              type="button"
+              variant="outline"
+              size="icon"
+              aria-label="Refresh"
+              title="Refresh"
+              onClick={() => void reload()}
+              disabled={loading}
+            >
+              <RefreshCw size={15} aria-hidden />
+            </Button>
             <Button
               type="button"
               disabled={environments.length === 0}
@@ -277,12 +473,6 @@ export function ApplicationHome({
               Quick change
             </Button>
             <EnvironmentAction
-              label="Import defaults"
-              icon={<FileUp size={15} />}
-              environments={environmentNames}
-              onPick={setDefaultsEnv}
-            />
-            <EnvironmentAction
               label="Roll back"
               icon={<RotateCcw size={15} />}
               environments={activeNames}
@@ -290,39 +480,24 @@ export function ApplicationHome({
               open={rollbackMenuOpen}
               onOpenChange={setRollbackMenuOpen}
             />
-            <Button type="button" variant="outline" onClick={() => setEnvironmentOpen(true)}>
-              <Plus size={15} />
-              Add environment
-            </Button>
-            <Button
-              type="button"
-              variant="outline"
-              onClick={() => setDefinition({ prefill: null })}
-            >
-              <SlidersHorizontal size={15} />
-              Edit definition
-            </Button>
-            <EnvironmentAction
-              label="Connect SDK"
-              icon={<Cable size={15} />}
-              environments={environmentNames}
-              onPick={setConnectEnv}
+            <ActionMenu
+              label="More actions"
+              items={moreItems}
+              trigger={
+                <Button type="button" variant="outline" aria-label="More actions">
+                  <MoreHorizontal size={15} aria-hidden />
+                  More
+                </Button>
+              }
             />
-            <Button
-              type="button"
-              variant="outline"
-              onClick={() => void reload()}
-              disabled={loading}
-            >
-              <RefreshCw size={15} />
-              Refresh
-            </Button>
           </>
         }
       />
       {overview.status === "setup" ? (
         <SetupPanel overview={overview} onAction={onSetupAction} />
-      ) : null}
+      ) : (
+        <FindingList findings={findings} onFix={onFix} className="application-findings" />
+      )}
       <DefinitionCard
         overview={overview}
         onEdit={(prefill) => setDefinition({ prefill: prefill ?? null })}
@@ -358,6 +533,7 @@ export function ApplicationHome({
                 onShip: (environment, alias) => setShipTarget({ env: environment, alias }),
                 onRollback: setRollbackEnv,
                 onConnect: setConnectEnv,
+                onFix,
               }}
             />
           </TabsContent>
@@ -389,7 +565,10 @@ export function ApplicationHome({
             </div>
             <ConfigurationMatrix
               app={application.name}
-              environments={environments.map((environment) => environment.namespace)}
+              environments={environments.map((environment) => ({
+                env: environment.namespace.env,
+                production: environment.production,
+              }))}
               rows={overview.rows}
               onAddSecret={openSecret}
               onEdit={openWriteRow}
@@ -564,7 +743,7 @@ export function ApplicationHome({
             if (failures.length === 0) {
               toast.success(
                 "Values updated",
-                `Created independent versions in ${response.results.length} environment(s).`,
+                `Created independent versions in ${response.results.length} ${response.results.length === 1 ? "environment" : "environments"}.`,
               );
               setWriteRow(null);
               setRetryEnvironments(null);

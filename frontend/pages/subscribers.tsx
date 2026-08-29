@@ -1,11 +1,14 @@
 import { RefreshCw } from "lucide-react";
+import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Icon } from "@/components/icons";
+import { TransportBadge } from "@/components/TransportBadge";
 import { Badge, EmptyState, PageHeader, StatSkeleton, TableSkeleton } from "@/components/ui";
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/context/ToastContext";
 import { api, isAbortError } from "@/lib/api";
 import { formatRelative, formatUnixMs } from "@/lib/format";
+import { links } from "@/lib/links";
 import type { NamespaceRef, Subscriber } from "@/lib/types";
 
 const REFRESH_MS = 5000;
@@ -124,14 +127,11 @@ export default function SubscribersPage() {
         subtitle="Applications currently live-subscribed to configuration."
         actions={
           <>
-            {loadError ? (
-              <Badge kind="danger">refresh failed</Badge>
-            ) : (
-              <Badge kind="success">
-                <span className="size-1.5 rounded-full bg-success" />
-                live · updated {lastUpdated ? formatRelative(lastUpdated) : "—"}
-              </Badge>
-            )}
+            <TransportBadge
+              transport="poll"
+              stale={loadError !== null}
+              lastUpdatedAt={lastUpdated || null}
+            />
             <Button variant="outline" onClick={() => void refresh(false)}>
               <RefreshCw size={16} aria-hidden />
               Refresh
@@ -239,7 +239,13 @@ export default function SubscribersPage() {
                             <div className="faint text-sm mono">{s.instance_id}</div>
                           ) : null}
                         </td>
-                        <td className="mono">{s.identity || <span className="faint">—</span>}</td>
+                        <td className="mono">
+                          {s.identity ? (
+                            <Link href={links.identities({ name: s.identity })}>{s.identity}</Link>
+                          ) : (
+                            <span className="faint">—</span>
+                          )}
+                        </td>
                         <td>
                           <div className="row-wrap">
                             {(s.namespaces ?? []).length === 0 ? (
@@ -247,7 +253,12 @@ export default function SubscribersPage() {
                             ) : (
                               s.namespaces.map((ns, i) => (
                                 <Badge key={i} kind="neutral">
-                                  {formatNamespace(ns)}
+                                  <Link
+                                    href={links.releases({ app: ns.app, env: ns.env })}
+                                    title={`Releases in ${formatNamespace(ns)}`}
+                                  >
+                                    {formatNamespace(ns)}
+                                  </Link>
                                 </Badge>
                               ))
                             )}

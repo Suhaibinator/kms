@@ -85,9 +85,20 @@
 
   /* ---------- Environment pipeline ---------- */
 
+  /* Scroll affordance for four-plus environments: the same background stack
+     as .table-wrap (globals.css), with the page ground as the cover colour. */
   .pipeline-scroll {
     overflow-x: auto;
     padding-bottom: var(--space-2);
+    background:
+      linear-gradient(to right, var(--bg) 40%, transparent) left center / 32px 100% no-repeat,
+      linear-gradient(to left, var(--bg) 40%, transparent) right center / 32px 100% no-repeat,
+      radial-gradient(farthest-side at 0 50%, var(--scroll-shadow), transparent) left center / 14px
+      100% no-repeat,
+      radial-gradient(farthest-side at 100% 50%, var(--scroll-shadow), transparent) right center /
+      14px 100% no-repeat,
+      var(--bg);
+    background-attachment: local, local, scroll, scroll;
   }
   .pipeline {
     display: grid;
@@ -205,6 +216,59 @@
     word-break: break-word;
   }
 
+  /* Findings that need their own line in a column (components/FindingList.tsx
+     renders them; the list recipe lives in globals.css). */
+  .pipeline-findings .finding {
+    padding: var(--space-2);
+  }
+
+  /* ---------- Application page: header + findings ---------- */
+
+  .application-findings {
+    margin-bottom: var(--space-4);
+  }
+  /* A menu entry that opens a submenu carries a chevron at its far edge. */
+  .menu-item.menu-item-submenu {
+    justify-content: space-between;
+  }
+  .menu-item-chevron {
+    flex: 0 0 auto;
+    margin-left: auto;
+    color: var(--text-faint);
+  }
+
+  /* ---------- Application list ---------- */
+
+  .application-list-toolbar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-3);
+    margin-bottom: var(--space-3);
+  }
+  .application-list-filter {
+    flex: 0 1 320px;
+    min-width: 200px;
+  }
+
+  /* ---------- Configuration matrix cells ---------- */
+
+  /* An inline anchor cannot ellipsize; the link is the value's whole line. */
+  .matrix-value-link {
+    display: block;
+    color: var(--text);
+  }
+  .matrix-value-meta {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+  }
+  .matrix-value .matrix-copy {
+    height: calc(var(--control-h-sm) - var(--space-2));
+    padding: 0 var(--space-2);
+    font-size: var(--text-xs);
+  }
+
   /* ---------- Contract editor ---------- */
 
   .contract-editor {
@@ -220,6 +284,14 @@
     grid-template-columns: minmax(140px, 1.4fr) minmax(120px, 1fr) minmax(120px, 1fr) auto auto;
     align-items: center;
     gap: var(--space-2);
+  }
+  /* Column captions above the rows: the same grid as .contract-editor-row so
+     the labels line up with the inputs beneath them (aria-hidden; the inputs
+     carry their own labels). */
+  .contract-editor-head {
+    padding: 0 var(--space-1);
+    color: var(--text-muted);
+    font-size: var(--text-xs);
   }
   .contract-editor-secret {
     padding-left: var(--space-2);
@@ -304,6 +376,10 @@
     }
     .contract-editor-row {
       grid-template-columns: 1fr 1fr;
+    }
+    /* The rows wrap to two columns here, so the captions no longer align. */
+    .contract-editor-head {
+      display: none;
     }
     .wizard-env-row {
       grid-template-columns: 1fr;

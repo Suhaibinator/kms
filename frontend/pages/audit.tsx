@@ -1,4 +1,5 @@
 import { RefreshCw } from "lucide-react";
+import Link from "next/link";
 import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
 import { Icon } from "@/components/icons";
 import {
@@ -19,12 +20,22 @@ import { api, isAbortError } from "@/lib/api";
 import {
   datetimeLocalToUnixMs,
   displayAuditResource,
+  formatRelative,
   formatUnixMs,
   isEmptyJson,
   prettyJson,
 } from "@/lib/format";
-import { useCursorPagination, useFieldErrors, useLatestRequest, useNamespaces } from "@/lib/hooks";
+import {
+  useCursorPagination,
+  useFieldErrors,
+  useLatestRequest,
+  useNamespaces,
+  useQueryParams,
+} from "@/lib/hooks";
+import { links } from "@/lib/links";
 import type { AuditEvent, AuditFilters } from "@/lib/types";
+import { useQueryReplace } from "@/lib/url";
+import { useNow } from "@/lib/useNow";
 import { validateKeyPrefix } from "@/lib/validation";
 
 interface FilterForm {
@@ -47,6 +58,24 @@ const EMPTY_FORM: FilterForm = {
   to: "",
 };
 
+const PAGE_SIZE = 50;
+const TABLE_HEADERS = ["Time", "Event", "Actor", "Resource", "Decision", "Source IP"];
+
+// The URL is the source of truth for an investigation, so it can be shared,
+// reloaded and returned to: the seven filters plus the cursor position.
+const QUERY_KEYS = [
+  "app",
+  "env",
+  "key_prefix",
+  "actor",
+  "event_type",
+  "from",
+  "to",
+  "page_token",
+  "page",
+] as const;
+type QueryValues = Record<(typeof QUERY_KEYS)[number], string | null>;
+
 function decisionKind(decision: string): "success" | "danger" | "neutral" {
   if (decision === "allow") return "success";
   if (decision === "deny") return "danger";
@@ -61,19 +90,84 @@ function rangeError(from: string, to: string): string | null {
   return fromMs > toMs ? "End must be after start." : null;
 }
 
+/** Unix ms → the `datetime-local` value it round-trips through. */
+function unixMsToDatetimeLocal(ms: number | undefined): string {
+  if (!ms) return "";
+  const d = new Date(ms);
+  if (Number.isNaN(d.getTime())) return "";
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+function formFromQuery(query: QueryValues): FilterForm {
+  return {
+    env: query.env ?? "",
+    app: query.app ?? "",
+    key_prefix: query.key_prefix ?? "",
+    actor: query.actor ?? "",
+    event_type: query.event_type ?? "",
+    from: query.from ?? "",
+    to: query.to ?? "",
+  };
+}
+
+function filtersFromForm(form: FilterForm): AuditFilters {
+  return {
+    env: form.env.trim() || undefined,
+    app: form.app.trim() || undefined,
+    key_prefix: form.key_prefix.trim() || undefined,
+    actor: form.actor.trim() || undefined,
+    event_type: form.event_type.trim() || undefined,
+    from_unix_ms: datetimeLocalToUnixMs(form.from),
+    to_unix_ms: datetimeLocalToUnixMs(form.to),
+  };
+}
+
+/** The query patch that describes a filter set (empty strings delete keys). */
+function queryFromFilters(filters: AuditFilters): Record<string, string> {
+  return {
+    env: filters.env ?? "",
+    app: filters.app ?? "",
+    key_prefix: filters.key_prefix ?? "",
+    actor: filters.actor ?? "",
+    event_type: filters.event_type ?? "",
+    from: unixMsToDatetimeLocal(filters.from_unix_ms),
+    to: unixMsToDatetimeLocal(filters.to_unix_ms),
+    page_token: "",
+    page: "",
+  };
+}
+
+let lastRowCount = PAGE_SIZE;
+
 export default function AuditPage() {
+  const { values, ready } = useQueryParams(QUERY_KEYS);
+  // On a static export the query is empty until the client router hydrates;
+  // rendering the list before that would fetch page 1 unfiltered for nothing.
+  if (!ready) return <TableSkeleton headers={TABLE_HEADERS} rows={lastRowCount} />;
+  return <AuditLog initial={values} />;
+}
+
+function AuditLog({ initial }: { initial: QueryValues }) {
   const toast = useToast();
   const { namespaces } = useNamespaces();
+  const replaceQuery = useQueryReplace("/audit");
+  const now = useNow();
   const [events, setEvents] = useState<AuditEvent[]>([]);
   const [loading, setLoading] = useState(true);
   const { begin } = useLatestRequest();
 
-  const [form, setForm] = useState<FilterForm>(EMPTY_FORM);
-  const [applied, setApplied] = useState<AuditFilters>({});
+  const [form, setForm] = useState<FilterForm>(() => formFromQuery(initial));
+  const [applied, setApplied] = useState<AuditFilters>(() =>
+    filtersFromForm(formFromQuery(initial)),
+  );
   const [expanded, setExpanded] = useState<number | null>(null);
   const filterErrors = useFieldErrors<"key_prefix">();
   // Scoping the cursor on the applied filters resets it to page 1 whenever they change.
-  const paging = useCursorPagination(JSON.stringify(applied));
+  const paging = useCursorPagination(JSON.stringify(applied), {
+    pageToken: initial.page_token,
+    page: initial.page ? Number(initial.page) : undefined,
+  });
 
   const apps = useMemo(() => {
     const set = new Set<string>();
@@ -100,11 +194,13 @@ export default function AuditPage() {
       setLoading(true);
       try {
         const res = await api.listAudit(
-          { ...filters, page_size: 50, page_token: token || undefined },
+          { ...filters, page_size: PAGE_SIZE, page_token: token || undefined },
           { signal: run.signal },
         );
         if (!run.current) return;
-        setEvents(res.events ?? []);
+        const list = res.events ?? [];
+        setEvents(list);
+        lastRowCount = Math.max(5, list.length);
         setNextToken(res.next_page_token ?? "");
       } catch (err) {
         if (run.current && !isAbortError(err)) toast.error(err, "Failed to load audit events");
@@ -124,21 +220,32 @@ export default function AuditPage() {
     filterErrors.markAllTouched();
     if (prefixProblem || rangeProblem) return;
     setExpanded(null);
-    setApplied({
-      env: form.env.trim() || undefined,
-      app: form.app.trim() || undefined,
-      key_prefix: form.key_prefix.trim() || undefined,
-      actor: form.actor.trim() || undefined,
-      event_type: form.event_type.trim() || undefined,
-      from_unix_ms: datetimeLocalToUnixMs(form.from),
-      to_unix_ms: datetimeLocalToUnixMs(form.to),
-    });
+    const next = filtersFromForm(form);
+    setApplied(next);
+    replaceQuery(queryFromFilters(next));
   }
   function clear() {
     setForm(EMPTY_FORM);
     filterErrors.reset();
     setExpanded(null);
     setApplied({});
+    replaceQuery(queryFromFilters({}));
+  }
+
+  // The cursor moves from event handlers, so the URL follows it here rather
+  // than from an effect (see useQueryReplace).
+  function nextPage() {
+    replaceQuery({ page_token: paging.nextToken, page: String(paging.page + 1) });
+    paging.next();
+  }
+  function previousPage() {
+    const page = paging.previousToken ? paging.page - 1 : 1;
+    replaceQuery({ page_token: paging.previousToken, page: page > 1 ? String(page) : "" });
+    paging.previous();
+  }
+  function firstPage() {
+    replaceQuery({ page_token: "", page: "" });
+    paging.reset();
   }
 
   function onApp(app: string) {
@@ -244,10 +351,7 @@ export default function AuditPage() {
       </form>
 
       {loading ? (
-        <TableSkeleton
-          headers={["Time", "Event", "Actor", "Resource", "Decision", "Source IP"]}
-          rows={8}
-        />
+        <TableSkeleton headers={TABLE_HEADERS} rows={lastRowCount} />
       ) : events.length === 0 ? (
         <EmptyState
           icon={<Icon.audit size={20} />}
@@ -269,12 +373,9 @@ export default function AuditPage() {
           <table className="data">
             <thead>
               <tr>
-                <th>Time</th>
-                <th>Event</th>
-                <th>Actor</th>
-                <th>Resource</th>
-                <th>Decision</th>
-                <th>Source IP</th>
+                {TABLE_HEADERS.map((header) => (
+                  <th key={header}>{header}</th>
+                ))}
                 <th />
               </tr>
             </thead>
@@ -283,12 +384,17 @@ export default function AuditPage() {
                 const open = expanded === e.id;
                 const hasMeta = !isEmptyJson(e.metadata_json);
                 const resource = displayAuditResource(e);
+                const resourceHref = links.auditResource(e);
                 const metaId = `audit-meta-${e.id}`;
                 return (
                   <Fragment key={e.id}>
                     <tr>
-                      <td className="nowrap" data-label="Time">
-                        {formatUnixMs(e.created_at_unix_ms)}
+                      <td
+                        className="nowrap"
+                        data-label="Time"
+                        title={formatUnixMs(e.created_at_unix_ms)}
+                      >
+                        {formatRelative(e.created_at_unix_ms, now)}
                       </td>
                       <td className="mono" data-label="Event">
                         {e.event_type}
@@ -302,7 +408,13 @@ export default function AuditPage() {
                       <td data-label="Resource">
                         {resource ? (
                           <span className="cell-path">
-                            {resource}
+                            {resourceHref ? (
+                              <Link href={resourceHref} title={`Open ${e.resource_type}`}>
+                                {resource}
+                              </Link>
+                            ) : (
+                              resource
+                            )}
                             {e.resource_version > 0 ? (
                               <span className="faint"> · v{e.resource_version}</span>
                             ) : null}
@@ -353,12 +465,15 @@ export default function AuditPage() {
 
       <Pagination
         hasNext={paging.hasNext}
-        onNext={paging.next}
+        onNext={nextPage}
         hasPrevious={paging.hasPrevious}
-        onPrevious={paging.previous}
-        onReset={paging.reset}
-        showReset={paging.hasPrevious}
+        onPrevious={previousPage}
+        onReset={firstPage}
+        showReset={paging.page > 1}
         page={paging.page}
+        count={loading ? undefined : events.length}
+        loading={loading}
+        noun="events"
       />
     </>
   );

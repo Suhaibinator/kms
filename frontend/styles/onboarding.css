@@ -238,6 +238,14 @@
     gap: var(--space-3);
     margin-bottom: var(--space-3);
   }
+  /* Status chips that narrow the grid, e.g. to blocked applications only. */
+  .fleet-filter {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-1);
+    margin-bottom: var(--space-3);
+  }
   .fleet-grid {
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));

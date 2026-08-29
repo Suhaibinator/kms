@@ -1,4 +1,5 @@
 import { Menu } from "@base-ui/react/menu";
+import { ChevronRight } from "lucide-react";
 import Link from "next/link";
 import type { ReactElement, ReactNode } from "react";
 
@@ -9,12 +10,57 @@ export interface ActionMenuItem {
   href?: string;
   onSelect?: () => void;
   disabled?: boolean;
+  /** Renders a submenu of these items instead of acting itself. */
+  children?: ActionMenuItem[];
+}
+
+function renderItems(items: ActionMenuItem[]): ReactNode {
+  return items.map((item) => {
+    if (item.children) {
+      return (
+        <Menu.SubmenuRoot key={item.key} disabled={item.disabled}>
+          <Menu.SubmenuTrigger className="menu-item menu-item-submenu">
+            {item.label}
+            <ChevronRight size={14} aria-hidden className="menu-item-chevron" />
+          </Menu.SubmenuTrigger>
+          <Menu.Portal>
+            <Menu.Positioner sideOffset={4} className="isolate z-50">
+              <Menu.Popup className="menu-popup">{renderItems(item.children)}</Menu.Popup>
+            </Menu.Positioner>
+          </Menu.Portal>
+        </Menu.SubmenuRoot>
+      );
+    }
+    if (item.href) {
+      return (
+        <Menu.LinkItem
+          key={item.key}
+          href={item.href}
+          className="menu-item"
+          render={<Link href={item.href} />}
+        >
+          {item.label}
+        </Menu.LinkItem>
+      );
+    }
+    return (
+      <Menu.Item
+        key={item.key}
+        className="menu-item"
+        disabled={item.disabled}
+        onClick={item.onSelect}
+      >
+        {item.label}
+      </Menu.Item>
+    );
+  });
 }
 
 /**
  * A small dropdown of actions or links on Base UI's Menu. `trigger` is the
  * element the menu attaches to (usually a Button); `label` names the popup for
- * assistive tech. Pass `open`/`onOpenChange` to drive it from the URL.
+ * assistive tech. Pass `open`/`onOpenChange` to drive it from the URL. An item
+ * with `children` opens a submenu (e.g. an action that needs an environment).
  */
 export function ActionMenu({
   trigger,
@@ -37,27 +83,7 @@ export function ActionMenu({
       <Menu.Portal>
         <Menu.Positioner align={align} sideOffset={4} className="isolate z-50">
           <Menu.Popup className="menu-popup" aria-label={label}>
-            {items.map((item) =>
-              item.href ? (
-                <Menu.LinkItem
-                  key={item.key}
-                  href={item.href}
-                  className="menu-item"
-                  render={<Link href={item.href} />}
-                >
-                  {item.label}
-                </Menu.LinkItem>
-              ) : (
-                <Menu.Item
-                  key={item.key}
-                  className="menu-item"
-                  disabled={item.disabled}
-                  onClick={item.onSelect}
-                >
-                  {item.label}
-                </Menu.Item>
-              ),
-            )}
+            {renderItems(items)}
           </Menu.Popup>
         </Menu.Positioner>
       </Menu.Portal>

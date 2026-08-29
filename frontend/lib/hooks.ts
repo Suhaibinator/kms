@@ -117,14 +117,35 @@ interface CursorState {
   tokens: string[];
   index: number;
   nextToken: string;
+  /** Page number of `tokens[1]`; 2 normally, higher when seeded from a URL
+   *  whose intermediate tokens are unknown. */
+  secondPage: number;
 }
 
 function initialCursor(scope: string): CursorState {
-  return { scope, tokens: [""], index: 0, nextToken: "" };
+  return { scope, tokens: [""], index: 0, nextToken: "", secondPage: 2 };
 }
 
-export function useCursorPagination(scope: string) {
-  const [state, setState] = useState<CursorState>(() => initialCursor(scope));
+export interface CursorSeed {
+  /** The page token to start on (from `?page_token=`). */
+  pageToken?: string | null;
+  /** The page number that token represents (from `?page=`); 2 when omitted. */
+  page?: number | null;
+}
+
+/**
+ * A cursor stack for page_token APIs: `next` pushes the server's token,
+ * `previous` pops. `seed` (first mount only) starts on a token restored from
+ * the URL — the pages between 1 and it are unknown, so there is no Previous
+ * from it (only First page) and `page` counts from the seeded number.
+ */
+export function useCursorPagination(scope: string, seed?: CursorSeed) {
+  const [state, setState] = useState<CursorState>(() => {
+    const base = initialCursor(scope);
+    if (!seed?.pageToken) return base;
+    const page = Math.max(2, Math.floor(seed.page ?? 2));
+    return { ...base, tokens: ["", seed.pageToken], index: 1, secondPage: page };
+  });
   const active = state.scope === scope ? state : initialCursor(scope);
   const pageToken = active.tokens[active.index] ?? "";
 
@@ -165,11 +186,19 @@ export function useCursorPagination(scope: string) {
 
   const reset = useCallback(() => setState(initialCursor(scope)), [scope]);
 
+  const hasNext = Boolean(active.nextToken) && active.nextToken !== pageToken;
+  // From a restored token the pages before it are unknown, so there is no
+  // "previous" — only "first"; callers show the reset control from `page > 1`.
+  const hasPrevious = active.index > 1 || (active.index === 1 && active.secondPage === 2);
   return {
     pageToken,
-    page: active.index + 1,
-    hasPrevious: active.index > 0,
-    hasNext: Boolean(active.nextToken) && active.nextToken !== pageToken,
+    page: active.index === 0 ? 1 : active.index - 1 + active.secondPage,
+    hasPrevious,
+    hasNext,
+    /** The token `next()` will move to ("" when there is none). */
+    nextToken: hasNext ? active.nextToken : "",
+    /** The token `previous()` will move to ("" for page 1). */
+    previousToken: hasPrevious ? (active.tokens[active.index - 1] ?? "") : "",
     setNextToken,
     next,
     previous,

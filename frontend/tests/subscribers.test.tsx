@@ -1,5 +1,7 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { links } from "@/lib/links";
+import type { Subscriber } from "@/lib/types";
 import SubscribersPage from "@/pages/subscribers";
 
 const mocks = vi.hoisted(() => ({
@@ -26,14 +28,37 @@ describe("SubscribersPage", () => {
     render(<SubscribersPage />);
     expect(await screen.findByText("Could not load subscribers")).toBeVisible();
     expect(screen.queryByText("No applications are currently subscribed")).toBeNull();
-    expect(screen.getByText("refresh failed")).toBeVisible();
+    expect(screen.getByRole("status")).toHaveTextContent("Stale");
     expect(mocks.toast.error).toHaveBeenCalledTimes(1);
 
     mocks.subscribers.mockResolvedValueOnce(empty);
     fireEvent.click(screen.getByRole("button", { name: "Try again" }));
     expect(await screen.findByText("No applications are currently subscribed")).toBeVisible();
-    expect(screen.queryByText("refresh failed")).toBeNull();
-    expect(screen.getByText(/live · updated/)).toBeVisible();
+    expect(screen.getByRole("status")).toHaveTextContent(/^Polling· (just now|\d+s ago)$/);
+  });
+
+  it("links each row to the identity and to the namespace's releases", async () => {
+    const subscriber: Subscriber = {
+      client_name: "api",
+      instance_id: "prod-3",
+      identity: "gradethis-be",
+      namespaces: [{ env: "prod", app: "gradethis" }],
+      remote_addr: "10.0.0.9:5001",
+      connected_at_unix_ms: Date.now() - 60_000,
+      last_heartbeat_unix_ms: Date.now(),
+      last_acked_revision: 7,
+    };
+    mocks.subscribers.mockResolvedValueOnce({ subscribers: [subscriber], current_revision: 7 });
+    render(<SubscribersPage />);
+    expect(await screen.findByRole("link", { name: "gradethis-be" })).toHaveAttribute(
+      "href",
+      links.identities({ name: "gradethis-be" }),
+    );
+    expect(screen.getByRole("link", { name: "prod/gradethis" })).toHaveAttribute(
+      "href",
+      links.releases({ app: "gradethis", env: "prod" }),
+    );
+    expect(screen.getByText("up to date")).toBeVisible();
   });
 
   it("shows stat placeholders instead of zeros during the first load", async () => {
