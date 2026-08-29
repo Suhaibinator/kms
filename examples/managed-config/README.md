@@ -11,12 +11,58 @@ It demonstrates:
 
 - a source-owned, tagged `Config` with defaults and validation;
 - generated schema, contract, typed snapshots, and consumer views;
+- an `OnApplied` report for every published generation, listing the canonical
+  paths that changed since the previous generation (secret rotations are
+  path-only) and whether the generation diverges from source defaults;
 - one atomic hot override and secret rotation with explicit default-divergence
   reporting and redacted secret formatting;
 - an old snapshot remaining immutable across activation;
 - whole-candidate rejection when a release mixes restart-bound and hot changes;
 - last-known-good serving after that rejection;
 - a later release restoring source defaults and clearing divergence.
+
+A process that starts while an override is active does not fail: the active
+release is applied as-is, reported once through `OnDefaultMismatch` at
+`PhaseStartup`, and exposed as `Status().DefaultDivergent`. The applied
+acknowledgement carries the divergence flag so the console can show which
+replicas are running overrides. The CI verify test below is the tripwire that
+keeps source defaults and the active release from drifting apart unnoticed.
+
+The example wires channel-backed callbacks so its transcript is
+deterministic. A real service passes the ready-made slog implementation and
+installs its logger on the sink once configuration has built it:
+
+```go
+sink := configstore.NewLogSink(nil) // buffers startup records until Set
+store, err := configkms.Start(ctx, client, configkms.Options{
+    Release:   "runtime",
+    Defaults:  appconfig.Defaults,
+    Callbacks: configstore.SlogCallbacks(sink, configstore.SlogOptions{Component: "kms"}),
+})
+// ... build the application logger from store.Current() ...
+sink.Set(logger)
+```
+
+Export the store's status and counters as Prometheus metrics with one line;
+no alias, path, or value is ever exported:
+
+```go
+registry.MustRegister(kmsmetrics.NewCollector("managed_config_example", store))
+```
+
+`verify_test.go` is the CI verify test. It hashes the source defaults and asks
+KMS whether the active release still matches; only hashes and bounded
+verdicts cross the wire. It skips when `KMS_VERIFY_ENDPOINT` is unset, so a
+plain `go test ./...` needs no server:
+
+```bash
+KMS_VERIFY_ENDPOINT=kms.dev.example:8443 \
+KMS_VERIFY_TOKEN="$VERIFY_TOKEN" \
+KMS_VERIFY_CA_FILE=/etc/kms/ca.pem \
+KMS_VERIFY_NAMESPACE=dev/managed-config \
+KMS_VERIFY_REQUIRED=1 \
+go test ./examples/managed-config -run TestReleaseMatchesSourceDefaults -v
+```
 
 In production, remove the `demo_kms.go` scaffolding and pass a normally
 configured client to the same generated `configkms.Start` call:

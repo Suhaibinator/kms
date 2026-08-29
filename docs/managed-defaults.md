@@ -112,6 +112,77 @@ TLS uses system roots by default, or `--ca`; mTLS additionally uses `--cert`
 and `--key`. Production execution requires
 `--confirm-production <environment>`.
 
+## Verify code defaults against a release (CI)
+
+Applying defaults is a write; verifying is the matching read. The verify test
+hashes the source-owned parameter groups for a profile and asks KMS whether
+the active release still pins the same canonical documents. Only lowercase
+hex SHA-256 hashes travel to the server and only bounded verdicts come back,
+so it is safe to run from any pipeline that can hold a token. Six lines:
+
+```go
+func TestReleaseMatchesSourceDefaults(t *testing.T) {
+    kmsverify.Run(t, kmsverify.Spec[appconfig.Config]{
+        Defaults: appconfig.ManagedReleaseDefaults,
+        Verify:   configkms.VerifyReleaseDefaults,
+    })
+}
+```
+
+Connection and selection come from the environment:
+
+| Variable | Meaning |
+|---|---|
+| `KMS_VERIFY_ENDPOINT` | KMS gRPC `host:port`. Unset: skip (or fail with `KMS_VERIFY_REQUIRED`). |
+| `KMS_VERIFY_TOKEN` | Token of the verification identity. |
+| `KMS_VERIFY_CA_FILE` / `KMS_VERIFY_CA_PEM` | CA bundle path or PEM text (mutually exclusive); system roots otherwise. |
+| `KMS_VERIFY_PROFILE` | Defaults profile; empty selects the binding's default. |
+| `KMS_VERIFY_NAMESPACE` | `env/app` to compare. Required unless `Spec.Namespace` derives it from the profile. |
+| `KMS_VERIFY_RELEASE` | Release name; default `runtime`. |
+| `KMS_VERIFY_REQUIRED` | Truthy turns a missing endpoint into a failure. |
+| `KMS_VERIFY_INSECURE` | Cleartext; loopback endpoints only. |
+
+Each parameter alias in the generated contract receives one verdict:
+
+| Verdict | Meaning |
+|---|---|
+| `match` | The release pins a parameter whose canonical hash equals the source default. |
+| `differs` | The release pins a different value (an override is active, or code moved on). |
+| `missing_in_release` | The contract names an alias the active release does not pin. |
+| `unknown_alias` | The alias is not part of the application definition on the server. |
+| `secret_alias` | The alias is a secret; secrets are never compared. |
+| `unsupported_content_type` | The server cannot canonicalize this content type. |
+| `unverified` | Count of parameter aliases the release pins that the contract did not mention (new parameters in KMS that code does not know about). |
+
+The run passes only when the schema digest matches and every alias is
+`match`. Exit semantics: `kmsverify.Run` skips the test when
+`KMS_VERIFY_ENDPOINT` is unset, fails it when `KMS_VERIFY_REQUIRED` is set and
+the endpoint is missing, fails it with the value-free report when the
+comparison does not pass, and fails it with the error for configuration or
+transport problems (unreadable CA, non-loopback insecure endpoint, no
+namespace, `kmsclient.ErrRateLimited` when the per-identity verify budget is
+spent). `kmsverify.Verify` returns the `VerifyResult` for scripts that decide
+themselves.
+
+The verification identity needs the `configuration-release:verify-defaults`
+operation on each namespace it checks. Create it **without** a home namespace
+so it holds no implicit read grant, then allow exactly that operation per
+`env/app` (the policy verb is being added alongside the server RPC):
+
+```bash
+parameter-store admin identity create ci-verify-payments --kind client --auth token
+parameter-store admin policy create ci-verify-payments \
+  --subject ci-verify-payments \
+  --allow configuration-release:verify-defaults@staging/payments \
+  --allow configuration-release:verify-defaults@prod/payments
+```
+
+Run the test on pushes to the main branch and on version tags, never on pull
+requests: a pull request from a fork would otherwise execute with the
+repository's verification token, and a failing verify on an unmerged branch
+says nothing about what is deployed. The
+[consumer adoption guide](consumer-adoption.md) has the workflow template.
+
 ## Preview and apply an exported artifact
 
 The application and target namespace must already exist. Preview is the safe

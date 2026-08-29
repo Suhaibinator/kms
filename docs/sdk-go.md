@@ -409,13 +409,16 @@ root configuration package; the root must not import the binding. Generator
 package selection and output paths are relative to its working directory. See
 the linked guide for reproducible `go:generate`, module-root, and CI commands.
 
-The application remains authoritative for non-secret defaults. Startup fails
-on drift unless the application explicitly supplies a bypass; valid runtime
-hot overrides apply atomically and remain visibly divergent, while any change
-to a restart-bound field rejects the complete candidate. Generated strict
+The application remains authoritative for non-secret defaults. A release
+that diverges from them is applied and reported, at startup and on every
+reload, and stays visibly divergent through `Status`, `OnApplied`, the applied
+acknowledgement, and `kmsmetrics`; any change to a restart-bound field rejects
+the complete candidate. The generated `VerifyReleaseDefaults` and
+`sdk/go/kmsverify` turn the same comparison into a CI test. Generated strict
 decoding, declaration tags, supported encodings, snapshot discipline,
-secrets, schema/contract artifacts, testing, and the operator workflow are in
-the [managed Go configuration guide](managed-go-configuration.md).
+secrets, schema/contract artifacts, logging, metrics, verification, testing,
+and the operator workflow are in the
+[managed Go configuration guide](managed-go-configuration.md).
 
 The lower-level APIs below remain supported and are useful when an application
 needs a custom preparation model.
@@ -505,6 +508,32 @@ fresh-reads the active name/version/revision/digest before `Commit`. It calls
 commit. A failed initial candidate makes `Run` return; after one successful
 commit, outages and rejected candidates leave the last-known-good release in
 place. A panic in `Commit` is fatal and is never reported as `applied`.
+
+A `PreparedRelease` may also implement `ReleaseDivergenceReporter`:
+
+```go
+type ReleaseDivergenceReporter interface {
+    ReleaseDivergence() (divergent bool, fieldCount int)
+}
+```
+
+When it does, the `applied` acknowledgement carries `applied_divergent` and
+`divergent_field_count` so subscriber views and readiness findings can show
+which replicas run a release that differs from their source defaults. No
+field name or value is sent. Generated managed bindings implement it
+automatically.
+
+`Client.VerifyReleaseDefaults(ctx, VerifyReleaseDefaultsOptions{Namespace,
+Release, Profile, SchemaSHA256, Entries})` is the value-free comparison behind
+the CI verify test: each entry is an alias, content type, and the lowercase
+hex SHA-256 of the canonical document (`configstore.ParameterHash`), and the
+result carries one bounded verdict per alias plus `SchemaMatches` and an
+`UnverifiedCount`. It requires the `configuration-release:verify-defaults`
+operation and is rate limited per identity; the client maps
+`ResourceExhausted` to `ErrRateLimited`, which callers should treat as "wait
+for the window" rather than retry. Generated bindings wrap it as
+`VerifyReleaseDefaults(ctx, client, root, opts)`; see
+[managed defaults](managed-defaults.md#verify-code-defaults-against-a-release-ci).
 
 For an explicit typed decode step without reflection:
 

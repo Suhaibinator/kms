@@ -259,16 +259,16 @@ func (h *adversarialManagedApp) mustActivate(
 	return response
 }
 
-func (h *adversarialManagedApp) startStore(
-	instanceID string,
-	allowDefaultMismatch bool,
-) (*adversarialRunningStore, error) {
-	return h.startStoreWithDefaults(instanceID, allowDefaultMismatch, fixtureconfig.Defaults)
+// startStore starts a generated store onto whatever release is active. A
+// release that diverges from source defaults is applied and reported, so the
+// only startup errors are transport, contract, decode, and validation
+// failures.
+func (h *adversarialManagedApp) startStore(instanceID string) (*adversarialRunningStore, error) {
+	return h.startStoreWithDefaults(instanceID, fixtureconfig.Defaults)
 }
 
 func (h *adversarialManagedApp) startStoreWithDefaults(
 	instanceID string,
-	allowDefaultMismatch bool,
 	defaults func() *fixtureconfig.Config,
 ) (*adversarialRunningStore, error) {
 	h.t.Helper()
@@ -282,11 +282,10 @@ func (h *adversarialManagedApp) startStoreWithDefaults(
 	ctx, cancel := context.WithCancel(h.ctx)
 	store, err := fixturekms.Start(ctx, client, fixturekms.Options{
 		Release: adversarialReleaseName, Defaults: defaults,
-		AllowDefaultMismatch: allowDefaultMismatch,
-		OnDefaultMismatch:    func(configstore.DefaultMismatchReport) {},
-		SecretTokenProvider:  h.provider,
-		ReconcileInterval:    time.Hour,
-		InstanceID:           instanceID,
+		Callbacks:           configstore.Callbacks{OnDefaultMismatch: func(configstore.DefaultMismatchReport) {}},
+		SecretTokenProvider: h.provider,
+		ReconcileInterval:   time.Hour,
+		InstanceID:          instanceID,
 	})
 	if err != nil {
 		cancel()
@@ -609,7 +608,7 @@ func TestManagedConfigAdversarialSchemaRuntimeParity(t *testing.T) {
 			if err != nil || !activation.GetChanged() {
 				t.Fatalf("activate release changed=%t err=%v", activation.GetChanged(), err)
 			}
-			running, startErr := app.startStore(fmt.Sprintf("parity-%02d", i), true)
+			running, startErr := app.startStore(fmt.Sprintf("parity-%02d", i))
 			if tc.runtimeApply {
 				if startErr != nil {
 					t.Fatalf("runtime rejected schema-accepted document: %v", startErr)
@@ -710,7 +709,7 @@ func TestManagedConfigAdversarialSchemaRuntimeParity(t *testing.T) {
 				tc.setDefault(value)
 				return value
 			}
-			running, err := app.startStoreWithDefaults(fmt.Sprintf("parity-nil-default-%02d", index), false, defaults)
+			running, err := app.startStoreWithDefaults(fmt.Sprintf("parity-nil-default-%02d", index), defaults)
 			if err != nil {
 				t.Fatalf("strict startup rejected matching nil default: %v", err)
 			}
@@ -737,7 +736,7 @@ func TestManagedConfigAdversarialServerGuardsRecoveryAndRedaction(t *testing.T) 
 		t.Fatalf("initial release invalid: %v", validation.GetErrors())
 	}
 	initialActivation := app.mustActivate(initialRelease, 0)
-	running, err := app.startStore("adversarial-recovery-instance", false)
+	running, err := app.startStore("adversarial-recovery-instance")
 	if err != nil {
 		t.Fatalf("start managed store: %v", err)
 	}
@@ -840,7 +839,7 @@ func TestManagedConfigAdversarialExactSecretVersionsAndMixedAtomicity(t *testing
 	pins := app.seed(defaultAdversarialDatabaseDocument(), defaultAdversarialRuntimeDocument())
 	initialRelease, _ := app.createRelease(pins, nil)
 	app.mustActivate(initialRelease, 0)
-	running, err := app.startStore("adversarial-secret-instance", false)
+	running, err := app.startStore("adversarial-secret-instance")
 	if err != nil {
 		t.Fatalf("start managed store: %v", err)
 	}
@@ -935,7 +934,7 @@ func TestManagedConfigAdversarialRapidCASAndReaders(t *testing.T) {
 	pins := app.seed(defaultAdversarialDatabaseDocument(), defaultAdversarialRuntimeDocument())
 	initialRelease, _ := app.createRelease(pins, nil)
 	initialActivation := app.mustActivate(initialRelease, 0)
-	running, err := app.startStore("adversarial-rapid-instance", false)
+	running, err := app.startStore("adversarial-rapid-instance")
 	if err != nil {
 		t.Fatalf("start managed store: %v", err)
 	}
