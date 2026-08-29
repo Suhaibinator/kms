@@ -600,6 +600,11 @@ type releaseSubscriberDTO struct {
 	ClientTimestampUnixMS int64           `json:"client_timestamp_unix_ms"`
 	ServerTimestampUnixMS int64           `json:"server_timestamp_unix_ms"`
 	Connected             bool            `json:"connected"`
+	// AppliedDivergent reports an applied generation that differs from the
+	// application's source-owned defaults; DivergentFieldCount is how many
+	// fields differ. Both are zero for every non-applied state.
+	AppliedDivergent    bool   `json:"applied_divergent"`
+	DivergentFieldCount uint32 `json:"divergent_field_count"`
 }
 
 func toReleaseSubscriberDTO(s domain.ReleaseAcknowledgement) releaseSubscriberDTO {
@@ -610,6 +615,7 @@ func toReleaseSubscriberDTO(s domain.ReleaseAcknowledgement) releaseSubscriberDT
 		ActivationRevision: s.ActivationRevision, RejectionCategory: s.RejectionCategory,
 		Diagnostic: s.Diagnostic, ClientTimestampUnixMS: unixMS(s.ClientTimestamp),
 		ServerTimestampUnixMS: unixMS(s.ServerTimestamp), Connected: s.Connected,
+		AppliedDivergent: s.AppliedDivergent, DivergentFieldCount: s.DivergentFieldCount,
 	}
 }
 

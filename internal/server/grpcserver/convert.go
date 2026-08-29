@@ -330,7 +330,7 @@ func toProtoConfigurationSchema(s domain.ConfigurationSchema) *kmsv1.Configurati
 }
 
 func toProtoReleaseSubscriber(a domain.ReleaseAcknowledgement) *kmsv1.ReleaseSubscriberState {
-	return &kmsv1.ReleaseSubscriberState{Namespace: nsRefToProto(a.Namespace), ReleaseName: a.ReleaseName, ClientName: a.ClientName, InstanceId: a.InstanceID, Identity: a.Identity, State: a.State, ReleaseVersion: a.ReleaseVersion, ActivationRevision: a.ActivationRevision, RejectionCategory: a.RejectionCategory, Diagnostic: a.Diagnostic, ClientTimestampUnixMs: unixMS(a.ClientTimestamp), ServerTimestampUnixMs: unixMS(a.ServerTimestamp), Connected: a.Connected}
+	return &kmsv1.ReleaseSubscriberState{Namespace: nsRefToProto(a.Namespace), ReleaseName: a.ReleaseName, ClientName: a.ClientName, InstanceId: a.InstanceID, Identity: a.Identity, State: a.State, ReleaseVersion: a.ReleaseVersion, ActivationRevision: a.ActivationRevision, RejectionCategory: a.RejectionCategory, Diagnostic: a.Diagnostic, ClientTimestampUnixMs: unixMS(a.ClientTimestamp), ServerTimestampUnixMs: unixMS(a.ServerTimestamp), Connected: a.Connected, AppliedDivergent: a.AppliedDivergent, DivergentFieldCount: a.DivergentFieldCount}
 }
 
 // --- watch events ----------------------------------------------------------
