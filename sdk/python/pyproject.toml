@@ -26,7 +26,8 @@ kms-config-gen-py = "kms_paramstore.configgen.cli:main"
 
 [project.optional-dependencies]
 dev = [
-    "grpcio-tools>=1.83.1",
+    # Generated output is byte-compared in CI, so keep the compiler exact.
+    "grpcio-tools==1.83.1",
     "pytest>=9.1.1",
     "mypy>=2.3.1",
 ]
