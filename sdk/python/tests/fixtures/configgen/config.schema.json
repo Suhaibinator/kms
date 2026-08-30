@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "runtime": {
+      "additionalProperties": false,
+      "properties": {
+        "debug": {
+          "type": "boolean"
+        },
+        "port": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "debug",
+        "port"
+      ],
+      "type": "object"
+    }
+  },
+  "required": [
+    "runtime"
+  ],
+  "type": "object"
+}

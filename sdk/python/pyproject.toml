@@ -21,6 +21,9 @@ dependencies = [
     "pydantic>=2.13,<3",
 ]
 
+[project.scripts]
+kms-config-gen-py = "kms_paramstore.configgen.cli:main"
+
 [project.optional-dependencies]
 dev = [
     "grpcio-tools>=1.83.1",
