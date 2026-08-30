@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import datetime as dt
 import re
 import keyword
 from dataclasses import dataclass
@@ -104,6 +105,7 @@ class ConfigSpec:
         secrets: list[ManagedSecretField] = []
         unmanaged: list[str] = []
         for property_name, field in model.model_fields.items():
+            _validate_validation_alias(field.validation_alias, property_name)
             managed = [item for item in field.metadata if isinstance(item, (Parameter, SecretField, Unmanaged))]
             if len(managed) != 1:
                 raise TypeError(
@@ -121,10 +123,12 @@ class ConfigSpec:
                 _validate_views(marker.views, property_name)
                 if field.default is PydanticUndefined and field.default_factory is None:
                     raise TypeError(f"configstore: non-secret field {property_name} must declare a source default")
+                annotation = _validation_annotation(field.annotation, field.metadata)
+                _validate_managed_annotation(annotation, property_name, set())
                 parameters.append(
                     ParameterField(
                         property_name, json_name, marker.group, marker.reload,
-                        marker.views, _validation_annotation(field.annotation, field.metadata),
+                        marker.views, annotation,
                     )
                 )
                 continue
@@ -234,6 +238,37 @@ def _python_identifier(value: str) -> str:
 
 def _accepts_secret(annotation: Any) -> bool:
     return annotation is Secret or Secret in get_args(annotation) or get_origin(annotation) is Secret
+
+
+def _validate_validation_alias(alias: object, path: str) -> None:
+    if alias is not None and not isinstance(alias, str):
+        raise TypeError(
+            f"configstore: field {path} uses an unsupported non-string validation alias"
+        )
+
+
+def _validate_managed_annotation(annotation: Any, path: str, seen: set[type[BaseModel]]) -> None:
+    core = get_args(annotation)[0] if get_origin(annotation) is Annotated else annotation
+    if core is dt.timedelta:
+        raise TypeError(
+            f"configstore: field {path} uses datetime.timedelta; use configstore.Duration "
+            "for portable Go-duration nanosecond semantics"
+        )
+    origin = get_origin(core)
+    if origin is not None:
+        for item in get_args(core):
+            if item is not type(None) and item is not Ellipsis:
+                _validate_managed_annotation(item, path, seen)
+        return
+    if isinstance(core, type) and issubclass(core, BaseModel):
+        if core in seen:
+            return
+        seen.add(core)
+        for name, field in core.model_fields.items():
+            nested_path = f"{path}.{name}"
+            _validate_validation_alias(field.validation_alias, nested_path)
+            nested = _validation_annotation(field.annotation, field.metadata)
+            _validate_managed_annotation(nested, nested_path, seen)
 
 
 def _validation_annotation(annotation: Any, metadata: list[Any]) -> Any:

@@ -6,7 +6,7 @@ import asyncio
 from typing import Annotated
 
 import pytest
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import AliasChoices, AliasPath, BaseModel, ConfigDict, Field
 from pydantic import create_model
 
 from kms_paramstore.configstore import (
@@ -125,6 +125,41 @@ def test_model_contract_rejects_mutable_or_permissive_roots() -> None:
 
     with pytest.raises(TypeError, match="frozen=True"):
         ConfigSpec.from_model(Bad)
+
+
+def test_managed_timedelta_is_rejected_in_favor_of_nanosecond_duration() -> None:
+    class NestedDuration(BaseModel):
+        model_config = ConfigDict(frozen=True, strict=True, extra="forbid")
+        delay: dt.timedelta = dt.timedelta()
+
+    class BadDuration(BaseModel):
+        model_config = ConfigDict(frozen=True, strict=True, extra="forbid")
+        nested: Annotated[NestedDuration, Parameter("runtime")] = NestedDuration()
+
+    with pytest.raises(TypeError, match="use configstore.Duration"):
+        ConfigSpec.from_model(BadDuration)
+
+
+def test_non_string_validation_aliases_are_rejected_at_root_and_nested() -> None:
+    class BadRootAlias(BaseModel):
+        model_config = ConfigDict(frozen=True, strict=True, extra="forbid")
+        value: Annotated[int, Parameter("runtime")] = Field(
+            1, validation_alias=AliasChoices("value", "legacy_value")
+        )
+
+    with pytest.raises(TypeError, match="non-string validation alias"):
+        ConfigSpec.from_model(BadRootAlias)
+
+    class NestedAlias(BaseModel):
+        model_config = ConfigDict(frozen=True, strict=True, extra="forbid")
+        value: int = Field(validation_alias=AliasPath("payload", "value"))
+
+    class BadNestedAlias(BaseModel):
+        model_config = ConfigDict(frozen=True, strict=True, extra="forbid")
+        nested: Annotated[NestedAlias, Parameter("runtime")] = NestedAlias.model_construct(value=1)
+
+    with pytest.raises(TypeError, match="nested.value.*non-string validation alias"):
+        ConfigSpec.from_model(BadNestedAlias)
 
 
 @pytest.mark.parametrize("view", ["class", "start", "verify-defaults"])
@@ -256,7 +291,7 @@ class CodecConfig(BaseModel):
     count: Annotated[int, Field(ge=-5, le=5), Parameter("typed")] = 0
     ratio: Annotated[float, Parameter("typed")] = 1.0
     payload: Annotated[bytes, Parameter("typed")] = b""
-    delay: Annotated[dt.timedelta, Parameter("typed")] = dt.timedelta()
+    delay: Annotated[Duration, Parameter("typed")] = Duration(0)
     optional: Annotated[int | None, Parameter("typed")] = None
     items: Annotated[list[int], Parameter("typed")] = Field(default_factory=list)
     mapping: Annotated[dict[str, bool], Parameter("typed")] = Field(default_factory=dict)
@@ -284,7 +319,7 @@ def test_recursive_codecs_support_portable_managed_types() -> None:
     prepared.commit()
     config = binding.current.config()
     assert config.payload == b"\x00\x01"
-    assert config.delay == dt.timedelta(hours=1, minutes=2, seconds=3, milliseconds=4, microseconds=5)
+    assert config.delay == Duration(3_723_004_005_000)
     assert json.loads(binding.encode_parameter_groups(config)["typed"])["payload"] == "AAE="
 
 
@@ -321,7 +356,7 @@ def test_go_duration_allows_only_one_leading_sign() -> None:
     binding = ConfigBinding(CodecConfig, {})
     prepared = binding.prepare(_codec_snapshot(json.dumps({**base, "delay": "-1h2m"})))
     prepared.commit()
-    assert binding.current.get("delay") == -dt.timedelta(hours=1, minutes=2)
+    assert binding.current.get("delay") == Duration(-3_720_000_000_000)
     assert json.loads(binding.encode_parameter_groups()["typed"])["delay"] == "-1h2m0s"
     for invalid in ("1h-2m", "1h+2m", "--1h", "+-1h"):
         with pytest.raises(CandidateError):

@@ -3,7 +3,6 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Annotated
 import asyncio
-import datetime as dt
 import json
 
 import pytest
@@ -121,7 +120,7 @@ class PortableConfig(BaseModel):
     model_config = ConfigDict(frozen=True, strict=True, extra="forbid", arbitrary_types_allowed=True)
     count: Annotated[int, Field(ge=-10, le=10), Parameter("portable")] = 0
     payload: Annotated[bytes, Parameter("portable")] = b""
-    timeout: Annotated[dt.timedelta, Parameter("portable")] = dt.timedelta()
+    timeout: Annotated[Duration, Parameter("portable")] = Duration(0)
     nested: Annotated[PortableNested | None, Parameter("portable")] = None
     password: Annotated[Secret, SecretField("password")]
 
@@ -156,6 +155,7 @@ class ConstrainedNested(BaseModel):
     retry_ratio: Annotated[float, Field(alias="retry-ratio", gt=0, le=1, multiple_of=0.1)] = 0.5
     labels: Annotated[list[str], Field(min_length=1, max_length=3)] = ["default"]
     weights: Annotated[dict[str, int], Field(min_length=1, max_length=2)] = {"one": 1}
+    nickname: Annotated[str | None, Field(min_length=2, max_length=4)] = None
 
 
 class AliasedConfig(BaseModel):
@@ -188,6 +188,12 @@ def test_schema_constraints_aliases_and_nested_defaults_match_runtime() -> None:
     assert nested["properties"]["labels"]["maxItems"] == 3
     assert nested["properties"]["weights"]["minProperties"] == 1
     assert nested["properties"]["weights"]["maxProperties"] == 2
+    assert nested["properties"]["nickname"] == {
+        "anyOf": [
+            {"type": "string", "minLength": 2, "maxLength": 4},
+            {"type": "null"},
+        ]
+    }
     assert properties["precise"] == {"type": "string", "format": "go-duration"}
 
     from kms_paramstore.configstore import ConfigBinding
@@ -224,3 +230,15 @@ def test_source_model_named_snapshot_does_not_collide_with_generated_snapshot() 
     assert "_RootConfig = _source.Snapshot" in binding
     assert "Snapshot = _source.Snapshot" not in binding
     compile(binding, "<generated>", "exec")
+
+
+def test_bytes_length_constraints_are_rejected_instead_of_misstated() -> None:
+    class BytesConfig(BaseModel):
+        model_config = ConfigDict(
+            frozen=True, strict=True, extra="forbid", arbitrary_types_allowed=True,
+        )
+        payload: Annotated[bytes | None, Field(min_length=2), Parameter("runtime")] = None
+        password: Annotated[Secret, SecretField("password")]
+
+    with pytest.raises(TypeError, match="decoded byte length constraints"):
+        generate_artifacts(BytesConfig, source_module=__name__)
