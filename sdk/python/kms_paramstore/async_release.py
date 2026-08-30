@@ -44,6 +44,7 @@ from .release import (
     _now_ms,
     _release_digest,
     _token_from_result,
+    _validate_release_timing,
     _valid_sha256_hex,
 )
 from .secret import Secret
@@ -84,9 +85,11 @@ class AsyncReleaseLoader:
             raise errors.ConfigError(
                 "release max_concurrent_fetches must be between 1 and 256"
             )
-        if config.reconcile_interval <= 0:
-            raise errors.ConfigError("release reconcile_interval must be positive")
-        if config.reconnect_initial <= 0 or config.reconnect_max < config.reconnect_initial:
+        _validate_release_timing("reconcile_interval", config.reconcile_interval)
+        _validate_release_timing("reconnect_initial", config.reconnect_initial)
+        _validate_release_timing("reconnect_max", config.reconnect_max)
+        _validate_release_timing("request_timeout", config.request_timeout)
+        if config.reconnect_max < config.reconnect_initial:
             raise errors.ConfigError("invalid release reconnect backoff")
 
         self._client = client
@@ -116,6 +119,8 @@ class AsyncReleaseLoader:
         self._resolutions = 0
         self._resolution_failures = 0
         self._last_resolution_ms = 0
+        self._candidates = 0
+        self._applied = 0
         self._ack_counts: Dict[str, int] = {state: 0 for state in _STATES}
         self._rejection_counts: Dict[str, int] = {
             category: 0 for category in sorted(_REJECTION_CATEGORIES)
@@ -134,12 +139,14 @@ class AsyncReleaseLoader:
 
     def stats(self) -> ReleaseStats:
         return ReleaseStats(
+            candidates=self._candidates,
+            applied=self._applied,
+            rejected=self._rejection_counts,
             reconnects=self._reconnects,
             resolutions=self._resolutions,
             resolution_failures=self._resolution_failures,
             last_resolution_ms=self._last_resolution_ms,
-            acknowledgements=MappingProxyType(dict(self._ack_counts)),
-            rejections=MappingProxyType(dict(self._rejection_counts)),
+            acknowledgements=self._ack_counts,
         )
 
     def stop(self) -> None:
@@ -181,7 +188,12 @@ class AsyncReleaseLoader:
                 namespace = await namespace
             self._namespace = namespace
 
-            initial = await self._read_active()
+            try:
+                initial = await self._read_active()
+            except Exception:
+                raise ReleaseStartupError(
+                    "unable to read the initial active configuration release"
+                ) from None
             if not initial.release.name:
                 raise ReleaseStartupError(
                     "active configuration release response was empty"
@@ -268,6 +280,7 @@ class AsyncReleaseLoader:
             except asyncio.QueueEmpty:
                 pass
         self._candidate_queue.put_nowait(candidate)
+        self._candidates += 1
         self._status = replace(
             self._status,
             observed_version=candidate.release.version,
@@ -287,12 +300,15 @@ class AsyncReleaseLoader:
         )
         prepared: Optional[PreparedRelease] = None
         try:
-            snapshot = await self._resolve(candidate, cancel)
+            started = time.monotonic()
+            try:
+                snapshot = await self._resolve(candidate, cancel)
+            finally:
+                self._record_resolution(int((time.monotonic() - started) * 1000))
             self._status = replace(self._status, state="received")
             self._ack(candidate, "received")
             if cancel.is_set():
                 raise _CandidateFailure("superseded")
-            self._status = replace(self._status, state="prepared")
             try:
                 result = prepare(cancel, snapshot)
                 prepared = await result if inspect.isawaitable(result) else result
@@ -307,19 +323,20 @@ class AsyncReleaseLoader:
                 getattr(prepared, "abort", None)
             ):
                 raise _CandidateFailure("prepare_failed")
-            self._ack(candidate, "prepared")
             if cancel.is_set():
-                _safe_abort(prepared)
+                self._abort_or_fail(candidate, prepared)
                 raise _CandidateFailure("superseded")
+            self._status = replace(self._status, state="prepared")
+            self._ack(candidate, "prepared")
             try:
                 active = await self._read_active()
             except Exception:
-                _safe_abort(prepared)
+                self._abort_or_fail(candidate, prepared)
                 raise _CandidateFailure(
                     "superseded" if cancel.is_set() else "active_check_failed"
                 ) from None
             if cancel.is_set() or active.identity != candidate.identity:
-                _safe_abort(prepared)
+                self._abort_or_fail(candidate, prepared)
                 raise _CandidateFailure("superseded")
             try:
                 returned = prepared.commit()
@@ -346,6 +363,7 @@ class AsyncReleaseLoader:
                 last_failure_category="",
                 last_failure_unix_ms=0,
             )
+            self._applied += 1
             self._ack(candidate, "applied", divergence=_divergence_of(prepared))
             return ("applied", "", 0)
         except _CandidateFailure as exc:
@@ -361,15 +379,26 @@ class AsyncReleaseLoader:
             )
         except asyncio.CancelledError:
             if prepared is not None:
-                _safe_abort(prepared)
+                self._abort_or_fail(candidate, prepared)
             raise
         finally:
             if self._active_cancel is cancel:
                 self._active_cancel = None
                 self._active_identity = None
 
+    def _abort_or_fail(self, candidate: _Candidate, prepared: PreparedRelease) -> None:
+        """Abort synchronously; contract violations are fatal internal failures."""
+        try:
+            returned: object = getattr(prepared, "abort")()
+            if returned is not None:
+                raise TypeError("PreparedRelease.abort must return None")
+        except BaseException:
+            self._reject(candidate, "internal")
+            raise ReleaseCommitError(
+                "PreparedRelease.abort failed; abort must be infallible and return None"
+            ) from None
+
     async def _resolve(self, candidate: _Candidate, cancel: asyncio.Event) -> ReleaseSnapshot:
-        started = time.monotonic()
         release = candidate.release
         namespace = self._require_namespace()
         if (
@@ -444,8 +473,6 @@ class AsyncReleaseLoader:
                 if not task.done():
                     task.cancel()
             await asyncio.gather(*tasks, return_exceptions=True)
-            self._resolutions += 1
-            self._last_resolution_ms = int((time.monotonic() - started) * 1000)
         return ReleaseSnapshot(
             namespace=manifest.namespace,
             name=manifest.name,
@@ -525,14 +552,17 @@ class AsyncReleaseLoader:
         return secret
 
     async def _read_active(self) -> _Candidate:
-        response = await self._stub.GetActiveRelease(
-            kms_pb2.GetActiveReleaseRequest(
-                namespace=to_proto_namespace(self._require_namespace()),
-                name=self._config.name,
-            ),
-            metadata=self._client._auth_metadata(),
-            timeout=self._client._call_timeout(self._config.request_timeout),
-        )
+        try:
+            response = await self._stub.GetActiveRelease(
+                kms_pb2.GetActiveReleaseRequest(
+                    namespace=to_proto_namespace(self._require_namespace()),
+                    name=self._config.name,
+                ),
+                metadata=self._client._auth_metadata(),
+                timeout=self._client._call_timeout(self._config.request_timeout),
+            )
+        except grpc.RpcError as exc:
+            raise errors.map_grpc_error(exc) from None
         return _Candidate(_clone_release(response.release), response.activation_revision)
 
     async def _reconcile_loop(self) -> None:
@@ -566,6 +596,9 @@ class AsyncReleaseLoader:
             while not self._stop_event.is_set() and not self._graceful_watch_stop.is_set():
                 if streams_started:
                     self._reconnects += 1
+                    self._status = replace(
+                        self._status, reconnects=self._reconnects
+                    )
                 streams_started += 1
                 received = await self._watch_once()
                 if received:
@@ -746,6 +779,14 @@ class AsyncReleaseLoader:
         )
         return self._ack(candidate, "rejected", category)
 
+    def _record_resolution(self, elapsed_ms: int) -> None:
+        self._resolutions += 1
+        self._last_resolution_ms = max(0, elapsed_ms)
+        self._status = replace(
+            self._status,
+            last_resolution_duration_ms=self._last_resolution_ms,
+        )
+
     def _require_namespace(self) -> NamespaceRef:
         if self._namespace is None:
             raise errors.NoNamespaceError("release loader namespace is not resolved")
@@ -796,13 +837,6 @@ async def _gather_until_cancel(
     finally:
         cancel_task.cancel()
         await asyncio.gather(cancel_task, return_exceptions=True)
-
-
-def _safe_abort(prepared: PreparedRelease) -> None:
-    try:
-        prepared.abort()
-    except BaseException:
-        pass
 
 
 __all__ = [

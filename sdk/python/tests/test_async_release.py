@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import math
 from typing import Dict, List, Optional
 
+import grpc
 import pytest
 
 import kms_paramstore.release as release_module
@@ -11,7 +13,7 @@ from kms_paramstore._gen import kms_pb2
 from kms_paramstore._refs import NamespaceRef
 from kms_paramstore.async_release import AsyncReleaseLoader, AsyncReleaseLoaderConfig
 from kms_paramstore.release import ClassifiedReleaseError, ReleaseCandidateError
-from kms_paramstore.release import ReleaseCommitError
+from kms_paramstore.release import ReleaseCommitError, ReleaseStartupError
 from kms_paramstore.secret import Secret
 
 
@@ -194,9 +196,11 @@ class _Prepared:
 
 
 async def _wait_for(predicate, timeout=2.0):
-    async with asyncio.timeout(timeout):
+    async def poll():
         while not predicate():
             await asyncio.sleep(0.005)
+
+    await asyncio.wait_for(poll(), timeout=timeout)
 
 
 def _loader(monkeypatch, initial, **config):
@@ -206,16 +210,17 @@ def _loader(monkeypatch, initial, **config):
         lambda _channel: stub,
     )
     client = _AsyncClient()
+    settings = {
+        "name": "runtime",
+        "reconcile_interval": 10.0,
+        "reconnect_initial": 0.01,
+        "reconnect_max": 0.02,
+        "secret_token_provider": lambda _alias, _path, _cancel: ("token", True),
+    }
+    settings.update(config)
     loader = AsyncReleaseLoader(
         client,
-        AsyncReleaseLoaderConfig(
-            name="runtime",
-            reconcile_interval=10.0,
-            reconnect_initial=0.01,
-            reconnect_max=0.02,
-            secret_token_provider=lambda _alias, _path, _cancel: ("token", True),
-            **config,
-        ),
+        AsyncReleaseLoaderConfig(**settings),
     )
     return loader, stub, client
 
@@ -460,5 +465,90 @@ def test_async_loader_rejects_overlap_but_allows_sequential_runs(monkeypatch):
         loader.stop()
         await second_run
         assert first.commits == second.commits == 1
+
+    asyncio.run(scenario())
+
+
+def test_async_status_stats_and_prepared_state_are_canonical(monkeypatch):
+    async def scenario():
+        loader, _stub, _client = _loader(monkeypatch, _release(1, 10))
+
+        def prepare(_cancel, _snapshot):
+            assert loader.status().state == "received"
+            return _Prepared()
+
+        task = asyncio.create_task(loader.run(prepare))
+        await _wait_for(lambda: loader.status().state == "applied")
+        loader.stop()
+        await task
+        status = loader.status()
+        stats = loader.stats()
+        assert status.last_resolution_duration_ms >= 0
+        assert status.reconnects == stats.reconnects
+        assert stats.candidates == 1
+        assert stats.applied == 1
+        assert stats.rejected == stats.rejections
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("failure", ["raises", "returns"])
+def test_async_abort_contract_failure_is_fatal_internal(monkeypatch, failure):
+    async def scenario():
+        loader, stub, _client = _loader(monkeypatch, _release(1, 10))
+
+        class BrokenAbort(_Prepared):
+            def abort(self):
+                self.aborts += 1
+                if failure == "raises":
+                    raise RuntimeError("abort failed")
+                return object()
+
+        def prepare(_cancel, _snapshot):
+            stub.release, stub.revision = _release(2, 11)
+            return BrokenAbort()
+
+        with pytest.raises(ReleaseCommitError, match="abort failed"):
+            await loader.run(prepare)
+        assert loader.status().last_failure_category == "internal"
+        assert loader.stats().rejected["internal"] == 1
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("reconcile_interval", 0),
+        ("reconcile_interval", math.nan),
+        ("reconnect_initial", math.inf),
+        ("reconnect_max", -1),
+        ("request_timeout", math.nan),
+        ("request_timeout", 0),
+    ],
+)
+def test_async_release_timing_must_be_finite_positive(monkeypatch, field, value):
+    with pytest.raises(Exception, match="finite and positive|backoff"):
+        _loader(monkeypatch, _release(1, 10), **{field: value})
+
+
+def test_async_initial_grpc_failure_is_wrapped_as_startup_error(monkeypatch):
+    class Unavailable(grpc.RpcError):
+        def code(self):
+            return grpc.StatusCode.UNAVAILABLE
+
+        def details(self):
+            return "unavailable"
+
+    async def scenario():
+        loader, stub, _client = _loader(monkeypatch, _release(1, 10))
+
+        async def fail(_request, **_kwargs):
+            raise Unavailable()
+
+        stub.GetActiveRelease = fail
+        with pytest.raises(ReleaseStartupError, match="unable to read"):
+            await loader.run(lambda _cancel, _snapshot: _Prepared())
+        assert not stub.calls
 
     asyncio.run(scenario())

@@ -165,8 +165,7 @@ class AsyncSubscriptionManager:
             try:
                 await self._run_stream()
             except asyncio.CancelledError:
-                if self._closed:
-                    return
+                return
             except Exception as exc:
                 self._client._logf("async watch stream ended: %s", exc)
             if self._closed:

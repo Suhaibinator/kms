@@ -52,9 +52,11 @@ def test_async_watch_stream_and_shutdown():
     server, address, store = start_server(whoami_namespace=NS)
 
     async def wait_for(predicate, timeout: float = 5.0) -> None:
-        async with asyncio.timeout(timeout):
+        async def poll() -> None:
             while not predicate():
                 await asyncio.sleep(0.01)
+
+        await asyncio.wait_for(poll(), timeout=timeout)
 
     async def exercise() -> None:
         client = AsyncClient(address, namespace=NS, insecure=True, reconcile_interval=60)

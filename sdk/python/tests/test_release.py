@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import math
 import queue
 import threading
 import time
@@ -266,16 +267,17 @@ def _loader(monkeypatch, initial, **config):
         lambda _channel: stub,
     )
     client = _Client()
+    settings = {
+        "name": "runtime",
+        "reconcile_interval": 10.0,
+        "reconnect_initial": 0.01,
+        "reconnect_max": 0.02,
+        "secret_token_provider": lambda _alias, _path: ("local-token", True),
+    }
+    settings.update(config)
     loader = ReleaseLoader(
         client,
-        ReleaseLoaderConfig(
-            name="runtime",
-            reconcile_interval=10.0,
-            reconnect_initial=0.01,
-            reconnect_max=0.02,
-            secret_token_provider=lambda _alias, _path: ("local-token", True),
-            **config,
-        ),
+        ReleaseLoaderConfig(**settings),
     )
     return loader, stub, client
 
@@ -826,3 +828,106 @@ def test_typed_helper_uses_explicit_decode(monkeypatch):
 
     run_typed_release(loader, decode, prepare, stop_event=stop)
     assert seen == [1]
+
+
+def test_sync_loader_dedupes_replayed_and_unchanged_active_identity(monkeypatch):
+    loader, stub, _client = _loader(monkeypatch, _release(1, 10))
+    prepared = _Prepared()
+    thread, raised = _run_in_thread(loader, lambda _cancel, _snapshot: prepared)
+    assert wait_until(lambda: prepared.commits == 1)
+    assert loader.stats().candidates == 1
+
+    # Both a replayed stream activation and a reconciliation offer carry the
+    # already applied identity and must not resolve/prepare/commit it again.
+    stub.activate(_release(1, 10))
+    loader._offer_candidate(release_module._Candidate(*_release(1, 10)))
+    time.sleep(0.1)
+    assert prepared.commits == 1
+    assert loader.stats().candidates == 1
+
+    loader.stop()
+    thread.join(timeout=2)
+    assert not raised
+
+
+def test_sync_status_stats_and_prepared_state_are_canonical(monkeypatch):
+    loader, _stub, _client = _loader(monkeypatch, _release(1, 10))
+
+    def prepare(_cancel, _snapshot):
+        assert loader.status().state == "received"
+        return _Prepared()
+
+    thread, raised = _run_in_thread(loader, prepare)
+    assert wait_until(lambda: loader.status().state == "applied")
+    loader.stop()
+    thread.join(timeout=2)
+    assert not raised
+    status = loader.status()
+    stats = loader.stats()
+    assert status.last_resolution_duration_ms >= 0
+    assert status.reconnects == stats.reconnects
+    assert stats.candidates == 1
+    assert stats.applied == 1
+    assert stats.rejected == stats.rejections
+
+
+@pytest.mark.parametrize("failure", ["raises", "returns"])
+def test_sync_abort_contract_failure_is_fatal_internal(monkeypatch, failure):
+    loader, stub, _client = _loader(monkeypatch, _release(1, 10))
+
+    class BrokenAbort(_Prepared):
+        def abort(self):
+            self.aborts += 1
+            if failure == "raises":
+                raise RuntimeError("abort failed")
+            return object()
+
+    def prepare(_cancel, _snapshot):
+        stub.release, stub.revision = _release(2, 11)
+        return BrokenAbort()
+
+    with pytest.raises(ReleaseCommitError, match="abort failed"):
+        loader.run(prepare)
+    assert loader.status().last_failure_category == "internal"
+    assert loader.stats().rejected["internal"] == 1
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("reconcile_interval", 0),
+        ("reconcile_interval", math.nan),
+        ("reconnect_initial", math.inf),
+        ("reconnect_max", -1),
+        ("request_timeout", math.nan),
+        ("request_timeout", 0),
+    ],
+)
+def test_sync_release_timing_must_be_finite_positive(monkeypatch, field, value):
+    with pytest.raises(Exception, match="finite and positive|backoff"):
+        _loader(monkeypatch, _release(1, 10), **{field: value})
+
+
+def test_sync_external_stop_relay_exits_after_each_reused_run(monkeypatch):
+    loader, stub, _client = _loader(monkeypatch, _release(1, 10))
+    external = threading.Event()
+    for version in (1, 2):
+        stub.release, stub.revision = _release(version, 9 + version)
+        prepared = _Prepared()
+        raised = []
+
+        def run():
+            try:
+                loader.run(lambda _cancel, _snapshot: prepared, stop_event=external)
+            except BaseException as exc:
+                raised.append(exc)
+
+        thread = threading.Thread(target=run)
+        thread.start()
+        assert wait_until(lambda: prepared.commits == 1)
+        relay = loader._relay_thread
+        assert relay is not None and relay.is_alive()
+        loader.stop()
+        thread.join(timeout=2)
+        assert not raised
+        assert not relay.is_alive()

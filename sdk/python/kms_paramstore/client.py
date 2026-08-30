@@ -816,13 +816,14 @@ class Client:
         if callback is None:
             raise errors.ConfigError("watch requires a callback")
         ns = self._resolve_namespace_arg(namespace)
-        w = self._subs().register_watcher(ns, callback)
+        manager = self._subs()
+        w = manager.register_watcher(ns, callback)
         stopped = threading.Event()
 
         def stop() -> None:
             if not stopped.is_set():
                 stopped.set()
-                self._subs().remove_watcher(w)
+                manager.remove_watcher(w)
 
         return stop
 

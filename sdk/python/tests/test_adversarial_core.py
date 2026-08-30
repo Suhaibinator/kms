@@ -187,6 +187,51 @@ def test_async_unknown_event_does_not_advance_and_key_revision_never_regresses()
     asyncio.run(exercise())
 
 
+def test_async_watch_run_terminates_when_cancelled_without_client_close():
+    async def exercise() -> None:
+        client = SimpleNamespace(_cache=Cache(0), _logf=lambda *args: None)
+        manager = AsyncSubscriptionManager(client)
+        never = asyncio.Event()
+
+        async def blocked_stream():
+            await never.wait()
+
+        manager._run_stream = blocked_stream
+        task = asyncio.create_task(manager._run())
+        await asyncio.sleep(0)
+        task.cancel()
+        await asyncio.wait_for(task, timeout=0.5)
+        assert task.done()
+        assert not manager._closed
+
+    asyncio.run(exercise())
+
+
+def test_sync_watch_unsubscribe_remains_idempotent_after_client_close():
+    client = Client(channel=mock.MagicMock(), namespace=NS)
+
+    class Manager:
+        def __init__(self):
+            self.removed = 0
+
+        def register_watcher(self, _namespace, _callback):
+            return object()
+
+        def remove_watcher(self, _watcher):
+            self.removed += 1
+
+        def stop(self):
+            return None
+
+    manager = Manager()
+    client._sub = manager
+    unsubscribe = client.watch(lambda _event: None)
+    client.close()
+    unsubscribe()
+    unsubscribe()
+    assert manager.removed == 1
+
+
 def test_all_async_public_operations_fail_after_close():
     async def exercise() -> None:
         client = AsyncClient(channel=mock.MagicMock(), namespace=NS)
@@ -228,9 +273,11 @@ def test_async_resolve_hot_reload_token_bypass_and_callback_close():
     server, address, store = start_server(whoami_namespace=NS)
 
     async def wait_for(predicate, timeout=5.0):
-        async with asyncio.timeout(timeout):
+        async def poll():
             while not predicate():
                 await asyncio.sleep(0.01)
+
+        await asyncio.wait_for(poll(), timeout)
 
     async def exercise() -> None:
         client = AsyncClient(address, namespace=NS, insecure=True, cache_ttl=60)

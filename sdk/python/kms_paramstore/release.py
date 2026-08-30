@@ -11,6 +11,7 @@ from __future__ import annotations
 import concurrent.futures
 import hashlib
 import hmac
+import math
 import random
 import threading
 import time
@@ -82,6 +83,18 @@ _STATES = RELEASE_STATES
 _REJECTION_CATEGORIES = frozenset(RELEASE_REJECTION_CATEGORIES)
 _DIAGNOSTIC_LIMIT = 128
 _MAX_DIVERGENT_FIELD_COUNT = 65_535
+
+
+def _validate_release_timing(name: str, value: Optional[float]) -> None:
+    if value is None:
+        return
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, (int, float))
+        or not math.isfinite(value)
+        or value <= 0
+    ):
+        raise errors.ConfigError(f"release {name} must be finite and positive")
 
 
 class PreparedRelease(Protocol):
@@ -226,6 +239,8 @@ class ReleaseStatus:
     applied_revision: int = 0
     last_failure_category: str = ""
     last_failure_unix_ms: int = 0
+    last_resolution_duration_ms: int = 0
+    reconnects: int = 0
 
     @property
     def active_version(self) -> int:
@@ -242,12 +257,25 @@ class ReleaseStatus:
 class ReleaseStats:
     """Low-cardinality counters and timing for a loader instance."""
 
+    candidates: int = 0
+    applied: int = 0
+    rejected: Mapping[str, int] = field(default_factory=lambda: MappingProxyType({}))
     reconnects: int = 0
+    # Compatibility observability retained for v0.1 callers. New integrations
+    # should use candidates/applied/rejected/reconnects, matching Go and TS.
     resolutions: int = 0
     resolution_failures: int = 0
     last_resolution_ms: int = 0
-    acknowledgements: Mapping[str, int] = field(default_factory=dict)
-    rejections: Mapping[str, int] = field(default_factory=dict)
+    acknowledgements: Mapping[str, int] = field(default_factory=lambda: MappingProxyType({}))
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "rejected", MappingProxyType(dict(self.rejected)))
+        object.__setattr__(self, "acknowledgements", MappingProxyType(dict(self.acknowledgements)))
+
+    @property
+    def rejections(self) -> Mapping[str, int]:
+        """Deprecated alias for :attr:`rejected`."""
+        return self.rejected
 
 
 @dataclass(frozen=True)
@@ -297,10 +325,11 @@ class _CandidateFailure(Exception):
 class ReleaseLoader:
     """Reliably resolve, prepare, and atomically apply one named release.
 
-    :meth:`run` blocks until stopped and permits only one invocation. Public
-    status/statistics methods are safe to call concurrently. Release events use
-    a dedicated stream and a replace-latest candidate slot, never the client's
-    best-effort callback queue.
+    :meth:`run` blocks until stopped and permits one active invocation at a
+    time; the loader may be reused sequentially after a run exits. Public
+    status/statistics methods are safe to call concurrently. Release events
+    use a dedicated stream and a replace-latest candidate slot, never the
+    client's best-effort callback queue.
     """
 
     def __init__(self, client: "Client", config: ReleaseLoaderConfig) -> None:
@@ -310,9 +339,11 @@ class ReleaseLoader:
             raise errors.ConfigError(
                 "release max_concurrent_fetches must be between 1 and 256"
             )
-        if config.reconcile_interval <= 0:
-            raise errors.ConfigError("release reconcile_interval must be positive")
-        if config.reconnect_initial <= 0 or config.reconnect_max < config.reconnect_initial:
+        _validate_release_timing("reconcile_interval", config.reconcile_interval)
+        _validate_release_timing("reconnect_initial", config.reconnect_initial)
+        _validate_release_timing("reconnect_max", config.reconnect_max)
+        _validate_release_timing("request_timeout", config.request_timeout)
+        if config.reconnect_max < config.reconnect_initial:
             raise errors.ConfigError("invalid release reconnect backoff")
 
         self._client = client
@@ -327,12 +358,15 @@ class ReleaseLoader:
         self._run_generation = 0
         self._stop_event = threading.Event()
         self._watch_thread: Optional[threading.Thread] = None
+        self._relay_thread: Optional[threading.Thread] = None
+        self._relay_done = threading.Event()
         self._executor: Optional[concurrent.futures.ThreadPoolExecutor] = None
 
         self._candidate_cond = threading.Condition()
         self._pending_candidate: Optional[_Candidate] = None
         self._active_cancel: Optional[threading.Event] = None
         self._active_identity: Optional[Tuple[int, int, str, str]] = None
+        self._latest_identity: Optional[Tuple[int, int, str, str]] = None
         self._last_seen_revision = 0
 
         self._ack_cond = threading.Condition()
@@ -352,6 +386,8 @@ class ReleaseLoader:
         self._resolutions = 0
         self._resolution_failures = 0
         self._last_resolution_ms = 0
+        self._candidates = 0
+        self._applied = 0
         self._ack_counts: Dict[str, int] = {state: 0 for state in _STATES}
         self._rejection_counts: Dict[str, int] = {
             category: 0 for category in sorted(_REJECTION_CATEGORIES)
@@ -372,12 +408,14 @@ class ReleaseLoader:
     def stats(self) -> ReleaseStats:
         with self._state_lock:
             return ReleaseStats(
+                candidates=self._candidates,
+                applied=self._applied,
+                rejected=self._rejection_counts,
                 reconnects=self._reconnects,
                 resolutions=self._resolutions,
                 resolution_failures=self._resolution_failures,
                 last_resolution_ms=self._last_resolution_ms,
-                acknowledgements=MappingProxyType(dict(self._ack_counts)),
-                rejections=MappingProxyType(dict(self._rejection_counts)),
+                acknowledgements=self._ack_counts,
             )
 
     def stop(self) -> None:
@@ -421,8 +459,11 @@ class ReleaseLoader:
             self._pending_candidate = None
             self._active_cancel = None
             self._active_identity = None
+            self._latest_identity = None
             self._graceful_watch_stop = threading.Event()
             self._watch_done = threading.Event()
+            self._relay_done = threading.Event()
+            self._relay_thread = None
 
         self._executor = concurrent.futures.ThreadPoolExecutor(
             max_workers=self._config.max_concurrent_fetches,
@@ -452,13 +493,18 @@ class ReleaseLoader:
         self._watch_thread.start()
         if stop_event is not None:
             def relay_stop() -> None:
-                stop_event.wait()
+                while not stop_event.is_set():
+                    if self._relay_done.wait(0.05):
+                        return
                 with self._run_lock:
                     active = self._running and self._run_generation == run_generation
                 if active:
                     self.stop()
 
-            threading.Thread(target=relay_stop, name="kms-release-stop", daemon=True).start()
+            self._relay_thread = threading.Thread(
+                target=relay_stop, name="kms-release-stop", daemon=True
+            )
+            self._relay_thread.start()
 
         applied_once = False
         next_reconcile = time.monotonic() + self._config.reconcile_interval
@@ -492,7 +538,13 @@ class ReleaseLoader:
                 if time.monotonic() >= next_reconcile:
                     next_reconcile = time.monotonic() + self._config.reconcile_interval
                     try:
-                        self._offer_candidate(self._read_active())
+                        reconciled = self._read_active()
+                        with self._state_lock:
+                            retry_rejected = self._status.state == "rejected"
+                        with self._candidate_cond:
+                            if retry_rejected and reconciled.identity == self._latest_identity:
+                                self._latest_identity = None
+                        self._offer_candidate(reconciled)
                     except Exception:
                         if not applied_once:
                             raise ReleaseStartupError(
@@ -501,6 +553,9 @@ class ReleaseLoader:
                         self._set_transport_failure("active_check_failed")
         finally:
             self.stop()
+            self._relay_done.set()
+            if self._relay_thread is not None:
+                self._relay_thread.join(timeout=1.0)
             if self._watch_thread is not None:
                 self._watch_thread.join(timeout=2.0)
             if self._executor is not None:
@@ -527,20 +582,32 @@ class ReleaseLoader:
     def _offer_candidate(self, candidate: _Candidate) -> None:
         if not candidate.release.name:  # type: ignore[attr-defined]
             return
+        accepted = False
         with self._candidate_cond:
             if candidate.revision and candidate.revision < self._last_seen_revision:
                 return
             if candidate.revision > self._last_seen_revision:
                 self._last_seen_revision = candidate.revision
-            if self._active_identity is not None and _is_newer(
-                candidate.identity, self._active_identity
-            ):
+            if self._latest_identity is not None:
+                if candidate.revision < self._latest_identity[0]:
+                    return
+                if candidate.identity == self._latest_identity:
+                    return
+            self._latest_identity = candidate.identity
+            if self._active_identity is not None and candidate.identity != self._active_identity:
                 if self._active_cancel is not None:
                     self._active_cancel.set()
-            pending = self._pending_candidate
-            if pending is None or _is_newer(candidate.identity, pending.identity):
-                self._pending_candidate = candidate
-                self._candidate_cond.notify_all()
+            self._pending_candidate = candidate
+            self._candidate_cond.notify_all()
+            accepted = True
+        if accepted:
+            with self._state_lock:
+                self._candidates += 1
+                self._status = replace(
+                    self._status,
+                    observed_version=candidate.release.version,  # type: ignore[attr-defined]
+                    observed_revision=candidate.revision,
+                )
 
     def _take_candidate(self, timeout: float) -> Optional[_Candidate]:
         deadline = time.monotonic() + timeout
@@ -566,13 +633,16 @@ class ReleaseLoader:
         self._set_observed(candidate)
 
         try:
-            snapshot = self._resolve(candidate, cancel)
+            started = time.monotonic()
+            try:
+                snapshot = self._resolve(candidate, cancel)
+            finally:
+                self._record_resolution(int((time.monotonic() - started) * 1000))
             self._set_observed(candidate, "received")
             self._ack(candidate, "received")
             if cancel.is_set():
                 raise _CandidateFailure("superseded")
 
-            self._set_observed(candidate, "prepared")
             try:
                 prepared = prepare_callback(cancel, snapshot)
             except Exception as exc:
@@ -585,21 +655,23 @@ class ReleaseLoader:
             ):
                 raise _CandidateFailure("prepare_failed", "invalid prepared release")
 
-            self._ack(candidate, "prepared")
             if cancel.is_set():
-                _safe_abort(prepared)
+                self._abort_or_fail(candidate, prepared)
                 raise _CandidateFailure("superseded")
+
+            self._set_observed(candidate, "prepared")
+            self._ack(candidate, "prepared")
 
             try:
                 active = self._read_active()
             except Exception:
-                _safe_abort(prepared)
+                self._abort_or_fail(candidate, prepared)
                 raise _CandidateFailure("active_check_failed") from None
             if cancel.is_set():
-                _safe_abort(prepared)
+                self._abort_or_fail(candidate, prepared)
                 raise _CandidateFailure("superseded")
             if active.identity != candidate.identity:
-                _safe_abort(prepared)
+                self._abort_or_fail(candidate, prepared)
                 raise _CandidateFailure("superseded")
 
             try:
@@ -623,6 +695,7 @@ class ReleaseLoader:
                     last_failure_category="",
                     last_failure_unix_ms=0,
                 )
+                self._applied += 1
             self._ack(candidate, "applied", divergence=_divergence_of(prepared))
             return "applied", "", 0
         except _CandidateFailure as exc:
@@ -638,8 +711,19 @@ class ReleaseLoader:
                     self._active_cancel = None
                     self._active_identity = None
 
+    def _abort_or_fail(self, candidate: _Candidate, prepared: PreparedRelease) -> None:
+        """Abort synchronously; contract violations are fatal internal failures."""
+        try:
+            returned: object = getattr(prepared, "abort")()
+            if returned is not None:
+                raise TypeError("PreparedRelease.abort must return None")
+        except BaseException:
+            self._reject(candidate, "internal")
+            raise ReleaseCommitError(
+                "PreparedRelease.abort failed; abort must be infallible and return None"
+            ) from None
+
     def _resolve(self, candidate: _Candidate, cancel: threading.Event) -> ReleaseSnapshot:
-        started = time.monotonic()
         release = candidate.release
         if (
             not release.name
@@ -721,10 +805,6 @@ class ReleaseLoader:
         finally:
             for future in pending:
                 future.cancel()
-            elapsed = int((time.monotonic() - started) * 1000)
-            with self._state_lock:
-                self._resolutions += 1
-                self._last_resolution_ms = elapsed
 
         return ReleaseSnapshot(
             namespace=manifest.namespace,
@@ -808,6 +888,9 @@ class ReleaseLoader:
                 if streams_started:
                     with self._state_lock:
                         self._reconnects += 1
+                        self._status = replace(
+                            self._status, reconnects=self._reconnects
+                        )
                 streams_started += 1
                 if self._watch_once():
                     # A usable connection may still terminate with an RPC error.
@@ -997,6 +1080,15 @@ class ReleaseLoader:
                     observed_revision=candidate.revision,
                 )
 
+    def _record_resolution(self, elapsed_ms: int) -> None:
+        with self._state_lock:
+            self._resolutions += 1
+            self._last_resolution_ms = max(0, elapsed_ms)
+            self._status = replace(
+                self._status,
+                last_resolution_duration_ms=self._last_resolution_ms,
+            )
+
     def _set_failure(self, category: str) -> None:
         if category not in _REJECTION_CATEGORIES:
             category = "internal"
@@ -1149,15 +1241,6 @@ def _divergence_of(prepared: PreparedRelease) -> Tuple[bool, int]:
         return (True, min(max(field_count, 0), _MAX_DIVERGENT_FIELD_COUNT))
     except BaseException:
         return (False, 0)
-
-
-def _safe_abort(prepared: PreparedRelease) -> None:
-    try:
-        prepared.abort()
-    except Exception:
-        # Abort is cleanup after an already-decided rejection. It cannot make a
-        # stale candidate eligible to commit and must not expose application data.
-        pass
 
 
 def _grpc_code_name(exc: grpc.RpcError) -> str:
