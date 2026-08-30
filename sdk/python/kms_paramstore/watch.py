@@ -31,7 +31,7 @@ from ._refs import NamespaceRef, Ref
 if TYPE_CHECKING:
     from .client import Client
 
-__all__ = ["Event", "EventType"]
+__all__ = ["Event", "EventType", "WatchStatus"]
 
 # Safety-net full-sync poll cadence (plan 8.4.8).
 _DEFAULT_RECONCILE_INTERVAL = 300.0  # seconds
@@ -53,7 +53,7 @@ class EventType(enum.Enum):
         return self.value
 
 
-@dataclass
+@dataclass(frozen=True)
 class Event:
     """Delivered to :meth:`Client.watch` callbacks when any key in the
     subscribed namespace changes."""
@@ -72,6 +72,26 @@ class Event:
         if self.namespace:
             return f"/{self.namespace}/{self.key}"
         return self.key
+
+
+@dataclass(frozen=True)
+class WatchStatus:
+    """Value-free health snapshot for metrics and readiness checks."""
+
+    state: str
+    reconciliation: str
+    current_revision: int
+    reconnect_count: int
+    namespace_count: int
+    tracked_parameter_count: int
+    watcher_count: int
+    parameter_handler_count: int
+    connected_at_unix_ms: Optional[int] = None
+    last_event_at_unix_ms: Optional[int] = None
+    disconnected_at_unix_ms: Optional[int] = None
+    last_reconcile_attempt_at_unix_ms: Optional[int] = None
+    last_reconcile_success_at_unix_ms: Optional[int] = None
+    last_reconcile_failure_at_unix_ms: Optional[int] = None
 
 
 @dataclass
@@ -142,6 +162,15 @@ class _SubManager:
         self._next_watcher_id = 0
         self._started = False
         self._last_rev = 0
+        self._state = "idle"
+        self._reconciliation = "not_started"
+        self._reconnect_count = 0
+        self._connected_at_unix_ms: Optional[int] = None
+        self._last_event_at_unix_ms: Optional[int] = None
+        self._disconnected_at_unix_ms: Optional[int] = None
+        self._last_reconcile_attempt_at_unix_ms: Optional[int] = None
+        self._last_reconcile_success_at_unix_ms: Optional[int] = None
+        self._last_reconcile_failure_at_unix_ms: Optional[int] = None
 
         self._stop_event = threading.Event()
         self._restart_event = threading.Event()
@@ -225,6 +254,25 @@ class _SubManager:
         with self._lock:
             return sorted(self._namespaces)
 
+    def status(self) -> WatchStatus:
+        with self._lock:
+            return WatchStatus(
+                state=self._state,
+                reconciliation=self._reconciliation,
+                current_revision=self._last_rev,
+                reconnect_count=self._reconnect_count,
+                namespace_count=len(self._namespaces),
+                tracked_parameter_count=len(self._known),
+                watcher_count=len(self._watchers),
+                parameter_handler_count=sum(len(v) for v in self._param_handlers.values()),
+                connected_at_unix_ms=self._connected_at_unix_ms,
+                last_event_at_unix_ms=self._last_event_at_unix_ms,
+                disconnected_at_unix_ms=self._disconnected_at_unix_ms,
+                last_reconcile_attempt_at_unix_ms=self._last_reconcile_attempt_at_unix_ms,
+                last_reconcile_success_at_unix_ms=self._last_reconcile_success_at_unix_ms,
+                last_reconcile_failure_at_unix_ms=self._last_reconcile_failure_at_unix_ms,
+            )
+
     # --- lifecycle ---------------------------------------------------------
 
     def _signal_restart(self) -> None:
@@ -248,6 +296,8 @@ class _SubManager:
                 pass
         for t in self._threads:
             t.join(timeout=2.0)
+        with self._lock:
+            self._state = "stopped"
 
     def _run(self) -> None:
         attempt = 0
@@ -287,10 +337,15 @@ class _SubManager:
                 yield item
 
         try:
+            with self._lock:
+                self._state = "connecting" if self._reconnect_count == 0 else "reconnecting"
             responses = self._client._watch_stub.Subscribe(
                 request_iter(), metadata=self._client._auth_metadata("")
             )
             self._current_responses = responses
+            with self._lock:
+                self._state = "connected"
+                self._connected_at_unix_ms = int(time.time() * 1000)
             for ev in responses:
                 self._handle_event(ev, out_q)
             return None
@@ -299,8 +354,15 @@ class _SubManager:
         finally:
             out_q.put(None)  # unblock the request iterator
             self._current_responses = None
+            with self._lock:
+                if not self._stop_event.is_set():
+                    self._state = "reconnecting"
+                    self._reconnect_count += 1
+                    self._disconnected_at_unix_ms = int(time.time() * 1000)
 
     def _handle_event(self, ev, out_q) -> None:
+        with self._lock:
+            self._last_event_at_unix_ms = int(time.time() * 1000)
         rev = ev.revision
         kind = ev.WhichOneof("event")
         if kind == "snapshot":
@@ -444,6 +506,7 @@ class _SubManager:
 
     def _reconcile(self) -> None:
         with self._lock:
+            self._last_reconcile_attempt_at_unix_ms = int(time.time() * 1000)
             namespaces = list(self._namespaces)
             param_keys = set(self._param_handlers.keys())
 
@@ -456,13 +519,22 @@ class _SubManager:
         # List the whole subscribed namespace and reconcile by exact key. A
         # registered parameter absent from its namespace listing was deleted
         # while the stream missed the event; revert it (present=False).
+        failed = False
         for env, app in namespaces:
             present = self._reconcile_namespace(NamespaceRef(env, app), snap_rev)
             if present is None:
+                failed = True
                 continue  # listing failed; keep last-known values for this namespace
             for rk in param_keys:
                 if rk[0] == env and rk[1] == app and rk not in present:
                     self._set_value(rk, "", False, 0, snap_rev, reconcile=True)
+        with self._lock:
+            if failed:
+                self._reconciliation = "degraded"
+                self._last_reconcile_failure_at_unix_ms = int(time.time() * 1000)
+            else:
+                self._reconciliation = "healthy"
+                self._last_reconcile_success_at_unix_ms = int(time.time() * 1000)
 
     def _reconcile_namespace(self, ns: NamespaceRef, snap_rev: int) -> Optional[Set[_RefKey]]:
         """List every parameter in ``ns``, applying present values.

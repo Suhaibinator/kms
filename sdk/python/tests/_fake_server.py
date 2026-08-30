@@ -199,6 +199,24 @@ class ParameterServicer(kms_pb2_grpc.ParameterServiceServicer):
             rev = self.store._next_rev()
         return kms_pb2.DeleteParameterResponse(revision=rev)
 
+    def GetParameterMetadata(self, request, context):
+        rk = _rk_from_ref(request.ref)
+        with self.store.lock:
+            versions = self.store.params.get(rk)
+            if not versions:
+                context.abort(grpc.StatusCode.NOT_FOUND, "not found")
+            infos = [
+                kms_pb2.ParameterVersionInfo(
+                    version=index + 1, content_type=content_type,
+                    state="enabled", created_by="fake",
+                )
+                for index, (_value, content_type) in enumerate(versions)
+            ]
+        return kms_pb2.GetParameterMetadataResponse(
+            ref=_proto_ref(rk), content_type=versions[-1][1],
+            labels={"current": len(versions)}, versions=infos,
+        )
+
 
 class SecretServicer(kms_pb2_grpc.SecretServiceServicer):
     def __init__(self, store: FakeStore) -> None:
@@ -216,9 +234,15 @@ class SecretServicer(kms_pb2_grpc.SecretServiceServicer):
             if sec["token"]:
                 if md.get("x-kms-secret-token") != sec["token"]:
                     context.abort(grpc.StatusCode.PERMISSION_DENIED, "secret token required")
-            version = request.version or len(sec["versions"])
+            while len(sec["states"]) < len(sec["versions"]):
+                sec["states"].append("enabled")
+            if not sec.get("promoted", False) and sec["current_version"] < len(sec["versions"]):
+                sec["current_version"] = len(sec["versions"])
+            version = request.version or sec["current_version"]
             if version < 1 or version > len(sec["versions"]):
                 context.abort(grpc.StatusCode.NOT_FOUND, "version not found")
+            if sec["states"][version - 1] != "enabled":
+                context.abort(grpc.StatusCode.FAILED_PRECONDITION, "version is not enabled")
             value, ct = sec["versions"][version - 1]
         return kms_pb2.GetSecretResponse(
             ref=_proto_ref(rk), version=version, value=value, content_type=ct,
@@ -234,6 +258,7 @@ class SecretServicer(kms_pb2_grpc.SecretServiceServicer):
                 sec = {
                     "value": request.value, "content_type": request.content_type or "application/octet-stream",
                     "token": token, "client_bound": request.client_bound, "versions": [],
+                    "states": [], "current_version": 0, "promoted": False,
                 }
                 self.store.secrets[rk] = sec
             else:
@@ -241,7 +266,10 @@ class SecretServicer(kms_pb2_grpc.SecretServiceServicer):
                     token = "tok2-" + "_".join(rk)
                     sec["token"] = token
             sec["versions"].append((request.value, request.content_type or sec["content_type"]))
+            sec["states"].append("enabled")
             version = len(sec["versions"])
+            sec["current_version"] = version
+            sec["promoted"] = False
             rev = self.store._next_rev()
         self.store._broadcast(kms_pb2.SubscribeEvent(
             secret_change=kms_pb2.SecretMetadataChange(ref=_proto_ref(rk), change_type="put", version=version),
@@ -256,7 +284,7 @@ class SecretServicer(kms_pb2_grpc.SecretServiceServicer):
             if sec is None:
                 context.abort(grpc.StatusCode.NOT_FOUND, "not found")
             versions = [
-                kms_pb2.SecretVersionInfo(version=i + 1, state="enabled")
+                kms_pb2.SecretVersionInfo(version=i + 1, state=sec["states"][i])
                 for i in range(len(sec["versions"]))
             ]
             meta = kms_pb2.SecretMetadata(
@@ -266,6 +294,31 @@ class SecretServicer(kms_pb2_grpc.SecretServiceServicer):
             )
         return kms_pb2.GetSecretMetadataResponse(secret=meta)
 
+    def ListSecrets(self, request, context):
+        ns = (request.namespace.env, request.namespace.app)
+        with self.store.lock:
+            keys = sorted(
+                rk for rk in self.store.secrets
+                if rk[:2] == ns and (not request.key_prefix or rk[2].startswith(request.key_prefix))
+            )
+            page_size = request.page_size or 100
+            start = int(request.page_token) if request.page_token else 0
+            window = keys[start:start + page_size]
+            next_token = str(start + page_size) if start + page_size < len(keys) else ""
+            items = []
+            for rk in window:
+                sec = self.store.secrets[rk]
+                items.append(kms_pb2.SecretMetadata(
+                    ref=_proto_ref(rk), content_type=sec["content_type"],
+                    client_bound=sec["client_bound"], has_access_token=bool(sec["token"]),
+                    labels={"current": sec["current_version"]},
+                    versions=[
+                        kms_pb2.SecretVersionInfo(version=i + 1, state=state)
+                        for i, state in enumerate(sec["states"])
+                    ],
+                ))
+        return kms_pb2.ListSecretsResponse(secrets=items, next_page_token=next_token)
+
     def DeleteSecret(self, request, context):
         rk = _rk_from_ref(request.ref)
         with self.store.lock:
@@ -274,6 +327,45 @@ class SecretServicer(kms_pb2_grpc.SecretServiceServicer):
             del self.store.secrets[rk]
             rev = self.store._next_rev()
         return kms_pb2.DeleteSecretResponse(revision=rev)
+
+    def DisableSecret(self, request, context):
+        rk = _rk_from_ref(request.ref)
+        with self.store.lock:
+            sec = self.store.secrets.get(rk)
+            if sec is None:
+                context.abort(grpc.StatusCode.NOT_FOUND, "not found")
+            indexes = range(len(sec["states"])) if request.version == 0 else (request.version - 1,)
+            for index in indexes:
+                if index < 0 or index >= len(sec["states"]):
+                    context.abort(grpc.StatusCode.NOT_FOUND, "version not found")
+                sec["states"][index] = "enabled" if request.enable else "disabled"
+            rev = self.store._next_rev()
+        return kms_pb2.DisableSecretResponse(revision=rev)
+
+    def DestroySecretVersion(self, request, context):
+        rk = _rk_from_ref(request.ref)
+        with self.store.lock:
+            sec = self.store.secrets.get(rk)
+            if sec is None or request.version < 1 or request.version > len(sec["versions"]):
+                context.abort(grpc.StatusCode.NOT_FOUND, "version not found")
+            sec["states"][request.version - 1] = "destroyed"
+            sec["versions"][request.version - 1] = (b"", sec["versions"][request.version - 1][1])
+            rev = self.store._next_rev()
+        return kms_pb2.DestroySecretVersionResponse(revision=rev)
+
+    def PromoteSecretVersion(self, request, context):
+        rk = _rk_from_ref(request.ref)
+        with self.store.lock:
+            sec = self.store.secrets.get(rk)
+            if sec is None or request.version < 1 or request.version > len(sec["versions"]):
+                context.abort(grpc.StatusCode.NOT_FOUND, "version not found")
+            previous = sec["current_version"]
+            sec["current_version"] = request.version
+            sec["promoted"] = True
+            rev = self.store._next_rev()
+        return kms_pb2.PromoteSecretVersionResponse(
+            current_version=request.version, previous_version=previous, revision=rev
+        )
 
 
 class WatchServicer(kms_pb2_grpc.WatchServiceServicer):

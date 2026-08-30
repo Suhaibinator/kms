@@ -7,6 +7,8 @@ the status code and the server's (non-secret) message.
 
 from __future__ import annotations
 
+from typing import Optional
+
 import grpc
 
 __all__ = [
@@ -15,6 +17,7 @@ __all__ = [
     "PermissionDeniedError",
     "UnauthenticatedError",
     "FailedPreconditionError",
+    "RateLimitedError",
     "NotInitializedError",
     "ConfigError",
     "NoNamespaceError",
@@ -23,19 +26,38 @@ __all__ = [
 
 
 class ParamStoreError(Exception):
-    """Base class for all errors raised by the SDK."""
+    """Base class with a stable, transport-independent programmatic code."""
+
+    code = "unknown"
+
+    def __init__(
+        self,
+        message: str = "",
+        *,
+        code: Optional[str] = None,
+        grpc_code: Optional[grpc.StatusCode] = None,
+    ) -> None:
+        super().__init__(message)
+        self.code = code or type(self).code
+        self.grpc_code = grpc_code
 
 
 class NotFoundError(ParamStoreError):
     """A parameter or secret (or the requested version/label) does not exist."""
 
+    code = "not_found"
+
 
 class PermissionDeniedError(ParamStoreError):
     """The caller is authenticated but not authorized for the path/operation."""
 
+    code = "permission_denied"
+
 
 class UnauthenticatedError(ParamStoreError):
     """The client identity token is missing, invalid, or expired."""
+
+    code = "unauthenticated"
 
 
 class FailedPreconditionError(ParamStoreError):
@@ -44,13 +66,19 @@ class FailedPreconditionError(ParamStoreError):
     For example, a client-bound mode mismatch or a disabled version.
     """
 
+    code = "failed_precondition"
+
 
 class NotInitializedError(ParamStoreError):
     """A declarative value was read before ``Client.resolve``/``init`` ran."""
 
+    code = "not_initialized"
+
 
 class ConfigError(ParamStoreError):
     """The SDK was configured incorrectly (bad endpoint, missing key, ...)."""
+
+    code = "invalid_argument"
 
 
 class NoNamespaceError(ConfigError):
@@ -62,6 +90,14 @@ class NoNamespaceError(ConfigError):
     ``/env/app/key``.
     """
 
+    code = "no_namespace"
+
+
+class RateLimitedError(ParamStoreError):
+    """The server exhausted a per-identity operation budget."""
+
+    code = "resource_exhausted"
+
 
 # Map gRPC status codes to SDK exception types. Codes not listed here surface as
 # a generic ParamStoreError that preserves the code name and message.
@@ -70,6 +106,26 @@ _CODE_MAP = {
     grpc.StatusCode.PERMISSION_DENIED: PermissionDeniedError,
     grpc.StatusCode.UNAUTHENTICATED: UnauthenticatedError,
     grpc.StatusCode.FAILED_PRECONDITION: FailedPreconditionError,
+    grpc.StatusCode.RESOURCE_EXHAUSTED: RateLimitedError,
+}
+
+_CODE_NAMES = {
+    grpc.StatusCode.CANCELLED: "cancelled",
+    grpc.StatusCode.UNKNOWN: "unknown",
+    grpc.StatusCode.INVALID_ARGUMENT: "invalid_argument",
+    grpc.StatusCode.DEADLINE_EXCEEDED: "deadline_exceeded",
+    grpc.StatusCode.NOT_FOUND: "not_found",
+    grpc.StatusCode.ALREADY_EXISTS: "already_exists",
+    grpc.StatusCode.PERMISSION_DENIED: "permission_denied",
+    grpc.StatusCode.RESOURCE_EXHAUSTED: "resource_exhausted",
+    grpc.StatusCode.FAILED_PRECONDITION: "failed_precondition",
+    grpc.StatusCode.ABORTED: "aborted",
+    grpc.StatusCode.OUT_OF_RANGE: "out_of_range",
+    grpc.StatusCode.UNIMPLEMENTED: "unimplemented",
+    grpc.StatusCode.INTERNAL: "internal",
+    grpc.StatusCode.UNAVAILABLE: "unavailable",
+    grpc.StatusCode.DATA_LOSS: "data_loss",
+    grpc.StatusCode.UNAUTHENTICATED: "unauthenticated",
 }
 
 
@@ -81,10 +137,18 @@ def map_grpc_error(err: grpc.RpcError) -> ParamStoreError:
     """
     code = None
     message = str(err)
-    if isinstance(err, grpc.Call):
-        code = err.code()
-        message = err.details() or ""
+    code_method = getattr(err, "code", None)
+    details_method = getattr(err, "details", None)
+    if callable(code_method):
+        candidate = code_method()
+        if isinstance(candidate, grpc.StatusCode):
+            code = candidate
+            if callable(details_method):
+                message = details_method() or ""
     exc_type = _CODE_MAP.get(code, ParamStoreError)
+    stable_code = _CODE_NAMES.get(code, "unknown")
     if exc_type is ParamStoreError and code is not None:
-        return ParamStoreError(f"{code.name.lower()}: {message}")
-    return exc_type(message)
+        return ParamStoreError(
+            f"{stable_code}: {message}", code=stable_code, grpc_code=code
+        )
+    return exc_type(message, grpc_code=code)

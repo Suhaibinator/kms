@@ -7,7 +7,7 @@ import os
 import queue
 import sys
 import threading
-from dataclasses import dataclass
+from collections.abc import Iterable, Mapping
 from typing import Callable, List, Optional, Tuple
 
 import grpc
@@ -23,17 +23,26 @@ from ._refs import (
 )
 from .cache import Cache
 from .config import DEFAULT_TIMEOUT, TLSConfig
+from ._defaults import apply_result, make_apply_request, make_verify_request, verify_result
 from .models import (
+    ApplicationDefaultsApplyResult,
+    Page,
     Parameter,
+    ParameterMetadata,
+    PromoteSecretResult,
     PutResult,
     PutSecretResult,
     SecretInfo,
+    VerifyDefaultEntry,
+    VerifyReleaseDefaultsResult,
+    WhoAmI,
     _parameter_from_proto,
+    _parameter_metadata_from_proto,
     _secret_info_from_proto,
 )
 from ._gen import kms_pb2, kms_pb2_grpc
 from .secret import Secret
-from .watch import Event, _SubManager
+from .watch import Event, WatchStatus, _SubManager
 
 __all__ = ["Client", "WhoAmI"]
 
@@ -50,16 +59,6 @@ def _default_client_name() -> str:
     if argv0:
         return os.path.basename(argv0)
     return "kms-paramstore-client"
-
-
-@dataclass
-class WhoAmI:
-    """The identity the server sees for this connection (from ``WhoAmI``)."""
-
-    name: str
-    kind: str
-    namespace: Optional[str]  # "env/app", or None when the identity is unbound
-    auth_method: str  # "mtls" | "token" | ""
 
 
 class Client:
@@ -83,8 +82,8 @@ class Client:
     def __init__(
         self,
         endpoint: str = "",
-        token: str = "",
         *,
+        token: str = "",
         namespace: Optional[str] = None,
         tls: "Optional[TLSConfig | grpc.ChannelCredentials]" = None,
         insecure: bool = False,
@@ -93,6 +92,7 @@ class Client:
         client_name: Optional[str] = None,
         fallback_to_defaults_on_error: bool = False,
         logger: Optional[logging.Logger] = None,
+        reconcile_interval: float = 300.0,
         channel_options: Optional[List[Tuple[str, object]]] = None,
         channel: Optional[grpc.Channel] = None,
     ) -> None:
@@ -114,6 +114,9 @@ class Client:
         self._logger = logger or logging.getLogger("kms_paramstore")
         self._fallback = fallback_to_defaults_on_error
         self._cache = Cache(cache_ttl)
+        if reconcile_interval <= 0:
+            raise errors.ConfigError("reconcile_interval must be positive")
+        self._reconcile_interval = reconcile_interval
 
         # Namespace: from config (parsed now, failing fast on a bad string) or
         # discovered lazily via WhoAmI on first relative-key use.
@@ -146,6 +149,7 @@ class Client:
         self._param_stub = kms_pb2_grpc.ParameterServiceStub(self._channel)
         self._secret_stub = kms_pb2_grpc.SecretServiceStub(self._channel)
         self._watch_stub = kms_pb2_grpc.WatchServiceStub(self._channel)
+        self._release_stub = kms_pb2_grpc.ConfigurationReleaseServiceStub(self._channel)
         self._admin_stub = kms_pb2_grpc.AdminServiceStub(self._channel)
 
         self._closed = threading.Event()
@@ -182,6 +186,14 @@ class Client:
         if self._owns_channel:
             self._channel.close()
 
+    @property
+    def closed(self) -> bool:
+        return self._closed.is_set()
+
+    def _assert_open(self) -> None:
+        if self.closed:
+            raise errors.FailedPreconditionError("KMS client is closed")
+
     # --- internal helpers --------------------------------------------------
 
     def _logf(self, fmt: str, *args: object) -> None:
@@ -204,9 +216,10 @@ class Client:
         return self._timeout
 
     def _subs(self) -> _SubManager:
+        self._assert_open()
         with self._sub_lock:
             if self._sub is None:
-                self._sub = _SubManager(self)
+                self._sub = _SubManager(self, reconcile_interval=self._reconcile_interval)
             return self._sub
 
     def _default_allowed_for_error(self, err: Exception) -> bool:
@@ -267,6 +280,7 @@ class Client:
         Absolute ``"/env/app/key"`` splits directly; a relative key resolves
         against the client namespace (discovering it via WhoAmI if needed).
         """
+        self._assert_open()
         if not key:
             raise errors.ConfigError("key must not be empty")
         if key.startswith("/"):
@@ -274,6 +288,7 @@ class Client:
         return Ref(self._require_namespace(key), key)
 
     def _resolve_namespace_arg(self, namespace: "Optional[str | NamespaceRef]") -> NamespaceRef:
+        self._assert_open()
         if namespace is None:
             ns = self._client_namespace()
             if ns is None:
@@ -292,6 +307,7 @@ class Client:
         Callable by any authenticated identity (no policy check). This is the
         SDK's namespace-discovery mechanism.
         """
+        self._assert_open()
         try:
             resp = self._admin_stub.WhoAmI(
                 kms_pb2.WhoAmIRequest(),
@@ -302,7 +318,7 @@ class Client:
             raise errors.map_grpc_error(e) from None
         ns = resp.namespace
         namespace = f"{ns.env}/{ns.app}" if ns.env and ns.app else None
-        return WhoAmI(name=resp.name, kind=resp.kind, namespace=namespace, auth_method=resp.auth_method)
+        return WhoAmI(identity=resp.name, kind=resp.kind, namespace=namespace, auth_method=resp.auth_method)
 
     # --- parameters --------------------------------------------------------
 
@@ -320,7 +336,24 @@ class Client:
         ``/env/app/key``. By default reads the ``current`` label; pass
         ``version`` or ``label`` to read another.
         """
-        return self._get_parameter_ref(self._resolve_ref(key), version=version, label=label, timeout=timeout)
+        version, label = _normalize_selector(version, label)
+        return self._get_parameter_ref(
+            self._resolve_ref(key), version=version, label=label, timeout=timeout
+        )
+
+    def get_parameter_info(
+        self,
+        key: str,
+        *,
+        version: int = 0,
+        label: str = "",
+        timeout: Optional[float] = None,
+    ) -> Parameter:
+        """Return a parameter value together with its immutable metadata."""
+        version, label = _normalize_selector(version, label)
+        return self._fetch_parameter_info(
+            self._resolve_ref(key), version=version, label=label, timeout=timeout
+        )
 
     def _get_parameter_ref(
         self, ref: Ref, *, version: int = 0, label: str = "", secret_token: str = "", timeout: Optional[float] = None
@@ -333,6 +366,16 @@ class Client:
     def _fetch_parameter(
         self, ref: Ref, *, version: int, label: str, secret_token: str, timeout: Optional[float] = None
     ) -> str:
+        parameter = self._fetch_parameter_info(
+            ref, version=version, label=label, secret_token=secret_token, timeout=timeout
+        )
+        return parameter.value
+
+    def _fetch_parameter_info(
+        self, ref: Ref, *, version: int, label: str, secret_token: str = "", timeout: Optional[float] = None
+    ) -> Parameter:
+        version, label = _normalize_selector(version, label)
+        generation = None if secret_token else self._cache.begin_parameter_read(str(ref))
         try:
             resp = self._param_stub.GetParameter(
                 kms_pb2.GetParameterRequest(ref=to_proto_ref(ref), version=version, label=label),
@@ -341,9 +384,13 @@ class Client:
             )
         except grpc.RpcError as e:
             raise errors.map_grpc_error(e) from None
-        value = resp.parameter.value
-        self._cache.put_param(str(ref), version, label, value)
-        return value
+        if not resp.HasField("parameter"):
+            raise errors.ParamStoreError("KMS parameter response was empty", code="internal")
+        parameter = _parameter_from_proto(resp.parameter)
+        _assert_read_identity("parameter", ref, parameter.env, parameter.app, parameter.key, parameter.version, version)
+        if not secret_token:
+            self._cache.put_param_if_unchanged(generation, version, label, parameter.value)
+        return parameter
 
     def _list_parameters_raw(self, ns: NamespaceRef, key_prefix: str, page_token: str, page_size: int = 0):
         return self._param_stub.ListParameters(
@@ -361,18 +408,19 @@ class Client:
         *,
         page_size: int = 0,
         page_token: str = "",
-    ) -> Tuple[List[Parameter], str]:
+    ) -> Page[Parameter]:
         """List parameters in a namespace under an optional key prefix.
 
         ``namespace`` defaults to the client namespace. Returns
         ``(parameters, next_page_token)``.
         """
         ns = self._resolve_namespace_arg(namespace)
+        page_size = _valid_page_size(page_size)
         try:
             resp = self._list_parameters_raw(ns, key_prefix, page_token, page_size)
         except grpc.RpcError as e:
             raise errors.map_grpc_error(e) from None
-        return [_parameter_from_proto(p) for p in resp.parameters], resp.next_page_token
+        return Page(tuple(_parameter_from_proto(p) for p in resp.parameters), resp.next_page_token)
 
     def put_parameter(
         self,
@@ -412,6 +460,70 @@ class Client:
         self._cache.invalidate_param(str(ref))
         return resp.revision
 
+    def get_parameter_metadata(
+        self, key: str, *, timeout: Optional[float] = None
+    ) -> ParameterMetadata:
+        """Return parameter metadata and version history without its value."""
+        ref = self._resolve_ref(key)
+        try:
+            resp = self._param_stub.GetParameterMetadata(
+                kms_pb2.GetParameterMetadataRequest(ref=to_proto_ref(ref)),
+                metadata=self._auth_metadata(),
+                timeout=self._call_timeout(timeout),
+            )
+        except grpc.RpcError as e:
+            raise errors.map_grpc_error(e) from None
+        if not resp.HasField("ref"):
+            resp.ref.CopyFrom(to_proto_ref(ref))
+        return _parameter_metadata_from_proto(resp)
+
+    def verify_release_defaults(
+        self,
+        *,
+        namespace: str,
+        entries: Iterable[VerifyDefaultEntry | Mapping[str, object]],
+        release: str = "",
+        profile: str = "",
+        schema_sha256: str = "",
+        timeout: Optional[float] = None,
+    ) -> VerifyReleaseDefaultsResult:
+        """Compare value-free default hashes with the active release."""
+        request, requested = make_verify_request(
+            namespace=namespace, release=release, profile=profile,
+            schema_sha256=schema_sha256, entries=entries,
+        )
+        try:
+            response = self._release_stub.VerifyReleaseDefaults(
+                request, metadata=self._auth_metadata(), timeout=self._call_timeout(timeout)
+            )
+        except grpc.RpcError as exc:
+            raise errors.map_grpc_error(exc) from None
+        return verify_result(response, requested)
+
+    def apply_application_defaults(
+        self,
+        *,
+        namespace: str,
+        artifact: "bytes | bytearray | str",
+        overwrite: bool = False,
+        execute: bool = False,
+        plan_digest: str = "",
+        update_definition: bool = False,
+        timeout: Optional[float] = None,
+    ) -> ApplicationDefaultsApplyResult:
+        """Preview or execute a generated parameter-only defaults artifact."""
+        request = make_apply_request(
+            namespace=namespace, artifact=artifact, overwrite=overwrite,
+            execute=execute, plan_digest=plan_digest, update_definition=update_definition,
+        )
+        try:
+            response = self._admin_stub.ApplyApplicationDefaults(
+                request, metadata=self._auth_metadata(), timeout=self._call_timeout(timeout)
+            )
+        except grpc.RpcError as exc:
+            raise errors.map_grpc_error(exc) from None
+        return apply_result(response, expected_execute=execute)
+
     # --- secrets -----------------------------------------------------------
 
     def get_secret(
@@ -436,11 +548,13 @@ class Client:
         and would keep serving after a token rotation until the TTL expired.
         """
         ref = self._resolve_ref(key)
+        version, label = _normalize_selector(version, label)
         cache_key = str(ref)
         if not secret_token:
             cached = self._cache.get_secret(cache_key, version, label)
             if cached is not None:
                 return cached
+        generation = None if secret_token else self._cache.begin_secret_read(cache_key)
         try:
             resp = self._secret_stub.GetSecret(
                 kms_pb2.GetSecretRequest(ref=to_proto_ref(ref), version=version, label=label),
@@ -449,7 +563,12 @@ class Client:
             )
         except grpc.RpcError as e:
             raise errors.map_grpc_error(e) from None
+        if not resp.HasField("ref"):
+            raise errors.ParamStoreError("KMS secret response omitted resource reference", code="internal")
         rref = resp.ref
+        _assert_read_identity(
+            "secret", ref, rref.namespace.env, rref.namespace.app, rref.key, resp.version, version
+        )
         s = Secret(
             resp.value,
             env=rref.namespace.env or ref.ns.env,
@@ -459,7 +578,7 @@ class Client:
             content_type=resp.content_type,
         )
         if not secret_token:
-            self._cache.put_secret(cache_key, version, label, s)
+            self._cache.put_secret_if_unchanged(generation, version, label, s)
         return s
 
     def put_secret(
@@ -477,8 +596,18 @@ class Client:
     ) -> PutSecretResult:
         """Create a new immutable version of a secret (tooling use)."""
         ref = self._resolve_ref(key)
+        if not isinstance(value, (bytes, bytearray, str)):
+            raise errors.ConfigError("secret value must be bytes, bytearray, or str")
+        if (
+            isinstance(expires_at_unix_ms, bool)
+            or not isinstance(expires_at_unix_ms, int)
+            or not 0 <= expires_at_unix_ms < 2**63
+        ):
+            raise errors.ConfigError("expires_at_unix_ms must be a non-negative int64 integer")
         if isinstance(value, str):
             value = value.encode("utf-8")
+        elif isinstance(value, bytearray):
+            value = bytes(value)
         try:
             resp = self._secret_stub.PutSecret(
                 kms_pb2.PutSecretRequest(
@@ -498,6 +627,30 @@ class Client:
         self._cache.invalidate_secret(str(ref))
         return PutSecretResult(version=resp.version, revision=resp.revision, access_token=resp.access_token)
 
+    def list_secrets(
+        self,
+        namespace: "Optional[str | NamespaceRef]" = None,
+        key_prefix: str = "",
+        *,
+        page_size: int = 0,
+        page_token: str = "",
+        timeout: Optional[float] = None,
+    ) -> Page[SecretInfo]:
+        """List secret metadata only; plaintext is never returned."""
+        ns = self._resolve_namespace_arg(namespace)
+        try:
+            resp = self._secret_stub.ListSecrets(
+                kms_pb2.ListSecretsRequest(
+                    namespace=to_proto_namespace(ns), key_prefix=key_prefix,
+                    page_size=_valid_page_size(page_size), page_token=page_token,
+                ),
+                metadata=self._auth_metadata(),
+                timeout=self._call_timeout(timeout),
+            )
+        except grpc.RpcError as e:
+            raise errors.map_grpc_error(e) from None
+        return Page(tuple(_secret_info_from_proto(s) for s in resp.secrets), resp.next_page_token)
+
     def get_secret_metadata(self, key: str, *, timeout: Optional[float] = None) -> SecretInfo:
         """Return secret-level metadata (never plaintext)."""
         ref = self._resolve_ref(key)
@@ -509,6 +662,8 @@ class Client:
             )
         except grpc.RpcError as e:
             raise errors.map_grpc_error(e) from None
+        if not resp.HasField("secret"):
+            raise errors.ParamStoreError("KMS secret metadata response was empty", code="internal")
         return _secret_info_from_proto(resp.secret)
 
     def delete_secret(self, key: str, *, timeout: Optional[float] = None) -> int:
@@ -524,6 +679,73 @@ class Client:
             raise errors.map_grpc_error(e) from None
         self._cache.invalidate_secret(str(ref))
         return resp.revision
+
+    def set_secret_enabled(
+        self,
+        key: str,
+        enabled: bool,
+        *,
+        version: int = 0,
+        secret_token: str = "",
+        timeout: Optional[float] = None,
+    ) -> int:
+        """Enable or disable one version, or all versions when ``version`` is 0."""
+        _valid_uint64(version, "version")
+        ref = self._resolve_ref(key)
+        try:
+            resp = self._secret_stub.DisableSecret(
+                kms_pb2.DisableSecretRequest(ref=to_proto_ref(ref), version=version, enable=enabled),
+                metadata=self._auth_metadata(secret_token),
+                timeout=self._call_timeout(timeout),
+            )
+        except grpc.RpcError as e:
+            raise errors.map_grpc_error(e) from None
+        self._cache.invalidate_secret(str(ref))
+        return resp.revision
+
+    def destroy_secret_version(
+        self,
+        key: str,
+        version: int,
+        *,
+        secret_token: str = "",
+        timeout: Optional[float] = None,
+    ) -> int:
+        """Permanently destroy the plaintext for one exact secret version."""
+        _valid_uint64(version, "version", nonzero=True)
+        ref = self._resolve_ref(key)
+        try:
+            resp = self._secret_stub.DestroySecretVersion(
+                kms_pb2.DestroySecretVersionRequest(ref=to_proto_ref(ref), version=version),
+                metadata=self._auth_metadata(secret_token),
+                timeout=self._call_timeout(timeout),
+            )
+        except grpc.RpcError as e:
+            raise errors.map_grpc_error(e) from None
+        self._cache.invalidate_secret(str(ref))
+        return resp.revision
+
+    def promote_secret_version(
+        self,
+        key: str,
+        version: int,
+        *,
+        secret_token: str = "",
+        timeout: Optional[float] = None,
+    ) -> PromoteSecretResult:
+        """Move the ``current`` label to one exact secret version."""
+        _valid_uint64(version, "version", nonzero=True)
+        ref = self._resolve_ref(key)
+        try:
+            resp = self._secret_stub.PromoteSecretVersion(
+                kms_pb2.PromoteSecretVersionRequest(ref=to_proto_ref(ref), version=version),
+                metadata=self._auth_metadata(secret_token),
+                timeout=self._call_timeout(timeout),
+            )
+        except grpc.RpcError as e:
+            raise errors.map_grpc_error(e) from None
+        self._cache.invalidate_secret(str(ref))
+        return PromoteSecretResult(resp.current_version, resp.previous_version, resp.revision)
 
     # --- declarative resolution -------------------------------------------
 
@@ -582,3 +804,48 @@ class Client:
         if self._sub is None:
             return 0
         return self._sub._get_rev()
+
+    @property
+    def watch_status(self) -> WatchStatus:
+        """An immutable, value-free snapshot of watch/reconciliation health."""
+        if self._sub is None:
+            return WatchStatus(
+                state="stopped" if self.closed else "idle",
+                reconciliation="not_started",
+                current_revision=0,
+                reconnect_count=0,
+                namespace_count=0,
+                tracked_parameter_count=0,
+                watcher_count=0,
+                parameter_handler_count=0,
+            )
+        return self._sub.status()
+
+
+def _valid_uint64(value: int, name: str, *, nonzero: bool = False) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value < (1 if nonzero else 0) or value >= 2**64:
+        constraint = "a positive" if nonzero else "a non-negative"
+        raise errors.ConfigError(f"{name} must be {constraint} uint64 integer")
+    return value
+
+
+def _valid_page_size(value: int) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0 or value > 1000:
+        raise errors.ConfigError("page_size must be an integer between 0 and 1000")
+    return value
+
+
+def _normalize_selector(version: int, label: str) -> Tuple[int, str]:
+    _valid_uint64(version, "version")
+    if not isinstance(label, str):
+        raise errors.ConfigError("label must be a string")
+    return version, "" if version else label
+
+
+def _assert_read_identity(
+    kind: str, ref: Ref, env: str, app: str, key: str, returned_version: int, requested_version: int
+) -> None:
+    if (env, app, key) != (ref.ns.env, ref.ns.app, ref.key):
+        raise errors.ParamStoreError(f"KMS {kind} response identity mismatch", code="internal")
+    if requested_version and returned_version != requested_version:
+        raise errors.ParamStoreError(f"KMS {kind} response version mismatch", code="internal")
