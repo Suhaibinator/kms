@@ -22,6 +22,8 @@ from kms_paramstore.configstore import (
     ContractEntry,
     validate_manifest,
     ConfigSnapshot,
+    Duration,
+    start_async_managed_config,
 )
 from kms_paramstore.release import ReleaseSnapshot
 from kms_paramstore.secret import Secret
@@ -152,6 +154,14 @@ def test_view_normalization_collisions_are_rejected() -> None:
     with pytest.raises(TypeError, match="same Python class"):
         ConfigSpec.from_model(BadViewClasses)
 
+    class BadFieldView(BaseModel):
+        model_config = ConfigDict(frozen=True, strict=True, extra="forbid")
+        server_view: Annotated[int, Parameter("runtime")] = 1
+        value: Annotated[int, Parameter("runtime", views=("server-view",))] = 2
+
+    with pytest.raises(TypeError, match="snapshot field"):
+        ConfigSpec.from_model(BadFieldView)
+
 
 def test_release_contract_is_bounded_to_256_entries() -> None:
     fields = {
@@ -174,6 +184,14 @@ def test_manifest_mismatch_is_classified_before_resolution() -> None:
 def test_default_mismatch_callback_is_required_and_callable() -> None:
     with pytest.raises(TypeError, match="required"):
         Callbacks(None)  # type: ignore[arg-type]
+
+
+def test_defaults_model_input_omits_required_secret_fields() -> None:
+    defaults = RuntimeConfig(password=Secret(b"source-default-must-not-serialize"))
+    binding = ConfigBinding(RuntimeConfig, defaults)
+    encoded = "".join(binding.encode_defaults_groups().values())
+    assert "source-default-must-not-serialize" not in encoded
+    assert json.loads(binding.encode_defaults_groups()["runtime"])["port"] == 8080
 
 
 def test_secret_values_never_appear_in_errors() -> None:
@@ -304,10 +322,29 @@ def test_go_duration_allows_only_one_leading_sign() -> None:
     prepared = binding.prepare(_codec_snapshot(json.dumps({**base, "delay": "-1h2m"})))
     prepared.commit()
     assert binding.current.get("delay") == -dt.timedelta(hours=1, minutes=2)
-    assert json.loads(binding.encode_parameter_groups()["typed"])["delay"] == "-1h2m"
+    assert json.loads(binding.encode_parameter_groups()["typed"])["delay"] == "-1h2m0s"
     for invalid in ("1h-2m", "1h+2m", "--1h", "+-1h"):
         with pytest.raises(CandidateError):
             ConfigBinding(CodecConfig, {}).prepare(_codec_snapshot(json.dumps({**base, "delay": invalid})))
+
+
+def test_go_duration_retains_nanoseconds_and_uses_canonical_spellings() -> None:
+    from kms_paramstore.configstore.codecs import decode_value, encode_value
+    from kms_paramstore.configstore import parameter_hash
+
+    assert decode_value(Duration, "1ns") == Duration(1)
+    assert encode_value(Duration, decode_value(Duration, "1μs")) == "1µs"
+    assert encode_value(Duration, decode_value(Duration, "1500ns")) == "1.5µs"
+    assert encode_value(Duration, decode_value(Duration, "1h2m")) == "1h2m0s"
+    assert encode_value(Duration, Duration(0)) == "0s"
+    hashes = {
+        parameter_hash("json", json.dumps({"delay": encode_value(Duration, decode_value(Duration, value))}))
+        for value in ("1us", "1µs", "1μs")
+    }
+    assert len(hashes) == 1
+    for invalid in ("9223372036854775808ns", "-9223372036854775809ns"):
+        with pytest.raises(ValueError, match="int64"):
+            decode_value(Duration, invalid)
 
 
 class _AsyncLoader:
@@ -344,5 +381,40 @@ def test_async_manager_uses_event_loop_lifecycle_and_records_failure() -> None:
         with pytest.raises(ValueError, match="failed"):
             await failed.wait_until_ready_async()
         assert failed._done.is_set()
+
+    asyncio.run(scenario())
+
+
+def test_cancelled_async_start_stops_loader_and_releases_binding_claim(monkeypatch) -> None:
+    import kms_paramstore.async_release as async_release
+
+    async def scenario() -> None:
+        running = asyncio.Event()
+        stopped = asyncio.Event()
+
+        class BlockingLoader:
+            def __init__(self, client, config) -> None:
+                pass
+
+            async def run(self, prepare) -> None:
+                running.set()
+                await stopped.wait()
+
+            async def stop(self) -> None:
+                stopped.set()
+
+        monkeypatch.setattr(async_release, "AsyncReleaseLoader", BlockingLoader)
+        binding = ConfigBinding(RuntimeConfig, {})
+        task = asyncio.create_task(start_async_managed_config(
+            object(), release="runtime", binding=binding,
+            callbacks=Callbacks(lambda _report: None),
+        ))
+        await running.wait()
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert stopped.is_set()
+        binding._claim_start()
+        binding._release_start_claim()
 
     asyncio.run(scenario())

@@ -156,6 +156,7 @@ class ConfigSpec:
             names.add(item.json_name)
         view_methods: dict[str, str] = {}
         view_classes: dict[str, str] = {}
+        property_names = {item.property for item in parameters} | {item.property for item in secrets}
         view_items = [(item.property, item.views) for item in parameters]
         view_items.extend((item.property, item.views) for item in secrets)
         for property_name, views in view_items:
@@ -165,6 +166,10 @@ class ConfigSpec:
                 )
             for view in views:
                 method = _python_identifier(view)
+                if method in property_names:
+                    raise TypeError(
+                        f"configstore: view {view} collides with generated snapshot field {method}"
+                    )
                 if method in _GENERATED_STORE_RESERVED:
                     raise TypeError(f"configstore: view {view} collides with generated store API")
                 previous = view_methods.setdefault(method, view)

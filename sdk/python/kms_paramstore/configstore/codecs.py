@@ -8,16 +8,40 @@ import datetime as dt
 import re
 import types
 from decimal import Decimal, InvalidOperation
+from dataclasses import dataclass
 from typing import Annotated, Any, Mapping, Union, get_args, get_origin
 
 from pydantic import BaseModel, TypeAdapter
 
-_DURATION_PART = re.compile(r"((?:[0-9]+(?:\.[0-9]+)?|\.[0-9]+))(ns|us|µs|ms|s|m|h)")
+_DURATION_PART = re.compile(r"((?:[0-9]+(?:\.[0-9]+)?|\.[0-9]+))(ns|us|µs|μs|ms|s|m|h)")
 _DURATION_SCALE = {
-    "ns": Decimal(1), "us": Decimal(1_000), "µs": Decimal(1_000),
+    "ns": Decimal(1), "us": Decimal(1_000), "µs": Decimal(1_000), "μs": Decimal(1_000),
     "ms": Decimal(1_000_000), "s": Decimal(1_000_000_000),
     "m": Decimal(60_000_000_000), "h": Decimal(3_600_000_000_000),
 }
+_MIN_DURATION_NS = -(1 << 63)
+_MAX_DURATION_NS = (1 << 63) - 1
+
+
+@dataclass(frozen=True, order=True)
+class Duration:
+    """A Go-compatible duration retaining signed int64 nanosecond precision."""
+
+    nanoseconds: int
+
+    def __post_init__(self) -> None:
+        if isinstance(self.nanoseconds, bool) or not isinstance(self.nanoseconds, int):
+            raise TypeError("duration nanoseconds must be an integer")
+        if not (_MIN_DURATION_NS <= self.nanoseconds <= _MAX_DURATION_NS):
+            raise ValueError("duration exceeds signed int64 nanoseconds")
+
+    def to_timedelta(self) -> dt.timedelta:
+        if self.nanoseconds % 1000:
+            raise ValueError("duration is below Python timedelta precision")
+        return dt.timedelta(microseconds=self.nanoseconds // 1000)
+
+    def __str__(self) -> str:
+        return _format_duration_ns(self.nanoseconds)
 
 
 def decode_value(annotation: Any, value: Any) -> Any:
@@ -36,8 +60,9 @@ def decode_value(annotation: Any, value: Any) -> Any:
             raise ValueError("invalid base64") from error
         if base64.b64encode(decoded).decode("ascii") != value:
             raise ValueError("base64 is not canonical")
-    elif core is dt.timedelta:
-        decoded = _parse_duration(value)
+    elif core in (dt.timedelta, Duration):
+        duration = _parse_duration(value)
+        decoded = duration.to_timedelta() if core is dt.timedelta else duration
     elif origin in (list, set, frozenset):
         if not isinstance(value, list):
             raise TypeError("expected array")
@@ -69,12 +94,13 @@ def decode_value(annotation: Any, value: Any) -> Any:
             raise TypeError("expected object")
         decoded_fields: dict[str, Any] = {}
         for name, field in model_type.model_fields.items():
-            wire_name = field.validation_alias if isinstance(field.validation_alias, str) else field.alias or name
+            wire_name = field.serialization_alias or field.alias or name
+            input_name = field.validation_alias if isinstance(field.validation_alias, str) else field.alias or name
             if wire_name in value:
                 nested = Annotated[(field.annotation, *field.metadata)] if field.metadata else field.annotation
-                decoded_fields[name] = decode_value(nested, value[wire_name])
+                decoded_fields[input_name] = decode_value(nested, value[wire_name])
         if set(value) - {
-            (field.validation_alias if isinstance(field.validation_alias, str) else field.alias or name)
+            (field.serialization_alias or field.alias or name)
             for name, field in model_type.model_fields.items()
         }:
             raise ValueError("unknown nested field")
@@ -103,7 +129,9 @@ def encode_value(annotation: Any, value: Any) -> Any:
     if core is bytes:
         return base64.b64encode(value).decode("ascii")
     if core is dt.timedelta:
-        return _format_duration(value)
+        return _format_duration_ns(_timedelta_nanoseconds(value))
+    if core is Duration:
+        return _format_duration_ns(value.nanoseconds)
     if origin in (list, set, frozenset):
         return [encode_value(args[0], item) for item in value]
     if origin is tuple:
@@ -132,11 +160,11 @@ def _core(annotation: Any) -> Any:
     return get_args(annotation)[0] if get_origin(annotation) is Annotated else annotation
 
 
-def _parse_duration(value: Any) -> dt.timedelta:
+def _parse_duration(value: Any) -> Duration:
     if not isinstance(value, str) or not value:
         raise TypeError("expected Go duration string")
     if value == "0":
-        return dt.timedelta()
+        return Duration(0)
     sign = 1
     if value.startswith(("+", "-")):
         sign = -1 if value[0] == "-" else 1
@@ -153,21 +181,52 @@ def _parse_duration(value: Any) -> dt.timedelta:
             index = match.end()
     except InvalidOperation as error:
         raise ValueError("invalid duration") from error
-    # timedelta is microsecond-resolution. Reject rather than silently round.
-    if total % 1000:
-        raise ValueError("duration is below Python microsecond precision")
-    return dt.timedelta(microseconds=sign * int(total / 1000))
+    if total != total.to_integral_value():
+        raise ValueError("duration is below nanosecond precision")
+    nanoseconds = sign * int(total)
+    return Duration(nanoseconds)
 
 
-def _format_duration(value: dt.timedelta) -> str:
-    micros = ((value.days * 86400 + value.seconds) * 1_000_000) + value.microseconds
-    if micros == 0:
-        return "0"
-    sign = "-" if micros < 0 else ""
-    remaining = abs(micros)
+def _timedelta_nanoseconds(value: dt.timedelta) -> int:
+    nanoseconds = (
+        ((value.days * 86400 + value.seconds) * 1_000_000) + value.microseconds
+    ) * 1000
+    if not (_MIN_DURATION_NS <= nanoseconds <= _MAX_DURATION_NS):
+        raise ValueError("duration exceeds signed int64 nanoseconds")
+    return nanoseconds
+
+
+def _format_duration_ns(nanoseconds: int) -> str:
+    Duration(nanoseconds)
+    if nanoseconds == 0:
+        return "0s"
+    sign = "-" if nanoseconds < 0 else ""
+    value = abs(nanoseconds)
+    if value < 1_000:
+        return f"{sign}{value}ns"
+    if value < 1_000_000:
+        return sign + _format_decimal_unit(value, 1_000, 3, "µs")
+    if value < 1_000_000_000:
+        return sign + _format_decimal_unit(value, 1_000_000, 6, "ms")
+
+    hours, remainder = divmod(value, 3_600_000_000_000)
+    minutes, remainder = divmod(remainder, 60_000_000_000)
+    seconds, fraction = divmod(remainder, 1_000_000_000)
     parts: list[str] = []
-    for unit, size in (("h", 3_600_000_000), ("m", 60_000_000), ("s", 1_000_000), ("ms", 1_000), ("us", 1)):
-        count, remaining = divmod(remaining, size)
-        if count:
-            parts.append(f"{count}{unit}")
+    if hours:
+        parts.append(f"{hours}h")
+    if hours or minutes:
+        parts.append(f"{minutes}m")
+    rendered_seconds = str(seconds)
+    if fraction:
+        rendered_seconds += "." + f"{fraction:09d}".rstrip("0")
+    parts.append(rendered_seconds + "s")
     return sign + "".join(parts)
+
+
+def _format_decimal_unit(value: int, scale: int, precision: int, suffix: str) -> str:
+    whole, remainder = divmod(value, scale)
+    rendered = str(whole)
+    if remainder:
+        rendered += "." + f"{remainder:0{precision}d}".rstrip("0")
+    return rendered + suffix

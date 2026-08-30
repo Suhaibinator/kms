@@ -163,7 +163,7 @@ class ConfigBinding(Generic[T]):
                     raise CandidateError("config_decode_failed", paths=(secret_field.alias,))
                 payload[secret_field.property] = _clone_secret(secret)
             try:
-                candidate = self.model.model_validate(payload, strict=True)
+                candidate = self.model.model_validate(_model_input(self.model, payload), strict=True)
             except ValidationError as error:
                 raise CandidateError("config_validation_failed", error) from error
             _require_finite(candidate, tuple(field.property for field in self.spec.parameters))
@@ -172,7 +172,9 @@ class ConfigBinding(Generic[T]):
             for secret_field in self.spec.secrets:
                 effective_payload[secret_field.property] = _clone_secret(secrets[secret_field.alias])
             try:
-                effective = self.model.model_validate(effective_payload, strict=True)
+                effective = self.model.model_validate(
+                    _model_input(self.model, effective_payload), strict=True
+                )
             except ValidationError as error:
                 raise CandidateError("config_validation_failed", error) from error
             _require_finite(effective, tuple(field.property for field in self.spec.parameters))
@@ -234,8 +236,12 @@ class ConfigBinding(Generic[T]):
             raise CandidateError("config_decode_failed", error) from error
 
     def _normalize_defaults(self, defaults: Mapping[str, Any] | T) -> dict[str, Any]:
-        raw = defaults.model_dump(round_trip=True) if isinstance(defaults, BaseModel) else dict(defaults)
         allowed = {field.property for field in self.spec.parameters} | set(self.spec.unmanaged)
+        raw = (
+            defaults.model_dump(include=allowed, round_trip=True)
+            if isinstance(defaults, BaseModel)
+            else dict(defaults)
+        )
         unknown = set(raw) - allowed
         if unknown:
             raise TypeError("configstore: defaults contain unknown or secret fields")
@@ -256,6 +262,10 @@ class ConfigBinding(Generic[T]):
             if self._started:
                 raise RuntimeError("configstore: managed store may only be started once")
             self._started = True
+
+    def _release_start_claim(self) -> None:
+        with self._lock:
+            self._started = False
 
 
 class _PreparedCandidate(Generic[T]):
@@ -494,16 +504,31 @@ async def start_async_managed_config(
 ) -> AsyncManagedConfigManager[T]:
     from ..async_release import AsyncReleaseLoader, AsyncReleaseLoaderConfig
     binding._claim_start()
-    kwargs = dict(name=release, namespace=namespace, **loader_options)
-    if "validate_manifest" in inspect.signature(AsyncReleaseLoaderConfig).parameters:
-        kwargs["validate_manifest"] = lambda *args: validate_manifest(
-            binding.spec.contract, args[-1].entries
+    manager: AsyncManagedConfigManager[T] | None = None
+    try:
+        kwargs = dict(name=release, namespace=namespace, **loader_options)
+        if "validate_manifest" in inspect.signature(AsyncReleaseLoaderConfig).parameters:
+            kwargs["validate_manifest"] = lambda *args: validate_manifest(
+                binding.spec.contract, args[-1].entries
+            )
+        manager = AsyncManagedConfigManager(
+            AsyncReleaseLoader(client, AsyncReleaseLoaderConfig(**kwargs)), binding, callbacks
         )
-    manager = AsyncManagedConfigManager(
-        AsyncReleaseLoader(client, AsyncReleaseLoaderConfig(**kwargs)), binding, callbacks
-    )
-    await manager.start_async()
-    await manager.wait_until_ready_async()
+        await manager.start_async()
+        await manager.wait_until_ready_async()
+    except BaseException:
+        if manager is not None:
+            try:
+                await manager.stop_async()
+            except BaseException:
+                pass
+            try:
+                await manager.wait_async()
+            except BaseException:
+                pass
+        binding._release_start_claim()
+        raise
+    assert manager is not None
     return manager
 
 
@@ -542,6 +567,20 @@ def _strict_group(document: str, expected: tuple[str, ...]) -> dict[str, Any]:
     if not isinstance(value, dict) or set(value) != set(expected):
         raise CandidateError("config_decode_failed")
     return value
+
+
+def _model_input(model: type[BaseModel], values: Mapping[str, Any]) -> dict[str, Any]:
+    """Map stable Python property keys onto Pydantic's validation aliases."""
+    result: dict[str, Any] = {}
+    for property_name, value in values.items():
+        field = model.model_fields[property_name]
+        input_name = (
+            field.validation_alias
+            if isinstance(field.validation_alias, str)
+            else field.alias or property_name
+        )
+        result[input_name] = value
+    return result
 
 
 def _same(left: Any, right: Any) -> bool:

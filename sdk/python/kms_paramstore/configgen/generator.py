@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 import tempfile
 import datetime as dt
@@ -15,6 +16,7 @@ from typing import Annotated, Any, Union, get_args, get_origin
 
 from pydantic import BaseModel
 
+from ..configstore.codecs import Duration
 from ..configstore.model import ConfigSpec
 from ..secret import Secret
 
@@ -144,7 +146,7 @@ def _encoding(annotation: Any) -> str:
         return "float64"
     if core is bytes:
         return "base64"
-    if core is dt.timedelta:
+    if core in (dt.timedelta, Duration):
         return "go-duration"
     if origin in (list, tuple):
         return "array"
@@ -166,30 +168,60 @@ def _schema_for(annotation: Any) -> dict[str, Any]:
         schema: dict[str, Any] = {"type": "boolean"}
     elif core is str:
         schema = {"type": "string"}
+        _apply_constraints(
+            schema, metadata,
+            (("min_length", "minLength"), ("max_length", "maxLength"), ("pattern", "pattern")),
+        )
     elif core is int:
         minimum, maximum = -(1 << 63), (1 << 63) - 1
+        exclusive_minimum: int | None = None
+        exclusive_maximum: int | None = None
+        multiple_of: int | None = None
         for item in metadata:
             if getattr(item, "ge", None) is not None:
                 minimum = max(minimum, item.ge)
             if getattr(item, "gt", None) is not None:
-                minimum = max(minimum, item.gt + 1)
+                exclusive_minimum = item.gt if exclusive_minimum is None else max(exclusive_minimum, item.gt)
             if getattr(item, "le", None) is not None:
                 maximum = min(maximum, item.le)
             if getattr(item, "lt", None) is not None:
-                maximum = min(maximum, item.lt - 1)
+                exclusive_maximum = item.lt if exclusive_maximum is None else min(exclusive_maximum, item.lt)
+            if getattr(item, "multiple_of", None) is not None:
+                multiple_of = item.multiple_of
         schema = {"type": "integer", "minimum": minimum, "maximum": maximum}
+        if exclusive_minimum is not None:
+            schema["exclusiveMinimum"] = exclusive_minimum
+        if exclusive_maximum is not None:
+            schema["exclusiveMaximum"] = exclusive_maximum
+        if multiple_of is not None:
+            schema["multipleOf"] = multiple_of
     elif core is float:
         float_maximum = float.fromhex("0x1.fffffffffffffp+1023")
         schema = {"type": "number", "minimum": -float_maximum, "maximum": float_maximum}
+        _apply_constraints(
+            schema, metadata,
+            (
+                ("ge", "minimum"), ("gt", "exclusiveMinimum"),
+                ("le", "maximum"), ("lt", "exclusiveMaximum"),
+                ("multiple_of", "multipleOf"),
+            ),
+        )
     elif core is bytes:
         schema = {"type": "string", "format": "kms-base64"}
-    elif core is dt.timedelta:
+    elif core in (dt.timedelta, Duration):
         schema = {"type": "string", "format": "go-duration"}
     elif origin in (list, set, frozenset):
         schema = {"type": "array", "items": _schema_for(args[0])}
+        _apply_constraints(
+            schema, metadata, (("min_length", "minItems"), ("max_length", "maxItems")),
+        )
     elif origin is tuple:
         if len(args) == 2 and args[1] is Ellipsis:
             schema = {"type": "array", "items": _schema_for(args[0])}
+            _apply_constraints(
+                schema, metadata,
+                (("min_length", "minItems"), ("max_length", "maxItems")),
+            )
         else:
             schema = {
                 "type": "array", "prefixItems": [_schema_for(item) for item in args],
@@ -199,6 +231,10 @@ def _schema_for(annotation: Any) -> dict[str, Any]:
         if args[0] is not str:
             raise TypeError("configgen: mappings must use string keys")
         schema = {"type": "object", "additionalProperties": _schema_for(args[1])}
+        _apply_constraints(
+            schema, metadata,
+            (("min_length", "minProperties"), ("max_length", "maxProperties")),
+        )
     elif origin in (Union, types.UnionType):
         members = tuple(item for item in args if item is not type(None))
         if len(members) != 1 or len(members) == len(args):
@@ -211,7 +247,8 @@ def _schema_for(annotation: Any) -> dict[str, Any]:
             json_name = field.serialization_alias or field.alias or name
             nested = Annotated[(field.annotation, *field.metadata)] if field.metadata else field.annotation
             properties[json_name] = _schema_for(nested)
-            required.append(json_name)
+            if field.is_required():
+                required.append(json_name)
         schema = {
             "type": "object", "additionalProperties": False,
             "required": required, "properties": properties,
@@ -219,6 +256,20 @@ def _schema_for(annotation: Any) -> dict[str, Any]:
     else:
         raise TypeError(f"configgen: unsupported portable field type {core!r}")
     return schema
+
+
+def _apply_constraints(
+    schema: dict[str, Any], metadata: tuple[Any, ...], names: tuple[tuple[str, str], ...],
+) -> None:
+    for source, target in names:
+        values = [getattr(item, source) for item in metadata if getattr(item, source, None) is not None]
+        if values:
+            value = values[-1]
+            if target == "pattern" and hasattr(value, "pattern"):
+                value = value.pattern
+            if isinstance(value, float) and not math.isfinite(value):
+                raise TypeError(f"configgen: {source} constraint must be finite")
+            schema[target] = value
 
 
 def _views(spec: ConfigSpec) -> dict[str, list[str]]:
@@ -239,12 +290,13 @@ def _identifier(value: str) -> str:
 def _render_binding(module: str, type_name: str, digest: str, contract: object, spec: ConfigSpec) -> str:
     lines = [
         '"""Generated by kms-config-gen-py; DO NOT EDIT."""',
-        "from __future__ import annotations", "", "from typing import Any, Mapping, cast", "",
+        "from __future__ import annotations", "", "import datetime as _dt",
+        "from typing import Any, Mapping, cast", "",
         f"import {module} as _source",
         "from kms_paramstore import Secret",
         "from kms_paramstore.configstore import (",
         "    AsyncManagedConfigManager, Callbacks, ConfigBinding, ConfigSnapshot,",
-        "    ConfigView, ContractEntry, ManagedConfigManager, VerifyResult,",
+        "    ConfigView, ContractEntry, Duration, ManagedConfigManager, VerifyResult,",
         "    encode_defaults_artifact as _encode_defaults_artifact,",
         "    export_defaults as _export_defaults,",
         "    start_async_managed_config as _start_async_managed_config,",
@@ -252,7 +304,7 @@ def _render_binding(module: str, type_name: str, digest: str, contract: object, 
         "    verify_defaults as _verify_defaults,",
         "    verify_defaults_async as _verify_defaults_async,",
         ")", "",
-        f"{type_name} = _source.{type_name}", "",
+        f"_RootConfig = _source.{type_name}", "",
         f'SCHEMA_SHA256 = "{digest}"',
         "CONTRACT = (",
     ]
@@ -273,7 +325,7 @@ def _render_binding(module: str, type_name: str, digest: str, contract: object, 
             ])
         if lines[-1] == "":
             lines.pop()
-    lines.extend(["", f"class Snapshot(ConfigSnapshot[{type_name}]):"])
+    lines.extend(["", "class Snapshot(ConfigSnapshot[_RootConfig]):"])
     all_fields = [(field.property, field.annotation) for field in spec.parameters]
     all_fields.extend((field.property, Secret) for field in spec.secrets)
     for property_name, annotation in sorted(all_fields):
@@ -293,18 +345,18 @@ def _render_binding(module: str, type_name: str, digest: str, contract: object, 
     if lines[-1] == "":
         lines.pop()
     lines.extend([
-        "", f"class GeneratedConfigStore(ConfigBinding[{type_name}]):",
-        f"    def __init__(self, defaults: Mapping[str, Any] | {type_name}) -> None:",
-        f"        super().__init__({type_name}, defaults, snapshot_type=Snapshot)",
+        "", "class GeneratedConfigStore(ConfigBinding[_RootConfig]):",
+        "    def __init__(self, defaults: Mapping[str, Any] | _RootConfig) -> None:",
+        "        super().__init__(_RootConfig, defaults, snapshot_type=Snapshot)",
         "",
         "    @property",
         "    def current(self) -> Snapshot:",
         "        return cast(Snapshot, super().current)",
         "",
-        f"    def start(self, client: object, *, release: str, callbacks: Callbacks, namespace: str | None = None, **options: Any) -> ManagedConfigManager[{type_name}]:",
+        "    def start(self, client: object, *, release: str, callbacks: Callbacks, namespace: str | None = None, **options: Any) -> ManagedConfigManager[_RootConfig]:",
         "        return _start_managed_config(client, release=release, binding=self, callbacks=callbacks, namespace=namespace, **options)",
         "",
-        f"    async def start_async(self, client: object, *, release: str, callbacks: Callbacks, namespace: str | None = None, **options: Any) -> AsyncManagedConfigManager[{type_name}]:",
+        "    async def start_async(self, client: object, *, release: str, callbacks: Callbacks, namespace: str | None = None, **options: Any) -> AsyncManagedConfigManager[_RootConfig]:",
         "        return await _start_async_managed_config(client, release=release, binding=self, callbacks=callbacks, namespace=namespace, **options)",
         "",
         "    def defaults_artifact(self, profile: str) -> str:",
@@ -342,6 +394,10 @@ def _type_expr(annotation: Any, source_module: str) -> str:
     origin, args = get_origin(core), get_args(core)
     if core in (bool, str, int, float, bytes):
         return core.__name__
+    if core is dt.timedelta:
+        return "_dt.timedelta"
+    if core is Duration:
+        return "Duration"
     if getattr(core, "__name__", "") == "Secret" and getattr(core, "__module__", "") == "kms_paramstore.secret":
         return "Secret"
     if origin in (list, set, frozenset):

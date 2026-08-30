@@ -10,7 +10,7 @@ import pytest
 from pydantic import BaseModel, ConfigDict, Field
 
 from kms_paramstore.configgen import StaleArtifactsError, generate_artifacts, write_artifacts
-from kms_paramstore.configstore import Parameter, SecretField
+from kms_paramstore.configstore import Duration, Parameter, SecretField
 from kms_paramstore.configstore import Callbacks, ContractEntry
 from kms_paramstore.release import ReleaseSnapshot
 from kms_paramstore.secret import Secret
@@ -146,3 +146,81 @@ def test_portable_schema_exactly_describes_runtime_wire_codecs() -> None:
     prepared.commit()
     encoded = json.loads(binding.encode_parameter_groups()["portable"])
     assert encoded == {"count": 5, "nested": {"label": "ok"}, "payload": "AAE=", "timeout": "1s"}
+
+
+class ConstrainedNested(BaseModel):
+    model_config = ConfigDict(
+        frozen=True, strict=True, extra="forbid", populate_by_name=False,
+    )
+    required_name: Annotated[str, Field(alias="required-name", min_length=2, max_length=8, pattern="^[a-z]+$")]
+    retry_ratio: Annotated[float, Field(alias="retry-ratio", gt=0, le=1, multiple_of=0.1)] = 0.5
+    labels: Annotated[list[str], Field(min_length=1, max_length=3)] = ["default"]
+    weights: Annotated[dict[str, int], Field(min_length=1, max_length=2)] = {"one": 1}
+
+
+class AliasedConfig(BaseModel):
+    model_config = ConfigDict(
+        frozen=True, strict=True, extra="forbid", arbitrary_types_allowed=True,
+        populate_by_name=False,
+    )
+    port: Annotated[int, Parameter("runtime")] = Field(8080, alias="wire-port")
+    nested: Annotated[ConstrainedNested, Parameter("runtime")] = Field(
+        default=ConstrainedNested.model_validate({"required-name": "okay"}),
+        alias="wire-nested",
+    )
+    precise: Annotated[Duration, Parameter("runtime")] = Duration(1)
+    password: Annotated[Secret, SecretField("password")]
+
+
+def test_schema_constraints_aliases_and_nested_defaults_match_runtime() -> None:
+    artifacts = generate_artifacts(AliasedConfig, source_module=__name__)
+    properties = json.loads(artifacts.schema)["properties"]["runtime"]["properties"]
+    nested = properties["wire-nested"]
+    assert nested["required"] == ["required-name"]
+    assert nested["properties"]["required-name"] == {
+        "type": "string", "minLength": 2, "maxLength": 8, "pattern": "^[a-z]+$",
+    }
+    assert nested["properties"]["retry-ratio"] == {
+        "type": "number", "minimum": -float.fromhex("0x1.fffffffffffffp+1023"),
+        "maximum": 1, "exclusiveMinimum": 0, "multipleOf": 0.1,
+    }
+    assert nested["properties"]["labels"]["minItems"] == 1
+    assert nested["properties"]["labels"]["maxItems"] == 3
+    assert nested["properties"]["weights"]["minProperties"] == 1
+    assert nested["properties"]["weights"]["maxProperties"] == 2
+    assert properties["precise"] == {"type": "string", "format": "go-duration"}
+
+    from kms_paramstore.configstore import ConfigBinding
+    binding = ConfigBinding(AliasedConfig, {})
+    prepared = binding.prepare(ReleaseSnapshot(
+        namespace="dev/app", name="runtime", version=1, activation_revision=1,
+        schema_id="app", schema_version=1, digest="digest", metadata_json="{}", entries=(),
+        parameters={"runtime": json.dumps({
+            "wire-port": 9000,
+            "wire-nested": {"required-name": "valid", "retry-ratio": 0.7,
+                            "labels": ["x"], "weights": {"x": 1}},
+            "precise": "1ns",
+        })},
+        secrets={"password": Secret(b"secret", version=1)},
+    ))
+    prepared.commit()
+    assert binding.current.config().port == 9000
+    assert binding.current.config().nested.required_name == "valid"
+    encoded = json.loads(binding.encode_parameter_groups()["runtime"])
+    assert set(encoded) == {"wire-port", "wire-nested", "precise"}
+    assert encoded["wire-nested"]["required-name"] == "valid"
+    assert encoded["precise"] == "1ns"
+
+
+def test_source_model_named_snapshot_does_not_collide_with_generated_snapshot() -> None:
+    class Snapshot(BaseModel):
+        model_config = ConfigDict(
+            frozen=True, strict=True, extra="forbid", arbitrary_types_allowed=True,
+        )
+        value: Annotated[int, Parameter("runtime")] = 1
+        password: Annotated[Secret, SecretField("password")]
+
+    binding = generate_artifacts(Snapshot, source_module=__name__).binding
+    assert "_RootConfig = _source.Snapshot" in binding
+    assert "Snapshot = _source.Snapshot" not in binding
+    compile(binding, "<generated>", "exec")

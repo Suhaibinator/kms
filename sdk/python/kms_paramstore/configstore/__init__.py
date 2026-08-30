@@ -1,6 +1,7 @@
 """Managed Pydantic configuration with Go/TypeScript-compatible semantics."""
 
 from .canonical import canonical_parameter_value, parameter_hash
+from .codecs import Duration
 from .contract import ContractEntry, validate_contract, validate_manifest
 from .defaults import (
     DEFAULTS_ARTIFACT_FORMAT,
