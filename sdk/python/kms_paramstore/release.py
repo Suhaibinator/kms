@@ -55,29 +55,31 @@ __all__ = [
     "ReleaseStats",
     "ReleaseStatus",
     "SecretTokenProvider",
+    "RELEASE_REJECTION_CATEGORIES",
+    "RELEASE_STATES",
     "run_typed_release",
 ]
 
 _KIND_PARAMETER = "parameter"
 _KIND_SECRET = "secret"
-_STATES = ("received", "prepared", "applied", "rejected")
-_REJECTION_CATEGORIES = frozenset(
-    {
-        "resolution_failed",
-        "token_unavailable",
-        "version_mismatch",
-        "digest_mismatch",
-        "prepare_failed",
-        "config_contract_mismatch",
-        "config_decode_failed",
-        "config_validation_failed",
-        "default_mismatch",
-        "restart_required",
-        "superseded",
-        "active_check_failed",
-        "internal",
-    }
+RELEASE_STATES = ("received", "prepared", "applied", "rejected")
+RELEASE_REJECTION_CATEGORIES = (
+    "resolution_failed",
+    "token_unavailable",
+    "version_mismatch",
+    "digest_mismatch",
+    "prepare_failed",
+    "config_contract_mismatch",
+    "config_decode_failed",
+    "config_validation_failed",
+    "default_mismatch",
+    "restart_required",
+    "superseded",
+    "active_check_failed",
+    "internal",
 )
+_STATES = RELEASE_STATES
+_REJECTION_CATEGORIES = frozenset(RELEASE_REJECTION_CATEGORIES)
 _DIAGNOSTIC_LIMIT = 128
 _MAX_DIVERGENT_FIELD_COUNT = 65_535
 

@@ -290,6 +290,13 @@ def test_release_protocols_and_async_loader_are_publicly_exported():
     assert kms_paramstore.ReleaseCandidateError is release_module.ReleaseCandidateError
     assert kms_paramstore.AsyncReleaseLoader.__name__ == "AsyncReleaseLoader"
     assert kms_paramstore.AsyncReleaseLoaderConfig.__name__ == "AsyncReleaseLoaderConfig"
+    assert "restart_required" in kms_paramstore.RELEASE_REJECTION_CATEGORIES
+    assert kms_paramstore.RELEASE_STATES == (
+        "received",
+        "prepared",
+        "applied",
+        "rejected",
+    )
 
 
 def test_release_loader_rejects_overlap_but_allows_sequential_runs(monkeypatch):
