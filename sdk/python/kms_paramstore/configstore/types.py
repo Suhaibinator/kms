@@ -8,6 +8,7 @@ from types import MappingProxyType
 from typing import Any, Generic, Mapping, TypeVar
 
 from pydantic import BaseModel
+from ..secret import Secret
 
 T = TypeVar("T", bound=BaseModel)
 
@@ -58,17 +59,29 @@ class ReleaseIdentity:
 class ConfigSnapshot(Generic[T]):
     """Immutable generation holder returning defensive Pydantic copies."""
 
-    __slots__ = ("_config", "release")
+    __slots__ = ("_config", "release", "_sealed")
+    _config: T
+    release: ReleaseIdentity
+    _sealed: bool
 
     def __init__(self, config: T, release: ReleaseIdentity = ReleaseIdentity()) -> None:
-        self._config = config.model_copy(deep=True)
-        self.release = release
+        object.__setattr__(self, "_config", _clone_value(config))
+        object.__setattr__(self, "release", release)
+        object.__setattr__(self, "_sealed", True)
+
+    def __setattr__(self, name: str, value: object) -> None:
+        if getattr(self, "_sealed", False):
+            raise AttributeError("configstore: snapshot is immutable")
+        object.__setattr__(self, name, value)
 
     def config(self) -> T:
-        return self._config.model_copy(deep=True)
+        return _clone_value(self._config)
 
     def get(self, key: str) -> Any:
-        return copy.deepcopy(getattr(self._config, key))
+        return _clone_value(getattr(self._config, key))
+
+    def __repr__(self) -> str:
+        return f"ConfigSnapshot(release={self.release!r}, config=[REDACTED])"
 
 
 @dataclass(frozen=True)
@@ -164,3 +177,30 @@ class ManagedConfigStats:
     default_divergent: bool = False
     applied_release_version: int = 0
     applied_activation_revision: int = 0
+
+
+def _clone_value(value: Any) -> Any:
+    if isinstance(value, Secret):
+        return Secret(
+            value.value,
+            env=value.env,
+            app=value.app,
+            key=value.key,
+            version=value.version,
+            content_type=value.content_type,
+        )
+    if isinstance(value, BaseModel):
+        updates = {
+            name: _clone_value(getattr(value, name))
+            for name in value.__class__.model_fields
+        }
+        return value.model_copy(update=updates, deep=True)
+    if isinstance(value, dict):
+        return {_clone_value(key): _clone_value(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_clone_value(item) for item in value]
+    if isinstance(value, tuple):
+        return tuple(_clone_value(item) for item in value)
+    if isinstance(value, set):
+        return {_clone_value(item) for item in value}
+    return copy.deepcopy(value)

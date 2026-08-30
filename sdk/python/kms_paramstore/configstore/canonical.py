@@ -5,7 +5,6 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-import sys
 from dataclasses import dataclass
 from typing import Any
 
@@ -30,27 +29,81 @@ class _Parser:
         self.index = 0
 
     def parse(self) -> Any:
-        self._space()
-        value = self._value(0)
+        root: list[Any] = [None]
+        tasks: list[tuple[Any, ...]] = [("value", root, 0)]
+        while tasks:
+            task = tasks.pop()
+            kind = task[0]
+            if kind == "value":
+                holder, depth = task[1], task[2]
+                if depth > 1000:
+                    raise ValueError("invalid JSON")
+                self._space()
+                if self.index >= len(self.source):
+                    raise ValueError("invalid JSON")
+                character = self.source[self.index]
+                if character == "[":
+                    self.index += 1
+                    value: Any = []
+                    holder[0] = value
+                    tasks.append(("array", value, depth, True))
+                elif character == "{":
+                    self.index += 1
+                    value = _Object()
+                    holder[0] = value
+                    tasks.append(("object", value, set(), depth, True))
+                else:
+                    holder[0] = self._scalar()
+            elif kind == "array":
+                array, depth, allow_close = task[1], task[2], task[3]
+                self._space()
+                if allow_close and self._take("]"):
+                    continue
+                holder = [None]
+                tasks.extend((("array_after", array, holder, depth), ("value", holder, depth + 1)))
+            elif kind == "array_after":
+                array, holder, depth = task[1], task[2], task[3]
+                array.append(holder[0])
+                self._space()
+                if self._take("]"):
+                    continue
+                if not self._take(","):
+                    raise ValueError("invalid JSON array")
+                tasks.append(("array", array, depth, False))
+            elif kind == "object":
+                obj, seen, depth, allow_close = task[1], task[2], task[3], task[4]
+                self._space()
+                if allow_close and self._take("}"):
+                    continue
+                if self.index >= len(self.source) or self.source[self.index] != '"':
+                    raise ValueError("invalid JSON object")
+                name = self._string()
+                if name in seen:
+                    raise ValueError("duplicate object key")
+                seen.add(name)
+                self._space()
+                if not self._take(":"):
+                    raise ValueError("invalid JSON object")
+                holder = [None]
+                tasks.extend((("object_after", obj, seen, name, holder, depth), ("value", holder, depth + 1)))
+            elif kind == "object_after":
+                obj, seen, name, holder, depth = task[1:]
+                obj.append((name, holder[0]))
+                self._space()
+                if self._take("}"):
+                    continue
+                if not self._take(","):
+                    raise ValueError("invalid JSON object")
+                tasks.append(("object", obj, seen, depth, False))
         self._space()
         if self.index != len(self.source):
             raise ValueError("trailing data")
-        return value
+        return root[0]
 
-    def _space(self) -> None:
-        while self.index < len(self.source) and self.source[self.index] in _WS:
-            self.index += 1
-
-    def _value(self, depth: int) -> Any:
-        if depth > 1000 or self.index >= len(self.source):
-            raise ValueError("invalid JSON")
+    def _scalar(self) -> Any:
         character = self.source[self.index]
         if character == '"':
             return self._string()
-        if character == "{":
-            return self._object(depth)
-        if character == "[":
-            return self._array(depth)
         for token, value in (("null", None), ("true", True), ("false", False)):
             if self.source.startswith(token, self.index):
                 self.index += len(token)
@@ -60,6 +113,10 @@ class _Parser:
             raise ValueError("invalid JSON")
         self.index = match.end()
         return _Number(match.group(0))
+
+    def _space(self) -> None:
+        while self.index < len(self.source) and self.source[self.index] in _WS:
+            self.index += 1
 
     def _string(self) -> str:
         start = self.index
@@ -82,47 +139,6 @@ class _Parser:
                 return _replace_surrogates(decoded)
         raise ValueError("unterminated JSON string")
 
-    def _array(self, depth: int) -> list[Any]:
-        self.index += 1
-        self._space()
-        values: list[Any] = []
-        if self._take("]"):
-            return values
-        while True:
-            values.append(self._value(depth + 1))
-            self._space()
-            if self._take("]"):
-                return values
-            if not self._take(","):
-                raise ValueError("invalid JSON array")
-            self._space()
-
-    def _object(self, depth: int) -> _Object:
-        self.index += 1
-        self._space()
-        values = _Object()
-        seen: set[str] = set()
-        if self._take("}"):
-            return values
-        while True:
-            if self.index >= len(self.source) or self.source[self.index] != '"':
-                raise ValueError("invalid JSON object")
-            name = self._string()
-            if name in seen:
-                raise ValueError("duplicate object key")
-            seen.add(name)
-            self._space()
-            if not self._take(":"):
-                raise ValueError("invalid JSON object")
-            self._space()
-            values.append((name, self._value(depth + 1)))
-            self._space()
-            if self._take("}"):
-                return values
-            if not self._take(","):
-                raise ValueError("invalid JSON object")
-            self._space()
-
     def _take(self, token: str) -> bool:
         if self.source.startswith(token, self.index):
             self.index += len(token)
@@ -142,22 +158,43 @@ def _quote(value: str) -> str:
 
 
 def _write(value: Any) -> str:
-    if value is None:
-        return "null"
-    if value is True:
-        return "true"
-    if value is False:
-        return "false"
-    if isinstance(value, _Number):
-        return value.lexeme
-    if isinstance(value, str):
-        return _quote(value)
-    if isinstance(value, _Object):
-        properties = sorted(value, key=lambda item: item[0].encode("utf-8"))
-        return "{" + ",".join(f"{_quote(k)}:{_write(v)}" for k, v in properties) + "}"
-    if isinstance(value, list):
-        return "[" + ",".join(_write(item) for item in value) + "]"
-    raise TypeError("unsupported canonical JSON node")
+    output: list[str] = []
+    tasks: list[tuple[str, Any]] = [("value", value)]
+    while tasks:
+        kind, item = tasks.pop()
+        if kind == "text":
+            output.append(item)
+        elif item is None:
+            output.append("null")
+        elif item is True:
+            output.append("true")
+        elif item is False:
+            output.append("false")
+        elif isinstance(item, _Number):
+            output.append(item.lexeme)
+        elif isinstance(item, str):
+            output.append(_quote(item))
+        elif isinstance(item, _Object):
+            properties = sorted(item, key=lambda pair: pair[0].encode("utf-8"))
+            tasks.append(("text", "}"))
+            for index in range(len(properties) - 1, -1, -1):
+                name, child = properties[index]
+                tasks.append(("value", child))
+                tasks.append(("text", ":"))
+                tasks.append(("text", _quote(name)))
+                if index:
+                    tasks.append(("text", ","))
+            tasks.append(("text", "{"))
+        elif isinstance(item, list):
+            tasks.append(("text", "]"))
+            for index in range(len(item) - 1, -1, -1):
+                tasks.append(("value", item[index]))
+                if index:
+                    tasks.append(("text", ","))
+            tasks.append(("text", "["))
+        else:
+            raise TypeError("unsupported canonical JSON node")
+    return "".join(output)
 
 
 def canonical_parameter_value(content_type: str, value: str | bytes) -> bytes:
@@ -175,14 +212,7 @@ def canonical_parameter_value(content_type: str, value: str | bytes) -> bytes:
     try:
         source = value if isinstance(value, str) else value.decode("utf-8", "strict")
         source.encode("utf-8", "strict")
-        old_limit = sys.getrecursionlimit()
-        if old_limit < 5000:
-            sys.setrecursionlimit(5000)
-        try:
-            return _write(_Parser(source).parse()).encode("utf-8")
-        finally:
-            if old_limit < 5000:
-                sys.setrecursionlimit(old_limit)
+        return _write(_Parser(source).parse()).encode("utf-8")
     except (UnicodeError, ValueError, RecursionError):
         raise ValueError("configstore: canonical json: invalid document") from None
 

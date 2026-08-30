@@ -6,12 +6,14 @@ import hashlib
 import json
 import os
 import tempfile
+import datetime as dt
+import collections.abc
 from dataclasses import dataclass
 from pathlib import Path
 import types
 from typing import Annotated, Any, Union, get_args, get_origin
 
-from pydantic import BaseModel, TypeAdapter
+from pydantic import BaseModel
 
 from ..configstore.model import ConfigSpec
 from ..secret import Secret
@@ -44,7 +46,7 @@ def generate_artifacts(
     for alias, fields in spec.group_fields().items():
         properties: dict[str, Any] = {}
         for field in fields:
-            properties[field.json_name] = TypeAdapter(field.annotation).json_schema(mode="validation")
+            properties[field.json_name] = _schema_for(field.annotation)
         groups[alias] = {
             "type": "object", "additionalProperties": False,
             "required": [field.json_name for field in fields], "properties": properties,
@@ -130,24 +132,93 @@ def _pretty(value: object) -> str:
 
 
 def _encoding(annotation: Any) -> str:
-    origin = getattr(annotation, "__origin__", None)
-    if annotation is bool:
+    core = get_args(annotation)[0] if get_origin(annotation) is Annotated else annotation
+    origin = get_origin(core)
+    if core is bool:
         return "boolean"
-    if annotation is str:
+    if core is str:
         return "string"
-    if annotation is int:
+    if core is int:
         return "int64"
-    if annotation is float:
+    if core is float:
         return "float64"
-    if annotation is bytes:
+    if core is bytes:
         return "base64"
+    if core is dt.timedelta:
+        return "go-duration"
     if origin in (list, tuple):
         return "array"
-    if origin is dict:
+    if origin in (dict, collections.abc.Mapping):
         return "record"
-    if isinstance(annotation, type) and issubclass(annotation, BaseModel):
+    if origin in (Union, types.UnionType) and type(None) in get_args(core):
+        member = next(item for item in get_args(core) if item is not type(None))
+        return f"nullable<{_encoding(member)}>"
+    if isinstance(core, type) and issubclass(core, BaseModel):
         return "object"
-    return "pydantic"
+    raise TypeError(f"configgen: unsupported portable field type {core!r}")
+
+
+def _schema_for(annotation: Any) -> dict[str, Any]:
+    core = get_args(annotation)[0] if get_origin(annotation) is Annotated else annotation
+    metadata = get_args(annotation)[1:] if get_origin(annotation) is Annotated else ()
+    origin, args = get_origin(core), get_args(core)
+    if core is bool:
+        schema: dict[str, Any] = {"type": "boolean"}
+    elif core is str:
+        schema = {"type": "string"}
+    elif core is int:
+        minimum, maximum = -(1 << 63), (1 << 63) - 1
+        for item in metadata:
+            if getattr(item, "ge", None) is not None:
+                minimum = max(minimum, item.ge)
+            if getattr(item, "gt", None) is not None:
+                minimum = max(minimum, item.gt + 1)
+            if getattr(item, "le", None) is not None:
+                maximum = min(maximum, item.le)
+            if getattr(item, "lt", None) is not None:
+                maximum = min(maximum, item.lt - 1)
+        schema = {"type": "integer", "minimum": minimum, "maximum": maximum}
+    elif core is float:
+        float_maximum = float.fromhex("0x1.fffffffffffffp+1023")
+        schema = {"type": "number", "minimum": -float_maximum, "maximum": float_maximum}
+    elif core is bytes:
+        schema = {"type": "string", "format": "kms-base64"}
+    elif core is dt.timedelta:
+        schema = {"type": "string", "format": "go-duration"}
+    elif origin in (list, set, frozenset):
+        schema = {"type": "array", "items": _schema_for(args[0])}
+    elif origin is tuple:
+        if len(args) == 2 and args[1] is Ellipsis:
+            schema = {"type": "array", "items": _schema_for(args[0])}
+        else:
+            schema = {
+                "type": "array", "prefixItems": [_schema_for(item) for item in args],
+                "minItems": len(args), "maxItems": len(args),
+            }
+    elif origin in (dict, collections.abc.Mapping):
+        if args[0] is not str:
+            raise TypeError("configgen: mappings must use string keys")
+        schema = {"type": "object", "additionalProperties": _schema_for(args[1])}
+    elif origin in (Union, types.UnionType):
+        members = tuple(item for item in args if item is not type(None))
+        if len(members) != 1 or len(members) == len(args):
+            raise TypeError("configgen: only optional unions are portable")
+        schema = {"anyOf": [_schema_for(members[0]), {"type": "null"}]}
+    elif isinstance(core, type) and issubclass(core, BaseModel):
+        properties: dict[str, Any] = {}
+        required: list[str] = []
+        for name, field in core.model_fields.items():
+            json_name = field.serialization_alias or field.alias or name
+            nested = Annotated[(field.annotation, *field.metadata)] if field.metadata else field.annotation
+            properties[json_name] = _schema_for(nested)
+            required.append(json_name)
+        schema = {
+            "type": "object", "additionalProperties": False,
+            "required": required, "properties": properties,
+        }
+    else:
+        raise TypeError(f"configgen: unsupported portable field type {core!r}")
+    return schema
 
 
 def _views(spec: ConfigSpec) -> dict[str, list[str]]:
@@ -171,11 +242,25 @@ def _render_binding(module: str, type_name: str, digest: str, contract: object, 
         "from __future__ import annotations", "", "from typing import Any, Mapping, cast", "",
         f"import {module} as _source",
         "from kms_paramstore import Secret",
-        "from kms_paramstore.configstore import ConfigBinding, ConfigView", "",
+        "from kms_paramstore.configstore import (",
+        "    AsyncManagedConfigManager, Callbacks, ConfigBinding, ConfigSnapshot,",
+        "    ConfigView, ContractEntry, ManagedConfigManager, VerifyResult,",
+        "    encode_defaults_artifact as _encode_defaults_artifact,",
+        "    export_defaults as _export_defaults,",
+        "    start_async_managed_config as _start_async_managed_config,",
+        "    start_managed_config as _start_managed_config,",
+        "    verify_defaults as _verify_defaults,",
+        "    verify_defaults_async as _verify_defaults_async,",
+        ")", "",
         f"{type_name} = _source.{type_name}", "",
         f'SCHEMA_SHA256 = "{digest}"',
-        "CONTRACT = " + repr(tuple((entry.alias, entry.kind, entry.content_type) for entry in spec.contract)),
+        "CONTRACT = (",
     ]
+    for entry in spec.contract:
+        lines.append(
+            f"    ContractEntry({entry.alias!r}, {entry.kind!r}, {entry.content_type!r}),"
+        )
+    lines.append(")")
     views = _view_fields(spec)
     for view, fields in views.items():
         class_name = _view_class(view)
@@ -188,19 +273,52 @@ def _render_binding(module: str, type_name: str, digest: str, contract: object, 
             ])
         if lines[-1] == "":
             lines.pop()
+    lines.extend(["", f"class Snapshot(ConfigSnapshot[{type_name}]):"])
+    all_fields = [(field.property, field.annotation) for field in spec.parameters]
+    all_fields.extend((field.property, Secret) for field in spec.secrets)
+    for property_name, annotation in sorted(all_fields):
+        rendered = _type_expr(annotation, module)
+        lines.extend([
+            "    @property", f"    def {property_name}(self) -> {rendered}:",
+            f"        return cast({rendered}, ConfigSnapshot.get(self, {property_name!r}))", "",
+        ])
+    for view, fields in views.items():
+        class_name = _view_class(view)
+        method = _identifier(view)
+        properties = tuple(field[0] for field in fields)
+        lines.extend([
+            f"    def {method}(self) -> {class_name}:",
+            f"        return {class_name}(self, {properties!r})", "",
+        ])
+    if lines[-1] == "":
+        lines.pop()
     lines.extend([
         "", f"class GeneratedConfigStore(ConfigBinding[{type_name}]):",
         f"    def __init__(self, defaults: Mapping[str, Any] | {type_name}) -> None:",
-        f"        super().__init__({type_name}, defaults)",
+        f"        super().__init__({type_name}, defaults, snapshot_type=Snapshot)",
+        "",
+        "    @property",
+        "    def current(self) -> Snapshot:",
+        "        return cast(Snapshot, super().current)",
+        "",
+        f"    def start(self, client: object, *, release: str, callbacks: Callbacks, namespace: str | None = None, **options: Any) -> ManagedConfigManager[{type_name}]:",
+        "        return _start_managed_config(client, release=release, binding=self, callbacks=callbacks, namespace=namespace, **options)",
+        "",
+        f"    async def start_async(self, client: object, *, release: str, callbacks: Callbacks, namespace: str | None = None, **options: Any) -> AsyncManagedConfigManager[{type_name}]:",
+        "        return await _start_async_managed_config(client, release=release, binding=self, callbacks=callbacks, namespace=namespace, **options)",
+        "",
+        "    def defaults_artifact(self, profile: str) -> str:",
+        "        return _encode_defaults_artifact(profile=profile, schema_sha256=SCHEMA_SHA256, contract=CONTRACT, parameters=self.encode_defaults_groups())",
+        "",
+        "    def export_defaults(self, profile: str, output: Any) -> None:",
+        "        _export_defaults(profile=profile, schema_sha256=SCHEMA_SHA256, binding=self, output=output)",
+        "",
+        "    def verify_defaults(self, client: object, *, namespace: str, release: str = '', profile: str = '', **options: Any) -> VerifyResult:",
+        "        return _verify_defaults(client, namespace=namespace, release=release, profile=profile, schema_sha256=SCHEMA_SHA256, contract=CONTRACT, groups=self.encode_defaults_groups(), **options)",
+        "",
+        "    async def verify_defaults_async(self, client: object, *, namespace: str, release: str = '', profile: str = '', **options: Any) -> VerifyResult:",
+        "        return await _verify_defaults_async(client, namespace=namespace, release=release, profile=profile, schema_sha256=SCHEMA_SHA256, contract=CONTRACT, groups=self.encode_defaults_groups(), **options)",
     ])
-    for view, fields in views.items():
-        method = _identifier(view)
-        class_name = _view_class(view)
-        properties = tuple(field[0] for field in fields)
-        lines.extend([
-            "", f"    def {method}(self) -> {class_name}:",
-            f"        return {class_name}(self.current, {properties!r})",
-        ])
     return "\n".join(lines) + "\n"
 
 

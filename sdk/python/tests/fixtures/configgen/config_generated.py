@@ -5,12 +5,24 @@ from typing import Any, Mapping, cast
 
 import tests.fixtures.configgen.source as _source
 from kms_paramstore import Secret
-from kms_paramstore.configstore import ConfigBinding, ConfigView
+from kms_paramstore.configstore import (
+    AsyncManagedConfigManager, Callbacks, ConfigBinding, ConfigSnapshot,
+    ConfigView, ContractEntry, ManagedConfigManager, VerifyResult,
+    encode_defaults_artifact as _encode_defaults_artifact,
+    export_defaults as _export_defaults,
+    start_async_managed_config as _start_async_managed_config,
+    start_managed_config as _start_managed_config,
+    verify_defaults as _verify_defaults,
+    verify_defaults_async as _verify_defaults_async,
+)
 
 ApplicationConfig = _source.ApplicationConfig
 
-SCHEMA_SHA256 = "2751c2f83659dcde5450bf7608f1aa6229e191db7ceaa58c3b430742c7fed6ee"
-CONTRACT = (('db_password', 'secret', ''), ('runtime', 'parameter', 'json'))
+SCHEMA_SHA256 = "3ea94877dd7e3054e51226eb22570a42b99744cf58872e8d3a471065c8bbed85"
+CONTRACT = (
+    ContractEntry('db_password', 'secret', ''),
+    ContractEntry('runtime', 'parameter', 'json'),
+)
 
 class ServerConfigView(ConfigView):
     @property
@@ -25,9 +37,44 @@ class ServerConfigView(ConfigView):
     def port(self) -> int:
         return cast(int, ConfigView.get(self, 'port'))
 
-class GeneratedConfigStore(ConfigBinding[ApplicationConfig]):
-    def __init__(self, defaults: Mapping[str, Any] | ApplicationConfig) -> None:
-        super().__init__(ApplicationConfig, defaults)
+class Snapshot(ConfigSnapshot[ApplicationConfig]):
+    @property
+    def debug(self) -> bool:
+        return cast(bool, ConfigSnapshot.get(self, 'debug'))
+
+    @property
+    def password(self) -> Secret:
+        return cast(Secret, ConfigSnapshot.get(self, 'password'))
+
+    @property
+    def port(self) -> int:
+        return cast(int, ConfigSnapshot.get(self, 'port'))
 
     def server(self) -> ServerConfigView:
-        return ServerConfigView(self.current, ('debug', 'password', 'port'))
+        return ServerConfigView(self, ('debug', 'password', 'port'))
+
+class GeneratedConfigStore(ConfigBinding[ApplicationConfig]):
+    def __init__(self, defaults: Mapping[str, Any] | ApplicationConfig) -> None:
+        super().__init__(ApplicationConfig, defaults, snapshot_type=Snapshot)
+
+    @property
+    def current(self) -> Snapshot:
+        return cast(Snapshot, super().current)
+
+    def start(self, client: object, *, release: str, callbacks: Callbacks, namespace: str | None = None, **options: Any) -> ManagedConfigManager[ApplicationConfig]:
+        return _start_managed_config(client, release=release, binding=self, callbacks=callbacks, namespace=namespace, **options)
+
+    async def start_async(self, client: object, *, release: str, callbacks: Callbacks, namespace: str | None = None, **options: Any) -> AsyncManagedConfigManager[ApplicationConfig]:
+        return await _start_async_managed_config(client, release=release, binding=self, callbacks=callbacks, namespace=namespace, **options)
+
+    def defaults_artifact(self, profile: str) -> str:
+        return _encode_defaults_artifact(profile=profile, schema_sha256=SCHEMA_SHA256, contract=CONTRACT, parameters=self.encode_defaults_groups())
+
+    def export_defaults(self, profile: str, output: Any) -> None:
+        _export_defaults(profile=profile, schema_sha256=SCHEMA_SHA256, binding=self, output=output)
+
+    def verify_defaults(self, client: object, *, namespace: str, release: str = '', profile: str = '', **options: Any) -> VerifyResult:
+        return _verify_defaults(client, namespace=namespace, release=release, profile=profile, schema_sha256=SCHEMA_SHA256, contract=CONTRACT, groups=self.encode_defaults_groups(), **options)
+
+    async def verify_defaults_async(self, client: object, *, namespace: str, release: str = '', profile: str = '', **options: Any) -> VerifyResult:
+        return await _verify_defaults_async(client, namespace=namespace, release=release, profile=profile, schema_sha256=SCHEMA_SHA256, contract=CONTRACT, groups=self.encode_defaults_groups(), **options)

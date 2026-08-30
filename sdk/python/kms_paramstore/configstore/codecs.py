@@ -12,7 +12,7 @@ from typing import Annotated, Any, Mapping, Union, get_args, get_origin
 
 from pydantic import BaseModel, TypeAdapter
 
-_DURATION_PART = re.compile(r"([+-]?(?:[0-9]+(?:\.[0-9]+)?|\.[0-9]+))(ns|us|µs|ms|s|m|h)")
+_DURATION_PART = re.compile(r"((?:[0-9]+(?:\.[0-9]+)?|\.[0-9]+))(ns|us|µs|ms|s|m|h)")
 _DURATION_SCALE = {
     "ns": Decimal(1), "us": Decimal(1_000), "µs": Decimal(1_000),
     "ms": Decimal(1_000_000), "s": Decimal(1_000_000_000),
@@ -34,6 +34,8 @@ def decode_value(annotation: Any, value: Any) -> Any:
             decoded: Any = base64.b64decode(value, validate=True)
         except (ValueError, binascii.Error) as error:
             raise ValueError("invalid base64") from error
+        if base64.b64encode(decoded).decode("ascii") != value:
+            raise ValueError("base64 is not canonical")
     elif core is dt.timedelta:
         decoded = _parse_duration(value)
     elif origin in (list, set, frozenset):
@@ -81,10 +83,13 @@ def decode_value(annotation: Any, value: Any) -> Any:
         # validate_json is important here: JSON integers remain strict integers
         # while strings cannot be coerced into numerics or booleans.
         import json
-        return TypeAdapter(annotation).validate_json(
+        decoded = TypeAdapter(annotation).validate_json(
             json.dumps(value, ensure_ascii=False, separators=(",", ":"), allow_nan=False),
             strict=True,
         )
+        if core is int and not (-(1 << 63) <= decoded <= (1 << 63) - 1):
+            raise ValueError("integer is outside the portable int64 range")
+        return decoded
     return TypeAdapter(annotation).validate_python(decoded, strict=True)
 
 
@@ -132,6 +137,12 @@ def _parse_duration(value: Any) -> dt.timedelta:
         raise TypeError("expected Go duration string")
     if value == "0":
         return dt.timedelta()
+    sign = 1
+    if value.startswith(("+", "-")):
+        sign = -1 if value[0] == "-" else 1
+        value = value[1:]
+    if not value:
+        raise ValueError("invalid duration")
     index, total = 0, Decimal(0)
     try:
         while index < len(value):
@@ -145,7 +156,7 @@ def _parse_duration(value: Any) -> dt.timedelta:
     # timedelta is microsecond-resolution. Reject rather than silently round.
     if total % 1000:
         raise ValueError("duration is below Python microsecond precision")
-    return dt.timedelta(microseconds=int(total / 1000))
+    return dt.timedelta(microseconds=sign * int(total / 1000))
 
 
 def _format_duration(value: dt.timedelta) -> str:

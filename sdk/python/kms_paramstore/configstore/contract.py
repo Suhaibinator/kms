@@ -48,16 +48,22 @@ def validate_manifest(
     contract: Iterable[ContractEntry], entries: Mapping[str, object] | Iterable[object]
 ) -> None:
     """Validate a release manifest before any resource is fetched."""
-    expected = {entry.alias: entry for entry in validate_contract(contract)}
-    if isinstance(entries, Mapping):
-        actual = dict(entries)
-    else:
-        actual = {str(getattr(entry, "alias", "")): entry for entry in entries}
-    if set(actual) != set(expected):
-        raise ValueError("configstore: release aliases do not match generated contract")
-    for alias, wanted in expected.items():
-        got = actual[alias]
-        if getattr(got, "alias", alias) != alias or getattr(got, "kind", "") != wanted.kind:
-            raise ValueError("configstore: release entry does not match generated contract")
-        if wanted.content_type and getattr(got, "content_type", "") != wanted.content_type:
-            raise ValueError("configstore: release content type does not match generated contract")
+    from .types import CandidateError
+    try:
+        expected = {entry.alias: entry for entry in validate_contract(contract)}
+        if isinstance(entries, Mapping):
+            actual = dict(entries)
+        else:
+            actual = {str(getattr(entry, "alias", "")): entry for entry in entries}
+        if set(actual) != set(expected):
+            raise ValueError("release aliases do not match generated contract")
+        for alias, wanted in expected.items():
+            got = actual[alias]
+            if getattr(got, "alias", alias) != alias or getattr(got, "kind", "") != wanted.kind:
+                raise ValueError("release entry does not match generated contract")
+            if wanted.content_type and getattr(got, "content_type", "") != wanted.content_type:
+                raise ValueError("release content type does not match generated contract")
+    except CandidateError:
+        raise
+    except Exception as error:
+        raise CandidateError("config_contract_mismatch", error) from error

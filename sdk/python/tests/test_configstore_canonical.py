@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import sys
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
@@ -25,3 +27,12 @@ def test_shared_go_canonical_vectors() -> None:
 def test_bytes_passthrough_is_defensive() -> None:
     value = b"raw\x00bytes"
     assert canonical_parameter_value("bytes", value) == value
+
+
+def test_deep_canonicalization_is_thread_safe_and_does_not_change_recursion_limit() -> None:
+    before = sys.getrecursionlimit()
+    document = "[" * 1000 + "[]" + "]" * 1000
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        results = list(executor.map(lambda _: canonical_parameter_value("json", document), range(32)))
+    assert all(result == document.encode() for result in results)
+    assert sys.getrecursionlimit() == before

@@ -7,6 +7,7 @@ from typing import Annotated
 
 import pytest
 from pydantic import BaseModel, ConfigDict, Field
+from pydantic import create_model
 
 from kms_paramstore.configstore import (
     Callbacks,
@@ -18,6 +19,9 @@ from kms_paramstore.configstore import (
     Parameter,
     SecretField,
     Unmanaged,
+    ContractEntry,
+    validate_manifest,
+    ConfigSnapshot,
 )
 from kms_paramstore.release import ReleaseSnapshot
 from kms_paramstore.secret import Secret
@@ -61,6 +65,10 @@ def test_prepare_is_atomic_strict_and_defensive() -> None:
     assert [item.path for item in prepared.default_differences] == ["runtime.label_set", "runtime.port"]
     prepared.commit()
     first = binding.current
+    with pytest.raises(AttributeError, match="immutable"):
+        first.release = first.release  # type: ignore[misc]
+    with pytest.raises(AttributeError, match="immutable"):
+        first._config = first.config()  # type: ignore[misc]
     assert first.get("port") == 9000
     labels = first.get("labels")
     labels.append("mutated")
@@ -72,6 +80,19 @@ def test_prepare_is_atomic_strict_and_defensive() -> None:
         ("runtime.port", 9000, 9001), ("db_password", None, None),
     ]
     assert binding.current.get("port") == 9000
+
+
+def test_snapshot_and_validation_own_independent_secret_clones() -> None:
+    source = snapshot()
+    fetched = source.secrets["db_password"]
+    binding = ConfigBinding(RuntimeConfig, {})
+    prepared = binding.prepare(source)
+    fetched._value = b"mutated-before-commit"
+    prepared.commit()
+    first = binding.current.get("password")
+    assert first.value == b"canary"
+    first._value = b"mutated-after-read"
+    assert binding.current.get("password").value == b"canary"
 
 
 @pytest.mark.parametrize(
@@ -102,6 +123,57 @@ def test_model_contract_rejects_mutable_or_permissive_roots() -> None:
 
     with pytest.raises(TypeError, match="frozen=True"):
         ConfigSpec.from_model(Bad)
+
+
+@pytest.mark.parametrize("view", ["class", "start", "verify-defaults"])
+def test_view_names_reject_keywords_and_generated_api_collisions(view: str) -> None:
+    class BadView(BaseModel):
+        model_config = ConfigDict(frozen=True, strict=True, extra="forbid")
+        value: Annotated[int, Parameter("runtime", views=(view,))] = 1
+
+    with pytest.raises(TypeError, match="view"):
+        ConfigSpec.from_model(BadView)
+
+
+def test_view_normalization_collisions_are_rejected() -> None:
+    class BadViews(BaseModel):
+        model_config = ConfigDict(frozen=True, strict=True, extra="forbid")
+        one: Annotated[int, Parameter("runtime", views=("foo-bar",))] = 1
+        two: Annotated[int, Parameter("runtime", views=("foo_bar",))] = 2
+
+    with pytest.raises(TypeError, match="normalize"):
+        ConfigSpec.from_model(BadViews)
+
+    class BadViewClasses(BaseModel):
+        model_config = ConfigDict(frozen=True, strict=True, extra="forbid")
+        one: Annotated[int, Parameter("runtime", views=("foo",))] = 1
+        two: Annotated[int, Parameter("runtime", views=("Foo",))] = 2
+
+    with pytest.raises(TypeError, match="same Python class"):
+        ConfigSpec.from_model(BadViewClasses)
+
+
+def test_release_contract_is_bounded_to_256_entries() -> None:
+    fields = {
+        f"field_{index}": (Annotated[int, Parameter(f"group_{index}")], index)
+        for index in range(257)
+    }
+    Huge = create_model(
+        "Huge", __config__=ConfigDict(frozen=True, strict=True, extra="forbid"), **fields
+    )
+    with pytest.raises(TypeError, match="maximum is 256"):
+        ConfigSpec.from_model(Huge)
+
+
+def test_manifest_mismatch_is_classified_before_resolution() -> None:
+    with pytest.raises(CandidateError, match="config_contract_mismatch") as caught:
+        validate_manifest((ContractEntry("runtime", "parameter", "json"),), {})
+    assert caught.value.release_rejection_category == "config_contract_mismatch"
+
+
+def test_default_mismatch_callback_is_required_and_callable() -> None:
+    with pytest.raises(TypeError, match="required"):
+        Callbacks(None)  # type: ignore[arg-type]
 
 
 def test_secret_values_never_appear_in_errors() -> None:
@@ -211,6 +283,31 @@ def test_recursive_codecs_reject_ranges_nonfinite_and_noncanonical_encodings(fie
     document = json.dumps(values, allow_nan=True)
     with pytest.raises(CandidateError):
         ConfigBinding(CodecConfig, {}).prepare(_codec_snapshot(document))
+
+
+@pytest.mark.parametrize("payload", ["AB==", "AAE", "AAE===", "A A E="])
+def test_base64_requires_canonical_round_trip(payload: str) -> None:
+    values = {
+        "count": 0, "ratio": 1.0, "payload": payload, "delay": "0",
+        "optional": None, "items": [], "mapping": {}, "nested": {"name": "ok"},
+    }
+    with pytest.raises(CandidateError):
+        ConfigBinding(CodecConfig, {}).prepare(_codec_snapshot(json.dumps(values)))
+
+
+def test_go_duration_allows_only_one_leading_sign() -> None:
+    base = {
+        "count": 0, "ratio": 1.0, "payload": "", "optional": None,
+        "items": [], "mapping": {}, "nested": {"name": "ok"},
+    }
+    binding = ConfigBinding(CodecConfig, {})
+    prepared = binding.prepare(_codec_snapshot(json.dumps({**base, "delay": "-1h2m"})))
+    prepared.commit()
+    assert binding.current.get("delay") == -dt.timedelta(hours=1, minutes=2)
+    assert json.loads(binding.encode_parameter_groups()["typed"])["delay"] == "-1h2m"
+    for invalid in ("1h-2m", "1h+2m", "--1h", "+-1h"):
+        with pytest.raises(CandidateError):
+            ConfigBinding(CodecConfig, {}).prepare(_codec_snapshot(json.dumps({**base, "delay": invalid})))
 
 
 class _AsyncLoader:

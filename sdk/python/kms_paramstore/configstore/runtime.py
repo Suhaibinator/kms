@@ -54,6 +54,14 @@ class Callbacks:
     on_applied: Callable[[AppliedReport], None] | None = None
     on_candidate_rejected: Callable[[CandidateRejectionReport], None] | None = None
 
+    def __post_init__(self) -> None:
+        if not callable(self.on_default_mismatch):
+            raise TypeError("configstore: on_default_mismatch callback is required")
+        if self.on_applied is not None and not callable(self.on_applied):
+            raise TypeError("configstore: on_applied must be callable")
+        if self.on_candidate_rejected is not None and not callable(self.on_candidate_rejected):
+            raise TypeError("configstore: on_candidate_rejected must be callable")
+
 
 class ConfigView:
     """A typed-view building block that always reads from one snapshot."""
@@ -73,11 +81,19 @@ class ConfigView:
 class ConfigBinding(Generic[T]):
     """Generated-binding runtime shared by sync and async managers."""
 
-    def __init__(self, model: type[T], defaults: Mapping[str, Any] | T) -> None:
+    def __init__(
+        self,
+        model: type[T],
+        defaults: Mapping[str, Any] | T,
+        *,
+        snapshot_type: type[ConfigSnapshot[T]] = ConfigSnapshot,
+    ) -> None:
         self.spec = ConfigSpec.from_model(model)
         self.model = model
         self._source_defaults = self._normalize_defaults(defaults)
+        self._snapshot_type = snapshot_type
         self._active: ConfigSnapshot[T] | None = None
+        self._started = False
         self._lock = threading.Lock()
 
     @property
@@ -124,6 +140,10 @@ class ConfigBinding(Generic[T]):
         try:
             parameters = getattr(snapshot, "parameters")
             secrets = getattr(snapshot, "secrets")
+            expected_parameters = set(self.spec.group_fields())
+            expected_secrets = {field.alias for field in self.spec.secrets}
+            if set(parameters) != expected_parameters or set(secrets) != expected_secrets:
+                raise CandidateError("config_contract_mismatch")
             payload = copy.deepcopy(self._source_defaults)
             for group, fields in self.spec.group_fields().items():
                 if group not in parameters:
@@ -141,7 +161,7 @@ class ConfigBinding(Generic[T]):
                 secret = secrets.get(secret_field.alias)
                 if not isinstance(secret, Secret):
                     raise CandidateError("config_decode_failed", paths=(secret_field.alias,))
-                payload[secret_field.property] = secret
+                payload[secret_field.property] = _clone_secret(secret)
             try:
                 candidate = self.model.model_validate(payload, strict=True)
             except ValidationError as error:
@@ -150,7 +170,7 @@ class ConfigBinding(Generic[T]):
 
             effective_payload = copy.deepcopy(self._source_defaults)
             for secret_field in self.spec.secrets:
-                effective_payload[secret_field.property] = secrets[secret_field.alias]
+                effective_payload[secret_field.property] = _clone_secret(secrets[secret_field.alias])
             try:
                 effective = self.model.model_validate(effective_payload, strict=True)
             except ValidationError as error:
@@ -187,8 +207,19 @@ class ConfigBinding(Generic[T]):
                         if secret_field.reload == "restart":
                             restart.append(secret_field.alias)
 
-            next_snapshot = ConfigSnapshot(candidate, identity)
-            groups = self.encode_parameter_groups(candidate)
+            published_secrets = {
+                field.property: _clone_secret(getattr(candidate, field.property))
+                for field in self.spec.secrets
+            }
+            candidate = candidate.model_copy(update=published_secrets, deep=True)
+            next_snapshot = self._snapshot_type(candidate, identity)
+            # Group documents are observability-only after the candidate has
+            # passed decode/validation. An encoder failure must not turn a
+            # valid release into a rejection (matching Go and TypeScript).
+            try:
+                groups = self.encode_parameter_groups(candidate)
+            except Exception:
+                groups = MappingProxyType({})
             return _PreparedCandidate(
                 self,
                 next_snapshot,
@@ -219,6 +250,12 @@ class ConfigBinding(Generic[T]):
                     raise TypeError(f"configstore: unmanaged field {property_name} requires a default")
                 raw[property_name] = info.get_default(call_default_factory=True)
         return copy.deepcopy(raw)
+
+    def _claim_start(self) -> None:
+        with self._lock:
+            if self._started:
+                raise RuntimeError("configstore: managed store may only be started once")
+            self._started = True
 
 
 class _PreparedCandidate(Generic[T]):
@@ -439,6 +476,7 @@ def start_managed_config(
     namespace: str | None = None, **loader_options: Any,
 ) -> ManagedConfigManager[T]:
     from ..release import ReleaseLoader, ReleaseLoaderConfig
+    binding._claim_start()
     kwargs = dict(name=release, namespace=namespace, **loader_options)
     if "validate_manifest" in inspect.signature(ReleaseLoaderConfig).parameters:
         kwargs["validate_manifest"] = lambda *args: validate_manifest(
@@ -455,6 +493,7 @@ async def start_async_managed_config(
     namespace: str | None = None, **loader_options: Any,
 ) -> AsyncManagedConfigManager[T]:
     from ..async_release import AsyncReleaseLoader, AsyncReleaseLoaderConfig
+    binding._claim_start()
     kwargs = dict(name=release, namespace=namespace, **loader_options)
     if "validate_manifest" in inspect.signature(AsyncReleaseLoaderConfig).parameters:
         kwargs["validate_manifest"] = lambda *args: validate_manifest(
@@ -514,6 +553,17 @@ def _same(left: Any, right: Any) -> bool:
 
 def _secret_identity(secret: Secret) -> tuple[str, str, str, int, str]:
     return (secret.env, secret.app, secret.key, secret.version, secret.content_type)
+
+
+def _clone_secret(secret: Secret) -> Secret:
+    return Secret(
+        secret.value,
+        env=secret.env,
+        app=secret.app,
+        key=secret.key,
+        version=secret.version,
+        content_type=secret.content_type,
+    )
 
 
 def _require_finite(model: BaseModel, fields: tuple[str, ...]) -> None:

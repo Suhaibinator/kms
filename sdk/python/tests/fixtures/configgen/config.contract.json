@@ -35,7 +35,7 @@
       "kind": "parameter"
     }
   ],
-  "schema_sha256": "2751c2f83659dcde5450bf7608f1aa6229e191db7ceaa58c3b430742c7fed6ee",
+  "schema_sha256": "3ea94877dd7e3054e51226eb22570a42b99744cf58872e8d3a471065c8bbed85",
   "secrets": [
     {
       "alias": "db_password",

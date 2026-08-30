@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import keyword
 from dataclasses import dataclass
 from typing import Annotated, Any, Literal, Mapping, get_args, get_origin
 
@@ -25,6 +26,14 @@ __all__ = [
 
 ReloadPolicy = Literal["hot", "restart"]
 _NAME = re.compile(r"^[A-Za-z][A-Za-z0-9_-]{0,63}$")
+_GENERATED_STORE_RESERVED = frozenset(
+    {
+        "current", "view", "prepare", "spec", "model", "start", "start_async",
+        "encode_parameter_groups", "encode_defaults_groups", "export_defaults",
+        "verify_defaults", "verify_defaults_async",
+    }
+)
+_GENERATED_SNAPSHOT_RESERVED = frozenset({"release", "config", "get"})
 
 
 @dataclass(frozen=True)
@@ -131,6 +140,11 @@ class ConfigSpec:
 
         if not parameters and not secrets:
             raise TypeError("configstore: model must contain at least one managed field")
+        entry_count = len({field.group for field in parameters}) + len(secrets)
+        if entry_count > 256:
+            raise TypeError(
+                f"configstore: model requires {entry_count} release entries; maximum is 256"
+            )
         aliases = [item.group for item in parameters] + [item.alias for item in secrets]
         if len(set(aliases)) != len(set(item.group for item in parameters)) + len(secrets):
             raise TypeError("configstore: parameter group and secret aliases must be unique")
@@ -140,6 +154,33 @@ class ConfigSpec:
             if item.json_name in names:
                 raise TypeError(f"configstore: duplicate JSON field {item.group}.{item.json_name}")
             names.add(item.json_name)
+        view_methods: dict[str, str] = {}
+        view_classes: dict[str, str] = {}
+        view_items = [(item.property, item.views) for item in parameters]
+        view_items.extend((item.property, item.views) for item in secrets)
+        for property_name, views in view_items:
+            if property_name in _GENERATED_SNAPSHOT_RESERVED:
+                raise TypeError(
+                    f"configstore: field {property_name} collides with generated snapshot API"
+                )
+            for view in views:
+                method = _python_identifier(view)
+                if method in _GENERATED_STORE_RESERVED:
+                    raise TypeError(f"configstore: view {view} collides with generated store API")
+                previous = view_methods.setdefault(method, view)
+                if previous != view:
+                    raise TypeError(
+                        f"configstore: views {previous} and {view} normalize to the same Python method"
+                    )
+                class_name = "".join(
+                    part[:1].upper() + part[1:]
+                    for part in method.split("_")
+                )
+                previous_class = view_classes.setdefault(class_name, view)
+                if previous_class != view:
+                    raise TypeError(
+                        f"configstore: views {previous_class} and {view} normalize to the same Python class"
+                    )
         return cls(
             model,
             tuple(sorted(parameters, key=lambda item: (item.group.encode(), item.json_name.encode()))),
@@ -176,6 +217,14 @@ def _validate_views(views: tuple[str, ...], property_name: str) -> None:
         raise TypeError(f"configstore: field {property_name} views must be a unique tuple")
     for view in views:
         _validate_name(view, f"field {property_name} view")
+        _python_identifier(view)
+
+
+def _python_identifier(value: str) -> str:
+    normalized = value.replace("-", "_")
+    if not normalized.isidentifier() or keyword.iskeyword(normalized):
+        raise TypeError(f"configstore: view {value} is not a valid Python method name")
+    return normalized
 
 
 def _accepts_secret(annotation: Any) -> bool:
