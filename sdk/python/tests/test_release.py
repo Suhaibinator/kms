@@ -104,11 +104,15 @@ class _SecretStub:
 
 class _Call:
     _CLOSED = object()
+    _EOF = object()
 
     def __init__(self, requests, owner: "_ReleaseStub") -> None:
         self._queue: "queue.Queue[object]" = queue.Queue()
         self._closed = threading.Event()
         self._owner = owner
+        self.half_closed = False
+        self.drained = False
+        self.cancelled = False
 
         def read_requests() -> None:
             try:
@@ -120,6 +124,9 @@ class _Call:
                             owner.acknowledgements.append(request.acknowledgement)
             except Exception:
                 pass
+            finally:
+                self.half_closed = True
+                self._queue.put(self._EOF)
 
         threading.Thread(target=read_requests, daemon=True).start()
 
@@ -128,6 +135,9 @@ class _Call:
 
     def __next__(self):
         item = self._queue.get(timeout=2.0)
+        if item is self._EOF:
+            self.drained = True
+            raise StopIteration
         if item is self._CLOSED:
             raise RuntimeError("stream disconnected")
         return item
@@ -140,6 +150,7 @@ class _Call:
         self._queue.put(self._CLOSED)
 
     def cancel(self) -> bool:
+        self.cancelled = True
         self._closed.set()
         self._queue.put(self._CLOSED)
         return True
@@ -300,7 +311,7 @@ def test_release_protocols_and_async_loader_are_publicly_exported():
 
 
 def test_release_loader_rejects_overlap_but_allows_sequential_runs(monkeypatch):
-    loader, _stub, _client = _loader(monkeypatch, _release(1, 10))
+    loader, stub, _client = _loader(monkeypatch, _release(1, 10))
     first = _Prepared()
     first_thread, first_raised = _run_in_thread(
         loader, lambda _cancel, _snapshot: first
@@ -312,6 +323,10 @@ def test_release_loader_rejects_overlap_but_allows_sequential_runs(monkeypatch):
     first_thread.join(timeout=2)
     assert not first_raised
 
+    # A reused loader registers from the new authoritative startup read, not
+    # the previous run's remembered stream revision.
+    with stub.lock:
+        stub.release, stub.revision = _release(2, 5)
     second = _Prepared()
     second_thread, second_raised = _run_in_thread(
         loader, lambda _cancel, _snapshot: second
@@ -320,6 +335,7 @@ def test_release_loader_rejects_overlap_but_allows_sequential_runs(monkeypatch):
     loader.stop()
     second_thread.join(timeout=2)
     assert not second_raised
+    assert stub.registrations[-1].last_seen_revision == 5
 
 
 def test_initial_snapshot_is_complete_immutable_redacting_and_acknowledged(monkeypatch):
@@ -410,6 +426,51 @@ def test_classified_manifest_failure_is_redacted_and_propagated(monkeypatch):
     assert rejected
     assert rejected[-1].rejection_category == "config_contract_mismatch"
     assert rejected[-1].diagnostic == ""
+    assert len(stub.calls) == 1
+    assert stub.calls[0].half_closed
+    assert stub.calls[0].drained
+    assert not stub.calls[0].cancelled
+
+
+@pytest.mark.parametrize("bad_digest", ["é" * 64, "g" * 64, "0" * 63])
+def test_malformed_release_digest_is_classified_not_raised(monkeypatch, bad_digest):
+    initial = _release(1, 10)
+    initial[0].digest = bad_digest
+    loader, stub, _client = _loader(monkeypatch, initial)
+    with pytest.raises(ReleaseStartupError) as caught:
+        loader.run(lambda _cancel, _snapshot: _Prepared())
+    assert getattr(caught.value, "category") == "digest_mismatch"
+    rejected = [ack for ack in stub.acknowledgements if ack.state == "rejected"]
+    assert rejected[-1].rejection_category == "digest_mismatch"
+
+
+def test_uppercase_parameter_digest_is_accepted(monkeypatch):
+    initial = _release(1, 10)
+    initial[0].entries[0].parameter_digest = initial[0].entries[0].parameter_digest.upper()
+    initial[0].digest = release_module._release_digest(initial[0])
+    loader, _stub, _client = _loader(monkeypatch, initial)
+    prepared = _Prepared()
+    thread, raised = _run_in_thread(loader, lambda _cancel, _snapshot: prepared)
+    assert wait_until(lambda: prepared.commits == 1)
+    loader.stop()
+    thread.join(timeout=2)
+    assert not raised
+
+
+def test_empty_initial_active_fails_before_watch_or_prepare(monkeypatch):
+    empty = kms_pb2.ConfigurationRelease()
+    loader, stub, _client = _loader(monkeypatch, (empty, 0))
+    called = False
+
+    def prepare(_cancel, _snapshot):
+        nonlocal called
+        called = True
+        return _Prepared()
+
+    with pytest.raises(ReleaseStartupError, match="response was empty"):
+        loader.run(prepare)
+    assert not called
+    assert stub.calls == []
 
 
 def test_classified_prepare_failure_preserves_lkg_and_category(monkeypatch):
@@ -548,6 +609,32 @@ def test_newer_activation_cancels_and_aborts_stale_candidate(monkeypatch):
     assert loader.stats().rejections["superseded"] >= 1
 
 
+def test_active_fence_includes_release_name(monkeypatch):
+    loader, stub, _client = _loader(monkeypatch, _release(1, 10))
+    stale = _Prepared()
+    current = _Prepared()
+
+    def prepare(_cancel, snapshot):
+        if snapshot.version == 1:
+            with stub.lock:
+                renamed = kms_pb2.ConfigurationRelease()
+                renamed.CopyFrom(stub.release)
+                renamed.name = "different-release"
+                stub.release = renamed
+            return stale
+        return current
+
+    thread, raised = _run_in_thread(loader, prepare)
+    assert wait_until(lambda: stale.aborts == 1)
+    stub.activate(_release(2, 11))
+    assert wait_until(lambda: loader.status().applied_version == 2)
+    loader.stop()
+    thread.join(timeout=2)
+    assert not raised
+    assert stale.commits == 0
+    assert current.commits == 1
+
+
 def test_prepare_rejection_keeps_last_known_good(monkeypatch):
     loader, stub, _client = _loader(monkeypatch, _release(1, 10))
     prepared: Dict[int, _Prepared] = {}
@@ -564,6 +651,9 @@ def test_prepare_rejection_keeps_last_known_good(monkeypatch):
     assert loader.status().applied_version == 1
     stub.activate(_release(3, 30))
     assert wait_until(lambda: loader.status().applied_version == 3)
+    assert loader.status().state == "applied"
+    assert loader.status().last_failure_category == ""
+    assert loader.status().last_failure_unix_ms == 0
     loader.stop()
     thread.join(timeout=2)
 
@@ -589,7 +679,8 @@ def test_commit_exception_is_fatal_and_never_aborted_or_applied(monkeypatch):
         loader.run(lambda _cancel, _snapshot: item)
 
     assert item.aborts == 0
-    assert loader.status().state == "fatal"
+    assert loader.status().state == "rejected"
+    assert loader.stats().rejections["internal"] == 1
     assert "applied" not in {ack.state for ack in stub.acknowledgements}
 
 
@@ -605,7 +696,8 @@ def test_commit_return_value_is_fatal_contract_violation(monkeypatch):
         loader.run(lambda _cancel, _snapshot: prepared)
     assert prepared.commits == 1
     assert prepared.aborts == 0
-    assert loader.status().state == "fatal"
+    assert loader.status().state == "rejected"
+    assert loader.stats().rejections["internal"] == 1
     assert "applied" not in {ack.state for ack in stub.acknowledgements}
 
 

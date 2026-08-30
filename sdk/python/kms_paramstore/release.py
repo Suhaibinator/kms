@@ -278,8 +278,13 @@ class _Candidate:
     revision: int
 
     @property
-    def identity(self) -> Tuple[int, int, str]:
-        return (self.revision, self.release.version, self.release.digest)  # type: ignore[attr-defined]
+    def identity(self) -> Tuple[int, int, str, str]:
+        return (
+            self.revision,
+            self.release.version,
+            self.release.name,
+            self.release.digest,
+        )  # type: ignore[attr-defined]
 
 
 class _CandidateFailure(Exception):
@@ -327,13 +332,16 @@ class ReleaseLoader:
         self._candidate_cond = threading.Condition()
         self._pending_candidate: Optional[_Candidate] = None
         self._active_cancel: Optional[threading.Event] = None
-        self._active_identity: Optional[Tuple[int, int, str]] = None
+        self._active_identity: Optional[Tuple[int, int, str, str]] = None
         self._last_seen_revision = 0
 
         self._ack_cond = threading.Condition()
         self._ack_sequence = 0
-        self._ack_flushed_sequence = 0
+        self._ack_flushed_by_state: Dict[str, int] = {}
         self._ack_latest: Dict[str, Tuple[int, kms_pb2.ReleaseAcknowledgement]] = {}
+
+        self._graceful_watch_stop = threading.Event()
+        self._watch_done = threading.Event()
 
         self._call_lock = threading.Lock()
         self._watch_call = None
@@ -413,7 +421,35 @@ class ReleaseLoader:
             self._pending_candidate = None
             self._active_cancel = None
             self._active_identity = None
+            self._graceful_watch_stop = threading.Event()
+            self._watch_done = threading.Event()
 
+        self._executor = concurrent.futures.ThreadPoolExecutor(
+            max_workers=self._config.max_concurrent_fetches,
+            thread_name_prefix="kms-release-resolve",
+        )
+        try:
+            initial = self._read_active()
+        except Exception:
+            with self._run_lock:
+                self._running = False
+            self._executor.shutdown(wait=True, cancel_futures=True)
+            self._executor = None
+            raise ReleaseStartupError(
+                "unable to read the initial active configuration release"
+            ) from None
+        if not initial.release.name:  # type: ignore[attr-defined]
+            with self._run_lock:
+                self._running = False
+            self._executor.shutdown(wait=True, cancel_futures=True)
+            self._executor = None
+            raise ReleaseStartupError("active configuration release response was empty")
+        with self._candidate_cond:
+            self._last_seen_revision = initial.revision
+        self._watch_thread = threading.Thread(
+            target=self._watch_loop, name="kms-release-watch", daemon=True
+        )
+        self._watch_thread.start()
         if stop_event is not None:
             def relay_stop() -> None:
                 stop_event.wait()
@@ -424,38 +460,18 @@ class ReleaseLoader:
 
             threading.Thread(target=relay_stop, name="kms-release-stop", daemon=True).start()
 
-        self._executor = concurrent.futures.ThreadPoolExecutor(
-            max_workers=self._config.max_concurrent_fetches,
-            thread_name_prefix="kms-release-resolve",
-        )
-        self._watch_thread = threading.Thread(
-            target=self._watch_loop, name="kms-release-watch", daemon=True
-        )
-        self._watch_thread.start()
-
         applied_once = False
         next_reconcile = time.monotonic() + self._config.reconcile_interval
         try:
-            try:
-                self._offer_candidate(self._read_active())
-            except Exception:
-                # WatchRelease sends the active snapshot on registration. It is
-                # an equally authoritative startup source if the parallel fresh
-                # read happened to fail during a transient reconnect.
-                fallback = self._take_candidate(
-                    min(5.0, self._client._call_timeout(self._config.request_timeout))
-                )
-                if fallback is None:
-                    raise ReleaseStartupError(
-                        "unable to read the initial active configuration release"
-                    ) from None
-                self._offer_candidate(fallback)
+            self._offer_candidate(initial)
 
             while not self._stop_event.is_set():
                 wait_for = min(0.25, max(0.0, next_reconcile - time.monotonic()))
                 candidate = self._take_candidate(wait_for)
                 if candidate is not None:
-                    outcome, category = self._process_candidate(candidate, prepare)
+                    outcome, category, acknowledgement_generation = self._process_candidate(
+                        candidate, prepare
+                    )
                     if outcome == "applied":
                         applied_once = True
                     elif outcome == "rejected" and not applied_once:
@@ -469,7 +485,7 @@ class ReleaseLoader:
                         if fresh is not None and fresh.identity != candidate.identity:
                             self._offer_candidate(fresh)
                             continue
-                        self._wait_for_rejected_ack()
+                        self._graceful_shutdown_after_ack(acknowledgement_generation)
                         raise ReleaseCandidateError(category)
                     continue
 
@@ -489,9 +505,6 @@ class ReleaseLoader:
                 self._watch_thread.join(timeout=2.0)
             if self._executor is not None:
                 self._executor.shutdown(wait=True, cancel_futures=True)
-            with self._state_lock:
-                if self._status.state != "fatal":
-                    self._status = replace(self._status, state="stopped")
             with self._run_lock:
                 if self._run_generation == run_generation:
                     self._running = False
@@ -545,20 +558,21 @@ class ReleaseLoader:
         self,
         candidate: _Candidate,
         prepare_callback: Callable[[threading.Event, ReleaseSnapshot], PreparedRelease],
-    ) -> Tuple[str, str]:
+    ) -> Tuple[str, str, int]:
         cancel = threading.Event()
         with self._candidate_cond:
             self._active_cancel = cancel
             self._active_identity = candidate.identity
-        self._set_observed(candidate, "resolving")
+        self._set_observed(candidate)
 
         try:
             snapshot = self._resolve(candidate, cancel)
+            self._set_observed(candidate, "received")
             self._ack(candidate, "received")
             if cancel.is_set():
                 raise _CandidateFailure("superseded")
 
-            self._set_observed(candidate, "preparing")
+            self._set_observed(candidate, "prepared")
             try:
                 prepared = prepare_callback(cancel, snapshot)
             except Exception as exc:
@@ -593,13 +607,7 @@ class ReleaseLoader:
                 if returned is not None:
                     raise TypeError("PreparedRelease.commit must return None")
             except BaseException:
-                with self._state_lock:
-                    self._status = replace(
-                        self._status,
-                        state="fatal",
-                        last_failure_category="internal",
-                        last_failure_unix_ms=_now_ms(),
-                    )
+                self._set_failure("internal")
                 raise ReleaseCommitError(
                     "PreparedRelease.commit raised; applied state is unknown"
                 ) from None
@@ -612,14 +620,18 @@ class ReleaseLoader:
                     observed_revision=candidate.revision,
                     applied_version=candidate.release.version,  # type: ignore[attr-defined]
                     applied_revision=candidate.revision,
+                    last_failure_category="",
+                    last_failure_unix_ms=0,
                 )
             self._ack(candidate, "applied", divergence=_divergence_of(prepared))
-            return "applied", ""
+            return "applied", "", 0
         except _CandidateFailure as exc:
-            self._reject(candidate, exc.category, exc.diagnostic)
+            acknowledgement_generation = self._reject(
+                candidate, exc.category, exc.diagnostic
+            )
             if exc.category == "superseded":
-                return "superseded", exc.category
-            return "rejected", exc.category
+                return "superseded", exc.category, acknowledgement_generation
+            return "rejected", exc.category, acknowledgement_generation
         finally:
             with self._candidate_cond:
                 if self._active_cancel is cancel:
@@ -636,8 +648,12 @@ class ReleaseLoader:
             or release.namespace.app != self._namespace.app
         ):
             raise _CandidateFailure("version_mismatch", "release identity mismatch")
-        if not release.digest or not hmac.compare_digest(
-            _release_digest(release), release.digest.lower()
+        try:
+            calculated_digest = _release_digest(release)
+        except (TypeError, ValueError):
+            raise _CandidateFailure("digest_mismatch", "release digest mismatch") from None
+        if not _valid_sha256_hex(release.digest) or not hmac.compare_digest(
+            calculated_digest, release.digest.lower()
         ):
             raise _CandidateFailure("digest_mismatch", "release digest mismatch")
         if not release.entries:
@@ -746,7 +762,9 @@ class ReleaseLoader:
             if entry.content_type and parameter.content_type != entry.content_type:
                 raise _CandidateFailure("digest_mismatch", "content type mismatch")
             digest = hashlib.sha256(parameter.value.encode("utf-8")).hexdigest()
-            if not entry.parameter_digest or digest != entry.parameter_digest:
+            if not _valid_sha256_hex(entry.parameter_digest) or not hmac.compare_digest(
+                digest, entry.parameter_digest.lower()
+            ):
                 raise _CandidateFailure("digest_mismatch")
             return parameter.value
 
@@ -785,24 +803,27 @@ class ReleaseLoader:
     def _watch_loop(self) -> None:
         attempt = 0
         streams_started = 0
-        while not self._stop_event.is_set():
-            if streams_started:
-                with self._state_lock:
-                    self._reconnects += 1
-            streams_started += 1
-            if self._watch_once():
-                # A usable connection may still terminate with an RPC error.
-                # Receiving any server event proves connectivity and resets the
-                # next delay to the base window.
-                attempt = 0
-            if self._stop_event.is_set():
-                return
-            cap = min(
-                self._config.reconnect_max,
-                self._config.reconnect_initial * (2 ** min(attempt, 16)),
-            )
-            attempt += 1
-            self._stop_event.wait(random.uniform(0.01, cap))
+        try:
+            while not self._stop_event.is_set() and not self._graceful_watch_stop.is_set():
+                if streams_started:
+                    with self._state_lock:
+                        self._reconnects += 1
+                streams_started += 1
+                if self._watch_once():
+                    # A usable connection may still terminate with an RPC error.
+                    # Receiving any server event proves connectivity and resets the
+                    # next delay to the base window.
+                    attempt = 0
+                if self._stop_event.is_set() or self._graceful_watch_stop.is_set():
+                    return
+                cap = min(
+                    self._config.reconnect_max,
+                    self._config.reconnect_initial * (2 ** min(attempt, 16)),
+                )
+                attempt += 1
+                self._stop_event.wait(random.uniform(0.01, cap))
+        finally:
+            self._watch_done.set()
 
     def _watch_once(self) -> bool:
         received_event = False
@@ -849,13 +870,13 @@ class ReleaseLoader:
         with self._ack_cond:
             initial = sorted(self._ack_latest.values(), key=lambda item: item[0])
             sent_sequence = max((item[0] for item in initial), default=0)
-        for _, acknowledgement in initial:
+        for sequence, acknowledgement in initial:
             yield kms_pb2.WatchReleaseRequest(acknowledgement=acknowledgement)
-        with self._ack_cond:
-            self._ack_flushed_sequence = max(self._ack_flushed_sequence, sent_sequence)
-            self._ack_cond.notify_all()
+            with self._ack_cond:
+                self._ack_flushed_by_state[acknowledgement.state] = sequence
+                self._ack_cond.notify_all()
 
-        while not self._stop_event.is_set():
+        while not self._stop_event.is_set() and not self._graceful_watch_stop.is_set():
             with self._ack_cond:
                 updates = sorted(
                     (item for item in self._ack_latest.values() if item[0] > sent_sequence),
@@ -868,21 +889,34 @@ class ReleaseLoader:
                 sent_sequence = max(sent_sequence, sequence)
                 yield kms_pb2.WatchReleaseRequest(acknowledgement=acknowledgement)
                 with self._ack_cond:
-                    self._ack_flushed_sequence = max(self._ack_flushed_sequence, sequence)
+                    self._ack_flushed_by_state[acknowledgement.state] = sequence
                     self._ack_cond.notify_all()
 
-    def _wait_for_rejected_ack(self) -> None:
-        """Bound startup long enough for the terminal acknowledgement to flush."""
+    def _graceful_shutdown_after_ack(self, generation: int) -> None:
+        """Flush the exact terminal ack, half-close, and drain the stream."""
         timeout = min(2.0, self._client._call_timeout(self._config.request_timeout))
         deadline = time.monotonic() + timeout
         with self._ack_cond:
-            rejected = self._ack_latest.get("rejected")
-            target = rejected[0] if rejected is not None else 0
-            while target > self._ack_flushed_sequence and not self._stop_event.is_set():
+            while (
+                self._ack_flushed_by_state.get("rejected") != generation
+                and not self._stop_event.is_set()
+            ):
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
                     break
                 self._ack_cond.wait(remaining)
+            self._graceful_watch_stop.set()
+            self._ack_cond.notify_all()
+        remaining = max(0.0, deadline - time.monotonic())
+        if self._watch_done.wait(remaining):
+            return
+        with self._call_lock:
+            call = self._watch_call
+        if call is not None:
+            try:
+                call.cancel()
+            except Exception:
+                pass
 
     def _ack(
         self,
@@ -891,9 +925,9 @@ class ReleaseLoader:
         category: str = "",
         diagnostic: str = "",
         divergence: Tuple[bool, int] = (False, 0),
-    ) -> None:
+    ) -> int:
         if state not in _STATES:
-            return
+            return 0
         if state != "rejected":
             category = ""
             diagnostic = ""
@@ -919,17 +953,19 @@ class ReleaseLoader:
             current = self._ack_latest.get(state)
             if current is None or current[1].activation_revision <= candidate.revision:
                 self._ack_sequence += 1
-                self._ack_latest[state] = (self._ack_sequence, acknowledgement)
+                generation = self._ack_sequence
+                self._ack_latest[state] = (generation, acknowledgement)
                 self._ack_cond.notify_all()
                 accepted = True
             else:
+                generation = 0
                 accepted = False
         if accepted:
             with self._state_lock:
                 self._ack_counts[state] += 1
+        return generation
 
-    def _reject(self, candidate: _Candidate, category: str, diagnostic: str = "") -> None:
-        self._ack(candidate, "rejected", category, diagnostic)
+    def _reject(self, candidate: _Candidate, category: str, diagnostic: str = "") -> int:
         self._set_failure(category)
         with self._state_lock:
             self._resolution_failures += int(
@@ -941,17 +977,25 @@ class ReleaseLoader:
                     "digest_mismatch",
                 }
             )
+        return self._ack(candidate, "rejected", category, diagnostic)
 
     # --- status helpers ---------------------------------------------------
 
-    def _set_observed(self, candidate: _Candidate, state: str) -> None:
+    def _set_observed(self, candidate: _Candidate, state: Optional[str] = None) -> None:
         with self._state_lock:
-            self._status = replace(
-                self._status,
-                state=state,
-                observed_version=candidate.release.version,  # type: ignore[attr-defined]
-                observed_revision=candidate.revision,
-            )
+            if state is None:
+                self._status = replace(
+                    self._status,
+                    observed_version=candidate.release.version,  # type: ignore[attr-defined]
+                    observed_revision=candidate.revision,
+                )
+            else:
+                self._status = replace(
+                    self._status,
+                    state=state,
+                    observed_version=candidate.release.version,  # type: ignore[attr-defined]
+                    observed_revision=candidate.revision,
+                )
 
     def _set_failure(self, category: str) -> None:
         if category not in _REJECTION_CATEGORIES:
@@ -1053,10 +1097,22 @@ def _clone_release(release):
     return clone
 
 
-def _is_newer(candidate: Tuple[int, int, str], previous: Tuple[int, int, str]) -> bool:
+def _is_newer(
+    candidate: Tuple[int, int, str, str], previous: Tuple[int, int, str, str]
+) -> bool:
     if candidate[0] != previous[0]:
         return candidate[0] > previous[0]
     return candidate[1:] != previous[1:]
+
+
+def _valid_sha256_hex(value: object) -> bool:
+    if not isinstance(value, str) or len(value) != 64:
+        return False
+    try:
+        decoded = bytes.fromhex(value)
+    except (TypeError, ValueError):
+        return False
+    return value.isascii() and len(decoded) == 32
 
 
 def _token_from_result(result: SecretTokenResult) -> str:

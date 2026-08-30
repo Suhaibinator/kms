@@ -11,6 +11,7 @@ from kms_paramstore._gen import kms_pb2
 from kms_paramstore._refs import NamespaceRef
 from kms_paramstore.async_release import AsyncReleaseLoader, AsyncReleaseLoaderConfig
 from kms_paramstore.release import ClassifiedReleaseError, ReleaseCandidateError
+from kms_paramstore.release import ReleaseCommitError
 from kms_paramstore.secret import Secret
 
 
@@ -71,6 +72,8 @@ class _AsyncCall:
         self.owner = owner
         self.queue: "asyncio.Queue[object]" = asyncio.Queue()
         self.cancelled = False
+        self.half_closed = False
+        self.drained = False
 
     async def write(self, request) -> None:
         if request.WhichOneof("request") == "register":
@@ -84,6 +87,7 @@ class _AsyncCall:
     async def __anext__(self):
         item = await self.queue.get()
         if item is self._CLOSED:
+            self.drained = True
             raise StopAsyncIteration
         return item
 
@@ -96,7 +100,9 @@ class _AsyncCall:
         return True
 
     async def done_writing(self) -> None:
-        return None
+        if not self.half_closed:
+            self.half_closed = True
+            self.queue.put_nowait(self._CLOSED)
 
 
 class _AsyncReleaseStub:
@@ -278,6 +284,33 @@ def test_async_loader_supersedes_and_aborts_stale_candidate(monkeypatch):
     asyncio.run(scenario())
 
 
+def test_async_active_fence_includes_release_name(monkeypatch):
+    async def scenario():
+        loader, stub, _client = _loader(monkeypatch, _release(1, 10))
+        stale = _Prepared()
+        current = _Prepared()
+
+        async def prepare(_cancel, snapshot):
+            if snapshot.version == 1:
+                renamed = kms_pb2.ConfigurationRelease()
+                renamed.CopyFrom(stub.release)
+                renamed.name = "different-release"
+                stub.release = renamed
+                return stale
+            return current
+
+        task = asyncio.create_task(loader.run(prepare))
+        await _wait_for(lambda: stale.aborts == 1)
+        stub.activate(_release(2, 11))
+        await _wait_for(lambda: loader.status().applied_version == 2)
+        loader.stop()
+        await task
+        assert stale.commits == 0
+        assert current.commits == 1
+
+    asyncio.run(scenario())
+
+
 def test_async_classified_failure_is_redacted_and_fetch_free(monkeypatch):
     async def scenario():
         sensitive = "secret local validation detail"
@@ -296,6 +329,81 @@ def test_async_classified_failure_is_redacted_and_fetch_free(monkeypatch):
         rejected = [a for a in stub.acknowledgements if a.state == "rejected"]
         assert rejected[-1].rejection_category == "restart_required"
         assert rejected[-1].diagnostic == ""
+        assert len(stub.calls) == 1
+        assert stub.calls[0].half_closed
+        assert stub.calls[0].drained
+        assert not stub.calls[0].cancelled
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("bad_digest", ["é" * 64, "g" * 64, "0" * 63])
+def test_async_malformed_release_digest_is_classified(monkeypatch, bad_digest):
+    async def scenario():
+        initial = _release(1, 10)
+        initial[0].digest = bad_digest
+        loader, stub, _client = _loader(monkeypatch, initial)
+        with pytest.raises(ReleaseCandidateError) as caught:
+            await loader.run(lambda _cancel, _snapshot: _Prepared())
+        assert caught.value.category == "digest_mismatch"
+        rejected = [a for a in stub.acknowledgements if a.state == "rejected"]
+        assert rejected[-1].rejection_category == "digest_mismatch"
+
+    asyncio.run(scenario())
+
+
+def test_async_uppercase_parameter_digest_is_accepted(monkeypatch):
+    async def scenario():
+        initial = _release(1, 10)
+        initial[0].entries[0].parameter_digest = (
+            initial[0].entries[0].parameter_digest.upper()
+        )
+        initial[0].digest = release_module._release_digest(initial[0])
+        loader, _stub, _client = _loader(monkeypatch, initial)
+        prepared = _Prepared()
+        task = asyncio.create_task(loader.run(lambda _cancel, _snapshot: prepared))
+        await _wait_for(lambda: prepared.commits == 1)
+        loader.stop()
+        await task
+        assert loader.status().state == "applied"
+
+    asyncio.run(scenario())
+
+
+def test_async_empty_initial_active_fails_before_watch(monkeypatch):
+    async def scenario():
+        loader, stub, _client = _loader(
+            monkeypatch, (kms_pb2.ConfigurationRelease(), 0)
+        )
+        called = False
+
+        def prepare(_cancel, _snapshot):
+            nonlocal called
+            called = True
+            return _Prepared()
+
+        with pytest.raises(Exception, match="response was empty"):
+            await loader.run(prepare)
+        assert not called
+        assert stub.calls == []
+        assert loader.status().state == "idle"
+
+    asyncio.run(scenario())
+
+
+def test_async_commit_failure_uses_public_rejected_state(monkeypatch):
+    async def scenario():
+        class Broken(_Prepared):
+            def commit(self):
+                raise RuntimeError("commit failed")
+
+        loader, stub, _client = _loader(monkeypatch, _release(1, 10))
+        with pytest.raises(ReleaseCommitError):
+            await loader.run(lambda _cancel, _snapshot: Broken())
+        assert loader.status().state == "rejected"
+        assert loader.status().last_failure_category == "internal"
+        assert loader.stats().rejections["internal"] == 1
+        assert not any(a.state == "applied" for a in stub.acknowledgements)
 
     asyncio.run(scenario())
 
@@ -324,6 +432,11 @@ def test_async_rejection_preserves_lkg_and_replays_acks(monkeypatch):
         replayed = [a for a in stub.acknowledgements if a.activation_revision == 11]
         assert any(a.state == "rejected" for a in replayed)
         assert all(a.diagnostic == "" for a in replayed)
+        stub.activate(_release(3, 12))
+        await _wait_for(lambda: loader.status().applied_version == 3)
+        assert loader.status().state == "applied"
+        assert loader.status().last_failure_category == ""
+        assert loader.status().last_failure_unix_ms == 0
         loader.stop()
         await task
 

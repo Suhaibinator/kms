@@ -29,6 +29,7 @@ from .release import (
     ReleaseEntry,
     ReleaseManifest,
     ReleaseSnapshot,
+    ReleaseStartupError,
     ReleaseStats,
     ReleaseStatus,
     _Candidate,
@@ -43,6 +44,7 @@ from .release import (
     _now_ms,
     _release_digest,
     _token_from_result,
+    _valid_sha256_hex,
 )
 from .secret import Secret
 
@@ -97,14 +99,17 @@ class AsyncReleaseLoader:
         self._stop_event = asyncio.Event()
         self._candidate_queue: "asyncio.Queue[_Candidate]" = asyncio.Queue(maxsize=1)
         self._active_cancel: Optional[asyncio.Event] = None
-        self._active_identity: Optional[Tuple[int, int, str]] = None
-        self._latest_identity: Optional[Tuple[int, int, str]] = None
+        self._active_identity: Optional[Tuple[int, int, str, str]] = None
+        self._latest_identity: Optional[Tuple[int, int, str, str]] = None
         self._last_seen_revision = 0
         self._watch_call: Any = None
 
         self._ack_event = asyncio.Event()
         self._ack_generation = 0
+        self._ack_flushed_by_state: Dict[str, int] = {}
         self._ack_latest: Dict[str, Tuple[int, Any, bool]] = {}
+        self._graceful_watch_stop = asyncio.Event()
+        self._watch_done = asyncio.Event()
 
         self._status = ReleaseStatus()
         self._reconnects = 0
@@ -168,6 +173,8 @@ class AsyncReleaseLoader:
         self._active_cancel = None
         self._active_identity = None
         self._latest_identity = None
+        self._graceful_watch_stop = asyncio.Event()
+        self._watch_done = asyncio.Event()
         try:
             namespace = self._client._resolve_namespace_arg(self._config.namespace)
             if inspect.isawaitable(namespace):
@@ -175,6 +182,10 @@ class AsyncReleaseLoader:
             self._namespace = namespace
 
             initial = await self._read_active()
+            if not initial.release.name:
+                raise ReleaseStartupError(
+                    "active configuration release response was empty"
+                )
             self._last_seen_revision = initial.revision
             watch_task = asyncio.create_task(self._watch_loop(), name="kms-release-watch")
             reconcile_task = asyncio.create_task(
@@ -202,7 +213,9 @@ class AsyncReleaseLoader:
                     stopped_task.cancel()
                     await asyncio.gather(stopped_task, return_exceptions=True)
                     candidate = candidate_task.result()
-                    outcome, category = await self._process_candidate(candidate, prepare)
+                    outcome, category, acknowledgement_generation = (
+                        await self._process_candidate(candidate, prepare)
+                    )
                     if outcome == "applied":
                         applied_once = True
                     elif outcome == "rejected" and not applied_once:
@@ -213,7 +226,9 @@ class AsyncReleaseLoader:
                         if fresh is not None and fresh.identity != candidate.identity:
                             self._offer_candidate(fresh)
                             continue
-                        await self._wait_for_rejected_ack()
+                        await self._graceful_shutdown_after_ack(
+                            acknowledgement_generation
+                        )
                         raise ReleaseCandidateError(category)
             finally:
                 self.stop()
@@ -224,8 +239,6 @@ class AsyncReleaseLoader:
                     task.cancel()
                 await asyncio.gather(*tasks, return_exceptions=True)
         finally:
-            if self._status.state != "fatal":
-                self._status = replace(self._status, state="stopped")
             self._watch_call = None
             self._running = False
 
@@ -261,18 +274,25 @@ class AsyncReleaseLoader:
             observed_revision=candidate.revision,
         )
 
-    async def _process_candidate(self, candidate: _Candidate, prepare: Any) -> Tuple[str, str]:
+    async def _process_candidate(
+        self, candidate: _Candidate, prepare: Any
+    ) -> Tuple[str, str, int]:
         cancel = asyncio.Event()
         self._active_cancel = cancel
         self._active_identity = candidate.identity
-        self._status = replace(self._status, state="resolving")
+        self._status = replace(
+            self._status,
+            observed_version=candidate.release.version,
+            observed_revision=candidate.revision,
+        )
         prepared: Optional[PreparedRelease] = None
         try:
             snapshot = await self._resolve(candidate, cancel)
+            self._status = replace(self._status, state="received")
             self._ack(candidate, "received")
             if cancel.is_set():
                 raise _CandidateFailure("superseded")
-            self._status = replace(self._status, state="preparing")
+            self._status = replace(self._status, state="prepared")
             try:
                 result = prepare(cancel, snapshot)
                 prepared = await result if inspect.isawaitable(result) else result
@@ -306,9 +326,10 @@ class AsyncReleaseLoader:
                 if returned is not None:
                     raise TypeError("PreparedRelease.commit must return None")
             except BaseException:
+                self._rejection_counts["internal"] += 1
                 self._status = replace(
                     self._status,
-                    state="fatal",
+                    state="rejected",
                     last_failure_category="internal",
                     last_failure_unix_ms=_now_ms(),
                 )
@@ -322,16 +343,22 @@ class AsyncReleaseLoader:
                 observed_revision=candidate.revision,
                 applied_version=candidate.release.version,
                 applied_revision=candidate.revision,
+                last_failure_category="",
+                last_failure_unix_ms=0,
             )
             self._ack(candidate, "applied", divergence=_divergence_of(prepared))
-            return ("applied", "")
+            return ("applied", "", 0)
         except _CandidateFailure as exc:
             if prepared is not None and exc.category != "prepare_failed":
                 # All paths that need cleanup normally abort above. This guard
                 # covers validator/fencing refactors without double-aborting.
                 pass
-            self._reject(candidate, exc.category)
-            return ("superseded" if exc.category == "superseded" else "rejected", exc.category)
+            generation = self._reject(candidate, exc.category)
+            return (
+                "superseded" if exc.category == "superseded" else "rejected",
+                exc.category,
+                generation,
+            )
         except asyncio.CancelledError:
             if prepared is not None:
                 _safe_abort(prepared)
@@ -352,7 +379,14 @@ class AsyncReleaseLoader:
             or release.namespace.app != namespace.app
         ):
             raise _CandidateFailure("version_mismatch")
-        if not release.digest or release.digest.lower() != _release_digest(release):
+        try:
+            calculated_digest = _release_digest(release)
+        except (TypeError, ValueError):
+            raise _CandidateFailure("digest_mismatch") from None
+        if (
+            not _valid_sha256_hex(release.digest)
+            or release.digest.lower() != calculated_digest
+        ):
             raise _CandidateFailure("digest_mismatch")
         if not release.entries:
             raise _CandidateFailure("resolution_failed")
@@ -450,7 +484,10 @@ class AsyncReleaseLoader:
             if parameter.version != entry.version or actual_path != entry.path:
                 raise _CandidateFailure("version_mismatch")
             digest = hashlib.sha256(parameter.value.encode("utf-8")).hexdigest()
-            if not entry.parameter_digest or digest.lower() != entry.parameter_digest.lower():
+            if (
+                not _valid_sha256_hex(entry.parameter_digest)
+                or digest.lower() != entry.parameter_digest.lower()
+            ):
                 raise _CandidateFailure("digest_mismatch")
             if entry.content_type and parameter.content_type != entry.content_type:
                 raise _CandidateFailure("digest_mismatch")
@@ -525,26 +562,29 @@ class AsyncReleaseLoader:
     async def _watch_loop(self) -> None:
         attempt = 0
         streams_started = 0
-        while not self._stop_event.is_set():
-            if streams_started:
-                self._reconnects += 1
-            streams_started += 1
-            received = await self._watch_once()
-            if received:
-                attempt = 0
-            if self._stop_event.is_set():
-                return
-            cap = min(
-                self._config.reconnect_max,
-                self._config.reconnect_initial * (2 ** min(attempt, 16)),
-            )
-            attempt += 1
-            try:
-                await asyncio.wait_for(
-                    self._stop_event.wait(), timeout=random.uniform(0.01, cap)
+        try:
+            while not self._stop_event.is_set() and not self._graceful_watch_stop.is_set():
+                if streams_started:
+                    self._reconnects += 1
+                streams_started += 1
+                received = await self._watch_once()
+                if received:
+                    attempt = 0
+                if self._stop_event.is_set() or self._graceful_watch_stop.is_set():
+                    return
+                cap = min(
+                    self._config.reconnect_max,
+                    self._config.reconnect_initial * (2 ** min(attempt, 16)),
                 )
-            except asyncio.TimeoutError:
-                pass
+                attempt += 1
+                try:
+                    await asyncio.wait_for(
+                        self._stop_event.wait(), timeout=random.uniform(0.01, cap)
+                    )
+                except asyncio.TimeoutError:
+                    pass
+        finally:
+            self._watch_done.set()
 
     async def _watch_once(self) -> bool:
         call: Any = None
@@ -618,20 +658,37 @@ class AsyncReleaseLoader:
             current = self._ack_latest.get(state)
             if current is not None and current[0] == generation:
                 self._ack_latest[state] = (generation, current[1], False)
+                self._ack_flushed_by_state[state] = generation
 
-    async def _wait_for_rejected_ack(self) -> None:
-        """Give a delayed/reconnecting stream a bounded terminal flush window."""
+    async def _graceful_shutdown_after_ack(self, generation: int) -> None:
+        """Flush the exact terminal ack, half-close, and drain stream EOF."""
         timeout = min(2.0, self._client._call_timeout(self._config.request_timeout))
         deadline = asyncio.get_running_loop().time() + timeout
-        while True:
-            rejected = self._ack_latest.get("rejected")
-            if rejected is None or not rejected[2]:
-                return
+        while self._ack_flushed_by_state.get("rejected") != generation:
             remaining = deadline - asyncio.get_running_loop().time()
             if remaining <= 0:
-                return
+                break
             self._ack_event.set()
             await asyncio.sleep(min(0.01, remaining))
+        self._graceful_watch_stop.set()
+        self._ack_event.set()
+        call = self._watch_call
+        if call is not None:
+            try:
+                await call.done_writing()
+            except Exception:
+                pass
+        remaining = max(0.0, deadline - asyncio.get_running_loop().time())
+        try:
+            await asyncio.wait_for(self._watch_done.wait(), timeout=remaining)
+            return
+        except asyncio.TimeoutError:
+            pass
+        if call is not None:
+            try:
+                call.cancel()
+            except Exception:
+                pass
 
     def _ack(
         self,
@@ -639,9 +696,9 @@ class AsyncReleaseLoader:
         state: str,
         category: str = "",
         divergence: Tuple[bool, int] = (False, 0),
-    ) -> None:
+    ) -> int:
         if state not in _STATES:
-            return
+            return 0
         if state != "rejected":
             category = ""
         elif category not in _REJECTION_CATEGORIES:
@@ -663,11 +720,14 @@ class AsyncReleaseLoader:
         current = self._ack_latest.get(state)
         if current is None or current[1].activation_revision <= candidate.revision:
             self._ack_generation += 1
-            self._ack_latest[state] = (self._ack_generation, acknowledgement, True)
+            generation = self._ack_generation
+            self._ack_latest[state] = (generation, acknowledgement, True)
             self._ack_event.set()
             self._ack_counts[state] += 1
+            return generation
+        return 0
 
-    def _reject(self, candidate: _Candidate, category: str) -> None:
+    def _reject(self, candidate: _Candidate, category: str) -> int:
         if category not in _REJECTION_CATEGORIES:
             category = "internal"
         self._rejection_counts[category] += 1
@@ -684,7 +744,7 @@ class AsyncReleaseLoader:
             last_failure_category=category,
             last_failure_unix_ms=_now_ms(),
         )
-        self._ack(candidate, "rejected", category)
+        return self._ack(candidate, "rejected", category)
 
     def _require_namespace(self) -> NamespaceRef:
         if self._namespace is None:
