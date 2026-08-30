@@ -68,6 +68,13 @@ entire candidate, leaving the last known good snapshot active. Snapshot and
 view reads return defensive copies, and secret changes appear in reports only
 as field paths.
 
+Use `kms_paramstore.configstore.Duration` for Go-compatible duration fields;
+it retains the full signed 64-bit nanosecond range. `datetime.timedelta` is
+intentionally rejected because its microsecond precision cannot represent the
+wire format faithfully. Config generation also rejects decoded-byte length
+constraints, which JSON Schema cannot express for base64 strings without
+misstating their meaning.
+
 `encode_defaults_artifact` and `export_defaults` produce parameter-only
 `kms-config-defaults/v1` artifacts. `verify_defaults` sends only canonical
 SHA-256 hashes to KMS and returns a value-free result suitable for CI logs.
