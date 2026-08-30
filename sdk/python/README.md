@@ -13,11 +13,12 @@ Requires Python 3.10+.
 pip install -e sdk/python
 # Published releases are wheel assets on GitHub (replace both versions):
 python -m pip install \
-  https://github.com/Suhaibinator/kms/releases/download/v0.1.0/kms_paramstore-0.1.0-py3-none-any.whl
+  https://github.com/Suhaibinator/kms/releases/download/v0.2.0/kms_paramstore-0.2.0-py3-none-any.whl
 ```
 
-Runtime dependencies are `grpcio>=1.83.0` and `protobuf>=7.35.1,<8`. The gRPC stubs are
-vendored under `kms_paramstore/_gen/`, so no `protoc` is needed to use the SDK.
+Runtime dependencies are `grpcio>=1.83.1`, `protobuf>=7.35.1,<8`, and
+`pydantic>=2.13,<3`. The gRPC stubs are vendored under
+`kms_paramstore/_gen/`, so no `protoc` is needed to use the SDK.
 
 ## Quick start
 
@@ -87,8 +88,7 @@ required only for token-method identities, and admitted only where the namespace
 `allowed_auth_methods` includes `"token"`. Use `tls_from_files(ca_cert)` for
 server-only TLS, `mtls_from_files(cert, key, ca)` for mutual TLS, or
 `tls_from_bytes(ca_cert=..., client_cert=..., client_key=...)` to build credentials
-from in-memory PEM. `tls` also accepts a `TLSConfig(ca=..., cert=..., key=...)`
-dataclass (paths or raw PEM bytes).
+from in-memory PEM. Pass the resulting `grpc.ChannelCredentials` through `tls=`.
 
 Transport choice is fail-closed: if `tls` is omitted, construction fails unless
 you pass a pre-built `channel` or explicitly set `insecure=True`. The latter is
@@ -202,7 +202,9 @@ Env-var-overridden values are pinned and do not hot-reload.
 ## Atomic configuration releases
 
 Use the synchronous, thread-safe release loader when related values must be
-resolved and installed together:
+resolved and installed together. Asyncio applications use `AsyncReleaseLoader`
+with `AsyncReleaseLoaderConfig`; it owns independent event-loop state and an
+async gRPC stream.
 
 ```python
 from kms_paramstore import ReleaseLoader, ReleaseLoaderConfig
@@ -210,6 +212,7 @@ from kms_paramstore import ReleaseLoader, ReleaseLoaderConfig
 loader = ReleaseLoader(client, ReleaseLoaderConfig(
     name="runtime",
     secret_token_provider=lambda alias, path: local_tokens.get(alias),
+    validate_manifest=lambda cancel, manifest: validate_contract(manifest),
 ))
 
 def prepare(cancel, snapshot):
@@ -223,7 +226,11 @@ revision, digest, schema pin, exact entries, parameters, and `Secret` values by
 stable alias. A prepared object's `commit()` must be infallible and normally
 performs an atomic reference swap; `abort()` releases stale or failed prepared
 work. Startup fails until one release applies. Later outages and rejections
-retain the last-known-good state.
+retain the last-known-good state. Manifest validation runs before resource
+fetches and token lookup. `ClassifiedReleaseError` propagates an allow-listed,
+value-free rejection category (including `restart_required`) without sending
+its local message. Applied acknowledgements can carry a bounded divergence
+count from a prepared object's optional `release_divergence()` method.
 
 `run_typed_release` provides an explicit no-reflection decode step. See
 [`../../docs/sdk-python.md`](../../docs/sdk-python.md#atomic-release-loading)

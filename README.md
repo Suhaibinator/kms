@@ -547,8 +547,10 @@ client-side routing resolves deep links on refresh.
   run the self-contained
   [`examples/managed-config`](examples/managed-config) walkthrough.
 - **Python** (`sdk/python`, package `kms_paramstore`, distribution
-  `kms-paramstore`) — equivalent synchronous release loading with explicit
-  decoding; see [`docs/sdk-python.md`](docs/sdk-python.md).
+  `kms-paramstore`) — equivalent synchronous and asyncio clients and release
+  loaders, plus Pydantic-based generated managed configuration, defaults, and
+  verification; see [`docs/sdk-python.md`](docs/sdk-python.md) and the
+  [`Python managed configuration guide`](sdk/python/MANAGED_CONFIG.md).
 - **TypeScript** (`sdk/typescript`, package `@suhaibinator/kms`) — Node.js
   TLS/mTLS client, declarative hot reload, atomic release loading,
   framework-neutral public-policy publishing, generated managed configuration,

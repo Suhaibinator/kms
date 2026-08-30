@@ -235,12 +235,15 @@ return loader.Run(ctx, func(ctx context.Context, snapshot kmsclient.ReleaseSnaps
 ```
 
 Python uses `ReleaseLoader(client, ReleaseLoaderConfig(name="runtime", ...))`
-and synchronous `loader.run(prepare)` with the same resolution, cancellation,
+and synchronous `loader.run(prepare)`, or the event-loop-native
+`AsyncReleaseLoader`, with the same resolution, cancellation,
 prepare/commit/abort, last-known-good, and acknowledgement guarantees. The
 lower-level Go and Python loaders decode explicitly and do not infer schemas.
-Go applications may instead opt into the additive
-[`kms-config-gen` managed layer](managed-go-configuration.md), which generates
-strict typed bindings and a release schema from an application root type.
+Go applications may opt into the additive [`kms-config-gen` managed
+layer](managed-go-configuration.md). Python v0.2 provides the equivalent
+Pydantic-based `kms-config-gen-py` layer, which emits a typed binding, strict
+release schema, and machine contract; see the
+[`Python managed configuration guide`](../sdk/python/MANAGED_CONFIG.md).
 
 TypeScript uses `await client.createReleaseLoader({ name: "runtime" })` and
 `await loader.run(prepare, signal)`. Decode and validate the complete
