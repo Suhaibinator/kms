@@ -40,9 +40,13 @@ if TYPE_CHECKING:
     from .client import Client
 
 __all__ = [
+    "ClassifiedReleaseError",
     "PreparedRelease",
+    "ReleaseCandidateError",
     "ReleaseCommitError",
     "ReleaseEntry",
+    "ReleaseDivergenceReporter",
+    "ReleaseManifest",
     "ReleaseLoader",
     "ReleaseLoaderConfig",
     "ReleaseLoaderError",
@@ -64,13 +68,18 @@ _REJECTION_CATEGORIES = frozenset(
         "version_mismatch",
         "digest_mismatch",
         "prepare_failed",
+        "config_contract_mismatch",
+        "config_decode_failed",
+        "config_validation_failed",
+        "default_mismatch",
+        "restart_required",
         "superseded",
         "active_check_failed",
         "internal",
     }
 )
 _DIAGNOSTIC_LIMIT = 128
-_PROCESS_INSTANCE_ID = str(uuid.uuid4())
+_MAX_DIVERGENT_FIELD_COUNT = 65_535
 
 
 class PreparedRelease(Protocol):
@@ -81,6 +90,13 @@ class PreparedRelease(Protocol):
 
     def abort(self) -> None:
         """Release resources when this candidate will not be committed."""
+
+
+class ReleaseDivergenceReporter(Protocol):
+    """Optional prepared-release capability for value-free drift reporting."""
+
+    def release_divergence(self) -> Tuple[bool, int]:
+        """Report whether source defaults differ and the bounded field count."""
 
 
 SecretTokenResult = Union[str, Tuple[str, bool], None]
@@ -99,6 +115,24 @@ class ReleaseCommitError(ReleaseLoaderError):
     """Application ``commit`` raised, violating the prepared-release contract."""
 
 
+class ClassifiedReleaseError(ReleaseLoaderError):
+    """Classify a local validation failure without exposing its message remotely."""
+
+    def __init__(self, category: str, message: str = "") -> None:
+        if category not in _REJECTION_CATEGORIES:
+            raise ValueError("invalid release rejection category")
+        super().__init__(message or f"configuration release rejected ({category})")
+        self.release_rejection_category = category
+
+
+class ReleaseCandidateError(ReleaseStartupError):
+    """Redacted error for an initial candidate that could not be applied."""
+
+    def __init__(self, category: str) -> None:
+        self.category = category if category in _REJECTION_CATEGORIES else "internal"
+        super().__init__(f"initial configuration release was rejected ({self.category})")
+
+
 @dataclass(frozen=True)
 class ReleaseEntry:
     """One exact immutable resource reference in a release."""
@@ -112,6 +146,37 @@ class ReleaseEntry:
     parameter_digest: str = ""
     client_bound: bool = False
     has_access_token: bool = False
+
+
+@dataclass(frozen=True)
+class ReleaseManifest:
+    """Immutable unresolved manifest passed to validation before any fetch."""
+
+    namespace: str
+    name: str
+    version: int
+    activation_revision: int
+    schema_id: str
+    schema_version: int
+    digest: str
+    metadata_json: str
+    entries: Mapping[str, ReleaseEntry]
+
+    def entry(self, alias: str) -> Optional[ReleaseEntry]:
+        return self.entries.get(alias)
+
+    def __repr__(self) -> str:
+        return (
+            "ReleaseManifest("
+            f"namespace={self.namespace!r}, name={self.name!r}, "
+            f"version={self.version}, activation_revision={self.activation_revision}, "
+            f"digest={self.digest!r}, entries={len(self.entries)})"
+        )
+
+    __str__ = __repr__
+
+    def __format__(self, _spec: str) -> str:
+        return self.__repr__()
 
 
 @dataclass(frozen=True)
@@ -196,6 +261,7 @@ class ReleaseLoaderConfig:
     namespace: "Optional[str | NamespaceRef]" = None
     reconcile_interval: float = 60.0
     secret_token_provider: Optional[SecretTokenProvider] = None
+    validate_manifest: Optional[Callable[[threading.Event, ReleaseManifest], None]] = None
     max_concurrent_fetches: int = 16
     client_name: Optional[str] = None
     instance_id: Optional[str] = None
@@ -246,11 +312,12 @@ class ReleaseLoader:
         self._config = config
         self._namespace = client._resolve_namespace_arg(config.namespace)
         self._client_name = config.client_name or client._client_name
-        self._instance_id = config.instance_id or _PROCESS_INSTANCE_ID
+        self._instance_id = config.instance_id or str(uuid.uuid4())
         self._stub = kms_pb2_grpc.ConfigurationReleaseServiceStub(client._channel)
 
         self._run_lock = threading.Lock()
-        self._has_run = False
+        self._running = False
+        self._run_generation = 0
         self._stop_event = threading.Event()
         self._watch_thread: Optional[threading.Thread] = None
         self._executor: Optional[concurrent.futures.ThreadPoolExecutor] = None
@@ -263,6 +330,7 @@ class ReleaseLoader:
 
         self._ack_cond = threading.Condition()
         self._ack_sequence = 0
+        self._ack_flushed_sequence = 0
         self._ack_latest: Dict[str, Tuple[int, kms_pb2.ReleaseAcknowledgement]] = {}
 
         self._call_lock = threading.Lock()
@@ -334,14 +402,23 @@ class ReleaseLoader:
         if not callable(prepare):
             raise errors.ConfigError("release prepare callback is required")
         with self._run_lock:
-            if self._has_run:
-                raise errors.ConfigError("a ReleaseLoader may only be run once")
-            self._has_run = True
+            if self._running:
+                raise errors.ConfigError("a ReleaseLoader is already running")
+            self._running = True
+            self._run_generation += 1
+            run_generation = self._run_generation
+            self._stop_event = threading.Event()
+            self._pending_candidate = None
+            self._active_cancel = None
+            self._active_identity = None
 
         if stop_event is not None:
             def relay_stop() -> None:
                 stop_event.wait()
-                self.stop()
+                with self._run_lock:
+                    active = self._running and self._run_generation == run_generation
+                if active:
+                    self.stop()
 
             threading.Thread(target=relay_stop, name="kms-release-stop", daemon=True).start()
 
@@ -380,9 +457,18 @@ class ReleaseLoader:
                     if outcome == "applied":
                         applied_once = True
                     elif outcome == "rejected" and not applied_once:
-                        raise ReleaseStartupError(
-                            f"initial configuration release was rejected ({category})"
-                        )
+                        # An activation may have superseded a rejected startup
+                        # candidate before cancellation became observable. Give
+                        # the fresh active identity one chance to replace it.
+                        try:
+                            fresh = self._read_active()
+                        except Exception:
+                            fresh = None
+                        if fresh is not None and fresh.identity != candidate.identity:
+                            self._offer_candidate(fresh)
+                            continue
+                        self._wait_for_rejected_ack()
+                        raise ReleaseCandidateError(category)
                     continue
 
                 if time.monotonic() >= next_reconcile:
@@ -404,6 +490,9 @@ class ReleaseLoader:
             with self._state_lock:
                 if self._status.state != "fatal":
                     self._status = replace(self._status, state="stopped")
+            with self._run_lock:
+                if self._run_generation == run_generation:
+                    self._running = False
 
     # --- candidate lifecycle ---------------------------------------------
 
@@ -455,13 +544,6 @@ class ReleaseLoader:
         candidate: _Candidate,
         prepare_callback: Callable[[threading.Event, ReleaseSnapshot], PreparedRelease],
     ) -> Tuple[str, str]:
-        status = self.status()
-        if (
-            candidate.revision <= status.applied_revision
-            and candidate.release.version == status.applied_version  # type: ignore[attr-defined]
-        ):
-            return "duplicate", ""
-
         cancel = threading.Event()
         with self._candidate_cond:
             self._active_cancel = cancel
@@ -477,8 +559,11 @@ class ReleaseLoader:
             self._set_observed(candidate, "preparing")
             try:
                 prepared = prepare_callback(cancel, snapshot)
-            except Exception:
-                raise _CandidateFailure("prepare_failed") from None
+            except Exception as exc:
+                category = _classified_rejection_category(exc) or "prepare_failed"
+                if cancel.is_set():
+                    category = "superseded"
+                raise _CandidateFailure(category) from None
             if prepared is None or not callable(getattr(prepared, "commit", None)) or not callable(
                 getattr(prepared, "abort", None)
             ):
@@ -502,7 +587,9 @@ class ReleaseLoader:
                 raise _CandidateFailure("superseded")
 
             try:
-                prepared.commit()
+                returned: object = getattr(prepared, "commit")()
+                if returned is not None:
+                    raise TypeError("PreparedRelease.commit must return None")
             except BaseException:
                 with self._state_lock:
                     self._status = replace(
@@ -515,7 +602,6 @@ class ReleaseLoader:
                     "PreparedRelease.commit raised; applied state is unknown"
                 ) from None
 
-            self._ack(candidate, "applied")
             with self._state_lock:
                 self._status = replace(
                     self._status,
@@ -525,6 +611,7 @@ class ReleaseLoader:
                     applied_version=candidate.release.version,  # type: ignore[attr-defined]
                     applied_revision=candidate.revision,
                 )
+            self._ack(candidate, "applied", divergence=_divergence_of(prepared))
             return "applied", ""
         except _CandidateFailure as exc:
             self._reject(candidate, exc.category, exc.diagnostic)
@@ -540,13 +627,48 @@ class ReleaseLoader:
     def _resolve(self, candidate: _Candidate, cancel: threading.Event) -> ReleaseSnapshot:
         started = time.monotonic()
         release = candidate.release
+        if (
+            not release.name
+            or release.name != self._config.name
+            or release.namespace.env != self._namespace.env
+            or release.namespace.app != self._namespace.app
+        ):
+            raise _CandidateFailure("version_mismatch", "release identity mismatch")
         if not release.digest or not hmac.compare_digest(
             _release_digest(release), release.digest.lower()
         ):
             raise _CandidateFailure("digest_mismatch", "release digest mismatch")
-        entries = tuple(_entry_from_proto(entry) for entry in release.entries)
+        if not release.entries:
+            raise _CandidateFailure("resolution_failed", "release has no entries")
+        try:
+            entries = tuple(_entry_from_proto(entry) for entry in release.entries)
+        except (TypeError, ValueError):
+            raise _CandidateFailure("resolution_failed", "invalid release entry") from None
         if len({entry.alias for entry in entries}) != len(entries):
             raise _CandidateFailure("resolution_failed", "duplicate alias")
+
+        manifest = ReleaseManifest(
+            namespace=f"{release.namespace.env}/{release.namespace.app}",
+            name=release.name,
+            version=release.version,
+            activation_revision=candidate.revision,
+            schema_id=release.schema_id,
+            schema_version=release.schema_version,
+            digest=release.digest,
+            metadata_json=release.metadata_json,
+            entries=MappingProxyType({entry.alias: entry for entry in entries}),
+        )
+        validator = self._config.validate_manifest
+        if validator is not None:
+            try:
+                validator(cancel, manifest)
+            except Exception as exc:
+                category = _classified_rejection_category(exc) or "prepare_failed"
+                if cancel.is_set():
+                    category = "superseded"
+                raise _CandidateFailure(category) from None
+        if cancel.is_set() or self._stop_event.is_set():
+            raise _CandidateFailure("superseded")
 
         executor = self._executor
         if executor is None:
@@ -587,14 +709,14 @@ class ReleaseLoader:
                 self._last_resolution_ms = elapsed
 
         return ReleaseSnapshot(
-            namespace=f"{release.namespace.env}/{release.namespace.app}",
-            name=release.name,
-            version=release.version,
-            activation_revision=candidate.revision,
-            schema_id=release.schema_id,
-            schema_version=release.schema_version,
-            digest=release.digest,
-            metadata_json=release.metadata_json,
+            namespace=manifest.namespace,
+            name=manifest.name,
+            version=manifest.version,
+            activation_revision=manifest.activation_revision,
+            schema_id=manifest.schema_id,
+            schema_version=manifest.schema_version,
+            digest=manifest.digest,
+            metadata_json=manifest.metadata_json,
             entries=entries,
             parameters=MappingProxyType(parameters),
             secrets=MappingProxyType(secrets),
@@ -619,8 +741,8 @@ class ReleaseLoader:
                 raise _CandidateFailure("version_mismatch")
             if str(Ref(NamespaceRef(parameter.ref.namespace.env, parameter.ref.namespace.app), parameter.ref.key)) != entry.path:
                 raise _CandidateFailure("version_mismatch", "resource mismatch")
-            if parameter.content_type != entry.content_type:
-                raise _CandidateFailure("version_mismatch", "content type mismatch")
+            if entry.content_type and parameter.content_type != entry.content_type:
+                raise _CandidateFailure("digest_mismatch", "content type mismatch")
             digest = hashlib.sha256(parameter.value.encode("utf-8")).hexdigest()
             if not entry.parameter_digest or digest != entry.parameter_digest:
                 raise _CandidateFailure("digest_mismatch")
@@ -652,7 +774,7 @@ class ReleaseLoader:
             raise _CandidateFailure("version_mismatch")
         if secret.path != entry.path:
             raise _CandidateFailure("version_mismatch", "resource mismatch")
-        if secret.content_type != entry.content_type:
+        if entry.content_type and secret.content_type != entry.content_type:
             raise _CandidateFailure("version_mismatch", "content type mismatch")
         return secret
 
@@ -727,6 +849,9 @@ class ReleaseLoader:
             sent_sequence = max((item[0] for item in initial), default=0)
         for _, acknowledgement in initial:
             yield kms_pb2.WatchReleaseRequest(acknowledgement=acknowledgement)
+        with self._ack_cond:
+            self._ack_flushed_sequence = max(self._ack_flushed_sequence, sent_sequence)
+            self._ack_cond.notify_all()
 
         while not self._stop_event.is_set():
             with self._ack_cond:
@@ -740,6 +865,22 @@ class ReleaseLoader:
             for sequence, acknowledgement in updates:
                 sent_sequence = max(sent_sequence, sequence)
                 yield kms_pb2.WatchReleaseRequest(acknowledgement=acknowledgement)
+                with self._ack_cond:
+                    self._ack_flushed_sequence = max(self._ack_flushed_sequence, sequence)
+                    self._ack_cond.notify_all()
+
+    def _wait_for_rejected_ack(self) -> None:
+        """Bound startup long enough for the terminal acknowledgement to flush."""
+        timeout = min(2.0, self._client._call_timeout(self._config.request_timeout))
+        deadline = time.monotonic() + timeout
+        with self._ack_cond:
+            rejected = self._ack_latest.get("rejected")
+            target = rejected[0] if rejected is not None else 0
+            while target > self._ack_flushed_sequence and not self._stop_event.is_set():
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    break
+                self._ack_cond.wait(remaining)
 
     def _ack(
         self,
@@ -747,6 +888,7 @@ class ReleaseLoader:
         state: str,
         category: str = "",
         diagnostic: str = "",
+        divergence: Tuple[bool, int] = (False, 0),
     ) -> None:
         if state not in _STATES:
             return
@@ -764,15 +906,25 @@ class ReleaseLoader:
             instance_id=self._instance_id,
             state=state,
             rejection_category=category,
-            diagnostic=diagnostic[:_DIAGNOSTIC_LIMIT],
+            # Local errors can contain resolved values. Categories are the
+            # complete wire contract; arbitrary diagnostics never cross it.
+            diagnostic="",
             timestamp_unix_ms=_now_ms(),
+            applied_divergent=state == "applied" and divergence[0],
+            divergent_field_count=divergence[1] if state == "applied" and divergence[0] else 0,
         )
         with self._ack_cond:
-            self._ack_sequence += 1
-            self._ack_latest[state] = (self._ack_sequence, acknowledgement)
-            self._ack_cond.notify_all()
-        with self._state_lock:
-            self._ack_counts[state] += 1
+            current = self._ack_latest.get(state)
+            if current is None or current[1].activation_revision <= candidate.revision:
+                self._ack_sequence += 1
+                self._ack_latest[state] = (self._ack_sequence, acknowledgement)
+                self._ack_cond.notify_all()
+                accepted = True
+            else:
+                accepted = False
+        if accepted:
+            with self._state_lock:
+                self._ack_counts[state] += 1
 
     def _reject(self, candidate: _Candidate, category: str, diagnostic: str = "") -> None:
         self._ack(candidate, "rejected", category, diagnostic)
@@ -843,6 +995,15 @@ def run_typed_release(
 
 def _entry_from_proto(entry) -> ReleaseEntry:
     ref = entry.ref
+    if (
+        not entry.alias
+        or entry.kind not in {_KIND_PARAMETER, _KIND_SECRET}
+        or entry.version <= 0
+        or not ref.namespace.env
+        or not ref.namespace.app
+        or not ref.key
+    ):
+        raise ValueError("invalid release entry")
     return ReleaseEntry(
         alias=entry.alias,
         kind=entry.kind,
@@ -901,6 +1062,35 @@ def _token_from_result(result: SecretTokenResult) -> str:
         token, ok = result
         return token if ok else ""
     return result or ""
+
+
+def _classified_rejection_category(exc: BaseException) -> str:
+    """Read only an allow-listed category; never preserve the local cause."""
+    try:
+        category = getattr(exc, "release_rejection_category", "")
+        if not category:
+            method = getattr(exc, "release_rejection_category_value", None)
+            if callable(method):
+                category = method()
+    except BaseException:
+        return ""
+    return category if isinstance(category, str) and category in _REJECTION_CATEGORIES else ""
+
+
+def _divergence_of(prepared: PreparedRelease) -> Tuple[bool, int]:
+    reporter = getattr(prepared, "release_divergence", None)
+    if not callable(reporter):
+        return (False, 0)
+    try:
+        reported = reporter()
+        if not isinstance(reported, tuple) or len(reported) != 2:
+            return (False, 0)
+        divergent, field_count = reported
+        if divergent is not True or isinstance(field_count, bool) or not isinstance(field_count, int):
+            return (False, 0)
+        return (True, min(max(field_count, 0), _MAX_DIVERGENT_FIELD_COUNT))
+    except BaseException:
+        return (False, 0)
 
 
 def _safe_abort(prepared: PreparedRelease) -> None:

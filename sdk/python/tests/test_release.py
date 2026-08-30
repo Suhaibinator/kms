@@ -10,6 +10,7 @@ from typing import Dict, List, Optional
 import pytest
 
 import kms_paramstore.release as release_module
+import kms_paramstore
 from kms_paramstore import (
     ReleaseCommitError,
     ReleaseLoader,
@@ -17,6 +18,7 @@ from kms_paramstore import (
     ReleaseStartupError,
     run_typed_release,
 )
+from kms_paramstore.release import ClassifiedReleaseError
 from kms_paramstore._gen import kms_pb2
 from kms_paramstore._refs import NamespaceRef
 from kms_paramstore.secret import Secret
@@ -281,6 +283,38 @@ def _run_in_thread(loader, prepare):
     return thread, errors
 
 
+def test_release_protocols_and_async_loader_are_publicly_exported():
+    assert kms_paramstore.ReleaseDivergenceReporter is release_module.ReleaseDivergenceReporter
+    assert kms_paramstore.ReleaseManifest is release_module.ReleaseManifest
+    assert kms_paramstore.ClassifiedReleaseError is release_module.ClassifiedReleaseError
+    assert kms_paramstore.ReleaseCandidateError is release_module.ReleaseCandidateError
+    assert kms_paramstore.AsyncReleaseLoader.__name__ == "AsyncReleaseLoader"
+    assert kms_paramstore.AsyncReleaseLoaderConfig.__name__ == "AsyncReleaseLoaderConfig"
+
+
+def test_release_loader_rejects_overlap_but_allows_sequential_runs(monkeypatch):
+    loader, _stub, _client = _loader(monkeypatch, _release(1, 10))
+    first = _Prepared()
+    first_thread, first_raised = _run_in_thread(
+        loader, lambda _cancel, _snapshot: first
+    )
+    assert wait_until(lambda: first.commits == 1)
+    with pytest.raises(Exception, match="already running"):
+        loader.run(lambda _cancel, _snapshot: _Prepared())
+    loader.stop()
+    first_thread.join(timeout=2)
+    assert not first_raised
+
+    second = _Prepared()
+    second_thread, second_raised = _run_in_thread(
+        loader, lambda _cancel, _snapshot: second
+    )
+    assert wait_until(lambda: second.commits == 1)
+    loader.stop()
+    second_thread.join(timeout=2)
+    assert not second_raised
+
+
 def test_initial_snapshot_is_complete_immutable_redacting_and_acknowledged(monkeypatch):
     loader, stub, client = _loader(monkeypatch, _release(1, 10))
     prepared = _Prepared()
@@ -314,6 +348,131 @@ def test_initial_snapshot_is_complete_immutable_redacting_and_acknowledged(monke
     with pytest.raises(FrozenInstanceError):
         snapshot.version = 99
     assert loader.stats().acknowledgements["applied"] == 1
+
+
+def test_manifest_validation_precedes_fetch_and_is_immutable(monkeypatch):
+    order = []
+
+    def validate(cancel, manifest):
+        assert not cancel.is_set()
+        order.append("manifest")
+        assert manifest.namespace == "prod/app"
+        assert manifest.entry("password").has_access_token
+        with pytest.raises(TypeError):
+            manifest.entries["other"] = manifest.entry("setting")
+
+    loader, stub, client = _loader(
+        monkeypatch,
+        _release(1, 10),
+        validate_manifest=validate,
+    )
+    original_get = client._param_stub.GetParameter
+
+    def get_parameter(*args, **kwargs):
+        order.append("fetch")
+        return original_get(*args, **kwargs)
+
+    client._param_stub.GetParameter = get_parameter
+    prepared = _Prepared()
+    thread, raised = _run_in_thread(loader, lambda _cancel, _snapshot: prepared)
+    assert wait_until(lambda: loader.status().state == "applied")
+    loader.stop()
+    thread.join(timeout=2)
+    assert not raised
+    assert order[0] == "manifest"
+    assert "fetch" in order
+
+
+def test_classified_manifest_failure_is_redacted_and_propagated(monkeypatch):
+    sensitive = "secret plaintext from local validation"
+
+    def validate(_cancel, _manifest):
+        raise ClassifiedReleaseError("config_contract_mismatch", sensitive)
+
+    loader, stub, client = _loader(
+        monkeypatch,
+        _release(1, 10),
+        validate_manifest=validate,
+    )
+    with pytest.raises(ReleaseStartupError) as caught:
+        loader.run(lambda _cancel, _snapshot: _Prepared())
+    assert getattr(caught.value, "category") == "config_contract_mismatch"
+    assert sensitive not in str(caught.value)
+    assert not client._secret_stub.tokens
+    rejected = [ack for ack in stub.acknowledgements if ack.state == "rejected"]
+    assert rejected
+    assert rejected[-1].rejection_category == "config_contract_mismatch"
+    assert rejected[-1].diagnostic == ""
+
+
+def test_classified_prepare_failure_preserves_lkg_and_category(monkeypatch):
+    loader, stub, _client = _loader(monkeypatch, _release(1, 10))
+
+    def prepare(_cancel, snapshot):
+        if snapshot.version == 2:
+            raise ClassifiedReleaseError(
+                "restart_required", "sensitive restart field names"
+            )
+        return _Prepared()
+
+    thread, raised = _run_in_thread(loader, prepare)
+    assert wait_until(lambda: loader.status().applied_version == 1)
+    stub.activate(_release(2, 11))
+    assert wait_until(lambda: loader.status().last_failure_category == "restart_required")
+    assert loader.status().applied_version == 1
+    rejected = [ack for ack in stub.acknowledgements if ack.state == "rejected"]
+    assert rejected[-1].rejection_category == "restart_required"
+    assert rejected[-1].diagnostic == ""
+    loader.stop()
+    thread.join(timeout=2)
+    assert not raised
+
+
+def test_stale_ack_cannot_replace_replay_state_or_increment_counter(monkeypatch):
+    loader, _stub, _client = _loader(monkeypatch, _release(1, 10))
+    newer_release, newer_revision = _release(2, 20)
+    stale_release, stale_revision = _release(1, 10)
+    newer = release_module._Candidate(newer_release, newer_revision)
+    stale = release_module._Candidate(stale_release, stale_revision)
+    loader._ack(newer, "rejected", "restart_required")
+    count = loader.stats().acknowledgements["rejected"]
+    loader._ack(stale, "rejected", "default_mismatch")
+    assert loader.stats().acknowledgements["rejected"] == count
+    assert loader._ack_latest["rejected"][1].activation_revision == 20
+    assert loader._ack_latest["rejected"][1].rejection_category == "restart_required"
+
+
+@pytest.mark.parametrize(
+    ("reported", "expected"),
+    [
+        ((True, 3), (True, 3)),
+        ((True, -1), (True, 0)),
+        ((True, 100_000), (True, 65_535)),
+        ((False, 9), (False, 0)),
+    ],
+)
+def test_applied_ack_carries_only_bounded_divergence(monkeypatch, reported, expected):
+    class DivergentPrepared(_Prepared):
+        def release_divergence(self):
+            return reported
+
+    loader, stub, _client = _loader(monkeypatch, _release(1, 10))
+    thread, raised = _run_in_thread(
+        loader, lambda _cancel, _snapshot: DivergentPrepared()
+    )
+    assert wait_until(
+        lambda: any(ack.state == "applied" for ack in stub.acknowledgements)
+    )
+    loader.stop()
+    thread.join(timeout=2)
+    assert not raised
+    applied = [ack for ack in stub.acknowledgements if ack.state == "applied"][-1]
+    assert (applied.applied_divergent, applied.divergent_field_count) == expected
+    assert all(
+        not ack.applied_divergent and ack.divergent_field_count == 0
+        for ack in stub.acknowledgements
+        if ack.state != "applied"
+    )
 
 
 def test_initial_digest_mismatch_fails_startup_and_rejects(monkeypatch):
@@ -423,6 +582,22 @@ def test_commit_exception_is_fatal_and_never_aborted_or_applied(monkeypatch):
         loader.run(lambda _cancel, _snapshot: item)
 
     assert item.aborts == 0
+    assert loader.status().state == "fatal"
+    assert "applied" not in {ack.state for ack in stub.acknowledgements}
+
+
+def test_commit_return_value_is_fatal_contract_violation(monkeypatch):
+    class ReturningPrepared(_Prepared):
+        def commit(self):
+            self.commits += 1
+            return "not-none"
+
+    loader, stub, _client = _loader(monkeypatch, _release(1, 10))
+    prepared = ReturningPrepared()
+    with pytest.raises(ReleaseCommitError):
+        loader.run(lambda _cancel, _snapshot: prepared)
+    assert prepared.commits == 1
+    assert prepared.aborts == 0
     assert loader.status().state == "fatal"
     assert "applied" not in {ack.state for ack in stub.acknowledgements}
 
