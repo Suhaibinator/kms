@@ -367,6 +367,7 @@ class ReleaseLoader:
         self._active_cancel: Optional[threading.Event] = None
         self._active_identity: Optional[Tuple[int, int, str, str]] = None
         self._latest_identity: Optional[Tuple[int, int, str, str]] = None
+        self._retry_identity: Optional[Tuple[int, int, str, str]] = None
         self._last_seen_revision = 0
 
         self._ack_cond = threading.Condition()
@@ -460,6 +461,7 @@ class ReleaseLoader:
             self._active_cancel = None
             self._active_identity = None
             self._latest_identity = None
+            self._retry_identity = None
             self._graceful_watch_stop = threading.Event()
             self._watch_done = threading.Event()
             self._relay_done = threading.Event()
@@ -509,7 +511,7 @@ class ReleaseLoader:
         applied_once = False
         next_reconcile = time.monotonic() + self._config.reconcile_interval
         try:
-            self._offer_candidate(initial)
+            self._offer_candidate(initial, source="reconciliation")
 
             while not self._stop_event.is_set():
                 wait_for = min(0.25, max(0.0, next_reconcile - time.monotonic()))
@@ -518,6 +520,7 @@ class ReleaseLoader:
                     outcome, category, acknowledgement_generation = self._process_candidate(
                         candidate, prepare
                     )
+                    self._record_retry_eligibility(candidate, outcome)
                     if outcome == "applied":
                         applied_once = True
                     elif outcome == "rejected" and not applied_once:
@@ -529,7 +532,7 @@ class ReleaseLoader:
                         except Exception:
                             fresh = None
                         if fresh is not None and fresh.identity != candidate.identity:
-                            self._offer_candidate(fresh)
+                            self._offer_candidate(fresh, source="reconciliation")
                             continue
                         self._graceful_shutdown_after_ack(acknowledgement_generation)
                         raise ReleaseCandidateError(category)
@@ -539,12 +542,7 @@ class ReleaseLoader:
                     next_reconcile = time.monotonic() + self._config.reconcile_interval
                     try:
                         reconciled = self._read_active()
-                        with self._state_lock:
-                            retry_rejected = self._status.state == "rejected"
-                        with self._candidate_cond:
-                            if retry_rejected and reconciled.identity == self._latest_identity:
-                                self._latest_identity = None
-                        self._offer_candidate(reconciled)
+                        self._offer_candidate(reconciled, source="reconciliation")
                     except Exception:
                         if not applied_once:
                             raise ReleaseStartupError(
@@ -579,7 +577,7 @@ class ReleaseLoader:
             raise errors.map_grpc_error(exc) from None
         return _Candidate(_clone_release(response.release), response.activation_revision)
 
-    def _offer_candidate(self, candidate: _Candidate) -> None:
+    def _offer_candidate(self, candidate: _Candidate, *, source: str = "activation") -> None:
         if not candidate.release.name:  # type: ignore[attr-defined]
             return
         accepted = False
@@ -592,8 +590,13 @@ class ReleaseLoader:
                 if candidate.revision < self._latest_identity[0]:
                     return
                 if candidate.identity == self._latest_identity:
-                    return
+                    if not (
+                        source == "reconciliation"
+                        and self._retry_identity == candidate.identity
+                    ):
+                        return
             self._latest_identity = candidate.identity
+            self._retry_identity = None
             if self._active_identity is not None and candidate.identity != self._active_identity:
                 if self._active_cancel is not None:
                     self._active_cancel.set()
@@ -608,6 +611,14 @@ class ReleaseLoader:
                     observed_version=candidate.release.version,  # type: ignore[attr-defined]
                     observed_revision=candidate.revision,
                 )
+
+    def _record_retry_eligibility(self, candidate: _Candidate, outcome: str) -> None:
+        """Allow only the exact latest rejected identity to retry on reconciliation."""
+        with self._candidate_cond:
+            if outcome == "rejected" and self._latest_identity == candidate.identity:
+                self._retry_identity = candidate.identity
+            elif self._retry_identity == candidate.identity:
+                self._retry_identity = None
 
     def _take_candidate(self, timeout: float) -> Optional[_Candidate]:
         deadline = time.monotonic() + timeout

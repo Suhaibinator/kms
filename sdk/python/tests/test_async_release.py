@@ -492,6 +492,48 @@ def test_async_status_stats_and_prepared_state_are_canonical(monkeypatch):
     asyncio.run(scenario())
 
 
+@pytest.mark.parametrize("outcome", ["rejected", "superseded"])
+def test_async_old_outcome_cannot_unlock_newer_inflight_reconciliation(monkeypatch, outcome):
+    async def scenario():
+        loader, _stub, _client = _loader(monkeypatch, _release(1, 10))
+        release_a, revision_a = _release(1, 10)
+        release_b, revision_b = _release(2, 11)
+        candidate_a = release_module._Candidate(release_a, revision_a)
+        candidate_b = release_module._Candidate(release_b, revision_b)
+
+        loader._offer_candidate(candidate_a)
+        assert loader._candidate_queue.get_nowait() == candidate_a
+        loader._active_identity = candidate_a.identity
+        loader._active_cancel = asyncio.Event()
+        loader._offer_candidate(candidate_b)
+        loader._record_retry_eligibility(candidate_a, outcome)
+        assert loader._retry_identity is None
+        assert loader._candidate_queue.get_nowait() == candidate_b
+
+        # B is in flight while status may still describe A's rejection.
+        loader._active_identity = candidate_b.identity
+        loader._offer_candidate(candidate_b, source="reconciliation")
+        assert loader._candidate_queue.empty()
+
+    asyncio.run(scenario())
+
+
+def test_async_exact_latest_rejection_retries_only_from_reconciliation(monkeypatch):
+    async def scenario():
+        loader, _stub, _client = _loader(monkeypatch, _release(1, 10))
+        release, revision = _release(1, 10)
+        candidate = release_module._Candidate(release, revision)
+        loader._offer_candidate(candidate)
+        assert loader._candidate_queue.get_nowait() == candidate
+        loader._record_retry_eligibility(candidate, "rejected")
+        loader._offer_candidate(candidate)
+        assert loader._candidate_queue.empty()
+        loader._offer_candidate(candidate, source="reconciliation")
+        assert loader._candidate_queue.get_nowait() == candidate
+
+    asyncio.run(scenario())
+
+
 @pytest.mark.parametrize("failure", ["raises", "returns"])
 def test_async_abort_contract_failure_is_fatal_internal(monkeypatch, failure):
     async def scenario():

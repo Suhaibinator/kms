@@ -850,6 +850,43 @@ def test_sync_loader_dedupes_replayed_and_unchanged_active_identity(monkeypatch)
     assert not raised
 
 
+@pytest.mark.parametrize("outcome", ["rejected", "superseded"])
+def test_sync_old_outcome_cannot_unlock_newer_inflight_reconciliation(monkeypatch, outcome):
+    loader, _stub, _client = _loader(monkeypatch, _release(1, 10))
+    release_a, revision_a = _release(1, 10)
+    release_b, revision_b = _release(2, 11)
+    candidate_a = release_module._Candidate(release_a, revision_a)
+    candidate_b = release_module._Candidate(release_b, revision_b)
+
+    loader._offer_candidate(candidate_a)
+    assert loader._take_candidate(0.01) == candidate_a
+    loader._active_identity = candidate_a.identity
+    loader._active_cancel = threading.Event()
+    loader._offer_candidate(candidate_b)
+    loader._record_retry_eligibility(candidate_a, outcome)
+    assert loader._retry_identity is None
+    assert loader._take_candidate(0.01) == candidate_b
+
+    # B is now in flight. A's stale rejected status must not make an unchanged
+    # reconciliation of B eligible for a duplicate preparation.
+    loader._active_identity = candidate_b.identity
+    loader._offer_candidate(candidate_b, source="reconciliation")
+    assert loader._take_candidate(0.01) is None
+
+
+def test_sync_exact_latest_rejection_retries_only_from_reconciliation(monkeypatch):
+    loader, _stub, _client = _loader(monkeypatch, _release(1, 10))
+    release, revision = _release(1, 10)
+    candidate = release_module._Candidate(release, revision)
+    loader._offer_candidate(candidate)
+    assert loader._take_candidate(0.01) == candidate
+    loader._record_retry_eligibility(candidate, "rejected")
+    loader._offer_candidate(candidate)
+    assert loader._take_candidate(0.01) is None
+    loader._offer_candidate(candidate, source="reconciliation")
+    assert loader._take_candidate(0.01) == candidate
+
+
 def test_sync_status_stats_and_prepared_state_are_canonical(monkeypatch):
     loader, _stub, _client = _loader(monkeypatch, _release(1, 10))
 

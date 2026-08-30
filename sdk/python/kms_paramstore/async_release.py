@@ -104,6 +104,7 @@ class AsyncReleaseLoader:
         self._active_cancel: Optional[asyncio.Event] = None
         self._active_identity: Optional[Tuple[int, int, str, str]] = None
         self._latest_identity: Optional[Tuple[int, int, str, str]] = None
+        self._retry_identity: Optional[Tuple[int, int, str, str]] = None
         self._last_seen_revision = 0
         self._watch_call: Any = None
 
@@ -180,6 +181,7 @@ class AsyncReleaseLoader:
         self._active_cancel = None
         self._active_identity = None
         self._latest_identity = None
+        self._retry_identity = None
         self._graceful_watch_stop = asyncio.Event()
         self._watch_done = asyncio.Event()
         try:
@@ -208,7 +210,7 @@ class AsyncReleaseLoader:
                 if stop_event is not None
                 else None
             )
-            self._offer_candidate(initial)
+            self._offer_candidate(initial, source="reconciliation")
             applied_once = False
             try:
                 while not self._stop_event.is_set():
@@ -228,6 +230,7 @@ class AsyncReleaseLoader:
                     outcome, category, acknowledgement_generation = (
                         await self._process_candidate(candidate, prepare)
                     )
+                    self._record_retry_eligibility(candidate, outcome)
                     if outcome == "applied":
                         applied_once = True
                     elif outcome == "rejected" and not applied_once:
@@ -236,7 +239,7 @@ class AsyncReleaseLoader:
                         except Exception:
                             fresh = None
                         if fresh is not None and fresh.identity != candidate.identity:
-                            self._offer_candidate(fresh)
+                            self._offer_candidate(fresh, source="reconciliation")
                             continue
                         await self._graceful_shutdown_after_ack(
                             acknowledgement_generation
@@ -258,7 +261,7 @@ class AsyncReleaseLoader:
         await stop_event.wait()
         self.stop()
 
-    def _offer_candidate(self, candidate: _Candidate) -> None:
+    def _offer_candidate(self, candidate: _Candidate, *, source: str = "activation") -> None:
         if self._stop_event.is_set() or not candidate.release.name:
             return
         if candidate.revision and candidate.revision < self._last_seen_revision:
@@ -269,8 +272,13 @@ class AsyncReleaseLoader:
             if candidate.revision < self._latest_identity[0]:
                 return
             if candidate.identity == self._latest_identity:
-                return
+                if not (
+                    source == "reconciliation"
+                    and self._retry_identity == candidate.identity
+                ):
+                    return
         self._latest_identity = candidate.identity
+        self._retry_identity = None
         if self._active_identity is not None and candidate.identity != self._active_identity:
             if self._active_cancel is not None:
                 self._active_cancel.set()
@@ -286,6 +294,13 @@ class AsyncReleaseLoader:
             observed_version=candidate.release.version,
             observed_revision=candidate.revision,
         )
+
+    def _record_retry_eligibility(self, candidate: _Candidate, outcome: str) -> None:
+        """Allow only the exact latest rejected identity to retry on reconciliation."""
+        if outcome == "rejected" and self._latest_identity == candidate.identity:
+            self._retry_identity = candidate.identity
+        elif self._retry_identity == candidate.identity:
+            self._retry_identity = None
 
     async def _process_candidate(
         self, candidate: _Candidate, prepare: Any
@@ -584,10 +599,7 @@ class AsyncReleaseLoader:
                         last_failure_unix_ms=_now_ms(),
                     )
                 continue
-            # Permit reconciliation to retry the newest rejected candidate.
-            if self._status.state == "rejected" and candidate.identity == self._latest_identity:
-                self._latest_identity = None
-            self._offer_candidate(candidate)
+            self._offer_candidate(candidate, source="reconciliation")
 
     async def _watch_loop(self) -> None:
         attempt = 0
