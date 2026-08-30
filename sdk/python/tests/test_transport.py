@@ -5,7 +5,7 @@ from unittest import mock
 import grpc
 import pytest
 
-from kms_paramstore import Client, ConfigError, ParamStoreError, TLSConfig
+from kms_paramstore import Client, ConfigError, ParamStoreError, tls_from_files
 from tests._fake_server import start_server
 from tests._tls_support import create_test_tls_material
 from tests.conftest import NS
@@ -62,9 +62,9 @@ def test_tls_config_performs_verified_loopback_rpc(tmp_path):
     )
 
     try:
-        # Exercise the production TLSConfig file-loading and credential path,
+        # Exercise the production file-loading credential path,
         # then cross a real TLS socket and gRPC handler boundary.
-        client = Client(address, tls=TLSConfig(ca=material.ca_cert), timeout=2)
+        client = Client(address, tls=tls_from_files(material.ca_cert), timeout=2)
         try:
             identity = client.who_am_i()
             assert identity.name == "test-client"
@@ -78,7 +78,7 @@ def test_tls_config_performs_verified_loopback_rpc(tmp_path):
         # the server is reachable without proving certificate verification.
         untrusted_client = Client(
             address,
-            tls=TLSConfig(ca=material.wrong_ca_cert),
+            tls=tls_from_files(material.wrong_ca_cert),
             timeout=2,
         )
         try:
@@ -93,7 +93,7 @@ def test_tls_config_performs_verified_loopback_rpc(tmp_path):
         wrong_name_address = address.replace("localhost", "127.0.0.1", 1)
         wrong_name_client = Client(
             wrong_name_address,
-            tls=TLSConfig(ca=material.ca_cert),
+            tls=tls_from_files(material.ca_cert),
             timeout=2,
         )
         try:

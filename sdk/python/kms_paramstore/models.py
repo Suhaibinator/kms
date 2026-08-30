@@ -53,7 +53,10 @@ class Parameter:
     metadata_json: str = "{}"
     created_by: str = ""
     created_at_unix_ms: int = 0
-    labels: Mapping[str, int] = field(default_factory=dict)
+    labels: Mapping[str, int] = field(default_factory=lambda: MappingProxyType({}))
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "labels", MappingProxyType(dict(self.labels)))
 
     @property
     def namespace(self) -> str:
@@ -83,8 +86,12 @@ class ParameterMetadata:
     metadata_json: str = "{}"
     created_at_unix_ms: int = 0
     updated_at_unix_ms: int = 0
-    labels: Mapping[str, int] = field(default_factory=dict)
+    labels: Mapping[str, int] = field(default_factory=lambda: MappingProxyType({}))
     versions: Tuple[ParameterVersion, ...] = ()
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "labels", MappingProxyType(dict(self.labels)))
+        object.__setattr__(self, "versions", tuple(self.versions))
 
     @property
     def namespace(self) -> str:
@@ -119,8 +126,12 @@ class SecretInfo:
     metadata_json: str = "{}"
     created_at_unix_ms: int = 0
     updated_at_unix_ms: int = 0
-    labels: Mapping[str, int] = field(default_factory=dict)
+    labels: Mapping[str, int] = field(default_factory=lambda: MappingProxyType({}))
     versions: Tuple[SecretVersion, ...] = ()
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "labels", MappingProxyType(dict(self.labels)))
+        object.__setattr__(self, "versions", tuple(self.versions))
 
     @property
     def namespace(self) -> str:
@@ -161,6 +172,9 @@ class Page(Generic[T]):
 
     items: Tuple[T, ...]
     next_page_token: str = ""
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "items", tuple(self.items))
 
     def __iter__(self) -> Iterator[object]:
         yield self.items

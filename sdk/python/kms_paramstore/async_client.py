@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import math
 import os
 import sys
 from collections.abc import Iterable, Mapping
@@ -22,7 +23,7 @@ from .client import (
     _valid_page_size,
     _valid_uint64,
 )
-from .config import DEFAULT_TIMEOUT, TLSConfig
+from .config import DEFAULT_TIMEOUT
 from ._defaults import apply_result, make_apply_request, make_verify_request, verify_result
 from .models import (
     ApplicationDefaultsApplyResult,
@@ -55,9 +56,10 @@ class AsyncClient:
         *,
         token: str = "",
         namespace: Optional[str] = None,
-        tls: "Optional[TLSConfig | grpc.ChannelCredentials]" = None,
+        tls: Optional[grpc.ChannelCredentials] = None,
         insecure: bool = False,
         cache_ttl: float = 0.0,
+        cache_max_entries: int = 4096,
         timeout: float = DEFAULT_TIMEOUT,
         client_name: Optional[str] = None,
         fallback_to_defaults_on_error: bool = False,
@@ -66,6 +68,8 @@ class AsyncClient:
         channel_options: Optional[List[Tuple[str, object]]] = None,
         channel: Optional[grpc.aio.Channel] = None,
     ) -> None:
+        if channel is not None and (tls is not None or insecure):
+            raise errors.ConfigError("channel cannot be combined with tls or insecure=True")
         if channel is None and not endpoint:
             raise errors.ConfigError("endpoint is required")
         if channel is None and tls is not None and insecure:
@@ -74,15 +78,22 @@ class AsyncClient:
             raise errors.ConfigError(
                 "transport security is required; pass tls=..., or set insecure=True only for local development"
             )
-        if reconcile_interval <= 0:
-            raise errors.ConfigError("reconcile_interval must be positive")
+        if isinstance(timeout, bool) or not isinstance(timeout, (int, float)) or not math.isfinite(timeout) or timeout <= 0:
+            raise errors.ConfigError("timeout must be finite and positive")
+        if isinstance(cache_ttl, bool) or not isinstance(cache_ttl, (int, float)) or not math.isfinite(cache_ttl):
+            raise errors.ConfigError("cache_ttl must be finite")
+        if isinstance(reconcile_interval, bool) or not isinstance(reconcile_interval, (int, float)) or not math.isfinite(reconcile_interval) or reconcile_interval <= 0:
+            raise errors.ConfigError("reconcile_interval must be finite and positive")
         self._token = token
-        self._timeout = timeout if timeout and timeout > 0 else DEFAULT_TIMEOUT
+        self._timeout = float(timeout)
         argv0 = sys.argv[0] if sys.argv else ""
         self._client_name = client_name or (os.path.basename(argv0) if argv0 else "kms-paramstore-client")
         self._logger = logger or logging.getLogger("kms_paramstore")
         self._fallback = fallback_to_defaults_on_error
-        self._cache = Cache(cache_ttl)
+        try:
+            self._cache = Cache(cache_ttl, cache_max_entries)
+        except ValueError as exc:
+            raise errors.ConfigError(str(exc)) from exc
         self._reconcile_interval = reconcile_interval
         self._namespace = parse_namespace(namespace) if namespace else None
         self._namespace_discovered = bool(namespace)
@@ -100,9 +111,8 @@ class AsyncClient:
                 ("grpc.keepalive_timeout_ms", 10000),
                 ("grpc.keepalive_permit_without_calls", 1),
             ]
-            credentials = tls.to_credentials() if isinstance(tls, TLSConfig) else tls
-            if credentials is not None:
-                self._channel = grpc.aio.secure_channel(endpoint, credentials, options=options)
+            if tls is not None:
+                self._channel = grpc.aio.secure_channel(endpoint, tls, options=options)
             else:
                 self._channel = grpc.aio.insecure_channel(endpoint, options=options)
             self._owns_channel = True
@@ -145,6 +155,15 @@ class AsyncClient:
         except Exception:
             pass
 
+    def _default_allowed_for_error(self, err: Exception) -> bool:
+        return isinstance(err, errors.NotFoundError) or self._fallback
+
+    def _enqueue_callback(self, callback: Callable[[], object]) -> None:
+        try:
+            self._subs().dispatch(callback)
+        except asyncio.QueueFull:
+            self._logf("async callback queue full, dropping notification")
+
     def _auth_metadata(self, secret_token: str = "") -> List[Tuple[str, str]]:
         metadata: List[Tuple[str, str]] = []
         if self._token:
@@ -154,7 +173,11 @@ class AsyncClient:
         return metadata
 
     def _call_timeout(self, timeout: Optional[float]) -> float:
-        return timeout if timeout is not None and timeout > 0 else self._timeout
+        if timeout is not None:
+            if isinstance(timeout, bool) or not isinstance(timeout, (int, float)) or not math.isfinite(timeout) or timeout <= 0:
+                raise errors.ConfigError("timeout must be finite and positive")
+            return float(timeout)
+        return self._timeout
 
     async def _client_namespace(self) -> Optional[NamespaceRef]:
         if self._namespace_discovered:
@@ -169,6 +192,7 @@ class AsyncClient:
         return self._namespace
 
     async def _resolve_ref(self, key: str) -> Ref:
+        self._assert_open()
         if not key:
             raise errors.ConfigError("key must not be empty")
         if key.startswith("/"):
@@ -183,6 +207,7 @@ class AsyncClient:
     async def _resolve_namespace_arg(
         self, namespace: "Optional[str | NamespaceRef]"
     ) -> NamespaceRef:
+        self._assert_open()
         if isinstance(namespace, NamespaceRef):
             return namespace
         if namespace is not None:
@@ -206,21 +231,27 @@ class AsyncClient:
         return WhoAmI(response.name, response.kind, namespace, response.auth_method)
 
     async def get_parameter(
-        self, key: str, *, version: int = 0, label: str = "", timeout: Optional[float] = None
+        self, key: str, *, version: int = 0, label: str = "", secret_token: str = "",
+        timeout: Optional[float] = None
     ) -> str:
         version, label = _normalize_selector(version, label)
         ref = await self._resolve_ref(key)
-        cached = self._cache.get_param(str(ref), version, label)
-        if cached is not None:
-            return cached
-        return (await self._fetch_parameter_info(ref, version=version, label=label, timeout=timeout)).value
+        if not secret_token:
+            cached = self._cache.get_param(str(ref), version, label)
+            if cached is not None:
+                return cached
+        return (await self._fetch_parameter_info(
+            ref, version=version, label=label, secret_token=secret_token, timeout=timeout
+        )).value
 
     async def get_parameter_info(
-        self, key: str, *, version: int = 0, label: str = "", timeout: Optional[float] = None
+        self, key: str, *, version: int = 0, label: str = "", secret_token: str = "",
+        timeout: Optional[float] = None
     ) -> Parameter:
         version, label = _normalize_selector(version, label)
         return await self._fetch_parameter_info(
-            await self._resolve_ref(key), version=version, label=label, timeout=timeout
+            await self._resolve_ref(key), version=version, label=label,
+            secret_token=secret_token, timeout=timeout
         )
 
     async def _fetch_parameter_info(
@@ -231,21 +262,24 @@ class AsyncClient:
         version, label = _normalize_selector(version, label)
         generation = None if secret_token else self._cache.begin_parameter_read(str(ref))
         try:
-            response = await self._param_stub.GetParameter(
-                kms_pb2.GetParameterRequest(ref=to_proto_ref(ref), version=version, label=label),
-                metadata=self._auth_metadata(secret_token), timeout=self._call_timeout(timeout),
+            try:
+                response = await self._param_stub.GetParameter(
+                    kms_pb2.GetParameterRequest(ref=to_proto_ref(ref), version=version, label=label),
+                    metadata=self._auth_metadata(secret_token), timeout=self._call_timeout(timeout),
+                )
+            except grpc.RpcError as exc:
+                raise errors.map_grpc_error(exc) from None
+            if not response.HasField("parameter"):
+                raise errors.ParamStoreError("KMS parameter response was empty", code="internal")
+            parameter = _parameter_from_proto(response.parameter)
+            _assert_read_identity(
+                "parameter", ref, parameter.env, parameter.app, parameter.key, parameter.version, version
             )
-        except grpc.RpcError as exc:
-            raise errors.map_grpc_error(exc) from None
-        if not response.HasField("parameter"):
-            raise errors.ParamStoreError("KMS parameter response was empty", code="internal")
-        parameter = _parameter_from_proto(response.parameter)
-        _assert_read_identity(
-            "parameter", ref, parameter.env, parameter.app, parameter.key, parameter.version, version
-        )
-        if not secret_token:
-            self._cache.put_param_if_unchanged(generation, version, label, parameter.value)
-        return parameter
+            if not secret_token:
+                self._cache.put_param_if_unchanged(generation, version, label, parameter.value)
+            return parameter
+        finally:
+            self._cache.end_read(generation)
 
     async def put_parameter(
         self, key: str, value: str, *, content_type: str = "", metadata_json: str = "",
@@ -268,6 +302,7 @@ class AsyncClient:
         self, namespace: NamespaceRef, *, key_prefix: str = "", page_size: int = 0,
         page_token: str = "", timeout: Optional[float] = None,
     ) -> Page[Parameter]:
+        self._assert_open()
         try:
             response = await self._param_stub.ListParameters(
                 kms_pb2.ListParametersRequest(
@@ -320,6 +355,7 @@ class AsyncClient:
         entries: Iterable[VerifyDefaultEntry | Mapping[str, object]], release: str = "",
         profile: str = "", schema_sha256: str = "", timeout: Optional[float] = None,
     ) -> VerifyReleaseDefaultsResult:
+        self._assert_open()
         request, requested = make_verify_request(
             namespace=namespace, release=release, profile=profile,
             schema_sha256=schema_sha256, entries=entries,
@@ -337,6 +373,7 @@ class AsyncClient:
         overwrite: bool = False, execute: bool = False, plan_digest: str = "",
         update_definition: bool = False, timeout: Optional[float] = None,
     ) -> ApplicationDefaultsApplyResult:
+        self._assert_open()
         request = make_apply_request(
             namespace=namespace, artifact=artifact, overwrite=overwrite,
             execute=execute, plan_digest=plan_digest, update_definition=update_definition,
@@ -361,26 +398,36 @@ class AsyncClient:
                 return cached
         generation = None if secret_token else self._cache.begin_secret_read(str(ref))
         try:
-            response = await self._secret_stub.GetSecret(
-                kms_pb2.GetSecretRequest(ref=to_proto_ref(ref), version=version, label=label),
-                metadata=self._auth_metadata(secret_token), timeout=self._call_timeout(timeout),
+            try:
+                response = await self._secret_stub.GetSecret(
+                    kms_pb2.GetSecretRequest(ref=to_proto_ref(ref), version=version, label=label),
+                    metadata=self._auth_metadata(secret_token), timeout=self._call_timeout(timeout),
+                )
+            except grpc.RpcError as exc:
+                raise errors.map_grpc_error(exc) from None
+            if not response.HasField("ref"):
+                raise errors.ParamStoreError("KMS secret response omitted resource reference", code="internal")
+            rref = response.ref
+            _assert_read_identity(
+                "secret", ref, rref.namespace.env, rref.namespace.app, rref.key,
+                response.version, version,
             )
-        except grpc.RpcError as exc:
-            raise errors.map_grpc_error(exc) from None
-        if not response.HasField("ref"):
-            raise errors.ParamStoreError("KMS secret response omitted resource reference", code="internal")
-        rref = response.ref
-        _assert_read_identity(
-            "secret", ref, rref.namespace.env, rref.namespace.app, rref.key,
-            response.version, version,
-        )
-        secret = Secret(
-            response.value, env=rref.namespace.env, app=rref.namespace.app, key=rref.key,
-            version=response.version, content_type=response.content_type,
-        )
-        if not secret_token:
-            self._cache.put_secret_if_unchanged(generation, version, label, secret)
-        return secret
+            secret = Secret(
+                response.value, env=rref.namespace.env, app=rref.namespace.app, key=rref.key,
+                version=response.version, content_type=response.content_type,
+            )
+            if not secret_token:
+                self._cache.put_secret_if_unchanged(generation, version, label, secret)
+            return secret
+        finally:
+            self._cache.end_read(generation)
+
+    async def resolve(self, config_obj: object, *, timeout: Optional[float] = None) -> None:
+        """Resolve every declarative value using this client's event loop."""
+        self._assert_open()
+        from .values import resolve_targets_async
+
+        await resolve_targets_async(self, config_obj, timeout=timeout)
 
     async def put_secret(
         self, key: str, value: "bytes | bytearray | str", *, content_type: str = "",

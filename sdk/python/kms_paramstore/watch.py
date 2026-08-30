@@ -394,6 +394,7 @@ class _SubManager:
         with self._lock:
             stream_namespaces = list(self._stream_namespaces)
         self._client._cache.invalidate_secrets_in_namespaces(stream_namespaces)
+        self._client._cache.invalidate_parameters_in_namespaces(stream_namespaces)
 
         present: Set[_RefKey] = set()
         for p in snap.parameters:
@@ -464,11 +465,11 @@ class _SubManager:
             handlers = list(self._param_handlers.get(rk, ()))
             watchers = self._matching_watchers_locked(rk)
 
+        env, app, key = rk
+        self._client._cache.invalidate_param(str(Ref(NamespaceRef(env, app), key)))
         if not changed:
             return
 
-        env, app, key = rk
-        self._client._cache.invalidate_param(str(Ref(NamespaceRef(env, app), key)))
         for h in handlers:
             try:
                 h(value, present)

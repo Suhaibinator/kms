@@ -28,7 +28,6 @@ from .async_release import (
     run_typed_release_async,
 )
 from .client import Client
-from .config import TLSConfig
 from .errors import (
     ConfigError,
     FailedPreconditionError,
@@ -95,7 +94,6 @@ __all__ = [
     "AsyncManifestValidator",
     "AsyncSecretTokenProvider",
     "WhoAmI",
-    "TLSConfig",
     "Secret",
     "new_secret",
     "SecretValue",

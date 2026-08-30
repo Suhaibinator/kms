@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import math
 import os
 import queue
 import sys
@@ -22,7 +23,7 @@ from ._refs import (
     to_proto_ref,
 )
 from .cache import Cache
-from .config import DEFAULT_TIMEOUT, TLSConfig
+from .config import DEFAULT_TIMEOUT
 from ._defaults import apply_result, make_apply_request, make_verify_request, verify_result
 from .models import (
     ApplicationDefaultsApplyResult,
@@ -85,9 +86,10 @@ class Client:
         *,
         token: str = "",
         namespace: Optional[str] = None,
-        tls: "Optional[TLSConfig | grpc.ChannelCredentials]" = None,
+        tls: Optional[grpc.ChannelCredentials] = None,
         insecure: bool = False,
         cache_ttl: float = 0.0,
+        cache_max_entries: int = 4096,
         timeout: float = DEFAULT_TIMEOUT,
         client_name: Optional[str] = None,
         fallback_to_defaults_on_error: bool = False,
@@ -96,6 +98,8 @@ class Client:
         channel_options: Optional[List[Tuple[str, object]]] = None,
         channel: Optional[grpc.Channel] = None,
     ) -> None:
+        if channel is not None and (tls is not None or insecure):
+            raise errors.ConfigError("channel cannot be combined with tls or insecure=True")
         if channel is None and not endpoint:
             raise errors.ConfigError("endpoint is required")
         if channel is None and tls is not None and insecure:
@@ -109,13 +113,20 @@ class Client:
         # (the server derives the identity from the cert), and dev servers may be
         # unauthenticated. When both are present the token still travels too.
         self._token = token
-        self._timeout = timeout if timeout and timeout > 0 else DEFAULT_TIMEOUT
+        if isinstance(timeout, bool) or not isinstance(timeout, (int, float)) or not math.isfinite(timeout) or timeout <= 0:
+            raise errors.ConfigError("timeout must be finite and positive")
+        if isinstance(cache_ttl, bool) or not isinstance(cache_ttl, (int, float)) or not math.isfinite(cache_ttl):
+            raise errors.ConfigError("cache_ttl must be finite")
+        if isinstance(reconcile_interval, bool) or not isinstance(reconcile_interval, (int, float)) or not math.isfinite(reconcile_interval) or reconcile_interval <= 0:
+            raise errors.ConfigError("reconcile_interval must be finite and positive")
+        self._timeout = float(timeout)
         self._client_name = client_name or _default_client_name()
         self._logger = logger or logging.getLogger("kms_paramstore")
         self._fallback = fallback_to_defaults_on_error
-        self._cache = Cache(cache_ttl)
-        if reconcile_interval <= 0:
-            raise errors.ConfigError("reconcile_interval must be positive")
+        try:
+            self._cache = Cache(cache_ttl, cache_max_entries)
+        except ValueError as exc:
+            raise errors.ConfigError(str(exc)) from exc
         self._reconcile_interval = reconcile_interval
 
         # Namespace: from config (parsed now, failing fast on a bad string) or
@@ -137,9 +148,8 @@ class Client:
                 ("grpc.keepalive_timeout_ms", 10000),
                 ("grpc.keepalive_permit_without_calls", 1),
             ]
-            creds = tls.to_credentials() if isinstance(tls, TLSConfig) else tls
-            if creds is not None:
-                self._channel = grpc.secure_channel(endpoint, creds, options=options)
+            if tls is not None:
+                self._channel = grpc.secure_channel(endpoint, tls, options=options)
             else:
                 # Reaching this branch requires the explicit insecure=True
                 # opt-in validated above.
@@ -182,7 +192,8 @@ class Client:
             self._cb_queue.put_nowait(lambda: None)
         except queue.Full:
             pass
-        self._cb_thread.join(timeout=2.0)
+        if threading.current_thread() is not self._cb_thread:
+            self._cb_thread.join(timeout=2.0)
         if self._owns_channel:
             self._channel.close()
 
@@ -211,8 +222,10 @@ class Client:
         return md
 
     def _call_timeout(self, timeout: Optional[float]) -> float:
-        if timeout is not None and timeout > 0:
-            return timeout
+        if timeout is not None:
+            if isinstance(timeout, bool) or not isinstance(timeout, (int, float)) or not math.isfinite(timeout) or timeout <= 0:
+                raise errors.ConfigError("timeout must be finite and positive")
+            return float(timeout)
         return self._timeout
 
     def _subs(self) -> _SubManager:
@@ -328,6 +341,7 @@ class Client:
         *,
         version: int = 0,
         label: str = "",
+        secret_token: str = "",
         timeout: Optional[float] = None,
     ) -> str:
         """Return the value of a non-secret parameter.
@@ -338,7 +352,8 @@ class Client:
         """
         version, label = _normalize_selector(version, label)
         return self._get_parameter_ref(
-            self._resolve_ref(key), version=version, label=label, timeout=timeout
+            self._resolve_ref(key), version=version, label=label,
+            secret_token=secret_token, timeout=timeout
         )
 
     def get_parameter_info(
@@ -347,20 +362,23 @@ class Client:
         *,
         version: int = 0,
         label: str = "",
+        secret_token: str = "",
         timeout: Optional[float] = None,
     ) -> Parameter:
         """Return a parameter value together with its immutable metadata."""
         version, label = _normalize_selector(version, label)
         return self._fetch_parameter_info(
-            self._resolve_ref(key), version=version, label=label, timeout=timeout
+            self._resolve_ref(key), version=version, label=label,
+            secret_token=secret_token, timeout=timeout
         )
 
     def _get_parameter_ref(
         self, ref: Ref, *, version: int = 0, label: str = "", secret_token: str = "", timeout: Optional[float] = None
     ) -> str:
-        cached = self._cache.get_param(str(ref), version, label)
-        if cached is not None:
-            return cached
+        if not secret_token:
+            cached = self._cache.get_param(str(ref), version, label)
+            if cached is not None:
+                return cached
         return self._fetch_parameter(ref, version=version, label=label, secret_token=secret_token, timeout=timeout)
 
     def _fetch_parameter(
@@ -377,28 +395,34 @@ class Client:
         version, label = _normalize_selector(version, label)
         generation = None if secret_token else self._cache.begin_parameter_read(str(ref))
         try:
-            resp = self._param_stub.GetParameter(
-                kms_pb2.GetParameterRequest(ref=to_proto_ref(ref), version=version, label=label),
-                metadata=self._auth_metadata(secret_token),
-                timeout=self._call_timeout(timeout),
-            )
-        except grpc.RpcError as e:
-            raise errors.map_grpc_error(e) from None
-        if not resp.HasField("parameter"):
-            raise errors.ParamStoreError("KMS parameter response was empty", code="internal")
-        parameter = _parameter_from_proto(resp.parameter)
-        _assert_read_identity("parameter", ref, parameter.env, parameter.app, parameter.key, parameter.version, version)
-        if not secret_token:
-            self._cache.put_param_if_unchanged(generation, version, label, parameter.value)
-        return parameter
+            try:
+                resp = self._param_stub.GetParameter(
+                    kms_pb2.GetParameterRequest(ref=to_proto_ref(ref), version=version, label=label),
+                    metadata=self._auth_metadata(secret_token),
+                    timeout=self._call_timeout(timeout),
+                )
+            except grpc.RpcError as e:
+                raise errors.map_grpc_error(e) from None
+            if not resp.HasField("parameter"):
+                raise errors.ParamStoreError("KMS parameter response was empty", code="internal")
+            parameter = _parameter_from_proto(resp.parameter)
+            _assert_read_identity("parameter", ref, parameter.env, parameter.app, parameter.key, parameter.version, version)
+            if not secret_token:
+                self._cache.put_param_if_unchanged(generation, version, label, parameter.value)
+            return parameter
+        finally:
+            self._cache.end_read(generation)
 
-    def _list_parameters_raw(self, ns: NamespaceRef, key_prefix: str, page_token: str, page_size: int = 0):
+    def _list_parameters_raw(
+        self, ns: NamespaceRef, key_prefix: str, page_token: str,
+        page_size: int = 0, timeout: Optional[float] = None,
+    ):
         return self._param_stub.ListParameters(
             kms_pb2.ListParametersRequest(
                 namespace=to_proto_namespace(ns), key_prefix=key_prefix, page_size=page_size, page_token=page_token
             ),
             metadata=self._auth_metadata(),
-            timeout=self._timeout,
+            timeout=self._call_timeout(timeout),
         )
 
     def list_parameters(
@@ -408,6 +432,7 @@ class Client:
         *,
         page_size: int = 0,
         page_token: str = "",
+        timeout: Optional[float] = None,
     ) -> Page[Parameter]:
         """List parameters in a namespace under an optional key prefix.
 
@@ -417,7 +442,7 @@ class Client:
         ns = self._resolve_namespace_arg(namespace)
         page_size = _valid_page_size(page_size)
         try:
-            resp = self._list_parameters_raw(ns, key_prefix, page_token, page_size)
+            resp = self._list_parameters_raw(ns, key_prefix, page_token, page_size, timeout)
         except grpc.RpcError as e:
             raise errors.map_grpc_error(e) from None
         return Page(tuple(_parameter_from_proto(p) for p in resp.parameters), resp.next_page_token)
@@ -556,35 +581,38 @@ class Client:
                 return cached
         generation = None if secret_token else self._cache.begin_secret_read(cache_key)
         try:
-            resp = self._secret_stub.GetSecret(
-                kms_pb2.GetSecretRequest(ref=to_proto_ref(ref), version=version, label=label),
-                metadata=self._auth_metadata(secret_token),
-                timeout=self._call_timeout(timeout),
+            try:
+                resp = self._secret_stub.GetSecret(
+                    kms_pb2.GetSecretRequest(ref=to_proto_ref(ref), version=version, label=label),
+                    metadata=self._auth_metadata(secret_token),
+                    timeout=self._call_timeout(timeout),
+                )
+            except grpc.RpcError as e:
+                raise errors.map_grpc_error(e) from None
+            if not resp.HasField("ref"):
+                raise errors.ParamStoreError("KMS secret response omitted resource reference", code="internal")
+            rref = resp.ref
+            _assert_read_identity(
+                "secret", ref, rref.namespace.env, rref.namespace.app, rref.key, resp.version, version
             )
-        except grpc.RpcError as e:
-            raise errors.map_grpc_error(e) from None
-        if not resp.HasField("ref"):
-            raise errors.ParamStoreError("KMS secret response omitted resource reference", code="internal")
-        rref = resp.ref
-        _assert_read_identity(
-            "secret", ref, rref.namespace.env, rref.namespace.app, rref.key, resp.version, version
-        )
-        s = Secret(
-            resp.value,
-            env=rref.namespace.env or ref.ns.env,
-            app=rref.namespace.app or ref.ns.app,
-            key=rref.key or ref.key,
-            version=resp.version,
-            content_type=resp.content_type,
-        )
-        if not secret_token:
-            self._cache.put_secret_if_unchanged(generation, version, label, s)
-        return s
+            s = Secret(
+                resp.value,
+                env=rref.namespace.env or ref.ns.env,
+                app=rref.namespace.app or ref.ns.app,
+                key=rref.key or ref.key,
+                version=resp.version,
+                content_type=resp.content_type,
+            )
+            if not secret_token:
+                self._cache.put_secret_if_unchanged(generation, version, label, s)
+            return s
+        finally:
+            self._cache.end_read(generation)
 
     def put_secret(
         self,
         key: str,
-        value: bytes,
+        value: "bytes | bytearray | str",
         *,
         content_type: str = "",
         metadata_json: str = "",
