@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "kms-paramstore"
-version = "0.1.0"
+version = "0.2.0"
 description = "Python SDK for the KMS parameter store and secret management service"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -14,15 +14,16 @@ authors = [{ name = "Suhaib" }]
 keywords = ["kms", "secrets", "parameter-store", "grpc", "configuration"]
 dependencies = [
     # The vendored stubs hard-fail at import on older runtimes: kms_pb2_grpc.py
-    # requires grpcio >= 1.83.0 and kms_pb2.py validates protobuf >= 7.35.1.
+    # requires grpcio >= 1.83.1 and kms_pb2.py validates protobuf >= 7.35.1.
     # Keep these lower bounds in sync when regenerating the stubs.
-    "grpcio>=1.83.0",
+    "grpcio>=1.83.1",
     "protobuf>=7.35.1,<8",
+    "pydantic>=2.13,<3",
 ]
 
 [project.optional-dependencies]
 dev = [
-    "grpcio-tools>=1.83.0",
+    "grpcio-tools>=1.83.1",
     "pytest>=9.1.1",
     "mypy>=2.3.1",
 ]
