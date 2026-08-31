@@ -2,7 +2,7 @@ package configstore
 
 import (
 	"encoding/base64"
-	"encoding/json"
+	"encoding/json/jsontext"
 	"errors"
 	"fmt"
 	"io"
@@ -12,7 +12,6 @@ import (
 	"strconv"
 	"strings"
 	"time"
-	"unicode/utf8"
 )
 
 // CodecKind selects the canonical JSON representation for a generated field.
@@ -119,12 +118,12 @@ func DecodeGroup(document string, dst any, fields []FieldCodec) error {
 }
 
 func parseJSONDocument(document string) (jsonNode, error) {
-	if !utf8.ValidString(document) {
-		return jsonNode{}, errInvalidJSON
-	}
-	decoder := json.NewDecoder(strings.NewReader(document))
-	decoder.UseNumber()
-	token, err := decoder.Token()
+	return parseJSONReader(strings.NewReader(document))
+}
+
+func parseJSONReader(input io.Reader) (jsonNode, error) {
+	decoder := jsontext.NewDecoder(input)
+	token, err := decoder.ReadToken()
 	if err != nil {
 		return jsonNode{}, errInvalidJSON
 	}
@@ -132,74 +131,69 @@ func parseJSONDocument(document string) (jsonNode, error) {
 	if err != nil {
 		return jsonNode{}, errInvalidJSON
 	}
-	if _, err := decoder.Token(); !errors.Is(err, io.EOF) {
+	if _, err := decoder.ReadToken(); !errors.Is(err, io.EOF) {
 		return jsonNode{}, errInvalidJSON
 	}
 	return root, nil
 }
 
-func readJSONNode(decoder *json.Decoder, token json.Token, depth int) (jsonNode, error) {
+func readJSONNode(decoder *jsontext.Decoder, token jsontext.Token, depth int) (jsonNode, error) {
 	if depth > maxJSONDepth {
 		return jsonNode{}, errInvalidJSON
 	}
-	switch item := token.(type) {
-	case nil:
+	switch token.Kind() {
+	case jsontext.KindNull:
 		return jsonNode{kind: nodeNull}, nil
-	case bool:
-		return jsonNode{kind: nodeBool, boolean: item}, nil
-	case string:
-		return jsonNode{kind: nodeString, text: item}, nil
-	case json.Number:
-		return jsonNode{kind: nodeNumber, text: item.String()}, nil
-	case json.Delim:
-		switch item {
-		case '{':
-			node := jsonNode{kind: nodeObject}
-			for decoder.More() {
-				keyToken, err := decoder.Token()
-				if err != nil {
-					return jsonNode{}, errInvalidJSON
-				}
-				key, ok := keyToken.(string)
-				if !ok {
-					return jsonNode{}, errInvalidJSON
-				}
-				valueToken, err := decoder.Token()
-				if err != nil {
-					return jsonNode{}, errInvalidJSON
-				}
-				value, err := readJSONNode(decoder, valueToken, depth+1)
-				if err != nil {
-					return jsonNode{}, errInvalidJSON
-				}
-				node.properties = append(node.properties, jsonProperty{name: key, value: value})
-			}
-			end, err := decoder.Token()
-			if err != nil || end != json.Delim('}') {
+	case jsontext.KindFalse, jsontext.KindTrue:
+		return jsonNode{kind: nodeBool, boolean: token.Bool()}, nil
+	case jsontext.KindString:
+		return jsonNode{kind: nodeString, text: token.String()}, nil
+	case jsontext.KindNumber:
+		return jsonNode{kind: nodeNumber, text: token.String()}, nil
+	case jsontext.KindBeginObject:
+		node := jsonNode{kind: nodeObject}
+		for decoder.PeekKind() != jsontext.KindEndObject {
+			keyToken, err := decoder.ReadToken()
+			if err != nil {
 				return jsonNode{}, errInvalidJSON
 			}
-			return node, nil
-		case '[':
-			node := jsonNode{kind: nodeArray}
-			for decoder.More() {
-				valueToken, err := decoder.Token()
-				if err != nil {
-					return jsonNode{}, errInvalidJSON
-				}
-				value, err := readJSONNode(decoder, valueToken, depth+1)
-				if err != nil {
-					return jsonNode{}, errInvalidJSON
-				}
-				node.elements = append(node.elements, value)
-			}
-			end, err := decoder.Token()
-			if err != nil || end != json.Delim(']') {
+			if keyToken.Kind() != jsontext.KindString {
 				return jsonNode{}, errInvalidJSON
 			}
-			return node, nil
-		default:
+			key := keyToken.String()
+			valueToken, err := decoder.ReadToken()
+			if err != nil {
+				return jsonNode{}, errInvalidJSON
+			}
+			value, err := readJSONNode(decoder, valueToken, depth+1)
+			if err != nil {
+				return jsonNode{}, errInvalidJSON
+			}
+			node.properties = append(node.properties, jsonProperty{name: key, value: value})
+		}
+		end, err := decoder.ReadToken()
+		if err != nil || end.Kind() != jsontext.KindEndObject {
 			return jsonNode{}, errInvalidJSON
 		}
+		return node, nil
+	case jsontext.KindBeginArray:
+		node := jsonNode{kind: nodeArray}
+		for decoder.PeekKind() != jsontext.KindEndArray {
+			valueToken, err := decoder.ReadToken()
+			if err != nil {
+				return jsonNode{}, errInvalidJSON
+			}
+			value, err := readJSONNode(decoder, valueToken, depth+1)
+			if err != nil {
+				return jsonNode{}, errInvalidJSON
+			}
+			node.elements = append(node.elements, value)
+		}
+		end, err := decoder.ReadToken()
+		if err != nil || end.Kind() != jsontext.KindEndArray {
+			return jsonNode{}, errInvalidJSON
+		}
+		return node, nil
 	default:
 		return jsonNode{}, errInvalidJSON
 	}

@@ -4,7 +4,7 @@ package configkms
 
 import (
 	context "context"
-	json "encoding/json"
+	jsontext "encoding/json/jsontext"
 	errors "errors"
 	fmt "fmt"
 	rootconfig "github.com/Suhaibinator/kms/internal/configstorefixture/config"
@@ -64,11 +64,11 @@ type PersistenceHandlerView struct{ generation *immutableGeneration }
 
 // EncodeParameterGroups encodes every complete non-secret parameter group from root.
 // The returned documents use the same canonical encodings accepted by the generated store.
-func EncodeParameterGroups(root *rootconfig.Config) (map[string]json.RawMessage, error) {
+func EncodeParameterGroups(root *rootconfig.Config) (map[string]jsontext.Value, error) {
 	if err := validateInlinePointers(root); err != nil {
 		return nil, err
 	}
-	groups := make(map[string]json.RawMessage, 2)
+	groups := make(map[string]jsontext.Value, 2)
 	group0, err := configstore.EncodeGroup(root, groupFields0)
 	if err != nil {
 		return nil, fmt.Errorf("generated config store: encode parameter group database: %w", err)
@@ -280,7 +280,7 @@ func (s *Store) prepare(ctx context.Context, snapshot kmsclient.ReleaseSnapshot)
 		DefaultDifferences:    differences,
 		RestartRequiredFields: restartRequired,
 		Changed:               changed,
-		Groups:                func() (map[string]json.RawMessage, error) { return EncodeParameterGroups(generation.config) },
+		Groups:                func() (map[string]jsontext.Value, error) { return EncodeParameterGroups(generation.config) },
 	}, nil
 }
 
@@ -580,7 +580,7 @@ func equalValue9(left, right time.Duration) bool {
 }
 
 func reportValue9(value time.Duration) any {
-	return value
+	return value.String()
 }
 
 func cloneValue10(value []string) []string {

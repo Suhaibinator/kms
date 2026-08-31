@@ -3,7 +3,8 @@ package configkms
 import (
 	"context"
 	"encoding/base64"
-	"encoding/json"
+	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"fmt"
 	"reflect"
 	"sort"
@@ -427,7 +428,7 @@ func TestStartupDefaultMismatchIsAppliedAndReported(t *testing.T) {
 	gotAliases := make([]string, 0, len(groups))
 	for alias, document := range groups {
 		gotAliases = append(gotAliases, alias)
-		if !json.Valid(document) {
+		if !jsontext.Value(document).IsValid() {
 			t.Fatalf("group %s is not a JSON document: %s", alias, document)
 		}
 		if strings.Contains(string(document), passwordPlaintext) || strings.Contains(string(document), defaultTokenPrefix) {
@@ -501,7 +502,7 @@ func TestHotReloadReportsChangedFields(t *testing.T) {
 	if got := changePaths(hotReport); !reflect.DeepEqual(got, []string{"database.timeout", "runtime.features"}) {
 		t.Fatalf("hot change paths = %v, want database.timeout and runtime.features", got)
 	}
-	if change := hotChanges["database.timeout"]; change.Previous != 3*time.Second || change.Current != 750*time.Millisecond {
+	if change := hotChanges["database.timeout"]; change.Previous != "3s" || change.Current != "750ms" {
 		t.Fatalf("database.timeout change = %#v, want 3s -> 750ms", change)
 	}
 	if change := hotChanges["runtime.features"]; !reflect.DeepEqual(change.Previous, []string{"search", "reports"}) || !reflect.DeepEqual(change.Current, []string{"hot-search"}) {
@@ -563,7 +564,7 @@ func TestHotReloadReportsChangedFields(t *testing.T) {
 		t.Fatalf("restoration change paths = %v, want the two reverted paths", got)
 	}
 	restoredChanges := changesByPath(restoredReport)
-	if change := restoredChanges["database.timeout"]; change.Previous != 750*time.Millisecond || change.Current != 3*time.Second {
+	if change := restoredChanges["database.timeout"]; change.Previous != "750ms" || change.Current != "3s" {
 		t.Fatalf("database.timeout restoration = %#v, want 750ms -> 3s", change)
 	}
 	if change := restoredChanges["runtime.features"]; !reflect.DeepEqual(change.Previous, []string{"hot-search"}) || !reflect.DeepEqual(change.Current, []string{"search", "reports"}) {

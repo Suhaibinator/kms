@@ -2,7 +2,7 @@ package configstore
 
 import (
 	"context"
-	"encoding/json"
+	"encoding/json/jsontext"
 	"log/slog"
 	"sort"
 	"sync"
@@ -153,7 +153,7 @@ const (
 //   - OnApplied at startup: INFO "kms config applied" with component, phase,
 //     release, release_version, activation_revision and default_divergent,
 //     followed (unless DisableStartupSnapshot) by INFO "kms config group" per
-//     alias in sorted order with alias, values (json.RawMessage),
+//     alias in sorted order with alias, values (jsontext.Value),
 //     release_version and activation_revision. A Groups failure is logged
 //     as ERROR "kms config groups unavailable".
 //   - OnApplied at runtime: INFO "kms config reloaded" with component,
@@ -271,7 +271,7 @@ func logSnapshot(sink *LogSink, startup bool, componentAttr slog.Attr, release R
 	for _, alias := range aliases {
 		values := groups[alias]
 		if len(values) == 0 {
-			values = json.RawMessage("null")
+			values = jsontext.Value("null")
 		}
 		sink.emit(startup, slog.LevelInfo, "kms config group",
 			componentAttr,

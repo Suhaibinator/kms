@@ -2,7 +2,8 @@ package cli
 
 import (
 	"bytes"
-	"encoding/json"
+	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"errors"
 	"flag"
 	"fmt"
@@ -779,19 +780,16 @@ func readSchemaJSON(path string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if json.Valid(data) {
-		var compact bytes.Buffer
-		if err := json.Compact(&compact, data); err != nil {
-			return "", err
-		}
-		return compact.String(), nil
+	value := jsontext.Value(data).Clone()
+	if err := value.Compact(); err == nil {
+		return string(value), nil
 	}
 	var document any
 	decoder := yaml.NewDecoder(bytes.NewReader(data))
 	if err := decoder.Decode(&document); err != nil {
 		return "", errors.New("schema must be valid JSON or YAML")
 	}
-	encoded, err := json.Marshal(document)
+	encoded, err := json.Marshal(document, json.Deterministic(true))
 	if err != nil {
 		return "", fmt.Errorf("converting YAML schema to JSON: %w", err)
 	}

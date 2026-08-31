@@ -2,8 +2,9 @@ package core
 
 import (
 	"context"
-	"encoding/json"
+	"encoding/json/v2"
 	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/Suhaibinator/kms/internal/domain"
@@ -37,7 +38,7 @@ func TestPutParameterValidation(t *testing.T) {
 	}
 }
 
-func TestPutParameterJSONRetainsDuplicatePropertyCompatibility(t *testing.T) {
+func TestPutParameterJSONRejectsDuplicateProperties(t *testing.T) {
 	ctx := context.Background()
 	s := newTestService(newFakeStore())
 
@@ -46,12 +47,8 @@ func TestPutParameterJSONRetainsDuplicatePropertyCompatibility(t *testing.T) {
 		"nested": `{"outer":{"limit":1,"limit":2}}`,
 	} {
 		t.Run(name, func(t *testing.T) {
-			version, _, err := s.PutParameter(ctx, adminPrincipal(), tref("duplicate-"+name), value, "json", "{}")
-			if err != nil {
-				t.Fatalf("PutParameter rejected legacy-compatible duplicate JSON properties: %v", err)
-			}
-			if version != 1 {
-				t.Fatalf("version = %d, want 1", version)
+			if _, _, err := s.PutParameter(ctx, adminPrincipal(), tref("duplicate-"+name), value, "json", "{}"); !errors.Is(err, domain.ErrInvalidArgument) {
+				t.Fatalf("PutParameter duplicate error = %v, want ErrInvalidArgument", err)
 			}
 		})
 	}
@@ -80,11 +77,11 @@ func TestParseJSONParameterRetainsLegacySyntaxAcceptance(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			var legacy any
-			legacyErr := json.Unmarshal([]byte(tc.raw), &legacy)
+			var native any
+			nativeErr := json.Unmarshal([]byte(tc.raw), &native)
 			_, currentErr := parseParameterValue(tc.raw, "json")
-			if (currentErr == nil) != (legacyErr == nil) {
-				t.Fatalf("acceptance differs from legacy json.Unmarshal: current error = %v, legacy error = %v", currentErr, legacyErr)
+			if (currentErr == nil) != (nativeErr == nil) {
+				t.Fatalf("acceptance differs from strict JSON v2: current error = %v, v2 error = %v", currentErr, nativeErr)
 			}
 		})
 	}
@@ -114,9 +111,9 @@ func TestManagedParameterSchemaValuePreservesExactNumbers(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	value, ok := parsed.(map[string]any)["large"].(json.Number)
-	if !ok || value.String() != "9007199254740993" {
-		t.Fatalf("large number = %#v, want exact json.Number", parsed)
+	value := parsed.(map[string]any)["large"]
+	if fmt.Sprint(value) != "9007199254740993" {
+		t.Fatalf("large number = %#v, want an exact precision-preserving number", parsed)
 	}
 }
 

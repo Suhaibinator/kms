@@ -138,6 +138,7 @@
       "values": [
         {
           "alias": "database",
+          "client_bound": false,
           "content_type": "json",
           "current_version": 1,
           "key": "database",
@@ -147,6 +148,7 @@
         },
         {
           "alias": "db_password",
+          "client_bound": false,
           "content_type": "text/plain",
           "current_version": 1,
           "key": "db_password",
@@ -156,6 +158,7 @@
         },
         {
           "alias": "rate_limits",
+          "client_bound": false,
           "content_type": "integer",
           "current_version": 2,
           "key": "rate_limits",
@@ -319,6 +322,7 @@
       "values": [
         {
           "alias": "database",
+          "client_bound": false,
           "content_type": "json",
           "current_version": 1,
           "key": "database",
@@ -328,6 +332,7 @@
         },
         {
           "alias": "db_password",
+          "client_bound": false,
           "content_type": "text/plain",
           "current_version": 1,
           "key": "db_password",
@@ -337,6 +342,7 @@
         },
         {
           "alias": "rate_limits",
+          "client_bound": false,
           "content_type": "integer",
           "current_version": 4,
           "key": "rate_limits",
@@ -353,13 +359,17 @@
     {
       "environments": {
         "dev": {
+          "client_bound": false,
           "content_type": "json",
+          "has_access_token": false,
           "present": true,
           "value": "{\"host\":\"db.internal\",\"pool\":8}",
           "version": 1
         },
         "prod": {
+          "client_bound": false,
           "content_type": "json",
+          "has_access_token": false,
           "present": true,
           "value": "{\"host\":\"db.internal\",\"pool\":8}",
           "version": 1
@@ -371,12 +381,16 @@
     {
       "environments": {
         "dev": {
+          "client_bound": false,
           "content_type": "text/plain",
+          "has_access_token": false,
           "present": true,
           "version": 1
         },
         "prod": {
+          "client_bound": false,
           "content_type": "text/plain",
+          "has_access_token": false,
           "present": true,
           "version": 1
         }
@@ -387,13 +401,17 @@
     {
       "environments": {
         "dev": {
+          "client_bound": false,
           "content_type": "integer",
+          "has_access_token": false,
           "present": true,
           "value": "7",
           "version": 2
         },
         "prod": {
+          "client_bound": false,
           "content_type": "integer",
+          "has_access_token": false,
           "present": true,
           "value": "20",
           "version": 4

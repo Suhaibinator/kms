@@ -7,7 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/binary"
-	"encoding/json"
+	"encoding/json/v2"
 	"fmt"
 	"io"
 
@@ -176,7 +176,7 @@ func filteredCursorScope(pr Principal, filter any) string {
 		Identity   string `json:"identity"`
 		Method     string `json:"method"`
 		Filter     any    `json:"filter"`
-	}{IdentityID: pr.Identity.ID, Identity: pr.Identity.Name, Method: string(pr.Method), Filter: filter})
+	}{IdentityID: pr.Identity.ID, Identity: pr.Identity.Name, Method: string(pr.Method), Filter: filter}, json.Deterministic(true))
 	sum := sha256.Sum256(payload)
 	return base64.RawURLEncoding.EncodeToString(sum[:])
 }

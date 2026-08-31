@@ -3,7 +3,8 @@ package cli
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
+	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"io"
@@ -321,7 +322,7 @@ func loadFromJSON(path string) ([]kv, error) {
 	}
 	switch trimmed[0] {
 	case '{':
-		var obj map[string]json.RawMessage
+		var obj map[string]jsontext.Value
 		if err := json.Unmarshal(raw, &obj); err != nil {
 			return nil, fmt.Errorf("parsing JSON object: %w", err)
 		}
@@ -332,8 +333,8 @@ func loadFromJSON(path string) ([]kv, error) {
 		return out, nil
 	case '[':
 		var arr []struct {
-			Key   string          `json:"key"`
-			Value json.RawMessage `json:"value"`
+			Key   string         `json:"key"`
+			Value jsontext.Value `json:"value"`
 		}
 		if err := json.Unmarshal(raw, &arr); err != nil {
 			return nil, fmt.Errorf("parsing JSON array: %w", err)
@@ -350,7 +351,7 @@ func loadFromJSON(path string) ([]kv, error) {
 
 // coerceJSONValue renders a JSON value as the string to import: a JSON string
 // yields its unquoted text; anything else keeps its raw JSON encoding.
-func coerceJSONValue(raw json.RawMessage) string {
+func coerceJSONValue(raw jsontext.Value) string {
 	var s string
 	if err := json.Unmarshal(raw, &s); err == nil {
 		return s

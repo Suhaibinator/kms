@@ -2,7 +2,8 @@ package core
 
 import (
 	"bytes"
-	"encoding/json"
+	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"flag"
 	"os"
 	"path/filepath"
@@ -269,7 +270,11 @@ func TestConsoleFixturesReadiness(t *testing.T) {
 	} {
 		typeMapping[name] = JSONTypeToContentType(property)
 	}
-	out, err := json.MarshalIndent(map[string]any{"type_mapping": typeMapping, "cases": cases}, "", "  ")
+	out, err := json.Marshal(
+		map[string]any{"type_mapping": typeMapping, "cases": cases},
+		json.Deterministic(true),
+		jsontext.WithIndent("  "),
+	)
 	if err != nil {
 		t.Fatal(err)
 	}

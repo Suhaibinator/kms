@@ -2,7 +2,8 @@ package configgen
 
 import (
 	"context"
-	"encoding/json"
+	"encoding/json/v2"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -21,6 +22,27 @@ func documentedSchema(t *testing.T, defaultsFunc string) map[string]any {
 		t.Fatal(err)
 	}
 	return schema
+}
+
+func TestGeneratedReportsProjectNestedDurations(t *testing.T) {
+	t.Parallel()
+	artifacts, err := Generate(context.Background(), Options{
+		Dir: repoRoot(t), Package: "./internal/configgen/testdata/documented", Type: "Config",
+		BindingPackage: "documentedgenerated",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	binding := string(artifacts.Binding)
+	for name, pattern := range map[string]string{
+		"struct": `(?s)func reportValue\d+\(value rootconfig\.Retry\) any \{.*return map\[string\]any\{.*"backoff":\s+reportValue\d+\(value\.Backoff\)`,
+		"map":    `(?s)func reportValue\d+\(value map\[string\]rootconfig\.Retry\) any \{.*out\[key\] = reportValue\d+\(item\)`,
+		"slice":  `(?s)func reportValue\d+\(value \[\]rootconfig\.Retry\) any \{.*out\[i\] = reportValue\d+\(value\[i\]\)`,
+	} {
+		if !regexp.MustCompile(pattern).MatchString(binding) {
+			t.Fatalf("generated %s report projection does not convert nested durations", name)
+		}
+	}
 }
 
 func property(t *testing.T, schema map[string]any, path ...string) map[string]any {
@@ -80,7 +102,7 @@ func TestSchemaCarriesDocCommentsAndLiteralDefaults(t *testing.T) {
 	if burst := property(t, schema, "runtime", "burst"); burst["default"] != float64(0) {
 		t.Fatalf("new(int) should default to the zero value, got %v", burst["default"])
 	}
-	if got, _ := json.Marshal(property(t, schema, "runtime", "fallback")["default"]); string(got) != `{"attempts":5,"backoff":"1s"}` {
+	if got, _ := json.Marshal(property(t, schema, "runtime", "fallback")["default"], json.Deterministic(true)); string(got) != `{"attempts":5,"backoff":"1s"}` {
 		t.Fatalf("helper returning a literal should be inlined, got %s", got)
 	}
 	computed := property(t, schema, "runtime", "computed")
@@ -106,11 +128,11 @@ func TestSchemaCarriesDocCommentsAndLiteralDefaults(t *testing.T) {
 		t.Fatalf("list item struct fields should be described, got %v", historyField)
 	}
 	tags := property(t, schema, "runtime", "tags")
-	if got, _ := json.Marshal(tags["default"]); string(got) != `["blue","canary"]` {
+	if got, _ := json.Marshal(tags["default"], json.Deterministic(true)); string(got) != `["blue","canary"]` {
 		t.Fatalf("tags default = %s", got)
 	}
 	server := property(t, schema, "server")
-	if got, _ := json.Marshal(server["default"]); string(got) != `{"listen_address":"127.0.0.1:8080"}` {
+	if got, _ := json.Marshal(server["default"], json.Deterministic(true)); string(got) != `{"listen_address":"127.0.0.1:8080"}` {
 		t.Fatalf("complete group default = %s", got)
 	}
 	if _, has := property(t, schema, "runtime")["default"]; has {

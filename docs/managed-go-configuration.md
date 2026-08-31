@@ -331,7 +331,7 @@ databaseJSON := groups["database"]
 rateLimitsJSON := groups["rate_limits"]
 ```
 
-`EncodeParameterGroups` returns `map[string]json.RawMessage`, keyed by the
+`EncodeParameterGroups` returns `map[string]jsontext.Value`, keyed by the
 declared parameter-group aliases. Each value is a complete strict group
 document, not a patch. The encoder uses the same generated descriptors as the
 runtime decoder: durations are Go duration strings, byte slices are canonical

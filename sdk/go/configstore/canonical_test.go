@@ -1,7 +1,7 @@
 package configstore
 
 import (
-	"encoding/json"
+	"encoding/json/v2"
 	"os"
 	"testing"
 )
@@ -98,5 +98,15 @@ func TestSemanticallyEqualDocumentsHashEqually(t *testing.T) {
 	}
 	if a != b {
 		t.Fatalf("hashes differ: %s vs %s", a, b)
+	}
+}
+
+func BenchmarkCanonicalParameterValue(b *testing.B) {
+	document := []byte(`{"service":{"limits":{"burst":20,"rate":10},"regions":["us-west-2","eu-west-1"]},"enabled":true}`)
+	b.ReportAllocs()
+	for b.Loop() {
+		if _, err := CanonicalParameterValue("json", document); err != nil {
+			b.Fatal(err)
+		}
 	}
 }

@@ -1,89 +1,19 @@
 package core
 
 import (
-	"encoding/json"
+	"encoding/json/jsontext"
 	"errors"
-	"fmt"
-	"io"
 	"strings"
+
+	"github.com/santhosh-tekuri/jsonschema/v6"
 )
 
-// decodeStrictJSON parses one JSON value without rounding numbers through
-// float64 and rejects duplicate object properties at every nesting level.
-// Keeping this lexical check at managed schema and release-admission boundaries
-// is important because JSON Schema cannot recover duplicate keys after decode.
+// decodeStrictJSON parses exactly one JSON value without rounding numbers
+// through float64. jsontext applies the v2 syntax defaults before the schema
+// helper builds the precision-preserving semantic representation.
 func decodeStrictJSON(raw string) (any, error) {
-	decoder := json.NewDecoder(strings.NewReader(raw))
-	decoder.UseNumber()
-	value, err := decodeStrictJSONValue(decoder)
-	if err != nil {
-		return nil, err
+	if !jsontext.Value(raw).IsValid() {
+		return nil, errors.New("invalid JSON document")
 	}
-	if _, err := decoder.Token(); !errors.Is(err, io.EOF) {
-		if err == nil {
-			return nil, errors.New("multiple JSON values")
-		}
-		return nil, err
-	}
-	return value, nil
-}
-
-func decodeStrictJSONValue(decoder *json.Decoder) (any, error) {
-	token, err := decoder.Token()
-	if err != nil {
-		return nil, err
-	}
-	delim, isDelim := token.(json.Delim)
-	if !isDelim {
-		return token, nil
-	}
-	switch delim {
-	case '{':
-		object := make(map[string]any)
-		for decoder.More() {
-			nameToken, err := decoder.Token()
-			if err != nil {
-				return nil, err
-			}
-			name, ok := nameToken.(string)
-			if !ok {
-				return nil, errors.New("JSON object property is not a string")
-			}
-			if _, exists := object[name]; exists {
-				return nil, fmt.Errorf("duplicate JSON property %q", name)
-			}
-			value, err := decodeStrictJSONValue(decoder)
-			if err != nil {
-				return nil, err
-			}
-			object[name] = value
-		}
-		closing, err := decoder.Token()
-		if err != nil {
-			return nil, err
-		}
-		if closing != json.Delim('}') {
-			return nil, errors.New("malformed JSON object")
-		}
-		return object, nil
-	case '[':
-		array := make([]any, 0)
-		for decoder.More() {
-			value, err := decodeStrictJSONValue(decoder)
-			if err != nil {
-				return nil, err
-			}
-			array = append(array, value)
-		}
-		closing, err := decoder.Token()
-		if err != nil {
-			return nil, err
-		}
-		if closing != json.Delim(']') {
-			return nil, errors.New("malformed JSON array")
-		}
-		return array, nil
-	default:
-		return nil, errors.New("unexpected JSON delimiter")
-	}
+	return jsonschema.UnmarshalJSON(strings.NewReader(raw))
 }

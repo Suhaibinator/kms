@@ -8,7 +8,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
-	"encoding/json"
+	"encoding/json/v2"
 	"errors"
 	"io"
 	"io/fs"
@@ -363,12 +363,31 @@ func newRequestID() string {
 // value; per-handler field validation then reports any required-field errors.
 func decodeJSON(w http.ResponseWriter, r *http.Request, v any) error {
 	r.Body = http.MaxBytesReader(w, r.Body, maxBodyBytes)
-	dec := json.NewDecoder(r.Body)
-	if err := dec.Decode(v); err != nil {
-		if errors.Is(err, io.EOF) {
+	body := &jsonBodyReader{Reader: r.Body}
+	if err := json.UnmarshalRead(body, v); err != nil {
+		if !body.sawNonWhitespace && errors.Is(err, io.ErrUnexpectedEOF) {
 			return nil // empty body: leave v zero-valued
 		}
 		return invalidArg("invalid JSON body")
 	}
 	return nil
+}
+
+// jsonBodyReader distinguishes an absent JSON document from a truncated one.
+// UnmarshalRead reports both as unexpected EOF, while this API intentionally
+// continues to accept empty or whitespace-only request bodies.
+type jsonBodyReader struct {
+	io.Reader
+	sawNonWhitespace bool
+}
+
+func (r *jsonBodyReader) Read(p []byte) (int, error) {
+	n, err := r.Reader.Read(p)
+	for _, b := range p[:n] {
+		if b != ' ' && b != '\t' && b != '\r' && b != '\n' {
+			r.sawNonWhitespace = true
+			break
+		}
+	}
+	return n, err
 }

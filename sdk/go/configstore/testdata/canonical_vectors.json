@@ -126,11 +126,10 @@
     "sha256": "b5bea41b6c623f7c09f1bf24dcae58ebab3c0cdd90ad966bc43a45b44867e12b"
   },
   {
-    "name": "escaped_lone_surrogate_becomes_replacement",
+    "name": "escaped_lone_surrogate_rejected",
     "content_type": "json",
     "input": "{\"s\":\"\\ud800\"}",
-    "canonical": "{\"s\":\"\ufffd\"}",
-    "sha256": "7513ecfd87d7bd3c5671d16e2a24074dc15ea73c79a51ffda3ffc1cd8ede8389"
+    "error": true
   },
   {
     "name": "duplicate_key",
@@ -213,15 +212,13 @@
     "name": "escaped_low_surrogate_only",
     "content_type": "json",
     "input": "{\"s\":\"\\udc00\"}",
-    "canonical": "{\"s\":\"\ufffd\"}",
-    "sha256": "7513ecfd87d7bd3c5671d16e2a24074dc15ea73c79a51ffda3ffc1cd8ede8389"
+    "error": true
   },
   {
     "name": "escaped_pair_split_by_char",
     "content_type": "json",
     "input": "{\"s\":\"\\ud83d-\\ude00\"}",
-    "canonical": "{\"s\":\"\ufffd-\ufffd\"}",
-    "sha256": "893983efde7f042424b7767b81466f66ef277ca9202018db7386cfbec2e9bf3c"
+    "error": true
   },
   {
     "name": "escaped_surrogate_in_key_duplicate",

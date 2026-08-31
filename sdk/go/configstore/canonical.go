@@ -4,10 +4,7 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
-	"errors"
 	"fmt"
-	"io"
 	"sort"
 	"unicode/utf8"
 )
@@ -30,19 +27,8 @@ func CanonicalParameterValue(contentType string, value []byte) ([]byte, error) {
 	if contentType != "json" {
 		return append([]byte(nil), value...), nil
 	}
-	if !utf8.Valid(value) {
-		return nil, errors.New("configstore: canonical json: invalid UTF-8")
-	}
-	decoder := json.NewDecoder(bytes.NewReader(value))
-	decoder.UseNumber()
-	node, err := readCanonicalValue(decoder, 0)
+	node, err := parseJSONReader(bytes.NewBuffer(value))
 	if err != nil {
-		return nil, fmt.Errorf("configstore: canonical json: %w", err)
-	}
-	if _, err := decoder.Token(); !errors.Is(err, io.EOF) {
-		if err == nil {
-			return nil, errors.New("configstore: canonical json: trailing data after document")
-		}
 		return nil, fmt.Errorf("configstore: canonical json: %w", err)
 	}
 	var out bytes.Buffer
@@ -60,106 +46,40 @@ func ParameterHash(contentType string, value []byte) (string, error) {
 	return hex.EncodeToString(sum[:]), nil
 }
 
-// maxCanonicalDepth bounds container nesting (the root value is depth 0) so
-// both SDKs reject the same documents; the TypeScript strict parser uses the
-// same limit.
-const maxCanonicalDepth = 1000
-
-func readCanonicalValue(decoder *json.Decoder, depth int) (any, error) {
-	if depth > maxCanonicalDepth {
-		return nil, errors.New("nesting too deep")
-	}
-	token, err := decoder.Token()
-	if err != nil {
-		if errors.Is(err, io.EOF) {
-			return nil, errors.New("empty document")
-		}
-		return nil, err
-	}
-	delimiter, isDelimiter := token.(json.Delim)
-	if !isDelimiter {
-		return token, nil
-	}
-	switch delimiter {
-	case '{':
-		object := make(map[string]any)
-		for decoder.More() {
-			nameToken, err := decoder.Token()
-			if err != nil {
-				return nil, err
-			}
-			name, ok := nameToken.(string)
-			if !ok {
-				return nil, errors.New("object key is not a string")
-			}
-			if _, duplicate := object[name]; duplicate {
-				return nil, fmt.Errorf("duplicate object key %q", name)
-			}
-			child, err := readCanonicalValue(decoder, depth+1)
-			if err != nil {
-				return nil, err
-			}
-			object[name] = child
-		}
-		if _, err := decoder.Token(); err != nil {
-			return nil, err
-		}
-		return object, nil
-	case '[':
-		array := make([]any, 0)
-		for decoder.More() {
-			child, err := readCanonicalValue(decoder, depth+1)
-			if err != nil {
-				return nil, err
-			}
-			array = append(array, child)
-		}
-		if _, err := decoder.Token(); err != nil {
-			return nil, err
-		}
-		return array, nil
-	default:
-		return nil, fmt.Errorf("unexpected delimiter %q", delimiter)
-	}
-}
-
-func writeCanonicalValue(out *bytes.Buffer, node any) {
-	switch value := node.(type) {
-	case nil:
+func writeCanonicalValue(out *bytes.Buffer, node jsonNode) {
+	switch node.kind {
+	case nodeNull:
 		out.WriteString("null")
-	case bool:
-		if value {
+	case nodeBool:
+		if node.boolean {
 			out.WriteString("true")
 		} else {
 			out.WriteString("false")
 		}
-	case json.Number:
-		out.WriteString(value.String())
-	case string:
-		writeCanonicalString(out, value)
-	case []any:
+	case nodeNumber:
+		out.WriteString(node.text)
+	case nodeString:
+		writeCanonicalString(out, node.text)
+	case nodeArray:
 		out.WriteByte('[')
-		for i, child := range value {
+		for i, child := range node.elements {
 			if i > 0 {
 				out.WriteByte(',')
 			}
 			writeCanonicalValue(out, child)
 		}
 		out.WriteByte(']')
-	case map[string]any:
-		keys := make([]string, 0, len(value))
-		for key := range value {
-			keys = append(keys, key)
-		}
-		sort.Strings(keys) // byte order == UTF-8 code point order
+	case nodeObject:
+		properties := append([]jsonProperty(nil), node.properties...)
+		sort.Slice(properties, func(i, j int) bool { return properties[i].name < properties[j].name })
 		out.WriteByte('{')
-		for i, key := range keys {
+		for i, property := range properties {
 			if i > 0 {
 				out.WriteByte(',')
 			}
-			writeCanonicalString(out, key)
+			writeCanonicalString(out, property.name)
 			out.WriteByte(':')
-			writeCanonicalValue(out, value[key])
+			writeCanonicalValue(out, property.value)
 		}
 		out.WriteByte('}')
 	default:

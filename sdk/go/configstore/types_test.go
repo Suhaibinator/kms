@@ -1,7 +1,8 @@
 package configstore
 
 import (
-	"encoding/json"
+	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"reflect"
@@ -117,7 +118,7 @@ func TestDefaultMismatchReportFormattingNeverIncludesValues(t *testing.T) {
 func TestAppliedReportFormattingNeverIncludesValues(t *testing.T) {
 	const canary = "NONSECRET-CHANGE-CANARY"
 	const secretCanary = "plaintext-secret-canary"
-	groups := map[string]json.RawMessage{"group": json.RawMessage(`{"field":"` + canary + `"}`)}
+	groups := map[string]jsontext.Value{"group": jsontext.Value(`{"field":"` + canary + `"}`)}
 	report := newAppliedReport(
 		PhaseRuntime,
 		ReleaseIdentity{namespace: "prod/app", name: "runtime", version: 5, activationRevision: 12},
@@ -127,7 +128,7 @@ func TestAppliedReportFormattingNeverIncludesValues(t *testing.T) {
 			{Path: "group.secret", Previous: nil, Current: kmsclient.NewSecret([]byte(secretCanary))},
 			{Path: "bad path\n", Previous: 1, Current: 2},
 		},
-		func() (map[string]json.RawMessage, error) { return groups, nil },
+		func() (map[string]jsontext.Value, error) { return groups, nil },
 	)
 	encoded, err := json.Marshal(report)
 	if err != nil {
@@ -237,5 +238,81 @@ func TestCandidateRejectionReportIsImmutableBoundedAndValueFree(t *testing.T) {
 	}
 	if report.Category() != RejectRestartRequired || report.Release().Version() != 4 {
 		t.Fatalf("report identity/category = %s/%s", report.Category(), report.Release())
+	}
+}
+
+func TestReportBufferedAndStreamingJSONPathsAgree(t *testing.T) {
+	release := ReleaseIdentity{namespace: "prod/app", name: "runtime", version: 3, activationRevision: 5}
+	tests := []struct {
+		name     string
+		value    any
+		buffered func() ([]byte, error)
+	}{
+		{
+			name:  "applied",
+			value: newAppliedReport(PhaseRuntime, release, true, []FieldChange{{Path: "runtime.limit", Previous: 1, Current: 2}}, nil),
+			buffered: func() ([]byte, error) {
+				return newAppliedReport(PhaseRuntime, release, true, []FieldChange{{Path: "runtime.limit", Previous: 1, Current: 2}}, nil).MarshalJSON()
+			},
+		},
+		{
+			name:  "default mismatch",
+			value: newDefaultMismatchReport(PhaseStartup, MismatchError, release, []FieldDifference{{Path: "runtime.limit", Expected: 1, Actual: 2}}),
+			buffered: func() ([]byte, error) {
+				return newDefaultMismatchReport(PhaseStartup, MismatchError, release, []FieldDifference{{Path: "runtime.limit", Expected: 1, Actual: 2}}).MarshalJSON()
+			},
+		},
+		{
+			name:  "candidate error",
+			value: &CandidateError{category: RejectInternal, cause: errors.New("private diagnostic")},
+			buffered: func() ([]byte, error) {
+				return (&CandidateError{category: RejectInternal, cause: errors.New("private diagnostic")}).MarshalJSON()
+			},
+		},
+		{
+			name:  "candidate rejection",
+			value: newCandidateRejectionReport(RejectRestartRequired, release, []string{"runtime.limit"}),
+			buffered: func() ([]byte, error) {
+				return newCandidateRejectionReport(RejectRestartRequired, release, []string{"runtime.limit"}).MarshalJSON()
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			streamed, err := json.Marshal(test.value)
+			if err != nil {
+				t.Fatalf("streaming marshal: %v", err)
+			}
+			buffered, err := test.buffered()
+			if err != nil {
+				t.Fatalf("buffered marshal: %v", err)
+			}
+			if string(buffered) != string(streamed) {
+				t.Fatalf("buffered = %s, streaming = %s", buffered, streamed)
+			}
+			if strings.Contains(string(streamed), "private diagnostic") {
+				t.Fatalf("JSON leaked private diagnostic: %s", streamed)
+			}
+		})
+	}
+}
+
+func BenchmarkAppliedReportMarshalJSONV2(b *testing.B) {
+	report := newAppliedReport(
+		PhaseRuntime,
+		ReleaseIdentity{namespace: "prod/app", name: "runtime", version: 5, activationRevision: 12},
+		true,
+		[]FieldChange{
+			{Path: "runtime.limit", Previous: 10, Current: 20},
+			{Path: "runtime.endpoint", Previous: "old.internal", Current: "new.internal"},
+		},
+		nil,
+	)
+	b.ReportAllocs()
+	for b.Loop() {
+		if _, err := json.Marshal(report); err != nil {
+			b.Fatal(err)
+		}
 	}
 }

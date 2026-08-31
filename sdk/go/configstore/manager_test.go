@@ -2,7 +2,7 @@ package configstore
 
 import (
 	"context"
-	"encoding/json"
+	"encoding/json/jsontext"
 	"errors"
 	"fmt"
 	"reflect"
@@ -102,7 +102,7 @@ func TestManagerRuntimeAppliedReportCarriesRedactedChanges(t *testing.T) {
 	initial.Commit()
 
 	secret := kmsclient.NewSecret([]byte("plaintext-canary"))
-	groups := map[string]json.RawMessage{"group": json.RawMessage(`{"limit":30}`)}
+	groups := map[string]jsontext.Value{"group": jsontext.Value(`{"limit":30}`)}
 	next = PreparedCandidate{
 		Publish: func() {},
 		Changed: []FieldChange{
@@ -110,7 +110,7 @@ func TestManagerRuntimeAppliedReportCarriesRedactedChanges(t *testing.T) {
 			{Path: "group.token", Previous: secret, Current: struct{ S kmsclient.Secret }{secret}},
 			{Path: "not a path\n", Previous: 1, Current: 2},
 		},
-		Groups: func() (map[string]json.RawMessage, error) { return groups, nil },
+		Groups: func() (map[string]jsontext.Value, error) { return groups, nil },
 	}
 	reload, err := manager.prepareWithIdentity(context.Background(), kmsclient.ReleaseSnapshot{}, testIdentity(2, 2))
 	if err != nil {

@@ -165,9 +165,12 @@ class JsonParser {
         const encoded = this.#source.slice(start, this.#offset);
         const decoded: unknown = JSON.parse(encoded);
         if (typeof decoded !== "string") throw new InvalidJsonDocumentError();
-        // Go's encoding/json replaces escaped unmatched UTF-16 surrogates
-        // with U+FFFD. JSON.parse preserves the unmatched code unit.
-        return normalizeUnpairedSurrogates(decoded);
+        // Go JSON v2 rejects escaped unmatched UTF-16 surrogates. JSON.parse
+        // preserves the unmatched code unit, so detect it explicitly.
+        if (normalizeUnpairedSurrogates(decoded) !== decoded) {
+          throw new InvalidJsonDocumentError();
+        }
+        return decoded;
       }
       if (code < 0x20) throw new InvalidJsonDocumentError();
       if (code === 0x5c) {

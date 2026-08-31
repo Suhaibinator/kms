@@ -2,10 +2,9 @@ package configstore
 
 import (
 	"bytes"
-	"encoding/json"
+	"encoding/json/v2"
 	"errors"
 	"fmt"
-	"io"
 	"sort"
 	"strings"
 	"unicode/utf8"
@@ -100,16 +99,15 @@ func EncodeDefaultsArtifact(artifact DefaultsArtifact) ([]byte, error) {
 		wire.Parameters[i] = defaultsParameterWire(parameter)
 	}
 
-	var output bytes.Buffer
-	encoder := json.NewEncoder(&output)
-	encoder.SetEscapeHTML(false)
-	if err := encoder.Encode(wire); err != nil {
+	output, err := json.Marshal(wire, json.Deterministic(true))
+	if err != nil {
 		return nil, fmt.Errorf("configstore: encode defaults artifact: %w", err)
 	}
-	if output.Len() > MaxDefaultsArtifactSize {
+	output = append(output, '\n')
+	if len(output) > MaxDefaultsArtifactSize {
 		return nil, errors.New("configstore: defaults artifact exceeds 4 MiB")
 	}
-	return output.Bytes(), nil
+	return output, nil
 }
 
 // ParseDefaultsArtifact strictly parses and validates one defaults artifact.
@@ -125,18 +123,9 @@ func ParseDefaultsArtifact(data []byte) (DefaultsArtifact, error) {
 	if len(bytes.TrimSpace(data)) == 0 {
 		return DefaultsArtifact{}, errors.New("configstore: defaults artifact is empty")
 	}
-	if err := rejectDuplicateJSONFields(data); err != nil {
-		return DefaultsArtifact{}, err
-	}
-
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	decoder.DisallowUnknownFields()
 	var wire defaultsArtifactDecodeWire
-	if err := decoder.Decode(&wire); err != nil {
+	if err := json.Unmarshal(data, &wire, json.RejectUnknownMembers(true)); err != nil {
 		return DefaultsArtifact{}, fmt.Errorf("configstore: decode defaults artifact: %w", err)
-	}
-	if err := requireJSONEOF(decoder); err != nil {
-		return DefaultsArtifact{}, err
 	}
 	if wire.Format == nil || wire.Profile == nil || wire.SchemaSHA256 == nil || wire.Contract == nil || wire.Parameters == nil {
 		return DefaultsArtifact{}, errors.New("configstore: defaults artifact is missing a required field")
@@ -162,80 +151,6 @@ func ParseDefaultsArtifact(data []byte) (DefaultsArtifact, error) {
 		artifact.Parameters[i] = DefaultsParameter{Alias: *parameter.Alias, ContentType: *parameter.ContentType, Value: *parameter.Value}
 	}
 	return validateDefaultsArtifact(artifact, true)
-}
-
-func rejectDuplicateJSONFields(data []byte) error {
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	if err := scanDefaultsJSONValue(decoder); err != nil {
-		return fmt.Errorf("configstore: decode defaults artifact: %w", err)
-	}
-	return requireJSONEOF(decoder)
-}
-
-func scanDefaultsJSONValue(decoder *json.Decoder) error {
-	token, err := decoder.Token()
-	if err != nil {
-		return err
-	}
-	delimiter, ok := token.(json.Delim)
-	if !ok {
-		return nil
-	}
-	switch delimiter {
-	case '{':
-		seen := make(map[string]struct{})
-		for decoder.More() {
-			rawName, err := decoder.Token()
-			if err != nil {
-				return err
-			}
-			name, ok := rawName.(string)
-			if !ok {
-				return errors.New("object field name is not a string")
-			}
-			if _, duplicate := seen[name]; duplicate {
-				return errors.New("duplicate JSON object field")
-			}
-			seen[name] = struct{}{}
-			if err := scanDefaultsJSONValue(decoder); err != nil {
-				return err
-			}
-		}
-		closing, err := decoder.Token()
-		if err != nil {
-			return err
-		}
-		if closing != json.Delim('}') {
-			return errors.New("object is not closed")
-		}
-	case '[':
-		for decoder.More() {
-			if err := scanDefaultsJSONValue(decoder); err != nil {
-				return err
-			}
-		}
-		closing, err := decoder.Token()
-		if err != nil {
-			return err
-		}
-		if closing != json.Delim(']') {
-			return errors.New("array is not closed")
-		}
-	default:
-		return errors.New("invalid JSON delimiter")
-	}
-	return nil
-}
-
-func requireJSONEOF(decoder *json.Decoder) error {
-	var extra any
-	if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
-		if err == nil {
-			return errors.New("configstore: defaults artifact contains trailing data")
-		}
-		return fmt.Errorf("configstore: decode defaults artifact trailing data: %w", err)
-	}
-	return nil
 }
 
 func validateDefaultsArtifact(artifact DefaultsArtifact, requireSorted bool) (DefaultsArtifact, error) {

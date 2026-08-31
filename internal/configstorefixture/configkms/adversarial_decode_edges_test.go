@@ -1,16 +1,15 @@
 package configkms
 
 import (
-	"encoding/json"
-	"errors"
+	"encoding/json/jsontext"
 	"fmt"
-	"io"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/Suhaibinator/kms/sdk/go/configstore"
 	"github.com/Suhaibinator/kms/sdk/go/kmsclient"
+	"github.com/santhosh-tekuri/jsonschema/v6"
 )
 
 func TestAdversarialMalformedDuplicateAndMistypedDocumentGauntlet(t *testing.T) {
@@ -168,79 +167,8 @@ func adversarialStrictSchemaAccepts(schema interface{ Validate(any) error }, dat
 }
 
 func adversarialStrictJSON(document string) (any, error) {
-	decoder := json.NewDecoder(strings.NewReader(document))
-	decoder.UseNumber()
-	token, err := decoder.Token()
-	if err != nil {
-		return nil, err
+	if !jsontext.Value(document).IsValid() {
+		return nil, jsontext.ErrDuplicateName
 	}
-	value, err := adversarialStrictJSONToken(decoder, token)
-	if err != nil {
-		return nil, err
-	}
-	if _, err := decoder.Token(); err != io.EOF {
-		if err == nil {
-			err = errors.New("trailing JSON value")
-		}
-		return nil, err
-	}
-	return value, nil
-}
-
-func adversarialStrictJSONToken(decoder *json.Decoder, token json.Token) (any, error) {
-	switch value := token.(type) {
-	case nil, bool, string, json.Number:
-		return value, nil
-	case json.Delim:
-		switch value {
-		case '{':
-			object := make(map[string]any)
-			for decoder.More() {
-				keyToken, err := decoder.Token()
-				if err != nil {
-					return nil, err
-				}
-				key, ok := keyToken.(string)
-				if !ok {
-					return nil, errors.New("object key is not a string")
-				}
-				if _, duplicate := object[key]; duplicate {
-					return nil, errors.New("duplicate object key")
-				}
-				itemToken, err := decoder.Token()
-				if err != nil {
-					return nil, err
-				}
-				item, err := adversarialStrictJSONToken(decoder, itemToken)
-				if err != nil {
-					return nil, err
-				}
-				object[key] = item
-			}
-			end, err := decoder.Token()
-			if err != nil || end != json.Delim('}') {
-				return nil, errors.New("invalid object terminator")
-			}
-			return object, nil
-		case '[':
-			array := make([]any, 0)
-			for decoder.More() {
-				itemToken, err := decoder.Token()
-				if err != nil {
-					return nil, err
-				}
-				item, err := adversarialStrictJSONToken(decoder, itemToken)
-				if err != nil {
-					return nil, err
-				}
-				array = append(array, item)
-			}
-			end, err := decoder.Token()
-			if err != nil || end != json.Delim(']') {
-				return nil, errors.New("invalid array terminator")
-			}
-			return array, nil
-		}
-	}
-	return nil, errors.New("invalid JSON token")
+	return jsonschema.UnmarshalJSON(strings.NewReader(document))
 }

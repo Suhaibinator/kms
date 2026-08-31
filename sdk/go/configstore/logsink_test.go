@@ -2,7 +2,8 @@ package configstore
 
 import (
 	"bytes"
-	"encoding/json"
+	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -105,14 +106,14 @@ func TestSlogCallbacksLogsDefaultMismatch(t *testing.T) {
 func TestSlogCallbacksLogsStartupAppliedWithSortedGroupSnapshot(t *testing.T) {
 	logger, buffer := newJSONLogger(slog.LevelInfo)
 	callbacks := SlogCallbacks(NewLogSink(logger), SlogOptions{})
-	groups := map[string]json.RawMessage{
-		"limits":   json.RawMessage(`{"rate":10}`),
-		"database": json.RawMessage(`{"host":"db","port":5432}`),
+	groups := map[string]jsontext.Value{
+		"limits":   jsontext.Value(`{"rate":10}`),
+		"database": jsontext.Value(`{"host":"db","port":5432}`),
 		"empty":    nil,
 	}
 	callbacks.OnApplied(newAppliedReport(PhaseStartup, logTestIdentity(), true,
 		[]FieldChange{{Path: "ignored.at.startup", Previous: 1, Current: 2}},
-		func() (map[string]json.RawMessage, error) { return groups, nil }))
+		func() (map[string]jsontext.Value, error) { return groups, nil }))
 
 	lines := decodeLogLines(t, buffer)
 	want := []string{"kms config applied", "kms config group", "kms config group", "kms config group"}
@@ -148,7 +149,7 @@ func TestSlogCallbacksStartupSnapshotCanBeDisabledAndReportsGroupErrors(t *testi
 	logger, buffer := newJSONLogger(slog.LevelInfo)
 	callbacks := SlogCallbacks(NewLogSink(logger), SlogOptions{DisableStartupSnapshot: true})
 	callbacks.OnApplied(newAppliedReport(PhaseStartup, logTestIdentity(), false, nil,
-		func() (map[string]json.RawMessage, error) {
+		func() (map[string]jsontext.Value, error) {
 			t.Fatal("Groups called with snapshot disabled")
 			return nil, nil
 		}))
@@ -159,7 +160,7 @@ func TestSlogCallbacksStartupSnapshotCanBeDisabledAndReportsGroupErrors(t *testi
 	logger, buffer = newJSONLogger(slog.LevelInfo)
 	callbacks = SlogCallbacks(NewLogSink(logger), SlogOptions{})
 	callbacks.OnApplied(newAppliedReport(PhaseStartup, logTestIdentity(), false, nil,
-		func() (map[string]json.RawMessage, error) { return nil, errors.New("encode failed") }))
+		func() (map[string]jsontext.Value, error) { return nil, errors.New("encode failed") }))
 	lines := decodeLogLines(t, buffer)
 	if got := messagesOf(lines); strings.Join(got, "|") != "kms config applied|kms config groups unavailable" {
 		t.Fatalf("messages = %v", got)
@@ -175,8 +176,8 @@ func TestSlogCallbacksLogsRuntimeReloadWithFieldChanges(t *testing.T) {
 	callbacks.OnApplied(newAppliedReport(PhaseRuntime, logTestIdentity(), false, []FieldChange{
 		{Path: "limits.rate", Previous: 10, Current: 20},
 		{Path: "database.password", Previous: nil, Current: nil},
-	}, func() (map[string]json.RawMessage, error) {
-		return map[string]json.RawMessage{"limits": json.RawMessage(`{"rate":20}`)}, nil
+	}, func() (map[string]jsontext.Value, error) {
+		return map[string]jsontext.Value{"limits": jsontext.Value(`{"rate":20}`)}, nil
 	}))
 
 	lines := decodeLogLines(t, buffer)
@@ -225,8 +226,8 @@ func TestSlogCallbacksBuffersStartupRecordsUntilLoggerIsSet(t *testing.T) {
 	callbacks.OnCandidateRejected(newCandidateRejectionReport(RejectConfigDecodeFailed, testIdentity(1, 1), []string{"limits"}))
 	callbacks.OnDefaultMismatch(newDefaultMismatchReport(PhaseStartup, MismatchError, logTestIdentity(), []FieldDifference{{Path: "limits.rate", Expected: 1, Actual: 2}}))
 	callbacks.OnApplied(newAppliedReport(PhaseStartup, logTestIdentity(), true, nil,
-		func() (map[string]json.RawMessage, error) {
-			return map[string]json.RawMessage{"limits": json.RawMessage(`{"rate":2}`)}, nil
+		func() (map[string]jsontext.Value, error) {
+			return map[string]jsontext.Value{"limits": jsontext.Value(`{"rate":2}`)}, nil
 		}))
 	// Runtime records without a logger are dropped, not buffered.
 	callbacks.OnDefaultMismatch(newDefaultMismatchReport(PhaseRuntime, MismatchError, testIdentity(5, 5), []FieldDifference{{Path: "limits.rate", Expected: 1, Actual: 3}}))
@@ -305,11 +306,11 @@ func TestSlogCallbacksAttributeKeysNeverLookSecret(t *testing.T) {
 	callbacks := SlogCallbacks(NewLogSink(logger), SlogOptions{})
 	callbacks.OnDefaultMismatch(newDefaultMismatchReport(PhaseStartup, MismatchError, logTestIdentity(), []FieldDifference{{Path: "a.b", Expected: 1, Actual: 2}}))
 	callbacks.OnApplied(newAppliedReport(PhaseStartup, logTestIdentity(), true, nil,
-		func() (map[string]json.RawMessage, error) {
-			return map[string]json.RawMessage{"a": json.RawMessage(`{}`)}, nil
+		func() (map[string]jsontext.Value, error) {
+			return map[string]jsontext.Value{"a": jsontext.Value(`{}`)}, nil
 		}))
 	callbacks.OnApplied(newAppliedReport(PhaseStartup, logTestIdentity(), true, nil,
-		func() (map[string]json.RawMessage, error) { return nil, errors.New("boom") }))
+		func() (map[string]jsontext.Value, error) { return nil, errors.New("boom") }))
 	callbacks.OnApplied(newAppliedReport(PhaseRuntime, logTestIdentity(), false, []FieldChange{{Path: "a.b", Previous: 1, Current: 2}}, nil))
 	callbacks.OnCandidateRejected(newCandidateRejectionReport(RejectInternal, logTestIdentity(), []string{"a"}))
 	callbacks.OnDefaultMismatch(nil)
@@ -343,14 +344,14 @@ func TestSlogCallbacksToleratesNilSink(t *testing.T) {
 }
 
 func TestSlogCallbacksLogsReloadSnapshotUnlessDisabled(t *testing.T) {
-	groups := map[string]json.RawMessage{
-		"limits":   json.RawMessage(`{"rate":20}`),
-		"database": json.RawMessage(`{"host":"db","port":5432}`),
+	groups := map[string]jsontext.Value{
+		"limits":   jsontext.Value(`{"rate":20}`),
+		"database": jsontext.Value(`{"host":"db","port":5432}`),
 	}
 	report := func() AppliedReport {
 		return newAppliedReport(PhaseRuntime, testIdentity(5, 12), true,
 			[]FieldChange{{Path: "limits.rate", Previous: 10, Current: 20}},
-			func() (map[string]json.RawMessage, error) { return groups, nil })
+			func() (map[string]jsontext.Value, error) { return groups, nil })
 	}
 
 	logger, buffer := newJSONLogger(slog.LevelInfo)

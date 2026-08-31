@@ -2,6 +2,8 @@ package kmsclient
 
 import (
 	"context"
+	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"io"
@@ -157,7 +159,12 @@ func (v SecretValue) Format(f fmt.State, verb rune) {
 
 // MarshalJSON redacts.
 func (v SecretValue) MarshalJSON() ([]byte, error) {
-	return []byte(`"` + redactedText + `"`), nil
+	return json.Marshal(redactedText)
+}
+
+// MarshalJSONTo is the streaming JSON v2 equivalent of MarshalJSON.
+func (v SecretValue) MarshalJSONTo(out *jsontext.Encoder) error {
+	return json.MarshalEncode(out, redactedText)
 }
 
 // ParameterValue is a declarative, store-backed non-secret field. By default it

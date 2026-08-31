@@ -2,7 +2,7 @@ package core
 
 import (
 	"context"
-	"encoding/json"
+	"encoding/json/v2"
 	"errors"
 	"maps"
 	"sort"

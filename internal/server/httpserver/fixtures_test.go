@@ -2,7 +2,8 @@ package httpserver
 
 import (
 	"bytes"
-	"encoding/json"
+	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"flag"
 	"net/http"
 	"net/http/httptest"
@@ -62,7 +63,11 @@ func fixtureBytes(t *testing.T, v any) []byte {
 	if err := json.Unmarshal(raw, &generic); err != nil {
 		t.Fatal(err)
 	}
-	out, err := json.MarshalIndent(normalizeFixture(generic), "", "  ")
+	out, err := json.Marshal(
+		normalizeFixture(generic),
+		json.Deterministic(true),
+		jsontext.WithIndent("  "),
+	)
 	if err != nil {
 		t.Fatal(err)
 	}

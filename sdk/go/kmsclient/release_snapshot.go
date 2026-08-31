@@ -1,7 +1,8 @@
 package kmsclient
 
 import (
-	"encoding/json"
+	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"fmt"
 	"io"
 	"maps"
@@ -89,16 +90,27 @@ func (m ReleaseManifest) Format(f fmt.State, _ rune) { _, _ = io.WriteString(f, 
 
 // MarshalJSON emits only release identity and non-sensitive entry metadata.
 func (m ReleaseManifest) MarshalJSON() ([]byte, error) {
-	return json.Marshal(struct {
-		Namespace          string                          `json:"namespace"`
-		Name               string                          `json:"name"`
-		Version            uint64                          `json:"version"`
-		ActivationRevision uint64                          `json:"activation_revision"`
-		SchemaID           string                          `json:"schema_id,omitempty"`
-		SchemaVersion      uint64                          `json:"schema_version,omitempty"`
-		Digest             string                          `json:"digest"`
-		Entries            map[string]ReleaseEntryMetadata `json:"entries"`
-	}{
+	return json.Marshal(m.jsonProjection())
+}
+
+// MarshalJSONTo streams the same safe projection as MarshalJSON.
+func (m ReleaseManifest) MarshalJSONTo(out *jsontext.Encoder) error {
+	return json.MarshalEncode(out, m.jsonProjection())
+}
+
+type releaseSnapshotJSON struct {
+	Namespace          string                          `json:"namespace"`
+	Name               string                          `json:"name"`
+	Version            uint64                          `json:"version"`
+	ActivationRevision uint64                          `json:"activation_revision"`
+	SchemaID           string                          `json:"schema_id,omitempty"`
+	SchemaVersion      uint64                          `json:"schema_version,omitempty"`
+	Digest             string                          `json:"digest"`
+	Entries            map[string]ReleaseEntryMetadata `json:"entries"`
+}
+
+func (m ReleaseManifest) jsonProjection() releaseSnapshotJSON {
+	return releaseSnapshotJSON{
 		Namespace:          m.namespace,
 		Name:               m.name,
 		Version:            m.version,
@@ -106,8 +118,8 @@ func (m ReleaseManifest) MarshalJSON() ([]byte, error) {
 		SchemaID:           m.schemaID,
 		SchemaVersion:      m.schemaVersion,
 		Digest:             m.digest,
-		Entries:            m.Entries(),
-	})
+		Entries:            m.entries,
+	}
 }
 
 // ReleaseSnapshot is a completely resolved configuration release candidate.
@@ -194,16 +206,16 @@ func (s ReleaseSnapshot) Format(f fmt.State, _ rune) { _, _ = io.WriteString(f, 
 // MarshalJSON emits release identity and entry metadata only. Resolved values
 // are deliberately excluded so snapshots are safe to attach to diagnostics.
 func (s ReleaseSnapshot) MarshalJSON() ([]byte, error) {
-	return json.Marshal(struct {
-		Namespace          string                          `json:"namespace"`
-		Name               string                          `json:"name"`
-		Version            uint64                          `json:"version"`
-		ActivationRevision uint64                          `json:"activation_revision"`
-		SchemaID           string                          `json:"schema_id,omitempty"`
-		SchemaVersion      uint64                          `json:"schema_version,omitempty"`
-		Digest             string                          `json:"digest"`
-		Entries            map[string]ReleaseEntryMetadata `json:"entries"`
-	}{
+	return json.Marshal(s.jsonProjection())
+}
+
+// MarshalJSONTo streams the same value-free projection as MarshalJSON.
+func (s ReleaseSnapshot) MarshalJSONTo(out *jsontext.Encoder) error {
+	return json.MarshalEncode(out, s.jsonProjection())
+}
+
+func (s ReleaseSnapshot) jsonProjection() releaseSnapshotJSON {
+	return releaseSnapshotJSON{
 		Namespace:          s.namespace,
 		Name:               s.name,
 		Version:            s.version,
@@ -211,8 +223,8 @@ func (s ReleaseSnapshot) MarshalJSON() ([]byte, error) {
 		SchemaID:           s.schemaID,
 		SchemaVersion:      s.schemaVersion,
 		Digest:             s.digest,
-		Entries:            s.Entries(),
-	})
+		Entries:            s.entries,
+	}
 }
 
 // ReleaseLoaderStatus is a redacted point-in-time view of loader progress.
@@ -226,6 +238,42 @@ type ReleaseLoaderStatus struct {
 	LastFailureAt          time.Time
 	LastResolutionDuration time.Duration
 	Reconnects             uint64
+}
+
+type releaseLoaderStatusJSON struct {
+	State                  string
+	ObservedVersion        uint64
+	ObservedRevision       uint64
+	AppliedVersion         uint64
+	AppliedRevision        uint64
+	LastFailureCategory    string
+	LastFailureAt          time.Time
+	LastResolutionDuration string
+	Reconnects             uint64
+}
+
+func (s ReleaseLoaderStatus) jsonProjection() releaseLoaderStatusJSON {
+	return releaseLoaderStatusJSON{
+		State:                  s.State,
+		ObservedVersion:        s.ObservedVersion,
+		ObservedRevision:       s.ObservedRevision,
+		AppliedVersion:         s.AppliedVersion,
+		AppliedRevision:        s.AppliedRevision,
+		LastFailureCategory:    s.LastFailureCategory,
+		LastFailureAt:          s.LastFailureAt,
+		LastResolutionDuration: s.LastResolutionDuration.String(),
+		Reconnects:             s.Reconnects,
+	}
+}
+
+// MarshalJSON emits LastResolutionDuration as a human-readable duration.
+func (s ReleaseLoaderStatus) MarshalJSON() ([]byte, error) {
+	return json.Marshal(s.jsonProjection())
+}
+
+// MarshalJSONTo is the streaming JSON v2 equivalent of MarshalJSON.
+func (s ReleaseLoaderStatus) MarshalJSONTo(out *jsontext.Encoder) error {
+	return json.MarshalEncode(out, s.jsonProjection())
 }
 
 // ReleaseLoaderStats contains bounded counters suitable for metrics export.

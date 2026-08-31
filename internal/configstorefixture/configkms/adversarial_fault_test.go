@@ -2,7 +2,7 @@ package configkms
 
 import (
 	"context"
-	"encoding/json"
+	"encoding/json/v2"
 	"fmt"
 	"reflect"
 	"strings"

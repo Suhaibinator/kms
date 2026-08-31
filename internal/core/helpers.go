@@ -3,7 +3,7 @@ package core
 import (
 	"crypto/rand"
 	"encoding/hex"
-	"encoding/json"
+	"encoding/json/v2"
 	"fmt"
 	"slices"
 	"time"
@@ -29,7 +29,7 @@ func encodeMeta(meta map[string]string) string {
 	if len(meta) == 0 {
 		return "{}"
 	}
-	b, err := json.Marshal(meta)
+	b, err := json.Marshal(meta, json.Deterministic(true))
 	if err != nil {
 		return "{}"
 	}

@@ -229,9 +229,8 @@ function serializeArtifact(artifact: DefaultsArtifact): string {
     contract,
     parameters,
   });
-  // Go's encoding/json always escapes line and paragraph separators, even
-  // with HTML escaping disabled. JSON.stringify leaves them literal.
-  return `${encoded.replace(/\u2028/gu, "\\u2028").replace(/\u2029/gu, "\\u2029")}\n`;
+  // Go JSON v2 and JSON.stringify both use minimal escaping.
+  return `${encoded}\n`;
 }
 
 function exactObject(node: JsonNode, names: readonly string[]): ReadonlyMap<string, JsonNode> {

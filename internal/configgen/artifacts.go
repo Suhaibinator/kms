@@ -1,10 +1,10 @@
 package configgen
 
 import (
-	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
+	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"fmt"
 	"go/token"
 	"math"
@@ -284,11 +284,11 @@ type contractEntry struct {
 }
 
 func renderContract(model *ir, schema []byte) ([]byte, renderedContract, error) {
-	var compactSchema bytes.Buffer
-	if err := json.Compact(&compactSchema, schema); err != nil {
+	compactSchema := jsontext.Value(schema).Clone()
+	if err := compactSchema.Compact(); err != nil {
 		return nil, renderedContract{}, fmt.Errorf("compact generated schema: %w", err)
 	}
-	hash := sha256.Sum256(compactSchema.Bytes())
+	hash := sha256.Sum256(compactSchema)
 	hashText := hex.EncodeToString(hash[:])
 	doc := contractDocument{
 		Format:       "kms-config-contract/v1",
@@ -342,7 +342,7 @@ func canonicalEncoding(value *typeIR) string {
 }
 
 func marshalArtifact(value any, name string) ([]byte, error) {
-	data, err := json.MarshalIndent(value, "", "  ")
+	data, err := json.Marshal(value, json.Deterministic(true), jsontext.WithIndent("  "))
 	if err != nil {
 		return nil, fmt.Errorf("configgen: marshal %s: %w", name, err)
 	}

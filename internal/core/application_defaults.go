@@ -2,7 +2,7 @@ package core
 
 import (
 	"context"
-	"encoding/json"
+	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"reflect"
@@ -326,7 +326,7 @@ func (s *Service) buildDefaultsPlan(ctx context.Context, in domain.DefaultsApply
 		Resolution: resolution, Resources: resources, Entries: digestEntries,
 		MissingSecrets: result.MissingSecrets, Overwrite: in.Overwrite,
 	}
-	digestJSON, err := json.Marshal(digestInput)
+	digestJSON, err := json.Marshal(digestInput, json.Deterministic(true))
 	if err != nil {
 		return defaultsPlan{}, fmt.Errorf("encode defaults plan: %w", err)
 	}

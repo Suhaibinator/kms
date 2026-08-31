@@ -1,7 +1,8 @@
 package generated
 
 import (
-	"encoding/json"
+	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"errors"
 	"math"
 	"reflect"
@@ -49,7 +50,7 @@ func TestEncodeParameterGroupsCanonicalRoundTrip(t *testing.T) {
 		t.Fatalf("rate_limits group = %s, want %s", got, want)
 	}
 	for alias, document := range groups {
-		if string(document) == "" || json.Valid(document) == false {
+		if string(document) == "" || !jsontext.Value(document).IsValid() {
 			t.Fatalf("group %q is not valid JSON: %q", alias, document)
 		}
 		if contents := string(document); strings.Contains(contents, "database_password") || strings.Contains(contents, "must-never-appear-in-parameter-groups") {
@@ -78,10 +79,10 @@ func TestEncodeParameterGroupsPreservesNilCollections(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, want := string(groups["database"]), `{"endpoint":{"host":"","labels":null,"ports":null,"zones":["",""]},"timeout":"1s"}`; got != want {
+	if got, want := string(groups["database"]), `{"endpoint":{"host":"","labels":{},"ports":[],"zones":["",""]},"timeout":"1s"}`; got != want {
 		t.Fatalf("database group = %s, want %s", got, want)
 	}
-	if got, want := string(groups["rate_limits"]), `{"limit":0,"payload":null,"ratio":null}`; got != want {
+	if got, want := string(groups["rate_limits"]), `{"limit":0,"payload":"","ratio":null}`; got != want {
 		t.Fatalf("rate_limits group = %s, want %s", got, want)
 	}
 }
@@ -92,9 +93,9 @@ func TestEncodeParameterGroupsReturnsJSONError(t *testing.T) {
 	if err == nil {
 		t.Fatal("NaN was encoded")
 	}
-	var unsupported *json.UnsupportedValueError
+	var unsupported *json.SemanticError
 	if !errors.As(err, &unsupported) {
-		t.Fatalf("error = %T: %v, want wrapped *json.UnsupportedValueError", err, err)
+		t.Fatalf("error = %T: %v, want wrapped *json.SemanticError", err, err)
 	}
 }
 

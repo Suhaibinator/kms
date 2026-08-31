@@ -55,13 +55,12 @@ describe("canonical parameter values", () => {
     expect([...input]).toEqual([0xff, 0x00, 0x80]);
   });
 
-  it("rejects invalid UTF-8 bytes and raw lone surrogates but decodes escaped ones like Go", () => {
+  it("rejects invalid UTF-8 bytes and unmatched surrogates like Go JSON v2", () => {
     expect(() => canonicalParameterValue("json", Buffer.from([0x22, 0xff, 0x22]))).toThrow(
       /invalid UTF-8/u,
     );
     expect(() => canonicalParameterValue("json", '"\ud800"')).toThrow(/invalid UTF-8/u);
-    // Go's encoding/json replaces an escaped unpaired surrogate with U+FFFD.
-    expect(Buffer.from(canonicalParameterValue("json", '"\\ud800"')).toString("utf8")).toBe('"�"');
+    expect(() => canonicalParameterValue("json", '"\\ud800"')).toThrow(/invalid document/u);
     expect(() => canonicalParameterValue("json", '{"a":1,"a":1}')).toThrow(/duplicate/u);
     expect(() => canonicalParameterValue("json", '{"a":[1,{"b":1,"b":2}]}')).toThrow(/duplicate/u);
     expect(() => canonicalParameterValue("json", "[1,]")).toThrow(/invalid document/u);

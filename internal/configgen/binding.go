@@ -31,7 +31,7 @@ func renderBinding(model *ir, packageName string, contract renderedContract) ([]
 		helperByType: make(map[types.Type]int),
 	}
 	for _, imported := range []struct{ path, alias string }{
-		{"context", "context"}, {"encoding/json", "json"}, {"errors", "errors"}, {"fmt", "fmt"}, {"sync/atomic", "atomic"}, {"time", "time"},
+		{"context", "context"}, {"encoding/json/jsontext", "jsontext"}, {"errors", "errors"}, {"fmt", "fmt"}, {"sync/atomic", "atomic"}, {"time", "time"},
 		{configstorePath, "configstore"}, {kmsclientPath, "kmsclient"},
 	} {
 		r.addImport(imported.path, imported.alias)
@@ -191,11 +191,11 @@ func (r *bindingRenderer) renderVerify() {
 func (r *bindingRenderer) renderParameterGroupEncoder() {
 	r.line("// EncodeParameterGroups encodes every complete non-secret parameter group from root.")
 	r.line("// The returned documents use the same canonical encodings accepted by the generated store.")
-	r.line("func EncodeParameterGroups(root *%s) (map[string]json.RawMessage, error) {", r.rootTypeString)
+	r.line("func EncodeParameterGroups(root *%s) (map[string]jsontext.Value, error) {", r.rootTypeString)
 	r.line("\tif err := validateInlinePointers(root); err != nil {")
 	r.line("\t\treturn nil, err")
 	r.line("\t}")
-	r.line("\tgroups := make(map[string]json.RawMessage, %d)", len(r.model.Groups))
+	r.line("\tgroups := make(map[string]jsontext.Value, %d)", len(r.model.Groups))
 	for groupIndex, group := range r.model.Groups {
 		r.line("\tgroup%d, err := configstore.EncodeGroup(root, groupFields%d)", groupIndex, groupIndex)
 		r.line("\tif err != nil {")
@@ -390,7 +390,7 @@ func (r *bindingRenderer) renderPrepare() {
 	r.line("\t\tDefaultDifferences: differences,")
 	r.line("\t\tRestartRequiredFields: restartRequired,")
 	r.line("\t\tChanged: changed,")
-	r.line("\t\tGroups: func() (map[string]json.RawMessage, error) { return EncodeParameterGroups(generation.config) },")
+	r.line("\t\tGroups: func() (map[string]jsontext.Value, error) { return EncodeParameterGroups(generation.config) },")
 	r.line("\t}, nil")
 	r.line("}")
 	r.line("")
@@ -527,6 +527,22 @@ func (r *bindingRenderer) addHelper(value *typeIR) int {
 	return index
 }
 
+func reportNeedsProjection(value *typeIR) bool {
+	switch value.Kind {
+	case typeDuration:
+		return true
+	case typePointer, typeArray, typeSlice, typeMap:
+		return reportNeedsProjection(value.Elem)
+	case typeStruct:
+		for _, field := range value.Fields {
+			if field.Included && reportNeedsProjection(field.Type) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func (r *bindingRenderer) renderHelpers() {
 	for index, value := range r.helpers {
 		r.renderCloneHelper(index, value)
@@ -636,13 +652,42 @@ func (r *bindingRenderer) renderEqualHelper(index int, value *typeIR) {
 func (r *bindingRenderer) renderReportHelper(index int, value *typeIR) {
 	typeName := r.typeString(value.GoType)
 	r.line("func reportValue%d(value %s) any {", index, typeName)
-	if value.Kind == typePointer {
+	if !reportNeedsProjection(value) {
+		if value.Kind == typePointer {
+			r.line("\tif value == nil { return nil }")
+			r.line("\treturn *value")
+		} else if value.Mutable {
+			r.line("\treturn cloneValue%d(value)", index)
+		} else {
+			r.line("\treturn value")
+		}
+		r.line("}")
+		r.line("")
+		return
+	}
+
+	switch value.Kind {
+	case typeDuration:
+		r.line("\treturn value.String()")
+	case typePointer:
 		r.line("\tif value == nil { return nil }")
-		r.line("\treturn *value")
-	} else if value.Mutable {
-		r.line("\treturn cloneValue%d(value)", index)
-	} else {
-		r.line("\treturn value")
+		r.line("\treturn reportValue%d(*value)", r.helperByType[value.Elem.GoType])
+	case typeArray, typeSlice:
+		r.line("\tout := make([]any, len(value))")
+		r.line("\tfor i := range value { out[i] = reportValue%d(value[i]) }", r.helperByType[value.Elem.GoType])
+		r.line("\treturn out")
+	case typeMap:
+		r.line("\tout := make(map[string]any, len(value))")
+		r.line("\tfor key, item := range value { out[key] = reportValue%d(item) }", r.helperByType[value.Elem.GoType])
+		r.line("\treturn out")
+	case typeStruct:
+		r.line("\treturn map[string]any{")
+		for _, field := range value.Fields {
+			if field.Included {
+				r.line("\t\t%s: reportValue%d(value.%s),", strconv.Quote(field.JSONName), r.helperByType[field.Type.GoType], field.GoName)
+			}
+		}
+		r.line("\t}")
 	}
 	r.line("}")
 	r.line("")

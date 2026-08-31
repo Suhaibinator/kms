@@ -5,7 +5,8 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
+	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"errors"
 	"go/parser"
 	"go/token"
@@ -76,7 +77,10 @@ func TestGenerateIsDeterministicAndCanonical(t *testing.T) {
 	if !bytes.Contains(first.Binding, []byte(`configstore.FieldChange{Path: "database_password"}`)) {
 		t.Fatal("generated change list does not report secret rotation path-only")
 	}
-	if !regexp.MustCompile(`Groups:\s+func\(\) \(map\[string\]json\.RawMessage, error\)`).Match(first.Binding) {
+	if !regexp.MustCompile(`func reportValue\d+\(value time\.Duration\) any \{\s+return value\.String\(\)\s+\}`).Match(first.Binding) {
+		t.Fatal("generated duration reports do not use human-readable strings")
+	}
+	if !regexp.MustCompile(`Groups:\s+func\(\) \(map\[string\]jsontext\.Value, error\)`).Match(first.Binding) {
 		t.Fatal("generated candidate does not set Groups")
 	}
 	if !bytes.Contains(first.Binding, []byte("func VerifyReleaseDefaults(")) {
@@ -139,11 +143,11 @@ func TestGenerateIsDeterministicAndCanonical(t *testing.T) {
 	if err := json.Unmarshal(first.Contract, &contract); err != nil {
 		t.Fatal(err)
 	}
-	var compactSchema bytes.Buffer
-	if err := json.Compact(&compactSchema, first.Schema); err != nil {
+	compactSchema := jsontext.Value(first.Schema).Clone()
+	if err := compactSchema.Compact(); err != nil {
 		t.Fatal(err)
 	}
-	wantHash := sha256.Sum256(compactSchema.Bytes())
+	wantHash := sha256.Sum256(compactSchema)
 	if contract.Format != "kms-config-contract/v1" || contract.SchemaSHA256 != hex.EncodeToString(wantHash[:]) {
 		t.Fatalf("unexpected contract identity: %#v", contract)
 	}

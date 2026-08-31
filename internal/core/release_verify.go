@@ -136,7 +136,7 @@ func (s *Service) VerifyReleaseDefaults(ctx context.Context, pr Principal, in do
 
 	// Schema check against the application-pinned schema (falling back to the
 	// release's own pin when the application has none). The generator's
-	// schema_sha256 is sha256(json.Compact(schema)), which is exactly the
+	// schema_sha256 is sha256(jsontext.Value(schema).Compact()), exactly the
 	// registry digest.
 	schemaMatches := false
 	if in.SchemaSHA256 != "" {

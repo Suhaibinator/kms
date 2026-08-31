@@ -2,7 +2,7 @@ package configstore
 
 import (
 	"context"
-	"encoding/json"
+	"encoding/json/jsontext"
 	"errors"
 	"fmt"
 	"sort"
@@ -18,7 +18,7 @@ import (
 type VerifyInput struct {
 	SchemaSHA256 string
 	Contract     []ContractEntry
-	Groups       map[string]json.RawMessage
+	Groups       map[string]jsontext.Value
 }
 
 // VerifyOptions addresses the release to compare against.

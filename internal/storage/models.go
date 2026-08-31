@@ -1,7 +1,7 @@
 package storage
 
 import (
-	"encoding/json"
+	"encoding/json/v2"
 	"time"
 
 	"github.com/Suhaibinator/kms/internal/domain"

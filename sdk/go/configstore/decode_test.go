@@ -354,6 +354,18 @@ func TestDecodeGroupPreservesNilVersusEmptyCollections(t *testing.T) {
 		len(emptyValues.Items) != 0 || len(emptyValues.Labels) != 0 || len(emptyValues.Blob) != 0 {
 		t.Fatalf("empty collections did not remain non-nil empty values: %#v", emptyValues)
 	}
+
+	document, err := EncodeGroup(&nullableCollections{}, codecs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	canonical, err := CanonicalParameterValue("json", document)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := string(canonical), `{"blob":"","items":[],"labels":{}}`; got != want {
+		t.Fatalf("EncodeGroup(nil collections) = %s, want %s", got, want)
+	}
 }
 
 func TestRejectDecodeMapsOnlyGeneratedCanonicalPaths(t *testing.T) {
@@ -387,5 +399,17 @@ func TestRejectDecodeMapsOnlyGeneratedCanonicalPaths(t *testing.T) {
 				t.Fatal("unknown JSON property leaked into canonical path")
 			}
 		})
+	}
+}
+
+func BenchmarkDecodeGroup(b *testing.B) {
+	document := `{"enabled":true,"name":"service","signed":-8,"unsigned":42,"ratio":1.25,"delay":"1m30s","blob":"AAEC/w==","nested":{"count":7,"note":null},"items":[{"count":9,"note":"ready"}],"pair":["left","right"],"labels":{"one":1,"two":2},"optional":null}`
+	fields := fixtureCodecs()
+	b.ReportAllocs()
+	for b.Loop() {
+		var destination decodeFixture
+		if err := DecodeGroup(document, &destination, fields); err != nil {
+			b.Fatal(err)
+		}
 	}
 }

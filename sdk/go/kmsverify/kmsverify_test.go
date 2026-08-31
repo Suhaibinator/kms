@@ -7,7 +7,7 @@ import (
 	"crypto/rand"
 	"crypto/x509"
 	"crypto/x509/pkix"
-	"encoding/json"
+	"encoding/json/jsontext"
 	"encoding/pem"
 	"errors"
 	"fmt"
@@ -47,8 +47,8 @@ func testSpec() Spec[testRoot] {
 			return configstore.VerifyDefaults(ctx, client, configstore.VerifyInput{
 				SchemaSHA256: strings.Repeat("a", 64),
 				Contract:     testContract,
-				Groups: map[string]json.RawMessage{
-					"limits": json.RawMessage(fmt.Sprintf(`{"limit":%d}`, root.Limit)),
+				Groups: map[string]jsontext.Value{
+					"limits": jsontext.Value(fmt.Sprintf(`{"limit":%d}`, root.Limit)),
 				},
 			}, opts)
 		},

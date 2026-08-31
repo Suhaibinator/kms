@@ -14,7 +14,7 @@ const fixturePath = resolve(import.meta.dirname, "fixtures/configgen/defaults-ar
 const schemaSHA256 = "0123456789abcdef".repeat(4);
 
 describe("defaults artifact", () => {
-  it("matches the canonical cross-language fixture including Go JSON escaping", async () => {
+  it("matches the canonical cross-language fixture using minimal escaping", async () => {
     const encodedValue = '{"text":"<>&\u2028\u2029"}';
     const document = encodeDefaultsArtifact({
       profile: "development<>&\u2028inner",
@@ -30,8 +30,8 @@ describe("defaults artifact", () => {
     expect(document).toBe(fixture);
     expect(document.endsWith("\n")).toBe(true);
     expect(document).toContain("<>&");
-    expect(document).toContain("\\u2028");
-    expect(document).toContain("\\u2029");
+    expect(document).toContain("\u2028");
+    expect(document).toContain("\u2029");
     expect(document).not.toContain("\\u003c");
     expect(document).not.toContain("\\u003e");
     expect(document).not.toContain("\\u0026");

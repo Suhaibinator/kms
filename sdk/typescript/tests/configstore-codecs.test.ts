@@ -89,9 +89,8 @@ describe("strict managed-configuration codecs", () => {
     });
   });
 
-  it("normalizes unmatched JSON surrogates like Go without collapsing valid pairs", () => {
-    const unmatched = parseStrictJson('"\\ud800"');
-    expect(unmatched).toEqual({ kind: "string", value: "\ufffd" });
+  it("rejects unmatched JSON surrogates like Go v2 without rejecting valid pairs", () => {
+    expect(() => parseStrictJson('"\\ud800"')).toThrow(/invalid JSON document/u);
     const pair = parseStrictJson('"\\ud83d\\ude00"');
     expect(pair).toEqual({ kind: "string", value: "😀" });
 
@@ -102,7 +101,7 @@ describe("strict managed-configuration codecs", () => {
       field<MapHolder, "labels">("labels", "labels", codecs.record(codecs.string)),
     ]);
     expect(() => decodeGroup('{"labels":{"\\ud800":"a","\\ufffd":"b"}}', maps)).toThrow(
-      /duplicate map key/u,
+      /invalid JSON document/u,
     );
   });
 

@@ -1,9 +1,17 @@
 package core
 
 import (
-	"encoding/json"
 	"testing"
 )
+
+func exactJSONNumber(t *testing.T, raw string) any {
+	t.Helper()
+	value, err := decodeStrictJSON(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return value
+}
 
 func TestCompileSchemaAssertsGeneratedFormats(t *testing.T) {
 	schema, err := compileSchema(`{
@@ -64,10 +72,10 @@ func TestCompileSchemaDoesNotRewriteFormatPropertiesInsideConst(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := schema.Validate(map[string]any{"format": "email", "x": json.Number("1")}); err != nil {
+	if err := schema.Validate(map[string]any{"format": "email", "x": exactJSONNumber(t, "1")}); err != nil {
 		t.Fatalf("const instance was changed while configuring formats: %v", err)
 	}
-	if err := schema.Validate(map[string]any{"x": json.Number("1")}); err == nil {
+	if err := schema.Validate(map[string]any{"x": exactJSONNumber(t, "1")}); err == nil {
 		t.Fatal("schema accepted the const value only after its format property was removed")
 	}
 }
@@ -80,7 +88,7 @@ func TestCompileSchemaRejectsDuplicatePropertiesAndPreservesNumericBounds(t *tes
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := schema.Validate(json.Number("9007199254740993")); err == nil {
+	if err := schema.Validate(exactJSONNumber(t, "9007199254740993")); err == nil {
 		t.Fatal("integer above the exact bound was accepted")
 	}
 }

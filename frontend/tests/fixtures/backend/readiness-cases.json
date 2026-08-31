@@ -25,17 +25,20 @@
           {
             "alias": "database",
             "kind": "parameter",
-            "present": false
+            "present": false,
+            "current_version": 0
           },
           {
             "alias": "rate_limits",
             "kind": "parameter",
-            "present": false
+            "present": false,
+            "current_version": 0
           },
           {
             "alias": "db_password",
             "kind": "secret",
-            "present": false
+            "present": false,
+            "current_version": 0
           }
         ],
         "active": null,
@@ -88,7 +91,8 @@
           {
             "alias": "rate_limits",
             "kind": "parameter",
-            "present": false
+            "present": false,
+            "current_version": 0
           },
           {
             "alias": "db_password",

@@ -2,7 +2,8 @@ package configstore
 
 import (
 	"context"
-	"encoding/json"
+	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"io"
@@ -83,7 +84,7 @@ type PreparedCandidate struct {
 	Changed []FieldChange
 	// Groups returns the canonical non-secret parameter group documents of the
 	// candidate, keyed by alias. It must never include secret values.
-	Groups func() (map[string]json.RawMessage, error)
+	Groups func() (map[string]jsontext.Value, error)
 }
 
 // Phase identifies whether a candidate was the initial generation or a reload.
@@ -130,7 +131,7 @@ type AppliedReport interface {
 	Release() ReleaseIdentity
 	DefaultDivergent() bool
 	Changed() []FieldChange
-	Groups() (map[string]json.RawMessage, error)
+	Groups() (map[string]jsontext.Value, error)
 }
 
 type appliedReport struct {
@@ -138,10 +139,10 @@ type appliedReport struct {
 	release   ReleaseIdentity
 	divergent bool
 	changes   []FieldChange
-	groups    func() (map[string]json.RawMessage, error)
+	groups    func() (map[string]jsontext.Value, error)
 }
 
-func newAppliedReport(phase Phase, release ReleaseIdentity, divergent bool, changes []FieldChange, groups func() (map[string]json.RawMessage, error)) *appliedReport {
+func newAppliedReport(phase Phase, release ReleaseIdentity, divergent bool, changes []FieldChange, groups func() (map[string]jsontext.Value, error)) *appliedReport {
 	return &appliedReport{phase: phase, release: release, divergent: divergent, changes: cloneChanges(changes), groups: groups}
 }
 
@@ -150,17 +151,17 @@ func (r *appliedReport) Release() ReleaseIdentity { return r.release }
 func (r *appliedReport) DefaultDivergent() bool   { return r.divergent }
 func (r *appliedReport) Changed() []FieldChange   { return cloneChanges(r.changes) }
 
-func (r *appliedReport) Groups() (map[string]json.RawMessage, error) {
+func (r *appliedReport) Groups() (map[string]jsontext.Value, error) {
 	if r.groups == nil {
-		return map[string]json.RawMessage{}, nil
+		return map[string]jsontext.Value{}, nil
 	}
 	groups, err := r.groups()
 	if err != nil {
 		return nil, err
 	}
-	out := make(map[string]json.RawMessage, len(groups))
+	out := make(map[string]jsontext.Value, len(groups))
 	for alias, document := range groups {
-		out[alias] = append(json.RawMessage(nil), document...)
+		out[alias] = document.Clone()
 	}
 	return out, nil
 }
@@ -187,12 +188,23 @@ func (r *appliedReport) Format(f fmt.State, verb rune) {
 }
 
 func (r *appliedReport) MarshalJSON() ([]byte, error) {
-	return json.Marshal(struct {
-		Phase            Phase           `json:"phase"`
-		Release          ReleaseIdentity `json:"release"`
-		DefaultDivergent bool            `json:"default_divergent"`
-		Changed          []FieldChange   `json:"changed"`
-	}{Phase: r.phase, Release: r.release, DefaultDivergent: r.divergent, Changed: r.Changed()})
+	return json.Marshal(r.jsonProjection())
+}
+
+type appliedReportJSON struct {
+	Phase            Phase           `json:"phase"`
+	Release          ReleaseIdentity `json:"release"`
+	DefaultDivergent bool            `json:"default_divergent"`
+	Changed          []FieldChange   `json:"changed"`
+}
+
+func (r *appliedReport) jsonProjection() appliedReportJSON {
+	return appliedReportJSON{Phase: r.phase, Release: r.release, DefaultDivergent: r.divergent, Changed: r.changes}
+}
+
+// MarshalJSONTo streams the same safe report projection as MarshalJSON.
+func (r *appliedReport) MarshalJSONTo(out *jsontext.Encoder) error {
+	return json.MarshalEncode(out, r.jsonProjection())
 }
 
 // FieldDifference contains one canonical, non-secret default comparison.
@@ -259,17 +271,28 @@ func (r *defaultMismatchReport) Format(f fmt.State, verb rune) {
 }
 
 func (r *defaultMismatchReport) MarshalJSON() ([]byte, error) {
-	return json.Marshal(struct {
-		Phase       MismatchPhase     `json:"phase"`
-		Severity    MismatchSeverity  `json:"severity"`
-		Release     ReleaseIdentity   `json:"release"`
-		Differences []FieldDifference `json:"differences"`
-	}{
+	return json.Marshal(r.jsonProjection())
+}
+
+type defaultMismatchReportJSON struct {
+	Phase       MismatchPhase     `json:"phase"`
+	Severity    MismatchSeverity  `json:"severity"`
+	Release     ReleaseIdentity   `json:"release"`
+	Differences []FieldDifference `json:"differences"`
+}
+
+func (r *defaultMismatchReport) jsonProjection() defaultMismatchReportJSON {
+	return defaultMismatchReportJSON{
 		Phase:       r.phase,
 		Severity:    r.severity,
 		Release:     r.release,
-		Differences: r.Fields(),
-	})
+		Differences: r.differences,
+	}
+}
+
+// MarshalJSONTo streams the same safe report projection as MarshalJSON.
+func (r *defaultMismatchReport) MarshalJSONTo(out *jsontext.Encoder) error {
+	return json.MarshalEncode(out, r.jsonProjection())
 }
 
 // RejectionCategory is a bounded release acknowledgement and metrics label.
@@ -442,9 +465,20 @@ func (e *CandidateError) Format(f fmt.State, verb rune) {
 }
 
 func (e *CandidateError) MarshalJSON() ([]byte, error) {
-	return json.Marshal(struct {
-		Category RejectionCategory `json:"category"`
-	}{Category: e.category})
+	return json.Marshal(e.jsonProjection())
+}
+
+type candidateErrorJSON struct {
+	Category RejectionCategory `json:"category"`
+}
+
+func (e *CandidateError) jsonProjection() candidateErrorJSON {
+	return candidateErrorJSON{Category: e.category}
+}
+
+// MarshalJSONTo streams the same redacted projection as MarshalJSON.
+func (e *CandidateError) MarshalJSONTo(out *jsontext.Encoder) error {
+	return json.MarshalEncode(out, e.jsonProjection())
 }
 
 // CandidateRejectionReport is a value-free local preparation diagnostic. Paths
@@ -485,11 +519,22 @@ func (r *candidateRejectionReport) Format(f fmt.State, verb rune) {
 }
 
 func (r *candidateRejectionReport) MarshalJSON() ([]byte, error) {
-	return json.Marshal(struct {
-		Category RejectionCategory `json:"category"`
-		Release  ReleaseIdentity   `json:"release"`
-		Paths    []string          `json:"paths"`
-	}{Category: r.category, Release: r.release, Paths: r.Paths()})
+	return json.Marshal(r.jsonProjection())
+}
+
+type candidateRejectionReportJSON struct {
+	Category RejectionCategory `json:"category"`
+	Release  ReleaseIdentity   `json:"release"`
+	Paths    []string          `json:"paths"`
+}
+
+func (r *candidateRejectionReport) jsonProjection() candidateRejectionReportJSON {
+	return candidateRejectionReportJSON{Category: r.category, Release: r.release, Paths: r.paths}
+}
+
+// MarshalJSONTo streams the same value-free projection as MarshalJSON.
+func (r *candidateRejectionReport) MarshalJSONTo(out *jsontext.Encoder) error {
+	return json.MarshalEncode(out, r.jsonProjection())
 }
 
 // ReleaseIdentity contains immutable, non-sensitive identity copied from a
@@ -550,15 +595,21 @@ func (r ReleaseIdentity) String() string {
 }
 
 func (r ReleaseIdentity) MarshalJSON() ([]byte, error) {
-	return json.Marshal(struct {
-		Namespace          string `json:"namespace"`
-		Name               string `json:"name"`
-		Version            uint64 `json:"version"`
-		ActivationRevision uint64 `json:"activation_revision"`
-		SchemaID           string `json:"schema_id,omitempty"`
-		SchemaVersion      uint64 `json:"schema_version,omitempty"`
-		Digest             string `json:"digest"`
-	}{
+	return json.Marshal(r.jsonProjection())
+}
+
+type releaseIdentityJSON struct {
+	Namespace          string `json:"namespace"`
+	Name               string `json:"name"`
+	Version            uint64 `json:"version"`
+	ActivationRevision uint64 `json:"activation_revision"`
+	SchemaID           string `json:"schema_id,omitempty"`
+	SchemaVersion      uint64 `json:"schema_version,omitempty"`
+	Digest             string `json:"digest"`
+}
+
+func (r ReleaseIdentity) jsonProjection() releaseIdentityJSON {
+	return releaseIdentityJSON{
 		Namespace:          r.namespace,
 		Name:               r.name,
 		Version:            r.version,
@@ -566,7 +617,12 @@ func (r ReleaseIdentity) MarshalJSON() ([]byte, error) {
 		SchemaID:           r.schemaID,
 		SchemaVersion:      r.schemaVersion,
 		Digest:             r.digest,
-	})
+	}
+}
+
+// MarshalJSONTo streams the same identity-only projection as MarshalJSON.
+func (r ReleaseIdentity) MarshalJSONTo(out *jsontext.Encoder) error {
+	return json.MarshalEncode(out, r.jsonProjection())
 }
 
 // Status is a redacted point-in-time manager status. It contains no aliases,

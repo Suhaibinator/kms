@@ -2,7 +2,7 @@ package configstore
 
 import (
 	"bytes"
-	"encoding/json"
+	"encoding/json/v2"
 	"os"
 	"reflect"
 	"strings"
@@ -100,6 +100,10 @@ func TestParseDefaultsArtifactRejectsMalformedContracts(t *testing.T) {
 	}
 	tests := map[string]func(map[string]any){
 		"unknown top-level field": func(value map[string]any) { value["secret_values"] = []any{} },
+		"case mismatched field": func(value map[string]any) {
+			value["Format"] = value["format"]
+			delete(value, "format")
+		},
 		"unknown contract field": func(value map[string]any) {
 			value["contract"].([]any)[1].(map[string]any)["value"] = "forbidden"
 		},
@@ -159,7 +163,7 @@ func TestParseDefaultsArtifactRejectsMalformedContracts(t *testing.T) {
 		`{"format":"kms-config-defaults/v1","format":"kms-config-defaults/v1","profile":"dev","schema_sha256":"` + testSchemaSHA256 + `","contract":[],"parameters":[]}`,
 		`{"format":"kms-config-defaults/v1","profile":"dev","schema_sha256":"` + testSchemaSHA256 + `","contract":[{"alias":"token","alias":"token","kind":"secret","content_type":""}],"parameters":[]}`,
 	} {
-		if _, err := ParseDefaultsArtifact([]byte(duplicate)); err == nil || !strings.Contains(err.Error(), "duplicate JSON") {
+		if _, err := ParseDefaultsArtifact([]byte(duplicate)); err == nil || !strings.Contains(err.Error(), "duplicate object member name") {
 			t.Fatalf("duplicate JSON field error = %v", err)
 		}
 	}
@@ -257,6 +261,33 @@ func TestDefaultsArtifactCanonicalWhitespace(t *testing.T) {
 		})
 		if err == nil {
 			t.Fatalf("noncanonical content type %q was accepted", contentType)
+		}
+	}
+}
+
+func BenchmarkParseDefaultsArtifact(b *testing.B) {
+	encoded, err := EncodeDefaultsArtifact(DefaultsArtifact{
+		Format:       DefaultsArtifactFormat,
+		Profile:      "production",
+		SchemaSHA256: testSchemaSHA256,
+		Contract: []ContractEntry{
+			{Alias: "database", Kind: ContractKindParameter, ContentType: "json"},
+			{Alias: "limits", Kind: ContractKindParameter, ContentType: "json"},
+			{Alias: "token", Kind: ContractKindSecret},
+		},
+		Parameters: []DefaultsParameter{
+			{Alias: "database", ContentType: "json", Value: `{"host":"db.internal","port":5432}`},
+			{Alias: "limits", ContentType: "json", Value: `{"burst":20,"rate":10}`},
+		},
+	})
+	if err != nil {
+		b.Fatal(err)
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for b.Loop() {
+		if _, err := ParseDefaultsArtifact(encoded); err != nil {
+			b.Fatal(err)
 		}
 	}
 }

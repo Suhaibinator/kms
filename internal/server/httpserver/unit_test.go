@@ -1,7 +1,10 @@
 package httpserver
 
 import (
+	"bytes"
+	"encoding/json/v2"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -53,6 +56,63 @@ func TestWriteJSONDisablesCaching(t *testing.T) {
 	writeJSON(w, http.StatusOK, map[string]string{"value": "sensitive"})
 	if got := w.Header().Get("Cache-Control"); got != "no-store" {
 		t.Fatalf("Cache-Control = %q, want no-store", got)
+	}
+}
+
+func TestWriteJSONUsesV2MinimalEscapingWithoutTrailingNewline(t *testing.T) {
+	w := httptest.NewRecorder()
+	writeJSON(w, http.StatusOK, map[string]string{"value": "<tag>&"})
+	if got, want := w.Body.String(), `{"value":"<tag>&"}`; got != want {
+		t.Fatalf("body = %q, want %q", got, want)
+	}
+}
+
+func TestDecodeJSONUsesStrictSingleDocumentV2Semantics(t *testing.T) {
+	type requestBody struct {
+		Name string `json:"name"`
+	}
+	tests := map[string]struct {
+		body    []byte
+		want    string
+		wantErr bool
+	}{
+		"empty":           {body: nil},
+		"whitespace only": {body: []byte(" \n\t")},
+		"exact case":      {body: []byte(`{"name":"ok"}`), want: "ok"},
+		"wrong case":      {body: []byte(`{"Name":"ignored"}`)},
+		"duplicate":       {body: []byte(`{"name":"one","name":"two"}`), wantErr: true},
+		"trailing value":  {body: []byte(`{"name":"one"} {}`), wantErr: true},
+		"invalid UTF-8":   {body: []byte{'{', '"', 'n', 'a', 'm', 'e', '"', ':', '"', 0xff, '"', '}'}, wantErr: true},
+	}
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			r := httptest.NewRequest(http.MethodPost, "/", bytes.NewReader(test.body))
+			w := httptest.NewRecorder()
+			var got requestBody
+			err := decodeJSON(w, r, &got)
+			if (err != nil) != test.wantErr {
+				t.Fatalf("decodeJSON error = %v, wantErr %t", err, test.wantErr)
+			}
+			if !test.wantErr && got.Name != test.want {
+				t.Fatalf("Name = %q, want %q", got.Name, test.want)
+			}
+		})
+	}
+}
+
+func BenchmarkHTTPDTOJSONV2(b *testing.B) {
+	value := errorEnvelope{Error: errorBody{
+		Code:    "invalid_argument",
+		Message: "invalid JSON body",
+		ValidationErrors: []releaseValidationErrorDTO{
+			{Alias: "runtime", Code: "required", SchemaPointer: "/properties/limit", Message: "missing property"},
+		},
+	}}
+	b.ReportAllocs()
+	for b.Loop() {
+		if err := json.MarshalWrite(io.Discard, value); err != nil {
+			b.Fatal(err)
+		}
 	}
 }
 

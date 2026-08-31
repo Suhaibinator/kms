@@ -2,7 +2,7 @@ package configstore
 
 import (
 	"context"
-	"encoding/json"
+	"encoding/json/jsontext"
 	"errors"
 	"fmt"
 	"strings"
@@ -273,7 +273,7 @@ type managedPrepared struct {
 	fieldCount int
 	startup    bool
 	changes    []FieldChange
-	groups     func() (map[string]json.RawMessage, error)
+	groups     func() (map[string]jsontext.Value, error)
 }
 
 func (p *managedPrepared) Commit() {

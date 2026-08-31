@@ -2,7 +2,7 @@ package configstore
 
 import (
 	"context"
-	"encoding/json"
+	"encoding/json/jsontext"
 	"errors"
 	"fmt"
 	"strings"
@@ -31,12 +31,12 @@ func verifyTestInput() VerifyInput {
 			{Alias: "banner", Kind: ContractKindParameter, ContentType: "string"},
 			{Alias: "db_password", Kind: ContractKindSecret},
 		},
-		Groups: map[string]json.RawMessage{
-			"limits":   json.RawMessage(`{ "rate": 10, "burst": 20 }`),
-			"database": json.RawMessage(`{"host":"db.internal","port":5432}`),
-			"banner":   json.RawMessage(`hello   world`),
+		Groups: map[string]jsontext.Value{
+			"limits":   jsontext.Value(`{ "rate": 10, "burst": 20 }`),
+			"database": jsontext.Value(`{"host":"db.internal","port":5432}`),
+			"banner":   jsontext.Value(`hello   world`),
 			// A group for a secret alias must be ignored, never hashed or sent.
-			"db_password": json.RawMessage(`"hunter2-secret-canary"`),
+			"db_password": jsontext.Value(`"hunter2-secret-canary"`),
 		},
 	}
 }
@@ -114,7 +114,7 @@ func TestVerifyDefaultsRejectsMissingGroupAndBadInputs(t *testing.T) {
 	}
 
 	in = verifyTestInput()
-	in.Groups["limits"] = json.RawMessage(`{"rate": 1,}`)
+	in.Groups["limits"] = jsontext.Value(`{"rate": 1,}`)
 	_, err = VerifyDefaults(context.Background(), client, in, VerifyOptions{Namespace: "prod/app"})
 	if err == nil || !strings.Contains(err.Error(), "hash parameter group limits") {
 		t.Fatalf("invalid json error = %v", err)

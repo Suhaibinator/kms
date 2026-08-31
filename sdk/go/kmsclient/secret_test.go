@@ -1,7 +1,7 @@
 package kmsclient
 
 import (
-	"encoding/json"
+	"encoding/json/v2"
 	"fmt"
 	"strings"
 	"testing"
@@ -38,6 +38,13 @@ func TestSecretRedaction(t *testing.T) {
 		t.Fatalf("json.Marshal: %v", err)
 	}
 	assertRedacted(t, "json", string(j))
+	legacyPath, err := s.MarshalJSON()
+	if err != nil {
+		t.Fatalf("MarshalJSON: %v", err)
+	}
+	if string(legacyPath) != string(j) {
+		t.Fatalf("MarshalJSON = %s, streaming marshal = %s", legacyPath, j)
+	}
 
 	// Plaintext must still be reachable explicitly.
 	if got := s.StringValue(); got != leak {
@@ -111,6 +118,13 @@ func TestSecretValueRedaction(t *testing.T) {
 		t.Fatalf("json.Marshal: %v", err)
 	}
 	assertRedacted(t, "SecretValue json", string(j))
+	legacyPath, err := sv.MarshalJSON()
+	if err != nil {
+		t.Fatalf("SecretValue.MarshalJSON: %v", err)
+	}
+	if string(legacyPath) != string(j) {
+		t.Fatalf("SecretValue.MarshalJSON = %s, streaming marshal = %s", legacyPath, j)
+	}
 
 	// And embedded in a config struct with an exported field.
 	type cfg struct {

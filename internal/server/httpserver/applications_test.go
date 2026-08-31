@@ -150,8 +150,8 @@ func TestApplicationOverviewHTTP(t *testing.T) {
 		if m["present"] != true || m["key"] != m["alias"] || m["current_version"].(float64) != 1 {
 			t.Fatalf("value = %v", m)
 		}
-		if _, ok := m["pinned_version"]; ok {
-			t.Fatalf("no active release but pinned_version set: %v", m)
+		if m["pinned_version"].(float64) != 0 {
+			t.Fatalf("no active release but pinned_version nonzero: %v", m)
 		}
 	}
 	if _, ok := dev["release"].(map[string]any)["active"]; ok {
@@ -294,8 +294,8 @@ func TestShipApplicationHTTP(t *testing.T) {
 			if m["change"] != "edited" || m["to_version"].(float64) != 2 || m["key"] != "rate_limits" {
 				t.Fatalf("edited entry = %v", m)
 			}
-			if _, ok := m["from_version"]; ok {
-				t.Fatalf("first release has no from_version: %v", m)
+			if m["from_version"].(float64) != 0 {
+				t.Fatalf("first release has nonzero from_version: %v", m)
 			}
 		default:
 			if m["change"] != "included" || m["to_version"].(float64) != 1 {

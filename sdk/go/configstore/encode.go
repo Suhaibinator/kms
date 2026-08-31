@@ -2,7 +2,8 @@ package configstore
 
 import (
 	"encoding/base64"
-	"encoding/json"
+	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"fmt"
 	"reflect"
 	"time"
@@ -11,8 +12,8 @@ import (
 // EncodeGroup encodes one complete parameter group from src using the same
 // generated descriptor consumed by DecodeGroup. Src must be a non-nil pointer
 // to a struct. The returned document contains every described field exactly
-// once and preserves nil versus non-nil empty slices, maps, and byte slices.
-func EncodeGroup(src any, fields []FieldCodec) (json.RawMessage, error) {
+// once. Nil slices, maps, and byte slices use JSON v2's empty representations.
+func EncodeGroup(src any, fields []FieldCodec) (jsontext.Value, error) {
 	value := reflect.ValueOf(src)
 	if !value.IsValid() || value.Kind() != reflect.Pointer || value.IsNil() || value.Elem().Kind() != reflect.Struct {
 		return nil, fmt.Errorf("configstore: EncodeGroup source must be a non-nil pointer to a struct")
@@ -26,7 +27,7 @@ func EncodeGroup(src any, fields []FieldCodec) (json.RawMessage, error) {
 	if err != nil {
 		return nil, fmt.Errorf("configstore: encode JSON group document: %w", err)
 	}
-	return json.RawMessage(document), nil
+	return jsontext.Value(document), nil
 }
 
 func encodeObject(source reflect.Value, fields []FieldCodec, path string) (map[string]any, error) {
@@ -82,7 +83,14 @@ func encodeValue(source reflect.Value, codec ValueCodec, path string) (any, erro
 			}
 		}
 		if source.IsNil() {
-			return nil, nil
+			switch codec.Kind {
+			case CodecSlice:
+				return []any{}, nil
+			case CodecMap:
+				return map[string]any{}, nil
+			case CodecBytes:
+				return "", nil
+			}
 		}
 	}
 

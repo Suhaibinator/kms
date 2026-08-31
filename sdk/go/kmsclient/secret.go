@@ -1,6 +1,8 @@
 package kmsclient
 
 import (
+	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"fmt"
 	"io"
 )
@@ -72,5 +74,10 @@ func (s Secret) Format(f fmt.State, verb rune) {
 // MarshalJSON always emits the redaction string, so a Secret embedded in a
 // JSON-marshaled struct never leaks plaintext.
 func (s Secret) MarshalJSON() ([]byte, error) {
-	return []byte(`"` + redactedText + `"`), nil
+	return json.Marshal(redactedText)
+}
+
+// MarshalJSONTo is the streaming JSON v2 equivalent of MarshalJSON.
+func (s Secret) MarshalJSONTo(out *jsontext.Encoder) error {
+	return json.MarshalEncode(out, redactedText)
 }
