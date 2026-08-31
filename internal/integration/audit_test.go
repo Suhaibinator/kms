@@ -140,6 +140,9 @@ func TestAuditRowsHaveNoPlaintext(t *testing.T) {
 				t.Errorf("audit row %q contains plaintext", et)
 			}
 		}
+		if err := rows.Err(); err != nil {
+			t.Fatalf("iterate audit rows: %v", err)
+		}
 		if n == 0 {
 			t.Fatal("expected audit rows on disk")
 		}
