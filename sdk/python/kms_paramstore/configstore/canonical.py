@@ -136,7 +136,7 @@ class _Parser:
                     decoded = json.loads(self.source[start : self.index])
                 except (TypeError, ValueError) as error:
                     raise ValueError("invalid JSON string") from error
-                return _replace_surrogates(decoded)
+                return _decode_surrogate_pairs(decoded)
         raise ValueError("unterminated JSON string")
 
     def _take(self, token: str) -> bool:
@@ -146,11 +146,11 @@ class _Parser:
         return False
 
 
-def _replace_surrogates(value: str) -> str:
-    # Go and JavaScript replace decoded, unpaired JSON surrogate escapes with
-    # U+FFFD. Python intentionally preserves them, so normalize explicitly.
+def _decode_surrogate_pairs(value: str) -> str:
+    # Python preserves decoded JSON surrogate escapes. Go's JSON v2 decoder
+    # rejects unpaired surrogates, so combine valid pairs and reject lone ones.
     encoded = value.encode("utf-16", "surrogatepass")
-    return encoded.decode("utf-16", "replace")
+    return encoded.decode("utf-16", "strict")
 
 
 def _quote(value: str) -> str:
