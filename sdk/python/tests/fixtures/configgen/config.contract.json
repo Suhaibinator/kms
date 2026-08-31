@@ -1,0 +1,68 @@
+{
+  "fields": [
+    {
+      "encoding": "boolean",
+      "group": "runtime",
+      "json_name": "debug",
+      "python_name": "debug",
+      "python_path": "debug",
+      "reload": "hot",
+      "views": [
+        "server"
+      ]
+    },
+    {
+      "encoding": "int64",
+      "group": "runtime",
+      "json_name": "port",
+      "python_name": "port",
+      "python_path": "port",
+      "reload": "restart",
+      "views": [
+        "server"
+      ]
+    }
+  ],
+  "format": "kms-config-contract/v1",
+  "groups": [
+    {
+      "alias": "runtime",
+      "content_type": "json",
+      "fields": [
+        "debug",
+        "port"
+      ],
+      "kind": "parameter"
+    }
+  ],
+  "schema_sha256": "3ea94877dd7e3054e51226eb22570a42b99744cf58872e8d3a471065c8bbed85",
+  "secrets": [
+    {
+      "alias": "db_password",
+      "encoding": "secret",
+      "kind": "secret",
+      "python_name": "password",
+      "python_path": "password",
+      "reload": "hot",
+      "views": [
+        "server"
+      ]
+    }
+  ],
+  "source": {
+    "language": "python",
+    "module": "tests.fixtures.configgen.source",
+    "type": "ApplicationConfig"
+  },
+  "views": [
+    {
+      "fields": [
+        "db_password",
+        "runtime.debug",
+        "runtime.port"
+      ],
+      "method": "server",
+      "name": "server"
+    }
+  ]
+}

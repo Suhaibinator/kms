@@ -18,18 +18,42 @@ This document describes the public API as implemented in
 `proto/kms/v1/kms.proto` and [`http-api.md`](http-api.md); for the
 namespace/key model, see [`migration.md`](migration.md).
 
+## Migrating to v0.2
+
+`v0.2.0` is the next minor release for the repository, but it intentionally
+contains breaking Python API cleanup so this SDK follows the current Go and
+TypeScript semantics:
+
+- `token` is keyword-only on `Client` and `AsyncClient`.
+- `tls=` accepts `grpc.ChannelCredentials`; replace `TLSConfig(...)` with
+  `tls_from_files(...)`, `mtls_from_files(...)`, or `tls_from_bytes(...)`.
+- paginated methods return an immutable `Page` whose `items` are a tuple.
+  Existing two-value unpacking remains available.
+- errors expose only the documented bounded codes, and `__version__` comes
+  from installed package metadata.
+- Pydantic v2 is a required dependency for generated managed configuration;
+  Pydantic v1 is not supported.
+- asyncio code uses `AsyncClient` and `AsyncReleaseLoader`. Do not share a
+  synchronous channel, watch, loader, or lifecycle object across event-loop
+  boundaries.
+
+Lower-level `ParameterValue` and `SecretValue` remain available. Candidate
+resolution, acknowledgement ordering, restart rejection, last-known-good
+retention, defaults verification, and generated configuration contracts now
+use the same language-neutral behavior as the Go and TypeScript SDKs.
+
 ## Installing
 
 ```bash
 pip install -e sdk/python
 # Published releases are wheel assets on GitHub (replace both versions):
 python -m pip install \
-  https://github.com/Suhaibinator/kms/releases/download/v0.1.0/kms_paramstore-0.1.0-py3-none-any.whl
+  https://github.com/Suhaibinator/kms/releases/download/v0.2.0/kms_paramstore-0.2.0-py3-none-any.whl
 ```
 
-Runtime dependencies are `grpcio>=1.83.0` and `protobuf>=7.35.1,<8`; the generated
-gRPC stubs are vendored under `kms_paramstore/_gen/`, so `protoc` is not
-needed to use the SDK.
+Runtime dependencies are `grpcio>=1.83.1`, `protobuf>=7.35.1,<8`, and
+`pydantic>=2.13,<3`; the generated gRPC stubs are vendored under
+`kms_paramstore/_gen/`, so `protoc` is not needed to use the SDK.
 
 ## Namespaces and keys
 
@@ -96,22 +120,42 @@ or constructed and closed manually. `Client.__init__` parameters
 | Parameter | Meaning |
 |---|---|
 | `endpoint` | `host:port` of the server's gRPC listener. Required unless `channel` is supplied. First positional argument. |
-| `token` | Per-client identity token, sent as `authorization: Bearer <token>` on every RPC. **Optional** — an mTLS client certificate authenticates on its own, and a dev server may need no credential at all. When both a token and a cert are present, the token is still sent. Second positional argument, or keyword. |
+| `token` | Per-client identity token, sent as `authorization: Bearer <token>` on every RPC. **Optional** and keyword-only — an mTLS client certificate authenticates on its own, and a dev server may need no credential at all. |
 | `namespace` | The client's namespace as `"env/app"`. Keyword-only, `None` by default. When `None`, the namespace is discovered from the identity via `WhoAmI` on first use. A malformed string fails fast with `ConfigError` at construction. |
-| `tls` | `TLSConfig` (see below) or a raw `grpc.ChannelCredentials`. When omitted, the client requires either `insecure=True` or a pre-built `channel`. |
+| `tls` | A `grpc.ChannelCredentials` built by the SDK TLS helpers. When omitted, the client requires either `insecure=True` or a pre-built `channel`. |
 | `insecure` | Explicitly opts into a cleartext channel for local development. Defaults to `False` and is mutually exclusive with `tls`; never enable it across an untrusted network. |
 | `cache_ttl` | Seconds to cache `get_parameter`/`get_secret` reads; `0` (default) disables caching. Cache entries are invalidated by writes through the client and, once a subscription is active, by watch events. |
+| `cache_max_entries` | Maximum entries retained by each bounded parameter/secret cache. Defaults to 4096. |
 | `timeout` | Default per-RPC deadline in seconds, used when a call doesn't pass its own `timeout`. Defaults to 5.0. Does not apply to the long-lived `Subscribe` stream. |
 | `client_name` | Identifies this client in the subscription registry (visible on the frontend's Subscribers page). Defaults to `os.path.basename(sys.argv[0])`. |
 | `fallback_to_defaults_on_error` | Controls when a declarative field's `default` is used — see [Declarative config](#declarative-config-secretvalue-and-parametervalue) below. Defaults to `False`. |
 | `logger` | A `logging.Logger` for operational messages (keys, env var names, connection state) — never secret plaintext. Defaults to `logging.getLogger("kms_paramstore")`. |
 | `channel_options` | Extra gRPC channel options (`list[tuple[str, object]]`). They are passed before the SDK's fixed keepalive entries; avoid supplying duplicate keepalive keys because gRPC's duplicate-option precedence is not an SDK contract. |
-| `channel` | A pre-built `grpc.Channel` to use directly (mainly for tests); when set, `endpoint`/`tls`/`channel_options` are ignored and the SDK does not own (and will not close) the channel. |
+| `channel` | A pre-built `grpc.Channel` to use directly (mainly for tests); the SDK does not own or close it. Combining `channel` with `tls` or `insecure=True` is rejected as ambiguous. |
 
 Client-side keepalive pings every 30s with a 10s timeout,
 `grpc.keepalive_permit_without_calls=1`. `close()` releases the connection
 and stops all background threads (the watch subscription manager and the
 callback dispatch thread); it is idempotent.
+
+Asyncio applications use the same method names and keyword arguments through
+`AsyncClient`; RPC, resolution, watch, and close operations are awaited:
+
+```python
+from kms_paramstore import AsyncClient, mtls_from_files
+
+async with AsyncClient(
+    "parameter-store.prod.internal:8443",
+    tls=mtls_from_files("app.crt", "app.key", "server-ca.crt"),
+) as client:
+    rate = await client.get_parameter("rate-limit")
+    await client.resolve(config)
+    unsubscribe = await client.watch(on_event)
+```
+
+`AsyncClient` uses `grpc.aio` and owns one event-loop-local watch manager.
+Create a separate client for each event-loop/thread boundary; never pass it a
+synchronous `grpc.Channel`.
 
 ## Identity and discovery
 
@@ -232,21 +276,17 @@ only the gRPC status code and the server's own (non-secret) status message.
 ## TLS / mTLS
 
 ```python
-from kms_paramstore import Client, TLSConfig, tls_from_files, mtls_from_files
+from kms_paramstore import Client, tls_from_files, mtls_from_files
 
 # Recommended: cert-only mutual TLS, identity + namespace derived from the cert.
 client = Client("host:8443",
                 tls=mtls_from_files("app.crt", "app.key", "server-ca.crt"))
 
-# Dataclass form, accepts file paths or raw PEM bytes:
-client = Client("host:8443", token="...", tls=TLSConfig(ca="server-ca.crt"))
-client = Client("host:8443",
-                tls=TLSConfig(ca="server-ca.crt", cert="app.crt", key="app.key"))
+# Server-authenticated TLS:
+client = Client("host:8443", token="...", tls=tls_from_files("server-ca.crt"))
 ```
 
-`tls=` accepts either a `TLSConfig` (`ca`/`cert`/`key`, each a file path or
-raw `bytes`; `to_credentials()` builds the `grpc.ChannelCredentials`) or a
-`grpc.ChannelCredentials` built directly with `tls_from_files(ca_cert)`
+`tls=` accepts a `grpc.ChannelCredentials` built with `tls_from_files(ca_cert)`
 (server-only TLS), `mtls_from_files(client_cert, client_key, ca_cert)`
 (mutual TLS), or `tls_from_bytes(ca_cert=None, client_cert=None,
 client_key=None)` (in-memory PEM bytes, e.g. from a secrets manager rather
@@ -419,7 +459,7 @@ not the ordinary namespace callback queue.
 ```python
 import threading
 from kms_paramstore import (
-    ReleaseLoader, ReleaseLoaderConfig, ReleaseSnapshot,
+    ClassifiedReleaseError, ReleaseLoader, ReleaseLoaderConfig, ReleaseSnapshot,
 )
 
 loader = ReleaseLoader(client, ReleaseLoaderConfig(
@@ -427,6 +467,7 @@ loader = ReleaseLoader(client, ReleaseLoaderConfig(
     reconcile_interval=60.0,       # default
     max_concurrent_fetches=16,     # default; maximum 256
     secret_token_provider=lambda alias, path: local_tokens.get(alias),
+    validate_manifest=lambda cancel, manifest: validate_contract(manifest),
 ))
 
 class PreparedRuntime:
@@ -453,7 +494,7 @@ loader.run(prepare)  # blocks until loader.stop() or the optional stop_event
 `ReleaseLoaderConfig.name` is required. `namespace=None` uses the client's
 namespace/discovery; set a namespace string or `NamespaceRef` only when a
 loader should be explicitly scoped. `client_name=None` uses the client's
-name. A process-wide UUID is used as `instance_id` and reused across
+name. A loader-specific UUID is used as `instance_id` and reused across
 reconnects unless one is supplied. Reconciliation defaults to 60 seconds,
 resolution concurrency to 16, reconnect backoff to 0.25–30 seconds, and RPC
 deadlines to the client's default unless `request_timeout` is set.
@@ -480,7 +521,37 @@ verifies versions and digests, reports `received`, calls preparation, reports
 that does not commit. An initial failure raises `ReleaseStartupError`; after a
 successful commit, outages and rejected candidates retain the last-known-good
 release. An exception from `commit` raises fatal `ReleaseCommitError` and is
-never acknowledged as applied. A `ReleaseLoader` may be run only once.
+never acknowledged as applied. Concurrent runs are rejected; after one run has
+fully stopped, the same loader may be run again.
+
+Manifest validation receives immutable, metadata-only `ReleaseManifest`
+state before any resource fetch or token lookup. Validation or preparation may
+raise `ClassifiedReleaseError` with an allow-listed category such as
+`config_contract_mismatch`, `config_decode_failed`,
+`config_validation_failed`, `default_mismatch`, or `restart_required`. The
+category reaches status and the rejected acknowledgement, but the local error
+message never does. A prepared object may implement
+`release_divergence() -> tuple[bool, int]`; only an applied acknowledgement
+carries that bounded, value-free summary.
+
+Asyncio applications use event-loop-native equivalents which never share
+channels or lifecycle state with synchronous code:
+
+```python
+from kms_paramstore import AsyncReleaseLoader, AsyncReleaseLoaderConfig
+
+loader = AsyncReleaseLoader(async_client, AsyncReleaseLoaderConfig(
+    name="runtime",
+    secret_token_provider=async_token_provider,  # (alias, path, cancel)
+    validate_manifest=async_manifest_validator,  # (cancel, manifest)
+))
+await loader.run(async_prepare, stop_event=shutdown)
+```
+
+`AsyncReleaseLoader.stop()` is synchronous and cancellation-safe; `run()`
+awaits task and stream cleanup. Manifest validation, exact resolution,
+supersession, active fencing, acknowledgement replay, rejection categories,
+and last-known-good behavior match `ReleaseLoader`.
 
 For explicit typed decoding without descriptors, dataclass reflection, or
 schema generation:
@@ -507,10 +578,12 @@ release; the next activation event prepares the newer candidate. Replicas
 apply independently—version 1 has no fleet-wide barrier. See
 [`configuration-releases.md`](configuration-releases.md) for server semantics.
 
-## Parity with the Go SDK
+## Parity with the Go and TypeScript SDKs
 
-The two SDKs are intentionally close; the naming differs where each
-language's conventions do (see [`sdk-go.md`](sdk-go.md)):
+Python follows the same language-neutral release and managed-configuration
+behavior as both current SDKs. The table shows the closest Go spellings (see
+[`sdk-go.md`](sdk-go.md)); TypeScript uses the corresponding promise-based
+client and loader APIs.
 
 | Concept | Go | Python |
 |---|---|---|
@@ -521,6 +594,7 @@ language's conventions do (see [`sdk-go.md`](sdk-go.md)):
 | Cross-namespace key | leading-`/` display path | leading-`/` display path |
 | Atomic release loader | `ReleaseLoader.Run` | `ReleaseLoader.run` |
 | Explicit typed helper | `RunTypedRelease[T]` | `run_typed_release` |
+| Managed config generation | `kms-config-gen` | `kms-config-gen-py` |
 
 ## What this document does not cover
 

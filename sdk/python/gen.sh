@@ -15,6 +15,14 @@ repo_root="$(cd "$sdk_dir/../.." && pwd)"
 proto_dir="$repo_root/proto"
 out_pkg="$sdk_dir/kms_paramstore/_gen"
 
+if [[ "${1:-}" == "--check" ]]; then
+  exec python3 "$sdk_dir/scripts/check_generated.py"
+fi
+if [[ $# -ne 0 ]]; then
+  echo "usage: $0 [--check]" >&2
+  exit 2
+fi
+
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 

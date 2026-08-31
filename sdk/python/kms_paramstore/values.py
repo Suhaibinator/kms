@@ -26,19 +26,21 @@ Resolution order for each field: environment override, then store fetch, then
 from __future__ import annotations
 
 import functools
+import asyncio
 import os
 import threading
 import weakref
 from concurrent.futures import ThreadPoolExecutor
-from typing import TYPE_CHECKING, Callable, Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple
 
 from . import errors
 from .secret import Secret
 
 if TYPE_CHECKING:
+    from .async_client import AsyncClient
     from .client import Client
 
-__all__ = ["SecretValue", "ParameterValue", "resolve_targets"]
+__all__ = ["SecretValue", "ParameterValue", "resolve_targets", "resolve_targets_async"]
 
 
 # ---------------------------------------------------------------------------
@@ -65,7 +67,7 @@ class _ParamState:
         self.from_env = False
         self.static = False
         self.default: Optional[str] = None
-        self.client: Optional["Client"] = None
+        self.client: Optional[Any] = None
         self.value = ""
         self.callbacks: List[Callable[[str, str], None]] = []
 
@@ -170,6 +172,11 @@ class _DescriptorBase:
     def _init(self, instance: object, client: "Client", *, timeout: Optional[float] = None) -> None:
         raise NotImplementedError
 
+    async def _init_async(
+        self, instance: object, client: "AsyncClient", *, timeout: Optional[float] = None
+    ) -> None:
+        raise NotImplementedError
+
 
 class SecretValue(_DescriptorBase):
     """A declarative, store-backed secret field that resolves to a :class:`Secret`.
@@ -236,6 +243,41 @@ class SecretValue(_DescriptorBase):
                 st.initialized = True
                 return
             raise errors.ConfigError("SecretValue has no key, env_var, or default configured")
+
+    async def _init_async(
+        self, instance: object, client: "AsyncClient", *, timeout: Optional[float] = None
+    ) -> None:
+        st = self._state_for(instance)
+        assert isinstance(st, _SecretState)
+        with st.lock:
+            if st.initialized:
+                return
+            env_value = os.environ.get(self._env_var, "") if self._env_var else ""
+        if env_value:
+            with st.lock:
+                st.secret = Secret(env_value.encode("utf-8"), key=self._key)
+                st.from_env = True
+                st.initialized = True
+            return
+        if self._key:
+            try:
+                secret = await client.get_secret(
+                    self._key, secret_token=self._token, timeout=timeout
+                )
+            except Exception as err:
+                if self._default is None or not client._default_allowed_for_error(err):
+                    raise errors.ParamStoreError(f"resolve secret {self._key!r}: {err}") from err
+                secret = Secret(self._default.encode("utf-8"), key=self._key)
+            with st.lock:
+                st.secret = secret
+                st.initialized = True
+            return
+        if self._default is not None:
+            with st.lock:
+                st.secret = Secret(self._default.encode("utf-8"), key=self._key)
+                st.initialized = True
+            return
+        raise errors.ConfigError("SecretValue has no key, env_var, or default configured")
 
 
 class ParameterValue(_DescriptorBase):
@@ -323,6 +365,42 @@ class ParameterValue(_DescriptorBase):
             return None, self._default
         raise errors.ConfigError("ParameterValue has no key, env_var, or default configured")
 
+    async def _init_async(
+        self, instance: object, client: "AsyncClient", *, timeout: Optional[float] = None
+    ) -> None:
+        st = self._state_for(instance)
+        assert isinstance(st, _ParamState)
+        with st.lock:
+            if st.initialized:
+                return
+            st.client = client
+            st.default = self._default
+            env_value = os.environ.get(self._env_var, "") if self._env_var else ""
+            if env_value:
+                st.value = env_value
+                st.from_env = True
+                st.static = True
+                st.initialized = True
+                return
+        ref = await client._resolve_ref(self._key) if self._key else None
+        if self._key:
+            try:
+                value = await client.get_parameter(self._key, timeout=timeout)
+            except Exception as err:
+                if self._default is None or not client._default_allowed_for_error(err):
+                    raise errors.ParamStoreError(f"resolve parameter {self._key!r}: {err}") from err
+                value = self._default
+        elif self._default is not None:
+            value = self._default
+        else:
+            raise errors.ConfigError("ParameterValue has no key, env_var, or default configured")
+        with st.lock:
+            st.value = value
+            st.initialized = True
+            st.static = self._static or ref is None
+        if not st.static and ref is not None:
+            client._subs().register_parameter(ref, value, st.apply_update)
+
 
 # ---------------------------------------------------------------------------
 # Resolution walk
@@ -383,3 +461,15 @@ def resolve_targets(client: "Client", config_obj: object, *, timeout: Optional[f
     for e in errors_out:
         if e is not None:
             raise e
+
+
+async def resolve_targets_async(
+    client: "AsyncClient", config_obj: object, *, timeout: Optional[float] = None
+) -> None:
+    """Resolve declarative fields concurrently without crossing event loops."""
+    targets: List[Tuple[_DescriptorBase, object]] = []
+    _collect_targets(config_obj, targets, set())
+    await asyncio.gather(*(
+        descriptor._init_async(instance, client, timeout=timeout)
+        for descriptor, instance in targets
+    ))

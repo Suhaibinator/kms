@@ -84,6 +84,13 @@ class Secret:
     def is_empty(self) -> bool:
         return len(self._value) == 0
 
+    def clone(self) -> "Secret":
+        """Return an independent wrapper with copied plaintext bytes."""
+        return Secret(
+            bytes(bytearray(self._value)), env=self._env, app=self._app,
+            key=self._key, version=self._version, content_type=self._content_type,
+        )
+
     def __len__(self) -> int:
         return len(self._value)
 
