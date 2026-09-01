@@ -105,11 +105,13 @@ func (c *CLI) policyUsageError(format string, args ...any) int {
 
 func (c *CLI) cmdPolicyCreate(args []string) int {
 	fs := c.newFlags("policy create")
-	cf := addConnFlags(fs)
-	subject := fs.String("subject", "", "identity name the policy binds to, or * for every client")
+	cf := addConnFlags(c, fs)
+	subject := fs.String("subject", "", "identity `name` the policy binds to, or * for every client")
 	var allow, deny policyRules
-	fs.Var(&allow, "allow", "allow rule OP@ENV/APP (repeatable)")
-	fs.Var(&deny, "deny", "deny rule OP@ENV/APP (repeatable)")
+	fs.Var(&allow, "allow", "allow `rule` OP@ENV/APP (repeatable)")
+	fs.Var(&deny, "deny", "deny `rule` OP@ENV/APP (repeatable)")
+	c.setUsage(fs, "admin policy create NAME --subject IDENTITY --allow OP@ENV/APP [flags]",
+		"Create a namespace-level authorization policy from allow and deny rules.", false)
 	if !c.parseFlags(fs, args) {
 		return 2
 	}
@@ -144,8 +146,10 @@ func (c *CLI) cmdPolicyCreate(args []string) int {
 
 func (c *CLI) cmdPolicyList(args []string) int {
 	fs := c.newFlags("policy list")
-	cf := addConnFlags(fs)
-	pageSize := fs.Int("page-size", 100, "results per RPC")
+	cf := addConnFlags(c, fs)
+	pageSize := fs.Int("page-size", 100, "result `count` per RPC")
+	c.setUsage(fs, "admin policy list [flags]",
+		"List policies with their subject and their allow and deny rules.", false)
 	if !c.parseFlags(fs, args) {
 		return 2
 	}
@@ -177,7 +181,8 @@ func (c *CLI) cmdPolicyList(args []string) int {
 
 func (c *CLI) cmdPolicyDelete(args []string) int {
 	fs := c.newFlags("policy delete")
-	cf := addConnFlags(fs)
+	cf := addConnFlags(c, fs)
+	c.setUsage(fs, "admin policy delete NAME [flags]", "Delete a policy by name.", false)
 	if !c.parseFlags(fs, args) {
 		return 2
 	}

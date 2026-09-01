@@ -22,7 +22,7 @@ func TestBackupCommand(t *testing.T) {
 
 	out := filepath.Join(dir, "backup.db")
 	c := newTestCLI()
-	if code := c.cmdBackup([]string{"--db", dbPath, "--out", out}); code != 0 {
+	if code := c.cmdBackup([]string{"--sqlite-path", dbPath, "--out", out}); code != 0 {
 		t.Fatalf("backup exit = %d, stderr=%s", code, c.stderr())
 	}
 	if err := validateSQLiteFile(out); err != nil {
@@ -31,7 +31,7 @@ func TestBackupCommand(t *testing.T) {
 
 	// A second backup to the same path must be refused.
 	c2 := newTestCLI()
-	if code := c2.cmdBackup([]string{"--db", dbPath, "--out", out}); code == 0 {
+	if code := c2.cmdBackup([]string{"--sqlite-path", dbPath, "--out", out}); code == 0 {
 		t.Fatalf("expected refusal to overwrite existing backup")
 	}
 	if !strings.Contains(c2.stderr(), "already exists") {
@@ -49,7 +49,7 @@ func TestBackupRequiresOut(t *testing.T) {
 	_ = store.Close()
 
 	c := newTestCLI()
-	if code := c.cmdBackup([]string{"--db", dbPath}); code == 0 {
+	if code := c.cmdBackup([]string{"--sqlite-path", dbPath}); code == 0 {
 		t.Fatalf("expected failure without --out")
 	}
 }
@@ -59,7 +59,7 @@ func TestBackupRejectsMissingSource(t *testing.T) {
 	missing := filepath.Join(dir, "missing.db")
 	out := filepath.Join(dir, "backup.db")
 	c := newTestCLI()
-	if code := c.cmdBackup([]string{"--db", missing, "--out", out}); code == 0 {
+	if code := c.cmdBackup([]string{"--sqlite-path", missing, "--out", out}); code == 0 {
 		t.Fatal("missing source was accepted as an empty backup")
 	}
 	if fileExists(missing) || fileExists(out) {
@@ -80,13 +80,13 @@ func TestRestoreCommandEndToEnd(t *testing.T) {
 
 	backup := filepath.Join(dir, "backup.db")
 	c := newTestCLI()
-	if code := c.cmdBackup([]string{"--db", srcDB, "--out", backup}); code != 0 {
+	if code := c.cmdBackup([]string{"--sqlite-path", srcDB, "--out", backup}); code != 0 {
 		t.Fatalf("backup exit=%d stderr=%s", code, c.stderr())
 	}
 
 	restored := filepath.Join(dir, "restored.db")
 	c2 := newTestCLI()
-	if code := c2.cmdRestore([]string{"--db", restored, "--in", backup}); code != 0 {
+	if code := c2.cmdRestore([]string{"--sqlite-path", restored, "--in", backup}); code != 0 {
 		t.Fatalf("restore exit=%d stderr=%s", code, c2.stderr())
 	}
 	if !strings.Contains(c2.stdout(), "Restored") {

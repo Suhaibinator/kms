@@ -93,15 +93,17 @@ The Key Encryption Key (KEK) wraps DEKs. It is never stored in SQLite. On
 startup (`internal/crypto/unseal.go`, `Unseal`), the service acquires it in
 this order:
 
-1. **Key file** (`encryption.kek_file`): raw key material read from disk —
-   32 raw bytes, 64 hex characters, or base64 of 32 bytes
+1. **Key file** (`--kek-file`, `KMS_KEK_FILE`, or `encryption.kek_file` — the
+   same setting in its three spellings, resolved flag first): raw key material
+   read from disk — 32 raw bytes, 64 hex characters, or base64 of 32 bytes
    (`LoadKEKMaterialFromFile`). This is the unattended path: a restart needs
    no human.
-2. **Passphrase**: if no key file is configured/present, a human passphrase
-   is required — either pre-supplied (e.g. via `KMS_MASTER_PASSPHRASE`) or
-   read interactively with a no-echo TTY prompt (confirmed twice on first
-   initialization). The passphrase is stretched into 32 bytes of KEK
-   material with **argon2id** (`DeriveKEKMaterialFromPassphrase`), using a
+2. **Passphrase**: if no key file resolves from any of those three, a human
+   passphrase is required — either pre-supplied (e.g. via
+   `KMS_MASTER_PASSPHRASE`) or read interactively with a no-echo TTY prompt
+   (confirmed twice on first initialization). The passphrase is stretched
+   into 32 bytes of KEK material with **argon2id**
+   (`DeriveKEKMaterialFromPassphrase`), using a
    random salt persisted in `key_metadata.kdf_salt` and cost parameters
    persisted as JSON in `key_metadata.kdf`. Default parameters
    (`DefaultArgon2Params`) follow RFC 9106's second recommended profile: 64
@@ -109,7 +111,10 @@ this order:
 
 If neither is available — no key file and stdin is not a TTY (and no
 pre-supplied passphrase) — the service fails fast with `ErrNoKeySource`
-rather than hanging a systemd unit on an invisible prompt.
+rather than hanging a systemd unit on an invisible prompt. The offline
+commands (`init`, `check`, `rotate-kek`, `import`) acquire the key through
+this same path and the same resolution order, so a host that sets
+`KMS_KEK_FILE` gets the unattended behavior everywhere, not just in `serve`.
 
 **Key-check canary.** At initialization the service encrypts a fixed
 plaintext (`"kms/v1 key-check canary"`) under the new KEK and stores the

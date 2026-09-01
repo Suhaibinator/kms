@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"sync"
 	"text/tabwriter"
 	"time"
 
@@ -25,6 +26,11 @@ import (
 // connFlags holds the shared gRPC connection flags for convenience and admin
 // commands that talk to a running server.
 type connFlags struct {
+	// c supplies the environment lookup used by finalize; tests inject a map
+	// so client behaviour never depends on the developer's shell.
+	c    *CLI
+	once sync.Once
+
 	endpoint    string
 	token       string
 	secretToken string
@@ -34,18 +40,71 @@ type connFlags struct {
 	insecure    bool
 }
 
-func addConnFlags(fs *flag.FlagSet) *connFlags {
-	cf := &connFlags{}
-	fs.StringVar(&cf.endpoint, "endpoint", "localhost:8443", "server gRPC endpoint (host:port)")
-	fs.StringVar(&cf.token, "token", os.Getenv("KMS_TOKEN"), "identity bearer token (env KMS_TOKEN)")
+// defaultEndpoint is the server address used when neither --endpoint nor
+// KMS_ENDPOINT names one.
+const defaultEndpoint = "localhost:8443"
+
+// connEnvFallback pairs a connection field with the environment variable that
+// fills it when the flag was not given.
+type connEnvFallback struct {
+	field *string
+	env   string
+}
+
+// envFallbacks lists every connection setting with its environment variable, in
+// flag order. It is the single source for the fallbacks finalize applies and for
+// the client-side KMS_* names, which are deliberately disjoint from the server
+// settings registry in internal/config: these say which server to talk to and
+// as whom, not how to run one.
+func (cf *connFlags) envFallbacks() []connEnvFallback {
+	return []connEnvFallback{
+		{&cf.endpoint, "KMS_ENDPOINT"},
+		{&cf.token, "KMS_TOKEN"},
+		{&cf.ca, "KMS_CA_FILE"},
+		{&cf.cert, "KMS_CLIENT_CERT_FILE"},
+		{&cf.key, "KMS_CLIENT_KEY_FILE"},
+	}
+}
+
+// addConnFlags registers the shared connection flags on fs. Every flag gets a
+// literal empty default and names its environment variable in the usage text
+// rather than defaulting to the variable's value: flag help prints non-empty
+// string defaults, so a KMS_TOKEN-derived default would write the caller's
+// bearer token to stderr on any "<command> -h". finalize applies the fallbacks
+// after parsing instead.
+func addConnFlags(c *CLI, fs *flag.FlagSet) *connFlags {
+	cf := &connFlags{c: c}
+	fs.StringVar(&cf.endpoint, "endpoint", "", "server gRPC `endpoint` host:port (env KMS_ENDPOINT; default "+defaultEndpoint+")")
+	fs.StringVar(&cf.token, "token", "", "identity bearer `token` (env KMS_TOKEN)")
 	fs.BoolVar(&cf.insecure, "insecure", false, "disable TLS (development only)")
-	fs.StringVar(&cf.ca, "ca", "", "CA bundle for server verification")
-	fs.StringVar(&cf.cert, "cert", "", "client certificate for mTLS")
-	fs.StringVar(&cf.key, "key", "", "client private key for mTLS")
+	fs.StringVar(&cf.ca, "ca", "", "CA bundle `file` for verifying the server (env KMS_CA_FILE); this is the client-side trust store, not the server's client_ca_file")
+	fs.StringVar(&cf.cert, "cert", "", "client certificate `file` for mTLS (env KMS_CLIENT_CERT_FILE)")
+	fs.StringVar(&cf.key, "key", "", "client private key `file` for mTLS (env KMS_CLIENT_KEY_FILE)")
 	return cf
 }
 
+// finalize resolves each connection setting to flag, then environment, then
+// built-in default. Flags are parsed before either caller runs, so an explicitly
+// set flag always wins. dial and authCtx call it, which keeps every command site
+// unchanged; sync.Once makes the repeated calls free and idempotent.
+func (cf *connFlags) finalize() {
+	cf.once.Do(func() {
+		for _, fallback := range cf.envFallbacks() {
+			if *fallback.field != "" {
+				continue
+			}
+			if v, ok := cf.c.env(fallback.env); ok {
+				*fallback.field = v
+			}
+		}
+		if cf.endpoint == "" {
+			cf.endpoint = defaultEndpoint
+		}
+	})
+}
+
 func (cf *connFlags) dial() (*grpc.ClientConn, error) {
+	cf.finalize()
 	var creds credentials.TransportCredentials
 	if cf.insecure {
 		creds = insecure.NewCredentials()
@@ -78,6 +137,7 @@ func (cf *connFlags) dial() (*grpc.ClientConn, error) {
 // metadata, matching the server's expected header names. mTLS callers omit the
 // bearer token; the server derives their identity from the client certificate.
 func (cf *connFlags) authCtx(ctx context.Context) context.Context {
+	cf.finalize()
 	var kvs []string
 	if cf.token != "" {
 		kvs = append(kvs, "authorization", "Bearer "+cf.token)
@@ -120,12 +180,14 @@ func displayPath(ref *kmsv1.ResourceRef) string {
 
 func (c *CLI) cmdPutSecret(args []string) int {
 	fs := c.newFlags("put-secret")
-	cf := addConnFlags(fs)
-	valueFile := fs.String("value-file", "", "read the secret value from this file (default: stdin)")
+	cf := addConnFlags(c, fs)
+	valueFile := fs.String("value-file", "", "read the secret value from this `file` (default: stdin)")
 	clientBound := fs.Bool("client-bound", false, "write a client-bound secret (new secrets also require --generate-token)")
 	genToken := fs.Bool("generate-token", false, "mint or rotate a per-secret access token (shown once)")
-	contentType := fs.String("content-type", "text/plain", "secret content type")
-	fs.StringVar(&cf.secretToken, "secret-token", "", "existing per-secret token (client-bound updates)")
+	contentType := fs.String("content-type", "text/plain", "secret content `type`")
+	fs.StringVar(&cf.secretToken, "secret-token", "", "existing per-secret `token` (client-bound updates)")
+	c.setUsage(fs, "put-secret /env/app/key [flags]",
+		"Store a secret value read from --value-file or standard input.", false)
 	if !c.parseFlags(fs, args) {
 		return 2
 	}
@@ -178,12 +240,14 @@ func (c *CLI) cmdPutSecret(args []string) int {
 
 func (c *CLI) cmdGetSecret(args []string) int {
 	fs := c.newFlags("get-secret")
-	cf := addConnFlags(fs)
+	cf := addConnFlags(c, fs)
 	show := fs.Bool("show", false, "allow printing the secret to a terminal")
-	out := fs.String("out", "", "write the secret to this file instead of stdout")
-	version := fs.Uint64("version", 0, "specific version (0 = current label)")
-	label := fs.String("label", "", "version label (default: current)")
-	fs.StringVar(&cf.secretToken, "secret-token", "", "per-secret access token")
+	out := fs.String("out", "", "write the secret to this `file` instead of stdout")
+	version := fs.Uint64("version", 0, "specific `version` (0 = current label)")
+	label := fs.String("label", "", "version `label` (default: current)")
+	fs.StringVar(&cf.secretToken, "secret-token", "", "per-secret access `token`")
+	c.setUsage(fs, "get-secret /env/app/key [flags]",
+		"Fetch a secret; writing it to a terminal requires --show or --out FILE.", false)
 	if !c.parseFlags(fs, args) {
 		return 2
 	}
@@ -234,8 +298,10 @@ func (c *CLI) cmdGetSecret(args []string) int {
 
 func (c *CLI) cmdPutParameter(args []string) int {
 	fs := c.newFlags("put-parameter")
-	cf := addConnFlags(fs)
-	contentType := fs.String("content-type", "string", "parameter content type")
+	cf := addConnFlags(c, fs)
+	contentType := fs.String("content-type", "string", "parameter content `type`")
+	c.setUsage(fs, "put-parameter /env/app/key VALUE [flags]",
+		"Store a non-secret parameter value.", false)
 	if !c.parseFlags(fs, args) {
 		return 2
 	}
@@ -273,8 +339,9 @@ func (c *CLI) cmdPutParameter(args []string) int {
 
 func (c *CLI) cmdList(args []string) int {
 	fs := c.newFlags("list")
-	cf := addConnFlags(fs)
-	keyPrefix := fs.String("prefix", "", "relative key prefix within the namespace")
+	cf := addConnFlags(c, fs)
+	keyPrefix := fs.String("prefix", "", "relative key `prefix` within the namespace")
+	c.setUsage(fs, "list ENV/APP [flags]", "List the parameters and secrets in a namespace.", false)
 	if !c.parseFlags(fs, args) {
 		return 2
 	}

@@ -20,9 +20,11 @@ import (
 // usage errors.
 func (c *CLI) cmdReleaseVerifyDefaults(args []string) int {
 	fs := c.newFlags("release verify-defaults")
-	cf := addConnFlags(fs)
-	artifactPath := fs.String("artifact", "", "generated defaults artifact file ('-' for stdin)")
-	releaseName := fs.String("release", "", "release name (default: the application's release name)")
+	cf := addConnFlags(c, fs)
+	artifactPath := fs.String("artifact", "", "generated defaults artifact `file` ('-' for stdin)")
+	releaseName := fs.String("release", "", "release `name` (default: the application's release name)")
+	c.setUsage(fs, "release verify-defaults ENV/APP --artifact FILE|- [flags]",
+		"Compare a generated defaults artifact with the active release by hash alone; no parameter value leaves the process.", false)
 	if !c.parseFlags(fs, args) {
 		return 2
 	}

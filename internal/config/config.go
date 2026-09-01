@@ -1,10 +1,13 @@
-// Package config loads the parameter-store server configuration from a YAML
-// file, applies environment-variable overrides, fills defaults, validates the
-// result, and builds the server TLS configuration.
+// Package config loads the parameter-store server configuration from built-in
+// defaults, a YAML file, KMS_* environment variables, and command-line flags,
+// validates the result, and builds the server TLS configuration.
 //
-// Precedence, lowest to highest: built-in defaults, YAML file, environment
-// variables. Values that may contain sensitive material are never logged
-// wholesale; use Redacted for startup logging.
+// Every setting has exactly one YAML key, one environment variable, and one
+// flag, all declared in the Settings registry. Precedence, lowest to highest:
+// built-in defaults, YAML file, environment variables, flags. Resolve applies
+// the layers and reports where each value came from. Values that may contain
+// sensitive material are never logged wholesale; use Redacted for startup
+// logging.
 package config
 
 import (
@@ -12,12 +15,10 @@ import (
 	"crypto/x509"
 	"fmt"
 	"os"
-	"strconv"
 	"strings"
 	"time"
 
 	"go.uber.org/zap/zapcore"
-	"gopkg.in/yaml.v3"
 )
 
 // Config is the fully resolved server configuration.
@@ -137,99 +138,19 @@ func Default() Config {
 
 // Load resolves configuration from defaults, an optional YAML file, and
 // environment overrides. An empty path skips the file. It does not run
-// semantic validation; call Validate separately (the CLI does so for serve).
+// semantic validation; call Validate separately. Callers that also want flag
+// overrides or provenance use Resolve directly.
 func Load(path string) (Config, error) {
-	cfg := Default()
-	if path != "" {
-		raw, err := os.ReadFile(path)
-		if err != nil {
-			return Config{}, fmt.Errorf("reading config file %s: %w", path, err)
-		}
-		// Decode onto the defaults so unset fields keep their defaults.
-		if err := yaml.Unmarshal(raw, &cfg); err != nil {
-			return Config{}, fmt.Errorf("parsing config file %s: %w", path, err)
-		}
-	}
-	if err := cfg.ApplyEnv(); err != nil {
-		return Config{}, err
-	}
-	return cfg, nil
+	cfg, _, err := Resolve(Options{Path: path})
+	return cfg, err
 }
 
 // ApplyEnv overlays KMS_* environment variables onto the config. Only
-// variables that are set take effect. A malformed boolean value is a hard
-// error rather than being silently ignored, so an operator who writes
-// KMS_TLS_ENABLED=yes gets told instead of unknowingly running without TLS.
+// variables that are set take effect. A malformed value is a hard error rather
+// than being silently ignored, so an operator who writes KMS_TLS_ENABLED=yes
+// gets told instead of unknowingly running without TLS.
 func (c *Config) ApplyEnv() error {
-	setStr(&c.Server.GRPCAddr, "KMS_GRPC_ADDR")
-	setStr(&c.Server.HTTPAddr, "KMS_HTTP_ADDR")
-	setStr(&c.Storage.SQLitePath, "KMS_SQLITE_PATH")
-	setStr(&c.Encryption.KEKFile, "KMS_KEK_FILE")
-	setStr(&c.Security.ServerCertFile, "KMS_SERVER_CERT_FILE")
-	setStr(&c.Security.ServerKeyFile, "KMS_SERVER_KEY_FILE")
-	setStr(&c.Security.ClientCAFile, "KMS_CLIENT_CA_FILE")
-	setStr(&c.Log.Level, "KMS_LOG_LEVEL")
-
-	for _, n := range []struct {
-		dst *int
-		key string
-	}{
-		{&c.Server.VerifyDefaults.RequestsPerHour, "KMS_VERIFY_DEFAULTS_REQUESTS_PER_HOUR"},
-		{&c.Server.VerifyDefaults.Burst, "KMS_VERIFY_DEFAULTS_BURST"},
-		{&c.Server.VerifyDefaults.MismatchBudgetPerHour, "KMS_VERIFY_DEFAULTS_MISMATCH_BUDGET_PER_HOUR"},
-	} {
-		if err := setInt(n.dst, n.key); err != nil {
-			return err
-		}
-	}
-
-	for _, b := range []struct {
-		dst *bool
-		key string
-	}{
-		{&c.Security.TLSEnabled, "KMS_TLS_ENABLED"},
-		{&c.Security.MTLSEnabled, "KMS_MTLS_ENABLED"},
-		{&c.Security.TrustProxyHeaders, "KMS_TRUST_PROXY_HEADERS"},
-		{&c.Frontend.Enabled, "KMS_FRONTEND_ENABLED"},
-		{&c.Audit.Enabled, "KMS_AUDIT_ENABLED"},
-	} {
-		if err := setBool(b.dst, b.key); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func setStr(dst *string, key string) {
-	if v, ok := os.LookupEnv(key); ok {
-		*dst = v
-	}
-}
-
-func setInt(dst *int, key string) error {
-	v, ok := os.LookupEnv(key)
-	if !ok {
-		return nil
-	}
-	n, err := strconv.Atoi(strings.TrimSpace(v))
-	if err != nil {
-		return fmt.Errorf("%s=%q is not a valid integer", key, v)
-	}
-	*dst = n
-	return nil
-}
-
-func setBool(dst *bool, key string) error {
-	v, ok := os.LookupEnv(key)
-	if !ok {
-		return nil
-	}
-	b, err := strconv.ParseBool(strings.TrimSpace(v))
-	if err != nil {
-		return fmt.Errorf("%s=%q is not a valid boolean (use true/false/1/0)", key, v)
-	}
-	*dst = b
-	return nil
+	return applyEnv(c, os.LookupEnv, nil)
 }
 
 // Validate checks cross-field constraints and the existence of any referenced

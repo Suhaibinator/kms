@@ -42,14 +42,14 @@ func TestCLIProcessBackupRestoreSecurity(t *testing.T) {
 
 	backupDir := t.TempDir()
 	backupPath := filepath.Join(backupDir, "online-backup.db")
-	if output, err := runParameterStoreProcess(ctx, binary, "backup", "--db", e.dbPath, "--out", backupPath); err != nil {
+	if output, err := runParameterStoreProcess(ctx, binary, "backup", "--sqlite-path", e.dbPath, "--out", backupPath); err != nil {
 		t.Fatalf("CLI process online backup: %v\n%s", err, output)
 	}
 	assertOwnerOnlyFileMode(t, backupPath)
 
 	restoreDir := t.TempDir()
 	restoredPath := filepath.Join(restoreDir, "restored.db")
-	if output, err := runParameterStoreProcess(ctx, binary, "restore", "--in", backupPath, "--db", restoredPath); err != nil {
+	if output, err := runParameterStoreProcess(ctx, binary, "restore", "--in", backupPath, "--sqlite-path", restoredPath); err != nil {
 		t.Fatalf("CLI process restore: %v\n%s", err, output)
 	}
 	assertOwnerOnlyFileMode(t, restoredPath)
@@ -82,7 +82,7 @@ func TestCLIProcessBackupRestoreSecurity(t *testing.T) {
 		if err := os.WriteFile(destination, []byte(canary), 0o600); err != nil {
 			t.Fatal(err)
 		}
-		output, err := runParameterStoreProcess(ctx, binary, "restore", "--in", backupPath, "--db", destination)
+		output, err := runParameterStoreProcess(ctx, binary, "restore", "--in", backupPath, "--sqlite-path", destination)
 		if err == nil {
 			t.Fatalf("restore replaced an existing destination without --force:\n%s", output)
 		}
@@ -109,7 +109,7 @@ func TestCLIProcessBackupRestoreSecurity(t *testing.T) {
 		if err := os.Symlink(victim, destination); err != nil {
 			t.Fatal(err)
 		}
-		output, err := runParameterStoreProcess(ctx, binary, "restore", "--in", backupPath, "--db", destination)
+		output, err := runParameterStoreProcess(ctx, binary, "restore", "--in", backupPath, "--sqlite-path", destination)
 		if err == nil {
 			t.Fatalf("restore followed/replaced symlink destination without --force:\n%s", output)
 		}
@@ -134,7 +134,7 @@ func TestCLIProcessBackupRestoreSecurity(t *testing.T) {
 			t.Fatal(err)
 		}
 		destination := filepath.Join(parent, "blocked.db")
-		output, err := runParameterStoreProcess(ctx, binary, "restore", "--in", backupPath, "--db", destination)
+		output, err := runParameterStoreProcess(ctx, binary, "restore", "--in", backupPath, "--sqlite-path", destination)
 		if err == nil {
 			t.Fatalf("restore accepted shared writable parent:\n%s", output)
 		}

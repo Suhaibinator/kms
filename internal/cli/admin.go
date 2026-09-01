@@ -6,10 +6,12 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 
+	"github.com/Suhaibinator/kms/internal/config"
 	"github.com/Suhaibinator/kms/internal/core"
 	"github.com/Suhaibinator/kms/internal/crypto"
 	"github.com/Suhaibinator/kms/internal/domain"
@@ -22,19 +24,66 @@ func (c *CLI) quietLogger() *zap.Logger {
 	return newLogger(c.Stderr, zapcore.WarnLevel)
 }
 
+// dbTarget renders the database a command is about to act on as an absolute
+// path plus the layer that supplied it, e.g.
+// "/data/kms.db (source: env KMS_SQLITE_PATH)". Offline commands print it so an
+// operator can see at a glance which file was chosen and why — the flag, an
+// environment variable, the config file, or the built-in default.
+func dbTarget(cfg config.Config, prov config.Provenance) string {
+	return fmt.Sprintf("%s (source: %s)", absPath(cfg.Storage.SQLitePath), prov["storage.sqlite_path"])
+}
+
+// absPath resolves path against the working directory, falling back to the
+// original string when that is not possible.
+func absPath(path string) string {
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return path
+	}
+	return abs
+}
+
+// requireSQLitePath rejects an empty storage.sqlite_path. Offline commands
+// cannot call Config.Validate (it stats TLS material they never use), so they
+// check the one setting they depend on themselves.
+func (c *CLI) requireSQLitePath(cfg config.Config) error {
+	if cfg.Storage.SQLitePath == "" {
+		return errors.New("storage.sqlite_path must not be empty")
+	}
+	return nil
+}
+
+// warnDestructiveTarget prints the database a destructive command is about to
+// overwrite to stderr, before it acts, so an operator who pointed the command
+// at the wrong file by way of a stale environment variable can still stop it.
+func (c *CLI) warnDestructiveTarget(cfg config.Config, prov config.Provenance) {
+	_, _ = fmt.Fprintf(c.Stderr, "Target database: %s\n", dbTarget(cfg, prov))
+}
+
 // --- init ------------------------------------------------------------------
 
 func (c *CLI) cmdInit(args []string) int {
 	fs := c.newFlags("init")
-	db := fs.String("db", "./kms.db", "database file path (created if absent)")
-	keyFile := fs.String("master-key-file", "", "master key file path (generated if absent); omit to use a passphrase")
-	admin := fs.String("admin", "", "also create a bootstrap admin identity with this name")
+	r := c.serverSettings(fs, "storage.sqlite_path", "encryption.kek_file")
+	admin := fs.String("admin", "", "also create a bootstrap admin identity with this `name`")
+	c.setUsage(fs, "init [flags]",
+		"Create or migrate the database and establish its master key, optionally with a bootstrap admin identity.", true)
 	if !c.parseFlags(fs, args) {
 		return 2
 	}
+	if !c.rejectPositionals() {
+		return 2
+	}
+	cfg, prov, _, err := r.resolve()
+	if err != nil {
+		return c.fail("%v", err)
+	}
+	if err := c.requireSQLitePath(cfg); err != nil {
+		return c.fail("%v", err)
+	}
 	ctx := context.Background()
 
-	store, err := storage.Open(*db)
+	store, err := storage.Open(cfg.Storage.SQLitePath)
 	if err != nil {
 		return c.fail("opening database: %v", err)
 	}
@@ -42,15 +91,15 @@ func (c *CLI) cmdInit(args []string) int {
 
 	// CreateKeyFileIfMissing generates the key file on first init; without a
 	// key file the prompter asks for a passphrase (twice, with confirmation).
-	keyring, err := c.unseal(ctx, store, *keyFile, true)
+	keyring, err := c.unseal(ctx, store, cfg.Encryption.KEKFile, true)
 	if err != nil {
 		return c.fail("initializing master key: %v", err)
 	}
 	keyring.Active().Destroy()
 
-	_, _ = fmt.Fprintf(c.Stdout, "Initialized database at %s\n", *db)
-	if *keyFile != "" {
-		_, _ = fmt.Fprintf(c.Stdout, "Master key file: %s (back this up separately from the database)\n", *keyFile)
+	_, _ = fmt.Fprintf(c.Stdout, "Initialized database at %s\n", dbTarget(cfg, prov))
+	if cfg.Encryption.KEKFile != "" {
+		_, _ = fmt.Fprintf(c.Stdout, "Master key file: %s (back this up separately from the database)\n", cfg.Encryption.KEKFile)
 	} else {
 		_, _ = fmt.Fprintln(c.Stdout, "Master key derived from passphrase. You must supply it on every start.")
 	}
@@ -78,17 +127,28 @@ func (c *CLI) cmdInit(args []string) int {
 
 func (c *CLI) cmdMigrate(args []string) int {
 	fs := c.newFlags("migrate")
-	db := fs.String("db", "./kms.db", "database file path")
+	r := c.serverSettings(fs, "storage.sqlite_path")
+	c.setUsage(fs, "migrate [flags]", "Apply any pending database migrations.", true)
 	if !c.parseFlags(fs, args) {
 		return 2
 	}
+	if !c.rejectPositionals() {
+		return 2
+	}
+	cfg, prov, _, err := r.resolve()
+	if err != nil {
+		return c.fail("%v", err)
+	}
+	if err := c.requireSQLitePath(cfg); err != nil {
+		return c.fail("%v", err)
+	}
 	// Open runs migrations inside the transaction and refuses a newer schema.
-	store, err := storage.Open(*db)
+	store, err := storage.Open(cfg.Storage.SQLitePath)
 	if err != nil {
 		return c.fail("migrating database: %v", err)
 	}
 	_ = store.Close()
-	_, _ = fmt.Fprintf(c.Stdout, "Migrations applied; %s is up to date.\n", *db)
+	_, _ = fmt.Fprintf(c.Stdout, "Migrations applied to %s\n", dbTarget(cfg, prov))
 	return 0
 }
 
@@ -96,14 +156,25 @@ func (c *CLI) cmdMigrate(args []string) int {
 
 func (c *CLI) cmdCheck(args []string) int {
 	fs := c.newFlags("check")
-	db := fs.String("db", "./kms.db", "database file path")
-	keyFile := fs.String("key-file", "", "master key file to verify (optional)")
+	r := c.serverSettings(fs, "storage.sqlite_path", "encryption.kek_file")
+	c.setUsage(fs, "check [flags]",
+		"Verify that the database opens with an up-to-date schema and, when a key source is available, that the master key unseals it.", true)
 	if !c.parseFlags(fs, args) {
 		return 2
 	}
+	if !c.rejectPositionals() {
+		return 2
+	}
+	cfg, prov, _, err := r.resolve()
+	if err != nil {
+		return c.fail("%v", err)
+	}
+	if err := c.requireSQLitePath(cfg); err != nil {
+		return c.fail("%v", err)
+	}
 	ctx := context.Background()
 
-	store, err := storage.Open(*db)
+	store, err := storage.Open(cfg.Storage.SQLitePath)
 	if err != nil {
 		return c.fail("opening database: %v", err)
 	}
@@ -111,7 +182,7 @@ func (c *CLI) cmdCheck(args []string) int {
 	if err := store.Ping(ctx); err != nil {
 		return c.fail("database unreachable: %v", err)
 	}
-	_, _ = fmt.Fprintf(c.Stdout, "Database OK: %s (schema up to date)\n", *db)
+	_, _ = fmt.Fprintf(c.Stdout, "Database OK (schema up to date): %s\n", dbTarget(cfg, prov))
 
 	// Verify the master key only if the database has been initialized and some
 	// key source is available. Never print key material.
@@ -119,11 +190,14 @@ func (c *CLI) cmdCheck(args []string) int {
 		_, _ = fmt.Fprintln(c.Stdout, "Master key: database not yet initialized (run init).")
 		return 0
 	}
-	if !c.keySourceAvailable(*keyFile) {
+	// Build the options once and reuse them: Unseal zeroes the passphrase it is
+	// given, so a second unsealOptions call would be needed to retry.
+	opts := c.unsealOptions(cfg.Encryption.KEKFile, false)
+	if !opts.HasKeySource() {
 		_, _ = fmt.Fprintln(c.Stdout, "Master key: not checked (no key file, passphrase, or TTY available).")
 		return 0
 	}
-	keyring, err := c.unseal(ctx, store, *keyFile, false)
+	keyring, err := crypto.Unseal(ctx, store, opts)
 	if err != nil {
 		return c.fail("master key verification failed: %v", err)
 	}
@@ -132,24 +206,26 @@ func (c *CLI) cmdCheck(args []string) int {
 	return 0
 }
 
-func (c *CLI) keySourceAvailable(keyFile string) bool {
-	if keyFile != "" {
-		return true
-	}
-	if os.Getenv("KMS_MASTER_PASSPHRASE") != "" {
-		return true
-	}
-	return c.newPrompter() != nil
-}
-
 // --- backup ----------------------------------------------------------------
 
 func (c *CLI) cmdBackup(args []string) int {
 	fs := c.newFlags("backup")
-	db := fs.String("db", "./kms.db", "source database file path")
-	out := fs.String("out", "", "backup output file path (must not exist)")
+	r := c.serverSettings(fs, "storage.sqlite_path")
+	out := fs.String("out", "", "backup output `file` (must not exist)")
+	c.setUsage(fs, "backup [flags]",
+		"Write a consistent online backup of the database to --out; the master key is not included.", true)
 	if !c.parseFlags(fs, args) {
 		return 2
+	}
+	if !c.rejectPositionals() {
+		return 2
+	}
+	cfg, _, _, err := r.resolve()
+	if err != nil {
+		return c.fail("%v", err)
+	}
+	if err := c.requireSQLitePath(cfg); err != nil {
+		return c.fail("%v", err)
 	}
 	if *out == "" {
 		return c.fail("--out is required")
@@ -157,10 +233,10 @@ func (c *CLI) cmdBackup(args []string) int {
 	if fileExists(*out) {
 		return c.fail("output file %s already exists; refusing to overwrite", *out)
 	}
-	if err := storage.ValidateKMSDatabase(*db); err != nil {
+	if err := storage.ValidateKMSDatabase(cfg.Storage.SQLitePath); err != nil {
 		return c.fail("invalid backup source: %v", err)
 	}
-	store, err := storage.Open(*db)
+	store, err := storage.Open(cfg.Storage.SQLitePath)
 	if err != nil {
 		return c.fail("opening database: %v", err)
 	}
@@ -177,20 +253,34 @@ func (c *CLI) cmdBackup(args []string) int {
 
 func (c *CLI) cmdRestore(args []string) int {
 	fs := c.newFlags("restore")
-	db := fs.String("db", "./kms.db", "destination database file path")
-	in := fs.String("in", "", "backup input file path")
+	r := c.serverSettings(fs, "storage.sqlite_path")
+	in := fs.String("in", "", "backup input `file`")
 	force := fs.Bool("force", false, "overwrite an existing destination database")
+	c.setUsage(fs, "restore [flags]",
+		"Restore the database from a backup file. The server must be stopped; an existing destination is replaced only with --force.", true)
 	if !c.parseFlags(fs, args) {
 		return 2
+	}
+	if !c.rejectPositionals() {
+		return 2
+	}
+	cfg, prov, _, err := r.resolve()
+	if err != nil {
+		return c.fail("%v", err)
+	}
+	if err := c.requireSQLitePath(cfg); err != nil {
+		return c.fail("%v", err)
 	}
 	if *in == "" {
 		return c.fail("--in is required")
 	}
-	if err := restoreFile(*in, *db, *force); err != nil {
+	// Restore overwrites the destination: name it before touching anything.
+	c.warnDestructiveTarget(cfg, prov)
+	if err := restoreFile(*in, cfg.Storage.SQLitePath, *force); err != nil {
 		return c.fail("%v", err)
 	}
 
-	_, _ = fmt.Fprintf(c.Stdout, "Restored %s from %s\n", *db, *in)
+	_, _ = fmt.Fprintf(c.Stdout, "Restored %s from %s\n", dbTarget(cfg, prov), *in)
 	_, _ = fmt.Fprintln(c.Stdout, "Next steps: ensure the matching master key (file or passphrase) is available before starting the server.")
 	return 0
 }
@@ -199,17 +289,29 @@ func (c *CLI) cmdRestore(args []string) int {
 
 func (c *CLI) cmdCreateAdmin(args []string) int {
 	fs := c.newFlags("create-admin")
-	db := fs.String("db", "./kms.db", "database file path")
-	name := fs.String("name", "", "admin identity name")
+	r := c.serverSettings(fs, "storage.sqlite_path")
+	name := fs.String("name", "", "admin identity `name`")
+	c.setUsage(fs, "create-admin [flags]",
+		"Create an admin identity directly in the database and print its token once.", true)
 	if !c.parseFlags(fs, args) {
 		return 2
+	}
+	if !c.rejectPositionals() {
+		return 2
+	}
+	cfg, _, _, err := r.resolve()
+	if err != nil {
+		return c.fail("%v", err)
+	}
+	if err := c.requireSQLitePath(cfg); err != nil {
+		return c.fail("%v", err)
 	}
 	if *name == "" {
 		return c.fail("--name is required")
 	}
 	// Direct store access. WAL mode allows this concurrently with a running
 	// server, but the caller is responsible for that coordination.
-	store, err := storage.Open(*db)
+	store, err := storage.Open(cfg.Storage.SQLitePath)
 	if err != nil {
 		return c.fail("opening database: %v", err)
 	}
@@ -236,10 +338,22 @@ func (c *CLI) cmdCreateAdmin(args []string) int {
 
 func (c *CLI) cmdRotateAdmin(args []string) int {
 	fs := c.newFlags("rotate-admin")
-	db := fs.String("db", "./kms.db", "database file path")
-	name := fs.String("name", "", "admin identity name")
+	r := c.serverSettings(fs, "storage.sqlite_path")
+	name := fs.String("name", "", "admin identity `name`")
+	c.setUsage(fs, "rotate-admin [flags]",
+		"Recover an existing admin by rotating its token directly in the database, printing the replacement once.", true)
 	if !c.parseFlags(fs, args) {
 		return 2
+	}
+	if !c.rejectPositionals() {
+		return 2
+	}
+	cfg, _, _, err := r.resolve()
+	if err != nil {
+		return c.fail("%v", err)
+	}
+	if err := c.requireSQLitePath(cfg); err != nil {
+		return c.fail("%v", err)
 	}
 	if *name == "" {
 		return c.fail("--name is required")
@@ -250,7 +364,7 @@ func (c *CLI) cmdRotateAdmin(args []string) int {
 	// hash immediately, but the operator must coordinate concurrent identity
 	// administration.
 	ctx := context.Background()
-	store, err := storage.Open(*db)
+	store, err := storage.Open(cfg.Storage.SQLitePath)
 	if err != nil {
 		return c.fail("opening database: %v", err)
 	}
@@ -286,22 +400,35 @@ func (c *CLI) cmdRotateAdmin(args []string) int {
 
 func (c *CLI) cmdRotateKEK(args []string) int {
 	fs := c.newFlags("rotate-kek")
-	db := fs.String("db", "./kms.db", "database file path")
-	keyFile := fs.String("key-file", "", "current master key file (omit to use the current passphrase)")
-	newKeyFile := fs.String("new-key-file", "", "new master key file (generated if absent); omit to enter a new passphrase")
+	r := c.serverSettings(fs, "storage.sqlite_path", "encryption.kek_file")
+	newKeyFile := fs.String("new-key-file", "", "new master key `file` (generated if absent); omit to enter a new passphrase")
+	c.setUsage(fs, "rotate-kek [flags]",
+		"Rotate the master key, rewrapping every secret version and CA key under the new key.", true)
 	if !c.parseFlags(fs, args) {
 		return 2
 	}
+	if !c.rejectPositionals() {
+		return 2
+	}
+	cfg, prov, _, err := r.resolve()
+	if err != nil {
+		return c.fail("%v", err)
+	}
+	if err := c.requireSQLitePath(cfg); err != nil {
+		return c.fail("%v", err)
+	}
 	ctx := context.Background()
 
-	store, err := storage.Open(*db)
+	// Rotation rewrites every wrapped row in place: name the database first.
+	c.warnDestructiveTarget(cfg, prov)
+	store, err := storage.Open(cfg.Storage.SQLitePath)
 	if err != nil {
 		return c.fail("opening database: %v", err)
 	}
 	defer func() { _ = store.Close() }()
 
 	// Unseal the current keyring exactly as serve does.
-	current, err := c.unseal(ctx, store, *keyFile, false)
+	current, err := c.unseal(ctx, store, cfg.Encryption.KEKFile, false)
 	if err != nil {
 		return c.fail("unsealing current master key: %v", err)
 	}

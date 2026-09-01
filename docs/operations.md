@@ -18,9 +18,19 @@ For the encryption and authorization design behind these procedures, see
 
 ## Configuration
 
-The server reads a YAML config file (`--config FILE` or `KMS_CONFIG` env
-var), applies `KMS_*` environment overrides on top, then validates the
-result. Defaults come from `internal/config.Default()`.
+Every setting has exactly three spellings: a YAML key in the config file, a
+`KMS_*` environment variable, and a command-line flag. The flag name is
+derived mechanically from the environment variable — strip `KMS_`, lowercase,
+replace `_` with `-` — so `storage.sqlite_path`, `KMS_SQLITE_PATH`, and
+`--sqlite-path` are the same knob.
+
+They resolve highest-precedence first: **flag, then `KMS_*` environment
+variable, then the config file, then the built-in default**. The file is named
+by `--config FILE` or `KMS_CONFIG`. This order applies to `serve`, to every
+offline command that opens the database (`init`, `migrate`, `check`, `backup`,
+`restore`, `create-admin`, `rotate-admin`, `rotate-kek`, `import`), and to
+`config show` / `config validate`. Defaults come from
+`internal/config.Default()`.
 
 ```yaml
 server:
@@ -67,23 +77,48 @@ log:
   level: "info"
 ```
 
-| Env var | Overrides |
-|---|---|
-| `KMS_CONFIG` | Default `--config` path |
-| `KMS_GRPC_ADDR` | `server.grpc_addr` |
-| `KMS_HTTP_ADDR` | `server.http_addr` |
-| `KMS_SQLITE_PATH` | `storage.sqlite_path` |
-| `KMS_KEK_FILE` | `encryption.kek_file` |
-| `KMS_SERVER_CERT_FILE` / `KMS_SERVER_KEY_FILE` / `KMS_CLIENT_CA_FILE` | `security.*` |
-| `KMS_TLS_ENABLED` / `KMS_MTLS_ENABLED` | `security.tls_enabled` / `security.mtls_enabled` (parsed with `strconv.ParseBool`) |
-| `KMS_TRUST_PROXY_HEADERS` | `security.trust_proxy_headers` (parsed with `strconv.ParseBool`) — honor `X-Forwarded-For` for the rate-limit key and audit source IP; enable only behind a trusted reverse proxy (see [TLS and mTLS](#tls-and-mtls)) |
-| `KMS_FRONTEND_ENABLED` | `frontend.enabled` |
-| `KMS_AUDIT_ENABLED` | `audit.enabled` |
-| `KMS_VERIFY_DEFAULTS_REQUESTS_PER_HOUR` | `server.verify_defaults.requests_per_hour` (integer) |
-| `KMS_VERIFY_DEFAULTS_BURST` | `server.verify_defaults.burst` (integer) |
-| `KMS_VERIFY_DEFAULTS_MISMATCH_BUDGET_PER_HOUR` | `server.verify_defaults.mismatch_budget_per_hour` (integer) |
-| `KMS_LOG_LEVEL` | `log.level` |
-| `KMS_MASTER_PASSPHRASE` | Supplies the master passphrase without a TTY prompt (see below) |
+| Env var | Flag | Config key |
+|---|---|---|
+| `KMS_CONFIG` | `--config` | — (names the config file itself) |
+| `KMS_GRPC_ADDR` | `--grpc-addr` | `server.grpc_addr` |
+| `KMS_HTTP_ADDR` | `--http-addr` | `server.http_addr` |
+| `KMS_VERIFY_DEFAULTS_REQUESTS_PER_HOUR` | `--verify-defaults-requests-per-hour` | `server.verify_defaults.requests_per_hour` (integer) |
+| `KMS_VERIFY_DEFAULTS_BURST` | `--verify-defaults-burst` | `server.verify_defaults.burst` (integer) |
+| `KMS_VERIFY_DEFAULTS_MISMATCH_BUDGET_PER_HOUR` | `--verify-defaults-mismatch-budget-per-hour` | `server.verify_defaults.mismatch_budget_per_hour` (integer) |
+| `KMS_SQLITE_PATH` | `--sqlite-path` | `storage.sqlite_path` |
+| `KMS_KEK_FILE` | `--kek-file` | `encryption.kek_file` |
+| `KMS_TLS_ENABLED` | `--tls-enabled` | `security.tls_enabled` (parsed with `strconv.ParseBool`) |
+| `KMS_MTLS_ENABLED` | `--mtls-enabled` | `security.mtls_enabled` (parsed with `strconv.ParseBool`) |
+| `KMS_SERVER_CERT_FILE` | `--server-cert-file` | `security.server_cert_file` |
+| `KMS_SERVER_KEY_FILE` | `--server-key-file` | `security.server_key_file` |
+| `KMS_CLIENT_CA_FILE` | `--client-ca-file` | `security.client_ca_file` — the CA the **server** verifies client certificates against, not a client's `--ca` trust bundle |
+| `KMS_TRUST_PROXY_HEADERS` | `--trust-proxy-headers` | `security.trust_proxy_headers` (parsed with `strconv.ParseBool`) — honor `X-Forwarded-For` for the rate-limit key and audit source IP; enable only behind a trusted reverse proxy (see [TLS and mTLS](#tls-and-mtls)) |
+| `KMS_FRONTEND_ENABLED` | `--frontend-enabled` | `frontend.enabled` |
+| `KMS_AUDIT_ENABLED` | `--audit-enabled` | `audit.enabled` |
+| `KMS_WATCH_HEARTBEAT_INTERVAL` | `--watch-heartbeat-interval` | `watch.heartbeat_interval` (duration) |
+| `KMS_WATCH_RETAIN_DURATION` | `--watch-retain-duration` | `watch.retain_duration` (duration) |
+| `KMS_WATCH_RETAIN_ROWS` | `--watch-retain-rows` | `watch.retain_rows` (integer) |
+| `KMS_WATCH_RELEASE_RETAIN_DURATION` | `--watch-release-retain-duration` | `watch.release_retain_duration` (duration) |
+| `KMS_WATCH_RELEASE_RETAIN_VERSIONS` | `--watch-release-retain-versions` | `watch.release_retain_versions` (integer) |
+| `KMS_WATCH_RELEASE_SUBSCRIBER_RETAIN_DURATION` | `--watch-release-subscriber-retain-duration` | `watch.release_subscriber_retain_duration` (duration) |
+| `KMS_LOG_LEVEL` | `--log-level` | `log.level` |
+| `KMS_MASTER_PASSPHRASE` | — | — (supplies the master passphrase without a TTY prompt; see below) |
+
+Durations accept either a Go duration string (`"30s"`, `"24h"`) or a bare
+number of seconds, in all three spellings alike. Boolean settings must be
+written `--tls-enabled` or `--tls-enabled=false`; `--tls-enabled false` is
+rejected (`unexpected argument "false" (boolean flags take the form
+--flag=false)`) rather than silently reading as `true` plus a stray argument.
+
+Mistakes are errors, not silent fallbacks, and for every command rather than
+just `serve`. A malformed `KMS_*` value fails immediately
+(`KMS_TLS_ENABLED="yes" is not a valid boolean (use true/false/1/0)`), and an
+unrecognized key in the config file is reported with its line and the nearest
+match:
+
+```text
+config.yaml:12: unknown key storage.sqlite_pth (did you mean storage.sqlite_path?)
+```
 
 `Config.Validate()` enforces: both listen addresses set; `sqlite_path` set;
 `mtls_enabled` requires `tls_enabled`; `tls_enabled` requires
@@ -91,9 +126,11 @@ log:
 `client_ca_file` to exist; every `server.verify_defaults.*` budget is
 positive and `mismatch_budget_per_hour` is at least 300; and every
 `watch.*` duration or row/version count is positive. `Config.Redacted()` is
-what the server logs at startup — addresses, paths, and feature flags,
-deliberately never a wholesale dump of the file (so nothing sensitive that
-might end up in the YAML by mistake gets logged).
+the one-line summary the server logs at startup — addresses, paths, and
+feature flags, with the key file reported only as `set`/`unset` — so nothing
+sensitive that might end up in the YAML by mistake gets logged. For the
+complete effective configuration, including where each value came from, use
+[`config show`](#inspecting-the-effective-configuration).
 
 Logs are structured JSON emitted by [Uber zap](https://github.com/uber-go/zap):
 each line carries `ts` (ISO8601, millisecond precision), a lowercase `level`
@@ -107,6 +144,55 @@ The HTTP server uses 10 s read-header, 30 s read, 60 s write, and 120 s idle
 timeouts. The release-subscriber SSE endpoint clears its write deadline for
 that response and enforces its own five-minute lifetime. Configure reverse
 proxies with limits at least this large.
+
+### Inspecting the effective configuration
+
+`config show` resolves the configuration exactly as `serve` (or `init`,
+`backup`, `restore`, …) would with the same arguments and environment, then
+prints every setting with its value and the source that won. It answers
+"which database file is this actually going to open?" without reading three
+sources by hand. Paths are printed in full; `KMS_MASTER_PASSPHRASE` is
+reported only as `set` or `unset`, never its value.
+
+```text
+$ KMS_SQLITE_PATH=/data/kms.db parameter-store config show \
+    --config /etc/parameter-store/config.yaml --tls-enabled
+config file: /etc/parameter-store/config.yaml (flag --config)
+
+KEY                     VALUE            SOURCE
+server.grpc_addr        0.0.0.0:8443     file server.grpc_addr
+server.http_addr        0.0.0.0:8080     default
+storage.sqlite_path     /data/kms.db     env KMS_SQLITE_PATH
+encryption.kek_file     /key/master.key  file encryption.kek_file
+security.tls_enabled    true             flag --tls-enabled
+...                                      (one row per setting)
+log.level               info             default
+
+KMS_MASTER_PASSPHRASE: set
+```
+
+The `SOURCE` column is one of `default`, `file <key>`, `env <VAR>`, or
+`flag --<name>`; a setting whose effective value is empty prints as `""`.
+
+`config validate` resolves the same way and then runs the same checks `serve`
+does, including that the referenced TLS certificate and key files exist:
+
+```text
+$ parameter-store config validate --config /etc/parameter-store/config.yaml
+configuration OK (/etc/parameter-store/config.yaml)
+```
+
+With no file in play it reports `configuration OK (no config file; defaults,
+environment, and flags only)`. Both commands accept `--config` and every
+server setting flag, so they can be run in CI, or from a systemd
+`ExecStartPre=`, to catch a bad file or a typo'd environment variable before a
+restart takes the service down.
+
+Every command also documents itself: `parameter-store <command> -h` prints a
+usage line, a description, and a flag table that names each setting's
+environment variable and config key (`--sqlite-path PATH  SQLite database file
+path (env KMS_SQLITE_PATH, config storage.sqlite_path)`), followed by a
+reminder of the resolution order.
 
 ## Connect a production application with mTLS
 
@@ -302,22 +388,41 @@ keeps this development workflow separate from production mTLS.
 ## Administrative CLI reference
 
 These commands are implemented in `internal/cli` and operate directly on the
-SQLite file passed via `--db` — they do not require a running server (except
-`create-admin` and `rotate-admin` identity changes, which a running `serve`
-process reads immediately via its shared database). All flags are the standard library
-`flag` package's double-dash-or-single-dash form (e.g. `--db` or `-db`).
+SQLite file — they do not require a running server (except `create-admin` and
+`rotate-admin` identity changes, which a running `serve` process reads
+immediately via its shared database). They resolve the database path, the
+master key file, and every other setting exactly as `serve` does:
+`--sqlite-path` beats `KMS_SQLITE_PATH`, which beats `storage.sqlite_path` in
+the `--config` file, which beats the built-in `./kms.db`. A host or container
+that already exports `KMS_SQLITE_PATH` and `KMS_KEK_FILE` therefore needs no
+path flags at all. All flags are the standard library `flag` package's
+double-dash-or-single-dash form (e.g. `--sqlite-path` or `-sqlite-path`), and
+boolean flags must be written `--force` or `--force=false`, never
+`--force false`.
+
+Because the path can come from three places, each command prints the
+**absolute** path it resolved along with the source:
+
+```text
+$ parameter-store init --admin ops
+Initialized database at /data/kms.db (source: env KMS_SQLITE_PATH)
+```
+
+`restore` and `rotate-kek` print `Target database: /abs/path (source: ...)` to
+stderr before they touch anything, so a destructive run names its target
+first.
 
 | Command | Flags | Purpose |
 |---|---|---|
-| `init` | `--db` (default `./kms.db`), `--master-key-file` (omit for a passphrase prompt), `--admin NAME` (optional) | Creates/migrates the database and the master key (generating a key file, or prompting for a new passphrase with confirmation). With `--admin`, also creates a bootstrap admin identity and prints its token once. |
-| `migrate` | `--db` | Opens the database, applying any pending migrations, and exits. |
-| `check` | `--db`, `--key-file` (optional) | Verifies the database is reachable and, if a key source is available (file, `KMS_MASTER_PASSPHRASE`, or TTY), verifies the master key against the stored key-check value. Never prints key material. |
-| `backup` | `--db`, `--out` (required, must not already exist) | Writes a consistent online backup through owner-only staging and atomic no-replace publication. Prints a reminder that the master key is not included. |
-| `restore` | `--db` (destination), `--in` (required, source backup), `--force` (overwrite an existing destination) | Validates the input is a KMS SQLite backup, stages an owner-only copy, publishes it atomically, removes stale `-wal`/`-shm` sidecars, then opens (and migrates) it. Without `--force`, publication never replaces an existing or concurrently created entry. |
-| `create-admin` | `--db`, `--name` (required) | Creates an admin identity directly against the database file and prints its token once. Uses WAL mode's concurrent-reader support, but coordinating this against a live `serve` process is the operator's responsibility. |
-| `rotate-admin` | `--db`, `--name` (required) | Recovery command that directly replaces an existing enabled admin identity's token hash and prints the new token once. The old token becomes invalid immediately; a disabled admin, client identity, missing identity, or identity without a token is rejected without mutation. It does not require the old token, master key, or a running server. If output is lost, rerun the command to mint another replacement. A running server observes the shared-database update immediately, but operators must coordinate concurrent identity administration. |
-| `rotate-kek` | `--db`, `--key-file` (current key, omit to use the current passphrase), `--new-key-file` (new key, omit to enter a new passphrase) | Unseals with the current key, generates or loads the new key, and calls the same `Service.RotateKEK` used internally — rewrapping every **non-destroyed** secret version's DEK and every built-in CA key under the new KEK in one transaction. Prints both counts (`N secret versions and M CA keys rewrapped`). Run with `serve` stopped; a live process retains the old keyring. |
-| `import` | `--from` (JSON file or SuhaibParameterStore SQLite export), `--namespace env/app` **or** `--env`/`--app`, `--db` (default `./kms.db`), `--master-key-file`, `--dry-run`, `--report FILE` | Maps flat source keys to **relative slug keys** (`slug(key)`, e.g. `TWILIO_SID` → `twilio-sid`) in the destination namespace, **auto-creates the namespace** if it does not exist, writes each as a new secret via a ref-based `PutSecret` with a freshly minted per-secret access token, and emits a mapping report (old key → `/env/app/key` display path → token, written once). Distinct source keys that slug to the same key are reported as a collision rather than silently overwriting. `--dry-run` reports the mapping without writing or minting tokens. Pass either `--namespace` or `--env`/`--app`, not both. See [`migration.md`](migration.md) for the full gradethis walkthrough. |
+| `init` | `--sqlite-path` (default `./kms.db`), `--kek-file` (omit for a passphrase prompt), `--admin NAME` (optional) | Creates/migrates the database and the master key (generating a key file, or prompting for a new passphrase with confirmation). With `--admin`, also creates a bootstrap admin identity and prints its token once. |
+| `migrate` | `--sqlite-path` | Opens the database, applying any pending migrations, and exits. |
+| `check` | `--sqlite-path`, `--kek-file` (optional) | Verifies the database is reachable and, whenever a key source resolves (a key file from the flag, `KMS_KEK_FILE`, or `encryption.kek_file`; `KMS_MASTER_PASSPHRASE`; or a TTY), verifies the master key against the stored key-check value. Never prints key material. |
+| `backup` | `--sqlite-path`, `--out` (required, must not already exist) | Writes a consistent online backup through owner-only staging and atomic no-replace publication. Prints a reminder that the master key is not included. |
+| `restore` | `--sqlite-path` (destination), `--in` (required, source backup), `--force` (overwrite an existing destination) | Validates the input is a KMS SQLite backup, stages an owner-only copy, publishes it atomically, removes stale `-wal`/`-shm` sidecars, then opens (and migrates) it. Without `--force`, publication never replaces an existing or concurrently created entry. |
+| `create-admin` | `--sqlite-path`, `--name` (required) | Creates an admin identity directly against the database file and prints its token once. Uses WAL mode's concurrent-reader support, but coordinating this against a live `serve` process is the operator's responsibility. |
+| `rotate-admin` | `--sqlite-path`, `--name` (required) | Recovery command that directly replaces an existing enabled admin identity's token hash and prints the new token once. The old token becomes invalid immediately; a disabled admin, client identity, missing identity, or identity without a token is rejected without mutation. It does not require the old token, master key, or a running server. If output is lost, rerun the command to mint another replacement. A running server observes the shared-database update immediately, but operators must coordinate concurrent identity administration. |
+| `rotate-kek` | `--sqlite-path`, `--kek-file` (current key, omit to use the current passphrase), `--new-key-file` (new key, omit to enter a new passphrase) | Unseals with the current key, generates or loads the new key, and calls the same `Service.RotateKEK` used internally — rewrapping every **non-destroyed** secret version's DEK and every built-in CA key under the new KEK in one transaction. Prints both counts (`N secret versions and M CA keys rewrapped`). Run with `serve` stopped; a live process retains the old keyring. |
+| `import` | `--from` (JSON file or SuhaibParameterStore SQLite export), `--namespace env/app` **or** `--env`/`--app`, `--sqlite-path` (default `./kms.db`), `--kek-file`, `--dry-run`, `--report FILE` | Maps flat source keys to **relative slug keys** (`slug(key)`, e.g. `TWILIO_SID` → `twilio-sid`) in the destination namespace, **auto-creates the namespace** if it does not exist, writes each as a new secret via a ref-based `PutSecret` with a freshly minted per-secret access token, and emits a mapping report (old key → `/env/app/key` display path → token, written once). Distinct source keys that slug to the same key are reported as a collision rather than silently overwriting. `--dry-run` reports the mapping without writing or minting tokens. Pass either `--namespace` or `--env`/`--app`, not both. See [`migration.md`](migration.md) for the full gradethis walkthrough. |
 
 `import --from` accepts either a SuhaibParameterStore SQLite database with a
 `parameters(key, value)` table, a JSON object such as `{"KEY":"value"}`, or a
@@ -340,7 +445,12 @@ those values; every version created after migration stores its own attributes.
 `init`, `check`, `rotate-kek`, and `import` all go through the same
 master-key acquisition path as `serve` (key file → `KMS_MASTER_PASSPHRASE`
 → interactive prompt) via the shared `unseal` helper, so the same no-TTY
-fail-fast behavior applies.
+fail-fast behavior applies. The key file is whichever of `--kek-file`,
+`KMS_KEK_FILE`, or `encryption.kek_file` wins the usual resolution, so a
+container or systemd unit that already supplies one gets the unattended path
+without repeating it on the command line — and `check` verifies the master key
+whenever a key source resolves that way, not only when a key file is named on
+the command line.
 
 ### Secure destination paths
 
@@ -403,7 +513,7 @@ umask-002 tree:
 ```bash
 chmod g-w ~/code ~/code/kms ~/code/kms/bin   # or:
 install -d -m 0700 ~/.local/share/parameter-store
-./parameter-store init --db ~/.local/share/parameter-store/kms.db
+./parameter-store init --sqlite-path ~/.local/share/parameter-store/kms.db
 ```
 
 **Directories prepared by another account.** Create destination directories
@@ -483,11 +593,27 @@ unsuitable for the database regardless.
 ### Management commands (`admin` group, over gRPC)
 
 The `admin` command group manages namespaces, identities, and the built-in
-CA on a **running** server over gRPC (unlike the offline `--db` commands
-above). Every admin command shares the connection flags `--endpoint`
-(default `localhost:8443`), `--token` (admin bearer token; env `KMS_TOKEN`),
-`--insecure` (skip TLS, development only), `--ca`, and `--cert`/`--key`
-(mTLS). The diagnostic `admin ca show` command needs no credential because the
+CA on a **running** server over gRPC (unlike the offline database commands
+above). Every admin command shares the connection flags `--endpoint`,
+`--token` (admin bearer token), `--insecure` (skip TLS, development only),
+`--ca`, and `--cert`/`--key` (mTLS). Each connection flag falls back to an
+environment variable when it is omitted, so an operator shell can export the
+connection once and drop the flags:
+
+| Flag | Environment fallback |
+|---|---|
+| `--endpoint` | `KMS_ENDPOINT` (default `localhost:8443`) |
+| `--token` | `KMS_TOKEN` |
+| `--ca` | `KMS_CA_FILE` |
+| `--cert` | `KMS_CLIENT_CERT_FILE` |
+| `--key` | `KMS_CLIENT_KEY_FILE` |
+
+`KMS_CA_FILE` is the **client's** trust bundle for verifying the server. It is
+a different thing from the server-side `KMS_CLIENT_CA_FILE`
+(`security.client_ca_file`), which is the CA the server verifies client
+certificates against. The same fallbacks apply to `release`, `defaults`, and
+the convenience commands (`put-secret`, `get-secret`, `put-parameter`,
+`list`). The diagnostic `admin ca show` command needs no credential because the
 built-in client issuer's certificate is public.
 
 | Command | Args / flags | Purpose |
@@ -1005,8 +1131,9 @@ Recommended layout:
 Take the backup online, without stopping the server, with:
 
 ```bash
-parameter-store backup --db /var/lib/parameter-store/kms.db \
+parameter-store backup --sqlite-path /var/lib/parameter-store/kms.db \
     --out /var/backups/parameter-store/db/kms-$(date +%Y%m%dT%H%M%S).db
+# Drop --sqlite-path if KMS_SQLITE_PATH or the config file already names it.
 ```
 
 `backup` refuses to overwrite an existing output file, so each invocation
@@ -1027,8 +1154,9 @@ stolen one.
 
 ```bash
 systemctl stop parameter-store
-parameter-store restore --db /var/lib/parameter-store/kms.db \
+parameter-store restore --sqlite-path /var/lib/parameter-store/kms.db \
     --in /var/backups/parameter-store/db/kms-20260701T120000.db
+# -> Target database: /var/lib/parameter-store/kms.db (source: flag --sqlite-path)
 # --force is required if the destination file already exists
 systemctl start parameter-store
 ```
@@ -1076,9 +1204,10 @@ The inner, client-token-derived layer is untouched — rotating the master key
 never requires contacting any client or invalidating any client token.
 
 ```bash
-parameter-store rotate-kek --db /var/lib/parameter-store/kms.db \
-    --key-file /etc/parameter-store/master.key \
+parameter-store rotate-kek --sqlite-path /var/lib/parameter-store/kms.db \
+    --kek-file /etc/parameter-store/master.key \
     --new-key-file /etc/parameter-store/master-new.key
+# -> Target database: /var/lib/parameter-store/kms.db (source: flag --sqlite-path)
 # -> KEK rotated: 128 secret versions and 1 CA keys rewrapped under kek-<id>
 # The old key can no longer decrypt after this rotation; point any running
 # server at the new master key and restart it.
@@ -1087,9 +1216,12 @@ parameter-store rotate-kek --db /var/lib/parameter-store/kms.db \
 Stop `serve` before running this offline command; otherwise the live process
 continues with its old in-memory keyring until restarted. The command prints
 the count of rewrapped secret versions and CA keys. Omit
-`--key-file` to unseal the current key from a passphrase instead of a file;
+`--kek-file` to take the current key from `KMS_KEK_FILE` /
+`encryption.kek_file`, or from a passphrase when no key file resolves at all;
 omit `--new-key-file` to be prompted for a new passphrase rather than
-generating a new key file. Every rotation is audited as `key.rotate`.
+generating a new key file. (`--new-key-file` names the *replacement* key and is
+not a config setting, so it has no environment or config-file spelling.) Every
+rotation is audited as `key.rotate`.
 
 ## Monitoring and readiness
 

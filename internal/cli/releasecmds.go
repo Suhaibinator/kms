@@ -93,8 +93,10 @@ type releaseEntryDefinition struct {
 
 func (c *CLI) cmdReleaseCreate(args []string) int {
 	fs := c.newFlags("release create")
-	cf := addConnFlags(fs)
-	file := fs.String("file", "", "release JSON/YAML file ('-' for stdin)")
+	cf := addConnFlags(c, fs)
+	file := fs.String("file", "", "release JSON/YAML `file` ('-' for stdin)")
+	c.setUsage(fs, "release create FILE [flags]",
+		"Create an immutable release from a strict JSON or YAML definition.", false)
 	if !c.parseFlags(fs, args) {
 		return 2
 	}
@@ -222,7 +224,9 @@ func releaseCreateRequest(definition releaseDefinition) (*kmsv1.CreateReleaseReq
 
 func (c *CLI) cmdReleaseValidate(args []string) int {
 	fs := c.newFlags("release validate")
-	cf := addConnFlags(fs)
+	cf := addConnFlags(c, fs)
+	c.setUsage(fs, "release validate ENV/APP NAME VERSION [flags]",
+		"Check that a release's resource pins still resolve and that pinned values satisfy its schema.", false)
 	if !c.parseFlags(fs, args) {
 		return 2
 	}
@@ -271,7 +275,9 @@ func releaseValidationDetails(err error) *kmsv1.ValidateReleaseResponse {
 
 func (c *CLI) cmdReleaseShow(args []string) int {
 	fs := c.newFlags("release show")
-	cf := addConnFlags(fs)
+	cf := addConnFlags(c, fs)
+	c.setUsage(fs, "release show ENV/APP NAME VERSION [flags]",
+		"Print a release manifest's metadata and entries; secret values are never shown.", false)
 	if !c.parseFlags(fs, args) {
 		return 2
 	}
@@ -324,8 +330,10 @@ func (c *CLI) printRelease(release *kmsv1.ConfigurationRelease, revision uint64,
 
 func (c *CLI) cmdReleaseList(args []string) int {
 	fs := c.newFlags("release list")
-	cf := addConnFlags(fs)
-	pageSize := fs.Int("page-size", 100, "results per RPC")
+	cf := addConnFlags(c, fs)
+	pageSize := fs.Int("page-size", 100, "result `count` per RPC")
+	c.setUsage(fs, "release list ENV/APP [NAME] [flags]",
+		"List immutable release versions and which one is active.", false)
 	if !c.parseFlags(fs, args) {
 		return 2
 	}
@@ -374,7 +382,9 @@ func (c *CLI) cmdReleaseList(args []string) int {
 
 func (c *CLI) cmdReleaseDiff(args []string) int {
 	fs := c.newFlags("release diff")
-	cf := addConnFlags(fs)
+	cf := addConnFlags(c, fs)
+	c.setUsage(fs, "release diff ENV/APP NAME FROM_VERSION TO_VERSION [flags]",
+		"Compare two versions of a release by alias, pin, and parameter digest.", false)
 	if !c.parseFlags(fs, args) {
 		return 2
 	}
@@ -511,9 +521,11 @@ func (v *optionalUint64) Set(raw string) error {
 
 func (c *CLI) cmdReleaseActivate(args []string) int {
 	fs := c.newFlags("release activate")
-	cf := addConnFlags(fs)
+	cf := addConnFlags(c, fs)
 	var expected optionalUint64
-	fs.Var(&expected, "expected-current-version", "CAS guard (0 means expect no active release)")
+	fs.Var(&expected, "expected-current-version", "CAS guard: expected active `version` (0 means expect no active release)")
+	c.setUsage(fs, "release activate ENV/APP NAME VERSION [flags]",
+		"Atomically make a release version the active one.", false)
 	if !c.parseFlags(fs, args) {
 		return 2
 	}
@@ -556,7 +568,9 @@ func (c *CLI) failReleaseActivation(verb string, err error) int {
 
 func (c *CLI) cmdReleaseRollback(args []string) int {
 	fs := c.newFlags("release rollback")
-	cf := addConnFlags(fs)
+	cf := addConnFlags(c, fs)
+	c.setUsage(fs, "release rollback ENV/APP NAME [VERSION] [flags]",
+		"Reactivate the previous release version, or an explicit one.", false)
 	if !c.parseFlags(fs, args) {
 		return 2
 	}
@@ -605,8 +619,10 @@ func (c *CLI) cmdReleaseRollback(args []string) int {
 
 func (c *CLI) cmdReleaseSubscribers(args []string) int {
 	fs := c.newFlags("release subscribers")
-	cf := addConnFlags(fs)
-	pageSize := fs.Int("page-size", 100, "results per RPC")
+	cf := addConnFlags(c, fs)
+	pageSize := fs.Int("page-size", 100, "result `count` per RPC")
+	c.setUsage(fs, "release subscribers ENV/APP NAME [flags]",
+		"Show per-instance release lifecycle state and activation lag.", false)
 	if !c.parseFlags(fs, args) {
 		return 2
 	}
@@ -745,8 +761,10 @@ func (c *CLI) cmdReleaseSchema(args []string) int {
 
 func (c *CLI) cmdReleaseSchemaCreate(args []string) int {
 	fs := c.newFlags("release schema create")
-	cf := addConnFlags(fs)
-	metadata := fs.String("metadata-json", "", "non-sensitive metadata JSON")
+	cf := addConnFlags(c, fs)
+	metadata := fs.String("metadata-json", "", "non-sensitive metadata `json`")
+	c.setUsage(fs, "release schema create ID FILE [flags]",
+		"Create an immutable JSON Schema version from a JSON or YAML file.", false)
 	if !c.parseFlags(fs, args) {
 		return 2
 	}
@@ -798,7 +816,9 @@ func readSchemaJSON(path string) (string, error) {
 
 func (c *CLI) cmdReleaseSchemaShow(args []string) int {
 	fs := c.newFlags("release schema show")
-	cf := addConnFlags(fs)
+	cf := addConnFlags(c, fs)
+	c.setUsage(fs, "release schema show ID VERSION [flags]",
+		"Print a schema version and its digest.", false)
 	if !c.parseFlags(fs, args) {
 		return 2
 	}
@@ -828,8 +848,10 @@ func (c *CLI) cmdReleaseSchemaShow(args []string) int {
 
 func (c *CLI) cmdReleaseSchemaList(args []string) int {
 	fs := c.newFlags("release schema list")
-	cf := addConnFlags(fs)
-	pageSize := fs.Int("page-size", 100, "results per RPC")
+	cf := addConnFlags(c, fs)
+	pageSize := fs.Int("page-size", 100, "result `count` per RPC")
+	c.setUsage(fs, "release schema list [ID] [flags]",
+		"List schema versions with their digests and creation times.", false)
 	if !c.parseFlags(fs, args) {
 		return 2
 	}

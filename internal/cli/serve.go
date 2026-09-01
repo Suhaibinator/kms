@@ -79,12 +79,16 @@ var GRPCFactory func(svc *core.Service, hub *watch.Hub, cfg GRPCConfig) (GRPCSer
 
 func (c *CLI) cmdServe(args []string) int {
 	flags := c.newFlags("serve")
-	configPath := flags.String("config", c.ConfigPath, "config file path (env KMS_CONFIG)")
+	r := c.serverSettings(flags)
+	c.setUsage(flags, "serve [flags]", "Run the gRPC and HTTP servers.", true)
 	if !c.parseFlags(flags, args) {
 		return 2
 	}
+	if !c.rejectPositionals() {
+		return 2
+	}
 
-	cfg, err := config.Load(*configPath)
+	cfg, prov, configFile, err := r.resolve()
 	if err != nil {
 		return c.fail("loading config: %v", err)
 	}
@@ -93,7 +97,14 @@ func (c *CLI) cmdServe(args []string) int {
 	}
 
 	logger := newLogger(c.Stderr, cfg.LogLevel())
-	logger.Info("starting parameter-store", zap.String("version", Version), zap.String("config", cfg.Redacted()))
+	if configFile == "" {
+		configFile = "none"
+	}
+	logger.Info("starting parameter-store",
+		zap.String("version", Version),
+		zap.String("config_file", configFile),
+		zap.String("config", cfg.Redacted()))
+	logConfigSources(logger, prov)
 
 	// Startup order per plan 23.1: open store (migrates), unseal, then listeners.
 	store, err := storage.Open(cfg.Storage.SQLitePath)
@@ -271,6 +282,23 @@ func (c *CLI) cmdServe(args []string) int {
 	cancel() // stop the watch hub before the deferred store.Close
 	logger.Info("shutdown complete")
 	return exitCode
+}
+
+// logConfigSources records, at debug level, where every setting that is not on
+// its built-in default came from — one field per setting, keyed by the YAML
+// key. It answers "why is it using that value?" from the startup log alone,
+// without printing the values themselves (Redacted already covers those).
+func logConfigSources(logger *zap.Logger, prov config.Provenance) {
+	if !logger.Core().Enabled(zapcore.DebugLevel) {
+		return
+	}
+	fields := make([]zap.Field, 0, len(prov))
+	for _, key := range config.SortedKeys() {
+		if src := prov[key]; src.Kind != config.SourceDefault {
+			fields = append(fields, zap.String(key, src.String()))
+		}
+	}
+	logger.Debug("configuration sources", fields...)
 }
 
 // grpcServerTLS derives the gRPC listener's TLS config from the base server

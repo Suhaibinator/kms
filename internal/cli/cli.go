@@ -9,6 +9,8 @@ import (
 	"io"
 	"os"
 	"strings"
+
+	"github.com/Suhaibinator/kms/internal/config"
 )
 
 // Version is the build version, overridable at link time with
@@ -20,8 +22,15 @@ type CLI struct {
 	Stdout io.Writer
 	Stderr io.Writer
 	Stdin  *os.File
-	// ConfigPath is the global --config value (or KMS_CONFIG); used by serve.
-	ConfigPath string
+	// ConfigPath is the config file path from the global --config flag or the
+	// KMS_CONFIG environment variable; ConfigPathSource records which. Every
+	// config-aware command (serve, the offline database commands, config)
+	// resolves its settings from this file.
+	ConfigPath       string
+	ConfigPathSource string
+	// lookupEnv reads environment variables; nil means os.LookupEnv. Tests
+	// inject a map so command behaviour never depends on the developer's shell.
+	lookupEnv func(key string) (string, bool)
 	// positionals holds the non-flag arguments collected by the most recent
 	// parseFlags call (flags may be interspersed with positionals).
 	positionals []string
@@ -41,7 +50,10 @@ func New() *CLI {
 
 // Run dispatches a subcommand and returns the process exit code.
 func (c *CLI) Run(args []string) int {
-	c.ConfigPath = os.Getenv("KMS_CONFIG")
+	c.ConfigPath, c.ConfigPathSource = "", ""
+	if v, ok := c.env("KMS_CONFIG"); ok && v != "" {
+		c.ConfigPath, c.ConfigPathSource = v, "env KMS_CONFIG"
+	}
 	c.helpRequested = false
 	rest := c.consumeGlobalFlags(args)
 	if len(rest) == 0 {
@@ -54,6 +66,8 @@ func (c *CLI) Run(args []string) int {
 	switch cmd {
 	case "serve":
 		code = c.cmdServe(cmdArgs)
+	case "config":
+		code = c.cmdConfig(cmdArgs)
 	case "init":
 		code = c.cmdInit(cmdArgs)
 	case "migrate":
@@ -116,13 +130,13 @@ func (c *CLI) consumeGlobalFlags(args []string) []string {
 				_, _ = fmt.Fprintln(c.Stderr, "--config requires a value")
 				return nil
 			}
-			c.ConfigPath = args[i+1]
+			c.ConfigPath, c.ConfigPathSource = args[i+1], "flag --config"
 			i += 2
 		case strings.HasPrefix(a, "--config="):
-			c.ConfigPath = strings.TrimPrefix(a, "--config=")
+			c.ConfigPath, c.ConfigPathSource = strings.TrimPrefix(a, "--config="), "flag --config"
 			i++
 		case strings.HasPrefix(a, "-config="):
-			c.ConfigPath = strings.TrimPrefix(a, "-config=")
+			c.ConfigPath, c.ConfigPathSource = strings.TrimPrefix(a, "-config="), "flag --config"
 			i++
 		default:
 			return args[i:]
@@ -139,6 +153,8 @@ Usage:
 
 Server:
   serve            Run the gRPC + HTTP server.
+  config show      Print the effective configuration and where each value came from.
+  config validate  Check the configuration file, environment, and flags.
 
 Administration:
   init             Create/migrate a database and master key.
@@ -175,7 +191,13 @@ Other:
   help             Show this help.
 
 Global flags:
-  --config FILE    Config file path (env KMS_CONFIG). Used by serve.
+  --config FILE    Config file path (env KMS_CONFIG). Read by serve, config,
+                   and every command that opens the database directly.
+
+Settings resolve in this order: flag, then KMS_* environment variable, then the
+config file, then the built-in default. Commands that talk to a running server
+read KMS_ENDPOINT, KMS_TOKEN, KMS_CA_FILE, KMS_CLIENT_CERT_FILE, and
+KMS_CLIENT_KEY_FILE as flag defaults.
 
 Run "parameter-store <command> -h" for command-specific flags.
 `)
@@ -258,3 +280,157 @@ func (c *CLI) parseFlags(fs *flag.FlagSet, args []string) bool {
 // args returns the positional arguments collected by parseFlags (flags may be
 // interspersed before or after them).
 func (c *CLI) args() []string { return c.positionals }
+
+// env reads an environment variable through the CLI's injectable lookup.
+func (c *CLI) env(key string) (string, bool) {
+	if c.lookupEnv != nil {
+		return c.lookupEnv(key)
+	}
+	return os.LookupEnv(key)
+}
+
+// rejectPositionals fails a command that takes no positional arguments when
+// parseFlags collected any. Its main job is catching "--flag false" for a
+// boolean flag: the flag package sets the flag to true and leaves "false" as a
+// positional, which would otherwise be ignored silently.
+func (c *CLI) rejectPositionals() bool {
+	if len(c.positionals) == 0 {
+		return true
+	}
+	_, _ = fmt.Fprintf(c.Stderr, "error: unexpected argument %q (boolean flags take the form --flag=false)\n", c.positionals[0])
+	return false
+}
+
+// settingsResolver ties a command's FlagSet to the config registry. Build it
+// with serverSettings before parseFlags and call resolve afterwards.
+type settingsResolver struct {
+	c          *CLI
+	bound      *config.Bound
+	configPath *string
+}
+
+// serverSettings registers --config plus a flag for each named config setting
+// (all of them when keys is empty) on fs, so the command participates in the
+// standard resolution order: flag > environment > config file > default.
+func (c *CLI) serverSettings(fs *flag.FlagSet, keys ...string) *settingsResolver {
+	r := &settingsResolver{c: c}
+	r.configPath = fs.String("config", "", "config `file` path (env KMS_CONFIG)")
+	r.bound = config.AddFlags(fs, keys...)
+	return r
+}
+
+// resolve returns the effective configuration, the source of every setting,
+// and the config file path that was read ("" when none). Malformed environment
+// variables and unknown config keys are errors. It does not run
+// Config.Validate; serve and config validate do that themselves because it
+// stats TLS material that offline commands have no business requiring.
+func (r *settingsResolver) resolve() (config.Config, config.Provenance, string, error) {
+	path := *r.configPath
+	if path == "" {
+		path = r.c.ConfigPath
+	}
+	cfg, prov, err := config.Resolve(config.Options{Path: path, Flags: r.bound, LookupEnv: r.c.env})
+	return cfg, prov, path, err
+}
+
+// configFileSource describes where the resolved config path came from, for
+// output such as "config file: /etc/x.yaml (flag --config)".
+func (r *settingsResolver) configFileSource() string {
+	if *r.configPath != "" {
+		return "flag --config"
+	}
+	return r.c.ConfigPathSource
+}
+
+// setUsage installs a structured help renderer on fs: a usage line, a short
+// description, the flag table, and (for commands that read server settings)
+// a footer explaining the resolution order. It replaces the flag package's
+// bare default listing.
+func (c *CLI) setUsage(fs *flag.FlagSet, synopsis, description string, settingsFooter bool) {
+	fs.Usage = func() {
+		w := c.Stderr
+		_, _ = fmt.Fprintf(w, "Usage: parameter-store %s\n", synopsis)
+		if description != "" {
+			_, _ = fmt.Fprintf(w, "\n%s\n", wrapText(description, 78, ""))
+		}
+		_, _ = fmt.Fprintln(w, "\nFlags:")
+		printFlagTable(w, fs)
+		if settingsFooter {
+			_, _ = fmt.Fprint(w, settingsFooterText)
+		}
+	}
+}
+
+const settingsFooterText = `
+Settings resolve in this order: flag, then environment variable, then the
+config file (--config or KMS_CONFIG), then the built-in default. A malformed
+KMS_* value or an unknown key in the config file is an error. Run
+"parameter-store config show" to print the effective configuration and where
+each value came from.
+`
+
+// printFlagTable renders every flag on fs as "--name PLACEHOLDER" followed by
+// its usage text, default value, and (for boolean flags) the =false form.
+func printFlagTable(w io.Writer, fs *flag.FlagSet) {
+	type row struct{ head, body string }
+	var rows []row
+	width := 0
+	fs.VisitAll(func(f *flag.Flag) {
+		name, usage := flag.UnquoteUsage(f)
+		head := "--" + f.Name
+		if isBoolFlag(f) {
+			head += "[=true|false]"
+		} else if name != "" {
+			head += " " + strings.ToUpper(name)
+		}
+		if f.DefValue != "" && f.DefValue != "false" && !isBoolFlag(f) {
+			usage += fmt.Sprintf(" (default %q)", f.DefValue)
+		} else if isBoolFlag(f) && f.DefValue == "true" {
+			usage += " (default true)"
+		}
+		rows = append(rows, row{head, usage})
+		if len(head) > width {
+			width = len(head)
+		}
+	})
+	if width > 34 {
+		width = 34
+	}
+	for _, r := range rows {
+		if len(r.head) > width {
+			_, _ = fmt.Fprintf(w, "  %s\n  %s%s\n", r.head, strings.Repeat(" ", width+2), wrapText(r.body, 78-width-4, strings.Repeat(" ", width+4)))
+			continue
+		}
+		_, _ = fmt.Fprintf(w, "  %-*s  %s\n", width, r.head, wrapText(r.body, 78-width-4, strings.Repeat(" ", width+4)))
+	}
+}
+
+func isBoolFlag(f *flag.Flag) bool {
+	b, ok := f.Value.(interface{ IsBoolFlag() bool })
+	return ok && b.IsBoolFlag()
+}
+
+// wrapText word-wraps s to width columns; continuation lines are prefixed
+// with indent. The first line carries no prefix so callers can place it.
+func wrapText(s string, width int, indent string) string {
+	if width < 20 {
+		width = 20
+	}
+	words := strings.Fields(s)
+	var b strings.Builder
+	line := 0
+	for i, wd := range words {
+		if i > 0 {
+			if line+1+len(wd) > width {
+				b.WriteString("\n" + indent)
+				line = 0
+			} else {
+				b.WriteByte(' ')
+				line++
+			}
+		}
+		b.WriteString(wd)
+		line += len(wd)
+	}
+	return b.String()
+}
