@@ -148,8 +148,12 @@ func (c *CLI) cmdDefaultsApply(args []string) int {
 }
 
 // dialConn honours the test transport override, otherwise dials the
-// endpoint named by the connection flags.
+// endpoint named by the connection flags. Connection settings are finalized
+// first either way so token-file handling is exercised under the override.
 func (c *CLI) dialConn(cf *connFlags) (*grpc.ClientConn, error) {
+	if err := cf.finalize(); err != nil {
+		return nil, err
+	}
 	if c.dialOverride != nil {
 		return c.dialOverride(cf)
 	}

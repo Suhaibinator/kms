@@ -45,6 +45,20 @@ type CLI struct {
 	// dialOverride is replaced by command tests with an in-memory gRPC
 	// transport. Production callers leave it nil and use connFlags.dial.
 	dialOverride dialFunc
+	// output selects how command results are rendered: a human table (the
+	// default) or JSON for scripts. Set by --output/-o or KMS_OUTPUT.
+	output outputMode
+	// assumeYes answers every confirmation prompt (--yes/-y). Scripts must set
+	// it: a destructive command refuses to run on a non-interactive stdin
+	// without it.
+	assumeYes bool
+	// quiet suppresses informational stderr lines written through info
+	// (--quiet/-q). Errors, prompts, and confirmation previews are never
+	// suppressed.
+	quiet bool
+	// isTTY reports whether stdin is an interactive terminal; nil means
+	// term.IsTerminal on Stdin. Tests inject it to exercise prompts.
+	isTTY func() bool
 }
 
 // New builds a CLI bound to the process standard streams.
@@ -59,7 +73,17 @@ func (c *CLI) Run(args []string) int {
 		c.ConfigPath, c.ConfigPathSource = v, "env KMS_CONFIG"
 	}
 	c.helpRequested = false
-	rest := c.consumeGlobalFlags(args)
+	c.output, c.assumeYes, c.quiet = outputTable, false, false
+	if v, ok := c.env("KMS_OUTPUT"); ok && v != "" {
+		if err := c.output.Set(v); err != nil {
+			_, _ = fmt.Fprintf(c.Stderr, "error: KMS_OUTPUT: %v\n", err)
+			return 2
+		}
+	}
+	rest, ok := c.consumeGlobalFlags(args)
+	if !ok {
+		return 2
+	}
 	if len(rest) == 0 {
 		c.usage()
 		return 2
@@ -123,39 +147,88 @@ func (c *CLI) Run(args []string) int {
 	return code
 }
 
-// consumeGlobalFlags extracts a leading --config before the subcommand so both
-// `parameter-store --config x serve` and `parameter-store serve --config x`
-// work. Parsing stops at the first token that is not a recognized global flag.
-func (c *CLI) consumeGlobalFlags(args []string) []string {
+// globalFlag describes one flag accepted before the subcommand. The same
+// flags (long form) are registered on every command's flag set by newFlags so
+// `parameter-store -o json list ...` and `parameter-store list ... -o json`
+// mean the same thing.
+type globalFlag struct {
+	names      []string // accepted spellings, e.g. "--output", "-o"
+	takesValue bool
+	apply      func(c *CLI, value string) error
+}
+
+func globalFlags() []globalFlag {
+	return []globalFlag{
+		{names: []string{"--config", "-config"}, takesValue: true, apply: func(c *CLI, v string) error {
+			c.ConfigPath, c.ConfigPathSource = v, "flag --config"
+			return nil
+		}},
+		{names: []string{"--output", "-output", "-o"}, takesValue: true, apply: func(c *CLI, v string) error {
+			return c.output.Set(v)
+		}},
+		{names: []string{"--yes", "-yes", "-y"}, apply: func(c *CLI, _ string) error { c.assumeYes = true; return nil }},
+		{names: []string{"--quiet", "-quiet", "-q"}, apply: func(c *CLI, _ string) error { c.quiet = true; return nil }},
+	}
+}
+
+// consumeGlobalFlags extracts the global flags that precede the subcommand so
+// both `parameter-store --config x serve` and `parameter-store serve --config
+// x` work. Parsing stops at the first token that is not a recognized global
+// flag. It returns false (after printing the problem) when a flag is
+// malformed; the caller exits with the usage code.
+func (c *CLI) consumeGlobalFlags(args []string) ([]string, bool) {
+	flags := globalFlags()
 	i := 0
+next:
 	for i < len(args) {
 		a := args[i]
-		switch {
-		case a == "--config" || a == "-config":
-			if i+1 >= len(args) {
-				_, _ = fmt.Fprintln(c.Stderr, "--config requires a value")
-				return nil
+		for _, gf := range flags {
+			for _, name := range gf.names {
+				var value string
+				switch {
+				case a == name && gf.takesValue:
+					if i+1 >= len(args) {
+						_, _ = fmt.Fprintf(c.Stderr, "%s requires a value\n", name)
+						return nil, false
+					}
+					value = args[i+1]
+					i += 2
+				case a == name:
+					i++
+				case gf.takesValue && strings.HasPrefix(a, name+"="):
+					value = strings.TrimPrefix(a, name+"=")
+					i++
+				default:
+					continue
+				}
+				if err := gf.apply(c, value); err != nil {
+					_, _ = fmt.Fprintf(c.Stderr, "%s: %v\n", name, err)
+					return nil, false
+				}
+				continue next
 			}
-			c.ConfigPath, c.ConfigPathSource = args[i+1], "flag --config"
-			i += 2
-		case strings.HasPrefix(a, "--config="):
-			c.ConfigPath, c.ConfigPathSource = strings.TrimPrefix(a, "--config="), "flag --config"
-			i++
-		case strings.HasPrefix(a, "-config="):
-			c.ConfigPath, c.ConfigPathSource = strings.TrimPrefix(a, "-config="), "flag --config"
-			i++
-		default:
-			return args[i:]
 		}
+		return args[i:], true
 	}
-	return args[i:]
+	return args[i:], true
+}
+
+// addGlobalFlags registers the long-form global flags on a command flag set.
+// A value given after the subcommand overrides one given before it. The
+// short forms (-o, -y, -q) are accepted only before the subcommand: several
+// commands already own --out, and a short flag that means different things
+// in different positions is a trap.
+func (c *CLI) addGlobalFlags(fs *flag.FlagSet) {
+	fs.Var(&c.output, "output", "output `format`: table or json (env KMS_OUTPUT)")
+	fs.BoolVar(&c.assumeYes, "yes", c.assumeYes, "answer confirmation prompts automatically; required for destructive commands on a non-interactive stdin")
+	fs.BoolVar(&c.quiet, "quiet", c.quiet, "suppress informational messages on stderr")
 }
 
 func (c *CLI) usage() {
 	_, _ = fmt.Fprint(c.Stderr, `parameter-store — parameter and secret management service
 
 Usage:
-  parameter-store [--config FILE] <command> [flags]
+  parameter-store [global flags] <command> [flags]
 
 Server:
   serve            Run the gRPC + HTTP server.
@@ -198,30 +271,53 @@ Other:
   version          Print the build version.
   help             Show this help.
 
-Global flags:
+Global flags (accepted before the subcommand; the long forms also after it):
   --config FILE    Config file path (env KMS_CONFIG). Read by serve, config,
                    and every command that opens the database directly.
+  -o, --output F   Output format: table (default) or json (env KMS_OUTPUT).
+                   In json mode stdout carries exactly one JSON document.
+  -y, --yes        Answer confirmation prompts automatically. Destructive
+                   commands refuse to run on a non-interactive stdin without it.
+  -q, --quiet      Suppress informational messages on stderr.
+
+Exit codes: 0 ok, 1 error, 2 usage, 3 unauthenticated, 4 permission denied,
+5 not found, 6 conflict, 7 failed precondition, 8 server unavailable,
+9 rate limited.
 
 Settings resolve in this order: flag, then KMS_* environment variable, then the
 config file, then the built-in default. Commands that talk to a running server
-read KMS_ENDPOINT, KMS_TOKEN, KMS_CA_FILE, KMS_CLIENT_CERT_FILE, and
-KMS_CLIENT_KEY_FILE as flag defaults.
+read KMS_ENDPOINT, KMS_TOKEN, KMS_TOKEN_FILE, KMS_CA_FILE, KMS_CLIENT_CERT_FILE,
+and KMS_CLIENT_KEY_FILE as flag defaults.
 
 Run "parameter-store <command> -h" for command-specific flags.
 `)
 }
 
-// fail prints an error to stderr and returns exit code 1.
+// fail prints an error to stderr and returns exit code 1. Use failErr when
+// the error came from the server or the store so the exit code reflects its
+// kind (see exitcodes.go).
 func (c *CLI) fail(format string, args ...any) int {
 	_, _ = fmt.Fprintf(c.Stderr, "error: "+format+"\n", args...)
-	return 1
+	return exitError
+}
+
+// info prints an informational line to stderr unless --quiet was given. It is
+// for progress and advice ("Wrote 12 bytes to x"), never for results, errors,
+// prompts, or the preview shown before a destructive confirmation.
+func (c *CLI) info(format string, args ...any) {
+	if c.quiet {
+		return
+	}
+	_, _ = fmt.Fprintf(c.Stderr, format+"\n", args...)
 }
 
 // newFlags builds a flag set that writes usage to the CLI's stderr and returns
-// an error rather than exiting the process on a parse problem.
+// an error rather than exiting the process on a parse problem. Every command
+// flag set carries the global flags so they may follow the subcommand.
 func (c *CLI) newFlags(name string) *flag.FlagSet {
 	fs := flag.NewFlagSet(name, flag.ContinueOnError)
 	fs.SetOutput(c.Stderr)
+	c.addGlobalFlags(fs)
 	return fs
 }
 

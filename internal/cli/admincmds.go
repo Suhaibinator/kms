@@ -144,7 +144,7 @@ func (c *CLI) cmdNamespaceWrite(args []string, update bool) int {
 	}
 	pns := &kmsv1.NamespaceRef{Env: ns.Env, App: ns.App}
 
-	conn, err := cf.dial()
+	conn, err := c.dialConn(cf)
 	if err != nil {
 		return c.fail("%v", err)
 	}
@@ -191,7 +191,7 @@ func (c *CLI) cmdNamespaceDelete(args []string) int {
 		return c.fail("namespace delete: %v", err)
 	}
 
-	conn, err := cf.dial()
+	conn, err := c.dialConn(cf)
 	if err != nil {
 		return c.fail("%v", err)
 	}
@@ -216,7 +216,7 @@ func (c *CLI) cmdNamespaceList(args []string) int {
 	if !c.parseFlags(fs, args) {
 		return 2
 	}
-	conn, err := cf.dial()
+	conn, err := c.dialConn(cf)
 	if err != nil {
 		return c.fail("%v", err)
 	}
@@ -393,7 +393,7 @@ func (c *CLI) cmdIdentityIssueCert(args []string) int {
 		return c.fail("%v", err)
 	}
 
-	conn, err := cf.dial()
+	conn, err := c.dialConn(cf)
 	if err != nil {
 		return c.fail("%v", err)
 	}
@@ -446,7 +446,7 @@ func (c *CLI) cmdIdentityRevokeCert(args []string) int {
 		return c.fail("--serial is required")
 	}
 
-	conn, err := cf.dial()
+	conn, err := c.dialConn(cf)
 	if err != nil {
 		return c.fail("%v", err)
 	}
@@ -476,7 +476,7 @@ func (c *CLI) cmdIdentityRotate(args []string) int {
 		return c.fail("identity rotate requires a NAME argument")
 	}
 
-	conn, err := cf.dial()
+	conn, err := c.dialConn(cf)
 	if err != nil {
 		return c.fail("%v", err)
 	}
@@ -507,7 +507,7 @@ func (c *CLI) cmdIdentityRevoke(args []string) int {
 		return c.fail("identity revoke requires a NAME argument")
 	}
 
-	conn, err := cf.dial()
+	conn, err := c.dialConn(cf)
 	if err != nil {
 		return c.fail("%v", err)
 	}
@@ -530,7 +530,7 @@ func (c *CLI) cmdIdentityList(args []string) int {
 	if !c.parseFlags(fs, args) {
 		return 2
 	}
-	conn, err := cf.dial()
+	conn, err := c.dialConn(cf)
 	if err != nil {
 		return c.fail("%v", err)
 	}
@@ -576,7 +576,7 @@ func (c *CLI) cmdAdminCA(args []string) int {
 	if !c.parseFlags(fs, args[1:]) {
 		return 2
 	}
-	conn, err := cf.dial()
+	conn, err := c.dialConn(cf)
 	if err != nil {
 		return c.fail("%v", err)
 	}

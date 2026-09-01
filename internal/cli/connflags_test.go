@@ -69,7 +69,9 @@ func TestConnFlagsEnvFillsEveryField(t *testing.T) {
 	if !c.parseFlags(fs, []string{"--ca", "/flag/ca.pem"}) {
 		t.Fatalf("parseFlags failed: %s", c.stderr())
 	}
-	cf.finalize()
+	if err := cf.finalize(); err != nil {
+		t.Fatalf("finalize: %v", err)
+	}
 
 	if cf.endpoint != "kms.internal:9443" || cf.token != "env-token" {
 		t.Errorf("endpoint = %q, token = %q", cf.endpoint, cf.token)
@@ -117,7 +119,9 @@ func TestConnFlagsDefaultEndpoint(t *testing.T) {
 	if !c.parseFlags(fs, nil) {
 		t.Fatalf("parseFlags failed: %s", c.stderr())
 	}
-	cf.finalize()
+	if err := cf.finalize(); err != nil {
+		t.Fatalf("finalize: %v", err)
+	}
 	if cf.endpoint != "localhost:8443" {
 		t.Errorf("endpoint = %q, want localhost:8443", cf.endpoint)
 	}
@@ -127,7 +131,7 @@ func TestConnFlagsDefaultEndpoint(t *testing.T) {
 }
 
 // TestClientEnvNamesDisjointFromServerSettings keeps the two KMS_* namespaces
-// apart: config.EnvNames() configures a server process, while these five tell a
+// apart: config.EnvNames() configures a server process, while these seven tell a
 // client which server to talk to and as whom. A name in both would make one
 // variable mean two things depending on the subcommand.
 func TestClientEnvNamesDisjointFromServerSettings(t *testing.T) {
@@ -136,8 +140,8 @@ func TestClientEnvNamesDisjointFromServerSettings(t *testing.T) {
 		server[name] = true
 	}
 	fallbacks := (&connFlags{}).envFallbacks()
-	if len(fallbacks) != 5 {
-		t.Fatalf("connection fallbacks = %d, want 5", len(fallbacks))
+	if len(fallbacks) != 7 {
+		t.Fatalf("connection fallbacks = %d, want 7", len(fallbacks))
 	}
 	for _, fallback := range fallbacks {
 		if !strings.HasPrefix(fallback.env, "KMS_") {

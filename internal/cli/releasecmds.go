@@ -116,7 +116,7 @@ func (c *CLI) cmdReleaseCreate(args []string) int {
 		return c.fail("invalid release definition: %v", err)
 	}
 
-	conn, err := cf.dial()
+	conn, err := c.dialConn(cf)
 	if err != nil {
 		return c.fail("%v", err)
 	}
@@ -234,7 +234,7 @@ func (c *CLI) cmdReleaseValidate(args []string) int {
 	if !ok {
 		return 1
 	}
-	conn, err := cf.dial()
+	conn, err := c.dialConn(cf)
 	if err != nil {
 		return c.fail("%v", err)
 	}
@@ -285,7 +285,7 @@ func (c *CLI) cmdReleaseShow(args []string) int {
 	if !ok {
 		return 1
 	}
-	conn, err := cf.dial()
+	conn, err := c.dialConn(cf)
 	if err != nil {
 		return c.fail("%v", err)
 	}
@@ -349,7 +349,7 @@ func (c *CLI) cmdReleaseList(args []string) int {
 	if len(pos) > 1 {
 		name = pos[1]
 	}
-	conn, err := cf.dial()
+	conn, err := c.dialConn(cf)
 	if err != nil {
 		return c.fail("%v", err)
 	}
@@ -404,7 +404,7 @@ func (c *CLI) cmdReleaseDiff(args []string) int {
 	if err != nil {
 		return c.fail("invalid TO_VERSION: %v", err)
 	}
-	conn, err := cf.dial()
+	conn, err := c.dialConn(cf)
 	if err != nil {
 		return c.fail("%v", err)
 	}
@@ -541,7 +541,7 @@ func (c *CLI) cmdReleaseActivate(args []string) int {
 }
 
 func (c *CLI) activateRelease(cf *connFlags, req *kmsv1.ActivateReleaseRequest, verb string) int {
-	conn, err := cf.dial()
+	conn, err := c.dialConn(cf)
 	if err != nil {
 		return c.fail("%v", err)
 	}
@@ -584,7 +584,7 @@ func (c *CLI) cmdReleaseRollback(args []string) int {
 	}
 	name := pos[1]
 
-	conn, err := cf.dial()
+	conn, err := c.dialConn(cf)
 	if err != nil {
 		return c.fail("%v", err)
 	}
@@ -634,7 +634,7 @@ func (c *CLI) cmdReleaseSubscribers(args []string) int {
 	if err != nil {
 		return c.fail("invalid namespace: %v", err)
 	}
-	conn, err := cf.dial()
+	conn, err := c.dialConn(cf)
 	if err != nil {
 		return c.fail("%v", err)
 	}
@@ -776,7 +776,7 @@ func (c *CLI) cmdReleaseSchemaCreate(args []string) int {
 	if err != nil {
 		return c.fail("reading schema: %v", err)
 	}
-	conn, err := cf.dial()
+	conn, err := c.dialConn(cf)
 	if err != nil {
 		return c.fail("%v", err)
 	}
@@ -830,7 +830,7 @@ func (c *CLI) cmdReleaseSchemaShow(args []string) int {
 	if err != nil {
 		return c.fail("invalid VERSION: %v", err)
 	}
-	conn, err := cf.dial()
+	conn, err := c.dialConn(cf)
 	if err != nil {
 		return c.fail("%v", err)
 	}
@@ -860,7 +860,7 @@ func (c *CLI) cmdReleaseSchemaList(args []string) int {
 	if len(pos) > 0 {
 		id = pos[0]
 	}
-	conn, err := cf.dial()
+	conn, err := c.dialConn(cf)
 	if err != nil {
 		return c.fail("%v", err)
 	}

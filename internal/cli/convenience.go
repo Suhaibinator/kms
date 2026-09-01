@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 	"sync"
 	"text/tabwriter"
 	"time"
@@ -20,6 +21,7 @@ import (
 
 	kmsv1 "github.com/Suhaibinator/kms/gen/kmsv1"
 	"github.com/Suhaibinator/kms/internal/domain"
+	"github.com/Suhaibinator/kms/internal/fileutil"
 	"github.com/Suhaibinator/kms/internal/keyutil"
 )
 
@@ -31,13 +33,18 @@ type connFlags struct {
 	c    *CLI
 	once sync.Once
 
-	endpoint    string
-	token       string
-	secretToken string
-	ca          string
-	cert        string
-	key         string
-	insecure    bool
+	endpoint        string
+	token           string
+	tokenFile       string
+	secretToken     string
+	secretTokenFile string
+	ca              string
+	cert            string
+	key             string
+	insecure        bool
+	// finalizeErr is the error finalize produced, replayed by later callers
+	// (sync.Once runs the body only once).
+	finalizeErr error
 }
 
 // defaultEndpoint is the server address used when neither --endpoint nor
@@ -60,6 +67,8 @@ func (cf *connFlags) envFallbacks() []connEnvFallback {
 	return []connEnvFallback{
 		{&cf.endpoint, "KMS_ENDPOINT"},
 		{&cf.token, "KMS_TOKEN"},
+		{&cf.tokenFile, "KMS_TOKEN_FILE"},
+		{&cf.secretTokenFile, "KMS_SECRET_TOKEN_FILE"},
 		{&cf.ca, "KMS_CA_FILE"},
 		{&cf.cert, "KMS_CLIENT_CERT_FILE"},
 		{&cf.key, "KMS_CLIENT_KEY_FILE"},
@@ -75,7 +84,8 @@ func (cf *connFlags) envFallbacks() []connEnvFallback {
 func addConnFlags(c *CLI, fs *flag.FlagSet) *connFlags {
 	cf := &connFlags{c: c}
 	fs.StringVar(&cf.endpoint, "endpoint", "", "server gRPC `endpoint` host:port (env KMS_ENDPOINT; default "+defaultEndpoint+")")
-	fs.StringVar(&cf.token, "token", "", "identity bearer `token` (env KMS_TOKEN)")
+	fs.StringVar(&cf.token, "token", "", "identity bearer `token` (env KMS_TOKEN); visible to other local users in the process list, prefer --token-file")
+	fs.StringVar(&cf.tokenFile, "token-file", "", "read the identity bearer token from this private `file` (env KMS_TOKEN_FILE)")
 	fs.BoolVar(&cf.insecure, "insecure", false, "disable TLS (development only)")
 	fs.StringVar(&cf.ca, "ca", "", "CA bundle `file` for verifying the server (env KMS_CA_FILE); this is the client-side trust store, not the server's client_ca_file")
 	fs.StringVar(&cf.cert, "cert", "", "client certificate `file` for mTLS (env KMS_CLIENT_CERT_FILE)")
@@ -83,11 +93,24 @@ func addConnFlags(c *CLI, fs *flag.FlagSet) *connFlags {
 	return cf
 }
 
+// addSecretTokenFlags registers the per-secret token flags for commands that
+// read or update token-gated secrets.
+func addSecretTokenFlags(fs *flag.FlagSet, cf *connFlags, usage string) {
+	fs.StringVar(&cf.secretToken, "secret-token", "", usage+" (visible in the process list, prefer --secret-token-file)")
+	fs.StringVar(&cf.secretTokenFile, "secret-token-file", "", "read the per-secret token from this private `file` (env KMS_SECRET_TOKEN_FILE)")
+}
+
 // finalize resolves each connection setting to flag, then environment, then
-// built-in default. Flags are parsed before either caller runs, so an explicitly
-// set flag always wins. dial and authCtx call it, which keeps every command site
-// unchanged; sync.Once makes the repeated calls free and idempotent.
-func (cf *connFlags) finalize() {
+// built-in default, and loads token files. Flags are parsed before either
+// caller runs, so an explicitly set flag always wins. dial and authCtx call
+// it; sync.Once makes the repeated calls free and idempotent, and the first
+// error is replayed to every caller.
+//
+// A token given both inline and as a file is a usage error rather than a
+// precedence question: the two sources come from different places (a shell
+// history or CI variable versus a mounted credential file) and silently
+// picking one would let a stale inline token shadow a rotated file.
+func (cf *connFlags) finalize() error {
 	cf.once.Do(func() {
 		for _, fallback := range cf.envFallbacks() {
 			if *fallback.field != "" {
@@ -100,11 +123,67 @@ func (cf *connFlags) finalize() {
 		if cf.endpoint == "" {
 			cf.endpoint = defaultEndpoint
 		}
+		if cf.token != "" && cf.tokenFile != "" {
+			cf.finalizeErr = usageError("--token and --token-file (or KMS_TOKEN and KMS_TOKEN_FILE) are mutually exclusive")
+			return
+		}
+		if cf.secretToken != "" && cf.secretTokenFile != "" {
+			cf.finalizeErr = usageError("--secret-token and --secret-token-file (or KMS_SECRET_TOKEN_FILE) are mutually exclusive")
+			return
+		}
+		if cf.tokenFile != "" {
+			tok, err := readTokenFile(cf.tokenFile)
+			if err != nil {
+				cf.finalizeErr = fmt.Errorf("--token-file: %w", err)
+				return
+			}
+			cf.token = tok
+		}
+		if cf.secretTokenFile != "" {
+			tok, err := readTokenFile(cf.secretTokenFile)
+			if err != nil {
+				cf.finalizeErr = fmt.Errorf("--secret-token-file: %w", err)
+				return
+			}
+			cf.secretToken = tok
+		}
 	})
+	return cf.finalizeErr
+}
+
+// usageError marks an error that should exit with the usage code.
+type usageError string
+
+func (e usageError) Error() string { return string(e) }
+
+// readTokenFile reads a bearer token from a file that must already be
+// private to the current user (no group/other bits, owner-only, a regular
+// file, not a symlink). One trailing newline is tolerated because editors
+// add it; any other whitespace or an empty file is rejected so a truncated
+// or misnamed file cannot silently turn into an anonymous call.
+func readTokenFile(path string) (string, error) {
+	secured, err := fileutil.SecureExistingPrivateFile(path)
+	if err != nil {
+		return "", err
+	}
+	raw, err := os.ReadFile(secured)
+	if err != nil {
+		return "", err
+	}
+	tok := strings.TrimSuffix(strings.TrimSuffix(string(raw), "\n"), "\r")
+	if tok == "" {
+		return "", fmt.Errorf("%s is empty", path)
+	}
+	if strings.ContainsAny(tok, " \t\r\n") {
+		return "", fmt.Errorf("%s must contain exactly one token", path)
+	}
+	return tok, nil
 }
 
 func (cf *connFlags) dial() (*grpc.ClientConn, error) {
-	cf.finalize()
+	if err := cf.finalize(); err != nil {
+		return nil, err
+	}
 	var creds credentials.TransportCredentials
 	if cf.insecure {
 		creds = insecure.NewCredentials()
@@ -130,14 +209,19 @@ func (cf *connFlags) dial() (*grpc.ClientConn, error) {
 		}
 		creds = credentials.NewTLS(tlsCfg)
 	}
-	return grpc.NewClient(cf.endpoint, grpc.WithTransportCredentials(creds))
+	return grpc.NewClient(cf.endpoint,
+		grpc.WithTransportCredentials(creds),
+		grpc.WithUserAgent("parameter-store-cli/"+Version),
+	)
 }
 
 // authCtx attaches the identity token and optional per-secret token as gRPC
 // metadata, matching the server's expected header names. mTLS callers omit the
 // bearer token; the server derives their identity from the client certificate.
 func (cf *connFlags) authCtx(ctx context.Context) context.Context {
-	cf.finalize()
+	// dial has already surfaced any finalize error; a failed finalize leaves
+	// both tokens empty, so the worst case here is an unauthenticated call.
+	_ = cf.finalize()
 	var kvs []string
 	if cf.token != "" {
 		kvs = append(kvs, "authorization", "Bearer "+cf.token)
@@ -185,7 +269,7 @@ func (c *CLI) cmdPutSecret(args []string) int {
 	clientBound := fs.Bool("client-bound", false, "write a client-bound secret (new secrets also require --generate-token)")
 	genToken := fs.Bool("generate-token", false, "mint or rotate a per-secret access token (shown once)")
 	contentType := fs.String("content-type", "text/plain", "secret content `type`")
-	fs.StringVar(&cf.secretToken, "secret-token", "", "existing per-secret `token` (client-bound updates)")
+	addSecretTokenFlags(fs, cf, "existing per-secret `token` (client-bound updates)")
 	c.setUsage(fs, "put-secret /env/app/key [flags]",
 		"Store a secret value read from --value-file or standard input.", false)
 	if !c.parseFlags(fs, args) {
@@ -204,7 +288,7 @@ func (c *CLI) cmdPutSecret(args []string) int {
 		return c.fail("reading value: %v", err)
 	}
 
-	conn, err := cf.dial()
+	conn, err := c.dialConn(cf)
 	if err != nil {
 		return c.fail("%v", err)
 	}
@@ -245,7 +329,7 @@ func (c *CLI) cmdGetSecret(args []string) int {
 	out := fs.String("out", "", "write the secret to this `file` instead of stdout")
 	version := fs.Uint64("version", 0, "specific `version` (0 = current label)")
 	label := fs.String("label", "", "version `label` (default: current)")
-	fs.StringVar(&cf.secretToken, "secret-token", "", "per-secret access `token`")
+	addSecretTokenFlags(fs, cf, "per-secret access `token`")
 	c.setUsage(fs, "get-secret /env/app/key [flags]",
 		"Fetch a secret; writing it to a terminal requires --show or --out FILE.", false)
 	if !c.parseFlags(fs, args) {
@@ -260,7 +344,7 @@ func (c *CLI) cmdGetSecret(args []string) int {
 		return c.fail("invalid path: %v", err)
 	}
 
-	conn, err := cf.dial()
+	conn, err := c.dialConn(cf)
 	if err != nil {
 		return c.fail("%v", err)
 	}
@@ -315,7 +399,7 @@ func (c *CLI) cmdPutParameter(args []string) int {
 	}
 	value := pos[1]
 
-	conn, err := cf.dial()
+	conn, err := c.dialConn(cf)
 	if err != nil {
 		return c.fail("%v", err)
 	}
@@ -355,7 +439,7 @@ func (c *CLI) cmdList(args []string) int {
 	}
 	pns := &kmsv1.NamespaceRef{Env: ns.Env, App: ns.App}
 
-	conn, err := cf.dial()
+	conn, err := c.dialConn(cf)
 	if err != nil {
 		return c.fail("%v", err)
 	}

@@ -97,8 +97,8 @@ func TestMalformedCommandFlagStillExitsWithUsageError(t *testing.T) {
 func TestConsumeGlobalConfigFlag(t *testing.T) {
 	c := newTestCLI()
 	// `--config x version` should set ConfigPath and still run version.
-	rest := c.consumeGlobalFlags([]string{"--config", "/etc/kms.yaml", "version"})
-	if c.ConfigPath != "/etc/kms.yaml" {
+	rest, ok := c.consumeGlobalFlags([]string{"--config", "/etc/kms.yaml", "version"})
+	if !ok || c.ConfigPath != "/etc/kms.yaml" {
 		t.Fatalf("ConfigPath = %q", c.ConfigPath)
 	}
 	if len(rest) != 1 || rest[0] != "version" {
@@ -107,15 +107,15 @@ func TestConsumeGlobalConfigFlag(t *testing.T) {
 
 	// `--config=x` form.
 	c2 := newTestCLI()
-	rest = c2.consumeGlobalFlags([]string{"--config=/a.yaml", "serve"})
-	if c2.ConfigPath != "/a.yaml" || rest[0] != "serve" {
+	rest, ok = c2.consumeGlobalFlags([]string{"--config=/a.yaml", "serve"})
+	if !ok || c2.ConfigPath != "/a.yaml" || rest[0] != "serve" {
 		t.Fatalf("config= form failed: %q %v", c2.ConfigPath, rest)
 	}
 
 	// No global flag: everything is the command.
 	c3 := newTestCLI()
-	rest = c3.consumeGlobalFlags([]string{"serve", "--config", "x"})
-	if rest[0] != "serve" {
+	rest, ok = c3.consumeGlobalFlags([]string{"serve", "--config", "x"})
+	if !ok || rest[0] != "serve" {
 		t.Fatalf("rest = %v", rest)
 	}
 }
