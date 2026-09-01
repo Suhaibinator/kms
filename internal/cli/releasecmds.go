@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"context"
 	"encoding/json/jsontext"
 	"encoding/json/v2"
 	"errors"
@@ -18,6 +19,7 @@ import (
 	kmsv1 "github.com/Suhaibinator/kms/gen/kmsv1"
 	"github.com/Suhaibinator/kms/internal/domain"
 	"github.com/Suhaibinator/kms/internal/keyutil"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"gopkg.in/yaml.v3"
 )
@@ -74,6 +76,55 @@ Commands:
 `)
 }
 
+// writeAlignedTable renders a table to an arbitrary writer with the layout
+// CLI.printTable uses for stdout. Release output needs it because the very
+// same tables are also written elsewhere: the activation preview and a failed
+// activation's validation errors go to stderr, and two renderers are still
+// called with a test buffer.
+func writeAlignedTable(w io.Writer, headers []string, rows [][]string) {
+	tw := tabwriter.NewWriter(w, 0, 4, 2, ' ', 0)
+	_, _ = fmt.Fprintln(tw, strings.Join(headers, "\t"))
+	for _, row := range rows {
+		_, _ = fmt.Fprintln(tw, strings.Join(row, "\t"))
+	}
+	_ = tw.Flush()
+}
+
+// releaseNamespaceJSON is the {env, app} pair JSON output carries wherever the
+// table prints "env/app".
+type releaseNamespaceJSON struct {
+	Env string `json:"env"`
+	App string `json:"app"`
+}
+
+func releaseNamespaceOf(ns *kmsv1.NamespaceRef) releaseNamespaceJSON {
+	return releaseNamespaceJSON{Env: ns.GetEnv(), App: ns.GetApp()}
+}
+
+// releaseEntryJSON is one manifest entry as JSON. A release pins a secret by
+// reference — path and version — never by value, so the JSON carries exactly
+// the non-secret columns the table shows. The parameter digest is suppressed
+// for secrets the same way entryDigest suppresses it for the table.
+type releaseEntryJSON struct {
+	Alias           string `json:"alias"`
+	Kind            string `json:"kind"`
+	Path            string `json:"path"`
+	Version         uint64 `json:"version"`
+	ContentType     string `json:"content_type"`
+	ParameterDigest string `json:"parameter_digest"`
+}
+
+func releaseEntryToJSON(entry *kmsv1.ConfigurationReleaseEntry) releaseEntryJSON {
+	return releaseEntryJSON{
+		Alias:           entry.GetAlias(),
+		Kind:            entryKind(entry),
+		Path:            entryPath(entry),
+		Version:         entry.GetVersion(),
+		ContentType:     entry.GetContentType(),
+		ParameterDigest: entryDigest(entry),
+	}
+}
+
 type releaseDefinition struct {
 	Namespace     string                   `json:"namespace" yaml:"namespace"`
 	Name          string                   `json:"name" yaml:"name"`
@@ -89,6 +140,15 @@ type releaseEntryDefinition struct {
 	Key     string `json:"key" yaml:"key"`
 	Version uint64 `json:"version,omitempty" yaml:"version,omitempty"`
 	Label   string `json:"label,omitempty" yaml:"label,omitempty"`
+}
+
+// releaseCreateJSON reports a created release: the identity the caller asked
+// for plus the immutable version and digest the server assigned.
+type releaseCreateJSON struct {
+	Namespace releaseNamespaceJSON `json:"namespace"`
+	Name      string               `json:"name"`
+	Version   uint64               `json:"version"`
+	Digest    string               `json:"digest"`
 }
 
 func (c *CLI) cmdReleaseCreate(args []string) int {
@@ -109,7 +169,7 @@ func (c *CLI) cmdReleaseCreate(args []string) int {
 	}
 	definition, err := c.readReleaseDefinition(*file)
 	if err != nil {
-		return c.fail("reading release definition: %v", err)
+		return c.failErr("reading release definition", err)
 	}
 	req, err := releaseCreateRequest(definition)
 	if err != nil {
@@ -118,20 +178,30 @@ func (c *CLI) cmdReleaseCreate(args []string) int {
 
 	conn, err := c.dialConn(cf)
 	if err != nil {
-		return c.fail("%v", err)
+		return c.failErr("", err)
 	}
 	defer func() { _ = conn.Close() }()
 	ctx, cancel := callContext()
 	defer cancel()
 	resp, err := kmsv1.NewConfigurationReleaseServiceClient(conn).CreateRelease(cf.authCtx(ctx), req)
 	if err != nil {
-		return c.fail("release create: %v", err)
+		return c.failErr("release create", err)
 	}
 	if resp.GetRelease() == nil {
 		return c.fail("release create: server returned an empty release")
 	}
-	_, _ = fmt.Fprintf(c.Stdout, "Created %s/%s version %d (digest %s)\n",
+	line := fmt.Sprintf("Created %s/%s version %d (digest %s)",
 		definition.Namespace, definition.Name, resp.GetRelease().GetVersion(), resp.GetRelease().GetDigest())
+	if c.jsonOutput() {
+		c.info("%s", line)
+		return c.printJSON(releaseCreateJSON{
+			Namespace: releaseNamespaceOf(req.GetNamespace()),
+			Name:      definition.Name,
+			Version:   resp.GetRelease().GetVersion(),
+			Digest:    resp.GetRelease().GetDigest(),
+		})
+	}
+	_, _ = fmt.Fprintln(c.Stdout, line)
 	return 0
 }
 
@@ -222,6 +292,35 @@ func releaseCreateRequest(definition releaseDefinition) (*kmsv1.CreateReleaseReq
 	}, nil
 }
 
+// releaseValidateJSON is the verdict of `release validate`. errors is always a
+// list (empty when the release is valid), never null.
+type releaseValidateJSON struct {
+	Valid  bool                         `json:"valid"`
+	Errors []releaseValidationErrorJSON `json:"errors"`
+}
+
+// releaseValidationErrorJSON carries one validation failure. The server
+// sanitizes message, which never contains a resource value.
+type releaseValidationErrorJSON struct {
+	Alias         string `json:"alias"`
+	Code          string `json:"code"`
+	SchemaPointer string `json:"schema_pointer"`
+	Message       string `json:"message"`
+}
+
+func releaseValidationErrorsJSON(validationErrors []*kmsv1.ReleaseValidationError) []releaseValidationErrorJSON {
+	out := make([]releaseValidationErrorJSON, 0, len(validationErrors))
+	for _, validationErr := range validationErrors {
+		out = append(out, releaseValidationErrorJSON{
+			Alias:         validationErr.GetAlias(),
+			Code:          validationErr.GetCode(),
+			SchemaPointer: validationErr.GetSchemaPointer(),
+			Message:       validationErr.GetMessage(),
+		})
+	}
+	return out
+}
+
 func (c *CLI) cmdReleaseValidate(args []string) int {
 	fs := c.newFlags("release validate")
 	cf := addConnFlags(c, fs)
@@ -236,7 +335,7 @@ func (c *CLI) cmdReleaseValidate(args []string) int {
 	}
 	conn, err := c.dialConn(cf)
 	if err != nil {
-		return c.fail("%v", err)
+		return c.failErr("", err)
 	}
 	defer func() { _ = conn.Close() }()
 	ctx, cancel := callContext()
@@ -245,7 +344,19 @@ func (c *CLI) cmdReleaseValidate(args []string) int {
 		Namespace: ns, Name: name, Version: version,
 	})
 	if err != nil {
-		return c.fail("release validate: %v", err)
+		return c.failErr("release validate", err)
+	}
+	if c.jsonOutput() {
+		if code := c.printJSON(releaseValidateJSON{
+			Valid:  resp.GetValid(),
+			Errors: releaseValidationErrorsJSON(resp.GetErrors()),
+		}); code != exitOK {
+			return code
+		}
+		if resp.GetValid() {
+			return exitOK
+		}
+		return exitError
 	}
 	if resp.GetValid() {
 		_, _ = fmt.Fprintf(c.Stdout, "Release %s/%s version %d is valid.\n", namespaceDisplay(ns), name, version)
@@ -256,12 +367,14 @@ func (c *CLI) cmdReleaseValidate(args []string) int {
 }
 
 func printReleaseValidationErrors(w io.Writer, validationErrors []*kmsv1.ReleaseValidationError) {
-	tw := tabwriter.NewWriter(w, 0, 4, 2, ' ', 0)
-	_, _ = fmt.Fprintln(tw, "ALIAS\tCODE\tSCHEMA POINTER\tMESSAGE")
+	rows := make([][]string, 0, len(validationErrors))
 	for _, validationErr := range validationErrors {
-		_, _ = fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n", validationErr.GetAlias(), validationErr.GetCode(), validationErr.GetSchemaPointer(), validationErr.GetMessage())
+		rows = append(rows, []string{
+			validationErr.GetAlias(), validationErr.GetCode(),
+			validationErr.GetSchemaPointer(), validationErr.GetMessage(),
+		})
 	}
-	_ = tw.Flush()
+	writeAlignedTable(w, []string{"ALIAS", "CODE", "SCHEMA POINTER", "MESSAGE"}, rows)
 }
 
 func releaseValidationDetails(err error) *kmsv1.ValidateReleaseResponse {
@@ -271,6 +384,23 @@ func releaseValidationDetails(err error) *kmsv1.ValidateReleaseResponse {
 		}
 	}
 	return nil
+}
+
+// releaseShowJSON is one release manifest. It repeats the table's header lines
+// as fields (namespace, schema pin, activation labels) so a script never has to
+// parse prose.
+type releaseShowJSON struct {
+	Namespace     releaseNamespaceJSON `json:"namespace"`
+	Name          string               `json:"name"`
+	Version       uint64               `json:"version"`
+	Revision      uint64               `json:"revision"`
+	Current       bool                 `json:"current"`
+	Previous      bool                 `json:"previous"`
+	SchemaID      string               `json:"schema_id"`
+	SchemaVersion uint64               `json:"schema_version"`
+	Digest        string               `json:"digest"`
+	CreatedAt     *string              `json:"created_at"`
+	Entries       []releaseEntryJSON   `json:"entries"`
 }
 
 func (c *CLI) cmdReleaseShow(args []string) int {
@@ -287,7 +417,7 @@ func (c *CLI) cmdReleaseShow(args []string) int {
 	}
 	conn, err := c.dialConn(cf)
 	if err != nil {
-		return c.fail("%v", err)
+		return c.failErr("", err)
 	}
 	defer func() { _ = conn.Close() }()
 	ctx, cancel := callContext()
@@ -296,7 +426,7 @@ func (c *CLI) cmdReleaseShow(args []string) int {
 		Namespace: ns, Name: name, Version: version,
 	})
 	if err != nil {
-		return c.fail("release show: %v", err)
+		return c.failErr("release show", err)
 	}
 	return c.printRelease(resp.GetRelease(), 0, false, false)
 }
@@ -304,6 +434,27 @@ func (c *CLI) cmdReleaseShow(args []string) int {
 func (c *CLI) printRelease(release *kmsv1.ConfigurationRelease, revision uint64, current, previous bool) int {
 	if release == nil {
 		return c.fail("server returned an empty release")
+	}
+	entries := append([]*kmsv1.ConfigurationReleaseEntry(nil), release.GetEntries()...)
+	sort.Slice(entries, func(i, j int) bool { return entries[i].GetAlias() < entries[j].GetAlias() })
+	if c.jsonOutput() {
+		document := releaseShowJSON{
+			Namespace:     releaseNamespaceOf(release.GetNamespace()),
+			Name:          release.GetName(),
+			Version:       release.GetVersion(),
+			Revision:      revision,
+			Current:       current,
+			Previous:      previous,
+			SchemaID:      release.GetSchemaId(),
+			SchemaVersion: release.GetSchemaVersion(),
+			Digest:        release.GetDigest(),
+			CreatedAt:     jsonTime(release.GetCreatedAtUnixMs()),
+			Entries:       make([]releaseEntryJSON, 0, len(entries)),
+		}
+		for _, entry := range entries {
+			document.Entries = append(document.Entries, releaseEntryToJSON(entry))
+		}
+		return c.printJSON(document)
 	}
 	_, _ = fmt.Fprintf(c.Stdout, "%s/%s version %d\n", namespaceDisplay(release.GetNamespace()), release.GetName(), release.GetVersion())
 	_, _ = fmt.Fprintf(c.Stdout, "Digest: %s\n", release.GetDigest())
@@ -316,16 +467,27 @@ func (c *CLI) printRelease(release *kmsv1.ConfigurationRelease, revision uint64,
 	if current || previous {
 		_, _ = fmt.Fprintf(c.Stdout, "Labels: current=%t previous=%t\n", current, previous)
 	}
-	tw := tabwriter.NewWriter(c.Stdout, 0, 4, 2, ' ', 0)
-	_, _ = fmt.Fprintln(tw, "ALIAS\tKIND\tPATH\tVERSION\tCONTENT TYPE\tPARAMETER DIGEST")
-	entries := append([]*kmsv1.ConfigurationReleaseEntry(nil), release.GetEntries()...)
-	sort.Slice(entries, func(i, j int) bool { return entries[i].GetAlias() < entries[j].GetAlias() })
+	rows := make([][]string, 0, len(entries))
 	for _, entry := range entries {
-		_, _ = fmt.Fprintf(tw, "%s\t%s\t%s\t%d\t%s\t%s\n",
-			entry.GetAlias(), entry.GetKind(), displayPath(entry.GetRef()), entry.GetVersion(), entry.GetContentType(), entry.GetParameterDigest())
+		rows = append(rows, []string{
+			entry.GetAlias(), entry.GetKind(), displayPath(entry.GetRef()),
+			strconv.FormatUint(entry.GetVersion(), 10), entry.GetContentType(), entry.GetParameterDigest(),
+		})
 	}
-	_ = tw.Flush()
+	c.printTable([]string{"ALIAS", "KIND", "PATH", "VERSION", "CONTENT TYPE", "PARAMETER DIGEST"}, rows)
 	return 0
+}
+
+// releaseListItemJSON is one row of `release list`: every table column plus the
+// creation time, which the table has no room for.
+type releaseListItemJSON struct {
+	Name      string  `json:"name"`
+	Version   uint64  `json:"version"`
+	Current   bool    `json:"current"`
+	Previous  bool    `json:"previous"`
+	Revision  uint64  `json:"revision"`
+	Digest    string  `json:"digest"`
+	CreatedAt *string `json:"created_at"`
 }
 
 func (c *CLI) cmdReleaseList(args []string) int {
@@ -351,33 +513,79 @@ func (c *CLI) cmdReleaseList(args []string) int {
 	}
 	conn, err := c.dialConn(cf)
 	if err != nil {
-		return c.fail("%v", err)
+		return c.failErr("", err)
 	}
 	defer func() { _ = conn.Close() }()
 	ctx, cancel := callContext()
 	defer cancel()
 	client := kmsv1.NewConfigurationReleaseServiceClient(conn)
-	tw := tabwriter.NewWriter(c.Stdout, 0, 4, 2, ' ', 0)
-	_, _ = fmt.Fprintln(tw, "NAME\tVERSION\tCURRENT\tPREVIOUS\tREVISION\tDIGEST")
+	rows := [][]string{}
+	items := []releaseListItemJSON{}
 	pageToken := ""
 	for {
 		resp, listErr := client.ListReleases(cf.authCtx(ctx), &kmsv1.ListReleasesRequest{
 			Namespace: ns, Name: name, PageSize: int32(*pageSize), PageToken: pageToken,
 		})
 		if listErr != nil {
-			return c.fail("release list: %v", listErr)
+			return c.failErr("release list", listErr)
 		}
 		for _, summary := range resp.GetReleases() {
 			release := summary.GetRelease()
-			_, _ = fmt.Fprintf(tw, "%s\t%d\t%t\t%t\t%d\t%s\n", release.GetName(), release.GetVersion(), summary.GetCurrent(), summary.GetPrevious(), summary.GetActivationRevision(), release.GetDigest())
+			if c.jsonOutput() {
+				items = append(items, releaseListItemJSON{
+					Name:      release.GetName(),
+					Version:   release.GetVersion(),
+					Current:   summary.GetCurrent(),
+					Previous:  summary.GetPrevious(),
+					Revision:  summary.GetActivationRevision(),
+					Digest:    release.GetDigest(),
+					CreatedAt: jsonTime(release.GetCreatedAtUnixMs()),
+				})
+				continue
+			}
+			rows = append(rows, []string{
+				release.GetName(), strconv.FormatUint(release.GetVersion(), 10),
+				strconv.FormatBool(summary.GetCurrent()), strconv.FormatBool(summary.GetPrevious()),
+				strconv.FormatUint(summary.GetActivationRevision(), 10), release.GetDigest(),
+			})
 		}
 		pageToken = resp.GetNextPageToken()
 		if pageToken == "" {
 			break
 		}
 	}
-	_ = tw.Flush()
+	if c.jsonOutput() {
+		// The loop above followed every page, so the result set is complete and
+		// there is no token to hand back.
+		return c.printList(items, "")
+	}
+	c.printTable([]string{"NAME", "VERSION", "CURRENT", "PREVIOUS", "REVISION", "DIGEST"}, rows)
 	return 0
+}
+
+// releaseVersionJSON identifies one side of a diff.
+type releaseVersionJSON struct {
+	Name    string `json:"name"`
+	Version uint64 `json:"version"`
+}
+
+// releaseEntryChange is an alias present in both releases whose pin moved.
+type releaseEntryChange struct {
+	Alias string           `json:"alias"`
+	From  releaseEntryJSON `json:"from"`
+	To    releaseEntryJSON `json:"to"`
+}
+
+// releaseDiff is the alias-keyed difference between two release manifests. It
+// is computed once and rendered three ways — the JSON document, the diff
+// table, and the preview `release activate` prints before it asks for
+// confirmation — so all three can never disagree.
+type releaseDiff struct {
+	From    releaseVersionJSON   `json:"from"`
+	To      releaseVersionJSON   `json:"to"`
+	Added   []releaseEntryJSON   `json:"added"`
+	Removed []releaseEntryJSON   `json:"removed"`
+	Changed []releaseEntryChange `json:"changed"`
 }
 
 func (c *CLI) cmdReleaseDiff(args []string) int {
@@ -406,7 +614,7 @@ func (c *CLI) cmdReleaseDiff(args []string) int {
 	}
 	conn, err := c.dialConn(cf)
 	if err != nil {
-		return c.fail("%v", err)
+		return c.failErr("", err)
 	}
 	defer func() { _ = conn.Close() }()
 	ctx, cancel := callContext()
@@ -414,17 +622,24 @@ func (c *CLI) cmdReleaseDiff(args []string) int {
 	client := kmsv1.NewConfigurationReleaseServiceClient(conn)
 	fromResp, err := client.GetRelease(cf.authCtx(ctx), &kmsv1.GetReleaseRequest{Namespace: ns, Name: pos[1], Version: fromVersion})
 	if err != nil {
-		return c.fail("release diff: reading version %d: %v", fromVersion, err)
+		return c.failErr(fmt.Sprintf("release diff: reading version %d", fromVersion), err)
 	}
 	toResp, err := client.GetRelease(cf.authCtx(ctx), &kmsv1.GetReleaseRequest{Namespace: ns, Name: pos[1], Version: toVersion})
 	if err != nil {
-		return c.fail("release diff: reading version %d: %v", toVersion, err)
+		return c.failErr(fmt.Sprintf("release diff: reading version %d", toVersion), err)
 	}
-	printReleaseDiff(c.Stdout, fromResp.GetRelease(), toResp.GetRelease())
+	diff := computeReleaseDiff(fromResp.GetRelease(), toResp.GetRelease())
+	if c.jsonOutput() {
+		return c.printJSON(diff)
+	}
+	writeReleaseDiff(c.Stdout, diff)
 	return 0
 }
 
-func printReleaseDiff(w io.Writer, from, to *kmsv1.ConfigurationRelease) {
+// computeReleaseDiff pairs the two manifests by alias. It is pure: nothing is
+// rendered or fetched here, so the JSON document, the table, and the activation
+// preview all describe the same comparison.
+func computeReleaseDiff(from, to *kmsv1.ConfigurationRelease) releaseDiff {
 	fromEntries := make(map[string]*kmsv1.ConfigurationReleaseEntry)
 	toEntries := make(map[string]*kmsv1.ConfigurationReleaseEntry)
 	aliases := make(map[string]struct{})
@@ -445,27 +660,68 @@ func printReleaseDiff(w io.Writer, from, to *kmsv1.ConfigurationRelease) {
 		ordered = append(ordered, alias)
 	}
 	sort.Strings(ordered)
-	tw := tabwriter.NewWriter(w, 0, 4, 2, ' ', 0)
-	_, _ = fmt.Fprintln(tw, "ALIAS\tCHANGE\tKIND\tPATH\tVERSION\tPARAMETER DIGEST")
+	diff := releaseDiff{
+		From:    releaseVersionJSON{Name: from.GetName(), Version: from.GetVersion()},
+		To:      releaseVersionJSON{Name: to.GetName(), Version: to.GetVersion()},
+		Added:   []releaseEntryJSON{},
+		Removed: []releaseEntryJSON{},
+		Changed: []releaseEntryChange{},
+	}
 	for _, alias := range ordered {
 		before, hadBefore := fromEntries[alias]
 		after, hasAfter := toEntries[alias]
-		change := "changed"
 		switch {
 		case !hadBefore:
-			change = "added"
+			diff.Added = append(diff.Added, releaseEntryToJSON(after))
 		case !hasAfter:
-			change = "removed"
-		case releaseEntriesEqual(before, after):
-			continue
+			diff.Removed = append(diff.Removed, releaseEntryToJSON(before))
+		case !releaseEntriesEqual(before, after):
+			diff.Changed = append(diff.Changed, releaseEntryChange{
+				Alias: alias, From: releaseEntryToJSON(before), To: releaseEntryToJSON(after),
+			})
 		}
-		_, _ = fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n", alias, change,
-			diffText(entryKind(before), entryKind(after)),
-			diffText(entryPath(before), entryPath(after)),
-			diffText(entryVersion(before), entryVersion(after)),
-			diffText(entryDigest(before), entryDigest(after)))
 	}
-	_ = tw.Flush()
+	return diff
+}
+
+// writeReleaseDiff renders a computed diff as one alias-ordered table. Aliases
+// are unique across the three categories, so sorting the merged rows restores
+// the single ordering the diff has always printed.
+func writeReleaseDiff(w io.Writer, diff releaseDiff) {
+	rows := make([][]string, 0, len(diff.Added)+len(diff.Removed)+len(diff.Changed))
+	var absent releaseEntryJSON
+	for _, entry := range diff.Added {
+		rows = append(rows, releaseDiffRow(entry.Alias, "added", absent, false, entry, true))
+	}
+	for _, entry := range diff.Removed {
+		rows = append(rows, releaseDiffRow(entry.Alias, "removed", entry, true, absent, false))
+	}
+	for _, change := range diff.Changed {
+		rows = append(rows, releaseDiffRow(change.Alias, "changed", change.From, true, change.To, true))
+	}
+	sort.Slice(rows, func(i, j int) bool { return rows[i][0] < rows[j][0] })
+	writeAlignedTable(w, []string{"ALIAS", "CHANGE", "KIND", "PATH", "VERSION", "PARAMETER DIGEST"}, rows)
+}
+
+// releaseDiffRow renders one row; each cell shows "before -> after" when the
+// two sides differ. A side the alias is missing from renders as empty cells.
+func releaseDiffRow(alias, change string, before releaseEntryJSON, hadBefore bool, after releaseEntryJSON, hasAfter bool) []string {
+	return []string{
+		alias, change,
+		diffText(before.Kind, after.Kind),
+		diffText(before.Path, after.Path),
+		diffText(diffVersionText(before.Version, hadBefore), diffVersionText(after.Version, hasAfter)),
+		diffText(before.ParameterDigest, after.ParameterDigest),
+	}
+}
+
+// diffVersionText renders a pin version, leaving the cell blank (rather than
+// "0") for the side an alias is absent from.
+func diffVersionText(version uint64, present bool) string {
+	if !present {
+		return ""
+	}
+	return strconv.FormatUint(version, 10)
 }
 
 func releaseEntriesEqual(a, b *kmsv1.ConfigurationReleaseEntry) bool {
@@ -519,6 +775,28 @@ func (v *optionalUint64) Set(raw string) error {
 	return nil
 }
 
+// releaseActivationJSON is the outcome of an activation. activate and rollback
+// share it because they are the same RPC seen from two directions.
+type releaseActivationJSON struct {
+	Namespace       releaseNamespaceJSON `json:"namespace"`
+	Name            string               `json:"name"`
+	Version         uint64               `json:"version"`
+	PreviousVersion uint64               `json:"previous_version"`
+	Revision        uint64               `json:"revision"`
+	Changed         bool                 `json:"changed"`
+}
+
+func releaseActivationOf(ns *kmsv1.NamespaceRef, name string, resp *kmsv1.ActivateReleaseResponse) releaseActivationJSON {
+	return releaseActivationJSON{
+		Namespace:       releaseNamespaceOf(ns),
+		Name:            name,
+		Version:         resp.GetCurrentVersion(),
+		PreviousVersion: resp.GetPreviousVersion(),
+		Revision:        resp.GetActivationRevision(),
+		Changed:         resp.GetChanged(),
+	}
+}
+
 func (c *CLI) cmdReleaseActivate(args []string) int {
 	fs := c.newFlags("release activate")
 	cf := addConnFlags(c, fs)
@@ -537,33 +815,79 @@ func (c *CLI) cmdReleaseActivate(args []string) int {
 	if expected.set {
 		req.ExpectedCurrentVersion = &expected.value
 	}
-	return c.activateRelease(cf, req, "activate")
-}
 
-func (c *CLI) activateRelease(cf *connFlags, req *kmsv1.ActivateReleaseRequest, verb string) int {
 	conn, err := c.dialConn(cf)
 	if err != nil {
-		return c.fail("%v", err)
+		return c.failErr("", err)
 	}
 	defer func() { _ = conn.Close() }()
 	ctx, cancel := callContext()
 	defer cancel()
-	resp, err := kmsv1.NewConfigurationReleaseServiceClient(conn).ActivateRelease(cf.authCtx(ctx), req)
-	if err != nil {
-		return c.failReleaseActivation(verb, err)
+	client := kmsv1.NewConfigurationReleaseServiceClient(conn)
+	if code := c.previewReleaseActivation(ctx, cf, client, ns, name, version); code != exitOK {
+		return code
 	}
-	_, _ = fmt.Fprintf(c.Stdout, "Active %s/%s version %d (previous %d, revision %d, changed=%t)\n",
-		namespaceDisplay(req.GetNamespace()), req.GetName(), resp.GetCurrentVersion(), resp.GetPreviousVersion(), resp.GetActivationRevision(), resp.GetChanged())
+	if ok, code := c.confirmYesNo(fmt.Sprintf("activate release %s v%d in %s", name, version, namespaceDisplay(ns))); !ok {
+		return code
+	}
+	resp, err := client.ActivateRelease(cf.authCtx(ctx), req)
+	if err != nil {
+		return c.failReleaseActivation("activate", err)
+	}
+	line := fmt.Sprintf("Active %s/%s version %d (previous %d, revision %d, changed=%t)",
+		namespaceDisplay(ns), name, resp.GetCurrentVersion(), resp.GetPreviousVersion(), resp.GetActivationRevision(), resp.GetChanged())
+	if c.jsonOutput() {
+		c.info("%s", line)
+		return c.printJSON(releaseActivationOf(ns, name, resp))
+	}
+	_, _ = fmt.Fprintln(c.Stdout, line)
 	return 0
 }
 
+// previewReleaseActivation shows what the activation would change: the diff
+// from the currently active release to the requested one, or a note that the
+// namespace has none yet. This is the thing the operator confirms against, so
+// it goes straight to stderr and --quiet never suppresses it. A namespace with
+// no active release answers NotFound, which is not an error here.
+func (c *CLI) previewReleaseActivation(ctx context.Context, cf *connFlags, client kmsv1.ConfigurationReleaseServiceClient, ns *kmsv1.NamespaceRef, name string, version uint64) int {
+	active, err := client.GetActiveRelease(cf.authCtx(ctx), &kmsv1.GetActiveReleaseRequest{Namespace: ns, Name: name})
+	if err != nil {
+		if status.Code(err) == codes.NotFound {
+			c.printNoActiveRelease(ns, name, version)
+			return exitOK
+		}
+		return c.failErr("release activate: reading the active release", err)
+	}
+	if active.GetRelease() == nil {
+		c.printNoActiveRelease(ns, name, version)
+		return exitOK
+	}
+	requested, err := client.GetRelease(cf.authCtx(ctx), &kmsv1.GetReleaseRequest{Namespace: ns, Name: name, Version: version})
+	if err != nil {
+		return c.failErr(fmt.Sprintf("release activate: reading version %d", version), err)
+	}
+	_, _ = fmt.Fprintf(c.Stderr, "Activating %s v%d in %s over the active v%d:\n",
+		name, version, namespaceDisplay(ns), active.GetRelease().GetVersion())
+	writeReleaseDiff(c.Stderr, computeReleaseDiff(active.GetRelease(), requested.GetRelease()))
+	return exitOK
+}
+
+func (c *CLI) printNoActiveRelease(ns *kmsv1.NamespaceRef, name string, version uint64) {
+	_, _ = fmt.Fprintf(c.Stderr, "No active release in %s; %s v%d will become the first.\n", namespaceDisplay(ns), name, version)
+}
+
+// failReleaseActivation reports a refused activation. A validation failure
+// arrives as FailedPrecondition carrying a ValidateReleaseResponse detail: the
+// individual errors are printed for the operator, and the exit code stays the
+// one the status maps to (7) so a script can tell "invalid release" from
+// "server unreachable".
 func (c *CLI) failReleaseActivation(verb string, err error) int {
 	if validation := releaseValidationDetails(err); validation != nil {
 		_, _ = fmt.Fprintf(c.Stderr, "error: release %s: configuration release validation failed\n", verb)
 		printReleaseValidationErrors(c.Stderr, validation.GetErrors())
-		return 1
+		return exitCodeFor(err)
 	}
-	return c.fail("release %s: %v", verb, err)
+	return c.failErr("release "+verb, err)
 }
 
 func (c *CLI) cmdReleaseRollback(args []string) int {
@@ -586,7 +910,7 @@ func (c *CLI) cmdReleaseRollback(args []string) int {
 
 	conn, err := c.dialConn(cf)
 	if err != nil {
-		return c.fail("%v", err)
+		return c.failErr("", err)
 	}
 	defer func() { _ = conn.Close() }()
 	ctx, cancel := callContext()
@@ -594,7 +918,7 @@ func (c *CLI) cmdReleaseRollback(args []string) int {
 	client := kmsv1.NewConfigurationReleaseServiceClient(conn)
 	active, err := client.GetActiveRelease(cf.authCtx(ctx), &kmsv1.GetActiveReleaseRequest{Namespace: ns, Name: name})
 	if err != nil {
-		return c.fail("release rollback: reading active release: %v", err)
+		return c.failErr("release rollback: reading active release", err)
 	}
 	target := active.GetPreviousVersion()
 	if len(pos) == 3 {
@@ -606,6 +930,11 @@ func (c *CLI) cmdReleaseRollback(args []string) int {
 	if target == 0 {
 		return c.fail("release rollback: no previous release is available")
 	}
+	// Confirm last: everything above only reads, so the operator is asked only
+	// once there is a target to roll back to.
+	if ok, code := c.confirmDestructive("roll back the active release of", namespaceDisplay(ns)); !ok {
+		return code
+	}
 	expected := active.GetRelease().GetVersion()
 	resp, err := client.ActivateRelease(cf.authCtx(ctx), &kmsv1.ActivateReleaseRequest{
 		Namespace: ns, Name: name, Version: target, ExpectedCurrentVersion: &expected,
@@ -613,7 +942,12 @@ func (c *CLI) cmdReleaseRollback(args []string) int {
 	if err != nil {
 		return c.failReleaseActivation("rollback", err)
 	}
-	_, _ = fmt.Fprintf(c.Stdout, "Rolled back %s/%s to version %d (revision %d)\n", namespaceDisplay(ns), name, resp.GetCurrentVersion(), resp.GetActivationRevision())
+	line := fmt.Sprintf("Rolled back %s/%s to version %d (revision %d)", namespaceDisplay(ns), name, resp.GetCurrentVersion(), resp.GetActivationRevision())
+	if c.jsonOutput() {
+		c.info("%s", line)
+		return c.printJSON(releaseActivationOf(ns, name, resp))
+	}
+	_, _ = fmt.Fprintln(c.Stdout, line)
 	return 0
 }
 
@@ -636,7 +970,7 @@ func (c *CLI) cmdReleaseSubscribers(args []string) int {
 	}
 	conn, err := c.dialConn(cf)
 	if err != nil {
-		return c.fail("%v", err)
+		return c.failErr("", err)
 	}
 	defer func() { _ = conn.Close() }()
 	ctx, cancel := callContext()
@@ -650,7 +984,7 @@ func (c *CLI) cmdReleaseSubscribers(args []string) int {
 			Namespace: ns, ReleaseName: pos[1], PageSize: int32(*pageSize), PageToken: pageToken,
 		})
 		if listErr != nil {
-			return c.fail("release subscribers: %v", listErr)
+			return c.failErr("release subscribers", listErr)
 		}
 		currentRevision = max(currentRevision, resp.GetCurrentRevision())
 		mergeReleaseSubscriberStates(instances, resp.GetSubscribers())
@@ -658,6 +992,10 @@ func (c *CLI) cmdReleaseSubscribers(args []string) int {
 		if pageToken == "" {
 			break
 		}
+	}
+	if c.jsonOutput() {
+		// Every page has been followed, so there is no token to hand back.
+		return c.printList(releaseSubscriberInstancesJSON(instances, currentRevision), "")
 	}
 	writeReleaseSubscriberInstances(c.Stdout, instances, currentRevision)
 	return 0
@@ -699,7 +1037,9 @@ func mergeReleaseSubscriberStates(instances map[releaseSubscriberInstanceKey]*re
 	}
 }
 
-func writeReleaseSubscriberInstances(w io.Writer, instances map[releaseSubscriberInstanceKey]*releaseSubscriberInstanceStatus, currentRevision uint64) {
+// sortedReleaseSubscriberKeys orders instances the way both renderers present
+// them: by identity, then client, then instance id.
+func sortedReleaseSubscriberKeys(instances map[releaseSubscriberInstanceKey]*releaseSubscriberInstanceStatus) []releaseSubscriberInstanceKey {
 	keys := make([]releaseSubscriberInstanceKey, 0, len(instances))
 	for key := range instances {
 		keys = append(keys, key)
@@ -713,23 +1053,86 @@ func writeReleaseSubscriberInstances(w io.Writer, instances map[releaseSubscribe
 		}
 		return keys[i].instance < keys[j].instance
 	})
-	tw := tabwriter.NewWriter(w, 0, 4, 2, ' ', 0)
-	_, _ = fmt.Fprintln(tw, "IDENTITY\tCLIENT\tINSTANCE\tRECEIVED\tPREPARED\tAPPLIED\tREJECTED\tLAG\tCONNECTED")
+	return keys
+}
+
+// releaseSubscriberLag is how many activations an instance is behind the
+// namespace's current revision.
+func releaseSubscriberLag(instance *releaseSubscriberInstanceStatus, currentRevision uint64) uint64 {
+	if currentRevision > instance.latestRevision {
+		return currentRevision - instance.latestRevision
+	}
+	return 0
+}
+
+// releaseSubscriberStateJSON is one lifecycle state an instance reported. The
+// table squeezes it into "v1/r2[:category]"; JSON keeps the parts separate.
+type releaseSubscriberStateJSON struct {
+	ReleaseVersion     uint64 `json:"release_version"`
+	ActivationRevision uint64 `json:"activation_revision"`
+	RejectionCategory  string `json:"rejection_category,omitempty"`
+}
+
+// releaseSubscriberJSON is one row of `release subscribers`. A state the
+// instance never reported is null, the JSON form of the table's "-".
+type releaseSubscriberJSON struct {
+	Identity  string                      `json:"identity"`
+	Client    string                      `json:"client"`
+	Instance  string                      `json:"instance"`
+	Received  *releaseSubscriberStateJSON `json:"received"`
+	Prepared  *releaseSubscriberStateJSON `json:"prepared"`
+	Applied   *releaseSubscriberStateJSON `json:"applied"`
+	Rejected  *releaseSubscriberStateJSON `json:"rejected"`
+	Lag       uint64                      `json:"lag"`
+	Connected bool                        `json:"connected"`
+}
+
+func releaseSubscriberStateToJSON(state *kmsv1.ReleaseSubscriberState) *releaseSubscriberStateJSON {
+	if state == nil {
+		return nil
+	}
+	return &releaseSubscriberStateJSON{
+		ReleaseVersion:     state.GetReleaseVersion(),
+		ActivationRevision: state.GetActivationRevision(),
+		RejectionCategory:  state.GetRejectionCategory(),
+	}
+}
+
+func releaseSubscriberInstancesJSON(instances map[releaseSubscriberInstanceKey]*releaseSubscriberInstanceStatus, currentRevision uint64) []releaseSubscriberJSON {
+	items := make([]releaseSubscriberJSON, 0, len(instances))
+	for _, key := range sortedReleaseSubscriberKeys(instances) {
+		instance := instances[key]
+		items = append(items, releaseSubscriberJSON{
+			Identity:  instance.identity,
+			Client:    instance.client,
+			Instance:  instance.instance,
+			Received:  releaseSubscriberStateToJSON(instance.states[domain.ReleaseStateReceived]),
+			Prepared:  releaseSubscriberStateToJSON(instance.states[domain.ReleaseStatePrepared]),
+			Applied:   releaseSubscriberStateToJSON(instance.states[domain.ReleaseStateApplied]),
+			Rejected:  releaseSubscriberStateToJSON(instance.states[domain.ReleaseStateRejected]),
+			Lag:       releaseSubscriberLag(instance, currentRevision),
+			Connected: instance.connected,
+		})
+	}
+	return items
+}
+
+func writeReleaseSubscriberInstances(w io.Writer, instances map[releaseSubscriberInstanceKey]*releaseSubscriberInstanceStatus, currentRevision uint64) {
+	keys := sortedReleaseSubscriberKeys(instances)
+	rows := make([][]string, 0, len(keys))
 	for _, key := range keys {
 		instance := instances[key]
-		lag := uint64(0)
-		if currentRevision > instance.latestRevision {
-			lag = currentRevision - instance.latestRevision
-		}
-		_, _ = fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%d\t%t\n",
+		rows = append(rows, []string{
 			instance.identity, instance.client, instance.instance,
 			releaseSubscriberStateText(instance.states[domain.ReleaseStateReceived]),
 			releaseSubscriberStateText(instance.states[domain.ReleaseStatePrepared]),
 			releaseSubscriberStateText(instance.states[domain.ReleaseStateApplied]),
 			releaseSubscriberStateText(instance.states[domain.ReleaseStateRejected]),
-			lag, instance.connected)
+			strconv.FormatUint(releaseSubscriberLag(instance, currentRevision), 10),
+			strconv.FormatBool(instance.connected),
+		})
 	}
-	_ = tw.Flush()
+	writeAlignedTable(w, []string{"IDENTITY", "CLIENT", "INSTANCE", "RECEIVED", "PREPARED", "APPLIED", "REJECTED", "LAG", "CONNECTED"}, rows)
 }
 
 func releaseSubscriberStateText(state *kmsv1.ReleaseSubscriberState) string {
@@ -759,6 +1162,13 @@ func (c *CLI) cmdReleaseSchema(args []string) int {
 	}
 }
 
+// releaseSchemaJSON identifies an immutable schema version.
+type releaseSchemaJSON struct {
+	ID      string `json:"id"`
+	Version uint64 `json:"version"`
+	Digest  string `json:"digest"`
+}
+
 func (c *CLI) cmdReleaseSchemaCreate(args []string) int {
 	fs := c.newFlags("release schema create")
 	cf := addConnFlags(c, fs)
@@ -774,11 +1184,11 @@ func (c *CLI) cmdReleaseSchemaCreate(args []string) int {
 	}
 	schemaJSON, err := readSchemaJSON(pos[1])
 	if err != nil {
-		return c.fail("reading schema: %v", err)
+		return c.failErr("reading schema", err)
 	}
 	conn, err := c.dialConn(cf)
 	if err != nil {
-		return c.fail("%v", err)
+		return c.failErr("", err)
 	}
 	defer func() { _ = conn.Close() }()
 	ctx, cancel := callContext()
@@ -787,9 +1197,16 @@ func (c *CLI) cmdReleaseSchemaCreate(args []string) int {
 		Id: pos[0], SchemaJson: schemaJSON, MetadataJson: *metadata,
 	})
 	if err != nil {
-		return c.fail("release schema create: %v", err)
+		return c.failErr("release schema create", err)
 	}
-	_, _ = fmt.Fprintf(c.Stdout, "Created schema %s version %d (digest %s)\n", resp.GetSchema().GetId(), resp.GetSchema().GetVersion(), resp.GetSchema().GetDigest())
+	line := fmt.Sprintf("Created schema %s version %d (digest %s)", resp.GetSchema().GetId(), resp.GetSchema().GetVersion(), resp.GetSchema().GetDigest())
+	if c.jsonOutput() {
+		c.info("%s", line)
+		return c.printJSON(releaseSchemaJSON{
+			ID: resp.GetSchema().GetId(), Version: resp.GetSchema().GetVersion(), Digest: resp.GetSchema().GetDigest(),
+		})
+	}
+	_, _ = fmt.Fprintln(c.Stdout, line)
 	return 0
 }
 
@@ -814,6 +1231,15 @@ func readSchemaJSON(path string) (string, error) {
 	return string(encoded), nil
 }
 
+// releaseSchemaShowJSON embeds the schema document itself as JSON rather than
+// as a string, so a caller can pipe it straight into a validator.
+type releaseSchemaShowJSON struct {
+	ID      string         `json:"id"`
+	Version uint64         `json:"version"`
+	Digest  string         `json:"digest"`
+	Schema  jsontext.Value `json:"schema"`
+}
+
 func (c *CLI) cmdReleaseSchemaShow(args []string) int {
 	fs := c.newFlags("release schema show")
 	cf := addConnFlags(c, fs)
@@ -832,18 +1258,35 @@ func (c *CLI) cmdReleaseSchemaShow(args []string) int {
 	}
 	conn, err := c.dialConn(cf)
 	if err != nil {
-		return c.fail("%v", err)
+		return c.failErr("", err)
 	}
 	defer func() { _ = conn.Close() }()
 	ctx, cancel := callContext()
 	defer cancel()
 	resp, err := kmsv1.NewConfigurationSchemaServiceClient(conn).GetSchema(cf.authCtx(ctx), &kmsv1.GetSchemaRequest{Id: pos[0], Version: version})
 	if err != nil {
-		return c.fail("release schema show: %v", err)
+		return c.failErr("release schema show", err)
 	}
 	schema := resp.GetSchema()
+	if c.jsonOutput() {
+		document := jsontext.Value(schema.GetSchemaJson())
+		if len(bytes.TrimSpace(document)) == 0 {
+			document = jsontext.Value("null")
+		}
+		return c.printJSON(releaseSchemaShowJSON{
+			ID: schema.GetId(), Version: schema.GetVersion(), Digest: schema.GetDigest(), Schema: document,
+		})
+	}
 	_, _ = fmt.Fprintf(c.Stdout, "Schema %s version %d\nDigest: %s\n%s\n", schema.GetId(), schema.GetVersion(), schema.GetDigest(), schema.GetSchemaJson())
 	return 0
+}
+
+// releaseSchemaListItemJSON is one row of `release schema list`.
+type releaseSchemaListItemJSON struct {
+	ID        string  `json:"id"`
+	Version   uint64  `json:"version"`
+	Digest    string  `json:"digest"`
+	CreatedAt *string `json:"created_at"`
 }
 
 func (c *CLI) cmdReleaseSchemaList(args []string) int {
@@ -862,30 +1305,43 @@ func (c *CLI) cmdReleaseSchemaList(args []string) int {
 	}
 	conn, err := c.dialConn(cf)
 	if err != nil {
-		return c.fail("%v", err)
+		return c.failErr("", err)
 	}
 	defer func() { _ = conn.Close() }()
 	ctx, cancel := callContext()
 	defer cancel()
 	client := kmsv1.NewConfigurationSchemaServiceClient(conn)
-	tw := tabwriter.NewWriter(c.Stdout, 0, 4, 2, ' ', 0)
-	_, _ = fmt.Fprintln(tw, "ID\tVERSION\tDIGEST\tCREATED")
+	rows := [][]string{}
+	items := []releaseSchemaListItemJSON{}
 	pageToken := ""
 	for {
 		resp, listErr := client.ListSchemas(cf.authCtx(ctx), &kmsv1.ListSchemasRequest{Id: id, PageSize: int32(*pageSize), PageToken: pageToken})
 		if listErr != nil {
-			return c.fail("release schema list: %v", listErr)
+			return c.failErr("release schema list", listErr)
 		}
 		for _, schema := range resp.GetSchemas() {
+			if c.jsonOutput() {
+				items = append(items, releaseSchemaListItemJSON{
+					ID: schema.GetId(), Version: schema.GetVersion(), Digest: schema.GetDigest(),
+					CreatedAt: jsonTime(schema.GetCreatedAtUnixMs()),
+				})
+				continue
+			}
 			created := time.UnixMilli(schema.GetCreatedAtUnixMs()).UTC().Format(time.RFC3339)
-			_, _ = fmt.Fprintf(tw, "%s\t%d\t%s\t%s\n", schema.GetId(), schema.GetVersion(), schema.GetDigest(), created)
+			rows = append(rows, []string{
+				schema.GetId(), strconv.FormatUint(schema.GetVersion(), 10), schema.GetDigest(), created,
+			})
 		}
 		pageToken = resp.GetNextPageToken()
 		if pageToken == "" {
 			break
 		}
 	}
-	_ = tw.Flush()
+	if c.jsonOutput() {
+		// Every page has been followed, so there is no token to hand back.
+		return c.printList(items, "")
+	}
+	c.printTable([]string{"ID", "VERSION", "DIGEST", "CREATED"}, rows)
 	return 0
 }
 
