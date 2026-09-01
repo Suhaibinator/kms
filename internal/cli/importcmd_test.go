@@ -142,7 +142,7 @@ func TestImportDryRun(t *testing.T) {
 	c := newTestCLI()
 	code := c.cmdImport([]string{
 		"--from", src, "--namespace", "prod/gradethis",
-		"--dry-run", "--report", report, "--db", dbPath,
+		"--dry-run", "--report", report, "--sqlite-path", dbPath,
 	})
 	if code != 0 {
 		t.Fatalf("import dry-run exit = %d, stderr=%s", code, c.stderr())
@@ -224,10 +224,13 @@ func createOldStore(t *testing.T, path string, rows map[string]string) {
 	}
 }
 
-// newTestCLI builds a CLI with buffered output for assertions.
+// newTestCLI builds a CLI with buffered output for assertions and an empty
+// environment, so no command under test ever observes the developer's shell.
+// A test that needs a variable installs its own lookup with mapLookup.
 func newTestCLI() *testCLI {
 	c := &testCLI{out: &bytes.Buffer{}, err: &bytes.Buffer{}}
 	c.CLI = CLI{Stdout: c.out, Stderr: c.err, Stdin: nil}
+	c.CLI.lookupEnv = func(string) (string, bool) { return "", false }
 	return c
 }
 

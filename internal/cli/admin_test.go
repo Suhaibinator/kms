@@ -24,7 +24,7 @@ func TestInitCheckImportEndToEnd(t *testing.T) {
 
 	// init: create db + key file + bootstrap admin.
 	c := newTestCLI()
-	if code := c.cmdInit([]string{"--db", db, "--master-key-file", keyFile, "--admin", "root"}); code != 0 {
+	if code := c.cmdInit([]string{"--sqlite-path", db, "--kek-file", keyFile, "--admin", "root"}); code != 0 {
 		t.Fatalf("init exit=%d stderr=%s", code, c.stderr())
 	}
 	if !strings.Contains(c.stdout(), "token:") {
@@ -36,7 +36,7 @@ func TestInitCheckImportEndToEnd(t *testing.T) {
 
 	// check: database + key verification.
 	c2 := newTestCLI()
-	if code := c2.cmdCheck([]string{"--db", db, "--key-file", keyFile}); code != 0 {
+	if code := c2.cmdCheck([]string{"--sqlite-path", db, "--kek-file", keyFile}); code != 0 {
 		t.Fatalf("check exit=%d stderr=%s", code, c2.stderr())
 	}
 	if !strings.Contains(c2.stdout(), "Master key OK") {
@@ -50,7 +50,7 @@ func TestInitCheckImportEndToEnd(t *testing.T) {
 	c3 := newTestCLI()
 	code := c3.cmdImport([]string{
 		"--from", src, "--namespace", "prod/gradethis",
-		"--db", db, "--master-key-file", keyFile, "--report", report,
+		"--sqlite-path", db, "--kek-file", keyFile, "--report", report,
 	})
 	if code != 0 {
 		t.Fatalf("import exit=%d stderr=%s", code, c3.stderr())
@@ -92,11 +92,132 @@ func TestCheckUninitializedDatabase(t *testing.T) {
 	db := filepath.Join(dir, "fresh.db")
 	c := newTestCLI()
 	// A freshly opened (migrated) but un-keyed database reports that it needs init.
-	if code := c.cmdCheck([]string{"--db", db}); code != 0 {
+	if code := c.cmdCheck([]string{"--sqlite-path", db}); code != 0 {
 		t.Fatalf("check exit=%d stderr=%s", code, c.stderr())
 	}
 	if !strings.Contains(c.stdout(), "not yet initialized") {
 		t.Fatalf("check stdout = %s", c.stdout())
+	}
+}
+
+// TestInitHonoursEnvSQLitePath proves the offline commands read the same
+// KMS_* variables the server does: init with no flags at all lands on the
+// database and key file named by the environment, and says so.
+func TestInitHonoursEnvSQLitePath(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "from-env.db")
+	keyPath := filepath.Join(dir, "master.key")
+
+	c := newTestCLI()
+	c.lookupEnv = mapLookup(map[string]string{"KMS_SQLITE_PATH": dbPath, "KMS_KEK_FILE": keyPath})
+	if code := c.cmdInit(nil); code != 0 {
+		t.Fatalf("init exit=%d stderr=%s", code, c.stderr())
+	}
+	assertDBTarget(t, c.stdout(), dbPath, "env KMS_SQLITE_PATH")
+	if !fileExists(dbPath) {
+		t.Fatalf("init did not create %s; stdout=%s", dbPath, c.stdout())
+	}
+}
+
+// TestInitFlagBeatsEnvBeatsFile pins the resolution order for the database
+// path across all three layers, checking both the file that gets created and
+// the source the command reports.
+func TestInitFlagBeatsEnvBeatsFile(t *testing.T) {
+	dir := t.TempDir()
+	fileDB := filepath.Join(dir, "file.db")
+	envDB := filepath.Join(dir, "env.db")
+	flagDB := filepath.Join(dir, "flag.db")
+	keyPath := filepath.Join(dir, "master.key")
+	configPath := filepath.Join(dir, "kms.yaml")
+	writeFile(t, configPath, "storage:\n  sqlite_path: "+fileDB+"\n")
+	env := mapLookup(map[string]string{"KMS_SQLITE_PATH": envDB})
+
+	// The flag outranks both the environment and the file.
+	withFlag := newTestCLI()
+	withFlag.lookupEnv = env
+	if code := withFlag.cmdInit([]string{"--config", configPath, "--sqlite-path", flagDB, "--kek-file", keyPath}); code != 0 {
+		t.Fatalf("init exit=%d stderr=%s", code, withFlag.stderr())
+	}
+	assertDBTarget(t, withFlag.stdout(), flagDB, "flag --sqlite-path")
+	if !fileExists(flagDB) {
+		t.Fatalf("--sqlite-path did not create %s", flagDB)
+	}
+
+	// Without the flag, the environment outranks the file.
+	withEnv := newTestCLI()
+	withEnv.lookupEnv = env
+	if code := withEnv.cmdInit([]string{"--config", configPath, "--kek-file", keyPath}); code != 0 {
+		t.Fatalf("init exit=%d stderr=%s", code, withEnv.stderr())
+	}
+	assertDBTarget(t, withEnv.stdout(), envDB, "env KMS_SQLITE_PATH")
+	if !fileExists(envDB) {
+		t.Fatalf("KMS_SQLITE_PATH did not create %s", envDB)
+	}
+
+	// With neither, the config file supplies the path.
+	fromFile := newTestCLI() // newTestCLI's environment is empty
+	if code := fromFile.cmdInit([]string{"--config", configPath, "--kek-file", keyPath}); code != 0 {
+		t.Fatalf("init exit=%d stderr=%s", code, fromFile.stderr())
+	}
+	assertDBTarget(t, fromFile.stdout(), fileDB, "file storage.sqlite_path")
+	if !fileExists(fileDB) {
+		t.Fatalf("config file did not create %s", fileDB)
+	}
+}
+
+// TestInitRejectsStrayPositional guards the case that motivates
+// rejectPositionals: an argument the flag package would otherwise drop on the
+// floor must not be silently ignored by a command that creates a database.
+func TestInitRejectsStrayPositional(t *testing.T) {
+	keyPath := filepath.Join(t.TempDir(), "master.key")
+	c := newTestCLI()
+	if code := c.cmdInit([]string{"--kek-file", keyPath, "extra"}); code != 2 {
+		t.Fatalf("init exit=%d, want 2; stdout=%s stderr=%s", code, c.stdout(), c.stderr())
+	}
+	if !strings.Contains(c.stderr(), `unexpected argument "extra"`) {
+		t.Fatalf("stderr = %s", c.stderr())
+	}
+	if fileExists(keyPath) {
+		t.Fatal("a rejected invocation created the master key file")
+	}
+}
+
+// TestCheckVerifiesKeyFromEnv checks that the master key is verified from
+// KMS_KEK_FILE alone, with no flags on the command line.
+func TestCheckVerifiesKeyFromEnv(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "kms.db")
+	keyPath := filepath.Join(dir, "master.key")
+
+	init := newTestCLI()
+	if code := init.cmdInit([]string{"--sqlite-path", dbPath, "--kek-file", keyPath}); code != 0 {
+		t.Fatalf("init exit=%d stderr=%s", code, init.stderr())
+	}
+
+	c := newTestCLI()
+	c.lookupEnv = mapLookup(map[string]string{"KMS_SQLITE_PATH": dbPath, "KMS_KEK_FILE": keyPath})
+	if code := c.cmdCheck(nil); code != 0 {
+		t.Fatalf("check exit=%d stderr=%s", code, c.stderr())
+	}
+	if !strings.Contains(c.stdout(), "Master key OK.") {
+		t.Fatalf("check stdout = %s", c.stdout())
+	}
+}
+
+// TestServeHelpIsEnvIndependent keeps help output stable: the --config default
+// must be the empty string, never whatever KMS_CONFIG happens to hold, so
+// `serve -h` documents the flag rather than the current shell.
+func TestServeHelpIsEnvIndependent(t *testing.T) {
+	c := newTestCLI()
+	c.lookupEnv = mapLookup(map[string]string{"KMS_CONFIG": "/nope"})
+	if code := c.Run([]string{"serve", "-h"}); code != 0 {
+		t.Fatalf("serve -h exit=%d stderr=%s", code, c.stderr())
+	}
+	if !strings.Contains(c.stderr(), "--config FILE") {
+		t.Fatalf("help missing the --config flag: %s", c.stderr())
+	}
+	if strings.Contains(c.stderr(), "/nope") {
+		t.Fatalf("help leaked KMS_CONFIG: %s", c.stderr())
 	}
 }
 
@@ -119,7 +240,7 @@ func TestRotateAdminDirectDatabaseRecovery(t *testing.T) {
 	}
 
 	c := newTestCLI()
-	if code := c.Run([]string{"rotate-admin", "--db", db, "--name", "admin"}); code != 0 {
+	if code := c.Run([]string{"rotate-admin", "--sqlite-path", db, "--name", "admin"}); code != 0 {
 		t.Fatalf("rotate-admin exit=%d stderr=%s", code, c.stderr())
 	}
 	if !strings.Contains(c.stdout(), `Rotated admin identity "admin".`) {
@@ -173,11 +294,11 @@ func TestRotateAdminRejectsInvalidTargetsWithoutMutation(t *testing.T) {
 		args      func(db string) []string
 		wantError string
 	}{
-		{name: "missing name", target: "admin", kind: domain.IdentityKindAdmin, hasToken: true, args: func(db string) []string { return []string{"--db", db} }, wantError: "--name is required"},
-		{name: "unknown identity", target: "admin", kind: domain.IdentityKindAdmin, hasToken: true, args: func(db string) []string { return []string{"--db", db, "--name", "missing"} }, wantError: "identity missing"},
-		{name: "client identity", target: "client", kind: domain.IdentityKindClient, hasToken: true, args: func(db string) []string { return []string{"--db", db, "--name", "client"} }, wantError: "is not an admin"},
-		{name: "disabled admin", target: "admin", kind: domain.IdentityKindAdmin, disabled: true, hasToken: true, args: func(db string) []string { return []string{"--db", db, "--name", "admin"} }, wantError: "is disabled"},
-		{name: "admin without token", target: "admin", kind: domain.IdentityKindAdmin, args: func(db string) []string { return []string{"--db", db, "--name", "admin"} }, wantError: "has no token to rotate"},
+		{name: "missing name", target: "admin", kind: domain.IdentityKindAdmin, hasToken: true, args: func(db string) []string { return []string{"--sqlite-path", db} }, wantError: "--name is required"},
+		{name: "unknown identity", target: "admin", kind: domain.IdentityKindAdmin, hasToken: true, args: func(db string) []string { return []string{"--sqlite-path", db, "--name", "missing"} }, wantError: "identity missing"},
+		{name: "client identity", target: "client", kind: domain.IdentityKindClient, hasToken: true, args: func(db string) []string { return []string{"--sqlite-path", db, "--name", "client"} }, wantError: "is not an admin"},
+		{name: "disabled admin", target: "admin", kind: domain.IdentityKindAdmin, disabled: true, hasToken: true, args: func(db string) []string { return []string{"--sqlite-path", db, "--name", "admin"} }, wantError: "is disabled"},
+		{name: "admin without token", target: "admin", kind: domain.IdentityKindAdmin, args: func(db string) []string { return []string{"--sqlite-path", db, "--name", "admin"} }, wantError: "has no token to rotate"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -238,6 +359,31 @@ func TestRotateAdminRejectsInvalidTargetsWithoutMutation(t *testing.T) {
 				t.Fatalf("refused rotation audit events = %+v, %v", events, err)
 			}
 		})
+	}
+}
+
+// mapLookup builds an environment lookup backed by m, so a test declares
+// exactly which KMS_* variables the command under test can see.
+func mapLookup(m map[string]string) func(string) (string, bool) {
+	return func(key string) (string, bool) {
+		v, ok := m[key]
+		return v, ok
+	}
+}
+
+// assertDBTarget checks that output names the absolute form of path together
+// with the provenance the command should have reported for it.
+func assertDBTarget(t *testing.T, output, path, source string) {
+	t.Helper()
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		t.Fatalf("abs %s: %v", path, err)
+	}
+	if !strings.Contains(output, abs) {
+		t.Fatalf("output does not name %s: %s", abs, output)
+	}
+	if want := "(source: " + source + ")"; !strings.Contains(output, want) {
+		t.Fatalf("output does not report %s: %s", want, output)
 	}
 }
 

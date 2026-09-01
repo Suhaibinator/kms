@@ -46,12 +46,20 @@ func (c *CLI) cmdImport(args []string) int {
 	namespace := fs.String("namespace", "", "destination namespace env/app, e.g. prod/gradethis")
 	env := fs.String("env", "", "destination environment (alternative to --namespace)")
 	app := fs.String("app", "", "destination application (alternative to --namespace)")
-	db := fs.String("db", "./kms.db", "destination database (required unless --dry-run)")
-	keyFile := fs.String("master-key-file", "", "master key file (omit to use a passphrase)")
 	dryRun := fs.Bool("dry-run", false, "print old key -> new path mapping without writing")
 	report := fs.String("report", "", "write the mapping report to this file instead of stdout")
+	r := c.serverSettings(fs, "storage.sqlite_path", "encryption.kek_file")
+	c.setUsage(fs, "import [flags]",
+		"Import keys from a SuhaibParameterStore export into a namespace as secrets. --dry-run prints the old key -> new path mapping and needs no database or master key.", true)
 	if !c.parseFlags(fs, args) {
 		return 2
+	}
+	if !c.rejectPositionals() {
+		return 2
+	}
+	cfg, _, _, err := r.resolve()
+	if err != nil {
+		return c.fail("%v", err)
 	}
 	if *from == "" {
 		return c.fail("--from is required")
@@ -98,14 +106,17 @@ func (c *CLI) cmdImport(args []string) int {
 	}
 
 	// Real import: open the store, unseal, and write each value as a secret.
-	store, err := storage.Open(*db)
+	if err := c.requireSQLitePath(cfg); err != nil {
+		return c.fail("%v", err)
+	}
+	store, err := storage.Open(cfg.Storage.SQLitePath)
 	if err != nil {
 		return c.fail("opening destination database: %v", err)
 	}
 	defer func() { _ = store.Close() }()
 
 	ctx := context.Background()
-	keyring, err := c.unseal(ctx, store, *keyFile, false)
+	keyring, err := c.unseal(ctx, store, cfg.Encryption.KEKFile, false)
 	if err != nil {
 		return c.fail("acquiring master key: %v", err)
 	}
