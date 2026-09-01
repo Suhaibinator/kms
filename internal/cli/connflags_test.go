@@ -1,8 +1,6 @@
 package cli
 
 import (
-	"os"
-	"path/filepath"
 	"runtime"
 	"slices"
 	"strings"
@@ -135,21 +133,6 @@ func TestConnFlagsDefaultEndpoint(t *testing.T) {
 
 // --- token files ------------------------------------------------------------
 
-// writeTokenFile writes a token file with the given mode inside the test's own
-// private directory.
-func writeTokenFile(t *testing.T, content string, mode os.FileMode) string {
-	t.Helper()
-	path := filepath.Join(t.TempDir(), "token")
-	if err := os.WriteFile(path, []byte(content), mode); err != nil {
-		t.Fatal(err)
-	}
-	// WriteFile applies the process umask, so set the mode the test means.
-	if err := os.Chmod(path, mode); err != nil {
-		t.Fatal(err)
-	}
-	return path
-}
-
 // TestTokenFileReachesTheServerAsABearerToken runs the whole path — flag or
 // environment variable, file permission check, newline trimming, metadata —
 // end to end through the client transport, because every intermediate check
@@ -176,7 +159,7 @@ func TestTokenFileReachesTheServerAsABearerToken(t *testing.T) {
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			path := writeTokenFile(t, test.content, 0o600)
+			path := writeTokenFile(t, "token", test.content, 0o600)
 			stub := &whoAmIStub{response: &kmsv1.WhoAmIResponse{Name: "ops", Kind: "admin", AuthMethod: "token"}}
 			c := newWhoAmICLI(t, stub)
 			if test.env != nil {
@@ -202,7 +185,7 @@ func TestTokenFileRejectsGroupReadablePermissions(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("POSIX permission bits are checked by fileutil's platform tests")
 	}
-	path := writeTokenFile(t, "kms_file_token", 0o644)
+	path := writeTokenFile(t, "token", "kms_file_token", 0o644)
 	stub := &whoAmIStub{response: &kmsv1.WhoAmIResponse{Name: "ops"}}
 	c := newWhoAmICLI(t, stub)
 	if code := c.Run([]string{"whoami", "--insecure", "--token-file", path}); code == 0 {
@@ -219,7 +202,7 @@ func TestTokenFileRejectsGroupReadablePermissions(t *testing.T) {
 // An empty file is a truncated or misnamed credential, never an anonymous
 // call: the CLI refuses rather than silently dropping the authorization header.
 func TestTokenFileRejectsAnEmptyFile(t *testing.T) {
-	path := writeTokenFile(t, "\n", 0o600)
+	path := writeTokenFile(t, "token", "\n", 0o600)
 	stub := &whoAmIStub{response: &kmsv1.WhoAmIResponse{Name: "ops"}}
 	c := newWhoAmICLI(t, stub)
 	if code := c.Run([]string{"whoami", "--insecure", "--token-file", path}); code == 0 {
@@ -237,7 +220,7 @@ func TestTokenFileRejectsAnEmptyFile(t *testing.T) {
 // versus a mounted credential); picking one silently would let a stale token
 // shadow a rotated file, so it is a usage error.
 func TestInlineTokenAndTokenFileAreMutuallyExclusive(t *testing.T) {
-	path := writeTokenFile(t, "kms_file_token", 0o600)
+	path := writeTokenFile(t, "token", "kms_file_token", 0o600)
 	stub := &whoAmIStub{response: &kmsv1.WhoAmIResponse{Name: "ops"}}
 	c := newWhoAmICLI(t, stub)
 	c.lookupEnv = connEnvLookup(map[string]string{"KMS_TOKEN_FILE": path})
