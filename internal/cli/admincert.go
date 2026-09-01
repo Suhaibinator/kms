@@ -235,7 +235,7 @@ func (c *CLI) orphanedAdminCert(ctx context.Context, svc *core.Service, output *
 		return fmt.Errorf("%w; certificate %s was recorded but its private key was not written, and revoking it failed (%v) — run: parameter-store admin-cert revoke %s --serial %s",
 			cause, serial, rerr, name, serial)
 	}
-	return fmt.Errorf("%w; certificate %s was recorded but its private key was not written, so it has been revoked — re-run the command", cause, serial)
+	return fmt.Errorf("%w; certificate %s was recorded but its private key was not written, so it has been revoked — issue a replacement with: parameter-store admin-cert issue %s --out <dir>", cause, serial, name)
 }
 
 // toProtoCertBundle renders a locally issued bundle in the shape the gRPC path

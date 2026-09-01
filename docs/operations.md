@@ -1049,7 +1049,15 @@ requirement off.** If the proxy terminates TLS, the KMS itself runs with
 token alone then grants full administrative access to anything that can reach
 the KMS port. In that topology the proxy must enforce client certificates
 itself, and the KMS listener must not be reachable except through it. KMS does
-not currently trust a proxy-supplied client-certificate header.
+not currently trust a proxy-supplied client-certificate header (tracked as
+issue #26). Note the opposite topology: a proxy that terminates the browser's
+TLS and then **re-encrypts to a TLS-enabled KMS** leaves the requirement
+enforced but unsatisfiable through the proxy — the admin's certificate ends at
+the proxy, KMS sees only the proxy's connection, and every admin sign-in is
+refused even if the proxy verified the certificate. Until #26 lands, either let
+administrators reach the KMS listener directly for the console and CLI, or set
+`admin_require_client_cert: false` for that deployment and enforce client
+certificates at the proxy.
 
 **Running securely: don't ship TLS disabled on a networked bind.** If
 `tls_enabled` is `false`, `serve` logs a startup warning; if in addition

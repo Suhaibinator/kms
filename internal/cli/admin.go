@@ -120,6 +120,9 @@ func (c *CLI) cmdInit(args []string) int {
 	_, _ = fmt.Fprintln(c.Stdout, "Built-in CA: ready")
 
 	if *admin != "" {
+		if err := c.requireNoIdentity(ctx, store, *admin); err != nil {
+			return c.fail("%v", err)
+		}
 		if err := c.withReservedCertBundle(*certDir, *admin, func(output *reservedCertBundle) error {
 			return c.createBootstrapAdmin(ctx, store, svc, *admin, output)
 		}); err != nil {
@@ -127,6 +130,22 @@ func (c *CLI) cmdInit(args []string) int {
 		}
 	}
 	return 0
+}
+
+// requireNoIdentity refuses to create an identity that already exists before
+// any certificate output files are reserved, so a retried init/create-admin
+// does not leave empty NAME.crt/NAME.key placeholders behind and points at the
+// command that adds a certificate to an existing admin instead.
+func (c *CLI) requireNoIdentity(ctx context.Context, store storage.Store, name string) error {
+	_, err := store.GetIdentityByName(ctx, name)
+	switch {
+	case err == nil:
+		return fmt.Errorf("identity %q already exists; to issue it a client certificate run: parameter-store admin-cert issue %s --out <dir>", name, name)
+	case errors.Is(err, domain.ErrNotFound):
+		return nil
+	default:
+		return fmt.Errorf("checking identity %q: %w", name, err)
+	}
 }
 
 // createBootstrapAdmin creates an admin identity directly in the store, prints
@@ -365,6 +384,9 @@ func (c *CLI) cmdCreateAdmin(args []string) int {
 		svc = issuer
 	}
 
+	if err := c.requireNoIdentity(ctx, store, *name); err != nil {
+		return c.fail("%v", err)
+	}
 	if err := c.withReservedCertBundle(*certDir, *name, func(output *reservedCertBundle) error {
 		return c.createBootstrapAdmin(ctx, store, svc, *name, output)
 	}); err != nil {

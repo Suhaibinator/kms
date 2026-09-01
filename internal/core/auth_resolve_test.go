@@ -277,7 +277,8 @@ func TestResolvePrincipalRevokedCertFallsBackToToken(t *testing.T) {
 		t.Fatalf("RevokeIdentityCertificate: %v", err)
 	}
 
-	// The certificate is dropped (and audited by VerifyClientCert), but the
+	// The certificate is dropped (recorded as auth.credential_ignored, see
+	// TestResolvePrincipalIgnoredCredentialIsAuditedAsAllowed), but the
 	// still-valid token admits the non-admin caller by the token method.
 	pr, err := s.ResolvePrincipal(ctx, CredentialInput{Token: token, PeerCert: leaf})
 	if err != nil {
@@ -611,4 +612,78 @@ func TestReauthorizeWatchTokenAdminHonorsRequirementChange(t *testing.T) {
 	if err := s.ReauthorizeWatch(ctx, pr); !errors.Is(err, domain.ErrUnauthenticated) {
 		t.Fatalf("reauth with the requirement on err = %v, want ErrUnauthenticated", err)
 	}
+}
+
+// TestResolvePrincipalIgnoredCredentialIsAuditedAsAllowed: when one presented
+// credential fails to verify but the other admits the caller, the request
+// succeeds and the audit log must say so — one auth.credential_ignored row
+// with decision allow naming the admitted identity, and no auth.failure row
+// that would make a successful request read as a failed login.
+func TestResolvePrincipalIgnoredCredentialIsAuditedAsAllowed(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("stale token beside a valid certificate", func(t *testing.T) {
+		store := newFakeStore()
+		s := newTestService(store)
+		withCA(t, s)
+		leaf, _ := newClient(t, s, store, "svc", nil, domain.AuthMethodMTLS, domain.AuthMethodToken)
+
+		pr, err := s.ResolvePrincipal(ctx, CredentialInput{Token: "kms_rotated-away", PeerCert: leaf, RequestID: "req-1"})
+		if err != nil {
+			t.Fatalf("ResolvePrincipal: %v", err)
+		}
+		if pr.Method != domain.AuthMethodMTLS || pr.Token != "" {
+			t.Fatalf("principal = method %q token %q, want mtls with no token", pr.Method, pr.Token)
+		}
+		if store.hasAudit("auth.failure", "deny") {
+			t.Fatal("an admitted request was audited as auth.failure")
+		}
+		ev := requireLastAudit(t, store, "auth.credential_ignored", "allow")
+		if ev.ActorIdentity != "svc" || ev.ActorType != domain.IdentityKindClient || ev.RequestID != "req-1" {
+			t.Fatalf("credential_ignored row = %+v, want actor svc/client on req-1", ev)
+		}
+		assertMetadata(t, ev, `"ignored":"token"`, `"method":"mtls"`)
+	})
+
+	t.Run("revoked certificate beside a valid token", func(t *testing.T) {
+		store := newFakeStore()
+		s := newTestService(store)
+		withCA(t, s)
+		leaf, token := newClient(t, s, store, "svc", nil, domain.AuthMethodMTLS, domain.AuthMethodToken)
+		if err := s.RevokeIdentityCertificate(ctx, adminPrincipal(), "svc", CertSerial(leaf)); err != nil {
+			t.Fatalf("RevokeIdentityCertificate: %v", err)
+		}
+
+		pr, err := s.ResolvePrincipal(ctx, CredentialInput{Token: token, PeerCert: leaf})
+		if err != nil {
+			t.Fatalf("ResolvePrincipal: %v", err)
+		}
+		if pr.Method != domain.AuthMethodToken {
+			t.Fatalf("method = %q, want token", pr.Method)
+		}
+		if store.hasAudit("auth.failure", "deny") {
+			t.Fatal("an admitted request was audited as auth.failure")
+		}
+		assertMetadata(t, requireLastAudit(t, store, "auth.credential_ignored", "allow"), `"ignored":"mtls"`, `"method":"token"`)
+	})
+
+	// Refused requests keep the classic rows: a lone invalid credential is an
+	// auth.failure, and an admin whose certificate failed is denied with both
+	// the certificate failure and the admission denial on record.
+	t.Run("refused requests still audit the failure", func(t *testing.T) {
+		store := newFakeStore()
+		s := newTestService(store)
+		withCA(t, s)
+		leaf, token := issueAdminCert(t, s, store, "root")
+		if err := s.RevokeIdentityCertificate(ctx, adminPrincipal(), "root", CertSerial(leaf)); err != nil {
+			t.Fatalf("RevokeIdentityCertificate: %v", err)
+		}
+		if _, err := s.ResolvePrincipal(ctx, CredentialInput{Token: token, PeerCert: leaf}); !errors.Is(err, domain.ErrUnauthenticated) {
+			t.Fatalf("err = %v, want ErrUnauthenticated", err)
+		}
+		if store.hasAudit("auth.credential_ignored", "allow") {
+			t.Fatal("a refused request was audited as credential_ignored")
+		}
+		assertMetadata(t, requireLastAudit(t, store, "auth.failure", "deny"), `"reason":"admin_client_cert_required"`)
+	})
 }

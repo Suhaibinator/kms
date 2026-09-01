@@ -314,23 +314,40 @@ func (s *Service) CACertificate() (*x509.Certificate, error) {
 // they never reveal whether the token was close, or whether an identity
 // exists. An audit event is emitted for failures.
 func (s *Service) Authenticate(ctx context.Context, token, remoteAddr, userAgent string) (domain.Identity, error) {
+	return s.authenticateToken(ctx, token, remoteAddr, userAgent, true)
+}
+
+// authenticateToken is Authenticate with the failure audit made optional.
+// ResolvePrincipal verifies each presented credential first and audits
+// afterwards, once it knows whether a failed credential denied the request
+// (auth.failure) or was merely ignored beside a valid one
+// (auth.credential_ignored).
+func (s *Service) authenticateToken(ctx context.Context, token, remoteAddr, userAgent string, audit bool) (domain.Identity, error) {
 	token = strings.TrimSpace(token)
 	if token == "" {
 		return domain.Identity{}, domain.Errorf(domain.ErrUnauthenticated, "missing credentials")
 	}
 	id, err := s.store.GetIdentityByTokenHash(ctx, crypto.TokenHash(token))
 	if err != nil || id.Disabled {
-		s.audit(ctx, domain.AuditEvent{
-			EventType: "auth.failure",
-			ActorType: "unknown",
-			Decision:  "deny",
-			SourceIP:  remoteAddr,
-			UserAgent: userAgent,
-			Metadata:  encodeMeta(map[string]string{"method": string(domain.AuthMethodToken)}),
-		})
+		if audit {
+			s.auditAuthFailure(ctx, domain.AuthMethodToken, remoteAddr, userAgent)
+		}
 		return domain.Identity{}, domain.Errorf(domain.ErrUnauthenticated, "invalid credentials")
 	}
 	return id, nil
+}
+
+// auditAuthFailure records a presented credential that did not verify. The
+// row names the method only, never the credential or a guessed identity.
+func (s *Service) auditAuthFailure(ctx context.Context, method domain.AuthMethod, remoteAddr, userAgent string) {
+	s.audit(ctx, domain.AuditEvent{
+		EventType: "auth.failure",
+		ActorType: "unknown",
+		Decision:  "deny",
+		SourceIP:  remoteAddr,
+		UserAgent: userAgent,
+		Metadata:  encodeMeta(map[string]string{"method": string(method)}),
+	})
 }
 
 // VerifyClientCert maps a verified peer certificate to an identity for mTLS
@@ -340,38 +357,39 @@ func (s *Service) Authenticate(ctx context.Context, token, remoteAddr, userAgent
 // enrolled non-revoked/non-expired certificate, and an enabled identity.
 // Failures are generic and audited.
 func (s *Service) VerifyClientCert(ctx context.Context, cert *x509.Certificate, remoteAddr, userAgent string) (domain.Identity, error) {
+	return s.verifyClientCert(ctx, cert, remoteAddr, userAgent, true)
+}
+
+// verifyClientCert is VerifyClientCert with the failure audit made optional
+// (see authenticateToken).
+func (s *Service) verifyClientCert(ctx context.Context, cert *x509.Certificate, remoteAddr, userAgent string, audit bool) (domain.Identity, error) {
 	name, err := ca.IdentityFromCert(cert)
 	if err != nil {
-		return domain.Identity{}, s.mtlsAuthFailure(ctx, remoteAddr, userAgent)
+		return domain.Identity{}, s.mtlsAuthFailure(ctx, remoteAddr, userAgent, audit)
 	}
 	serial := CertSerial(cert)
 	fingerprint := CertFingerprint(cert)
 	rec, err := s.store.GetIdentityCertBySerial(ctx, serial)
 	if err != nil {
-		return domain.Identity{}, s.mtlsAuthFailure(ctx, remoteAddr, userAgent)
+		return domain.Identity{}, s.mtlsAuthFailure(ctx, remoteAddr, userAgent, audit)
 	}
 	if fingerprint == "" || rec.Cert.Fingerprint != fingerprint ||
 		rec.IdentityName != name || rec.IdentityDisabled ||
 		!rec.Cert.RevokedAt.IsZero() ||
 		(!rec.Cert.NotAfter.IsZero() && s.now().After(rec.Cert.NotAfter)) {
-		return domain.Identity{}, s.mtlsAuthFailure(ctx, remoteAddr, userAgent)
+		return domain.Identity{}, s.mtlsAuthFailure(ctx, remoteAddr, userAgent, audit)
 	}
 	id, err := s.store.GetIdentityByName(ctx, name)
 	if err != nil || id.Disabled {
-		return domain.Identity{}, s.mtlsAuthFailure(ctx, remoteAddr, userAgent)
+		return domain.Identity{}, s.mtlsAuthFailure(ctx, remoteAddr, userAgent, audit)
 	}
 	return id, nil
 }
 
-func (s *Service) mtlsAuthFailure(ctx context.Context, remoteAddr, userAgent string) error {
-	s.audit(ctx, domain.AuditEvent{
-		EventType: "auth.failure",
-		ActorType: "unknown",
-		Decision:  "deny",
-		SourceIP:  remoteAddr,
-		UserAgent: userAgent,
-		Metadata:  encodeMeta(map[string]string{"method": string(domain.AuthMethodMTLS)}),
-	})
+func (s *Service) mtlsAuthFailure(ctx context.Context, remoteAddr, userAgent string, audit bool) error {
+	if audit {
+		s.auditAuthFailure(ctx, domain.AuthMethodMTLS, remoteAddr, userAgent)
+	}
 	return domain.Errorf(domain.ErrUnauthenticated, "invalid credentials")
 }
 

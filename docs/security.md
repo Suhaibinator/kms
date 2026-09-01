@@ -823,6 +823,17 @@ above (real TCP peer address, or `X-Forwarded-For` only if
   certificate and a valid token that name *different* identities. Neither is
   trusted, so the row carries actor type `unknown` and no identity.
 
+A presented credential that fails to verify is recorded as `auth.failure`
+**only when the request is refused**. When the caller presented two
+credentials, one did not verify, and the other admitted it (a machine client
+whose token was rotated but whose certificate is valid; a browser still
+holding a revoked certificate while the requirement is relaxed), the request
+succeeds and is recorded instead as one **`auth.credential_ignored`** row with
+decision `allow`, naming the admitted identity, and metadata
+`{"ignored": "<token|mtls>", "method": "<admitted method>"}`. A successful
+request therefore never reads as a failed login in the audit log, while a
+stale or revoked credential still leaves a trace an operator can act on.
+
 Certificate issuance is audited on both paths: the refused online attempt as
 `identity.cert.issue` `deny` with `{"reason": "admin_target", "channel":
 "online"}`, and the offline `admin-cert issue` as `identity.cert.issue`

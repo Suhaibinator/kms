@@ -999,7 +999,7 @@ func TestPublishAdminCertRevokesWhenTheKeyFileCannotBeWritten(t *testing.T) {
 	if output.published {
 		t.Fatal("a bundle whose key file failed was marked published")
 	}
-	for _, want := range []string{"has been revoked", bundle.Serial, "re-run"} {
+	for _, want := range []string{"has been revoked", bundle.Serial, "admin-cert issue ops --out"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Fatalf("error %q missing %q", err, want)
 		}

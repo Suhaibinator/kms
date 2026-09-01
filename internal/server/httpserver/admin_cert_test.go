@@ -7,6 +7,7 @@ import (
 	"crypto/x509"
 	"encoding/json/v2"
 	"encoding/pem"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -267,5 +268,41 @@ func TestAdminCertHTTP_LoginWithoutTokenRejected(t *testing.T) {
 		if got := errCode(t, w); got != "unauthenticated" {
 			t.Fatalf("%s: code = %s, want unauthenticated", name, got)
 		}
+	}
+}
+
+// TestAdminCertHTTP_LoginClientCertWithoutTokenRejected pins the empty-token
+// guard in handleLogin on its own: a *client* identity's certificate alone is
+// a valid credential for API calls, but login is a token exchange, so a
+// certificate with an empty token must be refused whether or not the admin
+// requirement is enforced. (An admin certificate alone is already refused by
+// admitAdmin, which is why this case needs a client.)
+func TestAdminCertHTTP_LoginClientCertWithoutTokenRejected(t *testing.T) {
+	for _, required := range []bool{true, false} {
+		t.Run(fmt.Sprintf("requirement=%t", required), func(t *testing.T) {
+			e := newTestEnv(t)
+			e.svc.SetAdminRequireClientCert(required)
+			adminPr := core.Principal{Identity: domain.Identity{Name: "admin", Kind: domain.IdentityKindAdmin}}
+			res, err := e.svc.CreateIdentity(context.Background(), adminPr, core.CreateIdentityInput{
+				Name: "svc", Kind: domain.IdentityKindClient, AuthMethods: []domain.AuthMethod{domain.AuthMethodMTLS},
+			})
+			if err != nil || res.Cert == nil {
+				t.Fatalf("create cert-only client: err=%v cert=%v", err, res.Cert)
+			}
+			block, _ := pem.Decode([]byte(res.Cert.CertPEM))
+			leaf, err := x509.ParseCertificate(block.Bytes)
+			if err != nil {
+				t.Fatalf("parse client certificate: %v", err)
+			}
+
+			// The certificate does authenticate the client on the API...
+			mustStatus(t, e.request(t, http.MethodGet, "/api/v1/whoami", "", nil, leaf), http.StatusOK)
+			// ...but cannot stand in for the token at login.
+			w := e.request(t, http.MethodPost, "/api/v1/auth/login", "", map[string]any{"token": ""}, leaf)
+			mustStatus(t, w, http.StatusUnauthorized)
+			if got := errCode(t, w); got != "unauthenticated" {
+				t.Fatalf("code = %s, want unauthenticated", got)
+			}
+		})
 	}
 }
