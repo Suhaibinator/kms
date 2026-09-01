@@ -20,7 +20,7 @@ import (
 // usage errors.
 func (c *CLI) cmdReleaseVerifyDefaults(args []string) int {
 	fs := c.newFlags("release verify-defaults")
-	cf := addConnFlags(fs)
+	cf := addConnFlags(c, fs)
 	artifactPath := fs.String("artifact", "", "generated defaults artifact file ('-' for stdin)")
 	releaseName := fs.String("release", "", "release name (default: the application's release name)")
 	if !c.parseFlags(fs, args) {

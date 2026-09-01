@@ -105,7 +105,7 @@ func (c *CLI) policyUsageError(format string, args ...any) int {
 
 func (c *CLI) cmdPolicyCreate(args []string) int {
 	fs := c.newFlags("policy create")
-	cf := addConnFlags(fs)
+	cf := addConnFlags(c, fs)
 	subject := fs.String("subject", "", "identity name the policy binds to, or * for every client")
 	var allow, deny policyRules
 	fs.Var(&allow, "allow", "allow rule OP@ENV/APP (repeatable)")
@@ -144,7 +144,7 @@ func (c *CLI) cmdPolicyCreate(args []string) int {
 
 func (c *CLI) cmdPolicyList(args []string) int {
 	fs := c.newFlags("policy list")
-	cf := addConnFlags(fs)
+	cf := addConnFlags(c, fs)
 	pageSize := fs.Int("page-size", 100, "results per RPC")
 	if !c.parseFlags(fs, args) {
 		return 2
@@ -177,7 +177,7 @@ func (c *CLI) cmdPolicyList(args []string) int {
 
 func (c *CLI) cmdPolicyDelete(args []string) int {
 	fs := c.newFlags("policy delete")
-	cf := addConnFlags(fs)
+	cf := addConnFlags(c, fs)
 	if !c.parseFlags(fs, args) {
 		return 2
 	}

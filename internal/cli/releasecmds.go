@@ -93,7 +93,7 @@ type releaseEntryDefinition struct {
 
 func (c *CLI) cmdReleaseCreate(args []string) int {
 	fs := c.newFlags("release create")
-	cf := addConnFlags(fs)
+	cf := addConnFlags(c, fs)
 	file := fs.String("file", "", "release JSON/YAML file ('-' for stdin)")
 	if !c.parseFlags(fs, args) {
 		return 2
@@ -222,7 +222,7 @@ func releaseCreateRequest(definition releaseDefinition) (*kmsv1.CreateReleaseReq
 
 func (c *CLI) cmdReleaseValidate(args []string) int {
 	fs := c.newFlags("release validate")
-	cf := addConnFlags(fs)
+	cf := addConnFlags(c, fs)
 	if !c.parseFlags(fs, args) {
 		return 2
 	}
@@ -271,7 +271,7 @@ func releaseValidationDetails(err error) *kmsv1.ValidateReleaseResponse {
 
 func (c *CLI) cmdReleaseShow(args []string) int {
 	fs := c.newFlags("release show")
-	cf := addConnFlags(fs)
+	cf := addConnFlags(c, fs)
 	if !c.parseFlags(fs, args) {
 		return 2
 	}
@@ -324,7 +324,7 @@ func (c *CLI) printRelease(release *kmsv1.ConfigurationRelease, revision uint64,
 
 func (c *CLI) cmdReleaseList(args []string) int {
 	fs := c.newFlags("release list")
-	cf := addConnFlags(fs)
+	cf := addConnFlags(c, fs)
 	pageSize := fs.Int("page-size", 100, "results per RPC")
 	if !c.parseFlags(fs, args) {
 		return 2
@@ -374,7 +374,7 @@ func (c *CLI) cmdReleaseList(args []string) int {
 
 func (c *CLI) cmdReleaseDiff(args []string) int {
 	fs := c.newFlags("release diff")
-	cf := addConnFlags(fs)
+	cf := addConnFlags(c, fs)
 	if !c.parseFlags(fs, args) {
 		return 2
 	}
@@ -511,7 +511,7 @@ func (v *optionalUint64) Set(raw string) error {
 
 func (c *CLI) cmdReleaseActivate(args []string) int {
 	fs := c.newFlags("release activate")
-	cf := addConnFlags(fs)
+	cf := addConnFlags(c, fs)
 	var expected optionalUint64
 	fs.Var(&expected, "expected-current-version", "CAS guard (0 means expect no active release)")
 	if !c.parseFlags(fs, args) {
@@ -556,7 +556,7 @@ func (c *CLI) failReleaseActivation(verb string, err error) int {
 
 func (c *CLI) cmdReleaseRollback(args []string) int {
 	fs := c.newFlags("release rollback")
-	cf := addConnFlags(fs)
+	cf := addConnFlags(c, fs)
 	if !c.parseFlags(fs, args) {
 		return 2
 	}
@@ -605,7 +605,7 @@ func (c *CLI) cmdReleaseRollback(args []string) int {
 
 func (c *CLI) cmdReleaseSubscribers(args []string) int {
 	fs := c.newFlags("release subscribers")
-	cf := addConnFlags(fs)
+	cf := addConnFlags(c, fs)
 	pageSize := fs.Int("page-size", 100, "results per RPC")
 	if !c.parseFlags(fs, args) {
 		return 2
@@ -745,7 +745,7 @@ func (c *CLI) cmdReleaseSchema(args []string) int {
 
 func (c *CLI) cmdReleaseSchemaCreate(args []string) int {
 	fs := c.newFlags("release schema create")
-	cf := addConnFlags(fs)
+	cf := addConnFlags(c, fs)
 	metadata := fs.String("metadata-json", "", "non-sensitive metadata JSON")
 	if !c.parseFlags(fs, args) {
 		return 2
@@ -798,7 +798,7 @@ func readSchemaJSON(path string) (string, error) {
 
 func (c *CLI) cmdReleaseSchemaShow(args []string) int {
 	fs := c.newFlags("release schema show")
-	cf := addConnFlags(fs)
+	cf := addConnFlags(c, fs)
 	if !c.parseFlags(fs, args) {
 		return 2
 	}
@@ -828,7 +828,7 @@ func (c *CLI) cmdReleaseSchemaShow(args []string) int {
 
 func (c *CLI) cmdReleaseSchemaList(args []string) int {
 	fs := c.newFlags("release schema list")
-	cf := addConnFlags(fs)
+	cf := addConnFlags(c, fs)
 	pageSize := fs.Int("page-size", 100, "results per RPC")
 	if !c.parseFlags(fs, args) {
 		return 2

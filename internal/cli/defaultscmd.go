@@ -65,7 +65,7 @@ func (c *CLI) defaultsUsageError(format string, args ...any) int {
 
 func (c *CLI) cmdDefaultsApply(args []string) int {
 	fs := c.newFlags("defaults apply")
-	cf := addConnFlags(fs)
+	cf := addConnFlags(c, fs)
 	from := fs.String("from", "", "defaults artifact file, or - for stdin")
 	overwrite := fs.Bool("overwrite", false, "permit updates to differing existing parameters")
 	updateDefinition := fs.Bool("update-definition", false, "permit application contract and schema pin updates")
