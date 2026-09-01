@@ -230,7 +230,7 @@ func createOldStore(t *testing.T, path string, rows map[string]string) {
 func newTestCLI() *testCLI {
 	c := &testCLI{out: &bytes.Buffer{}, err: &bytes.Buffer{}}
 	c.CLI = CLI{Stdout: c.out, Stderr: c.err, Stdin: nil}
-	c.CLI.lookupEnv = func(string) (string, bool) { return "", false }
+	c.lookupEnv = func(string) (string, bool) { return "", false }
 	return c
 }
 
