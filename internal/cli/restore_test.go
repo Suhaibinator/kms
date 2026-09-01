@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 
 	"github.com/glebarez/sqlite"
@@ -249,4 +250,128 @@ func writeFileBytes(t *testing.T, path string, b []byte) {
 	if err := os.WriteFile(path, b, 0o600); err != nil {
 		t.Fatal(err)
 	}
+}
+
+// --- restore confirmation ---------------------------------------------------
+
+// restore replaces a whole database. A script that forgot --yes must fail
+// loudly rather than overwriting whatever file the environment named.
+func TestRestoreRefusedOnNonInteractiveStdinWithoutYes(t *testing.T) {
+	dir := t.TempDir()
+	backup := filepath.Join(dir, "backup.db")
+	destination := filepath.Join(dir, "kms.db")
+	createKMSDB(t, backup)
+
+	c := newTestCLI() // newTestCLI has no stdin, so it is never a terminal
+	code := c.cmdRestore([]string{"--sqlite-path", destination, "--in", backup})
+	if code != 2 {
+		t.Fatalf("restore exit=%d, want 2; stderr=%s", code, c.stderr())
+	}
+	if !strings.Contains(c.stderr(), "refusing to restore "+absPath(destination)+" from "+backup) {
+		t.Fatalf("stderr = %q", c.stderr())
+	}
+	// The destructive-target warning is printed before the prompt, so the
+	// operator sees which file was about to be replaced even on a refusal.
+	if !strings.Contains(c.stderr(), "Target database: "+absPath(destination)) {
+		t.Fatalf("stderr = %q", c.stderr())
+	}
+	if fileExists(destination) {
+		t.Fatal("a refused restore created the destination")
+	}
+	if c.stdout() != "" {
+		t.Fatalf("a refused restore wrote to stdout: %q", c.stdout())
+	}
+}
+
+// An existing destination needs both answers: --yes for "yes, restore", and
+// --force for "yes, replace the file that is already there".
+func TestRestoreOverExistingDestinationNeedsBothYesAndForce(t *testing.T) {
+	dir := t.TempDir()
+	backup := filepath.Join(dir, "backup.db")
+	destination := filepath.Join(dir, "kms.db")
+	createKMSDB(t, backup)
+	writeFileBytes(t, destination, fakeSQLiteBytes("existing"))
+
+	// --yes alone still refuses: --force keeps its own meaning.
+	withoutForce := newTestCLI()
+	if code := withoutForce.cmdRestore([]string{"--sqlite-path", destination, "--in", backup, "--yes"}); code == 0 {
+		t.Fatalf("restore replaced an existing destination without --force; stderr=%s", withoutForce.stderr())
+	}
+	if !strings.Contains(withoutForce.stderr(), "pass --force to overwrite") {
+		t.Fatalf("stderr = %q", withoutForce.stderr())
+	}
+	if got := readFileString(t, destination); !strings.Contains(got, "existing") {
+		t.Fatalf("destination was replaced: %q", got)
+	}
+
+	// --force alone refuses too, because stdin is not a terminal.
+	withoutYes := newTestCLI()
+	if code := withoutYes.cmdRestore([]string{"--sqlite-path", destination, "--in", backup, "--force"}); code != 2 {
+		t.Fatalf("restore exit=%d, want 2; stderr=%s", code, withoutYes.stderr())
+	}
+
+	// Both together do the work.
+	both := newTestCLI()
+	if code := both.cmdRestore([]string{"--sqlite-path", destination, "--in", backup, "--yes", "--force"}); code != 0 {
+		t.Fatalf("restore exit=%d stderr=%s", code, both.stderr())
+	}
+	if err := storage.ValidateKMSDatabase(destination); err != nil {
+		t.Fatalf("restored database is invalid: %v", err)
+	}
+}
+
+// On a terminal the operator answers the prompt instead of passing --yes.
+func TestRestoreAcceptsAnInteractiveYes(t *testing.T) {
+	dir := t.TempDir()
+	backup := filepath.Join(dir, "backup.db")
+	destination := filepath.Join(dir, "kms.db")
+	createKMSDB(t, backup)
+
+	c := newTestCLI()
+	c.isTTY = func() bool { return true }
+	c.Stdin = fileContaining(t, "y\n")
+	if code := c.cmdRestore([]string{"--sqlite-path", destination, "--in", backup}); code != 0 {
+		t.Fatalf("restore exit=%d stderr=%s", code, c.stderr())
+	}
+	if !strings.Contains(c.stderr(), "[y/N]") {
+		t.Fatalf("no prompt was shown: %q", c.stderr())
+	}
+	if err := storage.ValidateKMSDatabase(destination); err != nil {
+		t.Fatalf("restored database is invalid: %v", err)
+	}
+}
+
+func TestRestoreJSON(t *testing.T) {
+	dir := t.TempDir()
+	backup := filepath.Join(dir, "backup.db")
+	destination := filepath.Join(dir, "kms.db")
+	createKMSDB(t, backup)
+
+	c := newTestCLI()
+	if code := c.Run([]string{"-o", "json", "--yes", "restore", "--sqlite-path", destination, "--in", backup}); code != 0 {
+		t.Fatalf("restore exit=%d stderr=%s", code, c.stderr())
+	}
+	document := decodeJSONStdout(t, c)
+	assertJSONFields(t, document, "sqlite_path", "backup_file")
+	if document["sqlite_path"] != absPath(destination) || document["backup_file"] != backup {
+		t.Fatalf("document = %v", document)
+	}
+	// The next-steps advice is informational and belongs on stderr in JSON mode.
+	if !strings.Contains(c.stderr(), "Next steps: ensure the matching master key") {
+		t.Fatalf("stderr = %q", c.stderr())
+	}
+}
+
+// fileContaining writes content to a temporary file and opens it for reading,
+// standing in for the terminal the confirmation prompt reads from.
+func fileContaining(t *testing.T, content string) *os.File {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "stdin")
+	writeFileBytes(t, path, []byte(content))
+	f, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = f.Close() })
+	return f
 }

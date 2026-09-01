@@ -1,6 +1,9 @@
 package cli
 
 import (
+	"os"
+	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -127,6 +130,125 @@ func TestConnFlagsDefaultEndpoint(t *testing.T) {
 	}
 	if cf.token != "" || cf.ca != "" || cf.cert != "" || cf.key != "" || cf.insecure {
 		t.Errorf("empty environment produced %+v", cf)
+	}
+}
+
+// --- token files ------------------------------------------------------------
+
+// writeTokenFile writes a token file with the given mode inside the test's own
+// private directory.
+func writeTokenFile(t *testing.T, content string, mode os.FileMode) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "token")
+	if err := os.WriteFile(path, []byte(content), mode); err != nil {
+		t.Fatal(err)
+	}
+	// WriteFile applies the process umask, so set the mode the test means.
+	if err := os.Chmod(path, mode); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+// TestTokenFileReachesTheServerAsABearerToken runs the whole path — flag or
+// environment variable, file permission check, newline trimming, metadata —
+// end to end through the client transport, because every intermediate check
+// exists only to make the last step correct.
+func TestTokenFileReachesTheServerAsABearerToken(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		content string
+		args    func(path string) []string
+		env     map[string]string
+	}{
+		{
+			name:    "flag",
+			content: "kms_file_token",
+			args:    func(path string) []string { return []string{"whoami", "--insecure", "--token-file", path} },
+		},
+		{
+			name: "environment",
+			// One trailing newline is what every editor adds; it must not
+			// become part of the credential.
+			content: "kms_file_token\n",
+			args:    func(string) []string { return []string{"whoami", "--insecure"} },
+			env:     map[string]string{"KMS_TOKEN_FILE": ""},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			path := writeTokenFile(t, test.content, 0o600)
+			stub := &whoAmIStub{response: &kmsv1.WhoAmIResponse{Name: "ops", Kind: "admin", AuthMethod: "token"}}
+			c := newWhoAmICLI(t, stub)
+			if test.env != nil {
+				env := map[string]string{}
+				for k := range test.env {
+					env[k] = path
+				}
+				c.lookupEnv = connEnvLookup(env)
+			}
+			if code := c.Run(test.args(path)); code != 0 {
+				t.Fatalf("whoami exit = %d, stderr=%s", code, c.stderr())
+			}
+			if got := stub.authorization(t); !slices.Equal(got, []string{"Bearer kms_file_token"}) {
+				t.Fatalf("authorization metadata = %q", got)
+			}
+		})
+	}
+}
+
+// A token file other local accounts can read is not a credential the CLI is
+// willing to use, and the refusal happens before any call is made.
+func TestTokenFileRejectsGroupReadablePermissions(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX permission bits are checked by fileutil's platform tests")
+	}
+	path := writeTokenFile(t, "kms_file_token", 0o644)
+	stub := &whoAmIStub{response: &kmsv1.WhoAmIResponse{Name: "ops"}}
+	c := newWhoAmICLI(t, stub)
+	if code := c.Run([]string{"whoami", "--insecure", "--token-file", path}); code == 0 {
+		t.Fatalf("a world-readable token file was accepted; stderr=%s", c.stderr())
+	}
+	if !strings.Contains(c.stderr(), "--token-file") {
+		t.Fatalf("stderr = %q", c.stderr())
+	}
+	if got := stub.authorization(t); len(got) != 0 {
+		t.Fatalf("a rejected token file still produced a call: %q", got)
+	}
+}
+
+// An empty file is a truncated or misnamed credential, never an anonymous
+// call: the CLI refuses rather than silently dropping the authorization header.
+func TestTokenFileRejectsAnEmptyFile(t *testing.T) {
+	path := writeTokenFile(t, "\n", 0o600)
+	stub := &whoAmIStub{response: &kmsv1.WhoAmIResponse{Name: "ops"}}
+	c := newWhoAmICLI(t, stub)
+	if code := c.Run([]string{"whoami", "--insecure", "--token-file", path}); code == 0 {
+		t.Fatalf("an empty token file was accepted; stderr=%s", c.stderr())
+	}
+	if !strings.Contains(c.stderr(), "is empty") {
+		t.Fatalf("stderr = %q", c.stderr())
+	}
+	if got := stub.authorization(t); len(got) != 0 {
+		t.Fatalf("a rejected token file still produced a call: %q", got)
+	}
+}
+
+// An inline token and a token file come from different places (a CI variable
+// versus a mounted credential); picking one silently would let a stale token
+// shadow a rotated file, so it is a usage error.
+func TestInlineTokenAndTokenFileAreMutuallyExclusive(t *testing.T) {
+	path := writeTokenFile(t, "kms_file_token", 0o600)
+	stub := &whoAmIStub{response: &kmsv1.WhoAmIResponse{Name: "ops"}}
+	c := newWhoAmICLI(t, stub)
+	c.lookupEnv = connEnvLookup(map[string]string{"KMS_TOKEN_FILE": path})
+	if code := c.Run([]string{"whoami", "--insecure", "--token", "inline"}); code != exitUsage {
+		t.Fatalf("whoami exit = %d, want %d; stderr=%s", code, exitUsage, c.stderr())
+	}
+	if !strings.Contains(c.stderr(), "mutually exclusive") {
+		t.Fatalf("stderr = %q", c.stderr())
+	}
+	if got := stub.authorization(t); len(got) != 0 {
+		t.Fatalf("a refused invocation still produced a call: %q", got)
 	}
 }
 

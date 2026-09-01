@@ -59,7 +59,7 @@ func (c *CLI) cmdImport(args []string) int {
 	}
 	cfg, _, _, err := r.resolve()
 	if err != nil {
-		return c.fail("%v", err)
+		return c.failErr("", err)
 	}
 	if *from == "" {
 		return c.fail("--from is required")
@@ -71,16 +71,20 @@ func (c *CLI) cmdImport(args []string) int {
 
 	items, err := loadImportSource(*from)
 	if err != nil {
-		return c.fail("reading source: %v", err)
+		return c.failErr("reading source", err)
 	}
 	entries, err := buildImportEntries(ns, items)
 	if err != nil {
 		return c.fail("%v", err)
 	}
 
+	// In JSON mode stdout carries the report as the result document, so the
+	// text report is written only when --report names a file. --report keeps
+	// its meaning in both modes: the file always receives the text mapping.
+	writeText := !c.jsonOutput() || *report != ""
 	out, closeReport, err := c.reportWriter(*report)
 	if err != nil {
-		return c.fail("%v", err)
+		return c.failErr("", err)
 	}
 	reportClosed := false
 	defer func() {
@@ -89,19 +93,31 @@ func (c *CLI) cmdImport(args []string) int {
 		}
 	}()
 
+	finish := func(results []importResult, withTokens bool) int {
+		if writeText {
+			if err := writeImportReport(out, results, withTokens); err != nil {
+				return c.failErr(importReportPrefix(withTokens, "writing"), err)
+			}
+		}
+		reportClosed = true
+		if err := closeReport(); err != nil {
+			return c.failErr(importReportPrefix(withTokens, "closing"), err)
+		}
+		return 0
+	}
+
 	if *dryRun {
 		results := make([]importResult, len(entries))
 		for i, e := range entries {
 			results[i] = importResult{Key: e.Key, Path: e.Ref.String()}
 		}
-		if err := writeImportReport(out, results, false); err != nil {
-			return c.fail("writing import report: %v", err)
+		if code := finish(results, false); code != 0 {
+			return code
 		}
-		reportClosed = true
-		if err := closeReport(); err != nil {
-			return c.fail("closing import report: %v", err)
+		c.info("Dry run: %d keys would be imported into %s. No data written.", len(entries), ns)
+		if c.jsonOutput() {
+			return c.printJSON(importJSON(ns, results, true))
 		}
-		_, _ = fmt.Fprintf(c.Stderr, "Dry run: %d keys would be imported into %s. No data written.\n", len(entries), ns)
 		return 0
 	}
 
@@ -111,14 +127,14 @@ func (c *CLI) cmdImport(args []string) int {
 	}
 	store, err := storage.Open(cfg.Storage.SQLitePath)
 	if err != nil {
-		return c.fail("opening destination database: %v", err)
+		return c.failErr("opening destination database", err)
 	}
 	defer func() { _ = store.Close() }()
 
 	ctx := context.Background()
 	keyring, err := c.unseal(ctx, store, cfg.Encryption.KEKFile, false)
 	if err != nil {
-		return c.fail("acquiring master key: %v", err)
+		return c.failErr("acquiring master key", err)
 	}
 	svc := core.New(store, c.quietLogger(), Version)
 	svc.SetKeyring(keyring)
@@ -129,7 +145,7 @@ func (c *CLI) cmdImport(args []string) int {
 	// if missing so import works against a fresh database; an existing namespace
 	// is left untouched.
 	if _, err := svc.CreateNamespace(ctx, pr, ns, "imported from SuhaibParameterStore", nil); err != nil && !errors.Is(err, domain.ErrAlreadyExists) {
-		return c.fail("ensuring namespace %s: %v", ns, err)
+		return c.failErr(fmt.Sprintf("ensuring namespace %s", ns), err)
 	}
 
 	results := make([]importResult, 0, len(entries))
@@ -141,19 +157,70 @@ func (c *CLI) cmdImport(args []string) int {
 			GenerateToken: true,
 		})
 		if err != nil {
-			return c.fail("importing %s -> %s: %v", e.Key, e.Ref, err)
+			return c.failErr(fmt.Sprintf("importing %s -> %s", e.Key, e.Ref), err)
 		}
 		results = append(results, importResult{Key: e.Key, Path: e.Ref.String(), Token: res.AccessToken})
 	}
-	if err := writeImportReport(out, results, true); err != nil {
-		return c.fail("writing one-time import token report: %v", err)
+	if code := finish(results, true); code != 0 {
+		return code
 	}
-	reportClosed = true
-	if err := closeReport(); err != nil {
-		return c.fail("closing one-time import token report: %v", err)
+	c.info("Imported %d secrets into %s.", len(results), ns)
+	if c.jsonOutput() {
+		// The access tokens are unrecoverable, so the warning the text report
+		// carries is repeated on stderr where --quiet cannot reach it.
+		_, _ = fmt.Fprintln(c.Stderr, "WARNING: the access tokens are shown once and are not recoverable. Update app configs now.")
+		return c.printJSON(importJSON(ns, results, false))
 	}
-	_, _ = fmt.Fprintf(c.Stderr, "Imported %d secrets into %s.\n", len(results), ns)
 	return 0
+}
+
+// importReportPrefix builds the error prefix for a report I/O failure, naming
+// the one-time tokens when the report carries them.
+func importReportPrefix(withTokens bool, verb string) string {
+	if withTokens {
+		return verb + " one-time import token report"
+	}
+	return verb + " import report"
+}
+
+// importReportJSON is the JSON form of the mapping report: what came from
+// where, and (for a real import) the one-time access token each new secret
+// received. Tokens appear here exactly once.
+type importReportJSON struct {
+	Namespace importNamespaceJSON `json:"namespace"`
+	DryRun    bool                `json:"dry_run"`
+	Imported  int                 `json:"imported"`
+	Entries   []importEntryJSON   `json:"entries"`
+}
+
+type importNamespaceJSON struct {
+	Env string `json:"env"`
+	App string `json:"app"`
+}
+
+// importEntryJSON mirrors importResult: the field order and names are the same
+// so one converts to the other, and only the JSON tags are new.
+type importEntryJSON struct {
+	Key   string `json:"key"`  // the source key, verbatim
+	Path  string `json:"path"` // /env/app/key it maps to
+	Token string `json:"token,omitempty"`
+}
+
+// importJSON assembles the report document. A dry run reports what would
+// happen and mints no tokens, so imported stays 0 and no entry carries one.
+func importJSON(ns domain.NamespaceRef, results []importResult, dryRun bool) importReportJSON {
+	document := importReportJSON{
+		Namespace: importNamespaceJSON{Env: ns.Env, App: ns.App},
+		DryRun:    dryRun,
+		Entries:   make([]importEntryJSON, 0, len(results)),
+	}
+	if !dryRun {
+		document.Imported = len(results)
+	}
+	for _, r := range results {
+		document.Entries = append(document.Entries, importEntryJSON(r))
+	}
+	return document
 }
 
 // resolveImportNamespace resolves the destination namespace from either

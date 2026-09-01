@@ -118,6 +118,8 @@ func (c *CLI) Run(args []string) int {
 		code = c.cmdAdmin(cmdArgs)
 	case "import":
 		code = c.cmdImport(cmdArgs)
+	case "whoami":
+		code = c.cmdWhoAmI(cmdArgs)
 	case "put-secret":
 		code = c.cmdPutSecret(cmdArgs)
 	case "get-secret":
@@ -260,6 +262,7 @@ Management (talk to a running server over gRPC):
   admin            Manage namespaces, application identities, policies, and client certificates.
 
 Convenience (talk to a running server over gRPC):
+  whoami                        Print the identity the server sees for this credential.
   put-secret /env/app/key       Store a secret (value from --value-file or stdin).
   get-secret /env/app/key       Fetch a secret (requires --show, --out, or a pipe).
   put-parameter /env/app/key V  Store a parameter value.
