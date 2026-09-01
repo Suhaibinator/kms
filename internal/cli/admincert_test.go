@@ -128,8 +128,16 @@ func TestAdminCertIssueEndToEnd(t *testing.T) {
 		t.Fatalf("admin-cert issue exit=%d stderr=%s", code, c.stderr())
 	}
 
-	certPath := filepath.Join(outDir, "ops.crt")
-	keyPath := filepath.Join(outDir, "ops.key")
+	// The CLI prints the canonical reserved paths (fileutil.ResolveStablePath
+	// resolves symlinks and short names): /private/var/... on macOS, the long
+	// form of RUNNER~1 on Windows. Assert against that same canonical form; the
+	// --out argument above deliberately stays the raw t.TempDir() spelling.
+	canonicalOut, err := filepath.EvalSymlinks(outDir)
+	if err != nil {
+		t.Fatalf("canonicalizing %s: %v", outDir, err)
+	}
+	certPath := filepath.Join(canonicalOut, "ops.crt")
+	keyPath := filepath.Join(canonicalOut, "ops.key")
 	if runtime.GOOS != "windows" {
 		keyInfo, err := os.Stat(keyPath)
 		if err != nil {
@@ -185,7 +193,7 @@ func TestAdminCertIssueEndToEnd(t *testing.T) {
 		keyPath,
 		`Issued admin client certificate for identity "ops"`,
 		"openssl pkcs12 -export",
-		filepath.Join(outDir, "ops.p12"),
+		filepath.Join(canonicalOut, "ops.p12"),
 		"--cert " + certPath + " --key " + keyPath,
 		"KMS_CLIENT_CERT_FILE=" + certPath,
 		"still require",
