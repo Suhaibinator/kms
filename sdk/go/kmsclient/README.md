@@ -5,6 +5,9 @@ service. It hides gRPC boilerplate behind a small, safe surface: simple reads,
 declarative store-backed config fields, and hot reload of parameters — with
 secret plaintext that never leaks into logs, errors, or string/JSON output.
 
+Requires Go 1.27 or newer; the public JSON integration uses
+`encoding/json/jsontext` from Go's JSON v2 implementation.
+
 ```go
 import "github.com/Suhaibinator/kms/sdk/go/kmsclient"
 ```

@@ -1,5 +1,5 @@
 // Prop contracts shared by the application, ship, onboarding and palette
-// lanes (plan §3.3). Frozen on day 0 so every lane compiles against the same
+// lanes. Frozen on day 0 so every lane compiles against the same
 // shapes; the components themselves start as null-rendering stubs.
 
 import type {

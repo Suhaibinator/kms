@@ -5,8 +5,8 @@
 //
 // Resources are addressed by domain.Ref (a namespace plus a relative key),
 // never by a parsed path string. Every namespaced operation runs, in order:
-// argument validation (internal/keyutil), the per-namespace auth-method gate
-// (plan §7), authorization (internal/policy, with the implicit home-namespace
+// argument validation (internal/keyutil), the per-namespace auth-method gate,
+// authorization (internal/policy, with the implicit home-namespace
 // grant folded in), the storage call, then audit and watch fan-out.
 package core
 

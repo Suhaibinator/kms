@@ -564,7 +564,7 @@ func toAuditEvent(m auditEventModel) domain.AuditEvent {
 }
 
 // marshalAuthMethods renders a set of auth methods as the stored JSON array.
-// An empty set defaults to ["mtls"] — the strongest posture (plan §3).
+// An empty set defaults to ["mtls"] — the strongest posture.
 func marshalAuthMethods(methods []domain.AuthMethod) string {
 	if len(methods) == 0 {
 		return `["mtls"]`

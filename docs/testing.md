@@ -150,8 +150,17 @@ fixture. The browser gate verifies initial hydration, HTTP refresh, exact
 
 ## Frontend
 
-The frontend has compile-time checks, lint/format gates, component tests,
-browser smoke tests, and a production export:
+The frontend has four distinct validation boundaries:
+
+1. TypeScript, Biome, and Vitest validate source and component behavior.
+2. Go-generated JSON fixtures keep the server DTO and readiness contracts in
+   sync with the frontend types.
+3. Playwright exercises browser behavior against the Next.js development
+   server and in-memory fake API routes.
+4. A production build verifies the static export that is embedded in the Go
+   binary.
+
+Run the complete local sequence with:
 
 ```bash
 cd frontend
@@ -167,9 +176,13 @@ test -f out/index.html
 ```
 
 `npm ci` consumes the committed lockfile, and CI rejects a build that does not
-produce the embedded entry point.
+produce the embedded entry point. `npm run check` combines type checking,
+linting, formatting, Vitest, and the production build; Playwright remains a
+separate command because it requires a browser installation. See the
+[frontend development guide](../frontend/README.md) for the local API proxy and
+static-preview workflow.
 
-### Console fixtures and journeys
+### Server/frontend contract fixtures
 
 The console renders readiness state computed by the Go server, so the two
 sides share one set of fixtures rather than two hand-written copies. Go tests
@@ -179,21 +192,16 @@ write them from the real readiness functions and DTO encoders:
 go test ./internal/core ./internal/server/httpserver -run TestConsoleFixtures -update
 ```
 
-`TestConsoleFixtures` in `internal/server/httpserver/fixtures_test.go` drives
-a real in-process server and writes `frontend/tests/fixtures/backend/
-{fleet,overview-ready,overview-incident,overview-setup,ship-preview,
-ship-conflict}.json`: the fleet form, three `ApplicationOverview` responses
-(a ready application, an incident with a rejected instance and drift, and an
-application with no environments yet), a Ship dry-run preview, and a Ship
-`conflict` result. `TestConsoleFixturesReadiness` in
-`internal/core/consolefixtures_test.go` writes `readiness-cases.json`: 14
-named readiness cases (each an `input` of contract, schema pin, values,
-active release, latest version, and instances, with the `expected` column
-states, environment and application status, and finding codes) plus the
-`type_mapping` block that pins the schema-type ↔ content-type table on both
-sides. Without `-update` both tests compare their output byte-for-byte with
-the committed files and fail on drift, which is how CI runs them
-(`make test-unit` covers both packages).
+`TestConsoleFixtures` in `internal/server/httpserver/fixtures_test.go` drives a
+real in-process server and writes the fleet, application-overview, Ship
+preview, and Ship conflict fixtures under
+`frontend/tests/fixtures/backend/`. `TestConsoleFixturesReadiness` in
+`internal/core/consolefixtures_test.go` writes `readiness-cases.json`, including
+the named readiness cases and the schema-type/content-type mapping shared by
+both implementations. Without `-update`, both tests compare their output
+byte-for-byte with the committed files and fail on drift; `make test-unit`
+covers both packages.
+
 `frontend/tests/fixtures.test.ts` loads every fixture with `satisfies`
 against the TypeScript types in `frontend/lib/types.ts` and replays the
 readiness cases through the frontend's own status/finding vocabulary, so a
@@ -201,41 +209,19 @@ DTO field renamed in Go fails the frontend suite, and a type changed in
 TypeScript fails against the committed JSON. Regenerate and commit the
 fixtures in the same change as any DTO or readiness edit.
 
-The vitest suites added with the application-centred console are grouped by
-the lane that owns them:
+### Browser journeys
 
-- shared (`lib/`, shell, chips): `links`, `ident`, `status-chip`,
-  `breadcrumbs`, `app-shell`, `contract-derive`, `subscribers`, `sse`,
-  `use-release-subscribers`, `fixtures`, `api-console`, `release-utils`,
-  `visual-tokens` (widened to every `styles/*.css` file with the `--ident-*`
-  light/dark parity check);
-- application page: `applications`, `contract-editor`,
-  `create-application-wizard`, `environment-pipeline`, `add-environment-clone`;
-- ship and rollback: `ship-modal` (dry-run call, changed rows, stale-preview
-  gating, one-click non-production ship with `expected_active_version`,
-  production type-to-confirm gating on partial text, the `rejected`,
-  `release_created_not_activated`, and `conflict` phases, drift opt-in,
-  guided versus express default, missing-secret blocker), `rollback-dialog`
-  (pre-validation, CAS, production confirm, 409), `releases`;
-- onboarding and palette: `dashboard`, `setup-steps`, `setup-checklist`,
-  `connect-sdk-panel`, `command-palette`, `identities`, `login`.
+Playwright starts `next dev` on a dedicated loopback port; it does not serve
+the production `out/` directory. Tests intercept `/api/v1/*` with
+`page.route`, using either a focused per-spec fake or the mutable shared fake
+in `frontend/tests/e2e/fakes/console-api.ts`. The suite covers authentication
+and responsive navigation, theme persistence, first-run application setup,
+command-palette routing, Ship/incident/rollback behavior, and wide-modal
+layout on desktop Chromium and the Pixel 7 profile.
 
-Two Playwright journeys under `frontend/tests/e2e/` drive the exported site
-against an in-memory fake API (`tests/e2e/fakes/console-api.ts`) that
-answers `page.route("**/api/v1/**")` from mutable state and returns 404 for
-the subscriber stream so the polling fallback is what the browser exercises:
-
-- `onboarding.spec.ts` — a fresh admin with zero applications: first-run
-  checklist → create-application wizard → first Ship → checklist steps
-  turning done → the pipeline stacking on a Pixel 7 viewport without
-  horizontal overflow.
-- `incident.spec.ts` — `⌘K` to a production alias → Ship with the typed
-  environment name → a rejected instance with its remediation → Roll back
-  with pre-validation → the column back on the previous release.
-
-`npm run test:e2e` runs both alongside the existing `login.spec.ts` and
-`theme.spec.ts` on Chromium desktop and the Pixel 7 profile. The server-side
-counterpart of the stream fallback is
+The shared fake returns 404 for the release-subscriber stream so its Ship and
+incident journeys exercise the polling fallback. The server-side counterpart
+is
 `internal/server/httpserver/subscribers_stream_test.go`, which uses
 `httptest.NewServer` to assert the initial snapshot, keep-alive comments, the
 `end` event, and the per-identity and global caps.
@@ -256,6 +242,10 @@ The workflow in `.github/workflows/ci.yml` runs these independent checks:
 - `Python SDK (pytest & mypy)` — the supported Python-version matrix.
 - `TypeScript SDK` — the complete package gate on supported Node.js majors 22,
   24, and 26.
+- `TypeScript SDK (compiler minimum & Chromium)` — minimum TypeScript
+  declaration consumption and the real-browser Next.js fixture.
+- `TypeScript SDK (Next ... / React ...)` — isolated builds across the
+  supported Next.js and React peer tuples.
 - `Frontend (quality, tests & build)` — locked install, generated types,
   TypeScript, linting, formatting, component/browser tests, and static export.
 - Go lint and `govulncheck` remain independent required checks.

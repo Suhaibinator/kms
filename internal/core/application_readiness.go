@@ -9,7 +9,7 @@ import (
 	"github.com/Suhaibinator/kms/internal/domain"
 )
 
-// Readiness (console plan §3.1) is computed by pure functions over data the
+// Readiness is computed by pure functions over data the
 // overview endpoint has already fetched, so the rules are unit-testable
 // without storage and the frontend never re-derives them.
 

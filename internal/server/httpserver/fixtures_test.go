@@ -15,7 +15,7 @@ import (
 	"github.com/Suhaibinator/kms/internal/domain"
 )
 
-// Console fixtures (plan §3.3): deterministic backend responses the frontend
+// Console fixtures: deterministic backend responses the frontend
 // asserts its TypeScript types against. Run
 //
 //	go test ./internal/core ./internal/server/httpserver -run TestConsoleFixtures -update

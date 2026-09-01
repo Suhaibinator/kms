@@ -1,4 +1,4 @@
-// The command palette's index and search (plan §2.8). Pure: the palette
+// The command palette's index and search. Pure: the palette
 // component feeds it the application and namespace lists and renders what
 // comes back. Scoring is token-prefix / substring / subsequence per query
 // token; every token must match somewhere or the item drops out.

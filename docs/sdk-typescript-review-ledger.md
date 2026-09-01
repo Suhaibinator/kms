@@ -1,5 +1,10 @@
 # TypeScript SDK stage-review ledger
 
+> **Historical audit record.** All stages below reached their recorded
+> dispositions. This ledger preserves review evidence; current behavior and
+> support status live in [`sdk-typescript-api.md`](sdk-typescript-api.md) and
+> [`sdk-typescript-parity.md`](sdk-typescript-parity.md).
+
 This is the durable triage record for the adversarial stage gates required by
 [`sdk-typescript-plan.md`](sdk-typescript-plan.md). It complements the
 behavioral [`sdk-typescript-parity.md`](sdk-typescript-parity.md) matrix: the

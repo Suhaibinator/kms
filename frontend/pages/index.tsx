@@ -313,7 +313,7 @@ export default function DashboardPage() {
     setFleetLoading(true);
     // Parameter/secret totals are cross-namespace overviews, which the
     // namespace-scoped list APIs can't answer directly — they come from the
-    // per-namespace counts on ListNamespaces (plan §10).
+    // per-namespace counts on ListNamespaces.
     const [health, ns, subs, audit] = await Promise.allSettled([
       api.health({ signal: run.signal }),
       api.listNamespaces(200, undefined, { signal: run.signal }),

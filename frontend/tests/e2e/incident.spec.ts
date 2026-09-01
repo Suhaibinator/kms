@@ -1,4 +1,4 @@
-// The incident journey (plan §2.9): from the focused prod column, Edit & ship
+// The incident journey: from the focused prod column, Edit & ship
 // a value, watch the rollout report one rejected instance, roll back from the
 // same modal, and see the column serve the previous release again. Five
 // clicks plus typing, all against the in-memory fake.

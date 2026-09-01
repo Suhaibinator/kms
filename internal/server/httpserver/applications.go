@@ -8,7 +8,7 @@ import (
 	"github.com/Suhaibinator/kms/internal/domain"
 )
 
-// Console application endpoints (plan §3.2). Handlers stay thin: parse, call
+// Console application endpoints. Handlers stay thin: parse, call
 // one service method, render.
 
 func (s *server) handleGetApplication(w http.ResponseWriter, r *http.Request) {

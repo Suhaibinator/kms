@@ -2,14 +2,33 @@
 
 The Go server exposes a JSON HTTP API under `/api/v1/` for the embedded
 frontend. It is backed by the same service layer, auth, and audit pipeline as
-the gRPC API. All responses are JSON. This document is the contract between
-the Go server and the Next.js frontend.
+the gRPC API. Non-streaming success and application-error responses are JSON;
+the release-subscriber stream is server-sent events. This document is the
+contract between the Go server and the Next.js frontend.
 
 Resources are addressed by a **namespace** — a fixed `(env, app)` pair — plus a
 relative **key**. There is no flat `path` string on the wire: requests carry
 explicit `env`, `app`, and `key` fields (query params or JSON body). The
 `/env/app/key` form survives only as a display convention in logs, audit
 rendering, and the frontend; the server never parses it.
+
+## Wire constraints
+
+- JSON request bodies are limited to **4 MiB** and must contain exactly one
+  valid UTF-8 JSON document. Duplicate object names, trailing JSON values, and
+  invalid UTF-8 are rejected. For ordinary endpoint DTOs, JSON field names are
+  case-sensitive and unknown fields are ignored; the raw defaults-artifact
+  endpoint additionally validates its artifact schema.
+- Parameter and secret values are limited to **1 MiB after decoding**. A
+  base64-encoded secret therefore also has to fit inside the 4 MiB request
+  body limit.
+- Paged endpoints default `page_size` to **100** and cap it at **1,000**.
+  Omitted, malformed, or non-positive sizes use the default. Treat
+  `page_token` as opaque and return the supplied filters unchanged on the next
+  request.
+- Normal HTTP routes use 10 s read-header, 30 s read, 60 s write, and 120 s
+  idle timeouts. The subscriber SSE handler clears the write deadline for its
+  response and applies its own five-minute lifetime.
 
 ## Authentication
 
@@ -96,7 +115,7 @@ each need one round-trip. These admin-only endpoints compute the aggregate on
 the server so the frontend renders state rather than deriving it. Their
 response shapes are pinned by Go-generated fixtures under
 `frontend/tests/fixtures/backend/` (see
-[`testing.md`](testing.md#console-fixtures-and-journeys)); the DTOs in
+[`testing.md`](testing.md#serverfrontend-contract-fixtures)); the DTOs in
 `internal/server/httpserver/dto_console.go` mirror the "Console aggregates"
 block of `frontend/lib/types.ts` field for field. Nothing in this section
 returns a parameter value the caller did not just send, secret plaintext, or

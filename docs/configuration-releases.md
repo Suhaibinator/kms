@@ -205,7 +205,7 @@ unless explicitly classified. Operator remediation is in the
 
 ## Loader lifecycle
 
-Equivalent Go and Python loaders perform these steps:
+Equivalent Go, Python, and TypeScript loaders perform these steps:
 
 1. fresh-read or receive the active release;
 2. resolve all exact pins concurrently (default limit 16);
@@ -233,8 +233,10 @@ activation racing immediately after that read can briefly leave a replica on
 the older release; the stream presents the newer release as the next candidate.
 Version 1 has no fleet-wide activation barrier, so replicas apply independently.
 
-See [`sdk-go.md`](sdk-go.md#atomic-release-loading) and
-[`sdk-python.md`](sdk-python.md#atomic-release-loading) for application code.
+See [`sdk-go.md`](sdk-go.md#atomic-release-loading),
+[`sdk-python.md`](sdk-python.md#atomic-release-loading), and the
+[`TypeScript release API`](sdk-typescript-api.md#lifecycle-and-concurrency) for
+application code.
 Generated Go bindings, source-owned defaults, consumer views, and emergency
 override operations are documented in
 [`managed-go-configuration.md`](managed-go-configuration.md).

@@ -62,7 +62,8 @@ client; every key you pass is then resolved SDK-side:
 from a namespace-bound identity (mTLS cert or token). An unbound identity plus a
 relative key raises `NoNamespaceError` — pass `namespace=` or use an absolute
 path. `client.who_am_i()` returns the identity the server sees
-(`name`, `kind`, `namespace`, `auth_method`).
+(`identity`, `kind`, `namespace`, `auth_method`); `name` remains a deprecated
+v0.1 alias for `identity`.
 
 ## TLS / mTLS
 
@@ -134,7 +135,7 @@ client.resolve(cfg)   # walks the object (and nested config objects) concurrentl
 cfg.stripe_key            # -> a redacting Secret
 cfg.stripe_key.value      # -> bytes (explicit access only)
 print(cfg.stripe_key)     # -> [REDACTED]
-cfg.rate_limit.get()      # -> latest value, hot-reloaded when dynamic
+cfg.rate_limit.get()      # -> latest value, hot-reloaded unless static=True
 ```
 
 `SecretValue` resolves to a `Secret`; `ParameterValue` resolves to a handle with
@@ -235,6 +236,14 @@ count from a prepared object's optional `release_divergence()` method.
 `run_typed_release` provides an explicit no-reflection decode step. See
 [`../../docs/sdk-python.md`](../../docs/sdk-python.md#atomic-release-loading)
 for lifecycle, cancellation, token-provider, and status details.
+
+## Generated managed configuration
+
+The optional Pydantic v2 layer generates a typed store, Draft 2020-12 schema,
+and release contract; it also provides atomic snapshots, hot/restart policy,
+defaults export, and value-free defaults verification. See
+[`MANAGED_CONFIG.md`](MANAGED_CONFIG.md). Its generator rejects schemas larger
+than 256 KiB; the KMS server and Go generator permit up to 1 MiB.
 
 ## Errors
 

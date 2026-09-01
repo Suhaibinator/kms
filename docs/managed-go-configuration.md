@@ -7,6 +7,10 @@ supersession, and last-known-good behavior. Generated bindings add strict
 decoding, validation, application-owned defaults, drift policy, immutable
 snapshots, typed consumer views, and deterministic schema artifacts.
 
+This layer requires Go 1.27 or newer. Generated bindings expose canonical JSON
+documents as `encoding/json/jsontext.Value`, matching the repository's Go JSON
+v2 runtime.
+
 For a runnable walkthrough, use:
 
 ```bash
@@ -265,6 +269,10 @@ Generation is deterministic. It never emits defaults, current KMS values,
 secret plaintext, tokens, physical paths, release pins, or timestamps. Rerun
 it when fields, JSON names, types, groups, views, reload policies, or secret
 aliases change. A value-only KMS update does not require regeneration.
+
+The Go generator permits a generated schema up to the server's 1 MiB schema
+limit. The Python and TypeScript generators currently enforce a smaller
+256 KiB generation limit; their SDK guides call out that boundary.
 
 The Draft 2020-12 schema describes the alias-keyed parameter object validated
 by KMS. Secrets are excluded because KMS validates them as independent pinned

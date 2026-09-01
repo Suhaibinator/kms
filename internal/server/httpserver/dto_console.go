@@ -4,7 +4,7 @@ import (
 	"github.com/Suhaibinator/kms/internal/domain"
 )
 
-// Console read-model DTOs (plan §3.2). Field names mirror the "Console
+// Console read-model DTOs. Field names mirror the "Console
 // aggregates" section of frontend/lib/types.ts exactly.
 
 type findingScopeDTO struct {

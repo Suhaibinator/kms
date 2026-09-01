@@ -18,10 +18,10 @@ This document describes the public API as implemented in
 `proto/kms/v1/kms.proto` and [`http-api.md`](http-api.md); for the
 namespace/key model, see [`migration.md`](migration.md).
 
-## Migrating to v0.2
+## Migrating from v0.1 to v0.2
 
-`v0.2.0` is the next minor release for the repository, but it intentionally
-contains breaking Python API cleanup so this SDK follows the current Go and
+The Python package in this source tree is versioned `v0.2.0`. It contains
+intentional breaking API cleanup so the SDK follows the current Go and
 TypeScript semantics:
 
 - `token` is keyword-only on `Client` and `AsyncClient`.
@@ -159,7 +159,7 @@ synchronous `grpc.Channel`.
 
 ## Identity and discovery
 
-The recommended posture (plan §7) is a **client certificate** minted by the
+The recommended posture is a **client certificate** minted by the
 KMS's built-in CA: it proves possession — a stolen bearer token alone is
 useless where a namespace requires mTLS — and the server derives the
 identity, and thus the namespace, from the certificate. Build the transport
@@ -169,7 +169,7 @@ namespace's `allowed_auth_methods` includes `"token"`.
 
 ```python
 me = client.who_am_i()
-me.name          # identity name
+me.identity      # identity name (`name` is a deprecated v0.1 alias)
 me.kind          # "client" | "admin"
 me.namespace     # "env/app", or None when the identity is unbound
 me.auth_method   # "mtls" | "token" | ""
@@ -231,7 +231,7 @@ result = client.put_secret("stripe-api-key", b"sk_live_...",
 
 - `put_parameter(key, value, *, content_type="", metadata_json="", timeout=None) -> PutResult`
 - `put_secret(key, value, *, content_type="", metadata_json="", client_bound=False, generate_access_token=False, expires_at_unix_ms=0, secret_token="", timeout=None) -> PutSecretResult` — `value` may be `bytes` or `str` (a `str` is UTF-8-encoded). A new client-bound secret requires `client_bound=True, generate_access_token=True`; retain the returned one-time token. Updates require `client_bound=True, secret_token=current_token`; also setting `generate_access_token=True` rotates the token for the new version.
-- `list_parameters(namespace=None, key_prefix="", *, page_size=0, page_token="") -> (list[Parameter], next_page_token)` — listing is namespace-scoped; `namespace` accepts an `"env/app"` string (or `None` for the client's own namespace) and `key_prefix` filters by relative-key prefix.
+- `list_parameters(namespace=None, key_prefix="", *, page_size=0, page_token="") -> Page[Parameter]` — listing is namespace-scoped; `namespace` accepts an `"env/app"` string (or `None` for the client's own namespace) and `key_prefix` filters by relative-key prefix. Prefer `page.items` and `page.next_page_token`; two-value unpacking remains only as a v0.1 migration path.
 - `delete_parameter(key, *, timeout=None) -> int` (returns the revision)
 - `get_secret_metadata(key, *, timeout=None) -> SecretInfo` (metadata only, never plaintext)
 - `delete_secret(key, *, timeout=None) -> int` (returns the revision)
@@ -241,6 +241,26 @@ result = client.put_secret("stripe-api-key", b"sk_live_...",
 the generated protobuf messages. `Parameter` and `SecretInfo` carry explicit
 `env`, `app`, and `key` fields, plus `namespace` (`"env/app"`) and `path`
 (`"/env/app/key"`) display properties.
+
+### Public client surface
+
+`AsyncClient` provides awaited equivalents of the same RPC, resolution,
+watch, defaults, and close operations. The stable method families are:
+
+| Family | Methods and results |
+|---|---|
+| Identity and reads | `who_am_i`, `get_parameter`, `get_parameter_info`, `get_secret` |
+| Parameter inventory and writes | `list_parameters -> Page[Parameter]`, `get_parameter_metadata`, `put_parameter`, `delete_parameter` |
+| Secret inventory and lifecycle | `list_secrets -> Page[SecretInfo]`, `get_secret_metadata`, `put_secret`, `delete_secret`, `set_secret_enabled`, `destroy_secret_version`, `promote_secret_version -> PromoteSecretResult` |
+| Runtime configuration | `resolve`, `watch`, `watch_namespace`, `current_revision`, `watch_status` |
+| Managed defaults | `verify_release_defaults -> VerifyReleaseDefaultsResult`, `apply_application_defaults -> ApplicationDefaultsApplyResult` |
+| Lifecycle | `close`; sync and async clients are context managers for their respective execution models |
+
+The package root also exports immutable response models, bounded error types,
+sync/async release loaders, release snapshots/status/stats, declarative value
+descriptors, TLS helpers, and the bounded release state/rejection constants.
+Generated Pydantic configuration has its own
+[`managed-configuration guide`](../sdk/python/MANAGED_CONFIG.md).
 
 ## Errors
 
@@ -577,6 +597,14 @@ activation immediately after it can briefly leave this replica on the prior
 release; the next activation event prepares the newer candidate. Replicas
 apply independently—version 1 has no fleet-wide barrier. See
 [`configuration-releases.md`](configuration-releases.md) for server semantics.
+
+## Generated managed configuration
+
+For strict Pydantic v2 models, deterministic binding/schema/contract
+generation, atomic managed snapshots, defaults export and verification, use
+[`kms-config-gen-py` and the Python managed-configuration guide`](../sdk/python/MANAGED_CONFIG.md).
+The Python generator currently caps generated schemas at 256 KiB, below the
+server and Go generator's 1 MiB limit, and fails before writing any artifact.
 
 ## Parity with the Go and TypeScript SDKs
 
