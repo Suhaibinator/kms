@@ -1,5 +1,11 @@
 # Overview
 
+> **Historical scan artifact.** This threat model was generated for revision
+> `f902af4ba4b4314a86bd295986e94f6234b15214`, not current source, during a scan
+> that stopped before reconciliation and sealing. Use
+> [`../security.md`](../security.md) as the current security reference and
+> [`../security-review.md`](../security-review.md) for remediation status.
+
 `kms` is a self-hosted parameter store and secret-management service delivered as one Go binary. It stores state in SQLite, exposes a machine-facing gRPC API and browser/admin HTTP API, embeds a statically exported Next.js UI, and ships Go and Python client SDKs. Its primary security purpose is to keep application secrets confidential at rest while enforcing namespace-scoped identity and authorization controls for live access. The primary runtime is `cmd/parameter-store` plus `internal/cli`, `internal/server`, `internal/core`, `internal/storage`, `internal/crypto`, `internal/ca`, `internal/policy`, and `internal/watch`. The `frontend` and both SDKs are also product surfaces because they handle credentials, plaintext secret values, namespace context, and update streams. Tests, plans, and generated protobuf bindings are supporting surfaces rather than independently deployed services.
 
 The most valuable assets are secret plaintext, the KEK/master-key material, per-secret client-bound tokens, identity bearer tokens, private keys and certificates, the built-in CA private key, authorization policy, audit integrity, configuration-release integrity, and the availability and ordering of versioned configuration. Parameters are intentionally plaintext in SQLite but may still contain sensitive operational metadata. The SQLite database exposes identities, policy, audit, namespace, release, and schema metadata even when secret ciphertext remains protected.

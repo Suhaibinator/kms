@@ -1,5 +1,11 @@
 # Framework-Neutral TypeScript SDK Plan
 
+> **Historical design record.** This plan has been completed. It is retained
+> to explain the original scope and stage gates, not to describe unfinished
+> work. Use [`sdk-typescript-api.md`](sdk-typescript-api.md) for the current API
+> and [`sdk-typescript-parity.md`](sdk-typescript-parity.md) for live support
+> status.
+
 ## Purpose
 
 Build a Node.js TypeScript SDK with near-full behavioral feature parity with the Go SDK and the KMS contract, without server changes and without coupling the SDK to Next.js. The SDK is the generic configuration and release runtime; applications and framework adapters decide how to expose non-sensitive configuration to browsers.

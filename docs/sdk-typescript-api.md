@@ -371,7 +371,7 @@ surface (the `kms-config-gen-ts` executable is the corresponding CLI):
 | `ReloadPolicy`, `TypeDescriptor`, `NestedFieldDescriptor`, `FieldDescriptor`, `GroupDescriptor`, `SecretDescriptor`, `ConfigDescriptor` | Types | Complete versioned descriptor model for source type, parameter encodings, reload policy, views, and secret aliases. |
 | `parseDescriptor(document)`, `normalizeDescriptor(value)` | Functions | Duplicate-aware JSON parsing or unknown-value validation followed by deterministic sorting and deep freezing. |
 | `DescriptorError` | Error class | Descriptor syntax, shape, naming, collision, nesting, and range failure. |
-| `CONTRACT_FORMAT`, `MAX_SCHEMA_BYTES` | Constants | Generated machine-contract discriminator and generated schema size bound. |
+| `CONTRACT_FORMAT`, `MAX_SCHEMA_BYTES` | Constants | Generated machine-contract discriminator and 256 KiB generated-schema bound. The server and Go generator accept up to 1 MiB. |
 | `GenerateOptions`, `GeneratedArtifacts`, `generate(input, options?)` | Types/function | Deterministically produce binding, schema, contract, and schema SHA-256; import specifiers are explicitly configurable. |
 | `OutputPaths`, `verifyArtifacts(paths, artifacts)`, `writeArtifacts(paths, artifacts)` | Type/functions | Name three explicit destinations, compare without mutation, or stage/fsync/replace changed members. Writers must not run concurrently because the three renames are not one filesystem transaction. |
 | `StaleArtifactsError` | Error class | Reports the copied list of generated outputs that differ in verify/check mode. |
@@ -385,6 +385,9 @@ them without modification in `--check`/`--verify` mode. The descriptor records
 the application root type, parameter groups and field encodings, secret
 aliases, hot/restart policy, and consumer views; it must not contain default or
 secret values.
+
+The TypeScript generator currently rejects schemas larger than 256 KiB before
+writing any artifact. The server and Go generator accept up to 1 MiB.
 
 Generated bindings depend only on the stable package root and `configstore`
 entry point. Generated application artifacts are committed and type-checked;

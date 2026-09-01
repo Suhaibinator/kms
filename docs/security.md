@@ -70,9 +70,9 @@ for one another even though they may use overlapping key material. Because
 AES-GCM authenticates the AAD, a ciphertext blob copied into a different
 record, a different version, or a different layer fails authentication
 immediately rather than decrypting to garbage or — worse — to a
-plausible-looking wrong value. This is what plan §10.5 calls binding
-"namespace, secret name, version" as associated data — now expressed as the
-explicit `(env, app, key)` triple rather than a packed path.
+plausible-looking wrong value. The namespace, secret name, and version are
+bound as the explicit `(env, app, key, version)` tuple rather than a packed
+path.
 
 The old `type:<resource_type>` component is gone: only secrets are
 envelope-encrypted (parameters are stored in plaintext, see below), so there
@@ -144,7 +144,7 @@ inside one storage transaction (metadata swap + rewrap), so rotation is
 crash-safe. For client-bound
 secrets, rotation only touches the outer (KEK) layer; the inner
 client-token-derived layer is untouched and requires no client
-participation (plan §11.4.4).
+participation.
 
 ## Filesystem output integrity
 
@@ -221,10 +221,10 @@ token is rejected as `PermissionDenied`; a supplied wrong token fails the
 version-specific authenticated unwrap as a generic `ErrDecryptFailed`, the same
 failure class as corrupted ciphertext or a wrong KEK.
 
-Layering rather than deriving one key from `master ⊕ token` is deliberate
-(plan §10.7): KEK rotation rewraps only the outer layer as a pure
-server-side operation; client token rotation is independent and only
-requires the client to supply the old token when writing a new version.
+Layering rather than deriving one key from `master ⊕ token` is deliberate:
+KEK rotation rewraps only the outer layer as a pure server-side operation;
+client token rotation is independent and only requires the client to supply
+the old token when writing a new version.
 
 **Token rotation is per-version, not global.** The per-version HKDF key
 share is the token itself, bound to that version's own
@@ -297,11 +297,12 @@ creation/rotation time and is not retrievable again:
   fully audited) but — as noted above — still cannot decrypt a client-bound
   secret without that version's token.
 
-Authentication failures are generic (`domain.ErrUnauthenticated`,
-"invalid credentials") regardless of whether the token was malformed,
-unknown, or belonged to a disabled identity, and every failure is audited
-(`auth.failure`) with the source IP and user agent but never the attempted
-token. Failed authentications are also rate-limited per source IP — see
+Authentication failures are generic at the HTTP and gRPC boundaries regardless
+of whether a presented token was malformed, unknown, or belonged to a disabled
+identity. Presented-but-invalid tokens and failed mTLS mappings are audited as
+`auth.failure` with the source IP and user agent, but never the attempted
+credential. A request with no credential is rejected and rate-limited in the
+same way, but does not create an `auth.failure` row. See
 [below](#login-and-failed-authentication-rate-limiting).
 
 ## Proof of identity: the built-in CA and mTLS
@@ -309,8 +310,8 @@ token. Failed authentications are also rate-limited per source IP — see
 A bearer token scopes access but does not prove possession — anyone holding
 the string is the identity. Machine clients therefore authenticate with
 **mTLS client certificates minted by a certificate authority embedded in the
-KMS** (`internal/ca`, plan-namespaces.md §7). The certificate is proof of
-possession of a private key the KMS issued. In an mTLS-only namespace, a stolen
+KMS** (`internal/ca`). The certificate is proof of possession of a private key
+the KMS issued. In an mTLS-only namespace, a stolen
 database or leaked bearer token does not let an attacker impersonate the
 identity on the wire without its client private key.
 
@@ -326,7 +327,7 @@ server's own TLS serving certificate remains operator-provided.
 `ca_keys` table enveloped exactly like a secret version: its own DEK wraps the
 PKCS#8 key material (`encrypted_key`), and that DEK is wrapped under the active
 KEK (`encrypted_dek`, `kek_id`). KEK rotation rewraps the CA key's DEK
-alongside every secret DEK (plan-namespaces.md §7), so rotation needs no
+alongside every secret DEK, so rotation needs no
 certificate reissue — the identity↔namespace binding lives in the database,
 not in the cert. The plaintext signing key remains in server memory for the
 process lifetime so it can issue certificates.
@@ -697,9 +698,11 @@ them:
 - **`key`** (`ValidateKey`): 1–256 characters total; `/`-separated segments of
   `[a-z0-9._-]`; no leading, trailing, empty, `.`, or `..` segment. The slash
   is validated only as a legal character — a key is an **opaque** string the
-  server never splits, prefix-matches, or otherwise interprets. `db/port` and
+  server never splits into a hierarchy or otherwise interprets. `db/port` and
   `metrics/port` are two unrelated keys; there is no key hierarchy, no
-  `MatchKey`, and no key-pattern authorization anywhere.
+  `MatchKey`, and no key-pattern authorization anywhere. List and audit APIs
+  may apply the caller-requested literal `key_prefix` browsing filter; that
+  prefix match is never an authorization boundary.
 
 Because env, app, and key are explicit, validated fields on the wire — never a
 single path string the server parses — the traversal and injection surface
@@ -710,15 +713,15 @@ an extra namespace segment through a key.
 
 Every secret read, secret reveal, secret/parameter write, version
 promotion, disable, destroy, policy change, namespace change,
-authentication failure, authorization denial, KEK rotation, schema
-registration, release create/validate/activate/rollback, CAS conflict,
+presented-but-invalid credential failure, authorization denial, KEK rotation,
+schema registration, release create/validate/activate/rollback, CAS conflict,
 release lifecycle acknowledgement, defaults verification (counts only), and
 blocked release-reference destruction is audited
 (`internal/core/*.go`, `Service.audit`/`auditRef`/`auditRefWithNamespaceID`/`auditStrict`) into
 `audit_events`. Audit records carry actor identity/kind, the resource's
 `env`/`app`/`key`/version and immutable namespace-incarnation ID (denormalized
 with no foreign key, so the history stays readable after a namespace is
-deleted — plan-namespaces.md §3),
+deleted),
 decision (`allow`/`deny`/`error`), source IP, user agent, request ID, and an
 opaque `metadata_json` blob for operation-specific context — **never** secret
 plaintext, never a token.
@@ -780,7 +783,7 @@ Redaction is enforced by type, not by call-site discipline:
 
 ## What this does not protect against
 
-Being explicit about the boundary, per plan §3 (non-goals) and §10.7.4:
+The security boundary explicitly does not protect against:
 
 - **A live, fully compromised KMS host.** If an attacker has code execution
   on the server process, they can read the unsealed KEK from memory,
@@ -800,7 +803,7 @@ Being explicit about the boundary, per plan §3 (non-goals) and §10.7.4:
   [`operations.md`](operations.md#disaster-recovery) for what this means
   operationally.
 - **This is not a replacement for a cloud KMS, HSM, or enterprise
-  key-management system** in high-compliance environments (plan §3.1); the
+  key-management system** in high-compliance environments; the
   local KEK provider is the only one implemented in v1.
 - **Multi-tenant isolation beyond namespace authorization.** All tenants share
   one SQLite database and one master key; isolation is enforced by the

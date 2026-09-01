@@ -68,8 +68,10 @@ management.
   validated root type with storage, reload-policy, and consumer-view tags.
   `kms-config-gen` emits strict decoders, immutable atomic snapshots and typed
   views, a release schema, and a machine contract. Application-owned defaults
-  fail closed on startup drift while explicit hot emergency overrides remain
-  possible. See [`docs/managed-go-configuration.md`](docs/managed-go-configuration.md).
+  are applied on startup drift while the divergence is surfaced through
+  callbacks, status, logs, and metrics; use value-free defaults verification as
+  the release gate. See
+  [`docs/managed-go-configuration.md`](docs/managed-go-configuration.md).
 - **Declarative SDK config** in Go, Python, and TypeScript: `SecretValue`/
   `ParameterValue` fields resolved with one `Resolve`/`resolve` call — env
   override, then store, then dev default, else a startup error naming the
@@ -178,12 +180,14 @@ the Python SDK, the TypeScript SDK, and a multi-platform container image through
 GitHub. For example:
 
 ```bash
+VERSION=0.1.15 # choose a release containing RELEASE_COMPLETE.json
+
 # Container image (Linux amd64/arm64).
-docker pull ghcr.io/suhaibinator/kms:0.1.0
+docker pull "ghcr.io/suhaibinator/kms:${VERSION}"
 
 # Python SDK wheel from the GitHub Release.
 python -m pip install \
-  https://github.com/Suhaibinator/kms/releases/download/v0.1.0/kms_paramstore-0.1.0-py3-none-any.whl
+  "https://github.com/Suhaibinator/kms/releases/download/v${VERSION}/kms_paramstore-${VERSION}-py3-none-any.whl"
 ```
 
 GitHub's npm registry requires an authenticated `@suhaibinator` scope before
@@ -407,6 +411,10 @@ env var table, is in
 server:
   grpc_addr: "0.0.0.0:8443"
   http_addr: "0.0.0.0:8080"
+  verify_defaults:
+    requests_per_hour: 60
+    burst: 10
+    mismatch_budget_per_hour: 500
 
 storage:
   sqlite_path: "/var/lib/parameter-store/kms.db"
@@ -500,8 +508,7 @@ are global, so a subscriber may appear behind because another namespace
 changed; use the view as a coarse liveness/lag signal, not proof that a
 specific key was applied. See [`docs/sdk-go.md`](docs/sdk-go.md#hot-reload),
 [`docs/sdk-python.md`](docs/sdk-python.md), and the
-[TypeScript SDK guide](sdk/typescript/README.md#declarative-values-and-hot-reload),
-and [`plan-namespaces.md`](plan-namespaces.md) §9 for the full design.
+[TypeScript SDK guide](sdk/typescript/README.md#declarative-values-and-hot-reload).
 
 For related values that must change together, use a **configuration release**
 instead of independent key callbacks. A release-aware client observes the
@@ -518,23 +525,16 @@ defaults, typed views, and reload-policy enforcement should use the
 
 ## Frontend
 
-The `frontend/` directory is a Next.js app built as a static export
-(`output: "export"`, no server runtime) and embedded into the binary. It
-covers: login (bearer token), a dashboard, namespace management (create with
-`(env, app)` and allowed auth methods, per-namespace parameter/secret
-counts), parameter create/edit/version history, secret
-create/update/promote/disable/destroy with an explicit reveal flow (secret
-values are hidden by default and require an explicit action, with
-client-bound secrets showing no reveal option at all — the server cannot
-produce their plaintext), policy management, identity management (namespace
-binding, auth methods, one-time mTLS certificate issuance and revocation),
-audit log browsing with filters, live subscriber visibility, configuration
-release/schema creation, validation, diff, activation, rollback and per-instance
-apply status, and a
-health/status view. All dynamic data comes from the
-`/api/v1/*` JSON API described in [`docs/http-api.md`](docs/http-api.md);
-unknown frontend routes fall back to the exported entry HTML so
-client-side routing resolves deep links on refresh.
+The `frontend/` directory is a Next.js static export (`output: "export"`, no
+Node server runtime) embedded into the Go binary. It provides the operator
+console for applications and environments, parameters and secrets, identities
+and policies, releases and schemas, audit events, subscribers, and service
+health. Secret plaintext is hidden unless explicitly revealed, and
+client-bound secrets cannot be revealed by the server. Dynamic data comes from
+the [`/api/v1/*` API](docs/http-api.md); unknown frontend routes fall back to
+the exported entry HTML so client-side deep links work on refresh. See the
+[`frontend` development guide](frontend/README.md) for local workflows and
+[`docs/testing.md`](docs/testing.md#frontend) for test boundaries.
 
 ## Client SDKs
 
@@ -561,6 +561,8 @@ client-side routing resolves deep links on refresh.
 
 ## Documentation
 
+- [`docs/README.md`](docs/README.md) — documentation map, including active
+  references and historical records.
 - [`docs/operations.md`](docs/operations.md) — running in production:
   systemd, TLS/mTLS, backup/restore, disaster recovery, KEK rotation,
   monitoring.
@@ -585,10 +587,11 @@ client-side routing resolves deep links on refresh.
   guarantees.
 - [`docs/migration.md`](docs/migration.md) — migrating from
   SuhaibParameterStore (gradethis's prior parameter store).
-- [`plan.md`](plan.md) — the original requirements/design record (historical;
-  current contracts live in `README.md` and `docs/`).
-- [`plan-namespaces.md`](plan-namespaces.md) — the completed namespace-native
-  rewrite record.
+- [`docs/testing.md`](docs/testing.md) — local and CI validation commands.
+- [`docs/releasing.md`](docs/releasing.md) — release artifacts, installation,
+  verification, and maintainer workflow.
+- [`docs/consumer-adoption.md`](docs/consumer-adoption.md) — adopting generated
+  managed configuration in a consuming Go service.
 
 ## License
 

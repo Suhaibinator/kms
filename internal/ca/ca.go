@@ -1,6 +1,6 @@
 // Package ca implements the KMS's built-in certificate authority. It mints the
 // short-lived client certificates that machine clients present for mTLS
-// authentication (plan-namespaces.md §7).
+// authentication.
 //
 // The package is deliberately self-contained: it depends only on the standard
 // library and knows nothing about the KMS's domain types, storage, or wire

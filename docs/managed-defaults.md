@@ -43,7 +43,11 @@ go run ./cmd/export-kms-defaults --profile dev --output defaults.dev.json
 ```
 
 The TypeScript SDK provides the equivalent `runDefaultsExporter` and generated
-`encodeDefaultsArtifact` entry points.
+`encodeDefaultsArtifact` entry points. Python generated stores expose
+`defaults_artifact`, `export_defaults`, and sync/async `verify_defaults`;
+`Client.apply_application_defaults` and its async equivalent preview or apply
+the resulting artifact. See the
+[`Python managed-configuration guide`](../sdk/python/MANAGED_CONFIG.md).
 
 The deterministic `kms-config-defaults/v1` JSON records the profile, generated
 schema SHA-256, complete contract, and exact encoded value for every parameter
@@ -166,8 +170,8 @@ themselves.
 
 The verification identity needs the `configuration-release:verify-defaults`
 operation on each namespace it checks. Create it **without** a home namespace
-so it holds no implicit read grant, then allow exactly that operation per
-`env/app` (the policy verb is being added alongside the server RPC):
+so it holds no implicit read grant, then allow exactly that implemented
+operation per `env/app`:
 
 ```bash
 parameter-store admin identity create ci-verify-payments --kind client --auth token

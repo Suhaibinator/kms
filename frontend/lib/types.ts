@@ -542,7 +542,7 @@ export interface KeysResponse {
   keys: KeyMetadata[];
 }
 
-// The operation identifiers recognized by the policy engine (plan §6, §16.1),
+// The operation identifiers recognized by the policy engine,
 // and the content types the server accepts for a parameter value.
 //
 // Both sets are defined once, in lib/validation.ts, alongside the validators
@@ -568,7 +568,7 @@ export const PARAMETER_CONTENT_TYPES: string[] = [...CONTENT_TYPES];
 //
 // Read-model endpoints the console composes its application, fleet and ship
 // surfaces from. The backend computes every state and finding (readiness state
-// machine, plan §3.1); the frontend only renders. Copy for finding codes lives
+// machine); the frontend only renders. Copy for finding codes lives
 // in lib/readiness.ts, keyed by `code` — `params` carry numbers and names,
 // never values.
 
@@ -633,8 +633,8 @@ export interface Finding {
   params: Record<string, string | number>;
 }
 
-// One contract alias resolved against an environment (plan §3.1 alias → key
-// resolution). `key` is absent when the alias resolved to nothing.
+// One contract alias resolved against an environment. `key` is absent when
+// the alias resolved to nothing.
 export interface OverviewValue {
   alias: string;
   kind: ReleaseEntryKind;

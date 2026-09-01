@@ -2,7 +2,7 @@
 
 This service exists to replace SuhaibParameterStore. The migration is done
 when gradethis builds and runs with no dependency on
-`SuhaibParameterStoreClient` (plan §33).
+`SuhaibParameterStoreClient`.
 
 ## Concept mapping
 
@@ -64,7 +64,7 @@ type Config struct {
 func Load(ctx context.Context) (*Config, error) {
     client, err := kmsclient.NewClient(kmsclient.Config{
         Endpoint: os.Getenv("PARAM_STORE_ENDPOINT"),
-        // Cert-only identity (plan §7): the client certificate authenticates,
+        // Cert-only identity: the client certificate authenticates,
         // and the namespace is discovered from the bound identity via WhoAmI.
         // No Token, no Namespace needed here.
         TLS: kmsclient.MTLSFromFiles(
@@ -299,17 +299,28 @@ as the next candidate, so do not treat activation as a distributed commit.
    parameter-store import --from parameterstore.db \
        --env prod --app gradethis --dry-run
    parameter-store import --from parameterstore.db \
-       --env prod --app gradethis --report tokens.csv
+       --env prod --app gradethis --report tokens.txt
    ```
+   `--from` accepts the legacy SQLite database's `parameters(key, value)`
+   table, a JSON object (`{"KEY":"value"}`), or a JSON array
+   (`[{"key":"KEY","value":"value"}]`). Non-string JSON values retain their
+   JSON encoding and are still imported as `text/plain` secrets.
+
    A dry-run report contains only the old-key → display-path mapping. A real
    import additionally includes each freshly minted per-secret access token;
    store that report securely, distribute the tokens into gradethis config,
-   then delete it. (Import flags: [`operations.md`](operations.md).)
+   then delete it. The report is arrow-delimited plain text, not CSV.
+   Import commits one secret at a time and writes the report last, so a later
+   failure can leave partial writes without a complete token report. Inspect
+   the destination before retrying; a retry creates new versions and can
+   rotate tokens. (Import details: [`operations.md`](operations.md).)
 4. **Dual-run**: point gradethis dev/staging at the new SDK; keep the old
-   store running. Verify every value matches (compare tool / staging boot).
+   store running. Verify every value through application-level assertions or
+   a staging boot that exercises every required field; this repository does
+   not include a separate migration comparison command.
 5. **Cut over production**, then decommission SuhaibParameterStore.
 
-## Acceptance checklist (plan §33.4)
+## Acceptance checklist
 
 - [ ] gradethis builds and boots with only the new SDK.
 - [ ] The `prod/gradethis` namespace exists and gradethis's identity is bound

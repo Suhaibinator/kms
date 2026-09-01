@@ -436,8 +436,8 @@ class Client:
     ) -> Page[Parameter]:
         """List parameters in a namespace under an optional key prefix.
 
-        ``namespace`` defaults to the client namespace. Returns
-        ``(parameters, next_page_token)``.
+        ``namespace`` defaults to the client namespace. Returns an immutable
+        :class:`Page`; two-value iteration is retained only for v0.1 migration.
         """
         ns = self._resolve_namespace_arg(namespace)
         page_size = _valid_page_size(page_size)

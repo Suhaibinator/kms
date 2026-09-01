@@ -34,16 +34,20 @@ kms-config-gen-py --model app.config:AppConfig \
 ```
 
 Use `--check` in CI. It compares all three files without rewriting them.
+Generation fails before writing any artifact when the generated schema exceeds
+256 KiB. The KMS server and Go generator permit schemas up to 1 MiB; Python's
+generator currently enforces the smaller limit.
 
 The generated module is the normal runtime entry point. Construct its typed
 store from source defaults, then start the sync or asyncio manager:
 
 ```python
-from app.config import AppConfig
 from app.config_generated import GeneratedConfigStore
 from kms_paramstore.configstore import Callbacks
 
-store = GeneratedConfigStore(AppConfig(password=bootstrap_password))
+# Source defaults contain only parameters and unmanaged fields. Secrets come
+# exclusively from exact release pins.
+store = GeneratedConfigStore({})
 manager = store.start(
     client,
     release="runtime",

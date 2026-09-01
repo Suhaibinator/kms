@@ -1,8 +1,15 @@
 # Repository Coverage Ledger
 
-Target revision: `f902af4ba4b4314a86bd295986e94f6234b15214`
+> **Historical, incomplete scan artifact.** Target revision:
+> `f902af4ba4b4314a86bd295986e94f6234b15214`, not current source. The
+> `open_frontier` dispositions below record unfinished work in that interrupted
+> scan; they are not current vulnerability or coverage status. See the
+> [remediation outcome](../security-review.md#remediation-outcome).
 
-This ledger was seeded before deep file review from the ranked runtime inventory and the repository-level frontier pass. `open_frontier` rows are interim and must be reconciled to `reportable`, `suppressed`, `not_applicable`, or `deferred` before final reporting.
+This ledger was seeded before deep file review from the ranked runtime inventory
+and repository-level frontier pass. At scan time, `open_frontier` rows still
+needed reconciliation to `reportable`, `suppressed`, `not_applicable`, or
+`deferred`; that reconciliation never ran.
 
 | Row | Boundary / shard | Family | Root control or seed | Source / privileged boundary | Sink or control checked | Files checked / queued | Candidate IDs | Disposition | Evidence / closure requirement |
 |---|---|---|---|---|---|---|---|---|---|

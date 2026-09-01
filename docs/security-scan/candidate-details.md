@@ -1,19 +1,22 @@
 # Candidate Details
 
-Per-candidate detail for the 14 distinct issues summarised in the triage table in
-[`../security-review.md`](../security-review.md). Read that file first — it
-carries the status banner, the evidence vocabulary, and the scope limits that
-apply to everything here.
+> **Historical scan artifact.** These claims describe revision
+> `f902af4ba4b4314a86bd295986e94f6234b15214`, not current source. All 14 rows
+> have fixed dispositions in
+> [`../security-review.md`](../security-review.md#remediation-outcome). The
+> present-tense claim text, locations, severities, and proof gaps below are
+> preserved verbatim as evidence from the interrupted scan; do not treat them
+> as an active vulnerability list.
 
-Nothing in this file is a confirmed vulnerability. Every item is an **unvalidated
-candidate** from a scan that did not run to completion. Severities are reproduced
-verbatim from each candidate's own attack-path receipt; where the scan recorded
-none, the entry reads *not assigned*, which means **unrated, not low**. Each
-static candidate's `proof_gap` and counterevidence are preserved as the scan
-wrote them.
+Per-candidate detail follows the historical candidate table in
+[`../security-review.md`](../security-review.md). The scan did not complete
+reconciliation or sealing, so these were not final reportable findings even
+where its local evidence label was **Demonstrated**. Severities are reproduced
+from the original attack-path receipts; *not assigned* means **unrated, not
+low**.
 
-Section numbers match the triage table's `#` column (most-actionable first), not
-candidate-ID order.
+Section numbers match the historical candidate table's `#` column (the
+original most-actionable-first order), not candidate-ID order.
 
 ---
 

@@ -65,7 +65,7 @@ function newRequestId(): string {
 
 /**
  * Quick change: edit values, dry-run a preview, ship with a CAS guard, watch
- * the rollout — one modal, guided or express (plan §2.4).
+ * the rollout — one modal, guided or express.
  */
 export default function ShipModal({
   application,

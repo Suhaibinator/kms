@@ -22,6 +22,9 @@ and a worked example, see [`migration.md`](migration.md).
 
 ## Installing
 
+The SDK requires Go 1.27 or newer. Its public redaction and managed-
+configuration surfaces use the Go 1.27 `encoding/json/jsontext` APIs.
+
 ```bash
 go get github.com/Suhaibinator/kms/sdk/go/kmsclient
 ```

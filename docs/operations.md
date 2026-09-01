@@ -89,16 +89,24 @@ log:
 `mtls_enabled` requires `tls_enabled`; `tls_enabled` requires
 `server_cert_file`/`server_key_file` to exist; `mtls_enabled` requires
 `client_ca_file` to exist; every `server.verify_defaults.*` budget is
-positive and `mismatch_budget_per_hour` is at least 300. `Config.Redacted()` is what the server logs at
-startup — addresses, paths, and feature flags, deliberately never a
-wholesale dump of the file (so nothing sensitive that might end up in the
-YAML by mistake gets logged).
+positive and `mismatch_budget_per_hour` is at least 300; and every
+`watch.*` duration or row/version count is positive. `Config.Redacted()` is
+what the server logs at startup — addresses, paths, and feature flags,
+deliberately never a wholesale dump of the file (so nothing sensitive that
+might end up in the YAML by mistake gets logged).
 
 Logs are structured JSON emitted by [Uber zap](https://github.com/uber-go/zap):
 each line carries `ts` (ISO8601, millisecond precision), a lowercase `level`
 (`debug`/`info`/`warn`/`error`), `msg`, and typed fields. `log.level` /
-`KMS_LOG_LEVEL` sets the minimum level (default `info`). Secret plaintext,
-tokens, and key material never appear in a log line at any level.
+`KMS_LOG_LEVEL` sets the minimum level (default `info`). Accepted values are
+`debug`, `info`, `warn`/`warning`, and `error`; an empty or unrecognized value
+falls back to `info`. Secret plaintext, tokens, and key material never appear
+in a log line at any level.
+
+The HTTP server uses 10 s read-header, 30 s read, 60 s write, and 120 s idle
+timeouts. The release-subscriber SSE endpoint clears its write deadline for
+that response and enforces its own five-minute lifetime. Configure reverse
+proxies with limits at least this large.
 
 ## Connect a production application with mTLS
 
@@ -310,6 +318,19 @@ process reads immediately via its shared database). All flags are the standard l
 | `rotate-admin` | `--db`, `--name` (required) | Recovery command that directly replaces an existing enabled admin identity's token hash and prints the new token once. The old token becomes invalid immediately; a disabled admin, client identity, missing identity, or identity without a token is rejected without mutation. It does not require the old token, master key, or a running server. If output is lost, rerun the command to mint another replacement. A running server observes the shared-database update immediately, but operators must coordinate concurrent identity administration. |
 | `rotate-kek` | `--db`, `--key-file` (current key, omit to use the current passphrase), `--new-key-file` (new key, omit to enter a new passphrase) | Unseals with the current key, generates or loads the new key, and calls the same `Service.RotateKEK` used internally — rewrapping every **non-destroyed** secret version's DEK and every built-in CA key under the new KEK in one transaction. Prints both counts (`N secret versions and M CA keys rewrapped`). Run with `serve` stopped; a live process retains the old keyring. |
 | `import` | `--from` (JSON file or SuhaibParameterStore SQLite export), `--namespace env/app` **or** `--env`/`--app`, `--db` (default `./kms.db`), `--master-key-file`, `--dry-run`, `--report FILE` | Maps flat source keys to **relative slug keys** (`slug(key)`, e.g. `TWILIO_SID` → `twilio-sid`) in the destination namespace, **auto-creates the namespace** if it does not exist, writes each as a new secret via a ref-based `PutSecret` with a freshly minted per-secret access token, and emits a mapping report (old key → `/env/app/key` display path → token, written once). Distinct source keys that slug to the same key are reported as a collision rather than silently overwriting. `--dry-run` reports the mapping without writing or minting tokens. Pass either `--namespace` or `--env`/`--app`, not both. See [`migration.md`](migration.md) for the full gradethis walkthrough. |
+
+`import --from` accepts either a SuhaibParameterStore SQLite database with a
+`parameters(key, value)` table, a JSON object such as `{"KEY":"value"}`, or a
+JSON array such as `[{"key":"KEY","value":"value"}]`. JSON strings import
+as their unquoted text; other JSON values retain their JSON encoding, and all
+imported values use secret content type `text/plain`. The report is plain text,
+not CSV: each real-import row is `old-key -> /env/app/key -> access-token`.
+
+Import is not an all-or-nothing transaction: namespace creation and each
+secret version commit independently, and the one-time token report is written
+only after all values succeed. If a later write or report write fails, inspect
+the destination before retrying. A retry creates additional versions and may
+rotate access tokens; preserve only the final successful report.
 
 The v1→v2 database migration adds content type, client-bound mode, and
 token-required state to each immutable secret-version row. Because v1 retained
@@ -599,8 +620,9 @@ On `serve`, the process (`internal/cli/serve.go`):
 7. Starts the gRPC listener (via `cli.GRPCFactory`, wired in
    `cmd/parameter-store/main.go` to `internal/server/grpcserver`), then the
    HTTP listener.
-8. Blocks on `SIGINT`/`SIGTERM`, then shuts down: gRPC graceful stop, HTTP
-   graceful shutdown (20s timeout), stop the watch hub, close the store.
+8. Blocks on `SIGINT`/`SIGTERM`, then shuts down: gRPC graceful stop is capped
+   at 10 s before active streams are forced closed; HTTP shutdown uses a 20 s
+   overall context; then the watch hub stops and the store closes.
 
 `/healthz` is liveness (process is up). `/readyz` and the gRPC standard
 health service (`grpc.health.v1.Health`, `internal/server/grpcserver`)
@@ -933,7 +955,7 @@ decryption errors later. Confirm `/readyz` reports ready after starting.
 | Database lost, key intact, backup exists | Restore the backup; secrets decrypt normally. |
 | Database corrupted, no backup | Data loss. This is single-node embedded storage — back it up. |
 | **Master key lost, database intact** | **All secret versions are permanently unrecoverable, including client-bound versions** (which require the master key plus their client token). There is no escrow, recovery mechanism, or support path. Parameters and metadata are unaffected. The KEK-wrapped CA private key is also unrecoverable, so the old instance cannot start; a replacement instance bootstraps a new CA and all client certificates must be re-issued. This is why the key backup procedure above must never be skipped. |
-| **A client-bound version's client token is lost** | Every version encrypted under that token is **permanently unrecoverable**, even with the master key and database intact. Versions written under other retained tokens remain readable. This is by design (plan §10.7.3); the frontend requires explicit acknowledgment at creation time. |
+| **A client-bound version's client token is lost** | Every version encrypted under that token is **permanently unrecoverable**, even with the master key and database intact. Versions written under other retained tokens remain readable. This is by design; the frontend requires explicit acknowledgment at creation time. |
 | Wrong master key / passphrase supplied | Startup fails immediately at the key-check step (`VerifyKeyCheck`) with an actionable error — the service will not start in a half-unsealed state. |
 
 ## KEK rotation
@@ -949,9 +971,8 @@ without reissuing any certificate. Every rewrapped row receives the new
 No readable secret or CA row depends on the retired KEK after the transaction.
 
 For client-bound secrets, rotation **only touches the outer (KEK) layer**.
-The inner, client-token-derived layer is untouched — rotating the master
-key never requires contacting any client or invalidating any client token
-(plan §11.4.4).
+The inner, client-token-derived layer is untouched — rotating the master key
+never requires contacting any client or invalidating any client token.
 
 ```bash
 parameter-store rotate-kek --db /var/lib/parameter-store/kms.db \

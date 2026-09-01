@@ -1,6 +1,6 @@
-// The setup checklist, derived purely from what the console already knows
-// (plan §2.6): how many applications and namespaces exist, and — once an
-// application exists — its overview. The first-run checklist on `/` and the
+// The setup checklist is derived purely from what the console already knows:
+// how many applications and namespaces exist and, once an application exists,
+// its overview. The first-run checklist on `/` and the
 // SetupPanel on an application page render the same list; only the inputs
 // differ. Nothing here fetches.
 

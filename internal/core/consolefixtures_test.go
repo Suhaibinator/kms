@@ -13,7 +13,7 @@ import (
 	"github.com/Suhaibinator/kms/internal/domain"
 )
 
-// readiness-cases.json (plan §3.3) pins the pure readiness functions: each
+// readiness-cases.json pins the pure readiness functions: each
 // case is a compact input the frontend can also reason about plus the states
 // and finding codes the backend derives from it, and the schema-type ↔
 // content-type table both sides must agree on. Regenerate with

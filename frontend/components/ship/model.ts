@@ -1,4 +1,4 @@
-// Pure state helpers for the ship modal (plan §2.4). Nothing here touches the
+// Pure state helpers for the ship modal. Nothing here touches the
 // DOM or the API, so the row/change/outcome logic is unit-testable on its own
 // and the components stay presentational.
 

@@ -1,17 +1,20 @@
 # Security Review — Automated Scan Candidates
 
-> **Status: remediated in the working tree (2026-07-20).** The source scan was
-> incomplete and its candidates were initially unvalidated. Every distinct
-> candidate below has now been reproduced or traced to its invariant, fixed,
-> and covered by focused regression tests; the original evidence and wording
-> remain below as historical input.
-> **Scope:** the whole repository at `f902af4ba4b4314a86bd295986e94f6234b15214`,
-> which is the baseline `HEAD` beneath these working-tree remediations.
+> **Historical artifact — remediated after the 2026-07-20 scan baseline.** The
+> source scan was incomplete and its candidates were initially unvalidated.
+> Every distinct candidate was subsequently reproduced or traced to its
+> invariant, fixed, and covered by focused regression tests. The remediation
+> outcome below describes the implemented fixes; the candidate claims and
+> evidence that follow are preserved only as historical input and do not
+> describe current behavior.
+> **Scan scope:** repository revision
+> `f902af4ba4b4314a86bd295986e94f6234b15214`, a historical target that is not
+> current `HEAD`.
 > **18 candidate ledgers → 14 distinct issues** (duplicates grouped here by hand).
-> This is *not* [`security.md`](security.md) — that is the hand-authored reference
-> describing the system **as designed**; this file is a machine's **unconfirmed
-> reading of the implementation**. Where they disagree, neither is automatically
-> right: `security.md` states intent, this file states an untriaged observation.
+> This is *not* [`security.md`](security.md), the current hand-authored security
+> reference. The raw machine observations below retain their original wording;
+> use the remediation table, current source, and regression tests to understand
+> their resolution.
 
 ## Remediation outcome
 
@@ -85,11 +88,14 @@ This repository is unusual: **six of the fourteen items were actually executed**
 — rows 3–4 over real HTTP, rows 5 and 9–11 against a real filesystem — rather
 than only read. Those are the ones to trust first.
 
-## Triage table
+## Historical candidate table
 
-Ranked by what a maintainer should look at first, not by candidate ID.
+This is the original triage order, not an active vulnerability queue. Every row
+maps to the fixed disposition with the same number in
+[Remediation outcome](#remediation-outcome). Locations and present-tense claims
+refer to the historical scan target and may no longer resolve in current code.
 
-| # | Issue | Location | Severity | Evidence | Detail |
+| # | Original candidate claim | Historical location | Severity | Original evidence | Detail |
 |---|---|---|---|---|---|
 | 1 | Go SDK picks cleartext gRPC when `Config.TLS` is left unset — tokens and secret plaintext ride the wire | `sdk/go/kmsclient/client.go:170` | **high** | Traced | [→](security-scan/candidate-details.md#1-go-sdk-selects-insecure-transport-by-default) |
 | 2 | Python SDK does the same when `tls=None` | `sdk/python/kms_paramstore/client.py:129` | **high** | Traced | [→](security-scan/candidate-details.md#2-python-sdk-selects-insecure-transport-by-default) |
@@ -111,27 +117,13 @@ Rows 3 and 4 each cover **three** candidate IDs that the scan never deduped
 that is the entire 18 → 14 difference. Full ID mapping is in
 [`candidate-details.md`](security-scan/candidate-details.md).
 
-## Start here
+## Original investigation sequence
 
-1. **Read the two SDK constructors (rows 1–2).** `sdk/go/kmsclient/client.go:167-170`
-   and `sdk/python/kms_paramstore/client.py:125-130` are a few minutes of reading
-   and settle both **high** items outright: decide whether an unset TLS config
-   should select cleartext, or whether cleartext should require an explicit
-   opt-in. Safe explicit TLS builders already exist in both SDKs.
-2. **Re-run the two demonstrated method-gate bypasses (rows 3–4).** These
-   reproduced over real HTTP *and* contradict a written guarantee in
-   `security.md` that the gate runs "on every namespaced operation." Confirm,
-   then decide which document is wrong.
-3. **Decide the file-mode posture (rows 5, 9, 10, 11).** All four were observed
-   directly under a forced `umask 022`. They share one question: should the CLI
-   and storage layer set explicit restrictive modes rather than inheriting the
-   umask? Row 5 leaks a private key and deserves priority within this group.
-4. **Assess the three concurrency traces (rows 6–8).** None were executed — no
-   scheduling harness was built. Either build one or reason the interleavings
-   out at the source. Row 6 is the only plaintext-disclosure claim in the scan
-   and also carries its lowest confidence (0.82).
-5. **Check whether any deployment configures an additional client CA (row 14).**
-   If none does, this is inert. If one does, it moves to the top of this list.
+The interrupted scan prioritized SDK transport defaults, the demonstrated
+method-gate bypasses, filesystem output modes, secret concurrency traces, and
+additional-client-CA identity binding, in that order. Those tasks led to the
+fixes summarized above. They are retained as provenance, not as outstanding
+maintainer actions.
 
 ## Scope & limits
 
@@ -151,12 +143,11 @@ What this review can and cannot support:
   precondition: those rows *"must be reconciled to `reportable`, `suppressed`,
   `not_applicable`, or `deferred` before final reporting."* That never happened.
   So "the scan did not flag X" is **not** evidence that X is safe.
-- **Line numbers drift.** Citations were spot-checked against `HEAD` and land
-  correctly today; they will rot as soon as these files are edited.
-- **To regenerate:** re-run the Codex security scan against
-  `f902af4ba4b4314a86bd295986e94f6234b15214` and let it proceed through
-  reconciliation and sealing. The original workspace was a temporary directory
-  and should be assumed gone.
+- **Line numbers are historical.** Citations refer to the scan target and are
+  not expected to land in current source.
+- **To regenerate current results:** start a new Codex security scan against the
+  desired current revision and let it proceed through reconciliation and
+  sealing. The original workspace was temporary and should be assumed gone.
 
 ## Artifact index
 
@@ -176,7 +167,7 @@ summarised in `candidate-details.md`; `04_reconciliation/` was empty.
 
 | Field | Value |
 |---|---|
-| Target revision | `f902af4ba4b4314a86bd295986e94f6234b15214` (== current `HEAD`) |
+| Target revision | `f902af4ba4b4314a86bd295986e94f6234b15214` (historical scan target; not current `HEAD`) |
 | Scan ID | `f902af4ba4b4314a86bd295986e94f6234b15214_20260720T032103Z_hko3mvpu` |
 | Repository digest | `sha256:aff589429acb0ca0b8e3d908a882e4eb55c22d46574df91a33b6196c272bdbf4` |
 | Mode | `standard_repository_scan` |

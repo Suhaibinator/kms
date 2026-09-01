@@ -15,8 +15,8 @@
 //  2. Else if any allow rule matches -> allow.
 //  3. Else -> deny.
 //
-// Authorize additionally honors the implicit home-namespace grant (plan §3,
-// §6): a namespace-bound identity may perform read/list operations within its
+// Authorize additionally honors the implicit home-namespace grant: a
+// namespace-bound identity may perform read/list operations within its
 // own namespace with no explicit allow rule. Deny rules still override the
 // implicit grant.
 package policy
@@ -64,7 +64,7 @@ func allowedBy(policies []domain.Policy, operation string, ns domain.NamespaceRe
 }
 
 // implicitHomeOps are the operations a namespace-bound identity may perform in
-// its own namespace with no explicit policy (plan §3, §6): parameter and secret
+// its own namespace with no explicit policy: parameter and secret
 // reads and lists. Subscribe is authorized by core as a continuous
 // parameter:read within the home namespace and therefore rides on the same
 // grant. Writes, deletes, disables, destroys, and promotes always require an

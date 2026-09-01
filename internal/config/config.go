@@ -1,6 +1,6 @@
 // Package config loads the parameter-store server configuration from a YAML
 // file, applies environment-variable overrides, fills defaults, validates the
-// result, and builds the server TLS configuration (plan section 7).
+// result, and builds the server TLS configuration.
 //
 // Precedence, lowest to highest: built-in defaults, YAML file, environment
 // variables. Values that may contain sensitive material are never logged

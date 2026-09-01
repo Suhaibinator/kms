@@ -1,4 +1,4 @@
-// Presentation of the readiness state machine (plan §3.1). The backend
+// Presentation of the readiness state machine. The backend
 // computes every state and finding; this module only maps codes to labels,
 // tones, copy and the action that fixes them. Copy never includes values —
 // findings carry names and numbers only.

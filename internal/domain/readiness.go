@@ -2,7 +2,7 @@ package domain
 
 import "regexp"
 
-// Readiness state machine vocabulary (console plan §3.1). The backend computes
+// Readiness state machine vocabulary. The backend computes
 // every state and finding; the frontend only renders them. Finding params
 // carry names and numbers only — never parameter or secret values.
 
