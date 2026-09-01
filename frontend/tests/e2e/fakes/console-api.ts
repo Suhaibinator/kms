@@ -766,6 +766,8 @@ function handle(
           current_revision: state.revision,
           grpc_addr: "127.0.0.1:7443",
           tls_enabled: true,
+          admin_client_cert_required: false,
+          client_cert_presented: false,
         },
       };
     case "GET /namespaces":

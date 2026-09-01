@@ -189,6 +189,12 @@ var Settings = []Setting{
 		ptr:  func(c *Config) any { return &c.Security.TrustProxyHeaders },
 	},
 	{
+		Key:  "security.admin_require_client_cert",
+		Env:  "KMS_ADMIN_REQUIRE_CLIENT_CERT",
+		Help: "require admin identities to present a built-in-CA client certificate in addition to a bearer token (relaxed with a warning while tls_enabled is false)",
+		ptr:  func(c *Config) any { return &c.Security.AdminRequireClientCert },
+	},
+	{
 		Key:  "frontend.enabled",
 		Env:  "KMS_FRONTEND_ENABLED",
 		Help: "serve the embedded web frontend",

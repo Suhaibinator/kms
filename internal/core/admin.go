@@ -4,9 +4,11 @@ import (
 	"context"
 	"errors"
 	"regexp"
+	"slices"
 	"strconv"
 	"time"
 
+	"github.com/Suhaibinator/kms/internal/ca"
 	"github.com/Suhaibinator/kms/internal/crypto"
 	"github.com/Suhaibinator/kms/internal/domain"
 	"github.com/Suhaibinator/kms/internal/keyutil"
@@ -306,7 +308,7 @@ type CreateIdentityInput struct {
 	Name        string
 	Kind        string // domain.IdentityKindClient | domain.IdentityKindAdmin
 	Namespace   *domain.NamespaceRef
-	AuthMethods []domain.AuthMethod // empty defaults to {mtls}; admin kind always gets a token
+	AuthMethods []domain.AuthMethod // client: empty defaults to {mtls}; admin: token only ("mtls" is rejected, see IssueLocalAdminCertificate)
 	CertTTL     time.Duration       // 0 uses the CA default (90 days)
 }
 
@@ -324,9 +326,11 @@ type CreateIdentityResult struct {
 
 // CreateIdentity mints a new identity and its credentials. Admin only. A client
 // identity may be minted with a bearer token, a client-certificate bundle, or
-// both, per AuthMethods (empty defaults to mTLS-only, the strongest posture);
-// admin identities always receive a token (the frontend logs in with it).
-// Credentials are returned exactly once.
+// both, per AuthMethods (empty defaults to mTLS-only, the strongest posture).
+// An admin identity always receives a token and never a certificate here:
+// admin client certificates are minted only by the offline CLI on the server
+// host (IssueLocalAdminCertificate), so requesting "mtls" for an admin is an
+// error. Credentials are returned exactly once.
 func (s *Service) CreateIdentity(ctx context.Context, pr Principal, in CreateIdentityInput) (CreateIdentityResult, error) {
 	if err := s.requireAdmin(ctx, pr, "identity.write", domain.ResourceIdentity, in.Name); err != nil {
 		return CreateIdentityResult{}, err
@@ -343,7 +347,15 @@ func (s *Service) CreateIdentity(ctx context.Context, pr Principal, in CreateIde
 			return CreateIdentityResult{}, domain.Errorf(domain.ErrInvalidArgument, "%v", err)
 		}
 	}
-	methods, err := normalizeAuthMethods(in.AuthMethods)
+	var (
+		methods []domain.AuthMethod
+		err     error
+	)
+	if in.Kind == domain.IdentityKindAdmin {
+		methods, err = normalizeAdminAuthMethods(in.AuthMethods)
+	} else {
+		methods, err = normalizeAuthMethods(in.AuthMethods)
+	}
 	if err != nil {
 		return CreateIdentityResult{}, err
 	}
@@ -366,7 +378,7 @@ func (s *Service) CreateIdentity(ctx context.Context, pr Principal, in CreateIde
 	)
 	if wantCert {
 		var generated domain.IdentityCert
-		bundle, generated, err = s.generateCert(in.Name, in.CertTTL)
+		bundle, generated, err = s.generateCert(in.Name, in.CertTTL, ca.KeyEd25519)
 		if err != nil {
 			return CreateIdentityResult{}, err
 		}
@@ -436,9 +448,14 @@ func certAuthzRef(pr Principal, name string) domain.Ref {
 }
 
 // IssueIdentityCertificate mints an additional client certificate for an
-// existing identity (renewal/rollover). Available to admins, or to identities
-// granted admin:identity:cert (restricted to non-admin targets in the caller's
-// own namespace; see guardCertTarget). The private key is returned exactly once.
+// existing client-kind identity (renewal/rollover). Available to admins, or to
+// identities granted admin:identity:cert (restricted to non-admin targets in
+// the caller's own namespace; see guardCertTarget). Admin-kind targets are
+// refused for every caller, admins included: an admin certificate is the
+// management plane's proof of possession and is minted only by the offline CLI
+// on the server host (IssueLocalAdminCertificate), so a stolen online admin
+// credential cannot mint durable new admin credentials. The private key is
+// returned exactly once.
 func (s *Service) IssueIdentityCertificate(ctx context.Context, pr Principal, name string, ttl time.Duration) (*CertBundle, error) {
 	if err := s.requireAdminOrOp(ctx, pr, domain.OpAdminIdentityCert, "identity.cert.issue", domain.ResourceIdentity, certAuthzRef(pr, name)); err != nil {
 		return nil, err
@@ -450,10 +467,16 @@ func (s *Service) IssueIdentityCertificate(ctx context.Context, pr Principal, na
 	if err := s.guardCertTarget(ctx, pr, "identity.cert.issue", id); err != nil {
 		return nil, err
 	}
+	if id.Kind == domain.IdentityKindAdmin {
+		s.auditName(ctx, pr, "identity.cert.issue", domain.ResourceIdentity, name, "deny",
+			map[string]string{"reason": "admin_target", "channel": "online"})
+		return nil, domain.Errorf(domain.ErrPermissionDenied,
+			"admin client certificates are issued only offline with 'parameter-store admin-cert issue'")
+	}
 	if id.Disabled {
 		return nil, domain.Errorf(domain.ErrFailedPrecondition, "identity %s is disabled", name)
 	}
-	bundle, err := s.issueCert(ctx, name, ttl)
+	bundle, err := s.issueCert(ctx, name, ttl, ca.KeyEd25519)
 	if err != nil {
 		return nil, err
 	}
@@ -462,10 +485,76 @@ func (s *Service) IssueIdentityCertificate(ctx context.Context, pr Principal, na
 	return bundle, nil
 }
 
+// IssueLocalAdminCertificate mints a client certificate for an admin-kind
+// identity. It exists for the offline CLI only (parameter-store admin-cert
+// issue), which runs on the server host with direct database and master-key
+// access: admin certificates are the management plane's proof of possession,
+// so minting one must require host access rather than any online credential.
+// It MUST NOT be reachable from any transport handler; IssueIdentityCertificate
+// is the online path and refuses admin targets. The leaf key is ECDSA P-256 so
+// the credential can be imported into browser and OS keystores. The private
+// key is returned exactly once.
+func (s *Service) IssueLocalAdminCertificate(ctx context.Context, pr Principal, name string, ttl time.Duration) (*CertBundle, error) {
+	if err := s.requireAdmin(ctx, pr, "identity.cert.issue", domain.ResourceIdentity, name); err != nil {
+		return nil, err
+	}
+	id, err := s.store.GetIdentityByName(ctx, name)
+	if err != nil {
+		return nil, err
+	}
+	if id.Kind != domain.IdentityKindAdmin {
+		return nil, domain.Errorf(domain.ErrInvalidArgument,
+			"identity %s is not an admin; client identities receive certificates through the online identity API", name)
+	}
+	if id.Disabled {
+		return nil, domain.Errorf(domain.ErrFailedPrecondition, "identity %s is disabled", name)
+	}
+	bundle, err := s.issueCert(ctx, name, ttl, ca.KeyECDSAP256)
+	if err != nil {
+		return nil, err
+	}
+	s.auditName(ctx, pr, "identity.cert.issue", domain.ResourceIdentity, name, "allow",
+		map[string]string{"serial": bundle.Serial, "channel": "local"})
+	return bundle, nil
+}
+
+// AdminsWithoutValidCert lists enabled admin-kind identities that hold no
+// currently valid (enrolled, unrevoked, unexpired) client certificate. serve
+// warns about them at startup while the admin client-certificate requirement
+// is enforced, since they cannot authenticate until one is issued offline. It
+// is for trusted in-process callers: not principal-gated, not exposed by any
+// transport.
+func (s *Service) AdminsWithoutValidCert(ctx context.Context) ([]string, error) {
+	now := s.now()
+	valid := func(c domain.IdentityCert) bool {
+		return c.RevokedAt.IsZero() && (c.NotAfter.IsZero() || now.Before(c.NotAfter))
+	}
+	var lacking []string
+	token := ""
+	for {
+		ids, next, err := s.store.ListIdentities(ctx, storage.ListPage{Limit: 1000, Token: token})
+		if err != nil {
+			return nil, err
+		}
+		for _, id := range ids {
+			if id.Kind != domain.IdentityKindAdmin || id.Disabled {
+				continue
+			}
+			if !slices.ContainsFunc(id.Certs, valid) {
+				lacking = append(lacking, id.Name)
+			}
+		}
+		if next == "" || next == token {
+			return lacking, nil
+		}
+		token = next
+	}
+}
+
 // issueCert mints a certificate via the built-in CA and records it. The caller
 // audits. The identity must already exist.
-func (s *Service) issueCert(ctx context.Context, name string, ttl time.Duration) (*CertBundle, error) {
-	bundle, cert, err := s.generateCert(name, ttl)
+func (s *Service) issueCert(ctx context.Context, name string, ttl time.Duration, alg ca.KeyAlgorithm) (*CertBundle, error) {
+	bundle, cert, err := s.generateCert(name, ttl, alg)
 	if err != nil {
 		return nil, err
 	}
@@ -478,12 +567,12 @@ func (s *Service) issueCert(ctx context.Context, name string, ttl time.Duration)
 // generateCert mints a certificate without touching storage. CreateIdentity
 // passes the resulting record into the identity transaction; renewals persist
 // it separately after confirming the target identity already exists.
-func (s *Service) generateCert(name string, ttl time.Duration) (*CertBundle, domain.IdentityCert, error) {
+func (s *Service) generateCert(name string, ttl time.Duration, alg ca.KeyAlgorithm) (*CertBundle, domain.IdentityCert, error) {
 	authority := s.ca.Load()
 	if authority == nil {
 		return nil, domain.IdentityCert{}, domain.Errorf(domain.ErrNotReady, "certificate authority not initialized")
 	}
-	issued, err := authority.IssueClientCert(name, ttl)
+	issued, err := authority.IssueClientCertWithOptions(name, ca.IssueOptions{TTL: ttl, Key: alg})
 	if err != nil {
 		return nil, domain.IdentityCert{}, domain.Errorf(domain.ErrInvalidArgument, "%v", err)
 	}

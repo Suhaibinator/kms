@@ -7,6 +7,7 @@ package httpserver
 import (
 	"context"
 	"crypto/rand"
+	"crypto/x509"
 	"encoding/hex"
 	"encoding/json/v2"
 	"errors"
@@ -20,7 +21,6 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/Suhaibinator/kms/internal/core"
-	"github.com/Suhaibinator/kms/internal/domain"
 	"github.com/Suhaibinator/kms/internal/ratelimit"
 )
 
@@ -51,6 +51,12 @@ type Config struct {
 	// TLS. The health endpoint reports it (or a TLS request connection) as
 	// tls_enabled so the console can warn about cleartext listeners.
 	TLSEnabled bool
+	// AdminClientCertRequired reports whether admin identities must present a
+	// client certificate alongside their bearer token on this listener. It is
+	// the *effective* value computed by serve (the configured setting AND TLS
+	// being on), used only to tell an unauthenticated caller — the login page —
+	// why its token alone will be refused. Enforcement itself lives in core.
+	AdminClientCertRequired bool
 }
 
 // maxBodyBytes bounds request bodies. A 1 MiB secret value base64-encodes to
@@ -177,25 +183,33 @@ func (s *server) serveAPI(w http.ResponseWriter, r *http.Request) {
 	s.apiMux.ServeHTTP(w, r.WithContext(ctx))
 }
 
-// authenticate resolves the bearer token to a Principal, attaching request
-// context (remote addr, user agent, request id, per-secret token header).
+// authenticate resolves the request's credentials — the bearer token and any
+// client certificate the TLS layer verified on this connection — to a
+// Principal, attaching request context (remote addr, user agent, request id,
+// per-secret token header). Combination rules and the admin
+// client-certificate requirement live in core, not here.
 func (s *server) authenticate(r *http.Request, ip string) (core.Principal, error) {
-	token := bearerToken(r)
-	id, err := s.svc.Authenticate(r.Context(), token, ip, r.UserAgent())
-	if err != nil {
-		return core.Principal{}, err
-	}
-	return core.Principal{
-		Identity: id,
-		// HTTP callers authenticate with a bearer token by definition. The
-		// per-namespace method gate lives in core; admin-kind identities bypass it.
-		Method:      domain.AuthMethodToken,
-		Token:       token,
+	return s.svc.ResolvePrincipal(r.Context(), core.CredentialInput{
+		Token:       bearerToken(r),
+		PeerCert:    peerCertFromRequest(r),
 		SecretToken: r.Header.Get("X-KMS-Secret-Token"),
 		RemoteAddr:  ip,
 		UserAgent:   r.UserAgent(),
 		RequestID:   requestIDFrom(r.Context()),
-	}, nil
+	})
+}
+
+// peerCertFromRequest returns the leaf client certificate presented on this
+// connection, or nil. It insists on a verified chain rather than mere presence:
+// under tls.VerifyClientCertIfGiven the TLS stack has already validated a
+// presented certificate against the listener's client-CA pool, and requiring
+// VerifiedChains keeps that guarantee if the listener ever moves to a mode that
+// accepts a certificate without verifying it.
+func peerCertFromRequest(r *http.Request) *x509.Certificate {
+	if r.TLS == nil || len(r.TLS.VerifiedChains) == 0 || len(r.TLS.PeerCertificates) == 0 {
+		return nil
+	}
+	return r.TLS.PeerCertificates[0]
 }
 
 // --- request context -------------------------------------------------------

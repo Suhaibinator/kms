@@ -34,10 +34,13 @@ management.
   access. No recovery escrow, by design; see
   [`docs/security.md`](docs/security.md#client-bound-secrets-opt-in-double-wrapping).
 - **Built-in certificate authority + mTLS**: an embedded CA (Ed25519,
-  KEK-wrapped private key) mints short-lived client certificates (90-day
-  default) so machine clients prove possession of a key rather than merely
-  presenting a token. Each namespace records its `allowed_auth_methods`
-  (`mtls`/`token`); **new namespaces default to mTLS-only**.
+  KEK-wrapped private key) created by `init` mints short-lived client
+  certificates (90-day default) so machine clients prove possession of a key
+  rather than merely presenting a token. Each namespace records its
+  `allowed_auth_methods` (`mtls`/`token`); **new namespaces default to
+  mTLS-only**. Administrators additionally need a certificate of their own
+  (ECDSA P-256, importable into a browser) alongside their token; theirs is
+  issued only offline on the KMS host.
 - **Namespace-native RBAC** with deny precedence: rules are
   `{operation, env, app}` (env/app exact or `*`) over per-operation verbs (`secret:read`, `parameter:write`,
   `admin:key:rotate`, …), plus an **implicit home-namespace grant** — a
@@ -202,10 +205,14 @@ container initialization, and the maintainer release procedure.
 # resolve them the same way, so export the paths once and both commands agree.
 export KMS_SQLITE_PATH=./kms.db KMS_KEK_FILE=./master.key
 
-# Create the database and a file-based master key, plus a bootstrap admin.
+# Create the database, a file-based master key, the built-in CA, and a
+# bootstrap admin.
 ./bin/parameter-store init --admin ops
 # -> Initialized database at /abs/path/kms.db (source: env KMS_SQLITE_PATH)
+# -> Built-in CA: ready
 # -> prints the admin identity's bearer token exactly once; save it.
+# Add --cert-dir ./admin-creds to also issue the admin's client certificate,
+# which production requires alongside the token (see below).
 
 # Start a plaintext development server on loopback only. Production requires
 # TLS; see "Connect a production application with mTLS" below.
@@ -236,6 +243,14 @@ Check readiness: `curl http://localhost:8080/readyz` (`ready`) and
 `curl http://localhost:8080/healthz` (`ok`). The embedded web UI is at
 `http://localhost:8080/` — log in with the admin token from `init`. Server
 logs should show both `gRPC listening` and `HTTP listening`.
+
+This development server also logs `security.admin_require_client_cert cannot
+be enforced without TLS`. That is expected: an admin normally needs a **client
+certificate in addition to its token**, and without TLS no certificate can
+reach the server, so the requirement is relaxed and the token alone signs you
+in. On a TLS deployment, issue each admin a certificate with
+[`admin-cert issue`](docs/operations.md#admin-credentials-and-browser-setup)
+before they can use the console or the `admin` CLI.
 
 ### Local development: connect with a token
 
@@ -313,14 +328,15 @@ should actually use instead of calling `GetSecret` directly.
 
 ### Connect a production application with mTLS
 
-Production uses three distinct certificate roles. Keeping the direction of
+Production uses four distinct certificate roles. Keeping the direction of
 trust clear prevents the most common setup mistake:
 
 | Certificate role | Created and stored by | Used for |
 |---|---|---|
 | **KMS server certificate/key + server trust CA** | The operator obtains the serving certificate from the organization's PKI or another trusted CA, configures `server_cert_file`/`server_key_file`, and distributes a `server-ca.crt` trust bundle to applications. | KMS presents the serving certificate; applications use `server-ca.crt` to verify that they reached the real KMS server. The server private key stays on the KMS host. |
-| **KMS built-in client-issuing CA** | KMS creates this self-signed CA on first startup and stores it in SQLite's `ca_keys` table; the private key is KEK-wrapped. | KMS issues and verifies application client certificates. Applications do **not** use this CA to verify the server. Its public certificate can be exported with `admin ca show` for diagnostics or out-of-band verification only. |
+| **KMS built-in client-issuing CA** | `parameter-store init` creates this self-signed CA and stores it in SQLite's `ca_keys` table; the private key is KEK-wrapped. | KMS issues and verifies application client certificates **and administrator certificates**. Applications do **not** use this CA to verify the server. Its public certificate can be exported with `admin ca show` for diagnostics or out-of-band verification only. |
 | **Per-application client certificate/key** | KMS creates one when an mTLS identity is enrolled; its serial/fingerprint enrollment record remains in SQLite and the one-time PEM files go to the operator. | The application presents the certificate and proves possession of its private key; KMS maps its `kms://identity/<name>` URI SAN to the enrolled identity. |
+| **Administrator certificate/key** | Minted only on the KMS host by `parameter-store admin-cert issue NAME --out DIR` (or `init`/`create-admin` with `--cert-dir`); never issued over the network. | An administrator presents it **in addition to** their bearer token, on the CLI (`--cert`/`--key`) and in the browser (imported as PKCS#12). A stolen admin token alone is useless. |
 
 First [enable server TLS](docs/operations.md#tls-and-mtls) with the
 operator-provided serving certificate. Its DNS or IP SAN must match the host
@@ -329,13 +345,15 @@ the SDKs perform normal server-name verification. Then create an mTLS-only
 namespace and one identity for the consuming application:
 
 ```bash
-ADMIN_TOKEN=...                 # bootstrap or another admin credential
+ADMIN_TOKEN=...                 # the admin's bearer token
+ADMIN_CERT=./admin-creds/ops.crt   # from: parameter-store admin-cert issue ops --out ./admin-creds
+ADMIN_KEY=./admin-creds/ops.key
 KMS_ENDPOINT=kms.internal:8443
 SERVER_CA=/etc/parameter-store/trust/server-ca.crt
 
 ./bin/parameter-store admin namespace create --env prod --app gradethis \
   --auth-methods mtls --endpoint "$KMS_ENDPOINT" --ca "$SERVER_CA" \
-  --token "$ADMIN_TOKEN"
+  --cert "$ADMIN_CERT" --key "$ADMIN_KEY" --token "$ADMIN_TOKEN"
 
 # POSIX: create an owner-only output directory.
 install -d -m 0700 ./credentials/gradethis-be
@@ -344,7 +362,8 @@ install -d -m 0700 ./credentials/gradethis-be
 ./bin/parameter-store admin identity create gradethis-be \
   --namespace prod/gradethis --auth mtls --ttl 90d \
   --out ./credentials/gradethis-be \
-  --endpoint "$KMS_ENDPOINT" --ca "$SERVER_CA" --token "$ADMIN_TOKEN"
+  --endpoint "$KMS_ENDPOINT" --ca "$SERVER_CA" \
+  --cert "$ADMIN_CERT" --key "$ADMIN_KEY" --token "$ADMIN_TOKEN"
 # -> ./credentials/gradethis-be/gradethis-be.crt
 # -> ./credentials/gradethis-be/gradethis-be.key (one-time private key)
 ```
@@ -458,6 +477,9 @@ security:
   server_key_file: "/etc/parameter-store/tls/server.key"
   client_ca_file: ""
   trust_proxy_headers: false
+  # Admins present a built-in-CA client certificate as well as their token.
+  # Default true; relaxed with a warning while tls_enabled is false.
+  admin_require_client_cert: true
 
 encryption:
   kek_file: "/etc/parameter-store/master.key"
@@ -506,6 +528,12 @@ Full detail: [`docs/security.md`](docs/security.md). Summary:
   `kms://identity/<name>` URI SAN); tokens remain available where a
   namespace allows them. Each namespace's `allowed_auth_methods` gates which
   method admits a caller at all, checked before authorization.
+- **Administrators present both credentials**: while
+  `security.admin_require_client_cert` is enforced (the default whenever TLS
+  is on), an admin needs a built-in-CA client certificate **and** its bearer
+  token, on the CLI and in the browser alike. Admin certificates are minted
+  only on the KMS host (`admin-cert issue`), never over the network, so a
+  stolen admin token is useless on its own and cannot mint a replacement.
 - **Tokens**: high-entropy, server-minted, shown once, stored only as
   SHA-256 hashes (nullable for cert-only identities). Per-client identity
   tokens establish the caller; optional per-secret access tokens

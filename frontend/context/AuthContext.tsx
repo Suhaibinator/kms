@@ -122,7 +122,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     // Validate before persisting: login sends the token in the body, not the header.
     const res = await api.login(token);
     setToken(token);
-    let id: Identity = { name: res.identity.name, kind: res.identity.kind };
+    // Seed from the login response so the identity still records how it
+    // authenticated (token, or cert + token) if the whoami below fails.
+    let id: Identity = {
+      name: res.identity.name,
+      kind: res.identity.kind,
+      auth_method: res.auth_method,
+    };
     try {
       // /auth/login omits the bound namespace, which the shell needs to scope
       // navigation. A failure here is not fatal — the next load fills it in.

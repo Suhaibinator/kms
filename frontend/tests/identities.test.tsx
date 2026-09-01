@@ -225,6 +225,103 @@ describe("identity onboarding", () => {
     ).not.toBeInTheDocument();
   });
 
+  it("offers administrators a token only, because admin certificates are issued offline", async () => {
+    // The API rejects `mtls` for an admin kind outright: certificates for an
+    // administrator come from `parameter-store admin-cert issue` on the host.
+    const createIdentity = vi.spyOn(api, "createIdentity").mockResolvedValue({
+      identity: {
+        name: "deploy-admin",
+        kind: "admin",
+        namespace: null,
+        has_token: true,
+        certs: [],
+      },
+      token: "kms_admin_once",
+    });
+    render(<IdentitiesPage />);
+    await screen.findByText("No identities yet");
+    fireEvent.click(screen.getAllByRole("button", { name: "Connect application" })[0]);
+    const dialog = screen.getByRole("dialog", {
+      name: "Connect application — choose application",
+    });
+
+    fireEvent.click(within(dialog).getByText("Advanced identity type"));
+    await chooseSelectOption(
+      within(dialog).getByRole("combobox", { name: "Identity type" }),
+      "Administrator",
+    );
+    expect(
+      within(dialog).getByText(/this identity cannot sign in until an operator issues one offline/),
+    ).toBeVisible();
+    fireEvent.change(within(dialog).getByRole("textbox", { name: "Application identity name" }), {
+      target: { value: "deploy-admin" },
+    });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Continue to authentication" }));
+
+    const authDialog = screen.getByRole("dialog", { name: "New identity — authentication" });
+    const mtls = within(authDialog).getByRole("checkbox", { name: /mTLS client certificate/ });
+    expect(mtls).not.toBeChecked();
+    expect(mtls).toHaveAttribute("aria-disabled", "true");
+    expect(within(authDialog).getByText(/issued offline with/)).toBeVisible();
+    expect(within(authDialog).getByText("parameter-store admin-cert issue")).toBeVisible();
+
+    // Even if the disabled control is reached anyway, the payload cannot grow
+    // a method the server refuses.
+    fireEvent.click(mtls);
+    expect(mtls).not.toBeChecked();
+    expect(
+      within(authDialog).queryByLabelText("Certificate lifetime (days)"),
+    ).not.toBeInTheDocument();
+
+    fireEvent.click(
+      within(authDialog).getByRole("button", { name: "Create identity credentials" }),
+    );
+    await waitFor(() =>
+      expect(createIdentity).toHaveBeenCalledWith({
+        name: "deploy-admin",
+        kind: "admin",
+        namespace: null,
+        auth_methods: ["token"],
+        cert_ttl_seconds: 0,
+      }),
+    );
+  });
+
+  it("explains that admin certificates are issued offline in the certificates modal", async () => {
+    const admin = identity("root-admin", {
+      kind: "admin",
+      namespace: null,
+      has_token: true,
+      certs: [cert("abcd")],
+    });
+    vi.mocked(api.listIdentities).mockResolvedValue({
+      identities: [admin],
+      next_page_token: "",
+    });
+    const issueCert = vi.spyOn(api, "issueCert");
+    render(<IdentitiesPage />);
+    const row = (await screen.findByText("root-admin")).closest("tr") as HTMLElement;
+    fireEvent.click(within(row).getByRole("button", { name: "Certificates" }));
+
+    const certsDialog = screen.getByRole("dialog", { name: "Certificates — root-admin" });
+    expect(within(certsDialog).getByText(/Admin certificates are issued offline/)).toBeVisible();
+    expect(
+      within(certsDialog).getByText("parameter-store admin-cert issue NAME --out DIR"),
+    ).toBeVisible();
+    // No online issuance for an admin — the form is gone, not merely disabled.
+    expect(
+      within(certsDialog).queryByRole("button", { name: "Issue new certificate" }),
+    ).not.toBeInTheDocument();
+    expect(
+      within(certsDialog).queryByLabelText("New cert lifetime (days)"),
+    ).not.toBeInTheDocument();
+    expect(issueCert).not.toHaveBeenCalled();
+
+    // Revocation stays online: a stolen admin cert must be killable from here.
+    expect(within(certsDialog).getByText("fp-abcd")).toBeVisible();
+    expect(within(certsDialog).getByRole("button", { name: "Revoke" })).toBeEnabled();
+  });
+
   it("shows namespace failures with a retry instead of claiming no namespaces exist", async () => {
     mocks.namespacesError = new Error("offline");
     const dialog = await openWizard();

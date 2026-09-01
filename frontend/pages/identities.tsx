@@ -300,6 +300,10 @@ export default function IdentitiesPage() {
       )
     : "unknown";
   const certIssueReason = unavailableMethodReason("mtls", certIssueAvailability);
+  // Admin certificates are minted offline by `parameter-store admin-cert issue`,
+  // which needs host access to the database and master key. The online API
+  // refuses admin targets, so the console must not offer the form at all.
+  const certsTargetIsAdmin = certsTarget?.kind === "admin";
 
   const selectedNamespace = useMemo(
     () => namespaces.find((ns) => ns.env === bindNs.env && ns.app === bindNs.app) ?? null,
@@ -403,6 +407,10 @@ export default function IdentitiesPage() {
   }
 
   function toggleMethod(method: AuthMethod, on: boolean) {
+    // An admin never gets an mTLS credential from here: the API rejects it and
+    // the checkbox is disabled. Ignore the toggle rather than build a payload
+    // the server will refuse.
+    if (identityMode === "admin" && method === "mtls") return;
     const set = new Set(methods);
     if (on) set.add(method);
     else set.delete(method);
@@ -481,6 +489,8 @@ export default function IdentitiesPage() {
 
   async function onIssueCert() {
     if (!certsTarget) return;
+    // The API refuses admin targets; the form is not rendered for them either.
+    if (certsTarget.kind === "admin") return;
     if (certIssueAvailability !== "allowed") {
       toast.error(new Error(certIssueReason), "Certificate issuance unavailable");
       return;
@@ -917,7 +927,9 @@ export default function IdentitiesPage() {
               ) : identityMode === "admin" ? (
                 <div className="danger-panel mb-4">
                   Administrator identities are unbound and receive a bearer token with full admin
-                  authority. Create one only for trusted operators or automation.
+                  authority. Create one only for trusted operators or automation. When the server
+                  requires admin client certificates, this identity cannot sign in until an operator
+                  issues one offline.
                 </div>
               ) : (
                 <div className="warn-panel mb-4">
@@ -983,22 +995,34 @@ export default function IdentitiesPage() {
                 label="Credential method"
                 error={methodsProblem}
                 hint={
-                  identityMode === "admin"
-                    ? "Administrators always receive a bearer token; optionally issue a client certificate too."
-                    : "mTLS is recommended. Select token only when the target namespace explicitly permits it."
+                  identityMode === "admin" ? (
+                    <>
+                      Administrators receive a bearer token here. Their client certificates are
+                      issued offline with{" "}
+                      <span className="mono">parameter-store admin-cert issue</span>, never through
+                      the console or API.
+                    </>
+                  ) : (
+                    "mTLS is recommended. Select token only when the target namespace explicitly permits it."
+                  )
                 }
               >
                 <div className="auth-choice auth-choice-recommended">
                   <div className="checkbox-row">
                     <Checkbox
                       id="new-mtls"
-                      checked={methods.includes("mtls")}
+                      checked={identityMode !== "admin" && methods.includes("mtls")}
+                      disabled={identityMode === "admin"}
                       onCheckedChange={(checked) => toggleMethod("mtls", checked)}
                     />
                     <label htmlFor="new-mtls">
                       <span className="auth-choice-title">
                         <strong>mTLS client certificate</strong>
-                        <Badge kind="success">recommended</Badge>
+                        {identityMode === "admin" ? (
+                          <Badge kind="neutral">offline only</Badge>
+                        ) : (
+                          <Badge kind="success">recommended</Badge>
+                        )}
                       </span>
                       <span className="faint text-sm">
                         Proof of possession: the application must hold both its certificate and
@@ -1081,7 +1105,9 @@ export default function IdentitiesPage() {
         title={certsTarget ? `Certificates — ${certsTarget.name}` : "Certificates"}
         onClose={() => setCertsSnapshot(null)}
         dismissible={!issueBusy}
-        initialFocus={certIssueAvailability === "allowed" ? issueDaysRef : undefined}
+        initialFocus={
+          certIssueAvailability === "allowed" && !certsTargetIsAdmin ? issueDaysRef : undefined
+        }
         footer={
           <Button variant="outline" onClick={() => setCertsSnapshot(null)} disabled={issueBusy}>
             Close
@@ -1090,61 +1116,74 @@ export default function IdentitiesPage() {
       >
         {certsTarget ? (
           <>
-            {certIssueAvailability !== "allowed" ? (
+            {certsTargetIsAdmin ? (
+              <div className="info-panel mb-4" role="status">
+                <strong>Admin certificates are issued offline:</strong>{" "}
+                <span className="mono">parameter-store admin-cert issue NAME --out DIR</span>. The
+                command needs host access to the database and master key, so it has no online
+                equivalent. Existing certificates can still be revoked below.
+              </div>
+            ) : certIssueAvailability !== "allowed" ? (
               <div id="cert-issue-reason" className="danger-panel mb-4" role="alert">
                 <strong>New certificate issuance is disabled.</strong> {certIssueReason} Update the
                 bound namespace to accept mTLS before issuing another certificate. Existing
                 certificates can still be inspected and revoked below.
               </div>
             ) : null}
-            {/* `.filters` is the app's label-above-control-beside-button row layout. */}
-            <form
-              ref={issueFocus.formRef}
-              className="filters"
-              onSubmit={(event) => {
-                event.preventDefault();
-                void onIssueCert();
-              }}
-            >
-              <Field
-                label="New cert lifetime (days)"
-                htmlFor="issue-days"
-                error={issueErrors.shown("days", issueDaysProblem)}
-              >
-                <Input
-                  ref={issueDaysRef}
-                  id="issue-days"
-                  type="number"
-                  min={1}
-                  max={MAX_CERT_DAYS}
-                  step={1}
-                  disabled={certIssueAvailability !== "allowed"}
-                  value={issueDays}
-                  onChange={(e) => setIssueDays(e.target.value)}
-                  onBlur={() => issueErrors.touch("days")}
-                />
-              </Field>
-              {/* A bad lifetime keeps the button live: the click reveals the message
+            {certsTargetIsAdmin ? null : (
+              <>
+                {/* `.filters` is the app's label-above-control-beside-button row layout. */}
+                <form
+                  ref={issueFocus.formRef}
+                  className="filters"
+                  onSubmit={(event) => {
+                    event.preventDefault();
+                    void onIssueCert();
+                  }}
+                >
+                  <Field
+                    label="New cert lifetime (days)"
+                    htmlFor="issue-days"
+                    error={issueErrors.shown("days", issueDaysProblem)}
+                  >
+                    <Input
+                      ref={issueDaysRef}
+                      id="issue-days"
+                      type="number"
+                      min={1}
+                      max={MAX_CERT_DAYS}
+                      step={1}
+                      disabled={certIssueAvailability !== "allowed"}
+                      value={issueDays}
+                      onChange={(e) => setIssueDays(e.target.value)}
+                      onBlur={() => issueErrors.touch("days")}
+                    />
+                  </Field>
+                  {/* A bad lifetime keeps the button live: the click reveals the message
                   next to the field instead of greying out silently. */}
-              <Button
-                type="submit"
-                disabled={certIssueAvailability !== "allowed"}
-                loading={issueBusy}
-                aria-describedby={
-                  certIssueAvailability === "allowed" ? undefined : "cert-issue-reason"
-                }
-              >
-                Issue new certificate
-              </Button>
-            </form>
-            <div className="faint text-sm mb-4">
-              Issue a fresh certificate before an old one expires for zero-downtime rollover.
-              Multiple valid certificates can coexist.
-            </div>
+                  <Button
+                    type="submit"
+                    disabled={certIssueAvailability !== "allowed"}
+                    loading={issueBusy}
+                    aria-describedby={
+                      certIssueAvailability === "allowed" ? undefined : "cert-issue-reason"
+                    }
+                  >
+                    Issue new certificate
+                  </Button>
+                </form>
+                <div className="faint text-sm mb-4">
+                  Issue a fresh certificate before an old one expires for zero-downtime rollover.
+                  Multiple valid certificates can coexist.
+                </div>
+              </>
+            )}
 
             {(certsTarget.certs ?? []).length === 0 ? (
               <EmptyState icon={<Icon.identity size={20} />} title="No certificates issued">
-                Issue one above to let this identity authenticate over mTLS.
+                {certsTargetIsAdmin
+                  ? "Run the command above on the KMS host to issue one."
+                  : "Issue one above to let this identity authenticate over mTLS."}
               </EmptyState>
             ) : (
               <div className="table-wrap">
@@ -1644,7 +1683,12 @@ function CredentialsModal({
                 <div className="info-panel">
                   <strong>No policy is required for an administrator identity.</strong> It already
                   has administrative authority across KMS. Protect this credential as a privileged
-                  secret and use it only from trusted operator tooling.
+                  secret and use it only from trusted operator tooling. If the server requires admin
+                  client certificates, this token alone will not sign in: an operator must also run{" "}
+                  <span className="mono">
+                    parameter-store admin-cert issue {credentials.name} --out DIR
+                  </span>{" "}
+                  on the KMS host.
                 </div>
               ) : (
                 <div className="policy-next-step">

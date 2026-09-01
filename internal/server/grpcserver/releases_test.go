@@ -44,6 +44,9 @@ func TestConfigurationReleaseGRPCLifecycleAndWatch(t *testing.T) {
 		t.Fatal(err)
 	}
 	svc.SetKeyring(crypto.NewKeyring(kek))
+	// Token-only admin seeding; the admin client-certificate requirement has
+	// its own suite (admin_mtls_test.go).
+	svc.SetAdminRequireClientCert(false)
 	hub := watch.NewHub(st, nil, watch.Options{HeartbeatInterval: time.Second, PruneInterval: time.Hour})
 	svc.SetHub(hub)
 	hubCtx, cancel := context.WithCancel(ctx)
@@ -257,6 +260,9 @@ func TestVerifyReleaseDefaultsGRPCAndDivergentAcknowledgement(t *testing.T) {
 		t.Fatal(err)
 	}
 	svc.SetKeyring(crypto.NewKeyring(kek))
+	// Token-only admin seeding; the admin client-certificate requirement has
+	// its own suite (admin_mtls_test.go).
+	svc.SetAdminRequireClientCert(false)
 	hub := watch.NewHub(st, nil, watch.Options{HeartbeatInterval: time.Second, PruneInterval: time.Hour})
 	svc.SetHub(hub)
 	hubCtx, cancel := context.WithCancel(ctx)

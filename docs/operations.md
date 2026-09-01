@@ -28,8 +28,8 @@ They resolve highest-precedence first: **flag, then `KMS_*` environment
 variable, then the config file, then the built-in default**. The file is named
 by `--config FILE` or `KMS_CONFIG`. This order applies to `serve`, to every
 offline command that opens the database (`init`, `migrate`, `check`, `backup`,
-`restore`, `create-admin`, `rotate-admin`, `rotate-kek`, `import`), and to
-`config show` / `config validate`. Defaults come from
+`restore`, `create-admin`, `rotate-admin`, `admin-cert`, `rotate-kek`,
+`import`), and to `config show` / `config validate`. Defaults come from
 `internal/config.Default()`.
 
 ```yaml
@@ -55,6 +55,10 @@ security:
   server_key_file: "/etc/parameter-store/tls/server.key"
   client_ca_file: ""
   trust_proxy_headers: false
+  # Admins must present a built-in-CA client certificate *and* their bearer
+  # token. Default true; relaxed at startup with a warning while tls_enabled
+  # is false. See "Admin credentials and browser setup".
+  admin_require_client_cert: true
 
 encryption:
   kek_file: "/etc/parameter-store/master.key"
@@ -93,6 +97,7 @@ log:
 | `KMS_SERVER_KEY_FILE` | `--server-key-file` | `security.server_key_file` |
 | `KMS_CLIENT_CA_FILE` | `--client-ca-file` | `security.client_ca_file` — the CA the **server** verifies client certificates against, not a client's `--ca` trust bundle |
 | `KMS_TRUST_PROXY_HEADERS` | `--trust-proxy-headers` | `security.trust_proxy_headers` (parsed with `strconv.ParseBool`) — honor `X-Forwarded-For` for the rate-limit key and audit source IP; enable only behind a trusted reverse proxy (see [TLS and mTLS](#tls-and-mtls)) |
+| `KMS_ADMIN_REQUIRE_CLIENT_CERT` | `--admin-require-client-cert` | `security.admin_require_client_cert` (parsed with `strconv.ParseBool`) — **default `true`**; admins must present a built-in-CA client certificate in addition to their bearer token; relaxed with a warning while `tls_enabled` is false (see [Admin credentials and browser setup](#admin-credentials-and-browser-setup)) |
 | `KMS_FRONTEND_ENABLED` | `--frontend-enabled` | `frontend.enabled` |
 | `KMS_AUDIT_ENABLED` | `--audit-enabled` | `audit.enabled` |
 | `KMS_WATCH_HEARTBEAT_INTERVAL` | `--watch-heartbeat-interval` | `watch.heartbeat_interval` (duration) |
@@ -125,7 +130,13 @@ config.yaml:12: unknown key storage.sqlite_pth (did you mean storage.sqlite_path
 `server_cert_file`/`server_key_file` to exist; `mtls_enabled` requires
 `client_ca_file` to exist; every `server.verify_defaults.*` budget is
 positive and `mismatch_budget_per_hour` is at least 300; and every
-`watch.*` duration or row/version count is positive. `Config.Redacted()` is
+`watch.*` duration or row/version count is positive.
+
+`admin_require_client_cert: true` together with `tls_enabled: false` is
+deliberately **not** a validation error. The requirement is unenforceable
+without TLS — no certificate ever reaches the server — so `serve` relaxes it
+at runtime and says so in the startup log, rather than making a development
+machine change its configuration to start. `Config.Redacted()` is
 the one-line summary the server logs at startup — addresses, paths, and
 feature flags, with the key file reported only as `set`/`unset` — so nothing
 sensitive that might end up in the YAML by mistake gets logged. For the
@@ -197,17 +208,19 @@ reminder of the resolution order.
 ## Connect a production application with mTLS
 
 Use one KMS identity and one client certificate/key pair per consuming
-application. Before issuing anything, distinguish the three certificate roles:
+application. Before issuing anything, distinguish the four certificate roles:
 
 | Certificate role | Created and stored by | Used for |
 |---|---|---|
 | **KMS server certificate/key + server trust CA** | The operator obtains the serving certificate from the organization's PKI or another trusted CA, configures `server_cert_file`/`server_key_file`, and distributes a `server-ca.crt` trust bundle to applications. | KMS presents the serving certificate; applications use `server-ca.crt` to verify the KMS server. The server private key stays on the KMS host. |
-| **KMS built-in client-issuing CA** | KMS creates this self-signed CA on first startup and stores it in SQLite's `ca_keys` table; the private key is KEK-wrapped. | KMS issues and verifies application client certificates. Applications do **not** use this CA for server trust. `admin ca show` exports its public certificate for diagnostics or out-of-band verification only. |
+| **KMS built-in client-issuing CA** | `parameter-store init` creates this self-signed CA and stores it in SQLite's `ca_keys` table; the private key is KEK-wrapped. | KMS issues and verifies application client certificates and administrator certificates. Applications do **not** use this CA for server trust. `admin ca show` exports its public certificate for diagnostics or out-of-band verification only. |
 | **Per-application client certificate/key** | KMS creates it when an mTLS identity is enrolled. Its serial/fingerprint enrollment remains in `identity_certs`; the one-time PEM files go to the operator. | The application presents the certificate and proves possession of its private key. KMS maps its `kms://identity/<name>` URI SAN to the enrolled identity and checks its serial, fingerprint, expiry, and revocation state. |
+| **Administrator certificate/key** | Minted only on the KMS host by `parameter-store admin-cert issue NAME --out DIR` (or `init`/`create-admin` with `--cert-dir`); never issued over the network. | An administrator presents it **in addition to** their bearer token, on the CLI (`--cert`/`--key`) and in the browser (imported as PKCS#12). See [Admin credentials and browser setup](#admin-credentials-and-browser-setup). |
 
 The following secure path assumes the server is already running with
 [`security.tls_enabled: true`](#tls-and-mtls), the operator has the CA bundle
-that trusts its serving certificate, and an admin credential is available.
+that trusts its serving certificate, and an admin credential — token **and**
+certificate — is available.
 The serving certificate's DNS or IP SAN must match the host applications use
 in `KMS_ENDPOINT` (`kms.internal` below), because the SDKs perform normal
 server-name verification. The built-in client CA works with
@@ -220,25 +233,34 @@ New namespaces default to mTLS-only, but specifying the method makes the
 intended posture visible in scripts and reviews:
 
 ```bash
-ADMIN_TOKEN=...                 # bootstrap or another admin credential
+ADMIN_TOKEN=...                 # the admin's bearer token
+ADMIN_CERT=./admin-creds/ops.crt   # its client certificate, from admin-cert issue
+ADMIN_KEY=./admin-creds/ops.key
 KMS_ENDPOINT=kms.internal:8443
 SERVER_CA=/etc/parameter-store/trust/server-ca.crt
 
 parameter-store admin namespace create --env prod --app gradethis \
     --auth-methods mtls --endpoint "$KMS_ENDPOINT" --ca "$SERVER_CA" \
-    --token "$ADMIN_TOKEN"
+    --cert "$ADMIN_CERT" --key "$ADMIN_KEY" --token "$ADMIN_TOKEN"
 ```
+
+An admin needs **both** credentials on every command: the token above and the
+certificate pair issued offline with
+[`admin-cert issue`](#admin-credentials-and-browser-setup). Exporting
+`KMS_TOKEN`, `KMS_CLIENT_CERT_FILE`, and `KMS_CLIENT_KEY_FILE` once lets the
+rest of this walkthrough drop the three flags.
 
 For an existing namespace, inspect and update it with the same secure
 connection flags:
 
 ```bash
 parameter-store admin namespace list \
-    --endpoint "$KMS_ENDPOINT" --ca "$SERVER_CA" --token "$ADMIN_TOKEN"
+    --endpoint "$KMS_ENDPOINT" --ca "$SERVER_CA" \
+    --cert "$ADMIN_CERT" --key "$ADMIN_KEY" --token "$ADMIN_TOKEN"
 
 parameter-store admin namespace update --env prod --app gradethis \
     --auth-methods mtls --endpoint "$KMS_ENDPOINT" --ca "$SERVER_CA" \
-    --token "$ADMIN_TOKEN"
+    --cert "$ADMIN_CERT" --key "$ADMIN_KEY" --token "$ADMIN_TOKEN"
 ```
 
 `namespace update` is a full replacement of both the description and auth
@@ -268,7 +290,8 @@ install -d -m 0700 ./credentials/gradethis-be
 parameter-store admin identity create gradethis-be \
     --namespace prod/gradethis --auth mtls --ttl 90d \
     --out ./credentials/gradethis-be \
-    --endpoint "$KMS_ENDPOINT" --ca "$SERVER_CA" --token "$ADMIN_TOKEN"
+    --endpoint "$KMS_ENDPOINT" --ca "$SERVER_CA" \
+    --cert "$ADMIN_CERT" --key "$ADMIN_KEY" --token "$ADMIN_TOKEN"
 # writes ./credentials/gradethis-be/gradethis-be.crt (0644)
 #        ./credentials/gradethis-be/gradethis-be.key (0600, written only once)
 ```
@@ -281,6 +304,11 @@ The private key cannot be retrieved later. If it is lost, issue another
 certificate rather than trying to recover it. Do not create one shared
 identity for several applications: separate identities make policy, audit,
 rollover, and revocation boundaries explicit.
+
+This is the **client-kind** path. `admin identity create --kind admin` mints a
+token only — `--auth mtls` is rejected for an admin, and `issue-cert` refuses
+an admin target — because an admin certificate is minted only on the server
+host with [`admin-cert issue`](#admin-credentials-and-browser-setup).
 
 ### 3. Deploy the application credentials and server trust
 
@@ -388,9 +416,10 @@ keeps this development workflow separate from production mTLS.
 ## Administrative CLI reference
 
 These commands are implemented in `internal/cli` and operate directly on the
-SQLite file — they do not require a running server (except `create-admin` and
-`rotate-admin` identity changes, which a running `serve` process reads
-immediately via its shared database). They resolve the database path, the
+SQLite file — they do not require a running server (`create-admin`,
+`rotate-admin`, and `admin-cert` change credentials, which a running `serve`
+process reads immediately via its shared database). They resolve the database
+path, the
 master key file, and every other setting exactly as `serve` does:
 `--sqlite-path` beats `KMS_SQLITE_PATH`, which beats `storage.sqlite_path` in
 the `--config` file, which beats the built-in `./kms.db`. A host or container
@@ -414,13 +443,16 @@ first.
 
 | Command | Flags | Purpose |
 |---|---|---|
-| `init` | `--sqlite-path` (default `./kms.db`), `--kek-file` (omit for a passphrase prompt), `--admin NAME` (optional) | Creates/migrates the database and the master key (generating a key file, or prompting for a new passphrase with confirmation). With `--admin`, also creates a bootstrap admin identity and prints its token once. |
+| `init` | `--sqlite-path` (default `./kms.db`), `--kek-file` (omit for a passphrase prompt), `--admin NAME` (optional), `--cert-dir DIR` (optional, requires `--admin`) | Creates/migrates the database, the master key (generating a key file, or prompting for a new passphrase with confirmation), and the **built-in CA** — always, so every database has one from the moment it exists. With `--admin`, also creates a bootstrap admin identity and prints its token once; with `--cert-dir`, also issues that admin's client certificate into `DIR/NAME.crt` and `DIR/NAME.key`. Re-running `init` keeps the CA the database already has. |
 | `migrate` | `--sqlite-path` | Opens the database, applying any pending migrations, and exits. |
 | `check` | `--sqlite-path`, `--kek-file` (optional) | Verifies the database is reachable and, whenever a key source resolves (a key file from the flag, `KMS_KEK_FILE`, or `encryption.kek_file`; `KMS_MASTER_PASSPHRASE`; or a TTY), verifies the master key against the stored key-check value. Never prints key material. |
 | `backup` | `--sqlite-path`, `--out` (required, must not already exist) | Writes a consistent online backup through owner-only staging and atomic no-replace publication. Prints a reminder that the master key is not included. |
 | `restore` | `--sqlite-path` (destination), `--in` (required, source backup), `--force` (overwrite an existing destination) | Validates the input is a KMS SQLite backup, stages an owner-only copy, publishes it atomically, removes stale `-wal`/`-shm` sidecars, then opens (and migrates) it. Without `--force`, publication never replaces an existing or concurrently created entry. |
-| `create-admin` | `--sqlite-path`, `--name` (required) | Creates an admin identity directly against the database file and prints its token once. Uses WAL mode's concurrent-reader support, but coordinating this against a live `serve` process is the operator's responsibility. |
+| `create-admin` | `--sqlite-path`, `--name` (required), `--kek-file`, `--cert-dir DIR` (optional) | Creates an admin identity directly against the database file and prints its token once. With `--cert-dir`, also issues the admin's client certificate into `DIR/NAME.crt` and `DIR/NAME.key` — that path unseals the master key and requires an existing CA. Without it the admin is token-only and no unseal (or passphrase prompt) happens, so it cannot sign in while `admin_require_client_cert` is enforced until `admin-cert issue` runs. Uses WAL mode's concurrent-reader support, but coordinating this against a live `serve` process is the operator's responsibility. |
 | `rotate-admin` | `--sqlite-path`, `--name` (required) | Recovery command that directly replaces an existing enabled admin identity's token hash and prints the new token once. The old token becomes invalid immediately; a disabled admin, client identity, missing identity, or identity without a token is rejected without mutation. It does not require the old token, master key, or a running server. If output is lost, rerun the command to mint another replacement. A running server observes the shared-database update immediately, but operators must coordinate concurrent identity administration. |
+| `admin-cert issue` | `NAME` (positional), `--out DIR` (**required**), `--ttl` (default 90d), `--sqlite-path`, `--kek-file` | Issues a client certificate for an existing admin identity, offline. Unseals the master key, requires an existing CA, and refuses a non-admin, unknown, or disabled target without writing anything. Writes `DIR/NAME.crt` (`0644`) and `DIR/NAME.key` (`0600`), both created exclusively; the private key is never printed. Audited as `identity.cert.issue` with actor `cli` and `channel: local`. This is the **only** way to mint an admin certificate. |
+| `admin-cert revoke` | `NAME` (positional), `--serial SERIAL` (required), `--sqlite-path` | Revokes one of that admin's certificates. Needs no master key. The certificate stops authenticating on the next request; a running server sees the change immediately. |
+| `admin-cert list` | `NAME` (positional), `--sqlite-path` | Prints the admin's certificates as `SERIAL FINGERPRINT STATE EXPIRES ISSUED`, where state is `valid`, `revoked`, or `expired`. Read-only and unaudited. |
 | `rotate-kek` | `--sqlite-path`, `--kek-file` (current key, omit to use the current passphrase), `--new-key-file` (new key, omit to enter a new passphrase) | Unseals with the current key, generates or loads the new key, and calls the same `Service.RotateKEK` used internally — rewrapping every **non-destroyed** secret version's DEK and every built-in CA key under the new KEK in one transaction. Prints both counts (`N secret versions and M CA keys rewrapped`). Run with `serve` stopped; a live process retains the old keyring. |
 | `import` | `--from` (JSON file or SuhaibParameterStore SQLite export), `--namespace env/app` **or** `--env`/`--app`, `--sqlite-path` (default `./kms.db`), `--kek-file`, `--dry-run`, `--report FILE` | Maps flat source keys to **relative slug keys** (`slug(key)`, e.g. `TWILIO_SID` → `twilio-sid`) in the destination namespace, **auto-creates the namespace** if it does not exist, writes each as a new secret via a ref-based `PutSecret` with a freshly minted per-secret access token, and emits a mapping report (old key → `/env/app/key` display path → token, written once). Distinct source keys that slug to the same key are reported as a collision rather than silently overwriting. `--dry-run` reports the mapping without writing or minting tokens. Pass either `--namespace` or `--env`/`--app`, not both. See [`migration.md`](migration.md) for the full gradethis walkthrough. |
 
@@ -442,10 +474,13 @@ token-required state to each immutable secret-version row. Because v1 retained
 only the latest shared secret attributes, legacy versions are backfilled from
 those values; every version created after migration stores its own attributes.
 
-`init`, `check`, `rotate-kek`, and `import` all go through the same
+`init`, `check`, `rotate-kek`, `import`, `admin-cert issue`, and
+`create-admin --cert-dir` all go through the same
 master-key acquisition path as `serve` (key file → `KMS_MASTER_PASSPHRASE`
 → interactive prompt) via the shared `unseal` helper, so the same no-TTY
-fail-fast behavior applies. The key file is whichever of `--kek-file`,
+fail-fast behavior applies. (`create-admin` without `--cert-dir`,
+`admin-cert revoke`, and `admin-cert list` need no key and never prompt.)
+The key file is whichever of `--kek-file`,
 `KMS_KEK_FILE`, or `encryption.kek_file` wins the usual resolution, so a
 container or systemd unit that already supplies one gets the unattended path
 without repeating it on the command line — and `check` verifies the master key
@@ -607,6 +642,18 @@ connection once and drop the flags:
 | `--ca` | `KMS_CA_FILE` |
 | `--cert` | `KMS_CLIENT_CERT_FILE` |
 | `--key` | `KMS_CLIENT_KEY_FILE` |
+
+**In production, `--cert`/`--key` are not optional for an admin.** While
+`security.admin_require_client_cert` is enforced (the default whenever TLS is
+on), an admin identity authenticates with its client certificate **and** its
+token; either alone is rejected as `unauthenticated` without saying which was
+missing. Issue the pair with
+[`admin-cert issue`](#admin-credentials-and-browser-setup) and export
+`KMS_CLIENT_CERT_FILE`/`KMS_CLIENT_KEY_FILE` alongside `KMS_TOKEN` so the
+flags can be dropped. Examples elsewhere in this document that pass only
+`--token` assume either a development server with TLS disabled
+(`--insecure`), where the requirement is relaxed, or that the certificate
+already comes from the environment.
 
 `KMS_CA_FILE` is the **client's** trust bundle for verifying the server. It is
 a different thing from the server-side `KMS_CLIENT_CA_FILE`
@@ -839,15 +886,23 @@ On `serve`, the process (`internal/cli/serve.go`):
 3. Constructs the core service (not yet ready — no keyring attached).
 4. **Acquires the master key** (below) and attaches it to the service,
    which is what flips readiness on.
-5. **Bootstraps the built-in CA** (`Service.BootstrapCA`): on a fresh
-   database it generates the CA and stores it KEK-wrapped; on later starts it
-   loads and decrypts the existing CA into memory (see
+5. **Bootstraps the built-in CA** (`Service.BootstrapCA`): normally it loads
+   and decrypts the CA `init` created; on a database that has none it
+   generates one and stores it KEK-wrapped (see
    [Built-in CA](#built-in-ca-and-client-certificates)).
 6. Starts the watch hub (change-log tailer / subscriber registry).
-7. Starts the gRPC listener (via `cli.GRPCFactory`, wired in
+7. Builds the TLS config and **settles the admin client-certificate
+   posture**: the requirement is effective only when
+   `security.admin_require_client_cert` is true *and* TLS is on. The log says
+   which of the three states applies, and — when the requirement is
+   effective — names every enabled admin identity that holds no valid
+   certificate along with the command to issue one (see
+   [Admin credentials and browser setup](#admin-credentials-and-browser-setup)).
+8. Starts the gRPC listener (via `cli.GRPCFactory`, wired in
    `cmd/parameter-store/main.go` to `internal/server/grpcserver`), then the
-   HTTP listener.
-8. Blocks on `SIGINT`/`SIGTERM`, then shuts down: gRPC graceful stop is capped
+   HTTP listener. Both accept — but never demand — a certificate from the
+   built-in CA.
+9. Blocks on `SIGINT`/`SIGTERM`, then shuts down: gRPC graceful stop is capped
    at 10 s before active streams are forced closed; HTTP shutdown uses a 20 s
    overall context; then the watch hub stops and the store closes.
 
@@ -940,6 +995,7 @@ security:
   server_key_file: "/etc/parameter-store/tls/server.key"
   client_ca_file: ""   # set only for an additional operator client CA
   trust_proxy_headers: false
+  admin_require_client_cert: true
 ```
 
 The **server certificate is operator-provided** (`server_cert_file` /
@@ -948,18 +1004,20 @@ server's serving certificate. `tls_enabled` alone terminates TLS on both
 listeners with that certificate (`Config.BuildServerTLS`, minimum TLS 1.2).
 
 **Client-certificate authentication uses the built-in CA and does not require
-`mtls_enabled`.** Whenever TLS is on, the gRPC listener adds the built-in CA
-to its client-CA pool and switches to `tls.VerifyClientCertIfGiven`
-(`grpcServerTLS`, `serve.go`) — so a client presenting a certificate the
+`mtls_enabled`.** Whenever TLS is on, **both** listeners add the built-in CA
+to their client-CA pool and switch to `tls.VerifyClientCertIfGiven`
+(`internal/server/listenertls`) — so a client presenting a certificate the
 built-in CA issued authenticates by mTLS, while token-only clients, presenting
 no certificate, still connect. The server reads that issuer directly from
 SQLite; application onboarding does not involve `admin ca show`.
 The TLS layer verifies any certificate offered; the per-namespace
-`allowed_auth_methods` gate, not the handshake, decides who is admitted.
+`allowed_auth_methods` gate and the admin admission rule, not the handshake,
+decide who is admitted.
 
 `mtls_enabled` (which requires `tls_enabled` and a `client_ca_file`, both
 checked to exist at config-validation time) adds an **operator-supplied** CA to
-the gRPC TLS trust pool alongside the built-in one. Certificate presentation
+the listeners' TLS trust pool alongside the built-in one. Certificate
+presentation
 stays optional either way (`VerifyClientCertIfGiven`, not require-and-verify).
 However, TLS trust alone does not create a KMS identity: certificate auth also
 requires the `kms://identity/<name>` SAN and a matching `identity_certs` row.
@@ -968,11 +1026,24 @@ certificates, so an external CA is not independently usable for identity auth
 without a separate provisioning mechanism. Do not enable `mtls_enabled` merely
 to use the built-in CA.
 
-The embedded HTTP/frontend listener **never** requires a client certificate:
-it clones the TLS config and sets `tls.NoClientCert` (`serve.go`), since human
-users authenticate with a bearer token through the login flow. For mTLS in
-front of the web UI, put a TLS-terminating reverse proxy ahead of the HTTP
-listener.
+**The embedded HTTP/frontend listener asks for a client certificate too.** It
+derives its TLS config from the same `listenertls.Build` as gRPC, so a browser
+is *offered* the built-in CA and may present an administrator's certificate,
+but one is never demanded at the handshake — an unauthenticated visitor must
+still be able to reach the login page and `GET /api/v1/health`. A browser with
+no matching certificate connects normally and is refused (if it is an admin)
+by the core admission rule, not by a handshake error. Admins therefore need no
+reverse proxy to authenticate with a certificate; see
+[Admin credentials and browser setup](#admin-credentials-and-browser-setup).
+
+**A TLS-terminating reverse proxy in front of the HTTP listener turns the
+requirement off.** If the proxy terminates TLS, the KMS itself runs with
+`tls_enabled: false` (or receives plain HTTP), no certificate reaches it, and
+`serve` relaxes `admin_require_client_cert` with a warning: an admin bearer
+token alone then grants full administrative access to anything that can reach
+the KMS port. In that topology the proxy must enforce client certificates
+itself, and the KMS listener must not be reachable except through it. KMS does
+not currently trust a proxy-supplied client-certificate header.
 
 **Running securely: don't ship TLS disabled on a networked bind.** If
 `tls_enabled` is `false`, `serve` logs a startup warning; if in addition
@@ -1008,16 +1079,22 @@ address. Default: `false`.
 ## Built-in CA and client certificates
 
 Machine clients authenticate by mTLS certificates minted by a certificate
-authority embedded in the KMS. There is nothing to provision: the CA is
-**bootstrapped during the first `serve` startup after unseal** and lives inside
-the same database.
+authority embedded in the KMS, and administrators present one in addition to
+their bearer token. There is nothing to provision: the CA is **created by
+`parameter-store init`** and lives inside the same database.
 
 **Lifecycle.**
 
-- On the first `serve` after the master key is acquired,
-  `Service.BootstrapCA` generates the CA — an Ed25519 key pair and a
+- `init` generates the CA — an Ed25519 key pair and a
   long-lived (10-year), self-signed CA certificate that signs client leaves
-  only. On every later start it loads and decrypts the existing CA.
+  only. Every `serve` afterwards loads and decrypts it. `BootstrapCA` is
+  get-or-create, so re-running `init` keeps the existing CA, and a database
+  created before this behavior still gets a CA on its next `serve`.
+- **Leaf key algorithms differ by identity kind.** Client leaves are Ed25519;
+  **admin leaves are ECDSA P-256**, because browser and OS keystores have
+  poor Ed25519 support and an admin certificate has to be importable into
+  one. Both are signed by the Ed25519 CA key and verify against the same
+  single built-in CA.
 - The **CA private key is stored KEK-wrapped** in the `ca_keys` table
   (enveloped exactly like a secret version: its own DEK wraps the key, and the
   active KEK wraps that DEK); the plaintext signing key remains in server
@@ -1030,14 +1107,23 @@ the same database.
   in the database, not in the certificate, and issued leaves are unaffected.
 - The CA certificate is **public**: `admin ca show [--out FILE]` (or the
   unauthenticated `GET /api/v1/ca`) prints it for inspection or out-of-band
-  verification of KMS-issued client certificates. The gRPC server loads this
-  client-CA directly from the database. SDK clients instead need a CA bundle
+  verification of KMS-issued client certificates. Both listeners load this
+  client CA directly from the database. SDK clients instead need a CA bundle
   that trusts the separately operator-provided **server** certificate.
+- The offline commands that mint certificates (`admin-cert issue`,
+  `create-admin --cert-dir`) **require** an existing CA and never generate
+  one: inserting a CA key retires every other row, so a second generator
+  would silently invalidate every certificate already issued. If a database
+  somehow has none, they fail and point at `init`.
 
 **Certificate rollover runbook.** Issued client certificates default to a
 **90-day** TTL (`--ttl` overrides). Because an identity may hold several
 concurrently-valid certificates, rollover is zero-downtime — issue the
-replacement *before* the current one expires:
+replacement *before* the current one expires. This runbook is for
+**client-kind** identities: `issue-cert` refuses an admin-kind target for
+every caller (`permission_denied`), and admin certificates are rolled over
+with the offline `admin-cert issue`
+([below](#admin-credentials-and-browser-setup)).
 
 Certificate paths are reserved before the minting RPC. If the RPC or a local
 write fails **before both credential files are fully written and closed**, the
@@ -1092,10 +1178,130 @@ The method gate runs **before** authorization on every namespaced operation
 (parameter reads included): a client whose method is not in the target
 namespace's list is refused with `PermissionDenied` and audited, regardless
 of policy. It applies to **client-kind** identities only — **admin-kind**
-identities (the human management plane, and the browser login, which is
-token-based) bypass the method gate but remain fully audited. Changing a
+identities are the human management plane and administer every namespace, so
+no per-namespace list applies to them; they are admitted by the stricter
+[admin rule](#admin-credentials-and-browser-setup) (certificate *and* token)
+instead, and remain fully audited. Changing a
 namespace's auth methods is itself an audited admin action
 (`admin:namespace:update`).
+
+## Admin credentials and browser setup
+
+An administrator has **two** credentials, and needs both on every request:
+a bearer token and a client certificate issued by the built-in CA. This is
+`security.admin_require_client_cert`, on by default. A stolen token alone is
+useless, and the certificate's private key never travels in a request.
+
+> **Upgrade note.** On an existing TLS deployment this takes effect the moment
+> you restart into the new build: **every admin loses console and CLI access**
+> until a certificate is issued for them. Either run `admin-cert issue` for
+> each admin before or immediately after the restart, or set
+> `security.admin_require_client_cert: false` (`KMS_ADMIN_REQUIRE_CLIENT_CERT=false`,
+> `--admin-require-client-cert=false`) to keep the old token-only behavior
+> with a startup warning. `serve` names the affected admins at startup, so an
+> upgrade with no certificates issued logs one warning per stranded admin plus
+> the command to fix it. Deployments running without TLS are unaffected — the
+> requirement is relaxed there. One further behavior change on gRPC: a request
+> presenting a valid certificate **and** a valid token naming a *different*
+> identity is now refused (`unauthenticated`, audited
+> `reason: credential_mismatch`); previously the certificate silently won.
+
+**Issue a certificate.** Run on the server host, with the database and master
+key reachable — there is no online path for this:
+
+```bash
+parameter-store admin-cert issue ops --out ./admin-creds
+#   --ttl 90d          certificate lifetime (default 90 days; e.g. --ttl 365d)
+#   --sqlite-path P    database (or KMS_SQLITE_PATH / storage.sqlite_path)
+#   --kek-file F       master key (or KMS_KEK_FILE / encryption.kek_file)
+```
+
+`--out` is required: the private key is written to a `0600` file and never
+printed. The command writes `./admin-creds/ops.crt` (`0644`) and
+`./admin-creds/ops.key` (`0600`), both created exclusively, and refuses an
+unknown, non-admin, or disabled target before anything is unsealed or
+reserved. It fails if the database has no CA (run `init`). The issuance is
+audited as `identity.cert.issue` with actor `cli` and `channel: local`.
+
+`init --admin ops --cert-dir ./admin-creds` and
+`create-admin --name ops --cert-dir ./admin-creds` do the same thing while
+creating the identity, printing the one-time token alongside the certificate.
+
+**Use it from the CLI.** Every `parameter-store admin …` command needs the
+certificate pair *and* the token:
+
+```bash
+parameter-store admin identity list \
+    --endpoint kms.internal:8443 --ca server-ca.crt \
+    --cert ./admin-creds/ops.crt --key ./admin-creds/ops.key --token "$KMS_TOKEN"
+
+# or once, in the environment:
+export KMS_CLIENT_CERT_FILE=./admin-creds/ops.crt
+export KMS_CLIENT_KEY_FILE=./admin-creds/ops.key
+export KMS_TOKEN=<the admin token>
+```
+
+Without `--cert`/`--key` the call fails as `unauthenticated`, exactly as a
+wrong token would — the error deliberately does not say which half was
+missing.
+
+**Use it from a browser.** Convert the pair to PKCS#12, then import it:
+
+```bash
+openssl pkcs12 -export -inkey ./admin-creds/ops.key -in ./admin-creds/ops.crt \
+    -name "parameter-store ops" -out ops.p12
+```
+
+- **Chrome / Edge** read the operating system store: import `ops.p12` into
+  macOS Keychain Access or Windows `certmgr`. On Linux they use NSS instead —
+  import at `chrome://settings/certificates`, tab **Your certificates**,
+  **Import**.
+- **Firefox** keeps its own store: Settings › Privacy & Security › View
+  Certificates › **Your Certificates** › **Import**.
+
+Reload the console afterwards. Then sign in with the admin token as before —
+the certificate alone never signs you in.
+
+Caveats worth knowing before you hand this to an administrator:
+
+- The browser picks a certificate **per TLS connection** and there is no
+  "sign out" for it; closing the browser is what stops it being presented.
+  (Server-side sessions with an explicit logout are a planned follow-up.)
+- The console's login page detects the situation and says so: it reads the
+  unauthenticated `GET /api/v1/health`, and when
+  `admin_client_cert_required` is true while `client_cert_presented` is
+  false it shows a notice explaining that a certificate is needed. Client
+  identity tokens still sign in without one.
+- Linux keystores (Chrome and Firefox via NSS) are verified to accept these
+  certificates. macOS Keychain and the Windows store should be verified by
+  the operator before rolling this out to a fleet.
+- A `--p12` output flag is a possible follow-up; today the `openssl` step is
+  manual.
+
+**Inspect and revoke.** Both run offline against the database; revocation
+needs no master key:
+
+```bash
+parameter-store admin-cert list ops
+# SERIAL  FINGERPRINT  STATE  EXPIRES  ISSUED   (state: valid | revoked | expired)
+
+parameter-store admin-cert revoke ops --serial <serial>
+```
+
+A revoked certificate stops authenticating on the next request, and a running
+server sees the change immediately — no restart, no CRL. Revoking an admin
+certificate **online** (`admin identity revoke-cert`, the frontend's
+certificates dialog) also remains allowed: containment must not require host
+access, even though issuance does. To cut an admin off entirely, `rotate-admin`
+its token as well.
+
+**Renewal needs host access, by design.** Certificates default to a 90-day
+TTL; `--ttl 365d` is available if that cadence is impractical. There is no
+automatic renewal and no online self-service path, so track `not_after` (the
+`admin-cert list` `EXPIRES` column) and re-issue ahead of expiry. An admin
+whose certificate has expired is locked out exactly like one who never had
+it — `serve` will name them at the next restart, but nothing warns before
+expiry.
 
 ## Backups
 

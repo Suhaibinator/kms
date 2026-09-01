@@ -720,3 +720,75 @@ func TestSortedKeysAndEnvNames(t *testing.T) {
 		t.Errorf("EnvNames() = %q, want %q", names, want)
 	}
 }
+
+// TestAdminRequireClientCertDefaultsOn pins the security-relevant default: the
+// admin client-certificate requirement is on unless an operator turns it off,
+// and it can be turned off through either the environment or the flag. A
+// regression here (a Default() that forgets the Security block, say) would
+// silently downgrade every deployment to token-only admin auth.
+func TestAdminRequireClientCertDefaultsOn(t *testing.T) {
+	t.Parallel()
+
+	const key = "security.admin_require_client_cert"
+	s := mustLookup(t, key)
+	if s.Env != "KMS_ADMIN_REQUIRE_CLIENT_CERT" {
+		t.Errorf("Env = %q, want KMS_ADMIN_REQUIRE_CLIENT_CERT", s.Env)
+	}
+	if s.Flag() != "admin-require-client-cert" {
+		t.Errorf("Flag() = %q, want admin-require-client-cert", s.Flag())
+	}
+
+	t.Run("default", func(t *testing.T) {
+		t.Parallel()
+		cfg, prov := mustResolve(t, Options{LookupEnv: noEnv})
+		if !cfg.Security.AdminRequireClientCert {
+			t.Errorf("AdminRequireClientCert = false, want true by default")
+		}
+		if got := prov[key].String(); got != "default" {
+			t.Errorf("provenance = %q, want default", got)
+		}
+	})
+
+	t.Run("env disables", func(t *testing.T) {
+		t.Parallel()
+		env := envMap(map[string]string{s.Env: "false"})
+		cfg, prov := mustResolve(t, Options{LookupEnv: env})
+		if cfg.Security.AdminRequireClientCert {
+			t.Errorf("AdminRequireClientCert = true, want false from %s", s.Env)
+		}
+		if got, want := prov[key].String(), "env "+s.Env; got != want {
+			t.Errorf("provenance = %q, want %q", got, want)
+		}
+	})
+
+	t.Run("file disables", func(t *testing.T) {
+		t.Parallel()
+		path := writeConfigFile(t, "security:\n  admin_require_client_cert: false\n")
+		cfg, prov := mustResolve(t, Options{Path: path, LookupEnv: noEnv})
+		if cfg.Security.AdminRequireClientCert {
+			t.Errorf("AdminRequireClientCert = true, want false from the config file")
+		}
+		if got, want := prov[key].String(), "file "+key; got != want {
+			t.Errorf("provenance = %q, want %q", got, want)
+		}
+	})
+
+	t.Run("flag beats env", func(t *testing.T) {
+		t.Parallel()
+		// Env says on, the flag says off: the operator typing --...=false on the
+		// command line must win over an inherited environment variable.
+		env := envMap(map[string]string{s.Env: "true"})
+		fs := newFlagSet(t)
+		b := AddFlags(fs, key)
+		if err := fs.Parse([]string{"--admin-require-client-cert=false"}); err != nil {
+			t.Fatalf("Parse: %v", err)
+		}
+		cfg, prov := mustResolve(t, Options{LookupEnv: env, Flags: b})
+		if cfg.Security.AdminRequireClientCert {
+			t.Errorf("AdminRequireClientCert = true, want false from the flag")
+		}
+		if got, want := prov[key].String(), "flag --"+s.Flag(); got != want {
+			t.Errorf("provenance = %q, want %q", got, want)
+		}
+	})
+}

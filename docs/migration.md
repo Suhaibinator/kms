@@ -272,12 +272,19 @@ as the next candidate, so do not treat activation as a distributed commit.
 1. **Stand up the service** and initialize it:
    ```bash
    parameter-store init --sqlite-path /var/lib/parameter-store/kms.db \
-       --kek-file /etc/parameter-store/master.key --admin bootstrap
+       --kek-file /etc/parameter-store/master.key \
+       --admin bootstrap --cert-dir ./admin-creds
    # Or, if config.yaml already sets storage.sqlite_path and
    # encryption.kek_file, init reads them too:
-   #   parameter-store init --config /etc/parameter-store/config.yaml --admin bootstrap
+   #   parameter-store init --config /etc/parameter-store/config.yaml \
+   #       --admin bootstrap --cert-dir ./admin-creds
    parameter-store serve --config /etc/parameter-store/config.yaml
    ```
+   `init` also creates the built-in CA. `--cert-dir` issues the bootstrap
+   admin's client certificate (`bootstrap.crt`/`bootstrap.key`) next to its
+   one-time token: with TLS enabled the admin needs **both** to run the
+   commands below (`--cert`/`--key` alongside `--token`). See
+   [`operations.md`](operations.md#admin-credentials-and-browser-setup).
 2. **Create the namespace and the gradethis client identity.** The namespace
    must exist before anything is written into it, and new namespaces default
    to **mTLS-only**. Create `prod/gradethis`, then a client identity **bound

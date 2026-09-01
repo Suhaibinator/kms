@@ -84,8 +84,31 @@ func authMethodAllowed(allowed []domain.AuthMethod, method domain.AuthMethod) bo
 	return slices.Contains(allowed, method)
 }
 
-// normalizeAuthMethods validates a requested auth-method set and applies the
-// default (mTLS-only, the strongest posture) when the set is empty.
+// normalizeAdminAuthMethods validates the auth-method set requested for an
+// admin-kind identity. Admins always receive a bearer token, and their client
+// certificates are minted only by the offline CLI on the server host
+// (IssueLocalAdminCertificate), never through the online API, so "mtls" is
+// rejected here rather than silently ignored. An empty set means token only.
+func normalizeAdminAuthMethods(methods []domain.AuthMethod) ([]domain.AuthMethod, error) {
+	if len(methods) == 0 {
+		return []domain.AuthMethod{domain.AuthMethodToken}, nil
+	}
+	for _, m := range methods {
+		if !domain.ValidAuthMethod(m) {
+			return nil, domain.Errorf(domain.ErrInvalidArgument, "unknown auth method %q", m)
+		}
+		if m == domain.AuthMethodMTLS {
+			return nil, domain.Errorf(domain.ErrInvalidArgument,
+				"admin identities cannot be issued client certificates online; create the admin with auth method %q and run 'parameter-store admin-cert issue NAME --out DIR' on the server host",
+				domain.AuthMethodToken)
+		}
+	}
+	return methods, nil
+}
+
+// normalizeAuthMethods validates a requested auth-method set for a client-kind
+// identity and applies the default (mTLS-only, the strongest posture) when the
+// set is empty.
 func normalizeAuthMethods(methods []domain.AuthMethod) ([]domain.AuthMethod, error) {
 	if len(methods) == 0 {
 		return []domain.AuthMethod{domain.AuthMethodMTLS}, nil

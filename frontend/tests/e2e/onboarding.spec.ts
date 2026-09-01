@@ -63,6 +63,8 @@ async function installFake(page: Page): Promise<State> {
         current_revision: 0,
         grpc_addr: "127.0.0.1:8443",
         tls_enabled: true,
+        admin_client_cert_required: false,
+        client_cert_presented: false,
       });
     }
     if (path === "/namespaces") return json(200, { namespaces: [], next_page_token: "" });

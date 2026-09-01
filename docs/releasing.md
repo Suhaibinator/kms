@@ -93,7 +93,7 @@ docker volume create kms-key
 docker run --rm -it \
   -v kms-data:/data -v kms-key:/key \
   "ghcr.io/suhaibinator/kms:${VERSION}" \
-  init --admin ops
+  init --admin ops --cert-dir /data/admin-creds
 
 docker run --rm \
   -p 8080:8080 -p 8443:8443 \
@@ -105,6 +105,13 @@ The image sets `KMS_SQLITE_PATH=/data/kms.db` and `KMS_KEK_FILE=/key/master.key`
 and every offline command honors those the same way `serve` does, so `init`
 needs no path flags. It echoes what it resolved
 (`Initialized database at /data/kms.db (source: env KMS_SQLITE_PATH)`).
+
+`init` also creates the built-in CA, and `--cert-dir` writes the bootstrap
+admin's client certificate and key alongside its one-time token. With TLS
+enabled the admin needs both to reach the console or the `admin` CLI —
+copy them out of the volume and off the host. Issue certificates for further
+admins with `docker run … admin-cert issue NAME --out DIR`; see
+[`operations.md`](operations.md#admin-credentials-and-browser-setup).
 
 Use named volumes as shown. Docker initializes an empty volume from the image
 directory's ownership and mode, so `/data` and `/key` keep the `kms`-owned,

@@ -119,6 +119,9 @@ func TestMTLS_ReleaseWatchHeartbeatRejectsRevokedCertificate(t *testing.T) {
 		t.Fatal(err)
 	}
 	svc.SetKeyring(crypto.NewKeyring(kek))
+	// This test seeds the release through a token-only admin; the admin
+	// client-certificate requirement has its own suite (admin_mtls_test.go).
+	svc.SetAdminRequireClientCert(false)
 	if err := svc.BootstrapCA(ctx); err != nil {
 		t.Fatal(err)
 	}

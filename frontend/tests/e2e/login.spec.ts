@@ -9,7 +9,16 @@ async function mockAuthenticatedConsole(page: Page, namespaces: Record<string, u
     const payload = path.endsWith("/whoami")
       ? { name: "e2e-client", kind: "client", namespace: { env: "prod", app: "billing" } }
       : path.endsWith("/health")
-        ? { healthy: true, ready: true, version: "e2e", current_revision: 0 }
+        ? {
+            healthy: true,
+            ready: true,
+            version: "e2e",
+            current_revision: 0,
+            grpc_addr: "127.0.0.1:8443",
+            tls_enabled: true,
+            admin_client_cert_required: false,
+            client_cert_presented: false,
+          }
         : path.endsWith("/namespaces")
           ? { namespaces, next_page_token: "" }
           : path.endsWith("/subscribers")
@@ -36,6 +45,39 @@ test("login exposes a labelled identity-token form with the intended font", asyn
     .getByRole("heading", { name: "KMS Console", level: 1 })
     .evaluate((heading) => getComputedStyle(heading).fontFamily);
   expect(fontFamily.toLowerCase()).not.toContain("times");
+});
+
+test("explains a missing admin client certificate without taking the form away", async ({
+  page,
+}) => {
+  // The server asks admins for a client certificate; this browser has none in
+  // its keystore, so the handshake carried no chain-verified certificate.
+  await page.route("**/api/v1/health", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        healthy: true,
+        ready: true,
+        version: "e2e",
+        current_revision: 0,
+        grpc_addr: "127.0.0.1:8443",
+        tls_enabled: true,
+        admin_client_cert_required: true,
+        client_cert_presented: false,
+      }),
+    });
+  });
+  await page.goto("/login");
+
+  const notice = page
+    .getByRole("status")
+    .filter({ hasText: "Admin sign-in needs a client certificate" });
+  await expect(notice).toBeVisible();
+  await expect(notice).toContainText("parameter-store admin-cert issue NAME --out DIR");
+  // Client identity tokens are unaffected, so nothing about the form is gated.
+  await expect(page.getByLabel("Identity token")).toBeEditable();
+  await expect(page.getByRole("button", { name: "Sign in" })).toBeEnabled();
 });
 
 test("portalled dropdowns and filter controls stay visually consistent", async ({

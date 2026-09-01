@@ -49,17 +49,21 @@ func (noopHub) Wake()                            {}
 func (noopHub) Subscribers() []domain.Subscriber { return nil }
 
 // Principal is the authenticated caller plus request context. Transports build
-// it via Service.Authenticate (bearer token) or Service.VerifyClientCert
-// (mTLS) and pass it to every operation.
+// it via Service.ResolvePrincipal, which verifies the presented bearer token
+// and/or client certificate and enforces the admin client-certificate
+// requirement, and pass it to every operation.
 type Principal struct {
 	Identity domain.Identity
 	// Method is how the caller proved its identity (token or mTLS). The
 	// transport sets it; the per-namespace auth-method gate enforces it for
 	// client-kind identities.
 	Method domain.AuthMethod
-	// Token is the identity bearer token the caller authenticated with, retained
-	// only so long-lived token streams can re-authenticate periodically (see
-	// ReauthorizeWatch). Empty for mTLS callers. Never logged or persisted.
+	// Token is the identity bearer token the caller presented, retained only so
+	// long-lived streams can re-authenticate periodically (see
+	// ReauthorizeWatch). Set for token callers and for callers that presented a
+	// valid token alongside a client certificate; an admin admitted under the
+	// client-certificate requirement always carries it. Never logged or
+	// persisted.
 	Token string
 	// Serial is the serial of the client certificate an mTLS caller presented
 	// (empty for token callers). It lets long-lived mTLS streams be re-validated
@@ -82,8 +86,11 @@ type Principal struct {
 
 // IsAdmin reports whether the principal has the admin kind. Admin-kind
 // identities are the management plane: they bypass the per-namespace
-// auth-method gate and data-plane policy (a browser cannot practically do
-// client-cert auth), but not audit or client-bound cryptography.
+// auth-method gate and data-plane policy, but not audit or client-bound
+// cryptography. Instead of the namespace gate they are subject to the global
+// admin client-certificate requirement, enforced when the principal is built
+// (see ResolvePrincipal and admitAdmin), so a principal that reaches an
+// operation has already satisfied it.
 func (p Principal) IsAdmin() bool { return p.Identity.Kind == domain.IdentityKindAdmin }
 
 // home returns the caller's bound namespace (nil when unbound), passed to
@@ -107,9 +114,14 @@ type Service struct {
 	hub          atomic.Pointer[Hub]
 	ca           atomic.Pointer[ca.CA]
 	auditEnabled atomic.Bool
-	log          *zap.Logger
-	version      string
-	now          func() time.Time
+	// adminRequireClientCert is the effective admin client-certificate
+	// requirement (security.admin_require_client_cert, relaxed by serve when
+	// TLS is off). On by default so in-process consumers keep the secure
+	// behavior unless they explicitly opt out. See admitAdmin.
+	adminRequireClientCert atomic.Bool
+	log                    *zap.Logger
+	version                string
+	now                    func() time.Time
 	// releaseNotify fans out "subscriber state changed" wakeups to the
 	// console's live rollout streams.
 	releaseNotify *releaseSubscriberNotifier
@@ -132,6 +144,7 @@ func New(store storage.Store, logger *zap.Logger, version string) *Service {
 	}
 	s := &Service{store: store, log: logger, version: version, now: func() time.Time { return time.Now().UTC() }, filteredPageKey: mustNewFilteredPageKey(), releaseNotify: newReleaseSubscriberNotifier()}
 	s.auditEnabled.Store(true)
+	s.adminRequireClientCert.Store(true)
 	s.verifyLimits.Store(newVerifyLimiters(DefaultVerifyDefaultsLimits()))
 	var h Hub = noopHub{}
 	s.hub.Store(&h)
@@ -148,6 +161,19 @@ func (s *Service) SetHub(h Hub) { s.hub.Store(&h) }
 // by default so non-server consumers retain the secure behavior unless they
 // explicitly opt out through configuration.
 func (s *Service) SetAuditEnabled(enabled bool) { s.auditEnabled.Store(enabled) }
+
+// SetAdminRequireClientCert sets the effective admin client-certificate
+// requirement: while true, an admin-kind identity is admitted only when it
+// presents a valid client certificate AND its bearer token (see admitAdmin).
+// serve passes the configured value, forced to false when TLS is disabled
+// because no client certificate can be presented without it.
+func (s *Service) SetAdminRequireClientCert(required bool) {
+	s.adminRequireClientCert.Store(required)
+}
+
+// AdminRequireClientCert reports the effective admin client-certificate
+// requirement.
+func (s *Service) AdminRequireClientCert() bool { return s.adminRequireClientCert.Load() }
 
 // Store exposes the underlying store to trusted in-process consumers
 // (watch hub snapshot/replay, CLI). Transport layers must not use it.
@@ -549,7 +575,11 @@ func (s *Service) AuthorizeSubscribeContext(ctx context.Context, pr Principal, n
 // exact presenting certificate (serial plus fingerprint) is still enrolled and
 // valid, so revoking a single cert drops the stream. Any transport that builds
 // an mTLS Principal MUST populate Serial and Fingerprint; missing either fails
-// reauthorization closed.
+// reauthorization closed. An admin stream admitted under the client-certificate
+// requirement presented both credentials, so its bearer token is re-checked as
+// well: rotating the admin token drops the stream just as revoking the
+// certificate does. Non-admin callers that happened to present both are only
+// re-checked on the certificate, the credential that admitted them.
 //
 // Authorization re-check: for each subscribed namespace it re-runs the same
 // per-namespace method gate AND namespace-level policy check (home grant folded
@@ -565,9 +595,8 @@ func (s *Service) AuthorizeSubscribeContext(ctx context.Context, pr Principal, n
 func (s *Service) ReauthorizeWatch(ctx context.Context, pr Principal, namespaces ...domain.NamespaceRef) error {
 	switch pr.Method {
 	case domain.AuthMethodToken:
-		id, err := s.Authenticate(ctx, pr.Token, pr.RemoteAddr, pr.UserAgent)
-		if err != nil || id.Name != pr.Identity.Name || id.Kind != pr.Identity.Kind {
-			return domain.Errorf(domain.ErrUnauthenticated, "invalid credentials")
+		if err := s.reauthToken(ctx, pr); err != nil {
+			return err
 		}
 	case domain.AuthMethodMTLS:
 		id, err := s.store.GetIdentityByName(ctx, pr.Identity.Name)
@@ -587,6 +616,14 @@ func (s *Service) ReauthorizeWatch(ctx context.Context, pr Principal, namespaces
 			!rec.Cert.RevokedAt.IsZero() ||
 			(!rec.Cert.NotAfter.IsZero() && s.now().After(rec.Cert.NotAfter)) {
 			return domain.Errorf(domain.ErrUnauthenticated, "invalid credentials")
+		}
+		if pr.IsAdmin() && s.adminRequireClientCert.Load() {
+			if err := s.admitAdmin(ctx, pr); err != nil {
+				return err
+			}
+			if err := s.reauthToken(ctx, pr); err != nil {
+				return err
+			}
 		}
 	default:
 		return domain.Errorf(domain.ErrUnauthenticated, "invalid credentials")
@@ -612,6 +649,16 @@ func (s *Service) ReauthorizeWatch(ctx context.Context, pr Principal, namespaces
 		if !pr.IsAdmin() && !policy.Authorize(policies, home, domain.OpParameterRead, ns) {
 			return domain.Errorf(domain.ErrPermissionDenied, "access denied")
 		}
+	}
+	return nil
+}
+
+// reauthToken re-authenticates a retained bearer token and requires it to still
+// resolve to the principal's identity (same name and kind).
+func (s *Service) reauthToken(ctx context.Context, pr Principal) error {
+	id, err := s.Authenticate(ctx, pr.Token, pr.RemoteAddr, pr.UserAgent)
+	if err != nil || id.Name != pr.Identity.Name || id.Kind != pr.Identity.Kind {
+		return domain.Errorf(domain.ErrUnauthenticated, "invalid credentials")
 	}
 	return nil
 }

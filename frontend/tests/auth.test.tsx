@@ -218,6 +218,23 @@ describe("AuthProvider session restore", () => {
     expect(mocks.storeIdentity).toHaveBeenCalledWith({ name: "a", kind: "admin" });
     expect(screen.getByTestId("identity")).toHaveTextContent("a");
   });
+
+  it("keeps the login response's auth method when whoami cannot confirm it", async () => {
+    // An admin signing in with a client certificate plus a token: /auth/login
+    // already reported how it was accepted, so a failed whoami does not lose it.
+    mocks.login.mockResolvedValue({ identity: { name: "a", kind: "admin" }, auth_method: "mtls" });
+    mocks.whoami.mockRejectedValue(new ApiError("unavailable", "offline", 0));
+
+    renderProvider();
+    await waitFor(() => expect(screen.getByTestId("ready")).toHaveTextContent("true"));
+
+    let identity: Awaited<ReturnType<Auth["login"]>> | undefined;
+    await act(async () => {
+      identity = await latest?.login("tok");
+    });
+
+    expect(identity).toMatchObject({ name: "a", kind: "admin", auth_method: "mtls" });
+  });
 });
 
 describe("Protected redirects", () => {

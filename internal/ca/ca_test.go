@@ -1,8 +1,14 @@
 package ca
 
 import (
+	"crypto"
+	"crypto/ecdsa"
+	"crypto/ed25519"
+	"crypto/elliptic"
 	"crypto/x509"
+	"encoding/pem"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 )
@@ -194,7 +200,113 @@ func TestIdentityFromCertRequiresSAN(t *testing.T) {
 	}
 }
 
+// --- leaf key algorithms ---
+
+func TestKeyAlgorithmString(t *testing.T) {
+	if got := KeyEd25519.String(); got != "ed25519" {
+		t.Errorf("KeyEd25519.String() = %q, want ed25519", got)
+	}
+	if got := KeyECDSAP256.String(); got != "ecdsa-p256" {
+		t.Errorf("KeyECDSAP256.String() = %q, want ecdsa-p256", got)
+	}
+	if got := KeyAlgorithm(99).String(); got != "KeyAlgorithm(99)" {
+		t.Errorf("KeyAlgorithm(99).String() = %q, want KeyAlgorithm(99)", got)
+	}
+}
+
+// Admin credentials must be importable into browser and OS keystores, which
+// commonly cannot hold Ed25519 keys for TLS client authentication. The leaf key
+// is therefore ECDSA P-256 while the CA's signature over it stays Ed25519.
+func TestIssueClientCertWithOptionsECDSAP256(t *testing.T) {
+	c := mustGenerate(t)
+	before := time.Now()
+	issued, err := c.IssueClientCertWithOptions("ops", IssueOptions{Key: KeyECDSAP256})
+	if err != nil {
+		t.Fatalf("IssueClientCertWithOptions: %v", err)
+	}
+
+	key, ok := parseLeafKey(t, issued.KeyPEM).(*ecdsa.PrivateKey)
+	if !ok {
+		t.Fatalf("leaf key is %T, want *ecdsa.PrivateKey", parseLeafKey(t, issued.KeyPEM))
+	}
+	if key.Curve != elliptic.P256() {
+		t.Errorf("curve = %s, want P-256", key.Curve.Params().Name)
+	}
+
+	leaf := parseLeaf(t, issued.CertPEM)
+	if leaf.PublicKeyAlgorithm != x509.ECDSA {
+		t.Errorf("public key algorithm = %v, want ECDSA", leaf.PublicKeyAlgorithm)
+	}
+	if leaf.SignatureAlgorithm != x509.PureEd25519 {
+		t.Errorf("signature algorithm = %v, want PureEd25519 (the CA key is unchanged)", leaf.SignatureAlgorithm)
+	}
+	if !key.PublicKey.Equal(leaf.PublicKey) {
+		t.Error("returned private key does not match the certificate's public key")
+	}
+	if !hasClientAuth(leaf) {
+		t.Error("leaf missing ExtKeyUsageClientAuth")
+	}
+	name, err := IdentityFromCert(leaf)
+	if err != nil || name != "ops" {
+		t.Fatalf("IdentityFromCert = %q, %v; want ops", name, err)
+	}
+	verifyChain(t, c, issued)
+
+	// A zero TTL still means the package default.
+	wantMin := before.Add(DefaultCertTTL).Add(-time.Minute)
+	wantMax := time.Now().Add(DefaultCertTTL).Add(time.Minute)
+	if issued.NotAfter.Before(wantMin) || issued.NotAfter.After(wantMax) {
+		t.Errorf("NotAfter %v out of expected window [%v, %v]", issued.NotAfter, wantMin, wantMax)
+	}
+}
+
+func TestIssueClientCertDefaultsToEd25519(t *testing.T) {
+	c := mustGenerate(t)
+
+	// Both the shorthand and the zero-valued options select Ed25519.
+	for name, issue := range map[string]func() (IssuedCert, error){
+		"IssueClientCert": func() (IssuedCert, error) { return c.IssueClientCert("svc", time.Hour) },
+		"IssueClientCertWithOptions zero": func() (IssuedCert, error) {
+			return c.IssueClientCertWithOptions("svc", IssueOptions{TTL: time.Hour})
+		},
+	} {
+		issued, err := issue()
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if _, ok := parseLeafKey(t, issued.KeyPEM).(ed25519.PrivateKey); !ok {
+			t.Errorf("%s: leaf key is %T, want ed25519.PrivateKey", name, parseLeafKey(t, issued.KeyPEM))
+		}
+		if leaf := parseLeaf(t, issued.CertPEM); leaf.PublicKeyAlgorithm != x509.Ed25519 {
+			t.Errorf("%s: public key algorithm = %v, want Ed25519", name, leaf.PublicKeyAlgorithm)
+		}
+	}
+}
+
+func TestIssueClientCertWithOptionsRejectsUnknownAlgorithm(t *testing.T) {
+	c := mustGenerate(t)
+	if _, err := c.IssueClientCertWithOptions("svc", IssueOptions{Key: KeyAlgorithm(99)}); err == nil {
+		t.Fatal("accepted an unsupported leaf key algorithm")
+	} else if !strings.Contains(err.Error(), "KeyAlgorithm(99)") {
+		t.Errorf("error %q does not name the rejected algorithm", err)
+	}
+}
+
 // --- helpers ---
+
+func parseLeafKey(t *testing.T, keyPEM []byte) crypto.PrivateKey {
+	t.Helper()
+	block, _ := pem.Decode(keyPEM)
+	if block == nil || block.Type != pemTypePrivateKey {
+		t.Fatal("no PRIVATE KEY PEM block")
+		return nil
+	}
+	key, err := x509.ParsePKCS8PrivateKey(block.Bytes)
+	if err != nil {
+		t.Fatalf("ParsePKCS8PrivateKey: %v", err)
+	}
+	return key
+}
 
 func verifyChain(t *testing.T, c *CA, issued IssuedCert) {
 	t.Helper()

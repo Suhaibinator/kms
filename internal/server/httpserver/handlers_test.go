@@ -30,11 +30,22 @@ func TestLogin(t *testing.T) {
 	if id["name"] != "admin" || id["kind"] != "admin" {
 		t.Fatalf("identity = %v", id)
 	}
+	if body["auth_method"] != "token" {
+		t.Fatalf("auth_method = %v, want token", body["auth_method"])
+	}
 
 	w = e.do(http.MethodPost, "/api/v1/auth/login", map[string]any{"token": "wrong"}, nil)
 	mustStatus(t, w, http.StatusUnauthorized)
 	if errCode(t, w) != "unauthenticated" {
 		t.Fatalf("code = %s", errCode(t, w))
+	}
+
+	// A certificate alone is never a sign-in: an empty token is refused with
+	// the same generic 401, without consulting any credential.
+	w = e.do(http.MethodPost, "/api/v1/auth/login", map[string]any{"token": "   "}, nil)
+	mustStatus(t, w, http.StatusUnauthorized)
+	if errCode(t, w) != "unauthenticated" {
+		t.Fatalf("empty token code = %s", errCode(t, w))
 	}
 }
 
@@ -741,8 +752,11 @@ func TestHealthReportsListenerDetails(t *testing.T) {
 	if body["grpc_addr"] != "" || body["tls_enabled"] != false {
 		t.Fatalf("default health listener fields = %v", body)
 	}
+	if body["admin_client_cert_required"] != false || body["client_cert_presented"] != false {
+		t.Fatalf("default health admin-cert fields = %v", body)
+	}
 
-	srv, err := New(e.svc, Config{Addr: ":0", Version: "test-version", GRPCAddr: "0.0.0.0:8443", TLSEnabled: true})
+	srv, err := New(e.svc, Config{Addr: ":0", Version: "test-version", GRPCAddr: "0.0.0.0:8443", TLSEnabled: true, AdminClientCertRequired: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -753,13 +767,18 @@ func TestHealthReportsListenerDetails(t *testing.T) {
 	if body["grpc_addr"] != "0.0.0.0:8443" || body["tls_enabled"] != true {
 		t.Fatalf("configured health listener fields = %v", body)
 	}
+	// The console reads these two to explain an admin sign-in that cannot
+	// succeed on this connection.
+	if body["admin_client_cert_required"] != true || body["client_cert_presented"] != false {
+		t.Fatalf("configured health admin-cert fields = %v", body)
+	}
 
 	// A request that actually arrived over TLS reports tls_enabled regardless of config.
 	r := httptest.NewRequest(http.MethodGet, "/api/v1/health", nil)
 	r.TLS = &tls.ConnectionState{}
 	w = httptest.NewRecorder()
 	e.handler.ServeHTTP(w, r)
-	if body := decodeBody(t, w); body["tls_enabled"] != true {
+	if body := decodeBody(t, w); body["tls_enabled"] != true || body["client_cert_presented"] != false {
 		t.Fatalf("tls request health = %v", body)
 	}
 }

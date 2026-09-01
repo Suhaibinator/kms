@@ -43,6 +43,9 @@ func TestRunHelp(t *testing.T) {
 	for _, want := range []string{
 		"Application onboarding",
 		"rotate-admin",
+		"admin-cert",
+		"Issue, list, or revoke admin client certificates offline",
+		"--cert-dir also",
 		"create ./certs and restrict directory access to its owner",
 		"admin namespace create --env ENV --app APP --auth-methods mtls",
 		"admin identity create NAME --namespace ENV/APP --auth mtls --out ./certs",
@@ -57,6 +60,11 @@ func TestRunHelp(t *testing.T) {
 func TestCommandFlagHelpExitsSuccessfully(t *testing.T) {
 	for _, args := range [][]string{
 		{"rotate-admin", "--help"},
+		{"admin-cert", "issue", "--help"},
+		{"admin-cert", "revoke", "-h"},
+		{"admin-cert", "list", "--help"},
+		{"init", "--help"},
+		{"create-admin", "-h"},
 		{"admin", "identity", "create", "-h"},
 		{"admin", "identity", "issue-cert", "--help"},
 		{"admin", "ca", "show", "-h"},

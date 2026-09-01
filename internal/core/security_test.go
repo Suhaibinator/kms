@@ -91,11 +91,29 @@ func TestIssueCertificateTargetGuard(t *testing.T) {
 		}
 	})
 
-	t.Run("admin caller unrestricted", func(t *testing.T) {
+	t.Run("admin caller unrestricted for client targets", func(t *testing.T) {
+		s, store, _, _, nsB := certOpSetup(t)
+		bindIdentity(store, "stranger", domain.IdentityKindClient, &nsB)
+		if _, err := s.IssueIdentityCertificate(ctx, adminPrincipal(), "stranger", 0); err != nil {
+			t.Fatalf("admin issue for any client target: %v", err)
+		}
+	})
+
+	// Admin certificates are the management plane's proof of possession and are
+	// minted only by the offline CLI (IssueLocalAdminCertificate); the online
+	// path refuses admin targets for every caller, admins included, so a stolen
+	// online admin credential cannot mint durable new admin credentials.
+	t.Run("admin-kind target refused for admin callers too", func(t *testing.T) {
 		s, store, _, _, nsB := certOpSetup(t)
 		bindIdentity(store, "boss", domain.IdentityKindAdmin, &nsB)
-		if _, err := s.IssueIdentityCertificate(ctx, adminPrincipal(), "boss", 0); err != nil {
-			t.Fatalf("admin issue for any target: %v", err)
+		if _, err := s.IssueIdentityCertificate(ctx, adminPrincipal(), "boss", 0); !errors.Is(err, domain.ErrPermissionDenied) {
+			t.Fatalf("admin issue for admin target err = %v, want ErrPermissionDenied", err)
+		}
+		if !store.hasAudit("identity.cert.issue", "deny") {
+			t.Error("online admin-target refusal not audited")
+		}
+		if _, err := s.IssueLocalAdminCertificate(ctx, adminPrincipal(), "boss", 0); err != nil {
+			t.Fatalf("offline admin issuance: %v", err)
 		}
 	})
 

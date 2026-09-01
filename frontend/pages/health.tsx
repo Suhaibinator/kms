@@ -77,6 +77,7 @@ export default function HealthPage() {
             <StatSkeleton label="Readiness" />
             <StatSkeleton label="Version" />
             <StatSkeleton label="Current revision" />
+            <StatSkeleton label="Admin client cert" />
           </div>
           <div className="card">
             <h2 className="card-title">Encryption keys</h2>
@@ -117,6 +118,21 @@ export default function HealthPage() {
             <div className="stat">
               <div className="stat-label">Current revision</div>
               <div className="stat-value">{health?.current_revision ?? "—"}</div>
+            </div>
+            {/* Whether admins must present a client certificate on top of their
+                token. `relaxed` also covers a server running without TLS, where
+                the requirement cannot be enforced. */}
+            <div className="stat">
+              <div className="stat-label">Admin client cert</div>
+              <div className="stat-badges">
+                {health === null ? (
+                  <Badge kind="neutral">unknown</Badge>
+                ) : (
+                  <Badge kind={health.admin_client_cert_required ? "success" : "warning"}>
+                    {health.admin_client_cert_required ? "required" : "relaxed"}
+                  </Badge>
+                )}
+              </div>
             </div>
           </div>
 
