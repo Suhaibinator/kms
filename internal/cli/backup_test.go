@@ -84,9 +84,11 @@ func TestRestoreCommandEndToEnd(t *testing.T) {
 		t.Fatalf("backup exit=%d stderr=%s", code, c.stderr())
 	}
 
+	// restore now confirms before it writes; a non-interactive caller supplies
+	// the answer with --yes.
 	restored := filepath.Join(dir, "restored.db")
 	c2 := newTestCLI()
-	if code := c2.cmdRestore([]string{"--sqlite-path", restored, "--in", backup}); code != 0 {
+	if code := c2.cmdRestore([]string{"--sqlite-path", restored, "--in", backup, "--yes"}); code != 0 {
 		t.Fatalf("restore exit=%d stderr=%s", code, c2.stderr())
 	}
 	if !strings.Contains(c2.stdout(), "Restored") {

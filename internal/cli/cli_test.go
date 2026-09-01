@@ -3,6 +3,8 @@ package cli
 import (
 	"strings"
 	"testing"
+
+	kmsv1 "github.com/Suhaibinator/kms/gen/kmsv1"
 )
 
 func TestRunVersion(t *testing.T) {
@@ -69,6 +71,7 @@ func TestCommandFlagHelpExitsSuccessfully(t *testing.T) {
 		{"admin", "identity", "issue-cert", "--help"},
 		{"admin", "ca", "show", "-h"},
 		{"put-secret", "--help"},
+		{"whoami", "--help"},
 	} {
 		c := newTestCLI()
 		if code := c.Run(args); code != 0 {
@@ -91,6 +94,32 @@ func TestMalformedCommandFlagStillExitsWithUsageError(t *testing.T) {
 	c := newTestCLI()
 	if code := c.Run([]string{"admin", "identity", "create", "--not-a-real-flag"}); code != 2 {
 		t.Fatalf("malformed flag exit = %d, want 2; stderr: %s", code, c.stderr())
+	}
+}
+
+// --output is accepted on both sides of the subcommand, and a value after it
+// wins: `parameter-store -o table whoami --output json` must produce JSON.
+func TestOutputFlagIsAcceptedAfterTheSubcommand(t *testing.T) {
+	stub := &whoAmIStub{response: &kmsv1.WhoAmIResponse{Name: "ops", Kind: "admin", AuthMethod: "token"}}
+	c := newWhoAmICLI(t, stub)
+	if code := c.Run([]string{"-o", "table", "whoami", "--insecure", "--token", "t", "--output", "json"}); code != 0 {
+		t.Fatalf("whoami exit = %d, stderr=%s", code, c.stderr())
+	}
+	if got := decodeJSONStdout(t, c)["name"]; got != "ops" {
+		t.Fatalf("document = %q", c.stdout())
+	}
+}
+
+// KMS_OUTPUT selects the format when no flag does, so a CI job can set it once.
+func TestOutputFormatFromEnvironment(t *testing.T) {
+	stub := &whoAmIStub{response: &kmsv1.WhoAmIResponse{Name: "ops", Kind: "admin", AuthMethod: "token"}}
+	c := newWhoAmICLI(t, stub)
+	c.lookupEnv = mapLookup(map[string]string{"KMS_OUTPUT": "json"})
+	if code := c.Run([]string{"whoami", "--insecure", "--token", "t"}); code != 0 {
+		t.Fatalf("whoami exit = %d, stderr=%s", code, c.stderr())
+	}
+	if got := decodeJSONStdout(t, c)["auth_method"]; got != "token" {
+		t.Fatalf("document = %q", c.stdout())
 	}
 }
 

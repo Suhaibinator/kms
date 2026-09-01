@@ -8,10 +8,11 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
-	"text/tabwriter"
 	"time"
+	"unicode/utf8"
 
 	"golang.org/x/term"
 	"google.golang.org/grpc"
@@ -258,6 +259,80 @@ func displayPath(ref *kmsv1.ResourceRef) string {
 	}.String()
 }
 
+// --- whoami ----------------------------------------------------------------
+
+// whoAmINamespaceJSON is the namespace an identity is bound to. An unbound
+// identity carries a nil pointer, which renders as JSON null.
+type whoAmINamespaceJSON struct {
+	Env string `json:"env"`
+	App string `json:"app"`
+}
+
+// whoAmIJSON is the JSON form of the calling identity as the server resolved
+// it from the presented credential.
+type whoAmIJSON struct {
+	Name       string               `json:"name"`
+	Kind       string               `json:"kind"`
+	Namespace  *whoAmINamespaceJSON `json:"namespace"`
+	AuthMethod string               `json:"auth_method"`
+}
+
+// jsonNamespaceRef renders a wire NamespaceRef for JSON output; an unset ref
+// (an unbound identity) becomes null rather than an object of empty strings.
+func jsonNamespaceRef(ns *kmsv1.NamespaceRef) *whoAmINamespaceJSON {
+	if ns == nil {
+		return nil
+	}
+	return &whoAmINamespaceJSON{Env: ns.GetEnv(), App: ns.GetApp()}
+}
+
+// cmdWhoAmI reports the identity the server derives from the credential this
+// invocation presents. It is the first command to run when a token or client
+// certificate does not behave as expected: it answers "who does the server
+// think I am, and how did it decide?" without needing any permission.
+func (c *CLI) cmdWhoAmI(args []string) int {
+	fs := c.newFlags("whoami")
+	cf := addConnFlags(c, fs)
+	c.setUsage(fs, "whoami [flags]",
+		"Print the identity the server resolves from the presented credential: its name, kind, namespace binding, and the authentication method that was used.", false)
+	if !c.parseFlags(fs, args) {
+		return 2
+	}
+	if !c.rejectPositionals() {
+		return 2
+	}
+
+	conn, err := c.dialConn(cf)
+	if err != nil {
+		return c.failErr("", err)
+	}
+	defer func() { _ = conn.Close() }()
+	ctx, cancel := callContext()
+	defer cancel()
+
+	resp, err := kmsv1.NewAdminServiceClient(conn).WhoAmI(cf.authCtx(ctx), &kmsv1.WhoAmIRequest{})
+	if err != nil {
+		return c.failErr("whoami", err)
+	}
+	if c.jsonOutput() {
+		return c.printJSON(whoAmIJSON{
+			Name:       resp.GetName(),
+			Kind:       resp.GetKind(),
+			Namespace:  jsonNamespaceRef(resp.GetNamespace()),
+			AuthMethod: resp.GetAuthMethod(),
+		})
+	}
+	// "(unbound)" rather than an empty field: a blank namespace line reads like
+	// output the command failed to fill in.
+	namespace := "(unbound)"
+	if ns := resp.GetNamespace(); ns != nil {
+		namespace = ns.GetEnv() + "/" + ns.GetApp()
+	}
+	_, _ = fmt.Fprintf(c.Stdout, "name: %s\nkind: %s\nnamespace: %s\nauth_method: %s\n",
+		resp.GetName(), resp.GetKind(), namespace, resp.GetAuthMethod())
+	return 0
+}
+
 // --- put-secret ------------------------------------------------------------
 
 func (c *CLI) cmdPutSecret(args []string) int {
@@ -288,7 +363,7 @@ func (c *CLI) cmdPutSecret(args []string) int {
 
 	conn, err := c.dialConn(cf)
 	if err != nil {
-		return c.fail("%v", err)
+		return c.failErr("", err)
 	}
 	defer func() { _ = conn.Close() }()
 	ctx, cancel := callContext()
@@ -302,7 +377,20 @@ func (c *CLI) cmdPutSecret(args []string) int {
 		GenerateAccessToken: *genToken,
 	})
 	if err != nil {
-		return c.fail("put-secret: %v", err)
+		return c.failErr("put-secret", err)
+	}
+	if c.jsonOutput() {
+		// The one-time warning is security-relevant, so it goes to stderr
+		// unsilenced while the token itself appears once inside the document.
+		if resp.AccessToken != "" {
+			_, _ = fmt.Fprintln(c.Stderr, "WARNING: the access token is shown once; store it now.")
+		}
+		return c.printJSON(putSecretJSON{
+			Key:         ref.String(),
+			Version:     resp.Version,
+			Revision:    resp.Revision,
+			AccessToken: resp.AccessToken,
+		})
 	}
 	if _, err := fmt.Fprintf(c.Stdout, "Stored %s version %d (revision %d)\n", ref, resp.Version, resp.Revision); err != nil {
 		return c.fail("writing secret result: %v", err)
@@ -316,6 +404,15 @@ func (c *CLI) cmdPutSecret(args []string) int {
 		}
 	}
 	return 0
+}
+
+// putSecretJSON is the JSON form of a stored secret version. access_token is
+// present only when --generate-token minted one, and only ever here.
+type putSecretJSON struct {
+	Key         string `json:"key"`
+	Version     uint64 `json:"version"`
+	Revision    uint64 `json:"revision"`
+	AccessToken string `json:"access_token,omitempty"`
 }
 
 // --- get-secret ------------------------------------------------------------
@@ -344,7 +441,7 @@ func (c *CLI) cmdGetSecret(args []string) int {
 
 	conn, err := c.dialConn(cf)
 	if err != nil {
-		return c.fail("%v", err)
+		return c.failErr("", err)
 	}
 	defer func() { _ = conn.Close() }()
 	ctx, cancel := callContext()
@@ -356,16 +453,39 @@ func (c *CLI) cmdGetSecret(args []string) int {
 		Label:   *label,
 	})
 	if err != nil {
-		return c.fail("get-secret: %v", err)
+		return c.failErr("get-secret", err)
 	}
 
+	// The destination rules are the same in both output modes: --out wins, a
+	// terminal still needs --show, and only then does the value leave the
+	// process. JSON mode differs solely in how the result is rendered.
+	document := getSecretJSON{
+		Key:         displayPath(resp.Ref),
+		Version:     resp.Version,
+		ContentType: resp.ContentType,
+		CreatedAt:   jsonTime(resp.CreatedAtUnixMs),
+	}
+	if document.Key == "" {
+		document.Key = ref.String()
+	}
 	switch {
 	case *out != "":
 		if err := os.WriteFile(*out, resp.Value, 0o600); err != nil {
-			return c.fail("writing --out: %v", err)
+			return c.failErr("writing --out", err)
 		}
-		_, _ = fmt.Fprintf(c.Stderr, "Wrote %d bytes to %s\n", len(resp.Value), *out)
+		c.info("Wrote %d bytes to %s", len(resp.Value), *out)
+		document.OutFile = *out
 	case *show || !c.stdoutIsTTY():
+		if c.jsonOutput() {
+			// A secret that is not valid UTF-8 has no JSON string form; --out
+			// saves it verbatim instead of corrupting it.
+			if !utf8.Valid(resp.Value) {
+				return c.fail("secret value is not valid UTF-8 and cannot be rendered as JSON; use --out FILE")
+			}
+			value := string(resp.Value)
+			document.Value = &value
+			break
+		}
 		// Piped or explicitly allowed: emit raw bytes with no trailing newline.
 		if _, err := c.Stdout.Write(resp.Value); err != nil {
 			return c.fail("writing output: %v", err)
@@ -373,7 +493,22 @@ func (c *CLI) cmdGetSecret(args []string) int {
 	default:
 		return c.fail("refusing to print a secret to a terminal; pass --show to print or --out FILE to save")
 	}
+	if c.jsonOutput() {
+		return c.printJSON(document)
+	}
 	return 0
+}
+
+// getSecretJSON is the JSON form of a fetched secret. value is null when the
+// bytes went to --out instead of stdout, in which case out_file names the file
+// that now holds them.
+type getSecretJSON struct {
+	Key         string  `json:"key"`
+	Version     uint64  `json:"version"`
+	Value       *string `json:"value"`
+	ContentType string  `json:"content_type"`
+	CreatedAt   *string `json:"created_at"`
+	OutFile     string  `json:"out_file,omitempty"`
 }
 
 // --- put-parameter ---------------------------------------------------------
@@ -399,7 +534,7 @@ func (c *CLI) cmdPutParameter(args []string) int {
 
 	conn, err := c.dialConn(cf)
 	if err != nil {
-		return c.fail("%v", err)
+		return c.failErr("", err)
 	}
 	defer func() { _ = conn.Close() }()
 	ctx, cancel := callContext()
@@ -411,10 +546,20 @@ func (c *CLI) cmdPutParameter(args []string) int {
 		ContentType: *contentType,
 	})
 	if err != nil {
-		return c.fail("put-parameter: %v", err)
+		return c.failErr("put-parameter", err)
+	}
+	if c.jsonOutput() {
+		return c.printJSON(putParameterJSON{Key: ref.String(), Version: resp.Version, Revision: resp.Revision})
 	}
 	_, _ = fmt.Fprintf(c.Stdout, "Stored %s version %d (revision %d)\n", ref, resp.Version, resp.Revision)
 	return 0
+}
+
+// putParameterJSON is the JSON form of a stored parameter version.
+type putParameterJSON struct {
+	Key      string `json:"key"`
+	Version  uint64 `json:"version"`
+	Revision uint64 `json:"revision"`
 }
 
 // --- list ------------------------------------------------------------------
@@ -439,7 +584,7 @@ func (c *CLI) cmdList(args []string) int {
 
 	conn, err := c.dialConn(cf)
 	if err != nil {
-		return c.fail("%v", err)
+		return c.failErr("", err)
 	}
 	defer func() { _ = conn.Close() }()
 	ctx, cancel := callContext()
@@ -449,18 +594,19 @@ func (c *CLI) cmdList(args []string) int {
 	paramClient := kmsv1.NewParameterServiceClient(conn)
 	secretClient := kmsv1.NewSecretServiceClient(conn)
 
-	tw := tabwriter.NewWriter(c.Stdout, 0, 4, 2, ' ', 0)
-	_, _ = fmt.Fprintln(tw, "TYPE\tPATH\tCURRENT\tNOTE")
+	items := []listItemJSON{}
 
 	// Page through the full result set; a listing command that silently
 	// truncated at the first page would give a misleading partial view.
 	for token := ""; ; {
 		resp, err := paramClient.ListParameters(actx, &kmsv1.ListParametersRequest{Namespace: pns, KeyPrefix: *keyPrefix, PageToken: token})
 		if err != nil {
-			return c.fail("list parameters: %v", err)
+			return c.failErr("list parameters", err)
 		}
 		for _, p := range resp.Parameters {
-			_, _ = fmt.Fprintf(tw, "parameter\t%s\t%d\t%s\n", displayPath(p.Ref), p.Version, p.ContentType)
+			items = append(items, listItemJSON{
+				Type: "parameter", Path: displayPath(p.Ref), Current: p.Version, Note: p.ContentType,
+			})
 		}
 		if token = resp.NextPageToken; token == "" {
 			break
@@ -469,21 +615,46 @@ func (c *CLI) cmdList(args []string) int {
 	for token := ""; ; {
 		resp, err := secretClient.ListSecrets(actx, &kmsv1.ListSecretsRequest{Namespace: pns, KeyPrefix: *keyPrefix, PageToken: token})
 		if err != nil {
-			return c.fail("list secrets: %v", err)
+			return c.failErr("list secrets", err)
 		}
 		for _, s := range resp.Secrets {
 			note := "standard"
 			if s.ClientBound {
 				note = "client-bound"
 			}
-			_, _ = fmt.Fprintf(tw, "secret\t%s\t%d\t%s\n", displayPath(s.Ref), s.Labels["current"], note)
+			items = append(items, listItemJSON{
+				Type: "secret", Path: displayPath(s.Ref), Current: s.Labels["current"],
+				Note: note, ClientBound: s.ClientBound,
+			})
 		}
 		if token = resp.NextPageToken; token == "" {
 			break
 		}
 	}
-	_ = tw.Flush()
+
+	if c.jsonOutput() {
+		// The command drains every page itself, so the envelope's
+		// next_page_token is always empty (and therefore omitted): the items
+		// array is the complete result.
+		return c.printList(items, "")
+	}
+	rows := make([][]string, 0, len(items))
+	for _, it := range items {
+		rows = append(rows, []string{it.Type, it.Path, strconv.FormatUint(it.Current, 10), it.Note})
+	}
+	c.printTable([]string{"TYPE", "PATH", "CURRENT", "NOTE"}, rows)
 	return 0
+}
+
+// listItemJSON is one row of the namespace listing. It carries every table
+// column plus client_bound, so a consumer need not parse the human-readable
+// note to tell a client-bound secret from a standard one.
+type listItemJSON struct {
+	Type        string `json:"type"` // parameter | secret
+	Path        string `json:"path"` // /env/app/key
+	Current     uint64 `json:"current"`
+	Note        string `json:"note"`         // content type (parameter) or standard|client-bound (secret)
+	ClientBound bool   `json:"client_bound"` // always false for a parameter
 }
 
 // --- helpers ---------------------------------------------------------------
