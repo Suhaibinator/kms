@@ -21,8 +21,10 @@ import (
 func (c *CLI) cmdReleaseVerifyDefaults(args []string) int {
 	fs := c.newFlags("release verify-defaults")
 	cf := addConnFlags(c, fs)
-	artifactPath := fs.String("artifact", "", "generated defaults artifact file ('-' for stdin)")
-	releaseName := fs.String("release", "", "release name (default: the application's release name)")
+	artifactPath := fs.String("artifact", "", "generated defaults artifact `file` ('-' for stdin)")
+	releaseName := fs.String("release", "", "release `name` (default: the application's release name)")
+	c.setUsage(fs, "release verify-defaults ENV/APP --artifact FILE|- [flags]",
+		"Compare a generated defaults artifact with the active release by hash alone; no parameter value leaves the process.", false)
 	if !c.parseFlags(fs, args) {
 		return 2
 	}

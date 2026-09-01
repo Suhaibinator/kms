@@ -48,12 +48,9 @@ Apply flags:
   --execute                  Apply after a fresh preview (preview is the default).
   --confirm-production ENV   Required for --execute against a production ENV.
 
-Connection flags:
-  --endpoint HOST:PORT       Server gRPC endpoint (default localhost:8443).
-  --token TOKEN              Admin bearer token (env KMS_TOKEN).
-  --insecure                 Disable TLS (development only).
-  --ca FILE                  CA bundle for server verification.
-  --cert FILE --key FILE     Client certificate and private key for mTLS.
+Connection flags (--endpoint, --token, --ca, --cert, --key, --insecure) are shared
+by every command here and documented in "defaults apply -h"; each has a KMS_*
+environment fallback.
 `)
 }
 
@@ -66,11 +63,13 @@ func (c *CLI) defaultsUsageError(format string, args ...any) int {
 func (c *CLI) cmdDefaultsApply(args []string) int {
 	fs := c.newFlags("defaults apply")
 	cf := addConnFlags(c, fs)
-	from := fs.String("from", "", "defaults artifact file, or - for stdin")
+	from := fs.String("from", "", "defaults artifact `file`, or - for stdin")
 	overwrite := fs.Bool("overwrite", false, "permit updates to differing existing parameters")
 	updateDefinition := fs.Bool("update-definition", false, "permit application contract and schema pin updates")
 	execute := fs.Bool("execute", false, "apply after a fresh preview")
-	confirmProduction := fs.String("confirm-production", "", "production environment name confirmation")
+	confirmProduction := fs.String("confirm-production", "", "production `environment` name, repeated to confirm --execute")
+	c.setUsage(fs, "defaults apply ENV/APP --from FILE|- [flags]",
+		"Preview the parameter defaults a generated artifact would write, or apply them with --execute.", false)
 	if !c.parseFlags(fs, args) {
 		return 2
 	}

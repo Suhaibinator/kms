@@ -88,8 +88,9 @@ Certificate roles:
   "ca show" is NOT that server-trust CA; it exports the CA KMS uses to issue client certs.
   Admin identities always receive a one-time bearer token, even with --auth mtls or both.
 
-Connection flags (all admin commands):
-  --endpoint, --token, --insecure, --ca, --cert, --key
+Connection flags (--endpoint, --token, --ca, --cert, --key, --insecure) are shared
+by every command here and documented in "admin <group> <action> -h"; each has a
+KMS_* environment fallback.
 `)
 }
 
@@ -117,16 +118,18 @@ func (c *CLI) cmdAdminNamespace(args []string) int {
 // cmdNamespaceWrite handles create and update (same flags; update is a full
 // replace of description and auth methods).
 func (c *CLI) cmdNamespaceWrite(args []string, update bool) int {
-	name := "namespace create"
+	name, summary := "namespace create", "Create a namespace with its description and allowed authentication methods."
 	if update {
 		name = "namespace update"
+		summary = "Replace a namespace's description and allowed authentication methods; both are set from the flags rather than merged."
 	}
 	fs := c.newFlags(name)
 	cf := addConnFlags(c, fs)
-	env := fs.String("env", "", "namespace environment (e.g. prod)")
-	app := fs.String("app", "", "namespace application (e.g. gradethis)")
-	description := fs.String("description", "", "namespace description")
-	authMethods := fs.String("auth-methods", "", "comma-separated allowed auth methods (mtls,token); default mtls")
+	env := fs.String("env", "", "namespace `environment` (e.g. prod)")
+	app := fs.String("app", "", "namespace `application` (e.g. gradethis)")
+	description := fs.String("description", "", "namespace `description`")
+	authMethods := fs.String("auth-methods", "", "comma-separated allowed auth `methods` (mtls,token); default mtls")
+	c.setUsage(fs, "admin "+name+" --env ENV --app APP [flags]", summary, false)
 	if !c.parseFlags(fs, args) {
 		return 2
 	}
@@ -175,8 +178,10 @@ func (c *CLI) cmdNamespaceWrite(args []string, update bool) int {
 func (c *CLI) cmdNamespaceDelete(args []string) int {
 	fs := c.newFlags("namespace delete")
 	cf := addConnFlags(c, fs)
-	env := fs.String("env", "", "namespace environment (e.g. prod)")
-	app := fs.String("app", "", "namespace application (e.g. gradethis)")
+	env := fs.String("env", "", "namespace `environment` (e.g. prod)")
+	app := fs.String("app", "", "namespace `application` (e.g. gradethis)")
+	c.setUsage(fs, "admin namespace delete --env ENV --app APP [flags]",
+		"Delete a namespace that holds no parameters or secrets.", false)
 	if !c.parseFlags(fs, args) {
 		return 2
 	}
@@ -205,6 +210,8 @@ func (c *CLI) cmdNamespaceDelete(args []string) int {
 func (c *CLI) cmdNamespaceList(args []string) int {
 	fs := c.newFlags("namespace list")
 	cf := addConnFlags(c, fs)
+	c.setUsage(fs, "admin namespace list [flags]",
+		"List namespaces with their allowed auth methods and parameter/secret counts.", false)
 	if !c.parseFlags(fs, args) {
 		return 2
 	}
@@ -266,11 +273,13 @@ func (c *CLI) cmdAdminIdentity(args []string) int {
 func (c *CLI) cmdIdentityCreate(args []string) int {
 	fs := c.newFlags("identity create")
 	cf := addConnFlags(c, fs)
-	kind := fs.String("kind", "client", "identity kind (client|admin); admin always also receives a one-time bearer token")
-	namespace := fs.String("namespace", "", "home namespace env/app (optional)")
-	auth := fs.String("auth", "mtls", "application authentication credentials to create: mtls|token|both")
-	ttl := fs.String("ttl", "", "certificate lifetime (e.g. 90d, 720h); default 90d")
-	outDir := fs.String("out", "", "directory for one-time application client credentials (NAME.crt/NAME.key); recommended")
+	kind := fs.String("kind", "client", "identity `kind` (client|admin); admin always also receives a one-time bearer token")
+	namespace := fs.String("namespace", "", "home namespace `env/app` (optional)")
+	auth := fs.String("auth", "mtls", "credential `method` to create for the application: mtls, token, or both")
+	ttl := fs.String("ttl", "", "certificate `lifetime` (e.g. 90d, 720h); default 90d")
+	outDir := fs.String("out", "", "`directory` for one-time application client credentials (NAME.crt/NAME.key); recommended")
+	c.setUsage(fs, "admin identity create NAME [flags]",
+		"Create an application identity and its one-time credentials.", false)
 	if !c.parseFlags(fs, args) {
 		return 2
 	}
@@ -366,8 +375,10 @@ func (c *CLI) writeCreatedIdentityResult(name, kind string, methods []string, ce
 func (c *CLI) cmdIdentityIssueCert(args []string) int {
 	fs := c.newFlags("identity issue-cert")
 	cf := addConnFlags(c, fs)
-	ttl := fs.String("ttl", "", "certificate lifetime (e.g. 90d, 720h); default 90d")
-	outDir := fs.String("out", "", "directory for one-time application client credentials (NAME.crt/NAME.key); recommended")
+	ttl := fs.String("ttl", "", "certificate `lifetime` (e.g. 90d, 720h); default 90d")
+	outDir := fs.String("out", "", "`directory` for one-time application client credentials (NAME.crt/NAME.key); recommended")
+	c.setUsage(fs, "admin identity issue-cert NAME [flags]",
+		"Issue additional or replacement mTLS credentials for an existing identity.", false)
 	if !c.parseFlags(fs, args) {
 		return 2
 	}
@@ -420,7 +431,9 @@ func (c *CLI) writeIssuedIdentityCertificateResult(name string, certOutput *rese
 func (c *CLI) cmdIdentityRevokeCert(args []string) int {
 	fs := c.newFlags("identity revoke-cert")
 	cf := addConnFlags(c, fs)
-	serial := fs.String("serial", "", "certificate serial to revoke")
+	serial := fs.String("serial", "", "certificate `serial` to revoke")
+	c.setUsage(fs, "admin identity revoke-cert NAME --serial SERIAL [flags]",
+		"Revoke a single issued certificate by serial number.", false)
 	if !c.parseFlags(fs, args) {
 		return 2
 	}
@@ -452,6 +465,8 @@ func (c *CLI) cmdIdentityRevokeCert(args []string) int {
 func (c *CLI) cmdIdentityRotate(args []string) int {
 	fs := c.newFlags("identity rotate")
 	cf := addConnFlags(c, fs)
+	c.setUsage(fs, "admin identity rotate NAME [flags]",
+		"Rotate a token identity's bearer token and print the new one once.", false)
 	if !c.parseFlags(fs, args) {
 		return 2
 	}
@@ -481,6 +496,8 @@ func (c *CLI) cmdIdentityRotate(args []string) int {
 func (c *CLI) cmdIdentityRevoke(args []string) int {
 	fs := c.newFlags("identity revoke")
 	cf := addConnFlags(c, fs)
+	c.setUsage(fs, "admin identity revoke NAME [flags]",
+		"Disable an identity, invalidating every certificate it holds.", false)
 	if !c.parseFlags(fs, args) {
 		return 2
 	}
@@ -507,6 +524,8 @@ func (c *CLI) cmdIdentityRevoke(args []string) int {
 func (c *CLI) cmdIdentityList(args []string) int {
 	fs := c.newFlags("identity list")
 	cf := addConnFlags(c, fs)
+	c.setUsage(fs, "admin identity list [flags]",
+		"List identities with their kind, home namespace, and credential state.", false)
 	if !c.parseFlags(fs, args) {
 		return 2
 	}
@@ -550,7 +569,9 @@ func (c *CLI) cmdAdminCA(args []string) int {
 	}
 	fs := c.newFlags("ca show")
 	cf := addConnFlags(c, fs)
-	out := fs.String("out", "", "export the built-in client-issuing CA to FILE (not the KMS server-trust CA)")
+	out := fs.String("out", "", "export the built-in client-issuing CA to this `file` (not the KMS server-trust CA)")
+	c.setUsage(fs, "admin ca show [flags]",
+		"Export the built-in client-issuing CA certificate, which is not the CA that signs the server certificate.", false)
 	if !c.parseFlags(fs, args[1:]) {
 		return 2
 	}

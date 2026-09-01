@@ -181,11 +181,13 @@ func displayPath(ref *kmsv1.ResourceRef) string {
 func (c *CLI) cmdPutSecret(args []string) int {
 	fs := c.newFlags("put-secret")
 	cf := addConnFlags(c, fs)
-	valueFile := fs.String("value-file", "", "read the secret value from this file (default: stdin)")
+	valueFile := fs.String("value-file", "", "read the secret value from this `file` (default: stdin)")
 	clientBound := fs.Bool("client-bound", false, "write a client-bound secret (new secrets also require --generate-token)")
 	genToken := fs.Bool("generate-token", false, "mint or rotate a per-secret access token (shown once)")
-	contentType := fs.String("content-type", "text/plain", "secret content type")
-	fs.StringVar(&cf.secretToken, "secret-token", "", "existing per-secret token (client-bound updates)")
+	contentType := fs.String("content-type", "text/plain", "secret content `type`")
+	fs.StringVar(&cf.secretToken, "secret-token", "", "existing per-secret `token` (client-bound updates)")
+	c.setUsage(fs, "put-secret /env/app/key [flags]",
+		"Store a secret value read from --value-file or standard input.", false)
 	if !c.parseFlags(fs, args) {
 		return 2
 	}
@@ -240,10 +242,12 @@ func (c *CLI) cmdGetSecret(args []string) int {
 	fs := c.newFlags("get-secret")
 	cf := addConnFlags(c, fs)
 	show := fs.Bool("show", false, "allow printing the secret to a terminal")
-	out := fs.String("out", "", "write the secret to this file instead of stdout")
-	version := fs.Uint64("version", 0, "specific version (0 = current label)")
-	label := fs.String("label", "", "version label (default: current)")
-	fs.StringVar(&cf.secretToken, "secret-token", "", "per-secret access token")
+	out := fs.String("out", "", "write the secret to this `file` instead of stdout")
+	version := fs.Uint64("version", 0, "specific `version` (0 = current label)")
+	label := fs.String("label", "", "version `label` (default: current)")
+	fs.StringVar(&cf.secretToken, "secret-token", "", "per-secret access `token`")
+	c.setUsage(fs, "get-secret /env/app/key [flags]",
+		"Fetch a secret; writing it to a terminal requires --show or --out FILE.", false)
 	if !c.parseFlags(fs, args) {
 		return 2
 	}
@@ -295,7 +299,9 @@ func (c *CLI) cmdGetSecret(args []string) int {
 func (c *CLI) cmdPutParameter(args []string) int {
 	fs := c.newFlags("put-parameter")
 	cf := addConnFlags(c, fs)
-	contentType := fs.String("content-type", "string", "parameter content type")
+	contentType := fs.String("content-type", "string", "parameter content `type`")
+	c.setUsage(fs, "put-parameter /env/app/key VALUE [flags]",
+		"Store a non-secret parameter value.", false)
 	if !c.parseFlags(fs, args) {
 		return 2
 	}
@@ -334,7 +340,8 @@ func (c *CLI) cmdPutParameter(args []string) int {
 func (c *CLI) cmdList(args []string) int {
 	fs := c.newFlags("list")
 	cf := addConnFlags(c, fs)
-	keyPrefix := fs.String("prefix", "", "relative key prefix within the namespace")
+	keyPrefix := fs.String("prefix", "", "relative key `prefix` within the namespace")
+	c.setUsage(fs, "list ENV/APP [flags]", "List the parameters and secrets in a namespace.", false)
 	if !c.parseFlags(fs, args) {
 		return 2
 	}

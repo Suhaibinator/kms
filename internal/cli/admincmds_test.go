@@ -44,6 +44,10 @@ func TestAdminHelpExplainsApplicationCredentialRoles(t *testing.T) {
 	}
 }
 
+// collapseHelp joins runs of whitespace so wording assertions survive the flag
+// table's line wrapping, which can split a phrase across two output lines.
+func collapseHelp(help string) string { return strings.Join(strings.Fields(help), " ") }
+
 func TestIdentityAndCAFlagHelpUseApplicationCredentialTerms(t *testing.T) {
 	tests := []struct {
 		name string
@@ -72,7 +76,7 @@ func TestIdentityAndCAFlagHelpUseApplicationCredentialTerms(t *testing.T) {
 			if code := c.Run(tt.args); code != 0 {
 				t.Fatalf("help exit = %d, want 0", code)
 			}
-			if !strings.Contains(c.stderr(), tt.want) {
+			if !strings.Contains(collapseHelp(c.stderr()), tt.want) {
 				t.Fatalf("flag help missing %q: %s", tt.want, c.stderr())
 			}
 		})
