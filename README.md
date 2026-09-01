@@ -209,6 +209,20 @@ KMS_KEK_FILE=./master.key KMS_SQLITE_PATH=./kms.db \
   ./bin/parameter-store serve
 ```
 
+If `init` fails with `unsafe destination spelling ... is group- or
+other-writable without the sticky bit`, the directory chain is group-writable —
+the `umask 002` default on Debian and Ubuntu. Run `chmod g-w` on each flagged
+ancestor, or keep the data outside that tree:
+
+```bash
+install -d -m 0700 ~/.local/share/parameter-store
+./bin/parameter-store init --db ~/.local/share/parameter-store/kms.db \
+  --master-key-file ~/.local/share/parameter-store/master.key --admin ops
+```
+
+See [Preparing a destination directory](docs/operations.md#preparing-a-destination-directory)
+for the full rules.
+
 Check readiness: `curl http://localhost:8080/readyz` (`ready`) and
 `curl http://localhost:8080/healthz` (`ok`). The embedded web UI is at
 `http://localhost:8080/` — log in with the admin token from `init`. Server

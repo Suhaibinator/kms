@@ -101,5 +101,11 @@ docker run --rm \
   "ghcr.io/suhaibinator/kms:${VERSION}"
 ```
 
+Use named volumes as shown. Docker initializes an empty volume from the image
+directory's ownership and mode, so `/data` and `/key` keep the `kms`-owned,
+non-group-writable permissions that destination-path validation requires. Bind
+mounts and Kubernetes `fsGroup` volumes need extra preparation — see
+[Container and Kubernetes volumes](operations.md#container-and-kubernetes-volumes).
+
 Back up the database and master-key volumes separately. For networked
 deployments, configure TLS as described in [operations.md](operations.md).
