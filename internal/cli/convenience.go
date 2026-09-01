@@ -261,29 +261,13 @@ func displayPath(ref *kmsv1.ResourceRef) string {
 
 // --- whoami ----------------------------------------------------------------
 
-// whoAmINamespaceJSON is the namespace an identity is bound to. An unbound
-// identity carries a nil pointer, which renders as JSON null.
-type whoAmINamespaceJSON struct {
-	Env string `json:"env"`
-	App string `json:"app"`
-}
-
 // whoAmIJSON is the JSON form of the calling identity as the server resolved
 // it from the presented credential.
 type whoAmIJSON struct {
-	Name       string               `json:"name"`
-	Kind       string               `json:"kind"`
-	Namespace  *whoAmINamespaceJSON `json:"namespace"`
-	AuthMethod string               `json:"auth_method"`
-}
-
-// jsonNamespaceRef renders a wire NamespaceRef for JSON output; an unset ref
-// (an unbound identity) becomes null rather than an object of empty strings.
-func jsonNamespaceRef(ns *kmsv1.NamespaceRef) *whoAmINamespaceJSON {
-	if ns == nil {
-		return nil
-	}
-	return &whoAmINamespaceJSON{Env: ns.GetEnv(), App: ns.GetApp()}
+	Name       string            `json:"name"`
+	Kind       string            `json:"kind"`
+	Namespace  *namespaceRefJSON `json:"namespace"`
+	AuthMethod string            `json:"auth_method"`
 }
 
 // cmdWhoAmI reports the identity the server derives from the credential this
@@ -318,7 +302,7 @@ func (c *CLI) cmdWhoAmI(args []string) int {
 		return c.printJSON(whoAmIJSON{
 			Name:       resp.GetName(),
 			Kind:       resp.GetKind(),
-			Namespace:  jsonNamespaceRef(resp.GetNamespace()),
+			Namespace:  namespaceRefToJSON(resp.GetNamespace()),
 			AuthMethod: resp.GetAuthMethod(),
 		})
 	}
@@ -354,7 +338,7 @@ func (c *CLI) cmdPutSecret(args []string) int {
 	}
 	ref, err := keyutil.SplitDisplayPath(pos[0])
 	if err != nil {
-		return c.fail("invalid path: %v", err)
+		return c.failUsage("invalid path: %v", err)
 	}
 	value, err := c.readValue(*valueFile)
 	if err != nil {
@@ -436,7 +420,7 @@ func (c *CLI) cmdGetSecret(args []string) int {
 	}
 	ref, err := keyutil.SplitDisplayPath(pos[0])
 	if err != nil {
-		return c.fail("invalid path: %v", err)
+		return c.failUsage("invalid path: %v", err)
 	}
 
 	conn, err := c.dialConn(cf)
@@ -528,7 +512,7 @@ func (c *CLI) cmdPutParameter(args []string) int {
 	}
 	ref, err := keyutil.SplitDisplayPath(pos[0])
 	if err != nil {
-		return c.fail("invalid path: %v", err)
+		return c.failUsage("invalid path: %v", err)
 	}
 	value := pos[1]
 
@@ -578,7 +562,7 @@ func (c *CLI) cmdList(args []string) int {
 	}
 	ns, err := keyutil.ParseNamespace(pos[0])
 	if err != nil {
-		return c.fail("invalid namespace: %v", err)
+		return c.failUsage("invalid namespace: %v", err)
 	}
 	pns := &kmsv1.NamespaceRef{Env: ns.Env, App: ns.App}
 

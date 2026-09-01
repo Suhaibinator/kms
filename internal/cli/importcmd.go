@@ -62,11 +62,11 @@ func (c *CLI) cmdImport(args []string) int {
 		return c.failErr("", err)
 	}
 	if *from == "" {
-		return c.fail("--from is required")
+		return c.failUsage("--from is required")
 	}
 	ns, err := resolveImportNamespace(*namespace, *env, *app)
 	if err != nil {
-		return c.fail("%v", err)
+		return c.failUsage("%v", err)
 	}
 
 	items, err := loadImportSource(*from)
@@ -123,7 +123,7 @@ func (c *CLI) cmdImport(args []string) int {
 
 	// Real import: open the store, unseal, and write each value as a secret.
 	if err := c.requireSQLitePath(cfg); err != nil {
-		return c.fail("%v", err)
+		return c.failUsage("%v", err)
 	}
 	store, err := storage.Open(cfg.Storage.SQLitePath)
 	if err != nil {
@@ -187,15 +187,10 @@ func importReportPrefix(withTokens bool, verb string) string {
 // where, and (for a real import) the one-time access token each new secret
 // received. Tokens appear here exactly once.
 type importReportJSON struct {
-	Namespace importNamespaceJSON `json:"namespace"`
-	DryRun    bool                `json:"dry_run"`
-	Imported  int                 `json:"imported"`
-	Entries   []importEntryJSON   `json:"entries"`
-}
-
-type importNamespaceJSON struct {
-	Env string `json:"env"`
-	App string `json:"app"`
+	Namespace namespaceRefJSON  `json:"namespace"`
+	DryRun    bool              `json:"dry_run"`
+	Imported  int               `json:"imported"`
+	Entries   []importEntryJSON `json:"entries"`
 }
 
 // importEntryJSON mirrors importResult: the field order and names are the same
@@ -210,7 +205,7 @@ type importEntryJSON struct {
 // happen and mints no tokens, so imported stays 0 and no entry carries one.
 func importJSON(ns domain.NamespaceRef, results []importResult, dryRun bool) importReportJSON {
 	document := importReportJSON{
-		Namespace: importNamespaceJSON{Env: ns.Env, App: ns.App},
+		Namespace: namespaceRefJSON{Env: ns.Env, App: ns.App},
 		DryRun:    dryRun,
 		Entries:   make([]importEntryJSON, 0, len(results)),
 	}

@@ -133,11 +133,9 @@ func (c *CLI) Run(args []string) int {
 	case "defaults":
 		code = c.cmdDefaults(cmdArgs)
 	case "version", "--version", "-version":
-		_, _ = fmt.Fprintln(c.Stdout, Version)
-		code = 0
+		code = c.cmdVersion(cmdArgs)
 	case "help", "-h", "--help":
-		c.usage()
-		code = 0
+		code = c.cmdHelp(cmdArgs)
 	default:
 		_, _ = fmt.Fprintf(c.Stderr, "unknown command %q\n\n", cmd)
 		c.usage()
@@ -171,6 +169,42 @@ func globalFlags() []globalFlag {
 		{names: []string{"--yes", "-yes", "-y"}, apply: func(c *CLI, _ string) error { c.assumeYes = true; return nil }},
 		{names: []string{"--quiet", "-quiet", "-q"}, apply: func(c *CLI, _ string) error { c.quiet = true; return nil }},
 	}
+}
+
+// cmdVersion prints the build version. It runs through a flag set like every
+// other command so the global flags work after the subcommand
+// (`version --output json`) and a stray argument is a usage error.
+func (c *CLI) cmdVersion(args []string) int {
+	fs := c.newFlags("version")
+	c.setUsage(fs, "version [flags]", "Print the build version.", false)
+	if !c.parseFlags(fs, args) {
+		return 2
+	}
+	if !c.rejectPositionals() {
+		return 2
+	}
+	if c.jsonOutput() {
+		return c.printJSON(struct {
+			Version string `json:"version"`
+		}{Version})
+	}
+	_, _ = fmt.Fprintln(c.Stdout, Version)
+	return 0
+}
+
+// cmdHelp prints the top-level usage. Arguments are rejected rather than
+// ignored so `help frobnicate` does not silently look like success.
+func (c *CLI) cmdHelp(args []string) int {
+	fs := c.newFlags("help")
+	c.setUsage(fs, "help", "Print the list of commands.", false)
+	if !c.parseFlags(fs, args) {
+		return 2
+	}
+	if !c.rejectPositionals() {
+		return 2
+	}
+	c.usage()
+	return 0
 }
 
 // consumeGlobalFlags extracts the global flags that precede the subcommand so
@@ -302,6 +336,15 @@ Run "parameter-store <command> -h" for command-specific flags.
 func (c *CLI) fail(format string, args ...any) int {
 	_, _ = fmt.Fprintf(c.Stderr, "error: "+format+"\n", args...)
 	return exitError
+}
+
+// failUsage is fail for a problem in how the command was invoked (a missing
+// required flag, an invalid flag combination): it exits 2 like a malformed
+// flag would, so scripts can tell "fix the invocation" from "the operation
+// failed".
+func (c *CLI) failUsage(format string, args ...any) int {
+	_, _ = fmt.Fprintf(c.Stderr, "error: "+format+"\n", args...)
+	return exitUsage
 }
 
 // info prints an informational line to stderr unless --quiet was given. It is

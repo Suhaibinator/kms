@@ -105,15 +105,6 @@ func configSettingsJSON(cfg *config.Config, prov config.Provenance) []configSett
 	return settings
 }
 
-// optionalString maps the empty string to JSON null, for fields whose absence
-// is meaningful ("no config file" rather than "a file named nothing").
-func optionalString(s string) *string {
-	if s == "" {
-		return nil
-	}
-	return &s
-}
-
 // cmdConfigValidate resolves the configuration and runs Config.Validate, which
 // also checks that referenced TLS files exist.
 func (c *CLI) cmdConfigValidate(args []string) int {

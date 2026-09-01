@@ -337,16 +337,10 @@ func TestInfoQuietSetThroughRun(t *testing.T) {
 	}
 }
 
-// TestVersionRejectsUnknownFlags documents a gap in the dispatcher: version
-// (and help) are answered directly in Run's switch without a flag set, so
-// every trailing argument is discarded. `parameter-store version --output=json`
-// prints the plain version instead of JSON, and `version --not-a-flag` exits 0
-// where every other command exits 2 (see
-// TestMalformedCommandFlagStillExitsWithUsageError). Harmless today, but it
-// contradicts the promise that the long global flags also work after the
-// subcommand.
+// TestVersionRejectsUnknownFlags: version runs through a flag set like every
+// other command, so the long global flags work after it and an unknown flag
+// is the usual usage error rather than being silently discarded.
 func TestVersionRejectsUnknownFlags(t *testing.T) {
-	t.Skip("BUG: `version` ignores its arguments entirely; `version --not-a-flag` exits 0 and `version --output=json` leaves output=table")
 	c := newTestCLI()
 	if code := c.Run([]string{"version", "--not-a-flag"}); code != 2 {
 		t.Errorf("Run(version --not-a-flag) = %d, want 2", code)
@@ -357,5 +351,12 @@ func TestVersionRejectsUnknownFlags(t *testing.T) {
 	}
 	if c2.output != outputJSON {
 		t.Errorf("Run(version --output=json) left output = %q, want json", c2.output)
+	}
+	if got, want := c2.stdout(), "{\n  \"version\": \""+Version+"\"\n}\n"; got != want {
+		t.Errorf("Run(version --output=json) stdout = %q, want %q", got, want)
+	}
+	c3 := newTestCLI()
+	if code := c3.Run([]string{"help", "frobnicate"}); code != 2 {
+		t.Errorf("Run(help frobnicate) = %d, want 2", code)
 	}
 }

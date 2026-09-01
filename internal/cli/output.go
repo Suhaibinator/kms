@@ -8,6 +8,8 @@ import (
 	"strings"
 	"text/tabwriter"
 	"time"
+
+	kmsv1 "github.com/Suhaibinator/kms/gen/kmsv1"
 )
 
 // outputMode selects how a command renders its result. It implements
@@ -114,4 +116,47 @@ func jsonTimeOf(t time.Time) *string {
 	}
 	s := t.UTC().Format(time.RFC3339Nano)
 	return &s
+}
+
+// namespaceRefJSON is the {env, app} pair JSON output carries wherever the
+// table prints "env/app", so consumers never have to split on the separator.
+type namespaceRefJSON struct {
+	Env string `json:"env"`
+	App string `json:"app"`
+}
+
+// namespaceRefToJSON returns nil (JSON null) for an unset namespace, which is
+// how the wire spells "unbound identity".
+func namespaceRefToJSON(ref *kmsv1.NamespaceRef) *namespaceRefJSON {
+	if ref == nil {
+		return nil
+	}
+	return &namespaceRefJSON{Env: ref.GetEnv(), App: ref.GetApp()}
+}
+
+// namespaceRefValue is namespaceRefToJSON for documents whose namespace is
+// always present (a release lives in exactly one), rendered inline.
+func namespaceRefValue(ref *kmsv1.NamespaceRef) namespaceRefJSON {
+	return namespaceRefJSON{Env: ref.GetEnv(), App: ref.GetApp()}
+}
+
+// optionalString maps the empty string to JSON null, for fields whose absence
+// is meaningful ("no config file" rather than "a file named nothing").
+func optionalString(s string) *string {
+	if s == "" {
+		return nil
+	}
+	return &s
+}
+
+// resultLine prints one human-readable result line. In table mode it is the
+// command's output and goes to stdout; in JSON mode stdout carries nothing but
+// the result document, so the same line becomes an informational stderr line
+// that --quiet may silence.
+func (c *CLI) resultLine(format string, args ...any) {
+	if c.jsonOutput() {
+		c.info(format, args...)
+		return
+	}
+	_, _ = fmt.Fprintf(c.Stdout, format+"\n", args...)
 }

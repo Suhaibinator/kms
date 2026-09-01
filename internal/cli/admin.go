@@ -62,18 +62,6 @@ func (c *CLI) warnDestructiveTarget(cfg config.Config, prov config.Provenance) {
 	_, _ = fmt.Fprintf(c.Stderr, "Target database: %s\n", dbTarget(cfg, prov))
 }
 
-// resultLine prints one human-readable result line. In table mode it is the
-// command's output and goes to stdout; in JSON mode stdout carries nothing but
-// the result document, so the same line becomes an informational stderr line
-// that --quiet may silence.
-func (c *CLI) resultLine(format string, args ...any) {
-	if c.jsonOutput() {
-		c.info(format, args...)
-		return
-	}
-	_, _ = fmt.Fprintf(c.Stdout, format+"\n", args...)
-}
-
 // bootstrapCertJSON names the files a locally issued client certificate was
 // written to. Offline issuance never emits a separate CA file, so only the
 // pair appears.
@@ -110,10 +98,10 @@ func (c *CLI) cmdInit(args []string) int {
 		return c.failErr("", err)
 	}
 	if err := c.requireSQLitePath(cfg); err != nil {
-		return c.fail("%v", err)
+		return c.failUsage("%v", err)
 	}
 	if *certDir != "" && *admin == "" {
-		return c.fail("--cert-dir requires --admin")
+		return c.failUsage("--cert-dir requires --admin")
 	}
 	ctx := context.Background()
 
@@ -244,26 +232,15 @@ func (c *CLI) createBootstrapAdmin(ctx context.Context, store storage.Store, svc
 }
 
 // publishBootstrapCert writes a freshly issued admin certificate to its
-// reserved files. Table mode also prints the follow-up guidance, which is
-// publishAdminCert's job; JSON mode writes the files only, because stdout
-// carries nothing but the result document and the paths appear inside it.
+// reserved files. Table mode is publishAdminCert. JSON mode writes the files
+// and the stderr guidance only: stdout carries nothing but the caller's
+// document, and the file paths appear inside it.
 func (c *CLI) publishBootstrapCert(ctx context.Context, svc *core.Service, output *reservedCertBundle, name string, bundle *core.CertBundle) error {
 	if !c.jsonOutput() {
 		return c.publishAdminCert(ctx, svc, output, name, bundle)
 	}
-	// writeCertBundleToOutput reports which files it wrote and warns that the
-	// private key is unrecoverable, both on stdout — which in JSON mode
-	// carries only the document. Point it at stderr for the duration rather
-	// than dropping the lines: the paths reappear in the document, and the
-	// warning about the one-time key still reaches the operator.
-	stdout := c.Stdout
-	c.Stdout = c.Stderr
-	err := c.writeCertBundleToOutput(output, toProtoCertBundle(bundle))
-	c.Stdout = stdout
-	if err != nil {
-		return c.orphanedAdminCert(ctx, svc, output, name, bundle.Serial, err)
-	}
-	return nil
+	_, err := c.publishAdminCertFiles(ctx, svc, output, name, bundle)
+	return err
 }
 
 // bootstrapAdminCertFailure annotates a certificate failure that happens after
@@ -295,7 +272,7 @@ func (c *CLI) cmdMigrate(args []string) int {
 		return c.failErr("", err)
 	}
 	if err := c.requireSQLitePath(cfg); err != nil {
-		return c.fail("%v", err)
+		return c.failUsage("%v", err)
 	}
 	// Open runs migrations inside the transaction and refuses a newer schema.
 	store, err := storage.Open(cfg.Storage.SQLitePath)
@@ -337,10 +314,10 @@ func (c *CLI) cmdCheck(args []string) int {
 	}
 	cfg, prov, _, err := r.resolve()
 	if err != nil {
-		return c.fail("%v", err)
+		return c.failErr("", err)
 	}
 	if err := c.requireSQLitePath(cfg); err != nil {
-		return c.fail("%v", err)
+		return c.failUsage("%v", err)
 	}
 	ctx := context.Background()
 
@@ -424,10 +401,10 @@ func (c *CLI) cmdBackup(args []string) int {
 		return c.failErr("", err)
 	}
 	if err := c.requireSQLitePath(cfg); err != nil {
-		return c.fail("%v", err)
+		return c.failUsage("%v", err)
 	}
 	if *out == "" {
-		return c.fail("--out is required")
+		return c.failUsage("--out is required")
 	}
 	if fileExists(*out) {
 		return c.fail("output file %s already exists; refusing to overwrite", *out)
@@ -478,16 +455,24 @@ func (c *CLI) cmdRestore(args []string) int {
 		return c.failErr("", err)
 	}
 	if err := c.requireSQLitePath(cfg); err != nil {
-		return c.fail("%v", err)
+		return c.failUsage("%v", err)
 	}
 	if *in == "" {
-		return c.fail("--in is required")
+		return c.failUsage("--in is required")
 	}
 	// Restore overwrites the destination: name it before touching anything,
 	// then make the operator say yes to that exact pair of paths. --force
 	// keeps its separate meaning (replace an existing destination at all), so
 	// a scripted restore over a live database needs both flags.
 	sqlitePath := absPath(cfg.Storage.SQLitePath)
+	if !*force {
+		// Refuse before the prompt: an operator should not answer "y" only to
+		// learn the destination needed --force. restoreFile re-checks under
+		// the atomic publish, so a file appearing in between is still refused.
+		if _, err := os.Lstat(sqlitePath); err == nil {
+			return c.failUsage("destination %s already exists; pass --force to overwrite", sqlitePath)
+		}
+	}
 	c.warnDestructiveTarget(cfg, prov)
 	if ok, code := c.confirmYesNo(fmt.Sprintf("restore %s from %s", sqlitePath, *in)); !ok {
 		return code
@@ -531,10 +516,10 @@ func (c *CLI) cmdCreateAdmin(args []string) int {
 		return c.failErr("", err)
 	}
 	if err := c.requireSQLitePath(cfg); err != nil {
-		return c.fail("%v", err)
+		return c.failUsage("%v", err)
 	}
 	if *name == "" {
-		return c.fail("--name is required")
+		return c.failUsage("--name is required")
 	}
 	ctx := context.Background()
 	// Direct store access. WAL mode allows this concurrently with a running
@@ -593,10 +578,10 @@ func (c *CLI) cmdRotateAdmin(args []string) int {
 		return c.failErr("", err)
 	}
 	if err := c.requireSQLitePath(cfg); err != nil {
-		return c.fail("%v", err)
+		return c.failUsage("%v", err)
 	}
 	if *name == "" {
-		return c.fail("--name is required")
+		return c.failUsage("--name is required")
 	}
 
 	// Direct store access makes this the recovery path when no usable admin
@@ -667,7 +652,7 @@ func (c *CLI) cmdRotateKEK(args []string) int {
 		return c.failErr("", err)
 	}
 	if err := c.requireSQLitePath(cfg); err != nil {
-		return c.fail("%v", err)
+		return c.failUsage("%v", err)
 	}
 	ctx := context.Background()
 

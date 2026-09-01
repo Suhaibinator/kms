@@ -158,14 +158,14 @@ func (c *CLI) cmdAdminCertIssue(args []string) int {
 		return c.failErr("", err)
 	}
 	if err := c.requireSQLitePath(cfg); err != nil {
-		return c.fail("%v", err)
+		return c.failUsage("%v", err)
 	}
 	if *out == "" {
-		return c.fail("--out is required: the admin private key is written only to an owner-only file, never to stdout")
+		return c.failUsage("--out is required: the admin private key is written only to an owner-only file, never to stdout")
 	}
 	ttlSeconds, err := parseTTLSeconds(*ttl)
 	if err != nil {
-		return c.fail("%v", err)
+		return c.failUsage("%v", err)
 	}
 	ctx := context.Background()
 
@@ -224,23 +224,39 @@ func (c *CLI) publishAdminCert(ctx context.Context, svc *core.Service, output *r
 }
 
 // publishAdminCertJSON is the JSON half of publishAdminCert: the credential
-// files are written exactly as in table mode (the private key never enters the
-// document), the status line and the CLI/browser guidance move to stderr, and
-// stdout receives one object naming the files. Every failure still routes
-// through orphanedAdminCert, so an unusable certificate is revoked here too.
+// files are written by publishAdminCertFiles and stdout receives one object
+// naming them. Every failure still routes through orphanedAdminCert, so an
+// unusable certificate is revoked here too.
 func (c *CLI) publishAdminCertJSON(ctx context.Context, svc *core.Service, output *reservedCertBundle, name string, bundle *core.CertBundle) error {
-	cert, err := writeCertBundleFiles(output, toProtoCertBundle(bundle))
+	cert, err := c.publishAdminCertFiles(ctx, svc, output, name, bundle)
 	if err != nil {
-		return c.orphanedAdminCert(ctx, svc, output, name, bundle.Serial, err)
-	}
-	c.info("Issued admin client certificate for identity %q (expires %s).", name, bundle.NotAfter.UTC().Format(time.RFC3339))
-	if err := c.writeAdminCertNextSteps(output, name, bundle.Serial); err != nil {
-		return c.orphanedAdminCert(ctx, svc, output, name, bundle.Serial, err)
+		return err
 	}
 	if err := writeJSON(c.Stdout, issuedCertJSON{Name: name, Serial: bundle.Serial, Cert: cert}); err != nil {
 		return c.orphanedAdminCert(ctx, svc, output, name, bundle.Serial, fmt.Errorf("writing certificate output: %w", err))
 	}
 	return nil
+}
+
+// publishAdminCertFiles writes the credential files exactly as in table mode
+// (the private key never enters a document) and moves the status line and the
+// CLI/browser guidance to stderr, leaving stdout to the caller's document. The
+// one-time-key warning is not an info line: --quiet must not hide that the key
+// on disk is the only copy. Failures are already wrapped by orphanedAdminCert.
+func (c *CLI) publishAdminCertFiles(ctx context.Context, svc *core.Service, output *reservedCertBundle, name string, bundle *core.CertBundle) (*certFilesJSON, error) {
+	cert, err := writeCertBundleFiles(output, toProtoCertBundle(bundle))
+	if err != nil {
+		return nil, c.orphanedAdminCert(ctx, svc, output, name, bundle.Serial, err)
+	}
+	c.info("Issued admin client certificate for identity %q: wrote %s and %s (serial %s, expires %s).",
+		name, output.certPath, output.keyPath, bundle.Serial, bundle.NotAfter.UTC().Format(time.RFC3339))
+	if _, err := fmt.Fprintln(c.Stderr, "WARNING: the private key is written once and is never stored server-side."); err != nil {
+		return nil, c.orphanedAdminCert(ctx, svc, output, name, bundle.Serial, fmt.Errorf("writing certificate output: %w", err))
+	}
+	if err := c.writeAdminCertNextSteps(output, name, bundle.Serial); err != nil {
+		return nil, c.orphanedAdminCert(ctx, svc, output, name, bundle.Serial, err)
+	}
+	return cert, nil
 }
 
 // orphanedAdminCert turns a publish failure into an actionable error. When the
@@ -346,10 +362,10 @@ func (c *CLI) cmdAdminCertRevoke(args []string) int {
 		return c.failErr("", err)
 	}
 	if err := c.requireSQLitePath(cfg); err != nil {
-		return c.fail("%v", err)
+		return c.failUsage("%v", err)
 	}
 	if *serial == "" {
-		return c.fail("--serial is required")
+		return c.failUsage("--serial is required")
 	}
 	// Revocation is immediate and irreversible for that credential, so the
 	// operator retypes the admin it belongs to before the database is opened.
@@ -403,7 +419,7 @@ func (c *CLI) cmdAdminCertList(args []string) int {
 		return c.failErr("", err)
 	}
 	if err := c.requireSQLitePath(cfg); err != nil {
-		return c.fail("%v", err)
+		return c.failUsage("%v", err)
 	}
 	ctx := context.Background()
 

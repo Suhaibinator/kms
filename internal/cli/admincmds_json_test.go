@@ -329,8 +329,8 @@ func TestIdentityCreateJSONCarriesTokenOnce(t *testing.T) {
 func TestIdentityCreateJSONRefusesToDropThePrivateKey(t *testing.T) {
 	stub := &identityAdminStub{}
 	c, code := runAdminJSON(t, stub, "-o", "json", "admin", "identity", "create", "svc", "--insecure")
-	if code != 1 {
-		t.Fatalf("exit=%d, want 1; stderr=%s", code, c.stderr())
+	if code != 2 {
+		t.Fatalf("exit=%d, want 2; stderr=%s", code, c.stderr())
 	}
 	if !strings.Contains(c.stderr(), "--out is required with --output json") {
 		t.Fatalf("stderr = %s", c.stderr())

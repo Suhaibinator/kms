@@ -75,17 +75,6 @@ Commands:
 `)
 }
 
-// releaseNamespaceJSON is the {env, app} pair JSON output carries wherever the
-// table prints "env/app".
-type releaseNamespaceJSON struct {
-	Env string `json:"env"`
-	App string `json:"app"`
-}
-
-func releaseNamespaceOf(ns *kmsv1.NamespaceRef) releaseNamespaceJSON {
-	return releaseNamespaceJSON{Env: ns.GetEnv(), App: ns.GetApp()}
-}
-
 // releaseEntryJSON is one manifest entry as JSON. A release pins a secret by
 // reference — path and version — never by value, so the JSON carries exactly
 // the non-secret columns the table shows. The parameter digest is suppressed
@@ -130,10 +119,10 @@ type releaseEntryDefinition struct {
 // releaseCreateJSON reports a created release: the identity the caller asked
 // for plus the immutable version and digest the server assigned.
 type releaseCreateJSON struct {
-	Namespace releaseNamespaceJSON `json:"namespace"`
-	Name      string               `json:"name"`
-	Version   uint64               `json:"version"`
-	Digest    string               `json:"digest"`
+	Namespace namespaceRefJSON `json:"namespace"`
+	Name      string           `json:"name"`
+	Version   uint64           `json:"version"`
+	Digest    string           `json:"digest"`
 }
 
 func (c *CLI) cmdReleaseCreate(args []string) int {
@@ -180,7 +169,7 @@ func (c *CLI) cmdReleaseCreate(args []string) int {
 	if c.jsonOutput() {
 		c.info("%s", line)
 		return c.printJSON(releaseCreateJSON{
-			Namespace: releaseNamespaceOf(req.GetNamespace()),
+			Namespace: namespaceRefValue(req.GetNamespace()),
 			Name:      definition.Name,
 			Version:   resp.GetRelease().GetVersion(),
 			Digest:    resp.GetRelease().GetDigest(),
@@ -375,17 +364,17 @@ func releaseValidationDetails(err error) *kmsv1.ValidateReleaseResponse {
 // as fields (namespace, schema pin, activation labels) so a script never has to
 // parse prose.
 type releaseShowJSON struct {
-	Namespace     releaseNamespaceJSON `json:"namespace"`
-	Name          string               `json:"name"`
-	Version       uint64               `json:"version"`
-	Revision      uint64               `json:"revision"`
-	Current       bool                 `json:"current"`
-	Previous      bool                 `json:"previous"`
-	SchemaID      string               `json:"schema_id"`
-	SchemaVersion uint64               `json:"schema_version"`
-	Digest        string               `json:"digest"`
-	CreatedAt     *string              `json:"created_at"`
-	Entries       []releaseEntryJSON   `json:"entries"`
+	Namespace     namespaceRefJSON   `json:"namespace"`
+	Name          string             `json:"name"`
+	Version       uint64             `json:"version"`
+	Revision      uint64             `json:"revision"`
+	Current       bool               `json:"current"`
+	Previous      bool               `json:"previous"`
+	SchemaID      string             `json:"schema_id"`
+	SchemaVersion uint64             `json:"schema_version"`
+	Digest        string             `json:"digest"`
+	CreatedAt     *string            `json:"created_at"`
+	Entries       []releaseEntryJSON `json:"entries"`
 }
 
 func (c *CLI) cmdReleaseShow(args []string) int {
@@ -424,7 +413,7 @@ func (c *CLI) printRelease(release *kmsv1.ConfigurationRelease, revision uint64,
 	sort.Slice(entries, func(i, j int) bool { return entries[i].GetAlias() < entries[j].GetAlias() })
 	if c.jsonOutput() {
 		document := releaseShowJSON{
-			Namespace:     releaseNamespaceOf(release.GetNamespace()),
+			Namespace:     namespaceRefValue(release.GetNamespace()),
 			Name:          release.GetName(),
 			Version:       release.GetVersion(),
 			Revision:      revision,
@@ -490,7 +479,7 @@ func (c *CLI) cmdReleaseList(args []string) int {
 	}
 	ns, err := parseNamespaceProto(pos[0])
 	if err != nil {
-		return c.fail("invalid namespace: %v", err)
+		return c.failUsage("invalid namespace: %v", err)
 	}
 	name := ""
 	if len(pos) > 1 {
@@ -587,7 +576,7 @@ func (c *CLI) cmdReleaseDiff(args []string) int {
 	}
 	ns, err := parseNamespaceProto(pos[0])
 	if err != nil {
-		return c.fail("invalid namespace: %v", err)
+		return c.failUsage("invalid namespace: %v", err)
 	}
 	fromVersion, err := parseVersion(pos[2])
 	if err != nil {
@@ -763,17 +752,17 @@ func (v *optionalUint64) Set(raw string) error {
 // releaseActivationJSON is the outcome of an activation. activate and rollback
 // share it because they are the same RPC seen from two directions.
 type releaseActivationJSON struct {
-	Namespace       releaseNamespaceJSON `json:"namespace"`
-	Name            string               `json:"name"`
-	Version         uint64               `json:"version"`
-	PreviousVersion uint64               `json:"previous_version"`
-	Revision        uint64               `json:"revision"`
-	Changed         bool                 `json:"changed"`
+	Namespace       namespaceRefJSON `json:"namespace"`
+	Name            string           `json:"name"`
+	Version         uint64           `json:"version"`
+	PreviousVersion uint64           `json:"previous_version"`
+	Revision        uint64           `json:"revision"`
+	Changed         bool             `json:"changed"`
 }
 
 func releaseActivationOf(ns *kmsv1.NamespaceRef, name string, resp *kmsv1.ActivateReleaseResponse) releaseActivationJSON {
 	return releaseActivationJSON{
-		Namespace:       releaseNamespaceOf(ns),
+		Namespace:       namespaceRefValue(ns),
 		Name:            name,
 		Version:         resp.GetCurrentVersion(),
 		PreviousVersion: resp.GetPreviousVersion(),
@@ -889,7 +878,7 @@ func (c *CLI) cmdReleaseRollback(args []string) int {
 	}
 	ns, err := parseNamespaceProto(pos[0])
 	if err != nil {
-		return c.fail("invalid namespace: %v", err)
+		return c.failUsage("invalid namespace: %v", err)
 	}
 	name := pos[1]
 
@@ -909,7 +898,7 @@ func (c *CLI) cmdReleaseRollback(args []string) int {
 	if len(pos) == 3 {
 		target, err = parseVersion(pos[2])
 		if err != nil {
-			return c.fail("invalid VERSION: %v", err)
+			return c.failUsage("invalid VERSION: %v", err)
 		}
 	}
 	if target == 0 {
@@ -951,7 +940,7 @@ func (c *CLI) cmdReleaseSubscribers(args []string) int {
 	}
 	ns, err := parseNamespaceProto(pos[0])
 	if err != nil {
-		return c.fail("invalid namespace: %v", err)
+		return c.failUsage("invalid namespace: %v", err)
 	}
 	conn, err := c.dialConn(cf)
 	if err != nil {
@@ -1239,7 +1228,7 @@ func (c *CLI) cmdReleaseSchemaShow(args []string) int {
 	}
 	version, err := parseVersion(pos[1])
 	if err != nil {
-		return c.fail("invalid VERSION: %v", err)
+		return c.failUsage("invalid VERSION: %v", err)
 	}
 	conn, err := c.dialConn(cf)
 	if err != nil {
@@ -1336,19 +1325,19 @@ func (c *CLI) parseReleaseIdentity(args []string, requireVersion bool) (*kmsv1.N
 		want = 3
 	}
 	if len(args) != want {
-		_ = c.fail("release command requires ENV/APP NAME%s", map[bool]string{true: " VERSION"}[requireVersion])
+		_ = c.failUsage("release command requires ENV/APP NAME%s", map[bool]string{true: " VERSION"}[requireVersion])
 		return nil, "", 0, false
 	}
 	ns, err := parseNamespaceProto(args[0])
 	if err != nil {
-		_ = c.fail("invalid namespace: %v", err)
+		_ = c.failUsage("invalid namespace: %v", err)
 		return nil, "", 0, false
 	}
 	version := uint64(0)
 	if requireVersion {
 		version, err = parseVersion(args[2])
 		if err != nil {
-			_ = c.fail("invalid VERSION: %v", err)
+			_ = c.failUsage("invalid VERSION: %v", err)
 			return nil, "", 0, false
 		}
 	}

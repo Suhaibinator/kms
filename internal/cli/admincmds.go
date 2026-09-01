@@ -139,7 +139,7 @@ func (c *CLI) cmdNamespaceWrite(args []string, update bool) int {
 	}
 	methods, err := parseAuthMethods(*authMethods)
 	if err != nil {
-		return c.fail("%v", err)
+		return c.failUsage("%v", err)
 	}
 	pns := &kmsv1.NamespaceRef{Env: ns.Env, App: ns.App}
 
@@ -326,11 +326,11 @@ func (c *CLI) cmdIdentityCreate(args []string) int {
 
 	methods, err := identityAuthMethods(*kind, *auth)
 	if err != nil {
-		return c.fail("%v", err)
+		return c.failUsage("%v", err)
 	}
 	ttlSeconds, err := parseTTLSeconds(*ttl)
 	if err != nil {
-		return c.fail("%v", err)
+		return c.failUsage("%v", err)
 	}
 	if code, refused := c.refuseJSONCertToStdout("identity create", *outDir, methods); refused {
 		return code
@@ -467,7 +467,7 @@ func (c *CLI) cmdIdentityIssueCert(args []string) int {
 	name := pos[0]
 	ttlSeconds, err := parseTTLSeconds(*ttl)
 	if err != nil {
-		return c.fail("%v", err)
+		return c.failUsage("%v", err)
 	}
 	if code, refused := c.refuseJSONCertToStdout("identity issue-cert", *outDir, []string{"mtls"}); refused {
 		return code
@@ -537,7 +537,7 @@ func (c *CLI) cmdIdentityRevokeCert(args []string) int {
 		return c.fail("identity revoke-cert requires a NAME argument")
 	}
 	if *serial == "" {
-		return c.fail("--serial is required")
+		return c.failUsage("--serial is required")
 	}
 	// The identity, not the serial, is what an operator recognizes, so that is
 	// what the confirmation asks for; the serial is named in the prompt.
@@ -951,26 +951,10 @@ func (c *CLI) refuseJSONCertToStdout(command, outDir string, methods []string) (
 	if !c.jsonOutput() || outDir != "" || !hasAuthMethod(methods, "mtls") {
 		return 0, false
 	}
-	return c.fail("%s: --out is required with --output json: the one-time private key is written to a file, never to the JSON document", command), true
+	return c.failUsage("%s: --out is required with --output json: the one-time private key is written to a file, never to the JSON document", command), true
 }
 
 // --- JSON documents --------------------------------------------------------
-
-// namespaceRefJSON renders a namespace as its two labels rather than the
-// "env/app" string, so consumers never have to split on the separator.
-type namespaceRefJSON struct {
-	Env string `json:"env"`
-	App string `json:"app"`
-}
-
-// namespaceRefToJSON returns nil (JSON null) for an unset namespace, which is
-// how the wire spells "unbound identity".
-func namespaceRefToJSON(ref *kmsv1.NamespaceRef) *namespaceRefJSON {
-	if ref == nil {
-		return nil
-	}
-	return &namespaceRefJSON{Env: ref.GetEnv(), App: ref.GetApp()}
-}
 
 // jsonStrings normalizes a possibly nil list so it renders as [] rather than
 // null: a script that ranges over the field must never have to nil-check it.

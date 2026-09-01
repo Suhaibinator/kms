@@ -297,7 +297,7 @@ func TestRotateAdminRejectsInvalidTargetsWithoutMutation(t *testing.T) {
 		wantError string
 		wantCode  int
 	}{
-		{name: "missing name", target: "admin", kind: domain.IdentityKindAdmin, hasToken: true, args: func(db string) []string { return []string{"--sqlite-path", db} }, wantError: "--name is required", wantCode: 1},
+		{name: "missing name", target: "admin", kind: domain.IdentityKindAdmin, hasToken: true, args: func(db string) []string { return []string{"--sqlite-path", db} }, wantError: "--name is required", wantCode: 2},
 		{name: "unknown identity", target: "admin", kind: domain.IdentityKindAdmin, hasToken: true, args: func(db string) []string { return []string{"--sqlite-path", db, "--name", "missing"} }, wantError: "identity missing", wantCode: exitNotFound},
 		{name: "client identity", target: "client", kind: domain.IdentityKindClient, hasToken: true, args: func(db string) []string { return []string{"--sqlite-path", db, "--name", "client"} }, wantError: "is not an admin", wantCode: 1},
 		{name: "disabled admin", target: "admin", kind: domain.IdentityKindAdmin, disabled: true, hasToken: true, args: func(db string) []string { return []string{"--sqlite-path", db, "--name", "admin"} }, wantError: "is disabled", wantCode: 1},

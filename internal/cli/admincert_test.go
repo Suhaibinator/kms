@@ -234,8 +234,8 @@ func TestAdminCertIssueRequiresOutputDirectory(t *testing.T) {
 
 	c := newTestCLI()
 	code := c.Run([]string{"admin-cert", "issue", "ops", "--sqlite-path", db, "--kek-file", keyFile})
-	if code != 1 {
-		t.Fatalf("exit=%d, want 1; stderr=%s", code, c.stderr())
+	if code != 2 {
+		t.Fatalf("exit=%d, want 2; stderr=%s", code, c.stderr())
 	}
 	if !strings.Contains(c.stderr(), "--out is required") || !strings.Contains(c.stderr(), "never to stdout") {
 		t.Fatalf("stderr = %s", c.stderr())
@@ -355,7 +355,7 @@ func TestAdminCertIssueRejectsInvalidTargetsWithoutMutation(t *testing.T) {
 			args: func(db, key, out string) []string {
 				return []string{"ops", "--sqlite-path", db, "--kek-file", key, "--out", out, "--ttl", "0d"}
 			},
-			wantExit: 1,
+			wantExit: 2,
 			wantErr:  "invalid --ttl",
 		},
 	}
@@ -467,7 +467,7 @@ func TestAdminCertRevokeRejectsInvalidTargets(t *testing.T) {
 		wantExit int
 		wantErr  string
 	}{
-		{name: "missing serial", args: []string{"ops", "--sqlite-path", db, "--yes"}, wantExit: 1, wantErr: "--serial is required"},
+		{name: "missing serial", args: []string{"ops", "--sqlite-path", db, "--yes"}, wantExit: 2, wantErr: "--serial is required"},
 		{name: "missing name", args: []string{"--sqlite-path", db, "--serial", serial, "--yes"}, wantExit: 2, wantErr: "requires a NAME argument"},
 		{name: "client identity", args: []string{"app", "--sqlite-path", db, "--serial", serial, "--yes"}, wantExit: 1, wantErr: "is not an admin"},
 		// The store reports both a foreign serial and an unknown one as not
@@ -654,8 +654,8 @@ func TestInitCertDirRequiresAdmin(t *testing.T) {
 	certDir := t.TempDir()
 
 	c := newTestCLI()
-	if code := c.Run([]string{"init", "--sqlite-path", db, "--kek-file", keyFile, "--cert-dir", certDir}); code != 1 {
-		t.Fatalf("exit=%d, want 1; stderr=%s", code, c.stderr())
+	if code := c.Run([]string{"init", "--sqlite-path", db, "--kek-file", keyFile, "--cert-dir", certDir}); code != 2 {
+		t.Fatalf("exit=%d, want 2; stderr=%s", code, c.stderr())
 	}
 	if !strings.Contains(c.stderr(), "--cert-dir requires --admin") {
 		t.Fatalf("stderr = %s", c.stderr())
@@ -856,8 +856,8 @@ func TestIdentityCreateAdminKindRejectsMTLSLocally(t *testing.T) {
 		c.dialOverride = dial
 		code := c.Run([]string{"admin", "identity", "create", "boss", "--kind", "admin",
 			"--auth", auth, "--insecure", "--token", "admin-token"})
-		if code != 1 {
-			t.Fatalf("--auth %s exit=%d, want 1; stderr=%s", auth, code, c.stderr())
+		if code != 2 {
+			t.Fatalf("--auth %s exit=%d, want 2; stderr=%s", auth, code, c.stderr())
 		}
 		if !strings.Contains(c.stderr(), "admin-cert issue") {
 			t.Fatalf("--auth %s stderr = %s", auth, c.stderr())
