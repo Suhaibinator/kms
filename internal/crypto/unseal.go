@@ -40,6 +40,14 @@ type UnsealOptions struct {
 	Prompt PassphrasePrompter
 }
 
+// HasKeySource reports whether Unseal has at least one way to obtain master
+// key material: a key file path, a pre-supplied passphrase, or an interactive
+// prompter. It is the single definition of "a key can be acquired" shared by
+// the CLI's check and unseal paths.
+func (o UnsealOptions) HasKeySource() bool {
+	return o.KeyFilePath != "" || len(o.Passphrase) > 0 || o.Prompt != nil
+}
+
 // ErrNoKeySource is returned when neither a key file nor any way to obtain a
 // passphrase is available.
 var ErrNoKeySource = errors.New(

@@ -5,7 +5,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 
 	"golang.org/x/term"
 
@@ -59,16 +58,24 @@ func (c *CLI) readNewPassphrase() ([]byte, error) {
 	return prompt(true)
 }
 
-// unseal acquires and verifies the master key against store using the same
-// resolution order as serve: key file, then KMS_MASTER_PASSPHRASE, then an
-// interactive TTY prompt. createIfMissing generates a key file (or prompts for
-// a new passphrase) when initializing a fresh database.
-func (c *CLI) unseal(ctx context.Context, store crypto.KeyMetadataStore, keyFile string, createIfMissing bool) (*crypto.Keyring, error) {
-	opts := crypto.UnsealOptions{
+// unsealOptions builds the master-key acquisition options shared by every
+// command that opens a database: key file first (encryption.kek_file), then
+// KMS_MASTER_PASSPHRASE, then an interactive TTY prompt. createIfMissing
+// generates a key file (or prompts for a new passphrase) when initializing a
+// fresh database. Callers that only need to know whether any source exists
+// use UnsealOptions.HasKeySource on the result.
+func (c *CLI) unsealOptions(keyFile string, createIfMissing bool) crypto.UnsealOptions {
+	passphrase, _ := c.env("KMS_MASTER_PASSPHRASE")
+	return crypto.UnsealOptions{
 		KeyFilePath:            keyFile,
 		CreateKeyFileIfMissing: createIfMissing,
-		Passphrase:             []byte(os.Getenv("KMS_MASTER_PASSPHRASE")),
+		Passphrase:             []byte(passphrase),
 		Prompt:                 c.newPrompter(),
 	}
-	return crypto.Unseal(ctx, store, opts)
+}
+
+// unseal acquires and verifies the master key against store using the
+// resolution order documented on unsealOptions.
+func (c *CLI) unseal(ctx context.Context, store crypto.KeyMetadataStore, keyFile string, createIfMissing bool) (*crypto.Keyring, error) {
+	return crypto.Unseal(ctx, store, c.unsealOptions(keyFile, createIfMissing))
 }
