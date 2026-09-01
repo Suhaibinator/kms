@@ -65,7 +65,7 @@ func (c *CLI) warnDestructiveTarget(cfg config.Config, prov config.Provenance) {
 func (c *CLI) cmdInit(args []string) int {
 	fs := c.newFlags("init")
 	r := c.serverSettings(fs, "storage.sqlite_path", "encryption.kek_file")
-	admin := fs.String("admin", "", "also create a bootstrap admin identity with this name")
+	admin := fs.String("admin", "", "also create a bootstrap admin identity with this `name`")
 	c.setUsage(fs, "init [flags]",
 		"Create or migrate the database and establish its master key, optionally with a bootstrap admin identity.", true)
 	if !c.parseFlags(fs, args) {
@@ -211,7 +211,7 @@ func (c *CLI) cmdCheck(args []string) int {
 func (c *CLI) cmdBackup(args []string) int {
 	fs := c.newFlags("backup")
 	r := c.serverSettings(fs, "storage.sqlite_path")
-	out := fs.String("out", "", "backup output file path (must not exist)")
+	out := fs.String("out", "", "backup output `file` (must not exist)")
 	c.setUsage(fs, "backup [flags]",
 		"Write a consistent online backup of the database to --out; the master key is not included.", true)
 	if !c.parseFlags(fs, args) {
@@ -254,7 +254,7 @@ func (c *CLI) cmdBackup(args []string) int {
 func (c *CLI) cmdRestore(args []string) int {
 	fs := c.newFlags("restore")
 	r := c.serverSettings(fs, "storage.sqlite_path")
-	in := fs.String("in", "", "backup input file path")
+	in := fs.String("in", "", "backup input `file`")
 	force := fs.Bool("force", false, "overwrite an existing destination database")
 	c.setUsage(fs, "restore [flags]",
 		"Restore the database from a backup file. The server must be stopped; an existing destination is replaced only with --force.", true)
@@ -290,7 +290,7 @@ func (c *CLI) cmdRestore(args []string) int {
 func (c *CLI) cmdCreateAdmin(args []string) int {
 	fs := c.newFlags("create-admin")
 	r := c.serverSettings(fs, "storage.sqlite_path")
-	name := fs.String("name", "", "admin identity name")
+	name := fs.String("name", "", "admin identity `name`")
 	c.setUsage(fs, "create-admin [flags]",
 		"Create an admin identity directly in the database and print its token once.", true)
 	if !c.parseFlags(fs, args) {
@@ -339,7 +339,7 @@ func (c *CLI) cmdCreateAdmin(args []string) int {
 func (c *CLI) cmdRotateAdmin(args []string) int {
 	fs := c.newFlags("rotate-admin")
 	r := c.serverSettings(fs, "storage.sqlite_path")
-	name := fs.String("name", "", "admin identity name")
+	name := fs.String("name", "", "admin identity `name`")
 	c.setUsage(fs, "rotate-admin [flags]",
 		"Recover an existing admin by rotating its token directly in the database, printing the replacement once.", true)
 	if !c.parseFlags(fs, args) {
@@ -401,7 +401,7 @@ func (c *CLI) cmdRotateAdmin(args []string) int {
 func (c *CLI) cmdRotateKEK(args []string) int {
 	fs := c.newFlags("rotate-kek")
 	r := c.serverSettings(fs, "storage.sqlite_path", "encryption.kek_file")
-	newKeyFile := fs.String("new-key-file", "", "new master key file (generated if absent); omit to enter a new passphrase")
+	newKeyFile := fs.String("new-key-file", "", "new master key `file` (generated if absent); omit to enter a new passphrase")
 	c.setUsage(fs, "rotate-kek [flags]",
 		"Rotate the master key, rewrapping every secret version and CA key under the new key.", true)
 	if !c.parseFlags(fs, args) {

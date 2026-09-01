@@ -42,12 +42,12 @@ type importResult struct {
 
 func (c *CLI) cmdImport(args []string) int {
 	fs := c.newFlags("import")
-	from := fs.String("from", "", "source export: JSON file or SuhaibParameterStore SQLite db")
-	namespace := fs.String("namespace", "", "destination namespace env/app, e.g. prod/gradethis")
-	env := fs.String("env", "", "destination environment (alternative to --namespace)")
-	app := fs.String("app", "", "destination application (alternative to --namespace)")
+	from := fs.String("from", "", "source export `file`: JSON or a SuhaibParameterStore SQLite database")
+	namespace := fs.String("namespace", "", "destination `namespace` as env/app, e.g. prod/gradethis")
+	env := fs.String("env", "", "destination `environment` (alternative to --namespace)")
+	app := fs.String("app", "", "destination `application` (alternative to --namespace)")
 	dryRun := fs.Bool("dry-run", false, "print old key -> new path mapping without writing")
-	report := fs.String("report", "", "write the mapping report to this file instead of stdout")
+	report := fs.String("report", "", "write the mapping report to this `file` instead of stdout")
 	r := c.serverSettings(fs, "storage.sqlite_path", "encryption.kek_file")
 	c.setUsage(fs, "import [flags]",
 		"Import keys from a SuhaibParameterStore export into a namespace as secrets. --dry-run prints the old key -> new path mapping and needs no database or master key.", true)
