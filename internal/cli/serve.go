@@ -168,14 +168,17 @@ func (c *CLI) cmdServe(args []string) int {
 	// and say so loudly rather than refusing to start.
 	adminCertRequired := cfg.Security.AdminRequireClientCert && tlsCfg != nil
 	svc.SetAdminRequireClientCert(adminCertRequired)
-	var lackingCerts []string
-	var lackingErr error
+	var (
+		lackingCerts  []string
+		expiringCerts []core.ExpiringAdminCert
+		lackingErr    error
+	)
 	if adminCertRequired {
-		lackingCerts, lackingErr = svc.AdminsWithoutValidCert(ctx)
+		lackingCerts, expiringCerts, lackingErr = svc.AdminCertReport(ctx, adminCertExpiryWarning)
 	}
 	logAdminCertPosture(logger, cfg.Security.AdminRequireClientCert, tlsCfg != nil,
 		isNonLoopbackBind(cfg.Server.GRPCAddr) || isNonLoopbackBind(cfg.Server.HTTPAddr),
-		lackingCerts, lackingErr)
+		lackingCerts, expiringCerts, lackingErr)
 
 	if tlsCfg == nil {
 		// Plaintext transport carries bearer tokens and secret values in the
@@ -270,6 +273,8 @@ func (c *CLI) cmdServe(args []string) int {
 	select {
 	case sig := <-sigCh:
 		logger.Info("shutdown signal received", zap.String("signal", sig.String()))
+	case <-c.stopServe:
+		logger.Info("shutdown requested")
 	case e := <-httpErr:
 		// A listener that fails to start (e.g. address already in use) is fatal;
 		// exit non-zero so a process supervisor reports the failure.
@@ -331,8 +336,14 @@ const (
 	adminCertDisabledMsg      = "security.admin_require_client_cert is disabled; a stolen admin token alone grants full administrative access"
 	adminCertEnforcedMsg      = `admin identities must present a client certificate in addition to a bearer token; issue one offline with "parameter-store admin-cert issue NAME --out DIR"`
 	adminCertMissingMsg       = "admin identity has no valid client certificate and cannot authenticate while admin_require_client_cert is enforced; run: parameter-store admin-cert issue <name> --out <dir>"
+	adminCertExpiringMsg      = "admin identity's newest valid client certificate expires soon; an expired certificate is rejected by the TLS handshake itself, so re-issue before then with: parameter-store admin-cert issue <name> --out <dir>"
 	adminCertScanFailedMsg    = "could not check which admin identities have a valid client certificate; admins without one will be refused"
 )
+
+// adminCertExpiryWarning is how far ahead serve warns about an admin
+// certificate's expiry. Two weeks leaves room for a re-issue that needs host
+// access and a browser import.
+const adminCertExpiryWarning = 14 * 24 * time.Hour
 
 // logAdminCertPosture states, at startup, whether an admin needs a client
 // certificate on this server and what the consequence is either way. The three
@@ -344,7 +355,7 @@ const (
 // needs to hear that at boot rather than at their next login. lacking and
 // scanErr come from core.AdminsWithoutValidCert and are only consulted when the
 // requirement is in force; a failed scan is reported, never fatal.
-func logAdminCertPosture(logger *zap.Logger, configured, tlsEnabled, nonLoopback bool, lacking []string, scanErr error) {
+func logAdminCertPosture(logger *zap.Logger, configured, tlsEnabled, nonLoopback bool, lacking []string, expiring []core.ExpiringAdminCert, scanErr error) {
 	switch {
 	case !configured:
 		logger.Warn(adminCertDisabledMsg)
@@ -361,6 +372,10 @@ func logAdminCertPosture(logger *zap.Logger, configured, tlsEnabled, nonLoopback
 		}
 		for _, name := range lacking {
 			logger.Warn(adminCertMissingMsg, zap.String("identity", name))
+		}
+		for _, e := range expiring {
+			logger.Warn(adminCertExpiringMsg, zap.String("identity", e.Name), zap.String("serial", e.Serial),
+				zap.Time("not_after", e.NotAfter), zap.Duration("expires_in", time.Until(e.NotAfter).Round(time.Hour)))
 		}
 	}
 }

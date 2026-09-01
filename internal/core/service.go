@@ -598,6 +598,12 @@ func (s *Service) ReauthorizeWatch(ctx context.Context, pr Principal, namespaces
 		if err := s.reauthToken(ctx, pr); err != nil {
 			return err
 		}
+		// A token-method admin principal can only have been admitted while the
+		// requirement was off; re-running admitAdmin here is defense in depth so
+		// the stream cannot outlive a future change to that rule.
+		if err := s.admitAdmin(ctx, pr); err != nil {
+			return err
+		}
 	case domain.AuthMethodMTLS:
 		id, err := s.store.GetIdentityByName(ctx, pr.Identity.Name)
 		if err != nil || id.Disabled || id.Kind != pr.Identity.Kind {

@@ -3,6 +3,7 @@ package grpcserver
 import (
 	"context"
 	"crypto/tls"
+	"strings"
 	"testing"
 	"time"
 
@@ -12,6 +13,7 @@ import (
 	kmsv1 "github.com/Suhaibinator/kms/gen/kmsv1"
 	"github.com/Suhaibinator/kms/internal/core"
 	"github.com/Suhaibinator/kms/internal/domain"
+	"github.com/Suhaibinator/kms/internal/storage"
 )
 
 // issueAdminCert mints a client certificate for the harness's seeded admin
@@ -100,6 +102,36 @@ func TestAdminCert_MismatchedCredentialsRejected(t *testing.T) {
 	if codeOf(err) != codes.Unauthenticated {
 		t.Fatalf("admin cert + client token: code = %v, want Unauthenticated (%v)", codeOf(err), err)
 	}
+	// The refusal is recorded as a credential mismatch, not as one of the
+	// single-credential failures: an operator reading the audit log has to be
+	// able to tell "two valid credentials naming different identities" (a
+	// replay or a mix-up) from a plain missing certificate.
+	ev := requireAuthFailure(t, env, "credential_mismatch")
+	if ev.ActorIdentity != "" || ev.ActorType != "unknown" {
+		t.Errorf("actor = %q/%q, want unattributed (neither credential may be allowed to win)", ev.ActorIdentity, ev.ActorType)
+	}
+}
+
+// requireAuthFailure returns the one auth.failure deny row whose metadata
+// contains want, failing when there is none.
+func requireAuthFailure(t *testing.T, env *tlsTestEnv, want string) domain.AuditEvent {
+	t.Helper()
+	events, _, err := env.store.ListAudit(context.Background(), domain.AuditFilter{}, storage.ListPage{Limit: 100})
+	if err != nil {
+		t.Fatalf("list audit: %v", err)
+	}
+	var seen []string
+	for _, ev := range events {
+		if ev.EventType != "auth.failure" || ev.Decision != "deny" {
+			continue
+		}
+		if strings.Contains(ev.Metadata, want) {
+			return ev
+		}
+		seen = append(seen, ev.Metadata)
+	}
+	t.Fatalf("no auth.failure deny row containing %q; auth failures recorded: %v", want, seen)
+	return domain.AuditEvent{}
 }
 
 // TestAdminCert_RequirementOffAllowsTokenOnly: with the requirement disabled

@@ -341,6 +341,9 @@ func TestReauthorizeWatchAdminBypassesTightenedGate(t *testing.T) {
 	ctx := context.Background()
 	store := newFakeStore()
 	s := newTestService(store)
+	// This test is about the namespace gate, not the admin credential rule: a
+	// token-method admin stream can only exist while that rule is off.
+	s.SetAdminRequireClientCert(false)
 	store.addNamespace(tns, domain.AuthMethodMTLS)
 	store.addIdentity("root", domain.IdentityKindAdmin, "kms_admin")
 	pr := Principal{
@@ -357,6 +360,8 @@ func TestReauthorizeWatchAdminRejectsRecreatedNamespace(t *testing.T) {
 	ctx := context.Background()
 	store := newFakeStore()
 	s := newTestService(store)
+	// Incarnation binding is under test, not the admin credential rule (see above).
+	s.SetAdminRequireClientCert(false)
 	store.addNamespace(tns, domain.AuthMethodToken)
 	store.addIdentity("root", domain.IdentityKindAdmin, "kms_admin")
 	pr := Principal{

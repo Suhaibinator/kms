@@ -31,6 +31,10 @@ type CLI struct {
 	// lookupEnv reads environment variables; nil means os.LookupEnv. Tests
 	// inject a map so command behaviour never depends on the developer's shell.
 	lookupEnv func(key string) (string, bool)
+	// stopServe, when non-nil, ends a running `serve` as a shutdown signal
+	// would. Tests use it to run the real server wiring in-process; production
+	// leaves it nil (a nil channel never fires).
+	stopServe <-chan struct{}
 	// positionals holds the non-flag arguments collected by the most recent
 	// parseFlags call (flags may be interspersed with positionals).
 	positionals []string

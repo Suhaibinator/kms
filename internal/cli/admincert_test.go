@@ -6,6 +6,8 @@ import (
 	"crypto/elliptic"
 	"crypto/x509"
 	"encoding/pem"
+	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -15,6 +17,7 @@ import (
 	"time"
 
 	kmsv1 "github.com/Suhaibinator/kms/gen/kmsv1"
+	"github.com/Suhaibinator/kms/internal/core"
 	"github.com/Suhaibinator/kms/internal/crypto"
 	"github.com/Suhaibinator/kms/internal/domain"
 	"github.com/Suhaibinator/kms/internal/storage"
@@ -143,6 +146,10 @@ func TestAdminCertIssueEndToEnd(t *testing.T) {
 		if err != nil {
 			t.Fatalf("stat key: %v", err)
 		}
+		// The exact mode is not this command's doing: fileutil.OpenPrivateExclusive
+		// is what creates the key file 0600 (and refuses to reuse an existing
+		// path), and its own suite in internal/fileutil covers the guarantee.
+		// Asserting it here keeps the offline issuance path wired to that helper.
 		if perm := keyInfo.Mode().Perm(); perm != 0o600 {
 			t.Fatalf("private key mode = %o, want 600", perm)
 		}
@@ -888,6 +895,183 @@ func TestIdentityAuthMethods(t *testing.T) {
 		}
 		if strings.Join(got, ",") != strings.Join(test.want, ",") {
 			t.Errorf("identityAuthMethods(%q, %q) = %v, want %v", test.kind, test.auth, got, test.want)
+		}
+	}
+}
+
+// --- publish failures: an admin certificate nobody can use is revoked -------
+
+// localAdminService builds the same Service the offline commands run against:
+// the real store, the unsealed master key, and the built-in CA.
+func localAdminService(t *testing.T, c *testCLI, db, keyFile string) (*core.Service, *storage.SQLStore, func()) {
+	t.Helper()
+	store := openTestStore(t, db)
+	keyring, err := c.unseal(context.Background(), store, keyFile, false)
+	if err != nil {
+		t.Fatalf("unseal: %v", err)
+	}
+	svc := core.New(store, c.quietLogger(), Version)
+	svc.SetKeyring(keyring)
+	if err := svc.BootstrapCA(context.Background()); err != nil {
+		keyring.Active().Destroy()
+		t.Fatalf("bootstrap CA: %v", err)
+	}
+	return svc, store, func() { keyring.Active().Destroy() }
+}
+
+// TestAdminCertIssueKeepsWrittenCredentialsWhenOutputFails: writeCertBundleToOutput
+// writes both files and only then prints, so a broken stdout arrives after the
+// credential is safely on disk. Revoking there would destroy a perfectly good
+// credential over a lost status line, so the certificate stays valid and the
+// error says so.
+func TestAdminCertIssueKeepsWrittenCredentialsWhenOutputFails(t *testing.T) {
+	db, keyFile := initKMS(t, "ops")
+	outDir := t.TempDir()
+
+	c := newTestCLI()
+	c.CLI.Stdout = errorWriter{err: io.ErrClosedPipe}
+	code := c.Run([]string{"admin-cert", "issue", "ops",
+		"--sqlite-path", db, "--kek-file", keyFile, "--out", outDir})
+	if code != 1 {
+		t.Fatalf("exit=%d, want 1; stderr=%s", code, c.stderr())
+	}
+
+	store := openTestStore(t, db)
+	certs := identityCerts(t, store, "ops")
+	if len(certs) != 1 {
+		t.Fatalf("recorded certificates = %+v, want exactly one", certs)
+	}
+	if !certs[0].RevokedAt.IsZero() {
+		t.Fatalf("a fully written credential was revoked because stdout failed: %+v", certs[0])
+	}
+	for _, want := range []string{"remains valid", certs[0].Serial, "were fully written"} {
+		if !strings.Contains(c.stderr(), want) {
+			t.Fatalf("stderr missing %q: %s", want, c.stderr())
+		}
+	}
+	// The operator can still use what was written: both files exist and the
+	// certificate on disk is the one that was recorded.
+	if names := dirEntries(t, outDir); len(names) != 2 {
+		t.Fatalf("output directory = %v, want the certificate and key", names)
+	}
+	written := parsePEMCertificate(t, filepath.Join(outDir, "ops.crt"))
+	if got := strings.ToLower(written.SerialNumber.Text(16)); got != certs[0].Serial {
+		t.Fatalf("written certificate serial = %s, want the recorded %s", got, certs[0].Serial)
+	}
+	if _, ok := parsePEMPrivateKey(t, filepath.Join(outDir, "ops.key")).(*ecdsa.PrivateKey); !ok {
+		t.Fatal("private key was not written")
+	}
+}
+
+// TestPublishAdminCertRevokesWhenTheKeyFileCannotBeWritten: the certificate row
+// is committed before the files are written, so a key file that cannot be
+// completed (a full or read-only volume) would otherwise leave an admin
+// certificate whose private key nobody holds — counted as covering that admin
+// while being useless. It has to be revoked.
+func TestPublishAdminCertRevokesWhenTheKeyFileCannotBeWritten(t *testing.T) {
+	db, keyFile := initKMS(t, "ops")
+	outDir := t.TempDir()
+	ctx := context.Background()
+
+	c := newTestCLI()
+	svc, store, closeCA := localAdminService(t, c, db, keyFile)
+	defer closeCA()
+
+	output, err := reserveCertBundle(outDir, "ops")
+	if err != nil {
+		t.Fatalf("reserveCertBundle: %v", err)
+	}
+	defer output.cleanup()
+	// Closing the reserved key file makes the write fail exactly where a full
+	// volume would, after the certificate has already been issued.
+	if err := output.keyFile.Close(); err != nil {
+		t.Fatalf("close reserved key file: %v", err)
+	}
+
+	bundle, err := svc.IssueLocalAdminCertificate(ctx, localAdminPrincipal(), "ops", 0)
+	if err != nil {
+		t.Fatalf("IssueLocalAdminCertificate: %v", err)
+	}
+	err = c.publishAdminCert(ctx, svc, output, "ops", bundle)
+	if err == nil {
+		t.Fatal("publishing to an unwritable key file succeeded")
+	}
+	if output.published {
+		t.Fatal("a bundle whose key file failed was marked published")
+	}
+	for _, want := range []string{"has been revoked", bundle.Serial, "re-run"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("error %q missing %q", err, want)
+		}
+	}
+	rec, err := store.GetIdentityCertBySerial(ctx, bundle.Serial)
+	if err != nil {
+		t.Fatalf("GetIdentityCertBySerial: %v", err)
+	}
+	if rec.Cert.RevokedAt.IsZero() {
+		t.Fatalf("orphaned certificate %s was left valid: %+v", bundle.Serial, rec.Cert)
+	}
+	// The one-time key was never printed as a fallback: the file was its only
+	// copy, which is exactly why the certificate had to be revoked.
+	if strings.Contains(c.stdout(), "PRIVATE KEY") {
+		t.Fatalf("the one-time private key was printed to stdout: %s", c.stdout())
+	}
+}
+
+// TestOrphanedAdminCertPublishedIsNotRevoked pins the other half of the rule at
+// the unit level: once both files are on disk the credential is intact, and a
+// later failure must never revoke it.
+func TestOrphanedAdminCertPublishedIsNotRevoked(t *testing.T) {
+	db, keyFile := initKMS(t, "ops")
+	ctx := context.Background()
+
+	c := newTestCLI()
+	svc, store, closeCA := localAdminService(t, c, db, keyFile)
+	defer closeCA()
+
+	bundle, err := svc.IssueLocalAdminCertificate(ctx, localAdminPrincipal(), "ops", 0)
+	if err != nil {
+		t.Fatalf("IssueLocalAdminCertificate: %v", err)
+	}
+	output := &reservedCertBundle{certPath: "/out/ops.crt", keyPath: "/out/ops.key", published: true}
+	err = c.orphanedAdminCert(ctx, svc, output, "ops", bundle.Serial, errors.New("writing certificate guidance: broken pipe"))
+	for _, want := range []string{"remains valid", bundle.Serial, "broken pipe"} {
+		if err == nil || !strings.Contains(err.Error(), want) {
+			t.Fatalf("error %v missing %q", err, want)
+		}
+	}
+	rec, err := store.GetIdentityCertBySerial(ctx, bundle.Serial)
+	if err != nil {
+		t.Fatalf("GetIdentityCertBySerial: %v", err)
+	}
+	if !rec.Cert.RevokedAt.IsZero() {
+		t.Fatalf("a published certificate was revoked: %+v", rec.Cert)
+	}
+}
+
+// TestOrphanedAdminCertReportsFailedRevocation: when the best-effort revoke
+// itself fails there is nothing left but to tell the operator the exact command
+// to run. Silence would leave an unusable certificate counted as valid.
+func TestOrphanedAdminCertReportsFailedRevocation(t *testing.T) {
+	db, keyFile := initKMS(t, "ops")
+	ctx := context.Background()
+
+	c := newTestCLI()
+	svc, _, closeCA := localAdminService(t, c, db, keyFile)
+	defer closeCA()
+
+	output := &reservedCertBundle{certPath: "/out/ops.crt", keyPath: "/out/ops.key"}
+	err := c.orphanedAdminCert(ctx, svc, output, "ops", "deadbeef", errors.New("writing private key: no space left on device"))
+	if err == nil {
+		t.Fatal("revoking an unknown serial reported success")
+	}
+	for _, want := range []string{
+		"no space left on device",
+		"revoking it failed",
+		"parameter-store admin-cert revoke ops --serial deadbeef",
+	} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("error %q missing %q", err, want)
 		}
 	}
 }

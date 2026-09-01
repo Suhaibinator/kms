@@ -7,7 +7,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"time"
 
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
@@ -155,15 +154,7 @@ func (c *CLI) createBootstrapAdmin(ctx context.Context, store storage.Store, svc
 	if err != nil {
 		return fmt.Errorf("issuing admin client certificate: %w", err)
 	}
-	// Publish the one-time private key before any further status output.
-	if err := c.writeCertBundleToOutput(output, toProtoCertBundle(bundle)); err != nil {
-		return err
-	}
-	if _, err := fmt.Fprintf(c.Stdout, "Issued admin client certificate for identity %q (expires %s).\n",
-		name, bundle.NotAfter.UTC().Format(time.RFC3339)); err != nil {
-		return fmt.Errorf("writing certificate output: %w", err)
-	}
-	return c.writeAdminCertNextSteps(output, name, bundle.Serial)
+	return c.publishAdminCert(ctx, svc, output, name, bundle)
 }
 
 // --- migrate ---------------------------------------------------------------

@@ -191,21 +191,51 @@ func (c *CLI) cmdAdminCertIssue(args []string) int {
 		if issueErr != nil {
 			return fmt.Errorf("issuing admin client certificate: %w", issueErr)
 		}
-		// Publish the one-time private key before any informational output, so a
-		// broken stdout cannot discard an already-recorded certificate.
-		if err := c.writeCertBundleToOutput(output, toProtoCertBundle(bundle)); err != nil {
-			return err
-		}
-		if _, err := fmt.Fprintf(c.Stdout, "Issued admin client certificate for identity %q (expires %s).\n",
-			name, bundle.NotAfter.UTC().Format(time.RFC3339)); err != nil {
-			return fmt.Errorf("writing certificate output: %w", err)
-		}
-		return c.writeAdminCertNextSteps(output, name, bundle.Serial)
+		return c.publishAdminCert(ctx, svc, output, name, bundle)
 	})
 	if err != nil {
 		return c.fail("%v", err)
 	}
 	return 0
+}
+
+// publishAdminCert writes a freshly issued admin certificate bundle to its
+// reserved files and prints the follow-up guidance. IssueLocalAdminCertificate
+// has already committed the certificate row, so this is the point of no
+// return for the one-time private key: the key file is written before any
+// informational output, so a broken stdout cannot discard a recorded
+// certificate, and a failure before the files are fully written revokes the
+// serial rather than leaving a valid certificate whose key nobody holds.
+func (c *CLI) publishAdminCert(ctx context.Context, svc *core.Service, output *reservedCertBundle, name string, bundle *core.CertBundle) error {
+	if err := c.writeCertBundleToOutput(output, toProtoCertBundle(bundle)); err != nil {
+		return c.orphanedAdminCert(ctx, svc, output, name, bundle.Serial, err)
+	}
+	if _, err := fmt.Fprintf(c.Stdout, "Issued admin client certificate for identity %q (expires %s).\n",
+		name, bundle.NotAfter.UTC().Format(time.RFC3339)); err != nil {
+		return c.orphanedAdminCert(ctx, svc, output, name, bundle.Serial, fmt.Errorf("writing certificate output: %w", err))
+	}
+	if err := c.writeAdminCertNextSteps(output, name, bundle.Serial); err != nil {
+		return c.orphanedAdminCert(ctx, svc, output, name, bundle.Serial, err)
+	}
+	return nil
+}
+
+// orphanedAdminCert turns a publish failure into an actionable error. When the
+// certificate and key files were fully written (output.published) the
+// credential is intact and only the guidance was lost, so the certificate is
+// left valid and named. Otherwise the key is gone for good: revoke the serial
+// (best effort, host-local) so the identity is not reported as certified by a
+// certificate nobody can use, and print the manual revoke command if that
+// fails.
+func (c *CLI) orphanedAdminCert(ctx context.Context, svc *core.Service, output *reservedCertBundle, name, serial string, cause error) error {
+	if output != nil && output.published {
+		return fmt.Errorf("%w (certificate %s was written and remains valid)", cause, serial)
+	}
+	if rerr := svc.RevokeIdentityCertificate(ctx, localAdminPrincipal(), name, serial); rerr != nil {
+		return fmt.Errorf("%w; certificate %s was recorded but its private key was not written, and revoking it failed (%v) — run: parameter-store admin-cert revoke %s --serial %s",
+			cause, serial, rerr, name, serial)
+	}
+	return fmt.Errorf("%w; certificate %s was recorded but its private key was not written, so it has been revoked — re-run the command", cause, serial)
 }
 
 // toProtoCertBundle renders a locally issued bundle in the shape the gRPC path

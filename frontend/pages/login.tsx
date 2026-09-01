@@ -22,7 +22,7 @@ export default function LoginPage() {
   const [submitted, setSubmitted] = useState(false);
   // Why the last attempt failed, shown under the field; cleared on edit.
   const [authError, setAuthError] = useState<string | null>(null);
-  // Unauthenticated server posture, used only to explain a missing client
+  // Unauthenticated server posture, used only to explain the client
   // certificate. Null until it loads, and null forever if it cannot: health is
   // advisory here, never a precondition for using the form.
   const [health, setHealth] = useState<HealthResponse | null>(null);
@@ -59,6 +59,12 @@ export default function LoginPage() {
   // tokens are unaffected, which is why this is a notice and not a blocker.
   const certMissing = health?.admin_client_cert_required === true && !health.client_cert_presented;
 
+  // A certificate was presented, but presenting one is not the same as it being
+  // accepted for the identity behind the token: it may be revoked, replaced by
+  // a newer enrolment, or issued for someone else entirely.
+  const certPresented =
+    health?.admin_client_cert_required === true && health.client_cert_presented === true;
+
   const missingToken = submitted && !token.trim();
 
   async function onSubmit(e: React.FormEvent) {
@@ -88,13 +94,18 @@ export default function LoginPage() {
           "Server unavailable",
         );
       } else if (status === 401 || code === "invalid_credentials") {
-        // The server answers every bad credential the same way, so the missing
-        // certificate can only ever be named as a possibility, never as a fact.
-        setAuthError(
-          certMissing
-            ? "That token was not recognised — or it belongs to an administrator and this browser presented no client certificate."
-            : "That token was not recognised. Check it was copied completely.",
-        );
+        // The server answers every bad credential the same way and never says
+        // which one failed, so the certificate — absent or rejected — can only
+        // ever be named as a possibility, never as a diagnosis.
+        let message = "That token was not recognised. Check it was copied completely.";
+        if (certMissing) {
+          message =
+            "That token was not recognised — or it belongs to an administrator and this browser presented no client certificate.";
+        } else if (certPresented) {
+          message =
+            "That token was not recognised — or the client certificate this browser presented is not valid for that administrator (revoked, replaced, or issued for another identity).";
+        }
+        setAuthError(message);
         toast.error(err, "Sign-in failed");
       } else {
         toast.error(err, "Sign-in failed");

@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"regexp"
-	"slices"
 	"strconv"
 	"time"
 
@@ -518,37 +517,71 @@ func (s *Service) IssueLocalAdminCertificate(ctx context.Context, pr Principal, 
 	return bundle, nil
 }
 
-// AdminsWithoutValidCert lists enabled admin-kind identities that hold no
-// currently valid (enrolled, unrevoked, unexpired) client certificate. serve
-// warns about them at startup while the admin client-certificate requirement
-// is enforced, since they cannot authenticate until one is issued offline. It
-// is for trusted in-process callers: not principal-gated, not exposed by any
+// ExpiringAdminCert names an enabled admin whose newest valid client
+// certificate expires soon, so an operator can re-issue it before the TLS
+// handshake starts rejecting it.
+type ExpiringAdminCert struct {
+	Name     string
+	Serial   string
+	NotAfter time.Time
+}
+
+// AdminCertReport describes the certificate posture of admin-kind identities:
+// lacking lists enabled admins with no currently valid (enrolled, unrevoked,
+// unexpired) certificate — they cannot authenticate while the requirement is
+// enforced — and expiring lists enabled admins whose newest valid certificate
+// expires within `within` (0 disables that check). An expired certificate is
+// rejected by the TLS handshake itself, before core can explain anything, so
+// the warning has to come ahead of time. serve logs both at startup. For
+// trusted in-process callers only: not principal-gated, not exposed by any
 // transport.
-func (s *Service) AdminsWithoutValidCert(ctx context.Context) ([]string, error) {
+func (s *Service) AdminCertReport(ctx context.Context, within time.Duration) (lacking []string, expiring []ExpiringAdminCert, err error) {
 	now := s.now()
 	valid := func(c domain.IdentityCert) bool {
 		return c.RevokedAt.IsZero() && (c.NotAfter.IsZero() || now.Before(c.NotAfter))
 	}
-	var lacking []string
 	token := ""
 	for {
-		ids, next, err := s.store.ListIdentities(ctx, storage.ListPage{Limit: 1000, Token: token})
-		if err != nil {
-			return nil, err
+		ids, next, lerr := s.store.ListIdentities(ctx, storage.ListPage{Limit: 1000, Token: token})
+		if lerr != nil {
+			return nil, nil, lerr
 		}
 		for _, id := range ids {
 			if id.Kind != domain.IdentityKindAdmin || id.Disabled {
 				continue
 			}
-			if !slices.ContainsFunc(id.Certs, valid) {
+			// The newest valid certificate decides: an admin mid-rollover holds
+			// an old and a new one, and only the later expiry matters.
+			var newest *domain.IdentityCert
+			for i := range id.Certs {
+				c := &id.Certs[i]
+				if !valid(*c) {
+					continue
+				}
+				if newest == nil || c.NotAfter.IsZero() || (!newest.NotAfter.IsZero() && c.NotAfter.After(newest.NotAfter)) {
+					newest = c
+				}
+			}
+			switch {
+			case newest == nil:
 				lacking = append(lacking, id.Name)
+			case within > 0 && !newest.NotAfter.IsZero() && newest.NotAfter.Before(now.Add(within)):
+				expiring = append(expiring, ExpiringAdminCert{Name: id.Name, Serial: newest.Serial, NotAfter: newest.NotAfter})
 			}
 		}
 		if next == "" || next == token {
-			return lacking, nil
+			return lacking, expiring, nil
 		}
 		token = next
 	}
+}
+
+// AdminsWithoutValidCert lists enabled admin-kind identities that hold no
+// currently valid client certificate. It is AdminCertReport without the
+// expiry look-ahead.
+func (s *Service) AdminsWithoutValidCert(ctx context.Context) ([]string, error) {
+	lacking, _, err := s.AdminCertReport(ctx, 0)
+	return lacking, err
 }
 
 // issueCert mints a certificate via the built-in CA and records it. The caller

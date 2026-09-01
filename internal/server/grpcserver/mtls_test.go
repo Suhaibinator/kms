@@ -286,4 +286,25 @@ func TestPeerCertFromContext(t *testing.T) {
 	if got := peerCertFromContext(ctx); got != nil {
 		t.Fatalf("TLS peer without cert: got %v, want nil", got)
 	}
+	// A certificate that was presented but never chain-verified is not a
+	// credential. Under VerifyClientCertIfGiven the TLS stack fills both fields
+	// together, but a future listener mode (RequestClientCert) would present a
+	// leaf with no verified chain, and that must never authenticate anyone.
+	ctx = peer.NewContext(context.Background(), &peer.Peer{
+		AuthInfo: credentials.TLSInfo{State: tls.ConnectionState{
+			PeerCertificates: []*x509.Certificate{{}},
+		}},
+	})
+	if got := peerCertFromContext(ctx); got != nil {
+		t.Fatalf("unverified chain: got %v, want nil", got)
+	}
+	// The mirror case: a verified chain with no leaf to attribute it to.
+	ctx = peer.NewContext(context.Background(), &peer.Peer{
+		AuthInfo: credentials.TLSInfo{State: tls.ConnectionState{
+			VerifiedChains: [][]*x509.Certificate{{{}}},
+		}},
+	})
+	if got := peerCertFromContext(ctx); got != nil {
+		t.Fatalf("verified chain without a leaf: got %v, want nil", got)
+	}
 }

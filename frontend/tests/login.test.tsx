@@ -229,6 +229,26 @@ describe("LoginPage", () => {
     );
   });
 
+  it("names the presented certificate as a possible cause when one was presented and sign-in still fails", async () => {
+    mocks.health.mockResolvedValue(
+      health({ admin_client_cert_required: true, client_cert_presented: true }),
+    );
+    mocks.login.mockRejectedValue(new ApiError("invalid_credentials", "nope", 401));
+
+    render(<LoginPage />);
+    await waitFor(() => expect(mocks.health).toHaveBeenCalled());
+    submit("kms_admin_token");
+
+    // Presenting a certificate is not the same as it being accepted, and the
+    // generic 401 cannot tell them apart — so the copy must not blame the token
+    // alone when a certificate was on the connection.
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "That token was not recognised — or the client certificate this browser presented is not valid for that administrator (revoked, replaced, or issued for another identity).",
+    );
+    // The notice is only for a *missing* certificate: one was presented here.
+    expect(screen.queryByText(CERT_NOTICE)).toBeNull();
+  });
+
   it("skips the form when a session is already stored", async () => {
     mocks.token = "already-signed-in";
     mocks.query = { returnTo: "/audit" };

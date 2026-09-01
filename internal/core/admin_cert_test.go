@@ -8,12 +8,16 @@ import (
 	"crypto/x509"
 	"encoding/pem"
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
 	"time"
 
+	"go.uber.org/zap"
+
 	"github.com/Suhaibinator/kms/internal/domain"
+	"github.com/Suhaibinator/kms/internal/storage"
 )
 
 // parsePrivateKeyPEM decodes a one-time issuance key bundle (PKCS#8).
@@ -372,5 +376,299 @@ func TestAdminsWithoutValidCertHonorsServiceClock(t *testing.T) {
 	}
 	if !slices.Equal(got, []string{"ops"}) {
 		t.Fatalf("after expiry = %v, want [ops]", got)
+	}
+}
+
+// --- AdminCertReport --------------------------------------------------------
+
+// reportFixture builds a service whose clock is pinned to `now`, so certificate
+// expiry is exercised against an exact instant rather than wall-clock timing.
+func reportFixture(t *testing.T, now time.Time) (*Service, *fakeStore) {
+	t.Helper()
+	store := newFakeStore()
+	s := newTestService(store)
+	withCA(t, s)
+	s.now = func() time.Time { return now }
+	return s, store
+}
+
+// addAdminCert enrolls a certificate row for an existing identity. It bypasses
+// the CA so a test can name the exact serial and expiry it wants to assert on.
+func addAdminCert(t *testing.T, store *fakeStore, name, serial string, notAfter time.Time) domain.IdentityCert {
+	t.Helper()
+	cert := domain.IdentityCert{
+		Serial:      serial,
+		Fingerprint: fmt.Sprintf("%064s", serial),
+		NotAfter:    notAfter,
+		CreatedAt:   time.Now(),
+	}
+	if err := store.InsertIdentityCert(context.Background(), name, cert); err != nil {
+		t.Fatalf("InsertIdentityCert(%s, %s): %v", name, serial, err)
+	}
+	return cert
+}
+
+// expiringNames returns the reported identity names, so a test can assert the
+// set without depending on store iteration order.
+func expiringNames(expiring []ExpiringAdminCert) []string {
+	out := make([]string, 0, len(expiring))
+	for _, e := range expiring {
+		out = append(out, e.Name)
+	}
+	slices.Sort(out)
+	return out
+}
+
+const reportWindow = 14 * 24 * time.Hour
+
+// TestAdminCertReportExpiring covers the look-ahead serve uses at startup: an
+// expired certificate is rejected by the TLS handshake itself, so the operator
+// has to hear about it before that happens.
+func TestAdminCertReportExpiring(t *testing.T) {
+	ctx := context.Background()
+	now := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
+
+	t.Run("within the window is flagged with its serial and expiry", func(t *testing.T) {
+		s, store := reportFixture(t, now)
+		store.addIdentity("ops", domain.IdentityKindAdmin, "kms_ops")
+		notAfter := now.Add(3 * 24 * time.Hour)
+		addAdminCert(t, store, "ops", "abc1", notAfter)
+
+		lacking, expiring, err := s.AdminCertReport(ctx, reportWindow)
+		if err != nil {
+			t.Fatalf("AdminCertReport: %v", err)
+		}
+		if len(lacking) != 0 {
+			t.Fatalf("lacking = %v, want none (the certificate is still valid)", lacking)
+		}
+		if len(expiring) != 1 {
+			t.Fatalf("expiring = %+v, want exactly one", expiring)
+		}
+		if expiring[0].Name != "ops" || expiring[0].Serial != "abc1" || !expiring[0].NotAfter.Equal(notAfter) {
+			t.Fatalf("expiring[0] = %+v, want ops/abc1/%v", expiring[0], notAfter)
+		}
+	})
+
+	t.Run("beyond the window is not flagged", func(t *testing.T) {
+		s, store := reportFixture(t, now)
+		store.addIdentity("ops", domain.IdentityKindAdmin, "kms_ops")
+		addAdminCert(t, store, "ops", "abc1", now.Add(30*24*time.Hour))
+
+		lacking, expiring, err := s.AdminCertReport(ctx, reportWindow)
+		if err != nil || len(lacking) != 0 || len(expiring) != 0 {
+			t.Fatalf("AdminCertReport = %v, %+v, %v; want nothing reported", lacking, expiring, err)
+		}
+	})
+
+	// Mid-rollover an admin holds the certificate it is retiring and the one it
+	// has just imported. Only the later expiry matters; warning on the older one
+	// would train operators to ignore the warning.
+	t.Run("the newest valid certificate decides", func(t *testing.T) {
+		s, store := reportFixture(t, now)
+		store.addIdentity("ops", domain.IdentityKindAdmin, "kms_ops")
+		addAdminCert(t, store, "ops", "old1", now.Add(2*24*time.Hour))
+		addAdminCert(t, store, "ops", "new1", now.Add(60*24*time.Hour))
+
+		lacking, expiring, err := s.AdminCertReport(ctx, reportWindow)
+		if err != nil || len(lacking) != 0 || len(expiring) != 0 {
+			t.Fatalf("AdminCertReport = %v, %+v, %v; want nothing reported (the new certificate covers the admin)", lacking, expiring, err)
+		}
+	})
+
+	t.Run("a never-expiring certificate is neither lacking nor expiring", func(t *testing.T) {
+		s, store := reportFixture(t, now)
+		store.addIdentity("ops", domain.IdentityKindAdmin, "kms_ops")
+		addAdminCert(t, store, "ops", "forever", time.Time{})
+
+		lacking, expiring, err := s.AdminCertReport(ctx, reportWindow)
+		if err != nil || len(lacking) != 0 || len(expiring) != 0 {
+			t.Fatalf("AdminCertReport = %v, %+v, %v; want nothing reported", lacking, expiring, err)
+		}
+	})
+
+	// A never-expiring certificate must also win against an expiring one, so an
+	// admin holding both is not warned about the one it no longer needs.
+	t.Run("a never-expiring certificate outranks an expiring one", func(t *testing.T) {
+		s, store := reportFixture(t, now)
+		store.addIdentity("ops", domain.IdentityKindAdmin, "kms_ops")
+		addAdminCert(t, store, "ops", "soon", now.Add(time.Hour))
+		addAdminCert(t, store, "ops", "forever", time.Time{})
+
+		_, expiring, err := s.AdminCertReport(ctx, reportWindow)
+		if err != nil || len(expiring) != 0 {
+			t.Fatalf("expiring = %+v, %v; want none", expiring, err)
+		}
+	})
+
+	// within == 0 is the AdminsWithoutValidCert mode: report who cannot
+	// authenticate at all, never who will stop being able to.
+	t.Run("within zero disables the expiry check", func(t *testing.T) {
+		s, store := reportFixture(t, now)
+		store.addIdentity("ops", domain.IdentityKindAdmin, "kms_ops")
+		addAdminCert(t, store, "ops", "abc1", now.Add(time.Minute))
+
+		lacking, expiring, err := s.AdminCertReport(ctx, 0)
+		if err != nil || len(lacking) != 0 || len(expiring) != 0 {
+			t.Fatalf("AdminCertReport(0) = %v, %+v, %v; want nothing reported", lacking, expiring, err)
+		}
+	})
+
+	t.Run("an already expired certificate is lacking, not expiring", func(t *testing.T) {
+		s, store := reportFixture(t, now)
+		store.addIdentity("ops", domain.IdentityKindAdmin, "kms_ops")
+		addAdminCert(t, store, "ops", "gone", now.Add(-time.Hour))
+
+		lacking, expiring, err := s.AdminCertReport(ctx, reportWindow)
+		if err != nil {
+			t.Fatalf("AdminCertReport: %v", err)
+		}
+		if !slices.Equal(lacking, []string{"ops"}) || len(expiring) != 0 {
+			t.Fatalf("AdminCertReport = %v, %+v; want lacking [ops] and no expiring entry", lacking, expiring)
+		}
+	})
+
+	t.Run("a revoked certificate leaves the admin lacking", func(t *testing.T) {
+		s, store := reportFixture(t, now)
+		cert, _ := issueAdminCert(t, s, store, "ops")
+		if err := s.RevokeIdentityCertificate(ctx, adminPrincipal(), "ops", CertSerial(cert)); err != nil {
+			t.Fatalf("RevokeIdentityCertificate: %v", err)
+		}
+
+		lacking, expiring, err := s.AdminCertReport(ctx, reportWindow)
+		if err != nil {
+			t.Fatalf("AdminCertReport: %v", err)
+		}
+		if !slices.Equal(lacking, []string{"ops"}) || len(expiring) != 0 {
+			t.Fatalf("AdminCertReport = %v, %+v; want lacking [ops]", lacking, expiring)
+		}
+	})
+
+	// A disabled admin cannot authenticate by any credential, and a client
+	// identity is outside the admin requirement entirely: neither is the
+	// operator's problem at startup.
+	t.Run("disabled admins and client identities are ignored", func(t *testing.T) {
+		s, store := reportFixture(t, now)
+		store.addIdentity("retired", domain.IdentityKindAdmin, "kms_retired")
+		addAdminCert(t, store, "retired", "ret1", now.Add(time.Hour))
+		if err := store.SetIdentityDisabled(ctx, "retired", true); err != nil {
+			t.Fatalf("SetIdentityDisabled: %v", err)
+		}
+		store.addIdentity("app", domain.IdentityKindClient, "kms_app")
+		addAdminCert(t, store, "app", "app1", now.Add(time.Hour))
+		store.addIdentity("bare-client", domain.IdentityKindClient, "kms_bare_client")
+
+		lacking, expiring, err := s.AdminCertReport(ctx, reportWindow)
+		if err != nil || len(lacking) != 0 || len(expiring) != 0 {
+			t.Fatalf("AdminCertReport = %v, %+v, %v; want nothing reported", lacking, expiring, err)
+		}
+	})
+
+	t.Run("lacking and expiring are reported together", func(t *testing.T) {
+		s, store := reportFixture(t, now)
+		store.addIdentity("bare", domain.IdentityKindAdmin, "kms_bare")
+		store.addIdentity("soon", domain.IdentityKindAdmin, "kms_soon")
+		addAdminCert(t, store, "soon", "soon1", now.Add(24*time.Hour))
+		store.addIdentity("covered", domain.IdentityKindAdmin, "kms_covered")
+		addAdminCert(t, store, "covered", "cov1", now.Add(90*24*time.Hour))
+
+		lacking, expiring, err := s.AdminCertReport(ctx, reportWindow)
+		if err != nil {
+			t.Fatalf("AdminCertReport: %v", err)
+		}
+		slices.Sort(lacking)
+		if !slices.Equal(lacking, []string{"bare"}) {
+			t.Fatalf("lacking = %v, want [bare]", lacking)
+		}
+		if !slices.Equal(expiringNames(expiring), []string{"soon"}) {
+			t.Fatalf("expiring = %+v, want only soon", expiring)
+		}
+	})
+}
+
+// TestAdminsWithoutValidCertWrapsReport pins that the narrower helper is the
+// report with the look-ahead switched off, so the two cannot drift.
+func TestAdminsWithoutValidCertWrapsReport(t *testing.T) {
+	ctx := context.Background()
+	now := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
+	s, store := reportFixture(t, now)
+	store.addIdentity("bare", domain.IdentityKindAdmin, "kms_bare")
+	store.addIdentity("soon", domain.IdentityKindAdmin, "kms_soon")
+	addAdminCert(t, store, "soon", "soon1", now.Add(time.Hour))
+
+	got, err := s.AdminsWithoutValidCert(ctx)
+	if err != nil {
+		t.Fatalf("AdminsWithoutValidCert: %v", err)
+	}
+	if !slices.Equal(got, []string{"bare"}) {
+		t.Fatalf("AdminsWithoutValidCert = %v, want [bare] (an expiring certificate is still a valid one)", got)
+	}
+}
+
+// pagedIdentityStore serves ListIdentities one page at a time. The unpaged
+// fakeStore would let a report that ignored the continuation token pass, and
+// the real SQLite store only pages past 1000 identities — far too slow to seed
+// in a unit test.
+type pagedIdentityStore struct {
+	*fakeStore
+	pageSize int
+	pages    int
+}
+
+func (p *pagedIdentityStore) ListIdentities(ctx context.Context, page storage.ListPage) ([]domain.Identity, string, error) {
+	all, _, err := p.fakeStore.ListIdentities(ctx, storage.ListPage{})
+	if err != nil {
+		return nil, "", err
+	}
+	start := 0
+	if page.Token != "" {
+		for i, id := range all {
+			if id.Name == page.Token {
+				start = i + 1
+				break
+			}
+		}
+	}
+	end := min(start+p.pageSize, len(all))
+	p.pages++
+	if end < len(all) {
+		return all[start:end], all[end-1].Name, nil
+	}
+	return all[start:end], "", nil
+}
+
+// TestAdminCertReportPagesThroughIdentities proves the scan follows the
+// continuation token: an admin on the last page is reported exactly like one on
+// the first.
+func TestAdminCertReportPagesThroughIdentities(t *testing.T) {
+	ctx := context.Background()
+	now := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
+	backing := newFakeStore()
+	store := &pagedIdentityStore{fakeStore: backing, pageSize: 2}
+	s := New(store, zap.NewNop(), "test")
+	withCA(t, s)
+	s.now = func() time.Time { return now }
+
+	// Sorted by name: a1 (lacking), a2 (covered), a3 (expiring), a4 (lacking).
+	// With pageSize 2 each lands on a different page.
+	backing.addIdentity("a1", domain.IdentityKindAdmin, "kms_a1")
+	backing.addIdentity("a2", domain.IdentityKindAdmin, "kms_a2")
+	addAdminCert(t, backing, "a2", "a2cert", now.Add(90*24*time.Hour))
+	backing.addIdentity("a3", domain.IdentityKindAdmin, "kms_a3")
+	addAdminCert(t, backing, "a3", "a3cert", now.Add(24*time.Hour))
+	backing.addIdentity("a4", domain.IdentityKindAdmin, "kms_a4")
+
+	lacking, expiring, err := s.AdminCertReport(ctx, reportWindow)
+	if err != nil {
+		t.Fatalf("AdminCertReport: %v", err)
+	}
+	slices.Sort(lacking)
+	if !slices.Equal(lacking, []string{"a1", "a4"}) {
+		t.Fatalf("lacking = %v, want [a1 a4]", lacking)
+	}
+	if !slices.Equal(expiringNames(expiring), []string{"a3"}) {
+		t.Fatalf("expiring = %+v, want only a3", expiring)
+	}
+	if store.pages < 2 {
+		t.Fatalf("ListIdentities was called %d time(s); the fixture must serve more than one page", store.pages)
 	}
 }

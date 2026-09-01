@@ -6,6 +6,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Suhaibinator/kms/internal/crypto"
 	"github.com/Suhaibinator/kms/internal/domain"
@@ -461,8 +462,10 @@ func TestReauthorizeWatchAdminCertAndToken(t *testing.T) {
 		if err := s.RevokeIdentity(ctx, adminPrincipal(), "ops"); err != nil {
 			t.Fatalf("RevokeIdentity: %v", err)
 		}
-		if err := s.ReauthorizeWatch(ctx, pr); err == nil {
-			t.Fatal("reauth after disabling the admin identity succeeded, want an error")
+		// The stream must fail on the credential, not merely on some later
+		// authorization step: a disabled identity is no longer authenticated.
+		if err := s.ReauthorizeWatch(ctx, pr); !errors.Is(err, domain.ErrUnauthenticated) {
+			t.Fatalf("reauth after disabling the admin identity err = %v, want ErrUnauthenticated", err)
 		}
 	})
 
@@ -510,5 +513,102 @@ func TestReauthorizeWatchClientCertIgnoresTokenRotation(t *testing.T) {
 	}
 	if err := s.ReauthorizeWatch(ctx, pr); err != nil {
 		t.Fatalf("client mTLS reauth after token rotation = %v, want nil (the certificate admitted it)", err)
+	}
+}
+
+// --- admin admission: a broken certificate is not half a credential ---------
+
+// TestResolvePrincipalAdminBrokenCertificateWithValidToken covers the states an
+// admin certificate degrades into. In each of them the bearer token is still
+// perfectly valid, so what stops the login is the client-certificate
+// requirement alone — exactly the case a stolen token has to hit.
+func TestResolvePrincipalAdminBrokenCertificateWithValidToken(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("revoked certificate", func(t *testing.T) {
+		s, store, cert, token := adminCertFixture(t, "ops")
+		if err := s.RevokeIdentityCertificate(ctx, adminPrincipal(), "ops", CertSerial(cert)); err != nil {
+			t.Fatalf("RevokeIdentityCertificate: %v", err)
+		}
+
+		pr, err := s.ResolvePrincipal(ctx, CredentialInput{Token: token, PeerCert: cert, RemoteAddr: "10.0.0.9"})
+		if !errors.Is(err, domain.ErrUnauthenticated) {
+			t.Fatalf("err = %v, want ErrUnauthenticated", err)
+		}
+		if pr.Identity.Name != "" {
+			t.Fatalf("denied principal must be zero-valued, got %+v", pr)
+		}
+		// The revoked certificate is dropped, leaving a token-only admin; the
+		// requirement is what refuses it, and the audit says so.
+		ev := requireLastAudit(t, store, "auth.failure", "deny")
+		if ev.ActorIdentity != "ops" {
+			t.Errorf("actor = %q, want ops", ev.ActorIdentity)
+		}
+		assertMetadata(t, ev, `"reason":"admin_client_cert_required"`, `"method":"token"`)
+	})
+
+	t.Run("expired certificate", func(t *testing.T) {
+		s, store, cert, token := adminCertFixture(t, "ops")
+		rec, err := store.GetIdentityCertBySerial(ctx, CertSerial(cert))
+		if err != nil {
+			t.Fatalf("GetIdentityCertBySerial: %v", err)
+		}
+		s.now = func() time.Time { return rec.Cert.NotAfter.Add(time.Hour) }
+
+		if _, err := s.ResolvePrincipal(ctx, CredentialInput{Token: token, PeerCert: cert}); !errors.Is(err, domain.ErrUnauthenticated) {
+			t.Fatalf("err = %v, want ErrUnauthenticated", err)
+		}
+		assertMetadata(t, requireLastAudit(t, store, "auth.failure", "deny"),
+			`"reason":"admin_client_cert_required"`, `"method":"token"`)
+	})
+
+	t.Run("disabled admin holding both credentials", func(t *testing.T) {
+		s, store, cert, token := adminCertFixture(t, "ops")
+		if err := s.RevokeIdentity(ctx, adminPrincipal(), "ops"); err != nil {
+			t.Fatalf("RevokeIdentity: %v", err)
+		}
+
+		pr, err := s.ResolvePrincipal(ctx, CredentialInput{Token: token, PeerCert: cert})
+		if !errors.Is(err, domain.ErrUnauthenticated) {
+			t.Fatalf("err = %v, want ErrUnauthenticated", err)
+		}
+		if pr.Identity.Name != "" {
+			t.Fatalf("denied principal must be zero-valued, got %+v", pr)
+		}
+		// Neither credential survives verification, so the identity was never
+		// proven and the failure must not be attributed to it.
+		ev := requireLastAudit(t, store, "auth.failure", "deny")
+		if ev.ActorIdentity != "" || ev.ActorType != "unknown" {
+			t.Errorf("actor = %q/%q, want unattributed", ev.ActorIdentity, ev.ActorType)
+		}
+		if strings.Contains(ev.Metadata, "admin_client_cert_required") {
+			t.Errorf("a disabled identity was refused as a certificate-requirement failure: %s", ev.Metadata)
+		}
+	})
+}
+
+// TestReauthorizeWatchTokenAdminHonorsRequirementChange covers the token branch
+// of ReauthorizeWatch: a stream opened while the requirement was off must not
+// outlive it being turned on, because a token-only admin could never open one
+// under enforcement.
+func TestReauthorizeWatchTokenAdminHonorsRequirementChange(t *testing.T) {
+	ctx := context.Background()
+	s, _, _, token := adminCertFixture(t, "ops")
+	s.SetAdminRequireClientCert(false)
+
+	pr, err := s.ResolvePrincipal(ctx, CredentialInput{Token: token})
+	if err != nil {
+		t.Fatalf("relaxed admin login: %v", err)
+	}
+	if pr.Method != domain.AuthMethodToken {
+		t.Fatalf("method = %q, want token", pr.Method)
+	}
+	if err := s.ReauthorizeWatch(ctx, pr); err != nil {
+		t.Fatalf("reauth with the requirement off = %v, want nil", err)
+	}
+
+	s.SetAdminRequireClientCert(true)
+	if err := s.ReauthorizeWatch(ctx, pr); !errors.Is(err, domain.ErrUnauthenticated) {
+		t.Fatalf("reauth with the requirement on err = %v, want ErrUnauthenticated", err)
 	}
 }

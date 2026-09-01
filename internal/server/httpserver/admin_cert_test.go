@@ -9,6 +9,7 @@ import (
 	"encoding/pem"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/Suhaibinator/kms/internal/core"
@@ -193,5 +194,78 @@ func TestAdminCertHTTP_HealthReportsPosture(t *testing.T) {
 	body = health(cert)
 	if body["admin_client_cert_required"] != true || body["client_cert_presented"] != true {
 		t.Fatalf("health with a certificate = %v", body)
+	}
+}
+
+// --- the transport refuses what only the offline CLI may do -----------------
+
+// TestAdminCertHTTP_CreateAdminIdentityRejectsMTLS: the online API must never
+// mint an admin certificate, so asking for one is an argument error rather than
+// a silently token-only identity.
+func TestAdminCertHTTP_CreateAdminIdentityRejectsMTLS(t *testing.T) {
+	e, cert := newAdminCertEnv(t)
+
+	for _, methods := range [][]string{{"mtls"}, {"token", "mtls"}} {
+		w := e.request(t, http.MethodPost, "/api/v1/identities", e.adminToken, map[string]any{
+			"name": "ops", "kind": domain.IdentityKindAdmin, "auth_methods": methods,
+		}, cert)
+		mustStatus(t, w, http.StatusBadRequest)
+		if got := errCode(t, w); got != "invalid_argument" {
+			t.Fatalf("auth_methods %v: code = %s, want invalid_argument", methods, got)
+		}
+	}
+}
+
+// TestAdminCertHTTP_CreateAdminIdentityMintsTokenOnly: the accepted shape. The
+// new admin gets a bearer token and no certificate — it collects that offline,
+// on the server host.
+func TestAdminCertHTTP_CreateAdminIdentityMintsTokenOnly(t *testing.T) {
+	e, cert := newAdminCertEnv(t)
+
+	w := e.request(t, http.MethodPost, "/api/v1/identities", e.adminToken, map[string]any{
+		"name": "ops", "kind": domain.IdentityKindAdmin,
+	}, cert)
+	mustStatus(t, w, http.StatusOK)
+	body := decodeBody(t, w)
+	if token, _ := body["token"].(string); token == "" {
+		t.Fatalf("response carries no bearer token: %v", body)
+	}
+	if _, ok := body["cert"]; ok {
+		t.Fatalf("admin identity received a client certificate over the network: %v", body)
+	}
+}
+
+// TestAdminCertHTTP_IssueCertRefusesAdminTarget: an attacker holding both live
+// admin credentials still cannot mint a durable new one over the network.
+func TestAdminCertHTTP_IssueCertRefusesAdminTarget(t *testing.T) {
+	e, cert := newAdminCertEnv(t)
+
+	w := e.request(t, http.MethodPost, "/api/v1/identities/issue-cert", e.adminToken,
+		map[string]any{"name": "admin"}, cert)
+	mustStatus(t, w, http.StatusForbidden)
+	if got := errCode(t, w); got != "permission_denied" {
+		t.Fatalf("code = %s, want permission_denied", got)
+	}
+	if body := w.Body.String(); !strings.Contains(body, "admin-cert issue") {
+		t.Fatalf("refusal does not name the offline command: %s", body)
+	}
+}
+
+// TestAdminCertHTTP_LoginWithoutTokenRejected: a certificate alone never signs
+// anyone in, even on a connection that presented a perfectly valid one. The
+// console's own sign-in probe has to carry the token.
+func TestAdminCertHTTP_LoginWithoutTokenRejected(t *testing.T) {
+	e, cert := newAdminCertEnv(t)
+
+	for name, body := range map[string]any{
+		"empty token":   map[string]any{"token": ""},
+		"blank token":   map[string]any{"token": "   "},
+		"token omitted": map[string]any{},
+	} {
+		w := e.request(t, http.MethodPost, "/api/v1/auth/login", "", body, cert)
+		mustStatus(t, w, http.StatusUnauthorized)
+		if got := errCode(t, w); got != "unauthenticated" {
+			t.Fatalf("%s: code = %s, want unauthenticated", name, got)
+		}
 	}
 }

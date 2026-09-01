@@ -1031,9 +1031,15 @@ derives its TLS config from the same `listenertls.Build` as gRPC, so a browser
 is *offered* the built-in CA and may present an administrator's certificate,
 but one is never demanded at the handshake — an unauthenticated visitor must
 still be able to reach the login page and `GET /api/v1/health`. A browser with
-no matching certificate connects normally and is refused (if it is an admin)
-by the core admission rule, not by a handshake error. Admins therefore need no
-reverse proxy to authenticate with a certificate; see
+no matching certificate connects normally and, if it presents an admin token,
+is refused by the core admission rule. The handshake *does* reject a presented
+certificate that the client-CA pool cannot verify — **expired**, not yet valid,
+or issued by another CA: the browser or CLI then fails at the TLS layer with a
+certificate error and never reaches the login page or the console's notice,
+until the certificate is removed from the keystore or replaced. Revocation is
+the other way round: a revoked certificate still passes the handshake
+(revocation is a database check) and core refuses it. Admins need no reverse
+proxy to authenticate with a certificate; see
 [Admin credentials and browser setup](#admin-credentials-and-browser-setup).
 
 **A TLS-terminating reverse proxy in front of the HTTP listener turns the
@@ -1299,9 +1305,13 @@ its token as well.
 TTL; `--ttl 365d` is available if that cadence is impractical. There is no
 automatic renewal and no online self-service path, so track `not_after` (the
 `admin-cert list` `EXPIRES` column) and re-issue ahead of expiry. An admin
-whose certificate has expired is locked out exactly like one who never had
-it — `serve` will name them at the next restart, but nothing warns before
-expiry.
+whose certificate has expired is locked out *harder* than one who never had
+it: the expired certificate is rejected by the TLS handshake itself, so their
+browser and CLI cannot even reach the login page until it is removed from the
+keystore or replaced. `serve` warns at startup about every enabled admin whose
+newest valid certificate expires within 14 days (naming the identity and
+serial) as well as every admin who has none; re-issue and import the new
+certificate before the old one lapses.
 
 ## Backups
 
