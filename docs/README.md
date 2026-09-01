@@ -60,6 +60,3 @@ current API or operational contracts.
 - [`sdk-typescript-plan.md`](sdk-typescript-plan.md) and
   [`sdk-typescript-review-ledger.md`](sdk-typescript-review-ledger.md) — completed
   TypeScript delivery plan and review evidence.
-- [`security-review.md`](security-review.md) and [`security-scan/`](security-scan/)
-  — historical, incomplete scan input plus the later remediation record. Use
-  [`security.md`](security.md) for the current model.
