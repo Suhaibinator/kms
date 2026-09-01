@@ -3,6 +3,7 @@ package httpserver
 import (
 	"encoding/base64"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/Suhaibinator/kms/internal/core"
@@ -177,6 +178,12 @@ func (s *server) handlePutApplicationParameter(w http.ResponseWriter, r *http.Re
 
 // --- auth & health ---------------------------------------------------------
 
+// handleLogin exchanges a bearer token — plus, for an admin under the client
+// certificate requirement, the certificate on this connection — for the
+// caller's identity. It is the console's "are these credentials good?" probe:
+// the browser keeps sending the token per request afterwards, and TLS keeps
+// supplying the certificate. Every failure is the same generic 401 so the
+// endpoint is not an oracle for which half was wrong.
 func (s *server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Token string `json:"token"`
@@ -185,18 +192,35 @@ func (s *server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, r, err)
 		return
 	}
+	if strings.TrimSpace(body.Token) == "" {
+		// A certificate alone never signs anyone in; without a token there is
+		// nothing to verify.
+		s.writeError(w, r, domain.Errorf(domain.ErrUnauthenticated, "missing credentials"))
+		return
+	}
 	meta := metaFrom(r.Context())
-	id, err := s.svc.Authenticate(r.Context(), body.Token, meta.ip, meta.ua)
+	pr, err := s.svc.ResolvePrincipal(r.Context(), core.CredentialInput{
+		Token:      body.Token,
+		PeerCert:   peerCertFromRequest(r),
+		RemoteAddr: meta.ip,
+		UserAgent:  meta.ua,
+		RequestID:  meta.requestID,
+	})
 	if err != nil {
 		s.writeError(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"identity": map[string]string{"name": id.Name, "kind": id.Kind},
+		"identity":    map[string]string{"name": pr.Identity.Name, "kind": pr.Identity.Kind},
+		"auth_method": string(pr.Method),
 	})
 }
 
-// handleHealth is the API health endpoint (no auth).
+// handleHealth is the API health endpoint (no auth). It reports the admin
+// client-certificate posture so the login page can explain a refusal before one
+// happens: admin_client_cert_required is the server's effective setting, and
+// client_cert_presented says whether *this* connection carried a chain-verified
+// certificate. Neither reveals anything about a token's validity.
 func (s *server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	ready := s.svc.Ready(r.Context()) == nil
 	var rev uint64
@@ -204,12 +228,14 @@ func (s *server) handleHealth(w http.ResponseWriter, r *http.Request) {
 		rev, _ = s.svc.CurrentRevision(r.Context())
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"healthy":          true,
-		"ready":            ready,
-		"version":          s.version(),
-		"current_revision": rev,
-		"grpc_addr":        s.cfg.GRPCAddr,
-		"tls_enabled":      s.cfg.TLSEnabled || r.TLS != nil,
+		"healthy":                    true,
+		"ready":                      ready,
+		"version":                    s.version(),
+		"current_revision":           rev,
+		"grpc_addr":                  s.cfg.GRPCAddr,
+		"tls_enabled":                s.cfg.TLSEnabled || r.TLS != nil,
+		"admin_client_cert_required": s.cfg.AdminClientCertRequired,
+		"client_cert_presented":      peerCertFromRequest(r) != nil,
 	})
 }
 

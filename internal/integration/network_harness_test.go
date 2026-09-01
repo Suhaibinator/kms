@@ -12,6 +12,7 @@ import (
 	"errors"
 	"math/big"
 	"net"
+	"net/http"
 	"os"
 	"path/filepath"
 	"sync"
@@ -28,6 +29,8 @@ import (
 	"github.com/Suhaibinator/kms/internal/crypto"
 	"github.com/Suhaibinator/kms/internal/domain"
 	"github.com/Suhaibinator/kms/internal/server/grpcserver"
+	"github.com/Suhaibinator/kms/internal/server/httpserver"
+	"github.com/Suhaibinator/kms/internal/server/listenertls"
 	"github.com/Suhaibinator/kms/internal/storage"
 	"github.com/Suhaibinator/kms/internal/watch"
 )
@@ -55,6 +58,13 @@ type loopbackTLSEnv struct {
 	serverPEM  []byte
 	adminToken string
 	adminConn  *grpc.ClientConn
+
+	// The HTTPS listener mirrors the gRPC one: same server certificate, same
+	// derived listener TLS config, so both transports are exercised over a real
+	// handshake against the same service.
+	httpServer   *http.Server
+	httpListener net.Listener
+	httpDone     chan error
 
 	closeOnce sync.Once
 }
@@ -99,6 +109,10 @@ func newLoopbackTLSEnv(t *testing.T) *loopbackTLSEnv {
 	logger := zap.NewNop()
 	svc := core.New(store, logger, "integration-network")
 	svc.SetKeyring(keyring)
+	// The seeded admin is token-only and most tests here call the API with a
+	// bearer token alone. https_admin_test.go turns the admin
+	// client-certificate requirement back on where it is the subject.
+	svc.SetAdminRequireClientCert(false)
 	if err := svc.BootstrapCA(setupCtx); err != nil {
 		t.Fatalf("bootstrap integration CA: %v", err)
 	}
@@ -121,18 +135,19 @@ func newLoopbackTLSEnv(t *testing.T) *loopbackTLSEnv {
 	}
 
 	serverCert, serverPool := newLoopbackServerCertificate(t)
-	clientCAPool, err := svc.CACertPool()
+	// Exactly what serve builds: one operator TLS config, both listeners
+	// derived from it through listenertls.Build.
+	baseTLS := &tls.Config{
+		MinVersion:   tls.VersionTLS12,
+		Certificates: []tls.Certificate{serverCert},
+	}
+	listenerTLS, err := listenertls.Build(baseTLS, svc)
 	if err != nil {
 		hubCancel()
-		t.Fatalf("load client CA pool: %v", err)
+		t.Fatalf("build listener TLS config: %v", err)
 	}
 	server, err := grpcserver.New(svc, hub, grpcserver.Config{
-		TLS: &tls.Config{
-			MinVersion:   tls.VersionTLS12,
-			Certificates: []tls.Certificate{serverCert},
-			ClientCAs:    clientCAPool,
-			ClientAuth:   tls.VerifyClientCertIfGiven,
-		},
+		TLS:                   listenerTLS,
 		HealthRefreshInterval: 20 * time.Millisecond,
 	})
 	if err != nil {
@@ -143,6 +158,24 @@ func newLoopbackTLSEnv(t *testing.T) *loopbackTLSEnv {
 	if err != nil {
 		hubCancel()
 		t.Fatalf("listen on loopback: %v", err)
+	}
+
+	// AdminClientCertRequired is what /api/v1/health reports; enforcement is the
+	// service's, so a test can flip the service setting without rebuilding this.
+	httpSrv, err := httpserver.New(svc, httpserver.Config{
+		Addr: "127.0.0.1:0", TLSEnabled: true, AdminClientCertRequired: true, Version: "integration-network",
+	})
+	if err != nil {
+		hubCancel()
+		_ = listener.Close()
+		t.Fatalf("build integration HTTP server: %v", err)
+	}
+	httpSrv.TLSConfig = listenerTLS
+	httpListener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		hubCancel()
+		_ = listener.Close()
+		t.Fatalf("listen on loopback for HTTPS: %v", err)
 	}
 
 	e := &loopbackTLSEnv{
@@ -161,8 +194,13 @@ func newLoopbackTLSEnv(t *testing.T) *loopbackTLSEnv {
 		serverPool: serverPool,
 		serverPEM:  pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: serverCert.Certificate[0]}),
 		adminToken: adminToken,
+
+		httpServer:   httpSrv,
+		httpListener: httpListener,
+		httpDone:     make(chan error, 1),
 	}
 	go func() { e.serveDone <- server.Serve(listener) }()
+	go func() { e.httpDone <- httpSrv.ServeTLS(httpListener, "", "") }()
 
 	e.adminConn = e.dial(t, nil)
 	readyCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -196,6 +234,24 @@ func (e *loopbackTLSEnv) shutdown() {
 		if e.listener != nil {
 			_ = e.listener.Close()
 		}
+		if e.httpServer != nil {
+			shutdownCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			_ = e.httpServer.Shutdown(shutdownCtx)
+			cancel()
+		}
+		if e.httpListener != nil {
+			_ = e.httpListener.Close()
+		}
+		if e.httpDone != nil {
+			select {
+			case err := <-e.httpDone:
+				if err != nil && !errors.Is(err, http.ErrServerClosed) && !errors.Is(err, net.ErrClosed) {
+					e.t.Errorf("loopback HTTPS server stopped with error: %v", err)
+				}
+			case <-time.After(2 * time.Second):
+				e.t.Error("timed out waiting for loopback HTTPS server shutdown")
+			}
+		}
 		if e.hubCancel != nil {
 			e.hubCancel()
 		}
@@ -226,6 +282,21 @@ func (e *loopbackTLSEnv) shutdown() {
 }
 
 func (e *loopbackTLSEnv) endpoint() string { return e.listener.Addr().String() }
+
+// httpsURL returns the absolute URL of path on the loopback HTTPS listener.
+func (e *loopbackTLSEnv) httpsURL(path string) string {
+	return "https://" + e.httpListener.Addr().String() + path
+}
+
+// httpClient returns an HTTPS client trusting the loopback server certificate
+// and, when clientCert is non-nil, presenting it during the handshake — the
+// browser equivalent of having imported an admin certificate.
+func (e *loopbackTLSEnv) httpClient(clientCert *tls.Certificate) *http.Client {
+	return &http.Client{
+		Timeout:   5 * time.Second,
+		Transport: &http.Transport{TLSClientConfig: e.clientTLS(clientCert)},
+	}
+}
 
 // caFile writes the loopback server certificate to a PEM file and returns its
 // path, for clients that take a CA bundle path rather than a *tls.Config.

@@ -80,6 +80,10 @@ func buildService(t *testing.T, store *memStore, ready bool) (*core.Service, *wa
 	t.Helper()
 	logger := zap.NewNop()
 	svc := core.New(store, logger, "v-test")
+	// These suites seed token-only admins and call the API with a bearer token
+	// alone. The admin client-certificate requirement is exercised deliberately
+	// in admin_mtls_test.go, which turns it back on.
+	svc.SetAdminRequireClientCert(false)
 	if ready {
 		kek, err := crypto.NewKEKFromMaterial("kek-1", make([]byte, 32))
 		if err != nil {

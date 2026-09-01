@@ -9,14 +9,21 @@
 // the caller's responsibility. This package only holds the X.509 material and
 // signs.
 //
-// Keys are Ed25519. The CA certificate is long-lived and self-signed; issued
-// client certificates are short-lived leaves carrying the identity name in
-// both the CommonName and a URI SAN of the form "kms://identity/<name>". The
-// URI SAN is authoritative for identity mapping; the CommonName is cosmetic.
+// The CA key is Ed25519. Issued client certificates are short-lived leaves
+// carrying the identity name in both the CommonName and a URI SAN of the form
+// "kms://identity/<name>"; the URI SAN is authoritative for identity mapping
+// and the CommonName is cosmetic. Leaf keys are Ed25519 by default;
+// IssueOptions.Key selects ECDSA P-256 for credentials that must live in a
+// browser or OS keystore (admin certificates), since those commonly cannot
+// hold or use Ed25519 keys for TLS client authentication. The CA signature on
+// every leaf stays Ed25519 regardless of the leaf key type.
 package ca
 
 import (
+	"crypto"
+	"crypto/ecdsa"
 	"crypto/ed25519"
+	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/x509"
@@ -72,7 +79,7 @@ type CA struct {
 // the CA.
 type IssuedCert struct {
 	CertPEM           []byte    // PEM-encoded leaf certificate
-	KeyPEM            []byte    // PEM-encoded PKCS#8 Ed25519 private key
+	KeyPEM            []byte    // PEM-encoded PKCS#8 private key (Ed25519 or ECDSA P-256 per IssueOptions.Key)
 	Serial            string    // lowercase hex of the certificate serial number
 	FingerprintSHA256 string    // lowercase hex of SHA-256 over the leaf DER
 	NotAfter          time.Time // expiry (UTC, second precision)
@@ -152,18 +159,62 @@ func Load(certPEM, keyPEM []byte) (*CA, error) {
 	return &CA{cert: cert, signer: signer, certPEM: certPEM}, nil
 }
 
+// KeyAlgorithm selects the key type generated for an issued leaf certificate.
+type KeyAlgorithm int
+
+const (
+	// KeyEd25519 is the default leaf key type, used for machine clients (the
+	// Go SDK and CLI handle it natively).
+	KeyEd25519 KeyAlgorithm = iota
+	// KeyECDSAP256 selects an ECDSA P-256 leaf key. Browser and OS keystores
+	// (Windows CNG, macOS Keychain, older NSS) commonly cannot hold or use
+	// Ed25519 keys for TLS client authentication, so credentials destined for
+	// a human's browser use this type. The CA's signature over the leaf stays
+	// Ed25519.
+	KeyECDSAP256
+)
+
+// String renders the algorithm for logs and error messages.
+func (k KeyAlgorithm) String() string {
+	switch k {
+	case KeyEd25519:
+		return "ed25519"
+	case KeyECDSAP256:
+		return "ecdsa-p256"
+	default:
+		return fmt.Sprintf("KeyAlgorithm(%d)", int(k))
+	}
+}
+
+// IssueOptions parameterizes IssueClientCertWithOptions. The zero value
+// matches IssueClientCert's defaults: DefaultCertTTL and an Ed25519 leaf key.
+type IssueOptions struct {
+	// TTL is the leaf validity period; DefaultCertTTL when <= 0.
+	TTL time.Duration
+	// Key selects the leaf key algorithm.
+	Key KeyAlgorithm
+}
+
 // IssueClientCert mints a new client certificate for identityName, valid for
-// ttl (DefaultCertTTL when ttl <= 0). The certificate carries identityName in
-// its CommonName and a "kms://identity/<name>" URI SAN, and is marked for
-// ExtKeyUsageClientAuth. A fresh Ed25519 key pair is generated per call; its
-// private key is returned in the result and not retained.
+// ttl (DefaultCertTTL when ttl <= 0), with an Ed25519 key. It is shorthand for
+// IssueClientCertWithOptions(identityName, IssueOptions{TTL: ttl}).
 func (c *CA) IssueClientCert(identityName string, ttl time.Duration) (IssuedCert, error) {
+	return c.IssueClientCertWithOptions(identityName, IssueOptions{TTL: ttl})
+}
+
+// IssueClientCertWithOptions mints a new client certificate for identityName.
+// The certificate carries identityName in its CommonName and a
+// "kms://identity/<name>" URI SAN, and is marked for ExtKeyUsageClientAuth. A
+// fresh key pair of the requested algorithm is generated per call; its private
+// key is returned in the result and not retained.
+func (c *CA) IssueClientCertWithOptions(identityName string, opts IssueOptions) (IssuedCert, error) {
 	if identityName == "" {
 		return IssuedCert{}, errors.New("ca: identity name must not be empty")
 	}
 	if strings.ContainsAny(identityName, " \t\r\n") {
 		return IssuedCert{}, fmt.Errorf("ca: identity name %q contains whitespace", identityName)
 	}
+	ttl := opts.TTL
 	if ttl <= 0 {
 		ttl = DefaultCertTTL
 	}
@@ -173,9 +224,25 @@ func (c *CA) IssueClientCert(identityName string, ttl time.Duration) (IssuedCert
 		return IssuedCert{}, fmt.Errorf("ca: build identity URI: %w", err)
 	}
 
-	pub, priv, err := ed25519.GenerateKey(rand.Reader)
-	if err != nil {
-		return IssuedCert{}, fmt.Errorf("ca: generate leaf key: %w", err)
+	var (
+		pub  crypto.PublicKey
+		priv crypto.PrivateKey
+	)
+	switch opts.Key {
+	case KeyEd25519:
+		edPub, edPriv, kerr := ed25519.GenerateKey(rand.Reader)
+		if kerr != nil {
+			return IssuedCert{}, fmt.Errorf("ca: generate leaf key: %w", kerr)
+		}
+		pub, priv = edPub, edPriv
+	case KeyECDSAP256:
+		ecPriv, kerr := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+		if kerr != nil {
+			return IssuedCert{}, fmt.Errorf("ca: generate leaf key: %w", kerr)
+		}
+		pub, priv = &ecPriv.PublicKey, ecPriv
+	default:
+		return IssuedCert{}, fmt.Errorf("ca: unsupported leaf key algorithm %s", opts.Key)
 	}
 
 	serial, err := rand.Int(rand.Reader, serialLimit)
@@ -266,7 +333,7 @@ func (c *CA) CertPool() *x509.CertPool {
 	return pool
 }
 
-func marshalKeyPEM(priv ed25519.PrivateKey) ([]byte, error) {
+func marshalKeyPEM(priv crypto.PrivateKey) ([]byte, error) {
 	der, err := x509.MarshalPKCS8PrivateKey(priv)
 	if err != nil {
 		return nil, fmt.Errorf("ca: marshal private key: %w", err)

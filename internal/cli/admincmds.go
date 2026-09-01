@@ -86,7 +86,8 @@ Certificate roles:
   Applications present NAME.crt and prove possession with NAME.key; the key stays local.
   Applications verify the operator-provided KMS server certificate with its CA bundle.
   "ca show" is NOT that server-trust CA; it exports the CA KMS uses to issue client certs.
-  Admin identities always receive a one-time bearer token, even with --auth mtls or both.
+  Admin identities always receive a one-time bearer token and never a certificate here;
+  their client certificates are issued on the server host with "admin-cert issue".
 
 Connection flags (--endpoint, --token, --ca, --cert, --key, --insecure) are shared
 by every command here and documented in "admin <group> <action> -h"; each has a
@@ -273,9 +274,9 @@ func (c *CLI) cmdAdminIdentity(args []string) int {
 func (c *CLI) cmdIdentityCreate(args []string) int {
 	fs := c.newFlags("identity create")
 	cf := addConnFlags(c, fs)
-	kind := fs.String("kind", "client", "identity `kind` (client|admin); admin always also receives a one-time bearer token")
+	kind := fs.String("kind", "client", "identity `kind` (client|admin); an admin receives a one-time bearer token only, its client certificate is issued offline with \"admin-cert issue\"")
 	namespace := fs.String("namespace", "", "home namespace `env/app` (optional)")
-	auth := fs.String("auth", "mtls", "credential `method` to create for the application: mtls, token, or both")
+	auth := fs.String("auth", "", "credential `method` to create for the application: mtls, token, or both (default mtls; admin identities are token-only)")
 	ttl := fs.String("ttl", "", "certificate `lifetime` (e.g. 90d, 720h); default 90d")
 	outDir := fs.String("out", "", "`directory` for one-time application client credentials (NAME.crt/NAME.key); recommended")
 	c.setUsage(fs, "admin identity create NAME [flags]",
@@ -289,7 +290,7 @@ func (c *CLI) cmdIdentityCreate(args []string) int {
 	}
 	name := pos[0]
 
-	methods, err := authFlagToMethods(*auth)
+	methods, err := identityAuthMethods(*kind, *auth)
 	if err != nil {
 		return c.fail("%v", err)
 	}
@@ -311,7 +312,7 @@ func (c *CLI) cmdIdentityCreate(args []string) int {
 		req.Namespace = &kmsv1.NamespaceRef{Env: ns.Env, App: ns.App}
 	}
 
-	conn, err := cf.dial()
+	conn, err := c.dialConn(cf)
 	if err != nil {
 		return c.fail("%v", err)
 	}
@@ -803,6 +804,25 @@ func authFlagToMethods(auth string) ([]string, error) {
 		return []string{"token"}, nil
 	case "both":
 		return []string{"mtls", "token"}, nil
+	default:
+		return nil, fmt.Errorf("--auth must be mtls, token, or both")
+	}
+}
+
+// identityAuthMethods maps --kind and --auth to the wire auth-method list.
+// Admin identities are token-only over the network: their client certificates
+// are minted offline on the server host ("parameter-store admin-cert issue"),
+// and the server rejects an admin creation that asks for mTLS.
+func identityAuthMethods(kind, auth string) ([]string, error) {
+	if kind != "admin" {
+		return authFlagToMethods(auth)
+	}
+	switch auth {
+	case "", "token":
+		return []string{"token"}, nil
+	case "mtls", "both":
+		return nil, fmt.Errorf("--auth %s is not available for --kind admin: issue the admin client certificate on the server host with "+
+			`"parameter-store admin-cert issue NAME --out DIR"`, auth)
 	default:
 		return nil, fmt.Errorf("--auth must be mtls, token, or both")
 	}

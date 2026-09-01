@@ -56,6 +56,10 @@ func newReleaseTestEnv(t *testing.T) *testEnv {
 		t.Fatalf("seed key metadata: %v", err)
 	}
 	svc := core.New(store, zap.NewNop(), "test-version")
+	// The seeded admin is token-only and every request here carries a bearer
+	// token alone; the admin client-certificate requirement has its own suite
+	// (admin_cert_test.go), which turns it back on.
+	svc.SetAdminRequireClientCert(false)
 	svc.SetKeyring(crypto.NewKeyring(kek))
 	adminToken, adminHash, err := crypto.GenerateToken("kms")
 	if err != nil {
@@ -78,6 +82,10 @@ func newTestEnvWith(t *testing.T, ready bool) *testEnv {
 	store := newFakeStore()
 	logger := zap.NewNop()
 	svc := core.New(store, logger, "test-version")
+	// The seeded admin is token-only and every request here carries a bearer
+	// token alone; the admin client-certificate requirement has its own suite
+	// (admin_cert_test.go), which turns it back on.
+	svc.SetAdminRequireClientCert(false)
 
 	ctx := context.Background()
 	_ = store.InsertKeyMetadata(ctx, domain.KeyMetadata{

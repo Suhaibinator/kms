@@ -171,7 +171,11 @@ themselves.
 The verification identity needs the `configuration-release:verify-defaults`
 operation on each namespace it checks. Create it **without** a home namespace
 so it holds no implicit read grant, then allow exactly that implemented
-operation per `env/app`:
+operation per `env/app`. These are admin commands against a live server, so on
+a TLS deployment supply the operator's admin client certificate as well as the
+token (`--cert`/`--key`, or `KMS_CLIENT_CERT_FILE`/`KMS_CLIENT_KEY_FILE`; see
+[`operations.md`](operations.md#admin-credentials-and-browser-setup)) —
+connection flags are omitted here for readability:
 
 ```bash
 parameter-store admin identity create ci-verify-payments --kind client --auth token

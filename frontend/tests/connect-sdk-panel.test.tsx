@@ -16,6 +16,8 @@ const health: HealthResponse = {
   current_revision: 42,
   grpc_addr: "kms.prod.internal:8443",
   tls_enabled: true,
+  admin_client_cert_required: false,
+  client_cert_presented: false,
 };
 
 const ns = { env: "prod", app: "gradethis" };

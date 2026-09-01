@@ -123,6 +123,13 @@ func (s *server) handleReleaseSubscriberStream(w http.ResponseWriter, r *http.Re
 	var debounce *time.Timer
 	var debounceC <-chan time.Time
 	refresh := func() error {
+		// Re-validate the credentials that opened the stream (token rotation,
+		// certificate revocation, identity disable) on every refresh, as the gRPC
+		// watch streams do on every heartbeat, instead of relying solely on
+		// maxLifetime to end a stream whose principal has been revoked.
+		if err := s.svc.ReauthorizeWatch(ctx, pr); err != nil {
+			return err
+		}
 		snap, err := s.svc.GetReleaseRolloutSnapshot(ctx, pr, ns, name)
 		if err != nil {
 			return err

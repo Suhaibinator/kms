@@ -3,7 +3,6 @@ package cli
 import (
 	"context"
 	"crypto/tls"
-	"crypto/x509"
 	"errors"
 	"io"
 	"io/fs"
@@ -20,6 +19,7 @@ import (
 	"github.com/Suhaibinator/kms/internal/config"
 	"github.com/Suhaibinator/kms/internal/core"
 	"github.com/Suhaibinator/kms/internal/server/httpserver"
+	"github.com/Suhaibinator/kms/internal/server/listenertls"
 	"github.com/Suhaibinator/kms/internal/storage"
 	"github.com/Suhaibinator/kms/internal/watch"
 
@@ -161,6 +161,25 @@ func (c *CLI) cmdServe(args []string) int {
 	if err != nil {
 		return c.fail("building TLS config: %v", err)
 	}
+
+	// The admin client-certificate requirement is only meaningful when the
+	// listeners speak TLS: without a handshake no certificate ever reaches the
+	// server, so enforcing it would lock every admin out of a dev run. Relax it
+	// and say so loudly rather than refusing to start.
+	adminCertRequired := cfg.Security.AdminRequireClientCert && tlsCfg != nil
+	svc.SetAdminRequireClientCert(adminCertRequired)
+	var (
+		lackingCerts  []string
+		expiringCerts []core.ExpiringAdminCert
+		lackingErr    error
+	)
+	if adminCertRequired {
+		lackingCerts, expiringCerts, lackingErr = svc.AdminCertReport(ctx, adminCertExpiryWarning)
+	}
+	logAdminCertPosture(logger, cfg.Security.AdminRequireClientCert, tlsCfg != nil,
+		isNonLoopbackBind(cfg.Server.GRPCAddr) || isNonLoopbackBind(cfg.Server.HTTPAddr),
+		lackingCerts, expiringCerts, lackingErr)
+
 	if tlsCfg == nil {
 		// Plaintext transport carries bearer tokens and secret values in the
 		// clear. Warn loudly, and escalate when bound to a non-loopback address
@@ -180,11 +199,11 @@ func (c *CLI) cmdServe(args []string) int {
 	grpcAddr := ""
 	if GRPCFactory != nil {
 		grpcAddr = cfg.Server.GRPCAddr
-		// The gRPC listener authenticates machine clients by mTLS: add the built-in
-		// CA to its client-CA pool and verify a presented client certificate, but do
-		// not require one (VerifyClientCertIfGiven) — token-only clients still
-		// connect, and the per-namespace auth-method gate decides admittance.
-		grpcTLS, terr := grpcServerTLS(tlsCfg, svc)
+		// Both listeners accept — but never demand — a certificate from the
+		// built-in CA, so machine clients and admins can authenticate by
+		// certificate while token-only callers still connect. Admission is
+		// core's decision, not the handshake's.
+		grpcTLS, terr := listenertls.Build(tlsCfg, svc)
 		if terr != nil {
 			return c.fail("building gRPC TLS config: %v", terr)
 		}
@@ -211,29 +230,33 @@ func (c *CLI) cmdServe(args []string) int {
 		webRoot = sub
 	}
 	httpSrv, err := httpserver.New(svc, httpserver.Config{
-		Addr:              cfg.Server.HTTPAddr,
-		FrontendEnabled:   cfg.Frontend.Enabled,
-		Frontend:          webRoot,
-		Version:           Version,
-		TrustProxyHeaders: cfg.Security.TrustProxyHeaders,
-		GRPCAddr:          grpcAddr,
-		TLSEnabled:        tlsCfg != nil,
+		Addr:                    cfg.Server.HTTPAddr,
+		FrontendEnabled:         cfg.Frontend.Enabled,
+		Frontend:                webRoot,
+		Version:                 Version,
+		TrustProxyHeaders:       cfg.Security.TrustProxyHeaders,
+		GRPCAddr:                grpcAddr,
+		TLSEnabled:              tlsCfg != nil,
+		AdminClientCertRequired: adminCertRequired,
 	})
 	if err != nil {
 		return c.fail("building HTTP server: %v", err)
+	}
+	// The browser-facing listener uses the same derived config as gRPC: a
+	// browser is offered the built-in CA and may present an admin certificate,
+	// but one is never demanded at the handshake — an unauthenticated caller
+	// still has to reach the login page and /api/v1/health.
+	if tlsCfg != nil {
+		httpSrv.TLSConfig, err = listenertls.Build(tlsCfg, svc)
+		if err != nil {
+			return c.fail("building HTTP TLS config: %v", err)
+		}
 	}
 
 	httpErr := make(chan error, 1)
 	go func() {
 		var e error
 		if tlsCfg != nil {
-			// The browser-facing HTTP listener uses the server certificate but
-			// must not demand client certificates even under mTLS (that gate is
-			// for machine gRPC clients). Operators wanting mTLS on the UI put it
-			// behind a terminating proxy.
-			httpTLS := tlsCfg.Clone()
-			httpTLS.ClientAuth = tls.NoClientCert
-			httpSrv.TLSConfig = httpTLS
 			e = httpSrv.ListenAndServeTLS("", "")
 		} else {
 			e = httpSrv.ListenAndServe()
@@ -250,6 +273,8 @@ func (c *CLI) cmdServe(args []string) int {
 	select {
 	case sig := <-sigCh:
 		logger.Info("shutdown signal received", zap.String("signal", sig.String()))
+	case <-c.stopServe:
+		logger.Info("shutdown requested")
 	case e := <-httpErr:
 		// A listener that fails to start (e.g. address already in use) is fatal;
 		// exit non-zero so a process supervisor reports the failure.
@@ -301,30 +326,58 @@ func logConfigSources(logger *zap.Logger, prov config.Provenance) {
 	logger.Debug("configuration sources", fields...)
 }
 
-// grpcServerTLS derives the gRPC listener's TLS config from the base server
-// config, adding the built-in CA to the client-CA pool and switching to
-// VerifyClientCertIfGiven so a client may authenticate by certificate without
-// every client being forced to present one. A nil base (TLS disabled) yields nil
-// — plaintext development transport carries no client certificates.
-func grpcServerTLS(base *tls.Config, svc *core.Service) (*tls.Config, error) {
-	if base == nil {
-		return nil, nil
+// Startup messages describing what the admin client-certificate requirement
+// actually does in this deployment. They are constants so the posture test
+// pins the operator-facing wording, including the offline command an operator
+// has to run.
+const (
+	adminCertUnenforceableMsg = "security.admin_require_client_cert cannot be enforced without TLS; admin token-only login is active"
+	adminCertExposedMsg       = "security.admin_require_client_cert cannot be enforced without TLS; admin token-only login is active, so a bearer token alone grants full administrative access from the network — enable security.tls_enabled"
+	adminCertDisabledMsg      = "security.admin_require_client_cert is disabled; a stolen admin token alone grants full administrative access"
+	adminCertEnforcedMsg      = `admin identities must present a client certificate in addition to a bearer token; issue one offline with "parameter-store admin-cert issue NAME --out DIR"`
+	adminCertMissingMsg       = "admin identity has no valid client certificate and cannot authenticate while admin_require_client_cert is enforced; run: parameter-store admin-cert issue <name> --out <dir>"
+	adminCertExpiringMsg      = "admin identity's newest valid client certificate expires soon; an expired certificate is rejected by the TLS handshake itself, so re-issue before then with: parameter-store admin-cert issue <name> --out <dir>"
+	adminCertScanFailedMsg    = "could not check which admin identities have a valid client certificate; admins without one will be refused"
+)
+
+// adminCertExpiryWarning is how far ahead serve warns about an admin
+// certificate's expiry. Two weeks leaves room for a re-issue that needs host
+// access and a browser import.
+const adminCertExpiryWarning = 14 * 24 * time.Hour
+
+// logAdminCertPosture states, at startup, whether an admin needs a client
+// certificate on this server and what the consequence is either way. The three
+// cases are distinct security postures, so each gets its own message:
+// configured-but-unenforceable (TLS off, escalated when the server is reachable
+// from the network), deliberately disabled, and enforced. Under enforcement it
+// also names every admin identity that has no usable certificate — on an
+// upgrade those admins are locked out until one is issued, and the operator
+// needs to hear that at boot rather than at their next login. lacking and
+// scanErr come from core.AdminsWithoutValidCert and are only consulted when the
+// requirement is in force; a failed scan is reported, never fatal.
+func logAdminCertPosture(logger *zap.Logger, configured, tlsEnabled, nonLoopback bool, lacking []string, expiring []core.ExpiringAdminCert, scanErr error) {
+	switch {
+	case !configured:
+		logger.Warn(adminCertDisabledMsg)
+	case !tlsEnabled:
+		if nonLoopback {
+			logger.Warn(adminCertExposedMsg)
+		} else {
+			logger.Warn(adminCertUnenforceableMsg)
+		}
+	default:
+		logger.Info(adminCertEnforcedMsg)
+		if scanErr != nil {
+			logger.Warn(adminCertScanFailedMsg, zap.Error(scanErr))
+		}
+		for _, name := range lacking {
+			logger.Warn(adminCertMissingMsg, zap.String("identity", name))
+		}
+		for _, e := range expiring {
+			logger.Warn(adminCertExpiringMsg, zap.String("identity", e.Name), zap.String("serial", e.Serial),
+				zap.Time("not_after", e.NotAfter), zap.Duration("expires_in", time.Until(e.NotAfter).Round(time.Hour)))
+		}
 	}
-	caCert, err := svc.CACertificate()
-	if err != nil {
-		return nil, err
-	}
-	cfg := base.Clone()
-	var pool *x509.CertPool
-	if cfg.ClientCAs != nil {
-		pool = cfg.ClientCAs.Clone()
-	} else {
-		pool = x509.NewCertPool()
-	}
-	pool.AddCert(caCert)
-	cfg.ClientCAs = pool
-	cfg.ClientAuth = tls.VerifyClientCertIfGiven
-	return cfg, nil
 }
 
 // newLogger builds a structured JSON logger at the given level, writing to w.

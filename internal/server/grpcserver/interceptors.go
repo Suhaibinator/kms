@@ -17,7 +17,6 @@ import (
 	"google.golang.org/grpc/status"
 
 	"github.com/Suhaibinator/kms/internal/core"
-	"github.com/Suhaibinator/kms/internal/domain"
 )
 
 // publicMethods bypass authentication and readiness gating: health probes must
@@ -98,53 +97,30 @@ type wrappedStream struct {
 
 func (w *wrappedStream) Context() context.Context { return w.ctx }
 
-// authenticate resolves the caller's credential to a principal and stashes it
-// in the context. A verified mTLS client certificate (checked against the
-// built-in CA pool during the TLS handshake) takes precedence: it proves
-// possession, so it maps to an mTLS-method principal. A bearer token is the
-// fallback (and the only option for token-method identities). Failures return a
-// generic Unauthenticated status; the method that produced the credential
-// determines the per-namespace auth-method gate downstream.
+// authenticate hands the caller's raw credentials to core.ResolvePrincipal and
+// stashes the resulting principal in the context. Both a client certificate
+// (chain-verified by the TLS handshake against the built-in CA pool) and a
+// bearer token are passed when present: core verifies them independently, and a
+// caller holding both gets an mTLS-method principal that retains its token.
+// Admin identities are admitted only when they present both while
+// security.admin_require_client_cert is in force. Failures return a generic
+// Unauthenticated status that never says which credential was at fault; the
+// resulting method drives the per-namespace auth-method gate downstream.
 func (s *Server) authenticate(ctx context.Context, reqID string) (context.Context, error) {
 	md, _ := metadata.FromIncomingContext(ctx)
-	token := bearerToken(md)
-	secretToken := firstMD(md, "x-kms-secret-token")
 	remoteAddr := remoteAddrFrom(ctx)
-	userAgent := firstMD(md, "user-agent")
-
-	// A presented client certificate has already been chain-verified by the TLS
-	// layer (VerifyClientCertIfGiven). Prefer it: it is proof of possession.
-	if cert := peerCertFromContext(ctx); cert != nil {
-		if id, err := s.svc.VerifyClientCert(ctx, cert, remoteAddr, userAgent); err == nil {
-			return withPrincipal(ctx, core.Principal{
-				Identity:    id,
-				Method:      domain.AuthMethodMTLS,
-				Serial:      core.CertSerial(cert),
-				Fingerprint: core.CertFingerprint(cert),
-				SecretToken: secretToken,
-				RemoteAddr:  remoteAddr,
-				UserAgent:   userAgent,
-				RequestID:   reqID,
-			}), nil
-		}
-		// Certificate present but not valid (revoked/expired/disabled/unmapped).
-		// Fall through to token auth so a client that also holds a valid token can
-		// still authenticate where the namespace admits the token method.
-	}
-
-	id, err := s.svc.Authenticate(ctx, token, remoteAddr, userAgent)
+	pr, err := s.svc.ResolvePrincipal(ctx, core.CredentialInput{
+		Token:       bearerToken(md),
+		PeerCert:    peerCertFromContext(ctx),
+		SecretToken: firstMD(md, "x-kms-secret-token"),
+		RemoteAddr:  remoteAddr,
+		UserAgent:   firstMD(md, "user-agent"),
+		RequestID:   reqID,
+	})
 	if err != nil {
 		return ctx, status.Error(codes.Unauthenticated, "unauthenticated")
 	}
-	return withPrincipal(ctx, core.Principal{
-		Identity:    id,
-		Method:      domain.AuthMethodToken,
-		Token:       token,
-		SecretToken: secretToken,
-		RemoteAddr:  remoteAddr,
-		UserAgent:   userAgent,
-		RequestID:   reqID,
-	}), nil
+	return withPrincipal(ctx, pr), nil
 }
 
 // peerCertFromContext returns the verified leaf client certificate from the TLS

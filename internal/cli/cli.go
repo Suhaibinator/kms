@@ -31,6 +31,10 @@ type CLI struct {
 	// lookupEnv reads environment variables; nil means os.LookupEnv. Tests
 	// inject a map so command behaviour never depends on the developer's shell.
 	lookupEnv func(key string) (string, bool)
+	// stopServe, when non-nil, ends a running `serve` as a shutdown signal
+	// would. Tests use it to run the real server wiring in-process; production
+	// leaves it nil (a nil channel never fires).
+	stopServe <-chan struct{}
 	// positionals holds the non-flag arguments collected by the most recent
 	// parseFlags call (flags may be interspersed with positionals).
 	positionals []string
@@ -82,6 +86,8 @@ func (c *CLI) Run(args []string) int {
 		code = c.cmdCreateAdmin(cmdArgs)
 	case "rotate-admin":
 		code = c.cmdRotateAdmin(cmdArgs)
+	case "admin-cert":
+		code = c.cmdAdminCert(cmdArgs)
 	case "rotate-kek":
 		code = c.cmdRotateKEK(cmdArgs)
 	case "admin":
@@ -162,8 +168,10 @@ Administration:
   check            Verify a database and (optionally) the master key.
   backup           Write a consistent online database backup.
   restore          Restore a database file (server must be stopped).
-  create-admin     Create an admin identity and print its token once.
+  create-admin     Create an admin identity and print its token once (--cert-dir also
+                   issues its client certificate).
   rotate-admin     Recover an existing admin by rotating its token directly.
+  admin-cert       Issue, list, or revoke admin client certificates offline (no server needed).
   rotate-kek       Rotate the master key, rewrapping all secrets.
   import           Import data from SuhaibParameterStore.
 

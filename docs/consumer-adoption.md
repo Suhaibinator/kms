@@ -160,7 +160,14 @@ Each environment needs one verification identity. Create it **without** a
 home namespace (`--namespace` omitted) so it carries no implicit read grant,
 then allow exactly the verify operation on that environment's namespace. The
 server exposes this as the explicit
-`configuration-release:verify-defaults` operation:
+`configuration-release:verify-defaults` operation.
+
+These are admin commands run against a live server, so on a TLS deployment
+they need the operator's admin **client certificate as well as** the admin
+token — `--cert`/`--key` (or `KMS_CLIENT_CERT_FILE`/`KMS_CLIENT_KEY_FILE`)
+alongside `--token`. See
+[`operations.md`](operations.md#admin-credentials-and-browser-setup); the
+connection flags are omitted below for readability.
 
 ```bash
 parameter-store admin identity create ci-verify-payments-staging --kind client --auth token

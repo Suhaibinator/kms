@@ -40,14 +40,36 @@ Authorization: Bearer <token>
 ```
 
 Tokens are identity tokens (admin or client) minted by `parameter-store
-create-admin` or the identities API. The frontend flow:
+create-admin` or the identities API.
+
+**An admin identity also needs a client certificate.** While
+`security.admin_require_client_cert` is enforced — the default whenever the
+server has TLS on — an admin-kind identity is admitted only when the request
+carries **both** a bearer token and a client certificate issued by the
+built-in CA and chain-verified during the TLS handshake. The listener asks for
+a certificate but never demands one, so unauthenticated callers and token-only
+client identities connect as before. Either credential alone, or a certificate
+and token naming different identities, yields the same generic
+`401 unauthenticated` — the API is not an oracle for which half was wrong.
+Admin certificates are issued only by `parameter-store admin-cert issue NAME
+--out DIR` on the server host; see
+[`operations.md`](operations.md#admin-credentials-and-browser-setup). Without
+TLS the requirement is unenforceable and the server relaxes it, so a
+development server accepts an admin token alone.
+
+The frontend flow:
 
 1. User pastes a token on the login page.
-2. `POST /api/v1/auth/login` with `{"token": "..."}`.
-3. On 200, response is `{"identity": {"name": "...", "kind": "admin"}}`.
+2. `POST /api/v1/auth/login` with `{"token": "..."}`. The browser supplies any
+   imported client certificate itself, as part of the TLS connection.
+3. On 200, response is
+   `{"identity": {"name": "...", "kind": "admin"}, "auth_method": "mtls"}`.
    The frontend stores the token (memory + sessionStorage) and sends it as
-   the `Authorization` header on every subsequent call.
-4. On 401 the token is invalid.
+   the `Authorization` header on every subsequent call; TLS keeps supplying
+   the certificate per connection.
+4. On 401 the credentials are invalid — a bad token, or, for an admin, a
+   missing or invalid certificate. The login page reads
+   `GET /api/v1/health` to tell the second case apart and explain it.
 
 Most management endpoints require `kind == "admin"`.
 
@@ -673,9 +695,11 @@ bearer-token theft useless for it. New namespaces default to `["mtls"]`
 (strongest posture); adding `"token"` is an explicit, audited namespace-settings
 change.
 
-The HTTP listener itself is bearer-token only; machine clients present mTLS
-certificates on the gRPC listener. The HTTP API exposes the same namespace
-configuration, so the two methods are summarized here for completeness:
+Client identities normally present mTLS certificates on the gRPC listener; the
+HTTP listener also accepts a client certificate, which is how an admin
+satisfies the certificate half of its credentials. The HTTP API exposes the
+same namespace configuration, so the two methods are summarized here for
+completeness:
 
 - **mTLS** clients authenticate with a client certificate minted by the
   built-in CA (see `GET /api/v1/ca` and the identities endpoints). Certificates
@@ -685,10 +709,12 @@ configuration, so the two methods are summarized here for completeness:
   possession-free: whoever holds the string is treated as the app.
 
 The auth-method gate applies to **client-kind** identities. **Admin-kind**
-identities are the management plane: they administer any namespace from a
-browser (which cannot practically present a client certificate), and therefore
-**bypass both the method gate and data-plane policy checks** — the browser login
-above stays token-based regardless of a namespace's `allowed_auth_methods`.
+identities are the management plane: they administer any namespace, so no
+per-namespace `allowed_auth_methods` list applies to them and they are not
+subject to data-plane policy checks. They are admitted by the stricter rule
+described under [Authentication](#authentication) instead — certificate *and*
+token — so an admin reports `auth_method: "mtls"` from `/whoami` while the
+requirement is enforced.
 Admin identities never bypass auditing or the cryptographic impossibility of
 revealing a client-bound secret without its token.
 
@@ -850,13 +876,30 @@ this DTO. Creation selectors use the same `ref` shape, plus either `version` or
 ### Auth & health
 
 - `POST /api/v1/auth/login` — no auth — body `{"token": "..."}` →
-  `{"identity": {"name": "...", "kind": "admin|client"}}`
+  `{"identity": {"name": "...", "kind": "admin|client"},
+    "auth_method": "mtls|token"}`
+  A token is always required in the body; a certificate alone never signs
+  anyone in. `auth_method` reports how the caller was resolved — `mtls` when a
+  chain-verified client certificate on this connection named the same identity
+  as the token, `token` otherwise — and is `mtls` for every admin while the
+  client-certificate requirement is enforced. Every failure is the same
+  `401 unauthenticated`.
 - `GET /api/v1/health` — no auth →
   `{"healthy": true, "ready": true, "version": "...", "current_revision": 42,
-    "grpc_addr": "0.0.0.0:8443", "tls_enabled": true}`
+    "grpc_addr": "0.0.0.0:8443", "tls_enabled": true,
+    "admin_client_cert_required": true, "client_cert_presented": false}`
   `grpc_addr` is the configured gRPC listen address (empty when the gRPC
   server is not wired); `tls_enabled` is true when the server was started with
   TLS or the request itself arrived over TLS.
+  `admin_client_cert_required` is the server's **effective** setting — false
+  when `security.admin_require_client_cert` is off *or* TLS is off, since the
+  requirement cannot be enforced without a handshake.
+  `client_cert_presented` is true when *this* connection carried a client
+  certificate the TLS layer chain-verified against the built-in CA; it says
+  nothing about whether that certificate is enrolled, unrevoked, or names an
+  admin. Together they let the login page explain a refusal before it
+  happens (`required && !presented` → the browser has no certificate loaded)
+  without revealing anything about any token's validity.
 - `GET /api/v1/whoami` →
   `{"name": "...", "kind": "admin|client",
     "namespace": {"env": "...", "app": "..."} | null, "auth_method": "mtls|token"}`
@@ -982,6 +1025,12 @@ rules (a deny still wins).
   requested; `cert` (the one-time PEM bundle) present only when `"mtls"` was
   requested. `cert_ttl_seconds` applies to the initial certificate (server
   default 90 days when omitted). Both `token` and `cert` are shown once.
+  For `"kind": "admin"` the only valid credential is a token: an omitted or
+  empty `auth_methods` means `["token"]`, and including `"mtls"` is rejected
+  with `400 invalid_argument`, because admin certificates are minted only by
+  `parameter-store admin-cert issue` on the server host. The response for an
+  admin therefore always has `cert: null`, and the new admin cannot sign in
+  until a certificate is issued offline.
 - `POST /api/v1/identities/rotate` — `{"name"}` → `{"token": "..."}`
   Mints a new bearer token and invalidates the current one (shown once). For
   token identities; mTLS identities rotate via `issue-cert` instead.
@@ -989,10 +1038,16 @@ rules (a deny still wins).
   `{"cert": CertBundle}`
   Issues an additional client certificate (shown once). Multiple concurrent
   valid certificates per identity allow zero-downtime rollover.
+  An **admin-kind target is refused for every caller**, admins included, with
+  `403 permission_denied` (audited `identity.cert.issue` deny,
+  `reason: admin_target`, `channel: online`): an admin certificate is minted
+  only offline with `parameter-store admin-cert issue NAME --out DIR`, so a
+  stolen online admin credential cannot mint durable new admin credentials.
 - `POST /api/v1/identities/revoke-cert` — `{"name", "serial"}` → `{}`
   Revokes a single certificate by serial; other certs keep working. Takes
   effect on the next RPC; an existing watch stream is closed on its next
-  heartbeat reauthorization.
+  heartbeat reauthorization. Unlike issuance, this **is** allowed for an
+  admin-kind target: containment must not require host access.
 - `POST /api/v1/identities/revoke` — `{"name"}` → `{}`
   Disables the identity: its token and **all** of its certificates stop working
   for new RPCs immediately; an existing watch stream is closed on its next

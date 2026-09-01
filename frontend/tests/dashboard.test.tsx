@@ -80,6 +80,8 @@ const healthy = {
   current_revision: 42,
   grpc_addr: "kms:8443",
   tls_enabled: true,
+  admin_client_cert_required: false,
+  client_cert_presented: false,
 };
 const ready = readyJson as unknown as ApplicationOverview;
 const setup = setupJson as unknown as ApplicationOverview;
@@ -440,10 +442,23 @@ describe("HealthPage", () => {
     mocks.health.mockRejectedValue(new Error("connection refused"));
 
     render(<HealthPage />);
-    expect(await screen.findAllByText("unknown")).toHaveLength(2);
+    // Health, readiness, and the admin client-certificate posture: none of the
+    // three may guess a value from a failed load.
+    expect(await screen.findAllByText("unknown")).toHaveLength(3);
     expect(screen.queryByText("unhealthy")).toBeNull();
     expect(screen.queryByText("not ready")).toBeNull();
     expect(mocks.toast.error).toHaveBeenCalledWith(expect.any(Error), "Failed to load health");
+  });
+
+  it("reports whether admins must present a client certificate", async () => {
+    render(<HealthPage />);
+    expect(await screen.findByText("relaxed")).toBeVisible();
+
+    mocks.health.mockResolvedValue({ ...healthy, admin_client_cert_required: true });
+    fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
+
+    expect(await screen.findByText("required")).toBeVisible();
+    expect(screen.queryByText("relaxed")).toBeNull();
   });
 
   it("keeps the loaded stats on screen while a refresh is in flight", async () => {

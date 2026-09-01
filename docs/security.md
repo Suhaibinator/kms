@@ -274,7 +274,9 @@ server and stored **only as a SHA-256 hash** (`crypto.GenerateToken`,
 creation/rotation time and is not retrievable again:
 
 - **Identity tokens** (`identities.token_hash`, prefix `kms_`): the token
-  method of authenticating a client or admin identity. Sent as
+  method of authenticating a client or admin identity — for an admin
+  identity the token is necessary but *not sufficient* (see
+  [below](#an-admin-token-alone-is-not-enough)). Sent as
   `authorization: Bearer <token>` (gRPC metadata key `authorization`; HTTP
   `Authorization` header). This is what `Service.Authenticate` looks up to
   resolve a `domain.Identity`, and what establishes the caller's identity for
@@ -310,18 +312,55 @@ credential. A request with no credential is rejected and rate-limited in the
 same way, but does not create an `auth.failure` row. See
 [below](#login-and-failed-authentication-rate-limiting).
 
+### An admin token alone is not enough
+
+While `security.admin_require_client_cert` is enforced — the **default** — an
+admin-kind identity authenticates only by presenting **both** a valid
+client certificate minted by the built-in CA **and** its bearer token on the
+same request, on **both** the HTTP and gRPC listeners. Either credential
+alone is refused with the same generic `unauthenticated` error as any other
+bad credential. The rule is enforced in `internal/core`
+(`ResolvePrincipal`/`admitAdmin`, `internal/core/auth_resolve.go`), not in a
+transport, so there is no listener that can forget it.
+
+The two credentials must name the **same** identity: a valid certificate
+combined with a valid token belonging to a different identity is denied
+outright rather than letting either credential win. The combined principal
+carries `method: mtls` and retains the token, so a long-lived admin watch
+stream re-checks the certificate *and* the token on every heartbeat — rotating
+an admin's token or revoking its certificate closes the stream.
+
+What this buys: a stolen admin token is useless without the certificate's
+private key, and a stolen key file is useless without the token. The key
+never travels in a request (only a signature over the TLS handshake does), so
+it cannot leak from scrollback, a log, an environment file, or a phishing
+page. Admin certificates are minted **only** by the offline CLI on the server
+host ([below](#proof-of-identity-the-built-in-ca-and-mtls)), so a stolen
+online admin credential cannot mint durable new admin credentials.
+
+The requirement cannot be enforced when `security.tls_enabled` is false — no
+certificate ever reaches the server — so `serve` relaxes it at startup with a
+warning rather than failing validation, and admins log in with a token alone.
+That includes running behind a TLS-terminating reverse proxy: the KMS then
+sees plain HTTP and the proxy must enforce client certificates itself. See
+[`operations.md`](operations.md#admin-credentials-and-browser-setup).
+
 ## Proof of identity: the built-in CA and mTLS
 
 A bearer token scopes access but does not prove possession — anyone holding
 the string is the identity. Machine clients therefore authenticate with
 **mTLS client certificates minted by a certificate authority embedded in the
-KMS** (`internal/ca`). The certificate is proof of possession of a private key
+KMS** (`internal/ca`), and administrators present one in addition to their
+token. The certificate is proof of possession of a private key
 the KMS issued. In an mTLS-only namespace, a stolen
 database or leaked bearer token does not let an attacker impersonate the
 identity on the wire without its client private key.
 
-**The CA.** On the first `serve` startup after unseal, the service generates a self-signed CA
-(`ca.Generate`): an **Ed25519** key pair and a long-lived (**10-year**),
+**The CA.** `parameter-store init` generates the CA (`ca.Generate`) when it
+creates the store, so every database has one from the moment it exists;
+`serve` loads it after unseal, and still generates one on first start for a
+database created before that behavior. The CA is
+an **Ed25519** key pair and a long-lived (**10-year**),
 self-signed CA certificate marked `IsCA` with **`MaxPathLenZero`**, so it can
 sign leaf client certificates but no intermediates. It is not automatically
 renewed, and the CLI currently has no dedicated CA-rotation command. It signs
@@ -338,13 +377,35 @@ not in the cert. The plaintext signing key remains in server memory for the
 process lifetime so it can issue certificates.
 
 **Issued client certificates** (`ca.IssueClientCert`) are short-lived
-Ed25519 leaves carrying the identity name in the CommonName **and** in a URI
+leaves carrying the identity name in the CommonName **and** in a URI
 SAN of the form `kms://identity/<name>`, marked `ExtKeyUsageClientAuth`. The
 default TTL is **90 days** (`ca.DefaultCertTTL`), settable per issuance, and
 `NotBefore` is backdated **5 minutes** (`clockSkew`) to tolerate small clock
 differences. A **fresh key pair is generated per issuance and returned exactly
 once** (PEM bundle); the CA never retains or stores a leaf private key, exactly
 like the token model.
+
+**Leaf key algorithms.** Client leaves are **Ed25519**, like the CA key.
+**Admin leaves are ECDSA P-256** (`ca.KeyECDSAP256`): browser and OS keystores
+have poor Ed25519 support, and an admin certificate has to be importable into
+one. Either leaf is signed by the Ed25519 CA key, so both verify against the
+same single built-in CA — nothing about the mapping, revocation, or
+fingerprint binding below depends on the leaf's key type.
+
+**Admin certificates are issued offline only.** `Service.IssueIdentityCertificate`
+— the online path behind `admin identity issue-cert` and `POST
+/api/v1/identities/issue-cert` — refuses an admin-kind target for
+**every** caller, admins included (`403 permission_denied`, audited
+`identity.cert.issue` deny with `reason: admin_target`, `channel: online`).
+Creating an admin identity online with the `mtls` auth method is likewise
+rejected (`400 invalid_argument`); admins created online get a token only. The
+only way to mint an admin certificate is `parameter-store admin-cert issue
+NAME --out DIR` on the server host, which opens SQLite directly and unseals
+the master key (`Service.IssueLocalAdminCertificate`, reachable from no
+transport). Minting an admin credential therefore requires host access, not
+merely a live admin session, so a stolen admin token or session cannot bootstrap
+durable new admin credentials. **Revoking** an admin certificate online stays
+allowed — containment must not need host access.
 
 **Mapping a peer certificate to an identity is URI-SAN-only.**
 `ca.IdentityFromCert` requires exactly one `kms://identity/<name>` URI SAN and
@@ -397,10 +458,14 @@ so a namespace-bound identity presenting a disallowed method still gets
 nothing.
 
 The gate applies to **client-kind** identities. **Admin-kind** identities are
-the management plane: a human administering namespaces from a browser cannot
-practically present a client certificate, so admins bypass the method gate
-(browser login stays token-based). Bypassing the *method gate* does not waive
-auditing — every admin action is still audited exactly as before (see
+the management plane and administer every namespace, so no per-namespace
+method list applies to them; they are admitted by their own, stricter rule
+instead. While `security.admin_require_client_cert` is enforced (the default)
+an admin must present a built-in-CA client certificate **and** its bearer
+token on every request — the [admin admission rule](#an-admin-token-alone-is-not-enough)
+above, which the browser console satisfies with an imported certificate.
+Standing outside the *method gate* does not waive auditing — every admin
+action is audited exactly as before (see
 [Audit guarantees](#audit-guarantees)).
 
 Operations that legitimately span namespaces, including namespace listings
@@ -453,6 +518,14 @@ throttle by hitting arbitrary API paths with bad credentials instead of
 the login endpoint. Each bucket allows a burst of 10 immediate attempts
 and refills at 5 per minute; once exhausted, further attempts from that
 key get `429 rate_limited` instead of being evaluated.
+
+An admin request refused for presenting only one of the two required
+credentials (certificate or token, but not both) is a failed authentication
+like any other: it returns the same generic `401 unauthenticated`, consumes a
+token from the bucket, and is audited. An admin whose certificate has expired
+or been revoked therefore burns through the burst quickly if a client keeps
+retrying — expected, and the reason the `serve` startup log names admins with
+no valid certificate.
 
 The bucket key is the caller's IP as resolved by `clientIP` — the real TCP
 peer address by default, or the first address in `X-Forwarded-For` if
@@ -737,6 +810,36 @@ above (real TCP peer address, or `X-Forwarded-For` only if
 `security.trust_proxy_headers` is enabled) — see
 [above](#login-and-failed-authentication-rate-limiting).
 
+**`auth.failure` reasons.** The admin admission rule adds two, both in
+`metadata_json`:
+
+- `{"method": "<mtls|token>", "reason": "admin_client_cert_required"}` — an
+  admin presented only a certificate or only a token while the requirement was
+  enforced. The row *does* name the identity (`actor_identity`, `actor_type`):
+  it was cryptographically proven by whichever credential was valid, and
+  naming it is what makes "this admin is stuck without a certificate" visible
+  in the audit log.
+- `{"method": "mtls+token", "reason": "credential_mismatch"}` — a valid
+  certificate and a valid token that name *different* identities. Neither is
+  trusted, so the row carries actor type `unknown` and no identity.
+
+A presented credential that fails to verify is recorded as `auth.failure`
+**only when the request is refused**. When the caller presented two
+credentials, one did not verify, and the other admitted it (a machine client
+whose token was rotated but whose certificate is valid; a browser still
+holding a revoked certificate while the requirement is relaxed), the request
+succeeds and is recorded instead as one **`auth.credential_ignored`** row with
+decision `allow`, naming the admitted identity, and metadata
+`{"ignored": "<token|mtls>", "method": "<admitted method>"}`. A successful
+request therefore never reads as a failed login in the audit log, while a
+stale or revoked credential still leaves a trace an operator can act on.
+
+Certificate issuance is audited on both paths: the refused online attempt as
+`identity.cert.issue` `deny` with `{"reason": "admin_target", "channel":
+"online"}`, and the offline `admin-cert issue` as `identity.cert.issue`
+`allow` with `{"serial": "...", "channel": "local"}` under actor identity
+`cli`. As everywhere else, none of these rows carry credential material.
+
 **Secret reads fail closed on audit failure.** For `secret.read` and
 `secret.reveal` specifically, the audit event is written with
 `Service.auditStrict` *before* the plaintext is returned to the caller; if
@@ -798,10 +901,17 @@ The security boundary explicitly does not protect against:
   each insufficient) but does not create a boundary against the process
   that holds the key material and sees the traffic.
 - **A malicious or compromised administrator.** Admin identities are the
-  management plane: they bypass the per-namespace method gate and data-plane
-  policy, and can reveal any
+  management plane: they stand outside the per-namespace method gate and
+  data-plane policy, and can reveal any
   non-client-bound secret; every action is audited, which gives detection,
-  not prevention.
+  not prevention. Requiring a client certificate alongside the token raises
+  the bar for *stealing* an admin credential — the token alone is worthless,
+  the key never travels in a request, and neither credential can mint a new
+  admin certificate without host access — but an attacker who holds both, or
+  who has the administrator's cooperation, has the full management plane.
+  Containment is revocation: `admin-cert revoke` for the certificate,
+  `rotate-admin` for the token, either of which takes effect on the next
+  request and closes open watch streams within a heartbeat.
 - **Loss of the master key**, which makes every secret version unrecoverable,
   or loss of a client-bound version's client token, which makes versions
   encrypted under that token unrecoverable. Both are by design (no escrow); see

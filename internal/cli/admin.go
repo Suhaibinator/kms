@@ -66,8 +66,9 @@ func (c *CLI) cmdInit(args []string) int {
 	fs := c.newFlags("init")
 	r := c.serverSettings(fs, "storage.sqlite_path", "encryption.kek_file")
 	admin := fs.String("admin", "", "also create a bootstrap admin identity with this `name`")
+	certDir := fs.String("cert-dir", "", "`directory` for the bootstrap admin's client certificate (NAME.crt/NAME.key); requires --admin")
 	c.setUsage(fs, "init [flags]",
-		"Create or migrate the database and establish its master key, optionally with a bootstrap admin identity.", true)
+		"Create or migrate the database, establish its master key and built-in CA, and optionally create a bootstrap admin identity with its client certificate.", true)
 	if !c.parseFlags(fs, args) {
 		return 2
 	}
@@ -80,6 +81,9 @@ func (c *CLI) cmdInit(args []string) int {
 	}
 	if err := c.requireSQLitePath(cfg); err != nil {
 		return c.fail("%v", err)
+	}
+	if *certDir != "" && *admin == "" {
+		return c.fail("--cert-dir requires --admin")
 	}
 	ctx := context.Background()
 
@@ -95,7 +99,17 @@ func (c *CLI) cmdInit(args []string) int {
 	if err != nil {
 		return c.fail("initializing master key: %v", err)
 	}
-	keyring.Active().Destroy()
+	defer keyring.Active().Destroy()
+
+	// init is the one place that creates the built-in CA: it runs once, before
+	// any server, so it cannot race a concurrent generator (InsertCAKey retires
+	// every other CA row). BootstrapCA is get-or-create, so re-running init on
+	// an existing database keeps the CA it already has.
+	svc := core.New(store, c.quietLogger(), Version)
+	svc.SetKeyring(keyring)
+	if err := svc.BootstrapCA(ctx); err != nil {
+		return c.fail("preparing built-in CA: %v", err)
+	}
 
 	_, _ = fmt.Fprintf(c.Stdout, "Initialized database at %s\n", dbTarget(cfg, prov))
 	if cfg.Encryption.KEKFile != "" {
@@ -103,24 +117,63 @@ func (c *CLI) cmdInit(args []string) int {
 	} else {
 		_, _ = fmt.Fprintln(c.Stdout, "Master key derived from passphrase. You must supply it on every start.")
 	}
+	_, _ = fmt.Fprintln(c.Stdout, "Built-in CA: ready")
 
 	if *admin != "" {
-		token, hash, err := crypto.GenerateToken("kms")
-		if err != nil {
-			return c.fail("generating admin token: %v", err)
+		if err := c.requireNoIdentity(ctx, store, *admin); err != nil {
+			return c.fail("%v", err)
 		}
-		if _, err := store.CreateIdentity(ctx, storage.CreateIdentityParams{
-			Name:      *admin,
-			Kind:      domain.IdentityKindAdmin,
-			TokenHash: hash,
+		if err := c.withReservedCertBundle(*certDir, *admin, func(output *reservedCertBundle) error {
+			return c.createBootstrapAdmin(ctx, store, svc, *admin, output)
 		}); err != nil {
-			return c.fail("creating admin identity: %v", err)
-		}
-		if err := printTokenOnce(c.Stdout, "admin identity", *admin, token); err != nil {
-			return c.fail("writing one-time admin token: %v", err)
+			return c.fail("%v", err)
 		}
 	}
 	return 0
+}
+
+// requireNoIdentity refuses to create an identity that already exists before
+// any certificate output files are reserved, so a retried init/create-admin
+// does not leave empty NAME.crt/NAME.key placeholders behind and points at the
+// command that adds a certificate to an existing admin instead.
+func (c *CLI) requireNoIdentity(ctx context.Context, store storage.Store, name string) error {
+	_, err := store.GetIdentityByName(ctx, name)
+	switch {
+	case err == nil:
+		return fmt.Errorf("identity %q already exists; to issue it a client certificate run: parameter-store admin-cert issue %s --out <dir>", name, name)
+	case errors.Is(err, domain.ErrNotFound):
+		return nil
+	default:
+		return fmt.Errorf("checking identity %q: %w", name, err)
+	}
+}
+
+// createBootstrapAdmin creates an admin identity directly in the store, prints
+// its one-time token, and — when output reserves a destination — issues and
+// writes its client certificate. Both credentials are shown exactly once.
+func (c *CLI) createBootstrapAdmin(ctx context.Context, store storage.Store, svc *core.Service, name string, output *reservedCertBundle) error {
+	token, hash, err := crypto.GenerateToken("kms")
+	if err != nil {
+		return fmt.Errorf("generating admin token: %w", err)
+	}
+	if _, err := store.CreateIdentity(ctx, storage.CreateIdentityParams{
+		Name:      name,
+		Kind:      domain.IdentityKindAdmin,
+		TokenHash: hash,
+	}); err != nil {
+		return fmt.Errorf("creating admin identity: %w", err)
+	}
+	if err := printTokenOnce(c.Stdout, "admin identity", name, token); err != nil {
+		return fmt.Errorf("writing one-time admin token: %w", err)
+	}
+	if output == nil {
+		return nil
+	}
+	bundle, err := svc.IssueLocalAdminCertificate(ctx, localAdminPrincipal(), name, 0)
+	if err != nil {
+		return fmt.Errorf("issuing admin client certificate: %w", err)
+	}
+	return c.publishAdminCert(ctx, svc, output, name, bundle)
 }
 
 // --- migrate ---------------------------------------------------------------
@@ -289,17 +342,18 @@ func (c *CLI) cmdRestore(args []string) int {
 
 func (c *CLI) cmdCreateAdmin(args []string) int {
 	fs := c.newFlags("create-admin")
-	r := c.serverSettings(fs, "storage.sqlite_path")
+	r := c.serverSettings(fs, "storage.sqlite_path", "encryption.kek_file")
 	name := fs.String("name", "", "admin identity `name`")
+	certDir := fs.String("cert-dir", "", "`directory` for the admin's client certificate (NAME.crt/NAME.key); omit for a token-only admin")
 	c.setUsage(fs, "create-admin [flags]",
-		"Create an admin identity directly in the database and print its token once.", true)
+		"Create an admin identity directly in the database and print its token once; with --cert-dir also issue its client certificate.", true)
 	if !c.parseFlags(fs, args) {
 		return 2
 	}
 	if !c.rejectPositionals() {
 		return 2
 	}
-	cfg, _, _, err := r.resolve()
+	cfg, prov, _, err := r.resolve()
 	if err != nil {
 		return c.fail("%v", err)
 	}
@@ -309,6 +363,7 @@ func (c *CLI) cmdCreateAdmin(args []string) int {
 	if *name == "" {
 		return c.fail("--name is required")
 	}
+	ctx := context.Background()
 	// Direct store access. WAL mode allows this concurrently with a running
 	// server, but the caller is responsible for that coordination.
 	store, err := storage.Open(cfg.Storage.SQLitePath)
@@ -317,19 +372,25 @@ func (c *CLI) cmdCreateAdmin(args []string) int {
 	}
 	defer func() { _ = store.Close() }()
 
-	token, hash, err := crypto.GenerateToken("kms")
-	if err != nil {
-		return c.fail("generating token: %v", err)
+	// The master key is only needed to issue a certificate: a token-only admin
+	// is created without unsealing (and so without a passphrase prompt).
+	var svc *core.Service
+	if *certDir != "" {
+		issuer, closeCA, err := c.requireLocalCA(ctx, store, cfg, prov)
+		if err != nil {
+			return c.fail("%v", err)
+		}
+		defer closeCA()
+		svc = issuer
 	}
-	if _, err := store.CreateIdentity(context.Background(), storage.CreateIdentityParams{
-		Name:      *name,
-		Kind:      domain.IdentityKindAdmin,
-		TokenHash: hash,
+
+	if err := c.requireNoIdentity(ctx, store, *name); err != nil {
+		return c.fail("%v", err)
+	}
+	if err := c.withReservedCertBundle(*certDir, *name, func(output *reservedCertBundle) error {
+		return c.createBootstrapAdmin(ctx, store, svc, *name, output)
 	}); err != nil {
-		return c.fail("creating admin identity: %v", err)
-	}
-	if err := printTokenOnce(c.Stdout, "admin identity", *name, token); err != nil {
-		return c.fail("writing one-time admin token: %v", err)
+		return c.fail("%v", err)
 	}
 	return 0
 }
@@ -385,8 +446,7 @@ func (c *CLI) cmdRotateAdmin(args []string) int {
 	}
 
 	svc := core.New(store, c.quietLogger(), Version)
-	localAdmin := core.Principal{Identity: domain.Identity{Name: "cli", Kind: domain.IdentityKindAdmin}}
-	token, err := svc.RotateIdentityToken(ctx, localAdmin, *name)
+	token, err := svc.RotateIdentityToken(ctx, localAdminPrincipal(), *name)
 	if err != nil {
 		return c.fail("rotating admin token: %v", err)
 	}
@@ -440,8 +500,7 @@ func (c *CLI) cmdRotateKEK(args []string) int {
 		return c.fail("preparing new master key: %v", err)
 	}
 
-	pr := core.Principal{Identity: domain.Identity{Name: "cli", Kind: domain.IdentityKindAdmin}}
-	secretsRewrapped, caRewrapped, err := svc.RotateKEK(ctx, pr, newKM, material)
+	secretsRewrapped, caRewrapped, err := svc.RotateKEK(ctx, localAdminPrincipal(), newKM, material)
 	if err != nil {
 		return c.fail("rotating KEK: %v", err)
 	}

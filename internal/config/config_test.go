@@ -160,6 +160,17 @@ func TestValidate(t *testing.T) {
 			t.Fatalf("Validate: %v", err)
 		}
 	})
+	t.Run("admin_require_client_cert without tls is accepted", func(t *testing.T) {
+		// Deliberately not a validation error: the default is on, and a
+		// TLS-less dev run must still start. serve relaxes the requirement at
+		// runtime and warns instead of refusing to boot.
+		cfg := Default()
+		cfg.Security.AdminRequireClientCert = true
+		cfg.Security.TLSEnabled = false
+		if err := cfg.Validate(); err != nil {
+			t.Fatalf("Validate: %v", err)
+		}
+	})
 }
 
 func TestBuildServerTLS(t *testing.T) {

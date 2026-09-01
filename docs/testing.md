@@ -48,6 +48,20 @@ make test-integration-race
 make test
 ```
 
+**Run the Go suites with `umask 077` and a private `TMPDIR`.** Tests that
+write credential bundles (`internal/cli` certificate output, backup and
+restore destinations) go through the same secure-destination check as
+production: every directory in the resolved parent chain must not be group- or
+other-writable without the sticky bit. A shared `/tmp` or the `umask 002`
+default on Debian and Ubuntu makes those tests fail with `unsafe destination
+spelling …`, which is the check working, not a flake:
+
+```bash
+umask 077
+export TMPDIR=$(mktemp -d)
+go test ./...
+```
+
 Generated managed-configuration artifacts are committed. In this repository,
 regenerate the fixture when its root contract changes and run the same
 read-only verification used by CI:

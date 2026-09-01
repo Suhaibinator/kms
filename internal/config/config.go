@@ -73,6 +73,12 @@ type SecurityConfig struct {
 	// IP (rate-limit key + audit source IP). Enable ONLY behind a trusted
 	// reverse proxy; otherwise clients can spoof it. Default false.
 	TrustProxyHeaders bool `yaml:"trust_proxy_headers"`
+	// AdminRequireClientCert makes an admin identity present a client
+	// certificate issued by the built-in CA *in addition to* its bearer token,
+	// on both listeners. Default true. It cannot be enforced when tls_enabled
+	// is false (no certificate ever reaches the server), so serve relaxes it
+	// with a startup warning rather than failing validation.
+	AdminRequireClientCert bool `yaml:"admin_require_client_cert"`
 }
 
 // EncryptionConfig points at the local master-key file (may be empty for
@@ -121,6 +127,9 @@ func Default() Config {
 		Storage: StorageConfig{
 			SQLitePath: "./kms.db",
 		},
+		// The Security block exists solely to default AdminRequireClientCert to
+		// true; every other field's zero value is its default.
+		Security:   SecurityConfig{AdminRequireClientCert: true},
 		Encryption: EncryptionConfig{},
 		Frontend:   FrontendConfig{Enabled: true},
 		Audit:      AuditConfig{Enabled: true},
@@ -267,11 +276,11 @@ func (c Config) Redacted() string {
 		kek = "set"
 	}
 	return fmt.Sprintf(
-		"grpc_addr=%s http_addr=%s sqlite_path=%s tls=%t mtls=%t kek_file=%s frontend=%t audit=%t "+
+		"grpc_addr=%s http_addr=%s sqlite_path=%s tls=%t mtls=%t admin_require_client_cert=%t kek_file=%s frontend=%t audit=%t "+
 			"heartbeat=%s retain_duration=%s retain_rows=%d release_retain_duration=%s release_retain_versions=%d release_subscriber_retain_duration=%s "+
 			"verify_defaults_requests_per_hour=%d verify_defaults_burst=%d verify_defaults_mismatch_budget_per_hour=%d log_level=%s",
 		c.Server.GRPCAddr, c.Server.HTTPAddr, c.Storage.SQLitePath,
-		c.Security.TLSEnabled, c.Security.MTLSEnabled, kek,
+		c.Security.TLSEnabled, c.Security.MTLSEnabled, c.Security.AdminRequireClientCert, kek,
 		c.Frontend.Enabled, c.Audit.Enabled,
 		time.Duration(c.Watch.HeartbeatInterval), time.Duration(c.Watch.RetainDuration),
 		c.Watch.RetainRows, time.Duration(c.Watch.ReleaseRetainDuration), c.Watch.ReleaseRetainVersions,

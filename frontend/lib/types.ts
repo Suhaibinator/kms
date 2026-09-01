@@ -59,6 +59,9 @@ export interface LoginResponse {
     name: string;
     kind: IdentityKind;
   };
+  // How the credentials presented at login were accepted ("mtls" | "token").
+  // Absent on servers older than admin client-certificate support.
+  auth_method?: string;
 }
 
 export interface HealthResponse {
@@ -70,6 +73,12 @@ export interface HealthResponse {
   // the Connect SDK panel; `tls_enabled: false` is a warning, not a detail.
   grpc_addr: string;
   tls_enabled: boolean;
+  // Whether the server makes admins present a client certificate on top of
+  // their token, and whether *this* connection presented a chain-verified one.
+  // Both are unauthenticated, so the login page can explain a missing
+  // certificate without becoming an oracle for token validity.
+  admin_client_cert_required: boolean;
+  client_cert_presented: boolean;
 }
 
 export interface ApiErrorEnvelope {
