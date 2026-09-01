@@ -158,15 +158,13 @@ func (e usageError) Error() string { return string(e) }
 
 // readTokenFile reads a bearer token from a file that must already be
 // private to the current user (no group/other bits, owner-only, a regular
-// file, not a symlink). One trailing newline is tolerated because editors
-// add it; any other whitespace or an empty file is rejected so a truncated
-// or misnamed file cannot silently turn into an anonymous call.
+// file, not a symlink); the file is opened read-only and never modified, so a
+// 0400 credential on a read-only mount works. One trailing newline is
+// tolerated because editors add it; any other whitespace or an empty file is
+// rejected so a truncated or misnamed file cannot silently turn into an
+// anonymous call.
 func readTokenFile(path string) (string, error) {
-	secured, err := fileutil.SecureExistingPrivateFile(path)
-	if err != nil {
-		return "", err
-	}
-	raw, err := os.ReadFile(secured)
+	raw, err := fileutil.ReadPrivateFile(path)
 	if err != nil {
 		return "", err
 	}
