@@ -82,8 +82,7 @@ func (c *CLI) adminCertName(action string) (string, bool) {
 		_, _ = fmt.Fprintf(c.Stderr, "error: admin-cert %s requires a NAME argument\n", action)
 		return "", false
 	}
-	if len(pos) > 1 {
-		_, _ = fmt.Fprintf(c.Stderr, "error: unexpected argument %q (boolean flags take the form --flag=false)\n", pos[1])
+	if !c.rejectExtraPositionals(1) {
 		return "", false
 	}
 	return pos[0], true

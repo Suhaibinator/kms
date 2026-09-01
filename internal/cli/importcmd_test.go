@@ -290,8 +290,54 @@ func TestImportJSONWithReportFileWritesBoth(t *testing.T) {
 	if body := readFileString(t, report); !strings.Contains(body, "A -> /prod/gradethis/a") {
 		t.Fatalf("report = %q", body)
 	}
-	if entries, _ := decodeJSONStdout(t, c)["entries"].([]any); len(entries) != 1 {
+	document := decodeJSONStdout(t, c)
+	if entries, _ := document["entries"].([]any); len(entries) != 1 {
 		t.Fatalf("stdout document = %q", c.stdout())
+	}
+	if document["report_file"] != report {
+		t.Fatalf("report_file = %v, want %q", document["report_file"], report)
+	}
+}
+
+// A real import with both -o json and --report puts each one-time token in
+// exactly one place: the report file the operator named. The JSON document
+// carries the mapping without tokens and names the file instead, the way
+// get-secret --out reports out_file rather than the value.
+func TestImportJSONWithReportFileKeepsTokensOutOfStdout(t *testing.T) {
+	dir := t.TempDir()
+	db := filepath.Join(dir, "kms.db")
+	keyFile := filepath.Join(dir, "master.key")
+	src := filepath.Join(dir, "export.json")
+	writeFile(t, src, `{"STRIPE_KEY":"sk_live_x"}`)
+	report := filepath.Join(dir, "report.txt")
+
+	init := newTestCLI()
+	if code := init.cmdInit([]string{"--sqlite-path", db, "--kek-file", keyFile}); code != 0 {
+		t.Fatalf("init exit=%d stderr=%s", code, init.stderr())
+	}
+
+	c := newTestCLI()
+	code := c.Run([]string{"-o", "json", "import", "--from", src, "--namespace", "prod/gradethis",
+		"--sqlite-path", db, "--kek-file", keyFile, "--report", report})
+	if code != 0 {
+		t.Fatalf("import exit = %d, stderr=%s", code, c.stderr())
+	}
+	body := readFileString(t, report)
+	if !strings.Contains(body, "kmss_") {
+		t.Fatalf("report file carries no token: %q", body)
+	}
+	if strings.Contains(c.stdout(), "kmss_") || strings.Contains(c.stderr(), "kmss_") {
+		t.Fatalf("a token left the report file:\nstdout=%s\nstderr=%s", c.stdout(), c.stderr())
+	}
+	document := decodeJSONStdout(t, c)
+	if document["report_file"] != report {
+		t.Fatalf("report_file = %v, want %q", document["report_file"], report)
+	}
+	entries, _ := document["entries"].([]any)
+	entry, _ := entries[0].(map[string]any)
+	assertJSONFields(t, entry, "key", "path")
+	if !strings.Contains(c.stderr(), "WARNING: the access tokens were written once to "+report) {
+		t.Fatalf("stderr = %q", c.stderr())
 	}
 }
 

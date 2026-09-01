@@ -97,14 +97,16 @@ func TestDefaultsApplyExecuteJSONPrintsOnlyTheAppliedDocument(t *testing.T) {
 	}
 }
 
-func TestDefaultsApplyMissingArtifactExitsNotFound(t *testing.T) {
+// A missing local artifact is a plain error, not "not found": 5 is reserved
+// for the server's verdict on a store resource.
+func TestDefaultsApplyMissingArtifactExitsError(t *testing.T) {
 	stub := &defaultsAdminStub{}
 	c := newTestCLI()
 	c.dialOverride = startDefaultsAdminServer(t, stub)
 	missing := filepath.Join(t.TempDir(), "absent.json")
 	code := c.Run([]string{"defaults", "apply", "dev/app", "--from", missing, "--insecure"})
-	if code != exitNotFound {
-		t.Fatalf("exit=%d want=%d stderr=%s", code, exitNotFound, c.stderr())
+	if code != exitError {
+		t.Fatalf("exit=%d want=%d stderr=%s", code, exitError, c.stderr())
 	}
 	if !strings.Contains(c.stderr(), "error: reading defaults artifact:") {
 		t.Fatalf("stderr = %s", c.stderr())

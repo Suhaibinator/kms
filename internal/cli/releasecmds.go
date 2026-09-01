@@ -135,6 +135,12 @@ func (c *CLI) cmdReleaseCreate(args []string) int {
 		return 2
 	}
 	pos := c.args()
+	if *file != "" && len(pos) > 0 {
+		return c.failUsage("release create takes FILE or --file, not both")
+	}
+	if !c.rejectExtraPositionals(1) {
+		return 2
+	}
 	if *file == "" && len(pos) > 0 {
 		*file = pos[0]
 	}
@@ -479,6 +485,9 @@ func (c *CLI) cmdReleaseList(args []string) int {
 	ns, err := parseNamespaceProto(pos[0])
 	if err != nil {
 		return c.failUsage("invalid namespace: %v", err)
+	}
+	if !c.rejectExtraPositionals(2) {
+		return 2
 	}
 	name := ""
 	if len(pos) > 1 {
@@ -904,8 +913,11 @@ func (c *CLI) cmdReleaseRollback(args []string) int {
 		return c.fail("release rollback: no previous release is available")
 	}
 	// Confirm last: everything above only reads, so the operator is asked only
-	// once there is a target to roll back to.
-	if ok, code := c.confirmDestructive("roll back the active release of", namespaceDisplay(ns)); !ok {
+	// once there is a target to roll back to. The prompt names the release and
+	// the version it will move to — a namespace usually holds several — and
+	// the typed resource stays ENV/APP, which is what the operator recognizes.
+	action := fmt.Sprintf("roll back release %s from v%d to v%d in", name, active.GetRelease().GetVersion(), target)
+	if ok, code := c.confirmDestructive(action, namespaceDisplay(ns)); !ok {
 		return code
 	}
 	expected := active.GetRelease().GetVersion()
@@ -1272,6 +1284,9 @@ func (c *CLI) cmdReleaseSchemaList(args []string) int {
 		return 2
 	}
 	pos := c.args()
+	if !c.rejectExtraPositionals(1) {
+		return 2
+	}
 	id := ""
 	if len(pos) > 0 {
 		id = pos[0]

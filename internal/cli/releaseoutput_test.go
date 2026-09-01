@@ -542,7 +542,7 @@ func TestReleaseRollbackRequiresTypedConfirmation(t *testing.T) {
 		if len(stub.activations()) != 0 {
 			t.Fatalf("a refused rollback must not reach the server: %+v", stub.activations())
 		}
-		if !strings.Contains(c.stderr(), "refusing to roll back the active release of prod/app without --yes") {
+		if !strings.Contains(c.stderr(), "refusing to roll back release runtime from v3 to v2 in prod/app without --yes") {
 			t.Fatalf("stderr = %s", c.stderr())
 		}
 	})

@@ -155,7 +155,7 @@ func (c *CLI) cmdPolicyList(args []string) int {
 	pageSize := fs.Int("page-size", 100, "result `count` per RPC")
 	c.setUsage(fs, "admin policy list [flags]",
 		"List policies with their subject and their allow and deny rules.", false)
-	if !c.parseFlags(fs, args) {
+	if !c.parseFlags(fs, args) || !c.rejectPositionals() {
 		return 2
 	}
 	conn, err := c.dialConn(cf)

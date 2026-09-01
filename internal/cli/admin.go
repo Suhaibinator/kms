@@ -184,7 +184,7 @@ func (c *CLI) requireNoIdentity(ctx context.Context, store storage.Store, name s
 	_, err := store.GetIdentityByName(ctx, name)
 	switch {
 	case err == nil:
-		return fmt.Errorf("identity %q already exists; to issue it a client certificate run: parameter-store admin-cert issue %s --out <dir>", name, name)
+		return fmt.Errorf("identity %q: %w; to issue it a client certificate run: parameter-store admin-cert issue %s --out <dir>", name, domain.ErrAlreadyExists, name)
 	case errors.Is(err, domain.ErrNotFound):
 		return nil
 	default:
@@ -470,7 +470,7 @@ func (c *CLI) cmdRestore(args []string) int {
 		// learn the destination needed --force. restoreFile re-checks under
 		// the atomic publish, so a file appearing in between is still refused.
 		if _, err := os.Lstat(sqlitePath); err == nil {
-			return c.failUsage("destination %s already exists; pass --force to overwrite", sqlitePath)
+			return c.failErr("", fmt.Errorf("destination %s: %w; pass --force to overwrite", sqlitePath, os.ErrExist))
 		}
 	}
 	c.warnDestructiveTarget(cfg, prov)

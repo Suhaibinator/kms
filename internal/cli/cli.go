@@ -458,10 +458,19 @@ func (c *CLI) env(key string) (string, bool) {
 // boolean flag: the flag package sets the flag to true and leaves "false" as a
 // positional, which would otherwise be ignored silently.
 func (c *CLI) rejectPositionals() bool {
-	if len(c.positionals) == 0 {
+	return c.rejectExtraPositionals(0)
+}
+
+// rejectExtraPositionals fails a command that takes at most want positional
+// arguments when parseFlags collected more. The stray argument is the same
+// "--flag false" hazard rejectPositionals describes, and on a command that
+// confirms before acting it is the difference between "--yes false" meaning
+// no and meaning yes.
+func (c *CLI) rejectExtraPositionals(want int) bool {
+	if len(c.positionals) <= want {
 		return true
 	}
-	_, _ = fmt.Fprintf(c.Stderr, "error: unexpected argument %q (boolean flags take the form --flag=false)\n", c.positionals[0])
+	_, _ = fmt.Fprintf(c.Stderr, "error: unexpected argument %q (boolean flags take the form --flag=false)\n", c.positionals[want])
 	return false
 }
 

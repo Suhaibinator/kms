@@ -123,9 +123,11 @@ func TestReadTokenFileRejectsUnsafeFiles(t *testing.T) {
 		if !errors.Is(err, os.ErrNotExist) {
 			t.Fatalf("readTokenFile of a missing file = %v, want os.ErrNotExist", err)
 		}
-		// A missing credential file exits 5, like any other missing resource.
-		if code := exitCodeFor(err); code != exitNotFound {
-			t.Fatalf("exitCodeFor = %d, want %d", code, exitNotFound)
+		// A missing credential file is a plain error: 5 means the server said
+		// "not found", and a script's `5) echo "no such secret"` must not
+		// fire on a mistyped --token-file path.
+		if code := exitCodeFor(err); code != exitError {
+			t.Fatalf("exitCodeFor = %d, want %d", code, exitError)
 		}
 	})
 

@@ -133,7 +133,7 @@ func (c *CLI) cmdNamespaceWrite(args []string, update bool) int {
 	description := fs.String("description", "", "namespace `description`")
 	authMethods := fs.String("auth-methods", "", "comma-separated allowed auth `methods` (mtls,token); default mtls")
 	c.setUsage(fs, "admin "+name+" --env ENV --app APP [flags]", summary, false)
-	if !c.parseFlags(fs, args) {
+	if !c.parseFlags(fs, args) || !c.rejectPositionals() {
 		return 2
 	}
 	ns, err := namespaceFromFlags(*env, *app)
@@ -192,7 +192,7 @@ func (c *CLI) cmdNamespaceDelete(args []string) int {
 	app := fs.String("app", "", "namespace `application` (e.g. gradethis)")
 	c.setUsage(fs, "admin namespace delete --env ENV --app APP [flags]",
 		"Delete a namespace that holds no parameters or secrets.", false)
-	if !c.parseFlags(fs, args) {
+	if !c.parseFlags(fs, args) || !c.rejectPositionals() {
 		return 2
 	}
 	ns, err := namespaceFromFlags(*env, *app)
@@ -231,7 +231,7 @@ func (c *CLI) cmdNamespaceList(args []string) int {
 	cf := addConnFlags(c, fs)
 	c.setUsage(fs, "admin namespace list [flags]",
 		"List namespaces with their allowed auth methods and parameter/secret counts.", false)
-	if !c.parseFlags(fs, args) {
+	if !c.parseFlags(fs, args) || !c.rejectPositionals() {
 		return 2
 	}
 	conn, err := c.dialConn(cf)
@@ -327,6 +327,9 @@ func (c *CLI) cmdIdentityCreate(args []string) int {
 	pos := c.args()
 	if len(pos) < 1 || pos[0] == "" {
 		return c.failUsage("identity create requires a NAME argument")
+	}
+	if !c.rejectExtraPositionals(1) {
+		return 2
 	}
 	name := pos[0]
 
@@ -470,6 +473,9 @@ func (c *CLI) cmdIdentityIssueCert(args []string) int {
 	if len(pos) < 1 || pos[0] == "" {
 		return c.failUsage("identity issue-cert requires a NAME argument")
 	}
+	if !c.rejectExtraPositionals(1) {
+		return 2
+	}
 	name := pos[0]
 	ttlSeconds, err := parseTTLSeconds(*ttl)
 	if err != nil {
@@ -542,6 +548,9 @@ func (c *CLI) cmdIdentityRevokeCert(args []string) int {
 	if len(pos) < 1 || pos[0] == "" {
 		return c.failUsage("identity revoke-cert requires a NAME argument")
 	}
+	if !c.rejectExtraPositionals(1) {
+		return 2
+	}
 	if *serial == "" {
 		return c.failUsage("--serial is required")
 	}
@@ -584,6 +593,9 @@ func (c *CLI) cmdIdentityRotate(args []string) int {
 	if len(pos) < 1 || pos[0] == "" {
 		return c.failUsage("identity rotate requires a NAME argument")
 	}
+	if !c.rejectExtraPositionals(1) {
+		return 2
+	}
 
 	conn, err := c.dialConn(cf)
 	if err != nil {
@@ -603,7 +615,7 @@ func (c *CLI) cmdIdentityRotate(args []string) int {
 		_, _ = fmt.Fprintln(c.Stderr, "WARNING: this token is shown once and cannot be recovered. Store it securely.")
 		return c.printJSON(identityTokenJSON{Name: pos[0], Token: resp.GetToken()})
 	}
-	if err := printTokenOnce(c.Stdout, "identity", pos[0], resp.Token); err != nil {
+	if err := printRotatedTokenOnce(c.Stdout, "identity", pos[0], resp.Token); err != nil {
 		return c.fail("writing one-time identity token: %v", err)
 	}
 	return 0
@@ -620,6 +632,9 @@ func (c *CLI) cmdIdentityRevoke(args []string) int {
 	pos := c.args()
 	if len(pos) < 1 || pos[0] == "" {
 		return c.failUsage("identity revoke requires a NAME argument")
+	}
+	if !c.rejectExtraPositionals(1) {
+		return 2
 	}
 	// Revoking an identity invalidates every credential it holds, so the
 	// operator retypes the name before the server is contacted.
@@ -651,7 +666,7 @@ func (c *CLI) cmdIdentityList(args []string) int {
 	cf := addConnFlags(c, fs)
 	c.setUsage(fs, "admin identity list [flags]",
 		"List identities with their kind, home namespace, and credential state.", false)
-	if !c.parseFlags(fs, args) {
+	if !c.parseFlags(fs, args) || !c.rejectPositionals() {
 		return 2
 	}
 	conn, err := c.dialConn(cf)
@@ -719,7 +734,7 @@ func (c *CLI) cmdAdminCA(args []string) int {
 	out := fs.String("out", "", "export the built-in client-issuing CA to this `file` (not the KMS server-trust CA)")
 	c.setUsage(fs, "admin ca show [flags]",
 		"Export the built-in client-issuing CA certificate, which is not the CA that signs the server certificate.", false)
-	if !c.parseFlags(fs, args[1:]) {
+	if !c.parseFlags(fs, args[1:]) || !c.rejectPositionals() {
 		return 2
 	}
 	conn, err := c.dialConn(cf)

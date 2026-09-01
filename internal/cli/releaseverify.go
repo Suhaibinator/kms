@@ -54,6 +54,9 @@ func (c *CLI) cmdReleaseVerifyDefaults(args []string) int {
 
 	conn, err := c.dialConn(cf)
 	if err != nil {
+		if exitCodeFor(err) == exitUsage {
+			return c.failUsage("%v", err)
+		}
 		return c.fail("%v", err)
 	}
 	defer func() { _ = conn.Close() }()

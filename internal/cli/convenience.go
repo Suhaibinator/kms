@@ -39,10 +39,15 @@ type connFlags struct {
 	tokenFile       string
 	secretToken     string
 	secretTokenFile string
-	ca              string
-	cert            string
-	key             string
-	insecure        bool
+	// secretTokenFlags records that addSecretTokenFlags ran, which is what
+	// makes KMS_SECRET_TOKEN_FILE apply: a per-secret token belongs only on
+	// the RPCs of the two commands that read or update a token-gated secret,
+	// never on every call a shell with the variable exported happens to make.
+	secretTokenFlags bool
+	ca               string
+	cert             string
+	key              string
+	insecure         bool
 	// finalizeErr is the error finalize produced, replayed by later callers
 	// (sync.Once runs the body only once).
 	finalizeErr error
@@ -53,10 +58,12 @@ type connFlags struct {
 const defaultEndpoint = "localhost:8443"
 
 // connEnvFallback pairs a connection field with the environment variable that
-// fills it when the flag was not given.
+// fills it when the flag was not given. A variable whose flag the command did
+// not register is ignored rather than applied.
 type connEnvFallback struct {
-	field *string
-	env   string
+	field      *string
+	env        string
+	registered bool
 }
 
 // envFallbacks lists every connection setting with its environment variable, in
@@ -66,13 +73,13 @@ type connEnvFallback struct {
 // as whom, not how to run one.
 func (cf *connFlags) envFallbacks() []connEnvFallback {
 	return []connEnvFallback{
-		{&cf.endpoint, "KMS_ENDPOINT"},
-		{&cf.token, "KMS_TOKEN"},
-		{&cf.tokenFile, "KMS_TOKEN_FILE"},
-		{&cf.secretTokenFile, "KMS_SECRET_TOKEN_FILE"},
-		{&cf.ca, "KMS_CA_FILE"},
-		{&cf.cert, "KMS_CLIENT_CERT_FILE"},
-		{&cf.key, "KMS_CLIENT_KEY_FILE"},
+		{&cf.endpoint, "KMS_ENDPOINT", true},
+		{&cf.token, "KMS_TOKEN", true},
+		{&cf.tokenFile, "KMS_TOKEN_FILE", true},
+		{&cf.secretTokenFile, "KMS_SECRET_TOKEN_FILE", cf.secretTokenFlags},
+		{&cf.ca, "KMS_CA_FILE", true},
+		{&cf.cert, "KMS_CLIENT_CERT_FILE", true},
+		{&cf.key, "KMS_CLIENT_KEY_FILE", true},
 	}
 }
 
@@ -97,6 +104,7 @@ func addConnFlags(c *CLI, fs *flag.FlagSet) *connFlags {
 // addSecretTokenFlags registers the per-secret token flags for commands that
 // read or update token-gated secrets.
 func addSecretTokenFlags(fs *flag.FlagSet, cf *connFlags, usage string) {
+	cf.secretTokenFlags = true
 	fs.StringVar(&cf.secretToken, "secret-token", "", usage+" (visible in the process list, prefer --secret-token-file)")
 	fs.StringVar(&cf.secretTokenFile, "secret-token-file", "", "read the per-secret token from this private `file` (env KMS_SECRET_TOKEN_FILE)")
 }
@@ -114,7 +122,7 @@ func addSecretTokenFlags(fs *flag.FlagSet, cf *connFlags, usage string) {
 func (cf *connFlags) finalize() error {
 	cf.once.Do(func() {
 		for _, fallback := range cf.envFallbacks() {
-			if *fallback.field != "" {
+			if !fallback.registered || *fallback.field != "" {
 				continue
 			}
 			if v, ok := cf.c.env(fallback.env); ok {
@@ -218,8 +226,8 @@ func (cf *connFlags) dial() (*grpc.ClientConn, error) {
 // metadata, matching the server's expected header names. mTLS callers omit the
 // bearer token; the server derives their identity from the client certificate.
 func (cf *connFlags) authCtx(ctx context.Context) context.Context {
-	// dial has already surfaced any finalize error; a failed finalize leaves
-	// both tokens empty, so the worst case here is an unauthenticated call.
+	// dial has already surfaced any finalize error, and every caller returns
+	// on it before reaching here; the tokens are whatever finalize left.
 	_ = cf.finalize()
 	var kvs []string
 	if cf.token != "" {
@@ -336,6 +344,9 @@ func (c *CLI) cmdPutSecret(args []string) int {
 	if len(pos) < 1 || pos[0] == "" {
 		return c.failUsage("put-secret requires a /env/app/key argument")
 	}
+	if !c.rejectExtraPositionals(1) {
+		return 2
+	}
 	ref, err := keyutil.SplitDisplayPath(pos[0])
 	if err != nil {
 		return c.failUsage("invalid path: %v", err)
@@ -417,6 +428,9 @@ func (c *CLI) cmdGetSecret(args []string) int {
 	pos := c.args()
 	if len(pos) < 1 || pos[0] == "" {
 		return c.failUsage("get-secret requires a /env/app/key argument")
+	}
+	if !c.rejectExtraPositionals(1) {
+		return 2
 	}
 	ref, err := keyutil.SplitDisplayPath(pos[0])
 	if err != nil {
@@ -510,6 +524,9 @@ func (c *CLI) cmdPutParameter(args []string) int {
 	if len(pos) < 2 || pos[0] == "" {
 		return c.failUsage("put-parameter requires /env/app/key and VALUE arguments")
 	}
+	if !c.rejectExtraPositionals(2) {
+		return 2
+	}
 	ref, err := keyutil.SplitDisplayPath(pos[0])
 	if err != nil {
 		return c.failUsage("invalid path: %v", err)
@@ -559,6 +576,9 @@ func (c *CLI) cmdList(args []string) int {
 	pos := c.args()
 	if len(pos) < 1 || pos[0] == "" {
 		return c.failUsage("list requires an env/app namespace argument")
+	}
+	if !c.rejectExtraPositionals(1) {
+		return 2
 	}
 	ns, err := keyutil.ParseNamespace(pos[0])
 	if err != nil {

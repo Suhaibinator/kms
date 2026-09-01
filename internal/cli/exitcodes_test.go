@@ -7,6 +7,7 @@ import (
 	"net"
 	"os"
 	"strings"
+	"syscall"
 	"testing"
 
 	"google.golang.org/grpc/codes"
@@ -126,16 +127,20 @@ func TestExitCodeForStdlibAndTransport(t *testing.T) {
 		{"plain", errors.New("plain"), exitError},
 		{"usageError", usageError("--token and --token-file are mutually exclusive"), exitUsage},
 		{"wrapped usageError", fmt.Errorf("--token-file: %w", usageError("bad")), exitUsage},
-		{"os.ErrNotExist", os.ErrNotExist, exitNotFound},
-		{"PathError not exist", &os.PathError{Op: "open", Path: "/nope", Err: os.ErrNotExist}, exitNotFound},
+		{"os.ErrNotExist is a local file, not a store resource", os.ErrNotExist, exitError},
+		{"PathError not exist", &os.PathError{Op: "open", Path: "/nope", Err: os.ErrNotExist}, exitError},
 		{"os.ErrExist", os.ErrExist, exitConflict},
 		{"wrapped os.ErrExist", fmt.Errorf("backup file: %w", os.ErrExist), exitConflict},
 		{"context.DeadlineExceeded", context.DeadlineExceeded, exitUnavailable},
 		{"wrapped deadline", fmt.Errorf("rpc: %w", context.DeadlineExceeded), exitUnavailable},
-		{"net.Error", fakeNetError{}, exitUnavailable},
-		{"wrapped net.Error", fmt.Errorf("dialing kms:8443: %w", fakeNetError{}), exitUnavailable},
-		{"timeout net.Error", fakeNetError{timeout: true}, exitUnavailable},
 		{"net.OpError", &net.OpError{Op: "dial", Net: "tcp", Err: errors.New("connection refused")}, exitUnavailable},
+		{"wrapped net.OpError", fmt.Errorf("dialing kms:8443: %w", &net.OpError{Op: "dial", Net: "tcp", Err: errors.New("connection refused")}), exitUnavailable},
+		{"net.DNSError", &net.DNSError{Err: "no such host", Name: "kms.internal"}, exitUnavailable},
+		// syscall.Errno satisfies net.Error; a local file error must not read
+		// as a transport failure.
+		{"EACCES on a local file", &os.PathError{Op: "open", Path: "/etc/kms/token", Err: syscall.EACCES}, exitError},
+		{"ENOENT on a local file", &os.PathError{Op: "open", Path: "/nope", Err: syscall.ENOENT}, exitError},
+		{"bare net.Error implementation", fakeNetError{}, exitError},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -247,7 +252,7 @@ func TestFailErrIsNotSilencedByQuiet(t *testing.T) {
 	t.Parallel()
 	c := newTestCLI()
 	c.quiet = true
-	if code := c.failErr("", os.ErrNotExist); code != exitNotFound {
+	if code := c.failErr("", domain.ErrNotFound); code != exitNotFound {
 		t.Fatalf("failErr code = %d, want %d", code, exitNotFound)
 	}
 	if c.stderr() == "" {
@@ -274,6 +279,28 @@ func TestInvocationErrorsExitUsage(t *testing.T) {
 		{[]string{"admin", "identity", "frobnicate"}, "unknown identity action"},
 		{[]string{"admin", "ca"}, "admin ca supports only: ca show"},
 		{[]string{"release", "show", "prod/app", "rel"}, "requires ENV/APP NAME VERSION"},
+		// "--yes false" leaves "false" as a positional the flag package has
+		// already ignored while setting --yes; a confirming command must
+		// refuse rather than treat that as consent.
+		{[]string{"admin", "namespace", "delete", "--env", "prod", "--app", "api", "--yes", "false"}, `unexpected argument "false"`},
+		{[]string{"admin", "namespace", "create", "--env", "prod", "--app", "api", "stray"}, `unexpected argument "stray"`},
+		{[]string{"admin", "identity", "revoke", "svc", "--yes", "false"}, `unexpected argument "false"`},
+		{[]string{"admin", "identity", "revoke-cert", "svc", "--serial", "1", "--yes", "false"}, `unexpected argument "false"`},
+		{[]string{"admin", "identity", "create", "svc", "extra"}, `unexpected argument "extra"`},
+		{[]string{"admin", "identity", "issue-cert", "svc", "extra"}, `unexpected argument "extra"`},
+		{[]string{"admin", "identity", "rotate", "svc", "extra"}, `unexpected argument "extra"`},
+		{[]string{"admin", "identity", "list", "extra"}, `unexpected argument "extra"`},
+		{[]string{"admin", "namespace", "list", "extra"}, `unexpected argument "extra"`},
+		{[]string{"admin", "policy", "list", "extra"}, `unexpected argument "extra"`},
+		{[]string{"admin", "ca", "show", "extra"}, `unexpected argument "extra"`},
+		{[]string{"put-secret", "/prod/api/key", "value-that-should-be-stdin"}, `unexpected argument "value-that-should-be-stdin"`},
+		{[]string{"get-secret", "/prod/api/key", "--show", "false"}, `unexpected argument "false"`},
+		{[]string{"put-parameter", "/prod/api/key", "v", "extra"}, `unexpected argument "extra"`},
+		{[]string{"list", "prod/api", "extra"}, `unexpected argument "extra"`},
+		{[]string{"release", "create", "--file", "a.yaml", "b.yaml"}, "takes FILE or --file, not both"},
+		{[]string{"release", "create", "a.yaml", "b.yaml"}, `unexpected argument "b.yaml"`},
+		{[]string{"release", "list", "prod/app", "rel", "extra"}, `unexpected argument "extra"`},
+		{[]string{"release", "schema", "list", "id", "extra"}, `unexpected argument "extra"`},
 		{[]string{"release", "validate", "prod/app", "rel", "v1"}, "invalid VERSION"},
 		{[]string{"release", "activate", "prod:app", "rel", "1"}, "invalid namespace"},
 		{[]string{"admin", "ca", "rotate"}, "admin ca supports only: ca show"},

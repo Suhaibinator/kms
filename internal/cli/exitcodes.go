@@ -17,7 +17,9 @@ import (
 // documented in docs/operations.md. Codes 3–9 mirror the gRPC status the
 // server returned (or the equivalent domain sentinel for offline commands),
 // so `parameter-store get-secret` failing with 5 means "not found" whether
-// the caller reads the message or not.
+// the caller reads the message or not. A missing local file — a token file,
+// a CA bundle, a config file — is therefore a plain 1, never 5: the script
+// pattern `5) echo "no such secret"` must not fire on a mistyped path.
 const (
 	exitOK                 = 0
 	exitError              = 1 // any error not classified below
@@ -69,7 +71,7 @@ func exitCodeFor(err error) int {
 		return exitUnauthenticated
 	case errors.Is(err, domain.ErrPermissionDenied):
 		return exitPermissionDenied
-	case errors.Is(err, domain.ErrNotFound), errors.Is(err, os.ErrNotExist):
+	case errors.Is(err, domain.ErrNotFound):
 		return exitNotFound
 	case errors.Is(err, domain.ErrAlreadyExists), errors.Is(err, domain.ErrAborted), errors.Is(err, os.ErrExist):
 		return exitConflict
@@ -80,8 +82,14 @@ func exitCodeFor(err error) int {
 	case errors.Is(err, domain.ErrNotReady), errors.Is(err, context.DeadlineExceeded):
 		return exitUnavailable
 	}
-	var netErr net.Error
-	if errors.As(err, &netErr) {
+	// Only the net package's own error types count as transport failures.
+	// The net.Error interface is too wide: syscall.Errno satisfies it, so a
+	// local "permission denied" or "no such file" wrapped in an *os.PathError
+	// would otherwise read as "server unavailable".
+	var opErr *net.OpError
+	var dnsErr *net.DNSError
+	var addrErr *net.AddrError
+	if errors.As(err, &opErr) || errors.As(err, &dnsErr) || errors.As(err, &addrErr) {
 		return exitUnavailable
 	}
 	return exitError

@@ -547,6 +547,10 @@ One-time credentials keep their table-mode rules:
 - A one-time token — an identity token, a rotated admin token, a per-secret
   access token, an import token — appears in the document exactly once. The
   "shown once" warning stays on stderr, where `--quiet` cannot reach it.
+- `import --report FILE --output json` writes the tokens to the report file
+  **only**: each entry's `token` is blank and the document carries
+  `report_file`, so the same credentials never land in two places (the same
+  single-sink rule as `get-secret --out`).
 - Certificate bundles are **never** embedded. The files are written to
   `--out`/`--cert-dir` and the document names them (`cert_file`, `key_file`).
   `admin identity create` and `admin identity issue-cert` with `--output json`
@@ -576,7 +580,7 @@ above with `X` as each element:
 | `restore` | `{sqlite_path, backup_file}` |
 | `rotate-admin` | `{name, token}` |
 | `rotate-kek` | `{kek_id, secret_versions_rewrapped, ca_keys_rewrapped, new_key_file}` — `new_key_file` is absent in passphrase mode |
-| `import` | `{namespace: {env, app}, dry_run, imported, entries}`, entry `{key, path, token}` — `token` only on a real import |
+| `import` | `{namespace: {env, app}, dry_run, imported, report_file, entries}`, entry `{key, path, token}` — `token` only on a real import without `--report`; with `--report FILE` the tokens are written to that file, `token` is blank, and `report_file` names it |
 | `config show` | `{config_path, config_path_source, passphrase, settings}`, setting `{key, value, source}` — `passphrase` reports `set`/`unset` only |
 | `config validate` | `{valid, config_path}` — only the valid case is printed; an invalid configuration exits non-zero with the reason on stderr |
 | `version` | `{version}` |
@@ -617,12 +621,12 @@ above with `X` as each element:
 | Code | Meaning |
 |---|---|
 | `0` | Success. |
-| `1` | An error not classified below. |
-| `2` | Usage: a bad flag, a missing or unknown action or positional argument, a missing required flag, an invalid `ENV/APP` or `VERSION`, or a refused or mistyped confirmation. Nothing is dialed or opened first. |
+| `1` | An error not classified below, including every local-file problem: a missing or unreadable token file, CA bundle, configuration file, manifest, or `defaults` artifact. |
+| `2` | Usage: a bad flag, a stray positional argument (`--yes false` is the usual culprit), a missing or unknown action or positional, a missing required flag, an invalid `ENV/APP` or `VERSION`, or a refused or mistyped confirmation. Nothing is dialed or opened first. |
 | `3` | Unauthenticated. |
 | `4` | Permission denied. |
-| `5` | Not found. |
-| `6` | Conflict: the resource already exists, or a compare-and-swap lost. |
+| `5` | Not found: the store or server has no such namespace, identity, policy, key, release, or version. A file the CLI itself could not find is `1`, so scripts can tell "no such secret" from "the token file is missing". |
+| `6` | Conflict: the resource already exists (`admin identity create` for an existing name, `backup --out` and `restore` onto an existing file without `--force`), or a compare-and-swap lost. |
 | `7` | Failed precondition, including an activation that release validation refused. |
 | `8` | Server unavailable: unreachable, not ready, or the call deadline expired. |
 | `9` | Rate limited (resource exhausted). |
@@ -660,7 +664,7 @@ also accepts a file:
 | Flag | Environment | Holds |
 |---|---|---|
 | `--token-file FILE` | `KMS_TOKEN_FILE` | The identity bearer token. |
-| `--secret-token-file FILE` | `KMS_SECRET_TOKEN_FILE` | The per-secret access token (`put-secret`, `get-secret`). |
+| `--secret-token-file FILE` | `KMS_SECRET_TOKEN_FILE` | The per-secret access token (`put-secret`, `get-secret` only). |
 
 Prefer these over `--token`/`--secret-token` anywhere the command line is
 observable — a shared host, a CI runner, a container others can `exec` into.
@@ -683,7 +687,11 @@ error: --token and --token-file (or KMS_TOKEN and KMS_TOKEN_FILE) are mutually e
 The check covers the environment: exporting `KMS_TOKEN` and passing
 `--token-file` (or the reverse) fails the same way. Note that `--secret-token`
 has no environment fallback of its own; only `--secret-token-file` /
-`KMS_SECRET_TOKEN_FILE` does.
+`KMS_SECRET_TOKEN_FILE` does. `KMS_SECRET_TOKEN_FILE` is read only by
+`put-secret` and `get-secret`, the two commands that accept
+`--secret-token-file`: a shell that exports it can still run `list`, `whoami`,
+or any `admin` command without those calls opening — or failing on — a file
+they would never use.
 
 #### Confirmations
 
@@ -745,8 +753,14 @@ may notice are recorded here:
   `admin identity revoke-cert`, and `admin-cert revoke`.
 - Failures that previously exited `1` now exit `3`–`9` when the server
   classified them, `2` when the command line itself was wrong (a missing
-  positional used to be `1`), and `6` when `backup --out` names an existing
-  file. A script that tests `-eq 1` should test `-ne 0` instead.
+  positional used to be `1`), and `6` when `backup --out` or `restore` names an
+  existing file without `--force`. A missing local file — token file, CA
+  bundle, manifest, artifact — stays `1`; only a store or server resource is
+  `5`. A script that tests `-eq 1` should test `-ne 0` instead.
+- Every command now rejects positional arguments it does not take, so
+  `--yes false` (which the flag parser reads as `--yes` plus a stray `false`)
+  is refused with exit `2` instead of silently confirming. `release create`
+  takes the manifest as `FILE` or `--file`, not both.
 - `--output json`, `KMS_OUTPUT`, `--quiet`, `--token-file`,
   `--secret-token-file`, and the `whoami` command are new.
 
@@ -1057,8 +1071,10 @@ parameter-store release rollback prod/gradethis runtime 1 \
 
 Both commands confirm first. `activate` prints the diff from the currently
 active release to stderr — or `No active release in prod/gradethis; runtime v1
-will become the first.` — and then asks `[y/N]`; `rollback` asks the operator to
-retype `prod/gradethis`. Neither preview is suppressed by `--quiet`. A pipeline
+will become the first.` — and then asks `[y/N]`; `rollback` names the exact
+transition (`roll back release runtime from v3 to v2 in prod/gradethis`) and
+asks the operator to retype `prod/gradethis`. Neither preview is suppressed by
+`--quiet`. A pipeline
 must pass `--yes`, or the command refuses on its non-interactive stdin without
 acting. An activation that release validation refuses exits `7` and prints the
 individual validation errors.

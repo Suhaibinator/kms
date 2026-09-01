@@ -80,7 +80,9 @@ func (c *CLI) cmdImport(args []string) int {
 
 	// In JSON mode stdout carries the report as the result document, so the
 	// text report is written only when --report names a file. --report keeps
-	// its meaning in both modes: the file always receives the text mapping.
+	// its meaning in both modes: the file always receives the text mapping,
+	// tokens included — and then the JSON document does not, so each one-time
+	// token lands in exactly one place (the file the operator named for it).
 	writeText := !c.jsonOutput() || *report != ""
 	out, closeReport, err := c.reportWriter(*report)
 	if err != nil {
@@ -116,7 +118,7 @@ func (c *CLI) cmdImport(args []string) int {
 		}
 		c.info("Dry run: %d keys would be imported into %s. No data written.", len(entries), ns)
 		if c.jsonOutput() {
-			return c.printJSON(importJSON(ns, results, true))
+			return c.printJSON(importJSON(ns, results, true, *report))
 		}
 		return 0
 	}
@@ -168,8 +170,12 @@ func (c *CLI) cmdImport(args []string) int {
 	if c.jsonOutput() {
 		// The access tokens are unrecoverable, so the warning the text report
 		// carries is repeated on stderr where --quiet cannot reach it.
-		_, _ = fmt.Fprintln(c.Stderr, "WARNING: the access tokens are shown once and are not recoverable. Update app configs now.")
-		return c.printJSON(importJSON(ns, results, false))
+		if *report != "" {
+			_, _ = fmt.Fprintf(c.Stderr, "WARNING: the access tokens were written once to %s and are not recoverable. Update app configs now.\n", *report)
+		} else {
+			_, _ = fmt.Fprintln(c.Stderr, "WARNING: the access tokens are shown once and are not recoverable. Update app configs now.")
+		}
+		return c.printJSON(importJSON(ns, results, false, *report))
 	}
 	return 0
 }
@@ -185,12 +191,14 @@ func importReportPrefix(withTokens bool, verb string) string {
 
 // importReportJSON is the JSON form of the mapping report: what came from
 // where, and (for a real import) the one-time access token each new secret
-// received. Tokens appear here exactly once.
+// received. A token appears exactly once: in this document, or — when
+// --report named a file — in that file, which report_file then names.
 type importReportJSON struct {
-	Namespace namespaceRefJSON  `json:"namespace"`
-	DryRun    bool              `json:"dry_run"`
-	Imported  int               `json:"imported"`
-	Entries   []importEntryJSON `json:"entries"`
+	Namespace  namespaceRefJSON  `json:"namespace"`
+	DryRun     bool              `json:"dry_run"`
+	Imported   int               `json:"imported"`
+	ReportFile string            `json:"report_file,omitempty"`
+	Entries    []importEntryJSON `json:"entries"`
 }
 
 // importEntryJSON mirrors importResult: the field order and names are the same
@@ -203,17 +211,24 @@ type importEntryJSON struct {
 
 // importJSON assembles the report document. A dry run reports what would
 // happen and mints no tokens, so imported stays 0 and no entry carries one.
-func importJSON(ns domain.NamespaceRef, results []importResult, dryRun bool) importReportJSON {
+// When reportFile is set the tokens have already been written there, so the
+// entries omit them.
+func importJSON(ns domain.NamespaceRef, results []importResult, dryRun bool, reportFile string) importReportJSON {
 	document := importReportJSON{
-		Namespace: namespaceRefJSON{Env: ns.Env, App: ns.App},
-		DryRun:    dryRun,
-		Entries:   make([]importEntryJSON, 0, len(results)),
+		Namespace:  namespaceRefJSON{Env: ns.Env, App: ns.App},
+		DryRun:     dryRun,
+		ReportFile: reportFile,
+		Entries:    make([]importEntryJSON, 0, len(results)),
 	}
 	if !dryRun {
 		document.Imported = len(results)
 	}
 	for _, r := range results {
-		document.Entries = append(document.Entries, importEntryJSON(r))
+		entry := importEntryJSON(r)
+		if reportFile != "" {
+			entry.Token = ""
+		}
+		document.Entries = append(document.Entries, entry)
 	}
 	return document
 }

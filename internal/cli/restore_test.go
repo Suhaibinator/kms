@@ -294,8 +294,8 @@ func TestRestoreOverExistingDestinationNeedsBothYesAndForce(t *testing.T) {
 
 	// --yes alone still refuses: --force keeps its own meaning.
 	withoutForce := newTestCLI()
-	if code := withoutForce.cmdRestore([]string{"--sqlite-path", destination, "--in", backup, "--yes"}); code == 0 {
-		t.Fatalf("restore replaced an existing destination without --force; stderr=%s", withoutForce.stderr())
+	if code := withoutForce.cmdRestore([]string{"--sqlite-path", destination, "--in", backup, "--yes"}); code != exitConflict {
+		t.Fatalf("restore over an existing destination without --force: code = %d, want %d (same as backup); stderr=%s", code, exitConflict, withoutForce.stderr())
 	}
 	if !strings.Contains(withoutForce.stderr(), "pass --force to overwrite") {
 		t.Fatalf("stderr = %q", withoutForce.stderr())
