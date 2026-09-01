@@ -170,7 +170,7 @@ func startServe(t *testing.T, tlsEnabled bool, extraArgs ...string) *servedKMS {
 	served.baseURL = scheme + "://" + addr
 
 	c := newTestCLI()
-	c.CLI.Stderr = served.logs
+	c.Stderr = served.logs
 	c.stopServe = served.stop
 	go func() { served.done <- c.cmdServe(args) }()
 	t.Cleanup(func() { served.stopAndWait(t) })
@@ -214,6 +214,7 @@ func (s *servedKMS) health(t *testing.T) map[string]any {
 		}
 		resp, err := client.Get(s.baseURL + "/api/v1/health")
 		if err == nil {
+			defer func() { _ = resp.Body.Close() }()
 			return decodeJSONBody(t, resp)
 		}
 		if time.Now().After(deadline) {
@@ -236,6 +237,7 @@ func (s *servedKMS) whoami(t *testing.T, withCert bool) (int, map[string]any) {
 	if err != nil {
 		t.Fatalf("whoami (cert=%t): %v", withCert, err)
 	}
+	defer func() { _ = resp.Body.Close() }()
 	return resp.StatusCode, decodeJSONBody(t, resp)
 }
 

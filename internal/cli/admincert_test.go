@@ -929,7 +929,7 @@ func TestAdminCertIssueKeepsWrittenCredentialsWhenOutputFails(t *testing.T) {
 	outDir := t.TempDir()
 
 	c := newTestCLI()
-	c.CLI.Stdout = errorWriter{err: io.ErrClosedPipe}
+	c.Stdout = errorWriter{err: io.ErrClosedPipe}
 	code := c.Run([]string{"admin-cert", "issue", "ops",
 		"--sqlite-path", db, "--kek-file", keyFile, "--out", outDir})
 	if code != 1 {
