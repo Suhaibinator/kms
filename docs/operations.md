@@ -439,7 +439,10 @@ Initialized database at /data/kms.db (source: env KMS_SQLITE_PATH)
 
 `restore` and `rotate-kek` print `Target database: /abs/path (source: ...)` to
 stderr before they touch anything, so a destructive run names its target
-first.
+first, and then confirm before acting — see
+[Global flags, output formats, and exit codes](#global-flags-output-formats-and-exit-codes)
+for the confirmation rules, the machine-readable `--output json` mode, the exit
+codes every command shares, and the `--token-file` credential form.
 
 | Command | Flags | Purpose |
 |---|---|---|
@@ -447,13 +450,13 @@ first.
 | `migrate` | `--sqlite-path` | Opens the database, applying any pending migrations, and exits. |
 | `check` | `--sqlite-path`, `--kek-file` (optional) | Verifies the database is reachable and, whenever a key source resolves (a key file from the flag, `KMS_KEK_FILE`, or `encryption.kek_file`; `KMS_MASTER_PASSPHRASE`; or a TTY), verifies the master key against the stored key-check value. Never prints key material. |
 | `backup` | `--sqlite-path`, `--out` (required, must not already exist) | Writes a consistent online backup through owner-only staging and atomic no-replace publication. Prints a reminder that the master key is not included. |
-| `restore` | `--sqlite-path` (destination), `--in` (required, source backup), `--force` (overwrite an existing destination) | Validates the input is a KMS SQLite backup, stages an owner-only copy, publishes it atomically, removes stale `-wal`/`-shm` sidecars, then opens (and migrates) it. Without `--force`, publication never replaces an existing or concurrently created entry. |
+| `restore` | `--sqlite-path` (destination), `--in` (required, source backup), `--force` (overwrite an existing destination), `--yes` | Validates the input is a KMS SQLite backup, stages an owner-only copy, publishes it atomically, removes stale `-wal`/`-shm` sidecars, then opens (and migrates) it. Without `--force`, publication never replaces an existing or concurrently created entry — and an existing destination is refused before the prompt. **Confirms `[y/N]`** after printing the target; a script needs `--yes`, plus `--force` if the destination exists. |
 | `create-admin` | `--sqlite-path`, `--name` (required), `--kek-file`, `--cert-dir DIR` (optional) | Creates an admin identity directly against the database file and prints its token once. With `--cert-dir`, also issues the admin's client certificate into `DIR/NAME.crt` and `DIR/NAME.key` — that path unseals the master key and requires an existing CA. Without it the admin is token-only and no unseal (or passphrase prompt) happens, so it cannot sign in while `admin_require_client_cert` is enforced until `admin-cert issue` runs. Uses WAL mode's concurrent-reader support, but coordinating this against a live `serve` process is the operator's responsibility. |
 | `rotate-admin` | `--sqlite-path`, `--name` (required) | Recovery command that directly replaces an existing enabled admin identity's token hash and prints the new token once. The old token becomes invalid immediately; a disabled admin, client identity, missing identity, or identity without a token is rejected without mutation. It does not require the old token, master key, or a running server. If output is lost, rerun the command to mint another replacement. A running server observes the shared-database update immediately, but operators must coordinate concurrent identity administration. |
 | `admin-cert issue` | `NAME` (positional), `--out DIR` (**required**), `--ttl` (default 90d), `--sqlite-path`, `--kek-file` | Issues a client certificate for an existing admin identity, offline. Unseals the master key, requires an existing CA, and refuses a non-admin, unknown, or disabled target without writing anything. Writes `DIR/NAME.crt` (`0644`) and `DIR/NAME.key` (`0600`), both created exclusively; the private key is never printed. Audited as `identity.cert.issue` with actor `cli` and `channel: local`. This is the **only** way to mint an admin certificate. |
-| `admin-cert revoke` | `NAME` (positional), `--serial SERIAL` (required), `--sqlite-path` | Revokes one of that admin's certificates. Needs no master key. The certificate stops authenticating on the next request; a running server sees the change immediately. |
+| `admin-cert revoke` | `NAME` (positional), `--serial SERIAL` (required), `--sqlite-path`, `--yes` | Revokes one of that admin's certificates. Needs no master key. The certificate stops authenticating on the next request; a running server sees the change immediately. **Confirms by retyping `NAME`.** |
 | `admin-cert list` | `NAME` (positional), `--sqlite-path` | Prints the admin's certificates as `SERIAL FINGERPRINT STATE EXPIRES ISSUED`, where state is `valid`, `revoked`, or `expired`. Read-only and unaudited. |
-| `rotate-kek` | `--sqlite-path`, `--kek-file` (current key, omit to use the current passphrase), `--new-key-file` (new key, omit to enter a new passphrase) | Unseals with the current key, generates or loads the new key, and calls the same `Service.RotateKEK` used internally — rewrapping every **non-destroyed** secret version's DEK and every built-in CA key under the new KEK in one transaction. Prints both counts (`N secret versions and M CA keys rewrapped`). Run with `serve` stopped; a live process retains the old keyring. |
+| `rotate-kek` | `--sqlite-path`, `--kek-file` (current key, omit to use the current passphrase), `--new-key-file` (new key, omit to enter a new passphrase), `--yes` | **Confirms by retyping the absolute database path**, before the database is opened or any passphrase is prompted for. Unseals with the current key, generates or loads the new key, and calls the same `Service.RotateKEK` used internally — rewrapping every **non-destroyed** secret version's DEK and every built-in CA key under the new KEK in one transaction. Prints both counts (`N secret versions and M CA keys rewrapped`). Run with `serve` stopped; a live process retains the old keyring. |
 | `import` | `--from` (JSON file or SuhaibParameterStore SQLite export), `--namespace env/app` **or** `--env`/`--app`, `--sqlite-path` (default `./kms.db`), `--kek-file`, `--dry-run`, `--report FILE` | Maps flat source keys to **relative slug keys** (`slug(key)`, e.g. `TWILIO_SID` → `twilio-sid`) in the destination namespace, **auto-creates the namespace** if it does not exist, writes each as a new secret via a ref-based `PutSecret` with a freshly minted per-secret access token, and emits a mapping report (old key → `/env/app/key` display path → token, written once). Distinct source keys that slug to the same key are reported as a collision rather than silently overwriting. `--dry-run` reports the mapping without writing or minting tokens. Pass either `--namespace` or `--env`/`--app`, not both. See [`migration.md`](migration.md) for the full gradethis walkthrough. |
 
 `import --from` accepts either a SuhaibParameterStore SQLite database with a
@@ -486,6 +489,275 @@ container or systemd unit that already supplies one gets the unattended path
 without repeating it on the command line — and `check` verifies the master key
 whenever a key source resolves that way, not only when a key file is named on
 the command line.
+
+### Global flags, output formats, and exit codes
+
+Four flags apply to every command, `version` and `help` included. All four may
+precede the subcommand; the long forms are also accepted after it, and a later
+occurrence wins over an earlier one.
+
+| Flag | Environment | Effect |
+|---|---|---|
+| `-o`, `--output table\|json` | `KMS_OUTPUT` | Result format (default `table`). A flag beats the variable. |
+| `-y`, `--yes` | — | Answer confirmation prompts. Destructive commands require it on a non-interactive stdin. |
+| `-q`, `--quiet` | — | Suppress informational stderr lines. |
+| `--config FILE` | `KMS_CONFIG` | Config file path. |
+
+The one-letter forms (`-o`, `-y`, `-q`) are accepted **only before** the
+subcommand: several commands own a `--out` of their own, and a short flag that
+means different things in different positions is a trap. `--config` after the
+subcommand is accepted only by the commands that read server settings (`serve`,
+`config`, and the offline database commands); an online command rejects it
+there. An invalid format — from either the flag or `KMS_OUTPUT` — is a usage
+error.
+
+`--quiet` drops progress and advice only. It never suppresses errors,
+confirmation prompts, the `release activate` preview, the `Target database: ...`
+line, or a one-time token / private-key warning.
+
+#### JSON output
+
+With `--output json` (or `KMS_OUTPUT=json`) **stdout carries exactly one JSON
+document** and nothing else; status lines, warnings, and next-steps blocks move
+to stderr. Documents are indented two spaces, use `snake_case` keys, spell
+timestamps as RFC 3339 in UTC (`2026-11-30T23:18:36.502Z`), and use `null` —
+rather than an omitted key — for an absent optional value.
+
+```bash
+parameter-store -o json admin namespace list | jq -r '.items[].env'
+
+export KMS_OUTPUT=json          # same, for a whole script
+parameter-store admin identity list | jq -r '.items[] | select(.disabled).name'
+```
+
+Every list command returns the same envelope, and `items` is never `null`:
+
+```json
+{
+  "items": []
+}
+```
+
+`next_page_token` appears only when a listing was truncated. Every list command
+in the CLI follows every page itself, so the field is omitted in practice; treat
+its presence as the signal to page, not its absence as proof of completeness.
+
+One-time credentials keep their table-mode rules:
+
+- A one-time token — an identity token, a rotated admin token, a per-secret
+  access token, an import token — appears in the document exactly once. The
+  "shown once" warning stays on stderr, where `--quiet` cannot reach it.
+- Certificate bundles are **never** embedded. The files are written to
+  `--out`/`--cert-dir` and the document names them (`cert_file`, `key_file`).
+  `admin identity create` and `admin identity issue-cert` with `--output json`
+  and no `--out` are refused with exit 2 (`--out is required with --output
+  json: the one-time private key is written to a file, never to the JSON
+  document`). `admin-cert issue` already requires `--out` in both modes.
+- `get-secret --output json` keeps the terminal guard: with `--out FILE` the
+  bytes go to the file, `value` is `null`, and `out_file` names it; otherwise
+  the value is inlined only when `--show` was given or stdout is not a
+  terminal, and a bare terminal is refused exactly as in table mode. A value
+  that is not valid UTF-8 has no JSON string form and is refused with an
+  instruction to use `--out FILE` rather than corrupted.
+- `defaults apply --execute --output json` prints only the applied result. The
+  preview it runs first stays a human-only step, because stdout may carry only
+  one document.
+
+The documents themselves, by command. "items of X" means the list envelope
+above with `X` as each element:
+
+| Command | JSON document |
+|---|---|
+| `init` | `{sqlite_path, sqlite_path_source, master_key, kek_file, ca, admin}` — `master_key` is `file` or `passphrase`, `kek_file` is absent in passphrase mode, `admin` is `null` without `--admin` |
+| `create-admin` | `{name, token, cert}` — the same object `init` nests under `admin`; `cert` is `{cert_file, key_file}` or `null` |
+| `migrate` | `{sqlite_path, sqlite_path_source, migrated}` |
+| `check` | `{database, master_key, sqlite_path, sqlite_path_source}` — `master_key` is `ok`, `not_initialized`, or `not_checked` |
+| `backup` | `{backup_file, sqlite_path}` |
+| `restore` | `{sqlite_path, backup_file}` |
+| `rotate-admin` | `{name, token}` |
+| `rotate-kek` | `{kek_id, secret_versions_rewrapped, ca_keys_rewrapped, new_key_file}` — `new_key_file` is absent in passphrase mode |
+| `import` | `{namespace: {env, app}, dry_run, imported, entries}`, entry `{key, path, token}` — `token` only on a real import |
+| `config show` | `{config_path, config_path_source, passphrase, settings}`, setting `{key, value, source}` — `passphrase` reports `set`/`unset` only |
+| `config validate` | `{valid, config_path}` — only the valid case is printed; an invalid configuration exits non-zero with the reason on stderr |
+| `version` | `{version}` |
+| `whoami` | `{name, kind, namespace, auth_method}` — `kind` `client\|admin`, `namespace` `{env, app}` or `null`, `auth_method` `mtls\|token` |
+| `put-secret` | `{key, version, revision, access_token}` — `access_token` only with `--generate-token` |
+| `get-secret` | `{key, version, value, content_type, created_at, out_file}` — with `--out` the value went to the file, so `value` is `null` and `out_file` names it; otherwise `out_file` is absent |
+| `put-parameter` | `{key, version, revision}` |
+| `list` | items of `{type, path, current, note, client_bound}` — `type` is `parameter` or `secret` |
+| `admin namespace create`, `admin namespace update` | `{env, app, auth_methods}` |
+| `admin namespace delete` | `{env, app, deleted}` |
+| `admin namespace list` | items of `{env, app, auth_methods, parameter_count, secret_count, description}` |
+| `admin identity create` | `{name, kind, namespace, auth_methods, token, cert}` — `token` and `cert` present only when minted; `cert` is `{cert_file, key_file, serial, expires_at}` |
+| `admin identity issue-cert`, `admin-cert issue` | `{name, serial, cert}` with the same `cert` object |
+| `admin identity rotate` | `{name, token}` |
+| `admin identity revoke` | `{name, revoked}` |
+| `admin identity revoke-cert`, `admin-cert revoke` | `{name, serial, revoked}` |
+| `admin identity list` | items of `{name, kind, namespace, has_token, cert_count, disabled}` |
+| `admin-cert list` | items of `{serial, fingerprint, state, expires_at, issued_at}` — `state` is `valid`, `revoked`, or `expired` |
+| `admin policy create` | `{name, subject, allow, deny}` |
+| `admin policy list` | items of that same object |
+| `admin policy delete` | `{name, deleted}` |
+| `admin ca show` | `{cert_pem}`, or `{ca_file}` with `--out` |
+| `release create` | `{namespace, name, version, digest}` |
+| `release validate` | `{valid, errors}`, error `{alias, code, schema_pointer, message}` |
+| `release show` | `{namespace, name, version, revision, current, previous, schema_id, schema_version, digest, created_at, entries}`, entry `{alias, kind, path, version, content_type, parameter_digest}` |
+| `release list` | items of `{name, version, current, previous, revision, digest, created_at}` |
+| `release diff` | `{from: {name, version}, to: {name, version}, added, removed, changed}` — `added`/`removed` are release entries, `changed` is `{alias, from, to}` |
+| `release activate`, `release rollback` | `{namespace, name, version, previous_version, revision, changed}` |
+| `release subscribers` | items of `{identity, client, instance, received, prepared, applied, rejected, lag, connected}` — each lifecycle state is `{release_version, activation_revision, rejection_category}` or `null` |
+| `release verify-defaults` | `{name, version, activation_revision, schema, clean, entries, counts}`, entry `{alias, verdict}`, counts `{match, differs, missing_in_release, unknown_alias, secret_alias, unsupported_content_type, unverified}` |
+| `release schema create` | `{id, version, digest}` |
+| `release schema show` | `{id, version, digest, schema}` — `schema` is the schema document itself, not a string |
+| `release schema list` | items of `{id, version, digest, created_at}` |
+| `defaults apply` | `{profile, plan_digest, executed, definition_changed, definition_updated, entries, missing_secrets, counts}`, entry `{status, alias, key, content_type, current_version, applied_version, revision}`, counts `{create, unchanged, update, blocked}` |
+
+#### Exit codes
+
+| Code | Meaning |
+|---|---|
+| `0` | Success. |
+| `1` | An error not classified below. |
+| `2` | Usage: a bad flag or argument, a missing required flag, an invalid `ENV/APP` or `VERSION`, or a refused or mistyped confirmation. |
+| `3` | Unauthenticated. |
+| `4` | Permission denied. |
+| `5` | Not found. |
+| `6` | Conflict: the resource already exists, or a compare-and-swap lost. |
+| `7` | Failed precondition, including an activation that release validation refused. |
+| `8` | Server unavailable: unreachable, not ready, or the call deadline expired. |
+| `9` | Rate limited (resource exhausted). |
+
+Codes 3–9 mirror the gRPC status the server returned, so an online command's
+exit code is the server's own verdict; offline commands map the equivalent
+store sentinels the same way.
+
+```bash
+parameter-store get-secret /prod/gradethis/db-password --out ./db-password
+case $? in
+  0) ;;
+  5) echo "no such secret" >&2; exit 1 ;;
+  4) echo "this credential may not read it" >&2; exit 1 ;;
+  8) echo "KMS unreachable; will retry" >&2; exit 75 ;;
+  *) exit 1 ;;
+esac
+```
+
+Three commands keep their own contract:
+
+- `check` is a health probe: `0` healthy, `1` unhealthy. (A bad invocation is
+  still `2`.)
+- `release verify-defaults` keeps `0` verified, `1` not verified (any non-match
+  verdict, a schema mismatch, or an RPC failure), `2` usage.
+- `release validate` prints its verdict — in both output modes — and exits `1`
+  when the release is invalid.
+
+One rough edge to know about: the usage code is not applied uniformly to a
+missing argument. A missing required **flag** exits `2` (`--out`, `--name`,
+`--serial`, `--in`, `--from`, `--subject`, `--artifact`), as does a missing
+positional in the groups that own a usage helper (`admin policy`, `defaults
+apply`, `release verify-defaults`, `admin-cert`). Everywhere else a missing
+positional — `get-secret`, `put-secret`, `put-parameter`, `list`, `admin
+identity`, `release create` with no file, `release show`/`validate`/`activate`
+with no `VERSION` — prints `error: ... requires ...` and exits `1`. Branch on
+zero versus non-zero for "did it work", and on the table above for a
+classified failure.
+
+#### Token files instead of `--token`
+
+`--token` is visible to every local user in `ps` output and
+`/proc/PID/cmdline`. Every command that talks to a running server therefore
+also accepts a file:
+
+| Flag | Environment | Holds |
+|---|---|---|
+| `--token-file FILE` | `KMS_TOKEN_FILE` | The identity bearer token. |
+| `--secret-token-file FILE` | `KMS_SECRET_TOKEN_FILE` | The per-secret access token (`put-secret`, `get-secret`). |
+
+Prefer these over `--token`/`--secret-token` anywhere the command line is
+observable — a shared host, a CI runner, a container others can `exec` into.
+The file must be a regular file owned by the caller with no group or other
+access (`0600` or `0400`), under a parent chain that satisfies the
+[secure destination-path](#secure-destination-paths) rules. It is opened
+read-only and never modified, so a `0400` credential on a read-only mount (a
+Kubernetes secret volume, for instance) works. It must hold exactly one token:
+a single trailing newline is trimmed, and an empty file or any interior
+whitespace is rejected rather than silently turned into an anonymous call.
+
+Supplying both spellings is a usage error rather than a precedence question, so
+a stale inline token can never shadow a rotated file:
+
+```text
+$ parameter-store whoami --token "$KMS_TOKEN" --token-file ./kms.token
+error: --token and --token-file (or KMS_TOKEN and KMS_TOKEN_FILE) are mutually exclusive
+```
+
+The check covers the environment: exporting `KMS_TOKEN` and passing
+`--token-file` (or the reverse) fails the same way. Note that `--secret-token`
+has no environment fallback of its own; only `--secret-token-file` /
+`KMS_SECRET_TOKEN_FILE` does.
+
+#### Confirmations
+
+Destructive commands confirm on stderr, in one of two ways.
+
+**Retype the resource.** The operator types the exact target back, which forces
+a second look at *what* is about to be destroyed rather than a reflexive `y`:
+
+| Command | What must be retyped |
+|---|---|
+| `admin namespace delete` | `ENV/APP`, e.g. `prod/gradethis` |
+| `admin identity revoke` | the identity name |
+| `admin identity revoke-cert` | the identity name |
+| `admin-cert revoke` | the identity name |
+| `release rollback` | `ENV/APP` |
+| `rotate-kek` | the absolute database path |
+
+```text
+$ parameter-store admin namespace delete --env prod --app gradethis
+This will delete namespace prod/gradethis. This cannot be undone.
+Type "prod/gradethis" to confirm:
+```
+
+A mismatch exits `2` and the command does not act — for `admin namespace
+delete` the server is never even contacted.
+
+**Yes or no.** `restore` and `release activate` ask `[y/N]` after printing what
+they are about to do: `restore` prints its `Target database: ...` line first,
+and `release activate` prints the diff from the currently active release, or
+`No active release in ENV/APP; NAME vN will become the first.` The default is
+no; anything but `y`/`yes` aborts with exit `2`.
+
+`--yes` answers both kinds. On a non-interactive stdin — a pipe, cron, a CI
+runner — a command that would prompt refuses before touching anything:
+
+```text
+$ echo | parameter-store admin namespace delete --env prod --app gradethis
+error: refusing to delete namespace prod/gradethis without --yes on a non-interactive stdin
+
+$ parameter-store --yes admin namespace delete --env prod --app gradethis
+Deleted namespace prod/gradethis
+```
+
+`defaults apply` is unchanged and asks no interactive question: it keeps its own
+preview → `--execute` → `--confirm-production ENV` model.
+
+#### Behavior changes
+
+This repository publishes no changelog file, so the changes an existing script
+may notice are recorded here:
+
+- **`restore` now requires `--yes` on a non-interactive stdin.** `--force` keeps
+  its separate meaning — replace an existing destination — so a scripted restore
+  over an existing database needs **both** `--yes --force`. An existing
+  destination without `--force` is now refused *before* the prompt rather than
+  after it.
+- The same `--yes` requirement applies to `release activate`, `release
+  rollback`, `rotate-kek`, `admin namespace delete`, `admin identity revoke`,
+  `admin identity revoke-cert`, and `admin-cert revoke`.
+- Failures that previously exited `1` now exit `3`–`9` when the server
+  classified them. A script that tests `-eq 1` should test `-ne 0` instead.
+- `--output json`, `KMS_OUTPUT`, `--quiet`, `--token-file`,
+  `--secret-token-file`, and the `whoami` command are new.
 
 ### Secure destination paths
 
@@ -639,9 +911,16 @@ connection once and drop the flags:
 |---|---|
 | `--endpoint` | `KMS_ENDPOINT` (default `localhost:8443`) |
 | `--token` | `KMS_TOKEN` |
+| `--token-file` | `KMS_TOKEN_FILE` |
 | `--ca` | `KMS_CA_FILE` |
 | `--cert` | `KMS_CLIENT_CERT_FILE` |
 | `--key` | `KMS_CLIENT_KEY_FILE` |
+
+`--token-file` reads the bearer token from an owner-only file instead of the
+command line, which `ps` and `/proc/PID/cmdline` expose to every local user;
+prefer it wherever the command line is observable. `--token` and `--token-file`
+together — from flags or from the environment — are a usage error. See
+[Token files instead of `--token`](#token-files-instead-of---token).
 
 **In production, `--cert`/`--key` are not optional for an admin.** While
 `security.admin_require_client_cert` is enforced (the default whenever TLS is
@@ -667,13 +946,13 @@ built-in client issuer's certificate is public.
 |---|---|---|
 | `admin namespace create` | `--env ENV`, `--app APP`, `--description`, `--auth-methods mtls,token` (default: mTLS-only) | Create a namespace. Environment/application are flags, not a positional `ENV/APP` argument. |
 | `admin namespace update` | `--env ENV`, `--app APP`, `--description`, `--auth-methods` | **Full replace** of the description and allowed auth methods. |
-| `admin namespace delete` | `--env ENV`, `--app APP` | Delete an **empty** namespace (no parameters, secrets, or bound identities). |
+| `admin namespace delete` | `--env ENV`, `--app APP`, `--yes` | Delete an **empty** namespace (no parameters, secrets, or bound identities). **Confirms by retyping `ENV/APP`** before the server is contacted. |
 | `admin namespace list` | — | Table of namespaces with allowed auth methods and parameter/secret counts. |
-| `admin identity create NAME` | `--kind client\|admin` (default `client`), `--namespace env/app`, `--auth mtls\|token\|both` (default `mtls`), `--ttl 90d` (or e.g. `720h`), `--out DIR` | Create an identity. Mints a token and/or a one-time PEM cert bundle per `--auth`; with `--out DIR` writes `NAME.crt` (0644) and `NAME.key` (0600), otherwise prints them once. |
+| `admin identity create NAME` | `--kind client\|admin` (default `client`), `--namespace env/app`, `--auth mtls\|token\|both` (default `mtls`), `--ttl 90d` (or e.g. `720h`), `--out DIR` | Create an identity. Mints a token and/or a one-time PEM cert bundle per `--auth`; with `--out DIR` writes `NAME.crt` (0644) and `NAME.key` (0600), otherwise prints them once — so `--out` is required whenever `--output json` would mint a certificate. |
 | `admin identity issue-cert NAME` | `--ttl`, `--out DIR` | Mint an **additional** client certificate for an existing identity (for overlap rollover). |
-| `admin identity revoke-cert NAME` | `--serial` (required) | Revoke one certificate by serial. |
+| `admin identity revoke-cert NAME` | `--serial` (required), `--yes` | Revoke one certificate by serial. **Confirms by retyping `NAME`.** |
 | `admin identity rotate NAME` | — | Rotate a token identity's bearer token (printed once). |
-| `admin identity revoke NAME` | — | Disable an identity; **all** of its certificates become invalid. |
+| `admin identity revoke NAME` | `--yes` | Disable an identity; **all** of its certificates become invalid. **Confirms by retyping `NAME`.** |
 | `admin identity list` | — | Table: name, kind, namespace, has-token, cert count, disabled. |
 | `admin policy create NAME` | `--subject IDENTITY` (or `*`), `--allow OP@ENV/APP` (repeatable), `--deny OP@ENV/APP` (repeatable) | Create a namespace-level policy. Either label may be `*`; a bare `OP` means every namespace. Operations and labels are validated by the server (`policy.ValidateRules`). |
 | `admin policy list` | `--page-size` | Table: name, subject, allow rules, deny rules (`op@env/app`). |
@@ -695,15 +974,17 @@ These operate over gRPC against `--endpoint` (default `localhost:8443`), not
 directly on the database file, so they need a server with the gRPC listener
 open (the default when running `serve`). They share the same connection flags
 as the `admin` group: `--endpoint`, `--token` (identity bearer token; env
-`KMS_TOKEN`), `--insecure` (skip TLS, development only), `--ca`, `--cert`/
-`--key` (mTLS). Secrets and parameters are addressed by a **`/env/app/key`
-display path**, which the CLI splits into an explicit namespace + relative
-key client-side; `list` takes a bare `ENV/APP` namespace.
+`KMS_TOKEN`) or `--token-file` (env `KMS_TOKEN_FILE`), `--insecure` (skip TLS,
+development only), `--ca`, `--cert`/`--key` (mTLS). Secrets and parameters are
+addressed by a **`/env/app/key` display path**, which the CLI splits into an
+explicit namespace + relative key client-side; `list` takes a bare `ENV/APP`
+namespace.
 
 | Command | Extra flags | Purpose |
 |---|---|---|
-| `put-secret /env/app/key` | `--value-file` (default: read stdin), `--content-type` (default `text/plain`), `--client-bound`, `--generate-token`, `--secret-token` (for client-bound updates) | Stores a new secret version. A new client-bound secret requires `--client-bound --generate-token`; the server-minted token is its one-time client key share. Existing client-bound secrets require `--client-bound --secret-token`, and adding `--generate-token` rotates the token for the new version. |
-| `get-secret /env/app/key` | `--version`, `--label`, `--secret-token`, `--show` (allow printing to a terminal), `--out FILE` (write to a file instead, mode 0600) | Fetches a secret value. Refuses to print raw secret bytes to an interactive terminal unless `--show` is passed or output is piped — `--out FILE` or piping (`\| cat`) works without `--show`. |
+| `whoami` | — | Prints the identity the server resolves from the credential this invocation presents: `name`, `kind`, `namespace` (or `(unbound)`), and `auth_method` (`mtls` or `token`). Needs no permission, so it is the first command to run when a token or certificate does not behave as expected. |
+| `put-secret /env/app/key` | `--value-file` (default: read stdin), `--content-type` (default `text/plain`), `--client-bound`, `--generate-token`, `--secret-token`/`--secret-token-file` (for client-bound updates) | Stores a new secret version. A new client-bound secret requires `--client-bound --generate-token`; the server-minted token is its one-time client key share. Existing client-bound secrets require `--client-bound --secret-token`, and adding `--generate-token` rotates the token for the new version. |
+| `get-secret /env/app/key` | `--version`, `--label`, `--secret-token`/`--secret-token-file`, `--show` (allow printing to a terminal), `--out FILE` (write to a file instead, mode 0600) | Fetches a secret value. Refuses to print raw secret bytes to an interactive terminal unless `--show` is passed or output is piped — `--out FILE` or piping (`\| cat`) works without `--show`. |
 | `put-parameter /env/app/key VALUE` | `--content-type` (default `string`) | Stores a new parameter version. |
 | `list ENV/APP` | `--prefix` (relative key prefix within the namespace) | Lists parameters and secrets (metadata only) in a namespace as a table: type, `/env/app/key`, current version, content-type/client-bound note. Pages through the full result set. |
 
@@ -782,6 +1063,14 @@ parameter-store release rollback prod/gradethis runtime \
 parameter-store release rollback prod/gradethis runtime 1 \
   --endpoint localhost:8443 --token "$ADMIN_TOKEN" --insecure
 ```
+
+Both commands confirm first. `activate` prints the diff from the currently
+active release to stderr — or `No active release in prod/gradethis; runtime v1
+will become the first.` — and then asks `[y/N]`; `rollback` asks the operator to
+retype `prod/gradethis`. Neither preview is suppressed by `--quiet`. A pipeline
+must pass `--yes`, or the command refuses on its non-interactive stdin without
+acting. An activation that release validation refuses exits `7` and prints the
+individual validation errors.
 
 `POST /api/v1/releases/rollback` is the HTTP form of the first recipe: it
 targets the active release's `previous` version, carries the same
@@ -1381,9 +1670,18 @@ systemctl stop parameter-store
 parameter-store restore --sqlite-path /var/lib/parameter-store/kms.db \
     --in /var/backups/parameter-store/db/kms-20260701T120000.db
 # -> Target database: /var/lib/parameter-store/kms.db (source: flag --sqlite-path)
+# -> Restore /var/lib/parameter-store/kms.db from .../kms-20260701T120000.db? [y/N]:
 # --force is required if the destination file already exists
 systemctl start parameter-store
 ```
+
+`restore` asks for confirmation after naming both paths, so an operator who
+pointed it at the wrong database through a stale `KMS_SQLITE_PATH` can still
+stop it. **A non-interactive run needs `--yes`** — without it the command
+refuses rather than hanging or proceeding — and restoring over an existing
+database needs `--yes --force`, since `--force` retains its separate meaning.
+An existing destination without `--force` is refused before the prompt, so the
+answer is never wasted.
 
 `restore` validates that `--in` is actually a SQLite file (checks the
 16-byte file header) before copying it into place, removes any stale
@@ -1432,10 +1730,18 @@ parameter-store rotate-kek --sqlite-path /var/lib/parameter-store/kms.db \
     --kek-file /etc/parameter-store/master.key \
     --new-key-file /etc/parameter-store/master-new.key
 # -> Target database: /var/lib/parameter-store/kms.db (source: flag --sqlite-path)
+# -> This will rotate the master key of /var/lib/parameter-store/kms.db. This
+#    cannot be undone.
+#    Type "/var/lib/parameter-store/kms.db" to confirm:
 # -> KEK rotated: 128 secret versions and 1 CA keys rewrapped under kek-<id>
 # The old key can no longer decrypt after this rotation; point any running
 # server at the new master key and restart it.
 ```
+
+The confirmation asks for the **absolute** database path, retyped exactly, and
+runs before the database is opened or any passphrase is prompted for — a
+refusal leaves the file untouched. Pass `--yes` to skip it; without `--yes` on
+a non-interactive stdin the command refuses instead of rotating.
 
 Stop `serve` before running this offline command; otherwise the live process
 continues with its old in-memory keyring until restarted. The command prints
