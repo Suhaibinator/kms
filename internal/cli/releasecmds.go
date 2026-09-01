@@ -305,7 +305,7 @@ func (c *CLI) cmdReleaseValidate(args []string) int {
 	}
 	ns, name, version, ok := c.parseReleaseIdentity(c.args(), true)
 	if !ok {
-		return 1
+		return 2
 	}
 	conn, err := c.dialConn(cf)
 	if err != nil {
@@ -391,7 +391,7 @@ func (c *CLI) cmdReleaseShow(args []string) int {
 	}
 	ns, name, version, ok := c.parseReleaseIdentity(c.args(), true)
 	if !ok {
-		return 1
+		return 2
 	}
 	conn, err := c.dialConn(cf)
 	if err != nil {
@@ -782,7 +782,7 @@ func (c *CLI) cmdReleaseActivate(args []string) int {
 	}
 	ns, name, version, ok := c.parseReleaseIdentity(c.args(), true)
 	if !ok {
-		return 1
+		return 2
 	}
 	req := &kmsv1.ActivateReleaseRequest{Namespace: ns, Name: name, Version: version}
 	if expected.set {
