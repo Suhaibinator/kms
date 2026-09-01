@@ -379,6 +379,107 @@ sticky-directory behavior only. They do **not** inspect NFSv4 or other extended
 ACL entries; operators must verify separately that no such ACL grants broader
 path-mutation or file-access rights.
 
+#### Preparing a destination directory
+
+Every ancestor of the destination is checked, so the whole chain must satisfy
+the rules above — a private leaf directory under a group-writable parent is
+still refused. Two defaults commonly violate this.
+
+**Group-writable home directories.** Debian and Ubuntu ship `umask 002` with
+user-private groups, so every directory an interactive user creates is `0775`.
+Running from such a directory fails even though the group has no other members:
+
+```
+$ ./parameter-store init
+error: opening database: validate database path "./kms.db": unsafe destination
+spelling for ./kms.db: /home/you/code is group- or other-writable without the
+sticky bit
+```
+
+The check reads mode bits only; it does not enumerate group membership. Clear
+the group-write bit on every flagged ancestor, or keep KMS data outside the
+umask-002 tree:
+
+```bash
+chmod g-w ~/code ~/code/kms ~/code/kms/bin   # or:
+install -d -m 0700 ~/.local/share/parameter-store
+./parameter-store init --db ~/.local/share/parameter-store/kms.db
+```
+
+**Directories prepared by another account.** Create destination directories
+under the account that runs the command. A directory prepared by root for a
+service user is refused unless it is owned by root or by that user; `chown` it
+to the service account and set `0700` or `0755`.
+
+#### Container and Kubernetes volumes
+
+Inside the published image the chain is short — `/` at `0755 root` and `/data`
+at `2755 kms:kms` — so the image works as shipped. What matters is how `/data`
+and `/key` are mounted.
+
+| Mount | `/data` as the container sees it | Result |
+| --- | --- | --- |
+| No volume (image defaults) | `2755 kms:kms` | works |
+| Named or anonymous Docker volume | `2755 kms:kms` | works |
+| Bind mount, host directory `0775` | `0775 <host uid>` | refused |
+| Bind mount, host directory `0755`, `--user` matching its owner | `0755 <host uid>` | works |
+| Kubernetes `fsGroup` | `2775 root:<fsGroup>` | refused |
+| `emptyDir` | `0777` | refused |
+
+**Named volumes are the supported default.** Docker initializes an empty volume
+from the image directory's ownership and mode, so `kms-data` and `kms-key`
+inherit `2755 kms:kms` and pass. This is the flow in
+[`releasing.md`](releasing.md).
+
+**Bind mounts** expose the host directory's uid and mode directly. The host
+directory must be `0755` (not the umask-002 default `0775`) and owned by the
+uid the container runs as:
+
+```bash
+install -d -m 0755 ./kms-data ./kms-key
+docker run --rm --user "$(id -u):$(id -g)" \
+  -v "$PWD/kms-data:/data" -v "$PWD/kms-key:/key" \
+  ghcr.io/suhaibinator/kms:latest init --admin ops
+```
+
+**Kubernetes needs an explicit `chown`.** `fsGroup` grants a non-root container
+write access through the group bit, which is exactly what path validation
+refuses — so no `fsGroup` value works, and lowering the mode to `0755` leaves
+the volume unwritable. Because the check walks every ancestor, moving the
+database into a subdirectory does not help either: the volume root is still in
+the chain.
+
+Omit `fsGroup` and hand the volume root to the runtime uid with an init
+container. The image runs as uid `100`, gid `101`:
+
+```yaml
+spec:
+  securityContext:
+    runAsUser: 100
+    runAsGroup: 101
+    # No fsGroup: the kubelet would re-add group write on every mount.
+  initContainers:
+    - name: fix-volume-permissions
+      image: busybox:1.37
+      securityContext:
+        runAsUser: 0
+      command: ["sh", "-c", "chown 100:101 /data /key && chmod 0755 /data /key"]
+      volumeMounts:
+        - { name: kms-data, mountPath: /data }
+        - { name: kms-key, mountPath: /key }
+  containers:
+    - name: parameter-store
+      image: ghcr.io/suhaibinator/kms:latest
+      volumeMounts:
+        - { name: kms-data, mountPath: /data }
+        - { name: kms-key, mountPath: /key }
+```
+
+If a CSI driver reapplies group write on mount, set
+`fsGroupChangePolicy: OnRootMismatch` alongside the init container, or use a
+volume type whose root permissions you control. `emptyDir` is `0777` and is
+unsuitable for the database regardless.
+
 ### Management commands (`admin` group, over gRPC)
 
 The `admin` command group manages namespaces, identities, and the built-in
