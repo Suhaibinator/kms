@@ -48,7 +48,14 @@ func (c *CLI) jsonOutput() bool { return c.output == outputJSON }
 // have always printed (tabwriter with tabwidth 4, padding 2), so scripts that
 // parse the human output keep working byte for byte.
 func (c *CLI) printTable(headers []string, rows [][]string) {
-	tw := tabwriter.NewWriter(c.Stdout, 0, 4, 2, ' ', 0)
+	writeAlignedTable(c.Stdout, headers, rows)
+}
+
+// writeAlignedTable is printTable for an arbitrary writer. Release commands
+// need it because the same tables also go to stderr (the activation preview,
+// a failed activation's validation errors) and to test buffers.
+func writeAlignedTable(w io.Writer, headers []string, rows [][]string) {
+	tw := tabwriter.NewWriter(w, 0, 4, 2, ' ', 0)
 	_, _ = fmt.Fprintln(tw, strings.Join(headers, "\t"))
 	for _, row := range rows {
 		_, _ = fmt.Fprintln(tw, strings.Join(row, "\t"))

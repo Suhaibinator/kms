@@ -528,7 +528,6 @@ func TestAdminDestructiveCommandsRequireConfirmation(t *testing.T) {
 	}
 }
 
-
 // TestAdminNamespaceDeleteTypedConfirmation covers the interactive path: the
 // operator retypes the namespace to proceed, and a mistyped answer aborts
 // without touching the server.

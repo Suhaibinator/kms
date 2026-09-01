@@ -13,7 +13,6 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"text/tabwriter"
 	"time"
 
 	kmsv1 "github.com/Suhaibinator/kms/gen/kmsv1"
@@ -74,20 +73,6 @@ Commands:
   subscribers ENV/APP NAME            Show per-instance lifecycle state and lag.
   schema create|show|list              Manage immutable JSON Schemas.
 `)
-}
-
-// writeAlignedTable renders a table to an arbitrary writer with the layout
-// CLI.printTable uses for stdout. Release output needs it because the very
-// same tables are also written elsewhere: the activation preview and a failed
-// activation's validation errors go to stderr, and two renderers are still
-// called with a test buffer.
-func writeAlignedTable(w io.Writer, headers []string, rows [][]string) {
-	tw := tabwriter.NewWriter(w, 0, 4, 2, ' ', 0)
-	_, _ = fmt.Fprintln(tw, strings.Join(headers, "\t"))
-	for _, row := range rows {
-		_, _ = fmt.Fprintln(tw, strings.Join(row, "\t"))
-	}
-	_ = tw.Flush()
 }
 
 // releaseNamespaceJSON is the {env, app} pair JSON output carries wherever the
