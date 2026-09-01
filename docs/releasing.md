@@ -93,13 +93,18 @@ docker volume create kms-key
 docker run --rm -it \
   -v kms-data:/data -v kms-key:/key \
   "ghcr.io/suhaibinator/kms:${VERSION}" \
-  init --db /data/kms.db --master-key-file /key/master.key --admin ops
+  init --admin ops
 
 docker run --rm \
   -p 8080:8080 -p 8443:8443 \
   -v kms-data:/data -v kms-key:/key \
   "ghcr.io/suhaibinator/kms:${VERSION}"
 ```
+
+The image sets `KMS_SQLITE_PATH=/data/kms.db` and `KMS_KEK_FILE=/key/master.key`,
+and every offline command honors those the same way `serve` does, so `init`
+needs no path flags. It echoes what it resolved
+(`Initialized database at /data/kms.db (source: env KMS_SQLITE_PATH)`).
 
 Use named volumes as shown. Docker initializes an empty volume from the image
 directory's ownership and mode, so `/data` and `/key` keep the `kms`-owned,

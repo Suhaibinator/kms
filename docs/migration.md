@@ -271,8 +271,11 @@ as the next candidate, so do not treat activation as a distributed commit.
 
 1. **Stand up the service** and initialize it:
    ```bash
-   parameter-store init --db /var/lib/parameter-store/kms.db \
-       --master-key-file /etc/parameter-store/master.key --admin bootstrap
+   parameter-store init --sqlite-path /var/lib/parameter-store/kms.db \
+       --kek-file /etc/parameter-store/master.key --admin bootstrap
+   # Or, if config.yaml already sets storage.sqlite_path and
+   # encryption.kek_file, init reads them too:
+   #   parameter-store init --config /etc/parameter-store/config.yaml --admin bootstrap
    parameter-store serve --config /etc/parameter-store/config.yaml
    ```
 2. **Create the namespace and the gradethis client identity.** The namespace

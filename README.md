@@ -198,16 +198,25 @@ container initialization, and the maintainer release procedure.
 ### Initialize and run locally
 
 ```bash
+# Every setting has a flag, a KMS_* variable, and a config key; init and serve
+# resolve them the same way, so export the paths once and both commands agree.
+export KMS_SQLITE_PATH=./kms.db KMS_KEK_FILE=./master.key
+
 # Create the database and a file-based master key, plus a bootstrap admin.
-./bin/parameter-store init --db ./kms.db --master-key-file ./master.key --admin ops
+./bin/parameter-store init --admin ops
+# -> Initialized database at /abs/path/kms.db (source: env KMS_SQLITE_PATH)
 # -> prints the admin identity's bearer token exactly once; save it.
 
 # Start a plaintext development server on loopback only. Production requires
 # TLS; see "Connect a production application with mTLS" below.
-KMS_KEK_FILE=./master.key KMS_SQLITE_PATH=./kms.db \
-  KMS_GRPC_ADDR=127.0.0.1:8443 KMS_HTTP_ADDR=127.0.0.1:8080 \
+KMS_GRPC_ADDR=127.0.0.1:8443 KMS_HTTP_ADDR=127.0.0.1:8080 \
   ./bin/parameter-store serve
 ```
+
+Flags work just as well as the variables — `init --sqlite-path ./kms.db
+--kek-file ./master.key --admin ops` is the same run — and a flag always wins
+over the environment and the config file. `parameter-store config show` prints
+the effective configuration with the source of every value.
 
 If `init` fails with `unsafe destination spelling ... is group- or
 other-writable without the sticky bit`, the directory chain is group-writable —
@@ -216,8 +225,8 @@ ancestor, or keep the data outside that tree:
 
 ```bash
 install -d -m 0700 ~/.local/share/parameter-store
-./bin/parameter-store init --db ~/.local/share/parameter-store/kms.db \
-  --master-key-file ~/.local/share/parameter-store/master.key --admin ops
+./bin/parameter-store init --sqlite-path ~/.local/share/parameter-store/kms.db \
+  --kek-file ~/.local/share/parameter-store/master.key --admin ops
 ```
 
 See [Preparing a destination directory](docs/operations.md#preparing-a-destination-directory)
@@ -238,6 +247,7 @@ token-only identity:
 
 ```bash
 ADMIN_TOKEN=...   # from `init --admin`; admin flags: --endpoint / --token
+                  # (or export KMS_ENDPOINT / KMS_TOKEN and omit both)
 
 ./bin/parameter-store admin namespace create --env dev --app gradethis \
   --auth-methods token --endpoint localhost:8443 --insecure --token "$ADMIN_TOKEN"
@@ -416,10 +426,16 @@ See the complete [application onboarding and rollover runbook](docs/operations.m
 
 ## Configuration
 
-YAML file (`--config FILE` / `KMS_CONFIG`) plus `KMS_*` environment
-overrides; see `internal/config/config.go`. Full reference, including the
-env var table, is in
-[`docs/operations.md`](docs/operations.md#configuration).
+Every setting has exactly three spellings — a YAML key, a `KMS_*` environment
+variable, and a flag derived from it (`storage.sqlite_path`,
+`KMS_SQLITE_PATH`, `--sqlite-path`) — and they resolve highest first:
+**flag, then environment variable, then the config file (`--config FILE` /
+`KMS_CONFIG`), then the built-in default**. The same order applies to `serve`
+and to every offline command (`init`, `migrate`, `check`, `backup`, `restore`,
+…). Run `parameter-store config show` to print the effective configuration
+with the source of each value, and `parameter-store config validate` to check
+it before a restart. Full reference, including the env var and flag table, is
+in [`docs/operations.md`](docs/operations.md#configuration).
 
 ```yaml
 server:
