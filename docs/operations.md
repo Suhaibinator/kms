@@ -449,7 +449,7 @@ codes every command shares, and the `--token-file` credential form.
 | `init` | `--sqlite-path` (default `./kms.db`), `--kek-file` (omit for a passphrase prompt), `--admin NAME` (optional), `--cert-dir DIR` (optional, requires `--admin`) | Creates/migrates the database, the master key (generating a key file, or prompting for a new passphrase with confirmation), and the **built-in CA** — always, so every database has one from the moment it exists. With `--admin`, also creates a bootstrap admin identity and prints its token once; with `--cert-dir`, also issues that admin's client certificate into `DIR/NAME.crt` and `DIR/NAME.key`. Re-running `init` keeps the CA the database already has. |
 | `migrate` | `--sqlite-path` | Opens the database, applying any pending migrations, and exits. |
 | `check` | `--sqlite-path`, `--kek-file` (optional) | Verifies the database is reachable and, whenever a key source resolves (a key file from the flag, `KMS_KEK_FILE`, or `encryption.kek_file`; `KMS_MASTER_PASSPHRASE`; or a TTY), verifies the master key against the stored key-check value. Never prints key material. |
-| `backup` | `--sqlite-path`, `--out` (required, must not already exist) | Writes a consistent online backup through owner-only staging and atomic no-replace publication. Prints a reminder that the master key is not included. |
+| `backup` | `--sqlite-path`, `--out` (required; an existing file is refused with exit `6`) | Writes a consistent online backup through owner-only staging and atomic no-replace publication. Prints a reminder that the master key is not included. |
 | `restore` | `--sqlite-path` (destination), `--in` (required, source backup), `--force` (overwrite an existing destination), `--yes` | Validates the input is a KMS SQLite backup, stages an owner-only copy, publishes it atomically, removes stale `-wal`/`-shm` sidecars, then opens (and migrates) it. Without `--force`, publication never replaces an existing or concurrently created entry — and an existing destination is refused before the prompt. **Confirms `[y/N]`** after printing the target; a script needs `--yes`, plus `--force` if the destination exists. |
 | `create-admin` | `--sqlite-path`, `--name` (required), `--kek-file`, `--cert-dir DIR` (optional) | Creates an admin identity directly against the database file and prints its token once. With `--cert-dir`, also issues the admin's client certificate into `DIR/NAME.crt` and `DIR/NAME.key` — that path unseals the master key and requires an existing CA. Without it the admin is token-only and no unseal (or passphrase prompt) happens, so it cannot sign in while `admin_require_client_cert` is enforced until `admin-cert issue` runs. Uses WAL mode's concurrent-reader support, but coordinating this against a live `serve` process is the operator's responsibility. |
 | `rotate-admin` | `--sqlite-path`, `--name` (required) | Recovery command that directly replaces an existing enabled admin identity's token hash and prints the new token once. The old token becomes invalid immediately; a disabled admin, client identity, missing identity, or identity without a token is rejected without mutation. It does not require the old token, master key, or a running server. If output is lost, rerun the command to mint another replacement. A running server observes the shared-database update immediately, but operators must coordinate concurrent identity administration. |
@@ -493,8 +493,9 @@ the command line.
 ### Global flags, output formats, and exit codes
 
 Four flags apply to every command, `version` and `help` included. All four may
-precede the subcommand; the long forms are also accepted after it, and a later
-occurrence wins over an earlier one.
+precede the subcommand; `--output`, `--yes`, and `--quiet` — short forms
+included — are also accepted after it, and a later occurrence wins over an
+earlier one.
 
 | Flag | Environment | Effect |
 |---|---|---|
@@ -503,13 +504,12 @@ occurrence wins over an earlier one.
 | `-q`, `--quiet` | — | Suppress informational stderr lines. |
 | `--config FILE` | `KMS_CONFIG` | Config file path. |
 
-The one-letter forms (`-o`, `-y`, `-q`) are accepted **only before** the
-subcommand: several commands own a `--out` of their own, and a short flag that
-means different things in different positions is a trap. `--config` after the
-subcommand is accepted only by the commands that read server settings (`serve`,
-`config`, and the offline database commands); an online command rejects it
-there. An invalid format — from either the flag or `KMS_OUTPUT` — is a usage
-error.
+`-o` is always `--output`; a command's own output-directory flag is spelled
+`--out` and has no short form, so `--help` lists the pair as `--output FORMAT,
+-o` and `--out DIRECTORY`. `--config` after the subcommand is accepted only by
+the commands that read server settings (`serve`, `config`, and the offline
+database commands); an online command rejects it there. An invalid format —
+from either the flag or `KMS_OUTPUT` — is a usage error.
 
 `--quiet` drops progress and advice only. It never suppresses errors,
 confirmation prompts, the `release activate` preview, the `Target database: ...`
@@ -601,7 +601,7 @@ above with `X` as each element:
 | `admin ca show` | `{cert_pem}`, or `{ca_file}` with `--out` |
 | `release create` | `{namespace, name, version, digest}` |
 | `release validate` | `{valid, errors}`, error `{alias, code, schema_pointer, message}` |
-| `release show` | `{namespace, name, version, revision, current, previous, schema_id, schema_version, digest, created_at, entries}`, entry `{alias, kind, path, version, content_type, parameter_digest}` |
+| `release show` | `{namespace, name, version, schema, digest, created_at, entries}` — `schema` is `{id, version}` or `null`; entry `{alias, kind, path, version, content_type, parameter_digest}`. Activation state is not part of a manifest; `release list` reports `current`/`previous` |
 | `release list` | items of `{name, version, current, previous, revision, digest, created_at}` |
 | `release diff` | `{from: {name, version}, to: {name, version}, added, removed, changed}` — `added`/`removed` are release entries, `changed` is `{alias, from, to}` |
 | `release activate`, `release rollback` | `{namespace, name, version, previous_version, revision, changed}` |
@@ -618,7 +618,7 @@ above with `X` as each element:
 |---|---|
 | `0` | Success. |
 | `1` | An error not classified below. |
-| `2` | Usage: a bad flag or argument, a missing required flag, an invalid `ENV/APP` or `VERSION`, or a refused or mistyped confirmation. |
+| `2` | Usage: a bad flag, a missing or unknown action or positional argument, a missing required flag, an invalid `ENV/APP` or `VERSION`, or a refused or mistyped confirmation. Nothing is dialed or opened first. |
 | `3` | Unauthenticated. |
 | `4` | Permission denied. |
 | `5` | Not found. |
@@ -650,17 +650,6 @@ Three commands keep their own contract:
   verdict, a schema mismatch, or an RPC failure), `2` usage.
 - `release validate` prints its verdict — in both output modes — and exits `1`
   when the release is invalid.
-
-One rough edge to know about: the usage code is not applied uniformly to a
-missing argument. A missing required **flag** exits `2` (`--out`, `--name`,
-`--serial`, `--in`, `--from`, `--subject`, `--artifact`), as does a missing
-positional in the groups that own a usage helper (`admin policy`, `defaults
-apply`, `release verify-defaults`, `admin-cert`). Everywhere else a missing
-positional — `get-secret`, `put-secret`, `put-parameter`, `list`, `admin
-identity`, `release create` with no file, `release show`/`validate`/`activate`
-with no `VERSION` — prints `error: ... requires ...` and exits `1`. Branch on
-zero versus non-zero for "did it work", and on the table above for a
-classified failure.
 
 #### Token files instead of `--token`
 
@@ -755,7 +744,9 @@ may notice are recorded here:
   rollback`, `rotate-kek`, `admin namespace delete`, `admin identity revoke`,
   `admin identity revoke-cert`, and `admin-cert revoke`.
 - Failures that previously exited `1` now exit `3`–`9` when the server
-  classified them. A script that tests `-eq 1` should test `-ne 0` instead.
+  classified them, `2` when the command line itself was wrong (a missing
+  positional used to be `1`), and `6` when `backup --out` names an existing
+  file. A script that tests `-eq 1` should test `-ne 0` instead.
 - `--output json`, `KMS_OUTPUT`, `--quiet`, `--token-file`,
   `--secret-token-file`, and the `whoami` command are new.
 
