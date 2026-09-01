@@ -137,13 +137,11 @@ func TestGlobalFlagsResetBetweenRuns(t *testing.T) {
 	}
 }
 
-// TestGlobalLongFlagsAfterSubcommand: the long forms are registered on every
-// command flag set, so `<command> --yes` means the same as `--yes <command>`.
-// config validate is the subject because it neither dials nor opens a
-// database and still parses flags. The short forms are deliberately not
-// registered there — several commands already own --out, and a short flag that
-// means different things in different positions is a trap.
-func TestGlobalLongFlagsAfterSubcommand(t *testing.T) {
+// TestGlobalFlagsAfterSubcommand: every global flag, long or short, is
+// registered on every command flag set, so `<command> -y` means the same as
+// `-y <command>`. config validate is the subject because it neither dials nor
+// opens a database and still parses flags.
+func TestGlobalFlagsAfterSubcommand(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
 		name      string
@@ -160,10 +158,13 @@ func TestGlobalLongFlagsAfterSubcommand(t *testing.T) {
 		{name: "--output= after", args: []string{"config", "validate", "--output=json"}, wantMode: outputJSON},
 		// A value after the subcommand overrides one given before it.
 		{name: "after overrides before", args: []string{"-o", "json", "config", "validate", "--output=table"}, wantMode: outputTable},
-		// Short forms after the subcommand are unknown flags: exit 2.
-		{name: "-y after is a usage error", args: []string{"config", "validate", "-y"}, wantCode: 2, wantMode: outputTable},
-		{name: "-q after is a usage error", args: []string{"config", "validate", "-q"}, wantCode: 2, wantMode: outputTable},
-		{name: "-o after is a usage error", args: []string{"config", "validate", "-o", "json"}, wantCode: 2, wantMode: outputTable},
+		// Short forms after the subcommand are the same flags.
+		{name: "-y after", args: []string{"config", "validate", "-y"}, wantYes: true, wantMode: outputTable},
+		{name: "-q after", args: []string{"config", "validate", "-q"}, wantQuiet: true, wantMode: outputTable},
+		{name: "-o after", args: []string{"config", "validate", "-o", "json"}, wantMode: outputJSON},
+		{name: "-o= after", args: []string{"config", "validate", "-o=json"}, wantMode: outputJSON},
+		// An unknown flag after the subcommand is still a usage error.
+		{name: "unknown short flag", args: []string{"config", "validate", "-z"}, wantCode: 2, wantMode: outputTable},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -185,21 +186,24 @@ func TestGlobalLongFlagsAfterSubcommand(t *testing.T) {
 	}
 }
 
-// TestAddGlobalFlagsRegistersLongFormsOnly guards the asymmetry directly, so a
-// future "convenience" short form on a command flag set is caught here rather
-// than by a user whose --out collides with -o.
-func TestAddGlobalFlagsRegistersLongFormsOnly(t *testing.T) {
+// TestAddGlobalFlagsAliasesShareOneValue: -o/-y/-q after the subcommand are
+// the same flags as their long forms (Go's flag package never abbreviates, so
+// -o cannot collide with a command's --out), and both spellings must write to
+// the same field so neither can drift.
+func TestAddGlobalFlagsAliasesShareOneValue(t *testing.T) {
 	t.Parallel()
 	c := newTestCLI()
 	fs := c.newFlags("test")
-	for _, name := range []string{"output", "yes", "quiet"} {
-		if fs.Lookup(name) == nil {
-			t.Errorf("command flag set is missing --%s", name)
+	for long, short := range shortFlags {
+		l, s := fs.Lookup(long), fs.Lookup(short)
+		if l == nil || s == nil {
+			t.Fatalf("command flag set is missing --%s or -%s", long, short)
 		}
-	}
-	for _, name := range []string{"o", "y", "q"} {
-		if fs.Lookup(name) != nil {
-			t.Errorf("command flag set registered the short form -%s", name)
+		if err := s.Value.Set(l.DefValue); err != nil {
+			t.Fatalf("-%s.Set(%q): %v", short, l.DefValue, err)
+		}
+		if got := l.Value.String(); got != s.Value.String() {
+			t.Errorf("--%s reads %q after -%s was set, want the same value", long, got, short)
 		}
 	}
 }

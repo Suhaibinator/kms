@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"strings"
 	"testing"
 
 	"google.golang.org/grpc/codes"
@@ -251,5 +252,63 @@ func TestFailErrIsNotSilencedByQuiet(t *testing.T) {
 	}
 	if c.stderr() == "" {
 		t.Fatal("--quiet silenced an error")
+	}
+}
+
+// TestInvocationErrorsExitUsage pins exit 2 for the ways a command line can be
+// wrong before anything is dialed or opened: a missing action or positional,
+// an unknown action, a malformed namespace or version. None of these need a
+// server, so an error other than 2 would mean the CLI tried to do work.
+func TestInvocationErrorsExitUsage(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		args    []string
+		wantErr string
+	}{
+		{[]string{"admin", "namespace"}, "requires an action"},
+		{[]string{"admin", "namespace", "frobnicate"}, "unknown namespace action"},
+		{[]string{"admin", "namespace", "create", "--env", "prod"}, "both --env and --app are required"},
+		{[]string{"admin", "namespace", "create", "--env", "prod", "--app", "api", "--auth-methods", "carrier-pigeon"}, "auth method"},
+		{[]string{"admin", "namespace", "delete", "--app", "api", "--yes"}, "both --env and --app are required"},
+		{[]string{"admin", "identity"}, "requires an action"},
+		{[]string{"admin", "identity", "frobnicate"}, "unknown identity action"},
+		{[]string{"admin", "ca"}, "admin ca supports only: ca show"},
+		{[]string{"admin", "ca", "rotate"}, "admin ca supports only: ca show"},
+		{[]string{"admin", "identity", "create"}, "requires a NAME argument"},
+		{[]string{"admin", "identity", "create", "svc", "--namespace", "prod"}, "invalid --namespace"},
+		{[]string{"admin", "identity", "issue-cert"}, "requires a NAME argument"},
+		{[]string{"admin", "identity", "revoke-cert"}, "requires a NAME argument"},
+		{[]string{"admin", "identity", "rotate"}, "requires a NAME argument"},
+		{[]string{"admin", "identity", "revoke"}, "requires a NAME argument"},
+		{[]string{"put-secret"}, "requires a /env/app/key argument"},
+		{[]string{"get-secret"}, "requires a /env/app/key argument"},
+		{[]string{"put-parameter", "/prod/api/key"}, "requires /env/app/key and VALUE"},
+		{[]string{"list"}, "requires an env/app namespace argument"},
+		{[]string{"release", "frobnicate"}, "unknown release command"},
+		{[]string{"release", "create"}, "requires FILE or --file"},
+		{[]string{"release", "list"}, "requires ENV/APP"},
+		{[]string{"release", "diff", "prod/api", "rel"}, "requires ENV/APP NAME FROM_VERSION TO_VERSION"},
+		{[]string{"release", "diff", "prod/api", "rel", "x", "2"}, "invalid FROM_VERSION"},
+		{[]string{"release", "diff", "prod/api", "rel", "1", "y"}, "invalid TO_VERSION"},
+		{[]string{"release", "rollback"}, "requires ENV/APP NAME"},
+		{[]string{"release", "subscribers", "prod/api"}, "requires ENV/APP NAME"},
+		{[]string{"release", "schema"}, "requires create, show, or list"},
+		{[]string{"release", "schema", "frobnicate"}, "unknown release schema command"},
+		{[]string{"release", "schema", "create", "id"}, "requires ID FILE"},
+		{[]string{"release", "schema", "show", "id"}, "requires ID VERSION"},
+	} {
+		t.Run(strings.Join(tc.args, " "), func(t *testing.T) {
+			t.Parallel()
+			c := newTestCLI()
+			if code := c.Run(tc.args); code != exitUsage {
+				t.Fatalf("Run(%v) = %d, want %d; stderr=%s", tc.args, code, exitUsage, c.stderr())
+			}
+			if !strings.Contains(c.stderr(), tc.wantErr) {
+				t.Fatalf("Run(%v) stderr = %q, want it to mention %q", tc.args, c.stderr(), tc.wantErr)
+			}
+			if c.stdout() != "" {
+				t.Fatalf("Run(%v) wrote stdout: %q", tc.args, c.stdout())
+			}
+		})
 	}
 }

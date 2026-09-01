@@ -72,6 +72,13 @@ func TestCommandFlagHelpExitsSuccessfully(t *testing.T) {
 		{"admin", "ca", "show", "-h"},
 		{"put-secret", "--help"},
 		{"whoami", "--help"},
+		{"admin", "--help"},
+		{"admin", "namespace", "--help"},
+		{"admin", "identity", "-h"},
+		{"admin", "policy", "help"},
+		{"admin", "ca", "--help"},
+		{"release", "--help"},
+		{"config", "--help"},
 	} {
 		c := newTestCLI()
 		if code := c.Run(args); code != 0 {
@@ -107,6 +114,37 @@ func TestOutputFlagIsAcceptedAfterTheSubcommand(t *testing.T) {
 	}
 	if got := decodeJSONStdout(t, c)["name"]; got != "ops" {
 		t.Fatalf("document = %q", c.stdout())
+	}
+}
+
+// The short forms work after the subcommand too, where `admin-cert issue`
+// also owns --out: -o is the output format everywhere, -y and -q likewise.
+func TestShortGlobalFlagsAreAcceptedAfterTheSubcommand(t *testing.T) {
+	stub := &whoAmIStub{response: &kmsv1.WhoAmIResponse{Name: "ops", Kind: "admin", AuthMethod: "token"}}
+	c := newWhoAmICLI(t, stub)
+	if code := c.Run([]string{"whoami", "--insecure", "--token", "t", "-o", "json", "-q", "-y"}); code != 0 {
+		t.Fatalf("whoami exit = %d, stderr=%s", code, c.stderr())
+	}
+	if got := decodeJSONStdout(t, c)["name"]; got != "ops" {
+		t.Fatalf("document = %q", c.stdout())
+	}
+	if !c.quiet || !c.assumeYes {
+		t.Fatalf("quiet=%v assumeYes=%v, want both set", c.quiet, c.assumeYes)
+	}
+
+	// Usage folds each alias into its long form's row rather than listing
+	// one-letter flags separately.
+	help := newTestCLI()
+	if code := help.Run([]string{"admin-cert", "issue", "--help"}); code != 0 {
+		t.Fatalf("help exit = %d", code)
+	}
+	for _, want := range []string{"--output FORMAT, -o", "--yes[=true|false], -y", "--quiet[=true|false], -q", "--out DIRECTORY"} {
+		if !strings.Contains(help.stderr(), want) {
+			t.Fatalf("usage missing %q:\n%s", want, help.stderr())
+		}
+	}
+	if strings.Contains(help.stderr(), "\n  --o ") || strings.Contains(help.stderr(), "--y[") || strings.Contains(help.stderr(), "--q[") {
+		t.Fatalf("usage lists an alias on its own row:\n%s", help.stderr())
 	}
 }
 

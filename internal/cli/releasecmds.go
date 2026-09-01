@@ -53,7 +53,7 @@ func (c *CLI) cmdRelease(args []string) int {
 		c.releaseUsage()
 		return 0
 	default:
-		return c.fail("unknown release command %q", args[0])
+		return c.failUsage("unknown release command %q", args[0])
 	}
 }
 
@@ -139,7 +139,7 @@ func (c *CLI) cmdReleaseCreate(args []string) int {
 		*file = pos[0]
 	}
 	if *file == "" {
-		return c.fail("release create requires FILE or --file")
+		return c.failUsage("release create requires FILE or --file")
 	}
 	definition, err := c.readReleaseDefinition(*file)
 	if err != nil {
@@ -361,20 +361,24 @@ func releaseValidationDetails(err error) *kmsv1.ValidateReleaseResponse {
 }
 
 // releaseShowJSON is one release manifest. It repeats the table's header lines
-// as fields (namespace, schema pin, activation labels) so a script never has to
-// parse prose.
+// as fields (namespace, schema pin) so a script never has to parse prose.
+// Activation state is deliberately absent: GetRelease does not report it, and
+// a "current": false that is never true would mislead; use release list.
 type releaseShowJSON struct {
-	Namespace     namespaceRefJSON   `json:"namespace"`
-	Name          string             `json:"name"`
-	Version       uint64             `json:"version"`
-	Revision      uint64             `json:"revision"`
-	Current       bool               `json:"current"`
-	Previous      bool               `json:"previous"`
-	SchemaID      string             `json:"schema_id"`
-	SchemaVersion uint64             `json:"schema_version"`
-	Digest        string             `json:"digest"`
-	CreatedAt     *string            `json:"created_at"`
-	Entries       []releaseEntryJSON `json:"entries"`
+	Namespace namespaceRefJSON   `json:"namespace"`
+	Name      string             `json:"name"`
+	Version   uint64             `json:"version"`
+	Schema    *releaseSchemaRef  `json:"schema"`
+	Digest    string             `json:"digest"`
+	CreatedAt *string            `json:"created_at"`
+	Entries   []releaseEntryJSON `json:"entries"`
+}
+
+// releaseSchemaRef names the schema a release was validated against; null in
+// the document when the release has none.
+type releaseSchemaRef struct {
+	ID      string `json:"id"`
+	Version uint64 `json:"version"`
 }
 
 func (c *CLI) cmdReleaseShow(args []string) int {
@@ -402,10 +406,13 @@ func (c *CLI) cmdReleaseShow(args []string) int {
 	if err != nil {
 		return c.failErr("release show", err)
 	}
-	return c.printRelease(resp.GetRelease(), 0, false, false)
+	return c.printRelease(resp.GetRelease())
 }
 
-func (c *CLI) printRelease(release *kmsv1.ConfigurationRelease, revision uint64, current, previous bool) int {
+// printRelease renders one release manifest. GetRelease carries no activation
+// state (that belongs to release list), so neither the table nor the document
+// pretends to know whether this version is current.
+func (c *CLI) printRelease(release *kmsv1.ConfigurationRelease) int {
 	if release == nil {
 		return c.fail("server returned an empty release")
 	}
@@ -413,17 +420,15 @@ func (c *CLI) printRelease(release *kmsv1.ConfigurationRelease, revision uint64,
 	sort.Slice(entries, func(i, j int) bool { return entries[i].GetAlias() < entries[j].GetAlias() })
 	if c.jsonOutput() {
 		document := releaseShowJSON{
-			Namespace:     namespaceRefValue(release.GetNamespace()),
-			Name:          release.GetName(),
-			Version:       release.GetVersion(),
-			Revision:      revision,
-			Current:       current,
-			Previous:      previous,
-			SchemaID:      release.GetSchemaId(),
-			SchemaVersion: release.GetSchemaVersion(),
-			Digest:        release.GetDigest(),
-			CreatedAt:     jsonTime(release.GetCreatedAtUnixMs()),
-			Entries:       make([]releaseEntryJSON, 0, len(entries)),
+			Namespace: namespaceRefValue(release.GetNamespace()),
+			Name:      release.GetName(),
+			Version:   release.GetVersion(),
+			Digest:    release.GetDigest(),
+			CreatedAt: jsonTime(release.GetCreatedAtUnixMs()),
+			Entries:   make([]releaseEntryJSON, 0, len(entries)),
+		}
+		if release.GetSchemaId() != "" {
+			document.Schema = &releaseSchemaRef{ID: release.GetSchemaId(), Version: release.GetSchemaVersion()}
 		}
 		for _, entry := range entries {
 			document.Entries = append(document.Entries, releaseEntryToJSON(entry))
@@ -434,12 +439,6 @@ func (c *CLI) printRelease(release *kmsv1.ConfigurationRelease, revision uint64,
 	_, _ = fmt.Fprintf(c.Stdout, "Digest: %s\n", release.GetDigest())
 	if release.GetSchemaId() != "" {
 		_, _ = fmt.Fprintf(c.Stdout, "Schema: %s version %d\n", release.GetSchemaId(), release.GetSchemaVersion())
-	}
-	if revision != 0 {
-		_, _ = fmt.Fprintf(c.Stdout, "Activation revision: %d\n", revision)
-	}
-	if current || previous {
-		_, _ = fmt.Fprintf(c.Stdout, "Labels: current=%t previous=%t\n", current, previous)
 	}
 	rows := make([][]string, 0, len(entries))
 	for _, entry := range entries {
@@ -475,7 +474,7 @@ func (c *CLI) cmdReleaseList(args []string) int {
 	}
 	pos := c.args()
 	if len(pos) < 1 {
-		return c.fail("release list requires ENV/APP")
+		return c.failUsage("release list requires ENV/APP")
 	}
 	ns, err := parseNamespaceProto(pos[0])
 	if err != nil {
@@ -572,7 +571,7 @@ func (c *CLI) cmdReleaseDiff(args []string) int {
 	}
 	pos := c.args()
 	if len(pos) != 4 {
-		return c.fail("release diff requires ENV/APP NAME FROM_VERSION TO_VERSION")
+		return c.failUsage("release diff requires ENV/APP NAME FROM_VERSION TO_VERSION")
 	}
 	ns, err := parseNamespaceProto(pos[0])
 	if err != nil {
@@ -580,11 +579,11 @@ func (c *CLI) cmdReleaseDiff(args []string) int {
 	}
 	fromVersion, err := parseVersion(pos[2])
 	if err != nil {
-		return c.fail("invalid FROM_VERSION: %v", err)
+		return c.failUsage("invalid FROM_VERSION: %v", err)
 	}
 	toVersion, err := parseVersion(pos[3])
 	if err != nil {
-		return c.fail("invalid TO_VERSION: %v", err)
+		return c.failUsage("invalid TO_VERSION: %v", err)
 	}
 	conn, err := c.dialConn(cf)
 	if err != nil {
@@ -874,7 +873,7 @@ func (c *CLI) cmdReleaseRollback(args []string) int {
 	}
 	pos := c.args()
 	if len(pos) < 2 || len(pos) > 3 {
-		return c.fail("release rollback requires ENV/APP NAME [VERSION]")
+		return c.failUsage("release rollback requires ENV/APP NAME [VERSION]")
 	}
 	ns, err := parseNamespaceProto(pos[0])
 	if err != nil {
@@ -936,7 +935,7 @@ func (c *CLI) cmdReleaseSubscribers(args []string) int {
 	}
 	pos := c.args()
 	if len(pos) != 2 {
-		return c.fail("release subscribers requires ENV/APP NAME")
+		return c.failUsage("release subscribers requires ENV/APP NAME")
 	}
 	ns, err := parseNamespaceProto(pos[0])
 	if err != nil {
@@ -1122,7 +1121,7 @@ func releaseSubscriberStateText(state *kmsv1.ReleaseSubscriberState) string {
 
 func (c *CLI) cmdReleaseSchema(args []string) int {
 	if len(args) == 0 {
-		return c.fail("release schema requires create, show, or list")
+		return c.failUsage("release schema requires create, show, or list")
 	}
 	switch args[0] {
 	case "create":
@@ -1132,7 +1131,7 @@ func (c *CLI) cmdReleaseSchema(args []string) int {
 	case "list":
 		return c.cmdReleaseSchemaList(args[1:])
 	default:
-		return c.fail("unknown release schema command %q", args[0])
+		return c.failUsage("unknown release schema command %q", args[0])
 	}
 }
 
@@ -1154,7 +1153,7 @@ func (c *CLI) cmdReleaseSchemaCreate(args []string) int {
 	}
 	pos := c.args()
 	if len(pos) != 2 {
-		return c.fail("release schema create requires ID FILE")
+		return c.failUsage("release schema create requires ID FILE")
 	}
 	schemaJSON, err := readSchemaJSON(pos[1])
 	if err != nil {
@@ -1224,7 +1223,7 @@ func (c *CLI) cmdReleaseSchemaShow(args []string) int {
 	}
 	pos := c.args()
 	if len(pos) != 2 {
-		return c.fail("release schema show requires ID VERSION")
+		return c.failUsage("release schema show requires ID VERSION")
 	}
 	version, err := parseVersion(pos[1])
 	if err != nil {

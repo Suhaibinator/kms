@@ -98,10 +98,13 @@ KMS_* environment fallback.
 
 func (c *CLI) cmdAdminNamespace(args []string) int {
 	if len(args) == 0 {
-		return c.fail("admin namespace requires an action (create|update|delete|list)")
+		return c.failUsage("admin namespace requires an action (create|update|delete|list)")
 	}
 	action, rest := args[0], args[1:]
 	switch action {
+	case "help", "-h", "--help":
+		c.adminUsage()
+		return 0
 	case "create":
 		return c.cmdNamespaceWrite(rest, false)
 	case "update":
@@ -111,7 +114,7 @@ func (c *CLI) cmdAdminNamespace(args []string) int {
 	case "list":
 		return c.cmdNamespaceList(rest)
 	default:
-		return c.fail("unknown namespace action %q", action)
+		return c.failUsage("unknown namespace action %q", action)
 	}
 }
 
@@ -135,7 +138,7 @@ func (c *CLI) cmdNamespaceWrite(args []string, update bool) int {
 	}
 	ns, err := namespaceFromFlags(*env, *app)
 	if err != nil {
-		return c.fail("%s: %v", name, err)
+		return c.failUsage("%s: %v", name, err)
 	}
 	methods, err := parseAuthMethods(*authMethods)
 	if err != nil {
@@ -194,7 +197,7 @@ func (c *CLI) cmdNamespaceDelete(args []string) int {
 	}
 	ns, err := namespaceFromFlags(*env, *app)
 	if err != nil {
-		return c.fail("namespace delete: %v", err)
+		return c.failUsage("namespace delete: %v", err)
 	}
 	// Deleting a namespace is irreversible and identified only by two flags, so
 	// the operator retypes the target before the server is even contacted.
@@ -284,10 +287,13 @@ func (c *CLI) cmdNamespaceList(args []string) int {
 
 func (c *CLI) cmdAdminIdentity(args []string) int {
 	if len(args) == 0 {
-		return c.fail("admin identity requires an action (create|issue-cert|revoke-cert|rotate|revoke|list)")
+		return c.failUsage("admin identity requires an action (create|issue-cert|revoke-cert|rotate|revoke|list)")
 	}
 	action, rest := args[0], args[1:]
 	switch action {
+	case "help", "-h", "--help":
+		c.adminUsage()
+		return 0
 	case "create":
 		return c.cmdIdentityCreate(rest)
 	case "issue-cert":
@@ -301,7 +307,7 @@ func (c *CLI) cmdAdminIdentity(args []string) int {
 	case "list":
 		return c.cmdIdentityList(rest)
 	default:
-		return c.fail("unknown identity action %q", action)
+		return c.failUsage("unknown identity action %q", action)
 	}
 }
 
@@ -320,7 +326,7 @@ func (c *CLI) cmdIdentityCreate(args []string) int {
 	}
 	pos := c.args()
 	if len(pos) < 1 || pos[0] == "" {
-		return c.fail("identity create requires a NAME argument")
+		return c.failUsage("identity create requires a NAME argument")
 	}
 	name := pos[0]
 
@@ -344,7 +350,7 @@ func (c *CLI) cmdIdentityCreate(args []string) int {
 	if *namespace != "" {
 		ns, perr := keyutil.ParseNamespace(*namespace)
 		if perr != nil {
-			return c.fail("invalid --namespace: %v", perr)
+			return c.failUsage("invalid --namespace: %v", perr)
 		}
 		req.Namespace = &kmsv1.NamespaceRef{Env: ns.Env, App: ns.App}
 	}
@@ -462,7 +468,7 @@ func (c *CLI) cmdIdentityIssueCert(args []string) int {
 	}
 	pos := c.args()
 	if len(pos) < 1 || pos[0] == "" {
-		return c.fail("identity issue-cert requires a NAME argument")
+		return c.failUsage("identity issue-cert requires a NAME argument")
 	}
 	name := pos[0]
 	ttlSeconds, err := parseTTLSeconds(*ttl)
@@ -534,7 +540,7 @@ func (c *CLI) cmdIdentityRevokeCert(args []string) int {
 	}
 	pos := c.args()
 	if len(pos) < 1 || pos[0] == "" {
-		return c.fail("identity revoke-cert requires a NAME argument")
+		return c.failUsage("identity revoke-cert requires a NAME argument")
 	}
 	if *serial == "" {
 		return c.failUsage("--serial is required")
@@ -576,7 +582,7 @@ func (c *CLI) cmdIdentityRotate(args []string) int {
 	}
 	pos := c.args()
 	if len(pos) < 1 || pos[0] == "" {
-		return c.fail("identity rotate requires a NAME argument")
+		return c.failUsage("identity rotate requires a NAME argument")
 	}
 
 	conn, err := c.dialConn(cf)
@@ -613,7 +619,7 @@ func (c *CLI) cmdIdentityRevoke(args []string) int {
 	}
 	pos := c.args()
 	if len(pos) < 1 || pos[0] == "" {
-		return c.fail("identity revoke requires a NAME argument")
+		return c.failUsage("identity revoke requires a NAME argument")
 	}
 	// Revoking an identity invalidates every credential it holds, so the
 	// operator retypes the name before the server is contacted.
@@ -701,8 +707,12 @@ func (c *CLI) cmdIdentityList(args []string) int {
 // --- CA --------------------------------------------------------------------
 
 func (c *CLI) cmdAdminCA(args []string) int {
+	if len(args) > 0 && (args[0] == "help" || args[0] == "-h" || args[0] == "--help") {
+		c.adminUsage()
+		return 0
+	}
 	if len(args) == 0 || args[0] != "show" {
-		return c.fail("admin ca supports only: ca show")
+		return c.failUsage("admin ca supports only: ca show")
 	}
 	fs := c.newFlags("ca show")
 	cf := addConnFlags(c, fs)

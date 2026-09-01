@@ -167,11 +167,10 @@ func TestReleaseShowJSONIsTheWholeOfStdout(t *testing.T) {
   },
   "name": "runtime",
   "version": 3,
-  "revision": 0,
-  "current": false,
-  "previous": false,
-  "schema_id": "app/runtime",
-  "schema_version": 2,
+  "schema": {
+    "id": "app/runtime",
+    "version": 2
+  },
   "digest": "d3",
   "created_at": "2023-11-14T22:13:20Z",
   "entries": [

@@ -334,7 +334,7 @@ func (c *CLI) cmdPutSecret(args []string) int {
 	}
 	pos := c.args()
 	if len(pos) < 1 || pos[0] == "" {
-		return c.fail("put-secret requires a /env/app/key argument")
+		return c.failUsage("put-secret requires a /env/app/key argument")
 	}
 	ref, err := keyutil.SplitDisplayPath(pos[0])
 	if err != nil {
@@ -416,7 +416,7 @@ func (c *CLI) cmdGetSecret(args []string) int {
 	}
 	pos := c.args()
 	if len(pos) < 1 || pos[0] == "" {
-		return c.fail("get-secret requires a /env/app/key argument")
+		return c.failUsage("get-secret requires a /env/app/key argument")
 	}
 	ref, err := keyutil.SplitDisplayPath(pos[0])
 	if err != nil {
@@ -508,7 +508,7 @@ func (c *CLI) cmdPutParameter(args []string) int {
 	}
 	pos := c.args()
 	if len(pos) < 2 || pos[0] == "" {
-		return c.fail("put-parameter requires /env/app/key and VALUE arguments")
+		return c.failUsage("put-parameter requires /env/app/key and VALUE arguments")
 	}
 	ref, err := keyutil.SplitDisplayPath(pos[0])
 	if err != nil {
@@ -558,7 +558,7 @@ func (c *CLI) cmdList(args []string) int {
 	}
 	pos := c.args()
 	if len(pos) < 1 || pos[0] == "" {
-		return c.fail("list requires an env/app namespace argument")
+		return c.failUsage("list requires an env/app namespace argument")
 	}
 	ns, err := keyutil.ParseNamespace(pos[0])
 	if err != nil {

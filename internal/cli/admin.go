@@ -407,7 +407,7 @@ func (c *CLI) cmdBackup(args []string) int {
 		return c.failUsage("--out is required")
 	}
 	if fileExists(*out) {
-		return c.fail("output file %s already exists; refusing to overwrite", *out)
+		return c.failErr("", fmt.Errorf("output file %s: %w; refusing to overwrite", *out, os.ErrExist))
 	}
 	if err := storage.ValidateKMSDatabase(cfg.Storage.SQLitePath); err != nil {
 		return c.failErr("invalid backup source", err)

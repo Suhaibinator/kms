@@ -20,6 +20,9 @@ func (c *CLI) cmdAdminPolicy(args []string) int {
 	}
 	action, rest := args[0], args[1:]
 	switch action {
+	case "help", "-h", "--help":
+		c.adminUsage()
+		return 0
 	case "create":
 		return c.cmdPolicyCreate(rest)
 	case "list":

@@ -249,16 +249,30 @@ next:
 	return args[i:], true
 }
 
-// addGlobalFlags registers the long-form global flags on a command flag set.
-// A value given after the subcommand overrides one given before it. The
-// short forms (-o, -y, -q) are accepted only before the subcommand: several
-// commands already own --out, and a short flag that means different things
-// in different positions is a trap.
+// addGlobalFlags registers the global flags on a command flag set, so they
+// are accepted after the subcommand as well as before it; a value given after
+// the subcommand overrides one given before it. The short forms are the same
+// flags under a second name (Go's flag package never abbreviates, so -o is
+// unrelated to the --out several commands own); printFlagTable folds each
+// alias into its long form's row.
 func (c *CLI) addGlobalFlags(fs *flag.FlagSet) {
 	fs.Var(&c.output, "output", "output `format`: table or json (env KMS_OUTPUT)")
+	fs.Var(&c.output, "o", "")
 	fs.BoolVar(&c.assumeYes, "yes", c.assumeYes, "answer confirmation prompts automatically; required for destructive commands on a non-interactive stdin")
+	fs.BoolVar(&c.assumeYes, "y", c.assumeYes, "")
 	fs.BoolVar(&c.quiet, "quiet", c.quiet, "suppress informational messages on stderr")
+	fs.BoolVar(&c.quiet, "q", c.quiet, "")
+	// The flag package records the value at registration as the default, which
+	// here is whatever `-o json` or `-y` before the subcommand already set.
+	// Usage text must describe the built-in defaults, not this invocation.
+	fs.Lookup("output").DefValue = string(outputTable)
+	for _, name := range []string{"yes", "quiet"} {
+		fs.Lookup(name).DefValue = "false"
+	}
 }
+
+// shortFlags maps a long global flag to its one-letter alias for usage text.
+var shortFlags = map[string]string{"output": "o", "yes": "y", "quiet": "q"}
 
 func (c *CLI) usage() {
 	_, _ = fmt.Fprint(c.Stderr, `parameter-store — parameter and secret management service
@@ -526,12 +540,18 @@ func printFlagTable(w io.Writer, fs *flag.FlagSet) {
 	var rows []row
 	width := 0
 	fs.VisitAll(func(f *flag.Flag) {
+		if len(f.Name) == 1 {
+			return // an alias; shown beside its long form
+		}
 		name, usage := flag.UnquoteUsage(f)
 		head := "--" + f.Name
 		if isBoolFlag(f) {
 			head += "[=true|false]"
 		} else if name != "" {
 			head += " " + strings.ToUpper(name)
+		}
+		if short, ok := shortFlags[f.Name]; ok && fs.Lookup(short) != nil {
+			head += ", -" + short
 		}
 		if f.DefValue != "" && f.DefValue != "false" && !isBoolFlag(f) {
 			usage += fmt.Sprintf(" (default %q)", f.DefValue)
