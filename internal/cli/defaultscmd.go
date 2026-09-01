@@ -5,8 +5,8 @@ import (
 	"io"
 	"os"
 	"sort"
+	"strconv"
 	"strings"
-	"text/tabwriter"
 
 	kmsv1 "github.com/Suhaibinator/kms/gen/kmsv1"
 	"github.com/Suhaibinator/kms/internal/domain"
@@ -89,12 +89,12 @@ func (c *CLI) cmdDefaultsApply(args []string) int {
 	}
 	artifact, err := c.readDefaultsArtifact(*from)
 	if err != nil {
-		return c.fail("reading defaults artifact: %v", err)
+		return c.failErr("reading defaults artifact", err)
 	}
 
 	conn, err := c.dialConn(cf)
 	if err != nil {
-		return c.fail("%v", err)
+		return c.failErr("", err)
 	}
 	defer func() { _ = conn.Close() }()
 	ctx, cancel := callContext()
@@ -109,16 +109,20 @@ func (c *CLI) cmdDefaultsApply(args []string) int {
 		UpdateDefinition: *updateDefinition,
 	})
 	if err != nil {
-		return c.fail("previewing defaults: %v", err)
+		return c.failErr("previewing defaults", err)
 	}
 	if err := validateDefaultsResponse(preview, false); err != nil {
 		return c.fail("invalid defaults preview response: %v", err)
 	}
-	if err := c.writeDefaultsResult("Preview", preview); err != nil {
-		return c.fail("writing defaults preview: %v", err)
-	}
 	if !*execute {
-		return 0
+		return c.reportDefaultsResult("Preview", "writing defaults preview", preview)
+	}
+	// With --execute the run ends in an applied result, and JSON mode may put
+	// only one document on stdout: the preview stays a human-only step there.
+	if !c.jsonOutput() {
+		if code := c.reportDefaultsResult("Preview", "writing defaults preview", preview); code != exitOK {
+			return code
+		}
 	}
 	if blocked := countDefaultsStatus(preview.GetEntries(), "blocked"); blocked > 0 {
 		return c.fail("%d parameter default(s) are blocked; pass --overwrite and preview again", blocked)
@@ -136,15 +140,12 @@ func (c *CLI) cmdDefaultsApply(args []string) int {
 		PlanDigest:       preview.GetPlanDigest(),
 	})
 	if err != nil {
-		return c.fail("applying defaults: %v", err)
+		return c.failErr("applying defaults", err)
 	}
 	if err := validateDefaultsResponse(applied, true); err != nil {
 		return c.fail("invalid defaults apply response: %v", err)
 	}
-	if err := c.writeDefaultsResult("Applied", applied); err != nil {
-		return c.fail("writing defaults result: %v", err)
-	}
-	return 0
+	return c.reportDefaultsResult("Applied", "writing defaults result", applied)
 }
 
 // dialConn honours the test transport override, otherwise dials the
@@ -242,7 +243,13 @@ func countDefaultsStatus(entries []*kmsv1.DefaultsApplyEntry, status string) int
 	return count
 }
 
-func (c *CLI) writeDefaultsResult(heading string, resp *kmsv1.ApplyApplicationDefaultsResponse) error {
+// defaultsStatuses is the fixed status vocabulary, in the order the summary
+// line and the JSON counts report it.
+var defaultsStatuses = []string{"create", "unchanged", "update", "blocked"}
+
+// sortedDefaultsEntries orders a response's entries by alias then key so both
+// renderers present the same plan in the same order every run.
+func sortedDefaultsEntries(resp *kmsv1.ApplyApplicationDefaultsResponse) []*kmsv1.DefaultsApplyEntry {
 	entries := append([]*kmsv1.DefaultsApplyEntry(nil), resp.GetEntries()...)
 	sort.Slice(entries, func(i, j int) bool {
 		if entries[i].GetAlias() == entries[j].GetAlias() {
@@ -250,29 +257,107 @@ func (c *CLI) writeDefaultsResult(heading string, resp *kmsv1.ApplyApplicationDe
 		}
 		return entries[i].GetAlias() < entries[j].GetAlias()
 	})
+	return entries
+}
+
+// defaultsEntryJSON is one planned parameter write. The artifact's values are
+// never echoed: an entry names the parameter and what would happen to it.
+type defaultsEntryJSON struct {
+	Status         string `json:"status"`
+	Alias          string `json:"alias"`
+	Key            string `json:"key"`
+	ContentType    string `json:"content_type"`
+	CurrentVersion uint64 `json:"current_version"`
+	AppliedVersion uint64 `json:"applied_version"`
+	Revision       uint64 `json:"revision"`
+}
+
+// defaultsCountsJSON is the summary line as fields.
+type defaultsCountsJSON struct {
+	Create    int `json:"create"`
+	Unchanged int `json:"unchanged"`
+	Update    int `json:"update"`
+	Blocked   int `json:"blocked"`
+}
+
+// defaultsApplyJSON is one `defaults apply` result. executed distinguishes a
+// preview from the applied run, which is what the table says in its heading.
+type defaultsApplyJSON struct {
+	Profile           string              `json:"profile"`
+	PlanDigest        string              `json:"plan_digest"`
+	Executed          bool                `json:"executed"`
+	DefinitionChanged bool                `json:"definition_changed"`
+	DefinitionUpdated bool                `json:"definition_updated"`
+	Entries           []defaultsEntryJSON `json:"entries"`
+	MissingSecrets    []string            `json:"missing_secrets"`
+	Counts            defaultsCountsJSON  `json:"counts"`
+}
+
+func defaultsApplyJSONOf(resp *kmsv1.ApplyApplicationDefaultsResponse) defaultsApplyJSON {
+	entries := sortedDefaultsEntries(resp)
+	missingSecrets := append([]string{}, resp.GetMissingSecrets()...)
+	sort.Strings(missingSecrets)
+	document := defaultsApplyJSON{
+		Profile:           resp.GetProfile(),
+		PlanDigest:        resp.GetPlanDigest(),
+		Executed:          resp.GetExecuted(),
+		DefinitionChanged: resp.GetDefinitionChanged(),
+		DefinitionUpdated: resp.GetDefinitionUpdated(),
+		Entries:           make([]defaultsEntryJSON, 0, len(entries)),
+		MissingSecrets:    missingSecrets,
+		Counts: defaultsCountsJSON{
+			Create:    countDefaultsStatus(entries, "create"),
+			Unchanged: countDefaultsStatus(entries, "unchanged"),
+			Update:    countDefaultsStatus(entries, "update"),
+			Blocked:   countDefaultsStatus(entries, "blocked"),
+		},
+	}
+	for _, entry := range entries {
+		document.Entries = append(document.Entries, defaultsEntryJSON{
+			Status:         entry.GetStatus(),
+			Alias:          entry.GetAlias(),
+			Key:            entry.GetKey(),
+			ContentType:    entry.GetContentType(),
+			CurrentVersion: entry.GetCurrentVersion(),
+			AppliedVersion: entry.GetAppliedVersion(),
+			Revision:       entry.GetRevision(),
+		})
+	}
+	return document
+}
+
+// reportDefaultsResult renders one result: the JSON document, or the human
+// table. failPrefix names the step for the error a broken stdout produces.
+func (c *CLI) reportDefaultsResult(heading, failPrefix string, resp *kmsv1.ApplyApplicationDefaultsResponse) int {
+	if c.jsonOutput() {
+		return c.printJSON(defaultsApplyJSONOf(resp))
+	}
+	if err := c.writeDefaultsResult(heading, resp); err != nil {
+		return c.failErr(failPrefix, err)
+	}
+	return exitOK
+}
+
+func (c *CLI) writeDefaultsResult(heading string, resp *kmsv1.ApplyApplicationDefaultsResponse) error {
+	entries := sortedDefaultsEntries(resp)
 	missingSecrets := append([]string(nil), resp.GetMissingSecrets()...)
 	sort.Strings(missingSecrets)
 
 	if _, err := fmt.Fprintf(c.Stdout, "%s defaults\nProfile: %s\nPlan digest: %s\nDefinition changed: %t\nDefinition updated: %t\n", heading, resp.GetProfile(), resp.GetPlanDigest(), resp.GetDefinitionChanged(), resp.GetDefinitionUpdated()); err != nil {
 		return err
 	}
-	tw := tabwriter.NewWriter(c.Stdout, 0, 4, 2, ' ', 0)
-	if _, err := fmt.Fprintln(tw, "STATUS\tALIAS\tKEY\tCONTENT TYPE\tCURRENT\tAPPLIED\tREVISION"); err != nil {
-		return err
-	}
+	rows := make([][]string, 0, len(entries))
 	for _, entry := range entries {
-		if _, err := fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%d\t%d\t%d\n",
+		rows = append(rows, []string{
 			entry.GetStatus(), entry.GetAlias(), entry.GetKey(), entry.GetContentType(),
-			entry.GetCurrentVersion(), entry.GetAppliedVersion(), entry.GetRevision()); err != nil {
-			return err
-		}
+			strconv.FormatUint(entry.GetCurrentVersion(), 10),
+			strconv.FormatUint(entry.GetAppliedVersion(), 10),
+			strconv.FormatUint(entry.GetRevision(), 10),
+		})
 	}
-	if err := tw.Flush(); err != nil {
-		return err
-	}
-	statuses := []string{"create", "unchanged", "update", "blocked"}
-	parts := make([]string, 0, len(statuses))
-	for _, status := range statuses {
+	c.printTable([]string{"STATUS", "ALIAS", "KEY", "CONTENT TYPE", "CURRENT", "APPLIED", "REVISION"}, rows)
+	parts := make([]string, 0, len(defaultsStatuses))
+	for _, status := range defaultsStatuses {
 		parts = append(parts, fmt.Sprintf("%s=%d", status, countDefaultsStatus(entries, status)))
 	}
 	if _, err := fmt.Fprintf(c.Stdout, "Summary: %s\n", strings.Join(parts, " ")); err != nil {

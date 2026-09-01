@@ -106,8 +106,9 @@ func TestPrintReleaseDiffNeverRendersSecretMaterial(t *testing.T) {
 		{Alias: "password", Kind: "secret", Ref: secretRef, Version: 2, MetadataJson: `{"do_not_print":"new-secret-plaintext"}`},
 		{Alias: "settings", Kind: "parameter", Ref: parameterRef, Version: 2, ParameterDigest: "digest-two"},
 	}}
+	diff := computeReleaseDiff(from, to)
 	var output bytes.Buffer
-	printReleaseDiff(&output, from, to)
+	writeReleaseDiff(&output, diff)
 	text := output.String()
 	if strings.Contains(text, "secret-plaintext") || strings.Contains(text, "do_not_print") {
 		t.Fatalf("diff leaked secret metadata/value: %s", text)
@@ -116,6 +117,15 @@ func TestPrintReleaseDiffNeverRendersSecretMaterial(t *testing.T) {
 		if !strings.Contains(text, want) {
 			t.Fatalf("diff missing %q: %s", want, text)
 		}
+	}
+	// The JSON rendering shares the same computation, so it must be just as
+	// free of secret material.
+	var encoded bytes.Buffer
+	if err := writeJSON(&encoded, diff); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(encoded.String(), "secret-plaintext") || strings.Contains(encoded.String(), "do_not_print") {
+		t.Fatalf("diff json leaked secret metadata/value: %s", encoded.String())
 	}
 }
 
