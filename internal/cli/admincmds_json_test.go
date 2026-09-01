@@ -3,8 +3,6 @@ package cli
 import (
 	"context"
 	"encoding/json/v2"
-	"os"
-	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -530,25 +528,6 @@ func TestAdminDestructiveCommandsRequireConfirmation(t *testing.T) {
 	}
 }
 
-// ttyStdin makes a temp file holding line look like an interactive terminal to
-// the confirmation prompt: c.Stdin is an *os.File, and isTTY is the override.
-func ttyStdin(t *testing.T, c *testCLI, line string) {
-	t.Helper()
-	path := filepath.Join(t.TempDir(), "stdin")
-	if err := os.WriteFile(path, []byte(line), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	f, err := os.Open(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = f.Close() })
-	if _, err := f.Seek(0, 0); err != nil {
-		t.Fatal(err)
-	}
-	c.Stdin = f
-	c.isTTY = func() bool { return true }
-}
 
 // TestAdminNamespaceDeleteTypedConfirmation covers the interactive path: the
 // operator retypes the namespace to proceed, and a mistyped answer aborts
@@ -567,7 +546,7 @@ func TestAdminNamespaceDeleteTypedConfirmation(t *testing.T) {
 			stub := &adminStub{}
 			c := newTestCLI()
 			c.dialOverride = startStubGRPC(t, func(s *grpc.Server) { kmsv1.RegisterAdminServiceServer(s, stub) })
-			ttyStdin(t, c, test.typed)
+			interactive(t, c, test.typed)
 			code := c.Run([]string{"admin", "namespace", "delete", "--env", "prod", "--app", "gradethis", "--insecure"})
 			if code != test.wantExit {
 				t.Fatalf("exit=%d, want %d; stderr=%s", code, test.wantExit, c.stderr())

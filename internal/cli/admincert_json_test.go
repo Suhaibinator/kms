@@ -167,7 +167,7 @@ func TestAdminCertRevokeRequiresConfirmation(t *testing.T) {
 
 	// The interactive path: retyping the identity proceeds, a typo aborts.
 	mistyped := newTestCLI()
-	ttyStdin(t, mistyped, "nope\n")
+	interactive(t, mistyped, "nope\n")
 	if code := mistyped.Run([]string{"admin-cert", "revoke", "ops", "--sqlite-path", db, "--serial", serial}); code != exitUsage {
 		t.Fatalf("mistyped exit=%d, want %d; stderr=%s", code, exitUsage, mistyped.stderr())
 	}
@@ -183,7 +183,7 @@ func TestAdminCertRevokeRequiresConfirmation(t *testing.T) {
 	}
 
 	typed := newTestCLI()
-	ttyStdin(t, typed, "ops\n")
+	interactive(t, typed, "ops\n")
 	if code := typed.Run([]string{"admin-cert", "revoke", "ops", "--sqlite-path", db, "--serial", serial}); code != 0 {
 		t.Fatalf("typed exit=%d stderr=%s", code, typed.stderr())
 	}
