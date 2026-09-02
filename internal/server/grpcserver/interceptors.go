@@ -26,7 +26,6 @@ var publicMethods = map[string]bool{
 	"/kms.v1.AdminService/Health":           true,
 	"/kms.v1.AdminService/GetCACertificate": true,
 	"/grpc.health.v1.Health/Check":          true,
-	"/grpc.health.v1.Health/Watch":          true,
 }
 
 // unaryInterceptor applies, in order: panic recovery, request-ID tagging,
