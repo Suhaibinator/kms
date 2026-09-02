@@ -8,16 +8,30 @@ import (
 	"testing"
 
 	"google.golang.org/grpc"
+
+	"github.com/Suhaibinator/kms/internal/fileutil"
 )
 
 // writeTokenFile writes contents at mode inside a fresh private directory and
-// returns the path. The mode is applied with an explicit Chmod because the
-// test environment's umask would otherwise decide it.
+// returns the path. The file is created through fileutil.OpenPrivateExclusive
+// rather than os.WriteFile so that it is owned by the current user on every
+// platform (an elevated Windows session otherwise creates files owned by the
+// Administrators group, which ReadPrivateFile rightly refuses). The mode is
+// then applied with an explicit Chmod because the test environment's umask
+// would otherwise decide it.
 func writeTokenFile(t *testing.T, name, contents string, mode os.FileMode) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), name)
-	if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
+	f, err := fileutil.OpenPrivateExclusive(path)
+	if err != nil {
+		t.Fatalf("create %s: %v", path, err)
+	}
+	if _, err := f.WriteString(contents); err != nil {
+		_ = f.Close()
 		t.Fatalf("write %s: %v", path, err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatalf("close %s: %v", path, err)
 	}
 	if err := os.Chmod(path, mode); err != nil {
 		t.Fatalf("chmod %s: %v", path, err)
