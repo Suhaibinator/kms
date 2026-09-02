@@ -111,6 +111,21 @@ describe("AppShell", () => {
     expect(main).toHaveFocus();
   });
 
+  it("links every visible KMS brand back to the overview", () => {
+    render(
+      <AppShell>
+        <p>page</p>
+      </AppShell>,
+    );
+
+    const brandLinks = screen.getAllByRole("link", { name: /KMS/ });
+    expect(brandLinks).toHaveLength(2);
+    for (const brand of brandLinks) expect(brand).toHaveAttribute("href", "/");
+
+    fireEvent.click(screen.getByRole("button", { name: "Open navigation" }));
+    expect(screen.getByRole("link", { name: /KMS/ })).toHaveAttribute("href", "/");
+  });
+
   it("carries the last namespace into the Parameters, Secrets and Releases links", () => {
     render(
       <AppShell>
