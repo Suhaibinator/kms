@@ -56,6 +56,9 @@ func (s *SQLStore) ListAudit(ctx context.Context, f domain.AuditFilter, page Lis
 	if f.EventType != "" {
 		q = q.Where("event_type = ?", f.EventType)
 	}
+	if f.Decision != "" {
+		q = q.Where("decision = ?", f.Decision)
+	}
 	// Fixed-width timestamps sort lexicographically in chronological order, so
 	// text range comparisons are correct.
 	if !f.From.IsZero() {

@@ -2405,6 +2405,105 @@ func TestAuditPagination(t *testing.T) {
 	}
 }
 
+func TestAuditDecisionFilter(t *testing.T) {
+	st := newStore(t)
+	ctx := context.Background()
+	base := time.Date(2026, 7, 1, 12, 0, 0, 0, time.UTC)
+	events := []domain.AuditEvent{
+		{EventType: "read", ActorIdentity: "alice", ResourceEnv: "prod", ResourceApp: "app", ResourceKey: "x", Decision: "allow", CreatedAt: base},
+		{EventType: "read", ActorIdentity: "alice", ResourceEnv: "prod", ResourceApp: "app", ResourceKey: "y", Decision: "deny", CreatedAt: base.Add(time.Second)},
+		{EventType: "read", ActorIdentity: "bob", ResourceEnv: "prod", ResourceApp: "app", ResourceKey: "z", Decision: "deny", CreatedAt: base.Add(2 * time.Second)},
+		{EventType: "read", ActorIdentity: "alice", ResourceEnv: "stage", ResourceApp: "app", ResourceKey: "w", Decision: "deny", CreatedAt: base.Add(3 * time.Second)},
+		{EventType: "write", ActorIdentity: "alice", ResourceEnv: "prod", ResourceApp: "app", ResourceKey: "v", Decision: "error", CreatedAt: base.Add(4 * time.Second)},
+	}
+	for _, e := range events {
+		if err := st.AppendAudit(ctx, e); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	for _, tc := range []struct {
+		name   string
+		filter domain.AuditFilter
+		want   []string
+	}{
+		{"deny only", domain.AuditFilter{Decision: "deny"}, []string{"w", "z", "y"}},
+		{"error only", domain.AuditFilter{Decision: "error"}, []string{"v"}},
+		{"allow only", domain.AuditFilter{Decision: "allow"}, []string{"x"}},
+		{"empty matches any", domain.AuditFilter{}, []string{"v", "w", "z", "y", "x"}},
+		{"with namespace", domain.AuditFilter{Decision: "deny", Env: "prod", App: "app"}, []string{"z", "y"}},
+		{"with actor and event type", domain.AuditFilter{Decision: "deny", ActorIdentity: "alice", EventType: "read"}, []string{"w", "y"}},
+		{"with time range", domain.AuditFilter{Decision: "deny", From: base.Add(2 * time.Second)}, []string{"w", "z"}},
+		{"no match", domain.AuditFilter{Decision: "error", Env: "stage"}, nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, _, err := st.ListAudit(ctx, tc.filter, ListPage{Limit: 100})
+			if err != nil {
+				t.Fatal(err)
+			}
+			keys := make([]string, 0, len(got))
+			for _, e := range got {
+				keys = append(keys, e.ResourceKey)
+			}
+			if strings.Join(keys, ",") != strings.Join(tc.want, ",") {
+				t.Fatalf("keys = %v, want %v", keys, tc.want)
+			}
+		})
+	}
+
+	// The cursor must carry the decision filter across pages rather than
+	// re-scanning rows the first page already skipped.
+	var paged []string
+	token := ""
+	for {
+		list, next, err := st.ListAudit(ctx, domain.AuditFilter{Decision: "deny"}, ListPage{Limit: 2, Token: token})
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, e := range list {
+			paged = append(paged, e.ResourceKey)
+		}
+		if next == "" {
+			break
+		}
+		token = next
+	}
+	if strings.Join(paged, ",") != "w,z,y" {
+		t.Fatalf("paged deny keys = %v, want [w z y]", paged)
+	}
+}
+
+// TestAuditDecisionIndexCreatedOnExistingDatabase covers the upgrade path: a
+// database written before the decision index existed gains it on the next
+// migration rather than only on a freshly created file.
+func TestAuditDecisionIndexCreatedOnExistingDatabase(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "kms.db")
+	st, err := OpenWithOptions(path, Options{})
+	if err != nil {
+		t.Fatalf("OpenWithOptions: %v", err)
+	}
+	if err := st.db.Exec("DROP INDEX idx_audit_decision").Error; err != nil {
+		t.Fatalf("drop index: %v", err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	reopened, err := OpenWithOptions(path, Options{})
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	t.Cleanup(func() { _ = reopened.Close() })
+
+	var columns []string
+	if err := reopened.db.Raw("SELECT name FROM pragma_index_info('idx_audit_decision') ORDER BY seqno").Scan(&columns).Error; err != nil {
+		t.Fatalf("inspect index: %v", err)
+	}
+	if strings.Join(columns, ",") != "decision,id" {
+		t.Fatalf("idx_audit_decision columns = %v, want [decision id]", columns)
+	}
+}
+
 // ---- change log / revisions ----------------------------------------------
 
 func TestRevisionMonotonicAfterPruneAll(t *testing.T) {

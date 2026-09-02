@@ -966,6 +966,8 @@ export interface ListAuditEventsRequest {
   toUnixMs: bigint;
   pageSize: number;
   pageToken: string;
+  /** allow | deny | error; empty = any */
+  decision: string;
 }
 
 export interface ListAuditEventsResponse {
@@ -14623,6 +14625,7 @@ function createBaseListAuditEventsRequest(): ListAuditEventsRequest {
     toUnixMs: 0n,
     pageSize: 0,
     pageToken: "",
+    decision: "",
   };
 }
 
@@ -14660,6 +14663,9 @@ export const ListAuditEventsRequest: MessageFns<ListAuditEventsRequest> = {
     }
     if (message.pageToken !== "") {
       writer.uint32(74).string(message.pageToken);
+    }
+    if (message.decision !== "") {
+      writer.uint32(82).string(message.decision);
     }
     return writer;
   },
@@ -14749,6 +14755,14 @@ export const ListAuditEventsRequest: MessageFns<ListAuditEventsRequest> = {
             message.pageToken = reader.string();
             continue;
           }
+          case 10: {
+            if (tag !== 82) {
+              break;
+            }
+
+            message.decision = reader.string();
+            continue;
+          }
         }
         if ((tag & 7) === 4 || tag === 0) {
           break;
@@ -14800,6 +14814,7 @@ export const ListAuditEventsRequest: MessageFns<ListAuditEventsRequest> = {
         : isSet(object.page_token)
         ? globalThis.String(object.page_token)
         : "",
+      decision: isSet(object.decision) ? globalThis.String(object.decision) : "",
     };
   },
 
@@ -14832,6 +14847,9 @@ export const ListAuditEventsRequest: MessageFns<ListAuditEventsRequest> = {
     if (message.pageToken !== "") {
       obj.pageToken = message.pageToken;
     }
+    if (message.decision !== "") {
+      obj.decision = message.decision;
+    }
     return obj;
   },
 
@@ -14851,6 +14869,7 @@ export const ListAuditEventsRequest: MessageFns<ListAuditEventsRequest> = {
     message.toUnixMs = (object.toUnixMs !== undefined && object.toUnixMs !== null) ? BigInt(object.toUnixMs) : 0n;
     message.pageSize = object.pageSize ?? 0;
     message.pageToken = object.pageToken ?? "";
+    message.decision = object.decision ?? "";
     return message;
   },
 };
@@ -16788,5 +16807,5 @@ export interface MessageFns<T> {
   fromPartial(object: DeepPartial<T>): T;
 }
 
-// source-sha256: ce657215263c039800b4e4a8dccb9e79104251f635790c43caf4089388906e1d
+// source-sha256: bbb6b5b79f8d2390e9d3dd20c6e91ececec422ceab64b862a0871274d7da4cb1
 // generation-sha256: c3e69d40e38671d5381cfa50a679b45232adc3ecd3df927c51285f1901aa09ef

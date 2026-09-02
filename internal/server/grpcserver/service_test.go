@@ -342,6 +342,54 @@ func TestAdmin_CreateIdentityMintsCertBundle(t *testing.T) {
 	}
 }
 
+func TestAdmin_ListAuditEventsDecisionFilter(t *testing.T) {
+	env := newTestEnv(t, true)
+	ctx := context.Background()
+	for _, ev := range []domain.AuditEvent{
+		{EventType: "parameter.write", ResourceKey: "x", Decision: "allow"},
+		{EventType: "authz.denial", ResourceKey: "y", Decision: "deny"},
+		{EventType: "secret.reveal", ResourceKey: "z", Decision: "error"},
+	} {
+		if err := env.store.AppendAudit(ctx, ev); err != nil {
+			t.Fatalf("seed audit: %v", err)
+		}
+	}
+
+	for _, tc := range []struct{ decision, want string }{
+		{"allow", "x"},
+		{"deny", "y"},
+		{"error", "z"},
+	} {
+		t.Run(tc.decision, func(t *testing.T) {
+			resp, err := env.admin().ListAuditEvents(adminCtx(), &kmsv1.ListAuditEventsRequest{Decision: tc.decision})
+			if err != nil {
+				t.Fatalf("list audit: %v", err)
+			}
+			if len(resp.GetEvents()) != 1 || resp.GetEvents()[0].GetResourceKey() != tc.want {
+				t.Fatalf("decision=%s events = %+v, want the %q row", tc.decision, resp.GetEvents(), tc.want)
+			}
+		})
+	}
+
+	resp, err := env.admin().ListAuditEvents(adminCtx(), &kmsv1.ListAuditEventsRequest{})
+	if err != nil {
+		t.Fatalf("list audit: %v", err)
+	}
+	if len(resp.GetEvents()) != 3 {
+		t.Fatalf("unfiltered events = %d, want all 3", len(resp.GetEvents()))
+	}
+}
+
+func TestAdmin_ListAuditEventsRejectsUnknownDecision(t *testing.T) {
+	env := newTestEnv(t, true)
+	for _, decision := range []string{"allowed", "ALLOW", "allow,deny", " allow"} {
+		_, err := env.admin().ListAuditEvents(adminCtx(), &kmsv1.ListAuditEventsRequest{Decision: decision})
+		if codeOf(err) != codes.InvalidArgument {
+			t.Fatalf("decision=%q: code = %v, want InvalidArgument (%v)", decision, codeOf(err), err)
+		}
+	}
+}
+
 func TestParameter_ListNamespaceScoped(t *testing.T) {
 	env := newTestEnv(t, true)
 	for _, r := range []struct{ env, app, key string }{

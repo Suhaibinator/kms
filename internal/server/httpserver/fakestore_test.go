@@ -838,6 +838,9 @@ func (s *fakeStore) ListAudit(_ context.Context, f domain.AuditFilter, _ storage
 		if f.EventType != "" && ev.EventType != f.EventType {
 			continue
 		}
+		if f.Decision != "" && ev.Decision != f.Decision {
+			continue
+		}
 		if !f.From.IsZero() && ev.CreatedAt.Before(f.From) {
 			continue
 		}

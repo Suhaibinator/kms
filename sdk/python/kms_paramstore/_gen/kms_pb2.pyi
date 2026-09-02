@@ -1228,7 +1228,7 @@ class AuditEvent(_message.Message):
     def __init__(self, id: _Optional[int] = ..., event_type: _Optional[str] = ..., actor_identity: _Optional[str] = ..., actor_type: _Optional[str] = ..., resource_type: _Optional[str] = ..., resource_env: _Optional[str] = ..., resource_app: _Optional[str] = ..., resource_key: _Optional[str] = ..., resource_version: _Optional[int] = ..., decision: _Optional[str] = ..., source_ip: _Optional[str] = ..., user_agent: _Optional[str] = ..., request_id: _Optional[str] = ..., created_at_unix_ms: _Optional[int] = ..., metadata_json: _Optional[str] = ...) -> None: ...
 
 class ListAuditEventsRequest(_message.Message):
-    __slots__ = ("env", "app", "key_prefix", "actor_identity", "event_type", "from_unix_ms", "to_unix_ms", "page_size", "page_token")
+    __slots__ = ("env", "app", "key_prefix", "actor_identity", "event_type", "from_unix_ms", "to_unix_ms", "page_size", "page_token", "decision")
     ENV_FIELD_NUMBER: _ClassVar[int]
     APP_FIELD_NUMBER: _ClassVar[int]
     KEY_PREFIX_FIELD_NUMBER: _ClassVar[int]
@@ -1238,6 +1238,7 @@ class ListAuditEventsRequest(_message.Message):
     TO_UNIX_MS_FIELD_NUMBER: _ClassVar[int]
     PAGE_SIZE_FIELD_NUMBER: _ClassVar[int]
     PAGE_TOKEN_FIELD_NUMBER: _ClassVar[int]
+    DECISION_FIELD_NUMBER: _ClassVar[int]
     env: str
     app: str
     key_prefix: str
@@ -1247,7 +1248,8 @@ class ListAuditEventsRequest(_message.Message):
     to_unix_ms: int
     page_size: int
     page_token: str
-    def __init__(self, env: _Optional[str] = ..., app: _Optional[str] = ..., key_prefix: _Optional[str] = ..., actor_identity: _Optional[str] = ..., event_type: _Optional[str] = ..., from_unix_ms: _Optional[int] = ..., to_unix_ms: _Optional[int] = ..., page_size: _Optional[int] = ..., page_token: _Optional[str] = ...) -> None: ...
+    decision: str
+    def __init__(self, env: _Optional[str] = ..., app: _Optional[str] = ..., key_prefix: _Optional[str] = ..., actor_identity: _Optional[str] = ..., event_type: _Optional[str] = ..., from_unix_ms: _Optional[int] = ..., to_unix_ms: _Optional[int] = ..., page_size: _Optional[int] = ..., page_token: _Optional[str] = ..., decision: _Optional[str] = ...) -> None: ...
 
 class ListAuditEventsResponse(_message.Message):
     __slots__ = ("events", "next_page_token")

@@ -923,6 +923,7 @@ message ListAuditEventsRequest {
   int64 to_unix_ms = 7;
   int32 page_size = 8;
   string page_token = 9;
+  string decision = 10; // allow | deny | error; empty = any
 }
 
 message ListAuditEventsResponse {

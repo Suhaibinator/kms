@@ -207,7 +207,9 @@ func (policyModel) TableName() string { return "policies" }
 
 // auditEventModel -> audit_events. Resource env/app/key are denormalized text.
 type auditEventModel struct {
-	ID                  int64  `gorm:"column:id;primaryKey;autoIncrement"`
+	// id carries the decision index's second column: audit listing pages by
+	// descending id, so the index has to order rows within one decision.
+	ID                  int64  `gorm:"column:id;primaryKey;autoIncrement;index:idx_audit_decision,priority:2"`
 	EventType           string `gorm:"column:event_type;not null"`
 	ActorIdentity       string `gorm:"column:actor_identity;not null;default:'';index:idx_audit_actor"`
 	ActorType           string `gorm:"column:actor_type;not null;default:''"`
@@ -217,7 +219,7 @@ type auditEventModel struct {
 	ResourceApp         string `gorm:"column:resource_app;not null;default:'';index:idx_audit_ns,priority:2"`
 	ResourceKey         string `gorm:"column:resource_key;not null;default:''"`
 	ResourceVersion     int64  `gorm:"column:resource_version;not null;default:0"`
-	Decision            string `gorm:"column:decision;not null;default:''"`
+	Decision            string `gorm:"column:decision;not null;default:'';index:idx_audit_decision,priority:1"`
 	SourceIP            string `gorm:"column:source_ip;not null;default:''"`
 	UserAgent           string `gorm:"column:user_agent;not null;default:''"`
 	RequestID           string `gorm:"column:request_id;not null;default:''"`

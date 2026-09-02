@@ -1055,7 +1055,7 @@ rules (a deny still wins).
 
 ### Audit
 
-- `GET /api/v1/audit?env=&app=&key_prefix=&actor=&event_type=&from_unix_ms=&to_unix_ms=&page_size=&page_token=` →
+- `GET /api/v1/audit?env=&app=&key_prefix=&actor=&event_type=&decision=&from_unix_ms=&to_unix_ms=&page_size=&page_token=` →
   ```json
   { "events": [ { "id": 1, "event_type": "secret.read", "actor_identity": "gradethis-be",
       "actor_type": "client", "resource_type": "secret",
@@ -1065,8 +1065,10 @@ rules (a deny still wins).
       "metadata_json": "{}" } ],
     "next_page_token": "" }
   ```
-  `env`, `app`, and `key_prefix` scope events to a namespace and key range; all
-  filters are optional and combine.
+  `env`, `app`, and `key_prefix` scope events to a namespace and key range;
+  `decision` selects one recorded outcome and must be `allow`, `deny`, or
+  `error` (any other value is `invalid_argument`, 400). All filters are optional
+  and combine.
 
 ### Subscribers
 
