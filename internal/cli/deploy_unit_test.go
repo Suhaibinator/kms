@@ -27,7 +27,9 @@ func repoFile(t *testing.T, rel string) string {
 	if err != nil {
 		t.Fatalf("read %s: %v", rel, err)
 	}
-	return string(b)
+	// A Windows checkout with autocrlf hands back CRLF; the comparisons below
+	// are about content, not line endings.
+	return strings.ReplaceAll(string(b), "\r\n", "\n")
 }
 
 // documentedUnit returns the ini block under "Running under systemd" in the

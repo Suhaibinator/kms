@@ -393,11 +393,11 @@ func TestReloadServeSwapsClientCA(t *testing.T) {
 	writeClientCA(t, caOne, "operator-ca-1")
 	writeClientCA(t, caTwo, "operator-ca-2")
 
-	env := newReloadEnv(t, tlsConfigBody(certFile, keyFile)+"  mtls_enabled: true\n  client_ca_file: \""+caOne+"\"\n")
+	env := newReloadEnv(t, tlsConfigBody(certFile, keyFile)+mtlsConfigBody(caOne))
 	svc := reloadTestService(t, env.c)
 	holder := tlsHolderFor(t, env.running, svc)
 
-	env.rewrite(t, tlsConfigBody(certFile, keyFile)+"  mtls_enabled: true\n  client_ca_file: \""+caTwo+"\"\n")
+	env.rewrite(t, tlsConfigBody(certFile, keyFile)+mtlsConfigBody(caTwo))
 	out := env.reload(t, holder, svc)
 	if out.err != nil {
 		t.Fatalf("reload: %v", out.err)
@@ -481,6 +481,13 @@ func TestReloadServeFlagBeatsTheFile(t *testing.T) {
 // a reload of TLS material starts from.
 func tlsConfigBody(certFile, keyFile string) string {
 	return fmt.Sprintf("security:\n  tls_enabled: true\n  server_cert_file: %q\n  server_key_file: %q\n", certFile, keyFile)
+}
+
+// mtlsConfigBody continues tlsConfigBody's security block with mTLS on and
+// the given client CA. Paths are %q-quoted: a Windows path written raw inside
+// YAML double quotes reads C:\Users as a broken \U escape.
+func mtlsConfigBody(caFile string) string {
+	return fmt.Sprintf("  mtls_enabled: true\n  client_ca_file: %q\n", caFile)
 }
 
 // TestDiffSettings pins the partition the reload log is built from: only
