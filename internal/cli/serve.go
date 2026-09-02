@@ -214,6 +214,12 @@ func (c *CLI) cmdServe(args []string) int {
 		}
 	}
 
+	// A typed nil must not reach the reloadReporter interface, so the reload
+	// path only sees the exporter when metrics are actually on.
+	var reloadRep reloadReporter
+	if exporter != nil {
+		reloadRep = exporter
+	}
 	if exporter != nil {
 		exporter.SetPosture(tlsCfg != nil, adminCertRequired)
 		sampler := serveSampler(svc, store, cfg.Storage.SQLitePath)
@@ -309,13 +315,13 @@ loop:
 		case sig := <-sigCh:
 			if sig == syscall.SIGHUP {
 				logger.Info("reload signal received", zap.String("signal", sig.String()))
-				running, _ = c.reloadServe(ctx, r, logger, logLevel, tlsHolder, svc, running, nil)
+				running, _ = c.reloadServe(ctx, r, logger, logLevel, tlsHolder, svc, running, reloadRep)
 				continue
 			}
 			logger.Info("shutdown signal received", zap.String("signal", sig.String()))
 			break loop
 		case <-c.reloadSignal:
-			running, _ = c.reloadServe(ctx, r, logger, logLevel, tlsHolder, svc, running, nil)
+			running, _ = c.reloadServe(ctx, r, logger, logLevel, tlsHolder, svc, running, reloadRep)
 		case <-c.stopServe:
 			logger.Info("shutdown requested")
 			break loop

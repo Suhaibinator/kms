@@ -608,6 +608,24 @@ func (s *servedKMS) awaitLog(t *testing.T, msg string) {
 	}
 }
 
+// awaitMetric polls /metrics until the exposition carries line; the counter
+// is bumped just after the log line a test usually waited on, so reading
+// once could still see the previous value.
+func (s *servedKMS) awaitMetric(t *testing.T, line string) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		status, body := s.get(t, "/metrics")
+		if status == http.StatusOK && strings.Contains(body, line) {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("/metrics never carried %q; last body:\n%s", line, body)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
 // TestServeReloadRotatesServerCertificate is the operator-facing statement of
 // the feature: write a new keypair over the configured paths, signal a reload,
 // and the running listener presents it to the next handshake — no restart, no
@@ -663,6 +681,10 @@ func TestServeReloadKeepsCertificateWhenTheNewOneIsCorrupt(t *testing.T) {
 	if serial, _ := s.servedCert(t); serial != "2" {
 		t.Errorf("listener serves serial %s after a failed reload, want the certificate it had (2)", serial)
 	}
+	// Both outcomes reach the exporter: the rotation that took and the
+	// reload that was refused.
+	s.awaitMetric(t, `kms_reloads_total{result="applied"} 1`)
+	s.awaitMetric(t, `kms_reloads_total{result="rejected"} 1`)
 	s.health(t)
 	if exit := s.stopAndWait(t); exit != 0 {
 		t.Fatalf("serve exit = %d, want 0; log:\n%s", exit, s.logs.String())
