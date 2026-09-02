@@ -641,6 +641,15 @@ func TestAuditDecisionFilter(t *testing.T) {
 			if decision != "" && ev["decision"] != decision {
 				t.Fatalf("decision=%s returned a %v row: %v", decision, ev["decision"], ev)
 			}
+			// Namespaced rows carry the incarnation they were authorized
+			// against; the namespace.create row predates it and says 0.
+			nsID, ok := ev["resource_namespace_id"].(float64)
+			if !ok {
+				t.Fatalf("row lacks resource_namespace_id: %v", ev)
+			}
+			if (ev["event_type"] != "namespace.create") != (nsID != 0) {
+				t.Fatalf("event %v resource_namespace_id = %v", ev["event_type"], nsID)
+			}
 			types = append(types, ev["event_type"].(string))
 		}
 		return types

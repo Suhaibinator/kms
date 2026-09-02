@@ -278,21 +278,22 @@ func fromProtoRules(rs []*kmsv1.PolicyRule) []domain.PolicyRule {
 
 func toProtoAuditEvent(e domain.AuditEvent) *kmsv1.AuditEvent {
 	return &kmsv1.AuditEvent{
-		Id:              e.ID,
-		EventType:       e.EventType,
-		ActorIdentity:   e.ActorIdentity,
-		ActorType:       e.ActorType,
-		ResourceType:    e.ResourceType,
-		ResourceEnv:     e.ResourceEnv,
-		ResourceApp:     e.ResourceApp,
-		ResourceKey:     e.ResourceKey,
-		ResourceVersion: e.ResourceVersion,
-		Decision:        e.Decision,
-		SourceIp:        e.SourceIP,
-		UserAgent:       e.UserAgent,
-		RequestId:       e.RequestID,
-		CreatedAtUnixMs: unixMS(e.CreatedAt),
-		MetadataJson:    e.Metadata,
+		Id:                  e.ID,
+		EventType:           e.EventType,
+		ActorIdentity:       e.ActorIdentity,
+		ActorType:           e.ActorType,
+		ResourceType:        e.ResourceType,
+		ResourceEnv:         e.ResourceEnv,
+		ResourceApp:         e.ResourceApp,
+		ResourceKey:         e.ResourceKey,
+		ResourceVersion:     e.ResourceVersion,
+		ResourceNamespaceId: e.ResourceNamespaceID,
+		Decision:            e.Decision,
+		SourceIp:            e.SourceIP,
+		UserAgent:           e.UserAgent,
+		RequestId:           e.RequestID,
+		CreatedAtUnixMs:     unixMS(e.CreatedAt),
+		MetadataJson:        e.Metadata,
 	}
 }
 

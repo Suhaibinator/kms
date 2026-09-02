@@ -7150,8 +7150,12 @@ type AuditEvent struct {
 	RequestId       string                 `protobuf:"bytes,13,opt,name=request_id,json=requestId,proto3" json:"request_id,omitempty"`
 	CreatedAtUnixMs int64                  `protobuf:"varint,14,opt,name=created_at_unix_ms,json=createdAtUnixMs,proto3" json:"created_at_unix_ms,omitempty"`
 	MetadataJson    string                 `protobuf:"bytes,15,opt,name=metadata_json,json=metadataJson,proto3" json:"metadata_json,omitempty"`
-	unknownFields   protoimpl.UnknownFields
-	sizeCache       protoimpl.SizeCache
+	// The immutable incarnation ID of the namespace the event was authorized
+	// against (0 for global events and legacy rows), so a deleted-and-recreated
+	// env/app can be told apart in an export.
+	ResourceNamespaceId int64 `protobuf:"varint,16,opt,name=resource_namespace_id,json=resourceNamespaceId,proto3" json:"resource_namespace_id,omitempty"`
+	unknownFields       protoimpl.UnknownFields
+	sizeCache           protoimpl.SizeCache
 }
 
 func (x *AuditEvent) Reset() {
@@ -7287,6 +7291,13 @@ func (x *AuditEvent) GetMetadataJson() string {
 		return x.MetadataJson
 	}
 	return ""
+}
+
+func (x *AuditEvent) GetResourceNamespaceId() int64 {
+	if x != nil {
+		return x.ResourceNamespaceId
+	}
+	return 0
 }
 
 type ListAuditEventsRequest struct {
@@ -8576,7 +8587,7 @@ const file_kms_v1_kms_proto_rawDesc = "" +
 	"authMethod\"\x19\n" +
 	"\x17GetCACertificateRequest\"5\n" +
 	"\x18GetCACertificateResponse\x12\x19\n" +
-	"\bcert_pem\x18\x01 \x01(\tR\acertPem\"\x83\x04\n" +
+	"\bcert_pem\x18\x01 \x01(\tR\acertPem\"\xb7\x04\n" +
 	"\n" +
 	"AuditEvent\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\x03R\x02id\x12\x1d\n" +
@@ -8598,7 +8609,8 @@ const file_kms_v1_kms_proto_rawDesc = "" +
 	"\n" +
 	"request_id\x18\r \x01(\tR\trequestId\x12+\n" +
 	"\x12created_at_unix_ms\x18\x0e \x01(\x03R\x0fcreatedAtUnixMs\x12#\n" +
-	"\rmetadata_json\x18\x0f \x01(\tR\fmetadataJson\"\xb9\x02\n" +
+	"\rmetadata_json\x18\x0f \x01(\tR\fmetadataJson\x122\n" +
+	"\x15resource_namespace_id\x18\x10 \x01(\x03R\x13resourceNamespaceId\"\xb9\x02\n" +
 	"\x16ListAuditEventsRequest\x12\x10\n" +
 	"\x03env\x18\x01 \x01(\tR\x03env\x12\x10\n" +
 	"\x03app\x18\x02 \x01(\tR\x03app\x12\x1d\n" +

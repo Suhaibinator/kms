@@ -346,7 +346,7 @@ func TestAdmin_ListAuditEventsDecisionFilter(t *testing.T) {
 	env := newTestEnv(t, true)
 	ctx := context.Background()
 	for _, ev := range []domain.AuditEvent{
-		{EventType: "parameter.write", ResourceKey: "x", Decision: "allow"},
+		{EventType: "parameter.write", ResourceKey: "x", Decision: "allow", ResourceNamespaceID: 7},
 		{EventType: "authz.denial", ResourceKey: "y", Decision: "deny"},
 		{EventType: "secret.reveal", ResourceKey: "z", Decision: "error"},
 	} {
@@ -377,6 +377,17 @@ func TestAdmin_ListAuditEventsDecisionFilter(t *testing.T) {
 	}
 	if len(resp.GetEvents()) != 3 {
 		t.Fatalf("unfiltered events = %d, want all 3", len(resp.GetEvents()))
+	}
+	// The namespace incarnation travels with the event, so an export can tell
+	// a deleted-and-recreated env/app apart from its predecessor.
+	for _, ev := range resp.GetEvents() {
+		want := int64(0)
+		if ev.GetResourceKey() == "x" {
+			want = 7
+		}
+		if ev.GetResourceNamespaceId() != want {
+			t.Fatalf("event %q resource_namespace_id = %d, want %d", ev.GetResourceKey(), ev.GetResourceNamespaceId(), want)
+		}
 	}
 }
 

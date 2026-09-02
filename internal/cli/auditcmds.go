@@ -201,11 +201,6 @@ func unixMSOrZero(t time.Time) int64 {
 // auditRecordFromProto projects a wire event onto the canonical record that
 // `audit export`, `audit list -o json`, and the server-side archive all share,
 // so the three can be concatenated and parsed together.
-//
-// One field cannot be filled from the wire: AuditEvent carries no namespace
-// incarnation ID, which the API deliberately does not publish. Records that
-// came from a server therefore spell resource.namespace_id as 0, and only the
-// archive written by the server itself carries the real value.
 func auditRecordFromProto(ev *kmsv1.AuditEvent) core.AuditRecord {
 	return core.AuditRecord{
 		ID:        ev.GetId(),
@@ -214,11 +209,12 @@ func auditRecordFromProto(ev *kmsv1.AuditEvent) core.AuditRecord {
 		Decision:  ev.GetDecision(),
 		Actor:     core.AuditActor{Identity: ev.GetActorIdentity(), Type: ev.GetActorType()},
 		Resource: core.AuditResource{
-			Type:    ev.GetResourceType(),
-			Env:     ev.GetResourceEnv(),
-			App:     ev.GetResourceApp(),
-			Key:     ev.GetResourceKey(),
-			Version: ev.GetResourceVersion(),
+			Type:        ev.GetResourceType(),
+			NamespaceID: ev.GetResourceNamespaceId(),
+			Env:         ev.GetResourceEnv(),
+			App:         ev.GetResourceApp(),
+			Key:         ev.GetResourceKey(),
+			Version:     ev.GetResourceVersion(),
 		},
 		SourceIP:  ev.GetSourceIp(),
 		UserAgent: ev.GetUserAgent(),

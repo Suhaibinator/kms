@@ -1060,7 +1060,7 @@ rules (a deny still wins).
   { "events": [ { "id": 1, "event_type": "secret.read", "actor_identity": "gradethis-be",
       "actor_type": "client", "resource_type": "secret",
       "resource_env": "prod", "resource_app": "gradethis", "resource_key": "stripe-api-key",
-      "resource_version": 2, "decision": "allow", "source_ip": "10.0.0.5",
+      "resource_version": 2, "resource_namespace_id": 3, "decision": "allow", "source_ip": "10.0.0.5",
       "user_agent": "", "request_id": "r-123", "created_at_unix_ms": 0,
       "metadata_json": "{}" } ],
     "next_page_token": "" }
@@ -1069,6 +1069,9 @@ rules (a deny still wins).
   `decision` selects one recorded outcome and must be `allow`, `deny`, or
   `error` (any other value is `invalid_argument`, 400). All filters are optional
   and combine.
+  `resource_namespace_id` is the immutable incarnation of the namespace the
+  event was authorized against (`0` for global events and rows that predate
+  it), so a deleted-and-recreated `env/app` can be told apart in an export.
 
 ### Subscribers
 

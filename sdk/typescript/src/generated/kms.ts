@@ -951,6 +951,12 @@ export interface AuditEvent {
   requestId: string;
   createdAtUnixMs: bigint;
   metadataJson: string;
+  /**
+   * The immutable incarnation ID of the namespace the event was authorized
+   * against (0 for global events and legacy rows), so a deleted-and-recreated
+   * env/app can be told apart in an export.
+   */
+  resourceNamespaceId: bigint;
 }
 
 export interface ListAuditEventsRequest {
@@ -14257,6 +14263,7 @@ function createBaseAuditEvent(): AuditEvent {
     requestId: "",
     createdAtUnixMs: 0n,
     metadataJson: "",
+    resourceNamespaceId: 0n,
   };
 }
 
@@ -14315,6 +14322,12 @@ export const AuditEvent: MessageFns<AuditEvent> = {
     }
     if (message.metadataJson !== "") {
       writer.uint32(122).string(message.metadataJson);
+    }
+    if (message.resourceNamespaceId !== 0n) {
+      if (BigInt.asIntN(64, message.resourceNamespaceId) !== message.resourceNamespaceId) {
+        throw new globalThis.Error("value provided for field message.resourceNamespaceId of type int64 too large");
+      }
+      writer.uint32(128).int64(message.resourceNamespaceId);
     }
     return writer;
   },
@@ -14452,6 +14465,14 @@ export const AuditEvent: MessageFns<AuditEvent> = {
             message.metadataJson = reader.string();
             continue;
           }
+          case 16: {
+            if (tag !== 128) {
+              break;
+            }
+
+            message.resourceNamespaceId = reader.int64() as bigint;
+            continue;
+          }
         }
         if ((tag & 7) === 4 || tag === 0) {
           break;
@@ -14533,6 +14554,11 @@ export const AuditEvent: MessageFns<AuditEvent> = {
         : isSet(object.metadata_json)
         ? globalThis.String(object.metadata_json)
         : "",
+      resourceNamespaceId: isSet(object.resourceNamespaceId)
+        ? BigInt(object.resourceNamespaceId)
+        : isSet(object.resource_namespace_id)
+        ? BigInt(object.resource_namespace_id)
+        : 0n,
     };
   },
 
@@ -14583,6 +14609,9 @@ export const AuditEvent: MessageFns<AuditEvent> = {
     if (message.metadataJson !== "") {
       obj.metadataJson = message.metadataJson;
     }
+    if (message.resourceNamespaceId !== 0n) {
+      obj.resourceNamespaceId = message.resourceNamespaceId.toString();
+    }
     return obj;
   },
 
@@ -14610,6 +14639,9 @@ export const AuditEvent: MessageFns<AuditEvent> = {
       ? BigInt(object.createdAtUnixMs)
       : 0n;
     message.metadataJson = object.metadataJson ?? "";
+    message.resourceNamespaceId = (object.resourceNamespaceId !== undefined && object.resourceNamespaceId !== null)
+      ? BigInt(object.resourceNamespaceId)
+      : 0n;
     return message;
   },
 };
@@ -16807,5 +16839,5 @@ export interface MessageFns<T> {
   fromPartial(object: DeepPartial<T>): T;
 }
 
-// source-sha256: bbb6b5b79f8d2390e9d3dd20c6e91ececec422ceab64b862a0871274d7da4cb1
+// source-sha256: 43eec1ad2c8ec1cd960674c761777df574ef4dc9cd52e06e59a81bb732296bd4
 // generation-sha256: c3e69d40e38671d5381cfa50a679b45232adc3ecd3df927c51285f1901aa09ef

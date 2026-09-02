@@ -88,21 +88,22 @@ func auditCLI(t *testing.T, stub *auditStub) *testCLI {
 // a JSON record can both be pinned against known values.
 func sampleAuditEvent(id int64, at time.Time) *kmsv1.AuditEvent {
 	return &kmsv1.AuditEvent{
-		Id:              id,
-		EventType:       "secret.read",
-		ActorIdentity:   "gradethis-be",
-		ActorType:       "client",
-		ResourceType:    "secret",
-		ResourceEnv:     "prod",
-		ResourceApp:     "gradethis",
-		ResourceKey:     "db-password",
-		ResourceVersion: 3,
-		Decision:        "allow",
-		SourceIp:        "10.0.0.4",
-		UserAgent:       "kms-go/1.0",
-		RequestId:       fmt.Sprintf("req-%d", id),
-		CreatedAtUnixMs: at.UnixMilli(),
-		MetadataJson:    `{"label":"current"}`,
+		Id:                  id,
+		EventType:           "secret.read",
+		ActorIdentity:       "gradethis-be",
+		ActorType:           "client",
+		ResourceType:        "secret",
+		ResourceEnv:         "prod",
+		ResourceApp:         "gradethis",
+		ResourceKey:         "db-password",
+		ResourceVersion:     3,
+		ResourceNamespaceId: 42,
+		Decision:            "allow",
+		SourceIp:            "10.0.0.4",
+		UserAgent:           "kms-go/1.0",
+		RequestId:           fmt.Sprintf("req-%d", id),
+		CreatedAtUnixMs:     at.UnixMilli(),
+		MetadataJson:        `{"label":"current"}`,
 	}
 }
 
@@ -267,7 +268,7 @@ func TestAuditListJSONIsTheCanonicalRecord(t *testing.T) {
 	if got.Actor != (core.AuditActor{Identity: "gradethis-be", Type: "client"}) {
 		t.Fatalf("actor = %+v", got.Actor)
 	}
-	wantResource := core.AuditResource{Type: "secret", Env: "prod", App: "gradethis", Key: "db-password", Version: 3}
+	wantResource := core.AuditResource{Type: "secret", NamespaceID: 42, Env: "prod", App: "gradethis", Key: "db-password", Version: 3}
 	if got.Resource != wantResource {
 		t.Fatalf("resource = %+v, want %+v", got.Resource, wantResource)
 	}
@@ -424,6 +425,9 @@ func TestAuditListFollowJSONEmitsJSONLines(t *testing.T) {
 		}
 		if record.ID != int64(i+1) {
 			t.Fatalf("line %d id = %d, want %d (oldest first)", i, record.ID, i+1)
+		}
+		if record.Resource.NamespaceID != 42 {
+			t.Fatalf("line %d resource.namespace_id = %d, want the wire value 42", i, record.Resource.NamespaceID)
 		}
 	}
 }

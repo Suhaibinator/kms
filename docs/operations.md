@@ -1044,10 +1044,10 @@ consequences follow from the retry behavior:
   than a no-op. Give it the same treatment as the database directory (see
   [Preparing a destination directory](#preparing-a-destination-directory)).
 
-Records written by the server's archive carry the resource's immutable
-namespace-incarnation ID; records produced by `audit export` and `audit list
---output json` spell that field `0`, because the gRPC/HTTP `AuditEvent` does
-not publish it. Every other field is identical.
+Records written by the server's archive, by `audit export`, and by `audit list
+--output json` are identical field for field, including the resource's
+immutable namespace-incarnation ID (`resource.namespace_id`), so the three can
+be concatenated and searched together.
 
 Retiring history offline — before shrinking a database, or on a host where
 `serve` is stopped — uses the same code path through `audit prune`:

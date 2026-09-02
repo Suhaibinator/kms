@@ -1194,7 +1194,7 @@ class GetCACertificateResponse(_message.Message):
     def __init__(self, cert_pem: _Optional[str] = ...) -> None: ...
 
 class AuditEvent(_message.Message):
-    __slots__ = ("id", "event_type", "actor_identity", "actor_type", "resource_type", "resource_env", "resource_app", "resource_key", "resource_version", "decision", "source_ip", "user_agent", "request_id", "created_at_unix_ms", "metadata_json")
+    __slots__ = ("id", "event_type", "actor_identity", "actor_type", "resource_type", "resource_env", "resource_app", "resource_key", "resource_version", "decision", "source_ip", "user_agent", "request_id", "created_at_unix_ms", "metadata_json", "resource_namespace_id")
     ID_FIELD_NUMBER: _ClassVar[int]
     EVENT_TYPE_FIELD_NUMBER: _ClassVar[int]
     ACTOR_IDENTITY_FIELD_NUMBER: _ClassVar[int]
@@ -1210,6 +1210,7 @@ class AuditEvent(_message.Message):
     REQUEST_ID_FIELD_NUMBER: _ClassVar[int]
     CREATED_AT_UNIX_MS_FIELD_NUMBER: _ClassVar[int]
     METADATA_JSON_FIELD_NUMBER: _ClassVar[int]
+    RESOURCE_NAMESPACE_ID_FIELD_NUMBER: _ClassVar[int]
     id: int
     event_type: str
     actor_identity: str
@@ -1225,7 +1226,8 @@ class AuditEvent(_message.Message):
     request_id: str
     created_at_unix_ms: int
     metadata_json: str
-    def __init__(self, id: _Optional[int] = ..., event_type: _Optional[str] = ..., actor_identity: _Optional[str] = ..., actor_type: _Optional[str] = ..., resource_type: _Optional[str] = ..., resource_env: _Optional[str] = ..., resource_app: _Optional[str] = ..., resource_key: _Optional[str] = ..., resource_version: _Optional[int] = ..., decision: _Optional[str] = ..., source_ip: _Optional[str] = ..., user_agent: _Optional[str] = ..., request_id: _Optional[str] = ..., created_at_unix_ms: _Optional[int] = ..., metadata_json: _Optional[str] = ...) -> None: ...
+    resource_namespace_id: int
+    def __init__(self, id: _Optional[int] = ..., event_type: _Optional[str] = ..., actor_identity: _Optional[str] = ..., actor_type: _Optional[str] = ..., resource_type: _Optional[str] = ..., resource_env: _Optional[str] = ..., resource_app: _Optional[str] = ..., resource_key: _Optional[str] = ..., resource_version: _Optional[int] = ..., decision: _Optional[str] = ..., source_ip: _Optional[str] = ..., user_agent: _Optional[str] = ..., request_id: _Optional[str] = ..., created_at_unix_ms: _Optional[int] = ..., metadata_json: _Optional[str] = ..., resource_namespace_id: _Optional[int] = ...) -> None: ...
 
 class ListAuditEventsRequest(_message.Message):
     __slots__ = ("env", "app", "key_prefix", "actor_identity", "event_type", "from_unix_ms", "to_unix_ms", "page_size", "page_token", "decision")
