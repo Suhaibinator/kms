@@ -2,6 +2,7 @@ package storage
 
 import (
 	"context"
+	"time"
 
 	"github.com/Suhaibinator/kms/internal/domain"
 )
@@ -89,4 +90,63 @@ func (s *SQLStore) ListAudit(ctx context.Context, f domain.AuditFilter, page Lis
 // pages and cursors for hidden rows are not exposed to callers.
 func AuditPageToken(id int64) string {
 	return encodeIntToken(id)
+}
+
+// AuditPruneStore is implemented by stores that can retire audit rows. It is
+// deliberately not part of Store: retiring audit history is an operator-driven
+// capability of the durable store, not something every Store implementation
+// (including the in-memory test fakes) has to answer for. Callers type-assert
+// for it.
+type AuditPruneStore interface {
+	// ListAuditBefore returns up to limit rows with created_at < before, oldest
+	// first (ascending id).
+	ListAuditBefore(ctx context.Context, before time.Time, limit int) ([]domain.AuditEvent, error)
+	// DeleteAuditByIDs deletes exactly the given rows and returns how many were
+	// deleted.
+	DeleteAuditByIDs(ctx context.Context, ids []int64) (int64, error)
+}
+
+var _ AuditPruneStore = (*SQLStore)(nil)
+
+// ListAuditBefore returns the oldest rows written strictly before the cutoff,
+// so a caller can archive a batch before deleting it. limit is clamped the way
+// every other listing is; a zero cutoff means "retain everything" and selects
+// no rows.
+func (s *SQLStore) ListAuditBefore(ctx context.Context, before time.Time, limit int) ([]domain.AuditEvent, error) {
+	if before.IsZero() {
+		return nil, nil
+	}
+	var rows []auditEventModel
+	// Fixed-width timestamps sort lexicographically in chronological order, so
+	// the text comparison is the chronological one. The bound is strict: a row
+	// stamped at exactly the cutoff is still inside the retention window.
+	err := s.db.WithContext(ctx).Model(&auditEventModel{}).
+		Where("created_at < ?", fmtTime(before)).
+		Order("id ASC").
+		Limit(clampLimit(limit)).
+		Find(&rows).Error
+	if err != nil {
+		return nil, err
+	}
+	out := make([]domain.AuditEvent, 0, len(rows))
+	for _, m := range rows {
+		out = append(out, toAuditEvent(m))
+	}
+	return out, nil
+}
+
+// DeleteAuditByIDs deletes exactly the listed rows and reports how many were
+// removed; ids that no longer exist are simply absent from the count, so a
+// second pass over the same batch is harmless. Callers pass a batch obtained
+// from ListAuditBefore, which keeps the id list well inside SQLite's bound
+// parameter limit.
+func (s *SQLStore) DeleteAuditByIDs(ctx context.Context, ids []int64) (int64, error) {
+	if len(ids) == 0 {
+		return 0, nil
+	}
+	res := s.db.WithContext(ctx).Where("id IN ?", ids).Delete(&auditEventModel{})
+	if res.Error != nil {
+		return 0, res.Error
+	}
+	return res.RowsAffected, nil
 }

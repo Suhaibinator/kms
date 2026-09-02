@@ -2473,6 +2473,121 @@ func TestAuditDecisionFilter(t *testing.T) {
 	}
 }
 
+// seedAuditAt appends one event per timestamp and returns the ids in order.
+func seedAuditAt(t *testing.T, st *SQLStore, times ...time.Time) []int64 {
+	t.Helper()
+	ctx := context.Background()
+	ids := make([]int64, 0, len(times))
+	for i, at := range times {
+		if err := st.AppendAudit(ctx, domain.AuditEvent{
+			EventType: "e", ResourceKey: strconv.Itoa(i), Decision: "allow", CreatedAt: at,
+		}); err != nil {
+			t.Fatal(err)
+		}
+		// ListAudit is newest-first, so the row just appended is at the front.
+		rows, _, err := st.ListAudit(ctx, domain.AuditFilter{}, ListPage{Limit: 1})
+		if err != nil {
+			t.Fatal(err)
+		}
+		ids = append(ids, rows[0].ID)
+	}
+	return ids
+}
+
+func TestListAuditBeforeCutoffOrderAndLimit(t *testing.T) {
+	st := newStore(t)
+	ctx := context.Background()
+	base := time.Date(2026, 7, 1, 12, 0, 0, 0, time.UTC)
+	ids := seedAuditAt(t, st,
+		base, base.Add(time.Second), base.Add(2*time.Second), base.Add(3*time.Second))
+
+	// The bound is strict: the row stamped at exactly the cutoff is retained.
+	got, err := st.ListAuditBefore(ctx, base.Add(2*time.Second), 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 || got[0].ID != ids[0] || got[1].ID != ids[1] {
+		t.Fatalf("cutoff rows = %+v, want the first two ids %v", got, ids[:2])
+	}
+	// Oldest first, so an archive is written in the order it happened.
+	if !got[0].CreatedAt.Before(got[1].CreatedAt) {
+		t.Fatalf("rows are not oldest-first: %v then %v", got[0].CreatedAt, got[1].CreatedAt)
+	}
+
+	limited, err := st.ListAuditBefore(ctx, base.Add(time.Hour), 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(limited) != 3 || limited[0].ID != ids[0] {
+		t.Fatalf("limited rows = %+v, want the 3 oldest", limited)
+	}
+
+	// A zero cutoff means "retain everything".
+	none, err := st.ListAuditBefore(ctx, time.Time{}, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(none) != 0 {
+		t.Fatalf("zero cutoff returned %d rows, want none", len(none))
+	}
+}
+
+func TestListAuditBeforeCutoffSubSecond(t *testing.T) {
+	st := newStore(t)
+	ctx := context.Background()
+	base := time.Date(2026, 7, 1, 12, 0, 0, 0, time.UTC)
+	// Fixed-width stored timestamps keep the text comparison chronological even
+	// when only the fraction differs.
+	seedAuditAt(t, st, base, base.Add(500*time.Millisecond))
+
+	got, err := st.ListAuditBefore(ctx, base.Add(250*time.Millisecond), 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || !got[0].CreatedAt.Equal(base) {
+		t.Fatalf("sub-second cutoff rows = %+v, want only the .000 row", got)
+	}
+}
+
+func TestDeleteAuditByIDs(t *testing.T) {
+	st := newStore(t)
+	ctx := context.Background()
+	base := time.Date(2026, 7, 1, 12, 0, 0, 0, time.UTC)
+	ids := seedAuditAt(t, st, base, base.Add(time.Second), base.Add(2*time.Second))
+
+	deleted, err := st.DeleteAuditByIDs(ctx, ids[:2])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if deleted != 2 {
+		t.Fatalf("deleted = %d, want 2", deleted)
+	}
+	remaining, _, err := st.ListAudit(ctx, domain.AuditFilter{}, ListPage{Limit: 100})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(remaining) != 1 || remaining[0].ID != ids[2] {
+		t.Fatalf("remaining = %+v, want only id %d", remaining, ids[2])
+	}
+
+	// Re-deleting a retired batch is harmless: only rows that still exist count.
+	deleted, err = st.DeleteAuditByIDs(ctx, []int64{ids[0], ids[1], ids[2]})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if deleted != 1 {
+		t.Fatalf("re-delete count = %d, want 1 (only the surviving row)", deleted)
+	}
+
+	deleted, err = st.DeleteAuditByIDs(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if deleted != 0 {
+		t.Fatalf("empty delete count = %d, want 0", deleted)
+	}
+}
+
 // TestAuditDecisionIndexCreatedOnExistingDatabase covers the upgrade path: a
 // database written before the decision index existed gains it on the next
 // migration rather than only on a freshly created file.
