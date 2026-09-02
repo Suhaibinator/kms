@@ -71,9 +71,31 @@ func TestAuditRetentionValidate(t *testing.T) {
 			"retention with an archive",
 			func(c *Config) {
 				c.Audit.RetainDuration = Duration(24 * time.Hour)
-				c.Audit.ArchiveDir = "/var/lib/kms/audit"
+				c.Audit.ArchiveDir = t.TempDir()
 			},
 			"",
+		},
+		{
+			// Retention never creates the directory, so a typo must refuse
+			// the start rather than fail every pass.
+			"archive directory must exist",
+			func(c *Config) {
+				c.Audit.RetainDuration = Duration(24 * time.Hour)
+				c.Audit.ArchiveDir = filepath.Join(t.TempDir(), "missing")
+			},
+			"audit.archive_dir",
+		},
+		{
+			"archive directory must be a directory",
+			func(c *Config) {
+				c.Audit.RetainDuration = Duration(24 * time.Hour)
+				file := filepath.Join(t.TempDir(), "file")
+				if err := os.WriteFile(file, nil, 0o600); err != nil {
+					t.Fatal(err)
+				}
+				c.Audit.ArchiveDir = file
+			},
+			"is not a directory",
 		},
 		{
 			"negative retention",

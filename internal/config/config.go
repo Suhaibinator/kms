@@ -233,6 +233,11 @@ func (c Config) Validate() error {
 	if c.Audit.ArchiveDir != "" && time.Duration(c.Audit.RetainDuration) <= 0 {
 		return fmt.Errorf("audit.archive_dir requires audit.retain_duration")
 	}
+	if c.Audit.ArchiveDir != "" {
+		if err := dirMustExist(c.Audit.ArchiveDir, "audit.archive_dir"); err != nil {
+			return err
+		}
+	}
 	if time.Duration(c.Watch.HeartbeatInterval) <= 0 {
 		return fmt.Errorf("watch.heartbeat_interval must be positive")
 	}
@@ -277,6 +282,20 @@ func fileMustExist(path, label string) error {
 	}
 	if info.IsDir() {
 		return fmt.Errorf("%s: %s is a directory, expected a file", label, path)
+	}
+	return nil
+}
+
+// dirMustExist rejects an archive location that does not exist yet: retention
+// never creates it, so a typo would otherwise surface as a failed pass every
+// five minutes instead of a refused start.
+func dirMustExist(path, label string) error {
+	info, err := os.Stat(path)
+	if err != nil {
+		return fmt.Errorf("%s: %w", label, err)
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("%s: %s is not a directory", label, path)
 	}
 	return nil
 }
