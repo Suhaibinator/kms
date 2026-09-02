@@ -132,6 +132,9 @@ type Service struct {
 	// verifyLimits holds the per-identity request and mismatch budgets for
 	// VerifyReleaseDefaults (see release_verify.go). Process-local.
 	verifyLimits atomic.Pointer[verifyLimiters]
+	// metrics is the operational-signal exporter (see metrics.go); no-op
+	// until SetMetrics attaches one.
+	metrics atomic.Pointer[metricsHolder]
 }
 
 // New constructs a Service. The keyring is attached later via SetKeyring
@@ -148,6 +151,7 @@ func New(store storage.Store, logger *zap.Logger, version string) *Service {
 	s.verifyLimits.Store(newVerifyLimiters(DefaultVerifyDefaultsLimits()))
 	var h Hub = noopHub{}
 	s.hub.Store(&h)
+	s.initMetrics()
 	return s
 }
 
@@ -722,7 +726,12 @@ func (s *Service) appendAudit(ctx context.Context, ev domain.AuditEvent) error {
 	// mid-request must not suppress the record of what it did.
 	actx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 	defer cancel()
-	return s.store.AppendAudit(actx, ev)
+	if err := s.store.AppendAudit(actx, ev); err != nil {
+		s.m().AuditWriteFailed()
+		return err
+	}
+	s.m().AuditEvent(ev.EventType, ev.Decision)
+	return nil
 }
 
 // auditRef records a namespaced operation, denormalizing the ref's env/app/key.
