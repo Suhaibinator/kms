@@ -135,13 +135,13 @@ function SidebarContent({
 }) {
   return (
     <>
-      <div className="sidebar-brand">
+      <Link href="/" className="sidebar-brand" onClick={onNavigate}>
         <LogoMark />
         <div>
           <div className="brand-name">KMS</div>
           <div className="brand-sub">Parameter &amp; Secret Store</div>
         </div>
-      </div>
+      </Link>
 
       <button
         type="button"
@@ -283,10 +283,10 @@ export default function AppShell({ children }: { children: ReactNode }) {
             >
               <Icon.menu />
             </SheetTrigger>
-            <div className="mobile-topbar-brand">
+            <Link href="/" className="mobile-topbar-brand">
               <LogoMark />
               <span>KMS</span>
-            </div>
+            </Link>
           </header>
           <SheetContent
             side="left"
