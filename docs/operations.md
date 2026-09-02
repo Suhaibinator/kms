@@ -32,6 +32,11 @@ offline command that opens the database (`init`, `migrate`, `check`, `backup`,
 `import`), and to `config show` / `config validate`. Defaults come from
 `internal/config.Default()`.
 
+A running `serve` re-reads the file with exactly this precedence on `SIGHUP`,
+so a setting pinned by a flag or an environment variable cannot be changed by
+editing the file — see [Hot reload (SIGHUP)](#hot-reload-sighup) for what a
+reload applies and what it only reports.
+
 ```yaml
 server:
   grpc_addr: "0.0.0.0:8443"
@@ -1203,9 +1208,17 @@ On `serve`, the process (`internal/cli/serve.go`):
    `cmd/parameter-store/main.go` to `internal/server/grpcserver`), then the
    HTTP listener. Both accept — but never demand — a certificate from the
    built-in CA.
-9. Blocks on `SIGINT`/`SIGTERM`, then shuts down: gRPC graceful stop is capped
-   at 10 s before active streams are forced closed; HTTP shutdown uses a 20 s
-   overall context; then the watch hub stops and the store closes.
+9. Blocks on signals. `SIGINT` and `SIGTERM` shut down: gRPC graceful stop is
+   capped at 10 s before active streams are forced closed; HTTP shutdown uses
+   a 20 s overall context; then the watch hub stops and the store closes.
+   `SIGHUP` instead reloads the configuration in place and keeps serving — see
+   [Hot reload (SIGHUP)](#hot-reload-sighup).
+
+`SIGHUP` is **ignored** from flag parsing (step 1) until the listeners are up.
+A hangup during the passphrase prompt, the migrations or the CA bootstrap is
+discarded rather than killing a process that is halfway through starting.
+`SIGINT` is untouched throughout, so Ctrl-C at the passphrase prompt still
+works.
 
 `/healthz` is liveness (process is up). `/readyz` and the gRPC standard
 health service (`grpc.health.v1.Health`, `internal/server/grpcserver`)
@@ -1287,6 +1300,165 @@ WantedBy=multi-user.target
 Key file permissions matter: the master key file should be owned by the
 service user and mode `0600` (this is exactly what
 `crypto.WriteKEKMaterialFile` produces when the service creates one itself).
+
+The unit above is also shipped in the repository as
+[`deploy/systemd/parameter-store.service`](../deploy/systemd/parameter-store.service);
+a test keeps the two copies identical.
+
+## Hot reload (SIGHUP)
+
+`SIGHUP` makes a running `serve` re-read its configuration and its TLS material
+without dropping a connection:
+
+```bash
+systemctl reload parameter-store            # ExecReload sends the signal
+kill -HUP "$(pidof parameter-store)"        # or send it directly
+```
+
+### What a reload applies
+
+| Setting | Effect |
+|---|---|
+| `log.level` | The running logger's level changes for every line from then on. |
+| `security.server_cert_file`, `security.server_key_file` | The keypair is re-read from disk and served to the next handshake, on both listeners. |
+| `security.client_ca_file` | The client-CA trust pool is rebuilt and governs the next handshake. |
+
+The certificate, key and CA **contents** are re-read on every reload while TLS
+is on, whether or not the paths changed — operators rotate the files far more
+often than they rename them, so a `SIGHUP` with an untouched config file *is*
+the certificate-rotation signal. The built-in CA is re-added to the pool every
+time, so client certificates it issued keep working across a rotation.
+
+A reload also re-scans the admin certificates and restates the posture (see
+[Admin credentials and browser setup](#admin-credentials-and-browser-setup)):
+a rotated client CA or server certificate changes which admin credentials still
+complete a handshake, and that is worth saying again at the moment it changes.
+
+### What a reload ignores
+
+Everything else keeps its running value and is listed under `ignored` in the
+log line:
+
+- `server.grpc_addr`, `server.http_addr`, `storage.sqlite_path` — the
+  listeners and the database are bound for the process lifetime.
+- `encryption.kek_file` — the master key changes only through
+  [`rotate-kek`](#kek-rotation).
+- `security.tls_enabled`, `security.mtls_enabled` — these pick
+  `ListenAndServe` versus `ListenAndServeTLS` at start. Turning TLS on or off
+  is a restart. With TLS off the three `security.*_file` settings are ignored
+  as well: there is no certificate on the listeners to replace.
+- `security.trust_proxy_headers`, `frontend.enabled` — wired into the HTTP
+  server when it is constructed.
+- `security.admin_require_client_cert`, `audit.enabled` — privilege-boundary
+  changes. They take a deliberate restart, which emits the startup posture log,
+  so a reload can never quietly stop auditing or stop requiring an admin
+  certificate.
+- `watch.*`, `server.verify_defaults.*` — read once, into the watch hub and the
+  service's per-identity budgets.
+
+### All or nothing
+
+The new file is parsed, validated, and the new TLS material fully loaded into a
+local configuration **before** anything running is touched. If any step fails,
+the server logs exactly one line at `error` level with the reason:
+
+```text
+configuration reload failed; running configuration unchanged
+```
+
+and nothing changes — not the log level, not the certificate the listeners
+serve, not the configuration the next reload will diff against. A truncated
+certificate, a mismatched key, an unknown key in the YAML or a value that fails
+`Config.Validate()` is a failed reload, never a broken listener.
+
+### Precedence on reload is the startup precedence
+
+A reload re-resolves through the same layers as a start: **flag, then `KMS_*`
+environment variable, then the config file, then the built-in default**. A
+value pinned on the command line or in the unit's environment therefore cannot
+be changed by editing the file — the resolved value does not differ, so the key
+is not even reported. To make a setting reloadable, remove the flag (and the
+environment variable) and let the config file own it.
+
+### The log lines
+
+Success is one `info` line naming what moved:
+
+```json
+{"level":"info","msg":"configuration reloaded","changed":["log.level"],
+ "ignored":["server.http_addr"],"log_level":"debug","tls":true,
+ "server_certificate_changed":true,"server_certificate_serial":"3fa1c0",
+ "server_certificate_not_after":"2027-03-01T00:00:00.000Z",
+ "client_ca_changed":false}
+```
+
+| Field | Meaning |
+|---|---|
+| `changed` | Reloadable keys whose resolved value differs from the running one. They have been applied. |
+| `ignored` | Keys that differ but are not reloadable. The process keeps its running value; the file and the process now disagree. |
+| `log_level` | The effective level after the reload. |
+| `tls` | Whether the listeners serve TLS. When false, the certificate fields below are absent. |
+| `server_certificate_changed` | The leaf now served differs from the one served before — the rotation really happened. |
+| `server_certificate_serial` | Serial of the leaf now served, lowercase hex. |
+| `server_certificate_not_after` | Its expiry. |
+| `client_ca_changed` | The client-CA pool differs from the one previously in force. |
+
+An empty `changed` together with `server_certificate_changed: true` is the
+normal picture for a certificate rotation: the config file did not change, the
+bytes behind it did.
+
+**No audit event is written for a reload.** A signal carries no principal, so
+there is no identity to attribute the change to; these two log lines are the
+record, and host access — which is what it takes to send the signal or edit the
+file — is the control.
+
+### Rotating the server certificate
+
+Write the new certificate and key **atomically** — a temporary file in the same
+directory, then `mv` — so a reload can never read a half-written file, and
+write both before signalling:
+
+```bash
+cd /etc/parameter-store/tls
+install -m 0600 -o parameter-store -g parameter-store new.crt server.crt.new
+install -m 0600 -o parameter-store -g parameter-store new.key server.key.new
+mv server.crt.new server.crt
+mv server.key.new server.key
+systemctl reload parameter-store      # or: kill -HUP "$(pidof parameter-store)"
+```
+
+Verify from off-host that the new serial is on the wire:
+
+```bash
+openssl s_client -connect HOST:PORT </dev/null 2>/dev/null \
+  | openssl x509 -noout -serial -enddate
+```
+
+and cross-check it against `server_certificate_serial` in the reload log line.
+A reload that catches a new certificate beside the old key fails the keypair
+check and leaves the old pair in service — safe, but it means the rotation has
+not happened yet; finish writing and reload again.
+
+### Established connections keep what they handshook with
+
+A swap changes what the **next** handshake sees. Connections already open keep
+the certificate and the verification state they negotiated:
+
+- Rotating the server certificate does not disturb in-flight requests or open
+  watch streams.
+- Rotating the client CA does **not** evict established mTLS connections. A
+  client whose authority you just removed keeps its current connection until it
+  reconnects; restart the service to force that.
+- Watch streams re-authorise the *identity* on every heartbeat — a disabled
+  identity, a revoked certificate or a rotated token ends the stream — but they
+  do not re-verify the chain against the new pool.
+
+### Foreground runs survive a hangup
+
+Because `serve` ignores `SIGHUP` until the listeners are up and treats it as a
+reload thereafter, a foreground `serve` outlives its terminal the way `nginx`
+and `sshd` do: closing an SSH session no longer takes the server with it. Stop
+it with Ctrl-C (`SIGINT`) or `SIGTERM`.
 
 ## TLS and mTLS
 

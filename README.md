@@ -478,6 +478,14 @@ with the source of each value, and `parameter-store config validate` to check
 it before a restart. Full reference, including the env var and flag table, is
 in [`docs/operations.md`](docs/operations.md#configuration).
 
+A running server re-reads the file on `SIGHUP` (`systemctl reload
+parameter-store`) with the same precedence: the log level and the server
+keypair and client-CA files are swapped for new connections, established ones
+keep what they handshook with, and a bad file is rejected with one log line and
+no change at all. Everything else — listen addresses, the database path, the
+TLS on/off switches, `admin_require_client_cert`, `audit.enabled` — still takes
+a restart. See [Hot reload (SIGHUP)](docs/operations.md#hot-reload-sighup).
+
 ```yaml
 server:
   grpc_addr: "0.0.0.0:8443"
