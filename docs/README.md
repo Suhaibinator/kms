@@ -8,7 +8,8 @@ a local quick start. Use this index for deeper reference material.
 - [`operations.md`](operations.md) — configuration, production mTLS onboarding,
   [admin credentials and browser setup](operations.md#admin-credentials-and-browser-setup),
   CLI commands including
-  [JSON output, exit codes, token files, and confirmations](operations.md#global-flags-output-formats-and-exit-codes),
+  [JSON output, exit codes, token files, and confirmations](operations.md#global-flags-output-formats-and-exit-codes)
+  and [running any process with store values](operations.md#run-any-process-with-store-values),
   startup, backup/restore, monitoring, and retention.
 - [`security.md`](security.md) — current encryption, authentication,
   authorization, audit, and threat-boundary guarantees.

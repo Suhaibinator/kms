@@ -63,6 +63,13 @@ type CLI struct {
 	// isTTY reports whether stdin is an interactive terminal; nil means
 	// term.IsTerminal on Stdin. Tests inject it to exercise prompts.
 	isTTY func() bool
+	// launchOverride replaces the process launcher used by `exec`; nil means
+	// launchProcess. Tests capture argv and the child environment instead of
+	// replacing the test binary.
+	launchOverride launchFunc
+	// environOverride supplies the parent environment `exec` merges into;
+	// nil means os.Environ. Tests inject a fixed slice.
+	environOverride func() []string
 }
 
 // New builds a CLI bound to the process standard streams.
@@ -126,6 +133,10 @@ func (c *CLI) Run(args []string) int {
 		code = c.cmdImport(cmdArgs)
 	case "whoami":
 		code = c.cmdWhoAmI(cmdArgs)
+	case "exec":
+		code = c.cmdExec(cmdArgs)
+	case "env":
+		code = c.cmdEnv(cmdArgs)
 	case "put-secret":
 		code = c.cmdPutSecret(cmdArgs)
 	case "get-secret":
@@ -323,6 +334,8 @@ Convenience (talk to a running server over gRPC):
   get-secret /env/app/key       Fetch a secret (requires --show, --out, or a pipe).
   put-parameter /env/app/key V  Store a parameter value.
   list env/app                  List parameters and secrets in a namespace (--prefix).
+  exec env/app -- CMD [ARGS]    Run CMD with the namespace's values as environment variables.
+  env env/app                   Print the namespace's values as dotenv, export, JSON, or YAML.
   release                       Manage configuration releases and schemas.
   defaults                      Preview or apply generated application defaults.
 

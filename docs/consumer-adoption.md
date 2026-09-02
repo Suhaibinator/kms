@@ -15,6 +15,17 @@ every reload; `SlogCallbacks` logs all of it; `kmsmetrics` exports status;
 and a six-line test verifies in CI that the active release still matches the
 defaults in code.
 
+**Not using an SDK?** A workload that cannot link one — a shell script, a
+third-party binary, a container entrypoint, a migration tool — reads the same
+values through the CLI: `parameter-store exec ENV/APP --release NAME -- CMD`
+resolves the active release, verifies every pinned version and digest, and runs
+`CMD` with the values as environment variables; `parameter-store env ENV/APP`
+prints them instead, for `source <(...)` or a systemd `EnvironmentFile=`. It is
+a weaker contract than a generated binding — no hot reload, no typed access,
+and an environment variable is visible to anything running as that user — so
+use it for the processes that have no alternative, not as the default path. See
+[Run any process with store values](operations.md#run-any-process-with-store-values).
+
 ## 1. Bump the module and regenerate the binding
 
 ```bash
