@@ -520,6 +520,64 @@ func TestServeMetricsDisabled(t *testing.T) {
 	}
 }
 
+// authGet fetches an authenticated endpoint with the admin bearer token.
+func (s *servedKMS) authGet(t *testing.T, path string) (int, map[string]any) {
+	t.Helper()
+	req, err := http.NewRequest(http.MethodGet, s.baseURL+path, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Authorization", "Bearer "+s.token)
+	resp, err := s.client(t, false).Do(req)
+	if err != nil {
+		t.Fatalf("GET %s: %v", path, err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	return resp.StatusCode, decodeJSONBody(t, resp)
+}
+
+// TestServePostureReportsConfiguredSettings is the wiring statement for the
+// static half of GET /api/v1/posture. Those booleans describe the process an
+// operator is actually running, so they have to come from its configuration:
+// a snapshot that reported the defaults would be reassuring and wrong. TLS is
+// off here, which also relaxes the admin certificate requirement, so the
+// endpoint has three settings to get right at once.
+func TestServePostureReportsConfiguredSettings(t *testing.T) {
+	s := startServe(t, false, "--metrics-enabled=false", "--audit-retain-duration", "720h")
+	s.health(t)
+
+	code, body := s.authGet(t, "/api/v1/posture")
+	if code != http.StatusOK {
+		t.Fatalf("GET /api/v1/posture = %d, want 200; body=%v", code, body)
+	}
+	auth, ok := body["auth"].(map[string]any)
+	if !ok {
+		t.Fatalf("posture.auth is %T, want an object", body["auth"])
+	}
+	if auth["tls_enabled"] != false || auth["mtls_enabled"] != false ||
+		auth["admin_client_cert_required"] != false {
+		t.Errorf("auth = %v, want every listener setting false on a plaintext listener", auth)
+	}
+	audit, ok := body["audit"].(map[string]any)
+	if !ok {
+		t.Fatalf("posture.audit is %T, want an object", body["audit"])
+	}
+	if audit["enabled"] != true || audit["retain_duration"] != "720h0m0s" ||
+		audit["archive_enabled"] != false {
+		t.Errorf("audit = %v, want the configured 720h retention with no archive", audit)
+	}
+	if body["metrics_enabled"] != false {
+		t.Errorf("metrics_enabled = %v, want false with --metrics-enabled=false", body["metrics_enabled"])
+	}
+	kek, ok := body["kek"].(map[string]any)
+	if !ok {
+		t.Fatalf("posture.kek is %T, want an object", body["kek"])
+	}
+	if generations, _ := kek["generations"].(float64); generations != 1 {
+		t.Errorf("kek.generations = %v, want the one key init created", kek["generations"])
+	}
+}
+
 // TestHealthcheckCommand is the container HEALTHCHECK path. The command
 // resolves the listen address and the TLS posture the same way serve does, so
 // the flags that started the server also describe how to reach it.

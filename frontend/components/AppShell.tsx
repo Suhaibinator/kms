@@ -80,6 +80,7 @@ export const NAV: NavGroup[] = [
     label: "Operations",
     items: [
       { href: "/audit", label: "Audit log", icon: <Icon.audit /> },
+      { href: "/posture", label: "Security posture", icon: <Icon.posture />, adminOnly: true },
       { href: "/subscribers", label: "Subscribers", icon: <Icon.subscribers />, adminOnly: true },
       { href: "/health", label: "Health & keys", icon: <Icon.health />, adminOnly: true },
     ],

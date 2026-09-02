@@ -41,6 +41,8 @@ import type {
   Parameter,
   ParameterMetadata,
   Policy,
+  PostureFilters,
+  PostureResponse,
   PromoteSecretResponse,
   PutParameterRequest,
   PutParameterResponse,
@@ -643,6 +645,17 @@ export const api = {
         page_size: filters.page_size,
         page_token: filters.page_token,
       })}`,
+      request,
+    );
+  },
+
+  // --- Security posture ---
+  // Admin-only. Both windows accept a Go duration ("720h") or a day count
+  // ("30d"); omitting one asks the server for its 30-day default rather than
+  // guessing it here.
+  posture(filters: PostureFilters = {}, request?: ApiRequestOptions): Promise<PostureResponse> {
+    return apiFetch<PostureResponse>(
+      `/posture${qs({ cert_window: filters.cert_window, secret_window: filters.secret_window })}`,
       request,
     );
   },

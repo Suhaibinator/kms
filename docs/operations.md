@@ -2345,6 +2345,21 @@ rotation is audited as `key.rotate`.
   access, write, admin action, and authorization denial — see
   [`security.md`](security.md#audit-guarantees) for exactly what is and
   isn't recorded there.
+- The console's **Security posture** page (`/posture`, admin-only, backed by
+  `GET /api/v1/posture`) is the named form of the sampled expiry gauges: where
+  `kms_identity_certs_expiring_soon`, `kms_secret_versions_expiring_soon`,
+  `kms_admin_certs_lacking`, and `kms_admin_certs_expiring_soon` tell you *how
+  many*, the page tells you *which* — the identities, serials, secret
+  addresses, and expiry instants behind each number, soonest first, over a
+  7/30/90-day window (the gauges sample the 30-day one, and the
+  admin-certificate window is pinned to serve's 14-day startup warning on both
+  sides). Beside them it shows the active key's age against
+  `kms_kek_active_created_timestamp_seconds` and the
+  `kms_kek_generations` count, plus the TLS/mTLS, admin-certificate, audit, and
+  metrics posture the process is actually running with. Alert on the gauges;
+  open the page to find out what to re-issue. It reports metadata only — no
+  value, token, key material, or certificate PEM — and each list is capped at
+  200 rows with the true total beside it.
 - `GET /metrics` serves a Prometheus exposition of the whole picture above as
   numbers — see [Prometheus metrics](#prometheus-metrics) below.
 

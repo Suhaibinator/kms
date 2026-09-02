@@ -410,6 +410,104 @@ export interface AuditFilters {
   page_token?: string;
 }
 
+// --- Security posture ---
+//
+// The one response whose timestamps are RFC 3339 strings rather than
+// *_unix_ms, and whose windows are Go duration strings ("720h0m0s"). It is
+// metadata about credentials and never carries one: identities appear by name,
+// certificates by serial and expiry, secrets by address. Nothing here is a
+// secret value, a token, key material, or a certificate PEM — do not add a
+// field that would be.
+
+export interface PostureWindows {
+  cert: string;
+  secret: string;
+  // Fixed at 14 days server-side, so the page, the startup warning and the
+  // kms_admin_certs_expiring_soon gauge agree on what "expiring" means.
+  admin_cert: string;
+}
+
+export interface PostureKek {
+  active_id: string;
+  created_at: string;
+  age_seconds: number;
+  // Every KEK ever recorded, active and retired: 1 means never rotated.
+  generations: number;
+}
+
+export interface PostureAuth {
+  tls_enabled: boolean;
+  mtls_enabled: boolean;
+  admin_client_cert_required: boolean;
+}
+
+export interface PostureAudit {
+  enabled: boolean;
+  // "forever" when nothing is ever retired, else a Go duration.
+  retain_duration: string;
+  archive_enabled: boolean;
+}
+
+export interface ExpiringAdminCert {
+  identity: string;
+  serial: string;
+  not_after: string;
+}
+
+export interface ExpiringIdentityCert {
+  identity: string;
+  // The identity's bound namespace; empty for unbound identities.
+  env: string;
+  app: string;
+  serial: string;
+  not_after: string;
+}
+
+export interface ExpiringSecretVersion {
+  env: string;
+  app: string;
+  key: string;
+  version: number;
+  expires_at: string;
+}
+
+// A capped list plus the true count behind it. `truncated` says the two
+// disagree, so the page can say it is showing only the first rows.
+export interface PostureList<T> {
+  items: T[];
+  total: number;
+  truncated: boolean;
+}
+
+export interface PostureChangeLog {
+  rows: number;
+  last_revision: number;
+  oldest_revision: number;
+}
+
+export interface PostureResponse {
+  generated_at: string;
+  windows: PostureWindows;
+  kek: PostureKek;
+  auth: PostureAuth;
+  audit: PostureAudit;
+  metrics_enabled: boolean;
+  admin_certs: {
+    // Enabled admins with no valid client certificate: they cannot
+    // authenticate at all while the requirement is enforced.
+    lacking: string[];
+    expiring: ExpiringAdminCert[];
+  };
+  identity_certs_expiring: PostureList<ExpiringIdentityCert>;
+  secret_versions_expiring: PostureList<ExpiringSecretVersion>;
+  changelog: PostureChangeLog;
+}
+
+export interface PostureFilters {
+  cert_window?: string;
+  secret_window?: string;
+}
+
 // --- Subscribers ---
 
 export interface Subscriber {

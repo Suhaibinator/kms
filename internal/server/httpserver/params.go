@@ -3,6 +3,7 @@ package httpserver
 import (
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/Suhaibinator/kms/internal/domain"
@@ -74,6 +75,44 @@ func parseUnixMS(s string) (time.Time, error) {
 		return time.Time{}, nil
 	}
 	return time.UnixMilli(ms).UTC(), nil
+}
+
+// parseWindow parses an expiry look-ahead query param. It accepts a Go
+// duration ("720h") or a bare "Nd" day count ("30d") — the two spellings the
+// CLI's --ttl and --since already take — and an empty value means the default.
+//
+// The bounds are deliberately strict rather than clamped: zero and negative
+// windows have no meaning here (a window that looks backwards would report
+// certificates whose expiry is already being enforced by the handshake), and a
+// look-ahead beyond a year stops distinguishing "soon" from "eventually" while
+// asking the store to sort most of its history. Both are the caller's mistake,
+// so they are refused instead of quietly rewritten.
+func parseWindow(name, raw string) (time.Duration, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return postureDefaultWindow, nil
+	}
+	d, ok := parseDurationOrDays(raw)
+	if !ok || d <= 0 || d > postureMaxWindow {
+		return 0, invalidArg(name + ` must be a positive duration of at most 365d (for example "30d" or "720h")`)
+	}
+	return d, nil
+}
+
+// parseDurationOrDays accepts "720h" or "30d"; ok is false for anything else.
+func parseDurationOrDays(raw string) (time.Duration, bool) {
+	if days, found := strings.CutSuffix(raw, "d"); found {
+		// Guard the "d" suffix against Go durations that legitimately end in
+		// one, though none currently do: only a bare integer is a day count.
+		if n, err := strconv.Atoi(days); err == nil {
+			return time.Duration(n) * 24 * time.Hour, true
+		}
+	}
+	d, err := time.ParseDuration(raw)
+	if err != nil {
+		return 0, false
+	}
+	return d, true
 }
 
 func invalidArg(msg string) error {

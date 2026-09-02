@@ -87,6 +87,11 @@ management.
   an explicit reveal flow), policies, identities (with mTLS certificate
   issuance), audit log browsing, live subscriber visibility, and key
   metadata.
+- **Security posture page** (`/posture`, admin-only): what expires in the next
+  7/30/90 days — admin and client certificates, secret versions — beside the
+  active key's age and the listener's TLS/mTLS, audit, and metrics posture.
+  Metadata only: identities by name, certificates by serial and expiry, and
+  never a value, token, or key.
 - **KEK rotation** that rewraps every non-destroyed secret version's DEK —
   and the CA's private key — under a new master key without decrypting and
   re-encrypting values, in one transaction.
