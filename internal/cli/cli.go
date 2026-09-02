@@ -39,6 +39,10 @@ type CLI struct {
 	// configuration exactly as SIGHUP does. Tests use it to drive reloads
 	// deterministically; production leaves it nil.
 	reloadSignal <-chan struct{}
+	// followStop, when non-nil, ends `audit list --follow` as SIGINT would.
+	// Tests close it after a fixed number of polls so a tail finishes
+	// deterministically; production leaves it nil (a nil channel never fires).
+	followStop <-chan struct{}
 	// positionals holds the non-flag arguments collected by the most recent
 	// parseFlags call (flags may be interspersed with positionals).
 	positionals []string
@@ -127,6 +131,8 @@ func (c *CLI) Run(args []string) int {
 		code = c.cmdAdminCert(cmdArgs)
 	case "rotate-kek":
 		code = c.cmdRotateKEK(cmdArgs)
+	case "audit":
+		code = c.cmdAudit(cmdArgs)
 	case "admin":
 		code = c.cmdAdmin(cmdArgs)
 	case "import":
@@ -315,6 +321,7 @@ Administration:
   rotate-admin     Recover an existing admin by rotating its token directly.
   admin-cert       Issue, list, or revoke admin client certificates offline (no server needed).
   rotate-kek       Rotate the master key, rewrapping all secrets.
+  audit            Read or export audit history from a running server.
   import           Import data from SuhaibParameterStore.
 
 Application onboarding (talk to a running server over gRPC):

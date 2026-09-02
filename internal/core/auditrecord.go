@@ -69,14 +69,16 @@ func AuditRecordFrom(ev domain.AuditEvent) AuditRecord {
 		SourceIP:  ev.SourceIP,
 		UserAgent: ev.UserAgent,
 		RequestID: ev.RequestID,
-		Metadata:  auditMetadataValue(ev.Metadata),
+		Metadata:  AuditMetadataValue(ev.Metadata),
 	}
 }
 
-// auditMetadataValue keeps well-formed metadata verbatim and demotes anything
+// AuditMetadataValue keeps well-formed metadata verbatim and demotes anything
 // else — including the empty string — to a JSON string holding the raw text, so
-// one malformed row can never make a whole export unparseable.
-func auditMetadataValue(raw string) jsontext.Value {
+// one malformed row can never make a whole export unparseable. It is exported
+// because the CLI builds the same record from a wire event, which carries the
+// identical raw metadata string and must render it identically.
+func AuditMetadataValue(raw string) jsontext.Value {
 	if value := jsontext.Value(raw); value.IsValid() {
 		return value
 	}
