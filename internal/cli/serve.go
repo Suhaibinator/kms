@@ -92,6 +92,11 @@ func (c *CLI) cmdServe(args []string) int {
 		return 2
 	}
 
+	// A hangup is a reload request once the listeners are up; before that —
+	// during the passphrase prompt, migrations or CA bootstrap — it must not
+	// kill the process. Ctrl-C at the prompt still works (SIGINT is untouched).
+	signal.Ignore(syscall.SIGHUP)
+
 	cfg, prov, configFile, err := r.resolve()
 	if err != nil {
 		return c.fail("loading config: %v", err)
@@ -100,7 +105,7 @@ func (c *CLI) cmdServe(args []string) int {
 		return c.fail("invalid config: %v", err)
 	}
 
-	logger := newLogger(c.Stderr, cfg.LogLevel())
+	logger, logLevel := newLogger(c.Stderr, cfg.LogLevel())
 	if configFile == "" {
 		configFile = "none"
 	}
@@ -220,19 +225,24 @@ func (c *CLI) cmdServe(args []string) int {
 		go exporter.RunSampler(ctx, sampler)
 	}
 
+	// Both listeners accept — but never demand — a certificate from the
+	// built-in CA, so machine clients and admins can authenticate by
+	// certificate while token-only callers still connect. Admission is core's
+	// decision, not the handshake's. The derived config lives in a Reloadable
+	// so SIGHUP can swap the keypair and client CA under both listeners
+	// without a restart; each listener gets its own slot because ALPN is
+	// negotiated from the per-handshake config (gRPC insists on h2).
+	derivedTLS, err := listenertls.Build(tlsCfg, svc)
+	if err != nil {
+		return c.fail("building listener TLS config: %v", err)
+	}
+	tlsHolder := listenertls.NewReloadable(derivedTLS)
+
 	var grpcSrv GRPCServer
 	grpcAddr := ""
 	if GRPCFactory != nil {
 		grpcAddr = cfg.Server.GRPCAddr
-		// Both listeners accept — but never demand — a certificate from the
-		// built-in CA, so machine clients and admins can authenticate by
-		// certificate while token-only callers still connect. Admission is
-		// core's decision, not the handshake's.
-		grpcTLS, terr := listenertls.Build(tlsCfg, svc)
-		if terr != nil {
-			return c.fail("building gRPC TLS config: %v", terr)
-		}
-		grpcSrv, err = GRPCFactory(svc, hub, GRPCConfig{Addr: cfg.Server.GRPCAddr, TLS: grpcTLS, Metrics: exporter})
+		grpcSrv, err = GRPCFactory(svc, hub, GRPCConfig{Addr: cfg.Server.GRPCAddr, TLS: tlsHolder.Listener("h2"), Metrics: exporter})
 		if err != nil {
 			return c.fail("building gRPC server: %v", err)
 		}
@@ -272,12 +282,7 @@ func (c *CLI) cmdServe(args []string) int {
 	// browser is offered the built-in CA and may present an admin certificate,
 	// but one is never demanded at the handshake — an unauthenticated caller
 	// still has to reach the login page and /api/v1/health.
-	if tlsCfg != nil {
-		httpSrv.TLSConfig, err = listenertls.Build(tlsCfg, svc)
-		if err != nil {
-			return c.fail("building HTTP TLS config: %v", err)
-		}
-	}
+	httpSrv.TLSConfig = tlsHolder.Listener("h2", "http/1.1")
 
 	httpErr := make(chan error, 1)
 	go func() {
@@ -294,18 +299,33 @@ func (c *CLI) cmdServe(args []string) int {
 	logger.Info("HTTP listening", zap.String("addr", cfg.Server.HTTPAddr), zap.Bool("tls", tlsCfg != nil), zap.Bool("frontend", cfg.Frontend.Enabled))
 
 	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
+	defer signal.Stop(sigCh)
 	exitCode := 0
-	select {
-	case sig := <-sigCh:
-		logger.Info("shutdown signal received", zap.String("signal", sig.String()))
-	case <-c.stopServe:
-		logger.Info("shutdown requested")
-	case e := <-httpErr:
-		// A listener that fails to start (e.g. address already in use) is fatal;
-		// exit non-zero so a process supervisor reports the failure.
-		logger.Error("HTTP server failed", zap.Error(e))
-		exitCode = 1
+	running := cfg
+loop:
+	for {
+		select {
+		case sig := <-sigCh:
+			if sig == syscall.SIGHUP {
+				logger.Info("reload signal received", zap.String("signal", sig.String()))
+				running, _ = c.reloadServe(ctx, r, logger, logLevel, tlsHolder, svc, running, nil)
+				continue
+			}
+			logger.Info("shutdown signal received", zap.String("signal", sig.String()))
+			break loop
+		case <-c.reloadSignal:
+			running, _ = c.reloadServe(ctx, r, logger, logLevel, tlsHolder, svc, running, nil)
+		case <-c.stopServe:
+			logger.Info("shutdown requested")
+			break loop
+		case e := <-httpErr:
+			// A listener that fails to start (e.g. address already in use) is fatal;
+			// exit non-zero so a process supervisor reports the failure.
+			logger.Error("HTTP server failed", zap.Error(e))
+			exitCode = 1
+			break loop
+		}
 	}
 
 	shutdownCtx, shCancel := context.WithTimeout(context.Background(), 20*time.Second)
@@ -407,10 +427,13 @@ func logAdminCertPosture(logger *zap.Logger, configured, tlsEnabled, nonLoopback
 }
 
 // newLogger builds a structured JSON logger at the given level, writing to w.
-func newLogger(w io.Writer, level zapcore.Level) *zap.Logger {
+// The returned AtomicLevel is the core's enabler, so SetLevel takes effect for
+// every consumer of the logger at once (serve changes it on SIGHUP).
+func newLogger(w io.Writer, level zapcore.Level) (*zap.Logger, zap.AtomicLevel) {
 	encCfg := zap.NewProductionEncoderConfig()
 	encCfg.EncodeTime = zapcore.ISO8601TimeEncoder
 	encCfg.EncodeLevel = zapcore.LowercaseLevelEncoder
-	core := zapcore.NewCore(zapcore.NewJSONEncoder(encCfg), zapcore.AddSync(w), level)
-	return zap.New(core)
+	atomicLevel := zap.NewAtomicLevelAt(level)
+	core := zapcore.NewCore(zapcore.NewJSONEncoder(encCfg), zapcore.AddSync(w), atomicLevel)
+	return zap.New(core), atomicLevel
 }

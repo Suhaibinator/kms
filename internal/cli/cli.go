@@ -35,6 +35,10 @@ type CLI struct {
 	// would. Tests use it to run the real server wiring in-process; production
 	// leaves it nil (a nil channel never fires).
 	stopServe <-chan struct{}
+	// reloadSignal, when non-nil, makes a running `serve` re-read its
+	// configuration exactly as SIGHUP does. Tests use it to drive reloads
+	// deterministically; production leaves it nil.
+	reloadSignal <-chan struct{}
 	// positionals holds the non-flag arguments collected by the most recent
 	// parseFlags call (flags may be interspersed with positionals).
 	positionals []string
