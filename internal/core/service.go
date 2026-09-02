@@ -344,6 +344,7 @@ func (s *Service) authenticateToken(ctx context.Context, token, remoteAddr, user
 // auditAuthFailure records a presented credential that did not verify. The
 // row names the method only, never the credential or a guessed identity.
 func (s *Service) auditAuthFailure(ctx context.Context, method domain.AuthMethod, remoteAddr, userAgent string) {
+	s.m().AuthFailure(authFailureReason(method))
 	s.audit(ctx, domain.AuditEvent{
 		EventType: "auth.failure",
 		ActorType: "unknown",
@@ -438,6 +439,7 @@ func (s *Service) namespaceMethodCheck(ctx context.Context, pr Principal, ns dom
 	for i, m := range n.AllowedAuthMethods {
 		allowed[i] = string(m)
 	}
+	s.m().AuthzMethodDenied(authFailureReason(pr.Method))
 	s.auditRefWithNamespaceID(ctx, pr, "authz.method_denied", resourceType, domain.Ref{NS: ns}, n.ID, 0, "deny",
 		map[string]string{"method": string(pr.Method), "required": strings.Join(allowed, ",")})
 	return domain.Namespace{}, domain.Errorf(domain.ErrPermissionDenied,
@@ -490,6 +492,7 @@ func (s *Service) authorize(ctx context.Context, pr Principal, operation, resour
 		return ctx, domain.Namespace{}, domain.Errorf(domain.ErrPermissionDenied, "authorization unavailable")
 	}
 	if !policy.Authorize(policies, pr.home(), operation, ref.NS) {
+		s.m().AuthzDenied(operation)
 		s.auditRefWithNamespaceID(bound, pr, "authz.denial", resourceType, ref, n.ID, 0, "deny", map[string]string{"operation": operation})
 		return ctx, domain.Namespace{}, domain.Errorf(domain.ErrPermissionDenied, "access denied")
 	}
@@ -523,6 +526,7 @@ func (s *Service) listFilter(ctx context.Context, pr Principal, resourceType, li
 	// Use the full authorization decision here: explicit denies must override
 	// both policy allows and the implicit home-namespace grant.
 	if !policy.Authorize(policies, home, listOp, ns) {
+		s.m().AuthzDenied(listOp)
 		s.auditRefWithNamespaceID(bound, pr, "authz.denial", resourceType, domain.Ref{NS: ns}, n.ID, 0, "deny",
 			map[string]string{"operation": listOp})
 		return ctx, domain.Namespace{}, nil, domain.Errorf(domain.ErrPermissionDenied, "access denied")

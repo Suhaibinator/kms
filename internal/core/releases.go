@@ -529,10 +529,12 @@ func (s *Service) ActivateConfigurationRelease(ctx context.Context, pr Principal
 	}
 	validation, err := s.validateConfigurationRelease(ctx, pr, rs, ns, name, version, false)
 	if err != nil {
+		s.m().ReleaseOutcome(ReleaseOutcomeError)
 		s.auditRefWithNamespaceID(ctx, pr, "configuration_release.activate", domain.ResourceConfigurationRelease, domain.Ref{NS: ns, Key: name}, namespace.ID, version, "error", nil)
 		return domain.ActiveConfigurationRelease{}, false, err
 	}
 	if len(validation) > 0 {
+		s.m().ReleaseOutcome(ReleaseOutcomeValidationFailed)
 		s.auditRefWithNamespaceID(ctx, pr, "configuration_release.activate", domain.ResourceConfigurationRelease, domain.Ref{NS: ns, Key: name}, namespace.ID, version, "deny", map[string]string{"error_count": strconv.Itoa(len(validation)), "reason": "validation_failed"})
 		return domain.ActiveConfigurationRelease{}, false, domain.NewReleaseValidationFailedError(validation)
 	}
@@ -540,9 +542,11 @@ func (s *Service) ActivateConfigurationRelease(ctx context.Context, pr Principal
 	if err != nil {
 		decision := "error"
 		event := "configuration_release.activate"
+		outcome := ReleaseOutcomeError
 		metadata := map[string]string(nil)
 		if validationFailed, ok := errors.AsType[*domain.ReleaseValidationFailedError](err); ok {
 			decision = "deny"
+			outcome = ReleaseOutcomeValidationFailed
 			metadata = map[string]string{
 				"error_count": strconv.Itoa(len(validationFailed.Violations())),
 				"reason":      "validation_failed",
@@ -551,15 +555,20 @@ func (s *Service) ActivateConfigurationRelease(ctx context.Context, pr Principal
 		if errors.Is(err, domain.ErrAborted) {
 			event = "configuration_release.cas_conflict"
 			decision = "deny"
+			outcome = ReleaseOutcomeCASConflict
 		}
+		s.m().ReleaseOutcome(outcome)
 		s.auditRefWithNamespaceID(ctx, pr, event, domain.ResourceConfigurationRelease, domain.Ref{NS: ns, Key: name}, namespace.ID, version, decision, metadata)
 		return domain.ActiveConfigurationRelease{}, false, err
 	}
 	if changed {
 		event := "configuration_release.activate"
+		outcome := ReleaseOutcomeActivated
 		if active.PreviousVersion > 0 && version < active.PreviousVersion {
 			event = "configuration_release.rollback"
+			outcome = ReleaseOutcomeRolledBack
 		}
+		s.m().ReleaseOutcome(outcome)
 		s.auditRefWithNamespaceID(ctx, pr, event, domain.ResourceConfigurationRelease, domain.Ref{NS: ns, Key: name}, namespace.ID, version, "allow", map[string]string{"previous_version": strconv.FormatUint(active.PreviousVersion, 10)})
 		s.getHub().Wake()
 		s.notifyReleaseSubscribers(ns, name)
@@ -595,6 +604,7 @@ func (s *Service) RollbackConfigurationRelease(ctx context.Context, pr Principal
 	}
 	current := active.Release.Version
 	if expectedCurrent != nil && *expectedCurrent != current {
+		s.m().ReleaseOutcome(ReleaseOutcomeCASConflict)
 		s.auditRefWithNamespaceID(ctx, pr, "configuration_release.cas_conflict", domain.ResourceConfigurationRelease, domain.Ref{NS: ns, Key: name}, namespace.ID, active.PreviousVersion, "deny", map[string]string{"reason": "rollback"})
 		return domain.RollbackResult{}, domain.Errorf(domain.ErrAborted, "release %s is at version %d, expected %d", name, current, *expectedCurrent)
 	}

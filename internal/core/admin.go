@@ -21,6 +21,7 @@ func (s *Service) requireAdmin(ctx context.Context, pr Principal, eventType, res
 	if pr.IsAdmin() {
 		return nil
 	}
+	s.m().AuthzDenied(eventType)
 	s.auditName(ctx, pr, eventType, resourceType, name, "deny", nil)
 	return domain.Errorf(domain.ErrPermissionDenied, "access denied")
 }
@@ -69,6 +70,7 @@ func (s *Service) requireAdminOrOpContext(ctx context.Context, pr Principal, ope
 		return ctx, domain.Namespace{}, domain.Errorf(domain.ErrPermissionDenied, "authorization unavailable")
 	}
 	if !policy.Authorize(policies, pr.home(), operation, ref.NS) {
+		s.m().AuthzDenied(operation)
 		if namespace.ID != 0 {
 			s.auditRefWithNamespaceID(ctx, pr, eventType, resourceType, ref, namespace.ID, 0, "deny", map[string]string{"operation": operation})
 		} else {
