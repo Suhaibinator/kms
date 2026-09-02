@@ -308,7 +308,11 @@ func (c *CLI) cmdServe(args []string) int {
 		TrustProxyHeaders:       cfg.Security.TrustProxyHeaders,
 		GRPCAddr:                grpcAddr,
 		TLSEnabled:              tlsCfg != nil,
+		MTLSEnabled:             cfg.Security.MTLSEnabled,
 		AdminClientCertRequired: adminCertRequired,
+		AuditEnabled:            cfg.Audit.Enabled,
+		AuditRetainDuration:     auditRetain,
+		AuditArchiveEnabled:     cfg.Audit.ArchiveDir != "",
 		Metrics:                 exporter,
 	})
 	if err != nil {

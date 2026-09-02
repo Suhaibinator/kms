@@ -120,6 +120,7 @@ var RouteLabels = []string{
 	"POST /api/v1/identities/revoke",
 
 	"GET /api/v1/audit",
+	"GET /api/v1/posture",
 	"GET /api/v1/subscribers",
 	"GET /api/v1/release-subscribers",
 	"GET /api/v1/release-subscribers/stream",
@@ -251,6 +252,7 @@ var AuditEventTypes = []string{
 	"parameter.write",
 	"policy.read",
 	"policy.write",
+	"posture.read",
 	"secret.delete",
 	"secret.destroy",
 	"secret.disable",

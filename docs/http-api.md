@@ -1073,6 +1073,55 @@ rules (a deny still wins).
   event was authorized against (`0` for global events and rows that predate
   it), so a deleted-and-recreated `env/app` can be told apart in an export.
 
+### Security posture
+
+- `GET /api/v1/posture?cert_window=&secret_window=` →
+  ```json
+  { "generated_at": "2026-09-01T12:00:00Z",
+    "windows": { "cert": "720h0m0s", "secret": "720h0m0s", "admin_cert": "336h0m0s" },
+    "kek": { "active_id": "kek-2026-01", "created_at": "2026-01-04T09:12:00Z",
+      "age_seconds": 20779200, "generations": 2 },
+    "auth": { "tls_enabled": true, "mtls_enabled": true, "admin_client_cert_required": true },
+    "audit": { "enabled": true, "retain_duration": "forever", "archive_enabled": false },
+    "metrics_enabled": true,
+    "admin_certs": { "lacking": ["ops-oncall"],
+      "expiring": [ { "identity": "root", "serial": "3f…", "not_after": "2026-09-10T00:00:00Z" } ] },
+    "identity_certs_expiring": { "items": [ { "identity": "gradethis-be", "env": "prod",
+        "app": "gradethis", "serial": "a1…", "not_after": "2026-09-14T00:00:00Z" } ],
+      "total": 1, "truncated": false },
+    "secret_versions_expiring": { "items": [ { "env": "prod", "app": "gradethis",
+        "key": "stripe-api-key", "version": 2, "expires_at": "2026-09-20T00:00:00Z" } ],
+      "total": 1, "truncated": false },
+    "changelog": { "rows": 412, "last_revision": 900, "oldest_revision": 488 } }
+  ```
+  **Admin only** (403 `permission_denied` for any other identity, 401 before
+  that for an unauthenticated one): the snapshot spans every namespace at once,
+  which no delegated policy grant scopes. It backs the console's **Security
+  posture** page.
+  `cert_window` and `secret_window` are the look-ahead for identity
+  certificates and secret versions. Each takes a Go duration (`720h`) or a bare
+  day count (`30d`); both default to **30d**, the window the
+  `kms_*_expiring_soon` gauges sample. Zero, negative, unparseable, and
+  anything over `365d` are `invalid_argument` (400) rather than clamped. The
+  admin-certificate window is **not** a parameter: it is fixed at 14 days so the
+  page, serve's startup warning, and `kms_admin_certs_expiring_soon` agree on
+  what "expiring" means.
+  Both lists are sorted by expiry ascending and capped at **200** items;
+  `total` is the full count behind the list and `truncated` says the two
+  disagree. Already-expired certificates and versions are excluded (the
+  handshake already enforces those), as are revoked certificates and versions
+  that are not `enabled`. `retain_duration` is `"forever"` when audit rows are
+  never retired.
+  Unlike the rest of this API, its timestamps are RFC 3339 UTC strings rather
+  than `*_unix_ms`, so they sit in the same vocabulary as the duration windows
+  beside them.
+
+  **Metadata only.** No field carries a secret value, a bearer token or its
+  hash, key material, a private key, or a certificate PEM. Identities appear by
+  name and certificates by serial and expiry; the KEK appears as an id, a
+  creation time, and a generation count. Building the response reads metadata
+  rows only — it never unwraps a DEK and no decrypt path is reachable from it.
+
 ### Subscribers
 
 - `GET /api/v1/subscribers` →

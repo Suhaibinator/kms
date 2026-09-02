@@ -56,6 +56,12 @@ export const PALETTE_PAGES: ReadonlyArray<{
   },
   { href: "/audit", label: "Audit log", keywords: ["events", "history"] },
   {
+    href: "/posture",
+    label: "Security posture",
+    keywords: ["expiring", "certificates", "kek", "rotation", "security"],
+    adminOnly: true,
+  },
+  {
     href: "/subscribers",
     label: "Subscribers",
     keywords: ["instances", "streams"],

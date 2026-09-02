@@ -83,6 +83,7 @@ describe("AppShell", () => {
       "Policies",
       "Identities",
       "Audit log",
+      "Security posture",
       "Subscribers",
       "Health & keys",
     ]);

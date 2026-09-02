@@ -58,6 +58,20 @@ type Config struct {
 	// being on), used only to tell an unauthenticated caller — the login page —
 	// why its token alone will be refused. Enforcement itself lives in core.
 	AdminClientCertRequired bool
+	// MTLSEnabled records that the listener was configured with a client CA
+	// (security.mtls_enabled), so the TLS stack demands and verifies a client
+	// certificate on every connection. Reported by the posture endpoint, which
+	// is admin-only; unlike AdminClientCertRequired it is never shown to an
+	// unauthenticated caller.
+	MTLSEnabled bool
+	// AuditEnabled, AuditRetainDuration and AuditArchiveEnabled describe the
+	// configured audit posture for the posture endpoint: whether decisions are
+	// recorded at all, how long rows are kept (zero keeps them forever), and
+	// whether retired rows are archived before deletion. They are reported,
+	// never enforced here — retention runs in serve and recording in core.
+	AuditEnabled        bool
+	AuditRetainDuration time.Duration
+	AuditArchiveEnabled bool
 	// Metrics is the Prometheus exporter. When set, the server serves its
 	// exposition at /metrics — unauthenticated, like the probes — and records
 	// one observation per request, per SSE stream, and per rate-limit refusal.
