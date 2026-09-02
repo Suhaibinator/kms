@@ -188,14 +188,11 @@ var (
 	auditDecisionSet     = stringSet(core.AuditDecisions)
 )
 
-// AuthMethods is the closed set of the method label on
+// authMethodSet is the closed set of the method label on
 // kms_authz_method_denials_total: the credential a caller authenticated with,
-// which is what a namespace's auth-method gate refuses on. The two values are
-// the same vocabulary the token and mTLS authentication failures use, so they
-// are spelled with those constants rather than repeated as literals.
-var AuthMethods = []string{core.AuthFailureToken, core.AuthFailureMTLS}
-
-var authMethodSet = stringSet(AuthMethods)
+// which is what a namespace's auth-method gate refuses on. core owns the list
+// so the hook and the exporter cannot drift.
+var authMethodSet = stringSet(core.AuthMethods)
 
 // AuthMethodLabel maps an authentication method onto its label value.
 func AuthMethodLabel(method string) string {

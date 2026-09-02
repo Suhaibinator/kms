@@ -225,7 +225,7 @@ func (m *Metrics) initClosedSets() {
 	for _, limiter := range LimiterNames {
 		m.rateLimited.WithLabelValues(limiter)
 	}
-	for _, method := range AuthMethods {
+	for _, method := range core.AuthMethods {
 		m.authzMethodDenials.WithLabelValues(method)
 	}
 }

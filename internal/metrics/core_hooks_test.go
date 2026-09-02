@@ -36,7 +36,7 @@ func TestClosedSetsStartAtZero(t *testing.T) {
 			t.Errorf("kms_ratelimit_refusals_total{limiter=%q} = %v, want 0", limiter, got)
 		}
 	}
-	for _, method := range AuthMethods {
+	for _, method := range core.AuthMethods {
 		if got := testutil.ToFloat64(m.authzMethodDenials.WithLabelValues(method)); got != 0 {
 			t.Errorf("kms_authz_method_denials_total{method=%q} = %v, want 0", method, got)
 		}

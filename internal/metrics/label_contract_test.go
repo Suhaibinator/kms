@@ -206,7 +206,7 @@ func TestClosedSetsCoverTheirSources(t *testing.T) {
 			t.Errorf("LimiterLabel(%q) = %q", limiter, got)
 		}
 	}
-	for _, method := range AuthMethods {
+	for _, method := range core.AuthMethods {
 		if got := AuthMethodLabel(method); got != method {
 			t.Errorf("AuthMethodLabel(%q) = %q", method, got)
 		}
@@ -241,7 +241,7 @@ func TestClosedSetsAreWellFormed(t *testing.T) {
 		"PolicyOperations": PolicyOperations,
 		"ReloadResults":    ReloadResults,
 		"DBFiles":          DBFiles,
-		"AuthMethods":      AuthMethods,
+		"AuthMethods":      core.AuthMethods,
 	} {
 		seen := map[string]bool{}
 		for _, v := range values {
