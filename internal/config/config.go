@@ -93,9 +93,17 @@ type FrontendConfig struct {
 	Enabled bool `yaml:"enabled"`
 }
 
-// AuditConfig toggles audit logging.
+// AuditConfig toggles audit logging and bounds how long its rows are kept.
 type AuditConfig struct {
 	Enabled bool `yaml:"enabled"`
+	// RetainDuration is how long audit rows are kept. Zero — the default —
+	// keeps them forever: audit history is evidence, so it is never discarded
+	// unless an operator asks for it.
+	RetainDuration Duration `yaml:"retain_duration"`
+	// ArchiveDir receives a JSONL copy of every row before it is retired, so
+	// enabling retention does not have to mean losing the history. Empty
+	// discards retired rows.
+	ArchiveDir string `yaml:"archive_dir"`
 }
 
 // MetricsConfig toggles the Prometheus exporter and its /metrics endpoint.
@@ -143,8 +151,10 @@ func Default() Config {
 		Security:   SecurityConfig{AdminRequireClientCert: true},
 		Encryption: EncryptionConfig{},
 		Frontend:   FrontendConfig{Enabled: true},
-		Audit:      AuditConfig{Enabled: true},
-		Metrics:    MetricsConfig{Enabled: true},
+		// RetainDuration 0 and an empty ArchiveDir are the defaults: keep audit
+		// history forever.
+		Audit:   AuditConfig{Enabled: true},
+		Metrics: MetricsConfig{Enabled: true},
 		Watch: WatchConfig{
 			HeartbeatInterval:               Duration(30 * time.Second),
 			RetainDuration:                  Duration(24 * time.Hour),
@@ -216,6 +226,12 @@ func (c Config) Validate() error {
 		if err := fileMustExist(c.Security.ClientCAFile, "security.client_ca_file"); err != nil {
 			return err
 		}
+	}
+	if time.Duration(c.Audit.RetainDuration) < 0 {
+		return fmt.Errorf("audit.retain_duration must not be negative (0 keeps audit history forever)")
+	}
+	if c.Audit.ArchiveDir != "" && time.Duration(c.Audit.RetainDuration) <= 0 {
+		return fmt.Errorf("audit.archive_dir requires audit.retain_duration")
 	}
 	if time.Duration(c.Watch.HeartbeatInterval) <= 0 {
 		return fmt.Errorf("watch.heartbeat_interval must be positive")
@@ -304,12 +320,16 @@ func (c Config) Redacted() string {
 		kek = "set"
 	}
 	return fmt.Sprintf(
-		"grpc_addr=%s http_addr=%s sqlite_path=%s tls=%t mtls=%t admin_require_client_cert=%t kek_file=%s frontend=%t audit=%t metrics=%t "+
+		"grpc_addr=%s http_addr=%s sqlite_path=%s tls=%t mtls=%t admin_require_client_cert=%t kek_file=%s frontend=%t audit=%t "+
+			"audit_retain_duration=%s audit_archive_dir=%s metrics=%t "+
 			"heartbeat=%s retain_duration=%s retain_rows=%d release_retain_duration=%s release_retain_versions=%d release_subscriber_retain_duration=%s "+
 			"verify_defaults_requests_per_hour=%d verify_defaults_burst=%d verify_defaults_mismatch_budget_per_hour=%d log_level=%s",
 		c.Server.GRPCAddr, c.Server.HTTPAddr, c.Storage.SQLitePath,
 		c.Security.TLSEnabled, c.Security.MTLSEnabled, c.Security.AdminRequireClientCert, kek,
-		c.Frontend.Enabled, c.Audit.Enabled, c.Metrics.Enabled,
+		c.Frontend.Enabled, c.Audit.Enabled,
+		// The archive directory is a path, not a credential: an operator
+		// debugging retention needs to see where rows are being written.
+		time.Duration(c.Audit.RetainDuration), c.Audit.ArchiveDir, c.Metrics.Enabled,
 		time.Duration(c.Watch.HeartbeatInterval), time.Duration(c.Watch.RetainDuration),
 		c.Watch.RetainRows, time.Duration(c.Watch.ReleaseRetainDuration), c.Watch.ReleaseRetainVersions,
 		time.Duration(c.Watch.ReleaseSubscriberRetainDuration),

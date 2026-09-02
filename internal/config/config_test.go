@@ -22,6 +22,11 @@ func TestDefaults(t *testing.T) {
 	if !cfg.Frontend.Enabled || !cfg.Audit.Enabled || !cfg.Metrics.Enabled {
 		t.Fatalf("frontend/audit/metrics should default enabled")
 	}
+	// Audit history is evidence: it is kept forever until an operator opts in
+	// to retention.
+	if time.Duration(cfg.Audit.RetainDuration) != 0 || cfg.Audit.ArchiveDir != "" {
+		t.Fatalf("audit retention defaults = %+v, want keep-forever", cfg.Audit)
+	}
 	if time.Duration(cfg.Watch.HeartbeatInterval) != 30*time.Second {
 		t.Fatalf("heartbeat default = %v", time.Duration(cfg.Watch.HeartbeatInterval))
 	}

@@ -73,6 +73,8 @@ frontend:
 
 audit:
   enabled: true
+  retain_duration: 0     # 0 keeps audit rows forever
+  archive_dir: ""        # JSONL copy of rows before they are retired
 
 metrics:
   enabled: true
@@ -108,6 +110,8 @@ log:
 | `KMS_ADMIN_REQUIRE_CLIENT_CERT` | `--admin-require-client-cert` | `security.admin_require_client_cert` (parsed with `strconv.ParseBool`) — **default `true`**; admins must present a built-in-CA client certificate in addition to their bearer token; relaxed with a warning while `tls_enabled` is false (see [Admin credentials and browser setup](#admin-credentials-and-browser-setup)) |
 | `KMS_FRONTEND_ENABLED` | `--frontend-enabled` | `frontend.enabled` |
 | `KMS_AUDIT_ENABLED` | `--audit-enabled` | `audit.enabled` |
+| `KMS_AUDIT_RETAIN_DURATION` | `--audit-retain-duration` | `audit.retain_duration` (duration) — **default `0`**, which keeps audit rows forever |
+| `KMS_AUDIT_ARCHIVE_DIR` | `--audit-archive-dir` | `audit.archive_dir` — directory receiving a JSONL copy of audit rows before they are retired; empty discards them. Requires `audit.retain_duration` above 0 |
 | `KMS_METRICS_ENABLED` | `--metrics-enabled` | `metrics.enabled` (parsed with `strconv.ParseBool`) — **default `true`**; serve Prometheus metrics on `/metrics` |
 | `KMS_WATCH_HEARTBEAT_INTERVAL` | `--watch-heartbeat-interval` | `watch.heartbeat_interval` (duration) |
 | `KMS_WATCH_RETAIN_DURATION` | `--watch-retain-duration` | `watch.retain_duration` (duration) |

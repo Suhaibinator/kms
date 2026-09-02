@@ -207,6 +207,18 @@ var Settings = []Setting{
 		ptr:  func(c *Config) any { return &c.Audit.Enabled },
 	},
 	{
+		Key:  "audit.retain_duration",
+		Env:  "KMS_AUDIT_RETAIN_DURATION",
+		Help: "`duration` to retain audit rows; 0 keeps them forever",
+		ptr:  func(c *Config) any { return &c.Audit.RetainDuration },
+	},
+	{
+		Key:  "audit.archive_dir",
+		Env:  "KMS_AUDIT_ARCHIVE_DIR",
+		Help: "`directory` receiving a JSONL copy of audit rows before they are retired; empty discards them",
+		ptr:  func(c *Config) any { return &c.Audit.ArchiveDir },
+	},
+	{
 		Key:  "metrics.enabled",
 		Env:  "KMS_METRICS_ENABLED",
 		Help: "serve Prometheus metrics on /metrics",
