@@ -460,6 +460,28 @@ describe("ReleasesPage", () => {
     );
   });
 
+  it("disables a resource picker when no matching resources exist", async () => {
+    mocks.query = { app: "payments", env: "prod" };
+    mocks.applicationDashboard.mockResolvedValue({
+      ...dashboardWithContract,
+      application: {
+        ...dashboardWithContract.application,
+        contract: [{ alias: "api_key", kind: "secret" as const }],
+      },
+    });
+
+    render(<ReleasesPage />);
+    await screen.findByText("No releases found");
+    fireEvent.click(screen.getAllByRole("button", { name: "New release" })[0]);
+    const dialog = await screen.findByRole("dialog", { name: "New release · prod/payments" });
+    const resource = await within(dialog).findByRole("combobox", { name: "Resource" });
+
+    expect(resource).toBeDisabled();
+    expect(resource).toHaveTextContent("No matching secrets");
+    fireEvent.click(resource);
+    expect(screen.queryByRole("listbox")).toBeNull();
+  });
+
   it("keeps invalid advanced JSON in place and blocks returning to Guided mode", async () => {
     mocks.query = { app: "payments", env: "prod" };
     mocks.applicationDashboard.mockResolvedValue(dashboardWithoutContract);

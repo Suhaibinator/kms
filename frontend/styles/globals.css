@@ -1733,7 +1733,7 @@
     grid-template-columns:
       minmax(130px, 0.9fr) minmax(115px, 0.65fr) minmax(190px, 1.3fr)
       minmax(145px, 0.8fr) minmax(145px, 0.8fr) auto;
-    align-items: end;
+    align-items: start;
     gap: var(--space-3);
     padding: var(--space-4);
     border-bottom: 1px solid var(--border);
@@ -1746,6 +1746,12 @@
     display: flex;
     align-items: center;
     min-height: var(--control-h);
+    /* Match the labelled fields' line box plus their gap without making the
+       whole row bottom-align to validation text. */
+    margin-top: calc(1.375em + var(--space-1));
+  }
+  .release-builder-entry > [data-slot="button"] {
+    margin-top: calc(1.375em + var(--space-1));
   }
   /* The 60dvh minimum lives on the element as `min-h-[60dvh]`: a utility, so it
      can beat Textarea's own min-h-16 utility. Layered component CSS cannot. */

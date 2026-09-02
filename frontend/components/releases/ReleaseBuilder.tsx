@@ -608,6 +608,7 @@ export function ReleaseBuilder({
                         <AppSelect
                           ref={index === 0 ? firstResourceRef : undefined}
                           value={entry.key}
+                          disabled={resources.length === 0}
                           onValueChange={(key) => {
                             updateEntry(entry.id, {
                               key,
@@ -628,7 +629,11 @@ export function ReleaseBuilder({
                             }
                           }}
                           onBlur={() => touch("key")}
-                          placeholder={`Choose ${entry.kind}…`}
+                          placeholder={
+                            resources.length === 0
+                              ? `No matching ${entry.kind}s`
+                              : `Choose ${entry.kind}…`
+                          }
                           options={resources}
                         />
                       </Field>
