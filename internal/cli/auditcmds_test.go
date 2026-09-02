@@ -787,3 +787,73 @@ func TestAuditPruneWithoutArchiveReportsNullArchiveDir(t *testing.T) {
 		t.Fatalf("rows = %d, want 0", got)
 	}
 }
+
+// --- serve wiring ----------------------------------------------------------
+
+// TestServeRunsAuditRetention is the end-to-end statement of the server-side
+// half: with a retention window and an archive directory configured, `serve`
+// retires the rows that are already past the window at startup, and the copy is
+// on disk before the row is gone.
+func TestServeRunsAuditRetention(t *testing.T) {
+	archive := t.TempDir()
+	s := startServeSeeded(t, false, func(t *testing.T, db string) {
+		seedAuditRows(t, openTestStore(t, db), 3, 48*time.Hour)
+	}, "--audit-retain-duration", "1s", "--audit-archive-dir", archive)
+	// The listener answering means startup finished; the retention pass it
+	// launched runs alongside, so wait for its effect rather than for it.
+	s.health(t)
+
+	store := openTestStore(t, s.db)
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		events, _, err := store.ListAudit(context.Background(),
+			domain.AuditFilter{EventType: "secret.read"}, storage.ListPage{Limit: 100})
+		if err != nil {
+			t.Fatalf("list audit: %v", err)
+		}
+		if len(events) == 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("%d seeded rows survived retention; log:\n%s", len(events), s.logs.String())
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if exit := s.stopAndWait(t); exit != 0 {
+		t.Fatalf("serve exit = %d, want 0; log:\n%s", exit, s.logs.String())
+	}
+
+	files, err := filepath.Glob(filepath.Join(archive, "audit-*.jsonl"))
+	if err != nil {
+		t.Fatalf("glob the archive: %v", err)
+	}
+	var archived int
+	for _, file := range files {
+		archived += len(auditExportIDs(t, file))
+	}
+	// Archive-before-delete: whatever left the database is already in a file.
+	if archived < 3 {
+		t.Fatalf("archived %d records in %v, want at least the 3 seeded ones", archived, files)
+	}
+	if logs := s.logs.String(); !logContains(logs, auditRetentionStartupMsg) {
+		t.Fatalf("startup log does not report the retention posture:\n%s", logs)
+	}
+}
+
+// TestServeReportsRetentionDisabled: the default keeps history forever, and the
+// boot log has to say so — silence would read the same as a server quietly
+// discarding evidence.
+func TestServeReportsRetentionDisabled(t *testing.T) {
+	s := startServe(t, false)
+	s.health(t)
+	if exit := s.stopAndWait(t); exit != 0 {
+		t.Fatalf("serve exit = %d, want 0; log:\n%s", exit, s.logs.String())
+	}
+	logs := s.logs.String()
+	if !logContains(logs, auditRetentionStartupMsg) {
+		t.Fatalf("startup log omits the retention line:\n%s", logs)
+	}
+	if !strings.Contains(logs, `"retain":"forever"`) {
+		t.Fatalf("startup log does not spell the default as forever:\n%s", logs)
+	}
+}
