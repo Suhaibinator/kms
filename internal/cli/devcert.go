@@ -12,6 +12,7 @@ import (
 	"math/big"
 	"net"
 	"os"
+	"strings"
 	"time"
 )
 
@@ -130,7 +131,7 @@ func devServerNames(extraHosts []string) ([]string, []net.IP) {
 	ips := []net.IP{net.ParseIP("127.0.0.1"), net.ParseIP("::1")}
 	seenDNS := map[string]bool{"localhost": true}
 	seenIP := map[string]bool{"127.0.0.1": true, "::1": true}
-	if host, err := os.Hostname(); err == nil && host != "" && !seenDNS[host] {
+	if host, err := os.Hostname(); err == nil && isPlausibleDNSName(host) && !seenDNS[host] {
 		dnsNames = append(dnsNames, host)
 		seenDNS[host] = true
 	}
@@ -145,10 +146,28 @@ func devServerNames(extraHosts []string) ([]string, []net.IP) {
 			}
 			continue
 		}
-		if !seenDNS[h] {
+		if isPlausibleDNSName(h) && !seenDNS[h] {
 			dnsNames = append(dnsNames, h)
 			seenDNS[h] = true
 		}
 	}
 	return dnsNames, ips
+}
+
+// isPlausibleDNSName keeps a name out of the SAN list unless x509 will accept
+// it. A machine named in anything but ASCII (or a hostname carrying a stray
+// character) would otherwise make certificate creation fail, and `dev` would
+// refuse to start over a SAN nobody asked for.
+func isPlausibleDNSName(name string) bool {
+	if name == "" || len(name) > 253 || strings.HasPrefix(name, "-") || strings.HasSuffix(name, "-") {
+		return false
+	}
+	for _, r := range name {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '-', r == '.':
+		default:
+			return false
+		}
+	}
+	return true
 }
