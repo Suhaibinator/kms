@@ -24,6 +24,26 @@ The Next.js development server proxies `/api/*` to
 an identity token. See the root [quickstart](../README.md#initialize-and-run-locally)
 for a local server setup.
 
+## List tables
+
+Every list page composes the same three pieces, so a new one does not invent
+its own:
+
+- **Sorting** — declare the columns once as a module-level `SortColumn[]`
+  (`lib/sort.ts`), then `useSort(pathname, COLUMNS)` and `<SortHeaderRow>` from
+  `components/SortableTable.tsx`. The state lives in `?sort=&dir=`, so a sorted
+  list survives a reload and can be shared. Server-paginated lists sort the
+  loaded page only and say so in the header tooltip and the footer.
+- **Totals** — `<TableSummary>` (`components/ui.tsx`) is the table's `<caption>`,
+  flipped to the bottom: "Showing N of M" plus the count of active filters.
+- **Bulk actions** — `useBulkSelection`, `SelectAllCell`, `SelectRowCell`,
+  `BulkActionBar` and `BulkDeleteDialog` (`components/BulkSelection.tsx`) run the
+  existing per-item API once per selection with `runBulk` (`lib/bulk.ts`); there
+  are no bulk endpoints.
+
+Keyboard shortcuts are declared in `lib/shortcuts.ts` and rendered by the `?`
+sheet. A new `keydown` handler belongs in that list.
+
 ## Checks and tests
 
 Run the source, component, and production-build gates with:

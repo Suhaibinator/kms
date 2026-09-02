@@ -10,12 +10,15 @@ const mocks = vi.hoisted(() => ({
     error: null as unknown,
     reload: vi.fn(),
   },
+  router: { isReady: true, query: {} as Record<string, string>, replace: vi.fn() },
   updateNamespace: vi.fn(),
   deleteNamespace: vi.fn(),
   listIdentities: vi.fn(),
   toast: { success: vi.fn(), info: vi.fn(), error: vi.fn() },
 }));
 
+// The table's sort state lives in the URL, so the page reads and writes a router.
+vi.mock("next/router", () => ({ useRouter: () => mocks.router }));
 vi.mock("@/context/ToastContext", () => ({ useToast: () => mocks.toast }));
 vi.mock("@/lib/api", () => ({
   api: {
@@ -52,6 +55,8 @@ function namespace(
 describe("NamespacesPage", () => {
   beforeEach(() => {
     mocks.namespaces = { namespaces: [], loading: false, error: null, reload: vi.fn() };
+    mocks.router.query = {};
+    mocks.router.replace.mockReset();
     mocks.updateNamespace.mockReset();
     mocks.deleteNamespace.mockReset();
     mocks.listIdentities.mockReset().mockResolvedValue({ identities: [], next_page_token: "" });
@@ -80,6 +85,38 @@ describe("NamespacesPage", () => {
     expect(screen.queryByText("Loading…")).toBeNull();
     expect(screen.getByText("dev")).toBeVisible();
     expect(screen.getByText("dev").closest("[aria-busy]")).toHaveAttribute("aria-busy", "true");
+  });
+
+  it("reorders every environment table from a column header and records it in the URL", () => {
+    mocks.namespaces.namespaces = [
+      namespace("dev", { parameters: 9 }),
+      namespace("prod", { parameters: 1 }),
+    ];
+    const environments = () =>
+      [...document.querySelectorAll('table.data tbody td[data-label="Environment"]')].map(
+        (cell) => cell.textContent ?? "",
+      );
+
+    const { rerender } = render(<NamespacesPage />);
+    expect(environments()).toEqual(["dev", "prod"]);
+    // The whole list is loaded here, so the footer's total is the real one.
+    expect(screen.getByTestId("table-summary")).toHaveTextContent("Showing 2 of 2 environments");
+
+    fireEvent.click(screen.getByRole("button", { name: "Parameters" }));
+    expect(mocks.router.replace).toHaveBeenLastCalledWith(
+      { pathname: "/namespaces", query: { sort: "parameters", dir: "asc" } },
+      undefined,
+      { shallow: true, scroll: false },
+    );
+
+    // The URL is the source of truth, so land the router on what the click asked for.
+    mocks.router.query = { sort: "parameters", dir: "asc" };
+    rerender(<NamespacesPage />);
+    expect(environments()).toEqual(["prod", "dev"]);
+    expect(screen.getByRole("button", { name: "Parameters" }).closest("th")).toHaveAttribute(
+      "aria-sort",
+      "ascending",
+    );
   });
 
   it("links each namespace to its parameters and secrets", () => {

@@ -11,6 +11,7 @@ import { SchemaRegistry } from "@/components/releases/SchemaRegistry";
 import { parseReleaseKey, releaseKey } from "@/components/releases/utils";
 import { entryHrefResolver } from "@/components/releases/ViolationTable";
 import RollbackDialog from "@/components/ship/RollbackDialog";
+import { headerLabels, SortHeaderRow, useSort } from "@/components/SortableTable";
 import {
   Badge,
   Button,
@@ -20,6 +21,7 @@ import {
   PageHeader,
   Pagination,
   TableSkeleton,
+  TableSummary,
 } from "@/components/ui";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useToast } from "@/context/ToastContext";
@@ -28,6 +30,7 @@ import { crumbs } from "@/lib/crumbs";
 import { useCursorPagination, useNamespaces } from "@/lib/hooks";
 import { links } from "@/lib/links";
 import { isProductionEnvironment } from "@/lib/readiness";
+import type { SortColumn } from "@/lib/sort";
 import type {
   ConfigurationRelease,
   OverviewActiveRelease,
@@ -38,6 +41,25 @@ import { queryValue, useQueryReplace } from "@/lib/url";
 import { validateReleaseName } from "@/lib/validation";
 
 const NO_NS: NamespaceSelection = { env: "", app: "" };
+
+// Module scope so the sort controller's memos stay stable across renders. The
+// release column sorts by name then version — numeric collation puts v2 before
+// v10 — and the state column by how live the release is.
+const COLUMNS: ReadonlyArray<SortColumn<ReleaseSummary>> = [
+  { id: "release", label: "Release", value: (s) => `${s.release.name} ${s.release.version}` },
+  { id: "state", label: "State", value: (s) => (s.current ? 0 : s.previous ? 1 : 2) },
+  {
+    id: "schema",
+    label: "Schema",
+    value: (s) =>
+      s.release.schema_id ? `${s.release.schema_id}@${s.release.schema_version}` : null,
+  },
+  { id: "entries", label: "Entries", value: (s) => s.release.entries.length },
+  { id: "digest", label: "Digest", value: (s) => s.release.digest },
+  { id: "actions", label: "Actions" },
+];
+
+const PAGE_SORT_HINT = "Sorts the releases loaded on this page, not the whole history.";
 
 type PendingReleaseAction =
   | { kind: "activate"; summary: ReleaseSummary }
@@ -100,6 +122,7 @@ export default function ReleasesPage() {
   const refreshController = useRef<AbortController | null>(null);
   const linkRun = useRef(0);
   const replaceQuery = useQueryReplace("/releases");
+  const sort = useSort<ReleaseSummary>("/releases", COLUMNS);
 
   const queryTab = queryValue(router.query.tab);
   const queryApp = queryValue(router.query.app);
@@ -491,9 +514,7 @@ export default function ReleasesPage() {
               Release history and creation are scoped to one isolated environment.
             </EmptyState>
           ) : !seeded || !settled || releasesLoading ? (
-            <TableSkeleton
-              headers={["Release", "State", "Schema", "Entries", "Digest", "Actions"]}
-            />
+            <TableSkeleton headers={headerLabels(COLUMNS)} />
           ) : releases.length === 0 ? (
             <EmptyState
               icon={<Icon.release size={20} />}
@@ -507,18 +528,17 @@ export default function ReleasesPage() {
           ) : (
             <div className="table-wrap card-table">
               <table className="data">
+                <TableSummary
+                  shown={releases.length}
+                  noun="releases"
+                  filters={name ? 1 : 0}
+                  hint={sort.sort ? PAGE_SORT_HINT : undefined}
+                />
                 <thead>
-                  <tr>
-                    <th>Release</th>
-                    <th>State</th>
-                    <th>Schema</th>
-                    <th>Entries</th>
-                    <th>Digest</th>
-                    <th>Actions</th>
-                  </tr>
+                  <SortHeaderRow controller={sort} hint={PAGE_SORT_HINT} />
                 </thead>
                 <tbody>
-                  {releases.map((summary) => {
+                  {sort.apply(releases).map((summary) => {
                     const release = summary.release;
                     return (
                       <tr key={releaseKey(release)}>

@@ -2,7 +2,16 @@ import { Copy, Pencil, Trash2 } from "lucide-react";
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import { Icon } from "@/components/icons";
 import { ConfirmDialog, Modal } from "@/components/Modal";
-import { EmptyState, Field, Input, PageHeader, Pagination, TableSkeleton } from "@/components/ui";
+import { headerLabels, SortHeaderRow, useSort } from "@/components/SortableTable";
+import {
+  EmptyState,
+  Field,
+  Input,
+  PageHeader,
+  Pagination,
+  TableSkeleton,
+  TableSummary,
+} from "@/components/ui";
 import { AppSelect } from "@/components/ui/app-select";
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/context/ToastContext";
@@ -10,6 +19,7 @@ import { api, isAbortError } from "@/lib/api";
 import { formatUnixMs } from "@/lib/format";
 import { useFocusFirstInvalid } from "@/lib/forms";
 import { useCursorPagination, useFieldErrors, useLatestRequest, useNamespaces } from "@/lib/hooks";
+import type { SortColumn } from "@/lib/sort";
 import type { Namespace } from "@/lib/types";
 import { POLICY_OPERATIONS, type Policy, type PolicyRule } from "@/lib/types";
 import {
@@ -226,8 +236,20 @@ function EffectivePermissions({ draft }: { draft: Draft }) {
 
 const MAX_IDENTITY_PAGES = 10;
 
+// Module scope so the sort controller's memos stay stable across renders.
+const COLUMNS: ReadonlyArray<SortColumn<Policy>> = [
+  { id: "name", label: "Name", value: (p) => p.name },
+  { id: "subject", label: "Subject", value: (p) => p.subject },
+  { id: "allow", label: "Allow", value: (p) => p.allow?.length ?? 0 },
+  { id: "deny", label: "Deny", value: (p) => p.deny?.length ?? 0 },
+  { id: "updated", label: "Updated", value: (p) => p.updated_at_unix_ms },
+];
+
+const PAGE_SORT_HINT = "Sorts the policies loaded on this page, not every policy.";
+
 export default function PoliciesPage() {
   const toast = useToast();
+  const sort = useSort<Policy>("/policies", COLUMNS);
   const { namespaces, loading: namespacesLoading } = useNamespaces();
   const [policies, setPolicies] = useState<Policy[]>([]);
   const [loading, setLoading] = useState(true);
@@ -399,7 +421,7 @@ export default function PoliciesPage() {
       />
 
       {loading ? (
-        <TableSkeleton headers={["Name", "Subject", "Allow", "Deny", "Updated"]} />
+        <TableSkeleton headers={headerLabels(COLUMNS)} />
       ) : policies.length === 0 ? (
         <EmptyState
           icon={<Icon.policy size={20} />}
@@ -411,18 +433,16 @@ export default function PoliciesPage() {
       ) : (
         <div className="table-wrap">
           <table className="data">
+            <TableSummary
+              shown={policies.length}
+              noun="policies"
+              hint={sort.sort ? PAGE_SORT_HINT : undefined}
+            />
             <thead>
-              <tr>
-                <th>Name</th>
-                <th>Subject</th>
-                <th>Allow</th>
-                <th>Deny</th>
-                <th>Updated</th>
-                <th />
-              </tr>
+              <SortHeaderRow controller={sort} hint={PAGE_SORT_HINT} after={<th />} />
             </thead>
             <tbody>
-              {policies.map((p) => (
+              {sort.apply(policies).map((p) => (
                 <tr key={p.name}>
                   <td className="mono">{p.name}</td>
                   <td className="mono">{p.subject}</td>

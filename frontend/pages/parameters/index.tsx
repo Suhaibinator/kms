@@ -2,11 +2,19 @@ import { ChevronDown, Eye, Filter, MoreHorizontal, X } from "lucide-react";
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ActionMenu } from "@/components/applications/ActionMenu";
+import {
+  BulkActionBar,
+  BulkDeleteDialog,
+  SelectAllCell,
+  SelectRowCell,
+  useBulkSelection,
+} from "@/components/BulkSelection";
 import { Icon } from "@/components/icons";
 import { JsonEditor } from "@/components/JsonEditor";
 import { ConfirmDialog, Modal } from "@/components/Modal";
 import NamespacePicker, { type NamespaceSelection } from "@/components/NamespacePicker";
 import { ContentTypeSelect, ParameterValueInput } from "@/components/ParameterValueInput";
+import { headerLabels, SortHeaderRow, useSort } from "@/components/SortableTable";
 import {
   Badge,
   EmptyState,
@@ -15,10 +23,13 @@ import {
   PageHeader,
   Pagination,
   TableSkeleton,
+  TableSummary,
 } from "@/components/ui";
 import { Button, ButtonLink } from "@/components/ui/button";
+import { useAuth } from "@/context/AuthContext";
 import { useToast } from "@/context/ToastContext";
 import { api, isAbortError } from "@/lib/api";
+import { bulkSummary, runBulk } from "@/lib/bulk";
 import { crumbs } from "@/lib/crumbs";
 import { formatUnixMs, isEmptyJson, labelEntries } from "@/lib/format";
 import { useFocusFirstInvalid } from "@/lib/forms";
@@ -32,6 +43,8 @@ import {
 import { canonicalParameterValue } from "@/lib/json-text";
 import { links } from "@/lib/links";
 import { rememberNamespace } from "@/lib/namespace-memory";
+import { isProductionEnvironment } from "@/lib/readiness";
+import type { SortColumn } from "@/lib/sort";
 import type { Parameter } from "@/lib/types";
 import { useQueryReplace } from "@/lib/url";
 import { useParameterSchema } from "@/lib/useParameterSchema";
@@ -60,11 +73,25 @@ function requestScope(selection: NamespaceSelection, prefix: string, token: stri
   return JSON.stringify([selection.env, selection.app, prefix, token]);
 }
 
+// Module scope so the sort controller's memos stay stable across renders.
+const COLUMNS: ReadonlyArray<SortColumn<Parameter>> = [
+  { id: "key", label: "Key", value: (p) => p.key },
+  { id: "version", label: "Version", value: (p) => p.version },
+  { id: "type", label: "Type", value: (p) => p.content_type },
+  // A stack of label badges has no single value to order by.
+  { id: "labels", label: "Labels" },
+  { id: "created", label: "Created", value: (p) => p.created_at_unix_ms },
+];
+
+const PAGE_SORT_HINT = "Sorts the rows loaded on this page, not the whole namespace.";
+
 export default function ParametersPage() {
   const toast = useToast();
+  const { identity } = useAuth();
   const { namespaces, error: nsError } = useNamespaces();
   const { values: queryValues, ready: queryReady } = useQueryParams(["env", "app", "key_prefix"]);
   const replaceQuery = useQueryReplace("/parameters");
+  const sort = useSort<Parameter>("/parameters", COLUMNS);
 
   const [ns, setNs] = useState<NamespaceSelection>(NO_NS);
   const [prefixInput, setPrefixInput] = useState("");
@@ -100,6 +127,14 @@ export default function ParametersPage() {
 
   const [deleteTarget, setDeleteTarget] = useState<Parameter | null>(null);
   const [deleting, setDeleting] = useState(false);
+
+  // Bulk delete is an admin convenience; the console's only role distinction is
+  // admin vs client identity, and a client's writes depend on a policy the
+  // console cannot see, so it keeps the per-row action only.
+  const canBulkDelete = identity?.kind === "admin";
+  const [bulkOpen, setBulkOpen] = useState(false);
+  const [bulkBusy, setBulkBusy] = useState(false);
+  const [bulkDone, setBulkDone] = useState(0);
 
   // Seed the selection from deep-link query params exactly once.
   const [seeded, setSeeded] = useState(false);
@@ -313,8 +348,38 @@ export default function ParametersPage() {
   // A response has arrived for exactly this namespace/prefix/page. Gating on
   // this rather than on `loading` keeps the empty state from flashing before
   // the first request has even started.
-  const settled = loadedScope === requestScope(ns, prefix, pageToken);
+  const scope = requestScope(ns, prefix, pageToken);
+  const settled = loadedScope === scope;
   const keyLength = [...key].length;
+
+  const sortedRows = sort.apply(rows);
+  // Scoped to this exact namespace/prefix/page: any of them changing is a
+  // different list, and the ticks must not travel to it.
+  const selection = useBulkSelection(canBulkDelete ? rows.map((row) => row.key) : [], scope);
+
+  async function onBulkDelete() {
+    const targets = selection.selected;
+    if (targets.length === 0) return;
+    setBulkBusy(true);
+    setBulkDone(0);
+    try {
+      // No bulk endpoint exists: this is the row action, run once per key.
+      const result = await runBulk(
+        targets,
+        (key) => api.deleteParameter({ env: ns.env, app: ns.app, key }),
+        setBulkDone,
+      );
+      const summary = bulkSummary(result, "Deleted", "parameters");
+      if (summary.ok) toast.success(summary.title, summary.detail);
+      else toast.error(new Error(summary.detail), summary.title);
+      setBulkOpen(false);
+      selection.clear();
+      const remaining = await load(pageToken, ns, prefix);
+      if (remaining !== null && remaining.length === 0 && paging.hasPrevious) paging.previous();
+    } finally {
+      setBulkBusy(false);
+    }
+  }
 
   return (
     <>
@@ -361,13 +426,13 @@ export default function ParametersPage() {
       </form>
 
       {awaitingDeepLink ? (
-        <TableSkeleton headers={["Key", "Version", "Type", "Labels", "Created"]} />
+        <TableSkeleton headers={headerLabels(COLUMNS)} />
       ) : !hasNs ? (
         <EmptyState icon={<Icon.namespace size={20} />} title="Choose an environment">
           Pick an application and environment above to list its parameters.
         </EmptyState>
       ) : !settled || loading ? (
-        <TableSkeleton headers={["Key", "Version", "Type", "Labels", "Created"]} />
+        <TableSkeleton headers={headerLabels(COLUMNS)} />
       ) : rows.length === 0 ? (
         <EmptyState
           icon={<Icon.parameter size={20} />}
@@ -390,19 +455,33 @@ export default function ParametersPage() {
       ) : (
         <div className="table-wrap card-table">
           <table className="data">
+            <TableSummary
+              shown={sortedRows.length}
+              noun="parameters"
+              filters={prefix ? 1 : 0}
+              hint={sort.sort ? PAGE_SORT_HINT : undefined}
+            />
             <thead>
-              <tr>
-                <th>Key</th>
-                <th>Version</th>
-                <th>Type</th>
-                <th>Labels</th>
-                <th>Created</th>
-                <th />
-              </tr>
+              <SortHeaderRow
+                controller={sort}
+                hint={PAGE_SORT_HINT}
+                before={
+                  canBulkDelete ? (
+                    <SelectAllCell
+                      selection={selection}
+                      label="Select all parameters on this page"
+                    />
+                  ) : null
+                }
+                after={<th />}
+              />
             </thead>
             <tbody>
-              {rows.map((p) => (
-                <tr key={p.key}>
+              {sortedRows.map((p) => (
+                <tr key={p.key} data-state={selection.has(p.key) ? "selected" : undefined}>
+                  {canBulkDelete ? (
+                    <SelectRowCell selection={selection} id={p.key} label={`Select ${p.key}`} />
+                  ) : null}
                   <td data-label="Key">
                     <Link className="cell-path" href={links.parameterDetail(p)}>
                       {p.key}
@@ -459,6 +538,16 @@ export default function ParametersPage() {
           </table>
         </div>
       )}
+
+      {canBulkDelete ? (
+        <BulkActionBar
+          selection={selection}
+          noun="parameters"
+          actionLabel="Delete selected"
+          busy={bulkBusy}
+          onAction={() => setBulkOpen(true)}
+        />
+      ) : null}
 
       <Pagination
         hasNext={paging.hasNext}
@@ -601,6 +690,21 @@ export default function ParametersPage() {
         busy={deleting}
         onConfirm={onDelete}
         onCancel={() => setDeleteTarget(null)}
+      />
+
+      <BulkDeleteDialog
+        open={bulkOpen}
+        names={selection.selected}
+        noun="parameters"
+        verb="Delete"
+        verbing="Deleting"
+        scope={hasNs ? `${ns.env}/${ns.app}` : undefined}
+        production={isProductionEnvironment(ns.env)}
+        consequence="Every version of each one goes with it, and this cannot be undone."
+        busy={bulkBusy}
+        completed={bulkDone}
+        onConfirm={() => void onBulkDelete()}
+        onCancel={() => setBulkOpen(false)}
       />
     </>
   );

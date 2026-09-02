@@ -23,6 +23,7 @@ import {
   PALETTE_RESULT_LIMIT,
   type PaletteItem,
   rankPalette,
+  SHORTCUTS_ACTION_ID,
 } from "@/lib/palette";
 import type { Application } from "@/lib/types";
 import { cn } from "@/lib/utils";
@@ -67,7 +68,7 @@ function useApplications(enabled: boolean): Application[] {
   return applications;
 }
 
-function PaletteBody({ onClose }: { onClose: () => void }) {
+function PaletteBody({ onClose, onShortcuts }: { onClose: () => void; onShortcuts?: () => void }) {
   const router = useRouter();
   const { identity } = useAuth();
   const isAdmin = identity?.kind === "admin";
@@ -112,9 +113,14 @@ function PaletteBody({ onClose }: { onClose: () => void }) {
   const navigate = useCallback(
     (item: PaletteItem) => {
       onClose();
+      // The shortcut sheet is a dialog the shell owns, not a route.
+      if (item.id === SHORTCUTS_ACTION_ID) {
+        onShortcuts?.();
+        return;
+      }
       void router.push(item.href);
     },
-    [onClose, router],
+    [onClose, onShortcuts, router],
   );
 
   const onKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
@@ -261,7 +267,7 @@ function PaletteBody({ onClose }: { onClose: () => void }) {
  * The body mounts only while open, so the index is built (and applications
  * fetched) on first use rather than on every page.
  */
-export default function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
+export default function CommandPalette({ open, onOpenChange, onShortcuts }: CommandPaletteProps) {
   const close = useCallback(() => onOpenChange(false), [onOpenChange]);
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -271,7 +277,7 @@ export default function CommandPalette({ open, onOpenChange }: CommandPalettePro
         aria-describedby={undefined}
       >
         <DialogTitle className="sr-only">Command palette</DialogTitle>
-        {open ? <PaletteBody onClose={close} /> : null}
+        {open ? <PaletteBody onClose={close} onShortcuts={onShortcuts} /> : null}
       </DialogContent>
     </Dialog>
   );

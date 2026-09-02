@@ -2,13 +2,22 @@ import { RefreshCw } from "lucide-react";
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Icon } from "@/components/icons";
+import { headerLabels, SortHeaderRow, useSort } from "@/components/SortableTable";
 import { TransportBadge } from "@/components/TransportBadge";
-import { Badge, EmptyState, PageHeader, StatSkeleton, TableSkeleton } from "@/components/ui";
+import {
+  Badge,
+  EmptyState,
+  PageHeader,
+  StatSkeleton,
+  TableSkeleton,
+  TableSummary,
+} from "@/components/ui";
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/context/ToastContext";
 import { api, isAbortError } from "@/lib/api";
 import { formatRelative, formatUnixMs } from "@/lib/format";
 import { links } from "@/lib/links";
+import type { SortColumn } from "@/lib/sort";
 import type { NamespaceRef, Subscriber } from "@/lib/types";
 
 const REFRESH_MS = 5000;
@@ -16,6 +25,19 @@ const REFRESH_MS = 5000;
 function formatNamespace(ns: NamespaceRef): string {
   return `${ns.env}/${ns.app}`;
 }
+
+// Module scope so the sort controller's memos stay stable across renders. The
+// order chosen here applies inside every namespace's table at once.
+const COLUMNS: ReadonlyArray<SortColumn<Subscriber>> = [
+  { id: "client", label: "Client", value: (s) => s.client_name },
+  { id: "identity", label: "Identity", value: (s) => s.identity },
+  // One subscriber can watch several namespaces; there is no single value.
+  { id: "namespaces", label: "Namespaces" },
+  { id: "remote", label: "Remote address", value: (s) => s.remote_addr },
+  { id: "connected", label: "Connected", value: (s) => s.connected_at_unix_ms },
+  { id: "heartbeat", label: "Last heartbeat", value: (s) => s.last_heartbeat_unix_ms },
+  { id: "revision", label: "Applied revision", value: (s) => s.last_acked_revision },
+];
 
 // The namespace a subscriber is grouped under: its first watched namespace. A
 // client subscribes namespace-wide, so this is stable.
@@ -26,6 +48,7 @@ function groupKey(s: Subscriber): string {
 
 export default function SubscribersPage() {
   const toast = useToast();
+  const sort = useSort<Subscriber>("/subscribers", COLUMNS);
   const [subscribers, setSubscribers] = useState<Subscriber[]>([]);
   const [currentRevision, setCurrentRevision] = useState(0);
   const [initialLoading, setInitialLoading] = useState(true);
@@ -175,18 +198,7 @@ export default function SubscribersPage() {
       </div>
 
       {initialLoading ? (
-        <TableSkeleton
-          headers={[
-            "Client",
-            "Identity",
-            "Namespaces",
-            "Remote address",
-            "Connected",
-            "Last heartbeat",
-            "Applied revision",
-          ]}
-          rows={4}
-        />
+        <TableSkeleton headers={headerLabels(COLUMNS)} rows={4} />
       ) : loadError && subscribers.length === 0 ? (
         <EmptyState
           icon={<Icon.subscribers size={20} />}
@@ -213,19 +225,13 @@ export default function SubscribersPage() {
             </div>
             <div className="table-wrap">
               <table className="data">
+                {/* Every live subscriber is loaded at once, so "of" is the real total. */}
+                <TableSummary shown={list.length} noun="subscribers" />
                 <thead>
-                  <tr>
-                    <th>Client</th>
-                    <th>Identity</th>
-                    <th>Namespaces</th>
-                    <th>Remote address</th>
-                    <th>Connected</th>
-                    <th>Last heartbeat</th>
-                    <th>Applied revision</th>
-                  </tr>
+                  <SortHeaderRow controller={sort} />
                 </thead>
                 <tbody>
-                  {list.map((s) => {
+                  {sort.apply(list).map((s) => {
                     const behind = currentRevision - s.last_acked_revision;
                     const stale = behind > 0;
                     return (

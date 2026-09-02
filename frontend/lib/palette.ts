@@ -71,6 +71,9 @@ export const PALETTE_PAGES: ReadonlyArray<{
 
 export const NEW_APPLICATION_HREF = "/applications?new=1";
 
+/** The one palette entry that opens a dialog instead of navigating. */
+export const SHORTCUTS_ACTION_ID = "action:shortcuts";
+
 /** How many ranked matches the palette renders before asking for a narrower query. */
 export const PALETTE_RESULT_LIMIT = 12;
 
@@ -148,6 +151,16 @@ export function buildPaletteIndex({
     href: NEW_APPLICATION_HREF,
     keywords: ["create", "add", "app", "wizard"],
     adminOnly: true,
+  });
+  // Not a route: CommandPalette recognises this id and opens the sheet. The
+  // href is the fragment the sheet would live at if it ever became one.
+  items.push({
+    id: SHORTCUTS_ACTION_ID,
+    group: "Actions",
+    title: "Keyboard shortcuts",
+    subtitle: "Every shortcut the console answers to",
+    href: "#keyboard-shortcuts",
+    keywords: ["keys", "hotkeys", "help", "bindings"],
   });
   for (const ns of namespaces) {
     if (!byName.has(ns.app)) continue;

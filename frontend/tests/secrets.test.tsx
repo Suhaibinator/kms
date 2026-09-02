@@ -22,6 +22,10 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("next/router", () => ({ useRouter: () => mocks.router }));
 vi.mock("@/context/ToastContext", () => ({ useToast: () => mocks.toast }));
+// The page asks who is signed in before it offers bulk delete.
+vi.mock("@/context/AuthContext", () => ({
+  useAuth: () => ({ identity: { name: "root", kind: "admin", namespace: null } }),
+}));
 
 const NAMESPACE: Namespace = {
   env: "prod",
@@ -81,6 +85,13 @@ async function chooseNamespace(): Promise<void> {
   await chooseSelectOption(app, NAMESPACE.app);
   const environment = screen.getByLabelText("Environment");
   await chooseSelectOption(environment, NAMESPACE.env);
+}
+
+/** The Key cell of every rendered row, in the order they are rendered. */
+function keyColumn(): string[] {
+  return [...document.querySelectorAll('table.data tbody td[data-label="Key"]')].map(
+    (cell) => cell.textContent ?? "",
+  );
 }
 
 /** Renders the secret detail page and opens its new-version form. */
@@ -187,6 +198,38 @@ describe("secret list filter validation", () => {
 
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Filter" })).toBeEnabled();
+  });
+
+  it("reorders the loaded page from a column header and records the sort in the URL", async () => {
+    const older: SecretMetadata = { ...SECRET, key: "zeta", updated_at_unix_ms: 9 };
+    mocks.router.query = { env: NAMESPACE.env, app: NAMESPACE.app };
+    vi.spyOn(api, "listSecrets").mockResolvedValue({
+      secrets: [older, SECRET],
+      next_page_token: "",
+    });
+    const { rerender } = render(<SecretsPage />);
+    expect(await screen.findByText("zeta")).toBeVisible();
+    expect(keyColumn()).toEqual(["zeta", "api-key"]);
+    expect(screen.getByTestId("table-summary")).toHaveTextContent("Showing 2 of 2 secrets");
+
+    fireEvent.click(screen.getByRole("button", { name: "Key" }));
+    expect(mocks.router.replace).toHaveBeenLastCalledWith(
+      {
+        pathname: "/secrets",
+        query: { env: NAMESPACE.env, app: NAMESPACE.app, sort: "key", dir: "asc" },
+      },
+      undefined,
+      { shallow: true, scroll: false },
+    );
+
+    // The URL is the source of truth, so land the router on what the click asked for.
+    mocks.router.query = { env: NAMESPACE.env, app: NAMESPACE.app, sort: "key", dir: "asc" };
+    rerender(<SecretsPage />);
+    expect(keyColumn()).toEqual(["api-key", "zeta"]);
+    expect(screen.getByRole("button", { name: "Key" }).closest("th")).toHaveAttribute(
+      "aria-sort",
+      "ascending",
+    );
   });
 });
 

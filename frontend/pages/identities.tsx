@@ -1,10 +1,18 @@
 import { Check, Download, Eye, EyeOff } from "lucide-react";
 import Link from "next/link";
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
+import {
+  BulkActionBar,
+  BulkDeleteDialog,
+  SelectAllCell,
+  SelectRowCell,
+  useBulkSelection,
+} from "@/components/BulkSelection";
 import CopyButton from "@/components/CopyButton";
 import { Icon } from "@/components/icons";
 import { ConfirmDialog, Modal } from "@/components/Modal";
 import NamespacePicker, { type NamespaceSelection } from "@/components/NamespacePicker";
+import { headerLabels, SortHeaderRow, useSort } from "@/components/SortableTable";
 import {
   Badge,
   Checkbox,
@@ -15,12 +23,15 @@ import {
   Pagination,
   Spinner,
   TableSkeleton,
+  TableSummary,
 } from "@/components/ui";
 import { AppSelect } from "@/components/ui/app-select";
 import { Button, ButtonLink } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { useAuth } from "@/context/AuthContext";
 import { useToast } from "@/context/ToastContext";
 import { ApiError, api, isAbortError } from "@/lib/api";
+import { bulkSummary, runBulk } from "@/lib/bulk";
 import { displayNamespace, formatUnixMs } from "@/lib/format";
 import { useFocusFirstInvalid } from "@/lib/forms";
 import {
@@ -35,6 +46,7 @@ import {
   unavailableMethodReason,
   validCertCount,
 } from "@/lib/identity-methods";
+import type { SortColumn } from "@/lib/sort";
 import type { AuthMethod, CertBundle, Identity, IdentityCert, IdentityKind } from "@/lib/types";
 import {
   firstError,
@@ -52,6 +64,23 @@ const NO_NS: NamespaceSelection = { env: "", app: "" };
 const MASKED_TOKEN = "•".repeat(24);
 /** Enough of a certificate serial to match a row against the revoke confirmation. */
 const SERIAL_PREVIEW_LENGTH = 12;
+
+// Module scope so the sort controller's memos stay stable across renders.
+const COLUMNS: ReadonlyArray<SortColumn<Identity>> = [
+  { id: "name", label: "Name", value: (identity) => identity.name },
+  { id: "kind", label: "Kind", value: (identity) => identity.kind },
+  {
+    id: "namespace",
+    label: "Namespace",
+    value: (identity) => (identity.namespace ? displayNamespace(identity.namespace) : null),
+  },
+  // A token badge and a cert count are two different things; neither orders the other.
+  { id: "credentials", label: "Credentials" },
+  { id: "status", label: "Status", value: (identity) => Boolean(identity.disabled) },
+  { id: "created", label: "Created", value: (identity) => identity.created_at_unix_ms },
+];
+
+const PAGE_SORT_HINT = "Sorts the identities loaded on this page, not every identity.";
 
 function shortSerial(serial: string): string {
   return serial.length > SERIAL_PREVIEW_LENGTH
@@ -202,6 +231,8 @@ function TokenCredentialRoles({ compact = false }: { compact?: boolean }) {
 
 export default function IdentitiesPage() {
   const toast = useToast();
+  const { identity: viewer } = useAuth();
+  const sort = useSort<Identity>("/identities", COLUMNS);
   const {
     namespaces,
     loading: namespacesLoading,
@@ -253,6 +284,13 @@ export default function IdentitiesPage() {
   const [rotateTarget, setRotateTarget] = useState<string | null>(null);
   const [revokeTarget, setRevokeTarget] = useState<string | null>(null);
   const [actionBusy, setActionBusy] = useState(false);
+
+  // Bulk revoke follows the row action: only an admin identity reaches this page
+  // in the first place, and only an active identity has anything to revoke.
+  const canBulkRevoke = viewer?.kind === "admin";
+  const [bulkOpen, setBulkOpen] = useState(false);
+  const [bulkBusy, setBulkBusy] = useState(false);
+  const [bulkDone, setBulkDone] = useState(0);
 
   const [caBusy, setCaBusy] = useState(false);
 
@@ -584,6 +622,26 @@ export default function IdentitiesPage() {
     }
   }
 
+  async function onBulkRevoke() {
+    const targets = selection.selected;
+    if (targets.length === 0) return;
+    setBulkBusy(true);
+    setBulkDone(0);
+    try {
+      // No bulk endpoint exists: this is the row's Revoke, once per identity.
+      const result = await runBulk(targets, (name) => api.revokeIdentity(name), setBulkDone);
+      const summary = bulkSummary(result, "Revoked", "identities");
+      if (summary.ok) toast.success(summary.title, summary.detail);
+      else toast.error(new Error(summary.detail), summary.title);
+      setBulkOpen(false);
+      selection.clear();
+      const remaining = await load(paging.pageToken);
+      if (remaining !== null && remaining.length === 0 && paging.hasPrevious) paging.previous();
+    } finally {
+      setBulkBusy(false);
+    }
+  }
+
   async function downloadCa() {
     setCaBusy(true);
     try {
@@ -605,6 +663,13 @@ export default function IdentitiesPage() {
     paging.reset();
     await load("");
   }
+
+  const sortedIdentities = sort.apply(identities);
+  // A revoked identity has nothing left to revoke, so it is never selectable.
+  const selection = useBulkSelection(
+    canBulkRevoke ? identities.filter((row) => !row.disabled).map((row) => row.name) : [],
+    paging.pageToken,
+  );
 
   return (
     <>
@@ -650,9 +715,7 @@ export default function IdentitiesPage() {
       </details>
 
       {loading ? (
-        <TableSkeleton
-          headers={["Name", "Kind", "Namespace", "Credentials", "Status", "Created"]}
-        />
+        <TableSkeleton headers={headerLabels(COLUMNS)} />
       ) : identities.length === 0 ? (
         <EmptyState
           icon={<Icon.identity size={20} />}
@@ -664,19 +727,28 @@ export default function IdentitiesPage() {
       ) : (
         <div className="table-wrap card-table">
           <table className="data">
+            <TableSummary
+              shown={sortedIdentities.length}
+              noun="identities"
+              hint={sort.sort ? PAGE_SORT_HINT : undefined}
+            />
             <thead>
-              <tr>
-                <th>Name</th>
-                <th>Kind</th>
-                <th>Namespace</th>
-                <th>Credentials</th>
-                <th>Status</th>
-                <th>Created</th>
-                <th />
-              </tr>
+              <SortHeaderRow
+                controller={sort}
+                hint={PAGE_SORT_HINT}
+                before={
+                  canBulkRevoke ? (
+                    <SelectAllCell
+                      selection={selection}
+                      label="Select all active identities on this page"
+                    />
+                  ) : null
+                }
+                after={<th />}
+              />
             </thead>
             <tbody>
-              {identities.map((id) => {
+              {sortedIdentities.map((id) => {
                 const certCount = validCertCount(id);
                 const tokenAvailability = identityMethodAvailability(
                   id,
@@ -691,8 +763,17 @@ export default function IdentitiesPage() {
                   <tr
                     key={id.name}
                     data-identity={id.name}
+                    data-state={selection.has(id.name) ? "selected" : undefined}
                     aria-current={linkedName === id.name ? "true" : undefined}
                   >
+                    {canBulkRevoke ? (
+                      <SelectRowCell
+                        selection={selection}
+                        id={id.name}
+                        label={`Select ${id.name}`}
+                        disabled={id.disabled}
+                      />
+                    ) : null}
                     <td className="mono" data-label="Name">
                       {id.name}
                     </td>
@@ -779,6 +860,16 @@ export default function IdentitiesPage() {
         </div>
       )}
 
+      {canBulkRevoke ? (
+        <BulkActionBar
+          selection={selection}
+          noun="identities"
+          actionLabel="Revoke selected"
+          busy={bulkBusy}
+          onAction={() => setBulkOpen(true)}
+        />
+      ) : null}
+
       <Pagination
         hasNext={paging.hasNext}
         onNext={paging.next}
@@ -787,6 +878,19 @@ export default function IdentitiesPage() {
         onReset={paging.reset}
         showReset={paging.hasPrevious}
         page={paging.page}
+      />
+
+      <BulkDeleteDialog
+        open={bulkOpen}
+        names={selection.selected}
+        noun="identities"
+        verb="Revoke"
+        verbing="Revoking"
+        consequence="Their tokens and every certificate they hold stop working on the next RPC; open watch streams close on the next heartbeat."
+        busy={bulkBusy}
+        completed={bulkDone}
+        onConfirm={() => void onBulkRevoke()}
+        onCancel={() => setBulkOpen(false)}
       />
 
       {/* Connect application */}

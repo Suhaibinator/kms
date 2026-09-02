@@ -174,6 +174,46 @@ describe("ReleasesPage", () => {
     mocks.subscriberStream.mockRejectedValue(new ApiError("unimplemented", "no stream", 404));
   });
 
+  it("reorders the loaded page from a column header and records the sort in the URL", async () => {
+    mocks.query = { app: "payments", env: "prod" };
+    mocks.listReleases.mockResolvedValue({
+      releases: [
+        { release: releaseV2, current: true, previous: false, activation_revision: 8 },
+        { release: releaseV1, current: false, previous: true, activation_revision: 7 },
+      ],
+      next_page_token: "",
+    });
+    // ReleaseIdent opens each cell with its own "release" kind label.
+    const versions = () =>
+      [...document.querySelectorAll('table.data tbody td[data-label="Release"]')].map(
+        (cell) => cell.textContent ?? "",
+      );
+
+    const { rerender } = render(<ReleasesPage />);
+    expect((await screen.findAllByText("runtime@2"))[0]).toBeVisible();
+    expect(versions()).toEqual(["releaseruntime@2", "releaseruntime@1"]);
+    expect(screen.getByTestId("table-summary")).toHaveTextContent("Showing 2 of 2 releases");
+
+    fireEvent.click(screen.getByRole("button", { name: "Release" }));
+    expect(mocks.replace).toHaveBeenLastCalledWith(
+      {
+        pathname: "/releases",
+        query: { app: "payments", env: "prod", sort: "release", dir: "asc" },
+      },
+      undefined,
+      { shallow: true, scroll: false },
+    );
+
+    // The URL is the source of truth, so land the router on what the click asked for.
+    mocks.query = { app: "payments", env: "prod", sort: "release", dir: "asc" };
+    rerender(<ReleasesPage />);
+    expect(versions()).toEqual(["releaseruntime@1", "releaseruntime@2"]);
+    expect(screen.getByRole("button", { name: "Release" }).closest("th")).toHaveAttribute(
+      "aria-sort",
+      "ascending",
+    );
+  });
+
   it("loads the URL-selected schema tab lazily and keeps schema JSON out of the table", async () => {
     mocks.query = { tab: "schemas" };
     mocks.listSchemas.mockResolvedValue({

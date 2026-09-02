@@ -83,6 +83,8 @@ export interface ConnectSdkPanelProps {
 export interface CommandPaletteProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  /** Runs the "Keyboard shortcuts" action, which opens a sheet rather than a route. */
+  onShortcuts?: () => void;
 }
 
 // --- contract editor helpers ---------------------------------------------------
