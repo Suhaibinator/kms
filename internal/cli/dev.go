@@ -302,20 +302,10 @@ func dirIsEmpty(dir string) (bool, error) {
 	return len(entries) == 0, nil
 }
 
-// removeDevStore deletes a temporary store, retrying briefly: on Windows a
-// database file can stay locked for a moment after the last handle is closed,
-// and a demo that leaves its master key behind in the temp directory is not
-// temporary in the way the banner promised.
-func removeDevStore(dir string) error {
-	var err error
-	for attempt := range 5 {
-		if err = os.RemoveAll(dir); err == nil {
-			return nil
-		}
-		time.Sleep(time.Duration(attempt+1) * 50 * time.Millisecond)
-	}
-	return err
-}
+// removeDevStore deletes a temporary store. A demo that leaves its master key
+// behind in the temp directory is not temporary in the way the banner
+// promised, so the delete is worth retrying.
+func removeDevStore(dir string) error { return removeWithRetry(dir) }
 
 // wipeDirContents empties a marked dev store without removing the directory
 // itself, which the operator may have created (and may have opened a shell in).
@@ -325,11 +315,25 @@ func wipeDirContents(dir string) error {
 		return err
 	}
 	for _, entry := range entries {
-		if err := os.RemoveAll(filepath.Join(dir, entry.Name())); err != nil {
+		if err := removeWithRetry(filepath.Join(dir, entry.Name())); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// removeWithRetry deletes a path, retrying briefly: on Windows a database file
+// can stay locked for a moment after the last handle is closed, and both
+// callers run immediately after a server released one.
+func removeWithRetry(path string) error {
+	var err error
+	for attempt := range 5 {
+		if err = os.RemoveAll(path); err == nil {
+			return nil
+		}
+		time.Sleep(time.Duration(attempt+1) * 50 * time.Millisecond)
+	}
+	return err
 }
 
 // devFacts is everything the banner and the JSON document report. The two
