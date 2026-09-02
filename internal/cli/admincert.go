@@ -5,7 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
-	"text/tabwriter"
+	"strings"
 	"time"
 
 	kmsv1 "github.com/Suhaibinator/kms/gen/kmsv1"
@@ -82,8 +82,7 @@ func (c *CLI) adminCertName(action string) (string, bool) {
 		_, _ = fmt.Fprintf(c.Stderr, "error: admin-cert %s requires a NAME argument\n", action)
 		return "", false
 	}
-	if len(pos) > 1 {
-		_, _ = fmt.Fprintf(c.Stderr, "error: unexpected argument %q (boolean flags take the form --flag=false)\n", pos[1])
+	if !c.rejectExtraPositionals(1) {
 		return "", false
 	}
 	return pos[0], true
@@ -155,34 +154,34 @@ func (c *CLI) cmdAdminCertIssue(args []string) int {
 	}
 	cfg, prov, _, err := r.resolve()
 	if err != nil {
-		return c.fail("%v", err)
+		return c.failErr("", err)
 	}
 	if err := c.requireSQLitePath(cfg); err != nil {
-		return c.fail("%v", err)
+		return c.failUsage("%v", err)
 	}
 	if *out == "" {
-		return c.fail("--out is required: the admin private key is written only to an owner-only file, never to stdout")
+		return c.failUsage("--out is required: the admin private key is written only to an owner-only file, never to stdout")
 	}
 	ttlSeconds, err := parseTTLSeconds(*ttl)
 	if err != nil {
-		return c.fail("%v", err)
+		return c.failUsage("%v", err)
 	}
 	ctx := context.Background()
 
 	store, err := storage.Open(cfg.Storage.SQLitePath)
 	if err != nil {
-		return c.fail("opening database: %v", err)
+		return c.failErr("opening database", err)
 	}
 	defer func() { _ = store.Close() }()
 
 	// Validate the target before anything is prompted, unsealed, or reserved: a
 	// refusal must leave no key-file placeholders and no passphrase prompt.
 	if _, err := c.requireAdminTarget(ctx, store, name, true); err != nil {
-		return c.fail("%v", err)
+		return c.failErr("", err)
 	}
 	svc, closeCA, err := c.requireLocalCA(ctx, store, cfg, prov)
 	if err != nil {
-		return c.fail("%v", err)
+		return c.failErr("", err)
 	}
 	defer closeCA()
 
@@ -194,7 +193,7 @@ func (c *CLI) cmdAdminCertIssue(args []string) int {
 		return c.publishAdminCert(ctx, svc, output, name, bundle)
 	})
 	if err != nil {
-		return c.fail("%v", err)
+		return c.failErr("", err)
 	}
 	return 0
 }
@@ -207,6 +206,9 @@ func (c *CLI) cmdAdminCertIssue(args []string) int {
 // certificate, and a failure before the files are fully written revokes the
 // serial rather than leaving a valid certificate whose key nobody holds.
 func (c *CLI) publishAdminCert(ctx context.Context, svc *core.Service, output *reservedCertBundle, name string, bundle *core.CertBundle) error {
+	if c.jsonOutput() {
+		return c.publishAdminCertJSON(ctx, svc, output, name, bundle)
+	}
 	if err := c.writeCertBundleToOutput(output, toProtoCertBundle(bundle)); err != nil {
 		return c.orphanedAdminCert(ctx, svc, output, name, bundle.Serial, err)
 	}
@@ -218,6 +220,42 @@ func (c *CLI) publishAdminCert(ctx context.Context, svc *core.Service, output *r
 		return c.orphanedAdminCert(ctx, svc, output, name, bundle.Serial, err)
 	}
 	return nil
+}
+
+// publishAdminCertJSON is the JSON half of publishAdminCert: the credential
+// files are written by publishAdminCertFiles and stdout receives one object
+// naming them. Every failure still routes through orphanedAdminCert, so an
+// unusable certificate is revoked here too.
+func (c *CLI) publishAdminCertJSON(ctx context.Context, svc *core.Service, output *reservedCertBundle, name string, bundle *core.CertBundle) error {
+	cert, err := c.publishAdminCertFiles(ctx, svc, output, name, bundle)
+	if err != nil {
+		return err
+	}
+	if err := writeJSON(c.Stdout, issuedCertJSON{Name: name, Serial: bundle.Serial, Cert: cert}); err != nil {
+		return c.orphanedAdminCert(ctx, svc, output, name, bundle.Serial, fmt.Errorf("writing certificate output: %w", err))
+	}
+	return nil
+}
+
+// publishAdminCertFiles writes the credential files exactly as in table mode
+// (the private key never enters a document) and moves the status line and the
+// CLI/browser guidance to stderr, leaving stdout to the caller's document. The
+// one-time-key warning is not an info line: --quiet must not hide that the key
+// on disk is the only copy. Failures are already wrapped by orphanedAdminCert.
+func (c *CLI) publishAdminCertFiles(ctx context.Context, svc *core.Service, output *reservedCertBundle, name string, bundle *core.CertBundle) (*certFilesJSON, error) {
+	cert, err := writeCertBundleFiles(output, toProtoCertBundle(bundle))
+	if err != nil {
+		return nil, c.orphanedAdminCert(ctx, svc, output, name, bundle.Serial, err)
+	}
+	c.info("Issued admin client certificate for identity %q: wrote %s and %s (serial %s, expires %s).",
+		name, output.certPath, output.keyPath, bundle.Serial, bundle.NotAfter.UTC().Format(time.RFC3339))
+	if _, err := fmt.Fprintln(c.Stderr, "WARNING: the private key is written once and is never stored server-side."); err != nil {
+		return nil, c.orphanedAdminCert(ctx, svc, output, name, bundle.Serial, fmt.Errorf("writing certificate output: %w", err))
+	}
+	if err := c.writeAdminCertNextSteps(output, name, bundle.Serial); err != nil {
+		return nil, c.orphanedAdminCert(ctx, svc, output, name, bundle.Serial, err)
+	}
+	return cert, nil
 }
 
 // orphanedAdminCert turns a publish failure into an actionable error. When the
@@ -266,7 +304,7 @@ func (c *CLI) writeAdminCertNextSteps(output *reservedCertBundle, name, serial s
 		return nil
 	}
 	p12Path := filepath.Join(filepath.Dir(output.certPath), name+".p12")
-	if _, err := fmt.Fprintf(c.Stdout, `
+	guidance := fmt.Sprintf(`
 Admin client credentials:
   client certificate: %[1]s
   client private key: %[2]s
@@ -290,7 +328,14 @@ Next steps:
      the admin bearer token.
   4. Revoke this certificate later with:
        parameter-store admin-cert revoke %[3]s --serial %[4]s
-`, output.certPath, output.keyPath, name, serial, p12Path); err != nil {
+`, output.certPath, output.keyPath, name, serial, p12Path)
+	// JSON mode keeps stdout to the document alone; the guidance is advice, so
+	// it goes through info and --quiet may drop it.
+	if c.jsonOutput() {
+		c.info("%s", strings.TrimRight(guidance, "\n"))
+		return nil
+	}
+	if _, err := fmt.Fprint(c.Stdout, guidance); err != nil {
 		return fmt.Errorf("writing certificate guidance: %w", err)
 	}
 	return nil
@@ -313,30 +358,40 @@ func (c *CLI) cmdAdminCertRevoke(args []string) int {
 	}
 	cfg, _, _, err := r.resolve()
 	if err != nil {
-		return c.fail("%v", err)
+		return c.failErr("", err)
 	}
 	if err := c.requireSQLitePath(cfg); err != nil {
-		return c.fail("%v", err)
+		return c.failUsage("%v", err)
 	}
 	if *serial == "" {
-		return c.fail("--serial is required")
+		return c.failUsage("--serial is required")
+	}
+	// Revocation is immediate and irreversible for that credential, so the
+	// operator retypes the admin it belongs to before the database is opened.
+	if ok, code := c.confirmDestructive("revoke admin certificate "+*serial+" of identity", name); !ok {
+		return code
 	}
 	ctx := context.Background()
 
 	store, err := storage.Open(cfg.Storage.SQLitePath)
 	if err != nil {
-		return c.fail("opening database: %v", err)
+		return c.failErr("opening database", err)
 	}
 	defer func() { _ = store.Close() }()
 
 	// A disabled admin's certificates stay revocable; only the kind is checked,
 	// for symmetry with issue.
 	if _, err := c.requireAdminTarget(ctx, store, name, false); err != nil {
-		return c.fail("%v", err)
+		return c.failErr("", err)
 	}
 	svc := core.New(store, c.quietLogger(), Version)
 	if err := svc.RevokeIdentityCertificate(ctx, localAdminPrincipal(), name, *serial); err != nil {
-		return c.fail("revoking certificate: %v", err)
+		return c.failErr("revoking certificate", err)
+	}
+	if c.jsonOutput() {
+		c.info("Revoked certificate %s for admin identity %q. It stops authenticating on the next request; a running server sees the change immediately.",
+			*serial, name)
+		return c.printJSON(revokedCertJSON{Name: name, Serial: *serial, Revoked: true})
 	}
 	_, _ = fmt.Fprintf(c.Stdout,
 		"Revoked certificate %s for admin identity %q. It stops authenticating on the next request; a running server sees the change immediately.\n",
@@ -360,37 +415,61 @@ func (c *CLI) cmdAdminCertList(args []string) int {
 	}
 	cfg, _, _, err := r.resolve()
 	if err != nil {
-		return c.fail("%v", err)
+		return c.failErr("", err)
 	}
 	if err := c.requireSQLitePath(cfg); err != nil {
-		return c.fail("%v", err)
+		return c.failUsage("%v", err)
 	}
 	ctx := context.Background()
 
 	store, err := storage.Open(cfg.Storage.SQLitePath)
 	if err != nil {
-		return c.fail("opening database: %v", err)
+		return c.failErr("opening database", err)
 	}
 	defer func() { _ = store.Close() }()
 
 	if _, err := c.requireAdminTarget(ctx, store, name, false); err != nil {
-		return c.fail("%v", err)
+		return c.failErr("", err)
 	}
 	certs, err := store.ListIdentityCerts(ctx, name)
 	if err != nil {
-		return c.fail("listing certificates: %v", err)
+		return c.failErr("listing certificates", err)
 	}
 
 	now := time.Now()
-	tw := tabwriter.NewWriter(c.Stdout, 0, 4, 2, ' ', 0)
-	_, _ = fmt.Fprintln(tw, "SERIAL\tFINGERPRINT\tSTATE\tEXPIRES\tISSUED")
-	for _, cert := range certs {
-		_, _ = fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n",
-			cert.Serial, cert.Fingerprint, certState(cert, now),
-			formatCertTime(cert.NotAfter), formatCertTime(cert.CreatedAt))
+	if c.jsonOutput() {
+		items := make([]adminCertJSON, 0, len(certs))
+		for _, cert := range certs {
+			items = append(items, adminCertJSON{
+				Serial:      cert.Serial,
+				Fingerprint: cert.Fingerprint,
+				State:       certState(cert, now),
+				ExpiresAt:   jsonTimeOf(cert.NotAfter),
+				IssuedAt:    jsonTimeOf(cert.CreatedAt),
+			})
+		}
+		return c.printList(items, "")
 	}
-	_ = tw.Flush()
+	rows := make([][]string, 0, len(certs))
+	for _, cert := range certs {
+		rows = append(rows, []string{
+			cert.Serial, cert.Fingerprint, certState(cert, now),
+			formatCertTime(cert.NotAfter), formatCertTime(cert.CreatedAt),
+		})
+	}
+	c.printTable([]string{"SERIAL", "FINGERPRINT", "STATE", "EXPIRES", "ISSUED"}, rows)
 	return 0
+}
+
+// adminCertJSON is the JSON view of one admin client certificate: every column
+// the table shows, with the two timestamps in RFC 3339 (null when unset, which
+// the table spells "-").
+type adminCertJSON struct {
+	Serial      string  `json:"serial"`
+	Fingerprint string  `json:"fingerprint"`
+	State       string  `json:"state"`
+	ExpiresAt   *string `json:"expires_at"`
+	IssuedAt    *string `json:"issued_at"`
 }
 
 // certState reports how a certificate would be treated at verification time.

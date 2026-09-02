@@ -9,7 +9,6 @@ import (
 	"slices"
 	"strconv"
 	"strings"
-	"text/tabwriter"
 	"time"
 
 	kmsv1 "github.com/Suhaibinator/kms/gen/kmsv1"
@@ -99,10 +98,13 @@ KMS_* environment fallback.
 
 func (c *CLI) cmdAdminNamespace(args []string) int {
 	if len(args) == 0 {
-		return c.fail("admin namespace requires an action (create|update|delete|list)")
+		return c.failUsage("admin namespace requires an action (create|update|delete|list)")
 	}
 	action, rest := args[0], args[1:]
 	switch action {
+	case "help", "-h", "--help":
+		c.adminUsage()
+		return 0
 	case "create":
 		return c.cmdNamespaceWrite(rest, false)
 	case "update":
@@ -112,7 +114,7 @@ func (c *CLI) cmdAdminNamespace(args []string) int {
 	case "list":
 		return c.cmdNamespaceList(rest)
 	default:
-		return c.fail("unknown namespace action %q", action)
+		return c.failUsage("unknown namespace action %q", action)
 	}
 }
 
@@ -131,22 +133,22 @@ func (c *CLI) cmdNamespaceWrite(args []string, update bool) int {
 	description := fs.String("description", "", "namespace `description`")
 	authMethods := fs.String("auth-methods", "", "comma-separated allowed auth `methods` (mtls,token); default mtls")
 	c.setUsage(fs, "admin "+name+" --env ENV --app APP [flags]", summary, false)
-	if !c.parseFlags(fs, args) {
+	if !c.parseFlags(fs, args) || !c.rejectPositionals() {
 		return 2
 	}
 	ns, err := namespaceFromFlags(*env, *app)
 	if err != nil {
-		return c.fail("%s: %v", name, err)
+		return c.failUsage("%s: %v", name, err)
 	}
 	methods, err := parseAuthMethods(*authMethods)
 	if err != nil {
-		return c.fail("%v", err)
+		return c.failUsage("%v", err)
 	}
 	pns := &kmsv1.NamespaceRef{Env: ns.Env, App: ns.App}
 
-	conn, err := cf.dial()
+	conn, err := c.dialConn(cf)
 	if err != nil {
-		return c.fail("%v", err)
+		return c.failErr("", err)
 	}
 	defer func() { _ = conn.Close() }()
 	ctx, cancel := callContext()
@@ -159,7 +161,7 @@ func (c *CLI) cmdNamespaceWrite(args []string, update bool) int {
 			Ref: pns, Description: *description, AllowedAuthMethods: methods,
 		})
 		if uerr != nil {
-			return c.fail("%s: %v", name, uerr)
+			return c.failErr(name, uerr)
 		}
 		out = resp.Namespace
 	} else {
@@ -167,9 +169,16 @@ func (c *CLI) cmdNamespaceWrite(args []string, update bool) int {
 			Ref: pns, Description: *description, AllowedAuthMethods: methods,
 		})
 		if cerr != nil {
-			return c.fail("%s: %v", name, cerr)
+			return c.failErr(name, cerr)
 		}
 		out = resp.Namespace
+	}
+	if c.jsonOutput() {
+		return c.printJSON(writtenNamespaceJSON{
+			Env:         out.GetRef().GetEnv(),
+			App:         out.GetRef().GetApp(),
+			AuthMethods: jsonStrings(out.GetAllowedAuthMethods()),
+		})
 	}
 	_, _ = fmt.Fprintf(c.Stdout, "%s/%s (auth: %s)\n", out.GetRef().GetEnv(), out.GetRef().GetApp(),
 		strings.Join(out.GetAllowedAuthMethods(), ","))
@@ -183,17 +192,22 @@ func (c *CLI) cmdNamespaceDelete(args []string) int {
 	app := fs.String("app", "", "namespace `application` (e.g. gradethis)")
 	c.setUsage(fs, "admin namespace delete --env ENV --app APP [flags]",
 		"Delete a namespace that holds no parameters or secrets.", false)
-	if !c.parseFlags(fs, args) {
+	if !c.parseFlags(fs, args) || !c.rejectPositionals() {
 		return 2
 	}
 	ns, err := namespaceFromFlags(*env, *app)
 	if err != nil {
-		return c.fail("namespace delete: %v", err)
+		return c.failUsage("namespace delete: %v", err)
+	}
+	// Deleting a namespace is irreversible and identified only by two flags, so
+	// the operator retypes the target before the server is even contacted.
+	if ok, code := c.confirmDestructive("delete namespace", ns.String()); !ok {
+		return code
 	}
 
-	conn, err := cf.dial()
+	conn, err := c.dialConn(cf)
 	if err != nil {
-		return c.fail("%v", err)
+		return c.failErr("", err)
 	}
 	defer func() { _ = conn.Close() }()
 	ctx, cancel := callContext()
@@ -202,7 +216,11 @@ func (c *CLI) cmdNamespaceDelete(args []string) int {
 	if _, err := kmsv1.NewAdminServiceClient(conn).DeleteNamespace(cf.authCtx(ctx), &kmsv1.DeleteNamespaceRequest{
 		Ref: &kmsv1.NamespaceRef{Env: ns.Env, App: ns.App},
 	}); err != nil {
-		return c.fail("namespace delete: %v", err)
+		return c.failErr("namespace delete", err)
+	}
+	if c.jsonOutput() {
+		c.info("Deleted namespace %s", ns)
+		return c.printJSON(deletedNamespaceJSON{Env: ns.Env, App: ns.App, Deleted: true})
 	}
 	_, _ = fmt.Fprintf(c.Stdout, "Deleted namespace %s\n", ns)
 	return 0
@@ -213,36 +231,55 @@ func (c *CLI) cmdNamespaceList(args []string) int {
 	cf := addConnFlags(c, fs)
 	c.setUsage(fs, "admin namespace list [flags]",
 		"List namespaces with their allowed auth methods and parameter/secret counts.", false)
-	if !c.parseFlags(fs, args) {
+	if !c.parseFlags(fs, args) || !c.rejectPositionals() {
 		return 2
 	}
-	conn, err := cf.dial()
+	conn, err := c.dialConn(cf)
 	if err != nil {
-		return c.fail("%v", err)
+		return c.failErr("", err)
 	}
 	defer func() { _ = conn.Close() }()
 	ctx, cancel := callContext()
 	defer cancel()
 	client := kmsv1.NewAdminServiceClient(conn)
 
-	tw := tabwriter.NewWriter(c.Stdout, 0, 4, 2, ' ', 0)
-	_, _ = fmt.Fprintln(tw, "NAMESPACE\tAUTH\tPARAMS\tSECRETS\tDESCRIPTION")
+	// Both renderings collect every page first: the tabwriter needs all rows to
+	// size its columns, and the JSON envelope is a single document.
+	items := []namespaceJSON{}
+	var rows [][]string
 	for token := ""; ; {
 		resp, err := client.ListNamespaces(cf.authCtx(ctx), &kmsv1.ListNamespacesRequest{PageToken: token})
 		if err != nil {
-			return c.fail("namespace list: %v", err)
+			return c.failErr("namespace list", err)
 		}
 		for _, ns := range resp.Namespaces {
-			_, _ = fmt.Fprintf(tw, "%s/%s\t%s\t%d\t%d\t%s\n",
-				ns.GetRef().GetEnv(), ns.GetRef().GetApp(),
+			if c.jsonOutput() {
+				items = append(items, namespaceJSON{
+					Env:            ns.GetRef().GetEnv(),
+					App:            ns.GetRef().GetApp(),
+					AuthMethods:    jsonStrings(ns.GetAllowedAuthMethods()),
+					ParameterCount: ns.GetParameterCount(),
+					SecretCount:    ns.GetSecretCount(),
+					Description:    ns.GetDescription(),
+				})
+				continue
+			}
+			rows = append(rows, []string{
+				ns.GetRef().GetEnv() + "/" + ns.GetRef().GetApp(),
 				strings.Join(ns.GetAllowedAuthMethods(), ","),
-				ns.GetParameterCount(), ns.GetSecretCount(), ns.GetDescription())
+				strconv.FormatUint(ns.GetParameterCount(), 10),
+				strconv.FormatUint(ns.GetSecretCount(), 10),
+				ns.GetDescription(),
+			})
 		}
 		if token = resp.NextPageToken; token == "" {
 			break
 		}
 	}
-	_ = tw.Flush()
+	if c.jsonOutput() {
+		return c.printList(items, "")
+	}
+	c.printTable([]string{"NAMESPACE", "AUTH", "PARAMS", "SECRETS", "DESCRIPTION"}, rows)
 	return 0
 }
 
@@ -250,10 +287,13 @@ func (c *CLI) cmdNamespaceList(args []string) int {
 
 func (c *CLI) cmdAdminIdentity(args []string) int {
 	if len(args) == 0 {
-		return c.fail("admin identity requires an action (create|issue-cert|revoke-cert|rotate|revoke|list)")
+		return c.failUsage("admin identity requires an action (create|issue-cert|revoke-cert|rotate|revoke|list)")
 	}
 	action, rest := args[0], args[1:]
 	switch action {
+	case "help", "-h", "--help":
+		c.adminUsage()
+		return 0
 	case "create":
 		return c.cmdIdentityCreate(rest)
 	case "issue-cert":
@@ -267,7 +307,7 @@ func (c *CLI) cmdAdminIdentity(args []string) int {
 	case "list":
 		return c.cmdIdentityList(rest)
 	default:
-		return c.fail("unknown identity action %q", action)
+		return c.failUsage("unknown identity action %q", action)
 	}
 }
 
@@ -286,17 +326,23 @@ func (c *CLI) cmdIdentityCreate(args []string) int {
 	}
 	pos := c.args()
 	if len(pos) < 1 || pos[0] == "" {
-		return c.fail("identity create requires a NAME argument")
+		return c.failUsage("identity create requires a NAME argument")
+	}
+	if !c.rejectExtraPositionals(1) {
+		return 2
 	}
 	name := pos[0]
 
 	methods, err := identityAuthMethods(*kind, *auth)
 	if err != nil {
-		return c.fail("%v", err)
+		return c.failUsage("%v", err)
 	}
 	ttlSeconds, err := parseTTLSeconds(*ttl)
 	if err != nil {
-		return c.fail("%v", err)
+		return c.failUsage("%v", err)
+	}
+	if code, refused := c.refuseJSONCertToStdout("identity create", *outDir, methods); refused {
+		return code
 	}
 	req := &kmsv1.CreateIdentityRequest{
 		Name:           name,
@@ -307,14 +353,14 @@ func (c *CLI) cmdIdentityCreate(args []string) int {
 	if *namespace != "" {
 		ns, perr := keyutil.ParseNamespace(*namespace)
 		if perr != nil {
-			return c.fail("invalid --namespace: %v", perr)
+			return c.failUsage("invalid --namespace: %v", perr)
 		}
 		req.Namespace = &kmsv1.NamespaceRef{Env: ns.Env, App: ns.App}
 	}
 
 	conn, err := c.dialConn(cf)
 	if err != nil {
-		return c.fail("%v", err)
+		return c.failErr("", err)
 	}
 	defer func() { _ = conn.Close() }()
 	ctx, cancel := callContext()
@@ -334,7 +380,7 @@ func (c *CLI) cmdIdentityCreate(args []string) int {
 		err = create(nil)
 	}
 	if err != nil {
-		return c.fail("%v", err)
+		return c.failErr("", err)
 	}
 	return 0
 }
@@ -348,6 +394,9 @@ func (c *CLI) writeCreatedIdentityResult(name, kind string, methods []string, ce
 	// healthy file sink was reserved before the RPC.
 	if hasAuthMethod(methods, "mtls") && resp.Cert == nil {
 		return fmt.Errorf("server returned no certificate bundle")
+	}
+	if c.jsonOutput() {
+		return c.writeCreatedIdentityJSON(name, kind, methods, certOutput, resp)
 	}
 	if resp.Cert != nil {
 		if err := c.writeCertBundleToOutput(certOutput, resp.Cert); err != nil {
@@ -373,6 +422,43 @@ func (c *CLI) writeCreatedIdentityResult(name, kind string, methods []string, ce
 	return nil
 }
 
+// writeCreatedIdentityJSON is the JSON half of writeCreatedIdentityResult: one
+// document on stdout carrying the one-time token exactly once, with the status
+// line and the deployment guidance moved to stderr. The credential files are
+// written first for the same reason the table path does it — the private key
+// must survive a broken stdout — and never appear as PEM in the document
+// (refuseJSONCertToStdout has already made --out mandatory here).
+func (c *CLI) writeCreatedIdentityJSON(name, kind string, methods []string, certOutput *reservedCertBundle, resp *kmsv1.CreateIdentityResponse) error {
+	doc := createdIdentityJSON{
+		Name:        name,
+		Kind:        kind,
+		Namespace:   namespaceRefToJSON(resp.GetIdentity().GetNamespace()),
+		AuthMethods: jsonStrings(methods),
+		Token:       resp.GetToken(),
+	}
+	if resp.Cert != nil {
+		cert, err := writeCertBundleFiles(certOutput, resp.Cert)
+		if err != nil {
+			return err
+		}
+		doc.Cert = cert
+	}
+	c.info("Created identity %q (kind %s).", name, kind)
+	if resp.Token != "" {
+		// A one-time credential warning is never silenced by --quiet.
+		_, _ = fmt.Fprintln(c.Stderr, "WARNING: the token is shown once and cannot be recovered.")
+	}
+	if doc.Cert != nil {
+		if err := c.writeMTLSCredentialNextSteps(certOutput); err != nil {
+			return err
+		}
+	}
+	if err := writeJSON(c.Stdout, doc); err != nil {
+		return fmt.Errorf("writing identity output: %w", err)
+	}
+	return nil
+}
+
 func (c *CLI) cmdIdentityIssueCert(args []string) int {
 	fs := c.newFlags("identity issue-cert")
 	cf := addConnFlags(c, fs)
@@ -385,17 +471,23 @@ func (c *CLI) cmdIdentityIssueCert(args []string) int {
 	}
 	pos := c.args()
 	if len(pos) < 1 || pos[0] == "" {
-		return c.fail("identity issue-cert requires a NAME argument")
+		return c.failUsage("identity issue-cert requires a NAME argument")
+	}
+	if !c.rejectExtraPositionals(1) {
+		return 2
 	}
 	name := pos[0]
 	ttlSeconds, err := parseTTLSeconds(*ttl)
 	if err != nil {
-		return c.fail("%v", err)
+		return c.failUsage("%v", err)
+	}
+	if code, refused := c.refuseJSONCertToStdout("identity issue-cert", *outDir, []string{"mtls"}); refused {
+		return code
 	}
 
-	conn, err := cf.dial()
+	conn, err := c.dialConn(cf)
 	if err != nil {
-		return c.fail("%v", err)
+		return c.failErr("", err)
 	}
 	defer func() { _ = conn.Close() }()
 	ctx, cancel := callContext()
@@ -412,12 +504,26 @@ func (c *CLI) cmdIdentityIssueCert(args []string) int {
 		return c.writeIssuedIdentityCertificateResult(name, certOutput, resp.Cert)
 	})
 	if err != nil {
-		return c.fail("%v", err)
+		return c.failErr("", err)
 	}
 	return 0
 }
 
 func (c *CLI) writeIssuedIdentityCertificateResult(name string, certOutput *reservedCertBundle, bundle *kmsv1.CertBundle) error {
+	if c.jsonOutput() {
+		cert, err := writeCertBundleFiles(certOutput, bundle)
+		if err != nil {
+			return err
+		}
+		c.info("Issued new mTLS credentials for identity %q.", name)
+		if err := c.writeMTLSCredentialNextSteps(certOutput); err != nil {
+			return err
+		}
+		if err := writeJSON(c.Stdout, issuedCertJSON{Name: name, Serial: bundle.GetSerial(), Cert: cert}); err != nil {
+			return fmt.Errorf("writing certificate output: %w", err)
+		}
+		return nil
+	}
 	// As with initial identity creation, publish the one-time private key before
 	// emitting status or guidance that could fail on a broken stdout.
 	if err := c.writeCertBundleToOutput(certOutput, bundle); err != nil {
@@ -440,15 +546,23 @@ func (c *CLI) cmdIdentityRevokeCert(args []string) int {
 	}
 	pos := c.args()
 	if len(pos) < 1 || pos[0] == "" {
-		return c.fail("identity revoke-cert requires a NAME argument")
+		return c.failUsage("identity revoke-cert requires a NAME argument")
+	}
+	if !c.rejectExtraPositionals(1) {
+		return 2
 	}
 	if *serial == "" {
-		return c.fail("--serial is required")
+		return c.failUsage("--serial is required")
+	}
+	// The identity, not the serial, is what an operator recognizes, so that is
+	// what the confirmation asks for; the serial is named in the prompt.
+	if ok, code := c.confirmDestructive("revoke certificate "+*serial+" of identity", pos[0]); !ok {
+		return code
 	}
 
-	conn, err := cf.dial()
+	conn, err := c.dialConn(cf)
 	if err != nil {
-		return c.fail("%v", err)
+		return c.failErr("", err)
 	}
 	defer func() { _ = conn.Close() }()
 	ctx, cancel := callContext()
@@ -457,7 +571,11 @@ func (c *CLI) cmdIdentityRevokeCert(args []string) int {
 	if _, err := kmsv1.NewAdminServiceClient(conn).RevokeIdentityCertificate(cf.authCtx(ctx), &kmsv1.RevokeIdentityCertificateRequest{
 		Name: pos[0], Serial: *serial,
 	}); err != nil {
-		return c.fail("identity revoke-cert: %v", err)
+		return c.failErr("identity revoke-cert", err)
+	}
+	if c.jsonOutput() {
+		c.info("Revoked certificate %s for identity %q", *serial, pos[0])
+		return c.printJSON(revokedCertJSON{Name: pos[0], Serial: *serial, Revoked: true})
 	}
 	_, _ = fmt.Fprintf(c.Stdout, "Revoked certificate %s for identity %q\n", *serial, pos[0])
 	return 0
@@ -473,12 +591,15 @@ func (c *CLI) cmdIdentityRotate(args []string) int {
 	}
 	pos := c.args()
 	if len(pos) < 1 || pos[0] == "" {
-		return c.fail("identity rotate requires a NAME argument")
+		return c.failUsage("identity rotate requires a NAME argument")
+	}
+	if !c.rejectExtraPositionals(1) {
+		return 2
 	}
 
-	conn, err := cf.dial()
+	conn, err := c.dialConn(cf)
 	if err != nil {
-		return c.fail("%v", err)
+		return c.failErr("", err)
 	}
 	defer func() { _ = conn.Close() }()
 	ctx, cancel := callContext()
@@ -486,9 +607,15 @@ func (c *CLI) cmdIdentityRotate(args []string) int {
 
 	resp, err := kmsv1.NewAdminServiceClient(conn).RotateIdentityToken(cf.authCtx(ctx), &kmsv1.RotateIdentityTokenRequest{Name: pos[0]})
 	if err != nil {
-		return c.fail("identity rotate: %v", err)
+		return c.failErr("identity rotate", err)
 	}
-	if err := printTokenOnce(c.Stdout, "identity", pos[0], resp.Token); err != nil {
+	if c.jsonOutput() {
+		// The token belongs in the document exactly once; the warning that makes
+		// it actionable is stderr and is never silenced.
+		_, _ = fmt.Fprintln(c.Stderr, "WARNING: this token is shown once and cannot be recovered. Store it securely.")
+		return c.printJSON(identityTokenJSON{Name: pos[0], Token: resp.GetToken()})
+	}
+	if err := printRotatedTokenOnce(c.Stdout, "identity", pos[0], resp.Token); err != nil {
 		return c.fail("writing one-time identity token: %v", err)
 	}
 	return 0
@@ -504,19 +631,31 @@ func (c *CLI) cmdIdentityRevoke(args []string) int {
 	}
 	pos := c.args()
 	if len(pos) < 1 || pos[0] == "" {
-		return c.fail("identity revoke requires a NAME argument")
+		return c.failUsage("identity revoke requires a NAME argument")
+	}
+	if !c.rejectExtraPositionals(1) {
+		return 2
+	}
+	// Revoking an identity invalidates every credential it holds, so the
+	// operator retypes the name before the server is contacted.
+	if ok, code := c.confirmDestructive("revoke identity", pos[0]); !ok {
+		return code
 	}
 
-	conn, err := cf.dial()
+	conn, err := c.dialConn(cf)
 	if err != nil {
-		return c.fail("%v", err)
+		return c.failErr("", err)
 	}
 	defer func() { _ = conn.Close() }()
 	ctx, cancel := callContext()
 	defer cancel()
 
 	if _, err := kmsv1.NewAdminServiceClient(conn).RevokeIdentity(cf.authCtx(ctx), &kmsv1.RevokeIdentityRequest{Name: pos[0]}); err != nil {
-		return c.fail("identity revoke: %v", err)
+		return c.failErr("identity revoke", err)
+	}
+	if c.jsonOutput() {
+		c.info("Revoked identity %q (all its certificates are now invalid)", pos[0])
+		return c.printJSON(revokedIdentityJSON{Name: pos[0], Revoked: true})
 	}
 	_, _ = fmt.Fprintf(c.Stdout, "Revoked identity %q (all its certificates are now invalid)\n", pos[0])
 	return 0
@@ -527,58 +666,80 @@ func (c *CLI) cmdIdentityList(args []string) int {
 	cf := addConnFlags(c, fs)
 	c.setUsage(fs, "admin identity list [flags]",
 		"List identities with their kind, home namespace, and credential state.", false)
-	if !c.parseFlags(fs, args) {
+	if !c.parseFlags(fs, args) || !c.rejectPositionals() {
 		return 2
 	}
-	conn, err := cf.dial()
+	conn, err := c.dialConn(cf)
 	if err != nil {
-		return c.fail("%v", err)
+		return c.failErr("", err)
 	}
 	defer func() { _ = conn.Close() }()
 	ctx, cancel := callContext()
 	defer cancel()
 	client := kmsv1.NewAdminServiceClient(conn)
 
-	tw := tabwriter.NewWriter(c.Stdout, 0, 4, 2, ' ', 0)
-	_, _ = fmt.Fprintln(tw, "NAME\tKIND\tNAMESPACE\tTOKEN\tCERTS\tDISABLED")
+	items := []identityJSON{}
+	var rows [][]string
 	for token := ""; ; {
 		resp, err := client.ListIdentities(cf.authCtx(ctx), &kmsv1.ListIdentitiesRequest{PageToken: token})
 		if err != nil {
-			return c.fail("identity list: %v", err)
+			return c.failErr("identity list", err)
 		}
 		for _, id := range resp.Identities {
+			if c.jsonOutput() {
+				items = append(items, identityJSON{
+					Name:      id.GetName(),
+					Kind:      id.GetKind(),
+					Namespace: namespaceRefToJSON(id.GetNamespace()),
+					HasToken:  id.GetHasToken(),
+					CertCount: len(id.GetCerts()),
+					Disabled:  id.GetDisabled(),
+				})
+				continue
+			}
 			ns := "-"
 			if n := id.GetNamespace(); n != nil {
 				ns = n.GetEnv() + "/" + n.GetApp()
 			}
-			_, _ = fmt.Fprintf(tw, "%s\t%s\t%s\t%t\t%d\t%t\n",
-				id.GetName(), id.GetKind(), ns, id.GetHasToken(), len(id.GetCerts()), id.GetDisabled())
+			rows = append(rows, []string{
+				id.GetName(), id.GetKind(), ns,
+				strconv.FormatBool(id.GetHasToken()),
+				strconv.Itoa(len(id.GetCerts())),
+				strconv.FormatBool(id.GetDisabled()),
+			})
 		}
 		if token = resp.NextPageToken; token == "" {
 			break
 		}
 	}
-	_ = tw.Flush()
+	if c.jsonOutput() {
+		return c.printList(items, "")
+	}
+	c.printTable([]string{"NAME", "KIND", "NAMESPACE", "TOKEN", "CERTS", "DISABLED"}, rows)
 	return 0
 }
 
 // --- CA --------------------------------------------------------------------
 
 func (c *CLI) cmdAdminCA(args []string) int {
+	if len(args) > 0 && (args[0] == "help" || args[0] == "-h" || args[0] == "--help") {
+		c.adminUsage()
+		return 0
+	}
 	if len(args) == 0 || args[0] != "show" {
-		return c.fail("admin ca supports only: ca show")
+		return c.failUsage("admin ca supports only: ca show")
 	}
 	fs := c.newFlags("ca show")
 	cf := addConnFlags(c, fs)
 	out := fs.String("out", "", "export the built-in client-issuing CA to this `file` (not the KMS server-trust CA)")
 	c.setUsage(fs, "admin ca show [flags]",
 		"Export the built-in client-issuing CA certificate, which is not the CA that signs the server certificate.", false)
-	if !c.parseFlags(fs, args[1:]) {
+	if !c.parseFlags(fs, args[1:]) || !c.rejectPositionals() {
 		return 2
 	}
-	conn, err := cf.dial()
+	conn, err := c.dialConn(cf)
 	if err != nil {
-		return c.fail("%v", err)
+		return c.failErr("", err)
 	}
 	defer func() { _ = conn.Close() }()
 	ctx, cancel := callContext()
@@ -587,15 +748,22 @@ func (c *CLI) cmdAdminCA(args []string) int {
 	// GetCACertificate is public; no credential is attached.
 	resp, err := kmsv1.NewAdminServiceClient(conn).GetCACertificate(ctx, &kmsv1.GetCACertificateRequest{})
 	if err != nil {
-		return c.fail("ca show: %v", err)
+		return c.failErr("ca show", err)
 	}
 	if *out != "" {
 		if err := os.WriteFile(*out, []byte(resp.CertPem), 0o644); err != nil {
-			return c.fail("writing --out: %v", err)
+			return c.failErr("writing --out", err)
 		}
-		_, _ = fmt.Fprintf(c.Stderr, "Wrote built-in client-issuing CA certificate to %s\n", *out)
-		_, _ = fmt.Fprintln(c.Stderr, "This is not the CA bundle applications use to verify the KMS server certificate.")
+		c.info("Wrote built-in client-issuing CA certificate to %s", *out)
+		c.info("This is not the CA bundle applications use to verify the KMS server certificate.")
+		if c.jsonOutput() {
+			return c.printJSON(caFileJSON{CAFile: *out})
+		}
 		return 0
+	}
+	if c.jsonOutput() {
+		// The PEM is public material the table mode already prints to stdout.
+		return c.printJSON(caPEMJSON{CertPEM: resp.GetCertPem()})
 	}
 	_, _ = fmt.Fprint(c.Stdout, resp.CertPem)
 	return 0
@@ -706,19 +874,9 @@ func (c *CLI) writeCertBundleToOutput(output *reservedCertBundle, bundle *kmsv1.
 		return nil
 	}
 
-	if _, err := output.certFile.Write([]byte(bundle.CertPem)); err != nil {
-		return fmt.Errorf("writing certificate: %w", err)
+	if err := writeReservedCertFiles(output, bundle); err != nil {
+		return err
 	}
-	if _, err := output.keyFile.Write([]byte(bundle.KeyPem)); err != nil {
-		return fmt.Errorf("writing private key: %w", err)
-	}
-	if err := output.certFile.Close(); err != nil {
-		return fmt.Errorf("closing certificate: %w", err)
-	}
-	if err := output.keyFile.Close(); err != nil {
-		return fmt.Errorf("closing private key: %w", err)
-	}
-	output.published = true
 	if _, err := fmt.Fprintf(c.Stdout, "  wrote %s and %s (serial %s)\n", output.certPath, output.keyPath, bundle.Serial); err != nil {
 		return fmt.Errorf("writing certificate status: %w", err)
 	}
@@ -746,7 +904,7 @@ Next steps:
 		return nil
 	}
 
-	if _, err := fmt.Fprintf(c.Stdout, `
+	guidance := fmt.Sprintf(`
 Application mTLS credentials:
   client certificate: %s
   client private key: %s
@@ -755,10 +913,160 @@ Next steps:
   1. Deploy both files securely to the application.
   2. Configure the application with a CA bundle that trusts the operator-provided KMS server certificate.
      Do not use "parameter-store admin ca show" for server trust; that built-in CA issues client certificates.
-`, output.certPath, output.keyPath); err != nil {
+`, output.certPath, output.keyPath)
+	// In JSON mode the same guidance goes to stderr: stdout carries the document
+	// alone, and --quiet drops advice the operator did not ask for.
+	if c.jsonOutput() {
+		c.info("%s", strings.TrimRight(guidance, "\n"))
+		return nil
+	}
+	if _, err := fmt.Fprint(c.Stdout, guidance); err != nil {
 		return fmt.Errorf("writing certificate guidance: %w", err)
 	}
 	return nil
+}
+
+// writeReservedCertFiles publishes a one-time bundle into its reserved files
+// and marks the reservation published. It writes nothing to stdout so the JSON
+// path can persist the private key without emitting anything but its document.
+func writeReservedCertFiles(output *reservedCertBundle, bundle *kmsv1.CertBundle) error {
+	if _, err := output.certFile.Write([]byte(bundle.CertPem)); err != nil {
+		return fmt.Errorf("writing certificate: %w", err)
+	}
+	if _, err := output.keyFile.Write([]byte(bundle.KeyPem)); err != nil {
+		return fmt.Errorf("writing private key: %w", err)
+	}
+	if err := output.certFile.Close(); err != nil {
+		return fmt.Errorf("closing certificate: %w", err)
+	}
+	if err := output.keyFile.Close(); err != nil {
+		return fmt.Errorf("closing private key: %w", err)
+	}
+	output.published = true
+	return nil
+}
+
+// writeCertBundleFiles is the JSON-mode counterpart of writeCertBundleToOutput:
+// it publishes the bundle and describes it by path only. Commands guarantee a
+// reservation before calling it (see refuseJSONCertToStdout), because a JSON
+// document must never carry the one-time private key.
+func writeCertBundleFiles(output *reservedCertBundle, bundle *kmsv1.CertBundle) (*certFilesJSON, error) {
+	if bundle == nil {
+		return nil, fmt.Errorf("server returned no certificate bundle")
+	}
+	if output == nil {
+		return nil, fmt.Errorf("refusing to print a one-time private key as JSON: rerun with --out DIR")
+	}
+	if err := writeReservedCertFiles(output, bundle); err != nil {
+		return nil, err
+	}
+	return &certFilesJSON{
+		CertFile:  output.certPath,
+		KeyFile:   output.keyPath,
+		Serial:    bundle.GetSerial(),
+		ExpiresAt: jsonTime(bundle.GetNotAfterUnixMs()),
+	}, nil
+}
+
+// refuseJSONCertToStdout stops a command that would mint mTLS credentials in
+// JSON mode without a --out directory. The table mode prints that one-time
+// private key to stdout; a JSON document must not carry it, and silently
+// dropping it would enroll a certificate whose key nobody holds.
+func (c *CLI) refuseJSONCertToStdout(command, outDir string, methods []string) (code int, refused bool) {
+	if !c.jsonOutput() || outDir != "" || !hasAuthMethod(methods, "mtls") {
+		return 0, false
+	}
+	return c.failUsage("%s: --out is required with --output json: the one-time private key is written to a file, never to the JSON document", command), true
+}
+
+// --- JSON documents --------------------------------------------------------
+
+// jsonStrings normalizes a possibly nil list so it renders as [] rather than
+// null: a script that ranges over the field must never have to nil-check it.
+func jsonStrings(values []string) []string {
+	if values == nil {
+		return []string{}
+	}
+	return values
+}
+
+type namespaceJSON struct {
+	Env            string   `json:"env"`
+	App            string   `json:"app"`
+	AuthMethods    []string `json:"auth_methods"`
+	ParameterCount uint64   `json:"parameter_count"`
+	SecretCount    uint64   `json:"secret_count"`
+	Description    string   `json:"description"`
+}
+
+type writtenNamespaceJSON struct {
+	Env         string   `json:"env"`
+	App         string   `json:"app"`
+	AuthMethods []string `json:"auth_methods"`
+}
+
+type deletedNamespaceJSON struct {
+	Env     string `json:"env"`
+	App     string `json:"app"`
+	Deleted bool   `json:"deleted"`
+}
+
+type identityJSON struct {
+	Name      string            `json:"name"`
+	Kind      string            `json:"kind"`
+	Namespace *namespaceRefJSON `json:"namespace"`
+	HasToken  bool              `json:"has_token"`
+	CertCount int               `json:"cert_count"`
+	Disabled  bool              `json:"disabled"`
+}
+
+// certFilesJSON names a one-time credential pair by path. It never carries PEM
+// material: the certificate is on disk, and the private key exists nowhere else.
+type certFilesJSON struct {
+	CertFile  string  `json:"cert_file"`
+	KeyFile   string  `json:"key_file"`
+	Serial    string  `json:"serial"`
+	ExpiresAt *string `json:"expires_at"`
+}
+
+type createdIdentityJSON struct {
+	Name        string            `json:"name"`
+	Kind        string            `json:"kind"`
+	Namespace   *namespaceRefJSON `json:"namespace"`
+	AuthMethods []string          `json:"auth_methods"`
+	// Token is the one-time bearer token, present only when one was minted.
+	Token string         `json:"token,omitempty"`
+	Cert  *certFilesJSON `json:"cert,omitempty"`
+}
+
+type identityTokenJSON struct {
+	Name  string `json:"name"`
+	Token string `json:"token"`
+}
+
+type revokedIdentityJSON struct {
+	Name    string `json:"name"`
+	Revoked bool   `json:"revoked"`
+}
+
+type issuedCertJSON struct {
+	Name   string         `json:"name"`
+	Serial string         `json:"serial"`
+	Cert   *certFilesJSON `json:"cert"`
+}
+
+type revokedCertJSON struct {
+	Name    string `json:"name"`
+	Serial  string `json:"serial"`
+	Revoked bool   `json:"revoked"`
+}
+
+type caPEMJSON struct {
+	CertPEM string `json:"cert_pem"`
+}
+
+type caFileJSON struct {
+	CAFile string `json:"ca_file"`
 }
 
 func hasAuthMethod(methods []string, want string) bool {

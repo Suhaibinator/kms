@@ -45,6 +45,20 @@ type CLI struct {
 	// dialOverride is replaced by command tests with an in-memory gRPC
 	// transport. Production callers leave it nil and use connFlags.dial.
 	dialOverride dialFunc
+	// output selects how command results are rendered: a human table (the
+	// default) or JSON for scripts. Set by --output/-o or KMS_OUTPUT.
+	output outputMode
+	// assumeYes answers every confirmation prompt (--yes/-y). Scripts must set
+	// it: a destructive command refuses to run on a non-interactive stdin
+	// without it.
+	assumeYes bool
+	// quiet suppresses informational stderr lines written through info
+	// (--quiet/-q). Errors, prompts, and confirmation previews are never
+	// suppressed.
+	quiet bool
+	// isTTY reports whether stdin is an interactive terminal; nil means
+	// term.IsTerminal on Stdin. Tests inject it to exercise prompts.
+	isTTY func() bool
 }
 
 // New builds a CLI bound to the process standard streams.
@@ -59,7 +73,17 @@ func (c *CLI) Run(args []string) int {
 		c.ConfigPath, c.ConfigPathSource = v, "env KMS_CONFIG"
 	}
 	c.helpRequested = false
-	rest := c.consumeGlobalFlags(args)
+	c.output, c.assumeYes, c.quiet = outputTable, false, false
+	if v, ok := c.env("KMS_OUTPUT"); ok && v != "" {
+		if err := c.output.Set(v); err != nil {
+			_, _ = fmt.Fprintf(c.Stderr, "error: KMS_OUTPUT: %v\n", err)
+			return 2
+		}
+	}
+	rest, ok := c.consumeGlobalFlags(args)
+	if !ok {
+		return 2
+	}
 	if len(rest) == 0 {
 		c.usage()
 		return 2
@@ -94,6 +118,8 @@ func (c *CLI) Run(args []string) int {
 		code = c.cmdAdmin(cmdArgs)
 	case "import":
 		code = c.cmdImport(cmdArgs)
+	case "whoami":
+		code = c.cmdWhoAmI(cmdArgs)
 	case "put-secret":
 		code = c.cmdPutSecret(cmdArgs)
 	case "get-secret":
@@ -107,11 +133,9 @@ func (c *CLI) Run(args []string) int {
 	case "defaults":
 		code = c.cmdDefaults(cmdArgs)
 	case "version", "--version", "-version":
-		_, _ = fmt.Fprintln(c.Stdout, Version)
-		code = 0
+		code = c.cmdVersion(cmdArgs)
 	case "help", "-h", "--help":
-		c.usage()
-		code = 0
+		code = c.cmdHelp(cmdArgs)
 	default:
 		_, _ = fmt.Fprintf(c.Stderr, "unknown command %q\n\n", cmd)
 		c.usage()
@@ -123,39 +147,138 @@ func (c *CLI) Run(args []string) int {
 	return code
 }
 
-// consumeGlobalFlags extracts a leading --config before the subcommand so both
-// `parameter-store --config x serve` and `parameter-store serve --config x`
-// work. Parsing stops at the first token that is not a recognized global flag.
-func (c *CLI) consumeGlobalFlags(args []string) []string {
+// globalFlag describes one flag accepted before the subcommand. The same
+// flags (long form) are registered on every command's flag set by newFlags so
+// `parameter-store -o json list ...` and `parameter-store list ... -o json`
+// mean the same thing.
+type globalFlag struct {
+	names      []string // accepted spellings, e.g. "--output", "-o"
+	takesValue bool
+	apply      func(c *CLI, value string) error
+}
+
+func globalFlags() []globalFlag {
+	return []globalFlag{
+		{names: []string{"--config", "-config"}, takesValue: true, apply: func(c *CLI, v string) error {
+			c.ConfigPath, c.ConfigPathSource = v, "flag --config"
+			return nil
+		}},
+		{names: []string{"--output", "-output", "-o"}, takesValue: true, apply: func(c *CLI, v string) error {
+			return c.output.Set(v)
+		}},
+		{names: []string{"--yes", "-yes", "-y"}, apply: func(c *CLI, _ string) error { c.assumeYes = true; return nil }},
+		{names: []string{"--quiet", "-quiet", "-q"}, apply: func(c *CLI, _ string) error { c.quiet = true; return nil }},
+	}
+}
+
+// cmdVersion prints the build version. It runs through a flag set like every
+// other command so the global flags work after the subcommand
+// (`version --output json`) and a stray argument is a usage error.
+func (c *CLI) cmdVersion(args []string) int {
+	fs := c.newFlags("version")
+	c.setUsage(fs, "version [flags]", "Print the build version.", false)
+	if !c.parseFlags(fs, args) {
+		return 2
+	}
+	if !c.rejectPositionals() {
+		return 2
+	}
+	if c.jsonOutput() {
+		return c.printJSON(struct {
+			Version string `json:"version"`
+		}{Version})
+	}
+	_, _ = fmt.Fprintln(c.Stdout, Version)
+	return 0
+}
+
+// cmdHelp prints the top-level usage. Arguments are rejected rather than
+// ignored so `help frobnicate` does not silently look like success.
+func (c *CLI) cmdHelp(args []string) int {
+	fs := c.newFlags("help")
+	c.setUsage(fs, "help", "Print the list of commands.", false)
+	if !c.parseFlags(fs, args) {
+		return 2
+	}
+	if !c.rejectPositionals() {
+		return 2
+	}
+	c.usage()
+	return 0
+}
+
+// consumeGlobalFlags extracts the global flags that precede the subcommand so
+// both `parameter-store --config x serve` and `parameter-store serve --config
+// x` work. Parsing stops at the first token that is not a recognized global
+// flag. It returns false (after printing the problem) when a flag is
+// malformed; the caller exits with the usage code.
+func (c *CLI) consumeGlobalFlags(args []string) ([]string, bool) {
+	flags := globalFlags()
 	i := 0
+next:
 	for i < len(args) {
 		a := args[i]
-		switch {
-		case a == "--config" || a == "-config":
-			if i+1 >= len(args) {
-				_, _ = fmt.Fprintln(c.Stderr, "--config requires a value")
-				return nil
+		for _, gf := range flags {
+			for _, name := range gf.names {
+				var value string
+				switch {
+				case a == name && gf.takesValue:
+					if i+1 >= len(args) {
+						_, _ = fmt.Fprintf(c.Stderr, "%s requires a value\n", name)
+						return nil, false
+					}
+					value = args[i+1]
+					i += 2
+				case a == name:
+					i++
+				case gf.takesValue && strings.HasPrefix(a, name+"="):
+					value = strings.TrimPrefix(a, name+"=")
+					i++
+				default:
+					continue
+				}
+				if err := gf.apply(c, value); err != nil {
+					_, _ = fmt.Fprintf(c.Stderr, "%s: %v\n", name, err)
+					return nil, false
+				}
+				continue next
 			}
-			c.ConfigPath, c.ConfigPathSource = args[i+1], "flag --config"
-			i += 2
-		case strings.HasPrefix(a, "--config="):
-			c.ConfigPath, c.ConfigPathSource = strings.TrimPrefix(a, "--config="), "flag --config"
-			i++
-		case strings.HasPrefix(a, "-config="):
-			c.ConfigPath, c.ConfigPathSource = strings.TrimPrefix(a, "-config="), "flag --config"
-			i++
-		default:
-			return args[i:]
 		}
+		return args[i:], true
 	}
-	return args[i:]
+	return args[i:], true
 }
+
+// addGlobalFlags registers the global flags on a command flag set, so they
+// are accepted after the subcommand as well as before it; a value given after
+// the subcommand overrides one given before it. The short forms are the same
+// flags under a second name (Go's flag package never abbreviates, so -o is
+// unrelated to the --out several commands own); printFlagTable folds each
+// alias into its long form's row.
+func (c *CLI) addGlobalFlags(fs *flag.FlagSet) {
+	fs.Var(&c.output, "output", "output `format`: table or json (env KMS_OUTPUT)")
+	fs.Var(&c.output, "o", "")
+	fs.BoolVar(&c.assumeYes, "yes", c.assumeYes, "answer confirmation prompts automatically; required for destructive commands on a non-interactive stdin")
+	fs.BoolVar(&c.assumeYes, "y", c.assumeYes, "")
+	fs.BoolVar(&c.quiet, "quiet", c.quiet, "suppress informational messages on stderr")
+	fs.BoolVar(&c.quiet, "q", c.quiet, "")
+	// The flag package records the value at registration as the default, which
+	// here is whatever `-o json` or `-y` before the subcommand already set.
+	// Usage text must describe the built-in defaults, not this invocation.
+	fs.Lookup("output").DefValue = string(outputTable)
+	for _, name := range []string{"yes", "quiet"} {
+		fs.Lookup(name).DefValue = "false"
+	}
+}
+
+// shortFlags maps a long global flag to its one-letter alias for usage text.
+var shortFlags = map[string]string{"output": "o", "yes": "y", "quiet": "q"}
 
 func (c *CLI) usage() {
 	_, _ = fmt.Fprint(c.Stderr, `parameter-store — parameter and secret management service
 
 Usage:
-  parameter-store [--config FILE] <command> [flags]
+  parameter-store [global flags] <command> [flags]
 
 Server:
   serve            Run the gRPC + HTTP server.
@@ -187,6 +310,7 @@ Management (talk to a running server over gRPC):
   admin            Manage namespaces, application identities, policies, and client certificates.
 
 Convenience (talk to a running server over gRPC):
+  whoami                        Print the identity the server sees for this credential.
   put-secret /env/app/key       Store a secret (value from --value-file or stdin).
   get-secret /env/app/key       Fetch a secret (requires --show, --out, or a pipe).
   put-parameter /env/app/key V  Store a parameter value.
@@ -198,30 +322,62 @@ Other:
   version          Print the build version.
   help             Show this help.
 
-Global flags:
+Global flags (accepted before the subcommand; the long forms also after it):
   --config FILE    Config file path (env KMS_CONFIG). Read by serve, config,
                    and every command that opens the database directly.
+  -o, --output F   Output format: table (default) or json (env KMS_OUTPUT).
+                   In json mode stdout carries exactly one JSON document.
+  -y, --yes        Answer confirmation prompts automatically. Destructive
+                   commands refuse to run on a non-interactive stdin without it.
+  -q, --quiet      Suppress informational messages on stderr.
+
+Exit codes: 0 ok, 1 error, 2 usage, 3 unauthenticated, 4 permission denied,
+5 not found, 6 conflict, 7 failed precondition, 8 server unavailable,
+9 rate limited.
 
 Settings resolve in this order: flag, then KMS_* environment variable, then the
 config file, then the built-in default. Commands that talk to a running server
-read KMS_ENDPOINT, KMS_TOKEN, KMS_CA_FILE, KMS_CLIENT_CERT_FILE, and
-KMS_CLIENT_KEY_FILE as flag defaults.
+read KMS_ENDPOINT, KMS_TOKEN, KMS_TOKEN_FILE, KMS_CA_FILE, KMS_CLIENT_CERT_FILE,
+and KMS_CLIENT_KEY_FILE as flag defaults.
 
 Run "parameter-store <command> -h" for command-specific flags.
 `)
 }
 
-// fail prints an error to stderr and returns exit code 1.
+// fail prints an error to stderr and returns exit code 1. Use failErr when
+// the error came from the server or the store so the exit code reflects its
+// kind (see exitcodes.go).
 func (c *CLI) fail(format string, args ...any) int {
 	_, _ = fmt.Fprintf(c.Stderr, "error: "+format+"\n", args...)
-	return 1
+	return exitError
+}
+
+// failUsage is fail for a problem in how the command was invoked (a missing
+// required flag, an invalid flag combination): it exits 2 like a malformed
+// flag would, so scripts can tell "fix the invocation" from "the operation
+// failed".
+func (c *CLI) failUsage(format string, args ...any) int {
+	_, _ = fmt.Fprintf(c.Stderr, "error: "+format+"\n", args...)
+	return exitUsage
+}
+
+// info prints an informational line to stderr unless --quiet was given. It is
+// for progress and advice ("Wrote 12 bytes to x"), never for results, errors,
+// prompts, or the preview shown before a destructive confirmation.
+func (c *CLI) info(format string, args ...any) {
+	if c.quiet {
+		return
+	}
+	_, _ = fmt.Fprintf(c.Stderr, format+"\n", args...)
 }
 
 // newFlags builds a flag set that writes usage to the CLI's stderr and returns
-// an error rather than exiting the process on a parse problem.
+// an error rather than exiting the process on a parse problem. Every command
+// flag set carries the global flags so they may follow the subcommand.
 func (c *CLI) newFlags(name string) *flag.FlagSet {
 	fs := flag.NewFlagSet(name, flag.ContinueOnError)
 	fs.SetOutput(c.Stderr)
+	c.addGlobalFlags(fs)
 	return fs
 }
 
@@ -302,10 +458,19 @@ func (c *CLI) env(key string) (string, bool) {
 // boolean flag: the flag package sets the flag to true and leaves "false" as a
 // positional, which would otherwise be ignored silently.
 func (c *CLI) rejectPositionals() bool {
-	if len(c.positionals) == 0 {
+	return c.rejectExtraPositionals(0)
+}
+
+// rejectExtraPositionals fails a command that takes at most want positional
+// arguments when parseFlags collected more. The stray argument is the same
+// "--flag false" hazard rejectPositionals describes, and on a command that
+// confirms before acting it is the difference between "--yes false" meaning
+// no and meaning yes.
+func (c *CLI) rejectExtraPositionals(want int) bool {
+	if len(c.positionals) <= want {
 		return true
 	}
-	_, _ = fmt.Fprintf(c.Stderr, "error: unexpected argument %q (boolean flags take the form --flag=false)\n", c.positionals[0])
+	_, _ = fmt.Fprintf(c.Stderr, "error: unexpected argument %q (boolean flags take the form --flag=false)\n", c.positionals[want])
 	return false
 }
 
@@ -384,12 +549,18 @@ func printFlagTable(w io.Writer, fs *flag.FlagSet) {
 	var rows []row
 	width := 0
 	fs.VisitAll(func(f *flag.Flag) {
+		if len(f.Name) == 1 {
+			return // an alias; shown beside its long form
+		}
 		name, usage := flag.UnquoteUsage(f)
 		head := "--" + f.Name
 		if isBoolFlag(f) {
 			head += "[=true|false]"
 		} else if name != "" {
 			head += " " + strings.ToUpper(name)
+		}
+		if short, ok := shortFlags[f.Name]; ok && fs.Lookup(short) != nil {
+			head += ", -" + short
 		}
 		if f.DefValue != "" && f.DefValue != "false" && !isBoolFlag(f) {
 			usage += fmt.Sprintf(" (default %q)", f.DefValue)

@@ -177,6 +177,15 @@ tokens. Backup and non-force restore publish complete staged files atomically
 without replacing an entry that appeared concurrently; `restore --force` is
 the explicit replacement exception.
 
+The same parent-chain rules apply to credential files the CLI *reads*:
+`--token-file`/`KMS_TOKEN_FILE` and `--secret-token-file`/
+`KMS_SECRET_TOKEN_FILE` accept only a regular, current-user-owned file with no
+group or other access, and the opened inode is verified against the inspected
+directory entry so a swap between the checks and the read is detected rather
+than followed. The file is opened read-only and never modified, so a `0400`
+credential on a read-only mount is accepted. Passing a token this way keeps it
+out of `ps` output and `/proc/PID/cmdline`, which any local user can read.
+
 Platform enforcement is deliberately specific:
 
 - On macOS, every allow ACL entry anywhere in the canonical parent chain is

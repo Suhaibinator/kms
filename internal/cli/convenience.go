@@ -8,9 +8,11 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strconv"
+	"strings"
 	"sync"
-	"text/tabwriter"
 	"time"
+	"unicode/utf8"
 
 	"golang.org/x/term"
 	"google.golang.org/grpc"
@@ -20,6 +22,7 @@ import (
 
 	kmsv1 "github.com/Suhaibinator/kms/gen/kmsv1"
 	"github.com/Suhaibinator/kms/internal/domain"
+	"github.com/Suhaibinator/kms/internal/fileutil"
 	"github.com/Suhaibinator/kms/internal/keyutil"
 )
 
@@ -31,13 +34,23 @@ type connFlags struct {
 	c    *CLI
 	once sync.Once
 
-	endpoint    string
-	token       string
-	secretToken string
-	ca          string
-	cert        string
-	key         string
-	insecure    bool
+	endpoint        string
+	token           string
+	tokenFile       string
+	secretToken     string
+	secretTokenFile string
+	// secretTokenFlags records that addSecretTokenFlags ran, which is what
+	// makes KMS_SECRET_TOKEN_FILE apply: a per-secret token belongs only on
+	// the RPCs of the two commands that read or update a token-gated secret,
+	// never on every call a shell with the variable exported happens to make.
+	secretTokenFlags bool
+	ca               string
+	cert             string
+	key              string
+	insecure         bool
+	// finalizeErr is the error finalize produced, replayed by later callers
+	// (sync.Once runs the body only once).
+	finalizeErr error
 }
 
 // defaultEndpoint is the server address used when neither --endpoint nor
@@ -45,10 +58,12 @@ type connFlags struct {
 const defaultEndpoint = "localhost:8443"
 
 // connEnvFallback pairs a connection field with the environment variable that
-// fills it when the flag was not given.
+// fills it when the flag was not given. A variable whose flag the command did
+// not register is ignored rather than applied.
 type connEnvFallback struct {
-	field *string
-	env   string
+	field      *string
+	env        string
+	registered bool
 }
 
 // envFallbacks lists every connection setting with its environment variable, in
@@ -58,11 +73,13 @@ type connEnvFallback struct {
 // as whom, not how to run one.
 func (cf *connFlags) envFallbacks() []connEnvFallback {
 	return []connEnvFallback{
-		{&cf.endpoint, "KMS_ENDPOINT"},
-		{&cf.token, "KMS_TOKEN"},
-		{&cf.ca, "KMS_CA_FILE"},
-		{&cf.cert, "KMS_CLIENT_CERT_FILE"},
-		{&cf.key, "KMS_CLIENT_KEY_FILE"},
+		{&cf.endpoint, "KMS_ENDPOINT", true},
+		{&cf.token, "KMS_TOKEN", true},
+		{&cf.tokenFile, "KMS_TOKEN_FILE", true},
+		{&cf.secretTokenFile, "KMS_SECRET_TOKEN_FILE", cf.secretTokenFlags},
+		{&cf.ca, "KMS_CA_FILE", true},
+		{&cf.cert, "KMS_CLIENT_CERT_FILE", true},
+		{&cf.key, "KMS_CLIENT_KEY_FILE", true},
 	}
 }
 
@@ -75,7 +92,8 @@ func (cf *connFlags) envFallbacks() []connEnvFallback {
 func addConnFlags(c *CLI, fs *flag.FlagSet) *connFlags {
 	cf := &connFlags{c: c}
 	fs.StringVar(&cf.endpoint, "endpoint", "", "server gRPC `endpoint` host:port (env KMS_ENDPOINT; default "+defaultEndpoint+")")
-	fs.StringVar(&cf.token, "token", "", "identity bearer `token` (env KMS_TOKEN)")
+	fs.StringVar(&cf.token, "token", "", "identity bearer `token` (env KMS_TOKEN); visible to other local users in the process list, prefer --token-file")
+	fs.StringVar(&cf.tokenFile, "token-file", "", "read the identity bearer token from this private `file` (env KMS_TOKEN_FILE)")
 	fs.BoolVar(&cf.insecure, "insecure", false, "disable TLS (development only)")
 	fs.StringVar(&cf.ca, "ca", "", "CA bundle `file` for verifying the server (env KMS_CA_FILE); this is the client-side trust store, not the server's client_ca_file")
 	fs.StringVar(&cf.cert, "cert", "", "client certificate `file` for mTLS (env KMS_CLIENT_CERT_FILE)")
@@ -83,14 +101,28 @@ func addConnFlags(c *CLI, fs *flag.FlagSet) *connFlags {
 	return cf
 }
 
+// addSecretTokenFlags registers the per-secret token flags for commands that
+// read or update token-gated secrets.
+func addSecretTokenFlags(fs *flag.FlagSet, cf *connFlags, usage string) {
+	cf.secretTokenFlags = true
+	fs.StringVar(&cf.secretToken, "secret-token", "", usage+" (visible in the process list, prefer --secret-token-file)")
+	fs.StringVar(&cf.secretTokenFile, "secret-token-file", "", "read the per-secret token from this private `file` (env KMS_SECRET_TOKEN_FILE)")
+}
+
 // finalize resolves each connection setting to flag, then environment, then
-// built-in default. Flags are parsed before either caller runs, so an explicitly
-// set flag always wins. dial and authCtx call it, which keeps every command site
-// unchanged; sync.Once makes the repeated calls free and idempotent.
-func (cf *connFlags) finalize() {
+// built-in default, and loads token files. Flags are parsed before either
+// caller runs, so an explicitly set flag always wins. dial and authCtx call
+// it; sync.Once makes the repeated calls free and idempotent, and the first
+// error is replayed to every caller.
+//
+// A token given both inline and as a file is a usage error rather than a
+// precedence question: the two sources come from different places (a shell
+// history or CI variable versus a mounted credential file) and silently
+// picking one would let a stale inline token shadow a rotated file.
+func (cf *connFlags) finalize() error {
 	cf.once.Do(func() {
 		for _, fallback := range cf.envFallbacks() {
-			if *fallback.field != "" {
+			if !fallback.registered || *fallback.field != "" {
 				continue
 			}
 			if v, ok := cf.c.env(fallback.env); ok {
@@ -100,11 +132,65 @@ func (cf *connFlags) finalize() {
 		if cf.endpoint == "" {
 			cf.endpoint = defaultEndpoint
 		}
+		if cf.token != "" && cf.tokenFile != "" {
+			cf.finalizeErr = usageError("--token and --token-file (or KMS_TOKEN and KMS_TOKEN_FILE) are mutually exclusive")
+			return
+		}
+		if cf.secretToken != "" && cf.secretTokenFile != "" {
+			cf.finalizeErr = usageError("--secret-token and --secret-token-file (or KMS_SECRET_TOKEN_FILE) are mutually exclusive")
+			return
+		}
+		if cf.tokenFile != "" {
+			tok, err := readTokenFile(cf.tokenFile)
+			if err != nil {
+				cf.finalizeErr = fmt.Errorf("--token-file: %w", err)
+				return
+			}
+			cf.token = tok
+		}
+		if cf.secretTokenFile != "" {
+			tok, err := readTokenFile(cf.secretTokenFile)
+			if err != nil {
+				cf.finalizeErr = fmt.Errorf("--secret-token-file: %w", err)
+				return
+			}
+			cf.secretToken = tok
+		}
 	})
+	return cf.finalizeErr
+}
+
+// usageError marks an error that should exit with the usage code.
+type usageError string
+
+func (e usageError) Error() string { return string(e) }
+
+// readTokenFile reads a bearer token from a file that must already be
+// private to the current user (no group/other bits, owner-only, a regular
+// file, not a symlink); the file is opened read-only and never modified, so a
+// 0400 credential on a read-only mount works. One trailing newline is
+// tolerated because editors add it; any other whitespace or an empty file is
+// rejected so a truncated or misnamed file cannot silently turn into an
+// anonymous call.
+func readTokenFile(path string) (string, error) {
+	raw, err := fileutil.ReadPrivateFile(path)
+	if err != nil {
+		return "", err
+	}
+	tok := strings.TrimSuffix(strings.TrimSuffix(string(raw), "\n"), "\r")
+	if tok == "" {
+		return "", fmt.Errorf("%s is empty", path)
+	}
+	if strings.ContainsAny(tok, " \t\r\n") {
+		return "", fmt.Errorf("%s must contain exactly one token", path)
+	}
+	return tok, nil
 }
 
 func (cf *connFlags) dial() (*grpc.ClientConn, error) {
-	cf.finalize()
+	if err := cf.finalize(); err != nil {
+		return nil, err
+	}
 	var creds credentials.TransportCredentials
 	if cf.insecure {
 		creds = insecure.NewCredentials()
@@ -130,14 +216,19 @@ func (cf *connFlags) dial() (*grpc.ClientConn, error) {
 		}
 		creds = credentials.NewTLS(tlsCfg)
 	}
-	return grpc.NewClient(cf.endpoint, grpc.WithTransportCredentials(creds))
+	return grpc.NewClient(cf.endpoint,
+		grpc.WithTransportCredentials(creds),
+		grpc.WithUserAgent("parameter-store-cli/"+Version),
+	)
 }
 
 // authCtx attaches the identity token and optional per-secret token as gRPC
 // metadata, matching the server's expected header names. mTLS callers omit the
 // bearer token; the server derives their identity from the client certificate.
 func (cf *connFlags) authCtx(ctx context.Context) context.Context {
-	cf.finalize()
+	// dial has already surfaced any finalize error, and every caller returns
+	// on it before reaching here; the tokens are whatever finalize left.
+	_ = cf.finalize()
 	var kvs []string
 	if cf.token != "" {
 		kvs = append(kvs, "authorization", "Bearer "+cf.token)
@@ -176,6 +267,64 @@ func displayPath(ref *kmsv1.ResourceRef) string {
 	}.String()
 }
 
+// --- whoami ----------------------------------------------------------------
+
+// whoAmIJSON is the JSON form of the calling identity as the server resolved
+// it from the presented credential.
+type whoAmIJSON struct {
+	Name       string            `json:"name"`
+	Kind       string            `json:"kind"`
+	Namespace  *namespaceRefJSON `json:"namespace"`
+	AuthMethod string            `json:"auth_method"`
+}
+
+// cmdWhoAmI reports the identity the server derives from the credential this
+// invocation presents. It is the first command to run when a token or client
+// certificate does not behave as expected: it answers "who does the server
+// think I am, and how did it decide?" without needing any permission.
+func (c *CLI) cmdWhoAmI(args []string) int {
+	fs := c.newFlags("whoami")
+	cf := addConnFlags(c, fs)
+	c.setUsage(fs, "whoami [flags]",
+		"Print the identity the server resolves from the presented credential: its name, kind, namespace binding, and the authentication method that was used.", false)
+	if !c.parseFlags(fs, args) {
+		return 2
+	}
+	if !c.rejectPositionals() {
+		return 2
+	}
+
+	conn, err := c.dialConn(cf)
+	if err != nil {
+		return c.failErr("", err)
+	}
+	defer func() { _ = conn.Close() }()
+	ctx, cancel := callContext()
+	defer cancel()
+
+	resp, err := kmsv1.NewAdminServiceClient(conn).WhoAmI(cf.authCtx(ctx), &kmsv1.WhoAmIRequest{})
+	if err != nil {
+		return c.failErr("whoami", err)
+	}
+	if c.jsonOutput() {
+		return c.printJSON(whoAmIJSON{
+			Name:       resp.GetName(),
+			Kind:       resp.GetKind(),
+			Namespace:  namespaceRefToJSON(resp.GetNamespace()),
+			AuthMethod: resp.GetAuthMethod(),
+		})
+	}
+	// "(unbound)" rather than an empty field: a blank namespace line reads like
+	// output the command failed to fill in.
+	namespace := "(unbound)"
+	if ns := resp.GetNamespace(); ns != nil {
+		namespace = ns.GetEnv() + "/" + ns.GetApp()
+	}
+	_, _ = fmt.Fprintf(c.Stdout, "name: %s\nkind: %s\nnamespace: %s\nauth_method: %s\n",
+		resp.GetName(), resp.GetKind(), namespace, resp.GetAuthMethod())
+	return 0
+}
+
 // --- put-secret ------------------------------------------------------------
 
 func (c *CLI) cmdPutSecret(args []string) int {
@@ -185,7 +334,7 @@ func (c *CLI) cmdPutSecret(args []string) int {
 	clientBound := fs.Bool("client-bound", false, "write a client-bound secret (new secrets also require --generate-token)")
 	genToken := fs.Bool("generate-token", false, "mint or rotate a per-secret access token (shown once)")
 	contentType := fs.String("content-type", "text/plain", "secret content `type`")
-	fs.StringVar(&cf.secretToken, "secret-token", "", "existing per-secret `token` (client-bound updates)")
+	addSecretTokenFlags(fs, cf, "existing per-secret `token` (client-bound updates)")
 	c.setUsage(fs, "put-secret /env/app/key [flags]",
 		"Store a secret value read from --value-file or standard input.", false)
 	if !c.parseFlags(fs, args) {
@@ -193,20 +342,23 @@ func (c *CLI) cmdPutSecret(args []string) int {
 	}
 	pos := c.args()
 	if len(pos) < 1 || pos[0] == "" {
-		return c.fail("put-secret requires a /env/app/key argument")
+		return c.failUsage("put-secret requires a /env/app/key argument")
+	}
+	if !c.rejectExtraPositionals(1) {
+		return 2
 	}
 	ref, err := keyutil.SplitDisplayPath(pos[0])
 	if err != nil {
-		return c.fail("invalid path: %v", err)
+		return c.failUsage("invalid path: %v", err)
 	}
 	value, err := c.readValue(*valueFile)
 	if err != nil {
 		return c.fail("reading value: %v", err)
 	}
 
-	conn, err := cf.dial()
+	conn, err := c.dialConn(cf)
 	if err != nil {
-		return c.fail("%v", err)
+		return c.failErr("", err)
 	}
 	defer func() { _ = conn.Close() }()
 	ctx, cancel := callContext()
@@ -220,7 +372,20 @@ func (c *CLI) cmdPutSecret(args []string) int {
 		GenerateAccessToken: *genToken,
 	})
 	if err != nil {
-		return c.fail("put-secret: %v", err)
+		return c.failErr("put-secret", err)
+	}
+	if c.jsonOutput() {
+		// The one-time warning is security-relevant, so it goes to stderr
+		// unsilenced while the token itself appears once inside the document.
+		if resp.AccessToken != "" {
+			_, _ = fmt.Fprintln(c.Stderr, "WARNING: the access token is shown once; store it now.")
+		}
+		return c.printJSON(putSecretJSON{
+			Key:         ref.String(),
+			Version:     resp.Version,
+			Revision:    resp.Revision,
+			AccessToken: resp.AccessToken,
+		})
 	}
 	if _, err := fmt.Fprintf(c.Stdout, "Stored %s version %d (revision %d)\n", ref, resp.Version, resp.Revision); err != nil {
 		return c.fail("writing secret result: %v", err)
@@ -236,6 +401,15 @@ func (c *CLI) cmdPutSecret(args []string) int {
 	return 0
 }
 
+// putSecretJSON is the JSON form of a stored secret version. access_token is
+// present only when --generate-token minted one, and only ever here.
+type putSecretJSON struct {
+	Key         string `json:"key"`
+	Version     uint64 `json:"version"`
+	Revision    uint64 `json:"revision"`
+	AccessToken string `json:"access_token,omitempty"`
+}
+
 // --- get-secret ------------------------------------------------------------
 
 func (c *CLI) cmdGetSecret(args []string) int {
@@ -245,7 +419,7 @@ func (c *CLI) cmdGetSecret(args []string) int {
 	out := fs.String("out", "", "write the secret to this `file` instead of stdout")
 	version := fs.Uint64("version", 0, "specific `version` (0 = current label)")
 	label := fs.String("label", "", "version `label` (default: current)")
-	fs.StringVar(&cf.secretToken, "secret-token", "", "per-secret access `token`")
+	addSecretTokenFlags(fs, cf, "per-secret access `token`")
 	c.setUsage(fs, "get-secret /env/app/key [flags]",
 		"Fetch a secret; writing it to a terminal requires --show or --out FILE.", false)
 	if !c.parseFlags(fs, args) {
@@ -253,16 +427,19 @@ func (c *CLI) cmdGetSecret(args []string) int {
 	}
 	pos := c.args()
 	if len(pos) < 1 || pos[0] == "" {
-		return c.fail("get-secret requires a /env/app/key argument")
+		return c.failUsage("get-secret requires a /env/app/key argument")
+	}
+	if !c.rejectExtraPositionals(1) {
+		return 2
 	}
 	ref, err := keyutil.SplitDisplayPath(pos[0])
 	if err != nil {
-		return c.fail("invalid path: %v", err)
+		return c.failUsage("invalid path: %v", err)
 	}
 
-	conn, err := cf.dial()
+	conn, err := c.dialConn(cf)
 	if err != nil {
-		return c.fail("%v", err)
+		return c.failErr("", err)
 	}
 	defer func() { _ = conn.Close() }()
 	ctx, cancel := callContext()
@@ -274,16 +451,39 @@ func (c *CLI) cmdGetSecret(args []string) int {
 		Label:   *label,
 	})
 	if err != nil {
-		return c.fail("get-secret: %v", err)
+		return c.failErr("get-secret", err)
 	}
 
+	// The destination rules are the same in both output modes: --out wins, a
+	// terminal still needs --show, and only then does the value leave the
+	// process. JSON mode differs solely in how the result is rendered.
+	document := getSecretJSON{
+		Key:         displayPath(resp.Ref),
+		Version:     resp.Version,
+		ContentType: resp.ContentType,
+		CreatedAt:   jsonTime(resp.CreatedAtUnixMs),
+	}
+	if document.Key == "" {
+		document.Key = ref.String()
+	}
 	switch {
 	case *out != "":
 		if err := os.WriteFile(*out, resp.Value, 0o600); err != nil {
-			return c.fail("writing --out: %v", err)
+			return c.failErr("writing --out", err)
 		}
-		_, _ = fmt.Fprintf(c.Stderr, "Wrote %d bytes to %s\n", len(resp.Value), *out)
+		c.info("Wrote %d bytes to %s", len(resp.Value), *out)
+		document.OutFile = *out
 	case *show || !c.stdoutIsTTY():
+		if c.jsonOutput() {
+			// A secret that is not valid UTF-8 has no JSON string form; --out
+			// saves it verbatim instead of corrupting it.
+			if !utf8.Valid(resp.Value) {
+				return c.fail("secret value is not valid UTF-8 and cannot be rendered as JSON; use --out FILE")
+			}
+			value := string(resp.Value)
+			document.Value = &value
+			break
+		}
 		// Piped or explicitly allowed: emit raw bytes with no trailing newline.
 		if _, err := c.Stdout.Write(resp.Value); err != nil {
 			return c.fail("writing output: %v", err)
@@ -291,7 +491,22 @@ func (c *CLI) cmdGetSecret(args []string) int {
 	default:
 		return c.fail("refusing to print a secret to a terminal; pass --show to print or --out FILE to save")
 	}
+	if c.jsonOutput() {
+		return c.printJSON(document)
+	}
 	return 0
+}
+
+// getSecretJSON is the JSON form of a fetched secret. value is null when the
+// bytes went to --out instead of stdout, in which case out_file names the file
+// that now holds them.
+type getSecretJSON struct {
+	Key         string  `json:"key"`
+	Version     uint64  `json:"version"`
+	Value       *string `json:"value"`
+	ContentType string  `json:"content_type"`
+	CreatedAt   *string `json:"created_at"`
+	OutFile     string  `json:"out_file,omitempty"`
 }
 
 // --- put-parameter ---------------------------------------------------------
@@ -307,17 +522,20 @@ func (c *CLI) cmdPutParameter(args []string) int {
 	}
 	pos := c.args()
 	if len(pos) < 2 || pos[0] == "" {
-		return c.fail("put-parameter requires /env/app/key and VALUE arguments")
+		return c.failUsage("put-parameter requires /env/app/key and VALUE arguments")
+	}
+	if !c.rejectExtraPositionals(2) {
+		return 2
 	}
 	ref, err := keyutil.SplitDisplayPath(pos[0])
 	if err != nil {
-		return c.fail("invalid path: %v", err)
+		return c.failUsage("invalid path: %v", err)
 	}
 	value := pos[1]
 
-	conn, err := cf.dial()
+	conn, err := c.dialConn(cf)
 	if err != nil {
-		return c.fail("%v", err)
+		return c.failErr("", err)
 	}
 	defer func() { _ = conn.Close() }()
 	ctx, cancel := callContext()
@@ -329,10 +547,20 @@ func (c *CLI) cmdPutParameter(args []string) int {
 		ContentType: *contentType,
 	})
 	if err != nil {
-		return c.fail("put-parameter: %v", err)
+		return c.failErr("put-parameter", err)
+	}
+	if c.jsonOutput() {
+		return c.printJSON(putParameterJSON{Key: ref.String(), Version: resp.Version, Revision: resp.Revision})
 	}
 	_, _ = fmt.Fprintf(c.Stdout, "Stored %s version %d (revision %d)\n", ref, resp.Version, resp.Revision)
 	return 0
+}
+
+// putParameterJSON is the JSON form of a stored parameter version.
+type putParameterJSON struct {
+	Key      string `json:"key"`
+	Version  uint64 `json:"version"`
+	Revision uint64 `json:"revision"`
 }
 
 // --- list ------------------------------------------------------------------
@@ -347,17 +575,20 @@ func (c *CLI) cmdList(args []string) int {
 	}
 	pos := c.args()
 	if len(pos) < 1 || pos[0] == "" {
-		return c.fail("list requires an env/app namespace argument")
+		return c.failUsage("list requires an env/app namespace argument")
+	}
+	if !c.rejectExtraPositionals(1) {
+		return 2
 	}
 	ns, err := keyutil.ParseNamespace(pos[0])
 	if err != nil {
-		return c.fail("invalid namespace: %v", err)
+		return c.failUsage("invalid namespace: %v", err)
 	}
 	pns := &kmsv1.NamespaceRef{Env: ns.Env, App: ns.App}
 
-	conn, err := cf.dial()
+	conn, err := c.dialConn(cf)
 	if err != nil {
-		return c.fail("%v", err)
+		return c.failErr("", err)
 	}
 	defer func() { _ = conn.Close() }()
 	ctx, cancel := callContext()
@@ -367,18 +598,19 @@ func (c *CLI) cmdList(args []string) int {
 	paramClient := kmsv1.NewParameterServiceClient(conn)
 	secretClient := kmsv1.NewSecretServiceClient(conn)
 
-	tw := tabwriter.NewWriter(c.Stdout, 0, 4, 2, ' ', 0)
-	_, _ = fmt.Fprintln(tw, "TYPE\tPATH\tCURRENT\tNOTE")
+	items := []listItemJSON{}
 
 	// Page through the full result set; a listing command that silently
 	// truncated at the first page would give a misleading partial view.
 	for token := ""; ; {
 		resp, err := paramClient.ListParameters(actx, &kmsv1.ListParametersRequest{Namespace: pns, KeyPrefix: *keyPrefix, PageToken: token})
 		if err != nil {
-			return c.fail("list parameters: %v", err)
+			return c.failErr("list parameters", err)
 		}
 		for _, p := range resp.Parameters {
-			_, _ = fmt.Fprintf(tw, "parameter\t%s\t%d\t%s\n", displayPath(p.Ref), p.Version, p.ContentType)
+			items = append(items, listItemJSON{
+				Type: "parameter", Path: displayPath(p.Ref), Current: p.Version, Note: p.ContentType,
+			})
 		}
 		if token = resp.NextPageToken; token == "" {
 			break
@@ -387,21 +619,46 @@ func (c *CLI) cmdList(args []string) int {
 	for token := ""; ; {
 		resp, err := secretClient.ListSecrets(actx, &kmsv1.ListSecretsRequest{Namespace: pns, KeyPrefix: *keyPrefix, PageToken: token})
 		if err != nil {
-			return c.fail("list secrets: %v", err)
+			return c.failErr("list secrets", err)
 		}
 		for _, s := range resp.Secrets {
 			note := "standard"
 			if s.ClientBound {
 				note = "client-bound"
 			}
-			_, _ = fmt.Fprintf(tw, "secret\t%s\t%d\t%s\n", displayPath(s.Ref), s.Labels["current"], note)
+			items = append(items, listItemJSON{
+				Type: "secret", Path: displayPath(s.Ref), Current: s.Labels["current"],
+				Note: note, ClientBound: s.ClientBound,
+			})
 		}
 		if token = resp.NextPageToken; token == "" {
 			break
 		}
 	}
-	_ = tw.Flush()
+
+	if c.jsonOutput() {
+		// The command drains every page itself, so the envelope's
+		// next_page_token is always empty (and therefore omitted): the items
+		// array is the complete result.
+		return c.printList(items, "")
+	}
+	rows := make([][]string, 0, len(items))
+	for _, it := range items {
+		rows = append(rows, []string{it.Type, it.Path, strconv.FormatUint(it.Current, 10), it.Note})
+	}
+	c.printTable([]string{"TYPE", "PATH", "CURRENT", "NOTE"}, rows)
 	return 0
+}
+
+// listItemJSON is one row of the namespace listing. It carries every table
+// column plus client_bound, so a consumer need not parse the human-readable
+// note to tell a client-bound secret from a standard one.
+type listItemJSON struct {
+	Type        string `json:"type"` // parameter | secret
+	Path        string `json:"path"` // /env/app/key
+	Current     uint64 `json:"current"`
+	Note        string `json:"note"`         // content type (parameter) or standard|client-bound (secret)
+	ClientBound bool   `json:"client_bound"` // always false for a parameter
 }
 
 // --- helpers ---------------------------------------------------------------

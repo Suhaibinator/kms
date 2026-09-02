@@ -302,11 +302,15 @@ func TestDefaultsApplyHandlesServerAndMalformedResponses(t *testing.T) {
 		response *kmsv1.ApplyApplicationDefaultsResponse
 		err      error
 		want     string
+		// code is the classified exit status: a server status maps to its own
+		// code, while a response the CLI itself rejects stays the generic 1.
+		code int
 	}{
-		{name: "malformed artifact rejected by server", err: status.Error(codes.InvalidArgument, "invalid defaults artifact"), want: "invalid defaults artifact"},
-		{name: "authentication failure", err: status.Error(codes.Unauthenticated, "missing credentials"), want: "missing credentials"},
-		{name: "empty plan digest", response: &kmsv1.ApplyApplicationDefaultsResponse{Profile: "dev"}, want: "missing plan digest"},
-		{name: "unknown status", response: &kmsv1.ApplyApplicationDefaultsResponse{PlanDigest: "plan", Entries: []*kmsv1.DefaultsApplyEntry{{Alias: "a", Key: "a", Status: "mystery"}}}, want: "unknown status"},
+		{name: "malformed artifact rejected by server", err: status.Error(codes.InvalidArgument, "invalid defaults artifact"), want: "invalid defaults artifact", code: 1},
+		{name: "authentication failure", err: status.Error(codes.Unauthenticated, "missing credentials"), want: "missing credentials", code: exitUnauthenticated},
+		{name: "server unavailable", err: status.Error(codes.Unavailable, "server is starting"), want: "server is starting", code: exitUnavailable},
+		{name: "empty plan digest", response: &kmsv1.ApplyApplicationDefaultsResponse{Profile: "dev"}, want: "missing plan digest", code: 1},
+		{name: "unknown status", response: &kmsv1.ApplyApplicationDefaultsResponse{PlanDigest: "plan", Entries: []*kmsv1.DefaultsApplyEntry{{Alias: "a", Key: "a", Status: "mystery"}}}, want: "unknown status", code: 1},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -315,8 +319,8 @@ func TestDefaultsApplyHandlesServerAndMalformedResponses(t *testing.T) {
 			c := newTestCLI()
 			c.dialOverride = dial
 			code := c.Run([]string{"defaults", "apply", "dev/app", "--from", writeDefaultsInput(t, "malformed artifact"), "--insecure"})
-			if code != 1 || !strings.Contains(c.stderr(), test.want) {
-				t.Fatalf("exit=%d stderr=%s, want %q", code, c.stderr(), test.want)
+			if code != test.code || !strings.Contains(c.stderr(), test.want) {
+				t.Fatalf("exit=%d want=%d stderr=%s, want %q", code, test.code, c.stderr(), test.want)
 			}
 		})
 	}

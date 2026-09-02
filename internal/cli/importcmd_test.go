@@ -192,6 +192,155 @@ func TestWriteImportReportPropagatesOutputFailure(t *testing.T) {
 	}
 }
 
+// In JSON mode the mapping report becomes the result document on stdout. A
+// dry run mints nothing, so no entry carries a token.
+func TestImportDryRunJSON(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "export.json")
+	writeFile(t, src, `{"STRIPE_KEY":"sk_live_x","TWILIO_SID":"AC123"}`)
+
+	c := newTestCLI()
+	code := c.Run([]string{"-o", "json", "import", "--from", src, "--namespace", "prod/gradethis", "--dry-run"})
+	if code != 0 {
+		t.Fatalf("import exit = %d, stderr=%s", code, c.stderr())
+	}
+	document := decodeJSONStdout(t, c)
+	assertJSONFields(t, document, "namespace", "dry_run", "imported", "entries")
+	if document["dry_run"] != true {
+		t.Fatalf("dry_run = %v", document["dry_run"])
+	}
+	if imported, _ := document["imported"].(float64); imported != 0 {
+		t.Fatalf("imported = %v, want 0 for a dry run", document["imported"])
+	}
+	namespace, _ := document["namespace"].(map[string]any)
+	if namespace["env"] != "prod" || namespace["app"] != "gradethis" {
+		t.Fatalf("namespace = %v", namespace)
+	}
+	entries, ok := document["entries"].([]any)
+	if !ok || len(entries) != 2 {
+		t.Fatalf("entries = %#v, want 2", document["entries"])
+	}
+	// Entries are sorted by source key, so the document is reproducible.
+	first, _ := entries[0].(map[string]any)
+	assertJSONFields(t, first, "key", "path")
+	if first["key"] != "STRIPE_KEY" || first["path"] != "/prod/gradethis/stripe-key" {
+		t.Fatalf("entries[0] = %v", first)
+	}
+	if strings.Contains(c.stdout(), "token") {
+		t.Fatalf("a dry run disclosed a token field: %s", c.stdout())
+	}
+}
+
+// A real import mints one access token per secret. Each appears exactly once
+// in the document, with the one-time warning on stderr.
+func TestImportJSONCarriesEachAccessTokenOnce(t *testing.T) {
+	dir := t.TempDir()
+	db := filepath.Join(dir, "kms.db")
+	keyFile := filepath.Join(dir, "master.key")
+	src := filepath.Join(dir, "export.json")
+	writeFile(t, src, `{"STRIPE_KEY":"sk_live_x"}`)
+
+	init := newTestCLI()
+	if code := init.cmdInit([]string{"--sqlite-path", db, "--kek-file", keyFile}); code != 0 {
+		t.Fatalf("init exit=%d stderr=%s", code, init.stderr())
+	}
+
+	c := newTestCLI()
+	code := c.Run([]string{"-o", "json", "import", "--from", src, "--namespace", "prod/gradethis",
+		"--sqlite-path", db, "--kek-file", keyFile})
+	if code != 0 {
+		t.Fatalf("import exit = %d, stderr=%s", code, c.stderr())
+	}
+	document := decodeJSONStdout(t, c)
+	if document["dry_run"] != false {
+		t.Fatalf("dry_run = %v", document["dry_run"])
+	}
+	if imported, _ := document["imported"].(float64); imported != 1 {
+		t.Fatalf("imported = %v, want 1", document["imported"])
+	}
+	entries, _ := document["entries"].([]any)
+	entry, _ := entries[0].(map[string]any)
+	assertJSONFields(t, entry, "key", "path", "token")
+	token, _ := entry["token"].(string)
+	if !strings.HasPrefix(token, "kmss_") {
+		t.Fatalf("token = %q", token)
+	}
+	if strings.Count(c.stdout(), token) != 1 {
+		t.Fatalf("the one-time token appears more than once: %s", c.stdout())
+	}
+	if !strings.Contains(c.stderr(), "WARNING: the access tokens are shown once") {
+		t.Fatalf("stderr = %q", c.stderr())
+	}
+}
+
+// --report keeps its meaning in JSON mode: the file still receives the text
+// mapping, and stdout still carries exactly one document.
+func TestImportJSONWithReportFileWritesBoth(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "export.json")
+	writeFile(t, src, `{"A":"1"}`)
+	report := filepath.Join(dir, "report.txt")
+
+	c := newTestCLI()
+	code := c.Run([]string{"-o", "json", "import", "--from", src, "--namespace", "prod/gradethis",
+		"--dry-run", "--report", report})
+	if code != 0 {
+		t.Fatalf("import exit = %d, stderr=%s", code, c.stderr())
+	}
+	if body := readFileString(t, report); !strings.Contains(body, "A -> /prod/gradethis/a") {
+		t.Fatalf("report = %q", body)
+	}
+	document := decodeJSONStdout(t, c)
+	if entries, _ := document["entries"].([]any); len(entries) != 1 {
+		t.Fatalf("stdout document = %q", c.stdout())
+	}
+	if document["report_file"] != report {
+		t.Fatalf("report_file = %v, want %q", document["report_file"], report)
+	}
+}
+
+// A real import with both -o json and --report puts each one-time token in
+// exactly one place: the report file the operator named. The JSON document
+// carries the mapping without tokens and names the file instead, the way
+// get-secret --out reports out_file rather than the value.
+func TestImportJSONWithReportFileKeepsTokensOutOfStdout(t *testing.T) {
+	dir := t.TempDir()
+	db := filepath.Join(dir, "kms.db")
+	keyFile := filepath.Join(dir, "master.key")
+	src := filepath.Join(dir, "export.json")
+	writeFile(t, src, `{"STRIPE_KEY":"sk_live_x"}`)
+	report := filepath.Join(dir, "report.txt")
+
+	init := newTestCLI()
+	if code := init.cmdInit([]string{"--sqlite-path", db, "--kek-file", keyFile}); code != 0 {
+		t.Fatalf("init exit=%d stderr=%s", code, init.stderr())
+	}
+
+	c := newTestCLI()
+	code := c.Run([]string{"-o", "json", "import", "--from", src, "--namespace", "prod/gradethis",
+		"--sqlite-path", db, "--kek-file", keyFile, "--report", report})
+	if code != 0 {
+		t.Fatalf("import exit = %d, stderr=%s", code, c.stderr())
+	}
+	body := readFileString(t, report)
+	if !strings.Contains(body, "kmss_") {
+		t.Fatalf("report file carries no token: %q", body)
+	}
+	if strings.Contains(c.stdout(), "kmss_") || strings.Contains(c.stderr(), "kmss_") {
+		t.Fatalf("a token left the report file:\nstdout=%s\nstderr=%s", c.stdout(), c.stderr())
+	}
+	document := decodeJSONStdout(t, c)
+	if document["report_file"] != report {
+		t.Fatalf("report_file = %v, want %q", document["report_file"], report)
+	}
+	entries, _ := document["entries"].([]any)
+	entry, _ := entries[0].(map[string]any)
+	assertJSONFields(t, entry, "key", "path")
+	if !strings.Contains(c.stderr(), "WARNING: the access tokens were written once to "+report) {
+		t.Fatalf("stderr = %q", c.stderr())
+	}
+}
+
 // --- helpers ---------------------------------------------------------------
 
 func writeFile(t *testing.T, path, content string) {

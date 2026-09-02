@@ -29,10 +29,10 @@ func TestBackupCommand(t *testing.T) {
 		t.Fatalf("backup output is not a valid sqlite db: %v", err)
 	}
 
-	// A second backup to the same path must be refused.
+	// A second backup to the same path must be refused, as a conflict.
 	c2 := newTestCLI()
-	if code := c2.cmdBackup([]string{"--sqlite-path", dbPath, "--out", out}); code == 0 {
-		t.Fatalf("expected refusal to overwrite existing backup")
+	if code := c2.cmdBackup([]string{"--sqlite-path", dbPath, "--out", out}); code != exitConflict {
+		t.Fatalf("backup over an existing file exit = %d, want %d; stderr=%s", code, exitConflict, c2.stderr())
 	}
 	if !strings.Contains(c2.stderr(), "already exists") {
 		t.Fatalf("stderr = %s", c2.stderr())
@@ -84,9 +84,11 @@ func TestRestoreCommandEndToEnd(t *testing.T) {
 		t.Fatalf("backup exit=%d stderr=%s", code, c.stderr())
 	}
 
+	// restore now confirms before it writes; a non-interactive caller supplies
+	// the answer with --yes.
 	restored := filepath.Join(dir, "restored.db")
 	c2 := newTestCLI()
-	if code := c2.cmdRestore([]string{"--sqlite-path", restored, "--in", backup}); code != 0 {
+	if code := c2.cmdRestore([]string{"--sqlite-path", restored, "--in", backup, "--yes"}); code != 0 {
 		t.Fatalf("restore exit=%d stderr=%s", code, c2.stderr())
 	}
 	if !strings.Contains(c2.stdout(), "Restored") {

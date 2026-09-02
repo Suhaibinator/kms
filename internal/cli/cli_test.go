@@ -3,6 +3,8 @@ package cli
 import (
 	"strings"
 	"testing"
+
+	kmsv1 "github.com/Suhaibinator/kms/gen/kmsv1"
 )
 
 func TestRunVersion(t *testing.T) {
@@ -69,6 +71,14 @@ func TestCommandFlagHelpExitsSuccessfully(t *testing.T) {
 		{"admin", "identity", "issue-cert", "--help"},
 		{"admin", "ca", "show", "-h"},
 		{"put-secret", "--help"},
+		{"whoami", "--help"},
+		{"admin", "--help"},
+		{"admin", "namespace", "--help"},
+		{"admin", "identity", "-h"},
+		{"admin", "policy", "help"},
+		{"admin", "ca", "--help"},
+		{"release", "--help"},
+		{"config", "--help"},
 	} {
 		c := newTestCLI()
 		if code := c.Run(args); code != 0 {
@@ -94,11 +104,68 @@ func TestMalformedCommandFlagStillExitsWithUsageError(t *testing.T) {
 	}
 }
 
+// --output is accepted on both sides of the subcommand, and a value after it
+// wins: `parameter-store -o table whoami --output json` must produce JSON.
+func TestOutputFlagIsAcceptedAfterTheSubcommand(t *testing.T) {
+	stub := &whoAmIStub{response: &kmsv1.WhoAmIResponse{Name: "ops", Kind: "admin", AuthMethod: "token"}}
+	c := newWhoAmICLI(t, stub)
+	if code := c.Run([]string{"-o", "table", "whoami", "--insecure", "--token", "t", "--output", "json"}); code != 0 {
+		t.Fatalf("whoami exit = %d, stderr=%s", code, c.stderr())
+	}
+	if got := decodeJSONStdout(t, c)["name"]; got != "ops" {
+		t.Fatalf("document = %q", c.stdout())
+	}
+}
+
+// The short forms work after the subcommand too, where `admin-cert issue`
+// also owns --out: -o is the output format everywhere, -y and -q likewise.
+func TestShortGlobalFlagsAreAcceptedAfterTheSubcommand(t *testing.T) {
+	stub := &whoAmIStub{response: &kmsv1.WhoAmIResponse{Name: "ops", Kind: "admin", AuthMethod: "token"}}
+	c := newWhoAmICLI(t, stub)
+	if code := c.Run([]string{"whoami", "--insecure", "--token", "t", "-o", "json", "-q", "-y"}); code != 0 {
+		t.Fatalf("whoami exit = %d, stderr=%s", code, c.stderr())
+	}
+	if got := decodeJSONStdout(t, c)["name"]; got != "ops" {
+		t.Fatalf("document = %q", c.stdout())
+	}
+	if !c.quiet || !c.assumeYes {
+		t.Fatalf("quiet=%v assumeYes=%v, want both set", c.quiet, c.assumeYes)
+	}
+
+	// Usage folds each alias into its long form's row rather than listing
+	// one-letter flags separately.
+	help := newTestCLI()
+	if code := help.Run([]string{"admin-cert", "issue", "--help"}); code != 0 {
+		t.Fatalf("help exit = %d", code)
+	}
+	for _, want := range []string{"--output FORMAT, -o", "--yes[=true|false], -y", "--quiet[=true|false], -q", "--out DIRECTORY"} {
+		if !strings.Contains(help.stderr(), want) {
+			t.Fatalf("usage missing %q:\n%s", want, help.stderr())
+		}
+	}
+	if strings.Contains(help.stderr(), "\n  --o ") || strings.Contains(help.stderr(), "--y[") || strings.Contains(help.stderr(), "--q[") {
+		t.Fatalf("usage lists an alias on its own row:\n%s", help.stderr())
+	}
+}
+
+// KMS_OUTPUT selects the format when no flag does, so a CI job can set it once.
+func TestOutputFormatFromEnvironment(t *testing.T) {
+	stub := &whoAmIStub{response: &kmsv1.WhoAmIResponse{Name: "ops", Kind: "admin", AuthMethod: "token"}}
+	c := newWhoAmICLI(t, stub)
+	c.lookupEnv = mapLookup(map[string]string{"KMS_OUTPUT": "json"})
+	if code := c.Run([]string{"whoami", "--insecure", "--token", "t"}); code != 0 {
+		t.Fatalf("whoami exit = %d, stderr=%s", code, c.stderr())
+	}
+	if got := decodeJSONStdout(t, c)["auth_method"]; got != "token" {
+		t.Fatalf("document = %q", c.stdout())
+	}
+}
+
 func TestConsumeGlobalConfigFlag(t *testing.T) {
 	c := newTestCLI()
 	// `--config x version` should set ConfigPath and still run version.
-	rest := c.consumeGlobalFlags([]string{"--config", "/etc/kms.yaml", "version"})
-	if c.ConfigPath != "/etc/kms.yaml" {
+	rest, ok := c.consumeGlobalFlags([]string{"--config", "/etc/kms.yaml", "version"})
+	if !ok || c.ConfigPath != "/etc/kms.yaml" {
 		t.Fatalf("ConfigPath = %q", c.ConfigPath)
 	}
 	if len(rest) != 1 || rest[0] != "version" {
@@ -107,15 +174,15 @@ func TestConsumeGlobalConfigFlag(t *testing.T) {
 
 	// `--config=x` form.
 	c2 := newTestCLI()
-	rest = c2.consumeGlobalFlags([]string{"--config=/a.yaml", "serve"})
-	if c2.ConfigPath != "/a.yaml" || rest[0] != "serve" {
+	rest, ok = c2.consumeGlobalFlags([]string{"--config=/a.yaml", "serve"})
+	if !ok || c2.ConfigPath != "/a.yaml" || rest[0] != "serve" {
 		t.Fatalf("config= form failed: %q %v", c2.ConfigPath, rest)
 	}
 
 	// No global flag: everything is the command.
 	c3 := newTestCLI()
-	rest = c3.consumeGlobalFlags([]string{"serve", "--config", "x"})
-	if rest[0] != "serve" {
+	rest, ok = c3.consumeGlobalFlags([]string{"serve", "--config", "x"})
+	if !ok || rest[0] != "serve" {
 		t.Fatalf("rest = %v", rest)
 	}
 }

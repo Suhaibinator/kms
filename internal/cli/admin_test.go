@@ -285,6 +285,8 @@ func TestRotateAdminDirectDatabaseRecovery(t *testing.T) {
 }
 
 func TestRotateAdminRejectsInvalidTargetsWithoutMutation(t *testing.T) {
+	// wantCode is 1 for the checks the CLI composes itself; the store's
+	// not-found sentinel surfaces as the documented exit code 5 instead.
 	tests := []struct {
 		name      string
 		target    string
@@ -293,12 +295,13 @@ func TestRotateAdminRejectsInvalidTargetsWithoutMutation(t *testing.T) {
 		hasToken  bool
 		args      func(db string) []string
 		wantError string
+		wantCode  int
 	}{
-		{name: "missing name", target: "admin", kind: domain.IdentityKindAdmin, hasToken: true, args: func(db string) []string { return []string{"--sqlite-path", db} }, wantError: "--name is required"},
-		{name: "unknown identity", target: "admin", kind: domain.IdentityKindAdmin, hasToken: true, args: func(db string) []string { return []string{"--sqlite-path", db, "--name", "missing"} }, wantError: "identity missing"},
-		{name: "client identity", target: "client", kind: domain.IdentityKindClient, hasToken: true, args: func(db string) []string { return []string{"--sqlite-path", db, "--name", "client"} }, wantError: "is not an admin"},
-		{name: "disabled admin", target: "admin", kind: domain.IdentityKindAdmin, disabled: true, hasToken: true, args: func(db string) []string { return []string{"--sqlite-path", db, "--name", "admin"} }, wantError: "is disabled"},
-		{name: "admin without token", target: "admin", kind: domain.IdentityKindAdmin, args: func(db string) []string { return []string{"--sqlite-path", db, "--name", "admin"} }, wantError: "has no token to rotate"},
+		{name: "missing name", target: "admin", kind: domain.IdentityKindAdmin, hasToken: true, args: func(db string) []string { return []string{"--sqlite-path", db} }, wantError: "--name is required", wantCode: 2},
+		{name: "unknown identity", target: "admin", kind: domain.IdentityKindAdmin, hasToken: true, args: func(db string) []string { return []string{"--sqlite-path", db, "--name", "missing"} }, wantError: "identity missing", wantCode: exitNotFound},
+		{name: "client identity", target: "client", kind: domain.IdentityKindClient, hasToken: true, args: func(db string) []string { return []string{"--sqlite-path", db, "--name", "client"} }, wantError: "is not an admin", wantCode: 1},
+		{name: "disabled admin", target: "admin", kind: domain.IdentityKindAdmin, disabled: true, hasToken: true, args: func(db string) []string { return []string{"--sqlite-path", db, "--name", "admin"} }, wantError: "is disabled", wantCode: 1},
+		{name: "admin without token", target: "admin", kind: domain.IdentityKindAdmin, args: func(db string) []string { return []string{"--sqlite-path", db, "--name", "admin"} }, wantError: "has no token to rotate", wantCode: 1},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -326,8 +329,8 @@ func TestRotateAdminRejectsInvalidTargetsWithoutMutation(t *testing.T) {
 			}
 
 			c := newTestCLI()
-			if code := c.cmdRotateAdmin(test.args(db)); code != 1 {
-				t.Fatalf("rotate-admin exit=%d, want 1; stdout=%s stderr=%s", code, c.stdout(), c.stderr())
+			if code := c.cmdRotateAdmin(test.args(db)); code != test.wantCode {
+				t.Fatalf("rotate-admin exit=%d, want %d; stdout=%s stderr=%s", code, test.wantCode, c.stdout(), c.stderr())
 			}
 			if !strings.Contains(c.stderr(), test.wantError) {
 				t.Fatalf("stderr = %q, want %q", c.stderr(), test.wantError)
@@ -359,6 +362,308 @@ func TestRotateAdminRejectsInvalidTargetsWithoutMutation(t *testing.T) {
 				t.Fatalf("refused rotation audit events = %+v, %v", events, err)
 			}
 		})
+	}
+}
+
+// --- JSON output ------------------------------------------------------------
+
+// initDB creates a database and master key file, returning both paths.
+func initDB(t *testing.T) (db, keyFile string) {
+	t.Helper()
+	dir := t.TempDir()
+	db = filepath.Join(dir, "kms.db")
+	keyFile = filepath.Join(dir, "master.key")
+	c := newTestCLI()
+	if code := c.cmdInit([]string{"--sqlite-path", db, "--kek-file", keyFile}); code != 0 {
+		t.Fatalf("init exit=%d stderr=%s", code, c.stderr())
+	}
+	return db, keyFile
+}
+
+func TestInitJSONCarriesTheAdminTokenOnce(t *testing.T) {
+	dir := t.TempDir()
+	db := filepath.Join(dir, "kms.db")
+	keyFile := filepath.Join(dir, "master.key")
+
+	c := newTestCLI()
+	code := c.Run([]string{"-o", "json", "init", "--sqlite-path", db, "--kek-file", keyFile, "--admin", "root"})
+	if code != 0 {
+		t.Fatalf("init exit=%d stderr=%s", code, c.stderr())
+	}
+	document := decodeJSONStdout(t, c)
+	assertJSONFields(t, document, "sqlite_path", "sqlite_path_source", "master_key", "kek_file", "ca", "admin")
+	if document["master_key"] != "file" || document["ca"] != "ready" || document["kek_file"] != keyFile {
+		t.Fatalf("document = %v", document)
+	}
+	if document["sqlite_path"] != absPath(db) || document["sqlite_path_source"] != "flag --sqlite-path" {
+		t.Fatalf("sqlite_path = %v (%v)", document["sqlite_path"], document["sqlite_path_source"])
+	}
+	admin, ok := document["admin"].(map[string]any)
+	if !ok {
+		t.Fatalf("admin = %#v, want an object", document["admin"])
+	}
+	assertJSONFields(t, admin, "name", "token", "cert")
+	token, _ := admin["token"].(string)
+	if !strings.HasPrefix(token, "kms_") {
+		t.Fatalf("admin token = %q", token)
+	}
+	if strings.Count(c.stdout(), token) != 1 {
+		t.Fatalf("the one-time token appears more than once on stdout: %s", c.stdout())
+	}
+	// No --cert-dir: there is no certificate, and the field says so explicitly.
+	if admin["cert"] != nil {
+		t.Fatalf("cert = %#v, want null", admin["cert"])
+	}
+	// The one-time warning is a security notice, so it stays on stderr where
+	// it cannot corrupt the document.
+	if !strings.Contains(c.stderr(), "WARNING: this token is shown once") {
+		t.Fatalf("stderr = %q", c.stderr())
+	}
+}
+
+// Without --admin there is no bootstrap identity, and admin is null rather
+// than an object of empty strings.
+func TestInitJSONWithoutAdminIsNull(t *testing.T) {
+	dir := t.TempDir()
+	c := newTestCLI()
+	code := c.Run([]string{"-o", "json", "init",
+		"--sqlite-path", filepath.Join(dir, "kms.db"), "--kek-file", filepath.Join(dir, "master.key")})
+	if code != 0 {
+		t.Fatalf("init exit=%d stderr=%s", code, c.stderr())
+	}
+	if admin, present := decodeJSONStdout(t, c)["admin"]; !present || admin != nil {
+		t.Fatalf("admin = %#v (present=%v), want null", admin, present)
+	}
+}
+
+func TestCheckJSONReportsEachVerdict(t *testing.T) {
+	db, keyFile := initDB(t)
+
+	// A database that opens and whose master key unseals.
+	verified := newTestCLI()
+	if code := verified.Run([]string{"-o", "json", "check", "--sqlite-path", db, "--kek-file", keyFile}); code != 0 {
+		t.Fatalf("check exit=%d stderr=%s", code, verified.stderr())
+	}
+	document := decodeJSONStdout(t, verified)
+	assertJSONFields(t, document, "database", "master_key", "sqlite_path", "sqlite_path_source")
+	if document["database"] != "ok" || document["master_key"] != "ok" || document["sqlite_path"] != absPath(db) {
+		t.Fatalf("document = %v", document)
+	}
+
+	// The same database with no key source available: the schema is still
+	// verified, the key is reported as unchecked, and the exit code stays 0.
+	unchecked := newTestCLI()
+	if code := unchecked.Run([]string{"-o", "json", "check", "--sqlite-path", db}); code != 0 {
+		t.Fatalf("check exit=%d stderr=%s", code, unchecked.stderr())
+	}
+	if got := decodeJSONStdout(t, unchecked)["master_key"]; got != "not_checked" {
+		t.Fatalf("master_key = %v, want not_checked", got)
+	}
+
+	// A migrated but un-keyed database needs init, and says so.
+	fresh := newTestCLI()
+	if code := fresh.Run([]string{"-o", "json", "check", "--sqlite-path", filepath.Join(t.TempDir(), "fresh.db")}); code != 0 {
+		t.Fatalf("check exit=%d stderr=%s", code, fresh.stderr())
+	}
+	if got := decodeJSONStdout(t, fresh)["master_key"]; got != "not_initialized" {
+		t.Fatalf("master_key = %v, want not_initialized", got)
+	}
+}
+
+func TestMigrateAndBackupJSON(t *testing.T) {
+	db, _ := initDB(t)
+
+	migrated := newTestCLI()
+	if code := migrated.Run([]string{"-o", "json", "migrate", "--sqlite-path", db}); code != 0 {
+		t.Fatalf("migrate exit=%d stderr=%s", code, migrated.stderr())
+	}
+	document := decodeJSONStdout(t, migrated)
+	assertJSONFields(t, document, "sqlite_path", "sqlite_path_source", "migrated")
+	if document["migrated"] != true || document["sqlite_path"] != absPath(db) {
+		t.Fatalf("migrate document = %v", document)
+	}
+
+	out := filepath.Join(t.TempDir(), "backup.db")
+	backup := newTestCLI()
+	if code := backup.Run([]string{"-o", "json", "backup", "--sqlite-path", db, "--out", out}); code != 0 {
+		t.Fatalf("backup exit=%d stderr=%s", code, backup.stderr())
+	}
+	document = decodeJSONStdout(t, backup)
+	assertJSONFields(t, document, "backup_file", "sqlite_path")
+	if document["backup_file"] != out {
+		t.Fatalf("backup document = %v", document)
+	}
+	// The "master key not included" note is advice, not the result: in JSON
+	// mode it belongs on stderr.
+	if !strings.Contains(backup.stderr(), "the master key is NOT included") {
+		t.Fatalf("stderr = %q", backup.stderr())
+	}
+}
+
+func TestCreateAdminAndRotateAdminJSON(t *testing.T) {
+	db, _ := initDB(t)
+
+	created := newTestCLI()
+	if code := created.Run([]string{"-o", "json", "create-admin", "--sqlite-path", db, "--name", "ops"}); code != 0 {
+		t.Fatalf("create-admin exit=%d stderr=%s", code, created.stderr())
+	}
+	document := decodeJSONStdout(t, created)
+	assertJSONFields(t, document, "name", "token", "cert")
+	firstToken, _ := document["token"].(string)
+	if document["name"] != "ops" || !strings.HasPrefix(firstToken, "kms_") {
+		t.Fatalf("create-admin document = %v", document)
+	}
+
+	rotated := newTestCLI()
+	if code := rotated.Run([]string{"-o", "json", "rotate-admin", "--sqlite-path", db, "--name", "ops"}); code != 0 {
+		t.Fatalf("rotate-admin exit=%d stderr=%s", code, rotated.stderr())
+	}
+	document = decodeJSONStdout(t, rotated)
+	assertJSONFields(t, document, "name", "token")
+	secondToken, _ := document["token"].(string)
+	if secondToken == firstToken || !strings.HasPrefix(secondToken, "kms_") {
+		t.Fatalf("rotate-admin token = %q (first = %q)", secondToken, firstToken)
+	}
+	if strings.Count(rotated.stdout(), secondToken) != 1 {
+		t.Fatalf("the replacement token appears more than once: %s", rotated.stdout())
+	}
+}
+
+// With --cert-dir the credential files are still written, but their guidance
+// text would corrupt the document, so JSON mode names the paths instead.
+func TestCreateAdminWithCertDirJSONNamesTheCredentialFiles(t *testing.T) {
+	db, keyFile := initDB(t)
+	certDir := t.TempDir()
+
+	c := newTestCLI()
+	code := c.Run([]string{"-o", "json", "create-admin",
+		"--sqlite-path", db, "--kek-file", keyFile, "--name", "ops", "--cert-dir", certDir})
+	if code != 0 {
+		t.Fatalf("create-admin exit=%d stderr=%s", code, c.stderr())
+	}
+	document := decodeJSONStdout(t, c)
+	cert, ok := document["cert"].(map[string]any)
+	if !ok {
+		t.Fatalf("cert = %#v, want an object", document["cert"])
+	}
+	assertJSONFields(t, cert, "cert_file", "key_file")
+	certFile, _ := cert["cert_file"].(string)
+	keyPath, _ := cert["key_file"].(string)
+	if !strings.HasSuffix(certFile, "ops.crt") || !strings.HasSuffix(keyPath, "ops.key") {
+		t.Fatalf("cert = %v", cert)
+	}
+	if !strings.Contains(readFileString(t, certFile), "BEGIN CERTIFICATE") {
+		t.Fatalf("%s does not hold a certificate", certFile)
+	}
+	if !fileExists(keyPath) {
+		t.Fatalf("%s was not written", keyPath)
+	}
+	// The PKCS#12/next-steps guidance is human help: it must not reach stdout
+	// in JSON mode, and the private key must never appear there at all.
+	if strings.Contains(c.stdout(), "Next steps") || strings.Contains(c.stdout(), "PRIVATE KEY") {
+		t.Fatalf("JSON stdout carried certificate guidance or key material: %s", c.stdout())
+	}
+	// The unrecoverable-key warning survives the move to stderr.
+	if !strings.Contains(c.stderr(), "WARNING: the private key is written once") {
+		t.Fatalf("stderr = %q", c.stderr())
+	}
+}
+
+// --- rotate-kek confirmation ------------------------------------------------
+
+// activeKEKID reads the master key identifier recorded in the database, so a
+// test can prove a refused rotation left it alone.
+func activeKEKID(t *testing.T, db string) string {
+	t.Helper()
+	store, err := storage.Open(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = store.Close() }()
+	km, err := store.ActiveKeyMetadata(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return km.ID
+}
+
+// rotate-kek rewrites every wrapped row: a script that forgot --yes must fail
+// loudly rather than rotating the master key of whatever database the
+// environment happened to name.
+func TestRotateKEKRefusedOnNonInteractiveStdinWithoutYes(t *testing.T) {
+	db, keyFile := initDB(t)
+	before := activeKEKID(t, db)
+	newKey := filepath.Join(t.TempDir(), "new-master.key")
+
+	c := newTestCLI() // newTestCLI has no stdin, so it is never a terminal
+	code := c.Run([]string{"rotate-kek", "--sqlite-path", db, "--kek-file", keyFile, "--new-key-file", newKey})
+	if code != exitUsage {
+		t.Fatalf("rotate-kek exit=%d, want %d; stderr=%s", code, exitUsage, c.stderr())
+	}
+	if !strings.Contains(c.stderr(), "refusing to rotate the master key of "+absPath(db)) {
+		t.Fatalf("stderr = %q", c.stderr())
+	}
+	// The refusal comes before the database is opened or a key is generated.
+	if fileExists(newKey) {
+		t.Fatal("a refused rotation generated the replacement key file")
+	}
+	if after := activeKEKID(t, db); after != before {
+		t.Fatalf("a refused rotation changed the active key: %q -> %q", before, after)
+	}
+	if c.stdout() != "" {
+		t.Fatalf("a refused rotation wrote to stdout: %q", c.stdout())
+	}
+}
+
+func TestRotateKEKProceedsWithYesAndReportsJSON(t *testing.T) {
+	db, keyFile := initDB(t)
+	before := activeKEKID(t, db)
+	newKey := filepath.Join(t.TempDir(), "new-master.key")
+
+	c := newTestCLI()
+	code := c.Run([]string{"-o", "json", "--yes", "rotate-kek",
+		"--sqlite-path", db, "--kek-file", keyFile, "--new-key-file", newKey})
+	if code != 0 {
+		t.Fatalf("rotate-kek exit=%d stderr=%s", code, c.stderr())
+	}
+	document := decodeJSONStdout(t, c)
+	assertJSONFields(t, document, "kek_id", "secret_versions_rewrapped", "ca_keys_rewrapped", "new_key_file")
+	if document["new_key_file"] != newKey {
+		t.Fatalf("document = %v", document)
+	}
+	kekID, _ := document["kek_id"].(string)
+	if kekID == "" || kekID == before {
+		t.Fatalf("kek_id = %q, want a new identifier (was %q)", kekID, before)
+	}
+	if after := activeKEKID(t, db); after != kekID {
+		t.Fatalf("database active key = %q, want the reported %q", after, kekID)
+	}
+	// The restart notice is a safety warning: it stays on stderr and is never
+	// routed through info, so --quiet cannot hide it.
+	if !strings.Contains(c.stderr(), "IMPORTANT: point any running server at the new master key") {
+		t.Fatalf("stderr = %q", c.stderr())
+	}
+}
+
+// --quiet silences progress but never the destructive-target warning or the
+// restart notice.
+func TestRotateKEKQuietKeepsTheSafetyWarnings(t *testing.T) {
+	db, keyFile := initDB(t)
+	newKey := filepath.Join(t.TempDir(), "new-master.key")
+
+	c := newTestCLI()
+	code := c.Run([]string{"-o", "json", "--yes", "--quiet", "rotate-kek",
+		"--sqlite-path", db, "--kek-file", keyFile, "--new-key-file", newKey})
+	if code != 0 {
+		t.Fatalf("rotate-kek exit=%d stderr=%s", code, c.stderr())
+	}
+	for _, want := range []string{"Target database: ", "IMPORTANT: point any running server"} {
+		if !strings.Contains(c.stderr(), want) {
+			t.Fatalf("--quiet silenced %q: %s", want, c.stderr())
+		}
+	}
+	if strings.Contains(c.stderr(), "KEK rotated:") {
+		t.Fatalf("--quiet did not silence the progress line: %s", c.stderr())
 	}
 }
 

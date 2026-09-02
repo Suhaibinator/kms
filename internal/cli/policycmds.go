@@ -5,7 +5,6 @@ import (
 	"flag"
 	"fmt"
 	"strings"
-	"text/tabwriter"
 
 	kmsv1 "github.com/Suhaibinator/kms/gen/kmsv1"
 )
@@ -21,6 +20,9 @@ func (c *CLI) cmdAdminPolicy(args []string) int {
 	}
 	action, rest := args[0], args[1:]
 	switch action {
+	case "help", "-h", "--help":
+		c.adminUsage()
+		return 0
 	case "create":
 		return c.cmdPolicyCreate(rest)
 	case "list":
@@ -129,16 +131,19 @@ func (c *CLI) cmdPolicyCreate(args []string) int {
 
 	conn, err := c.dialConn(cf)
 	if err != nil {
-		return c.fail("%v", err)
+		return c.failErr("", err)
 	}
 	defer func() { _ = conn.Close() }()
 	ctx, cancel := callContext()
 	defer cancel()
 	resp, err := kmsv1.NewAdminServiceClient(conn).CreatePolicy(cf.authCtx(ctx), &kmsv1.CreatePolicyRequest{Policy: policy})
 	if err != nil {
-		return c.fail("policy create: %v", err)
+		return c.failErr("policy create", err)
 	}
 	created := resp.GetPolicy()
+	if c.jsonOutput() {
+		return c.printJSON(policyToJSON(created))
+	}
 	_, _ = fmt.Fprintf(c.Stdout, "Created policy %s for subject %s (allow: %s; deny: %s)\n",
 		created.GetName(), created.GetSubject(), formatPolicyRules(created.GetAllow()), formatPolicyRules(created.GetDeny()))
 	return 0
@@ -150,32 +155,39 @@ func (c *CLI) cmdPolicyList(args []string) int {
 	pageSize := fs.Int("page-size", 100, "result `count` per RPC")
 	c.setUsage(fs, "admin policy list [flags]",
 		"List policies with their subject and their allow and deny rules.", false)
-	if !c.parseFlags(fs, args) {
+	if !c.parseFlags(fs, args) || !c.rejectPositionals() {
 		return 2
 	}
 	conn, err := c.dialConn(cf)
 	if err != nil {
-		return c.fail("%v", err)
+		return c.failErr("", err)
 	}
 	defer func() { _ = conn.Close() }()
 	ctx, cancel := callContext()
 	defer cancel()
 	client := kmsv1.NewAdminServiceClient(conn)
-	tw := tabwriter.NewWriter(c.Stdout, 0, 4, 2, ' ', 0)
-	_, _ = fmt.Fprintln(tw, "NAME\tSUBJECT\tALLOW\tDENY")
+	items := []policyJSON{}
+	var rows [][]string
 	for token := ""; ; {
 		resp, err := client.ListPolicies(cf.authCtx(ctx), &kmsv1.ListPoliciesRequest{PageSize: int32(*pageSize), PageToken: token})
 		if err != nil {
-			return c.fail("policy list: %v", err)
+			return c.failErr("policy list", err)
 		}
 		for _, p := range resp.GetPolicies() {
-			_, _ = fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n", p.GetName(), p.GetSubject(), formatPolicyRules(p.GetAllow()), formatPolicyRules(p.GetDeny()))
+			if c.jsonOutput() {
+				items = append(items, policyToJSON(p))
+				continue
+			}
+			rows = append(rows, []string{p.GetName(), p.GetSubject(), formatPolicyRules(p.GetAllow()), formatPolicyRules(p.GetDeny())})
 		}
 		if token = resp.GetNextPageToken(); token == "" {
 			break
 		}
 	}
-	_ = tw.Flush()
+	if c.jsonOutput() {
+		return c.printList(items, "")
+	}
+	c.printTable([]string{"NAME", "SUBJECT", "ALLOW", "DENY"}, rows)
 	return 0
 }
 
@@ -192,14 +204,54 @@ func (c *CLI) cmdPolicyDelete(args []string) int {
 	}
 	conn, err := c.dialConn(cf)
 	if err != nil {
-		return c.fail("%v", err)
+		return c.failErr("", err)
 	}
 	defer func() { _ = conn.Close() }()
 	ctx, cancel := callContext()
 	defer cancel()
 	if _, err := kmsv1.NewAdminServiceClient(conn).DeletePolicy(cf.authCtx(ctx), &kmsv1.DeletePolicyRequest{Name: pos[0]}); err != nil {
-		return c.fail("policy delete: %v", err)
+		return c.failErr("policy delete", err)
+	}
+	if c.jsonOutput() {
+		c.info("Deleted policy %s", pos[0])
+		return c.printJSON(deletedPolicyJSON{Name: pos[0], Deleted: true})
 	}
 	_, _ = fmt.Fprintf(c.Stdout, "Deleted policy %s\n", pos[0])
 	return 0
+}
+
+// --- JSON documents --------------------------------------------------------
+
+// policyJSON renders a policy with its rules in the same OP@ENV/APP spelling
+// the table prints and the --allow/--deny flags accept, so a listed rule can be
+// fed straight back into a create.
+type policyJSON struct {
+	Name    string   `json:"name"`
+	Subject string   `json:"subject"`
+	Allow   []string `json:"allow"`
+	Deny    []string `json:"deny"`
+}
+
+func policyToJSON(p *kmsv1.Policy) policyJSON {
+	return policyJSON{
+		Name:    p.GetName(),
+		Subject: p.GetSubject(),
+		Allow:   policyRuleStrings(p.GetAllow()),
+		Deny:    policyRuleStrings(p.GetDeny()),
+	}
+}
+
+// policyRuleStrings renders rules for JSON. Unlike formatPolicyRules it never
+// substitutes "-" for an empty list: absent rules are an empty array.
+func policyRuleStrings(rules []*kmsv1.PolicyRule) []string {
+	out := make([]string, 0, len(rules))
+	for _, rule := range rules {
+		out = append(out, formatPolicyRule(rule))
+	}
+	return out
+}
+
+type deletedPolicyJSON struct {
+	Name    string `json:"name"`
+	Deleted bool   `json:"deleted"`
 }

@@ -2,8 +2,6 @@ package cli
 
 import (
 	"fmt"
-	"io"
-	"text/tabwriter"
 
 	kmsv1 "github.com/Suhaibinator/kms/gen/kmsv1"
 	"github.com/Suhaibinator/kms/internal/domain"
@@ -17,7 +15,9 @@ import (
 //
 // Exit status: 0 when every alias matches (and the schema matches when the
 // artifact carries a schema digest), 1 on any non-match or RPC failure, 2 on
-// usage errors.
+// usage errors. This command deliberately keeps the three-way status rather
+// than the shared classified exit codes: callers branch on "verified" versus
+// "not verified", and an RPC failure is simply "not verified".
 func (c *CLI) cmdReleaseVerifyDefaults(args []string) int {
 	fs := c.newFlags("release verify-defaults")
 	cf := addConnFlags(c, fs)
@@ -54,6 +54,9 @@ func (c *CLI) cmdReleaseVerifyDefaults(args []string) int {
 
 	conn, err := c.dialConn(cf)
 	if err != nil {
+		if exitCodeFor(err) == exitUsage {
+			return c.failUsage("%v", err)
+		}
 		return c.fail("%v", err)
 	}
 	defer func() { _ = conn.Close() }()
@@ -64,8 +67,15 @@ func (c *CLI) cmdReleaseVerifyDefaults(args []string) int {
 		return c.fail("release verify-defaults: %v", err)
 	}
 	checkSchema := artifact.SchemaSHA256 != ""
-	printVerifyDefaults(c.Stdout, checkSchema, resp)
-	if verifyDefaultsClean(checkSchema, resp) {
+	clean := verifyDefaultsClean(checkSchema, resp)
+	if c.jsonOutput() {
+		if code := c.printJSON(verifyDefaultsJSONOf(checkSchema, clean, resp)); code != exitOK {
+			return code
+		}
+	} else {
+		c.printVerifyDefaults(checkSchema, resp)
+	}
+	if clean {
 		return 0
 	}
 	return 1
@@ -96,24 +106,82 @@ func verifyDefaultsRequest(ns *kmsv1.NamespaceRef, releaseName string, artifact 
 	}, nil
 }
 
-func printVerifyDefaults(w io.Writer, checkSchema bool, resp *kmsv1.VerifyReleaseDefaultsResponse) {
-	tw := tabwriter.NewWriter(w, 0, 4, 2, ' ', 0)
-	_, _ = fmt.Fprintln(tw, "ALIAS\tVERDICT")
+// verifyDefaultsSchemaText is the schema verdict both renderers print: an
+// artifact without a schema digest asked for no schema comparison at all.
+func verifyDefaultsSchemaText(checkSchema bool, resp *kmsv1.VerifyReleaseDefaultsResponse) string {
+	if !checkSchema {
+		return "not checked"
+	}
+	if resp.GetSchemaMatches() {
+		return "match"
+	}
+	return "mismatch"
+}
+
+// releaseVerifyEntryJSON is one alias verdict; values are never part of it.
+type releaseVerifyEntryJSON struct {
+	Alias   string `json:"alias"`
+	Verdict string `json:"verdict"`
+}
+
+// releaseVerifyCountsJSON is the summary line the table prints as prose.
+type releaseVerifyCountsJSON struct {
+	Match                  uint32 `json:"match"`
+	Differs                uint32 `json:"differs"`
+	MissingInRelease       uint32 `json:"missing_in_release"`
+	UnknownAlias           uint32 `json:"unknown_alias"`
+	SecretAlias            uint32 `json:"secret_alias"`
+	UnsupportedContentType uint32 `json:"unsupported_content_type"`
+	Unverified             uint32 `json:"unverified"`
+}
+
+// releaseVerifyDefaultsJSON is the machine-readable mismatch report. clean
+// mirrors the exit status (0 when true, 1 when false) so a caller that already
+// parsed the document does not have to re-derive the verdict.
+type releaseVerifyDefaultsJSON struct {
+	Name               string                   `json:"name"`
+	Version            uint64                   `json:"version"`
+	ActivationRevision uint64                   `json:"activation_revision"`
+	Schema             string                   `json:"schema"`
+	Clean              bool                     `json:"clean"`
+	Entries            []releaseVerifyEntryJSON `json:"entries"`
+	Counts             releaseVerifyCountsJSON  `json:"counts"`
+}
+
+func verifyDefaultsJSONOf(checkSchema, clean bool, resp *kmsv1.VerifyReleaseDefaultsResponse) releaseVerifyDefaultsJSON {
+	entries := make([]releaseVerifyEntryJSON, 0, len(resp.GetEntries()))
 	for _, entry := range resp.GetEntries() {
-		_, _ = fmt.Fprintf(tw, "%s\t%s\n", entry.GetAlias(), entry.GetVerdict())
+		entries = append(entries, releaseVerifyEntryJSON{Alias: entry.GetAlias(), Verdict: entry.GetVerdict()})
 	}
-	_ = tw.Flush()
-	schema := "not checked"
-	if checkSchema {
-		schema = "mismatch"
-		if resp.GetSchemaMatches() {
-			schema = "match"
-		}
+	return releaseVerifyDefaultsJSON{
+		Name:               resp.GetName(),
+		Version:            resp.GetVersion(),
+		ActivationRevision: resp.GetActivationRevision(),
+		Schema:             verifyDefaultsSchemaText(checkSchema, resp),
+		Clean:              clean,
+		Entries:            entries,
+		Counts: releaseVerifyCountsJSON{
+			Match:                  resp.GetMatchCount(),
+			Differs:                resp.GetDiffersCount(),
+			MissingInRelease:       resp.GetMissingInReleaseCount(),
+			UnknownAlias:           resp.GetUnknownAliasCount(),
+			SecretAlias:            resp.GetSecretAliasCount(),
+			UnsupportedContentType: resp.GetUnsupportedContentTypeCount(),
+			Unverified:             resp.GetUnverifiedCount(),
+		},
 	}
-	_, _ = fmt.Fprintf(w, "Release %s version %d (revision %d): %d match, %d differs, %d missing_in_release, %d unknown_alias, %d secret_alias, %d unsupported_content_type, %d unverified; schema %s\n",
+}
+
+func (c *CLI) printVerifyDefaults(checkSchema bool, resp *kmsv1.VerifyReleaseDefaultsResponse) {
+	rows := make([][]string, 0, len(resp.GetEntries()))
+	for _, entry := range resp.GetEntries() {
+		rows = append(rows, []string{entry.GetAlias(), entry.GetVerdict()})
+	}
+	c.printTable([]string{"ALIAS", "VERDICT"}, rows)
+	_, _ = fmt.Fprintf(c.Stdout, "Release %s version %d (revision %d): %d match, %d differs, %d missing_in_release, %d unknown_alias, %d secret_alias, %d unsupported_content_type, %d unverified; schema %s\n",
 		resp.GetName(), resp.GetVersion(), resp.GetActivationRevision(),
 		resp.GetMatchCount(), resp.GetDiffersCount(), resp.GetMissingInReleaseCount(), resp.GetUnknownAliasCount(),
-		resp.GetSecretAliasCount(), resp.GetUnsupportedContentTypeCount(), resp.GetUnverifiedCount(), schema)
+		resp.GetSecretAliasCount(), resp.GetUnsupportedContentTypeCount(), resp.GetUnverifiedCount(), verifyDefaultsSchemaText(checkSchema, resp))
 }
 
 // verifyDefaultsClean reports whether every requested alias matched and, when

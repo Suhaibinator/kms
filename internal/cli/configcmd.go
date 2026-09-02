@@ -60,10 +60,49 @@ func (c *CLI) cmdConfigShow(args []string) int {
 	}
 	cfg, prov, path, err := r.resolve()
 	if err != nil {
-		return c.fail("%v", err)
+		return c.failErr("", err)
+	}
+	if c.jsonOutput() {
+		return c.printJSON(configShowJSON{
+			ConfigPath:       optionalString(path),
+			ConfigPathSource: optionalString(r.configFileSource()),
+			Passphrase:       c.passphraseState(),
+			Settings:         configSettingsJSON(&cfg, prov),
+		})
 	}
 	printConfigTable(c.Stdout, &cfg, prov, path, r.configFileSource(), c.passphraseState())
 	return 0
+}
+
+// configShowJSON is the JSON form of config show. config_path is null when no
+// file was read, and passphrase reports only presence ("set"/"unset") — the
+// same redaction the table applies, since KMS_MASTER_PASSPHRASE never belongs
+// in machine-readable output.
+type configShowJSON struct {
+	ConfigPath       *string             `json:"config_path"`
+	ConfigPathSource *string             `json:"config_path_source"`
+	Passphrase       string              `json:"passphrase"` // set | unset
+	Settings         []configSettingJSON `json:"settings"`
+}
+
+// configSettingJSON is one resolved setting with the layer it came from.
+type configSettingJSON struct {
+	Key    string `json:"key"`
+	Value  string `json:"value"`
+	Source string `json:"source"`
+}
+
+// configSettingsJSON renders every registered setting in the registry's order,
+// so the JSON rows line up one-for-one with the table's.
+func configSettingsJSON(cfg *config.Config, prov config.Provenance) []configSettingJSON {
+	settings := make([]configSettingJSON, 0, len(config.Settings))
+	for _, s := range config.Settings {
+		// Unlike the table, an unset value stays the empty string here: JSON
+		// has a representation for "empty" and does not need the `""` marker
+		// the aligned columns use to keep the row readable.
+		settings = append(settings, configSettingJSON{Key: s.Key, Value: s.Get(cfg), Source: prov[s.Key].String()})
+	}
+	return settings
 }
 
 // cmdConfigValidate resolves the configuration and runs Config.Validate, which
@@ -81,10 +120,17 @@ func (c *CLI) cmdConfigValidate(args []string) int {
 	}
 	cfg, _, path, err := r.resolve()
 	if err != nil {
-		return c.fail("%v", err)
+		return c.failErr("", err)
 	}
 	if err := cfg.Validate(); err != nil {
-		return c.fail("invalid configuration: %v", err)
+		return c.failErr("invalid configuration", err)
+	}
+	if c.jsonOutput() {
+		// Only the valid case reaches this point; an invalid configuration
+		// exits non-zero with the reason on stderr rather than reporting
+		// valid:false, so a script never has to parse the document to learn
+		// that the command failed.
+		return c.printJSON(configValidateJSON{Valid: true, ConfigPath: optionalString(path)})
 	}
 	if path != "" {
 		_, _ = fmt.Fprintf(c.Stdout, "configuration OK (%s)\n", path)
@@ -92,6 +138,12 @@ func (c *CLI) cmdConfigValidate(args []string) int {
 		_, _ = fmt.Fprintln(c.Stdout, "configuration OK (no config file; defaults, environment, and flags only)")
 	}
 	return 0
+}
+
+// configValidateJSON is the JSON form of config validate.
+type configValidateJSON struct {
+	Valid      bool    `json:"valid"`
+	ConfigPath *string `json:"config_path"`
 }
 
 func (c *CLI) passphraseState() string {

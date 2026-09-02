@@ -90,6 +90,18 @@ management.
 - **KEK rotation** that rewraps every non-destroyed secret version's DEK —
   and the CA's private key — under a new master key without decrypting and
   re-encrypting values, in one transaction.
+- **Scriptable CLI**: every command accepts `--output json` (or
+  `KMS_OUTPUT=json`) and then puts exactly one document on stdout, with status
+  lines, warnings, and prompts on stderr. Failures carry classified exit codes
+  — `2` usage, `3` unauthenticated, `4` permission denied, `5` not found, `6`
+  conflict, `7` failed precondition, `8` unavailable, `9` rate limited — so a
+  script branches without parsing messages. Credentials can come from an
+  owner-only file (`--token-file`, `--secret-token-file`) instead of an
+  argument every local user can read in `ps`. Irreversible commands confirm,
+  either by retyping the target or `[y/N]`, and refuse to run on a
+  non-interactive stdin without `--yes`. `whoami` reports the identity the
+  server resolves from the credential you presented. See
+  [`docs/operations.md`](docs/operations.md#global-flags-output-formats-and-exit-codes).
 - **SuhaibParameterStore migration tooling**: `parameter-store import` maps
   flat keys into an `(env, app)` namespace (`--env`/`--app`) and mints fresh
   per-secret tokens with a one-time mapping report. See
