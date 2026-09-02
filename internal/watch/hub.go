@@ -14,6 +14,7 @@ import (
 	"encoding/hex"
 	"maps"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"go.uber.org/zap"
@@ -142,10 +143,80 @@ type Hub struct {
 	// happens-before edge with the initial revision read.
 	startedCh chan struct{}
 
+	// cursor is the dispatch position, published for Stats. It is written only
+	// by Run and drain (one goroutine) and read by any caller of Stats, so it
+	// is atomic rather than guarded by mu: taking mu here would put the metrics
+	// path on the same lock as fan-out.
+	cursor atomic.Uint64
+	// droppedStale and droppedSlow count subscribers the hub tore down, split
+	// by which of the two failures caused it. They are never reset.
+	droppedStale atomic.Uint64
+	droppedSlow  atomic.Uint64
+
 	mu          sync.Mutex
 	subs        map[uint64]*Subscription
 	releaseSubs map[uint64]*ReleaseSubscription
 	nextID      uint64
+}
+
+// Stats is the hub's fan-out state: how many streams are connected, how far
+// dispatch has got, how far the worst subscriber trails it, and how many
+// subscribers have been torn down for each of the two reasons. It is a
+// point-in-time copy of plain numbers — nothing that identifies a client,
+// namespace, or identity — so it can be published as metrics unchanged.
+type Stats struct {
+	Subscribers        int
+	ReleaseSubscribers int
+	// LastDispatchedRevision is the dispatch cursor: the change-log revision
+	// the hub has caught up to. At startup it is the revision the log was
+	// already at, since earlier entries are history served as backlog.
+	LastDispatchedRevision uint64
+	// MaxLagRevisions is how far the furthest-behind subscriber trails the
+	// cursor, measured from its last acked revision. It is 0 with no
+	// subscribers, and 0 rather than negative if a subscriber has acked a
+	// backlog revision the dispatch loop has not reached yet.
+	MaxLagRevisions uint64
+	// DroppedStale counts subscribers dropped for missing heartbeats.
+	// DroppedSlow counts subscribers dropped for letting their buffer overflow,
+	// whether during live dispatch or while their backlog was being computed.
+	// Neither counts a client that disconnected on its own.
+	DroppedStale uint64
+	DroppedSlow  uint64
+}
+
+// Stats snapshots the hub for the metrics exporter. It follows the hub's
+// locking discipline: registry sizes are read under mu, and the per-subscriber
+// acks are read afterwards from a copied slice, so a subscription's own lock is
+// never taken while the hub lock is held.
+func (h *Hub) Stats() Stats {
+	stats := Stats{
+		LastDispatchedRevision: h.cursor.Load(),
+		DroppedStale:           h.droppedStale.Load(),
+		DroppedSlow:            h.droppedSlow.Load(),
+	}
+
+	h.mu.Lock()
+	stats.Subscribers = len(h.subs)
+	stats.ReleaseSubscribers = len(h.releaseSubs)
+	subs := make([]*Subscription, 0, len(h.subs))
+	for _, s := range h.subs {
+		subs = append(subs, s)
+	}
+	h.mu.Unlock()
+
+	if len(subs) == 0 {
+		return stats
+	}
+	slowest := subs[0].lastAckedRevision()
+	for _, s := range subs[1:] {
+		if acked := s.lastAckedRevision(); acked < slowest {
+			slowest = acked
+		}
+	}
+	if stats.LastDispatchedRevision > slowest {
+		stats.MaxLagRevisions = stats.LastDispatchedRevision - slowest
+	}
+	return stats
 }
 
 // NewHub constructs a hub over store. logger may be nil.
@@ -207,6 +278,7 @@ func (h *Hub) Run(ctx context.Context) error {
 		var err error
 		cursor, err = h.store.CurrentRevision(ctx)
 		if err == nil {
+			h.cursor.Store(cursor)
 			break
 		}
 		h.log.Error("watch hub: reading current revision at start", zap.Error(err))
@@ -294,6 +366,7 @@ func (h *Hub) drain(ctx context.Context, cursor uint64) (uint64, error) {
 		for _, e := range entries {
 			h.dispatch(e)
 			cursor = e.Revision
+			h.cursor.Store(cursor)
 		}
 		if len(entries) < dispatchBatch {
 			return cursor, nil
@@ -329,8 +402,14 @@ func (h *Hub) dispatch(e domain.ChangeLogEntry) {
 		if !s.matches(e) {
 			continue
 		}
-		if !s.offer(e) {
-			s.Close()
+		if s.offer(e) {
+			continue
+		}
+		// offer also reports false for a subscription that is already closed
+		// (the client hung up between the registry copy and here), so only a
+		// teardown this call actually performed counts as a slow subscriber.
+		if s.close() {
+			h.droppedSlow.Add(1)
 		}
 	}
 }
@@ -350,7 +429,9 @@ func (h *Hub) dropExpired() {
 	for _, s := range stale {
 		h.log.Info("watch hub: dropping stale subscriber",
 			zap.String("client", s.reg.ClientName), zap.String("instance", s.reg.InstanceID))
-		s.Close()
+		if s.close() {
+			h.droppedStale.Add(1)
+		}
 	}
 }
 
@@ -449,8 +530,12 @@ func (h *Hub) Subscribe(ctx context.Context, reg Registration) (*Subscription, e
 	}
 	if !sub.activate(bl) {
 		// Overflowed while catching up during backlog computation. The client
-		// should reconnect and resume by revision.
-		sub.Close()
+		// should reconnect and resume by revision. It is the same failure the
+		// dispatch loop counts — a buffer that filled faster than it drained —
+		// so it belongs in the same counter.
+		if sub.close() {
+			h.droppedSlow.Add(1)
+		}
 		return nil, domain.Errorf(domain.ErrFailedPrecondition, "subscriber fell behind during subscribe")
 	}
 	return sub, nil
