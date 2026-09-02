@@ -109,6 +109,8 @@ func (c *CLI) Run(args []string) int {
 	switch cmd {
 	case "serve":
 		code = c.cmdServe(cmdArgs)
+	case "dev":
+		code = c.cmdDev(cmdArgs)
 	case "config":
 		code = c.cmdConfig(cmdArgs)
 	case "healthcheck":
@@ -305,6 +307,8 @@ Usage:
 
 Server:
   serve            Run the gRPC + HTTP server.
+  dev              Run a disposable, seeded demo server (TLS, console, demo data)
+                   on loopback. For evaluation only; never for real data.
   config show      Print the effective configuration and where each value came from.
   config validate  Check the configuration file, environment, and flags.
   healthcheck      Probe this host's own HTTP listener (loopback; for a container

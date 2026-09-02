@@ -5,7 +5,9 @@ a local quick start. Use this index for deeper reference material.
 
 ## Operate and integrate
 
-- [`operations.md`](operations.md) — configuration, production mTLS onboarding,
+- [`operations.md`](operations.md) — configuration,
+  [development mode (`dev`)](operations.md#development-mode-dev),
+  production mTLS onboarding,
   [admin credentials and browser setup](operations.md#admin-credentials-and-browser-setup),
   CLI commands including
   [JSON output, exit codes, token files, and confirmations](operations.md#global-flags-output-formats-and-exit-codes),

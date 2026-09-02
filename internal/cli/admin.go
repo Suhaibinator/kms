@@ -106,29 +106,12 @@ func (c *CLI) cmdInit(args []string) int {
 	}
 	ctx := context.Background()
 
-	store, err := storage.Open(cfg.Storage.SQLitePath)
+	bootstrapped, err := c.bootstrapStore(ctx, cfg.Storage.SQLitePath, cfg.Encryption.KEKFile)
 	if err != nil {
-		return c.failErr("opening database", err)
+		return c.failErr("", err)
 	}
-	defer func() { _ = store.Close() }()
-
-	// CreateKeyFileIfMissing generates the key file on first init; without a
-	// key file the prompter asks for a passphrase (twice, with confirmation).
-	keyring, err := c.unseal(ctx, store, cfg.Encryption.KEKFile, true)
-	if err != nil {
-		return c.failErr("initializing master key", err)
-	}
-	defer keyring.Active().Destroy()
-
-	// init is the one place that creates the built-in CA: it runs once, before
-	// any server, so it cannot race a concurrent generator (InsertCAKey retires
-	// every other CA row). BootstrapCA is get-or-create, so re-running init on
-	// an existing database keeps the CA it already has.
-	svc := core.New(store, c.quietLogger(), Version)
-	svc.SetKeyring(keyring)
-	if err := svc.BootstrapCA(ctx); err != nil {
-		return c.failErr("preparing built-in CA", err)
-	}
+	defer bootstrapped.close()
+	store, svc := bootstrapped.store, bootstrapped.svc
 
 	c.resultLine("Initialized database at %s", dbTarget(cfg, prov))
 	if cfg.Encryption.KEKFile != "" {
@@ -164,6 +147,56 @@ func (c *CLI) cmdInit(args []string) int {
 		return c.printJSON(document)
 	}
 	return 0
+}
+
+// bootstrappedStore is an initialized database with its master key and
+// built-in CA in place: everything a caller needs before it can create an
+// identity or write a value.
+type bootstrappedStore struct {
+	store   storage.Store
+	svc     *core.Service
+	keyring *crypto.Keyring
+}
+
+// close releases the master key material and the database handle. Callers
+// defer it; it is safe to call exactly once.
+func (b *bootstrappedStore) close() {
+	b.keyring.Active().Destroy()
+	_ = b.store.Close()
+}
+
+// bootstrapStore performs the three steps init runs before it creates
+// anything: open (and migrate) the database, acquire the master key —
+// generating the key file when it is absent, so an unattended run never stops
+// at a passphrase prompt it can satisfy itself — and prepare the built-in CA.
+// `dev` reuses it so a disposable store is bootstrapped by exactly the code
+// that bootstraps a real one. Errors arrive already prefixed with the step
+// that failed, so callers pass them to failErr with an empty prefix.
+//
+// init is the one place that creates the built-in CA: it runs once, before any
+// server, so it cannot race a concurrent generator (InsertCAKey retires every
+// other CA row). BootstrapCA is get-or-create, so re-running init on an
+// existing database keeps the CA it already has.
+func (c *CLI) bootstrapStore(ctx context.Context, sqlitePath, kekFile string) (*bootstrappedStore, error) {
+	store, err := storage.Open(sqlitePath)
+	if err != nil {
+		return nil, fmt.Errorf("opening database: %w", err)
+	}
+	// CreateKeyFileIfMissing generates the key file on first init; without a
+	// key file the prompter asks for a passphrase (twice, with confirmation).
+	keyring, err := c.unseal(ctx, store, kekFile, true)
+	if err != nil {
+		_ = store.Close()
+		return nil, fmt.Errorf("initializing master key: %w", err)
+	}
+	svc := core.New(store, c.quietLogger(), Version)
+	svc.SetKeyring(keyring)
+	if err := svc.BootstrapCA(ctx); err != nil {
+		keyring.Active().Destroy()
+		_ = store.Close()
+		return nil, fmt.Errorf("preparing built-in CA: %w", err)
+	}
+	return &bootstrappedStore{store: store, svc: svc, keyring: keyring}, nil
 }
 
 // initJSON is the JSON form of init. admin is null unless --admin created one;
