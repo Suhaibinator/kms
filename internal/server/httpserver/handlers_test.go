@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 )
@@ -606,6 +607,79 @@ func TestAuditAndKeys(t *testing.T) {
 	for _, forbidden := range []string{"key_check", "kdf_salt", "material"} {
 		if _, leaked := k[forbidden]; leaked {
 			t.Fatalf("key metadata leaked %s", forbidden)
+		}
+	}
+}
+
+func TestAuditDecisionFilter(t *testing.T) {
+	e := newTestEnv(t)
+	e.createNS("prod", "gradethis", "token", "mtls")
+	w := e.admin(http.MethodPut, "/api/v1/parameters", map[string]any{
+		"env": "prod", "app": "gradethis", "key": "x", "value": "1", "content_type": "integer",
+	})
+	mustStatus(t, w, http.StatusOK)
+	// An unauthorized write by the policy-less client records a deny row.
+	w = e.client(http.MethodPut, "/api/v1/parameters", map[string]any{
+		"env": "prod", "app": "gradethis", "key": "y", "value": "2", "content_type": "integer",
+	})
+	mustStatus(t, w, http.StatusForbidden)
+
+	// The decision filter combines with the namespace filter; each returned row
+	// must carry the requested decision.
+	var wantNSID float64
+	auditEventTypes := func(decision string) []string {
+		t.Helper()
+		query := "/api/v1/audit?env=prod&app=gradethis"
+		if decision != "" {
+			query += "&decision=" + decision
+		}
+		w := e.admin(http.MethodGet, query, nil)
+		mustStatus(t, w, http.StatusOK)
+		events, _ := decodeBody(t, w)["events"].([]any)
+		types := make([]string, 0, len(events))
+		for _, raw := range events {
+			ev := raw.(map[string]any)
+			if decision != "" && ev["decision"] != decision {
+				t.Fatalf("decision=%s returned a %v row: %v", decision, ev["decision"], ev)
+			}
+			// Every row here was recorded against the same namespace
+			// incarnation (namespace.create carries the id it just minted),
+			// so the wire field must be present, nonzero, and identical.
+			nsID, ok := ev["resource_namespace_id"].(float64)
+			if !ok || nsID == 0 {
+				t.Fatalf("event %v resource_namespace_id = %v, want the namespace incarnation", ev["event_type"], ev["resource_namespace_id"])
+			}
+			if wantNSID == 0 {
+				wantNSID = nsID
+			} else if nsID != wantNSID {
+				t.Fatalf("event %v resource_namespace_id = %v, want %v", ev["event_type"], nsID, wantNSID)
+			}
+			types = append(types, ev["event_type"].(string))
+		}
+		return types
+	}
+
+	if got := auditEventTypes("deny"); strings.Join(got, ",") != "authz.denial" {
+		t.Fatalf("decision=deny event types = %v, want [authz.denial]", got)
+	}
+	if got := auditEventTypes("allow"); strings.Join(got, ",") != "namespace.create,parameter.write" {
+		t.Fatalf("decision=allow event types = %v, want the namespace and parameter writes", got)
+	}
+	if got := auditEventTypes("error"); len(got) != 0 {
+		t.Fatalf("decision=error event types = %v, want none", got)
+	}
+	if got := auditEventTypes(""); len(got) != 3 {
+		t.Fatalf("unfiltered event types = %v, want all three rows", got)
+	}
+}
+
+func TestAuditDecisionFilterRejectsUnknownValue(t *testing.T) {
+	e := newTestEnv(t)
+	for _, decision := range []string{"allowed", "ALLOW", "allow,deny", " allow"} {
+		w := e.admin(http.MethodGet, "/api/v1/audit?decision="+url.QueryEscape(decision), nil)
+		mustStatus(t, w, http.StatusBadRequest)
+		if code := errCode(t, w); code != "invalid_argument" {
+			t.Fatalf("decision=%q code = %q, want invalid_argument", decision, code)
 		}
 	}
 }

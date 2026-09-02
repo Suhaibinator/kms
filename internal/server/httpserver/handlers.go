@@ -769,12 +769,18 @@ func (s *server) handleListAudit(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, r, err)
 		return
 	}
+	decision := q.Get("decision")
+	if !domain.ValidAuditDecision(decision) {
+		s.writeError(w, r, invalidArg("decision must be allow, deny, or error"))
+		return
+	}
 	filter := domain.AuditFilter{
 		Env:           q.Get("env"),
 		App:           q.Get("app"),
 		KeyPrefix:     q.Get("key_prefix"),
 		ActorIdentity: q.Get("actor"),
 		EventType:     q.Get("event_type"),
+		Decision:      decision,
 		From:          from,
 		To:            to,
 	}

@@ -911,6 +911,10 @@ message AuditEvent {
   string request_id = 13;
   int64 created_at_unix_ms = 14;
   string metadata_json = 15;
+  // The immutable incarnation ID of the namespace the event was authorized
+  // against (0 for global events and legacy rows), so a deleted-and-recreated
+  // env/app can be told apart in an export.
+  int64 resource_namespace_id = 16;
 }
 
 message ListAuditEventsRequest {
@@ -923,6 +927,7 @@ message ListAuditEventsRequest {
   int64 to_unix_ms = 7;
   int32 page_size = 8;
   string page_token = 9;
+  string decision = 10; // allow | deny | error; empty = any
 }
 
 message ListAuditEventsResponse {

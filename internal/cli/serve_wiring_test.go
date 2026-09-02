@@ -137,6 +137,7 @@ type servedKMS struct {
 	addr    string
 	token   string
 	certDir string
+	db      string
 	pool    *x509.CertPool
 	// configPath is the YAML file serve reads through --config. A test rewrites
 	// it and fires reloadCh to drive a reload the way SIGHUP does.
@@ -160,6 +161,15 @@ type servedKMS struct {
 // always reads a config file (`--config`), so a test can rewrite it and reload.
 func startServe(t *testing.T, tlsEnabled bool, extraArgs ...string) *servedKMS {
 	t.Helper()
+	return startServeSeeded(t, tlsEnabled, nil, extraArgs...)
+}
+
+// startServeSeeded is startServe with a hook that runs against the initialised
+// database before `serve` opens it. Startup-time behaviour that acts on
+// existing rows — audit retention runs one pass as soon as the hub is up — can
+// only be observed if those rows are already there.
+func startServeSeeded(t *testing.T, tlsEnabled bool, seed func(t *testing.T, db string), extraArgs ...string) *servedKMS {
+	t.Helper()
 	dir := t.TempDir()
 	db := filepath.Join(dir, "kms.db")
 	kek := filepath.Join(dir, "master.key")
@@ -171,6 +181,9 @@ func startServe(t *testing.T, tlsEnabled bool, extraArgs ...string) *servedKMS {
 		t.Fatalf("init exit=%d stderr=%s", code, initCLI.stderr())
 	}
 	token := tokenFromCLIOutput(t, initCLI.stdout())
+	if seed != nil {
+		seed(t, db)
+	}
 
 	addr := freeLoopbackAddr(t)
 	scheme := "http"
@@ -188,6 +201,7 @@ func startServe(t *testing.T, tlsEnabled bool, extraArgs ...string) *servedKMS {
 		addr:       addr,
 		token:      token,
 		certDir:    certDir,
+		db:         db,
 		configPath: configPath,
 		reloadCh:   make(chan struct{}),
 		stop:       make(chan struct{}),

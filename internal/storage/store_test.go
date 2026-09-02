@@ -2405,6 +2405,264 @@ func TestAuditPagination(t *testing.T) {
 	}
 }
 
+func TestAuditDecisionFilter(t *testing.T) {
+	st := newStore(t)
+	ctx := context.Background()
+	base := time.Date(2026, 7, 1, 12, 0, 0, 0, time.UTC)
+	events := []domain.AuditEvent{
+		{EventType: "read", ActorIdentity: "alice", ResourceEnv: "prod", ResourceApp: "app", ResourceKey: "x", Decision: "allow", CreatedAt: base},
+		{EventType: "read", ActorIdentity: "alice", ResourceEnv: "prod", ResourceApp: "app", ResourceKey: "y", Decision: "deny", CreatedAt: base.Add(time.Second)},
+		{EventType: "read", ActorIdentity: "bob", ResourceEnv: "prod", ResourceApp: "app", ResourceKey: "z", Decision: "deny", CreatedAt: base.Add(2 * time.Second)},
+		{EventType: "read", ActorIdentity: "alice", ResourceEnv: "stage", ResourceApp: "app", ResourceKey: "w", Decision: "deny", CreatedAt: base.Add(3 * time.Second)},
+		{EventType: "write", ActorIdentity: "alice", ResourceEnv: "prod", ResourceApp: "app", ResourceKey: "v", Decision: "error", CreatedAt: base.Add(4 * time.Second)},
+	}
+	for _, e := range events {
+		if err := st.AppendAudit(ctx, e); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	for _, tc := range []struct {
+		name   string
+		filter domain.AuditFilter
+		want   []string
+	}{
+		{"deny only", domain.AuditFilter{Decision: "deny"}, []string{"w", "z", "y"}},
+		{"error only", domain.AuditFilter{Decision: "error"}, []string{"v"}},
+		{"allow only", domain.AuditFilter{Decision: "allow"}, []string{"x"}},
+		{"empty matches any", domain.AuditFilter{}, []string{"v", "w", "z", "y", "x"}},
+		{"with namespace", domain.AuditFilter{Decision: "deny", Env: "prod", App: "app"}, []string{"z", "y"}},
+		{"with actor and event type", domain.AuditFilter{Decision: "deny", ActorIdentity: "alice", EventType: "read"}, []string{"w", "y"}},
+		{"with time range", domain.AuditFilter{Decision: "deny", From: base.Add(2 * time.Second)}, []string{"w", "z"}},
+		{"no match", domain.AuditFilter{Decision: "error", Env: "stage"}, nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, _, err := st.ListAudit(ctx, tc.filter, ListPage{Limit: 100})
+			if err != nil {
+				t.Fatal(err)
+			}
+			keys := make([]string, 0, len(got))
+			for _, e := range got {
+				keys = append(keys, e.ResourceKey)
+			}
+			if strings.Join(keys, ",") != strings.Join(tc.want, ",") {
+				t.Fatalf("keys = %v, want %v", keys, tc.want)
+			}
+		})
+	}
+
+	// The cursor must carry the decision filter across pages rather than
+	// re-scanning rows the first page already skipped.
+	var paged []string
+	token := ""
+	for {
+		list, next, err := st.ListAudit(ctx, domain.AuditFilter{Decision: "deny"}, ListPage{Limit: 2, Token: token})
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, e := range list {
+			paged = append(paged, e.ResourceKey)
+		}
+		if next == "" {
+			break
+		}
+		token = next
+	}
+	if strings.Join(paged, ",") != "w,z,y" {
+		t.Fatalf("paged deny keys = %v, want [w z y]", paged)
+	}
+}
+
+// seedAuditAt appends one event per timestamp and returns the ids in order.
+func seedAuditAt(t *testing.T, st *SQLStore, times ...time.Time) []int64 {
+	t.Helper()
+	ctx := context.Background()
+	ids := make([]int64, 0, len(times))
+	for i, at := range times {
+		if err := st.AppendAudit(ctx, domain.AuditEvent{
+			EventType: "e", ResourceKey: strconv.Itoa(i), Decision: "allow", CreatedAt: at,
+		}); err != nil {
+			t.Fatal(err)
+		}
+		// ListAudit is newest-first, so the row just appended is at the front.
+		rows, _, err := st.ListAudit(ctx, domain.AuditFilter{}, ListPage{Limit: 1})
+		if err != nil {
+			t.Fatal(err)
+		}
+		ids = append(ids, rows[0].ID)
+	}
+	return ids
+}
+
+func TestListAuditBeforeCutoffOrderAndLimit(t *testing.T) {
+	st := newStore(t)
+	ctx := context.Background()
+	base := time.Date(2026, 7, 1, 12, 0, 0, 0, time.UTC)
+	ids := seedAuditAt(t, st,
+		base, base.Add(time.Second), base.Add(2*time.Second), base.Add(3*time.Second))
+
+	// The bound is strict: the row stamped at exactly the cutoff is retained.
+	got, err := st.ListAuditBefore(ctx, base.Add(2*time.Second), 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 || got[0].ID != ids[0] || got[1].ID != ids[1] {
+		t.Fatalf("cutoff rows = %+v, want the first two ids %v", got, ids[:2])
+	}
+	// Oldest first, so an archive is written in the order it happened.
+	if !got[0].CreatedAt.Before(got[1].CreatedAt) {
+		t.Fatalf("rows are not oldest-first: %v then %v", got[0].CreatedAt, got[1].CreatedAt)
+	}
+
+	limited, err := st.ListAuditBefore(ctx, base.Add(time.Hour), 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(limited) != 3 || limited[0].ID != ids[0] {
+		t.Fatalf("limited rows = %+v, want the 3 oldest", limited)
+	}
+
+	// A zero cutoff means "retain everything".
+	none, err := st.ListAuditBefore(ctx, time.Time{}, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(none) != 0 {
+		t.Fatalf("zero cutoff returned %d rows, want none", len(none))
+	}
+}
+
+func TestListAuditBeforeCutoffSubSecond(t *testing.T) {
+	st := newStore(t)
+	ctx := context.Background()
+	base := time.Date(2026, 7, 1, 12, 0, 0, 0, time.UTC)
+	// Fixed-width stored timestamps keep the text comparison chronological even
+	// when only the fraction differs.
+	seedAuditAt(t, st, base, base.Add(500*time.Millisecond))
+
+	got, err := st.ListAuditBefore(ctx, base.Add(250*time.Millisecond), 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || !got[0].CreatedAt.Equal(base) {
+		t.Fatalf("sub-second cutoff rows = %+v, want only the .000 row", got)
+	}
+}
+
+// TestCountAuditBefore: a dry run reports what a pass would retire, so the
+// count must agree with ListAuditBefore on the same cutoff — including the
+// strict bound that keeps a row stamped exactly at it.
+func TestCountAuditBefore(t *testing.T) {
+	st := newStore(t)
+	ctx := context.Background()
+	base := time.Date(2026, 7, 1, 12, 0, 0, 0, time.UTC)
+	seedAuditAt(t, st,
+		base, base.Add(time.Second), base.Add(2*time.Second), base.Add(3*time.Second))
+
+	for _, tc := range []struct {
+		name   string
+		cutoff time.Time
+		want   int64
+	}{
+		{"strict bound", base.Add(2 * time.Second), 2},
+		// The count is not capped the way a listing is: it answers for the
+		// whole retirement, not for one batch.
+		{"everything", base.Add(time.Hour), 4},
+		{"nothing yet", base, 0},
+		{"zero cutoff retains everything", time.Time{}, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := st.CountAuditBefore(ctx, tc.cutoff)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got != tc.want {
+				t.Fatalf("count = %d, want %d", got, tc.want)
+			}
+			if tc.cutoff.IsZero() {
+				return
+			}
+			rows, err := st.ListAuditBefore(ctx, tc.cutoff, 1000)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if int64(len(rows)) != got {
+				t.Fatalf("count %d disagrees with the %d rows a pass would list", got, len(rows))
+			}
+		})
+	}
+}
+
+func TestDeleteAuditByIDs(t *testing.T) {
+	st := newStore(t)
+	ctx := context.Background()
+	base := time.Date(2026, 7, 1, 12, 0, 0, 0, time.UTC)
+	ids := seedAuditAt(t, st, base, base.Add(time.Second), base.Add(2*time.Second))
+
+	deleted, err := st.DeleteAuditByIDs(ctx, ids[:2])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if deleted != 2 {
+		t.Fatalf("deleted = %d, want 2", deleted)
+	}
+	remaining, _, err := st.ListAudit(ctx, domain.AuditFilter{}, ListPage{Limit: 100})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(remaining) != 1 || remaining[0].ID != ids[2] {
+		t.Fatalf("remaining = %+v, want only id %d", remaining, ids[2])
+	}
+
+	// Re-deleting a retired batch is harmless: only rows that still exist count.
+	deleted, err = st.DeleteAuditByIDs(ctx, []int64{ids[0], ids[1], ids[2]})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if deleted != 1 {
+		t.Fatalf("re-delete count = %d, want 1 (only the surviving row)", deleted)
+	}
+
+	deleted, err = st.DeleteAuditByIDs(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if deleted != 0 {
+		t.Fatalf("empty delete count = %d, want 0", deleted)
+	}
+}
+
+// TestAuditDecisionIndexCreatedOnExistingDatabase covers the upgrade path: a
+// database written before the decision index existed gains it on the next
+// migration rather than only on a freshly created file.
+func TestAuditDecisionIndexCreatedOnExistingDatabase(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "kms.db")
+	st, err := OpenWithOptions(path, Options{})
+	if err != nil {
+		t.Fatalf("OpenWithOptions: %v", err)
+	}
+	if err := st.db.Exec("DROP INDEX idx_audit_decision").Error; err != nil {
+		t.Fatalf("drop index: %v", err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	reopened, err := OpenWithOptions(path, Options{})
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	t.Cleanup(func() { _ = reopened.Close() })
+
+	var columns []string
+	if err := reopened.db.Raw("SELECT name FROM pragma_index_info('idx_audit_decision') ORDER BY seqno").Scan(&columns).Error; err != nil {
+		t.Fatalf("inspect index: %v", err)
+	}
+	if strings.Join(columns, ",") != "decision,id" {
+		t.Fatalf("idx_audit_decision columns = %v, want [decision id]", columns)
+	}
+}
+
 // ---- change log / revisions ----------------------------------------------
 
 func TestRevisionMonotonicAfterPruneAll(t *testing.T) {

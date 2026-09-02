@@ -951,6 +951,12 @@ export interface AuditEvent {
   requestId: string;
   createdAtUnixMs: bigint;
   metadataJson: string;
+  /**
+   * The immutable incarnation ID of the namespace the event was authorized
+   * against (0 for global events and legacy rows), so a deleted-and-recreated
+   * env/app can be told apart in an export.
+   */
+  resourceNamespaceId: bigint;
 }
 
 export interface ListAuditEventsRequest {
@@ -966,6 +972,8 @@ export interface ListAuditEventsRequest {
   toUnixMs: bigint;
   pageSize: number;
   pageToken: string;
+  /** allow | deny | error; empty = any */
+  decision: string;
 }
 
 export interface ListAuditEventsResponse {
@@ -14255,6 +14263,7 @@ function createBaseAuditEvent(): AuditEvent {
     requestId: "",
     createdAtUnixMs: 0n,
     metadataJson: "",
+    resourceNamespaceId: 0n,
   };
 }
 
@@ -14313,6 +14322,12 @@ export const AuditEvent: MessageFns<AuditEvent> = {
     }
     if (message.metadataJson !== "") {
       writer.uint32(122).string(message.metadataJson);
+    }
+    if (message.resourceNamespaceId !== 0n) {
+      if (BigInt.asIntN(64, message.resourceNamespaceId) !== message.resourceNamespaceId) {
+        throw new globalThis.Error("value provided for field message.resourceNamespaceId of type int64 too large");
+      }
+      writer.uint32(128).int64(message.resourceNamespaceId);
     }
     return writer;
   },
@@ -14450,6 +14465,14 @@ export const AuditEvent: MessageFns<AuditEvent> = {
             message.metadataJson = reader.string();
             continue;
           }
+          case 16: {
+            if (tag !== 128) {
+              break;
+            }
+
+            message.resourceNamespaceId = reader.int64() as bigint;
+            continue;
+          }
         }
         if ((tag & 7) === 4 || tag === 0) {
           break;
@@ -14531,6 +14554,11 @@ export const AuditEvent: MessageFns<AuditEvent> = {
         : isSet(object.metadata_json)
         ? globalThis.String(object.metadata_json)
         : "",
+      resourceNamespaceId: isSet(object.resourceNamespaceId)
+        ? BigInt(object.resourceNamespaceId)
+        : isSet(object.resource_namespace_id)
+        ? BigInt(object.resource_namespace_id)
+        : 0n,
     };
   },
 
@@ -14581,6 +14609,9 @@ export const AuditEvent: MessageFns<AuditEvent> = {
     if (message.metadataJson !== "") {
       obj.metadataJson = message.metadataJson;
     }
+    if (message.resourceNamespaceId !== 0n) {
+      obj.resourceNamespaceId = message.resourceNamespaceId.toString();
+    }
     return obj;
   },
 
@@ -14608,6 +14639,9 @@ export const AuditEvent: MessageFns<AuditEvent> = {
       ? BigInt(object.createdAtUnixMs)
       : 0n;
     message.metadataJson = object.metadataJson ?? "";
+    message.resourceNamespaceId = (object.resourceNamespaceId !== undefined && object.resourceNamespaceId !== null)
+      ? BigInt(object.resourceNamespaceId)
+      : 0n;
     return message;
   },
 };
@@ -14623,6 +14657,7 @@ function createBaseListAuditEventsRequest(): ListAuditEventsRequest {
     toUnixMs: 0n,
     pageSize: 0,
     pageToken: "",
+    decision: "",
   };
 }
 
@@ -14660,6 +14695,9 @@ export const ListAuditEventsRequest: MessageFns<ListAuditEventsRequest> = {
     }
     if (message.pageToken !== "") {
       writer.uint32(74).string(message.pageToken);
+    }
+    if (message.decision !== "") {
+      writer.uint32(82).string(message.decision);
     }
     return writer;
   },
@@ -14749,6 +14787,14 @@ export const ListAuditEventsRequest: MessageFns<ListAuditEventsRequest> = {
             message.pageToken = reader.string();
             continue;
           }
+          case 10: {
+            if (tag !== 82) {
+              break;
+            }
+
+            message.decision = reader.string();
+            continue;
+          }
         }
         if ((tag & 7) === 4 || tag === 0) {
           break;
@@ -14800,6 +14846,7 @@ export const ListAuditEventsRequest: MessageFns<ListAuditEventsRequest> = {
         : isSet(object.page_token)
         ? globalThis.String(object.page_token)
         : "",
+      decision: isSet(object.decision) ? globalThis.String(object.decision) : "",
     };
   },
 
@@ -14832,6 +14879,9 @@ export const ListAuditEventsRequest: MessageFns<ListAuditEventsRequest> = {
     if (message.pageToken !== "") {
       obj.pageToken = message.pageToken;
     }
+    if (message.decision !== "") {
+      obj.decision = message.decision;
+    }
     return obj;
   },
 
@@ -14851,6 +14901,7 @@ export const ListAuditEventsRequest: MessageFns<ListAuditEventsRequest> = {
     message.toUnixMs = (object.toUnixMs !== undefined && object.toUnixMs !== null) ? BigInt(object.toUnixMs) : 0n;
     message.pageSize = object.pageSize ?? 0;
     message.pageToken = object.pageToken ?? "";
+    message.decision = object.decision ?? "";
     return message;
   },
 };
@@ -16788,5 +16839,5 @@ export interface MessageFns<T> {
   fromPartial(object: DeepPartial<T>): T;
 }
 
-// source-sha256: ce657215263c039800b4e4a8dccb9e79104251f635790c43caf4089388906e1d
+// source-sha256: 43eec1ad2c8ec1cd960674c761777df574ef4dc9cd52e06e59a81bb732296bd4
 // generation-sha256: c3e69d40e38671d5381cfa50a679b45232adc3ecd3df927c51285f1901aa09ef

@@ -404,40 +404,42 @@ type certBundleDTO struct {
 // --- audit -----------------------------------------------------------------
 
 type auditEventDTO struct {
-	ID              int64  `json:"id"`
-	EventType       string `json:"event_type"`
-	ActorIdentity   string `json:"actor_identity"`
-	ActorType       string `json:"actor_type"`
-	ResourceType    string `json:"resource_type"`
-	ResourceEnv     string `json:"resource_env"`
-	ResourceApp     string `json:"resource_app"`
-	ResourceKey     string `json:"resource_key"`
-	ResourceVersion uint64 `json:"resource_version"`
-	Decision        string `json:"decision"`
-	SourceIP        string `json:"source_ip"`
-	UserAgent       string `json:"user_agent"`
-	RequestID       string `json:"request_id"`
-	CreatedAtUnixMS int64  `json:"created_at_unix_ms"`
-	MetadataJSON    string `json:"metadata_json"`
+	ID                  int64  `json:"id"`
+	EventType           string `json:"event_type"`
+	ActorIdentity       string `json:"actor_identity"`
+	ActorType           string `json:"actor_type"`
+	ResourceType        string `json:"resource_type"`
+	ResourceEnv         string `json:"resource_env"`
+	ResourceApp         string `json:"resource_app"`
+	ResourceKey         string `json:"resource_key"`
+	ResourceVersion     uint64 `json:"resource_version"`
+	ResourceNamespaceID int64  `json:"resource_namespace_id"`
+	Decision            string `json:"decision"`
+	SourceIP            string `json:"source_ip"`
+	UserAgent           string `json:"user_agent"`
+	RequestID           string `json:"request_id"`
+	CreatedAtUnixMS     int64  `json:"created_at_unix_ms"`
+	MetadataJSON        string `json:"metadata_json"`
 }
 
 func toAuditEventDTO(e domain.AuditEvent) auditEventDTO {
 	return auditEventDTO{
-		ID:              e.ID,
-		EventType:       e.EventType,
-		ActorIdentity:   e.ActorIdentity,
-		ActorType:       e.ActorType,
-		ResourceType:    e.ResourceType,
-		ResourceEnv:     e.ResourceEnv,
-		ResourceApp:     e.ResourceApp,
-		ResourceKey:     e.ResourceKey,
-		ResourceVersion: e.ResourceVersion,
-		Decision:        e.Decision,
-		SourceIP:        e.SourceIP,
-		UserAgent:       e.UserAgent,
-		RequestID:       e.RequestID,
-		CreatedAtUnixMS: unixMS(e.CreatedAt),
-		MetadataJSON:    rawJSON(e.Metadata),
+		ID:                  e.ID,
+		EventType:           e.EventType,
+		ActorIdentity:       e.ActorIdentity,
+		ActorType:           e.ActorType,
+		ResourceType:        e.ResourceType,
+		ResourceEnv:         e.ResourceEnv,
+		ResourceApp:         e.ResourceApp,
+		ResourceKey:         e.ResourceKey,
+		ResourceVersion:     e.ResourceVersion,
+		ResourceNamespaceID: e.ResourceNamespaceID,
+		Decision:            e.Decision,
+		SourceIP:            e.SourceIP,
+		UserAgent:           e.UserAgent,
+		RequestID:           e.RequestID,
+		CreatedAtUnixMS:     unixMS(e.CreatedAt),
+		MetadataJSON:        rawJSON(e.Metadata),
 	}
 }
 

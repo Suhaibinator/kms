@@ -187,6 +187,8 @@ func TestFlagNameDerivation(t *testing.T) {
 		{"KMS_TLS_ENABLED", "tls-enabled"},
 		{"KMS_METRICS_ENABLED", "metrics-enabled"},
 		{"KMS_WATCH_RELEASE_SUBSCRIBER_RETAIN_DURATION", "watch-release-subscriber-retain-duration"},
+		{"KMS_AUDIT_RETAIN_DURATION", "audit-retain-duration"},
+		{"KMS_AUDIT_ARCHIVE_DIR", "audit-archive-dir"},
 		{"KMS_LOG_LEVEL", "log-level"},
 	} {
 		t.Run(tc.env, func(t *testing.T) {

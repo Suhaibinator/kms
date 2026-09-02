@@ -7150,8 +7150,12 @@ type AuditEvent struct {
 	RequestId       string                 `protobuf:"bytes,13,opt,name=request_id,json=requestId,proto3" json:"request_id,omitempty"`
 	CreatedAtUnixMs int64                  `protobuf:"varint,14,opt,name=created_at_unix_ms,json=createdAtUnixMs,proto3" json:"created_at_unix_ms,omitempty"`
 	MetadataJson    string                 `protobuf:"bytes,15,opt,name=metadata_json,json=metadataJson,proto3" json:"metadata_json,omitempty"`
-	unknownFields   protoimpl.UnknownFields
-	sizeCache       protoimpl.SizeCache
+	// The immutable incarnation ID of the namespace the event was authorized
+	// against (0 for global events and legacy rows), so a deleted-and-recreated
+	// env/app can be told apart in an export.
+	ResourceNamespaceId int64 `protobuf:"varint,16,opt,name=resource_namespace_id,json=resourceNamespaceId,proto3" json:"resource_namespace_id,omitempty"`
+	unknownFields       protoimpl.UnknownFields
+	sizeCache           protoimpl.SizeCache
 }
 
 func (x *AuditEvent) Reset() {
@@ -7289,6 +7293,13 @@ func (x *AuditEvent) GetMetadataJson() string {
 	return ""
 }
 
+func (x *AuditEvent) GetResourceNamespaceId() int64 {
+	if x != nil {
+		return x.ResourceNamespaceId
+	}
+	return 0
+}
+
 type ListAuditEventsRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Env           string                 `protobuf:"bytes,1,opt,name=env,proto3" json:"env,omitempty"`                              // exact env filter, empty = any
@@ -7300,6 +7311,7 @@ type ListAuditEventsRequest struct {
 	ToUnixMs      int64                  `protobuf:"varint,7,opt,name=to_unix_ms,json=toUnixMs,proto3" json:"to_unix_ms,omitempty"`
 	PageSize      int32                  `protobuf:"varint,8,opt,name=page_size,json=pageSize,proto3" json:"page_size,omitempty"`
 	PageToken     string                 `protobuf:"bytes,9,opt,name=page_token,json=pageToken,proto3" json:"page_token,omitempty"`
+	Decision      string                 `protobuf:"bytes,10,opt,name=decision,proto3" json:"decision,omitempty"` // allow | deny | error; empty = any
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -7393,6 +7405,13 @@ func (x *ListAuditEventsRequest) GetPageSize() int32 {
 func (x *ListAuditEventsRequest) GetPageToken() string {
 	if x != nil {
 		return x.PageToken
+	}
+	return ""
+}
+
+func (x *ListAuditEventsRequest) GetDecision() string {
+	if x != nil {
+		return x.Decision
 	}
 	return ""
 }
@@ -8568,7 +8587,7 @@ const file_kms_v1_kms_proto_rawDesc = "" +
 	"authMethod\"\x19\n" +
 	"\x17GetCACertificateRequest\"5\n" +
 	"\x18GetCACertificateResponse\x12\x19\n" +
-	"\bcert_pem\x18\x01 \x01(\tR\acertPem\"\x83\x04\n" +
+	"\bcert_pem\x18\x01 \x01(\tR\acertPem\"\xb7\x04\n" +
 	"\n" +
 	"AuditEvent\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\x03R\x02id\x12\x1d\n" +
@@ -8590,7 +8609,8 @@ const file_kms_v1_kms_proto_rawDesc = "" +
 	"\n" +
 	"request_id\x18\r \x01(\tR\trequestId\x12+\n" +
 	"\x12created_at_unix_ms\x18\x0e \x01(\x03R\x0fcreatedAtUnixMs\x12#\n" +
-	"\rmetadata_json\x18\x0f \x01(\tR\fmetadataJson\"\x9d\x02\n" +
+	"\rmetadata_json\x18\x0f \x01(\tR\fmetadataJson\x122\n" +
+	"\x15resource_namespace_id\x18\x10 \x01(\x03R\x13resourceNamespaceId\"\xb9\x02\n" +
 	"\x16ListAuditEventsRequest\x12\x10\n" +
 	"\x03env\x18\x01 \x01(\tR\x03env\x12\x10\n" +
 	"\x03app\x18\x02 \x01(\tR\x03app\x12\x1d\n" +
@@ -8605,7 +8625,9 @@ const file_kms_v1_kms_proto_rawDesc = "" +
 	"to_unix_ms\x18\a \x01(\x03R\btoUnixMs\x12\x1b\n" +
 	"\tpage_size\x18\b \x01(\x05R\bpageSize\x12\x1d\n" +
 	"\n" +
-	"page_token\x18\t \x01(\tR\tpageToken\"m\n" +
+	"page_token\x18\t \x01(\tR\tpageToken\x12\x1a\n" +
+	"\bdecision\x18\n" +
+	" \x01(\tR\bdecision\"m\n" +
 	"\x17ListAuditEventsResponse\x12*\n" +
 	"\x06events\x18\x01 \x03(\v2\x12.kms.v1.AuditEventR\x06events\x12&\n" +
 	"\x0fnext_page_token\x18\x02 \x01(\tR\rnextPageToken\"\xd7\x02\n" +

@@ -176,6 +176,36 @@ func (c *CLI) cmdServe(args []string) int {
 		exporter.SetWatchSource(func() metrics.WatchStats { return watchStats(hub.Stats()) })
 	}
 
+	// Audit retention runs on its own loop rather than inside the hub. The two
+	// prune different things and fail differently: an unwritable archive
+	// directory must stall audit retirement only, never the change-log pruning
+	// subscribers depend on. The loop shares the serve context, so it ends with
+	// everything else.
+	auditRetain := time.Duration(cfg.Audit.RetainDuration)
+	// Logged on every start, including when retention is off: "is this server
+	// discarding audit history?" must be answerable from the boot log alone.
+	logger.Info(auditRetentionStartupMsg,
+		zap.Bool("enabled", auditRetain > 0),
+		zap.String("retain", auditRetainDescription(auditRetain)),
+		zap.String("archive_dir", cfg.Audit.ArchiveDir))
+	if auditRetain > 0 {
+		retention := &core.AuditRetention{
+			Store:      store,
+			Retain:     auditRetain,
+			ArchiveDir: cfg.Audit.ArchiveDir,
+			Logger:     logger,
+		}
+		// A typed nil would pass the interface's nil check and then
+		// dereference, so the exporter is handed over only when it exists.
+		if exporter != nil {
+			retention.Metrics = exporter
+		}
+		if err := retention.Validate(); err != nil {
+			return c.fail("configuring audit retention: %v", err)
+		}
+		go retention.Run(ctx)
+	}
+
 	tlsCfg, err := cfg.BuildServerTLS()
 	if err != nil {
 		return c.fail("building TLS config: %v", err)
@@ -391,6 +421,22 @@ const (
 	adminCertExpiringMsg      = "admin identity's newest valid client certificate expires soon; an expired certificate is rejected by the TLS handshake itself, so re-issue before then with: parameter-store admin-cert issue <name> --out <dir>"
 	adminCertScanFailedMsg    = "could not check which admin identities have a valid client certificate; admins without one will be refused"
 )
+
+// auditRetentionStartupMsg is the single line every start emits about audit
+// retention. It is a constant because the wiring test pins it: the posture it
+// reports — keeping history forever, or retiring it on a schedule — is one an
+// operator has to be able to read back out of the boot log.
+const auditRetentionStartupMsg = "audit retention"
+
+// auditRetainDescription spells the retention window for that line. "forever"
+// is the default posture and deserves the word; a bare "0s" would read like a
+// misconfiguration.
+func auditRetainDescription(retain time.Duration) string {
+	if retain <= 0 {
+		return "forever"
+	}
+	return retain.String()
+}
 
 // adminCertExpiryWarning is how far ahead serve warns about an admin
 // certificate's expiry. Two weeks leaves room for a re-issue that needs host

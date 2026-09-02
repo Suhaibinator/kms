@@ -493,11 +493,18 @@ func (m *memStore) AppendAudit(_ context.Context, ev domain.AuditEvent) error {
 	return nil
 }
 
-func (m *memStore) ListAudit(_ context.Context, _ domain.AuditFilter, _ storage.ListPage) ([]domain.AuditEvent, string, error) {
+// ListAudit honors only the decision filter; the remaining predicates are
+// exercised against the real store in internal/storage.
+func (m *memStore) ListAudit(_ context.Context, f domain.AuditFilter, _ storage.ListPage) ([]domain.AuditEvent, string, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	out := make([]domain.AuditEvent, len(m.audit))
-	copy(out, m.audit)
+	out := make([]domain.AuditEvent, 0, len(m.audit))
+	for _, ev := range m.audit {
+		if f.Decision != "" && ev.Decision != f.Decision {
+			continue
+		}
+		out = append(out, ev)
+	}
 	return out, "", nil
 }
 

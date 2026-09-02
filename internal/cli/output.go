@@ -58,7 +58,11 @@ func (c *CLI) printTable(headers []string, rows [][]string) {
 // a failed activation's validation errors) and to test buffers.
 func writeAlignedTable(w io.Writer, headers []string, rows [][]string) {
 	tw := tabwriter.NewWriter(w, 0, 4, 2, ' ', 0)
-	_, _ = fmt.Fprintln(tw, strings.Join(headers, "\t"))
+	// A nil header list prints the rows alone. `audit list --follow` needs
+	// that: a tail repeats its column header at most once, at the top.
+	if headers != nil {
+		_, _ = fmt.Fprintln(tw, strings.Join(headers, "\t"))
+	}
 	for _, row := range rows {
 		_, _ = fmt.Fprintln(tw, strings.Join(row, "\t"))
 	}

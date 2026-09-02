@@ -384,6 +384,7 @@ export interface AuditEvent {
   resource_app: string;
   resource_key: string;
   resource_version: number;
+  resource_namespace_id: number;
   decision: string;
   source_ip: string;
   user_agent: string;

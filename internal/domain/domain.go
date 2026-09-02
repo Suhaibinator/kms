@@ -333,8 +333,23 @@ type AuditFilter struct {
 	KeyPrefix     string
 	ActorIdentity string
 	EventType     string
-	From          time.Time
-	To            time.Time
+	// Decision matches the recorded outcome exactly: "allow", "deny", or
+	// "error". Empty matches any outcome.
+	Decision string
+	From     time.Time
+	To       time.Time
+}
+
+// ValidAuditDecision reports whether s is an outcome AuditFilter.Decision may
+// select on: "allow", "deny", "error", or "" for any. Transports validate the
+// caller-supplied spelling with it so a typo narrows nothing silently.
+func ValidAuditDecision(s string) bool {
+	switch s {
+	case "", "allow", "deny", "error":
+		return true
+	default:
+		return false
+	}
 }
 
 // ChangeLogEntry is one revisioned change for watch replay. Ref carries the

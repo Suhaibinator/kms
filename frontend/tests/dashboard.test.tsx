@@ -204,6 +204,7 @@ describe("DashboardPage", () => {
       resource_app: "billing",
       resource_key: "db/password",
       resource_version: 1,
+      resource_namespace_id: 1,
       decision: "allow",
       source_ip: "",
       user_agent: "",

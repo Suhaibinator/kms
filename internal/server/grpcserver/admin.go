@@ -281,12 +281,16 @@ func (h *adminServer) ListAuditEvents(ctx context.Context, req *kmsv1.ListAuditE
 	if err != nil {
 		return nil, err
 	}
+	if !domain.ValidAuditDecision(req.GetDecision()) {
+		return nil, h.s.mapErr(ctx, domain.Errorf(domain.ErrInvalidArgument, "decision must be allow, deny, or error"))
+	}
 	filter := domain.AuditFilter{
 		Env:           req.GetEnv(),
 		App:           req.GetApp(),
 		KeyPrefix:     req.GetKeyPrefix(),
 		ActorIdentity: req.GetActorIdentity(),
 		EventType:     req.GetEventType(),
+		Decision:      req.GetDecision(),
 		From:          unixMSToTime(req.GetFromUnixMs()),
 		To:            unixMSToTime(req.GetToUnixMs()),
 	}
