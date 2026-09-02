@@ -85,7 +85,9 @@ export default function NamespacePicker({
     onChange({ app, env: stillValid ? value.env : "" });
   }
 
-  const emptyList = loading && namespaces.length === 0;
+  const loadingEmptyList = loading && namespaces.length === 0;
+  const noApplications = appOptions.length === 0;
+  const noEnvironments = envOptions.length === 0;
 
   return (
     <>
@@ -93,10 +95,16 @@ export default function NamespacePicker({
         <AppSelect
           id={appId}
           value={value.app}
-          disabled={disabled || emptyList}
+          disabled={disabled || loadingEmptyList || noApplications}
           onValueChange={onApp}
           onBlur={onBlur}
-          placeholder={emptyList ? "Loading applications…" : "Select application…"}
+          placeholder={
+            loadingEmptyList
+              ? "Loading applications…"
+              : noApplications
+                ? "No applications available"
+                : "Select application…"
+          }
           options={appOptions}
         />
       </Field>
@@ -104,15 +112,17 @@ export default function NamespacePicker({
         <AppSelect
           id={envId}
           value={value.env}
-          disabled={disabled || emptyList || !value.app}
+          disabled={disabled || loadingEmptyList || !value.app || noEnvironments}
           onValueChange={(env) => onChange({ app: value.app, env })}
           onBlur={onBlur}
           placeholder={
-            emptyList
+            loadingEmptyList
               ? "Loading environments…"
-              : value.app
-                ? "Select environment…"
-                : "Select application first"
+              : namespaces.length === 0 || (value.app && noEnvironments)
+                ? "No environments available"
+                : value.app
+                  ? "Select environment…"
+                  : "Select application first"
           }
           options={envOptions}
         />

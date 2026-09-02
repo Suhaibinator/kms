@@ -609,6 +609,9 @@ export function ReleaseBuilder({
                           ref={index === 0 ? firstResourceRef : undefined}
                           value={entry.key}
                           disabled={resources.length === 0}
+                          searchable
+                          searchPlaceholder={`Filter ${entry.kind}s…`}
+                          emptyMessage={`No matching ${entry.kind}s.`}
                           onValueChange={(key) => {
                             updateEntry(entry.id, {
                               key,
@@ -658,8 +661,14 @@ export function ReleaseBuilder({
                             value={entry.label}
                             onValueChange={(label) => updateEntry(entry.id, { label })}
                             onBlur={() => touch("label")}
-                            disabled={entry.metadataLoading}
-                            placeholder={entry.metadataLoading ? "Loading…" : "Choose label…"}
+                            disabled={entry.metadataLoading || entry.labels.length === 0}
+                            placeholder={
+                              entry.metadataLoading
+                                ? "Loading…"
+                                : entry.labels.length === 0
+                                  ? "No labels available"
+                                  : "Choose label…"
+                            }
                             options={entry.labels.map((label) => ({ value: label, label }))}
                           />
                         </Field>
@@ -669,8 +678,14 @@ export function ReleaseBuilder({
                             value={entry.version}
                             onValueChange={(version) => updateEntry(entry.id, { version })}
                             onBlur={() => touch("version")}
-                            disabled={entry.metadataLoading}
-                            placeholder={entry.metadataLoading ? "Loading…" : "Choose version…"}
+                            disabled={entry.metadataLoading || entry.versions.length === 0}
+                            placeholder={
+                              entry.metadataLoading
+                                ? "Loading…"
+                                : entry.versions.length === 0
+                                  ? "No versions available"
+                                  : "Choose version…"
+                            }
                             options={entry.versions.map((version) => ({
                               value: String(version),
                               label: `v${version}`,

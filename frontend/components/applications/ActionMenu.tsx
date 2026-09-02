@@ -1,7 +1,7 @@
 import { Menu } from "@base-ui/react/menu";
 import { ChevronRight } from "lucide-react";
 import Link from "next/link";
-import type { ReactElement, ReactNode } from "react";
+import { cloneElement, type ReactElement, type ReactNode } from "react";
 
 export interface ActionMenuItem {
   key: string;
@@ -17,6 +17,13 @@ export interface ActionMenuItem {
 function renderItems(items: ActionMenuItem[]): ReactNode {
   return items.map((item) => {
     if (item.children) {
+      if (item.children.length === 0) {
+        return (
+          <Menu.Item key={item.key} className="menu-item" disabled>
+            {item.label}
+          </Menu.Item>
+        );
+      }
       return (
         <Menu.SubmenuRoot key={item.key} disabled={item.disabled}>
           <Menu.SubmenuTrigger className="menu-item menu-item-submenu">
@@ -77,6 +84,16 @@ export function ActionMenu({
   onOpenChange?: (open: boolean) => void;
   align?: "start" | "end";
 }) {
+  if (items.length === 0) {
+    return cloneElement(
+      trigger as ReactElement<{ "aria-disabled"?: boolean; disabled?: boolean }>,
+      {
+        "aria-disabled": true,
+        disabled: true,
+      },
+    );
+  }
+
   return (
     <Menu.Root modal={false} open={open} onOpenChange={onOpenChange}>
       <Menu.Trigger render={trigger} />

@@ -1,4 +1,5 @@
 import type { FocusEventHandler, Ref } from "react";
+import { SearchableAppSelect } from "@/components/ui/searchable-app-select";
 import {
   Select,
   SelectContent,
@@ -24,6 +25,9 @@ export function AppSelect({
   name,
   id,
   className,
+  searchable = false,
+  searchPlaceholder = "Filter options…",
+  emptyMessage = "No matching options.",
   onBlur,
   ref,
   "aria-describedby": ariaDescribedBy,
@@ -38,12 +42,39 @@ export function AppSelect({
   name?: string;
   id?: string;
   className?: string;
+  searchable?: boolean;
+  searchPlaceholder?: string;
+  emptyMessage?: string;
   onBlur?: FocusEventHandler<HTMLButtonElement>;
   /** The trigger button, e.g. for a modal's `initialFocus`. */
   ref?: Ref<HTMLButtonElement>;
   "aria-describedby"?: string;
   "aria-invalid"?: boolean;
 }) {
+  const effectivelyDisabled = disabled || options.length === 0;
+
+  if (searchable) {
+    return (
+      <SearchableAppSelect
+        value={value}
+        onValueChange={onValueChange}
+        options={options}
+        placeholder={placeholder}
+        searchPlaceholder={searchPlaceholder}
+        emptyMessage={emptyMessage}
+        disabled={effectivelyDisabled}
+        required={required}
+        name={name}
+        id={id}
+        className={className}
+        onBlur={onBlur}
+        ref={ref}
+        aria-describedby={ariaDescribedBy}
+        aria-invalid={ariaInvalid}
+      />
+    );
+  }
+
   const items = options.map(({ value: optionValue, label }) => ({
     value: optionValue,
     label,
@@ -54,7 +85,7 @@ export function AppSelect({
       value={value || null}
       onValueChange={(next) => onValueChange(next ?? "")}
       items={items}
-      disabled={disabled}
+      disabled={effectivelyDisabled}
       required={required}
       name={name}
     >
