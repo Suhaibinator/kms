@@ -321,7 +321,8 @@ Administration:
   rotate-admin     Recover an existing admin by rotating its token directly.
   admin-cert       Issue, list, or revoke admin client certificates offline (no server needed).
   rotate-kek       Rotate the master key, rewrapping all secrets.
-  audit            Read or export audit history from a running server.
+  audit            Read, export, or retire audit history (list and export talk to a
+                   running server; prune runs offline against the database file).
   import           Import data from SuhaibParameterStore.
 
 Application onboarding (talk to a running server over gRPC):

@@ -104,6 +104,11 @@ type AuditPruneStore interface {
 	// DeleteAuditByIDs deletes exactly the given rows and returns how many were
 	// deleted.
 	DeleteAuditByIDs(ctx context.Context, ids []int64) (int64, error)
+	// CountAuditBefore reports how many rows a full retirement pass would
+	// cover. ListAuditBefore cannot answer that on its own — it has no cursor,
+	// so the only way past its first batch is to delete one — which is exactly
+	// what "audit prune --dry-run" must not do.
+	CountAuditBefore(ctx context.Context, before time.Time) (int64, error)
 }
 
 var _ AuditPruneStore = (*SQLStore)(nil)
@@ -133,6 +138,24 @@ func (s *SQLStore) ListAuditBefore(ctx context.Context, before time.Time, limit 
 		out = append(out, toAuditEvent(m))
 	}
 	return out, nil
+}
+
+// CountAuditBefore counts the rows ListAuditBefore would eventually return for
+// the same cutoff, applying the identical strict text comparison so the count
+// and the pass agree on which rows are inside the retention window. A zero
+// cutoff means "retain everything" and counts nothing.
+func (s *SQLStore) CountAuditBefore(ctx context.Context, before time.Time) (int64, error) {
+	if before.IsZero() {
+		return 0, nil
+	}
+	var total int64
+	err := s.db.WithContext(ctx).Model(&auditEventModel{}).
+		Where("created_at < ?", fmtTime(before)).
+		Count(&total).Error
+	if err != nil {
+		return 0, err
+	}
+	return total, nil
 }
 
 // DeleteAuditByIDs deletes exactly the listed rows and reports how many were

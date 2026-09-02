@@ -64,6 +64,21 @@ func (p *pruneStore) DeleteAuditByIDs(_ context.Context, ids []int64) (int64, er
 	return n, nil
 }
 
+func (p *pruneStore) CountAuditBefore(_ context.Context, before time.Time) (int64, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.listErr != nil {
+		return 0, p.listErr
+	}
+	var total int64
+	for _, row := range p.rows {
+		if row.CreatedAt.Before(before) {
+			total++
+		}
+	}
+	return total, nil
+}
+
 func (p *pruneStore) remaining() []int64 {
 	p.mu.Lock()
 	defer p.mu.Unlock()

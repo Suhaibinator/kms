@@ -2549,6 +2549,50 @@ func TestListAuditBeforeCutoffSubSecond(t *testing.T) {
 	}
 }
 
+// TestCountAuditBefore: a dry run reports what a pass would retire, so the
+// count must agree with ListAuditBefore on the same cutoff — including the
+// strict bound that keeps a row stamped exactly at it.
+func TestCountAuditBefore(t *testing.T) {
+	st := newStore(t)
+	ctx := context.Background()
+	base := time.Date(2026, 7, 1, 12, 0, 0, 0, time.UTC)
+	seedAuditAt(t, st,
+		base, base.Add(time.Second), base.Add(2*time.Second), base.Add(3*time.Second))
+
+	for _, tc := range []struct {
+		name   string
+		cutoff time.Time
+		want   int64
+	}{
+		{"strict bound", base.Add(2 * time.Second), 2},
+		// The count is not capped the way a listing is: it answers for the
+		// whole retirement, not for one batch.
+		{"everything", base.Add(time.Hour), 4},
+		{"nothing yet", base, 0},
+		{"zero cutoff retains everything", time.Time{}, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := st.CountAuditBefore(ctx, tc.cutoff)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got != tc.want {
+				t.Fatalf("count = %d, want %d", got, tc.want)
+			}
+			if tc.cutoff.IsZero() {
+				return
+			}
+			rows, err := st.ListAuditBefore(ctx, tc.cutoff, 1000)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if int64(len(rows)) != got {
+				t.Fatalf("count %d disagrees with the %d rows a pass would list", got, len(rows))
+			}
+		})
+	}
+}
+
 func TestDeleteAuditByIDs(t *testing.T) {
 	st := newStore(t)
 	ctx := context.Background()

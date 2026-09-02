@@ -18,6 +18,8 @@ import (
 
 	kmsv1 "github.com/Suhaibinator/kms/gen/kmsv1"
 	"github.com/Suhaibinator/kms/internal/core"
+	"github.com/Suhaibinator/kms/internal/domain"
+	"github.com/Suhaibinator/kms/internal/storage"
 )
 
 // auditStub is an AdminService that records every ListAuditEvents request and
@@ -564,5 +566,224 @@ func TestParseSinceUntilGrammar(t *testing.T) {
 		if _, err := parseSinceUntil("--since", bad, now); err == nil {
 			t.Fatalf("parseSinceUntil(%q) accepted an unparseable bound", bad)
 		}
+	}
+}
+
+// --- prune -----------------------------------------------------------------
+
+// seedAuditRows writes n audit rows backdated by age, returning nothing: the
+// tests count what survives rather than tracking ids the store assigns.
+func seedAuditRows(t *testing.T, store *storage.SQLStore, n int, age time.Duration) {
+	t.Helper()
+	created := time.Now().Add(-age)
+	for i := range n {
+		err := store.AppendAudit(context.Background(), domain.AuditEvent{
+			EventType:           "secret.read",
+			ActorIdentity:       "gradethis-be",
+			ActorType:           "client",
+			ResourceType:        "secret",
+			ResourceNamespaceID: 1,
+			ResourceEnv:         "prod",
+			ResourceApp:         "gradethis",
+			ResourceKey:         fmt.Sprintf("key-%d", i),
+			Decision:            "allow",
+			CreatedAt:           created.Add(time.Duration(i) * time.Millisecond),
+			Metadata:            `{"label":"current"}`,
+		})
+		if err != nil {
+			t.Fatalf("seed audit row %d: %v", i, err)
+		}
+	}
+}
+
+func auditRowCount(t *testing.T, store *storage.SQLStore) int {
+	t.Helper()
+	events, _, err := store.ListAudit(context.Background(), domain.AuditFilter{}, storage.ListPage{Limit: 1000})
+	if err != nil {
+		t.Fatalf("list audit: %v", err)
+	}
+	return len(events)
+}
+
+// TestAuditPruneRefusesWithoutConfirmation: prune deletes history. On a
+// non-interactive stdin without --yes it must refuse before touching a row,
+// the way every other destructive command does.
+func TestAuditPruneRefusesWithoutConfirmation(t *testing.T) {
+	db, _ := initKMS(t, "")
+	store := openTestStore(t, db)
+	seedAuditRows(t, store, 3, 48*time.Hour)
+	before := auditRowCount(t, store)
+
+	c := newTestCLI()
+	code := c.Run([]string{"audit", "prune", "--older-than", "24h", "--sqlite-path", db})
+	if code != 2 {
+		t.Fatalf("exit = %d, want 2; stderr = %s", code, c.stderr())
+	}
+	if !strings.Contains(c.stderr(), "without --yes") {
+		t.Fatalf("stderr = %q", c.stderr())
+	}
+	if got := auditRowCount(t, store); got != before {
+		t.Fatalf("rows = %d, want the untouched %d", got, before)
+	}
+}
+
+// TestAuditPruneDryRunCountsWithoutDeleting is the rehearsal: it reports the
+// same cutoff the real run would use and leaves every row in place.
+func TestAuditPruneDryRunCountsWithoutDeleting(t *testing.T) {
+	db, _ := initKMS(t, "")
+	store := openTestStore(t, db)
+	seedAuditRows(t, store, 4, 48*time.Hour)
+	seedAuditRows(t, store, 2, time.Minute)
+	before := auditRowCount(t, store)
+
+	c := newTestCLI()
+	code := c.Run([]string{"audit", "prune", "--older-than", "24h", "--dry-run", "--sqlite-path", db})
+	if code != 0 {
+		t.Fatalf("exit = %d, stderr = %s", code, c.stderr())
+	}
+	if !strings.Contains(c.stdout(), "Would prune 4 audit events") {
+		t.Fatalf("stdout = %q, want the four backdated rows counted", c.stdout())
+	}
+	if got := auditRowCount(t, store); got != before {
+		t.Fatalf("rows = %d, want the untouched %d", got, before)
+	}
+}
+
+// TestAuditPruneArchivesBeforeDeleting is the guarantee the command exists to
+// keep: what leaves the database is on disk first, in the shared record format.
+func TestAuditPruneArchivesBeforeDeleting(t *testing.T) {
+	db, _ := initKMS(t, "")
+	store := openTestStore(t, db)
+	seedAuditRows(t, store, 5, 48*time.Hour)
+	seedAuditRows(t, store, 2, time.Minute)
+	archive := t.TempDir()
+
+	c := newTestCLI()
+	code := c.Run([]string{"audit", "prune", "--older-than", "24h", "--archive", archive,
+		"--sqlite-path", db, "--yes"})
+	if code != 0 {
+		t.Fatalf("exit = %d, stderr = %s", code, c.stderr())
+	}
+	if !strings.Contains(c.stdout(), fmt.Sprintf("Pruned 5 audit events (archived to %s)", archive)) {
+		t.Fatalf("stdout = %q", c.stdout())
+	}
+	if got := auditRowCount(t, store); got != 2 {
+		t.Fatalf("rows = %d, want the 2 inside the retention window", got)
+	}
+
+	files, err := filepath.Glob(filepath.Join(archive, "audit-*.jsonl"))
+	if err != nil || len(files) == 0 {
+		t.Fatalf("archive files = %v (%v), want at least one", files, err)
+	}
+	var archived int
+	for _, file := range files {
+		archived += len(auditExportIDs(t, file))
+		if runtime.GOOS == "windows" {
+			continue
+		}
+		info, err := os.Stat(file)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if mode := info.Mode().Perm(); mode != 0o600 {
+			t.Fatalf("archive %s mode = %#o, want 0600", file, mode)
+		}
+	}
+	if archived != 5 {
+		t.Fatalf("archived %d records, want the 5 that were deleted", archived)
+	}
+}
+
+// TestAuditPruneKeepsRowsWhenTheArchiveIsUnusable: archive-before-delete means
+// an archive that cannot be written is a refusal, never a silent delete.
+func TestAuditPruneKeepsRowsWhenTheArchiveIsUnusable(t *testing.T) {
+	db, _ := initKMS(t, "")
+	store := openTestStore(t, db)
+	seedAuditRows(t, store, 3, 48*time.Hour)
+	before := auditRowCount(t, store)
+
+	missing := filepath.Join(t.TempDir(), "not-created")
+	c := newTestCLI()
+	code := c.Run([]string{"audit", "prune", "--older-than", "24h", "--archive", missing,
+		"--sqlite-path", db, "--yes"})
+	if code == 0 {
+		t.Fatalf("exit = 0, want a failure; stderr = %s", c.stderr())
+	}
+	if !strings.Contains(c.stderr(), "--archive") {
+		t.Fatalf("stderr = %q, want it to name --archive", c.stderr())
+	}
+	if got := auditRowCount(t, store); got != before {
+		t.Fatalf("rows = %d, want the untouched %d", got, before)
+	}
+}
+
+func TestAuditPruneRejectsInvalidInvocations(t *testing.T) {
+	db, _ := initKMS(t, "")
+	cases := []struct {
+		name string
+		args []string
+		want string
+	}{
+		{"missing cutoff", []string{"--yes"}, "--older-than is required"},
+		{"future cutoff", []string{"--older-than", "-1h", "--yes"}, "invalid --older-than"},
+		{"zero cutoff", []string{"--older-than", "0s", "--yes"}, "is not in the past"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			c := newTestCLI()
+			args := append([]string{"audit", "prune", "--sqlite-path", db}, tc.args...)
+			if code := c.Run(args); code != 2 {
+				t.Fatalf("exit = %d, want 2; stderr = %s", code, c.stderr())
+			}
+			if !strings.Contains(c.stderr(), tc.want) {
+				t.Fatalf("stderr = %q, want it to mention %q", c.stderr(), tc.want)
+			}
+		})
+	}
+}
+
+func TestAuditPruneJSONReportsTheArchive(t *testing.T) {
+	db, _ := initKMS(t, "")
+	store := openTestStore(t, db)
+	seedAuditRows(t, store, 2, 48*time.Hour)
+	archive := t.TempDir()
+
+	c := newTestCLI()
+	code := c.Run([]string{"-o", "json", "audit", "prune", "--older-than", "24h",
+		"--archive", archive, "--sqlite-path", db, "--yes"})
+	if code != 0 {
+		t.Fatalf("exit = %d, stderr = %s", code, c.stderr())
+	}
+	var document auditPruneJSON
+	if err := json.Unmarshal([]byte(c.stdout()), &document); err != nil {
+		t.Fatalf("decode %q: %v", c.stdout(), err)
+	}
+	if document.Pruned != 2 || document.DryRun {
+		t.Fatalf("document = %+v", document)
+	}
+	if document.ArchiveDir == nil || *document.ArchiveDir != archive {
+		t.Fatalf("archive_dir = %v, want %q", document.ArchiveDir, archive)
+	}
+}
+
+func TestAuditPruneWithoutArchiveReportsNullArchiveDir(t *testing.T) {
+	db, _ := initKMS(t, "")
+	store := openTestStore(t, db)
+	seedAuditRows(t, store, 2, 48*time.Hour)
+
+	c := newTestCLI()
+	code := c.Run([]string{"-o", "json", "audit", "prune", "--older-than", "24h", "--sqlite-path", db, "--yes"})
+	if code != 0 {
+		t.Fatalf("exit = %d, stderr = %s", code, c.stderr())
+	}
+	var document auditPruneJSON
+	if err := json.Unmarshal([]byte(c.stdout()), &document); err != nil {
+		t.Fatalf("decode %q: %v", c.stdout(), err)
+	}
+	if document.Pruned != 2 || document.ArchiveDir != nil {
+		t.Fatalf("document = %+v, want two rows discarded with a null archive_dir", document)
+	}
+	if got := auditRowCount(t, store); got != 0 {
+		t.Fatalf("rows = %d, want 0", got)
 	}
 }

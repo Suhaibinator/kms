@@ -18,6 +18,7 @@ import (
 	"github.com/Suhaibinator/kms/internal/core"
 	"github.com/Suhaibinator/kms/internal/domain"
 	"github.com/Suhaibinator/kms/internal/fileutil"
+	"github.com/Suhaibinator/kms/internal/storage"
 )
 
 const (
@@ -46,9 +47,10 @@ const (
 // first batch of a --follow tail and every page of a plain listing.
 var auditTableHeaders = []string{"TIME", "EVENT", "DECISION", "ACTOR", "NAMESPACE", "KEY", "REQUEST_ID"}
 
-// cmdAudit dispatches the audit subcommands. Both query a running server as an
-// admin: reading the audit log is an administrative operation, and the server
-// is what enforces which rows a delegated reader may see.
+// cmdAudit dispatches the audit subcommands. list and export query a running
+// server as an admin; prune runs offline against the database file, because
+// retiring history is a host-level operation like backup or rotate-kek — it
+// needs the file, not a credential, and must work when the server is down.
 func (c *CLI) cmdAudit(args []string) int {
 	if len(args) == 0 {
 		c.auditUsage()
@@ -60,6 +62,8 @@ func (c *CLI) cmdAudit(args []string) int {
 		return c.cmdAuditList(rest)
 	case "export":
 		return c.cmdAuditExport(rest)
+	case "prune":
+		return c.cmdAuditPrune(rest)
 	case "help", "-h", "--help":
 		c.auditUsage()
 		return 0
@@ -71,7 +75,7 @@ func (c *CLI) cmdAudit(args []string) int {
 }
 
 func (c *CLI) auditUsage() {
-	_, _ = fmt.Fprint(c.Stderr, `parameter-store audit — read and export audit history
+	_, _ = fmt.Fprint(c.Stderr, `parameter-store audit — read, export, and retire audit history
 
 Usage:
   parameter-store audit <action> [flags]
@@ -82,9 +86,16 @@ Actions:
                           --since, --until, --limit, --page-token, --interval).
   export --out FILE       Stream every matching event to a JSON Lines file. The
                           destination is created exclusively and never overwritten.
+  prune --older-than DUR  Retire events older than a cutoff from the database file,
+                          archiving them first with --archive DIR (--dry-run,
+                          --sqlite-path).
 
 list and export talk to a running server and need an admin credential (or an
-identity holding admin:audit:read).
+identity holding admin:audit:read). prune runs on the server host against the
+database directly; the server does not need to be running.
+
+Audit history is evidence. prune without --archive deletes it outright, so pass
+an archive directory unless discarding the rows is the intent.
 `)
 }
 
@@ -545,4 +556,141 @@ func (c *CLI) writeAuditExport(client kmsv1.AdminServiceClient, cf *connFlags, r
 		return 0, fmt.Errorf("publishing %s: %w", out, err)
 	}
 	return count, nil
+}
+
+// --- audit prune -----------------------------------------------------------
+
+func (c *CLI) cmdAuditPrune(args []string) int {
+	fs := c.newFlags("audit prune")
+	r := c.serverSettings(fs, "storage.sqlite_path")
+	olderThan := fs.String("older-than", "", "retire events older than this: a duration (720h, 90d) or an RFC 3339 `instant`")
+	archive := fs.String("archive", "", "existing `directory` receiving a JSON Lines copy of every row before it is deleted")
+	dryRun := fs.Bool("dry-run", false, "report how many events would be retired, without deleting anything")
+	c.setUsage(fs, "audit prune --older-than DURATION [flags]",
+		"Retire audit events older than a cutoff directly from the database file. With --archive DIR every row is written to DIR/audit-<YYYYMMDD>.jsonl and synced before it is deleted; without it the rows are discarded.", true)
+	if !c.parseFlags(fs, args) {
+		return 2
+	}
+	if !c.rejectPositionals() {
+		return 2
+	}
+	cfg, prov, _, err := r.resolve()
+	if err != nil {
+		return c.failErr("", err)
+	}
+	if err := c.requireSQLitePath(cfg); err != nil {
+		return c.failUsage("%v", err)
+	}
+	if *olderThan == "" {
+		return c.failUsage("--older-than is required")
+	}
+	// One clock reading anchors both the cutoff the operator is shown and the
+	// cutoff the pass applies, so nothing can drift between the confirmation
+	// and the delete.
+	now := time.Now()
+	cutoff, err := parseSinceUntil("--older-than", *olderThan, now)
+	if err != nil {
+		return c.failUsage("%v", err)
+	}
+	retain := now.Sub(cutoff)
+	if retain <= 0 {
+		return c.failUsage("--older-than %q is not in the past; it would retire every audit event", *olderThan)
+	}
+	if *archive != "" {
+		if err := requireArchiveDir(*archive); err != nil {
+			return c.failErr("", err)
+		}
+	}
+
+	// Name the database even for a dry run: which file was counted is exactly
+	// what the rehearsal is meant to establish.
+	c.warnDestructiveTarget(cfg, prov)
+	if !*dryRun {
+		action := fmt.Sprintf("prune audit events older than %s from", *olderThan)
+		if ok, code := c.confirmDestructive(action, absPath(cfg.Storage.SQLitePath)); !ok {
+			return code
+		}
+	}
+
+	store, err := storage.Open(cfg.Storage.SQLitePath)
+	if err != nil {
+		return c.failErr("opening database", err)
+	}
+	defer func() { _ = store.Close() }()
+
+	retention := core.AuditRetention{
+		Store:      store,
+		Retain:     retain,
+		ArchiveDir: *archive,
+		Logger:     c.quietLogger(),
+		Now:        func() time.Time { return now },
+	}
+	if err := retention.Validate(); err != nil {
+		return c.failUsage("%v", err)
+	}
+	ctx := context.Background()
+	if *dryRun {
+		total, err := store.CountAuditBefore(ctx, retention.Cutoff())
+		if err != nil {
+			return c.failErr("counting audit events", err)
+		}
+		c.resultLine("Would prune %d audit events", total)
+		if c.jsonOutput() {
+			return c.printJSON(auditPruneJSON{Pruned: total, ArchiveDir: optionalString(*archive), DryRun: true})
+		}
+		return 0
+	}
+
+	// One RunOnce bounds its work so the server's background loop never holds
+	// the database for an unbounded stretch. A one-shot command is expected to
+	// finish the job instead, so repeat until a pass finds nothing left.
+	var pruned int64
+	for {
+		n, err := retention.RunOnce(ctx)
+		pruned += n
+		if err != nil {
+			// Archive-before-delete means the batch that failed is still in
+			// the database; say what did get retired before reporting why the
+			// rest did not.
+			c.info("Pruned %d audit events before the failure", pruned)
+			return c.failErr("pruning audit events", err)
+		}
+		if n == 0 {
+			break
+		}
+	}
+	if *archive != "" {
+		c.resultLine("Pruned %d audit events (archived to %s)", pruned, *archive)
+	} else {
+		c.resultLine("Pruned %d audit events", pruned)
+	}
+	if c.jsonOutput() {
+		return c.printJSON(auditPruneJSON{Pruned: pruned, ArchiveDir: optionalString(*archive), DryRun: false})
+	}
+	return 0
+}
+
+// auditPruneJSON is the JSON form of `audit prune`: what a real run deleted or
+// a --dry-run counted, and where the copies went. archive_dir is null when the
+// rows were discarded rather than archived, which is the difference between a
+// retention policy and data loss.
+type auditPruneJSON struct {
+	Pruned     int64   `json:"pruned"`
+	ArchiveDir *string `json:"archive_dir"`
+	DryRun     bool    `json:"dry_run"`
+}
+
+// requireArchiveDir refuses an --archive directory that does not already
+// exist, the rule audit.archive_dir follows in the config for the same reason:
+// creating it here would guess at the permissions of a directory that is about
+// to hold the only remaining copy of the audit history.
+func requireArchiveDir(path string) error {
+	info, err := os.Stat(path)
+	if err != nil {
+		return fmt.Errorf("--archive: %w", err)
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("--archive: %s is not a directory", path)
+	}
+	return nil
 }
