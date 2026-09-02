@@ -40,18 +40,15 @@ func documentedUnit(t *testing.T) string {
 	if idx < 0 {
 		t.Fatalf("docs/operations.md has no %q section", section)
 	}
-	rest := doc[idx:]
-	const fence = "```ini\n"
-	start := strings.Index(rest, fence)
-	if start < 0 {
+	_, rest, ok := strings.Cut(doc[idx:], "```ini\n")
+	if !ok {
 		t.Fatal("the \"Running under systemd\" section has no fenced ini block")
 	}
-	rest = rest[start+len(fence):]
-	end := strings.Index(rest, "```")
-	if end < 0 {
+	block, _, ok := strings.Cut(rest, "```")
+	if !ok {
 		t.Fatal("the systemd unit block in docs/operations.md is not closed")
 	}
-	return rest[:end]
+	return block
 }
 
 // TestShippedSystemdUnitMatchesTheRunbook: the file and the documented block

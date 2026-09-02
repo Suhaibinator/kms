@@ -160,6 +160,20 @@ func TestValidate(t *testing.T) {
 			t.Fatalf("Validate: %v", err)
 		}
 	})
+	t.Run("log level must be recognized", func(t *testing.T) {
+		for _, level := range []string{"", "debug", "info", "WARN", " warning ", "error"} {
+			cfg := Default()
+			cfg.Log.Level = level
+			if err := cfg.Validate(); err != nil {
+				t.Errorf("level %q: Validate: %v", level, err)
+			}
+		}
+		cfg := Default()
+		cfg.Log.Level = "debgu"
+		if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "log.level") {
+			t.Fatalf("err = %v", err)
+		}
+	})
 	t.Run("admin_require_client_cert without tls is accepted", func(t *testing.T) {
 		// Deliberately not a validation error: the default is on, and a
 		// TLS-less dev run must still start. serve relaxes the requirement at

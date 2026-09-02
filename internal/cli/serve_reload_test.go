@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -284,26 +285,21 @@ func TestReloadServeRejectsBadConfiguration(t *testing.T) {
 	}
 }
 
-// TestReloadServeUnknownLogLevelFallsBackToInfo documents that an unrecognized
-// level is not a reload failure: Config.LogLevel maps anything it does not know
-// to info, at a reload exactly as at startup. The written value is still what
-// the config file says, which is what `config show` will print.
-func TestReloadServeUnknownLogLevelFallsBackToInfo(t *testing.T) {
+// TestReloadServeUnknownLogLevelIsRejected: a level the logger does not know
+// is a typo, and Config.Validate refuses it — so the reload is rejected as a
+// whole rather than quietly turning a debug session into an info one.
+func TestReloadServeUnknownLogLevelIsRejected(t *testing.T) {
 	env := newReloadEnv(t, "log:\n  level: debug\n")
 	env.rewrite(t, "log:\n  level: bogus\n")
 
 	out := env.reload(t, nil, nil)
-	if out.err != nil {
-		t.Fatalf("reload: %v", out.err)
+	if out.err == nil || !strings.Contains(out.err.Error(), "log.level") {
+		t.Fatalf("reload err = %v, want a log.level validation error", out.err)
 	}
-	if got := env.level.Level(); got != zapcore.InfoLevel {
-		t.Errorf("logger level = %v, want info", got)
+	if got := env.level.Level(); got != zapcore.DebugLevel {
+		t.Errorf("logger level = %v, want the running debug level", got)
 	}
-	e := entryFor(t, out.logs, configReloadedMsg)
-	assertKeys(t, e, "changed", []string{"log.level"})
-	if got := e.ContextMap()["log_level"]; got != "info" {
-		t.Errorf("log_level field = %v, want the effective level info", got)
-	}
+	entryFor(t, out.logs, configReloadFailedMsg)
 }
 
 // TestReloadServeRotatesServerCertificate is the cert-rotation path: the paths

@@ -156,9 +156,10 @@ Logs are structured JSON emitted by [Uber zap](https://github.com/uber-go/zap):
 each line carries `ts` (ISO8601, millisecond precision), a lowercase `level`
 (`debug`/`info`/`warn`/`error`), `msg`, and typed fields. `log.level` /
 `KMS_LOG_LEVEL` sets the minimum level (default `info`). Accepted values are
-`debug`, `info`, `warn`/`warning`, and `error`; an empty or unrecognized value
-falls back to `info`. Secret plaintext, tokens, and key material never appear
-in a log line at any level.
+`debug`, `info`, `warn`/`warning`, and `error` (case-insensitive); an empty
+value means `info`, and anything else is a validation error — `serve` refuses
+to start, and a hot reload is rejected as a whole. Secret plaintext, tokens,
+and key material never appear in a log line at any level.
 
 The HTTP server uses 10 s read-header, 30 s read, 60 s write, and 120 s idle
 timeouts. The release-subscriber SSE endpoint clears its write deadline for

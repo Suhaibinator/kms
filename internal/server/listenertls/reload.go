@@ -73,6 +73,9 @@ func (r *Reloadable) Listener(nextProtos ...string) *tls.Config {
 // Swap installs derived for every listener. Handshakes in flight finish with
 // the config they started with; the next one sees the new material.
 func (r *Reloadable) Swap(derived *tls.Config) {
+	if r == nil {
+		return
+	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.derived = derived

@@ -174,7 +174,7 @@ func (c *CLI) prepareReload(ctx context.Context, r *settingsResolver, logger *za
 
 // diffSettings partitions the settings whose value differs between the running
 // and newly resolved configuration into those the reload applied and those it
-// ignored. Both lists are sorted by key.
+// ignored. Both lists follow the registry order of config.Settings.
 func diffSettings(running, next *config.Config, applied []string) (changed, ignored []string) {
 	for _, key := range config.SortedKeys() {
 		s, ok := config.Lookup(key)
