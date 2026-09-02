@@ -188,7 +188,10 @@ func (c *CLI) resolveEnvironment(ctx context.Context, conn *grpc.ClientConn, cf 
 		client := kmsv1.NewSecretServiceClient(conn)
 		for _, s := range secrets {
 			path := displayPath(s.ref)
-			token := tokens.lookup(s, ns, c)
+			token, err := tokens.lookup(s, ns, c)
+			if err != nil {
+				return resolvedEnvironment{}, err
+			}
 			if s.needsToken && token == "" {
 				if sel.strict {
 					return resolvedEnvironment{}, fmt.Errorf("secret %s requires a per-secret token and none was supplied (--secret-token-file %s=PATH)", path, path)
@@ -349,22 +352,41 @@ func (c *CLI) secretTokens(sel *envSelection) (*secretTokenSource, error) {
 	return src, nil
 }
 
-// lookup returns the token for s: --secret-token, then --secret-token-file
-// (both under any accepted spelling of the secret), then the
-// KMS_SECRET_TOKEN_<NAME> environment variable. Empty means none.
-func (t *secretTokenSource) lookup(s secretItem, ns *kmsv1.NamespaceRef, c *CLI) string {
+// lookup returns the token for s: a --secret-token or --secret-token-file
+// under any accepted spelling of the secret, then the KMS_SECRET_TOKEN_<NAME>
+// environment variable. Empty means none.
+//
+// The flags are checked before needsToken is consulted: a flag token that
+// names a secret needing none is a typo (or a stale script) landing on the
+// wrong secret, and the intended one would otherwise be skipped with only a
+// warning. Two spellings of one secret are ambiguous even when they agree, so
+// they are refused rather than resolved by spelling order. Environment tokens
+// are ambient and may be leftovers, so they are only read when needed.
+func (t *secretTokenSource) lookup(s secretItem, ns *kmsv1.NamespaceRef, c *CLI) (string, error) {
+	var matched []string
 	for _, name := range s.names(ns) {
-		if tok, ok := t.byKey[name]; ok {
+		if _, ok := t.byKey[name]; ok {
+			matched = append(matched, name)
 			t.used[name] = true
-			return tok
 		}
+	}
+	path := displayPath(s.ref)
+	switch {
+	case len(matched) > 1:
+		return "", fmt.Errorf("secret %s is named by more than one token flag (%s); supply it once", path, strings.Join(matched, ", "))
+	case len(matched) == 1 && !s.needsToken:
+		return "", fmt.Errorf("secret %s does not require a per-secret token; remove --secret-token/--secret-token-file %s", path, matched[0])
+	case len(matched) == 1:
+		return t.byKey[matched[0]], nil
+	case !s.needsToken:
+		return "", nil
 	}
 	if envName, ok := s.tokenEnvName(); ok {
 		if tok, ok := c.env(envName); ok && tok != "" {
-			return tok
+			return tok, nil
 		}
 	}
-	return ""
+	return "", nil
 }
 
 // unused reports flag-supplied tokens that matched no secret needing one.
@@ -483,7 +505,19 @@ func (c *CLI) cmdEnv(args []string) int {
 		return c.failErr("writing --out", err)
 	}
 	c.info("Wrote %d variables to %s", len(res.vars), *out)
+	if c.jsonOutput() {
+		// The variables went to the file, so stdout still carries exactly one
+		// document: where they are and how many, never the values.
+		return c.printJSON(envOutJSON{OutFile: *out, Variables: len(res.vars)})
+	}
 	return 0
+}
+
+// envOutJSON is the JSON form of `env --out FILE`: the file now holding the
+// assignments and the number written, mirroring get-secret's out_file.
+type envOutJSON struct {
+	OutFile   string `json:"out_file"`
+	Variables int    `json:"variables"`
 }
 
 // envWriter selects the formatter for --format.

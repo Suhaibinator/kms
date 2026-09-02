@@ -592,6 +592,7 @@ above with `X` as each element:
 | `whoami` | `{name, kind, namespace, auth_method}` — `kind` `client\|admin`, `namespace` `{env, app}` or `null`, `auth_method` `mtls\|token` |
 | `put-secret` | `{key, version, revision, access_token}` — `access_token` only with `--generate-token` |
 | `get-secret` | `{key, version, value, content_type, created_at, out_file}` — with `--out` the value went to the file, so `value` is `null` and `out_file` names it; otherwise `out_file` is absent |
+| `env` | the `--format json` object `{"NAME": "value", ...}` — with `--out` the assignments went to the file, so stdout carries `{out_file, variables}` instead |
 | `put-parameter` | `{key, version, revision}` |
 | `list` | items of `{type, path, current, note, client_bound}` — `type` is `parameter` or `secret` |
 | `admin namespace create`, `admin namespace update` | `{env, app, auth_methods}` |
@@ -1094,9 +1095,14 @@ Either flag beats the environment. `KEY` is any spelling of the secret: its
 `/env/app/key` display path, its relative key when the secret is in the
 selected namespace, or — with `--release` — its alias. Name a secret once: the
 same `KEY` in both flags is a usage error (exit `2`), and naming one secret
-under two different spellings leaves the unconsumed spelling looking like a
-stray key (exit `1`). `KMS_SECRET_TOKEN_FILE`, which `put-secret` and
-`get-secret` read, is not consulted here.
+under two different spellings is refused as ambiguous (exit `1`) even when the
+tokens agree. A flag token is also refused when it names a secret that is not
+in the selection or does not need one (exit `1`): a stale token or a typo that
+lands on the wrong secret would otherwise leave the intended secret skipped
+with only a warning. `KMS_SECRET_TOKEN_<NAME>` variables are ambient and may
+be leftovers, so they are read only for a secret that needs a token and never
+cause a refusal. `KMS_SECRET_TOKEN_FILE`, which `put-secret` and `get-secret`
+read, is not consulted here.
 
 The token travels as gRPC metadata on that one secret's fetch; no other call
 carries it. A secret whose token was not supplied is **skipped**, with a
@@ -1176,7 +1182,9 @@ publishes the result at mode `0600`; an existing path is refused with exit `6`
 unless `--force` is given, and a failed write leaves nothing behind. The
 destination must satisfy the [secure destination-path](#secure-destination-paths)
 rules. `--quiet` suppresses the `Wrote N variables to ...` line and the base64
-note, never the skipped-secret warning.
+note, never the skipped-secret warning. With `--output json` stdout still
+carries one document, `{out_file, variables}`, and the values only ever reach
+the file.
 
 #### Under systemd
 

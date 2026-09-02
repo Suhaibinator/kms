@@ -580,15 +580,14 @@ func TestEnvSecretTokenSourcesAndSpellings(t *testing.T) {
 	}
 }
 
-// TestEnvSecretTokenPrecedence: either flag beats the environment, so a stale
-// exported variable can never shadow an explicit one. The two flags never
-// compete with each other: one key in both is refused up front, and naming the
-// same secret twice under different spellings leaves the losing spelling
-// looking like a stray key.
+// TestEnvSecretTokenPrecedence: flags beat the environment, and the flags never
+// compete with each other: one key in both is refused up front, naming the same
+// secret twice under different spellings is ambiguous and refused, and a flag
+// token for a secret that needs none is the typo it almost certainly is.
 func TestEnvSecretTokenPrecedence(t *testing.T) {
 	t.Parallel()
 
-	t.Run("one secret takes one spelling", func(t *testing.T) {
+	t.Run("one secret named twice is ambiguous", func(t *testing.T) {
 		t.Parallel()
 		f := newEnvFixture(t)
 		code := f.run(
@@ -598,10 +597,45 @@ func TestEnvSecretTokenPrecedence(t *testing.T) {
 		if code != exitError {
 			t.Fatalf("exit = %d, want %d (stderr=%s)", code, exitError, f.stderr())
 		}
-		// The display path matched first; the relative key was never consumed
-		// and is reported rather than silently ignored.
-		if !strings.Contains(f.stderr(), "names stripe-key, which is not a secret in the selection that requires a token") {
+		// Both spellings are named so the operator can see which two collided;
+		// the token itself never is.
+		if !strings.Contains(f.stderr(), "secret /prod/app/stripe-key is named by more than one token flag (/prod/app/stripe-key, stripe-key)") {
 			t.Fatalf("stderr = %s", f.stderr())
+		}
+		if strings.Contains(f.stderr(), envTestStripeToken) {
+			t.Fatalf("stderr leaked the token: %s", f.stderr())
+		}
+		for _, call := range f.rec.snapshot() {
+			if call.method == "GetSecret" && call.path == "/prod/app/stripe-key" {
+				t.Fatal("GetSecret was called for the ambiguously named secret")
+			}
+		}
+	})
+
+	t.Run("a token for a secret that needs none is refused", func(t *testing.T) {
+		t.Parallel()
+		f := newEnvFixture(t)
+		code := f.run("--secret-token", "session-secret=leftover")
+		if code != exitError {
+			t.Fatalf("exit = %d, want %d (stderr=%s)", code, exitError, f.stderr())
+		}
+		if !strings.Contains(f.stderr(), "secret /prod/app/session-secret does not require a per-secret token; remove --secret-token/--secret-token-file session-secret") {
+			t.Fatalf("stderr = %s", f.stderr())
+		}
+		if strings.Contains(f.stderr(), "leftover") {
+			t.Fatalf("stderr leaked the token: %s", f.stderr())
+		}
+	})
+
+	t.Run("an environment token for a secret that needs none is ignored", func(t *testing.T) {
+		t.Parallel()
+		f := newEnvFixture(t)
+		f.lookupEnv = mapLookup(map[string]string{"KMS_SECRET_TOKEN_SESSION_SECRET": "leftover"})
+		if code := f.run("--secret-token", "stripe-key="+envTestStripeToken); code != 0 {
+			t.Fatalf("exit = %d, stderr=%s", code, f.stderr())
+		}
+		if got := f.rec.call(t, "GetSecret", "/prod/app/session-secret").secretToken; got != "" {
+			t.Fatalf("secret token = %q, want none sent for a token-free secret", got)
 		}
 	})
 
@@ -1240,6 +1274,46 @@ func TestEnvOutWritesAPrivateFile(t *testing.T) {
 		if info.Mode().Perm() != 0o600 {
 			t.Fatalf("mode = %v, want 0600", info.Mode().Perm())
 		}
+	}
+}
+
+// TestEnvOutJSONReportsTheFile: with --out the values live in the file, so
+// the one JSON document stdout still owes names the file and the count --
+// the same shape get-secret uses -- and never the assignments.
+func TestEnvOutJSONReportsTheFile(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "app.env")
+	f := newEnvFixture(t)
+	code := f.run("--secret-token", "stripe-key="+envTestStripeToken, "--out", path, "--output", "json")
+	if code != 0 {
+		t.Fatalf("exit = %d, stderr=%s", code, f.stderr())
+	}
+	var document struct {
+		OutFile   string `json:"out_file"`
+		Variables int    `json:"variables"`
+	}
+	if err := json.Unmarshal([]byte(f.stdout()), &document); err != nil {
+		t.Fatalf("stdout is not one JSON document: %v\n%s", err, f.stdout())
+	}
+	if document.OutFile != path || document.Variables != 4 {
+		t.Fatalf("document = %+v, want out_file=%s variables=4", document, path)
+	}
+	for _, forbidden := range []string{envTestSessionValue, envTestStripeValue, "STRIPE_KEY="} {
+		if strings.Contains(f.stdout(), forbidden) {
+			t.Fatalf("stdout carries %q alongside the file: %s", forbidden, f.stdout())
+		}
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v", path, err)
+	}
+	// --output json selects the json format for the file as well.
+	var vars map[string]string
+	if err := json.Unmarshal(raw, &vars); err != nil {
+		t.Fatalf("file is not JSON: %v\n%s", err, raw)
+	}
+	if vars["STRIPE_KEY"] != envTestStripeValue {
+		t.Fatalf("file = %s", raw)
 	}
 }
 
