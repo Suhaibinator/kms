@@ -69,6 +69,9 @@ frontend:
 audit:
   enabled: true
 
+metrics:
+  enabled: true
+
 watch:
   heartbeat_interval: 30s
   retain_duration: 24h
@@ -100,6 +103,7 @@ log:
 | `KMS_ADMIN_REQUIRE_CLIENT_CERT` | `--admin-require-client-cert` | `security.admin_require_client_cert` (parsed with `strconv.ParseBool`) — **default `true`**; admins must present a built-in-CA client certificate in addition to their bearer token; relaxed with a warning while `tls_enabled` is false (see [Admin credentials and browser setup](#admin-credentials-and-browser-setup)) |
 | `KMS_FRONTEND_ENABLED` | `--frontend-enabled` | `frontend.enabled` |
 | `KMS_AUDIT_ENABLED` | `--audit-enabled` | `audit.enabled` |
+| `KMS_METRICS_ENABLED` | `--metrics-enabled` | `metrics.enabled` (parsed with `strconv.ParseBool`) — **default `true`**; serve Prometheus metrics on `/metrics` |
 | `KMS_WATCH_HEARTBEAT_INTERVAL` | `--watch-heartbeat-interval` | `watch.heartbeat_interval` (duration) |
 | `KMS_WATCH_RETAIN_DURATION` | `--watch-retain-duration` | `watch.retain_duration` (duration) |
 | `KMS_WATCH_RETAIN_ROWS` | `--watch-retain-rows` | `watch.retain_rows` (integer) |

@@ -207,6 +207,12 @@ var Settings = []Setting{
 		ptr:  func(c *Config) any { return &c.Audit.Enabled },
 	},
 	{
+		Key:  "metrics.enabled",
+		Env:  "KMS_METRICS_ENABLED",
+		Help: "serve Prometheus metrics on /metrics",
+		ptr:  func(c *Config) any { return &c.Metrics.Enabled },
+	},
+	{
 		Key:  "watch.heartbeat_interval",
 		Env:  "KMS_WATCH_HEARTBEAT_INTERVAL",
 		Help: "watch stream heartbeat `interval`",
