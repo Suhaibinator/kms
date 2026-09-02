@@ -472,6 +472,7 @@ codes every command shares, and the `--token-file` credential form.
 | `admin-cert list` | `NAME` (positional), `--sqlite-path` | Prints the admin's certificates as `SERIAL FINGERPRINT STATE EXPIRES ISSUED`, where state is `valid`, `revoked`, or `expired`. Read-only and unaudited. |
 | `rotate-kek` | `--sqlite-path`, `--kek-file` (current key, omit to use the current passphrase), `--new-key-file` (new key, omit to enter a new passphrase), `--yes` | **Confirms by retyping the absolute database path**, before the database is opened or any passphrase is prompted for. Unseals with the current key, generates or loads the new key, and calls the same `Service.RotateKEK` used internally — rewrapping every **non-destroyed** secret version's DEK and every built-in CA key under the new KEK in one transaction. Prints both counts (`N secret versions and M CA keys rewrapped`). Run with `serve` stopped; a live process retains the old keyring. |
 | `healthcheck` | `--ready`, `--timeout` (default `3s`), plus `--http-addr` and `--tls-enabled` | Probes this host's own HTTP listener at `127.0.0.1:<server.http_addr port>/healthz` (`/readyz` with `--ready`) and exits `0` on HTTP 200, `1` otherwise — a connection error is one line on stderr. It resolves the address and the TLS posture through the same flag > env > config file > default order `serve` uses, so a container or unit that already supplies them needs no arguments. The server certificate is **not** verified: this is a loopback liveness check for a container `HEALTHCHECK` or a process supervisor (the image ships one), never a way to check a remote server. Needs no database, master key, or credentials. |
+| `audit prune` | `--older-than DURATION` (**required**; `720h`, `90d`, or an RFC 3339 instant), `--archive DIR` (must already exist), `--dry-run`, `--sqlite-path`, `--yes` | Retires audit events older than the cutoff directly from the database file, **archiving before it deletes**: with `--archive`, every row is appended to `DIR/audit-<YYYYMMDD>.jsonl` (0600) and the file is synced before the row is removed, so an unwritable archive means the rows stay. Without `--archive` the rows are discarded outright. Prints `Target database: /abs/path (source: ...)` and then **confirms by retyping the absolute database path**; `--dry-run` counts the matching rows, prints `Would prune N audit events`, and skips both the confirmation and any deletion. Needs no master key and no running server. See [Audit retention and archive](#audit-retention-and-archive). |
 | `import` | `--from` (JSON file or SuhaibParameterStore SQLite export), `--namespace env/app` **or** `--env`/`--app`, `--sqlite-path` (default `./kms.db`), `--kek-file`, `--dry-run`, `--report FILE` | Maps flat source keys to **relative slug keys** (`slug(key)`, e.g. `TWILIO_SID` → `twilio-sid`) in the destination namespace, **auto-creates the namespace** if it does not exist, writes each as a new secret via a ref-based `PutSecret` with a freshly minted per-secret access token, and emits a mapping report (old key → `/env/app/key` display path → token, written once). Distinct source keys that slug to the same key are reported as a collision rather than silently overwriting. `--dry-run` reports the mapping without writing or minting tokens. Pass either `--namespace` or `--env`/`--app`, not both. See [`migration.md`](migration.md) for the full gradethis walkthrough. |
 
 `import --from` accepts either a SuhaibParameterStore SQLite database with a
@@ -983,7 +984,18 @@ built-in client issuer's certificate is public.
 | `admin policy create NAME` | `--subject IDENTITY` (or `*`), `--allow OP@ENV/APP` (repeatable), `--deny OP@ENV/APP` (repeatable) | Create a namespace-level policy. Either label may be `*`; a bare `OP` means every namespace. Operations and labels are validated by the server (`policy.ValidateRules`). |
 | `admin policy list` | `--page-size` | Table: name, subject, allow rules, deny rules (`op@env/app`). |
 | `admin policy delete NAME` | — | Delete a policy. |
+| `audit list` | `--env`, `--app`, `--key-prefix`, `--actor`, `--event`, `--decision allow\|deny\|error`, `--since`, `--until`, `--limit` (default 100, at most 1000), `--page-token`, `--follow`, `--interval` (default 5s, minimum 1s) | Table of audit events newest first: `TIME EVENT DECISION ACTOR NAMESPACE KEY REQUEST_ID`, where `TIME` is RFC 3339 in UTC and every column a global event cannot fill prints `-`. `--since`/`--until` take a duration ago (`24h`, `7d`) or an RFC 3339 instant. `--follow` tails the log by polling — the first page is printed oldest-first and later polls print only events the tail has not shown — until SIGINT/SIGTERM; it cannot be combined with `--page-token`. |
+| `audit export` | the same filters as `audit list`, plus `--out FILE.jsonl` (**required**) | Streams **every** matching page into `--out` as JSON Lines, one canonical record per line. The file is staged owner-only beside the destination and published atomically, so an interrupted run leaves no truncated file; an existing destination is refused with exit `6` and left untouched. |
 | `admin ca show` | `--out FILE` | **Diagnostic/out-of-band only:** print (or write) the public built-in **client-issuing** CA certificate to inspect or independently verify KMS-issued client certificates. This is not the SDK's server-trust CA and is not part of application onboarding. |
+
+`audit list` and `audit export` are spelled without the `admin` prefix —
+they are top-level commands — but they belong to this group in every other
+respect: the same connection flags, the same admin credential, and the same
+`--output json` envelope. They are listed here because reading the audit log
+is an administrative operation; the third audit subcommand, `audit prune`,
+runs offline and is in the table above. Any identity holding the delegated
+`admin:audit:read` operation can run `list` and `export` too, and sees only the
+rows its policy and the namespace's authentication-method boundary admit.
 
 `--ttl` accepts a Go duration (`720h`) or a bare day count (`90d`); omitting
 it uses the server's 90-day default. `--auth-methods` and `--auth` values are
@@ -993,6 +1005,79 @@ token. Tokens and certificate private keys are shown exactly once and are
 never retrievable again. `admin namespace`/`identity` map onto
 the `AdminService` RPCs; see the [built-in CA runbook](#built-in-ca-and-client-certificates)
 below for the certificate lifecycle these commands drive.
+
+### Audit retention and archive
+
+By default the server keeps audit rows **forever**: `audit.retain_duration` is
+`0`, and every start logs one line saying so, so "is this server discarding
+audit history?" is answerable from the boot log alone.
+
+```text
+{"level":"info","msg":"audit retention","enabled":false,"retain":"forever","archive_dir":""}
+{"level":"info","msg":"audit retention","enabled":true,"retain":"2160h0m0s","archive_dir":"/var/lib/parameter-store/audit"}
+```
+
+Setting `audit.retain_duration` above `0` starts a background loop that runs
+one pass immediately after startup and every five minutes thereafter. It
+retires rows older than `now - retain_duration` in batches, and its single
+invariant is **archive before delete**: when `audit.archive_dir` names a
+directory, a batch is written to its per-day file and `fsync`ed before any of
+its rows are removed. An archive that cannot be written is therefore a refused
+pass — the rows stay, the failure is logged at `error`, and the next tick
+retries — never a silent deletion. Archive failures never stall the watch hub;
+the two prune different things on separate loops.
+
+The archive is one file per **UTC day of event creation**, named
+`audit-<YYYYMMDD>.jsonl`, created `0600` and opened append-only. Each line is
+one record in the same canonical shape `audit export` and `audit list --output
+json` produce, so the three can be concatenated and fed to one parser. Two
+consequences follow from the retry behavior:
+
+- **Consumers must deduplicate by `id`.** A pass that archives a batch and then
+  fails to delete it retries the whole batch, so the same record can appear
+  twice. Every record carries its `id` for exactly this purpose.
+- **The directory must already exist and be private.** The server does not
+  create it — creating it would mean guessing the permissions of a directory
+  that is about to hold the only remaining copy of the audit log. `Validate()`
+  refuses to start when `audit.archive_dir` is missing, and `audit.archive_dir`
+  without a positive `audit.retain_duration` is a configuration error rather
+  than a no-op. Give it the same treatment as the database directory (see
+  [Preparing a destination directory](#preparing-a-destination-directory)).
+
+Records written by the server's archive carry the resource's immutable
+namespace-incarnation ID; records produced by `audit export` and `audit list
+--output json` spell that field `0`, because the gRPC/HTTP `AuditEvent` does
+not publish it. Every other field is identical.
+
+Retiring history offline — before shrinking a database, or on a host where
+`serve` is stopped — uses the same code path through `audit prune`:
+
+```bash
+# Rehearse: how many rows would a 90-day window retire, and from which file?
+parameter-store audit prune --older-than 90d --dry-run
+# Target database: /var/lib/parameter-store/kms.db (source: config file storage.sqlite_path)
+# Would prune 41027 audit events
+
+# Keep the evidence, then retire it. The directory must already exist.
+install -d -m 700 /var/lib/parameter-store/audit
+parameter-store audit prune --older-than 90d \
+  --archive /var/lib/parameter-store/audit --yes
+# Pruned 41027 audit events (archived to /var/lib/parameter-store/audit)
+```
+
+Take a full export first if the archive is going somewhere the database backup
+does not cover:
+
+```bash
+parameter-store audit export --until 90d --out ./audit-through-2026-06.jsonl
+```
+
+`audit prune` opens the database directly and works while `serve` is running
+(WAL mode allows it), but coordinating that is the operator's responsibility —
+the same caveat `create-admin` and `rotate-admin` carry. Pruning **without**
+`--archive` deletes the rows outright; see
+[`security.md`](security.md#audit-guarantees) for why that is a posture change
+rather than a tuning knob.
 
 ### Convenience commands (talk to a running server over gRPC)
 

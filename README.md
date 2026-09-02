@@ -121,6 +121,13 @@ management.
   variables as dotenv, `export`, JSON, or YAML for `source <(...)` or a systemd
   `EnvironmentFile=`. See
   [`docs/operations.md`](docs/operations.md#run-any-process-with-store-values).
+- **Audit operability**: `parameter-store audit list` filters and tails the
+  audit log (`--decision`, `--since`, `--follow`), `audit export` streams every
+  matching event to a JSON Lines file, and `audit prune` retires old rows
+  offline — archiving each batch to a private per-day file and syncing it
+  *before* anything is deleted. Retention is off by default: history is kept
+  forever until an operator asks otherwise. See
+  [`docs/operations.md`](docs/operations.md#audit-retention-and-archive).
 - **SuhaibParameterStore migration tooling**: `parameter-store import` maps
   flat keys into an `(env, app)` namespace (`--env`/`--app`) and mints fresh
   per-secret tokens with a one-time mapping report. See
@@ -139,7 +146,8 @@ client SDK (Go · Python · TypeScript)
 parameter-store — single binary (cmd/parameter-store)
   |
   internal/cli — command dispatch: serve, init, migrate, backup,
-  |              restore, create-admin, rotate-admin, rotate-kek, import, ...
+  |              restore, create-admin, rotate-admin, rotate-kek, audit,
+  |              import, ...
   |
   +--- grpcserver ---------------+--- httpserver -------------------+
   |    ParameterService, Secret- |    /api/v1/*  (frontend + admin) |

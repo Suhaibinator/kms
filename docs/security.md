@@ -862,6 +862,25 @@ by refusing to serve the read rather than by hoping the write succeeds.
 Audit writes also run with `context.WithoutCancel` plus a 5s timeout, so a
 client disconnecting mid-request cannot suppress the record of what it did.
 
+**Retention is off by default, and discarding history is a deliberate act.**
+`audit.retain_duration` is `0`, which keeps every row forever: audit history is
+evidence, and a service that quietly aged it out would decide an operator's
+retention policy for them. Setting it above zero starts retirement, and every
+start logs the resulting posture so the decision is visible in the boot log
+rather than only in a config file. When `audit.archive_dir` is set, retirement
+is archive-before-delete — the batch is written to a `0600` per-day JSON Lines
+file and `fsync`ed before any of its rows are removed, so an unwritable archive
+stalls pruning instead of destroying history — and that archive, not the
+database, becomes the forensic record: it is the artifact an investigation
+reads, so it belongs on storage with at least the database's protection and
+backup coverage. Retiring rows **without** an archive (`audit.retain_duration`
+alone, or `audit prune` without `--archive`) is not a tuning knob but a change
+of posture: it permanently destroys the record of who read which secret, and
+the CLI makes the operator retype the database path before it will do so. The
+offline `parameter-store audit prune` and the server's background loop run the
+identical code path, so both obey the same guarantee. See
+[`operations.md`](operations.md#audit-retention-and-archive) for the runbook.
+
 Admins can read deleted and legacy audit history. Delegated audit readers see
 only rows whose complete namespace, immutable incarnation ID, current
 authentication-method boundary, and current per-row policy decision all match.
