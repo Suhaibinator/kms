@@ -10,8 +10,8 @@ For the encryption and authorization design behind these procedures, see
 > `internal/cli`. The offline commands (`init`, `migrate`, `check`, `backup`,
 > `restore`, `create-admin`, `rotate-admin`, `rotate-kek`, `import`) operate directly on the
 > SQLite file; the `admin` command group and the convenience commands
-> (`put-secret`, `get-secret`, `put-parameter`, `list`, `release`) talk to a running
-> server over gRPC. `make build` produces a working `bin/parameter-store`,
+> (`put-secret`, `get-secret`, `put-parameter`, `list`, `exec`, `env`,
+> `release`) talk to a running server over gRPC. `make build` produces a working `bin/parameter-store`,
 > and `serve` opens both the gRPC and HTTP listeners
 > (`cmd/parameter-store/main.go` wires `cli.GRPCFactory` to
 > `internal/server/grpcserver`).
@@ -671,6 +671,11 @@ also accepts a file:
 | `--token-file FILE` | `KMS_TOKEN_FILE` | The identity bearer token. |
 | `--secret-token-file FILE` | `KMS_SECRET_TOKEN_FILE` | The per-secret access token (`put-secret`, `get-secret` only). |
 
+`exec` and `env` read many secrets at once, so they spell the same idea as a
+repeatable `--secret-token-file KEY=PATH` with its own
+[`KMS_SECRET_TOKEN_<NAME>`](#per-secret-tokens) variables; the single-valued
+flag and `KMS_SECRET_TOKEN_FILE` below are `put-secret` and `get-secret` only.
+
 Prefer these over `--token`/`--secret-token` anywhere the command line is
 observable — a shared host, a CI runner, a container others can `exec` into.
 The file must be a regular file owned by the caller with no group or other
@@ -693,10 +698,10 @@ The check covers the environment: exporting `KMS_TOKEN` and passing
 `--token-file` (or the reverse) fails the same way. Note that `--secret-token`
 has no environment fallback of its own; only `--secret-token-file` /
 `KMS_SECRET_TOKEN_FILE` does. `KMS_SECRET_TOKEN_FILE` is read only by
-`put-secret` and `get-secret`, the two commands that accept
+`put-secret` and `get-secret`, the two commands that accept the single-valued
 `--secret-token-file`: a shell that exports it can still run `list`, `whoami`,
-or any `admin` command without those calls opening — or failing on — a file
-they would never use.
+`exec`, `env`, or any `admin` command without those calls opening — or failing
+on — a file they would never use.
 
 #### Confirmations
 
@@ -949,7 +954,7 @@ a different thing from the server-side `KMS_CLIENT_CA_FILE`
 (`security.client_ca_file`), which is the CA the server verifies client
 certificates against. The same fallbacks apply to `release`, `defaults`, and
 the convenience commands (`put-secret`, `get-secret`, `put-parameter`,
-`list`). The diagnostic `admin ca show` command needs no credential because the
+`list`, `exec`, `env`). The diagnostic `admin ca show` command needs no credential because the
 built-in client issuer's certificate is public.
 
 | Command | Args / flags | Purpose |
@@ -997,6 +1002,8 @@ namespace.
 | `get-secret /env/app/key` | `--version`, `--label`, `--secret-token`/`--secret-token-file`, `--show` (allow printing to a terminal), `--out FILE` (write to a file instead, mode 0600) | Fetches a secret value. Refuses to print raw secret bytes to an interactive terminal unless `--show` is passed or output is piped — `--out FILE` or piping (`\| cat`) works without `--show`. |
 | `put-parameter /env/app/key VALUE` | `--content-type` (default `string`) | Stores a new parameter version. |
 | `list ENV/APP` | `--prefix` (relative key prefix within the namespace) | Lists parameters and secrets (metadata only) in a namespace as a table: type, `/env/app/key`, current version, content-type/client-bound note. Pages through the full result set. |
+| `exec ENV/APP -- COMMAND [ARGS...]` | `--release NAME`, `--prefix`, `--no-secrets`, `--env-prefix`, `--strict`, `--secret-token KEY=TOKEN`/`--secret-token-file KEY=PATH` (repeatable), `--preserve-env` | Runs `COMMAND` with the namespace's parameters and secrets injected as environment variables. Resolves every value first, then replaces itself with `COMMAND` (on Unix), so signals and the exit status pass straight through. See [Run any process with store values](#run-any-process-with-store-values). |
+| `env ENV/APP` | the same selection and token flags as `exec`, plus `--format dotenv\|export\|json\|yaml`, `--show`, `--out FILE`, `--force` | Prints the same variables instead of running anything, for `source <(...)`, an `EnvironmentFile=`, or a `jq` pipeline. Refuses to print to an interactive terminal unless `--show`, `--out`, or `--no-secrets` is given. |
 
 Parameter content types are literal KMS tokens: `string`, `integer`, `float`,
 `boolean`, `json`, or `binary`. They are not MIME types. In particular, publish
@@ -1006,6 +1013,247 @@ A literal `--` ends flag parsing: everything after it is taken as
 positional arguments verbatim, even if it begins with `-`. Use it when a
 value itself looks like a flag, e.g. `parameter-store put-parameter
 /prod/gradethis/flag -- -5`.
+
+### Run any process with store values
+
+`exec` and `env` are for workloads that cannot link an SDK: a shell script, a
+third-party binary, a container entrypoint, a migration tool. Both resolve the
+same selection of parameters and secrets and map them to environment variables.
+`exec` then runs a command with them; `env` prints them instead.
+
+```bash
+# Run the workload with the active release's exact, digest-verified values.
+parameter-store exec prod/gradethis --release runtime -- ./server --port 8080
+
+# The same values, printed for a shell to source.
+source <(parameter-store env prod/gradethis --release runtime --format export)
+```
+
+#### Prefer `--release NAME` in production
+
+Without `--release` the selection is the namespace's **current** values: every
+parameter and secret the caller can list, at whatever version the `current`
+label points to at that moment. That is convenient in development and
+non-deterministic in production — two replicas started a minute apart can get
+different values, and nothing records what either of them saw.
+
+`--release NAME` resolves the namespace's **active** release instead and pins
+every entry to the version it recorded. Each parameter is re-fetched by version
+and verified: same resource, same version, same content type, and a SHA-256
+digest equal to the one the release recorded. Each secret is fetched at its
+pinned version and checked the same way, minus the digest (a release never
+records one for secret material). Any mismatch aborts the invocation before a
+process is started, so a workload never runs on a mix of pinned and drifted
+values. In namespace mode `--prefix db/` narrows the selection to a subtree
+exactly as it does for `list`; `--prefix` and `--release` are mutually
+exclusive, since a release fixes its own entries.
+
+Release entries are named by **alias**, so the variable names come from the
+contract the application owns rather than from wherever the values happen to
+live — including entries pinned from another namespace.
+
+#### Variable names
+
+| Source | Rule | Example |
+|---|---|---|
+| Store key (namespace mode) | uppercase; `/`, `-`, and `.` fold to `_` | `billing/stripe-key` → `BILLING_STRIPE_KEY` |
+| Release alias (`--release`) | uppercase; `-` folds to `_` | `stripe-key` → `STRIPE_KEY` |
+
+`--env-prefix APP_` is prepended verbatim to every name (`APP_STRIPE_KEY`). A
+name that would start with a digit has no legal spelling as a shell variable
+and is refused, naming the flag that fixes it — an `--env-prefix` always begins
+with a letter or underscore. Two entries that map to one name are refused as
+well; nothing is silently overwritten. Names are sorted, so two runs diff
+cleanly.
+
+A value containing a NUL byte, or one that is not valid UTF-8, cannot survive
+an environment string. It is base64-encoded under `<NAME>_B64` instead, and the
+substitution is reported on stderr:
+
+```text
+note: tls/keystore is not text; injected base64-encoded as TLS_KEYSTORE_B64
+```
+
+Detection is content-based only: the stored content type carries no signal,
+since `application/octet-stream` is the default for every secret.
+
+#### Per-secret tokens
+
+A secret that is client-bound or carries an access token needs that token
+before it can be read. Unlike `get-secret`, which reads one secret and takes a
+single-valued `--secret-token`, these two commands may read many, so the flags
+are keyed and repeatable:
+
+| Source | Form | Notes |
+|---|---|---|
+| `--secret-token` | `KEY=TOKEN`, repeatable | Visible in `ps`; prefer the file form. |
+| `--secret-token-file` | `KEY=PATH`, repeatable | One token per file, owner-only, same rules as [`--token-file`](#token-files-instead-of---token). |
+| `KMS_SECRET_TOKEN_<NAME>` | environment | `<NAME>` is the variable the secret maps to, **without** `--env-prefix` and without `_B64`. |
+
+Either flag beats the environment. `KEY` is any spelling of the secret: its
+`/env/app/key` display path, its relative key when the secret is in the
+selected namespace, or — with `--release` — its alias. Name a secret once: the
+same `KEY` in both flags is a usage error (exit `2`), and naming one secret
+under two different spellings leaves the unconsumed spelling looking like a
+stray key (exit `1`). `KMS_SECRET_TOKEN_FILE`, which `put-secret` and
+`get-secret` read, is not consulted here.
+
+The token travels as gRPC metadata on that one secret's fetch; no other call
+carries it. A secret whose token was not supplied is **skipped**, with a
+warning `--quiet` cannot suppress:
+
+```text
+warning: skipped secret /prod/gradethis/stripe-key: it requires a per-secret token and none was supplied (use --strict to fail instead)
+```
+
+`--strict` promotes that to a refusal before anything is launched, which is
+what a production unit wants: a workload that starts without its database
+password fails later and less clearly. `--no-secrets` removes the condition by
+selecting parameters only — and then makes any `--secret-token`/
+`--secret-token-file` an error, since it can no longer apply to anything.
+
+#### The command's environment
+
+`exec` merges the store's variables into the environment it inherited:
+
+- The **injected value wins** over an existing variable of the same name. That
+  is the point: a stale `DB_HOST` left in a unit file or a container image must
+  not shadow the store.
+- `--preserve-env` inverts it — the parent's value is kept — and every shadowed
+  name is reported, so the difference is visible rather than assumed:
+  `note: DB_HOST is already set and kept (--preserve-env); the store's value was not injected`.
+- Every `KMS_SECRET_TOKEN_*` variable is **removed** from the command's
+  environment (`KMS_SECRET_TOKEN_FILE` shares that prefix and goes too). They
+  are inputs to the CLI, not credentials the workload should inherit.
+- `KMS_TOKEN`, `KMS_TOKEN_FILE`, `KMS_ENDPOINT`, and the rest of the connection
+  settings **are** inherited: the workload may legitimately call the store
+  itself. Unset them explicitly
+  (`/usr/bin/env -u KMS_TOKEN parameter-store exec ...`) if it should not.
+
+One `NAME=value` entry may not exceed 128 KiB on Unix or 32 KiB on Windows —
+the platform's own limit — and the whole injected set may not exceed 2 MiB.
+Over either, the command names the offending variable instead of letting the
+kernel refuse the `exec` with a bare `E2BIG`.
+
+#### Who can read the values
+
+An environment variable is not a secure channel. On Linux a process's full
+environment is readable through `/proc/PID/environ` by its owner and by root,
+it is inherited by every descendant, and it routinely reaches crash dumps and
+container inspection APIs (`docker inspect`, `kubectl describe pod` for
+anything in the pod spec). `ps eww` shows it to the same accounts. Prefer an
+SDK where you can; where you cannot, run the workload as its own user and treat
+the values as visible to anything running as that user or as root.
+
+The command line is worse than the environment: `--secret-token KEY=TOKEN` and
+`--token TOKEN` are visible to **every** local user in `ps` and
+`/proc/PID/cmdline` for as long as the CLI runs. Use `--secret-token-file`,
+`--token-file`, or the `KMS_SECRET_TOKEN_<NAME>` variables in production.
+
+#### `env` output
+
+`--format` selects `dotenv` (the default), `export`, `json`, or `yaml`. The
+global `-o json` selects `json`; combining it with a different `--format` is a
+usage error. Each format quotes for its own reader: `export` uses POSIX single
+quotes, `dotenv` leaves unambiguous values bare (so `set -a; . file` works) and
+JSON-quotes the rest, and `yaml` double-quotes every value.
+
+Because the output *is* the secret material, `env` refuses to write it to an
+interactive terminal:
+
+```text
+$ parameter-store env prod/gradethis
+error: refusing to print secrets to a terminal; pass --show to print, --out FILE to save, or --no-secrets
+```
+
+The check runs **before** anything is fetched, so a refused invocation reads no
+secret and leaves no audit rows behind. A pipe, `--show`, `--out FILE`, and
+`--no-secrets` all satisfy it — the same rule `get-secret` applies to a single
+value.
+
+`--out FILE` writes through a private staging entry in the same directory and
+publishes the result at mode `0600`; an existing path is refused with exit `6`
+unless `--force` is given, and a failed write leaves nothing behind. The
+destination must satisfy the [secure destination-path](#secure-destination-paths)
+rules. `--quiet` suppresses the `Wrote N variables to ...` line and the base64
+note, never the skipped-secret warning.
+
+#### Under systemd
+
+The simplest unit needs no file at all: `exec` resolves everything and then
+becomes the server.
+
+```ini
+# /etc/systemd/system/gradethis.service
+[Service]
+User=gradethis
+Environment=KMS_ENDPOINT=kms.internal:8443
+Environment=KMS_TOKEN_FILE=/etc/gradethis/kms.token
+ExecStart=/usr/local/bin/parameter-store exec prod/gradethis \
+  --release runtime --strict -- /usr/local/bin/gradethis-server
+Restart=on-failure
+```
+
+On Unix the CLI replaces itself with the server once every value is resolved,
+so systemd's `MainPID`, `Restart=`, signal delivery, and exit status all refer
+to the server itself rather than to a surviving wrapper. `--strict` fails the
+start rather than running the server without a secret. (Windows has no
+`exec(2)`; there the CLI stays as a thin parent that forwards the child's exit
+status.)
+
+Where the workload must have a real `EnvironmentFile=`, generate it from a
+`oneshot` unit ordered before the service, rather than from an `ExecStartPre=`
+in the same unit — the file must exist before systemd reads it:
+
+```ini
+# /etc/systemd/system/gradethis-env.service
+[Service]
+Type=oneshot
+User=gradethis
+RuntimeDirectory=gradethis
+RuntimeDirectoryMode=0700
+RuntimeDirectoryPreserve=yes
+Environment=KMS_ENDPOINT=kms.internal:8443
+Environment=KMS_TOKEN_FILE=/etc/gradethis/kms.token
+ExecStart=/usr/local/bin/parameter-store env prod/gradethis \
+  --release runtime --strict --force --out /run/gradethis/env
+
+# /etc/systemd/system/gradethis.service
+[Unit]
+Requires=gradethis-env.service
+After=gradethis-env.service
+
+[Service]
+User=gradethis
+EnvironmentFile=/run/gradethis/env
+ExecStart=/usr/local/bin/gradethis-server
+```
+
+`RuntimeDirectory=` with `RuntimeDirectoryPreserve=yes` gives the pair an
+owner-only `/run/gradethis` that outlives the oneshot, `--force` lets a restart
+replace the previous file, and `dotenv` — the default format — is exactly what
+`EnvironmentFile=` parses. The file is written `0600`, so it is readable only
+by the service user.
+
+#### Exit codes
+
+`exec` returns the **command's** exit status unchanged. When the command could
+not be started it uses the shell's own codes, so a supervisor reads them the
+way it reads `sh`'s:
+
+| Code | Meaning |
+|---|---|
+| `126` | The command was found but could not be executed: not executable, a directory, or a bad interpreter. |
+| `127` | The command was not found — or a bare name resolved only through the current directory, which is refused; run it as `./name` or give its path. |
+
+Everything before the launch uses the standard CLI codes: `2` for a usage
+problem (a missing `--`, `--prefix` with `--release`, one key in both token
+flags), `1` for a resolution failure (a digest mismatch, a missing token under
+`--strict`, a `--secret-token` that names nothing in the selection), and `3`–`9`
+mirroring the server's status — `4` for a wrong per-secret token, `5` for a
+release that is not there, `7` for a failed precondition. A resolution failure
+never starts the command. Note the overlap: a command that itself exits `126`
+or `127` is indistinguishable from a launch failure, exactly as under `sh -c`.
 
 ### Configuration release commands
 

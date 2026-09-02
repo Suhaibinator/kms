@@ -112,6 +112,15 @@ management.
   non-interactive stdin without `--yes`. `whoami` reports the identity the
   server resolves from the credential you presented. See
   [`docs/operations.md`](docs/operations.md#global-flags-output-formats-and-exit-codes).
+- **Store values in any process's environment**: `parameter-store exec ENV/APP
+  -- CMD` resolves a namespace's parameters and secrets, maps them to
+  environment variables, and replaces itself with `CMD`, so a workload that
+  cannot link an SDK — a shell script, a third-party binary, a container
+  entrypoint — still reads from the store. `--release NAME` pins and verifies
+  the active release's exact versions and digests; `env` prints the same
+  variables as dotenv, `export`, JSON, or YAML for `source <(...)` or a systemd
+  `EnvironmentFile=`. See
+  [`docs/operations.md`](docs/operations.md#run-any-process-with-store-values).
 - **SuhaibParameterStore migration tooling**: `parameter-store import` maps
   flat keys into an `(env, app)` namespace (`--env`/`--app`) and mints fresh
   per-secret tokens with a one-time mapping report. See
@@ -318,6 +327,20 @@ echo -n 'sk_test_123' | ./bin/parameter-store put-secret /dev/gradethis/stripe-a
 
 ./bin/parameter-store get-secret /dev/gradethis/stripe-api-key \
   --endpoint localhost:8443 --insecure --token "$GRADETHIS_TOKEN" --show
+```
+
+A process that cannot link an SDK can still read from the store: `exec`
+resolves the namespace and hands the values to the command as environment
+variables (`stripe-api-key` becomes `STRIPE_API_KEY`), and `env` prints the
+same set instead of running anything.
+
+```bash
+./bin/parameter-store exec dev/gradethis --insecure --token "$GRADETHIS_TOKEN" \
+  -- printenv STRIPE_API_KEY
+# -> sk_test_123
+
+# In production, pin the active release's exact, digest-verified versions:
+parameter-store exec prod/gradethis --release runtime --strict -- ./server
 ```
 
 The equivalent from a consuming application using the Go SDK is below. This
