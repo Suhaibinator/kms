@@ -16,6 +16,71 @@ For the encryption and authorization design behind these procedures, see
 > (`cmd/parameter-store/main.go` wires `cli.GRPCFactory` to
 > `internal/server/grpcserver`).
 
+## Development mode (`dev`)
+
+`parameter-store dev` is the evaluation path, not an operations one. It is
+listed here so nobody mistakes it for a deployment mode.
+
+One command produces a complete, running instance:
+
+```bash
+parameter-store dev
+```
+
+It creates a **dev store** — a single directory holding the SQLite database,
+a file-based master key, a throwaway TLS CA with a server keypair signed by
+it, and a marker file — then bootstraps that store exactly as `init` does
+(migrations, master key, built-in CA), creates a token-only admin identity,
+seeds demo content, and starts the same `serve` wiring the production binary
+runs: TLS on both listeners, the embedded console, metrics, and hot reload.
+When the server answers its own health probe it prints a banner on **stderr**
+(stdout stays clean) with the console URL, the gRPC address, the CA
+certificate path, the two tokens, and two copy-paste commands. `--output json`
+replaces the banner with one JSON document on stdout carrying the same facts.
+
+What it seeds (skip with `--no-seed`): the namespaces `dev/demo` and
+`prod/demo`, parameters covering every content type with two versions on one
+key, two secrets — one expiring in a few days so the posture and expiry
+metrics have something to show — a non-admin identity `demo-app` whose policy
+allows reads in `dev/demo` only, and an activated configuration release with
+its schema. Everything is written through the same core APIs the `admin` CLI
+drives over gRPC, so the store is one a person could have built by hand,
+audit trail included. Seeding is idempotent: restarting against the same
+`--dir` adds nothing.
+
+**The marker file is the safety interlock.** A dev store carries
+`.parameter-store-dev`, written when the directory is created. `dev` refuses a
+`--dir` that has contents but no marker — *"not a dev store — refusing to
+touch it"* — and refuses it *before writing anything*, so a mistyped path
+costs an error message and nothing else. `--reset` erases and re-seeds a
+marked directory and is refused on an unmarked one, which is what keeps it
+from ever being aimed at a production store. Without `--dir` the store is a
+private temporary directory that is deleted when the server stops. Everything
+inside is created owner-only (`0600` files under a `0700` directory) through
+the same `fileutil` helpers the offline commands use.
+
+**Both listeners bind loopback by default** (`127.0.0.1:8443` for HTTP,
+`127.0.0.1:8444` for gRPC; `--http-addr`/`--grpc-addr` override, and a flag,
+`KMS_*` variable, or config file entry still wins over those defaults in the
+usual order). A non-loopback address is a usage error (exit `2`) unless
+`--allow-remote` is given, and then a warning is printed that `--quiet` cannot
+suppress. That flag is what the container one-liner in the README uses.
+
+**The printed tokens are dev-only.** They belong to that disposable store and
+authenticate nowhere else; the banner labels them so. `dev` also turns
+`security.admin_require_client_cert` off — the whole point of the banner is
+that a bearer token alone gets you in — which is why `serve` logs its
+"a stolen admin token alone grants full administrative access" warning on
+every `dev` start. That posture is acceptable for a loopback demo and
+unacceptable anywhere else.
+
+**Do not use `dev` for real data.** It is not a supported deployment mode: it
+manufactures its own TLS material, weakens the admin credential requirement,
+prints credentials to a terminal, and (by default) deletes its database on
+exit. A real deployment starts with `init` and `serve` — see
+[Configuration](#configuration) and
+[Startup sequence and readiness](#startup-sequence-and-readiness).
+
 ## Configuration
 
 Every setting has exactly three spellings: a YAML key in the config file, a
@@ -471,6 +536,7 @@ codes every command shares, and the `--token-file` credential form.
 | `admin-cert revoke` | `NAME` (positional), `--serial SERIAL` (required), `--sqlite-path`, `--yes` | Revokes one of that admin's certificates. Needs no master key. The certificate stops authenticating on the next request; a running server sees the change immediately. **Confirms by retyping `NAME`.** |
 | `admin-cert list` | `NAME` (positional), `--sqlite-path` | Prints the admin's certificates as `SERIAL FINGERPRINT STATE EXPIRES ISSUED`, where state is `valid`, `revoked`, or `expired`. Read-only and unaudited. |
 | `rotate-kek` | `--sqlite-path`, `--kek-file` (current key, omit to use the current passphrase), `--new-key-file` (new key, omit to enter a new passphrase), `--yes` | **Confirms by retyping the absolute database path**, before the database is opened or any passphrase is prompted for. Unseals with the current key, generates or loads the new key, and calls the same `Service.RotateKEK` used internally — rewrapping every **non-destroyed** secret version's DEK and every built-in CA key under the new KEK in one transaction. Prints both counts (`N secret versions and M CA keys rewrapped`). Run with `serve` stopped; a live process retains the old keyring. |
+| `dev` | `--dir DIR`, `--no-seed`, `--reset`, `--allow-remote`, plus `--http-addr`, `--grpc-addr`, `--log-level` | **Evaluation only.** Creates a disposable dev store (database, master key, built-in CA, TLS material, a marker file), bootstraps it the way `init` does, seeds demo namespaces/parameters/secrets/identity/release, and runs the real `serve` wiring on loopback with TLS and the console. Prints a banner on stderr with the console URL, CA path, and two dev-only tokens; `--output json` prints the same facts as one document on stdout. Refuses a `--dir` that has contents but no `.parameter-store-dev` marker, and refuses a non-loopback address without `--allow-remote`. See [Development mode](#development-mode-dev). |
 | `healthcheck` | `--ready`, `--timeout` (default `3s`), plus `--http-addr` and `--tls-enabled` | Probes this host's own HTTP listener at `127.0.0.1:<server.http_addr port>/healthz` (`/readyz` with `--ready`) and exits `0` on HTTP 200, `1` otherwise — a connection error is one line on stderr. It resolves the address and the TLS posture through the same flag > env > config file > default order `serve` uses, so a container or unit that already supplies them needs no arguments. The server certificate is **not** verified: this is a loopback liveness check for a container `HEALTHCHECK` or a process supervisor (the image ships one), never a way to check a remote server. Needs no database, master key, or credentials. |
 | `audit prune` | `--older-than DURATION` (**required**; `720h`, `90d`, or an RFC 3339 instant), `--archive DIR` (must already exist), `--dry-run`, `--sqlite-path`, `--yes` | Retires audit events older than the cutoff directly from the database file, **archiving before it deletes**: with `--archive`, every row is appended to `DIR/audit-<YYYYMMDD>.jsonl` (0600) and the file is synced before the row is removed, so an unwritable archive means the rows stay. Without `--archive` the rows are discarded outright. Prints `Target database: /abs/path (source: ...)` and then **confirms by retyping the absolute database path**; `--dry-run` counts the matching rows, prints `Would prune N audit events`, and skips both the confirmation and any deletion. Needs no master key and no running server. See [Audit retention and archive](#audit-retention-and-archive). |
 | `import` | `--from` (JSON file or SuhaibParameterStore SQLite export), `--namespace env/app` **or** `--env`/`--app`, `--sqlite-path` (default `./kms.db`), `--kek-file`, `--dry-run`, `--report FILE` | Maps flat source keys to **relative slug keys** (`slug(key)`, e.g. `TWILIO_SID` → `twilio-sid`) in the destination namespace, **auto-creates the namespace** if it does not exist, writes each as a new secret via a ref-based `PutSecret` with a freshly minted per-secret access token, and emits a mapping report (old key → `/env/app/key` display path → token, written once). Distinct source keys that slug to the same key are reported as a collision rather than silently overwriting. `--dry-run` reports the mapping without writing or minting tokens. Pass either `--namespace` or `--env`/`--app`, not both. See [`migration.md`](migration.md) for the full gradethis walkthrough. |
@@ -588,6 +654,7 @@ above with `X` as each element:
 
 | Command | JSON document |
 |---|---|
+| `dev` | `{console_url, http_addr, grpc_addr, store_dir, ephemeral, ca_file, admin, demo_app, seeded, namespaces, examples}` — `admin` and `demo_app` are `{name, token}`, `demo_app` is `null` with `--no-seed`; printed once the server is ready, in place of the banner |
 | `init` | `{sqlite_path, sqlite_path_source, master_key, kek_file, ca, admin}` — `master_key` is `file` or `passphrase`, `kek_file` is absent in passphrase mode, `admin` is `null` without `--admin` |
 | `create-admin` | `{name, token, cert}` — the same object `init` nests under `admin`; `cert` is `{cert_file, key_file}` or `null` |
 | `migrate` | `{sqlite_path, sqlite_path_source, migrated}` |

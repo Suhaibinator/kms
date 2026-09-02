@@ -10,6 +10,38 @@ versioning, namespace-scoped access control, audit logging, and hot reload,
 without requiring every consumer to understand encryption or key
 management.
 
+## Try it in one minute
+
+```bash
+make build                                  # or: go install github.com/Suhaibinator/kms/cmd/parameter-store@latest
+./bin/parameter-store dev                   # throwaway store, TLS, console, demo data
+# open the console URL the banner prints (accept its self-signed certificate)
+./bin/parameter-store admin namespace list \
+  --endpoint 127.0.0.1:8444 --ca /THE/CA/PATH/FROM/THE/BANNER --token DEV_ONLY_ADMIN_TOKEN
+```
+
+`dev` builds a disposable store — database, master key, built-in CA, TLS
+material, an admin identity, and demo data in `dev/demo` and `prod/demo` —
+serves it on loopback, and prints the console URL, the CA certificate path,
+two dev-only tokens, and two copy-paste commands. Ctrl-C stops it and deletes
+the store. Or run the same thing from the published image:
+
+```bash
+docker run --rm -p 127.0.0.1:8443:8443 -p 127.0.0.1:8444:8444 \
+  ghcr.io/suhaibinator/kms:latest dev --allow-remote \
+  --http-addr 0.0.0.0:8443 --grpc-addr 0.0.0.0:8444
+```
+
+`go install` skips the frontend build, so that binary answers the console with
+a "frontend not built" page while the API and CLI work normally; `make build`
+and the container image both carry the UI. To drive a containerized `dev` from
+the host CLI, add `--name kms-dev` to the run above and copy its CA out
+(`docker cp kms-dev:<ca_file_from_the_banner> ./dev-ca.crt`).
+
+The tokens `dev` prints belong to that disposable store and to nothing else —
+see [Development mode](docs/operations.md#development-mode-dev). For a real
+deployment, start at [Quickstart](#quickstart).
+
 ## Features
 
 - **Namespaces, parameters, and secrets**: a namespace is a first-class
