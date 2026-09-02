@@ -1,0 +1,156 @@
+# Prometheus alerting rules for the parameter store.
+#
+# Every expression here reads a series the server publishes on /metrics (see
+# docs/operations.md, "Prometheus metrics"). The database-backed gauges are
+# refreshed by a sampler every 60 s, so the `for:` windows below are all
+# comfortably longer than one sample interval.
+#
+# Load with:
+#   rule_files:
+#     - /etc/prometheus/rules/alerts.yml
+groups:
+  - name: kms-availability
+    rules:
+      - alert: KMSDown
+        expr: up == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Parameter store is not being scraped"
+          description: >-
+            Prometheus cannot reach the /metrics endpoint. Either the process
+            is gone, the HTTP listener never came up (an interactive passphrase
+            prompt blocks it), or a network path changed.
+
+      - alert: KMSNotReady
+        expr: kms_ready == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Parameter store is serving but not ready"
+          description: >-
+            The listeners answer, but the store is unreachable, migrations are
+            unapplied, or the master key is not loaded. Every authenticated API
+            call is being refused. Check /readyz and the startup log.
+
+      - alert: KMSOperationalSampleStale
+        expr: time() - kms_ops_last_sample_timestamp_seconds > 300
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "The operational sampler has not succeeded in 5 minutes"
+          description: >-
+            The sampler runs every 60 s. While it is failing, every
+            database-backed gauge below (change-log size, expiry counts, KEK
+            age, admin certificates, file sizes) is stale and the alerts on
+            them are silently blind. Cross-check
+            kms_ops_sample_failures_total.
+
+  - name: kms-security
+    rules:
+      - alert: KMSAuthFailureSpike
+        expr: sum(rate(kms_auth_failures_total[5m])) > 1
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Sustained credential rejections"
+          description: >-
+            More than one rejected credential per second, averaged over five
+            minutes. Usually a rotated token that an application did not pick
+            up; otherwise it is a credential-stuffing attempt. Break it down by
+            the reason label before deciding.
+
+      - alert: KMSAdminClientCertRefusals
+        expr: increase(kms_auth_failures_total{reason="admin_client_cert_required"}[10m]) > 0
+        for: 0m
+        labels:
+          severity: warning
+        annotations:
+          summary: "An admin was refused for presenting a token without a certificate"
+          description: >-
+            An admin identity authenticated with a bearer token alone while
+            security.admin_require_client_cert is enforced. Issue that admin a
+            certificate offline with
+            "parameter-store admin-cert issue NAME --out DIR".
+
+      - alert: KMSAdminsWithoutCertificate
+        expr: kms_admin_certs_lacking > 0
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Admin identities have no usable client certificate"
+          description: >-
+            These admins cannot authenticate at all while
+            security.admin_require_client_cert is enforced. Typically seen
+            right after an upgrade that turned the requirement on.
+
+      - alert: KMSAdminCertificatesExpiringSoon
+        expr: kms_admin_certs_expiring_soon > 0
+        for: 1h
+        labels:
+          severity: warning
+        annotations:
+          summary: "An admin client certificate expires within two weeks"
+          description: >-
+            An expired certificate is rejected by the TLS handshake itself, so
+            the admin is locked out with no useful error. Re-issue before then
+            with "parameter-store admin-cert issue NAME --out DIR".
+
+      - alert: KMSKEKOlderThanAYear
+        expr: time() - kms_kek_active_created_timestamp_seconds > 365 * 86400
+        for: 1h
+        labels:
+          severity: warning
+        annotations:
+          summary: "The active master key is more than a year old"
+          description: >-
+            Rotate with "parameter-store rotate-kek" (server stopped). It
+            rewraps every non-destroyed secret version's DEK and the CA key in
+            one transaction; secret values are never decrypted.
+
+  - name: kms-durability
+    rules:
+      - alert: KMSAuditWriteFailures
+        expr: increase(kms_audit_write_failures_total[5m]) > 0
+        for: 0m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Audit rows could not be persisted"
+          description: >-
+            The guarded operation fails closed, so callers are seeing errors —
+            and the audit trail has a hole for exactly the window this fired
+            in. Almost always the database being unwritable (disk full,
+            permissions, read-only mount).
+
+  - name: kms-watch
+    rules:
+      - alert: KMSWatchSubscribersLagging
+        expr: kms_watch_subscriber_lag_revisions_max > 0
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "A watch subscriber is behind the dispatch cursor"
+          description: >-
+            The furthest-behind subscriber has trailed the change log for ten
+            minutes. Configuration changes are not reaching at least one
+            application, and the hub will eventually drop it as slow.
+
+      - alert: KMSWatchSubscribersDropped
+        expr: increase(kms_watch_subscribers_dropped_total[15m]) > 0
+        for: 0m
+        labels:
+          severity: warning
+        annotations:
+          summary: "The hub dropped a watch subscriber"
+          description: >-
+            reason="stale" is a client that stopped heartbeating; reason="slow"
+            is one that let its buffer overflow. Either way that application
+            reconnects and re-reads, so a burst around a deploy is expected and
+            a steady trickle is not.

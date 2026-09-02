@@ -1185,3 +1185,7 @@ bidirectional `WatchRelease` contract.
   routing works on refresh/deep links.
 - `/healthz` (liveness) and `/readyz` (readiness) are plain-text endpoints
   outside `/api`.
+- `/metrics` is the Prometheus exposition, also outside `/api` and also
+  unauthenticated. It is absent (and the path falls through to the frontend
+  catch-all) when `metrics.enabled` is false. See
+  [`operations.md`](operations.md#prometheus-metrics).
