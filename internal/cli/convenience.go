@@ -229,12 +229,21 @@ func (cf *connFlags) authCtx(ctx context.Context) context.Context {
 	// dial has already surfaced any finalize error, and every caller returns
 	// on it before reaching here; the tokens are whatever finalize left.
 	_ = cf.finalize()
+	return cf.authCtxWithSecretToken(ctx, cf.secretToken)
+}
+
+// authCtxWithSecretToken is authCtx with an explicit per-secret token, for
+// commands that fetch several token-gated secrets over one connection and
+// look each token up themselves (exec, env). An empty token attaches only the
+// identity credential.
+func (cf *connFlags) authCtxWithSecretToken(ctx context.Context, secretToken string) context.Context {
+	_ = cf.finalize()
 	var kvs []string
 	if cf.token != "" {
 		kvs = append(kvs, "authorization", "Bearer "+cf.token)
 	}
-	if cf.secretToken != "" {
-		kvs = append(kvs, "x-kms-secret-token", cf.secretToken)
+	if secretToken != "" {
+		kvs = append(kvs, "x-kms-secret-token", secretToken)
 	}
 	if len(kvs) == 0 {
 		return ctx
