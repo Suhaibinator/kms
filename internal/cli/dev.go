@@ -204,9 +204,11 @@ func (c *CLI) checkDevBind(httpAddr, grpcAddr string, allowRemote bool) (int, bo
 	return exitOK, true
 }
 
-// prepareDevDir resolves the dev store directory and guarantees it is one.
-// It returns the directory, whether it is temporary (and so removed on exit),
-// and — when the directory is empty — the exit code the caller should use.
+// prepareDevDir resolves the dev store directory and guarantees it is one:
+// creating and marking it when it is new or empty, wiping it under --reset,
+// and refusing it when it holds anything without the marker. It returns the
+// directory, whether it is temporary (and so removed on exit), and an exit
+// code; on refusal the directory is empty and that code is the command's.
 func (c *CLI) prepareDevDir(dir string, reset bool) (string, bool, int) {
 	if dir == "" {
 		if reset {

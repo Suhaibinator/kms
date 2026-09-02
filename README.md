@@ -35,8 +35,8 @@ docker run --rm -p 127.0.0.1:8443:8443 -p 127.0.0.1:8444:8444 \
 `go install` skips the frontend build, so that binary answers the console with
 a "frontend not built" page while the API and CLI work normally; `make build`
 and the container image both carry the UI. To drive a containerized `dev` from
-the host CLI, copy its CA out first
-(`docker cp <container>:<ca_file_from_the_banner> ./dev-ca.crt`).
+the host CLI, add `--name kms-dev` to the run above and copy its CA out
+(`docker cp kms-dev:<ca_file_from_the_banner> ./dev-ca.crt`).
 
 The tokens `dev` prints belong to that disposable store and to nothing else —
 see [Development mode](docs/operations.md#development-mode-dev). For a real
