@@ -15,6 +15,7 @@ import (
 	"sync"
 	"testing"
 
+	"golang.org/x/term"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
@@ -1575,6 +1576,13 @@ func TestEnvTerminalGuardRefusesBeforeAnyRPC(t *testing.T) {
 		t.Skipf("cannot open a pseudo-terminal: %v", err)
 	}
 	t.Cleanup(func() { _ = pty.Close() })
+	// Only the master side is opened, and only Linux answers isatty for it.
+	// On Darwin the master is a cloning device that is not a terminal (the
+	// slave would be), so the guard has nothing to refuse there — and a write
+	// to a master whose slave was never opened blocks forever.
+	if !term.IsTerminal(int(pty.Fd())) {
+		t.Skip("the pseudo-terminal master is not a tty on this platform")
+	}
 
 	f := newEnvFixture(t)
 	f.Stdout = pty
