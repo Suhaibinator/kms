@@ -49,17 +49,21 @@ func (b *safeBuffer) String() string {
 	return b.buf.String()
 }
 
-// serveTestServerCert writes a self-signed loopback server certificate and its
-// key, and returns their paths plus a pool trusting it — the operator-supplied
-// TLS material serve loads through security.server_cert_file/server_key_file.
-func serveTestServerCert(t *testing.T) (certFile, keyFile string, pool *x509.CertPool) {
+// writeServerCert writes server.crt/server.key into dir with the given serial —
+// the operator-supplied TLS material serve loads through
+// security.server_cert_file/server_key_file — and returns their paths, a pool
+// trusting the certificate, and the parsed leaf. Distinct serials are how a
+// test tells one keypair from another across a rotation; calling it twice on
+// the same directory replaces the pair in place, which is what an operator does
+// before sending SIGHUP.
+func writeServerCert(t *testing.T, dir string, serial int64) (certFile, keyFile string, pool *x509.CertPool, leaf *x509.Certificate) {
 	t.Helper()
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		t.Fatalf("generate server key: %v", err)
 	}
 	tmpl := &x509.Certificate{
-		SerialNumber:          big.NewInt(1),
+		SerialNumber:          big.NewInt(serial),
 		Subject:               pkix.Name{CommonName: "localhost"},
 		DNSNames:              []string{"localhost"},
 		IPAddresses:           []net.IP{net.ParseIP("127.0.0.1")},
@@ -81,20 +85,33 @@ func serveTestServerCert(t *testing.T) (certFile, keyFile string, pool *x509.Cer
 	}
 	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER})
 
-	dir := t.TempDir()
 	certFile = filepath.Join(dir, "server.crt")
 	keyFile = filepath.Join(dir, "server.key")
-	if err := os.WriteFile(certFile, certPEM, 0o600); err != nil {
-		t.Fatalf("write server certificate: %v", err)
-	}
-	if err := os.WriteFile(keyFile, keyPEM, 0o600); err != nil {
-		t.Fatalf("write server key: %v", err)
-	}
+	writeFileAtomically(t, certFile, certPEM)
+	writeFileAtomically(t, keyFile, keyPEM)
 	pool = x509.NewCertPool()
 	if !pool.AppendCertsFromPEM(certPEM) {
 		t.Fatal("trust the generated server certificate")
 	}
-	return certFile, keyFile, pool
+	leaf, err = x509.ParseCertificate(der)
+	if err != nil {
+		t.Fatalf("parse server certificate: %v", err)
+	}
+	return certFile, keyFile, pool, leaf
+}
+
+// writeFileAtomically replaces path through a temporary file in the same
+// directory, the rotation procedure operations.md prescribes: a reload can land
+// at any moment, and a half-written certificate would be a reload failure.
+func writeFileAtomically(t *testing.T, path string, data []byte) {
+	t.Helper()
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, data, 0o600); err != nil {
+		t.Fatalf("write %s: %v", tmp, err)
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		t.Fatalf("rename %s to %s: %v", tmp, path, err)
+	}
 }
 
 // freeLoopbackAddr reserves and releases a loopback port, so serve can bind a
@@ -117,10 +134,20 @@ func freeLoopbackAddr(t *testing.T) string {
 type servedKMS struct {
 	logs    *safeBuffer
 	baseURL string
+	addr    string
 	token   string
 	certDir string
 	pool    *x509.CertPool
+	// configPath is the YAML file serve reads through --config. A test rewrites
+	// it and fires reloadCh to drive a reload the way SIGHUP does.
+	configPath string
+	// tlsDir holds server.crt/server.key when TLS is on, so a test can rotate
+	// the keypair in place under the running listener.
+	tlsDir   string
+	certFile string
+	keyFile  string
 
+	reloadCh chan struct{}
 	stop     chan struct{}
 	done     chan int
 	stopOnce sync.Once
@@ -129,7 +156,8 @@ type servedKMS struct {
 }
 
 // startServe initialises a database with one admin identity holding both
-// credentials, then runs `serve` against it on a loopback port.
+// credentials, then runs `serve` against it on a loopback port. The server
+// always reads a config file (`--config`), so a test can rewrite it and reload.
 func startServe(t *testing.T, tlsEnabled bool, extraArgs ...string) *servedKMS {
 	t.Helper()
 	dir := t.TempDir()
@@ -146,22 +174,29 @@ func startServe(t *testing.T, tlsEnabled bool, extraArgs ...string) *servedKMS {
 
 	addr := freeLoopbackAddr(t)
 	scheme := "http"
+	configPath := filepath.Join(dir, "config.yaml")
+	writeConfigFile(t, configPath, "log:\n  level: info\n")
 	args := []string{
+		"--config", configPath,
 		"--sqlite-path", db,
 		"--kek-file", kek,
 		"--http-addr", addr,
 		"--grpc-addr", "127.0.0.1:0",
 	}
 	served := &servedKMS{
-		logs:    &safeBuffer{},
-		token:   token,
-		certDir: certDir,
-		stop:    make(chan struct{}),
-		done:    make(chan int, 1),
+		logs:       &safeBuffer{},
+		addr:       addr,
+		token:      token,
+		certDir:    certDir,
+		configPath: configPath,
+		reloadCh:   make(chan struct{}),
+		stop:       make(chan struct{}),
+		done:       make(chan int, 1),
 	}
 	if tlsEnabled {
-		certFile, keyFile, pool := serveTestServerCert(t)
-		served.pool = pool
+		served.tlsDir = t.TempDir()
+		certFile, keyFile, pool, _ := writeServerCert(t, served.tlsDir, 1)
+		served.pool, served.certFile, served.keyFile = pool, certFile, keyFile
 		scheme = "https"
 		args = append(args, "--tls-enabled", "--server-cert-file", certFile, "--server-key-file", keyFile)
 	} else {
@@ -173,9 +208,31 @@ func startServe(t *testing.T, tlsEnabled bool, extraArgs ...string) *servedKMS {
 	c := newTestCLI()
 	c.Stderr = served.logs
 	c.stopServe = served.stop
+	c.reloadSignal = served.reloadCh
 	go func() { served.done <- c.cmdServe(args) }()
 	t.Cleanup(func() { served.stopAndWait(t) })
 	return served
+}
+
+// reload drives one reload through the same seam SIGHUP uses. The send
+// completes when the serve loop picks the signal up; the reload itself happens
+// afterwards, so callers still poll for its effect.
+func (s *servedKMS) reload(t *testing.T) {
+	t.Helper()
+	select {
+	case s.reloadCh <- struct{}{}:
+	case code := <-s.done:
+		s.waited, s.exitCode = true, code
+		t.Fatalf("serve exited with code %d instead of reloading; log:\n%s", code, s.logs.String())
+	case <-time.After(10 * time.Second):
+		t.Fatalf("serve did not accept a reload signal within 10s; log:\n%s", s.logs.String())
+	}
+}
+
+// rewriteConfig replaces the config file serve reads on reload.
+func (s *servedKMS) rewriteConfig(t *testing.T, body string) {
+	t.Helper()
+	writeConfigFile(t, s.configPath, body)
 }
 
 // client returns an HTTP client for this server, presenting the admin client
@@ -476,6 +533,180 @@ func TestHealthcheckCommand(t *testing.T) {
 	if !strings.HasPrefix(closed.stderr(), "error: http://127.0.0.1:") {
 		t.Errorf("closed-port message = %q", closed.stderr())
 	}
+
+	if exit := s.stopAndWait(t); exit != 0 {
+		t.Fatalf("serve exit = %d, want 0; log:\n%s", exit, s.logs.String())
+	}
+}
+
+// --- SIGHUP reload over the running listeners -------------------------------
+
+// servedCert completes a fresh TLS handshake against the HTTP listener and
+// reports the serial of the certificate it presented plus the negotiated ALPN
+// protocol. Verification is skipped deliberately: the question is which
+// certificate the listener serves after a rotation, not whether this test
+// trusts it.
+func (s *servedKMS) servedCert(t *testing.T) (serial, alpn string) {
+	t.Helper()
+	conn, err := tls.Dial("tcp", s.addr, &tls.Config{
+		InsecureSkipVerify: true, // the test inspects the certificate itself
+		MinVersion:         tls.VersionTLS12,
+		NextProtos:         []string{"h2", "http/1.1"},
+	})
+	if err != nil {
+		t.Fatalf("dial the TLS listener: %v", err)
+	}
+	defer func() { _ = conn.Close() }()
+	state := conn.ConnectionState()
+	if len(state.PeerCertificates) == 0 {
+		t.Fatal("the listener presented no certificate")
+	}
+	return state.PeerCertificates[0].SerialNumber.String(), state.NegotiatedProtocol
+}
+
+// awaitServedSerial polls fresh handshakes until the listener presents want. A
+// reload runs asynchronously with respect to the test's dial, so this is the
+// only honest way to observe it.
+func (s *servedKMS) awaitServedSerial(t *testing.T, want string) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		got, _ := s.servedCert(t)
+		if got == want {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("listener still presents serial %s after 10s, want %s; log:\n%s", got, want, s.logs.String())
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+// rotateServerCert writes a fresh keypair with the given serial over the
+// configured paths — atomically, through a temporary file in the same
+// directory, the way operations.md tells an operator to — and moves the test's
+// own trust anchor along with it so the HTTP client still verifies the server
+// after the reload.
+func (s *servedKMS) rotateServerCert(t *testing.T, serial int64) {
+	t.Helper()
+	_, _, pool, _ := writeServerCert(t, s.tlsDir, serial)
+	s.pool = pool
+}
+
+// awaitLog polls the server's log until msg appears.
+func (s *servedKMS) awaitLog(t *testing.T, msg string) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		if logContains(s.logs.String(), msg) {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("%q never appeared in the server log within 10s; log:\n%s", msg, s.logs.String())
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+// awaitMetric polls /metrics until the exposition carries line; the counter
+// is bumped just after the log line a test usually waited on, so reading
+// once could still see the previous value.
+func (s *servedKMS) awaitMetric(t *testing.T, line string) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		status, body := s.get(t, "/metrics")
+		if status == http.StatusOK && strings.Contains(body, line) {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("/metrics never carried %q; last body:\n%s", line, body)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+// TestServeReloadRotatesServerCertificate is the operator-facing statement of
+// the feature: write a new keypair over the configured paths, signal a reload,
+// and the running listener presents it to the next handshake — no restart, no
+// edit to the config file, and h2 still negotiated afterwards.
+//
+// GRPCFactory is nil in this test binary, so serve runs HTTP-only and there is
+// no gRPC listener to dial; the per-slot ALPN the gRPC listener depends on is
+// covered in internal/server/listenertls and internal/server/grpcserver.
+func TestServeReloadRotatesServerCertificate(t *testing.T) {
+	s := startServe(t, true)
+	s.health(t)
+
+	serial, alpn := s.servedCert(t)
+	if serial != "1" {
+		t.Fatalf("serial before the reload = %s, want 1", serial)
+	}
+	if alpn != "h2" {
+		t.Fatalf("negotiated %q before the reload, want h2", alpn)
+	}
+
+	s.rotateServerCert(t, 2)
+	s.reload(t)
+	s.awaitServedSerial(t, "2")
+
+	if _, alpn := s.servedCert(t); alpn != "h2" {
+		t.Errorf("negotiated %q after the reload, want h2", alpn)
+	}
+	// The reload swaps material under the running listener rather than
+	// restarting it: the same process still answers.
+	s.health(t)
+	if exit := s.stopAndWait(t); exit != 0 {
+		t.Fatalf("serve exit = %d, want 0; log:\n%s", exit, s.logs.String())
+	}
+}
+
+// TestServeReloadKeepsCertificateWhenTheNewOneIsCorrupt: the new material is
+// loaded before anything running is touched, so a bad file costs one error line
+// and nothing else. The listener keeps serving the certificate it had.
+func TestServeReloadKeepsCertificateWhenTheNewOneIsCorrupt(t *testing.T) {
+	s := startServe(t, true)
+	s.health(t)
+
+	s.rotateServerCert(t, 2)
+	s.reload(t)
+	s.awaitServedSerial(t, "2")
+
+	if err := os.WriteFile(s.certFile, []byte("-----BEGIN CERTIFICATE-----\ntruncated\n"), 0o600); err != nil {
+		t.Fatalf("corrupt the certificate file: %v", err)
+	}
+	s.reload(t)
+	s.awaitLog(t, configReloadFailedMsg)
+
+	if serial, _ := s.servedCert(t); serial != "2" {
+		t.Errorf("listener serves serial %s after a failed reload, want the certificate it had (2)", serial)
+	}
+	// Both outcomes reach the exporter: the rotation that took and the
+	// reload that was refused.
+	s.awaitMetric(t, `kms_reloads_total{result="applied"} 1`)
+	s.awaitMetric(t, `kms_reloads_total{result="rejected"} 1`)
+	s.health(t)
+	if exit := s.stopAndWait(t); exit != 0 {
+		t.Fatalf("serve exit = %d, want 0; log:\n%s", exit, s.logs.String())
+	}
+}
+
+// TestServeReloadAppliesLogLevelFromTheFile: the level is re-read from the file
+// with the startup precedence and applied to the live logger. The debug-only
+// "configuration sources" line is the visible proof — absent while the server
+// runs at info, present once the reload takes.
+func TestServeReloadAppliesLogLevelFromTheFile(t *testing.T) {
+	const configSourcesMsg = "configuration sources"
+	s := startServe(t, false)
+	s.health(t)
+
+	if logContains(s.logs.String(), configSourcesMsg) {
+		t.Fatalf("the debug-only configuration-sources line appeared at info level:\n%s", s.logs.String())
+	}
+	s.rewriteConfig(t, "log:\n  level: debug\n")
+	s.reload(t)
+	s.awaitLog(t, configReloadedMsg)
+	s.awaitLog(t, configSourcesMsg)
 
 	if exit := s.stopAndWait(t); exit != 0 {
 		t.Fatalf("serve exit = %d, want 0; log:\n%s", exit, s.logs.String())

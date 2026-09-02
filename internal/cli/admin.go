@@ -21,7 +21,8 @@ import (
 // quietLogger builds a warn-level logger for administrative commands so normal
 // runs keep stdout/stderr clean while still surfacing problems.
 func (c *CLI) quietLogger() *zap.Logger {
-	return newLogger(c.Stderr, zapcore.WarnLevel)
+	logger, _ := newLogger(c.Stderr, zapcore.WarnLevel)
+	return logger
 }
 
 // dbTarget renders the database a command is about to act on as an absolute

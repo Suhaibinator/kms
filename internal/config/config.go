@@ -235,7 +235,23 @@ func (c Config) Validate() error {
 	if time.Duration(c.Watch.ReleaseSubscriberRetainDuration) <= 0 {
 		return fmt.Errorf("watch.release_subscriber_retain_duration must be positive")
 	}
+	if !validLogLevel(c.Log.Level) {
+		return fmt.Errorf("log.level %q is not one of debug, info, warn, error", c.Log.Level)
+	}
 	return nil
+}
+
+// validLogLevel reports whether level names a level LogLevel maps. An empty
+// value is the default (info); anything else unrecognized is almost certainly
+// a typo, and a typo must not quietly turn a debug session into an info one —
+// on a hot reload the whole reload is rejected instead.
+func validLogLevel(level string) bool {
+	switch strings.ToLower(strings.TrimSpace(level)) {
+	case "", "debug", "info", "warn", "warning", "error":
+		return true
+	default:
+		return false
+	}
 }
 
 func fileMustExist(path, label string) error {
