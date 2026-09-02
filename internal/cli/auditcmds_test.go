@@ -333,6 +333,71 @@ func TestAuditListFollowPrintsOldestFirstAndNeverRepeats(t *testing.T) {
 	}
 }
 
+// TestAuditListFollowBackfillsOnePageThenDrainsBursts: the first poll is the
+// backfill and takes exactly one page — --limit newest rows — however much
+// history the server offers behind it; once the tail is live a burst wider
+// than a page is paged through until the newest row already printed comes
+// back, so nothing in between is dropped.
+func TestAuditListFollowBackfillsOnePageThenDrainsBursts(t *testing.T) {
+	base := time.Date(2026, 3, 4, 5, 6, 7, 0, time.UTC)
+	at := func(id int64) time.Time { return base.Add(time.Duration(id) * time.Second) }
+	stub := newAuditStub(
+		// The backfill: two rows with a whole history behind them.
+		&kmsv1.ListAuditEventsResponse{
+			Events:        []*kmsv1.AuditEvent{sampleAuditEvent(5, at(5)), sampleAuditEvent(4, at(4))},
+			NextPageToken: "older-history",
+		},
+		// The next poll finds a burst wider than one page ...
+		&kmsv1.ListAuditEventsResponse{
+			Events:        []*kmsv1.AuditEvent{sampleAuditEvent(8, at(8)), sampleAuditEvent(7, at(7))},
+			NextPageToken: "burst-2",
+		},
+		// ... whose second page reaches the boundary row it already printed.
+		&kmsv1.ListAuditEventsResponse{
+			Events: []*kmsv1.AuditEvent{sampleAuditEvent(6, at(6)), sampleAuditEvent(5, at(5)), sampleAuditEvent(4, at(4))},
+		},
+	)
+	stub.stopAfter = 3
+	c := auditCLI(t, stub)
+	c.followStop = stub.stop
+
+	done := make(chan int, 1)
+	go func() {
+		done <- c.Run([]string{"audit", "list", "--follow", "--interval", "1s", "--insecure", "--token", "admin-token"})
+	}()
+	select {
+	case code := <-done:
+		if code != 0 {
+			t.Fatalf("exit = %d, stderr = %s", code, c.stderr())
+		}
+	case <-time.After(15 * time.Second):
+		t.Fatalf("follow did not stop; stdout = %q", c.stdout())
+	}
+
+	lines := strings.Split(strings.TrimRight(c.stdout(), "\n"), "\n")
+	want := []string{"req-4", "req-5", "req-6", "req-7", "req-8"}
+	if len(lines) != len(want)+1 {
+		t.Fatalf("tail = %q, want a header and %d rows", c.stdout(), len(want))
+	}
+	for i, id := range want {
+		if !strings.Contains(lines[i+1], id) {
+			t.Fatalf("row %d = %q, want %s", i, lines[i+1], id)
+		}
+	}
+	if stub.callCount() != 3 {
+		t.Fatalf("calls = %d, want 3 (one backfill page, then a two-page burst)", stub.callCount())
+	}
+	if token := stub.request(t, 1).GetPageToken(); token != "" {
+		t.Fatalf("the live poll started from page token %q, want the first page", token)
+	}
+	if from := stub.request(t, 1).GetFromUnixMs(); from != at(5).UnixMilli() {
+		t.Fatalf("live poll from_unix_ms = %d, want the newest backfilled row %d", from, at(5).UnixMilli())
+	}
+	if token := stub.request(t, 2).GetPageToken(); token != "burst-2" {
+		t.Fatalf("burst continuation page token = %q, want burst-2", token)
+	}
+}
+
 // TestAuditListFollowJSONEmitsJSONLines: a stream has no closing bracket, so a
 // tail writes one record per line rather than the single document every other
 // JSON result is.

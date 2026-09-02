@@ -391,10 +391,12 @@ func (c *CLI) followAuditEvents(client kmsv1.AdminServiceClient, cf *connFlags, 
 }
 
 // pollAuditEvents fetches every event newer than lastID and returns them
-// oldest first. It keeps paging until it reaches an event it has already
-// printed, so a burst larger than one page is not silently dropped. req is the
-// command's own request value and is reused (with its paging fields rewritten)
-// across polls; nothing else holds a reference to it.
+// oldest first. Once the tail has printed something it keeps paging until it
+// reaches an event it has already shown, so a burst larger than one page is
+// not silently dropped; the very first poll is the backfill and stops after
+// one page — --limit newest rows — rather than replaying the whole history.
+// req is the command's own request value and is reused (with its paging
+// fields rewritten) across polls; nothing else holds a reference to it.
 func (c *CLI) pollAuditEvents(ctx context.Context, client kmsv1.AdminServiceClient, cf *connFlags, req *kmsv1.ListAuditEventsRequest, lastID, lastMs int64) ([]*kmsv1.AuditEvent, error) {
 	if lastMs > 0 {
 		req.FromUnixMs = lastMs
@@ -417,7 +419,7 @@ func (c *CLI) pollAuditEvents(ctx context.Context, client kmsv1.AdminServiceClie
 			fresh = append(fresh, ev)
 		}
 		token = resp.GetNextPageToken()
-		if reachedSeen || token == "" {
+		if reachedSeen || token == "" || lastID == 0 {
 			break
 		}
 	}
