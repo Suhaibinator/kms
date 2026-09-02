@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"runtime/debug"
 	"strings"
+	"time"
 
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
@@ -31,6 +32,14 @@ var publicMethods = map[string]bool{
 // unaryInterceptor applies, in order: panic recovery, request-ID tagging,
 // authentication, and readiness gating.
 func (s *Server) unaryInterceptor(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (resp any, err error) {
+	// Registered before the recovery defer so it runs after it: a panicked
+	// handler must be observed under the Internal status the caller actually
+	// receives, not as the nil error that is in flight while the panic unwinds.
+	if m := s.cfg.Metrics; m != nil {
+		start := time.Now()
+		defer func() { m.ObserveGRPC(info.FullMethod, status.Code(err), time.Since(start)) }()
+	}
+
 	reqID := newRequestID()
 	ctx = withRequestID(ctx, reqID)
 
@@ -75,7 +84,7 @@ func (s *Server) streamInterceptor(srv any, ss grpc.ServerStream, info *grpc.Str
 	}()
 
 	if publicMethods[info.FullMethod] {
-		return handler(srv, &wrappedStream{ServerStream: ss, ctx: ctx})
+		return s.runStream(handler, srv, &wrappedStream{ServerStream: ss, ctx: ctx}, info.FullMethod)
 	}
 
 	if rerr := s.svc.Ready(ctx); rerr != nil {
@@ -85,7 +94,21 @@ func (s *Server) streamInterceptor(srv any, ss grpc.ServerStream, info *grpc.Str
 	if err != nil {
 		return err
 	}
-	return handler(srv, &wrappedStream{ServerStream: ss, ctx: ctx})
+	return s.runStream(handler, srv, &wrappedStream{ServerStream: ss, ctx: ctx}, info.FullMethod)
+}
+
+// runStream invokes the stream handler while holding the active-stream gauge.
+// The decrement is deferred inside this frame, so it also runs when the stream
+// ends by cancellation or by a panic unwinding to the recovery defer above —
+// an unpaired increment would drift the gauge upward for the life of the
+// process. A stream refused before the handler (not ready, unauthenticated)
+// never opened, so it is never counted.
+func (s *Server) runStream(handler grpc.StreamHandler, srv any, ss grpc.ServerStream, fullMethod string) error {
+	if m := s.cfg.Metrics; m != nil {
+		m.GRPCStreamStarted(fullMethod)
+		defer m.GRPCStreamEnded(fullMethod)
+	}
+	return handler(srv, ss)
 }
 
 // wrappedStream overrides Context so downstream handlers see the authenticated,
