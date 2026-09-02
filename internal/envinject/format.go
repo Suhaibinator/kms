@@ -74,8 +74,8 @@ func WriteYAML(w io.Writer, vars []Var) error {
 }
 
 // ShellQuote returns s single-quoted for a POSIX shell. A single quote cannot
-// appear inside single quotes, so each one is written as '\”: close, escape,
-// reopen. The empty string yields ”.
+// appear inside single quotes, so each one is written as '\'': close,
+// escape, reopen. The empty string yields ''.
 func ShellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
