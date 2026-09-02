@@ -82,6 +82,7 @@ afterEach(() => {
 /** Picks the fixture namespace once its options have arrived. */
 async function chooseNamespace(): Promise<void> {
   const app = screen.getByLabelText("Application");
+  await waitFor(() => expect(app).toBeEnabled());
   await chooseSelectOption(app, NAMESPACE.app);
   const environment = screen.getByLabelText("Environment");
   await chooseSelectOption(environment, NAMESPACE.env);

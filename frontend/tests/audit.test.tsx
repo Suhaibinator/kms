@@ -8,6 +8,8 @@ import AuditPage from "@/pages/audit";
 
 const mocks = vi.hoisted(() => ({
   namespaces: [] as Namespace[],
+  namespacesLoading: false,
+  namespacesError: null as unknown,
   query: {} as Record<string, string>,
   // Like the real router, a replace changes what the next render reads.
   replace: vi.fn(async (url: { query: Record<string, string> }) => {
@@ -35,8 +37,8 @@ vi.mock("@/lib/hooks", async (importOriginal) => {
     ...actual,
     useNamespaces: () => ({
       namespaces: mocks.namespaces,
-      loading: false,
-      error: null,
+      loading: mocks.namespacesLoading,
+      error: mocks.namespacesError,
       reload: vi.fn(),
     }),
   };
@@ -68,6 +70,8 @@ const replaced = () => mocks.replace.mock.calls.at(-1)?.[0];
 
 beforeEach(() => {
   mocks.namespaces = [];
+  mocks.namespacesLoading = false;
+  mocks.namespacesError = null;
   mocks.query = {};
   mocks.replace.mockClear();
   mocks.toast.error.mockReset();
@@ -129,6 +133,65 @@ describe("audit table", () => {
 });
 
 describe("audit filters", () => {
+  it("disables namespace filters when the namespace list has no choices", async () => {
+    render(<AuditPage />);
+    await screen.findByText("No audit events have been recorded yet.");
+
+    const app = screen.getByRole("combobox", { name: "Application" });
+    const env = screen.getByRole("combobox", { name: "Environment" });
+    expect(app).toBeDisabled();
+    expect(env).toBeDisabled();
+    expect(app).toHaveTextContent("No applications available");
+    expect(env).toHaveTextContent("No environments available");
+  });
+
+  it("distinguishes a loading or failed namespace list", async () => {
+    mocks.namespacesLoading = true;
+    const { rerender } = render(<AuditPage />);
+    await screen.findByText("No audit events have been recorded yet.");
+    expect(screen.getByRole("combobox", { name: "Application" })).toHaveTextContent(
+      "Loading applications…",
+    );
+    expect(screen.getByRole("combobox", { name: "Environment" })).toHaveTextContent(
+      "Loading environments…",
+    );
+
+    mocks.namespacesLoading = false;
+    mocks.namespacesError = new Error("unavailable");
+    rerender(<AuditPage />);
+    expect(screen.getByRole("combobox", { name: "Application" })).toHaveTextContent(
+      "Applications unavailable",
+    );
+    expect(screen.getByRole("combobox", { name: "Environment" })).toHaveTextContent(
+      "Environments unavailable",
+    );
+  });
+
+  it("keeps stale URL filters visible and disables only an optionless environment", async () => {
+    mocks.namespaces = [
+      {
+        app: "billing",
+        env: "prod",
+        description: "",
+        allowed_auth_methods: ["mtls"],
+        created_by: "admin",
+        created_at_unix_ms: 1,
+        parameter_count: 0,
+        secret_count: 0,
+      },
+    ];
+    mocks.query = { app: "ghost" };
+    render(<AuditPage />);
+    await screen.findByText("No events match the current filters.");
+
+    const app = screen.getByRole("combobox", { name: "Application" });
+    const env = screen.getByRole("combobox", { name: "Environment" });
+    expect(app).toBeEnabled();
+    expect(app).toHaveTextContent("ghost (not found)");
+    expect(env).toBeDisabled();
+    expect(env).toHaveTextContent("No environments available");
+  });
+
   it("offers Clear filters only once a filter is applied", async () => {
     const listAudit = vi.mocked(api.listAudit);
     render(<AuditPage />);

@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ApiError } from "@/lib/api";
 import { links } from "@/lib/links";
 import ReleasesPage from "@/pages/releases";
+import { chooseSelectOption } from "./select-test-utils";
 
 const mocks = vi.hoisted(() => ({
   query: {} as Record<string, string>,
@@ -297,6 +298,25 @@ describe("ReleasesPage", () => {
     );
   });
 
+  it("disables comparison when no other loaded version exists", async () => {
+    mocks.query = { app: "payments", env: "prod", name: "runtime" };
+    mocks.listReleases.mockResolvedValue({
+      releases: [{ release: releaseV2, current: true, previous: false, activation_revision: 8 }],
+      next_page_token: "",
+    });
+
+    render(<ReleasesPage />);
+    fireEvent.click(await screen.findByRole("button", { name: "View" }));
+    const dialog = screen.getByRole("dialog", { name: "Release runtime@2" });
+    fireEvent.click(within(dialog).getByRole("tab", { name: "Compare" }));
+
+    const compare = within(dialog).getByRole("combobox", { name: "Compare with" });
+    expect(compare).toBeDisabled();
+    expect(compare).toHaveTextContent("No other version available");
+    fireEvent.click(compare);
+    expect(screen.queryByRole("listbox")).toBeNull();
+  });
+
   it("keeps the Rollout tab selected when an activation refreshes the list", async () => {
     mocks.query = { app: "payments", env: "prod", name: "runtime" };
     mocks.listReleases
@@ -498,6 +518,49 @@ describe("ReleasesPage", () => {
         metadata_json: "{}",
       }),
     );
+  });
+
+  it("disables a resource picker when no matching resources exist", async () => {
+    mocks.query = { app: "payments", env: "prod" };
+    mocks.applicationDashboard.mockResolvedValue({
+      ...dashboardWithContract,
+      application: {
+        ...dashboardWithContract.application,
+        contract: [{ alias: "api_key", kind: "secret" as const }],
+      },
+    });
+
+    render(<ReleasesPage />);
+    await screen.findByText("No releases found");
+    fireEvent.click(screen.getAllByRole("button", { name: "New release" })[0]);
+    const dialog = await screen.findByRole("dialog", { name: "New release · prod/payments" });
+    const resource = await within(dialog).findByRole("combobox", { name: "Resource" });
+
+    expect(resource).toBeDisabled();
+    expect(resource).toHaveTextContent("No matching secrets");
+    fireEvent.click(resource);
+    expect(screen.queryByRole("listbox")).toBeNull();
+  });
+
+  it("disables label and version selectors until metadata provides choices", async () => {
+    mocks.query = { app: "payments", env: "prod" };
+    mocks.applicationDashboard.mockResolvedValue(dashboardWithoutContract);
+
+    render(<ReleasesPage />);
+    await screen.findByText("No releases found");
+    fireEvent.click(screen.getAllByRole("button", { name: "New release" })[0]);
+    const dialog = await screen.findByRole("dialog", { name: "New release · prod/payments" });
+    const selector = within(dialog).getByRole("combobox", { name: "Selector" });
+
+    await chooseSelectOption(selector, "Label");
+    const label = within(dialog).getByRole("combobox", { name: "Label" });
+    expect(label).toBeDisabled();
+    expect(label).toHaveTextContent("No labels available");
+
+    await chooseSelectOption(selector, "Exact version");
+    const version = within(dialog).getByRole("combobox", { name: "Version" });
+    expect(version).toBeDisabled();
+    expect(version).toHaveTextContent("No versions available");
   });
 
   it("keeps invalid advanced JSON in place and blocks returning to Guided mode", async () => {

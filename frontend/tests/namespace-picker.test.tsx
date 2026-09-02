@@ -112,6 +112,35 @@ describe("NamespacePicker", () => {
     );
   });
 
+  it("disables settled empty selectors with explicit empty-state labels", () => {
+    render(<NamespacePicker namespaces={[]} value={{ app: "", env: "" }} onChange={vi.fn()} />);
+
+    const app = screen.getByRole("combobox", { name: "Application" });
+    const env = screen.getByRole("combobox", { name: "Environment" });
+    expect(app).toBeDisabled();
+    expect(env).toBeDisabled();
+    expect(app).toHaveTextContent("No applications available");
+    expect(env).toHaveTextContent("No environments available");
+  });
+
+  it("disables an environment selector when a stale app has no environment value", async () => {
+    render(
+      <NamespacePicker
+        namespaces={namespaces}
+        value={{ app: "ghost", env: "" }}
+        onChange={vi.fn()}
+      />,
+    );
+
+    const app = screen.getByRole("combobox", { name: "Application" });
+    const env = screen.getByRole("combobox", { name: "Environment" });
+    expect(app).toBeEnabled();
+    expect(app).toHaveTextContent("ghost (not found)");
+    expect(await visibleSelectOptions(app)).toEqual(["ghost (not found)", "billing", "search"]);
+    expect(env).toBeDisabled();
+    expect(env).toHaveTextContent("No environments available");
+  });
+
   it("renders field errors inline and marks the control invalid", () => {
     render(
       <NamespacePicker

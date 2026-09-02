@@ -74,6 +74,12 @@ export function ReleaseWorkspace({
     return previous ? releaseKey(previous.release) : "";
   }, [release, sameNameReleases]);
   const effectiveCompareKey = compareKey || defaultCompareKey;
+  const comparisonOptions = sameNameReleases
+    .filter((candidate) => candidate.release.version !== release?.version)
+    .map((candidate) => ({
+      value: releaseKey(candidate.release),
+      label: releaseKey(candidate.release),
+    }));
 
   const comparison = sameNameReleases.find(
     (candidate) => releaseKey(candidate.release) === effectiveCompareKey,
@@ -250,13 +256,13 @@ export function ReleaseWorkspace({
                 <AppSelect
                   value={effectiveCompareKey}
                   onValueChange={setCompareKey}
-                  placeholder="Choose another version…"
-                  options={sameNameReleases
-                    .filter((candidate) => candidate.release.version !== release.version)
-                    .map((candidate) => ({
-                      value: releaseKey(candidate.release),
-                      label: releaseKey(candidate.release),
-                    }))}
+                  disabled={comparisonOptions.length === 0}
+                  placeholder={
+                    comparisonOptions.length === 0
+                      ? "No other version available"
+                      : "Choose another version…"
+                  }
+                  options={comparisonOptions}
                 />
               </Field>
             </div>

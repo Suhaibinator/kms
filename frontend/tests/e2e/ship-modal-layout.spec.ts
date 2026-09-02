@@ -40,3 +40,61 @@ test("ship modal body does not scroll horizontally with a wide preview", async (
   expect(widths.table).toBeGreaterThan(widths.client); // the table really is wider
   expect(widths.scroll).toBeLessThanOrEqual(widths.client); // …but the body does not scroll
 });
+
+test("ship environment summary is anchored independently of field content", async ({
+  page,
+}, testInfo) => {
+  const state = incidentState();
+  await mockConsole(page, state);
+
+  await page.goto("/applications?app=gradethis&env=prod");
+  await page.getByRole("button", { name: "Edit & ship rate_limits in prod" }).click();
+  const modal = page.getByTestId("ship-modal");
+  const row = modal.locator(".ship-env-row");
+  const field = row.locator(".ship-env-field");
+  const environment = row.getByRole("combobox", { name: "Environment" });
+  const summary = row.locator(".ship-env-summary");
+  await expect(summary).toBeVisible();
+
+  const layout = await row.evaluate((element) => {
+    const fieldElement = element.querySelector(".ship-env-field");
+    const controlElement = element.querySelector('[role="combobox"]');
+    const summaryElement = element.querySelector(".ship-env-summary");
+    if (!fieldElement || !controlElement || !summaryElement) {
+      throw new Error("Ship environment row is missing a required element");
+    }
+    const field = fieldElement.getBoundingClientRect();
+    const control = controlElement.getBoundingClientRect();
+    const summary = summaryElement.getBoundingClientRect();
+    const style = getComputedStyle(element);
+    return {
+      alignItems: style.alignItems,
+      field: { left: field.left, right: field.right, top: field.top, bottom: field.bottom },
+      control: { top: control.top },
+      summary: { left: summary.left, right: summary.right, top: summary.top },
+      viewportWidth: window.innerWidth,
+    };
+  });
+  expect(layout.alignItems).toBe(
+    testInfo.project.name === "mobile-chromium" ? "stretch" : "flex-start",
+  );
+  expect(layout.field.left).toBeGreaterThanOrEqual(0);
+  expect(layout.field.right).toBeLessThanOrEqual(layout.viewportWidth);
+  expect(layout.summary.left).toBeGreaterThanOrEqual(0);
+  expect(layout.summary.right).toBeLessThanOrEqual(layout.viewportWidth);
+
+  if (testInfo.project.name === "mobile-chromium") {
+    expect(layout.summary.top).toBeGreaterThanOrEqual(layout.field.bottom);
+    expect(layout.summary.top - layout.field.bottom).toBeLessThanOrEqual(32);
+  } else {
+    expect(layout.summary.top).toBeCloseTo(layout.control.top, 0);
+  }
+
+  // Keep the locators live through the assertions so failures report the
+  // user-facing controls rather than only anonymous geometry.
+  await expect(field).toBeVisible();
+  await expect(environment).toBeEnabled();
+  if (process.env.CAPTURE_QA) {
+    await page.screenshot({ path: testInfo.outputPath("ship-environment-row.png") });
+  }
+});

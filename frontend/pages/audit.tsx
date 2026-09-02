@@ -166,7 +166,7 @@ export default function AuditPage() {
 
 function AuditLog({ initial }: { initial: QueryValues }) {
   const toast = useToast();
-  const { namespaces } = useNamespaces();
+  const { namespaces, loading: namespacesLoading, error: namespacesError } = useNamespaces();
   const replaceQuery = useQueryReplace("/audit");
   const sort = useSort<AuditEvent>("/audit", COLUMNS);
   const now = useNow();
@@ -199,6 +199,48 @@ function AuditLog({ initial }: { initial: QueryValues }) {
     }
     return [...set].sort((a, b) => a.localeCompare(b));
   }, [namespaces, form.app]);
+
+  // Preserve deep-linked filters that no longer exist so the query remains
+  // legible, while still preventing an empty menu when no choices exist.
+  const appOptions = useMemo(() => {
+    const options = apps.map((app) => ({ value: app, label: app }));
+    if (form.app && !apps.includes(form.app)) {
+      options.unshift({
+        value: form.app,
+        label: namespacesLoading ? form.app : `${form.app} (not found)`,
+      });
+    }
+    return options;
+  }, [apps, form.app, namespacesLoading]);
+
+  const envOptions = useMemo(() => {
+    const options = envs.map((env) => ({ value: env, label: env }));
+    if (form.env && !envs.includes(form.env)) {
+      options.unshift({
+        value: form.env,
+        label: namespacesLoading ? form.env : `${form.env} (not found)`,
+      });
+    }
+    return options;
+  }, [envs, form.env, namespacesLoading]);
+
+  const loadingEmptyNamespaces = namespacesLoading && namespaces.length === 0;
+  const appPlaceholder = loadingEmptyNamespaces
+    ? "Loading applications…"
+    : namespacesError && appOptions.length === 0
+      ? "Applications unavailable"
+      : appOptions.length === 0
+        ? "No applications available"
+        : "All applications";
+  const envPlaceholder = loadingEmptyNamespaces
+    ? "Loading environments…"
+    : !form.app && namespaces.length > 0
+      ? "Select application first"
+      : namespacesError && envOptions.length === 0
+        ? "Environments unavailable"
+        : envOptions.length === 0
+          ? "No environments available"
+          : "All environments";
 
   const prefixProblem = validateKeyPrefix(form.key_prefix.trim());
   const rangeProblem = rangeError(form.from, form.to);
@@ -295,19 +337,20 @@ function AuditLog({ initial }: { initial: QueryValues }) {
           <AppSelect
             id="f-app"
             value={form.app}
+            disabled={loadingEmptyNamespaces || appOptions.length === 0}
             onValueChange={onApp}
-            placeholder="All applications"
-            options={apps.map((app) => ({ value: app, label: app }))}
+            placeholder={appPlaceholder}
+            options={appOptions}
           />
         </Field>
         <Field label="Environment" htmlFor="f-env">
           <AppSelect
             id="f-env"
             value={form.env}
-            disabled={!form.app}
+            disabled={loadingEmptyNamespaces || !form.app || envOptions.length === 0}
             onValueChange={(env) => setForm({ ...form, env })}
-            placeholder={form.app ? "All environments" : "Select application first"}
-            options={envs.map((env) => ({ value: env, label: env }))}
+            placeholder={envPlaceholder}
+            options={envOptions}
           />
         </Field>
         <Field

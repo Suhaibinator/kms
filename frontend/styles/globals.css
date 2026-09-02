@@ -1008,7 +1008,10 @@
 
   .rule-row {
     display: flex;
-    align-items: flex-end;
+    /* Keep every field anchored to the row's top. Inline validation and
+       namespace warnings grow below their own control instead of pulling that
+       control (and only that control) upward relative to its siblings. */
+    align-items: flex-start;
     flex-wrap: wrap;
     gap: 10px;
   }
@@ -1025,10 +1028,10 @@
     flex: 1 1 110px;
     min-width: 110px;
   }
-  /* The row bottom-aligns its cells, and Field carries a bottom margin the bare
-     button does not — this keeps the remove button level with the inputs. */
+  /* Bare action buttons have no label, so offset them by exactly one label
+     block while leaving the row itself top-aligned. */
   .rule-row > .rule-remove {
-    margin-bottom: var(--space-4);
+    margin-top: var(--label-offset);
   }
   /* A label used as a row/heading caption, not stacked above its control. Tailwind's
      m-0 cannot do this: it is layered and loses to the unlayered .field-label rule. */
@@ -1865,7 +1868,7 @@
     grid-template-columns:
       minmax(130px, 0.9fr) minmax(115px, 0.65fr) minmax(190px, 1.3fr)
       minmax(145px, 0.8fr) minmax(145px, 0.8fr) auto;
-    align-items: end;
+    align-items: start;
     gap: var(--space-3);
     padding: var(--space-4);
     border-bottom: 1px solid var(--border);
@@ -1878,6 +1881,12 @@
     display: flex;
     align-items: center;
     min-height: var(--control-h);
+    /* Match the labelled fields' line box plus their gap without making the
+       whole row bottom-align to validation text. */
+    margin-top: calc(1.375em + var(--space-1));
+  }
+  .release-builder-entry > [data-slot="button"] {
+    margin-top: calc(1.375em + var(--space-1));
   }
   /* The 60dvh minimum lives on the element as `min-h-[60dvh]`: a utility, so it
      can beat Textarea's own min-h-16 utility. Layered component CSS cannot. */
@@ -3105,12 +3114,18 @@
       align-items: stretch;
       gap: 8px;
     }
-    .rule-op {
+    .rule-op,
+    .rule-app,
+    .rule-env {
+      flex: none;
       min-width: 0;
       width: 100%;
     }
     .rule-remove {
       width: 100%;
+    }
+    .rule-row > .rule-remove {
+      margin-top: 0;
     }
   }
 

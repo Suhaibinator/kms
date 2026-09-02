@@ -95,7 +95,10 @@
   }
   .ship-env-row {
     display: flex;
-    align-items: flex-end;
+    /* Field messages belong below their control and must not move the summary
+       beside it. Top alignment makes that invariant hold if this field gains
+       help or validation text later. */
+    align-items: flex-start;
     gap: var(--space-4);
     flex-wrap: wrap;
   }
@@ -112,6 +115,7 @@
     gap: var(--space-2);
     flex-wrap: wrap;
     min-height: var(--control-h);
+    margin-top: var(--label-offset);
   }
   .ship-blockers,
   .ship-rows,
@@ -460,10 +464,23 @@
 
   /* --- Mobile ------------------------------------------------------------ */
   @media (max-width: 640px) {
+    .ship-env-row {
+      flex-direction: column;
+      align-items: stretch;
+    }
     .ship-env-field,
     .ship-add-row,
     .ship-confirm {
       max-width: none;
+    }
+    .ship-env-field {
+      flex: none;
+      width: 100%;
+    }
+    /* The summary commonly wraps onto its own line at this width, where it no
+       longer needs the desktop label offset. */
+    .ship-env-summary {
+      margin-top: 0;
     }
     .ship-facts,
     .conflict-facts {
