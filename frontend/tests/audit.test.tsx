@@ -79,6 +79,55 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+describe("audit table", () => {
+  const eventTypes = () =>
+    [...document.querySelectorAll('table.data tbody td[data-label="Event"]')].map(
+      (cell) => cell.textContent ?? "",
+    );
+
+  it("reorders the loaded page from a column header and records the sort in the URL", async () => {
+    vi.mocked(api.listAudit).mockResolvedValue({
+      events: [event(1), event(2, { event_type: "parameter.write" })],
+      next_page_token: "",
+    });
+    const { rerender } = render(<AuditPage />);
+    await screen.findByText("secret.read");
+    expect(eventTypes()).toEqual(["secret.read", "parameter.write"]);
+
+    fireEvent.click(screen.getByRole("button", { name: "Event" }));
+    expect(replaced()).toEqual({ pathname: "/audit", query: { sort: "event", dir: "asc" } });
+
+    // The mock router lands on the new query, so a rerender reads it back.
+    rerender(<AuditPage />);
+    expect(eventTypes()).toEqual(["parameter.write", "secret.read"]);
+    expect(screen.getByRole("button", { name: "Event" }).closest("th")).toHaveAttribute(
+      "aria-sort",
+      "ascending",
+    );
+    expect(screen.getByTestId("table-summary")).toHaveTextContent(
+      "Showing 2 of 2 events · Sorts the events loaded on this page",
+    );
+  });
+
+  it("counts the events on screen and the filters narrowing them", async () => {
+    vi.mocked(api.listAudit).mockResolvedValue({ events: [event(1)], next_page_token: "" });
+    render(<AuditPage />);
+    await screen.findByText("secret.read");
+    const summary = screen.getByTestId("table-summary");
+    expect(summary).toHaveTextContent("Showing 1 of 1 event");
+    expect(summary).not.toHaveTextContent("filter");
+
+    fireEvent.change(screen.getByLabelText("Actor"), { target: { value: "deploy-bot" } });
+    fireEvent.change(screen.getByLabelText("Event type"), { target: { value: "secret.read" } });
+    fireEvent.click(screen.getByRole("button", { name: "Apply" }));
+    await waitFor(() =>
+      expect(screen.getByTestId("table-summary")).toHaveTextContent(
+        "Showing 1 of 1 event · 2 filters active",
+      ),
+    );
+  });
+});
+
 describe("audit filters", () => {
   it("offers Clear filters only once a filter is applied", async () => {
     const listAudit = vi.mocked(api.listAudit);

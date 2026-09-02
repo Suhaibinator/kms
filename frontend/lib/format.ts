@@ -96,3 +96,13 @@ export function labelEntries(
   if (!labels) return [];
   return Object.entries(labels).sort((a, b) => a[0].localeCompare(b[0]));
 }
+
+/** "12 events" / "1 event" from a plural noun; good enough for the console's
+ *  nouns (events, parameters, secrets, applications, identities, policies). */
+export function countNoun(count: number, plural: string): string {
+  if (count === 1) {
+    if (plural.endsWith("ies")) return `${plural.slice(0, -3)}y`;
+    if (plural.endsWith("s")) return plural.slice(0, -1);
+  }
+  return plural;
+}

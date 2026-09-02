@@ -1,8 +1,16 @@
 import { Filter, X } from "lucide-react";
 import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
+import {
+  BulkActionBar,
+  BulkDeleteDialog,
+  SelectAllCell,
+  SelectRowCell,
+  useBulkSelection,
+} from "@/components/BulkSelection";
 import { Icon } from "@/components/icons";
 import NamespacePicker, { type NamespaceSelection } from "@/components/NamespacePicker";
+import { headerLabels, SortHeaderRow, useSort } from "@/components/SortableTable";
 import {
   Badge,
   EmptyState,
@@ -11,15 +19,20 @@ import {
   PageHeader,
   Pagination,
   TableSkeleton,
+  TableSummary,
 } from "@/components/ui";
 import { Button, ButtonLink } from "@/components/ui/button";
+import { useAuth } from "@/context/AuthContext";
 import { useToast } from "@/context/ToastContext";
 import { api, isAbortError } from "@/lib/api";
+import { bulkSummary, runBulk } from "@/lib/bulk";
 import { crumbs } from "@/lib/crumbs";
 import { formatUnixMs } from "@/lib/format";
 import { useCursorPagination, useLatestRequest, useNamespaces, useQueryParams } from "@/lib/hooks";
 import { links } from "@/lib/links";
 import { rememberNamespace } from "@/lib/namespace-memory";
+import { isProductionEnvironment } from "@/lib/readiness";
+import type { SortColumn } from "@/lib/sort";
 import type { SecretMetadata } from "@/lib/types";
 import { useQueryReplace } from "@/lib/url";
 import { validateKeyPrefix } from "@/lib/validation";
@@ -37,11 +50,26 @@ function requestScope(selection: NamespaceSelection, prefix: string, token: stri
   return JSON.stringify([selection.env, selection.app, prefix, token]);
 }
 
+// Module scope so the sort controller's memos stay stable across renders.
+const COLUMNS: ReadonlyArray<SortColumn<SecretMetadata>> = [
+  { id: "key", label: "Key", value: (s) => s.key },
+  { id: "type", label: "Type", value: (s) => s.content_type },
+  { id: "current", label: "Current", value: (s) => currentVersion(s) },
+  { id: "versions", label: "Versions", value: (s) => s.versions?.length ?? 0 },
+  // Client-bound is the mode that changes how a value is read, so it leads.
+  { id: "mode", label: "Mode", value: (s) => Boolean(s.client_bound) },
+  { id: "updated", label: "Updated", value: (s) => s.updated_at_unix_ms },
+];
+
+const PAGE_SORT_HINT = "Sorts the rows loaded on this page, not the whole namespace.";
+
 export default function SecretsPage() {
   const toast = useToast();
+  const { identity } = useAuth();
   const { namespaces, error: nsError } = useNamespaces();
   const { values: queryValues, ready: queryReady } = useQueryParams(["env", "app", "key_prefix"]);
   const replaceQuery = useQueryReplace("/secrets");
+  const sort = useSort<SecretMetadata>("/secrets", COLUMNS);
 
   const [ns, setNs] = useState<NamespaceSelection>(NO_NS);
   const [prefixInput, setPrefixInput] = useState("");
@@ -52,6 +80,10 @@ export default function SecretsPage() {
   const [loading, setLoading] = useState(false);
   const [loadedScope, setLoadedScope] = useState("");
   const request = useLatestRequest();
+
+  const [bulkOpen, setBulkOpen] = useState(false);
+  const [bulkBusy, setBulkBusy] = useState(false);
+  const [bulkDone, setBulkDone] = useState(0);
 
   const paging = useCursorPagination(JSON.stringify([ns.env, ns.app, prefix]));
   const { pageToken, setNextToken } = paging;
@@ -158,7 +190,41 @@ export default function SecretsPage() {
   // A response has arrived for exactly this namespace/prefix/page. Gating on
   // this rather than on `loading` keeps the empty state from flashing before
   // the first request has even started.
-  const settled = loadedScope === requestScope(ns, prefix, pageToken);
+  const scope = requestScope(ns, prefix, pageToken);
+  const settled = loadedScope === scope;
+
+  const sortedSecrets = sort.apply(secrets);
+  // Bulk delete is an admin convenience; the console's only role distinction is
+  // admin vs client identity, and a client's writes depend on a policy the
+  // console cannot see.
+  const canBulkDelete = identity?.kind === "admin";
+  const selection = useBulkSelection(
+    canBulkDelete ? secrets.map((secret) => secret.key) : [],
+    scope,
+  );
+
+  async function onBulkDelete() {
+    const targets = selection.selected;
+    if (targets.length === 0) return;
+    setBulkBusy(true);
+    setBulkDone(0);
+    try {
+      // No bulk endpoint exists: this is the detail page's delete, once per key.
+      const result = await runBulk(
+        targets,
+        (key) => api.deleteSecret({ env: ns.env, app: ns.app, key }),
+        setBulkDone,
+      );
+      const summary = bulkSummary(result, "Deleted", "secrets");
+      if (summary.ok) toast.success(summary.title, summary.detail);
+      else toast.error(new Error(summary.detail), summary.title);
+      setBulkOpen(false);
+      selection.clear();
+      await load(pageToken, ns, prefix);
+    } finally {
+      setBulkBusy(false);
+    }
+  }
 
   return (
     <>
@@ -195,13 +261,13 @@ export default function SecretsPage() {
       </form>
 
       {awaitingDeepLink ? (
-        <TableSkeleton headers={["Key", "Type", "Current", "Versions", "Mode", "Updated"]} />
+        <TableSkeleton headers={headerLabels(COLUMNS)} />
       ) : !hasNs ? (
         <EmptyState icon={<Icon.namespace size={20} />} title="Choose an environment">
           Pick an application and environment above to list its secrets.
         </EmptyState>
       ) : !settled || loading ? (
-        <TableSkeleton headers={["Key", "Type", "Current", "Versions", "Mode", "Updated"]} />
+        <TableSkeleton headers={headerLabels(COLUMNS)} />
       ) : secrets.length === 0 ? (
         <EmptyState
           icon={<Icon.secret size={20} />}
@@ -222,21 +288,31 @@ export default function SecretsPage() {
       ) : (
         <div className="table-wrap card-table">
           <table className="data">
+            <TableSummary
+              shown={sortedSecrets.length}
+              noun="secrets"
+              filters={prefix ? 1 : 0}
+              hint={sort.sort ? PAGE_SORT_HINT : undefined}
+            />
             <thead>
-              <tr>
-                <th>Key</th>
-                <th>Type</th>
-                <th>Current</th>
-                <th>Versions</th>
-                <th>Mode</th>
-                <th>Updated</th>
-              </tr>
+              <SortHeaderRow
+                controller={sort}
+                hint={PAGE_SORT_HINT}
+                before={
+                  canBulkDelete ? (
+                    <SelectAllCell selection={selection} label="Select all secrets on this page" />
+                  ) : null
+                }
+              />
             </thead>
             <tbody>
-              {secrets.map((s) => {
+              {sortedSecrets.map((s) => {
                 const cur = currentVersion(s);
                 return (
-                  <tr key={s.key}>
+                  <tr key={s.key} data-state={selection.has(s.key) ? "selected" : undefined}>
+                    {canBulkDelete ? (
+                      <SelectRowCell selection={selection} id={s.key} label={`Select ${s.key}`} />
+                    ) : null}
                     <td data-label="Key">
                       <Link className="cell-path" href={links.secretDetail(s)}>
                         {s.key}
@@ -270,6 +346,16 @@ export default function SecretsPage() {
         </div>
       )}
 
+      {canBulkDelete ? (
+        <BulkActionBar
+          selection={selection}
+          noun="secrets"
+          actionLabel="Delete selected"
+          busy={bulkBusy}
+          onAction={() => setBulkOpen(true)}
+        />
+      ) : null}
+
       <Pagination
         hasNext={paging.hasNext}
         onNext={paging.next}
@@ -281,6 +367,21 @@ export default function SecretsPage() {
         count={secrets.length}
         loading={!settled}
         noun="secrets"
+      />
+
+      <BulkDeleteDialog
+        open={bulkOpen}
+        names={selection.selected}
+        noun="secrets"
+        verb="Delete"
+        verbing="Deleting"
+        scope={hasNs ? `${ns.env}/${ns.app}` : undefined}
+        production={isProductionEnvironment(ns.env)}
+        consequence="Every version of each one is destroyed, and encrypted values cannot be recovered."
+        busy={bulkBusy}
+        completed={bulkDone}
+        onConfirm={() => void onBulkDelete()}
+        onCancel={() => setBulkOpen(false)}
       />
     </>
   );

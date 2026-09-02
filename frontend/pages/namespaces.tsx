@@ -4,6 +4,7 @@ import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { ActionMenu } from "@/components/applications/ActionMenu";
 import { Icon } from "@/components/icons";
 import { ConfirmDialog, Modal } from "@/components/Modal";
+import { headerLabels, SortHeaderRow, useSort } from "@/components/SortableTable";
 import {
   Badge,
   Checkbox,
@@ -12,6 +13,7 @@ import {
   Input,
   PageHeader,
   TableSkeleton,
+  TableSummary,
 } from "@/components/ui";
 import { Button, ButtonLink } from "@/components/ui/button";
 import { useToast } from "@/context/ToastContext";
@@ -20,6 +22,7 @@ import { formatUnixMs } from "@/lib/format";
 import { useFieldErrors, useNamespaces } from "@/lib/hooks";
 import { identitiesRelyingOn, methodLabel } from "@/lib/identity-methods";
 import { links } from "@/lib/links";
+import type { SortColumn } from "@/lib/sort";
 import type { AuthMethod, Identity, Namespace } from "@/lib/types";
 
 const MAX_IDENTITY_PAGES = 10;
@@ -28,14 +31,22 @@ function sameMethods(a: readonly AuthMethod[], b: readonly AuthMethod[]): boolea
   return a.length === b.length && a.every((method) => b.includes(method));
 }
 
-const TABLE_HEADERS = [
-  "Environment",
-  "Description",
-  "Auth methods",
-  "Parameters",
-  "Secrets",
-  "Created",
+// Module scope so the sort controller's memos stay stable across renders. The
+// order chosen here applies inside every application's table at once.
+const COLUMNS: ReadonlyArray<SortColumn<Namespace>> = [
+  { id: "env", label: "Environment", value: (ns) => ns.env },
+  { id: "description", label: "Description", value: (ns) => ns.description },
+  {
+    id: "methods",
+    label: "Auth methods",
+    value: (ns) => [...(ns.allowed_auth_methods ?? [])].sort().join(","),
+  },
+  { id: "parameters", label: "Parameters", value: (ns) => ns.parameter_count },
+  { id: "secrets", label: "Secrets", value: (ns) => ns.secret_count },
+  { id: "created", label: "Created", value: (ns) => ns.created_at_unix_ms },
 ];
+
+const TABLE_HEADERS = headerLabels(COLUMNS);
 
 function AuthMethodBadges({ methods }: { methods: AuthMethod[] }) {
   if (!methods || methods.length === 0) {
@@ -101,6 +112,7 @@ function AuthMethodsField({
 export default function NamespacesPage() {
   const toast = useToast();
   const { namespaces, loading, error, reload } = useNamespaces();
+  const sort = useSort<Namespace>("/namespaces", COLUMNS);
 
   const [editTarget, setEditTarget] = useState<Namespace | null>(null);
   const [editDescription, setEditDescription] = useState("");
@@ -289,16 +301,13 @@ export default function NamespacesPage() {
               </div>
               <div className="table-wrap card-table">
                 <table className="data">
+                  {/* The whole list is loaded, so "of" is the real total. */}
+                  <TableSummary shown={group.list.length} noun="environments" />
                   <thead>
-                    <tr>
-                      {TABLE_HEADERS.map((header) => (
-                        <th key={header}>{header}</th>
-                      ))}
-                      <th />
-                    </tr>
+                    <SortHeaderRow controller={sort} after={<th />} />
                   </thead>
                   <tbody>
-                    {group.list.map((ns) => {
+                    {sort.apply(group.list).map((ns) => {
                       const total = ns.parameter_count + ns.secret_count;
                       const canDelete = total === 0;
                       const deleteReason = `Namespace holds ${ns.parameter_count} parameter(s) and ${ns.secret_count} secret(s). Empty it before deleting.`;

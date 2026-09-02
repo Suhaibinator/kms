@@ -8,6 +8,7 @@ import { chooseSelectOption } from "./select-test-utils";
 
 const mocks = vi.hoisted(() => ({
   query: {} as Record<string, string>,
+  replace: vi.fn(async () => true),
   namespaces: [] as Namespace[],
   namespacesLoading: false,
   namespacesError: null as unknown,
@@ -23,10 +24,15 @@ vi.mock("next/router", () => ({
     pathname: "/identities",
     query: mocks.query,
     isReady: true,
+    replace: mocks.replace,
     events: { on: vi.fn(), off: vi.fn() },
   }),
 }));
 vi.mock("@/context/ToastContext", () => ({ useToast: () => mocks.toast }));
+// The page asks who is signed in before it offers bulk revoke.
+vi.mock("@/context/AuthContext", () => ({
+  useAuth: () => ({ identity: { name: "root", kind: "admin", namespace: null } }),
+}));
 vi.mock("@/lib/hooks", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/hooks")>();
   return {
@@ -98,6 +104,7 @@ function centralDirectoryModes(buffer: ArrayBuffer): Map<string, { host: number;
 
 beforeEach(() => {
   mocks.query = {};
+  mocks.replace.mockClear();
   mocks.namespaces = [];
   mocks.namespacesLoading = false;
   mocks.namespacesError = null;
@@ -867,6 +874,40 @@ describe("identity wizard validation", () => {
 });
 
 describe("identity list", () => {
+  /** The Name cell of every rendered row, in the order they are rendered. */
+  function nameColumn(): string[] {
+    return [...document.querySelectorAll('table.data tbody td[data-label="Name"]')].map(
+      (cell) => cell.textContent ?? "",
+    );
+  }
+
+  it("reorders the loaded page from a column header and records the sort in the URL", async () => {
+    vi.mocked(api.listIdentities).mockResolvedValue({
+      identities: [identity("zeta"), identity("alpha")],
+      next_page_token: "",
+    });
+    const { rerender } = render(<IdentitiesPage />);
+    await screen.findByText("zeta");
+    expect(nameColumn()).toEqual(["zeta", "alpha"]);
+    expect(screen.getByTestId("table-summary")).toHaveTextContent("Showing 2 of 2 identities");
+
+    fireEvent.click(screen.getByRole("button", { name: "Name" }));
+    expect(mocks.replace).toHaveBeenLastCalledWith(
+      { pathname: "/identities", query: { sort: "name", dir: "asc" } },
+      undefined,
+      { shallow: true, scroll: false },
+    );
+
+    // The URL is the source of truth, so land the router on what the click asked for.
+    mocks.query = { sort: "name", dir: "asc" };
+    rerender(<IdentitiesPage />);
+    expect(nameColumn()).toEqual(["alpha", "zeta"]);
+    expect(screen.getByRole("button", { name: "Name" }).closest("th")).toHaveAttribute(
+      "aria-sort",
+      "ascending",
+    );
+  });
+
   it("pages forward with the server token and shows the page number", async () => {
     const listIdentities = vi
       .mocked(api.listIdentities)

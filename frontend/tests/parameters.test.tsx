@@ -22,6 +22,10 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("next/router", () => ({ useRouter: () => mocks.router }));
 vi.mock("@/context/ToastContext", () => ({ useToast: () => mocks.toast }));
+// The page asks who is signed in before it offers bulk delete.
+vi.mock("@/context/AuthContext", () => ({
+  useAuth: () => ({ identity: { name: "root", kind: "admin", namespace: null } }),
+}));
 
 const NAMESPACE: Namespace = {
   env: "prod",
@@ -69,6 +73,13 @@ beforeEach(() => {
 afterEach(() => {
   vi.restoreAllMocks();
 });
+
+/** The Key cell of every rendered row, in the order they are rendered. */
+function keyColumn(): string[] {
+  return [...document.querySelectorAll('table.data tbody td[data-label="Key"]')].map(
+    (cell) => cell.textContent ?? "",
+  );
+}
 
 /** Picks the fixture namespace in the filter bar once its options have arrived. */
 async function chooseNamespace(): Promise<void> {
@@ -224,6 +235,66 @@ describe("parameters page", () => {
     expect(
       await screen.findByRole("dialog", { name: "Discard changes?", hidden: true }),
     ).toBeInTheDocument();
+  });
+
+  it("reorders the loaded page from a column header and records the sort in the URL", async () => {
+    mocks.router.query = { env: NAMESPACE.env, app: NAMESPACE.app };
+    vi.spyOn(api, "listParameters").mockResolvedValue({
+      parameters: [BETA, ALPHA],
+      next_page_token: "",
+    });
+    const { rerender } = render(<ParametersPage />);
+    expect(await screen.findByText(BETA.key)).toBeVisible();
+    expect(keyColumn()).toEqual(["beta", "alpha"]);
+
+    const header = screen.getByRole("button", { name: "Key" });
+    expect(header.closest("th")).toHaveAttribute("aria-sort", "none");
+    fireEvent.click(header);
+    expect(mocks.router.replace).toHaveBeenLastCalledWith(
+      {
+        pathname: "/parameters",
+        query: { env: NAMESPACE.env, app: NAMESPACE.app, sort: "key", dir: "asc" },
+      },
+      undefined,
+      { shallow: true, scroll: false },
+    );
+
+    // The URL is the source of truth, so land the router on what the click asked for.
+    mocks.router.query = { env: NAMESPACE.env, app: NAMESPACE.app, sort: "key", dir: "asc" };
+    rerender(<ParametersPage />);
+    expect(keyColumn()).toEqual(["alpha", "beta"]);
+    expect(screen.getByRole("button", { name: "Key" }).closest("th")).toHaveAttribute(
+      "aria-sort",
+      "ascending",
+    );
+    // Only the loaded page is ordered, and the footer says so.
+    expect(screen.getByTestId("table-summary")).toHaveTextContent(
+      "Showing 2 of 2 parameters · Sorts the rows loaded on this page",
+    );
+  });
+
+  it("counts the rows on screen, and the filter narrowing them", async () => {
+    mocks.router.query = { env: NAMESPACE.env, app: NAMESPACE.app };
+    vi.spyOn(api, "listParameters").mockResolvedValue({
+      parameters: [ALPHA, BETA],
+      next_page_token: "",
+    });
+    const { rerender } = render(<ParametersPage />);
+    expect(await screen.findByText(ALPHA.key)).toBeVisible();
+    const summary = screen.getByTestId("table-summary");
+    expect(summary).toHaveTextContent("Showing 2 of 2 parameters");
+    expect(summary).not.toHaveTextContent("filter");
+
+    vi.mocked(api.listParameters).mockResolvedValue({ parameters: [ALPHA], next_page_token: "" });
+    mocks.router.query = { env: NAMESPACE.env, app: NAMESPACE.app, key_prefix: "al" };
+    rerender(<ParametersPage />);
+    fireEvent.change(screen.getByLabelText("Key prefix"), { target: { value: "al" } });
+    fireEvent.click(screen.getByRole("button", { name: "Filter" }));
+    await waitFor(() =>
+      expect(screen.getByTestId("table-summary")).toHaveTextContent(
+        "Showing 1 of 1 parameter · 1 filter active",
+      ),
+    );
   });
 
   it("writes the chosen namespace back to the URL", async () => {

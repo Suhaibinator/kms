@@ -3,6 +3,7 @@ import Link from "next/link";
 import { useRouter } from "next/router";
 import { type ReactNode, useEffect, useMemo, useState } from "react";
 import CommandPalette from "@/components/palette/CommandPalette";
+import ShortcutsDialog from "@/components/ShortcutsDialog";
 import { Button } from "@/components/ui/button";
 import { Kbd } from "@/components/ui/kbd";
 import { Sheet, SheetContent, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
@@ -11,6 +12,7 @@ import { useAuth } from "@/context/AuthContext";
 import { displayNamespace } from "@/lib/format";
 import { links } from "@/lib/links";
 import { type NamespaceRef, useLastNamespace } from "@/lib/namespace-memory";
+import { isApplePlatform, isShortcutSheetKey } from "@/lib/shortcuts";
 import type { Identity } from "@/lib/types";
 import { Icon } from "./icons";
 import { LogoMark } from "./LogoMark";
@@ -94,12 +96,9 @@ function isActive(pathname: string, item: NavItem): boolean {
 const MAC_SHORTCUT_LABEL = "⌘K";
 const OTHER_SHORTCUT_LABEL = "Ctrl K";
 
-/** True on macOS and iOS, where the palette shortcut is the Command key. */
-export function isApplePlatform(nav: Navigator = navigator): boolean {
-  const withHints = nav as Navigator & { userAgentData?: { platform?: string } };
-  const platform = withHints.userAgentData?.platform || nav.platform || "";
-  return /mac|iphone|ipad|ipod/i.test(platform);
-}
+// Lives in lib/shortcuts.ts alongside the rest of the keyboard model; re-exported
+// here because the shell is where callers have always looked for it.
+export { isApplePlatform };
 
 /**
  * The visible shortcut chip. The server has no platform to ask, so it renders
@@ -216,6 +215,7 @@ export default function AppShell({ children }: { children: ReactNode }) {
   const { identity, logout } = useAuth();
   const [navOpen, setNavOpen] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
+  const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const shortcutLabel = useShortcutLabel();
   const namespace = useLastNamespace();
   const visibleNav = useMemo(
@@ -235,12 +235,21 @@ export default function AppShell({ children }: { children: ReactNode }) {
     return () => router.events.off("routeChangeStart", close);
   }, [router.events]);
 
-  // ⌘K / Ctrl+K toggles the command palette from anywhere in the shell.
+  // The shell owns the global shortcuts: ⌘K / Ctrl+K toggles the palette, and
+  // `?` outside a text field opens the sheet that documents both. Registered
+  // once here rather than per page, so every route answers to them identically.
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      if (!isPaletteShortcut(event)) return;
-      event.preventDefault();
-      setPaletteOpen((open) => !open);
+      if (isPaletteShortcut(event)) {
+        event.preventDefault();
+        setPaletteOpen((open) => !open);
+        return;
+      }
+      if (isShortcutSheetKey(event)) {
+        event.preventDefault();
+        setPaletteOpen(false);
+        setShortcutsOpen(true);
+      }
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
@@ -318,7 +327,12 @@ export default function AppShell({ children }: { children: ReactNode }) {
           {identity && identity.kind !== "admin" ? <IdentityStrip identity={identity} /> : null}
           <div className="page">{children}</div>
         </main>
-        <CommandPalette open={paletteOpen} onOpenChange={setPaletteOpen} />
+        <CommandPalette
+          open={paletteOpen}
+          onOpenChange={setPaletteOpen}
+          onShortcuts={() => setShortcutsOpen(true)}
+        />
+        <ShortcutsDialog open={shortcutsOpen} onClose={() => setShortcutsOpen(false)} />
       </div>
     </TooltipProvider>
   );

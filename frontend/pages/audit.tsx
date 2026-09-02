@@ -2,6 +2,7 @@ import { RefreshCw } from "lucide-react";
 import Link from "next/link";
 import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
 import { Icon } from "@/components/icons";
+import { headerLabels, SortHeaderRow, useSort } from "@/components/SortableTable";
 import {
   Badge,
   EmptyState,
@@ -12,6 +13,7 @@ import {
   Pagination,
   Spinner,
   TableSkeleton,
+  TableSummary,
 } from "@/components/ui";
 import { AppSelect } from "@/components/ui/app-select";
 import { Button } from "@/components/ui/button";
@@ -33,6 +35,7 @@ import {
   useQueryParams,
 } from "@/lib/hooks";
 import { links } from "@/lib/links";
+import type { SortColumn } from "@/lib/sort";
 import type { AuditEvent, AuditFilters } from "@/lib/types";
 import { useQueryReplace } from "@/lib/url";
 import { useNow } from "@/lib/useNow";
@@ -59,7 +62,20 @@ const EMPTY_FORM: FilterForm = {
 };
 
 const PAGE_SIZE = 50;
-const TABLE_HEADERS = ["Time", "Event", "Actor", "Resource", "Decision", "Source IP"];
+
+// Module scope so the sort controller's memos stay stable across renders.
+const COLUMNS: ReadonlyArray<SortColumn<AuditEvent>> = [
+  { id: "time", label: "Time", value: (e) => e.created_at_unix_ms },
+  { id: "event", label: "Event", value: (e) => e.event_type },
+  { id: "actor", label: "Actor", value: (e) => e.actor_identity },
+  { id: "resource", label: "Resource", value: (e) => displayAuditResource(e) ?? e.resource_type },
+  { id: "decision", label: "Decision", value: (e) => e.decision },
+  { id: "source", label: "Source IP", value: (e) => e.source_ip },
+];
+
+const TABLE_HEADERS = headerLabels(COLUMNS);
+
+const PAGE_SORT_HINT = "Sorts the events loaded on this page, not the whole log.";
 
 // The URL is the source of truth for an investigation, so it can be shared,
 // reloaded and returned to: the seven filters plus the cursor position.
@@ -152,6 +168,7 @@ function AuditLog({ initial }: { initial: QueryValues }) {
   const toast = useToast();
   const { namespaces } = useNamespaces();
   const replaceQuery = useQueryReplace("/audit");
+  const sort = useSort<AuditEvent>("/audit", COLUMNS);
   const now = useNow();
   const [events, setEvents] = useState<AuditEvent[]>([]);
   const [loading, setLoading] = useState(true);
@@ -185,7 +202,8 @@ function AuditLog({ initial }: { initial: QueryValues }) {
 
   const prefixProblem = validateKeyPrefix(form.key_prefix.trim());
   const rangeProblem = rangeError(form.from, form.to);
-  const hasFilters = Object.values(applied).some((v) => v !== undefined && v !== "");
+  const appliedFilters = Object.values(applied).filter((v) => v !== undefined && v !== "").length;
+  const hasFilters = appliedFilters > 0;
 
   const { setNextToken } = paging;
   const load = useCallback(
@@ -371,16 +389,17 @@ function AuditLog({ initial }: { initial: QueryValues }) {
       ) : (
         <div className="table-wrap card-table">
           <table className="data">
+            <TableSummary
+              shown={events.length}
+              noun="events"
+              filters={appliedFilters}
+              hint={sort.sort ? PAGE_SORT_HINT : undefined}
+            />
             <thead>
-              <tr>
-                {TABLE_HEADERS.map((header) => (
-                  <th key={header}>{header}</th>
-                ))}
-                <th />
-              </tr>
+              <SortHeaderRow controller={sort} hint={PAGE_SORT_HINT} after={<th />} />
             </thead>
             <tbody>
-              {events.map((e) => {
+              {sort.apply(events).map((e) => {
                 const open = expanded === e.id;
                 const hasMeta = !isEmptyJson(e.metadata_json);
                 const resource = displayAuditResource(e);

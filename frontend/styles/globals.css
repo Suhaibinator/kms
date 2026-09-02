@@ -1175,6 +1175,138 @@
     text-align: right;
   }
 
+  /* ---------- Sortable headers ----------
+     The <th> keeps its own padding for unsortable columns; a sortable one hands
+     it to the button so the whole cell is the hit target. */
+
+  table.data th.sortable {
+    padding: 0;
+  }
+  .sort-button {
+    display: inline-flex;
+    width: 100%;
+    align-items: center;
+    gap: var(--space-1);
+    padding: var(--space-3) var(--space-4);
+    border: 0;
+    background: none;
+    color: inherit;
+    font: inherit;
+    letter-spacing: inherit;
+    text-transform: inherit;
+    white-space: nowrap;
+    cursor: pointer;
+  }
+  .sort-button:hover {
+    color: var(--text);
+  }
+  .sort-button:focus-visible {
+    outline: 2px solid var(--primary);
+    outline-offset: -2px;
+  }
+  .sort-indicator {
+    display: inline-flex;
+    color: var(--text-faint);
+  }
+  /* Unsorted columns keep a dimmed hint, so the affordance is visible without
+     five arrows competing with the one that is actually in effect. */
+  table.data th[aria-sort="none"] .sort-indicator {
+    opacity: 0.4;
+  }
+  table.data th[aria-sort="ascending"] .sort-button,
+  table.data th[aria-sort="descending"] .sort-button,
+  table.data th[aria-sort="ascending"] .sort-indicator,
+  table.data th[aria-sort="descending"] .sort-indicator {
+    color: var(--text);
+  }
+
+  /* ---------- List totals ----------
+     A <caption> flipped to the bottom: no colspan to keep in step with the
+     columns, and screen readers announce it as part of the table. */
+
+  .table-summary {
+    caption-side: bottom;
+    padding: var(--space-2) var(--space-4);
+    border-top: 1px solid var(--border);
+    background: var(--bg-elev);
+    color: var(--text-faint);
+    font-size: var(--text-xs);
+    text-align: left;
+  }
+
+  /* ---------- Bulk selection ---------- */
+
+  table.data td.select-cell,
+  table.data th.select-cell {
+    width: 1%;
+    padding-right: 0;
+  }
+  .bulk-bar {
+    position: sticky;
+    bottom: var(--space-3);
+    z-index: 5;
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    margin-top: var(--space-3);
+    padding: var(--space-2) var(--space-3);
+    border: 1px solid var(--accent-border);
+    border-radius: var(--radius-lg);
+    background: var(--surface);
+    box-shadow: var(--shadow-sm);
+  }
+  .bulk-bar-count {
+    font-size: var(--text-sm);
+    font-weight: 600;
+  }
+  .bulk-list {
+    margin: var(--space-2) 0 0;
+    padding-left: var(--space-5);
+    max-height: 30vh;
+    overflow-y: auto;
+    list-style: disc;
+  }
+  /* Base UI reports the mixed state on the root; the tick glyph would read as
+     "all of them", so a partial selection draws a dash instead. */
+  [data-slot="checkbox"][data-indeterminate] {
+    border-color: var(--primary);
+    background: var(--accent-soft);
+    color: var(--primary);
+  }
+  [data-slot="checkbox"][data-indeterminate] [data-slot="checkbox-indicator"] > svg {
+    display: none;
+  }
+  [data-slot="checkbox"][data-indeterminate] [data-slot="checkbox-indicator"]::after {
+    content: "";
+    display: block;
+    width: 8px;
+    height: 2px;
+    border-radius: 1px;
+    background: currentColor;
+  }
+
+  /* ---------- Keyboard shortcut sheet ---------- */
+
+  .shortcut-group + .shortcut-group {
+    margin-top: var(--space-5);
+  }
+  .shortcut-list {
+    display: grid;
+    grid-template-columns: max-content 1fr;
+    gap: var(--space-2) var(--space-4);
+    margin: var(--space-3) 0 0;
+    align-items: center;
+  }
+  .shortcut-list dt {
+    display: flex;
+    gap: var(--space-1);
+  }
+  .shortcut-list dd {
+    margin: 0;
+    color: var(--text-muted);
+    font-size: var(--text-sm);
+  }
+
   /* A short status beside a modal's footer buttons: why the primary action is
      disabled, or that nothing changed. Sits left of the buttons on wide
      screens and above them when the footer stacks. */

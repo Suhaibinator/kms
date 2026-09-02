@@ -8,12 +8,15 @@ import { chooseSelectOption } from "./select-test-utils";
 const mocks = vi.hoisted(() => ({
   namespaces: [] as Namespace[],
   namespacesLoading: false,
+  router: { isReady: true, query: {} as Record<string, string>, replace: vi.fn() },
   toast: {
     error: vi.fn(),
     success: vi.fn(),
   },
 }));
 
+// The table's sort state lives in the URL, so the page reads and writes a router.
+vi.mock("next/router", () => ({ useRouter: () => mocks.router }));
 vi.mock("@/context/ToastContext", () => ({ useToast: () => mocks.toast }));
 vi.mock("@/lib/hooks", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/hooks")>();
@@ -68,6 +71,8 @@ function datalistValues(input: HTMLElement): string[] {
 beforeEach(() => {
   mocks.namespaces = [];
   mocks.namespacesLoading = false;
+  mocks.router.query = {};
+  mocks.router.replace.mockReset();
   mocks.toast.error.mockReset();
   mocks.toast.success.mockReset();
   vi.spyOn(api, "listPolicies").mockResolvedValue({ policies: [], next_page_token: "" });
@@ -85,6 +90,38 @@ afterEach(() => {
 });
 
 describe("policy list", () => {
+  it("reorders the loaded page from a column header and records the sort in the URL", async () => {
+    vi.mocked(api.listPolicies).mockResolvedValue({
+      policies: [policy("second"), policy("first")],
+      next_page_token: "",
+    });
+    const names = () =>
+      [...document.querySelectorAll("table.data tbody tr > td:first-child")].map(
+        (cell) => cell.textContent ?? "",
+      );
+
+    const { rerender } = render(<PoliciesPage />);
+    await screen.findByText("second");
+    expect(names()).toEqual(["second", "first"]);
+    expect(screen.getByTestId("table-summary")).toHaveTextContent("Showing 2 of 2 policies");
+
+    fireEvent.click(screen.getByRole("button", { name: "Name" }));
+    expect(mocks.router.replace).toHaveBeenLastCalledWith(
+      { pathname: "/policies", query: { sort: "name", dir: "asc" } },
+      undefined,
+      { shallow: true, scroll: false },
+    );
+
+    // The URL is the source of truth, so land the router on what the click asked for.
+    mocks.router.query = { sort: "name", dir: "asc" };
+    rerender(<PoliciesPage />);
+    expect(names()).toEqual(["first", "second"]);
+    expect(screen.getByRole("button", { name: "Name" }).closest("th")).toHaveAttribute(
+      "aria-sort",
+      "ascending",
+    );
+  });
+
   it("steps back to page 1 after deleting the last policy on page 2", async () => {
     let deleted = false;
     const listPolicies = vi.mocked(api.listPolicies).mockImplementation(async (_size, token) => {

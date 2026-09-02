@@ -395,6 +395,29 @@ describe("CommandPalette", () => {
     expect(screen.queryByRole("option", { name: /Search parameters/ })).toBeNull();
   });
 
+  it("opens the shortcut sheet instead of navigating for the Keyboard shortcuts action", async () => {
+    const onOpenChange = vi.fn();
+    const onShortcuts = vi.fn();
+    render(<CommandPalette open onOpenChange={onOpenChange} onShortcuts={onShortcuts} />);
+    const input = await screen.findByRole("combobox");
+    fireEvent.change(input, { target: { value: "keyboard shortcuts" } });
+
+    const option = await screen.findByRole("option", { name: /Keyboard shortcuts/ });
+    fireEvent.click(option);
+    expect(onShortcuts).toHaveBeenCalledTimes(1);
+    // It is a dialog the shell owns, not a route: nothing may be pushed.
+    expect(mocks.push).not.toHaveBeenCalled();
+    expect(onOpenChange).toHaveBeenCalledWith(false);
+  });
+
+  it("offers the shortcut sheet to a client identity too", async () => {
+    mocks.identity = client;
+    render(<CommandPalette open onOpenChange={vi.fn()} />);
+    const input = await screen.findByRole("combobox");
+    fireEvent.change(input, { target: { value: "shortcuts" } });
+    expect(await screen.findByRole("option", { name: /Keyboard shortcuts/ })).toBeVisible();
+  });
+
   it("shows keyboard hints in the footer", async () => {
     render(<CommandPalette open onOpenChange={vi.fn()} />);
     await screen.findByRole("combobox");

@@ -15,6 +15,7 @@ import {
 import { Skeleton as ShadcnSkeleton } from "@/components/ui/skeleton";
 import { Spinner as ShadcnSpinner } from "@/components/ui/spinner";
 import type { Crumb } from "@/lib/crumbs";
+import { countNoun } from "@/lib/format";
 import type { SecretVersionState } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
@@ -337,14 +338,53 @@ export function KeyValue({ rows }: { rows: Array<[string, ReactNode]> }) {
   );
 }
 
-/** "12 events" / "1 event" from a plural noun; good enough for the console's
- *  nouns (events, parameters, secrets, applications, identities, policies). */
-function countNoun(count: number, plural: string): string {
-  if (count === 1) {
-    if (plural.endsWith("ies")) return `${plural.slice(0, -3)}y`;
-    if (plural.endsWith("s")) return plural.slice(0, -1);
-  }
-  return plural;
+/**
+ * A table's own footer line: how much of the list is on screen, what is
+ * narrowing it, and anything the ordering cannot promise. Rendered as the
+ * table's `<caption>` (flipped to the bottom in CSS) so it needs no colspan and
+ * screen readers announce it with the table.
+ *
+ * Must be the first child of `<table>` — the HTML parser moves a caption there
+ * anyway, and React would warn about the misplaced node.
+ */
+export function TableSummary({
+  shown,
+  total,
+  filters = 0,
+  noun,
+  hint,
+}: {
+  /** Rows rendered right now. */
+  shown: number;
+  /** Rows the list holds in all, where that is knowable; defaults to `shown`. */
+  total?: number;
+  /** Active filters narrowing the list; omitted from the line when 0. */
+  filters?: number;
+  /** Plural noun for the rows ("parameters"). */
+  noun: string;
+  /** A caveat, e.g. that sorting only reaches the loaded page. */
+  hint?: ReactNode;
+}) {
+  const of = total ?? shown;
+  return (
+    <caption className="table-summary" data-testid="table-summary">
+      <span>
+        Showing {shown} of {of} {countNoun(of, noun)}
+      </span>
+      {filters > 0 ? (
+        <span>
+          {" · "}
+          {filters} {countNoun(filters, "filters")} active
+        </span>
+      ) : null}
+      {hint ? (
+        <span className="faint">
+          {" · "}
+          {hint}
+        </span>
+      ) : null}
+    </caption>
+  );
 }
 
 export function Pagination({
