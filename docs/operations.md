@@ -1263,6 +1263,10 @@ Type=simple
 User=parameter-store
 Group=parameter-store
 ExecStart=/usr/local/bin/parameter-store serve --config /etc/parameter-store/config.yaml
+ExecReload=/bin/kill -HUP $MAINPID
+# systemctl reload parameter-store re-reads the config file and the TLS
+# material — log level, server certificate, key and client CA — without
+# dropping the listeners. See docs/operations.md "Hot reload (SIGHUP)".
 Restart=on-failure
 RestartSec=5s
 # No controlling TTY under systemd — encryption.kek_file in config.yaml

@@ -1,0 +1,30 @@
+# /etc/systemd/system/parameter-store.service
+[Unit]
+Description=Parameter Store
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=parameter-store
+Group=parameter-store
+ExecStart=/usr/local/bin/parameter-store serve --config /etc/parameter-store/config.yaml
+ExecReload=/bin/kill -HUP $MAINPID
+# systemctl reload parameter-store re-reads the config file and the TLS
+# material — log level, server certificate, key and client CA — without
+# dropping the listeners. See docs/operations.md "Hot reload (SIGHUP)".
+Restart=on-failure
+RestartSec=5s
+# No controlling TTY under systemd — encryption.kek_file in config.yaml
+# (or KMS_KEK_FILE below) must be set, or KMS_MASTER_PASSPHRASE must be
+# supplied via EnvironmentFile. Otherwise the process fails fast at start
+# rather than hanging on a prompt it can never receive.
+# Environment=KMS_MASTER_PASSPHRASE=...   # only if not using a key file
+# EnvironmentFile=/etc/parameter-store/env  # prefer this over inline Environment=
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/parameter-store
+StateDirectory=parameter-store
+
+[Install]
+WantedBy=multi-user.target
