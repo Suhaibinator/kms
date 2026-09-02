@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -109,6 +110,11 @@ func TestReadTokenFileRejectsUnsafeFiles(t *testing.T) {
 
 	t.Run("group and other readable", func(t *testing.T) {
 		t.Parallel()
+		if runtime.GOOS == "windows" {
+			// A POSIX mode does not widen a Windows DACL; the fileutil package
+			// asserts the equivalent through DACL-specific tests there.
+			t.Skip("Windows security is asserted through DACL-specific tests")
+		}
 		path := writeTokenFile(t, "token", "tok\n", 0o644)
 		if got, err := readTokenFile(path); err == nil {
 			t.Fatalf("readTokenFile of a 0644 file = %q, want an error", got)
