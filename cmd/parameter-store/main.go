@@ -28,7 +28,7 @@ func (a *grpcAdapter) Stop()         { a.srv.Stop() }
 
 func main() {
 	cli.GRPCFactory = func(svc *core.Service, hub *watch.Hub, cfg cli.GRPCConfig) (cli.GRPCServer, error) {
-		srv, err := grpcserver.New(svc, hub, grpcserver.Config{Addr: cfg.Addr, TLS: cfg.TLS})
+		srv, err := grpcserver.New(svc, hub, grpcserver.Config{Addr: cfg.Addr, TLS: cfg.TLS, Metrics: cfg.Metrics})
 		if err != nil {
 			return nil, err
 		}

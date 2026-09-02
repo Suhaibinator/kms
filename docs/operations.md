@@ -69,6 +69,9 @@ frontend:
 audit:
   enabled: true
 
+metrics:
+  enabled: true
+
 watch:
   heartbeat_interval: 30s
   retain_duration: 24h
@@ -100,6 +103,7 @@ log:
 | `KMS_ADMIN_REQUIRE_CLIENT_CERT` | `--admin-require-client-cert` | `security.admin_require_client_cert` (parsed with `strconv.ParseBool`) — **default `true`**; admins must present a built-in-CA client certificate in addition to their bearer token; relaxed with a warning while `tls_enabled` is false (see [Admin credentials and browser setup](#admin-credentials-and-browser-setup)) |
 | `KMS_FRONTEND_ENABLED` | `--frontend-enabled` | `frontend.enabled` |
 | `KMS_AUDIT_ENABLED` | `--audit-enabled` | `audit.enabled` |
+| `KMS_METRICS_ENABLED` | `--metrics-enabled` | `metrics.enabled` (parsed with `strconv.ParseBool`) — **default `true`**; serve Prometheus metrics on `/metrics` |
 | `KMS_WATCH_HEARTBEAT_INTERVAL` | `--watch-heartbeat-interval` | `watch.heartbeat_interval` (duration) |
 | `KMS_WATCH_RETAIN_DURATION` | `--watch-retain-duration` | `watch.retain_duration` (duration) |
 | `KMS_WATCH_RETAIN_ROWS` | `--watch-retain-rows` | `watch.retain_rows` (integer) |
@@ -457,6 +461,7 @@ codes every command shares, and the `--token-file` credential form.
 | `admin-cert revoke` | `NAME` (positional), `--serial SERIAL` (required), `--sqlite-path`, `--yes` | Revokes one of that admin's certificates. Needs no master key. The certificate stops authenticating on the next request; a running server sees the change immediately. **Confirms by retyping `NAME`.** |
 | `admin-cert list` | `NAME` (positional), `--sqlite-path` | Prints the admin's certificates as `SERIAL FINGERPRINT STATE EXPIRES ISSUED`, where state is `valid`, `revoked`, or `expired`. Read-only and unaudited. |
 | `rotate-kek` | `--sqlite-path`, `--kek-file` (current key, omit to use the current passphrase), `--new-key-file` (new key, omit to enter a new passphrase), `--yes` | **Confirms by retyping the absolute database path**, before the database is opened or any passphrase is prompted for. Unseals with the current key, generates or loads the new key, and calls the same `Service.RotateKEK` used internally — rewrapping every **non-destroyed** secret version's DEK and every built-in CA key under the new KEK in one transaction. Prints both counts (`N secret versions and M CA keys rewrapped`). Run with `serve` stopped; a live process retains the old keyring. |
+| `healthcheck` | `--ready`, `--timeout` (default `3s`), plus `--http-addr` and `--tls-enabled` | Probes this host's own HTTP listener at `127.0.0.1:<server.http_addr port>/healthz` (`/readyz` with `--ready`) and exits `0` on HTTP 200, `1` otherwise — a connection error is one line on stderr. It resolves the address and the TLS posture through the same flag > env > config file > default order `serve` uses, so a container or unit that already supplies them needs no arguments. The server certificate is **not** verified: this is a loopback liveness check for a container `HEALTHCHECK` or a process supervisor (the image ships one), never a way to check a remote server. Needs no database, master key, or credentials. |
 | `import` | `--from` (JSON file or SuhaibParameterStore SQLite export), `--namespace env/app` **or** `--env`/`--app`, `--sqlite-path` (default `./kms.db`), `--kek-file`, `--dry-run`, `--report FILE` | Maps flat source keys to **relative slug keys** (`slug(key)`, e.g. `TWILIO_SID` → `twilio-sid`) in the destination namespace, **auto-creates the namespace** if it does not exist, writes each as a new secret via a ref-based `PutSecret` with a freshly minted per-secret access token, and emits a mapping report (old key → `/env/app/key` display path → token, written once). Distinct source keys that slug to the same key are reported as a collision rather than silently overwriting. `--dry-run` reports the mapping without writing or minting tokens. Pass either `--namespace` or `--env`/`--app`, not both. See [`migration.md`](migration.md) for the full gradethis walkthrough. |
 
 `import --from` accepts either a SuhaibParameterStore SQLite database with a
@@ -1818,6 +1823,74 @@ rotation is audited as `key.rotate`.
   access, write, admin action, and authorization denial — see
   [`security.md`](security.md#audit-guarantees) for exactly what is and
   isn't recorded there.
+- `GET /metrics` serves a Prometheus exposition of the whole picture above as
+  numbers — see [Prometheus metrics](#prometheus-metrics) below.
+
+### Prometheus metrics
+
+`GET /metrics` on the **HTTP listener** serves a Prometheus exposition. It is
+**unauthenticated**, exactly like `/healthz`, `/readyz`, and `/api/v1/health` —
+a scrape carries no credential, so treat it as the same exposure class as those
+and keep it off the public internet: give the reverse proxy an explicit path
+rule (allow `/metrics` only from the monitoring network), or firewall the HTTP
+listener and scrape it over the private interface. Setting `metrics.enabled:
+false` (`KMS_METRICS_ENABLED=false`, `--metrics-enabled=false`) removes the
+endpoint entirely — the path stops being special and answers whatever the
+frontend catch-all does, a `404` with the frontend off.
+
+Nothing in the exposition identifies **who touched what**. Every label is a
+closed set fixed in code (`internal/metrics/labels.go`): a namespace, an
+application, a key name, an identity, a client address, and a request ID can
+never appear, and a value arriving from a call site that is not in its set
+collapses to `other`/`unknown`/`unmatched` rather than minting a series. That
+is what makes an unauthenticated endpoint acceptable: a scrape reveals *how
+much* is happening, never *what*. The route label is the matched mux pattern
+(`GET /api/v1/secrets`), never the request path; every embedded frontend asset
+is a single `static` bucket, and anything unrouted is `unmatched`.
+
+A scrape **never touches the database**. The gauges that need a query are
+refreshed by a background sampler every 60 s, plus once synchronously at
+startup so the first scrape after a restart already carries real numbers. A
+failed sampler run leaves the previous values in place and increments
+`kms_ops_sample_failures_total` — a transient database error must not read as
+"the change log emptied" — so alert on the age of
+`kms_ops_last_sample_timestamp_seconds` rather than trusting a flat gauge. The
+watch gauges are the exception: they read the hub directly at scrape time.
+
+The series, grouped by what they answer:
+
+| Concern | Series |
+|---|---|
+| Build and posture | `kms_build_info{version,go_version}`, `kms_start_time_seconds`, `kms_ready`, `kms_tls_enabled`, `kms_admin_client_cert_required`, `kms_reloads_total{result}`, `kms_last_reload_timestamp_seconds` |
+| Authentication and authorization | `kms_auth_failures_total{reason}`, `kms_authz_denials_total{operation}`, `kms_authz_method_denials_total{method}`, `kms_ratelimit_refusals_total{limiter}` |
+| Audit and secrets | `kms_audit_events_total{event_type,decision}`, `kms_audit_write_failures_total`, `kms_audit_pruned_total`, `kms_secret_decrypt_failures_total`, `kms_release_outcomes_total{outcome}` |
+| Transport | `kms_grpc_requests_total{service,method,code}`, `kms_grpc_request_duration_seconds{service,method}`, `kms_grpc_streams_active{service,method}`, `kms_http_requests_total{route,method,status}`, `kms_http_request_duration_seconds{route,method}`, `kms_http_sse_streams_active` |
+| Watch fan-out (scrape-time) | `kms_watch_subscribers`, `kms_watch_release_subscribers`, `kms_watch_last_dispatched_revision`, `kms_watch_subscriber_lag_revisions_max`, `kms_watch_subscribers_dropped_total{reason}` |
+| Keys and certificates (sampled) | `kms_kek_generations`, `kms_kek_active_created_timestamp_seconds`, `kms_admin_certs_lacking`, `kms_admin_certs_expiring_soon`, `kms_identity_certs_expiring_soon`, `kms_secret_versions_expiring_soon` |
+| Storage (sampled) | `kms_changelog_rows`, `kms_changelog_last_revision`, `kms_changelog_oldest_revision`, `kms_db_file_bytes{file}` |
+| The sampler itself | `kms_ops_last_sample_timestamp_seconds`, `kms_ops_sample_failures_total` |
+
+The standard Go runtime and process collectors (`go_*`, `process_*`) share the
+registry, so one scrape covers goroutines, heap, file descriptors, and CPU too.
+
+Ready-to-load alerting rules are in
+[`deploy/prometheus/alerts.yml`](../deploy/prometheus/alerts.yml). The
+expressions, in short:
+
+| Alert | Expression |
+|---|---|
+| Not being scraped | `up == 0` |
+| Serving but not ready | `kms_ready == 0` for 2m |
+| Credential rejections | `sum(rate(kms_auth_failures_total[5m])) > 1` |
+| Admin refused for a missing certificate | `increase(kms_auth_failures_total{reason="admin_client_cert_required"}[10m]) > 0` |
+| Admins with no usable certificate | `kms_admin_certs_lacking > 0` |
+| Admin certificate expiring | `kms_admin_certs_expiring_soon > 0` |
+| Master key older than a year | `time() - kms_kek_active_created_timestamp_seconds > 365 * 86400` |
+| Audit rows not persisted | `increase(kms_audit_write_failures_total[5m]) > 0` |
+| A watch subscriber is behind | `kms_watch_subscriber_lag_revisions_max > 0` for 10m |
+| The hub dropped a subscriber | `increase(kms_watch_subscribers_dropped_total[15m]) > 0` |
+| The sampler is stale | `time() - kms_ops_last_sample_timestamp_seconds > 300` |
+
 
 ## Change-log retention
 

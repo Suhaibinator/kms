@@ -21,6 +21,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/Suhaibinator/kms/internal/core"
+	"github.com/Suhaibinator/kms/internal/metrics"
 	"github.com/Suhaibinator/kms/internal/ratelimit"
 )
 
@@ -57,6 +58,11 @@ type Config struct {
 	// being on), used only to tell an unauthenticated caller — the login page —
 	// why its token alone will be refused. Enforcement itself lives in core.
 	AdminClientCertRequired bool
+	// Metrics is the Prometheus exporter. When set, the server serves its
+	// exposition at /metrics — unauthenticated, like the probes — and records
+	// one observation per request, per SSE stream, and per rate-limit refusal.
+	// nil disables all of that and leaves /metrics to the normal dispatch.
+	Metrics *metrics.Metrics
 }
 
 // maxBodyBytes bounds request bodies. A 1 MiB secret value base64-encodes to
@@ -108,10 +114,10 @@ func newServer(svc *core.Service, cfg Config) *server {
 }
 
 // handler is the full middleware chain around the dispatcher.
-func (s *server) handler() http.Handler { return s.logging(http.HandlerFunc(s.route)) }
+func (s *server) handler() http.Handler { return s.observe(http.HandlerFunc(s.route)) }
 
-// route is the top-level dispatcher: health/readiness probes, the JSON API, or
-// the static frontend.
+// route is the top-level dispatcher: health/readiness probes, the metrics
+// exposition, the JSON API, or the static frontend.
 func (s *server) route(w http.ResponseWriter, r *http.Request) {
 	switch r.URL.Path {
 	case "/healthz":
@@ -120,6 +126,15 @@ func (s *server) route(w http.ResponseWriter, r *http.Request) {
 	case "/readyz":
 		s.handleReadiness(w, r)
 		return
+	case "/metrics":
+		// Unauthenticated, exactly like the two probes above: a scrape carries
+		// no credential, and the exposition is a closed set of counts (see
+		// internal/metrics). With the exporter off the path is not special at
+		// all and falls through to the API/frontend dispatch below.
+		if s.cfg.Metrics != nil {
+			s.cfg.Metrics.Handler().ServeHTTP(w, r)
+			return
+		}
 	}
 	if strings.HasPrefix(r.URL.Path, "/api/") {
 		s.serveAPI(w, r)
@@ -154,6 +169,7 @@ func (s *server) serveAPI(w http.ResponseWriter, r *http.Request) {
 		return
 	case "/api/v1/auth/login":
 		if !s.loginLimiter.Allow(ip) {
+			s.rateLimited(metrics.LimiterHTTPLogin)
 			writeErrorCode(w, http.StatusTooManyRequests, "rate_limited", "too many requests; slow down")
 			return
 		}
@@ -170,6 +186,7 @@ func (s *server) serveAPI(w http.ResponseWriter, r *http.Request) {
 	// successful authentication refunds the reservation; a failed one keeps it.
 	// This makes throttling effective even while the bucket is exhausted.
 	if !s.loginLimiter.Allow(ip) {
+		s.rateLimited(metrics.LimiterHTTPAuth)
 		writeErrorCode(w, http.StatusTooManyRequests, "rate_limited", "too many requests; slow down")
 		return
 	}
@@ -245,38 +262,86 @@ func requestIDFrom(ctx context.Context) string {
 
 // --- middleware ------------------------------------------------------------
 
-// logging assigns a request id and records method, path, status, and duration
-// for API and page requests. Static assets are skipped to keep logs readable.
-func (s *server) logging(next http.Handler) http.Handler {
+// observe assigns a request id, records every request in the metrics exporter,
+// and logs method, path, status, and duration for API and page requests. The
+// two are separate concerns: static assets, probes, and scrapes are skipped by
+// the log to keep it readable, but they are still counted — a probe that
+// starts failing is exactly what a dashboard needs to show.
+func (s *server) observe(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requestID := newRequestID()
 		ctx := context.WithValue(r.Context(), requestIDKey, requestID)
 		r = r.WithContext(ctx)
 		w.Header().Set("X-Request-ID", requestID)
 
-		if s.skipLog(r) {
-			next.ServeHTTP(w, r)
-			return
-		}
 		start := time.Now()
 		rec := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
 		next.ServeHTTP(rec, r)
+		elapsed := time.Since(start)
+
+		if m := s.cfg.Metrics; m != nil {
+			m.ObserveHTTP(s.routeLabel(r), r.Method, rec.status, elapsed)
+		}
+		if s.skipLog(r) {
+			return
+		}
 		// The query string is intentionally omitted: it may carry resource
 		// paths and must never grow to include anything sensitive in a log.
 		s.log.Info("http request",
 			zap.String("method", r.Method),
 			zap.String("path", r.URL.Path),
 			zap.Int("status", rec.status),
-			zap.Int64("duration_ms", time.Since(start).Milliseconds()),
+			zap.Int64("duration_ms", elapsed.Milliseconds()),
 			zap.String("request_id", requestID),
 		)
 	})
 }
 
-// skipLog suppresses logging for static assets and health probes.
+// exemptRoutes are the paths route and serveAPI dispatch by name rather than
+// through the API mux, so the mux cannot name them for the route label.
+var exemptRoutes = map[string]bool{
+	"/healthz":       true,
+	"/readyz":        true,
+	"/metrics":       true,
+	"/api/v1/health": true,
+	"/api/v1/ca":     true,
+}
+
+// routeLabel resolves a request to its metrics route label: the path itself
+// for the endpoints above, the mux's matched pattern for the JSON API, and one
+// of the two catch-alls otherwise — RouteStatic for whatever the frontend
+// serves (asset filenames are a build artifact, not an API surface) and
+// RouteUnmatched for the rest, which includes a 404 and a 405, neither of
+// which the mux attributes to a pattern. Everything goes through
+// metrics.RouteLabel, which collapses an unknown value to unmatched, so a
+// request path carrying a namespace or a key name can never become a series.
+func (s *server) routeLabel(r *http.Request) string {
+	p := r.URL.Path
+	if exemptRoutes[p] {
+		return metrics.RouteLabel(p)
+	}
+	if _, pattern := s.apiMux.Handler(r); pattern != "" {
+		return metrics.RouteLabel(pattern)
+	}
+	if s.static != nil && !strings.HasPrefix(p, "/api/") {
+		return metrics.RouteStatic
+	}
+	return metrics.RouteUnmatched
+}
+
+// rateLimited records a refusal by the named limiter when an exporter is
+// attached. Core reports its own limiters directly; this covers the two the
+// transport owns.
+func (s *server) rateLimited(limiter string) {
+	if m := s.cfg.Metrics; m != nil {
+		m.RateLimited(limiter)
+	}
+}
+
+// skipLog suppresses logging for static assets, health probes, and scrapes.
 func (s *server) skipLog(r *http.Request) bool {
 	p := r.URL.Path
-	if p == "/healthz" || p == "/readyz" {
+	if p == "/healthz" || p == "/readyz" || p == "/metrics" {
 		return true
 	}
 	if strings.HasPrefix(p, "/_next/") {

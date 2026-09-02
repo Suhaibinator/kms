@@ -97,6 +97,7 @@ func (s *Service) VerifyReleaseDefaults(ctx context.Context, pr Principal, in do
 	auditRef := domain.Ref{NS: in.Namespace, Key: in.ReleaseName}
 	counts := verifyAuditCounts{entryCount: len(in.Entries), schemaMatches: false}
 	if !limits.requests.Allow(identity) {
+		s.m().RateLimited(LimiterVerifyDefaultsRequests)
 		counts.limited = true
 		s.auditVerifyDefaults(ctx, pr, auditRef, namespace.ID, 0, "deny", counts)
 		return domain.VerifyReleaseDefaultsResult{}, domain.Errorf(domain.ErrResourceExhausted, "verify-defaults request budget exhausted for identity")
@@ -215,6 +216,7 @@ func (s *Service) VerifyReleaseDefaults(ctx context.Context, pr Principal, in do
 		// can neither retry immediately nor probe around the threshold.
 		limits.mismatches.Drain(identity)
 		limits.requests.Drain(identity)
+		s.m().RateLimited(LimiterVerifyDefaultsMismatch)
 		counts.limited = true
 		s.auditVerifyDefaults(ctx, pr, auditRef, namespace.ID, release.Version, "deny", counts)
 		return domain.VerifyReleaseDefaultsResult{}, domain.Errorf(domain.ErrResourceExhausted, "verify-defaults mismatch budget exhausted for identity")

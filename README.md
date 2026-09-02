@@ -90,6 +90,16 @@ management.
 - **KEK rotation** that rewraps every non-destroyed secret version's DEK —
   and the CA's private key — under a new master key without decrypting and
   re-encrypting values, in one transaction.
+- **Prometheus metrics on `/metrics`**, on by default: authentication,
+  authorization, rate-limit, audit, and release counters plus gRPC/HTTP
+  latency, watch fan-out lag, key age, and certificate-expiry gauges. Every
+  label is a closed set fixed in code — never a namespace, identity, key,
+  client, IP, or request ID — so the unauthenticated endpoint reveals how much
+  is happening, never what. A scrape never queries the database. Ships with
+  alerting rules ([`deploy/prometheus/alerts.yml`](deploy/prometheus/alerts.yml))
+  and a `parameter-store healthcheck` command the container image wires to
+  Docker's `HEALTHCHECK`. See
+  [`docs/operations.md`](docs/operations.md#prometheus-metrics).
 - **Scriptable CLI**: every command accepts `--output json` (or
   `KMS_OUTPUT=json`) and then puts exactly one document on stdout, with status
   lines, warnings, and prompts on stderr. Failures carry classified exit codes

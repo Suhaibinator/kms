@@ -16,6 +16,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -374,4 +375,109 @@ func logContains(logs, msg string) bool {
 		return false
 	}
 	return bytes.Contains([]byte(logs), bytes.Trim(escaped, `"`))
+}
+
+// get fetches an unauthenticated endpoint on the running server and returns
+// the status and body — the shape a Prometheus scrape and a container health
+// check both take.
+func (s *servedKMS) get(t *testing.T, path string) (int, string) {
+	t.Helper()
+	resp, err := s.client(t, false).Get(s.baseURL + path)
+	if err != nil {
+		t.Fatalf("GET %s: %v", path, err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	raw, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read %s body: %v", path, err)
+	}
+	return resp.StatusCode, string(raw)
+}
+
+// TestServeExposesMetrics is the end-to-end statement of the exporter's
+// wiring: the exposition is served on the HTTP listener without a credential,
+// and it carries the posture serve actually came up with rather than the zero
+// every gauge starts at.
+func TestServeExposesMetrics(t *testing.T) {
+	s := startServe(t, true)
+	s.health(t) // wait for the listener
+
+	code, body := s.get(t, "/metrics")
+	if code != http.StatusOK {
+		t.Fatalf("GET /metrics = %d, want 200", code)
+	}
+	for _, want := range []string{
+		"kms_build_info{",
+		"kms_ready 1",
+		"kms_tls_enabled 1",
+		"kms_admin_client_cert_required 1",
+		"kms_watch_subscribers 0",
+		"kms_kek_generations 1",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("exposition missing %q", want)
+		}
+	}
+	// The synchronous startup sample means the database-backed gauges carry
+	// real numbers before the first scrape, not zero until the first tick.
+	if strings.Contains(body, "kms_ops_last_sample_timestamp_seconds 0\n") {
+		t.Error("the startup sample did not run before the listener opened")
+	}
+	if strings.Contains(body, `kms_db_file_bytes{file="main"} 0`) {
+		t.Error("the database file size was never sampled")
+	}
+
+	if exit := s.stopAndWait(t); exit != 0 {
+		t.Fatalf("serve exit = %d, want 0; log:\n%s", exit, s.logs.String())
+	}
+}
+
+// TestServeMetricsDisabled: metrics.enabled=false attaches no exporter, so
+// /metrics is not a route at all and falls through to the normal dispatch —
+// here a 404, with the frontend off so the catch-all is not the SPA entry
+// document (which answers 503 in a test binary that embeds no built assets).
+func TestServeMetricsDisabled(t *testing.T) {
+	s := startServe(t, false, "--metrics-enabled=false", "--frontend-enabled=false")
+	s.health(t)
+
+	code, body := s.get(t, "/metrics")
+	if code != http.StatusNotFound {
+		t.Fatalf("GET /metrics with the exporter off = %d, want 404; body=%s", code, body)
+	}
+	if strings.Contains(body, "kms_build_info") {
+		t.Error("the exposition is served while metrics.enabled is false")
+	}
+}
+
+// TestHealthcheckCommand is the container HEALTHCHECK path. The command
+// resolves the listen address and the TLS posture the same way serve does, so
+// the flags that started the server also describe how to reach it.
+func TestHealthcheckCommand(t *testing.T) {
+	s := startServe(t, true)
+	s.health(t)
+
+	args := []string{"healthcheck", "--http-addr", strings.TrimPrefix(s.baseURL, "https://"), "--tls-enabled"}
+	c := newTestCLI()
+	if code := c.Run(args); code != 0 {
+		t.Fatalf("healthcheck = %d, want 0; stderr=%s", code, c.stderr())
+	}
+	ready := newTestCLI()
+	if code := ready.Run(append(append([]string{}, args...), "--ready")); code != 0 {
+		t.Fatalf("healthcheck --ready = %d, want 0; stderr=%s", code, ready.stderr())
+	}
+
+	// A closed port is a failure, with the reason on one line.
+	closed := newTestCLI()
+	closedCode := closed.Run([]string{"healthcheck", "--http-addr", freeLoopbackAddr(t),
+		"--tls-enabled=false", "--timeout", "2s"})
+	if closedCode != 1 {
+		t.Fatalf("healthcheck against a closed port = %d, want 1; stderr=%s", closedCode, closed.stderr())
+	}
+	if !strings.HasPrefix(closed.stderr(), "error: http://127.0.0.1:") {
+		t.Errorf("closed-port message = %q", closed.stderr())
+	}
+
+	if exit := s.stopAndWait(t); exit != 0 {
+		t.Fatalf("serve exit = %d, want 0; log:\n%s", exit, s.logs.String())
+	}
 }

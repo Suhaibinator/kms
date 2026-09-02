@@ -29,6 +29,7 @@ type Config struct {
 	Encryption EncryptionConfig `yaml:"encryption"`
 	Frontend   FrontendConfig   `yaml:"frontend"`
 	Audit      AuditConfig      `yaml:"audit"`
+	Metrics    MetricsConfig    `yaml:"metrics"`
 	Watch      WatchConfig      `yaml:"watch"`
 	Log        LogConfig        `yaml:"log"`
 }
@@ -97,6 +98,16 @@ type AuditConfig struct {
 	Enabled bool `yaml:"enabled"`
 }
 
+// MetricsConfig toggles the Prometheus exporter and its /metrics endpoint.
+// Default true: the series carry closed-set labels only — counts, latencies,
+// and sizes, never a namespace, identity, key, client, IP, or request ID — so
+// exposing them costs nothing an operator has to reason about. Turn it off
+// where the endpoint would be reachable by anyone who should not learn the
+// server's load or posture.
+type MetricsConfig struct {
+	Enabled bool `yaml:"enabled"`
+}
+
 // WatchConfig holds watch/hot-reload tuning.
 type WatchConfig struct {
 	HeartbeatInterval               Duration `yaml:"heartbeat_interval"`
@@ -133,6 +144,7 @@ func Default() Config {
 		Encryption: EncryptionConfig{},
 		Frontend:   FrontendConfig{Enabled: true},
 		Audit:      AuditConfig{Enabled: true},
+		Metrics:    MetricsConfig{Enabled: true},
 		Watch: WatchConfig{
 			HeartbeatInterval:               Duration(30 * time.Second),
 			RetainDuration:                  Duration(24 * time.Hour),
@@ -276,12 +288,12 @@ func (c Config) Redacted() string {
 		kek = "set"
 	}
 	return fmt.Sprintf(
-		"grpc_addr=%s http_addr=%s sqlite_path=%s tls=%t mtls=%t admin_require_client_cert=%t kek_file=%s frontend=%t audit=%t "+
+		"grpc_addr=%s http_addr=%s sqlite_path=%s tls=%t mtls=%t admin_require_client_cert=%t kek_file=%s frontend=%t audit=%t metrics=%t "+
 			"heartbeat=%s retain_duration=%s retain_rows=%d release_retain_duration=%s release_retain_versions=%d release_subscriber_retain_duration=%s "+
 			"verify_defaults_requests_per_hour=%d verify_defaults_burst=%d verify_defaults_mismatch_budget_per_hour=%d log_level=%s",
 		c.Server.GRPCAddr, c.Server.HTTPAddr, c.Storage.SQLitePath,
 		c.Security.TLSEnabled, c.Security.MTLSEnabled, c.Security.AdminRequireClientCert, kek,
-		c.Frontend.Enabled, c.Audit.Enabled,
+		c.Frontend.Enabled, c.Audit.Enabled, c.Metrics.Enabled,
 		time.Duration(c.Watch.HeartbeatInterval), time.Duration(c.Watch.RetainDuration),
 		c.Watch.RetainRows, time.Duration(c.Watch.ReleaseRetainDuration), c.Watch.ReleaseRetainVersions,
 		time.Duration(c.Watch.ReleaseSubscriberRetainDuration),

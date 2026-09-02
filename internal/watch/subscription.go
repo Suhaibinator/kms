@@ -103,14 +103,21 @@ func (s *Subscription) Ack(revision uint64) {
 
 // Close tears the subscription down and removes it from the registry. Safe to
 // call multiple times and from multiple goroutines.
-func (s *Subscription) Close() {
+func (s *Subscription) Close() { s.close() }
+
+// close is Close with the teardown reported: true only for the call that
+// actually performed it. The hub uses that to attribute a drop to the reason it
+// tore the subscriber down, rather than to a client that had already hung up.
+func (s *Subscription) close() (closed bool) {
 	s.closeOnce.Do(func() {
 		s.mu.Lock()
 		s.dropped = true
 		s.mu.Unlock()
 		close(s.done)
 		s.hub.remove(s.id)
+		closed = true
 	})
+	return closed
 }
 
 // offer is called by the dispatch loop for every entry in one of this
@@ -197,6 +204,14 @@ func (s *Subscription) lastHeartbeatTime() time.Time {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.lastHeartbeat
+}
+
+// lastAckedRevision returns the highest revision the client has acked. Hub.Stats
+// uses it to measure how far the subscriber trails the dispatch cursor.
+func (s *Subscription) lastAckedRevision() uint64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.lastAcked
 }
 
 // matches reports whether the entry's namespace is one this subscriber watches.

@@ -19,8 +19,8 @@ func TestDefaults(t *testing.T) {
 	if cfg.Storage.SQLitePath != "./kms.db" {
 		t.Fatalf("default sqlite = %q", cfg.Storage.SQLitePath)
 	}
-	if !cfg.Frontend.Enabled || !cfg.Audit.Enabled {
-		t.Fatalf("frontend/audit should default enabled")
+	if !cfg.Frontend.Enabled || !cfg.Audit.Enabled || !cfg.Metrics.Enabled {
+		t.Fatalf("frontend/audit/metrics should default enabled")
 	}
 	if time.Duration(cfg.Watch.HeartbeatInterval) != 30*time.Second {
 		t.Fatalf("heartbeat default = %v", time.Duration(cfg.Watch.HeartbeatInterval))
@@ -227,6 +227,41 @@ func TestRedactedNoSecretsDumped(t *testing.T) {
 	}
 	if !strings.Contains(red, "grpc_addr=") {
 		t.Fatalf("Redacted missing addresses: %q", red)
+	}
+	// The startup line is how an operator confirms which optional surfaces are
+	// live, so every feature toggle has to appear in it.
+	for _, want := range []string{"frontend=true", "audit=true", "metrics=true"} {
+		if !strings.Contains(red, want) {
+			t.Errorf("Redacted missing %s: %q", want, red)
+		}
+	}
+}
+
+// TestMetricsEnabledDefaultsOnAndIsDisableable pins the toggle an operator who
+// does not want /metrics reachable reaches for: on by default, off from the
+// config file.
+func TestMetricsEnabledDefaultsOnAndIsDisableable(t *testing.T) {
+	if !Default().Metrics.Enabled {
+		t.Fatal("metrics.enabled should default to true")
+	}
+
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, []byte("metrics:\n  enabled: false\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Metrics.Enabled {
+		t.Error("metrics.enabled should be false after the file overlay")
+	}
+	// The file names only metrics, so every other toggle keeps its default.
+	if !cfg.Audit.Enabled || !cfg.Frontend.Enabled {
+		t.Errorf("unrelated toggles changed: %+v", cfg)
+	}
+	if !strings.Contains(cfg.Redacted(), "metrics=false") {
+		t.Errorf("Redacted should report the disabled exporter: %q", cfg.Redacted())
 	}
 }
 

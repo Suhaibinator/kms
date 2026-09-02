@@ -463,6 +463,7 @@ func (s *Service) checkVersionReadable(ver storage.SecretVersionRecord) error {
 func (s *Service) decryptVersion(keyring *crypto.Keyring, rec storage.SecretRecord, ver storage.SecretVersionRecord, clientToken string) ([]byte, error) {
 	kek, err := keyring.Get(ver.KEKID)
 	if err != nil {
+		s.m().DecryptFailed()
 		return nil, fmt.Errorf("secret %s v%d: %w", rec.Ref, ver.Version, domain.ErrDecryptFailed)
 	}
 	// Recompute the AAD from the row's authoritative identity (env/app/key +
@@ -484,6 +485,7 @@ func (s *Service) decryptVersion(keyring *crypto.Keyring, rec storage.SecretReco
 	if err != nil {
 		// Deliberately generic: token, ciphertext, and key failures are
 		// indistinguishable to the caller.
+		s.m().DecryptFailed()
 		return nil, domain.ErrDecryptFailed
 	}
 	return pt, nil

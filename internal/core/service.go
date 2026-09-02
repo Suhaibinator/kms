@@ -132,6 +132,9 @@ type Service struct {
 	// verifyLimits holds the per-identity request and mismatch budgets for
 	// VerifyReleaseDefaults (see release_verify.go). Process-local.
 	verifyLimits atomic.Pointer[verifyLimiters]
+	// metrics is the operational-signal exporter (see metrics.go); no-op
+	// until SetMetrics attaches one.
+	metrics atomic.Pointer[metricsHolder]
 }
 
 // New constructs a Service. The keyring is attached later via SetKeyring
@@ -148,6 +151,7 @@ func New(store storage.Store, logger *zap.Logger, version string) *Service {
 	s.verifyLimits.Store(newVerifyLimiters(DefaultVerifyDefaultsLimits()))
 	var h Hub = noopHub{}
 	s.hub.Store(&h)
+	s.initMetrics()
 	return s
 }
 
@@ -340,6 +344,7 @@ func (s *Service) authenticateToken(ctx context.Context, token, remoteAddr, user
 // auditAuthFailure records a presented credential that did not verify. The
 // row names the method only, never the credential or a guessed identity.
 func (s *Service) auditAuthFailure(ctx context.Context, method domain.AuthMethod, remoteAddr, userAgent string) {
+	s.m().AuthFailure(authFailureReason(method))
 	s.audit(ctx, domain.AuditEvent{
 		EventType: "auth.failure",
 		ActorType: "unknown",
@@ -434,6 +439,7 @@ func (s *Service) namespaceMethodCheck(ctx context.Context, pr Principal, ns dom
 	for i, m := range n.AllowedAuthMethods {
 		allowed[i] = string(m)
 	}
+	s.m().AuthzMethodDenied(authFailureReason(pr.Method))
 	s.auditRefWithNamespaceID(ctx, pr, "authz.method_denied", resourceType, domain.Ref{NS: ns}, n.ID, 0, "deny",
 		map[string]string{"method": string(pr.Method), "required": strings.Join(allowed, ",")})
 	return domain.Namespace{}, domain.Errorf(domain.ErrPermissionDenied,
@@ -486,6 +492,7 @@ func (s *Service) authorize(ctx context.Context, pr Principal, operation, resour
 		return ctx, domain.Namespace{}, domain.Errorf(domain.ErrPermissionDenied, "authorization unavailable")
 	}
 	if !policy.Authorize(policies, pr.home(), operation, ref.NS) {
+		s.m().AuthzDenied(operation)
 		s.auditRefWithNamespaceID(bound, pr, "authz.denial", resourceType, ref, n.ID, 0, "deny", map[string]string{"operation": operation})
 		return ctx, domain.Namespace{}, domain.Errorf(domain.ErrPermissionDenied, "access denied")
 	}
@@ -519,6 +526,7 @@ func (s *Service) listFilter(ctx context.Context, pr Principal, resourceType, li
 	// Use the full authorization decision here: explicit denies must override
 	// both policy allows and the implicit home-namespace grant.
 	if !policy.Authorize(policies, home, listOp, ns) {
+		s.m().AuthzDenied(listOp)
 		s.auditRefWithNamespaceID(bound, pr, "authz.denial", resourceType, domain.Ref{NS: ns}, n.ID, 0, "deny",
 			map[string]string{"operation": listOp})
 		return ctx, domain.Namespace{}, nil, domain.Errorf(domain.ErrPermissionDenied, "access denied")
@@ -722,7 +730,12 @@ func (s *Service) appendAudit(ctx context.Context, ev domain.AuditEvent) error {
 	// mid-request must not suppress the record of what it did.
 	actx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 	defer cancel()
-	return s.store.AppendAudit(actx, ev)
+	if err := s.store.AppendAudit(actx, ev); err != nil {
+		s.m().AuditWriteFailed()
+		return err
+	}
+	s.m().AuditEvent(ev.EventType, ev.Decision)
+	return nil
 }
 
 // auditRef records a namespaced operation, denormalizing the ref's env/app/key.

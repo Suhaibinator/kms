@@ -84,6 +84,7 @@ func (s *Service) ResolvePrincipal(ctx context.Context, in CredentialInput) (Pri
 	switch {
 	case certOK && tokenOK:
 		if certID.Name != tokenID.Name {
+			s.m().AuthFailure(AuthFailureCredentialMismatch)
 			s.audit(ctx, domain.AuditEvent{
 				EventType: "auth.failure",
 				ActorType: "unknown",
@@ -118,6 +119,7 @@ func (s *Service) ResolvePrincipal(ctx context.Context, in CredentialInput) (Pri
 	default:
 		auditDropped()
 		if !certPresented && !tokenPresented {
+			s.m().AuthFailure(AuthFailureMissing)
 			return Principal{}, domain.Errorf(domain.ErrUnauthenticated, "missing credentials")
 		}
 		return Principal{}, domain.Errorf(domain.ErrUnauthenticated, "invalid credentials")
@@ -165,6 +167,7 @@ func (s *Service) admitAdmin(ctx context.Context, pr Principal) error {
 	if s.adminAdmitted(pr) {
 		return nil
 	}
+	s.m().AuthFailure(AuthFailureAdminClientCertRequired)
 	s.audit(ctx, domain.AuditEvent{
 		EventType:     "auth.failure",
 		ActorIdentity: pr.Identity.Name,

@@ -185,6 +185,7 @@ func TestFlagNameDerivation(t *testing.T) {
 		{"KMS_GRPC_ADDR", "grpc-addr"},
 		{"KMS_KEK_FILE", "kek-file"},
 		{"KMS_TLS_ENABLED", "tls-enabled"},
+		{"KMS_METRICS_ENABLED", "metrics-enabled"},
 		{"KMS_WATCH_RELEASE_SUBSCRIBER_RETAIN_DURATION", "watch-release-subscriber-retain-duration"},
 		{"KMS_LOG_LEVEL", "log-level"},
 	} {

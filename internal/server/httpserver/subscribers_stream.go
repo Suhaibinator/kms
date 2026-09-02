@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/Suhaibinator/kms/internal/domain"
+	"github.com/Suhaibinator/kms/internal/metrics"
 )
 
 // streamLimits tunes the live rollout stream. Tests shorten the intervals.
@@ -38,16 +39,31 @@ type streamRegistry struct {
 
 func newStreamRegistry() streamRegistry { return streamRegistry{byIdentity: map[string]int{}} }
 
+// Refusal reasons from acquire, as recorded in the audit log. streamLimiter
+// maps them onto the exporter's limiter label.
+const (
+	reasonGlobalStreamLimit   = "global_stream_limit"
+	reasonIdentityStreamLimit = "identity_stream_limit"
+)
+
+// streamLimiter names the metrics limiter behind an acquire refusal.
+func streamLimiter(reason string) string {
+	if reason == reasonGlobalStreamLimit {
+		return metrics.LimiterSSEGlobal
+	}
+	return metrics.LimiterSSEIdentity
+}
+
 // acquire reserves a slot; the returned release must be called when the
 // stream ends. reason names the exceeded cap when the request is refused.
 func (r *streamRegistry) acquire(identity string, limits streamLimits) (release func(), reason string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.total >= limits.global {
-		return nil, "global_stream_limit"
+		return nil, reasonGlobalStreamLimit
 	}
 	if r.byIdentity[identity] >= limits.perIdentity {
-		return nil, "identity_stream_limit"
+		return nil, reasonIdentityStreamLimit
 	}
 	r.total++
 	r.byIdentity[identity]++
@@ -78,11 +94,19 @@ func (s *server) handleReleaseSubscriberStream(w http.ResponseWriter, r *http.Re
 	}
 	release, reason := s.streams.acquire(pr.Identity.Name, s.stream)
 	if release == nil {
+		s.rateLimited(streamLimiter(reason))
 		s.svc.AuditReleaseStreamRejected(ctx, pr, ns, name, reason)
 		writeErrorCode(w, http.StatusTooManyRequests, "rate_limited", "too many live subscriber streams open")
 		return
 	}
 	defer release()
+	// The gauge tracks streams that actually hold a slot, so it matches what
+	// the caps are counting. Deferred immediately: a client that disconnects
+	// mid-stream unwinds through here like any other exit.
+	if m := s.cfg.Metrics; m != nil {
+		m.SSEStreamStarted()
+		defer m.SSEStreamEnded()
+	}
 
 	// The server's WriteTimeout would otherwise cut a healthy stream; clear it
 	// for this response only. Recorders without deadline support are fine.

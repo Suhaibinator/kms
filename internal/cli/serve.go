@@ -18,6 +18,7 @@ import (
 	kms "github.com/Suhaibinator/kms"
 	"github.com/Suhaibinator/kms/internal/config"
 	"github.com/Suhaibinator/kms/internal/core"
+	"github.com/Suhaibinator/kms/internal/metrics"
 	"github.com/Suhaibinator/kms/internal/server/httpserver"
 	"github.com/Suhaibinator/kms/internal/server/listenertls"
 	"github.com/Suhaibinator/kms/internal/storage"
@@ -63,6 +64,9 @@ type GRPCServer interface {
 type GRPCConfig struct {
 	Addr string
 	TLS  *tls.Config
+	// Metrics is the Prometheus exporter the gRPC interceptors report to, or
+	// nil when metrics.enabled is off.
+	Metrics *metrics.Metrics
 }
 
 // GRPCFactory builds the gRPC server. It is the SINGLE integration seam between
@@ -157,6 +161,16 @@ func (c *CLI) cmdServe(args []string) int {
 	// and be absent from both replay and live delivery.
 	<-hub.Started()
 
+	// Attach the exporter before anything can serve a request, so no
+	// authentication, authorization, or audit event is missed. Its watch
+	// gauges read the hub at scrape time, which is why it waits for the hub.
+	var exporter *metrics.Metrics
+	if cfg.Metrics.Enabled {
+		exporter = metrics.New(metrics.Options{Version: Version})
+		svc.SetMetrics(exporter)
+		exporter.SetWatchSource(func() metrics.WatchStats { return watchStats(hub.Stats()) })
+	}
+
 	tlsCfg, err := cfg.BuildServerTLS()
 	if err != nil {
 		return c.fail("building TLS config: %v", err)
@@ -195,6 +209,17 @@ func (c *CLI) cmdServe(args []string) int {
 		}
 	}
 
+	if exporter != nil {
+		exporter.SetPosture(tlsCfg != nil, adminCertRequired)
+		sampler := serveSampler(svc, store, cfg.Storage.SQLitePath)
+		exporter.SetStartTime(time.Now())
+		// Sample synchronously first: the listeners open on the next few
+		// lines, and a scrape that arrives immediately should carry real
+		// numbers rather than the zero every gauge starts at.
+		exporter.Sample(ctx, sampler)
+		go exporter.RunSampler(ctx, sampler)
+	}
+
 	var grpcSrv GRPCServer
 	grpcAddr := ""
 	if GRPCFactory != nil {
@@ -207,7 +232,7 @@ func (c *CLI) cmdServe(args []string) int {
 		if terr != nil {
 			return c.fail("building gRPC TLS config: %v", terr)
 		}
-		grpcSrv, err = GRPCFactory(svc, hub, GRPCConfig{Addr: cfg.Server.GRPCAddr, TLS: grpcTLS})
+		grpcSrv, err = GRPCFactory(svc, hub, GRPCConfig{Addr: cfg.Server.GRPCAddr, TLS: grpcTLS, Metrics: exporter})
 		if err != nil {
 			return c.fail("building gRPC server: %v", err)
 		}
@@ -238,6 +263,7 @@ func (c *CLI) cmdServe(args []string) int {
 		GRPCAddr:                grpcAddr,
 		TLSEnabled:              tlsCfg != nil,
 		AdminClientCertRequired: adminCertRequired,
+		Metrics:                 exporter,
 	})
 	if err != nil {
 		return c.fail("building HTTP server: %v", err)

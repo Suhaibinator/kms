@@ -23,6 +23,7 @@ import (
 
 	kmsv1 "github.com/Suhaibinator/kms/gen/kmsv1"
 	"github.com/Suhaibinator/kms/internal/core"
+	"github.com/Suhaibinator/kms/internal/metrics"
 	"github.com/Suhaibinator/kms/internal/watch"
 	"github.com/Suhaibinator/kms/sdk/go/configstore"
 )
@@ -42,6 +43,10 @@ type Config struct {
 	// HealthRefreshInterval controls how often the standard gRPC health service
 	// re-evaluates readiness. Defaults to 5s.
 	HealthRefreshInterval time.Duration
+	// Metrics is the Prometheus exporter. When set, the interceptors record
+	// one observation per completed unary call and hold the active-stream
+	// gauge for the life of every stream. nil disables both.
+	Metrics *metrics.Metrics
 }
 
 // defaults for keepalive and health refresh.
