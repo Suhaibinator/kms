@@ -11,6 +11,7 @@ import (
 	"crypto/tls"
 	"fmt"
 	"net"
+	"sync"
 	"time"
 
 	"go.uber.org/zap"
@@ -64,7 +65,11 @@ type Server struct {
 	grpc   *grpc.Server
 	health *health.Server
 
-	done chan struct{}
+	healthStopCh  chan struct{}
+	healthDone    chan struct{}
+	healthMu      sync.Mutex
+	healthRunning bool
+	healthStopped bool
 }
 
 // New builds a Server. The gRPC services are registered immediately; call
@@ -85,11 +90,12 @@ func New(svc *core.Service, hub *watch.Hub, cfg Config) (*Server, error) {
 	}
 
 	s := &Server{
-		cfg:  cfg,
-		svc:  svc,
-		hub:  hub,
-		log:  log,
-		done: make(chan struct{}),
+		cfg:          cfg,
+		svc:          svc,
+		hub:          hub,
+		log:          log,
+		healthStopCh: make(chan struct{}),
+		healthDone:   make(chan struct{}),
 	}
 	if err := svc.ResetReleaseSubscriberConnections(context.Background()); err != nil {
 		return nil, fmt.Errorf("resetting release subscriber connections: %w", err)
@@ -134,30 +140,56 @@ func (s *Server) Listen() (net.Listener, error) {
 // Serve begins serving on lis and blocks until the server stops. It also runs a
 // background loop that reflects readiness into the standard health service.
 func (s *Server) Serve(lis net.Listener) error {
-	go s.refreshHealth()
+	s.startHealth()
 	return s.grpc.Serve(lis)
 }
 
 // GracefulStop stops accepting new RPCs and blocks until in-flight RPCs finish.
 func (s *Server) GracefulStop() {
-	s.stopHealth()
+	s.signalHealthStop()
 	s.grpc.GracefulStop()
+	s.waitHealth()
 }
 
 // Stop stops the server immediately, cancelling in-flight RPCs.
 func (s *Server) Stop() {
-	s.stopHealth()
+	s.signalHealthStop()
 	s.grpc.Stop()
+	s.waitHealth()
 }
 
 // GRPCServer exposes the underlying *grpc.Server (for tests / reflection).
 func (s *Server) GRPCServer() *grpc.Server { return s.grpc }
 
-func (s *Server) stopHealth() {
-	select {
-	case <-s.done:
-	default:
-		close(s.done)
+func (s *Server) startHealth() {
+	s.healthMu.Lock()
+	defer s.healthMu.Unlock()
+	if s.healthRunning || s.healthStopped {
+		return
+	}
+	s.healthRunning = true
+	go func() {
+		defer close(s.healthDone)
+		s.refreshHealth()
+	}()
+}
+
+func (s *Server) signalHealthStop() {
+	s.healthMu.Lock()
+	defer s.healthMu.Unlock()
+	if !s.healthStopped {
+		s.healthStopped = true
+		close(s.healthStopCh)
+	}
+}
+
+func (s *Server) waitHealth() {
+	s.healthMu.Lock()
+	running := s.healthRunning
+	healthDone := s.healthDone
+	s.healthMu.Unlock()
+	if running {
+		<-healthDone
 	}
 }
 
@@ -182,7 +214,7 @@ func (s *Server) refreshHealth() {
 	defer ticker.Stop()
 	for {
 		select {
-		case <-s.done:
+		case <-s.healthStopCh:
 			return
 		case <-ticker.C:
 			set()

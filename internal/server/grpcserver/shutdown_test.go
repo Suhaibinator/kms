@@ -2,12 +2,106 @@ package grpcserver
 
 import (
 	"context"
+	"sync"
 	"testing"
 	"time"
 
+	"go.uber.org/zap"
+	"google.golang.org/grpc/test/bufconn"
+
 	kmsv1 "github.com/Suhaibinator/kms/gen/kmsv1"
+	"github.com/Suhaibinator/kms/internal/core"
+	"github.com/Suhaibinator/kms/internal/crypto"
 	"github.com/Suhaibinator/kms/internal/domain"
+	"github.com/Suhaibinator/kms/internal/watch"
 )
+
+type blockingPingStore struct {
+	*memStore
+	pingStarted chan struct{}
+	pingRelease chan struct{}
+	startOnce   sync.Once
+}
+
+func (s *blockingPingStore) Ping(ctx context.Context) error {
+	s.startOnce.Do(func() { close(s.pingStarted) })
+	select {
+	case <-s.pingRelease:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+// TestStopWaitsForHealthRefresh proves shutdown joins the readiness worker. A
+// readiness probe may be inside SQLite while Stop begins; returning before it
+// finishes lets the test harness remove the database directory while SQLite is
+// still creating or deleting WAL sidecars.
+func TestStopWaitsForHealthRefresh(t *testing.T) {
+	store := &blockingPingStore{
+		memStore:    newMemStore(),
+		pingStarted: make(chan struct{}),
+		pingRelease: make(chan struct{}),
+	}
+	releasePing := func() {
+		select {
+		case <-store.pingRelease:
+		default:
+			close(store.pingRelease)
+		}
+	}
+	t.Cleanup(releasePing)
+
+	logger := zap.NewNop()
+	svc := core.New(store, logger, "shutdown-test")
+	kek, err := crypto.NewKEKFromMaterial("kek-1", make([]byte, 32))
+	if err != nil {
+		t.Fatalf("build kek: %v", err)
+	}
+	svc.SetKeyring(crypto.NewKeyring(kek))
+	hub := watch.NewHub(store, logger, watch.Options{})
+	svc.SetHub(hub)
+	srv, err := New(svc, hub, Config{HealthRefreshInterval: time.Hour})
+	if err != nil {
+		t.Fatalf("New server: %v", err)
+	}
+	lis := bufconn.Listen(1 << 20)
+	t.Cleanup(func() { _ = lis.Close() })
+	serveDone := make(chan struct{})
+	go func() {
+		_ = srv.Serve(lis)
+		close(serveDone)
+	}()
+
+	select {
+	case <-store.pingStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("health refresh did not begin")
+	}
+
+	stopDone := make(chan struct{})
+	go func() {
+		srv.Stop()
+		close(stopDone)
+	}()
+	select {
+	case <-stopDone:
+		t.Fatal("Stop returned while the health refresh was still running")
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	releasePing()
+	select {
+	case <-stopDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Stop did not return after the health refresh finished")
+	}
+	select {
+	case <-serveDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Serve did not return after Stop")
+	}
+}
 
 // TestForcedStopUnblocksActiveWatchStream locks in the escape hatch that
 // serve.go's bounded shutdown relies on: a long-lived Subscribe stream keeps
