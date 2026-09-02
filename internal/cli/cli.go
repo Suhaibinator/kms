@@ -96,6 +96,8 @@ func (c *CLI) Run(args []string) int {
 		code = c.cmdServe(cmdArgs)
 	case "config":
 		code = c.cmdConfig(cmdArgs)
+	case "healthcheck":
+		code = c.cmdHealthcheck(cmdArgs)
 	case "init":
 		code = c.cmdInit(cmdArgs)
 	case "migrate":
@@ -284,6 +286,8 @@ Server:
   serve            Run the gRPC + HTTP server.
   config show      Print the effective configuration and where each value came from.
   config validate  Check the configuration file, environment, and flags.
+  healthcheck      Probe this host's own HTTP listener (loopback; for a container
+                   HEALTHCHECK or a supervisor). --ready probes /readyz.
 
 Administration:
   init             Create/migrate a database and master key.

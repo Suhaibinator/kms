@@ -45,5 +45,11 @@ ENV KMS_SQLITE_PATH=/data/kms.db \
     KMS_KEK_FILE=/key/master.key
 VOLUME ["/data", "/key"]
 EXPOSE 8080 8443
+# Loopback liveness against this container's own HTTP listener, resolving the
+# address and TLS posture from the same settings serve used. Add --ready to
+# gate on the database and master key as well; the start period covers an
+# unseal that has to read a key file off a mounted volume.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
+    CMD ["/usr/local/bin/parameter-store","healthcheck"]
 ENTRYPOINT ["/usr/local/bin/parameter-store"]
 CMD ["serve"]
