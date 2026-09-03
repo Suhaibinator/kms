@@ -3,7 +3,6 @@ package core
 import (
 	"context"
 	"errors"
-	"strings"
 	"testing"
 	"time"
 
@@ -137,9 +136,7 @@ func TestExactSecretVersionPinsContentTypeAndTokenProtection(t *testing.T) {
 	if _, err := s.GetSecret(ctx, adminPrincipal(), tref("api"), 2, ""); !errors.Is(err, domain.ErrPermissionDenied) {
 		t.Fatalf("GetSecret(v2 without token) err = %v, want permission denied", err)
 	}
-	pr := adminPrincipal()
-	pr.SecretToken = v2.AccessToken
-	gotV2, err := s.GetSecret(ctx, pr, tref("api"), 2, "")
+	gotV2, err := s.GetSecret(ctx, adminPrincipal(), tref("api"), 2, "", v2.AccessToken)
 	if err != nil {
 		t.Fatalf("GetSecret(v2): %v", err)
 	}
@@ -153,11 +150,10 @@ func TestExactSecretVersionPinsContentTypeAndTokenProtection(t *testing.T) {
 	v3 := putSecret(t, s, PutSecretInput{
 		Ref: tref("api"), Value: []byte("v3"), ContentType: "text/plain", GenerateToken: true,
 	})
-	if _, err := s.GetSecret(ctx, pr, tref("api"), 2, ""); !errors.Is(err, domain.ErrPermissionDenied) {
+	if _, err := s.GetSecret(ctx, adminPrincipal(), tref("api"), 2, "", v2.AccessToken); !errors.Is(err, domain.ErrPermissionDenied) {
 		t.Fatalf("GetSecret(v2 with rotated-out token) err = %v, want permission denied", err)
 	}
-	pr.SecretToken = v3.AccessToken
-	if _, err := s.GetSecret(ctx, pr, tref("api"), 2, ""); err != nil {
+	if _, err := s.GetSecret(ctx, adminPrincipal(), tref("api"), 2, "", v3.AccessToken); err != nil {
 		t.Fatalf("GetSecret(v2 with current token): %v", err)
 	}
 	if _, err := s.GetSecret(ctx, adminPrincipal(), tref("api"), 1, ""); err != nil {
@@ -189,17 +185,13 @@ func TestGetSecretTokenGate(t *testing.T) {
 	})
 
 	t.Run("wrong token denied", func(t *testing.T) {
-		pr := adminPrincipal()
-		pr.SecretToken = "kmss_wrong"
-		if _, err := s.GetSecret(ctx, pr, tref("api"), 0, ""); !errors.Is(err, domain.ErrPermissionDenied) {
+		if _, err := s.GetSecret(ctx, adminPrincipal(), tref("api"), 0, "", "kmss_wrong"); !errors.Is(err, domain.ErrPermissionDenied) {
 			t.Fatalf("err = %v, want ErrPermissionDenied", err)
 		}
 	})
 
 	t.Run("correct token allowed", func(t *testing.T) {
-		pr := adminPrincipal()
-		pr.SecretToken = res.AccessToken
-		val, err := s.GetSecret(ctx, pr, tref("api"), 0, "")
+		val, err := s.GetSecret(ctx, adminPrincipal(), tref("api"), 0, "", res.AccessToken)
 		if err != nil {
 			t.Fatalf("GetSecret: %v", err)
 		}
@@ -330,7 +322,7 @@ func TestRevealSecretBypassesTokenGate(t *testing.T) {
 	}
 }
 
-func TestRevealClientBoundRejected(t *testing.T) {
+func TestRevealClientBoundUsesVersionToken(t *testing.T) {
 	ctx := context.Background()
 	store := newFakeStore()
 	s := newTestService(store)
@@ -344,12 +336,29 @@ func TestRevealClientBoundRejected(t *testing.T) {
 		t.Fatal("client-bound creation should mint a token")
 	}
 
-	_, err := s.RevealSecret(ctx, adminPrincipal(), tref("cb"), 0, "")
-	if !errors.Is(err, domain.ErrFailedPrecondition) {
-		t.Fatalf("err = %v, want ErrFailedPrecondition", err)
+	withoutToken := adminPrincipal()
+	_, missingErr := s.RevealSecret(ctx, withoutToken, tref("cb"), 0, "")
+	if !errors.Is(missingErr, domain.ErrDecryptFailed) {
+		t.Fatalf("missing token err = %v, want ErrDecryptFailed", missingErr)
 	}
-	if !strings.Contains(err.Error(), "client-bound") {
-		t.Fatalf("error should explain client-bound: %v", err)
+
+	_, wrongErr := s.RevealSecret(ctx, adminPrincipal(), tref("cb"), 0, "", "kmss_wrongwrongwrongwrongwrongwrong")
+	if !errors.Is(wrongErr, domain.ErrDecryptFailed) {
+		t.Fatalf("wrong token err = %v, want ErrDecryptFailed", wrongErr)
+	}
+	if missingErr.Error() != wrongErr.Error() {
+		t.Fatalf("missing and wrong tokens produced distinguishable errors: %q != %q", missingErr, wrongErr)
+	}
+
+	val, err := s.RevealSecret(ctx, adminPrincipal(), tref("cb"), 0, "", res.AccessToken)
+	if err != nil {
+		t.Fatalf("RevealSecret with token: %v", err)
+	}
+	if string(val.Value) != "v" {
+		t.Fatalf("value = %q, want v", val.Value)
+	}
+	if !store.hasAudit("secret.reveal", "allow") || !store.hasAudit("secret.reveal", "error") {
+		t.Fatal("client-bound reveal outcomes were not audited")
 	}
 }
 
@@ -375,9 +384,7 @@ func TestClientBoundLifecycle(t *testing.T) {
 	if _, err := s.GetSecret(ctx, adminPrincipal(), tref("cb"), 0, ""); !errors.Is(err, domain.ErrPermissionDenied) {
 		t.Fatalf("read without token err = %v, want ErrPermissionDenied", err)
 	}
-	pr := adminPrincipal()
-	pr.SecretToken = token
-	val, err := s.GetSecret(ctx, pr, tref("cb"), 0, "")
+	val, err := s.GetSecret(ctx, adminPrincipal(), tref("cb"), 0, "", token)
 	if err != nil {
 		t.Fatalf("read with token: %v", err)
 	}
@@ -390,10 +397,8 @@ func TestClientBoundLifecycle(t *testing.T) {
 	}); !errors.Is(err, domain.ErrPermissionDenied) {
 		t.Fatalf("update without token err = %v, want ErrPermissionDenied", err)
 	}
-	upd := adminPrincipal()
-	upd.SecretToken = token
-	if _, err := s.PutSecret(ctx, upd, PutSecretInput{
-		Ref: tref("cb"), Value: []byte("v2"), ContentType: "text/plain", ClientBound: true,
+	if _, err := s.PutSecret(ctx, adminPrincipal(), PutSecretInput{
+		Ref: tref("cb"), Value: []byte("v2"), ContentType: "text/plain", ClientBound: true, SecretToken: token,
 	}); err != nil {
 		t.Fatalf("update with token: %v", err)
 	}
@@ -421,9 +426,11 @@ func TestPutSecretValidation(t *testing.T) {
 	withKeyring(t, s)
 
 	cases := map[string]PutSecretInput{
-		"empty value":      {Ref: tref("s"), Value: nil},
-		"bad key":          {Ref: domain.Ref{NS: tns, Key: "bad key"}, Value: []byte("v")},
-		"invalid metadata": {Ref: tref("s"), Value: []byte("v"), Metadata: "not-json"},
+		"empty value":               {Ref: tref("s"), Value: nil},
+		"bad key":                   {Ref: domain.Ref{NS: tns, Key: "bad key"}, Value: []byte("v")},
+		"invalid metadata":          {Ref: tref("s"), Value: []byte("v"), Metadata: "not-json"},
+		"token on new standard":     {Ref: tref("new-standard"), Value: []byte("v"), SecretToken: "unused"},
+		"token on new client-bound": {Ref: tref("new-client-bound"), Value: []byte("v"), ClientBound: true, GenerateToken: true, SecretToken: "unused"},
 	}
 	for name, in := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -431,6 +438,13 @@ func TestPutSecretValidation(t *testing.T) {
 				t.Fatalf("err = %v, want ErrInvalidArgument", err)
 			}
 		})
+	}
+
+	putSecret(t, s, PutSecretInput{Ref: tref("standard"), Value: []byte("v")})
+	if _, err := s.PutSecret(ctx, adminPrincipal(), PutSecretInput{
+		Ref: tref("standard"), Value: []byte("v2"), SecretToken: "unused",
+	}); !errors.Is(err, domain.ErrInvalidArgument) {
+		t.Fatalf("token on existing standard secret err = %v, want ErrInvalidArgument", err)
 	}
 }
 

@@ -36,8 +36,9 @@ a minor release may contain documented breaking changes.
 
 - Stable root, Next.js server, Next.js client, optional configstore, and
   TypeScript-native config generator package entry points.
-- Node gRPC transport with TLS/mTLS, bearer and per-secret metadata, bounded
-  deadlines, namespace discovery, and exact `bigint` protocol values.
+- Node gRPC transport with TLS/mTLS, bearer metadata, operation-specific
+  per-secret request fields, bounded deadlines, namespace discovery, and exact
+  `bigint` protocol values.
 - Typed errors, defensive redacting secrets, bounded read caching, declarative
   values, shared watches, reconciliation, and atomic release loading.
 - Explicit public-policy projections, stale-client recovery contracts, and a

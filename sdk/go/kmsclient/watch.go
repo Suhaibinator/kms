@@ -307,7 +307,7 @@ func (m *subManager) run() {
 }
 
 func (m *subManager) runStream(ctx context.Context) error {
-	stream, err := m.client.watch.Subscribe(m.client.withAuth(ctx, ""))
+	stream, err := m.client.watch.Subscribe(m.client.withAuth(ctx))
 	if err != nil {
 		return err
 	}
@@ -601,7 +601,7 @@ func (m *subManager) reconcile() {
 func (m *subManager) reconcileNamespace(ctx context.Context, ns namespaceRef, snapRev uint64, present map[string]struct{}) bool {
 	pageToken := ""
 	for range maxReconcilePages { // bounded to avoid runaway loops
-		cctx, cancel := m.client.callCtx(ctx, "")
+		cctx, cancel := m.client.callCtx(ctx)
 		resp, err := m.client.params.ListParameters(cctx, &kmsv1.ListParametersRequest{
 			Namespace: ns.proto(),
 			PageToken: pageToken,

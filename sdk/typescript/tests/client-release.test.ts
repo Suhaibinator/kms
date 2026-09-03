@@ -93,7 +93,8 @@ describe("KmsClient release transport boundary", () => {
         return { release, activationRevision: 12n, previousVersion: 0n };
       }
       if (path.endsWith("/GetSecret")) {
-        expect(options.metadata?.["x-kms-secret-token"]).toBe("release-token");
+        expect(options.metadata?.["x-kms-secret-token"]).toBeUndefined();
+        expect((_request as { secretToken?: string }).secretToken).toBe("release-token");
         return {
           ref: returnedRef,
           version: 9n,

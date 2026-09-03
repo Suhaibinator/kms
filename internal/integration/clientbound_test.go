@@ -37,9 +37,7 @@ func TestClientBoundFlow(t *testing.T) {
 	token := res.AccessToken
 
 	// Read with the correct token succeeds.
-	withToken := h.admin
-	withToken.SecretToken = token
-	got, err := h.svc.GetSecret(ctx, withToken, ref, 0, "")
+	got, err := h.svc.GetSecret(ctx, h.admin, ref, 0, "", token)
 	if err != nil {
 		t.Fatalf("GetSecret with token: %v", err)
 	}
@@ -52,28 +50,36 @@ func TestClientBoundFlow(t *testing.T) {
 	// cannot tell whether the token or the ciphertext was at fault. A missing
 	// token is denied at the gate (the caller knows it sent no token, so that is
 	// not an oracle about the secret).
-	wrong := h.admin
-	wrong.SecretToken = "kmss_wrongwrongwrongwrongwrongwrong"
-	if _, err := h.svc.GetSecret(ctx, wrong, ref, 0, ""); !errors.Is(err, domain.ErrDecryptFailed) {
+	const wrongToken = "kmss_wrongwrongwrongwrongwrongwrong"
+	if _, err := h.svc.GetSecret(ctx, h.admin, ref, 0, "", wrongToken); !errors.Is(err, domain.ErrDecryptFailed) {
 		t.Fatalf("wrong token err = %v, want ErrDecryptFailed (indistinguishable from tampering)", err)
 	}
 	if _, err := h.svc.GetSecret(ctx, h.admin, ref, 0, ""); !errors.Is(err, domain.ErrPermissionDenied) {
 		t.Fatalf("missing token err = %v, want ErrPermissionDenied", err)
 	}
 
-	// §25.3 (reveal): admin break-glass cannot reveal client-bound secrets —
-	// the server has no key share.
-	if _, err := h.svc.RevealSecret(ctx, h.admin, ref, 0, ""); !errors.Is(err, domain.ErrFailedPrecondition) {
-		t.Errorf("RevealSecret(client-bound) err = %v, want ErrFailedPrecondition", err)
+	// §25.3 (reveal): the admin reveal path can use a transient client token,
+	// but missing and wrong tokens remain indistinguishable from other
+	// decryption failures.
+	if _, err := h.svc.RevealSecret(ctx, h.admin, ref, 0, ""); !errors.Is(err, domain.ErrDecryptFailed) {
+		t.Errorf("RevealSecret(client-bound, missing token) err = %v, want ErrDecryptFailed", err)
+	}
+	if _, err := h.svc.RevealSecret(ctx, h.admin, ref, 0, "", wrongToken); !errors.Is(err, domain.ErrDecryptFailed) {
+		t.Errorf("RevealSecret(client-bound, wrong token) err = %v, want ErrDecryptFailed", err)
+	}
+	revealed, err := h.svc.RevealSecret(ctx, h.admin, ref, 0, "", token)
+	if err != nil {
+		t.Fatalf("RevealSecret(client-bound, correct token): %v", err)
+	}
+	if string(revealed.Value) != plaintext {
+		t.Errorf("revealed value = %q, want %q", revealed.Value, plaintext)
 	}
 
 	// Writing a new version requires proving possession of the current token.
-	badWrite := h.admin
-	badWrite.SecretToken = "kmss_nopenopenopenopenopenopenope"
-	if _, err := h.svc.PutSecret(ctx, badWrite, core.PutSecretInput{Ref: ref, Value: []byte("v2"), ClientBound: true}); !errors.Is(err, domain.ErrPermissionDenied) {
+	if _, err := h.svc.PutSecret(ctx, h.admin, core.PutSecretInput{Ref: ref, Value: []byte("v2"), ClientBound: true, SecretToken: "kmss_nopenopenopenopenopenopenope"}); !errors.Is(err, domain.ErrPermissionDenied) {
 		t.Errorf("client-bound rewrite with wrong token err = %v, want ErrPermissionDenied", err)
 	}
-	if _, err := h.svc.PutSecret(ctx, withToken, core.PutSecretInput{Ref: ref, Value: []byte("v2-value"), ClientBound: true}); err != nil {
+	if _, err := h.svc.PutSecret(ctx, h.admin, core.PutSecretInput{Ref: ref, Value: []byte("v2-value"), ClientBound: true, SecretToken: token}); err != nil {
 		t.Errorf("client-bound rewrite with correct token: %v", err)
 	}
 
@@ -141,7 +147,7 @@ func TestClientBoundFlow(t *testing.T) {
 	if _, err := h.svc.DeleteSecret(ctx, h.admin, ref); err != nil {
 		t.Fatalf("DeleteSecret: %v", err)
 	}
-	if _, err := h.svc.GetSecret(ctx, withToken, ref, 0, ""); !errors.Is(err, domain.ErrNotFound) {
+	if _, err := h.svc.GetSecret(ctx, h.admin, ref, 0, "", token); !errors.Is(err, domain.ErrNotFound) {
 		t.Errorf("read after delete err = %v, want ErrNotFound", err)
 	}
 }
@@ -164,10 +170,8 @@ func TestClientBoundTokenRotation(t *testing.T) {
 
 	// Rotate: a new version with a freshly minted token requires proving
 	// possession of the current token.
-	rotatePr := h.admin
-	rotatePr.SecretToken = oldToken
-	rotate, err := h.svc.PutSecret(ctx, rotatePr, core.PutSecretInput{
-		Ref: ref, Value: []byte("v2"), ClientBound: true, GenerateToken: true,
+	rotate, err := h.svc.PutSecret(ctx, h.admin, core.PutSecretInput{
+		Ref: ref, Value: []byte("v2"), ClientBound: true, GenerateToken: true, SecretToken: oldToken,
 	})
 	if err != nil {
 		t.Fatalf("rotate: %v", err)
@@ -177,30 +181,25 @@ func TestClientBoundTokenRotation(t *testing.T) {
 		t.Fatalf("expected a distinct new token, got %q (old %q)", newToken, oldToken)
 	}
 
-	newPr := h.admin
-	newPr.SecretToken = newToken
-	oldPr := h.admin
-	oldPr.SecretToken = oldToken
-
 	// The new current version (v2) is readable with the new token, and NOT with
 	// the old token (wrong key -> generic decryption failure, not an oracle).
-	if got, err := h.svc.GetSecret(ctx, newPr, ref, 0, ""); err != nil || string(got.Value) != "v2" {
+	if got, err := h.svc.GetSecret(ctx, h.admin, ref, 0, "", newToken); err != nil || string(got.Value) != "v2" {
 		t.Errorf("read current with new token = %q err=%v, want v2", got.Value, err)
 	}
-	if _, err := h.svc.GetSecret(ctx, newPr, ref, 2, ""); err != nil {
+	if _, err := h.svc.GetSecret(ctx, h.admin, ref, 2, "", newToken); err != nil {
 		t.Errorf("read v2 with new token err = %v, want ok", err)
 	}
-	if _, err := h.svc.GetSecret(ctx, oldPr, ref, 2, ""); !errors.Is(err, domain.ErrDecryptFailed) {
+	if _, err := h.svc.GetSecret(ctx, h.admin, ref, 2, "", oldToken); !errors.Is(err, domain.ErrDecryptFailed) {
 		t.Errorf("read v2 with old token err = %v, want ErrDecryptFailed", err)
 	}
 
 	// The prior version (v1) remains readable with its ORIGINAL token after the
 	// rotation — rotation must not silently orphan history. It is not readable
 	// with the new token.
-	if got, err := h.svc.GetSecret(ctx, oldPr, ref, 1, ""); err != nil || string(got.Value) != "v1" {
+	if got, err := h.svc.GetSecret(ctx, h.admin, ref, 1, "", oldToken); err != nil || string(got.Value) != "v1" {
 		t.Errorf("read v1 with old token = %q err=%v, want v1 (rotation must not orphan prior versions)", got.Value, err)
 	}
-	if _, err := h.svc.GetSecret(ctx, newPr, ref, 1, ""); !errors.Is(err, domain.ErrDecryptFailed) {
+	if _, err := h.svc.GetSecret(ctx, h.admin, ref, 1, "", newToken); !errors.Is(err, domain.ErrDecryptFailed) {
 		t.Errorf("read v1 with new token err = %v, want ErrDecryptFailed", err)
 	}
 }

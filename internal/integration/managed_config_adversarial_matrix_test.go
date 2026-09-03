@@ -146,14 +146,7 @@ func (h *adversarialManagedApp) seedParameterBypassingWriteValidation(key, docum
 
 func (h *adversarialManagedApp) putSecret(alias, key, plaintext string) uint64 {
 	h.t.Helper()
-	h.tokenMu.RLock()
-	oldToken := h.secretTokens[alias]
-	h.tokenMu.RUnlock()
-	rpcCtx := h.authCtx
-	if oldToken != "" {
-		rpcCtx = networkSecretContext(h.ctx, h.env.adminToken, oldToken)
-	}
-	response, err := h.secrets.PutSecret(rpcCtx, &kmsv1.PutSecretRequest{
+	response, err := h.secrets.PutSecret(h.authCtx, &kmsv1.PutSecretRequest{
 		Ref: networkRef("prod", h.app, key), Value: []byte(plaintext),
 		ContentType: "text/plain", GenerateAccessToken: true,
 	})

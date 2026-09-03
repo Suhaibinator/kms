@@ -104,18 +104,22 @@ func (s *parameterStub) PutParameter(ctx context.Context, _ *kmsv1.PutParameterR
 // secretStub answers the SecretService calls the convenience commands make.
 type secretStub struct {
 	kmsv1.UnimplementedSecretServiceServer
-	mu      sync.Mutex
-	auth    []string
-	secrets []*kmsv1.SecretMetadata
-	getResp *kmsv1.GetSecretResponse
-	putResp *kmsv1.PutSecretResponse
-	err     error
-	getErr  error
+	mu                  sync.Mutex
+	auth                []string
+	secretTokenMetadata []string
+	secrets             []*kmsv1.SecretMetadata
+	getReq              *kmsv1.GetSecretRequest
+	putReq              *kmsv1.PutSecretRequest
+	getResp             *kmsv1.GetSecretResponse
+	putResp             *kmsv1.PutSecretResponse
+	err                 error
+	getErr              error
 }
 
 func (s *secretStub) record(ctx context.Context) {
 	md, _ := metadata.FromIncomingContext(ctx)
 	s.auth = append(s.auth, strings.Join(md.Get("authorization"), ","))
+	s.secretTokenMetadata = append(s.secretTokenMetadata, strings.Join(md.Get("x-kms-secret-token"), ","))
 }
 
 func (s *secretStub) ListSecrets(ctx context.Context, _ *kmsv1.ListSecretsRequest) (*kmsv1.ListSecretsResponse, error) {
@@ -128,20 +132,22 @@ func (s *secretStub) ListSecrets(ctx context.Context, _ *kmsv1.ListSecretsReques
 	return &kmsv1.ListSecretsResponse{Secrets: s.secrets}, nil
 }
 
-func (s *secretStub) GetSecret(ctx context.Context, _ *kmsv1.GetSecretRequest) (*kmsv1.GetSecretResponse, error) {
+func (s *secretStub) GetSecret(ctx context.Context, req *kmsv1.GetSecretRequest) (*kmsv1.GetSecretResponse, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.record(ctx)
+	s.getReq = req
 	if s.getErr != nil {
 		return nil, s.getErr
 	}
 	return s.getResp, nil
 }
 
-func (s *secretStub) PutSecret(ctx context.Context, _ *kmsv1.PutSecretRequest) (*kmsv1.PutSecretResponse, error) {
+func (s *secretStub) PutSecret(ctx context.Context, req *kmsv1.PutSecretRequest) (*kmsv1.PutSecretResponse, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.record(ctx)
+	s.putReq = req
 	if s.err != nil {
 		return nil, s.err
 	}
@@ -356,7 +362,7 @@ func TestPutSecretJSONCarriesTheAccessTokenOnceWithTheWarningOnStderr(t *testing
 		t.Fatal(err)
 	}
 	code := c.Run([]string{"-o", "json", "put-secret", "/prod/gradethis/db-password",
-		"--value-file", valueFile, "--generate-token", "--insecure", "--token", "t"})
+		"--value-file", valueFile, "--generate-token", "--secret-token", "kmss_current", "--insecure", "--token", "t"})
 	if code != 0 {
 		t.Fatalf("put-secret exit = %d, stderr=%s", code, c.stderr())
 	}
@@ -367,6 +373,12 @@ func TestPutSecretJSONCarriesTheAccessTokenOnceWithTheWarningOnStderr(t *testing
 	}
 	if strings.Count(c.stdout(), "kmss_generated") != 1 {
 		t.Fatalf("access token appears more than once on stdout: %q", c.stdout())
+	}
+	if got := secrets.putReq.GetSecretToken(); got != "kmss_current" {
+		t.Fatalf("PutSecret secret_token = %q, want kmss_current", got)
+	}
+	if got := secrets.secretTokenMetadata; len(got) != 1 || got[0] != "" {
+		t.Fatalf("custom secret-token metadata = %v, want none", got)
 	}
 	// The one-time warning is security-relevant, so it is on stderr and is
 	// never routed through info.

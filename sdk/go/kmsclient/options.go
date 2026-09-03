@@ -22,9 +22,10 @@ func WithLabel(label string) GetOption {
 	return func(o *getOptions) { o.label = label }
 }
 
-// WithSecretToken sets the x-kms-secret-token metadata for the call. It is
+// WithSecretToken supplies the credential in a GetSecret request. It is
 // required for token-protected and client-bound secrets; for client-bound
-// secrets the token also carries the client key share (see plan 10.7).
+// secrets the token also carries the client key share. GetParameter accepts
+// this shared option for compatibility but never transmits the token.
 func WithSecretToken(token string) GetOption {
 	return func(o *getOptions) { o.secretToken = token }
 }
@@ -107,8 +108,8 @@ func WithExpiresAt(unixMS int64) PutSecretOption {
 	return func(o *putSecretOptions) { o.expiresAtUnixMS = unixMS }
 }
 
-// WithPutSecretToken sets the x-kms-secret-token for the write, needed when
-// updating an existing token-protected or client-bound secret.
+// WithPutSecretToken supplies the current credential in a PutSecret request,
+// needed when updating an existing client-bound secret.
 func WithPutSecretToken(token string) PutSecretOption {
 	return func(o *putSecretOptions) { o.secretToken = token }
 }

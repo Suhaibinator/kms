@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/Suhaibinator/kms/internal/core"
+	"github.com/Suhaibinator/kms/internal/crypto"
 	"github.com/Suhaibinator/kms/internal/domain"
 	"github.com/Suhaibinator/kms/internal/storage"
 )
@@ -515,6 +516,7 @@ func (s *server) handlePutSecret(w http.ResponseWriter, r *http.Request) {
 		ClientBound         bool   `json:"client_bound"`
 		GenerateAccessToken bool   `json:"generate_access_token"`
 		ExpiresAtUnixMS     int64  `json:"expires_at_unix_ms"`
+		SecretToken         string `json:"secret_token"`
 	}
 	if err := decodeJSON(w, r, &body); err != nil {
 		s.writeError(w, r, err)
@@ -533,7 +535,9 @@ func (s *server) handlePutSecret(w http.ResponseWriter, r *http.Request) {
 		ClientBound:   body.ClientBound,
 		GenerateToken: body.GenerateAccessToken,
 		ExpiresAt:     body.ExpiresAtUnixMS,
+		SecretToken:   body.SecretToken,
 	})
+	body.SecretToken = ""
 	if err != nil {
 		s.writeError(w, r, err)
 		return
@@ -548,24 +552,32 @@ func (s *server) handlePutSecret(w http.ResponseWriter, r *http.Request) {
 func (s *server) handleRevealSecret(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		refFields
-		Version uint64 `json:"version"`
-		Label   string `json:"label"`
+		Version     uint64 `json:"version"`
+		Label       string `json:"label"`
+		SecretToken string `json:"secret_token"`
 	}
 	if err := decodeJSON(w, r, &body); err != nil {
 		s.writeError(w, r, err)
 		return
 	}
-	val, err := s.svc.RevealSecret(r.Context(), principalFrom(r.Context()), body.ref(), body.Version, body.Label)
+	pr := principalFrom(r.Context())
+	// Reveal accepts its client-bound key share only in the request body.
+	secretToken := body.SecretToken
+	body.SecretToken = ""
+	val, err := s.svc.RevealSecret(r.Context(), pr, body.ref(), body.Version, body.Label, secretToken)
+	secretToken = ""
 	if err != nil {
 		s.writeError(w, r, err)
 		return
 	}
+	valueBase64 := base64.StdEncoding.EncodeToString(val.Value)
+	crypto.Zero(val.Value)
 	writeJSON(w, http.StatusOK, map[string]any{
 		"env":          val.Ref.NS.Env,
 		"app":          val.Ref.NS.App,
 		"key":          val.Ref.Key,
 		"version":      val.Version,
-		"value_base64": base64.StdEncoding.EncodeToString(val.Value),
+		"value_base64": valueBase64,
 		"content_type": val.ContentType,
 	})
 }

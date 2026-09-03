@@ -17,7 +17,7 @@ func (h *secretServer) GetSecret(ctx context.Context, req *kmsv1.GetSecretReques
 	if err != nil {
 		return nil, err
 	}
-	val, err := h.s.svc.GetSecret(ctx, pr, refFromProto(req.GetRef()), req.GetVersion(), req.GetLabel())
+	val, err := h.s.svc.GetSecret(ctx, pr, refFromProto(req.GetRef()), req.GetVersion(), req.GetLabel(), req.GetSecretToken())
 	if err != nil {
 		return nil, h.s.mapErr(ctx, err)
 	}
@@ -44,6 +44,7 @@ func (h *secretServer) PutSecret(ctx context.Context, req *kmsv1.PutSecretReques
 		ClientBound:   req.GetClientBound(),
 		GenerateToken: req.GetGenerateAccessToken(),
 		ExpiresAt:     req.GetExpiresAtUnixMs(),
+		SecretToken:   req.GetSecretToken(),
 	})
 	if err != nil {
 		return nil, h.s.mapErr(ctx, err)

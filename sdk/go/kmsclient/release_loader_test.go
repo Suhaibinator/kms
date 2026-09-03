@@ -17,7 +17,6 @@ import (
 	kmsv1 "github.com/Suhaibinator/kms/gen/kmsv1"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
-	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 	"google.golang.org/grpc/test/bufconn"
 	"google.golang.org/protobuf/proto"
@@ -72,10 +71,7 @@ func (s *releaseLoaderServer) GetSecret(ctx context.Context, req *kmsv1.GetSecre
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.secretFetches++
-	md, _ := metadata.FromIncomingContext(ctx)
-	if values := md.Get(mdSecretToken); len(values) > 0 {
-		s.secretToken = values[0]
-	}
+	s.secretToken = req.GetSecretToken()
 	secret := s.secrets[req.GetRef().GetKey()]
 	if secret == nil {
 		return nil, status.Error(5, "not found")

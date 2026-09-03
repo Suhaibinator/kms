@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { api } from "@/lib/api";
 import type { Namespace, SecretMetadata } from "@/lib/types";
@@ -365,6 +365,126 @@ describe("new secret version validation", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Save new version" }));
     expect(createSecret).not.toHaveBeenCalled();
+  });
+});
+
+describe("client-bound secret reveal", () => {
+  it("requires the selected version token, clears cancelled input, and sends it transiently", async () => {
+    const clientBoundSecret: SecretMetadata = {
+      ...SECRET,
+      client_bound: true,
+      has_access_token: true,
+    };
+    mocks.router.query = {
+      env: clientBoundSecret.env,
+      app: clientBoundSecret.app,
+      key: clientBoundSecret.key,
+    };
+    vi.spyOn(api, "secretMetadata").mockResolvedValue({ secret: clientBoundSecret });
+    const revealResponse = {
+      env: clientBoundSecret.env,
+      app: clientBoundSecret.app,
+      key: clientBoundSecret.key,
+      version: 1,
+      value_base64: "dmFsdWU=",
+      content_type: "text/plain",
+    };
+    let finishReveal: (response: typeof revealResponse) => void = () => undefined;
+    const reveal = vi.spyOn(api, "revealSecret").mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          finishReveal = resolve;
+        }),
+    );
+
+    render(<SecretDetailPage />);
+    fireEvent.click(await screen.findByRole("button", { name: "Reveal secret" }));
+    let dialog = screen.getByRole("dialog", { name: "Reveal secret value?" });
+    let tokenInput = within(dialog).getByLabelText("Token for this version");
+    const confirm = within(dialog).getByRole("button", { name: "Reveal" });
+    expect(tokenInput).toHaveAttribute("type", "password");
+    expect(confirm).toBeDisabled();
+
+    fireEvent.change(tokenInput, { target: { value: "kmss_discarded" } });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    fireEvent.click(screen.getByRole("button", { name: "Reveal secret" }));
+    dialog = screen.getByRole("dialog", { name: "Reveal secret value?" });
+    tokenInput = within(dialog).getByLabelText("Token for this version");
+    expect(tokenInput).toHaveValue("");
+
+    fireEvent.change(tokenInput, { target: { value: "kmss_version_token" } });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Reveal" }));
+
+    await waitFor(() =>
+      expect(reveal).toHaveBeenCalledWith(
+        { env: "prod", app: "billing", key: "api-key" },
+        1,
+        "",
+        "kmss_version_token",
+        { signal: expect.any(AbortSignal) },
+      ),
+    );
+    expect(tokenInput).toHaveValue("");
+    await act(async () => finishReveal(revealResponse));
+    expect(mocks.toast.success).toHaveBeenCalledWith(
+      "Revealed version 1",
+      "Recorded in the audit log.",
+    );
+  });
+
+  it("discards an in-flight reveal and closes its dialog when the active secret changes", async () => {
+    const firstSecret: SecretMetadata = {
+      ...SECRET,
+      client_bound: true,
+      has_access_token: true,
+    };
+    const nextSecret: SecretMetadata = {
+      ...firstSecret,
+      key: "replacement-key",
+    };
+    mocks.router.query = { env: firstSecret.env, app: firstSecret.app, key: firstSecret.key };
+    vi.spyOn(api, "secretMetadata").mockImplementation(async (ref) => ({
+      secret: ref.key === nextSecret.key ? nextSecret : firstSecret,
+    }));
+
+    const staleResponse = {
+      env: firstSecret.env,
+      app: firstSecret.app,
+      key: firstSecret.key,
+      version: 1,
+      value_base64: "c3RhbGUgcGxhaW50ZXh0",
+      content_type: "text/plain",
+    };
+    let finishReveal: (response: typeof staleResponse) => void = () => undefined;
+    vi.spyOn(api, "revealSecret").mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          finishReveal = resolve;
+        }),
+    );
+
+    const view = render(<SecretDetailPage />);
+    fireEvent.click(await screen.findByRole("button", { name: "Reveal secret" }));
+    const dialog = screen.getByRole("dialog", { name: "Reveal secret value?" });
+    fireEvent.change(within(dialog).getByLabelText("Token for this version"), {
+      target: { value: "kmss_stale_token" },
+    });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Reveal" }));
+
+    mocks.router.query = { env: nextSecret.env, app: nextSecret.app, key: nextSecret.key };
+    view.rerender(<SecretDetailPage />);
+    await waitFor(() =>
+      expect(api.secretMetadata).toHaveBeenCalledWith(
+        { env: "prod", app: "billing", key: "replacement-key" },
+        { signal: expect.any(AbortSignal) },
+      ),
+    );
+    await screen.findByRole("button", { name: "Reveal secret" });
+    expect(screen.queryByRole("dialog", { name: "Reveal secret value?" })).not.toBeInTheDocument();
+
+    await act(async () => finishReveal(staleResponse));
+    expect(screen.queryByText("stale plaintext")).not.toBeInTheDocument();
+    expect(mocks.toast.success).not.toHaveBeenCalled();
   });
 });
 

@@ -200,8 +200,8 @@ Both accept keyword-only options:
 
 `version` pins the read to a specific immutable version; `label` reads the
 version a label points at (server default is `"current"` when neither is
-given). `secret_token` sets the `x-kms-secret-token` metadata, required for
-token-protected and client-bound secrets.
+given). `secret_token` sets the operation-specific `GetSecret` request field,
+required for token-protected and client-bound secrets.
 
 `get_secret` returns a `Secret` (`kms_paramstore/secret.py`): an immutable,
 `__slots__`-based value type carrying plaintext plus read-only `env`, `app`,

@@ -90,7 +90,8 @@ class _SecretStub:
         self.tokens: List[str] = []
 
     def GetSecret(self, request, *, metadata, **_kwargs):
-        token = dict(metadata).get("x-kms-secret-token", "")
+        assert "x-kms-secret-token" not in dict(metadata)
+        token = request.secret_token
         self.tokens.append(token)
         if token != "local-token":
             raise AssertionError("protected secret fetched without its local token")
@@ -208,8 +209,8 @@ class _Client:
     def _resolve_namespace_arg(self, namespace):
         return namespace or NamespaceRef("prod", "app")
 
-    def _auth_metadata(self, secret_token: str = ""):
-        return [("x-kms-secret-token", secret_token)] if secret_token else []
+    def _auth_metadata(self):
+        return []
 
     def _call_timeout(self, timeout):
         return timeout or 1.0
@@ -232,8 +233,9 @@ class _Client:
                     key=resource_key,
                 ),
                 version=version,
+                secret_token=secret_token,
             ),
-            metadata=self._auth_metadata(secret_token),
+            metadata=self._auth_metadata(),
             timeout=self._call_timeout(timeout),
         )
         return Secret(

@@ -85,25 +85,26 @@ type Server struct {
 	lis  *bufconn.Listener
 	grpc *grpc.Server
 
-	mu             sync.Mutex
-	params         map[string]*kmsv1.Parameter // display path -> current parameter
-	paramVersions  map[string]map[uint64]*kmsv1.Parameter
-	secretMeta     map[string]*kmsv1.GetSecretResponse // display path -> current secret
-	secretVersions map[string]map[uint64]*kmsv1.GetSecretResponse
-	revision       uint64
-	paramErr       map[string]error       // display path -> error
-	secretErr      map[string]error       // display path -> error
-	lastMetadata   map[string]metadata.MD // method -> incoming md
-	putSecrets     []PutSecretCall
-	defaultsCalls  []*kmsv1.ApplyApplicationDefaultsRequest
-	defaultsQueue  []scriptedDefaultsResponse
-	verifyCalls    []*kmsv1.VerifyReleaseDefaultsRequest
-	verifyQueue    []scriptedVerifyResponse
-	schemaCalls    []*kmsv1.CreateSchemaRequest
-	schemaQueue    []scriptedSchemaResponse
-	getParamHook   func(displayPath string)
-	listHook       func(namespace string)
-	identity       *kmsv1.WhoAmIResponse
+	mu              sync.Mutex
+	params          map[string]*kmsv1.Parameter // display path -> current parameter
+	paramVersions   map[string]map[uint64]*kmsv1.Parameter
+	secretMeta      map[string]*kmsv1.GetSecretResponse // display path -> current secret
+	secretVersions  map[string]map[uint64]*kmsv1.GetSecretResponse
+	revision        uint64
+	paramErr        map[string]error       // display path -> error
+	secretErr       map[string]error       // display path -> error
+	lastMetadata    map[string]metadata.MD // method -> incoming md
+	lastSecretToken map[string]string      // method -> request field
+	putSecrets      []PutSecretCall
+	defaultsCalls   []*kmsv1.ApplyApplicationDefaultsRequest
+	defaultsQueue   []scriptedDefaultsResponse
+	verifyCalls     []*kmsv1.VerifyReleaseDefaultsRequest
+	verifyQueue     []scriptedVerifyResponse
+	schemaCalls     []*kmsv1.CreateSchemaRequest
+	schemaQueue     []scriptedSchemaResponse
+	getParamHook    func(displayPath string)
+	listHook        func(namespace string)
+	identity        *kmsv1.WhoAmIResponse
 
 	subMu     sync.Mutex
 	subs      []*Subscription
@@ -138,6 +139,7 @@ type PutSecretCall struct {
 	Value               []byte
 	ClientBound         bool
 	GenerateAccessToken bool
+	SecretToken         string
 }
 
 // New starts a fake server on an in-memory bufconn listener.
@@ -148,6 +150,7 @@ func New() (*Server, error) {
 		paramVersions:    make(map[string]map[uint64]*kmsv1.Parameter),
 		secretMeta:       make(map[string]*kmsv1.GetSecretResponse),
 		secretVersions:   make(map[string]map[uint64]*kmsv1.GetSecretResponse),
+		lastSecretToken:  make(map[string]string),
 		paramErr:         make(map[string]error),
 		secretErr:        make(map[string]error),
 		lastMetadata:     make(map[string]metadata.MD),
@@ -523,6 +526,14 @@ func (s *Server) LastMetadata(method string) metadata.MD {
 	return s.lastMetadata[method]
 }
 
+// LastSecretToken returns the operation-specific request field most recently
+// received by GetSecret or PutSecret.
+func (s *Server) LastSecretToken(method string) string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.lastSecretToken[method]
+}
+
 // PutSecretCalls returns a copy of recorded PutSecret invocations.
 func (s *Server) PutSecretCalls() []PutSecretCall {
 	s.mu.Lock()
@@ -684,6 +695,7 @@ func (s *Server) GetSecret(ctx context.Context, req *kmsv1.GetSecretRequest) (*k
 	display := displayOf(req.GetRef())
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.lastSecretToken["GetSecret"] = req.GetSecretToken()
 	if err := s.secretErr[display]; err != nil {
 		return nil, err
 	}
@@ -703,6 +715,7 @@ func (s *Server) PutSecret(ctx context.Context, req *kmsv1.PutSecretRequest) (*k
 	s.SetSecretPath(display, req.GetValue())
 	ns, key := splitDisplay(display)
 	s.mu.Lock()
+	s.lastSecretToken["PutSecret"] = req.GetSecretToken()
 	s.putSecrets = append(s.putSecrets, PutSecretCall{
 		Namespace:           ns,
 		Key:                 key,
@@ -710,6 +723,7 @@ func (s *Server) PutSecret(ctx context.Context, req *kmsv1.PutSecretRequest) (*k
 		Value:               req.GetValue(),
 		ClientBound:         req.GetClientBound(),
 		GenerateAccessToken: req.GetGenerateAccessToken(),
+		SecretToken:         req.GetSecretToken(),
 	})
 	rev := s.revision
 	s.mu.Unlock()

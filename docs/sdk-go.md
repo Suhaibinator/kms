@@ -135,7 +135,7 @@ Both accept `GetOption`s (`sdk/go/kmsclient/options.go`):
 
 - `WithVersion(n uint64)` — pin to an immutable version (takes precedence over `WithLabel`).
 - `WithLabel(label string)` — read the version a label points at (e.g. `"current"`, `"previous"`); the server default when neither option is given is `"current"`.
-- `WithSecretToken(token string)` — sets the `x-kms-secret-token` metadata; required for token-protected and client-bound secrets.
+- `WithSecretToken(token string)` — sets the operation-specific `GetSecret` request field; required for token-protected and client-bound secrets. The shared option is accepted by `GetParameter` for compatibility but is never transmitted there.
 
 `GetParameter` returns `(string, error)`. `GetSecret` returns `(Secret,
 error)`. `Secret` (`secret.go`) is a value type carrying plaintext plus

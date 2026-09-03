@@ -88,7 +88,7 @@ interface WatchHost {
   readonly timeoutMs: number;
   readonly logger: { warn(message: string): void };
   _watchTransport(): RpcTransport;
-  _metadata(secretToken?: string): Readonly<Record<string, string>>;
+  _metadata(): Readonly<Record<string, string>>;
   _rootSignal(): AbortSignal;
   _cache(): {
     invalidateParam(path: string): void;

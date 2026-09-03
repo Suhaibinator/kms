@@ -267,13 +267,20 @@ present *that version's* token, not the latest one, to read it.
 version irrecoverable. Losing a client token makes the versions encrypted under
 that token irrecoverable; versions written under other retained tokens remain
 readable. There is no backdoor, admin override, or support path around this.
-`Service.RevealSecret` (the admin/frontend/CLI reveal path) explicitly
-refuses to even attempt decryption of a client-bound secret
-(`domain.ErrFailedPrecondition`, "client-bound secrets cannot be revealed:
-the server cannot decrypt them without the client token") — the frontend and
-CLI show metadata only, and the "New secret" UI requires an explicit
-checkbox acknowledgment of this before it will submit the form
-(`frontend/pages/secrets/new.tsx`).
+The audited admin `Service.RevealSecret` path can decrypt a client-bound
+version only when the operator supplies that version's client token with the
+request. Missing, wrong, and unusable client key material all surface as the
+same generic decryption failure. The frontend keeps the token transient, sends
+it only in the JSON body of that reveal request, clears the input, and never
+stores or displays the token. Per-secret credentials are accepted only in the
+exact JSON/protobuf request that consumes them; custom HTTP headers and gRPC
+metadata are ignored so deployments do not depend on proxies redacting them.
+This is a strict transport cutover: upgrade the server and protected-secret
+clients together because legacy clients that send only the custom header or
+metadata cannot authorize a protected operation.
+The "New secret" UI still
+requires an explicit checkbox acknowledgment of the no-escrow property before
+it will submit the form (`frontend/pages/secrets/new.tsx`).
 
 ## Token model
 
@@ -302,9 +309,9 @@ creation/rotation time and is not retrievable again:
   enabling a token on a later standard-secret version does not retroactively
   protect older versions. `GetSecret` for a standard-secret version marked
   token-protected — **including when called by admins** — requires the matching
-  token via the `x-kms-secret-token` gRPC metadata key /
-  `X-KMS-Secret-Token` HTTP header (`tokenHashMatches`, constant-time
-  comparison via `hmac.Equal`). Explicit rotation replaces the shared
+  token in `GetSecretRequest.secret_token` (`tokenHashMatches`, constant-time
+  comparison via `hmac.Equal`). HTTP client-bound updates and admin reveals
+  use the equivalent `secret_token` JSON request-body field. Explicit rotation replaces the shared
   credential for every standard-secret version already marked protected. For
   client-bound secrets, writing another version requires the current token,
   and reads use the token as the per-version key-derivation material described
@@ -909,13 +916,15 @@ Redaction is enforced by type, not by call-site discipline:
   endpoint that can return plaintext is the admin-only `POST
   /api/v1/secrets/reveal`, which is explicitly audited per call.
 - The frontend never renders a secret value outside the explicit reveal
-  flow, and client-bound secrets have no reveal affordance in the UI at
-  all — the "Reveal secret" control is absent and the panel explains why,
-  because the server itself cannot produce the plaintext.
+  flow. For a client-bound version, the confirmation dialog requires that
+  version's token and clears it as the request starts; it is neither persisted
+  nor included in UI notifications. The revealed value follows the same
+  30-second auto-forget behavior as a standard secret.
 - HTTP request logging (`internal/server/httpserver/server.go`) deliberately
-  omits the query string from log lines, since resource identifiers (the
-  `env`/`app`/`key` query parameters) travel there and must never be allowed to
-  grow into carrying anything sensitive.
+  omits headers, bodies, and the query string. Per-secret credentials live only
+  in bounded request bodies, while resource identifiers (`env`/`app`/`key`)
+  remain query parameters where required. Reverse proxies are outside this
+  logging boundary and must still be configured not to record request bodies.
 
 ## What this does not protect against
 
@@ -930,9 +939,10 @@ The security boundary explicitly does not protect against:
   that holds the key material and sees the traffic.
 - **A malicious or compromised administrator.** Admin identities are the
   management plane: they stand outside the per-namespace method gate and
-  data-plane policy, and can reveal any
-  non-client-bound secret; every action is audited, which gives detection,
-  not prevention. Requiring a client certificate alongside the token raises
+  data-plane policy, and can reveal any standard secret. They can also reveal
+  a client-bound version if they obtain its client token; every action is
+  audited, which gives detection, not prevention. Requiring a client
+  certificate alongside the identity token raises
   the bar for *stealing* an admin credential — the token alone is worthless,
   the key never travels in a request, and neither credential can mint a new
   admin certificate without host access — but an attacker who holds both, or

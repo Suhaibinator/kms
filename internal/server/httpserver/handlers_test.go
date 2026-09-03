@@ -430,7 +430,7 @@ func TestSecretsLifecycle(t *testing.T) {
 	mustStatus(t, w, http.StatusOK)
 }
 
-func TestClientBoundRevealRejected(t *testing.T) {
+func TestClientBoundRevealRequiresToken(t *testing.T) {
 	e := newTestEnv(t)
 	e.createNS("prod", "gradethis")
 	w := e.admin(http.MethodPost, "/api/v1/secrets", map[string]any{
@@ -439,13 +439,87 @@ func TestClientBoundRevealRejected(t *testing.T) {
 		"client_bound": true, "generate_access_token": true,
 	})
 	mustStatus(t, w, http.StatusOK)
-
-	// Client-bound secrets have no reveal flow (412).
-	w = e.admin(http.MethodPost, "/api/v1/secrets/reveal", map[string]any{"env": "prod", "app": "gradethis", "key": "bound"})
-	mustStatus(t, w, http.StatusPreconditionFailed)
-	if errCode(t, w) != "failed_precondition" {
-		t.Fatalf("code = %s", errCode(t, w))
+	token, ok := decodeBody(t, w)["access_token"].(string)
+	if !ok || token == "" {
+		t.Fatal("client-bound create did not return an access token")
 	}
+	body := map[string]any{"env": "prod", "app": "gradethis", "key": "bound"}
+
+	// Missing and wrong tokens collapse to the same generic boundary response.
+	w = e.admin(http.MethodPost, "/api/v1/secrets/reveal", body)
+	mustStatus(t, w, http.StatusInternalServerError)
+	missingBody := w.Body.String()
+	if errCode(t, w) != "internal" {
+		t.Fatalf("missing-token code = %s", errCode(t, w))
+	}
+
+	// Reveal deliberately ignores the generic custom token header.
+	w = e.do(http.MethodPost, "/api/v1/secrets/reveal", body, map[string]string{
+		"Authorization":      "Bearer " + e.adminToken,
+		"X-KMS-Secret-Token": token,
+	})
+	mustStatus(t, w, http.StatusInternalServerError)
+	if w.Body.String() != missingBody {
+		t.Fatalf("header and missing tokens produced distinguishable responses: %q != %q", missingBody, w.Body.String())
+	}
+
+	// Wrong body tokens retain the same generic response.
+	body["secret_token"] = "kmss_wrongwrongwrongwrongwrongwrong"
+	w = e.admin(http.MethodPost, "/api/v1/secrets/reveal", body)
+	mustStatus(t, w, http.StatusInternalServerError)
+	if w.Body.String() != missingBody {
+		t.Fatalf("missing and wrong tokens produced distinguishable responses: %q != %q", missingBody, w.Body.String())
+	}
+
+	// The request-body field supplies the client key share.
+	body["secret_token"] = token
+	w = e.admin(http.MethodPost, "/api/v1/secrets/reveal", body)
+	mustStatus(t, w, http.StatusOK)
+	got := decodeBody(t, w)
+	if got["value_base64"] != base64.StdEncoding.EncodeToString([]byte("v")) {
+		t.Fatalf("revealed value = %v, want base64 plaintext", got["value_base64"])
+	}
+	if cacheControl := w.Header().Get("Cache-Control"); cacheControl != "no-store" {
+		t.Fatalf("Cache-Control = %q, want no-store", cacheControl)
+	}
+}
+
+func TestClientBoundUpdateTokenIsRequestBodyOnly(t *testing.T) {
+	e := newTestEnv(t)
+	e.createNS("prod", "gradethis")
+	create := map[string]any{
+		"env": "prod", "app": "gradethis", "key": "bound-update",
+		"value_base64": base64.StdEncoding.EncodeToString([]byte("v1")),
+		"client_bound": true, "generate_access_token": true,
+	}
+	w := e.admin(http.MethodPost, "/api/v1/secrets", create)
+	mustStatus(t, w, http.StatusOK)
+	token := decodeBody(t, w)["access_token"].(string)
+	update := map[string]any{
+		"env": "prod", "app": "gradethis", "key": "bound-update",
+		"value_base64": base64.StdEncoding.EncodeToString([]byte("v2")),
+		"client_bound": true,
+	}
+
+	// The deprecated custom header cannot authorize an update.
+	w = e.do(http.MethodPost, "/api/v1/secrets", update, map[string]string{
+		"Authorization": "Bearer " + e.adminToken, "X-KMS-Secret-Token": token,
+	})
+	mustStatus(t, w, http.StatusForbidden)
+
+	// A correct legacy header cannot override a wrong body credential.
+	update["secret_token"] = "kmss_wrongwrongwrongwrongwrongwrong"
+	w = e.do(http.MethodPost, "/api/v1/secrets", update, map[string]string{
+		"Authorization": "Bearer " + e.adminToken, "X-KMS-Secret-Token": token,
+	})
+	mustStatus(t, w, http.StatusForbidden)
+
+	// A body token is authoritative even when a conflicting legacy header is present.
+	update["secret_token"] = token
+	w = e.do(http.MethodPost, "/api/v1/secrets", update, map[string]string{
+		"Authorization": "Bearer " + e.adminToken, "X-KMS-Secret-Token": "wrong",
+	})
+	mustStatus(t, w, http.StatusOK)
 }
 
 func TestSecretInvalidBase64(t *testing.T) {

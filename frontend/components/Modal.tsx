@@ -127,6 +127,7 @@ export function ConfirmDialog({
   cancelLabel = "Cancel",
   danger,
   busy,
+  confirmDisabled: confirmDisabledProp,
   requireText,
   onConfirm,
   onCancel,
@@ -138,6 +139,8 @@ export function ConfirmDialog({
   cancelLabel?: string;
   danger?: boolean;
   busy?: boolean;
+  /** Additional caller-owned condition that prevents confirmation. */
+  confirmDisabled?: boolean;
   /** Exact text the user must enter before an irreversible action is enabled. */
   requireText?: string;
   onConfirm: () => void;
@@ -153,7 +156,8 @@ export function ConfirmDialog({
     if (open) setTyped("");
   }, [open]);
 
-  const confirmDisabled = busy || (!!requireText && typed !== requireText);
+  const confirmDisabled =
+    busy || confirmDisabledProp === true || (!!requireText && typed !== requireText);
 
   return (
     <Modal

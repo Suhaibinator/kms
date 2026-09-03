@@ -67,6 +67,11 @@ export default function SecretDetailPage() {
   const key = values.key ?? "";
   const hasRef = !!env && !!app && !!key;
   const ref = useMemo<ResourceRef>(() => ({ env, app, key }), [env, app, key]);
+  const refKey = `${env}\u0000${app}\u0000${key}`;
+  const activeRefKey = useRef(refKey);
+  // Update during render so a response cannot land in the gap between a route
+  // change rendering and its effect cleanup aborting the previous request.
+  activeRefKey.current = refKey;
 
   const [secret, setSecret] = useState<SecretMetadata | null>(null);
   const [loadState, setLoadState] = useState<
@@ -76,9 +81,11 @@ export default function SecretDetailPage() {
   // change of ref) is allowed to blank the page.
   const [refreshing, setRefreshing] = useState(false);
   const request = useLatestRequest();
+  const revealRequest = useLatestRequest();
 
   // Reveal flow.
   const [revealTarget, setRevealTarget] = useState<number | null>(null); // version pending confirm
+  const [revealToken, setRevealToken] = useState("");
   const [revealBusy, setRevealBusy] = useState(false);
   const [revealed, setRevealed] = useState<Revealed | null>(null);
   const [valueVisible, setValueVisible] = useState(false);
@@ -140,16 +147,23 @@ export default function SecretDetailPage() {
 
   useEffect(() => {
     if (!ready) return;
+    revealRequest.abort();
+    setRevealTarget(null);
+    setRevealBusy(false);
     if (hasRef) {
       setRevealed(null);
       setValueVisible(false);
+      setRevealToken("");
       void load();
     } else {
       setLoadState("idle");
       setSecret(null);
     }
-    return () => request.abort();
-  }, [ready, hasRef, load, request]);
+    return () => {
+      request.abort();
+      revealRequest.abort();
+    };
+  }, [ready, hasRef, load, request, revealRequest]);
 
   // Auto-hide countdown for the revealed value.
   useEffect(() => {
@@ -175,9 +189,15 @@ export default function SecretDetailPage() {
   const doReveal = useCallback(
     async (version: number) => {
       if (!hasRef) return;
+      const run = revealRequest.begin();
+      const token = secret?.client_bound ? revealToken : undefined;
+      // Clear the credential from React state as the request starts. The local
+      // copy exists only for this in-flight call and is never persisted.
+      setRevealToken("");
       setRevealBusy(true);
       try {
-        const res = await api.revealSecret(ref, version, "");
+        const res = await api.revealSecret(ref, version, "", token, { signal: run.signal });
+        if (!run.current || activeRefKey.current !== refKey) return;
         setRevealed({
           version: res.version,
           valueBase64: res.value_base64,
@@ -188,14 +208,27 @@ export default function SecretDetailPage() {
         // No value in the toast — metadata only.
         toast.success(`Revealed version ${res.version}`, "Recorded in the audit log.");
       } catch (err) {
+        if (!run.current || activeRefKey.current !== refKey || isAbortError(err)) return;
         toast.error(err, "Reveal failed");
       } finally {
-        setRevealBusy(false);
-        setRevealTarget(null);
+        if (run.current && activeRefKey.current === refKey) {
+          setRevealBusy(false);
+          setRevealTarget(null);
+        }
       }
     },
-    [hasRef, ref, toast],
+    [hasRef, ref, refKey, revealToken, revealRequest, secret?.client_bound, toast],
   );
+
+  const openReveal = useCallback((version: number) => {
+    setRevealToken("");
+    setRevealTarget(version);
+  }, []);
+
+  const closeReveal = useCallback(() => {
+    setRevealToken("");
+    setRevealTarget(null);
+  }, []);
 
   const runAction = useCallback(async () => {
     if (!hasRef || !confirm) return;
@@ -403,17 +436,7 @@ export default function SecretDetailPage() {
       {/* Reveal */}
       <div className="card">
         <div className="card-title">Secret value</div>
-        {secret.client_bound ? (
-          <div className="info-panel">
-            <strong>Client-bound — value cannot be revealed here.</strong>
-            <div className="mt-2">
-              This secret is encrypted with a key derived from the consuming application&apos;s
-              access token, which the server never stores in a recoverable form. The server cannot
-              decrypt it on its own, so there is no reveal flow. Only the application holding the
-              token can read the value.
-            </div>
-          </div>
-        ) : revealed ? (
+        {revealed ? (
           <div className="reveal-box">
             <div className="between mb-2">
               <div className="row-wrap">
@@ -474,8 +497,10 @@ export default function SecretDetailPage() {
         ) : (
           <div>
             <div className="warn-panel mb-4">
-              Revealing decrypts the secret and records an audit event. The value auto-hides after{" "}
-              {REVEAL_SECONDS} seconds.
+              {secret.client_bound
+                ? "Revealing this client-bound value requires the token used for the selected version. The token is sent only in this request body and is not stored by the console. "
+                : "Revealing decrypts the secret and records an audit event. "}
+              The value auto-hides after {REVEAL_SECONDS} seconds.
             </div>
             <div className="row-wrap">
               <label className="field-label" htmlFor="reveal-version">
@@ -495,7 +520,7 @@ export default function SecretDetailPage() {
               />
               <Button
                 disabled={selectedVersion === null || enabledVersions.length === 0}
-                onClick={() => selectedVersion !== null && setRevealTarget(selectedVersion)}
+                onClick={() => selectedVersion !== null && openReveal(selectedVersion)}
               >
                 Reveal secret
               </Button>
@@ -530,8 +555,7 @@ export default function SecretDetailPage() {
                       key={v.version}
                       v={v}
                       isCurrent={v.version === current}
-                      clientBound={secret.client_bound}
-                      onReveal={(ver) => setRevealTarget(ver)}
+                      onReveal={openReveal}
                       onConfirm={setConfirm}
                     />
                   ))}
@@ -550,12 +574,29 @@ export default function SecretDetailPage() {
             You are about to decrypt and display version {revealTarget} of{" "}
             <span className="mono">{displayPath(ref)}</span>. This is recorded in the audit log. The
             value will auto-hide after {REVEAL_SECONDS} seconds.
+            {secret.client_bound ? (
+              <Field
+                label="Token for this version"
+                hint="The token is used only for this reveal request and is not saved."
+                className="mt-4"
+              >
+                <Input
+                  type="password"
+                  value={revealToken}
+                  required
+                  autoComplete="off"
+                  spellCheck={false}
+                  onChange={(event) => setRevealToken(event.target.value)}
+                />
+              </Field>
+            ) : null}
           </>
         }
         confirmLabel="Reveal"
         busy={revealBusy}
+        confirmDisabled={secret.client_bound && revealToken.length === 0}
         onConfirm={() => revealTarget !== null && doReveal(revealTarget)}
-        onCancel={() => setRevealTarget(null)}
+        onCancel={closeReveal}
       />
 
       {/* Version / delete confirmations */}
@@ -640,13 +681,11 @@ export default function SecretDetailPage() {
 function VersionRow({
   v,
   isCurrent,
-  clientBound,
   onReveal,
   onConfirm,
 }: {
   v: SecretVersion;
   isCurrent: boolean;
-  clientBound: boolean;
   onReveal: (version: number) => void;
   onConfirm: (
     c:
@@ -681,7 +720,7 @@ function VersionRow({
       </td>
       <td>
         <div className="row-actions">
-          {!clientBound && v.state === "enabled" ? (
+          {v.state === "enabled" ? (
             <Button variant="outline" size="sm" onClick={() => onReveal(v.version)}>
               Reveal
             </Button>
@@ -794,20 +833,18 @@ function NewVersionModal({
     }
     setSaving(true);
     try {
-      const res = await api.createSecret(
-        {
-          env: secret.env,
-          app: secret.app,
-          key: secret.key,
-          value_base64: secretValueBase64(value, alreadyBase64),
-          content_type: contentType.trim() || "text/plain",
-          metadata_json: metadataJson.trim() || "{}",
-          client_bound: secret.client_bound,
-          generate_access_token: false,
-          expires_at_unix_ms: 0,
-        },
-        secret.client_bound ? clientToken.trim() : undefined,
-      );
+      const res = await api.createSecret({
+        env: secret.env,
+        app: secret.app,
+        key: secret.key,
+        value_base64: secretValueBase64(value, alreadyBase64),
+        content_type: contentType.trim() || "text/plain",
+        metadata_json: metadataJson.trim() || "{}",
+        client_bound: secret.client_bound,
+        generate_access_token: false,
+        expires_at_unix_ms: 0,
+        ...(secret.client_bound ? { secret_token: clientToken.trim() } : null),
+      });
       // Clear the plaintext from the field immediately.
       setValue("");
       setClientToken("");

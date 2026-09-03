@@ -70,9 +70,7 @@ func TestKEKRotationEndToEnd(t *testing.T) {
 	if got, err := h.svc.GetSecret(ctx, h.admin, stdRef, 0, ""); err != nil || string(got.Value) != stdValue {
 		t.Errorf("standard after rotate = %q err=%v, want %q", got.Value, err, stdValue)
 	}
-	boundPr := h.admin
-	boundPr.SecretToken = boundToken
-	if got, err := h.svc.GetSecret(ctx, boundPr, boundRef, 0, ""); err != nil || string(got.Value) != boundValue {
+	if got, err := h.svc.GetSecret(ctx, h.admin, boundRef, 0, "", boundToken); err != nil || string(got.Value) != boundValue {
 		t.Errorf("client-bound after rotate = %q err=%v, want %q", got.Value, err, boundValue)
 	}
 

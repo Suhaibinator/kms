@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"google.golang.org/grpc/codes"
+	grpcmetadata "google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 
 	kmsv1 "github.com/Suhaibinator/kms/gen/kmsv1"
@@ -504,13 +505,10 @@ func TestLoopbackConcurrentClientBoundWritesCommitExactlyOneWinner(t *testing.T)
 				defer wg.Done()
 				<-start
 				value := fmt.Sprintf("candidate-%02d", i)
-				callCtx := rootCtx
-				if secretToken != "" {
-					callCtx = networkSecretContext(ctx, e.adminToken, secretToken)
-				}
-				resp, err := secrets.PutSecret(callCtx, &kmsv1.PutSecretRequest{
+				resp, err := secrets.PutSecret(rootCtx, &kmsv1.PutSecretRequest{
 					Ref: networkRef("prod", "secret-race", "bound"), Value: []byte(value),
 					ContentType: "text/plain", ClientBound: true, GenerateAccessToken: true,
+					SecretToken: secretToken,
 				})
 				results <- writeResult{value: value, resp: resp, err: err}
 			}(i)
@@ -553,6 +551,12 @@ func TestLoopbackConcurrentClientBoundWritesCommitExactlyOneWinner(t *testing.T)
 	}
 
 	created := assertOneWinner("concurrent create", runConcurrent("", 8), 1)
+	legacyCtx := grpcmetadata.AppendToOutgoingContext(rootCtx, "x-kms-secret-token", created.resp.GetAccessToken())
+	if _, err := secrets.GetSecret(legacyCtx, &kmsv1.GetSecretRequest{
+		Ref: networkRef("prod", "secret-race", "bound"),
+	}); status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("legacy secret-token metadata read code = %v, want PermissionDenied", status.Code(err))
+	}
 	metadata, err := secrets.GetSecretMetadata(rootCtx, &kmsv1.GetSecretMetadataRequest{
 		Ref: networkRef("prod", "secret-race", "bound"),
 	})
@@ -562,8 +566,8 @@ func TestLoopbackConcurrentClientBoundWritesCommitExactlyOneWinner(t *testing.T)
 	if len(metadata.GetSecret().GetVersions()) != 1 || metadata.GetSecret().GetLabels()[domain.LabelCurrent] != 1 {
 		t.Fatalf("concurrent create committed multiple versions: %+v", metadata.GetSecret())
 	}
-	createdRead, err := secrets.GetSecret(networkSecretContext(ctx, e.adminToken, created.resp.GetAccessToken()), &kmsv1.GetSecretRequest{
-		Ref: networkRef("prod", "secret-race", "bound"),
+	createdRead, err := secrets.GetSecret(rootCtx, &kmsv1.GetSecretRequest{
+		Ref: networkRef("prod", "secret-race", "bound"), SecretToken: created.resp.GetAccessToken(),
 	})
 	if err != nil || string(createdRead.GetValue()) != created.value {
 		t.Fatalf("read create winner = %q err=%v, want %q", createdRead.GetValue(), err, created.value)
@@ -579,14 +583,14 @@ func TestLoopbackConcurrentClientBoundWritesCommitExactlyOneWinner(t *testing.T)
 	if len(metadata.GetSecret().GetVersions()) != 2 || metadata.GetSecret().GetLabels()[domain.LabelCurrent] != 2 {
 		t.Fatalf("concurrent rotation committed multiple versions: %+v", metadata.GetSecret())
 	}
-	rotatedRead, err := secrets.GetSecret(networkSecretContext(ctx, e.adminToken, rotated.resp.GetAccessToken()), &kmsv1.GetSecretRequest{
-		Ref: networkRef("prod", "secret-race", "bound"),
+	rotatedRead, err := secrets.GetSecret(rootCtx, &kmsv1.GetSecretRequest{
+		Ref: networkRef("prod", "secret-race", "bound"), SecretToken: rotated.resp.GetAccessToken(),
 	})
 	if err != nil || string(rotatedRead.GetValue()) != rotated.value {
 		t.Fatalf("read rotation winner = %q err=%v, want %q", rotatedRead.GetValue(), err, rotated.value)
 	}
-	if staleRead, err := secrets.GetSecret(networkSecretContext(ctx, e.adminToken, created.resp.GetAccessToken()), &kmsv1.GetSecretRequest{
-		Ref: networkRef("prod", "secret-race", "bound"),
+	if staleRead, err := secrets.GetSecret(rootCtx, &kmsv1.GetSecretRequest{
+		Ref: networkRef("prod", "secret-race", "bound"), SecretToken: created.resp.GetAccessToken(),
 	}); err == nil {
 		t.Fatalf("rotated-out token read current plaintext %q", staleRead.GetValue())
 	}

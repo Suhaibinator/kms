@@ -199,8 +199,8 @@ func (c *CLI) resolveEnvironment(ctx context.Context, conn *grpc.ClientConn, cf 
 				out.skipped = append(out.skipped, path)
 				continue
 			}
-			req := &kmsv1.GetSecretRequest{Ref: s.ref, Version: s.version}
-			resp, err := client.GetSecret(cf.authCtxWithSecretToken(ctx, token), req)
+			req := &kmsv1.GetSecretRequest{Ref: s.ref, Version: s.version, SecretToken: token}
+			resp, err := client.GetSecret(cf.authCtx(ctx), req)
 			if err != nil {
 				return resolvedEnvironment{}, fmt.Errorf("secret %s: %w", path, err)
 			}

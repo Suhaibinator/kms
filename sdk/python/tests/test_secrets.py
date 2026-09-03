@@ -38,7 +38,7 @@ def test_secret_token_required_and_propagated(client):
     # Without the token the server denies.
     with pytest.raises(PermissionDeniedError):
         client.get_secret("tok")
-    # With the token it succeeds (token travels in x-kms-secret-token metadata).
+    # With the token it succeeds (token travels in the exact request field).
     got = client.get_secret("tok", secret_token=res.access_token)
     assert got.value == b"v"
 
