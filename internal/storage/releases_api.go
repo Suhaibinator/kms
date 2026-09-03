@@ -49,3 +49,32 @@ type ReleaseStore interface {
 type FirstReleaseStore interface {
 	CreateFirstConfigurationRelease(ctx context.Context, release domain.ConfigurationRelease) (domain.ConfigurationRelease, error)
 }
+
+// ApplicationReleaseCurrentPin identifies a movable current label that an
+// application release preview resolved. Creation rechecks it in the same
+// transaction that allocates the release version.
+type ApplicationReleaseCurrentPin struct {
+	Kind    string
+	Ref     domain.Ref
+	Version uint64
+}
+
+// ApplicationReleaseCreate is the complete stale-state expectation captured
+// by CreateApplicationRelease's preview.
+type ApplicationReleaseCreate struct {
+	Release                    domain.ConfigurationRelease
+	NamespaceID                int64
+	Contract                   []domain.ApplicationContractField
+	SchemaDigest               string
+	ExpectedLatestVersion      uint64
+	ExpectedActiveVersion      uint64
+	ExpectedActivationRevision uint64
+	CurrentPins                []ApplicationReleaseCurrentPin
+}
+
+// ApplicationReleaseStore atomically creates the canonical application
+// release. An identical canonical latest release is returned as a successful
+// idempotent no-op; generic release creation deliberately remains unchanged.
+type ApplicationReleaseStore interface {
+	CreateLatestApplicationRelease(ctx context.Context, in ApplicationReleaseCreate) (release domain.ConfigurationRelease, created bool, err error)
+}

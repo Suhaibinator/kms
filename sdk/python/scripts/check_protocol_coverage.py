@@ -68,6 +68,7 @@ CLASSIFIED = {
         "ListAuditEvents": "admin-out-of-scope",
         "ListSubscribers": "admin-out-of-scope",
         "ListReleaseSubscribers": "admin-out-of-scope",
+        "CreateApplicationRelease": "admin-out-of-scope",
         "Health": "admin-out-of-scope",
     },
 }

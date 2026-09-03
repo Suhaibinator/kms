@@ -1454,6 +1454,11 @@ class AdminServiceStub:
                 request_serializer=kms_dot_v1_dot_kms__pb2.ApplyApplicationDefaultsRequest.SerializeToString,
                 response_deserializer=kms_dot_v1_dot_kms__pb2.ApplyApplicationDefaultsResponse.FromString,
                 _registered_method=True)
+        self.CreateApplicationRelease = channel.unary_unary(
+                '/kms.v1.AdminService/CreateApplicationRelease',
+                request_serializer=kms_dot_v1_dot_kms__pb2.CreateApplicationReleaseRequest.SerializeToString,
+                response_deserializer=kms_dot_v1_dot_kms__pb2.CreateApplicationReleaseResponse.FromString,
+                _registered_method=True)
         self.Health = channel.unary_unary(
                 '/kms.v1.AdminService/Health',
                 request_serializer=kms_dot_v1_dot_kms__pb2.HealthRequest.SerializeToString,
@@ -1588,6 +1593,12 @@ class AdminServiceServicer:
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
+    def CreateApplicationRelease(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
     def Health(self, request, context):
         """Missing associated documentation comment in .proto file."""
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
@@ -1696,6 +1707,11 @@ def add_AdminServiceServicer_to_server(servicer, server):
                     servicer.ApplyApplicationDefaults,
                     request_deserializer=kms_dot_v1_dot_kms__pb2.ApplyApplicationDefaultsRequest.FromString,
                     response_serializer=kms_dot_v1_dot_kms__pb2.ApplyApplicationDefaultsResponse.SerializeToString,
+            ),
+            'CreateApplicationRelease': grpc.unary_unary_rpc_method_handler(
+                    servicer.CreateApplicationRelease,
+                    request_deserializer=kms_dot_v1_dot_kms__pb2.CreateApplicationReleaseRequest.FromString,
+                    response_serializer=kms_dot_v1_dot_kms__pb2.CreateApplicationReleaseResponse.SerializeToString,
             ),
             'Health': grpc.unary_unary_rpc_method_handler(
                     servicer.Health,
@@ -2247,6 +2263,33 @@ class AdminService:
             '/kms.v1.AdminService/ApplyApplicationDefaults',
             kms_dot_v1_dot_kms__pb2.ApplyApplicationDefaultsRequest.SerializeToString,
             kms_dot_v1_dot_kms__pb2.ApplyApplicationDefaultsResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def CreateApplicationRelease(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/kms.v1.AdminService/CreateApplicationRelease',
+            kms_dot_v1_dot_kms__pb2.CreateApplicationReleaseRequest.SerializeToString,
+            kms_dot_v1_dot_kms__pb2.CreateApplicationReleaseResponse.FromString,
             options,
             channel_credentials,
             insecure,

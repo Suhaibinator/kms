@@ -13,7 +13,7 @@ import (
 	"google.golang.org/grpc/status"
 )
 
-func TestLoopbackDefaultsBootstrapAndFirstRelease(t *testing.T) {
+func TestLoopbackDefaultsReleaseCreationCarriesSecretAndStaysInactive(t *testing.T) {
 	e := newLoopbackTLSEnv(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -93,11 +93,118 @@ func TestLoopbackDefaultsBootstrapAndFirstRelease(t *testing.T) {
 		t.Fatalf("repinned application = %+v err=%v", repinned, err)
 	}
 
-	shipped, err := e.svc.ShipApplicationChange(ctx, admin, domain.ShipInput{Application: appName, Environment: ns.Env})
+	releasePreview, err := adminClient.CreateApplicationRelease(authCtx, &kmsv1.CreateApplicationReleaseRequest{
+		Namespace: networkNS(ns.Env, ns.App), Artifact: artifact, MetadataJson: `{"source":"integration"}`,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if shipped.Status != domain.ShipStatusActivated || shipped.Release == nil || shipped.Release.Version != 1 || len(shipped.Parameters) != 0 {
-		t.Fatalf("zero-edit first release = %+v", shipped)
+	if !releasePreview.GetValid() || releasePreview.GetExecuted() || releasePreview.GetPlanDigest() == "" || releasePreview.GetBaseReleaseVersion() != 0 {
+		t.Fatalf("first release preview = %+v", releasePreview)
+	}
+	createdFirst, err := adminClient.CreateApplicationRelease(authCtx, &kmsv1.CreateApplicationReleaseRequest{
+		Namespace: networkNS(ns.Env, ns.App), Artifact: artifact, MetadataJson: `{"source":"integration"}`,
+		Execute: true, PlanDigest: releasePreview.GetPlanDigest(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstRelease := createdFirst.GetRelease()
+	if !createdFirst.GetExecuted() || !createdFirst.GetCreated() || firstRelease == nil || firstRelease.GetVersion() != 1 {
+		t.Fatalf("first release create = %+v", createdFirst)
+	}
+	releases := kmsv1.NewConfigurationReleaseServiceClient(e.adminConn)
+	if _, err := releases.GetActiveRelease(authCtx, &kmsv1.GetActiveReleaseRequest{
+		Namespace: networkNS(ns.Env, ns.App), Name: "runtime",
+	}); status.Code(err) != codes.NotFound {
+		t.Fatalf("release creation unexpectedly activated v1: %v", err)
+	}
+	zero := uint64(0)
+	activatedFirst, err := releases.ActivateRelease(authCtx, &kmsv1.ActivateReleaseRequest{
+		Namespace: networkNS(ns.Env, ns.App), Name: "runtime", Version: firstRelease.GetVersion(), ExpectedCurrentVersion: &zero,
+	})
+	if err != nil || !activatedFirst.GetChanged() {
+		t.Fatalf("activate first release = %+v err=%v", activatedFirst, err)
+	}
+
+	rotated, err := e.svc.PutSecret(ctx, admin, core.PutSecretInput{
+		Ref: domain.Ref{NS: ns, Key: "api_key"}, Value: []byte("rotated-secret"), ContentType: "text/plain", Metadata: "{}",
+	})
+	if err != nil || rotated.Version != 2 {
+		t.Fatalf("rotate secret = %+v err=%v", rotated, err)
+	}
+	updatedArtifact, err := configstore.EncodeDefaultsArtifact(configstore.DefaultsArtifact{
+		Format: configstore.DefaultsArtifactFormat, Profile: "dev", SchemaSHA256: schema.GetDigest(),
+		Contract: []configstore.ContractEntry{
+			{Alias: "api_key", Kind: configstore.ContractKindSecret},
+			{Alias: "runtime", Kind: configstore.ContractKindParameter, ContentType: "json"},
+		},
+		Parameters: []configstore.DefaultsParameter{{Alias: "runtime", ContentType: "json", Value: `{"message":"updated"}`}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	updatePreview, err := adminClient.ApplyApplicationDefaults(authCtx, &kmsv1.ApplyApplicationDefaultsRequest{
+		Namespace: networkNS(ns.Env, ns.App), Artifact: updatedArtifact, Overwrite: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	updated, err := adminClient.ApplyApplicationDefaults(authCtx, &kmsv1.ApplyApplicationDefaultsRequest{
+		Namespace: networkNS(ns.Env, ns.App), Artifact: updatedArtifact, Overwrite: true,
+		Execute: true, PlanDigest: updatePreview.GetPlanDigest(),
+	})
+	if err != nil || !updated.GetExecuted() || updated.GetEntries()[0].GetAppliedVersion() != 2 {
+		t.Fatalf("updated defaults = %+v err=%v", updated, err)
+	}
+
+	nextPreview, err := adminClient.CreateApplicationRelease(authCtx, &kmsv1.CreateApplicationReleaseRequest{
+		Namespace: networkNS(ns.Env, ns.App), Artifact: updatedArtifact, MetadataJson: `{"source":"integration"}`,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var parameterPin, secretPin *kmsv1.ApplicationReleasePlanEntry
+	for _, entry := range nextPreview.GetEntries() {
+		switch entry.GetAlias() {
+		case "runtime":
+			parameterPin = entry
+		case "api_key":
+			secretPin = entry
+		}
+	}
+	if !nextPreview.GetValid() || parameterPin == nil || parameterPin.GetToVersion() != 2 ||
+		secretPin == nil || secretPin.GetFromVersion() != 1 || secretPin.GetToVersion() != 1 || secretPin.GetSource() != domain.ApplicationReleaseSourceCarriedActiveSecret {
+		t.Fatalf("next release preview = %+v", nextPreview)
+	}
+	createdNext, err := adminClient.CreateApplicationRelease(authCtx, &kmsv1.CreateApplicationReleaseRequest{
+		Namespace: networkNS(ns.Env, ns.App), Artifact: updatedArtifact, MetadataJson: `{"source":"integration"}`,
+		Execute: true, PlanDigest: nextPreview.GetPlanDigest(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	nextRelease := createdNext.GetRelease()
+	if !createdNext.GetCreated() || nextRelease == nil || nextRelease.GetVersion() != 2 {
+		t.Fatalf("next release create = %+v", createdNext)
+	}
+	stillActive, err := releases.GetActiveRelease(authCtx, &kmsv1.GetActiveReleaseRequest{
+		Namespace: networkNS(ns.Env, ns.App), Name: "runtime",
+	})
+	if err != nil || stillActive.GetRelease().GetVersion() != 1 || stillActive.GetActivationRevision() != activatedFirst.GetActivationRevision() {
+		t.Fatalf("release creation changed activation: %+v err=%v", stillActive, err)
+	}
+	listed, err := releases.ListReleases(authCtx, &kmsv1.ListReleasesRequest{
+		Namespace: networkNS(ns.Env, ns.App), Name: "runtime", PageSize: 10,
+	})
+	if err != nil || len(listed.GetReleases()) != 2 {
+		t.Fatalf("portal release list = %+v err=%v", listed, err)
+	}
+	expectedFirst := uint64(1)
+	activatedNext, err := releases.ActivateRelease(authCtx, &kmsv1.ActivateReleaseRequest{
+		Namespace: networkNS(ns.Env, ns.App), Name: "runtime", Version: nextRelease.GetVersion(), ExpectedCurrentVersion: &expectedFirst,
+	})
+	if err != nil || !activatedNext.GetChanged() || activatedNext.GetCurrentVersion() != 2 {
+		t.Fatalf("activate next release = %+v err=%v", activatedNext, err)
 	}
 }

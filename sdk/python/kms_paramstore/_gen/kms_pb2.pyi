@@ -1372,3 +1372,61 @@ class HealthResponse(_message.Message):
     current_revision: int
     details_json: str
     def __init__(self, healthy: _Optional[bool] = ..., ready: _Optional[bool] = ..., version: _Optional[str] = ..., current_revision: _Optional[int] = ..., details_json: _Optional[str] = ...) -> None: ...
+
+class CreateApplicationReleaseRequest(_message.Message):
+    __slots__ = ("namespace", "artifact", "metadata_json", "execute", "plan_digest")
+    NAMESPACE_FIELD_NUMBER: _ClassVar[int]
+    ARTIFACT_FIELD_NUMBER: _ClassVar[int]
+    METADATA_JSON_FIELD_NUMBER: _ClassVar[int]
+    EXECUTE_FIELD_NUMBER: _ClassVar[int]
+    PLAN_DIGEST_FIELD_NUMBER: _ClassVar[int]
+    namespace: NamespaceRef
+    artifact: bytes
+    metadata_json: str
+    execute: bool
+    plan_digest: str
+    def __init__(self, namespace: _Optional[_Union[NamespaceRef, _Mapping]] = ..., artifact: _Optional[bytes] = ..., metadata_json: _Optional[str] = ..., execute: _Optional[bool] = ..., plan_digest: _Optional[str] = ...) -> None: ...
+
+class ApplicationReleasePlanEntry(_message.Message):
+    __slots__ = ("alias", "kind", "ref", "from_version", "to_version", "source")
+    ALIAS_FIELD_NUMBER: _ClassVar[int]
+    KIND_FIELD_NUMBER: _ClassVar[int]
+    REF_FIELD_NUMBER: _ClassVar[int]
+    FROM_VERSION_FIELD_NUMBER: _ClassVar[int]
+    TO_VERSION_FIELD_NUMBER: _ClassVar[int]
+    SOURCE_FIELD_NUMBER: _ClassVar[int]
+    alias: str
+    kind: str
+    ref: ResourceRef
+    from_version: int
+    to_version: int
+    source: str
+    def __init__(self, alias: _Optional[str] = ..., kind: _Optional[str] = ..., ref: _Optional[_Union[ResourceRef, _Mapping]] = ..., from_version: _Optional[int] = ..., to_version: _Optional[int] = ..., source: _Optional[str] = ...) -> None: ...
+
+class CreateApplicationReleaseResponse(_message.Message):
+    __slots__ = ("profile", "plan_digest", "valid", "executed", "created", "release_name", "schema_version", "base_release_version", "entries", "missing_secrets", "validation", "release")
+    PROFILE_FIELD_NUMBER: _ClassVar[int]
+    PLAN_DIGEST_FIELD_NUMBER: _ClassVar[int]
+    VALID_FIELD_NUMBER: _ClassVar[int]
+    EXECUTED_FIELD_NUMBER: _ClassVar[int]
+    CREATED_FIELD_NUMBER: _ClassVar[int]
+    RELEASE_NAME_FIELD_NUMBER: _ClassVar[int]
+    SCHEMA_VERSION_FIELD_NUMBER: _ClassVar[int]
+    BASE_RELEASE_VERSION_FIELD_NUMBER: _ClassVar[int]
+    ENTRIES_FIELD_NUMBER: _ClassVar[int]
+    MISSING_SECRETS_FIELD_NUMBER: _ClassVar[int]
+    VALIDATION_FIELD_NUMBER: _ClassVar[int]
+    RELEASE_FIELD_NUMBER: _ClassVar[int]
+    profile: str
+    plan_digest: str
+    valid: bool
+    executed: bool
+    created: bool
+    release_name: str
+    schema_version: int
+    base_release_version: int
+    entries: _containers.RepeatedCompositeFieldContainer[ApplicationReleasePlanEntry]
+    missing_secrets: _containers.RepeatedScalarFieldContainer[str]
+    validation: _containers.RepeatedCompositeFieldContainer[ReleaseValidationError]
+    release: ConfigurationRelease
+    def __init__(self, profile: _Optional[str] = ..., plan_digest: _Optional[str] = ..., valid: _Optional[bool] = ..., executed: _Optional[bool] = ..., created: _Optional[bool] = ..., release_name: _Optional[str] = ..., schema_version: _Optional[int] = ..., base_release_version: _Optional[int] = ..., entries: _Optional[_Iterable[_Union[ApplicationReleasePlanEntry, _Mapping]]] = ..., missing_secrets: _Optional[_Iterable[str]] = ..., validation: _Optional[_Iterable[_Union[ReleaseValidationError, _Mapping]]] = ..., release: _Optional[_Union[ConfigurationRelease, _Mapping]] = ...) -> None: ...

@@ -1,5 +1,6 @@
-// Command apply-defaults uploads this application's generated schema or
-// previews/applies its source-owned parameter defaults to KMS.
+// Command apply-defaults uploads this application's generated schema,
+// previews/applies its source-owned parameter defaults, or creates an inactive
+// immutable release for review in KMS.
 package main
 
 import (

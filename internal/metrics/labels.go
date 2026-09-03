@@ -221,6 +221,8 @@ var AuditEventTypes = []string{
 	"application.environment_clone",
 	"application.list",
 	"application.read",
+	"application.release.create",
+	"application.release.preview",
 	"application.ship",
 	"application.unarchive",
 	"application.update",

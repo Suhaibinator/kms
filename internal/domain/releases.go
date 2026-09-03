@@ -43,6 +43,7 @@ const (
 	ReleaseValidationMalformedJSON    = "malformed_json"
 	ReleaseValidationSchema           = "schema_violation"
 	ReleaseValidationDigest           = "digest_mismatch"
+	ReleaseValidationDefaultMismatch  = "default_mismatch"
 	// ReleaseValidationContract reports a candidate whose entries do not match
 	// the application contract (alias set, kind or content type).
 	ReleaseValidationContract = "contract_mismatch"

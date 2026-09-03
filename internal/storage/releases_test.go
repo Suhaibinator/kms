@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"errors"
 	"fmt"
+	"sync"
 	"testing"
 	"time"
 
@@ -84,6 +85,122 @@ func TestConfigurationReleaseActivationCASRollbackAndGuards(t *testing.T) {
 		if row.ActivationRevision == 0 {
 			t.Errorf("version %d missing activation history", row.Release.Version)
 		}
+	}
+}
+
+func TestCreateLatestApplicationReleaseIsSpecializedAndIdempotent(t *testing.T) {
+	ctx := context.Background()
+	st := newStore(t)
+	contract := []domain.ApplicationContractField{{Alias: "config", Kind: domain.ReleaseEntryParameter, ContentType: "json"}}
+	app, schema, err := st.CreateApplicationWithSchema(ctx,
+		domain.Application{Name: "app", ReleaseName: "runtime", Contract: contract, CreatedBy: "admin"},
+		domain.ConfigurationSchema{Application: "app", ReleaseName: "runtime", Schema: `{"type":"object"}`, Digest: "schema-digest", Metadata: "{}", CreatedBy: "admin"},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	namespace, err := st.CreateNamespace(ctx, domain.Namespace{Env: "prod", App: app.Name, CreatedBy: "admin"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	parameter := domain.Ref{NS: namespace.NamespaceRef, Key: "config"}
+	if _, _, err := st.PutParameter(ctx, parameter, `{"n":1}`, "json", "{}", "admin"); err != nil {
+		t.Fatal(err)
+	}
+	candidate := domain.ConfigurationRelease{
+		Namespace: namespace.NamespaceRef, Name: app.ReleaseName, SchemaVersion: schema.Version,
+		Digest: "release-digest", Metadata: "{}", CreatedBy: "admin",
+		Entries: []domain.ConfigurationReleaseEntry{{Alias: "config", Kind: domain.ReleaseEntryParameter, Ref: parameter, Version: 1, ContentType: "json", Metadata: "{}", ParameterDigest: fmt.Sprintf("%x", sha256.Sum256([]byte(`{"n":1}`)))}},
+	}
+	input := ApplicationReleaseCreate{
+		Release: candidate, NamespaceID: namespace.ID, Contract: contract, SchemaDigest: schema.Digest,
+		CurrentPins: []ApplicationReleaseCurrentPin{{Kind: domain.ReleaseEntryParameter, Ref: parameter, Version: 1}},
+	}
+	first, created, err := st.CreateLatestApplicationRelease(ctx, input)
+	if err != nil || !created || first.Version != 1 {
+		t.Fatalf("first application release = %+v created=%v err=%v", first, created, err)
+	}
+	retry, created, err := st.CreateLatestApplicationRelease(ctx, input)
+	if err != nil || created || retry.Version != first.Version {
+		t.Fatalf("idempotent application release = %+v created=%v err=%v", retry, created, err)
+	}
+
+	// Generic creation deliberately retains its append-only behavior.
+	generic, err := st.CreateConfigurationRelease(ctx, candidate)
+	if err != nil || generic.Version != 2 {
+		t.Fatalf("generic identical release = %+v err=%v", generic, err)
+	}
+	retry, created, err = st.CreateLatestApplicationRelease(ctx, input)
+	if err != nil || created || retry.Version != generic.Version {
+		t.Fatalf("latest identical release = %+v created=%v err=%v", retry, created, err)
+	}
+	if _, err := st.GetActiveConfigurationRelease(ctx, namespace.NamespaceRef, app.ReleaseName); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("application release creation changed activation labels: %v", err)
+	}
+}
+
+func TestCreateLatestApplicationReleaseConcurrentIdenticalRequestsCreateOnce(t *testing.T) {
+	ctx := context.Background()
+	st := newStore(t)
+	contract := []domain.ApplicationContractField{{Alias: "config", Kind: domain.ReleaseEntryParameter, ContentType: "json"}}
+	app, schema, err := st.CreateApplicationWithSchema(ctx,
+		domain.Application{Name: "concurrent-app", ReleaseName: "runtime", Contract: contract, CreatedBy: "admin"},
+		domain.ConfigurationSchema{Application: "concurrent-app", ReleaseName: "runtime", Schema: `{"type":"object"}`, Digest: "schema-digest", Metadata: "{}", CreatedBy: "admin"},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	namespace, err := st.CreateNamespace(ctx, domain.Namespace{Env: "prod", App: app.Name, CreatedBy: "admin"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	parameter := domain.Ref{NS: namespace.NamespaceRef, Key: "config"}
+	if _, _, err := st.PutParameter(ctx, parameter, `{"n":1}`, "json", "{}", "admin"); err != nil {
+		t.Fatal(err)
+	}
+	input := ApplicationReleaseCreate{
+		Release: domain.ConfigurationRelease{
+			Namespace: namespace.NamespaceRef, Name: app.ReleaseName, SchemaVersion: schema.Version,
+			Digest: "release-digest", Metadata: "{}", CreatedBy: "admin",
+			Entries: []domain.ConfigurationReleaseEntry{{
+				Alias: "config", Kind: domain.ReleaseEntryParameter, Ref: parameter, Version: 1,
+				ContentType: "json", Metadata: "{}", ParameterDigest: fmt.Sprintf("%x", sha256.Sum256([]byte(`{"n":1}`))),
+			}},
+		},
+		NamespaceID: namespace.ID, Contract: contract, SchemaDigest: schema.Digest,
+		CurrentPins: []ApplicationReleaseCurrentPin{{Kind: domain.ReleaseEntryParameter, Ref: parameter, Version: 1}},
+	}
+	type outcome struct {
+		release domain.ConfigurationRelease
+		created bool
+		err     error
+	}
+	start := make(chan struct{})
+	results := make(chan outcome, 2)
+	var ready sync.WaitGroup
+	ready.Add(2)
+	for range 2 {
+		go func() {
+			ready.Done()
+			<-start
+			release, created, err := st.CreateLatestApplicationRelease(ctx, input)
+			results <- outcome{release: release, created: created, err: err}
+		}()
+	}
+	ready.Wait()
+	close(start)
+	createdCount := 0
+	for range 2 {
+		result := <-results
+		if result.err != nil || result.release.Version != 1 {
+			t.Fatalf("concurrent application release = %+v", result)
+		}
+		if result.created {
+			createdCount++
+		}
+	}
+	if createdCount != 1 {
+		t.Fatalf("concurrent created count = %d, want 1", createdCount)
 	}
 }
 

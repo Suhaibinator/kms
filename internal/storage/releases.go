@@ -7,6 +7,8 @@ import (
 	"encoding/hex"
 	"encoding/json/v2"
 	"errors"
+	"reflect"
+	"sort"
 	"strings"
 	"time"
 
@@ -18,19 +20,35 @@ import (
 
 var _ ReleaseStore = (*SQLStore)(nil)
 var _ FirstReleaseStore = (*SQLStore)(nil)
+var _ ApplicationReleaseStore = (*SQLStore)(nil)
 
 func (s *SQLStore) CreateConfigurationRelease(ctx context.Context, release domain.ConfigurationRelease) (domain.ConfigurationRelease, error) {
-	return s.createConfigurationRelease(ctx, release, false)
+	out, _, err := s.createConfigurationRelease(ctx, release, releaseCreateOptions{})
+	return out, err
 }
 
 // CreateFirstConfigurationRelease atomically creates version one or aborts if
 // the release stream is already established.
 func (s *SQLStore) CreateFirstConfigurationRelease(ctx context.Context, release domain.ConfigurationRelease) (domain.ConfigurationRelease, error) {
-	return s.createConfigurationRelease(ctx, release, true)
+	out, _, err := s.createConfigurationRelease(ctx, release, releaseCreateOptions{requireFirst: true})
+	return out, err
 }
 
-func (s *SQLStore) createConfigurationRelease(ctx context.Context, release domain.ConfigurationRelease, requireFirst bool) (domain.ConfigurationRelease, error) {
+type releaseCreateOptions struct {
+	requireFirst bool
+	application  *ApplicationReleaseCreate
+}
+
+// CreateLatestApplicationRelease performs the preview-state checks and
+// version allocation together. It is the only release creation path that is
+// idempotent against an identical latest canonical release.
+func (s *SQLStore) CreateLatestApplicationRelease(ctx context.Context, in ApplicationReleaseCreate) (domain.ConfigurationRelease, bool, error) {
+	return s.createConfigurationRelease(ctx, in.Release, releaseCreateOptions{application: &in})
+}
+
+func (s *SQLStore) createConfigurationRelease(ctx context.Context, release domain.ConfigurationRelease, options releaseCreateOptions) (domain.ConfigurationRelease, bool, error) {
 	var out domain.ConfigurationRelease
+	created := false
 	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		nsID, err := resolveNamespaceID(tx, release.Namespace)
 		if err != nil {
@@ -51,13 +69,43 @@ func (s *SQLStore) createConfigurationRelease(ctx context.Context, release domai
 			}
 			entryNamespaceIDs[entry.Ref.NS] = entryNamespaceID
 		}
+		for index := range release.Entries {
+			release.Entries[index].ResourceNamespaceID = entryNamespaceIDs[release.Entries[index].Ref.NS]
+		}
+		if options.application != nil {
+			if err := verifyApplicationReleaseState(tx, nsID, *options.application); err != nil {
+				return err
+			}
+		}
 		var maxVersion int64
 		if err := tx.Model(&configurationReleaseModel{}).
 			Where("namespace_id = ? AND name = ?", nsID, release.Name).
 			Select("COALESCE(MAX(version_number), 0)").Scan(&maxVersion).Error; err != nil {
 			return err
 		}
-		if requireFirst && maxVersion != 0 {
+		if options.application != nil && maxVersion != 0 {
+			latest, err := getConfigurationRelease(tx, release.Namespace, release.Name, uint64(maxVersion))
+			if err != nil {
+				return err
+			}
+			if sameCanonicalRelease(latest, release) {
+				var latestModel configurationReleaseModel
+				if err := tx.Where("namespace_id = ? AND name = ? AND version_number = ?", nsID, release.Name, maxVersion).First(&latestModel).Error; err != nil {
+					return err
+				}
+				if err := validateReleasePinsTx(tx, latestModel.ID); err != nil {
+					return err
+				}
+				out = latest
+				return nil
+			}
+			if uint64(maxVersion) != options.application.ExpectedLatestVersion {
+				return applicationReleaseStale()
+			}
+		} else if options.application != nil && options.application.ExpectedLatestVersion != 0 {
+			return applicationReleaseStale()
+		}
+		if options.requireFirst && maxVersion != 0 {
 			return domain.Errorf(domain.ErrAborted, "configuration release %s/%s is already established", release.Namespace, release.Name)
 		}
 		now := nowUTC()
@@ -69,15 +117,14 @@ func (s *SQLStore) createConfigurationRelease(ctx context.Context, release domai
 		}
 		if err := tx.Omit(clause.Associations).Create(&m).Error; err != nil {
 			if isUniqueErr(err) {
-				if requireFirst {
+				if options.requireFirst {
 					return domain.Errorf(domain.ErrAborted, "configuration release %s/%s is already established", release.Namespace, release.Name)
 				}
 				return domain.Errorf(domain.ErrAlreadyExists, "configuration release %s/%s version %d", release.Namespace, release.Name, maxVersion+1)
 			}
 			return err
 		}
-		for index, entry := range release.Entries {
-			release.Entries[index].ResourceNamespaceID = entryNamespaceIDs[entry.Ref.NS]
+		for _, entry := range release.Entries {
 			em := configurationReleaseEntryModel{
 				ReleaseID: m.ID, Alias: entry.Alias, Kind: entry.Kind, ResourceNamespaceID: entryNamespaceIDs[entry.Ref.NS],
 				ResourceEnv: entry.Ref.NS.Env, ResourceApp: entry.Ref.NS.App, ResourceKey: entry.Ref.Key,
@@ -92,13 +139,110 @@ func (s *SQLStore) createConfigurationRelease(ctx context.Context, release domai
 				return err
 			}
 		}
+		if options.application != nil {
+			if err := validateReleasePinsTx(tx, m.ID); err != nil {
+				return err
+			}
+		}
 		release.Version = uint64(m.VersionNumber)
 		release.CreatedAt = now
 		release.Metadata = m.MetadataJSON
 		out = release
+		created = true
 		return nil
 	})
-	return out, err
+	return out, created, err
+}
+
+func applicationReleaseStale() error {
+	return domain.Errorf(domain.ErrAborted, "application release plan is stale; preview again")
+}
+
+func verifyApplicationReleaseState(tx *gorm.DB, nsID int64, in ApplicationReleaseCreate) error {
+	var app applicationModel
+	if err := tx.Where("name = ?", in.Release.Namespace.App).First(&app).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return applicationReleaseStale()
+		}
+		return err
+	}
+	contract, err := contractJSON(in.Contract)
+	if err != nil {
+		return err
+	}
+	if app.ArchivedAt != nil || app.ReleaseName != in.Release.Name || uint64(app.SchemaVersion) != in.Release.SchemaVersion || app.ContractJSON != contract {
+		return applicationReleaseStale()
+	}
+	if in.NamespaceID != nsID {
+		return applicationReleaseStale()
+	}
+	var schema configurationSchemaModel
+	if err := tx.Where("application_name = ? AND release_name = ? AND version_number = ?", app.Name, app.ReleaseName, app.SchemaVersion).First(&schema).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return applicationReleaseStale()
+		}
+		return err
+	}
+	if schema.Digest != in.SchemaDigest {
+		return applicationReleaseStale()
+	}
+	var active configurationReleaseLabelModel
+	err = tx.Where("namespace_id = ? AND release_name = ? AND label = ?", nsID, in.Release.Name, domain.LabelCurrent).First(&active).Error
+	switch {
+	case errors.Is(err, gorm.ErrRecordNotFound):
+		if in.ExpectedActiveVersion != 0 || in.ExpectedActivationRevision != 0 {
+			return applicationReleaseStale()
+		}
+	case err != nil:
+		return err
+	default:
+		if uint64(active.VersionNumber) != in.ExpectedActiveVersion || uint64(active.ActivationRevision) != in.ExpectedActivationRevision {
+			return applicationReleaseStale()
+		}
+	}
+	for _, pin := range in.CurrentPins {
+		pinNamespaceID, err := resolveNamespaceID(tx, pin.Ref.NS)
+		if err != nil {
+			if errors.Is(err, domain.ErrNotFound) || errors.Is(err, domain.ErrAborted) {
+				return applicationReleaseStale()
+			}
+			return err
+		}
+		var current int64
+		switch pin.Kind {
+		case domain.ReleaseEntryParameter:
+			err = tx.Raw(`SELECT l.version_number FROM parameters p
+				JOIN parameter_labels l ON l.parameter_id = p.id AND l.label = ?
+				WHERE p.namespace_id = ? AND p.name = ?`, domain.LabelCurrent, pinNamespaceID, pin.Ref.Key).Scan(&current).Error
+		case domain.ReleaseEntrySecret:
+			err = tx.Raw(`SELECT l.version_number FROM secrets s
+				JOIN secret_labels l ON l.secret_id = s.id AND l.label = ?
+				WHERE s.namespace_id = ? AND s.name = ?`, domain.LabelCurrent, pinNamespaceID, pin.Ref.Key).Scan(&current).Error
+		default:
+			return applicationReleaseStale()
+		}
+		if err != nil {
+			return err
+		}
+		if uint64(current) != pin.Version {
+			return applicationReleaseStale()
+		}
+	}
+	return nil
+}
+
+func sameCanonicalRelease(a, b domain.ConfigurationRelease) bool {
+	normalize := func(r domain.ConfigurationRelease) domain.ConfigurationRelease {
+		r.Version, r.CreatedBy, r.CreatedAt = 0, "", time.Time{}
+		r.Metadata = zeroOr(r.Metadata, "{}")
+		r.Entries = append([]domain.ConfigurationReleaseEntry(nil), r.Entries...)
+		for index := range r.Entries {
+			r.Entries[index].Metadata = zeroOr(r.Entries[index].Metadata, "{}")
+		}
+		sort.Slice(r.Entries, func(i, j int) bool { return r.Entries[i].Alias < r.Entries[j].Alias })
+		return r
+	}
+	return reflect.DeepEqual(normalize(a), normalize(b))
 }
 
 func (s *SQLStore) GetConfigurationRelease(ctx context.Context, ns domain.NamespaceRef, name string, version uint64) (domain.ConfigurationRelease, error) {

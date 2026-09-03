@@ -424,8 +424,9 @@ and the operator workflow are in the
 [managed Go configuration guide](managed-go-configuration.md).
 
 Generated bindings also expose `GeneratedSchema() []byte`, which returns a
-fresh copy of the exact schema artifact. Applications that want both schema
-registration and defaults import can expose one command:
+fresh copy of the exact schema artifact. Applications that want schema
+registration, defaults import, and app-owned release creation can expose one
+command:
 
 ```go
 os.Exit(configstore.RunManagedConfigCommand(
@@ -442,12 +443,18 @@ os.Exit(configstore.RunManagedConfigCommand(
 ))
 ```
 
-It exposes `schema upload` (no profile) and `defaults apply --profile ...`.
-`RunDefaultsApplier` remains available when only the latter is wanted.
+It exposes `schema upload` (no profile), `defaults apply --profile ...`, and
+`release create --profile ...`. Release creation previews by default and uses
+`--execute` to persist an inactive immutable release. It requires current
+parameters to match the generated defaults, carries the active release's exact
+secret pins forward, and never activates. `RunDefaultsApplier` remains
+available when only defaults import is wanted.
 For custom tooling, `Client.CreateApplicationSchema` accepts an application,
 schema bytes, and optional metadata directly. KMS derives the release name and
 returns the assigned coordinates and digest; an identical registration wraps
-the public `ErrAlreadyExists` sentinel.
+the public `ErrAlreadyExists` sentinel. `Client.CreateApplicationRelease`
+exposes the same preview/plan-digest/create workflow used by the composite
+runner without exposing parameter values or secret material in its result.
 
 The lower-level APIs below remain supported and are useful when an application
 needs a custom preparation model.
