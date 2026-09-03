@@ -302,14 +302,14 @@ func migrateSchema(db *gorm.DB, current int) error {
 		ordinaryModels = append(ordinaryModels, model)
 	}
 	autoMigrateDB := db
-	ignoreRelationships := autoMigrateDB.Config.IgnoreRelationshipsWhenMigrating
+	ignoreRelationships := autoMigrateDB.IgnoreRelationshipsWhenMigrating
 	if migratedSchemaOwnership {
 		// Do not let associations on otherwise unrelated models recursively add
 		// one of the three ownership tables back into GORM's migration set.
-		autoMigrateDB.Config.IgnoreRelationshipsWhenMigrating = true
+		autoMigrateDB.IgnoreRelationshipsWhenMigrating = true
 	}
 	err := autoMigrateDB.AutoMigrate(ordinaryModels...)
-	autoMigrateDB.Config.IgnoreRelationshipsWhenMigrating = ignoreRelationships
+	autoMigrateDB.IgnoreRelationshipsWhenMigrating = ignoreRelationships
 	if err != nil {
 		return fmt.Errorf("auto-migrate: %w", err)
 	}

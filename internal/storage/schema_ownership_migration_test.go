@@ -21,6 +21,7 @@ func legacySchemaOwnershipDBAt(t *testing.T, path string) *gorm.DB {
 	if err != nil {
 		t.Fatal(err)
 	}
+	closeGORMDBAtCleanup(t, db)
 	for _, ddl := range []string{
 		`CREATE TABLE applications (
 			id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL UNIQUE,
@@ -64,6 +65,19 @@ func legacySchemaOwnershipDBAt(t *testing.T, path string) *gorm.DB {
 		}
 	}
 	return db
+}
+
+func closeGORMDBAtCleanup(t *testing.T, db *gorm.DB) {
+	t.Helper()
+	sqlDB, err := db.DB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := sqlDB.Close(); err != nil {
+			t.Errorf("close test database: %v", err)
+		}
+	})
 }
 
 func TestOpenMigratesValidSchemaOwnershipV8Database(t *testing.T) {
@@ -279,6 +293,7 @@ func TestMigrateSchemaOwnershipV8RejectsMissingOrPartiallyMigratedRegistry(t *te
 			if err != nil {
 				t.Fatal(err)
 			}
+			closeGORMDBAtCleanup(t, db)
 			test.seed(t, db)
 			if err := migrateSchemaOwnershipV8(db, 7); err == nil || !strings.Contains(err.Error(), test.want) {
 				t.Fatalf("migration error = %v, want %q", err, test.want)
@@ -485,6 +500,7 @@ func TestOpenRollsBackSchemaOwnershipWhenV8StampFails(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	closeGORMDBAtCleanup(t, inspect)
 	if !inspect.Migrator().HasColumn("configuration_schemas", "id") ||
 		!inspect.Migrator().HasColumn("applications", "schema_id") ||
 		!inspect.Migrator().HasColumn("configuration_releases", "schema_id") {
