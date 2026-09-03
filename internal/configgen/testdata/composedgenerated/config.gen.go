@@ -15,6 +15,10 @@ import (
 )
 
 const generatedSchemaSHA256 = "8aab8bd7749e19e7a1929fabd77debdc519b318d3aab39651d4cc33503bc6bfa"
+const generatedSchemaJSON = "{\n  \"$schema\": \"https://json-schema.org/draft/2020-12/schema\",\n  \"type\": \"object\",\n  \"additionalProperties\": false,\n  \"required\": [\n    \"database\",\n    \"runtime\"\n  ],\n  \"properties\": {\n    \"database\": {\n      \"additionalProperties\": false,\n      \"properties\": {\n        \"endpoint\": {\n          \"description\": \"Endpoint is the database address shared by every service.\",\n          \"type\": \"string\"\n        }\n      },\n      \"required\": [\n        \"endpoint\"\n      ],\n      \"type\": \"object\"\n    },\n    \"runtime\": {\n      \"additionalProperties\": false,\n      \"properties\": {\n        \"app_name\": {\n          \"type\": \"string\"\n        },\n        \"burst\": {\n          \"description\": \"Burst is the number of requests allowed above the steady rate.\",\n          \"maximum\": 2147483647,\n          \"minimum\": -2147483648,\n          \"type\": \"integer\"\n        }\n      },\n      \"required\": [\n        \"app_name\",\n        \"burst\"\n      ],\n      \"type\": \"object\"\n    }\n  }\n}\n"
+
+// GeneratedSchema returns a fresh copy of the exact JSON Schema emitted by kms-config-gen.
+func GeneratedSchema() []byte { return []byte(generatedSchemaJSON) }
 
 var generatedContract = []configstore.ContractEntry{
 	{Alias: "database", Kind: configstore.ContractKindParameter, ContentType: "json"},

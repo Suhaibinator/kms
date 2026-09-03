@@ -38,6 +38,15 @@ func newVerifyFixture(t *testing.T) *verifyFixture {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = st.Close() })
+	svc := New(st, nil, "test")
+	admin := adminPrincipal()
+	_, schema, err := svc.CreateApplicationWithSchema(ctx, admin, domain.Application{Name: "app", ReleaseName: "runtime"}, `{
+		"type": "object",
+		"properties": {"json_cfg": {"type": "object"}, "text_cfg": {"type": "string"}, "num_cfg": {"type": "integer"}, "quiet_cfg": {"type": "string"}}
+	}`, "{}")
+	if err != nil {
+		t.Fatal(err)
+	}
 	ns := domain.NamespaceRef{Env: "prod", App: "app"}
 	if _, err := st.CreateNamespace(ctx, domain.Namespace{NamespaceRef: ns, AllowedAuthMethods: []domain.AuthMethod{domain.AuthMethodToken}, CreatedBy: "admin"}); err != nil {
 		t.Fatal(err)
@@ -63,21 +72,12 @@ func newVerifyFixture(t *testing.T) *verifyFixture {
 	if err := st.InsertKeyMetadata(ctx, domain.KeyMetadata{ID: "kek-test", Source: domain.KeySourceFile, KeyCheck: keyCheck, State: domain.KeyStateActive, CreatedAt: time.Now().UTC()}); err != nil {
 		t.Fatal(err)
 	}
-	svc := New(st, nil, "test")
 	svc.SetKeyring(crypto.NewKeyring(kek))
-	admin := adminPrincipal()
 	if _, err := svc.PutSecret(ctx, admin, PutSecretInput{Ref: domain.Ref{NS: ns, Key: "db-password"}, Value: []byte("s3cr3t"), ContentType: "text/plain"}); err != nil {
 		t.Fatal(err)
 	}
-	schema, err := svc.CreateConfigurationSchema(ctx, admin, "app/runtime", `{
-		"type": "object",
-		"properties": {"json_cfg": {"type": "object"}, "text_cfg": {"type": "string"}, "num_cfg": {"type": "integer"}, "quiet_cfg": {"type": "string"}}
-	}`, "{}")
-	if err != nil {
-		t.Fatal(err)
-	}
 	rel, err := svc.CreateConfigurationRelease(ctx, admin, domain.CreateConfigurationReleaseInput{
-		Namespace: ns, Name: "runtime", SchemaID: schema.ID, SchemaVersion: schema.Version,
+		Namespace: ns, Name: "runtime", SchemaVersion: schema.Version,
 		Entries: []domain.ReleaseEntrySelector{
 			{Alias: "json_cfg", Kind: domain.ReleaseEntryParameter, Ref: domain.Ref{NS: ns, Key: "config/json"}},
 			{Alias: "text_cfg", Kind: domain.ReleaseEntryParameter, Ref: domain.Ref{NS: ns, Key: "config/text"}},

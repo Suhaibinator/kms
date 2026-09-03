@@ -31,6 +31,13 @@ func TestConfigurationReleaseGRPCLifecycleAndWatch(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = st.Close() }()
+	svc := core.New(st, nil, "test")
+	pinnedApp, pinnedSchema, err := svc.CreateApplicationWithSchema(ctx, core.Principal{
+		Identity: domain.Identity{Name: "admin", Kind: domain.IdentityKindAdmin}, Method: domain.AuthMethodToken,
+	}, domain.Application{Name: "app", ReleaseName: "runtime"}, `{"type":"object"}`, "{}")
+	if err != nil || pinnedApp.SchemaVersion != pinnedSchema.Version {
+		t.Fatalf("create pinned application = %+v schema=%+v err=%v", pinnedApp, pinnedSchema, err)
+	}
 	ns := domain.NamespaceRef{Env: "prod", App: "app"}
 	if _, err := st.CreateNamespace(ctx, domain.Namespace{NamespaceRef: ns}); err != nil {
 		t.Fatal(err)
@@ -38,7 +45,6 @@ func TestConfigurationReleaseGRPCLifecycleAndWatch(t *testing.T) {
 	if _, err := st.CreateIdentity(ctx, storage.CreateIdentityParams{Name: "admin", Kind: domain.IdentityKindAdmin, TokenHash: crypto.TokenHash(adminToken)}); err != nil {
 		t.Fatal(err)
 	}
-	svc := core.New(st, nil, "test")
 	kek, err := crypto.NewKEKFromMaterial("kek", make([]byte, 32))
 	if err != nil {
 		t.Fatal(err)
@@ -69,8 +75,31 @@ func TestConfigurationReleaseGRPCLifecycleAndWatch(t *testing.T) {
 	if _, err := param.PutParameter(adminCtx(), &kmsv1.PutParameterRequest{Ref: pRef("prod", "app", "config"), Value: `{"enabled":true}`, ContentType: "json"}); err != nil {
 		t.Fatal(err)
 	}
+	schemas := kmsv1.NewConfigurationSchemaServiceClient(conn)
+	createdSchema, err := schemas.CreateSchema(adminCtx(), &kmsv1.CreateSchemaRequest{
+		Application: "app",
+		SchemaJson:  `{"type":"object","properties":{"settings":{"type":"object"}},"required":["settings"]}`,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	schema := createdSchema.GetSchema()
+	if schema.GetApplication() != "app" || schema.GetReleaseName() != "runtime" || schema.GetVersion() != 2 || schema.GetDigest() == "" {
+		t.Fatalf("created schema = %+v", schema)
+	}
+	gotSchema, err := schemas.GetSchema(adminCtx(), &kmsv1.GetSchemaRequest{Application: "app", ReleaseName: "runtime", Version: schema.GetVersion()})
+	if err != nil || gotSchema.GetSchema().GetDigest() != schema.GetDigest() {
+		t.Fatalf("get schema = %+v err=%v", gotSchema, err)
+	}
+	listedSchemas, err := schemas.ListSchemas(adminCtx(), &kmsv1.ListSchemasRequest{Application: "app", ReleaseName: "runtime"})
+	if err != nil || len(listedSchemas.GetSchemas()) != 2 || listedSchemas.GetSchemas()[0].GetVersion() != schema.GetVersion() {
+		t.Fatalf("list schemas = %+v err=%v", listedSchemas, err)
+	}
+	if _, err := schemas.CreateSchema(adminCtx(), &kmsv1.CreateSchemaRequest{Application: "app", SchemaJson: schema.GetSchemaJson()}); status.Code(err) != codes.AlreadyExists {
+		t.Fatalf("duplicate schema code = %s err=%v, want AlreadyExists", status.Code(err), err)
+	}
 	releases := kmsv1.NewConfigurationReleaseServiceClient(conn)
-	created, err := releases.CreateRelease(adminCtx(), &kmsv1.CreateReleaseRequest{Namespace: pNS("prod", "app"), Name: "runtime", Entries: []*kmsv1.ReleaseEntrySelector{{Alias: "settings", Kind: "parameter", Ref: pRef("prod", "app", "config"), Label: "current"}}})
+	created, err := releases.CreateRelease(adminCtx(), &kmsv1.CreateReleaseRequest{Namespace: pNS("prod", "app"), Name: "runtime", SchemaVersion: pinnedSchema.Version, Entries: []*kmsv1.ReleaseEntrySelector{{Alias: "settings", Kind: "parameter", Ref: pRef("prod", "app", "config"), Label: "current"}}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -84,7 +113,7 @@ func TestConfigurationReleaseGRPCLifecycleAndWatch(t *testing.T) {
 	if !active.GetChanged() || active.GetActivationRevision() == 0 {
 		t.Fatalf("active=%+v", active)
 	}
-	createdV2, err := releases.CreateRelease(adminCtx(), &kmsv1.CreateReleaseRequest{Namespace: pNS("prod", "app"), Name: "runtime", Entries: []*kmsv1.ReleaseEntrySelector{{Alias: "settings", Kind: "parameter", Ref: pRef("prod", "app", "config"), Label: "current"}}})
+	createdV2, err := releases.CreateRelease(adminCtx(), &kmsv1.CreateReleaseRequest{Namespace: pNS("prod", "app"), Name: "runtime", SchemaVersion: pinnedSchema.Version, Entries: []*kmsv1.ReleaseEntrySelector{{Alias: "settings", Kind: "parameter", Ref: pRef("prod", "app", "config"), Label: "current"}}})
 	if err != nil {
 		t.Fatal(err)
 	}

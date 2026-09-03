@@ -23,7 +23,7 @@ import (
 
 // schemaVersion is the schema version this build supports. Opening a database
 // stamped with a higher version is refused.
-const schemaVersion = 7
+const schemaVersion = 8
 
 // tsLayout is a fixed-width RFC3339 UTC layout with nanosecond precision. Unlike
 // time.RFC3339Nano it never trims trailing zeros, so every stored timestamp has
@@ -234,33 +234,53 @@ func (s *SQLStore) migrate() error {
 	if current > schemaVersion {
 		return fmt.Errorf("database schema version %d is newer than supported version %d; upgrade the binary", current, schemaVersion)
 	}
+	needsOwnershipRewrite := current < 8 && ((s.db.Migrator().HasTable("configuration_schemas") && s.db.Migrator().HasColumn("configuration_schemas", "id")) ||
+		(s.db.Migrator().HasTable("applications") && s.db.Migrator().HasColumn("applications", "schema_id")) ||
+		(s.db.Migrator().HasTable("configuration_releases") && s.db.Migrator().HasColumn("configuration_releases", "schema_id")))
+	if needsOwnershipRewrite {
+		// The complete v8 upgrade, including unrelated additive migrations and
+		// the version stamp, is atomic for every database that still needs an
+		// ownership rewrite. This is intentionally conditional: GORM cannot
+		// rebuild an already-v8 SQLite table graph inside a foreign-key-enabled
+		// transaction, which matters only for stale stamps on an already migrated
+		// physical schema (where no ownership rewrite remains to roll back).
+		return s.db.Transaction(func(tx *gorm.DB) error {
+			return migrateSchema(tx, current)
+		})
+	}
+	return migrateSchema(s.db, current)
+}
 
+func migrateSchema(db *gorm.DB, current int) error {
 	// change_log is created explicitly to guarantee AUTOINCREMENT regardless of
 	// how GORM renders the tag.
-	if err := s.db.Exec(changeLogDDL).Error; err != nil {
+	if err := db.Exec(changeLogDDL).Error; err != nil {
 		return fmt.Errorf("create change_log: %w", err)
 	}
 	// CREATE TABLE IF NOT EXISTS does not evolve existing raw-DDL tables. Legacy
 	// rows remain namespace_id=0 and therefore fail closed for incarnation-bound
 	// watch replay; all new rows are stamped by appendChange.
-	if !s.db.Migrator().HasColumn(&changeLogModel{}, "NamespaceID") {
-		if err := s.db.Exec("ALTER TABLE change_log ADD COLUMN namespace_id INTEGER NOT NULL DEFAULT 0").Error; err != nil {
+	if !db.Migrator().HasColumn(&changeLogModel{}, "NamespaceID") {
+		if err := db.Exec("ALTER TABLE change_log ADD COLUMN namespace_id INTEGER NOT NULL DEFAULT 0").Error; err != nil {
 			return fmt.Errorf("add change_log namespace incarnation: %w", err)
 		}
 	}
-	if err := s.db.Exec(changeLogIndexDDL).Error; err != nil {
+	if err := db.Exec(changeLogIndexDDL).Error; err != nil {
 		return fmt.Errorf("create change_log index: %w", err)
 	}
-	if err := s.db.Exec(changeLogNamespaceIndexDDL).Error; err != nil {
+	if err := db.Exec(changeLogNamespaceIndexDDL).Error; err != nil {
 		return fmt.Errorf("create change_log namespace incarnation index: %w", err)
 	}
-	if err := ensureReleaseSubscriberIdentityKeys(s.db); err != nil {
+	if err := ensureReleaseSubscriberIdentityKeys(db); err != nil {
 		return err
 	}
 	needsSecretVersionAttributeBackfill := current < 2 ||
-		!s.db.Migrator().HasColumn(&secretVersionModel{}, "ContentType") ||
-		!s.db.Migrator().HasColumn(&secretVersionModel{}, "ClientBound") ||
-		!s.db.Migrator().HasColumn(&secretVersionModel{}, "HasAccessToken")
+		!db.Migrator().HasColumn(&secretVersionModel{}, "ContentType") ||
+		!db.Migrator().HasColumn(&secretVersionModel{}, "ClientBound") ||
+		!db.Migrator().HasColumn(&secretVersionModel{}, "HasAccessToken")
+	migratedSchemaOwnership := current < 8 && ((db.Migrator().HasTable("configuration_schemas") && db.Migrator().HasColumn("configuration_schemas", "id")) ||
+		(db.Migrator().HasTable("applications") && db.Migrator().HasColumn("applications", "schema_id")) ||
+		(db.Migrator().HasTable("configuration_releases") && db.Migrator().HasColumn("configuration_releases", "schema_id")))
 	// GORM attempts to rebuild manually repaired SQLite composite-key tables
 	// when its inferred DDL differs textually, even when the physical key is
 	// already correct. Migrate the ordinary models first, then create subscriber
@@ -271,24 +291,39 @@ func (s *SQLStore) migrate() error {
 		switch model.(type) {
 		case *releaseSubscriberStateModel, *releaseSubscriberConnectionModel:
 			continue
-		default:
-			ordinaryModels = append(ordinaryModels, model)
+		case *applicationModel, *configurationReleaseModel, *configurationSchemaModel:
+			if migratedSchemaOwnership {
+				// These three tables are rebuilt by the ownership migration below.
+				// Asking GORM to reinterpret their SQLite DDL can trigger another
+				// lossy rebuild while configuration_schemas has an inbound FK.
+				continue
+			}
 		}
+		ordinaryModels = append(ordinaryModels, model)
 	}
-	if err := s.db.AutoMigrate(ordinaryModels...); err != nil {
+	autoMigrateDB := db
+	ignoreRelationships := autoMigrateDB.Config.IgnoreRelationshipsWhenMigrating
+	if migratedSchemaOwnership {
+		// Do not let associations on otherwise unrelated models recursively add
+		// one of the three ownership tables back into GORM's migration set.
+		autoMigrateDB.Config.IgnoreRelationshipsWhenMigrating = true
+	}
+	err := autoMigrateDB.AutoMigrate(ordinaryModels...)
+	autoMigrateDB.Config.IgnoreRelationshipsWhenMigrating = ignoreRelationships
+	if err != nil {
 		return fmt.Errorf("auto-migrate: %w", err)
 	}
-	if !s.db.Migrator().HasTable(&releaseSubscriberStateModel{}) {
-		if err := s.db.AutoMigrate(&releaseSubscriberStateModel{}); err != nil {
+	if !db.Migrator().HasTable(&releaseSubscriberStateModel{}) {
+		if err := db.AutoMigrate(&releaseSubscriberStateModel{}); err != nil {
 			return fmt.Errorf("create release subscriber states: %w", err)
 		}
 	}
-	if !s.db.Migrator().HasTable(&releaseSubscriberConnectionModel{}) {
-		if err := s.db.AutoMigrate(&releaseSubscriberConnectionModel{}); err != nil {
+	if !db.Migrator().HasTable(&releaseSubscriberConnectionModel{}) {
+		if err := db.AutoMigrate(&releaseSubscriberConnectionModel{}); err != nil {
 			return fmt.Errorf("create release subscriber connections: %w", err)
 		}
 	}
-	if err := verifyReleaseSubscriberIdentityKeys(s.db); err != nil {
+	if err := verifyReleaseSubscriberIdentityKeys(db); err != nil {
 		return fmt.Errorf("verify release subscriber identity keys: %w", err)
 	}
 	// v7: applied-generation divergence on subscriber lifecycle rows. The
@@ -299,10 +334,10 @@ func (s *SQLStore) migrate() error {
 		{"AppliedDivergent", "ALTER TABLE release_subscriber_states ADD COLUMN applied_divergent INTEGER NOT NULL DEFAULT 0"},
 		{"DivergentFieldCount", "ALTER TABLE release_subscriber_states ADD COLUMN divergent_field_count INTEGER NOT NULL DEFAULT 0"},
 	} {
-		if s.db.Migrator().HasColumn(&releaseSubscriberStateModel{}, column.field) {
+		if db.Migrator().HasColumn(&releaseSubscriberStateModel{}, column.field) {
 			continue
 		}
-		if err := s.db.Exec(column.ddl).Error; err != nil {
+		if err := db.Exec(column.ddl).Error; err != nil {
 			return fmt.Errorf("add release subscriber divergence column %s: %w", column.field, err)
 		}
 	}
@@ -311,7 +346,7 @@ func (s *SQLStore) migrate() error {
 		// Older schemas only retained the latest values on secrets, so that is
 		// the only safe backfill available for existing version history. Future
 		// writes persist the attributes alongside every new version.
-		if err := s.db.Transaction(func(tx *gorm.DB) error {
+		if err := db.Transaction(func(tx *gorm.DB) error {
 			return tx.Exec(`UPDATE secret_versions
 				SET content_type = (SELECT content_type FROM secrets WHERE secrets.id = secret_versions.secret_id),
 				    client_bound = (SELECT client_bound FROM secrets WHERE secrets.id = secret_versions.secret_id),
@@ -323,7 +358,7 @@ func (s *SQLStore) migrate() error {
 
 	// Defensive verification of the critical AUTOINCREMENT invariant.
 	var ddl string
-	if err := s.db.Raw("SELECT sql FROM sqlite_master WHERE type='table' AND name='change_log'").Scan(&ddl).Error; err != nil {
+	if err := db.Raw("SELECT sql FROM sqlite_master WHERE type='table' AND name='change_log'").Scan(&ddl).Error; err != nil {
 		return fmt.Errorf("inspect change_log: %w", err)
 	}
 	if !strings.Contains(strings.ToUpper(ddl), "AUTOINCREMENT") {
@@ -331,8 +366,19 @@ func (s *SQLStore) migrate() error {
 	}
 
 	if current < schemaVersion {
-		if err := s.db.Create(&schemaMigrationModel{Version: schemaVersion, AppliedAt: fmtTime(time.Now())}).Error; err != nil {
-			return fmt.Errorf("record schema version: %w", err)
+		// The ownership rewrite and the v8 stamp are one transaction. If either
+		// the strict legacy validation/rebuild or the final stamp fails, SQLite
+		// rolls both back and the database remains a repairable pre-v8 database.
+		if err := db.Transaction(func(tx *gorm.DB) error {
+			if err := migrateSchemaOwnershipV8(tx, current); err != nil {
+				return err
+			}
+			if err := tx.Create(&schemaMigrationModel{Version: schemaVersion, AppliedAt: fmtTime(time.Now())}).Error; err != nil {
+				return fmt.Errorf("record schema version: %w", err)
+			}
+			return nil
+		}); err != nil {
+			return err
 		}
 	}
 	return nil

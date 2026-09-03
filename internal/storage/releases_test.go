@@ -384,7 +384,7 @@ func TestConfigurationReleaseSourceNamespaceIncarnationIsImmutable(t *testing.T)
 	})
 }
 
-func TestNamespaceDeleteRejectsConfigurationReleaseState(t *testing.T) {
+func TestNamespaceDeleteRetiresConfigurationReleaseState(t *testing.T) {
 	ctx := context.Background()
 	st := newStore(t)
 	seedNS(t, st, "prod", "app")
@@ -392,8 +392,14 @@ func TestNamespaceDeleteRejectsConfigurationReleaseState(t *testing.T) {
 	if _, err := st.CreateConfigurationRelease(ctx, domain.ConfigurationRelease{Namespace: ns, Name: "runtime", Digest: "digest", Metadata: "{}"}); err != nil {
 		t.Fatal(err)
 	}
-	if err := st.DeleteNamespace(ctx, ns); !errors.Is(err, domain.ErrFailedPrecondition) {
-		t.Fatalf("DeleteNamespace err=%v, want failed precondition", err)
+	if err := st.DeleteNamespace(ctx, ns); err != nil {
+		t.Fatalf("DeleteNamespace: %v", err)
+	}
+	if _, err := st.GetConfigurationRelease(ctx, ns, "runtime", 1); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("release survived namespace retirement: %v", err)
+	}
+	if _, err := st.GetNamespace(ctx, ns); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("namespace survived retirement: %v", err)
 	}
 }
 
@@ -402,11 +408,11 @@ func TestConfigurationSchemaAndReleaseAcknowledgementRoundTrip(t *testing.T) {
 	st := newStore(t)
 	seedNS(t, st, "prod", "app")
 	ns := nsRef("prod", "app")
-	schema, err := st.CreateConfigurationSchema(ctx, domain.ConfigurationSchema{ID: "runtime", Schema: `{"type":"object"}`, Digest: "d", Metadata: "{}"})
+	schema, err := st.CreateConfigurationSchema(ctx, domain.ConfigurationSchema{Application: "app", ReleaseName: "runtime", Schema: `{"type":"object"}`, Digest: "d", Metadata: "{}"})
 	if err != nil || schema.Version != 1 {
 		t.Fatalf("schema=%+v err=%v", schema, err)
 	}
-	got, err := st.GetConfigurationSchema(ctx, "runtime", 1)
+	got, err := st.GetConfigurationSchema(ctx, "app", "runtime", 1)
 	if err != nil || got.Schema != schema.Schema {
 		t.Fatalf("get schema=%+v err=%v", got, err)
 	}

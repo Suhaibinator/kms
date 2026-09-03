@@ -46,9 +46,6 @@ const devReleaseSchema = `{
 // EnsureApplication creates as "runtime" when the first namespace is made.
 const devReleaseName = "runtime"
 
-// devSchemaID names the schema stream the release pins.
-const devSchemaID = "demo-runtime"
-
 // seedDevStore writes the demo content through the same core APIs the admin
 // CLI drives over gRPC — no rows are inserted behind the service's back, so
 // the seeded store is one a person could have built by hand, audit trail
@@ -59,6 +56,9 @@ func (c *CLI) seedDevStore(ctx context.Context, svc *core.Service) (devSeedResul
 	admin := localAdminPrincipal()
 	devNS := domain.NamespaceRef{Env: devDemoEnv, App: devDemoApp}
 	prodNS := domain.NamespaceRef{Env: devDemoProdEnv, App: devDemoApp}
+	if err := ensureDevApplication(ctx, svc, admin); err != nil {
+		return out, err
+	}
 
 	// Both auth methods are allowed explicitly: the default is mTLS only, and
 	// the demo identity authenticates with a bearer token.
@@ -105,6 +105,35 @@ func (c *CLI) seedDevStore(ctx context.Context, svc *core.Service) (devSeedResul
 		return out, err
 	}
 	return out, nil
+}
+
+// ensureDevApplication establishes the application-owned schema and contract
+// before namespaces exist. That keeps the seed on the same lifecycle as a real
+// application: schema registration alone never repins an existing definition.
+func ensureDevApplication(ctx context.Context, svc *core.Service, admin core.Principal) error {
+	contract := []domain.ApplicationContractField{
+		{Alias: "greeting", Kind: domain.ReleaseEntryParameter, ContentType: "string"},
+		{Alias: "max_connections", Kind: domain.ReleaseEntryParameter, ContentType: "integer"},
+		{Alias: "dark_mode", Kind: domain.ReleaseEntryParameter, ContentType: "boolean"},
+		{Alias: "db_password", Kind: domain.ReleaseEntrySecret},
+	}
+	_, _, err := svc.CreateApplicationWithSchema(ctx, admin, domain.Application{
+		Name: devDemoApp, Description: "Demo application", ReleaseName: devReleaseName, Contract: contract,
+	}, devReleaseSchema, "")
+	if err == nil {
+		return nil
+	}
+	if !errors.Is(err, domain.ErrAlreadyExists) {
+		return fmt.Errorf("creating demo application: %w", err)
+	}
+	app, err := svc.GetApplication(ctx, admin, devDemoApp)
+	if err != nil {
+		return fmt.Errorf("reading existing demo application: %w", err)
+	}
+	if app.SchemaVersion == 0 {
+		return fmt.Errorf("existing demo application has no schema pin; recreate the development store")
+	}
+	return nil
 }
 
 // seedDevParameters writes one parameter of every content type, and gives the
@@ -231,16 +260,15 @@ func (c *CLI) seedDevRelease(ctx context.Context, svc *core.Service, admin core.
 		return fmt.Errorf("checking the active configuration release: %w", err)
 	}
 
-	schema, err := svc.CreateConfigurationSchema(ctx, admin, devSchemaID, devReleaseSchema, "")
+	app, err := svc.GetApplication(ctx, admin, devDemoApp)
 	if err != nil {
-		return fmt.Errorf("creating configuration schema %s: %w", devSchemaID, err)
+		return fmt.Errorf("reading demo application: %w", err)
 	}
 
 	release, err := svc.CreateConfigurationRelease(ctx, admin, domain.CreateConfigurationReleaseInput{
 		Namespace:     devNS,
 		Name:          devReleaseName,
-		SchemaID:      schema.ID,
-		SchemaVersion: schema.Version,
+		SchemaVersion: app.SchemaVersion,
 		Entries: []domain.ReleaseEntrySelector{
 			{Alias: "greeting", Kind: domain.ReleaseEntryParameter, Ref: domain.Ref{NS: devNS, Key: "app/greeting"}, Label: "current"},
 			{Alias: "max_connections", Kind: domain.ReleaseEntryParameter, Ref: domain.Ref{NS: devNS, Key: "app/max-connections"}, Label: "current"},

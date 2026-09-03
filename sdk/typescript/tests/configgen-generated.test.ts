@@ -518,7 +518,6 @@ function manifestFrom(snapshot: ReleaseSnapshot): ReleaseManifest {
     name: snapshot.name,
     version: snapshot.version,
     activationRevision: snapshot.activationRevision,
-    schemaId: snapshot.schemaId,
     schemaVersion: snapshot.schemaVersion,
     digest: snapshot.digest,
     entries: snapshot.entries(),

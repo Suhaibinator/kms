@@ -31,9 +31,6 @@ func normalizeApplication(app domain.Application) (domain.Application, error) {
 	if err := keyutil.ValidateKey(app.ReleaseName); err != nil {
 		return app, domain.Errorf(domain.ErrInvalidArgument, "invalid release name: %v", err)
 	}
-	if (app.SchemaID == "") != (app.SchemaVersion == 0) {
-		return app, domain.Errorf(domain.ErrInvalidArgument, "schema_id and schema_version must be specified together")
-	}
 	seen := make(map[string]struct{}, len(app.Contract))
 	for i := range app.Contract {
 		field := &app.Contract[i]
@@ -60,14 +57,14 @@ func normalizeApplication(app domain.Application) (domain.Application, error) {
 }
 
 func (s *Service) validateApplicationSchema(ctx context.Context, app domain.Application) error {
-	if app.SchemaID == "" {
+	if app.SchemaVersion == 0 {
 		return nil
 	}
 	rs, err := s.releaseStore()
 	if err != nil {
 		return err
 	}
-	_, err = rs.GetConfigurationSchema(ctx, app.SchemaID, app.SchemaVersion)
+	_, err = rs.GetConfigurationSchema(ctx, app.Name, app.ReleaseName, app.SchemaVersion)
 	return err
 }
 
@@ -79,8 +76,8 @@ func (s *Service) CreateApplication(ctx context.Context, pr Principal, app domai
 	if err != nil {
 		return domain.Application{}, err
 	}
-	if err := s.validateApplicationSchema(ctx, app); err != nil {
-		return domain.Application{}, err
+	if app.SchemaVersion != 0 {
+		return domain.Application{}, domain.Errorf(domain.ErrInvalidArgument, "schema_version requires atomic application creation with a schema document")
 	}
 	store, err := s.applicationStore()
 	if err != nil {
@@ -94,6 +91,39 @@ func (s *Service) CreateApplication(ctx context.Context, pr Principal, app domai
 	return out, err
 }
 
+// CreateApplicationWithSchema atomically creates an application and the first
+// immutable schema version owned by its canonical release lineage.
+func (s *Service) CreateApplicationWithSchema(ctx context.Context, pr Principal, app domain.Application, schemaJSON, metadata string) (domain.Application, domain.ConfigurationSchema, error) {
+	if err := s.requireAdmin(ctx, pr, "application.create", domain.ResourceApplication, app.Name); err != nil {
+		return domain.Application{}, domain.ConfigurationSchema{}, err
+	}
+	var err error
+	app, err = normalizeApplication(app)
+	if err != nil {
+		return domain.Application{}, domain.ConfigurationSchema{}, err
+	}
+	if app.SchemaVersion != 0 {
+		return domain.Application{}, domain.ConfigurationSchema{}, domain.Errorf(domain.ErrInvalidArgument, "schema_version is assigned by KMS when creating an application with a schema")
+	}
+	schema, err := normalizeConfigurationSchema(app.Name, app.ReleaseName, schemaJSON, metadata)
+	if err != nil {
+		return domain.Application{}, domain.ConfigurationSchema{}, err
+	}
+	store, err := s.applicationStore()
+	if err != nil {
+		return domain.Application{}, domain.ConfigurationSchema{}, err
+	}
+	now := s.now()
+	app.CreatedBy, app.CreatedAt, app.UpdatedAt = pr.Identity.Name, now, now
+	schema.CreatedBy = pr.Identity.Name
+	out, created, err := store.CreateApplicationWithSchema(ctx, app, schema)
+	if err == nil {
+		s.auditName(ctx, pr, "application.create", domain.ResourceApplication, app.Name, "allow", map[string]string{"schema_version": fmt.Sprint(created.Version)})
+		s.auditName(ctx, pr, "configuration_schema.create", domain.ResourceConfigurationSchema, app.Name+"/"+app.ReleaseName, "allow", map[string]string{"version": fmt.Sprint(created.Version)})
+	}
+	return out, created, err
+}
+
 func (s *Service) UpdateApplication(ctx context.Context, pr Principal, app domain.Application) (domain.Application, error) {
 	if err := s.requireAdmin(ctx, pr, "application.update", domain.ResourceApplication, app.Name); err != nil {
 		return domain.Application{}, err
@@ -102,11 +132,24 @@ func (s *Service) UpdateApplication(ctx context.Context, pr Principal, app domai
 	if err != nil {
 		return domain.Application{}, err
 	}
-	if err := s.validateApplicationSchema(ctx, app); err != nil {
-		return domain.Application{}, err
-	}
 	store, err := s.applicationStore()
 	if err != nil {
+		return domain.Application{}, err
+	}
+	current, err := store.GetApplication(ctx, app.Name)
+	if err != nil {
+		return domain.Application{}, err
+	}
+	if !current.ArchivedAt.IsZero() {
+		return domain.Application{}, domain.Errorf(domain.ErrFailedPrecondition, "application %s is archived", app.Name)
+	}
+	if app.ReleaseName != current.ReleaseName {
+		return domain.Application{}, domain.Errorf(domain.ErrFailedPrecondition, "application release name is immutable")
+	}
+	if app.SchemaVersion != current.SchemaVersion {
+		return domain.Application{}, domain.Errorf(domain.ErrFailedPrecondition, "application schema version can only be changed by defaults apply --update-definition")
+	}
+	if err := s.validateApplicationSchema(ctx, app); err != nil {
 		return domain.Application{}, err
 	}
 	out, err := store.UpdateApplication(ctx, app)
@@ -131,6 +174,10 @@ func (s *Service) GetApplication(ctx context.Context, pr Principal, name string)
 }
 
 func (s *Service) ListApplications(ctx context.Context, pr Principal, page storage.ListPage) ([]domain.Application, string, error) {
+	return s.ListApplicationsFiltered(ctx, pr, page, storage.ApplicationsActiveOnly)
+}
+
+func (s *Service) ListApplicationsFiltered(ctx context.Context, pr Principal, page storage.ListPage, archived storage.ApplicationArchiveFilter) ([]domain.Application, string, error) {
 	if err := s.requireAdmin(ctx, pr, "application.list", domain.ResourceApplication, "applications"); err != nil {
 		return nil, "", err
 	}
@@ -138,7 +185,7 @@ func (s *Service) ListApplications(ctx context.Context, pr Principal, page stora
 	if err != nil {
 		return nil, "", err
 	}
-	return store.ListApplications(ctx, page)
+	return store.ListApplications(ctx, page, archived)
 }
 
 func (s *Service) DeleteApplication(ctx context.Context, pr Principal, name string) error {
@@ -154,6 +201,36 @@ func (s *Service) DeleteApplication(ctx context.Context, pr Principal, name stri
 	}
 	s.auditName(ctx, pr, "application.delete", domain.ResourceApplication, name, "allow", nil)
 	return nil
+}
+
+func (s *Service) ArchiveApplication(ctx context.Context, pr Principal, name string) (domain.Application, error) {
+	if err := s.requireAdmin(ctx, pr, "application.archive", domain.ResourceApplication, name); err != nil {
+		return domain.Application{}, err
+	}
+	store, err := s.applicationStore()
+	if err != nil {
+		return domain.Application{}, err
+	}
+	out, err := store.ArchiveApplication(ctx, name, pr.Identity.Name)
+	if err == nil {
+		s.auditName(ctx, pr, "application.archive", domain.ResourceApplication, name, "allow", nil)
+	}
+	return out, err
+}
+
+func (s *Service) UnarchiveApplication(ctx context.Context, pr Principal, name string) (domain.Application, error) {
+	if err := s.requireAdmin(ctx, pr, "application.unarchive", domain.ResourceApplication, name); err != nil {
+		return domain.Application{}, err
+	}
+	store, err := s.applicationStore()
+	if err != nil {
+		return domain.Application{}, err
+	}
+	out, err := store.UnarchiveApplication(ctx, name)
+	if err == nil {
+		s.auditName(ctx, pr, "application.unarchive", domain.ResourceApplication, name, "allow", nil)
+	}
+	return out, err
 }
 
 func (s *Service) GetApplicationDashboard(ctx context.Context, pr Principal, name string) (domain.ApplicationDashboard, error) {

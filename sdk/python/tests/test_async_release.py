@@ -29,7 +29,6 @@ def _release(version: int, revision: int):
         namespace=kms_pb2.NamespaceRef(env="prod", app="app"),
         name="runtime",
         version=version,
-        schema_id="runtime",
         schema_version=1,
         entries=[
             kms_pb2.ConfigurationReleaseEntry(

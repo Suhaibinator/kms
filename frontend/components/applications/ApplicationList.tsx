@@ -2,7 +2,16 @@ import { ChevronRight, Plus } from "lucide-react";
 import Link from "next/link";
 import { useId, useMemo, useState } from "react";
 import { Icon } from "@/components/icons";
-import { EmptyState, Input, PageHeader, Pagination, TableSkeleton } from "@/components/ui";
+import {
+  Badge,
+  EmptyState,
+  Field,
+  Input,
+  PageHeader,
+  Pagination,
+  TableSkeleton,
+} from "@/components/ui";
+import { AppSelect } from "@/components/ui/app-select";
 import { Button } from "@/components/ui/button";
 import type { Application } from "@/lib/types";
 import { LIST_HEADERS } from "./shared";
@@ -15,6 +24,8 @@ export interface ApplicationListPaging {
   previous: () => void;
   reset: () => void;
 }
+
+export type ApplicationArchiveFilter = "exclude" | "include" | "only";
 
 /** Case-insensitive match on name or description. */
 export function matchesApplication(app: Application, query: string): boolean {
@@ -35,12 +46,16 @@ export function ApplicationList({
   loading,
   onCreate,
   paging,
+  archiveFilter = "exclude",
+  onArchiveFilterChange,
 }: {
   applications: Application[];
   loading: boolean;
   onCreate: () => void;
   /** Server-side cursor over the list; the filter narrows the current page. */
   paging?: ApplicationListPaging;
+  archiveFilter?: ApplicationArchiveFilter;
+  onArchiveFilterChange?: (filter: ApplicationArchiveFilter) => void;
 }) {
   const [query, setQuery] = useState("");
   const filterId = useId();
@@ -68,7 +83,7 @@ export function ApplicationList({
         <code>prod</code>, and <code>prod-gcp</code>. Environments never inherit values from one
         another; the application contract keeps their release shape consistent.
       </div>
-      {loading || applications.length > 0 || query ? (
+      {loading || applications.length > 0 || query || onArchiveFilterChange ? (
         <div className="application-list-toolbar">
           <label htmlFor={filterId} className="sr-only">
             Filter applications
@@ -82,6 +97,19 @@ export function ApplicationList({
             onChange={(event) => setQuery(event.target.value)}
             disabled={loading && applications.length === 0}
           />
+          {onArchiveFilterChange ? (
+            <Field label="Lifecycle">
+              <AppSelect
+                value={archiveFilter}
+                onValueChange={(value) => onArchiveFilterChange(value as ApplicationArchiveFilter)}
+                options={[
+                  { value: "exclude", label: "Active applications" },
+                  { value: "include", label: "All applications" },
+                  { value: "only", label: "Archived applications" },
+                ]}
+              />
+            </Field>
+          ) : null}
           {query && !loading ? (
             <span className="faint text-sm" role="status">
               {filtered.length} of {applications.length} shown
@@ -132,13 +160,16 @@ export function ApplicationList({
                       aria-label={`Manage ${app.name}`}
                     >
                       <strong className="mono">{app.name}</strong>
+                      {app.archived_at_unix_ms ? <Badge kind="neutral">archived</Badge> : null}
                     </Link>
                     <div className="faint text-sm">{app.description || "No description"}</div>
                   </td>
                   <td>{app.environment_count}</td>
                   <td className="mono">{app.release_name}</td>
                   <td className="mono">
-                    {app.schema_id ? `${app.schema_id}@${app.schema_version}` : "—"}
+                    {app.schema_version
+                      ? `${app.name}/${app.release_name}@${app.schema_version}`
+                      : "—"}
                   </td>
                   <td>{app.contract.length} aliases</td>
                   <td className="application-row-chevron" aria-hidden="true">

@@ -665,7 +665,6 @@ func (l *ReleaseLoader) resolveCandidate(ctx context.Context, ns namespaceRef, c
 		name:               manifest.Name(),
 		version:            manifest.Version(),
 		activationRevision: manifest.ActivationRevision(),
-		schemaID:           manifest.SchemaID(),
 		schemaVersion:      manifest.SchemaVersion(),
 		digest:             manifest.Digest(),
 		metadataJSON:       manifest.MetadataJSON(),
@@ -690,7 +689,6 @@ func newReleaseManifest(release *kmsv1.ConfigurationRelease, candidate releaseCa
 		name:               release.GetName(),
 		version:            release.GetVersion(),
 		activationRevision: candidate.revision,
-		schemaID:           release.GetSchemaId(),
 		schemaVersion:      release.GetSchemaVersion(),
 		digest:             release.GetDigest(),
 		metadataJSON:       release.GetMetadataJson(),
@@ -719,7 +717,6 @@ func deterministicReleaseDigest(release *kmsv1.ConfigurationRelease) (string, er
 	projection := &kmsv1.ConfigurationRelease{
 		Namespace:     &kmsv1.NamespaceRef{Env: release.GetNamespace().GetEnv(), App: release.GetNamespace().GetApp()},
 		Name:          release.GetName(),
-		SchemaId:      release.GetSchemaId(),
 		SchemaVersion: release.GetSchemaVersion(),
 		MetadataJson:  release.GetMetadataJson(),
 	}

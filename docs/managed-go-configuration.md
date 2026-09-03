@@ -651,6 +651,36 @@ candidates cannot displace last-known-good.
 
 ## Operator workflow
 
+### Expose schema and defaults commands from the application
+
+Generated bindings embed the exact emitted schema and return a fresh copy from
+`GeneratedSchema()`. An application can expose both source-owned operations
+without teaching each consumer how to construct KMS requests:
+
+```go
+os.Exit(configstore.RunManagedConfigCommand(
+    os.Args[1:], os.Stdout, os.Stderr,
+    configstore.ManagedConfigCommandConfig[appconfig.Profile, appconfig.Config]{
+        Application: appconfig.APP_NAME,
+        Schema: configkms.GeneratedSchema,
+        Defaults: configstore.DefaultsApplierConfig[appconfig.Profile, appconfig.Config]{
+            Provider: appconfig.ManagedReleaseDefaults,
+            Encoder: configkms.EncodeDefaultsArtifact,
+            Namespace: configkms.NamespaceForProfile,
+        },
+    },
+))
+```
+
+Use `managed-config schema upload` to register a new immutable version. It has
+no profile because the schema belongs to the application's release stream and
+is shared by every profile. Use `managed-config defaults apply --profile ...`
+to preview or apply profile-specific values. Add `--update-definition` on the
+previewed defaults operation to repin the application to an already uploaded
+matching schema. Uploading alone never changes the pin, and uploading an exact
+duplicate fails. Both commands read `KMS_TOKEN` and accept the standard
+endpoint/TLS flags. `RunDefaultsApplier` remains available as a standalone API.
+
 ### Check the generated contract
 
 The generated `runtime.contract.json` is a deployment/tooling artifact; it is
@@ -663,12 +693,13 @@ for rollout review. It deliberately contains no physical paths, exact versions,
 defaults, current values, secret plaintext, or tokens; operators continue to
 choose paths and pins in the release manifest.
 
-The schema ID and immutable registration version are operator-owned and are
-attached to the first-class application record. Every environment release for
-that application must pin that same schema version and match the application's
-alias/kind/content-type contract. The generated runtime does not hardcode the
-registry coordinates: KMS validates the application and manifest pins, while
-the process independently enforces the generated contract and strict decoder.
+The schema lineage is owned by the application and its immutable release name;
+only the registration version is pinned. Every environment release for that
+application must pin that same version and match the application's
+alias/kind/content-type contract. Profiles choose defaults and environments,
+not schemas: all profiles share this one lineage. KMS validates the application
+and manifest pin, while the process independently enforces the generated
+contract and strict decoder.
 
 ### Import the artifacts into the console
 
@@ -676,11 +707,11 @@ The console's **Create application** wizard accepts both generated artifacts
 directly, so an application onboarded from `kms-config-gen` does not need its
 contract typed by hand:
 
-1. **Schema step.** Paste or import `runtime.schema.json`. The wizard
-   registers it as a new immutable version under the schema ID you choose
-   when you advance to the next step, before the application record exists,
-   so a rejected schema leaves nothing behind. Picking an already-registered
-   `id@version` is equally valid.
+1. **Schema step.** Paste or import `runtime.schema.json`. The wizard creates
+   the application, its first immutable schema version, contract, and pin in
+   one transaction. A failure leaves none of them behind. Schema coordinates
+   are derived from the application and release names rather than entered as a
+   free-form ID.
 2. **Contract step.** **Import** accepts the `kms-config-contract/v1`
    envelope (`format`, `source`, `schema_sha256`, `groups`, `fields`,
    `secrets`, `views`) or a bare array of `{alias, kind, content_type}`
@@ -757,7 +788,7 @@ composite, and inline-fragment encodings. Review the generated non-secret
 documents before publishing them; secret values are provisioned separately.
 
 ```bash
-parameter-store release schema create my-service/runtime config/runtime.schema.json \
+parameter-store release schema create my-service config/runtime.schema.json \
   --endpoint "$PARAM_STORE_ENDPOINT" --token "$ADMIN_TOKEN" \
   --ca "$PARAM_STORE_SERVER_CA_CERT"
 ```
@@ -781,7 +812,6 @@ only the exact version pin that changed:
 ```yaml
 namespace: prod/my-service
 name: runtime
-schema_id: my-service/runtime
 schema_version: 1
 entries:
   - {alias: database, kind: parameter, key: config/groups/database, version: 12}

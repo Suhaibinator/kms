@@ -602,6 +602,7 @@ export default function ShipModal({
                 onAddSecret={onAddSecret}
               />
               <ShipPreview
+                application={application.name}
                 preview={preview}
                 loading={previewLoading}
                 stale={stale}
@@ -816,7 +817,6 @@ export default function ShipModal({
             created_by: "",
             created_at_unix_ms: 0,
             is_rolled_back: false,
-            schema_id: preview?.schema_id ?? "",
             schema_version: preview?.schema_version ?? 0,
             digest: result?.release?.digest ?? "",
             entries: [],

@@ -193,7 +193,6 @@ release.
 # runtime-release.yaml
 namespace: prod/gradethis
 name: runtime
-schema_id: gradethis/runtime
 schema_version: 1
 entries:
   - {alias: permissions, kind: parameter, key: config/groups/permissions, version: 12}
@@ -266,6 +265,21 @@ prod/gradethis runtime` until every expected instance reports the target as
 `applied`. Replicas apply independently—version 1 has no fleet-wide barrier.
 An activation racing immediately after a loader's final active read is handled
 as the next candidate, so do not treat activation as a distributed commit.
+
+## Database upgrade: structured schema ownership
+
+Schema version 8 replaces free-form schema IDs with separate
+`application_name` and `release_name` columns. Startup performs this rewrite
+and the v8 version stamp in one transaction, including recomputing immutable
+release digests without the removed `schema_id` field.
+
+The upgrade deliberately refuses to guess. Every non-empty application pin
+must equal `<application>/<application release>`, every release pin must equal
+`<namespace app>/<release name>`, and every registry lineage must have exactly
+one matching application owner. Malformed or shared lineages, missing pinned
+versions, and duplicate digests stop startup with a repair-oriented error; the
+database remains in its pre-v8 shape. Repair those records with the older
+binary after taking a backup, then retry the upgrade.
 
 ## Steps
 

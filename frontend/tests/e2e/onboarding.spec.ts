@@ -14,7 +14,6 @@ interface State {
     name: string;
     description: string;
     release_name: string;
-    schema_id: string;
     schema_version: number;
     contract: Contract[];
   }>;
@@ -27,12 +26,14 @@ function overview(app: State["applications"][number]) {
       created_by: "admin",
       created_at_unix_ms: 1755000000000,
       updated_at_unix_ms: 1755000000000,
+      archived_at_unix_ms: 0,
+      archived_by: "",
       environment_count: 0,
     },
     status: "setup",
     findings: [
       { code: "no_environments", severity: "warning", scope: {}, params: {} },
-      ...(app.schema_id
+      ...(app.schema_version
         ? []
         : [{ code: "schema_unpinned", severity: "info", scope: {}, params: {} }]),
     ],
@@ -80,13 +81,12 @@ async function installFake(page: Page): Promise<State> {
       });
     }
     if (path === "/applications" && method === "POST") {
-      const body = request.postDataJSON() as State["applications"][number];
+      const body = request.postDataJSON() as State["applications"][number] & { schema?: unknown };
       const app = {
         name: body.name,
         description: body.description ?? "",
         release_name: body.release_name || "runtime",
-        schema_id: body.schema_id ?? "",
-        schema_version: body.schema_version ?? 0,
+        schema_version: body.schema ? 1 : (body.schema_version ?? 0),
         contract: body.contract ?? [],
       };
       state.applications.push(app);
@@ -188,7 +188,6 @@ test("the command palette opens with ⌘K, ranks the ship deep link first, and n
     name: "gradethis",
     description: "Grading API",
     release_name: "runtime",
-    schema_id: "",
     schema_version: 0,
     contract: [{ alias: "rate_limits", kind: "parameter", content_type: "json" }],
   });

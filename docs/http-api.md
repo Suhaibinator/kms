@@ -78,8 +78,9 @@ Most management endpoints require `kind == "admin"`.
 Applications are the environment-independent configuration owners. These
 endpoints are admin-only:
 
-- `GET /api/v1/applications?page_size=&page_token=` lists applications and
-  their environment counts.
+- `GET /api/v1/applications?page_size=&page_token=&archived=` lists
+  applications and their environment counts. `archived` is `exclude`
+  (default), `include`, or `only`.
 - `POST /api/v1/applications` creates an application; `PATCH` replaces its
   mutable definition:
 
@@ -88,8 +89,6 @@ endpoints are admin-only:
     "name": "payments-api",
     "description": "Payments service",
     "release_name": "runtime",
-    "schema_id": "payments-api/runtime",
-    "schema_version": 3,
     "contract": [
       {"alias":"runtime","kind":"parameter","content_type":"json"},
       {"alias":"stripe_key","kind":"secret"}
@@ -97,8 +96,13 @@ endpoints are admin-only:
   }
   ```
 
-- `DELETE /api/v1/applications?name=` succeeds only after every environment
-  namespace has been deleted.
+- Creation may include `"schema":{"schema_json":"{...}","metadata_json":"{}"}`;
+  the application, schema version 1, contract, and pin are committed atomically.
+- `DELETE /api/v1/applications?name=` succeeds only when there are no
+  environments and no schema history.
+- `POST /api/v1/applications/archive` and `/unarchive` accept `{"name":"..."}`.
+  Archiving requires zero environments. Archived applications remain readable,
+  reject definition/schema/release mutations, and are excluded from default lists.
 - `GET /api/v1/applications/dashboard?name=` returns the application,
   environment namespaces, and the union of current parameter values and
   secret metadata as a cross-environment matrix. Secret plaintext is absent.
@@ -146,8 +150,9 @@ a token.
 - `GET /api/v1/applications/get?name=` → `{"application": Application}`
   (404 when the application does not exist). `Application` is the object
   returned by the list and create endpoints above (`name`, `description`,
-  `release_name`, `schema_id`, `schema_version`, `contract`, `created_by`,
-  `created_at_unix_ms`, `updated_at_unix_ms`, `environment_count`).
+  `release_name`, `schema_version`, `contract`, `created_by`,
+  `created_at_unix_ms`, `updated_at_unix_ms`, `archived_at_unix_ms`,
+  `archived_by`, `environment_count`).
 - `GET /api/v1/applications/overview` — **fleet form**, no query →
   ```json
   { "applications": [
@@ -214,7 +219,7 @@ Taken from the `overview-incident.json` fixture (abridged):
           "name": "runtime", "version": 2, "activation_revision": 12,
           "previous_version": 1, "created_by": "admin",
           "created_at_unix_ms": 1755000000000, "is_rolled_back": false,
-          "schema_id": "runtime", "schema_version": 1,
+          "schema_version": 1,
           "digest": "<sha256 hex>", "entries": [ ConfigurationReleaseEntry ]
         },
         "latest_version": 2,
@@ -348,7 +353,7 @@ blocking → warning → info and, within a severity, in emission order
 | `no_environments` | warning | app | — | add environment |
 | `contract_empty` | warning | app | — | edit contract (offers derive-from-active-release) |
 | `schema_unpinned` | info | app | — | pin schema |
-| `schema_missing` | blocking | app | `schema_id`, `schema_version` | pin schema (the pinned version is no longer in the registry) |
+| `schema_missing` | blocking | app | `application`, `release_name`, `schema_version` | pin schema (the pinned version is no longer in the registry) |
 | `schema_property_missing_alias` | warning | alias | `alias` | edit contract (derive) — schema has no property for a parameter alias and is open (`additionalProperties` not `false`) |
 | `alias_not_in_schema` | warning | alias | `alias` | edit contract (derive) — same, but the schema is closed |
 | `schema_required_missing_alias` | blocking | alias | `alias` | edit contract (derive) — schema requires a name that is not a parameter alias |
@@ -490,7 +495,7 @@ Response for an `activated` ship (the `ship-conflict.json` fixture shows the
   "status": "activated",
   "preview": {
     "base_version": 7, "release_name": "runtime",
-    "schema_id": "runtime", "schema_version": 1,
+    "schema_version": 1,
     "entries": [
       { "alias": "database",    "kind": "parameter", "key": "database",
         "from_version": 3, "to_version": 3,  "change": "pinned" },
@@ -845,7 +850,6 @@ certificates; `revoked_at_unix_ms` of `0` means valid.
   "namespace": { "env": "prod", "app": "gradethis" },
   "name": "runtime",
   "version": 14,
-  "schema_id": "gradethis/runtime",
   "schema_version": 1,
   "entries": [
     { "alias": "rate_limits", "kind": "parameter",
@@ -930,7 +934,9 @@ this DTO. Creation selectors use the same `ref` shape, plus either `version` or
     "allowed_auth_methods": ["mtls", "token"] }
   ```
   → `{"namespace": Namespace}`
-- `DELETE /api/v1/namespaces?env=&app=` → `{}`
+- `DELETE /api/v1/namespaces?env=&app=` → `{}`. Live parameters, secrets, or
+  bound identities block deletion; environment-scoped release/subscriber rows
+  are retired atomically so the owning application can subsequently be archived.
   Only succeeds when the namespace is empty (no parameters, no secrets, and no
   bound identities).
   Otherwise returns `failed_precondition` (412).
@@ -1146,7 +1152,7 @@ rules (a deny still wins).
 - `POST /api/v1/releases` creates, but does not activate, an immutable release:
   ```json
   { "namespace": { "env": "prod", "app": "gradethis" },
-    "name": "runtime", "schema_id": "gradethis/runtime", "schema_version": 1,
+    "name": "runtime", "schema_version": 1,
     "entries": [
       { "alias": "rate_limits", "kind": "parameter",
         "ref": { "namespace": {}, "key": "config/rate-limits" }, "label": "current" },
@@ -1192,11 +1198,11 @@ rules (a deny still wins).
       ] } }
   ```
 - `POST /api/v1/configuration-schemas` with
-  `{"id":"gradethis/runtime","schema_json":"{...}","metadata_json":"{}"}`
-  → `201 {"schema":{"id","version","schema_json","digest",
+  `{"application":"gradethis","schema_json":"{...}","metadata_json":"{}"}`
+  → `201 {"schema":{"application","release_name","version","schema_json","digest",
   "metadata_json","created_by","created_at_unix_ms"}}`.
-- `GET /api/v1/configuration-schemas?id=&page_size=&page_token=` →
-  `{"schemas":[...],"next_page_token":""}`. `id` is optional.
+- `GET /api/v1/configuration-schemas?application=&release_name=&page_size=&page_token=` →
+  `{"schemas":[...],"next_page_token":""}`. Coordinate filters are optional.
 - `GET /api/v1/release-subscribers?env=&app=&name=&page_size=&page_token=` →
   `{"subscribers":[{"namespace","release_name","client_name","instance_id",
   "identity","state","release_version","activation_revision",

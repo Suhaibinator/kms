@@ -19,6 +19,7 @@ import (
 	kmsv1 "github.com/Suhaibinator/kms/gen/kmsv1"
 	fixtureconfig "github.com/Suhaibinator/kms/internal/configstorefixture/config"
 	fixturekms "github.com/Suhaibinator/kms/internal/configstorefixture/configkms"
+	"github.com/Suhaibinator/kms/internal/core"
 	"github.com/Suhaibinator/kms/internal/domain"
 	"github.com/Suhaibinator/kms/sdk/go/configstore"
 	"github.com/Suhaibinator/kms/sdk/go/kmsclient"
@@ -34,7 +35,6 @@ type adversarialManagedApp struct {
 	authCtx       context.Context
 	app           string
 	namespace     *kmsv1.NamespaceRef
-	schemaID      string
 	schemaVersion uint64
 
 	parameters kmsv1.ParameterServiceClient
@@ -70,7 +70,7 @@ type adversarialExpectedGeneration struct {
 	secretVersion uint64
 }
 
-func registerAdversarialManagedSchema(t *testing.T, env *loopbackTLSEnv, schemaID string) uint64 {
+func registerAdversarialManagedSchema(t *testing.T, env *loopbackTLSEnv, application string) uint64 {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
@@ -78,27 +78,25 @@ func registerAdversarialManagedSchema(t *testing.T, env *loopbackTLSEnv, schemaI
 	if err != nil {
 		t.Fatalf("read generated managed schema: %v", err)
 	}
-	response, err := kmsv1.NewConfigurationSchemaServiceClient(env.adminConn).CreateSchema(
-		networkAuthContext(ctx, env.adminToken),
-		&kmsv1.CreateSchemaRequest{Id: schemaID, SchemaJson: string(document), MetadataJson: `{"owner":"adversarial-integration"}`},
-	)
+	_, schema, err := env.svc.CreateApplicationWithSchema(ctx, core.Principal{
+		Identity: domain.Identity{Name: "network-root", Kind: domain.IdentityKindAdmin}, Method: domain.AuthMethodToken,
+	}, domain.Application{Name: application, ReleaseName: adversarialReleaseName}, string(document), `{"owner":"adversarial-integration"}`)
 	if err != nil {
-		t.Fatalf("register adversarial managed schema: %v", err)
+		t.Fatalf("create adversarial managed application and schema: %v", err)
 	}
-	return response.GetSchema().GetVersion()
+	return schema.Version
 }
 
 func newAdversarialManagedApp(
 	t *testing.T,
 	env *loopbackTLSEnv,
-	schemaID string,
-	schemaVersion uint64,
 	app string,
 ) *adversarialManagedApp {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	authCtx := networkAuthContext(ctx, env.adminToken)
 	namespace := networkNS("prod", app)
+	schemaVersion := registerAdversarialManagedSchema(t, env, app)
 	admin := kmsv1.NewAdminServiceClient(env.adminConn)
 	if _, err := admin.CreateNamespace(authCtx, &kmsv1.CreateNamespaceRequest{
 		Ref: namespace, AllowedAuthMethods: []string{string(domain.AuthMethodToken)},
@@ -108,12 +106,12 @@ func newAdversarialManagedApp(
 	}
 	h := &adversarialManagedApp{
 		t: t, env: env, ctx: ctx, cancel: cancel, authCtx: authCtx, app: app, namespace: namespace,
-		schemaID: schemaID, schemaVersion: schemaVersion,
-		parameters:   kmsv1.NewParameterServiceClient(env.adminConn),
-		secrets:      kmsv1.NewSecretServiceClient(env.adminConn),
-		releases:     kmsv1.NewConfigurationReleaseServiceClient(env.adminConn),
-		admin:        admin,
-		secretTokens: make(map[string]string),
+		schemaVersion: schemaVersion,
+		parameters:    kmsv1.NewParameterServiceClient(env.adminConn),
+		secrets:       kmsv1.NewSecretServiceClient(env.adminConn),
+		releases:      kmsv1.NewConfigurationReleaseServiceClient(env.adminConn),
+		admin:         admin,
+		secretTokens:  make(map[string]string),
 	}
 	t.Cleanup(cancel)
 	return h
@@ -217,7 +215,6 @@ func (h *adversarialManagedApp) createReleaseWithSchema(
 	}
 	request := &kmsv1.CreateReleaseRequest{Namespace: h.namespace, Name: adversarialReleaseName, Entries: entries}
 	if attachSchema {
-		request.SchemaId = h.schemaID
 		request.SchemaVersion = h.schemaVersion
 	}
 	created, err := h.releases.CreateRelease(h.authCtx, request)
@@ -345,8 +342,6 @@ func defaultAdversarialRuntimeDocument() string {
 // Go collections have distinct canonical encodings and must remain distinct.
 func TestManagedConfigAdversarialSchemaRuntimeParity(t *testing.T) {
 	env := newLoopbackTLSEnv(t)
-	schemaID := "managed-config/adversarial-parity"
-	schemaVersion := registerAdversarialManagedSchema(t, env, schemaID)
 	defaultDatabase := defaultAdversarialDatabaseDocument()
 	defaultRuntime := defaultAdversarialRuntimeDocument()
 
@@ -578,7 +573,7 @@ func TestManagedConfigAdversarialSchemaRuntimeParity(t *testing.T) {
 			if runtimeDocument == "" {
 				runtimeDocument = defaultRuntime
 			}
-			app := newAdversarialManagedApp(t, env, schemaID, schemaVersion, fmt.Sprintf("managed-parity-%02d", i))
+			app := newAdversarialManagedApp(t, env, fmt.Sprintf("managed-parity-%02d", i))
 			seedRuntime := runtimeDocument
 			if tc.runtimeWriteReject != codes.OK {
 				seedRuntime = defaultRuntime
@@ -697,7 +692,7 @@ func TestManagedConfigAdversarialSchemaRuntimeParity(t *testing.T) {
 			if runtimeDocument == "" {
 				runtimeDocument = defaultRuntime
 			}
-			app := newAdversarialManagedApp(t, env, schemaID, schemaVersion, fmt.Sprintf("managed-parity-nil-default-%02d", index))
+			app := newAdversarialManagedApp(t, env, fmt.Sprintf("managed-parity-nil-default-%02d", index))
 			pins := app.seed(database, runtimeDocument)
 			release, validation := app.createRelease(pins, nil)
 			if !validation.GetValid() {
@@ -727,9 +722,7 @@ func TestManagedConfigAdversarialSchemaRuntimeParity(t *testing.T) {
 // normal terminal cancellation.
 func TestManagedConfigAdversarialServerGuardsRecoveryAndRedaction(t *testing.T) {
 	env := newLoopbackTLSEnv(t)
-	schemaID := "managed-config/adversarial-recovery"
-	schemaVersion := registerAdversarialManagedSchema(t, env, schemaID)
-	app := newAdversarialManagedApp(t, env, schemaID, schemaVersion, "managed-recovery")
+	app := newAdversarialManagedApp(t, env, "managed-recovery")
 	pins := app.seed(defaultAdversarialDatabaseDocument(), defaultAdversarialRuntimeDocument())
 	initialRelease, validation := app.createRelease(pins, nil)
 	if !validation.GetValid() {
@@ -747,7 +740,7 @@ func TestManagedConfigAdversarialServerGuardsRecoveryAndRedaction(t *testing.T) 
 	contractEntries[1].Alias = "runtime_unexpected"
 	if _, createErr := app.releases.CreateRelease(app.authCtx, &kmsv1.CreateReleaseRequest{
 		Namespace: app.namespace, Name: adversarialReleaseName, Entries: contractEntries,
-		SchemaId: app.schemaID, SchemaVersion: app.schemaVersion,
+		SchemaVersion: app.schemaVersion,
 	}); status.Code(createErr) != codes.FailedPrecondition {
 		t.Fatalf("create contract-drift release error = %v, want failed precondition", createErr)
 	}
@@ -833,9 +826,7 @@ func TestManagedConfigAdversarialServerGuardsRecoveryAndRedaction(t *testing.T) 
 // publishable, and a mixed hot/restart candidate cannot leak its hot subset.
 func TestManagedConfigAdversarialExactSecretVersionsAndMixedAtomicity(t *testing.T) {
 	env := newLoopbackTLSEnv(t)
-	schemaID := "managed-config/adversarial-secrets"
-	schemaVersion := registerAdversarialManagedSchema(t, env, schemaID)
-	app := newAdversarialManagedApp(t, env, schemaID, schemaVersion, "managed-secret-versions")
+	app := newAdversarialManagedApp(t, env, "managed-secret-versions")
 	pins := app.seed(defaultAdversarialDatabaseDocument(), defaultAdversarialRuntimeDocument())
 	initialRelease, _ := app.createRelease(pins, nil)
 	app.mustActivate(initialRelease, 0)
@@ -928,9 +919,7 @@ func TestManagedConfigAdversarialExactSecretVersionsAndMixedAtomicity(t *testing
 // while a burst of real activation events crosses SQLite, gRPC, and TLS.
 func TestManagedConfigAdversarialRapidCASAndReaders(t *testing.T) {
 	env := newLoopbackTLSEnv(t)
-	schemaID := "managed-config/adversarial-concurrency"
-	schemaVersion := registerAdversarialManagedSchema(t, env, schemaID)
-	app := newAdversarialManagedApp(t, env, schemaID, schemaVersion, "managed-rapid-activations")
+	app := newAdversarialManagedApp(t, env, "managed-rapid-activations")
 	pins := app.seed(defaultAdversarialDatabaseDocument(), defaultAdversarialRuntimeDocument())
 	initialRelease, _ := app.createRelease(pins, nil)
 	initialActivation := app.mustActivate(initialRelease, 0)

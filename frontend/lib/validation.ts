@@ -435,24 +435,6 @@ export function validateContract(
   return null;
 }
 
-/**
- * Validates the schema pin. `core.normalizeApplication` requires schema_id and
- * schema_version to be set together or not at all.
- */
-export function validateSchemaPin(schemaId: string, schemaVersion: string): string | null {
-  const hasId = schemaId.trim() !== "";
-  const hasVersion = schemaVersion.trim() !== "" && schemaVersion.trim() !== "0";
-  if (hasId === hasVersion) {
-    if (hasVersion && !/^\d+$/.test(schemaVersion.trim())) {
-      return "Schema version must be a positive whole number.";
-    }
-    return null;
-  }
-  return hasId
-    ? "Schema version is required when a schema ID is set."
-    : "Schema ID is required when a schema version is set.";
-}
-
 // --- helpers ----------------------------------------------------------------
 
 /** Returns the first non-null message, or null when everything passes. */

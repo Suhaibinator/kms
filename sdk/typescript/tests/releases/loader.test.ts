@@ -962,7 +962,6 @@ function makeRelease(version: bigint, entries: ConfigurationReleaseEntry[]): Con
     namespace,
     name: "runtime",
     version,
-    schemaId: "",
     schemaVersion: 0n,
     entries,
     metadataJson: "{}",

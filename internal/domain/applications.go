@@ -223,7 +223,6 @@ type ShipPreviewEntry struct {
 type ShipPreview struct {
 	BaseVersion   uint64
 	ReleaseName   string
-	SchemaID      string
 	SchemaVersion uint64
 	Entries       []ShipPreviewEntry
 	Validation    []ReleaseValidationError

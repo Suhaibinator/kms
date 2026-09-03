@@ -29,7 +29,6 @@
       }
     ],
     "release_name": "runtime",
-    "schema_id": "runtime",
     "schema_version": 1,
     "validation": {
       "errors": [],

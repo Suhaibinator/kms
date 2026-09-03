@@ -1,4 +1,6 @@
 import {
+  Archive,
+  ArchiveRestore,
   Cable,
   FileUp,
   MoreHorizontal,
@@ -21,7 +23,7 @@ import { StatusChip } from "@/components/StatusChip";
 import RollbackDialog from "@/components/ship/RollbackDialog";
 import ShipModal from "@/components/ship/ShipModal";
 import { TransportBadge } from "@/components/TransportBadge";
-import { EmptyState, PageHeader } from "@/components/ui";
+import { Badge, EmptyState, PageHeader } from "@/components/ui";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useToast } from "@/context/ToastContext";
@@ -164,6 +166,7 @@ export function ApplicationHome({
   const router = useRouter();
   const replaceQuery = useQueryReplace("/applications");
   const application = overview.application;
+  const archived = application.archived_at_unix_ms > 0;
   const environments = overview.environments;
   const environmentNames = useMemo(
     () => environments.map((environment) => environment.namespace.env),
@@ -203,6 +206,7 @@ export function ApplicationHome({
   const [writeTargets, setWriteTargets] = useState<string[] | null>(null);
   const [retryEnvironments, setRetryEnvironments] = useState<string[] | null>(null);
   const [writeSaving, setWriteSaving] = useState(false);
+  const [lifecycleSaving, setLifecycleSaving] = useState(false);
 
   // Seed the modals from the URL once per value: a palette action that sets
   // `?ship=` while already on this page must open the modal, and closing it
@@ -385,7 +389,22 @@ export function ApplicationHome({
     (environment) => environment.namespace.env === rollbackEnv,
   );
 
-  const moreItems: ActionMenuItem[] = [
+  async function setArchived(next: boolean) {
+    if (lifecycleSaving) return;
+    setLifecycleSaving(true);
+    try {
+      if (next) await api.archiveApplication(application.name);
+      else await api.unarchiveApplication(application.name);
+      toast.success(next ? "Application archived" : "Application restored");
+      await reload();
+    } catch (error) {
+      toast.error(error, next ? "Failed to archive application" : "Failed to restore application");
+    } finally {
+      setLifecycleSaving(false);
+    }
+  }
+
+  const activeMoreItems: ActionMenuItem[] = [
     environmentItem(
       "import-defaults",
       <>
@@ -424,7 +443,33 @@ export function ApplicationHome({
       environmentNames,
       setConnectEnv,
     ),
+    {
+      key: "archive",
+      label: (
+        <>
+          <Archive size={15} aria-hidden />
+          {environments.length ? "Archive (remove environments first)" : "Archive application"}
+        </>
+      ),
+      disabled: environments.length > 0 || lifecycleSaving,
+      onSelect: () => void setArchived(true),
+    },
   ];
+  const moreItems: ActionMenuItem[] = archived
+    ? [
+        {
+          key: "unarchive",
+          label: (
+            <>
+              <ArchiveRestore size={15} aria-hidden />
+              Unarchive application
+            </>
+          ),
+          disabled: lifecycleSaving,
+          onSelect: () => void setArchived(false),
+        },
+      ]
+    : activeMoreItems;
 
   return (
     <div className="application-home">
@@ -434,6 +479,7 @@ export function ApplicationHome({
           <span className="row-wrap">
             <Ident kind="app" value={application.name} tooltip={false} />
             <StatusChip status={overview.status} />
+            {archived ? <Badge>archived</Badge> : null}
           </span>
         }
         documentTitle={application.name}
@@ -466,7 +512,7 @@ export function ApplicationHome({
             </Button>
             <Button
               type="button"
-              disabled={environments.length === 0}
+              disabled={archived || environments.length === 0}
               onClick={() => setShipTarget({ env: defaultShipEnv })}
             >
               <Send size={15} />
@@ -493,7 +539,11 @@ export function ApplicationHome({
           </>
         }
       />
-      {overview.status === "setup" ? (
+      {archived ? (
+        <div className="info-panel mb-4" role="status">
+          This application is archived and read-only. Its schema history remains available.
+        </div>
+      ) : overview.status === "setup" ? (
         <SetupPanel overview={overview} onAction={onSetupAction} />
       ) : (
         <FindingList findings={findings} onFix={onFix} className="application-findings" />
@@ -507,9 +557,19 @@ export function ApplicationHome({
         <EmptyState
           icon={<Icon.namespace size={20} />}
           title="No environments"
-          actions={<Button onClick={() => setEnvironmentOpen(true)}>Add environment</Button>}
+          actions={
+            archived ? (
+              <Button onClick={() => void setArchived(false)} loading={lifecycleSaving}>
+                Unarchive application
+              </Button>
+            ) : (
+              <Button onClick={() => setEnvironmentOpen(true)}>Add environment</Button>
+            )
+          }
         >
-          Add dev, staging, production, or a provider-specific environment to begin managing values.
+          {archived
+            ? "Restore it before changing its definition or adding environments."
+            : "Add dev, staging, production, or a provider-specific environment to begin managing values."}
         </EmptyState>
       ) : (
         <Tabs
@@ -583,7 +643,7 @@ export function ApplicationHome({
         schemaJson={overview.schema_json}
         initialEnvironment={shipTarget?.env}
         initialAlias={shipTarget?.alias}
-        open={shipTarget !== null}
+        open={!archived && shipTarget !== null}
         onClose={closeShip}
         onShipped={() => void reload()}
         onAddSecret={openSecret}
@@ -592,7 +652,7 @@ export function ApplicationHome({
         namespace={{ env: rollbackEnv ?? "", app: application.name }}
         name={application.release_name}
         active={rollbackTarget?.release.active ?? null}
-        open={rollbackEnv !== null}
+        open={!archived && rollbackEnv !== null}
         onClose={closeRollback}
         onDone={() => {
           closeRollback();
@@ -617,7 +677,7 @@ export function ApplicationHome({
       <AddEnvironmentModal
         app={application.name}
         environments={environmentNames}
-        open={environmentOpen}
+        open={!archived && environmentOpen}
         saving={environmentSaving}
         onClose={() => setEnvironmentOpen(false)}
         onClone={(seed) => {
@@ -648,7 +708,7 @@ export function ApplicationHome({
         application={application}
         environments={environments}
         seed={cloneSeed}
-        open={cloneOpen}
+        open={!archived && cloneOpen}
         onClose={() => setCloneOpen(false)}
         onCreated={() => {
           setCloneOpen(false);
@@ -661,7 +721,7 @@ export function ApplicationHome({
         }}
       />
       <ApplicationDefinitionModal
-        open={definition !== null}
+        open={!archived && definition !== null}
         application={application}
         schemaJson={overview.schema_json}
         environments={environments}
@@ -673,7 +733,7 @@ export function ApplicationHome({
         }}
       />
       <DeriveSchemaDialog
-        open={deriveOpen}
+        open={!archived && deriveOpen}
         application={application}
         existingSchemaJson={overview.schema_json}
         onClose={() => setDeriveOpen(false)}
@@ -722,7 +782,7 @@ export function ApplicationHome({
           environments.find((candidate) => candidate.namespace.env === defaultsEnv)?.production ??
           false
         }
-        open={defaultsEnv !== null}
+        open={!archived && defaultsEnv !== null}
         onClose={() => setDefaultsEnv(null)}
         onImported={reload}
       />

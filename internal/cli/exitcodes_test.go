@@ -300,7 +300,7 @@ func TestInvocationErrorsExitUsage(t *testing.T) {
 		{[]string{"release", "create", "--file", "a.yaml", "b.yaml"}, "takes FILE or --file, not both"},
 		{[]string{"release", "create", "a.yaml", "b.yaml"}, `unexpected argument "b.yaml"`},
 		{[]string{"release", "list", "prod/app", "rel", "extra"}, `unexpected argument "extra"`},
-		{[]string{"release", "schema", "list", "id", "extra"}, `unexpected argument "extra"`},
+		{[]string{"release", "schema", "list", "app", "runtime", "extra"}, `unexpected argument "extra"`},
 		{[]string{"release", "validate", "prod/app", "rel", "v1"}, "invalid VERSION"},
 		{[]string{"release", "activate", "prod:app", "rel", "1"}, "invalid namespace"},
 		{[]string{"admin", "ca", "rotate"}, "admin ca supports only: ca show"},
@@ -324,8 +324,8 @@ func TestInvocationErrorsExitUsage(t *testing.T) {
 		{[]string{"release", "subscribers", "prod/api"}, "requires ENV/APP NAME"},
 		{[]string{"release", "schema"}, "requires create, show, or list"},
 		{[]string{"release", "schema", "frobnicate"}, "unknown release schema command"},
-		{[]string{"release", "schema", "create", "id"}, "requires ID FILE"},
-		{[]string{"release", "schema", "show", "id"}, "requires ID VERSION"},
+		{[]string{"release", "schema", "create", "app"}, "requires APPLICATION FILE"},
+		{[]string{"release", "schema", "show", "app"}, "requires APPLICATION RELEASE VERSION"},
 	} {
 		t.Run(strings.Join(tc.args, " "), func(t *testing.T) {
 			t.Parallel()

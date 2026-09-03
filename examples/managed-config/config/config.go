@@ -13,6 +13,7 @@ import (
 //go:generate go run ../../../cmd/kms-config-gen -package . -type Config -binding-package configkms -binding-output ../configkms/config_kms.gen.go -schema-output ../runtime.schema.json -contract-output ../runtime.contract.json
 
 const (
+	ApplicationName      = "managed-config"
 	defaultListenAddress = "127.0.0.1:8080"
 	defaultGreeting      = "hello from application defaults"
 	defaultRequestLimit  = 100

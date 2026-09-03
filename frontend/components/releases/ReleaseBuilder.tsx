@@ -68,9 +68,7 @@ function prettyDefinition(request: Omit<CreateReleaseRequest, "namespace">): str
   return JSON.stringify(
     {
       name: request.name,
-      ...(request.schema_id
-        ? { schema_id: request.schema_id, schema_version: request.schema_version }
-        : {}),
+      ...(request.schema_version ? { schema_version: request.schema_version } : {}),
       entries: request.entries,
       ...(request.metadata_json && request.metadata_json !== "{}"
         ? { metadata_json: request.metadata_json }
@@ -84,7 +82,6 @@ function prettyDefinition(request: Omit<CreateReleaseRequest, "namespace">): str
 function requestFromEntries(
   namespace: NamespaceRef,
   name: string,
-  schemaID: string,
   schemaVersion: string,
   entries: BuilderEntry[],
   metadataJSON: string,
@@ -92,8 +89,7 @@ function requestFromEntries(
   return {
     namespace,
     name: name.trim(),
-    schema_id: schemaID.trim() || undefined,
-    schema_version: schemaID.trim() ? Number(schemaVersion) : undefined,
+    schema_version: schemaVersion.trim() ? Number(schemaVersion) : undefined,
     entries: entries.map((entry) => ({
       alias: entry.alias.trim(),
       kind: entry.kind,
@@ -136,19 +132,15 @@ function entryProblems(entries: readonly BuilderEntry[]): Map<number, EntryProbl
   return problems;
 }
 
-/** The release-level checks: name, schema pin, metadata and the entry count. */
+/** The release-level checks: name, schema version, metadata and the entry count. */
 function builderError(
   name: string,
-  schemaID: string,
   schemaVersion: string,
   entries: readonly BuilderEntry[],
   metadataJSON: string,
 ): string | null {
   const nameError = validateReleaseName(name.trim());
   if (nameError) return nameError;
-  if (Boolean(schemaID.trim()) !== Boolean(schemaVersion.trim())) {
-    return "Schema ID and schema version must be provided together.";
-  }
   if (
     schemaVersion.trim() &&
     (!Number.isInteger(Number(schemaVersion)) || Number(schemaVersion) < 1)
@@ -161,9 +153,30 @@ function builderError(
   return null;
 }
 
+/** JSON mode may choose selectors and cross-namespace refs, but never a
+ * different schema pin. Omitted and explicit zero both mean "not pinned". */
+function releaseSchemaVersionError(
+  definition: string,
+  applicationSchemaVersion: number | null,
+): string | null {
+  if (applicationSchemaVersion === null) return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(definition);
+  } catch {
+    return null;
+  }
+  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) return null;
+  const raw = (parsed as Record<string, unknown>).schema_version;
+  const requested = raw === undefined || raw === 0 ? 0 : raw;
+  if (requested === applicationSchemaVersion) return null;
+  return applicationSchemaVersion === 0
+    ? "This application has no pinned schema; schema_version must be omitted or 0."
+    : `schema_version is owned by the application and must remain ${applicationSchemaVersion}.`;
+}
+
 interface GuidedSnapshot {
   name: string;
-  schemaID: string;
   schemaVersion: string;
   entries: string;
   metadataJSON: string;
@@ -203,7 +216,6 @@ export function ReleaseBuilder({
   const [mode, setMode] = useState<"guided" | "json">("guided");
   const [modeMessage, setModeMessage] = useState("");
   const [name, setName] = useState("runtime");
-  const [schemaID, setSchemaID] = useState("");
   const [schemaVersion, setSchemaVersion] = useState("");
   const [entries, setEntries] = useState<BuilderEntry[]>([]);
   const [metadataJSON, setMetadataJSON] = useState("{}");
@@ -221,7 +233,6 @@ export function ReleaseBuilder({
   const entryErrors = useFieldErrors<string>();
   const resetEntryErrors = entryErrors.reset;
   const { formRef, requestFocus } = useFocusFirstInvalid<HTMLDivElement>();
-  const schemaIDRef = useRef<HTMLInputElement>(null);
   const firstResourceRef = useRef<HTMLButtonElement>(null);
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: `loadAttempt` exists only to re-run this load from Retry.
@@ -243,8 +254,7 @@ export function ReleaseBuilder({
         if (generation.current !== currentGeneration) return;
         setDashboard(result);
         const nextName = result.application.release_name || "runtime";
-        const nextSchemaID = result.application.schema_id || "";
-        const nextSchemaVersion = result.application.schema_id
+        const nextSchemaVersion = result.application.schema_version
           ? String(result.application.schema_version)
           : "";
         const nextEntries = result.application.contract.map((field) => {
@@ -262,13 +272,11 @@ export function ReleaseBuilder({
         });
         const seeded = nextEntries.length ? nextEntries : [blankEntry(false)];
         setName(nextName);
-        setSchemaID(nextSchemaID);
         setSchemaVersion(nextSchemaVersion);
         setEntries(seeded);
         setMetadataJSON("{}");
         setSnapshot({
           name: nextName,
-          schemaID: nextSchemaID,
           schemaVersion: nextSchemaVersion,
           entries: entriesKey(seeded),
           metadataJSON: "{}",
@@ -279,14 +287,12 @@ export function ReleaseBuilder({
         // Never present the previous application's contract as this one's.
         setDashboard(null);
         setName("");
-        setSchemaID("");
         setSchemaVersion("");
         const seeded = [blankEntry(false)];
         setEntries(seeded);
         setMetadataJSON("{}");
         setSnapshot({
           name: "",
-          schemaID: "",
           schemaVersion: "",
           entries: entriesKey(seeded),
           metadataJSON: "{}",
@@ -308,11 +314,16 @@ export function ReleaseBuilder({
 
   const problems = useMemo(() => entryProblems(entries), [entries]);
   const releaseProblem = useMemo(
-    () => builderError(name, schemaID, schemaVersion, entries, metadataJSON),
-    [entries, metadataJSON, name, schemaID, schemaVersion],
+    () => builderError(name, schemaVersion, entries, metadataJSON),
+    [entries, metadataJSON, name, schemaVersion],
   );
   const guidedProblem = releaseProblem ?? (problems.size > 0 ? "entries" : null);
-  const jsonProblem = useMemo(() => releaseDefinitionError(jsonText), [jsonText]);
+  const jsonProblem = useMemo(
+    () =>
+      releaseDefinitionError(jsonText) ??
+      releaseSchemaVersionError(jsonText, dashboard?.application.schema_version ?? null),
+    [dashboard?.application.schema_version, jsonText],
+  );
 
   const dirty =
     snapshot !== null &&
@@ -320,13 +331,12 @@ export function ReleaseBuilder({
     (mode === "json"
       ? jsonText !== prettyDefinitionFor(snapshot, namespace)
       : name !== snapshot.name ||
-        schemaID !== snapshot.schemaID ||
         schemaVersion !== snapshot.schemaVersion ||
         entriesKey(entries) !== snapshot.entries ||
         metadataJSON !== snapshot.metadataJSON);
 
   function guidedRequest(): CreateReleaseRequest {
-    return requestFromEntries(namespace, name, schemaID, schemaVersion, entries, metadataJSON);
+    return requestFromEntries(namespace, name, schemaVersion, entries, metadataJSON);
   }
 
   function updateEntry(id: number, patch: Partial<BuilderEntry>) {
@@ -397,8 +407,7 @@ export function ReleaseBuilder({
       (dashboard?.application.contract ?? []).map((field) => [field.alias, field]),
     );
     setName(parsed.name ?? "");
-    setSchemaID(parsed.schema_id ?? "");
-    setSchemaVersion(parsed.schema_id ? String(parsed.schema_version ?? "") : "");
+    setSchemaVersion(parsed.schema_version ? String(parsed.schema_version) : "");
     setMetadataJSON(parsed.metadata_json ?? "{}");
     setEntries(
       parsedEntries.map((entry) => {
@@ -443,7 +452,6 @@ export function ReleaseBuilder({
   // Guided mode stays clickable so the click can reveal every problem inline;
   // JSON mode already shows its error unconditionally, so it keeps the disable.
   const createDisabled = loading || Boolean(loadError) || (mode === "json" && Boolean(jsonProblem));
-  const schemaEditable = !dashboard?.application.schema_id;
   const entryCount = entries.length;
   const problemCount = problems.size;
 
@@ -456,7 +464,7 @@ export function ReleaseBuilder({
       title={`New release · ${namespace.env}/${namespace.app}`}
       description="Releases are immutable: every create allocates the next version."
       onClose={onClose}
-      initialFocus={schemaEditable ? schemaIDRef : firstResourceRef}
+      initialFocus={firstResourceRef}
       footer={(close) => (
         <>
           <Button variant="outline" onClick={close} disabled={saving}>
@@ -515,24 +523,15 @@ export function ReleaseBuilder({
                 <Field label="Release name" hint="Owned by the selected application.">
                   <Input className="font-mono" value={name} disabled />
                 </Field>
-                <Field label="Schema ID" hint="Leave both schema fields empty for no schema.">
-                  <Input
-                    ref={schemaIDRef}
-                    className="font-mono"
-                    value={schemaID}
-                    disabled={!schemaEditable}
-                    onChange={(event) => setSchemaID(event.target.value)}
-                    placeholder="go-common/runtime"
-                  />
-                </Field>
-                <Field label="Schema version">
+                <Field label="Schema" hint="Owned and pinned by the application definition.">
                   <Input
                     className="font-mono"
-                    inputMode="numeric"
-                    value={schemaVersion}
-                    disabled={!schemaEditable}
-                    onChange={(event) => setSchemaVersion(event.target.value)}
-                    placeholder="1"
+                    value={
+                      schemaVersion
+                        ? `${namespace.app}/${name}@${schemaVersion}`
+                        : "No schema pinned"
+                    }
+                    disabled
                   />
                 </Field>
               </div>
@@ -744,7 +743,7 @@ export function ReleaseBuilder({
                 <strong>Ready to create</strong>
                 <span className="text-sm faint">
                   {name || "Unnamed release"} · {entryCount} immutable pins
-                  {schemaID ? ` · ${schemaID}@${schemaVersion}` : " · no schema"}
+                  {schemaVersion ? ` · ${namespace.app}/${name}@${schemaVersion}` : " · no schema"}
                 </span>
               </div>
             </div>
@@ -782,7 +781,6 @@ function prettyDefinitionFor(snapshot: GuidedSnapshot, namespace: NamespaceRef):
   const { namespace: _namespace, ...request } = requestFromEntries(
     namespace,
     snapshot.name,
-    snapshot.schemaID,
     snapshot.schemaVersion,
     entries.map(([alias, kind, key, selector, label, version]) => ({
       id: 0,

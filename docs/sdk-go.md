@@ -423,6 +423,32 @@ secrets, schema/contract artifacts, logging, metrics, verification, testing,
 and the operator workflow are in the
 [managed Go configuration guide](managed-go-configuration.md).
 
+Generated bindings also expose `GeneratedSchema() []byte`, which returns a
+fresh copy of the exact schema artifact. Applications that want both schema
+registration and defaults import can expose one command:
+
+```go
+os.Exit(configstore.RunManagedConfigCommand(
+    os.Args[1:], os.Stdout, os.Stderr,
+    configstore.ManagedConfigCommandConfig[appconfig.Profile, appconfig.Config]{
+        Application: appconfig.APP_NAME,
+        Schema: configkms.GeneratedSchema,
+        Defaults: configstore.DefaultsApplierConfig[appconfig.Profile, appconfig.Config]{
+            Provider: appconfig.ManagedReleaseDefaults,
+            Encoder: configkms.EncodeDefaultsArtifact,
+            Namespace: configkms.NamespaceForProfile,
+        },
+    },
+))
+```
+
+It exposes `schema upload` (no profile) and `defaults apply --profile ...`.
+`RunDefaultsApplier` remains available when only the latter is wanted.
+For custom tooling, `Client.CreateApplicationSchema` accepts an application,
+schema bytes, and optional metadata directly. KMS derives the release name and
+returns the assigned coordinates and digest; an identical registration wraps
+the public `ErrAlreadyExists` sentinel.
+
 The lower-level APIs below remain supported and are useful when an application
 needs a custom preparation model.
 
@@ -486,7 +512,7 @@ release, snapshot formatting, watch event, acknowledgement, metric, or KMS
 storage.
 
 `ReleaseSnapshot` provides `Namespace`, `Name`, `Version`,
-`ActivationRevision`, `SchemaID`, `SchemaVersion`, `Digest`, and
+`ActivationRevision`, `SchemaVersion`, `Digest`, and
 `MetadataJSON`, plus alias-keyed `Entry`/`Entries`, `Parameter`/`Parameters`,
 and `Secret`/`Secrets` accessors. Maps returned from plural accessors are
 copies. Each entry exposes exact path/version, content type, captured metadata,

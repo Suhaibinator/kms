@@ -181,7 +181,6 @@ function makeRelease(entry: ConfigurationReleaseEntry): ConfigurationRelease {
     namespace,
     name: "runtime",
     version: 3n,
-    schemaId: "",
     schemaVersion: 0n,
     entries: [entry],
     metadataJson: "{}",

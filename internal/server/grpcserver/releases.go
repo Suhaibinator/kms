@@ -105,7 +105,7 @@ func (h *configurationReleaseServer) CreateRelease(ctx context.Context, req *kms
 	for _, e := range req.GetEntries() {
 		entries = append(entries, domain.ReleaseEntrySelector{Alias: e.GetAlias(), Kind: e.GetKind(), Ref: refFromProto(e.GetRef()), Version: e.GetVersion(), Label: e.GetLabel()})
 	}
-	out, err := h.s.svc.CreateConfigurationRelease(ctx, pr, domain.CreateConfigurationReleaseInput{Namespace: nsRefFromProto(req.GetNamespace()), Name: req.GetName(), SchemaID: req.GetSchemaId(), SchemaVersion: req.GetSchemaVersion(), Entries: entries, Metadata: req.GetMetadataJson()})
+	out, err := h.s.svc.CreateConfigurationRelease(ctx, pr, domain.CreateConfigurationReleaseInput{Namespace: nsRefFromProto(req.GetNamespace()), Name: req.GetName(), SchemaVersion: req.GetSchemaVersion(), Entries: entries, Metadata: req.GetMetadataJson()})
 	if err != nil {
 		return nil, h.s.mapErr(ctx, err)
 	}
@@ -359,7 +359,7 @@ func (h *configurationSchemaServer) CreateSchema(ctx context.Context, req *kmsv1
 	if err != nil {
 		return nil, err
 	}
-	out, err := h.s.svc.CreateConfigurationSchema(ctx, pr, req.GetId(), req.GetSchemaJson(), req.GetMetadataJson())
+	out, err := h.s.svc.CreateConfigurationSchema(ctx, pr, req.GetApplication(), req.GetSchemaJson(), req.GetMetadataJson())
 	if err != nil {
 		return nil, h.s.mapErr(ctx, err)
 	}
@@ -370,7 +370,7 @@ func (h *configurationSchemaServer) GetSchema(ctx context.Context, req *kmsv1.Ge
 	if err != nil {
 		return nil, err
 	}
-	out, err := h.s.svc.GetConfigurationSchema(ctx, pr, req.GetId(), req.GetVersion())
+	out, err := h.s.svc.GetConfigurationSchema(ctx, pr, req.GetApplication(), req.GetReleaseName(), req.GetVersion())
 	if err != nil {
 		return nil, h.s.mapErr(ctx, err)
 	}
@@ -381,7 +381,7 @@ func (h *configurationSchemaServer) ListSchemas(ctx context.Context, req *kmsv1.
 	if err != nil {
 		return nil, err
 	}
-	rows, next, err := h.s.svc.ListConfigurationSchemas(ctx, pr, req.GetId(), pageFrom(req.GetPageSize(), req.GetPageToken()))
+	rows, next, err := h.s.svc.ListConfigurationSchemas(ctx, pr, req.GetApplication(), req.GetReleaseName(), pageFrom(req.GetPageSize(), req.GetPageToken()))
 	if err != nil {
 		return nil, h.s.mapErr(ctx, err)
 	}

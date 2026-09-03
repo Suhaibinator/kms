@@ -124,15 +124,11 @@ func TestApplicationDefaultsMissingSecretsFreshImportAndAuthorization(t *testing
 	ctx := context.Background()
 	svc, store := newConsoleTestService(t)
 	admin := adminPrincipal()
-	schema, err := svc.CreateConfigurationSchema(ctx, admin, "runtime", consoleSchema, "{}")
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, err = svc.CreateApplication(ctx, admin, domain.Application{Name: "gradethis", ReleaseName: "runtime", SchemaID: schema.ID, SchemaVersion: schema.Version, Contract: []domain.ApplicationContractField{
+	_, _, err := svc.CreateApplicationWithSchema(ctx, admin, domain.Application{Name: "gradethis", ReleaseName: "runtime", Contract: []domain.ApplicationContractField{
 		{Alias: "database", Kind: domain.ReleaseEntryParameter, ContentType: "json"},
 		{Alias: "db_password", Kind: domain.ReleaseEntrySecret},
 		{Alias: "rate_limits", Kind: domain.ReleaseEntryParameter, ContentType: "integer"},
-	}})
+	}}, consoleSchema, "{}")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -167,22 +163,19 @@ func TestApplicationDefaultsExplicitDefinitionUpdateRepinsMatchingSchema(t *test
 	ctx := context.Background()
 	svc, store := newConsoleTestService(t)
 	admin := adminPrincipal()
-	oldSchema, err := svc.CreateConfigurationSchema(ctx, admin, "gradethis/runtime", `{"type":"object"}`, "{}")
+	oldContract := []domain.ApplicationContractField{{Alias: "database", Kind: domain.ReleaseEntryParameter, ContentType: "json"}}
+	_, oldSchema, err := svc.CreateApplicationWithSchema(ctx, admin, domain.Application{
+		Name: "gradethis", ReleaseName: "runtime", Contract: oldContract,
+	}, `{"type":"object"}`, "{}")
 	if err != nil {
 		t.Fatal(err)
 	}
-	matchingSchema, err := svc.CreateConfigurationSchema(ctx, admin, "gradethis/runtime", " \n "+consoleSchema+" \n", "{}")
+	matchingSchema, err := svc.CreateConfigurationSchema(ctx, admin, "gradethis", " \n "+consoleSchema+" \n", "{}")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if matchingSchema.Schema != consoleSchema || matchingSchema.Digest != sha256Hex([]byte(consoleSchema)) {
 		t.Fatalf("schema was not canonicalized: %+v", matchingSchema)
-	}
-	oldContract := []domain.ApplicationContractField{{Alias: "database", Kind: domain.ReleaseEntryParameter, ContentType: "json"}}
-	if _, err := svc.CreateApplication(ctx, admin, domain.Application{
-		Name: "gradethis", ReleaseName: "runtime", SchemaID: oldSchema.ID, SchemaVersion: oldSchema.Version, Contract: oldContract,
-	}); err != nil {
-		t.Fatal(err)
 	}
 	ns := domain.NamespaceRef{Env: "dev", App: "gradethis"}
 	if _, err := svc.CreateNamespace(ctx, admin, ns, "", nil); err != nil {
@@ -231,8 +224,8 @@ func TestApplicationDefaultsExplicitDefinitionUpdateRepinsMatchingSchema(t *test
 		t.Fatal(err)
 	}
 	wantContract := applicationContractFromArtifact(parsed.Contract)
-	if !reflect.DeepEqual(updated.Contract, wantContract) || updated.SchemaID != matchingSchema.ID || updated.SchemaVersion != matchingSchema.Version {
-		t.Fatalf("updated definition = %+v, want schema=%s@%d contract=%+v", updated, matchingSchema.ID, matchingSchema.Version, wantContract)
+	if !reflect.DeepEqual(updated.Contract, wantContract) || updated.SchemaVersion != matchingSchema.Version {
+		t.Fatalf("updated definition = %+v, want schema=%s/%s@%d contract=%+v", updated, matchingSchema.Application, matchingSchema.ReleaseName, matchingSchema.Version, wantContract)
 	}
 	retry, err := svc.ApplyApplicationDefaults(ctx, admin, domain.DefaultsApplyInput{Namespace: ns, Artifact: artifact})
 	if err != nil || retry.DefinitionChanged {
@@ -260,7 +253,8 @@ func TestApplicationDefaultsRejectsStalePlansAndRecreatedNamespaces(t *testing.T
 
 	// An empty application proves namespace incarnation is part of the digest.
 	svc2, _ := newConsoleTestService(t)
-	if _, err := svc2.CreateApplication(ctx, admin, domain.Application{Name: "worker", ReleaseName: "runtime", Contract: []domain.ApplicationContractField{{Alias: "runtime", Kind: domain.ReleaseEntryParameter, ContentType: "string"}}}); err != nil {
+	const workerSchema = `{"type":"object","properties":{"runtime":{"type":"string"}}}`
+	if _, _, err := svc2.CreateApplicationWithSchema(ctx, admin, domain.Application{Name: "worker", ReleaseName: "runtime", Contract: []domain.ApplicationContractField{{Alias: "runtime", Kind: domain.ReleaseEntryParameter, ContentType: "string"}}}, workerSchema, "{}"); err != nil {
 		t.Fatal(err)
 	}
 	workerNS := domain.NamespaceRef{Env: "dev", App: "worker"}
@@ -268,7 +262,7 @@ func TestApplicationDefaultsRejectsStalePlansAndRecreatedNamespaces(t *testing.T
 		t.Fatal(err)
 	}
 	workerArtifact, err := configstore.EncodeDefaultsArtifact(configstore.DefaultsArtifact{
-		Format: configstore.DefaultsArtifactFormat, Profile: "dev", SchemaSHA256: strings.Repeat("0", 64),
+		Format: configstore.DefaultsArtifactFormat, Profile: "dev", SchemaSHA256: sha256Hex([]byte(workerSchema)),
 		Contract:   []configstore.ContractEntry{{Alias: "runtime", Kind: configstore.ContractKindParameter, ContentType: "string"}},
 		Parameters: []configstore.DefaultsParameter{{Alias: "runtime", ContentType: "string", Value: "default"}},
 	})
@@ -294,7 +288,8 @@ func TestApplicationDefaultsPlanPinsCrossEnvironmentResourceInventory(t *testing
 	ctx := context.Background()
 	svc, _ := newConsoleTestService(t)
 	admin := adminPrincipal()
-	if _, err := svc.CreateApplication(ctx, admin, domain.Application{Name: "worker", ReleaseName: "runtime", Contract: []domain.ApplicationContractField{{Alias: "runtime", Kind: domain.ReleaseEntryParameter, ContentType: "string"}}}); err != nil {
+	const workerSchema = `{"type":"object","properties":{"runtime":{"type":"string"}}}`
+	if _, _, err := svc.CreateApplicationWithSchema(ctx, admin, domain.Application{Name: "worker", ReleaseName: "runtime", Contract: []domain.ApplicationContractField{{Alias: "runtime", Kind: domain.ReleaseEntryParameter, ContentType: "string"}}}, workerSchema, "{}"); err != nil {
 		t.Fatal(err)
 	}
 	for _, env := range []string{"dev", "prod"} {
@@ -303,7 +298,7 @@ func TestApplicationDefaultsPlanPinsCrossEnvironmentResourceInventory(t *testing
 		}
 	}
 	artifact, err := configstore.EncodeDefaultsArtifact(configstore.DefaultsArtifact{
-		Format: configstore.DefaultsArtifactFormat, Profile: "dev", SchemaSHA256: strings.Repeat("0", 64),
+		Format: configstore.DefaultsArtifactFormat, Profile: "dev", SchemaSHA256: sha256Hex([]byte(workerSchema)),
 		Contract:   []configstore.ContractEntry{{Alias: "runtime", Kind: configstore.ContractKindParameter, ContentType: "string"}},
 		Parameters: []configstore.DefaultsParameter{{Alias: "runtime", ContentType: "string", Value: "default"}},
 	})

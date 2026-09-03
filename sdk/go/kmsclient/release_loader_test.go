@@ -825,7 +825,6 @@ func TestReleaseLoaderRetriesStillActiveCandidateOnReconciliation(t *testing.T) 
 func TestReleaseLoaderValidatesImmutableManifestBeforeResolution(t *testing.T) {
 	server := newReleaseLoaderServer()
 	release := testRelease(8, `{"enabled":true}`)
-	release.SchemaId = "app/runtime"
 	release.SchemaVersion = 3
 	release.MetadataJson = `{"owner":"config"}`
 	release.Digest, _ = deterministicReleaseDigest(release)
@@ -845,7 +844,7 @@ func TestReleaseLoaderValidatesImmutableManifestBeforeResolution(t *testing.T) {
 			if manifest.Namespace() != "prod/app" || manifest.Name() != "runtime" || manifest.Version() != 8 || manifest.ActivationRevision() != 43 {
 				t.Errorf("unexpected manifest identity: %s", manifest)
 			}
-			if manifest.SchemaID() != "app/runtime" || manifest.SchemaVersion() != 3 || manifest.Digest() != release.GetDigest() || manifest.MetadataJSON() != `{"owner":"config"}` {
+			if manifest.SchemaVersion() != 3 || manifest.Digest() != release.GetDigest() || manifest.MetadataJSON() != `{"owner":"config"}` {
 				t.Errorf("unexpected manifest metadata: %s", manifest)
 			}
 			entries := manifest.Entries()

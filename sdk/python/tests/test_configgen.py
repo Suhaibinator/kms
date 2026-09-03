@@ -67,7 +67,7 @@ def test_committed_generated_binding_is_a_typed_runtime_consumer() -> None:
     store = GeneratedConfigStore({})
     prepared = store.prepare(ReleaseSnapshot(
         namespace="prod/app", name="runtime", version=1, activation_revision=1,
-        schema_id="app", schema_version=1, digest="digest", metadata_json="{}",
+        schema_version=1, digest="digest", metadata_json="{}",
         entries=(), parameters={"runtime": '{"debug":true,"port":9000}'},
         secrets={"db_password": Secret(b"canary", version=1)},
     ))
@@ -138,7 +138,7 @@ def test_portable_schema_exactly_describes_runtime_wire_codecs() -> None:
     binding = ConfigBinding(PortableConfig, {})
     prepared = binding.prepare(ReleaseSnapshot(
         namespace="dev/app", name="runtime", version=1, activation_revision=1,
-        schema_id="app", schema_version=1, digest="digest", metadata_json="{}", entries=(),
+        schema_version=1, digest="digest", metadata_json="{}", entries=(),
         parameters={"portable": '{"count":5,"nested":{"label":"ok"},"payload":"AAE=","timeout":"1s"}'},
         secrets={"password": Secret(b"secret", version=1)},
     ))
@@ -200,7 +200,7 @@ def test_schema_constraints_aliases_and_nested_defaults_match_runtime() -> None:
     binding = ConfigBinding(AliasedConfig, {})
     prepared = binding.prepare(ReleaseSnapshot(
         namespace="dev/app", name="runtime", version=1, activation_revision=1,
-        schema_id="app", schema_version=1, digest="digest", metadata_json="{}", entries=(),
+        schema_version=1, digest="digest", metadata_json="{}", entries=(),
         parameters={"runtime": json.dumps({
             "wire-port": 9000,
             "wire-nested": {"required-name": "valid", "retry-ratio": 0.7,

@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -87,6 +88,8 @@ func TestGenerateIsDeterministicAndCanonical(t *testing.T) {
 		t.Fatal("generated binding does not emit VerifyReleaseDefaults")
 	}
 	for _, want := range [][]byte{
+		[]byte("const generatedSchemaJSON = " + strconv.Quote(string(first.Schema))),
+		[]byte("func GeneratedSchema() []byte { return []byte(generatedSchemaJSON) }"),
 		[]byte("func EncodeDefaultsArtifact(profile string, root *rootconfig.Config) ([]byte, error)"),
 		[]byte("Format:       configstore.DefaultsArtifactFormat"),
 		[]byte("SchemaSHA256: generatedSchemaSHA256"),

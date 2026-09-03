@@ -209,9 +209,9 @@ the operator explicitly supplies `--overwrite`.
 
 If the artifact contract or schema digest differs from the existing
 application definition, preview reports the definition change but never writes
-it. Register the generated schema under the application's existing schema ID,
-then pass `--update-definition` to explicitly allow execution to replace the
-contract and repin the matching registered schema version. KMS selects by
+it. Register the generated schema for the application (KMS derives its release
+name), then pass `--update-definition` to explicitly allow execution to replace
+the contract and repin the matching registered schema version. KMS selects by
 digest; callers never guess a version number.
 
 Execute uses a fresh server preview and its opaque plan digest:

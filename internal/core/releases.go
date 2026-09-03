@@ -81,9 +81,6 @@ func (s *Service) CreateConfigurationRelease(ctx context.Context, pr Principal, 
 	if err != nil {
 		return domain.ConfigurationRelease{}, err
 	}
-	if (in.SchemaID == "") != (in.SchemaVersion == 0) {
-		return domain.ConfigurationRelease{}, domain.Errorf(domain.ErrInvalidArgument, "schema_id and schema_version must be specified together")
-	}
 	ctx, namespace, err := s.authorize(ctx, pr, domain.OpConfigurationReleaseCreate, domain.ResourceConfigurationRelease, domain.Ref{NS: in.Namespace, Key: in.Name})
 	if err != nil {
 		return domain.ConfigurationRelease{}, err
@@ -130,21 +127,21 @@ func (s *Service) CreateConfigurationRelease(ctx context.Context, pr Principal, 
 // Structural input errors (bad alias, duplicate, unknown kind, invalid ref)
 // always abort.
 func (s *Service) resolveReleaseCandidate(ctx context.Context, pr Principal, rs storage.ReleaseStore, in domain.CreateConfigurationReleaseInput, collectErrors bool) (context.Context, domain.ConfigurationRelease, []domain.ReleaseValidationError, error) {
-	if in.SchemaID != "" {
-		if _, err := rs.GetConfigurationSchema(ctx, in.SchemaID, in.SchemaVersion); err != nil {
-			return ctx, domain.ConfigurationRelease{}, nil, err
-		}
-	}
 	ctx, entries, validation, err := s.resolveReleaseEntries(ctx, pr, in, collectErrors)
 	if err != nil {
 		return ctx, domain.ConfigurationRelease{}, nil, err
 	}
-	release := domain.ConfigurationRelease{Namespace: in.Namespace, Name: in.Name, SchemaID: in.SchemaID, SchemaVersion: in.SchemaVersion, Entries: entries, Metadata: in.Metadata, CreatedBy: pr.Identity.Name}
+	release := domain.ConfigurationRelease{Namespace: in.Namespace, Name: in.Name, SchemaVersion: in.SchemaVersion, Entries: entries, Metadata: in.Metadata, CreatedBy: pr.Identity.Name}
 	if len(validation) > 0 {
 		return ctx, release, validation, nil
 	}
-	if err := s.validateApplicationReleaseContract(ctx, in.Namespace.App, in.Name, in.SchemaID, in.SchemaVersion, entries, !collectErrors); err != nil {
+	if err := s.validateApplicationReleaseContract(ctx, in.Namespace.App, in.Name, in.SchemaVersion, entries, !collectErrors); err != nil {
 		return ctx, domain.ConfigurationRelease{}, nil, err
+	}
+	if in.SchemaVersion != 0 {
+		if _, err := rs.GetConfigurationSchema(ctx, in.Namespace.App, in.Name, in.SchemaVersion); err != nil {
+			return ctx, domain.ConfigurationRelease{}, nil, err
+		}
 	}
 	release.Digest, err = releaseDigest(release)
 	if err != nil {
@@ -259,7 +256,7 @@ func (s *Service) resolveReleaseEntries(ctx context.Context, pr Principal, in do
 // derives one from the entries (the first-release adoption rule); adopt=false
 // treats the entries as matching without writing anything so dry-run paths
 // never mutate the application.
-func (s *Service) validateApplicationReleaseContract(ctx context.Context, appName, releaseName, schemaID string, schemaVersion uint64, entries []domain.ConfigurationReleaseEntry, adopt bool) error {
+func (s *Service) validateApplicationReleaseContract(ctx context.Context, appName, releaseName string, schemaVersion uint64, entries []domain.ConfigurationReleaseEntry, adopt bool) error {
 	store, ok := s.store.(storage.ApplicationStore)
 	if !ok {
 		return nil
@@ -271,8 +268,11 @@ func (s *Service) validateApplicationReleaseContract(ctx context.Context, appNam
 	if app.ReleaseName != "" && releaseName != app.ReleaseName {
 		return domain.Errorf(domain.ErrFailedPrecondition, "application %s requires release name %q", appName, app.ReleaseName)
 	}
-	if app.SchemaID != "" && (schemaID != app.SchemaID || schemaVersion != app.SchemaVersion) {
-		return domain.Errorf(domain.ErrFailedPrecondition, "application %s requires schema %s@%d", appName, app.SchemaID, app.SchemaVersion)
+	if !app.ArchivedAt.IsZero() {
+		return domain.Errorf(domain.ErrFailedPrecondition, "application %s is archived", appName)
+	}
+	if schemaVersion != app.SchemaVersion {
+		return domain.Errorf(domain.ErrFailedPrecondition, "application %s requires schema %s/%s@%d", appName, appName, app.ReleaseName, app.SchemaVersion)
 	}
 	if len(app.Contract) == 0 {
 		if !adopt {
@@ -286,11 +286,7 @@ func (s *Service) validateApplicationReleaseContract(ctx context.Context, appNam
 			}
 			fields = append(fields, field)
 		}
-		adoptSchemaID, adoptSchemaVersion := app.SchemaID, app.SchemaVersion
-		if adoptSchemaID == "" {
-			adoptSchemaID, adoptSchemaVersion = schemaID, schemaVersion
-		}
-		app, err = store.AdoptApplicationContract(ctx, appName, adoptSchemaID, adoptSchemaVersion, fields)
+		app, err = store.AdoptApplicationContract(ctx, appName, fields)
 		if err != nil {
 			return err
 		}
@@ -413,7 +409,7 @@ func (s *Service) validateConfigurationRelease(ctx context.Context, pr Principal
 // never writes. Entries with a zero ResourceNamespaceID (never persisted) are
 // read through the caller's already-bound context instead of re-binding.
 func (s *Service) validateReleaseEntries(ctx context.Context, pr Principal, rs storage.ReleaseStore, rel domain.ConfigurationRelease, overrides map[string]releaseCandidateValue, authorizeEntries, adopt bool) ([]domain.ReleaseValidationError, error) {
-	if err := s.validateApplicationReleaseContract(ctx, rel.Namespace.App, rel.Name, rel.SchemaID, rel.SchemaVersion, rel.Entries, adopt); err != nil {
+	if err := s.validateApplicationReleaseContract(ctx, rel.Namespace.App, rel.Name, rel.SchemaVersion, rel.Entries, adopt); err != nil {
 		return nil, err
 	}
 	validation := make([]domain.ReleaseValidationError, 0)
@@ -499,8 +495,8 @@ func (s *Service) validateReleaseEntries(ctx context.Context, pr Principal, rs s
 			validation = append(validation, domain.ReleaseValidationError{Alias: entry.Alias, Code: domain.ReleaseValidationUnreadable, Message: "release entry kind is invalid"})
 		}
 	}
-	if len(validation) == 0 && rel.SchemaID != "" {
-		schrec, err := rs.GetConfigurationSchema(ctx, rel.SchemaID, rel.SchemaVersion)
+	if len(validation) == 0 && rel.SchemaVersion != 0 {
+		schrec, err := rs.GetConfigurationSchema(ctx, rel.Namespace.App, rel.Name, rel.SchemaVersion)
 		if err != nil {
 			validation = append(validation, domain.ReleaseValidationError{Code: domain.ReleaseValidationNotFound, Message: "configuration schema is unavailable"})
 		} else if sch, err := compileSchema(schrec.Schema); err != nil {
@@ -764,12 +760,47 @@ func (s *Service) ListReleaseSubscribers(ctx context.Context, pr Principal, ns d
 	return rows, next, active.ActivationRevision, nil
 }
 
-func (s *Service) CreateConfigurationSchema(ctx context.Context, pr Principal, id, schemaJSON, metadata string) (domain.ConfigurationSchema, error) {
-	if err := s.requireAdmin(ctx, pr, "configuration_schema.create", domain.ResourceConfigurationSchema, id); err != nil {
+func (s *Service) CreateConfigurationSchema(ctx context.Context, pr Principal, application, schemaJSON, metadata string) (domain.ConfigurationSchema, error) {
+	if err := keyutil.ValidateApp(application); err != nil {
+		return domain.ConfigurationSchema{}, domain.Errorf(domain.ErrInvalidArgument, "%v", err)
+	}
+	if err := s.requireAdmin(ctx, pr, "configuration_schema.create", domain.ResourceConfigurationSchema, application); err != nil {
 		return domain.ConfigurationSchema{}, err
 	}
-	if len(id) == 0 || len(id) > 256 || strings.ContainsAny(id, " \t\r\n") {
-		return domain.ConfigurationSchema{}, domain.Errorf(domain.ErrInvalidArgument, "invalid schema id")
+	apps, err := s.applicationStore()
+	if err != nil {
+		return domain.ConfigurationSchema{}, err
+	}
+	app, err := apps.GetApplication(ctx, application)
+	if err != nil {
+		return domain.ConfigurationSchema{}, err
+	}
+	if !app.ArchivedAt.IsZero() {
+		return domain.ConfigurationSchema{}, domain.Errorf(domain.ErrFailedPrecondition, "application %s is archived", application)
+	}
+	schema, err := normalizeConfigurationSchema(application, app.ReleaseName, schemaJSON, metadata)
+	if err != nil {
+		return domain.ConfigurationSchema{}, err
+	}
+	schema.CreatedBy = pr.Identity.Name
+	rs, err := s.releaseStore()
+	if err != nil {
+		return domain.ConfigurationSchema{}, err
+	}
+	out, err := rs.CreateConfigurationSchema(ctx, schema)
+	if err == nil {
+		resource := application + "/" + app.ReleaseName
+		s.auditName(ctx, pr, "configuration_schema.create", domain.ResourceConfigurationSchema, resource, "allow", map[string]string{"version": strconv.FormatUint(out.Version, 10)})
+	}
+	return out, err
+}
+
+func normalizeConfigurationSchema(application, releaseName, schemaJSON, metadata string) (domain.ConfigurationSchema, error) {
+	if err := keyutil.ValidateApp(application); err != nil {
+		return domain.ConfigurationSchema{}, domain.Errorf(domain.ErrInvalidArgument, "%v", err)
+	}
+	if err := keyutil.ValidateKey(releaseName); err != nil {
+		return domain.ConfigurationSchema{}, domain.Errorf(domain.ErrInvalidArgument, "invalid release name: %v", err)
 	}
 	if len(schemaJSON) == 0 || len(schemaJSON) > maxSchemaBytes {
 		return domain.ConfigurationSchema{}, domain.Errorf(domain.ErrInvalidArgument, "schema must contain between 1 and %d bytes", maxSchemaBytes)
@@ -789,36 +820,52 @@ func (s *Service) CreateConfigurationSchema(ctx context.Context, pr Principal, i
 	if _, err := compileSchema(schemaJSON); err != nil {
 		return domain.ConfigurationSchema{}, domain.Errorf(domain.ErrInvalidArgument, "invalid Draft 2020-12 JSON Schema")
 	}
-	rs, err := s.releaseStore()
-	if err != nil {
-		return domain.ConfigurationSchema{}, err
-	}
-	out, err := rs.CreateConfigurationSchema(ctx, domain.ConfigurationSchema{ID: id, Schema: schemaJSON, Digest: sha256Hex([]byte(schemaJSON)), Metadata: metadata, CreatedBy: pr.Identity.Name})
-	if err == nil {
-		s.auditName(ctx, pr, "configuration_schema.create", domain.ResourceConfigurationSchema, id, "allow", map[string]string{"version": strconv.FormatUint(out.Version, 10)})
-	}
-	return out, err
+	return domain.ConfigurationSchema{Application: application, ReleaseName: releaseName, Schema: schemaJSON, Digest: sha256Hex([]byte(schemaJSON)), Metadata: metadata}, nil
 }
 
-func (s *Service) GetConfigurationSchema(ctx context.Context, pr Principal, id string, version uint64) (domain.ConfigurationSchema, error) {
-	if err := s.requireAdmin(ctx, pr, "configuration_schema.read", domain.ResourceConfigurationSchema, id); err != nil {
+func (s *Service) GetConfigurationSchema(ctx context.Context, pr Principal, application, releaseName string, version uint64) (domain.ConfigurationSchema, error) {
+	if err := keyutil.ValidateApp(application); err != nil {
+		return domain.ConfigurationSchema{}, domain.Errorf(domain.ErrInvalidArgument, "%v", err)
+	}
+	if err := keyutil.ValidateKey(releaseName); err != nil {
+		return domain.ConfigurationSchema{}, domain.Errorf(domain.ErrInvalidArgument, "invalid release name: %v", err)
+	}
+	if version == 0 {
+		return domain.ConfigurationSchema{}, domain.Errorf(domain.ErrInvalidArgument, "version is required")
+	}
+	resource := application + "/" + releaseName
+	if err := s.requireAdmin(ctx, pr, "configuration_schema.read", domain.ResourceConfigurationSchema, resource); err != nil {
 		return domain.ConfigurationSchema{}, err
 	}
 	rs, err := s.releaseStore()
 	if err != nil {
 		return domain.ConfigurationSchema{}, err
 	}
-	return rs.GetConfigurationSchema(ctx, id, version)
+	return rs.GetConfigurationSchema(ctx, application, releaseName, version)
 }
-func (s *Service) ListConfigurationSchemas(ctx context.Context, pr Principal, id string, page storage.ListPage) ([]domain.ConfigurationSchema, string, error) {
-	if err := s.requireAdmin(ctx, pr, "configuration_schema.list", domain.ResourceConfigurationSchema, id); err != nil {
+func (s *Service) ListConfigurationSchemas(ctx context.Context, pr Principal, application, releaseName string, page storage.ListPage) ([]domain.ConfigurationSchema, string, error) {
+	if application == "" && releaseName != "" {
+		return nil, "", domain.Errorf(domain.ErrInvalidArgument, "application is required when release_name is set")
+	}
+	if application != "" {
+		if err := keyutil.ValidateApp(application); err != nil {
+			return nil, "", domain.Errorf(domain.ErrInvalidArgument, "%v", err)
+		}
+	}
+	if releaseName != "" {
+		if err := keyutil.ValidateKey(releaseName); err != nil {
+			return nil, "", domain.Errorf(domain.ErrInvalidArgument, "invalid release name: %v", err)
+		}
+	}
+	resource := strings.Trim(application+"/"+releaseName, "/")
+	if err := s.requireAdmin(ctx, pr, "configuration_schema.list", domain.ResourceConfigurationSchema, resource); err != nil {
 		return nil, "", err
 	}
 	rs, err := s.releaseStore()
 	if err != nil {
 		return nil, "", err
 	}
-	return rs.ListConfigurationSchemas(ctx, id, page)
+	return rs.ListConfigurationSchemas(ctx, application, releaseName, page)
 }
 
 func validateReleaseMetadata(v string) (string, error) {
@@ -831,7 +878,7 @@ func sha256Hex(v []byte) string { sum := sha256.Sum256(v); return hex.EncodeToSt
 func releaseDigest(r domain.ConfigurationRelease) (string, error) {
 	entries := append([]domain.ConfigurationReleaseEntry(nil), r.Entries...)
 	sort.Slice(entries, func(i, j int) bool { return entries[i].Alias < entries[j].Alias })
-	pb := &kmsv1.ConfigurationRelease{Namespace: &kmsv1.NamespaceRef{Env: r.Namespace.Env, App: r.Namespace.App}, Name: r.Name, SchemaId: r.SchemaID, SchemaVersion: r.SchemaVersion, MetadataJson: r.Metadata}
+	pb := &kmsv1.ConfigurationRelease{Namespace: &kmsv1.NamespaceRef{Env: r.Namespace.Env, App: r.Namespace.App}, Name: r.Name, SchemaVersion: r.SchemaVersion, MetadataJson: r.Metadata}
 	for _, e := range entries {
 		pb.Entries = append(pb.Entries, &kmsv1.ConfigurationReleaseEntry{Alias: e.Alias, Kind: e.Kind, Ref: &kmsv1.ResourceRef{Namespace: &kmsv1.NamespaceRef{Env: e.Ref.NS.Env, App: e.Ref.NS.App}, Key: e.Ref.Key}, Version: e.Version, ContentType: e.ContentType, MetadataJson: e.Metadata, ParameterDigest: e.ParameterDigest, ClientBound: e.ClientBound, HasAccessToken: e.HasAccessToken})
 	}

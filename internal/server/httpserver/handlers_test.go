@@ -270,22 +270,40 @@ func TestParameterMissingNamespace(t *testing.T) {
 
 func TestConfigurationReleaseHTTPLifecycle(t *testing.T) {
 	e := newReleaseTestEnv(t)
+	w := e.admin(http.MethodPost, "/api/v1/applications", map[string]any{
+		"name": "app", "release_name": "runtime",
+		"schema": map[string]any{"schema_json": `{"type":"object"}`},
+	})
+	mustStatus(t, w, http.StatusCreated)
+	pinnedSchema := decodeBody(t, w)["schema"].(map[string]any)
 	e.createNS("prod", "app")
 
-	w := e.admin(http.MethodPut, "/api/v1/parameters", map[string]any{
+	w = e.admin(http.MethodPut, "/api/v1/parameters", map[string]any{
 		"env": "prod", "app": "app", "key": "config/runtime", "value": `{"enabled":true}`, "content_type": "json",
 	})
 	mustStatus(t, w, http.StatusOK)
 
 	w = e.admin(http.MethodPost, "/api/v1/configuration-schemas", map[string]any{
-		"id": "runtime", "schema_json": `{"type":"object","properties":{"settings":{"type":"object"}},"required":["settings"]}`,
+		"application": "app", "schema_json": `{"type":"object","properties":{"settings":{"type":"object"}},"required":["settings"]}`,
 	})
 	mustStatus(t, w, http.StatusCreated)
 	schema := decodeBody(t, w)["schema"].(map[string]any)
+	if schema["application"] != "app" || schema["release_name"] != "runtime" || schema["digest"] == "" {
+		t.Fatalf("schema coordinates = %v", schema)
+	}
+	w = e.admin(http.MethodGet, "/api/v1/configuration-schemas?application=app&release_name=runtime", nil)
+	mustStatus(t, w, http.StatusOK)
+	if schemas := decodeBody(t, w)["schemas"].([]any); len(schemas) != 2 || schemas[0].(map[string]any)["application"] != "app" {
+		t.Fatalf("schema list = %v", schemas)
+	}
+	w = e.admin(http.MethodPost, "/api/v1/configuration-schemas", map[string]any{
+		"application": "app", "schema_json": `{"type":"object","properties":{"settings":{"type":"object"}},"required":["settings"]}`,
+	})
+	mustStatus(t, w, http.StatusConflict)
 
 	w = e.admin(http.MethodPost, "/api/v1/releases", map[string]any{
 		"namespace": map[string]any{"env": "prod", "app": "app"},
-		"name":      "runtime", "schema_id": "runtime", "schema_version": schema["version"],
+		"name":      "runtime", "schema_version": pinnedSchema["version"],
 		"entries": []map[string]any{{
 			"alias": "settings", "kind": "parameter",
 			"ref":   map[string]any{"namespace": map[string]any{"env": "prod", "app": "app"}, "key": "config/runtime"},
@@ -781,9 +799,9 @@ func TestApplicationDashboardHTTPWorkflow(t *testing.T) {
 	e := newReleaseTestEnv(t)
 	w := e.admin(http.MethodPost, "/api/v1/applications", map[string]any{
 		"name": "payments-api", "description": "Payments", "release_name": "runtime",
-		"schema_id": "", "schema_version": 0, "contract": []any{},
+		"schema_version": 0, "contract": []any{},
 	})
-	mustStatus(t, w, http.StatusOK)
+	mustStatus(t, w, http.StatusCreated)
 	for _, env := range []string{"dev", "prod-gcp"} {
 		w = e.admin(http.MethodPost, "/api/v1/namespaces", map[string]any{
 			"env": env, "app": "payments-api", "description": "", "allowed_auth_methods": []string{"mtls"},

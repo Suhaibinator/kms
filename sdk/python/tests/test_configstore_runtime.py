@@ -42,7 +42,7 @@ class RuntimeConfig(BaseModel):
 def snapshot(*, port: object = 8080, enabled: object = True, secret_version: int = 1) -> ReleaseSnapshot:
     return ReleaseSnapshot(
         namespace="prod/app", name="runtime", version=secret_version,
-        activation_revision=secret_version, schema_id="app", schema_version=1,
+        activation_revision=secret_version, schema_version=1,
         digest=f"digest-{secret_version}", metadata_json="{}", entries=(),
         parameters={
             "runtime": json.dumps({"port": port, "label_set": ["a"]}),

@@ -11,7 +11,6 @@ function fixture() {
     namespace: { env: "prod", app: "api" },
     name: "runtime",
     version: 42n,
-    schemaId: "runtime-v1",
     schemaVersion: 7n,
     entries: [
       {
@@ -47,7 +46,7 @@ function fixture() {
 describe("deterministicReleaseDigest", () => {
   it("matches the Go deterministic protobuf golden", () => {
     expect(deterministicReleaseDigest(fixture())).toBe(
-      "c6a612894cd56d475d4c31d94007a3432389c347e1af2dfcba46e8490e35c535",
+      "77c779a898693cbf1cc90516884c8c43fb6e3d4e50aab9435adeaf06ac9ea91a",
     );
   });
 

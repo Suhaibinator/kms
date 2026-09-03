@@ -25,19 +25,38 @@ export interface OverviewFreshness {
   /** When the data on screen was loaded; null before the first response. */
   lastLoadedAt: number | null;
   /** `failed`: the last reload failed and older data is still shown.
-   *  `changed`: a background check found a release activation the page does not show. */
+   *  `changed`: a background check found lifecycle or release state the page does not show. */
   staleReason: "failed" | "changed" | null;
 }
 
 /**
- * Release activations that differ between two overviews of the same
- * application, as value-free lines ("prod: runtime@13 activated at rev 13 by
- * alice"). Environments that appeared or disappeared count as well.
+ * Lifecycle or release activations that differ between two overviews of the
+ * same application, as value-free lines ("application archived by alice" or
+ * "prod: runtime@13 activated at rev 13 by alice"). Environments that appeared
+ * or disappeared count as well.
  */
 export function releaseMovements(prev: ApplicationOverview, next: ApplicationOverview): string[] {
   const before = new Map(prev.environments.map((env) => [env.namespace.env, env]));
   const after = new Map(next.environments.map((env) => [env.namespace.env, env]));
   const lines: string[] = [];
+  const wasArchived = prev.application.archived_at_unix_ms > 0;
+  const isArchived = next.application.archived_at_unix_ms > 0;
+  if (
+    prev.application.archived_at_unix_ms !== next.application.archived_at_unix_ms ||
+    prev.application.archived_by !== next.application.archived_by
+  ) {
+    if (!wasArchived && isArchived) {
+      lines.push(
+        `application archived${next.application.archived_by ? ` by ${next.application.archived_by}` : ""}`,
+      );
+    } else if (wasArchived && !isArchived) {
+      lines.push("application unarchived");
+    } else {
+      lines.push(
+        `application archive record changed${next.application.archived_by ? ` by ${next.application.archived_by}` : ""}`,
+      );
+    }
+  }
   for (const [name, env] of after) {
     const old = before.get(name);
     if (!old) {
@@ -133,7 +152,7 @@ export function useApplicationOverview(name: string): {
     if (name) void reload();
   }, [name, reload]);
 
-  // Another operator can ship or roll back while this page is open. A
+  // Another operator can change lifecycle state, ship or roll back while this page is open. A
   // read-only check every OVERVIEW_CHECK_MS (visible tab, nothing in flight)
   // compares release activations and, when they moved, says so once with a
   // Reload action — it never swaps the data under an open modal.

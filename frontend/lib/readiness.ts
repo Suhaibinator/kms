@@ -127,8 +127,10 @@ export const FINDING_COPY: Record<FindingCode, (p: Params) => string> = {
   schema_unpinned: () =>
     "No schema is pinned. Releases will not be validated against a shape before activation.",
   schema_missing: (p) => {
-    const id = str(p, "schema_id");
-    const pin = id ? ` ${id}@${str(p, "schema_version") ?? "?"}` : "";
+    const application = str(p, "application");
+    const release = str(p, "release_name");
+    const pin =
+      application && release ? ` ${application}/${release}@${str(p, "schema_version") ?? "?"}` : "";
     return `The pinned schema${pin} does not exist in the registry, so no release can be validated or activated.`;
   },
   schema_property_missing_alias: (p) =>

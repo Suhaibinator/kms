@@ -125,12 +125,13 @@ const OVERVIEW = {
     name: "billing",
     description: "",
     release_name: "billing",
-    schema_id: "cfg",
     schema_version: 3,
     contract: [{ alias: "retries_alias", kind: "parameter", content_type: "json" }],
     created_by: "admin",
     created_at_unix_ms: 1,
     updated_at_unix_ms: 1,
+    archived_at_unix_ms: 0,
+    archived_by: "",
     environment_count: 1,
   },
   status: "ready",
@@ -361,7 +362,7 @@ describe("new parameter version editor", () => {
     expect(api.applicationOverview).toHaveBeenCalledWith("billing", ["prod"], expect.anything());
 
     // The alias came from the overview's resolved key, not from the key itself.
-    expect(within(dialog).getByText("cfg@3")).toBeVisible();
+    expect(within(dialog).getByText("billing/billing@3")).toBeVisible();
     expect(within(dialog).getByText("retries_alias")).toBeVisible();
     expect(within(dialog).getByRole("button", { name: "Form" })).toHaveAttribute(
       "aria-pressed",
@@ -633,6 +634,6 @@ describe("new parameter version dialog", () => {
     fireEvent.click(adopt);
     // …but one click adopts it, keeping the edited value.
     expect(await within(dialog).findByRole("textbox", { name: "max" })).toHaveValue("4");
-    expect(within(dialog).getByText("cfg@3")).toBeVisible();
+    expect(within(dialog).getByText("billing/billing@3")).toBeVisible();
   });
 });

@@ -1,5 +1,5 @@
-// Command apply-defaults previews or applies this application's source-owned
-// parameter defaults to its KMS namespace.
+// Command apply-defaults uploads this application's generated schema or
+// previews/applies its source-owned parameter defaults to KMS.
 package main
 
 import (
@@ -11,13 +11,17 @@ import (
 )
 
 func main() {
-	os.Exit(configstore.RunDefaultsApplier(
+	os.Exit(configstore.RunManagedConfigCommand(
 		os.Args[1:], os.Stdout, os.Stderr,
-		configstore.DefaultsApplierConfig[string, appconfig.Config]{
-			Provider: appconfig.ManagedReleaseDefaults,
-			Encoder:  configkms.EncodeDefaultsArtifact,
-			Namespace: func(string) (string, error) {
-				return "dev/managed-config", nil
+		configstore.ManagedConfigCommandConfig[string, appconfig.Config]{
+			Application: appconfig.ApplicationName,
+			Schema:      configkms.GeneratedSchema,
+			Defaults: configstore.DefaultsApplierConfig[string, appconfig.Config]{
+				Provider: appconfig.ManagedReleaseDefaults,
+				Encoder:  configkms.EncodeDefaultsArtifact,
+				Namespace: func(string) (string, error) {
+					return "dev/managed-config", nil
+				},
 			},
 		},
 	))

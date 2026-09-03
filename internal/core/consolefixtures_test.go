@@ -110,7 +110,7 @@ func evaluateReadinessCase(in readinessCaseInput) readinessCaseExpected {
 	ns := domain.NamespaceRef{Env: "dev", App: "gradethis"}
 	app := domain.Application{Name: ns.App, ReleaseName: "runtime", Contract: in.Contract}
 	if in.SchemaPinned {
-		app.SchemaID, app.SchemaVersion = "runtime", 1
+		app.SchemaVersion = 1
 	}
 	kinds := map[string]string{}
 	contentTypes := map[string]string{}
@@ -140,7 +140,7 @@ func evaluateReadinessCase(in readinessCaseInput) readinessCaseExpected {
 	}
 	var active *domain.ActiveConfigurationRelease
 	if in.Active != nil {
-		release := domain.ConfigurationRelease{Namespace: ns, Name: app.ReleaseName, Version: in.Active.Version, SchemaID: app.SchemaID, SchemaVersion: app.SchemaVersion}
+		release := domain.ConfigurationRelease{Namespace: ns, Name: app.ReleaseName, Version: in.Active.Version, SchemaVersion: app.SchemaVersion}
 		for _, field := range in.Contract {
 			if version, ok := in.Active.Pins[field.Alias]; ok {
 				release.Entries = append(release.Entries, domain.ConfigurationReleaseEntry{Alias: field.Alias, Kind: field.Kind, Ref: domain.Ref{NS: ns, Key: field.Alias}, Version: version, ContentType: contentTypes[field.Alias]})
@@ -160,7 +160,7 @@ func evaluateReadinessCase(in readinessCaseInput) readinessCaseExpected {
 	var schema *domain.ConfigurationSchema
 	schemaMissing := in.SchemaPinned && !in.SchemaExists
 	if in.SchemaPinned && in.SchemaExists {
-		schema = &domain.ConfigurationSchema{ID: "runtime", Version: 1, Schema: alignedSchemaJSON(in.Contract)}
+		schema = &domain.ConfigurationSchema{Application: app.Name, ReleaseName: app.ReleaseName, Version: 1, Schema: alignedSchemaJSON(in.Contract)}
 	}
 	env := computeEnvironmentReadiness(environmentReadinessInput{
 		App: app, Namespace: domain.Namespace{NamespaceRef: ns, AllowedAuthMethods: []domain.AuthMethod{domain.AuthMethodToken}},

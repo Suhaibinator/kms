@@ -25,12 +25,26 @@ CREATE TABLE applications (
     name           TEXT NOT NULL UNIQUE,
     description    TEXT NOT NULL DEFAULT '',
     release_name   TEXT NOT NULL DEFAULT 'runtime',
-    schema_id      TEXT NOT NULL DEFAULT '',
     schema_version INTEGER NOT NULL DEFAULT 0,
     contract_json  TEXT NOT NULL DEFAULT '[]',
     created_by     TEXT NOT NULL DEFAULT '',
     created_at     TEXT NOT NULL,
-    updated_at     TEXT NOT NULL
+    updated_at     TEXT NOT NULL,
+    archived_at    TEXT,
+    archived_by    TEXT NOT NULL DEFAULT ''
+);
+
+CREATE TABLE configuration_schemas (
+    application_name TEXT NOT NULL REFERENCES applications(name) ON DELETE RESTRICT,
+    release_name     TEXT NOT NULL,
+    version_number   INTEGER NOT NULL,
+    schema_json      TEXT NOT NULL,
+    digest           TEXT NOT NULL,
+    metadata_json    TEXT NOT NULL DEFAULT '{}',
+    created_by       TEXT NOT NULL DEFAULT '',
+    created_at       TEXT NOT NULL,
+    PRIMARY KEY (application_name, release_name, version_number),
+    UNIQUE (application_name, release_name, digest)
 );
 
 CREATE TABLE namespaces (
@@ -42,6 +56,19 @@ CREATE TABLE namespaces (
     created_by           TEXT NOT NULL DEFAULT '',
     created_at           TEXT NOT NULL,
     UNIQUE (env, app)
+);
+
+CREATE TABLE configuration_releases (
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    namespace_id   INTEGER NOT NULL REFERENCES namespaces(id),
+    name           TEXT NOT NULL,
+    version_number INTEGER NOT NULL,
+    schema_version INTEGER NOT NULL DEFAULT 0,
+    digest         TEXT NOT NULL,
+    metadata_json  TEXT NOT NULL DEFAULT '{}',
+    created_by     TEXT NOT NULL DEFAULT '',
+    created_at     TEXT NOT NULL,
+    UNIQUE (namespace_id, name, version_number)
 );
 
 CREATE TABLE parameters (

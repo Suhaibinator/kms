@@ -137,7 +137,6 @@ func releaseSpec(data releaseData) kmsclienttest.ReleaseSpec {
 		Namespace:     fixtureNamespace,
 		Name:          fixtureReleaseName,
 		Version:       data.releaseVersion,
-		SchemaID:      "managed-fixture",
 		SchemaVersion: 1,
 		Entries:       entries,
 	}

@@ -161,13 +161,24 @@ type ListPage struct {
 type ApplicationStore interface {
 	EnsureApplication(ctx context.Context, name, createdBy string) (domain.Application, error)
 	CreateApplication(ctx context.Context, app domain.Application) (domain.Application, error)
+	CreateApplicationWithSchema(ctx context.Context, app domain.Application, schema domain.ConfigurationSchema) (domain.Application, domain.ConfigurationSchema, error)
 	GetApplication(ctx context.Context, name string) (domain.Application, error)
-	AdoptApplicationContract(ctx context.Context, name, schemaID string, schemaVersion uint64, contract []domain.ApplicationContractField) (domain.Application, error)
+	AdoptApplicationContract(ctx context.Context, name string, contract []domain.ApplicationContractField) (domain.Application, error)
 	UpdateApplication(ctx context.Context, app domain.Application) (domain.Application, error)
 	DeleteApplication(ctx context.Context, name string) error
-	ListApplications(ctx context.Context, page ListPage) ([]domain.Application, string, error)
+	ArchiveApplication(ctx context.Context, name, actor string) (domain.Application, error)
+	UnarchiveApplication(ctx context.Context, name string) (domain.Application, error)
+	ListApplications(ctx context.Context, page ListPage, archived ApplicationArchiveFilter) ([]domain.Application, string, error)
 	ListApplicationNamespaces(ctx context.Context, app string) ([]domain.Namespace, error)
 }
+
+type ApplicationArchiveFilter string
+
+const (
+	ApplicationsActiveOnly   ApplicationArchiveFilter = "exclude"
+	ApplicationsIncludeAll   ApplicationArchiveFilter = "include"
+	ApplicationsArchivedOnly ApplicationArchiveFilter = "only"
+)
 
 // Store is everything the service layer needs from persistence.
 type Store interface {

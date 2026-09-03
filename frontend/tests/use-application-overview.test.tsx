@@ -60,6 +60,23 @@ describe("releaseMovements", () => {
     expect(releaseMovements(ready, next)).toEqual(["dev: environment removed"]);
     expect(releaseMovements(next, ready)).toEqual(["dev: environment added"]);
   });
+
+  it("reports archive lifecycle changes, including archive attribution", () => {
+    const active = clone(ready);
+    active.environments = [];
+    active.application.environment_count = 0;
+    const archived = clone(active);
+    archived.application.archived_at_unix_ms = 123;
+    archived.application.archived_by = "alice";
+    expect(releaseMovements(active, archived)).toEqual(["application archived by alice"]);
+    expect(releaseMovements(archived, active)).toEqual(["application unarchived"]);
+
+    const reassigned = clone(archived);
+    reassigned.application.archived_by = "bob";
+    expect(releaseMovements(archived, reassigned)).toEqual([
+      "application archive record changed by bob",
+    ]);
+  });
 });
 
 describe("useApplicationOverview", () => {
@@ -134,6 +151,32 @@ describe("useApplicationOverview", () => {
     await waitFor(() => expect(result.current.slot?.data).toEqual(moved));
     expect(result.current.freshness.staleReason).toBeNull();
     expect(mocks.toast.dismiss).toHaveBeenCalledWith("overview-changed:gradethis");
+  });
+
+  it("announces an external archive so the page can reload into read-only state", async () => {
+    const active = clone(ready);
+    active.environments = [];
+    active.application.environment_count = 0;
+    const archived = clone(active);
+    archived.application.archived_at_unix_ms = 123;
+    archived.application.archived_by = "alice";
+    mocks.applicationOverview.mockResolvedValueOnce(active).mockResolvedValue(archived);
+    const { result } = renderHook(() => useApplicationOverview("gradethis"));
+    await waitFor(() => expect(result.current.slot?.status).toBe("success"));
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(OVERVIEW_CHECK_MS);
+    });
+    expect(result.current.slot?.data?.application.archived_at_unix_ms).toBe(0);
+    expect(result.current.freshness.staleReason).toBe("changed");
+    expect(mocks.toast.info).toHaveBeenCalledWith(
+      "This application changed since the page loaded",
+      "application archived by alice",
+      expect.objectContaining({
+        id: "overview-changed:gradethis",
+        action: expect.objectContaining({ label: "Reload" }),
+      }),
+    );
   });
 
   it("does not check while hidden or while a reload is in flight", async () => {

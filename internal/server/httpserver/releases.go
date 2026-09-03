@@ -111,7 +111,7 @@ func (s *server) handleActivateRelease(w http.ResponseWriter, r *http.Request) {
 
 func (s *server) handleCreateConfigurationSchema(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		ID           string `json:"id"`
+		Application  string `json:"application"`
 		SchemaJSON   string `json:"schema_json"`
 		MetadataJSON string `json:"metadata_json"`
 	}
@@ -120,7 +120,7 @@ func (s *server) handleCreateConfigurationSchema(w http.ResponseWriter, r *http.
 		return
 	}
 	schema, err := s.svc.CreateConfigurationSchema(r.Context(), principalFrom(r.Context()),
-		body.ID, body.SchemaJSON, body.MetadataJSON)
+		body.Application, body.SchemaJSON, body.MetadataJSON)
 	if err != nil {
 		s.writeError(w, r, err)
 		return
@@ -130,7 +130,7 @@ func (s *server) handleCreateConfigurationSchema(w http.ResponseWriter, r *http.
 
 func (s *server) handleListConfigurationSchemas(w http.ResponseWriter, r *http.Request) {
 	items, next, err := s.svc.ListConfigurationSchemas(r.Context(), principalFrom(r.Context()),
-		r.URL.Query().Get("id"), listPage(r))
+		r.URL.Query().Get("application"), r.URL.Query().Get("release_name"), listPage(r))
 	if err != nil {
 		s.writeError(w, r, err)
 		return

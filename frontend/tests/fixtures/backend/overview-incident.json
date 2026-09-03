@@ -1,5 +1,7 @@
 {
   "application": {
+    "archived_at_unix_ms": 0,
+    "archived_by": "",
     "contract": [
       {
         "alias": "database",
@@ -22,7 +24,6 @@
     "environment_count": 2,
     "name": "gradethis",
     "release_name": "runtime",
-    "schema_id": "runtime",
     "schema_version": 1,
     "updated_at_unix_ms": 1755000000000
   },
@@ -56,7 +57,7 @@
           "activation_revision": 8,
           "created_at_unix_ms": 1755000000000,
           "created_by": "admin",
-          "digest": "c79b1b20de6b84fd6748deab05c2295cb8c8291333e0a1b0a58a22251f2a6818",
+          "digest": "d5a86ac820f5ce21b04e33bc82c5fad598614561c8fb704ad5828cb897cbbdea",
           "entries": [
             {
               "alias": "database",
@@ -113,7 +114,6 @@
           "is_rolled_back": false,
           "name": "runtime",
           "previous_version": 0,
-          "schema_id": "runtime",
           "schema_version": 1,
           "version": 1
         },
@@ -225,7 +225,7 @@
           "activation_revision": 12,
           "created_at_unix_ms": 1755000000000,
           "created_by": "admin",
-          "digest": "2fbc5184b9c6844b75acee5ee86ba430f6c31d8f01c34b155c828a14ecaaf78b",
+          "digest": "496c2721734fb712291c864f12f1676c1e9a1c3bc54365eb51ad0904f16aeaaa",
           "entries": [
             {
               "alias": "database",
@@ -282,7 +282,6 @@
           "is_rolled_back": false,
           "name": "runtime",
           "previous_version": 1,
-          "schema_id": "runtime",
           "schema_version": 1,
           "version": 2
         },

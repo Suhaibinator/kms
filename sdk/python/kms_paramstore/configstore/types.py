@@ -30,7 +30,6 @@ class ReleaseIdentity:
     name: str = ""
     version: int = 0
     activation_revision: int = 0
-    schema_id: str = ""
     schema_version: int = 0
     digest: str = ""
 
@@ -41,7 +40,6 @@ class ReleaseIdentity:
             name=str(getattr(candidate, "name", "")),
             version=int(getattr(candidate, "version", 0)),
             activation_revision=int(getattr(candidate, "activation_revision", 0)),
-            schema_id=str(getattr(candidate, "schema_id", "")),
             schema_version=int(getattr(candidate, "schema_version", 0)),
             digest=str(getattr(candidate, "digest", "")),
         )

@@ -159,7 +159,6 @@ export function incidentState(): ConsoleState {
           namespace: { env: env.namespace.env, app: env.namespace.app },
           name: active.name,
           version,
-          schema_id: active.schema_id,
           schema_version: active.schema_version,
           entries,
           digest: version === active.version ? active.digest : digestOf(entries),
@@ -408,7 +407,6 @@ function environmentOverview(state: ConsoleState, ns: FakeNamespace): Environmen
             created_by: active.created_by,
             created_at_unix_ms: active.created_at_unix_ms,
             is_rolled_back: ns.previous > active.version,
-            schema_id: active.schema_id,
             schema_version: active.schema_version,
             digest: active.digest,
             entries: active.entries,
@@ -534,7 +532,6 @@ function buildCandidate(
     namespace: { env: ns.namespace.env, app: ns.namespace.app },
     name: state.application.release_name,
     version: latest + 1,
-    schema_id: state.application.schema_id,
     schema_version: state.application.schema_version,
     entries: releaseEntries,
     digest: digestOf(releaseEntries),
@@ -623,7 +620,6 @@ function ship(state: ConsoleState, request: ShipRequest): { status: number; body
   const preview: ShipPreview = {
     base_version: ns.active,
     release_name: state.application.release_name,
-    schema_id: state.application.schema_id,
     schema_version: state.application.schema_version,
     entries: candidate.entries,
     validation,
@@ -980,10 +976,11 @@ function handle(
       return {
         status: 200,
         body: {
-          schemas: state.application.schema_id
+          schemas: state.application.schema_version
             ? [
                 {
-                  id: state.application.schema_id,
+                  application: state.application.name,
+                  release_name: state.application.release_name,
                   version: state.application.schema_version,
                   schema_json: (incidentJson as { schema_json?: string }).schema_json ?? "{}",
                   digest: "sha256:schema",

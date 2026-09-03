@@ -13,6 +13,7 @@ type bindingRenderer struct {
 	model          *ir
 	packageName    string
 	contract       renderedContract
+	schema         []byte
 	body           strings.Builder
 	imports        map[string]string
 	usedAliases    map[string]bool
@@ -21,11 +22,12 @@ type bindingRenderer struct {
 	rootTypeString string
 }
 
-func renderBinding(model *ir, packageName string, contract renderedContract) ([]byte, error) {
+func renderBinding(model *ir, packageName string, contract renderedContract, schema []byte) ([]byte, error) {
 	r := &bindingRenderer{
 		model:        model,
 		packageName:  packageName,
 		contract:     contract,
+		schema:       append([]byte(nil), schema...),
 		imports:      make(map[string]string),
 		usedAliases:  make(map[string]bool),
 		helperByType: make(map[types.Type]int),
@@ -210,6 +212,10 @@ func (r *bindingRenderer) renderParameterGroupEncoder() {
 
 func (r *bindingRenderer) renderContract() {
 	r.line("const generatedSchemaSHA256 = %s", strconv.Quote(r.contract.SchemaSHA256))
+	r.line("const generatedSchemaJSON = %s", strconv.Quote(string(r.schema)))
+	r.line("")
+	r.line("// GeneratedSchema returns a fresh copy of the exact JSON Schema emitted by kms-config-gen.")
+	r.line("func GeneratedSchema() []byte { return []byte(generatedSchemaJSON) }")
 	r.line("")
 	r.line("var generatedContract = []configstore.ContractEntry{")
 	for _, entry := range r.contract.Entries {

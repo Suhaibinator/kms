@@ -566,7 +566,6 @@ function makeRelease(version: bigint, value: string): ConfigurationRelease {
     namespace,
     name: "runtime",
     version,
-    schemaId: "",
     schemaVersion: 0n,
     entries: [parameterEntry("settings", "settings", version, value)],
     metadataJson: "{}",

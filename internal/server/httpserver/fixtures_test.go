@@ -167,13 +167,13 @@ func TestConsoleFixtures(t *testing.T) {
 			"name": "billing", "description": "Billing worker", "release_name": "runtime",
 			"contract": []map[string]any{{"alias": "queue", "kind": "parameter", "content_type": "string"}},
 		})
-		mustStatus(t, w, http.StatusOK)
+		mustStatus(t, w, http.StatusCreated)
 		e.createNS("dev", "billing", "token")
 		w = e.admin(http.MethodPost, "/api/v1/applications", map[string]any{
 			"name": "reports", "description": "Nightly reports", "release_name": "runtime",
 			"contract": []map[string]any{{"alias": "bucket", "kind": "parameter", "content_type": "string"}},
 		})
-		mustStatus(t, w, http.StatusOK)
+		mustStatus(t, w, http.StatusCreated)
 		e.createNS("dev", "reports", "token")
 		w = e.admin(http.MethodPut, "/api/v1/parameters", map[string]any{"env": "dev", "app": "reports", "key": "bucket", "value": "reports-nightly", "content_type": "string", "metadata_json": "{}"})
 		mustStatus(t, w, http.StatusOK)
@@ -194,7 +194,7 @@ func TestConsoleFixtures(t *testing.T) {
 				{"alias": "db_password", "kind": "secret"},
 			},
 		})
-		mustStatus(t, w, http.StatusOK)
+		mustStatus(t, w, http.StatusCreated)
 		capture("overview-setup", e.admin(http.MethodGet, "/api/v1/applications/overview?name=gradethis", nil))
 	}
 
@@ -202,7 +202,7 @@ func TestConsoleFixtures(t *testing.T) {
 	// activation, so its shape is rendered from the domain result directly.
 	fixtures["ship-conflict"] = fixtureBytes(t, toShipResultDTO(domain.ShipResult{
 		Status: domain.ShipStatusConflict,
-		Preview: domain.ShipPreview{BaseVersion: 7, ReleaseName: "runtime", SchemaID: "runtime", SchemaVersion: 1, Entries: []domain.ShipPreviewEntry{
+		Preview: domain.ShipPreview{BaseVersion: 7, ReleaseName: "runtime", SchemaVersion: 1, Entries: []domain.ShipPreviewEntry{
 			{Alias: "database", Kind: domain.ReleaseEntryParameter, Key: "database", FromVersion: 3, ToVersion: 3, Change: domain.ShipEntryIncluded},
 			{Alias: "db_password", Kind: domain.ReleaseEntrySecret, Key: "db_password", FromVersion: 2, ToVersion: 2, Change: domain.ShipEntryIncluded},
 			{Alias: "rate_limits", Kind: domain.ReleaseEntryParameter, Key: "rate_limits", FromVersion: 10, ToVersion: 11, Change: domain.ShipEntryEdited},

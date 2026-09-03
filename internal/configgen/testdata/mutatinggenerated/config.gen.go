@@ -15,6 +15,10 @@ import (
 )
 
 const generatedSchemaSHA256 = "95e30071e4dfde584cdb41e43d8659ab36523b8dee1ae8ad3b5614eeca36a850"
+const generatedSchemaJSON = "{\n  \"$schema\": \"https://json-schema.org/draft/2020-12/schema\",\n  \"description\": \"Config is a generation fixture whose validation canonicalizes a field in place. The generated store must compare the two validated copies, not the original unvalidated defaults retained by the Store.\",\n  \"type\": \"object\",\n  \"additionalProperties\": false,\n  \"required\": [\n    \"runtime\"\n  ],\n  \"properties\": {\n    \"runtime\": {\n      \"additionalProperties\": false,\n      \"default\": {\n        \"name\": \"  canonical name  \"\n      },\n      \"properties\": {\n        \"name\": {\n          \"default\": \"  canonical name  \",\n          \"type\": \"string\"\n        }\n      },\n      \"required\": [\n        \"name\"\n      ],\n      \"type\": \"object\"\n    }\n  }\n}\n"
+
+// GeneratedSchema returns a fresh copy of the exact JSON Schema emitted by kms-config-gen.
+func GeneratedSchema() []byte { return []byte(generatedSchemaJSON) }
 
 var generatedContract = []configstore.ContractEntry{
 	{Alias: "runtime", Kind: configstore.ContractKindParameter, ContentType: "json"},

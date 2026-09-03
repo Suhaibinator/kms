@@ -139,7 +139,7 @@ export function deriveSetupSteps({
         : undefined,
   });
 
-  const schemaPinned = Boolean(app?.schema_id);
+  const schemaPinned = Boolean(app?.schema_version);
   const schemaMissing = appFindings.some((finding) => finding.code === "schema_missing");
   const schemaDone = schemaPinned && !schemaMissing;
   steps.push({
@@ -148,9 +148,9 @@ export function deriveSetupSteps({
     detail: !app
       ? "Optional. A JSON Schema validates every release before it activates."
       : schemaMissing
-        ? `Pinned schema \`${app.schema_id}@${app.schema_version}\` is not in the registry.`
+        ? `Pinned schema \`${app.name}/${app.release_name}@${app.schema_version}\` is not in the registry.`
         : schemaPinned
-          ? `\`${app.schema_id}@${app.schema_version}\` validates every release.`
+          ? `\`${app.name}/${app.release_name}@${app.schema_version}\` validates every release.`
           : "Optional. Releases activate without shape validation until one is pinned.",
     optional: true,
     done: schemaDone,

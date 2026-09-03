@@ -205,7 +205,7 @@ func TestFaultPrefetchContractFailureReportsIdentityBeforeAnyResourceRead(t *tes
 	identity := report.Release()
 	if report.Category() != configstore.RejectConfigContractMismatch || len(report.Paths()) != 0 ||
 		identity.Namespace() != fixtureNamespace || identity.Name() != fixtureReleaseName ||
-		identity.Version() != 2 || identity.ActivationRevision() != 102 || identity.SchemaID() != "managed-fixture" ||
+		identity.Version() != 2 || identity.ActivationRevision() != 102 ||
 		identity.SchemaVersion() != 1 || identity.Digest() == "" {
 		t.Fatalf("prefetch report = category:%s identity:%s paths:%#v", report.Category(), identity, report.Paths())
 	}

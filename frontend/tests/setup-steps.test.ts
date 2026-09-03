@@ -226,7 +226,7 @@ describe("deriveSetupSteps", () => {
     const steps = byId(deriveSetupSteps({ applicationCount: 1, namespaceCount: 2, overview }));
     expect(steps.schema).toMatchObject({ state: "todo", optional: true });
     expect(steps.schema?.detail).toContain(
-      `${ready.application.schema_id}@${ready.application.schema_version}`,
+      `${ready.application.name}/${ready.application.release_name}@${ready.application.schema_version}`,
     );
     expect(steps.schema?.detail).toContain("not in the registry");
   });

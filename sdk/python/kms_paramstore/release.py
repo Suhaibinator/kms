@@ -171,7 +171,6 @@ class ReleaseManifest:
     name: str
     version: int
     activation_revision: int
-    schema_id: str
     schema_version: int
     digest: str
     metadata_json: str
@@ -202,7 +201,6 @@ class ReleaseSnapshot:
     name: str
     version: int
     activation_revision: int
-    schema_id: str
     schema_version: int
     digest: str
     metadata_json: str
@@ -765,7 +763,6 @@ class ReleaseLoader:
             name=release.name,
             version=release.version,
             activation_revision=candidate.revision,
-            schema_id=release.schema_id,
             schema_version=release.schema_version,
             digest=release.digest,
             metadata_json=release.metadata_json,
@@ -822,7 +819,6 @@ class ReleaseLoader:
             name=manifest.name,
             version=manifest.version,
             activation_revision=manifest.activation_revision,
-            schema_id=manifest.schema_id,
             schema_version=manifest.schema_version,
             digest=manifest.digest,
             metadata_json=manifest.metadata_json,
@@ -1174,7 +1170,6 @@ def _release_digest(release) -> str:
             app=release.namespace.app,
         ),
         name=release.name,
-        schema_id=release.schema_id,
         schema_version=release.schema_version,
         metadata_json=release.metadata_json,
     )

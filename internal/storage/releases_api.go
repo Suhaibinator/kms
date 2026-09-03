@@ -31,8 +31,8 @@ type ReleaseStore interface {
 	ConfigurationReleaseActivationExists(ctx context.Context, ns domain.NamespaceRef, name string, version, revision uint64) (bool, error)
 
 	CreateConfigurationSchema(ctx context.Context, schema domain.ConfigurationSchema) (domain.ConfigurationSchema, error)
-	GetConfigurationSchema(ctx context.Context, id string, version uint64) (domain.ConfigurationSchema, error)
-	ListConfigurationSchemas(ctx context.Context, id string, page ListPage) ([]domain.ConfigurationSchema, string, error)
+	GetConfigurationSchema(ctx context.Context, application, releaseName string, version uint64) (domain.ConfigurationSchema, error)
+	ListConfigurationSchemas(ctx context.Context, application, releaseName string, page ListPage) ([]domain.ConfigurationSchema, string, error)
 
 	UpsertReleaseAcknowledgement(ctx context.Context, ack domain.ReleaseAcknowledgement) error
 	ListReleaseAcknowledgements(ctx context.Context, ns domain.NamespaceRef, name string, page ListPage) ([]domain.ReleaseAcknowledgement, string, error)

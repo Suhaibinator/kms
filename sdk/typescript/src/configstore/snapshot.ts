@@ -8,7 +8,6 @@ export interface ReleaseIdentityInit {
   readonly name?: string;
   readonly version?: bigint;
   readonly activationRevision?: bigint;
-  readonly schemaId?: string;
   readonly schemaVersion?: bigint;
   readonly digest?: string;
 }
@@ -19,7 +18,6 @@ export class ReleaseIdentity {
   readonly name: string;
   readonly version: bigint;
   readonly activationRevision: bigint;
-  readonly schemaId: string;
   readonly schemaVersion: bigint;
   readonly digest: string;
 
@@ -37,7 +35,6 @@ export class ReleaseIdentity {
     this.name = init.name ?? "";
     this.version = version;
     this.activationRevision = activationRevision;
-    this.schemaId = init.schemaId ?? "";
     this.schemaVersion = schemaVersion;
     this.digest = init.digest ?? "";
     Object.freeze(this);
@@ -49,7 +46,6 @@ export class ReleaseIdentity {
       name: candidate.name,
       version: candidate.version,
       activationRevision: candidate.activationRevision,
-      schemaId: candidate.schemaId,
       schemaVersion: candidate.schemaVersion,
       digest: candidate.digest,
     });
@@ -78,7 +74,6 @@ export class ReleaseIdentity {
       name: this.name,
       version: this.version.toString(),
       activationRevision: this.activationRevision.toString(),
-      schemaId: this.schemaId,
       schemaVersion: this.schemaVersion.toString(),
       digest: this.digest,
     });

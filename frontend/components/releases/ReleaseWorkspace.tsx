@@ -181,7 +181,9 @@ export function ReleaseWorkspace({
               <div className="stat">
                 <div className="stat-label">Schema</div>
                 <div className="stat-value-sm mono">
-                  {release.schema_id ? `${release.schema_id}@${release.schema_version}` : "none"}
+                  {release.schema_version
+                    ? `${release.namespace.app}/${release.name}@${release.schema_version}`
+                    : "none"}
                 </div>
               </div>
             </div>

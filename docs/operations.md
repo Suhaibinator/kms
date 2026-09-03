@@ -695,9 +695,9 @@ above with `X` as each element:
 | `release activate`, `release rollback` | `{namespace, name, version, previous_version, revision, changed}` |
 | `release subscribers` | items of `{identity, client, instance, received, prepared, applied, rejected, lag, connected}` — each lifecycle state is `{release_version, activation_revision, rejection_category}` or `null` |
 | `release verify-defaults` | `{name, version, activation_revision, schema, clean, entries, counts}`, entry `{alias, verdict}`, counts `{match, differs, missing_in_release, unknown_alias, secret_alias, unsupported_content_type, unverified}` |
-| `release schema create` | `{id, version, digest}` |
-| `release schema show` | `{id, version, digest, schema}` — `schema` is the schema document itself, not a string |
-| `release schema list` | items of `{id, version, digest, created_at}` |
+| `release schema create` | `{application, release_name, version, digest}` |
+| `release schema show` | `{application, release_name, version, digest, schema}` — `schema` is the schema document itself, not a string |
+| `release schema list` | items of `{application, release_name, version, digest, created_at}` |
 | `defaults apply` | `{profile, plan_digest, executed, definition_changed, definition_updated, entries, missing_secrets, counts}`, entry `{status, alias, key, content_type, current_version, applied_version, revision}`, counts `{create, unchanged, update, blocked}` |
 
 #### Exit codes
@@ -1040,7 +1040,7 @@ built-in client issuer's certificate is public.
 |---|---|---|
 | `admin namespace create` | `--env ENV`, `--app APP`, `--description`, `--auth-methods mtls,token` (default: mTLS-only) | Create a namespace. Environment/application are flags, not a positional `ENV/APP` argument. |
 | `admin namespace update` | `--env ENV`, `--app APP`, `--description`, `--auth-methods` | **Full replace** of the description and allowed auth methods. |
-| `admin namespace delete` | `--env ENV`, `--app APP`, `--yes` | Delete an **empty** namespace (no parameters, secrets, or bound identities). **Confirms by retyping `ENV/APP`** before the server is contacted. |
+| `admin namespace delete` | `--env ENV`, `--app APP`, `--yes` | Delete an **empty** namespace (no parameters, secrets, or bound identities) and retire its environment-scoped release/subscriber history. **Confirms by retyping `ENV/APP`** before the server is contacted. |
 | `admin namespace list` | — | Table of namespaces with allowed auth methods and parameter/secret counts. |
 | `admin identity create NAME` | `--kind client\|admin` (default `client`), `--namespace env/app`, `--auth mtls\|token\|both` (default `mtls`), `--ttl 90d` (or e.g. `720h`), `--out DIR` | Create an identity. Mints a token and/or a one-time PEM cert bundle per `--auth`; with `--out DIR` writes `NAME.crt` (0644) and `NAME.key` (0600), otherwise prints them once — so `--out` is required whenever `--output json` would mint a certificate. |
 | `admin identity issue-cert NAME` | `--ttl`, `--out DIR` | Mint an **additional** client certificate for an existing identity (for overlap rollover). |
@@ -1433,7 +1433,6 @@ convenience commands. A release definition is strict JSON or YAML:
 ```yaml
 namespace: prod/gradethis
 name: runtime
-schema_id: gradethis/runtime
 schema_version: 1
 entries:
   - alias: rate_limits
@@ -1456,11 +1455,11 @@ conservative name-based deletion guards, but activation fails closed; recreate
 such a release before activating it so every source obtains an exact pin.
 
 ```bash
-parameter-store release schema create gradethis/runtime runtime.schema.json \
+parameter-store release schema create gradethis runtime.schema.json \
   --endpoint localhost:8443 --token "$ADMIN_TOKEN" --insecure
-parameter-store release schema show gradethis/runtime 1 \
+parameter-store release schema show gradethis runtime 1 \
   --endpoint localhost:8443 --token "$ADMIN_TOKEN" --insecure
-parameter-store release schema list gradethis/runtime \
+parameter-store release schema list gradethis runtime \
   --endpoint localhost:8443 --token "$ADMIN_TOKEN" --insecure
 
 parameter-store release create runtime-release.yaml \

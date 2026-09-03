@@ -22,17 +22,16 @@ func consoleAdmin() core.Principal {
 // each environment with one version of every resource.
 func (e *testEnv) seedConsoleApp(envs ...string) {
 	e.t.Helper()
-	w := e.admin(http.MethodPost, "/api/v1/configuration-schemas", map[string]any{"id": "runtime", "schema_json": consoleSchemaJSON})
-	mustStatus(e.t, w, http.StatusCreated)
-	w = e.admin(http.MethodPost, "/api/v1/applications", map[string]any{
-		"name": "gradethis", "description": "Grading API", "release_name": "runtime", "schema_id": "runtime", "schema_version": 1,
+	w := e.admin(http.MethodPost, "/api/v1/applications", map[string]any{
+		"name": "gradethis", "description": "Grading API", "release_name": "runtime",
+		"schema": map[string]any{"schema_json": consoleSchemaJSON},
 		"contract": []map[string]any{
 			{"alias": "database", "kind": "parameter", "content_type": "json"},
 			{"alias": "rate_limits", "kind": "parameter", "content_type": "integer"},
 			{"alias": "db_password", "kind": "secret"},
 		},
 	})
-	mustStatus(e.t, w, http.StatusOK)
+	mustStatus(e.t, w, http.StatusCreated)
 	for _, env := range envs {
 		e.seedConsoleEnv(env)
 	}
@@ -122,6 +121,45 @@ func TestGetApplicationHTTP(t *testing.T) {
 	}
 	w = e.admin(http.MethodGet, "/api/v1/applications/get?name=nope", nil)
 	mustStatus(t, w, http.StatusNotFound)
+}
+
+func TestApplicationArchiveHTTP(t *testing.T) {
+	e := newReleaseTestEnv(t)
+	w := e.admin(http.MethodPost, "/api/v1/applications", map[string]any{
+		"name": "payments", "release_name": "runtime",
+		"schema": map[string]any{"schema_json": `{"type":"object"}`},
+	})
+	mustStatus(t, w, http.StatusCreated)
+	body := decodeBody(t, w)
+	if body["application"].(map[string]any)["schema_version"].(float64) != 1 || body["schema"].(map[string]any)["application"] != "payments" {
+		t.Fatalf("atomic create response = %v", body)
+	}
+	w = e.admin(http.MethodPost, "/api/v1/applications/archive", map[string]any{"name": "payments"})
+	mustStatus(t, w, http.StatusOK)
+	archived := decodeBody(t, w)["application"].(map[string]any)
+	if archived["archived_at_unix_ms"].(float64) == 0 || archived["archived_by"] != "admin" {
+		t.Fatalf("archived application = %v", archived)
+	}
+	w = e.admin(http.MethodGet, "/api/v1/applications", nil)
+	mustStatus(t, w, http.StatusOK)
+	if applications := decodeBody(t, w)["applications"].([]any); len(applications) != 0 {
+		t.Fatalf("default list includes archived application: %v", applications)
+	}
+	w = e.admin(http.MethodGet, "/api/v1/applications?archived=only", nil)
+	mustStatus(t, w, http.StatusOK)
+	if applications := decodeBody(t, w)["applications"].([]any); len(applications) != 1 || applications[0].(map[string]any)["name"] != "payments" {
+		t.Fatalf("archived list = %v", applications)
+	}
+	w = e.admin(http.MethodPost, "/api/v1/configuration-schemas", map[string]any{"application": "payments", "schema_json": `{"type":"string"}`})
+	mustStatus(t, w, http.StatusPreconditionFailed)
+	w = e.admin(http.MethodPost, "/api/v1/namespaces", map[string]any{"env": "prod", "app": "payments"})
+	mustStatus(t, w, http.StatusPreconditionFailed)
+	w = e.admin(http.MethodPost, "/api/v1/applications/unarchive", map[string]any{"name": "payments"})
+	mustStatus(t, w, http.StatusOK)
+	w = e.admin(http.MethodPost, "/api/v1/namespaces", map[string]any{"env": "prod", "app": "payments"})
+	mustStatus(t, w, http.StatusOK)
+	w = e.admin(http.MethodPost, "/api/v1/applications/archive", map[string]any{"name": "payments"})
+	mustStatus(t, w, http.StatusPreconditionFailed)
 }
 
 func TestApplicationOverviewHTTP(t *testing.T) {

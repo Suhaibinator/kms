@@ -136,8 +136,8 @@ func releaseFixture(version uint64, digest string) *kmsv1.ConfigurationRelease {
 	return &kmsv1.ConfigurationRelease{
 		Namespace: &kmsv1.NamespaceRef{Env: "prod", App: "app"},
 		Name:      "runtime", Version: version,
-		SchemaId: "app/runtime", SchemaVersion: 2,
-		Digest: digest, CreatedAtUnixMs: 1700000000000,
+		SchemaVersion: 2,
+		Digest:        digest, CreatedAtUnixMs: 1700000000000,
 		Entries: []*kmsv1.ConfigurationReleaseEntry{
 			{
 				Alias: "settings", Kind: "parameter",
@@ -168,7 +168,6 @@ func TestReleaseShowJSONIsTheWholeOfStdout(t *testing.T) {
   "name": "runtime",
   "version": 3,
   "schema": {
-    "id": "app/runtime",
     "version": 2
   },
   "digest": "d3",

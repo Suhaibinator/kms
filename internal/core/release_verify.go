@@ -135,18 +135,18 @@ func (s *Service) VerifyReleaseDefaults(ctx context.Context, pr Principal, in do
 	}
 	release := active.Release
 
-	// Schema check against the application-pinned schema (falling back to the
+	// Schema check against the application-pinned version (falling back to the
 	// release's own pin when the application has none). The generator's
 	// schema_sha256 is sha256(jsontext.Value(schema).Compact()), exactly the
 	// registry digest.
 	schemaMatches := false
 	if in.SchemaSHA256 != "" {
-		schemaID, schemaVersion := app.SchemaID, app.SchemaVersion
-		if schemaID == "" {
-			schemaID, schemaVersion = release.SchemaID, release.SchemaVersion
+		schemaVersion := app.SchemaVersion
+		if schemaVersion == 0 {
+			schemaVersion = release.SchemaVersion
 		}
-		if schemaID != "" {
-			schema, err := rs.GetConfigurationSchema(ctx, schemaID, schemaVersion)
+		if schemaVersion != 0 {
+			schema, err := rs.GetConfigurationSchema(ctx, app.Name, releaseName, schemaVersion)
 			if err != nil && !errors.Is(err, domain.ErrNotFound) {
 				return domain.VerifyReleaseDefaultsResult{}, err
 			}

@@ -323,11 +323,11 @@ func toProtoConfigurationRelease(r domain.ConfigurationRelease) *kmsv1.Configura
 	for _, e := range r.Entries {
 		entries = append(entries, toProtoConfigurationReleaseEntry(e))
 	}
-	return &kmsv1.ConfigurationRelease{Namespace: nsRefToProto(r.Namespace), Name: r.Name, Version: r.Version, SchemaId: r.SchemaID, SchemaVersion: r.SchemaVersion, Entries: entries, Digest: r.Digest, MetadataJson: r.Metadata, CreatedBy: r.CreatedBy, CreatedAtUnixMs: unixMS(r.CreatedAt)}
+	return &kmsv1.ConfigurationRelease{Namespace: nsRefToProto(r.Namespace), Name: r.Name, Version: r.Version, SchemaVersion: r.SchemaVersion, Entries: entries, Digest: r.Digest, MetadataJson: r.Metadata, CreatedBy: r.CreatedBy, CreatedAtUnixMs: unixMS(r.CreatedAt)}
 }
 
 func toProtoConfigurationSchema(s domain.ConfigurationSchema) *kmsv1.ConfigurationSchema {
-	return &kmsv1.ConfigurationSchema{Id: s.ID, Version: s.Version, SchemaJson: s.Schema, Digest: s.Digest, MetadataJson: s.Metadata, CreatedBy: s.CreatedBy, CreatedAtUnixMs: unixMS(s.CreatedAt)}
+	return &kmsv1.ConfigurationSchema{Application: s.Application, ReleaseName: s.ReleaseName, Version: s.Version, SchemaJson: s.Schema, Digest: s.Digest, MetadataJson: s.Metadata, CreatedBy: s.CreatedBy, CreatedAtUnixMs: unixMS(s.CreatedAt)}
 }
 
 func toProtoReleaseSubscriber(a domain.ReleaseAcknowledgement) *kmsv1.ReleaseSubscriberState {

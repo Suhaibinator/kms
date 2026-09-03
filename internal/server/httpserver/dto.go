@@ -113,12 +113,13 @@ type applicationDTO struct {
 	Name             string                            `json:"name"`
 	Description      string                            `json:"description"`
 	ReleaseName      string                            `json:"release_name"`
-	SchemaID         string                            `json:"schema_id"`
 	SchemaVersion    uint64                            `json:"schema_version"`
 	Contract         []domain.ApplicationContractField `json:"contract"`
 	CreatedBy        string                            `json:"created_by"`
 	CreatedAtUnixMS  int64                             `json:"created_at_unix_ms"`
 	UpdatedAtUnixMS  int64                             `json:"updated_at_unix_ms"`
+	ArchivedAtUnixMS int64                             `json:"archived_at_unix_ms"`
+	ArchivedBy       string                            `json:"archived_by"`
 	EnvironmentCount uint64                            `json:"environment_count"`
 }
 
@@ -128,8 +129,9 @@ func toApplicationDTO(app domain.Application) applicationDTO {
 		contract = []domain.ApplicationContractField{}
 	}
 	return applicationDTO{Name: app.Name, Description: app.Description, ReleaseName: app.ReleaseName,
-		SchemaID: app.SchemaID, SchemaVersion: app.SchemaVersion, Contract: contract,
-		CreatedBy: app.CreatedBy, CreatedAtUnixMS: unixMS(app.CreatedAt), UpdatedAtUnixMS: unixMS(app.UpdatedAt), EnvironmentCount: app.EnvironmentCount}
+		SchemaVersion: app.SchemaVersion, Contract: contract,
+		CreatedBy: app.CreatedBy, CreatedAtUnixMS: unixMS(app.CreatedAt), UpdatedAtUnixMS: unixMS(app.UpdatedAt),
+		ArchivedAtUnixMS: unixMS(app.ArchivedAt), ArchivedBy: app.ArchivedBy, EnvironmentCount: app.EnvironmentCount}
 }
 
 type applicationCellDTO struct {
@@ -508,7 +510,6 @@ type releaseDTO struct {
 	Namespace       namespaceRefDTO   `json:"namespace"`
 	Name            string            `json:"name"`
 	Version         uint64            `json:"version"`
-	SchemaID        string            `json:"schema_id"`
 	SchemaVersion   uint64            `json:"schema_version"`
 	Entries         []releaseEntryDTO `json:"entries"`
 	Digest          string            `json:"digest"`
@@ -529,7 +530,7 @@ func toReleaseDTO(r domain.ConfigurationRelease) releaseDTO {
 	}
 	return releaseDTO{
 		Namespace: namespaceRefDTO{Env: r.Namespace.Env, App: r.Namespace.App},
-		Name:      r.Name, Version: r.Version, SchemaID: r.SchemaID, SchemaVersion: r.SchemaVersion,
+		Name:      r.Name, Version: r.Version, SchemaVersion: r.SchemaVersion,
 		Entries: entries, Digest: r.Digest, MetadataJSON: rawJSON(r.Metadata),
 		CreatedBy: r.CreatedBy, CreatedAtUnixMS: unixMS(r.CreatedAt),
 	}
@@ -546,7 +547,6 @@ type releaseSelectorDTO struct {
 type createReleaseDTO struct {
 	Namespace     namespaceRefDTO      `json:"namespace"`
 	Name          string               `json:"name"`
-	SchemaID      string               `json:"schema_id"`
 	SchemaVersion uint64               `json:"schema_version"`
 	Entries       []releaseSelectorDTO `json:"entries"`
 	MetadataJSON  string               `json:"metadata_json"`
@@ -561,7 +561,7 @@ func (d createReleaseDTO) toDomain() domain.CreateConfigurationReleaseInput {
 		})
 	}
 	return domain.CreateConfigurationReleaseInput{
-		Namespace: ns, Name: d.Name, SchemaID: d.SchemaID, SchemaVersion: d.SchemaVersion,
+		Namespace: ns, Name: d.Name, SchemaVersion: d.SchemaVersion,
 		Entries: entries, Metadata: d.MetadataJSON,
 	}
 }
@@ -574,7 +574,8 @@ type releaseValidationErrorDTO struct {
 }
 
 type schemaDTO struct {
-	ID              string `json:"id"`
+	Application     string `json:"application"`
+	ReleaseName     string `json:"release_name"`
 	Version         uint64 `json:"version"`
 	SchemaJSON      string `json:"schema_json"`
 	Digest          string `json:"digest"`
@@ -584,7 +585,7 @@ type schemaDTO struct {
 }
 
 func toSchemaDTO(s domain.ConfigurationSchema) schemaDTO {
-	return schemaDTO{ID: s.ID, Version: s.Version, SchemaJSON: s.Schema, Digest: s.Digest,
+	return schemaDTO{Application: s.Application, ReleaseName: s.ReleaseName, Version: s.Version, SchemaJSON: s.Schema, Digest: s.Digest,
 		MetadataJSON: rawJSON(s.Metadata), CreatedBy: s.CreatedBy, CreatedAtUnixMS: unixMS(s.CreatedAt)}
 }
 

@@ -526,7 +526,7 @@ only with the corresponding pinned secret read; they never enter KMS release
 storage, snapshots, watch events, lifecycle acknowledgements, logs, or metrics.
 
 `ReleaseSnapshot` is a frozen dataclass with namespace, release version,
-activation revision, schema ID/version, deterministic digest, metadata,
+activation revision, schema version, deterministic digest, metadata,
 immutable entry tuple, and read-only alias-keyed parameter/secret mappings.
 Each `ReleaseEntry` contains exact path/version, content type, captured
 metadata, parameter digest, and non-sensitive secret protection flags. Snapshot

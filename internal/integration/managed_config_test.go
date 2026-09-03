@@ -15,6 +15,7 @@ import (
 	kmsv1 "github.com/Suhaibinator/kms/gen/kmsv1"
 	fixtureconfig "github.com/Suhaibinator/kms/internal/configstorefixture/config"
 	fixturekms "github.com/Suhaibinator/kms/internal/configstorefixture/configkms"
+	"github.com/Suhaibinator/kms/internal/core"
 	"github.com/Suhaibinator/kms/internal/domain"
 	"github.com/Suhaibinator/kms/sdk/go/configstore"
 	"github.com/Suhaibinator/kms/sdk/go/kmsclient"
@@ -23,7 +24,6 @@ import (
 const (
 	managedNamespace = "prod/managed-config"
 	managedRelease   = "runtime"
-	managedSchemaID  = "managed-config/runtime"
 
 	managedDatabaseDefault = `{"endpoint":{"host":"db.internal","ports":[5432,5433],"labels":{"role":["primary","readonly"]},"zones":["us-west-1a","us-west-1b"]},"max_open":20,"timeout":"3s"}`
 	managedDatabaseRestart = `{"endpoint":{"host":"db.failover.internal","ports":[5432,5433],"labels":{"role":["primary","readonly"]},"zones":["us-west-1a","us-west-1b"]},"max_open":20,"timeout":"3s"}`
@@ -67,25 +67,24 @@ func TestManagedConfigStoreOverRealKMS(t *testing.T) {
 	authCtx := networkAuthContext(ctx, env.adminToken)
 	namespace := networkNS("prod", "managed-config")
 
+	schemaJSON, err := os.ReadFile("../configstorefixture/runtime.schema.json")
+	if err != nil {
+		t.Fatalf("read generated schema: %v", err)
+	}
+	_, schema, err := env.svc.CreateApplicationWithSchema(ctx, core.Principal{
+		Identity: domain.Identity{Name: "network-root", Kind: domain.IdentityKindAdmin}, Method: domain.AuthMethodToken,
+	}, domain.Application{Name: "managed-config", ReleaseName: managedRelease}, string(schemaJSON), `{"owner":"integration"}`)
+	if err != nil {
+		t.Fatalf("create managed application and schema: %v", err)
+	}
+	schemaVersion := schema.Version
+
 	admin := kmsv1.NewAdminServiceClient(env.adminConn)
 	if _, err := admin.CreateNamespace(authCtx, &kmsv1.CreateNamespaceRequest{
 		Ref: namespace, AllowedAuthMethods: []string{string(domain.AuthMethodToken)},
 	}); err != nil {
 		t.Fatalf("create managed namespace: %v", err)
 	}
-
-	schemaJSON, err := os.ReadFile("../configstorefixture/runtime.schema.json")
-	if err != nil {
-		t.Fatalf("read generated schema: %v", err)
-	}
-	schemas := kmsv1.NewConfigurationSchemaServiceClient(env.adminConn)
-	schemaResponse, err := schemas.CreateSchema(authCtx, &kmsv1.CreateSchemaRequest{
-		Id: managedSchemaID, SchemaJson: string(schemaJSON), MetadataJson: `{"owner":"integration"}`,
-	})
-	if err != nil {
-		t.Fatalf("register generated schema: %v", err)
-	}
-	schemaVersion := schemaResponse.GetSchema().GetVersion()
 
 	parameters := kmsv1.NewParameterServiceClient(env.adminConn)
 	putParameter := func(key, value string) uint64 {
@@ -127,7 +126,7 @@ func TestManagedConfigStoreOverRealKMS(t *testing.T) {
 	createRelease := func(candidate managedPins, wantValid bool) *kmsv1.ConfigurationRelease {
 		t.Helper()
 		request := &kmsv1.CreateReleaseRequest{
-			Namespace: namespace, Name: managedRelease, SchemaId: managedSchemaID, SchemaVersion: schemaVersion,
+			Namespace: namespace, Name: managedRelease, SchemaVersion: schemaVersion,
 			Entries: []*kmsv1.ReleaseEntrySelector{
 				{Alias: "database", Kind: "parameter", Ref: networkRef("prod", "managed-config", "groups/database"), Version: candidate.database},
 				{Alias: "runtime", Kind: "parameter", Ref: networkRef("prod", "managed-config", "groups/runtime"), Version: candidate.runtime},

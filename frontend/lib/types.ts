@@ -135,12 +135,13 @@ export interface Application {
   name: string;
   description: string;
   release_name: string;
-  schema_id: string;
   schema_version: number;
   contract: ApplicationContractField[];
   created_by: string;
   created_at_unix_ms: number;
   updated_at_unix_ms: number;
+  archived_at_unix_ms: number;
+  archived_by: string;
   environment_count: number;
 }
 
@@ -562,7 +563,6 @@ export interface ConfigurationRelease {
   namespace: NamespaceRef;
   name: string;
   version: number;
-  schema_id: string;
   schema_version: number;
   entries: ConfigurationReleaseEntry[];
   digest: string;
@@ -581,7 +581,6 @@ export interface ReleaseSummary {
 export interface CreateReleaseRequest {
   namespace: NamespaceRef;
   name: string;
-  schema_id?: string;
   schema_version?: number;
   entries: ReleaseEntrySelector[];
   metadata_json?: string;
@@ -600,7 +599,8 @@ export interface ValidateReleaseResponse {
 }
 
 export interface ConfigurationSchema {
-  id: string;
+  application: string;
+  release_name: string;
   version: number;
   schema_json: string;
   digest: string;
@@ -762,7 +762,6 @@ export interface OverviewActiveRelease {
   created_by: string;
   created_at_unix_ms: number;
   is_rolled_back: boolean;
-  schema_id: string;
   schema_version: number;
   digest: string;
   entries: ConfigurationReleaseEntry[];
@@ -910,7 +909,6 @@ export interface ShipPreview {
   // is active yet (then the base is `current`).
   base_version: number;
   release_name: string;
-  schema_id: string;
   schema_version: number;
   entries: ShipPreviewEntry[];
   validation: ValidateReleaseResponse;

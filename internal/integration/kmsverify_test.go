@@ -31,7 +31,6 @@ const (
 	kmsverifyApp       = "kmsverify-app"
 	kmsverifyNamespace = kmsverifyEnv + "/" + kmsverifyApp
 	kmsverifyRelease   = "runtime"
-	kmsverifySchemaID  = "kmsverify/runtime"
 	// kmsverifyProfile deliberately differs from the environment name so the
 	// audit assertions can tell the informational profile label apart from the
 	// namespace that legitimately appears on every audit row.
@@ -170,18 +169,15 @@ func setupKMSVerifyFixture(t *testing.T) *kmsverifyFixture {
 	if err != nil {
 		t.Fatalf("read generated schema: %v", err)
 	}
-	schema, err := env.svc.CreateConfigurationSchema(ctx, admin, kmsverifySchemaID, string(schemaJSON), `{"owner":"kmsverify-integration"}`)
+	schemaSHA256, contract, sdkContract := loadFixtureContract(t)
+	_, schema, err := env.svc.CreateApplicationWithSchema(ctx, admin, domain.Application{
+		Name: kmsverifyApp, ReleaseName: kmsverifyRelease, Contract: contract,
+	}, string(schemaJSON), `{"owner":"kmsverify-integration"}`)
 	if err != nil {
 		t.Fatalf("register generated schema: %v", err)
 	}
-	schemaSHA256, contract, sdkContract := loadFixtureContract(t)
 	if schema.Digest != schemaSHA256 {
 		t.Fatalf("registered schema digest %s != generated contract schema_sha256 %s", schema.Digest, schemaSHA256)
-	}
-	if _, err := env.svc.CreateApplication(ctx, admin, domain.Application{
-		Name: kmsverifyApp, ReleaseName: kmsverifyRelease, SchemaID: schema.ID, SchemaVersion: schema.Version, Contract: contract,
-	}); err != nil {
-		t.Fatalf("create application: %v", err)
 	}
 	if _, err := env.svc.CreateNamespace(ctx, admin, ns, "kmsverify integration", []domain.AuthMethod{domain.AuthMethodToken}); err != nil {
 		t.Fatalf("create namespace: %v", err)

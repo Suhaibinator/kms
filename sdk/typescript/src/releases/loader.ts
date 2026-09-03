@@ -559,7 +559,6 @@ export class ReleaseLoader {
       name: release.name,
       version: release.version,
       activationRevision: candidate.revision,
-      schemaId: release.schemaId,
       schemaVersion: release.schemaVersion,
       digest: release.digest,
       metadataJson: release.metadataJson,

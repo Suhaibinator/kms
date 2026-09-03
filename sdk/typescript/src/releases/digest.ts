@@ -25,7 +25,6 @@ export function deterministicReleaseDigest(release: ConfigurationRelease): strin
     namespace: { env: release.namespace.env, app: release.namespace.app },
     name: release.name,
     version: 0n,
-    schemaId: release.schemaId,
     schemaVersion: release.schemaVersion,
     entries: projectedEntries,
     digest: "",

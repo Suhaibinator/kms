@@ -2,6 +2,8 @@
   "applications": [
     {
       "application": {
+        "archived_at_unix_ms": 0,
+        "archived_by": "",
         "contract": [
           {
             "alias": "queue",
@@ -15,7 +17,6 @@
         "environment_count": 1,
         "name": "billing",
         "release_name": "runtime",
-        "schema_id": "",
         "schema_version": 0,
         "updated_at_unix_ms": 1755000000000
       },
@@ -30,6 +31,8 @@
     },
     {
       "application": {
+        "archived_at_unix_ms": 0,
+        "archived_by": "",
         "contract": [
           {
             "alias": "database",
@@ -52,7 +55,6 @@
         "environment_count": 2,
         "name": "gradethis",
         "release_name": "runtime",
-        "schema_id": "runtime",
         "schema_version": 1,
         "updated_at_unix_ms": 1755000000000
       },
@@ -72,6 +74,8 @@
     },
     {
       "application": {
+        "archived_at_unix_ms": 0,
+        "archived_by": "",
         "contract": [
           {
             "alias": "bucket",
@@ -85,7 +89,6 @@
         "environment_count": 1,
         "name": "reports",
         "release_name": "runtime",
-        "schema_id": "",
         "schema_version": 0,
         "updated_at_unix_ms": 1755000000000
       },

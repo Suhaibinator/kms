@@ -60,7 +60,7 @@ export function DefinitionCard({
 }) {
   const application = overview.application;
   const alignment = useMemo(() => mergeAlignment(overview), [overview]);
-  const pinned = application.schema_id !== "";
+  const pinned = application.schema_version !== 0;
 
   function onFix(action: FixAction) {
     if (action === "pin_schema") onDeriveSchema();
@@ -77,11 +77,20 @@ export function DefinitionCard({
         <div>
           <span className="faint text-sm">Schema</span>
           {pinned ? (
-            <Ident kind="schema" value={`${application.schema_id}@${application.schema_version}`} />
+            <Ident
+              kind="schema"
+              value={`${application.name}/${application.release_name}@${application.schema_version}`}
+            />
           ) : (
             <div className="row-wrap">
               <span className="faint">Not pinned</span>
-              <Button type="button" variant="outline" size="sm" onClick={onDeriveSchema}>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                disabled={application.archived_at_unix_ms > 0}
+                onClick={onDeriveSchema}
+              >
                 Register schema
               </Button>
             </div>
@@ -112,7 +121,12 @@ export function DefinitionCard({
           <ActionMenu
             label="Fix alignment"
             trigger={
-              <Button type="button" variant="outline" size="sm">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                disabled={application.archived_at_unix_ms > 0}
+              >
                 <Wrench size={13} />
                 Fix
               </Button>

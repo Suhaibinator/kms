@@ -128,7 +128,7 @@ func Generate(ctx context.Context, options Options) (Artifacts, error) {
 	if err != nil {
 		return Artifacts{}, err
 	}
-	binding, err := renderBinding(normalized, options.BindingPackage, contractModel)
+	binding, err := renderBinding(normalized, options.BindingPackage, contractModel, schema)
 	if err != nil {
 		return Artifacts{}, err
 	}

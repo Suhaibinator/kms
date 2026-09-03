@@ -15,6 +15,10 @@ import (
 )
 
 const generatedSchemaSHA256 = "0daaf8989c2cefa6c6e5031cc69e54617cf5e16588f8bf9c48892b37261f959b"
+const generatedSchemaJSON = "{\n  \"$schema\": \"https://json-schema.org/draft/2020-12/schema\",\n  \"description\": \"Config is decoded and published as one immutable release generation.\",\n  \"type\": \"object\",\n  \"additionalProperties\": false,\n  \"required\": [\n    \"runtime\",\n    \"server\"\n  ],\n  \"properties\": {\n    \"runtime\": {\n      \"additionalProperties\": false,\n      \"default\": {\n        \"greeting\": \"hello from application defaults\",\n        \"request_limit\": 100\n      },\n      \"properties\": {\n        \"greeting\": {\n          \"default\": \"hello from application defaults\",\n          \"type\": \"string\"\n        },\n        \"request_limit\": {\n          \"default\": 100,\n          \"maximum\": 2147483647,\n          \"minimum\": -2147483648,\n          \"type\": \"integer\"\n        }\n      },\n      \"required\": [\n        \"greeting\",\n        \"request_limit\"\n      ],\n      \"type\": \"object\"\n    },\n    \"server\": {\n      \"additionalProperties\": false,\n      \"default\": {\n        \"listen_address\": \"127.0.0.1:8080\"\n      },\n      \"properties\": {\n        \"listen_address\": {\n          \"default\": \"127.0.0.1:8080\",\n          \"type\": \"string\"\n        }\n      },\n      \"required\": [\n        \"listen_address\"\n      ],\n      \"type\": \"object\"\n    }\n  }\n}\n"
+
+// GeneratedSchema returns a fresh copy of the exact JSON Schema emitted by kms-config-gen.
+func GeneratedSchema() []byte { return []byte(generatedSchemaJSON) }
 
 var generatedContract = []configstore.ContractEntry{
 	{Alias: "runtime", Kind: configstore.ContractKindParameter, ContentType: "json"},

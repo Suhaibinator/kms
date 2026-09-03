@@ -544,7 +544,6 @@ type ReleaseIdentity struct {
 	name               string
 	version            uint64
 	activationRevision uint64
-	schemaID           string
 	schemaVersion      uint64
 	digest             string
 }
@@ -556,7 +555,6 @@ func ReleaseIdentityFromSnapshot(snapshot kmsclient.ReleaseSnapshot) ReleaseIden
 		name:               snapshot.Name(),
 		version:            snapshot.Version(),
 		activationRevision: snapshot.ActivationRevision(),
-		schemaID:           snapshot.SchemaID(),
 		schemaVersion:      snapshot.SchemaVersion(),
 		digest:             snapshot.Digest(),
 	}
@@ -568,7 +566,6 @@ func releaseIdentityFromManifest(manifest kmsclient.ReleaseManifest) ReleaseIden
 		name:               manifest.Name(),
 		version:            manifest.Version(),
 		activationRevision: manifest.ActivationRevision(),
-		schemaID:           manifest.SchemaID(),
 		schemaVersion:      manifest.SchemaVersion(),
 		digest:             manifest.Digest(),
 	}
@@ -578,7 +575,6 @@ func (r ReleaseIdentity) Namespace() string          { return r.namespace }
 func (r ReleaseIdentity) Name() string               { return r.name }
 func (r ReleaseIdentity) Version() uint64            { return r.version }
 func (r ReleaseIdentity) ActivationRevision() uint64 { return r.activationRevision }
-func (r ReleaseIdentity) SchemaID() string           { return r.schemaID }
 func (r ReleaseIdentity) SchemaVersion() uint64      { return r.schemaVersion }
 func (r ReleaseIdentity) Digest() string             { return r.digest }
 
@@ -603,7 +599,6 @@ type releaseIdentityJSON struct {
 	Name               string `json:"name"`
 	Version            uint64 `json:"version"`
 	ActivationRevision uint64 `json:"activation_revision"`
-	SchemaID           string `json:"schema_id,omitempty"`
 	SchemaVersion      uint64 `json:"schema_version,omitempty"`
 	Digest             string `json:"digest"`
 }
@@ -614,7 +609,6 @@ func (r ReleaseIdentity) jsonProjection() releaseIdentityJSON {
 		Name:               r.name,
 		Version:            r.version,
 		ActivationRevision: r.activationRevision,
-		SchemaID:           r.schemaID,
 		SchemaVersion:      r.schemaVersion,
 		Digest:             r.digest,
 	}

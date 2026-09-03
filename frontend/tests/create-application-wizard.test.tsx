@@ -8,8 +8,6 @@ import { chooseSelectOption } from "./select-test-utils";
 const mocks = vi.hoisted(() => ({
   createApplication: vi.fn(),
   createNamespace: vi.fn(),
-  createSchema: vi.fn(),
-  listSchemas: vi.fn(),
   toast: { success: vi.fn(), info: vi.fn(), error: vi.fn() },
 }));
 
@@ -22,8 +20,6 @@ vi.mock("@/lib/api", async (importOriginal) => {
       ...actual.api,
       createApplication: mocks.createApplication,
       createNamespace: mocks.createNamespace,
-      createSchema: mocks.createSchema,
-      listSchemas: mocks.listSchemas,
     },
   };
 });
@@ -32,12 +28,13 @@ const created: Application = {
   name: "payments-api",
   description: "",
   release_name: "runtime",
-  schema_id: "",
   schema_version: 0,
   contract: [{ alias: "runtime", kind: "parameter", content_type: "json" }],
   created_by: "admin",
   created_at_unix_ms: 1,
   updated_at_unix_ms: 1,
+  archived_at_unix_ms: 0,
+  archived_by: "",
   environment_count: 0,
 };
 
@@ -72,8 +69,6 @@ describe("CreateApplicationWizard", () => {
   beforeEach(() => {
     mocks.createApplication.mockReset().mockResolvedValue({ application: created });
     mocks.createNamespace.mockReset().mockResolvedValue({ namespace: {} });
-    mocks.createSchema.mockReset();
-    mocks.listSchemas.mockReset().mockResolvedValue({ schemas: [], next_page_token: "" });
     mocks.toast.error.mockClear();
     mocks.toast.success.mockClear();
   });
@@ -105,12 +100,10 @@ describe("CreateApplicationWizard", () => {
     });
     fireEvent.click(within(dialog()).getByRole("button", { name: "Create application" }));
     await waitFor(() => expect(onCreated).toHaveBeenCalledWith(created));
-    expect(mocks.createSchema).not.toHaveBeenCalled();
     expect(mocks.createApplication).toHaveBeenCalledWith({
       name: "payments-api",
       description: "",
       release_name: "runtime",
-      schema_id: "",
       schema_version: 0,
       contract: [{ alias: "runtime", kind: "parameter", content_type: "json" }],
     });
@@ -121,18 +114,13 @@ describe("CreateApplicationWizard", () => {
     expect(within(dialog()).getByText("attached")).toBeVisible();
   });
 
-  it("registers a pasted schema before the contract step and derives the contract from it", async () => {
-    mocks.createSchema.mockResolvedValue({
-      schema: { id: "payments-api-runtime", version: 4, schema_json: SCHEMA },
-    });
+  it("creates a pasted schema atomically with the application and derives the contract", async () => {
     render(<CreateApplicationWizard open onClose={() => undefined} onCreated={vi.fn()} />);
     await fillBasics();
-    await chooseSelectOption(within(dialog()).getByLabelText("Schema"), "Register a new schema");
-    expect(within(dialog()).getByLabelText("Schema ID")).toHaveValue("payments-api-runtime");
+    await chooseSelectOption(within(dialog()).getByLabelText("Schema"), "Create with a schema");
     fireEvent.change(within(dialog()).getByLabelText("Schema JSON"), { target: { value: SCHEMA } });
     next();
     await screen.findByRole("list", { name: "Contract aliases" });
-    expect(mocks.createSchema).toHaveBeenCalledWith("payments-api-runtime", SCHEMA);
     expect(mocks.createApplication).not.toHaveBeenCalled();
     expect(within(dialog()).getByLabelText("Alias 1")).toHaveValue("timeout");
     expect(within(dialog()).getByLabelText("Alias 2")).toHaveValue("database");
@@ -141,8 +129,8 @@ describe("CreateApplicationWizard", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Create application" }));
     await waitFor(() => expect(mocks.createApplication).toHaveBeenCalledTimes(1));
     expect(mocks.createApplication.mock.calls[0][0]).toMatchObject({
-      schema_id: "payments-api-runtime",
-      schema_version: 4,
+      schema_version: 0,
+      schema: { schema_json: SCHEMA, metadata_json: "{}" },
       contract: [
         { alias: "timeout", kind: "parameter", content_type: "integer" },
         { alias: "database", kind: "parameter", content_type: "json" },
@@ -171,28 +159,29 @@ describe("CreateApplicationWizard", () => {
     expect(mocks.createNamespace).toHaveBeenCalledTimes(2);
   });
 
-  it("does not register the schema when registration fails, and stays on the step", async () => {
-    mocks.createSchema.mockRejectedValue(new Error("schema invalid at /properties"));
+  it("keeps application and first-schema creation atomic when the request fails", async () => {
+    mocks.createApplication.mockRejectedValue(new Error("schema invalid at /properties"));
     render(<CreateApplicationWizard open onClose={() => undefined} onCreated={vi.fn()} />);
     await fillBasics();
-    await chooseSelectOption(within(dialog()).getByLabelText("Schema"), "Register a new schema");
+    await chooseSelectOption(within(dialog()).getByLabelText("Schema"), "Create with a schema");
     fireEvent.change(within(dialog()).getByLabelText("Schema JSON"), { target: { value: SCHEMA } });
     next();
-    expect(await within(dialog()).findByRole("alert")).toHaveTextContent("schema invalid");
-    expect(within(dialog()).getByLabelText("Schema JSON")).toBeVisible();
-    expect(mocks.createApplication).not.toHaveBeenCalled();
+    await screen.findByRole("list", { name: "Contract aliases" });
+    next();
+    fireEvent.click(await screen.findByRole("button", { name: "Create application" }));
+    await waitFor(() => expect(mocks.toast.error).toHaveBeenCalled());
+    expect(mocks.createNamespace).not.toHaveBeenCalled();
   });
 
   it("waits for a blocked submit before showing schema errors, and loads a schema file", async () => {
     render(<CreateApplicationWizard open onClose={() => undefined} onCreated={vi.fn()} />);
     await fillBasics();
-    await chooseSelectOption(within(dialog()).getByLabelText("Schema"), "Register a new schema");
+    await chooseSelectOption(within(dialog()).getByLabelText("Schema"), "Create with a schema");
     // Choosing the mode does not shout; the empty JSON only errors once Next is tried.
     expect(within(dialog()).queryByRole("alert")).toBeNull();
-    expect(within(dialog()).getByRole("button", { name: "Register and continue" })).toBeEnabled();
+    expect(within(dialog()).getByRole("button", { name: "Next" })).toBeEnabled();
     next();
     expect(within(dialog()).getByText(/Schema is not valid JSON/)).toBeVisible();
-    expect(mocks.createSchema).not.toHaveBeenCalled();
 
     const file = new File([SCHEMA], "runtime.schema.json", { type: "application/json" });
     fireEvent.change(within(dialog()).getByLabelText("Schema file"), {

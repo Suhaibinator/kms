@@ -2,7 +2,10 @@ import { ArrowLeft } from "lucide-react";
 import { useRouter } from "next/router";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ApplicationHome } from "@/components/applications/ApplicationHome";
-import { ApplicationList } from "@/components/applications/ApplicationList";
+import {
+  ApplicationList,
+  type ApplicationArchiveFilter,
+} from "@/components/applications/ApplicationList";
 import CreateApplicationWizard from "@/components/applications/CreateApplicationWizard";
 import type { SetupAction } from "@/components/applications/contracts";
 import { LIST_HEADERS } from "@/components/applications/shared";
@@ -35,7 +38,8 @@ export default function ApplicationsPage() {
   const [applications, setApplications] = useState<Application[]>([]);
   const [listLoading, setListLoading] = useState(true);
   const [wizardOpen, setWizardOpen] = useState(false);
-  const paging = useCursorPagination("applications");
+  const [archiveFilter, setArchiveFilter] = useState<ApplicationArchiveFilter>("exclude");
+  const paging = useCursorPagination(`applications:${archiveFilter}`);
   const { slot, loading, reload, freshness } = useApplicationOverview(name);
 
   const loadApplications = useCallback(
@@ -43,9 +47,14 @@ export default function ApplicationsPage() {
       const run = request.begin();
       setListLoading(true);
       try {
-        const response = await api.listApplications(LIST_PAGE_SIZE, pageToken || undefined, {
-          signal: run.signal,
-        });
+        const response = await api.listApplications(
+          LIST_PAGE_SIZE,
+          pageToken || undefined,
+          {
+            signal: run.signal,
+          },
+          archiveFilter,
+        );
         if (!run.current) return;
         setApplications(response.applications ?? []);
         paging.setNextToken(response.next_page_token ?? "");
@@ -55,7 +64,7 @@ export default function ApplicationsPage() {
         if (run.current) setListLoading(false);
       }
     },
-    [request, toast, paging.setNextToken],
+    [request, toast, paging.setNextToken, archiveFilter],
   );
 
   useEffect(() => {
@@ -101,6 +110,11 @@ export default function ApplicationsPage() {
           loading={listLoading}
           onCreate={() => onSetupAction({ kind: "create-app" })}
           paging={paging}
+          archiveFilter={archiveFilter}
+          onArchiveFilterChange={(filter) => {
+            setArchiveFilter(filter);
+            paging.reset();
+          }}
         />
         <CreateApplicationWizard
           open={wizardOpen}

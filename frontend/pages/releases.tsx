@@ -52,7 +52,9 @@ const COLUMNS: ReadonlyArray<SortColumn<ReleaseSummary>> = [
     id: "schema",
     label: "Schema",
     value: (s) =>
-      s.release.schema_id ? `${s.release.schema_id}@${s.release.schema_version}` : null,
+      s.release.schema_version
+        ? `${s.release.namespace.app}/${s.release.name}@${s.release.schema_version}`
+        : null,
   },
   { id: "entries", label: "Entries", value: (s) => s.release.entries.length },
   { id: "digest", label: "Digest", value: (s) => s.release.digest },
@@ -86,7 +88,6 @@ function activeFromSummaries(
     created_by: release.created_by,
     created_at_unix_ms: release.created_at_unix_ms,
     is_rolled_back: previous ? previous.release.version > release.version : false,
-    schema_id: release.schema_id,
     schema_version: release.schema_version,
     digest: release.digest,
     entries: release.entries,
@@ -557,10 +558,10 @@ export default function ReleasesPage() {
                           )}
                         </td>
                         <td data-label="Schema">
-                          {release.schema_id ? (
+                          {release.schema_version ? (
                             <Ident
                               kind="schema"
-                              value={`${release.schema_id}@${release.schema_version}`}
+                              value={`${release.namespace.app}/${release.name}@${release.schema_version}`}
                             />
                           ) : (
                             <span className="faint">none</span>

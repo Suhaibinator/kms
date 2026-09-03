@@ -20,6 +20,7 @@ const mocks = vi.hoisted(() => ({
   parameterMetadata: vi.fn(),
   secretMetadata: vi.fn(),
   createRelease: vi.fn(),
+  listApplications: vi.fn(),
   listSchemas: vi.fn(),
   createSchema: vi.fn(),
   toast: { success: vi.fn(), info: vi.fn(), error: vi.fn() },
@@ -86,6 +87,7 @@ vi.mock("@/lib/api", async (importOriginal) => {
       parameterMetadata: mocks.parameterMetadata,
       secretMetadata: mocks.secretMetadata,
       createRelease: mocks.createRelease,
+      listApplications: mocks.listApplications,
       listSchemas: mocks.listSchemas,
       createSchema: mocks.createSchema,
     },
@@ -96,7 +98,6 @@ const releaseV1 = {
   namespace: { env: "prod", app: "payments" },
   name: "runtime",
   version: 1,
-  schema_id: "payments/runtime",
   schema_version: 1,
   entries: [
     {
@@ -129,12 +130,13 @@ const dashboardWithContract = {
     name: "payments",
     description: "",
     release_name: "runtime",
-    schema_id: "payments/runtime",
     schema_version: 3,
     contract: [{ alias: "runtime", kind: "parameter" as const, content_type: "json" }],
     created_by: "admin",
     created_at_unix_ms: 1,
     updated_at_unix_ms: 1,
+    archived_at_unix_ms: 0,
+    archived_by: "",
     environment_count: 1,
   },
   environments: [],
@@ -150,7 +152,6 @@ const dashboardWithContract = {
 const dashboardWithoutContract = {
   application: {
     ...dashboardWithContract.application,
-    schema_id: "",
     schema_version: 0,
     contract: [],
   },
@@ -165,6 +166,10 @@ describe("ReleasesPage", () => {
       if (typeof mock === "function" && "mockReset" in mock) mock.mockReset();
     }
     mocks.listReleases.mockResolvedValue({ releases: [], next_page_token: "" });
+    mocks.listApplications.mockResolvedValue({
+      applications: [dashboardWithContract.application],
+      next_page_token: "",
+    });
     mocks.listSchemas.mockResolvedValue({ schemas: [], next_page_token: "" });
     mocks.releaseSubscribers.mockResolvedValue({
       subscribers: [],
@@ -220,7 +225,8 @@ describe("ReleasesPage", () => {
     mocks.listSchemas.mockResolvedValue({
       schemas: [
         {
-          id: "payments/runtime",
+          application: "payments",
+          release_name: "runtime",
           version: 3,
           schema_json: '{"type":"object","properties":{"enabled":{"type":"boolean"}}}',
           digest: "abcdef0123456789abcdef0123456789",
@@ -244,6 +250,42 @@ describe("ReleasesPage", () => {
     expect(code?.textContent).toContain('"enabled": {');
     expect(code?.querySelector(".tok-key")?.textContent).toBe('"type"');
     expect(within(dialog).getByRole("checkbox", { name: "Wrap lines" })).toBeChecked();
+  });
+
+  it("only permits a release-name schema filter when an application is selected", async () => {
+    mocks.query = { tab: "schemas" };
+    render(<ReleasesPage />);
+    await screen.findByText("No schemas found");
+    const application = screen.getByRole("textbox", { name: "Application" });
+    const release = screen.getByRole("textbox", { name: "Release name" });
+    expect(release).toBeDisabled();
+    expect(release).toHaveAccessibleDescription("Choose an application first.");
+
+    fireEvent.change(application, { target: { value: "payments" } });
+    expect(release).toBeEnabled();
+    fireEvent.change(release, { target: { value: "runtime" } });
+    fireEvent.click(screen.getByRole("button", { name: "Apply filter" }));
+    await waitFor(() =>
+      expect(mocks.listSchemas).toHaveBeenLastCalledWith(
+        "payments",
+        "runtime",
+        undefined,
+        expect.anything(),
+      ),
+    );
+
+    fireEvent.change(application, { target: { value: "" } });
+    expect(release).toBeDisabled();
+    expect(release).toHaveValue("");
+    fireEvent.click(screen.getByRole("button", { name: "Apply filter" }));
+    await waitFor(() =>
+      expect(mocks.listSchemas).toHaveBeenLastCalledWith(
+        undefined,
+        undefined,
+        undefined,
+        expect.anything(),
+      ),
+    );
   });
 
   it("opens release details, compares same-name versions, and loads rollout state on demand", async () => {
@@ -496,14 +538,13 @@ describe("ReleasesPage", () => {
     fireEvent.click(screen.getAllByRole("button", { name: "New release" })[0]);
     const dialog = await screen.findByRole("dialog", { name: "New release · prod/payments" });
     expect(await within(dialog).findByRole("textbox", { name: "Release name" })).toBeDisabled();
-    expect(within(dialog).getByRole("textbox", { name: "Schema ID" })).toBeDisabled();
+    expect(within(dialog).getByRole("textbox", { name: "Schema" })).toBeDisabled();
 
     fireEvent.click(within(dialog).getByRole("button", { name: "Create release" }));
     await waitFor(() =>
       expect(mocks.createRelease).toHaveBeenCalledWith({
         namespace: { env: "prod", app: "payments" },
         name: "runtime",
-        schema_id: "payments/runtime",
         schema_version: 3,
         entries: [
           {
@@ -583,6 +624,54 @@ describe("ReleasesPage", () => {
       within(dialog).getByText("Fix the JSON definition before returning to Guided mode."),
     ).toBeVisible();
     expect(within(dialog).getByRole("textbox", { name: "Release definition" })).toHaveValue("{");
+  });
+
+  it("never allows JSON mode to repin the application's schema version", async () => {
+    mocks.query = { app: "payments", env: "prod" };
+    mocks.applicationDashboard.mockResolvedValue(dashboardWithContract);
+
+    const { unmount } = render(<ReleasesPage />);
+    await screen.findByText("No releases found");
+    fireEvent.click(screen.getAllByRole("button", { name: "New release" })[0]);
+    let dialog = await screen.findByRole("dialog", { name: "New release · prod/payments" });
+    await within(dialog).findByRole("textbox", { name: "Release name" });
+    fireEvent.click(within(dialog).getByRole("tab", { name: "JSON" }));
+    let editor = within(dialog).getByRole("textbox", { name: "Release definition" });
+    const pinned = JSON.parse((editor as HTMLTextAreaElement).value) as Record<string, unknown>;
+    expect(pinned.schema_version).toBe(3);
+
+    delete pinned.schema_version;
+    fireEvent.change(editor, { target: { value: JSON.stringify(pinned) } });
+    expect(within(dialog).getByText(/must remain 3/)).toBeVisible();
+    expect(within(dialog).getByRole("button", { name: "Create release" })).toBeDisabled();
+    fireEvent.change(editor, {
+      target: { value: JSON.stringify({ ...pinned, schema_version: 4 }) },
+    });
+    expect(within(dialog).getByText(/must remain 3/)).toBeVisible();
+
+    unmount();
+    mocks.applicationDashboard.mockResolvedValue({
+      ...dashboardWithContract,
+      application: { ...dashboardWithContract.application, schema_version: 0 },
+    });
+    render(<ReleasesPage />);
+    await screen.findByText("No releases found");
+    fireEvent.click(screen.getAllByRole("button", { name: "New release" })[0]);
+    dialog = await screen.findByRole("dialog", { name: "New release · prod/payments" });
+    await within(dialog).findByRole("textbox", { name: "Release name" });
+    fireEvent.click(within(dialog).getByRole("tab", { name: "JSON" }));
+    editor = within(dialog).getByRole("textbox", { name: "Release definition" });
+    const unpinned = JSON.parse((editor as HTMLTextAreaElement).value) as Record<string, unknown>;
+    expect(unpinned.schema_version).toBeUndefined();
+    fireEvent.change(editor, {
+      target: { value: JSON.stringify({ ...unpinned, schema_version: 1 }) },
+    });
+    expect(within(dialog).getByText(/has no pinned schema/)).toBeVisible();
+    fireEvent.change(editor, {
+      target: { value: JSON.stringify({ ...unpinned, schema_version: 0 }) },
+    });
+    expect(within(dialog).queryByText(/has no pinned schema/)).toBeNull();
+    expect(within(dialog).getByRole("button", { name: "Create release" })).toBeEnabled();
   });
 
   it("shows the guided blocking reason on click instead of an inert Create button", async () => {
@@ -709,7 +798,7 @@ describe("ReleasesPage", () => {
     expect((reopened as HTMLTextAreaElement).value).toContain('"type": "object"');
   });
 
-  it("reveals the missing schema ID on Register instead of an inert button", async () => {
+  it("requires an owning application when registering a schema", async () => {
     mocks.query = { tab: "schemas" };
 
     render(<ReleasesPage />);
@@ -720,12 +809,66 @@ describe("ReleasesPage", () => {
     const register = within(dialog).getByRole("button", { name: "Register schema" });
     expect(register).toBeEnabled();
     fireEvent.click(register);
-    expect(within(dialog).getByRole("alert")).toHaveTextContent("Schema ID is required.");
-    expect(within(dialog).getByRole("textbox", { name: "Schema ID" })).toHaveAttribute(
-      "aria-invalid",
-      "true",
-    );
+    expect(within(dialog).getByRole("alert")).toHaveTextContent("Application is required.");
     expect(mocks.createSchema).not.toHaveBeenCalled();
+  });
+
+  it("registers a schema under the selected application's canonical release", async () => {
+    mocks.query = { tab: "schemas" };
+    mocks.createSchema.mockResolvedValue({
+      schema: {
+        application: "payments",
+        release_name: "runtime",
+        version: 4,
+        schema_json: '{"type":"object"}',
+        digest: "sha256:schema",
+        metadata_json: "{}",
+        created_by: "admin",
+        created_at_unix_ms: 1,
+      },
+    });
+
+    render(<ReleasesPage />);
+    await screen.findByText("No schemas found");
+    fireEvent.click(screen.getAllByRole("button", { name: "Register schema" })[0]);
+    const dialog = await screen.findByRole("dialog", { name: "Register JSON Schema" });
+    await chooseSelectOption(within(dialog).getByLabelText("Application"), "payments / runtime");
+    fireEvent.change(within(dialog).getByRole("textbox", { name: "JSON Schema definition" }), {
+      target: { value: '{"type":"object"}' },
+    });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Register schema" }));
+    await waitFor(() =>
+      expect(mocks.createSchema).toHaveBeenCalledWith("payments", '{"type":"object"}'),
+    );
+    expect(mocks.toast.success).toHaveBeenCalledWith("Created schema payments/runtime@4");
+  });
+
+  it("loads every application page for the schema owner selector", async () => {
+    mocks.query = { tab: "schemas" };
+    const second = {
+      ...dashboardWithContract.application,
+      name: "orders",
+      release_name: "service",
+    };
+    mocks.listApplications
+      .mockResolvedValueOnce({
+        applications: [dashboardWithContract.application],
+        next_page_token: "apps-page-2",
+      })
+      .mockResolvedValueOnce({ applications: [second], next_page_token: "" });
+
+    render(<ReleasesPage />);
+    await screen.findByText("No schemas found");
+    fireEvent.click(screen.getAllByRole("button", { name: "Register schema" })[0]);
+    const dialog = await screen.findByRole("dialog", { name: "Register JSON Schema" });
+    await chooseSelectOption(within(dialog).getByLabelText("Application"), "orders / service");
+    expect(mocks.listApplications).toHaveBeenNthCalledWith(1, 200, undefined, expect.anything());
+    expect(mocks.listApplications).toHaveBeenNthCalledWith(
+      2,
+      200,
+      "apps-page-2",
+      expect.anything(),
+    );
   });
   it("renders release, schema and revision identifiers as typed chips with breadcrumbs", async () => {
     mocks.query = { app: "payments", env: "prod", name: "runtime" };

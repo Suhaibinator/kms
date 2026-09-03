@@ -11,10 +11,13 @@ import (
 )
 
 type fakeDefaultsApplyClient struct {
-	calls   []kmsclient.ApplicationDefaultsApplyOptions
-	results []kmsclient.ApplicationDefaultsApplyResult
-	errors  []error
-	closed  bool
+	calls         []kmsclient.ApplicationDefaultsApplyOptions
+	results       []kmsclient.ApplicationDefaultsApplyResult
+	errors        []error
+	schemaCalls   []kmsclient.CreateApplicationSchemaOptions
+	schemaResults []kmsclient.ApplicationSchema
+	schemaErrors  []error
+	closed        bool
 }
 
 func (client *fakeDefaultsApplyClient) ApplyApplicationDefaults(_ context.Context, options kmsclient.ApplicationDefaultsApplyOptions) (kmsclient.ApplicationDefaultsApplyResult, error) {
@@ -29,6 +32,15 @@ func (client *fakeDefaultsApplyClient) ApplyApplicationDefaults(_ context.Contex
 func (client *fakeDefaultsApplyClient) Close() error {
 	client.closed = true
 	return nil
+}
+
+func (client *fakeDefaultsApplyClient) CreateApplicationSchema(_ context.Context, options kmsclient.CreateApplicationSchemaOptions) (kmsclient.ApplicationSchema, error) {
+	client.schemaCalls = append(client.schemaCalls, options)
+	index := len(client.schemaCalls) - 1
+	if index < len(client.schemaErrors) && client.schemaErrors[index] != nil {
+		return kmsclient.ApplicationSchema{}, client.schemaErrors[index]
+	}
+	return client.schemaResults[index], nil
 }
 
 func defaultsApplierTestConfig(namespace string) DefaultsApplierConfig[exporterTestProfile, exporterTestConfig] {

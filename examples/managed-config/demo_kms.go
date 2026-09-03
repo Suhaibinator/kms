@@ -177,7 +177,6 @@ func scriptRelease(server *kmsclienttest.Server, values releaseValues) (kmsclien
 		Namespace:     exampleNamespace,
 		Name:          exampleRelease,
 		Version:       values.releaseVersion,
-		SchemaID:      "managed-config-example/runtime",
 		SchemaVersion: 1,
 		Entries: []kmsclienttest.ReleaseEntrySpec{
 			{Alias: "server", Kind: "parameter", Path: serverPath, Version: values.serverVersion, ContentType: "json"},

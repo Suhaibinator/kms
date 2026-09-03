@@ -12,6 +12,10 @@ import (
 // None of these values, nor any error wrapping them, ever contains secret
 // plaintext.
 var (
+	// ErrAlreadyExists is returned when an immutable resource already exists,
+	// including an identical schema already registered for an application.
+	ErrAlreadyExists = errors.New("kmsclient: already exists")
+
 	// ErrNotFound is returned when a parameter or secret (or the requested
 	// version/label) does not exist.
 	ErrNotFound = errors.New("kmsclient: not found")
@@ -64,6 +68,8 @@ func mapError(err error) error {
 	switch st.Code() {
 	case codes.OK:
 		return nil
+	case codes.AlreadyExists:
+		return fmt.Errorf("%w: %s", ErrAlreadyExists, st.Message())
 	case codes.NotFound:
 		return fmt.Errorf("%w: %s", ErrNotFound, st.Message())
 	case codes.PermissionDenied:

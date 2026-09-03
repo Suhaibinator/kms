@@ -34,8 +34,8 @@ func (s *SQLStore) ApplyDefaults(ctx context.Context, in DefaultsApplyTransactio
 				return err
 			}
 			if err := tx.Model(&applicationModel{}).Where("name = ?", in.Namespace.App).Updates(map[string]any{
-				"schema_id": in.DesiredSchemaID, "schema_version": in.DesiredSchemaVersion,
-				"contract_json": contract, "updated_at": fmtTime(nowUTC()),
+				"schema_version": in.DesiredSchemaVersion,
+				"contract_json":  contract, "updated_at": fmtTime(nowUTC()),
 			}).Error; err != nil {
 				return err
 			}
@@ -77,7 +77,7 @@ func verifyDefaultsApplication(tx *gorm.DB, in DefaultsApplyTransaction) error {
 	if err != nil {
 		return err
 	}
-	if app.ReleaseName != in.ReleaseName || app.SchemaID != in.SchemaID ||
+	if app.ReleaseName != in.ReleaseName || app.ArchivedAt != nil ||
 		uint64(app.SchemaVersion) != in.SchemaVersion || app.ContractJSON != contract {
 		return defaultsStale()
 	}
@@ -88,13 +88,13 @@ func verifyDefaultsApplication(tx *gorm.DB, in DefaultsApplyTransaction) error {
 		}
 		return err
 	}
-	schemaID, schemaVersion := in.SchemaID, in.SchemaVersion
+	schemaVersion := in.SchemaVersion
 	if in.UpdateDefinition {
-		schemaID, schemaVersion = in.DesiredSchemaID, in.DesiredSchemaVersion
+		schemaVersion = in.DesiredSchemaVersion
 	}
-	if schemaID != "" {
+	if schemaVersion != 0 {
 		var schema configurationSchemaModel
-		if err := tx.Where("id = ? AND version_number = ?", schemaID, schemaVersion).First(&schema).Error; err != nil {
+		if err := tx.Where("application_name = ? AND release_name = ? AND version_number = ?", in.Namespace.App, in.ReleaseName, schemaVersion).First(&schema).Error; err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) {
 				return defaultsStale()
 			}

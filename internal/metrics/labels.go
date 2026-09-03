@@ -79,6 +79,8 @@ var RouteLabels = []string{
 	"POST /api/v1/applications",
 	"PATCH /api/v1/applications",
 	"DELETE /api/v1/applications",
+	"POST /api/v1/applications/archive",
+	"POST /api/v1/applications/unarchive",
 	"GET /api/v1/applications/get",
 	"GET /api/v1/applications/dashboard",
 	"GET /api/v1/applications/overview",
@@ -210,6 +212,7 @@ func AuthMethodLabel(method string) string {
 // list is maintained alongside them; an event type missing from it is recorded
 // under ValueOther and shows up as a jump in that bucket.
 var AuditEventTypes = []string{
+	"application.archive",
 	"application.create",
 	"application.defaults",
 	"application.defaults.apply",
@@ -219,6 +222,7 @@ var AuditEventTypes = []string{
 	"application.list",
 	"application.read",
 	"application.ship",
+	"application.unarchive",
 	"application.update",
 	"audit.read",
 	"auth.credential_ignored",

@@ -14,12 +14,17 @@ import {
   Pagination,
   TableSkeleton,
 } from "@/components/ui";
+import { AppSelect } from "@/components/ui/app-select";
 import { useToast } from "@/context/ToastContext";
 import { api, isAbortError } from "@/lib/api";
 import { formatUnixMs } from "@/lib/format";
 import { useFocusFirstInvalid } from "@/lib/forms";
 import { useCursorPagination, useFieldErrors } from "@/lib/hooks";
-import type { ConfigurationSchema } from "@/lib/types";
+import type { Application, ConfigurationSchema } from "@/lib/types";
+
+function schemaLabel(schema: ConfigurationSchema): string {
+  return `${schema.application}/${schema.release_name}@${schema.version}`;
+}
 
 const DEFAULT_SCHEMA_JSON = `{
   "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -57,7 +62,7 @@ function SchemaViewer({
     <Modal
       open={Boolean(schema)}
       workspace
-      title={schema ? `Schema ${schema.id}@${schema.version}` : "Schema"}
+      title={schema ? `Schema ${schemaLabel(schema)}` : "Schema"}
       onClose={onClose}
     >
       {schema ? (
@@ -101,37 +106,75 @@ function RegisterSchemaDialog({
   onCreated: (schema: ConfigurationSchema) => void;
 }) {
   const toast = useToast();
-  const [schemaID, setSchemaID] = useState("");
+  const [applications, setApplications] = useState<Application[]>([]);
+  const [application, setApplication] = useState("");
+  const [loadingApplications, setLoadingApplications] = useState(false);
   const [schemaJSON, setSchemaJSON] = useState(DEFAULT_SCHEMA_JSON);
   const [attempted, setAttempted] = useState(false);
   const [saving, setSaving] = useState(false);
-  const idErrors = useFieldErrors<"id">();
+  const applicationErrors = useFieldErrors<"application">();
   const { formRef, requestFocus } = useFocusFirstInvalid<HTMLDivElement>();
-  const idRef = useRef<HTMLInputElement>(null);
   const schemaError = useMemo(() => schemaJSONError(schemaJSON), [schemaJSON]);
-  const idProblem = schemaID.trim() ? null : "Schema ID is required.";
-  const dirty = schemaID !== "" || schemaJSON !== DEFAULT_SCHEMA_JSON;
+  const applicationProblem = application ? null : "Application is required.";
+  const selectedApplication = applications.find((candidate) => candidate.name === application);
+  const dirty = application !== "" || schemaJSON !== DEFAULT_SCHEMA_JSON;
 
-  const resetIdErrors = idErrors.reset;
+  const resetApplicationErrors = applicationErrors.reset;
   useEffect(() => {
     if (!open) return;
-    setSchemaID("");
+    let cancelled = false;
+    setApplication("");
     setSchemaJSON(DEFAULT_SCHEMA_JSON);
     setAttempted(false);
-    resetIdErrors();
-  }, [open, resetIdErrors]);
+    resetApplicationErrors();
+    setLoadingApplications(true);
+    const controller = new AbortController();
+    const loadApplications = async () => {
+      const loaded: Application[] = [];
+      const seenTokens = new Set<string>();
+      let pageToken = "";
+      do {
+        const response = await api.listApplications(200, pageToken || undefined, {
+          signal: controller.signal,
+        });
+        loaded.push(...(response.applications ?? []));
+        pageToken = response.next_page_token ?? "";
+        if (pageToken && seenTokens.has(pageToken)) {
+          throw new Error("Application pagination returned the same page token twice.");
+        }
+        if (pageToken) seenTokens.add(pageToken);
+      } while (pageToken);
+      return loaded;
+    };
+    void loadApplications()
+      .then((loaded) => {
+        if (!cancelled) setApplications(loaded);
+      })
+      .catch((error: unknown) => {
+        if (cancelled || isAbortError(error)) return;
+        setApplications([]);
+        toast.error(error, "Could not load applications");
+      })
+      .finally(() => {
+        if (!cancelled) setLoadingApplications(false);
+      });
+    return () => {
+      cancelled = true;
+      controller.abort();
+    };
+  }, [open, resetApplicationErrors, toast]);
 
   async function register() {
     setAttempted(true);
-    idErrors.markAllTouched();
-    if (idProblem || schemaError) {
+    applicationErrors.markAllTouched();
+    if (applicationProblem || schemaError) {
       requestFocus();
       return;
     }
     setSaving(true);
     try {
-      const result = await api.createSchema(schemaID.trim(), schemaJSON);
-      toast.success(`Created schema ${result.schema.id}@${result.schema.version}`);
+      const result = await api.createSchema(application, schemaJSON);
+      toast.success(`Created schema ${schemaLabel(result.schema)}`);
       onCreated(result.schema);
       onClose();
     } catch (error) {
@@ -148,9 +191,8 @@ function RegisterSchemaDialog({
       dismissible={!saving}
       dirty={dirty}
       title="Register JSON Schema"
-      description="Each registration allocates the next immutable version of the schema ID."
+      description="Each registration allocates the next immutable version in the application's release stream."
       onClose={onClose}
-      initialFocus={idRef}
       footer={(close) => (
         <>
           <Button variant="outline" onClick={close} disabled={saving}>
@@ -163,14 +205,26 @@ function RegisterSchemaDialog({
       )}
     >
       <div ref={formRef}>
-        <Field label="Schema ID" error={idErrors.shown("id", idProblem)}>
-          <Input
-            ref={idRef}
+        <Field
+          label="Application"
+          hint={
+            selectedApplication
+              ? `Registers under ${selectedApplication.name}/${selectedApplication.release_name}`
+              : "The application's canonical release name is used automatically."
+          }
+          error={applicationErrors.shown("application", applicationProblem)}
+        >
+          <AppSelect
             className="font-mono"
-            value={schemaID}
-            onChange={(event) => setSchemaID(event.target.value)}
-            onBlur={() => idErrors.touch("id")}
-            placeholder="go-common/runtime"
+            value={application}
+            onValueChange={setApplication}
+            onBlur={() => applicationErrors.touch("application")}
+            options={applications.map((candidate) => ({
+              value: candidate.name,
+              label: `${candidate.name} / ${candidate.release_name}`,
+            }))}
+            placeholder={loadingApplications ? "Loading applications…" : "Select application…"}
+            disabled={loadingApplications || applications.length === 0}
           />
         </Field>
         <Field label="JSON Schema definition" error={attempted || schemaError ? schemaError : null}>
@@ -191,11 +245,13 @@ export function SchemaRegistry() {
   const toast = useToast();
   const [schemas, setSchemas] = useState<ConfigurationSchema[]>([]);
   const [loading, setLoading] = useState(true);
-  const [filterDraft, setFilterDraft] = useState("");
-  const [filter, setFilter] = useState("");
+  const [applicationDraft, setApplicationDraft] = useState("");
+  const [releaseDraft, setReleaseDraft] = useState("");
+  const [applicationFilter, setApplicationFilter] = useState("");
+  const [releaseFilter, setReleaseFilter] = useState("");
   const [registerOpen, setRegisterOpen] = useState(false);
   const [selectedSchema, setSelectedSchema] = useState<ConfigurationSchema | null>(null);
-  const paging = useCursorPagination(filter);
+  const paging = useCursorPagination(`${applicationFilter}/${releaseFilter}`);
   const controllerRef = useRef<AbortController | null>(null);
   const generation = useRef(0);
 
@@ -206,9 +262,12 @@ export function SchemaRegistry() {
     const currentGeneration = ++generation.current;
     setLoading(true);
     try {
-      const page = await api.listSchemas(filter || undefined, paging.pageToken || undefined, {
-        signal: controller.signal,
-      });
+      const page = await api.listSchemas(
+        applicationFilter || undefined,
+        applicationFilter ? releaseFilter || undefined : undefined,
+        paging.pageToken || undefined,
+        { signal: controller.signal },
+      );
       if (generation.current !== currentGeneration) return;
       setSchemas(page.schemas ?? []);
       paging.setNextToken(page.next_page_token ?? "");
@@ -222,7 +281,7 @@ export function SchemaRegistry() {
         setLoading(false);
       }
     }
-  }, [filter, paging.pageToken, paging.setNextToken, toast]);
+  }, [applicationFilter, releaseFilter, paging.pageToken, paging.setNextToken, toast]);
 
   useEffect(() => {
     void loadSchemas();
@@ -231,7 +290,9 @@ export function SchemaRegistry() {
 
   function applyFilter(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    setFilter(filterDraft.trim());
+    const application = applicationDraft.trim();
+    setApplicationFilter(application);
+    setReleaseFilter(application ? releaseDraft.trim() : "");
   }
 
   return (
@@ -239,7 +300,9 @@ export function SchemaRegistry() {
       <div className="section-toolbar">
         <div>
           <h2 className="section-title">Schema registry</h2>
-          <p className="text-sm faint">Global, immutable JSON Schema versions used by releases.</p>
+          <p className="text-sm faint">
+            Immutable JSON Schema versions owned by application release streams.
+          </p>
         </div>
         <div className="row-wrap">
           <Button variant="outline" loading={loading} onClick={() => void loadSchemas()}>
@@ -254,24 +317,49 @@ export function SchemaRegistry() {
       </div>
 
       <form className="filters schema-filters" onSubmit={applyFilter}>
-        <Field label="Exact schema ID">
+        <Field label="Application">
           <Input
             className="font-mono"
-            value={filterDraft}
-            onChange={(event) => setFilterDraft(event.target.value)}
-            placeholder="go-common/runtime"
+            value={applicationDraft}
+            onChange={(event) => {
+              const value = event.target.value;
+              setApplicationDraft(value);
+              if (!value.trim()) setReleaseDraft("");
+            }}
+            placeholder="go-common"
           />
         </Field>
-        <Button variant="outline" type="submit" disabled={loading || filterDraft.trim() === filter}>
+        <Field
+          label="Release name"
+          hint={applicationDraft.trim() ? undefined : "Choose an application first."}
+        >
+          <Input
+            className="font-mono"
+            value={releaseDraft}
+            onChange={(event) => setReleaseDraft(event.target.value)}
+            placeholder="runtime"
+            disabled={!applicationDraft.trim()}
+          />
+        </Field>
+        <Button
+          variant="outline"
+          type="submit"
+          disabled={
+            loading ||
+            (applicationDraft.trim() === applicationFilter && releaseDraft.trim() === releaseFilter)
+          }
+        >
           Apply filter
         </Button>
-        {filter ? (
+        {applicationFilter || releaseFilter ? (
           <Button
             variant="ghost"
             type="button"
             onClick={() => {
-              setFilterDraft("");
-              setFilter("");
+              setApplicationDraft("");
+              setReleaseDraft("");
+              setApplicationFilter("");
+              setReleaseFilter("");
             }}
           >
             Clear
@@ -287,7 +375,7 @@ export function SchemaRegistry() {
           title="No schemas found"
           actions={<Button onClick={() => setRegisterOpen(true)}>Register schema</Button>}
         >
-          Register a schema or clear the exact-ID filter.
+          Register a schema or clear the application/release filters.
         </EmptyState>
       ) : (
         <div className="table-wrap card-table">
@@ -303,9 +391,9 @@ export function SchemaRegistry() {
             </thead>
             <tbody>
               {schemas.map((schema) => (
-                <tr key={`${schema.id}@${schema.version}`}>
+                <tr key={schemaLabel(schema)}>
                   <td className="mono" data-label="Schema">
-                    {schema.id}@{schema.version}
+                    {schemaLabel(schema)}
                   </td>
                   <td className="mono" data-label="Digest">
                     {schema.digest.slice(0, 16)}…
@@ -345,11 +433,15 @@ export function SchemaRegistry() {
         onClose={() => setRegisterOpen(false)}
         onCreated={(schema) => {
           setSelectedSchema(schema);
-          // An exact-ID filter for another schema would hide the new one;
-          // retarget it rather than leave the registration invisible.
-          if (filter && filter !== schema.id) {
-            setFilterDraft(schema.id);
-            setFilter(schema.id);
+          // Retarget filters rather than leave the new registration invisible.
+          if (
+            (applicationFilter && applicationFilter !== schema.application) ||
+            (releaseFilter && releaseFilter !== schema.release_name)
+          ) {
+            setApplicationDraft(schema.application);
+            setReleaseDraft(schema.release_name);
+            setApplicationFilter(schema.application);
+            setReleaseFilter(schema.release_name);
           } else if (paging.page === 1) void loadSchemas();
           else paging.reset();
         }}

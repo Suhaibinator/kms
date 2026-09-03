@@ -9,6 +9,7 @@ import ApplicationsPage from "@/pages/applications";
 import incidentJson from "./fixtures/backend/overview-incident.json";
 import readyJson from "./fixtures/backend/overview-ready.json";
 import setupJson from "./fixtures/backend/overview-setup.json";
+import { chooseSelectOption } from "./select-test-utils";
 
 const mocks = vi.hoisted(() => ({
   query: {} as Record<string, string>,
@@ -17,6 +18,8 @@ const mocks = vi.hoisted(() => ({
   replace: vi.fn(async () => true),
   listApplications: vi.fn(),
   applicationOverview: vi.fn(),
+  archiveApplication: vi.fn(),
+  unarchiveApplication: vi.fn(),
   createNamespace: vi.fn(),
   createSecret: vi.fn(),
   putApplicationParameter: vi.fn(),
@@ -45,6 +48,8 @@ vi.mock("@/lib/api", async (importOriginal) => {
       ...actual.api,
       listApplications: mocks.listApplications,
       applicationOverview: mocks.applicationOverview,
+      archiveApplication: mocks.archiveApplication,
+      unarchiveApplication: mocks.unarchiveApplication,
       createNamespace: mocks.createNamespace,
       createSecret: mocks.createSecret,
       putApplicationParameter: mocks.putApplicationParameter,
@@ -84,6 +89,8 @@ describe("ApplicationsPage", () => {
     mocks.replace.mockClear();
     mocks.listApplications.mockReset();
     mocks.applicationOverview.mockReset();
+    mocks.archiveApplication.mockReset();
+    mocks.unarchiveApplication.mockReset();
     mocks.createNamespace.mockReset();
     mocks.createSecret.mockReset();
     mocks.putApplicationParameter.mockReset();
@@ -113,7 +120,12 @@ describe("ApplicationsPage", () => {
       "href",
       `/applications?app=${ready.application.name}`,
     );
-    expect(mocks.listApplications).toHaveBeenCalledWith(50, undefined, expect.anything());
+    expect(mocks.listApplications).toHaveBeenCalledWith(
+      50,
+      undefined,
+      expect.anything(),
+      "exclude",
+    );
     expect(screen.getByText("1 application")).toBeVisible();
     fireEvent.click(screen.getByRole("button", { name: "New application" }));
     const modal = screen.getByRole("dialog");
@@ -160,9 +172,29 @@ describe("ApplicationsPage", () => {
     mocks.listApplications.mockResolvedValue({ applications: [orders], next_page_token: "" });
     fireEvent.click(screen.getByRole("button", { name: "Next page" }));
     await waitFor(() =>
-      expect(mocks.listApplications).toHaveBeenLastCalledWith(50, "page-2", expect.anything()),
+      expect(mocks.listApplications).toHaveBeenLastCalledWith(
+        50,
+        "page-2",
+        expect.anything(),
+        "exclude",
+      ),
     );
     expect(await screen.findByText("Page 2")).toBeVisible();
+  });
+
+  it("can explicitly list archived applications", async () => {
+    mocks.listApplications.mockResolvedValue({ applications: [], next_page_token: "" });
+    render(<ApplicationsPage />);
+    await screen.findByText("No applications yet");
+    await chooseSelectOption(screen.getByLabelText("Lifecycle"), "Archived applications");
+    await waitFor(() =>
+      expect(mocks.listApplications).toHaveBeenLastCalledWith(
+        50,
+        undefined,
+        expect.anything(),
+        "only",
+      ),
+    );
   });
 
   it("shows a skeleton instead of the list until the router has hydrated", () => {
@@ -209,6 +241,33 @@ describe("ApplicationsPage", () => {
     }
     fireEvent.click(within(menu).getByRole("menuitem", { name: "Edit definition" }));
     expect(await screen.findByRole("dialog")).toHaveTextContent(/definition/i);
+  });
+
+  it("archives empty applications and restores archived applications", async () => {
+    const archived = clone(setup);
+    archived.application.archived_at_unix_ms = 1;
+    archived.application.archived_by = "admin";
+    mocks.query = { app: setup.application.name };
+    mocks.applicationOverview.mockResolvedValue(setup);
+    mocks.archiveApplication.mockResolvedValue({ application: archived.application });
+    const { rerender } = render(<ApplicationsPage />);
+    await screen.findByText("No environments");
+    let menu = await openMore();
+    fireEvent.click(within(menu).getByRole("menuitem", { name: "Archive application" }));
+    await waitFor(() =>
+      expect(mocks.archiveApplication).toHaveBeenCalledWith(setup.application.name),
+    );
+
+    mocks.applicationOverview.mockResolvedValue(archived);
+    mocks.unarchiveApplication.mockResolvedValue({ application: setup.application });
+    rerender(<ApplicationsPage key="archived" />);
+    expect(await screen.findByText(/archived and read-only/i)).toBeVisible();
+    expect(screen.getByRole("button", { name: "Quick change" })).toBeDisabled();
+    menu = await openMore();
+    fireEvent.click(within(menu).getByRole("menuitem", { name: "Unarchive application" }));
+    await waitFor(() =>
+      expect(mocks.unarchiveApplication).toHaveBeenCalledWith(setup.application.name),
+    );
   });
 
   it("opens the ship modal when ?ship= arrives while already on the application", async () => {
@@ -545,9 +604,7 @@ describe("ApplicationsPage", () => {
     fireEvent.click(within(definition).getByRole("button", { name: "Pin schema" }));
     const dialog = screen.getByRole("dialog");
     expect(within(dialog).getByText("Derive schema from contract")).toBeVisible();
-    expect(within(dialog).getByLabelText("Schema ID")).toHaveValue(
-      `${setup.application.name}-${setup.application.release_name}`,
-    );
+    expect(within(dialog).getByText(/gradethis\/runtime/)).toBeVisible();
     expect((within(dialog).getByLabelText("Schema JSON") as HTMLTextAreaElement).value).toContain(
       '"additionalProperties": false',
     );

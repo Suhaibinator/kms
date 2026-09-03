@@ -302,8 +302,8 @@ func TestComputeApplicationFindingsAndStatus(t *testing.T) {
 	env := func(status string, findings ...domain.Finding) domain.EnvironmentOverview {
 		return domain.EnvironmentOverview{Namespace: domain.Namespace{NamespaceRef: domain.NamespaceRef{Env: "dev", App: app.Name}}, Status: status, Findings: findings}
 	}
-	schema := &domain.ConfigurationSchema{ID: "runtime", Version: 1, Schema: `{"type":"object","properties":{"database":{"type":"object"},"rate_limits":{"type":"integer"}},"required":["database","rate_limits"],"additionalProperties":false}`}
-	app.SchemaID, app.SchemaVersion = "runtime", 1
+	schema := &domain.ConfigurationSchema{Application: app.Name, ReleaseName: app.ReleaseName, Version: 1, Schema: `{"type":"object","properties":{"database":{"type":"object"},"rate_limits":{"type":"integer"}},"required":["database","rate_limits"],"additionalProperties":false}`}
+	app.SchemaVersion = 1
 
 	status, findings := computeApplicationFindings(applicationReadinessInput{App: app, Environments: nil, Schema: schema})
 	if status != domain.AppStatusSetup {
@@ -340,11 +340,11 @@ func TestComputeApplicationFindingsAndStatus(t *testing.T) {
 		t.Fatalf("missing insecure_listener: %v", findingCodes(findings))
 	}
 	status, findings = computeApplicationFindings(applicationReadinessInput{App: app, SchemaMissing: true, Environments: []domain.EnvironmentOverview{env(domain.EnvStatusReady)}})
-	if f, ok := hasFinding(findings, domain.FindingSchemaMissing); status != domain.AppStatusBlocked || !ok || f.Params["schema_id"] != "runtime" {
+	if f, ok := hasFinding(findings, domain.FindingSchemaMissing); status != domain.AppStatusBlocked || !ok || f.Params["application"] != app.Name || f.Params["release_name"] != app.ReleaseName {
 		t.Fatalf("schema missing = %s %+v", status, findings)
 	}
 	unpinned := app
-	unpinned.SchemaID, unpinned.SchemaVersion = "", 0
+	unpinned.SchemaVersion = 0
 	if _, findings = computeApplicationFindings(applicationReadinessInput{App: unpinned, Environments: []domain.EnvironmentOverview{env(domain.EnvStatusReady)}}); len(findings) != 1 || findings[0].Code != domain.FindingSchemaUnpinned {
 		t.Fatalf("unpinned findings = %v", findingCodes(findings))
 	}

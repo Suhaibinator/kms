@@ -27,7 +27,6 @@ func TestReadReleaseDefinitionIsStrictAndBuildsExactSelectors(t *testing.T) {
 	definition := `
 namespace: prod/app
 name: runtime
-schema_id: app/runtime
 schema_version: 2
 entries:
   - alias: settings

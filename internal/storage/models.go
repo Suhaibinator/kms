@@ -29,16 +29,17 @@ func (keyMetadataModel) TableName() string { return "key_metadata" }
 // applicationModel -> applications. ContractJSON is a canonical JSON array of
 // domain.ApplicationContractField values.
 type applicationModel struct {
-	ID            int64  `gorm:"column:id;primaryKey;autoIncrement"`
-	Name          string `gorm:"column:name;not null;uniqueIndex"`
-	Description   string `gorm:"column:description;not null;default:''"`
-	ReleaseName   string `gorm:"column:release_name;not null;default:runtime"`
-	SchemaID      string `gorm:"column:schema_id;not null;default:''"`
-	SchemaVersion int64  `gorm:"column:schema_version;not null;default:0"`
-	ContractJSON  string `gorm:"column:contract_json;not null;default:'[]'"`
-	CreatedBy     string `gorm:"column:created_by;not null;default:''"`
-	CreatedAt     string `gorm:"column:created_at;not null"`
-	UpdatedAt     string `gorm:"column:updated_at;not null"`
+	ID            int64   `gorm:"column:id;primaryKey;autoIncrement"`
+	Name          string  `gorm:"column:name;not null;uniqueIndex"`
+	Description   string  `gorm:"column:description;not null;default:''"`
+	ReleaseName   string  `gorm:"column:release_name;not null;default:runtime"`
+	SchemaVersion int64   `gorm:"column:schema_version;not null;default:0"`
+	ContractJSON  string  `gorm:"column:contract_json;not null;default:'[]'"`
+	CreatedBy     string  `gorm:"column:created_by;not null;default:''"`
+	CreatedAt     string  `gorm:"column:created_at;not null"`
+	UpdatedAt     string  `gorm:"column:updated_at;not null"`
+	ArchivedAt    *string `gorm:"column:archived_at"`
+	ArchivedBy    string  `gorm:"column:archived_by;not null;default:''"`
 }
 
 func (applicationModel) TableName() string { return "applications" }
@@ -255,7 +256,6 @@ type configurationReleaseModel struct {
 	Namespace     namespaceModel `gorm:"foreignKey:NamespaceID;references:ID"`
 	Name          string         `gorm:"column:name;not null;uniqueIndex:idx_release_ns_name_ver,priority:2"`
 	VersionNumber int64          `gorm:"column:version_number;not null;uniqueIndex:idx_release_ns_name_ver,priority:3"`
-	SchemaID      string         `gorm:"column:schema_id;not null;default:''"`
 	SchemaVersion int64          `gorm:"column:schema_version;not null;default:0"`
 	Digest        string         `gorm:"column:digest;not null"`
 	MetadataJSON  string         `gorm:"column:metadata_json;not null;default:{}"`
@@ -318,13 +318,15 @@ func (configurationReleaseActivationModel) TableName() string {
 }
 
 type configurationSchemaModel struct {
-	ID            string `gorm:"column:id;not null;primaryKey"`
-	VersionNumber int64  `gorm:"column:version_number;not null;primaryKey;autoIncrement:false"`
-	SchemaJSON    string `gorm:"column:schema_json;not null"`
-	Digest        string `gorm:"column:digest;not null"`
-	MetadataJSON  string `gorm:"column:metadata_json;not null;default:{}"`
-	CreatedBy     string `gorm:"column:created_by;not null;default:''"`
-	CreatedAt     string `gorm:"column:created_at;not null"`
+	ApplicationName string           `gorm:"column:application_name;not null;primaryKey;uniqueIndex:idx_schema_digest,priority:1"`
+	Application     applicationModel `gorm:"foreignKey:ApplicationName;references:Name;constraint:OnDelete:RESTRICT"`
+	ReleaseName     string           `gorm:"column:release_name;not null;primaryKey;uniqueIndex:idx_schema_digest,priority:2"`
+	VersionNumber   int64            `gorm:"column:version_number;not null;primaryKey;autoIncrement:false"`
+	SchemaJSON      string           `gorm:"column:schema_json;not null"`
+	Digest          string           `gorm:"column:digest;not null;uniqueIndex:idx_schema_digest,priority:3"`
+	MetadataJSON    string           `gorm:"column:metadata_json;not null;default:{}"`
+	CreatedBy       string           `gorm:"column:created_by;not null;default:''"`
+	CreatedAt       string           `gorm:"column:created_at;not null"`
 }
 
 func (configurationSchemaModel) TableName() string { return "configuration_schemas" }
@@ -450,18 +452,22 @@ func toApplication(m applicationModel) domain.Application {
 	if err := json.Unmarshal([]byte(m.ContractJSON), &contract); err != nil {
 		contract = nil
 	}
-	return domain.Application{
+	out := domain.Application{
 		ID:            m.ID,
 		Name:          m.Name,
 		Description:   m.Description,
 		ReleaseName:   m.ReleaseName,
-		SchemaID:      m.SchemaID,
 		SchemaVersion: uint64(m.SchemaVersion),
 		Contract:      contract,
 		CreatedBy:     m.CreatedBy,
 		CreatedAt:     parseTime(m.CreatedAt),
 		UpdatedAt:     parseTime(m.UpdatedAt),
+		ArchivedBy:    m.ArchivedBy,
 	}
+	if m.ArchivedAt != nil {
+		out.ArchivedAt = parseTime(*m.ArchivedAt)
+	}
+	return out
 }
 
 func toIdentityCert(m identityCertModel) domain.IdentityCert {

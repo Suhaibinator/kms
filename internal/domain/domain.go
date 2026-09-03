@@ -231,12 +231,13 @@ type Application struct {
 	Name             string
 	Description      string
 	ReleaseName      string
-	SchemaID         string
 	SchemaVersion    uint64
 	Contract         []ApplicationContractField
 	CreatedBy        string
 	CreatedAt        time.Time
 	UpdatedAt        time.Time
+	ArchivedAt       time.Time
+	ArchivedBy       string
 	EnvironmentCount uint64
 }
 

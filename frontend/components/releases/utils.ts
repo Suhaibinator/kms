@@ -65,8 +65,7 @@ export function parseReleaseDefinition(definition: string): CreateReleaseRequest
   return {
     namespace: parsed.namespace,
     name: parsed.name,
-    schema_id: parsed.schema_id || undefined,
-    schema_version: parsed.schema_id ? Number(parsed.schema_version) : undefined,
+    schema_version: parsed.schema_version ? Number(parsed.schema_version) : undefined,
     entries: parsed.entries,
     metadata_json: parsed.metadata_json ?? "{}",
   };

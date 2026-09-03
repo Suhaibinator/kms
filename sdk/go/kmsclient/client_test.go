@@ -133,6 +133,7 @@ func TestErrorMapping(t *testing.T) {
 		code codes.Code
 		want error
 	}{
+		{codes.AlreadyExists, ErrAlreadyExists},
 		{codes.NotFound, ErrNotFound},
 		{codes.PermissionDenied, ErrPermissionDenied},
 		{codes.Unauthenticated, ErrUnauthenticated},

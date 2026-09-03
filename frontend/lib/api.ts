@@ -342,24 +342,27 @@ export const api = {
     pageSize?: number,
     pageToken?: string,
     request?: ApiRequestOptions,
+    archived?: "exclude" | "include" | "only",
   ): Promise<{ applications: Application[]; next_page_token: string }> {
-    return apiFetch(`/applications${qs({ page_size: pageSize, page_token: pageToken })}`, request);
+    return apiFetch(
+      `/applications${qs({ page_size: pageSize, page_token: pageToken, archived })}`,
+      request,
+    );
   },
   createApplication(req: {
     name: string;
     description: string;
     release_name: string;
-    schema_id: string;
     schema_version: number;
     contract: ApplicationContractField[];
-  }): Promise<{ application: Application }> {
+    schema?: { schema_json: string; metadata_json?: string };
+  }): Promise<{ application: Application; schema?: ConfigurationSchema }> {
     return apiFetch("/applications", { method: "POST", body: req });
   },
   updateApplication(req: {
     name: string;
     description: string;
     release_name: string;
-    schema_id: string;
     schema_version: number;
     contract: ApplicationContractField[];
   }): Promise<{ application: Application }> {
@@ -370,6 +373,12 @@ export const api = {
   },
   getApplication(name: string, request?: ApiRequestOptions): Promise<{ application: Application }> {
     return apiFetch(`/applications/get${qs({ name })}`, request);
+  },
+  archiveApplication(name: string): Promise<{ application: Application }> {
+    return apiFetch("/applications/archive", { method: "POST", body: { name } });
+  },
+  unarchiveApplication(name: string): Promise<{ application: Application }> {
+    return apiFetch("/applications/unarchive", { method: "POST", body: { name } });
   },
   // The application page's read model: status, findings and one
   // EnvironmentOverview per environment (or only `envs` when given).
@@ -754,20 +763,24 @@ export const api = {
     );
   },
   listSchemas(
-    id?: string,
+    application?: string,
+    releaseName?: string,
     pageToken?: string,
     request?: ApiRequestOptions,
   ): Promise<{ schemas: ConfigurationSchema[]; next_page_token: string }> {
-    return apiFetch(`/configuration-schemas${qs({ id, page_token: pageToken })}`, request);
+    return apiFetch(
+      `/configuration-schemas${qs({ application, release_name: releaseName, page_token: pageToken })}`,
+      request,
+    );
   },
   createSchema(
-    id: string,
+    application: string,
     schemaJson: string,
     metadataJson = "{}",
   ): Promise<{ schema: ConfigurationSchema }> {
     return apiFetch("/configuration-schemas", {
       method: "POST",
-      body: { id, schema_json: schemaJson, metadata_json: metadataJson },
+      body: { application, schema_json: schemaJson, metadata_json: metadataJson },
     });
   },
 

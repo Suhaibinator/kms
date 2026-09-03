@@ -114,6 +114,7 @@ type Client struct {
 	secrets  kmsv1.SecretServiceClient
 	watch    kmsv1.WatchServiceClient
 	releases kmsv1.ConfigurationReleaseServiceClient
+	schemas  kmsv1.ConfigurationSchemaServiceClient
 	admin    kmsv1.AdminServiceClient
 
 	// cfgNamespace is the parsed Config.Namespace (zero when unset). nsMu guards
@@ -211,6 +212,7 @@ func NewClient(cfg Config) (*Client, error) {
 		secrets:      kmsv1.NewSecretServiceClient(cc),
 		watch:        kmsv1.NewWatchServiceClient(cc),
 		releases:     kmsv1.NewConfigurationReleaseServiceClient(cc),
+		schemas:      kmsv1.NewConfigurationSchemaServiceClient(cc),
 		admin:        kmsv1.NewAdminServiceClient(cc),
 		cfgNamespace: nsRef,
 		cache:        newCache(cfg.CacheTTL),

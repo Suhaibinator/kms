@@ -534,10 +534,10 @@ func computeApplicationFindings(in applicationReadinessInput) (string, []domain.
 		findings = append(findings, finding(domain.FindingContractEmpty, domain.FindingWarning, appScope, nil))
 	}
 	switch {
-	case in.App.SchemaID == "":
+	case in.App.SchemaVersion == 0:
 		findings = append(findings, finding(domain.FindingSchemaUnpinned, domain.FindingInfo, appScope, nil))
 	case in.SchemaMissing || in.Schema == nil:
-		findings = append(findings, finding(domain.FindingSchemaMissing, domain.FindingBlocking, appScope, map[string]any{"schema_id": in.App.SchemaID, "schema_version": in.App.SchemaVersion}))
+		findings = append(findings, finding(domain.FindingSchemaMissing, domain.FindingBlocking, appScope, map[string]any{"application": in.App.Name, "release_name": in.App.ReleaseName, "schema_version": in.App.SchemaVersion}))
 	default:
 		findings = append(findings, contractSchemaAlignment(in.App.Contract, in.Schema.Schema)...)
 	}

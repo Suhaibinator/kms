@@ -10,7 +10,8 @@ export interface ParameterSchema {
   /** The renderable sub-schema for this key, else null. */
   schema: JsonSchema | null;
   alias: string;
-  schemaId: string;
+  application: string;
+  releaseName: string;
   schemaVersion: number;
 }
 
@@ -18,7 +19,8 @@ const NONE: ParameterSchema = {
   status: "none",
   schema: null,
   alias: "",
-  schemaId: "",
+  application: "",
+  releaseName: "",
   schemaVersion: 0,
 };
 const IDLE: ParameterSchema = { ...NONE, status: "idle" };
@@ -45,7 +47,8 @@ export function schemaForKey(overview: ApplicationOverview | null, key: string):
     status: "ready",
     schema: sub,
     alias,
-    schemaId: overview.application.schema_id,
+    application: overview.application.name,
+    releaseName: overview.application.release_name,
     schemaVersion: overview.application.schema_version,
   };
 }

@@ -63,8 +63,8 @@ func (s *SQLStore) createConfigurationRelease(ctx context.Context, release domai
 		now := nowUTC()
 		m := configurationReleaseModel{
 			NamespaceID: nsID, Name: release.Name, VersionNumber: maxVersion + 1,
-			SchemaID: release.SchemaID, SchemaVersion: int64(release.SchemaVersion),
-			Digest: release.Digest, MetadataJSON: zeroOr(release.Metadata, "{}"),
+			SchemaVersion: int64(release.SchemaVersion),
+			Digest:        release.Digest, MetadataJSON: zeroOr(release.Metadata, "{}"),
 			CreatedBy: release.CreatedBy, CreatedAt: fmtTime(now),
 		}
 		if err := tx.Omit(clause.Associations).Create(&m).Error; err != nil {
@@ -153,7 +153,7 @@ func releaseFromModelAndEntries(ns domain.NamespaceRef, m configurationReleaseMo
 		})
 	}
 	return domain.ConfigurationRelease{
-		Namespace: ns, Name: m.Name, Version: uint64(m.VersionNumber), SchemaID: m.SchemaID,
+		Namespace: ns, Name: m.Name, Version: uint64(m.VersionNumber),
 		SchemaVersion: uint64(m.SchemaVersion), Entries: entries, Digest: m.Digest,
 		Metadata: m.MetadataJSON, CreatedBy: m.CreatedBy, CreatedAt: parseTime(m.CreatedAt),
 	}
@@ -519,27 +519,56 @@ func releasePinValidationError(alias, code, message string) error {
 func (s *SQLStore) CreateConfigurationSchema(ctx context.Context, schema domain.ConfigurationSchema) (domain.ConfigurationSchema, error) {
 	var out domain.ConfigurationSchema
 	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		var max int64
-		if err := tx.Model(&configurationSchemaModel{}).Where("id = ?", schema.ID).Select("COALESCE(MAX(version_number), 0)").Scan(&max).Error; err != nil {
-			return err
-		}
-		now := nowUTC()
-		m := configurationSchemaModel{ID: schema.ID, VersionNumber: max + 1, SchemaJSON: schema.Schema, Digest: schema.Digest, MetadataJSON: zeroOr(schema.Metadata, "{}"), CreatedBy: schema.CreatedBy, CreatedAt: fmtTime(now)}
-		if err := tx.Create(&m).Error; err != nil {
-			return err
-		}
-		schema.Version = uint64(m.VersionNumber)
-		schema.Metadata = m.MetadataJSON
-		schema.CreatedAt = now
-		out = schema
-		return nil
+		var err error
+		out, err = createConfigurationSchemaTx(tx, schema)
+		return err
 	})
 	return out, err
 }
 
-func (s *SQLStore) GetConfigurationSchema(ctx context.Context, id string, version uint64) (domain.ConfigurationSchema, error) {
+func createConfigurationSchemaTx(tx *gorm.DB, schema domain.ConfigurationSchema) (domain.ConfigurationSchema, error) {
+	var app applicationModel
+	if err := tx.Where("name = ?", schema.Application).First(&app).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return domain.ConfigurationSchema{}, domain.Errorf(domain.ErrNotFound, "application %s", schema.Application)
+		}
+		return domain.ConfigurationSchema{}, err
+	}
+	if app.ArchivedAt != nil {
+		return domain.ConfigurationSchema{}, domain.Errorf(domain.ErrFailedPrecondition, "application %s is archived", schema.Application)
+	}
+	if schema.ReleaseName != app.ReleaseName {
+		return domain.ConfigurationSchema{}, domain.Errorf(domain.ErrFailedPrecondition,
+			"application %s owns schemas under release %q", schema.Application, app.ReleaseName)
+	}
+	var max int64
+	if err := tx.Model(&configurationSchemaModel{}).
+		Where("application_name = ? AND release_name = ?", schema.Application, schema.ReleaseName).
+		Select("COALESCE(MAX(version_number), 0)").Scan(&max).Error; err != nil {
+		return domain.ConfigurationSchema{}, err
+	}
+	now := nowUTC()
+	m := configurationSchemaModel{
+		ApplicationName: schema.Application, ReleaseName: schema.ReleaseName,
+		VersionNumber: max + 1, SchemaJSON: schema.Schema, Digest: schema.Digest,
+		MetadataJSON: zeroOr(schema.Metadata, "{}"), CreatedBy: schema.CreatedBy, CreatedAt: fmtTime(now),
+	}
+	if err := tx.Omit(clause.Associations).Create(&m).Error; err != nil {
+		if isUniqueErr(err) {
+			return domain.ConfigurationSchema{}, domain.Errorf(domain.ErrAlreadyExists,
+				"configuration schema %s/%s with this digest", schema.Application, schema.ReleaseName)
+		}
+		return domain.ConfigurationSchema{}, err
+	}
+	schema.Version = uint64(m.VersionNumber)
+	schema.Metadata = m.MetadataJSON
+	schema.CreatedAt = now
+	return schema, nil
+}
+
+func (s *SQLStore) GetConfigurationSchema(ctx context.Context, application, releaseName string, version uint64) (domain.ConfigurationSchema, error) {
 	var m configurationSchemaModel
-	q := s.db.WithContext(ctx).Where("id = ?", id)
+	q := s.db.WithContext(ctx).Where("application_name = ? AND release_name = ?", application, releaseName)
 	if version == 0 {
 		q = q.Order("version_number DESC")
 	} else {
@@ -547,7 +576,7 @@ func (s *SQLStore) GetConfigurationSchema(ctx context.Context, id string, versio
 	}
 	if err := q.First(&m).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return domain.ConfigurationSchema{}, domain.Errorf(domain.ErrNotFound, "configuration schema %s version %d", id, version)
+			return domain.ConfigurationSchema{}, domain.Errorf(domain.ErrNotFound, "configuration schema %s/%s version %d", application, releaseName, version)
 		}
 		return domain.ConfigurationSchema{}, err
 	}
@@ -555,31 +584,38 @@ func (s *SQLStore) GetConfigurationSchema(ctx context.Context, id string, versio
 }
 
 func schemaFromModel(m configurationSchemaModel) domain.ConfigurationSchema {
-	return domain.ConfigurationSchema{ID: m.ID, Version: uint64(m.VersionNumber), Schema: m.SchemaJSON, Digest: m.Digest, Metadata: m.MetadataJSON, CreatedBy: m.CreatedBy, CreatedAt: parseTime(m.CreatedAt)}
+	return domain.ConfigurationSchema{Application: m.ApplicationName, ReleaseName: m.ReleaseName, Version: uint64(m.VersionNumber), Schema: m.SchemaJSON, Digest: m.Digest, Metadata: m.MetadataJSON, CreatedBy: m.CreatedBy, CreatedAt: parseTime(m.CreatedAt)}
 }
 
-func (s *SQLStore) ListConfigurationSchemas(ctx context.Context, id string, page ListPage) ([]domain.ConfigurationSchema, string, error) {
+func (s *SQLStore) ListConfigurationSchemas(ctx context.Context, application, releaseName string, page ListPage) ([]domain.ConfigurationSchema, string, error) {
+	if application == "" && releaseName != "" {
+		return nil, "", domain.Errorf(domain.ErrInvalidArgument, "application is required when release_name is set")
+	}
 	limit := clampLimit(page.Limit)
 	cursor, err := decodeConfigurationSchemaCursor(page.Token)
 	if err != nil {
 		return nil, "", err
 	}
 	q := s.db.WithContext(ctx)
-	if id != "" {
-		q = q.Where("id = ?", id)
+	if application != "" {
+		q = q.Where("application_name = ?", application)
 	}
-	if cursor.ID != "" {
-		q = q.Where("id < ? OR (id = ? AND version_number < ?)", cursor.ID, cursor.ID, cursor.Version)
+	if releaseName != "" {
+		q = q.Where("release_name = ?", releaseName)
+	}
+	if cursor.Application != "" {
+		q = q.Where("application_name < ? OR (application_name = ? AND release_name < ?) OR (application_name = ? AND release_name = ? AND version_number < ?)",
+			cursor.Application, cursor.Application, cursor.ReleaseName, cursor.Application, cursor.ReleaseName, cursor.Version)
 	}
 	var rows []configurationSchemaModel
-	if err := q.Order("id DESC, version_number DESC").Limit(limit + 1).Find(&rows).Error; err != nil {
+	if err := q.Order("application_name DESC, release_name DESC, version_number DESC").Limit(limit + 1).Find(&rows).Error; err != nil {
 		return nil, "", err
 	}
 	next := ""
 	if len(rows) > limit {
 		rows = rows[:limit]
 		last := rows[len(rows)-1]
-		next, err = encodeConfigurationSchemaCursor(configurationSchemaCursor{ID: last.ID, Version: last.VersionNumber})
+		next, err = encodeConfigurationSchemaCursor(configurationSchemaCursor{Application: last.ApplicationName, ReleaseName: last.ReleaseName, Version: last.VersionNumber})
 		if err != nil {
 			return nil, "", err
 		}
@@ -592,8 +628,9 @@ func (s *SQLStore) ListConfigurationSchemas(ctx context.Context, id string, page
 }
 
 type configurationSchemaCursor struct {
-	ID      string `json:"id"`
-	Version int64  `json:"version"`
+	Application string `json:"application"`
+	ReleaseName string `json:"release_name"`
+	Version     int64  `json:"version"`
 }
 
 func encodeConfigurationSchemaCursor(cursor configurationSchemaCursor) (string, error) {
@@ -610,7 +647,7 @@ func decodeConfigurationSchemaCursor(token string) (configurationSchemaCursor, e
 		return configurationSchemaCursor{}, err
 	}
 	var cursor configurationSchemaCursor
-	if err := json.Unmarshal([]byte(raw), &cursor); err != nil || cursor.ID == "" || cursor.Version <= 0 {
+	if err := json.Unmarshal([]byte(raw), &cursor); err != nil || cursor.Application == "" || cursor.ReleaseName == "" || cursor.Version <= 0 {
 		return configurationSchemaCursor{}, domain.Errorf(domain.ErrInvalidArgument, "invalid page token")
 	}
 	return cursor, nil

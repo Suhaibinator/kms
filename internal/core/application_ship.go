@@ -62,6 +62,9 @@ func (s *Service) ShipApplicationChange(ctx context.Context, pr Principal, in do
 	if err != nil {
 		return domain.ShipResult{}, err
 	}
+	if !app.ArchivedAt.IsZero() {
+		return domain.ShipResult{}, domain.Errorf(domain.ErrFailedPrecondition, "application %s is archived", app.Name)
+	}
 	if len(app.Contract) == 0 {
 		return domain.ShipResult{}, domain.Errorf(domain.ErrFailedPrecondition, "application %s has no contract; define one before shipping", app.Name)
 	}
@@ -143,13 +146,13 @@ func (s *Service) ShipApplicationChange(ctx context.Context, pr Principal, in do
 		}
 	}
 	candidate := domain.ConfigurationRelease{
-		Namespace: ns, Name: app.ReleaseName, SchemaID: app.SchemaID, SchemaVersion: app.SchemaVersion,
+		Namespace: ns, Name: app.ReleaseName, SchemaVersion: app.SchemaVersion,
 		Entries:  append(append([]domain.ConfigurationReleaseEntry(nil), resolved...), plan.predicted...),
 		Metadata: metadata, CreatedBy: pr.Identity.Name,
 	}
 	sort.Slice(candidate.Entries, func(i, j int) bool { return candidate.Entries[i].Alias < candidate.Entries[j].Alias })
 	if len(validation) == 0 {
-		if err := s.validateApplicationReleaseContract(ctx, app.Name, app.ReleaseName, app.SchemaID, app.SchemaVersion, candidate.Entries, false); err != nil {
+		if err := s.validateApplicationReleaseContract(ctx, app.Name, app.ReleaseName, app.SchemaVersion, candidate.Entries, false); err != nil {
 			if !errors.Is(err, domain.ErrFailedPrecondition) {
 				return domain.ShipResult{}, err
 			}
@@ -166,7 +169,7 @@ func (s *Service) ShipApplicationChange(ctx context.Context, pr Principal, in do
 	}
 	result := domain.ShipResult{
 		Preview: domain.ShipPreview{
-			BaseVersion: activeVersion, ReleaseName: app.ReleaseName, SchemaID: app.SchemaID, SchemaVersion: app.SchemaVersion,
+			BaseVersion: activeVersion, ReleaseName: app.ReleaseName, SchemaVersion: app.SchemaVersion,
 			Entries: plan.entries, Validation: validation, Warnings: plan.warnings,
 		},
 		Parameters: []domain.ShipParameterWrite{},
@@ -212,7 +215,7 @@ func (s *Service) ShipApplicationChange(ctx context.Context, pr Principal, in do
 		}
 	}
 	release, err := s.CreateConfigurationRelease(ctx, pr, domain.CreateConfigurationReleaseInput{
-		Namespace: ns, Name: app.ReleaseName, SchemaID: app.SchemaID, SchemaVersion: app.SchemaVersion, Entries: selectors, Metadata: metadata,
+		Namespace: ns, Name: app.ReleaseName, SchemaVersion: app.SchemaVersion, Entries: selectors, Metadata: metadata,
 		RequireFirst: len(changes) == 0,
 	})
 	if err != nil {

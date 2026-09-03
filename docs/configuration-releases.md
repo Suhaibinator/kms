@@ -66,17 +66,21 @@ bytes but persisted only as a redaction marker.
 ## Optional schema registry
 
 `ConfigurationSchemaService` provides immutable `CreateSchema`, `GetSchema`,
-and `ListSchemas` operations. Schema IDs are global and each successful create
-allocates the next version. Registration is admin-managed and accepts at most
-1 MiB of JSON. KMS compiles schemas with `jsonschema/v6` as Draft 2020-12;
-an explicit `$schema` must name that dialect.
+and `ListSchemas` operations. A schema belongs to exactly one application and
+that application's immutable release name. Each successful create allocates
+the next version in the `(application, release_name)` lineage. Create accepts
+the application name and KMS derives its release name; there is no free-form
+schema ID. Registration is admin-managed and accepts at most 1 MiB of JSON.
+KMS compiles schemas with `jsonschema/v6` as Draft 2020-12; an explicit
+`$schema` must name that dialect.
 
 Schema registration compacts JSON before storing it and computing its digest.
 The generator uses the same compact representation, so whitespace and file
 formatting cannot make a generated defaults artifact disagree with the
 registered schema.
 
-A release either pins both `schema_id` and `schema_version`, or neither. During
+A release pins only `schema_version`; its application and release name already
+identify the owning schema lineage. During
 validation, KMS parses each parameter according to its declared content type
 and builds one object keyed by release alias. JSON parameters become JSON
 values; `integer`, `float`, and `boolean` become JSON scalars, while `string`
@@ -99,6 +103,10 @@ annotation behavior.
 
 Validation codes are `not_found`, `permission_denied`, `unreadable`,
 `content_type`, `malformed_json`, `schema_violation`, and `digest_mismatch`.
+
+Profiles do not select schemas. A profile chooses source-owned default values
+and normally maps to an environment; every profile for an application shares
+the same application/release schema lineage.
 
 ## gRPC contract
 

@@ -49,7 +49,6 @@ type ReleaseManifest struct {
 	name               string
 	version            uint64
 	activationRevision uint64
-	schemaID           string
 	schemaVersion      uint64
 	digest             string
 	metadataJSON       string
@@ -60,7 +59,6 @@ func (m ReleaseManifest) Namespace() string          { return m.namespace }
 func (m ReleaseManifest) Name() string               { return m.name }
 func (m ReleaseManifest) Version() uint64            { return m.version }
 func (m ReleaseManifest) ActivationRevision() uint64 { return m.activationRevision }
-func (m ReleaseManifest) SchemaID() string           { return m.schemaID }
 func (m ReleaseManifest) SchemaVersion() uint64      { return m.schemaVersion }
 func (m ReleaseManifest) Digest() string             { return m.digest }
 func (m ReleaseManifest) MetadataJSON() string       { return m.metadataJSON }
@@ -103,7 +101,6 @@ type releaseSnapshotJSON struct {
 	Name               string                          `json:"name"`
 	Version            uint64                          `json:"version"`
 	ActivationRevision uint64                          `json:"activation_revision"`
-	SchemaID           string                          `json:"schema_id,omitempty"`
 	SchemaVersion      uint64                          `json:"schema_version,omitempty"`
 	Digest             string                          `json:"digest"`
 	Entries            map[string]ReleaseEntryMetadata `json:"entries"`
@@ -115,7 +112,6 @@ func (m ReleaseManifest) jsonProjection() releaseSnapshotJSON {
 		Name:               m.name,
 		Version:            m.version,
 		ActivationRevision: m.activationRevision,
-		SchemaID:           m.schemaID,
 		SchemaVersion:      m.schemaVersion,
 		Digest:             m.digest,
 		Entries:            m.entries,
@@ -130,7 +126,6 @@ type ReleaseSnapshot struct {
 	name               string
 	version            uint64
 	activationRevision uint64
-	schemaID           string
 	schemaVersion      uint64
 	digest             string
 	metadataJSON       string
@@ -143,7 +138,6 @@ func (s ReleaseSnapshot) Namespace() string          { return s.namespace }
 func (s ReleaseSnapshot) Name() string               { return s.name }
 func (s ReleaseSnapshot) Version() uint64            { return s.version }
 func (s ReleaseSnapshot) ActivationRevision() uint64 { return s.activationRevision }
-func (s ReleaseSnapshot) SchemaID() string           { return s.schemaID }
 func (s ReleaseSnapshot) SchemaVersion() uint64      { return s.schemaVersion }
 func (s ReleaseSnapshot) Digest() string             { return s.digest }
 func (s ReleaseSnapshot) MetadataJSON() string       { return s.metadataJSON }
@@ -220,7 +214,6 @@ func (s ReleaseSnapshot) jsonProjection() releaseSnapshotJSON {
 		Name:               s.name,
 		Version:            s.version,
 		ActivationRevision: s.activationRevision,
-		SchemaID:           s.schemaID,
 		SchemaVersion:      s.schemaVersion,
 		Digest:             s.digest,
 		Entries:            s.entries,

@@ -18,6 +18,12 @@ func TestConfigurationReleaseCoreLifecycleAndHistoricalAck(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = st.Close() }()
+	svc := New(st, nil, "test")
+	pr := adminPrincipal()
+	_, schema, err := svc.CreateApplicationWithSchema(ctx, pr, domain.Application{Name: "app", ReleaseName: "runtime"}, `{"type":"object","properties":{"settings":{"type":"integer","minimum":0}},"required":["settings"]}`, "{}")
+	if err != nil {
+		t.Fatal(err)
+	}
 	ns := domain.NamespaceRef{Env: "prod", App: "app"}
 	if _, err := st.CreateNamespace(ctx, domain.Namespace{NamespaceRef: ns, CreatedBy: "admin"}); err != nil {
 		t.Fatal(err)
@@ -26,14 +32,8 @@ func TestConfigurationReleaseCoreLifecycleAndHistoricalAck(t *testing.T) {
 	if _, _, err := st.PutParameter(ctx, ref, "7", "integer", "{}", "admin"); err != nil {
 		t.Fatal(err)
 	}
-	svc := New(st, nil, "test")
-	pr := adminPrincipal()
-	schema, err := svc.CreateConfigurationSchema(ctx, pr, "runtime", `{"type":"object","properties":{"settings":{"type":"integer","minimum":0}},"required":["settings"]}`, "{}")
-	if err != nil {
-		t.Fatal(err)
-	}
 	create := func() domain.ConfigurationRelease {
-		r, err := svc.CreateConfigurationRelease(ctx, pr, domain.CreateConfigurationReleaseInput{Namespace: ns, Name: "runtime", SchemaID: schema.ID, SchemaVersion: schema.Version, Entries: []domain.ReleaseEntrySelector{{Alias: "settings", Kind: domain.ReleaseEntryParameter, Ref: ref, Label: "current"}}})
+		r, err := svc.CreateConfigurationRelease(ctx, pr, domain.CreateConfigurationReleaseInput{Namespace: ns, Name: "runtime", SchemaVersion: schema.Version, Entries: []domain.ReleaseEntrySelector{{Alias: "settings", Kind: domain.ReleaseEntryParameter, Ref: ref, Label: "current"}}})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -56,7 +56,7 @@ func TestConfigurationReleaseCoreLifecycleAndHistoricalAck(t *testing.T) {
 		t.Fatal(err)
 	}
 	badRelease, err := svc.CreateConfigurationRelease(ctx, pr, domain.CreateConfigurationReleaseInput{
-		Namespace: ns, Name: "runtime", SchemaID: schema.ID, SchemaVersion: schema.Version,
+		Namespace: ns, Name: "runtime", SchemaVersion: schema.Version,
 		Entries: []domain.ReleaseEntrySelector{{Alias: "settings", Kind: domain.ReleaseEntryParameter, Ref: ref, Version: 2}},
 	})
 	if err != nil {
@@ -202,11 +202,56 @@ func TestConfigurationReleaseValidationPinsSourceNamespaceIncarnation(t *testing
 }
 
 func TestConfigurationSchemaErrorsAreSanitized(t *testing.T) {
-	svc := newTestService(newFakeStore())
-	pr := adminPrincipal()
-	_, err := svc.CreateConfigurationSchema(context.Background(), pr, "runtime", `{"type":"definitely-not-a-real-type","const":"do-not-echo"}`, "{}")
+	_, err := normalizeConfigurationSchema("app", "runtime", `{"type":"definitely-not-a-real-type","const":"do-not-echo"}`, "{}")
 	if err == nil || err.Error() != "invalid Draft 2020-12 JSON Schema: invalid argument" {
 		t.Fatalf("unexpected schema error %q", err)
+	}
+}
+
+func TestConfigurationSchemaStructuredCoordinates(t *testing.T) {
+	ctx := context.Background()
+	st, err := storage.Open(filepath.Join(t.TempDir(), "kms.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = st.Close() }()
+	svc := New(st, nil, "test")
+	pr := adminPrincipal()
+	if _, err := svc.CreateApplication(ctx, pr, domain.Application{Name: "payments", ReleaseName: "runtime"}); err != nil {
+		t.Fatal(err)
+	}
+	first, err := svc.CreateConfigurationSchema(ctx, pr, "payments", `{"type":"object"}`, "{}")
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := svc.CreateConfigurationSchema(ctx, pr, "payments", `{"type":"string"}`, "{}")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := svc.GetConfigurationSchema(ctx, pr, "payments", "runtime", second.Version)
+	if err != nil || got.Application != "payments" || got.ReleaseName != "runtime" || got.Version != 2 {
+		t.Fatalf("get schema = %+v err=%v", got, err)
+	}
+	rows, next, err := svc.ListConfigurationSchemas(ctx, pr, "payments", "runtime", storage.ListPage{Limit: 1})
+	if err != nil || len(rows) != 1 || rows[0].Version != second.Version || next == "" {
+		t.Fatalf("first schema page = %+v next=%q err=%v", rows, next, err)
+	}
+	rows, next, err = svc.ListConfigurationSchemas(ctx, pr, "payments", "runtime", storage.ListPage{Limit: 1, Token: next})
+	if err != nil || len(rows) != 1 || rows[0].Version != first.Version || next != "" {
+		t.Fatalf("second schema page = %+v next=%q err=%v", rows, next, err)
+	}
+	for name, call := range map[string]func() error{
+		"get missing application": func() error { _, err := svc.GetConfigurationSchema(ctx, pr, "", "runtime", 1); return err },
+		"get missing release":     func() error { _, err := svc.GetConfigurationSchema(ctx, pr, "payments", "", 1); return err },
+		"get missing version":     func() error { _, err := svc.GetConfigurationSchema(ctx, pr, "payments", "runtime", 0); return err },
+		"list release without application": func() error {
+			_, _, err := svc.ListConfigurationSchemas(ctx, pr, "", "runtime", storage.ListPage{})
+			return err
+		},
+	} {
+		if err := call(); !errors.Is(err, domain.ErrInvalidArgument) {
+			t.Errorf("%s error = %v, want InvalidArgument", name, err)
+		}
 	}
 }
 
@@ -303,7 +348,8 @@ func TestReleaseCandidateValidationIsDryRunSafe(t *testing.T) {
 	defer func() { _ = st.Close() }()
 	svc := New(st, nil, "test")
 	pr := adminPrincipal()
-	if _, err := svc.CreateApplication(ctx, pr, domain.Application{Name: "worker", ReleaseName: "runtime"}); err != nil {
+	_, schema, err := svc.CreateApplicationWithSchema(ctx, pr, domain.Application{Name: "worker", ReleaseName: "runtime"}, `{"type":"object","properties":{"settings":{"type":"integer","minimum":0}},"required":["settings"]}`, "{}")
+	if err != nil {
 		t.Fatal(err)
 	}
 	ns := domain.NamespaceRef{Env: "dev", App: "worker"}
@@ -312,10 +358,6 @@ func TestReleaseCandidateValidationIsDryRunSafe(t *testing.T) {
 	}
 	ref := domain.Ref{NS: ns, Key: "settings"}
 	if _, _, err := svc.PutParameter(ctx, pr, ref, "7", "integer", "{}"); err != nil {
-		t.Fatal(err)
-	}
-	schema, err := svc.CreateConfigurationSchema(ctx, pr, "runtime", `{"type":"object","properties":{"settings":{"type":"integer","minimum":0}},"required":["settings"]}`, "{}")
-	if err != nil {
 		t.Fatal(err)
 	}
 	rs, err := svc.releaseStore()
@@ -327,7 +369,7 @@ func TestReleaseCandidateValidationIsDryRunSafe(t *testing.T) {
 		t.Fatal(err)
 	}
 	input := domain.CreateConfigurationReleaseInput{
-		Namespace: ns, Name: "runtime", SchemaID: schema.ID, SchemaVersion: schema.Version, Metadata: "{}",
+		Namespace: ns, Name: "runtime", SchemaVersion: schema.Version, Metadata: "{}",
 		Entries: []domain.ReleaseEntrySelector{{Alias: "settings", Kind: domain.ReleaseEntryParameter, Ref: ref}},
 	}
 	candCtx, candidate, resolution, err := svc.resolveReleaseCandidate(authCtx, pr, rs, input, true)

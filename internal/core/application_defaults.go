@@ -44,10 +44,8 @@ type defaultsPlanDigestInput struct {
 	ArtifactDigest       string                             `json:"artifact_digest"`
 	NamespaceID          int64                              `json:"namespace_id"`
 	ReleaseName          string                             `json:"release_name"`
-	SchemaID             string                             `json:"schema_id"`
 	SchemaVersion        uint64                             `json:"schema_version"`
 	Contract             []domain.ApplicationContractField  `json:"contract"`
-	DesiredSchemaID      string                             `json:"desired_schema_id"`
 	DesiredSchemaVersion uint64                             `json:"desired_schema_version"`
 	DesiredContract      []domain.ApplicationContractField  `json:"desired_contract"`
 	UpdateDefinition     bool                               `json:"update_definition"`
@@ -145,6 +143,9 @@ func (s *Service) buildDefaultsPlan(ctx context.Context, in domain.DefaultsApply
 	if err != nil {
 		return defaultsPlan{}, err
 	}
+	if !app.ArchivedAt.IsZero() {
+		return defaultsPlan{}, domain.Errorf(domain.ErrFailedPrecondition, "application %s is archived", app.Name)
+	}
 	desiredApp := app
 	desiredContract := applicationContractFromArtifact(artifact.Contract)
 	contractChanged := !reflect.DeepEqual(desiredContract, app.Contract)
@@ -164,21 +165,22 @@ func (s *Service) buildDefaultsPlan(ctx context.Context, in domain.DefaultsApply
 	if err != nil {
 		return defaultsPlan{}, err
 	}
-	if app.SchemaID != "" {
-		schema, schemaErr := releaseStore.GetConfigurationSchema(ctx, app.SchemaID, app.SchemaVersion)
-		schemaMatches := schemaErr == nil && schema.Digest == artifact.SchemaSHA256
+	schemaMatches := false
+	if app.SchemaVersion != 0 {
+		schema, schemaErr := releaseStore.GetConfigurationSchema(ctx, app.Name, app.ReleaseName, app.SchemaVersion)
+		schemaMatches = schemaErr == nil && schema.Digest == artifact.SchemaSHA256
 		if schemaErr != nil && !errors.Is(schemaErr, domain.ErrNotFound) {
 			return defaultsPlan{}, schemaErr
 		}
-		if !schemaMatches {
-			matching, err := findConfigurationSchemaByDigest(ctx, releaseStore, app.SchemaID, artifact.SchemaSHA256)
-			if err != nil {
-				return defaultsPlan{}, err
-			}
-			desiredApp.SchemaVersion = matching.Version
-		}
 	}
-	definitionChanged := contractChanged || desiredApp.SchemaID != app.SchemaID || desiredApp.SchemaVersion != app.SchemaVersion
+	if !schemaMatches {
+		matching, err := findConfigurationSchemaByDigest(ctx, releaseStore, app.Name, app.ReleaseName, artifact.SchemaSHA256)
+		if err != nil {
+			return defaultsPlan{}, err
+		}
+		desiredApp.SchemaVersion = matching.Version
+	}
+	definitionChanged := contractChanged || desiredApp.SchemaVersion != app.SchemaVersion
 	environments, err := appStore.ListApplicationNamespaces(ctx, app.Name)
 	if err != nil {
 		return defaultsPlan{}, err
@@ -241,12 +243,12 @@ func (s *Service) buildDefaultsPlan(ctx context.Context, in domain.DefaultsApply
 	}
 	transaction := storage.DefaultsApplyTransaction{
 		Namespace: in.Namespace, NamespaceID: namespace.ID, ReleaseName: app.ReleaseName,
-		SchemaID: app.SchemaID, SchemaVersion: app.SchemaVersion,
-		SchemaDigest: artifact.SchemaSHA256, Contract: append([]domain.ApplicationContractField(nil), app.Contract...),
-		UpdateDefinition: definitionChanged && in.UpdateDefinition,
-		DesiredSchemaID:  desiredApp.SchemaID, DesiredSchemaVersion: desiredApp.SchemaVersion,
-		DesiredContract: append([]domain.ApplicationContractField(nil), desiredApp.Contract...),
-		ResolutionState: resolution, Resources: resources,
+		SchemaVersion: app.SchemaVersion,
+		SchemaDigest:  artifact.SchemaSHA256, Contract: append([]domain.ApplicationContractField(nil), app.Contract...),
+		UpdateDefinition:     definitionChanged && in.UpdateDefinition,
+		DesiredSchemaVersion: desiredApp.SchemaVersion,
+		DesiredContract:      append([]domain.ApplicationContractField(nil), desiredApp.Contract...),
+		ResolutionState:      resolution, Resources: resources,
 	}
 	digestEntries := make([]defaultsPlanDigestEntry, 0, len(artifact.Parameters))
 	blocked := 0
@@ -320,9 +322,9 @@ func (s *Service) buildDefaultsPlan(ctx context.Context, in domain.DefaultsApply
 	}
 	digestInput := defaultsPlanDigestInput{
 		ArtifactDigest: artifactDigest, NamespaceID: namespace.ID, ReleaseName: app.ReleaseName,
-		SchemaID: app.SchemaID, SchemaVersion: app.SchemaVersion, Contract: app.Contract,
-		DesiredSchemaID: desiredApp.SchemaID, DesiredSchemaVersion: desiredApp.SchemaVersion,
-		DesiredContract: desiredApp.Contract, UpdateDefinition: in.UpdateDefinition,
+		SchemaVersion: app.SchemaVersion, Contract: app.Contract,
+		DesiredSchemaVersion: desiredApp.SchemaVersion,
+		DesiredContract:      desiredApp.Contract, UpdateDefinition: in.UpdateDefinition,
 		Resolution: resolution, Resources: resources, Entries: digestEntries,
 		MissingSecrets: result.MissingSecrets, Overwrite: in.Overwrite,
 	}
@@ -342,10 +344,10 @@ func applicationContractFromArtifact(artifact []configstore.ContractEntry) []dom
 	return converted
 }
 
-func findConfigurationSchemaByDigest(ctx context.Context, store storage.ReleaseStore, id, digest string) (domain.ConfigurationSchema, error) {
+func findConfigurationSchemaByDigest(ctx context.Context, store storage.ReleaseStore, application, releaseName, digest string) (domain.ConfigurationSchema, error) {
 	page := storage.ListPage{Limit: 100}
 	for {
-		schemas, next, err := store.ListConfigurationSchemas(ctx, id, page)
+		schemas, next, err := store.ListConfigurationSchemas(ctx, application, releaseName, page)
 		if err != nil {
 			return domain.ConfigurationSchema{}, err
 		}
@@ -355,7 +357,7 @@ func findConfigurationSchemaByDigest(ctx context.Context, store storage.ReleaseS
 			}
 		}
 		if next == "" {
-			return domain.ConfigurationSchema{}, domain.Errorf(domain.ErrFailedPrecondition, "register the generated schema under %q before updating the application definition", id)
+			return domain.ConfigurationSchema{}, domain.Errorf(domain.ErrFailedPrecondition, "register the generated schema for %s/%s before updating the application definition", application, releaseName)
 		}
 		page.Token = next
 	}

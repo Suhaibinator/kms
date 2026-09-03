@@ -8,6 +8,7 @@ import (
 
 	"github.com/Suhaibinator/kms/internal/core"
 	"github.com/Suhaibinator/kms/internal/domain"
+	"github.com/Suhaibinator/kms/internal/storage"
 )
 
 // newAPIMux registers every JSON API route. Method-aware patterns give
@@ -21,6 +22,8 @@ func (s *server) newAPIMux() *http.ServeMux {
 	mux.HandleFunc("POST /api/v1/applications", s.handleCreateApplication)
 	mux.HandleFunc("PATCH /api/v1/applications", s.handleUpdateApplication)
 	mux.HandleFunc("DELETE /api/v1/applications", s.handleDeleteApplication)
+	mux.HandleFunc("POST /api/v1/applications/archive", s.handleArchiveApplication)
+	mux.HandleFunc("POST /api/v1/applications/unarchive", s.handleUnarchiveApplication)
 	mux.HandleFunc("GET /api/v1/applications/get", s.handleGetApplication)
 	mux.HandleFunc("GET /api/v1/applications/dashboard", s.handleApplicationDashboard)
 	mux.HandleFunc("GET /api/v1/applications/overview", s.handleApplicationOverview)
@@ -84,7 +87,18 @@ func (s *server) newAPIMux() *http.ServeMux {
 // --- applications ----------------------------------------------------------
 
 func (s *server) handleListApplications(w http.ResponseWriter, r *http.Request) {
-	items, next, err := s.svc.ListApplications(r.Context(), principalFrom(r.Context()), listPage(r))
+	archiveFilter := storage.ApplicationsActiveOnly
+	switch r.URL.Query().Get("archived") {
+	case "", "exclude":
+	case "include":
+		archiveFilter = storage.ApplicationsIncludeAll
+	case "only":
+		archiveFilter = storage.ApplicationsArchivedOnly
+	default:
+		s.writeError(w, r, domain.Errorf(domain.ErrInvalidArgument, "archived must be exclude, include, or only"))
+		return
+	}
+	items, next, err := s.svc.ListApplicationsFiltered(r.Context(), principalFrom(r.Context()), listPage(r), archiveFilter)
 	if err != nil {
 		s.writeError(w, r, err)
 		return
@@ -96,25 +110,44 @@ func (s *server) handleListApplications(w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, http.StatusOK, map[string]any{"applications": out, "next_page_token": next})
 }
 
-func decodeApplication(w http.ResponseWriter, r *http.Request) (domain.Application, error) {
-	var body struct {
-		Name          string                            `json:"name"`
-		Description   string                            `json:"description"`
-		ReleaseName   string                            `json:"release_name"`
-		SchemaID      string                            `json:"schema_id"`
-		SchemaVersion uint64                            `json:"schema_version"`
-		Contract      []domain.ApplicationContractField `json:"contract"`
-	}
+type applicationRequest struct {
+	Name          string                            `json:"name"`
+	Description   string                            `json:"description"`
+	ReleaseName   string                            `json:"release_name"`
+	SchemaVersion uint64                            `json:"schema_version"`
+	Contract      []domain.ApplicationContractField `json:"contract"`
+	Schema        *struct {
+		SchemaJSON   string `json:"schema_json"`
+		MetadataJSON string `json:"metadata_json"`
+	} `json:"schema"`
+}
+
+func decodeApplication(w http.ResponseWriter, r *http.Request) (applicationRequest, error) {
+	var body applicationRequest
 	if err := decodeJSON(w, r, &body); err != nil {
-		return domain.Application{}, err
+		return applicationRequest{}, err
 	}
-	return domain.Application{Name: body.Name, Description: body.Description, ReleaseName: body.ReleaseName, SchemaID: body.SchemaID, SchemaVersion: body.SchemaVersion, Contract: body.Contract}, nil
+	return body, nil
+}
+
+func (body applicationRequest) application() domain.Application {
+	return domain.Application{Name: body.Name, Description: body.Description, ReleaseName: body.ReleaseName, SchemaVersion: body.SchemaVersion, Contract: body.Contract}
 }
 
 func (s *server) handleCreateApplication(w http.ResponseWriter, r *http.Request) {
-	app, err := decodeApplication(w, r)
+	body, err := decodeApplication(w, r)
 	if err != nil {
 		s.writeError(w, r, err)
+		return
+	}
+	app := body.application()
+	if body.Schema != nil {
+		out, schema, err := s.svc.CreateApplicationWithSchema(r.Context(), principalFrom(r.Context()), app, body.Schema.SchemaJSON, body.Schema.MetadataJSON)
+		if err != nil {
+			s.writeError(w, r, err)
+			return
+		}
+		writeJSON(w, http.StatusCreated, map[string]any{"application": toApplicationDTO(out), "schema": toSchemaDTO(schema)})
 		return
 	}
 	out, err := s.svc.CreateApplication(r.Context(), principalFrom(r.Context()), app)
@@ -122,16 +155,16 @@ func (s *server) handleCreateApplication(w http.ResponseWriter, r *http.Request)
 		s.writeError(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"application": toApplicationDTO(out)})
+	writeJSON(w, http.StatusCreated, map[string]any{"application": toApplicationDTO(out)})
 }
 
 func (s *server) handleUpdateApplication(w http.ResponseWriter, r *http.Request) {
-	app, err := decodeApplication(w, r)
+	body, err := decodeApplication(w, r)
 	if err != nil {
 		s.writeError(w, r, err)
 		return
 	}
-	out, err := s.svc.UpdateApplication(r.Context(), principalFrom(r.Context()), app)
+	out, err := s.svc.UpdateApplication(r.Context(), principalFrom(r.Context()), body.application())
 	if err != nil {
 		s.writeError(w, r, err)
 		return
@@ -145,6 +178,36 @@ func (s *server) handleDeleteApplication(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{})
+}
+
+func (s *server) handleArchiveApplication(w http.ResponseWriter, r *http.Request) {
+	s.handleApplicationLifecycle(w, r, true)
+}
+
+func (s *server) handleUnarchiveApplication(w http.ResponseWriter, r *http.Request) {
+	s.handleApplicationLifecycle(w, r, false)
+}
+
+func (s *server) handleApplicationLifecycle(w http.ResponseWriter, r *http.Request, archive bool) {
+	var body struct {
+		Name string `json:"name"`
+	}
+	if err := decodeJSON(w, r, &body); err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	var app domain.Application
+	var err error
+	if archive {
+		app, err = s.svc.ArchiveApplication(r.Context(), principalFrom(r.Context()), body.Name)
+	} else {
+		app, err = s.svc.UnarchiveApplication(r.Context(), principalFrom(r.Context()), body.Name)
+	}
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"application": toApplicationDTO(app)})
 }
 
 func (s *server) handleApplicationDashboard(w http.ResponseWriter, r *http.Request) {

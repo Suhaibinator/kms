@@ -51,7 +51,6 @@ type overviewActiveReleaseDTO struct {
 	CreatedBy          string            `json:"created_by"`
 	CreatedAtUnixMS    int64             `json:"created_at_unix_ms"`
 	IsRolledBack       bool              `json:"is_rolled_back"`
-	SchemaID           string            `json:"schema_id"`
 	SchemaVersion      uint64            `json:"schema_version"`
 	Digest             string            `json:"digest"`
 	Entries            []releaseEntryDTO `json:"entries"`
@@ -133,7 +132,7 @@ func toEnvironmentOverviewDTO(e domain.EnvironmentOverview) environmentOverviewD
 		release.Active = &overviewActiveReleaseDTO{
 			Name: rel.Name, Version: rel.Version, ActivationRevision: e.Active.ActivationRevision, PreviousVersion: e.Active.PreviousVersion,
 			CreatedBy: rel.CreatedBy, CreatedAtUnixMS: rel.CreatedAtUnixMS, IsRolledBack: e.Active.IsRolledBack,
-			SchemaID: rel.SchemaID, SchemaVersion: rel.SchemaVersion, Digest: rel.Digest, Entries: rel.Entries,
+			SchemaVersion: rel.SchemaVersion, Digest: rel.Digest, Entries: rel.Entries,
 		}
 	}
 	return environmentOverviewDTO{
@@ -229,7 +228,6 @@ type validateReleaseResponseDTO struct {
 type shipPreviewDTO struct {
 	BaseVersion   uint64                     `json:"base_version"`
 	ReleaseName   string                     `json:"release_name"`
-	SchemaID      string                     `json:"schema_id"`
 	SchemaVersion uint64                     `json:"schema_version"`
 	Entries       []shipPreviewEntryDTO      `json:"entries"`
 	Validation    validateReleaseResponseDTO `json:"validation"`
@@ -280,7 +278,7 @@ func toShipResultDTO(r domain.ShipResult) shipResultDTO {
 	out := shipResultDTO{
 		Status: r.Status,
 		Preview: shipPreviewDTO{
-			BaseVersion: r.Preview.BaseVersion, ReleaseName: r.Preview.ReleaseName, SchemaID: r.Preview.SchemaID, SchemaVersion: r.Preview.SchemaVersion,
+			BaseVersion: r.Preview.BaseVersion, ReleaseName: r.Preview.ReleaseName, SchemaVersion: r.Preview.SchemaVersion,
 			Entries: entries, Validation: validateReleaseResponseDTO{Valid: len(validation) == 0, Errors: validation}, Warnings: toFindingDTOs(r.Preview.Warnings),
 		},
 		Parameters: make([]shipParameterDTO, 0, len(r.Parameters)),

@@ -128,7 +128,6 @@ type ConfigurationRelease struct {
 	Namespace     NamespaceRef
 	Name          string
 	Version       uint64
-	SchemaID      string
 	SchemaVersion uint64
 	Entries       []ConfigurationReleaseEntry
 	Digest        string
@@ -163,7 +162,6 @@ type ReleaseEntrySelector struct {
 type CreateConfigurationReleaseInput struct {
 	Namespace     NamespaceRef
 	Name          string
-	SchemaID      string
 	SchemaVersion uint64
 	Entries       []ReleaseEntrySelector
 	Metadata      string
@@ -202,13 +200,14 @@ func (e *ReleaseValidationFailedError) Violations() []ReleaseValidationError {
 
 // ConfigurationSchema is one immutable JSON Schema version.
 type ConfigurationSchema struct {
-	ID        string
-	Version   uint64
-	Schema    string
-	Digest    string
-	Metadata  string
-	CreatedBy string
-	CreatedAt time.Time
+	Application string
+	ReleaseName string
+	Version     uint64
+	Schema      string
+	Digest      string
+	Metadata    string
+	CreatedBy   string
+	CreatedAt   time.Time
 }
 
 // ReleaseAcknowledgement records one application lifecycle state. InstanceID

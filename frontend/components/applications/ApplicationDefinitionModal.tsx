@@ -5,18 +5,9 @@ import { Button } from "@/components/ui/button";
 import { useToast } from "@/context/ToastContext";
 import { api } from "@/lib/api";
 import type { ContractEntry } from "@/lib/contract-derive";
-import { useFocusFirstInvalid } from "@/lib/forms";
-import { useFieldErrors } from "@/lib/hooks";
 import type { Application, ConfigurationReleaseEntry, EnvironmentOverview } from "@/lib/types";
-import {
-  firstError,
-  validateContract,
-  validateReleaseName,
-  validateSchemaPin,
-} from "@/lib/validation";
+import { validateContract } from "@/lib/validation";
 import { ContractEditor } from "./ContractEditor";
-
-type DefinitionField = "releaseName" | "schemaPin";
 
 /** The shape a release must match: alias, kind and (for parameters) content type. */
 function shapeOf(entries: ReadonlyArray<ContractEntry | ConfigurationReleaseEntry>): string {
@@ -42,8 +33,9 @@ export function divergingEnvironments(
 }
 
 /**
- * Edit definition: basics, schema pin and the structured contract in one
- * form. Warns when the contract differs from an active release's shape,
+ * Edit the mutable description and structured contract. The application and
+ * release names are immutable ownership coordinates, and schema repinning is
+ * performed by the previewed defaults workflow. Warns when the contract differs from an active release's shape,
  * because the next ship must match the contract and that release no longer
  * will.
  */
@@ -67,58 +59,38 @@ export function ApplicationDefinitionModal({
 }) {
   const toast = useToast();
   const formId = useId();
-  const releaseNameRef = useRef<HTMLInputElement>(null);
+  const descriptionRef = useRef<HTMLInputElement>(null);
   const [description, setDescription] = useState("");
-  const [releaseName, setReleaseName] = useState("runtime");
-  const [schemaID, setSchemaID] = useState("");
-  const [schemaVersion, setSchemaVersion] = useState("");
   const [contract, setContract] = useState<ContractEntry[]>([]);
   const [saving, setSaving] = useState(false);
-  const { touch, markAllTouched, reset, shown } = useFieldErrors<DefinitionField>();
-  const { formRef, requestFocus } = useFocusFirstInvalid();
 
   useEffect(() => {
     if (!open) return;
     setDescription(application.description);
-    setReleaseName(application.release_name);
-    setSchemaID(application.schema_id);
-    setSchemaVersion(application.schema_version ? String(application.schema_version) : "");
     setContract((prefillContract ?? application.contract).map((entry) => ({ ...entry })));
     setSaving(false);
-    reset();
-  }, [open, application, prefillContract, reset]);
+  }, [open, application, prefillContract]);
 
-  const releaseNameProblem = validateReleaseName(releaseName.trim());
-  const schemaPinProblem = validateSchemaPin(schemaID, schemaVersion);
   const contractProblem = validateContract(contract);
-  const blocking = firstError(releaseNameProblem, schemaPinProblem, contractProblem);
-  const shownSchemaPinProblem = shown("schemaPin", schemaPinProblem);
+  const blocking = contractProblem;
   const diverging = useMemo(
     () => divergingEnvironments(contract, environments),
     [contract, environments],
   );
   const dirty =
     description !== application.description ||
-    releaseName !== application.release_name ||
-    schemaID !== application.schema_id ||
-    schemaVersion !== (application.schema_version ? String(application.schema_version) : "") ||
     JSON.stringify(contract) !== JSON.stringify(application.contract);
 
   async function submit() {
-    markAllTouched();
     if (saving) return;
-    if (blocking) {
-      requestFocus();
-      return;
-    }
+    if (blocking) return;
     setSaving(true);
     try {
       const { application: updated } = await api.updateApplication({
         name: application.name,
         description,
-        release_name: releaseName.trim(),
-        schema_id: schemaID.trim(),
-        schema_version: Number(schemaVersion || 0),
+        release_name: application.release_name,
+        schema_version: application.schema_version,
         contract,
       });
       toast.success("Definition updated");
@@ -137,7 +109,7 @@ export function ApplicationDefinitionModal({
       onClose={onClose}
       dismissible={!saving}
       dirty={dirty && !saving}
-      initialFocus={releaseNameRef}
+      initialFocus={descriptionRef}
       wide
       footer={(close) => (
         <>
@@ -152,7 +124,6 @@ export function ApplicationDefinitionModal({
     >
       <form
         id={formId}
-        ref={formRef}
         onSubmit={(event) => {
           event.preventDefault();
           void submit();
@@ -162,46 +133,27 @@ export function ApplicationDefinitionModal({
           <Field label="Application name">
             <Input className="font-mono" value={application.name} disabled />
           </Field>
-          <Field
-            label="Release name"
-            hint="Every environment release uses this name."
-            error={shown("releaseName", releaseNameProblem)}
-          >
-            <Input
-              ref={releaseNameRef}
-              className="font-mono"
-              value={releaseName}
-              onChange={(event) => setReleaseName(event.target.value)}
-              onBlur={() => touch("releaseName")}
-            />
+          <Field label="Release name" hint="Immutable after the application is created.">
+            <Input className="font-mono" value={application.release_name} disabled />
           </Field>
         </div>
         <Field label="Description">
-          <Input value={description} onChange={(event) => setDescription(event.target.value)} />
+          <Input
+            ref={descriptionRef}
+            value={description}
+            onChange={(event) => setDescription(event.target.value)}
+          />
         </Field>
-        <div className="form-row">
-          <Field
-            label="Schema ID"
-            hint="Optional; specify both ID and version."
-            error={shownSchemaPinProblem}
-          >
-            <Input
-              className="font-mono"
-              value={schemaID}
-              onChange={(event) => setSchemaID(event.target.value)}
-              onBlur={() => touch("schemaPin")}
-            />
-          </Field>
-          <Field label="Schema version">
-            <Input
-              type="number"
-              min={1}
-              value={schemaVersion}
-              aria-invalid={shownSchemaPinProblem ? true : undefined}
-              onChange={(event) => setSchemaVersion(event.target.value)}
-              onBlur={() => touch("schemaPin")}
-            />
-          </Field>
+        <div className="info-panel mb-4 text-sm">
+          Schema pin:{" "}
+          {application.schema_version ? (
+            <span className="mono">
+              {application.name}/{application.release_name}@{application.schema_version}
+            </span>
+          ) : (
+            "not pinned"
+          )}
+          . Apply defaults with definition updates to change this pin.
         </div>
         <Field label="Contract" hint="Aliases the application reads; secrets have no content type.">
           <ContractEditor value={contract} onChange={setContract} schemaJson={schemaJson} />

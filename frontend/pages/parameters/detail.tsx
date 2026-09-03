@@ -730,7 +730,7 @@ export default function ParameterDetailPage() {
                   <>
                     <Ident
                       kind="schema"
-                      value={`${versionSchema.schemaId}@${versionSchema.schemaVersion}`}
+                      value={`${versionSchema.application}/${versionSchema.releaseName}@${versionSchema.schemaVersion}`}
                     />
                     <Ident kind="alias" value={versionSchema.alias} />
                   </>

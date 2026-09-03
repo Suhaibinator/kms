@@ -42,12 +42,10 @@ type DefaultsApplyTransaction struct {
 	Namespace            domain.NamespaceRef
 	NamespaceID          int64
 	ReleaseName          string
-	SchemaID             string
 	SchemaVersion        uint64
 	SchemaDigest         string
 	Contract             []domain.ApplicationContractField
 	UpdateDefinition     bool
-	DesiredSchemaID      string
 	DesiredSchemaVersion uint64
 	DesiredContract      []domain.ApplicationContractField
 	ResolutionState      []DefaultsResolutionState

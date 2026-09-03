@@ -21,6 +21,16 @@ import (
 func TestConfigurationReleaseLifecycle(t *testing.T) {
 	h := newHarness(t)
 	ctx := context.Background()
+	_, schemaV1, err := h.svc.CreateApplicationWithSchema(ctx, h.admin, domain.Application{Name: "release-integration", ReleaseName: "runtime"}, `{
+		"$schema":"https://json-schema.org/draft/2020-12/schema",
+		"type":"object",
+		"properties":{"workers":{"type":"integer","minimum":1}},
+		"required":["workers"],
+		"additionalProperties":false
+	}`, `{"owner":"integration"}`)
+	if err != nil {
+		t.Fatalf("CreateApplicationWithSchema: %v", err)
+	}
 	ns := nsRef("prod", "release-integration")
 	parameterRef := h.ensureNS("/prod/release-integration/workers")
 	secretRef := h.ref("/prod/release-integration/database-password")
@@ -41,19 +51,8 @@ func TestConfigurationReleaseLifecycle(t *testing.T) {
 		t.Fatal("PutSecret v1 returned no access token")
 	}
 
-	schemaV1, err := h.svc.CreateConfigurationSchema(ctx, h.admin, "release-integration/runtime", `{
-		"$schema":"https://json-schema.org/draft/2020-12/schema",
-		"type":"object",
-		"properties":{"workers":{"type":"integer","minimum":1}},
-		"required":["workers"],
-		"additionalProperties":false
-	}`, `{"owner":"integration"}`)
-	if err != nil {
-		t.Fatalf("CreateConfigurationSchema v1: %v", err)
-	}
-
 	releaseV1, err := h.svc.CreateConfigurationRelease(ctx, h.admin, domain.CreateConfigurationReleaseInput{
-		Namespace: ns, Name: "runtime", SchemaID: schemaV1.ID, SchemaVersion: schemaV1.Version,
+		Namespace: ns, Name: "runtime", SchemaVersion: schemaV1.Version,
 		Metadata: `{"purpose":"runtime"}`,
 		Entries: []domain.ReleaseEntrySelector{
 			{Alias: "workers", Kind: domain.ReleaseEntryParameter, Ref: parameterRef, Label: domain.LabelCurrent},
@@ -91,7 +90,7 @@ func TestConfigurationReleaseLifecycle(t *testing.T) {
 	// The application pins the schema, so invalid data is tested against that
 	// shared schema instead of creating an environment-specific schema version.
 	releaseV2, err := h.svc.CreateConfigurationRelease(ctx, h.admin, domain.CreateConfigurationReleaseInput{
-		Namespace: ns, Name: "runtime", SchemaID: schemaV1.ID, SchemaVersion: schemaV1.Version,
+		Namespace: ns, Name: "runtime", SchemaVersion: schemaV1.Version,
 		Metadata: `{"purpose":"runtime"}`,
 		Entries: []domain.ReleaseEntrySelector{
 			// Empty version/label defaults to current and must still persist the
@@ -122,7 +121,7 @@ func TestConfigurationReleaseLifecycle(t *testing.T) {
 		t.Fatalf("PutParameter v2: %v", err)
 	}
 	releaseV3, err := h.svc.CreateConfigurationRelease(ctx, h.admin, domain.CreateConfigurationReleaseInput{
-		Namespace: ns, Name: "runtime", SchemaID: schemaV1.ID, SchemaVersion: schemaV1.Version,
+		Namespace: ns, Name: "runtime", SchemaVersion: schemaV1.Version,
 		Metadata: `{"purpose":"runtime"}`,
 		Entries: []domain.ReleaseEntrySelector{
 			{Alias: "database_password", Kind: domain.ReleaseEntrySecret, Ref: secretRef, Version: secretV2.Version},

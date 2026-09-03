@@ -17,7 +17,7 @@ import {
 import { useFocusFirstInvalid } from "@/lib/forms";
 import { useFieldErrors } from "@/lib/hooks";
 import { isProductionEnvironment } from "@/lib/readiness";
-import type { Application, ConfigurationSchema } from "@/lib/types";
+import type { Application } from "@/lib/types";
 import {
   firstError,
   validateApplicationName,
@@ -35,11 +35,9 @@ const DEFAULT_CONTRACT: ContractEntry[] = [
   { alias: "runtime", kind: "parameter", content_type: "json" },
 ];
 
-type SchemaMode = "none" | "existing" | "new";
+type SchemaMode = "none" | "new";
 
 interface PinnedSchema {
-  id: string;
-  version: number;
   json: string;
 }
 
@@ -53,8 +51,7 @@ type EnvResult = { state: "created" | "attached" } | { state: "failed"; message:
 
 const SCHEMA_MODES: Array<{ value: SchemaMode; label: string }> = [
   { value: "none", label: "No schema (validate later)" },
-  { value: "existing", label: "Pin a registered schema" },
-  { value: "new", label: "Register a new schema" },
+  { value: "new", label: "Create with a schema" },
 ];
 
 function WizardProgress({ current }: { current: number }) {
@@ -100,11 +97,10 @@ async function safeSha(text: string): Promise<string | null> {
 }
 
 /**
- * Basics → Schema → Contract → Environments. A new schema is registered when
- * leaving the Schema step, so a failed registration leaves nothing behind and
- * the contract can be derived from it. Environments are created one by one
- * after the application; a 409 means the namespace already existed and is
- * simply attached, and failed rows can be retried without redoing the rest.
+ * Basics → Schema → Contract → Environments. A new schema stays local
+ * while the contract is derived, then the application, schema version one,
+ * contract and pin are created atomically. Environments are created one by one
+ * afterward; a 409 means the namespace already existed and is simply attached.
  */
 export default function CreateApplicationWizard({
   open,
@@ -119,17 +115,12 @@ export default function CreateApplicationWizard({
   const [description, setDescription] = useState("");
   const [releaseName, setReleaseName] = useState("runtime");
   const basics = useFieldErrors<"name" | "releaseName">();
-  const schemaFields = useFieldErrors<"schemaId" | "schemaJson" | "existing">();
+  const schemaFields = useFieldErrors<"schemaJson">();
   const { formRef, requestFocus } = useFocusFirstInvalid();
   const nameRef = useRef<HTMLInputElement>(null);
 
   const [schemaMode, setSchemaMode] = useState<SchemaMode>("none");
-  const [schemas, setSchemas] = useState<ConfigurationSchema[] | null>(null);
-  const [existingPick, setExistingPick] = useState("");
-  const [newSchemaId, setNewSchemaId] = useState("");
   const [newSchemaJson, setNewSchemaJson] = useState("");
-  const [registered, setRegistered] = useState<PinnedSchema | null>(null);
-  const [schemaError, setSchemaError] = useState("");
   const [schemaJsonUsed, setSchemaJsonUsed] = useState<string | null>(null);
   const [schemaSha, setSchemaSha] = useState<string | null>(null);
 
@@ -153,12 +144,7 @@ export default function CreateApplicationWizard({
     resetBasics();
     resetSchemaFields();
     setSchemaMode("none");
-    setSchemas(null);
-    setExistingPick("");
-    setNewSchemaId("");
     setNewSchemaJson("");
-    setRegistered(null);
-    setSchemaError("");
     setSchemaJsonUsed(null);
     setSchemaSha(null);
     setContract([]);
@@ -170,44 +156,14 @@ export default function CreateApplicationWizard({
     setBusy(false);
   }, [open, resetBasics, resetSchemaFields]);
 
-  // The registry is only needed once the Schema step is reached.
-  useEffect(() => {
-    if (!open || step !== 2 || schemas !== null) return;
-    let cancelled = false;
-    api
-      .listSchemas()
-      .then((response) => {
-        if (!cancelled) setSchemas(response.schemas ?? []);
-      })
-      .catch((error: unknown) => {
-        if (cancelled) return;
-        setSchemas([]);
-        toast.error(error, "Failed to load schemas");
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [open, step, schemas, toast]);
-
   const nameProblem = validateApplicationName(name.trim());
   const releaseNameProblem = validateReleaseName(releaseName.trim());
   const basicsBlocking = firstError(nameProblem, releaseNameProblem);
 
-  const existing = (schemas ?? []).find(
-    (schema) => `${schema.id}@${schema.version}` === existingPick,
-  );
-  const newSchemaIdProblem =
-    schemaMode === "new" && !newSchemaId.trim() ? "Schema ID is required." : null;
   const newSchemaJsonProblem = schemaMode === "new" ? parseSchemaObject(newSchemaJson) : null;
-  const existingProblem =
-    schemaMode === "existing" && !existing ? "Pick a registered schema." : null;
-  const schemaBlocking = firstError(existingProblem, newSchemaIdProblem, newSchemaJsonProblem);
+  const schemaBlocking = newSchemaJsonProblem;
   const pinned: PinnedSchema | null =
-    schemaMode === "existing" && existing
-      ? { id: existing.id, version: existing.version, json: existing.schema_json }
-      : schemaMode === "new"
-        ? registered
-        : null;
+    schemaMode === "new" && !newSchemaJsonProblem ? { json: newSchemaJson } : null;
 
   const contractProblem = validateContract(contract);
 
@@ -233,27 +189,7 @@ export default function CreateApplicationWizard({
       requestFocus();
       return;
     }
-    let json: string | null = null;
-    if (schemaMode === "existing" && existing) {
-      json = existing.schema_json;
-    } else if (schemaMode === "new") {
-      const id = newSchemaId.trim();
-      if (!(registered && registered.id === id && registered.json === newSchemaJson)) {
-        setBusy(true);
-        setSchemaError("");
-        try {
-          const { schema } = await api.createSchema(id, newSchemaJson);
-          setRegistered({ id: schema.id, version: schema.version, json: newSchemaJson });
-          toast.success("Schema registered", `${schema.id}@${schema.version}`);
-        } catch (error) {
-          setSchemaError(error instanceof Error ? error.message : "Failed to register the schema.");
-          return;
-        } finally {
-          setBusy(false);
-        }
-      }
-      json = newSchemaJson;
-    }
+    const json = schemaMode === "new" ? newSchemaJson : null;
     setSchemaJsonUsed(json);
     setSchemaSha(json ? await safeSha(json) : null);
     seedContract(json);
@@ -268,7 +204,6 @@ export default function CreateApplicationWizard({
         requestFocus();
         return;
       }
-      if (!newSchemaId) setNewSchemaId(`${name.trim()}-${releaseName.trim()}`);
       setStep(2);
     } else if (step === 2) {
       void leaveSchemaStep();
@@ -321,9 +256,11 @@ export default function CreateApplicationWizard({
           name: name.trim(),
           description,
           release_name: releaseName.trim(),
-          schema_id: pinned?.id ?? "",
-          schema_version: pinned?.version ?? 0,
+          schema_version: 0,
           contract,
+          ...(schemaMode === "new"
+            ? { schema: { schema_json: newSchemaJson, metadata_json: "{}" } }
+            : {}),
         });
         app = response.application;
         setCreated(app);
@@ -347,11 +284,6 @@ export default function CreateApplicationWizard({
   }
 
   const failed = Object.values(results).some((result) => result.state === "failed");
-  const schemaOptions = (schemas ?? []).map((schema) => ({
-    value: `${schema.id}@${schema.version}`,
-    label: `${schema.id}@${schema.version}`,
-  }));
-
   function updateRow(index: number, patch: Partial<EnvRow>) {
     setRows((current) => current.map((row, at) => (at === index ? { ...row, ...patch } : row)));
   }
@@ -403,7 +335,7 @@ export default function CreateApplicationWizard({
             ) : null}
             {step < 4 ? (
               <Button form={formId} type="submit" loading={busy}>
-                {step === 2 && schemaMode === "new" ? "Register and continue" : "Next"}
+                Next
               </Button>
             ) : (
               <Button form={formId} type="submit" loading={busy}>
@@ -476,42 +408,18 @@ export default function CreateApplicationWizard({
                 options={SCHEMA_MODES}
               />
             </Field>
-            {schemaMode === "existing" ? (
-              <Field
-                label="Registered schema"
-                hint={schemas === null ? "Loading the registry…" : undefined}
-                error={
-                  existingPick !== "" && !existing
-                    ? "Unknown schema."
-                    : schemaFields.shown("existing", existingProblem)
-                }
-              >
-                <AppSelect
-                  className="font-mono"
-                  value={existingPick}
-                  onValueChange={setExistingPick}
-                  onBlur={() => schemaFields.touch("existing")}
-                  options={schemaOptions}
-                  placeholder={
-                    schemas?.length === 0 ? "No schemas registered" : "Select id@version…"
-                  }
-                  disabled={schemas === null || schemas.length === 0}
-                />
-              </Field>
-            ) : null}
             {schemaMode === "new" ? (
               <>
-                <Field label="Schema ID" error={schemaFields.shown("schemaId", newSchemaIdProblem)}>
-                  <Input
-                    className="font-mono"
-                    value={newSchemaId}
-                    onChange={(event) => setNewSchemaId(event.target.value)}
-                    onBlur={() => schemaFields.touch("schemaId")}
-                  />
-                </Field>
+                <div className="info-panel mb-4 text-sm">
+                  This becomes{" "}
+                  <span className="mono">
+                    {name.trim()}/{releaseName.trim()}@1
+                  </span>
+                  . KMS owns the name and creates it with the application in one transaction.
+                </div>
                 <Field
                   label="Schema JSON"
-                  hint="Paste runtime.schema.json or load the file. Registered when you continue."
+                  hint="Paste runtime.schema.json or load the file. It is registered when the application is created."
                   error={schemaFields.shown("schemaJson", newSchemaJsonProblem)}
                 >
                   <JsonEditor
@@ -531,22 +439,6 @@ export default function CreateApplicationWizard({
                     }}
                   />
                 </Field>
-                {registered ? (
-                  <div className="info-panel mt-4 text-sm">
-                    Registered as{" "}
-                    <span className="mono">
-                      {registered.id}@{registered.version}
-                    </span>
-                    {registered.json !== newSchemaJson || registered.id !== newSchemaId.trim()
-                      ? "; the edited schema will be registered as a new version."
-                      : "."}
-                  </div>
-                ) : null}
-                {schemaError ? (
-                  <div className="danger-panel mt-4" role="alert">
-                    {schemaError}
-                  </div>
-                ) : null}
               </>
             ) : null}
           </>
@@ -561,7 +453,7 @@ export default function CreateApplicationWizard({
             {pinned ? (
               <div className="row-wrap mb-4">
                 <span className="text-sm">
-                  Schema <span className="mono">{`${pinned.id}@${pinned.version}`}</span>
+                  Schema <span className="mono">{`${name.trim()}/${releaseName.trim()}@1`}</span>
                 </span>
                 <Button
                   type="button"

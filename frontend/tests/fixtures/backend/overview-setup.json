@@ -1,5 +1,7 @@
 {
   "application": {
+    "archived_at_unix_ms": 0,
+    "archived_by": "",
     "contract": [
       {
         "alias": "database",
@@ -22,7 +24,6 @@
     "environment_count": 0,
     "name": "gradethis",
     "release_name": "runtime",
-    "schema_id": "",
     "schema_version": 0,
     "updated_at_unix_ms": 1755000000000
   },

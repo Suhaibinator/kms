@@ -12,9 +12,6 @@ import (
 // CreateNamespace stores a namespace. An empty AllowedAuthMethods set defaults
 // to ["mtls"] — the strongest posture.
 func (s *SQLStore) CreateNamespace(ctx context.Context, ns domain.Namespace) (domain.Namespace, error) {
-	if _, err := s.EnsureApplication(ctx, ns.App, ns.CreatedBy); err != nil {
-		return domain.Namespace{}, err
-	}
 	created := ns.CreatedAt
 	if created.IsZero() {
 		created = nowUTC()
@@ -27,7 +24,29 @@ func (s *SQLStore) CreateNamespace(ctx context.Context, ns domain.Namespace) (do
 		CreatedBy:          ns.CreatedBy,
 		CreatedAt:          fmtTime(created),
 	}
-	if err := s.db.WithContext(ctx).Create(&m).Error; err != nil {
+	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var app applicationModel
+		err := tx.Where("name = ?", ns.App).First(&app).Error
+		switch {
+		case err == nil:
+		case errors.Is(err, gorm.ErrRecordNotFound):
+			now := nowUTC()
+			app = applicationModel{
+				Name: ns.App, ReleaseName: "runtime", ContractJSON: "[]",
+				CreatedBy: ns.CreatedBy, CreatedAt: fmtTime(now), UpdatedAt: fmtTime(now),
+			}
+			if err := tx.Create(&app).Error; err != nil {
+				return err
+			}
+		default:
+			return err
+		}
+		if app.ArchivedAt != nil {
+			return domain.Errorf(domain.ErrFailedPrecondition, "application %s is archived", ns.App)
+		}
+		return tx.Create(&m).Error
+	})
+	if err != nil {
 		if isUniqueErr(err) {
 			return domain.Namespace{}, domain.Errorf(domain.ErrAlreadyExists, "namespace %s", ns.NamespaceRef)
 		}
@@ -79,10 +98,11 @@ func (s *SQLStore) UpdateNamespace(ctx context.Context, ref domain.NamespaceRef,
 	return s.GetNamespace(ctx, ref)
 }
 
-// DeleteNamespace removes an empty namespace. Emptiness is verified inside the
-// transaction: any remaining parameter, secret, or bound identity fails the
-// delete with domain.ErrFailedPrecondition. A secrets store must not offer a
-// recursive delete of live secrets.
+// DeleteNamespace removes an environment after its live resources and bound
+// identities are gone. Environment-scoped release and subscriber history is
+// retired in the same transaction; otherwise an application that has shipped
+// once could never remove its final environment and become archive-eligible.
+// A secrets store must not offer a recursive delete of live secrets.
 func (s *SQLStore) DeleteNamespace(ctx context.Context, ref domain.NamespaceRef) error {
 	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		id, err := resolveNamespaceID(tx, ref)
@@ -95,10 +115,6 @@ func (s *SQLStore) DeleteNamespace(ctx context.Context, ref domain.NamespaceRef)
 			{"parameters", "parameters"},
 			{"secrets", "secrets"},
 			{"identities", "bound identities"},
-			{"configuration_releases", "configuration releases"},
-			{"configuration_release_labels", "configuration release labels"},
-			{"release_subscriber_states", "configuration release subscriber states"},
-			{"release_subscriber_connections", "configuration release subscriber connections"},
 		} {
 			var n int64
 			if err := tx.Table(check.table).Where("namespace_id = ?", id).Count(&n).Error; err != nil {
@@ -108,6 +124,27 @@ func (s *SQLStore) DeleteNamespace(ctx context.Context, ref domain.NamespaceRef)
 				return domain.Errorf(domain.ErrFailedPrecondition,
 					"namespace %s is not empty (%d %s)", ref, n, check.what)
 			}
+		}
+		// Releases are immutable while their environment exists, but they are not
+		// application-owned history. Retire all rows whose identity is scoped to
+		// this namespace before removing the namespace itself. Audit/change-log
+		// rows are denormalized and intentionally remain readable.
+		for _, model := range []any{
+			&releaseSubscriberConnectionModel{},
+			&releaseSubscriberStateModel{},
+			&configurationReleaseActivationModel{},
+			&configurationReleaseLabelModel{},
+		} {
+			if err := tx.Where("namespace_id = ?", id).Delete(model).Error; err != nil {
+				return err
+			}
+		}
+		if err := tx.Exec(`DELETE FROM configuration_release_entries
+			WHERE release_id IN (SELECT id FROM configuration_releases WHERE namespace_id = ?)`, id).Error; err != nil {
+			return err
+		}
+		if err := tx.Where("namespace_id = ?", id).Delete(&configurationReleaseModel{}).Error; err != nil {
+			return err
 		}
 		res := tx.Where("id = ?", id).Delete(&namespaceModel{})
 		if res.Error != nil {

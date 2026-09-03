@@ -9,6 +9,7 @@ import { cn } from "@/lib/utils";
 import type { DriftCandidate } from "./model";
 
 export interface ShipPreviewProps {
+  application: string;
   preview: ShipPreviewData | null;
   /** A dry run is in flight. */
   loading: boolean;
@@ -46,6 +47,7 @@ function versionArrow(from?: number, to?: number): string {
 
 /** The Preview step: what a ship would write, release, pin and activate — from a dry run. */
 export function ShipPreview({
+  application,
   preview,
   loading,
   stale,
@@ -208,8 +210,11 @@ export function ShipPreview({
           <dl className="ship-facts">
             <dt>Schema</dt>
             <dd>
-              {preview.schema_id ? (
-                <Ident kind="schema" value={`${preview.schema_id}@${preview.schema_version}`} />
+              {preview.schema_version ? (
+                <Ident
+                  kind="schema"
+                  value={`${application}/${preview.release_name}@${preview.schema_version}`}
+                />
               ) : (
                 <span className="faint">no schema pinned</span>
               )}

@@ -69,10 +69,10 @@ func (s *Service) loadEnvironmentReleaseFacts(ctx context.Context, rs storage.Re
 // loadApplicationSchema fetches the pinned schema; missing reports a pin the
 // registry no longer has.
 func (s *Service) loadApplicationSchema(ctx context.Context, rs storage.ReleaseStore, app domain.Application) (*domain.ConfigurationSchema, bool, error) {
-	if app.SchemaID == "" {
+	if app.SchemaVersion == 0 {
 		return nil, false, nil
 	}
-	schema, err := rs.GetConfigurationSchema(ctx, app.SchemaID, app.SchemaVersion)
+	schema, err := rs.GetConfigurationSchema(ctx, app.Name, app.ReleaseName, app.SchemaVersion)
 	if errors.Is(err, domain.ErrNotFound) {
 		return nil, true, nil
 	}
@@ -235,7 +235,7 @@ func (s *Service) GetFleetOverview(ctx context.Context, pr Principal, opts Overv
 	var apps []domain.Application
 	token := ""
 	for {
-		page, next, err := store.ListApplications(ctx, storage.ListPage{Limit: 1000, Token: token})
+		page, next, err := store.ListApplications(ctx, storage.ListPage{Limit: 1000, Token: token}, storage.ApplicationsActiveOnly)
 		if err != nil {
 			return nil, err
 		}

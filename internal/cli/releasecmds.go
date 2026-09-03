@@ -102,7 +102,6 @@ func releaseEntryToJSON(entry *kmsv1.ConfigurationReleaseEntry) releaseEntryJSON
 type releaseDefinition struct {
 	Namespace     string                   `json:"namespace" yaml:"namespace"`
 	Name          string                   `json:"name" yaml:"name"`
-	SchemaID      string                   `json:"schema_id,omitempty" yaml:"schema_id,omitempty"`
 	SchemaVersion uint64                   `json:"schema_version,omitempty" yaml:"schema_version,omitempty"`
 	MetadataJSON  string                   `json:"metadata_json,omitempty" yaml:"metadata_json,omitempty"`
 	Entries       []releaseEntryDefinition `json:"entries" yaml:"entries"`
@@ -224,9 +223,6 @@ func releaseCreateRequest(definition releaseDefinition) (*kmsv1.CreateReleaseReq
 	if strings.TrimSpace(definition.Name) == "" {
 		return nil, errors.New("name is required")
 	}
-	if (definition.SchemaID == "") != (definition.SchemaVersion == 0) {
-		return nil, errors.New("schema_id and schema_version must be supplied together")
-	}
 	if len(definition.Entries) == 0 {
 		return nil, errors.New("at least one entry is required")
 	}
@@ -267,8 +263,8 @@ func releaseCreateRequest(definition releaseDefinition) (*kmsv1.CreateReleaseReq
 	}
 	return &kmsv1.CreateReleaseRequest{
 		Namespace: pns, Name: definition.Name,
-		SchemaId: definition.SchemaID, SchemaVersion: definition.SchemaVersion,
-		Entries: selectors, MetadataJson: definition.MetadataJSON,
+		SchemaVersion: definition.SchemaVersion,
+		Entries:       selectors, MetadataJson: definition.MetadataJSON,
 	}, nil
 }
 
@@ -383,7 +379,6 @@ type releaseShowJSON struct {
 // releaseSchemaRef names the schema a release was validated against; null in
 // the document when the release has none.
 type releaseSchemaRef struct {
-	ID      string `json:"id"`
 	Version uint64 `json:"version"`
 }
 
@@ -433,8 +428,8 @@ func (c *CLI) printRelease(release *kmsv1.ConfigurationRelease) int {
 			CreatedAt: jsonTime(release.GetCreatedAtUnixMs()),
 			Entries:   make([]releaseEntryJSON, 0, len(entries)),
 		}
-		if release.GetSchemaId() != "" {
-			document.Schema = &releaseSchemaRef{ID: release.GetSchemaId(), Version: release.GetSchemaVersion()}
+		if release.GetSchemaVersion() != 0 {
+			document.Schema = &releaseSchemaRef{Version: release.GetSchemaVersion()}
 		}
 		for _, entry := range entries {
 			document.Entries = append(document.Entries, releaseEntryToJSON(entry))
@@ -443,8 +438,8 @@ func (c *CLI) printRelease(release *kmsv1.ConfigurationRelease) int {
 	}
 	_, _ = fmt.Fprintf(c.Stdout, "%s/%s version %d\n", namespaceDisplay(release.GetNamespace()), release.GetName(), release.GetVersion())
 	_, _ = fmt.Fprintf(c.Stdout, "Digest: %s\n", release.GetDigest())
-	if release.GetSchemaId() != "" {
-		_, _ = fmt.Fprintf(c.Stdout, "Schema: %s version %d\n", release.GetSchemaId(), release.GetSchemaVersion())
+	if release.GetSchemaVersion() != 0 {
+		_, _ = fmt.Fprintf(c.Stdout, "Schema: %s/%s@%d\n", release.GetNamespace().GetApp(), release.GetName(), release.GetSchemaVersion())
 	}
 	rows := make([][]string, 0, len(entries))
 	for _, entry := range entries {
@@ -1149,23 +1144,24 @@ func (c *CLI) cmdReleaseSchema(args []string) int {
 
 // releaseSchemaJSON identifies an immutable schema version.
 type releaseSchemaJSON struct {
-	ID      string `json:"id"`
-	Version uint64 `json:"version"`
-	Digest  string `json:"digest"`
+	Application string `json:"application"`
+	ReleaseName string `json:"release_name"`
+	Version     uint64 `json:"version"`
+	Digest      string `json:"digest"`
 }
 
 func (c *CLI) cmdReleaseSchemaCreate(args []string) int {
 	fs := c.newFlags("release schema create")
 	cf := addConnFlags(c, fs)
 	metadata := fs.String("metadata-json", "", "non-sensitive metadata `json`")
-	c.setUsage(fs, "release schema create ID FILE [flags]",
+	c.setUsage(fs, "release schema create APPLICATION FILE [flags]",
 		"Create an immutable JSON Schema version from a JSON or YAML file.", false)
 	if !c.parseFlags(fs, args) {
 		return 2
 	}
 	pos := c.args()
 	if len(pos) != 2 {
-		return c.failUsage("release schema create requires ID FILE")
+		return c.failUsage("release schema create requires APPLICATION FILE")
 	}
 	schemaJSON, err := readSchemaJSON(pos[1])
 	if err != nil {
@@ -1179,16 +1175,16 @@ func (c *CLI) cmdReleaseSchemaCreate(args []string) int {
 	ctx, cancel := callContext()
 	defer cancel()
 	resp, err := kmsv1.NewConfigurationSchemaServiceClient(conn).CreateSchema(cf.authCtx(ctx), &kmsv1.CreateSchemaRequest{
-		Id: pos[0], SchemaJson: schemaJSON, MetadataJson: *metadata,
+		Application: pos[0], SchemaJson: schemaJSON, MetadataJson: *metadata,
 	})
 	if err != nil {
 		return c.failErr("release schema create", err)
 	}
-	line := fmt.Sprintf("Created schema %s version %d (digest %s)", resp.GetSchema().GetId(), resp.GetSchema().GetVersion(), resp.GetSchema().GetDigest())
+	line := fmt.Sprintf("Created schema %s/%s@%d (digest %s)", resp.GetSchema().GetApplication(), resp.GetSchema().GetReleaseName(), resp.GetSchema().GetVersion(), resp.GetSchema().GetDigest())
 	if c.jsonOutput() {
 		c.info("%s", line)
 		return c.printJSON(releaseSchemaJSON{
-			ID: resp.GetSchema().GetId(), Version: resp.GetSchema().GetVersion(), Digest: resp.GetSchema().GetDigest(),
+			Application: resp.GetSchema().GetApplication(), ReleaseName: resp.GetSchema().GetReleaseName(), Version: resp.GetSchema().GetVersion(), Digest: resp.GetSchema().GetDigest(),
 		})
 	}
 	_, _ = fmt.Fprintln(c.Stdout, line)
@@ -1219,25 +1215,26 @@ func readSchemaJSON(path string) (string, error) {
 // releaseSchemaShowJSON embeds the schema document itself as JSON rather than
 // as a string, so a caller can pipe it straight into a validator.
 type releaseSchemaShowJSON struct {
-	ID      string         `json:"id"`
-	Version uint64         `json:"version"`
-	Digest  string         `json:"digest"`
-	Schema  jsontext.Value `json:"schema"`
+	Application string         `json:"application"`
+	ReleaseName string         `json:"release_name"`
+	Version     uint64         `json:"version"`
+	Digest      string         `json:"digest"`
+	Schema      jsontext.Value `json:"schema"`
 }
 
 func (c *CLI) cmdReleaseSchemaShow(args []string) int {
 	fs := c.newFlags("release schema show")
 	cf := addConnFlags(c, fs)
-	c.setUsage(fs, "release schema show ID VERSION [flags]",
+	c.setUsage(fs, "release schema show APPLICATION RELEASE VERSION [flags]",
 		"Print a schema version and its digest.", false)
 	if !c.parseFlags(fs, args) {
 		return 2
 	}
 	pos := c.args()
-	if len(pos) != 2 {
-		return c.failUsage("release schema show requires ID VERSION")
+	if len(pos) != 3 {
+		return c.failUsage("release schema show requires APPLICATION RELEASE VERSION")
 	}
-	version, err := parseVersion(pos[1])
+	version, err := parseVersion(pos[2])
 	if err != nil {
 		return c.failUsage("invalid VERSION: %v", err)
 	}
@@ -1248,7 +1245,7 @@ func (c *CLI) cmdReleaseSchemaShow(args []string) int {
 	defer func() { _ = conn.Close() }()
 	ctx, cancel := callContext()
 	defer cancel()
-	resp, err := kmsv1.NewConfigurationSchemaServiceClient(conn).GetSchema(cf.authCtx(ctx), &kmsv1.GetSchemaRequest{Id: pos[0], Version: version})
+	resp, err := kmsv1.NewConfigurationSchemaServiceClient(conn).GetSchema(cf.authCtx(ctx), &kmsv1.GetSchemaRequest{Application: pos[0], ReleaseName: pos[1], Version: version})
 	if err != nil {
 		return c.failErr("release schema show", err)
 	}
@@ -1259,37 +1256,41 @@ func (c *CLI) cmdReleaseSchemaShow(args []string) int {
 			document = jsontext.Value("null")
 		}
 		return c.printJSON(releaseSchemaShowJSON{
-			ID: schema.GetId(), Version: schema.GetVersion(), Digest: schema.GetDigest(), Schema: document,
+			Application: schema.GetApplication(), ReleaseName: schema.GetReleaseName(), Version: schema.GetVersion(), Digest: schema.GetDigest(), Schema: document,
 		})
 	}
-	_, _ = fmt.Fprintf(c.Stdout, "Schema %s version %d\nDigest: %s\n%s\n", schema.GetId(), schema.GetVersion(), schema.GetDigest(), schema.GetSchemaJson())
+	_, _ = fmt.Fprintf(c.Stdout, "Schema %s/%s@%d\nDigest: %s\n%s\n", schema.GetApplication(), schema.GetReleaseName(), schema.GetVersion(), schema.GetDigest(), schema.GetSchemaJson())
 	return 0
 }
 
 // releaseSchemaListItemJSON is one row of `release schema list`.
 type releaseSchemaListItemJSON struct {
-	ID        string  `json:"id"`
-	Version   uint64  `json:"version"`
-	Digest    string  `json:"digest"`
-	CreatedAt *string `json:"created_at"`
+	Application string  `json:"application"`
+	ReleaseName string  `json:"release_name"`
+	Version     uint64  `json:"version"`
+	Digest      string  `json:"digest"`
+	CreatedAt   *string `json:"created_at"`
 }
 
 func (c *CLI) cmdReleaseSchemaList(args []string) int {
 	fs := c.newFlags("release schema list")
 	cf := addConnFlags(c, fs)
 	pageSize := fs.Int("page-size", 100, "result `count` per RPC")
-	c.setUsage(fs, "release schema list [ID] [flags]",
+	c.setUsage(fs, "release schema list [APPLICATION [RELEASE]] [flags]",
 		"List schema versions with their digests and creation times.", false)
 	if !c.parseFlags(fs, args) {
 		return 2
 	}
 	pos := c.args()
-	if !c.rejectExtraPositionals(1) {
+	if !c.rejectExtraPositionals(2) {
 		return 2
 	}
-	id := ""
+	application, releaseName := "", ""
 	if len(pos) > 0 {
-		id = pos[0]
+		application = pos[0]
+	}
+	if len(pos) > 1 {
+		releaseName = pos[1]
 	}
 	conn, err := c.dialConn(cf)
 	if err != nil {
@@ -1303,21 +1304,21 @@ func (c *CLI) cmdReleaseSchemaList(args []string) int {
 	items := []releaseSchemaListItemJSON{}
 	pageToken := ""
 	for {
-		resp, listErr := client.ListSchemas(cf.authCtx(ctx), &kmsv1.ListSchemasRequest{Id: id, PageSize: int32(*pageSize), PageToken: pageToken})
+		resp, listErr := client.ListSchemas(cf.authCtx(ctx), &kmsv1.ListSchemasRequest{Application: application, ReleaseName: releaseName, PageSize: int32(*pageSize), PageToken: pageToken})
 		if listErr != nil {
 			return c.failErr("release schema list", listErr)
 		}
 		for _, schema := range resp.GetSchemas() {
 			if c.jsonOutput() {
 				items = append(items, releaseSchemaListItemJSON{
-					ID: schema.GetId(), Version: schema.GetVersion(), Digest: schema.GetDigest(),
+					Application: schema.GetApplication(), ReleaseName: schema.GetReleaseName(), Version: schema.GetVersion(), Digest: schema.GetDigest(),
 					CreatedAt: jsonTime(schema.GetCreatedAtUnixMs()),
 				})
 				continue
 			}
 			created := time.UnixMilli(schema.GetCreatedAtUnixMs()).UTC().Format(time.RFC3339)
 			rows = append(rows, []string{
-				schema.GetId(), strconv.FormatUint(schema.GetVersion(), 10), schema.GetDigest(), created,
+				schema.GetApplication() + "/" + schema.GetReleaseName(), strconv.FormatUint(schema.GetVersion(), 10), schema.GetDigest(), created,
 			})
 		}
 		pageToken = resp.GetNextPageToken()
@@ -1329,7 +1330,7 @@ func (c *CLI) cmdReleaseSchemaList(args []string) int {
 		// Every page has been followed, so there is no token to hand back.
 		return c.printList(items, "")
 	}
-	c.printTable([]string{"ID", "VERSION", "DIGEST", "CREATED"}, rows)
+	c.printTable([]string{"SCHEMA", "VERSION", "DIGEST", "CREATED"}, rows)
 	return 0
 }
 

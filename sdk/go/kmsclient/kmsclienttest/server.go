@@ -80,6 +80,7 @@ type Server struct {
 	kmsv1.UnimplementedWatchServiceServer
 	kmsv1.UnimplementedAdminServiceServer
 	kmsv1.UnimplementedConfigurationReleaseServiceServer
+	kmsv1.UnimplementedConfigurationSchemaServiceServer
 
 	lis  *bufconn.Listener
 	grpc *grpc.Server
@@ -98,6 +99,8 @@ type Server struct {
 	defaultsQueue  []scriptedDefaultsResponse
 	verifyCalls    []*kmsv1.VerifyReleaseDefaultsRequest
 	verifyQueue    []scriptedVerifyResponse
+	schemaCalls    []*kmsv1.CreateSchemaRequest
+	schemaQueue    []scriptedSchemaResponse
 	getParamHook   func(displayPath string)
 	listHook       func(namespace string)
 	identity       *kmsv1.WhoAmIResponse
@@ -119,6 +122,11 @@ type scriptedDefaultsResponse struct {
 
 type scriptedVerifyResponse struct {
 	response *kmsv1.VerifyReleaseDefaultsResponse
+	err      error
+}
+
+type scriptedSchemaResponse struct {
+	response *kmsv1.CreateSchemaResponse
 	err      error
 }
 
@@ -153,6 +161,7 @@ func New() (*Server, error) {
 	kmsv1.RegisterWatchServiceServer(s.grpc, s)
 	kmsv1.RegisterAdminServiceServer(s.grpc, s)
 	kmsv1.RegisterConfigurationReleaseServiceServer(s.grpc, s)
+	kmsv1.RegisterConfigurationSchemaServiceServer(s.grpc, s)
 	go func() { _ = s.grpc.Serve(s.lis) }()
 	return s, nil
 }
@@ -196,7 +205,6 @@ type ReleaseSpec struct {
 	Namespace     string
 	Name          string
 	Version       uint64
-	SchemaID      string
 	SchemaVersion uint64
 	MetadataJSON  string
 	Entries       []ReleaseEntrySpec
@@ -254,7 +262,6 @@ func (s *Server) buildRelease(spec ReleaseSpec) (*kmsv1.ConfigurationRelease, er
 		Namespace:     nsProto(spec.Namespace),
 		Name:          spec.Name,
 		Version:       spec.Version,
-		SchemaId:      spec.SchemaID,
 		SchemaVersion: spec.SchemaVersion,
 		MetadataJson:  spec.MetadataJSON,
 	}
@@ -325,7 +332,6 @@ func deterministicReleaseDigest(release *kmsv1.ConfigurationRelease) (string, er
 	projection := &kmsv1.ConfigurationRelease{
 		Namespace:     &kmsv1.NamespaceRef{Env: release.GetNamespace().GetEnv(), App: release.GetNamespace().GetApp()},
 		Name:          release.GetName(),
-		SchemaId:      release.GetSchemaId(),
 		SchemaVersion: release.GetSchemaVersion(),
 		MetadataJson:  release.GetMetadataJson(),
 	}
@@ -550,6 +556,28 @@ func (s *Server) ApplicationDefaultsCalls() []*kmsv1.ApplyApplicationDefaultsReq
 	return result
 }
 
+// QueueCreateSchemaResponse scripts one CreateSchema RPC.
+func (s *Server) QueueCreateSchemaResponse(response *kmsv1.CreateSchemaResponse, err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var cloned *kmsv1.CreateSchemaResponse
+	if response != nil {
+		cloned = proto.Clone(response).(*kmsv1.CreateSchemaResponse)
+	}
+	s.schemaQueue = append(s.schemaQueue, scriptedSchemaResponse{response: cloned, err: err})
+}
+
+// CreateSchemaCalls returns a deep copy of schema registration requests.
+func (s *Server) CreateSchemaCalls() []*kmsv1.CreateSchemaRequest {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	result := make([]*kmsv1.CreateSchemaRequest, len(s.schemaCalls))
+	for index, call := range s.schemaCalls {
+		result[index] = proto.Clone(call).(*kmsv1.CreateSchemaRequest)
+	}
+	return result
+}
+
 // QueueVerifyReleaseDefaultsResponse scripts one VerifyReleaseDefaults RPC.
 // Calls consume responses in order; response and err are cloned/retained by the
 // fake so callers may safely mutate their inputs afterward. An unscripted call
@@ -719,6 +747,24 @@ func (s *Server) ApplyApplicationDefaults(ctx context.Context, request *kmsv1.Ap
 		return nil, nil
 	}
 	return proto.Clone(next.response).(*kmsv1.ApplyApplicationDefaultsResponse), nil
+}
+
+// CreateSchema returns the next scripted application-schema response.
+func (s *Server) CreateSchema(ctx context.Context, request *kmsv1.CreateSchemaRequest) (*kmsv1.CreateSchemaResponse, error) {
+	s.recordMD(ctx, "CreateSchema")
+	s.mu.Lock()
+	s.schemaCalls = append(s.schemaCalls, proto.Clone(request).(*kmsv1.CreateSchemaRequest))
+	if len(s.schemaQueue) == 0 {
+		s.mu.Unlock()
+		return nil, status.Error(codes.Unavailable, "no scripted schema response")
+	}
+	next := s.schemaQueue[0]
+	s.schemaQueue = s.schemaQueue[1:]
+	s.mu.Unlock()
+	if next.err != nil {
+		return nil, next.err
+	}
+	return proto.Clone(next.response).(*kmsv1.CreateSchemaResponse), nil
 }
 
 // --- ConfigurationReleaseService -----------------------------------------

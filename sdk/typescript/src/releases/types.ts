@@ -144,7 +144,6 @@ interface ReleaseIdentityInit {
   readonly name: string;
   readonly version: bigint;
   readonly activationRevision: bigint;
-  readonly schemaId?: string;
   readonly schemaVersion?: bigint;
   readonly digest: string;
   readonly metadataJson?: string;
@@ -156,7 +155,6 @@ interface SafeReleaseJson {
   readonly name: string;
   readonly version: string;
   readonly activationRevision: string;
-  readonly schemaId: string;
   readonly schemaVersion: string;
   readonly digest: string;
   readonly entries: Readonly<Record<string, ReleaseEntryMetadata>>;
@@ -167,7 +165,6 @@ abstract class ReleaseIdentity {
   readonly name: string;
   readonly version: bigint;
   readonly activationRevision: bigint;
-  readonly schemaId: string;
   readonly schemaVersion: bigint;
   readonly digest: string;
   readonly metadataJson: string;
@@ -182,7 +179,6 @@ abstract class ReleaseIdentity {
     this.name = init.name;
     this.version = init.version;
     this.activationRevision = init.activationRevision;
-    this.schemaId = init.schemaId ?? "";
     this.schemaVersion = schemaVersion;
     this.digest = init.digest;
     this.metadataJson = init.metadataJson ?? "";
@@ -203,7 +199,6 @@ abstract class ReleaseIdentity {
       name: this.name,
       version: this.version.toString(),
       activationRevision: this.activationRevision.toString(),
-      schemaId: this.schemaId,
       schemaVersion: this.schemaVersion.toString(),
       digest: this.digest,
       entries: Object.fromEntries(this.#entries),

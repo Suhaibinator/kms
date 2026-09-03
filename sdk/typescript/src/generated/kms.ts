@@ -318,7 +318,6 @@ export interface ConfigurationRelease {
   namespace: NamespaceRef | undefined;
   name: string;
   version: bigint;
-  schemaId: string;
   schemaVersion: bigint;
   entries: ConfigurationReleaseEntry[];
   digest: string;
@@ -330,7 +329,6 @@ export interface ConfigurationRelease {
 export interface CreateReleaseRequest {
   namespace: NamespaceRef | undefined;
   name: string;
-  schemaId: string;
   schemaVersion: bigint;
   entries: ReleaseEntrySelector[];
   metadataJson: string;
@@ -524,19 +522,24 @@ export interface WatchReleaseEvent {
 }
 
 export interface ConfigurationSchema {
-  id: string;
   version: bigint;
   schemaJson: string;
   digest: string;
   metadataJson: string;
   createdBy: string;
   createdAtUnixMs: bigint;
+  application: string;
+  releaseName: string;
 }
 
 export interface CreateSchemaRequest {
-  id: string;
   schemaJson: string;
   metadataJson: string;
+  /**
+   * KMS derives the immutable schema lineage's release name from the
+   * application's canonical release name.
+   */
+  application: string;
 }
 
 export interface CreateSchemaResponse {
@@ -544,8 +547,9 @@ export interface CreateSchemaResponse {
 }
 
 export interface GetSchemaRequest {
-  id: string;
   version: bigint;
+  application: string;
+  releaseName: string;
 }
 
 export interface GetSchemaResponse {
@@ -553,9 +557,10 @@ export interface GetSchemaResponse {
 }
 
 export interface ListSchemasRequest {
-  id: string;
   pageSize: number;
   pageToken: string;
+  application: string;
+  releaseName: string;
 }
 
 export interface ListSchemasResponse {
@@ -5423,7 +5428,6 @@ function createBaseConfigurationRelease(): ConfigurationRelease {
     namespace: undefined,
     name: "",
     version: 0n,
-    schemaId: "",
     schemaVersion: 0n,
     entries: [],
     digest: "",
@@ -5446,9 +5450,6 @@ export const ConfigurationRelease: MessageFns<ConfigurationRelease> = {
         throw new globalThis.Error("value provided for field message.version of type uint64 too large");
       }
       writer.uint32(24).uint64(message.version);
-    }
-    if (message.schemaId !== "") {
-      writer.uint32(34).string(message.schemaId);
     }
     if (message.schemaVersion !== 0n) {
       if (BigInt.asUintN(64, message.schemaVersion) !== message.schemaVersion) {
@@ -5512,14 +5513,6 @@ export const ConfigurationRelease: MessageFns<ConfigurationRelease> = {
             }
 
             message.version = reader.uint64() as bigint;
-            continue;
-          }
-          case 4: {
-            if (tag !== 34) {
-              break;
-            }
-
-            message.schemaId = reader.string();
             continue;
           }
           case 5: {
@@ -5587,11 +5580,6 @@ export const ConfigurationRelease: MessageFns<ConfigurationRelease> = {
       namespace: isSet(object.namespace) ? NamespaceRef.fromJSON(object.namespace) : undefined,
       name: isSet(object.name) ? globalThis.String(object.name) : "",
       version: isSet(object.version) ? BigInt(object.version) : 0n,
-      schemaId: isSet(object.schemaId)
-        ? globalThis.String(object.schemaId)
-        : isSet(object.schema_id)
-        ? globalThis.String(object.schema_id)
-        : "",
       schemaVersion: isSet(object.schemaVersion)
         ? BigInt(object.schemaVersion)
         : isSet(object.schema_version)
@@ -5630,9 +5618,6 @@ export const ConfigurationRelease: MessageFns<ConfigurationRelease> = {
     if (message.version !== 0n) {
       obj.version = message.version.toString();
     }
-    if (message.schemaId !== "") {
-      obj.schemaId = message.schemaId;
-    }
     if (message.schemaVersion !== 0n) {
       obj.schemaVersion = message.schemaVersion.toString();
     }
@@ -5664,7 +5649,6 @@ export const ConfigurationRelease: MessageFns<ConfigurationRelease> = {
       : undefined;
     message.name = object.name ?? "";
     message.version = (object.version !== undefined && object.version !== null) ? BigInt(object.version) : 0n;
-    message.schemaId = object.schemaId ?? "";
     message.schemaVersion = (object.schemaVersion !== undefined && object.schemaVersion !== null)
       ? BigInt(object.schemaVersion)
       : 0n;
@@ -5680,7 +5664,7 @@ export const ConfigurationRelease: MessageFns<ConfigurationRelease> = {
 };
 
 function createBaseCreateReleaseRequest(): CreateReleaseRequest {
-  return { namespace: undefined, name: "", schemaId: "", schemaVersion: 0n, entries: [], metadataJson: "" };
+  return { namespace: undefined, name: "", schemaVersion: 0n, entries: [], metadataJson: "" };
 }
 
 export const CreateReleaseRequest: MessageFns<CreateReleaseRequest> = {
@@ -5690,9 +5674,6 @@ export const CreateReleaseRequest: MessageFns<CreateReleaseRequest> = {
     }
     if (message.name !== "") {
       writer.uint32(18).string(message.name);
-    }
-    if (message.schemaId !== "") {
-      writer.uint32(26).string(message.schemaId);
     }
     if (message.schemaVersion !== 0n) {
       if (BigInt.asUintN(64, message.schemaVersion) !== message.schemaVersion) {
@@ -5738,14 +5719,6 @@ export const CreateReleaseRequest: MessageFns<CreateReleaseRequest> = {
             message.name = reader.string();
             continue;
           }
-          case 3: {
-            if (tag !== 26) {
-              break;
-            }
-
-            message.schemaId = reader.string();
-            continue;
-          }
           case 4: {
             if (tag !== 32) {
               break;
@@ -5786,11 +5759,6 @@ export const CreateReleaseRequest: MessageFns<CreateReleaseRequest> = {
     return {
       namespace: isSet(object.namespace) ? NamespaceRef.fromJSON(object.namespace) : undefined,
       name: isSet(object.name) ? globalThis.String(object.name) : "",
-      schemaId: isSet(object.schemaId)
-        ? globalThis.String(object.schemaId)
-        : isSet(object.schema_id)
-        ? globalThis.String(object.schema_id)
-        : "",
       schemaVersion: isSet(object.schemaVersion)
         ? BigInt(object.schemaVersion)
         : isSet(object.schema_version)
@@ -5815,9 +5783,6 @@ export const CreateReleaseRequest: MessageFns<CreateReleaseRequest> = {
     if (message.name !== "") {
       obj.name = message.name;
     }
-    if (message.schemaId !== "") {
-      obj.schemaId = message.schemaId;
-    }
     if (message.schemaVersion !== 0n) {
       obj.schemaVersion = message.schemaVersion.toString();
     }
@@ -5839,7 +5804,6 @@ export const CreateReleaseRequest: MessageFns<CreateReleaseRequest> = {
       ? NamespaceRef.fromPartial(object.namespace)
       : undefined;
     message.name = object.name ?? "";
-    message.schemaId = object.schemaId ?? "";
     message.schemaVersion = (object.schemaVersion !== undefined && object.schemaVersion !== null)
       ? BigInt(object.schemaVersion)
       : 0n;
@@ -8728,14 +8692,20 @@ export const WatchReleaseEvent: MessageFns<WatchReleaseEvent> = {
 };
 
 function createBaseConfigurationSchema(): ConfigurationSchema {
-  return { id: "", version: 0n, schemaJson: "", digest: "", metadataJson: "", createdBy: "", createdAtUnixMs: 0n };
+  return {
+    version: 0n,
+    schemaJson: "",
+    digest: "",
+    metadataJson: "",
+    createdBy: "",
+    createdAtUnixMs: 0n,
+    application: "",
+    releaseName: "",
+  };
 }
 
 export const ConfigurationSchema: MessageFns<ConfigurationSchema> = {
   encode(message: ConfigurationSchema, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
-    if (message.id !== "") {
-      writer.uint32(10).string(message.id);
-    }
     if (message.version !== 0n) {
       if (BigInt.asUintN(64, message.version) !== message.version) {
         throw new globalThis.Error("value provided for field message.version of type uint64 too large");
@@ -8760,6 +8730,12 @@ export const ConfigurationSchema: MessageFns<ConfigurationSchema> = {
       }
       writer.uint32(56).int64(message.createdAtUnixMs);
     }
+    if (message.application !== "") {
+      writer.uint32(66).string(message.application);
+    }
+    if (message.releaseName !== "") {
+      writer.uint32(74).string(message.releaseName);
+    }
     return writer;
   },
 
@@ -8776,14 +8752,6 @@ export const ConfigurationSchema: MessageFns<ConfigurationSchema> = {
       while (reader.pos < end) {
         const tag = reader.uint32();
         switch (tag >>> 3) {
-          case 1: {
-            if (tag !== 10) {
-              break;
-            }
-
-            message.id = reader.string();
-            continue;
-          }
           case 2: {
             if (tag !== 16) {
               break;
@@ -8832,6 +8800,22 @@ export const ConfigurationSchema: MessageFns<ConfigurationSchema> = {
             message.createdAtUnixMs = reader.int64() as bigint;
             continue;
           }
+          case 8: {
+            if (tag !== 66) {
+              break;
+            }
+
+            message.application = reader.string();
+            continue;
+          }
+          case 9: {
+            if (tag !== 74) {
+              break;
+            }
+
+            message.releaseName = reader.string();
+            continue;
+          }
         }
         if ((tag & 7) === 4 || tag === 0) {
           break;
@@ -8846,7 +8830,6 @@ export const ConfigurationSchema: MessageFns<ConfigurationSchema> = {
 
   fromJSON(object: any): ConfigurationSchema {
     return {
-      id: isSet(object.id) ? globalThis.String(object.id) : "",
       version: isSet(object.version) ? BigInt(object.version) : 0n,
       schemaJson: isSet(object.schemaJson)
         ? globalThis.String(object.schemaJson)
@@ -8869,14 +8852,17 @@ export const ConfigurationSchema: MessageFns<ConfigurationSchema> = {
         : isSet(object.created_at_unix_ms)
         ? BigInt(object.created_at_unix_ms)
         : 0n,
+      application: isSet(object.application) ? globalThis.String(object.application) : "",
+      releaseName: isSet(object.releaseName)
+        ? globalThis.String(object.releaseName)
+        : isSet(object.release_name)
+        ? globalThis.String(object.release_name)
+        : "",
     };
   },
 
   toJSON(message: ConfigurationSchema): unknown {
     const obj: any = {};
-    if (message.id !== "") {
-      obj.id = message.id;
-    }
     if (message.version !== 0n) {
       obj.version = message.version.toString();
     }
@@ -8895,6 +8881,12 @@ export const ConfigurationSchema: MessageFns<ConfigurationSchema> = {
     if (message.createdAtUnixMs !== 0n) {
       obj.createdAtUnixMs = message.createdAtUnixMs.toString();
     }
+    if (message.application !== "") {
+      obj.application = message.application;
+    }
+    if (message.releaseName !== "") {
+      obj.releaseName = message.releaseName;
+    }
     return obj;
   },
 
@@ -8903,7 +8895,6 @@ export const ConfigurationSchema: MessageFns<ConfigurationSchema> = {
   },
   fromPartial(object: DeepPartial<ConfigurationSchema>): ConfigurationSchema {
     const message = createBaseConfigurationSchema();
-    message.id = object.id ?? "";
     message.version = (object.version !== undefined && object.version !== null) ? BigInt(object.version) : 0n;
     message.schemaJson = object.schemaJson ?? "";
     message.digest = object.digest ?? "";
@@ -8912,24 +8903,26 @@ export const ConfigurationSchema: MessageFns<ConfigurationSchema> = {
     message.createdAtUnixMs = (object.createdAtUnixMs !== undefined && object.createdAtUnixMs !== null)
       ? BigInt(object.createdAtUnixMs)
       : 0n;
+    message.application = object.application ?? "";
+    message.releaseName = object.releaseName ?? "";
     return message;
   },
 };
 
 function createBaseCreateSchemaRequest(): CreateSchemaRequest {
-  return { id: "", schemaJson: "", metadataJson: "" };
+  return { schemaJson: "", metadataJson: "", application: "" };
 }
 
 export const CreateSchemaRequest: MessageFns<CreateSchemaRequest> = {
   encode(message: CreateSchemaRequest, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
-    if (message.id !== "") {
-      writer.uint32(10).string(message.id);
-    }
     if (message.schemaJson !== "") {
       writer.uint32(18).string(message.schemaJson);
     }
     if (message.metadataJson !== "") {
       writer.uint32(26).string(message.metadataJson);
+    }
+    if (message.application !== "") {
+      writer.uint32(34).string(message.application);
     }
     return writer;
   },
@@ -8947,14 +8940,6 @@ export const CreateSchemaRequest: MessageFns<CreateSchemaRequest> = {
       while (reader.pos < end) {
         const tag = reader.uint32();
         switch (tag >>> 3) {
-          case 1: {
-            if (tag !== 10) {
-              break;
-            }
-
-            message.id = reader.string();
-            continue;
-          }
           case 2: {
             if (tag !== 18) {
               break;
@@ -8971,6 +8956,14 @@ export const CreateSchemaRequest: MessageFns<CreateSchemaRequest> = {
             message.metadataJson = reader.string();
             continue;
           }
+          case 4: {
+            if (tag !== 34) {
+              break;
+            }
+
+            message.application = reader.string();
+            continue;
+          }
         }
         if ((tag & 7) === 4 || tag === 0) {
           break;
@@ -8985,7 +8978,6 @@ export const CreateSchemaRequest: MessageFns<CreateSchemaRequest> = {
 
   fromJSON(object: any): CreateSchemaRequest {
     return {
-      id: isSet(object.id) ? globalThis.String(object.id) : "",
       schemaJson: isSet(object.schemaJson)
         ? globalThis.String(object.schemaJson)
         : isSet(object.schema_json)
@@ -8996,19 +8988,20 @@ export const CreateSchemaRequest: MessageFns<CreateSchemaRequest> = {
         : isSet(object.metadata_json)
         ? globalThis.String(object.metadata_json)
         : "",
+      application: isSet(object.application) ? globalThis.String(object.application) : "",
     };
   },
 
   toJSON(message: CreateSchemaRequest): unknown {
     const obj: any = {};
-    if (message.id !== "") {
-      obj.id = message.id;
-    }
     if (message.schemaJson !== "") {
       obj.schemaJson = message.schemaJson;
     }
     if (message.metadataJson !== "") {
       obj.metadataJson = message.metadataJson;
+    }
+    if (message.application !== "") {
+      obj.application = message.application;
     }
     return obj;
   },
@@ -9018,9 +9011,9 @@ export const CreateSchemaRequest: MessageFns<CreateSchemaRequest> = {
   },
   fromPartial(object: DeepPartial<CreateSchemaRequest>): CreateSchemaRequest {
     const message = createBaseCreateSchemaRequest();
-    message.id = object.id ?? "";
     message.schemaJson = object.schemaJson ?? "";
     message.metadataJson = object.metadataJson ?? "";
+    message.application = object.application ?? "";
     return message;
   },
 };
@@ -9095,19 +9088,22 @@ export const CreateSchemaResponse: MessageFns<CreateSchemaResponse> = {
 };
 
 function createBaseGetSchemaRequest(): GetSchemaRequest {
-  return { id: "", version: 0n };
+  return { version: 0n, application: "", releaseName: "" };
 }
 
 export const GetSchemaRequest: MessageFns<GetSchemaRequest> = {
   encode(message: GetSchemaRequest, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
-    if (message.id !== "") {
-      writer.uint32(10).string(message.id);
-    }
     if (message.version !== 0n) {
       if (BigInt.asUintN(64, message.version) !== message.version) {
         throw new globalThis.Error("value provided for field message.version of type uint64 too large");
       }
       writer.uint32(16).uint64(message.version);
+    }
+    if (message.application !== "") {
+      writer.uint32(26).string(message.application);
+    }
+    if (message.releaseName !== "") {
+      writer.uint32(34).string(message.releaseName);
     }
     return writer;
   },
@@ -9125,20 +9121,28 @@ export const GetSchemaRequest: MessageFns<GetSchemaRequest> = {
       while (reader.pos < end) {
         const tag = reader.uint32();
         switch (tag >>> 3) {
-          case 1: {
-            if (tag !== 10) {
-              break;
-            }
-
-            message.id = reader.string();
-            continue;
-          }
           case 2: {
             if (tag !== 16) {
               break;
             }
 
             message.version = reader.uint64() as bigint;
+            continue;
+          }
+          case 3: {
+            if (tag !== 26) {
+              break;
+            }
+
+            message.application = reader.string();
+            continue;
+          }
+          case 4: {
+            if (tag !== 34) {
+              break;
+            }
+
+            message.releaseName = reader.string();
             continue;
           }
         }
@@ -9155,18 +9159,26 @@ export const GetSchemaRequest: MessageFns<GetSchemaRequest> = {
 
   fromJSON(object: any): GetSchemaRequest {
     return {
-      id: isSet(object.id) ? globalThis.String(object.id) : "",
       version: isSet(object.version) ? BigInt(object.version) : 0n,
+      application: isSet(object.application) ? globalThis.String(object.application) : "",
+      releaseName: isSet(object.releaseName)
+        ? globalThis.String(object.releaseName)
+        : isSet(object.release_name)
+        ? globalThis.String(object.release_name)
+        : "",
     };
   },
 
   toJSON(message: GetSchemaRequest): unknown {
     const obj: any = {};
-    if (message.id !== "") {
-      obj.id = message.id;
-    }
     if (message.version !== 0n) {
       obj.version = message.version.toString();
+    }
+    if (message.application !== "") {
+      obj.application = message.application;
+    }
+    if (message.releaseName !== "") {
+      obj.releaseName = message.releaseName;
     }
     return obj;
   },
@@ -9176,8 +9188,9 @@ export const GetSchemaRequest: MessageFns<GetSchemaRequest> = {
   },
   fromPartial(object: DeepPartial<GetSchemaRequest>): GetSchemaRequest {
     const message = createBaseGetSchemaRequest();
-    message.id = object.id ?? "";
     message.version = (object.version !== undefined && object.version !== null) ? BigInt(object.version) : 0n;
+    message.application = object.application ?? "";
+    message.releaseName = object.releaseName ?? "";
     return message;
   },
 };
@@ -9252,19 +9265,22 @@ export const GetSchemaResponse: MessageFns<GetSchemaResponse> = {
 };
 
 function createBaseListSchemasRequest(): ListSchemasRequest {
-  return { id: "", pageSize: 0, pageToken: "" };
+  return { pageSize: 0, pageToken: "", application: "", releaseName: "" };
 }
 
 export const ListSchemasRequest: MessageFns<ListSchemasRequest> = {
   encode(message: ListSchemasRequest, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
-    if (message.id !== "") {
-      writer.uint32(10).string(message.id);
-    }
     if (message.pageSize !== 0) {
       writer.uint32(16).int32(message.pageSize);
     }
     if (message.pageToken !== "") {
       writer.uint32(26).string(message.pageToken);
+    }
+    if (message.application !== "") {
+      writer.uint32(34).string(message.application);
+    }
+    if (message.releaseName !== "") {
+      writer.uint32(42).string(message.releaseName);
     }
     return writer;
   },
@@ -9282,14 +9298,6 @@ export const ListSchemasRequest: MessageFns<ListSchemasRequest> = {
       while (reader.pos < end) {
         const tag = reader.uint32();
         switch (tag >>> 3) {
-          case 1: {
-            if (tag !== 10) {
-              break;
-            }
-
-            message.id = reader.string();
-            continue;
-          }
           case 2: {
             if (tag !== 16) {
               break;
@@ -9306,6 +9314,22 @@ export const ListSchemasRequest: MessageFns<ListSchemasRequest> = {
             message.pageToken = reader.string();
             continue;
           }
+          case 4: {
+            if (tag !== 34) {
+              break;
+            }
+
+            message.application = reader.string();
+            continue;
+          }
+          case 5: {
+            if (tag !== 42) {
+              break;
+            }
+
+            message.releaseName = reader.string();
+            continue;
+          }
         }
         if ((tag & 7) === 4 || tag === 0) {
           break;
@@ -9320,7 +9344,6 @@ export const ListSchemasRequest: MessageFns<ListSchemasRequest> = {
 
   fromJSON(object: any): ListSchemasRequest {
     return {
-      id: isSet(object.id) ? globalThis.String(object.id) : "",
       pageSize: isSet(object.pageSize)
         ? globalThis.Number(object.pageSize)
         : isSet(object.page_size)
@@ -9331,19 +9354,28 @@ export const ListSchemasRequest: MessageFns<ListSchemasRequest> = {
         : isSet(object.page_token)
         ? globalThis.String(object.page_token)
         : "",
+      application: isSet(object.application) ? globalThis.String(object.application) : "",
+      releaseName: isSet(object.releaseName)
+        ? globalThis.String(object.releaseName)
+        : isSet(object.release_name)
+        ? globalThis.String(object.release_name)
+        : "",
     };
   },
 
   toJSON(message: ListSchemasRequest): unknown {
     const obj: any = {};
-    if (message.id !== "") {
-      obj.id = message.id;
-    }
     if (message.pageSize !== 0) {
       obj.pageSize = Math.round(message.pageSize);
     }
     if (message.pageToken !== "") {
       obj.pageToken = message.pageToken;
+    }
+    if (message.application !== "") {
+      obj.application = message.application;
+    }
+    if (message.releaseName !== "") {
+      obj.releaseName = message.releaseName;
     }
     return obj;
   },
@@ -9353,9 +9385,10 @@ export const ListSchemasRequest: MessageFns<ListSchemasRequest> = {
   },
   fromPartial(object: DeepPartial<ListSchemasRequest>): ListSchemasRequest {
     const message = createBaseListSchemasRequest();
-    message.id = object.id ?? "";
     message.pageSize = object.pageSize ?? 0;
     message.pageToken = object.pageToken ?? "";
+    message.application = object.application ?? "";
+    message.releaseName = object.releaseName ?? "";
     return message;
   },
 };
@@ -16839,5 +16872,5 @@ export interface MessageFns<T> {
   fromPartial(object: DeepPartial<T>): T;
 }
 
-// source-sha256: 43eec1ad2c8ec1cd960674c761777df574ef4dc9cd52e06e59a81bb732296bd4
+// source-sha256: 882c74967702b2c80ef394936a3961c248a3f6dab4251ceace7f6c7375e55a22
 // generation-sha256: c3e69d40e38671d5381cfa50a679b45232adc3ecd3df927c51285f1901aa09ef

@@ -394,11 +394,10 @@ class ConfigurationReleaseEntry(_message.Message):
     def __init__(self, alias: _Optional[str] = ..., kind: _Optional[str] = ..., ref: _Optional[_Union[ResourceRef, _Mapping]] = ..., version: _Optional[int] = ..., content_type: _Optional[str] = ..., metadata_json: _Optional[str] = ..., parameter_digest: _Optional[str] = ..., client_bound: _Optional[bool] = ..., has_access_token: _Optional[bool] = ...) -> None: ...
 
 class ConfigurationRelease(_message.Message):
-    __slots__ = ("namespace", "name", "version", "schema_id", "schema_version", "entries", "digest", "metadata_json", "created_by", "created_at_unix_ms")
+    __slots__ = ("namespace", "name", "version", "schema_version", "entries", "digest", "metadata_json", "created_by", "created_at_unix_ms")
     NAMESPACE_FIELD_NUMBER: _ClassVar[int]
     NAME_FIELD_NUMBER: _ClassVar[int]
     VERSION_FIELD_NUMBER: _ClassVar[int]
-    SCHEMA_ID_FIELD_NUMBER: _ClassVar[int]
     SCHEMA_VERSION_FIELD_NUMBER: _ClassVar[int]
     ENTRIES_FIELD_NUMBER: _ClassVar[int]
     DIGEST_FIELD_NUMBER: _ClassVar[int]
@@ -408,30 +407,27 @@ class ConfigurationRelease(_message.Message):
     namespace: NamespaceRef
     name: str
     version: int
-    schema_id: str
     schema_version: int
     entries: _containers.RepeatedCompositeFieldContainer[ConfigurationReleaseEntry]
     digest: str
     metadata_json: str
     created_by: str
     created_at_unix_ms: int
-    def __init__(self, namespace: _Optional[_Union[NamespaceRef, _Mapping]] = ..., name: _Optional[str] = ..., version: _Optional[int] = ..., schema_id: _Optional[str] = ..., schema_version: _Optional[int] = ..., entries: _Optional[_Iterable[_Union[ConfigurationReleaseEntry, _Mapping]]] = ..., digest: _Optional[str] = ..., metadata_json: _Optional[str] = ..., created_by: _Optional[str] = ..., created_at_unix_ms: _Optional[int] = ...) -> None: ...
+    def __init__(self, namespace: _Optional[_Union[NamespaceRef, _Mapping]] = ..., name: _Optional[str] = ..., version: _Optional[int] = ..., schema_version: _Optional[int] = ..., entries: _Optional[_Iterable[_Union[ConfigurationReleaseEntry, _Mapping]]] = ..., digest: _Optional[str] = ..., metadata_json: _Optional[str] = ..., created_by: _Optional[str] = ..., created_at_unix_ms: _Optional[int] = ...) -> None: ...
 
 class CreateReleaseRequest(_message.Message):
-    __slots__ = ("namespace", "name", "schema_id", "schema_version", "entries", "metadata_json")
+    __slots__ = ("namespace", "name", "schema_version", "entries", "metadata_json")
     NAMESPACE_FIELD_NUMBER: _ClassVar[int]
     NAME_FIELD_NUMBER: _ClassVar[int]
-    SCHEMA_ID_FIELD_NUMBER: _ClassVar[int]
     SCHEMA_VERSION_FIELD_NUMBER: _ClassVar[int]
     ENTRIES_FIELD_NUMBER: _ClassVar[int]
     METADATA_JSON_FIELD_NUMBER: _ClassVar[int]
     namespace: NamespaceRef
     name: str
-    schema_id: str
     schema_version: int
     entries: _containers.RepeatedCompositeFieldContainer[ReleaseEntrySelector]
     metadata_json: str
-    def __init__(self, namespace: _Optional[_Union[NamespaceRef, _Mapping]] = ..., name: _Optional[str] = ..., schema_id: _Optional[str] = ..., schema_version: _Optional[int] = ..., entries: _Optional[_Iterable[_Union[ReleaseEntrySelector, _Mapping]]] = ..., metadata_json: _Optional[str] = ...) -> None: ...
+    def __init__(self, namespace: _Optional[_Union[NamespaceRef, _Mapping]] = ..., name: _Optional[str] = ..., schema_version: _Optional[int] = ..., entries: _Optional[_Iterable[_Union[ReleaseEntrySelector, _Mapping]]] = ..., metadata_json: _Optional[str] = ...) -> None: ...
 
 class CreateReleaseResponse(_message.Message):
     __slots__ = ("release",)
@@ -696,32 +692,34 @@ class WatchReleaseEvent(_message.Message):
     def __init__(self, snapshot: _Optional[_Union[ReleaseSnapshotEvent, _Mapping]] = ..., activation: _Optional[_Union[ReleaseActivationEvent, _Mapping]] = ..., heartbeat: _Optional[_Union[Heartbeat, _Mapping]] = ..., revision: _Optional[int] = ...) -> None: ...
 
 class ConfigurationSchema(_message.Message):
-    __slots__ = ("id", "version", "schema_json", "digest", "metadata_json", "created_by", "created_at_unix_ms")
-    ID_FIELD_NUMBER: _ClassVar[int]
+    __slots__ = ("version", "schema_json", "digest", "metadata_json", "created_by", "created_at_unix_ms", "application", "release_name")
     VERSION_FIELD_NUMBER: _ClassVar[int]
     SCHEMA_JSON_FIELD_NUMBER: _ClassVar[int]
     DIGEST_FIELD_NUMBER: _ClassVar[int]
     METADATA_JSON_FIELD_NUMBER: _ClassVar[int]
     CREATED_BY_FIELD_NUMBER: _ClassVar[int]
     CREATED_AT_UNIX_MS_FIELD_NUMBER: _ClassVar[int]
-    id: str
+    APPLICATION_FIELD_NUMBER: _ClassVar[int]
+    RELEASE_NAME_FIELD_NUMBER: _ClassVar[int]
     version: int
     schema_json: str
     digest: str
     metadata_json: str
     created_by: str
     created_at_unix_ms: int
-    def __init__(self, id: _Optional[str] = ..., version: _Optional[int] = ..., schema_json: _Optional[str] = ..., digest: _Optional[str] = ..., metadata_json: _Optional[str] = ..., created_by: _Optional[str] = ..., created_at_unix_ms: _Optional[int] = ...) -> None: ...
+    application: str
+    release_name: str
+    def __init__(self, version: _Optional[int] = ..., schema_json: _Optional[str] = ..., digest: _Optional[str] = ..., metadata_json: _Optional[str] = ..., created_by: _Optional[str] = ..., created_at_unix_ms: _Optional[int] = ..., application: _Optional[str] = ..., release_name: _Optional[str] = ...) -> None: ...
 
 class CreateSchemaRequest(_message.Message):
-    __slots__ = ("id", "schema_json", "metadata_json")
-    ID_FIELD_NUMBER: _ClassVar[int]
+    __slots__ = ("schema_json", "metadata_json", "application")
     SCHEMA_JSON_FIELD_NUMBER: _ClassVar[int]
     METADATA_JSON_FIELD_NUMBER: _ClassVar[int]
-    id: str
+    APPLICATION_FIELD_NUMBER: _ClassVar[int]
     schema_json: str
     metadata_json: str
-    def __init__(self, id: _Optional[str] = ..., schema_json: _Optional[str] = ..., metadata_json: _Optional[str] = ...) -> None: ...
+    application: str
+    def __init__(self, schema_json: _Optional[str] = ..., metadata_json: _Optional[str] = ..., application: _Optional[str] = ...) -> None: ...
 
 class CreateSchemaResponse(_message.Message):
     __slots__ = ("schema",)
@@ -730,12 +728,14 @@ class CreateSchemaResponse(_message.Message):
     def __init__(self, schema: _Optional[_Union[ConfigurationSchema, _Mapping]] = ...) -> None: ...
 
 class GetSchemaRequest(_message.Message):
-    __slots__ = ("id", "version")
-    ID_FIELD_NUMBER: _ClassVar[int]
+    __slots__ = ("version", "application", "release_name")
     VERSION_FIELD_NUMBER: _ClassVar[int]
-    id: str
+    APPLICATION_FIELD_NUMBER: _ClassVar[int]
+    RELEASE_NAME_FIELD_NUMBER: _ClassVar[int]
     version: int
-    def __init__(self, id: _Optional[str] = ..., version: _Optional[int] = ...) -> None: ...
+    application: str
+    release_name: str
+    def __init__(self, version: _Optional[int] = ..., application: _Optional[str] = ..., release_name: _Optional[str] = ...) -> None: ...
 
 class GetSchemaResponse(_message.Message):
     __slots__ = ("schema",)
@@ -744,14 +744,16 @@ class GetSchemaResponse(_message.Message):
     def __init__(self, schema: _Optional[_Union[ConfigurationSchema, _Mapping]] = ...) -> None: ...
 
 class ListSchemasRequest(_message.Message):
-    __slots__ = ("id", "page_size", "page_token")
-    ID_FIELD_NUMBER: _ClassVar[int]
+    __slots__ = ("page_size", "page_token", "application", "release_name")
     PAGE_SIZE_FIELD_NUMBER: _ClassVar[int]
     PAGE_TOKEN_FIELD_NUMBER: _ClassVar[int]
-    id: str
+    APPLICATION_FIELD_NUMBER: _ClassVar[int]
+    RELEASE_NAME_FIELD_NUMBER: _ClassVar[int]
     page_size: int
     page_token: str
-    def __init__(self, id: _Optional[str] = ..., page_size: _Optional[int] = ..., page_token: _Optional[str] = ...) -> None: ...
+    application: str
+    release_name: str
+    def __init__(self, page_size: _Optional[int] = ..., page_token: _Optional[str] = ..., application: _Optional[str] = ..., release_name: _Optional[str] = ...) -> None: ...
 
 class ListSchemasResponse(_message.Message):
     __slots__ = ("schemas", "next_page_token")

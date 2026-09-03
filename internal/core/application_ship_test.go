@@ -46,15 +46,11 @@ const consoleSchema = `{"type":"object","properties":{"database":{"type":"object
 func seedConsoleApp(t *testing.T, svc *Service, pr Principal, envs ...string) domain.Application {
 	t.Helper()
 	ctx := context.Background()
-	schema, err := svc.CreateConfigurationSchema(ctx, pr, "runtime", consoleSchema, "{}")
-	if err != nil {
-		t.Fatal(err)
-	}
-	app, err := svc.CreateApplication(ctx, pr, domain.Application{Name: "gradethis", ReleaseName: "runtime", SchemaID: schema.ID, SchemaVersion: schema.Version, Contract: []domain.ApplicationContractField{
+	app, _, err := svc.CreateApplicationWithSchema(ctx, pr, domain.Application{Name: "gradethis", ReleaseName: "runtime", Contract: []domain.ApplicationContractField{
 		{Alias: "database", Kind: domain.ReleaseEntryParameter, ContentType: "json"},
 		{Alias: "rate_limits", Kind: domain.ReleaseEntryParameter, ContentType: "integer"},
 		{Alias: "db_password", Kind: domain.ReleaseEntrySecret},
-	}})
+	}}, consoleSchema, "{}")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -108,7 +104,7 @@ func TestShipApplicationChangeDryRunNeverWrites(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.Status != domain.ShipStatusPreview || len(result.Preview.Validation) != 0 || result.Preview.BaseVersion != 0 || result.Preview.ReleaseName != "runtime" || result.Preview.SchemaID != "runtime" {
+	if result.Status != domain.ShipStatusPreview || len(result.Preview.Validation) != 0 || result.Preview.BaseVersion != 0 || result.Preview.ReleaseName != "runtime" {
 		t.Fatalf("preview = %+v", result)
 	}
 	if e := previewEntry(t, result, "rate_limits"); e.Change != domain.ShipEntryEdited || e.ToVersion != 2 || e.FromVersion != 0 || e.Key != "rate_limits" {

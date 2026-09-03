@@ -2195,7 +2195,6 @@ type ConfigurationRelease struct {
 	Namespace       *NamespaceRef                `protobuf:"bytes,1,opt,name=namespace,proto3" json:"namespace,omitempty"`
 	Name            string                       `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
 	Version         uint64                       `protobuf:"varint,3,opt,name=version,proto3" json:"version,omitempty"`
-	SchemaId        string                       `protobuf:"bytes,4,opt,name=schema_id,json=schemaId,proto3" json:"schema_id,omitempty"`
 	SchemaVersion   uint64                       `protobuf:"varint,5,opt,name=schema_version,json=schemaVersion,proto3" json:"schema_version,omitempty"`
 	Entries         []*ConfigurationReleaseEntry `protobuf:"bytes,6,rep,name=entries,proto3" json:"entries,omitempty"`
 	Digest          string                       `protobuf:"bytes,7,opt,name=digest,proto3" json:"digest,omitempty"`
@@ -2257,13 +2256,6 @@ func (x *ConfigurationRelease) GetVersion() uint64 {
 	return 0
 }
 
-func (x *ConfigurationRelease) GetSchemaId() string {
-	if x != nil {
-		return x.SchemaId
-	}
-	return ""
-}
-
 func (x *ConfigurationRelease) GetSchemaVersion() uint64 {
 	if x != nil {
 		return x.SchemaVersion
@@ -2310,7 +2302,6 @@ type CreateReleaseRequest struct {
 	state         protoimpl.MessageState  `protogen:"open.v1"`
 	Namespace     *NamespaceRef           `protobuf:"bytes,1,opt,name=namespace,proto3" json:"namespace,omitempty"`
 	Name          string                  `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
-	SchemaId      string                  `protobuf:"bytes,3,opt,name=schema_id,json=schemaId,proto3" json:"schema_id,omitempty"`
 	SchemaVersion uint64                  `protobuf:"varint,4,opt,name=schema_version,json=schemaVersion,proto3" json:"schema_version,omitempty"`
 	Entries       []*ReleaseEntrySelector `protobuf:"bytes,5,rep,name=entries,proto3" json:"entries,omitempty"`
 	MetadataJson  string                  `protobuf:"bytes,6,opt,name=metadata_json,json=metadataJson,proto3" json:"metadata_json,omitempty"`
@@ -2358,13 +2349,6 @@ func (x *CreateReleaseRequest) GetNamespace() *NamespaceRef {
 func (x *CreateReleaseRequest) GetName() string {
 	if x != nil {
 		return x.Name
-	}
-	return ""
-}
-
-func (x *CreateReleaseRequest) GetSchemaId() string {
-	if x != nil {
-		return x.SchemaId
 	}
 	return ""
 }
@@ -3978,13 +3962,14 @@ func (*WatchReleaseEvent_Heartbeat) isWatchReleaseEvent_Event() {}
 
 type ConfigurationSchema struct {
 	state           protoimpl.MessageState `protogen:"open.v1"`
-	Id              string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
 	Version         uint64                 `protobuf:"varint,2,opt,name=version,proto3" json:"version,omitempty"`
 	SchemaJson      string                 `protobuf:"bytes,3,opt,name=schema_json,json=schemaJson,proto3" json:"schema_json,omitempty"`
 	Digest          string                 `protobuf:"bytes,4,opt,name=digest,proto3" json:"digest,omitempty"`
 	MetadataJson    string                 `protobuf:"bytes,5,opt,name=metadata_json,json=metadataJson,proto3" json:"metadata_json,omitempty"`
 	CreatedBy       string                 `protobuf:"bytes,6,opt,name=created_by,json=createdBy,proto3" json:"created_by,omitempty"`
 	CreatedAtUnixMs int64                  `protobuf:"varint,7,opt,name=created_at_unix_ms,json=createdAtUnixMs,proto3" json:"created_at_unix_ms,omitempty"`
+	Application     string                 `protobuf:"bytes,8,opt,name=application,proto3" json:"application,omitempty"`
+	ReleaseName     string                 `protobuf:"bytes,9,opt,name=release_name,json=releaseName,proto3" json:"release_name,omitempty"`
 	unknownFields   protoimpl.UnknownFields
 	sizeCache       protoimpl.SizeCache
 }
@@ -4017,13 +4002,6 @@ func (x *ConfigurationSchema) ProtoReflect() protoreflect.Message {
 // Deprecated: Use ConfigurationSchema.ProtoReflect.Descriptor instead.
 func (*ConfigurationSchema) Descriptor() ([]byte, []int) {
 	return file_kms_v1_kms_proto_rawDescGZIP(), []int{59}
-}
-
-func (x *ConfigurationSchema) GetId() string {
-	if x != nil {
-		return x.Id
-	}
-	return ""
 }
 
 func (x *ConfigurationSchema) GetVersion() uint64 {
@@ -4068,11 +4046,27 @@ func (x *ConfigurationSchema) GetCreatedAtUnixMs() int64 {
 	return 0
 }
 
+func (x *ConfigurationSchema) GetApplication() string {
+	if x != nil {
+		return x.Application
+	}
+	return ""
+}
+
+func (x *ConfigurationSchema) GetReleaseName() string {
+	if x != nil {
+		return x.ReleaseName
+	}
+	return ""
+}
+
 type CreateSchemaRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Id            string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
-	SchemaJson    string                 `protobuf:"bytes,2,opt,name=schema_json,json=schemaJson,proto3" json:"schema_json,omitempty"`
-	MetadataJson  string                 `protobuf:"bytes,3,opt,name=metadata_json,json=metadataJson,proto3" json:"metadata_json,omitempty"`
+	state        protoimpl.MessageState `protogen:"open.v1"`
+	SchemaJson   string                 `protobuf:"bytes,2,opt,name=schema_json,json=schemaJson,proto3" json:"schema_json,omitempty"`
+	MetadataJson string                 `protobuf:"bytes,3,opt,name=metadata_json,json=metadataJson,proto3" json:"metadata_json,omitempty"`
+	// KMS derives the immutable schema lineage's release name from the
+	// application's canonical release name.
+	Application   string `protobuf:"bytes,4,opt,name=application,proto3" json:"application,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -4107,13 +4101,6 @@ func (*CreateSchemaRequest) Descriptor() ([]byte, []int) {
 	return file_kms_v1_kms_proto_rawDescGZIP(), []int{60}
 }
 
-func (x *CreateSchemaRequest) GetId() string {
-	if x != nil {
-		return x.Id
-	}
-	return ""
-}
-
 func (x *CreateSchemaRequest) GetSchemaJson() string {
 	if x != nil {
 		return x.SchemaJson
@@ -4124,6 +4111,13 @@ func (x *CreateSchemaRequest) GetSchemaJson() string {
 func (x *CreateSchemaRequest) GetMetadataJson() string {
 	if x != nil {
 		return x.MetadataJson
+	}
+	return ""
+}
+
+func (x *CreateSchemaRequest) GetApplication() string {
+	if x != nil {
+		return x.Application
 	}
 	return ""
 }
@@ -4174,8 +4168,9 @@ func (x *CreateSchemaResponse) GetSchema() *ConfigurationSchema {
 
 type GetSchemaRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Id            string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
 	Version       uint64                 `protobuf:"varint,2,opt,name=version,proto3" json:"version,omitempty"`
+	Application   string                 `protobuf:"bytes,3,opt,name=application,proto3" json:"application,omitempty"`
+	ReleaseName   string                 `protobuf:"bytes,4,opt,name=release_name,json=releaseName,proto3" json:"release_name,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -4210,18 +4205,25 @@ func (*GetSchemaRequest) Descriptor() ([]byte, []int) {
 	return file_kms_v1_kms_proto_rawDescGZIP(), []int{62}
 }
 
-func (x *GetSchemaRequest) GetId() string {
-	if x != nil {
-		return x.Id
-	}
-	return ""
-}
-
 func (x *GetSchemaRequest) GetVersion() uint64 {
 	if x != nil {
 		return x.Version
 	}
 	return 0
+}
+
+func (x *GetSchemaRequest) GetApplication() string {
+	if x != nil {
+		return x.Application
+	}
+	return ""
+}
+
+func (x *GetSchemaRequest) GetReleaseName() string {
+	if x != nil {
+		return x.ReleaseName
+	}
+	return ""
 }
 
 type GetSchemaResponse struct {
@@ -4270,9 +4272,10 @@ func (x *GetSchemaResponse) GetSchema() *ConfigurationSchema {
 
 type ListSchemasRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Id            string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
 	PageSize      int32                  `protobuf:"varint,2,opt,name=page_size,json=pageSize,proto3" json:"page_size,omitempty"`
 	PageToken     string                 `protobuf:"bytes,3,opt,name=page_token,json=pageToken,proto3" json:"page_token,omitempty"`
+	Application   string                 `protobuf:"bytes,4,opt,name=application,proto3" json:"application,omitempty"`
+	ReleaseName   string                 `protobuf:"bytes,5,opt,name=release_name,json=releaseName,proto3" json:"release_name,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -4307,13 +4310,6 @@ func (*ListSchemasRequest) Descriptor() ([]byte, []int) {
 	return file_kms_v1_kms_proto_rawDescGZIP(), []int{64}
 }
 
-func (x *ListSchemasRequest) GetId() string {
-	if x != nil {
-		return x.Id
-	}
-	return ""
-}
-
 func (x *ListSchemasRequest) GetPageSize() int32 {
 	if x != nil {
 		return x.PageSize
@@ -4324,6 +4320,20 @@ func (x *ListSchemasRequest) GetPageSize() int32 {
 func (x *ListSchemasRequest) GetPageToken() string {
 	if x != nil {
 		return x.PageToken
+	}
+	return ""
+}
+
+func (x *ListSchemasRequest) GetApplication() string {
+	if x != nil {
+		return x.Application
+	}
+	return ""
+}
+
+func (x *ListSchemasRequest) GetReleaseName() string {
+	if x != nil {
+		return x.ReleaseName
 	}
 	return ""
 }
@@ -8223,12 +8233,11 @@ const file_kms_v1_kms_proto_rawDesc = "" +
 	"\rmetadata_json\x18\x06 \x01(\tR\fmetadataJson\x12)\n" +
 	"\x10parameter_digest\x18\a \x01(\tR\x0fparameterDigest\x12!\n" +
 	"\fclient_bound\x18\b \x01(\bR\vclientBound\x12(\n" +
-	"\x10has_access_token\x18\t \x01(\bR\x0ehasAccessToken\"\x82\x03\n" +
+	"\x10has_access_token\x18\t \x01(\bR\x0ehasAccessToken\"\xf6\x02\n" +
 	"\x14ConfigurationRelease\x122\n" +
 	"\tnamespace\x18\x01 \x01(\v2\x14.kms.v1.NamespaceRefR\tnamespace\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x12\x18\n" +
-	"\aversion\x18\x03 \x01(\x04R\aversion\x12\x1b\n" +
-	"\tschema_id\x18\x04 \x01(\tR\bschemaId\x12%\n" +
+	"\aversion\x18\x03 \x01(\x04R\aversion\x12%\n" +
 	"\x0eschema_version\x18\x05 \x01(\x04R\rschemaVersion\x12;\n" +
 	"\aentries\x18\x06 \x03(\v2!.kms.v1.ConfigurationReleaseEntryR\aentries\x12\x16\n" +
 	"\x06digest\x18\a \x01(\tR\x06digest\x12#\n" +
@@ -8236,14 +8245,13 @@ const file_kms_v1_kms_proto_rawDesc = "" +
 	"\n" +
 	"created_by\x18\t \x01(\tR\tcreatedBy\x12+\n" +
 	"\x12created_at_unix_ms\x18\n" +
-	" \x01(\x03R\x0fcreatedAtUnixMs\"\xff\x01\n" +
+	" \x01(\x03R\x0fcreatedAtUnixMsJ\x04\b\x04\x10\x05R\tschema_id\"\xf3\x01\n" +
 	"\x14CreateReleaseRequest\x122\n" +
 	"\tnamespace\x18\x01 \x01(\v2\x14.kms.v1.NamespaceRefR\tnamespace\x12\x12\n" +
-	"\x04name\x18\x02 \x01(\tR\x04name\x12\x1b\n" +
-	"\tschema_id\x18\x03 \x01(\tR\bschemaId\x12%\n" +
+	"\x04name\x18\x02 \x01(\tR\x04name\x12%\n" +
 	"\x0eschema_version\x18\x04 \x01(\x04R\rschemaVersion\x126\n" +
 	"\aentries\x18\x05 \x03(\v2\x1c.kms.v1.ReleaseEntrySelectorR\aentries\x12#\n" +
-	"\rmetadata_json\x18\x06 \x01(\tR\fmetadataJson\"O\n" +
+	"\rmetadata_json\x18\x06 \x01(\tR\fmetadataJsonJ\x04\b\x03\x10\x04R\tschema_id\"O\n" +
 	"\x15CreateReleaseResponse\x126\n" +
 	"\arelease\x18\x01 \x01(\v2\x1c.kms.v1.ConfigurationReleaseR\arelease\"z\n" +
 	"\x16ValidateReleaseRequest\x122\n" +
@@ -8366,9 +8374,8 @@ const file_kms_v1_kms_proto_rawDesc = "" +
 	"activation\x121\n" +
 	"\theartbeat\x18\x03 \x01(\v2\x11.kms.v1.HeartbeatH\x00R\theartbeat\x12\x1a\n" +
 	"\brevision\x18\x04 \x01(\x04R\brevisionB\a\n" +
-	"\x05event\"\xe9\x01\n" +
-	"\x13ConfigurationSchema\x12\x0e\n" +
-	"\x02id\x18\x01 \x01(\tR\x02id\x12\x18\n" +
+	"\x05event\"\xa8\x02\n" +
+	"\x13ConfigurationSchema\x12\x18\n" +
 	"\aversion\x18\x02 \x01(\x04R\aversion\x12\x1f\n" +
 	"\vschema_json\x18\x03 \x01(\tR\n" +
 	"schemaJson\x12\x16\n" +
@@ -8376,24 +8383,28 @@ const file_kms_v1_kms_proto_rawDesc = "" +
 	"\rmetadata_json\x18\x05 \x01(\tR\fmetadataJson\x12\x1d\n" +
 	"\n" +
 	"created_by\x18\x06 \x01(\tR\tcreatedBy\x12+\n" +
-	"\x12created_at_unix_ms\x18\a \x01(\x03R\x0fcreatedAtUnixMs\"k\n" +
-	"\x13CreateSchemaRequest\x12\x0e\n" +
-	"\x02id\x18\x01 \x01(\tR\x02id\x12\x1f\n" +
+	"\x12created_at_unix_ms\x18\a \x01(\x03R\x0fcreatedAtUnixMs\x12 \n" +
+	"\vapplication\x18\b \x01(\tR\vapplication\x12!\n" +
+	"\frelease_name\x18\t \x01(\tR\vreleaseNameJ\x04\b\x01\x10\x02R\x02id\"\x87\x01\n" +
+	"\x13CreateSchemaRequest\x12\x1f\n" +
 	"\vschema_json\x18\x02 \x01(\tR\n" +
 	"schemaJson\x12#\n" +
-	"\rmetadata_json\x18\x03 \x01(\tR\fmetadataJson\"K\n" +
+	"\rmetadata_json\x18\x03 \x01(\tR\fmetadataJson\x12 \n" +
+	"\vapplication\x18\x04 \x01(\tR\vapplicationJ\x04\b\x01\x10\x02R\x02id\"K\n" +
 	"\x14CreateSchemaResponse\x123\n" +
-	"\x06schema\x18\x01 \x01(\v2\x1b.kms.v1.ConfigurationSchemaR\x06schema\"<\n" +
-	"\x10GetSchemaRequest\x12\x0e\n" +
-	"\x02id\x18\x01 \x01(\tR\x02id\x12\x18\n" +
-	"\aversion\x18\x02 \x01(\x04R\aversion\"H\n" +
+	"\x06schema\x18\x01 \x01(\v2\x1b.kms.v1.ConfigurationSchemaR\x06schema\"{\n" +
+	"\x10GetSchemaRequest\x12\x18\n" +
+	"\aversion\x18\x02 \x01(\x04R\aversion\x12 \n" +
+	"\vapplication\x18\x03 \x01(\tR\vapplication\x12!\n" +
+	"\frelease_name\x18\x04 \x01(\tR\vreleaseNameJ\x04\b\x01\x10\x02R\x02id\"H\n" +
 	"\x11GetSchemaResponse\x123\n" +
-	"\x06schema\x18\x01 \x01(\v2\x1b.kms.v1.ConfigurationSchemaR\x06schema\"`\n" +
-	"\x12ListSchemasRequest\x12\x0e\n" +
-	"\x02id\x18\x01 \x01(\tR\x02id\x12\x1b\n" +
+	"\x06schema\x18\x01 \x01(\v2\x1b.kms.v1.ConfigurationSchemaR\x06schema\"\x9f\x01\n" +
+	"\x12ListSchemasRequest\x12\x1b\n" +
 	"\tpage_size\x18\x02 \x01(\x05R\bpageSize\x12\x1d\n" +
 	"\n" +
-	"page_token\x18\x03 \x01(\tR\tpageToken\"t\n" +
+	"page_token\x18\x03 \x01(\tR\tpageToken\x12 \n" +
+	"\vapplication\x18\x04 \x01(\tR\vapplication\x12!\n" +
+	"\frelease_name\x18\x05 \x01(\tR\vreleaseNameJ\x04\b\x01\x10\x02R\x02id\"t\n" +
 	"\x13ListSchemasResponse\x125\n" +
 	"\aschemas\x18\x01 \x03(\v2\x1b.kms.v1.ConfigurationSchemaR\aschemas\x12&\n" +
 	"\x0fnext_page_token\x18\x02 \x01(\tR\rnextPageToken\"\xbe\x01\n" +
