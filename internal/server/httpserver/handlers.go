@@ -562,10 +562,8 @@ func (s *server) handleRevealSecret(w http.ResponseWriter, r *http.Request) {
 	}
 	pr := principalFrom(r.Context())
 	// Reveal accepts its client-bound key share only in the request body.
-	secretToken := body.SecretToken
+	val, err := s.svc.RevealSecret(r.Context(), pr, body.ref(), body.Version, body.Label, body.SecretToken)
 	body.SecretToken = ""
-	val, err := s.svc.RevealSecret(r.Context(), pr, body.ref(), body.Version, body.Label, secretToken)
-	secretToken = ""
 	if err != nil {
 		s.writeError(w, r, err)
 		return

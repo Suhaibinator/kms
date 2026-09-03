@@ -226,7 +226,7 @@ func (s *Service) PutSecret(ctx context.Context, pr Principal, in PutSecretInput
 		return PutSecretResult{}, domain.Errorf(domain.ErrFailedPrecondition,
 			"secret %s already exists with client_bound=%v; the mode of a secret cannot change", in.Ref, existing.ClientBound)
 	}
-	if in.SecretToken != "" && !(exists && in.ClientBound) {
+	if in.SecretToken != "" && (!exists || !in.ClientBound) {
 		return PutSecretResult{}, domain.Errorf(domain.ErrInvalidArgument,
 			"secret_token is accepted only when updating an existing client-bound secret")
 	}
