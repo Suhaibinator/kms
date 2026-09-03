@@ -132,12 +132,11 @@ func (s *Server) authenticate(ctx context.Context, reqID string) (context.Contex
 	md, _ := metadata.FromIncomingContext(ctx)
 	remoteAddr := remoteAddrFrom(ctx)
 	pr, err := s.svc.ResolvePrincipal(ctx, core.CredentialInput{
-		Token:       bearerToken(md),
-		PeerCert:    peerCertFromContext(ctx),
-		SecretToken: firstMD(md, "x-kms-secret-token"),
-		RemoteAddr:  remoteAddr,
-		UserAgent:   firstMD(md, "user-agent"),
-		RequestID:   reqID,
+		Token:      bearerToken(md),
+		PeerCert:   peerCertFromContext(ctx),
+		RemoteAddr: remoteAddr,
+		UserAgent:  firstMD(md, "user-agent"),
+		RequestID:  reqID,
 	})
 	if err != nil {
 		return ctx, status.Error(codes.Unauthenticated, "unauthenticated")

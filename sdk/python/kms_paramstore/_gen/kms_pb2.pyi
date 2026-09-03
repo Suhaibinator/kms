@@ -212,14 +212,16 @@ class GetParameterMetadataResponse(_message.Message):
     def __init__(self, ref: _Optional[_Union[ResourceRef, _Mapping]] = ..., content_type: _Optional[str] = ..., metadata_json: _Optional[str] = ..., created_at_unix_ms: _Optional[int] = ..., updated_at_unix_ms: _Optional[int] = ..., labels: _Optional[_Mapping[str, int]] = ..., versions: _Optional[_Iterable[_Union[ParameterVersionInfo, _Mapping]]] = ...) -> None: ...
 
 class GetSecretRequest(_message.Message):
-    __slots__ = ("ref", "version", "label")
+    __slots__ = ("ref", "version", "label", "secret_token")
     REF_FIELD_NUMBER: _ClassVar[int]
     VERSION_FIELD_NUMBER: _ClassVar[int]
     LABEL_FIELD_NUMBER: _ClassVar[int]
+    SECRET_TOKEN_FIELD_NUMBER: _ClassVar[int]
     ref: ResourceRef
     version: int
     label: str
-    def __init__(self, ref: _Optional[_Union[ResourceRef, _Mapping]] = ..., version: _Optional[int] = ..., label: _Optional[str] = ...) -> None: ...
+    secret_token: str
+    def __init__(self, ref: _Optional[_Union[ResourceRef, _Mapping]] = ..., version: _Optional[int] = ..., label: _Optional[str] = ..., secret_token: _Optional[str] = ...) -> None: ...
 
 class GetSecretResponse(_message.Message):
     __slots__ = ("ref", "version", "value", "content_type", "metadata_json", "created_at_unix_ms")
@@ -238,7 +240,7 @@ class GetSecretResponse(_message.Message):
     def __init__(self, ref: _Optional[_Union[ResourceRef, _Mapping]] = ..., version: _Optional[int] = ..., value: _Optional[bytes] = ..., content_type: _Optional[str] = ..., metadata_json: _Optional[str] = ..., created_at_unix_ms: _Optional[int] = ...) -> None: ...
 
 class PutSecretRequest(_message.Message):
-    __slots__ = ("ref", "value", "content_type", "metadata_json", "client_bound", "generate_access_token", "expires_at_unix_ms")
+    __slots__ = ("ref", "value", "content_type", "metadata_json", "client_bound", "generate_access_token", "expires_at_unix_ms", "secret_token")
     REF_FIELD_NUMBER: _ClassVar[int]
     VALUE_FIELD_NUMBER: _ClassVar[int]
     CONTENT_TYPE_FIELD_NUMBER: _ClassVar[int]
@@ -246,6 +248,7 @@ class PutSecretRequest(_message.Message):
     CLIENT_BOUND_FIELD_NUMBER: _ClassVar[int]
     GENERATE_ACCESS_TOKEN_FIELD_NUMBER: _ClassVar[int]
     EXPIRES_AT_UNIX_MS_FIELD_NUMBER: _ClassVar[int]
+    SECRET_TOKEN_FIELD_NUMBER: _ClassVar[int]
     ref: ResourceRef
     value: bytes
     content_type: str
@@ -253,7 +256,8 @@ class PutSecretRequest(_message.Message):
     client_bound: bool
     generate_access_token: bool
     expires_at_unix_ms: int
-    def __init__(self, ref: _Optional[_Union[ResourceRef, _Mapping]] = ..., value: _Optional[bytes] = ..., content_type: _Optional[str] = ..., metadata_json: _Optional[str] = ..., client_bound: _Optional[bool] = ..., generate_access_token: _Optional[bool] = ..., expires_at_unix_ms: _Optional[int] = ...) -> None: ...
+    secret_token: str
+    def __init__(self, ref: _Optional[_Union[ResourceRef, _Mapping]] = ..., value: _Optional[bytes] = ..., content_type: _Optional[str] = ..., metadata_json: _Optional[str] = ..., client_bound: _Optional[bool] = ..., generate_access_token: _Optional[bool] = ..., expires_at_unix_ms: _Optional[int] = ..., secret_token: _Optional[str] = ...) -> None: ...
 
 class PutSecretResponse(_message.Message):
     __slots__ = ("version", "revision", "access_token")

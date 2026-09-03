@@ -237,7 +237,7 @@ export class KmsClient {
       const response = await this.#transport.unary(
         AdminServiceService.whoAmI,
         {},
-        this.#callOptions("", options),
+        this.#callOptions(options),
       );
       return Object.freeze({
         identity: response.name,
@@ -281,7 +281,7 @@ export class KmsClient {
       const response = await this.#transport.unary(
         ParameterServiceService.getParameter,
         { ref: toWireRef(ref), version: selector.version, label: selector.label },
-        this.#callOptions(options.secretToken ?? "", options),
+        this.#callOptions(options),
       );
       if (!response.parameter) throw new KmsError("internal", "KMS parameter response was empty");
       const parameter = parameterFromWire(response.parameter);
@@ -333,8 +333,13 @@ export class KmsClient {
     try {
       const response = await this.#transport.unary(
         SecretServiceService.getSecret,
-        { ref: toWireRef(ref), version: selector.version, label: selector.label },
-        this.#callOptions(options.secretToken ?? "", options),
+        {
+          ref: toWireRef(ref),
+          version: selector.version,
+          label: selector.label,
+          secretToken: options.secretToken ?? "",
+        },
+        this.#callOptions(options),
       );
       if (!response.ref)
         throw new KmsError("internal", "KMS secret response omitted resource reference");
@@ -365,7 +370,7 @@ export class KmsClient {
           contentType: options.contentType ?? "",
           metadataJson: options.metadataJson ?? "",
         },
-        this.#callOptions("", options),
+        this.#callOptions(options),
       );
       this.#cache.invalidateParam(displayPath(ref));
       return Object.freeze({ version: response.version, revision: response.revision });
@@ -403,8 +408,9 @@ export class KmsClient {
           clientBound: options.clientBound ?? false,
           generateAccessToken: options.generateAccessToken ?? false,
           expiresAtUnixMs,
+          secretToken: options.secretToken ?? "",
         },
-        this.#callOptions(options.secretToken ?? "", options),
+        this.#callOptions(options),
       );
       this.#cache.invalidateSecret(displayPath(ref));
       return Object.freeze({
@@ -441,7 +447,7 @@ export class KmsClient {
           pageSize,
           pageToken: options.pageToken ?? "",
         },
-        this.#callOptions("", options),
+        this.#callOptions(options),
       );
       return Object.freeze({
         items: Object.freeze(response.parameters.map(parameterFromWire)),
@@ -458,7 +464,7 @@ export class KmsClient {
       const response = await this.#transport.unary(
         ParameterServiceService.deleteParameter,
         { ref: toWireRef(ref) },
-        this.#callOptions("", options),
+        this.#callOptions(options),
       );
       this.#cache.invalidateParam(displayPath(ref));
       return response.revision;
@@ -473,7 +479,7 @@ export class KmsClient {
       const response = await this.#transport.unary(
         ParameterServiceService.getParameterMetadata,
         { ref: toWireRef(ref) },
-        this.#callOptions("", options),
+        this.#callOptions(options),
       );
       const responseRef = response.ref ? fromWireRef(response.ref) : ref;
       return Object.freeze({
@@ -514,7 +520,7 @@ export class KmsClient {
           pageSize: validPageSize(options.pageSize),
           pageToken: options.pageToken ?? "",
         },
-        this.#callOptions("", options),
+        this.#callOptions(options),
       );
       return Object.freeze({
         items: Object.freeze(response.secrets.map(secretInfoFromWire)),
@@ -531,7 +537,7 @@ export class KmsClient {
       const response = await this.#transport.unary(
         SecretServiceService.getSecretMetadata,
         { ref: toWireRef(ref) },
-        this.#callOptions("", options),
+        this.#callOptions(options),
       );
       if (!response.secret)
         throw new KmsError("internal", "KMS secret metadata response was empty");
@@ -547,7 +553,6 @@ export class KmsClient {
       ref,
       SecretServiceService.deleteSecret,
       { ref: toWireRef(ref) },
-      "",
       options,
     );
     return response.revision;
@@ -564,7 +569,6 @@ export class KmsClient {
       ref,
       SecretServiceService.disableSecret,
       { ref: toWireRef(ref), version: options.version ?? 0n, enable: enabled },
-      options.secretToken ?? "",
       options,
     );
     return response.revision;
@@ -581,7 +585,6 @@ export class KmsClient {
       ref,
       SecretServiceService.destroySecretVersion,
       { ref: toWireRef(ref), version },
-      options.secretToken ?? "",
       options,
     );
     return response.revision;
@@ -602,7 +605,6 @@ export class KmsClient {
       ref,
       SecretServiceService.promoteSecretVersion,
       { ref: toWireRef(ref), version },
-      options.secretToken ?? "",
       options,
     );
     return Object.freeze(response);
@@ -676,7 +678,7 @@ export class KmsClient {
           schemaSha256,
           entries,
         },
-        this.#callOptions("", options),
+        this.#callOptions(options),
       );
       if (!response) throw new KmsError("internal", "KMS verify response was empty");
       return verifyResultFromWire(response, seen, (message) => {
@@ -759,10 +761,9 @@ export class KmsClient {
   }
 
   /** @internal Authentication metadata for stream/session work. */
-  _metadata(secretToken = ""): Readonly<Record<string, string>> {
+  _metadata(): Readonly<Record<string, string>> {
     const metadata: Record<string, string> = {};
     if (this.#options.token) metadata.authorization = `Bearer ${this.#options.token}`;
-    if (secretToken) metadata["x-kms-secret-token"] = secretToken;
     return metadata;
   }
 
@@ -800,7 +801,7 @@ export class KmsClient {
       .unary(
         ConfigurationReleaseServiceService.getActiveRelease,
         { namespace: toWireNamespace(namespace), name },
-        this.#callOptions("", options),
+        this.#callOptions(options),
       )
       .catch((error: unknown) => {
         throwMapped(error);
@@ -861,7 +862,7 @@ export class KmsClient {
           const response = await this.#transport.unary(
             ParameterServiceService.getParameter,
             { ref: wireRef, version, label: "" },
-            this.#callOptions("", signal ? { signal } : {}),
+            this.#callOptions(signal ? { signal } : {}),
           );
           if (!response.parameter) {
             throw new KmsError("internal", "KMS parameter response was empty");
@@ -878,8 +879,8 @@ export class KmsClient {
         try {
           const response = await this.#transport.unary(
             SecretServiceService.getSecret,
-            { ref: wireRef, version, label: "" },
-            this.#callOptions(secretToken, signal ? { signal } : {}),
+            { ref: wireRef, version, label: "", secretToken },
+            this.#callOptions(signal ? { signal } : {}),
           );
           // Do not synthesize a missing ref from the request. Absence and
           // mismatch are both fail-closed identity violations for a release.
@@ -921,13 +922,13 @@ export class KmsClient {
     await this.#transport.close();
   }
 
-  #callOptions(secretToken: string, options: CallOptions): TransportCallOptions {
+  #callOptions(options: CallOptions): TransportCallOptions {
     this.#assertOpen();
     const defaultDeadline = new Date(Date.now() + this.timeoutMs);
     const deadline =
       options.deadline && options.deadline < defaultDeadline ? options.deadline : defaultDeadline;
     return {
-      metadata: this._metadata(secretToken),
+      metadata: this._metadata(),
       deadline,
       signal: combineSignals(this.#rootController.signal, options.signal),
     };
@@ -937,15 +938,10 @@ export class KmsClient {
     ref: ResourceRef,
     method: UnaryMethod<Request, Response>,
     request: Request,
-    secretToken: string,
     options: CallOptions,
   ): Promise<Response> {
     try {
-      const response = await this.#transport.unary(
-        method,
-        request,
-        this.#callOptions(secretToken, options),
-      );
+      const response = await this.#transport.unary(method, request, this.#callOptions(options));
       this.#cache.invalidateSecret(displayPath(ref));
       return response;
     } catch (error) {

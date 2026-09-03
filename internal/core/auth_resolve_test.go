@@ -394,12 +394,11 @@ func TestResolvePrincipalTrimsTokenAndCopiesRequestContext(t *testing.T) {
 	s, _, cert, token := adminCertFixture(t, "ops")
 
 	in := CredentialInput{
-		Token:       "  \t" + token + "\n",
-		PeerCert:    cert,
-		SecretToken: "sec-tok",
-		RemoteAddr:  "192.0.2.7",
-		UserAgent:   "console/1.0",
-		RequestID:   "req-42",
+		Token:      "  \t" + token + "\n",
+		PeerCert:   cert,
+		RemoteAddr: "192.0.2.7",
+		UserAgent:  "console/1.0",
+		RequestID:  "req-42",
 	}
 	pr, err := s.ResolvePrincipal(ctx, in)
 	if err != nil {
@@ -408,7 +407,7 @@ func TestResolvePrincipalTrimsTokenAndCopiesRequestContext(t *testing.T) {
 	if pr.Token != token {
 		t.Fatalf("token = %q, want the trimmed %q", pr.Token, token)
 	}
-	if pr.SecretToken != "sec-tok" || pr.RemoteAddr != "192.0.2.7" || pr.UserAgent != "console/1.0" || pr.RequestID != "req-42" {
+	if pr.RemoteAddr != "192.0.2.7" || pr.UserAgent != "console/1.0" || pr.RequestID != "req-42" {
 		t.Fatalf("request context not copied through: %+v", pr)
 	}
 }

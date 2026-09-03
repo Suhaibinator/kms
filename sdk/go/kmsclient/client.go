@@ -20,8 +20,8 @@ import (
 )
 
 const (
-	mdAuthorization = "authorization"
-	mdSecretToken   = "x-kms-secret-token"
+	mdAuthorization     = "authorization"
+	legacyMDSecretToken = "x-kms-secret-token"
 
 	defaultTimeout = 5 * time.Second
 
@@ -263,26 +263,28 @@ func (c *Client) logf(format string, args ...any) {
 }
 
 // callCtx derives a per-RPC context: it applies the default timeout (unless the
-// caller already set an earlier deadline) and attaches identity + secret-token
-// metadata.
-func (c *Client) callCtx(ctx context.Context, secretToken string) (context.Context, context.CancelFunc) {
-	ctx = c.withAuth(ctx, secretToken)
+// caller already set an earlier deadline) and attaches identity metadata.
+func (c *Client) callCtx(ctx context.Context) (context.Context, context.CancelFunc) {
+	ctx = c.withAuth(ctx)
 	if _, ok := ctx.Deadline(); ok {
 		return ctx, func() {}
 	}
 	return context.WithTimeout(ctx, c.timeout)
 }
 
-// withAuth attaches identity and optional secret-token metadata to an outgoing
-// context. Using AppendToOutgoingContext preserves any metadata a caller may
-// have set.
-func (c *Client) withAuth(ctx context.Context, secretToken string) context.Context {
-	kv := make([]string, 0, 4)
+// withAuth attaches standard identity metadata to an outgoing context. Using
+// AppendToOutgoingContext preserves any metadata a caller may have set.
+func (c *Client) withAuth(ctx context.Context) context.Context {
+	// A caller may reuse a context created for an older SDK version. Strip the
+	// deprecated credential key so it cannot escape on any RPC.
+	if md, ok := metadata.FromOutgoingContext(ctx); ok && len(md.Get(legacyMDSecretToken)) > 0 {
+		clean := md.Copy()
+		clean.Delete(legacyMDSecretToken)
+		ctx = metadata.NewOutgoingContext(ctx, clean)
+	}
+	kv := make([]string, 0, 2)
 	if c.cfg.Token != "" {
 		kv = append(kv, mdAuthorization, "Bearer "+c.cfg.Token)
-	}
-	if secretToken != "" {
-		kv = append(kv, mdSecretToken, secretToken)
 	}
 	if len(kv) == 0 {
 		return ctx
@@ -304,7 +306,7 @@ func (c *Client) resolveNamespace(ctx context.Context) (namespaceRef, bool, erro
 	if c.nsResolved {
 		return c.nsDiscovered, !c.nsDiscovered.isZero(), nil
 	}
-	cctx, cancel := c.callCtx(ctx, "")
+	cctx, cancel := c.callCtx(ctx)
 	defer cancel()
 	resp, err := c.admin.WhoAmI(cctx, &kmsv1.WhoAmIRequest{})
 	if err != nil {
@@ -359,7 +361,7 @@ func (c *Client) getParameter(ctx context.Context, r ref, o getOptions) (string,
 // read) and refreshes the cache with the result. The subscription reconciler
 // uses it to detect drift the cache would otherwise hide.
 func (c *Client) fetchParameter(ctx context.Context, r ref, o getOptions) (string, error) {
-	cctx, cancel := c.callCtx(ctx, o.secretToken)
+	cctx, cancel := c.callCtx(ctx)
 	defer cancel()
 	resp, err := c.params.GetParameter(cctx, &kmsv1.GetParameterRequest{
 		Ref:     r.resourceProto(),
@@ -395,12 +397,13 @@ func (c *Client) GetSecret(ctx context.Context, key string, opts ...GetOption) (
 		}
 	}
 
-	cctx, cancel := c.callCtx(ctx, o.secretToken)
+	cctx, cancel := c.callCtx(ctx)
 	defer cancel()
 	resp, err := c.secrets.GetSecret(cctx, &kmsv1.GetSecretRequest{
-		Ref:     r.resourceProto(),
-		Version: o.version,
-		Label:   o.label,
+		Ref:         r.resourceProto(),
+		Version:     o.version,
+		Label:       o.label,
+		SecretToken: o.secretToken,
 	})
 	if err != nil {
 		return Secret{}, mapError(err)
@@ -436,7 +439,7 @@ func (c *Client) PutParameter(ctx context.Context, key, value string, opts ...Pu
 	if err != nil {
 		return PutParameterResult{}, err
 	}
-	cctx, cancel := c.callCtx(ctx, "")
+	cctx, cancel := c.callCtx(ctx)
 	defer cancel()
 	resp, err := c.params.PutParameter(cctx, &kmsv1.PutParameterRequest{
 		Ref:          r.resourceProto(),
@@ -468,7 +471,7 @@ func (c *Client) PutSecret(ctx context.Context, key string, value []byte, opts .
 	if err != nil {
 		return PutSecretResult{}, err
 	}
-	cctx, cancel := c.callCtx(ctx, o.secretToken)
+	cctx, cancel := c.callCtx(ctx)
 	defer cancel()
 	resp, err := c.secrets.PutSecret(cctx, &kmsv1.PutSecretRequest{
 		Ref:                 r.resourceProto(),
@@ -478,6 +481,7 @@ func (c *Client) PutSecret(ctx context.Context, key string, value []byte, opts .
 		ClientBound:         o.clientBound,
 		GenerateAccessToken: o.generateAccessToken,
 		ExpiresAtUnixMs:     o.expiresAtUnixMS,
+		SecretToken:         o.secretToken,
 	})
 	if err != nil {
 		return PutSecretResult{}, mapError(err)

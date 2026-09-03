@@ -43,7 +43,7 @@ func (c *Client) CreateApplicationSchema(ctx context.Context, opts CreateApplica
 	}
 	expectedDigest := sha256.Sum256(compact)
 	expectedDigestHex := hex.EncodeToString(expectedDigest[:])
-	callCtx, cancel := c.callCtx(ctx, "")
+	callCtx, cancel := c.callCtx(ctx)
 	defer cancel()
 	response, err := c.schemas.CreateSchema(callCtx, &kmsv1.CreateSchemaRequest{
 		Application:  opts.Application,

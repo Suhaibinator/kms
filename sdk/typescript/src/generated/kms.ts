@@ -175,6 +175,11 @@ export interface GetSecretRequest {
   version: bigint;
   /** default "current" */
   label: string;
+  /**
+   * Per-secret access token. For client-bound secrets this is also the
+   * caller-held key share and is never logged or persisted in plaintext.
+   */
+  secretToken: string;
 }
 
 export interface GetSecretResponse {
@@ -199,11 +204,16 @@ export interface PutSecretRequest {
   /**
    * generate_access_token asks the server to mint a per-secret access token.
    * The token is returned exactly once in the response. Required (or an
-   * existing token supplied via metadata) when client_bound is true.
+   * existing token supplied in secret_token) when client_bound is true.
    */
   generateAccessToken: boolean;
   /** expires_at for the new version, 0 = never. */
   expiresAtUnixMs: bigint;
+  /**
+   * Current per-secret token, required when updating an existing client-bound
+   * secret. It is scoped to this operation and never logged or persisted.
+   */
+  secretToken: string;
 }
 
 export interface PutSecretResponse {
@@ -3486,7 +3496,7 @@ export const GetParameterMetadataResponse_LabelsEntry: MessageFns<GetParameterMe
 };
 
 function createBaseGetSecretRequest(): GetSecretRequest {
-  return { ref: undefined, version: 0n, label: "" };
+  return { ref: undefined, version: 0n, label: "", secretToken: "" };
 }
 
 export const GetSecretRequest: MessageFns<GetSecretRequest> = {
@@ -3502,6 +3512,9 @@ export const GetSecretRequest: MessageFns<GetSecretRequest> = {
     }
     if (message.label !== "") {
       writer.uint32(26).string(message.label);
+    }
+    if (message.secretToken !== "") {
+      writer.uint32(34).string(message.secretToken);
     }
     return writer;
   },
@@ -3543,6 +3556,14 @@ export const GetSecretRequest: MessageFns<GetSecretRequest> = {
             message.label = reader.string();
             continue;
           }
+          case 4: {
+            if (tag !== 34) {
+              break;
+            }
+
+            message.secretToken = reader.string();
+            continue;
+          }
         }
         if ((tag & 7) === 4 || tag === 0) {
           break;
@@ -3560,6 +3581,11 @@ export const GetSecretRequest: MessageFns<GetSecretRequest> = {
       ref: isSet(object.ref) ? ResourceRef.fromJSON(object.ref) : undefined,
       version: isSet(object.version) ? BigInt(object.version) : 0n,
       label: isSet(object.label) ? globalThis.String(object.label) : "",
+      secretToken: isSet(object.secretToken)
+        ? globalThis.String(object.secretToken)
+        : isSet(object.secret_token)
+        ? globalThis.String(object.secret_token)
+        : "",
     };
   },
 
@@ -3574,6 +3600,9 @@ export const GetSecretRequest: MessageFns<GetSecretRequest> = {
     if (message.label !== "") {
       obj.label = message.label;
     }
+    if (message.secretToken !== "") {
+      obj.secretToken = message.secretToken;
+    }
     return obj;
   },
 
@@ -3585,6 +3614,7 @@ export const GetSecretRequest: MessageFns<GetSecretRequest> = {
     message.ref = (object.ref !== undefined && object.ref !== null) ? ResourceRef.fromPartial(object.ref) : undefined;
     message.version = (object.version !== undefined && object.version !== null) ? BigInt(object.version) : 0n;
     message.label = object.label ?? "";
+    message.secretToken = object.secretToken ?? "";
     return message;
   },
 };
@@ -3774,6 +3804,7 @@ function createBasePutSecretRequest(): PutSecretRequest {
     clientBound: false,
     generateAccessToken: false,
     expiresAtUnixMs: 0n,
+    secretToken: "",
   };
 }
 
@@ -3802,6 +3833,9 @@ export const PutSecretRequest: MessageFns<PutSecretRequest> = {
         throw new globalThis.Error("value provided for field message.expiresAtUnixMs of type int64 too large");
       }
       writer.uint32(56).int64(message.expiresAtUnixMs);
+    }
+    if (message.secretToken !== "") {
+      writer.uint32(66).string(message.secretToken);
     }
     return writer;
   },
@@ -3875,6 +3909,14 @@ export const PutSecretRequest: MessageFns<PutSecretRequest> = {
             message.expiresAtUnixMs = reader.int64() as bigint;
             continue;
           }
+          case 8: {
+            if (tag !== 66) {
+              break;
+            }
+
+            message.secretToken = reader.string();
+            continue;
+          }
         }
         if ((tag & 7) === 4 || tag === 0) {
           break;
@@ -3916,6 +3958,11 @@ export const PutSecretRequest: MessageFns<PutSecretRequest> = {
         : isSet(object.expires_at_unix_ms)
         ? BigInt(object.expires_at_unix_ms)
         : 0n,
+      secretToken: isSet(object.secretToken)
+        ? globalThis.String(object.secretToken)
+        : isSet(object.secret_token)
+        ? globalThis.String(object.secret_token)
+        : "",
     };
   },
 
@@ -3942,6 +3989,9 @@ export const PutSecretRequest: MessageFns<PutSecretRequest> = {
     if (message.expiresAtUnixMs !== 0n) {
       obj.expiresAtUnixMs = message.expiresAtUnixMs.toString();
     }
+    if (message.secretToken !== "") {
+      obj.secretToken = message.secretToken;
+    }
     return obj;
   },
 
@@ -3959,6 +4009,7 @@ export const PutSecretRequest: MessageFns<PutSecretRequest> = {
     message.expiresAtUnixMs = (object.expiresAtUnixMs !== undefined && object.expiresAtUnixMs !== null)
       ? BigInt(object.expiresAtUnixMs)
       : 0n;
+    message.secretToken = object.secretToken ?? "";
     return message;
   },
 };
@@ -17542,5 +17593,5 @@ export interface MessageFns<T> {
   fromPartial(object: DeepPartial<T>): T;
 }
 
-// source-sha256: edf34c4ea42b28e1d3ef7d9e57e210a5484ffcee8a4aeb8fe15ea9848e007348
+// source-sha256: a10210192fc0e8fa38a65eab536131cb1d2d703e9b19de368c3c24af673f5d4c
 // generation-sha256: c3e69d40e38671d5381cfa50a679b45232adc3ecd3df927c51285f1901aa09ef

@@ -150,9 +150,9 @@ message GetParameterMetadataResponse {
 // SecretService
 // ---------------------------------------------------------------------------
 //
-// Authentication travels in gRPC metadata:
-//   "authorization":      "Bearer <per-client token>"
-//   "x-kms-secret-token": "<per-secret access token>"  (when required / client-bound)
+// Identity authentication travels in standard gRPC metadata:
+//   "authorization": "Bearer <per-client token>"
+// Per-secret credentials are fields on only the requests that consume them.
 
 service SecretService {
   rpc GetSecret(GetSecretRequest) returns (GetSecretResponse);
@@ -169,6 +169,9 @@ message GetSecretRequest {
   ResourceRef ref = 1;
   uint64 version = 2; // 0 = use label
   string label = 3;   // default "current"
+  // Per-secret access token. For client-bound secrets this is also the
+  // caller-held key share and is never logged or persisted in plaintext.
+  string secret_token = 4;
 }
 
 message GetSecretResponse {
@@ -190,10 +193,13 @@ message PutSecretRequest {
   bool client_bound = 5;
   // generate_access_token asks the server to mint a per-secret access token.
   // The token is returned exactly once in the response. Required (or an
-  // existing token supplied via metadata) when client_bound is true.
+  // existing token supplied in secret_token) when client_bound is true.
   bool generate_access_token = 6;
   // expires_at for the new version, 0 = never.
   int64 expires_at_unix_ms = 7;
+  // Current per-secret token, required when updating an existing client-bound
+  // secret. It is scoped to this operation and never logged or persisted.
+  string secret_token = 8;
 }
 
 message PutSecretResponse {

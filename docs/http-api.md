@@ -970,21 +970,27 @@ Listing is always namespace-scoped: `env` and `app` are required.
   { "env": "prod", "app": "gradethis", "key": "stripe-api-key",
     "value_base64": "...", "content_type": "text/plain",
     "metadata_json": "{}", "client_bound": false,
-    "generate_access_token": false, "expires_at_unix_ms": 0 }
+    "generate_access_token": false, "expires_at_unix_ms": 0,
+    "secret_token": "" }
   ```
   → `{"version": 1, "revision": 7, "access_token": "..."}`
   (`access_token` present only when `generate_access_token` was true — shown
   once, never again.) Creating a client-bound secret requires both
   `client_bound: true` and `generate_access_token: true`; the server-minted
   token is its only client key share. Client-bound updates additionally require
-  header `X-KMS-Secret-Token: <current-token>`; setting
+  the current token in the `secret_token` request-body field; setting
   `generate_access_token: true` on an update rotates the token for the new
   version and returns it once.
-- `POST /api/v1/secrets/reveal` — `{"env","app","key","version": 0,"label": ""}` →
+- `POST /api/v1/secrets/reveal` — `{"env","app","key","version": 0,"label": "","secret_token": "..."}` →
   `{"env","app","key","version","value_base64","content_type"}`.
-  Admin only. Every call is audited as a reveal event. Returns
-  `failed_precondition` (412) for client-bound secrets — they have no reveal
-  flow; the UI shows metadata only and explains why.
+  Admin only. Every successful reveal and decryption failure is audited as a
+  reveal event. A client-bound version requires its client token in the
+  `secret_token` request-body field; the field may be omitted for standard
+  secrets. Per-secret credentials are not accepted in custom headers, avoiding
+  exposure through proxy configurations that log them. Request
+  bodies are not logged by the server, and the token is never included in the
+  response or audit event. Missing, wrong, and unusable client key material all
+  return the same generic `internal` (500) response.
 - `POST /api/v1/secrets/disable` — `{"env","app","key","version": 0,"enable": false}` →
   `{"revision"}` (`version: 0` = all versions; `enable: true` re-enables.)
 - `POST /api/v1/secrets/destroy` — `{"env","app","key","version"}` →

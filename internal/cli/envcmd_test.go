@@ -51,8 +51,8 @@ func envTestDigest(value string) string {
 // --- stubs ------------------------------------------------------------------
 
 // envCall records one RPC a stub answered together with the credentials and
-// selectors it carried. Recording the per-call metadata is what makes
-// "the secret token travels on exactly one GetSecret" checkable.
+// selectors it carried. Identity is metadata; a per-secret credential is the
+// exact GetSecret request field.
 type envCall struct {
 	method      string
 	path        string
@@ -70,7 +70,6 @@ type envRecorder struct {
 func (r *envRecorder) record(ctx context.Context, call envCall) {
 	md, _ := metadata.FromIncomingContext(ctx)
 	call.auth = strings.Join(md.Get("authorization"), ",")
-	call.secretToken = strings.Join(md.Get("x-kms-secret-token"), ",")
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.calls = append(r.calls, call)
@@ -191,13 +190,12 @@ func (s *envSecretStub) ListSecrets(ctx context.Context, req *kmsv1.ListSecretsR
 
 func (s *envSecretStub) GetSecret(ctx context.Context, req *kmsv1.GetSecretRequest) (*kmsv1.GetSecretResponse, error) {
 	path := displayPath(req.GetRef())
-	s.rec.record(ctx, envCall{method: "GetSecret", path: path, version: req.GetVersion()})
+	s.rec.record(ctx, envCall{method: "GetSecret", path: path, version: req.GetVersion(), secretToken: req.GetSecretToken()})
 	if err := s.getErr[path]; err != nil {
 		return nil, err
 	}
 	if want, ok := s.requireToken[path]; ok {
-		md, _ := metadata.FromIncomingContext(ctx)
-		if strings.Join(md.Get("x-kms-secret-token"), ",") != want {
+		if req.GetSecretToken() != want {
 			return nil, status.Error(codes.PermissionDenied, "access denied")
 		}
 	}

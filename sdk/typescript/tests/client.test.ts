@@ -264,11 +264,14 @@ describe("KmsClient", () => {
     await client.getSecret("db/password", { secretToken: "one-time" });
     await client.getSecret("db/password", { secretToken: "one-time" });
     expect(reads).toBe(3);
-    expect(transport.calls.at(-1)?.options.metadata?.["x-kms-secret-token"]).toBe("one-time");
+    expect(transport.calls.at(-1)?.options.metadata?.["x-kms-secret-token"]).toBeUndefined();
+    expect(
+      (transport.calls.at(-1)?.request as { secretToken?: string } | undefined)?.secretToken,
+    ).toBe("one-time");
     await client.close();
   });
 
-  it("forwards parameter secret tokens and never promotes protected reads into cache", async () => {
+  it("never forwards parameter secret tokens and never promotes those reads into cache", async () => {
     let reads = 0;
     const transport = new FakeTransport((path, request, options) => {
       if (!path.endsWith("/GetParameter")) throw new Error(`unexpected ${path}`);
@@ -296,8 +299,8 @@ describe("KmsClient", () => {
     await expect(
       client.getParameterInfo("protected", { secretToken: "metadata-token" }),
     ).resolves.toMatchObject({ value: "value-2" });
-    expect(transport.calls[0]?.options.metadata?.["x-kms-secret-token"]).toBe("read-token");
-    expect(transport.calls[1]?.options.metadata?.["x-kms-secret-token"]).toBe("metadata-token");
+    expect(transport.calls[0]?.options.metadata?.["x-kms-secret-token"]).toBeUndefined();
+    expect(transport.calls[1]?.options.metadata?.["x-kms-secret-token"]).toBeUndefined();
 
     await expect(client.getParameter("protected")).resolves.toBe("value-3");
     await expect(client.getParameter("protected")).resolves.toBe("value-3");

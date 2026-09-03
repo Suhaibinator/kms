@@ -27,6 +27,9 @@ type PutSecretInput struct {
 	// with the request).
 	GenerateToken bool
 	ExpiresAt     int64 // unix ms, 0 = never
+	// SecretToken is the current per-secret credential. It is consumed only
+	// when updating an existing client-bound secret and is never persisted.
+	SecretToken string
 }
 
 // PutSecretResult reports the write outcome.
@@ -41,7 +44,8 @@ type PutSecretResult struct {
 // GetSecret decrypts and returns a secret value for an authorized machine
 // caller. Per-secret access tokens, when set, are required — including for
 // admins (the audited admin path is RevealSecret).
-func (s *Service) GetSecret(ctx context.Context, pr Principal, ref domain.Ref, version uint64, label string) (domain.SecretValue, error) {
+func (s *Service) GetSecret(ctx context.Context, pr Principal, ref domain.Ref, version uint64, label string, secretTokens ...string) (domain.SecretValue, error) {
+	secretToken := firstSecretToken(secretTokens)
 	if err := validateRef(ref); err != nil {
 		return domain.SecretValue{}, err
 	}
@@ -78,12 +82,12 @@ func (s *Service) GetSecret(ctx context.Context, pr Principal, ref domain.Ref, v
 	// specific version — a wrong token fails as a generic decryption error, with
 	// no additional information leaked.
 	if ver.ClientBound {
-		if pr.SecretToken == "" {
+		if secretToken == "" {
 			s.auditRefWithNamespaceID(ctx, pr, "secret.read", domain.ResourceSecret, ref, namespace.ID, ver.Version, "deny",
 				map[string]string{"reason": "token"})
 			return domain.SecretValue{}, domain.Errorf(domain.ErrPermissionDenied, "access denied")
 		}
-	} else if ver.HasAccessToken && !tokenHashMatches(pr.SecretToken, rec.AccessTokenHash) {
+	} else if ver.HasAccessToken && !tokenHashMatches(secretToken, rec.AccessTokenHash) {
 		s.auditRefWithNamespaceID(ctx, pr, "secret.read", domain.ResourceSecret, ref, namespace.ID, ver.Version, "deny",
 			map[string]string{"reason": "token"})
 		return domain.SecretValue{}, domain.Errorf(domain.ErrPermissionDenied, "access denied")
@@ -92,7 +96,7 @@ func (s *Service) GetSecret(ctx context.Context, pr Principal, ref domain.Ref, v
 		return domain.SecretValue{}, err
 	}
 
-	plaintext, err := s.decryptVersion(keyring, rec, ver, pr.SecretToken)
+	plaintext, err := s.decryptVersion(keyring, rec, ver, secretToken)
 	if err != nil {
 		s.auditRefWithNamespaceID(ctx, pr, "secret.read", domain.ResourceSecret, ref, namespace.ID, ver.Version, "error", nil)
 		s.log.Error("secret decryption failed", zap.String("ref", ref.String()), zap.Uint64("version", ver.Version), zap.String("kek_id", ver.KEKID))
@@ -116,9 +120,12 @@ func (s *Service) GetSecret(ctx context.Context, pr Principal, ref domain.Ref, v
 }
 
 // RevealSecret is the audited admin path used by the frontend/CLI. It
-// bypasses the per-secret token gate (break-glass) but can never decrypt
-// client-bound secrets — the server lacks the key material by design.
-func (s *Service) RevealSecret(ctx context.Context, pr Principal, ref domain.Ref, version uint64, label string) (domain.SecretValue, error) {
+// bypasses the per-secret token gate for standard secrets (break-glass).
+// Client-bound versions still require their client token because it is part
+// of the cryptographic key material; the token is supplied transiently on the
+// request as an operation-specific input.
+func (s *Service) RevealSecret(ctx context.Context, pr Principal, ref domain.Ref, version uint64, label string, secretTokens ...string) (domain.SecretValue, error) {
+	secretToken := firstSecretToken(secretTokens)
 	if err := validateRef(ref); err != nil {
 		return domain.SecretValue{}, err
 	}
@@ -139,15 +146,15 @@ func (s *Service) RevealSecret(ctx context.Context, pr Principal, ref domain.Ref
 	if err != nil {
 		return domain.SecretValue{}, err
 	}
-	if ver.ClientBound {
-		return domain.SecretValue{}, domain.Errorf(domain.ErrFailedPrecondition,
-			"client-bound secrets cannot be revealed: the server cannot decrypt them without the client token")
-	}
 	if err := s.checkVersionReadable(ver); err != nil {
 		return domain.SecretValue{}, err
 	}
 
-	plaintext, err := s.decryptVersion(keyring, rec, ver, "")
+	// Standard secrets intentionally retain the token-gate bypass. The crypto
+	// layer ignores clientToken for standard wrapping, while client-bound
+	// wrapping authenticates it against the selected immutable version. Missing,
+	// wrong, and unusable key material all collapse to ErrDecryptFailed.
+	plaintext, err := s.decryptVersion(keyring, rec, ver, secretToken)
 	if err != nil {
 		s.auditRefWithNamespaceID(ctx, pr, "secret.reveal", domain.ResourceSecret, ref, namespace.ID, ver.Version, "error", nil)
 		s.log.Error("secret decryption failed", zap.String("ref", ref.String()), zap.Uint64("version", ver.Version), zap.String("kek_id", ver.KEKID))
@@ -166,6 +173,16 @@ func (s *Service) RevealSecret(ctx context.Context, pr Principal, ref domain.Ref
 		Metadata:    ver.Metadata,
 		CreatedAt:   ver.CreatedAt,
 	}, nil
+}
+
+// firstSecretToken keeps the in-process service API source-compatible while
+// making the credential an operation-specific argument rather than part of the
+// authenticated principal. Transports pass at most one value.
+func firstSecretToken(tokens []string) string {
+	if len(tokens) == 0 {
+		return ""
+	}
+	return tokens[0]
 }
 
 // PutSecret creates a secret or appends a new immutable version.
@@ -209,6 +226,10 @@ func (s *Service) PutSecret(ctx context.Context, pr Principal, in PutSecretInput
 		return PutSecretResult{}, domain.Errorf(domain.ErrFailedPrecondition,
 			"secret %s already exists with client_bound=%v; the mode of a secret cannot change", in.Ref, existing.ClientBound)
 	}
+	if in.SecretToken != "" && (!exists || !in.ClientBound) {
+		return PutSecretResult{}, domain.Errorf(domain.ErrInvalidArgument,
+			"secret_token is accepted only when updating an existing client-bound secret")
+	}
 	expected := &storage.SecretWriteExpectation{Exists: exists}
 	if exists {
 		expected.ID = existing.ID
@@ -226,12 +247,12 @@ func (s *Service) PutSecret(ctx context.Context, pr Principal, in PutSecretInput
 		case exists:
 			// Writing a new version requires proving possession of the
 			// current token — it is the encryption key share.
-			if !tokenHashMatches(pr.SecretToken, existing.AccessTokenHash) {
+			if !tokenHashMatches(in.SecretToken, existing.AccessTokenHash) {
 				s.auditRefWithNamespaceID(ctx, pr, "secret.write", domain.ResourceSecret, in.Ref, namespace.ID, 0, "deny",
 					map[string]string{"reason": "token"})
 				return PutSecretResult{}, domain.Errorf(domain.ErrPermissionDenied, "access denied")
 			}
-			encToken = pr.SecretToken
+			encToken = in.SecretToken
 			if in.GenerateToken { // token rotation with the new version
 				mintedToken, newTokenHash, err = crypto.GenerateToken("kmss")
 				if err != nil {

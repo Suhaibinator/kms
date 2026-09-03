@@ -91,6 +91,71 @@ describe("apiFetch", () => {
     );
   });
 
+  it("sends a reveal token in the body and never creates a custom secret header", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          env: "prod",
+          app: "billing",
+          key: "api-key",
+          version: 2,
+          value_base64: "dmFsdWU=",
+          content_type: "text/plain",
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      ),
+    );
+
+    await api.revealSecret(
+      { env: "prod", app: "billing", key: "api-key" },
+      2,
+      "",
+      "kmss_version_token",
+    );
+
+    const init = fetchMock.mock.calls[0]?.[1];
+    expect(init?.headers).not.toEqual(
+      expect.objectContaining({ "X-KMS-Secret-Token": expect.any(String) }),
+    );
+    expect(JSON.parse(String(init?.body))).toMatchObject({
+      env: "prod",
+      app: "billing",
+      key: "api-key",
+      version: 2,
+      secret_token: "kmss_version_token",
+    });
+  });
+
+  it("sends an update token in the secret request body", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ version: 2, revision: 2 }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+
+    await api.createSecret({
+      env: "prod",
+      app: "billing",
+      key: "api-key",
+      value_base64: "dmFsdWU=",
+      content_type: "text/plain",
+      metadata_json: "{}",
+      client_bound: true,
+      generate_access_token: false,
+      expires_at_unix_ms: 0,
+      secret_token: "kmss_current_token",
+    });
+
+    const init = fetchMock.mock.calls[0]?.[1];
+    expect(init?.headers).not.toEqual(
+      expect.objectContaining({ "X-KMS-Secret-Token": expect.any(String) }),
+    );
+    expect(JSON.parse(String(init?.body))).toMatchObject({
+      secret_token: "kmss_current_token",
+    });
+  });
+
   it("turns a request timeout into a useful unavailable error", async () => {
     vi.spyOn(globalThis, "fetch").mockImplementation((_input, init) => {
       return new Promise((_resolve, reject) => {

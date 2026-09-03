@@ -685,8 +685,9 @@ The `frontend/` directory is a Next.js static export (`output: "export"`, no
 Node server runtime) embedded into the Go binary. It provides the operator
 console for applications and environments, parameters and secrets, identities
 and policies, releases and schemas, audit events, subscribers, and service
-health. Secret plaintext is hidden unless explicitly revealed, and
-client-bound secrets cannot be revealed by the server. Dynamic data comes from
+health. Secret plaintext is hidden unless explicitly revealed. Revealing a
+client-bound version additionally requires that version's client token, which
+the console sends only in the reveal request body. Dynamic data comes from
 the [`/api/v1/*` API](docs/http-api.md); unknown frontend routes fall back to
 the exported entry HTML so client-side deep links work on refresh. See the
 [`frontend` development guide](frontend/README.md) for local workflows and

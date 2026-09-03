@@ -778,7 +778,7 @@ func (l *ReleaseLoader) resolveEntry(ctx context.Context, entry *kmsv1.Configura
 
 	switch entry.GetKind() {
 	case "parameter":
-		cctx, cancel := l.client.callCtx(ctx, "")
+		cctx, cancel := l.client.callCtx(ctx)
 		resp, err := l.client.params.GetParameter(cctx, &kmsv1.GetParameterRequest{
 			Ref: entry.GetRef(), Version: entry.GetVersion(),
 		})
@@ -848,7 +848,7 @@ func sameResourceRef(a, b *kmsv1.ResourceRef) bool {
 }
 
 func (l *ReleaseLoader) getActive(ctx context.Context, ns namespaceRef) (releaseCandidate, error) {
-	cctx, cancel := l.client.callCtx(ctx, "")
+	cctx, cancel := l.client.callCtx(ctx)
 	defer cancel()
 	resp, err := l.client.releases.GetActiveRelease(cctx, &kmsv1.GetActiveReleaseRequest{
 		Namespace: ns.proto(), Name: l.cfg.Name,
@@ -909,7 +909,7 @@ func (l *ReleaseLoader) watchLoop(ctx context.Context, ns namespaceRef, events c
 }
 
 func (l *ReleaseLoader) watchSession(ctx context.Context, ns namespaceRef, events chan releaseCandidate, gracefulStop <-chan struct{}) (bool, bool, error) {
-	stream, err := l.client.releases.WatchRelease(l.client.withAuth(ctx, ""))
+	stream, err := l.client.releases.WatchRelease(l.client.withAuth(ctx))
 	if err != nil {
 		return false, false, err
 	}

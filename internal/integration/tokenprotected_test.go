@@ -35,15 +35,11 @@ func TestTokenProtectedSecret(t *testing.T) {
 		t.Errorf("admin GetSecret without token err = %v, want ErrPermissionDenied", err)
 	}
 	// A wrong token is denied with the same generic error.
-	wrong := h.admin
-	wrong.SecretToken = "kmss_wrongwrongwrongwrongwrongwrong"
-	if _, err := h.svc.GetSecret(ctx, wrong, ref, 0, ""); !errors.Is(err, domain.ErrPermissionDenied) {
+	if _, err := h.svc.GetSecret(ctx, h.admin, ref, 0, "", "kmss_wrongwrongwrongwrongwrongwrong"); !errors.Is(err, domain.ErrPermissionDenied) {
 		t.Errorf("GetSecret wrong token err = %v, want ErrPermissionDenied", err)
 	}
 	// The correct token succeeds.
-	withTok := h.admin
-	withTok.SecretToken = res.AccessToken
-	got, err := h.svc.GetSecret(ctx, withTok, ref, 0, "")
+	got, err := h.svc.GetSecret(ctx, h.admin, ref, 0, "", res.AccessToken)
 	if err != nil || string(got.Value) != plaintext {
 		t.Fatalf("GetSecret with token = %q err=%v, want %q", got.Value, err, plaintext)
 	}

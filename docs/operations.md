@@ -1266,8 +1266,8 @@ be leftovers, so they are read only for a secret that needs a token and never
 cause a refusal. `KMS_SECRET_TOKEN_FILE`, which `put-secret` and `get-secret`
 read, is not consulted here.
 
-The token travels as gRPC metadata on that one secret's fetch; no other call
-carries it. A secret whose token was not supplied is **skipped**, with a
+The token travels only in that secret's `GetSecret` protobuf request; no other
+call carries it. A secret whose token was not supplied is **skipped**, with a
 warning `--quiet` cannot suppress:
 
 ```text

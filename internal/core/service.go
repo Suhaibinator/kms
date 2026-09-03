@@ -76,9 +76,6 @@ type Principal struct {
 	// long-lived reauthorization to the enrolled certificate rather than merely
 	// to issuer-scoped serial and SAN claims. Empty for token callers.
 	Fingerprint string
-	// SecretToken is the optional per-secret access token supplied with the
-	// request (x-kms-secret-token). Never logged, never persisted.
-	SecretToken string
 	RemoteAddr  string
 	UserAgent   string
 	RequestID   string

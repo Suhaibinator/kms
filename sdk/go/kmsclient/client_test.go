@@ -12,6 +12,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 )
 
@@ -109,7 +110,19 @@ func TestAuthorizationMetadata(t *testing.T) {
 	}
 }
 
-func TestWithSecretTokenMetadata(t *testing.T) {
+func TestParameterNeverForwardsSecretToken(t *testing.T) {
+	c, srv := newTestClient(t, Config{})
+	srv.SetParameter(testNS, "p", "v")
+	ctx := metadata.AppendToOutgoingContext(context.Background(), "x-kms-secret-token", "legacy-must-not-leave")
+	if _, err := c.GetParameter(ctx, "p", WithSecretToken("must-not-leave")); err != nil {
+		t.Fatalf("GetParameter: %v", err)
+	}
+	if got := srv.LastMetadata("GetParameter").Get("x-kms-secret-token"); len(got) != 0 {
+		t.Fatalf("parameter secret-token metadata = %v, want none", got)
+	}
+}
+
+func TestWithSecretTokenRequestField(t *testing.T) {
 	c, srv := newTestClient(t, Config{Token: "identity-token"})
 	srv.SetSecret(testNS, "bound", []byte("v"))
 
@@ -118,8 +131,11 @@ func TestWithSecretTokenMetadata(t *testing.T) {
 		t.Fatalf("GetSecret: %v", err)
 	}
 	md := srv.LastMetadata("GetSecret")
-	if got := md.Get("x-kms-secret-token"); len(got) != 1 || got[0] != "per-secret-token" {
-		t.Errorf("x-kms-secret-token metadata = %v, want [per-secret-token]", got)
+	if got := md.Get("x-kms-secret-token"); len(got) != 0 {
+		t.Errorf("x-kms-secret-token metadata = %v, want none", got)
+	}
+	if got := srv.LastSecretToken("GetSecret"); got != "per-secret-token" {
+		t.Errorf("GetSecret secret_token = %q, want per-secret-token", got)
 	}
 	if got := md.Get("authorization"); len(got) != 1 || got[0] != "Bearer identity-token" {
 		t.Errorf("authorization metadata = %v", got)
@@ -220,9 +236,8 @@ func TestTokenGatedSecretBypassesCache(t *testing.T) {
 	if _, err := c.GetSecret(context.Background(), "bound"); err != nil {
 		t.Fatalf("GetSecret without token: %v", err)
 	}
-	md := srv.LastMetadata("GetSecret")
-	if got := md.Get("x-kms-secret-token"); len(got) != 0 {
-		t.Errorf("token-less read served from token-gated cache entry; last RPC metadata token = %v, want none (RPC per read)", got)
+	if got := srv.LastSecretToken("GetSecret"); got != "" {
+		t.Errorf("token-less read served from token-gated cache entry; last RPC secret token = %q, want empty (RPC per read)", got)
 	}
 
 	// A token-gated read must not be served from a cache entry either: after a

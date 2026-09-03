@@ -1089,10 +1089,13 @@ func (x *GetParameterMetadataResponse) GetVersions() []*ParameterVersionInfo {
 }
 
 type GetSecretRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Ref           *ResourceRef           `protobuf:"bytes,1,opt,name=ref,proto3" json:"ref,omitempty"`
-	Version       uint64                 `protobuf:"varint,2,opt,name=version,proto3" json:"version,omitempty"` // 0 = use label
-	Label         string                 `protobuf:"bytes,3,opt,name=label,proto3" json:"label,omitempty"`      // default "current"
+	state   protoimpl.MessageState `protogen:"open.v1"`
+	Ref     *ResourceRef           `protobuf:"bytes,1,opt,name=ref,proto3" json:"ref,omitempty"`
+	Version uint64                 `protobuf:"varint,2,opt,name=version,proto3" json:"version,omitempty"` // 0 = use label
+	Label   string                 `protobuf:"bytes,3,opt,name=label,proto3" json:"label,omitempty"`      // default "current"
+	// Per-secret access token. For client-bound secrets this is also the
+	// caller-held key share and is never logged or persisted in plaintext.
+	SecretToken   string `protobuf:"bytes,4,opt,name=secret_token,json=secretToken,proto3" json:"secret_token,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1144,6 +1147,13 @@ func (x *GetSecretRequest) GetVersion() uint64 {
 func (x *GetSecretRequest) GetLabel() string {
 	if x != nil {
 		return x.Label
+	}
+	return ""
+}
+
+func (x *GetSecretRequest) GetSecretToken() string {
+	if x != nil {
+		return x.SecretToken
 	}
 	return ""
 }
@@ -1243,12 +1253,15 @@ type PutSecretRequest struct {
 	ClientBound bool `protobuf:"varint,5,opt,name=client_bound,json=clientBound,proto3" json:"client_bound,omitempty"`
 	// generate_access_token asks the server to mint a per-secret access token.
 	// The token is returned exactly once in the response. Required (or an
-	// existing token supplied via metadata) when client_bound is true.
+	// existing token supplied in secret_token) when client_bound is true.
 	GenerateAccessToken bool `protobuf:"varint,6,opt,name=generate_access_token,json=generateAccessToken,proto3" json:"generate_access_token,omitempty"`
 	// expires_at for the new version, 0 = never.
 	ExpiresAtUnixMs int64 `protobuf:"varint,7,opt,name=expires_at_unix_ms,json=expiresAtUnixMs,proto3" json:"expires_at_unix_ms,omitempty"`
-	unknownFields   protoimpl.UnknownFields
-	sizeCache       protoimpl.SizeCache
+	// Current per-secret token, required when updating an existing client-bound
+	// secret. It is scoped to this operation and never logged or persisted.
+	SecretToken   string `protobuf:"bytes,8,opt,name=secret_token,json=secretToken,proto3" json:"secret_token,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *PutSecretRequest) Reset() {
@@ -1328,6 +1341,13 @@ func (x *PutSecretRequest) GetExpiresAtUnixMs() int64 {
 		return x.ExpiresAtUnixMs
 	}
 	return 0
+}
+
+func (x *PutSecretRequest) GetSecretToken() string {
+	if x != nil {
+		return x.SecretToken
+	}
+	return ""
 }
 
 type PutSecretResponse struct {
@@ -8462,18 +8482,19 @@ const file_kms_v1_kms_proto_rawDesc = "" +
 	"\bversions\x18\a \x03(\v2\x1c.kms.v1.ParameterVersionInfoR\bversions\x1a9\n" +
 	"\vLabelsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\x04R\x05value:\x028\x01\"i\n" +
+	"\x05value\x18\x02 \x01(\x04R\x05value:\x028\x01\"\x8c\x01\n" +
 	"\x10GetSecretRequest\x12%\n" +
 	"\x03ref\x18\x01 \x01(\v2\x13.kms.v1.ResourceRefR\x03ref\x12\x18\n" +
 	"\aversion\x18\x02 \x01(\x04R\aversion\x12\x14\n" +
-	"\x05label\x18\x03 \x01(\tR\x05label\"\xdf\x01\n" +
+	"\x05label\x18\x03 \x01(\tR\x05label\x12!\n" +
+	"\fsecret_token\x18\x04 \x01(\tR\vsecretToken\"\xdf\x01\n" +
 	"\x11GetSecretResponse\x12%\n" +
 	"\x03ref\x18\x01 \x01(\v2\x13.kms.v1.ResourceRefR\x03ref\x12\x18\n" +
 	"\aversion\x18\x02 \x01(\x04R\aversion\x12\x14\n" +
 	"\x05value\x18\x03 \x01(\fR\x05value\x12!\n" +
 	"\fcontent_type\x18\x04 \x01(\tR\vcontentType\x12#\n" +
 	"\rmetadata_json\x18\x05 \x01(\tR\fmetadataJson\x12+\n" +
-	"\x12created_at_unix_ms\x18\x06 \x01(\x03R\x0fcreatedAtUnixMs\"\x9b\x02\n" +
+	"\x12created_at_unix_ms\x18\x06 \x01(\x03R\x0fcreatedAtUnixMs\"\xbe\x02\n" +
 	"\x10PutSecretRequest\x12%\n" +
 	"\x03ref\x18\x01 \x01(\v2\x13.kms.v1.ResourceRefR\x03ref\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\fR\x05value\x12!\n" +
@@ -8481,7 +8502,8 @@ const file_kms_v1_kms_proto_rawDesc = "" +
 	"\rmetadata_json\x18\x04 \x01(\tR\fmetadataJson\x12!\n" +
 	"\fclient_bound\x18\x05 \x01(\bR\vclientBound\x122\n" +
 	"\x15generate_access_token\x18\x06 \x01(\bR\x13generateAccessToken\x12+\n" +
-	"\x12expires_at_unix_ms\x18\a \x01(\x03R\x0fexpiresAtUnixMs\"l\n" +
+	"\x12expires_at_unix_ms\x18\a \x01(\x03R\x0fexpiresAtUnixMs\x12!\n" +
+	"\fsecret_token\x18\b \x01(\tR\vsecretToken\"l\n" +
 	"\x11PutSecretResponse\x12\x18\n" +
 	"\aversion\x18\x01 \x01(\x04R\aversion\x12\x1a\n" +
 	"\brevision\x18\x02 \x01(\x04R\brevision\x12!\n" +

@@ -216,17 +216,16 @@ func (s *server) serveAPI(w http.ResponseWriter, r *http.Request) {
 
 // authenticate resolves the request's credentials — the bearer token and any
 // client certificate the TLS layer verified on this connection — to a
-// Principal, attaching request context (remote addr, user agent, request id,
-// per-secret token header). Combination rules and the admin
+// Principal, attaching request context (remote addr, user agent, request id).
+// Combination rules and the admin
 // client-certificate requirement live in core, not here.
 func (s *server) authenticate(r *http.Request, ip string) (core.Principal, error) {
 	return s.svc.ResolvePrincipal(r.Context(), core.CredentialInput{
-		Token:       bearerToken(r),
-		PeerCert:    peerCertFromRequest(r),
-		SecretToken: r.Header.Get("X-KMS-Secret-Token"),
-		RemoteAddr:  ip,
-		UserAgent:   r.UserAgent(),
-		RequestID:   requestIDFrom(r.Context()),
+		Token:      bearerToken(r),
+		PeerCert:   peerCertFromRequest(r),
+		RemoteAddr: ip,
+		UserAgent:  r.UserAgent(),
+		RequestID:  requestIDFrom(r.Context()),
 	})
 }
 

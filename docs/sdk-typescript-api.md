@@ -150,10 +150,12 @@ method families are:
 | `client.close()` | Idempotently cancel watches, reconciliation, callbacks, and transport work. `Symbol.asyncDispose` delegates to it. |
 | `CallOptions` | Per-call `AbortSignal` and earlier absolute deadline. The default unary deadline is five seconds. |
 
-`KmsClientOptions.token` supplies bearer authentication. `GetOptions` and
-secret mutation options accept a separate `secretToken`; it is never used as
-the caller identity. Parameter and secret reads carrying a `secretToken`
-bypass the shared read cache and never populate it. Lazy namespace discovery
+`KmsClientOptions.token` supplies bearer authentication. `GetOptions.secretToken`
+is placed only in a `GetSecret` request and is never used as caller identity or
+metadata. The shared option and legacy secret-lifecycle options remain accepted
+for source compatibility but are never transmitted by parameter or lifecycle
+operations. Parameter and secret reads carrying a `secretToken` still bypass
+the shared read cache and never populate it. Lazy namespace discovery
 is coalesced as client-owned work under the default RPC deadline; each caller's
 earlier deadline or cancellation independently bounds its wait without
 poisoning concurrent callers; an already-cancelled caller starts no shared

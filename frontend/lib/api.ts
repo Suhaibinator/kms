@@ -186,7 +186,6 @@ interface FetchOptions extends ApiRequestOptions {
   body?: unknown;
   /** Opaque bytes which must be sent byte-for-byte instead of stringified. */
   rawBody?: DefaultsArtifactBody;
-  headers?: Record<string, string>;
   auth?: boolean;
 }
 
@@ -203,12 +202,11 @@ export async function apiFetch<T>(path: string, opts: FetchOptions = {}): Promis
     method = "GET",
     body,
     rawBody,
-    headers = {},
     auth = true,
     signal,
     timeoutMs = DEFAULT_TIMEOUT_MS,
   } = opts;
-  const finalHeaders: Record<string, string> = { Accept: "application/json", ...headers };
+  const finalHeaders: Record<string, string> = { Accept: "application/json" };
   if (body !== undefined || rawBody !== undefined)
     finalHeaders["Content-Type"] = "application/json";
   if (auth) {
@@ -537,16 +535,28 @@ export const api = {
       request,
     );
   },
-  // Creating or updating a secret. For client-bound *updates* the caller must
-  // supply the existing secret token, sent as X-KMS-Secret-Token.
-  createSecret(req: CreateSecretRequest, secretToken?: string): Promise<CreateSecretResponse> {
-    const headers = secretToken ? { "X-KMS-Secret-Token": secretToken } : undefined;
-    return apiFetch<CreateSecretResponse>("/secrets", { method: "POST", body: req, headers });
+  // Client-bound updates carry the current token only in this request body.
+  createSecret(req: CreateSecretRequest): Promise<CreateSecretResponse> {
+    return apiFetch<CreateSecretResponse>("/secrets", { method: "POST", body: req });
   },
-  revealSecret(ref: ResourceRef, version: number, label: string): Promise<RevealSecretResponse> {
+  revealSecret(
+    ref: ResourceRef,
+    version: number,
+    label: string,
+    secretToken?: string,
+    request?: ApiRequestOptions,
+  ): Promise<RevealSecretResponse> {
     return apiFetch<RevealSecretResponse>("/secrets/reveal", {
+      ...request,
       method: "POST",
-      body: { env: ref.env, app: ref.app, key: ref.key, version, label },
+      body: {
+        env: ref.env,
+        app: ref.app,
+        key: ref.key,
+        version,
+        label,
+        ...(secretToken ? { secret_token: secretToken } : null),
+      },
     });
   },
   disableSecret(ref: ResourceRef, version: number, enable: boolean): Promise<RevisionResponse> {

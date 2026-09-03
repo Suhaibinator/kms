@@ -286,9 +286,9 @@ class SecretServiceStub:
     SecretService
     ---------------------------------------------------------------------------
 
-    Authentication travels in gRPC metadata:
-    "authorization":      "Bearer <per-client token>"
-    "x-kms-secret-token": "<per-secret access token>"  (when required / client-bound)
+    Identity authentication travels in standard gRPC metadata:
+    "authorization": "Bearer <per-client token>"
+    Per-secret credentials are fields on only the requests that consume them.
 
     """
 
@@ -345,9 +345,9 @@ class SecretServiceServicer:
     SecretService
     ---------------------------------------------------------------------------
 
-    Authentication travels in gRPC metadata:
-    "authorization":      "Bearer <per-client token>"
-    "x-kms-secret-token": "<per-secret access token>"  (when required / client-bound)
+    Identity authentication travels in standard gRPC metadata:
+    "authorization": "Bearer <per-client token>"
+    Per-secret credentials are fields on only the requests that consume them.
 
     """
 
@@ -455,9 +455,9 @@ class SecretService:
     SecretService
     ---------------------------------------------------------------------------
 
-    Authentication travels in gRPC metadata:
-    "authorization":      "Bearer <per-client token>"
-    "x-kms-secret-token": "<per-secret access token>"  (when required / client-bound)
+    Identity authentication travels in standard gRPC metadata:
+    "authorization": "Bearer <per-client token>"
+    Per-secret credentials are fields on only the requests that consume them.
 
     """
 

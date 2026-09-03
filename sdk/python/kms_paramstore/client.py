@@ -48,7 +48,6 @@ from .watch import Event, WatchStatus, _SubManager
 __all__ = ["Client", "WhoAmI"]
 
 _MD_AUTHORIZATION = "authorization"
-_MD_SECRET_TOKEN = "x-kms-secret-token"
 
 # Bounds the callback dispatch queue. Value updates are applied independently of
 # this queue, so a full queue only drops (best-effort) change notifications.
@@ -213,12 +212,10 @@ class Client:
         except Exception:
             pass
 
-    def _auth_metadata(self, secret_token: str = "") -> List[Tuple[str, str]]:
+    def _auth_metadata(self) -> List[Tuple[str, str]]:
         md: List[Tuple[str, str]] = []
         if self._token:
             md.append((_MD_AUTHORIZATION, "Bearer " + self._token))
-        if secret_token:
-            md.append((_MD_SECRET_TOKEN, secret_token))
         return md
 
     def _call_timeout(self, timeout: Optional[float]) -> float:
@@ -398,7 +395,7 @@ class Client:
             try:
                 resp = self._param_stub.GetParameter(
                     kms_pb2.GetParameterRequest(ref=to_proto_ref(ref), version=version, label=label),
-                    metadata=self._auth_metadata(secret_token),
+                    metadata=self._auth_metadata(),
                     timeout=self._call_timeout(timeout),
                 )
             except grpc.RpcError as e:
@@ -583,8 +580,10 @@ class Client:
         try:
             try:
                 resp = self._secret_stub.GetSecret(
-                    kms_pb2.GetSecretRequest(ref=to_proto_ref(ref), version=version, label=label),
-                    metadata=self._auth_metadata(secret_token),
+                    kms_pb2.GetSecretRequest(
+                        ref=to_proto_ref(ref), version=version, label=label, secret_token=secret_token
+                    ),
+                    metadata=self._auth_metadata(),
                     timeout=self._call_timeout(timeout),
                 )
             except grpc.RpcError as e:
@@ -646,8 +645,9 @@ class Client:
                     client_bound=client_bound,
                     generate_access_token=generate_access_token,
                     expires_at_unix_ms=expires_at_unix_ms,
+                    secret_token=secret_token,
                 ),
-                metadata=self._auth_metadata(secret_token),
+                metadata=self._auth_metadata(),
                 timeout=self._call_timeout(timeout),
             )
         except grpc.RpcError as e:
@@ -723,7 +723,7 @@ class Client:
         try:
             resp = self._secret_stub.DisableSecret(
                 kms_pb2.DisableSecretRequest(ref=to_proto_ref(ref), version=version, enable=enabled),
-                metadata=self._auth_metadata(secret_token),
+                metadata=self._auth_metadata(),
                 timeout=self._call_timeout(timeout),
             )
         except grpc.RpcError as e:
@@ -745,7 +745,7 @@ class Client:
         try:
             resp = self._secret_stub.DestroySecretVersion(
                 kms_pb2.DestroySecretVersionRequest(ref=to_proto_ref(ref), version=version),
-                metadata=self._auth_metadata(secret_token),
+                metadata=self._auth_metadata(),
                 timeout=self._call_timeout(timeout),
             )
         except grpc.RpcError as e:
@@ -767,7 +767,7 @@ class Client:
         try:
             resp = self._secret_stub.PromoteSecretVersion(
                 kms_pb2.PromoteSecretVersionRequest(ref=to_proto_ref(ref), version=version),
-                metadata=self._auth_metadata(secret_token),
+                metadata=self._auth_metadata(),
                 timeout=self._call_timeout(timeout),
             )
         except grpc.RpcError as e:

@@ -85,7 +85,7 @@ func (c *Client) CreateApplicationRelease(
 		return CreateApplicationReleaseResult{}, fmt.Errorf("kmsclient: preview must not include a plan digest")
 	}
 
-	cctx, cancel := c.callCtx(ctx, "")
+	cctx, cancel := c.callCtx(ctx)
 	defer cancel()
 	response, err := c.admin.CreateApplicationRelease(cctx, &kmsv1.CreateApplicationReleaseRequest{
 		Namespace:    namespace.proto(),

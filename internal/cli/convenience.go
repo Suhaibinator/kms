@@ -222,28 +222,17 @@ func (cf *connFlags) dial() (*grpc.ClientConn, error) {
 	)
 }
 
-// authCtx attaches the identity token and optional per-secret token as gRPC
-// metadata, matching the server's expected header names. mTLS callers omit the
-// bearer token; the server derives their identity from the client certificate.
+// authCtx attaches the standard identity token as gRPC metadata. Per-secret
+// credentials are fields on only the requests that consume them. mTLS callers
+// omit the bearer token; the server derives their identity from the client
+// certificate.
 func (cf *connFlags) authCtx(ctx context.Context) context.Context {
 	// dial has already surfaced any finalize error, and every caller returns
 	// on it before reaching here; the tokens are whatever finalize left.
 	_ = cf.finalize()
-	return cf.authCtxWithSecretToken(ctx, cf.secretToken)
-}
-
-// authCtxWithSecretToken is authCtx with an explicit per-secret token, for
-// commands that fetch several token-gated secrets over one connection and
-// look each token up themselves (exec, env). An empty token attaches only the
-// identity credential.
-func (cf *connFlags) authCtxWithSecretToken(ctx context.Context, secretToken string) context.Context {
-	_ = cf.finalize()
 	var kvs []string
 	if cf.token != "" {
 		kvs = append(kvs, "authorization", "Bearer "+cf.token)
-	}
-	if secretToken != "" {
-		kvs = append(kvs, "x-kms-secret-token", secretToken)
 	}
 	if len(kvs) == 0 {
 		return ctx
@@ -379,6 +368,7 @@ func (c *CLI) cmdPutSecret(args []string) int {
 		ContentType:         *contentType,
 		ClientBound:         *clientBound,
 		GenerateAccessToken: *genToken,
+		SecretToken:         cf.secretToken,
 	})
 	if err != nil {
 		return c.failErr("put-secret", err)
@@ -455,9 +445,10 @@ func (c *CLI) cmdGetSecret(args []string) int {
 	defer cancel()
 
 	resp, err := kmsv1.NewSecretServiceClient(conn).GetSecret(cf.authCtx(ctx), &kmsv1.GetSecretRequest{
-		Ref:     protoRef(ref),
-		Version: *version,
-		Label:   *label,
+		Ref:         protoRef(ref),
+		Version:     *version,
+		Label:       *label,
+		SecretToken: cf.secretToken,
 	})
 	if err != nil {
 		return c.failErr("get-secret", err)

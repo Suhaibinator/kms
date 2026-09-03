@@ -19,12 +19,10 @@ type CredentialInput struct {
 	// PeerCert is the leaf client certificate the TLS layer chain-verified
 	// against the listener's client-CA pool, or nil when the peer presented
 	// none. Transports must only pass a certificate with a verified chain.
-	PeerCert *x509.Certificate
-	// SecretToken is the optional per-secret access token header.
-	SecretToken string
-	RemoteAddr  string
-	UserAgent   string
-	RequestID   string
+	PeerCert   *x509.Certificate
+	RemoteAddr string
+	UserAgent  string
+	RequestID  string
 }
 
 // ResolvePrincipal verifies the presented credentials and combines them into a
@@ -75,10 +73,9 @@ func (s *Service) ResolvePrincipal(ctx context.Context, in CredentialInput) (Pri
 	}
 
 	pr := Principal{
-		SecretToken: in.SecretToken,
-		RemoteAddr:  in.RemoteAddr,
-		UserAgent:   in.UserAgent,
-		RequestID:   in.RequestID,
+		RemoteAddr: in.RemoteAddr,
+		UserAgent:  in.UserAgent,
+		RequestID:  in.RequestID,
 	}
 	var ignored domain.AuthMethod // a presented credential that did not verify but was not needed
 	switch {

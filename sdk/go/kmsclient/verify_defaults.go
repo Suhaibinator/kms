@@ -113,7 +113,7 @@ func (c *Client) VerifyReleaseDefaults(
 	if options.SchemaSHA256 != "" && !validLowerHex64(options.SchemaSHA256) {
 		return VerifyReleaseDefaultsResult{}, fmt.Errorf("kmsclient: invalid schema sha256")
 	}
-	cctx, cancel := c.callCtx(ctx, "")
+	cctx, cancel := c.callCtx(ctx)
 	defer cancel()
 	response, err := c.releases.VerifyReleaseDefaults(cctx, &kmsv1.VerifyReleaseDefaultsRequest{
 		Namespace:    namespace.proto(),

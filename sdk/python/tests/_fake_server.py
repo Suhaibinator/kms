@@ -230,9 +230,8 @@ class SecretServicer(kms_pb2_grpc.SecretServiceServicer):
             sec = self.store.secrets.get(rk)
             if sec is None:
                 context.abort(grpc.StatusCode.NOT_FOUND, f"secret {rk} not found")
-            md = dict(context.invocation_metadata())
             if sec["token"]:
-                if md.get("x-kms-secret-token") != sec["token"]:
+                if request.secret_token != sec["token"]:
                     context.abort(grpc.StatusCode.PERMISSION_DENIED, "secret token required")
             while len(sec["states"]) < len(sec["versions"]):
                 sec["states"].append("enabled")

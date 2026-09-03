@@ -102,7 +102,7 @@ describe("protocol-faithful gRPC integration", () => {
       callback,
     ) => {
       if (call.request.version === 0n) {
-        expect(call.metadata.get("x-kms-secret-token")).toEqual(["parameter-token"]);
+        expect(call.metadata.get("x-kms-secret-token")).toEqual([]);
       }
       const selected =
         call.request.version === 0n ? currentParameter : exactParameters.get(call.request.version);
@@ -127,7 +127,8 @@ describe("protocol-faithful gRPC integration", () => {
     } as UntypedServiceImplementation);
 
     const getSecret: handleUnaryCall<GetSecretRequest, GetSecretResponse> = (call, callback) => {
-      expect(call.metadata.get("x-kms-secret-token")).toEqual(["secret-token"]);
+      expect(call.metadata.get("x-kms-secret-token")).toEqual([]);
+      expect(call.request.secretToken).toBe("secret-token");
       callback(null, {
         ref: call.request.ref,
         version: 2n,
@@ -562,6 +563,7 @@ describe("protocol-faithful gRPC integration", () => {
           clientBound: true,
           generateAccessToken: true,
           expiresAtUnixMs: firstExactInteger + 100n,
+          secretToken: "put-token",
         },
       ]);
       expect(deleteSecretRequests).toEqual([{ ref: { namespace, key: "retired" } }]);
@@ -593,7 +595,7 @@ describe("protocol-faithful gRPC integration", () => {
         {
           rpc: "putSecret",
           authorization: ["Bearer integration-token"],
-          secretToken: ["put-token"],
+          secretToken: [],
         },
         {
           rpc: "listSecrets",
@@ -613,22 +615,22 @@ describe("protocol-faithful gRPC integration", () => {
         {
           rpc: "disableSecret",
           authorization: ["Bearer integration-token"],
-          secretToken: ["disable-token"],
+          secretToken: [],
         },
         {
           rpc: "disableSecret",
           authorization: ["Bearer integration-token"],
-          secretToken: ["enable-token"],
+          secretToken: [],
         },
         {
           rpc: "destroySecretVersion",
           authorization: ["Bearer integration-token"],
-          secretToken: ["destroy-token"],
+          secretToken: [],
         },
         {
           rpc: "promoteSecretVersion",
           authorization: ["Bearer integration-token"],
-          secretToken: ["promote-token"],
+          secretToken: [],
         },
       ]);
     } finally {

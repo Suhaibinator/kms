@@ -164,12 +164,10 @@ class AsyncClient:
         except asyncio.QueueFull:
             self._logf("async callback queue full, dropping notification")
 
-    def _auth_metadata(self, secret_token: str = "") -> List[Tuple[str, str]]:
+    def _auth_metadata(self) -> List[Tuple[str, str]]:
         metadata: List[Tuple[str, str]] = []
         if self._token:
             metadata.append(("authorization", "Bearer " + self._token))
-        if secret_token:
-            metadata.append(("x-kms-secret-token", secret_token))
         return metadata
 
     def _call_timeout(self, timeout: Optional[float]) -> float:
@@ -265,7 +263,7 @@ class AsyncClient:
             try:
                 response = await self._param_stub.GetParameter(
                     kms_pb2.GetParameterRequest(ref=to_proto_ref(ref), version=version, label=label),
-                    metadata=self._auth_metadata(secret_token), timeout=self._call_timeout(timeout),
+                    metadata=self._auth_metadata(), timeout=self._call_timeout(timeout),
                 )
             except grpc.RpcError as exc:
                 raise errors.map_grpc_error(exc) from None
@@ -400,8 +398,10 @@ class AsyncClient:
         try:
             try:
                 response = await self._secret_stub.GetSecret(
-                    kms_pb2.GetSecretRequest(ref=to_proto_ref(ref), version=version, label=label),
-                    metadata=self._auth_metadata(secret_token), timeout=self._call_timeout(timeout),
+                    kms_pb2.GetSecretRequest(
+                        ref=to_proto_ref(ref), version=version, label=label, secret_token=secret_token
+                    ),
+                    metadata=self._auth_metadata(), timeout=self._call_timeout(timeout),
                 )
             except grpc.RpcError as exc:
                 raise errors.map_grpc_error(exc) from None
@@ -448,7 +448,8 @@ class AsyncClient:
                     metadata_json=metadata_json, client_bound=client_bound,
                     generate_access_token=generate_access_token,
                     expires_at_unix_ms=expires_at_unix_ms,
-                ), metadata=self._auth_metadata(secret_token), timeout=self._call_timeout(timeout),
+                    secret_token=secret_token,
+                ), metadata=self._auth_metadata(), timeout=self._call_timeout(timeout),
             )
         except grpc.RpcError as exc:
             raise errors.map_grpc_error(exc) from None
@@ -487,7 +488,7 @@ class AsyncClient:
     async def _secret_revision_mutation(self, method, request, ref: Ref, secret_token: str, timeout) -> int:
         try:
             response = await method(
-                request, metadata=self._auth_metadata(secret_token), timeout=self._call_timeout(timeout)
+                request, metadata=self._auth_metadata(), timeout=self._call_timeout(timeout)
             )
         except grpc.RpcError as exc:
             raise errors.map_grpc_error(exc) from None
@@ -532,7 +533,7 @@ class AsyncClient:
         try:
             response = await self._secret_stub.PromoteSecretVersion(
                 kms_pb2.PromoteSecretVersionRequest(ref=to_proto_ref(ref), version=version),
-                metadata=self._auth_metadata(secret_token), timeout=self._call_timeout(timeout),
+                metadata=self._auth_metadata(), timeout=self._call_timeout(timeout),
             )
         except grpc.RpcError as exc:
             raise errors.map_grpc_error(exc) from None

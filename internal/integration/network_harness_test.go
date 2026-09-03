@@ -335,13 +335,6 @@ func networkAuthContext(parent context.Context, token string) context.Context {
 	return metadata.AppendToOutgoingContext(parent, "authorization", "Bearer "+token)
 }
 
-func networkSecretContext(parent context.Context, identityToken, secretToken string) context.Context {
-	return metadata.AppendToOutgoingContext(parent,
-		"authorization", "Bearer "+identityToken,
-		"x-kms-secret-token", secretToken,
-	)
-}
-
 func networkNS(env, app string) *kmsv1.NamespaceRef {
 	return &kmsv1.NamespaceRef{Env: env, App: app}
 }

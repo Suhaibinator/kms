@@ -43,9 +43,7 @@ func TestNoPlaintextOrTokensAtRest(t *testing.T) {
 	idToken := idRes.Token
 
 	// Read the secret so a decryption path also runs before we inspect logs.
-	tokenPr := h.admin
-	tokenPr.SecretToken = accessToken
-	if _, err := h.svc.GetSecret(ctx, tokenPr, ref, 0, ""); err != nil {
+	if _, err := h.svc.GetSecret(ctx, h.admin, ref, 0, "", accessToken); err != nil {
 		t.Fatalf("GetSecret: %v", err)
 	}
 

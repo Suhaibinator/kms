@@ -340,7 +340,7 @@ class _SubManager:
             with self._lock:
                 self._state = "connecting" if self._reconnect_count == 0 else "reconnecting"
             responses = self._client._watch_stub.Subscribe(
-                request_iter(), metadata=self._client._auth_metadata("")
+                request_iter(), metadata=self._client._auth_metadata()
             )
             self._current_responses = responses
             with self._lock:

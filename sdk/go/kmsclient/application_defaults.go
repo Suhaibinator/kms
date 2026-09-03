@@ -59,7 +59,7 @@ func (c *Client) ApplyApplicationDefaults(
 	if len(options.Artifact) == 0 {
 		return ApplicationDefaultsApplyResult{}, fmt.Errorf("kmsclient: defaults artifact is required")
 	}
-	cctx, cancel := c.callCtx(ctx, "")
+	cctx, cancel := c.callCtx(ctx)
 	defer cancel()
 	response, err := c.admin.ApplyApplicationDefaults(cctx, &kmsv1.ApplyApplicationDefaultsRequest{
 		Namespace:        namespace.proto(),

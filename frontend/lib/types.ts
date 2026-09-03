@@ -279,6 +279,7 @@ export interface CreateSecretRequest {
   client_bound: boolean;
   generate_access_token: boolean;
   expires_at_unix_ms: number;
+  secret_token?: string;
 }
 
 export interface CreateSecretResponse {

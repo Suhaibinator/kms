@@ -149,8 +149,8 @@ class _AsyncClient:
     async def _resolve_namespace_arg(self, namespace):
         return namespace or NamespaceRef("prod", "app")
 
-    def _auth_metadata(self, secret_token: str = ""):
-        return [("x-kms-secret-token", secret_token)] if secret_token else []
+    def _auth_metadata(self):
+        return []
 
     def _call_timeout(self, timeout):
         return timeout or 1.0
