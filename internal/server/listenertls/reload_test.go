@@ -434,9 +434,10 @@ func TestSwapReplacesClientCAPool(t *testing.T) {
 func TestSwapDuringHandshakes(t *testing.T) {
 	pairA, leafA := serverKeyPair(t, 55)
 	pairB, leafB := serverKeyPair(t, 66)
-	holder := NewReloadable(derivedFor(t, pairA, nil))
-	addr := echoServer(t, holder.Listener("h2"))
+	derivedA := derivedFor(t, pairA, nil)
 	derivedB := derivedFor(t, pairB, nil)
+	holder := NewReloadable(derivedA)
+	addr := echoServer(t, holder.Listener("h2"))
 	client := trusting(leafA, leafB)
 
 	done := make(chan struct{})
@@ -465,7 +466,7 @@ func TestSwapDuringHandshakes(t *testing.T) {
 		if i%2 == 0 {
 			holder.Swap(derivedB)
 		} else {
-			holder.Swap(derivedFor(t, pairA, nil))
+			holder.Swap(derivedA)
 		}
 		time.Sleep(time.Millisecond)
 	}
