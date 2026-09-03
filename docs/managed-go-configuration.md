@@ -651,10 +651,10 @@ candidates cannot displace last-known-good.
 
 ## Operator workflow
 
-### Expose schema and defaults commands from the application
+### Expose schema, defaults, and release commands from the application
 
 Generated bindings embed the exact emitted schema and return a fresh copy from
-`GeneratedSchema()`. An application can expose both source-owned operations
+`GeneratedSchema()`. An application can expose all three source-owned operations
 without teaching each consumer how to construct KMS requests:
 
 ```go
@@ -678,7 +678,16 @@ is shared by every profile. Use `managed-config defaults apply --profile ...`
 to preview or apply profile-specific values. Add `--update-definition` on the
 previewed defaults operation to repin the application to an already uploaded
 matching schema. Uploading alone never changes the pin, and uploading an exact
-duplicate fails. Both commands read `KMS_TOKEN` and accept the standard
+duplicate fails.
+
+After defaults are applied, use `managed-config release create --profile ...`
+to preview the exact immutable release KMS would create, then repeat it with
+`--execute` to create the release. Parameter values must still match the
+generated defaults. Existing secret aliases retain the active release's exact
+secret pins even when their `current` labels have moved; first-release and new
+secret aliases resolve `current`. Missing secrets fail closed. This command
+never activates a release—the new inactive version is reviewed and activated
+in the web console. All three commands read `KMS_TOKEN` and accept the standard
 endpoint/TLS flags. `RunDefaultsApplier` remains available as a standalone API.
 
 ### Check the generated contract
