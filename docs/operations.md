@@ -971,7 +971,7 @@ spec:
     # No fsGroup: the kubelet would re-add group write on every mount.
   initContainers:
     - name: fix-volume-permissions
-      image: busybox:1.37
+      image: busybox:1.38
       securityContext:
         runAsUser: 0
       command: ["sh", "-c", "chown 100:101 /data /key && chmod 0755 /data /key"]

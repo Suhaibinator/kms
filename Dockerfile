@@ -1,4 +1,4 @@
-# syntax=docker/dockerfile:1.24.0
+# syntax=docker/dockerfile:1.27.0
 
 FROM node:26.8.1-alpine AS frontend
 WORKDIR /src/frontend
@@ -7,7 +7,7 @@ RUN npm ci
 COPY frontend/ ./
 RUN npm run build
 
-FROM golang:1.27-alpine AS builder
+FROM golang:1.27.1-alpine AS builder
 ARG TARGETOS
 ARG TARGETARCH
 ARG VERSION=dev
