@@ -13,7 +13,7 @@ GO_TEST_FLAGS   ?=
 INTEGRATION_COVERPKG ?= ./internal/...,./sdk/go/...
 INTEGRATION_COVERAGE_PROFILE ?= integration-coverage.out
 
-.PHONY: build frontend backend test test-unit test-integration \
+.PHONY: build frontend backend test test-unit test-unit-shard test-integration \
 	test-integration-race check-integration-coverage test-platform-security \
 	vet check-frontend check-configgen typescript test-typescript \
 	check-typescript clean tidy
@@ -96,6 +96,19 @@ test:
 # portable and makes the CI unit/integration split explicit.
 test-unit:
 	go test $$(go list -f '{{if ne .ImportPath "github.com/Suhaibinator/kms/internal/integration"}}{{.ImportPath}}{{end}}' ./...) -count=1 -timeout=$(GO_TEST_TIMEOUT) $(GO_TEST_FLAGS)
+
+# Split the unit suite into disjoint CI shards. Keeping the package selection
+# here makes it easy to reproduce a shard locally and ensures the coverage
+# profiles can be combined without duplicate package blocks.
+test-unit-shard:
+	@packages=''; \
+	case "$(GO_TEST_SHARD)" in \
+		configgen) packages='./internal/configgen' ;; \
+		cli-storage) packages='./internal/cli ./internal/storage' ;; \
+		remaining) packages="$$(go list -f '{{if and (ne .ImportPath "github.com/Suhaibinator/kms/internal/integration") (ne .ImportPath "github.com/Suhaibinator/kms/internal/configgen") (ne .ImportPath "github.com/Suhaibinator/kms/internal/cli") (ne .ImportPath "github.com/Suhaibinator/kms/internal/storage")}}{{.ImportPath}}{{end}}' ./...)" ;; \
+		*) echo "ERROR: unknown GO_TEST_SHARD $(GO_TEST_SHARD)" >&2; exit 2 ;; \
+	esac; \
+	go test $$packages -count=1 -timeout=$(GO_TEST_TIMEOUT) $(GO_TEST_FLAGS)
 
 # Run the hermetic integration suite. Instrument production packages explicitly:
 # internal/integration contains only external-package tests, so its own package

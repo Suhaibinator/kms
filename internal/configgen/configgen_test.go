@@ -23,6 +23,7 @@ import (
 )
 
 func TestGenerateIsDeterministicAndCanonical(t *testing.T) {
+	t.Parallel()
 	options := validOptions(t)
 	first, err := Generate(context.Background(), options)
 	if err != nil {
@@ -175,6 +176,7 @@ func TestGenerateIsDeterministicAndCanonical(t *testing.T) {
 }
 
 func TestTagAndTypeErrors(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		typeName string
 		want     string
@@ -204,6 +206,7 @@ func TestTagAndTypeErrors(t *testing.T) {
 	root := repoRoot(t)
 	for _, test := range tests {
 		t.Run(test.typeName, func(t *testing.T) {
+			t.Parallel()
 			_, err := Generate(context.Background(), Options{
 				Dir: root, Package: "./internal/configgen/testdata/invalid", Type: test.typeName, BindingPackage: "binding",
 			})
@@ -215,6 +218,7 @@ func TestTagAndTypeErrors(t *testing.T) {
 }
 
 func TestGenerateComposesInlineFragments(t *testing.T) {
+	t.Parallel()
 	root := repoRoot(t)
 	artifacts, err := Generate(context.Background(), Options{
 		Dir: root, Package: "./internal/configgen/testdata/composed", Type: "Config", BindingPackage: "composedgenerated",
@@ -319,6 +323,7 @@ func nullableSchemaBranch(t *testing.T, value any, wantType string) map[string]a
 }
 
 func TestGenerateSecretOnlyRootHasValidEmptySchema(t *testing.T) {
+	t.Parallel()
 	artifacts, err := Generate(context.Background(), Options{
 		Dir: repoRoot(t), Package: "./internal/configgen/testdata/valid", Type: "SecretsOnly", BindingPackage: "binding",
 	})
@@ -341,6 +346,7 @@ func TestGenerateSecretOnlyRootHasValidEmptySchema(t *testing.T) {
 }
 
 func TestGeneratedDefaultComparisonUsesValidatedDefaults(t *testing.T) {
+	t.Parallel()
 	root := repoRoot(t)
 	artifacts, err := Generate(context.Background(), Options{
 		Dir: root, Package: "./internal/configgen/testdata/mutating", Type: "Config", BindingPackage: "mutatinggenerated",
@@ -371,6 +377,7 @@ func TestGeneratedDefaultComparisonUsesValidatedDefaults(t *testing.T) {
 }
 
 func TestGenerateRejectsProgramRootPackage(t *testing.T) {
+	t.Parallel()
 	_, err := Generate(context.Background(), Options{
 		Dir: repoRoot(t), Package: "./internal/configgen/testdata/mainconfig", Type: "Config", BindingPackage: "binding",
 	})
@@ -380,6 +387,7 @@ func TestGenerateRejectsProgramRootPackage(t *testing.T) {
 }
 
 func TestMachineSizedIntegerContractIsArchitectureIndependent(t *testing.T) {
+	t.Parallel()
 	for _, arch := range []string{"386", "amd64"} {
 		value, err := analyzeType(types.Typ[types.Int], types.SizesFor("gc", arch), make(map[types.Type]bool), "test int")
 		if err != nil {
@@ -392,6 +400,7 @@ func TestMachineSizedIntegerContractIsArchitectureIndependent(t *testing.T) {
 }
 
 func TestWriteAndVerify(t *testing.T) {
+	t.Parallel()
 	artifacts, err := Generate(context.Background(), validOptions(t))
 	if err != nil {
 		t.Fatal(err)
@@ -436,6 +445,7 @@ func TestWriteAndVerify(t *testing.T) {
 }
 
 func TestCommittedCompileFixtureIsFresh(t *testing.T) {
+	t.Parallel()
 	root := repoRoot(t)
 	artifacts, err := Generate(context.Background(), Options{
 		Dir: root, Package: "./internal/configgen/testdata/valid", Type: "Config", BindingPackage: "generated",
@@ -454,6 +464,7 @@ func TestCommittedCompileFixtureIsFresh(t *testing.T) {
 }
 
 func TestCommittedComposedCompileFixtureIsFresh(t *testing.T) {
+	t.Parallel()
 	root := repoRoot(t)
 	artifacts, err := Generate(context.Background(), Options{
 		Dir: root, Package: "./internal/configgen/testdata/composed", Type: "Config", BindingPackage: "composedgenerated",

@@ -63,6 +63,7 @@ func property(t *testing.T, schema map[string]any, path ...string) map[string]an
 }
 
 func TestSchemaCarriesDocCommentsAndLiteralDefaults(t *testing.T) {
+	t.Parallel()
 	schema := documentedSchema(t, "")
 	if got := schema["description"]; got != "Config is the documented fixture root." {
 		t.Fatalf("root description = %v", got)
@@ -144,6 +145,7 @@ func TestSchemaCarriesDocCommentsAndLiteralDefaults(t *testing.T) {
 }
 
 func TestSchemaDefaultsCanBeDisabledOrRequired(t *testing.T) {
+	t.Parallel()
 	schema := documentedSchema(t, "-")
 	if _, has := property(t, schema, "runtime", "greeting")["default"]; has {
 		t.Fatal("-defaults - must suppress defaults")
@@ -161,6 +163,7 @@ func TestSchemaDefaultsCanBeDisabledOrRequired(t *testing.T) {
 }
 
 func TestUndocumentedRootStaysMinimal(t *testing.T) {
+	t.Parallel()
 	artifacts, err := Generate(context.Background(), validOptions(t))
 	if err != nil {
 		t.Fatal(err)
@@ -171,6 +174,7 @@ func TestUndocumentedRootStaysMinimal(t *testing.T) {
 }
 
 func TestSchemaReadsDocCommentsFromInlinedPackages(t *testing.T) {
+	t.Parallel()
 	artifacts, err := Generate(context.Background(), Options{
 		Dir: repoRoot(t), Package: "./internal/configgen/testdata/composed", Type: "Config", BindingPackage: "composedgenerated",
 	})

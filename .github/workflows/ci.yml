@@ -35,10 +35,10 @@ jobs:
         with:
           version: v2.13.2
 
-  go-test:
-    name: Go build & unit tests (race)
+  go-checks:
+    name: Go module, generated, vet & build checks
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 15
     env:
       GOTOOLCHAIN: local
     steps:
@@ -59,10 +59,85 @@ jobs:
         run: go vet ./...
       - name: Build
         run: go build ./...
+
+  go-unit:
+    name: Go unit shard (${{ matrix.shard }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [configgen, cli-storage, remaining]
+    env:
+      GOTOOLCHAIN: local
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+          cache-dependency-path: go.sum
       - name: Unit tests with race detector and coverage
-        run: make test-unit GO_TEST_TIMEOUT=15m GO_TEST_FLAGS='-race -covermode=atomic -coverprofile=coverage.out'
-      - name: Coverage summary
-        run: go tool cover -func=coverage.out | tail -1
+        run: >-
+          make test-unit-shard
+          GO_TEST_SHARD='${{ matrix.shard }}'
+          GO_TEST_TIMEOUT=15m
+          GO_TEST_FLAGS='-race -covermode=atomic -coverprofile=coverage-${{ matrix.shard }}.out'
+      - name: Store shard coverage
+        uses: actions/upload-artifact@v7
+        with:
+          name: go-unit-coverage-${{ matrix.shard }}
+          path: coverage-${{ matrix.shard }}.out
+          if-no-files-found: error
+          retention-days: 1
+
+  # Keep one stable required status while the implementation fans out across
+  # matrix jobs. Shards own disjoint packages, so their profiles can be joined
+  # without double-counting coverage blocks.
+  go-unit-gate:
+    name: Go build & unit tests (race)
+    if: always()
+    needs: [go-checks, go-unit]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      GOTOOLCHAIN: local
+    steps:
+      - name: Require checks and every unit shard
+        if: needs.go-checks.result != 'success' || needs.go-unit.result != 'success'
+        run: |
+          echo "::error::Go checks=${{ needs.go-checks.result }}, unit shards=${{ needs.go-unit.result }}"
+          exit 1
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Download shard coverage
+        uses: actions/download-artifact@v8
+        with:
+          pattern: go-unit-coverage-*
+          path: coverage-shards
+          merge-multiple: true
+      - name: Combine coverage and print summary
+        shell: bash
+        run: |
+          mapfile -t profiles < <(find coverage-shards -type f -name 'coverage-*.out' | sort)
+          if [ "${#profiles[@]}" -ne 3 ]; then
+            echo "::error::expected 3 Go unit coverage profiles, found ${#profiles[@]}"
+            exit 1
+          fi
+          {
+            echo 'mode: atomic'
+            for profile in "${profiles[@]}"; do
+              if [ "$(head -n 1 "$profile")" != 'mode: atomic' ]; then
+                echo "::error::$profile does not use atomic coverage mode" >&2
+                exit 1
+              fi
+              tail -n +2 "$profile"
+            done
+          } >coverage.out
+          go tool cover -func=coverage.out | tail -1
 
   # Keep integration tests as a distinct required status. The suite owns its
   # real SQLite/key material and any loopback listeners, so CI needs no service
@@ -88,9 +163,9 @@ jobs:
       - name: Require exercised production coverage
         run: make check-integration-coverage INTEGRATION_COVERAGE_PROFILE=integration-coverage.out
 
-  # Linux cannot execute the build-tagged Darwin ACL and Windows DACL tests.
-  # Native runners make those security regressions observable rather than only
-  # proving that the platform-specific source cross-compiles.
+  # The Linux variants already run in the race-enabled unit shards. Native
+  # macOS and Windows runners make the build-tagged ACL/DACL regressions
+  # observable rather than only proving that their source cross-compiles.
   filesystem-security:
     name: Native filesystem security (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
@@ -98,7 +173,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-24.04, macos-15, windows-2025]
+        os: [macos-15, windows-2025]
     env:
       GOTOOLCHAIN: local
     steps:
