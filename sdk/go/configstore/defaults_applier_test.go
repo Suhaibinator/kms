@@ -11,13 +11,16 @@ import (
 )
 
 type fakeDefaultsApplyClient struct {
-	calls         []kmsclient.ApplicationDefaultsApplyOptions
-	results       []kmsclient.ApplicationDefaultsApplyResult
-	errors        []error
-	schemaCalls   []kmsclient.CreateApplicationSchemaOptions
-	schemaResults []kmsclient.ApplicationSchema
-	schemaErrors  []error
-	closed        bool
+	calls          []kmsclient.ApplicationDefaultsApplyOptions
+	results        []kmsclient.ApplicationDefaultsApplyResult
+	errors         []error
+	schemaCalls    []kmsclient.CreateApplicationSchemaOptions
+	schemaResults  []kmsclient.ApplicationSchema
+	schemaErrors   []error
+	releaseCalls   []kmsclient.CreateApplicationReleaseOptions
+	releaseResults []kmsclient.CreateApplicationReleaseResult
+	releaseErrors  []error
+	closed         bool
 }
 
 func (client *fakeDefaultsApplyClient) ApplyApplicationDefaults(_ context.Context, options kmsclient.ApplicationDefaultsApplyOptions) (kmsclient.ApplicationDefaultsApplyResult, error) {
@@ -41,6 +44,15 @@ func (client *fakeDefaultsApplyClient) CreateApplicationSchema(_ context.Context
 		return kmsclient.ApplicationSchema{}, client.schemaErrors[index]
 	}
 	return client.schemaResults[index], nil
+}
+
+func (client *fakeDefaultsApplyClient) CreateApplicationRelease(_ context.Context, options kmsclient.CreateApplicationReleaseOptions) (kmsclient.CreateApplicationReleaseResult, error) {
+	client.releaseCalls = append(client.releaseCalls, options)
+	index := len(client.releaseCalls) - 1
+	if index < len(client.releaseErrors) && client.releaseErrors[index] != nil {
+		return kmsclient.CreateApplicationReleaseResult{}, client.releaseErrors[index]
+	}
+	return client.releaseResults[index], nil
 }
 
 func defaultsApplierTestConfig(namespace string) DefaultsApplierConfig[exporterTestProfile, exporterTestConfig] {

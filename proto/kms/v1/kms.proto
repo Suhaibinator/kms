@@ -654,6 +654,7 @@ service AdminService {
   rpc ListSubscribers(ListSubscribersRequest) returns (ListSubscribersResponse);
   rpc ListReleaseSubscribers(ListReleaseSubscribersRequest) returns (ListReleaseSubscribersResponse);
   rpc ApplyApplicationDefaults(ApplyApplicationDefaultsRequest) returns (ApplyApplicationDefaultsResponse);
+  rpc CreateApplicationRelease(CreateApplicationReleaseRequest) returns (CreateApplicationReleaseResponse);
   rpc Health(HealthRequest) returns (HealthResponse);
 }
 
@@ -1007,4 +1008,48 @@ message HealthResponse {
   string version = 3;
   uint64 current_revision = 4;
   string details_json = 5;
+}
+
+// CreateApplicationRelease previews or creates one inactive immutable release
+// from a source-owned kms-config-defaults/v1 artifact. The server verifies the
+// generated parameter defaults against current values, carries forward exact
+// active secret pins when present, and resolves current only for new secret
+// aliases. Neither the request nor response exposes parameter values, secret
+// material, access tokens, or stored value digests. Execute requires the exact
+// plan_digest returned by a preceding preview and never activates the release.
+message CreateApplicationReleaseRequest {
+  NamespaceRef namespace = 1;
+  bytes artifact = 2;
+  string metadata_json = 3;
+  bool execute = 4;
+  string plan_digest = 5;
+}
+
+// ApplicationReleasePlanEntry is a value-free account of one release pin.
+// source is generated_default | carried_active_secret |
+// resolved_current_secret.
+message ApplicationReleasePlanEntry {
+  string alias = 1;
+  string kind = 2; // parameter | secret
+  ResourceRef ref = 3;
+  uint64 from_version = 4; // 0 when no active release pin exists
+  uint64 to_version = 5;
+  string source = 6;
+}
+
+message CreateApplicationReleaseResponse {
+  string profile = 1;
+  string plan_digest = 2;
+  bool valid = 3;
+  bool executed = 4;
+  bool created = 5;
+  string release_name = 6;
+  uint64 schema_version = 7;
+  uint64 base_release_version = 8;
+  repeated ApplicationReleasePlanEntry entries = 9;
+  repeated string missing_secrets = 10;
+  repeated ReleaseValidationError validation = 11;
+  // Set after any successful execute, including an idempotent result that
+  // returns an already-equivalent latest inactive release.
+  ConfigurationRelease release = 12;
 }

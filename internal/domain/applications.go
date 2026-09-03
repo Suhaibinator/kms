@@ -77,6 +77,47 @@ type DefaultsApplyResult struct {
 	DefinitionUpdated bool
 }
 
+// ApplicationReleaseCreateInput previews or executes creation of the
+// application's canonical release from one generated defaults artifact.
+// Execute never activates the release; the exact preview digest is required.
+type ApplicationReleaseCreateInput struct {
+	Namespace  NamespaceRef
+	Artifact   []byte
+	Metadata   string
+	Execute    bool
+	PlanDigest string
+}
+
+const (
+	ApplicationReleaseSourceGeneratedDefault      = "generated_default"
+	ApplicationReleaseSourceCarriedActiveSecret   = "carried_active_secret"
+	ApplicationReleaseSourceResolvedCurrentSecret = "resolved_current_secret"
+)
+
+type ApplicationReleasePlanEntry struct {
+	Alias       string
+	Kind        string
+	Ref         Ref
+	FromVersion uint64
+	ToVersion   uint64
+	Source      string
+}
+
+type ApplicationReleaseCreateResult struct {
+	Profile            string
+	PlanDigest         string
+	Valid              bool
+	Executed           bool
+	Created            bool
+	ReleaseName        string
+	SchemaVersion      uint64
+	BaseReleaseVersion uint64
+	Entries            []ApplicationReleasePlanEntry
+	MissingSecrets     []string
+	Validation         []ReleaseValidationError
+	Release            *ConfigurationRelease
+}
+
 // --- console read models ----------------------------------------------------
 
 // OverviewValue is one contract alias resolved against an environment. Key is

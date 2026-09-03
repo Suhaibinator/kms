@@ -95,6 +95,51 @@ func (h *adminServer) ApplyApplicationDefaults(ctx context.Context, req *kmsv1.A
 	}, nil
 }
 
+// CreateApplicationRelease exposes the application-owned, value-free release
+// planning workflow over the admin transport. The artifact is consumed only by
+// core; the response projects resource coordinates, versions, bounded source
+// labels, and sanitized validation errors without echoing values or secrets.
+func (h *adminServer) CreateApplicationRelease(ctx context.Context, req *kmsv1.CreateApplicationReleaseRequest) (*kmsv1.CreateApplicationReleaseResponse, error) {
+	pr, err := requirePrincipal(ctx)
+	if err != nil {
+		return nil, err
+	}
+	result, err := h.s.svc.CreateApplicationRelease(ctx, pr, domain.ApplicationReleaseCreateInput{
+		Namespace: nsRefFromProto(req.GetNamespace()),
+		Artifact:  req.GetArtifact(), Metadata: req.GetMetadataJson(),
+		Execute: req.GetExecute(), PlanDigest: req.GetPlanDigest(),
+	})
+	if err != nil {
+		return nil, h.s.mapErr(ctx, err)
+	}
+	return toProtoApplicationReleaseCreateResult(result), nil
+}
+
+func toProtoApplicationReleaseCreateResult(result domain.ApplicationReleaseCreateResult) *kmsv1.CreateApplicationReleaseResponse {
+	entries := make([]*kmsv1.ApplicationReleasePlanEntry, 0, len(result.Entries))
+	for _, entry := range result.Entries {
+		entries = append(entries, &kmsv1.ApplicationReleasePlanEntry{
+			Alias: entry.Alias, Kind: string(entry.Kind), Ref: refToProto(entry.Ref),
+			FromVersion: entry.FromVersion, ToVersion: entry.ToVersion, Source: string(entry.Source),
+		})
+	}
+	validation := make([]*kmsv1.ReleaseValidationError, 0, len(result.Validation))
+	for _, violation := range result.Validation {
+		validation = append(validation, toProtoReleaseValidationError(violation))
+	}
+	response := &kmsv1.CreateApplicationReleaseResponse{
+		Profile: result.Profile, PlanDigest: result.PlanDigest, Valid: result.Valid,
+		Executed: result.Executed, Created: result.Created, ReleaseName: result.ReleaseName,
+		SchemaVersion: result.SchemaVersion, BaseReleaseVersion: result.BaseReleaseVersion,
+		Entries: entries, MissingSecrets: append([]string(nil), result.MissingSecrets...),
+		Validation: validation,
+	}
+	if result.Release != nil {
+		response.Release = toProtoConfigurationRelease(*result.Release)
+	}
+	return response
+}
+
 // --- policies --------------------------------------------------------------
 
 func (h *adminServer) CreatePolicy(ctx context.Context, req *kmsv1.CreatePolicyRequest) (*kmsv1.CreatePolicyResponse, error) {

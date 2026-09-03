@@ -93,6 +93,15 @@ contract:
 go generate ./examples/managed-config/config
 ```
 
+Register a newly generated schema once for the application release stream:
+
+```bash
+go run ./examples/managed-config/cmd/apply-defaults \
+  schema upload \
+  --endpoint localhost:8443 \
+  --insecure
+```
+
 Export the source-owned parameter baseline (secret values are never included):
 
 ```bash
@@ -107,11 +116,13 @@ administrative identity:
 
 ```bash
 go run ./examples/managed-config/cmd/apply-defaults \
+  defaults apply \
   --profile default \
   --endpoint localhost:8443 \
   --insecure
 
 go run ./examples/managed-config/cmd/apply-defaults \
+  defaults apply \
   --profile default \
   --endpoint localhost:8443 \
   --insecure \
@@ -121,3 +132,25 @@ go run ./examples/managed-config/cmd/apply-defaults \
 The second invocation is idempotent: identical values are reported as
 `unchanged` without creating new versions. Add `--overwrite` only when a
 differing current parameter should be replaced.
+
+Once the defaults and application definition match, preview the next immutable
+release directly from the same application-owned wrapper:
+
+```bash
+go run ./examples/managed-config/cmd/apply-defaults \
+  release create \
+  --profile default \
+  --endpoint localhost:8443 \
+  --insecure
+
+go run ./examples/managed-config/cmd/apply-defaults \
+  release create \
+  --profile default \
+  --endpoint localhost:8443 \
+  --insecure \
+  --execute
+```
+
+The created release remains inactive for review and activation in the web
+console. Existing secret aliases retain the active release's exact pins; the
+command never reads or prints secret plaintext.
