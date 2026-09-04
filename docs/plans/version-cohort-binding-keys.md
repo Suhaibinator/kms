@@ -1,5 +1,11 @@
 # Version-cohort binding keys, SDK contract, and compromise purge
 
+## Context and motivation
+
+The `0.2.x` client-bound design couples a server-minted token to each secret version. Applications must manage alias-specific token files, older release pins require old unrecoverable tokens, and changing protection can force a new secret version and a manually rebuilt release. This operational cost provides little additional isolation under KMS’s threat model, where possession of a deployment already implies possession of that deployment’s KMS credentials.
+
+The `0.3.x` design instead treats a binding key as operator-owned encryption material supplied directly with a specific secret operation or SDK declaration. It preserves independently keyed historical version cohorts, permits in-place DEK rewrapping, and adds a focused break-glass purge: if a binding key is compromised, an administrator can irreversibly destroy precisely the contiguous versions encrypted with that key without deleting unrelated history or rewriting immutable releases.
+
 ## Summary
 
 Replace client-bound tokens with operator-supplied binding keys attached to individual secret versions.
@@ -12,7 +18,7 @@ A compromised binding key can be purged by anchoring at one version. KMS destroy
 
 ### Secret metadata
 
-- Rename `SecretMetadata.client_bound` to `bound`, retaining field number 3 and reserving the old field name.
+- Replace `SecretMetadata.client_bound` with `bound` in the clean `0.3.x` message layout; no old field name or number is reserved.
 - `SecretMetadata.bound` describes the version selected by the `current` label.
 - Extend `SecretVersionInfo` with:
   - `bool bound`
@@ -23,12 +29,9 @@ A compromised binding key can be purged by anchoring at one version. KMS destroy
 
 ### Secret reads and writes
 
-- Keep `GetSecretRequest.secret_token = 4`.
-- Add `GetSecretRequest.binding_key = 5`.
-- Remove and reserve `PutSecretRequest.client_bound = 5`.
-- Keep `generate_access_token = 6` and expiry at field 7.
-- Remove and reserve `PutSecretRequest.secret_token = 8`; its only existing write-side purpose was proving the conflated client-bound token.
-- Add `PutSecretRequest.binding_key = 9`.
+- Define the compact `0.3.x` read request as `ref = 1`, `version = 2`, `label = 3`, `secret_token = 4`, and `binding_key = 5`.
+- Define the compact `0.3.x` write request as `ref = 1`, `value = 2`, `content_type = 3`, `metadata_json = 4`, `binding_key = 5`, `generate_access_token = 6`, and `expires_at_unix_ms = 7`.
+- Remove `client_bound` and the write-side `secret_token` outright. Do not reserve their old names or numbers; the latter’s only existing purpose was proving the conflated client-bound token.
 - A non-empty `binding_key` creates a bound version. An empty value creates an unbound version, regardless of the preceding version’s protection.
 - A non-empty binding key must contain at least 32 UTF-8 bytes. No normalization, trimming, prefix requirement, or equality comparison is performed server-side.
 - Access-token behavior remains separate:
@@ -442,21 +445,33 @@ The metadata lookup and secret fetch count as one unit under the existing concur
   - Never silently substitute defaults for those bound values.
   - Scrub `KMS_BINDING_KEY` and `KMS_NEW_BINDING_KEY` before launching a child process.
 
-## Releases, schema, and console
+## Releases and console
 
 - Remove protection flags from configuration-release protobufs, domain structs, database models, digest projections, all SDK release models, and console views.
-- Reserve release-entry field numbers 8 and 9 and names `client_bound` and `has_access_token`.
+- `ConfigurationReleaseEntry` ends at `parameter_digest = 7`; remove the former protection fields without reserving their names or numbers.
 - Server creation and storage validation reject every parameter or secret ref outside the release’s namespace, without an admin exception.
-- Reset storage to a fresh baseline schema version 1 and delete all legacy migration scripts/helpers/tests.
 - Store version high-water marks independently from deletable secret material.
 - Console secret history displays `bound` and `has_access_token` per version.
 - Bind/unbind actions target one version; rotate and purge preview and confirm the discovered affected version range.
 - Binding-key form fields are password inputs held only in request-local browser state and cleared after submission.
 - Purge confirmation names the secret, anchor, and affected versions; no key-derived identifier is displayed.
 
+## 0.3.x greenfield storage baseline
+
+- Version `0.3.0` establishes a new storage baseline for the entire `0.3.x` line; it is not an incremental migration from `0.2.x`.
+- Treat the protobuf contract the same way: `0.3.0` makes no binary or JSON wire-compatibility promise to `0.2.x` clients.
+- Remove `reserved` declarations that exist only to preserve removed `0.2.x` fields, including the former release-protection and schema-ID gaps, and renumber affected messages densely from field 1.
+- Delete the complete existing migration history, including SQL migration files, bespoke Go migration helpers, legacy repair/upgrade branches, migration fixtures, and tests whose purpose is upgrading an older schema.
+- Set the new baseline schema version to 1 and materialize only the final `0.3.x` table, index, constraint, and trigger layout from current storage models.
+- Keep the schema-version table as the starting point for future migrations within or after the `0.3.x` line, but do not retain executable migrations predating this baseline.
+- Database initialization succeeds only for an empty/new database or a database already stamped with the exact `0.3.x` baseline schema.
+- Opening a `0.2.x`, unstamped non-empty, partially migrated, or otherwise legacy database fails before any schema or data mutation with a clear incompatible-baseline error.
+- Do not implement data copy, backfill, compatibility columns, dual reads/writes, legacy protobuf translation, or an in-place upgrade command.
+- Deployment documentation must require operators upgrading to `0.3.0` to create a fresh database and repopulate KMS through normal administrative/bootstrap workflows.
+
 ## Verification
 
-- Contract tests verify protobuf field numbers, reserved names, and generated Go/Python/TypeScript output.
+- Contract tests verify the new compact protobuf field layouts and generated Go/Python/TypeScript output; they do not preserve or test legacy field reservations.
 - Crypto tests cover bound/unbound encryption, wrong keys, fresh salts, in-place rewrap, zeroization paths, and unchanged value ciphertext.
 - Cohort tests cover first/middle/last anchors, bidirectional scans, key reuse after a boundary, destroyed/missing/corrupt boundaries, disabled/expired versions, and transaction rollback.
 - Purge tests verify exact affected versions, current-label failure, immutable invalid releases, admin-only authorization, audit redaction, and version-number non-reuse.
@@ -478,4 +493,4 @@ The metadata lookup and secret fetch count as one unit under the existing concur
 - A release pinned to an older binding-key cohort requires that cohort’s key. KMS cannot recover historical keys because it stores no identifier or verifier.
 - Changing a secret value while supplying a different binding key begins a new cohort; it does not rewrap older versions.
 - Rotation and compromise purge are deliberately cohort-scoped, while bind and unbind are exact-version operations.
-- This is a breaking greenfield release with no migration path for legacy databases, client-bound tokens, generated bindings, or old release digests.
+- This is the breaking greenfield baseline for the `0.3.x` line, with no migration path for `0.2.x` databases, client-bound tokens, generated bindings, or old release digests.
