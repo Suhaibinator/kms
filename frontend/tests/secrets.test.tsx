@@ -6,6 +6,7 @@ import {
   PurgeCleanupPendingApiError,
   PURGE_CLEANUP_PENDING_MESSAGE,
 } from "@/lib/api";
+import { datetimeLocalToUnixMs } from "@/lib/format";
 import type { Namespace, SecretMetadata } from "@/lib/types";
 import SecretDetailPage from "@/pages/secrets/detail";
 import SecretsPage from "@/pages/secrets/index";
@@ -248,6 +249,42 @@ describe("secret list filter validation", () => {
   });
 });
 
+describe("secret workspace navigation", () => {
+  it("opens an ordinary key activation in place and preserves the detail href", async () => {
+    mocks.router.query = { env: NAMESPACE.env, app: NAMESPACE.app };
+    vi.spyOn(api, "listSecrets").mockResolvedValue({ secrets: [SECRET], next_page_token: "" });
+    vi.spyOn(api, "secretMetadata").mockResolvedValue({ secret: SECRET });
+
+    render(<SecretsPage />);
+    const key = await screen.findByRole("link", { name: SECRET.key });
+    expect(key).toHaveAttribute(
+      "href",
+      `/secrets/detail?env=${NAMESPACE.env}&app=${NAMESPACE.app}&key=${SECRET.key}`,
+    );
+
+    fireEvent.click(key);
+    const workspace = await screen.findByRole("dialog", {
+      name: `/${NAMESPACE.env}/${NAMESPACE.app}/${SECRET.key}`,
+    });
+    expect(within(workspace).getByRole("tab", { name: "Overview" })).toBeVisible();
+    expect(within(workspace).getByRole("tab", { name: "Versions" })).toBeVisible();
+    expect(mocks.router.push).not.toHaveBeenCalled();
+  });
+
+  it("does not intercept modified clicks", async () => {
+    mocks.router.query = { env: NAMESPACE.env, app: NAMESPACE.app };
+    vi.spyOn(api, "listSecrets").mockResolvedValue({ secrets: [SECRET], next_page_token: "" });
+    const metadata = vi.spyOn(api, "secretMetadata");
+
+    render(<SecretsPage />);
+    const key = await screen.findByRole("link", { name: SECRET.key });
+    fireEvent.click(key, { ctrlKey: true });
+
+    expect(metadata).not.toHaveBeenCalled();
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+});
+
 describe("new secret validation", () => {
   /** Renders the form with a namespace chosen and every other field valid, so
    *  the field under test is the only thing that can block a submit. */
@@ -408,6 +445,55 @@ describe("new secret version validation", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Save new version" }));
     expect(createSecret).not.toHaveBeenCalled();
+  });
+
+  it("confirms token rotation, carries expiry, and holds the replacement token", async () => {
+    const protectedSecret: SecretMetadata = {
+      ...SECRET,
+      has_access_token: true,
+      versions: SECRET.versions.map((version) => ({ ...version, has_access_token: true })),
+    };
+    mocks.router.query = {
+      env: protectedSecret.env,
+      app: protectedSecret.app,
+      key: protectedSecret.key,
+    };
+    const metadata = vi.spyOn(api, "secretMetadata").mockResolvedValue({ secret: protectedSecret });
+    const createSecret = vi.spyOn(api, "createSecret").mockResolvedValue({
+      version: 2,
+      revision: 3,
+      access_token: "kmss_replacement",
+    });
+
+    render(<SecretDetailPage />);
+    fireEvent.click(await screen.findByRole("button", { name: "New version" }));
+    const dialog = screen.getByRole("dialog", { name: "New secret version" });
+    fireEvent.change(within(dialog).getByRole("textbox", { name: "Value" }), {
+      target: { value: "replacement value" },
+    });
+    fireEvent.click(within(dialog).getByText("Advanced options"));
+    const expires = within(dialog).getByLabelText("Expires at");
+    fireEvent.change(expires, { target: { value: "2099-01-02T03:04" } });
+    fireEvent.click(within(dialog).getByRole("checkbox", { name: /Rotate access token/ }));
+    fireEvent.click(within(dialog).getByRole("button", { name: "Create version & rotate token" }));
+
+    expect(createSecret).not.toHaveBeenCalled();
+    const confirm = screen.getByRole("dialog", { name: "Rotate access token?" });
+    expect(confirm).toHaveTextContent("current token");
+    fireEvent.click(within(confirm).getByRole("button", { name: "Create version & rotate token" }));
+
+    await waitFor(() => expect(createSecret).toHaveBeenCalledTimes(1));
+    expect(createSecret).toHaveBeenCalledWith(
+      expect.objectContaining({
+        generate_access_token: true,
+        expires_at_unix_ms: datetimeLocalToUnixMs("2099-01-02T03:04"),
+      }),
+    );
+    const token = await screen.findByRole("dialog", { name: "Save this access token now" });
+    expect(token).toHaveTextContent("kmss_replacement");
+    expect(within(token).queryByRole("button", { name: "Dismiss dialog" })).toBeNull();
+    fireEvent.click(within(token).getByRole("button", { name: "I've saved it — continue" }));
+    await waitFor(() => expect(metadata).toHaveBeenCalledTimes(2));
   });
 });
 

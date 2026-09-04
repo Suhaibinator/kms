@@ -55,6 +55,7 @@ export function Modal({
   initialFocus?: DialogPrimitive.Popup.Props["initialFocus"];
 }) {
   const [confirmingDiscard, setConfirmingDiscard] = useState(false);
+  const popupRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (!open) setConfirmingDiscard(false);
   }, [open]);
@@ -68,13 +69,41 @@ export function Modal({
     <Dialog
       open={open}
       disablePointerDismissal={!dismissible}
-      onOpenChange={(nextOpen) => {
-        if (!nextOpen && dismissible) requestClose();
+      onOpenChange={(nextOpen, eventDetails) => {
+        if (!nextOpen) {
+          // Keep Base UI from closing this controlled layer (or allowing an
+          // Escape press to continue into a parent dialog) before our dirty /
+          // non-dismissible policy has handled the request.
+          eventDetails.cancel();
+          // Base UI dispatches the same Escape close request to every open
+          // controlled root. Only the topmost nested dialog may handle it.
+          const eventTarget = eventDetails.event.target;
+          if (
+            eventDetails.reason === "escape-key" &&
+            ((eventTarget instanceof Element &&
+              eventTarget.closest('[data-slot="dialog-content"]') !== popupRef.current) ||
+              popupRef.current?.hasAttribute("data-nested-dialog-open"))
+          ) {
+            return;
+          }
+          if (!dismissible && eventDetails.reason === "escape-key") {
+            eventDetails.event.preventDefault();
+            eventDetails.event.stopPropagation();
+          }
+          if (dismissible) requestClose();
+        }
       }}
     >
       <DialogContent
+        ref={popupRef}
         showCloseButton={dismissible}
         initialFocus={initialFocus}
+        onKeyDown={(event) => {
+          if (!dismissible && event.key === "Escape") {
+            event.preventDefault();
+            event.stopPropagation();
+          }
+        }}
         className={cn(
           // Header and footer are pinned rows; only the middle row scrolls.
           // Without this the action buttons scroll off the bottom of a long form.
