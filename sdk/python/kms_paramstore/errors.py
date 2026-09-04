@@ -111,7 +111,9 @@ class PurgeCleanupPendingError(ParamStoreError):
     """The purge committed, but active database artifacts need cleanup.
 
     The server is fail-closed until it can finish cleanup. The caller must not
-    retry the purge with a binding key it has already discarded.
+    retry either purge: its bound-cohort or unbound-version preview guard is
+    now stale, and a retired binding key may already have been discarded. No
+    mutation result accompanies this error.
     """
 
     code = "purge_cleanup_pending"

@@ -15,6 +15,7 @@ export type {
   PutParameterOptions,
   PutSecretOptions,
   PurgeSecretBindingCohortOptions,
+  PurgeSecretUnboundVersionsOptions,
   RotateSecretBindingKeyOptions,
   SecretBindingCohortGuardOptions,
   WatchCallback,
@@ -48,7 +49,8 @@ export type {
   SecretInfo,
   SecretBindingCohortResult,
   SecretVersion,
-  SecretVersionMutationResult,
+  SecretVersionSetResult,
+  SecretVersionTransitionResult,
   WhoAmI,
 } from "./models.js";
 

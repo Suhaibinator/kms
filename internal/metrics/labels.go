@@ -112,6 +112,8 @@ var RouteLabels = []string{
 	"POST /api/v1/secrets/binding-cohort/preview",
 	"POST /api/v1/secrets/binding-key/rotate",
 	"POST /api/v1/secrets/binding-cohort/purge",
+	"POST /api/v1/secrets/unbound-versions/preview",
+	"POST /api/v1/secrets/unbound-versions/purge",
 	"DELETE /api/v1/secrets",
 
 	"GET /api/v1/policies",
@@ -276,6 +278,8 @@ var AuditEventTypes = []string{
 	"secret.read",
 	"secret.reveal",
 	"secret.unbind",
+	"secret.unbound_versions.preview",
+	"secret.unbound_versions.purge",
 	"secret.write",
 	"subscribers.read",
 }

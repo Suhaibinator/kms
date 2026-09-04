@@ -84,8 +84,10 @@ export class RateLimitedError extends KmsError {
 }
 
 /**
- * The secret cohort was logically purged, but live SQLite artifacts still
- * require cleanup. The operation must not be retried with the retired key.
+ * A secret purge committed, but live SQLite artifacts still require cleanup.
+ * No mutation result accompanies this error. Do not retry the purge: its
+ * exact preview guard is now stale, and a retired binding key may already
+ * have been discarded.
  */
 export class PurgeCleanupPendingError extends KmsError {
   constructor() {

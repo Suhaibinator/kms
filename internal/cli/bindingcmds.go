@@ -48,7 +48,7 @@ func (c *CLI) bindingKeyUsage() {
 
 Commands:
   generate                  Write one new 256-bit Base64URL binding key to stdout.
-  rotate PATH               Rotate the contiguous cohort around --version (0 = current).
+  rotate PATH               Create a new current version protected by a new binding key.
 
 Binding keys come from KMS_BINDING_KEY and, for rotation, KMS_NEW_BINDING_KEY.
 When a required variable is absent, an interactive terminal is prompted without echo.
@@ -89,6 +89,8 @@ func (c *CLI) cmdSecret(args []string) int {
 		return c.cmdSecretUnbind(args[1:])
 	case "purge-binding-cohort":
 		return c.cmdSecretPurgeBindingCohort(args[1:])
+	case "purge-unbound-versions":
+		return c.cmdSecretPurgeUnboundVersions(args[1:])
 	case "help", "-h", "--help":
 		c.secretUsage()
 		return exitOK
@@ -101,20 +103,20 @@ func (c *CLI) secretUsage() {
 	_, _ = fmt.Fprint(c.Stderr, `Usage: parameter-store secret <command> PATH [flags]
 
 Commands:
-  bind PATH                   Bind one exact version in place (0 = current).
-  unbind PATH                 Unbind one exact version in place (0 = current).
+  bind PATH                   Clone current into a new bound current version.
+  unbind PATH                 Clone current into a new unbound current version.
   purge-binding-cohort PATH   Irreversibly purge a compromised contiguous cohort (admin only).
+  purge-unbound-versions PATH Irreversibly purge every live unbound version (admin only).
 
-The operation's primary key comes from KMS_BINDING_KEY. A required key is prompted without
-echo on an interactive terminal.
+Binding operations take their key from KMS_BINDING_KEY. A required key is prompted without
+echo on an interactive terminal; purging unbound versions requires no binding key.
 `)
 }
 
 func (c *CLI) cmdSecretBind(args []string) int {
 	fs := c.newFlags("secret bind")
 	cf := addConnFlags(c, fs)
-	version := fs.Uint64("version", 0, "exact secret `version` (0 = current label)")
-	c.setUsage(fs, "secret bind /env/app/key [flags]", "Add binding-key protection to one secret version in place.", false)
+	c.setUsage(fs, "secret bind /env/app/key [flags]", "Create a new current version with binding-key protection.", false)
 	if !c.parseFlags(fs, args) {
 		return exitUsage
 	}
@@ -122,31 +124,35 @@ func (c *CLI) cmdSecretBind(args []string) int {
 	if !ok {
 		return exitUsage
 	}
-	bindingKey, err := c.requiredBindingKey(bindingKeyEnv, "New binding key for "+ref.String()+": ", true)
-	if err != nil {
-		return c.failUsage("secret bind: %v", err)
-	}
 	conn, err := c.dialConn(cf)
 	if err != nil {
 		return c.failErr("", err)
 	}
 	defer func() { _ = conn.Close() }()
+	client := kmsv1.NewSecretServiceClient(conn)
+	current, code := c.readCurrentSecretVersion(client, cf, ref, "secret bind")
+	if code != exitOK {
+		return code
+	}
+	bindingKey, err := c.requiredBindingKey(bindingKeyEnv, "New binding key for "+ref.String()+": ", true)
+	if err != nil {
+		return c.failUsage("secret bind: %v", err)
+	}
 	ctx, cancel := callContext()
 	defer cancel()
-	resp, err := kmsv1.NewSecretServiceClient(conn).BindSecret(cf.authCtx(ctx), &kmsv1.BindSecretRequest{
-		Ref: protoRef(ref), Version: *version, BindingKey: bindingKey,
+	resp, err := client.BindSecret(cf.authCtx(ctx), &kmsv1.BindSecretRequest{
+		Ref: protoRef(ref), ExpectedCurrentVersion: current, BindingKey: bindingKey,
 	})
 	if err != nil {
 		return c.failSecretRPC("secret bind", err)
 	}
-	return c.printSecretMutation("Bound", ref.String(), resp)
+	return c.printSecretTransition("Bound", ref.String(), resp)
 }
 
 func (c *CLI) cmdSecretUnbind(args []string) int {
 	fs := c.newFlags("secret unbind")
 	cf := addConnFlags(c, fs)
-	version := fs.Uint64("version", 0, "exact secret `version` (0 = current label)")
-	c.setUsage(fs, "secret unbind /env/app/key [flags]", "Remove binding-key protection from one secret version in place.", false)
+	c.setUsage(fs, "secret unbind /env/app/key [flags]", "Create a new current version without binding-key protection.", false)
 	if !c.parseFlags(fs, args) {
 		return exitUsage
 	}
@@ -154,31 +160,35 @@ func (c *CLI) cmdSecretUnbind(args []string) int {
 	if !ok {
 		return exitUsage
 	}
-	bindingKey, err := c.requiredBindingKey(bindingKeyEnv, "Binding key for "+ref.String()+": ", false)
-	if err != nil {
-		return c.failUsage("secret unbind: %v", err)
-	}
 	conn, err := c.dialConn(cf)
 	if err != nil {
 		return c.failErr("", err)
 	}
 	defer func() { _ = conn.Close() }()
+	client := kmsv1.NewSecretServiceClient(conn)
+	current, code := c.readCurrentSecretVersion(client, cf, ref, "secret unbind")
+	if code != exitOK {
+		return code
+	}
+	bindingKey, err := c.requiredBindingKey(bindingKeyEnv, "Binding key for "+ref.String()+": ", false)
+	if err != nil {
+		return c.failUsage("secret unbind: %v", err)
+	}
 	ctx, cancel := callContext()
 	defer cancel()
-	resp, err := kmsv1.NewSecretServiceClient(conn).UnbindSecret(cf.authCtx(ctx), &kmsv1.UnbindSecretRequest{
-		Ref: protoRef(ref), Version: *version, BindingKey: bindingKey,
+	resp, err := client.UnbindSecret(cf.authCtx(ctx), &kmsv1.UnbindSecretRequest{
+		Ref: protoRef(ref), ExpectedCurrentVersion: current, BindingKey: bindingKey,
 	})
 	if err != nil {
 		return c.failSecretRPC("secret unbind", err)
 	}
-	return c.printSecretMutation("Unbound", ref.String(), resp)
+	return c.printSecretTransition("Unbound", ref.String(), resp)
 }
 
 func (c *CLI) cmdBindingKeyRotate(args []string) int {
 	fs := c.newFlags("binding-key rotate")
 	cf := addConnFlags(c, fs)
-	version := fs.Uint64("version", 0, "anchor secret `version` (0 = current label)")
-	c.setUsage(fs, "binding-key rotate /env/app/key [flags]", "Preview, confirm, and rotate one contiguous binding-key cohort.", false)
+	c.setUsage(fs, "binding-key rotate /env/app/key [flags]", "Create a new current version protected by a replacement binding key.", false)
 	if !c.parseFlags(fs, args) {
 		return exitUsage
 	}
@@ -196,45 +206,26 @@ func (c *CLI) cmdBindingKeyRotate(args []string) int {
 	}
 	defer func() { _ = conn.Close() }()
 	client := kmsv1.NewSecretServiceClient(conn)
-	previewCtx, cancelPreview := callContext()
-	preview, err := client.PreviewSecretBindingCohort(cf.authCtx(previewCtx), &kmsv1.PreviewSecretBindingCohortRequest{
-		Ref: protoRef(ref), AnchorVersion: *version, BindingKey: oldKey,
-	})
-	cancelPreview()
-	if err != nil {
-		return c.failSecretRPC("binding-key rotate preview", err)
-	}
-	if err := validateCohortPreview(preview); err != nil {
-		return c.fail("binding-key rotate preview: %v", err)
-	}
-	c.printCohortPreview("Binding-key rotation", ref.String(), preview)
-	ok, code := c.confirmYesNo(fmt.Sprintf("rotate binding key for %s versions %s", ref, formatVersions(preview.GetAffectedVersions())))
-	if !ok {
+	current, code := c.readCurrentSecretVersion(client, cf, ref, "binding-key rotate")
+	if code != exitOK {
 		return code
 	}
 	newKey, err := c.requiredBindingKey(newBindingKeyEnv, "New binding key for "+ref.String()+": ", true)
 	if err != nil {
 		return c.failUsage("binding-key rotate: %v", err)
 	}
-	if oldKey == newKey {
-		return c.failUsage("binding-key rotate: new binding key must differ from current binding key")
-	}
-	revision := preview.GetRevision()
-	affected := append([]uint64(nil), preview.GetAffectedVersions()...)
 	mutationCtx, cancelMutation := callContext()
 	defer cancelMutation()
 	resp, err := client.RotateSecretBindingKey(cf.authCtx(mutationCtx), &kmsv1.RotateSecretBindingKeyRequest{
-		Ref:                      protoRef(ref),
-		AnchorVersion:            *version,
-		BindingKey:               oldKey,
-		NewBindingKey:            newKey,
-		ExpectedRevision:         &revision,
-		ExpectedAffectedVersions: affected,
+		Ref:                    protoRef(ref),
+		ExpectedCurrentVersion: current,
+		BindingKey:             oldKey,
+		NewBindingKey:          newKey,
 	})
 	if err != nil {
 		return c.failSecretRPC("binding-key rotate", err)
 	}
-	return c.printCohortMutation("Rotated binding key for", ref.String(), resp)
+	return c.printSecretTransition("Rotated binding key for", ref.String(), resp)
 }
 
 func (c *CLI) cmdSecretPurgeBindingCohort(args []string) int {
@@ -276,7 +267,6 @@ func (c *CLI) cmdSecretPurgeBindingCohort(args []string) int {
 	if !ok {
 		return code
 	}
-	revision := preview.GetRevision()
 	affected := append([]uint64(nil), preview.GetAffectedVersions()...)
 	mutationCtx, cancelMutation := callContext()
 	defer cancelMutation()
@@ -284,13 +274,76 @@ func (c *CLI) cmdSecretPurgeBindingCohort(args []string) int {
 		Ref:                      protoRef(ref),
 		AnchorVersion:            *version,
 		BindingKey:               bindingKey,
-		ExpectedRevision:         &revision,
+		ExpectedRevision:         new(preview.Revision),
 		ExpectedAffectedVersions: affected,
 	})
 	if err != nil {
 		return c.failPurgeSecretRPC("secret purge-binding-cohort", err)
 	}
 	return c.printCohortMutation("Purged binding-key cohort for", ref.String(), resp)
+}
+
+func (c *CLI) cmdSecretPurgeUnboundVersions(args []string) int {
+	fs := c.newFlags("secret purge-unbound-versions")
+	cf := addConnFlags(c, fs)
+	c.setUsage(fs, "secret purge-unbound-versions /env/app/key [flags]", "Preview and irreversibly purge every non-destroyed unbound version. Administrator authentication is required.", false)
+	if !c.parseFlags(fs, args) {
+		return exitUsage
+	}
+	ref, ok := c.bindingCommandRef("secret purge-unbound-versions")
+	if !ok {
+		return exitUsage
+	}
+	conn, err := c.dialConn(cf)
+	if err != nil {
+		return c.failErr("", err)
+	}
+	defer func() { _ = conn.Close() }()
+	client := kmsv1.NewSecretServiceClient(conn)
+	previewCtx, cancelPreview := callContext()
+	preview, err := client.PreviewSecretUnboundVersions(cf.authCtx(previewCtx), &kmsv1.PreviewSecretUnboundVersionsRequest{Ref: protoRef(ref)})
+	cancelPreview()
+	if err != nil {
+		return c.failSecretRPC("secret purge-unbound-versions preview", err)
+	}
+	if err := validateVersionSet(preview); err != nil {
+		return c.fail("secret purge-unbound-versions preview: %v", err)
+	}
+	c.printVersionSetPreview("Unbound-version purge", ref.String(), preview)
+	_, _ = fmt.Fprintf(c.Stderr, "IRREVERSIBLE ADMIN OPERATION: unbound versions %s will be permanently destroyed, even if immutable releases reference them. This cannot be undone.\n", formatVersions(preview.GetAffectedVersions()))
+	confirmed, code := c.confirmYesNo(fmt.Sprintf("permanently purge unbound versions of %s: %s", ref, formatVersions(preview.GetAffectedVersions())))
+	if !confirmed {
+		return code
+	}
+	mutationCtx, cancelMutation := callContext()
+	defer cancelMutation()
+	resp, err := client.PurgeSecretUnboundVersions(cf.authCtx(mutationCtx), &kmsv1.PurgeSecretUnboundVersionsRequest{
+		Ref:                      protoRef(ref),
+		ExpectedRevision:         preview.GetRevision(),
+		ExpectedAffectedVersions: append([]uint64(nil), preview.GetAffectedVersions()...),
+	})
+	if err != nil {
+		return c.failPurgeSecretRPC("secret purge-unbound-versions", err)
+	}
+	return c.printVersionSetMutation("Purged unbound versions for", ref.String(), resp)
+}
+
+func (c *CLI) readCurrentSecretVersion(client kmsv1.SecretServiceClient, cf *connFlags, ref domain.Ref, operation string) (uint64, int) {
+	ctx, cancel := callContext()
+	resp, err := client.GetSecretMetadata(cf.authCtx(ctx), &kmsv1.GetSecretMetadataRequest{Ref: protoRef(ref)})
+	cancel()
+	if err != nil {
+		return 0, c.failSecretRPC(operation+" metadata", err)
+	}
+	metadata := resp.GetSecret()
+	if metadata == nil || !sameRef(metadata.GetRef(), protoRef(ref)) {
+		return 0, c.fail("%s metadata: server returned a different resource", operation)
+	}
+	current := metadata.GetLabels()["current"]
+	if current == 0 {
+		return 0, c.fail("%s metadata: secret has no current version", operation)
+	}
+	return current, exitOK
 }
 
 func (c *CLI) bindingCommandRef(command string) (domain.Ref, bool) {
@@ -374,8 +427,38 @@ func validateCohortPreview(resp *kmsv1.SecretBindingCohortResponse) error {
 	if resp == nil || resp.GetAnchorVersion() == 0 {
 		return fmt.Errorf("server returned an empty anchor version")
 	}
-	if len(resp.GetAffectedVersions()) == 0 {
+	if err := validatePreviewVersions(resp.GetRevision(), resp.GetAffectedVersions()); err != nil {
+		return err
+	}
+	for _, version := range resp.GetAffectedVersions() {
+		if version == resp.GetAnchorVersion() {
+			return nil
+		}
+	}
+	return fmt.Errorf("server returned affected versions that omit the anchor")
+}
+
+func validateVersionSet(resp *kmsv1.SecretVersionSetResponse) error {
+	if resp == nil {
 		return fmt.Errorf("server returned no affected versions")
+	}
+	return validatePreviewVersions(resp.GetRevision(), resp.GetAffectedVersions())
+}
+
+func validatePreviewVersions(revision uint64, versions []uint64) error {
+	if revision == 0 {
+		return fmt.Errorf("server returned an empty storage revision")
+	}
+	if len(versions) == 0 {
+		return fmt.Errorf("server returned no affected versions")
+	}
+	for i, version := range versions {
+		if version == 0 {
+			return fmt.Errorf("server returned an empty affected version")
+		}
+		if i > 0 && version <= versions[i-1] {
+			return fmt.Errorf("server returned affected versions that are not sorted and unique")
+		}
 	}
 	return nil
 }
@@ -383,6 +466,12 @@ func validateCohortPreview(resp *kmsv1.SecretBindingCohortResponse) error {
 func (c *CLI) printCohortPreview(action, path string, resp *kmsv1.SecretBindingCohortResponse) {
 	_, _ = fmt.Fprintf(c.Stderr, "%s preview for %s\n", action, path)
 	_, _ = fmt.Fprintf(c.Stderr, "  anchor version: %d\n", resp.GetAnchorVersion())
+	_, _ = fmt.Fprintf(c.Stderr, "  affected versions: %s\n", formatVersions(resp.GetAffectedVersions()))
+	_, _ = fmt.Fprintf(c.Stderr, "  storage revision: %d\n", resp.GetRevision())
+}
+
+func (c *CLI) printVersionSetPreview(action, path string, resp *kmsv1.SecretVersionSetResponse) {
+	_, _ = fmt.Fprintf(c.Stderr, "%s preview for %s\n", action, path)
 	_, _ = fmt.Fprintf(c.Stderr, "  affected versions: %s\n", formatVersions(resp.GetAffectedVersions()))
 	_, _ = fmt.Fprintf(c.Stderr, "  storage revision: %d\n", resp.GetRevision())
 }
@@ -437,22 +526,38 @@ func selectSecretVersion(metadata *kmsv1.SecretMetadata, version uint64, label s
 
 type secretMutationJSON struct {
 	Key              string   `json:"key"`
-	AnchorVersion    uint64   `json:"anchor_version"`
-	AffectedVersions []uint64 `json:"affected_versions"`
+	CurrentVersion   uint64   `json:"current_version,omitempty"`
+	PreviousVersion  uint64   `json:"previous_version,omitempty"`
+	AnchorVersion    uint64   `json:"anchor_version,omitempty"`
+	AffectedVersions []uint64 `json:"affected_versions,omitempty"`
 	Revision         uint64   `json:"revision"`
 }
 
-func (c *CLI) printSecretMutation(action, path string, resp *kmsv1.SecretVersionMutationResponse) int {
-	if resp == nil || resp.GetAnchorVersion() == 0 || len(resp.GetAffectedVersions()) == 0 {
-		return c.fail("server returned an invalid secret mutation response")
+func (c *CLI) printSecretTransition(action, path string, resp *kmsv1.SecretVersionTransitionResponse) int {
+	if resp == nil || resp.GetCurrentVersion() == 0 || resp.GetPreviousVersion() == 0 ||
+		resp.GetRevision() == 0 || resp.GetCurrentVersion() <= resp.GetPreviousVersion() {
+		return c.fail("server returned an invalid secret transition response")
 	}
 	if c.jsonOutput() {
 		return c.printJSON(secretMutationJSON{
-			Key: path, AnchorVersion: resp.GetAnchorVersion(),
-			AffectedVersions: resp.GetAffectedVersions(), Revision: resp.GetRevision(),
+			Key: path, CurrentVersion: resp.GetCurrentVersion(),
+			PreviousVersion: resp.GetPreviousVersion(), Revision: resp.GetRevision(),
 		})
 	}
-	_, _ = fmt.Fprintf(c.Stdout, "%s %s version %d (revision %d)\n", action, path, resp.GetAnchorVersion(), resp.GetRevision())
+	_, _ = fmt.Fprintf(c.Stdout, "%s %s as new version %d; previous version %d is unchanged (revision %d)\n", action, path, resp.GetCurrentVersion(), resp.GetPreviousVersion(), resp.GetRevision())
+	return exitOK
+}
+
+func (c *CLI) printVersionSetMutation(action, path string, resp *kmsv1.SecretVersionSetResponse) int {
+	if err := validateVersionSet(resp); err != nil {
+		return c.fail("server returned an invalid version-set mutation response: %v", err)
+	}
+	if c.jsonOutput() {
+		return c.printJSON(secretMutationJSON{
+			Key: path, AffectedVersions: resp.GetAffectedVersions(), Revision: resp.GetRevision(),
+		})
+	}
+	_, _ = fmt.Fprintf(c.Stdout, "%s %s versions %s (revision %d)\n", action, path, formatVersions(resp.GetAffectedVersions()), resp.GetRevision())
 	return exitOK
 }
 

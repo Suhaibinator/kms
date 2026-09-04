@@ -60,14 +60,15 @@ deployment, start at [Quickstart](#quickstart).
 - **Envelope encryption at rest**: AES-256-GCM, one Data Encryption Key
   (DEK) per secret version, wrapped by a Key Encryption Key (KEK). Secret
   plaintext never touches SQLite, logs, metrics, or audit records.
-- **Opt-in binding keys**: an operator-supplied opaque key can add an inner
-  wrapping layer to any secret version. Binding is live metadata and can be
-  changed in place without a new version or release re-pin. Adjacent versions
-  that open with one key form a cryptographically discovered cohort for
-  guarded rotation or administrator-only compromise purge. Exact-version bind
-  and cohort rotation reject replacement keys that would silently merge with
-  an adjacent cohort. KMS never stores, hashes, fingerprints, or escrows the
-  key; see
+- **Opt-in binding keys**: an operator-supplied opaque key adds an inner
+  wrapping layer to a secret version. Protection mode is immutable per live
+  version: bind, unbind, and binding-key rotation clone the current value into
+  one new version and leave the source unchanged. Historical versions that
+  open with one key form a cryptographically discovered cohort for
+  compromise response. Callers with `secret:binding-manage` can preview a
+  cohort; purging it requires an administrator with `secret:destroy`.
+  Administrators can also preview and purge all non-destroyed unbound versions
+  of one secret. KMS never stores, hashes, fingerprints, or escrows a binding key; see
   [`docs/binding-keys.md`](docs/binding-keys.md).
 - **Built-in certificate authority + mTLS**: an embedded CA (Ed25519,
   KEK-wrapped private key) created by `init` mints short-lived client
@@ -642,10 +643,11 @@ Full detail: [`docs/security.md`](docs/security.md). Summary:
 - **Binding keys** add an operator-owned inner DEK-wrapping layer. A key is an
   opaque UTF-8 string of at least 32 bytes and is supplied only for the
   operation that needs it; KMS never stores a copy, hash, fingerprint, or
-  cohort identifier. Bind/unbind operate on one version in place. Rotation and
-  administrator-only purge operate on a cryptographically discovered
-  contiguous cohort with preview/CAS protection; bind and rotation reject
-  implicit merges outside their reported affected set. See
+  cohort identifier. Bind, unbind, and binding-key rotation create one new
+  current version while keeping the previous version unchanged. A
+  cryptographically discovered contiguous cohort is used only to preview and
+  purge historical versions after compromise; unbound versions have their own
+  all-version preview and guarded administrator purge. See
   [`docs/binding-keys.md`](docs/binding-keys.md).
 - **Proof of identity**: machine clients authenticate by mTLS client
   certificate from the built-in CA (identity is the cert's
@@ -753,7 +755,7 @@ See the [`frontend` development guide](frontend/README.md) for local workflows a
 - [`docs/security.md`](docs/security.md) — the encryption, authentication,
   authorization, and audit model in depth.
 - [`docs/binding-keys.md`](docs/binding-keys.md) — binding-key reads and writes,
-  in-place lifecycle operations, contiguous cohorts, and purge guarantees.
+  versioned protection transitions, historical cohorts, and purge guarantees.
 - [`docs/sdk-go.md`](docs/sdk-go.md) — the Go client SDK.
 - [`docs/managed-go-configuration.md`](docs/managed-go-configuration.md) —
   generated atomic typed configuration, defaults, and operator workflow.

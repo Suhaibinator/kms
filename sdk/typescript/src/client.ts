@@ -29,7 +29,8 @@ import type {
   SecretBindingCohortResult,
   SecretInfo,
   SecretVersion,
-  SecretVersionMutationResult,
+  SecretVersionSetResult,
+  SecretVersionTransitionResult,
   WhoAmI,
 } from "./models.js";
 import {
@@ -126,7 +127,7 @@ export interface PutSecretOptions extends CallOptions {
 }
 
 export interface BindSecretOptions extends CallOptions {
-  readonly version?: bigint;
+  readonly expectedCurrentVersion: bigint;
   readonly bindingKey: string;
 }
 
@@ -140,14 +141,19 @@ export interface SecretBindingCohortGuardOptions {
   readonly expectedAffectedVersions?: readonly bigint[];
 }
 
-export interface RotateSecretBindingKeyOptions
-  extends PreviewSecretBindingCohortOptions,
-    SecretBindingCohortGuardOptions {
+export interface RotateSecretBindingKeyOptions extends CallOptions {
+  readonly expectedCurrentVersion: bigint;
+  readonly bindingKey: string;
   readonly newBindingKey: string;
 }
 
 export type PurgeSecretBindingCohortOptions = PreviewSecretBindingCohortOptions &
   SecretBindingCohortGuardOptions;
+
+export interface PurgeSecretUnboundVersionsOptions extends CallOptions {
+  readonly expectedRevision: bigint;
+  readonly expectedAffectedVersions: readonly bigint[];
+}
 
 export interface ListOptions extends CallOptions {
   readonly keyPrefix?: string;
@@ -640,17 +646,26 @@ export class KmsClient {
     return Object.freeze(response);
   }
 
-  async bindSecret(key: string, options: BindSecretOptions): Promise<SecretVersionMutationResult> {
+  async bindSecret(
+    key: string,
+    options: BindSecretOptions,
+  ): Promise<SecretVersionTransitionResult> {
     const bindingKey = requiredCredential(options?.bindingKey, "bindSecret bindingKey");
-    return this.#bindingMutation(key, options?.version ?? 0n, bindingKey, options, true);
+    return this.#bindingTransition(key, options?.expectedCurrentVersion, bindingKey, options, true);
   }
 
   async unbindSecret(
     key: string,
     options: BindSecretOptions,
-  ): Promise<SecretVersionMutationResult> {
+  ): Promise<SecretVersionTransitionResult> {
     const bindingKey = requiredCredential(options?.bindingKey, "unbindSecret bindingKey");
-    return this.#bindingMutation(key, options?.version ?? 0n, bindingKey, options, false);
+    return this.#bindingTransition(
+      key,
+      options?.expectedCurrentVersion,
+      bindingKey,
+      options,
+      false,
+    );
   }
 
   async previewSecretBindingCohort(
@@ -679,32 +694,60 @@ export class KmsClient {
   async rotateSecretBindingKey(
     key: string,
     options: RotateSecretBindingKeyOptions,
-  ): Promise<SecretBindingCohortResult> {
+  ): Promise<SecretVersionTransitionResult> {
     const bindingKey = requiredCredential(options?.bindingKey, "rotateSecretBindingKey bindingKey");
     const newBindingKey = requiredCredential(
       options?.newBindingKey,
       "rotateSecretBindingKey newBindingKey",
     );
-    if (new TextEncoder().encode(newBindingKey).length >= 32 && bindingKey === newBindingKey) {
-      throw new ConfigError("new binding key must differ from current binding key");
-    }
-    const anchorVersion = options?.anchorVersion ?? 0n;
-    assertUint64(anchorVersion, "rotateSecretBindingKey anchorVersion");
-    const guards = bindingCohortGuards(options, "rotateSecretBindingKey");
+    const expectedCurrentVersion = options?.expectedCurrentVersion;
+    assertUint64(expectedCurrentVersion, "rotateSecretBindingKey expectedCurrentVersion", true);
     const ref = await this.#resolveResourceRefForCall(key, options);
     const response = await this.#secretMutation(
       ref,
       SecretServiceService.rotateSecretBindingKey,
       {
         ref: toWireRef(ref),
-        anchorVersion,
+        expectedCurrentVersion,
         bindingKey,
         newBindingKey,
-        ...guards,
       },
       options,
     );
-    return frozenBindingResult(response);
+    return frozenTransitionResult(response);
+  }
+
+  async previewSecretUnboundVersions(
+    key: string,
+    options: CallOptions = {},
+  ): Promise<SecretVersionSetResult> {
+    const ref = await this.#resolveResourceRefForCall(key, options);
+    try {
+      const response = await this.#transport.unary(
+        SecretServiceService.previewSecretUnboundVersions,
+        { ref: toWireRef(ref) },
+        this.#callOptions(options),
+      );
+      return frozenVersionSetResult(response);
+    } catch (error) {
+      throwSecretMapped(error);
+    }
+  }
+
+  async purgeSecretUnboundVersions(
+    key: string,
+    options: PurgeSecretUnboundVersionsOptions,
+  ): Promise<SecretVersionSetResult> {
+    const guards = requiredVersionSetGuards(options, "purgeSecretUnboundVersions");
+    const ref = await this.#resolveResourceRefForCall(key, options);
+    const response = await this.#secretMutation(
+      ref,
+      SecretServiceService.purgeSecretUnboundVersions,
+      { ref: toWireRef(ref), ...guards },
+      options,
+      mapPurgeSecretGrpcError,
+    );
+    return frozenVersionSetResult(response);
   }
 
   async purgeSecretBindingCohort(
@@ -1089,20 +1132,24 @@ export class KmsClient {
     }
   }
 
-  async #bindingMutation(
+  async #bindingTransition(
     key: string,
-    version: bigint,
+    expectedCurrentVersion: bigint,
     bindingKey: string,
     options: CallOptions,
     bind: boolean,
-  ): Promise<SecretVersionMutationResult> {
-    assertUint64(version, `${bind ? "bindSecret" : "unbindSecret"} version`);
+  ): Promise<SecretVersionTransitionResult> {
+    assertUint64(
+      expectedCurrentVersion,
+      `${bind ? "bindSecret" : "unbindSecret"} expectedCurrentVersion`,
+      true,
+    );
     const ref = await this.#resolveResourceRefForCall(key, options);
-    const request = { ref: toWireRef(ref), version, bindingKey };
+    const request = { ref: toWireRef(ref), expectedCurrentVersion, bindingKey };
     const response = bind
       ? await this.#secretMutation(ref, SecretServiceService.bindSecret, request, options)
       : await this.#secretMutation(ref, SecretServiceService.unbindSecret, request, options);
-    return frozenBindingResult(response);
+    return frozenTransitionResult(response);
   }
 
   #assertOpen(): void {
@@ -1146,7 +1193,7 @@ function validPageSize(value = 0): number {
   return value;
 }
 
-function assertUint64(value: bigint, name: string, positive = false): void {
+function assertUint64(value: unknown, name: string, positive = false): asserts value is bigint {
   if (typeof value !== "bigint" || value < (positive ? 1n : 0n) || value > UINT64_MAX) {
     throw new ConfigError(
       `${name} must be a ${positive ? "positive " : ""}bigint in the uint64 range`,
@@ -1166,16 +1213,15 @@ function requiredCredential(value: unknown, name: string): string {
   return value;
 }
 
-function bindingCohortGuards(
-  options: SecretBindingCohortGuardOptions,
+function requiredVersionSetGuards(
+  options: SecretBindingCohortGuardOptions | undefined,
   operation: string,
-): { readonly expectedRevision?: bigint; readonly expectedAffectedVersions: bigint[] } {
-  const revision = options.expectedRevision;
-  const versions = options.expectedAffectedVersions;
-  if (revision === undefined && versions === undefined) return { expectedAffectedVersions: [] };
+): { readonly expectedRevision: bigint; readonly expectedAffectedVersions: bigint[] } {
+  const revision = options?.expectedRevision;
+  const versions = options?.expectedAffectedVersions;
   if (revision === undefined || versions === undefined) {
     throw new ConfigError(
-      `${operation} expectedRevision and expectedAffectedVersions must be supplied together`,
+      `${operation} expectedRevision and expectedAffectedVersions are required`,
     );
   }
   assertUint64(revision, `${operation} expectedRevision`, true);
@@ -1195,6 +1241,24 @@ function bindingCohortGuards(
     previous = version;
   }
   return { expectedRevision: revision, expectedAffectedVersions: copied };
+}
+
+function bindingCohortGuards(
+  options: SecretBindingCohortGuardOptions | undefined,
+  operation: string,
+): { readonly expectedRevision?: bigint; readonly expectedAffectedVersions: bigint[] } {
+  const revision = options?.expectedRevision;
+  const versions = options?.expectedAffectedVersions;
+  if (revision === undefined && versions === undefined) return { expectedAffectedVersions: [] };
+  if (revision === undefined || versions === undefined) {
+    throw new ConfigError(
+      `${operation} expectedRevision and expectedAffectedVersions must be supplied together`,
+    );
+  }
+  return requiredVersionSetGuards(
+    { expectedRevision: revision, expectedAffectedVersions: versions },
+    operation,
+  );
 }
 
 /** @internal */
@@ -1313,9 +1377,31 @@ function frozenBindingResult(response: {
   readonly anchorVersion: bigint;
   readonly affectedVersions: readonly bigint[];
   readonly revision: bigint;
-}): SecretVersionMutationResult {
+}): SecretBindingCohortResult {
   return Object.freeze({
     anchorVersion: response.anchorVersion,
+    affectedVersions: Object.freeze([...response.affectedVersions]),
+    revision: response.revision,
+  });
+}
+
+function frozenTransitionResult(response: {
+  readonly currentVersion: bigint;
+  readonly previousVersion: bigint;
+  readonly revision: bigint;
+}): SecretVersionTransitionResult {
+  return Object.freeze({
+    currentVersion: response.currentVersion,
+    previousVersion: response.previousVersion,
+    revision: response.revision,
+  });
+}
+
+function frozenVersionSetResult(response: {
+  readonly affectedVersions: readonly bigint[];
+  readonly revision: bigint;
+}): SecretVersionSetResult {
+  return Object.freeze({
     affectedVersions: Object.freeze([...response.affectedVersions]),
     revision: response.revision,
   });

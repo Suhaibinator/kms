@@ -56,7 +56,7 @@ function positionalSelector(version: bigint, label: string): VersionRef {
  * Bounded in-memory TTL cache used by parameter reads.
  *
  * Secret methods remain as internal compatibility no-ops for watch wiring, but
- * plaintext is never retained: secret protection is mutable live metadata.
+ * plaintext is never retained: every secret read is authorized by the server.
  */
 export class ReadCache {
   readonly #ttlMs: number;

@@ -58,10 +58,11 @@ var (
 	// Retry after the window resets; do not retry in a tight loop.
 	ErrRateLimited = errors.New("kmsclient: rate limited")
 
-	// ErrPurgeCleanupPending means the logical binding-cohort purge committed,
-	// but KMS could not yet prove that the retired payload was removed from its
-	// live database artifacts. Purge methods return a zero result with this
-	// error; callers must not retry with the discarded binding key.
+	// ErrPurgeCleanupPending means the logical secret purge committed, but KMS
+	// could not yet prove that the retired payload was removed from its live
+	// database artifacts. Purge methods return a zero result with this error;
+	// callers must not retry the purge. For a cohort purge, discard the retired
+	// binding key rather than sending it again.
 	ErrPurgeCleanupPending = errors.New("kmsclient: secret purge committed; database artifact cleanup is pending")
 )
 

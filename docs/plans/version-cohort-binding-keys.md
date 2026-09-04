@@ -1,646 +1,125 @@
-# Version-cohort binding keys, SDK contract, and compromise purge
-
-## Context and motivation
-
-The `0.2.x` client-bound design couples a server-minted token to each secret version. Applications must manage alias-specific token files, older release pins require old unrecoverable tokens, and changing protection can force a new secret version and a manually rebuilt release. This operational cost provides little additional isolation under KMS’s threat model, where possession of a deployment already implies possession of that deployment’s KMS credentials.
-
-The `0.3.x` design instead treats a binding key as operator-owned encryption material supplied directly with a specific secret operation or SDK declaration. It preserves independently keyed historical version cohorts, permits in-place DEK rewrapping, and adds a focused break-glass purge: if a binding key is compromised, an administrator can irreversibly destroy precisely the contiguous versions encrypted with that key without deleting unrelated history or rewriting immutable releases.
-
-## Summary
-
-Replace client-bound tokens with operator-supplied binding keys attached to individual secret versions.
-
-Adjacent versions encrypted with the same binding key form an implicit cohort. KMS never stores a key, key hash, fingerprint, or cohort identifier; membership is discovered only by cryptographically opening adjacent DEKs with a supplied key.
-
-A compromised binding key can be purged by anchoring at one version. KMS destroys that version and adjacent versions of the same secret that open with the same key, stopping at the first cohort boundary.
-
-## Wire and domain contracts
-
-### Secret metadata
-
-- Replace `SecretMetadata.client_bound` with `bound` in the clean `0.3.x` message layout; no old field name or number is reserved.
-- `SecretMetadata.bound` describes the version selected by the `current` label.
-- Extend `SecretVersionInfo` with:
-  - `bool bound`
-  - `bool has_access_token`
-- Exact-version operations and release loading must use the version fields, never infer protection from the current-version summary.
-- Rename internal domain/model fields from `ClientBound` and `ClientKeySalt` to `Bound` and `BindingKeySalt`.
-- Internal wrap modes become `standard` and `binding_key`.
-
-### Secret reads and writes
-
-- Define the compact `0.3.x` read request as `ref = 1`, `version = 2`, `label = 3`, `secret_token = 4`, and `binding_key = 5`.
-- Define the compact `0.3.x` write request as `ref = 1`, `value = 2`, `content_type = 3`, `metadata_json = 4`, `binding_key = 5`, `generate_access_token = 6`, and `expires_at_unix_ms = 7`.
-- Remove `client_bound` and the write-side `secret_token` outright. Do not reserve their old names or numbers; the latter’s only existing purpose was proving the conflated client-bound token.
-- A non-empty `binding_key` creates a bound version. An empty value creates an unbound version, regardless of the preceding version’s protection.
-- A non-empty binding key must contain at least 32 UTF-8 bytes. No normalization,
-  trimming, prefix, encoding, or entropy requirement is imposed. KMS does not
-  compare keys across secrets or versions. Rotation alone compares the two
-  caller-supplied strings and rejects a byte-for-byte unchanged replacement.
-- Access-token behavior remains separate:
-  - `generate_access_token` creates or rotates the secret-level access token.
-  - New versions inherit token gating while `access_token_hash` exists.
-  - Reads of token-gated versions require `secret_token`.
-  - Reads of versions that are both bound and token-gated require both fields.
-
-### Binding mutation RPCs
-
-Add these SecretService operations:
-
-```proto
-rpc BindSecret(BindSecretRequest) returns (SecretVersionMutationResponse);
-rpc UnbindSecret(UnbindSecretRequest) returns (SecretVersionMutationResponse);
-rpc PreviewSecretBindingCohort(PreviewSecretBindingCohortRequest)
-    returns (SecretBindingCohortResponse);
-rpc RotateSecretBindingKey(RotateSecretBindingKeyRequest)
-    returns (SecretBindingCohortResponse);
-rpc PurgeSecretBindingCohort(PurgeSecretBindingCohortRequest)
-    returns (SecretBindingCohortResponse);
-```
-
-Request semantics:
-
-- `BindSecret(ref, version, binding_key)`
-  - `version = 0` means current.
-  - Requires an existing, non-destroyed, unbound version.
-  - Binds only that exact version in place.
-  - Rejects with a sanitized `FailedPrecondition` if the proposed key opens
-    either immediate live bound neighbor, because binding the version would
-    implicitly merge cohorts beyond the singleton affected-version response.
-- `UnbindSecret(ref, version, binding_key)`
-  - Requires an existing, non-destroyed, bound version.
-  - The supplied key must open that version.
-  - Unbinds only that exact version.
-- `RotateSecretBindingKey(ref, anchor_version, binding_key, new_binding_key)`
-  - `anchor_version = 0` means current.
-  - Rotates the contiguous cohort around the anchor.
-  - After rediscovering the old cohort and validating any CAS guard, rejects
-    with a sanitized `FailedPrecondition` if the replacement key opens either
-    immediate live bound neighbor outside that cohort.
-  - Rejects a byte-for-byte identical current and replacement key with a fixed,
-    sanitized `InvalidArgument` error and no mutation.
-- `PreviewSecretBindingCohort(ref, anchor_version, binding_key)`
-  - `anchor_version = 0` means current.
-  - Discovers the cohort without mutating it and returns the current storage revision.
-- `PurgeSecretBindingCohort(ref, anchor_version, binding_key)`
-  - `anchor_version = 0` means current.
-  - Admin-only and purges the contiguous matching cohort.
-- Mutation responses return:
-  - Anchor version.
-  - Sorted affected version numbers.
-  - Resulting storage revision.
-  - No derived key or cohort identifier.
-- Interactive rotate and purge callers pass the preview revision and affected
-  versions back as compare-and-swap guards. The server rediscovers and compares
-  the cohort inside the mutation transaction; any intervening change aborts
-  before rewrap or destruction, so the executed set is exactly the set the
-  administrator confirmed.
-
-Missing and incorrect binding keys return the same sanitized permission/decryption errors used for other secret credentials. Errors and audit records must never echo request fields.
-
-### Authorization and audit boundary
-
-- Add the known policy operation `secret:binding-manage`. It is default-deny
-  and is never part of the implicit home-namespace grant. An administrator can
-  delegate it with an exact rule, and `secret:*` deliberately matches it.
-- Bind, unbind, preview, and rotate authorize against
-  `secret:binding-manage`; ordinary `secret:write` is insufficient. Purge
-  remains administrator-only and retains its `secret:destroy` authorization
-  check as defense in depth.
-- Authorization denials continue through the common `authz.denial` audit path.
-  Invalid arguments, unavailable keyrings, wrong keys, stale guards, and other
-  authorized failures emit the operation's sanitized `error` audit wherever
-  the audit sink remains writable. No audit row contains either binding key.
-- A successful bind, unbind, or rotate is indivisible from its fixed sanitized
-  `allow` audit: rewrapped DEKs, the secret timestamp, revision/change-log row,
-  and audit row commit in one storage transaction. Audit insertion failure
-  rolls back the entire mutation and does not wake watchers.
-- Preview is a read-only cohort oracle. Its sanitized `allow` audit is strict
-  and durable before the cohort response is returned, even if general-purpose
-  auditing is disabled; an unavailable audit sink returns the fixed
-  `FailedPrecondition` `audit unavailable` result instead of cohort data.
-
-## Cryptographic and cohort behavior
-
-### Version encryption
-
-For a bound version:
-
-1. Generate a random DEK and encrypt the plaintext as today.
-2. Derive a 256-bit wrapping key using HKDF-SHA256 over the opaque binding-key bytes and a fresh random 32-byte salt.
-3. Encrypt the DEK under the derived binding key.
-4. Encrypt that inner result under the active server KEK.
-5. Persist ciphertext, outer encrypted DEK, KEK ID, binding salt, algorithm, nonce, AAD, and `bound=true`.
-
-For an unbound version, wrap the DEK directly under the server KEK and persist no binding salt.
-
-Zero derived keys, unwrapped DEKs, and temporary inner plaintext buffers as soon as each operation completes. Go strings containing caller-supplied keys cannot be reliably zeroed, so they must never be copied unnecessarily or retained beyond request/configuration lifetime.
-
-### In-place bind, unbind, and rotate
-
-- Binding mutations never decrypt or rewrite the stored secret-value ciphertext.
-- Bind:
-  - Open the standard DEK using the version’s recorded KEK.
-  - Add a binding-key layer with a new salt.
-  - Reapply the KEK layer.
-- Unbind:
-  - Open the KEK layer and then the supplied binding-key layer.
-  - Rewrap the raw DEK directly under the same KEK.
-- Rotate:
-  - Discover the cohort using the old key.
-  - Check any preview/CAS guard against that discovered source cohort.
-  - Cryptographically test the new key against the immediate bound versions
-    outside the cohort and reject rather than merge with either neighbor.
-  - Rewrap each selected DEK with the new key and a fresh independent salt.
-  - Preserve each version’s original KEK ID unless a separate KEK rotation occurs.
-- Bind/unbind affect one version. Rotate affects a discovered cohort.
-- Bind and rotate never implicitly merge cohorts. Storage remains key-blind:
-  it receives pure test callbacks for the proposed key and runs the neighbor
-  checks inside the same transaction before preparing or writing any rewrap.
-  Unbind needs no merge check because it can only split a cohort.
-- Serialize these operations with secret puts, purge, and server-KEK rotation.
-- Commit all cohort changes in one transaction. Any stale row, wrong anchor key, corrupt selected version, or concurrent mutation aborts the operation.
-
-### Cohort discovery
-
-Given an anchor version and binding key:
-
-1. The anchor must exist, be non-destroyed, and be bound.
-2. Cryptographically open the anchor’s binding layer. Failure rejects the operation without scanning further.
-3. Scan version numbers downward from `anchor-1` and upward from `anchor+1`.
-4. For each adjacent version:
-   - Bound and successfully opened with the supplied key: include it.
-   - Unbound: stop in that direction.
-   - Bound but not opened by the key: stop in that direction.
-   - Missing, destroyed, or cryptographically corrupt: stop in that direction.
-5. Never jump across a boundary, even if a later version happens to reuse the same key.
-6. Sort and deduplicate the resulting version list before mutation.
-
-This produces the intended grouping without storing key identity. For key epochs `v1=A`, `v2–v3=B`, and `v4–v5=C`, anchoring at `v5` with key C affects only versions 4 and 5.
-
-## Purge semantics
-
-- `PurgeSecretBindingCohort` requires an authenticated administrator; `secret:destroy` policy delegation is insufficient.
-- The operation deliberately bypasses current/previous release-reference protection.
-- For each selected version, irreversibly erase:
-  - Secret ciphertext.
-  - Encrypted DEK.
-  - Nonce.
-  - Binding-key salt.
-  - Any other recoverable cryptographic payload.
-- Retain a minimal tombstone containing version number, destroyed state, creation/destruction timestamps, and non-sensitive audit identity.
-- Clear version metadata if it may contain operator-supplied sensitive information.
-- Configure every SQLite connection with secure deletion enabled. A purge is not
-  reported as an ordinary success until the committed tombstones have been
-  checkpointed through a successful truncating WAL checkpoint, so the retired
-  payload is absent from the active database and WAL files.
-- If the transaction commits but that physical cleanup does not, fail closed
-  with the canonical cleanup-pending sentinel: HTTP 503
-  `purge_cleanup_pending`, gRPC `Unavailable`, and fixed text
-  `secret purge committed; database artifact cleanup is pending`. SDKs expose
-  Go `ErrPurgeCleanupPending`, Python `PurgeCleanupPendingError`, and TypeScript
-  `PurgeCleanupPendingError`. The purge is logically committed; callers must
-  not retry with the retired key, and no RPC result accompanies the error.
-- This active-database guarantee cannot retract copies outside KMS: operators
-  must separately expire backups and filesystem/volume snapshots, and use disk
-  encryption or media destruction for raw-device remanence. They must also
-  rotate or revoke the compromised upstream application secret itself.
-- Preserve labels exactly. If `current` points into the purged cohort, current becomes unreadable; KMS never auto-promotes another version.
-- Append one transactional change-log entry describing the affected versions and one sanitized admin audit event. Neither contains the binding key. This is the same fail-closed transactional-audit boundary used by bind, unbind, and rotate.
-- There is no purge-all flag and no arbitrary version list.
-- Ordinary `DestroySecretVersion` and `DeleteSecret` retain their release-reference safeguards.
-- Maintain a non-secret per-path version high-water mark even after deletion, so recreating `/env/app/key` cannot reuse version numbers and accidentally satisfy an old release pin.
-- Releases remain immutable:
-  - Reading the manifest still works.
-  - Validation and activation fail if they reference a purged version.
-  - A currently active invalidated release remains labeled active, but new application startups cannot resolve it.
-  - Already-running applications retain their previously published snapshot until restarted or replaced.
-
-## Go SDK
-
-### Direct client
-
-Add:
-
-```go
-func WithBindingKey(key string) GetOption
-func WithPutBindingKey(key string) PutSecretOption
-```
-
-Remove `WithClientBound` and `WithPutSecretToken`.
-
-`GetSecret` sends `SecretToken` and `BindingKey` independently. `PutSecret` determines bound state from `WithPutBindingKey`.
-
-Add management methods with `version == 0` meaning current:
-
-```go
-func (c *Client) BindSecret(
-    ctx context.Context, key string, version uint64, bindingKey string,
-) (SecretVersionMutationResult, error)
-
-func (c *Client) UnbindSecret(
-    ctx context.Context, key string, version uint64, bindingKey string,
-) (SecretVersionMutationResult, error)
-
-func (c *Client) PreviewSecretBindingCohort(
-    ctx context.Context, key string, anchorVersion uint64, bindingKey string,
-) (SecretBindingCohortResult, error)
-
-func (c *Client) RotateSecretBindingKey(
-    ctx context.Context, key string, anchorVersion uint64,
-    bindingKey, newBindingKey string,
-) (SecretBindingCohortResult, error)
-
-func (c *Client) PurgeSecretBindingCohort(
-    ctx context.Context, key string, anchorVersion uint64, bindingKey string,
-) (SecretBindingCohortResult, error)
-
-func (c *Client) RotateSecretBindingKeyIfUnchanged(
-    ctx context.Context, key string, anchorVersion uint64,
-    bindingKey, newBindingKey string, expected SecretBindingCohortResult,
-) (SecretBindingCohortResult, error)
-
-func (c *Client) PurgeSecretBindingCohortIfUnchanged(
-    ctx context.Context, key string, anchorVersion uint64,
-    bindingKey string, expected SecretBindingCohortResult,
-) (SecretBindingCohortResult, error)
-```
-
-The `IfUnchanged` variants replay the preview's revision and sorted affected
-versions as a paired CAS guard. Secret plaintext caching is disabled entirely;
-successful mutations still invalidate compatibility bookkeeping.
-
-Both Go rotation methods reject identical input strings locally without an RPC
-using `ErrInvalidArgument`. Python sync/async methods and TypeScript reject the
-same condition as `ConfigError`. This is convenience validation only; the
-server remains authoritative.
-
-### Secret types
-
-Extend `kmsclient.Secret`:
-
-```go
-type Secret struct {
-    BindKey string // declaration-only credential
-    // existing private plaintext and metadata fields
-}
-```
-
-Conventions:
-
-- `BindKey` allows generated configuration defaults such as:
-  ```go
-  OpenAIAPIKey: config.Secret{
-      BindKey: resolveFromEnvVar("OPENAI_API_KMS_BIND_KEY"),
-  }
-  ```
-- `IsZero` continues to mean “contains no plaintext”; a declaration containing only `BindKey` is zero for secret-value purposes.
-- `Clone` copies `BindKey` while the value is still a declaration.
-- Generated startup extracts `BindKey` into private loader credentials and clears it from cloned defaults and published resolved secrets.
-- Secrets returned directly by `GetSecret` do not contain the supplied binding key.
-- `String`, `GoString`, `Format`, and JSON serialization continue to emit only `[REDACTED]`.
-
-Extend declarative `SecretValue`:
-
-```go
-type SecretValue struct {
-    Key     string
-    Token   string
-    BindKey string
-    EnvVar  string
-    Default string
-}
-```
-
-- Environment overrides skip KMS and do not consume either credential.
-- Store resolution calls `GetSecret` with both configured credentials.
-- Default fallback behavior stays unchanged and must not mask credential errors unless the caller explicitly enabled fallback-on-any-error.
-- All `SecretValue` formatting remains redacted.
-
-### Managed release loading
-
-Add:
-
-```go
-type ReleaseLoaderConfig struct {
-    // existing fields
-    SecretTokenProvider SecretTokenProvider
-    BindingKeys         map[string]string // keyed by release alias
-}
-```
-
-- Defensive-copy `BindingKeys` during loader construction.
-- Never expose it through status, stats, errors, acknowledgements, or formatting.
-- The generated `Options` type does not expose `BindingKeys`; the generated binding builds the map from credential-only secret defaults.
-- Empty `BindKey` fields are omitted.
-- Do not compare binding keys belonging to different aliases.
-- The existing `SecretTokenProvider(alias, path)` remains because access tokens are independently per secret.
-
-## Python SDK
-
-### Direct sync/async clients
-
-Use snake_case consistently:
-
-```python
-client.get_secret(
-    key,
-    version=0,
-    label="",
-    secret_token="",
-    binding_key="",
-    timeout=None,
-)
-
-client.put_secret(
-    key,
-    value,
-    content_type="",
-    metadata_json="",
-    binding_key="",
-    generate_access_token=False,
-    expires_at_unix_ms=0,
-    timeout=None,
-)
-```
-
-Apply identical signatures to `AsyncClient`.
-
-Add sync and async methods:
-
-```python
-bind_secret(key, *, version=0, binding_key, timeout=None)
-unbind_secret(key, *, version=0, binding_key, timeout=None)
-preview_secret_binding_cohort(
-    key, *, anchor_version=0, binding_key, timeout=None
-)
-rotate_secret_binding_key(
-    key, *, anchor_version=0, binding_key, new_binding_key,
-    expected_revision=None, expected_affected_versions=None, timeout=None
-)
-purge_secret_binding_cohort(
-    key, *, anchor_version=0, binding_key,
-    expected_revision=None, expected_affected_versions=None, timeout=None
-)
-```
-
-The two expected fields are optional but paired and represent the exact result
-of a prior preview.
-
-Remove `client_bound` and write-side `secret_token` arguments from `put_secret`.
-
-### Secret declarations
-
-Extend `Secret` with a keyword-only `bind_key` constructor argument and read-only `bind_key` property.
-
-Generated Pydantic configuration fields may declare:
-
-```python
-openai_api_key: Annotated[Secret, SecretField("openai-api-key")] = Secret(
-    bind_key=resolve_from_env("OPENAI_API_KMS_BIND_KEY")
-)
-```
-
-- `Secret()` remains the unbound declaration.
-- Config generation accepts defaults only when the Secret has no plaintext, path, version, or content type; `bind_key` may be populated.
-- Implement `clone`, `__copy__`, and `__deepcopy__` so declaration copying preserves the key without exposing it.
-- Generated binding construction extracts alias keys and removes them from source-default payloads and resolved snapshots.
-- `repr`, `str`, `format`, Pydantic serialization, and validation errors remain redacted.
-
-Extend `SecretValue` with `bind_key=""`; sync and async resolution pass both `secret_token` and `binding_key`.
-
-Add `binding_keys: Mapping[str, str]` to both `ReleaseLoaderConfig` and `AsyncReleaseLoaderConfig`. Normalize it to a private immutable copy. Generated managed stores populate it automatically while explicit low-level loader users may pass it directly.
-
-## TypeScript SDK
-
-### Direct client
-
-Update options:
-
-```ts
-interface GetOptions {
-  version?: bigint;
-  label?: string;
-  secretToken?: string;
-  bindingKey?: string;
-  signal?: AbortSignal;
-  deadline?: Date;
-}
-
-interface PutSecretOptions {
-  contentType?: string;
-  metadataJson?: string;
-  bindingKey?: string;
-  generateAccessToken?: boolean;
-  expiresAtUnixMs?: bigint;
-  signal?: AbortSignal;
-  deadline?: Date;
-}
-```
-
-Remove `clientBound` and write-side `secretToken`.
-
-Add:
-
-```ts
-bindSecret(key, { version?, bindingKey, signal?, deadline? })
-unbindSecret(key, { version?, bindingKey, signal?, deadline? })
-previewSecretBindingCohort(
-  key,
-  { anchorVersion?, bindingKey, signal?, deadline? },
-)
-rotateSecretBindingKey(
-  key,
-  { anchorVersion?, bindingKey, newBindingKey,
-    expectedRevision?, expectedAffectedVersions?, signal?, deadline? },
-)
-purgeSecretBindingCohort(
-  key,
-  { anchorVersion?, bindingKey,
-    expectedRevision?, expectedAffectedVersions?, signal?, deadline? },
-)
-```
-
-Return frozen mutation/cohort result objects.
-
-### Secret declarations
-
-Replace the current non-sensitive-only constructor metadata type with:
-
-```ts
-interface SecretOptions {
-  path?: string;
-  version?: bigint;
-  contentType?: string;
-  bindKey?: string;
-}
-```
-
-Support:
-
-```ts
-openAIAPIKey: new Secret("", {
-  bindKey: resolveFromEnv("OPENAI_API_KMS_BIND_KEY"),
-})
-```
-
-- Store `bindKey` privately and expose a read-only getter for generated binding extraction.
-- `clone()` preserves it while cloning a declaration.
-- Generated startup extracts and strips it before publishing resolved snapshots.
-- Directly fetched Secrets never retain request credentials.
-- `toString`, `toJSON`, coercion, and Node inspection remain `[REDACTED]`.
-
-Add `bindKey?: string` to `SecretValueOptions`. Pass it as `bindingKey` during store resolution.
-
-Add `bindingKeys?: Readonly<Record<string, string>>` to `ClientReleaseLoaderOptions`, internal `ReleaseLoaderOptions`, and `ManagedConfigOptions`. Normalize into a null-prototype frozen object and never include it in object spreads used for diagnostics or status.
-
-Generated TypeScript stores derive the alias map from credential-only default Secrets; callers of generated stores do not supply a separate map.
-
-## Cross-SDK release-loader algorithm
-
-For every pinned secret entry:
-
-1. Verify that its namespace equals the release namespace.
-2. Fetch live metadata and locate the exact pinned version.
-3. Reject missing/destroyed/disabled/expired versions as resolution failures.
-4. If `has_access_token`:
-   - Invoke the existing token provider for that alias/path.
-   - Missing provider, provider error, or empty result → `ReleaseRejectTokenUnavailable`.
-5. If `bound`:
-   - Look up the release alias in the private binding-key map.
-   - Missing or empty value → `ReleaseRejectTokenUnavailable`.
-6. Call `GetSecret` with only the credentials required by that exact version.
-7. Any supplied-but-wrong credential, permission failure, or decryption error → `ReleaseRejectResolutionFailed`.
-8. Verify returned ref, version, and content type before admitting the value.
-9. Do not publish any candidate until every parameter and secret resolves and generated validation succeeds.
-
-The metadata lookup and secret fetch count as one unit under the existing concurrency limit and cancellation signal. A superseded candidate cancels both.
-
-## Credential and cache conventions
-
-- Binding keys are always application/operator-owned strings.
-- SDKs never read binding-key files or implement a binding-key directory.
-- Generated application code may source keys from any mechanism; environment-variable helpers are application code, not SDK policy.
-- Low-level alias maps use release aliases, not resource paths.
-- Extra map entries are retained privately but never transmitted. Only the exact alias being resolved is looked up.
-- Secret-value caching is disabled. Binding and access-token requirements are
-  mutable live metadata, so even a formerly uncredentialed cache entry could
-  otherwise bypass protection added by another client after the cache fill.
-- Binding keys are never included in cache keys, exception text, callbacks, tracing attributes, metrics labels, acknowledgements, or test snapshots.
-- Secret comparison and change reporting use only resolved path/version identity; changing a local binding-key declaration alone is not reported as a configuration-value change.
-
-## CLI and offline conventions
-
-- `kms binding-key generate` writes one 256-bit Base64URL key to stdout and nothing else, allowing redirection into the operator’s chosen secret manager.
-- No binding-key file flags or environment-file variables exist.
-- Single-secret commands accept:
-  - `KMS_BINDING_KEY` for non-interactive invocation.
-  - A non-echoing prompt when the variable is absent and stdin is a terminal.
-  - `KMS_NEW_BINDING_KEY` or a second prompt for rotation.
-- Rotation rejects identical current and replacement strings after preview has
-  verified the current key and before sending the mutation RPC.
-- Online operations use existing bearer-token/mTLS administrator authentication; the running server uses its configured KEK.
-- There is no offline secret-read or secret-export command in the current CLI.
-  If a single-secret offline read is introduced later, it must use the existing
-  KEK-loading mechanism plus the supplied binding key; this design does not add
-  that interface.
-- Bulk `env` and `exec` never request binding keys:
-  - Emit parameters normally.
-  - Resolve unbound secrets normally, including access-token handling.
-  - Fail closed by default, before output or launch, when any selected secret
-    is bound or lacks a required per-secret token.
-  - Keep `--no-secrets` as the explicit parameter-only path for namespace and
-    release selections; it never reads secret plaintext.
-  - Namespace mode alone may opt into `--allow-incomplete-secrets`, which
-    omits unavailable secrets with an unsuppressible warning and never emits
-    an empty credential value.
-  - Reject incomplete mode for releases, whose resolution stays atomic.
-  - In incomplete `exec`, scrub both the plain mapped name and possible `_B64`
-    name of every omitted secret from the inherited environment, even with
-    `--preserve-env`; `env` documentation warns that sourcing output cannot
-    unset a stale variable in a dirty shell.
-  - Remove the old `--strict` switch because fail-closed is the default.
-  - Scrub `KMS_BINDING_KEY` and `KMS_NEW_BINDING_KEY` before launching a child process.
-
-## Releases and console
-
-- Remove protection flags from configuration-release protobufs, domain structs, database models, digest projections, all SDK release models, and console views.
-- `ConfigurationReleaseEntry` ends at `parameter_digest = 7`; remove the former protection fields without reserving their names or numbers.
-- Server creation and storage validation reject every parameter or secret ref outside the release’s namespace, without an admin exception.
-- Store version high-water marks independently from deletable secret material.
-- Console secret history displays `bound` and `has_access_token` per version.
-- Bind/unbind actions target one version; rotate and purge preview and confirm the discovered affected version range.
-- Binding-key form fields are password inputs held only in request-local browser state and cleared after submission.
-- The console marks an identical rotation replacement invalid inline; its API
-  wrapper also refuses to send the request.
-- Purge confirmation names the secret, anchor, and affected versions; no key-derived identifier is displayed.
-
-## 0.3.x greenfield storage baseline
-
-- Version `0.3.0` establishes a new storage baseline for the entire `0.3.x` line; it is not an incremental migration from `0.2.x`.
-- Treat the protobuf contract the same way: `0.3.0` makes no binary or JSON wire-compatibility promise to `0.2.x` clients.
-- Remove `reserved` declarations that exist only to preserve removed `0.2.x` fields, including the former release-protection and schema-ID gaps, and renumber affected messages densely from field 1.
-- Delete the complete existing migration history, including SQL migration files, bespoke Go migration helpers, legacy repair/upgrade branches, migration fixtures, and tests whose purpose is upgrading an older schema.
-- Set the new baseline schema version to 1 and materialize only the final `0.3.x` table, index, constraint, and trigger layout from current storage models.
-- Keep the schema-version table as the starting point for future migrations within or after the `0.3.x` line, but do not retain executable migrations predating this baseline.
-- Database initialization succeeds only for an empty/new database or a database already stamped with the exact `0.3.x` baseline schema.
-- Opening a `0.2.x`, unstamped non-empty, partially migrated, or otherwise legacy database fails before any schema or data mutation with a clear incompatible-baseline error.
-- Do not implement data copy, backfill, compatibility columns, dual reads/writes, legacy protobuf translation, or an in-place upgrade command.
-- The existing `parameter-store import` remains allowed only as a greenfield
-  bootstrap path: it reads the separate SuhaibParameterStore
-  `parameters(key, value)` format or neutral JSON and creates current-model
-  resources through normal service APIs in a fresh `0.3.x` database. It must
-  not recognize, copy, repair, or translate any `0.2.x` KMS database or
-  protocol representation.
-- Deployment documentation must require operators upgrading to `0.3.0` to create a fresh database and repopulate KMS through normal administrative/bootstrap workflows.
+# Versioned protection transitions and unbound-version purge
+
+## Contract
+
+This is the breaking, greenfield `0.3.x` contract. It does not add a SQLite
+migration and does not change the database table layout, application
+configuration schema, `ConfigurationReleaseEntry`, or deterministic release
+digest format. It changes the SecretService API and all public clients.
+
+For every non-destroyed secret version, `bound` and `has_access_token` are
+immutable. An exact release pin therefore implicitly pins the protection mode,
+even though protection flags remain absent from release entries and digests.
+Destroyed rows are minimal tombstones and clear those flags.
+
+## Current-version transitions
+
+`BindSecret`, `UnbindSecret`, and `RotateSecretBindingKey` operate only on the
+version carrying the `current` label. Each request requires a positive
+`expected_current_version`; a mismatch returns `Aborted` without side effects.
+Each successful request:
+
+1. allocates the next high-water version;
+2. decrypts current and re-encrypts it with fresh ciphertext, DEK, nonce,
+   version-bound AAD, active KEK, and binding salt where applicable;
+3. preserves plaintext, content type, metadata, state, expiry, and the source
+   version's access-token requirement while recording fresh creation identity
+   and time;
+4. makes the clone `current` and the byte-for-byte unchanged source `previous`;
+5. commits the change event, sanitized audit row, and revision atomically; and
+6. invalidates affected caches.
+
+Bind requires current to be unbound. Unbind and rotation require current to be
+bound and the supplied old key to open it. Rotation also rejects identical old
+and new keys. Rotation creates only one new current version: it never modifies
+or clones the historical cohort, whose versions continue requiring the old key.
+Transitions fail closed if the stored `bound` flag contradicts wrapping
+metadata: bound sources must carry structurally valid binding-key wrapping
+before any decrypt callback runs, while bind accepts only structurally valid
+standard unbound wrapping.
+
+The three RPCs return
+`{current_version, previous_version, revision}`. Go, Python, and TypeScript call
+this `SecretVersionTransitionResult`. CLI bind, unbind, and rotation do not
+accept `--version`; they read current metadata and submit that version as the
+guard. The console offers these actions only on current.
+
+## Bound-cohort purge
+
+Cryptographic cohort discovery is retained for compromised historical binding
+keys. Preview opens the bound anchor and adjacent version numbers with the
+supplied key, stopping at an unbound, missing, destroyed, corrupt, or
+differently keyed boundary. Every purge API requires the administrator to
+submit exactly the previewed cohort with a positive revision and positive,
+sorted, unique affected-version CAS guard. There is no unguarded public SDK
+path. A revision or version-set mismatch aborts atomically. The CLI and console
+also require confirmation. Historical bound rows retain this console action.
+
+## Unbound-version purge
+
+`PreviewSecretUnboundVersions(ref)` returns every non-destroyed `bound=false`
+version of one secret, sorted and unique. Selection is structural, so disabled,
+expired, and cryptographically corrupt rows are included. No match is a failed
+precondition.
+
+`PurgeSecretUnboundVersions(ref, expected_revision,
+expected_affected_versions)` requires an exact prior preview. A revision or set
+mismatch aborts the transaction. Preview and purge require authenticated
+administrator status plus `secret:destroy`, checked before resource lookup.
+
+Purge clears ciphertext, encrypted DEK, nonce, AAD, KEK/wrapping data, expiry,
+content type, metadata, and protection flags, retaining only minimal
+tombstones. It bypasses release-reference safeguards, preserves labels without
+auto-promotion, clears the current projection if current is purged, and relies
+on destroyed-version validation to invalidate affected releases. Audit,
+change-log, cache invalidation, secure deletion, WAL truncation, and the
+post-commit `purge_cleanup_pending` outcome match bound-cohort purge.
+
+The HTTP endpoints are:
+
+- `POST /api/v1/secrets/unbound-versions/preview`
+- `POST /api/v1/secrets/unbound-versions/purge`
+
+The CLI command is `secret purge-unbound-versions PATH`. CLI and console first
+display the exact set, warn that the operation is irreversible, require
+confirmation, and submit the preview guards.
+
+Credential and cryptographic failures remain deliberately sanitized at every
+public boundary. In particular, the console displays the same generic secret
+operation failure for wrong-key and identical-key rotation failures; it never
+surfaces server diagnostic details or adds a credential-specific exception.
+
+## Releases and operations
+
+Existing release manifests are never rewritten automatically. After a
+transition, an existing release still pins the unchanged source and requires
+its original credentials. A new release must explicitly pin the new version;
+its digest differs because the exact version differs, not because the digest
+format changed.
+
+The operational sequence is:
+
+1. transition current;
+2. create and activate a release that pins the new version;
+3. retire releases that pin the old version; and
+4. purge the old bound cohort or unbound versions when required.
+
+Any future protection-mode toggle must create a new version. Rotating the
+credential accepted by token-gated versions is allowed, but it may never remove
+a live version's `has_access_token` requirement.
 
 ## Verification
 
-- Contract tests verify the new compact protobuf field layouts and generated Go/Python/TypeScript output; they do not preserve or test legacy field reservations.
-- Crypto tests cover bound/unbound encryption, wrong keys, fresh salts, in-place rewrap, zeroization paths, and unchanged value ciphertext.
-- Rotation tests cover no-op rejection without mutation at the crypto/core,
-  gRPC, HTTP, SDK, CLI, and console boundaries. Authoritative ordering is:
-  validate replacement shape, authorize, cryptographically verify the current
-  key and discover the cohort, check the CAS guard, then compare the two
-  caller-supplied strings. This keeps wrong current credentials on the existing
-  sanitized decrypt-failure path and stale previews on the existing aborted
-  path. Client-side equality checks are intentionally earlier and reveal only
-  the caller's own arguments.
-- Bind/rotation merge tests cover both-sided and one-sided adjacent matches,
-  rollback of every wrapping/revision/change/audit effect, successful use of a
-  different new key, and key reuse beyond unbound, missing, destroyed,
-  corrupt, or differently keyed hard boundaries.
-- Cohort tests cover first/middle/last anchors, bidirectional scans, key reuse after a boundary, destroyed/missing/corrupt boundaries, disabled/expired versions, and transaction rollback.
-- Authorization tests prove `secret:binding-manage` is default-deny, absent
-  from implicit home grants, explicitly delegable, and matched by `secret:*`,
-  while `secret:write` alone cannot perform a binding lifecycle operation.
-- Audit tests prove every successful bind/unbind/rotate rolls back its
-  rewrap, revision, and change log if the audit insert fails; preview returns
-  no cohort data if its strict audit fails; and failure records remain
-  sanitized under missing, malformed, wrong, or unchanged keys.
-- Purge tests verify exact affected versions, current-label failure, immutable invalid releases, admin-only authorization, audit redaction, and version-number non-reuse.
-- SDK tests in all three languages cover:
-  - Direct get/put option mapping.
-  - Both credentials together.
-  - Secret plaintext caching disabled, including live bind/token transitions
-    after a previously uncredentialed read.
-  - Declarative `Secret` and `SecretValue` behavior.
-  - Generated alias-map extraction and stripping.
-  - Sync/async parity.
-  - Redaction under every supported formatter/serializer.
-  - Missing versus wrong release credential categories.
-  - Startup failure and last-known-good hot reload.
-- CLI tests cover prompts, environment-string inputs, stdout-only generation,
-  bulk empty bound values, and child-environment scrubbing.
-- Run race-enabled Go tests, Python sync/async tests, TypeScript tests and type checks, frontend tests/build, protobuf generation checks, and configuration-generator golden tests.
+Tests cover one-version allocation, current/previous movement, preservation of
+non-protection fields, fresh cryptographic material and AAD, unchanged source
+rows, stale guards, invalid modes/keys, disabled and expired current versions,
+audit rollback, concurrency, KEK rotation, cache invalidation, and the release
+regression where an old release still opens the bound source only with its old
+key while a new release pins the new unbound version with a different digest.
 
-## Explicit consequences
-
-- A release pinned to an older binding-key cohort requires that cohort’s key. KMS cannot recover historical keys because it stores no identifier or verifier.
-- Changing a secret value while supplying a different binding key begins a new cohort; it does not rewrap older versions.
-- Rotation and compromise purge are deliberately cohort-scoped, while bind and unbind are exact-version operations.
-- Exact-version bind and cohort rotation reject any proposed key that would
-  merge their reported affected set with an immediately adjacent cohort.
-  Intentional merging, if added later, requires a separate previewable
-  operation that reports and guards the complete resulting cohort.
-- This is the breaking greenfield baseline for the `0.3.x` line, with no migration path for `0.2.x` databases, client-bound tokens, generated bindings, or old release digests.
+Purge tests cover alternating protection modes, disabled, expired, destroyed,
+missing and corrupt versions; authorization-before-lookup; optional paired
+bound-purge guards and mandatory unbound-purge guards; release-reference bypass;
+label preservation; tombstone contents;
+rollback, redaction, audit/change events; cleanup pending; CLI/console/HTTP;
+SDK parity; generated contracts; and full language/race suites.

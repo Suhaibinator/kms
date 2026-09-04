@@ -50,9 +50,11 @@ persistence. The immutable stored entry contains:
 - SHA-256 of the exact parameter bytes, or no value digest for a secret.
 
 Both parameter and secret references must be in the release's own namespace.
-Entries carry no protection flags: `bound` and `has_access_token` are live
-properties of the exact secret version and are deliberately absent from both
-the entry and release digest.
+Entries carry no protection flags: `bound` and `has_access_token` are
+deliberately absent from both the entry and release digest. Those properties
+are immutable for the lifetime of a non-destroyed secret version, so an exact
+version pin implicitly pins its protection mode without changing the release
+entry schema or deterministic digest format.
 
 The release digest is SHA-256 over a deterministic, alias-sorted protobuf
 projection containing the release schema reference, resource pins, captured
@@ -282,11 +284,21 @@ Promoting a parameter or secret's ordinary `current` label never changes an
 active release pin. Ordinary secret value rotation preserves the independent
 per-secret access token unless token generation/rotation is explicitly
 requested; the token remains outside the release. Every exact secret version
-has live `bound` and `has_access_token` flags. Bind and unbind change one
-version in place without changing its ciphertext or release pin; binding-key
-rotation changes only the contiguous cryptographic cohort. The admin-only
-cohort purge deliberately bypasses release-reference protection and leaves
-referencing releases immutable but unresolvable. See
+has immutable `bound` and `has_access_token` flags. Bind, unbind, and
+binding-key rotation clone the current secret into exactly one new current
+version and leave the source unchanged as `previous`. Existing releases
+therefore continue resolving the source with its original credentials; a newly
+created release must explicitly pin the new version and has a different digest
+because the version changed. The digest algorithm and release schema do not
+change.
+
+The safe operational sequence is: transition current, create and activate a
+new release, retire old releases, then purge the old bound cohort or all
+unbound versions when required. Both administrator purge operations bypass
+release-reference protection and leave referencing releases immutable but
+unresolvable. Future protection-mode toggles must create versions as well;
+access-token credential rotation may replace the credential but may never
+weaken an existing version's token requirement. See
 [`binding-keys.md`](binding-keys.md).
 
 Release history defaults to at least the newest 100 inactive versions and 90

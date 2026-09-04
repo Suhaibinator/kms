@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"maps"
-	"unicode/utf8"
 
 	kmsv1 "github.com/Suhaibinator/kms/gen/kmsv1"
 )
@@ -13,7 +12,8 @@ import (
 var errSecretMetadataRefMismatch = errors.New("kmsclient: secret metadata resource reference mismatch")
 
 // SecretVersionInfo describes one exact secret version without exposing its
-// plaintext. Bound and HasAccessToken are independent live protection flags.
+// plaintext. Bound and HasAccessToken are independent, immutable protection
+// properties until the version is destroyed.
 type SecretVersionInfo struct {
 	Version           uint64
 	State             string
@@ -101,27 +101,45 @@ func secretMetadataFromProto(secret *kmsv1.SecretMetadata, fallbackPath string) 
 	return out
 }
 
-// SecretVersionMutationResult reports an exact-version bind or unbind.
-type SecretVersionMutationResult struct {
-	AnchorVersion    uint64
+// SecretVersionTransitionResult reports a protection transition that cloned
+// the previous current version into a new current version.
+type SecretVersionTransitionResult struct {
+	CurrentVersion  uint64
+	PreviousVersion uint64
+	Revision        uint64
+}
+
+// SecretVersionSetResult reports an exact set of secret versions selected by
+// a preview or destroyed by a guarded purge.
+type SecretVersionSetResult struct {
 	AffectedVersions []uint64
 	Revision         uint64
 }
 
 // SecretBindingCohortResult reports the contiguous binding-key cohort found or
-// changed by a preview, rotation, or purge.
+// changed by a preview or purge.
 type SecretBindingCohortResult struct {
 	AnchorVersion    uint64
 	AffectedVersions []uint64
 	Revision         uint64
 }
 
-func versionMutationResult(resp *kmsv1.SecretVersionMutationResponse) SecretVersionMutationResult {
+func transitionResult(resp *kmsv1.SecretVersionTransitionResponse) SecretVersionTransitionResult {
 	if resp == nil {
-		return SecretVersionMutationResult{}
+		return SecretVersionTransitionResult{}
 	}
-	return SecretVersionMutationResult{
-		AnchorVersion:    resp.GetAnchorVersion(),
+	return SecretVersionTransitionResult{
+		CurrentVersion:  resp.GetCurrentVersion(),
+		PreviousVersion: resp.GetPreviousVersion(),
+		Revision:        resp.GetRevision(),
+	}
+}
+
+func versionSetResult(resp *kmsv1.SecretVersionSetResponse) SecretVersionSetResult {
+	if resp == nil {
+		return SecretVersionSetResult{}
+	}
+	return SecretVersionSetResult{
 		AffectedVersions: append([]uint64(nil), resp.GetAffectedVersions()...),
 		Revision:         resp.GetRevision(),
 	}
@@ -140,56 +158,80 @@ func cohortResult(resp *kmsv1.SecretBindingCohortResponse) SecretBindingCohortRe
 
 func validateCohortGuard(expected SecretBindingCohortResult) error {
 	if expected.Revision == 0 {
-		return errors.New("kmsclient: expected cohort revision must be positive")
+		return fmt.Errorf("%w: expected cohort revision must be positive", ErrInvalidArgument)
 	}
 	if len(expected.AffectedVersions) == 0 {
-		return errors.New("kmsclient: expected cohort affected versions must not be empty")
+		return fmt.Errorf("%w: expected cohort affected versions must not be empty", ErrInvalidArgument)
 	}
 	for i, version := range expected.AffectedVersions {
 		if version == 0 {
-			return errors.New("kmsclient: expected cohort affected versions must be positive")
+			return fmt.Errorf("%w: expected cohort affected versions must be positive", ErrInvalidArgument)
 		}
 		if i > 0 && version <= expected.AffectedVersions[i-1] {
-			return errors.New("kmsclient: expected cohort affected versions must be sorted and unique")
+			return fmt.Errorf("%w: expected cohort affected versions must be sorted and unique", ErrInvalidArgument)
 		}
 	}
 	return nil
 }
 
-// BindSecret adds binding-key protection to one exact version in place.
-// version 0 selects the version labeled current.
-func (c *Client) BindSecret(ctx context.Context, key string, version uint64, bindingKey string) (SecretVersionMutationResult, error) {
+func validateVersionSetGuard(expected SecretVersionSetResult) error {
+	if expected.Revision == 0 {
+		return fmt.Errorf("%w: expected version-set revision must be positive", ErrInvalidArgument)
+	}
+	if len(expected.AffectedVersions) == 0 {
+		return fmt.Errorf("%w: expected version-set affected versions must not be empty", ErrInvalidArgument)
+	}
+	for i, version := range expected.AffectedVersions {
+		if version == 0 {
+			return fmt.Errorf("%w: expected version-set affected versions must be positive", ErrInvalidArgument)
+		}
+		if i > 0 && version <= expected.AffectedVersions[i-1] {
+			return fmt.Errorf("%w: expected version-set affected versions must be sorted and unique", ErrInvalidArgument)
+		}
+	}
+	return nil
+}
+
+// BindSecret clones the current secret into a new bound version. The operation
+// aborts unless expectedCurrentVersion is still labeled current.
+func (c *Client) BindSecret(ctx context.Context, key string, expectedCurrentVersion uint64, bindingKey string) (SecretVersionTransitionResult, error) {
+	if expectedCurrentVersion == 0 {
+		return SecretVersionTransitionResult{}, fmt.Errorf("%w: expected current version must be positive", ErrInvalidArgument)
+	}
 	r, err := c.resolveRef(ctx, key)
 	if err != nil {
-		return SecretVersionMutationResult{}, err
+		return SecretVersionTransitionResult{}, err
 	}
 	cctx, cancel := c.callCtx(ctx)
 	defer cancel()
 	resp, err := c.secrets.BindSecret(cctx, &kmsv1.BindSecretRequest{
-		Ref: r.resourceProto(), Version: version, BindingKey: bindingKey,
+		Ref: r.resourceProto(), ExpectedCurrentVersion: expectedCurrentVersion, BindingKey: bindingKey,
 	})
 	if err != nil {
-		return SecretVersionMutationResult{}, mapSecretError(err)
+		return SecretVersionTransitionResult{}, mapSecretError(err)
 	}
-	return versionMutationResult(resp), nil
+	return transitionResult(resp), nil
 }
 
-// UnbindSecret removes binding-key protection from one exact version in place.
-// version 0 selects the version labeled current.
-func (c *Client) UnbindSecret(ctx context.Context, key string, version uint64, bindingKey string) (SecretVersionMutationResult, error) {
+// UnbindSecret clones the current secret into a new unbound version. The
+// operation aborts unless expectedCurrentVersion is still labeled current.
+func (c *Client) UnbindSecret(ctx context.Context, key string, expectedCurrentVersion uint64, bindingKey string) (SecretVersionTransitionResult, error) {
+	if expectedCurrentVersion == 0 {
+		return SecretVersionTransitionResult{}, fmt.Errorf("%w: expected current version must be positive", ErrInvalidArgument)
+	}
 	r, err := c.resolveRef(ctx, key)
 	if err != nil {
-		return SecretVersionMutationResult{}, err
+		return SecretVersionTransitionResult{}, err
 	}
 	cctx, cancel := c.callCtx(ctx)
 	defer cancel()
 	resp, err := c.secrets.UnbindSecret(cctx, &kmsv1.UnbindSecretRequest{
-		Ref: r.resourceProto(), Version: version, BindingKey: bindingKey,
+		Ref: r.resourceProto(), ExpectedCurrentVersion: expectedCurrentVersion, BindingKey: bindingKey,
 	})
 	if err != nil {
-		return SecretVersionMutationResult{}, mapSecretError(err)
+		return SecretVersionTransitionResult{}, mapSecretError(err)
 	}
-	return versionMutationResult(resp), nil
+	return transitionResult(resp), nil
 }
 
 // PreviewSecretBindingCohort returns the contiguous cohort around
@@ -210,52 +252,75 @@ func (c *Client) PreviewSecretBindingCohort(ctx context.Context, key string, anc
 	return cohortResult(resp), nil
 }
 
-// RotateSecretBindingKey rewraps the contiguous cohort around anchorVersion.
-// anchorVersion 0 selects current.
-func (c *Client) RotateSecretBindingKey(ctx context.Context, key string, anchorVersion uint64, bindingKey, newBindingKey string) (SecretBindingCohortResult, error) {
-	return c.rotateSecretBindingKey(ctx, key, anchorVersion, bindingKey, newBindingKey, nil)
-}
-
-// RotateSecretBindingKeyIfUnchanged performs the rotation only if the live
-// cohort still matches a prior PreviewSecretBindingCohort result.
-func (c *Client) RotateSecretBindingKeyIfUnchanged(ctx context.Context, key string, anchorVersion uint64, bindingKey, newBindingKey string, expected SecretBindingCohortResult) (SecretBindingCohortResult, error) {
-	expected.AffectedVersions = append([]uint64(nil), expected.AffectedVersions...)
-	if err := validateCohortGuard(expected); err != nil {
-		return SecretBindingCohortResult{}, err
-	}
-	return c.rotateSecretBindingKey(ctx, key, anchorVersion, bindingKey, newBindingKey, &expected)
-}
-
-func (c *Client) rotateSecretBindingKey(ctx context.Context, key string, anchorVersion uint64, bindingKey, newBindingKey string, expected *SecretBindingCohortResult) (SecretBindingCohortResult, error) {
-	if len(newBindingKey) >= 32 && utf8.ValidString(newBindingKey) && bindingKey == newBindingKey {
-		return SecretBindingCohortResult{}, fmt.Errorf("%w: new binding key must differ from current binding key", ErrInvalidArgument)
+// RotateSecretBindingKey clones the current bound secret into a new bound
+// version protected by newBindingKey. Historical versions remain unchanged.
+func (c *Client) RotateSecretBindingKey(ctx context.Context, key string, expectedCurrentVersion uint64, bindingKey, newBindingKey string) (SecretVersionTransitionResult, error) {
+	if expectedCurrentVersion == 0 {
+		return SecretVersionTransitionResult{}, fmt.Errorf("%w: expected current version must be positive", ErrInvalidArgument)
 	}
 	r, err := c.resolveRef(ctx, key)
 	if err != nil {
-		return SecretBindingCohortResult{}, err
+		return SecretVersionTransitionResult{}, err
 	}
 	req := &kmsv1.RotateSecretBindingKeyRequest{
-		Ref: r.resourceProto(), AnchorVersion: anchorVersion, BindingKey: bindingKey, NewBindingKey: newBindingKey,
-	}
-	if expected != nil {
-		revision := expected.Revision
-		req.ExpectedRevision = &revision
-		req.ExpectedAffectedVersions = append([]uint64(nil), expected.AffectedVersions...)
+		Ref: r.resourceProto(), ExpectedCurrentVersion: expectedCurrentVersion, BindingKey: bindingKey, NewBindingKey: newBindingKey,
 	}
 	cctx, cancel := c.callCtx(ctx)
 	defer cancel()
 	resp, err := c.secrets.RotateSecretBindingKey(cctx, req)
 	if err != nil {
-		return SecretBindingCohortResult{}, mapSecretError(err)
+		return SecretVersionTransitionResult{}, mapSecretError(err)
 	}
-	return cohortResult(resp), nil
+	return transitionResult(resp), nil
+}
+
+// PreviewSecretUnboundVersions returns every non-destroyed unbound version of
+// one secret. Pass the exact result to PurgeSecretUnboundVersions.
+func (c *Client) PreviewSecretUnboundVersions(ctx context.Context, key string) (SecretVersionSetResult, error) {
+	r, err := c.resolveRef(ctx, key)
+	if err != nil {
+		return SecretVersionSetResult{}, err
+	}
+	cctx, cancel := c.callCtx(ctx)
+	defer cancel()
+	resp, err := c.secrets.PreviewSecretUnboundVersions(cctx, &kmsv1.PreviewSecretUnboundVersionsRequest{Ref: r.resourceProto()})
+	if err != nil {
+		return SecretVersionSetResult{}, mapSecretError(err)
+	}
+	return versionSetResult(resp), nil
+}
+
+// PurgeSecretUnboundVersions irreversibly destroys the exact set returned by
+// PreviewSecretUnboundVersions. The preview guard is mandatory. If the logical
+// purge commits but physical database-artifact cleanup remains pending, the
+// method returns a zero result and ErrPurgeCleanupPending; callers must not
+// retry the purge.
+func (c *Client) PurgeSecretUnboundVersions(ctx context.Context, key string, expected SecretVersionSetResult) (SecretVersionSetResult, error) {
+	expected.AffectedVersions = append([]uint64(nil), expected.AffectedVersions...)
+	if err := validateVersionSetGuard(expected); err != nil {
+		return SecretVersionSetResult{}, err
+	}
+	r, err := c.resolveRef(ctx, key)
+	if err != nil {
+		return SecretVersionSetResult{}, err
+	}
+	cctx, cancel := c.callCtx(ctx)
+	defer cancel()
+	resp, err := c.secrets.PurgeSecretUnboundVersions(cctx, &kmsv1.PurgeSecretUnboundVersionsRequest{
+		Ref: r.resourceProto(), ExpectedRevision: expected.Revision,
+		ExpectedAffectedVersions: append([]uint64(nil), expected.AffectedVersions...),
+	})
+	if err != nil {
+		return SecretVersionSetResult{}, mapPurgeSecretError(err)
+	}
+	return versionSetResult(resp), nil
 }
 
 // PurgeSecretBindingCohort irreversibly destroys the contiguous cohort around
-// anchorVersion. anchorVersion 0 selects current. If the logical purge commits
-// but physical database-artifact cleanup remains pending, the method returns a
-// zero result and ErrPurgeCleanupPending; callers must not retry with the
-// discarded binding key.
+// anchorVersion. anchorVersion 0 selects current.
+// If the logical purge commits but physical database-artifact cleanup remains
+// pending, the method returns a zero result and ErrPurgeCleanupPending; callers
+// must not retry with the discarded binding key.
 func (c *Client) PurgeSecretBindingCohort(ctx context.Context, key string, anchorVersion uint64, bindingKey string) (SecretBindingCohortResult, error) {
 	return c.purgeSecretBindingCohort(ctx, key, anchorVersion, bindingKey, nil)
 }

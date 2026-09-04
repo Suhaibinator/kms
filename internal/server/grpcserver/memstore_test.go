@@ -1015,72 +1015,61 @@ func (m *memStore) PromoteSecretVersion(_ context.Context, ref domain.Ref, versi
 	return version, previous, revision, nil
 }
 
-func validateMemBindingWrapping(original storage.SecretVersionRecord, wrapping storage.SecretBindingWrapping, targetBound bool) error {
-	if wrapping.KEKID != original.KEKID || len(wrapping.EncryptedDEK) == 0 {
-		return domain.Errorf(domain.ErrFailedPrecondition, "invalid binding rewrap")
+func (m *memStore) TransitionSecretVersion(_ context.Context, params storage.SecretVersionTransitionParams) (storage.SecretVersionTransitionResult, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if params.ExpectedCurrentVersion == 0 {
+		return storage.SecretVersionTransitionResult{}, domain.Errorf(domain.ErrInvalidArgument, "expected current version is required")
 	}
-	if targetBound {
-		if wrapping.WrapMode != domain.WrapModeBindingKey || len(wrapping.BindingKeySalt) != crypto.BindingKeySaltSize {
-			return domain.Errorf(domain.ErrFailedPrecondition, "invalid bound rewrap")
-		}
-	} else if wrapping.WrapMode != domain.WrapModeStandard || len(wrapping.BindingKeySalt) != 0 {
-		return domain.Errorf(domain.ErrFailedPrecondition, "invalid unbound rewrap")
-	}
-	return nil
-}
-
-func (m *memStore) mutateSecretBindingLocked(ref domain.Ref, version uint64, targetBound bool, testNew storage.SecretBindingTestFunc, rewrap storage.SecretBindingRewrapFunc, eventType string, audit storage.SecretBindingAudit) (storage.SecretBindingResult, error) {
-	row, resolved, record, err := m.resolveSecretVersionLocked(ref, version, "")
+	row, current, source, err := m.resolveSecretVersionLocked(params.Ref, 0, domain.LabelCurrent)
 	if err != nil {
-		return storage.SecretBindingResult{}, err
+		return storage.SecretVersionTransitionResult{}, err
 	}
-	if record.State == domain.StateDestroyed || record.Bound == targetBound {
-		return storage.SecretBindingResult{}, domain.Errorf(domain.ErrFailedPrecondition, "secret version cannot change binding state")
+	if current != params.ExpectedCurrentVersion {
+		return storage.SecretVersionTransitionResult{}, domain.Errorf(domain.ErrAborted, "secret current version changed")
 	}
-	if targetBound && (memBindingNeighborMatches(row, resolved-1, testNew) || memBindingNeighborMatches(row, resolved+1, testNew)) {
-		return storage.SecretBindingResult{}, domain.Errorf(domain.ErrFailedPrecondition, "binding change would merge an adjacent cohort")
+	if source.State == domain.StateDestroyed {
+		return storage.SecretVersionTransitionResult{}, domain.Errorf(domain.ErrFailedPrecondition, "current secret version is destroyed")
 	}
-	wrapping, err := rewrap(cloneMemSecretVersion(record))
+	targetBound := params.Kind != storage.SecretTransitionUnbind
+	if source.Bound == targetBound && params.Kind != storage.SecretTransitionRotate {
+		return storage.SecretVersionTransitionResult{}, domain.Errorf(domain.ErrFailedPrecondition, "secret version cannot change binding state")
+	}
+	if params.Kind == storage.SecretTransitionRotate && !source.Bound {
+		return storage.SecretVersionTransitionResult{}, domain.Errorf(domain.ErrFailedPrecondition, "current secret version is not bound")
+	}
+	version := row.next + 1
+	payload, err := params.Encrypt(cloneMemSecretVersion(source), version)
 	if err != nil {
-		return storage.SecretBindingResult{}, err
+		return storage.SecretVersionTransitionResult{}, err
 	}
-	if err := validateMemBindingWrapping(record, wrapping, targetBound); err != nil {
-		return storage.SecretBindingResult{}, err
+	if err := validateMemSecretPayload(targetBound, payload); err != nil {
+		return storage.SecretVersionTransitionResult{}, err
 	}
 	if m.auditErr != nil {
-		return storage.SecretBindingResult{}, storage.ErrRequiredAuditUnavailable
+		return storage.SecretVersionTransitionResult{}, storage.ErrRequiredAuditUnavailable
 	}
-	record.Bound = targetBound
-	record.EncryptedDEK = bytes.Clone(wrapping.EncryptedDEK)
-	record.KEKID = wrapping.KEKID
-	record.WrapMode = wrapping.WrapMode
-	record.BindingKeySalt = bytes.Clone(wrapping.BindingKeySalt)
-	row.versions[resolved] = record
-	if row.record.Labels[domain.LabelCurrent] == resolved {
-		row.record.Bound = targetBound
+	now := m.clock()
+	record := cloneMemSecretVersion(source)
+	record.ID, record.Version = int64(version), version
+	record.Bound, record.Ciphertext = targetBound, bytes.Clone(payload.Ciphertext)
+	record.EncryptedDEK, record.KEKID = bytes.Clone(payload.EncryptedDEK), payload.KEKID
+	record.WrapMode, record.BindingKeySalt = payload.WrapMode, bytes.Clone(payload.BindingKeySalt)
+	record.Algorithm, record.Nonce, record.AAD = payload.Algorithm, bytes.Clone(payload.Nonce), payload.AAD
+	record.CreatedBy, record.CreatedAt, record.DestroyedAt = params.CreatedBy, now, time.Time{}
+	row.next, row.versions[version] = version, record
+	row.record.Labels[domain.LabelPrevious], row.record.Labels[domain.LabelCurrent] = current, version
+	row.record.Bound, row.record.ContentType, row.record.Metadata, row.record.UpdatedAt = targetBound, source.ContentType, source.Metadata, now
+	changeType, eventType := domain.ChangeBind, "secret.bind"
+	if params.Kind == storage.SecretTransitionUnbind {
+		changeType, eventType = domain.ChangeUnbind, "secret.unbind"
+	} else if params.Kind == storage.SecretTransitionRotate {
+		changeType, eventType = domain.ChangeRotateBindingKey, "secret.binding_key.rotate"
 	}
-	changeType := domain.ChangeUnbind
-	if targetBound {
-		changeType = domain.ChangeBind
-	}
-	revision := m.appendChangeLocked(domain.ChangeLogEntry{
-		ResourceType: domain.ResourceSecret, Ref: ref, ChangeType: changeType,
-		Version: resolved, AffectedVersions: []uint64{resolved},
-	})
-	m.appendBindingAuditLocked(eventType, ref, resolved, []uint64{resolved}, audit)
-	return storage.SecretBindingResult{AnchorVersion: resolved, AffectedVersions: []uint64{resolved}, Revision: revision}, nil
-}
-
-func (m *memStore) BindSecretVersion(_ context.Context, ref domain.Ref, version uint64, testNew storage.SecretBindingTestFunc, rewrap storage.SecretBindingRewrapFunc, audit storage.SecretBindingAudit) (storage.SecretBindingResult, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	return m.mutateSecretBindingLocked(ref, version, true, testNew, rewrap, "secret.bind", audit)
-}
-
-func (m *memStore) UnbindSecretVersion(_ context.Context, ref domain.Ref, version uint64, rewrap storage.SecretBindingRewrapFunc, audit storage.SecretBindingAudit) (storage.SecretBindingResult, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	return m.mutateSecretBindingLocked(ref, version, false, nil, rewrap, "secret.unbind", audit)
+	affected := []uint64{current, version}
+	revision := m.appendChangeLocked(domain.ChangeLogEntry{ResourceType: domain.ResourceSecret, Ref: params.Ref, ChangeType: changeType, Version: version, AffectedVersions: affected})
+	m.appendBindingAuditLocked(eventType, params.Ref, version, affected, params.Audit)
+	return storage.SecretVersionTransitionResult{CurrentVersion: version, PreviousVersion: current, Revision: revision}, nil
 }
 
 func (m *memStore) bindingCohortLocked(ref domain.Ref, anchor uint64, test storage.SecretBindingTestFunc) (*secretRow, uint64, []uint64, error) {
@@ -1121,7 +1110,7 @@ func validateMemBindingGuard(guard storage.SecretBindingCASGuard) error {
 		}
 		return nil
 	}
-	if len(guard.ExpectedAffectedVersions) == 0 {
+	if *guard.ExpectedRevision == 0 || len(guard.ExpectedAffectedVersions) == 0 {
 		return domain.Errorf(domain.ErrInvalidArgument, "expected revision and affected versions must be supplied together")
 	}
 	for i, version := range guard.ExpectedAffectedVersions {
@@ -1140,80 +1129,6 @@ func (m *memStore) PreviewSecretBindingCohort(_ context.Context, ref domain.Ref,
 		return storage.SecretBindingResult{}, err
 	}
 	return storage.SecretBindingResult{AnchorVersion: resolved, AffectedVersions: affected, Revision: m.revision}, nil
-}
-
-func (m *memStore) RotateSecretBindingKey(_ context.Context, ref domain.Ref, anchor uint64, guard storage.SecretBindingCASGuard, testOld, testNew storage.SecretBindingTestFunc, rewrap storage.SecretBindingRewrapFunc, audit storage.SecretBindingAudit) (storage.SecretBindingResult, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if err := validateMemBindingGuard(guard); err != nil {
-		return storage.SecretBindingResult{}, err
-	}
-	row, resolved, affected, err := m.bindingCohortLocked(ref, anchor, testOld)
-	if err != nil {
-		return storage.SecretBindingResult{}, err
-	}
-	if guard.ExpectedRevision != nil && (*guard.ExpectedRevision != m.revision || !slices.Equal(guard.ExpectedAffectedVersions, affected)) {
-		return storage.SecretBindingResult{}, domain.Errorf(domain.ErrAborted, "secret binding cohort changed")
-	}
-	if memBindingNeighborMatches(row, affected[0]-1, testNew) || memBindingNeighborMatches(row, affected[len(affected)-1]+1, testNew) {
-		return storage.SecretBindingResult{}, domain.Errorf(domain.ErrFailedPrecondition, "binding change would merge an adjacent cohort")
-	}
-	wrappings := make(map[uint64]storage.SecretBindingWrapping, len(affected))
-	oldSalts := make(map[string]struct{}, len(affected))
-	for _, version := range affected {
-		oldSalts[string(row.versions[version].BindingKeySalt)] = struct{}{}
-	}
-	seenSalts := make(map[string]struct{}, len(affected))
-	for _, version := range affected {
-		original := row.versions[version]
-		wrapping, err := rewrap(cloneMemSecretVersion(original))
-		if err != nil {
-			return storage.SecretBindingResult{}, err
-		}
-		if err := validateMemBindingWrapping(original, wrapping, true); err != nil {
-			return storage.SecretBindingResult{}, err
-		}
-		salt := string(wrapping.BindingKeySalt)
-		if _, reused := oldSalts[salt]; reused {
-			return storage.SecretBindingResult{}, domain.Errorf(domain.ErrFailedPrecondition, "binding rotation must use fresh salts")
-		}
-		if _, duplicate := seenSalts[salt]; duplicate {
-			return storage.SecretBindingResult{}, domain.Errorf(domain.ErrFailedPrecondition, "binding rotation must use independent salts")
-		}
-		seenSalts[salt] = struct{}{}
-		wrappings[version] = storage.SecretBindingWrapping{
-			EncryptedDEK:   bytes.Clone(wrapping.EncryptedDEK),
-			KEKID:          wrapping.KEKID,
-			WrapMode:       wrapping.WrapMode,
-			BindingKeySalt: bytes.Clone(wrapping.BindingKeySalt),
-		}
-	}
-	if m.auditErr != nil {
-		return storage.SecretBindingResult{}, storage.ErrRequiredAuditUnavailable
-	}
-	for _, version := range affected {
-		record := row.versions[version]
-		wrapping := wrappings[version]
-		record.EncryptedDEK = bytes.Clone(wrapping.EncryptedDEK)
-		record.KEKID = wrapping.KEKID
-		record.WrapMode = wrapping.WrapMode
-		record.BindingKeySalt = bytes.Clone(wrapping.BindingKeySalt)
-		record.Bound = true
-		row.versions[version] = record
-	}
-	revision := m.appendChangeLocked(domain.ChangeLogEntry{
-		ResourceType: domain.ResourceSecret, Ref: ref, ChangeType: domain.ChangeRotateBindingKey,
-		Version: resolved, AffectedVersions: slices.Clone(affected),
-	})
-	m.appendBindingAuditLocked("secret.binding_key.rotate", ref, resolved, affected, audit)
-	return storage.SecretBindingResult{AnchorVersion: resolved, AffectedVersions: affected, Revision: revision}, nil
-}
-
-func memBindingNeighborMatches(row *secretRow, version uint64, test storage.SecretBindingTestFunc) bool {
-	rec, ok := row.versions[version]
-	return ok && rec.State != domain.StateDestroyed && rec.Bound &&
-		rec.WrapMode == domain.WrapModeBindingKey && len(rec.BindingKeySalt) == crypto.BindingKeySaltSize &&
-		len(rec.EncryptedDEK) > 0 && rec.KEKID != "" && test(cloneMemSecretVersion(rec)) == nil
 }
 
 func (m *memStore) appendBindingAuditLocked(eventType string, ref domain.Ref, anchor uint64, affected []uint64, audit storage.SecretBindingAudit) {
@@ -1247,7 +1162,7 @@ func (m *memStore) PurgeSecretBindingCohort(_ context.Context, ref domain.Ref, a
 		return storage.SecretBindingResult{}, err
 	}
 	if guard.ExpectedRevision != nil && (*guard.ExpectedRevision != m.revision || !slices.Equal(guard.ExpectedAffectedVersions, affected)) {
-		return storage.SecretBindingResult{}, domain.Errorf(domain.ErrAborted, "secret binding cohort changed")
+		return storage.SecretBindingResult{}, domain.Errorf(domain.ErrAborted, "secret version set changed")
 	}
 	if m.auditErr != nil {
 		return storage.SecretBindingResult{}, storage.ErrRequiredAuditUnavailable
@@ -1280,6 +1195,72 @@ func (m *memStore) PurgeSecretBindingCohort(_ context.Context, ref domain.Ref, a
 		UserAgent: audit.UserAgent, RequestID: audit.RequestID, CreatedAt: now,
 	})
 	result := storage.SecretBindingResult{AnchorVersion: resolved, AffectedVersions: affected, Revision: revision}
+	if m.purgeResultErr != nil {
+		return result, m.purgeResultErr
+	}
+	return result, nil
+}
+
+func (m *memStore) PreviewSecretUnboundVersions(_ context.Context, ref domain.Ref) (storage.SecretVersionSetResult, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	row := m.secrets[ref.String()]
+	if row == nil {
+		return storage.SecretVersionSetResult{}, domain.Errorf(domain.ErrNotFound, "secret %s", ref)
+	}
+	affected := make([]uint64, 0)
+	for version, record := range row.versions {
+		if record.State != domain.StateDestroyed && !record.Bound {
+			affected = append(affected, version)
+		}
+	}
+	slices.Sort(affected)
+	if len(affected) == 0 {
+		return storage.SecretVersionSetResult{}, domain.Errorf(domain.ErrFailedPrecondition, "secret has no unbound versions")
+	}
+	return storage.SecretVersionSetResult{AffectedVersions: affected, Revision: m.revision}, nil
+}
+
+func (m *memStore) PurgeSecretUnboundVersions(_ context.Context, ref domain.Ref, expectedRevision uint64, expectedAffected []uint64, audit storage.SecretBindingPurgeAudit) (storage.SecretVersionSetResult, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	row := m.secrets[ref.String()]
+	if row == nil {
+		return storage.SecretVersionSetResult{}, domain.Errorf(domain.ErrNotFound, "secret %s", ref)
+	}
+	affected := make([]uint64, 0)
+	for version, record := range row.versions {
+		if record.State != domain.StateDestroyed && !record.Bound {
+			affected = append(affected, version)
+		}
+	}
+	slices.Sort(affected)
+	if expectedRevision == 0 || len(expectedAffected) == 0 {
+		return storage.SecretVersionSetResult{}, domain.Errorf(domain.ErrInvalidArgument, "exact preview guard is required")
+	}
+	if expectedRevision != m.revision || !slices.Equal(expectedAffected, affected) {
+		return storage.SecretVersionSetResult{}, domain.Errorf(domain.ErrAborted, "secret version set changed")
+	}
+	if m.auditErr != nil {
+		return storage.SecretVersionSetResult{}, storage.ErrRequiredAuditUnavailable
+	}
+	now := m.clock()
+	for _, version := range affected {
+		record := row.versions[version]
+		record.ContentType, record.Metadata, record.KEKID, record.WrapMode, record.Algorithm, record.AAD = "", "", "", "", "", ""
+		record.Bound, record.HasAccessToken = false, false
+		record.Ciphertext, record.EncryptedDEK, record.BindingKeySalt, record.Nonce = nil, nil, nil, nil
+		record.ExpiresAt, record.State, record.DestroyedAt = time.Time{}, domain.StateDestroyed, now
+		row.versions[version] = record
+	}
+	if slices.Contains(affected, row.record.Labels[domain.LabelCurrent]) {
+		row.record.Bound, row.record.ContentType, row.record.Metadata = false, "", ""
+	}
+	row.record.UpdatedAt = now
+	anchor := affected[0]
+	revision := m.appendChangeLocked(domain.ChangeLogEntry{ResourceType: domain.ResourceSecret, Ref: ref, ChangeType: domain.ChangePurgeUnbound, Version: anchor, AffectedVersions: slices.Clone(affected)})
+	m.appendBindingAuditLocked("secret.unbound_versions.purge", ref, anchor, affected, audit)
+	result := storage.SecretVersionSetResult{AffectedVersions: affected, Revision: revision}
 	if m.purgeResultErr != nil {
 		return result, m.purgeResultErr
 	}

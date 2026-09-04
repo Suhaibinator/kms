@@ -172,14 +172,18 @@ Binding keys are opaque valid UTF-8 of at least 32 bytes. Access-token
 generation is independent; there is no write-side secret token.
 
 The client also exposes `GetSecretMetadata`, `BindSecret`, `UnbindSecret`,
-`PreviewSecretBindingCohort`, `RotateSecretBindingKey`, and
-`PurgeSecretBindingCohort`. Version/anchor `0` selects `current`. Interactive
-or otherwise reviewed automation should preview first and call
-`RotateSecretBindingKeyIfUnchanged` or
-`PurgeSecretBindingCohortIfUnchanged`, passing the returned revision and exact
-affected versions as one compare-and-swap guard. Purge is irreversible and
-requires an administrator. Both rotation methods reject a byte-for-byte
-unchanged replacement locally as `ErrInvalidArgument` without making an RPC.
+`RotateSecretBindingKey`, `PreviewSecretBindingCohort`,
+`PurgeSecretBindingCohort`, `PreviewSecretUnboundVersions`, and
+`PurgeSecretUnboundVersions`. Bind, unbind, and rotation require the current
+version observed by the caller and return `SecretVersionTransitionResult`;
+each creates one new current version and leaves the source unchanged.
+`PurgeSecretBindingCohort` performs the legacy unguarded bound-cohort purge;
+`PurgeSecretBindingCohortIfUnchanged` accepts the exact
+`SecretBindingCohortResult` returned by its preview. Unbound purge always
+requires the exact `SecretVersionSetResult` returned by its preview. Purge is
+irreversible and requires an administrator. The server proves
+the supplied current key before rejecting a byte-for-byte unchanged rotation
+replacement, preserving the canonical credential-failure boundary.
 See [`binding-keys.md`](binding-keys.md).
 
 `SecretMetadata.Bound` summarizes the current-labeled version, while the
@@ -205,7 +209,7 @@ case errors.Is(err, kmsclient.ErrPermissionDenied):
 case errors.Is(err, kmsclient.ErrUnauthenticated):
     // missing/invalid/expired identity token
 case errors.Is(err, kmsclient.ErrFailedPrecondition):
-    // e.g. trying to bind an already-bound version
+    // e.g. trying to bind an already-bound current version
 }
 ```
 
@@ -225,8 +229,9 @@ original gRPC status error.
 
 `ErrPurgeCleanupPending` is the exceptional purge outcome: the logical purge
 transaction committed, but active SQLite/WAL cleanup is still pending. Do not
-retry with the retired binding key. gRPC cannot return a cohort result alongside
-an error, so the returned purge result is zero in this case.
+retry a bound-cohort purge with the retired binding key, or an unbound-version
+purge as though its preview were still live. gRPC cannot return a mutation
+result alongside an error, so the returned purge result is zero in this case.
 
 ## Declarative config: `SecretValue` and `ParameterValue`
 
@@ -564,7 +569,8 @@ storage. A missing required credential rejects the whole candidate as
 and `Secret`/`Secrets` accessors. Maps returned from plural accessors are
 copies. Each entry exposes exact path/version, content type, captured metadata,
 and parameter digest. Release entries carry no protection flags; those are
-looked up live on the exact secret version. `String`, every
+looked up on the exact secret version and are immutable while it remains live,
+so the pin implicitly fixes the protection mode. `String`, every
 `fmt` verb, and JSON marshaling exclude resolved parameter and secret values;
 `Secret` retains its existing `[REDACTED]` formatting.
 

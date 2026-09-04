@@ -530,9 +530,9 @@ func TestLoopbackBindingKeyAndAccessTokenAreIndependent(t *testing.T) {
 	}
 
 	unbound, err := secrets.UnbindSecret(rootCtx, &kmsv1.UnbindSecretRequest{
-		Ref: ref, Version: 1, BindingKey: integrationBindingKeyA,
+		Ref: ref, ExpectedCurrentVersion: 1, BindingKey: integrationBindingKeyA,
 	})
-	if err != nil || unbound.GetAnchorVersion() != 1 || len(unbound.GetAffectedVersions()) != 1 || unbound.GetAffectedVersions()[0] != 1 {
+	if err != nil || unbound.GetCurrentVersion() != 2 || unbound.GetPreviousVersion() != 1 {
 		t.Fatalf("UnbindSecret = %+v err=%v", unbound, err)
 	}
 	if read, err := secrets.GetSecret(rootCtx, &kmsv1.GetSecretRequest{
@@ -541,23 +541,21 @@ func TestLoopbackBindingKeyAndAccessTokenAreIndependent(t *testing.T) {
 		t.Fatalf("unbound token-only read = %q err=%v", read.GetValue(), err)
 	}
 	bound, err := secrets.BindSecret(rootCtx, &kmsv1.BindSecretRequest{
-		Ref: ref, Version: 0, BindingKey: integrationBindingKeyB,
+		Ref: ref, ExpectedCurrentVersion: 2, BindingKey: integrationBindingKeyB,
 	})
-	if err != nil || bound.GetAnchorVersion() != 1 {
+	if err != nil || bound.GetCurrentVersion() != 3 || bound.GetPreviousVersion() != 2 {
 		t.Fatalf("BindSecret = %+v err=%v", bound, err)
 	}
 	preview, err := secrets.PreviewSecretBindingCohort(rootCtx, &kmsv1.PreviewSecretBindingCohortRequest{
 		Ref: ref, AnchorVersion: 0, BindingKey: integrationBindingKeyB,
 	})
-	if err != nil || preview.GetAnchorVersion() != 1 || len(preview.GetAffectedVersions()) != 1 || preview.GetAffectedVersions()[0] != 1 {
+	if err != nil || preview.GetAnchorVersion() != 3 || len(preview.GetAffectedVersions()) != 1 || preview.GetAffectedVersions()[0] != 3 {
 		t.Fatalf("PreviewSecretBindingCohort = %+v err=%v", preview, err)
 	}
-	expectedRevision := preview.GetRevision()
 	rotated, err := secrets.RotateSecretBindingKey(rootCtx, &kmsv1.RotateSecretBindingKeyRequest{
-		Ref: ref, AnchorVersion: 1, BindingKey: integrationBindingKeyB, NewBindingKey: integrationBindingKeyC,
-		ExpectedRevision: &expectedRevision, ExpectedAffectedVersions: preview.GetAffectedVersions(),
+		Ref: ref, ExpectedCurrentVersion: 3, BindingKey: integrationBindingKeyB, NewBindingKey: integrationBindingKeyC,
 	})
-	if err != nil || rotated.GetAnchorVersion() != 1 || rotated.GetRevision() <= preview.GetRevision() {
+	if err != nil || rotated.GetCurrentVersion() != 4 || rotated.GetPreviousVersion() != 3 || rotated.GetRevision() <= preview.GetRevision() {
 		t.Fatalf("RotateSecretBindingKey = %+v err=%v", rotated, err)
 	}
 	if _, err := secrets.GetSecret(rootCtx, &kmsv1.GetSecretRequest{

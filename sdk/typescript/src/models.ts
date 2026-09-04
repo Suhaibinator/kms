@@ -50,13 +50,20 @@ export interface PutSecretResult extends PutResult {
   readonly accessToken: string;
 }
 
-export interface SecretVersionMutationResult {
-  readonly anchorVersion: bigint;
+export interface SecretVersionTransitionResult {
+  readonly currentVersion: bigint;
+  readonly previousVersion: bigint;
+  readonly revision: bigint;
+}
+
+export interface SecretVersionSetResult {
   readonly affectedVersions: readonly bigint[];
   readonly revision: bigint;
 }
 
-export type SecretBindingCohortResult = SecretVersionMutationResult;
+export interface SecretBindingCohortResult extends SecretVersionSetResult {
+  readonly anchorVersion: bigint;
+}
 
 export interface Page<T> {
   readonly items: readonly T[];

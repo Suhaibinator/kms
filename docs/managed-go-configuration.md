@@ -948,9 +948,10 @@ replicas against the new matching release, and monitor subscriber state until
 rollout completion.
 
 Secret value rotation creates a new immutable secret version and updates the
-exact secret pin in a release. Binding/unbinding rewraps one version in place
-and does not require a release re-pin; binding-key rotation operates on a
-contiguous cohort. A `reload=hot` secret pin can apply in-process; a
+exact secret pin in a release. Bind, unbind, and binding-key rotation likewise
+create one new current version and leave the source unchanged; a new release
+must explicitly pin that version. Historical binding-key cohorts are retained
+for compromised-key preview and purge. A `reload=hot` secret pin can apply in-process; a
 `reload=restart` secret pin is rejected by running replicas and adopted on the
 intended restart or rollout. Secret plaintext, access tokens, and binding keys never enter parameter
 JSON, defaults, generated schema/contract, drift reports, status, metrics, or

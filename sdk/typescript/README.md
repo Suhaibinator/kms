@@ -114,28 +114,31 @@ const previous = await client.getSecret("session-signing-key", {
 });
 ```
 
-Binding changes do not create a secret version. Cohort rotation and purge can
-be guarded by the exact revision and sorted versions returned by a preview:
+Binding changes and binding-key rotation create one new current version, so
+callers read current metadata and submit its version as a compare-and-swap
+guard. Historical versions remain unchanged under their original key:
 
 ```ts
 const bindingKey = process.env.SIGNING_KEY_BINDING_KEY!;
 const nextBindingKey = process.env.SIGNING_KEY_NEW_BINDING_KEY!;
-const preview = await client.previewSecretBindingCohort("session-signing-key", {
-  bindingKey,
-});
+const metadata = await client.getSecretMetadata("session-signing-key");
 await client.rotateSecretBindingKey("session-signing-key", {
+  expectedCurrentVersion: metadata.labels.current,
   bindingKey,
   newBindingKey: nextBindingKey,
-  expectedRevision: preview.revision,
-  expectedAffectedVersions: preview.affectedVersions,
 });
 ```
 
-The two preview guards must be supplied together. A guarded mutation rejects
-locally unless its revision is positive and its affected versions are a
-non-empty, strictly ascending list of positive `bigint` values. Rotation also
-rejects a byte-for-byte unchanged replacement locally as `ConfigError` without
-making an RPC; the server independently enforces the same rule.
+Bound-cohort purge accepts optional paired prior-preview guards; supply both
+fields or neither. Unbound-version purge requires its exact prior-preview
+guard. When guards are supplied, a purge rejects locally unless its revision is
+positive and its affected versions are a non-empty, strictly ascending list of positive `bigint` values. The
+server validates the current binding key before rejecting an identical
+replacement, so credential failures retain their canonical behavior.
+`PurgeCleanupPendingError` means either purge committed logically but active
+SQLite/WAL cleanup remains pending; no purge result accompanies the error. Do
+not retry a cohort purge with the retired key or an unbound purge as though its
+preview were still live.
 
 ## Declarative values and hot reload
 
@@ -238,7 +241,7 @@ Supply `secretTokenProvider` for access-token-gated release aliases and
 live metadata before requesting only the credentials it requires. Preparation
 errors that may contain application data are reported to the service as bounded
 rejection categories, not raw text. Secret plaintext is never read from the SDK
-cache because protection can be toggled in place.
+cache; every read is authorized by the server.
 
 ## Public policy and Next.js
 
@@ -281,12 +284,13 @@ try {
 }
 ```
 
-`PurgeCleanupPendingError` is the distinct post-commit outcome for a cohort
-purge whose SQLite artifact cleanup is still pending. The logical purge has
-already happened and KMS has failed closed, so do not retry it as though it had
-rolled back. Handle this class separately from an ordinary `unavailable` error
-and restore service by completing the documented database cleanup/reopen
-procedure.
+`PurgeCleanupPendingError` is the distinct post-commit outcome for either purge
+kind when SQLite artifact cleanup is still pending. The logical purge has
+already happened, no mutation result accompanies the error, and KMS has failed
+closed. Do not retry a bound-cohort purge with the retired key or an
+unbound-version purge as though its preview were still live. Handle this class
+separately from an ordinary `unavailable` error and restore service by completing
+the documented database cleanup/reopen procedure.
 
 `Secret`, `SecretValue`, and release secrets redact string conversion, JSON,
 and Node inspection. Their byte accessors return defensive copies. Once an

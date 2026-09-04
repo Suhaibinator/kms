@@ -111,6 +111,7 @@ const (
 	ChangeUnbind             = "unbind"
 	ChangeRotateBindingKey   = "rotate_binding_key"
 	ChangePurgeBindingCohort = "purge_binding_cohort"
+	ChangePurgeUnbound       = "purge_unbound_versions"
 )
 
 // NamespaceRef is a fixed (env, app) pair — the first-class grouping every

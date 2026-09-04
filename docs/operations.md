@@ -814,10 +814,11 @@ Type "prod/gradethis" to confirm:
 A mismatch exits `2` and the command does not act — for `admin namespace
 delete` the server is never even contacted.
 
-**Yes or no.** `restore`, `release activate`, `binding-key rotate`, and
-`secret purge-binding-cohort` ask `[y/N]` after printing what they are about to
-do. Rotate and purge first print the preview's exact affected versions; purge
-also prints an explicit irreversible/admin warning. The default is no;
+**Yes or no.** `restore`, `release activate`, `secret purge-binding-cohort`,
+and `secret purge-unbound-versions` ask `[y/N]`
+after printing what they are about to
+do. Each purge first prints the preview's exact affected versions and an
+explicit irreversible/admin warning. The default is no;
 anything but `y`/`yes` aborts with exit `2` and sends no mutation RPC.
 
 `--yes` answers both kinds. On a non-interactive stdin — a pipe, cron, a CI
@@ -1178,10 +1179,11 @@ namespace.
 | `put-parameter /env/app/key VALUE` | `--content-type` (default `string`) | Stores a new parameter version. |
 | `list ENV/APP` | `--prefix` (relative key prefix within the namespace) | Lists parameters and secrets (metadata only) in a namespace as a table: type, `/env/app/key`, current version, and content-type/bound note. Pages through the full result set. |
 | `binding-key generate` | — | Writes exactly one newly generated 256-bit Base64URL binding key plus newline to stdout, with no other output. |
-| `secret bind /env/app/key` | `--version` (`0` = current) | Binds one exact version in place using `KMS_BINDING_KEY` or a confirmed no-echo prompt. |
-| `secret unbind /env/app/key` | `--version` (`0` = current) | Unbinds one exact version in place using its current key. |
-| `binding-key rotate /env/app/key` | `--version` (`0` = current) | Obtains the current key, previews the contiguous cohort, prints exact versions, confirms, then obtains the new key separately (`KMS_BINDING_KEY`, `KMS_NEW_BINDING_KEY`) and submits the preview revision/version CAS guards. A byte-for-byte unchanged replacement is rejected locally before mutation. |
+| `secret bind /env/app/key` | — | Reads current metadata, then clones that unbound current version into one new bound current version using `KMS_BINDING_KEY` and the observed version as a CAS guard. The source remains unchanged as `previous`. |
+| `secret unbind /env/app/key` | — | Reads current metadata, then clones that bound current version into one new unbound current version using its current key and the observed version as a CAS guard. |
+| `binding-key rotate /env/app/key` | — | Reads current metadata, obtains the old and replacement keys separately (`KMS_BINDING_KEY`, `KMS_NEW_BINDING_KEY`), and directly submits the observed current version as a CAS guard. It clones only current into one new version protected by the replacement; historical versions retain the old key. The server proves the old key before rejecting a byte-for-byte unchanged replacement. |
 | `secret purge-binding-cohort /env/app/key` | `--version` (`0` = current) | **Irreversible, admin only.** Previews and confirms the exact contiguous compromised cohort, then replays CAS guards and destroys it even if releases pin those versions. |
+| `secret purge-unbound-versions /env/app/key` | — | **Irreversible, admin only.** Previews every non-destroyed unbound version (including disabled, expired, and corrupt rows), prints the exact set, confirms, then replays the mandatory revision/version-set guards and destroys it even if releases pin those versions. |
 | `exec ENV/APP -- COMMAND [ARGS...]` | `--release NAME`, `--prefix`, `--no-secrets`, `--env-prefix`, `--allow-incomplete-secrets` (namespace mode only), `--secret-token KEY=TOKEN`/`--secret-token-file KEY=PATH` (repeatable), `--preserve-env` | Runs `COMMAND` with the namespace's parameters and secrets injected as environment variables. Resolves every value first, then replaces itself with `COMMAND` (on Unix), so signals and the exit status pass straight through. See [Run any process with store values](#run-any-process-with-store-values). |
 | `env ENV/APP` | the same selection and token flags as `exec`, plus `--format dotenv\|export\|json\|yaml`, `--show`, `--out FILE`, `--force` | Prints the same variables instead of running anything, for `source <(...)`, an `EnvironmentFile=`, or a `jq` pipeline. Refuses to print to an interactive terminal unless `--show`, `--out`, or `--no-secrets` is given. |
 
@@ -1189,12 +1191,17 @@ Binding keys are opaque valid UTF-8 strings of at least 32 bytes. The CLI reads
 them only from the exact environment variables named above or from a no-echo
 terminal prompt; there is no key-file flag, key-file variable, key directory,
 or recovery source. KMS stores no key, hash, fingerprint, or cohort identity.
-Rotation and purge always preview the exact contiguous cryptographic cohort,
-confirm it, and replay both revision and affected-version CAS guards. A purge
+Bound-cohort purge previews the exact contiguous cryptographic cohort, confirms
+it, and replays both revision and affected-version CAS guards. Unbound purge
+does the same for the full unbound set without requesting a binding key.
+Transitions instead submit the current version observed immediately before the
+operation. A purge
 whose transaction committed but whose SQLite/WAL cleanup is still pending
 returns gRPC `Unavailable` with the fixed message `secret purge committed;
 database artifact cleanup is pending` and leaves the service fail-closed; do
-not repeat the purge with the retired key. See
+not repeat a bound-cohort purge with the retired key or repeat an unbound purge
+as though its preview were still live. No purge result accompanies the gRPC
+error. See
 [`binding-keys.md`](binding-keys.md).
 
 Parameter content types are literal KMS tokens: `string`, `integer`, `float`,
@@ -2375,7 +2382,7 @@ decryption errors later. Confirm `/readyz` reports ready after starting.
 | Database corrupted, no backup | Data loss. This is single-node embedded storage — back it up. |
 | **Master key lost, database intact** | **All secret versions are permanently unrecoverable, including bound versions** (which require the master key plus their binding key). There is no escrow, recovery mechanism, or support path. Parameters and metadata are unaffected. The KEK-wrapped CA private key is also unrecoverable, so the old instance cannot start; a replacement instance bootstraps a new CA and all client certificates must be re-issued. This is why the key backup procedure above must never be skipped. |
 | **A binding key is lost** | The contiguous version cohorts wrapped by that key are permanently unreadable even with the master key and database intact. KMS stores no key, hash, fingerprint, or recovery copy. |
-| **A binding key is compromised** | Rotate or revoke the upstream application secret, preview the cohort around a known affected version, then use the admin-only guarded `secret purge-binding-cohort`. Restart or replace every affected workload to discard process-held plaintext. Separately expire backups, snapshots, copy-on-write copies, and replicas; active-database scrubbing cannot retract them. If the incident may also have exposed an application's KMS identity token or client certificate and private key, revoke or rotate those credentials too. |
+| **A binding key is compromised** | Rotate current to a new binding key, create and activate a release that pins the new version, retire old releases, then preview the old cohort around a known affected version and use the admin-only guarded `secret purge-binding-cohort`. Historical versions keep requiring the old key until purged. Restart or replace every affected workload to discard process-held plaintext. Separately expire backups, snapshots, copy-on-write copies, and replicas; active-database scrubbing cannot retract them. If the incident may also have exposed an application's KMS identity token or client certificate and private key, revoke or rotate those credentials too. |
 | Wrong master key / passphrase supplied | Startup fails immediately at the key-check step (`VerifyKeyCheck`) with an actionable error — the service will not start in a half-unsealed state. |
 
 ## KEK rotation

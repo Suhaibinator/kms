@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 
 	"github.com/Suhaibinator/kms/internal/crypto"
 	"github.com/Suhaibinator/kms/internal/domain"
@@ -21,6 +22,7 @@ const (
 	unbindSecretAuditEvent       = "secret.unbind"
 	rotateBindingKeyAuditEvent   = "secret.binding_key.rotate"
 	purgeBindingCohortAuditEvent = "secret.binding_cohort.purge"
+	purgeUnboundAuditEvent       = "secret.unbound_versions.purge"
 )
 
 type purgeCleanupPendingError struct {
@@ -93,25 +95,6 @@ func validStandardWrapping(row secretVersionModel) bool {
 		row.KEKID != ""
 }
 
-func validateBindingWrapping(original secretVersionModel, got SecretBindingWrapping, targetBound bool) error {
-	if got.KEKID == "" || got.KEKID != original.KEKID {
-		return domain.Errorf(domain.ErrFailedPrecondition, "binding rewrap must preserve the version KEK")
-	}
-	if len(got.EncryptedDEK) == 0 {
-		return domain.Errorf(domain.ErrFailedPrecondition, "binding rewrap returned an empty encrypted DEK")
-	}
-	if targetBound {
-		if got.WrapMode != domain.WrapModeBindingKey || len(got.BindingKeySalt) != crypto.BindingKeySaltSize {
-			return domain.Errorf(domain.ErrFailedPrecondition, "binding rewrap returned invalid bound wrapping metadata")
-		}
-		return nil
-	}
-	if got.WrapMode != domain.WrapModeStandard || len(got.BindingKeySalt) != 0 {
-		return domain.Errorf(domain.ErrFailedPrecondition, "binding rewrap returned invalid standard wrapping metadata")
-	}
-	return nil
-}
-
 func affectedVersionsJSON(versions []uint64) (string, error) {
 	b, err := json.Marshal(versions)
 	if err != nil {
@@ -136,38 +119,6 @@ func appendSecretBindingChange(tx *gorm.DB, sec secretModel, ref domain.Ref, cha
 		AffectedVersionsJSON: encoded,
 		CreatedAt:            fmtTime(createdAt),
 	})
-}
-
-func updateSecretBindingTimestamp(tx *gorm.DB, sec secretModel, at time.Time) error {
-	updated := tx.Model(&secretModel{}).Where("id = ? AND namespace_id = ? AND name = ?", sec.ID, sec.NamespaceID, sec.Name).
-		Update("updated_at", fmtTime(at))
-	if updated.Error != nil {
-		return updated.Error
-	}
-	if updated.RowsAffected != 1 {
-		return domain.Errorf(domain.ErrAborted, "secret changed concurrently; retry")
-	}
-	return nil
-}
-
-func updateSecretWrapping(tx *gorm.DB, row secretVersionModel, wrapping SecretBindingWrapping, targetBound bool) error {
-	updated := tx.Model(&secretVersionModel{}).
-		Where("id = ? AND secret_id = ? AND version_number = ? AND state <> ? AND bound = ? AND kek_id = ?",
-			row.ID, row.SecretID, row.VersionNumber, domain.StateDestroyed, row.Bound, row.KEKID).
-		Updates(map[string]any{
-			"bound":            b2i(targetBound),
-			"encrypted_dek":    bytes.Clone(wrapping.EncryptedDEK),
-			"kek_id":           wrapping.KEKID,
-			"wrap_mode":        wrapping.WrapMode,
-			"binding_key_salt": bytes.Clone(wrapping.BindingKeySalt),
-		})
-	if updated.Error != nil {
-		return updated.Error
-	}
-	if updated.RowsAffected != 1 {
-		return domain.Errorf(domain.ErrAborted, "secret version changed concurrently; retry")
-	}
-	return nil
 }
 
 func appendSecretBindingAllowAudit(tx *gorm.DB, eventType string, sec secretModel, ref domain.Ref, anchor uint64, affected []uint64, audit SecretBindingAudit, fallbackCreatedAt time.Time) error {
@@ -201,116 +152,155 @@ func appendSecretBindingAllowAudit(tx *gorm.DB, eventType string, sec secretMode
 	return nil
 }
 
-func (s *SQLStore) mutateExactSecretBinding(ctx context.Context, ref domain.Ref, version uint64, targetBound bool, testNew SecretBindingTestFunc, rewrap SecretBindingRewrapFunc, audit SecretBindingAudit) (SecretBindingResult, error) {
-	if rewrap == nil {
-		return SecretBindingResult{}, domain.Errorf(domain.ErrInvalidArgument, "binding rewrap callback is required")
+// TransitionSecretVersion clones the current source into a new immutable
+// high-water version. The source row itself is never updated.
+func (s *SQLStore) TransitionSecretVersion(ctx context.Context, p SecretVersionTransitionParams) (SecretVersionTransitionResult, error) {
+	if p.ExpectedCurrentVersion == 0 {
+		return SecretVersionTransitionResult{}, domain.Errorf(domain.ErrInvalidArgument, "expected current version is required")
 	}
-	if targetBound && testNew == nil {
-		return SecretBindingResult{}, domain.Errorf(domain.ErrInvalidArgument, "binding test callback is required")
+	if p.Encrypt == nil {
+		return SecretVersionTransitionResult{}, domain.Errorf(domain.ErrInvalidArgument, "transition encryption callback is required")
 	}
-	var result SecretBindingResult
+	targetBound := false
+	changeType := ""
+	auditEvent := ""
+	switch p.Kind {
+	case SecretTransitionBind:
+		targetBound, changeType, auditEvent = true, domain.ChangeBind, bindSecretAuditEvent
+	case SecretTransitionUnbind:
+		changeType, auditEvent = domain.ChangeUnbind, unbindSecretAuditEvent
+	case SecretTransitionRotate:
+		targetBound, changeType, auditEvent = true, domain.ChangeRotateBindingKey, rotateBindingKeyAuditEvent
+	default:
+		return SecretVersionTransitionResult{}, domain.Errorf(domain.ErrInvalidArgument, "invalid secret protection transition")
+	}
+
+	var result SecretVersionTransitionResult
 	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		sec, row, err := resolveBindingVersion(tx, ref, version)
+		sec, source, err := resolveBindingVersion(tx, p.Ref, 0)
 		if err != nil {
 			return err
 		}
-		if row.State == domain.StateDestroyed {
-			return domain.Errorf(domain.ErrFailedPrecondition, "secret %s version %d is destroyed", ref, row.VersionNumber)
+		if uint64(source.VersionNumber) != p.ExpectedCurrentVersion {
+			return domain.Errorf(domain.ErrAborted, "secret %s current version changed; retry", p.Ref)
 		}
-		if targetBound {
-			if i2b(row.Bound) {
-				return domain.Errorf(domain.ErrFailedPrecondition, "secret %s version %d is already bound", ref, row.VersionNumber)
+		if source.State == domain.StateDestroyed || source.DestroyedAt != nil {
+			return domain.Errorf(domain.ErrFailedPrecondition, "secret %s current version %d is destroyed", p.Ref, source.VersionNumber)
+		}
+		if p.Kind == SecretTransitionBind {
+			if i2b(source.Bound) {
+				return domain.Errorf(domain.ErrFailedPrecondition, "secret %s current version %d is already bound", p.Ref, source.VersionNumber)
 			}
-			if !validStandardWrapping(row) {
-				return domain.Errorf(domain.ErrFailedPrecondition, "secret %s version %d has invalid wrapping metadata", ref, row.VersionNumber)
+			if !validStandardWrapping(source) {
+				return domain.Errorf(domain.ErrFailedPrecondition, "secret %s current version %d has invalid wrapping metadata", p.Ref, source.VersionNumber)
 			}
-			if err := rejectSecretBindingCohortMerge(tx, sec.ID, row.VersionNumber-1, row.VersionNumber+1, testNew); err != nil {
-				return err
-			}
-		} else {
-			if !i2b(row.Bound) {
-				return domain.Errorf(domain.ErrFailedPrecondition, "secret %s version %d is not bound", ref, row.VersionNumber)
-			}
-			if !validBoundWrapping(row) {
-				return domain.Errorf(domain.ErrFailedPrecondition, "secret %s version %d has invalid wrapping metadata", ref, row.VersionNumber)
-			}
+		} else if !i2b(source.Bound) {
+			return domain.Errorf(domain.ErrFailedPrecondition, "secret %s current version %d is not bound", p.Ref, source.VersionNumber)
+		} else if !validBoundWrapping(source) {
+			return domain.Errorf(domain.ErrFailedPrecondition, "secret %s current version %d has invalid wrapping metadata", p.Ref, source.VersionNumber)
 		}
 
-		wrapping, err := rewrap(bindingCallbackRecord(row))
+		var highWater secretVersionHighWaterModel
+		if err := tx.Where("namespace_id = ? AND name = ?", sec.NamespaceID, sec.Name).First(&highWater).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return domain.Errorf(domain.ErrFailedPrecondition, "secret %s version high-water mark is missing", p.Ref)
+			}
+			return err
+		}
+		if highWater.LastVersion == math.MaxInt64 {
+			return domain.Errorf(domain.ErrFailedPrecondition, "secret %s version space exhausted", p.Ref)
+		}
+		newVersion := uint64(highWater.LastVersion + 1)
+		payload, err := p.Encrypt(bindingCallbackRecord(source), newVersion)
 		if err != nil {
 			return err
 		}
-		if err := validateBindingWrapping(row, wrapping, targetBound); err != nil {
+		if err := validateSecretPayloadWrapping(targetBound, payload); err != nil {
 			return err
 		}
-		if targetBound && bytes.Equal(wrapping.BindingKeySalt, row.BindingKeySalt) {
-			return domain.Errorf(domain.ErrFailedPrecondition, "binding rewrap must use a fresh salt")
+		if len(payload.Ciphertext) == 0 || len(payload.EncryptedDEK) == 0 || len(payload.Nonce) == 0 || payload.AAD == "" || payload.Algorithm == "" {
+			return domain.Errorf(domain.ErrFailedPrecondition, "transition encryption returned incomplete cryptographic material")
 		}
-		if err := updateSecretWrapping(tx, row, wrapping, targetBound); err != nil {
+		if bytes.Equal(payload.Ciphertext, source.Ciphertext) || bytes.Equal(payload.EncryptedDEK, source.EncryptedDEK) || bytes.Equal(payload.Nonce, source.Nonce) || payload.AAD == source.AAD {
+			return domain.Errorf(domain.ErrFailedPrecondition, "transition encryption must use fresh cryptographic material and version-bound AAD")
+		}
+		if targetBound && bytes.Equal(payload.BindingKeySalt, source.BindingKeySalt) {
+			return domain.Errorf(domain.ErrFailedPrecondition, "transition encryption must use a fresh binding salt")
+		}
+		var active keyMetadataModel
+		if err := tx.Where("state = ?", domain.KeyStateActive).Order("created_at DESC, id DESC").First(&active).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return domain.Errorf(domain.ErrFailedPrecondition, "no active KEK for secret transition")
+			}
 			return err
 		}
+		if payload.KEKID != active.ID {
+			return domain.Errorf(domain.ErrFailedPrecondition, "active KEK changed during secret transition; retry")
+		}
+
 		now := nowUTC()
-		if err := updateSecretBindingTimestamp(tx, sec, now); err != nil {
+		row := secretVersionModel{
+			SecretID:       sec.ID,
+			VersionNumber:  int64(newVersion),
+			ContentType:    source.ContentType,
+			Bound:          b2i(targetBound),
+			HasAccessToken: source.HasAccessToken,
+			Ciphertext:     bytes.Clone(payload.Ciphertext),
+			EncryptedDEK:   bytes.Clone(payload.EncryptedDEK),
+			KEKID:          payload.KEKID,
+			WrapMode:       payload.WrapMode,
+			BindingKeySalt: bytes.Clone(payload.BindingKeySalt),
+			Algorithm:      payload.Algorithm,
+			Nonce:          bytes.Clone(payload.Nonce),
+			AAD:            payload.AAD,
+			State:          source.State,
+			CreatedBy:      p.CreatedBy,
+			CreatedAt:      fmtTime(now),
+			ExpiresAt:      source.ExpiresAt,
+			MetadataJSON:   source.MetadataJSON,
+		}
+		if err := tx.Omit(clause.Associations).Create(&row).Error; err != nil {
 			return err
 		}
-		affected := []uint64{uint64(row.VersionNumber)}
-		changeType := domain.ChangeUnbind
-		if targetBound {
-			changeType = domain.ChangeBind
+		updatedHighWater := tx.Model(&secretVersionHighWaterModel{}).
+			Where("namespace_id = ? AND name = ? AND last_version = ?", sec.NamespaceID, sec.Name, highWater.LastVersion).
+			Update("last_version", int64(newVersion))
+		if updatedHighWater.Error != nil {
+			return updatedHighWater.Error
 		}
-		revision, err := appendSecretBindingChange(tx, sec, ref, changeType, affected[0], affected, now)
+		if updatedHighWater.RowsAffected != 1 {
+			return domain.Errorf(domain.ErrAborted, "secret %s changed concurrently; retry", p.Ref)
+		}
+		if err := setSecretLabel(tx, sec.ID, domain.LabelCurrent, newVersion); err != nil {
+			return err
+		}
+		if err := setSecretLabel(tx, sec.ID, domain.LabelPrevious, uint64(source.VersionNumber)); err != nil {
+			return err
+		}
+		updatedSecret := tx.Model(&secretModel{}).
+			Where("id = ? AND namespace_id = ? AND name = ?", sec.ID, sec.NamespaceID, sec.Name).
+			Updates(map[string]any{"content_type": source.ContentType, "metadata_json": source.MetadataJSON, "updated_at": fmtTime(now)})
+		if updatedSecret.Error != nil {
+			return updatedSecret.Error
+		}
+		if updatedSecret.RowsAffected != 1 {
+			return domain.Errorf(domain.ErrAborted, "secret %s changed concurrently; retry", p.Ref)
+		}
+		affected := []uint64{uint64(source.VersionNumber), newVersion}
+		revision, err := appendSecretBindingChange(tx, sec, p.Ref, changeType, newVersion, affected, now)
 		if err != nil {
 			return err
 		}
-		auditEvent := unbindSecretAuditEvent
-		if targetBound {
-			auditEvent = bindSecretAuditEvent
-		}
-		if err := appendSecretBindingAllowAudit(tx, auditEvent, sec, ref, affected[0], affected, audit, now); err != nil {
+		if err := appendSecretBindingAllowAudit(tx, auditEvent, sec, p.Ref, newVersion, affected, p.Audit, now); err != nil {
 			return err
 		}
-		result = SecretBindingResult{AnchorVersion: affected[0], AffectedVersions: affected, Revision: revision}
+		result = SecretVersionTransitionResult{CurrentVersion: newVersion, PreviousVersion: uint64(source.VersionNumber), Revision: revision}
 		return nil
 	})
 	if err != nil {
-		return SecretBindingResult{}, err
+		return SecretVersionTransitionResult{}, err
 	}
 	return result, nil
-}
-
-// BindSecretVersion adds a binding-key wrapping layer to one exact version.
-func (s *SQLStore) BindSecretVersion(ctx context.Context, ref domain.Ref, version uint64, testNew SecretBindingTestFunc, rewrap SecretBindingRewrapFunc, audit SecretBindingAudit) (SecretBindingResult, error) {
-	return s.mutateExactSecretBinding(ctx, ref, version, true, testNew, rewrap, audit)
-}
-
-// UnbindSecretVersion removes a binding-key wrapping layer from one exact
-// version after the callback has authenticated and opened it.
-func (s *SQLStore) UnbindSecretVersion(ctx context.Context, ref domain.Ref, version uint64, rewrap SecretBindingRewrapFunc, audit SecretBindingAudit) (SecretBindingResult, error) {
-	return s.mutateExactSecretBinding(ctx, ref, version, false, nil, rewrap, audit)
-}
-
-// rejectSecretBindingCohortMerge checks only the immediate numeric neighbors
-// outside a binding mutation. Missing, destroyed, unbound, and structurally
-// corrupt rows remain hard cohort boundaries. A callback failure means the
-// proposed key does not open that neighbor and is intentionally not surfaced.
-func rejectSecretBindingCohortMerge(tx *gorm.DB, secretID, lower, upper int64, testNew SecretBindingTestFunc) error {
-	for _, version := range []int64{lower, upper} {
-		if version <= 0 {
-			continue
-		}
-		var row secretVersionModel
-		err := tx.Where("secret_id = ? AND version_number = ?", secretID, version).First(&row).Error
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			continue
-		}
-		if err != nil {
-			return err
-		}
-		if validBoundWrapping(row) && testNew(bindingCallbackRecord(row)) == nil {
-			return domain.Errorf(domain.ErrFailedPrecondition, "binding change would merge an adjacent cohort")
-		}
-	}
-	return nil
 }
 
 // discoverSecretBindingCohort validates the anchor first, then scans adjacent
@@ -387,7 +377,7 @@ func validateSecretBindingGuard(guard SecretBindingCASGuard) error {
 		}
 		return nil
 	}
-	if len(guard.ExpectedAffectedVersions) == 0 {
+	if *guard.ExpectedRevision == 0 || len(guard.ExpectedAffectedVersions) == 0 {
 		return domain.Errorf(domain.ErrInvalidArgument, "expected revision and affected versions must be supplied together")
 	}
 	var previous uint64
@@ -414,7 +404,7 @@ func checkSecretBindingGuard(guard SecretBindingCASGuard, revision uint64, affec
 		return nil
 	}
 	if *guard.ExpectedRevision != revision || !slices.Equal(guard.ExpectedAffectedVersions, affected) {
-		return domain.Errorf(domain.ErrAborted, "secret binding cohort changed; preview and retry")
+		return domain.Errorf(domain.ErrAborted, "secret version set changed; preview and retry")
 	}
 	return nil
 }
@@ -469,98 +459,49 @@ func (s *SQLStore) PreviewSecretBindingCohort(ctx context.Context, ref domain.Re
 	return result, nil
 }
 
-// RotateSecretBindingKey rewraps every member of the rediscovered cohort in
-// one transaction while preserving each version's KEK and value payload.
-func (s *SQLStore) RotateSecretBindingKey(ctx context.Context, ref domain.Ref, anchor uint64, guard SecretBindingCASGuard, testOld, testNew SecretBindingTestFunc, rewrapNew SecretBindingRewrapFunc, audit SecretBindingAudit) (SecretBindingResult, error) {
-	if testOld == nil || testNew == nil || rewrapNew == nil {
-		return SecretBindingResult{}, domain.Errorf(domain.ErrInvalidArgument, "binding test and rewrap callbacks are required")
-	}
-	guard = cloneSecretBindingGuard(guard)
-	if err := validateSecretBindingGuard(guard); err != nil {
-		return SecretBindingResult{}, err
-	}
-	var result SecretBindingResult
-	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		sec, resolvedAnchor, rows, err := discoverSecretBindingCohort(tx, ref, anchor, testOld)
-		if err != nil {
-			return err
-		}
-		affected := bindingVersions(rows)
-		currentRevision, err := s.currentRevision(tx)
-		if err != nil {
-			return err
-		}
-		if err := checkSecretBindingGuard(guard, currentRevision, affected); err != nil {
-			return err
-		}
-		if err := rejectSecretBindingCohortMerge(tx, sec.ID, rows[0].VersionNumber-1, rows[len(rows)-1].VersionNumber+1, testNew); err != nil {
-			return err
-		}
-
-		wrappings := make([]SecretBindingWrapping, len(rows))
-		oldSalts := make(map[string]struct{}, len(rows))
-		for _, row := range rows {
-			oldSalts[string(row.BindingKeySalt)] = struct{}{}
-		}
-		seenSalts := make(map[string]struct{}, len(rows))
-		for i, row := range rows {
-			wrapping, err := rewrapNew(bindingCallbackRecord(row))
-			if err != nil {
-				return err
-			}
-			if err := validateBindingWrapping(row, wrapping, true); err != nil {
-				return err
-			}
-			saltKey := string(wrapping.BindingKeySalt)
-			if _, reused := oldSalts[saltKey]; reused {
-				return domain.Errorf(domain.ErrFailedPrecondition, "binding rotation must use fresh salts")
-			}
-			if _, duplicate := seenSalts[saltKey]; duplicate {
-				return domain.Errorf(domain.ErrFailedPrecondition, "binding rotation must use independent salts")
-			}
-			seenSalts[saltKey] = struct{}{}
-			wrappings[i] = SecretBindingWrapping{
-				EncryptedDEK:   bytes.Clone(wrapping.EncryptedDEK),
-				KEKID:          wrapping.KEKID,
-				WrapMode:       wrapping.WrapMode,
-				BindingKeySalt: bytes.Clone(wrapping.BindingKeySalt),
-			}
-		}
-		for i, row := range rows {
-			if err := updateSecretWrapping(tx, row, wrappings[i], true); err != nil {
-				return err
-			}
-		}
-		now := nowUTC()
-		if err := updateSecretBindingTimestamp(tx, sec, now); err != nil {
-			return err
-		}
-		revision, err := appendSecretBindingChange(tx, sec, ref, domain.ChangeRotateBindingKey, resolvedAnchor, affected, now)
-		if err != nil {
-			return err
-		}
-		if err := appendSecretBindingAllowAudit(tx, rotateBindingKeyAuditEvent, sec, ref, resolvedAnchor, affected, audit, now); err != nil {
-			return err
-		}
-		result = SecretBindingResult{AnchorVersion: resolvedAnchor, AffectedVersions: affected, Revision: revision}
-		return nil
-	})
+func discoverSecretUnboundVersions(tx *gorm.DB, ref domain.Ref) (secretModel, uint64, []secretVersionModel, error) {
+	sec, err := (&SQLStore{}).findSecret(tx, ref)
 	if err != nil {
-		return SecretBindingResult{}, err
+		return secretModel{}, 0, nil, err
+	}
+	var rows []secretVersionModel
+	if err := tx.Where("secret_id = ? AND state <> ? AND bound = ?", sec.ID, domain.StateDestroyed, int64(0)).
+		Order("version_number ASC").Find(&rows).Error; err != nil {
+		return secretModel{}, 0, nil, err
+	}
+	if len(rows) == 0 {
+		return secretModel{}, 0, nil, domain.Errorf(domain.ErrFailedPrecondition, "secret %s has no unbound versions to purge", ref)
+	}
+	return sec, uint64(rows[0].VersionNumber), rows, nil
+}
+
+// PreviewSecretUnboundVersions returns every non-destroyed unbound version,
+// regardless of usability of its cryptographic material.
+func (s *SQLStore) PreviewSecretUnboundVersions(ctx context.Context, ref domain.Ref) (SecretVersionSetResult, error) {
+	var result SecretVersionSetResult
+	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		_, _, rows, err := discoverSecretUnboundVersions(tx, ref)
+		if err != nil {
+			return err
+		}
+		revision, err := s.currentRevision(tx)
+		if err != nil {
+			return err
+		}
+		result = SecretVersionSetResult{AffectedVersions: bindingVersions(rows), Revision: revision}
+		return nil
+	}, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return SecretVersionSetResult{}, err
 	}
 	return result, nil
 }
 
-// PurgeSecretBindingCohort irreversibly replaces each selected row with a
-// minimal tombstone. It intentionally does not consult release references.
-func (s *SQLStore) PurgeSecretBindingCohort(ctx context.Context, ref domain.Ref, anchor uint64, guard SecretBindingCASGuard, test SecretBindingTestFunc, audit SecretBindingPurgeAudit) (SecretBindingResult, error) {
-	if test == nil {
-		return SecretBindingResult{}, domain.Errorf(domain.ErrInvalidArgument, "binding test callback is required")
-	}
-	guard = cloneSecretBindingGuard(guard)
-	if err := validateSecretBindingGuard(guard); err != nil {
-		return SecretBindingResult{}, err
-	}
+type purgeSecretVersionSelector func(tx *gorm.DB) (secretModel, uint64, []secretVersionModel, error)
+
+// purgeSecretVersions is the common secure-erasure transaction and WAL scrub
+// used by bound-cohort and unbound-set purge operations.
+func (s *SQLStore) purgeSecretVersions(ctx context.Context, ref domain.Ref, guard SecretBindingCASGuard, selectRows purgeSecretVersionSelector, changeType, auditEvent string, audit SecretBindingPurgeAudit) (SecretBindingResult, error) {
 
 	// Pin our connection first, then drain the rest of the database/sql pool.
 	// Max-idle must be zero: otherwise database/sql can retain and hand out an
@@ -594,7 +535,7 @@ func (s *SQLStore) PurgeSecretBindingCohort(ctx context.Context, ref domain.Ref,
 			return err
 		}
 		if err := conn.Transaction(func(tx *gorm.DB) error {
-			sec, resolvedAnchor, rows, err := discoverSecretBindingCohort(tx, ref, anchor, test)
+			sec, resolvedAnchor, rows, err := selectRows(tx)
 			if err != nil {
 				return err
 			}
@@ -610,8 +551,8 @@ func (s *SQLStore) PurgeSecretBindingCohort(ctx context.Context, ref domain.Ref,
 			now := nowUTC()
 			for _, row := range rows {
 				updated := tx.Model(&secretVersionModel{}).
-					Where("id = ? AND secret_id = ? AND version_number = ? AND state <> ? AND bound = ? AND kek_id = ?",
-						row.ID, row.SecretID, row.VersionNumber, domain.StateDestroyed, row.Bound, row.KEKID).
+					Where("id = ? AND secret_id = ? AND version_number = ? AND state <> ? AND bound = ?",
+						row.ID, row.SecretID, row.VersionNumber, domain.StateDestroyed, row.Bound).
 					Updates(map[string]any{
 						"content_type":     "",
 						"bound":            int64(0),
@@ -656,11 +597,11 @@ func (s *SQLStore) PurgeSecretBindingCohort(ctx context.Context, ref domain.Ref,
 			if updatedSecret.RowsAffected != 1 {
 				return domain.Errorf(domain.ErrAborted, "secret changed concurrently; retry")
 			}
-			revision, err := appendSecretBindingChange(tx, sec, ref, domain.ChangePurgeBindingCohort, resolvedAnchor, affected, now)
+			revision, err := appendSecretBindingChange(tx, sec, ref, changeType, resolvedAnchor, affected, now)
 			if err != nil {
 				return err
 			}
-			if err := appendSecretBindingAllowAudit(tx, purgeBindingCohortAuditEvent, sec, ref, resolvedAnchor, affected, audit, now); err != nil {
+			if err := appendSecretBindingAllowAudit(tx, auditEvent, sec, ref, resolvedAnchor, affected, audit, now); err != nil {
 				return err
 			}
 			result = SecretBindingResult{AnchorVersion: resolvedAnchor, AffectedVersions: affected, Revision: revision}
@@ -693,4 +634,36 @@ func (s *SQLStore) PurgeSecretBindingCohort(ctx context.Context, ref domain.Ref,
 		return SecretBindingResult{}, err
 	}
 	return result, nil
+}
+
+// PurgeSecretBindingCohort irreversibly replaces each selected row with a
+// minimal tombstone. It intentionally does not consult release references.
+func (s *SQLStore) PurgeSecretBindingCohort(ctx context.Context, ref domain.Ref, anchor uint64, guard SecretBindingCASGuard, test SecretBindingTestFunc, audit SecretBindingPurgeAudit) (SecretBindingResult, error) {
+	if test == nil {
+		return SecretBindingResult{}, domain.Errorf(domain.ErrInvalidArgument, "binding test callback is required")
+	}
+	guard = cloneSecretBindingGuard(guard)
+	if err := validateSecretBindingGuard(guard); err != nil {
+		return SecretBindingResult{}, err
+	}
+	return s.purgeSecretVersions(ctx, ref, guard, func(tx *gorm.DB) (secretModel, uint64, []secretVersionModel, error) {
+		return discoverSecretBindingCohort(tx, ref, anchor, test)
+	}, domain.ChangePurgeBindingCohort, purgeBindingCohortAuditEvent, audit)
+}
+
+// PurgeSecretUnboundVersions irreversibly tombstones the exact set returned by
+// a prior preview. Both guards are mandatory.
+func (s *SQLStore) PurgeSecretUnboundVersions(ctx context.Context, ref domain.Ref, expectedRevision uint64, expectedAffectedVersions []uint64, audit SecretBindingPurgeAudit) (SecretVersionSetResult, error) {
+	revision := expectedRevision
+	guard := cloneSecretBindingGuard(SecretBindingCASGuard{
+		ExpectedRevision:         &revision,
+		ExpectedAffectedVersions: expectedAffectedVersions,
+	})
+	if err := validateSecretBindingGuard(guard); err != nil {
+		return SecretVersionSetResult{}, err
+	}
+	result, err := s.purgeSecretVersions(ctx, ref, guard, func(tx *gorm.DB) (secretModel, uint64, []secretVersionModel, error) {
+		return discoverSecretUnboundVersions(tx, ref)
+	}, domain.ChangePurgeUnbound, purgeUnboundAuditEvent, audit)
+	return SecretVersionSetResult{AffectedVersions: slices.Clone(result.AffectedVersions), Revision: result.Revision}, err
 }

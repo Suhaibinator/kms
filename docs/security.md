@@ -44,8 +44,7 @@ encrypted_dek                (stored in secret_versions.encrypted_dek)
 Implementation: `internal/crypto/aead.go` (`seal`/`open`, `sealPacked`/
 `openPacked` — nonce and ciphertext packed as `nonce || ciphertext`, GCM tag
 appended by the cipher) and `internal/crypto/envelope.go` (`Encrypt`,
-`EncryptBindingKey`, `Decrypt`, `BindDEK`, `UnbindDEK`,
-`RotateBindingKeyDEK`, `RewrapDEK`). The only algorithm implemented
+`EncryptBindingKey`, `Decrypt`, `RewrapDEK`). The only algorithm implemented
 is AES-256-GCM (`crypto.AlgorithmAES256GCM`); there is no unauthenticated
 mode and no custom cipher.
 
@@ -224,31 +223,48 @@ encrypted layers are persisted. Derived mutable key, DEK, and inner buffers
 are zeroed promptly. Missing and incorrect credentials collapse to the same
 sanitized boundary and no error or audit event echoes request material.
 
-Binding is a live per-version property. Bind and unbind rewrap the selected
-DEK in place without changing the version number, value ciphertext, or KEK ID.
-Rotation discovers and atomically rewraps a contiguous cohort using fresh
-independent salts. Cohort membership is proved only by opening adjacent bound
-versions with the supplied key and stops at the first boundary; KMS stores no
-cohort identifier. Exact-version bind and cohort rotation test the proposed
-key against their immediate outside neighbors inside the transaction and
-reject an implicit cohort merge before any rewrap. Hard boundaries still
-permit non-adjacent reuse of the same key.
+`bound` and `has_access_token` are immutable while a version is live. Bind,
+unbind, and binding-key rotation clone the current version into one new
+high-water current version and leave the source unchanged as `previous`. The
+clone is fully decrypted and re-encrypted with a fresh DEK, nonce, ciphertext,
+version-bound AAD, active KEK, and binding salt where applicable. Its plaintext,
+content type, metadata, enabled/disabled state, expiry, and token requirement
+are preserved; creation identity and time are fresh. A required
+`expected_current_version` guard makes concurrent current changes abort without
+side effects.
+
+Rotation changes only the new current version. Historical bound versions keep
+their original key. Cohort membership remains useful for compromised-key purge:
+it is proved only by opening adjacent bound versions with the supplied key and
+stops at the first boundary; KMS stores no cohort identifier.
 
 An administrator can preview and irreversibly purge the contiguous cohort for
-a compromised key. The mutation replays the preview revision and exact
-affected-version list as compare-and-swap guards, bypasses immutable-release
-deletion protection, leaves minimal tombstones, and preserves labels. Ordinary
-success is not returned until SQLite secure deletion and a truncating WAL
-checkpoint have removed the payload from the active database artifacts. This
-cannot retract backups, snapshots, copy-on-write layers, replicas, or raw-media
-remanence. The full credential, cohort, API, and physical-erasure contract is
-in [`binding-keys.md`](binding-keys.md).
+a compromised key. Callers may replay the preview revision and exact
+affected-version list as compare-and-swap guards; the CLI and console always
+do so. Purge bypasses immutable-release deletion protection, leaves minimal
+tombstones, and preserves labels. Ordinary success is not returned until
+SQLite secure deletion and a truncating WAL checkpoint have removed the
+payload from the active database artifacts. This cannot retract backups,
+snapshots, copy-on-write layers, replicas, or raw-media remanence. The full
+credential, cohort, API, and physical-erasure contract is in
+[`binding-keys.md`](binding-keys.md).
+
+The same administrator can separately preview and purge every non-destroyed
+unbound version of one secret. The preview includes disabled, expired, and
+cryptographically corrupt rows and is mandatory: the purge replays both the
+global revision and exact sorted version set. Both purge kinds require
+administrator status plus `secret:destroy`, checked before lookup. They erase
+all cryptographic and descriptive payload fields, retain only minimal
+tombstones and labels, do not auto-promote, and clear the current projection if
+current is purged.
 
 Access tokens remain completely independent. A version may be bound,
 token-gated, both, or neither. The access-token hash is never used as binding
-key material, and changing one credential does not rotate the other. SDK read
-caches are parameter-only: secret plaintext is never cached, so a live bind or
-token transition cannot be bypassed by a previously uncredentialed read.
+key material, and changing one credential does not rotate the other. A future
+protection-mode toggle must create another version. Access-token credential
+rotation may replace which token opens gated versions but may never remove a
+live version's `has_access_token` requirement. SDK read caches are
+parameter-only: secret plaintext is never cached.
 
 ## Token model
 
@@ -625,8 +641,9 @@ parameter and secret RPCs and their existing authorization and cryptographic
 checks.
 
 Secret entries capture only the exact version's resource identity, content
-type, and non-sensitive metadata. Live `bound` and `has_access_token` flags are
-absent from release rows and digests. Secret plaintext, token hashes, plaintext
+type, and non-sensitive metadata. Immutable per-live-version `bound` and
+`has_access_token` flags are absent from release rows and digests; the exact
+version pin implicitly pins those properties. Secret plaintext, token hashes, plaintext
 access tokens, and binding keys never enter releases, watch events, validation
 errors, diffs, acknowledgement diagnostics, logs, or metrics. Before a value
 fetch, a loader obtains exact live metadata, verifies its identity/version/
@@ -825,13 +842,13 @@ the audit write fails, the already-decrypted plaintext is explicitly zeroed
 logs a failure loudly but does not block the underlying operation — the
 plan's requirement that "all secret reads are audited" (§28.9) is enforced
 by refusing to serve the read rather than by hoping the write succeeds.
-Binding-cohort preview similarly persists a mandatory sanitized allow audit
-before returning cohort data. Successful bind, unbind, and binding-key rotate
-operations write a fixed sanitized allow audit inside the same database
-transaction as the DEK rewrap, revision, and change log; an audit insertion
+Binding-cohort and unbound-version previews similarly persist a mandatory
+sanitized allow audit before returning version data. Successful bind, unbind,
+and binding-key rotate operations write a fixed sanitized allow audit inside
+the same database transaction as the new version, revision, and change log; an audit insertion
 failure rolls back the mutation. These binding-management guarantees remain
-mandatory even when general-purpose auditing is disabled. Purge uses the same
-transactional rule for its tombstones and remains administrator-only.
+mandatory even when general-purpose auditing is disabled. Both purge paths use
+the same transactional rule for their tombstones and remain administrator-only.
 Audit writes also run with `context.WithoutCancel` plus a 5s timeout, so a
 client disconnecting mid-request cannot suppress the record of what it did.
 

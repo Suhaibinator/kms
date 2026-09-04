@@ -348,11 +348,13 @@ Management (talk to a running server over gRPC):
 Convenience (talk to a running server over gRPC):
   whoami                        Print the identity the server sees for this credential.
   binding-key generate           Generate one operator-owned binding key.
-  binding-key rotate PATH        Rotate the binding-key cohort containing a secret version.
-  secret bind PATH               Bind one secret version in place.
-  secret unbind PATH             Unbind one secret version in place.
+  binding-key rotate PATH        Create a new current version under a replacement binding key.
+  secret bind PATH               Create a new bound current secret version.
+  secret unbind PATH             Create a new unbound current secret version.
   secret purge-binding-cohort PATH
                                   Irreversibly purge one compromised binding-key cohort (admin only).
+  secret purge-unbound-versions PATH
+                                  Irreversibly purge every live unbound version (admin only).
   put-secret /env/app/key       Store a secret (value from --value-file or stdin).
   get-secret /env/app/key       Fetch a secret (requires --show, --out, or a pipe).
   put-parameter /env/app/key V  Store a parameter value.

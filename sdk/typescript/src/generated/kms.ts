@@ -299,29 +299,29 @@ export interface PromoteSecretVersionResponse {
 }
 
 /**
- * BindSecret adds a binding-key wrapping layer to one exact version in place.
- * version 0 selects the version currently labeled "current".
+ * BindSecret creates a new bound version from the version currently labeled
+ * "current". expected_current_version is a required compare-and-swap guard.
  */
 export interface BindSecretRequest {
   ref: ResourceRef | undefined;
-  version: bigint;
+  expectedCurrentVersion: bigint;
   bindingKey: string;
 }
 
 /**
- * UnbindSecret removes a binding-key wrapping layer from one exact version in
- * place. The supplied key must open that version. version 0 selects current.
+ * UnbindSecret creates a new unbound version from the version currently
+ * labeled "current". The supplied key must open that version and
+ * expected_current_version is a required compare-and-swap guard.
  */
 export interface UnbindSecretRequest {
   ref: ResourceRef | undefined;
-  version: bigint;
+  expectedCurrentVersion: bigint;
   bindingKey: string;
 }
 
-export interface SecretVersionMutationResponse {
-  anchorVersion: bigint;
-  /** singleton, sorted ascending */
-  affectedVersions: bigint[];
+export interface SecretVersionTransitionResponse {
+  currentVersion: bigint;
+  previousVersion: bigint;
   revision: bigint;
 }
 
@@ -336,25 +336,21 @@ export interface PreviewSecretBindingCohortRequest {
 }
 
 /**
- * RotateSecretBindingKey rewraps the contiguous cohort around anchor_version;
- * anchor_version 0 selects current. The optional preview guards must be
- * supplied together and let a caller reject a stale cohort rather than
- * mutating a set different from the one it confirmed.
+ * RotateSecretBindingKey creates a new version of the current bound secret
+ * under a different binding key. Historical versions are not changed.
  */
 export interface RotateSecretBindingKeyRequest {
   ref: ResourceRef | undefined;
-  anchorVersion: bigint;
+  expectedCurrentVersion: bigint;
   bindingKey: string;
   newBindingKey: string;
-  expectedRevision?: bigint | undefined;
-  expectedAffectedVersions: bigint[];
 }
 
 /**
  * PurgeSecretBindingCohort is an admin-only irreversible destruction of the
  * contiguous cohort around anchor_version and bypasses release-reference
  * protection; anchor_version 0 selects current. The optional preview guards
- * have the same paired semantics as the rotation guards.
+ * must be supplied together and, when present, exactly match a prior preview.
  */
 export interface PurgeSecretBindingCohortRequest {
   ref: ResourceRef | undefined;
@@ -371,6 +367,29 @@ export interface PurgeSecretBindingCohortRequest {
  */
 export interface SecretBindingCohortResponse {
   anchorVersion: bigint;
+  affectedVersions: bigint[];
+  revision: bigint;
+}
+
+/**
+ * PreviewSecretUnboundVersions discovers every non-destroyed unbound version
+ * of one secret. The result is the mandatory compare-and-swap input to purge.
+ */
+export interface PreviewSecretUnboundVersionsRequest {
+  ref: ResourceRef | undefined;
+}
+
+/**
+ * PurgeSecretUnboundVersions is an admin-only irreversible destruction of an
+ * exact previously previewed set. It bypasses release-reference protection.
+ */
+export interface PurgeSecretUnboundVersionsRequest {
+  ref: ResourceRef | undefined;
+  expectedRevision: bigint;
+  expectedAffectedVersions: bigint[];
+}
+
+export interface SecretVersionSetResponse {
   affectedVersions: bigint[];
   revision: bigint;
 }
@@ -705,7 +724,7 @@ export interface SecretMetadataChange {
     | undefined;
   /**
    * put | delete | promote | disable | enable | destroy | bind | unbind |
-   * rotate_binding_key | purge_binding_cohort
+   * rotate_binding_key | purge_binding_cohort | purge_unbound_versions
    */
   changeType: string;
   version: bigint;
@@ -5276,7 +5295,7 @@ export const PromoteSecretVersionResponse: MessageFns<PromoteSecretVersionRespon
 };
 
 function createBaseBindSecretRequest(): BindSecretRequest {
-  return { ref: undefined, version: 0n, bindingKey: "" };
+  return { ref: undefined, expectedCurrentVersion: 0n, bindingKey: "" };
 }
 
 export const BindSecretRequest: MessageFns<BindSecretRequest> = {
@@ -5284,11 +5303,11 @@ export const BindSecretRequest: MessageFns<BindSecretRequest> = {
     if (message.ref !== undefined) {
       ResourceRef.encode(message.ref, writer.uint32(10).fork()).join();
     }
-    if (message.version !== 0n) {
-      if (BigInt.asUintN(64, message.version) !== message.version) {
-        throw new globalThis.Error("value provided for field message.version of type uint64 too large");
+    if (message.expectedCurrentVersion !== 0n) {
+      if (BigInt.asUintN(64, message.expectedCurrentVersion) !== message.expectedCurrentVersion) {
+        throw new globalThis.Error("value provided for field message.expectedCurrentVersion of type uint64 too large");
       }
-      writer.uint32(16).uint64(message.version);
+      writer.uint32(16).uint64(message.expectedCurrentVersion);
     }
     if (message.bindingKey !== "") {
       writer.uint32(26).string(message.bindingKey);
@@ -5322,7 +5341,7 @@ export const BindSecretRequest: MessageFns<BindSecretRequest> = {
               break;
             }
 
-            message.version = reader.uint64() as bigint;
+            message.expectedCurrentVersion = reader.uint64() as bigint;
             continue;
           }
           case 3: {
@@ -5348,7 +5367,11 @@ export const BindSecretRequest: MessageFns<BindSecretRequest> = {
   fromJSON(object: any): BindSecretRequest {
     return {
       ref: isSet(object.ref) ? ResourceRef.fromJSON(object.ref) : undefined,
-      version: isSet(object.version) ? BigInt(object.version) : 0n,
+      expectedCurrentVersion: isSet(object.expectedCurrentVersion)
+        ? BigInt(object.expectedCurrentVersion)
+        : isSet(object.expected_current_version)
+        ? BigInt(object.expected_current_version)
+        : 0n,
       bindingKey: isSet(object.bindingKey)
         ? globalThis.String(object.bindingKey)
         : isSet(object.binding_key)
@@ -5362,8 +5385,8 @@ export const BindSecretRequest: MessageFns<BindSecretRequest> = {
     if (message.ref !== undefined) {
       obj.ref = ResourceRef.toJSON(message.ref);
     }
-    if (message.version !== 0n) {
-      obj.version = message.version.toString();
+    if (message.expectedCurrentVersion !== 0n) {
+      obj.expectedCurrentVersion = message.expectedCurrentVersion.toString();
     }
     if (message.bindingKey !== "") {
       obj.bindingKey = message.bindingKey;
@@ -5377,14 +5400,17 @@ export const BindSecretRequest: MessageFns<BindSecretRequest> = {
   fromPartial(object: DeepPartial<BindSecretRequest>): BindSecretRequest {
     const message = createBaseBindSecretRequest();
     message.ref = (object.ref !== undefined && object.ref !== null) ? ResourceRef.fromPartial(object.ref) : undefined;
-    message.version = (object.version !== undefined && object.version !== null) ? BigInt(object.version) : 0n;
+    message.expectedCurrentVersion =
+      (object.expectedCurrentVersion !== undefined && object.expectedCurrentVersion !== null)
+        ? BigInt(object.expectedCurrentVersion)
+        : 0n;
     message.bindingKey = object.bindingKey ?? "";
     return message;
   },
 };
 
 function createBaseUnbindSecretRequest(): UnbindSecretRequest {
-  return { ref: undefined, version: 0n, bindingKey: "" };
+  return { ref: undefined, expectedCurrentVersion: 0n, bindingKey: "" };
 }
 
 export const UnbindSecretRequest: MessageFns<UnbindSecretRequest> = {
@@ -5392,11 +5418,11 @@ export const UnbindSecretRequest: MessageFns<UnbindSecretRequest> = {
     if (message.ref !== undefined) {
       ResourceRef.encode(message.ref, writer.uint32(10).fork()).join();
     }
-    if (message.version !== 0n) {
-      if (BigInt.asUintN(64, message.version) !== message.version) {
-        throw new globalThis.Error("value provided for field message.version of type uint64 too large");
+    if (message.expectedCurrentVersion !== 0n) {
+      if (BigInt.asUintN(64, message.expectedCurrentVersion) !== message.expectedCurrentVersion) {
+        throw new globalThis.Error("value provided for field message.expectedCurrentVersion of type uint64 too large");
       }
-      writer.uint32(16).uint64(message.version);
+      writer.uint32(16).uint64(message.expectedCurrentVersion);
     }
     if (message.bindingKey !== "") {
       writer.uint32(26).string(message.bindingKey);
@@ -5430,7 +5456,7 @@ export const UnbindSecretRequest: MessageFns<UnbindSecretRequest> = {
               break;
             }
 
-            message.version = reader.uint64() as bigint;
+            message.expectedCurrentVersion = reader.uint64() as bigint;
             continue;
           }
           case 3: {
@@ -5456,7 +5482,11 @@ export const UnbindSecretRequest: MessageFns<UnbindSecretRequest> = {
   fromJSON(object: any): UnbindSecretRequest {
     return {
       ref: isSet(object.ref) ? ResourceRef.fromJSON(object.ref) : undefined,
-      version: isSet(object.version) ? BigInt(object.version) : 0n,
+      expectedCurrentVersion: isSet(object.expectedCurrentVersion)
+        ? BigInt(object.expectedCurrentVersion)
+        : isSet(object.expected_current_version)
+        ? BigInt(object.expected_current_version)
+        : 0n,
       bindingKey: isSet(object.bindingKey)
         ? globalThis.String(object.bindingKey)
         : isSet(object.binding_key)
@@ -5470,8 +5500,8 @@ export const UnbindSecretRequest: MessageFns<UnbindSecretRequest> = {
     if (message.ref !== undefined) {
       obj.ref = ResourceRef.toJSON(message.ref);
     }
-    if (message.version !== 0n) {
-      obj.version = message.version.toString();
+    if (message.expectedCurrentVersion !== 0n) {
+      obj.expectedCurrentVersion = message.expectedCurrentVersion.toString();
     }
     if (message.bindingKey !== "") {
       obj.bindingKey = message.bindingKey;
@@ -5485,32 +5515,33 @@ export const UnbindSecretRequest: MessageFns<UnbindSecretRequest> = {
   fromPartial(object: DeepPartial<UnbindSecretRequest>): UnbindSecretRequest {
     const message = createBaseUnbindSecretRequest();
     message.ref = (object.ref !== undefined && object.ref !== null) ? ResourceRef.fromPartial(object.ref) : undefined;
-    message.version = (object.version !== undefined && object.version !== null) ? BigInt(object.version) : 0n;
+    message.expectedCurrentVersion =
+      (object.expectedCurrentVersion !== undefined && object.expectedCurrentVersion !== null)
+        ? BigInt(object.expectedCurrentVersion)
+        : 0n;
     message.bindingKey = object.bindingKey ?? "";
     return message;
   },
 };
 
-function createBaseSecretVersionMutationResponse(): SecretVersionMutationResponse {
-  return { anchorVersion: 0n, affectedVersions: [], revision: 0n };
+function createBaseSecretVersionTransitionResponse(): SecretVersionTransitionResponse {
+  return { currentVersion: 0n, previousVersion: 0n, revision: 0n };
 }
 
-export const SecretVersionMutationResponse: MessageFns<SecretVersionMutationResponse> = {
-  encode(message: SecretVersionMutationResponse, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
-    if (message.anchorVersion !== 0n) {
-      if (BigInt.asUintN(64, message.anchorVersion) !== message.anchorVersion) {
-        throw new globalThis.Error("value provided for field message.anchorVersion of type uint64 too large");
+export const SecretVersionTransitionResponse: MessageFns<SecretVersionTransitionResponse> = {
+  encode(message: SecretVersionTransitionResponse, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.currentVersion !== 0n) {
+      if (BigInt.asUintN(64, message.currentVersion) !== message.currentVersion) {
+        throw new globalThis.Error("value provided for field message.currentVersion of type uint64 too large");
       }
-      writer.uint32(8).uint64(message.anchorVersion);
+      writer.uint32(8).uint64(message.currentVersion);
     }
-    writer.uint32(18).fork();
-    for (const v of message.affectedVersions) {
-      if (BigInt.asUintN(64, v) !== v) {
-        throw new globalThis.Error("a value provided in array field affectedVersions of type uint64 is too large");
+    if (message.previousVersion !== 0n) {
+      if (BigInt.asUintN(64, message.previousVersion) !== message.previousVersion) {
+        throw new globalThis.Error("value provided for field message.previousVersion of type uint64 too large");
       }
-      writer.uint64(v);
+      writer.uint32(16).uint64(message.previousVersion);
     }
-    writer.join();
     if (message.revision !== 0n) {
       if (BigInt.asUintN(64, message.revision) !== message.revision) {
         throw new globalThis.Error("value provided for field message.revision of type uint64 too large");
@@ -5520,7 +5551,7 @@ export const SecretVersionMutationResponse: MessageFns<SecretVersionMutationResp
     return writer;
   },
 
-  decode(input: BinaryReader | Uint8Array, length?: number): SecretVersionMutationResponse {
+  decode(input: BinaryReader | Uint8Array, length?: number): SecretVersionTransitionResponse {
     const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
     const previousRecursionDepth = (reader as any).__tsProtoDecodeDepth ?? 0;
     if (previousRecursionDepth >= 100) {
@@ -5529,7 +5560,7 @@ export const SecretVersionMutationResponse: MessageFns<SecretVersionMutationResp
     (reader as any).__tsProtoDecodeDepth = previousRecursionDepth + 1;
     try {
       const end = length === undefined ? reader.len : reader.pos + length;
-      const message = createBaseSecretVersionMutationResponse();
+      const message = createBaseSecretVersionTransitionResponse();
       while (reader.pos < end) {
         const tag = reader.uint32();
         switch (tag >>> 3) {
@@ -5538,26 +5569,16 @@ export const SecretVersionMutationResponse: MessageFns<SecretVersionMutationResp
               break;
             }
 
-            message.anchorVersion = reader.uint64() as bigint;
+            message.currentVersion = reader.uint64() as bigint;
             continue;
           }
           case 2: {
-            if (tag === 16) {
-              message.affectedVersions.push(reader.uint64() as bigint);
-
-              continue;
+            if (tag !== 16) {
+              break;
             }
 
-            if (tag === 18) {
-              const end2 = reader.uint32() + reader.pos;
-              while (reader.pos < end2) {
-                message.affectedVersions.push(reader.uint64() as bigint);
-              }
-
-              continue;
-            }
-
-            break;
+            message.previousVersion = reader.uint64() as bigint;
+            continue;
           }
           case 3: {
             if (tag !== 24) {
@@ -5579,29 +5600,29 @@ export const SecretVersionMutationResponse: MessageFns<SecretVersionMutationResp
     }
   },
 
-  fromJSON(object: any): SecretVersionMutationResponse {
+  fromJSON(object: any): SecretVersionTransitionResponse {
     return {
-      anchorVersion: isSet(object.anchorVersion)
-        ? BigInt(object.anchorVersion)
-        : isSet(object.anchor_version)
-        ? BigInt(object.anchor_version)
+      currentVersion: isSet(object.currentVersion)
+        ? BigInt(object.currentVersion)
+        : isSet(object.current_version)
+        ? BigInt(object.current_version)
         : 0n,
-      affectedVersions: globalThis.Array.isArray(object?.affectedVersions)
-        ? object.affectedVersions.map((e: any) => BigInt(e))
-        : globalThis.Array.isArray(object?.affected_versions)
-        ? object.affected_versions.map((e: any) => BigInt(e))
-        : [],
+      previousVersion: isSet(object.previousVersion)
+        ? BigInt(object.previousVersion)
+        : isSet(object.previous_version)
+        ? BigInt(object.previous_version)
+        : 0n,
       revision: isSet(object.revision) ? BigInt(object.revision) : 0n,
     };
   },
 
-  toJSON(message: SecretVersionMutationResponse): unknown {
+  toJSON(message: SecretVersionTransitionResponse): unknown {
     const obj: any = {};
-    if (message.anchorVersion !== 0n) {
-      obj.anchorVersion = message.anchorVersion.toString();
+    if (message.currentVersion !== 0n) {
+      obj.currentVersion = message.currentVersion.toString();
     }
-    if (message.affectedVersions?.length) {
-      obj.affectedVersions = message.affectedVersions.map((e) => e.toString());
+    if (message.previousVersion !== 0n) {
+      obj.previousVersion = message.previousVersion.toString();
     }
     if (message.revision !== 0n) {
       obj.revision = message.revision.toString();
@@ -5609,15 +5630,17 @@ export const SecretVersionMutationResponse: MessageFns<SecretVersionMutationResp
     return obj;
   },
 
-  create(base?: DeepPartial<SecretVersionMutationResponse>): SecretVersionMutationResponse {
-    return SecretVersionMutationResponse.fromPartial(base ?? {});
+  create(base?: DeepPartial<SecretVersionTransitionResponse>): SecretVersionTransitionResponse {
+    return SecretVersionTransitionResponse.fromPartial(base ?? {});
   },
-  fromPartial(object: DeepPartial<SecretVersionMutationResponse>): SecretVersionMutationResponse {
-    const message = createBaseSecretVersionMutationResponse();
-    message.anchorVersion = (object.anchorVersion !== undefined && object.anchorVersion !== null)
-      ? BigInt(object.anchorVersion)
+  fromPartial(object: DeepPartial<SecretVersionTransitionResponse>): SecretVersionTransitionResponse {
+    const message = createBaseSecretVersionTransitionResponse();
+    message.currentVersion = (object.currentVersion !== undefined && object.currentVersion !== null)
+      ? BigInt(object.currentVersion)
       : 0n;
-    message.affectedVersions = object.affectedVersions?.map((e) => BigInt(e)) || [];
+    message.previousVersion = (object.previousVersion !== undefined && object.previousVersion !== null)
+      ? BigInt(object.previousVersion)
+      : 0n;
     message.revision = (object.revision !== undefined && object.revision !== null) ? BigInt(object.revision) : 0n;
     return message;
   },
@@ -5738,14 +5761,7 @@ export const PreviewSecretBindingCohortRequest: MessageFns<PreviewSecretBindingC
 };
 
 function createBaseRotateSecretBindingKeyRequest(): RotateSecretBindingKeyRequest {
-  return {
-    ref: undefined,
-    anchorVersion: 0n,
-    bindingKey: "",
-    newBindingKey: "",
-    expectedRevision: undefined,
-    expectedAffectedVersions: [],
-  };
+  return { ref: undefined, expectedCurrentVersion: 0n, bindingKey: "", newBindingKey: "" };
 }
 
 export const RotateSecretBindingKeyRequest: MessageFns<RotateSecretBindingKeyRequest> = {
@@ -5753,11 +5769,11 @@ export const RotateSecretBindingKeyRequest: MessageFns<RotateSecretBindingKeyReq
     if (message.ref !== undefined) {
       ResourceRef.encode(message.ref, writer.uint32(10).fork()).join();
     }
-    if (message.anchorVersion !== 0n) {
-      if (BigInt.asUintN(64, message.anchorVersion) !== message.anchorVersion) {
-        throw new globalThis.Error("value provided for field message.anchorVersion of type uint64 too large");
+    if (message.expectedCurrentVersion !== 0n) {
+      if (BigInt.asUintN(64, message.expectedCurrentVersion) !== message.expectedCurrentVersion) {
+        throw new globalThis.Error("value provided for field message.expectedCurrentVersion of type uint64 too large");
       }
-      writer.uint32(16).uint64(message.anchorVersion);
+      writer.uint32(16).uint64(message.expectedCurrentVersion);
     }
     if (message.bindingKey !== "") {
       writer.uint32(26).string(message.bindingKey);
@@ -5765,22 +5781,6 @@ export const RotateSecretBindingKeyRequest: MessageFns<RotateSecretBindingKeyReq
     if (message.newBindingKey !== "") {
       writer.uint32(34).string(message.newBindingKey);
     }
-    if (message.expectedRevision !== undefined) {
-      if (BigInt.asUintN(64, message.expectedRevision) !== message.expectedRevision) {
-        throw new globalThis.Error("value provided for field message.expectedRevision of type uint64 too large");
-      }
-      writer.uint32(40).uint64(message.expectedRevision);
-    }
-    writer.uint32(50).fork();
-    for (const v of message.expectedAffectedVersions) {
-      if (BigInt.asUintN(64, v) !== v) {
-        throw new globalThis.Error(
-          "a value provided in array field expectedAffectedVersions of type uint64 is too large",
-        );
-      }
-      writer.uint64(v);
-    }
-    writer.join();
     return writer;
   },
 
@@ -5810,7 +5810,7 @@ export const RotateSecretBindingKeyRequest: MessageFns<RotateSecretBindingKeyReq
               break;
             }
 
-            message.anchorVersion = reader.uint64() as bigint;
+            message.expectedCurrentVersion = reader.uint64() as bigint;
             continue;
           }
           case 3: {
@@ -5829,32 +5829,6 @@ export const RotateSecretBindingKeyRequest: MessageFns<RotateSecretBindingKeyReq
             message.newBindingKey = reader.string();
             continue;
           }
-          case 5: {
-            if (tag !== 40) {
-              break;
-            }
-
-            message.expectedRevision = reader.uint64() as bigint;
-            continue;
-          }
-          case 6: {
-            if (tag === 48) {
-              message.expectedAffectedVersions.push(reader.uint64() as bigint);
-
-              continue;
-            }
-
-            if (tag === 50) {
-              const end2 = reader.uint32() + reader.pos;
-              while (reader.pos < end2) {
-                message.expectedAffectedVersions.push(reader.uint64() as bigint);
-              }
-
-              continue;
-            }
-
-            break;
-          }
         }
         if ((tag & 7) === 4 || tag === 0) {
           break;
@@ -5870,10 +5844,10 @@ export const RotateSecretBindingKeyRequest: MessageFns<RotateSecretBindingKeyReq
   fromJSON(object: any): RotateSecretBindingKeyRequest {
     return {
       ref: isSet(object.ref) ? ResourceRef.fromJSON(object.ref) : undefined,
-      anchorVersion: isSet(object.anchorVersion)
-        ? BigInt(object.anchorVersion)
-        : isSet(object.anchor_version)
-        ? BigInt(object.anchor_version)
+      expectedCurrentVersion: isSet(object.expectedCurrentVersion)
+        ? BigInt(object.expectedCurrentVersion)
+        : isSet(object.expected_current_version)
+        ? BigInt(object.expected_current_version)
         : 0n,
       bindingKey: isSet(object.bindingKey)
         ? globalThis.String(object.bindingKey)
@@ -5885,16 +5859,6 @@ export const RotateSecretBindingKeyRequest: MessageFns<RotateSecretBindingKeyReq
         : isSet(object.new_binding_key)
         ? globalThis.String(object.new_binding_key)
         : "",
-      expectedRevision: isSet(object.expectedRevision)
-        ? BigInt(object.expectedRevision)
-        : isSet(object.expected_revision)
-        ? BigInt(object.expected_revision)
-        : undefined,
-      expectedAffectedVersions: globalThis.Array.isArray(object?.expectedAffectedVersions)
-        ? object.expectedAffectedVersions.map((e: any) => BigInt(e))
-        : globalThis.Array.isArray(object?.expected_affected_versions)
-        ? object.expected_affected_versions.map((e: any) => BigInt(e))
-        : [],
     };
   },
 
@@ -5903,20 +5867,14 @@ export const RotateSecretBindingKeyRequest: MessageFns<RotateSecretBindingKeyReq
     if (message.ref !== undefined) {
       obj.ref = ResourceRef.toJSON(message.ref);
     }
-    if (message.anchorVersion !== 0n) {
-      obj.anchorVersion = message.anchorVersion.toString();
+    if (message.expectedCurrentVersion !== 0n) {
+      obj.expectedCurrentVersion = message.expectedCurrentVersion.toString();
     }
     if (message.bindingKey !== "") {
       obj.bindingKey = message.bindingKey;
     }
     if (message.newBindingKey !== "") {
       obj.newBindingKey = message.newBindingKey;
-    }
-    if (message.expectedRevision !== undefined) {
-      obj.expectedRevision = message.expectedRevision.toString();
-    }
-    if (message.expectedAffectedVersions?.length) {
-      obj.expectedAffectedVersions = message.expectedAffectedVersions.map((e) => e.toString());
     }
     return obj;
   },
@@ -5927,15 +5885,12 @@ export const RotateSecretBindingKeyRequest: MessageFns<RotateSecretBindingKeyReq
   fromPartial(object: DeepPartial<RotateSecretBindingKeyRequest>): RotateSecretBindingKeyRequest {
     const message = createBaseRotateSecretBindingKeyRequest();
     message.ref = (object.ref !== undefined && object.ref !== null) ? ResourceRef.fromPartial(object.ref) : undefined;
-    message.anchorVersion = (object.anchorVersion !== undefined && object.anchorVersion !== null)
-      ? BigInt(object.anchorVersion)
-      : 0n;
+    message.expectedCurrentVersion =
+      (object.expectedCurrentVersion !== undefined && object.expectedCurrentVersion !== null)
+        ? BigInt(object.expectedCurrentVersion)
+        : 0n;
     message.bindingKey = object.bindingKey ?? "";
     message.newBindingKey = object.newBindingKey ?? "";
-    message.expectedRevision = (object.expectedRevision !== undefined && object.expectedRevision !== null)
-      ? BigInt(object.expectedRevision)
-      : undefined;
-    message.expectedAffectedVersions = object.expectedAffectedVersions?.map((e) => BigInt(e)) || [];
     return message;
   },
 };
@@ -6248,6 +6203,311 @@ export const SecretBindingCohortResponse: MessageFns<SecretBindingCohortResponse
     message.anchorVersion = (object.anchorVersion !== undefined && object.anchorVersion !== null)
       ? BigInt(object.anchorVersion)
       : 0n;
+    message.affectedVersions = object.affectedVersions?.map((e) => BigInt(e)) || [];
+    message.revision = (object.revision !== undefined && object.revision !== null) ? BigInt(object.revision) : 0n;
+    return message;
+  },
+};
+
+function createBasePreviewSecretUnboundVersionsRequest(): PreviewSecretUnboundVersionsRequest {
+  return { ref: undefined };
+}
+
+export const PreviewSecretUnboundVersionsRequest: MessageFns<PreviewSecretUnboundVersionsRequest> = {
+  encode(message: PreviewSecretUnboundVersionsRequest, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.ref !== undefined) {
+      ResourceRef.encode(message.ref, writer.uint32(10).fork()).join();
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): PreviewSecretUnboundVersionsRequest {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const previousRecursionDepth = (reader as any).__tsProtoDecodeDepth ?? 0;
+    if (previousRecursionDepth >= 100) {
+      throw new globalThis.Error("protobuf decode recursion limit exceeded");
+    }
+    (reader as any).__tsProtoDecodeDepth = previousRecursionDepth + 1;
+    try {
+      const end = length === undefined ? reader.len : reader.pos + length;
+      const message = createBasePreviewSecretUnboundVersionsRequest();
+      while (reader.pos < end) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+          case 1: {
+            if (tag !== 10) {
+              break;
+            }
+
+            message.ref = ResourceRef.decode(reader, reader.uint32());
+            continue;
+          }
+        }
+        if ((tag & 7) === 4 || tag === 0) {
+          break;
+        }
+        reader.skip(tag & 7);
+      }
+      return message;
+    } finally {
+      (reader as any).__tsProtoDecodeDepth = previousRecursionDepth;
+    }
+  },
+
+  fromJSON(object: any): PreviewSecretUnboundVersionsRequest {
+    return { ref: isSet(object.ref) ? ResourceRef.fromJSON(object.ref) : undefined };
+  },
+
+  toJSON(message: PreviewSecretUnboundVersionsRequest): unknown {
+    const obj: any = {};
+    if (message.ref !== undefined) {
+      obj.ref = ResourceRef.toJSON(message.ref);
+    }
+    return obj;
+  },
+
+  create(base?: DeepPartial<PreviewSecretUnboundVersionsRequest>): PreviewSecretUnboundVersionsRequest {
+    return PreviewSecretUnboundVersionsRequest.fromPartial(base ?? {});
+  },
+  fromPartial(object: DeepPartial<PreviewSecretUnboundVersionsRequest>): PreviewSecretUnboundVersionsRequest {
+    const message = createBasePreviewSecretUnboundVersionsRequest();
+    message.ref = (object.ref !== undefined && object.ref !== null) ? ResourceRef.fromPartial(object.ref) : undefined;
+    return message;
+  },
+};
+
+function createBasePurgeSecretUnboundVersionsRequest(): PurgeSecretUnboundVersionsRequest {
+  return { ref: undefined, expectedRevision: 0n, expectedAffectedVersions: [] };
+}
+
+export const PurgeSecretUnboundVersionsRequest: MessageFns<PurgeSecretUnboundVersionsRequest> = {
+  encode(message: PurgeSecretUnboundVersionsRequest, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.ref !== undefined) {
+      ResourceRef.encode(message.ref, writer.uint32(10).fork()).join();
+    }
+    if (message.expectedRevision !== 0n) {
+      if (BigInt.asUintN(64, message.expectedRevision) !== message.expectedRevision) {
+        throw new globalThis.Error("value provided for field message.expectedRevision of type uint64 too large");
+      }
+      writer.uint32(16).uint64(message.expectedRevision);
+    }
+    writer.uint32(26).fork();
+    for (const v of message.expectedAffectedVersions) {
+      if (BigInt.asUintN(64, v) !== v) {
+        throw new globalThis.Error(
+          "a value provided in array field expectedAffectedVersions of type uint64 is too large",
+        );
+      }
+      writer.uint64(v);
+    }
+    writer.join();
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): PurgeSecretUnboundVersionsRequest {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const previousRecursionDepth = (reader as any).__tsProtoDecodeDepth ?? 0;
+    if (previousRecursionDepth >= 100) {
+      throw new globalThis.Error("protobuf decode recursion limit exceeded");
+    }
+    (reader as any).__tsProtoDecodeDepth = previousRecursionDepth + 1;
+    try {
+      const end = length === undefined ? reader.len : reader.pos + length;
+      const message = createBasePurgeSecretUnboundVersionsRequest();
+      while (reader.pos < end) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+          case 1: {
+            if (tag !== 10) {
+              break;
+            }
+
+            message.ref = ResourceRef.decode(reader, reader.uint32());
+            continue;
+          }
+          case 2: {
+            if (tag !== 16) {
+              break;
+            }
+
+            message.expectedRevision = reader.uint64() as bigint;
+            continue;
+          }
+          case 3: {
+            if (tag === 24) {
+              message.expectedAffectedVersions.push(reader.uint64() as bigint);
+
+              continue;
+            }
+
+            if (tag === 26) {
+              const end2 = reader.uint32() + reader.pos;
+              while (reader.pos < end2) {
+                message.expectedAffectedVersions.push(reader.uint64() as bigint);
+              }
+
+              continue;
+            }
+
+            break;
+          }
+        }
+        if ((tag & 7) === 4 || tag === 0) {
+          break;
+        }
+        reader.skip(tag & 7);
+      }
+      return message;
+    } finally {
+      (reader as any).__tsProtoDecodeDepth = previousRecursionDepth;
+    }
+  },
+
+  fromJSON(object: any): PurgeSecretUnboundVersionsRequest {
+    return {
+      ref: isSet(object.ref) ? ResourceRef.fromJSON(object.ref) : undefined,
+      expectedRevision: isSet(object.expectedRevision)
+        ? BigInt(object.expectedRevision)
+        : isSet(object.expected_revision)
+        ? BigInt(object.expected_revision)
+        : 0n,
+      expectedAffectedVersions: globalThis.Array.isArray(object?.expectedAffectedVersions)
+        ? object.expectedAffectedVersions.map((e: any) => BigInt(e))
+        : globalThis.Array.isArray(object?.expected_affected_versions)
+        ? object.expected_affected_versions.map((e: any) => BigInt(e))
+        : [],
+    };
+  },
+
+  toJSON(message: PurgeSecretUnboundVersionsRequest): unknown {
+    const obj: any = {};
+    if (message.ref !== undefined) {
+      obj.ref = ResourceRef.toJSON(message.ref);
+    }
+    if (message.expectedRevision !== 0n) {
+      obj.expectedRevision = message.expectedRevision.toString();
+    }
+    if (message.expectedAffectedVersions?.length) {
+      obj.expectedAffectedVersions = message.expectedAffectedVersions.map((e) => e.toString());
+    }
+    return obj;
+  },
+
+  create(base?: DeepPartial<PurgeSecretUnboundVersionsRequest>): PurgeSecretUnboundVersionsRequest {
+    return PurgeSecretUnboundVersionsRequest.fromPartial(base ?? {});
+  },
+  fromPartial(object: DeepPartial<PurgeSecretUnboundVersionsRequest>): PurgeSecretUnboundVersionsRequest {
+    const message = createBasePurgeSecretUnboundVersionsRequest();
+    message.ref = (object.ref !== undefined && object.ref !== null) ? ResourceRef.fromPartial(object.ref) : undefined;
+    message.expectedRevision = (object.expectedRevision !== undefined && object.expectedRevision !== null)
+      ? BigInt(object.expectedRevision)
+      : 0n;
+    message.expectedAffectedVersions = object.expectedAffectedVersions?.map((e) => BigInt(e)) || [];
+    return message;
+  },
+};
+
+function createBaseSecretVersionSetResponse(): SecretVersionSetResponse {
+  return { affectedVersions: [], revision: 0n };
+}
+
+export const SecretVersionSetResponse: MessageFns<SecretVersionSetResponse> = {
+  encode(message: SecretVersionSetResponse, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    writer.uint32(10).fork();
+    for (const v of message.affectedVersions) {
+      if (BigInt.asUintN(64, v) !== v) {
+        throw new globalThis.Error("a value provided in array field affectedVersions of type uint64 is too large");
+      }
+      writer.uint64(v);
+    }
+    writer.join();
+    if (message.revision !== 0n) {
+      if (BigInt.asUintN(64, message.revision) !== message.revision) {
+        throw new globalThis.Error("value provided for field message.revision of type uint64 too large");
+      }
+      writer.uint32(16).uint64(message.revision);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): SecretVersionSetResponse {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const previousRecursionDepth = (reader as any).__tsProtoDecodeDepth ?? 0;
+    if (previousRecursionDepth >= 100) {
+      throw new globalThis.Error("protobuf decode recursion limit exceeded");
+    }
+    (reader as any).__tsProtoDecodeDepth = previousRecursionDepth + 1;
+    try {
+      const end = length === undefined ? reader.len : reader.pos + length;
+      const message = createBaseSecretVersionSetResponse();
+      while (reader.pos < end) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+          case 1: {
+            if (tag === 8) {
+              message.affectedVersions.push(reader.uint64() as bigint);
+
+              continue;
+            }
+
+            if (tag === 10) {
+              const end2 = reader.uint32() + reader.pos;
+              while (reader.pos < end2) {
+                message.affectedVersions.push(reader.uint64() as bigint);
+              }
+
+              continue;
+            }
+
+            break;
+          }
+          case 2: {
+            if (tag !== 16) {
+              break;
+            }
+
+            message.revision = reader.uint64() as bigint;
+            continue;
+          }
+        }
+        if ((tag & 7) === 4 || tag === 0) {
+          break;
+        }
+        reader.skip(tag & 7);
+      }
+      return message;
+    } finally {
+      (reader as any).__tsProtoDecodeDepth = previousRecursionDepth;
+    }
+  },
+
+  fromJSON(object: any): SecretVersionSetResponse {
+    return {
+      affectedVersions: globalThis.Array.isArray(object?.affectedVersions)
+        ? object.affectedVersions.map((e: any) => BigInt(e))
+        : globalThis.Array.isArray(object?.affected_versions)
+        ? object.affected_versions.map((e: any) => BigInt(e))
+        : [],
+      revision: isSet(object.revision) ? BigInt(object.revision) : 0n,
+    };
+  },
+
+  toJSON(message: SecretVersionSetResponse): unknown {
+    const obj: any = {};
+    if (message.affectedVersions?.length) {
+      obj.affectedVersions = message.affectedVersions.map((e) => e.toString());
+    }
+    if (message.revision !== 0n) {
+      obj.revision = message.revision.toString();
+    }
+    return obj;
+  },
+
+  create(base?: DeepPartial<SecretVersionSetResponse>): SecretVersionSetResponse {
+    return SecretVersionSetResponse.fromPartial(base ?? {});
+  },
+  fromPartial(object: DeepPartial<SecretVersionSetResponse>): SecretVersionSetResponse {
+    const message = createBaseSecretVersionSetResponse();
     message.affectedVersions = object.affectedVersions?.map((e) => BigInt(e)) || [];
     message.revision = (object.revision !== undefined && object.revision !== null) ? BigInt(object.revision) : 0n;
     return message;
@@ -18127,9 +18387,10 @@ export const SecretServiceService = {
     responseStream: false as const,
     requestSerialize: (value: BindSecretRequest): Buffer => Buffer.from(BindSecretRequest.encode(value).finish()),
     requestDeserialize: (value: Buffer): BindSecretRequest => BindSecretRequest.decode(value),
-    responseSerialize: (value: SecretVersionMutationResponse): Buffer =>
-      Buffer.from(SecretVersionMutationResponse.encode(value).finish()),
-    responseDeserialize: (value: Buffer): SecretVersionMutationResponse => SecretVersionMutationResponse.decode(value),
+    responseSerialize: (value: SecretVersionTransitionResponse): Buffer =>
+      Buffer.from(SecretVersionTransitionResponse.encode(value).finish()),
+    responseDeserialize: (value: Buffer): SecretVersionTransitionResponse =>
+      SecretVersionTransitionResponse.decode(value),
   },
   unbindSecret: {
     path: "/kms.v1.SecretService/UnbindSecret" as const,
@@ -18137,9 +18398,10 @@ export const SecretServiceService = {
     responseStream: false as const,
     requestSerialize: (value: UnbindSecretRequest): Buffer => Buffer.from(UnbindSecretRequest.encode(value).finish()),
     requestDeserialize: (value: Buffer): UnbindSecretRequest => UnbindSecretRequest.decode(value),
-    responseSerialize: (value: SecretVersionMutationResponse): Buffer =>
-      Buffer.from(SecretVersionMutationResponse.encode(value).finish()),
-    responseDeserialize: (value: Buffer): SecretVersionMutationResponse => SecretVersionMutationResponse.decode(value),
+    responseSerialize: (value: SecretVersionTransitionResponse): Buffer =>
+      Buffer.from(SecretVersionTransitionResponse.encode(value).finish()),
+    responseDeserialize: (value: Buffer): SecretVersionTransitionResponse =>
+      SecretVersionTransitionResponse.decode(value),
   },
   previewSecretBindingCohort: {
     path: "/kms.v1.SecretService/PreviewSecretBindingCohort" as const,
@@ -18160,9 +18422,10 @@ export const SecretServiceService = {
     requestSerialize: (value: RotateSecretBindingKeyRequest): Buffer =>
       Buffer.from(RotateSecretBindingKeyRequest.encode(value).finish()),
     requestDeserialize: (value: Buffer): RotateSecretBindingKeyRequest => RotateSecretBindingKeyRequest.decode(value),
-    responseSerialize: (value: SecretBindingCohortResponse): Buffer =>
-      Buffer.from(SecretBindingCohortResponse.encode(value).finish()),
-    responseDeserialize: (value: Buffer): SecretBindingCohortResponse => SecretBindingCohortResponse.decode(value),
+    responseSerialize: (value: SecretVersionTransitionResponse): Buffer =>
+      Buffer.from(SecretVersionTransitionResponse.encode(value).finish()),
+    responseDeserialize: (value: Buffer): SecretVersionTransitionResponse =>
+      SecretVersionTransitionResponse.decode(value),
   },
   purgeSecretBindingCohort: {
     path: "/kms.v1.SecretService/PurgeSecretBindingCohort" as const,
@@ -18176,6 +18439,30 @@ export const SecretServiceService = {
       Buffer.from(SecretBindingCohortResponse.encode(value).finish()),
     responseDeserialize: (value: Buffer): SecretBindingCohortResponse => SecretBindingCohortResponse.decode(value),
   },
+  previewSecretUnboundVersions: {
+    path: "/kms.v1.SecretService/PreviewSecretUnboundVersions" as const,
+    requestStream: false as const,
+    responseStream: false as const,
+    requestSerialize: (value: PreviewSecretUnboundVersionsRequest): Buffer =>
+      Buffer.from(PreviewSecretUnboundVersionsRequest.encode(value).finish()),
+    requestDeserialize: (value: Buffer): PreviewSecretUnboundVersionsRequest =>
+      PreviewSecretUnboundVersionsRequest.decode(value),
+    responseSerialize: (value: SecretVersionSetResponse): Buffer =>
+      Buffer.from(SecretVersionSetResponse.encode(value).finish()),
+    responseDeserialize: (value: Buffer): SecretVersionSetResponse => SecretVersionSetResponse.decode(value),
+  },
+  purgeSecretUnboundVersions: {
+    path: "/kms.v1.SecretService/PurgeSecretUnboundVersions" as const,
+    requestStream: false as const,
+    responseStream: false as const,
+    requestSerialize: (value: PurgeSecretUnboundVersionsRequest): Buffer =>
+      Buffer.from(PurgeSecretUnboundVersionsRequest.encode(value).finish()),
+    requestDeserialize: (value: Buffer): PurgeSecretUnboundVersionsRequest =>
+      PurgeSecretUnboundVersionsRequest.decode(value),
+    responseSerialize: (value: SecretVersionSetResponse): Buffer =>
+      Buffer.from(SecretVersionSetResponse.encode(value).finish()),
+    responseDeserialize: (value: Buffer): SecretVersionSetResponse => SecretVersionSetResponse.decode(value),
+  },
 } as const;
 
 export interface SecretServiceServer extends UntypedServiceImplementation {
@@ -18187,11 +18474,13 @@ export interface SecretServiceServer extends UntypedServiceImplementation {
   destroySecretVersion: handleUnaryCall<DestroySecretVersionRequest, DestroySecretVersionResponse>;
   getSecretMetadata: handleUnaryCall<GetSecretMetadataRequest, GetSecretMetadataResponse>;
   promoteSecretVersion: handleUnaryCall<PromoteSecretVersionRequest, PromoteSecretVersionResponse>;
-  bindSecret: handleUnaryCall<BindSecretRequest, SecretVersionMutationResponse>;
-  unbindSecret: handleUnaryCall<UnbindSecretRequest, SecretVersionMutationResponse>;
+  bindSecret: handleUnaryCall<BindSecretRequest, SecretVersionTransitionResponse>;
+  unbindSecret: handleUnaryCall<UnbindSecretRequest, SecretVersionTransitionResponse>;
   previewSecretBindingCohort: handleUnaryCall<PreviewSecretBindingCohortRequest, SecretBindingCohortResponse>;
-  rotateSecretBindingKey: handleUnaryCall<RotateSecretBindingKeyRequest, SecretBindingCohortResponse>;
+  rotateSecretBindingKey: handleUnaryCall<RotateSecretBindingKeyRequest, SecretVersionTransitionResponse>;
   purgeSecretBindingCohort: handleUnaryCall<PurgeSecretBindingCohortRequest, SecretBindingCohortResponse>;
+  previewSecretUnboundVersions: handleUnaryCall<PreviewSecretUnboundVersionsRequest, SecretVersionSetResponse>;
+  purgeSecretUnboundVersions: handleUnaryCall<PurgeSecretUnboundVersionsRequest, SecretVersionSetResponse>;
 }
 
 export type WatchServiceService = typeof WatchServiceService;
@@ -18695,5 +18984,5 @@ export interface MessageFns<T> {
   fromPartial(object: DeepPartial<T>): T;
 }
 
-// source-sha256: 0f25a7df8c9675f91a008b6917f098f104c6cfa370f882f82168321dc4c19bbd
+// source-sha256: 33ea11d409aacc19205d81d17771d7c053938ce66dbc8cb2df50a0f21108b69f
 // generation-sha256: c3e69d40e38671d5381cfa50a679b45232adc3ecd3df927c51285f1901aa09ef

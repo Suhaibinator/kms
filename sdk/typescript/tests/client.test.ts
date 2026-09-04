@@ -340,11 +340,36 @@ describe("KmsClient", () => {
     const operations: readonly [string, () => Promise<unknown>][] = [
       ["get", () => client.getSecret("secret", { secretToken, bindingKey })],
       ["put", () => client.putSecret("secret", plaintext, { bindingKey })],
-      ["bind", () => client.bindSecret("secret", { bindingKey })],
-      ["unbind", () => client.unbindSecret("secret", { bindingKey })],
+      ["bind", () => client.bindSecret("secret", { expectedCurrentVersion: 1n, bindingKey })],
+      ["unbind", () => client.unbindSecret("secret", { expectedCurrentVersion: 1n, bindingKey })],
       ["preview", () => client.previewSecretBindingCohort("secret", { bindingKey })],
-      ["rotate", () => client.rotateSecretBindingKey("secret", { bindingKey, newBindingKey })],
-      ["purge", () => client.purgeSecretBindingCohort("secret", { bindingKey })],
+      [
+        "rotate",
+        () =>
+          client.rotateSecretBindingKey("secret", {
+            expectedCurrentVersion: 1n,
+            bindingKey,
+            newBindingKey,
+          }),
+      ],
+      [
+        "purge",
+        () =>
+          client.purgeSecretBindingCohort("secret", {
+            bindingKey,
+            expectedRevision: 1n,
+            expectedAffectedVersions: [1n],
+          }),
+      ],
+      ["preview-unbound", () => client.previewSecretUnboundVersions("secret")],
+      [
+        "purge-unbound",
+        () =>
+          client.purgeSecretUnboundVersions("secret", {
+            expectedRevision: 1n,
+            expectedAffectedVersions: [1n],
+          }),
+      ],
     ];
     for (const [operation, call] of operations) {
       const error = await call().catch((reason: unknown) => reason);
@@ -384,7 +409,11 @@ describe("KmsClient", () => {
     const client = new KmsClient({ transport, namespace: "prod/api" });
 
     const purgeError = await client
-      .purgeSecretBindingCohort("secret", { bindingKey })
+      .purgeSecretBindingCohort("secret", {
+        bindingKey,
+        expectedRevision: 1n,
+        expectedAffectedVersions: [1n],
+      })
       .catch((reason: unknown) => reason);
     expect(purgeError).toBeInstanceOf(PurgeCleanupPendingError);
     expect(purgeError).toMatchObject({
@@ -396,6 +425,7 @@ describe("KmsClient", () => {
 
     const rotateError = await client
       .rotateSecretBindingKey("secret", {
+        expectedCurrentVersion: 1n,
         bindingKey,
         newBindingKey: "replacement-binding-key",
       })
@@ -435,16 +465,24 @@ describe("KmsClient", () => {
     await client.close();
   });
 
-  it("maps binding lifecycle RPCs and freezes returned cohort versions", async () => {
+  it("maps binding lifecycle RPCs and freezes returned results", async () => {
     let revision = 20n;
     const transport = new FakeTransport((path) => {
       revision += 1n;
-      return {
-        anchorVersion: path.endsWith("/BindSecret") || path.endsWith("/UnbindSecret") ? 7n : 8n,
-        affectedVersions:
-          path.endsWith("/BindSecret") || path.endsWith("/UnbindSecret") ? [7n] : [7n, 8n],
-        revision,
-      };
+      if (
+        path.endsWith("/BindSecret") ||
+        path.endsWith("/UnbindSecret") ||
+        path.endsWith("/RotateSecretBindingKey")
+      ) {
+        return { currentVersion: 9n, previousVersion: 8n, revision };
+      }
+      if (
+        path.endsWith("/PreviewSecretUnboundVersions") ||
+        path.endsWith("/PurgeSecretUnboundVersions")
+      ) {
+        return { affectedVersions: [3n, 5n], revision };
+      }
+      return { anchorVersion: 8n, affectedVersions: [7n, 8n], revision };
     });
     const client = new KmsClient({ transport, namespace: "prod/api" });
 
@@ -453,25 +491,42 @@ describe("KmsClient", () => {
       bindingKey: "binding-key-a",
     });
     const bound = await client.bindSecret("credential", {
-      version: 7n,
+      expectedCurrentVersion: 7n,
       bindingKey: "binding-key-a",
     });
     const unbound = await client.unbindSecret("credential", {
-      version: 7n,
+      expectedCurrentVersion: 7n,
       bindingKey: "binding-key-a",
     });
     const rotated = await client.rotateSecretBindingKey("credential", {
-      anchorVersion: 8n,
+      expectedCurrentVersion: 8n,
       bindingKey: "binding-key-a",
       newBindingKey: "binding-key-b",
     });
     const purged = await client.purgeSecretBindingCohort("credential", {
       anchorVersion: 8n,
       bindingKey: "binding-key-b",
+      expectedRevision: 21n,
+      expectedAffectedVersions: [7n, 8n],
+    });
+    const unboundPreview = await client.previewSecretUnboundVersions("credential");
+    const unboundPurged = await client.purgeSecretUnboundVersions("credential", {
+      expectedRevision: unboundPreview.revision,
+      expectedAffectedVersions: unboundPreview.affectedVersions,
     });
 
-    for (const result of [previewed, bound, unbound, rotated, purged]) {
+    for (const result of [
+      previewed,
+      bound,
+      unbound,
+      rotated,
+      purged,
+      unboundPreview,
+      unboundPurged,
+    ]) {
       expect(Object.isFrozen(result)).toBe(true);
+    }
+    for (const result of [previewed, purged, unboundPreview, unboundPurged]) {
       expect(Object.isFrozen(result.affectedVersions)).toBe(true);
     }
     expect(transport.calls.map(({ request }) => request)).toEqual([
@@ -482,48 +537,46 @@ describe("KmsClient", () => {
       },
       {
         ref: { namespace: { env: "prod", app: "api" }, key: "credential" },
-        version: 7n,
+        expectedCurrentVersion: 7n,
         bindingKey: "binding-key-a",
       },
       {
         ref: { namespace: { env: "prod", app: "api" }, key: "credential" },
-        version: 7n,
+        expectedCurrentVersion: 7n,
         bindingKey: "binding-key-a",
       },
       {
         ref: { namespace: { env: "prod", app: "api" }, key: "credential" },
-        anchorVersion: 8n,
+        expectedCurrentVersion: 8n,
         bindingKey: "binding-key-a",
         newBindingKey: "binding-key-b",
-        expectedAffectedVersions: [],
       },
       {
         ref: { namespace: { env: "prod", app: "api" }, key: "credential" },
         anchorVersion: 8n,
         bindingKey: "binding-key-b",
-        expectedAffectedVersions: [],
+        expectedRevision: 21n,
+        expectedAffectedVersions: [7n, 8n],
+      },
+      {
+        ref: { namespace: { env: "prod", app: "api" }, key: "credential" },
+      },
+      {
+        ref: { namespace: { env: "prod", app: "api" }, key: "credential" },
+        expectedRevision: unboundPreview.revision,
+        expectedAffectedVersions: [3n, 5n],
       },
     ]);
     await client.close();
   });
 
-  it("sends paired cohort CAS guards defensively and rejects invalid guard sets locally", async () => {
+  it("allows omitted bound-purge guards and validates supplied guard sets locally", async () => {
     const transport = new FakeTransport(() => ({
       anchorVersion: 8n,
       affectedVersions: [7n, 8n],
       revision: 22n,
     }));
     const client = new KmsClient({ transport, namespace: "prod/api" });
-    const rotateVersions = [7n, 8n];
-    const rotate = client.rotateSecretBindingKey("credential", {
-      anchorVersion: 8n,
-      bindingKey: "binding-key-a",
-      newBindingKey: "binding-key-b",
-      expectedRevision: 20n,
-      expectedAffectedVersions: rotateVersions,
-    });
-    rotateVersions[0] = 99n;
-    await rotate;
     await client.purgeSecretBindingCohort("credential", {
       anchorVersion: 8n,
       bindingKey: "binding-key-b",
@@ -535,19 +588,22 @@ describe("KmsClient", () => {
       {
         ref: { namespace: { env: "prod", app: "api" }, key: "credential" },
         anchorVersion: 8n,
-        bindingKey: "binding-key-a",
-        newBindingKey: "binding-key-b",
-        expectedRevision: 20n,
-        expectedAffectedVersions: [7n, 8n],
-      },
-      {
-        ref: { namespace: { env: "prod", app: "api" }, key: "credential" },
-        anchorVersion: 8n,
         bindingKey: "binding-key-b",
         expectedRevision: 21n,
         expectedAffectedVersions: [7n, 8n],
       },
     ]);
+
+    await client.purgeSecretBindingCohort("credential", {
+      anchorVersion: 8n,
+      bindingKey: "binding-key-b",
+    });
+    expect(transport.calls[1]?.request).toEqual({
+      ref: { namespace: { env: "prod", app: "api" }, key: "credential" },
+      anchorVersion: 8n,
+      bindingKey: "binding-key-b",
+      expectedAffectedVersions: [],
+    });
 
     const invalid = [
       { expectedRevision: 1n },
@@ -564,7 +620,7 @@ describe("KmsClient", () => {
           anchorVersion: 8n,
           bindingKey: "binding-key-b",
           ...guards,
-        }),
+        } as never),
       ).rejects.toBeInstanceOf(ConfigError);
     }
     expect(transport.calls).toHaveLength(2);
@@ -827,15 +883,29 @@ describe("KmsClient", () => {
       () => client.getSecret("secret", { bindingKey: hostile as never }),
       () => client.getSecret("secret", { secretToken: hostile as never }),
       () => client.putSecret("secret", "value", { bindingKey: hostile as never }),
-      () => client.bindSecret("secret", { bindingKey: hostile as never }),
-      () => client.unbindSecret("secret", { bindingKey: hostile as never }),
+      () =>
+        client.bindSecret("secret", {
+          expectedCurrentVersion: 1n,
+          bindingKey: hostile as never,
+        }),
+      () =>
+        client.unbindSecret("secret", {
+          expectedCurrentVersion: 1n,
+          bindingKey: hostile as never,
+        }),
       () => client.previewSecretBindingCohort("secret", { bindingKey: hostile as never }),
       () =>
         client.rotateSecretBindingKey("secret", {
+          expectedCurrentVersion: 1n,
           bindingKey: "old",
           newBindingKey: hostile as never,
         }),
-      () => client.purgeSecretBindingCohort("secret", { bindingKey: hostile as never }),
+      () =>
+        client.purgeSecretBindingCohort("secret", {
+          bindingKey: hostile as never,
+          expectedRevision: 1n,
+          expectedAffectedVersions: [1n],
+        }),
     ];
 
     for (const call of calls) {
@@ -847,20 +917,27 @@ describe("KmsClient", () => {
     await client.close();
   });
 
-  it("rejects an unchanged replacement binding key without making an RPC", async () => {
-    const transport = new FakeTransport(() => {
-      throw new Error("unexpected RPC");
-    });
+  it("sends an unchanged replacement binding key for ordered server validation", async () => {
+    const transport = new FakeTransport(() => ({
+      currentVersion: 2n,
+      previousVersion: 1n,
+      revision: 3n,
+    }));
     const client = new KmsClient({ transport, namespace: "prod/api" });
     const bindingKey = "same-binding-key-0123456789abcdef";
 
     await expect(
-      client.rotateSecretBindingKey("secret", { bindingKey, newBindingKey: bindingKey }),
-    ).rejects.toMatchObject({
-      code: "invalid_argument",
-      message: "new binding key must differ from current binding key",
+      client.rotateSecretBindingKey("secret", {
+        expectedCurrentVersion: 1n,
+        bindingKey,
+        newBindingKey: bindingKey,
+      }),
+    ).resolves.toMatchObject({
+      currentVersion: 2n,
+      previousVersion: 1n,
     });
-    expect(transport.calls).toHaveLength(0);
+    expect(transport.calls).toHaveLength(1);
+    expect(transport.calls[0]?.request).toMatchObject({ bindingKey, newBindingKey: bindingKey });
     await client.close();
   });
 

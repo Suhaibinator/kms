@@ -168,14 +168,18 @@ service SecretService {
   rpc DestroySecretVersion(DestroySecretVersionRequest) returns (DestroySecretVersionResponse);
   rpc GetSecretMetadata(GetSecretMetadataRequest) returns (GetSecretMetadataResponse);
   rpc PromoteSecretVersion(PromoteSecretVersionRequest) returns (PromoteSecretVersionResponse);
-  rpc BindSecret(BindSecretRequest) returns (SecretVersionMutationResponse);
-  rpc UnbindSecret(UnbindSecretRequest) returns (SecretVersionMutationResponse);
+  rpc BindSecret(BindSecretRequest) returns (SecretVersionTransitionResponse);
+  rpc UnbindSecret(UnbindSecretRequest) returns (SecretVersionTransitionResponse);
   rpc PreviewSecretBindingCohort(PreviewSecretBindingCohortRequest)
       returns (SecretBindingCohortResponse);
   rpc RotateSecretBindingKey(RotateSecretBindingKeyRequest)
-      returns (SecretBindingCohortResponse);
+      returns (SecretVersionTransitionResponse);
   rpc PurgeSecretBindingCohort(PurgeSecretBindingCohortRequest)
       returns (SecretBindingCohortResponse);
+  rpc PreviewSecretUnboundVersions(PreviewSecretUnboundVersionsRequest)
+      returns (SecretVersionSetResponse);
+  rpc PurgeSecretUnboundVersions(PurgeSecretUnboundVersionsRequest)
+      returns (SecretVersionSetResponse);
 }
 
 message GetSecretRequest {
@@ -281,25 +285,26 @@ message PromoteSecretVersionResponse {
   uint64 revision = 3;
 }
 
-// BindSecret adds a binding-key wrapping layer to one exact version in place.
-// version 0 selects the version currently labeled "current".
+// BindSecret creates a new bound version from the version currently labeled
+// "current". expected_current_version is a required compare-and-swap guard.
 message BindSecretRequest {
   ResourceRef ref = 1;
-  uint64 version = 2;
+  uint64 expected_current_version = 2;
   string binding_key = 3;
 }
 
-// UnbindSecret removes a binding-key wrapping layer from one exact version in
-// place. The supplied key must open that version. version 0 selects current.
+// UnbindSecret creates a new unbound version from the version currently
+// labeled "current". The supplied key must open that version and
+// expected_current_version is a required compare-and-swap guard.
 message UnbindSecretRequest {
   ResourceRef ref = 1;
-  uint64 version = 2;
+  uint64 expected_current_version = 2;
   string binding_key = 3;
 }
 
-message SecretVersionMutationResponse {
-  uint64 anchor_version = 1;
-  repeated uint64 affected_versions = 2; // singleton, sorted ascending
+message SecretVersionTransitionResponse {
+  uint64 current_version = 1;
+  uint64 previous_version = 2;
   uint64 revision = 3;
 }
 
@@ -311,23 +316,19 @@ message PreviewSecretBindingCohortRequest {
   string binding_key = 3;
 }
 
-// RotateSecretBindingKey rewraps the contiguous cohort around anchor_version;
-// anchor_version 0 selects current. The optional preview guards must be
-// supplied together and let a caller reject a stale cohort rather than
-// mutating a set different from the one it confirmed.
+// RotateSecretBindingKey creates a new version of the current bound secret
+// under a different binding key. Historical versions are not changed.
 message RotateSecretBindingKeyRequest {
   ResourceRef ref = 1;
-  uint64 anchor_version = 2;
+  uint64 expected_current_version = 2;
   string binding_key = 3;
   string new_binding_key = 4;
-  optional uint64 expected_revision = 5;
-  repeated uint64 expected_affected_versions = 6;
 }
 
 // PurgeSecretBindingCohort is an admin-only irreversible destruction of the
 // contiguous cohort around anchor_version and bypasses release-reference
 // protection; anchor_version 0 selects current. The optional preview guards
-// have the same paired semantics as the rotation guards.
+// must be supplied together and, when present, exactly match a prior preview.
 message PurgeSecretBindingCohortRequest {
   ResourceRef ref = 1;
   uint64 anchor_version = 2;
@@ -343,6 +344,25 @@ message SecretBindingCohortResponse {
   uint64 anchor_version = 1;
   repeated uint64 affected_versions = 2;
   uint64 revision = 3;
+}
+
+// PreviewSecretUnboundVersions discovers every non-destroyed unbound version
+// of one secret. The result is the mandatory compare-and-swap input to purge.
+message PreviewSecretUnboundVersionsRequest {
+  ResourceRef ref = 1;
+}
+
+// PurgeSecretUnboundVersions is an admin-only irreversible destruction of an
+// exact previously previewed set. It bypasses release-reference protection.
+message PurgeSecretUnboundVersionsRequest {
+  ResourceRef ref = 1;
+  uint64 expected_revision = 2;
+  repeated uint64 expected_affected_versions = 3;
+}
+
+message SecretVersionSetResponse {
+  repeated uint64 affected_versions = 1;
+  uint64 revision = 2;
 }
 
 // ---------------------------------------------------------------------------
@@ -688,7 +708,7 @@ message ParameterChange {
 message SecretMetadataChange {
   ResourceRef ref = 1;
   // put | delete | promote | disable | enable | destroy | bind | unbind |
-  // rotate_binding_key | purge_binding_cohort
+  // rotate_binding_key | purge_binding_cohort | purge_unbound_versions
   string change_type = 2;
   uint64 version = 3;
   string label = 4;

@@ -342,12 +342,12 @@ class SecretServiceStub:
         self.BindSecret = channel.unary_unary(
                 '/kms.v1.SecretService/BindSecret',
                 request_serializer=kms_dot_v1_dot_kms__pb2.BindSecretRequest.SerializeToString,
-                response_deserializer=kms_dot_v1_dot_kms__pb2.SecretVersionMutationResponse.FromString,
+                response_deserializer=kms_dot_v1_dot_kms__pb2.SecretVersionTransitionResponse.FromString,
                 _registered_method=True)
         self.UnbindSecret = channel.unary_unary(
                 '/kms.v1.SecretService/UnbindSecret',
                 request_serializer=kms_dot_v1_dot_kms__pb2.UnbindSecretRequest.SerializeToString,
-                response_deserializer=kms_dot_v1_dot_kms__pb2.SecretVersionMutationResponse.FromString,
+                response_deserializer=kms_dot_v1_dot_kms__pb2.SecretVersionTransitionResponse.FromString,
                 _registered_method=True)
         self.PreviewSecretBindingCohort = channel.unary_unary(
                 '/kms.v1.SecretService/PreviewSecretBindingCohort',
@@ -357,12 +357,22 @@ class SecretServiceStub:
         self.RotateSecretBindingKey = channel.unary_unary(
                 '/kms.v1.SecretService/RotateSecretBindingKey',
                 request_serializer=kms_dot_v1_dot_kms__pb2.RotateSecretBindingKeyRequest.SerializeToString,
-                response_deserializer=kms_dot_v1_dot_kms__pb2.SecretBindingCohortResponse.FromString,
+                response_deserializer=kms_dot_v1_dot_kms__pb2.SecretVersionTransitionResponse.FromString,
                 _registered_method=True)
         self.PurgeSecretBindingCohort = channel.unary_unary(
                 '/kms.v1.SecretService/PurgeSecretBindingCohort',
                 request_serializer=kms_dot_v1_dot_kms__pb2.PurgeSecretBindingCohortRequest.SerializeToString,
                 response_deserializer=kms_dot_v1_dot_kms__pb2.SecretBindingCohortResponse.FromString,
+                _registered_method=True)
+        self.PreviewSecretUnboundVersions = channel.unary_unary(
+                '/kms.v1.SecretService/PreviewSecretUnboundVersions',
+                request_serializer=kms_dot_v1_dot_kms__pb2.PreviewSecretUnboundVersionsRequest.SerializeToString,
+                response_deserializer=kms_dot_v1_dot_kms__pb2.SecretVersionSetResponse.FromString,
+                _registered_method=True)
+        self.PurgeSecretUnboundVersions = channel.unary_unary(
+                '/kms.v1.SecretService/PurgeSecretUnboundVersions',
+                request_serializer=kms_dot_v1_dot_kms__pb2.PurgeSecretUnboundVersionsRequest.SerializeToString,
+                response_deserializer=kms_dot_v1_dot_kms__pb2.SecretVersionSetResponse.FromString,
                 _registered_method=True)
 
 
@@ -456,6 +466,18 @@ class SecretServiceServicer:
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
+    def PreviewSecretUnboundVersions(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def PurgeSecretUnboundVersions(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
 
 def add_SecretServiceServicer_to_server(servicer, server):
     rpc_method_handlers = {
@@ -502,12 +524,12 @@ def add_SecretServiceServicer_to_server(servicer, server):
             'BindSecret': grpc.unary_unary_rpc_method_handler(
                     servicer.BindSecret,
                     request_deserializer=kms_dot_v1_dot_kms__pb2.BindSecretRequest.FromString,
-                    response_serializer=kms_dot_v1_dot_kms__pb2.SecretVersionMutationResponse.SerializeToString,
+                    response_serializer=kms_dot_v1_dot_kms__pb2.SecretVersionTransitionResponse.SerializeToString,
             ),
             'UnbindSecret': grpc.unary_unary_rpc_method_handler(
                     servicer.UnbindSecret,
                     request_deserializer=kms_dot_v1_dot_kms__pb2.UnbindSecretRequest.FromString,
-                    response_serializer=kms_dot_v1_dot_kms__pb2.SecretVersionMutationResponse.SerializeToString,
+                    response_serializer=kms_dot_v1_dot_kms__pb2.SecretVersionTransitionResponse.SerializeToString,
             ),
             'PreviewSecretBindingCohort': grpc.unary_unary_rpc_method_handler(
                     servicer.PreviewSecretBindingCohort,
@@ -517,12 +539,22 @@ def add_SecretServiceServicer_to_server(servicer, server):
             'RotateSecretBindingKey': grpc.unary_unary_rpc_method_handler(
                     servicer.RotateSecretBindingKey,
                     request_deserializer=kms_dot_v1_dot_kms__pb2.RotateSecretBindingKeyRequest.FromString,
-                    response_serializer=kms_dot_v1_dot_kms__pb2.SecretBindingCohortResponse.SerializeToString,
+                    response_serializer=kms_dot_v1_dot_kms__pb2.SecretVersionTransitionResponse.SerializeToString,
             ),
             'PurgeSecretBindingCohort': grpc.unary_unary_rpc_method_handler(
                     servicer.PurgeSecretBindingCohort,
                     request_deserializer=kms_dot_v1_dot_kms__pb2.PurgeSecretBindingCohortRequest.FromString,
                     response_serializer=kms_dot_v1_dot_kms__pb2.SecretBindingCohortResponse.SerializeToString,
+            ),
+            'PreviewSecretUnboundVersions': grpc.unary_unary_rpc_method_handler(
+                    servicer.PreviewSecretUnboundVersions,
+                    request_deserializer=kms_dot_v1_dot_kms__pb2.PreviewSecretUnboundVersionsRequest.FromString,
+                    response_serializer=kms_dot_v1_dot_kms__pb2.SecretVersionSetResponse.SerializeToString,
+            ),
+            'PurgeSecretUnboundVersions': grpc.unary_unary_rpc_method_handler(
+                    servicer.PurgeSecretUnboundVersions,
+                    request_deserializer=kms_dot_v1_dot_kms__pb2.PurgeSecretUnboundVersionsRequest.FromString,
+                    response_serializer=kms_dot_v1_dot_kms__pb2.SecretVersionSetResponse.SerializeToString,
             ),
     }
     generic_handler = grpc.method_handlers_generic_handler(
@@ -776,7 +808,7 @@ class SecretService:
             target,
             '/kms.v1.SecretService/BindSecret',
             kms_dot_v1_dot_kms__pb2.BindSecretRequest.SerializeToString,
-            kms_dot_v1_dot_kms__pb2.SecretVersionMutationResponse.FromString,
+            kms_dot_v1_dot_kms__pb2.SecretVersionTransitionResponse.FromString,
             options,
             channel_credentials,
             insecure,
@@ -803,7 +835,7 @@ class SecretService:
             target,
             '/kms.v1.SecretService/UnbindSecret',
             kms_dot_v1_dot_kms__pb2.UnbindSecretRequest.SerializeToString,
-            kms_dot_v1_dot_kms__pb2.SecretVersionMutationResponse.FromString,
+            kms_dot_v1_dot_kms__pb2.SecretVersionTransitionResponse.FromString,
             options,
             channel_credentials,
             insecure,
@@ -857,7 +889,7 @@ class SecretService:
             target,
             '/kms.v1.SecretService/RotateSecretBindingKey',
             kms_dot_v1_dot_kms__pb2.RotateSecretBindingKeyRequest.SerializeToString,
-            kms_dot_v1_dot_kms__pb2.SecretBindingCohortResponse.FromString,
+            kms_dot_v1_dot_kms__pb2.SecretVersionTransitionResponse.FromString,
             options,
             channel_credentials,
             insecure,
@@ -885,6 +917,60 @@ class SecretService:
             '/kms.v1.SecretService/PurgeSecretBindingCohort',
             kms_dot_v1_dot_kms__pb2.PurgeSecretBindingCohortRequest.SerializeToString,
             kms_dot_v1_dot_kms__pb2.SecretBindingCohortResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def PreviewSecretUnboundVersions(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/kms.v1.SecretService/PreviewSecretUnboundVersions',
+            kms_dot_v1_dot_kms__pb2.PreviewSecretUnboundVersionsRequest.SerializeToString,
+            kms_dot_v1_dot_kms__pb2.SecretVersionSetResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def PurgeSecretUnboundVersions(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/kms.v1.SecretService/PurgeSecretUnboundVersions',
+            kms_dot_v1_dot_kms__pb2.PurgeSecretUnboundVersionsRequest.SerializeToString,
+            kms_dot_v1_dot_kms__pb2.SecretVersionSetResponse.FromString,
             options,
             channel_credentials,
             insecure,

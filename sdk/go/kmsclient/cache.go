@@ -10,8 +10,8 @@ import (
 const defaultMaxCacheEntries = 4096
 
 // cache is an optional in-memory read cache for parameters. Secret plaintext
-// is deliberately never retained because live protection can change without
-// producing a new version.
+// is deliberately never retained because every read must be authorized and a
+// version's availability can change independently of its value.
 //
 // A nil *cache is a no-op cache: all reads miss and writes are dropped. This
 // keeps the hot path branch-free when CacheTTL is 0.

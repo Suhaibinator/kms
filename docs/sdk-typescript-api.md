@@ -55,8 +55,8 @@ source of truth for exact inference.
 |---|---|---|
 | `createClient`, `KmsClient` | Function `(KmsClientOptions) => KmsClient`; class constructor with the same options | Construct and own one process-shareable Node client. |
 | `KmsClientOptions`, `Logger` | Types | Configure endpoint, authentication/transport, namespace, parameter cache/deadlines, reconciliation, client identity, and bounded logging. Secret plaintext is never cached. |
-| `CallOptions`, `GetOptions`, `ListOptions`, `PutParameterOptions`, `PutSecretOptions`, `BindSecretOptions`, `PreviewSecretBindingCohortOptions`, `RotateSecretBindingKeyOptions`, `PurgeSecretBindingCohortOptions`, `SecretBindingCohortGuardOptions` | Types | Per-operation cancellation/deadline, selectors, pagination, content metadata, independent credentials, and binding lifecycle/CAS options. |
-| `ParameterMetadata`, `Parameter`, `SecretInfo`, `SecretVersion`, `PutResult`, `PutSecretResult`, `SecretVersionMutationResult`, `SecretBindingCohortResult`, `Page<T>`, `WhoAmI` | Types | Immutable public response models; every protobuf integer/timestamp/revision field is `bigint`. |
+| `CallOptions`, `GetOptions`, `ListOptions`, `PutParameterOptions`, `PutSecretOptions`, `BindSecretOptions`, `PreviewSecretBindingCohortOptions`, `RotateSecretBindingKeyOptions`, `PurgeSecretBindingCohortOptions`, `PurgeSecretUnboundVersionsOptions`, `SecretBindingCohortGuardOptions` | Types | Per-operation cancellation/deadline, selectors, pagination, content metadata, independent credentials, current-version transition guards, optional paired exact-preview guards for bound-cohort purge, and mandatory exact-preview guards for unbound-version purge. |
+| `ParameterMetadata`, `Parameter`, `SecretInfo`, `SecretVersion`, `PutResult`, `PutSecretResult`, `SecretVersionTransitionResult`, `SecretBindingCohortResult`, `SecretVersionSetResult`, `Page<T>`, `WhoAmI` | Types | Immutable public response models; every protobuf integer/timestamp/revision field is `bigint`. |
 | `WatchOptions`, `WatchCallback`, `WatchEvent` | Types | Abortable watch registration and the discriminated `put`/`delete`/`secret_change` event union. |
 | `WatchStatus`, `WatchConnectionState`, `ReconciliationHealth` | Types | Frozen, value-free point-in-time watch health: connection/reconciliation state, exact revision, reconnect/scope/tracked-parameter counts, and optional lifecycle timestamps. |
 | `ClientReleaseLoaderOptions` | Type | Select a release and control identity, reconciliation, fetch concurrency, access-token lookup, defensive alias-keyed `bindingKeys`, and manifest validation. |
@@ -78,7 +78,7 @@ method families are:
 | `getSecret(key, options?)`, `putSecret(key, value, options?)` | Defensive `Secret` read or `PutSecretResult`; access tokens, binding keys, and bearer identity are independent. `putSecret` has no write-side secret token. |
 | `listSecrets(namespace?, options?)`, `getSecretMetadata(key, options?)`, `deleteSecret(key, options?)` | Immutable non-plaintext inventory/metadata or exact mutation revision. |
 | `setSecretEnabled(key, enabled, options?)`, `destroySecretVersion(key, version, options?)`, `promoteSecretVersion(key, version, options?)` | Authorized version-state mutations; promotion returns current/previous versions and revision as `bigint`. |
-| `bindSecret`, `unbindSecret`, `previewSecretBindingCohort`, `rotateSecretBindingKey`, `purgeSecretBindingCohort` | Exact-version/cohort lifecycle. Rotate/purge accept only paired, nonzero, sorted-unique preview guards; all results are deeply frozen. Purge is irreversible and admin-only. |
+| `bindSecret`, `unbindSecret`, `rotateSecretBindingKey`, `previewSecretBindingCohort`, `purgeSecretBindingCohort`, `previewSecretUnboundVersions`, `purgeSecretUnboundVersions` | Current-version transitions and purge lifecycle. Transitions require `expectedCurrentVersion` and return one new current/previous pair. Bound-cohort purge accepts an optional paired positive, sorted-unique preview guard; unbound-version purge requires one. All results are deeply frozen. Purge is irreversible and admin-only. |
 | `watch(callback, options?)`, `watchNamespace(namespace, callback, options?)` | Register on the shared process-client stream and return an idempotent local unsubscriber. Home-namespace discovery makes `watch` asynchronous. |
 | `resolve(config, options?)` | Resolve all reachable declarative values concurrently. |
 | `createReleaseLoader(options)` | Create an independently runnable loader that shares this client’s authenticated transport. |
@@ -177,16 +177,18 @@ generated protobuf symbols remain internal.
 | `listParameters`, `listSecrets` | Return immutable `Page<T>` values with bounded pagination inputs. |
 | `getParameterMetadata`, `getSecretMetadata` | Return non-plaintext history, labels, state, and content metadata. |
 | `deleteParameter`, `deleteSecret`, `setSecretEnabled`, `destroySecretVersion`, `promoteSecretVersion` | Perform the corresponding authorized mutation and return exact revision/version values. |
-| `bindSecret`, `unbindSecret` | Rewrap one exact version in place (`version: 0n` selects current) and return a frozen singleton mutation result. |
+| `bindSecret`, `unbindSecret` | Require `expectedCurrentVersion`, clone current into one new version with the requested protection mode, and return a frozen `SecretVersionTransitionResult`. |
 | `previewSecretBindingCohort` | Discover a contiguous cohort without mutation and return its anchor, sorted affected versions, and revision. |
-| `rotateSecretBindingKey`, `purgeSecretBindingCohort` | Rewrap or irreversibly destroy the contiguous cohort. `expectedRevision` and `expectedAffectedVersions` are optional but must be supplied together, nonzero, sorted, and unique. |
+| `rotateSecretBindingKey` | Require `expectedCurrentVersion` and clone only current under the replacement key; historical versions retain the old key. |
+| `purgeSecretBindingCohort` | Irreversibly destroy a contiguous bound cohort. Optional `expectedRevision` and `expectedAffectedVersions` must be supplied together and, when supplied, must exactly match a prior preview. |
+| `previewSecretUnboundVersions`, `purgeSecretUnboundVersions` | Preview every non-destroyed unbound version, then irreversibly purge exactly that mandatory revision/version-set guard. |
 | `SecretValue` | Resolve an env override, KMS secret, or allowed default. Plaintext access is explicit and implicit rendering redacts. |
 | `ParameterValue` | Resolve the same precedence and subscribe by default. `static: true` opts out; `onChange` and `dispose` own callback lifecycle. |
 | `client.resolve(object)` / `resolveValues` | Find declarative values through own properties and arrays, detect cycles, and report failures together in `ResolutionError`. |
 
 `SecretInfo.bound` summarizes the version selected by `current`, while
 `SecretInfo.hasAccessToken` reports whether the secret currently has an access
-token hash. Every `SecretVersion` carries its own live `bound` and
+token hash. Every `SecretVersion` carries immutable-while-live `bound` and
 `hasAccessToken`; exact-version decisions use those fields.
 
 `parseNamespace`, `splitDisplayPath`, `resolveRef`, and display helpers expose
@@ -468,9 +470,10 @@ caller-supplied secret bytes.
 RPCs that carry plaintext, access tokens, or binding keys use a secret-safe
 mapper with fixed messages rather than reflecting hostile server detail.
 `PurgeCleanupPendingError` means the purge transaction committed but physical
-SQLite/WAL cleanup has not completed. Do not retry the purge with the retired
-key. gRPC cannot return the cohort result with an error, so the promise rejects
-without a mutation result in this case.
+SQLite/WAL cleanup has not completed. Do not retry a bound-cohort purge with
+the retired key, or an unbound-version purge as though its preview were still
+live. gRPC cannot return a mutation result with an error, so the promise rejects
+without a result in this case.
 
 The complete `KmsErrorCode` union is `not_found`, `permission_denied`,
 `unauthenticated`, `failed_precondition`, `not_initialized`, `no_namespace`,

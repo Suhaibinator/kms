@@ -43,8 +43,9 @@ command suitable for laptops and hosted CI runners.
 
 `internal/integration/binding_key_test.go` is the end-to-end `0.3.x` binding
 gate. It covers independent credentials and live exact-version metadata,
-in-place bind/unbind, previewed CAS rotation, contiguous cohort purge, release
-invalidation, and secret-version high-water non-reuse through real
+version-creating bind/unbind/rotation with current-version CAS, contiguous
+bound-cohort purge, full unbound-version preview/purge, release pin stability
+and invalidation, and secret-version high-water non-reuse through real
 TLS/gRPC/core/SQLite wiring.
 
 Race-enabled variants are available for focused work and the complete suite:

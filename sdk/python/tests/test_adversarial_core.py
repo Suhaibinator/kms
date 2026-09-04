@@ -359,13 +359,21 @@ def test_all_sync_secret_bearing_rpcs_discard_reflected_remote_details():
     calls = (
         lambda: client.get_secret("key", secret_token=token, binding_key=binding_key),
         lambda: client.put_secret("key", plaintext, binding_key=binding_key),
-        lambda: client.bind_secret("key", binding_key=binding_key),
-        lambda: client.unbind_secret("key", binding_key=binding_key),
+        lambda: client.bind_secret("key", expected_current_version=1, binding_key=binding_key),
+        lambda: client.unbind_secret("key", expected_current_version=1, binding_key=binding_key),
         lambda: client.preview_secret_binding_cohort("key", binding_key=binding_key),
         lambda: client.rotate_secret_binding_key(
-            "key", binding_key=binding_key, new_binding_key=binding_key + "-new",
+            "key", expected_current_version=1, binding_key=binding_key,
+            new_binding_key=binding_key + "-new",
         ),
-        lambda: client.purge_secret_binding_cohort("key", binding_key=binding_key),
+        lambda: client.purge_secret_binding_cohort(
+            "key", binding_key=binding_key,
+            expected_revision=1, expected_affected_versions=(1,),
+        ),
+        lambda: client.preview_secret_unbound_versions("key"),
+        lambda: client.purge_secret_unbound_versions(
+            "key", expected_revision=1, expected_affected_versions=(1,),
+        ),
     )
     try:
         for call in calls:
@@ -386,18 +394,20 @@ def test_all_sync_secret_bearing_rpcs_discard_reflected_remote_details():
         client.close()
 
 
-def test_sync_rotation_rejects_unchanged_binding_key_without_rpc():
+def test_sync_rotation_sends_identical_keys_for_server_validation():
     key = "same-binding-key-0123456789abcdef"
     client = Client(channel=mock.MagicMock(), namespace=NS)
-    client._secret_stub = SimpleNamespace(RotateSecretBindingKey=mock.MagicMock())
+    rotate = mock.MagicMock(return_value=kms_pb2.SecretVersionTransitionResponse(
+        current_version=2, previous_version=1, revision=3,
+    ))
+    client._secret_stub = SimpleNamespace(RotateSecretBindingKey=rotate)
     try:
-        with pytest.raises(ConfigError) as caught:
-            client.rotate_secret_binding_key(
-                "secret", binding_key=key, new_binding_key=key,
-            )
-        assert str(caught.value) == "new binding key must differ from current binding key"
-        assert caught.value.code == "invalid_argument"
-        client._secret_stub.RotateSecretBindingKey.assert_not_called()
+        result = client.rotate_secret_binding_key(
+            "secret", expected_current_version=1, binding_key=key, new_binding_key=key,
+        )
+        assert (result.current_version, result.previous_version) == (2, 1)
+        request = rotate.call_args.args[0]
+        assert request.binding_key == key == request.new_binding_key
     finally:
         client.close()
 
@@ -413,13 +423,21 @@ def test_all_async_secret_bearing_rpcs_discard_reflected_remote_details():
         calls = (
             lambda: client.get_secret("key", secret_token=token, binding_key=binding_key),
             lambda: client.put_secret("key", plaintext, binding_key=binding_key),
-            lambda: client.bind_secret("key", binding_key=binding_key),
-            lambda: client.unbind_secret("key", binding_key=binding_key),
+            lambda: client.bind_secret("key", expected_current_version=1, binding_key=binding_key),
+            lambda: client.unbind_secret("key", expected_current_version=1, binding_key=binding_key),
             lambda: client.preview_secret_binding_cohort("key", binding_key=binding_key),
             lambda: client.rotate_secret_binding_key(
-                "key", binding_key=binding_key, new_binding_key=binding_key + "-new",
+                "key", expected_current_version=1, binding_key=binding_key,
+                new_binding_key=binding_key + "-new",
             ),
-            lambda: client.purge_secret_binding_cohort("key", binding_key=binding_key),
+            lambda: client.purge_secret_binding_cohort(
+                "key", binding_key=binding_key,
+                expected_revision=1, expected_affected_versions=(1,),
+            ),
+            lambda: client.preview_secret_unbound_versions("key"),
+            lambda: client.purge_secret_unbound_versions(
+                "key", expected_revision=1, expected_affected_versions=(1,),
+            ),
         )
         try:
             for call in calls:
@@ -438,20 +456,21 @@ def test_all_async_secret_bearing_rpcs_discard_reflected_remote_details():
     asyncio.run(exercise())
 
 
-def test_async_rotation_rejects_unchanged_binding_key_without_rpc():
+def test_async_rotation_sends_identical_keys_for_server_validation():
     async def exercise() -> None:
         key = "same-binding-key-0123456789abcdef"
         client = AsyncClient(channel=mock.MagicMock(), namespace=NS)
-        rotate = mock.AsyncMock()
+        rotate = mock.AsyncMock(return_value=kms_pb2.SecretVersionTransitionResponse(
+            current_version=2, previous_version=1, revision=3,
+        ))
         client._secret_stub = SimpleNamespace(RotateSecretBindingKey=rotate)
         try:
-            with pytest.raises(ConfigError) as caught:
-                await client.rotate_secret_binding_key(
-                    "secret", binding_key=key, new_binding_key=key,
-                )
-            assert str(caught.value) == "new binding key must differ from current binding key"
-            assert caught.value.code == "invalid_argument"
-            rotate.assert_not_awaited()
+            result = await client.rotate_secret_binding_key(
+                "secret", expected_current_version=1, binding_key=key, new_binding_key=key,
+            )
+            assert (result.current_version, result.previous_version) == (2, 1)
+            request = rotate.await_args.args[0]
+            assert request.binding_key == key == request.new_binding_key
         finally:
             await client.close()
 
@@ -468,13 +487,21 @@ def test_all_sync_secret_bearing_rpcs_sanitize_arbitrary_transport_exceptions():
     calls = (
         lambda: client.get_secret("key", secret_token=token, binding_key=binding_key),
         lambda: client.put_secret("key", plaintext, binding_key=binding_key),
-        lambda: client.bind_secret("key", binding_key=binding_key),
-        lambda: client.unbind_secret("key", binding_key=binding_key),
+        lambda: client.bind_secret("key", expected_current_version=1, binding_key=binding_key),
+        lambda: client.unbind_secret("key", expected_current_version=1, binding_key=binding_key),
         lambda: client.preview_secret_binding_cohort("key", binding_key=binding_key),
         lambda: client.rotate_secret_binding_key(
-            "key", binding_key=binding_key, new_binding_key=binding_key + "-new",
+            "key", expected_current_version=1, binding_key=binding_key,
+            new_binding_key=binding_key + "-new",
         ),
-        lambda: client.purge_secret_binding_cohort("key", binding_key=binding_key),
+        lambda: client.purge_secret_binding_cohort(
+            "key", binding_key=binding_key,
+            expected_revision=1, expected_affected_versions=(1,),
+        ),
+        lambda: client.preview_secret_unbound_versions("key"),
+        lambda: client.purge_secret_unbound_versions(
+            "key", expected_revision=1, expected_affected_versions=(1,),
+        ),
     )
     try:
         for call in calls:
@@ -508,13 +535,21 @@ def test_all_async_secret_bearing_rpcs_sanitize_arbitrary_transport_exceptions()
         calls = (
             lambda: client.get_secret("key", secret_token=token, binding_key=binding_key),
             lambda: client.put_secret("key", plaintext, binding_key=binding_key),
-            lambda: client.bind_secret("key", binding_key=binding_key),
-            lambda: client.unbind_secret("key", binding_key=binding_key),
+            lambda: client.bind_secret("key", expected_current_version=1, binding_key=binding_key),
+            lambda: client.unbind_secret("key", expected_current_version=1, binding_key=binding_key),
             lambda: client.preview_secret_binding_cohort("key", binding_key=binding_key),
             lambda: client.rotate_secret_binding_key(
-                "key", binding_key=binding_key, new_binding_key=binding_key + "-new",
+                "key", expected_current_version=1, binding_key=binding_key,
+                new_binding_key=binding_key + "-new",
             ),
-            lambda: client.purge_secret_binding_cohort("key", binding_key=binding_key),
+            lambda: client.purge_secret_binding_cohort(
+                "key", binding_key=binding_key,
+                expected_revision=1, expected_affected_versions=(1,),
+            ),
+            lambda: client.preview_secret_unbound_versions("key"),
+            lambda: client.purge_secret_unbound_versions(
+                "key", expected_revision=1, expected_affected_versions=(1,),
+            ),
         )
         try:
             for call in calls:
@@ -621,7 +656,10 @@ def test_sync_purge_cleanup_pending_is_exact_public_and_drops_rpc_context():
             _PurgeStatusError(grpc.StatusCode.UNAVAILABLE, canonical)
         )
         with pytest.raises(kms_paramstore.PurgeCleanupPendingError) as caught:
-            client.purge_secret_binding_cohort("key", binding_key=binding_key)
+            client.purge_secret_binding_cohort(
+                "key", binding_key=binding_key,
+                expected_revision=1, expected_affected_versions=(1,),
+            )
         assert caught.value.code == "purge_cleanup_pending"
         assert caught.value.grpc_code is grpc.StatusCode.UNAVAILABLE
         assert str(caught.value) == canonical
@@ -633,7 +671,10 @@ def test_sync_purge_cleanup_pending_is_exact_public_and_drops_rpc_context():
             _PurgeStatusError(grpc.StatusCode.UNAVAILABLE, reflected)
         )
         with pytest.raises(ParamStoreError) as generic:
-            client.purge_secret_binding_cohort("key", binding_key=binding_key)
+            client.purge_secret_binding_cohort(
+                "key", binding_key=binding_key,
+                expected_revision=1, expected_affected_versions=(1,),
+            )
         assert type(generic.value) is ParamStoreError
         assert generic.value.code == "unavailable"
         assert str(generic.value) == "secret operation failed (unavailable)"
@@ -654,7 +695,8 @@ def test_async_purge_cleanup_pending_requires_unavailable_and_drops_rpc_context(
             )
             with pytest.raises(kms_paramstore.PurgeCleanupPendingError) as caught:
                 await client.purge_secret_binding_cohort(
-                    "key", binding_key=binding_key
+                    "key", binding_key=binding_key,
+                    expected_revision=1, expected_affected_versions=(1,),
                 )
             assert caught.value.code == "purge_cleanup_pending"
             assert caught.value.grpc_code is grpc.StatusCode.UNAVAILABLE
@@ -666,7 +708,8 @@ def test_async_purge_cleanup_pending_requires_unavailable_and_drops_rpc_context(
             )
             with pytest.raises(ParamStoreError) as generic:
                 await client.purge_secret_binding_cohort(
-                    "key", binding_key=binding_key
+                    "key", binding_key=binding_key,
+                    expected_revision=1, expected_affected_versions=(1,),
                 )
             assert not isinstance(
                 generic.value, kms_paramstore.PurgeCleanupPendingError

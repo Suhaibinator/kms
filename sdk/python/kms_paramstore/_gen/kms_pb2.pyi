@@ -366,34 +366,34 @@ class PromoteSecretVersionResponse(_message.Message):
     def __init__(self, current_version: _Optional[int] = ..., previous_version: _Optional[int] = ..., revision: _Optional[int] = ...) -> None: ...
 
 class BindSecretRequest(_message.Message):
-    __slots__ = ("ref", "version", "binding_key")
+    __slots__ = ("ref", "expected_current_version", "binding_key")
     REF_FIELD_NUMBER: _ClassVar[int]
-    VERSION_FIELD_NUMBER: _ClassVar[int]
+    EXPECTED_CURRENT_VERSION_FIELD_NUMBER: _ClassVar[int]
     BINDING_KEY_FIELD_NUMBER: _ClassVar[int]
     ref: ResourceRef
-    version: int
+    expected_current_version: int
     binding_key: str
-    def __init__(self, ref: _Optional[_Union[ResourceRef, _Mapping]] = ..., version: _Optional[int] = ..., binding_key: _Optional[str] = ...) -> None: ...
+    def __init__(self, ref: _Optional[_Union[ResourceRef, _Mapping]] = ..., expected_current_version: _Optional[int] = ..., binding_key: _Optional[str] = ...) -> None: ...
 
 class UnbindSecretRequest(_message.Message):
-    __slots__ = ("ref", "version", "binding_key")
+    __slots__ = ("ref", "expected_current_version", "binding_key")
     REF_FIELD_NUMBER: _ClassVar[int]
-    VERSION_FIELD_NUMBER: _ClassVar[int]
+    EXPECTED_CURRENT_VERSION_FIELD_NUMBER: _ClassVar[int]
     BINDING_KEY_FIELD_NUMBER: _ClassVar[int]
     ref: ResourceRef
-    version: int
+    expected_current_version: int
     binding_key: str
-    def __init__(self, ref: _Optional[_Union[ResourceRef, _Mapping]] = ..., version: _Optional[int] = ..., binding_key: _Optional[str] = ...) -> None: ...
+    def __init__(self, ref: _Optional[_Union[ResourceRef, _Mapping]] = ..., expected_current_version: _Optional[int] = ..., binding_key: _Optional[str] = ...) -> None: ...
 
-class SecretVersionMutationResponse(_message.Message):
-    __slots__ = ("anchor_version", "affected_versions", "revision")
-    ANCHOR_VERSION_FIELD_NUMBER: _ClassVar[int]
-    AFFECTED_VERSIONS_FIELD_NUMBER: _ClassVar[int]
+class SecretVersionTransitionResponse(_message.Message):
+    __slots__ = ("current_version", "previous_version", "revision")
+    CURRENT_VERSION_FIELD_NUMBER: _ClassVar[int]
+    PREVIOUS_VERSION_FIELD_NUMBER: _ClassVar[int]
     REVISION_FIELD_NUMBER: _ClassVar[int]
-    anchor_version: int
-    affected_versions: _containers.RepeatedScalarFieldContainer[int]
+    current_version: int
+    previous_version: int
     revision: int
-    def __init__(self, anchor_version: _Optional[int] = ..., affected_versions: _Optional[_Iterable[int]] = ..., revision: _Optional[int] = ...) -> None: ...
+    def __init__(self, current_version: _Optional[int] = ..., previous_version: _Optional[int] = ..., revision: _Optional[int] = ...) -> None: ...
 
 class PreviewSecretBindingCohortRequest(_message.Message):
     __slots__ = ("ref", "anchor_version", "binding_key")
@@ -406,20 +406,16 @@ class PreviewSecretBindingCohortRequest(_message.Message):
     def __init__(self, ref: _Optional[_Union[ResourceRef, _Mapping]] = ..., anchor_version: _Optional[int] = ..., binding_key: _Optional[str] = ...) -> None: ...
 
 class RotateSecretBindingKeyRequest(_message.Message):
-    __slots__ = ("ref", "anchor_version", "binding_key", "new_binding_key", "expected_revision", "expected_affected_versions")
+    __slots__ = ("ref", "expected_current_version", "binding_key", "new_binding_key")
     REF_FIELD_NUMBER: _ClassVar[int]
-    ANCHOR_VERSION_FIELD_NUMBER: _ClassVar[int]
+    EXPECTED_CURRENT_VERSION_FIELD_NUMBER: _ClassVar[int]
     BINDING_KEY_FIELD_NUMBER: _ClassVar[int]
     NEW_BINDING_KEY_FIELD_NUMBER: _ClassVar[int]
-    EXPECTED_REVISION_FIELD_NUMBER: _ClassVar[int]
-    EXPECTED_AFFECTED_VERSIONS_FIELD_NUMBER: _ClassVar[int]
     ref: ResourceRef
-    anchor_version: int
+    expected_current_version: int
     binding_key: str
     new_binding_key: str
-    expected_revision: int
-    expected_affected_versions: _containers.RepeatedScalarFieldContainer[int]
-    def __init__(self, ref: _Optional[_Union[ResourceRef, _Mapping]] = ..., anchor_version: _Optional[int] = ..., binding_key: _Optional[str] = ..., new_binding_key: _Optional[str] = ..., expected_revision: _Optional[int] = ..., expected_affected_versions: _Optional[_Iterable[int]] = ...) -> None: ...
+    def __init__(self, ref: _Optional[_Union[ResourceRef, _Mapping]] = ..., expected_current_version: _Optional[int] = ..., binding_key: _Optional[str] = ..., new_binding_key: _Optional[str] = ...) -> None: ...
 
 class PurgeSecretBindingCohortRequest(_message.Message):
     __slots__ = ("ref", "anchor_version", "binding_key", "expected_revision", "expected_affected_versions")
@@ -444,6 +440,30 @@ class SecretBindingCohortResponse(_message.Message):
     affected_versions: _containers.RepeatedScalarFieldContainer[int]
     revision: int
     def __init__(self, anchor_version: _Optional[int] = ..., affected_versions: _Optional[_Iterable[int]] = ..., revision: _Optional[int] = ...) -> None: ...
+
+class PreviewSecretUnboundVersionsRequest(_message.Message):
+    __slots__ = ("ref",)
+    REF_FIELD_NUMBER: _ClassVar[int]
+    ref: ResourceRef
+    def __init__(self, ref: _Optional[_Union[ResourceRef, _Mapping]] = ...) -> None: ...
+
+class PurgeSecretUnboundVersionsRequest(_message.Message):
+    __slots__ = ("ref", "expected_revision", "expected_affected_versions")
+    REF_FIELD_NUMBER: _ClassVar[int]
+    EXPECTED_REVISION_FIELD_NUMBER: _ClassVar[int]
+    EXPECTED_AFFECTED_VERSIONS_FIELD_NUMBER: _ClassVar[int]
+    ref: ResourceRef
+    expected_revision: int
+    expected_affected_versions: _containers.RepeatedScalarFieldContainer[int]
+    def __init__(self, ref: _Optional[_Union[ResourceRef, _Mapping]] = ..., expected_revision: _Optional[int] = ..., expected_affected_versions: _Optional[_Iterable[int]] = ...) -> None: ...
+
+class SecretVersionSetResponse(_message.Message):
+    __slots__ = ("affected_versions", "revision")
+    AFFECTED_VERSIONS_FIELD_NUMBER: _ClassVar[int]
+    REVISION_FIELD_NUMBER: _ClassVar[int]
+    affected_versions: _containers.RepeatedScalarFieldContainer[int]
+    revision: int
+    def __init__(self, affected_versions: _Optional[_Iterable[int]] = ..., revision: _Optional[int] = ...) -> None: ...
 
 class ReleaseEntrySelector(_message.Message):
     __slots__ = ("alias", "kind", "ref", "version", "label")

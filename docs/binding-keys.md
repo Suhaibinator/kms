@@ -121,7 +121,7 @@ independent requirements.
 `SecretMetadata.bound` describes the version selected by `current`. Every
 `SecretVersionInfo` has its own live `bound` and `has_access_token` flags;
 exact-version readers must use those fields rather than the current summary.
-Destroyed cohort tombstones report both flags as false.
+Destroyed purge tombstones report both flags as false.
 
 Secret plaintext is never cached by the Go, Python, or TypeScript SDK. Watches
 carry metadata-only notifications, and a consumer explicitly refetches when it
@@ -129,55 +129,64 @@ needs plaintext.
 
 ## Bind, unbind, rotate, and purge
 
-Binding and unbinding rewrap one exact version in place, without creating a
-version or changing the secret-value ciphertext:
+`bound` and `has_access_token` are immutable properties of every live secret
+version. Binding, unbinding, and binding-key rotation therefore clone only the
+version labeled `current` into one new high-water version. KMS fully decrypts
+and re-encrypts the value with fresh ciphertext, DEK, nonce, version-bound AAD,
+active KEK, and (for a bound result) binding salt. The new version becomes
+`current`; the unchanged source becomes `previous`.
+
+The CLI reads current metadata immediately before each transition and submits
+that version as the required `expected_current_version` compare-and-swap guard.
+There is no transition `--version` flag:
 
 ```bash
-KMS_BINDING_KEY="$new_key" parameter-store secret bind /prod/app/api-key --version 7
-KMS_BINDING_KEY="$current_key" parameter-store secret unbind /prod/app/api-key --version 7
+KMS_BINDING_KEY="$new_key" parameter-store secret bind /prod/app/api-key
+KMS_BINDING_KEY="$current_key" parameter-store secret unbind /prod/app/api-key
+
+KMS_BINDING_KEY="$old_key" KMS_NEW_BINDING_KEY="$new_key" \
+  parameter-store binding-key rotate /prod/app/api-key
 ```
 
-Bind refuses a proposed key that already opens either immediate live bound
-neighbor of the selected version. This prevents an exact-version operation
-from silently joining cohorts outside its singleton affected-version result.
-Unbind can only split a cohort and needs no corresponding check.
+Bind requires an unbound current version. Unbind and rotation require a bound
+current version and the key that opens it. Rotation rejects a byte-for-byte
+identical replacement. A stale current guard aborts without creating a version,
+moving a label, advancing the revision, or writing an allow audit.
 
-`--version 0` (the default) selects `current`. Rotation and purge first preview
-the contiguous cohort around the anchor, print the exact affected versions,
-and request confirmation. They replay the preview's revision and version list
-as compare-and-swap guards, so a concurrent change aborts before mutation:
+Each transition preserves plaintext, content type, metadata, enabled/disabled
+state, expiry, and the source version's access-token requirement. It records a
+fresh creation time and actor. Rotation creates exactly one new current version;
+it neither modifies nor clones the historical cohort. Those versions continue
+to require the old binding key.
+
+Compromised historical bound versions are removed separately. Cohort purge
+previews the contiguous cryptographic cohort around an explicit anchor, prints
+the exact affected versions, and replays the revision and version set as CAS
+guards:
 
 ```bash
-KMS_BINDING_KEY="$old_key" KMS_NEW_BINDING_KEY="$new_key" \
-  parameter-store binding-key rotate /prod/app/api-key --version 7
-
 KMS_BINDING_KEY="$compromised_key" \
   parameter-store secret purge-binding-cohort /prod/app/api-key --version 7
 ```
 
-A rotation rejects `binding_key == new_binding_key` byte for byte. SDKs, the
-CLI, and the console reject this locally before sending the mutation. The
-server remains authoritative: it validates and authorizes the request, proves
-that the current key opens the anchor, and checks any CAS guard before reporting
-the fixed `invalid_argument` error. Consequently, a missing or wrong current
-key still follows the same sanitized credential/decryption path, and a stale
-preview still reports a conflict rather than revealing the equality decision.
-No key material is included in the error.
+An administrator can also purge every non-destroyed unbound version of one
+secret, including disabled, expired, or cryptographically corrupt rows. This is
+a distinct preview-and-confirm operation and does not accept a binding key:
 
-Rotation also refuses a replacement key that opens an immediate live bound
-neighbor just outside the rediscovered source cohort. The server performs this
-check inside the mutation transaction, after validating the optional preview
-guard and before preparing or writing any rewrapped DEK. A rejected implicit
-merge returns a fixed, sanitized `failed_precondition` and changes no version,
-revision, change log, or allow audit. Missing, unbound, destroyed, corrupt, and
-differently keyed versions remain hard boundaries, so the same key may still
-be reused beyond one of them. Intentional cohort merging is not supported in
-`0.3.x`; a future merge operation would need to preview and guard the complete
-resulting cohort.
+```bash
+parameter-store secret purge-unbound-versions /prod/app/api-key
+```
 
-Purge requires an authenticated administrator and is irreversible. It bypasses
-the normal current/previous release-reference safeguard because its purpose is
-to remove compromised material. It does not delete every historical version.
+Both purge forms require authenticated administrator status and
+`secret:destroy` authorization, are irreversible, and bypass release-reference
+protection. Preview is mandatory for unbound purge; purge aborts atomically if
+either the global revision or the sorted, unique version set differs from the
+preview. An empty preview fails with `failed_precondition`.
+
+The console displays bind, unbind, and rotation only on the current row and
+reports the newly created version. Historical bound rows retain their
+cohort-purge action. Administrators also receive a secret-level “Purge unbound
+versions” action that previews the exact set before enabling confirmation.
 
 A cohort is discovered cryptographically. KMS opens the bound anchor with the
 supplied key, then scans adjacent version numbers in both directions. It stops
@@ -186,39 +195,41 @@ version. It never jumps over that boundary, even if a later version reuses the
 same key. For `v1=A`, `v2-v3=B`, and `v4-v5=A`, anchoring at v5 with A affects
 only v4 and v5.
 
-The RPCs are `BindSecret`, `UnbindSecret`,
-`PreviewSecretBindingCohort`, `RotateSecretBindingKey`, and
-`PurgeSecretBindingCohort`. Bind/unbind return the anchor, a singleton sorted
-affected-version list, and the resulting revision. Preview, rotate, and purge
-return the anchor, sorted affected versions, and current/resulting revision.
-Rotate and purge accept optional `expected_revision` and
-`expected_affected_versions`; they must be supplied together for a guarded
-operation.
+The RPCs are `BindSecret`, `UnbindSecret`, `RotateSecretBindingKey`,
+`PreviewSecretBindingCohort`, `PurgeSecretBindingCohort`,
+`PreviewSecretUnboundVersions`, and `PurgeSecretUnboundVersions`. Transitions
+require `expected_current_version` and return
+`{current_version, previous_version, revision}`. Version-set previews and
+purges return `{affected_versions, revision}`. Binding-cohort preview/purge
+also return their anchor.
 
 The matching HTTP endpoints are:
 
 | Operation | Endpoint | Additional request fields |
 |---|---|---|
-| Bind | `POST /api/v1/secrets/bind` | `version`, `binding_key` |
-| Unbind | `POST /api/v1/secrets/unbind` | `version`, `binding_key` |
-| Preview | `POST /api/v1/secrets/binding-cohort/preview` | `anchor_version`, `binding_key` |
-| Rotate | `POST /api/v1/secrets/binding-key/rotate` | `anchor_version`, `binding_key`, `new_binding_key`, optional paired CAS fields |
-| Purge | `POST /api/v1/secrets/binding-cohort/purge` | `anchor_version`, `binding_key`, optional paired CAS fields |
+| Bind | `POST /api/v1/secrets/bind` | `expected_current_version`, `binding_key` |
+| Unbind | `POST /api/v1/secrets/unbind` | `expected_current_version`, `binding_key` |
+| Rotate | `POST /api/v1/secrets/binding-key/rotate` | `expected_current_version`, `binding_key`, `new_binding_key` |
+| Preview bound cohort | `POST /api/v1/secrets/binding-cohort/preview` | `anchor_version`, `binding_key` |
+| Purge bound cohort | `POST /api/v1/secrets/binding-cohort/purge` | `anchor_version`, `binding_key`, and optional paired `expected_revision`, `expected_affected_versions`; when supplied, they must match the exact prior preview (the CLI and console always supply them) |
+| Preview unbound versions | `POST /api/v1/secrets/unbound-versions/preview` | none |
+| Purge unbound versions | `POST /api/v1/secrets/unbound-versions/purge` | required `expected_revision`, `expected_affected_versions` |
 
-Every body also contains `env`, `app`, and `key`. Every successful response is
-`{"anchor_version":N,"affected_versions":[...],"revision":N}`. Missing and
-incorrect keys collapse to the same sanitized credential/decryption boundary;
-responses, logs, metrics, and audit events never echo a key.
+Every body also contains `env`, `app`, and `key`. Missing and incorrect keys
+collapse to the same sanitized credential/decryption boundary; responses,
+logs, metrics, and audit events never echo a key.
 
-Bind, unbind, preview, and rotate require the dedicated
+Bind, unbind, bound-cohort preview, and rotate require the dedicated
 `secret:binding-manage` policy operation. It is not granted implicitly to a
 namespace's own identity: delegate it with an exact namespace rule when
 needed, or with `secret:*` when the identity intentionally manages the entire
 secret lifecycle. `secret:write` alone does not grant binding management.
-Purge remains administrator-only regardless of delegated policy.
+Bound-cohort purge and both unbound-version operations require administrator
+status plus `secret:destroy`; these checks happen before secret lookup. Bound-
+cohort preview remains a non-destructive `secret:binding-manage` operation.
 
 Successful bind, unbind, and rotate operations commit their sanitized allow
-audit in the same transaction as the DEK rewrap, revision, and change-log row;
+audit in the same transaction as the new version, revision, and change-log row;
 an audit insertion failure rolls the mutation back and watchers are not
 woken. Preview returns cohort information only after its sanitized allow audit
 is durable. Authorization denials and authorized failures are audited through
@@ -228,9 +239,10 @@ are never included in those rows.
 ## Purge erasure boundary
 
 Purge replaces each selected version with a minimal tombstone and erases its
-ciphertext, encrypted DEK, nonce, binding salt, and operator metadata. Labels
-are preserved exactly. If `current` points at a purged version, it becomes
-unreadable; KMS does not silently promote another version. A per-path
+ciphertext, encrypted DEK, nonce, AAD, KEK/wrapping data, expiry, content type,
+metadata, and protection flags. Labels are preserved exactly and no historical
+version is promoted. If `current` points at a purged version, the current
+projection is cleared. A per-path
 high-water mark prevents a delete/recreate cycle from reusing an old version
 number and accidentally satisfying an immutable release pin.
 
@@ -242,9 +254,10 @@ pending, the service fails closed and reports HTTP 503 with code
 `purge_cleanup_pending` or gRPC `Unavailable`, with fixed text
 `secret purge committed; database artifact cleanup is pending`. SDKs expose
 Go `ErrPurgeCleanupPending`, Python `PurgeCleanupPendingError`, and TypeScript
-`PurgeCleanupPendingError`. The purge is logically committed: do not retry it
-with the retired key. Because gRPC cannot return a response with an error, no
-cohort result accompanies this outcome.
+`PurgeCleanupPendingError`. The purge is logically committed. Because gRPC
+cannot return a response with an error, no purge result accompanies this
+outcome. Do not retry a bound-cohort purge with the retired key, and do not
+retry an unbound-version purge as though its preview were still live.
 
 This guarantee covers only the active SQLite database and its WAL. It cannot
 retract copies in backups, filesystem or volume snapshots, copy-on-write
@@ -257,9 +270,10 @@ itself.
 
 Release entries contain only alias, kind, home-namespace resource reference,
 exact version, content type, metadata, and a parameter digest. They never carry
-`bound` or `has_access_token`; protection is live state, not part of an
-immutable pin or digest. Both parameter and secret pins must belong to the
-release's own `(env, app)` namespace.
+`bound` or `has_access_token`, and those fields do not enter the release digest.
+Because a non-destroyed version's protection flags cannot change, an exact
+version pin nevertheless pins its protection mode implicitly. Both parameter
+and secret pins must belong to the release's own `(env, app)` namespace.
 
 Before fetching an exact secret pin, release loaders fetch live metadata and
 verify the response identity, version, enabled/destroyed state, expiry, and the
@@ -269,6 +283,18 @@ candidate as `token_unavailable`; a wrong credential or failed resolution is
 `resolution_failed`. Startup fails until one complete snapshot applies. During
 hot reload, a rejected candidate never partially replaces the last-known-good
 snapshot.
+
+A protection transition does not rewrite an existing release. The operational
+sequence is: transition current, create and activate a release that explicitly
+pins the new version, retire releases that pin the source, then purge the old
+bound cohort or unbound versions if policy requires erasure. The new release
+has a different digest because its exact version pin differs; the digest format
+itself is unchanged.
+
+Any future protection-mode toggle must likewise create a new version. Rotating
+the per-secret access-token credential may replace the credential accepted by
+an already gated version, but it may never clear that version's
+`has_access_token` requirement.
 
 Bulk `env` and `exec` deliberately do not consume binding keys or call
 `GetSecret` for bound versions. Secret-inclusive bulk resolution fails closed

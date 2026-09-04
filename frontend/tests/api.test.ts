@@ -160,7 +160,7 @@ describe("apiFetch", () => {
     expect(body).not.toHaveProperty("secret_token");
   });
 
-  it("sends lifecycle credentials only in bodies and preserves preview CAS fields", async () => {
+  it("sends lifecycle credentials only in bodies and preserves purge CAS fields", async () => {
     const fetchMock = vi
       .spyOn(globalThis, "fetch")
       .mockImplementation(
@@ -180,10 +180,10 @@ describe("apiFetch", () => {
       4,
       "old-binding-key-0000000000000001",
       "next-binding-key-000000000000001",
-      18,
-      [4, 5],
     );
     await api.purgeSecretBindingCohort(ref, 4, "old-binding-key-0000000000000001", 18, [4, 5]);
+    await api.previewSecretUnboundVersions(ref);
+    await api.purgeSecretUnboundVersions(ref, 19, [1, 3]);
 
     expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
       "/api/v1/secrets/bind",
@@ -191,15 +191,25 @@ describe("apiFetch", () => {
       "/api/v1/secrets/binding-cohort/preview",
       "/api/v1/secrets/binding-key/rotate",
       "/api/v1/secrets/binding-cohort/purge",
+      "/api/v1/secrets/unbound-versions/preview",
+      "/api/v1/secrets/unbound-versions/purge",
     ]);
+    expect(JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body))).toMatchObject({
+      expected_current_version: 4,
+      binding_key: "new-binding-key-0000000000000001",
+    });
+    expect(JSON.parse(String(fetchMock.mock.calls[1]?.[1]?.body))).toMatchObject({
+      expected_current_version: 4,
+      binding_key: "old-binding-key-0000000000000001",
+    });
     const rotateBody = JSON.parse(String(fetchMock.mock.calls[3]?.[1]?.body));
     expect(rotateBody).toMatchObject({
-      anchor_version: 4,
+      expected_current_version: 4,
       binding_key: "old-binding-key-0000000000000001",
       new_binding_key: "next-binding-key-000000000000001",
-      expected_revision: 18,
-      expected_affected_versions: [4, 5],
     });
+    expect(rotateBody).not.toHaveProperty("expected_revision");
+    expect(rotateBody).not.toHaveProperty("expected_affected_versions");
     const purgeBody = JSON.parse(String(fetchMock.mock.calls[4]?.[1]?.body));
     expect(purgeBody).toMatchObject({
       anchor_version: 4,
@@ -207,26 +217,36 @@ describe("apiFetch", () => {
       expected_revision: 18,
       expected_affected_versions: [4, 5],
     });
+    expect(JSON.parse(String(fetchMock.mock.calls[5]?.[1]?.body))).toEqual({
+      env: "prod",
+      app: "billing",
+      key: "api-key",
+    });
+    expect(JSON.parse(String(fetchMock.mock.calls[6]?.[1]?.body))).toMatchObject({
+      expected_revision: 19,
+      expected_affected_versions: [1, 3],
+    });
     for (const [, init] of fetchMock.mock.calls) {
       expect(JSON.stringify(init?.headers ?? {})).not.toContain("binding-key");
     }
   });
 
-  it("rejects an unchanged replacement binding key without fetching", () => {
-    const fetchMock = vi.spyOn(globalThis, "fetch");
+  it("sends an unchanged replacement binding key for ordered server validation", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ current_version: 2, previous_version: 1, revision: 8 }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
     const key = "same-binding-key-0123456789abcdef";
 
-    expect(() =>
-      api.rotateSecretBindingKey(
-        { env: "prod", app: "billing", key: "api-key" },
-        1,
-        key,
-        key,
-        1,
-        [1],
-      ),
-    ).toThrow("New binding key must differ from current binding key.");
-    expect(fetchMock).not.toHaveBeenCalled();
+    await api.rotateSecretBindingKey({ env: "prod", app: "billing", key: "api-key" }, 1, key, key);
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body))).toMatchObject({
+      binding_key: key,
+      new_binding_key: key,
+    });
   });
 
   it("turns a request timeout into a useful unavailable error", async () => {
@@ -405,20 +425,14 @@ describe("secret operation error boundary", () => {
     ["previewSecretBindingCohort", () => api.previewSecretBindingCohort(ref, 2, bindingKeyCanary)],
     [
       "rotateSecretBindingKey",
-      () =>
-        api.rotateSecretBindingKey(
-          ref,
-          2,
-          bindingKeyCanary,
-          `${bindingKeyCanary}-replacement`,
-          41,
-          [2, 3],
-        ),
+      () => api.rotateSecretBindingKey(ref, 2, bindingKeyCanary, `${bindingKeyCanary}-replacement`),
     ],
     [
       "purgeSecretBindingCohort",
       () => api.purgeSecretBindingCohort(ref, 2, bindingKeyCanary, 41, [2, 3]),
     ],
+    ["previewSecretUnboundVersions", () => api.previewSecretUnboundVersions(ref)],
+    ["purgeSecretUnboundVersions", () => api.purgeSecretUnboundVersions(ref, 41, [1, 3])],
   ];
 
   it.each(secretOperations)(

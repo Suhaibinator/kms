@@ -63,8 +63,8 @@ type Config struct {
 	Insecure bool
 
 	// CacheTTL enables an in-memory read cache for GetParameter when greater
-	// than zero. Secret plaintext is never cached because a version's live
-	// protection requirements may change independently of its value.
+	// than zero. Secret plaintext is never cached because availability and
+	// authorization must be evaluated by the server on every read.
 	CacheTTL time.Duration
 
 	// FallbackToDefaultsOnError controls whether declarative SecretValue /
@@ -382,7 +382,7 @@ func (c *Client) fetchParameter(ctx context.Context, r ref, o getOptions) (strin
 // string/JSON formatting; call Value or StringValue for plaintext. Use
 // WithSecretToken for token-protected secrets and WithBindingKey for bound
 // secrets. The credentials are independent and a version may require both.
-// Secret plaintext is never cached because protection is live mutable state.
+// Secret plaintext is never cached; every read is authorized by the server.
 func (c *Client) GetSecret(ctx context.Context, key string, opts ...GetOption) (Secret, error) {
 	o := applyGetOptions(opts)
 	r, err := c.resolveRef(ctx, key)

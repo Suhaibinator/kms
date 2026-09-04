@@ -29,6 +29,8 @@ CORE = {
         "PreviewSecretBindingCohort": "preview_secret_binding_cohort",
         "RotateSecretBindingKey": "rotate_secret_binding_key",
         "PurgeSecretBindingCohort": "purge_secret_binding_cohort",
+        "PreviewSecretUnboundVersions": "preview_secret_unbound_versions",
+        "PurgeSecretUnboundVersions": "purge_secret_unbound_versions",
     },
     "kms.v1.AdminService": {"WhoAmI": "who_am_i"},
     "kms.v1.ConfigurationReleaseService": {

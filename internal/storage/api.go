@@ -95,38 +95,62 @@ type EncryptedPayload struct {
 	AAD            string
 }
 
-// SecretBindingWrapping is the only mutation surface exposed to binding-key
-// cryptography callbacks. Keeping value ciphertext, nonce, algorithm, and AAD
-// out of this type makes it impossible for an in-place binding operation to
-// rewrite the encrypted secret value accidentally.
-type SecretBindingWrapping struct {
-	EncryptedDEK   []byte
-	KEKID          string
-	WrapMode       string
-	BindingKeySalt []byte
-}
-
 // SecretBindingTestFunc proves that a caller-held binding key can open one
 // persisted version. The key itself remains entirely above storage. The
 // callback must be pure computation: no I/O and no calls into storage.
 type SecretBindingTestFunc func(SecretVersionRecord) error
 
-// SecretBindingRewrapFunc opens and rewraps one persisted DEK above storage.
-// Implementations must be pure computation: no I/O and no calls into storage.
-type SecretBindingRewrapFunc func(SecretVersionRecord) (SecretBindingWrapping, error)
-
-// SecretBindingCASGuard optionally binds rotate/purge execution to a preview.
-// The zero value means no guard. Otherwise both fields are required and the
-// versions must be non-empty, sorted, and unique.
+// SecretBindingCASGuard optionally binds a destructive version-set operation
+// to an exact prior preview. The zero value means no guard. Otherwise both
+// fields are required and the versions must be non-empty, positive, sorted,
+// and unique.
 type SecretBindingCASGuard struct {
 	ExpectedRevision         *uint64
 	ExpectedAffectedVersions []uint64
 }
 
-// SecretBindingResult is returned by exact-version and cohort operations.
+// SecretBindingResult is returned by binding-cohort operations.
 // AffectedVersions is always non-empty, sorted, and unique on success.
 type SecretBindingResult struct {
 	AnchorVersion    uint64
+	AffectedVersions []uint64
+	Revision         uint64
+}
+
+// SecretVersionTransitionKind identifies a protection transition. Each
+// transition clones the current source into one new immutable version.
+type SecretVersionTransitionKind string
+
+const (
+	SecretTransitionBind   SecretVersionTransitionKind = "bind"
+	SecretTransitionUnbind SecretVersionTransitionKind = "unbind"
+	SecretTransitionRotate SecretVersionTransitionKind = "rotate_binding_key"
+)
+
+// SecretVersionTransitionParams describes an atomic protection transition.
+// Encrypt is invoked inside the write transaction after the current-version
+// guard is checked and receives an isolated copy of the source row plus the
+// allocated high-water version. It must fully decrypt and re-encrypt the value.
+type SecretVersionTransitionParams struct {
+	Ref                    domain.Ref
+	ExpectedCurrentVersion uint64
+	Kind                   SecretVersionTransitionKind
+	CreatedBy              string
+	Encrypt                func(source SecretVersionRecord, newVersion uint64) (EncryptedPayload, error)
+	Audit                  SecretBindingAudit
+}
+
+// SecretVersionTransitionResult reports the label movement produced by a
+// protection transition.
+type SecretVersionTransitionResult struct {
+	CurrentVersion  uint64
+	PreviousVersion uint64
+	Revision        uint64
+}
+
+// SecretVersionSetResult is used by previewed destructive set operations.
+// AffectedVersions is always sorted and unique.
+type SecretVersionSetResult struct {
 	AffectedVersions []uint64
 	Revision         uint64
 }
@@ -322,29 +346,27 @@ type Store interface {
 	// domain.ErrAborted if p.Expected no longer matches the secret row.
 	CreateSecretVersion(ctx context.Context, p CreateSecretParams) (version, revision uint64, err error)
 
-	// BindSecretVersion and UnbindSecretVersion rewrap exactly one version in
-	// place. version 0 resolves the current label. Storage never receives the
-	// binding key; callbacks receive only persisted encrypted records. Bind
-	// uses testNew to reject a key that would implicitly merge the target with
-	// an adjacent cohort. The fixed sanitized allow audit commits atomically
-	// with the rewrap and change-log row.
-	BindSecretVersion(ctx context.Context, ref domain.Ref, version uint64, testNew SecretBindingTestFunc, rewrap SecretBindingRewrapFunc, audit SecretBindingAudit) (SecretBindingResult, error)
-	UnbindSecretVersion(ctx context.Context, ref domain.Ref, version uint64, rewrap SecretBindingRewrapFunc, audit SecretBindingAudit) (SecretBindingResult, error)
+	// TransitionSecretVersion atomically verifies the current-version guard,
+	// clones the current source into one new high-water version with a fully new
+	// encrypted payload, moves current/previous, and appends its change and audit.
+	TransitionSecretVersion(ctx context.Context, p SecretVersionTransitionParams) (SecretVersionTransitionResult, error)
 
 	// PreviewSecretBindingCohort discovers the contiguous cohort around anchor
 	// (0 = current) and returns the coherent global storage revision.
 	PreviewSecretBindingCohort(ctx context.Context, ref domain.Ref, anchor uint64, test SecretBindingTestFunc) (SecretBindingResult, error)
-	// RotateSecretBindingKey rediscovers and optionally CAS-checks the cohort,
-	// uses testNew to reject an implicit merge with an adjacent cohort, then
-	// rewraps every selected DEK and its fixed allow audit atomically.
-	RotateSecretBindingKey(ctx context.Context, ref domain.Ref, anchor uint64, guard SecretBindingCASGuard, testOld, testNew SecretBindingTestFunc, rewrapNew SecretBindingRewrapFunc, audit SecretBindingAudit) (SecretBindingResult, error)
-	// PurgeSecretBindingCohort rediscovers and optionally CAS-checks the cohort,
+	// PurgeSecretBindingCohort rediscovers the cohort and, when the optional
+	// paired preview guard is supplied, CAS-checks it against that preview,
 	// writes minimal tombstones, and appends its changelog and allow-audit rows
 	// in the same transaction. It intentionally bypasses release-pin guards.
 	// Success also requires a verified WAL truncate. If external use blocks that
 	// post-commit cleanup, the populated result and ErrPurgeCleanupPending are
 	// returned: the logical purge is durable and must not be retried with the key.
 	PurgeSecretBindingCohort(ctx context.Context, ref domain.Ref, anchor uint64, guard SecretBindingCASGuard, test SecretBindingTestFunc, audit SecretBindingPurgeAudit) (SecretBindingResult, error)
+	// PreviewSecretUnboundVersions returns every non-destroyed unbound version.
+	PreviewSecretUnboundVersions(ctx context.Context, ref domain.Ref) (SecretVersionSetResult, error)
+	// PurgeSecretUnboundVersions requires an exact preview guard and securely
+	// tombstones that set while intentionally bypassing release-pin guards.
+	PurgeSecretUnboundVersions(ctx context.Context, ref domain.Ref, expectedRevision uint64, expectedAffectedVersions []uint64, audit SecretBindingPurgeAudit) (SecretVersionSetResult, error)
 
 	GetSecretRecord(ctx context.Context, ref domain.Ref) (SecretRecord, error)
 	// GetSecretVersion resolves version (>0) or label (default "current") and

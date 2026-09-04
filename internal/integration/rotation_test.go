@@ -3,6 +3,7 @@ package integration
 import (
 	"context"
 	"path/filepath"
+	"reflect"
 	"testing"
 
 	"github.com/Suhaibinator/kms/internal/core"
@@ -10,6 +11,64 @@ import (
 	"github.com/Suhaibinator/kms/internal/domain"
 	"github.com/Suhaibinator/kms/internal/storage"
 )
+
+func TestProtectionTransitionAfterKEKRotationUsesActiveKEKAndPreservesSource(t *testing.T) {
+	h := newHarness(t)
+	ctx := context.Background()
+	ref := h.ensureNS("/prod/app/kek-transition")
+	const value = "stable-through-both-rotations"
+	const bindingKey = "integration-kek-transition-binding-key-0123456789abcdef"
+	if _, err := h.svc.PutSecret(ctx, h.admin, core.PutSecretInput{
+		Ref: ref, Value: []byte(value), ContentType: "text/plain", Metadata: `{"owner":"ops"}`, BindingKey: bindingKey,
+	}); err != nil {
+		t.Fatalf("PutSecret: %v", err)
+	}
+
+	newKeyPath := filepath.Join(h.dir, "master.key.transition")
+	newMaterial, err := crypto.WriteKEKMaterialFile(newKeyPath)
+	if err != nil {
+		t.Fatalf("write new key material: %v", err)
+	}
+	newID, err := crypto.NewKEKID()
+	if err != nil {
+		t.Fatalf("new kek id: %v", err)
+	}
+	if _, _, err := h.svc.RotateKEK(ctx, h.admin, domain.KeyMetadata{ID: newID, Source: domain.KeySourceFile}, newMaterial); err != nil {
+		t.Fatalf("RotateKEK: %v", err)
+	}
+	_, sourceBeforeTransition, err := h.store.GetSecretVersion(ctx, ref, 1, "")
+	if err != nil {
+		t.Fatalf("GetSecretVersion after KEK rotation: %v", err)
+	}
+	if sourceBeforeTransition.KEKID != newID {
+		t.Fatalf("source KEK = %q, want active %q", sourceBeforeTransition.KEKID, newID)
+	}
+
+	transition, err := h.svc.UnbindSecret(ctx, h.admin, ref, 1, bindingKey)
+	if err != nil {
+		t.Fatalf("UnbindSecret after KEK rotation: %v", err)
+	}
+	if transition.CurrentVersion != 2 || transition.PreviousVersion != 1 {
+		t.Fatalf("transition = %+v", transition)
+	}
+	_, sourceAfterTransition, err := h.store.GetSecretVersion(ctx, ref, 1, "")
+	if err != nil || !reflect.DeepEqual(sourceAfterTransition, sourceBeforeTransition) {
+		t.Fatalf("transition changed KEK-rewrapped source: before=%+v after=%+v err=%v", sourceBeforeTransition, sourceAfterTransition, err)
+	}
+	_, current, err := h.store.GetSecretVersion(ctx, ref, 2, "")
+	if err != nil {
+		t.Fatalf("GetSecretVersion current: %v", err)
+	}
+	if current.KEKID != newID || current.Bound {
+		t.Fatalf("new version did not use active KEK/unbound protection: %+v", current)
+	}
+	if got, err := h.svc.GetSecret(ctx, h.admin, ref, 1, "", "", bindingKey); err != nil || string(got.Value) != value {
+		t.Fatalf("historical source read=%q err=%v", got.Value, err)
+	}
+	if got, err := h.svc.GetSecret(ctx, h.admin, ref, 2, "", "", ""); err != nil || string(got.Value) != value {
+		t.Fatalf("new version read=%q err=%v", got.Value, err)
+	}
+}
 
 // §11.4 / §25.2 — KEK rotation rewraps every secret version under a fresh key.
 // All secrets (unbound and binding-key protected) keep decrypting, key metadata reflects

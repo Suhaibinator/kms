@@ -22,7 +22,103 @@ const (
 	grpcBindingKeyC = "binding-key-c-0123456789-0123456789"
 )
 
-func TestSecretBindingTransportAuditFailureRollsBack(t *testing.T) {
+func TestSecretBindingTransitionsCreateVersions(t *testing.T) {
+	env := newTestEnv(t, true)
+	env.store.addNamespace(domain.NamespaceRef{Env: "prod", App: "svc"})
+	client := env.secret()
+	secretRef := pRef("prod", "svc", "credentials")
+	expiresAt := time.Now().Add(time.Hour).UnixMilli()
+	put, err := client.PutSecret(adminCtx(), &kmsv1.PutSecretRequest{Ref: secretRef, Value: []byte("value"), ContentType: "text/plain", MetadataJson: `{"epoch":1}`, ExpiresAtUnixMs: expiresAt})
+	if err != nil {
+		t.Fatalf("put: %v", err)
+	}
+	bound, err := client.BindSecret(adminCtx(), &kmsv1.BindSecretRequest{Ref: secretRef, ExpectedCurrentVersion: put.GetVersion(), BindingKey: grpcBindingKeyA})
+	if err != nil {
+		t.Fatalf("bind: %v", err)
+	}
+	if bound.GetCurrentVersion() != 2 || bound.GetPreviousVersion() != 1 || bound.GetRevision() <= put.GetRevision() {
+		t.Fatalf("bind response = %+v", bound)
+	}
+	if _, err := client.BindSecret(adminCtx(), &kmsv1.BindSecretRequest{Ref: secretRef, ExpectedCurrentVersion: 1, BindingKey: grpcBindingKeyB}); codeOf(err) != codes.Aborted {
+		t.Fatalf("stale bind guard = %v, want Aborted", err)
+	}
+	rotated, err := client.RotateSecretBindingKey(adminCtx(), &kmsv1.RotateSecretBindingKeyRequest{Ref: secretRef, ExpectedCurrentVersion: 2, BindingKey: grpcBindingKeyA, NewBindingKey: grpcBindingKeyB})
+	if err != nil {
+		t.Fatalf("rotate: %v", err)
+	}
+	if rotated.GetCurrentVersion() != 3 || rotated.GetPreviousVersion() != 2 {
+		t.Fatalf("rotate response = %+v", rotated)
+	}
+	if _, err := client.GetSecret(adminCtx(), &kmsv1.GetSecretRequest{Ref: secretRef, Version: 2, BindingKey: grpcBindingKeyA}); err != nil {
+		t.Fatalf("historical source no longer opens with old key: %v", err)
+	}
+	if _, err := client.GetSecret(adminCtx(), &kmsv1.GetSecretRequest{Ref: secretRef, Version: 3, BindingKey: grpcBindingKeyB}); err != nil {
+		t.Fatalf("rotated current does not open with new key: %v", err)
+	}
+	unbound, err := client.UnbindSecret(adminCtx(), &kmsv1.UnbindSecretRequest{Ref: secretRef, ExpectedCurrentVersion: 3, BindingKey: grpcBindingKeyB})
+	if err != nil {
+		t.Fatalf("unbind: %v", err)
+	}
+	if unbound.GetCurrentVersion() != 4 || unbound.GetPreviousVersion() != 3 {
+		t.Fatalf("unbind response = %+v", unbound)
+	}
+	got, err := client.GetSecret(adminCtx(), &kmsv1.GetSecretRequest{Ref: secretRef, Version: 4})
+	if err != nil || string(got.GetValue()) != "value" || got.GetContentType() != "text/plain" || got.GetMetadataJson() != `{"epoch":1}` {
+		t.Fatalf("unbound clone = %+v, %v", got, err)
+	}
+	env.store.mu.Lock()
+	row := env.store.secrets["/prod/svc/credentials"]
+	v1, v2, v3, v4 := row.versions[1], row.versions[2], row.versions[3], row.versions[4]
+	audits := slices.Clone(env.store.audit)
+	changes := slices.Clone(env.store.changelog)
+	env.store.mu.Unlock()
+	if v1.Bound || !v2.Bound || !v3.Bound || v4.Bound {
+		t.Fatalf("version binding modes = %v %v %v %v", v1.Bound, v2.Bound, v3.Bound, v4.Bound)
+	}
+	if v4.ExpiresAt.UnixMilli() != expiresAt || v4.State != domain.StateEnabled || v4.ContentType != "text/plain" || v4.Metadata != `{"epoch":1}` {
+		t.Fatalf("transition did not preserve source properties: %+v", v4)
+	}
+	if reflect.DeepEqual(v3.Ciphertext, v4.Ciphertext) || v3.AAD == v4.AAD || reflect.DeepEqual(v3.Nonce, v4.Nonce) {
+		t.Fatal("transition reused cryptographic material")
+	}
+	wantAffected := map[string]struct {
+		versions   []uint64
+		metadata   string
+		changeType string
+	}{
+		"secret.bind":               {[]uint64{1, 2}, `{"affected_versions":[1,2]}`, domain.ChangeBind},
+		"secret.binding_key.rotate": {[]uint64{2, 3}, `{"affected_versions":[2,3]}`, domain.ChangeRotateBindingKey},
+		"secret.unbind":             {[]uint64{3, 4}, `{"affected_versions":[3,4]}`, domain.ChangeUnbind},
+	}
+	for eventType, want := range wantAffected {
+		found := false
+		for _, audit := range audits {
+			if audit.EventType == eventType {
+				if strings.Contains(audit.Metadata, grpcBindingKeyA) || strings.Contains(audit.Metadata, grpcBindingKeyB) {
+					t.Fatalf("audit leaked binding key: %+v", audit)
+				}
+				if audit.Decision == "allow" && audit.Metadata == want.metadata {
+					found = true
+				}
+			}
+		}
+		if !found {
+			t.Fatalf("missing %s audit", eventType)
+		}
+		found = false
+		for _, change := range changes {
+			if change.ChangeType == want.changeType && slices.Equal(change.AffectedVersions, want.versions) {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("missing %s change with affected versions %v: %+v", want.changeType, want.versions, changes)
+		}
+	}
+}
+
+func TestSecretBindingTransitionAuditFailureRollsBack(t *testing.T) {
 	env := newTestEnv(t, true)
 	env.store.addNamespace(domain.NamespaceRef{Env: "prod", App: "svc"})
 	client := env.secret()
@@ -30,252 +126,136 @@ func TestSecretBindingTransportAuditFailureRollsBack(t *testing.T) {
 	if _, err := client.PutSecret(adminCtx(), &kmsv1.PutSecretRequest{Ref: secretRef, Value: []byte("value")}); err != nil {
 		t.Fatalf("put: %v", err)
 	}
-
 	env.store.mu.Lock()
-	row := env.store.secrets["/prod/svc/audit-rollback"]
-	before := cloneMemSecretVersion(row.versions[1])
+	before := cloneMemSecretVersion(env.store.secrets["/prod/svc/audit-rollback"].versions[1])
 	beforeRevision := env.store.revision
 	env.store.auditErr = context.Canceled
 	env.store.mu.Unlock()
-
-	_, err := client.BindSecret(adminCtx(), &kmsv1.BindSecretRequest{
-		Ref: secretRef, Version: 1, BindingKey: grpcBindingKeyA,
-	})
+	_, err := client.BindSecret(adminCtx(), &kmsv1.BindSecretRequest{Ref: secretRef, ExpectedCurrentVersion: 1, BindingKey: grpcBindingKeyA})
 	if codeOf(err) != codes.FailedPrecondition || status.Convert(err).Message() != "audit unavailable: failed precondition" {
-		t.Fatalf("bind audit failure = %v, want fixed FailedPrecondition", err)
+		t.Fatalf("bind audit failure = %v", err)
 	}
 	env.store.mu.Lock()
-	after := cloneMemSecretVersion(row.versions[1])
+	after := cloneMemSecretVersion(env.store.secrets["/prod/svc/audit-rollback"].versions[1])
+	_, created := env.store.secrets["/prod/svc/audit-rollback"].versions[2]
 	afterRevision := env.store.revision
 	env.store.mu.Unlock()
-	if !reflect.DeepEqual(after, before) || afterRevision != beforeRevision {
-		t.Fatalf("audit failure mutated version or revision: before=%+v/%d after=%+v/%d", before, beforeRevision, after, afterRevision)
+	if !reflect.DeepEqual(after, before) || created || afterRevision != beforeRevision {
+		t.Fatal("audit failure mutated state")
 	}
 }
 
-func TestSecretBindingTransportLifecycle(t *testing.T) {
+func TestUnboundVersionPreviewAndPurge(t *testing.T) {
 	env := newTestEnv(t, true)
 	env.store.addNamespace(domain.NamespaceRef{Env: "prod", App: "svc"})
 	client := env.secret()
-	secretRef := pRef("prod", "svc", "credentials")
-	expiresAt := time.Now().Add(time.Hour).UnixMilli()
-
-	putV1, err := client.PutSecret(adminCtx(), &kmsv1.PutSecretRequest{
-		Ref: secretRef, Value: []byte("v1"), ContentType: "text/plain",
-		MetadataJson: `{"epoch":1}`, BindingKey: grpcBindingKeyA,
-		GenerateAccessToken: true, ExpiresAtUnixMs: expiresAt,
-	})
-	if err != nil {
-		t.Fatalf("put bound token-gated v1: %v", err)
+	secretRef := pRef("prod", "svc", "unbound")
+	if _, err := client.PutSecret(adminCtx(), &kmsv1.PutSecretRequest{Ref: secretRef, Value: []byte("v1")}); err != nil {
+		t.Fatalf("put v1: %v", err)
 	}
-	if putV1.GetVersion() != 1 || putV1.GetRevision() == 0 || putV1.GetAccessToken() == "" {
-		t.Fatalf("put v1 response = %+v", putV1)
+	if _, err := client.PutSecret(adminCtx(), &kmsv1.PutSecretRequest{Ref: secretRef, Value: []byte("v2"), BindingKey: grpcBindingKeyA}); err != nil {
+		t.Fatalf("put v2: %v", err)
 	}
-	accessToken := putV1.GetAccessToken()
-
-	// GetSecret must transmit the independent access token and binding key.
-	if _, err := client.GetSecret(adminCtx(), &kmsv1.GetSecretRequest{
-		Ref: secretRef, Version: 1, BindingKey: grpcBindingKeyA,
-	}); codeOf(err) != codes.PermissionDenied {
-		t.Fatalf("missing access token code = %v, want PermissionDenied", codeOf(err))
+	if _, err := client.PutSecret(adminCtx(), &kmsv1.PutSecretRequest{Ref: secretRef, Value: []byte("v3")}); err != nil {
+		t.Fatalf("put v3: %v", err)
 	}
-	if _, err := client.GetSecret(adminCtx(), &kmsv1.GetSecretRequest{
-		Ref: secretRef, Version: 1, SecretToken: accessToken,
-	}); codeOf(err) != codes.Internal {
-		t.Fatalf("missing binding key code = %v, want Internal", codeOf(err))
+	preview, err := client.PreviewSecretUnboundVersions(adminCtx(), &kmsv1.PreviewSecretUnboundVersionsRequest{Ref: secretRef})
+	if err != nil || !slices.Equal(preview.GetAffectedVersions(), []uint64{1, 3}) || preview.GetRevision() == 0 {
+		t.Fatalf("preview = %+v, %v", preview, err)
 	}
-	gotV1, err := client.GetSecret(adminCtx(), &kmsv1.GetSecretRequest{
-		Ref: secretRef, Version: 1, SecretToken: accessToken, BindingKey: grpcBindingKeyA,
-	})
-	if err != nil {
-		t.Fatalf("get with both credentials: %v", err)
+	env.store.addPolicy(domain.Policy{Name: "delegated-destroy", Subject: "client", Allow: []domain.PolicyRule{{Operation: domain.OpSecretDestroy, Env: "prod", App: "svc"}}})
+	if _, err := client.PreviewSecretUnboundVersions(clientCtx(), &kmsv1.PreviewSecretUnboundVersionsRequest{Ref: secretRef}); codeOf(err) != codes.PermissionDenied {
+		t.Fatalf("non-admin preview = %v, want PermissionDenied", err)
 	}
-	if string(gotV1.GetValue()) != "v1" || gotV1.GetContentType() != "text/plain" || gotV1.GetMetadataJson() != `{"epoch":1}` {
-		t.Fatalf("get v1 response = %+v", gotV1)
+	if _, err := client.PurgeSecretUnboundVersions(adminCtx(), &kmsv1.PurgeSecretUnboundVersionsRequest{Ref: secretRef, ExpectedRevision: preview.GetRevision(), ExpectedAffectedVersions: []uint64{1}}); codeOf(err) != codes.Aborted {
+		t.Fatalf("mismatched set purge = %v, want Aborted", err)
 	}
-
-	put := func(value, bindingKey string) *kmsv1.PutSecretResponse {
-		t.Helper()
-		response, err := client.PutSecret(adminCtx(), &kmsv1.PutSecretRequest{
-			Ref: secretRef, Value: []byte(value), ContentType: "text/plain", BindingKey: bindingKey,
-		})
-		if err != nil {
-			t.Fatalf("put %s: %v", value, err)
-		}
-		return response
+	purged, err := client.PurgeSecretUnboundVersions(adminCtx(), &kmsv1.PurgeSecretUnboundVersionsRequest{Ref: secretRef, ExpectedRevision: preview.GetRevision(), ExpectedAffectedVersions: preview.GetAffectedVersions()})
+	if err != nil || !slices.Equal(purged.GetAffectedVersions(), []uint64{1, 3}) || purged.GetRevision() <= preview.GetRevision() {
+		t.Fatalf("purge = %+v, %v", purged, err)
 	}
-	if got := put("v2", "").GetVersion(); got != 2 {
-		t.Fatalf("v2 version = %d", got)
-	}
-	if got := put("v3", grpcBindingKeyB).GetVersion(); got != 3 {
-		t.Fatalf("v3 version = %d", got)
-	}
-
-	assertMetadata := func(wantCurrentBound bool, wantBound []bool) {
-		t.Helper()
-		metadata, err := client.GetSecretMetadata(adminCtx(), &kmsv1.GetSecretMetadataRequest{Ref: secretRef})
-		if err != nil {
-			t.Fatalf("get metadata: %v", err)
-		}
-		secret := metadata.GetSecret()
-		if secret.GetBound() != wantCurrentBound || !secret.GetHasAccessToken() {
-			t.Fatalf("current metadata = %+v", secret)
-		}
-		if len(secret.GetVersions()) != len(wantBound) {
-			t.Fatalf("versions = %+v", secret.GetVersions())
-		}
-		for i, version := range secret.GetVersions() {
-			if version.GetVersion() != uint64(i+1) || version.GetBound() != wantBound[i] || !version.GetHasAccessToken() {
-				t.Fatalf("version %d metadata = %+v", i+1, version)
-			}
-		}
-		if got := secret.GetVersions()[0].GetExpiresAtUnixMs(); got != expiresAt {
-			t.Fatalf("v1 expiry = %d, want %d", got, expiresAt)
-		}
-	}
-	assertMetadata(true, []bool{true, false, true})
-
-	if _, err := client.PromoteSecretVersion(adminCtx(), &kmsv1.PromoteSecretVersionRequest{Ref: secretRef, Version: 2}); err != nil {
-		t.Fatalf("promote unbound v2: %v", err)
-	}
-	assertMetadata(false, []bool{true, false, true})
-
-	bound, err := client.BindSecret(adminCtx(), &kmsv1.BindSecretRequest{
-		Ref: secretRef, Version: 0, BindingKey: grpcBindingKeyC,
-	})
-	if err != nil {
-		t.Fatalf("bind current: %v", err)
-	}
-	if bound.GetAnchorVersion() != 2 || !slices.Equal(bound.GetAffectedVersions(), []uint64{2}) || bound.GetRevision() == 0 {
-		t.Fatalf("bind response = %+v", bound)
-	}
-	assertMetadata(true, []bool{true, true, true})
-
-	unbound, err := client.UnbindSecret(adminCtx(), &kmsv1.UnbindSecretRequest{
-		Ref: secretRef, Version: 2, BindingKey: grpcBindingKeyC,
-	})
-	if err != nil {
-		t.Fatalf("unbind v2: %v", err)
-	}
-	if unbound.GetAnchorVersion() != 2 || !slices.Equal(unbound.GetAffectedVersions(), []uint64{2}) || unbound.GetRevision() <= bound.GetRevision() {
-		t.Fatalf("unbind response = %+v", unbound)
-	}
-	assertMetadata(false, []bool{true, false, true})
-
-	if got := put("v4", grpcBindingKeyB).GetVersion(); got != 4 {
-		t.Fatalf("v4 version = %d", got)
-	}
-	preview, err := client.PreviewSecretBindingCohort(adminCtx(), &kmsv1.PreviewSecretBindingCohortRequest{
-		Ref: secretRef, AnchorVersion: 3, BindingKey: grpcBindingKeyB,
-	})
-	if err != nil {
-		t.Fatalf("preview B cohort: %v", err)
-	}
-	if preview.GetAnchorVersion() != 3 || !slices.Equal(preview.GetAffectedVersions(), []uint64{3, 4}) || preview.GetRevision() == 0 {
-		t.Fatalf("preview response = %+v", preview)
-	}
-	_, err = client.RotateSecretBindingKey(adminCtx(), &kmsv1.RotateSecretBindingKeyRequest{
-		Ref: secretRef, AnchorVersion: 3, BindingKey: grpcBindingKeyB, NewBindingKey: grpcBindingKeyB,
-	})
-	if codeOf(err) != codes.InvalidArgument || status.Convert(err).Message() != "new binding key must differ from current binding key: invalid argument" {
-		t.Fatalf("no-op rotation error = %v, want sanitized InvalidArgument", err)
-	}
-
-	// Optional scalar presence must survive protobuf decoding. With no revision,
-	// versions-only is malformed; pointer-to-zero is a present but stale guard.
-	_, err = client.RotateSecretBindingKey(adminCtx(), &kmsv1.RotateSecretBindingKeyRequest{
-		Ref: secretRef, AnchorVersion: 3, BindingKey: grpcBindingKeyB, NewBindingKey: grpcBindingKeyC,
-		ExpectedAffectedVersions: []uint64{3, 4},
-	})
-	if codeOf(err) != codes.InvalidArgument {
-		t.Fatalf("versions-only guard code = %v, want InvalidArgument", codeOf(err))
-	}
-	zeroRevision := uint64(0)
-	_, err = client.RotateSecretBindingKey(adminCtx(), &kmsv1.RotateSecretBindingKeyRequest{
-		Ref: secretRef, AnchorVersion: 3, BindingKey: grpcBindingKeyB, NewBindingKey: grpcBindingKeyC,
-		ExpectedRevision: &zeroRevision, ExpectedAffectedVersions: []uint64{3, 4},
-	})
-	if codeOf(err) != codes.Aborted {
-		t.Fatalf("explicit-zero guard code = %v, want Aborted", codeOf(err))
-	}
-
-	rotated, err := client.RotateSecretBindingKey(adminCtx(), &kmsv1.RotateSecretBindingKeyRequest{
-		Ref: secretRef, AnchorVersion: 3, BindingKey: grpcBindingKeyB, NewBindingKey: grpcBindingKeyC,
-		ExpectedRevision: &preview.Revision, ExpectedAffectedVersions: preview.GetAffectedVersions(),
-	})
-	if err != nil {
-		t.Fatalf("rotate B cohort: %v", err)
-	}
-	if rotated.GetAnchorVersion() != 3 || !slices.Equal(rotated.GetAffectedVersions(), []uint64{3, 4}) || rotated.GetRevision() <= preview.GetRevision() {
-		t.Fatalf("rotate response = %+v", rotated)
+	if _, err := client.GetSecret(adminCtx(), &kmsv1.GetSecretRequest{Ref: secretRef, Version: 2, BindingKey: grpcBindingKeyA}); err != nil {
+		t.Fatalf("bound version was affected: %v", err)
 	}
 	env.store.mu.Lock()
+	v1, v2, v3 := env.store.secrets["/prod/svc/unbound"].versions[1], env.store.secrets["/prod/svc/unbound"].versions[2], env.store.secrets["/prod/svc/unbound"].versions[3]
 	audits := slices.Clone(env.store.audit)
+	changes := slices.Clone(env.store.changelog)
 	env.store.mu.Unlock()
-	for _, eventType := range []string{"secret.bind", "secret.unbind", "secret.binding_key.rotate"} {
-		count := 0
-		for _, audit := range audits {
-			if audit.EventType != eventType || audit.Decision != "allow" {
-				continue
+	if v1.State != domain.StateDestroyed || v3.State != domain.StateDestroyed || v2.State == domain.StateDestroyed || len(v1.Ciphertext) != 0 || len(v3.Ciphertext) != 0 {
+		t.Fatalf("unexpected tombstones: v1=%+v v2=%+v v3=%+v", v1, v2, v3)
+	}
+	foundAudit := false
+	for _, audit := range audits {
+		if audit.EventType == "secret.unbound_versions.purge" && audit.Decision == "allow" && audit.Metadata == `{"affected_versions":[1,3]}` {
+			foundAudit = true
+			if audit.ResourceVersion != 1 {
+				t.Fatalf("unbound purge audit = %+v", audit)
 			}
-			count++
-			if audit.ActorIdentity != "admin" || audit.ResourceNamespaceID == 0 || audit.ResourceKey != "credentials" ||
-				audit.Metadata == "" || strings.Contains(audit.Metadata, grpcBindingKeyA) || strings.Contains(audit.Metadata, grpcBindingKeyB) || strings.Contains(audit.Metadata, grpcBindingKeyC) {
-				t.Fatalf("unsafe %s allow audit = %+v", eventType, audit)
+		}
+	}
+	if !foundAudit {
+		t.Fatal("missing unbound purge allow audit")
+	}
+	foundChange := false
+	for _, change := range changes {
+		if change.ChangeType == domain.ChangePurgeUnbound {
+			foundChange = true
+			if change.Version != 1 || !slices.Equal(change.AffectedVersions, []uint64{1, 3}) {
+				t.Fatalf("unbound purge change = %+v", change)
 			}
 		}
-		if count != 1 {
-			t.Fatalf("%s allow audit count = %d, want 1", eventType, count)
-		}
 	}
+	if !foundChange {
+		t.Fatal("missing unbound purge change")
+	}
+}
 
-	preview, err = client.PreviewSecretBindingCohort(adminCtx(), &kmsv1.PreviewSecretBindingCohortRequest{
-		Ref: secretRef, AnchorVersion: 3, BindingKey: grpcBindingKeyC,
-	})
+func TestBindingCredentialFailuresRemainIndistinguishable(t *testing.T) {
+	env := newTestEnv(t, true)
+	env.store.addNamespace(domain.NamespaceRef{Env: "prod", App: "svc"})
+	client := env.secret()
+	secretRef := pRef("prod", "svc", "credential-errors")
+	if _, err := client.PutSecret(adminCtx(), &kmsv1.PutSecretRequest{Ref: secretRef, Value: []byte("value"), BindingKey: grpcBindingKeyA}); err != nil {
+		t.Fatalf("put: %v", err)
+	}
+	guard, err := client.PreviewSecretBindingCohort(adminCtx(), &kmsv1.PreviewSecretBindingCohortRequest{Ref: secretRef, AnchorVersion: 1, BindingKey: grpcBindingKeyA})
 	if err != nil {
-		t.Fatalf("preview rotated cohort: %v", err)
+		t.Fatalf("preview guard: %v", err)
 	}
-	env.store.addPolicy(domain.Policy{
-		Name: "delegated-destroy", Subject: "client",
-		Allow: []domain.PolicyRule{{Operation: domain.OpSecretDestroy, Env: "prod", App: "svc"}},
-	})
-	_, err = client.PurgeSecretBindingCohort(clientCtx(), &kmsv1.PurgeSecretBindingCohortRequest{
-		Ref: secretRef, AnchorVersion: 3, BindingKey: grpcBindingKeyC,
-		ExpectedRevision: &preview.Revision, ExpectedAffectedVersions: preview.GetAffectedVersions(),
-	})
-	if codeOf(err) != codes.PermissionDenied {
-		t.Fatalf("delegated non-admin purge code = %v, want PermissionDenied", codeOf(err))
+	operations := []struct {
+		name string
+		call func(string) error
+	}{
+		{"unbind", func(key string) error {
+			_, err := client.UnbindSecret(adminCtx(), &kmsv1.UnbindSecretRequest{Ref: secretRef, ExpectedCurrentVersion: 1, BindingKey: key})
+			return err
+		}},
+		{"preview", func(key string) error {
+			_, err := client.PreviewSecretBindingCohort(adminCtx(), &kmsv1.PreviewSecretBindingCohortRequest{Ref: secretRef, AnchorVersion: 1, BindingKey: key})
+			return err
+		}},
+		{"rotate", func(key string) error {
+			_, err := client.RotateSecretBindingKey(adminCtx(), &kmsv1.RotateSecretBindingKeyRequest{Ref: secretRef, ExpectedCurrentVersion: 1, BindingKey: key, NewBindingKey: grpcBindingKeyC})
+			return err
+		}},
+		{"purge", func(key string) error {
+			_, err := client.PurgeSecretBindingCohort(adminCtx(), &kmsv1.PurgeSecretBindingCohortRequest{
+				Ref: secretRef, AnchorVersion: 1, BindingKey: key,
+				ExpectedRevision: new(guard.Revision), ExpectedAffectedVersions: guard.GetAffectedVersions(),
+			})
+			return err
+		}},
 	}
-
-	purged, err := client.PurgeSecretBindingCohort(adminCtx(), &kmsv1.PurgeSecretBindingCohortRequest{
-		Ref: secretRef, AnchorVersion: 3, BindingKey: grpcBindingKeyC,
-		ExpectedRevision: &preview.Revision, ExpectedAffectedVersions: preview.GetAffectedVersions(),
-	})
-	if err != nil {
-		t.Fatalf("purge rotated cohort: %v", err)
-	}
-	if purged.GetAnchorVersion() != 3 || !slices.Equal(purged.GetAffectedVersions(), []uint64{3, 4}) || purged.GetRevision() <= preview.GetRevision() {
-		t.Fatalf("purge response = %+v", purged)
-	}
-	_, err = client.GetSecret(adminCtx(), &kmsv1.GetSecretRequest{
-		Ref: secretRef, Version: 3, SecretToken: accessToken, BindingKey: grpcBindingKeyC,
-	})
-	if codeOf(err) != codes.FailedPrecondition {
-		t.Fatalf("purged version read code = %v, want FailedPrecondition", codeOf(err))
-	}
-	metadata, err := client.GetSecretMetadata(adminCtx(), &kmsv1.GetSecretMetadataRequest{Ref: secretRef})
-	if err != nil {
-		t.Fatalf("metadata after purge: %v", err)
-	}
-	secretMetadata := metadata.GetSecret()
-	if secretMetadata.GetContentType() != "" || secretMetadata.GetMetadataJson() != "" {
-		t.Fatalf("purged current projection retained content: %+v", secretMetadata)
-	}
-	versions := secretMetadata.GetVersions()
-	for _, index := range []int{2, 3} {
-		if versions[index].GetState() != domain.StateDestroyed || versions[index].GetBound() || versions[index].GetHasAccessToken() {
-			t.Fatalf("purged version metadata = %+v", versions[index])
-		}
+	for _, operation := range operations {
+		t.Run(operation.name, func(t *testing.T) {
+			for _, credential := range []string{"", "short", grpcBindingKeyB} {
+				err := operation.call(credential)
+				if codeOf(err) != codes.Internal || status.Convert(err).Message() != "internal error" {
+					t.Fatalf("credential %q error = %v", credential, err)
+				}
+			}
+		})
 	}
 }
 
@@ -284,104 +264,16 @@ func TestPurgeCleanupPendingMapsAcrossGRPC(t *testing.T) {
 	env.store.addNamespace(domain.NamespaceRef{Env: "prod", App: "svc"})
 	client := env.secret()
 	secretRef := pRef("prod", "svc", "cleanup-pending")
-	if _, err := client.PutSecret(adminCtx(), &kmsv1.PutSecretRequest{
-		Ref: secretRef, Value: []byte("value"), BindingKey: grpcBindingKeyA,
-	}); err != nil {
-		t.Fatalf("put bound secret: %v", err)
+	if _, err := client.PutSecret(adminCtx(), &kmsv1.PutSecretRequest{Ref: secretRef, Value: []byte("value")}); err != nil {
+		t.Fatalf("put: %v", err)
 	}
-	env.store.setPurgeResultErr(storage.ErrPurgeCleanupPending)
-
-	response, err := client.PurgeSecretBindingCohort(adminCtx(), &kmsv1.PurgeSecretBindingCohortRequest{
-		Ref: secretRef, AnchorVersion: 1, BindingKey: grpcBindingKeyA,
-	})
-	if response != nil || codeOf(err) != codes.Unavailable || status.Convert(err).Message() != storage.ErrPurgeCleanupPending.Error() {
-		t.Fatalf("cleanup-pending response = %+v, error = %v", response, err)
-	}
-
-	env.store.mu.Lock()
-	version := env.store.secrets[ref("prod", "svc", "cleanup-pending").String()].versions[1]
-	env.store.mu.Unlock()
-	if version.State != domain.StateDestroyed || len(version.Ciphertext) != 0 {
-		t.Fatalf("cleanup-pending purge did not logically commit: %+v", version)
-	}
-}
-
-func TestSecretBindingUnlockFailuresAreIndistinguishableOverGRPC(t *testing.T) {
-	env := newTestEnv(t, true)
-	env.store.addNamespace(domain.NamespaceRef{Env: "prod", App: "svc"})
-	client := env.secret()
-	secretRef := pRef("prod", "svc", "credential-errors")
-	if _, err := client.PutSecret(adminCtx(), &kmsv1.PutSecretRequest{
-		Ref: secretRef, Value: []byte("value"), BindingKey: grpcBindingKeyA,
-	}); err != nil {
-		t.Fatalf("put bound secret: %v", err)
-	}
-
-	operations := []struct {
-		name string
-		call func(string) error
-	}{
-		{name: "unbind", call: func(key string) error {
-			_, err := client.UnbindSecret(adminCtx(), &kmsv1.UnbindSecretRequest{Ref: secretRef, Version: 1, BindingKey: key})
-			return err
-		}},
-		{name: "preview", call: func(key string) error {
-			_, err := client.PreviewSecretBindingCohort(adminCtx(), &kmsv1.PreviewSecretBindingCohortRequest{Ref: secretRef, AnchorVersion: 1, BindingKey: key})
-			return err
-		}},
-		{name: "rotate", call: func(key string) error {
-			_, err := client.RotateSecretBindingKey(adminCtx(), &kmsv1.RotateSecretBindingKeyRequest{Ref: secretRef, AnchorVersion: 1, BindingKey: key, NewBindingKey: grpcBindingKeyC})
-			return err
-		}},
-		{name: "purge", call: func(key string) error {
-			_, err := client.PurgeSecretBindingCohort(adminCtx(), &kmsv1.PurgeSecretBindingCohortRequest{Ref: secretRef, AnchorVersion: 1, BindingKey: key})
-			return err
-		}},
-	}
-	for _, operation := range operations {
-		t.Run(operation.name, func(t *testing.T) {
-			var wantMessage string
-			for _, credential := range []string{"", "short", grpcBindingKeyB} {
-				err := operation.call(credential)
-				if codeOf(err) != codes.Internal {
-					t.Fatalf("credential %q code = %v, want Internal", credential, codeOf(err))
-				}
-				message := status.Convert(err).Message()
-				if message != "internal error" || strings.Contains(message, credential) && credential != "" {
-					t.Fatalf("credential %q leaked in %q", credential, message)
-				}
-				if wantMessage == "" {
-					wantMessage = message
-				} else if message != wantMessage {
-					t.Fatalf("credential failures differ: %q != %q", message, wantMessage)
-				}
-			}
-		})
-	}
-}
-
-func TestSecretBindingExpectedRevisionGuardShapeOverGRPC(t *testing.T) {
-	env := newTestEnv(t, true)
-	env.store.addNamespace(domain.NamespaceRef{Env: "prod", App: "svc"})
-	client := env.secret()
-	secretRef := pRef("prod", "svc", "guard-shape")
-	if _, err := client.PutSecret(adminCtx(), &kmsv1.PutSecretRequest{Ref: secretRef, Value: []byte("value"), BindingKey: grpcBindingKeyA}); err != nil {
-		t.Fatalf("put bound secret: %v", err)
-	}
-	preview, err := client.PreviewSecretBindingCohort(context.Background(), &kmsv1.PreviewSecretBindingCohortRequest{})
-	if codeOf(err) != codes.Unauthenticated || preview != nil {
-		t.Fatalf("unauthenticated preview = %+v, %v", preview, err)
-	}
-
-	current, err := client.PreviewSecretBindingCohort(adminCtx(), &kmsv1.PreviewSecretBindingCohortRequest{Ref: secretRef, AnchorVersion: 1, BindingKey: grpcBindingKeyA})
+	preview, err := client.PreviewSecretUnboundVersions(adminCtx(), &kmsv1.PreviewSecretUnboundVersionsRequest{Ref: secretRef})
 	if err != nil {
 		t.Fatalf("preview: %v", err)
 	}
-	_, err = client.PurgeSecretBindingCohort(adminCtx(), &kmsv1.PurgeSecretBindingCohortRequest{
-		Ref: secretRef, AnchorVersion: 1, BindingKey: grpcBindingKeyA,
-		ExpectedRevision: &current.Revision,
-	})
-	if codeOf(err) != codes.InvalidArgument {
-		t.Fatalf("revision-only purge code = %v, want InvalidArgument", codeOf(err))
+	env.store.setPurgeResultErr(storage.ErrPurgeCleanupPending)
+	response, err := client.PurgeSecretUnboundVersions(adminCtx(), &kmsv1.PurgeSecretUnboundVersionsRequest{Ref: secretRef, ExpectedRevision: preview.GetRevision(), ExpectedAffectedVersions: preview.GetAffectedVersions()})
+	if response != nil || codeOf(err) != codes.Unavailable || status.Convert(err).Message() != storage.ErrPurgeCleanupPending.Error() {
+		t.Fatalf("cleanup pending = %+v, %v", response, err)
 	}
 }

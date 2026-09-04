@@ -3,8 +3,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   ApiError,
   api,
-  PurgeCleanupPendingApiError,
   PURGE_CLEANUP_PENDING_MESSAGE,
+  PurgeCleanupPendingApiError,
+  SECRET_OPERATION_FAILED_MESSAGE,
 } from "@/lib/api";
 import { datetimeLocalToUnixMs } from "@/lib/format";
 import type { Namespace, SecretMetadata } from "@/lib/types";
@@ -835,7 +836,9 @@ describe("binding-key version actions", () => {
   }
 
   async function submitPurgeAfterPreview(): Promise<void> {
-    fireEvent.click(await screen.findByRole("button", { name: "Purge cohort" }));
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Purge cohort containing version 1" }),
+    );
     let dialog = screen.getByRole("dialog", { name: "Purge cohort · v1" });
     fireEvent.change(within(dialog).getByLabelText("Current binding key"), {
       target: { value: BINDING_KEY },
@@ -852,10 +855,10 @@ describe("binding-key version actions", () => {
     fireEvent.click(within(dialog).getByRole("button", { name: "Purge versions" }));
   }
 
-  it("binds and unbinds one exact version without a cohort preview", async () => {
+  it("binds and unbinds current into a new version without a cohort preview", async () => {
     const bind = vi.spyOn(api, "bindSecret").mockResolvedValue({
-      anchor_version: 1,
-      affected_versions: [1],
+      current_version: 2,
+      previous_version: 1,
       revision: 10,
     });
     const preview = vi.spyOn(api, "previewSecretBindingCohort");
@@ -880,8 +883,8 @@ describe("binding-key version actions", () => {
     // Re-render a bound row to exercise the inverse exact-version operation.
     view.unmount();
     const unbind = vi.spyOn(api, "unbindSecret").mockResolvedValue({
-      anchor_version: 1,
-      affected_versions: [1],
+      current_version: 2,
+      previous_version: 1,
       revision: 11,
     });
     renderBoundDetail();
@@ -894,39 +897,19 @@ describe("binding-key version actions", () => {
     await waitFor(() => expect(unbind).toHaveBeenCalledTimes(1));
   });
 
-  it("previews rotation, clears preview credentials, and replays the exact CAS", async () => {
-    const preview = vi.spyOn(api, "previewSecretBindingCohort").mockResolvedValue({
-      anchor_version: 1,
-      affected_versions: [1, 2],
-      revision: 41,
-    });
+  it("rotates only current into one new version with its current-version CAS", async () => {
+    const preview = vi.spyOn(api, "previewSecretBindingCohort");
     const rotate = vi.spyOn(api, "rotateSecretBindingKey").mockResolvedValue({
-      anchor_version: 1,
-      affected_versions: [1, 2],
+      current_version: 2,
+      previous_version: 1,
       revision: 42,
     });
     renderBoundDetail();
     fireEvent.click(await screen.findByRole("button", { name: "Rotate key" }));
-    let dialog = screen.getByRole("dialog", { name: "Rotate binding key · v1" });
-    const previewInput = within(dialog).getByLabelText("Current binding key");
-    fireEvent.change(previewInput, { target: { value: BINDING_KEY } });
-    fireEvent.click(within(dialog).getByRole("button", { name: "Preview cohort" }));
-
-    await waitFor(() =>
-      expect(preview).toHaveBeenCalledWith(
-        { env: "prod", app: "billing", key: "api-key" },
-        1,
-        BINDING_KEY,
-        { signal: expect.any(AbortSignal) },
-      ),
-    );
-    dialog = screen.getByRole("dialog", { name: "Rotate binding key · v1" });
-    expect(within(dialog).getByTestId("binding-cohort-versions")).toHaveTextContent("v1");
-    expect(within(dialog).getByTestId("binding-cohort-versions")).toHaveTextContent("v2");
+    const dialog = screen.getByRole("dialog", { name: "Rotate binding key · v1" });
     const current = within(dialog).getByLabelText("Current binding key");
     const replacement = within(dialog).getByLabelText("New binding key");
     const confirmation = within(dialog).getByLabelText("Confirm new binding key");
-    expect(current).toHaveValue("");
     fireEvent.change(current, { target: { value: BINDING_KEY } });
     fireEvent.change(replacement, { target: { value: NEW_BINDING_KEY } });
     fireEvent.change(confirmation, { target: { value: NEW_BINDING_KEY } });
@@ -938,49 +921,122 @@ describe("binding-key version actions", () => {
         1,
         BINDING_KEY,
         NEW_BINDING_KEY,
-        41,
-        [1, 2],
         { signal: expect.any(AbortSignal) },
       ),
     );
+    expect(preview).not.toHaveBeenCalled();
     expect(
       screen.queryByRole("dialog", { name: "Rotate binding key · v1" }),
     ).not.toBeInTheDocument();
   });
 
-  it("blocks a no-op binding-key rotation inline", async () => {
-    vi.spyOn(api, "previewSecretBindingCohort").mockResolvedValue({
-      anchor_version: 1,
-      affected_versions: [1],
-      revision: 41,
-    });
-    const rotate = vi.spyOn(api, "rotateSecretBindingKey");
+  it("keeps no-op rotation diagnostics sanitized after ordered server validation", async () => {
+    const rotate = vi
+      .spyOn(api, "rotateSecretBindingKey")
+      .mockRejectedValue(new ApiError("invalid_argument", SECRET_OPERATION_FAILED_MESSAGE, 400));
     renderBoundDetail();
     fireEvent.click(await screen.findByRole("button", { name: "Rotate key" }));
-    let dialog = screen.getByRole("dialog", { name: "Rotate binding key · v1" });
-    fireEvent.change(within(dialog).getByLabelText("Current binding key"), {
-      target: { value: BINDING_KEY },
-    });
-    fireEvent.click(within(dialog).getByRole("button", { name: "Preview cohort" }));
-    await screen.findByTestId("binding-cohort-versions");
-
-    dialog = screen.getByRole("dialog", { name: "Rotate binding key · v1" });
+    const dialog = screen.getByRole("dialog", { name: "Rotate binding key · v1" });
     fireEvent.change(within(dialog).getByLabelText("Current binding key"), {
       target: { value: BINDING_KEY },
     });
     fireEvent.change(within(dialog).getByLabelText("New binding key"), {
       target: { value: BINDING_KEY },
     });
-    fireEvent.blur(within(dialog).getByLabelText("New binding key"));
     fireEvent.change(within(dialog).getByLabelText("Confirm new binding key"), {
       target: { value: BINDING_KEY },
     });
     fireEvent.click(within(dialog).getByRole("button", { name: "Rotate binding key" }));
 
+    await waitFor(() =>
+      expect(rotate).toHaveBeenCalledWith(
+        { env: "prod", app: "billing", key: "api-key" },
+        1,
+        BINDING_KEY,
+        BINDING_KEY,
+        { signal: expect.any(AbortSignal) },
+      ),
+    );
+    await waitFor(() =>
+      expect(mocks.toast.error).toHaveBeenCalledWith(
+        expect.objectContaining({
+          code: "invalid_argument",
+          message: SECRET_OPERATION_FAILED_MESSAGE,
+        }),
+        "Rotate binding key failed",
+      ),
+    );
+  });
+
+  it("keeps transitions on current while retaining cohort purge for historical bound versions", async () => {
+    renderDetail({
+      ...SECRET,
+      bound: false,
+      labels: { current: 2, previous: 1 },
+      versions: [
+        { ...SECRET.versions[0], bound: true },
+        { ...SECRET.versions[0], version: 2, created_at_unix_ms: 2 },
+      ],
+    });
+
+    const historicalRow = (await screen.findByText("v1")).closest("tr");
+    const currentRow = screen
+      .getAllByText("v2")
+      .map((element) => element.closest("tr"))
+      .find((row): row is HTMLTableRowElement => row !== null);
+    expect(historicalRow).not.toBeNull();
+    expect(currentRow).toBeDefined();
     expect(
-      within(dialog).getByText("New binding key must differ from current binding key."),
+      within(historicalRow as HTMLElement).queryByRole("button", { name: "Unbind" }),
+    ).toBeNull();
+    expect(
+      within(historicalRow as HTMLElement).queryByRole("button", { name: "Rotate key" }),
+    ).toBeNull();
+    expect(
+      within(historicalRow as HTMLElement).getByRole("button", {
+        name: "Purge cohort containing version 1",
+      }),
     ).toBeVisible();
-    expect(rotate).not.toHaveBeenCalled();
+    expect(
+      within(historicalRow as HTMLElement).getByRole("button", { name: "Destroy version 1" }),
+    ).toBeVisible();
+    expect(within(currentRow as HTMLElement).getByRole("button", { name: "Bind" })).toBeVisible();
+  });
+
+  it("previews and purges every unbound version with exact guards", async () => {
+    const preview = vi.spyOn(api, "previewSecretUnboundVersions").mockResolvedValue({
+      affected_versions: [1, 3],
+      revision: 60,
+    });
+    const purge = vi.spyOn(api, "purgeSecretUnboundVersions").mockResolvedValue({
+      affected_versions: [1, 3],
+      revision: 61,
+    });
+    renderDetail(SECRET);
+    fireEvent.click(await screen.findByRole("button", { name: "Purge unbound versions" }));
+    let dialog = screen.getByRole("dialog", { name: "Purge unbound versions" });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Preview unbound versions" }));
+    await waitFor(() =>
+      expect(preview).toHaveBeenCalledWith(
+        { env: "prod", app: "billing", key: "api-key" },
+        { signal: expect.any(AbortSignal) },
+      ),
+    );
+    dialog = screen.getByRole("dialog", { name: "Purge unbound versions" });
+    expect(within(dialog).getByTestId("unbound-purge-versions")).toHaveTextContent("v1");
+    expect(within(dialog).getByTestId("unbound-purge-versions")).toHaveTextContent("v3");
+    fireEvent.change(within(dialog).getByLabelText(/Type PURGE/), {
+      target: { value: "PURGE" },
+    });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Purge versions" }));
+    await waitFor(() =>
+      expect(purge).toHaveBeenCalledWith(
+        { env: "prod", app: "billing", key: "api-key" },
+        60,
+        [1, 3],
+        { signal: expect.any(AbortSignal) },
+      ),
+    );
   });
 
   it("previews and purges the exact cohort only for an administrator", async () => {
@@ -1032,6 +1088,40 @@ describe("binding-key version actions", () => {
     await waitFor(() => expect(api.secretMetadata).toHaveBeenCalledTimes(2));
   });
 
+  it("treats unbound cleanup-pending as committed without retrying the preview", async () => {
+    vi.spyOn(api, "previewSecretUnboundVersions").mockResolvedValue({
+      affected_versions: [1],
+      revision: 50,
+    });
+    vi.spyOn(api, "purgeSecretUnboundVersions").mockRejectedValue(
+      new PurgeCleanupPendingApiError(),
+    );
+    renderDetail(SECRET);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Purge unbound versions" }));
+    let dialog = screen.getByRole("dialog", { name: "Purge unbound versions" });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Preview unbound versions" }));
+    await screen.findByTestId("unbound-purge-versions");
+    dialog = screen.getByRole("dialog", { name: "Purge unbound versions" });
+    fireEvent.change(within(dialog).getByLabelText(/Type PURGE/), {
+      target: { value: "PURGE" },
+    });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Purge versions" }));
+
+    await waitFor(() =>
+      expect(mocks.toast.info).toHaveBeenCalledWith(
+        "Purge committed",
+        "Database artifact cleanup is pending. Do not retry the purge; restart the service to complete cleanup.",
+        { duration: 12_000 },
+      ),
+    );
+    expect(mocks.toast.error).not.toHaveBeenCalled();
+    expect(
+      screen.queryByRole("dialog", { name: "Purge unbound versions" }),
+    ).not.toBeInTheDocument();
+    await waitFor(() => expect(api.secretMetadata).toHaveBeenCalledTimes(2));
+  });
+
   it.each([
     [
       "an exact-looking plain API error",
@@ -1070,8 +1160,21 @@ describe("binding-key version actions", () => {
 
   it("does not offer cohort purge to a client identity", async () => {
     mocks.identity = { name: "app", kind: "client", namespace: null };
-    renderBoundDetail();
+    renderDetail({
+      ...SECRET,
+      bound: true,
+      labels: { current: 2, previous: 1 },
+      versions: [
+        { ...SECRET.versions[0], bound: false },
+        { ...SECRET.versions[0], version: 2, bound: true, created_at_unix_ms: 2 },
+      ],
+    });
     expect(await screen.findByRole("button", { name: "Rotate key" })).toBeVisible();
-    expect(screen.queryByRole("button", { name: "Purge cohort" })).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: /Purge cohort containing version/ }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Purge unbound versions" }),
+    ).not.toBeInTheDocument();
   });
 });

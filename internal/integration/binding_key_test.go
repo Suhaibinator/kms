@@ -5,13 +5,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
 
 	"github.com/Suhaibinator/kms/internal/core"
 	"github.com/Suhaibinator/kms/internal/domain"
-	"github.com/Suhaibinator/kms/internal/storage"
 )
 
 const (
@@ -122,192 +122,175 @@ func TestBindingKeyCredentialsAndLiveMetadata(t *testing.T) {
 	}
 }
 
-func TestBindAndUnbindSecretVersionInPlace(t *testing.T) {
+func TestUnbindCreatesNewVersionAndPreservesReleasePinnedSource(t *testing.T) {
 	h := newHarness(t)
 	ctx := context.Background()
-	const app = "live-binding"
+	const app = "versioned-unbind"
 	if _, err := h.svc.CreateApplication(ctx, h.admin, domain.Application{Name: app, ReleaseName: "runtime"}); err != nil {
 		t.Fatalf("CreateApplication: %v", err)
 	}
-	ref := h.ensureNS("/prod/" + app + "/in-place-binding")
-	if _, err := h.svc.PutSecret(ctx, h.admin, core.PutSecretInput{Ref: ref, Value: []byte("stable-ciphertext")}); err != nil {
+	ref := h.ensureNS("/prod/" + app + "/credential")
+	if _, err := h.svc.PutSecret(ctx, h.admin, core.PutSecretInput{
+		Ref: ref, Value: []byte("stable-value"), ContentType: "text/plain", Metadata: `{"owner":"ops"}`, BindingKey: integrationBindingKeyA,
+	}); err != nil {
 		t.Fatalf("PutSecret: %v", err)
 	}
-	release, err := h.svc.CreateConfigurationRelease(ctx, h.admin, domain.CreateConfigurationReleaseInput{
-		Namespace: ref.NS,
-		Name:      "runtime",
-		Entries: []domain.ReleaseEntrySelector{{
-			Alias: "credential", Kind: domain.ReleaseEntrySecret, Ref: ref, Version: 1,
-		}},
+	oldRelease, err := h.svc.CreateConfigurationRelease(ctx, h.admin, domain.CreateConfigurationReleaseInput{
+		Namespace: ref.NS, Name: "runtime",
+		Entries: []domain.ReleaseEntrySelector{{Alias: "credential", Kind: domain.ReleaseEntrySecret, Ref: ref, Version: 1}},
 	})
 	if err != nil {
-		t.Fatalf("CreateConfigurationRelease: %v", err)
+		t.Fatalf("CreateConfigurationRelease(old): %v", err)
 	}
-	_, original, err := h.store.GetSecretVersion(ctx, ref, 1, "")
-	if err != nil {
-		t.Fatalf("GetSecretVersion before bind: %v", err)
-	}
-
-	bound, err := h.svc.BindSecret(ctx, h.admin, ref, 0, integrationBindingKeyA)
-	if err != nil {
-		t.Fatalf("BindSecret: %v", err)
-	}
-	if bound.AnchorVersion != 1 || !slices.Equal(bound.AffectedVersions, []uint64{1}) {
-		t.Fatalf("BindSecret result = %+v", bound)
-	}
-	_, afterBind, err := h.store.GetSecretVersion(ctx, ref, 1, "")
+	_, sourceBefore, err := h.store.GetSecretVersion(ctx, ref, 1, "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !afterBind.Bound || !bytes.Equal(afterBind.Ciphertext, original.Ciphertext) || bytes.Equal(afterBind.EncryptedDEK, original.EncryptedDEK) || len(afterBind.BindingKeySalt) == 0 {
-		t.Fatalf("bind did not perform an in-place DEK rewrap: before=%+v after=%+v", original, afterBind)
-	}
-	info, err := h.svc.GetSecretInfo(ctx, h.admin, ref)
-	if err != nil || !info.Bound {
-		t.Fatalf("metadata after bind = %+v err=%v", info, err)
-	}
-	assertSecretVersionProtection(t, info, 1, true, false)
-	if stored, err := h.svc.GetConfigurationRelease(ctx, h.admin, ref.NS, "runtime", release.Version); err != nil || stored.Digest != release.Digest || len(stored.Entries) != 1 || stored.Entries[0].Version != 1 {
-		t.Fatalf("bind changed immutable release pin: %+v err=%v", stored, err)
-	}
-	if validation, err := h.svc.ValidateConfigurationRelease(ctx, h.admin, ref.NS, "runtime", release.Version); err != nil || len(validation) != 0 {
-		t.Fatalf("bound live property invalidated release: validation=%+v err=%v", validation, err)
-	}
 
-	preview, err := h.svc.PreviewSecretBindingCohort(ctx, h.admin, ref, 0, integrationBindingKeyA)
-	if err != nil || preview.AnchorVersion != 1 || !slices.Equal(preview.AffectedVersions, []uint64{1}) || preview.Revision != bound.Revision {
-		t.Fatalf("PreviewSecretBindingCohort = %+v err=%v", preview, err)
-	}
-	for _, unusable := range []string{"", "short", string([]byte{0xff, 0xfe}), integrationBindingKeyB} {
-		if _, err := h.svc.UnbindSecret(ctx, h.admin, ref, 1, unusable); !errors.Is(err, domain.ErrDecryptFailed) || err.Error() != domain.ErrDecryptFailed.Error() {
-			t.Fatalf("UnbindSecret(unusable key) err = %v, want identical ErrDecryptFailed", err)
-		}
-	}
-	_, stillBound, err := h.store.GetSecretVersion(ctx, ref, 1, "")
-	if err != nil || !bytes.Equal(stillBound.EncryptedDEK, afterBind.EncryptedDEK) {
-		t.Fatalf("failed unbind changed wrapping: %+v err=%v", stillBound, err)
-	}
-
-	unbound, err := h.svc.UnbindSecret(ctx, h.admin, ref, 1, integrationBindingKeyA)
+	transition, err := h.svc.UnbindSecret(ctx, h.admin, ref, 1, integrationBindingKeyA)
 	if err != nil {
 		t.Fatalf("UnbindSecret: %v", err)
 	}
-	if unbound.AnchorVersion != 1 || !slices.Equal(unbound.AffectedVersions, []uint64{1}) {
-		t.Fatalf("UnbindSecret result = %+v", unbound)
+	if transition.CurrentVersion != 2 || transition.PreviousVersion != 1 {
+		t.Fatalf("transition = %+v", transition)
 	}
-	_, afterUnbind, err := h.store.GetSecretVersion(ctx, ref, 1, "")
+	_, sourceAfter, err := h.store.GetSecretVersion(ctx, ref, 1, "")
+	if err != nil || !reflect.DeepEqual(sourceAfter, sourceBefore) {
+		t.Fatalf("release-pinned source changed: before=%+v after=%+v err=%v", sourceBefore, sourceAfter, err)
+	}
+	if _, err := h.svc.GetSecret(ctx, h.admin, ref, 1, "", "", ""); !errors.Is(err, domain.ErrDecryptFailed) {
+		t.Fatalf("historical bound source no longer requires its old key: %v", err)
+	}
+	if got, err := h.svc.GetSecret(ctx, h.admin, ref, 1, "", "", integrationBindingKeyA); err != nil || string(got.Value) != "stable-value" {
+		t.Fatalf("historical source read=%q err=%v", got.Value, err)
+	}
+	if got, err := h.svc.GetSecret(ctx, h.admin, ref, 2, "", "", ""); err != nil || string(got.Value) != "stable-value" {
+		t.Fatalf("new unbound read=%q err=%v", got.Value, err)
+	}
+	storedOld, err := h.svc.GetConfigurationRelease(ctx, h.admin, ref.NS, "runtime", oldRelease.Version)
+	if err != nil || storedOld.Digest != oldRelease.Digest || storedOld.Entries[0].Version != 1 {
+		t.Fatalf("old release changed: %+v err=%v", storedOld, err)
+	}
+	if validation, err := h.svc.ValidateConfigurationRelease(ctx, h.admin, ref.NS, "runtime", oldRelease.Version); err != nil || len(validation) != 0 {
+		t.Fatalf("old release validation=%+v err=%v", validation, err)
+	}
+	newRelease, err := h.svc.CreateConfigurationRelease(ctx, h.admin, domain.CreateConfigurationReleaseInput{
+		Namespace: ref.NS, Name: "runtime",
+		Entries: []domain.ReleaseEntrySelector{{Alias: "credential", Kind: domain.ReleaseEntrySecret, Ref: ref, Version: 2}},
+	})
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("CreateConfigurationRelease(new): %v", err)
 	}
-	if afterUnbind.Bound || !bytes.Equal(afterUnbind.Ciphertext, original.Ciphertext) || bytes.Equal(afterUnbind.EncryptedDEK, afterBind.EncryptedDEK) || len(afterUnbind.BindingKeySalt) != 0 {
-		t.Fatalf("unbind did not perform an in-place DEK rewrap: %+v", afterUnbind)
-	}
-	info, err = h.svc.GetSecretInfo(ctx, h.admin, ref)
-	if err != nil || info.Bound {
-		t.Fatalf("metadata after unbind = %+v err=%v", info, err)
-	}
-	assertSecretVersionProtection(t, info, 1, false, false)
-	if validation, err := h.svc.ValidateConfigurationRelease(ctx, h.admin, ref.NS, "runtime", release.Version); err != nil || len(validation) != 0 {
-		t.Fatalf("unbound live property invalidated release: validation=%+v err=%v", validation, err)
-	}
-	if got, err := h.svc.GetSecret(ctx, h.admin, ref, 1, "", "", ""); err != nil || string(got.Value) != "stable-ciphertext" {
-		t.Fatalf("unbound value = %q err=%v", got.Value, err)
-	}
-	if _, err := h.svc.BindSecret(ctx, h.admin, ref, 1, "short"); !errors.Is(err, domain.ErrInvalidArgument) {
-		t.Fatalf("BindSecret(short new key) err = %v, want ErrInvalidArgument", err)
+	if newRelease.Digest == oldRelease.Digest || newRelease.Entries[0].Version != 2 {
+		t.Fatalf("new release did not pin distinct version/digest: old=%s new=%+v", oldRelease.Digest, newRelease)
 	}
 }
 
-func TestBindingCohortPreviewRotationAndCAS(t *testing.T) {
+func TestRotationCreatesOneVersionAndLeavesHistoricalCohortUnderOldKey(t *testing.T) {
 	h := newHarness(t)
 	ctx := context.Background()
-	ref := h.ensureNS("/prod/app/cohorts")
-	keys := []string{
-		integrationBindingKeyA,
-		integrationBindingKeyB,
-		integrationBindingKeyB,
-		integrationBindingKeyC,
-		integrationBindingKeyB,
-		integrationBindingKeyB,
-	}
-	for i, key := range keys {
-		if _, err := h.svc.PutSecret(ctx, h.admin, core.PutSecretInput{
-			Ref: ref, Value: []byte(fmt.Sprintf("value-%d", i+1)), BindingKey: key,
-		}); err != nil {
-			t.Fatalf("PutSecret v%d: %v", i+1, err)
-		}
-	}
-
-	preview, err := h.svc.PreviewSecretBindingCohort(ctx, h.admin, ref, 2, integrationBindingKeyB)
-	if err != nil || preview.AnchorVersion != 2 || !slices.Equal(preview.AffectedVersions, []uint64{2, 3}) {
-		t.Fatalf("preview first B cohort = %+v err=%v", preview, err)
-	}
-	currentPreview, err := h.svc.PreviewSecretBindingCohort(ctx, h.admin, ref, 0, integrationBindingKeyB)
-	if err != nil || currentPreview.AnchorVersion != 6 || !slices.Equal(currentPreview.AffectedVersions, []uint64{5, 6}) {
-		t.Fatalf("preview reused but separated B cohort = %+v err=%v", currentPreview, err)
-	}
-	if _, err := h.svc.PreviewSecretBindingCohort(ctx, h.admin, ref, 2, integrationBindingKeyA); !errors.Is(err, domain.ErrDecryptFailed) || err.Error() != domain.ErrDecryptFailed.Error() {
-		t.Fatalf("preview with wrong anchor key err = %v, want identical ErrDecryptFailed", err)
-	}
-	if revision, err := h.store.CurrentRevision(ctx); err != nil || revision != currentPreview.Revision {
-		t.Fatalf("preview changed revision: got %d err=%v, want %d", revision, err, currentPreview.Revision)
-	}
-
-	if _, err := h.svc.RotateSecretBindingKey(ctx, h.admin, ref, 2, integrationBindingKeyB, integrationBindingKeyD, &preview.Revision, nil); !errors.Is(err, domain.ErrInvalidArgument) {
-		t.Fatalf("revision-only guard err = %v, want ErrInvalidArgument", err)
-	}
-	if _, err := h.svc.RotateSecretBindingKey(ctx, h.admin, ref, 2, integrationBindingKeyB, integrationBindingKeyD, nil, preview.AffectedVersions); !errors.Is(err, domain.ErrInvalidArgument) {
-		t.Fatalf("versions-only guard err = %v, want ErrInvalidArgument", err)
-	}
-	if _, err := h.svc.RotateSecretBindingKey(ctx, h.admin, ref, 2, integrationBindingKeyB, integrationBindingKeyD, &preview.Revision, []uint64{2}); !errors.Is(err, domain.ErrAborted) {
-		t.Fatalf("affected-set mismatch err = %v, want ErrAborted", err)
-	}
-	if _, err := h.svc.PutSecret(ctx, h.admin, h.stdSecret("/prod/app/unrelated-revision", "advance")); err != nil {
-		t.Fatalf("advance revision: %v", err)
-	}
-	if _, err := h.svc.RotateSecretBindingKey(ctx, h.admin, ref, 2, integrationBindingKeyB, integrationBindingKeyD, &preview.Revision, preview.AffectedVersions); !errors.Is(err, domain.ErrAborted) {
-		t.Fatalf("stale revision err = %v, want ErrAborted", err)
-	}
-	if got, err := h.svc.PreviewSecretBindingCohort(ctx, h.admin, ref, 2, integrationBindingKeyB); err != nil || !slices.Equal(got.AffectedVersions, []uint64{2, 3}) {
-		t.Fatalf("failed CAS changed cohort: %+v err=%v", got, err)
-	}
-
-	before := make(map[uint64]storage.SecretVersionRecord, 2)
-	for _, version := range []uint64{2, 3} {
-		_, before[version], err = h.store.GetSecretVersion(ctx, ref, version, "")
-		if err != nil {
+	ref := h.ensureNS("/prod/app/versioned-rotation")
+	for _, value := range []string{"old-1", "old-2"} {
+		if _, err := h.svc.PutSecret(ctx, h.admin, core.PutSecretInput{Ref: ref, Value: []byte(value), BindingKey: integrationBindingKeyA}); err != nil {
 			t.Fatal(err)
 		}
 	}
-	preview, err = h.svc.PreviewSecretBindingCohort(ctx, h.admin, ref, 2, integrationBindingKeyB)
+	_, v1Before, _ := h.store.GetSecretVersion(ctx, ref, 1, "")
+	_, v2Before, _ := h.store.GetSecretVersion(ctx, ref, 2, "")
+	if _, err := h.svc.RotateSecretBindingKey(ctx, h.admin, ref, 1, integrationBindingKeyA, integrationBindingKeyB); !errors.Is(err, domain.ErrAborted) {
+		t.Fatalf("stale rotation guard err=%v", err)
+	}
+	rotated, err := h.svc.RotateSecretBindingKey(ctx, h.admin, ref, 2, integrationBindingKeyA, integrationBindingKeyB)
+	if err != nil || rotated.CurrentVersion != 3 || rotated.PreviousVersion != 2 {
+		t.Fatalf("rotation=%+v err=%v", rotated, err)
+	}
+	_, v1After, _ := h.store.GetSecretVersion(ctx, ref, 1, "")
+	_, v2After, _ := h.store.GetSecretVersion(ctx, ref, 2, "")
+	if !reflect.DeepEqual(v1After, v1Before) || !reflect.DeepEqual(v2After, v2Before) {
+		t.Fatal("rotation changed its historical cohort")
+	}
+	if old, err := h.svc.PreviewSecretBindingCohort(ctx, h.admin, ref, 1, integrationBindingKeyA); err != nil || !slices.Equal(old.AffectedVersions, []uint64{1, 2}) {
+		t.Fatalf("old cohort=%+v err=%v", old, err)
+	}
+	if current, err := h.svc.PreviewSecretBindingCohort(ctx, h.admin, ref, 3, integrationBindingKeyB); err != nil || !slices.Equal(current.AffectedVersions, []uint64{3}) {
+		t.Fatalf("new cohort=%+v err=%v", current, err)
+	}
+	if got, err := h.svc.GetSecret(ctx, h.admin, ref, 2, "", "", integrationBindingKeyA); err != nil || string(got.Value) != "old-2" {
+		t.Fatalf("old cohort read=%q err=%v", got.Value, err)
+	}
+	if _, err := h.svc.GetSecret(ctx, h.admin, ref, 3, "", "", integrationBindingKeyA); !errors.Is(err, domain.ErrDecryptFailed) {
+		t.Fatalf("new version accepted old key: %v", err)
+	}
+	if got, err := h.svc.GetSecret(ctx, h.admin, ref, 3, "", "", integrationBindingKeyB); err != nil || string(got.Value) != "old-2" {
+		t.Fatalf("rotated current read=%q err=%v", got.Value, err)
+	}
+	old, _ := h.svc.PreviewSecretBindingCohort(ctx, h.admin, ref, 1, integrationBindingKeyA)
+	if _, err := h.svc.PurgeSecretBindingCohort(ctx, h.admin, ref, 1, integrationBindingKeyA, new(old.Revision), old.AffectedVersions); err != nil {
+		t.Fatalf("purge old cohort: %v", err)
+	}
+	if got, err := h.svc.GetSecret(ctx, h.admin, ref, 3, "", "", integrationBindingKeyB); err != nil || string(got.Value) != "old-2" {
+		t.Fatalf("old-cohort purge harmed new current: read=%q err=%v", got.Value, err)
+	}
+}
+
+func TestPurgeUnboundVersionsBypassesReleasePinsAndPreservesBoundVersions(t *testing.T) {
+	h := newHarness(t)
+	ctx := context.Background()
+	const app = "purge-unbound-release"
+	if _, err := h.svc.CreateApplication(ctx, h.admin, domain.Application{Name: app, ReleaseName: "runtime"}); err != nil {
+		t.Fatal(err)
+	}
+	ref := h.ensureNS("/prod/" + app + "/credential")
+	for _, in := range []core.PutSecretInput{
+		{Ref: ref, Value: []byte("plain-1")},
+		{Ref: ref, Value: []byte("bound-2"), BindingKey: integrationBindingKeyA},
+		{Ref: ref, Value: []byte("plain-3")},
+	} {
+		if _, err := h.svc.PutSecret(ctx, h.admin, in); err != nil {
+			t.Fatal(err)
+		}
+	}
+	release, err := h.svc.CreateConfigurationRelease(ctx, h.admin, domain.CreateConfigurationReleaseInput{
+		Namespace: ref.NS, Name: "runtime",
+		Entries: []domain.ReleaseEntrySelector{{Alias: "credential", Kind: domain.ReleaseEntrySecret, Ref: ref, Version: 3}},
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	rotated, err := h.svc.RotateSecretBindingKey(ctx, h.admin, ref, 2, integrationBindingKeyB, integrationBindingKeyD, &preview.Revision, preview.AffectedVersions)
-	if err != nil {
-		t.Fatalf("RotateSecretBindingKey: %v", err)
+	zero := uint64(0)
+	if _, changed, err := h.svc.ActivateConfigurationRelease(ctx, h.admin, ref.NS, "runtime", release.Version, &zero); err != nil || !changed {
+		t.Fatalf("activate release changed=%v err=%v", changed, err)
 	}
-	if rotated.AnchorVersion != 2 || !slices.Equal(rotated.AffectedVersions, []uint64{2, 3}) || rotated.Revision <= preview.Revision {
-		t.Fatalf("rotation result = %+v, preview = %+v", rotated, preview)
+	if _, err := h.svc.DisableSecret(ctx, h.admin, ref, 1, false); err != nil {
+		t.Fatalf("disable v1: %v", err)
 	}
-	for _, version := range rotated.AffectedVersions {
-		_, after, err := h.store.GetSecretVersion(ctx, ref, version, "")
-		if err != nil {
-			t.Fatal(err)
-		}
-		if !bytes.Equal(after.Ciphertext, before[version].Ciphertext) || after.KEKID != before[version].KEKID ||
-			bytes.Equal(after.EncryptedDEK, before[version].EncryptedDEK) || bytes.Equal(after.BindingKeySalt, before[version].BindingKeySalt) {
-			t.Fatalf("v%d did not preserve ciphertext/KEK while rotating DEK wrapping", version)
-		}
-		if _, err := h.svc.GetSecret(ctx, h.admin, ref, version, "", "", integrationBindingKeyB); !errors.Is(err, domain.ErrDecryptFailed) {
-			t.Fatalf("old key still read v%d: %v", version, err)
-		}
-		if got, err := h.svc.GetSecret(ctx, h.admin, ref, version, "", "", integrationBindingKeyD); err != nil || string(got.Value) != fmt.Sprintf("value-%d", version) {
-			t.Fatalf("new key read v%d = %q err=%v", version, got.Value, err)
-		}
+	if _, err := h.svc.DestroySecretVersion(ctx, h.admin, ref, 3); !errors.Is(err, domain.ErrFailedPrecondition) {
+		t.Fatalf("ordinary destroy bypassed release pin: %v", err)
 	}
-	if got, err := h.svc.GetSecret(ctx, h.admin, ref, 5, "", "", integrationBindingKeyB); err != nil || string(got.Value) != "value-5" {
-		t.Fatalf("rotation crossed separated cohort: value=%q err=%v", got.Value, err)
+	preview, err := h.svc.PreviewSecretUnboundVersions(ctx, h.admin, ref)
+	if err != nil || !slices.Equal(preview.AffectedVersions, []uint64{1, 3}) {
+		t.Fatalf("preview=%+v err=%v", preview, err)
+	}
+	if _, err := h.svc.PurgeSecretUnboundVersions(ctx, h.admin, ref, preview.Revision, []uint64{1}); !errors.Is(err, domain.ErrAborted) {
+		t.Fatalf("mismatched set guard err=%v", err)
+	}
+	purged, err := h.svc.PurgeSecretUnboundVersions(ctx, h.admin, ref, preview.Revision, preview.AffectedVersions)
+	if err != nil || !slices.Equal(purged.AffectedVersions, []uint64{1, 3}) {
+		t.Fatalf("purge=%+v err=%v", purged, err)
+	}
+	if got, err := h.svc.GetSecret(ctx, h.admin, ref, 2, "", "", integrationBindingKeyA); err != nil || string(got.Value) != "bound-2" {
+		t.Fatalf("bound version after purge=%q err=%v", got.Value, err)
+	}
+	info, err := h.svc.GetSecretInfo(ctx, h.admin, ref)
+	if err != nil || info.Labels[domain.LabelCurrent] != 3 || info.Labels[domain.LabelPrevious] != 2 {
+		t.Fatalf("labels moved during purge: info=%+v err=%v", info, err)
+	}
+	if validation, err := h.svc.ValidateConfigurationRelease(ctx, h.admin, ref.NS, "runtime", release.Version); err != nil || len(validation) == 0 {
+		t.Fatalf("purged release validation=%+v err=%v", validation, err)
+	}
+	created, err := h.svc.PutSecret(ctx, h.admin, core.PutSecretInput{Ref: ref, Value: []byte("new-v4")})
+	if err != nil || created.Version != 4 {
+		t.Fatalf("post-purge put=%+v err=%v", created, err)
 	}
 }
 
@@ -367,10 +350,10 @@ func TestPurgeBindingCohortInvalidatesReleaseAndPreservesHighWater(t *testing.T)
 			t.Fatalf("purge with unusable key err = %v, want identical ErrDecryptFailed", err)
 		}
 	}
-	if _, err := h.svc.PurgeSecretBindingCohort(ctx, h.admin, ref, 2, integrationBindingKeyB, &preview.Revision, nil); !errors.Is(err, domain.ErrInvalidArgument) {
+	if _, err := h.svc.PurgeSecretBindingCohort(ctx, h.admin, ref, 2, integrationBindingKeyB, new(preview.Revision), nil); !errors.Is(err, domain.ErrInvalidArgument) {
 		t.Fatalf("purge revision-only guard err = %v, want ErrInvalidArgument", err)
 	}
-	if _, err := h.svc.PurgeSecretBindingCohort(ctx, h.admin, ref, 2, integrationBindingKeyB, &preview.Revision, []uint64{2}); !errors.Is(err, domain.ErrAborted) {
+	if _, err := h.svc.PurgeSecretBindingCohort(ctx, h.admin, ref, 2, integrationBindingKeyB, new(preview.Revision), []uint64{2}); !errors.Is(err, domain.ErrAborted) {
 		t.Fatalf("purge affected-set mismatch err = %v, want ErrAborted", err)
 	}
 	if cohort, err := h.svc.PreviewSecretBindingCohort(ctx, h.admin, ref, 2, integrationBindingKeyB); err != nil || !slices.Equal(cohort.AffectedVersions, preview.AffectedVersions) {
@@ -393,7 +376,7 @@ func TestPurgeBindingCohortInvalidatesReleaseAndPreservesHighWater(t *testing.T)
 		t.Fatalf("denied purge changed revision: %d -> %d err=%v", revisionBeforeDenied, revision, err)
 	}
 
-	purged, err := h.svc.PurgeSecretBindingCohort(ctx, h.admin, ref, 2, integrationBindingKeyB, &preview.Revision, preview.AffectedVersions)
+	purged, err := h.svc.PurgeSecretBindingCohort(ctx, h.admin, ref, 2, integrationBindingKeyB, new(preview.Revision), preview.AffectedVersions)
 	if err != nil {
 		t.Fatalf("PurgeSecretBindingCohort: %v", err)
 	}
@@ -470,7 +453,7 @@ func TestPurgeBindingCohortInvalidatesReleaseAndPreservesHighWater(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := h.svc.PurgeSecretBindingCohort(ctx, h.admin, reuseRef, 0, integrationBindingKeyB, &reusePreview.Revision, reusePreview.AffectedVersions); err != nil {
+	if _, err := h.svc.PurgeSecretBindingCohort(ctx, h.admin, reuseRef, 0, integrationBindingKeyB, new(reusePreview.Revision), reusePreview.AffectedVersions); err != nil {
 		t.Fatalf("purge reuse cohort: %v", err)
 	}
 	if _, err := h.svc.DeleteSecret(ctx, h.admin, reuseRef); err != nil {

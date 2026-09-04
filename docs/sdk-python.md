@@ -245,34 +245,44 @@ Binding lifecycle methods are available on both clients (await them on
 `AsyncClient`):
 
 ```python
-client.bind_secret("api-key", version=7, binding_key=new_key)
-client.unbind_secret("api-key", version=7, binding_key=current_key)
+client.bind_secret(
+    "api-key", expected_current_version=7, binding_key=new_key
+)
+client.unbind_secret(
+    "api-key", expected_current_version=7, binding_key=current_key
+)
 preview = client.preview_secret_binding_cohort(
     "api-key", anchor_version=7, binding_key=current_key
 )
 client.rotate_secret_binding_key(
-    "api-key", anchor_version=7, binding_key=current_key,
-    new_binding_key=new_key,
-    expected_revision=preview.revision,
-    expected_affected_versions=preview.affected_versions,
+    "api-key", expected_current_version=7,
+    binding_key=current_key, new_binding_key=new_key,
 )
 client.purge_secret_binding_cohort(
     "api-key", anchor_version=7, binding_key=compromised_key,
     expected_revision=preview.revision,
     expected_affected_versions=preview.affected_versions,
 )
+unbound = client.preview_secret_unbound_versions("api-key")
+client.purge_secret_unbound_versions(
+    "api-key",
+    expected_revision=unbound.revision,
+    expected_affected_versions=unbound.affected_versions,
+)
 ```
 
-Sync and async rotation reject a byte-for-byte unchanged replacement locally
-as `ConfigError` without making an RPC. The server independently enforces the
-same rule.
+The server proves the supplied current key before rejecting a byte-for-byte
+unchanged replacement, preserving the canonical credential-failure boundary.
 
-The two expected fields are optional but paired; the SDK rejects an incomplete,
-zero, unsorted, or duplicate guard before the RPC. Purge is irreversible and
-admin-only. See [`binding-keys.md`](binding-keys.md).
+Bound-cohort purge guards are optional but paired: supply both fields or
+neither. When supplied, and for every unbound-version purge, the SDK rejects
+an incomplete, zero, unsorted, or duplicate guard before the RPC. Purge is
+irreversible and admin-only. See
+[`binding-keys.md`](binding-keys.md).
 
 `PutResult`, `PutSecretResult`, `Parameter`, `SecretInfo`, `SecretVersion`,
-`SecretVersionMutationResult`, and `SecretBindingCohortResult`
+`SecretVersionTransitionResult`, `SecretBindingCohortResult`, and
+`SecretVersionSetResult`
 (`kms_paramstore/models.py`) are frozen dataclasses decoupling callers from
 the generated protobuf messages. Affected-version collections are immutable
 tuples. `Parameter` and `SecretInfo` carry explicit `env`, `app`, and `key`
@@ -281,8 +291,8 @@ properties.
 
 `SecretInfo.bound` summarizes the current-labeled version, while its top-level
 `has_access_token` reports whether the secret currently has an access-token
-hash. Every `SecretVersion` carries exact live `bound` and `has_access_token`
-flags; use those fields for an exact pin.
+hash. Every `SecretVersion` carries immutable-while-live `bound` and
+`has_access_token` flags; use those fields for an exact pin.
 
 ### Public client surface
 
@@ -293,7 +303,7 @@ watch, defaults, and close operations. The stable method families are:
 |---|---|
 | Identity and reads | `who_am_i`, `get_parameter`, `get_parameter_info`, `get_secret` |
 | Parameter inventory and writes | `list_parameters -> Page[Parameter]`, `get_parameter_metadata`, `put_parameter`, `delete_parameter` |
-| Secret inventory and lifecycle | `list_secrets -> Page[SecretInfo]`, `get_secret_metadata`, `put_secret`, `delete_secret`, `set_secret_enabled`, `destroy_secret_version`, `promote_secret_version`, `bind_secret`, `unbind_secret`, `preview_secret_binding_cohort`, `rotate_secret_binding_key`, `purge_secret_binding_cohort` |
+| Secret inventory and lifecycle | `list_secrets -> Page[SecretInfo]`, `get_secret_metadata`, `put_secret`, `delete_secret`, `set_secret_enabled`, `destroy_secret_version`, `promote_secret_version`, `bind_secret`, `unbind_secret`, `preview_secret_binding_cohort`, `rotate_secret_binding_key`, `purge_secret_binding_cohort`, `preview_secret_unbound_versions`, `purge_secret_unbound_versions` |
 | Runtime configuration | `resolve`, `watch`, `watch_namespace`, `current_revision`, `watch_status` |
 | Managed defaults | `verify_release_defaults -> VerifyReleaseDefaultsResult`, `apply_application_defaults -> ApplicationDefaultsApplyResult` |
 | Lifecycle | `close`; sync and async clients are context managers for their respective execution models |
@@ -325,11 +335,11 @@ except PermissionDeniedError:
 | `NotFoundError` | The key/version/label does not exist. |
 | `PermissionDeniedError` | Authenticated but not authorized for the resource/operation (includes a namespace that forbids the caller's auth method). |
 | `UnauthenticatedError` | Missing, invalid, or expired credential. |
-| `FailedPreconditionError` | Well-formed request the server state forbids (e.g. binding an already-bound version, a disabled version, or a stale cohort guard). |
+| `FailedPreconditionError` | Well-formed request the server state forbids (e.g. binding an already-bound version or finding no unbound versions to preview). CAS mismatches are a generic `ParamStoreError` with code `"aborted"`. |
 | `NotInitializedError` | A declarative `SecretValue` field was read before `resolve` ran. |
 | `ConfigError` | The SDK itself was misconfigured (missing endpoint, malformed namespace, no key/env_var/default on a declarative field, ...). |
 | `NoNamespaceError` | A **subclass of `ConfigError`**: a relative key was used on a client with no namespace (an unbound identity and no `namespace=`). The message names the key. |
-| `PurgeCleanupPendingError` | The cohort purge committed logically, but active SQLite/WAL artifact cleanup is pending. Do not retry with the retired key; no cohort result accompanies the gRPC error. |
+| `PurgeCleanupPendingError` | The bound-cohort or unbound-version purge committed logically, but active SQLite/WAL artifact cleanup is pending. No purge result accompanies the gRPC error. Do not retry a cohort purge with the retired key or an unbound purge as though its preview were still live. |
 
 For ordinary RPCs, gRPC status codes outside this mapped set surface as a
 generic `ParamStoreError` carrying the status code name and message. Every RPC
@@ -584,8 +594,9 @@ corresponding pinned read. Missing credentials reject the whole candidate as
 activation revision, schema version, deterministic digest, metadata,
 immutable entry tuple, and read-only alias-keyed parameter/secret mappings.
 Each `ReleaseEntry` contains exact path/version, content type, captured
-metadata, and parameter digest. Protection flags are live exact-version
-metadata and are absent from release entries and digests. Snapshot
+metadata, and parameter digest. Protection flags are immutable exact-version
+metadata and are absent from release entries and digests, so the version pin
+implicitly pins the protection mode. Snapshot
 `str`/`repr`/formatting omit resolved values, and every `Secret` remains
 `[REDACTED]` unless `.value` or `.string_value` is used explicitly.
 

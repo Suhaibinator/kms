@@ -234,11 +234,12 @@ if errors.Is(err, kmsclient.ErrNotFound) { ... }
 `ErrFailedPrecondition`, `ErrNoNamespace`. No error ever contains secret
 plaintext.
 
-`ErrPurgeCleanupPending` is special: the logical secret-cohort purge committed,
-but KMS could not yet prove removal from all live database artifacts. The purge
-method returns a zero result with this sentinel. Treat the secret as purged and
-do not retry with the discarded binding key; an operator must restore KMS so it
-can complete its artifact cleanup.
+`ErrPurgeCleanupPending` is special: the logical bound-cohort or unbound-version
+purge committed, but KMS could not yet prove removal from all live database
+artifacts. The purge method returns a zero result with this sentinel. Treat the
+selected versions as purged; do not retry a cohort purge with the retired key
+or an unbound purge as though its preview were still live. An operator must
+restore KMS so it can complete its artifact cleanup.
 
 ## Testing against a fake
 

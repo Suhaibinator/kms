@@ -8,6 +8,13 @@ when gradethis builds and runs with no dependency on
 > in-place upgrade from a `0.2.x` SQLite database and no compatibility path for
 > its client-bound tokens or release digests.
 
+The versioned protection-transition update within this greenfield `0.3.x`
+contract changes SecretService and SDK signatures, but not the SQLite table
+layout, application configuration schema, release-entry schema, or release
+digest format. Bind, unbind, and binding-key rotation now create a new version;
+operators must deploy a newly created release before retiring and purging the
+old version.
+
 ## Concept mapping
 
 A namespace is a fixed `(env, app)` pair. Flat, prefixed keys become a

@@ -94,6 +94,7 @@ func TestCommandFlagHelpExitsSuccessfully(t *testing.T) {
 		{"secret", "bind", "--help"},
 		{"secret", "unbind", "--help"},
 		{"secret", "purge-binding-cohort", "--help"},
+		{"secret", "purge-unbound-versions", "--help"},
 		{"whoami", "--help"},
 		{"admin", "--help"},
 		{"admin", "namespace", "--help"},

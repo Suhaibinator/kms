@@ -50,25 +50,23 @@ def test_async_client_core_surface_and_close():
                 "async/bound", secret_token=bound.access_token,
                 binding_key=old_key,
             )).bind_key == ""
-            preview = await client.preview_secret_binding_cohort(
-                "async/bound", binding_key=old_key,
-            )
             rotated = await client.rotate_secret_binding_key(
-                "async/bound", binding_key=old_key, new_binding_key=new_key,
-                expected_revision=preview.revision,
-                expected_affected_versions=preview.affected_versions,
+                "async/bound", expected_current_version=1,
+                binding_key=old_key, new_binding_key=new_key,
             )
-            assert rotated.affected_versions == (1,)
+            assert (rotated.current_version, rotated.previous_version) == (2, 1)
             purge_preview = await client.preview_secret_binding_cohort(
-                "async/bound", binding_key=new_key,
+                "async/bound", anchor_version=2, binding_key=new_key,
             )
             purged = await client.purge_secret_binding_cohort(
                 "async/bound", binding_key=new_key,
                 expected_revision=purge_preview.revision,
                 expected_affected_versions=purge_preview.affected_versions,
             )
-            assert purged.anchor_version == 1
-            assert (await client.get_secret_metadata("async/bound")).versions[0].state == "destroyed"
+            assert purged.anchor_version == 2
+            metadata = await client.get_secret_metadata("async/bound")
+            assert metadata.versions[0].state == "enabled"
+            assert metadata.versions[1].state == "destroyed"
         assert client.closed
 
     try:

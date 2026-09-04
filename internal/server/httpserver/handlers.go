@@ -56,6 +56,8 @@ func (s *server) newAPIMux() *http.ServeMux {
 	mux.HandleFunc("POST /api/v1/secrets/binding-cohort/preview", s.handlePreviewSecretBindingCohort)
 	mux.HandleFunc("POST /api/v1/secrets/binding-key/rotate", s.handleRotateSecretBindingKey)
 	mux.HandleFunc("POST /api/v1/secrets/binding-cohort/purge", s.handlePurgeSecretBindingCohort)
+	mux.HandleFunc("POST /api/v1/secrets/unbound-versions/preview", s.handlePreviewSecretUnboundVersions)
+	mux.HandleFunc("POST /api/v1/secrets/unbound-versions/purge", s.handlePurgeSecretUnboundVersions)
 	mux.HandleFunc("DELETE /api/v1/secrets", s.handleDeleteSecret)
 
 	mux.HandleFunc("GET /api/v1/policies", s.handleListPolicies)
@@ -643,39 +645,39 @@ func (s *server) handlePromoteSecret(w http.ResponseWriter, r *http.Request) {
 func (s *server) handleBindSecret(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		refFields
-		Version    uint64 `json:"version"`
-		BindingKey string `json:"binding_key"`
+		ExpectedCurrentVersion uint64 `json:"expected_current_version"`
+		BindingKey             string `json:"binding_key"`
 	}
 	if err := decodeJSON(w, r, &body); err != nil {
 		s.writeError(w, r, err)
 		return
 	}
-	result, err := s.svc.BindSecret(r.Context(), principalFrom(r.Context()), body.ref(), body.Version, body.BindingKey)
+	result, err := s.svc.BindSecret(r.Context(), principalFrom(r.Context()), body.ref(), body.ExpectedCurrentVersion, body.BindingKey)
 	body.BindingKey = ""
 	if err != nil {
 		s.writeError(w, r, err)
 		return
 	}
-	writeSecretVersionMutationResult(w, result)
+	writeSecretVersionTransitionResult(w, result)
 }
 
 func (s *server) handleUnbindSecret(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		refFields
-		Version    uint64 `json:"version"`
-		BindingKey string `json:"binding_key"`
+		ExpectedCurrentVersion uint64 `json:"expected_current_version"`
+		BindingKey             string `json:"binding_key"`
 	}
 	if err := decodeJSON(w, r, &body); err != nil {
 		s.writeError(w, r, err)
 		return
 	}
-	result, err := s.svc.UnbindSecret(r.Context(), principalFrom(r.Context()), body.ref(), body.Version, body.BindingKey)
+	result, err := s.svc.UnbindSecret(r.Context(), principalFrom(r.Context()), body.ref(), body.ExpectedCurrentVersion, body.BindingKey)
 	body.BindingKey = ""
 	if err != nil {
 		s.writeError(w, r, err)
 		return
 	}
-	writeSecretVersionMutationResult(w, result)
+	writeSecretVersionTransitionResult(w, result)
 }
 
 func (s *server) handlePreviewSecretBindingCohort(w http.ResponseWriter, r *http.Request) {
@@ -700,24 +702,22 @@ func (s *server) handlePreviewSecretBindingCohort(w http.ResponseWriter, r *http
 func (s *server) handleRotateSecretBindingKey(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		refFields
-		AnchorVersion            uint64   `json:"anchor_version"`
-		BindingKey               string   `json:"binding_key"`
-		NewBindingKey            string   `json:"new_binding_key"`
-		ExpectedRevision         *uint64  `json:"expected_revision"`
-		ExpectedAffectedVersions []uint64 `json:"expected_affected_versions"`
+		ExpectedCurrentVersion uint64 `json:"expected_current_version"`
+		BindingKey             string `json:"binding_key"`
+		NewBindingKey          string `json:"new_binding_key"`
 	}
 	if err := decodeJSON(w, r, &body); err != nil {
 		s.writeError(w, r, err)
 		return
 	}
-	result, err := s.svc.RotateSecretBindingKey(r.Context(), principalFrom(r.Context()), body.ref(), body.AnchorVersion, body.BindingKey, body.NewBindingKey, body.ExpectedRevision, body.ExpectedAffectedVersions)
+	result, err := s.svc.RotateSecretBindingKey(r.Context(), principalFrom(r.Context()), body.ref(), body.ExpectedCurrentVersion, body.BindingKey, body.NewBindingKey)
 	body.BindingKey = ""
 	body.NewBindingKey = ""
 	if err != nil {
 		s.writeError(w, r, err)
 		return
 	}
-	writeSecretBindingCohortResult(w, result)
+	writeSecretVersionTransitionResult(w, result)
 }
 
 func (s *server) handlePurgeSecretBindingCohort(w http.ResponseWriter, r *http.Request) {
@@ -741,9 +741,48 @@ func (s *server) handlePurgeSecretBindingCohort(w http.ResponseWriter, r *http.R
 	writeSecretBindingCohortResult(w, result)
 }
 
-func writeSecretVersionMutationResult(w http.ResponseWriter, result core.SecretVersionMutationResult) {
+func (s *server) handlePreviewSecretUnboundVersions(w http.ResponseWriter, r *http.Request) {
+	var body struct{ refFields }
+	if err := decodeJSON(w, r, &body); err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	result, err := s.svc.PreviewSecretUnboundVersions(r.Context(), principalFrom(r.Context()), body.ref())
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	writeSecretVersionSetResult(w, result)
+}
+
+func (s *server) handlePurgeSecretUnboundVersions(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		refFields
+		ExpectedRevision         uint64   `json:"expected_revision"`
+		ExpectedAffectedVersions []uint64 `json:"expected_affected_versions"`
+	}
+	if err := decodeJSON(w, r, &body); err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	result, err := s.svc.PurgeSecretUnboundVersions(r.Context(), principalFrom(r.Context()), body.ref(), body.ExpectedRevision, body.ExpectedAffectedVersions)
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	writeSecretVersionSetResult(w, result)
+}
+
+func writeSecretVersionTransitionResult(w http.ResponseWriter, result core.SecretVersionTransitionResult) {
 	writeJSON(w, http.StatusOK, map[string]any{
-		"anchor_version":    result.AnchorVersion,
+		"current_version":  result.CurrentVersion,
+		"previous_version": result.PreviousVersion,
+		"revision":         result.Revision,
+	})
+}
+
+func writeSecretVersionSetResult(w http.ResponseWriter, result core.SecretVersionSetResult) {
+	writeJSON(w, http.StatusOK, map[string]any{
 		"affected_versions": append([]uint64(nil), result.AffectedVersions...),
 		"revision":          result.Revision,
 	})

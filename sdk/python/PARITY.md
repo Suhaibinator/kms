@@ -9,7 +9,7 @@ Python application SDK.
 |---|---:|---:|---|
 | Parameter values, metadata, listing, mutation | yes | yes | `tests/test_core_parity.py`, `tests/test_async_client.py` |
 | Secret values, inventory, lifecycle, redaction | yes | yes | `tests/test_secrets.py`, `tests/test_core_parity.py`, `tests/test_async_client.py` |
-| Independent access-token/binding-key reads and cohort management | yes | yes | `tests/test_secrets.py`, `tests/test_async_client.py`, `tests/test_release.py`, `tests/test_async_release.py` |
+| Versioned binding transitions plus bound-cohort and unbound-version purge | yes | yes | `tests/test_secrets.py`, `tests/test_async_client.py`, `tests/test_release.py`, `tests/test_async_release.py` |
 | Namespace discovery and explicit cross-namespace refs | yes | yes | `tests/test_namespace.py`, `tests/test_async_client.py` |
 | Immutable pages, models, typed errors | yes | yes | `tests/test_core_parity.py` |
 | Resumable namespace watch and value-free health | yes | yes | `tests/test_watch.py`, `tests/test_async_client.py` |

@@ -650,25 +650,22 @@ func TestSecretBindingLifecyclePreviewCASRotateAndPurge(t *testing.T) {
 	revision := uint64(preview["revision"].(float64))
 	w = e.admin(http.MethodPost, "/api/v1/secrets/binding-key/rotate", map[string]any{
 		"env": "prod", "app": "gradethis", "key": "cohort",
-		"anchor_version": 2, "binding_key": keyA, "new_binding_key": keyA,
+		"expected_current_version": 2, "binding_key": keyA, "new_binding_key": keyA,
 	})
 	mustStatus(t, w, http.StatusBadRequest)
 	if got := errCode(t, w); got != "invalid_argument" {
 		t.Fatalf("no-op rotation error code = %q, want invalid_argument", got)
 	}
 
-	// The guard is optional, but when present both members are required. In
-	// particular, explicit revision zero must retain presence and reach the CAS
-	// comparison rather than being treated as an omitted guard.
+	// Rotation accepts only the mandatory current-version guard. Old cohort
+	// preview guards are rejected by strict JSON decoding.
 	guardBase := map[string]any{
 		"env": "prod", "app": "gradethis", "key": "cohort",
-		"anchor_version": 2, "binding_key": keyA, "new_binding_key": keyC,
+		"expected_current_version": 2, "binding_key": keyA, "new_binding_key": keyC,
 	}
 	for name, fields := range map[string]map[string]any{
 		"versions only":   {"expected_affected_versions": []uint64{1, 2}},
 		"revision only":   {"expected_revision": revision},
-		"unsorted":        {"expected_revision": revision, "expected_affected_versions": []uint64{2, 1}},
-		"duplicate":       {"expected_revision": revision, "expected_affected_versions": []uint64{1, 1}},
 		"misspelled both": {"expectedRevision": revision, "expectedAffectedVersions": []uint64{1, 2}},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -684,38 +681,36 @@ func TestSecretBindingLifecyclePreviewCASRotateAndPurge(t *testing.T) {
 		})
 	}
 	explicitZero := maps.Clone(guardBase)
-	explicitZero["expected_revision"] = uint64(0)
-	explicitZero["expected_affected_versions"] = []uint64{1, 2}
+	explicitZero["expected_current_version"] = uint64(0)
 	w = e.admin(http.MethodPost, "/api/v1/secrets/binding-key/rotate", explicitZero)
-	mustStatus(t, w, http.StatusConflict)
-	if got := errCode(t, w); got != "aborted" {
-		t.Fatalf("explicit-zero guard code = %q, want aborted", got)
+	mustStatus(t, w, http.StatusBadRequest)
+	if got := errCode(t, w); got != "invalid_argument" {
+		t.Fatalf("explicit-zero guard code = %q, want invalid_argument", got)
 	}
 
 	w = e.admin(http.MethodPost, "/api/v1/secrets/binding-key/rotate", map[string]any{
 		"env": "prod", "app": "gradethis", "key": "cohort",
-		"anchor_version": 2, "binding_key": keyA, "new_binding_key": keyC,
-		"expected_revision": revision, "expected_affected_versions": []uint64{1, 2},
+		"expected_current_version": 2, "binding_key": keyA, "new_binding_key": keyC,
 	})
 	mustStatus(t, w, http.StatusOK)
 	rotated := decodeBody(t, w)
-	if got := rotated["affected_versions"].([]any); len(got) != 2 || got[0] != float64(1) || got[1] != float64(2) {
-		t.Fatalf("rotated affected_versions = %v", got)
+	if rotated["current_version"] != float64(4) || rotated["previous_version"] != float64(2) {
+		t.Fatalf("rotation response = %v", rotated)
 	}
-	assertExactMetadata([]bool{true, true, true}, []string{domain.StateEnabled, domain.StateEnabled, domain.StateEnabled})
+	assertExactMetadata([]bool{true, true, true, true}, []string{domain.StateEnabled, domain.StateEnabled, domain.StateEnabled, domain.StateEnabled})
 
-	// Old material no longer opens the cohort; the replacement key does, while
-	// the adjacent B epoch remains a hard boundary.
+	// Historical material remains under the old key; only the new current uses
+	// the replacement key.
 	w = e.admin(http.MethodPost, "/api/v1/secrets/reveal", map[string]any{
 		"env": "prod", "app": "gradethis", "key": "cohort", "version": 1, "binding_key": keyA,
 	})
-	mustStatus(t, w, http.StatusInternalServerError)
+	mustStatus(t, w, http.StatusOK)
 	w = e.admin(http.MethodPost, "/api/v1/secrets/reveal", map[string]any{
-		"env": "prod", "app": "gradethis", "key": "cohort", "version": 1, "binding_key": keyC,
+		"env": "prod", "app": "gradethis", "key": "cohort", "version": 4, "binding_key": keyC,
 	})
 	mustStatus(t, w, http.StatusOK)
 
-	previewRequest["binding_key"] = keyC
+	previewRequest["binding_key"] = keyA
 	w = e.admin(http.MethodPost, "/api/v1/secrets/binding-cohort/preview", previewRequest)
 	mustStatus(t, w, http.StatusOK)
 	preview = decodeBody(t, w)
@@ -731,7 +726,7 @@ func TestSecretBindingLifecyclePreviewCASRotateAndPurge(t *testing.T) {
 	}
 	deniedPurge := e.client(http.MethodPost, "/api/v1/secrets/binding-cohort/purge", map[string]any{
 		"env": "prod", "app": "gradethis", "key": "cohort",
-		"anchor_version": 2, "binding_key": keyC,
+		"anchor_version": 2, "binding_key": keyA,
 		"expected_revision": revision, "expected_affected_versions": []uint64{1, 2},
 	})
 	mustStatus(t, deniedPurge, http.StatusForbidden)
@@ -747,7 +742,7 @@ func TestSecretBindingLifecyclePreviewCASRotateAndPurge(t *testing.T) {
 	mustStatus(t, w, http.StatusOK)
 	purge := map[string]any{
 		"env": "prod", "app": "gradethis", "key": "cohort",
-		"anchor_version": 2, "binding_key": keyC,
+		"anchor_version": 2, "binding_key": keyA,
 		"expected_revision": revision, "expected_affected_versions": []uint64{1, 2},
 	}
 	w = e.admin(http.MethodPost, "/api/v1/secrets/binding-cohort/purge", purge)
@@ -765,7 +760,7 @@ func TestSecretBindingLifecyclePreviewCASRotateAndPurge(t *testing.T) {
 
 	for _, version := range []uint64{1, 2} {
 		w = e.admin(http.MethodPost, "/api/v1/secrets/reveal", map[string]any{
-			"env": "prod", "app": "gradethis", "key": "cohort", "version": version, "binding_key": keyC,
+			"env": "prod", "app": "gradethis", "key": "cohort", "version": version, "binding_key": keyA,
 		})
 		mustStatus(t, w, http.StatusPreconditionFailed)
 	}
@@ -773,11 +768,11 @@ func TestSecretBindingLifecyclePreviewCASRotateAndPurge(t *testing.T) {
 		"env": "prod", "app": "gradethis", "key": "cohort", "version": 3, "binding_key": keyB,
 	})
 	mustStatus(t, w, http.StatusOK)
-	assertExactMetadata([]bool{false, false, true}, []string{domain.StateDestroyed, domain.StateDestroyed, domain.StateEnabled})
+	assertExactMetadata([]bool{false, false, true, true}, []string{domain.StateDestroyed, domain.StateDestroyed, domain.StateEnabled, domain.StateEnabled})
 	metadata := e.admin(http.MethodGet, "/api/v1/secrets/metadata?env=prod&app=gradethis&key=cohort", nil)
 	mustStatus(t, metadata, http.StatusOK)
-	if got := decodeBody(t, metadata)["secret"].(map[string]any)["content_type"]; got != "" {
-		t.Fatalf("purged current projection content_type = %v, want empty", got)
+	if got := decodeBody(t, metadata)["secret"].(map[string]any)["bound"]; got != true {
+		t.Fatalf("current projection bound = %v, want true", got)
 	}
 }
 
@@ -798,7 +793,7 @@ func TestSecretBindingManagementRequiresDedicatedPolicyOperation(t *testing.T) {
 	}
 	request := map[string]any{
 		"env": "prod", "app": "gradethis", "key": "binding-authz",
-		"version": 1, "binding_key": bindingKey,
+		"expected_current_version": 1, "binding_key": bindingKey,
 	}
 	denied := e.client(http.MethodPost, "/api/v1/secrets/bind", request)
 	mustStatus(t, denied, http.StatusForbidden)
@@ -823,7 +818,7 @@ func TestSecretBindingManagementRequiresDedicatedPolicyOperation(t *testing.T) {
 		}
 		count++
 		if audit.ActorIdentity != "client" || audit.ResourceNamespaceID == 0 || audit.ResourceKey != "binding-authz" ||
-			audit.Metadata != `{"affected_versions":[1]}` || strings.Contains(audit.Metadata, bindingKey) {
+			audit.Metadata != `{"affected_versions":[1,2]}` || strings.Contains(audit.Metadata, bindingKey) {
 			t.Fatalf("unsafe bind allow audit = %+v", audit)
 		}
 	}
@@ -849,7 +844,7 @@ func TestSecretBindingHTTPAuditFailureRollsBack(t *testing.T) {
 
 	response := e.admin(http.MethodPost, "/api/v1/secrets/bind", map[string]any{
 		"env": "prod", "app": "gradethis", "key": "binding-audit-rollback",
-		"version": 1, "binding_key": "binding-key-a-0123456789-0123456789",
+		"expected_current_version": 1, "binding_key": "binding-key-a-0123456789-0123456789",
 	})
 	mustStatus(t, response, http.StatusPreconditionFailed)
 	if errCode(t, response) != "failed_precondition" {
@@ -857,9 +852,10 @@ func TestSecretBindingHTTPAuditFailureRollsBack(t *testing.T) {
 	}
 	e.store.mu.Lock()
 	after := cloneBindingVersion(e.store.secrets[refKey(ref)].versions[1])
+	_, created := e.store.secrets[refKey(ref)].versions[2]
 	afterRevision := e.store.revision
 	e.store.mu.Unlock()
-	if !reflect.DeepEqual(after, before) || afterRevision != beforeRevision {
+	if !reflect.DeepEqual(after, before) || created || afterRevision != beforeRevision {
 		t.Fatalf("audit failure mutated version or revision: before=%+v/%d after=%+v/%d", before, beforeRevision, after, afterRevision)
 	}
 }
@@ -875,10 +871,17 @@ func TestPurgeCleanupPendingMapsAcrossHTTP(t *testing.T) {
 	})
 	mustStatus(t, w, http.StatusOK)
 	e.store.setPurgeResultErr(storage.ErrPurgeCleanupPending)
+	preview := e.admin(http.MethodPost, "/api/v1/secrets/binding-cohort/preview", map[string]any{
+		"env": "prod", "app": "gradethis", "key": "cleanup-pending",
+		"anchor_version": 1, "binding_key": bindingKey,
+	})
+	mustStatus(t, preview, http.StatusOK)
+	guard := decodeBody(t, preview)
 
 	w = e.admin(http.MethodPost, "/api/v1/secrets/binding-cohort/purge", map[string]any{
 		"env": "prod", "app": "gradethis", "key": "cleanup-pending",
 		"anchor_version": 1, "binding_key": bindingKey,
+		"expected_revision": guard["revision"], "expected_affected_versions": guard["affected_versions"],
 	})
 	mustStatus(t, w, http.StatusServiceUnavailable)
 	body := decodeBody(t, w)["error"].(map[string]any)
@@ -894,7 +897,7 @@ func TestPurgeCleanupPendingMapsAcrossHTTP(t *testing.T) {
 	}
 }
 
-func TestSecretBindAndUnbindMutateExactVersionInPlace(t *testing.T) {
+func TestSecretBindAndUnbindCreateNewCurrentVersions(t *testing.T) {
 	e := newTestEnv(t)
 	e.createNS("prod", "gradethis")
 	const bindingKey = "binding-key-a-0123456789-0123456789"
@@ -903,37 +906,45 @@ func TestSecretBindAndUnbindMutateExactVersionInPlace(t *testing.T) {
 		"value_base64": base64.StdEncoding.EncodeToString([]byte("plaintext")),
 	})
 	mustStatus(t, w, http.StatusOK)
-	assertVersionBound := func(want bool) {
+	assertVersionBound := func(want []bool, current float64) {
 		t.Helper()
 		metadata := e.admin(http.MethodGet, "/api/v1/secrets/metadata?env=prod&app=gradethis&key=exact", nil)
 		mustStatus(t, metadata, http.StatusOK)
 		secret := decodeBody(t, metadata)["secret"].(map[string]any)
 		versions := secret["versions"].([]any)
-		if secret["bound"] != want || len(versions) != 1 || versions[0].(map[string]any)["bound"] != want {
+		if secret["bound"] != want[len(want)-1] || len(versions) != len(want) || secret["labels"].(map[string]any)["current"] != current {
 			t.Fatalf("metadata after bound=%v: %v", want, secret)
+		}
+		for i, bound := range want {
+			if versions[i].(map[string]any)["bound"] != bound {
+				t.Fatalf("version %d metadata = %v", i+1, versions[i])
+			}
 		}
 	}
 
 	w = e.admin(http.MethodPost, "/api/v1/secrets/bind", map[string]any{
-		"env": "prod", "app": "gradethis", "key": "exact", "version": 1, "binding_key": bindingKey,
+		"env": "prod", "app": "gradethis", "key": "exact", "expected_current_version": 1, "binding_key": bindingKey,
 	})
 	mustStatus(t, w, http.StatusOK)
-	if got := decodeBody(t, w); got["anchor_version"] != float64(1) || len(got["affected_versions"].([]any)) != 1 {
+	if got := decodeBody(t, w); got["current_version"] != float64(2) || got["previous_version"] != float64(1) {
 		t.Fatalf("bind response = %v", got)
 	}
-	assertVersionBound(true)
+	assertVersionBound([]bool{false, true}, 2)
 	w = e.admin(http.MethodPost, "/api/v1/secrets/reveal", map[string]any{
-		"env": "prod", "app": "gradethis", "key": "exact", "version": 1, "binding_key": bindingKey,
+		"env": "prod", "app": "gradethis", "key": "exact", "version": 2, "binding_key": bindingKey,
 	})
 	mustStatus(t, w, http.StatusOK)
 
 	w = e.admin(http.MethodPost, "/api/v1/secrets/unbind", map[string]any{
-		"env": "prod", "app": "gradethis", "key": "exact", "version": 1, "binding_key": bindingKey,
+		"env": "prod", "app": "gradethis", "key": "exact", "expected_current_version": 2, "binding_key": bindingKey,
 	})
 	mustStatus(t, w, http.StatusOK)
-	assertVersionBound(false)
+	if got := decodeBody(t, w); got["current_version"] != float64(3) || got["previous_version"] != float64(2) {
+		t.Fatalf("unbind response = %v", got)
+	}
+	assertVersionBound([]bool{false, true, false}, 3)
 	w = e.admin(http.MethodPost, "/api/v1/secrets/reveal", map[string]any{
-		"env": "prod", "app": "gradethis", "key": "exact", "version": 1,
+		"env": "prod", "app": "gradethis", "key": "exact", "version": 3,
 	})
 	mustStatus(t, w, http.StatusOK)
 }
@@ -952,16 +963,25 @@ func TestSecretBindingUnlockFailuresAreIndistinguishable(t *testing.T) {
 		"binding_key":  bindingKey,
 	})
 	mustStatus(t, w, http.StatusOK)
+	preview := e.admin(http.MethodPost, "/api/v1/secrets/binding-cohort/preview", map[string]any{
+		"env": "prod", "app": "gradethis", "key": "credential-errors",
+		"anchor_version": 1, "binding_key": bindingKey,
+	})
+	mustStatus(t, preview, http.StatusOK)
+	guard := decodeBody(t, preview)
 
 	operations := []struct {
 		name string
 		path string
 		body map[string]any
 	}{
-		{name: "unbind", path: "/api/v1/secrets/unbind", body: map[string]any{"version": uint64(1)}},
+		{name: "unbind", path: "/api/v1/secrets/unbind", body: map[string]any{"expected_current_version": uint64(1)}},
 		{name: "preview", path: "/api/v1/secrets/binding-cohort/preview", body: map[string]any{"anchor_version": uint64(1)}},
-		{name: "rotate", path: "/api/v1/secrets/binding-key/rotate", body: map[string]any{"anchor_version": uint64(1), "new_binding_key": newKey}},
-		{name: "purge", path: "/api/v1/secrets/binding-cohort/purge", body: map[string]any{"anchor_version": uint64(1)}},
+		{name: "rotate", path: "/api/v1/secrets/binding-key/rotate", body: map[string]any{"expected_current_version": uint64(1), "new_binding_key": newKey}},
+		{name: "purge", path: "/api/v1/secrets/binding-cohort/purge", body: map[string]any{
+			"anchor_version": uint64(1), "expected_revision": guard["revision"],
+			"expected_affected_versions": guard["affected_versions"],
+		}},
 	}
 	for _, operation := range operations {
 		t.Run(operation.name, func(t *testing.T) {
@@ -990,6 +1010,68 @@ func TestSecretBindingUnlockFailuresAreIndistinguishable(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestSecretUnboundVersionsPreviewAndGuardedPurge(t *testing.T) {
+	e := newTestEnv(t)
+	e.createNS("prod", "gradethis")
+	const bindingKey = "binding-key-a-0123456789-0123456789"
+	put := func(value, key string) {
+		t.Helper()
+		w := e.admin(http.MethodPost, "/api/v1/secrets", map[string]any{
+			"env": "prod", "app": "gradethis", "key": "unbound-purge",
+			"value_base64": base64.StdEncoding.EncodeToString([]byte(value)), "binding_key": key,
+		})
+		mustStatus(t, w, http.StatusOK)
+	}
+	put("v1", "")
+	put("v2", bindingKey)
+	put("v3", "")
+	previewBody := map[string]any{"env": "prod", "app": "gradethis", "key": "unbound-purge"}
+	w := e.admin(http.MethodPost, "/api/v1/secrets/unbound-versions/preview", previewBody)
+	mustStatus(t, w, http.StatusOK)
+	preview := decodeBody(t, w)
+	if got := preview["affected_versions"].([]any); len(got) != 2 || got[0] != float64(1) || got[1] != float64(3) {
+		t.Fatalf("preview affected versions = %v", got)
+	}
+	if _, err := e.store.CreatePolicy(context.Background(), domain.Policy{Name: "delegated-destroy", Subject: "client", Allow: []domain.PolicyRule{{Operation: domain.OpSecretDestroy, Env: "prod", App: "gradethis"}}}); err != nil {
+		t.Fatalf("policy: %v", err)
+	}
+	w = e.client(http.MethodPost, "/api/v1/secrets/unbound-versions/preview", previewBody)
+	mustStatus(t, w, http.StatusForbidden)
+	w = e.admin(http.MethodPost, "/api/v1/secrets/unbound-versions/purge", map[string]any{
+		"env": "prod", "app": "gradethis", "key": "unbound-purge",
+		"expected_revision": uint64(preview["revision"].(float64)), "expected_affected_versions": []uint64{1},
+	})
+	mustStatus(t, w, http.StatusConflict)
+	w = e.admin(http.MethodPost, "/api/v1/secrets/unbound-versions/purge", map[string]any{
+		"env": "prod", "app": "gradethis", "key": "unbound-purge",
+		"expected_revision": uint64(preview["revision"].(float64)), "expected_affected_versions": []uint64{1, 3},
+	})
+	mustStatus(t, w, http.StatusOK)
+	if got := decodeBody(t, w)["affected_versions"].([]any); len(got) != 2 || got[0] != float64(1) || got[1] != float64(3) {
+		t.Fatalf("purged versions = %v", got)
+	}
+	w = e.admin(http.MethodPost, "/api/v1/secrets/reveal", map[string]any{
+		"env": "prod", "app": "gradethis", "key": "unbound-purge", "version": 2, "binding_key": bindingKey,
+	})
+	mustStatus(t, w, http.StatusOK)
+	e.store.mu.Lock()
+	audits := slices.Clone(e.store.audit)
+	e.store.mu.Unlock()
+	found := false
+	for _, audit := range audits {
+		if audit.EventType != "secret.unbound_versions.purge" || audit.Decision != "allow" {
+			continue
+		}
+		found = true
+		if audit.ResourceVersion != 1 || audit.Metadata != `{"affected_versions":[1,3]}` {
+			t.Fatalf("unbound purge audit = %+v", audit)
+		}
+	}
+	if !found {
+		t.Fatal("missing unbound purge allow audit")
 	}
 }
 

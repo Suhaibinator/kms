@@ -29,7 +29,6 @@ var (
 	ErrBindingKeyRequired    = errors.New("binding key required")
 	ErrBindingKeyTooShort    = errors.New("binding key must be at least 32 UTF-8 bytes")
 	ErrBindingKeyInvalidUTF8 = errors.New("binding key must be valid UTF-8")
-	ErrBindingKeyUnchanged   = errors.New("new binding key must differ from current binding key")
 )
 
 // BuildAAD returns the canonical associated-data string binding a secret
@@ -79,9 +78,7 @@ type DecryptInput struct {
 	BindingKey     string // required iff WrapMode == binding_key
 }
 
-// DEKRewrapResult is the complete persisted wrapping state after an in-place
-// bind, unbind, or binding-key rotation. KEKID is always the supplied KEK's ID.
-type DEKRewrapResult struct {
+type bindingWrapResult struct {
 	EncryptedDEK   []byte
 	BindingKeySalt []byte
 	WrapMode       string
@@ -177,75 +174,6 @@ func Decrypt(kek *KEK, in DecryptInput) ([]byte, error) {
 	return plaintext, nil
 }
 
-// BindDEK adds a binding-key layer to a standard wrapped DEK without touching
-// the value ciphertext or changing the KEK identity.
-func BindDEK(kek *KEK, encryptedDEK []byte, aad, bindingKey string) (DEKRewrapResult, error) {
-	if kek == nil {
-		return DEKRewrapResult{}, errors.New("nil KEK")
-	}
-	if err := ValidateBindingKey(bindingKey); err != nil {
-		return DEKRewrapResult{}, err
-	}
-	dek, err := openStandardDEK(kek, encryptedDEK, aad)
-	if err != nil {
-		return DEKRewrapResult{}, domain.ErrDecryptFailed
-	}
-	defer Zero(dek)
-	return wrapDEKWithBindingKey(kek, dek, aad, bindingKey)
-}
-
-// UnbindDEK removes a binding-key layer and wraps the raw DEK directly under
-// the same KEK. The value ciphertext is not an input and therefore cannot be
-// rewritten by this operation.
-func UnbindDEK(kek *KEK, encryptedDEK, bindingKeySalt []byte, aad, bindingKey string) (DEKRewrapResult, error) {
-	if kek == nil {
-		return DEKRewrapResult{}, errors.New("nil KEK")
-	}
-	if err := ValidateBindingKey(bindingKey); err != nil {
-		return DEKRewrapResult{}, err
-	}
-	dek, err := openBindingKeyDEK(kek, encryptedDEK, bindingKeySalt, aad, bindingKey)
-	if err != nil {
-		return DEKRewrapResult{}, domain.ErrDecryptFailed
-	}
-	defer Zero(dek)
-
-	wrapped, err := sealPacked(kek.key, dek, []byte(aad+aadSuffixDEK))
-	if err != nil {
-		return DEKRewrapResult{}, err
-	}
-	return DEKRewrapResult{
-		EncryptedDEK: wrapped,
-		WrapMode:     domain.WrapModeStandard,
-		KEKID:        kek.ID,
-	}, nil
-}
-
-// RotateBindingKeyDEK replaces the binding layer using a fresh independent
-// salt while preserving the value ciphertext and the version's KEK identity.
-func RotateBindingKeyDEK(kek *KEK, encryptedDEK, bindingKeySalt []byte, aad, bindingKey, newBindingKey string) (DEKRewrapResult, error) {
-	if kek == nil {
-		return DEKRewrapResult{}, errors.New("nil KEK")
-	}
-	if err := ValidateBindingKey(bindingKey); err != nil {
-		return DEKRewrapResult{}, err
-	}
-	if err := ValidateBindingKey(newBindingKey); err != nil {
-		return DEKRewrapResult{}, err
-	}
-	dek, err := openBindingKeyDEK(kek, encryptedDEK, bindingKeySalt, aad, bindingKey)
-	if err != nil {
-		return DEKRewrapResult{}, domain.ErrDecryptFailed
-	}
-	defer Zero(dek)
-	// Check equality only after the existing credential has opened the DEK.
-	// This keeps an invalid old credential on the usual decrypt-failure path.
-	if bindingKey == newBindingKey {
-		return DEKRewrapResult{}, ErrBindingKeyUnchanged
-	}
-	return wrapDEKWithBindingKey(kek, dek, aad, newBindingKey)
-}
-
 // TestBindingKeyDEK cryptographically tests cohort membership. It returns no
 // key material and zeroes the opened DEK before returning.
 func TestBindingKeyDEK(kek *KEK, encryptedDEK, bindingKeySalt []byte, aad, bindingKey string) error {
@@ -315,33 +243,33 @@ func openBindingKeyDEK(kek *KEK, encryptedDEK, bindingKeySalt []byte, aad, bindi
 	return dek, nil
 }
 
-func wrapDEKWithBindingKey(kek *KEK, dek []byte, aad, bindingKey string) (DEKRewrapResult, error) {
+func wrapDEKWithBindingKey(kek *KEK, dek []byte, aad, bindingKey string) (bindingWrapResult, error) {
 	if err := ValidateBindingKey(bindingKey); err != nil {
-		return DEKRewrapResult{}, err
+		return bindingWrapResult{}, err
 	}
 	salt, err := randomBytes(BindingKeySaltSize)
 	if err != nil {
-		return DEKRewrapResult{}, err
+		return bindingWrapResult{}, err
 	}
 	derivedKey, err := deriveBindingKey(bindingKey, salt)
 	if err != nil {
 		Zero(salt)
-		return DEKRewrapResult{}, err
+		return bindingWrapResult{}, err
 	}
 	inner, err := sealPacked(derivedKey, dek, []byte(aad+aadSuffixDEKInner))
 	Zero(derivedKey)
 	if err != nil {
 		Zero(salt)
-		return DEKRewrapResult{}, err
+		return bindingWrapResult{}, err
 	}
 	defer Zero(inner)
 
 	outer, err := sealPacked(kek.key, inner, []byte(aad+aadSuffixDEK))
 	if err != nil {
 		Zero(salt)
-		return DEKRewrapResult{}, err
+		return bindingWrapResult{}, err
 	}
-	return DEKRewrapResult{
+	return bindingWrapResult{
 		EncryptedDEK:   outer,
 		BindingKeySalt: salt,
 		WrapMode:       domain.WrapModeBindingKey,

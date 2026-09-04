@@ -17,7 +17,8 @@ __all__ = [
     "ParameterVersion",
     "SecretVersion",
     "SecretInfo",
-    "SecretVersionMutationResult",
+    "SecretVersionTransitionResult",
+    "SecretVersionSetResult",
     "SecretBindingCohortResult",
     "PutResult",
     "PutSecretResult",
@@ -167,8 +168,14 @@ class PromoteSecretResult:
 
 
 @dataclass(frozen=True)
-class SecretVersionMutationResult:
-    anchor_version: int
+class SecretVersionTransitionResult:
+    current_version: int
+    previous_version: int
+    revision: int
+
+
+@dataclass(frozen=True)
+class SecretVersionSetResult:
     affected_versions: Tuple[int, ...]
     revision: int
 

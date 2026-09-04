@@ -56,28 +56,28 @@ func (h *secretServer) PutSecret(ctx context.Context, req *kmsv1.PutSecretReques
 	}, nil
 }
 
-func (h *secretServer) BindSecret(ctx context.Context, req *kmsv1.BindSecretRequest) (*kmsv1.SecretVersionMutationResponse, error) {
+func (h *secretServer) BindSecret(ctx context.Context, req *kmsv1.BindSecretRequest) (*kmsv1.SecretVersionTransitionResponse, error) {
 	pr, err := requirePrincipal(ctx)
 	if err != nil {
 		return nil, err
 	}
-	result, err := h.s.svc.BindSecret(ctx, pr, refFromProto(req.GetRef()), req.GetVersion(), req.GetBindingKey())
+	result, err := h.s.svc.BindSecret(ctx, pr, refFromProto(req.GetRef()), req.GetExpectedCurrentVersion(), req.GetBindingKey())
 	if err != nil {
 		return nil, h.s.mapErr(ctx, err)
 	}
-	return secretVersionMutationResponse(result), nil
+	return secretVersionTransitionResponse(result), nil
 }
 
-func (h *secretServer) UnbindSecret(ctx context.Context, req *kmsv1.UnbindSecretRequest) (*kmsv1.SecretVersionMutationResponse, error) {
+func (h *secretServer) UnbindSecret(ctx context.Context, req *kmsv1.UnbindSecretRequest) (*kmsv1.SecretVersionTransitionResponse, error) {
 	pr, err := requirePrincipal(ctx)
 	if err != nil {
 		return nil, err
 	}
-	result, err := h.s.svc.UnbindSecret(ctx, pr, refFromProto(req.GetRef()), req.GetVersion(), req.GetBindingKey())
+	result, err := h.s.svc.UnbindSecret(ctx, pr, refFromProto(req.GetRef()), req.GetExpectedCurrentVersion(), req.GetBindingKey())
 	if err != nil {
 		return nil, h.s.mapErr(ctx, err)
 	}
-	return secretVersionMutationResponse(result), nil
+	return secretVersionTransitionResponse(result), nil
 }
 
 func (h *secretServer) PreviewSecretBindingCohort(ctx context.Context, req *kmsv1.PreviewSecretBindingCohortRequest) (*kmsv1.SecretBindingCohortResponse, error) {
@@ -92,16 +92,16 @@ func (h *secretServer) PreviewSecretBindingCohort(ctx context.Context, req *kmsv
 	return secretBindingCohortResponse(result), nil
 }
 
-func (h *secretServer) RotateSecretBindingKey(ctx context.Context, req *kmsv1.RotateSecretBindingKeyRequest) (*kmsv1.SecretBindingCohortResponse, error) {
+func (h *secretServer) RotateSecretBindingKey(ctx context.Context, req *kmsv1.RotateSecretBindingKeyRequest) (*kmsv1.SecretVersionTransitionResponse, error) {
 	pr, err := requirePrincipal(ctx)
 	if err != nil {
 		return nil, err
 	}
-	result, err := h.s.svc.RotateSecretBindingKey(ctx, pr, refFromProto(req.GetRef()), req.GetAnchorVersion(), req.GetBindingKey(), req.GetNewBindingKey(), req.ExpectedRevision, req.GetExpectedAffectedVersions())
+	result, err := h.s.svc.RotateSecretBindingKey(ctx, pr, refFromProto(req.GetRef()), req.GetExpectedCurrentVersion(), req.GetBindingKey(), req.GetNewBindingKey())
 	if err != nil {
 		return nil, h.s.mapErr(ctx, err)
 	}
-	return secretBindingCohortResponse(result), nil
+	return secretVersionTransitionResponse(result), nil
 }
 
 func (h *secretServer) PurgeSecretBindingCohort(ctx context.Context, req *kmsv1.PurgeSecretBindingCohortRequest) (*kmsv1.SecretBindingCohortResponse, error) {
@@ -116,9 +116,40 @@ func (h *secretServer) PurgeSecretBindingCohort(ctx context.Context, req *kmsv1.
 	return secretBindingCohortResponse(result), nil
 }
 
-func secretVersionMutationResponse(result core.SecretVersionMutationResult) *kmsv1.SecretVersionMutationResponse {
-	return &kmsv1.SecretVersionMutationResponse{
-		AnchorVersion:    result.AnchorVersion,
+func (h *secretServer) PreviewSecretUnboundVersions(ctx context.Context, req *kmsv1.PreviewSecretUnboundVersionsRequest) (*kmsv1.SecretVersionSetResponse, error) {
+	pr, err := requirePrincipal(ctx)
+	if err != nil {
+		return nil, err
+	}
+	result, err := h.s.svc.PreviewSecretUnboundVersions(ctx, pr, refFromProto(req.GetRef()))
+	if err != nil {
+		return nil, h.s.mapErr(ctx, err)
+	}
+	return secretVersionSetResponse(result), nil
+}
+
+func (h *secretServer) PurgeSecretUnboundVersions(ctx context.Context, req *kmsv1.PurgeSecretUnboundVersionsRequest) (*kmsv1.SecretVersionSetResponse, error) {
+	pr, err := requirePrincipal(ctx)
+	if err != nil {
+		return nil, err
+	}
+	result, err := h.s.svc.PurgeSecretUnboundVersions(ctx, pr, refFromProto(req.GetRef()), req.GetExpectedRevision(), req.GetExpectedAffectedVersions())
+	if err != nil {
+		return nil, h.s.mapErr(ctx, err)
+	}
+	return secretVersionSetResponse(result), nil
+}
+
+func secretVersionTransitionResponse(result core.SecretVersionTransitionResult) *kmsv1.SecretVersionTransitionResponse {
+	return &kmsv1.SecretVersionTransitionResponse{
+		CurrentVersion:  result.CurrentVersion,
+		PreviousVersion: result.PreviousVersion,
+		Revision:        result.Revision,
+	}
+}
+
+func secretVersionSetResponse(result core.SecretVersionSetResult) *kmsv1.SecretVersionSetResponse {
+	return &kmsv1.SecretVersionSetResponse{
 		AffectedVersions: append([]uint64(nil), result.AffectedVersions...),
 		Revision:         result.Revision,
 	}

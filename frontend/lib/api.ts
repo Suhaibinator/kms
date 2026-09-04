@@ -56,7 +56,8 @@ import type {
   RotateIdentityResponse,
   SecretBindingCohortResponse,
   SecretMetadata,
-  SecretVersionMutationResponse,
+  SecretVersionSetResponse,
+  SecretVersionTransitionResponse,
   ShipRequest,
   ShipResult,
   SubscriberStreamSnapshot,
@@ -95,9 +96,9 @@ export const PURGE_CLEANUP_PENDING_MESSAGE =
   "secret purge committed; database artifact cleanup is pending";
 
 /**
- * The purge transaction committed, but KMS could not yet prove that the
- * retired payload was removed from every live SQLite artifact. Callers must
- * not resubmit the compromised binding key.
+ * A purge transaction committed, but KMS could not yet prove that every
+ * selected payload was removed from all live SQLite artifacts. No mutation
+ * result accompanies this error; callers must not reuse the stale preview.
  */
 export class PurgeCleanupPendingApiError extends ApiError {
   constructor() {
@@ -637,26 +638,38 @@ export const api = {
   },
   bindSecret(
     ref: ResourceRef,
-    version: number,
+    expectedCurrentVersion: number,
     bindingKey: string,
     request?: ApiRequestOptions,
-  ): Promise<SecretVersionMutationResponse> {
-    return secretApiFetch<SecretVersionMutationResponse>("/secrets/bind", {
+  ): Promise<SecretVersionTransitionResponse> {
+    return secretApiFetch<SecretVersionTransitionResponse>("/secrets/bind", {
       ...request,
       method: "POST",
-      body: { env: ref.env, app: ref.app, key: ref.key, version, binding_key: bindingKey },
+      body: {
+        env: ref.env,
+        app: ref.app,
+        key: ref.key,
+        expected_current_version: expectedCurrentVersion,
+        binding_key: bindingKey,
+      },
     });
   },
   unbindSecret(
     ref: ResourceRef,
-    version: number,
+    expectedCurrentVersion: number,
     bindingKey: string,
     request?: ApiRequestOptions,
-  ): Promise<SecretVersionMutationResponse> {
-    return secretApiFetch<SecretVersionMutationResponse>("/secrets/unbind", {
+  ): Promise<SecretVersionTransitionResponse> {
+    return secretApiFetch<SecretVersionTransitionResponse>("/secrets/unbind", {
       ...request,
       method: "POST",
-      body: { env: ref.env, app: ref.app, key: ref.key, version, binding_key: bindingKey },
+      body: {
+        env: ref.env,
+        app: ref.app,
+        key: ref.key,
+        expected_current_version: expectedCurrentVersion,
+        binding_key: bindingKey,
+      },
     });
   },
   previewSecretBindingCohort(
@@ -679,32 +692,21 @@ export const api = {
   },
   rotateSecretBindingKey(
     ref: ResourceRef,
-    anchorVersion: number,
+    expectedCurrentVersion: number,
     bindingKey: string,
     newBindingKey: string,
-    expectedRevision: number,
-    expectedAffectedVersions: number[],
     request?: ApiRequestOptions,
-  ): Promise<SecretBindingCohortResponse> {
-    if (new TextEncoder().encode(newBindingKey).length >= 32 && bindingKey === newBindingKey) {
-      throw new ApiError(
-        "invalid_argument",
-        "New binding key must differ from current binding key.",
-        0,
-      );
-    }
-    return secretApiFetch<SecretBindingCohortResponse>("/secrets/binding-key/rotate", {
+  ): Promise<SecretVersionTransitionResponse> {
+    return secretApiFetch<SecretVersionTransitionResponse>("/secrets/binding-key/rotate", {
       ...request,
       method: "POST",
       body: {
         env: ref.env,
         app: ref.app,
         key: ref.key,
-        anchor_version: anchorVersion,
+        expected_current_version: expectedCurrentVersion,
         binding_key: bindingKey,
         new_binding_key: newBindingKey,
-        expected_revision: expectedRevision,
-        expected_affected_versions: expectedAffectedVersions,
       },
     });
   },
@@ -727,6 +729,38 @@ export const api = {
           key: ref.key,
           anchor_version: anchorVersion,
           binding_key: bindingKey,
+          expected_revision: expectedRevision,
+          expected_affected_versions: expectedAffectedVersions,
+        },
+      },
+      true,
+    );
+  },
+  previewSecretUnboundVersions(
+    ref: ResourceRef,
+    request?: ApiRequestOptions,
+  ): Promise<SecretVersionSetResponse> {
+    return secretApiFetch<SecretVersionSetResponse>("/secrets/unbound-versions/preview", {
+      ...request,
+      method: "POST",
+      body: { env: ref.env, app: ref.app, key: ref.key },
+    });
+  },
+  purgeSecretUnboundVersions(
+    ref: ResourceRef,
+    expectedRevision: number,
+    expectedAffectedVersions: number[],
+    request?: ApiRequestOptions,
+  ): Promise<SecretVersionSetResponse> {
+    return secretApiFetch<SecretVersionSetResponse>(
+      "/secrets/unbound-versions/purge",
+      {
+        ...request,
+        method: "POST",
+        body: {
+          env: ref.env,
+          app: ref.app,
+          key: ref.key,
           expected_revision: expectedRevision,
           expected_affected_versions: expectedAffectedVersions,
         },

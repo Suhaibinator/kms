@@ -22,13 +22,16 @@ func TestV03WireFieldLayouts(t *testing.T) {
 		{"SecretVersionInfo", fields("version", "state", "created_by", "created_at_unix_ms", "destroyed_at_unix_ms", "expires_at_unix_ms", "metadata_json", "bound", "has_access_token")},
 		{"GetSecretRequest", fields("ref", "version", "label", "secret_token", "binding_key")},
 		{"PutSecretRequest", fields("ref", "value", "content_type", "metadata_json", "binding_key", "generate_access_token", "expires_at_unix_ms")},
-		{"BindSecretRequest", fields("ref", "version", "binding_key")},
-		{"UnbindSecretRequest", fields("ref", "version", "binding_key")},
-		{"SecretVersionMutationResponse", fields("anchor_version", "affected_versions", "revision")},
+		{"BindSecretRequest", fields("ref", "expected_current_version", "binding_key")},
+		{"UnbindSecretRequest", fields("ref", "expected_current_version", "binding_key")},
+		{"SecretVersionTransitionResponse", fields("current_version", "previous_version", "revision")},
 		{"PreviewSecretBindingCohortRequest", fields("ref", "anchor_version", "binding_key")},
-		{"RotateSecretBindingKeyRequest", fields("ref", "anchor_version", "binding_key", "new_binding_key", "expected_revision", "expected_affected_versions")},
+		{"RotateSecretBindingKeyRequest", fields("ref", "expected_current_version", "binding_key", "new_binding_key")},
 		{"PurgeSecretBindingCohortRequest", fields("ref", "anchor_version", "binding_key", "expected_revision", "expected_affected_versions")},
 		{"SecretBindingCohortResponse", fields("anchor_version", "affected_versions", "revision")},
+		{"PreviewSecretUnboundVersionsRequest", fields("ref")},
+		{"PurgeSecretUnboundVersionsRequest", fields("ref", "expected_revision", "expected_affected_versions")},
+		{"SecretVersionSetResponse", fields("affected_versions", "revision")},
 		{"ConfigurationReleaseEntry", fields("alias", "kind", "ref", "version", "content_type", "metadata_json", "parameter_digest")},
 		{"ConfigurationRelease", fields("namespace", "name", "version", "schema_version", "entries", "digest", "metadata_json", "created_by", "created_at_unix_ms")},
 		{"CreateReleaseRequest", fields("namespace", "name", "schema_version", "entries", "metadata_json")},
@@ -61,11 +64,10 @@ func TestV03WireFieldLayouts(t *testing.T) {
 		})
 	}
 
-	rotate := messages.ByName("RotateSecretBindingKeyRequest")
-	purge := messages.ByName("PurgeSecretBindingCohortRequest")
-	for _, descriptor := range []protoreflect.MessageDescriptor{rotate, purge} {
-		if field := descriptor.Fields().ByName("expected_revision"); field == nil || !field.HasPresence() {
-			t.Errorf("%s.expected_revision must have explicit presence", descriptor.Name())
+	for _, name := range []protoreflect.Name{"PurgeSecretBindingCohortRequest", "PurgeSecretUnboundVersionsRequest"} {
+		descriptor := messages.ByName(name)
+		if field := descriptor.Fields().ByName("expected_revision"); field == nil || field.Kind() != protoreflect.Uint64Kind {
+			t.Errorf("%s.expected_revision must be uint64", descriptor.Name())
 		}
 		if field := descriptor.Fields().ByName("expected_affected_versions"); field == nil || field.Cardinality() != protoreflect.Repeated {
 			t.Errorf("%s.expected_affected_versions must be repeated", descriptor.Name())
@@ -117,11 +119,13 @@ func TestV03SecretBindingRPCLayouts(t *testing.T) {
 		input  protoreflect.FullName
 		output protoreflect.FullName
 	}{
-		{"BindSecret", "kms.v1.BindSecretRequest", "kms.v1.SecretVersionMutationResponse"},
-		{"UnbindSecret", "kms.v1.UnbindSecretRequest", "kms.v1.SecretVersionMutationResponse"},
+		{"BindSecret", "kms.v1.BindSecretRequest", "kms.v1.SecretVersionTransitionResponse"},
+		{"UnbindSecret", "kms.v1.UnbindSecretRequest", "kms.v1.SecretVersionTransitionResponse"},
 		{"PreviewSecretBindingCohort", "kms.v1.PreviewSecretBindingCohortRequest", "kms.v1.SecretBindingCohortResponse"},
-		{"RotateSecretBindingKey", "kms.v1.RotateSecretBindingKeyRequest", "kms.v1.SecretBindingCohortResponse"},
+		{"RotateSecretBindingKey", "kms.v1.RotateSecretBindingKeyRequest", "kms.v1.SecretVersionTransitionResponse"},
 		{"PurgeSecretBindingCohort", "kms.v1.PurgeSecretBindingCohortRequest", "kms.v1.SecretBindingCohortResponse"},
+		{"PreviewSecretUnboundVersions", "kms.v1.PreviewSecretUnboundVersionsRequest", "kms.v1.SecretVersionSetResponse"},
+		{"PurgeSecretUnboundVersions", "kms.v1.PurgeSecretUnboundVersionsRequest", "kms.v1.SecretVersionSetResponse"},
 	}
 
 	service := File_kms_v1_kms_proto.Services().ByName("SecretService")

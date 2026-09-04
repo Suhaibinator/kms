@@ -34,8 +34,9 @@ from .models import (
     PutResult,
     PutSecretResult,
     SecretBindingCohortResult,
+    SecretVersionSetResult,
+    SecretVersionTransitionResult,
     SecretInfo,
-    SecretVersionMutationResult,
     VerifyDefaultEntry,
     VerifyReleaseDefaultsResult,
     WhoAmI,
@@ -775,18 +776,19 @@ class Client:
         return PromoteSecretResult(resp.current_version, resp.previous_version, resp.revision)
 
     def bind_secret(
-        self, key: str, *, version: int = 0, binding_key: str,
+        self, key: str, *, expected_current_version: int, binding_key: str,
         timeout: Optional[float] = None,
-    ) -> SecretVersionMutationResult:
-        """Bind one exact secret version in place; version 0 selects current."""
-        _valid_uint64(version, "version")
+    ) -> SecretVersionTransitionResult:
+        """Clone current into a new bound version using a required CAS guard."""
+        _valid_uint64(expected_current_version, "expected_current_version", nonzero=True)
         ref = self._resolve_ref(key)
         call_timeout = self._call_timeout(timeout)
         mapped_error = None
         try:
             response = self._secret_stub.BindSecret(
                 kms_pb2.BindSecretRequest(
-                    ref=to_proto_ref(ref), version=version, binding_key=binding_key,
+                    ref=to_proto_ref(ref), expected_current_version=expected_current_version,
+                    binding_key=binding_key,
                 ), metadata=self._auth_metadata(), timeout=call_timeout,
             )
         except Exception as exc:
@@ -794,21 +796,22 @@ class Client:
         if mapped_error is not None:
             raise mapped_error
         self._cache.invalidate_secret(str(ref))
-        return _secret_version_mutation_result(response)
+        return _secret_version_transition_result(response)
 
     def unbind_secret(
-        self, key: str, *, version: int = 0, binding_key: str,
+        self, key: str, *, expected_current_version: int, binding_key: str,
         timeout: Optional[float] = None,
-    ) -> SecretVersionMutationResult:
-        """Unbind one exact secret version in place; version 0 selects current."""
-        _valid_uint64(version, "version")
+    ) -> SecretVersionTransitionResult:
+        """Clone current into a new unbound version using a required CAS guard."""
+        _valid_uint64(expected_current_version, "expected_current_version", nonzero=True)
         ref = self._resolve_ref(key)
         call_timeout = self._call_timeout(timeout)
         mapped_error = None
         try:
             response = self._secret_stub.UnbindSecret(
                 kms_pb2.UnbindSecretRequest(
-                    ref=to_proto_ref(ref), version=version, binding_key=binding_key,
+                    ref=to_proto_ref(ref), expected_current_version=expected_current_version,
+                    binding_key=binding_key,
                 ), metadata=self._auth_metadata(), timeout=call_timeout,
             )
         except Exception as exc:
@@ -816,7 +819,7 @@ class Client:
         if mapped_error is not None:
             raise mapped_error
         self._cache.invalidate_secret(str(ref))
-        return _secret_version_mutation_result(response)
+        return _secret_version_transition_result(response)
 
     def preview_secret_binding_cohort(
         self, key: str, *, anchor_version: int = 0, binding_key: str,
@@ -841,26 +844,20 @@ class Client:
         return _secret_binding_cohort_result(response)
 
     def rotate_secret_binding_key(
-        self, key: str, *, anchor_version: int = 0, binding_key: str,
-        new_binding_key: str, expected_revision: Optional[int] = None,
-        expected_affected_versions: Optional[Iterable[int]] = None,
+        self, key: str, *, expected_current_version: int, binding_key: str,
+        new_binding_key: str,
         timeout: Optional[float] = None,
-    ) -> SecretBindingCohortResult:
-        """Rotate the binding key for a contiguous version cohort."""
-        _valid_uint64(anchor_version, "anchor_version")
-        _reject_noop_binding_key_rotation(binding_key, new_binding_key)
-        guard = _cohort_guard(expected_revision, expected_affected_versions)
+    ) -> SecretVersionTransitionResult:
+        """Clone current into one new version protected by a different key."""
+        _valid_uint64(expected_current_version, "expected_current_version", nonzero=True)
         ref = self._resolve_ref(key)
         call_timeout = self._call_timeout(timeout)
         mapped_error = None
         try:
             request = kms_pb2.RotateSecretBindingKeyRequest(
-                ref=to_proto_ref(ref), anchor_version=anchor_version,
+                ref=to_proto_ref(ref), expected_current_version=expected_current_version,
                 binding_key=binding_key, new_binding_key=new_binding_key,
             )
-            if guard is not None:
-                request.expected_revision = guard[0]
-                request.expected_affected_versions.extend(guard[1])
             response = self._secret_stub.RotateSecretBindingKey(
                 request, metadata=self._auth_metadata(), timeout=call_timeout,
             )
@@ -869,7 +866,48 @@ class Client:
         if mapped_error is not None:
             raise mapped_error
         self._cache.invalidate_secret(str(ref))
-        return _secret_binding_cohort_result(response)
+        return _secret_version_transition_result(response)
+
+    def preview_secret_unbound_versions(
+        self, key: str, *, timeout: Optional[float] = None,
+    ) -> SecretVersionSetResult:
+        """Preview every non-destroyed unbound version of one secret."""
+        ref = self._resolve_ref(key)
+        mapped_error = None
+        try:
+            response = self._secret_stub.PreviewSecretUnboundVersions(
+                kms_pb2.PreviewSecretUnboundVersionsRequest(ref=to_proto_ref(ref)),
+                metadata=self._auth_metadata(), timeout=self._call_timeout(timeout),
+            )
+        except Exception as exc:
+            mapped_error = errors.map_secret_grpc_error(exc)
+        else:
+            return _secret_version_set_result(response)
+        raise mapped_error
+
+    def purge_secret_unbound_versions(
+        self, key: str, *, expected_revision: int,
+        expected_affected_versions: Iterable[int], timeout: Optional[float] = None,
+    ) -> SecretVersionSetResult:
+        """Irreversibly purge the exact previously previewed unbound set."""
+        revision, versions = _required_version_set_guard(
+            expected_revision, expected_affected_versions,
+        )
+        ref = self._resolve_ref(key)
+        mapped_error = None
+        try:
+            response = self._secret_stub.PurgeSecretUnboundVersions(
+                kms_pb2.PurgeSecretUnboundVersionsRequest(
+                    ref=to_proto_ref(ref), expected_revision=revision,
+                    expected_affected_versions=versions,
+                ), metadata=self._auth_metadata(), timeout=self._call_timeout(timeout),
+            )
+        except Exception as exc:
+            mapped_error = errors.map_purge_grpc_error(exc)
+        else:
+            self._cache.invalidate_secret(str(ref))
+            return _secret_version_set_result(response)
+        raise mapped_error
 
     def purge_secret_binding_cohort(
         self, key: str, *, anchor_version: int = 0, binding_key: str,
@@ -879,7 +917,9 @@ class Client:
     ) -> SecretBindingCohortResult:
         """Irreversibly purge a contiguous bound-version cohort."""
         _valid_uint64(anchor_version, "anchor_version")
-        guard = _cohort_guard(expected_revision, expected_affected_versions)
+        guard = _cohort_guard(
+            expected_revision, expected_affected_versions,
+        )
         ref = self._resolve_ref(key)
         call_timeout = self._call_timeout(timeout)
         mapped_error = None
@@ -992,17 +1032,6 @@ def _valid_page_size(value: int) -> int:
     return value
 
 
-def _reject_noop_binding_key_rotation(binding_key: str, new_binding_key: str) -> None:
-    if not isinstance(binding_key, str) or not isinstance(new_binding_key, str):
-        return
-    try:
-        replacement_is_valid = len(new_binding_key.encode("utf-8")) >= 32
-    except UnicodeEncodeError:
-        replacement_is_valid = False
-    if replacement_is_valid and binding_key == new_binding_key:
-        raise errors.ConfigError("new binding key must differ from current binding key")
-
-
 def _normalize_selector(version: int, label: str) -> Tuple[int, str]:
     _valid_uint64(version, "version")
     if not isinstance(label, str):
@@ -1010,18 +1039,12 @@ def _normalize_selector(version: int, label: str) -> Tuple[int, str]:
     return version, "" if version else label
 
 
-def _cohort_guard(
-    expected_revision: Optional[int], expected_affected_versions: Optional[Iterable[int]],
-) -> "Optional[Tuple[int, Tuple[int, ...]]]":
-    if (expected_revision is None) != (expected_affected_versions is None):
-        raise errors.ConfigError(
-            "expected_revision and expected_affected_versions must be supplied together"
-        )
-    if expected_revision is None:
-        return None
+def _required_version_set_guard(
+    expected_revision: int, expected_affected_versions: Iterable[int],
+) -> "Tuple[int, Tuple[int, ...]]":
     revision = _valid_uint64(expected_revision, "expected_revision", nonzero=True)
     try:
-        versions = tuple(expected_affected_versions or ())
+        versions = tuple(expected_affected_versions)
     except TypeError as exc:
         raise errors.ConfigError("expected_affected_versions must be an iterable of versions") from exc
     if not versions:
@@ -1033,11 +1056,29 @@ def _cohort_guard(
     return revision, versions
 
 
-def _secret_version_mutation_result(response) -> SecretVersionMutationResult:
-    return SecretVersionMutationResult(
-        anchor_version=response.anchor_version,
-        affected_versions=tuple(response.affected_versions),
+def _cohort_guard(
+    expected_revision: Optional[int], expected_affected_versions: Optional[Iterable[int]],
+) -> "Optional[Tuple[int, Tuple[int, ...]]]":
+    if (expected_revision is None) != (expected_affected_versions is None):
+        raise errors.ConfigError(
+            "expected_revision and expected_affected_versions must be supplied together"
+        )
+    if expected_revision is None:
+        return None
+    return _required_version_set_guard(expected_revision, expected_affected_versions or ())
+
+
+def _secret_version_transition_result(response) -> SecretVersionTransitionResult:
+    return SecretVersionTransitionResult(
+        current_version=response.current_version,
+        previous_version=response.previous_version,
         revision=response.revision,
+    )
+
+
+def _secret_version_set_result(response) -> SecretVersionSetResult:
+    return SecretVersionSetResult(
+        affected_versions=tuple(response.affected_versions), revision=response.revision,
     )
 
 

@@ -22,9 +22,10 @@ from .client import (
     _assert_ref_identity,
     _cohort_guard,
     _normalize_selector,
-    _reject_noop_binding_key_rotation,
+    _required_version_set_guard,
     _secret_binding_cohort_result,
-    _secret_version_mutation_result,
+    _secret_version_set_result,
+    _secret_version_transition_result,
     _valid_page_size,
     _valid_uint64,
 )
@@ -39,8 +40,9 @@ from .models import (
     PutResult,
     PutSecretResult,
     SecretBindingCohortResult,
+    SecretVersionSetResult,
+    SecretVersionTransitionResult,
     SecretInfo,
-    SecretVersionMutationResult,
     WhoAmI,
     VerifyDefaultEntry,
     VerifyReleaseDefaultsResult,
@@ -554,17 +556,18 @@ class AsyncClient:
         return PromoteSecretResult(response.current_version, response.previous_version, response.revision)
 
     async def bind_secret(
-        self, key: str, *, version: int = 0, binding_key: str,
+        self, key: str, *, expected_current_version: int, binding_key: str,
         timeout: Optional[float] = None,
-    ) -> SecretVersionMutationResult:
-        _valid_uint64(version, "version")
+    ) -> SecretVersionTransitionResult:
+        _valid_uint64(expected_current_version, "expected_current_version", nonzero=True)
         ref = await self._resolve_ref(key)
         call_timeout = self._call_timeout(timeout)
         mapped_error = None
         try:
             response = await self._secret_stub.BindSecret(
                 kms_pb2.BindSecretRequest(
-                    ref=to_proto_ref(ref), version=version, binding_key=binding_key,
+                    ref=to_proto_ref(ref), expected_current_version=expected_current_version,
+                    binding_key=binding_key,
                 ), metadata=self._auth_metadata(), timeout=call_timeout,
             )
         except Exception as exc:
@@ -572,20 +575,21 @@ class AsyncClient:
         if mapped_error is not None:
             raise mapped_error
         self._cache.invalidate_secret(str(ref))
-        return _secret_version_mutation_result(response)
+        return _secret_version_transition_result(response)
 
     async def unbind_secret(
-        self, key: str, *, version: int = 0, binding_key: str,
+        self, key: str, *, expected_current_version: int, binding_key: str,
         timeout: Optional[float] = None,
-    ) -> SecretVersionMutationResult:
-        _valid_uint64(version, "version")
+    ) -> SecretVersionTransitionResult:
+        _valid_uint64(expected_current_version, "expected_current_version", nonzero=True)
         ref = await self._resolve_ref(key)
         call_timeout = self._call_timeout(timeout)
         mapped_error = None
         try:
             response = await self._secret_stub.UnbindSecret(
                 kms_pb2.UnbindSecretRequest(
-                    ref=to_proto_ref(ref), version=version, binding_key=binding_key,
+                    ref=to_proto_ref(ref), expected_current_version=expected_current_version,
+                    binding_key=binding_key,
                 ), metadata=self._auth_metadata(), timeout=call_timeout,
             )
         except Exception as exc:
@@ -593,7 +597,7 @@ class AsyncClient:
         if mapped_error is not None:
             raise mapped_error
         self._cache.invalidate_secret(str(ref))
-        return _secret_version_mutation_result(response)
+        return _secret_version_transition_result(response)
 
     async def preview_secret_binding_cohort(
         self, key: str, *, anchor_version: int = 0, binding_key: str,
@@ -617,25 +621,19 @@ class AsyncClient:
         return _secret_binding_cohort_result(response)
 
     async def rotate_secret_binding_key(
-        self, key: str, *, anchor_version: int = 0, binding_key: str,
-        new_binding_key: str, expected_revision: Optional[int] = None,
-        expected_affected_versions: Optional[Iterable[int]] = None,
+        self, key: str, *, expected_current_version: int, binding_key: str,
+        new_binding_key: str,
         timeout: Optional[float] = None,
-    ) -> SecretBindingCohortResult:
-        _valid_uint64(anchor_version, "anchor_version")
-        _reject_noop_binding_key_rotation(binding_key, new_binding_key)
-        guard = _cohort_guard(expected_revision, expected_affected_versions)
+    ) -> SecretVersionTransitionResult:
+        _valid_uint64(expected_current_version, "expected_current_version", nonzero=True)
         ref = await self._resolve_ref(key)
         call_timeout = self._call_timeout(timeout)
         mapped_error = None
         try:
             request = kms_pb2.RotateSecretBindingKeyRequest(
-                ref=to_proto_ref(ref), anchor_version=anchor_version,
+                ref=to_proto_ref(ref), expected_current_version=expected_current_version,
                 binding_key=binding_key, new_binding_key=new_binding_key,
             )
-            if guard is not None:
-                request.expected_revision = guard[0]
-                request.expected_affected_versions.extend(guard[1])
             response = await self._secret_stub.RotateSecretBindingKey(
                 request, metadata=self._auth_metadata(), timeout=call_timeout,
             )
@@ -644,7 +642,46 @@ class AsyncClient:
         if mapped_error is not None:
             raise mapped_error
         self._cache.invalidate_secret(str(ref))
-        return _secret_binding_cohort_result(response)
+        return _secret_version_transition_result(response)
+
+    async def preview_secret_unbound_versions(
+        self, key: str, *, timeout: Optional[float] = None,
+    ) -> SecretVersionSetResult:
+        ref = await self._resolve_ref(key)
+        mapped_error = None
+        try:
+            response = await self._secret_stub.PreviewSecretUnboundVersions(
+                kms_pb2.PreviewSecretUnboundVersionsRequest(ref=to_proto_ref(ref)),
+                metadata=self._auth_metadata(), timeout=self._call_timeout(timeout),
+            )
+        except Exception as exc:
+            mapped_error = errors.map_secret_grpc_error(exc)
+        else:
+            return _secret_version_set_result(response)
+        raise mapped_error
+
+    async def purge_secret_unbound_versions(
+        self, key: str, *, expected_revision: int,
+        expected_affected_versions: Iterable[int], timeout: Optional[float] = None,
+    ) -> SecretVersionSetResult:
+        revision, versions = _required_version_set_guard(
+            expected_revision, expected_affected_versions,
+        )
+        ref = await self._resolve_ref(key)
+        mapped_error = None
+        try:
+            response = await self._secret_stub.PurgeSecretUnboundVersions(
+                kms_pb2.PurgeSecretUnboundVersionsRequest(
+                    ref=to_proto_ref(ref), expected_revision=revision,
+                    expected_affected_versions=versions,
+                ), metadata=self._auth_metadata(), timeout=self._call_timeout(timeout),
+            )
+        except Exception as exc:
+            mapped_error = errors.map_purge_grpc_error(exc)
+        else:
+            self._cache.invalidate_secret(str(ref))
+            return _secret_version_set_result(response)
+        raise mapped_error
 
     async def purge_secret_binding_cohort(
         self, key: str, *, anchor_version: int = 0, binding_key: str,
@@ -653,7 +690,9 @@ class AsyncClient:
         timeout: Optional[float] = None,
     ) -> SecretBindingCohortResult:
         _valid_uint64(anchor_version, "anchor_version")
-        guard = _cohort_guard(expected_revision, expected_affected_versions)
+        guard = _cohort_guard(
+            expected_revision, expected_affected_versions,
+        )
         ref = await self._resolve_ref(key)
         call_timeout = self._call_timeout(timeout)
         mapped_error = None

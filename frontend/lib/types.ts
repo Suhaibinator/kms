@@ -304,14 +304,19 @@ export interface PromoteSecretResponse {
   revision: number;
 }
 
-export interface SecretVersionMutationResponse {
-  anchor_version: number;
-  affected_versions: number[];
+export interface SecretVersionTransitionResponse {
+  current_version: number;
+  previous_version: number;
   revision: number;
 }
 
 export interface SecretBindingCohortResponse {
   anchor_version: number;
+  affected_versions: number[];
+  revision: number;
+}
+
+export interface SecretVersionSetResponse {
   affected_versions: number[];
   revision: number;
 }

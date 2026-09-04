@@ -171,23 +171,31 @@ func TestMetricsBindingLifecyclePersistedAudits(t *testing.T) {
 	if _, err := s.BindSecret(ctx, adminPrincipal(), ref, 1, testBindingKeyA); err != nil {
 		t.Fatalf("bind: %v", err)
 	}
-	if _, err := s.PreviewSecretBindingCohort(ctx, adminPrincipal(), ref, 1, testBindingKeyA); err != nil {
+	if _, err := s.PreviewSecretBindingCohort(ctx, adminPrincipal(), ref, 2, testBindingKeyA); err != nil {
 		t.Fatalf("preview: %v", err)
 	}
-	if _, err := s.RotateSecretBindingKey(ctx, adminPrincipal(), ref, 1, testBindingKeyA, testBindingKeyB, nil, nil); err != nil {
+	if _, err := s.RotateSecretBindingKey(ctx, adminPrincipal(), ref, 2, testBindingKeyA, testBindingKeyB); err != nil {
 		t.Fatalf("rotate: %v", err)
 	}
-	if _, err := s.UnbindSecret(ctx, adminPrincipal(), ref, 1, testBindingKeyB); err != nil {
+	if _, err := s.UnbindSecret(ctx, adminPrincipal(), ref, 3, testBindingKeyB); err != nil {
 		t.Fatalf("unbind: %v", err)
 	}
 	purgeRef := tref("binding-purge-audit-metrics")
 	putSecret(t, s, PutSecretInput{Ref: purgeRef, Value: []byte("v"), BindingKey: testBindingKeyA})
-	if _, err := s.PurgeSecretBindingCohort(ctx, adminPrincipal(), purgeRef, 1, testBindingKeyA, nil, nil); err != nil {
+	preview, err := s.PreviewSecretBindingCohort(ctx, adminPrincipal(), purgeRef, 1, testBindingKeyA)
+	if err != nil {
+		t.Fatalf("purge preview: %v", err)
+	}
+	if _, err := s.PurgeSecretBindingCohort(ctx, adminPrincipal(), purgeRef, 1, testBindingKeyA, new(preview.Revision), preview.AffectedVersions); err != nil {
 		t.Fatalf("purge: %v", err)
 	}
 
 	for _, eventType := range []string{"secret.bind", "secret.binding_cohort.preview", "secret.binding_key.rotate", "secret.unbind", "secret.binding_cohort.purge"} {
-		expectCount(t, m, "audit:"+eventType+":allow", 1)
+		want := 1
+		if eventType == "secret.binding_cohort.preview" {
+			want = 2
+		}
+		expectCount(t, m, "audit:"+eventType+":allow", want)
 	}
 	expectCount(t, m, "audit_write_failed", 0)
 }
@@ -200,9 +208,13 @@ func TestMetricsBindingPurgeCleanupPendingCountsCommittedAudit(t *testing.T) {
 	s.SetMetrics(m)
 	ref := tref("purge-cleanup-pending-metrics")
 	putSecret(t, s, PutSecretInput{Ref: ref, Value: []byte("v"), BindingKey: testBindingKeyA})
+	preview, err := s.PreviewSecretBindingCohort(context.Background(), adminPrincipal(), ref, 1, testBindingKeyA)
+	if err != nil {
+		t.Fatalf("preview: %v", err)
+	}
 	store.purgeResultErr = storage.ErrPurgeCleanupPending
 
-	if _, err := s.PurgeSecretBindingCohort(context.Background(), adminPrincipal(), ref, 1, testBindingKeyA, nil, nil); !errors.Is(err, storage.ErrPurgeCleanupPending) {
+	if _, err := s.PurgeSecretBindingCohort(context.Background(), adminPrincipal(), ref, 1, testBindingKeyA, new(preview.Revision), preview.AffectedVersions); !errors.Is(err, storage.ErrPurgeCleanupPending) {
 		t.Fatalf("purge cleanup pending = %v", err)
 	}
 	expectCount(t, m, "audit:secret.binding_cohort.purge:allow", 1)

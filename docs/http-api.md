@@ -758,7 +758,10 @@ token or binding-key material. A purge whose transaction committed but whose
 active SQLite/WAL scrub is still pending returns HTTP 503 with code
 `purge_cleanup_pending` and the fixed message
 `secret purge committed; database artifact cleanup is pending`;
-the service remains fail-closed until cleanup succeeds.
+the service remains fail-closed until cleanup succeeds. The logical purge is
+already committed, and no result body accompanies this error. Do not retry a
+bound-cohort purge with its retired key or retry an unbound-version purge as if
+its preview were still live.
 
 ## Common types
 
@@ -827,8 +830,9 @@ returns. Display paths shown in the UI look like `/prod/gradethis/rate-limit`.
 Top-level `bound` summarizes the version selected by `current`; top-level
 `has_access_token` reports whether the secret currently has an access-token
 hash. Exact-version decisions use both fields on that item in `versions`;
-binding is mutable live metadata, not an attribute of a release pin. Purged
-tombstones have `state: "destroyed"` with both version flags false.
+both flags are immutable until the version is destroyed. Release entries omit
+them, but an exact version pin implicitly pins their values. Purged tombstones
+have `state: "destroyed"` with both version flags false.
 
 `Identity`:
 ```json
@@ -883,7 +887,7 @@ certificates; `revoked_at_unix_ms` of `0` means valid.
 }
 ```
 
-Release values, secret plaintext, credentials, and live protection flags never
+Release values, secret plaintext, credentials, and protection flags never
 appear in this DTO or its digest. Creation selectors use the same `ref` shape,
 plus either `version` or `label`. Both parameter and secret references must
 exactly equal the release namespace; an empty selector namespace means that
@@ -1012,28 +1016,43 @@ Listing is always namespace-scoped: `env` and `app` are required.
   `{"revision"}` (irreversible)
 - `POST /api/v1/secrets/promote` — `{"env","app","key","version"}` →
   `{"current_version", "previous_version", "revision"}`
-- `POST /api/v1/secrets/bind` — `{"env","app","key","version":0,"binding_key":"..."}` →
-  `{"anchor_version","affected_versions":[N],"revision"}`. Rewraps one exact
-  version in place; `0` selects `current`.
+- `POST /api/v1/secrets/bind` —
+  `{"env","app","key","expected_current_version":N,"binding_key":"..."}` →
+  `{"current_version","previous_version","revision"}`. Clones the unbound
+  current version into one new bound current version; the source remains
+  unchanged as `previous`.
 - `POST /api/v1/secrets/unbind` — the same shape and response; the supplied key
-  must open the selected bound version.
+  must open the bound current version. The new current version is unbound.
 - `POST /api/v1/secrets/binding-cohort/preview` —
   `{"env","app","key","anchor_version":0,"binding_key":"..."}` →
   `{"anchor_version","affected_versions":[...],"revision"}` without mutation.
-- `POST /api/v1/secrets/binding-key/rotate` — preview-shaped body plus
-  `new_binding_key` and optional paired `expected_revision` /
-  `expected_affected_versions` compare-and-swap guards → the cohort result.
-  The new key must differ byte for byte from the current key; an unchanged
-  replacement returns a fixed `invalid_argument` after authorization, current
-  credential verification, and any CAS check.
+- `POST /api/v1/secrets/binding-key/rotate` —
+  `{"env","app","key","expected_current_version":N,"binding_key":"...","new_binding_key":"..."}`
+  → `{"current_version","previous_version","revision"}`. Clones only current
+  under the new key; the historical cohort remains unchanged under the old
+  key. The replacement must differ byte for byte from the current key.
 - `POST /api/v1/secrets/binding-cohort/purge` — admin only; preview-shaped body
-  plus the optional paired guards → the cohort result. This irreversibly
-  destroys the contiguous matching cohort even when immutable releases pin it.
+  with optional paired `expected_revision` and `expected_affected_versions`
+  guards → the cohort result. When supplied, the guards must exactly match a
+  prior preview. This
+  irreversibly destroys the contiguous matching cohort even when immutable
+  releases pin it.
+- `POST /api/v1/secrets/unbound-versions/preview` — `{"env","app","key"}` →
+  `{"affected_versions":[...],"revision"}`. Admin only. Returns every
+  non-destroyed unbound version, including disabled, expired, and corrupt rows;
+  an empty set is a failed precondition.
+- `POST /api/v1/secrets/unbound-versions/purge` — admin only;
+  `{"env","app","key","expected_revision":N,"expected_affected_versions":[...]}`
+  → the version-set result. Both guards are mandatory and must exactly match a
+  prior preview. The operation bypasses release-reference protection.
 - `DELETE /api/v1/secrets?env=&app=&key=` → `{"revision"}`
 
 Binding keys are never stored, hashed, fingerprinted, or echoed. Cohorts are
 found by cryptographically opening adjacent bound versions and stopping at the
-first boundary; see [`binding-keys.md`](binding-keys.md).
+first boundary. Bound-cohort preview requires `secret:binding-manage`.
+Bound-cohort purge and both unbound-version operations require administrator
+status plus `secret:destroy` before secret lookup. See
+[`binding-keys.md`](binding-keys.md).
 
 ### Policies
 

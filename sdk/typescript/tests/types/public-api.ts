@@ -6,17 +6,20 @@ import {
   ParameterValue,
   type PolicySnapshot,
   type PreparedRelease,
-  PurgeCleanupPendingError,
   type PublicConfigWire,
+  PurgeCleanupPendingError,
+  RateLimitedError,
   type ReleaseSnapshot,
   // @ts-expect-error Protocol transport types are internal and must not expose generated messages.
   type ReleaseTransport,
   type Secret,
-  type SecretBindingCohortResult,
   type SecretBindingCohortGuardOptions,
+  type SecretBindingCohortResult,
   type SecretOptions,
   SecretValue,
-  type SecretVersionMutationResult,
+  type SecretVersionSetResult,
+  type SecretVersionTransitionResult,
+  type VerifyReleaseDefaultsResult,
 } from "@suhaibinator/kms";
 import {
   type ConfigDescriptor,
@@ -31,22 +34,21 @@ import {
 import {
   type AppliedReport,
   type Callbacks,
+  type ContractEntry,
   canonicalParameterValue,
   consoleCallbacks,
-  type ContractEntry,
   // @ts-expect-error Startup default mismatches are applied and reported; the fatal error type was removed.
   DefaultMismatchError,
   type FieldChange,
   type ManagedPreparedCandidate,
   type MismatchSeverity,
+  type Phase,
   parameterHash,
   parseDefaultsArtifact as parseRuntimeDefaultsArtifact,
-  type Phase,
   startManagedConfig,
   type VerifyResult,
   verifyDefaults,
 } from "@suhaibinator/kms/configstore";
-import { RateLimitedError, type VerifyReleaseDefaultsResult } from "@suhaibinator/kms";
 import type { NextKms } from "@suhaibinator/kms/next/server";
 
 interface Policy {
@@ -148,28 +150,38 @@ export function acceptsPublicApi(
     secretToken: "access-token",
     bindingKey: declaration.bindKey,
   });
-  const bound: Promise<SecretVersionMutationResult> = client.bindSecret("secret", {
+  const bound: Promise<SecretVersionTransitionResult> = client.bindSecret("secret", {
+    expectedCurrentVersion: 1n,
     bindingKey: "operator-owned-binding-key",
   });
-  const unbound: Promise<SecretVersionMutationResult> = client.unbindSecret("secret", {
+  const unbound: Promise<SecretVersionTransitionResult> = client.unbindSecret("secret", {
+    expectedCurrentVersion: 1n,
     bindingKey: "operator-owned-binding-key",
   });
-  const guards: SecretBindingCohortGuardOptions = {
+  const guards = {
     expectedRevision: 4n,
     expectedAffectedVersions: [1n, 2n],
-  };
+  } satisfies SecretBindingCohortGuardOptions;
   const previewed: Promise<SecretBindingCohortResult> = client.previewSecretBindingCohort(
     "secret",
     { bindingKey: "operator-owned-binding-key" },
   );
-  const rotated: Promise<SecretBindingCohortResult> = client.rotateSecretBindingKey("secret", {
+  const rotated: Promise<SecretVersionTransitionResult> = client.rotateSecretBindingKey("secret", {
+    expectedCurrentVersion: 1n,
     bindingKey: "operator-owned-binding-key",
     newBindingKey: "new-operator-owned-binding-key",
-    ...guards,
   });
   const purged: Promise<SecretBindingCohortResult> = client.purgeSecretBindingCohort("secret", {
     bindingKey: "operator-owned-binding-key",
+    expectedRevision: guards.expectedRevision,
+    expectedAffectedVersions: guards.expectedAffectedVersions,
   });
+  const unboundPreview: Promise<SecretVersionSetResult> =
+    client.previewSecretUnboundVersions("secret");
+  const unboundPurge: Promise<SecretVersionSetResult> = client.purgeSecretUnboundVersions(
+    "secret",
+    guards,
+  );
   const cleanupPending = new PurgeCleanupPendingError();
   return [
     adapter,
@@ -184,6 +196,8 @@ export function acceptsPublicApi(
     previewed,
     rotated,
     purged,
+    unboundPreview,
+    unboundPurge,
     cleanupPending,
   ];
 }

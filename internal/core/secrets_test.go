@@ -14,7 +14,6 @@ import (
 	"go.uber.org/zap"
 	"go.uber.org/zap/zaptest/observer"
 
-	"github.com/Suhaibinator/kms/internal/crypto"
 	"github.com/Suhaibinator/kms/internal/domain"
 	"github.com/Suhaibinator/kms/internal/storage"
 )
@@ -24,6 +23,19 @@ const (
 	testBindingKeyB = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 	testBindingKeyC = "cccccccccccccccccccccccccccccccc"
 )
+
+type failFirstAuditStore struct {
+	*fakeStore
+	calls int
+}
+
+func (f *failFirstAuditStore) AppendAudit(ctx context.Context, event domain.AuditEvent) error {
+	f.calls++
+	if f.calls == 1 {
+		return errors.New("one-shot audit failure")
+	}
+	return f.fakeStore.AppendAudit(ctx, event)
+}
 
 // putSecret creates/updates a secret as admin and returns the result. It fails
 // the test on error.
@@ -548,7 +560,7 @@ func TestBindingMutationNewKeysRemainInvalidArguments(t *testing.T) {
 			beforeRevision := store.revision
 			auditsBefore := len(store.audits)
 
-			_, err := s.RotateSecretBindingKey(context.Background(), adminPrincipal(), ref, 1, testBindingKeyA, key, nil, nil)
+			_, err := s.RotateSecretBindingKey(context.Background(), adminPrincipal(), ref, 1, testBindingKeyA, key)
 			if !errors.Is(err, domain.ErrInvalidArgument) {
 				t.Fatalf("RotateSecretBindingKey error = %v, want ErrInvalidArgument", err)
 			}
@@ -566,27 +578,87 @@ func TestBindingMutationNewKeysRemainInvalidArguments(t *testing.T) {
 	}
 }
 
+func TestBindingTransitionsAuditMissingExpectedCurrentVersion(t *testing.T) {
+	tests := []struct {
+		name      string
+		eventType string
+		run       func(*Service, domain.Ref) error
+	}{
+		{
+			name: "bind", eventType: "secret.bind",
+			run: func(s *Service, ref domain.Ref) error {
+				_, err := s.BindSecret(context.Background(), adminPrincipal(), ref, 0, testBindingKeyA)
+				return err
+			},
+		},
+		{
+			name: "unbind", eventType: "secret.unbind",
+			run: func(s *Service, ref domain.Ref) error {
+				_, err := s.UnbindSecret(context.Background(), adminPrincipal(), ref, 0, testBindingKeyA)
+				return err
+			},
+		},
+		{
+			name: "rotate", eventType: "secret.binding_key.rotate",
+			run: func(s *Service, ref domain.Ref) error {
+				_, err := s.RotateSecretBindingKey(context.Background(), adminPrincipal(), ref, 0, testBindingKeyA, testBindingKeyB)
+				return err
+			},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			store := newFakeStore()
+			s, hub := newTestServiceWithHub(t, store)
+			ref := tref("missing-current-guard")
+			storeCalls := 0
+			store.beforeBindingOperation = func(string) { storeCalls++ }
+
+			err := tc.run(s, ref)
+			if !errors.Is(err, domain.ErrInvalidArgument) || !strings.Contains(err.Error(), "expected_current_version is required") {
+				t.Fatalf("error = %v, want missing-guard invalid argument", err)
+			}
+			if storeCalls != 0 || store.revision != 0 || hub.wakes != 0 {
+				t.Fatalf("missing guard reached mutation path: store calls=%d revision=%d wakes=%d", storeCalls, store.revision, hub.wakes)
+			}
+			if len(store.audits) != 1 {
+				t.Fatalf("audit count = %d, want 1", len(store.audits))
+			}
+			audit := store.audits[0]
+			if audit.EventType != tc.eventType || audit.Decision != "error" || audit.ResourceVersion != 0 || audit.Metadata != "{}" ||
+				audit.ResourceEnv != ref.NS.Env || audit.ResourceApp != ref.NS.App || audit.ResourceKey != ref.Key {
+				t.Fatalf("missing-guard audit = %+v", audit)
+			}
+			for _, key := range []string{testBindingKeyA, testBindingKeyB} {
+				if strings.Contains(fmt.Sprintf("%+v", audit), key) || strings.Contains(err.Error(), key) {
+					t.Fatal("binding key leaked from missing-guard failure")
+				}
+			}
+		})
+	}
+}
+
 func TestBindingMutationUnlockKeysCollapseWithoutMutationOrLeakage(t *testing.T) {
 	type operation struct {
 		name      string
 		eventType string
-		run       func(*Service, domain.Ref, string) error
+		run       func(*Service, domain.Ref, string, uint64) error
 	}
 	operations := []operation{
-		{name: "unbind", eventType: "secret.unbind", run: func(s *Service, ref domain.Ref, key string) error {
+		{name: "unbind", eventType: "secret.unbind", run: func(s *Service, ref domain.Ref, key string, _ uint64) error {
 			_, err := s.UnbindSecret(context.Background(), adminPrincipal(), ref, 1, key)
 			return err
 		}},
-		{name: "preview", eventType: "secret.binding_cohort.preview", run: func(s *Service, ref domain.Ref, key string) error {
+		{name: "preview", eventType: "secret.binding_cohort.preview", run: func(s *Service, ref domain.Ref, key string, _ uint64) error {
 			_, err := s.PreviewSecretBindingCohort(context.Background(), adminPrincipal(), ref, 1, key)
 			return err
 		}},
-		{name: "rotate-old", eventType: "secret.binding_key.rotate", run: func(s *Service, ref domain.Ref, key string) error {
-			_, err := s.RotateSecretBindingKey(context.Background(), adminPrincipal(), ref, 1, key, testBindingKeyC, nil, nil)
+		{name: "rotate-old", eventType: "secret.binding_key.rotate", run: func(s *Service, ref domain.Ref, key string, _ uint64) error {
+			_, err := s.RotateSecretBindingKey(context.Background(), adminPrincipal(), ref, 1, key, testBindingKeyC)
 			return err
 		}},
-		{name: "purge", eventType: "secret.binding_cohort.purge", run: func(s *Service, ref domain.Ref, key string) error {
-			_, err := s.PurgeSecretBindingCohort(context.Background(), adminPrincipal(), ref, 1, key, nil, nil)
+		{name: "purge", eventType: "secret.binding_cohort.purge", run: func(s *Service, ref domain.Ref, key string, revision uint64) error {
+			_, err := s.PurgeSecretBindingCohort(context.Background(), adminPrincipal(), ref, 1, key, new(revision), []uint64{1})
 			return err
 		}},
 	}
@@ -614,7 +686,7 @@ func TestBindingMutationUnlockKeysCollapseWithoutMutationOrLeakage(t *testing.T)
 				beforeRevision := store.revision
 				auditsBefore := len(store.audits)
 
-				err := op.run(s, ref, credential.key)
+				err := op.run(s, ref, credential.key, beforeRevision)
 				if err != domain.ErrDecryptFailed || err.Error() != domain.ErrDecryptFailed.Error() {
 					t.Fatalf("error = %#v, want canonical ErrDecryptFailed", err)
 				}
@@ -670,6 +742,14 @@ func TestBindUnbindAuthorizedFailuresAreAuditedAndRedacted(t *testing.T) {
 				return err
 			},
 		},
+		{
+			name:      "rotate",
+			eventType: "secret.binding_key.rotate",
+			invoke: func(s *Service, ref domain.Ref) error {
+				_, err := s.RotateSecretBindingKey(context.Background(), adminPrincipal(), ref, 1, testBindingKeyB, testBindingKeyB)
+				return err
+			},
+		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -706,263 +786,177 @@ func TestBindUnbindAuthorizedFailuresAreAuditedAndRedacted(t *testing.T) {
 	}
 }
 
-func TestBindingMutationImplicitMergeFailuresAreAtomicAuditedAndRedacted(t *testing.T) {
-	tests := []struct {
-		name      string
-		eventType string
-		keys      []string
-		invoke    func(*Service, domain.Ref) error
-	}{
-		{
-			name:      "bind",
-			eventType: "secret.bind",
-			keys:      []string{testBindingKeyA, "", testBindingKeyA},
-			invoke: func(s *Service, ref domain.Ref) error {
-				_, err := s.BindSecret(context.Background(), adminPrincipal(), ref, 2, testBindingKeyA)
-				return err
-			},
-		},
-		{
-			name:      "rotate",
-			eventType: "secret.binding_key.rotate",
-			keys:      []string{testBindingKeyA, testBindingKeyB, testBindingKeyB, testBindingKeyA},
-			invoke: func(s *Service, ref domain.Ref) error {
-				_, err := s.RotateSecretBindingKey(context.Background(), adminPrincipal(), ref, 2, testBindingKeyB, testBindingKeyA, nil, nil)
-				return err
-			},
-		},
-	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			store := newFakeStore()
-			s, hub := newTestServiceWithHub(t, store)
-			ref := tref("implicit-merge-" + tc.name)
-			for i, key := range tc.keys {
-				putSecret(t, s, PutSecretInput{Ref: ref, Value: []byte(fmt.Sprintf("value-%d", i+1)), BindingKey: key})
-			}
-			hub.wakes = 0
-			before := make(map[uint64]storage.SecretVersionRecord, len(tc.keys))
-			for version, rec := range store.secrets[ref.String()].versions {
-				before[version] = rec
-			}
-			beforeRevision := store.revision
-			auditsBefore := len(store.audits)
-
-			err := tc.invoke(s, ref)
-			if !errors.Is(err, domain.ErrFailedPrecondition) || err.Error() != "binding change would merge an adjacent cohort: failed precondition" {
-				t.Fatalf("error = %v, want sanitized merge failure", err)
-			}
-			for version, want := range before {
-				if got := store.secrets[ref.String()].versions[version]; !reflect.DeepEqual(got, want) {
-					t.Fatalf("rejected %s changed version %d", tc.name, version)
-				}
-			}
-			if store.revision != beforeRevision {
-				t.Fatalf("rejected %s revision = %d, want %d", tc.name, store.revision, beforeRevision)
-			}
-			if hub.wakes != 0 {
-				t.Fatalf("rejected %s woke watchers %d times", tc.name, hub.wakes)
-			}
-			if len(store.audits) != auditsBefore+1 {
-				t.Fatalf("audit count = %d, want %d", len(store.audits), auditsBefore+1)
-			}
-			audit := store.audits[len(store.audits)-1]
-			if audit.EventType != tc.eventType || audit.Decision != "error" || audit.ResourceNamespaceID != store.namespaces[tns.String()].ID ||
-				audit.ResourceEnv != ref.NS.Env || audit.ResourceApp != ref.NS.App || audit.ResourceKey != ref.Key || audit.Metadata != "{}" {
-				t.Fatalf("error audit = %+v", audit)
-			}
-			for _, key := range []string{testBindingKeyA, testBindingKeyB} {
-				if strings.Contains(fmt.Sprintf("%+v", audit), key) || strings.Contains(err.Error(), key) {
-					t.Fatalf("binding key leaked from failed %s", tc.name)
-				}
-			}
-		})
-	}
-}
-
-func TestBindUnbindExactVersionPreserveCiphertext(t *testing.T) {
+func TestProtectionTransitionsCreateImmutableVersions(t *testing.T) {
 	ctx := context.Background()
 	store := newFakeStore()
 	s, hub := newTestServiceWithHub(t, store)
-	ref := tref("exact-bind")
-	putSecret(t, s, PutSecretInput{Ref: ref, Value: []byte("value")})
+	ref := tref("versioned-protection")
+	putSecret(t, s, PutSecretInput{Ref: ref, Value: []byte("immutable value"), ContentType: "text/plain", Metadata: `{"owner":"ops"}`})
 	hub.wakes = 0
+	source := store.secrets[ref.String()].versions[1]
 
-	original := store.secrets[ref.String()].versions[1]
-	result, err := s.BindSecret(ctx, adminPrincipal(), ref, 0, testBindingKeyA)
+	boundResult, err := s.BindSecret(ctx, adminPrincipal(), ref, 1, testBindingKeyA)
 	if err != nil {
 		t.Fatalf("BindSecret: %v", err)
 	}
-	if result.AnchorVersion != 1 || !slices.Equal(result.AffectedVersions, []uint64{1}) {
-		t.Fatalf("bind result = %+v", result)
+	if boundResult.CurrentVersion != 2 || boundResult.PreviousVersion != 1 || hub.wakes != 1 {
+		t.Fatalf("bind result=%+v wakes=%d", boundResult, hub.wakes)
 	}
-	bound := store.secrets[ref.String()].versions[1]
-	if !bound.Bound || bound.WrapMode != domain.WrapModeBindingKey || len(bound.BindingKeySalt) == 0 {
-		t.Fatalf("bound row = %+v", bound)
+	if got := store.secrets[ref.String()].versions[1]; !reflect.DeepEqual(got, source) {
+		t.Fatal("bind changed its source version")
 	}
-	if !bytes.Equal(bound.Ciphertext, original.Ciphertext) || bytes.Equal(bound.EncryptedDEK, original.EncryptedDEK) {
-		t.Fatal("bind must preserve ciphertext and rewrap the DEK")
+	bound := store.secrets[ref.String()].versions[2]
+	if !bound.Bound || bound.ContentType != source.ContentType || bound.Metadata != source.Metadata || bound.State != source.State || bound.HasAccessToken != source.HasAccessToken {
+		t.Fatalf("bound clone did not preserve properties: %+v", bound)
 	}
-	if hub.wakes != 1 {
-		t.Fatalf("bind wakes = %d, want 1", hub.wakes)
+	if bytes.Equal(bound.Ciphertext, source.Ciphertext) || bytes.Equal(bound.EncryptedDEK, source.EncryptedDEK) || bytes.Equal(bound.Nonce, source.Nonce) || bound.AAD == source.AAD {
+		t.Fatal("bind reused cryptographic material")
 	}
-
-	beforePreviewWakes := hub.wakes
-	preview, err := s.PreviewSecretBindingCohort(ctx, adminPrincipal(), ref, 0, testBindingKeyA)
-	if err != nil || !slices.Equal(preview.AffectedVersions, []uint64{1}) {
-		t.Fatalf("preview = %+v, err=%v", preview, err)
+	if _, err := s.GetSecret(ctx, adminPrincipal(), ref, 2, "", "", testBindingKeyB); !errors.Is(err, domain.ErrDecryptFailed) {
+		t.Fatalf("bound clone accepted wrong key: %v", err)
 	}
-	if hub.wakes != beforePreviewWakes {
-		t.Fatal("preview woke watchers")
+	if got, err := s.GetSecret(ctx, adminPrincipal(), ref, 2, "", "", testBindingKeyA); err != nil || string(got.Value) != "immutable value" {
+		t.Fatalf("bound clone read=%q err=%v", got.Value, err)
 	}
-
-	beforeWrong := store.secrets[ref.String()].versions[1]
-	if _, err := s.UnbindSecret(ctx, adminPrincipal(), ref, 1, testBindingKeyB); !errors.Is(err, domain.ErrDecryptFailed) {
-		t.Fatalf("UnbindSecret(wrong key) err = %v", err)
+	if got, err := s.GetSecret(ctx, adminPrincipal(), ref, 1, "", "", ""); err != nil || string(got.Value) != "immutable value" {
+		t.Fatalf("source read=%q err=%v", got.Value, err)
 	}
-	afterWrong := store.secrets[ref.String()].versions[1]
-	if !bytes.Equal(afterWrong.Ciphertext, beforeWrong.Ciphertext) || !bytes.Equal(afterWrong.EncryptedDEK, beforeWrong.EncryptedDEK) {
-		t.Fatal("wrong-key unbind changed persisted data")
+	if _, err := s.RotateSecretBindingKey(ctx, adminPrincipal(), ref, 2, testBindingKeyB, testBindingKeyB); !errors.Is(err, domain.ErrDecryptFailed) {
+		t.Fatalf("wrong unchanged rotation key err=%v, want decrypt failed", err)
+	}
+	if _, err := s.RotateSecretBindingKey(ctx, adminPrincipal(), ref, 2, testBindingKeyA, testBindingKeyA); !errors.Is(err, domain.ErrInvalidArgument) {
+		t.Fatalf("authenticated unchanged rotation key err=%v, want invalid argument", err)
 	}
 
-	result, err = s.UnbindSecret(ctx, adminPrincipal(), ref, 1, testBindingKeyA)
-	if err != nil {
-		t.Fatalf("UnbindSecret: %v", err)
-	}
-	unbound := store.secrets[ref.String()].versions[1]
-	if unbound.Bound || unbound.WrapMode != domain.WrapModeStandard || len(unbound.BindingKeySalt) != 0 {
-		t.Fatalf("unbound row = %+v", unbound)
-	}
-	if !bytes.Equal(unbound.Ciphertext, original.Ciphertext) {
-		t.Fatal("unbind rewrote value ciphertext")
-	}
-	if value, err := s.GetSecret(ctx, adminPrincipal(), ref, 1, "", "", ""); err != nil || string(value.Value) != "value" {
-		t.Fatalf("unbound read = %q, err=%v", value.Value, err)
-	}
-	if hub.wakes != 2 {
-		t.Fatalf("bind+unbind wakes = %d, want 2", hub.wakes)
-	}
-}
-
-func TestBindingCohortDiscoveryAndRotation(t *testing.T) {
-	ctx := context.Background()
-	store := newFakeStore()
-	s := newTestService(store)
-	ring := withKeyring(t, s)
-	ref := tref("cohorts")
-
-	putSecret(t, s, PutSecretInput{Ref: ref, Value: []byte("a1"), BindingKey: testBindingKeyA})
-	putSecret(t, s, PutSecretInput{Ref: ref, Value: []byte("a2"), BindingKey: testBindingKeyA})
-	putSecret(t, s, PutSecretInput{Ref: ref, Value: []byte("plain")})
-	putSecret(t, s, PutSecretInput{Ref: ref, Value: []byte("b1"), BindingKey: testBindingKeyB})
-
-	// A later cohort may use another recorded KEK. Rotation must use the KEK
-	// recorded on each row instead of assuming the currently active key.
-	secondKEK, err := crypto.NewKEKFromMaterial("kek-second", bytes.Repeat([]byte{0x9}, 32))
-	if err != nil {
-		t.Fatalf("NewKEKFromMaterial: %v", err)
-	}
-	ring.SetActive(secondKEK)
-	putSecret(t, s, PutSecretInput{Ref: ref, Value: []byte("b2"), BindingKey: testBindingKeyB})
-	putSecret(t, s, PutSecretInput{Ref: ref, Value: []byte("a3"), BindingKey: testBindingKeyA})
-	if _, err := s.DisableSecret(ctx, adminPrincipal(), ref, 5, false); err != nil {
-		t.Fatalf("disable v5: %v", err)
-	}
-
-	for _, tc := range []struct {
-		anchor uint64
-		key    string
-		want   []uint64
-	}{
-		{anchor: 1, key: testBindingKeyA, want: []uint64{1, 2}},
-		{anchor: 4, key: testBindingKeyB, want: []uint64{4, 5}},
-		{anchor: 6, key: testBindingKeyA, want: []uint64{6}},
-	} {
-		preview, err := s.PreviewSecretBindingCohort(ctx, adminPrincipal(), ref, tc.anchor, tc.key)
-		if err != nil || !slices.Equal(preview.AffectedVersions, tc.want) {
-			t.Fatalf("preview anchor %d = %+v, err=%v, want %v", tc.anchor, preview, err, tc.want)
-		}
-	}
-	if _, err := s.PreviewSecretBindingCohort(ctx, adminPrincipal(), ref, 4, testBindingKeyA); !errors.Is(err, domain.ErrDecryptFailed) {
-		t.Fatalf("wrong anchor key err = %v, want ErrDecryptFailed", err)
-	}
-
-	preview, err := s.PreviewSecretBindingCohort(ctx, adminPrincipal(), ref, 4, testBindingKeyB)
-	if err != nil {
-		t.Fatalf("preview B: %v", err)
-	}
-	beforeNoop := store.secrets[ref.String()].versions[4]
-	beforeNoopRevision := store.revision
-	if _, err := s.RotateSecretBindingKey(ctx, adminPrincipal(), ref, 4, testBindingKeyB, testBindingKeyB, &preview.Revision, preview.AffectedVersions); !errors.Is(err, domain.ErrInvalidArgument) || err.Error() != "new binding key must differ from current binding key: invalid argument" {
-		t.Fatalf("no-op rotation err = %v, want sanitized ErrInvalidArgument", err)
-	}
-	if after := store.secrets[ref.String()].versions[4]; !reflect.DeepEqual(after, beforeNoop) || store.revision != beforeNoopRevision {
-		t.Fatal("no-op rotation mutated the secret or revision")
-	}
-	if _, err := s.RotateSecretBindingKey(ctx, adminPrincipal(), ref, 1, testBindingKeyB, testBindingKeyB, nil, nil); !errors.Is(err, domain.ErrDecryptFailed) {
-		t.Fatalf("wrong old key on no-op rotation err = %v, want ErrDecryptFailed", err)
-	}
-	before := map[uint64]storage.SecretVersionRecord{
-		4: store.secrets[ref.String()].versions[4],
-		5: store.secrets[ref.String()].versions[5],
-	}
-	rotated, err := s.RotateSecretBindingKey(ctx, adminPrincipal(), ref, 4, testBindingKeyB, testBindingKeyC, &preview.Revision, preview.AffectedVersions)
+	rotatedResult, err := s.RotateSecretBindingKey(ctx, adminPrincipal(), ref, 2, testBindingKeyA, testBindingKeyB)
 	if err != nil {
 		t.Fatalf("RotateSecretBindingKey: %v", err)
 	}
-	if !slices.Equal(rotated.AffectedVersions, []uint64{4, 5}) {
-		t.Fatalf("rotated versions = %v", rotated.AffectedVersions)
+	if rotatedResult.CurrentVersion != 3 || rotatedResult.PreviousVersion != 2 {
+		t.Fatalf("rotation result=%+v", rotatedResult)
 	}
-	for _, version := range rotated.AffectedVersions {
-		after := store.secrets[ref.String()].versions[version]
-		if !bytes.Equal(after.Ciphertext, before[version].Ciphertext) || after.KEKID != before[version].KEKID {
-			t.Fatalf("v%d ciphertext or recorded KEK changed", version)
-		}
-		if bytes.Equal(after.EncryptedDEK, before[version].EncryptedDEK) || bytes.Equal(after.BindingKeySalt, before[version].BindingKeySalt) {
-			t.Fatalf("v%d DEK wrapping or salt did not rotate", version)
-		}
+	if got := store.secrets[ref.String()].versions[2]; !reflect.DeepEqual(got, bound) {
+		t.Fatal("rotation changed the historical bound source")
 	}
-	if bytes.Equal(store.secrets[ref.String()].versions[4].BindingKeySalt, store.secrets[ref.String()].versions[5].BindingKeySalt) {
-		t.Fatal("rotated versions reused a binding salt")
+	if _, err := s.GetSecret(ctx, adminPrincipal(), ref, 2, "", "", testBindingKeyA); err != nil {
+		t.Fatalf("historical version no longer accepts old key: %v", err)
 	}
-	if _, err := s.PreviewSecretBindingCohort(ctx, adminPrincipal(), ref, 4, testBindingKeyB); !errors.Is(err, domain.ErrDecryptFailed) {
-		t.Fatalf("old key still opens anchor: %v", err)
+	if _, err := s.GetSecret(ctx, adminPrincipal(), ref, 3, "", "", testBindingKeyA); !errors.Is(err, domain.ErrDecryptFailed) {
+		t.Fatalf("rotated version accepted old key: %v", err)
 	}
-	if got, err := s.PreviewSecretBindingCohort(ctx, adminPrincipal(), ref, 4, testBindingKeyC); err != nil || !slices.Equal(got.AffectedVersions, []uint64{4, 5}) {
-		t.Fatalf("new-key preview = %+v, err=%v", got, err)
+
+	unboundResult, err := s.UnbindSecret(ctx, adminPrincipal(), ref, 3, testBindingKeyB)
+	if err != nil {
+		t.Fatalf("UnbindSecret: %v", err)
+	}
+	if unboundResult.CurrentVersion != 4 || unboundResult.PreviousVersion != 3 || store.secrets[ref.String()].versions[4].Bound {
+		t.Fatalf("unbind result=%+v row=%+v", unboundResult, store.secrets[ref.String()].versions[4])
+	}
+	if got, err := s.GetSecret(ctx, adminPrincipal(), ref, 4, "", "", ""); err != nil || string(got.Value) != "immutable value" {
+		t.Fatalf("unbound clone read=%q err=%v", got.Value, err)
+	}
+	if _, err := s.BindSecret(ctx, adminPrincipal(), ref, 3, testBindingKeyC); !errors.Is(err, domain.ErrAborted) {
+		t.Fatalf("stale current guard err=%v", err)
 	}
 }
 
-func TestBindingCohortCASGuards(t *testing.T) {
+func TestUnboundVersionPurgeRequiresAdminAndExactPreview(t *testing.T) {
 	ctx := context.Background()
 	store := newFakeStore()
-	s := newTestService(store)
-	withKeyring(t, s)
-	ref := tref("cas")
-	putSecret(t, s, PutSecretInput{Ref: ref, Value: []byte("v1"), BindingKey: testBindingKeyA})
-	putSecret(t, s, PutSecretInput{Ref: ref, Value: []byte("v2"), BindingKey: testBindingKeyA})
-	preview, err := s.PreviewSecretBindingCohort(ctx, adminPrincipal(), ref, 1, testBindingKeyA)
+	seedTokenNS(store)
+	s, hub := newTestServiceWithHub(t, store)
+	ref := tref("purge-unbound")
+	putSecret(t, s, PutSecretInput{Ref: ref, Value: []byte("plain-1")})
+	putSecret(t, s, PutSecretInput{Ref: ref, Value: []byte("bound"), BindingKey: testBindingKeyA})
+	putSecret(t, s, PutSecretInput{Ref: ref, Value: []byte("plain-2")})
+	store.addPolicy(domain.Policy{Name: "delegated-destroy", Subject: "app", Allow: []domain.PolicyRule{{Operation: domain.OpSecretDestroy, Env: "prod", App: "app"}}})
+
+	storeCalls := 0
+	store.beforeBindingOperation = func(string) { storeCalls++ }
+	if _, err := s.PreviewSecretUnboundVersions(ctx, clientPrincipal("app"), ref); !errors.Is(err, domain.ErrPermissionDenied) || storeCalls != 0 {
+		t.Fatalf("non-admin preview err=%v store-calls=%d", err, storeCalls)
+	}
+	preview, err := s.PreviewSecretUnboundVersions(ctx, adminPrincipal(), ref)
+	if err != nil || !slices.Equal(preview.AffectedVersions, []uint64{1, 3}) {
+		t.Fatalf("preview=%+v err=%v", preview, err)
+	}
+	putSecret(t, s, PutSecretInput{Ref: tref("revision-change"), Value: []byte("x")})
+	if _, err := s.PurgeSecretUnboundVersions(ctx, adminPrincipal(), ref, preview.Revision, preview.AffectedVersions); !errors.Is(err, domain.ErrAborted) {
+		t.Fatalf("stale purge err=%v", err)
+	}
+	preview, err = s.PreviewSecretUnboundVersions(ctx, adminPrincipal(), ref)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hub.wakes = 0
+	result, err := s.PurgeSecretUnboundVersions(ctx, adminPrincipal(), ref, preview.Revision, preview.AffectedVersions)
+	if err != nil || !slices.Equal(result.AffectedVersions, []uint64{1, 3}) || hub.wakes != 1 {
+		t.Fatalf("purge=%+v err=%v wakes=%d", result, err, hub.wakes)
+	}
+	if store.secrets[ref.String()].versions[2].State == domain.StateDestroyed {
+		t.Fatal("unbound purge destroyed a bound version")
+	}
+	if got := store.secrets[ref.String()].rec.Labels[domain.LabelCurrent]; got != 3 {
+		t.Fatalf("purge changed current label to %d", got)
+	}
+}
+
+func TestUnboundVersionPurgeRollsBackWhenTransactionalAuditUnavailable(t *testing.T) {
+	ctx := context.Background()
+	store := newFakeStore()
+	s, hub := newTestServiceWithHub(t, store)
+	ref := tref("purge-unbound-audit-rollback")
+	putSecret(t, s, PutSecretInput{Ref: ref, Value: []byte("plain")})
+	preview, err := s.PreviewSecretUnboundVersions(ctx, adminPrincipal(), ref)
 	if err != nil {
 		t.Fatalf("preview: %v", err)
 	}
+	before := store.secrets[ref.String()].versions[1]
+	beforeRevision := store.revision
+	auditsBefore := len(store.audits)
+	hub.wakes = 0
+	store.auditErr = errors.New("audit unavailable")
 
-	if _, err := s.RotateSecretBindingKey(ctx, adminPrincipal(), ref, 1, testBindingKeyA, testBindingKeyB, &preview.Revision, nil); !errors.Is(err, domain.ErrInvalidArgument) {
-		t.Fatalf("revision-only guard err = %v", err)
+	if _, err := s.PurgeSecretUnboundVersions(ctx, adminPrincipal(), ref, preview.Revision, preview.AffectedVersions); !errors.Is(err, domain.ErrFailedPrecondition) {
+		t.Fatalf("purge audit failure = %v, want failed precondition", err)
 	}
-	if _, err := s.RotateSecretBindingKey(ctx, adminPrincipal(), ref, 1, testBindingKeyA, testBindingKeyB, nil, preview.AffectedVersions); !errors.Is(err, domain.ErrInvalidArgument) {
-		t.Fatalf("versions-only guard err = %v", err)
+	if got := store.secrets[ref.String()].versions[1]; !reflect.DeepEqual(got, before) || store.revision != beforeRevision {
+		t.Fatal("unbound purge audit failure changed the version or revision")
 	}
+	if len(store.audits) != auditsBefore || hub.wakes != 0 {
+		t.Fatalf("failed purge appended audits or woke watchers: audits=%d wakes=%d", len(store.audits)-auditsBefore, hub.wakes)
+	}
+}
 
-	putSecret(t, s, PutSecretInput{Ref: tref("unrelated"), Value: []byte("change revision")})
-	if _, err := s.RotateSecretBindingKey(ctx, adminPrincipal(), ref, 1, testBindingKeyA, testBindingKeyB, &preview.Revision, preview.AffectedVersions); !errors.Is(err, domain.ErrAborted) {
-		t.Fatalf("stale revision guard err = %v", err)
+func TestUnboundVersionPurgeCleanupPendingReturnsCommittedResultAndWakes(t *testing.T) {
+	ctx := context.Background()
+	store := newFakeStore()
+	s, hub := newTestServiceWithHub(t, store)
+	ref := tref("purge-unbound-cleanup-pending")
+	putSecret(t, s, PutSecretInput{Ref: ref, Value: []byte("plain")})
+	preview, err := s.PreviewSecretUnboundVersions(ctx, adminPrincipal(), ref)
+	if err != nil {
+		t.Fatalf("preview: %v", err)
 	}
-	currentRevision := store.revision
-	if _, err := s.RotateSecretBindingKey(ctx, adminPrincipal(), ref, 1, testBindingKeyA, testBindingKeyB, &currentRevision, []uint64{1}); !errors.Is(err, domain.ErrAborted) {
-		t.Fatalf("stale affected-version guard err = %v", err)
+	store.purgeResultErr = storage.ErrPurgeCleanupPending
+	auditsBefore := len(store.audits)
+	hub.wakes = 0
+
+	result, err := s.PurgeSecretUnboundVersions(ctx, adminPrincipal(), ref, preview.Revision, preview.AffectedVersions)
+	if err != storage.ErrPurgeCleanupPending {
+		t.Fatalf("error = %#v, want canonical ErrPurgeCleanupPending", err)
 	}
-	if _, err := s.PreviewSecretBindingCohort(ctx, adminPrincipal(), ref, 1, testBindingKeyA); err != nil {
-		t.Fatalf("failed CAS mutated wrapping: %v", err)
+	if !slices.Equal(result.AffectedVersions, []uint64{1}) || result.Revision <= preview.Revision {
+		t.Fatalf("committed result = %+v", result)
+	}
+	if got := store.secrets[ref.String()].versions[1]; got.State != domain.StateDestroyed {
+		t.Fatalf("logical purge did not commit: %+v", got)
+	}
+	if len(store.audits) != auditsBefore+1 || hub.wakes != 1 {
+		t.Fatalf("cleanup-pending purge audits=%d wakes=%d", len(store.audits)-auditsBefore, hub.wakes)
+	}
+	if audit := store.audits[len(store.audits)-1]; audit.EventType != "secret.unbound_versions.purge" || audit.Decision != "allow" {
+		t.Fatalf("cleanup-pending audit = %+v", audit)
 	}
 }
 
@@ -996,7 +990,7 @@ func TestPurgeBindingCohortAdminOnlyAtomicAndRedacted(t *testing.T) {
 		t.Fatalf("preview: %v", err)
 	}
 	auditsBefore := len(store.audits)
-	result, err := s.PurgeSecretBindingCohort(ctx, adminPrincipal(), ref, 4, testBindingKeyB, &preview.Revision, preview.AffectedVersions)
+	result, err := s.PurgeSecretBindingCohort(ctx, adminPrincipal(), ref, 4, testBindingKeyB, new(preview.Revision), preview.AffectedVersions)
 	if err != nil {
 		t.Fatalf("PurgeSecretBindingCohort: %v", err)
 	}
@@ -1041,9 +1035,13 @@ func TestPurgeBindingCohortRollsBackWhenAuditUnavailable(t *testing.T) {
 	putSecret(t, s, PutSecretInput{Ref: ref, Value: []byte("v"), BindingKey: testBindingKeyA})
 	before := store.secrets[ref.String()].versions[1]
 	beforeRevision := store.revision
+	preview, err := s.PreviewSecretBindingCohort(ctx, adminPrincipal(), ref, 1, testBindingKeyA)
+	if err != nil {
+		t.Fatalf("preview: %v", err)
+	}
 	store.auditErr = errors.New("audit unavailable")
 
-	if _, err := s.PurgeSecretBindingCohort(ctx, adminPrincipal(), ref, 1, testBindingKeyA, nil, nil); err == nil {
+	if _, err := s.PurgeSecretBindingCohort(ctx, adminPrincipal(), ref, 1, testBindingKeyA, new(preview.Revision), preview.AffectedVersions); err == nil {
 		t.Fatal("purge succeeded with unavailable transactional audit")
 	}
 	after := store.secrets[ref.String()].versions[1]
@@ -1075,7 +1073,7 @@ func TestBindingMutationsRollBackWhenTransactionalAuditUnavailable(t *testing.T)
 		{
 			name: "rotate", bound: true,
 			run: func(s *Service, ref domain.Ref) error {
-				_, err := s.RotateSecretBindingKey(context.Background(), adminPrincipal(), ref, 1, testBindingKeyA, testBindingKeyB, nil, nil)
+				_, err := s.RotateSecretBindingKey(context.Background(), adminPrincipal(), ref, 1, testBindingKeyA, testBindingKeyB)
 				return err
 			},
 		},
@@ -1134,6 +1132,35 @@ func TestBindingCohortPreviewFailsClosedWhenAuditUnavailable(t *testing.T) {
 	}
 }
 
+func TestUnboundVersionPreviewRecordsErrorWhenRequiredAllowAuditFails(t *testing.T) {
+	base := newFakeStore()
+	seedTokenNS(base)
+	seedService := newTestService(base)
+	withKeyring(t, seedService)
+	ref := tref("unbound-preview-audit-fallback")
+	putSecret(t, seedService, PutSecretInput{Ref: ref, Value: []byte("value")})
+	base.audits = nil
+	beforeRevision := base.revision
+
+	store := &failFirstAuditStore{fakeStore: base}
+	s := New(store, zap.NewNop(), "test")
+	result, err := s.PreviewSecretUnboundVersions(context.Background(), adminPrincipal(), ref)
+	if !errors.Is(err, domain.ErrFailedPrecondition) || result.Revision != 0 || len(result.AffectedVersions) != 0 {
+		t.Fatalf("preview = %+v err=%v, want empty failed-precondition response", result, err)
+	}
+	if store.calls != 2 {
+		t.Fatalf("audit append calls = %d, want failed allow plus error fallback", store.calls)
+	}
+	if base.revision != beforeRevision || len(base.audits) != 1 {
+		t.Fatalf("preview revision=%d audits=%+v", base.revision, base.audits)
+	}
+	audit := base.audits[0]
+	if audit.EventType != "secret.unbound_versions.preview" || audit.Decision != "error" || audit.ResourceNamespaceID != base.namespaces[tns.String()].ID ||
+		audit.ResourceVersion != 0 || audit.Metadata != "{}" {
+		t.Fatalf("fallback audit = %+v", audit)
+	}
+}
+
 func TestBindingLifecycleAllowAuditsRemainMandatoryWhenGeneralAuditDisabled(t *testing.T) {
 	store := newFakeStore()
 	s := newTestService(store)
@@ -1146,13 +1173,13 @@ func TestBindingLifecycleAllowAuditsRemainMandatoryWhenGeneralAuditDisabled(t *t
 	if _, err := s.BindSecret(context.Background(), adminPrincipal(), ref, 1, testBindingKeyA); err != nil {
 		t.Fatalf("bind: %v", err)
 	}
-	if _, err := s.PreviewSecretBindingCohort(context.Background(), adminPrincipal(), ref, 1, testBindingKeyA); err != nil {
+	if _, err := s.PreviewSecretBindingCohort(context.Background(), adminPrincipal(), ref, 2, testBindingKeyA); err != nil {
 		t.Fatalf("preview: %v", err)
 	}
-	if _, err := s.RotateSecretBindingKey(context.Background(), adminPrincipal(), ref, 1, testBindingKeyA, testBindingKeyB, nil, nil); err != nil {
+	if _, err := s.RotateSecretBindingKey(context.Background(), adminPrincipal(), ref, 2, testBindingKeyA, testBindingKeyB); err != nil {
 		t.Fatalf("rotate: %v", err)
 	}
-	if _, err := s.UnbindSecret(context.Background(), adminPrincipal(), ref, 1, testBindingKeyB); err != nil {
+	if _, err := s.UnbindSecret(context.Background(), adminPrincipal(), ref, 3, testBindingKeyB); err != nil {
 		t.Fatalf("unbind: %v", err)
 	}
 	wantEvents := []string{"secret.bind", "secret.binding_cohort.preview", "secret.binding_key.rotate", "secret.unbind"}
@@ -1171,11 +1198,15 @@ func TestPurgeCleanupPendingReturnsCommittedResultAndWakes(t *testing.T) {
 	s, hub := newTestServiceWithHub(t, store)
 	ref := tref("purge-cleanup-pending")
 	putSecret(t, s, PutSecretInput{Ref: ref, Value: []byte("value"), BindingKey: testBindingKeyA})
+	preview, err := s.PreviewSecretBindingCohort(context.Background(), adminPrincipal(), ref, 1, testBindingKeyA)
+	if err != nil {
+		t.Fatalf("preview: %v", err)
+	}
 	hub.wakes = 0
 	store.purgeResultErr = storage.ErrPurgeCleanupPending
 	auditsBefore := len(store.audits)
 
-	result, err := s.PurgeSecretBindingCohort(context.Background(), adminPrincipal(), ref, 1, testBindingKeyA, nil, nil)
+	result, err := s.PurgeSecretBindingCohort(context.Background(), adminPrincipal(), ref, 1, testBindingKeyA, new(preview.Revision), preview.AffectedVersions)
 	if err != storage.ErrPurgeCleanupPending {
 		t.Fatalf("error = %#v, want canonical ErrPurgeCleanupPending", err)
 	}
@@ -1196,7 +1227,7 @@ func TestPurgeCleanupPendingReturnsCommittedResultAndWakes(t *testing.T) {
 	}
 }
 
-func TestBindingMutationSerializesWithPut(t *testing.T) {
+func TestBindingMutationAbortsWhenConcurrentPutAdvancesCurrent(t *testing.T) {
 	ctx := context.Background()
 	store := newFakeStore()
 	s := newTestService(store)
@@ -1228,15 +1259,15 @@ func TestBindingMutationSerializesWithPut(t *testing.T) {
 	}()
 	select {
 	case <-enteredPut:
-		t.Fatal("put entered storage while binding mutation held the key-write lock")
-	case <-time.After(100 * time.Millisecond):
-	}
-	close(releaseMutation)
-	if err := <-bindDone; err != nil {
-		t.Fatalf("BindSecret: %v", err)
+	case <-time.After(time.Second):
+		t.Fatal("put did not enter storage while transition was preparing")
 	}
 	if err := <-putDone; err != nil {
 		t.Fatalf("PutSecret: %v", err)
+	}
+	close(releaseMutation)
+	if err := <-bindDone; !errors.Is(err, domain.ErrAborted) {
+		t.Fatalf("BindSecret error = %v, want aborted stale-current guard", err)
 	}
 }
 
@@ -1261,13 +1292,13 @@ func TestBindingLifecycleRequiresExplicitBindingManageAuthorization(t *testing.T
 	if _, err := s.BindSecret(ctx, client, ref, 1, testBindingKeyA); err != nil {
 		t.Fatalf("authorized bind: %v", err)
 	}
-	if _, err := s.PreviewSecretBindingCohort(ctx, client, ref, 1, testBindingKeyA); err != nil {
+	if _, err := s.PreviewSecretBindingCohort(ctx, client, ref, 2, testBindingKeyA); err != nil {
 		t.Fatalf("authorized preview: %v", err)
 	}
-	if _, err := s.RotateSecretBindingKey(ctx, client, ref, 1, testBindingKeyA, testBindingKeyB, nil, nil); err != nil {
+	if _, err := s.RotateSecretBindingKey(ctx, client, ref, 2, testBindingKeyA, testBindingKeyB); err != nil {
 		t.Fatalf("authorized rotate: %v", err)
 	}
-	if _, err := s.UnbindSecret(ctx, client, ref, 1, testBindingKeyB); err != nil {
+	if _, err := s.UnbindSecret(ctx, client, ref, 3, testBindingKeyB); err != nil {
 		t.Fatalf("authorized unbind: %v", err)
 	}
 }
@@ -1286,13 +1317,13 @@ func TestBindingLifecycleAcceptsSecretWildcardAuthorization(t *testing.T) {
 	if _, err := s.BindSecret(ctx, client, ref, 1, testBindingKeyA); err != nil {
 		t.Fatalf("wildcard-authorized bind: %v", err)
 	}
-	if _, err := s.PreviewSecretBindingCohort(ctx, client, ref, 1, testBindingKeyA); err != nil {
+	if _, err := s.PreviewSecretBindingCohort(ctx, client, ref, 2, testBindingKeyA); err != nil {
 		t.Fatalf("wildcard-authorized preview: %v", err)
 	}
-	if _, err := s.RotateSecretBindingKey(ctx, client, ref, 1, testBindingKeyA, testBindingKeyB, nil, nil); err != nil {
+	if _, err := s.RotateSecretBindingKey(ctx, client, ref, 2, testBindingKeyA, testBindingKeyB); err != nil {
 		t.Fatalf("wildcard-authorized rotate: %v", err)
 	}
-	if _, err := s.UnbindSecret(ctx, client, ref, 1, testBindingKeyB); err != nil {
+	if _, err := s.UnbindSecret(ctx, client, ref, 3, testBindingKeyB); err != nil {
 		t.Fatalf("wildcard-authorized unbind: %v", err)
 	}
 }

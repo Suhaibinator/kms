@@ -101,6 +101,7 @@ func TestPurgeCleanupPendingRequiresExactStatusAndPurgeCall(t *testing.T) {
 
 func TestBindingLifecycleCommandsRedactHostileRemoteDetails(t *testing.T) {
 	preview := &kmsv1.SecretBindingCohortResponse{AnchorVersion: 5, AffectedVersions: []uint64{4, 5}, Revision: 71}
+	setPreview := &kmsv1.SecretVersionSetResponse{AffectedVersions: []uint64{1, 3}, Revision: 71}
 	remoteErr := hostileSecretRPCError(codes.PermissionDenied)
 	for _, tc := range []struct {
 		name string
@@ -110,13 +111,15 @@ func TestBindingLifecycleCommandsRedactHostileRemoteDetails(t *testing.T) {
 	}{
 		{name: "bind", args: []string{"secret", "bind", "/prod/app/key", "--insecure"}, set: func(s *bindingSecretStub) { s.bindErr = remoteErr }, env: map[string]string{bindingKeyEnv: testOldBindingKey}},
 		{name: "unbind", args: []string{"secret", "unbind", "/prod/app/key", "--insecure"}, set: func(s *bindingSecretStub) { s.unbindErr = remoteErr }, env: map[string]string{bindingKeyEnv: testOldBindingKey}},
-		{name: "rotate preview", args: []string{"binding-key", "rotate", "/prod/app/key", "--yes", "--insecure"}, set: func(s *bindingSecretStub) { s.previewErr = remoteErr }, env: map[string]string{bindingKeyEnv: testOldBindingKey}},
+		{name: "rotate metadata", args: []string{"binding-key", "rotate", "/prod/app/key", "--yes", "--insecure"}, set: func(s *bindingSecretStub) { s.metadataErr = remoteErr }, env: map[string]string{bindingKeyEnv: testOldBindingKey}},
 		{name: "rotate", args: []string{"binding-key", "rotate", "/prod/app/key", "--yes", "--insecure"}, set: func(s *bindingSecretStub) { s.rotateErr = remoteErr }, env: map[string]string{bindingKeyEnv: testOldBindingKey, newBindingKeyEnv: testNewBindingKey}},
 		{name: "purge preview", args: []string{"secret", "purge-binding-cohort", "/prod/app/key", "--yes", "--insecure"}, set: func(s *bindingSecretStub) { s.previewErr = remoteErr }, env: map[string]string{bindingKeyEnv: testOldBindingKey}},
 		{name: "purge", args: []string{"secret", "purge-binding-cohort", "/prod/app/key", "--yes", "--insecure"}, set: func(s *bindingSecretStub) { s.purgeErr = remoteErr }, env: map[string]string{bindingKeyEnv: testOldBindingKey}},
+		{name: "unbound purge preview", args: []string{"secret", "purge-unbound-versions", "/prod/app/key", "--yes", "--insecure"}, set: func(s *bindingSecretStub) { s.setPreviewErr = remoteErr }},
+		{name: "unbound purge", args: []string{"secret", "purge-unbound-versions", "/prod/app/key", "--yes", "--insecure"}, set: func(s *bindingSecretStub) { s.setPurgeErr = remoteErr }},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			stub := &bindingSecretStub{previewResp: preview}
+			stub := &bindingSecretStub{metadata: bindingMetadataFor("key", 5), previewResp: preview, setPreview: setPreview}
 			tc.set(stub)
 			c := newBindingCLI(t, stub)
 			c.lookupEnv = mapLookup(tc.env)
