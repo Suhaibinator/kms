@@ -182,10 +182,10 @@ export default function HealthPage() {
               </p>
               <p>
                 <strong>Bound secret versions</strong> additionally require their operator-supplied
-                binding key. There is no escrow — if the master key or a cohort&apos;s binding key is
-                lost, those versions are permanently unrecoverable. Per-secret access tokens remain
-                an independent optional gate. Restore procedures should verify that the master key
-                provider is reachable before the service reports ready.
+                binding key. There is no escrow — if the master key or a cohort&apos;s binding key
+                is lost, those versions are permanently unrecoverable. Per-secret access tokens
+                remain an independent optional gate. Restore procedures should verify that the
+                master key provider is reachable before the service reports ready.
               </p>
             </div>
           </div>
