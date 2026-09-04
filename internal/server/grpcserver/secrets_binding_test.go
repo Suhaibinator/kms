@@ -320,3 +320,58 @@ func TestPurgeCleanupPendingMapsAcrossGRPC(t *testing.T) {
 		t.Fatalf("cleanup pending = %+v, %v", response, err)
 	}
 }
+
+func TestSecretMetadataSelectors(t *testing.T) {
+	env := newTestEnv(t, true)
+	env.store.addNamespace(domain.NamespaceRef{Env: "prod", App: "svc"})
+	client := env.secret()
+	ref := pRef("prod", "svc", "metadata")
+	for _, key := range []string{"", grpcBindingKeyA} {
+		if _, err := client.PutSecret(adminCtx(), &kmsv1.PutSecretRequest{Ref: ref, Value: []byte("value"), BindingKey: key}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, tc := range []struct {
+		name        string
+		version     uint64
+		label       string
+		wantVersion uint64
+		wantBound   bool
+		wantCode    codes.Code
+	}{
+		{name: "exact", version: 1, wantVersion: 1},
+		{name: "current", label: "current", wantVersion: 2, wantBound: true},
+		{name: "previous", label: "previous", wantVersion: 1},
+		{name: "missing label", label: "missing", wantCode: codes.NotFound},
+		{name: "missing version", version: 99, wantCode: codes.NotFound},
+		{name: "conflicting selectors", version: 1, label: "current", wantCode: codes.InvalidArgument},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			resp, err := client.GetSecretMetadata(adminCtx(), &kmsv1.GetSecretMetadataRequest{Ref: ref, Version: tc.version, Label: tc.label})
+			if status.Code(err) != tc.wantCode {
+				t.Fatalf("error = %v, want %s", err, tc.wantCode)
+			}
+			if err != nil {
+				return
+			}
+			info := resp.GetSecret()
+			if len(info.GetVersions()) != 1 || info.GetVersions()[0].GetVersion() != tc.wantVersion || info.GetBound() != tc.wantBound || info.GetVersions()[0].GetBound() != tc.wantBound {
+				t.Fatalf("incorrect selected metadata: %v", info)
+			}
+			wantLabels := map[string]uint64(nil)
+			if tc.label != "" {
+				wantLabels = map[string]uint64{tc.label: tc.wantVersion}
+			}
+			if !reflect.DeepEqual(info.GetLabels(), wantLabels) {
+				t.Fatalf("labels = %v, want %v", info.GetLabels(), wantLabels)
+			}
+		})
+	}
+	full, err := client.GetSecretMetadata(adminCtx(), &kmsv1.GetSecretMetadataRequest{Ref: ref})
+	if err != nil || len(full.GetSecret().GetVersions()) != 2 || len(full.GetSecret().GetLabels()) != 2 {
+		t.Fatalf("full history changed: %v, %v", full, err)
+	}
+	if _, err := client.GetSecretMetadata(context.Background(), &kmsv1.GetSecretMetadataRequest{Ref: ref, Label: "current"}); status.Code(err) != codes.Unauthenticated {
+		t.Fatalf("unauthenticated label read: %v", err)
+	}
+}

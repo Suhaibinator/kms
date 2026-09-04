@@ -917,7 +917,7 @@ func (m *memStore) GetSecretInfo(_ context.Context, ref domain.Ref) (domain.Secr
 	return m.secretInfoLocked(row), nil
 }
 
-func (m *memStore) GetSecretVersionInfo(_ context.Context, ref domain.Ref, version uint64) (domain.Secret, error) {
+func (m *memStore) GetSecretVersionInfo(_ context.Context, ref domain.Ref, version uint64, label string) (domain.Secret, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	row := m.secrets[ref.String()]
@@ -925,10 +925,16 @@ func (m *memStore) GetSecretVersionInfo(_ context.Context, ref domain.Ref, versi
 		return domain.Secret{}, domain.Errorf(domain.ErrNotFound, "secret %s", ref)
 	}
 	info := m.secretInfoLocked(row)
+	if label != "" {
+		version = info.Labels[label]
+	}
 	for _, candidate := range info.Versions {
 		if candidate.Version == version {
 			info.Bound = candidate.Bound
 			info.Labels = nil
+			if label != "" {
+				info.Labels = map[string]uint64{label: version}
+			}
 			info.Versions = []domain.SecretVersionInfo{candidate}
 			return info, nil
 		}

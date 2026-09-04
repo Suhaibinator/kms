@@ -343,7 +343,7 @@ func (c *CLI) cmdSecretPurgeUnboundVersions(args []string) int {
 
 func (c *CLI) readCurrentSecretVersion(client kmsv1.SecretServiceClient, cf *connFlags, ref domain.Ref, operation string) (uint64, int) {
 	ctx, cancel := callContext()
-	resp, err := client.GetSecretMetadata(cf.authCtx(ctx), &kmsv1.GetSecretMetadataRequest{Ref: protoRef(ref)})
+	resp, err := client.GetSecretMetadata(cf.authCtx(ctx), &kmsv1.GetSecretMetadataRequest{Ref: protoRef(ref), Label: domain.LabelCurrent})
 	cancel()
 	if err != nil {
 		return 0, c.failSecretRPC(operation+" metadata", err)

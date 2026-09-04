@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+
+	"gopkg.in/yaml.v3"
 )
 
 const leak = "super-secret-plaintext"
@@ -182,4 +184,27 @@ func TestSecretValuePanicsBeforeInit(t *testing.T) {
 	}()
 	var sv SecretValue
 	_ = sv.Value()
+}
+
+func TestSecretYAMLRedaction(t *testing.T) {
+	const bindingKey = "binding-key-must-never-appear-in-yaml"
+	declaration := Secret{BindKey: bindingKey}
+	resolved := NewSecret([]byte(leak))
+	resolved.BindKey = bindingKey
+	for name, secret := range map[string]Secret{"declaration": declaration, "resolved": resolved, "clone": resolved.Clone()} {
+		t.Run(name, func(t *testing.T) {
+			for _, value := range []any{secret, &secret, struct {
+				Credential Secret `yaml:"credential"`
+			}{secret}, map[string]Secret{"credential": secret}} {
+				encoded, err := yaml.Marshal(value)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if strings.Contains(string(encoded), bindingKey) {
+					t.Errorf("YAML leaked binding credential: %s", encoded)
+				}
+				assertRedacted(t, "YAML", string(encoded))
+			}
+		})
+	}
 }

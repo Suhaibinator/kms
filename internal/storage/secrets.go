@@ -383,11 +383,12 @@ func (s *SQLStore) GetSecretInfo(ctx context.Context, ref domain.Ref) (domain.Se
 }
 
 // GetSecretVersionInfo returns a bounded metadata-only projection for one
-// exact version. It deliberately does not resolve or load labels, so an
-// unrelated corrupt current label cannot make a historical release pin fail.
-func (s *SQLStore) GetSecretVersionInfo(ctx context.Context, ref domain.Ref, version uint64) (domain.Secret, error) {
-	if version == 0 {
-		return domain.Secret{}, domain.Errorf(domain.ErrInvalidArgument, "secret version must be greater than zero")
+// selected version. A label is resolved in the same transaction as its metadata.
+// Exact version requests never load labels, so unrelated current-label corruption
+// cannot make a historical release pin fail.
+func (s *SQLStore) GetSecretVersionInfo(ctx context.Context, ref domain.Ref, version uint64, label string) (domain.Secret, error) {
+	if (version == 0 && label == "") || (version != 0 && label != "") {
+		return domain.Secret{}, domain.Errorf(domain.ErrInvalidArgument, "exactly one secret version or label is required")
 	}
 	var out domain.Secret
 	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
@@ -402,6 +403,17 @@ func (s *SQLStore) GetSecretVersionInfo(ctx context.Context, ref domain.Ref, ver
 				return domain.Errorf(domain.ErrNotFound, "secret %s", ref)
 			}
 			return err
+		}
+
+		if label != "" {
+			var selected secretLabelModel
+			if err := tx.Select("version_number").Where("secret_id = ? AND label = ?", sec.ID, label).First(&selected).Error; err != nil {
+				if errors.Is(err, gorm.ErrRecordNotFound) {
+					return domain.Errorf(domain.ErrNotFound, "secret %s label %q", ref, label)
+				}
+				return err
+			}
+			version = uint64(selected.VersionNumber)
 		}
 		var ver secretVersionModel
 		if err := tx.Select("version_number", "state", "created_by", "created_at", "destroyed_at", "expires_at", "metadata_json", "bound", "has_access_token").
@@ -422,6 +434,9 @@ func (s *SQLStore) GetSecretVersionInfo(ctx context.Context, ref domain.Ref, ver
 			HasAccessToken: sec.AccessTokenHash != nil, Metadata: sec.MetadataJSON,
 			CreatedAt: parseTime(sec.CreatedAt), UpdatedAt: parseTime(sec.UpdatedAt),
 			Versions: []domain.SecretVersionInfo{info},
+		}
+		if label != "" {
+			out.Labels = map[string]uint64{label: version}
 		}
 		return nil
 	}, &sql.TxOptions{ReadOnly: true})

@@ -1841,10 +1841,14 @@ func (x *DestroySecretVersionResponse) GetRevision() uint64 {
 type GetSecretMetadataRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	Ref   *ResourceRef           `protobuf:"bytes,1,opt,name=ref,proto3" json:"ref,omitempty"`
-	// 0 returns full history. A non-zero value returns only this exact version:
+	// With no version or label, returns full history. A non-zero version returns
+	// only this exact version:
 	// labels are omitted, versions contains exactly one item, and the envelope's
 	// bound field describes that requested version rather than the current label.
-	Version       uint64 `protobuf:"varint,2,opt,name=version,proto3" json:"version,omitempty"`
+	Version uint64 `protobuf:"varint,2,opt,name=version,proto3" json:"version,omitempty"`
+	// Mutually exclusive with version. Returns only the version selected by this
+	// label and its label mapping, resolved together in one database snapshot.
+	Label         string `protobuf:"bytes,3,opt,name=label,proto3" json:"label,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1891,6 +1895,13 @@ func (x *GetSecretMetadataRequest) GetVersion() uint64 {
 		return x.Version
 	}
 	return 0
+}
+
+func (x *GetSecretMetadataRequest) GetLabel() string {
+	if x != nil {
+		return x.Label
+	}
+	return ""
 }
 
 type GetSecretMetadataResponse struct {
@@ -9169,10 +9180,11 @@ const file_kms_v1_kms_proto_rawDesc = "" +
 	"\x03ref\x18\x01 \x01(\v2\x13.kms.v1.ResourceRefR\x03ref\x12\x18\n" +
 	"\aversion\x18\x02 \x01(\x04R\aversion\":\n" +
 	"\x1cDestroySecretVersionResponse\x12\x1a\n" +
-	"\brevision\x18\x01 \x01(\x04R\brevision\"[\n" +
+	"\brevision\x18\x01 \x01(\x04R\brevision\"q\n" +
 	"\x18GetSecretMetadataRequest\x12%\n" +
 	"\x03ref\x18\x01 \x01(\v2\x13.kms.v1.ResourceRefR\x03ref\x12\x18\n" +
-	"\aversion\x18\x02 \x01(\x04R\aversion\"K\n" +
+	"\aversion\x18\x02 \x01(\x04R\aversion\x12\x14\n" +
+	"\x05label\x18\x03 \x01(\tR\x05label\"K\n" +
 	"\x19GetSecretMetadataResponse\x12.\n" +
 	"\x06secret\x18\x01 \x01(\v2\x16.kms.v1.SecretMetadataR\x06secret\"^\n" +
 	"\x1bPromoteSecretVersionRequest\x12%\n" +

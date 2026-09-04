@@ -450,8 +450,12 @@ func (c *CLI) cmdGetSecret(args []string) int {
 	defer func() { _ = conn.Close() }()
 
 	client := kmsv1.NewSecretServiceClient(conn)
+	metadataLabel := *label
+	if *version == 0 && metadataLabel == "" {
+		metadataLabel = "current"
+	}
 	metadataCtx, cancelMetadata := callContext()
-	metadataResp, err := client.GetSecretMetadata(cf.authCtx(metadataCtx), &kmsv1.GetSecretMetadataRequest{Ref: protoRef(ref)})
+	metadataResp, err := client.GetSecretMetadata(cf.authCtx(metadataCtx), &kmsv1.GetSecretMetadataRequest{Ref: protoRef(ref), Version: *version, Label: metadataLabel})
 	cancelMetadata()
 	if err != nil {
 		return c.failErr("get-secret", err)

@@ -550,7 +550,7 @@ describe("protocol-faithful gRPC integration", () => {
         },
       ]);
       expect(secretMetadataRequests).toEqual([
-        { ref: { namespace, key: "password" }, version: 0n },
+        { ref: { namespace, key: "password" }, version: 0n, label: "" },
       ]);
       expect(putSecretRequests).toEqual([
         {

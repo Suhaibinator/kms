@@ -685,19 +685,19 @@ func (s *Service) GetSecretInfo(ctx context.Context, pr Principal, ref domain.Re
 	return s.store.GetSecretInfo(ctx, ref)
 }
 
-// GetSecretVersionInfo returns metadata for one exact version (no values).
-func (s *Service) GetSecretVersionInfo(ctx context.Context, pr Principal, ref domain.Ref, version uint64) (domain.Secret, error) {
+// GetSecretVersionInfo returns metadata for one version selected by number or label (no values).
+func (s *Service) GetSecretVersionInfo(ctx context.Context, pr Principal, ref domain.Ref, version uint64, label string) (domain.Secret, error) {
 	if err := validateRef(ref); err != nil {
 		return domain.Secret{}, err
 	}
-	if version == 0 {
-		return domain.Secret{}, domain.Errorf(domain.ErrInvalidArgument, "secret version must be greater than zero")
+	if (version == 0 && label == "") || (version != 0 && label != "") {
+		return domain.Secret{}, domain.Errorf(domain.ErrInvalidArgument, "exactly one secret version or label is required")
 	}
 	ctx, _, err := s.authorize(ctx, pr, domain.OpSecretRead, domain.ResourceSecret, ref)
 	if err != nil {
 		return domain.Secret{}, err
 	}
-	return s.store.GetSecretVersionInfo(ctx, ref, version)
+	return s.store.GetSecretVersionInfo(ctx, ref, version, label)
 }
 
 // DeleteSecret removes a secret and all versions (ciphertext included).

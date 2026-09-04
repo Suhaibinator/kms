@@ -268,10 +268,14 @@ message DestroySecretVersionResponse {
 
 message GetSecretMetadataRequest {
   ResourceRef ref = 1;
-  // 0 returns full history. A non-zero value returns only this exact version:
+  // With no version or label, returns full history. A non-zero version returns
+  // only this exact version:
   // labels are omitted, versions contains exactly one item, and the envelope's
   // bound field describes that requested version rather than the current label.
   uint64 version = 2;
+  // Mutually exclusive with version. Returns only the version selected by this
+  // label and its label mapping, resolved together in one database snapshot.
+  string label = 3;
 }
 
 message GetSecretMetadataResponse {

@@ -225,7 +225,7 @@ func (c *CLI) resolveEnvironment(ctx context.Context, conn *grpc.ClientConn, cf 
 			s := selected
 			path := displayPath(s.ref)
 			if !s.protectionKnown {
-				metadataResp, err := client.GetSecretMetadata(cf.authCtx(ctx), &kmsv1.GetSecretMetadataRequest{Ref: s.ref})
+				metadataResp, err := client.GetSecretMetadata(cf.authCtx(ctx), &kmsv1.GetSecretMetadataRequest{Ref: s.ref, Version: s.version})
 				if err != nil {
 					return resolvedEnvironment{}, fmt.Errorf("secret %s metadata: %w", path, err)
 				}

@@ -11,9 +11,9 @@ import (
 const redactedText = "[REDACTED]"
 
 // Secret holds secret plaintext together with non-sensitive metadata. It is
-// deliberately hard to leak: its String, GoString, Format and MarshalJSON
-// implementations all emit "[REDACTED]", so it is safe to pass to fmt.Printf,
-// structured loggers, or json.Marshal. Plaintext is only accessible through
+// deliberately hard to leak: its formatting, JSON, and YAML implementations
+// all emit "[REDACTED]", so it is safe to pass to fmt.Printf, structured loggers,
+// json.Marshal, or yaml.Marshal. Plaintext is only accessible through
 // the explicit Value / StringValue accessors.
 //
 // Secret is a value type; copies redact identically.
@@ -84,4 +84,9 @@ func (s Secret) MarshalJSON() ([]byte, error) {
 // MarshalJSONTo is the streaming JSON v2 equivalent of MarshalJSON.
 func (s Secret) MarshalJSONTo(out *jsontext.Encoder) error {
 	return json.MarshalEncode(out, redactedText)
+}
+
+// MarshalYAML redacts both plaintext and declaration credentials in YAML exports.
+func (s Secret) MarshalYAML() (any, error) {
+	return redactedText, nil
 }

@@ -222,7 +222,7 @@ func (f *fakeStore) GetSecretVersion(context.Context, domain.Ref, uint64, string
 func (f *fakeStore) GetSecretInfo(context.Context, domain.Ref) (domain.Secret, error) {
 	panic("unused")
 }
-func (f *fakeStore) GetSecretVersionInfo(context.Context, domain.Ref, uint64) (domain.Secret, error) {
+func (f *fakeStore) GetSecretVersionInfo(context.Context, domain.Ref, uint64, string) (domain.Secret, error) {
 	panic("unused")
 }
 func (f *fakeStore) ListSecrets(context.Context, domain.NamespaceRef, string, storage.ListPage) ([]domain.Secret, string, error) {

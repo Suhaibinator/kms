@@ -481,15 +481,21 @@ func (s *fakeStore) GetSecretInfo(_ context.Context, ref domain.Ref) (domain.Sec
 	return s.secretMeta(sec), nil
 }
 
-func (s *fakeStore) GetSecretVersionInfo(ctx context.Context, ref domain.Ref, version uint64) (domain.Secret, error) {
+func (s *fakeStore) GetSecretVersionInfo(ctx context.Context, ref domain.Ref, version uint64, label string) (domain.Secret, error) {
 	info, err := s.GetSecretInfo(ctx, ref)
 	if err != nil {
 		return domain.Secret{}, err
+	}
+	if label != "" {
+		version = info.Labels[label]
 	}
 	for _, candidate := range info.Versions {
 		if candidate.Version == version {
 			info.Bound = candidate.Bound
 			info.Labels = nil
+			if label != "" {
+				info.Labels = map[string]uint64{label: version}
+			}
 			info.Versions = []domain.SecretVersionInfo{candidate}
 			return info, nil
 		}
