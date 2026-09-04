@@ -221,6 +221,57 @@ class _AsyncPurgeStub:
         raise self._error
 
 
+@pytest.mark.parametrize("options", ({}, {"label": "previous"}), ids=("default", "label"))
+def test_sync_secret_read_rejects_zero_response_version(options):
+    plaintext = "zero-version-plaintext-must-not-return"
+    client = Client(channel=mock.MagicMock(), namespace=NS)
+
+    def get_secret(request, **_kwargs):
+        return kms_pb2.GetSecretResponse(
+            ref=request.ref,
+            version=0,
+            value=plaintext.encode(),
+            content_type="text/plain",
+        )
+
+    client._secret_stub = SimpleNamespace(GetSecret=get_secret)
+    try:
+        with pytest.raises(ParamStoreError) as caught:
+            client.get_secret("key", **options)
+        assert caught.value.code == "internal"
+        assert str(caught.value) == "KMS secret response contained an invalid version"
+        assert plaintext not in str(caught.value) + repr(caught.value)
+    finally:
+        client.close()
+
+
+def test_async_secret_read_rejects_zero_response_version_for_default_and_label():
+    async def exercise() -> None:
+        plaintext = "async-zero-version-plaintext-must-not-return"
+        client = AsyncClient(channel=mock.MagicMock(), namespace=NS)
+
+        async def get_secret(request, **_kwargs):
+            return kms_pb2.GetSecretResponse(
+                ref=request.ref,
+                version=0,
+                value=plaintext.encode(),
+                content_type="text/plain",
+            )
+
+        client._secret_stub = SimpleNamespace(GetSecret=get_secret)
+        try:
+            for options in ({}, {"label": "previous"}):
+                with pytest.raises(ParamStoreError) as caught:
+                    await client.get_secret("key", **options)
+                assert caught.value.code == "internal"
+                assert str(caught.value) == "KMS secret response contained an invalid version"
+                assert plaintext not in str(caught.value) + repr(caught.value)
+        finally:
+            await client.close()
+
+    asyncio.run(exercise())
+
+
 def test_all_sync_secret_bearing_rpcs_discard_reflected_remote_details():
     plaintext = "secret-plaintext-reflection-canary"
     token = "secret-token-reflection-canary"

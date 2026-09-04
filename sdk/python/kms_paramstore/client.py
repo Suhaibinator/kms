@@ -1026,5 +1026,12 @@ def _assert_read_identity(
 ) -> None:
     if (env, app, key) != (ref.ns.env, ref.ns.app, ref.key):
         raise errors.ParamStoreError(f"KMS {kind} response identity mismatch", code="internal")
+    if (
+        isinstance(returned_version, bool)
+        or not isinstance(returned_version, int)
+        or returned_version <= 0
+        or returned_version >= 2**64
+    ):
+        raise errors.ParamStoreError(f"KMS {kind} response contained an invalid version", code="internal")
     if requested_version and returned_version != requested_version:
         raise errors.ParamStoreError(f"KMS {kind} response version mismatch", code="internal")
