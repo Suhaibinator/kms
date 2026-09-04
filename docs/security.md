@@ -538,7 +538,7 @@ no per-key scoping. Each rule is an `(operation, env, app)` tuple:
   matching even multi-segment admin ops), or the global wildcard `*`. The
   known operations are
   `parameter:{read,write,list,delete}`,
-  `secret:{read,write,list,disable,destroy,promote}`,
+  `secret:{read,write,list,disable,destroy,promote,binding-manage}`,
   `configuration-release:{create,read,validate,activate,list,watch,verify-defaults}`, and
   `admin:{namespace:create,namespace:update,namespace:delete,identity:cert,policy:write,audit:read,key:rotate}`
   (`domain.Op*` constants).
@@ -565,7 +565,7 @@ with no policy rule at all**. The implicit set is exactly
 subscribe rides on the same grant (it is authorized once, as a namespace-level
 `parameter:read`, when the stream registers). It applies **only** to the
 caller's own namespace — access to any *other* namespace, and every write,
-delete, disable, destroy, and promote, always requires an explicit `allow`
+delete, disable, destroy, promote, and binding management, always requires an explicit `allow`
 rule (itself namespace-level). `configuration-release:verify-defaults` is
 likewise never implicit: the verification oracle is opt-in per identity even
 in the home namespace. Deny rules still override the implicit grant
@@ -812,16 +812,23 @@ Certificate issuance is audited on both paths: the refused online attempt as
 `allow` with `{"serial": "...", "channel": "local"}` under actor identity
 `cli`. As everywhere else, none of these rows carry credential material.
 
-**Secret reads fail closed on audit failure.** For `secret.read` and
+**Secret reads and binding management fail closed on audit failure.** For `secret.read` and
 `secret.reveal` specifically, the audit event is written with
 `Service.auditStrict` *before* the plaintext is returned to the caller; if
 the audit write fails, the already-decrypted plaintext is explicitly zeroed
 (`crypto.Zero`) and the call returns `domain.ErrFailedPrecondition`
-("audit unavailable") instead of the secret. Every other audit call site
-(writes, denials, admin actions) uses the non-strict `Service.audit`, which
+("audit unavailable") instead of the secret. Most other audit call sites
+(ordinary writes, denials, and admin actions) use the non-strict `Service.audit`, which
 logs a failure loudly but does not block the underlying operation — the
 plan's requirement that "all secret reads are audited" (§28.9) is enforced
 by refusing to serve the read rather than by hoping the write succeeds.
+Binding-cohort preview similarly persists a mandatory sanitized allow audit
+before returning cohort data. Successful bind, unbind, and binding-key rotate
+operations write a fixed sanitized allow audit inside the same database
+transaction as the DEK rewrap, revision, and change log; an audit insertion
+failure rolls back the mutation. These binding-management guarantees remain
+mandatory even when general-purpose auditing is disabled. Purge uses the same
+transactional rule for its tombstones and remains administrator-only.
 Audit writes also run with `context.WithoutCancel` plus a 5s timeout, so a
 client disconnecting mid-request cannot suppress the record of what it did.
 

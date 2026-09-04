@@ -16,7 +16,12 @@ import (
 	"github.com/Suhaibinator/kms/internal/domain"
 )
 
-const purgeBindingCohortAuditEvent = "secret.binding_cohort.purge"
+const (
+	bindSecretAuditEvent         = "secret.bind"
+	unbindSecretAuditEvent       = "secret.unbind"
+	rotateBindingKeyAuditEvent   = "secret.binding_key.rotate"
+	purgeBindingCohortAuditEvent = "secret.binding_cohort.purge"
+)
 
 type purgeCleanupPendingError struct {
 	cause error
@@ -165,7 +170,38 @@ func updateSecretWrapping(tx *gorm.DB, row secretVersionModel, wrapping SecretBi
 	return nil
 }
 
-func (s *SQLStore) mutateExactSecretBinding(ctx context.Context, ref domain.Ref, version uint64, targetBound bool, rewrap SecretBindingRewrapFunc) (SecretBindingResult, error) {
+func appendSecretBindingAllowAudit(tx *gorm.DB, eventType string, sec secretModel, ref domain.Ref, anchor uint64, affected []uint64, audit SecretBindingAudit, fallbackCreatedAt time.Time) error {
+	metadata, err := affectedVersionsJSON(affected)
+	if err != nil {
+		return err
+	}
+	createdAt := audit.CreatedAt
+	if createdAt.IsZero() {
+		createdAt = fallbackCreatedAt
+	}
+	if err := appendAudit(tx, domain.AuditEvent{
+		EventType:           eventType,
+		ActorIdentity:       audit.ActorIdentity,
+		ActorType:           audit.ActorType,
+		ResourceType:        domain.ResourceSecret,
+		ResourceNamespaceID: sec.NamespaceID,
+		ResourceEnv:         ref.NS.Env,
+		ResourceApp:         ref.NS.App,
+		ResourceKey:         ref.Key,
+		ResourceVersion:     anchor,
+		Decision:            "allow",
+		SourceIP:            audit.SourceIP,
+		UserAgent:           audit.UserAgent,
+		RequestID:           audit.RequestID,
+		CreatedAt:           createdAt,
+		Metadata:            `{"affected_versions":` + metadata + `}`,
+	}); err != nil {
+		return ErrRequiredAuditUnavailable
+	}
+	return nil
+}
+
+func (s *SQLStore) mutateExactSecretBinding(ctx context.Context, ref domain.Ref, version uint64, targetBound bool, rewrap SecretBindingRewrapFunc, audit SecretBindingAudit) (SecretBindingResult, error) {
 	if rewrap == nil {
 		return SecretBindingResult{}, domain.Errorf(domain.ErrInvalidArgument, "binding rewrap callback is required")
 	}
@@ -220,6 +256,13 @@ func (s *SQLStore) mutateExactSecretBinding(ctx context.Context, ref domain.Ref,
 		if err != nil {
 			return err
 		}
+		auditEvent := unbindSecretAuditEvent
+		if targetBound {
+			auditEvent = bindSecretAuditEvent
+		}
+		if err := appendSecretBindingAllowAudit(tx, auditEvent, sec, ref, affected[0], affected, audit, now); err != nil {
+			return err
+		}
 		result = SecretBindingResult{AnchorVersion: affected[0], AffectedVersions: affected, Revision: revision}
 		return nil
 	})
@@ -230,14 +273,14 @@ func (s *SQLStore) mutateExactSecretBinding(ctx context.Context, ref domain.Ref,
 }
 
 // BindSecretVersion adds a binding-key wrapping layer to one exact version.
-func (s *SQLStore) BindSecretVersion(ctx context.Context, ref domain.Ref, version uint64, rewrap SecretBindingRewrapFunc) (SecretBindingResult, error) {
-	return s.mutateExactSecretBinding(ctx, ref, version, true, rewrap)
+func (s *SQLStore) BindSecretVersion(ctx context.Context, ref domain.Ref, version uint64, rewrap SecretBindingRewrapFunc, audit SecretBindingAudit) (SecretBindingResult, error) {
+	return s.mutateExactSecretBinding(ctx, ref, version, true, rewrap, audit)
 }
 
 // UnbindSecretVersion removes a binding-key wrapping layer from one exact
 // version after the callback has authenticated and opened it.
-func (s *SQLStore) UnbindSecretVersion(ctx context.Context, ref domain.Ref, version uint64, rewrap SecretBindingRewrapFunc) (SecretBindingResult, error) {
-	return s.mutateExactSecretBinding(ctx, ref, version, false, rewrap)
+func (s *SQLStore) UnbindSecretVersion(ctx context.Context, ref domain.Ref, version uint64, rewrap SecretBindingRewrapFunc, audit SecretBindingAudit) (SecretBindingResult, error) {
+	return s.mutateExactSecretBinding(ctx, ref, version, false, rewrap, audit)
 }
 
 // discoverSecretBindingCohort validates the anchor first, then scans adjacent
@@ -398,7 +441,7 @@ func (s *SQLStore) PreviewSecretBindingCohort(ctx context.Context, ref domain.Re
 
 // RotateSecretBindingKey rewraps every member of the rediscovered cohort in
 // one transaction while preserving each version's KEK and value payload.
-func (s *SQLStore) RotateSecretBindingKey(ctx context.Context, ref domain.Ref, anchor uint64, guard SecretBindingCASGuard, testOld SecretBindingTestFunc, rewrapNew SecretBindingRewrapFunc) (SecretBindingResult, error) {
+func (s *SQLStore) RotateSecretBindingKey(ctx context.Context, ref domain.Ref, anchor uint64, guard SecretBindingCASGuard, testOld SecretBindingTestFunc, rewrapNew SecretBindingRewrapFunc, audit SecretBindingAudit) (SecretBindingResult, error) {
 	if testOld == nil || rewrapNew == nil {
 		return SecretBindingResult{}, domain.Errorf(domain.ErrInvalidArgument, "binding test and rewrap callbacks are required")
 	}
@@ -461,6 +504,9 @@ func (s *SQLStore) RotateSecretBindingKey(ctx context.Context, ref domain.Ref, a
 		}
 		revision, err := appendSecretBindingChange(tx, sec, ref, domain.ChangeRotateBindingKey, resolvedAnchor, affected, now)
 		if err != nil {
+			return err
+		}
+		if err := appendSecretBindingAllowAudit(tx, rotateBindingKeyAuditEvent, sec, ref, resolvedAnchor, affected, audit, now); err != nil {
 			return err
 		}
 		result = SecretBindingResult{AnchorVersion: resolvedAnchor, AffectedVersions: affected, Revision: revision}
@@ -581,31 +627,7 @@ func (s *SQLStore) PurgeSecretBindingCohort(ctx context.Context, ref domain.Ref,
 			if err != nil {
 				return err
 			}
-			auditCreatedAt := audit.CreatedAt
-			if auditCreatedAt.IsZero() {
-				auditCreatedAt = now
-			}
-			metadata, err := affectedVersionsJSON(affected)
-			if err != nil {
-				return err
-			}
-			if err := appendAudit(tx, domain.AuditEvent{
-				EventType:           purgeBindingCohortAuditEvent,
-				ActorIdentity:       audit.ActorIdentity,
-				ActorType:           audit.ActorType,
-				ResourceType:        domain.ResourceSecret,
-				ResourceNamespaceID: sec.NamespaceID,
-				ResourceEnv:         ref.NS.Env,
-				ResourceApp:         ref.NS.App,
-				ResourceKey:         ref.Key,
-				ResourceVersion:     resolvedAnchor,
-				Decision:            "allow",
-				SourceIP:            audit.SourceIP,
-				UserAgent:           audit.UserAgent,
-				RequestID:           audit.RequestID,
-				CreatedAt:           auditCreatedAt,
-				Metadata:            `{"affected_versions":` + metadata + `}`,
-			}); err != nil {
+			if err := appendSecretBindingAllowAudit(tx, purgeBindingCohortAuditEvent, sec, ref, resolvedAnchor, affected, audit, now); err != nil {
 				return err
 			}
 			result = SecretBindingResult{AnchorVersion: resolvedAnchor, AffectedVersions: affected, Revision: revision}

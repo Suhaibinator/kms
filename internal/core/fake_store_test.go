@@ -3,6 +3,7 @@ package core
 import (
 	"bytes"
 	"context"
+	"encoding/json/v2"
 	"sort"
 	"sync"
 	"time"
@@ -39,9 +40,12 @@ type fakeStore struct {
 	nextNamespaceID  int64
 
 	// error injection
-	pingErr     error
-	auditErr    error
-	policiesErr error
+	pingErr  error
+	auditErr error
+	// bindingAuditErr fails only the transactional binding allow audit, so
+	// tests can distinguish it from the subsequent best-effort error audit.
+	bindingAuditErr error
+	policiesErr     error
 	// purgeResultErr simulates a post-commit purge cleanup failure: the fake
 	// applies the tombstones/audit/revision, then returns this error with the
 	// populated result just like SQLStore.
@@ -419,7 +423,7 @@ func (f *fakeStore) CreateSecretVersion(_ context.Context, p storage.CreateSecre
 	return version, f.revision, nil
 }
 
-func (f *fakeStore) BindSecretVersion(_ context.Context, ref domain.Ref, version uint64, rewrap storage.SecretBindingRewrapFunc) (storage.SecretBindingResult, error) {
+func (f *fakeStore) BindSecretVersion(_ context.Context, ref domain.Ref, version uint64, rewrap storage.SecretBindingRewrapFunc, audit storage.SecretBindingAudit) (storage.SecretBindingResult, error) {
 	if f.beforeBindingOperation != nil {
 		f.beforeBindingOperation("bind")
 	}
@@ -442,6 +446,11 @@ func (f *fakeStore) BindSecretVersion(_ context.Context, ref domain.Ref, version
 	if wrapping.KEKID != rec.KEKID || wrapping.WrapMode != domain.WrapModeBindingKey || len(wrapping.BindingKeySalt) == 0 {
 		return storage.SecretBindingResult{}, domain.Errorf(domain.ErrAborted, "secret wrapping changed concurrently")
 	}
+	f.auditMu.Lock()
+	defer f.auditMu.Unlock()
+	if err := f.requiredBindingAuditError(); err != nil {
+		return storage.SecretBindingResult{}, err
+	}
 	rec.Bound = true
 	rec.EncryptedDEK = bytes.Clone(wrapping.EncryptedDEK)
 	rec.WrapMode = wrapping.WrapMode
@@ -451,10 +460,11 @@ func (f *fakeStore) BindSecretVersion(_ context.Context, ref domain.Ref, version
 		sec.rec.Bound = true
 	}
 	f.revision++
+	f.appendBindingAuditLocked("secret.bind", ref, resolved, []uint64{resolved}, audit)
 	return storage.SecretBindingResult{AnchorVersion: resolved, AffectedVersions: []uint64{resolved}, Revision: f.revision}, nil
 }
 
-func (f *fakeStore) UnbindSecretVersion(_ context.Context, ref domain.Ref, version uint64, rewrap storage.SecretBindingRewrapFunc) (storage.SecretBindingResult, error) {
+func (f *fakeStore) UnbindSecretVersion(_ context.Context, ref domain.Ref, version uint64, rewrap storage.SecretBindingRewrapFunc, audit storage.SecretBindingAudit) (storage.SecretBindingResult, error) {
 	if f.beforeBindingOperation != nil {
 		f.beforeBindingOperation("unbind")
 	}
@@ -477,6 +487,11 @@ func (f *fakeStore) UnbindSecretVersion(_ context.Context, ref domain.Ref, versi
 	if wrapping.KEKID != rec.KEKID || wrapping.WrapMode != domain.WrapModeStandard || len(wrapping.BindingKeySalt) != 0 {
 		return storage.SecretBindingResult{}, domain.Errorf(domain.ErrAborted, "secret wrapping changed concurrently")
 	}
+	f.auditMu.Lock()
+	defer f.auditMu.Unlock()
+	if err := f.requiredBindingAuditError(); err != nil {
+		return storage.SecretBindingResult{}, err
+	}
 	rec.Bound = false
 	rec.EncryptedDEK = bytes.Clone(wrapping.EncryptedDEK)
 	rec.WrapMode = wrapping.WrapMode
@@ -486,6 +501,7 @@ func (f *fakeStore) UnbindSecretVersion(_ context.Context, ref domain.Ref, versi
 		sec.rec.Bound = false
 	}
 	f.revision++
+	f.appendBindingAuditLocked("secret.unbind", ref, resolved, []uint64{resolved}, audit)
 	return storage.SecretBindingResult{AnchorVersion: resolved, AffectedVersions: []uint64{resolved}, Revision: f.revision}, nil
 }
 
@@ -506,7 +522,7 @@ func (f *fakeStore) PreviewSecretBindingCohort(_ context.Context, ref domain.Ref
 	return storage.SecretBindingResult{AnchorVersion: resolved, AffectedVersions: affected, Revision: f.revision}, nil
 }
 
-func (f *fakeStore) RotateSecretBindingKey(_ context.Context, ref domain.Ref, anchor uint64, guard storage.SecretBindingCASGuard, testOld storage.SecretBindingTestFunc, rewrapNew storage.SecretBindingRewrapFunc) (storage.SecretBindingResult, error) {
+func (f *fakeStore) RotateSecretBindingKey(_ context.Context, ref domain.Ref, anchor uint64, guard storage.SecretBindingCASGuard, testOld storage.SecretBindingTestFunc, rewrapNew storage.SecretBindingRewrapFunc, audit storage.SecretBindingAudit) (storage.SecretBindingResult, error) {
 	if f.beforeBindingOperation != nil {
 		f.beforeBindingOperation("rotate")
 	}
@@ -541,6 +557,11 @@ func (f *fakeStore) RotateSecretBindingKey(_ context.Context, ref domain.Ref, an
 		}
 		prepared[version] = wrapping
 	}
+	f.auditMu.Lock()
+	defer f.auditMu.Unlock()
+	if err := f.requiredBindingAuditError(); err != nil {
+		return storage.SecretBindingResult{}, err
+	}
 	for _, version := range affected {
 		rec := sec.versions[version]
 		wrapping := prepared[version]
@@ -551,7 +572,27 @@ func (f *fakeStore) RotateSecretBindingKey(_ context.Context, ref domain.Ref, an
 		sec.versions[version] = rec
 	}
 	f.revision++
+	f.appendBindingAuditLocked("secret.binding_key.rotate", ref, resolved, affected, audit)
 	return storage.SecretBindingResult{AnchorVersion: resolved, AffectedVersions: affected, Revision: f.revision}, nil
+}
+
+func (f *fakeStore) appendBindingAuditLocked(eventType string, ref domain.Ref, anchor uint64, affected []uint64, audit storage.SecretBindingAudit) {
+	metadata, _ := json.Marshal(affected)
+	ns := f.namespaces[ref.NS.String()]
+	f.audits = append(f.audits, domain.AuditEvent{
+		EventType: eventType, ActorIdentity: audit.ActorIdentity, ActorType: audit.ActorType,
+		ResourceType: domain.ResourceSecret, ResourceNamespaceID: ns.ID, ResourceEnv: ref.NS.Env,
+		ResourceApp: ref.NS.App, ResourceKey: ref.Key, ResourceVersion: anchor, Decision: "allow",
+		SourceIP: audit.SourceIP, UserAgent: audit.UserAgent, RequestID: audit.RequestID,
+		CreatedAt: audit.CreatedAt, Metadata: `{"affected_versions":` + string(metadata) + `}`,
+	})
+}
+
+func (f *fakeStore) requiredBindingAuditError() error {
+	if f.bindingAuditErr != nil || f.auditErr != nil {
+		return storage.ErrRequiredAuditUnavailable
+	}
+	return nil
 }
 
 func (f *fakeStore) PurgeSecretBindingCohort(_ context.Context, ref domain.Ref, anchor uint64, guard storage.SecretBindingCASGuard, test storage.SecretBindingTestFunc, audit storage.SecretBindingPurgeAudit) (storage.SecretBindingResult, error) {
@@ -576,8 +617,8 @@ func (f *fakeStore) PurgeSecretBindingCohort(_ context.Context, ref domain.Ref, 
 	}
 	f.auditMu.Lock()
 	defer f.auditMu.Unlock()
-	if f.auditErr != nil {
-		return storage.SecretBindingResult{}, f.auditErr
+	if err := f.requiredBindingAuditError(); err != nil {
+		return storage.SecretBindingResult{}, err
 	}
 
 	destroyedAt := time.Now()
@@ -606,14 +647,7 @@ func (f *fakeStore) PurgeSecretBindingCohort(_ context.Context, ref domain.Ref, 
 		sec.rec.Metadata = ""
 	}
 	f.revision++
-	ns := f.namespaces[ref.NS.String()]
-	f.audits = append(f.audits, domain.AuditEvent{
-		EventType: "secret.binding_cohort.purge", ActorIdentity: audit.ActorIdentity, ActorType: audit.ActorType,
-		ResourceType: domain.ResourceSecret, ResourceNamespaceID: ns.ID, ResourceEnv: ref.NS.Env,
-		ResourceApp: ref.NS.App, ResourceKey: ref.Key, ResourceVersion: resolved, Decision: "allow",
-		SourceIP: audit.SourceIP, UserAgent: audit.UserAgent, RequestID: audit.RequestID,
-		CreatedAt: audit.CreatedAt, Metadata: "{}",
-	})
+	f.appendBindingAuditLocked("secret.binding_cohort.purge", ref, resolved, affected, audit)
 	result := storage.SecretBindingResult{AnchorVersion: resolved, AffectedVersions: affected, Revision: f.revision}
 	return result, f.purgeResultErr
 }

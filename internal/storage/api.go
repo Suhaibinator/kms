@@ -31,6 +31,12 @@ import (
 // is closed and cannot serve further requests until it is reopened.
 var ErrPurgeCleanupPending = errors.New("secret purge committed; database artifact cleanup is pending")
 
+// ErrRequiredAuditUnavailable identifies a failed audit insert that caused a
+// binding mutation transaction to roll back. Core uses the sentinel for
+// metrics and maps it to a fixed failed-precondition response; the underlying
+// database error is never exposed to clients.
+var ErrRequiredAuditUnavailable = errors.New("required binding audit unavailable")
+
 // SecretRecord is the secret-level row.
 type SecretRecord struct {
 	ID  int64
@@ -125,10 +131,11 @@ type SecretBindingResult struct {
 	Revision         uint64
 }
 
-// SecretBindingPurgeAudit is the deliberately narrow request context storage
-// accepts for a purge. Storage supplies the fixed event/resource/decision and
-// sanitized metadata, so no caller credential can enter the durable audit row.
-type SecretBindingPurgeAudit struct {
+// SecretBindingAudit is the deliberately narrow request context storage
+// accepts for a binding mutation. Storage supplies the fixed
+// event/resource/decision and sanitized metadata, so the operation's binding
+// key fields cannot enter the durable audit row.
+type SecretBindingAudit struct {
 	ActorIdentity string
 	ActorType     string
 	SourceIP      string
@@ -136,6 +143,10 @@ type SecretBindingPurgeAudit struct {
 	RequestID     string
 	CreatedAt     time.Time
 }
+
+// SecretBindingPurgeAudit preserves the descriptive purge API name while all
+// binding mutations share the same narrow, credential-free audit envelope.
+type SecretBindingPurgeAudit = SecretBindingAudit
 
 // SecretWriteExpectation is the secret state observed by the service before it
 // prepares a write. Storage compares it inside the write transaction so an
@@ -314,15 +325,17 @@ type Store interface {
 	// BindSecretVersion and UnbindSecretVersion rewrap exactly one version in
 	// place. version 0 resolves the current label. Storage never receives the
 	// binding key; the callback receives only the persisted encrypted record.
-	BindSecretVersion(ctx context.Context, ref domain.Ref, version uint64, rewrap SecretBindingRewrapFunc) (SecretBindingResult, error)
-	UnbindSecretVersion(ctx context.Context, ref domain.Ref, version uint64, rewrap SecretBindingRewrapFunc) (SecretBindingResult, error)
+	// The fixed sanitized allow audit commits atomically with the rewrap and
+	// change-log row.
+	BindSecretVersion(ctx context.Context, ref domain.Ref, version uint64, rewrap SecretBindingRewrapFunc, audit SecretBindingAudit) (SecretBindingResult, error)
+	UnbindSecretVersion(ctx context.Context, ref domain.Ref, version uint64, rewrap SecretBindingRewrapFunc, audit SecretBindingAudit) (SecretBindingResult, error)
 
 	// PreviewSecretBindingCohort discovers the contiguous cohort around anchor
 	// (0 = current) and returns the coherent global storage revision.
 	PreviewSecretBindingCohort(ctx context.Context, ref domain.Ref, anchor uint64, test SecretBindingTestFunc) (SecretBindingResult, error)
 	// RotateSecretBindingKey rediscovers and optionally CAS-checks the cohort,
-	// then rewraps every selected DEK atomically.
-	RotateSecretBindingKey(ctx context.Context, ref domain.Ref, anchor uint64, guard SecretBindingCASGuard, testOld SecretBindingTestFunc, rewrapNew SecretBindingRewrapFunc) (SecretBindingResult, error)
+	// then rewraps every selected DEK and its fixed allow audit atomically.
+	RotateSecretBindingKey(ctx context.Context, ref domain.Ref, anchor uint64, guard SecretBindingCASGuard, testOld SecretBindingTestFunc, rewrapNew SecretBindingRewrapFunc, audit SecretBindingAudit) (SecretBindingResult, error)
 	// PurgeSecretBindingCohort rediscovers and optionally CAS-checks the cohort,
 	// writes minimal tombstones, and appends its changelog and allow-audit rows
 	// in the same transaction. It intentionally bypasses release-pin guards.

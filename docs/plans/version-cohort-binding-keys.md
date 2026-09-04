@@ -92,6 +92,28 @@ Request semantics:
 
 Missing and incorrect binding keys return the same sanitized permission/decryption errors used for other secret credentials. Errors and audit records must never echo request fields.
 
+### Authorization and audit boundary
+
+- Add the known policy operation `secret:binding-manage`. It is default-deny
+  and is never part of the implicit home-namespace grant. An administrator can
+  delegate it with an exact rule, and `secret:*` deliberately matches it.
+- Bind, unbind, preview, and rotate authorize against
+  `secret:binding-manage`; ordinary `secret:write` is insufficient. Purge
+  remains administrator-only and retains its `secret:destroy` authorization
+  check as defense in depth.
+- Authorization denials continue through the common `authz.denial` audit path.
+  Invalid arguments, unavailable keyrings, wrong keys, stale guards, and other
+  authorized failures emit the operation's sanitized `error` audit wherever
+  the audit sink remains writable. No audit row contains either binding key.
+- A successful bind, unbind, or rotate is indivisible from its fixed sanitized
+  `allow` audit: rewrapped DEKs, the secret timestamp, revision/change-log row,
+  and audit row commit in one storage transaction. Audit insertion failure
+  rolls back the entire mutation and does not wake watchers.
+- Preview is a read-only cohort oracle. Its sanitized `allow` audit is strict
+  and durable before the cohort response is returned, even if general-purpose
+  auditing is disabled; an unavailable audit sink returns the fixed
+  `FailedPrecondition` `audit unavailable` result instead of cohort data.
+
 ## Cryptographic and cohort behavior
 
 ### Version encryption
@@ -171,7 +193,7 @@ This produces the intended grouping without storing key identity. For key epochs
   encryption or media destruction for raw-device remanence. They must also
   rotate or revoke the compromised upstream application secret itself.
 - Preserve labels exactly. If `current` points into the purged cohort, current becomes unreadable; KMS never auto-promotes another version.
-- Append one transactional change-log entry describing the affected versions and one sanitized admin audit event. Neither contains the binding key.
+- Append one transactional change-log entry describing the affected versions and one sanitized admin audit event. Neither contains the binding key. This is the same fail-closed transactional-audit boundary used by bind, unbind, and rotate.
 - There is no purge-all flag and no arbitrary version list.
 - Ordinary `DestroySecretVersion` and `DeleteSecret` retain their release-reference safeguards.
 - Maintain a non-secret per-path version high-water mark even after deletion, so recreating `/env/app/key` cannot reuse version numbers and accidentally satisfy an old release pin.
@@ -561,6 +583,13 @@ The metadata lookup and secret fetch count as one unit under the existing concur
   path. Client-side equality checks are intentionally earlier and reveal only
   the caller's own arguments.
 - Cohort tests cover first/middle/last anchors, bidirectional scans, key reuse after a boundary, destroyed/missing/corrupt boundaries, disabled/expired versions, and transaction rollback.
+- Authorization tests prove `secret:binding-manage` is default-deny, absent
+  from implicit home grants, explicitly delegable, and matched by `secret:*`,
+  while `secret:write` alone cannot perform a binding lifecycle operation.
+- Audit tests prove every successful bind/unbind/rotate rolls back its
+  rewrap, revision, and change log if the audit insert fails; preview returns
+  no cohort data if its strict audit fails; and failure records remain
+  sanitized under missing, malformed, wrong, or unchanged keys.
 - Purge tests verify exact affected versions, current-label failure, immutable invalid releases, admin-only authorization, audit redaction, and version-number non-reuse.
 - SDK tests in all three languages cover:
   - Direct get/put option mapping.

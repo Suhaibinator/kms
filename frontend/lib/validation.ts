@@ -329,6 +329,7 @@ export const KNOWN_OPERATIONS = [
   "secret:disable",
   "secret:destroy",
   "secret:promote",
+  "secret:binding-manage",
   "configuration-release:create",
   "configuration-release:read",
   "configuration-release:validate",

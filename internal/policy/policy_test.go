@@ -96,6 +96,7 @@ func TestEvaluateOperationWildcards(t *testing.T) {
 	}{
 		{"secret:*", domain.OpSecretRead, true},
 		{"secret:*", domain.OpSecretDestroy, true},
+		{"secret:*", domain.OpSecretBindingManage, true},
 		{"secret:*", domain.OpParameterRead, false},
 		{"parameter:*", domain.OpParameterList, true},
 		{"admin:*", domain.OpAdminKeyRotate, true},
@@ -148,7 +149,7 @@ func TestImplicitHomeGrant(t *testing.T) {
 	}
 
 	// Writes and other mutations are NOT implicitly granted.
-	for _, op := range []string{domain.OpParameterWrite, domain.OpSecretWrite, domain.OpSecretDestroy, domain.OpParameterDelete, domain.OpConfigurationReleaseCreate, domain.OpConfigurationReleaseValidate, domain.OpConfigurationReleaseActivate, domain.OpConfigurationReleaseList, domain.OpConfigurationReleaseVerifyDefaults} {
+	for _, op := range []string{domain.OpParameterWrite, domain.OpSecretWrite, domain.OpSecretBindingManage, domain.OpSecretDestroy, domain.OpParameterDelete, domain.OpConfigurationReleaseCreate, domain.OpConfigurationReleaseValidate, domain.OpConfigurationReleaseActivate, domain.OpConfigurationReleaseList, domain.OpConfigurationReleaseVerifyDefaults} {
 		if Authorize(nil, home, op, ns("prod", "gradethis")) {
 			t.Errorf("implicit grant wrongly allowed mutation %s", op)
 		}
@@ -162,6 +163,24 @@ func TestImplicitHomeGrant(t *testing.T) {
 	// An unbound caller gets nothing implicitly.
 	if Authorize(nil, nil, domain.OpSecretRead, ns("prod", "gradethis")) {
 		t.Fatal("unbound caller got an implicit grant")
+	}
+}
+
+func TestBindingManageRequiresExplicitAllow(t *testing.T) {
+	home := &domain.NamespaceRef{Env: "prod", App: "gradethis"}
+	target := ns("prod", "gradethis")
+	if Authorize(nil, home, domain.OpSecretBindingManage, target) {
+		t.Fatal("binding-manage was implicitly granted in the home namespace")
+	}
+	p, err := ValidateRules(domain.Policy{Name: "binding-manager", Subject: "deployer", Allow: []domain.PolicyRule{rule(domain.OpSecretBindingManage, "prod", "gradethis")}})
+	if err != nil {
+		t.Fatalf("ValidateRules: %v", err)
+	}
+	if !Authorize([]domain.Policy{p}, home, domain.OpSecretBindingManage, target) {
+		t.Fatal("exact binding-manage allow was not honored")
+	}
+	if Authorize([]domain.Policy{p}, home, domain.OpSecretBindingManage, ns("prod", "other")) {
+		t.Fatal("binding-manage allow leaked into another namespace")
 	}
 }
 

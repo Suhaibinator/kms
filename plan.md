@@ -1124,6 +1124,7 @@ secret:list
 secret:disable
 secret:destroy
 secret:promote
+secret:binding-manage
 
 admin:namespace:create
 admin:policy:write

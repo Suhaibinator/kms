@@ -2,6 +2,7 @@ package grpcserver
 
 import (
 	"context"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -20,6 +21,37 @@ const (
 	grpcBindingKeyB = "binding-key-b-0123456789-0123456789"
 	grpcBindingKeyC = "binding-key-c-0123456789-0123456789"
 )
+
+func TestSecretBindingTransportAuditFailureRollsBack(t *testing.T) {
+	env := newTestEnv(t, true)
+	env.store.addNamespace(domain.NamespaceRef{Env: "prod", App: "svc"})
+	client := env.secret()
+	secretRef := pRef("prod", "svc", "audit-rollback")
+	if _, err := client.PutSecret(adminCtx(), &kmsv1.PutSecretRequest{Ref: secretRef, Value: []byte("value")}); err != nil {
+		t.Fatalf("put: %v", err)
+	}
+
+	env.store.mu.Lock()
+	row := env.store.secrets["/prod/svc/audit-rollback"]
+	before := cloneMemSecretVersion(row.versions[1])
+	beforeRevision := env.store.revision
+	env.store.auditErr = context.Canceled
+	env.store.mu.Unlock()
+
+	_, err := client.BindSecret(adminCtx(), &kmsv1.BindSecretRequest{
+		Ref: secretRef, Version: 1, BindingKey: grpcBindingKeyA,
+	})
+	if codeOf(err) != codes.FailedPrecondition || status.Convert(err).Message() != "audit unavailable: failed precondition" {
+		t.Fatalf("bind audit failure = %v, want fixed FailedPrecondition", err)
+	}
+	env.store.mu.Lock()
+	after := cloneMemSecretVersion(row.versions[1])
+	afterRevision := env.store.revision
+	env.store.mu.Unlock()
+	if !reflect.DeepEqual(after, before) || afterRevision != beforeRevision {
+		t.Fatalf("audit failure mutated version or revision: before=%+v/%d after=%+v/%d", before, beforeRevision, after, afterRevision)
+	}
+}
 
 func TestSecretBindingTransportLifecycle(t *testing.T) {
 	env := newTestEnv(t, true)
@@ -176,6 +208,25 @@ func TestSecretBindingTransportLifecycle(t *testing.T) {
 	}
 	if rotated.GetAnchorVersion() != 3 || !slices.Equal(rotated.GetAffectedVersions(), []uint64{3, 4}) || rotated.GetRevision() <= preview.GetRevision() {
 		t.Fatalf("rotate response = %+v", rotated)
+	}
+	env.store.mu.Lock()
+	audits := slices.Clone(env.store.audit)
+	env.store.mu.Unlock()
+	for _, eventType := range []string{"secret.bind", "secret.unbind", "secret.binding_key.rotate"} {
+		count := 0
+		for _, audit := range audits {
+			if audit.EventType != eventType || audit.Decision != "allow" {
+				continue
+			}
+			count++
+			if audit.ActorIdentity != "admin" || audit.ResourceNamespaceID == 0 || audit.ResourceKey != "credentials" ||
+				audit.Metadata == "" || strings.Contains(audit.Metadata, grpcBindingKeyA) || strings.Contains(audit.Metadata, grpcBindingKeyB) || strings.Contains(audit.Metadata, grpcBindingKeyC) {
+				t.Fatalf("unsafe %s allow audit = %+v", eventType, audit)
+			}
+		}
+		if count != 1 {
+			t.Fatalf("%s allow audit count = %d, want 1", eventType, count)
+		}
 	}
 
 	preview, err = client.PreviewSecretBindingCohort(adminCtx(), &kmsv1.PreviewSecretBindingCohortRequest{

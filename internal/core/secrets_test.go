@@ -520,6 +520,7 @@ func TestBindingMutationNewKeysRemainInvalidArguments(t *testing.T) {
 			putSecret(t, s, PutSecretInput{Ref: ref, Value: []byte("value")})
 			before := store.secrets[ref.String()].versions[1]
 			beforeRevision := store.revision
+			auditsBefore := len(store.audits)
 
 			_, err := s.BindSecret(context.Background(), adminPrincipal(), ref, 1, key)
 			if !errors.Is(err, domain.ErrInvalidArgument) {
@@ -527,6 +528,13 @@ func TestBindingMutationNewKeysRemainInvalidArguments(t *testing.T) {
 			}
 			if got := store.secrets[ref.String()].versions[1]; !reflect.DeepEqual(got, before) || store.revision != beforeRevision {
 				t.Fatal("invalid new bind key mutated the secret")
+			}
+			if len(store.audits) != auditsBefore+1 {
+				t.Fatalf("invalid bind key appended %d audits, want 1", len(store.audits)-auditsBefore)
+			}
+			audit := store.audits[len(store.audits)-1]
+			if audit.EventType != "secret.bind" || audit.Decision != "error" || audit.Metadata != "{}" || key != "" && strings.Contains(fmt.Sprintf("%+v", audit), key) {
+				t.Fatalf("invalid bind-key audit was absent or unsafe: %+v", audit)
 			}
 		})
 
@@ -538,6 +546,7 @@ func TestBindingMutationNewKeysRemainInvalidArguments(t *testing.T) {
 			putSecret(t, s, PutSecretInput{Ref: ref, Value: []byte("value"), BindingKey: testBindingKeyA})
 			before := store.secrets[ref.String()].versions[1]
 			beforeRevision := store.revision
+			auditsBefore := len(store.audits)
 
 			_, err := s.RotateSecretBindingKey(context.Background(), adminPrincipal(), ref, 1, testBindingKeyA, key, nil, nil)
 			if !errors.Is(err, domain.ErrInvalidArgument) {
@@ -545,6 +554,13 @@ func TestBindingMutationNewKeysRemainInvalidArguments(t *testing.T) {
 			}
 			if got := store.secrets[ref.String()].versions[1]; !reflect.DeepEqual(got, before) || store.revision != beforeRevision {
 				t.Fatal("invalid new rotation key mutated the secret")
+			}
+			if len(store.audits) != auditsBefore+1 {
+				t.Fatalf("invalid rotation key appended %d audits, want 1", len(store.audits)-auditsBefore)
+			}
+			audit := store.audits[len(store.audits)-1]
+			if audit.EventType != "secret.binding_key.rotate" || audit.Decision != "error" || audit.Metadata != "{}" || key != "" && strings.Contains(fmt.Sprintf("%+v", audit), key) {
+				t.Fatalf("invalid rotation-key audit was absent or unsafe: %+v", audit)
 			}
 		})
 	}
@@ -962,6 +978,120 @@ func TestPurgeBindingCohortRollsBackWhenAuditUnavailable(t *testing.T) {
 	}
 }
 
+func TestBindingMutationsRollBackWhenTransactionalAuditUnavailable(t *testing.T) {
+	tests := []struct {
+		name  string
+		bound bool
+		run   func(*Service, domain.Ref) error
+	}{
+		{
+			name: "bind",
+			run: func(s *Service, ref domain.Ref) error {
+				_, err := s.BindSecret(context.Background(), adminPrincipal(), ref, 1, testBindingKeyA)
+				return err
+			},
+		},
+		{
+			name: "unbind", bound: true,
+			run: func(s *Service, ref domain.Ref) error {
+				_, err := s.UnbindSecret(context.Background(), adminPrincipal(), ref, 1, testBindingKeyA)
+				return err
+			},
+		},
+		{
+			name: "rotate", bound: true,
+			run: func(s *Service, ref domain.Ref) error {
+				_, err := s.RotateSecretBindingKey(context.Background(), adminPrincipal(), ref, 1, testBindingKeyA, testBindingKeyB, nil, nil)
+				return err
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			store := newFakeStore()
+			s, hub := newTestServiceWithHub(t, store)
+			ref := tref("audit-rollback-" + tc.name)
+			in := PutSecretInput{Ref: ref, Value: []byte("value")}
+			if tc.bound {
+				in.BindingKey = testBindingKeyA
+			}
+			putSecret(t, s, in)
+			hub.wakes = 0
+			before := store.secrets[ref.String()].versions[1]
+			beforeRevision := store.revision
+			auditsBefore := len(store.audits)
+			store.auditErr = errors.New("audit unavailable")
+
+			if err := tc.run(s, ref); err == nil {
+				t.Fatal("mutation succeeded with unavailable transactional audit")
+			}
+			if got := store.secrets[ref.String()].versions[1]; !reflect.DeepEqual(got, before) {
+				t.Fatal("audit failure changed the version")
+			}
+			if store.revision != beforeRevision {
+				t.Fatalf("audit failure revision = %d, want %d", store.revision, beforeRevision)
+			}
+			if len(store.audits) != auditsBefore {
+				t.Fatalf("audit failure appended %d rows", len(store.audits)-auditsBefore)
+			}
+			if hub.wakes != 0 {
+				t.Fatalf("audit failure woke watchers %d times", hub.wakes)
+			}
+		})
+	}
+}
+
+func TestBindingCohortPreviewFailsClosedWhenAuditUnavailable(t *testing.T) {
+	store := newFakeStore()
+	s := newTestService(store)
+	withKeyring(t, s)
+	ref := tref("preview-audit-fail-closed")
+	putSecret(t, s, PutSecretInput{Ref: ref, Value: []byte("value"), BindingKey: testBindingKeyA})
+	beforeRevision := store.revision
+	store.auditErr = errors.New("audit unavailable")
+
+	result, err := s.PreviewSecretBindingCohort(context.Background(), adminPrincipal(), ref, 1, testBindingKeyA)
+	if !errors.Is(err, domain.ErrFailedPrecondition) || result.AnchorVersion != 0 || result.Revision != 0 || len(result.AffectedVersions) != 0 {
+		t.Fatalf("preview = %+v err=%v, want empty failed-precondition response", result, err)
+	}
+	if store.revision != beforeRevision {
+		t.Fatalf("read-only preview changed revision to %d, want %d", store.revision, beforeRevision)
+	}
+}
+
+func TestBindingLifecycleAllowAuditsRemainMandatoryWhenGeneralAuditDisabled(t *testing.T) {
+	store := newFakeStore()
+	s := newTestService(store)
+	withKeyring(t, s)
+	ref := tref("binding-required-audit")
+	putSecret(t, s, PutSecretInput{Ref: ref, Value: []byte("value")})
+	store.audits = nil
+	s.SetAuditEnabled(false)
+
+	if _, err := s.BindSecret(context.Background(), adminPrincipal(), ref, 1, testBindingKeyA); err != nil {
+		t.Fatalf("bind: %v", err)
+	}
+	if _, err := s.PreviewSecretBindingCohort(context.Background(), adminPrincipal(), ref, 1, testBindingKeyA); err != nil {
+		t.Fatalf("preview: %v", err)
+	}
+	if _, err := s.RotateSecretBindingKey(context.Background(), adminPrincipal(), ref, 1, testBindingKeyA, testBindingKeyB, nil, nil); err != nil {
+		t.Fatalf("rotate: %v", err)
+	}
+	if _, err := s.UnbindSecret(context.Background(), adminPrincipal(), ref, 1, testBindingKeyB); err != nil {
+		t.Fatalf("unbind: %v", err)
+	}
+	wantEvents := []string{"secret.bind", "secret.binding_cohort.preview", "secret.binding_key.rotate", "secret.unbind"}
+	if len(store.audits) != len(wantEvents) {
+		t.Fatalf("mandatory binding audits = %+v", store.audits)
+	}
+	for i, want := range wantEvents {
+		if audit := store.audits[i]; audit.EventType != want || audit.Decision != "allow" {
+			t.Fatalf("mandatory audit %d = %+v, want %s/allow", i, audit, want)
+		}
+	}
+}
+
 func TestPurgeCleanupPendingReturnsCommittedResultAndWakes(t *testing.T) {
 	store := newFakeStore()
 	s, hub := newTestServiceWithHub(t, store)
@@ -1036,7 +1166,7 @@ func TestBindingMutationSerializesWithPut(t *testing.T) {
 	}
 }
 
-func TestBindingLifecycleRequiresSecretWriteAuthorization(t *testing.T) {
+func TestBindingLifecycleRequiresExplicitBindingManageAuthorization(t *testing.T) {
 	ctx := context.Background()
 	store := newFakeStore()
 	seedTokenNS(store)
@@ -1050,6 +1180,10 @@ func TestBindingLifecycleRequiresSecretWriteAuthorization(t *testing.T) {
 		t.Fatalf("unauthorized bind err = %v", err)
 	}
 	store.addPolicy(domain.Policy{Name: "writer", Subject: "app", Allow: []domain.PolicyRule{{Operation: domain.OpSecretWrite, Env: "prod", App: "app"}}})
+	if _, err := s.BindSecret(ctx, client, ref, 1, testBindingKeyA); !errors.Is(err, domain.ErrPermissionDenied) {
+		t.Fatalf("secret:write unexpectedly authorized bind: %v", err)
+	}
+	store.addPolicy(domain.Policy{Name: "binding-manager", Subject: "app", Allow: []domain.PolicyRule{{Operation: domain.OpSecretBindingManage, Env: "prod", App: "app"}}})
 	if _, err := s.BindSecret(ctx, client, ref, 1, testBindingKeyA); err != nil {
 		t.Fatalf("authorized bind: %v", err)
 	}
@@ -1061,6 +1195,31 @@ func TestBindingLifecycleRequiresSecretWriteAuthorization(t *testing.T) {
 	}
 	if _, err := s.UnbindSecret(ctx, client, ref, 1, testBindingKeyB); err != nil {
 		t.Fatalf("authorized unbind: %v", err)
+	}
+}
+
+func TestBindingLifecycleAcceptsSecretWildcardAuthorization(t *testing.T) {
+	ctx := context.Background()
+	store := newFakeStore()
+	seedTokenNS(store)
+	s := newTestService(store)
+	withKeyring(t, s)
+	ref := tref("binding-wildcard-authz")
+	putSecret(t, s, PutSecretInput{Ref: ref, Value: []byte("v")})
+	client := clientPrincipal("app")
+	store.addPolicy(domain.Policy{Name: "secret-manager", Subject: "app", Allow: []domain.PolicyRule{{Operation: "secret:*", Env: "prod", App: "app"}}})
+
+	if _, err := s.BindSecret(ctx, client, ref, 1, testBindingKeyA); err != nil {
+		t.Fatalf("wildcard-authorized bind: %v", err)
+	}
+	if _, err := s.PreviewSecretBindingCohort(ctx, client, ref, 1, testBindingKeyA); err != nil {
+		t.Fatalf("wildcard-authorized preview: %v", err)
+	}
+	if _, err := s.RotateSecretBindingKey(ctx, client, ref, 1, testBindingKeyA, testBindingKeyB, nil, nil); err != nil {
+		t.Fatalf("wildcard-authorized rotate: %v", err)
+	}
+	if _, err := s.UnbindSecret(ctx, client, ref, 1, testBindingKeyB); err != nil {
+		t.Fatalf("wildcard-authorized unbind: %v", err)
 	}
 }
 

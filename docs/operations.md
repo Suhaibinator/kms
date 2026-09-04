@@ -174,7 +174,7 @@ log:
 | `KMS_TRUST_PROXY_HEADERS` | `--trust-proxy-headers` | `security.trust_proxy_headers` (parsed with `strconv.ParseBool`) — honor `X-Forwarded-For` for the rate-limit key and audit source IP; enable only behind a trusted reverse proxy (see [TLS and mTLS](#tls-and-mtls)) |
 | `KMS_ADMIN_REQUIRE_CLIENT_CERT` | `--admin-require-client-cert` | `security.admin_require_client_cert` (parsed with `strconv.ParseBool`) — **default `true`**; admins must present a built-in-CA client certificate in addition to their bearer token; relaxed with a warning while `tls_enabled` is false (see [Admin credentials and browser setup](#admin-credentials-and-browser-setup)) |
 | `KMS_FRONTEND_ENABLED` | `--frontend-enabled` | `frontend.enabled` |
-| `KMS_AUDIT_ENABLED` | `--audit-enabled` | `audit.enabled` |
+| `KMS_AUDIT_ENABLED` | `--audit-enabled` | `audit.enabled` — controls general-purpose auditing; binding-management mutation and cohort-preview audits remain mandatory and fail closed |
 | `KMS_AUDIT_RETAIN_DURATION` | `--audit-retain-duration` | `audit.retain_duration` (duration) — **default `0`**, which keeps audit rows forever |
 | `KMS_AUDIT_ARCHIVE_DIR` | `--audit-archive-dir` | `audit.archive_dir` — directory receiving a JSONL copy of audit rows before they are retired; empty discards them. Requires `audit.retain_duration` above 0 |
 | `KMS_METRICS_ENABLED` | `--metrics-enabled` | `metrics.enabled` (parsed with `strconv.ParseBool`) — **default `true`**; serve Prometheus metrics on `/metrics` |

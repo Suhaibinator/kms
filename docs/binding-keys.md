@@ -194,6 +194,21 @@ Every body also contains `env`, `app`, and `key`. Every successful response is
 incorrect keys collapse to the same sanitized credential/decryption boundary;
 responses, logs, metrics, and audit events never echo a key.
 
+Bind, unbind, preview, and rotate require the dedicated
+`secret:binding-manage` policy operation. It is not granted implicitly to a
+namespace's own identity: delegate it with an exact namespace rule when
+needed, or with `secret:*` when the identity intentionally manages the entire
+secret lifecycle. `secret:write` alone does not grant binding management.
+Purge remains administrator-only regardless of delegated policy.
+
+Successful bind, unbind, and rotate operations commit their sanitized allow
+audit in the same transaction as the DEK rewrap, revision, and change-log row;
+an audit insertion failure rolls the mutation back and watchers are not
+woken. Preview returns cohort information only after its sanitized allow audit
+is durable. Authorization denials and authorized failures are audited through
+the normal sanitized paths as far as the audit sink is available. Binding keys
+are never included in those rows.
+
 ## Purge erasure boundary
 
 Purge replaces each selected version with a minimal tombstone and erases its

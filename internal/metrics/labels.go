@@ -295,6 +295,7 @@ var PolicyOperations = []string{
 	domain.OpSecretDisable,
 	domain.OpSecretDestroy,
 	domain.OpSecretPromote,
+	domain.OpSecretBindingManage,
 	domain.OpConfigurationReleaseCreate,
 	domain.OpConfigurationReleaseRead,
 	domain.OpConfigurationReleaseValidate,

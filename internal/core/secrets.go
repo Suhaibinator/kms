@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"go.uber.org/zap"
 
@@ -289,12 +290,14 @@ type SecretBindingCohortResult struct {
 // rewriting its encrypted value. version 0 resolves the current label.
 func (s *Service) BindSecret(ctx context.Context, pr Principal, ref domain.Ref, version uint64, bindingKey string) (SecretVersionMutationResult, error) {
 	if err := validateRef(ref); err != nil {
+		s.auditRef(ctx, pr, "secret.bind", domain.ResourceSecret, ref, version, "error", nil)
 		return SecretVersionMutationResult{}, err
 	}
 	if err := validateNewBindingKeyArgument(bindingKey); err != nil {
+		s.auditRef(ctx, pr, "secret.bind", domain.ResourceSecret, ref, version, "error", nil)
 		return SecretVersionMutationResult{}, err
 	}
-	ctx, namespace, err := s.authorize(ctx, pr, domain.OpSecretWrite, domain.ResourceSecret, ref)
+	ctx, namespace, err := s.authorize(ctx, pr, domain.OpSecretBindingManage, domain.ResourceSecret, ref)
 	if err != nil {
 		return SecretVersionMutationResult{}, err
 	}
@@ -306,14 +309,15 @@ func (s *Service) BindSecret(ctx context.Context, pr Principal, ref domain.Ref, 
 		s.auditRefWithNamespaceID(ctx, pr, "secret.bind", domain.ResourceSecret, ref, namespace.ID, version, "error", nil)
 		return SecretVersionMutationResult{}, err
 	}
-	result, err := s.store.BindSecretVersion(ctx, ref, version, bindingRewrap(keyring, ref, bindingKey))
+	result, err := s.store.BindSecretVersion(ctx, ref, version, bindingRewrap(keyring, ref, bindingKey), secretBindingAudit(pr, s.now()))
 	s.keyWriteMu.Unlock()
 	if err != nil {
+		s.recordRequiredBindingAuditFailure(err)
 		s.auditRefWithNamespaceID(ctx, pr, "secret.bind", domain.ResourceSecret, ref, namespace.ID, version, "error", nil)
 		return SecretVersionMutationResult{}, sanitizeBindingMutationError(err)
 	}
 
-	s.auditRefWithNamespaceID(ctx, pr, "secret.bind", domain.ResourceSecret, ref, namespace.ID, result.AnchorVersion, "allow", nil)
+	s.m().AuditEvent("secret.bind", DecisionAllow)
 	s.getHub().Wake()
 	return secretVersionMutationResult(result), nil
 }
@@ -322,9 +326,10 @@ func (s *Service) BindSecret(ctx context.Context, pr Principal, ref domain.Ref, 
 // rewriting its encrypted value. version 0 resolves the current label.
 func (s *Service) UnbindSecret(ctx context.Context, pr Principal, ref domain.Ref, version uint64, bindingKey string) (SecretVersionMutationResult, error) {
 	if err := validateRef(ref); err != nil {
+		s.auditRef(ctx, pr, "secret.unbind", domain.ResourceSecret, ref, version, "error", nil)
 		return SecretVersionMutationResult{}, err
 	}
-	ctx, namespace, err := s.authorize(ctx, pr, domain.OpSecretWrite, domain.ResourceSecret, ref)
+	ctx, namespace, err := s.authorize(ctx, pr, domain.OpSecretBindingManage, domain.ResourceSecret, ref)
 	if err != nil {
 		return SecretVersionMutationResult{}, err
 	}
@@ -336,14 +341,15 @@ func (s *Service) UnbindSecret(ctx context.Context, pr Principal, ref domain.Ref
 		s.auditRefWithNamespaceID(ctx, pr, "secret.unbind", domain.ResourceSecret, ref, namespace.ID, version, "error", nil)
 		return SecretVersionMutationResult{}, err
 	}
-	result, err := s.store.UnbindSecretVersion(ctx, ref, version, bindingUnwrap(keyring, ref, bindingKey))
+	result, err := s.store.UnbindSecretVersion(ctx, ref, version, bindingUnwrap(keyring, ref, bindingKey), secretBindingAudit(pr, s.now()))
 	s.keyWriteMu.Unlock()
 	if err != nil {
+		s.recordRequiredBindingAuditFailure(err)
 		s.auditRefWithNamespaceID(ctx, pr, "secret.unbind", domain.ResourceSecret, ref, namespace.ID, version, "error", nil)
 		return SecretVersionMutationResult{}, sanitizeBindingMutationError(err)
 	}
 
-	s.auditRefWithNamespaceID(ctx, pr, "secret.unbind", domain.ResourceSecret, ref, namespace.ID, result.AnchorVersion, "allow", nil)
+	s.m().AuditEvent("secret.unbind", DecisionAllow)
 	s.getHub().Wake()
 	return secretVersionMutationResult(result), nil
 }
@@ -352,9 +358,10 @@ func (s *Service) UnbindSecret(ctx context.Context, pr Principal, ref domain.Ref
 // around anchor without changing storage. anchor 0 resolves current.
 func (s *Service) PreviewSecretBindingCohort(ctx context.Context, pr Principal, ref domain.Ref, anchor uint64, bindingKey string) (SecretBindingCohortResult, error) {
 	if err := validateRef(ref); err != nil {
+		s.auditRef(ctx, pr, "secret.binding_cohort.preview", domain.ResourceSecret, ref, anchor, "error", nil)
 		return SecretBindingCohortResult{}, err
 	}
-	ctx, namespace, err := s.authorize(ctx, pr, domain.OpSecretWrite, domain.ResourceSecret, ref)
+	ctx, namespace, err := s.authorize(ctx, pr, domain.OpSecretBindingManage, domain.ResourceSecret, ref)
 	if err != nil {
 		return SecretBindingCohortResult{}, err
 	}
@@ -365,6 +372,7 @@ func (s *Service) PreviewSecretBindingCohort(ctx context.Context, pr Principal, 
 	keyring, err := s.requireKeyring()
 	if err != nil {
 		s.keyWriteMu.RUnlock()
+		s.auditRefWithNamespaceID(ctx, pr, "secret.binding_cohort.preview", domain.ResourceSecret, ref, namespace.ID, anchor, "error", nil)
 		return SecretBindingCohortResult{}, err
 	}
 	result, err := s.store.PreviewSecretBindingCohort(ctx, ref, anchor, bindingTest(keyring, ref, bindingKey))
@@ -374,7 +382,10 @@ func (s *Service) PreviewSecretBindingCohort(ctx context.Context, pr Principal, 
 		return SecretBindingCohortResult{}, sanitizeBindingMutationError(err)
 	}
 
-	s.auditRefWithNamespaceID(ctx, pr, "secret.binding_cohort.preview", domain.ResourceSecret, ref, namespace.ID, result.AnchorVersion, "allow", nil)
+	if err := s.auditRefRequiredStrictWithNamespaceID(ctx, pr, "secret.binding_cohort.preview", domain.ResourceSecret, ref, namespace.ID, result.AnchorVersion, "allow", nil); err != nil {
+		s.auditRefWithNamespaceID(ctx, pr, "secret.binding_cohort.preview", domain.ResourceSecret, ref, namespace.ID, result.AnchorVersion, "error", nil)
+		return SecretBindingCohortResult{}, err
+	}
 	return secretBindingCohortResult(result), nil
 }
 
@@ -382,12 +393,14 @@ func (s *Service) PreviewSecretBindingCohort(ctx context.Context, pr Principal, 
 // anchor. Ciphertext and each version's recorded KEK remain unchanged.
 func (s *Service) RotateSecretBindingKey(ctx context.Context, pr Principal, ref domain.Ref, anchor uint64, bindingKey, newBindingKey string, expectedRevision *uint64, expectedAffected []uint64) (SecretBindingCohortResult, error) {
 	if err := validateRef(ref); err != nil {
+		s.auditRef(ctx, pr, "secret.binding_key.rotate", domain.ResourceSecret, ref, anchor, "error", nil)
 		return SecretBindingCohortResult{}, err
 	}
 	if err := validateNewBindingKeyArgument(newBindingKey); err != nil {
+		s.auditRef(ctx, pr, "secret.binding_key.rotate", domain.ResourceSecret, ref, anchor, "error", nil)
 		return SecretBindingCohortResult{}, err
 	}
-	ctx, namespace, err := s.authorize(ctx, pr, domain.OpSecretWrite, domain.ResourceSecret, ref)
+	ctx, namespace, err := s.authorize(ctx, pr, domain.OpSecretBindingManage, domain.ResourceSecret, ref)
 	if err != nil {
 		return SecretBindingCohortResult{}, err
 	}
@@ -396,19 +409,21 @@ func (s *Service) RotateSecretBindingKey(ctx context.Context, pr Principal, ref 
 	keyring, err := s.requireKeyring()
 	if err != nil {
 		s.keyWriteMu.Unlock()
+		s.auditRefWithNamespaceID(ctx, pr, "secret.binding_key.rotate", domain.ResourceSecret, ref, namespace.ID, anchor, "error", nil)
 		return SecretBindingCohortResult{}, err
 	}
 	result, err := s.store.RotateSecretBindingKey(ctx, ref, anchor, storage.SecretBindingCASGuard{
 		ExpectedRevision:         expectedRevision,
 		ExpectedAffectedVersions: expectedAffected,
-	}, bindingTest(keyring, ref, bindingKey), bindingRotate(keyring, ref, bindingKey, newBindingKey))
+	}, bindingTest(keyring, ref, bindingKey), bindingRotate(keyring, ref, bindingKey, newBindingKey), secretBindingAudit(pr, s.now()))
 	s.keyWriteMu.Unlock()
 	if err != nil {
+		s.recordRequiredBindingAuditFailure(err)
 		s.auditRefWithNamespaceID(ctx, pr, "secret.binding_key.rotate", domain.ResourceSecret, ref, namespace.ID, anchor, "error", nil)
 		return SecretBindingCohortResult{}, sanitizeBindingMutationError(err)
 	}
 
-	s.auditRefWithNamespaceID(ctx, pr, "secret.binding_key.rotate", domain.ResourceSecret, ref, namespace.ID, result.AnchorVersion, "allow", nil)
+	s.m().AuditEvent("secret.binding_key.rotate", DecisionAllow)
 	s.getHub().Wake()
 	return secretBindingCohortResult(result), nil
 }
@@ -417,6 +432,7 @@ func (s *Service) RotateSecretBindingKey(ctx context.Context, pr Principal, ref 
 // anchor. It is admin-only regardless of delegated secret:destroy policy.
 func (s *Service) PurgeSecretBindingCohort(ctx context.Context, pr Principal, ref domain.Ref, anchor uint64, bindingKey string, expectedRevision *uint64, expectedAffected []uint64) (SecretBindingCohortResult, error) {
 	if err := validateRef(ref); err != nil {
+		s.auditRef(ctx, pr, "secret.binding_cohort.purge", domain.ResourceSecret, ref, anchor, "error", nil)
 		return SecretBindingCohortResult{}, err
 	}
 	// Reject non-admin callers before namespace lookup or cohort discovery so
@@ -434,34 +450,31 @@ func (s *Service) PurgeSecretBindingCohort(ctx context.Context, pr Principal, re
 	keyring, err := s.requireKeyring()
 	if err != nil {
 		s.keyWriteMu.Unlock()
+		s.auditRefWithNamespaceID(ctx, pr, "secret.binding_cohort.purge", domain.ResourceSecret, ref, namespace.ID, anchor, "error", nil)
 		return SecretBindingCohortResult{}, err
 	}
 	result, err := s.store.PurgeSecretBindingCohort(ctx, ref, anchor, storage.SecretBindingCASGuard{
 		ExpectedRevision:         expectedRevision,
 		ExpectedAffectedVersions: expectedAffected,
-	}, bindingTest(keyring, ref, bindingKey), storage.SecretBindingPurgeAudit{
-		ActorIdentity: pr.Identity.Name,
-		ActorType:     pr.Identity.Kind,
-		SourceIP:      pr.RemoteAddr,
-		UserAgent:     pr.UserAgent,
-		RequestID:     pr.RequestID,
-		CreatedAt:     s.now(),
-	})
+	}, bindingTest(keyring, ref, bindingKey), secretBindingAudit(pr, s.now()))
 	s.keyWriteMu.Unlock()
 	if errors.Is(err, storage.ErrPurgeCleanupPending) {
 		// The logical purge, change-log row, and single allow audit already
 		// committed. Wake consumers, preserve the committed result, and surface
 		// the distinct cleanup state without appending a misleading error audit.
+		s.m().AuditEvent("secret.binding_cohort.purge", DecisionAllow)
 		s.getHub().Wake()
 		return secretBindingCohortResult(result), storage.ErrPurgeCleanupPending
 	}
 	if err != nil {
+		s.recordRequiredBindingAuditFailure(err)
 		s.auditRefWithNamespaceID(ctx, pr, "secret.binding_cohort.purge", domain.ResourceSecret, ref, namespace.ID, anchor, "error", nil)
 		return SecretBindingCohortResult{}, sanitizeBindingMutationError(err)
 	}
 
 	// Storage inserted the single allow audit atomically with the tombstones and
 	// change-log entry. Appending a second allow row here would break that unit.
+	s.m().AuditEvent("secret.binding_cohort.purge", DecisionAllow)
 	s.getHub().Wake()
 	return secretBindingCohortResult(result), nil
 }
@@ -482,6 +495,23 @@ func secretBindingCohortResult(result storage.SecretBindingResult) SecretBinding
 	}
 }
 
+func secretBindingAudit(pr Principal, createdAt time.Time) storage.SecretBindingAudit {
+	return storage.SecretBindingAudit{
+		ActorIdentity: pr.Identity.Name,
+		ActorType:     pr.Identity.Kind,
+		SourceIP:      pr.RemoteAddr,
+		UserAgent:     pr.UserAgent,
+		RequestID:     pr.RequestID,
+		CreatedAt:     createdAt,
+	}
+}
+
+func (s *Service) recordRequiredBindingAuditFailure(err error) {
+	if errors.Is(err, storage.ErrRequiredAuditUnavailable) {
+		s.m().AuditWriteFailed()
+	}
+}
+
 func validateNewBindingKeyArgument(bindingKey string) error {
 	if err := crypto.ValidateBindingKey(bindingKey); err != nil {
 		return domain.Errorf(domain.ErrInvalidArgument, "binding_key must be valid UTF-8 and at least %d bytes", crypto.MinBindingKeyBytes)
@@ -492,6 +522,9 @@ func validateNewBindingKeyArgument(bindingKey string) error {
 func sanitizeBindingMutationError(err error) error {
 	if errors.Is(err, domain.ErrDecryptFailed) {
 		return domain.ErrDecryptFailed
+	}
+	if errors.Is(err, storage.ErrRequiredAuditUnavailable) {
+		return domain.Errorf(domain.ErrFailedPrecondition, "audit unavailable")
 	}
 	return err
 }

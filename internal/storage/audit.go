@@ -15,8 +15,8 @@ func (s *SQLStore) AppendAudit(ctx context.Context, ev domain.AuditEvent) error 
 }
 
 // appendAudit inserts an audit row through db, which may be the caller's
-// already-open transaction. Cohort purge uses this so its tombstones,
-// changelog entry, and allow audit are indivisible.
+// already-open transaction. Binding mutations use this so their wrapping or
+// tombstone changes, changelog entry, and allow audit are indivisible.
 func appendAudit(db *gorm.DB, ev domain.AuditEvent) error {
 	created := ev.CreatedAt
 	if created.IsZero() {

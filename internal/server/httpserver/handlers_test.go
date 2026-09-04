@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -776,6 +778,89 @@ func TestSecretBindingLifecyclePreviewCASRotateAndPurge(t *testing.T) {
 	mustStatus(t, metadata, http.StatusOK)
 	if got := decodeBody(t, metadata)["secret"].(map[string]any)["content_type"]; got != "" {
 		t.Fatalf("purged current projection content_type = %v, want empty", got)
+	}
+}
+
+func TestSecretBindingManagementRequiresDedicatedPolicyOperation(t *testing.T) {
+	e := newTestEnv(t)
+	e.createNS("prod", "gradethis", "token")
+	const bindingKey = "binding-key-a-0123456789-0123456789"
+	put := e.admin(http.MethodPost, "/api/v1/secrets", map[string]any{
+		"env": "prod", "app": "gradethis", "key": "binding-authz",
+		"value_base64": base64.StdEncoding.EncodeToString([]byte("value")),
+	})
+	mustStatus(t, put, http.StatusOK)
+	if _, err := e.store.CreatePolicy(context.Background(), domain.Policy{
+		Name: "writer", Subject: "client",
+		Allow: []domain.PolicyRule{{Operation: domain.OpSecretWrite, Env: "prod", App: "gradethis"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	request := map[string]any{
+		"env": "prod", "app": "gradethis", "key": "binding-authz",
+		"version": 1, "binding_key": bindingKey,
+	}
+	denied := e.client(http.MethodPost, "/api/v1/secrets/bind", request)
+	mustStatus(t, denied, http.StatusForbidden)
+	if errCode(t, denied) != "permission_denied" {
+		t.Fatalf("secret:write denial = %s", denied.Body.String())
+	}
+	if _, err := e.store.CreatePolicy(context.Background(), domain.Policy{
+		Name: "binding-manager", Subject: "client",
+		Allow: []domain.PolicyRule{{Operation: domain.OpSecretBindingManage, Env: "prod", App: "gradethis"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	allowed := e.client(http.MethodPost, "/api/v1/secrets/bind", request)
+	mustStatus(t, allowed, http.StatusOK)
+	e.store.mu.Lock()
+	audits := slices.Clone(e.store.audit)
+	e.store.mu.Unlock()
+	count := 0
+	for _, audit := range audits {
+		if audit.EventType != "secret.bind" || audit.Decision != "allow" {
+			continue
+		}
+		count++
+		if audit.ActorIdentity != "client" || audit.ResourceNamespaceID == 0 || audit.ResourceKey != "binding-authz" ||
+			audit.Metadata != `{"affected_versions":[1]}` || strings.Contains(audit.Metadata, bindingKey) {
+			t.Fatalf("unsafe bind allow audit = %+v", audit)
+		}
+	}
+	if count != 1 {
+		t.Fatalf("bind allow audit count = %d, want 1", count)
+	}
+}
+
+func TestSecretBindingHTTPAuditFailureRollsBack(t *testing.T) {
+	e := newTestEnv(t)
+	e.createNS("prod", "gradethis")
+	put := e.admin(http.MethodPost, "/api/v1/secrets", map[string]any{
+		"env": "prod", "app": "gradethis", "key": "binding-audit-rollback",
+		"value_base64": base64.StdEncoding.EncodeToString([]byte("value")),
+	})
+	mustStatus(t, put, http.StatusOK)
+	ref := domain.Ref{NS: domain.NamespaceRef{Env: "prod", App: "gradethis"}, Key: "binding-audit-rollback"}
+	e.store.mu.Lock()
+	before := cloneBindingVersion(e.store.secrets[refKey(ref)].versions[1])
+	beforeRevision := e.store.revision
+	e.store.auditErr = context.Canceled
+	e.store.mu.Unlock()
+
+	response := e.admin(http.MethodPost, "/api/v1/secrets/bind", map[string]any{
+		"env": "prod", "app": "gradethis", "key": "binding-audit-rollback",
+		"version": 1, "binding_key": "binding-key-a-0123456789-0123456789",
+	})
+	mustStatus(t, response, http.StatusPreconditionFailed)
+	if errCode(t, response) != "failed_precondition" {
+		t.Fatalf("audit failure response = %s", response.Body.String())
+	}
+	e.store.mu.Lock()
+	after := cloneBindingVersion(e.store.secrets[refKey(ref)].versions[1])
+	afterRevision := e.store.revision
+	e.store.mu.Unlock()
+	if !reflect.DeepEqual(after, before) || afterRevision != beforeRevision {
+		t.Fatalf("audit failure mutated version or revision: before=%+v/%d after=%+v/%d", before, beforeRevision, after, afterRevision)
 	}
 }
 

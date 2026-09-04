@@ -158,6 +158,94 @@ func TestMetricsDecryptFailed(t *testing.T) {
 	expectCount(t, m, "decrypt_failed", 1)
 }
 
+func TestMetricsBindingLifecyclePersistedAudits(t *testing.T) {
+	ctx := context.Background()
+	store := newFakeStore()
+	s := newTestService(store)
+	withKeyring(t, s)
+	m := newRecordingMetrics()
+	s.SetMetrics(m)
+	ref := tref("binding-audit-metrics")
+	putSecret(t, s, PutSecretInput{Ref: ref, Value: []byte("v")})
+
+	if _, err := s.BindSecret(ctx, adminPrincipal(), ref, 1, testBindingKeyA); err != nil {
+		t.Fatalf("bind: %v", err)
+	}
+	if _, err := s.PreviewSecretBindingCohort(ctx, adminPrincipal(), ref, 1, testBindingKeyA); err != nil {
+		t.Fatalf("preview: %v", err)
+	}
+	if _, err := s.RotateSecretBindingKey(ctx, adminPrincipal(), ref, 1, testBindingKeyA, testBindingKeyB, nil, nil); err != nil {
+		t.Fatalf("rotate: %v", err)
+	}
+	if _, err := s.UnbindSecret(ctx, adminPrincipal(), ref, 1, testBindingKeyB); err != nil {
+		t.Fatalf("unbind: %v", err)
+	}
+	purgeRef := tref("binding-purge-audit-metrics")
+	putSecret(t, s, PutSecretInput{Ref: purgeRef, Value: []byte("v"), BindingKey: testBindingKeyA})
+	if _, err := s.PurgeSecretBindingCohort(ctx, adminPrincipal(), purgeRef, 1, testBindingKeyA, nil, nil); err != nil {
+		t.Fatalf("purge: %v", err)
+	}
+
+	for _, eventType := range []string{"secret.bind", "secret.binding_cohort.preview", "secret.binding_key.rotate", "secret.unbind", "secret.binding_cohort.purge"} {
+		expectCount(t, m, "audit:"+eventType+":allow", 1)
+	}
+	expectCount(t, m, "audit_write_failed", 0)
+}
+
+func TestMetricsBindingPurgeCleanupPendingCountsCommittedAudit(t *testing.T) {
+	store := newFakeStore()
+	s := newTestService(store)
+	withKeyring(t, s)
+	m := newRecordingMetrics()
+	s.SetMetrics(m)
+	ref := tref("purge-cleanup-pending-metrics")
+	putSecret(t, s, PutSecretInput{Ref: ref, Value: []byte("v"), BindingKey: testBindingKeyA})
+	store.purgeResultErr = storage.ErrPurgeCleanupPending
+
+	if _, err := s.PurgeSecretBindingCohort(context.Background(), adminPrincipal(), ref, 1, testBindingKeyA, nil, nil); !errors.Is(err, storage.ErrPurgeCleanupPending) {
+		t.Fatalf("purge cleanup pending = %v", err)
+	}
+	expectCount(t, m, "audit:secret.binding_cohort.purge:allow", 1)
+	expectCount(t, m, "audit:secret.binding_cohort.purge:error", 0)
+	expectCount(t, m, "audit_write_failed", 0)
+}
+
+func TestMetricsBindingTransactionalAuditFailureIsDistinct(t *testing.T) {
+	t.Run("required allow audit failure", func(t *testing.T) {
+		store := newFakeStore()
+		s := newTestService(store)
+		withKeyring(t, s)
+		m := newRecordingMetrics()
+		s.SetMetrics(m)
+		ref := tref("binding-audit-metric-failure")
+		putSecret(t, s, PutSecretInput{Ref: ref, Value: []byte("v")})
+		store.bindingAuditErr = errors.New("transactional audit sink unavailable")
+
+		if _, err := s.BindSecret(context.Background(), adminPrincipal(), ref, 1, testBindingKeyA); !errors.Is(err, domain.ErrFailedPrecondition) || err.Error() != "audit unavailable: failed precondition" {
+			t.Fatalf("bind audit failure = %v, want fixed failed precondition", err)
+		}
+		expectCount(t, m, "audit_write_failed", 1)
+		expectCount(t, m, "audit:secret.bind:allow", 0)
+		expectCount(t, m, "audit:secret.bind:error", 1)
+	})
+
+	t.Run("ordinary binding failure", func(t *testing.T) {
+		store := newFakeStore()
+		s := newTestService(store)
+		withKeyring(t, s)
+		m := newRecordingMetrics()
+		s.SetMetrics(m)
+		ref := tref("binding-error-metric")
+		putSecret(t, s, PutSecretInput{Ref: ref, Value: []byte("v"), BindingKey: testBindingKeyA})
+
+		if _, err := s.UnbindSecret(context.Background(), adminPrincipal(), ref, 1, testBindingKeyB); !errors.Is(err, domain.ErrDecryptFailed) {
+			t.Fatalf("wrong-key unbind = %v", err)
+		}
+		expectCount(t, m, "audit_write_failed", 0)
+		expectCount(t, m, "audit:secret.unbind:error", 1)
+	})
+}
+
 func TestMetricsReleaseOutcomes(t *testing.T) {
 	ctx := context.Background()
 	st, err := storage.Open(filepath.Join(t.TempDir(), "kms.db"))

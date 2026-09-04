@@ -191,6 +191,7 @@ var knownOperations = map[string]bool{
 	domain.OpSecretRead: true, domain.OpSecretWrite: true,
 	domain.OpSecretList: true, domain.OpSecretDisable: true,
 	domain.OpSecretDestroy: true, domain.OpSecretPromote: true,
+	domain.OpSecretBindingManage:        true,
 	domain.OpConfigurationReleaseCreate: true, domain.OpConfigurationReleaseRead: true,
 	domain.OpConfigurationReleaseValidate: true, domain.OpConfigurationReleaseActivate: true,
 	domain.OpConfigurationReleaseList: true, domain.OpConfigurationReleaseWatch: true,
