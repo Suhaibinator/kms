@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/glebarez/sqlite"
@@ -54,9 +55,20 @@ const changeLogDDL = `CREATE TABLE IF NOT EXISTS change_log (
 const changeLogIndexDDL = `CREATE INDEX IF NOT EXISTS idx_change_log_ns ON change_log(env, app)`
 const changeLogNamespaceIndexDDL = `CREATE INDEX IF NOT EXISTS idx_change_log_namespace_revision ON change_log(namespace_id, revision)`
 
+const (
+	sqlStoreMaxOpenConns = 0 // database/sql default: unlimited
+	sqlStoreMaxIdleConns = 2 // database/sql default, made explicit for restoration after purge
+)
+
 // SQLStore is the SQLite-backed implementation of Store.
 type SQLStore struct {
 	db *gorm.DB
+
+	// purgeMu serializes the temporary database/sql pool quiescence used by a
+	// physical secret purge. It does not protect ordinary SQL transactions.
+	purgeMu          sync.Mutex
+	poolMaxOpenConns int
+	poolMaxIdleConns int
 }
 
 // compile-time assertion that *SQLStore satisfies Store.
@@ -161,7 +173,7 @@ func OpenWithOptions(path string, opts Options) (*SQLStore, error) {
 	// PutParameter calls racing to assign the next version).
 	databaseURI := sqliteFileURI(filepath.ToSlash(absPath))
 	dsn := fmt.Sprintf(
-		"%s?_txlock=immediate&_pragma=busy_timeout(%d)&_pragma=foreign_keys(1)&_pragma=journal_mode(WAL)&_pragma=synchronous(%s)",
+		"%s?_txlock=immediate&_pragma=busy_timeout(%d)&_pragma=foreign_keys(1)&_pragma=journal_mode(WAL)&_pragma=secure_delete(ON)&_pragma=synchronous(%s)",
 		databaseURI, busy.Milliseconds(), sync,
 	)
 	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{
@@ -171,11 +183,35 @@ func OpenWithOptions(path string, opts Options) (*SQLStore, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open database %q: %w", path, err)
 	}
-	s := &SQLStore{db: db}
+	sqlDB, err := db.DB()
+	if err != nil {
+		return nil, fmt.Errorf("access database %q: %w", path, err)
+	}
+	// Own the pool policy explicitly. database/sql exposes the current max-open
+	// value but has no max-idle getter, while physical purge temporarily changes
+	// both and must restore them exactly.
+	sqlDB.SetMaxOpenConns(sqlStoreMaxOpenConns)
+	sqlDB.SetMaxIdleConns(sqlStoreMaxIdleConns)
+	s := &SQLStore{
+		db:               db,
+		poolMaxOpenConns: sqlStoreMaxOpenConns,
+		poolMaxIdleConns: sqlStoreMaxIdleConns,
+	}
 	if initialize {
 		err = initializeBaseline(db)
 	} else {
 		err = verifyBaselineDB(db)
+	}
+	if err == nil {
+		// Recover from a crash after a logically committed purge but before its
+		// WAL cleanup. The store is not returned to callers until every frame has
+		// been checkpointed and the WAL has been truncated.
+		err = db.WithContext(context.Background()).Connection(func(conn *gorm.DB) error {
+			return truncateWAL(conn)
+		})
+		if err != nil {
+			err = fmt.Errorf("prepare database %q for service: %w", path, err)
+		}
 	}
 	if err != nil {
 		if sqlDB, e := db.DB(); e == nil {
@@ -362,6 +398,29 @@ func initializeBaselineWithVerifier(db *gorm.DB, verify func(*gorm.DB) error) er
 		// baseline, returning the verifier error rolls every DDL change back.
 		return verify(tx)
 	})
+}
+
+type walCheckpointResult struct {
+	Busy         int
+	Log          int
+	Checkpointed int
+}
+
+// truncateWAL checkpoints every committed frame into the main database and
+// truncates the live WAL artifact. SQLite documents a successful TRUNCATE
+// checkpoint as the exact tuple (busy, log, checkpointed) = (0, 0, 0); merely
+// executing the PRAGMA without inspecting its row can silently accept BUSY.
+// db must be pinned to one physical connection when concurrent use is possible.
+func truncateWAL(db *gorm.DB) error {
+	var result walCheckpointResult
+	row := db.Raw("PRAGMA main.wal_checkpoint(TRUNCATE)").Row()
+	if err := row.Scan(&result.Busy, &result.Log, &result.Checkpointed); err != nil {
+		return fmt.Errorf("truncate SQLite WAL: %w", err)
+	}
+	if result.Busy != 0 || result.Log != 0 || result.Checkpointed != 0 {
+		return fmt.Errorf("truncate SQLite WAL incomplete (busy=%d, log=%d, checkpointed=%d)", result.Busy, result.Log, result.Checkpointed)
+	}
+	return nil
 }
 
 // Ping verifies the database is reachable.

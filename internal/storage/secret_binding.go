@@ -12,10 +12,19 @@ import (
 
 	"gorm.io/gorm"
 
+	"github.com/Suhaibinator/kms/internal/crypto"
 	"github.com/Suhaibinator/kms/internal/domain"
 )
 
 const purgeBindingCohortAuditEvent = "secret.binding_cohort.purge"
+
+type purgeCleanupPendingError struct {
+	cause error
+}
+
+func (e *purgeCleanupPendingError) Error() string { return ErrPurgeCleanupPending.Error() }
+func (e *purgeCleanupPendingError) Unwrap() error { return ErrPurgeCleanupPending }
+func (e *purgeCleanupPendingError) Cause() error  { return e.cause }
 
 // bindingCallbackRecord returns an isolated copy of a stored record. A crypto
 // callback may zero or reuse its input buffers without mutating the row image
@@ -65,7 +74,7 @@ func validBoundWrapping(row secretVersionModel) bool {
 	return row.State != domain.StateDestroyed &&
 		i2b(row.Bound) &&
 		row.WrapMode == domain.WrapModeBindingKey &&
-		len(row.BindingKeySalt) > 0 &&
+		len(row.BindingKeySalt) == crypto.BindingKeySaltSize &&
 		len(row.EncryptedDEK) > 0 &&
 		row.KEKID != ""
 }
@@ -87,7 +96,7 @@ func validateBindingWrapping(original secretVersionModel, got SecretBindingWrapp
 		return domain.Errorf(domain.ErrFailedPrecondition, "binding rewrap returned an empty encrypted DEK")
 	}
 	if targetBound {
-		if got.WrapMode != domain.WrapModeBindingKey || len(got.BindingKeySalt) == 0 {
+		if got.WrapMode != domain.WrapModeBindingKey || len(got.BindingKeySalt) != crypto.BindingKeySaltSize {
 			return domain.Errorf(domain.ErrFailedPrecondition, "binding rewrap returned invalid bound wrapping metadata")
 		}
 		return nil
@@ -337,6 +346,27 @@ func checkSecretBindingGuard(guard SecretBindingCASGuard, revision uint64, affec
 	return nil
 }
 
+// waitForExclusivePoolConnection is called only while the purge's connection
+// is already pinned and the pool is limited to that one connection. Existing
+// checkouts are closed as they return because max-idle is zero; new checkouts
+// cannot start. Seeing exactly one open/in-use connection therefore proves the
+// caller owns the only live connection in this SQLStore.
+func waitForExclusivePoolConnection(ctx context.Context, sqlDB *sql.DB) error {
+	ticker := time.NewTicker(time.Millisecond)
+	defer ticker.Stop()
+	for {
+		stats := sqlDB.Stats()
+		if stats.OpenConnections == 1 && stats.InUse == 1 {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+		}
+	}
+}
+
 // PreviewSecretBindingCohort discovers a coherent cohort and global revision
 // without mutating either secret or change log.
 func (s *SQLStore) PreviewSecretBindingCohort(ctx context.Context, ref domain.Ref, anchor uint64, test SecretBindingTestFunc) (SecretBindingResult, error) {
@@ -392,6 +422,10 @@ func (s *SQLStore) RotateSecretBindingKey(ctx context.Context, ref domain.Ref, a
 		}
 
 		wrappings := make([]SecretBindingWrapping, len(rows))
+		oldSalts := make(map[string]struct{}, len(rows))
+		for _, row := range rows {
+			oldSalts[string(row.BindingKeySalt)] = struct{}{}
+		}
 		seenSalts := make(map[string]struct{}, len(rows))
 		for i, row := range rows {
 			wrapping, err := rewrapNew(bindingCallbackRecord(row))
@@ -401,10 +435,10 @@ func (s *SQLStore) RotateSecretBindingKey(ctx context.Context, ref domain.Ref, a
 			if err := validateBindingWrapping(row, wrapping, true); err != nil {
 				return err
 			}
-			if bytes.Equal(wrapping.BindingKeySalt, row.BindingKeySalt) {
+			saltKey := string(wrapping.BindingKeySalt)
+			if _, reused := oldSalts[saltKey]; reused {
 				return domain.Errorf(domain.ErrFailedPrecondition, "binding rotation must use fresh salts")
 			}
-			saltKey := string(wrapping.BindingKeySalt)
 			if _, duplicate := seenSalts[saltKey]; duplicate {
 				return domain.Errorf(domain.ErrFailedPrecondition, "binding rotation must use independent salts")
 			}
@@ -448,88 +482,159 @@ func (s *SQLStore) PurgeSecretBindingCohort(ctx context.Context, ref domain.Ref,
 	if err := validateSecretBindingGuard(guard); err != nil {
 		return SecretBindingResult{}, err
 	}
-	var result SecretBindingResult
-	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		sec, resolvedAnchor, rows, err := discoverSecretBindingCohort(tx, ref, anchor, test)
-		if err != nil {
-			return err
-		}
-		affected := bindingVersions(rows)
-		currentRevision, err := s.currentRevision(tx)
-		if err != nil {
-			return err
-		}
-		if err := checkSecretBindingGuard(guard, currentRevision, affected); err != nil {
-			return err
-		}
 
-		now := nowUTC()
-		for _, row := range rows {
-			updated := tx.Model(&secretVersionModel{}).
-				Where("id = ? AND secret_id = ? AND version_number = ? AND state <> ? AND bound = ? AND kek_id = ?",
-					row.ID, row.SecretID, row.VersionNumber, domain.StateDestroyed, row.Bound, row.KEKID).
-				Updates(map[string]any{
-					"content_type":     "",
-					"bound":            int64(0),
-					"has_access_token": int64(0),
-					"ciphertext":       nil,
-					"encrypted_dek":    nil,
-					"kek_id":           "",
-					"wrap_mode":        "",
-					"binding_key_salt": nil,
-					"algorithm":        "",
-					"nonce":            nil,
-					"aad":              "",
-					"state":            domain.StateDestroyed,
-					"destroyed_at":     fmtTime(now),
-					"expires_at":       nil,
-					"metadata_json":    "",
-				})
-			if updated.Error != nil {
-				return updated.Error
+	// Pin our connection first, then drain the rest of the database/sql pool.
+	// Max-idle must be zero: otherwise database/sql can retain and hand out an
+	// idle connection before enforcing max-open. With our checkout occupying the
+	// sole allowed slot, new operations queue and existing checkouts are closed
+	// as they return. External readers can still block TRUNCATE; that post-commit
+	// condition is reported distinctly below.
+	s.purgeMu.Lock()
+	defer s.purgeMu.Unlock()
+	sqlDB, err := s.db.DB()
+	if err != nil {
+		return SecretBindingResult{}, err
+	}
+	storeClosed := false
+	defer func() {
+		if storeClosed {
+			return
+		}
+		// Restore max-open first so the configured max-idle value is not
+		// immediately clamped back to the temporary limit.
+		sqlDB.SetMaxOpenConns(s.poolMaxOpenConns)
+		sqlDB.SetMaxIdleConns(s.poolMaxIdleConns)
+	}()
+
+	var result SecretBindingResult
+	committed := false
+	err = s.db.WithContext(ctx).Connection(func(conn *gorm.DB) error {
+		sqlDB.SetMaxIdleConns(0)
+		sqlDB.SetMaxOpenConns(1)
+		if err := waitForExclusivePoolConnection(ctx, sqlDB); err != nil {
+			return err
+		}
+		if err := conn.Transaction(func(tx *gorm.DB) error {
+			sec, resolvedAnchor, rows, err := discoverSecretBindingCohort(tx, ref, anchor, test)
+			if err != nil {
+				return err
 			}
-			if updated.RowsAffected != 1 {
-				return domain.Errorf(domain.ErrAborted, "secret version changed concurrently; retry")
+			affected := bindingVersions(rows)
+			currentRevision, err := s.currentRevision(tx)
+			if err != nil {
+				return err
 			}
-		}
-		if err := updateSecretBindingTimestamp(tx, sec, now); err != nil {
-			return err
-		}
-		revision, err := appendSecretBindingChange(tx, sec, ref, domain.ChangePurgeBindingCohort, resolvedAnchor, affected, now)
-		if err != nil {
-			return err
-		}
-		auditCreatedAt := audit.CreatedAt
-		if auditCreatedAt.IsZero() {
-			auditCreatedAt = now
-		}
-		metadata, err := affectedVersionsJSON(affected)
-		if err != nil {
-			return err
-		}
-		if err := appendAudit(tx, domain.AuditEvent{
-			EventType:           purgeBindingCohortAuditEvent,
-			ActorIdentity:       audit.ActorIdentity,
-			ActorType:           audit.ActorType,
-			ResourceType:        domain.ResourceSecret,
-			ResourceNamespaceID: sec.NamespaceID,
-			ResourceEnv:         ref.NS.Env,
-			ResourceApp:         ref.NS.App,
-			ResourceKey:         ref.Key,
-			ResourceVersion:     resolvedAnchor,
-			Decision:            "allow",
-			SourceIP:            audit.SourceIP,
-			UserAgent:           audit.UserAgent,
-			RequestID:           audit.RequestID,
-			CreatedAt:           auditCreatedAt,
-			Metadata:            `{"affected_versions":` + metadata + `}`,
+			if err := checkSecretBindingGuard(guard, currentRevision, affected); err != nil {
+				return err
+			}
+
+			now := nowUTC()
+			for _, row := range rows {
+				updated := tx.Model(&secretVersionModel{}).
+					Where("id = ? AND secret_id = ? AND version_number = ? AND state <> ? AND bound = ? AND kek_id = ?",
+						row.ID, row.SecretID, row.VersionNumber, domain.StateDestroyed, row.Bound, row.KEKID).
+					Updates(map[string]any{
+						"content_type":     "",
+						"bound":            int64(0),
+						"has_access_token": int64(0),
+						"ciphertext":       nil,
+						"encrypted_dek":    nil,
+						"kek_id":           "",
+						"wrap_mode":        "",
+						"binding_key_salt": nil,
+						"algorithm":        "",
+						"nonce":            nil,
+						"aad":              "",
+						"state":            domain.StateDestroyed,
+						"destroyed_at":     fmtTime(now),
+						"expires_at":       nil,
+						"metadata_json":    "",
+					})
+				if updated.Error != nil {
+					return updated.Error
+				}
+				if updated.RowsAffected != 1 {
+					return domain.Errorf(domain.ErrAborted, "secret version changed concurrently; retry")
+				}
+			}
+			secretUpdates := map[string]any{"updated_at": fmtTime(now)}
+			labels, err := loadSecretLabels(tx, sec.ID)
+			if err != nil {
+				return err
+			}
+			if current, ok := labels[domain.LabelCurrent]; ok && slices.Contains(affected, current) {
+				// The secret row is a projection of current. Once current is a minimal
+				// tombstone, it must not retain its operator-supplied metadata.
+				secretUpdates["content_type"] = ""
+				secretUpdates["metadata_json"] = ""
+			}
+			updatedSecret := tx.Model(&secretModel{}).
+				Where("id = ? AND namespace_id = ? AND name = ?", sec.ID, sec.NamespaceID, sec.Name).
+				Updates(secretUpdates)
+			if updatedSecret.Error != nil {
+				return updatedSecret.Error
+			}
+			if updatedSecret.RowsAffected != 1 {
+				return domain.Errorf(domain.ErrAborted, "secret changed concurrently; retry")
+			}
+			revision, err := appendSecretBindingChange(tx, sec, ref, domain.ChangePurgeBindingCohort, resolvedAnchor, affected, now)
+			if err != nil {
+				return err
+			}
+			auditCreatedAt := audit.CreatedAt
+			if auditCreatedAt.IsZero() {
+				auditCreatedAt = now
+			}
+			metadata, err := affectedVersionsJSON(affected)
+			if err != nil {
+				return err
+			}
+			if err := appendAudit(tx, domain.AuditEvent{
+				EventType:           purgeBindingCohortAuditEvent,
+				ActorIdentity:       audit.ActorIdentity,
+				ActorType:           audit.ActorType,
+				ResourceType:        domain.ResourceSecret,
+				ResourceNamespaceID: sec.NamespaceID,
+				ResourceEnv:         ref.NS.Env,
+				ResourceApp:         ref.NS.App,
+				ResourceKey:         ref.Key,
+				ResourceVersion:     resolvedAnchor,
+				Decision:            "allow",
+				SourceIP:            audit.SourceIP,
+				UserAgent:           audit.UserAgent,
+				RequestID:           audit.RequestID,
+				CreatedAt:           auditCreatedAt,
+				Metadata:            `{"affected_versions":` + metadata + `}`,
+			}); err != nil {
+				return err
+			}
+			result = SecretBindingResult{AnchorVersion: resolvedAnchor, AffectedVersions: affected, Revision: revision}
+			return nil
 		}); err != nil {
 			return err
 		}
-		result = SecretBindingResult{AnchorVersion: resolvedAnchor, AffectedVersions: affected, Revision: revision}
+		committed = true
+		// Once committed, request cancellation must not skip best-effort physical
+		// cleanup. SQLite's configured busy timeout still bounds external-reader
+		// contention.
+		if err := truncateWAL(conn.WithContext(context.WithoutCancel(ctx))); err != nil {
+			// Mark database/sql closed while this exclusive connection is still
+			// pinned. Closing only after GORM returned it to the pool would hand the
+			// connection to one queued request before fail-closed retirement.
+			_ = sqlDB.Close()
+			storeClosed = true
+			return &purgeCleanupPendingError{cause: err}
+		}
 		return nil
 	})
 	if err != nil {
+		if committed {
+			// Recoverable pre-purge frames may still exist. The callback retired
+			// this store before releasing its exclusive connection so no queued or
+			// subsequent request can mistake the logical commit for a full scrub.
+			// A fresh Open retries TRUNCATE before serving.
+			return result, err
+		}
 		return SecretBindingResult{}, err
 	}
 	return result, nil

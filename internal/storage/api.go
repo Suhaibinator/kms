@@ -17,10 +17,19 @@ package storage
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/Suhaibinator/kms/internal/domain"
 )
+
+// ErrPurgeCleanupPending means the logical purge, its change-log entry, and
+// its audit event committed, but SQLite could not yet truncate every WAL frame
+// that may contain the pre-purge bytes. Callers must not report rollback or
+// retry the purge with the binding key; opening the database again retries the
+// artifact cleanup before the store is returned for use. The affected SQLStore
+// is closed and cannot serve further requests until it is reopened.
+var ErrPurgeCleanupPending = errors.New("secret purge committed; database artifact cleanup is pending")
 
 // SecretRecord is the secret-level row.
 type SecretRecord struct {
@@ -92,7 +101,8 @@ type SecretBindingWrapping struct {
 }
 
 // SecretBindingTestFunc proves that a caller-held binding key can open one
-// persisted version. The key itself remains entirely above storage.
+// persisted version. The key itself remains entirely above storage. The
+// callback must be pure computation: no I/O and no calls into storage.
 type SecretBindingTestFunc func(SecretVersionRecord) error
 
 // SecretBindingRewrapFunc opens and rewraps one persisted DEK above storage.
@@ -316,6 +326,9 @@ type Store interface {
 	// PurgeSecretBindingCohort rediscovers and optionally CAS-checks the cohort,
 	// writes minimal tombstones, and appends its changelog and allow-audit rows
 	// in the same transaction. It intentionally bypasses release-pin guards.
+	// Success also requires a verified WAL truncate. If external use blocks that
+	// post-commit cleanup, the populated result and ErrPurgeCleanupPending are
+	// returned: the logical purge is durable and must not be retried with the key.
 	PurgeSecretBindingCohort(ctx context.Context, ref domain.Ref, anchor uint64, guard SecretBindingCASGuard, test SecretBindingTestFunc, audit SecretBindingPurgeAudit) (SecretBindingResult, error)
 
 	GetSecretRecord(ctx context.Context, ref domain.Ref) (SecretRecord, error)

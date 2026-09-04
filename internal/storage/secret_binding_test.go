@@ -3,19 +3,32 @@ package storage
 import (
 	"bytes"
 	"context"
+	"database/sql"
+	"encoding/binary"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"reflect"
 	"slices"
 	"testing"
 	"time"
 
+	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 
+	"github.com/Suhaibinator/kms/internal/crypto"
 	"github.com/Suhaibinator/kms/internal/domain"
 )
 
 var errBindingKeyRejected = domain.Errorf(domain.ErrPermissionDenied, "access denied")
+
+func bindingSalt(key, marker byte, version uint64) []byte {
+	salt := bytes.Repeat([]byte{marker}, crypto.BindingKeySaltSize)
+	salt[0] = key
+	binary.BigEndian.PutUint64(salt[len(salt)-8:], version)
+	return salt
+}
 
 func putBindingVersion(t *testing.T, st *SQLStore, r domain.Ref, key byte, options ...func(*CreateSecretParams)) uint64 {
 	t.Helper()
@@ -37,7 +50,7 @@ func putBindingVersion(t *testing.T, st *SQLStore, r domain.Ref, key byte, optio
 			}
 			if key != 0 {
 				payload.WrapMode = domain.WrapModeBindingKey
-				payload.BindingKeySalt = []byte{key, 'o', byte(version)}
+				payload.BindingKeySalt = bindingSalt(key, 'o', version)
 			}
 			return payload, nil
 		},
@@ -67,7 +80,7 @@ func bindingRewrap(key byte, marker byte) SecretBindingRewrapFunc {
 			EncryptedDEK:   []byte(fmt.Sprintf("rewrapped-%c-%d", key, rec.Version)),
 			KEKID:          rec.KEKID,
 			WrapMode:       domain.WrapModeBindingKey,
-			BindingKeySalt: []byte{key, marker, byte(rec.Version)},
+			BindingKeySalt: bindingSalt(key, marker, rec.Version),
 		}, nil
 	}
 }
@@ -100,6 +113,70 @@ func bindingRowSnapshot(row secretVersionModel) []any {
 		string(row.BindingKeySalt), row.Algorithm, string(row.Nonce), row.AAD, row.State,
 		row.CreatedBy, row.CreatedAt, row.DestroyedAt, row.ExpiresAt, row.MetadataJSON,
 	}
+}
+
+type forensicSecretMarkers struct {
+	Ciphertext   []byte
+	EncryptedDEK []byte
+	Nonce        []byte
+	Salt         []byte
+	AAD          []byte
+	Metadata     []byte
+}
+
+func newForensicSecretMarkers(tag string, version uint64) forensicSecretMarkers {
+	marker := func(field string) []byte {
+		return fmt.Appendf(nil, "|KMS-PURGE-LIVE-%s-%s-V%08d|", tag, field, version)
+	}
+	salt := bytes.Repeat([]byte{byte('K' + version)}, crypto.BindingKeySaltSize)
+	salt[0] = 'B'
+	return forensicSecretMarkers{
+		Ciphertext:   marker("CIPHERTEXT"),
+		EncryptedDEK: marker("ENCRYPTED-DEK"),
+		Nonce:        marker("NONCE"),
+		Salt:         salt,
+		AAD:          marker("AAD"),
+		Metadata:     marker("METADATA"),
+	}
+}
+
+func putForensicBindingVersion(t *testing.T, st *SQLStore, r domain.Ref, markers forensicSecretMarkers) uint64 {
+	t.Helper()
+	version, _, err := st.CreateSecretVersion(context.Background(), CreateSecretParams{
+		Ref: r, Bound: true, ContentType: "application/x-forensic-marker",
+		Metadata: fmt.Sprintf(`{"marker":%q}`, string(bytes.Repeat(markers.Metadata, 384))), CreatedBy: "forensic-test",
+		Encrypt: func(uint64) (EncryptedPayload, error) {
+			return EncryptedPayload{
+				Ciphertext: bytes.Repeat(markers.Ciphertext, 384), EncryptedDEK: bytes.Repeat(markers.EncryptedDEK, 384),
+				KEKID: "kek-a", WrapMode: domain.WrapModeBindingKey, BindingKeySalt: bytes.Clone(markers.Salt),
+				Algorithm: "AES-256-GCM", Nonce: bytes.Repeat(markers.Nonce, 384), AAD: string(bytes.Repeat(markers.AAD, 384)),
+			}, nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("CreateSecretVersion forensic marker: %v", err)
+	}
+	return version
+}
+
+func readArtifact(t *testing.T, path string) []byte {
+	t.Helper()
+	b, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		t.Fatalf("read SQLite artifact %s: %v", filepath.Base(path), err)
+	}
+	return b
+}
+
+func allForensicMarkers(markers ...forensicSecretMarkers) [][]byte {
+	var out [][]byte
+	for _, marker := range markers {
+		out = append(out, marker.Ciphertext, marker.EncryptedDEK, marker.Nonce, marker.Salt, marker.AAD, marker.Metadata)
+	}
+	return out
 }
 
 func TestSecretBindingExactVersionLifecycle(t *testing.T) {
@@ -149,7 +226,7 @@ func TestSecretBindingExactVersionLifecycle(t *testing.T) {
 		t.Fatalf("bind result = %+v", result)
 	}
 	bound := rawSecretVersion(t, st, r, 1)
-	if bound.Bound != 1 || bound.WrapMode != domain.WrapModeBindingKey || !bytes.Equal(bound.BindingKeySalt, []byte{'B', 'n', 1}) {
+	if bound.Bound != 1 || bound.WrapMode != domain.WrapModeBindingKey || !bytes.Equal(bound.BindingKeySalt, bindingSalt('B', 'n', 1)) {
 		t.Fatalf("bound wrapping = %+v", bound)
 	}
 	if !bytes.Equal(bound.Ciphertext, original.Ciphertext) || !bytes.Equal(bound.Nonce, original.Nonce) || bound.AAD != original.AAD || bound.Algorithm != original.Algorithm || bound.KEKID != original.KEKID {
@@ -177,6 +254,57 @@ func TestSecretBindingExactVersionLifecycle(t *testing.T) {
 	if len(changes) != 2 || changes[0].ChangeType != domain.ChangeBind || changes[1].ChangeType != domain.ChangeUnbind ||
 		!slices.Equal(changes[0].AffectedVersions, []uint64{1}) || !slices.Equal(changes[1].AffectedVersions, []uint64{1}) {
 		t.Fatalf("binding changes = %+v", changes)
+	}
+}
+
+func TestCreateAndBindRequireExactBindingSaltSize(t *testing.T) {
+	st := newStore(t)
+	ctx := context.Background()
+	seedNS(t, st, "prod", "app")
+
+	for _, size := range []int{0, crypto.BindingKeySaltSize - 1, crypto.BindingKeySaltSize + 1} {
+		r := ref("prod", "app", fmt.Sprintf("create-salt-%d", size))
+		_, _, err := st.CreateSecretVersion(ctx, CreateSecretParams{
+			Ref: r, Bound: true,
+			Encrypt: func(version uint64) (EncryptedPayload, error) {
+				payload, err := boundEncryptStub(nil)(version)
+				payload.BindingKeySalt = bytes.Repeat([]byte{'x'}, size)
+				return payload, err
+			},
+		})
+		if !errors.Is(err, domain.ErrFailedPrecondition) {
+			t.Fatalf("CreateSecretVersion salt length %d = %v, want failed precondition", size, err)
+		}
+		if _, err := st.GetSecretRecord(ctx, r); !errors.Is(err, domain.ErrNotFound) {
+			t.Fatalf("invalid create salt length %d left a secret: %v", size, err)
+		}
+	}
+
+	r := ref("prod", "app", "bind-salt")
+	putBindingVersion(t, st, r, 0)
+	original := rawSecretVersion(t, st, r, 1)
+	revision, err := st.CurrentRevision(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, size := range []int{0, crypto.BindingKeySaltSize - 1, crypto.BindingKeySaltSize + 1} {
+		_, err := st.BindSecretVersion(ctx, r, 1, func(rec SecretVersionRecord) (SecretBindingWrapping, error) {
+			return SecretBindingWrapping{
+				EncryptedDEK:   []byte("rewrapped"),
+				KEKID:          rec.KEKID,
+				WrapMode:       domain.WrapModeBindingKey,
+				BindingKeySalt: bytes.Repeat([]byte{'x'}, size),
+			}, nil
+		})
+		if !errors.Is(err, domain.ErrFailedPrecondition) {
+			t.Fatalf("BindSecretVersion salt length %d = %v, want failed precondition", size, err)
+		}
+		if got := rawSecretVersion(t, st, r, 1); !reflect.DeepEqual(bindingRowSnapshot(got), bindingRowSnapshot(original)) {
+			t.Fatalf("invalid bind salt length %d changed version", size)
+		}
+		if got, _ := st.CurrentRevision(ctx); got != revision {
+			t.Fatalf("invalid bind salt length %d changed revision to %d, want %d", size, got, revision)
+		}
 	}
 }
 
@@ -382,6 +510,77 @@ func TestRotateSecretBindingKeyCASRollbackAndStaleRows(t *testing.T) {
 	}
 }
 
+func TestRotateRejectsInvalidOrReusedSaltsAcrossWholeCohort(t *testing.T) {
+	st := newStore(t)
+	ctx := context.Background()
+	seedNS(t, st, "prod", "app")
+	r := ref("prod", "app", "rotate-salt-validation")
+	for range 3 {
+		putBindingVersion(t, st, r, 'B')
+	}
+	preview, err := st.PreviewSecretBindingCohort(ctx, r, 2, bindingKeyTest('B'))
+	if err != nil {
+		t.Fatal(err)
+	}
+	original := []secretVersionModel{
+		rawSecretVersion(t, st, r, 1),
+		rawSecretVersion(t, st, r, 2),
+		rawSecretVersion(t, st, r, 3),
+	}
+
+	cases := []struct {
+		name   string
+		rewrap SecretBindingRewrapFunc
+	}{
+		{
+			name: "short",
+			rewrap: func(rec SecretVersionRecord) (SecretBindingWrapping, error) {
+				return SecretBindingWrapping{EncryptedDEK: []byte("new"), KEKID: rec.KEKID, WrapMode: domain.WrapModeBindingKey, BindingKeySalt: bytes.Repeat([]byte{'s'}, crypto.BindingKeySaltSize-1)}, nil
+			},
+		},
+		{
+			name: "long",
+			rewrap: func(rec SecretVersionRecord) (SecretBindingWrapping, error) {
+				return SecretBindingWrapping{EncryptedDEK: []byte("new"), KEKID: rec.KEKID, WrapMode: domain.WrapModeBindingKey, BindingKeySalt: bytes.Repeat([]byte{'l'}, crypto.BindingKeySaltSize+1)}, nil
+			},
+		},
+		{
+			name: "another versions old salt",
+			rewrap: func(rec SecretVersionRecord) (SecretBindingWrapping, error) {
+				salt := bindingSalt('C', 'n', rec.Version)
+				if rec.Version == 1 {
+					salt = bytes.Clone(original[1].BindingKeySalt)
+				}
+				return SecretBindingWrapping{EncryptedDEK: []byte("new"), KEKID: rec.KEKID, WrapMode: domain.WrapModeBindingKey, BindingKeySalt: salt}, nil
+			},
+		},
+		{
+			name: "duplicate new salt",
+			rewrap: func(rec SecretVersionRecord) (SecretBindingWrapping, error) {
+				return SecretBindingWrapping{EncryptedDEK: []byte("new"), KEKID: rec.KEKID, WrapMode: domain.WrapModeBindingKey, BindingKeySalt: bindingSalt('C', 'n', 99)}, nil
+			},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := st.RotateSecretBindingKey(ctx, r, 2, SecretBindingCASGuard{
+				ExpectedRevision: uint64Pointer(preview.Revision), ExpectedAffectedVersions: preview.AffectedVersions,
+			}, bindingKeyTest('B'), tc.rewrap)
+			if !errors.Is(err, domain.ErrFailedPrecondition) {
+				t.Fatalf("RotateSecretBindingKey = %v, want failed precondition", err)
+			}
+			for i, want := range original {
+				if got := rawSecretVersion(t, st, r, uint64(i+1)); !reflect.DeepEqual(bindingRowSnapshot(got), bindingRowSnapshot(want)) {
+					t.Fatalf("failed rotation changed version %d", i+1)
+				}
+			}
+			if got, _ := st.CurrentRevision(ctx); got != preview.Revision {
+				t.Fatalf("failed rotation revision = %d, want %d", got, preview.Revision)
+			}
+		})
+	}
+}
+
 func TestPurgeSecretBindingCohortTombstonesAndBypassesRelease(t *testing.T) {
 	st := newStore(t)
 	ctx := context.Background()
@@ -461,6 +660,13 @@ func TestPurgeSecretBindingCohortTombstonesAndBypassesRelease(t *testing.T) {
 	if err != nil || !reflect.DeepEqual(labelsAfter, labelsBefore) {
 		t.Fatalf("labels after purge = %v, want %v (err=%v)", labelsAfter, labelsBefore, err)
 	}
+	projected, err := st.findSecret(st.db, r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if projected.ContentType != "" || projected.MetadataJSON != "" {
+		t.Fatalf("purged current retained secret projection: content_type=%q metadata=%q", projected.ContentType, projected.MetadataJSON)
+	}
 	_, current, err := st.GetSecretVersion(ctx, r, 0, "")
 	if err != nil || current.Version != 3 || current.State != domain.StateDestroyed {
 		t.Fatalf("current tombstone = %+v err=%v", current, err)
@@ -490,6 +696,376 @@ func TestPurgeSecretBindingCohortTombstonesAndBypassesRelease(t *testing.T) {
 	var highWater secretVersionHighWaterModel
 	if err := st.db.Where("namespace_id = ? AND name = ?", ns.ID, r.Key).First(&highWater).Error; err != nil || highWater.LastVersion != 3 {
 		t.Fatalf("high water = %+v err=%v", highWater, err)
+	}
+}
+
+func TestPurgeNonCurrentCohortPreservesCurrentProjection(t *testing.T) {
+	st := newStore(t)
+	ctx := context.Background()
+	seedNS(t, st, "prod", "app")
+	r := ref("prod", "app", "purge-non-current")
+	putBindingVersion(t, st, r, 'A')
+	putBindingVersion(t, st, r, 'B')
+	putBindingVersion(t, st, r, 'A', func(p *CreateSecretParams) {
+		p.ContentType = "application/current"
+		p.Metadata = `{"current":true}`
+	})
+
+	if _, err := st.PurgeSecretBindingCohort(ctx, r, 2, SecretBindingCASGuard{}, bindingKeyTest('B'), SecretBindingPurgeAudit{ActorIdentity: "admin"}); err != nil {
+		t.Fatal(err)
+	}
+	projected, err := st.findSecret(st.db, r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if projected.ContentType != "application/current" || projected.MetadataJSON != `{"current":true}` {
+		t.Fatalf("non-current purge changed current projection: content_type=%q metadata=%q", projected.ContentType, projected.MetadataJSON)
+	}
+}
+
+func TestPurgeScrubsLiveSQLiteArtifacts(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "kms.db")
+	st, err := OpenWithOptions(path, Options{BusyTimeout: 100 * time.Millisecond})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	seedNS(t, st, "prod", "app")
+	r := ref("prod", "app", "physical-purge")
+	mainMarkers := newForensicSecretMarkers("MAIN", 1)
+	walMarkers := newForensicSecretMarkers("WAL", 2)
+	putForensicBindingVersion(t, st, r, mainMarkers)
+	if err := st.db.WithContext(ctx).Connection(func(conn *gorm.DB) error { return truncateWAL(conn) }); err != nil {
+		t.Fatalf("stage main database marker: %v", err)
+	}
+	putForensicBindingVersion(t, st, r, walMarkers)
+
+	mainBefore := readArtifact(t, path)
+	walBefore := readArtifact(t, path+"-wal")
+	for _, marker := range allForensicMarkers(mainMarkers) {
+		if !bytes.Contains(mainBefore, marker) {
+			t.Fatalf("main database did not contain staged %d-byte marker", len(marker))
+		}
+	}
+	for _, marker := range allForensicMarkers(walMarkers) {
+		if !bytes.Contains(walBefore, marker) {
+			t.Fatalf("WAL did not contain staged %d-byte marker", len(marker))
+		}
+	}
+
+	result, err := st.PurgeSecretBindingCohort(ctx, r, 1, SecretBindingCASGuard{}, bindingKeyTest('B'), SecretBindingPurgeAudit{ActorIdentity: "admin"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(result.AffectedVersions, []uint64{1, 2}) {
+		t.Fatalf("purged versions = %v", result.AffectedVersions)
+	}
+
+	artifacts := map[string][]byte{
+		"main": readArtifact(t, path),
+		"wal":  readArtifact(t, path+"-wal"),
+		"shm":  readArtifact(t, path+"-shm"),
+	}
+	for artifact, contents := range artifacts {
+		for _, marker := range allForensicMarkers(mainMarkers, walMarkers) {
+			if bytes.Contains(contents, marker) {
+				t.Fatalf("%s artifact retained a purged %d-byte marker", artifact, len(marker))
+			}
+		}
+	}
+	if info, err := os.Stat(path + "-wal"); err == nil && info.Size() != 0 {
+		t.Fatalf("successful purge left WAL size %d, want 0", info.Size())
+	} else if err != nil && !errors.Is(err, os.ErrNotExist) {
+		t.Fatal(err)
+	}
+}
+
+func TestPurgeReportsCommittedCleanupPendingWhenExternalReaderBlocksCheckpoint(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "kms.db")
+	st, err := OpenWithOptions(path, Options{BusyTimeout: 10 * time.Millisecond})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	seedNS(t, st, "prod", "app")
+	r := ref("prod", "app", "pending-cleanup")
+	putBindingVersion(t, st, r, 'B')
+
+	reader, err := OpenWithOptions(path, Options{BusyTimeout: 10 * time.Millisecond})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = reader.Close() })
+	readerDB, err := reader.db.DB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	readTx, err := readerDB.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var visibleRows int
+	if err := readTx.QueryRowContext(ctx, "SELECT COUNT(*) FROM secret_versions").Scan(&visibleRows); err != nil || visibleRows != 1 {
+		_ = readTx.Rollback()
+		t.Fatalf("establish external read snapshot: rows=%d err=%v", visibleRows, err)
+	}
+
+	result, purgeErr := st.PurgeSecretBindingCohort(ctx, r, 1, SecretBindingCASGuard{}, bindingKeyTest('B'), SecretBindingPurgeAudit{ActorIdentity: "admin"})
+	if !errors.Is(purgeErr, ErrPurgeCleanupPending) {
+		_ = readTx.Rollback()
+		t.Fatalf("purge error = %v, want ErrPurgeCleanupPending", purgeErr)
+	}
+	if purgeErr.Error() != ErrPurgeCleanupPending.Error() {
+		_ = readTx.Rollback()
+		t.Fatalf("cleanup-pending error leaked details: %q", purgeErr)
+	}
+	if result.AnchorVersion != 1 || !slices.Equal(result.AffectedVersions, []uint64{1}) || result.Revision == 0 {
+		_ = readTx.Rollback()
+		t.Fatalf("committed purge did not return its result: %+v", result)
+	}
+	if err := st.Ping(ctx); err == nil {
+		_ = readTx.Rollback()
+		t.Fatal("cleanup-pending store continued serving after WAL scrub failure")
+	}
+	if blocked, err := OpenWithOptions(path, Options{BusyTimeout: 10 * time.Millisecond}); err == nil {
+		_ = blocked.Close()
+		_ = readTx.Rollback()
+		t.Fatal("store opened while an external reader prevented startup WAL cleanup")
+	}
+
+	if err := readTx.Rollback(); err != nil {
+		t.Fatal(err)
+	}
+	// Reopening performs the startup TRUNCATE checkpoint, recovering a crash or
+	// response failure between logical commit and physical cleanup.
+	reopened, err := OpenWithOptions(path, Options{BusyTimeout: 100 * time.Millisecond})
+	if err != nil {
+		t.Fatalf("startup cleanup after reader release: %v", err)
+	}
+	t.Cleanup(func() { _ = reopened.Close() })
+	row := rawSecretVersion(t, reopened, r, 1)
+	if row.State != domain.StateDestroyed || len(row.Ciphertext) != 0 {
+		t.Fatalf("cleanup-pending purge did not logically commit: %+v", row)
+	}
+	var auditCount int64
+	if err := reopened.db.Model(&auditEventModel{}).Where("event_type = ?", purgeBindingCohortAuditEvent).Count(&auditCount).Error; err != nil || auditCount != 1 {
+		t.Fatalf("cleanup-pending purge audit count=%d err=%v", auditCount, err)
+	}
+	if info, err := os.Stat(path + "-wal"); err == nil && info.Size() != 0 {
+		t.Fatalf("startup cleanup left WAL size %d, want 0", info.Size())
+	} else if err != nil && !errors.Is(err, os.ErrNotExist) {
+		t.Fatal(err)
+	}
+}
+
+func TestPurgeQuiescesPrimedInProcessPoolAndRestoresPolicy(t *testing.T) {
+	ctx := context.Background()
+	st := newStoreWithOptions(t, Options{BusyTimeout: 20 * time.Millisecond})
+	seedNS(t, st, "prod", "app")
+	r := ref("prod", "app", "in-process-reader")
+	putBindingVersion(t, st, r, 'B')
+	sqlDB, err := st.db.DB()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Keep one connection checked out with an old read snapshot and return a
+	// second to the idle pool. SetMaxOpenConns(1) alone would let purge take the
+	// idle connection without waiting for the reader because database/sql checks
+	// the idle list before enforcing max-open.
+	idleConn, err := sqlDB.Conn(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	readerConn, err := sqlDB.Conn(ctx)
+	if err != nil {
+		_ = idleConn.Close()
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = readerConn.Close() })
+	readTx, err := readerConn.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		_ = idleConn.Close()
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = readTx.Rollback() })
+	var visibleRows int
+	if err := readTx.QueryRowContext(ctx, "SELECT COUNT(*) FROM secret_versions").Scan(&visibleRows); err != nil || visibleRows != 1 {
+		_ = idleConn.Close()
+		t.Fatalf("establish read snapshot: rows=%d err=%v", visibleRows, err)
+	}
+	if err := idleConn.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if stats := sqlDB.Stats(); stats.InUse != 1 || stats.Idle != 1 || stats.OpenConnections != 2 {
+		t.Fatalf("primed pool stats = %+v, want one active reader and one idle connection", stats)
+	}
+
+	type purgeResult struct {
+		result SecretBindingResult
+		err    error
+	}
+	done := make(chan purgeResult, 1)
+	go func() {
+		result, err := st.PurgeSecretBindingCohort(ctx, r, 1, SecretBindingCASGuard{}, bindingKeyTest('B'), SecretBindingPurgeAudit{ActorIdentity: "admin"})
+		done <- purgeResult{result: result, err: err}
+	}()
+
+	deadline := time.Now().Add(time.Second)
+	for {
+		stats := sqlDB.Stats()
+		if stats.MaxOpenConnections == 1 && stats.OpenConnections == 2 && stats.InUse == 2 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("purge never pinned its connection while the in-process reader remained active")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	select {
+	case got := <-done:
+		t.Fatalf("purge returned before in-process reader drained: result=%+v err=%v", got.result, got.err)
+	case <-time.After(4 * 20 * time.Millisecond):
+	}
+	if err := readTx.Rollback(); err != nil {
+		t.Fatal(err)
+	}
+	if err := readerConn.Close(); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case got := <-done:
+		if got.err != nil || !slices.Equal(got.result.AffectedVersions, []uint64{1}) {
+			t.Fatalf("purge after reader drain: result=%+v err=%v", got.result, got.err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("purge did not finish after in-process reader drained")
+	}
+
+	if got := sqlDB.Stats().MaxOpenConnections; got != sqlStoreMaxOpenConns {
+		t.Fatalf("max-open after purge = %d, want configured %d", got, sqlStoreMaxOpenConns)
+	}
+	first, err := sqlDB.Conn(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := sqlDB.Conn(ctx)
+	if err != nil {
+		_ = first.Close()
+		t.Fatal(err)
+	}
+	if err := first.Close(); err != nil {
+		_ = second.Close()
+		t.Fatal(err)
+	}
+	if err := second.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if stats := sqlDB.Stats(); stats.Idle != sqlStoreMaxIdleConns {
+		t.Fatalf("idle connections after purge = %d, want configured %d (stats=%+v)", stats.Idle, sqlStoreMaxIdleConns, stats)
+	}
+}
+
+func TestPurgeCleanupPendingRejectsQueuedWorkBeforeConnectionHandoff(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "kms.db")
+	st, err := OpenWithOptions(path, Options{BusyTimeout: 250 * time.Millisecond})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	seedNS(t, st, "prod", "app")
+	r := ref("prod", "app", "queued-work")
+	putBindingVersion(t, st, r, 'B')
+
+	reader, err := OpenWithOptions(path, Options{BusyTimeout: 250 * time.Millisecond})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = reader.Close() })
+	readerDB, err := reader.db.DB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	readTx, err := readerDB.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = readTx.Rollback() })
+	var visibleRows int
+	if err := readTx.QueryRowContext(ctx, "SELECT COUNT(*) FROM secret_versions").Scan(&visibleRows); err != nil || visibleRows != 1 {
+		t.Fatalf("establish external read snapshot: rows=%d err=%v", visibleRows, err)
+	}
+
+	type purgeResult struct {
+		result SecretBindingResult
+		err    error
+	}
+	purgeDone := make(chan purgeResult, 1)
+	go func() {
+		result, err := st.PurgeSecretBindingCohort(ctx, r, 1, SecretBindingCASGuard{}, bindingKeyTest('B'), SecretBindingPurgeAudit{ActorIdentity: "admin"})
+		purgeDone <- purgeResult{result: result, err: err}
+	}()
+
+	sqlDB, err := st.db.DB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(time.Second)
+	for {
+		stats := sqlDB.Stats()
+		if stats.MaxOpenConnections == 1 && stats.InUse == 1 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("purge never pinned its exclusive connection")
+		}
+		time.Sleep(time.Millisecond)
+	}
+
+	waitBefore := sqlDB.Stats().WaitCount
+	queuedDone := make(chan error, 1)
+	queuedRef := ref("prod", "app", "must-not-commit")
+	go func() {
+		_, _, err := st.PutParameter(ctx, queuedRef, "value", "text/plain", "{}", "tester")
+		queuedDone <- err
+	}()
+	deadline = time.Now().Add(time.Second)
+	for sqlDB.Stats().WaitCount == waitBefore && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if sqlDB.Stats().WaitCount == waitBefore {
+		t.Fatal("concurrent write never queued behind purge")
+	}
+
+	gotPurge := <-purgeDone
+	if !errors.Is(gotPurge.err, ErrPurgeCleanupPending) || gotPurge.result.Revision == 0 {
+		t.Fatalf("purge result = %+v err=%v, want committed cleanup-pending", gotPurge.result, gotPurge.err)
+	}
+	select {
+	case err := <-queuedDone:
+		if err == nil {
+			t.Fatal("queued write was served after cleanup-pending retirement")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("queued write was not released when cleanup-pending retired the store")
+	}
+
+	if err := readTx.Rollback(); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := OpenWithOptions(path, Options{BusyTimeout: 250 * time.Millisecond})
+	if err != nil {
+		t.Fatalf("reopen after external reader release: %v", err)
+	}
+	t.Cleanup(func() { _ = reopened.Close() })
+	if _, err := reopened.GetParameter(ctx, queuedRef, 0, ""); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("queued write persisted after fail-closed purge: %v", err)
+	}
+	if row := rawSecretVersion(t, reopened, r, 1); row.State != domain.StateDestroyed {
+		t.Fatalf("purge did not commit before cleanup-pending: %+v", row)
 	}
 }
 

@@ -11,8 +11,24 @@ import (
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 
+	"github.com/Suhaibinator/kms/internal/crypto"
 	"github.com/Suhaibinator/kms/internal/domain"
 )
+
+func validateSecretPayloadWrapping(bound bool, payload EncryptedPayload) error {
+	wrapMode := zeroOr(payload.WrapMode, domain.WrapModeStandard)
+	if bound {
+		if wrapMode != domain.WrapModeBindingKey || len(payload.BindingKeySalt) != crypto.BindingKeySaltSize {
+			return domain.Errorf(domain.ErrFailedPrecondition,
+				"bound secret payload must use binding-key wrapping with a %d-byte salt", crypto.BindingKeySaltSize)
+		}
+		return nil
+	}
+	if wrapMode != domain.WrapModeStandard || len(payload.BindingKeySalt) != 0 {
+		return domain.Errorf(domain.ErrFailedPrecondition, "unbound secret payload must use standard wrapping without a binding-key salt")
+	}
+	return nil
+}
 
 func loadSecretLabels(tx *gorm.DB, secretID int64) (map[string]uint64, error) {
 	var labels []secretLabelModel
@@ -150,6 +166,9 @@ func (s *SQLStore) CreateSecretVersion(ctx context.Context, p CreateSecretParams
 
 		payload, err := p.Encrypt(newVer)
 		if err != nil {
+			return err
+		}
+		if err := validateSecretPayloadWrapping(p.Bound, payload); err != nil {
 			return err
 		}
 		// Rotation and this write both run under BEGIN IMMEDIATE. Verify the

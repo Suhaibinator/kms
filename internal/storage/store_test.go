@@ -80,13 +80,30 @@ func encryptStub(gotVersion *uint64) func(uint64) (EncryptedPayload, error) {
 	}
 }
 
+func boundEncryptStub(gotVersion *uint64) func(uint64) (EncryptedPayload, error) {
+	standard := encryptStub(gotVersion)
+	return func(v uint64) (EncryptedPayload, error) {
+		payload, err := standard(v)
+		if err != nil {
+			return EncryptedPayload{}, err
+		}
+		payload.WrapMode = domain.WrapModeBindingKey
+		payload.BindingKeySalt = bindingSalt('B', 's', v)
+		return payload, nil
+	}
+}
+
 func putSecret(t *testing.T, st *SQLStore, r domain.Ref, clientBound bool) (uint64, uint64) {
 	t.Helper()
+	encrypt := encryptStub(nil)
+	if clientBound {
+		encrypt = boundEncryptStub(nil)
+	}
 	v, rev, err := st.CreateSecretVersion(context.Background(), CreateSecretParams{
 		Ref:       r,
 		CreatedBy: "tester",
 		Bound:     clientBound,
-		Encrypt:   encryptStub(nil),
+		Encrypt:   encrypt,
 	})
 	if err != nil {
 		t.Fatalf("CreateSecretVersion(%s): %v", r, err)
@@ -184,6 +201,32 @@ func TestPragmasApplied(t *testing.T) {
 	check("journal_mode", "wal")
 	check("foreign_keys", "1")
 	check("busy_timeout", "5000")
+	check("secure_delete", "1")
+}
+
+func TestSecureDeleteAppliedToEveryPooledConnection(t *testing.T) {
+	st := newStore(t)
+	sqlDB, err := st.db.DB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	// Hold each checkout so database/sql must create a distinct physical
+	// connection; every one must have received the DSN pragma.
+	for i := range 4 {
+		conn, err := sqlDB.Conn(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = conn.Close() })
+		var got int
+		if err := conn.QueryRowContext(ctx, "PRAGMA secure_delete").Scan(&got); err != nil {
+			t.Fatalf("connection %d: %v", i, err)
+		}
+		if got != 1 {
+			t.Fatalf("connection %d secure_delete=%d, want 1", i, got)
+		}
+	}
 }
 
 func TestOpenCreatesDatabaseWithRestrictedPermissions(t *testing.T) {
@@ -847,7 +890,7 @@ func TestCreateSecretVersionAllowsMixedProtectionAndTracksCurrent(t *testing.T) 
 	r := ref("prod", "app", "s")
 	putSecret(t, st, r, false)
 	if _, _, err := st.CreateSecretVersion(ctx, CreateSecretParams{
-		Ref: r, Bound: true, Encrypt: encryptStub(nil),
+		Ref: r, Bound: true, Encrypt: boundEncryptStub(nil),
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -943,7 +986,7 @@ func TestCreateSecretVersionRejectsStaleExpectation(t *testing.T) {
 	r := ref("prod", "app", "guarded")
 
 	if _, _, err := st.CreateSecretVersion(ctx, CreateSecretParams{
-		Ref: r, Bound: true, AccessTokenHash: []byte("hash-v1"), Encrypt: encryptStub(nil),
+		Ref: r, Bound: true, AccessTokenHash: []byte("hash-v1"), Encrypt: boundEncryptStub(nil),
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -958,7 +1001,7 @@ func TestCreateSecretVersionRejectsStaleExpectation(t *testing.T) {
 		Expected: &SecretWriteExpectation{Exists: false},
 		Encrypt: func(version uint64) (EncryptedPayload, error) {
 			encrypted = true
-			return encryptStub(nil)(version)
+			return boundEncryptStub(nil)(version)
 		},
 	})
 	if !errors.Is(err, domain.ErrAborted) {
@@ -971,7 +1014,7 @@ func TestCreateSecretVersionRejectsStaleExpectation(t *testing.T) {
 	if _, _, err := st.CreateSecretVersion(ctx, CreateSecretParams{
 		Ref: r, Bound: true, AccessTokenHash: []byte("hash-v2"),
 		Expected: &SecretWriteExpectation{Exists: true, ID: recV1.ID, AccessTokenHash: []byte("hash-v1")},
-		Encrypt:  encryptStub(nil),
+		Encrypt:  boundEncryptStub(nil),
 	}); err != nil {
 		t.Fatalf("current token rotation: %v", err)
 	}
@@ -982,7 +1025,7 @@ func TestCreateSecretVersionRejectsStaleExpectation(t *testing.T) {
 		Expected: &SecretWriteExpectation{Exists: true, ID: recV1.ID, AccessTokenHash: []byte("hash-v1")},
 		Encrypt: func(version uint64) (EncryptedPayload, error) {
 			encrypted = true
-			return encryptStub(nil)(version)
+			return boundEncryptStub(nil)(version)
 		},
 	})
 	if !errors.Is(err, domain.ErrAborted) {
@@ -995,7 +1038,7 @@ func TestCreateSecretVersionRejectsStaleExpectation(t *testing.T) {
 	if _, _, err := st.CreateSecretVersion(ctx, CreateSecretParams{
 		Ref: r, Bound: true,
 		Expected: &SecretWriteExpectation{Exists: true, ID: recV1.ID, AccessTokenHash: []byte("hash-v2")},
-		Encrypt:  encryptStub(nil),
+		Encrypt:  boundEncryptStub(nil),
 	}); err != nil {
 		t.Fatalf("write with current expectation: %v", err)
 	}
@@ -1028,7 +1071,7 @@ func TestCreateSecretVersionConcurrentExpectedAbsentOnlyOneWins(t *testing.T) {
 				Ref:      r,
 				Bound:    true,
 				Expected: &SecretWriteExpectation{Exists: false},
-				Encrypt:  encryptStub(nil),
+				Encrypt:  boundEncryptStub(nil),
 			})
 			results <- result{version: version, err: err}
 		})
@@ -1067,7 +1110,7 @@ func TestCreateSecretVersionConcurrentTokenRotationsOnlyOneWins(t *testing.T) {
 	r := ref("prod", "app", "concurrent-rotation")
 	oldHash := []byte("hash-v1")
 	if _, _, err := st.CreateSecretVersion(ctx, CreateSecretParams{
-		Ref: r, Bound: true, AccessTokenHash: oldHash, Encrypt: encryptStub(nil),
+		Ref: r, Bound: true, AccessTokenHash: oldHash, Encrypt: boundEncryptStub(nil),
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -1092,7 +1135,7 @@ func TestCreateSecretVersionConcurrentTokenRotationsOnlyOneWins(t *testing.T) {
 			_, _, err := st.CreateSecretVersion(ctx, CreateSecretParams{
 				Ref: r, Bound: true, AccessTokenHash: newHash,
 				Expected: &SecretWriteExpectation{Exists: true, ID: rec.ID, AccessTokenHash: oldHash},
-				Encrypt:  encryptStub(nil),
+				Encrypt:  boundEncryptStub(nil),
 			})
 			results <- result{hash: newHash, err: err}
 		}(newHash)
@@ -1443,7 +1486,7 @@ func TestSecretVersionPinsContentAndProtectionAttributes(t *testing.T) {
 
 	bound := ref("prod", "app", "bound")
 	if _, _, err := st.CreateSecretVersion(ctx, CreateSecretParams{
-		Ref: bound, Bound: true, AccessTokenHash: []byte("bound-token"), Encrypt: encryptStub(nil),
+		Ref: bound, Bound: true, AccessTokenHash: []byte("bound-token"), Encrypt: boundEncryptStub(nil),
 	}); err != nil {
 		t.Fatal(err)
 	}
