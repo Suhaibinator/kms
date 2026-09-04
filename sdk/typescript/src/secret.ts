@@ -34,7 +34,11 @@ export class Secret {
       throw new TypeError("secret version must be a bigint in the uint64 range");
     }
     this.#contentType = options.contentType ?? "";
-    this.#bindKey = options.bindKey ?? "";
+    const bindKey = options.bindKey ?? "";
+    if (typeof bindKey !== "string") {
+      throw new TypeError("secret bindKey must be a string");
+    }
+    this.#bindKey = bindKey;
     Object.freeze(this);
   }
 

@@ -383,6 +383,39 @@ describe("ReleaseLoader", () => {
     expect(transport.calls.filter((call) => call.startsWith("secret:"))).toEqual([]);
   });
 
+  it.each([
+    ["parameter", "digest_mismatch"],
+    ["secret", "version_mismatch"],
+  ] as const)(
+    "rejects a validly digested %s pin whose empty content type differs from the live version",
+    async (kind, category) => {
+      const entry =
+        kind === "parameter"
+          ? parameterEntry("value", "value", 1n, "one", "")
+          : secretEntry("value", "value", 1n, "");
+      const release = makeRelease(1n, [entry]);
+      const transport = new FakeTransport(release);
+      transport.parameters.set("/prod/api/value", parameterResource("value", 1n, "one", "string"));
+      transport.secretMetadata.set("/prod/api/value", secretMetadataResource("value", 1n));
+      transport.secrets.set("/prod/api/value", secretResource("value", 1n, "secret", "string"));
+      let preparations = 0;
+      const loader = ReleaseLoader._create(transport, {
+        namespace,
+        name: "runtime",
+        clientName: "unit-test",
+      });
+
+      await expect(
+        loader.run(() => {
+          preparations += 1;
+          return invalidPrepared();
+        }),
+      ).rejects.toMatchObject({ category });
+      expect(preparations).toBe(0);
+      expect(loader.stats().applied).toBe(0n);
+    },
+  );
+
   it("defensively copies binding keys and ignores extra aliases", async () => {
     const release = makeRelease(1n, [secretEntry("database", "database/password", 11n, "string")]);
     const transport = new FakeTransport(release);

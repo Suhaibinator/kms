@@ -2,7 +2,12 @@ import { inspect } from "node:util";
 import { Metadata, status } from "@grpc/grpc-js";
 import { describe, expect, it, vi } from "vitest";
 import { type GetOptions, KmsClient } from "../src/client.js";
-import { ConfigError, KmsError } from "../src/errors.js";
+import {
+  ConfigError,
+  KmsError,
+  PURGE_CLEANUP_PENDING_MESSAGE,
+  PurgeCleanupPendingError,
+} from "../src/errors.js";
 import { REDACTED } from "../src/secret.js";
 import type { RpcTransport } from "../src/transport.js";
 import { FakeTransport } from "./helpers/fake-transport.js";
@@ -360,6 +365,48 @@ describe("KmsClient", () => {
         expect(rendered, operation).not.toContain(bindingKey);
         expect(rendered, operation).not.toContain(newBindingKey);
       }
+    }
+    await client.close();
+  });
+
+  it("distinguishes a purge that committed with artifact cleanup pending", async () => {
+    const bindingKey = "binding-key-must-not-leak";
+    const transport = new FakeTransport((path) => {
+      const details = path.endsWith("/PurgeSecretBindingCohort")
+        ? PURGE_CLEANUP_PENDING_MESSAGE
+        : `${PURGE_CLEANUP_PENDING_MESSAGE}: hostile suffix`;
+      throw Object.assign(new Error(details), {
+        code: status.UNAVAILABLE,
+        details,
+        metadata: new Metadata(),
+      });
+    });
+    const client = new KmsClient({ transport, namespace: "prod/api" });
+
+    const purgeError = await client
+      .purgeSecretBindingCohort("secret", { bindingKey })
+      .catch((reason: unknown) => reason);
+    expect(purgeError).toBeInstanceOf(PurgeCleanupPendingError);
+    expect(purgeError).toMatchObject({
+      code: "purge_cleanup_pending",
+      grpcCode: status.UNAVAILABLE,
+      message: PURGE_CLEANUP_PENDING_MESSAGE,
+    });
+    expect((purgeError as Error & { cause?: unknown }).cause).toBeUndefined();
+
+    const rotateError = await client
+      .rotateSecretBindingKey("secret", {
+        bindingKey,
+        newBindingKey: "replacement-binding-key",
+      })
+      .catch((reason: unknown) => reason);
+    expect(rotateError).toMatchObject({
+      code: "unavailable",
+      message: "KMS secret operation failed",
+    });
+    for (const rendered of [String(purgeError), inspect(purgeError), String(rotateError)]) {
+      expect(rendered).not.toContain(bindingKey);
+      expect(rendered).not.toContain("hostile suffix");
     }
     await client.close();
   });

@@ -7,8 +7,11 @@ import {
   isKmsError,
   KmsError,
   mapGrpcError,
+  mapPurgeSecretGrpcError,
   mapSecretGrpcError,
   NoNamespaceError,
+  PURGE_CLEANUP_PENDING_MESSAGE,
+  PurgeCleanupPendingError,
   wrapError,
 } from "../src/errors.js";
 import { FakeTransport } from "./helpers/fake-transport.js";
@@ -95,6 +98,28 @@ describe("gRPC error normalization", () => {
     });
     expect(mapped?.cause).toBeUndefined();
     expect(String(mapped)).not.toContain(canary);
+  });
+
+  it("preserves only the exact post-commit purge cleanup outcome", () => {
+    const pending = mapPurgeSecretGrpcError(
+      grpcError(status.UNAVAILABLE, PURGE_CLEANUP_PENDING_MESSAGE),
+    );
+    expect(pending).toBeInstanceOf(PurgeCleanupPendingError);
+    expect(pending).toMatchObject({
+      code: "purge_cleanup_pending",
+      grpcCode: status.UNAVAILABLE,
+      message: PURGE_CLEANUP_PENDING_MESSAGE,
+    });
+    expect(pending?.cause).toBeUndefined();
+
+    const ordinary = mapPurgeSecretGrpcError(
+      grpcError(status.UNAVAILABLE, `${PURGE_CLEANUP_PENDING_MESSAGE}-attacker-controlled`),
+    );
+    expect(ordinary).toMatchObject({
+      code: "unavailable",
+      message: "KMS secret operation failed",
+    });
+    expect(String(ordinary)).not.toContain("attacker-controlled");
   });
 
   it("preserves an injected DOM cancellation through the client RPC boundary", async () => {

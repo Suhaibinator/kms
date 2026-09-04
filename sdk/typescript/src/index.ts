@@ -29,9 +29,12 @@ export {
   isKmsError,
   KmsError,
   mapGrpcError,
+  mapPurgeSecretGrpcError,
   NoNamespaceError,
   normalizeError,
   NotInitializedError,
+  PURGE_CLEANUP_PENDING_MESSAGE,
+  PurgeCleanupPendingError,
   RateLimitedError,
   wrapError,
 } from "./errors.js";

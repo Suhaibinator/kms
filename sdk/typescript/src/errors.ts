@@ -19,7 +19,12 @@ export type KmsErrorCode =
   | "internal"
   | "unavailable"
   | "data_loss"
+  | "purge_cleanup_pending"
   | "unknown";
+
+/** Fixed wire-safe text for a purge that committed before artifact cleanup failed. */
+export const PURGE_CLEANUP_PENDING_MESSAGE =
+  "secret purge committed; database artifact cleanup is pending";
 
 export interface KmsErrorOptions extends ErrorOptions {
   /** The original gRPC status code, when the error came from an RPC. */
@@ -75,6 +80,19 @@ export class RateLimitedError extends KmsError {
   constructor(message: string, options: KmsErrorOptions = {}) {
     super("resource_exhausted", message, options);
     this.name = "RateLimitedError";
+  }
+}
+
+/**
+ * The secret cohort was logically purged, but live SQLite artifacts still
+ * require cleanup. The operation must not be retried with the retired key.
+ */
+export class PurgeCleanupPendingError extends KmsError {
+  constructor() {
+    super("purge_cleanup_pending", PURGE_CLEANUP_PENDING_MESSAGE, {
+      grpcCode: status.UNAVAILABLE,
+    });
+    this.name = "PurgeCleanupPendingError";
   }
 }
 
@@ -187,6 +205,28 @@ export function mapSecretGrpcError(error: ServiceError | Error | unknown): KmsEr
   return new KmsError(code, "KMS secret operation failed", {
     ...(grpcCode === undefined ? {} : { grpcCode }),
   });
+}
+
+/**
+ * Preserve the one distinct post-commit purge outcome without retaining any
+ * other server-provided text or cause.
+ */
+export function mapPurgeSecretGrpcError(
+  error: ServiceError | Error | unknown,
+): KmsError | undefined {
+  if (isPurgeCleanupPending(error)) return new PurgeCleanupPendingError();
+  return mapSecretGrpcError(error);
+}
+
+function isPurgeCleanupPending(error: unknown): boolean {
+  if (grpcCodeOf(error) !== status.UNAVAILABLE) return false;
+  if (error instanceof KmsError) return error.message === PURGE_CLEANUP_PENDING_MESSAGE;
+  if (!(error instanceof Error)) return false;
+  try {
+    return (error as Partial<GrpcErrorLike>).details === PURGE_CLEANUP_PENDING_MESSAGE;
+  } catch {
+    return false;
+  }
 }
 
 function grpcCodeOf(error: unknown): status | undefined {

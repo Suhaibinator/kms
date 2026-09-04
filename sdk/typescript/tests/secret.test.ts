@@ -90,6 +90,24 @@ describe("Secret", () => {
     expect(() => new Secret("secret", { version: 1 as unknown as bigint })).toThrow(TypeError);
   });
 
+  it("rejects a non-string declaration binding key without rendering it", () => {
+    const canary = "non-string-binding-key-canary";
+    const hostile = Object.freeze({
+      toString() {
+        throw new Error(canary);
+      },
+    });
+    let error: unknown;
+    try {
+      new Secret("", { bindKey: hostile as unknown as string });
+    } catch (caught) {
+      error = caught;
+    }
+    expect(error).toBeInstanceOf(TypeError);
+    expect(String(error)).toBe("TypeError: secret bindKey must be a string");
+    expect(String(error)).not.toContain(canary);
+  });
+
   it("newSecret wraps plaintext with defensive copies and exact metadata", () => {
     const input = Uint8Array.from([115, 101, 99, 114, 101, 116]);
     const secret = newSecret(input, {

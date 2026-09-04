@@ -5,6 +5,7 @@ import {
   ConfigError,
   KmsError,
   mapGrpcError,
+  mapPurgeSecretGrpcError,
   mapSecretGrpcError,
   RateLimitedError,
   wrapError,
@@ -702,6 +703,7 @@ export class KmsClient {
         ...guards,
       },
       options,
+      mapPurgeSecretGrpcError,
     );
     return frozenBindingResult(response);
   }
@@ -1050,13 +1052,14 @@ export class KmsClient {
     method: UnaryMethod<Request, Response>,
     request: Request,
     options: CallOptions,
+    errorMapper: typeof mapSecretGrpcError = mapSecretGrpcError,
   ): Promise<Response> {
     try {
       const response = await this.#transport.unary(method, request, this.#callOptions(options));
       this.#cache.invalidateSecret(displayPath(ref));
       return response;
     } catch (error) {
-      throwSecretMapped(error);
+      throwSecretMapped(error, errorMapper);
     }
   }
 
@@ -1345,8 +1348,11 @@ function throwMapped(error: unknown): never {
   throw mapped ?? wrapError("unexpected successful gRPC status", error);
 }
 
-function throwSecretMapped(error: unknown): never {
-  const mapped = mapSecretGrpcError(error);
+function throwSecretMapped(
+  error: unknown,
+  mapper: typeof mapSecretGrpcError = mapSecretGrpcError,
+): never {
+  const mapped = mapper(error);
   throw mapped ?? new KmsError("internal", "KMS secret operation failed");
 }
 

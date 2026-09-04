@@ -6,6 +6,7 @@ import {
   ParameterValue,
   type PolicySnapshot,
   type PreparedRelease,
+  PurgeCleanupPendingError,
   type PublicConfigWire,
   type ReleaseSnapshot,
   // @ts-expect-error Protocol transport types are internal and must not expose generated messages.
@@ -169,6 +170,7 @@ export function acceptsPublicApi(
   const purged: Promise<SecretBindingCohortResult> = client.purgeSecretBindingCohort("secret", {
     bindingKey: "operator-owned-binding-key",
   });
+  const cleanupPending = new PurgeCleanupPendingError();
   return [
     adapter,
     wire,
@@ -182,6 +184,7 @@ export function acceptsPublicApi(
     previewed,
     rotated,
     purged,
+    cleanupPending,
   ];
 }
 

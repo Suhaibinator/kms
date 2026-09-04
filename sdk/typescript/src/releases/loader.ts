@@ -627,7 +627,7 @@ export class ReleaseLoader {
       ) {
         throw new ResolutionError("digest_mismatch");
       }
-      if (entry.contentType && parameter.contentType !== entry.contentType) {
+      if (parameter.contentType !== entry.contentType) {
         throw new ResolutionError("digest_mismatch");
       }
       return { metadata, parameter: new ReleaseParameter(parameter.value, metadata) };
@@ -680,7 +680,7 @@ export class ReleaseLoader {
       if (!sameResourceRef(secret.ref, ref) || secret.version !== entry.version) {
         throw new ResolutionError("version_mismatch");
       }
-      if (entry.contentType && secret.contentType !== entry.contentType) {
+      if (secret.contentType !== entry.contentType) {
         throw new ResolutionError("version_mismatch");
       }
       return { metadata, secret: new ReleaseSecret(secret.value, metadata) };
