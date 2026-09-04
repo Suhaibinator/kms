@@ -13,7 +13,7 @@ export const DEFAULT_MAX_CACHE_ENTRIES = 4_096;
 export interface ReadCacheOptions {
   /** Entry lifetime in milliseconds. A non-positive value disables caching. */
   readonly ttlMs: number;
-  /** Independent maximum for parameter entries and secret entries. */
+  /** Maximum retained parameter entries. Secret plaintext is never cached. */
   readonly maxEntries?: number;
   /** Monotonic millisecond clock, injectable for deterministic tests. */
   readonly now?: () => number;
@@ -26,7 +26,7 @@ interface CacheEntry<T> {
 
 type EntryMap<T> = Map<string, Map<string, CacheEntry<T>>>;
 
-type CacheKind = "parameter" | "secret";
+type CacheKind = "parameter";
 
 interface GenerationState {
   epoch: object;
@@ -53,23 +53,18 @@ function positionalSelector(version: bigint, label: string): VersionRef {
 }
 
 /**
- * Bounded in-memory TTL cache used by parameter and secret reads.
+ * Bounded in-memory TTL cache used by parameter reads.
  *
- * Parameter and secret caps are independent. All secret writes and reads clone
- * their `Secret`, preventing callers from ever sharing plaintext buffers with
- * cache state. JavaScript execution is run-to-completion, so operations cannot
- * interleave while a map mutation is in progress.
+ * Secret methods remain as internal compatibility no-ops for watch wiring, but
+ * plaintext is never retained: secret protection is mutable live metadata.
  */
 export class ReadCache {
   readonly #ttlMs: number;
   readonly #maxEntries: number;
   readonly #now: () => number;
   readonly #parameters: EntryMap<string> = new Map();
-  readonly #secrets: EntryMap<Secret> = new Map();
   readonly #parameterGenerations: GenerationMap = new Map();
-  readonly #secretGenerations: GenerationMap = new Map();
   #parameterCount = 0;
-  #secretCount = 0;
 
   constructor(ttlMsOrOptions: number | ReadCacheOptions) {
     const options = typeof ttlMsOrOptions === "number" ? { ttlMs: ttlMsOrOptions } : ttlMsOrOptions;
@@ -92,7 +87,7 @@ export class ReadCache {
   }
 
   get secretSize(): number {
-    return this.#secretCount;
+    return 0;
   }
 
   getParameter(path: string, selector: VersionRef = {}): string | undefined {
@@ -132,12 +127,15 @@ export class ReadCache {
   }
 
   getSecret(path: string, selector: VersionRef = {}): Secret | undefined {
-    return this.#get(this.#secrets, path, selector, "secret")?.clone();
+    void path;
+    void selector;
+    return undefined;
   }
 
   setSecret(path: string, secret: Secret, selector: VersionRef = {}): void {
-    this.#secretCount = this.#set(this.#secrets, this.#secretCount, path, selector, secret.clone());
-    this.#secretCount = this.#evict(this.#secrets, this.#secretCount, "secret");
+    void path;
+    void secret;
+    void selector;
   }
 
   /** Positional Go-parity alias for internal client hot paths. */
@@ -152,7 +150,8 @@ export class ReadCache {
 
   /** @internal Capture the invalidation generation before starting a secret RPC. */
   beginSecretRead(path: string): ReadGeneration | undefined {
-    return this.#beginRead(this.#secretGenerations, "secret", path);
+    void path;
+    return undefined;
   }
 
   /** @internal Populate the secret cache only when no invalidation raced the RPC. */
@@ -162,9 +161,11 @@ export class ReadCache {
     label: string,
     secret: Secret,
   ): boolean {
-    if (!this.#isCurrent(this.#secretGenerations, generation, "secret")) return false;
-    this.putSecret(generation.path, version, label, secret);
-    return true;
+    void generation;
+    void version;
+    void label;
+    void secret;
+    return false;
   }
 
   /** @internal Release a read generation after its RPC settles, whether or not it cached. */
@@ -172,8 +173,7 @@ export class ReadCache {
     if (generation === undefined || generation.released) return;
     generation.released = true;
     generation.state.readers--;
-    const generations =
-      generation.kind === "parameter" ? this.#parameterGenerations : this.#secretGenerations;
+    const generations = this.#parameterGenerations;
     if (generation.state.readers === 0 && generations.get(generation.path) === generation.state) {
       generations.delete(generation.path);
     }
@@ -202,25 +202,12 @@ export class ReadCache {
   }
 
   invalidateSecret(path: string): void {
-    this.#invalidateGeneration(this.#secretGenerations, path);
-    const entries = this.#secrets.get(path);
-    if (entries === undefined) return;
-    this.#secretCount -= entries.size;
-    this.#secrets.delete(path);
+    void path;
   }
 
-  /**
-   * Invalidate tokenless secret cache entries in authoritative snapshot scope.
-   * A watch snapshot contains parameters only, so this closes the replay-window
-   * gap for secrets that changed while a subscriber was disconnected.
-   */
+  /** @internal Compatibility no-op: secret plaintext is never cached. */
   invalidateSecretsInNamespaces(namespaces: Iterable<NamespaceRef | string>): void {
-    this.#secretCount = this.#invalidateNamespaces(
-      this.#secrets,
-      this.#secretGenerations,
-      this.#secretCount,
-      namespaces,
-    );
+    void namespaces;
   }
 
   #invalidateNamespaces<T>(
@@ -252,11 +239,8 @@ export class ReadCache {
 
   clear(): void {
     for (const state of this.#parameterGenerations.values()) state.epoch = {};
-    for (const state of this.#secretGenerations.values()) state.epoch = {};
     this.#parameters.clear();
-    this.#secrets.clear();
     this.#parameterCount = 0;
-    this.#secretCount = 0;
   }
 
   #beginRead(
@@ -292,7 +276,7 @@ export class ReadCache {
     cache: EntryMap<T>,
     path: string,
     selector: VersionRef,
-    kind: "parameter" | "secret",
+    kind: "parameter",
   ): T | undefined {
     if (!this.enabled) return undefined;
     const entries = cache.get(path);
@@ -304,7 +288,6 @@ export class ReadCache {
 
     entries.delete(key);
     if (kind === "parameter") this.#parameterCount--;
-    else this.#secretCount--;
     if (entries.size === 0) cache.delete(path);
     return undefined;
   }
@@ -327,7 +310,7 @@ export class ReadCache {
     return count;
   }
 
-  #evict<T>(cache: EntryMap<T>, count: number, kind: "parameter" | "secret"): number {
+  #evict<T>(cache: EntryMap<T>, count: number, kind: "parameter"): number {
     if (count <= this.#maxEntries) return count;
     const now = this.#now();
 
@@ -356,7 +339,6 @@ export class ReadCache {
 
     // Keep the dedicated counters honest even if this method is extended.
     if (kind === "parameter") this.#parameterCount = count;
-    else this.#secretCount = count;
     return count;
   }
 }

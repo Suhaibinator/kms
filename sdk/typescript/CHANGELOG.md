@@ -8,6 +8,12 @@ a minor release may contain documented breaking changes.
 
 ### Changed
 
+- **Breaking (0.3.0):** operator-owned binding keys replace legacy per-version
+  key shares. Secret reads and writes accept `bindingKey`; in-place bind, unbind,
+  preview, guarded cohort rotation, and administrator purge are first-class
+  client operations. Release protection is resolved from exact live version
+  metadata, generated stores privately extract declaration `bindKey` values,
+  and secret plaintext caching is disabled.
 - **Breaking (configstore):** a startup default mismatch is no longer fatal.
   The candidate is applied and reported through `onDefaultMismatch` with
   severity `"error"`; `allowDefaultMismatch`, the `"fatal"` severity, and
@@ -65,9 +71,8 @@ a minor release may contain documented breaking changes.
   canonical decimal strings while retaining whole-value secret redaction.
 - Disposed declarative values unregister their live parameter handlers, and
   watch shutdown removes external abort listeners.
-- Expanded watch scopes retry a full snapshot until it arrives, preserve
-  per-key revision fences, and immediately invalidate newly watched secret
-  caches; disposal cannot race a late parameter subscription.
+- Expanded watch scopes retry a full snapshot until it arrives and preserve
+  per-key revision fences; disposal cannot race a late parameter subscription.
 - Authoritative snapshots and explicit tombstones invalidate ordinary
   parameter-cache reads; expanded scopes also interrupt reconnect backoff, and
   late reconciliation pages or absence sets cannot mutate a released and

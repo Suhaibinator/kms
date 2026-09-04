@@ -15,6 +15,7 @@ import {
   type Parameter,
   type ReleaseWatchRegistration,
   type ResourceRef,
+  type SecretMetadata,
   type WatchReleaseEvent,
   type WatchReleaseRequest,
 } from "../src/generated/kms.js";
@@ -524,6 +525,10 @@ class FakeReleaseTransport implements ReleaseTransport {
     return Promise.reject(new Error("unexpected secret fetch"));
   }
 
+  fetchSecretMetadata(): Promise<SecretMetadata> {
+    return Promise.reject(new Error("unexpected secret metadata fetch"));
+  }
+
   watchRelease(registration: ReleaseWatchRegistration, signal: AbortSignal): ReleaseWatchStream {
     this.registration = registration;
     this.stream = new FakeReleaseWatchStream(signal);
@@ -588,8 +593,6 @@ function parameterEntry(
     contentType: "json",
     metadataJson: `value:${value}`,
     parameterDigest: sha256Hex(value),
-    clientBound: false,
-    hasAccessToken: false,
   };
 }
 

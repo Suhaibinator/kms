@@ -485,10 +485,11 @@ function renderBinding(
   line();
 
   line(`export type ValidateConfig = (config: ${root}) => void | Promise<void>;`);
-  line(`export type StartOptions = Omit<ManagedConfigOptions, "contract">;`);
+  line(`export type StartOptions = Omit<ManagedConfigOptions, "contract" | "bindingKeys">;`);
   line();
   line("export class Store {");
   line(`  readonly #defaults: ConfigSnapshot<${root}>;`);
+  line("  readonly #bindingKeys: Readonly<Record<string, string>>;");
   line("  readonly #validate: ValidateConfig;");
   line(`  #active: ConfigSnapshot<${root}> | undefined;`);
   line("  #started = false;");
@@ -498,11 +499,19 @@ function renderBinding(
     '    if (typeof validate !== "function") throw new TypeError("generated config store: validate callback is required");',
   );
   line("    const copiedDefaults = writableClone(defaults);");
+  line("    const bindingKeys = Object.create(null) as Record<string, string>;");
   for (const secret of descriptor.secrets) {
     line(
       `    assertZeroSecret(copiedDefaults[${quote(secret.property)}], ${quote(secret.alias)});`,
     );
+    line(`    if (copiedDefaults[${quote(secret.property)}].bindKey.length > 0) {`);
+    line(
+      `      bindingKeys[${quote(secret.alias)}] = copiedDefaults[${quote(secret.property)}].bindKey;`,
+    );
+    line("    }");
+    line(`    setProperty(copiedDefaults, ${quote(secret.property)}, new Secret());`);
   }
+  line("    this.#bindingKeys = Object.freeze(bindingKeys);");
   line("    this.#defaults = immutableSnapshot(copiedDefaults);");
   line("    this.#validate = validate;");
   line("  }");
@@ -518,7 +527,7 @@ function renderBinding(
   line("    this.#started = true;");
   line("    return startManagedConfig(");
   line("      client,");
-  line("      { ...options, contract: generatedContract },");
+  line("      { ...options, bindingKeys: this.#bindingKeys, contract: generatedContract },");
   line("      (snapshot, candidateSignal) => this.#prepare(snapshot, candidateSignal),");
   line("      signal,");
   line("    );");
@@ -584,6 +593,12 @@ function renderBinding(
     line(`      assertSecret(candidate[${quote(secret.property)}], ${quote(secret.alias)});`);
     line(
       `      assertSecret(effectiveDefaults[${quote(secret.property)}], ${quote(secret.alias)});`,
+    );
+    line(
+      `      setProperty(candidate, ${quote(secret.property)}, stripSecretBindingKey(candidate[${quote(secret.property)}]));`,
+    );
+    line(
+      `      setProperty(effectiveDefaults, ${quote(secret.property)}, stripSecretBindingKey(effectiveDefaults[${quote(secret.property)}]));`,
     );
   }
   line("      validatedCandidate = writableClone(candidate);");
@@ -776,6 +791,21 @@ function renderBinding(
     line("    };");
     line("  }");
     line("  return node;");
+    line("}");
+    line();
+  }
+  if (hasSecrets) {
+    line("function stripSecretBindingKey(value: Secret): Secret {");
+    line("  const bytes = value.bytes();");
+    line("  try {");
+    line("    return new Secret(bytes, {");
+    line("      path: value.path,");
+    line("      version: value.version,");
+    line("      contentType: value.contentType,");
+    line("    });");
+    line("  } finally {");
+    line("    bytes.fill(0);");
+    line("  }");
     line("}");
     line();
   }

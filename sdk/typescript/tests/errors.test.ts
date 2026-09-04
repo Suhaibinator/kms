@@ -7,6 +7,7 @@ import {
   isKmsError,
   KmsError,
   mapGrpcError,
+  mapSecretGrpcError,
   NoNamespaceError,
   wrapError,
 } from "../src/errors.js";
@@ -69,6 +70,31 @@ describe("gRPC error normalization", () => {
     expect(mapped).toBeInstanceOf(KmsError);
     expect(mapped).toMatchObject({ code: "not_found", grpcCode: status.NOT_FOUND });
     expect((mapped as Error).cause).toBe(source);
+  });
+
+  it("maps secret RPC errors from status alone without reading or retaining hostile details", () => {
+    const canary = "reflected-secret-credential";
+    const source = new Error(canary);
+    let detailsReads = 0;
+    Object.defineProperties(source, {
+      code: { value: status.PERMISSION_DENIED },
+      details: {
+        get() {
+          detailsReads += 1;
+          throw new Error(canary);
+        },
+      },
+    });
+
+    const mapped = mapSecretGrpcError(source);
+    expect(detailsReads).toBe(0);
+    expect(mapped).toMatchObject({
+      code: "permission_denied",
+      grpcCode: status.PERMISSION_DENIED,
+      message: "KMS secret operation failed",
+    });
+    expect(mapped?.cause).toBeUndefined();
+    expect(String(mapped)).not.toContain(canary);
   });
 
   it("preserves an injected DOM cancellation through the client RPC boundary", async () => {

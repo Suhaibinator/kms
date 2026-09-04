@@ -41,8 +41,8 @@ with a client bundler.
 - Treat the CA passed to `tlsFromFiles` or `mtlsFromFiles` as a trust anchor for
   the operator-provided KMS server certificate. Do not substitute the built-in
   CA used by KMS to issue client identities.
-- Keep bearer tokens, private keys, per-secret access tokens, and client-bound
-  key shares outside source control and browser-visible environment variables.
+- Keep bearer tokens, private keys, per-secret access tokens, and binding keys
+  outside source control and browser-visible environment variables.
 - Set bounded operation deadlines, close clients during graceful shutdown, and
   monitor watch/reconciliation and release-loader health.
 - Publish only values selected by `definePublicProjection`. Client-side

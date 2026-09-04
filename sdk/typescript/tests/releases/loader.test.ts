@@ -7,6 +7,7 @@ import {
   type Parameter,
   type ReleaseWatchRegistration,
   type ResourceRef,
+  type SecretMetadata,
   type WatchReleaseEvent,
   type WatchReleaseRequest,
 } from "../../src/generated/kms.js";
@@ -81,8 +82,10 @@ class FakeTransport implements ReleaseTransport {
   registration: ReleaseWatchRegistration | undefined;
   readonly calls: string[] = [];
   readonly tokens: string[] = [];
+  readonly bindingKeys: string[] = [];
   readonly parameters = new Map<string, Parameter>();
   readonly secrets = new Map<string, FetchedSecret>();
+  readonly secretMetadata = new Map<string, SecretMetadata>();
   getActiveReleaseHook:
     | ((
         namespace: NamespaceRef,
@@ -127,13 +130,22 @@ class FakeTransport implements ReleaseTransport {
     ref: ResourceRef,
     _version: bigint,
     secretToken: string,
+    bindingKey: string,
     _signal?: AbortSignal,
   ): Promise<FetchedSecret> {
     this.calls.push(`secret:${pathOf(ref)}`);
     this.tokens.push(secretToken);
+    this.bindingKeys.push(bindingKey);
     const secret = this.secrets.get(pathOf(ref));
     if (!secret) return Promise.reject(new Error("secret not found"));
     return Promise.resolve(secret);
+  }
+
+  fetchSecretMetadata(ref: ResourceRef): Promise<SecretMetadata> {
+    this.calls.push(`secret-metadata:${pathOf(ref)}`);
+    const metadata = this.secretMetadata.get(pathOf(ref));
+    if (!metadata) return Promise.reject(new Error("secret metadata not found"));
+    return Promise.resolve(metadata);
   }
 
   watchRelease(
@@ -158,7 +170,7 @@ describe("ReleaseLoader", () => {
     const policy = '{"minLength":14}';
     const release = makeRelease(3n, [
       parameterEntry("policy", "policy/password", 7n, policy, "json"),
-      secretEntry("database", "database/password", 11n, "string", true),
+      secretEntry("database", "database/password", 11n, "string"),
     ]);
     const transport = new FakeTransport(release, 22n);
     transport.parameters.set(
@@ -168,6 +180,10 @@ describe("ReleaseLoader", () => {
     transport.secrets.set(
       "/prod/api/database/password",
       secretResource("database/password", 11n, "super-secret", "string"),
+    );
+    transport.secretMetadata.set(
+      "/prod/api/database/password",
+      secretMetadataResource("database/password", 11n, true, true),
     );
     const order: string[] = [];
     const committed = deferred<void>();
@@ -181,9 +197,10 @@ describe("ReleaseLoader", () => {
         order.push(`token:${alias}:${path}`);
         return "local-token";
       },
+      bindingKeys: { database: "local-binding-key" },
       validateManifest: (manifest) => {
         order.push("manifest");
-        expect(manifest.entry("database")?.hasAccessToken).toBe(true);
+        expect(manifest.entry("database")?.path).toBe("/prod/api/database/password");
         expect(JSON.stringify(manifest)).not.toContain("super-secret");
       },
     });
@@ -213,6 +230,7 @@ describe("ReleaseLoader", () => {
     expect(order[0]).toBe("manifest");
     expect(order).toContain("token:database:/prod/api/database/password");
     expect(transport.tokens).toEqual(["local-token"]);
+    expect(transport.bindingKeys).toEqual(["local-binding-key"]);
     expect(transport.registration).toMatchObject({
       name: "runtime",
       clientName: "unit-test",
@@ -228,6 +246,208 @@ describe("ReleaseLoader", () => {
       appliedRevision: 22n,
     });
     expect(loader.stats().applied).toBe(1n);
+  });
+
+  it("rejects missing exact-version credentials before fetching plaintext", async () => {
+    const release = makeRelease(1n, [secretEntry("database", "database/password", 11n, "string")]);
+    const transport = new FakeTransport(release);
+    transport.secretMetadata.set(
+      "/prod/api/database/password",
+      secretMetadataResource("database/password", 11n, true, false),
+    );
+    transport.secrets.set(
+      "/prod/api/database/password",
+      secretResource("database/password", 11n, "must-not-fetch", "string"),
+    );
+    const loader = ReleaseLoader._create(transport, {
+      namespace,
+      name: "runtime",
+      clientName: "unit-test",
+    });
+
+    await expect(loader.run(() => invalidPrepared())).rejects.toMatchObject({
+      category: "token_unavailable",
+    });
+    expect(transport.calls.filter((call) => call.startsWith("secret:"))).toEqual([]);
+  });
+
+  it("does not mistake inherited object properties for binding keys", async () => {
+    const release = makeRelease(1n, [secretEntry("toString", "database/password", 11n, "string")]);
+    const transport = new FakeTransport(release);
+    transport.secretMetadata.set(
+      "/prod/api/database/password",
+      secretMetadataResource("database/password", 11n, true, false),
+    );
+    const loader = ReleaseLoader._create(transport, {
+      namespace,
+      name: "runtime",
+      clientName: "unit-test",
+    });
+
+    await expect(loader.run(() => invalidPrepared())).rejects.toMatchObject({
+      category: "token_unavailable",
+    });
+    expect(transport.calls.filter((call) => call.startsWith("secret:"))).toEqual([]);
+  });
+
+  it("requires an access token independently of binding-key configuration", async () => {
+    const release = makeRelease(1n, [secretEntry("database", "database/password", 11n, "string")]);
+    const transport = new FakeTransport(release);
+    transport.secretMetadata.set(
+      "/prod/api/database/password",
+      secretMetadataResource("database/password", 11n, false, true),
+    );
+    const loader = ReleaseLoader._create(transport, {
+      namespace,
+      name: "runtime",
+      clientName: "unit-test",
+      bindingKeys: { database: "irrelevant-extra-key" },
+    });
+
+    await expect(loader.run(() => invalidPrepared())).rejects.toMatchObject({
+      category: "token_unavailable",
+    });
+    expect(transport.calls.filter((call) => call.startsWith("secret:"))).toEqual([]);
+  });
+
+  it("classifies a rejected supplied binding key as resolution_failed", async () => {
+    const release = makeRelease(1n, [secretEntry("database", "database/password", 11n, "string")]);
+    const transport = new FakeTransport(release);
+    transport.secretMetadata.set(
+      "/prod/api/database/password",
+      secretMetadataResource("database/password", 11n, true, false),
+    );
+    const loader = ReleaseLoader._create(transport, {
+      namespace,
+      name: "runtime",
+      clientName: "unit-test",
+      bindingKeys: { database: "wrong-key" },
+    });
+
+    const error = await loader.run(() => invalidPrepared()).catch((reason: unknown) => reason);
+    expect(error).toMatchObject({ category: "resolution_failed" });
+    expect(String(error)).not.toContain("wrong-key");
+    expect(transport.bindingKeys).toEqual(["wrong-key"]);
+  });
+
+  it.each([
+    ["missing", undefined],
+    ["missing version", secretMetadataResource("database/password", 12n)],
+    ["duplicate version", duplicateSecretMetadataResource("database/password", 11n)],
+    ["disabled", secretMetadataResource("database/password", 11n, false, false, "disabled")],
+    ["destroyed", secretMetadataResource("database/password", 11n, false, false, "destroyed")],
+    ["expired", secretMetadataResource("database/password", 11n, false, false, "enabled", 99n)],
+  ] as const)(
+    "rejects %s exact live secret metadata as resolution_failed",
+    async (_name, metadata) => {
+      const release = makeRelease(1n, [
+        secretEntry("database", "database/password", 11n, "string"),
+      ]);
+      const transport = new FakeTransport(release);
+      if (metadata) transport.secretMetadata.set("/prod/api/database/password", metadata);
+      const loader = ReleaseLoader._create(transport, {
+        namespace,
+        name: "runtime",
+        clientName: "unit-test",
+        now: () => 100,
+      });
+
+      await expect(loader.run(() => invalidPrepared())).rejects.toMatchObject({
+        category: "resolution_failed",
+      });
+      expect(transport.calls.filter((call) => call.startsWith("secret:"))).toEqual([]);
+    },
+  );
+
+  it("rejects mismatched live metadata identity before credential lookup or plaintext fetch", async () => {
+    const release = makeRelease(1n, [secretEntry("database", "database/password", 11n, "string")]);
+    const transport = new FakeTransport(release);
+    const metadata = secretMetadataResource("other/password", 11n, true, true);
+    transport.secretMetadata.set("/prod/api/database/password", metadata);
+    let tokenCalls = 0;
+    const loader = ReleaseLoader._create(transport, {
+      namespace,
+      name: "runtime",
+      clientName: "unit-test",
+      bindingKeys: { database: "must-not-use" },
+      secretTokenProvider: () => {
+        tokenCalls += 1;
+        return "must-not-use";
+      },
+    });
+
+    await expect(loader.run(() => invalidPrepared())).rejects.toMatchObject({
+      category: "version_mismatch",
+    });
+    expect(tokenCalls).toBe(0);
+    expect(transport.calls.filter((call) => call.startsWith("secret:"))).toEqual([]);
+  });
+
+  it("defensively copies binding keys and ignores extra aliases", async () => {
+    const release = makeRelease(1n, [secretEntry("database", "database/password", 11n, "string")]);
+    const transport = new FakeTransport(release);
+    transport.secretMetadata.set(
+      "/prod/api/database/password",
+      secretMetadataResource("database/password", 11n, true),
+    );
+    transport.secrets.set(
+      "/prod/api/database/password",
+      secretResource("database/password", 11n, "secret", "string"),
+    );
+    const source = { database: "original-key", extra: "never-transmit" };
+    let tokenCalls = 0;
+    const controller = new AbortController();
+    const committed = deferred<void>();
+    const loader = ReleaseLoader._create(transport, {
+      namespace,
+      name: "runtime",
+      clientName: "unit-test",
+      bindingKeys: source,
+      secretTokenProvider: () => {
+        tokenCalls += 1;
+        return "unused-token";
+      },
+    });
+    source.database = "mutated-key";
+    const run = loader.run(
+      () => ({
+        commit: () => {
+          committed.resolve();
+          return undefined;
+        },
+        abort: () => undefined,
+      }),
+      controller.signal,
+    );
+    await committed.promise;
+    controller.abort();
+    await expect(run).rejects.toMatchObject({ name: "AbortError" });
+
+    expect(tokenCalls).toBe(0);
+    expect(transport.tokens).toEqual([""]);
+    expect(transport.bindingKeys).toEqual(["original-key"]);
+    expect(String(loader.status())).not.toContain("original-key");
+  });
+
+  it.each([
+    ["parameter", parameterEntry("policy", "policy", 1n, "value")],
+    ["secret", secretEntry("database", "database/password", 1n, "string")],
+  ] as const)("rejects cross-namespace %s pins before any resource fetch", async (_kind, entry) => {
+    entry.ref = { namespace: { env: "prod", app: "other" }, key: "policy" };
+    const release = makeRelease(1n, [entry]);
+    const transport = new FakeTransport(release);
+    const loader = ReleaseLoader._create(transport, {
+      namespace,
+      name: "runtime",
+      clientName: "unit-test",
+    });
+
+    await expect(loader.run(() => invalidPrepared())).rejects.toMatchObject({
+      category: "resolution_failed",
+    });
+    expect(
+      transport.calls.filter((call) => call.startsWith("parameter:") || call.startsWith("secret")),
+    ).toEqual([]);
   });
 
   it("carries a bounded divergence summary on applied acknowledgements only", async () => {
@@ -297,7 +517,7 @@ describe("ReleaseLoader", () => {
   });
 
   it("runs manifest validation before fetch or token lookup and redacts its failure", async () => {
-    const release = makeRelease(1n, [secretEntry("password", "password", 2n, "string", true)]);
+    const release = makeRelease(1n, [secretEntry("password", "password", 2n, "string")]);
     const transport = new FakeTransport(release);
     let tokenCalls = 0;
     const loader = ReleaseLoader._create(transport, {
@@ -985,8 +1205,6 @@ function parameterEntry(
     contentType,
     metadataJson: "",
     parameterDigest: sha256Hex(value),
-    clientBound: false,
-    hasAccessToken: false,
   };
 }
 
@@ -995,7 +1213,6 @@ function secretEntry(
   key: string,
   version: bigint,
   contentType: string,
-  protectedSecret: boolean,
 ): ConfigurationReleaseEntry {
   return {
     alias,
@@ -1005,9 +1222,48 @@ function secretEntry(
     contentType,
     metadataJson: "",
     parameterDigest: "",
-    clientBound: false,
-    hasAccessToken: protectedSecret,
   };
+}
+
+function secretMetadataResource(
+  key: string,
+  version: bigint,
+  bound = false,
+  hasAccessToken = false,
+  state = "enabled",
+  expiresAtUnixMs = 0n,
+): SecretMetadata {
+  return {
+    ref: { namespace, key },
+    contentType: "string",
+    bound,
+    hasAccessToken,
+    metadataJson: "",
+    createdAtUnixMs: 1n,
+    updatedAtUnixMs: 1n,
+    labels: { current: version },
+    versions: [
+      {
+        version,
+        state,
+        createdBy: "test",
+        createdAtUnixMs: 1n,
+        destroyedAtUnixMs: 0n,
+        expiresAtUnixMs,
+        metadataJson: "",
+        bound,
+        hasAccessToken,
+      },
+    ],
+  };
+}
+
+function duplicateSecretMetadataResource(key: string, version: bigint): SecretMetadata {
+  const metadata = secretMetadataResource(key, version);
+  const first = metadata.versions[0];
+  if (!first) throw new Error("secret metadata fixture omitted its version");
+  metadata.versions.push({ ...first });
+  return metadata;
 }
 
 function parameterResource(

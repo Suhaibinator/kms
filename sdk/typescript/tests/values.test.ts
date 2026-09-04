@@ -1,4 +1,4 @@
-import { inspect } from "node:util";
+import { format, inspect } from "node:util";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -86,6 +86,7 @@ describe("SecretValue", () => {
     const value = new SecretValue("secret/key", {
       envVar: "SDK_TEST_SECRET",
       token: "access-token-must-not-render",
+      bindKey: "binding-key-must-not-render",
       default: "default-must-not-render",
     });
 
@@ -93,19 +94,33 @@ describe("SecretValue", () => {
 
     expect(value.value()).toBe("from-env");
     expect(client.secretCalls).toHaveLength(0);
-    for (const rendered of [String(value), inspect(value), JSON.stringify(value)]) {
+    expect(Reflect.ownKeys(value)).toEqual([]);
+    expect({ ...value }).toEqual({});
+    for (const rendered of [
+      String(value),
+      `${value}`,
+      value.toString(),
+      value.valueOf(),
+      inspect(value),
+      format("%s", value),
+      format("%o", value),
+      format("%j", value),
+      JSON.stringify(value),
+      JSON.stringify({ value }),
+    ]) {
       expect(rendered).toContain(REDACTED);
       expect(rendered).not.toContain("from-env");
       expect(rendered).not.toContain("access-token-must-not-render");
+      expect(rendered).not.toContain("binding-key-must-not-render");
       expect(rendered).not.toContain("default-must-not-render");
     }
     expect(Object.keys(value)).toEqual([]);
   });
 
-  it("fetches the store and forwards token and cancellation options", async () => {
+  it("fetches the store and forwards independent credentials and cancellation options", async () => {
     const client = new FakeResolver();
     client.secrets.set("secret/key", new Secret("from-store", { version: 7n }));
-    const value = new SecretValue({ key: "secret/key", token: "token" });
+    const value = new SecretValue({ key: "secret/key", token: "token", bindKey: "binding-key" });
     const controller = new AbortController();
 
     const deadline = new Date(Date.now() + 1_000);
@@ -116,7 +131,12 @@ describe("SecretValue", () => {
     expect(value.secret()).not.toBe(client.secrets.get("secret/key"));
     expect(client.secretCalls[0]).toEqual({
       key: "secret/key",
-      options: { signal: controller.signal, deadline, secretToken: "token" },
+      options: {
+        signal: controller.signal,
+        deadline,
+        secretToken: "token",
+        bindingKey: "binding-key",
+      },
     });
   });
 

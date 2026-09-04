@@ -1,7 +1,14 @@
 import { basename } from "node:path";
 import type { ChannelCredentials, ChannelOptions } from "@grpc/grpc-js";
 import { ReadCache } from "./cache.js";
-import { ConfigError, KmsError, mapGrpcError, RateLimitedError, wrapError } from "./errors.js";
+import {
+  ConfigError,
+  KmsError,
+  mapGrpcError,
+  mapSecretGrpcError,
+  RateLimitedError,
+  wrapError,
+} from "./errors.js";
 import {
   AdminServiceService,
   type ConfigurationRelease,
@@ -18,8 +25,10 @@ import type {
   Parameter,
   PutResult,
   PutSecretResult,
+  SecretBindingCohortResult,
   SecretInfo,
   SecretVersion,
+  SecretVersionMutationResult,
   WhoAmI,
 } from "./models.js";
 import {
@@ -99,6 +108,7 @@ export interface CallOptions {
 
 export interface GetOptions extends CallOptions, VersionRef {
   readonly secretToken?: string;
+  readonly bindingKey?: string;
 }
 
 export interface PutParameterOptions extends CallOptions {
@@ -109,11 +119,34 @@ export interface PutParameterOptions extends CallOptions {
 export interface PutSecretOptions extends CallOptions {
   readonly contentType?: string;
   readonly metadataJson?: string;
-  readonly clientBound?: boolean;
+  readonly bindingKey?: string;
   readonly generateAccessToken?: boolean;
   readonly expiresAtUnixMs?: bigint;
-  readonly secretToken?: string;
 }
+
+export interface BindSecretOptions extends CallOptions {
+  readonly version?: bigint;
+  readonly bindingKey: string;
+}
+
+export interface PreviewSecretBindingCohortOptions extends CallOptions {
+  readonly anchorVersion?: bigint;
+  readonly bindingKey: string;
+}
+
+export interface SecretBindingCohortGuardOptions {
+  readonly expectedRevision?: bigint;
+  readonly expectedAffectedVersions?: readonly bigint[];
+}
+
+export interface RotateSecretBindingKeyOptions
+  extends PreviewSecretBindingCohortOptions,
+    SecretBindingCohortGuardOptions {
+  readonly newBindingKey: string;
+}
+
+export type PurgeSecretBindingCohortOptions = PreviewSecretBindingCohortOptions &
+  SecretBindingCohortGuardOptions;
 
 export interface ListOptions extends CallOptions {
   readonly keyPrefix?: string;
@@ -146,6 +179,7 @@ export interface ClientReleaseLoaderOptions {
   readonly reconcileIntervalMs?: number;
   readonly maxConcurrentFetches?: number;
   readonly secretTokenProvider?: SecretTokenProvider;
+  readonly bindingKeys?: Readonly<Record<string, string>>;
   readonly validateManifest?: ValidateReleaseManifest;
   /** Injected only for deterministic tests. */
   readonly now?: () => number;
@@ -305,22 +339,9 @@ export class KmsClient {
   async getSecret(key: string, options: GetOptions = {}): Promise<Secret> {
     const ref = await this.#resolveResourceRefForCall(key, options);
     const selector = normalizeVersionRef(options);
-    const path = displayPath(ref);
-    if (!options.secretToken) {
-      const cached = this.#cache.getSecretAt(path, selector.version, selector.label);
-      if (cached) return cached;
-    }
-
-    const generation = options.secretToken ? undefined : this.#cache.beginSecretRead(path);
-    try {
-      const secret = await this.fetchSecret(ref, selector, options);
-      if (generation !== undefined) {
-        this.#cache.cacheSecretIfUnchanged(generation, selector.version, selector.label, secret);
-      }
-      return secret;
-    } finally {
-      this.#cache.endRead(generation);
-    }
+    // Secret protection is live metadata. Never serve plaintext from cache:
+    // doing so could bypass binding/token protection added after a prior read.
+    return this.fetchSecret(ref, selector, options);
   }
 
   /** @internal Exact-ref fetch used by the release runtime. */
@@ -338,6 +359,7 @@ export class KmsClient {
           version: selector.version,
           label: selector.label,
           secretToken: options.secretToken ?? "",
+          bindingKey: options.bindingKey ?? "",
         },
         this.#callOptions(options),
       );
@@ -351,7 +373,7 @@ export class KmsClient {
         contentType: response.contentType,
       });
     } catch (error) {
-      throwMapped(error);
+      throwSecretMapped(error);
     }
   }
 
@@ -405,10 +427,9 @@ export class KmsClient {
           value: plaintext,
           contentType: options.contentType ?? "",
           metadataJson: options.metadataJson ?? "",
-          clientBound: options.clientBound ?? false,
+          bindingKey: options.bindingKey ?? "",
           generateAccessToken: options.generateAccessToken ?? false,
           expiresAtUnixMs,
-          secretToken: options.secretToken ?? "",
         },
         this.#callOptions(options),
       );
@@ -419,7 +440,7 @@ export class KmsClient {
         accessToken: response.accessToken,
       });
     } catch (error) {
-      throwMapped(error);
+      throwSecretMapped(error);
     } finally {
       plaintext.fill(0);
     }
@@ -608,6 +629,81 @@ export class KmsClient {
       options,
     );
     return Object.freeze(response);
+  }
+
+  async bindSecret(key: string, options: BindSecretOptions): Promise<SecretVersionMutationResult> {
+    return this.#bindingMutation(key, options.version ?? 0n, options.bindingKey, options, true);
+  }
+
+  async unbindSecret(
+    key: string,
+    options: BindSecretOptions,
+  ): Promise<SecretVersionMutationResult> {
+    return this.#bindingMutation(key, options.version ?? 0n, options.bindingKey, options, false);
+  }
+
+  async previewSecretBindingCohort(
+    key: string,
+    options: PreviewSecretBindingCohortOptions,
+  ): Promise<SecretBindingCohortResult> {
+    const anchorVersion = options.anchorVersion ?? 0n;
+    assertUint64(anchorVersion, "previewSecretBindingCohort anchorVersion");
+    const ref = await this.#resolveResourceRefForCall(key, options);
+    try {
+      const response = await this.#transport.unary(
+        SecretServiceService.previewSecretBindingCohort,
+        { ref: toWireRef(ref), anchorVersion, bindingKey: options.bindingKey },
+        this.#callOptions(options),
+      );
+      return frozenBindingResult(response);
+    } catch (error) {
+      throwSecretMapped(error);
+    }
+  }
+
+  async rotateSecretBindingKey(
+    key: string,
+    options: RotateSecretBindingKeyOptions,
+  ): Promise<SecretBindingCohortResult> {
+    const anchorVersion = options.anchorVersion ?? 0n;
+    assertUint64(anchorVersion, "rotateSecretBindingKey anchorVersion");
+    const guards = bindingCohortGuards(options, "rotateSecretBindingKey");
+    const ref = await this.#resolveResourceRefForCall(key, options);
+    const response = await this.#secretMutation(
+      ref,
+      SecretServiceService.rotateSecretBindingKey,
+      {
+        ref: toWireRef(ref),
+        anchorVersion,
+        bindingKey: options.bindingKey,
+        newBindingKey: options.newBindingKey,
+        ...guards,
+      },
+      options,
+    );
+    return frozenBindingResult(response);
+  }
+
+  async purgeSecretBindingCohort(
+    key: string,
+    options: PurgeSecretBindingCohortOptions,
+  ): Promise<SecretBindingCohortResult> {
+    const anchorVersion = options.anchorVersion ?? 0n;
+    assertUint64(anchorVersion, "purgeSecretBindingCohort anchorVersion");
+    const guards = bindingCohortGuards(options, "purgeSecretBindingCohort");
+    const ref = await this.#resolveResourceRefForCall(key, options);
+    const response = await this.#secretMutation(
+      ref,
+      SecretServiceService.purgeSecretBindingCohort,
+      {
+        ref: toWireRef(ref),
+        anchorVersion,
+        bindingKey: options.bindingKey,
+        ...guards,
+      },
+      options,
+    );
+    return frozenBindingResult(response);
   }
 
   async watch(callback: WatchCallback, options: WatchOptions = {}): Promise<() => void> {
@@ -875,11 +971,11 @@ export class KmsClient {
           throwMapped(error);
         }
       },
-      fetchSecret: async (wireRef, version, secretToken, signal) => {
+      fetchSecret: async (wireRef, version, secretToken, bindingKey, signal) => {
         try {
           const response = await this.#transport.unary(
             SecretServiceService.getSecret,
-            { ref: wireRef, version, label: "", secretToken },
+            { ref: wireRef, version, label: "", secretToken, bindingKey },
             this.#callOptions(signal ? { signal } : {}),
           );
           // Do not synthesize a missing ref from the request. Absence and
@@ -890,6 +986,21 @@ export class KmsClient {
             value: Uint8Array.from(response.value),
             contentType: response.contentType,
           };
+        } catch (error) {
+          throwSecretMapped(error);
+        }
+      },
+      fetchSecretMetadata: async (wireRef, signal) => {
+        try {
+          const response = await this.#transport.unary(
+            SecretServiceService.getSecretMetadata,
+            { ref: wireRef },
+            this.#callOptions(signal ? { signal } : {}),
+          );
+          if (!response.secret) {
+            throw new KmsError("internal", "KMS secret metadata response was empty");
+          }
+          return response.secret;
         } catch (error) {
           throwMapped(error);
         }
@@ -945,8 +1056,24 @@ export class KmsClient {
       this.#cache.invalidateSecret(displayPath(ref));
       return response;
     } catch (error) {
-      throwMapped(error);
+      throwSecretMapped(error);
     }
+  }
+
+  async #bindingMutation(
+    key: string,
+    version: bigint,
+    bindingKey: string,
+    options: CallOptions,
+    bind: boolean,
+  ): Promise<SecretVersionMutationResult> {
+    assertUint64(version, `${bind ? "bindSecret" : "unbindSecret"} version`);
+    const ref = await this.#resolveResourceRefForCall(key, options);
+    const request = { ref: toWireRef(ref), version, bindingKey };
+    const response = bind
+      ? await this.#secretMutation(ref, SecretServiceService.bindSecret, request, options)
+      : await this.#secretMutation(ref, SecretServiceService.unbindSecret, request, options);
+    return frozenBindingResult(response);
   }
 
   #assertOpen(): void {
@@ -996,6 +1123,37 @@ function assertUint64(value: bigint, name: string, positive = false): void {
       `${name} must be a ${positive ? "positive " : ""}bigint in the uint64 range`,
     );
   }
+}
+
+function bindingCohortGuards(
+  options: SecretBindingCohortGuardOptions,
+  operation: string,
+): { readonly expectedRevision?: bigint; readonly expectedAffectedVersions: bigint[] } {
+  const revision = options.expectedRevision;
+  const versions = options.expectedAffectedVersions;
+  if (revision === undefined && versions === undefined) return { expectedAffectedVersions: [] };
+  if (revision === undefined || versions === undefined) {
+    throw new ConfigError(
+      `${operation} expectedRevision and expectedAffectedVersions must be supplied together`,
+    );
+  }
+  assertUint64(revision, `${operation} expectedRevision`, true);
+  if (!Array.isArray(versions) || versions.length === 0) {
+    throw new ConfigError(`${operation} expectedAffectedVersions must be a non-empty array`);
+  }
+  const copied: bigint[] = [];
+  let previous = 0n;
+  for (const [index, version] of versions.entries()) {
+    assertUint64(version, `${operation} expectedAffectedVersions[${index}]`, true);
+    if (index > 0 && version <= previous) {
+      throw new ConfigError(
+        `${operation} expectedAffectedVersions must be sorted and contain unique versions`,
+      );
+    }
+    copied.push(version);
+    previous = version;
+  }
+  return { expectedRevision: revision, expectedAffectedVersions: copied };
 }
 
 /** @internal */
@@ -1080,6 +1238,8 @@ function secretInfoFromWire(secret: SecretMetadata): SecretInfo {
         destroyedAtUnixMs: version.destroyedAtUnixMs,
         expiresAtUnixMs: version.expiresAtUnixMs,
         metadataJson: version.metadataJson,
+        bound: version.bound,
+        hasAccessToken: version.hasAccessToken,
       }),
     ),
   );
@@ -1088,7 +1248,7 @@ function secretInfoFromWire(secret: SecretMetadata): SecretInfo {
     app: ref.namespace.app,
     key: ref.key,
     contentType: secret.contentType,
-    clientBound: secret.clientBound,
+    bound: secret.bound,
     hasAccessToken: secret.hasAccessToken,
     metadataJson: secret.metadataJson,
     createdAtUnixMs: secret.createdAtUnixMs,
@@ -1097,6 +1257,18 @@ function secretInfoFromWire(secret: SecretMetadata): SecretInfo {
     versions,
     namespace: displayNamespace(ref.namespace),
     path: displayPath(ref),
+  });
+}
+
+function frozenBindingResult(response: {
+  readonly anchorVersion: bigint;
+  readonly affectedVersions: readonly bigint[];
+  readonly revision: bigint;
+}): SecretVersionMutationResult {
+  return Object.freeze({
+    anchorVersion: response.anchorVersion,
+    affectedVersions: Object.freeze([...response.affectedVersions]),
+    revision: response.revision,
   });
 }
 
@@ -1171,6 +1343,11 @@ function assertCallerActive(options: CallOptions): void {
 function throwMapped(error: unknown): never {
   const mapped = mapGrpcError(error);
   throw mapped ?? wrapError("unexpected successful gRPC status", error);
+}
+
+function throwSecretMapped(error: unknown): never {
+  const mapped = mapSecretGrpcError(error);
+  throw mapped ?? new KmsError("internal", "KMS secret operation failed");
 }
 
 class CallbackDispatcher {

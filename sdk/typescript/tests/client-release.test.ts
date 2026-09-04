@@ -26,8 +26,6 @@ describe("KmsClient release transport boundary", () => {
       contentType: "text/plain",
       metadataJson: "",
       parameterDigest: sha256Hex(expectedValue),
-      clientBound: false,
-      hasAccessToken: false,
     });
     let parameterReads = 0;
     const transport = new FakeTransport((path) => {
@@ -85,8 +83,6 @@ describe("KmsClient release transport boundary", () => {
       contentType: "text/plain",
       metadataJson: "",
       parameterDigest: "",
-      clientBound: false,
-      hasAccessToken: true,
     });
     const transport = new FakeTransport((path, _request, options) => {
       if (path.endsWith("/GetActiveRelease")) {
@@ -102,6 +98,33 @@ describe("KmsClient release transport boundary", () => {
           contentType: "text/plain",
           metadataJson: "",
           createdAtUnixMs: 1n,
+        };
+      }
+      if (path.endsWith("/GetSecretMetadata")) {
+        return {
+          secret: {
+            ref: expectedRef,
+            contentType: "text/plain",
+            bound: false,
+            hasAccessToken: true,
+            metadataJson: "",
+            createdAtUnixMs: 1n,
+            updatedAtUnixMs: 1n,
+            labels: { current: 9n },
+            versions: [
+              {
+                version: 9n,
+                state: "enabled",
+                createdBy: "test",
+                createdAtUnixMs: 1n,
+                destroyedAtUnixMs: 0n,
+                expiresAtUnixMs: 0n,
+                metadataJson: "",
+                bound: false,
+                hasAccessToken: true,
+              },
+            ],
+          },
         };
       }
       throw new Error(`unexpected ${path}`);
@@ -140,8 +163,6 @@ describe("KmsClient release transport boundary", () => {
       contentType: "text/plain",
       metadataJson: "",
       parameterDigest: sha256Hex(value),
-      clientBound: false,
-      hasAccessToken: false,
     });
     const transport = new RejectingRegistrationTransport((path) => {
       if (path.endsWith("/GetActiveRelease")) {

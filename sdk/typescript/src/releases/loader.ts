@@ -8,6 +8,7 @@ import {
   type ReleaseAcknowledgement,
   type ReleaseWatchRegistration,
   type ResourceRef,
+  type SecretMetadata,
   type WatchReleaseEvent,
   type WatchReleaseRequest,
 } from "../generated/kms.js";
@@ -91,8 +92,10 @@ export interface ReleaseTransport {
     ref: ResourceRef,
     version: bigint,
     secretToken: string,
+    bindingKey: string,
     signal?: AbortSignal,
   ): Promise<FetchedSecret>;
+  fetchSecretMetadata(ref: ResourceRef, signal?: AbortSignal): Promise<SecretMetadata>;
   watchRelease(
     registration: ReleaseWatchRegistration,
     signal: AbortSignal,
@@ -119,6 +122,7 @@ export interface ReleaseLoaderOptions {
   readonly reconcileIntervalMs?: number;
   readonly maxConcurrentFetches?: number;
   readonly secretTokenProvider?: SecretTokenProvider;
+  readonly bindingKeys?: Readonly<Record<string, string>>;
   readonly validateManifest?: ValidateReleaseManifest;
   /** @internal Bound for flushing a terminal startup acknowledgement. */
   readonly acknowledgementTimeoutMs?: number;
@@ -136,6 +140,7 @@ interface NormalizedOptions {
   readonly reconcileIntervalMs: number;
   readonly maxConcurrentFetches: number;
   readonly secretTokenProvider?: SecretTokenProvider;
+  readonly bindingKeys: Readonly<Record<string, string>>;
   readonly validateManifest?: ValidateReleaseManifest;
   readonly acknowledgementTimeoutMs: number;
   readonly now: () => number;
@@ -550,6 +555,9 @@ export class ReleaseLoader {
 
     const entries = new Map<string, ReleaseEntryMetadata>();
     for (const entry of release.entries) {
+      if (!sameNamespace(entry.ref?.namespace, namespace)) {
+        throw new ResolutionError("resolution_failed");
+      }
       const metadata = metadataForEntry(entry);
       if (entries.has(metadata.alias)) throw new ResolutionError("resolution_failed");
       entries.set(metadata.alias, metadata);
@@ -626,8 +634,24 @@ export class ReleaseLoader {
     }
 
     if (entry.kind === "secret") {
+      let live: SecretMetadata;
+      try {
+        live = await this.#transport.fetchSecretMetadata(cloneRef(ref), signal);
+      } catch {
+        throw new ResolutionError(signal.aborted ? "superseded" : "resolution_failed");
+      }
+      if (!sameResourceRef(live.ref, ref)) throw new ResolutionError("version_mismatch");
+      const matching = live.versions.filter((version) => version.version === entry.version);
+      if (matching.length !== 1) throw new ResolutionError("resolution_failed");
+      const exact = matching[0];
+      if (exact?.state !== "enabled") throw new ResolutionError("resolution_failed");
+      const now = BigInt(Math.trunc(this.#options.now()));
+      if (exact.expiresAtUnixMs > 0n && exact.expiresAtUnixMs <= now) {
+        throw new ResolutionError("resolution_failed");
+      }
+
       let token = "";
-      if (entry.clientBound || entry.hasAccessToken) {
+      if (exact.hasAccessToken) {
         if (!this.#options.secretTokenProvider) {
           throw new ResolutionError("token_unavailable");
         }
@@ -639,9 +663,17 @@ export class ReleaseLoader {
         }
         if (!token) throw new ResolutionError("token_unavailable");
       }
+      const bindingKey = exact.bound ? (this.#options.bindingKeys[entry.alias] ?? "") : "";
+      if (exact.bound && !bindingKey) throw new ResolutionError("token_unavailable");
       let secret: FetchedSecret;
       try {
-        secret = await this.#transport.fetchSecret(cloneRef(ref), entry.version, token, signal);
+        secret = await this.#transport.fetchSecret(
+          cloneRef(ref),
+          entry.version,
+          token,
+          bindingKey,
+          signal,
+        );
       } catch {
         throw new ResolutionError(signal.aborted ? "superseded" : "resolution_failed");
       }
@@ -921,6 +953,7 @@ function normalizeOptions(options: ReleaseLoaderOptions): NormalizedOptions {
     reconcileIntervalMs,
     maxConcurrentFetches,
     ...(options.secretTokenProvider ? { secretTokenProvider: options.secretTokenProvider } : {}),
+    bindingKeys: normalizeBindingKeys(options.bindingKeys),
     ...(options.validateManifest ? { validateManifest: options.validateManifest } : {}),
     acknowledgementTimeoutMs: positiveFinite(
       options.acknowledgementTimeoutMs ?? 5_000,
@@ -953,9 +986,25 @@ function metadataForEntry(entry: ConfigurationRelease["entries"][number]): Relea
     contentType: entry.contentType,
     metadataJson: entry.metadataJson,
     parameterDigest: entry.parameterDigest,
-    clientBound: entry.clientBound,
-    hasAccessToken: entry.hasAccessToken,
   });
+}
+
+function normalizeBindingKeys(
+  input: Readonly<Record<string, string>> | undefined,
+): Readonly<Record<string, string>> {
+  const result = Object.create(null) as Record<string, string>;
+  if (input === undefined) return Object.freeze(result);
+  if (typeof input !== "object" || input === null || Array.isArray(input)) {
+    throw new TypeError("release loader bindingKeys must be a record");
+  }
+  for (const alias of Object.keys(input)) {
+    const descriptor = Object.getOwnPropertyDescriptor(input, alias);
+    if (!descriptor || !("value" in descriptor) || typeof descriptor.value !== "string") {
+      throw new TypeError("release loader bindingKeys must contain string data properties");
+    }
+    result[alias] = descriptor.value;
+  }
+  return Object.freeze(result);
 }
 
 function makeCandidate(
@@ -986,6 +1035,10 @@ function sameResourceRef(left: ResourceRef | undefined, right: ResourceRef | und
     left.namespace.app === right.namespace.app &&
     left.key === right.key
   );
+}
+
+function sameNamespace(left: NamespaceRef | undefined, right: NamespaceRef): boolean {
+  return left !== undefined && left.env === right.env && left.app === right.app;
 }
 
 function synchronousCallbackError(name: string, returned: unknown): Error | undefined {

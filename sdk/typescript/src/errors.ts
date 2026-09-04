@@ -164,6 +164,47 @@ export function mapGrpcError(error: ServiceError | Error | unknown): Error | und
   });
 }
 
+/**
+ * Normalize a secret-bearing RPC failure without retaining server-supplied
+ * text or causes that could reflect plaintext or credentials.
+ */
+export function mapSecretGrpcError(error: ServiceError | Error | unknown): KmsError | undefined {
+  if (error === undefined || error === null) return undefined;
+  if (error instanceof KmsError) {
+    return new KmsError(error.code, "KMS secret operation failed", {
+      ...(error.grpcCode === undefined ? {} : { grpcCode: error.grpcCode }),
+    });
+  }
+  if (error instanceof Error && error.name === "AbortError") {
+    return new KmsError("cancelled", "KMS secret operation failed");
+  }
+  if (error instanceof Error && error.name === "TimeoutError") {
+    return new KmsError("deadline_exceeded", "KMS secret operation failed");
+  }
+  const grpcCode = grpcCodeOf(error);
+  if (grpcCode === status.OK) return undefined;
+  const code = grpcCode === undefined ? "unknown" : (GRPC_CODES[grpcCode] ?? "unknown");
+  return new KmsError(code, "KMS secret operation failed", {
+    ...(grpcCode === undefined ? {} : { grpcCode }),
+  });
+}
+
+function grpcCodeOf(error: unknown): status | undefined {
+  if (!(error instanceof Error)) return undefined;
+  let code: unknown;
+  try {
+    code = (error as Partial<GrpcErrorLike>).code;
+  } catch {
+    return undefined;
+  }
+  return typeof code === "number" &&
+    Number.isInteger(code) &&
+    code >= status.OK &&
+    code <= status.UNAUTHENTICATED
+    ? (code as status)
+    : undefined;
+}
+
 /** Backwards-friendly alias used by transport implementations. */
 export const normalizeError = mapGrpcError;
 

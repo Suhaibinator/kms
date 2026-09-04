@@ -181,10 +181,11 @@ export class Snapshot {
 }
 
 export type ValidateConfig = (config: RootConfig) => void | Promise<void>;
-export type StartOptions = Omit<ManagedConfigOptions, "contract">;
+export type StartOptions = Omit<ManagedConfigOptions, "contract" | "bindingKeys">;
 
 export class Store {
   readonly #defaults: ConfigSnapshot<RootConfig>;
+  readonly #bindingKeys: Readonly<Record<string, string>>;
   readonly #validate: ValidateConfig;
   #active: ConfigSnapshot<RootConfig> | undefined;
   #started = false;
@@ -192,7 +193,13 @@ export class Store {
   constructor(defaults: RootConfig, validate: ValidateConfig) {
     if (typeof validate !== "function") throw new TypeError("generated config store: validate callback is required");
     const copiedDefaults = writableClone(defaults);
+    const bindingKeys = Object.create(null) as Record<string, string>;
     assertZeroSecret(copiedDefaults["password"], "database_password");
+    if (copiedDefaults["password"].bindKey.length > 0) {
+      bindingKeys["database_password"] = copiedDefaults["password"].bindKey;
+    }
+    setProperty(copiedDefaults, "password", new Secret());
+    this.#bindingKeys = Object.freeze(bindingKeys);
     this.#defaults = immutableSnapshot(copiedDefaults);
     this.#validate = validate;
   }
@@ -206,7 +213,7 @@ export class Store {
     this.#started = true;
     return startManagedConfig(
       client,
-      { ...options, contract: generatedContract },
+      { ...options, bindingKeys: this.#bindingKeys, contract: generatedContract },
       (snapshot, candidateSignal) => this.#prepare(snapshot, candidateSignal),
       signal,
     );
@@ -263,6 +270,8 @@ export class Store {
       throwIfAborted(signal);
       assertSecret(candidate["password"], "database_password");
       assertSecret(effectiveDefaults["password"], "database_password");
+      setProperty(candidate, "password", stripSecretBindingKey(candidate["password"]));
+      setProperty(effectiveDefaults, "password", stripSecretBindingKey(effectiveDefaults["password"]));
       validatedCandidate = writableClone(candidate);
       validatedDefaults = writableClone(effectiveDefaults);
     } catch (cause) {
@@ -404,6 +413,19 @@ function canonicalNode(node: EncodedNode): EncodedNode {
     };
   }
   return node;
+}
+
+function stripSecretBindingKey(value: Secret): Secret {
+  const bytes = value.bytes();
+  try {
+    return new Secret(bytes, {
+      path: value.path,
+      version: value.version,
+      contentType: value.contentType,
+    });
+  } finally {
+    bytes.fill(0);
+  }
 }
 
 function sameSecretIdentity(left: unknown, right: unknown): boolean {

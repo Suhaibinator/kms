@@ -90,6 +90,12 @@ describe("TypeScript config generator", () => {
     expect(first.binding).not.toContain('from "../../../src/configgen/index.js"');
     expect(first.binding).toContain("restartRequiredFields");
     expect(first.binding).toContain("sameSecretIdentity");
+    expect(first.binding).toContain('Omit<ManagedConfigOptions, "contract" | "bindingKeys">');
+    expect(first.binding).toContain(
+      "{ ...options, bindingKeys: this.#bindingKeys, contract: generatedContract }",
+    );
+    expect(first.binding).toContain("Object.create(null) as Record<string, string>");
+    expect(first.binding).toContain("bytes.fill(0)");
     expect(first.binding).toContain("rejectDecode");
     expect(first.binding).toContain("assertRootCoverage<RootConfig");
     expect(first.binding).toContain("exactObject<");

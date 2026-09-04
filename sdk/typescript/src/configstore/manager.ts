@@ -469,6 +469,7 @@ function copyLoaderOptions(
       ? { maxConcurrentFetches: options.maxConcurrentFetches }
       : {}),
     ...(options.secretTokenProvider ? { secretTokenProvider: options.secretTokenProvider } : {}),
+    ...(options.bindingKeys ? { bindingKeys: options.bindingKeys } : {}),
     validateManifest,
     ...(options.now ? { now: options.now } : {}),
     ...(options.random ? { random: options.random } : {}),

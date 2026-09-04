@@ -12,6 +12,7 @@ export interface ValueReadOptions extends VersionRef {
 
 export interface SecretReadOptions extends ValueReadOptions {
   readonly secretToken?: string;
+  readonly bindingKey?: string;
 }
 
 export type ParameterUpdateHandler = (value: string, present: boolean) => void;
@@ -73,8 +74,10 @@ export interface ValueResolver {
 
 export interface SecretValueOptions {
   readonly key?: string;
-  /** Per-secret access token (and key share for client-bound secrets). */
+  /** Per-secret access token. */
   readonly token?: string;
+  /** Operator-owned binding key for this secret declaration. */
+  readonly bindKey?: string;
   /** A non-empty environment value wins and avoids all store access. */
   readonly envVar?: string;
   /** Non-empty development fallback. Used for not-found by default. */
@@ -97,6 +100,7 @@ function secretOptions(
   return {
     key: input.key ?? "",
     token: input.token ?? "",
+    bindKey: input.bindKey ?? "",
     envVar: input.envVar ?? "",
     default: input.default ?? "",
   };
@@ -148,6 +152,7 @@ function fallbackAllowed(client: ValueResolver, error: unknown): boolean {
 export class SecretValue {
   readonly #key: string;
   readonly #token: string;
+  readonly #bindKey: string;
   readonly #envVar: string;
   readonly #default: string;
   #resolved: Secret | undefined;
@@ -160,6 +165,7 @@ export class SecretValue {
     const normalized = secretOptions(keyOrOptions, options);
     this.#key = normalized.key;
     this.#token = normalized.token;
+    this.#bindKey = normalized.bindKey;
     this.#envVar = normalized.envVar;
     this.#default = normalized.default;
   }
@@ -170,6 +176,10 @@ export class SecretValue {
 
   get token(): string {
     return this.#token;
+  }
+
+  get bindKey(): string {
+    return this.#bindKey;
   }
 
   get envVar(): string {
@@ -222,6 +232,7 @@ export class SecretValue {
         const secret = await client.getSecret(this.#key, {
           ...readOptions(options),
           ...(this.#token.length === 0 ? {} : { secretToken: this.#token }),
+          ...(this.#bindKey.length === 0 ? {} : { bindingKey: this.#bindKey }),
         });
         if (!(secret instanceof Secret)) {
           throw new ConfigError("ValueResolver.getSecret() must return a Secret");

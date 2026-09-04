@@ -21,8 +21,6 @@ function fixture() {
         contentType: "string",
         metadataJson: "{}",
         parameterDigest: "",
-        clientBound: true,
-        hasAccessToken: true,
       },
       {
         alias: "a-policy",
@@ -32,8 +30,6 @@ function fixture() {
         contentType: "json",
         metadataJson: '{"owner":"platform"}',
         parameterDigest: sha256Hex('{"min":14}'),
-        clientBound: false,
-        hasAccessToken: false,
       },
     ],
     digest: "ignored",
@@ -46,7 +42,7 @@ function fixture() {
 describe("deterministicReleaseDigest", () => {
   it("matches the Go deterministic protobuf golden", () => {
     expect(deterministicReleaseDigest(fixture())).toBe(
-      "77c779a898693cbf1cc90516884c8c43fb6e3d4e50aab9435adeaf06ac9ea91a",
+      "0cc9ea54ba0d4903027235ac4ba5604114d7fbc787209919a0633e4e708f26c3",
     );
   });
 

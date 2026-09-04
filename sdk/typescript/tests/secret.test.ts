@@ -1,4 +1,4 @@
-import { inspect } from "node:util";
+import { format, inspect } from "node:util";
 
 import { describe, expect, it } from "vitest";
 
@@ -42,6 +42,7 @@ describe("Secret", () => {
       path: "/prod/api/key",
       version: 18_446_744_073_709_551_615n,
       contentType: "text/plain",
+      bindKey: "operator-binding-key-never-render",
     });
     const clone = original.clone();
 
@@ -50,8 +51,37 @@ describe("Secret", () => {
     expect(clone.path).toBe(original.path);
     expect(clone.version).toBe(18_446_744_073_709_551_615n);
     expect(clone.contentType).toBe("text/plain");
+    expect(clone.bindKey).toBe("operator-binding-key-never-render");
     expect(clone.isEmpty).toBe(false);
     expect(clone.length).toBe(6);
+  });
+
+  it("preserves a declaration binding key without exposing it through serialization", () => {
+    const bindingKey = "declaration-binding-key-never-render";
+    const declaration = new Secret("", { bindKey: bindingKey });
+    const clone = declaration.clone();
+
+    expect(declaration.isEmpty).toBe(true);
+    expect(declaration.bindKey).toBe(bindingKey);
+    expect(clone.bindKey).toBe(bindingKey);
+    expect(Object.keys(declaration)).toEqual([]);
+    expect(Reflect.ownKeys(declaration)).toEqual([]);
+    expect({ ...declaration }).toEqual({});
+    for (const rendered of [
+      String(declaration),
+      `${declaration}`,
+      declaration.toString(),
+      declaration.valueOf(),
+      inspect(declaration),
+      format("%s", declaration),
+      format("%o", declaration),
+      format("%j", declaration),
+      JSON.stringify(declaration),
+      JSON.stringify({ declaration }),
+    ]) {
+      expect(rendered).toContain(REDACTED);
+      expect(rendered).not.toContain(bindingKey);
+    }
   });
 
   it("rejects values outside uint64 version range", () => {

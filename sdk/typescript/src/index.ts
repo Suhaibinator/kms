@@ -4,14 +4,19 @@ export {
 } from "./client.js";
 export type {
   CallOptions,
+  BindSecretOptions,
   ClientReleaseLoaderOptions,
   GetOptions,
   KmsClientOptions,
   ListOptions,
   Logger,
   ParameterMetadata,
+  PreviewSecretBindingCohortOptions,
   PutParameterOptions,
   PutSecretOptions,
+  PurgeSecretBindingCohortOptions,
+  RotateSecretBindingKeyOptions,
+  SecretBindingCohortGuardOptions,
   WatchCallback,
   WatchEvent,
   WatchOptions,
@@ -38,7 +43,9 @@ export type {
   PutResult,
   PutSecretResult,
   SecretInfo,
+  SecretBindingCohortResult,
   SecretVersion,
+  SecretVersionMutationResult,
   WhoAmI,
 } from "./models.js";
 
@@ -129,7 +136,7 @@ export type {
 } from "./releases/verify.js";
 
 export { newSecret, REDACTED, Secret } from "./secret.js";
-export type { SecretMetadata } from "./secret.js";
+export type { SecretOptions } from "./secret.js";
 
 export { mtlsFromFiles, tlsFromBytes, tlsFromFiles } from "./tls.js";
 

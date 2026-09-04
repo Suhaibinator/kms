@@ -110,8 +110,30 @@ const pinned = await client.getParameter("rate-limit", { version: 7n });
 const previous = await client.getSecret("session-signing-key", {
   label: "previous",
   secretToken: process.env.SIGNING_KEY_TOKEN,
+  bindingKey: process.env.SIGNING_KEY_BINDING_KEY,
 });
 ```
+
+Binding changes do not create a secret version. Cohort rotation and purge can
+be guarded by the exact revision and sorted versions returned by a preview:
+
+```ts
+const bindingKey = process.env.SIGNING_KEY_BINDING_KEY!;
+const nextBindingKey = process.env.SIGNING_KEY_NEW_BINDING_KEY!;
+const preview = await client.previewSecretBindingCohort("session-signing-key", {
+  bindingKey,
+});
+await client.rotateSecretBindingKey("session-signing-key", {
+  bindingKey,
+  newBindingKey: nextBindingKey,
+  expectedRevision: preview.revision,
+  expectedAffectedVersions: preview.affectedVersions,
+});
+```
+
+The two preview guards must be supplied together. A guarded mutation rejects
+locally unless its revision is positive and its affected versions are a
+non-empty, strictly ascending list of positive `bigint` values.
 
 ## Declarative values and hot reload
 
@@ -127,6 +149,7 @@ const config = {
   database: {
     password: new SecretValue("db-password", {
       token: process.env.DB_PASSWORD_TOKEN,
+      bindKey: process.env.DB_PASSWORD_BINDING_KEY,
       envVar: "DB_PASSWORD",
     }),
   },
@@ -208,9 +231,12 @@ await loader.run(async (snapshot: ReleaseSnapshot): Promise<PreparedRelease> => 
 });
 ```
 
-Supply `secretTokenProvider` when a release contains token-protected or
-client-bound secrets. Preparation errors that may contain application data are
-reported to the service as bounded rejection categories, not raw text.
+Supply `secretTokenProvider` for access-token-gated release aliases and
+`bindingKeys` for bound aliases. The loader checks the exact pinned version's
+live metadata before requesting only the credentials it requires. Preparation
+errors that may contain application data are reported to the service as bounded
+rejection categories, not raw text. Secret plaintext is never read from the SDK
+cache because protection can be toggled in place.
 
 ## Public policy and Next.js
 
@@ -328,8 +354,10 @@ import { Store } from "./config.generated.js";
 const store = new Store(
   {
     requestTimeoutMs: 3000,
-    // Secret defaults must be the zero Secret; plaintext never belongs here.
-    databasePassword: new Secret(),
+    // Plaintext never belongs here; a declaration-only binding key is allowed.
+    databasePassword: new Secret("", {
+      bindKey: process.env.DATABASE_PASSWORD_KMS_BINDING_KEY,
+    }),
   },
   (candidate) => {
     if (candidate.requestTimeoutMs <= 0) {

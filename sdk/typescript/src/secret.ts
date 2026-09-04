@@ -5,10 +5,12 @@ const inspectCustom = Symbol.for("nodejs.util.inspect.custom");
 const encoder = new TextEncoder();
 const UINT64_MAX = (1n << 64n) - 1n;
 
-export interface SecretMetadata {
+export interface SecretOptions {
   readonly path?: string;
   readonly version?: bigint;
   readonly contentType?: string;
+  /** Declaration-only credential. Fetched secrets never retain request credentials. */
+  readonly bindKey?: string;
 }
 
 /**
@@ -22,15 +24,17 @@ export class Secret {
   readonly #path: string;
   readonly #version: bigint;
   readonly #contentType: string;
+  readonly #bindKey: string;
 
-  constructor(value: Uint8Array | string = new Uint8Array(), metadata: SecretMetadata = {}) {
+  constructor(value: Uint8Array | string = new Uint8Array(), options: SecretOptions = {}) {
     this.#value = typeof value === "string" ? encoder.encode(value) : Uint8Array.from(value);
-    this.#path = metadata.path ?? "";
-    this.#version = metadata.version ?? 0n;
+    this.#path = options.path ?? "";
+    this.#version = options.version ?? 0n;
     if (typeof this.#version !== "bigint" || this.#version < 0n || this.#version > UINT64_MAX) {
       throw new TypeError("secret version must be a bigint in the uint64 range");
     }
-    this.#contentType = metadata.contentType ?? "";
+    this.#contentType = options.contentType ?? "";
+    this.#bindKey = options.bindKey ?? "";
     Object.freeze(this);
   }
 
@@ -56,6 +60,11 @@ export class Secret {
     return this.#contentType;
   }
 
+  /** Declaration-only binding key used by generated managed configuration. */
+  get bindKey(): string {
+    return this.#bindKey;
+  }
+
   get length(): number {
     return this.#value.byteLength;
   }
@@ -69,6 +78,7 @@ export class Secret {
       path: this.#path,
       version: this.#version,
       contentType: this.#contentType,
+      bindKey: this.#bindKey,
     });
   }
 
@@ -94,6 +104,6 @@ export class Secret {
 }
 
 /** Wrap plaintext, mainly for tests and tools. */
-export function newSecret(value: Uint8Array | string, metadata: SecretMetadata = {}): Secret {
-  return new Secret(value, metadata);
+export function newSecret(value: Uint8Array | string, options: SecretOptions = {}): Secret {
+  return new Secret(value, options);
 }

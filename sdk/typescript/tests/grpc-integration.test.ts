@@ -449,10 +449,9 @@ describe("protocol-faithful gRPC integration", () => {
       const putResult = await client.putSecret("password", plaintext, {
         contentType: "application/octet-stream",
         metadataJson: '{"rotation":"integration"}',
-        clientBound: true,
+        bindingKey: "put-binding-key",
         generateAccessToken: true,
         expiresAtUnixMs: firstExactInteger + 100n,
-        secretToken: "put-token",
       });
       expect(putResult).toEqual({
         version: firstExactInteger + 15n,
@@ -474,7 +473,7 @@ describe("protocol-faithful gRPC integration", () => {
             app: "api",
             key: "password",
             contentType: "application/octet-stream",
-            clientBound: true,
+            bound: true,
             hasAccessToken: true,
             metadataJson: '{"classification":"metadata-only"}',
             createdAtUnixMs: firstExactInteger + 10n,
@@ -491,6 +490,8 @@ describe("protocol-faithful gRPC integration", () => {
                 destroyedAtUnixMs: 0n,
                 expiresAtUnixMs: firstExactInteger + 12n,
                 metadataJson: '{"source":"loopback"}',
+                bound: true,
+                hasAccessToken: true,
               },
             ],
           },
@@ -560,10 +561,9 @@ describe("protocol-faithful gRPC integration", () => {
           value: Buffer.from([0, 1, 254, 255]),
           contentType: "application/octet-stream",
           metadataJson: '{"rotation":"integration"}',
-          clientBound: true,
+          bindingKey: "put-binding-key",
           generateAccessToken: true,
           expiresAtUnixMs: firstExactInteger + 100n,
-          secretToken: "put-token",
         },
       ]);
       expect(deleteSecretRequests).toEqual([{ ref: { namespace, key: "retired" } }]);
@@ -712,7 +712,7 @@ function wireSecretMetadata(key: string, version: bigint): SecretMetadata {
   return {
     ref: { namespace, key },
     contentType: "application/octet-stream",
-    clientBound: true,
+    bound: true,
     hasAccessToken: true,
     metadataJson: '{"classification":"metadata-only"}',
     createdAtUnixMs: version,
@@ -727,6 +727,8 @@ function wireSecretMetadata(key: string, version: bigint): SecretMetadata {
         destroyedAtUnixMs: 0n,
         expiresAtUnixMs: version + 2n,
         metadataJson: '{"source":"loopback"}',
+        bound: true,
+        hasAccessToken: true,
       },
     ],
   };

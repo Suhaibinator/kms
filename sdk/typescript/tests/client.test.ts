@@ -1,3 +1,4 @@
+import { inspect } from "node:util";
 import { Metadata, status } from "@grpc/grpc-js";
 import { describe, expect, it, vi } from "vitest";
 import { type GetOptions, KmsClient } from "../src/client.js";
@@ -237,7 +238,7 @@ describe("KmsClient", () => {
     await client.close();
   });
 
-  it("defensively caches tokenless secrets and bypasses cache for token-gated reads", async () => {
+  it("never caches secret plaintext and forwards independent read credentials", async () => {
     let reads = 0;
     const transport = new FakeTransport((_path, _request, options) => {
       reads++;
@@ -256,18 +257,28 @@ describe("KmsClient", () => {
     const first = await client.getSecret("db/password");
     const leaked = first.bytes();
     leaked.fill(0);
-    const cached = await client.getSecret("db/password");
-    expect(cached.text()).toBe("secret-1");
-    expect(String(cached)).toBe(REDACTED);
-    expect(JSON.stringify(cached)).toBe(`"${REDACTED}"`);
+    const second = await client.getSecret("db/password");
+    expect(second.text()).toBe("secret-2");
+    expect(String(second)).toBe(REDACTED);
+    expect(JSON.stringify(second)).toBe(`"${REDACTED}"`);
 
-    await client.getSecret("db/password", { secretToken: "one-time" });
-    await client.getSecret("db/password", { secretToken: "one-time" });
-    expect(reads).toBe(3);
+    const credentialed = await client.getSecret("db/password", {
+      secretToken: "one-time",
+      bindingKey: "operator-binding-key",
+    });
+    expect(credentialed.bindKey).toBe("");
+    await client.getSecret("db/password", {
+      secretToken: "one-time",
+      bindingKey: "operator-binding-key",
+    });
+    expect(reads).toBe(4);
     expect(transport.calls.at(-1)?.options.metadata?.["x-kms-secret-token"]).toBeUndefined();
     expect(
       (transport.calls.at(-1)?.request as { secretToken?: string } | undefined)?.secretToken,
     ).toBe("one-time");
+    expect(
+      (transport.calls.at(-1)?.request as { bindingKey?: string } | undefined)?.bindingKey,
+    ).toBe("operator-binding-key");
     await client.close();
   });
 
@@ -308,26 +319,60 @@ describe("KmsClient", () => {
     await client.close();
   });
 
-  it("maps typed gRPC errors without including secret writes", async () => {
-    const failure = Object.assign(new Error("denied"), {
+  it("preserves secret RPC error codes while discarding reflected values and credentials", async () => {
+    const plaintext = "plaintext-reflection-canary";
+    const secretToken = "access-token-reflection-canary";
+    const bindingKey = "binding-key-reflection-canary";
+    const newBindingKey = "new-binding-key-reflection-canary";
+    const reflected = [plaintext, secretToken, bindingKey, newBindingKey].join("|");
+    const failure = Object.assign(new Error(reflected), {
       code: status.PERMISSION_DENIED,
-      details: "denied",
+      details: reflected,
       metadata: new Metadata(),
     });
     const transport = new FakeTransport(() => Promise.reject(failure));
     const client = new KmsClient({ transport, namespace: "prod/api" });
-    const plaintext = "do-not-render";
-    const error = await client.putSecret("secret", plaintext).catch((reason: unknown) => reason);
-    expect(error).toBeInstanceOf(KmsError);
-    expect((error as KmsError).code).toBe("permission_denied");
-    expect(String(error)).not.toContain(plaintext);
+    const operations: readonly [string, () => Promise<unknown>][] = [
+      ["get", () => client.getSecret("secret", { secretToken, bindingKey })],
+      ["put", () => client.putSecret("secret", plaintext, { bindingKey })],
+      ["bind", () => client.bindSecret("secret", { bindingKey })],
+      ["unbind", () => client.unbindSecret("secret", { bindingKey })],
+      ["preview", () => client.previewSecretBindingCohort("secret", { bindingKey })],
+      ["rotate", () => client.rotateSecretBindingKey("secret", { bindingKey, newBindingKey })],
+      ["purge", () => client.purgeSecretBindingCohort("secret", { bindingKey })],
+    ];
+    for (const [operation, call] of operations) {
+      const error = await call().catch((reason: unknown) => reason);
+      expect(error, operation).toBeInstanceOf(KmsError);
+      expect(error, operation).toMatchObject({
+        code: "permission_denied",
+        grpcCode: status.PERMISSION_DENIED,
+        message: "KMS secret operation failed",
+      });
+      expect((error as Error & { cause?: unknown }).cause, operation).toBeUndefined();
+      for (const rendered of [
+        String(error),
+        inspect(error, { depth: 10 }),
+        JSON.stringify(error),
+      ]) {
+        expect(rendered, operation).not.toContain(plaintext);
+        expect(rendered, operation).not.toContain(secretToken);
+        expect(rendered, operation).not.toContain(bindingKey);
+        expect(rendered, operation).not.toContain(newBindingKey);
+      }
+    }
     await client.close();
   });
 
   it("invalidates writes and preserves one-time access tokens", async () => {
     const transport = new FakeTransport((path, request) => {
       if (path.endsWith("/PutSecret")) {
-        expect(request).toMatchObject({ clientBound: true, generateAccessToken: true });
+        expect(request).toMatchObject({
+          bindingKey: "operator-binding-key",
+          generateAccessToken: true,
+        });
+        expect(request).not.toHaveProperty("clientBound");
+        expect(request).not.toHaveProperty("secretToken");
         return { version: 7n, revision: 10n, accessToken: "only-once" };
       }
       return { version: 2n, revision: 3n };
@@ -335,8 +380,147 @@ describe("KmsClient", () => {
     const client = new KmsClient({ transport, namespace: "dev/tool" });
     await expect(client.putParameter("flag", "on")).resolves.toEqual({ version: 2n, revision: 3n });
     await expect(
-      client.putSecret("token", "value", { clientBound: true, generateAccessToken: true }),
+      client.putSecret("token", "value", {
+        bindingKey: "operator-binding-key",
+        generateAccessToken: true,
+      }),
     ).resolves.toEqual({ version: 7n, revision: 10n, accessToken: "only-once" });
+    await client.close();
+  });
+
+  it("maps binding lifecycle RPCs and freezes returned cohort versions", async () => {
+    let revision = 20n;
+    const transport = new FakeTransport((path) => {
+      revision += 1n;
+      return {
+        anchorVersion: path.endsWith("/BindSecret") || path.endsWith("/UnbindSecret") ? 7n : 8n,
+        affectedVersions:
+          path.endsWith("/BindSecret") || path.endsWith("/UnbindSecret") ? [7n] : [7n, 8n],
+        revision,
+      };
+    });
+    const client = new KmsClient({ transport, namespace: "prod/api" });
+
+    const previewed = await client.previewSecretBindingCohort("credential", {
+      anchorVersion: 8n,
+      bindingKey: "binding-key-a",
+    });
+    const bound = await client.bindSecret("credential", {
+      version: 7n,
+      bindingKey: "binding-key-a",
+    });
+    const unbound = await client.unbindSecret("credential", {
+      version: 7n,
+      bindingKey: "binding-key-a",
+    });
+    const rotated = await client.rotateSecretBindingKey("credential", {
+      anchorVersion: 8n,
+      bindingKey: "binding-key-a",
+      newBindingKey: "binding-key-b",
+    });
+    const purged = await client.purgeSecretBindingCohort("credential", {
+      anchorVersion: 8n,
+      bindingKey: "binding-key-b",
+    });
+
+    for (const result of [previewed, bound, unbound, rotated, purged]) {
+      expect(Object.isFrozen(result)).toBe(true);
+      expect(Object.isFrozen(result.affectedVersions)).toBe(true);
+    }
+    expect(transport.calls.map(({ request }) => request)).toEqual([
+      {
+        ref: { namespace: { env: "prod", app: "api" }, key: "credential" },
+        anchorVersion: 8n,
+        bindingKey: "binding-key-a",
+      },
+      {
+        ref: { namespace: { env: "prod", app: "api" }, key: "credential" },
+        version: 7n,
+        bindingKey: "binding-key-a",
+      },
+      {
+        ref: { namespace: { env: "prod", app: "api" }, key: "credential" },
+        version: 7n,
+        bindingKey: "binding-key-a",
+      },
+      {
+        ref: { namespace: { env: "prod", app: "api" }, key: "credential" },
+        anchorVersion: 8n,
+        bindingKey: "binding-key-a",
+        newBindingKey: "binding-key-b",
+        expectedAffectedVersions: [],
+      },
+      {
+        ref: { namespace: { env: "prod", app: "api" }, key: "credential" },
+        anchorVersion: 8n,
+        bindingKey: "binding-key-b",
+        expectedAffectedVersions: [],
+      },
+    ]);
+    await client.close();
+  });
+
+  it("sends paired cohort CAS guards defensively and rejects invalid guard sets locally", async () => {
+    const transport = new FakeTransport(() => ({
+      anchorVersion: 8n,
+      affectedVersions: [7n, 8n],
+      revision: 22n,
+    }));
+    const client = new KmsClient({ transport, namespace: "prod/api" });
+    const rotateVersions = [7n, 8n];
+    const rotate = client.rotateSecretBindingKey("credential", {
+      anchorVersion: 8n,
+      bindingKey: "binding-key-a",
+      newBindingKey: "binding-key-b",
+      expectedRevision: 20n,
+      expectedAffectedVersions: rotateVersions,
+    });
+    rotateVersions[0] = 99n;
+    await rotate;
+    await client.purgeSecretBindingCohort("credential", {
+      anchorVersion: 8n,
+      bindingKey: "binding-key-b",
+      expectedRevision: 21n,
+      expectedAffectedVersions: Object.freeze([7n, 8n]),
+    });
+
+    expect(transport.calls.map(({ request }) => request)).toEqual([
+      {
+        ref: { namespace: { env: "prod", app: "api" }, key: "credential" },
+        anchorVersion: 8n,
+        bindingKey: "binding-key-a",
+        newBindingKey: "binding-key-b",
+        expectedRevision: 20n,
+        expectedAffectedVersions: [7n, 8n],
+      },
+      {
+        ref: { namespace: { env: "prod", app: "api" }, key: "credential" },
+        anchorVersion: 8n,
+        bindingKey: "binding-key-b",
+        expectedRevision: 21n,
+        expectedAffectedVersions: [7n, 8n],
+      },
+    ]);
+
+    const invalid = [
+      { expectedRevision: 1n },
+      { expectedAffectedVersions: [1n] },
+      { expectedRevision: 0n, expectedAffectedVersions: [1n] },
+      { expectedRevision: 1n, expectedAffectedVersions: [] },
+      { expectedRevision: 1n, expectedAffectedVersions: [0n] },
+      { expectedRevision: 1n, expectedAffectedVersions: [2n, 1n] },
+      { expectedRevision: 1n, expectedAffectedVersions: [1n, 1n] },
+    ] as const;
+    for (const guards of invalid) {
+      await expect(
+        client.purgeSecretBindingCohort("credential", {
+          anchorVersion: 8n,
+          bindingKey: "binding-key-b",
+          ...guards,
+        }),
+      ).rejects.toBeInstanceOf(ConfigError);
+    }
+    expect(transport.calls).toHaveLength(2);
     await client.close();
   });
 
@@ -466,7 +650,7 @@ describe("KmsClient", () => {
       expect((await client.getSecret("target", testCase.options)).text()).toBe(
         `safe-${testCase.name}`,
       );
-      expect(reads).toBe(2);
+      expect(reads).toBe(3);
       await client.close();
     }
   });
