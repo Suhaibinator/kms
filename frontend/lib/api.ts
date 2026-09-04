@@ -90,6 +90,22 @@ export class ApiError extends Error {
   }
 }
 
+export const SECRET_OPERATION_FAILED_MESSAGE = "Secret operation failed.";
+export const PURGE_CLEANUP_PENDING_MESSAGE =
+  "secret purge committed; database artifact cleanup is pending";
+
+/**
+ * The purge transaction committed, but KMS could not yet prove that the
+ * retired payload was removed from every live SQLite artifact. Callers must
+ * not resubmit the compromised binding key.
+ */
+export class PurgeCleanupPendingApiError extends ApiError {
+  constructor() {
+    super("purge_cleanup_pending", PURGE_CLEANUP_PENDING_MESSAGE, 503);
+    this.name = "PurgeCleanupPendingApiError";
+  }
+}
+
 // 409 arrives as code `already_exists` (see httpStatusToCode) whatever the
 // server meant by it — a duplicate name or a compare-and-swap that lost. The
 // status is the reliable signal, so ship/rollback/clone callers test this.
@@ -299,6 +315,64 @@ export async function apiFetch<T>(path: string, opts: FetchOptions = {}): Promis
   }
 
   return data as T;
+}
+
+function safeSecretErrorCode(error: ApiError): string {
+  switch (error.status) {
+    case 0:
+      return error.code === "unavailable" ? "unavailable" : "internal";
+    case 400:
+      return "invalid_argument";
+    case 401:
+      return "unauthenticated";
+    case 403:
+      return "permission_denied";
+    case 404:
+      return "not_found";
+    case 409:
+      return error.code === "aborted" ? "aborted" : "already_exists";
+    case 412:
+      return "failed_precondition";
+    case 429:
+      return "rate_limited";
+    case 503:
+      return "unavailable";
+    default:
+      return "internal";
+  }
+}
+
+/**
+ * Secret-bearing requests may contain plaintext, an access token, or one or
+ * two binding keys. Do not retain any remote diagnostic text or validation
+ * payload: a buggy or hostile peer could reflect those request fields in its
+ * error envelope. Only the structured HTTP status and a small allowlisted code
+ * distinction survive.
+ */
+async function secretApiFetch<T>(
+  path: string,
+  opts: FetchOptions,
+  recognizePurgeCleanupPending = false,
+): Promise<T> {
+  try {
+    return await apiFetch<T>(path, opts);
+  } catch (error) {
+    // Preserve caller cancellation so stale page requests remain silent.
+    if (isAbortError(error)) throw error;
+    if (
+      recognizePurgeCleanupPending &&
+      error instanceof ApiError &&
+      error.status === 503 &&
+      error.code === "purge_cleanup_pending" &&
+      error.message === PURGE_CLEANUP_PENDING_MESSAGE
+    ) {
+      throw new PurgeCleanupPendingApiError();
+    }
+    if (error instanceof ApiError) {
+      throw new ApiError(safeSecretErrorCode(error), SECRET_OPERATION_FAILED_MESSAGE, error.status);
+    }
+    throw new ApiError("internal", SECRET_OPERATION_FAILED_MESSAGE, 0);
+  }
 }
 
 function qs(params: Record<string, string | number | undefined | null>): string {
@@ -539,17 +613,16 @@ export const api = {
   },
   // Binding keys are operation-local request fields and are never retained.
   createSecret(req: CreateSecretRequest): Promise<CreateSecretResponse> {
-    return apiFetch<CreateSecretResponse>("/secrets", { method: "POST", body: req });
+    return secretApiFetch<CreateSecretResponse>("/secrets", { method: "POST", body: req });
   },
   revealSecret(
     ref: ResourceRef,
     version: number,
     label: string,
-    secretToken?: string,
     bindingKey?: string,
     request?: ApiRequestOptions,
   ): Promise<RevealSecretResponse> {
-    return apiFetch<RevealSecretResponse>("/secrets/reveal", {
+    return secretApiFetch<RevealSecretResponse>("/secrets/reveal", {
       ...request,
       method: "POST",
       body: {
@@ -558,7 +631,6 @@ export const api = {
         key: ref.key,
         version,
         label,
-        ...(secretToken ? { secret_token: secretToken } : null),
         ...(bindingKey ? { binding_key: bindingKey } : null),
       },
     });
@@ -569,7 +641,7 @@ export const api = {
     bindingKey: string,
     request?: ApiRequestOptions,
   ): Promise<SecretVersionMutationResponse> {
-    return apiFetch<SecretVersionMutationResponse>("/secrets/bind", {
+    return secretApiFetch<SecretVersionMutationResponse>("/secrets/bind", {
       ...request,
       method: "POST",
       body: { env: ref.env, app: ref.app, key: ref.key, version, binding_key: bindingKey },
@@ -581,7 +653,7 @@ export const api = {
     bindingKey: string,
     request?: ApiRequestOptions,
   ): Promise<SecretVersionMutationResponse> {
-    return apiFetch<SecretVersionMutationResponse>("/secrets/unbind", {
+    return secretApiFetch<SecretVersionMutationResponse>("/secrets/unbind", {
       ...request,
       method: "POST",
       body: { env: ref.env, app: ref.app, key: ref.key, version, binding_key: bindingKey },
@@ -593,7 +665,7 @@ export const api = {
     bindingKey: string,
     request?: ApiRequestOptions,
   ): Promise<SecretBindingCohortResponse> {
-    return apiFetch<SecretBindingCohortResponse>("/secrets/binding-cohort/preview", {
+    return secretApiFetch<SecretBindingCohortResponse>("/secrets/binding-cohort/preview", {
       ...request,
       method: "POST",
       body: {
@@ -614,7 +686,7 @@ export const api = {
     expectedAffectedVersions: number[],
     request?: ApiRequestOptions,
   ): Promise<SecretBindingCohortResponse> {
-    return apiFetch<SecretBindingCohortResponse>("/secrets/binding-key/rotate", {
+    return secretApiFetch<SecretBindingCohortResponse>("/secrets/binding-key/rotate", {
       ...request,
       method: "POST",
       body: {
@@ -637,19 +709,23 @@ export const api = {
     expectedAffectedVersions: number[],
     request?: ApiRequestOptions,
   ): Promise<SecretBindingCohortResponse> {
-    return apiFetch<SecretBindingCohortResponse>("/secrets/binding-cohort/purge", {
-      ...request,
-      method: "POST",
-      body: {
-        env: ref.env,
-        app: ref.app,
-        key: ref.key,
-        anchor_version: anchorVersion,
-        binding_key: bindingKey,
-        expected_revision: expectedRevision,
-        expected_affected_versions: expectedAffectedVersions,
+    return secretApiFetch<SecretBindingCohortResponse>(
+      "/secrets/binding-cohort/purge",
+      {
+        ...request,
+        method: "POST",
+        body: {
+          env: ref.env,
+          app: ref.app,
+          key: ref.key,
+          anchor_version: anchorVersion,
+          binding_key: bindingKey,
+          expected_revision: expectedRevision,
+          expected_affected_versions: expectedAffectedVersions,
+        },
       },
-    });
+      true,
+    );
   },
   disableSecret(ref: ResourceRef, version: number, enable: boolean): Promise<RevisionResponse> {
     return apiFetch<RevisionResponse>("/secrets/disable", {

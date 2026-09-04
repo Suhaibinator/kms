@@ -26,7 +26,13 @@ import { AppSelect } from "@/components/ui/app-select";
 import { Button, ButtonLink } from "@/components/ui/button";
 import { useAuth } from "@/context/AuthContext";
 import { useToast } from "@/context/ToastContext";
-import { ApiError, api, isAbortError, type ResourceRef } from "@/lib/api";
+import {
+  ApiError,
+  api,
+  isAbortError,
+  PurgeCleanupPendingApiError,
+  type ResourceRef,
+} from "@/lib/api";
 import { crumbs } from "@/lib/crumbs";
 import {
   base64ByteLength,
@@ -94,7 +100,6 @@ export default function SecretDetailPage() {
 
   // Reveal flow.
   const [revealTarget, setRevealTarget] = useState<number | null>(null); // version pending confirm
-  const [revealSecretToken, setRevealSecretToken] = useState("");
   const [revealBindingKey, setRevealBindingKey] = useState("");
   const [revealBusy, setRevealBusy] = useState(false);
   const [revealed, setRevealed] = useState<Revealed | null>(null);
@@ -165,7 +170,6 @@ export default function SecretDetailPage() {
     if (hasRef) {
       setRevealed(null);
       setValueVisible(false);
-      setRevealSecretToken("");
       setRevealBindingKey("");
       void load();
     } else {
@@ -204,15 +208,13 @@ export default function SecretDetailPage() {
       if (!hasRef) return;
       const run = revealRequest.begin();
       const versionInfo = secret?.versions.find((candidate) => candidate.version === version);
-      const secretToken = versionInfo?.has_access_token ? revealSecretToken : undefined;
       const bindingKey = versionInfo?.bound ? revealBindingKey : undefined;
       // Clear the credential from React state as the request starts. The local
       // copy exists only for this in-flight call and is never persisted.
-      setRevealSecretToken("");
       setRevealBindingKey("");
       setRevealBusy(true);
       try {
-        const res = await api.revealSecret(ref, version, "", secretToken, bindingKey, {
+        const res = await api.revealSecret(ref, version, "", bindingKey, {
           signal: run.signal,
         });
         if (!run.current || activeRefKey.current !== refKey) return;
@@ -235,26 +237,15 @@ export default function SecretDetailPage() {
         }
       }
     },
-    [
-      hasRef,
-      ref,
-      refKey,
-      revealSecretToken,
-      revealBindingKey,
-      revealRequest,
-      secret?.versions,
-      toast,
-    ],
+    [hasRef, ref, refKey, revealBindingKey, revealRequest, secret?.versions, toast],
   );
 
   const openReveal = useCallback((version: number) => {
-    setRevealSecretToken("");
     setRevealBindingKey("");
     setRevealTarget(version);
   }, []);
 
   const closeReveal = useCallback(() => {
-    setRevealSecretToken("");
     setRevealBindingKey("");
     setRevealTarget(null);
   }, []);
@@ -608,22 +599,6 @@ export default function SecretDetailPage() {
             You are about to decrypt and display version {revealTarget} of{" "}
             <span className="mono">{displayPath(ref)}</span>. This is recorded in the audit log. The
             value will auto-hide after {REVEAL_SECONDS} seconds.
-            {revealVersionInfo?.has_access_token ? (
-              <Field
-                label="Access token"
-                hint="Used only for this reveal request and not saved."
-                className="mt-4"
-              >
-                <Input
-                  type="password"
-                  value={revealSecretToken}
-                  required
-                  autoComplete="off"
-                  spellCheck={false}
-                  onChange={(event) => setRevealSecretToken(event.target.value)}
-                />
-              </Field>
-            ) : null}
             {revealVersionInfo?.bound ? (
               <Field
                 label="Binding key"
@@ -644,10 +619,7 @@ export default function SecretDetailPage() {
         }
         confirmLabel="Reveal"
         busy={revealBusy}
-        confirmDisabled={
-          (revealVersionInfo?.has_access_token === true && revealSecretToken.length === 0) ||
-          (revealVersionInfo?.bound === true && revealBindingKey.length === 0)
-        }
+        confirmDisabled={revealVersionInfo?.bound === true && revealBindingKey.length === 0}
         onConfirm={() => revealTarget !== null && doReveal(revealTarget)}
         onCancel={closeReveal}
       />
@@ -1214,11 +1186,7 @@ function BindingActionModal({
       onSaved();
     } catch (err) {
       if (!run.current) return;
-      if (
-        action.kind === "purge" &&
-        err instanceof ApiError &&
-        err.code === "purge_cleanup_pending"
-      ) {
+      if (action.kind === "purge" && err instanceof PurgeCleanupPendingApiError) {
         toast.info(
           "Purge committed",
           "Database artifact cleanup is pending. Do not retry with the binding key; restart the service to complete cleanup.",

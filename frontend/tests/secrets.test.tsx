@@ -1,6 +1,11 @@
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { api } from "@/lib/api";
+import {
+  ApiError,
+  api,
+  PurgeCleanupPendingApiError,
+  PURGE_CLEANUP_PENDING_MESSAGE,
+} from "@/lib/api";
 import type { Namespace, SecretMetadata } from "@/lib/types";
 import SecretDetailPage from "@/pages/secrets/detail";
 import SecretsPage from "@/pages/secrets/index";
@@ -407,7 +412,7 @@ describe("new secret version validation", () => {
 });
 
 describe("protected secret reveal", () => {
-  it("requires both exact-version credentials, clears cancelled input, and sends them transiently", async () => {
+  it("bypasses the exact-version access token and sends only the transient binding key", async () => {
     const protectedSecret: SecretMetadata = {
       ...SECRET,
       bound: true,
@@ -439,23 +444,20 @@ describe("protected secret reveal", () => {
     render(<SecretDetailPage />);
     fireEvent.click(await screen.findByRole("button", { name: "Reveal secret" }));
     let dialog = screen.getByRole("dialog", { name: "Reveal secret value?" });
-    let tokenInput = within(dialog).getByLabelText("Access token");
     let bindingInput = within(dialog).getByLabelText("Binding key");
     const confirm = within(dialog).getByRole("button", { name: "Reveal" });
-    expect(tokenInput).toHaveAttribute("type", "password");
+    expect(within(dialog).queryByLabelText("Access token")).not.toBeInTheDocument();
+    expect(bindingInput).toHaveAttribute("type", "password");
     expect(confirm).toBeDisabled();
 
-    fireEvent.change(tokenInput, { target: { value: "kmss_discarded" } });
     fireEvent.change(bindingInput, { target: { value: "discarded-binding-key" } });
     fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
     fireEvent.click(screen.getByRole("button", { name: "Reveal secret" }));
     dialog = screen.getByRole("dialog", { name: "Reveal secret value?" });
-    tokenInput = within(dialog).getByLabelText("Access token");
     bindingInput = within(dialog).getByLabelText("Binding key");
-    expect(tokenInput).toHaveValue("");
+    expect(within(dialog).queryByLabelText("Access token")).not.toBeInTheDocument();
     expect(bindingInput).toHaveValue("");
 
-    fireEvent.change(tokenInput, { target: { value: "kmss_version_token" } });
     fireEvent.change(bindingInput, { target: { value: "binding-key-for-version-00000001" } });
     fireEvent.click(within(dialog).getByRole("button", { name: "Reveal" }));
 
@@ -464,12 +466,10 @@ describe("protected secret reveal", () => {
         { env: "prod", app: "billing", key: "api-key" },
         1,
         "",
-        "kmss_version_token",
         "binding-key-for-version-00000001",
         { signal: expect.any(AbortSignal) },
       ),
     );
-    expect(tokenInput).toHaveValue("");
     expect(bindingInput).toHaveValue("");
     await act(async () => finishReveal(revealResponse));
     expect(mocks.toast.success).toHaveBeenCalledWith(
@@ -513,9 +513,7 @@ describe("protected secret reveal", () => {
     const view = render(<SecretDetailPage />);
     fireEvent.click(await screen.findByRole("button", { name: "Reveal secret" }));
     const dialog = screen.getByRole("dialog", { name: "Reveal secret value?" });
-    fireEvent.change(within(dialog).getByLabelText("Access token"), {
-      target: { value: "kmss_stale_token" },
-    });
+    expect(within(dialog).queryByLabelText("Access token")).not.toBeInTheDocument();
     fireEvent.change(within(dialog).getByLabelText("Binding key"), {
       target: { value: "binding-key-for-version-00000001" },
     });
@@ -690,6 +688,24 @@ describe("binding-key version actions", () => {
     });
   }
 
+  async function submitPurgeAfterPreview(): Promise<void> {
+    fireEvent.click(await screen.findByRole("button", { name: "Purge cohort" }));
+    let dialog = screen.getByRole("dialog", { name: "Purge cohort · v1" });
+    fireEvent.change(within(dialog).getByLabelText("Current binding key"), {
+      target: { value: BINDING_KEY },
+    });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Preview cohort" }));
+    await screen.findByTestId("binding-cohort-versions");
+    dialog = screen.getByRole("dialog", { name: "Purge cohort · v1" });
+    fireEvent.change(within(dialog).getByLabelText("Current binding key"), {
+      target: { value: BINDING_KEY },
+    });
+    fireEvent.change(within(dialog).getByLabelText(/Type PURGE/), {
+      target: { value: "PURGE" },
+    });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Purge versions" }));
+  }
+
   it("binds and unbinds one exact version without a cohort preview", async () => {
     const bind = vi.spyOn(api, "bindSecret").mockResolvedValue({
       anchor_version: 1,
@@ -798,21 +814,7 @@ describe("binding-key version actions", () => {
       revision: 51,
     });
     renderBoundDetail();
-    fireEvent.click(await screen.findByRole("button", { name: "Purge cohort" }));
-    let dialog = screen.getByRole("dialog", { name: "Purge cohort · v1" });
-    fireEvent.change(within(dialog).getByLabelText("Current binding key"), {
-      target: { value: BINDING_KEY },
-    });
-    fireEvent.click(within(dialog).getByRole("button", { name: "Preview cohort" }));
-    await screen.findByTestId("binding-cohort-versions");
-    dialog = screen.getByRole("dialog", { name: "Purge cohort · v1" });
-    fireEvent.change(within(dialog).getByLabelText("Current binding key"), {
-      target: { value: BINDING_KEY },
-    });
-    fireEvent.change(within(dialog).getByLabelText(/Type PURGE/), {
-      target: { value: "PURGE" },
-    });
-    fireEvent.click(within(dialog).getByRole("button", { name: "Purge versions" }));
+    await submitPurgeAfterPreview();
 
     await waitFor(() =>
       expect(purge).toHaveBeenCalledWith(
@@ -824,6 +826,65 @@ describe("binding-key version actions", () => {
         { signal: expect.any(AbortSignal) },
       ),
     );
+  });
+
+  it("treats the API-minted cleanup-pending result as a committed purge", async () => {
+    vi.spyOn(api, "previewSecretBindingCohort").mockResolvedValue({
+      anchor_version: 1,
+      affected_versions: [1],
+      revision: 50,
+    });
+    vi.spyOn(api, "purgeSecretBindingCohort").mockRejectedValue(new PurgeCleanupPendingApiError());
+    renderBoundDetail();
+
+    await submitPurgeAfterPreview();
+
+    await waitFor(() =>
+      expect(mocks.toast.info).toHaveBeenCalledWith(
+        "Purge committed",
+        "Database artifact cleanup is pending. Do not retry with the binding key; restart the service to complete cleanup.",
+        { duration: 12_000 },
+      ),
+    );
+    expect(mocks.toast.error).not.toHaveBeenCalled();
+    expect(screen.queryByRole("dialog", { name: "Purge cohort · v1" })).not.toBeInTheDocument();
+    await waitFor(() => expect(api.secretMetadata).toHaveBeenCalledTimes(2));
+  });
+
+  it.each([
+    [
+      "an exact-looking plain API error",
+      () => new ApiError("purge_cleanup_pending", PURGE_CLEANUP_PENDING_MESSAGE, 503),
+    ],
+    [
+      "the wrong HTTP status",
+      () => new ApiError("purge_cleanup_pending", PURGE_CLEANUP_PENDING_MESSAGE, 500),
+    ],
+    ["the wrong code", () => new ApiError("unavailable", PURGE_CLEANUP_PENDING_MESSAGE, 503)],
+    [
+      "a near-match message",
+      () =>
+        new ApiError(
+          "purge_cleanup_pending",
+          `${PURGE_CLEANUP_PENDING_MESSAGE}! ${BINDING_KEY}`,
+          503,
+        ),
+    ],
+  ])("does not treat %s as a committed purge", async (_case, makeError) => {
+    vi.spyOn(api, "previewSecretBindingCohort").mockResolvedValue({
+      anchor_version: 1,
+      affected_versions: [1],
+      revision: 50,
+    });
+    vi.spyOn(api, "purgeSecretBindingCohort").mockRejectedValue(makeError());
+    renderBoundDetail();
+
+    await submitPurgeAfterPreview();
+
+    await waitFor(() => expect(mocks.toast.error).toHaveBeenCalledTimes(1));
+    expect(mocks.toast.info).not.toHaveBeenCalled();
+    expect(screen.getByRole("dialog", { name: "Purge cohort · v1" })).toBeVisible();
+    expect(api.secretMetadata).toHaveBeenCalledTimes(1);
   });
 
   it("does not offer cohort purge to a client identity", async () => {

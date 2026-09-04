@@ -6,6 +6,9 @@ import {
   clearToken,
   getToken,
   isUnreachableError,
+  PurgeCleanupPendingApiError,
+  PURGE_CLEANUP_PENDING_MESSAGE,
+  SECRET_OPERATION_FAILED_MESSAGE,
   setToken,
   UNAUTHORIZED_EVENT,
 } from "@/lib/api";
@@ -91,7 +94,7 @@ describe("apiFetch", () => {
     );
   });
 
-  it("sends independent reveal credentials in the body and never creates custom secret headers", async () => {
+  it("sends only the binding credential for an admin reveal and never creates custom secret headers", async () => {
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
       new Response(
         JSON.stringify({
@@ -110,7 +113,6 @@ describe("apiFetch", () => {
       { env: "prod", app: "billing", key: "api-key" },
       2,
       "",
-      "kmss_version_token",
       "operator-binding-key-00000000001",
     );
 
@@ -123,9 +125,9 @@ describe("apiFetch", () => {
       app: "billing",
       key: "api-key",
       version: 2,
-      secret_token: "kmss_version_token",
       binding_key: "operator-binding-key-00000000001",
     });
+    expect(JSON.parse(String(init?.body))).not.toHaveProperty("secret_token");
   });
 
   it("sends a binding key in the secret write body without legacy protection fields", async () => {
@@ -358,6 +360,165 @@ describe("apiFetch", () => {
       window.removeEventListener(UNAUTHORIZED_EVENT, onUnauthorized);
     }
   });
+});
+
+describe("secret operation error boundary", () => {
+  const ref = { env: "prod", app: "billing", key: "api-key" };
+  const plaintextCanary = "plaintext-canary-do-not-reflect";
+  const accessTokenCanary = "kmss_access-token-canary-do-not-reflect";
+  const bindingKeyCanary = "binding-key-canary-0123456789abcdef";
+
+  const secretOperations: Array<[string, () => Promise<unknown>]> = [
+    [
+      "createSecret",
+      () =>
+        api.createSecret({
+          ...ref,
+          value_base64: plaintextCanary,
+          content_type: "text/plain",
+          metadata_json: "{}",
+          binding_key: bindingKeyCanary,
+          generate_access_token: true,
+          expires_at_unix_ms: 0,
+        }),
+    ],
+    ["revealSecret", () => api.revealSecret(ref, 2, "", bindingKeyCanary)],
+    ["bindSecret", () => api.bindSecret(ref, 2, bindingKeyCanary)],
+    ["unbindSecret", () => api.unbindSecret(ref, 2, bindingKeyCanary)],
+    ["previewSecretBindingCohort", () => api.previewSecretBindingCohort(ref, 2, bindingKeyCanary)],
+    [
+      "rotateSecretBindingKey",
+      () =>
+        api.rotateSecretBindingKey(
+          ref,
+          2,
+          bindingKeyCanary,
+          `${bindingKeyCanary}-replacement`,
+          41,
+          [2, 3],
+        ),
+    ],
+    [
+      "purgeSecretBindingCohort",
+      () => api.purgeSecretBindingCohort(ref, 2, bindingKeyCanary, 41, [2, 3]),
+    ],
+  ];
+
+  it.each(secretOperations)(
+    "%s drops hostile remote details while retaining a safe status and stable code",
+    async (_name, invoke) => {
+      vi.spyOn(globalThis, "fetch").mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            error: {
+              code: accessTokenCanary,
+              message: `${plaintextCanary}: ${bindingKeyCanary}`,
+              cause: accessTokenCanary,
+              validation_errors: [
+                {
+                  alias: bindingKeyCanary,
+                  code: accessTokenCanary,
+                  schema_pointer: plaintextCanary,
+                  message: `${bindingKeyCanary}: ${accessTokenCanary}`,
+                },
+              ],
+            },
+          }),
+          { status: 400, headers: { "Content-Type": "application/json" } },
+        ),
+      );
+
+      let caught: unknown;
+      try {
+        await invoke();
+      } catch (err) {
+        caught = err;
+      }
+
+      expect(caught).toBeInstanceOf(ApiError);
+      const error = caught as ApiError & { cause?: unknown };
+      expect(error).toMatchObject({
+        status: 400,
+        code: "invalid_argument",
+        message: SECRET_OPERATION_FAILED_MESSAGE,
+        validationErrors: [],
+      });
+      expect(error).not.toBeInstanceOf(PurgeCleanupPendingApiError);
+      expect(error.cause).toBeUndefined();
+      const visibleDetails = [
+        error.name,
+        error.code,
+        error.message,
+        JSON.stringify(error.validationErrors),
+        String(error.cause ?? ""),
+      ].join(" ");
+      expect(visibleDetails).not.toContain(plaintextCanary);
+      expect(visibleDetails).not.toContain(accessTokenCanary);
+      expect(visibleDetails).not.toContain(bindingKeyCanary);
+    },
+  );
+
+  it("mints the cleanup-pending error only for the canonical purge response", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          error: {
+            code: "purge_cleanup_pending",
+            message: PURGE_CLEANUP_PENDING_MESSAGE,
+          },
+        }),
+        { status: 503, headers: { "Content-Type": "application/json" } },
+      ),
+    );
+
+    let caught: unknown;
+    try {
+      await api.purgeSecretBindingCohort(ref, 2, bindingKeyCanary, 41, [2, 3]);
+    } catch (err) {
+      caught = err;
+    }
+
+    expect(caught).toBeInstanceOf(PurgeCleanupPendingApiError);
+    expect(caught).toMatchObject({
+      status: 503,
+      code: "purge_cleanup_pending",
+      message: PURGE_CLEANUP_PENDING_MESSAGE,
+      validationErrors: [],
+    });
+  });
+
+  it.each([
+    ["wrong status", 500, "purge_cleanup_pending", PURGE_CLEANUP_PENDING_MESSAGE],
+    ["wrong code", 503, "unavailable", PURGE_CLEANUP_PENDING_MESSAGE],
+    [
+      "wrong message",
+      503,
+      "purge_cleanup_pending",
+      `${PURGE_CLEANUP_PENDING_MESSAGE}! ${bindingKeyCanary}`,
+    ],
+  ])(
+    "treats a cleanup-pending response with %s as a generic secret failure",
+    async (_case, status, code, message) => {
+      vi.spyOn(globalThis, "fetch").mockResolvedValue(
+        new Response(JSON.stringify({ error: { code, message } }), {
+          status,
+          headers: { "Content-Type": "application/json" },
+        }),
+      );
+
+      let caught: unknown;
+      try {
+        await api.purgeSecretBindingCohort(ref, 2, bindingKeyCanary, 41, [2, 3]);
+      } catch (err) {
+        caught = err;
+      }
+
+      expect(caught).toBeInstanceOf(ApiError);
+      expect(caught).not.toBeInstanceOf(PurgeCleanupPendingApiError);
+      expect(caught).toMatchObject({ status, message: SECRET_OPERATION_FAILED_MESSAGE });
+      expect((caught as ApiError).message).not.toContain(bindingKeyCanary);
+    },
+  );
 });
 
 describe("isUnreachableError", () => {
