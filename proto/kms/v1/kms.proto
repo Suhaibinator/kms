@@ -157,6 +157,7 @@ message GetParameterMetadataResponse {
 // Identity authentication travels in standard gRPC metadata:
 //   "authorization": "Bearer <per-client token>"
 // Per-secret credentials are fields on only the requests that consume them.
+// Any supplied binding key must be valid UTF-8 and at least 32 bytes.
 
 service SecretService {
   rpc GetSecret(GetSecretRequest) returns (GetSecretResponse);
@@ -310,9 +311,10 @@ message PreviewSecretBindingCohortRequest {
   string binding_key = 3;
 }
 
-// RotateSecretBindingKey rewraps the contiguous cohort around anchor_version.
-// The optional preview guards let an interactive caller reject a stale cohort
-// rather than mutating a set different from the one it confirmed.
+// RotateSecretBindingKey rewraps the contiguous cohort around anchor_version;
+// anchor_version 0 selects current. The optional preview guards must be
+// supplied together and let a caller reject a stale cohort rather than
+// mutating a set different from the one it confirmed.
 message RotateSecretBindingKeyRequest {
   ResourceRef ref = 1;
   uint64 anchor_version = 2;
@@ -322,9 +324,10 @@ message RotateSecretBindingKeyRequest {
   repeated uint64 expected_affected_versions = 6;
 }
 
-// PurgeSecretBindingCohort irreversibly destroys the contiguous cohort around
-// anchor_version. The optional preview guards have the same semantics as the
-// rotation guards.
+// PurgeSecretBindingCohort is an admin-only irreversible destruction of the
+// contiguous cohort around anchor_version and bypasses release-reference
+// protection; anchor_version 0 selects current. The optional preview guards
+// have the same paired semantics as the rotation guards.
 message PurgeSecretBindingCohortRequest {
   ResourceRef ref = 1;
   uint64 anchor_version = 2;
@@ -684,7 +687,9 @@ message ParameterChange {
 // never pushed over the stream; clients refetch through GetSecret.
 message SecretMetadataChange {
   ResourceRef ref = 1;
-  string change_type = 2; // put | delete | promote | disable | enable | destroy
+  // put | delete | promote | disable | enable | destroy | bind | unbind |
+  // rotate_binding_key | purge_binding_cohort
+  string change_type = 2;
   uint64 version = 3;
   string label = 4;
 }

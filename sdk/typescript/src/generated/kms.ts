@@ -336,9 +336,10 @@ export interface PreviewSecretBindingCohortRequest {
 }
 
 /**
- * RotateSecretBindingKey rewraps the contiguous cohort around anchor_version.
- * The optional preview guards let an interactive caller reject a stale cohort
- * rather than mutating a set different from the one it confirmed.
+ * RotateSecretBindingKey rewraps the contiguous cohort around anchor_version;
+ * anchor_version 0 selects current. The optional preview guards must be
+ * supplied together and let a caller reject a stale cohort rather than
+ * mutating a set different from the one it confirmed.
  */
 export interface RotateSecretBindingKeyRequest {
   ref: ResourceRef | undefined;
@@ -350,9 +351,10 @@ export interface RotateSecretBindingKeyRequest {
 }
 
 /**
- * PurgeSecretBindingCohort irreversibly destroys the contiguous cohort around
- * anchor_version. The optional preview guards have the same semantics as the
- * rotation guards.
+ * PurgeSecretBindingCohort is an admin-only irreversible destruction of the
+ * contiguous cohort around anchor_version and bypasses release-reference
+ * protection; anchor_version 0 selects current. The optional preview guards
+ * have the same paired semantics as the rotation guards.
  */
 export interface PurgeSecretBindingCohortRequest {
   ref: ResourceRef | undefined;
@@ -701,7 +703,10 @@ export interface SecretMetadataChange {
   ref:
     | ResourceRef
     | undefined;
-  /** put | delete | promote | disable | enable | destroy */
+  /**
+   * put | delete | promote | disable | enable | destroy | bind | unbind |
+   * rotate_binding_key | purge_binding_cohort
+   */
   changeType: string;
   version: bigint;
   label: string;
@@ -18690,5 +18695,5 @@ export interface MessageFns<T> {
   fromPartial(object: DeepPartial<T>): T;
 }
 
-// source-sha256: 75fc632b6746ef4a3606d9e6c56aba9ca3ecb0ead8308f72db5d64b0fbe41a74
+// source-sha256: 0f25a7df8c9675f91a008b6917f098f104c6cfa370f882f82168321dc4c19bbd
 // generation-sha256: c3e69d40e38671d5381cfa50a679b45232adc3ecd3df927c51285f1901aa09ef

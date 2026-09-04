@@ -289,6 +289,7 @@ class SecretServiceStub:
     Identity authentication travels in standard gRPC metadata:
     "authorization": "Bearer <per-client token>"
     Per-secret credentials are fields on only the requests that consume them.
+    Any supplied binding key must be valid UTF-8 and at least 32 bytes.
 
     """
 
@@ -373,6 +374,7 @@ class SecretServiceServicer:
     Identity authentication travels in standard gRPC metadata:
     "authorization": "Bearer <per-client token>"
     Per-secret credentials are fields on only the requests that consume them.
+    Any supplied binding key must be valid UTF-8 and at least 32 bytes.
 
     """
 
@@ -538,6 +540,7 @@ class SecretService:
     Identity authentication travels in standard gRPC metadata:
     "authorization": "Bearer <per-client token>"
     Per-secret credentials are fields on only the requests that consume them.
+    Any supplied binding key must be valid UTF-8 and at least 32 bytes.
 
     """
 

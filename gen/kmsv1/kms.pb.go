@@ -2284,9 +2284,10 @@ func (x *PreviewSecretBindingCohortRequest) GetBindingKey() string {
 	return ""
 }
 
-// RotateSecretBindingKey rewraps the contiguous cohort around anchor_version.
-// The optional preview guards let an interactive caller reject a stale cohort
-// rather than mutating a set different from the one it confirmed.
+// RotateSecretBindingKey rewraps the contiguous cohort around anchor_version;
+// anchor_version 0 selects current. The optional preview guards must be
+// supplied together and let a caller reject a stale cohort rather than
+// mutating a set different from the one it confirmed.
 type RotateSecretBindingKeyRequest struct {
 	state                    protoimpl.MessageState `protogen:"open.v1"`
 	Ref                      *ResourceRef           `protobuf:"bytes,1,opt,name=ref,proto3" json:"ref,omitempty"`
@@ -2371,9 +2372,10 @@ func (x *RotateSecretBindingKeyRequest) GetExpectedAffectedVersions() []uint64 {
 	return nil
 }
 
-// PurgeSecretBindingCohort irreversibly destroys the contiguous cohort around
-// anchor_version. The optional preview guards have the same semantics as the
-// rotation guards.
+// PurgeSecretBindingCohort is an admin-only irreversible destruction of the
+// contiguous cohort around anchor_version and bypasses release-reference
+// protection; anchor_version 0 selects current. The optional preview guards
+// have the same paired semantics as the rotation guards.
 type PurgeSecretBindingCohortRequest struct {
 	state                    protoimpl.MessageState `protogen:"open.v1"`
 	Ref                      *ResourceRef           `protobuf:"bytes,1,opt,name=ref,proto3" json:"ref,omitempty"`
@@ -5208,11 +5210,13 @@ func (x *ParameterChange) GetLabel() string {
 // SecretMetadataChange notifies subscribers that a secret changed. Plaintext is
 // never pushed over the stream; clients refetch through GetSecret.
 type SecretMetadataChange struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Ref           *ResourceRef           `protobuf:"bytes,1,opt,name=ref,proto3" json:"ref,omitempty"`
-	ChangeType    string                 `protobuf:"bytes,2,opt,name=change_type,json=changeType,proto3" json:"change_type,omitempty"` // put | delete | promote | disable | enable | destroy
-	Version       uint64                 `protobuf:"varint,3,opt,name=version,proto3" json:"version,omitempty"`
-	Label         string                 `protobuf:"bytes,4,opt,name=label,proto3" json:"label,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	Ref   *ResourceRef           `protobuf:"bytes,1,opt,name=ref,proto3" json:"ref,omitempty"`
+	// put | delete | promote | disable | enable | destroy | bind | unbind |
+	// rotate_binding_key | purge_binding_cohort
+	ChangeType    string `protobuf:"bytes,2,opt,name=change_type,json=changeType,proto3" json:"change_type,omitempty"`
+	Version       uint64 `protobuf:"varint,3,opt,name=version,proto3" json:"version,omitempty"`
+	Label         string `protobuf:"bytes,4,opt,name=label,proto3" json:"label,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
