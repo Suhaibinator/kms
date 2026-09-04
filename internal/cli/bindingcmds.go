@@ -268,7 +268,7 @@ func (c *CLI) cmdSecretPurgeBindingCohort(args []string) int {
 	}
 	c.printCohortPreview("Binding-cohort purge", ref.String(), preview)
 	_, _ = fmt.Fprintf(c.Stderr, "IRREVERSIBLE ADMIN OPERATION: versions %s will be permanently destroyed, even if immutable releases reference them. This cannot be undone.\n", formatVersions(preview.GetAffectedVersions()))
-	ok, code = c.confirmYesNo(fmt.Sprintf("permanently purge %s versions %s", ref, formatVersions(preview.GetAffectedVersions())))
+	ok, code := c.confirmYesNo(fmt.Sprintf("permanently purge %s versions %s", ref, formatVersions(preview.GetAffectedVersions())))
 	if !ok {
 		return code
 	}

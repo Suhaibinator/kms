@@ -78,7 +78,7 @@ func TestInitCheckImportEndToEnd(t *testing.T) {
 
 	pr := core.Principal{Identity: domain.Identity{Name: "admin", Kind: domain.IdentityKindAdmin}}
 	stripeRef := domain.Ref{NS: domain.NamespaceRef{Env: "prod", App: "gradethis"}, Key: "stripe-key"}
-	val, err := svc.RevealSecret(context.Background(), pr, stripeRef, 0, "")
+	val, err := svc.RevealSecret(context.Background(), pr, stripeRef, 0, "", "", "")
 	if err != nil {
 		t.Fatalf("reveal imported secret: %v", err)
 	}

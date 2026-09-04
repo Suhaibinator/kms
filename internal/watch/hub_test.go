@@ -198,6 +198,21 @@ func (f *fakeStore) DeleteParameter(context.Context, domain.Ref) (uint64, error)
 func (f *fakeStore) CreateSecretVersion(context.Context, storage.CreateSecretParams) (uint64, uint64, error) {
 	panic("unused")
 }
+func (f *fakeStore) BindSecretVersion(context.Context, domain.Ref, uint64, storage.SecretBindingRewrapFunc) (storage.SecretBindingResult, error) {
+	panic("unused")
+}
+func (f *fakeStore) UnbindSecretVersion(context.Context, domain.Ref, uint64, storage.SecretBindingRewrapFunc) (storage.SecretBindingResult, error) {
+	panic("unused")
+}
+func (f *fakeStore) PreviewSecretBindingCohort(context.Context, domain.Ref, uint64, storage.SecretBindingTestFunc) (storage.SecretBindingResult, error) {
+	panic("unused")
+}
+func (f *fakeStore) RotateSecretBindingKey(context.Context, domain.Ref, uint64, storage.SecretBindingCASGuard, storage.SecretBindingTestFunc, storage.SecretBindingRewrapFunc) (storage.SecretBindingResult, error) {
+	panic("unused")
+}
+func (f *fakeStore) PurgeSecretBindingCohort(context.Context, domain.Ref, uint64, storage.SecretBindingCASGuard, storage.SecretBindingTestFunc, storage.SecretBindingPurgeAudit) (storage.SecretBindingResult, error) {
+	panic("unused")
+}
 func (f *fakeStore) GetSecretRecord(context.Context, domain.Ref) (storage.SecretRecord, error) {
 	panic("unused")
 }
