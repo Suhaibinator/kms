@@ -136,10 +136,14 @@ class ConfigSpec:
             _validate_name(marker.alias, f"field {property_name} secret alias")
             _validate_policy(marker.reload, property_name)
             _validate_views(marker.views, property_name)
-            if field.default is not PydanticUndefined or field.default_factory is not None:
-                raise TypeError(f"configstore: secret field {property_name} must be required and default-free")
             if not _accepts_secret(field.annotation):
                 raise TypeError(f"configstore: secret field {property_name} must be typed as Secret")
+            if field.default is not PydanticUndefined or field.default_factory is not None:
+                default = field.get_default(call_default_factory=True)
+                if not _is_secret_declaration(default):
+                    raise TypeError(
+                        f"configstore: secret field {property_name} default must be a credential-only Secret"
+                    )
             secrets.append(ManagedSecretField(property_name, marker.alias, marker.reload, marker.views))
 
         if not parameters and not secrets:
@@ -238,6 +242,18 @@ def _python_identifier(value: str) -> str:
 
 def _accepts_secret(annotation: Any) -> bool:
     return annotation is Secret or Secret in get_args(annotation) or get_origin(annotation) is Secret
+
+
+def _is_secret_declaration(value: object) -> bool:
+    return (
+        isinstance(value, Secret)
+        and value.is_empty()
+        and not value.env
+        and not value.app
+        and not value.key
+        and value.version == 0
+        and not value.content_type
+    )
 
 
 def _validate_validation_alias(alias: object, path: str) -> None:

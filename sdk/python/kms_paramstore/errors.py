@@ -1,8 +1,8 @@
 """Exception types for the paramstore SDK.
 
-Every exception here, and any message it carries, is guaranteed free of secret
-plaintext: the SDK maps server ``grpc`` status errors onto these types using only
-the status code and the server's (non-secret) message.
+RPCs that carry secret plaintext or credentials use a fixed-message mapper so a
+buggy or hostile server cannot reflect request material into an SDK exception.
+Other RPCs preserve the server's status message for operational context.
 """
 
 from __future__ import annotations
@@ -22,6 +22,7 @@ __all__ = [
     "ConfigError",
     "NoNamespaceError",
     "map_grpc_error",
+    "map_secret_grpc_error",
 ]
 
 
@@ -63,7 +64,7 @@ class UnauthenticatedError(ParamStoreError):
 class FailedPreconditionError(ParamStoreError):
     """The request is well-formed but server state forbids it.
 
-    For example, a client-bound mode mismatch or a disabled version.
+    For example, an invalid binding transition or a disabled version.
     """
 
     code = "failed_precondition"
@@ -151,4 +152,29 @@ def map_grpc_error(err: grpc.RpcError) -> ParamStoreError:
         return ParamStoreError(
             f"{stable_code}: {message}", code=stable_code, grpc_code=code
         )
+    return exc_type(message, grpc_code=code)
+
+
+def map_secret_grpc_error(err: grpc.RpcError) -> ParamStoreError:
+    """Translate a secret-bearing RPC error without trusting remote details.
+
+    Only the structured gRPC status code affects the result.  In particular,
+    neither ``details()`` nor ``str(err)`` is used because a misbehaving peer
+    could reflect secret plaintext, an access token, or a binding key there.
+    """
+    code = None
+    code_method = getattr(err, "code", None)
+    if callable(code_method):
+        try:
+            candidate = code_method()
+        except Exception:
+            candidate = None
+        if isinstance(candidate, grpc.StatusCode):
+            code = candidate
+
+    exc_type = _CODE_MAP.get(code, ParamStoreError)
+    stable_code = _CODE_NAMES.get(code, "unknown")
+    message = f"secret operation failed ({stable_code})"
+    if exc_type is ParamStoreError:
+        return ParamStoreError(message, code=stable_code, grpc_code=code)
     return exc_type(message, grpc_code=code)

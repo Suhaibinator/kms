@@ -33,7 +33,9 @@ from .models import (
     PromoteSecretResult,
     PutResult,
     PutSecretResult,
+    SecretBindingCohortResult,
     SecretInfo,
+    SecretVersionMutationResult,
     VerifyDefaultEntry,
     VerifyReleaseDefaultsResult,
     WhoAmI,
@@ -555,58 +557,44 @@ class Client:
         version: int = 0,
         label: str = "",
         secret_token: str = "",
+        binding_key: str = "",
         timeout: Optional[float] = None,
     ) -> Secret:
         """Return a secret as a redacting :class:`Secret`.
 
         ``key`` is relative to the client namespace, or an absolute
-        ``/env/app/key``. Use ``secret_token`` for token-protected or
-        client-bound secrets; for client-bound secrets it also carries the
-        client key share.
+        ``/env/app/key``. ``secret_token`` and ``binding_key`` are independent
+        credentials and are sent only for this request.
 
-        Token-gated reads bypass the client cache entirely: caching them under
-        the token-less key would let later calls without ``secret_token`` read
-        the plaintext from cache, skipping the server's per-secret token check,
-        and would keep serving after a token rotation until the TTL expired.
+        Secret plaintext is never cached by the SDK.
         """
         ref = self._resolve_ref(key)
         version, label = _normalize_selector(version, label)
-        cache_key = str(ref)
-        if not secret_token:
-            cached = self._cache.get_secret(cache_key, version, label)
-            if cached is not None:
-                return cached
-        generation = None if secret_token else self._cache.begin_secret_read(cache_key)
         try:
-            try:
-                resp = self._secret_stub.GetSecret(
-                    kms_pb2.GetSecretRequest(
-                        ref=to_proto_ref(ref), version=version, label=label, secret_token=secret_token
-                    ),
-                    metadata=self._auth_metadata(),
-                    timeout=self._call_timeout(timeout),
-                )
-            except grpc.RpcError as e:
-                raise errors.map_grpc_error(e) from None
-            if not resp.HasField("ref"):
-                raise errors.ParamStoreError("KMS secret response omitted resource reference", code="internal")
-            rref = resp.ref
-            _assert_read_identity(
-                "secret", ref, rref.namespace.env, rref.namespace.app, rref.key, resp.version, version
+            resp = self._secret_stub.GetSecret(
+                kms_pb2.GetSecretRequest(
+                    ref=to_proto_ref(ref), version=version, label=label,
+                    secret_token=secret_token, binding_key=binding_key,
+                ),
+                metadata=self._auth_metadata(),
+                timeout=self._call_timeout(timeout),
             )
-            s = Secret(
-                resp.value,
-                env=rref.namespace.env or ref.ns.env,
-                app=rref.namespace.app or ref.ns.app,
-                key=rref.key or ref.key,
-                version=resp.version,
-                content_type=resp.content_type,
-            )
-            if not secret_token:
-                self._cache.put_secret_if_unchanged(generation, version, label, s)
-            return s
-        finally:
-            self._cache.end_read(generation)
+        except grpc.RpcError as e:
+            raise errors.map_secret_grpc_error(e) from None
+        if not resp.HasField("ref"):
+            raise errors.ParamStoreError("KMS secret response omitted resource reference", code="internal")
+        rref = resp.ref
+        _assert_read_identity(
+            "secret", ref, rref.namespace.env, rref.namespace.app, rref.key, resp.version, version
+        )
+        return Secret(
+            resp.value,
+            env=rref.namespace.env or ref.ns.env,
+            app=rref.namespace.app or ref.ns.app,
+            key=rref.key or ref.key,
+            version=resp.version,
+            content_type=resp.content_type,
+        )
 
     def put_secret(
         self,
@@ -615,10 +603,9 @@ class Client:
         *,
         content_type: str = "",
         metadata_json: str = "",
-        client_bound: bool = False,
+        binding_key: str = "",
         generate_access_token: bool = False,
         expires_at_unix_ms: int = 0,
-        secret_token: str = "",
         timeout: Optional[float] = None,
     ) -> PutSecretResult:
         """Create a new immutable version of a secret (tooling use)."""
@@ -642,16 +629,15 @@ class Client:
                     value=value,
                     content_type=content_type,
                     metadata_json=metadata_json,
-                    client_bound=client_bound,
+                    binding_key=binding_key,
                     generate_access_token=generate_access_token,
                     expires_at_unix_ms=expires_at_unix_ms,
-                    secret_token=secret_token,
                 ),
                 metadata=self._auth_metadata(),
                 timeout=self._call_timeout(timeout),
             )
         except grpc.RpcError as e:
-            raise errors.map_grpc_error(e) from None
+            raise errors.map_secret_grpc_error(e) from None
         self._cache.invalidate_secret(str(ref))
         return PutSecretResult(version=resp.version, revision=resp.revision, access_token=resp.access_token)
 
@@ -775,6 +761,111 @@ class Client:
         self._cache.invalidate_secret(str(ref))
         return PromoteSecretResult(resp.current_version, resp.previous_version, resp.revision)
 
+    def bind_secret(
+        self, key: str, *, version: int = 0, binding_key: str,
+        timeout: Optional[float] = None,
+    ) -> SecretVersionMutationResult:
+        """Bind one exact secret version in place; version 0 selects current."""
+        _valid_uint64(version, "version")
+        ref = self._resolve_ref(key)
+        try:
+            response = self._secret_stub.BindSecret(
+                kms_pb2.BindSecretRequest(
+                    ref=to_proto_ref(ref), version=version, binding_key=binding_key,
+                ), metadata=self._auth_metadata(), timeout=self._call_timeout(timeout),
+            )
+        except grpc.RpcError as exc:
+            raise errors.map_secret_grpc_error(exc) from None
+        self._cache.invalidate_secret(str(ref))
+        return _secret_version_mutation_result(response)
+
+    def unbind_secret(
+        self, key: str, *, version: int = 0, binding_key: str,
+        timeout: Optional[float] = None,
+    ) -> SecretVersionMutationResult:
+        """Unbind one exact secret version in place; version 0 selects current."""
+        _valid_uint64(version, "version")
+        ref = self._resolve_ref(key)
+        try:
+            response = self._secret_stub.UnbindSecret(
+                kms_pb2.UnbindSecretRequest(
+                    ref=to_proto_ref(ref), version=version, binding_key=binding_key,
+                ), metadata=self._auth_metadata(), timeout=self._call_timeout(timeout),
+            )
+        except grpc.RpcError as exc:
+            raise errors.map_secret_grpc_error(exc) from None
+        self._cache.invalidate_secret(str(ref))
+        return _secret_version_mutation_result(response)
+
+    def preview_secret_binding_cohort(
+        self, key: str, *, anchor_version: int = 0, binding_key: str,
+        timeout: Optional[float] = None,
+    ) -> SecretBindingCohortResult:
+        """Preview the contiguous cohort containing the selected version."""
+        _valid_uint64(anchor_version, "anchor_version")
+        ref = self._resolve_ref(key)
+        try:
+            response = self._secret_stub.PreviewSecretBindingCohort(
+                kms_pb2.PreviewSecretBindingCohortRequest(
+                    ref=to_proto_ref(ref), anchor_version=anchor_version,
+                    binding_key=binding_key,
+                ), metadata=self._auth_metadata(), timeout=self._call_timeout(timeout),
+            )
+        except grpc.RpcError as exc:
+            raise errors.map_secret_grpc_error(exc) from None
+        return _secret_binding_cohort_result(response)
+
+    def rotate_secret_binding_key(
+        self, key: str, *, anchor_version: int = 0, binding_key: str,
+        new_binding_key: str, expected_revision: Optional[int] = None,
+        expected_affected_versions: Optional[Iterable[int]] = None,
+        timeout: Optional[float] = None,
+    ) -> SecretBindingCohortResult:
+        """Rotate the binding key for a contiguous version cohort."""
+        _valid_uint64(anchor_version, "anchor_version")
+        guard = _cohort_guard(expected_revision, expected_affected_versions)
+        ref = self._resolve_ref(key)
+        request = kms_pb2.RotateSecretBindingKeyRequest(
+            ref=to_proto_ref(ref), anchor_version=anchor_version,
+            binding_key=binding_key, new_binding_key=new_binding_key,
+        )
+        if guard is not None:
+            request.expected_revision = guard[0]
+            request.expected_affected_versions.extend(guard[1])
+        try:
+            response = self._secret_stub.RotateSecretBindingKey(
+                request, metadata=self._auth_metadata(), timeout=self._call_timeout(timeout),
+            )
+        except grpc.RpcError as exc:
+            raise errors.map_secret_grpc_error(exc) from None
+        self._cache.invalidate_secret(str(ref))
+        return _secret_binding_cohort_result(response)
+
+    def purge_secret_binding_cohort(
+        self, key: str, *, anchor_version: int = 0, binding_key: str,
+        expected_revision: Optional[int] = None,
+        expected_affected_versions: Optional[Iterable[int]] = None,
+        timeout: Optional[float] = None,
+    ) -> SecretBindingCohortResult:
+        """Irreversibly purge a contiguous bound-version cohort."""
+        _valid_uint64(anchor_version, "anchor_version")
+        guard = _cohort_guard(expected_revision, expected_affected_versions)
+        ref = self._resolve_ref(key)
+        request = kms_pb2.PurgeSecretBindingCohortRequest(
+            ref=to_proto_ref(ref), anchor_version=anchor_version, binding_key=binding_key,
+        )
+        if guard is not None:
+            request.expected_revision = guard[0]
+            request.expected_affected_versions.extend(guard[1])
+        try:
+            response = self._secret_stub.PurgeSecretBindingCohort(
+                request, metadata=self._auth_metadata(), timeout=self._call_timeout(timeout),
+            )
+        except grpc.RpcError as exc:
+            raise errors.map_secret_grpc_error(exc) from None
+        self._cache.invalidate_secret(str(ref))
+        return _secret_binding_cohort_result(response)
+
     # --- declarative resolution -------------------------------------------
 
     def resolve(self, config_obj: object, *, timeout: Optional[float] = None) -> None:
@@ -869,6 +960,45 @@ def _normalize_selector(version: int, label: str) -> Tuple[int, str]:
     if not isinstance(label, str):
         raise errors.ConfigError("label must be a string")
     return version, "" if version else label
+
+
+def _cohort_guard(
+    expected_revision: Optional[int], expected_affected_versions: Optional[Iterable[int]],
+) -> "Optional[Tuple[int, Tuple[int, ...]]]":
+    if (expected_revision is None) != (expected_affected_versions is None):
+        raise errors.ConfigError(
+            "expected_revision and expected_affected_versions must be supplied together"
+        )
+    if expected_revision is None:
+        return None
+    revision = _valid_uint64(expected_revision, "expected_revision", nonzero=True)
+    try:
+        versions = tuple(expected_affected_versions or ())
+    except TypeError as exc:
+        raise errors.ConfigError("expected_affected_versions must be an iterable of versions") from exc
+    if not versions:
+        raise errors.ConfigError("expected_affected_versions must not be empty")
+    for version in versions:
+        _valid_uint64(version, "expected_affected_versions item", nonzero=True)
+    if tuple(sorted(set(versions))) != versions:
+        raise errors.ConfigError("expected_affected_versions must be sorted and unique")
+    return revision, versions
+
+
+def _secret_version_mutation_result(response) -> SecretVersionMutationResult:
+    return SecretVersionMutationResult(
+        anchor_version=response.anchor_version,
+        affected_versions=tuple(response.affected_versions),
+        revision=response.revision,
+    )
+
+
+def _secret_binding_cohort_result(response) -> SecretBindingCohortResult:
+    return SecretBindingCohortResult(
+        anchor_version=response.anchor_version,
+        affected_versions=tuple(response.affected_versions),
+        revision=response.revision,
+    )
 
 
 def _assert_read_identity(

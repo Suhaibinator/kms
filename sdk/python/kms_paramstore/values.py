@@ -183,18 +183,20 @@ class SecretValue(_DescriptorBase):
 
     Args:
         key: relative key (``"stripe-api-key"``) or absolute ``"/env/app/key"``.
-        token: per-secret access token; for client-bound secrets it is also the
-            client key share.
+        token: optional per-secret access token.
+        bind_key: optional binding key, independent from the access token.
         env_var: optional environment variable that, when set and non-empty,
             overrides the store value (no namespace resolution is needed then).
         default: optional fallback (development only).
     """
 
-    def __init__(self, key: str = "", *, token: Optional[str] = None, env_var: Optional[str] = None,
+    def __init__(self, key: str = "", *, token: Optional[str] = None,
+                 bind_key: Optional[str] = None, env_var: Optional[str] = None,
                  default: Optional[str] = None) -> None:
         super().__init__()
         self._key = key
         self._token = token or ""
+        self._bind_key = bind_key or ""
         self._env_var = env_var or ""
         self._default = default
 
@@ -227,7 +229,10 @@ class SecretValue(_DescriptorBase):
                     return
             if self._key:
                 try:
-                    sec = client.get_secret(self._key, secret_token=self._token, timeout=timeout)
+                    sec = client.get_secret(
+                        self._key, secret_token=self._token,
+                        binding_key=self._bind_key, timeout=timeout,
+                    )
                 except Exception as err:
                     if self._default is not None and client._default_allowed_for_error(err):
                         client._logf("secret %r fetch failed (%s); using default", self._key, err)
@@ -262,7 +267,8 @@ class SecretValue(_DescriptorBase):
         if self._key:
             try:
                 secret = await client.get_secret(
-                    self._key, secret_token=self._token, timeout=timeout
+                    self._key, secret_token=self._token,
+                    binding_key=self._bind_key, timeout=timeout,
                 )
             except Exception as err:
                 if self._default is None or not client._default_allowed_for_error(err):

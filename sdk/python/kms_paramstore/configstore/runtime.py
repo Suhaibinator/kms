@@ -20,7 +20,7 @@ from ..secret import Secret
 from .canonical import canonical_parameter_value
 from .codecs import decode_value, encode_value
 from .contract import validate_manifest
-from .model import ConfigSpec
+from .model import ConfigSpec, _is_secret_declaration
 from .types import (
     AppliedReport,
     CandidateError,
@@ -90,6 +90,7 @@ class ConfigBinding(Generic[T]):
     ) -> None:
         self.spec = ConfigSpec.from_model(model)
         self.model = model
+        self._binding_keys = self._extract_binding_keys(defaults)
         self._source_defaults = self._normalize_defaults(defaults)
         self._snapshot_type = snapshot_type
         self._active: ConfigSnapshot[T] | None = None
@@ -242,6 +243,8 @@ class ConfigBinding(Generic[T]):
             if isinstance(defaults, BaseModel)
             else dict(defaults)
         )
+        for secret_field in self.spec.secrets:
+            raw.pop(secret_field.property, None)
         unknown = set(raw) - allowed
         if unknown:
             raise TypeError("configstore: defaults contain unknown or secret fields")
@@ -256,6 +259,45 @@ class ConfigBinding(Generic[T]):
                     raise TypeError(f"configstore: unmanaged field {property_name} requires a default")
                 raw[property_name] = info.get_default(call_default_factory=True)
         return copy.deepcopy(raw)
+
+    def _extract_binding_keys(
+        self, defaults: Mapping[str, Any] | T,
+    ) -> Mapping[str, str]:
+        supplied = None if isinstance(defaults, BaseModel) else dict(defaults)
+        result: dict[str, str] = {}
+        secret_properties = {field.property for field in self.spec.secrets}
+        if supplied is not None:
+            allowed = (
+                {field.property for field in self.spec.parameters}
+                | set(self.spec.unmanaged)
+                | secret_properties
+            )
+            if set(supplied) - allowed:
+                raise TypeError("configstore: defaults contain unknown fields")
+        for secret_field in self.spec.secrets:
+            value: object | None = None
+            present = False
+            if isinstance(defaults, BaseModel):
+                value = getattr(defaults, secret_field.property)
+                present = True
+            elif supplied is not None and secret_field.property in supplied:
+                value = supplied[secret_field.property]
+                present = True
+            else:
+                info = self.model.model_fields[secret_field.property]
+                if not info.is_required():
+                    value = info.get_default(call_default_factory=True)
+                    present = True
+            if not present:
+                continue
+            if not _is_secret_declaration(value):
+                raise TypeError(
+                    f"configstore: secret field {secret_field.property} default must be a credential-only Secret"
+                )
+            assert isinstance(value, Secret)
+            if value.bind_key:
+                result[secret_field.alias] = value.bind_key
+        return MappingProxyType(result)
 
     def _claim_start(self) -> None:
         with self._lock:
@@ -487,7 +529,13 @@ def start_managed_config(
 ) -> ManagedConfigManager[T]:
     from ..release import ReleaseLoader, ReleaseLoaderConfig
     binding._claim_start()
-    kwargs = dict(name=release, namespace=namespace, **loader_options)
+    if "binding_keys" in loader_options:
+        binding._release_start_claim()
+        raise TypeError("configstore: binding_keys are derived from secret defaults")
+    kwargs = dict(
+        name=release, namespace=namespace,
+        binding_keys=binding._binding_keys, **loader_options,
+    )
     if "validate_manifest" in inspect.signature(ReleaseLoaderConfig).parameters:
         kwargs["validate_manifest"] = lambda *args: validate_manifest(
             binding.spec.contract, args[-1].entries
@@ -506,7 +554,12 @@ async def start_async_managed_config(
     binding._claim_start()
     manager: AsyncManagedConfigManager[T] | None = None
     try:
-        kwargs = dict(name=release, namespace=namespace, **loader_options)
+        if "binding_keys" in loader_options:
+            raise TypeError("configstore: binding_keys are derived from secret defaults")
+        kwargs = dict(
+            name=release, namespace=namespace,
+            binding_keys=binding._binding_keys, **loader_options,
+        )
         if "validate_manifest" in inspect.signature(AsyncReleaseLoaderConfig).parameters:
             kwargs["validate_manifest"] = lambda *args: validate_manifest(
                 binding.spec.contract, args[-1].entries

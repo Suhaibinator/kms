@@ -59,7 +59,6 @@ def _release(version: int, revision: int, param_version: Optional[int] = None):
                 ref=_ref("password"),
                 version=param_version,
                 content_type="string",
-                has_access_token=True,
             ),
         ],
     )
@@ -88,13 +87,36 @@ class _ParameterStub:
 class _SecretStub:
     def __init__(self) -> None:
         self.tokens: List[str] = []
+        self.binding_keys: List[str] = []
+        self.bound = False
+        self.has_access_token = True
+        self.state = "enabled"
+        self.expires_at_unix_ms = 0
+        self.expected_binding_key = "local-binding-key"
+        self.metadata_calls = 0
+
+    def GetSecretMetadata(self, request, **_kwargs):
+        self.metadata_calls += 1
+        return kms_pb2.GetSecretMetadataResponse(
+            secret=kms_pb2.SecretMetadata(
+                ref=request.ref, content_type="string", labels={"current": 1},
+                versions=[kms_pb2.SecretVersionInfo(
+                    version=version, state=self.state,
+                    expires_at_unix_ms=self.expires_at_unix_ms,
+                    bound=self.bound, has_access_token=self.has_access_token,
+                ) for version in range(1, 10)],
+            )
+        )
 
     def GetSecret(self, request, *, metadata, **_kwargs):
         assert "x-kms-secret-token" not in dict(metadata)
         token = request.secret_token
         self.tokens.append(token)
-        if token != "local-token":
+        self.binding_keys.append(request.binding_key)
+        if self.has_access_token and token != "local-token":
             raise AssertionError("protected secret fetched without its local token")
+        if self.bound and request.binding_key != self.expected_binding_key:
+            raise AssertionError("bound secret fetched without its binding key")
         return kms_pb2.GetSecretResponse(
             ref=request.ref,
             value=f"secret-{request.version}".encode(),
@@ -222,6 +244,7 @@ class _Client:
         version=0,
         label="",
         secret_token="",
+        binding_key="",
         timeout=None,
     ):
         del label
@@ -234,6 +257,7 @@ class _Client:
                 ),
                 version=version,
                 secret_token=secret_token,
+                binding_key=binding_key,
             ),
             metadata=self._auth_metadata(),
             timeout=self._call_timeout(timeout),
@@ -246,6 +270,16 @@ class _Client:
             version=response.version,
             content_type=response.content_type,
         )
+
+    def get_secret_metadata(self, key, *, timeout=None):
+        del timeout
+        env, app, resource_key = key[1:].split("/", 2)
+        response = self._secret_stub.GetSecretMetadata(
+            kms_pb2.GetSecretMetadataRequest(ref=kms_pb2.ResourceRef(
+                namespace=kms_pb2.NamespaceRef(env=env, app=app), key=resource_key,
+            ))
+        )
+        return kms_paramstore.models._secret_info_from_proto(response.secret)
 
 
 class _Prepared:
@@ -376,6 +410,61 @@ def test_initial_snapshot_is_complete_immutable_redacting_and_acknowledged(monke
     assert loader.stats().acknowledgements["applied"] == 1
 
 
+def test_bound_release_uses_defensive_alias_key_copy_and_both_credentials(monkeypatch):
+    keys = {"password": "local-binding-key"}
+    loader, stub, client = _loader(
+        monkeypatch, _release(1, 10), binding_keys=keys,
+    )
+    client._secret_stub.bound = True
+    keys["password"] = "mutated-after-construction"
+    prepared = _Prepared()
+    thread, raised = _run_in_thread(loader, lambda _cancel, _snapshot: prepared)
+    assert wait_until(lambda: prepared.commits == 1)
+    loader.stop()
+    thread.join(timeout=2)
+    assert not raised
+    assert client._secret_stub.tokens == ["local-token"]
+    assert client._secret_stub.binding_keys == ["local-binding-key"]
+    assert "local-binding-key" not in repr(loader._config)
+
+
+def test_missing_binding_key_is_token_unavailable_before_plaintext_fetch(monkeypatch):
+    loader, stub, client = _loader(monkeypatch, _release(1, 10))
+    client._secret_stub.bound = True
+    with pytest.raises(ReleaseStartupError) as caught:
+        loader.run(lambda _cancel, _snapshot: _Prepared())
+    assert getattr(caught.value, "category") == "token_unavailable"
+    assert client._secret_stub.binding_keys == []
+
+
+def test_wrong_binding_key_and_unavailable_live_version_are_resolution_failures(monkeypatch):
+    loader, _stub, client = _loader(
+        monkeypatch, _release(1, 10), binding_keys={"password": "wrong"},
+    )
+    client._secret_stub.bound = True
+    with pytest.raises(ReleaseStartupError) as wrong:
+        loader.run(lambda _cancel, _snapshot: _Prepared())
+    assert getattr(wrong.value, "category") == "resolution_failed"
+
+    loader, _stub, client = _loader(monkeypatch, _release(1, 10))
+    client._secret_stub.state = "disabled"
+    with pytest.raises(ReleaseStartupError) as disabled:
+        loader.run(lambda _cancel, _snapshot: _Prepared())
+    assert getattr(disabled.value, "category") == "resolution_failed"
+    assert client._secret_stub.tokens == []
+
+
+def test_foreign_release_entry_is_rejected_before_resource_fetch(monkeypatch):
+    initial = _release(1, 10)
+    initial[0].entries[1].ref.namespace.app = "other"
+    initial[0].digest = release_module._release_digest(initial[0])
+    loader, _stub, client = _loader(monkeypatch, initial)
+    with pytest.raises(ReleaseStartupError) as caught:
+        loader.run(lambda _cancel, _snapshot: _Prepared())
+    assert getattr(caught.value, "category") == "resolution_failed"
+    assert client._secret_stub.metadata_calls == 0
+
+
 def test_manifest_validation_precedes_fetch_and_is_immutable(monkeypatch):
     order = []
 
@@ -383,7 +472,7 @@ def test_manifest_validation_precedes_fetch_and_is_immutable(monkeypatch):
         assert not cancel.is_set()
         order.append("manifest")
         assert manifest.namespace == "prod/app"
-        assert manifest.entry("password").has_access_token
+        assert not hasattr(manifest.entry("password"), "has_access_token")
         with pytest.raises(TypeError):
             manifest.entries["other"] = manifest.entry("setting")
 

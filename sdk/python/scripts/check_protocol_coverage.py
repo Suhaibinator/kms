@@ -24,6 +24,11 @@ CORE = {
         "DestroySecretVersion": "destroy_secret_version",
         "GetSecretMetadata": "get_secret_metadata",
         "PromoteSecretVersion": "promote_secret_version",
+        "BindSecret": "bind_secret",
+        "UnbindSecret": "unbind_secret",
+        "PreviewSecretBindingCohort": "preview_secret_binding_cohort",
+        "RotateSecretBindingKey": "rotate_secret_binding_key",
+        "PurgeSecretBindingCohort": "purge_secret_binding_cohort",
     },
     "kms.v1.AdminService": {"WhoAmI": "who_am_i"},
     "kms.v1.ConfigurationReleaseService": {
@@ -34,13 +39,6 @@ CORE = {
 CORE["kms.v1.AdminService"]["ApplyApplicationDefaults"] = "apply_application_defaults"
 
 CLASSIFIED = {
-    "kms.v1.SecretService": {
-        "BindSecret": "binding-key-sdk-phase",
-        "UnbindSecret": "binding-key-sdk-phase",
-        "PreviewSecretBindingCohort": "binding-key-tooling-out-of-scope",
-        "RotateSecretBindingKey": "binding-key-sdk-phase",
-        "PurgeSecretBindingCohort": "binding-key-sdk-phase",
-    },
     "kms.v1.WatchService": {"Subscribe": "internal-watch"},
     "kms.v1.ConfigurationReleaseService": {
         "CreateRelease": "release-tooling-out-of-scope",

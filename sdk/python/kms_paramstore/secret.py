@@ -8,6 +8,13 @@ __all__ = ["Secret", "REDACTED", "new_secret"]
 REDACTED = "[REDACTED]"
 
 
+class _RedactedInvalidSecret:
+    def __repr__(self) -> str:
+        return REDACTED
+
+    __str__ = __repr__
+
+
 class Secret:
     """Holds secret plaintext together with non-sensitive metadata.
 
@@ -17,7 +24,7 @@ class Secret:
     explicit :meth:`value` / :meth:`string_value` accessors.
     """
 
-    __slots__ = ("_value", "_env", "_app", "_key", "_version", "_content_type")
+    __slots__ = ("_value", "_env", "_app", "_key", "_version", "_content_type", "_bind_key")
 
     def __init__(
         self,
@@ -28,13 +35,17 @@ class Secret:
         key: str = "",
         version: int = 0,
         content_type: str = "",
+        bind_key: str = "",
     ) -> None:
+        if not isinstance(bind_key, str):
+            raise TypeError("bind_key must be a string")
         self._value = bytes(value)
         self._env = env
         self._app = app
         self._key = key
         self._version = version
         self._content_type = content_type
+        self._bind_key = bind_key
 
     # --- plaintext accessors (the only way to read the secret) -------------
 
@@ -81,6 +92,16 @@ class Secret:
     def content_type(self) -> str:
         return self._content_type
 
+    @property
+    def bind_key(self) -> str:
+        """Declaration-only binding credential.
+
+        Secrets returned by the client never contain the credential supplied
+        for their read. Generated configuration stores consume and clear this
+        field before publishing a resolved value.
+        """
+        return self._bind_key
+
     def is_empty(self) -> bool:
         return len(self._value) == 0
 
@@ -89,7 +110,16 @@ class Secret:
         return Secret(
             bytes(bytearray(self._value)), env=self._env, app=self._app,
             key=self._key, version=self._version, content_type=self._content_type,
+            bind_key=self._bind_key,
         )
+
+    def __copy__(self) -> "Secret":
+        return self.clone()
+
+    def __deepcopy__(self, memo: dict[int, object]) -> "Secret":
+        clone = self.clone()
+        memo[id(self)] = clone
+        return clone
 
     def __len__(self) -> int:
         return len(self._value)
@@ -118,6 +148,23 @@ class Secret:
     def __hash__(self) -> int:  # keep hashability disabled to avoid accidental
         raise TypeError("Secret is unhashable to discourage caching by value")
 
+    @classmethod
+    def __get_pydantic_core_schema__(cls, _source_type, _handler):
+        """Validate instances while serializing every secret as a redaction."""
+        from pydantic_core import core_schema
+
+        return core_schema.chain_schema(
+            [
+                core_schema.no_info_plain_validator_function(
+                    lambda value: value if isinstance(value, cls) else _RedactedInvalidSecret()
+                ),
+                core_schema.is_instance_schema(cls),
+            ],
+            serialization=core_schema.plain_serializer_function_ser_schema(
+                lambda _value: REDACTED, when_used="always"
+            ),
+        )
+
 
 def new_secret(
     value: bytes,
@@ -127,6 +174,10 @@ def new_secret(
     key: str = "",
     version: int = 0,
     content_type: str = "",
+    bind_key: str = "",
 ) -> Secret:
     """Wrap plaintext in a :class:`Secret` (mainly for tests and tooling)."""
-    return Secret(value, env=env, app=app, key=key, version=version, content_type=content_type)
+    return Secret(
+        value, env=env, app=app, key=key, version=version,
+        content_type=content_type, bind_key=bind_key,
+    )

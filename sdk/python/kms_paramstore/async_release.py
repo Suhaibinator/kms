@@ -13,7 +13,7 @@ import inspect
 import random
 import time
 import uuid
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from types import MappingProxyType
 from typing import Any, Awaitable, Callable, Dict, Mapping, Optional, Tuple, Union
 
@@ -66,6 +66,9 @@ class AsyncReleaseLoaderConfig:
     namespace: "Optional[str | NamespaceRef]" = None
     reconcile_interval: float = 60.0
     secret_token_provider: Optional[AsyncSecretTokenProvider] = None
+    binding_keys: Mapping[str, str] = field(
+        default_factory=lambda: MappingProxyType({}), repr=False, compare=False
+    )
     validate_manifest: Optional[AsyncManifestValidator] = None
     max_concurrent_fetches: int = 16
     client_name: Optional[str] = None
@@ -73,6 +76,9 @@ class AsyncReleaseLoaderConfig:
     reconnect_initial: float = 0.25
     reconnect_max: float = 30.0
     request_timeout: Optional[float] = None
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "binding_keys", MappingProxyType(dict(self.binding_keys)))
 
 
 class AsyncReleaseLoader:
@@ -94,6 +100,7 @@ class AsyncReleaseLoader:
 
         self._client = client
         self._config = config
+        self._binding_keys = MappingProxyType(dict(config.binding_keys))
         self._namespace: Optional[NamespaceRef] = None
         self._client_name = config.client_name or client._client_name
         self._instance_id = config.instance_id or str(uuid.uuid4())
@@ -440,6 +447,8 @@ class AsyncReleaseLoader:
             raise _CandidateFailure("resolution_failed") from None
         if len({entry.alias for entry in entries}) != len(entries):
             raise _CandidateFailure("resolution_failed")
+        if any(split_display_path(entry.path).ns != namespace for entry in entries):
+            raise _CandidateFailure("resolution_failed")
         manifest = ReleaseManifest(
             namespace=f"{namespace.env}/{namespace.app}",
             name=release.name,
@@ -532,8 +541,28 @@ class AsyncReleaseLoader:
             if entry.content_type and parameter.content_type != entry.content_type:
                 raise _CandidateFailure("digest_mismatch")
             return parameter.value
+        try:
+            live = await self._client.get_secret_metadata(
+                entry.path, timeout=self._config.request_timeout,
+            )
+        except Exception:
+            raise _CandidateFailure(
+                "superseded" if cancel.is_set() else "resolution_failed"
+            ) from None
+        requested_ref = split_display_path(entry.path)
+        if (live.env, live.app, live.key) != (
+            requested_ref.ns.env, requested_ref.ns.app, requested_ref.key,
+        ):
+            raise _CandidateFailure("version_mismatch")
+        matches = tuple(item for item in live.versions if item.version == entry.version)
+        if len(matches) != 1 or matches[0].state != "enabled":
+            raise _CandidateFailure("resolution_failed")
+        exact = matches[0]
+        if exact.expires_at_unix_ms > 0 and exact.expires_at_unix_ms <= int(time.time() * 1000):
+            raise _CandidateFailure("resolution_failed")
+
         token = ""
-        if entry.client_bound or entry.has_access_token:
+        if exact.has_access_token:
             provider = self._config.secret_token_provider
             if provider is None:
                 raise _CandidateFailure("token_unavailable")
@@ -547,11 +576,17 @@ class AsyncReleaseLoader:
                 ) from None
             if not token:
                 raise _CandidateFailure("token_unavailable")
+        binding_key = ""
+        if exact.bound:
+            binding_key = self._binding_keys.get(entry.alias, "")
+            if not isinstance(binding_key, str) or not binding_key:
+                raise _CandidateFailure("token_unavailable")
         try:
             secret = await self._client.get_secret(
                 entry.path,
                 version=entry.version,
                 secret_token=token,
+                binding_key=binding_key,
                 timeout=self._config.request_timeout,
             )
         except Exception:

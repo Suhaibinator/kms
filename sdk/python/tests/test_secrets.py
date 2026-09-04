@@ -44,12 +44,54 @@ def test_secret_token_required_and_propagated(client):
 
 
 def test_secret_metadata(client):
-    client.put_secret("meta", b"v", client_bound=False)
+    client.put_secret("meta", b"v")
     info = client.get_secret_metadata("meta")
     assert info.key == "meta"
     assert info.path == "/prod/app/meta"
     assert info.has_access_token is False
+    assert info.bound is False
+    assert info.versions[0].bound is False
+    assert info.versions[0].has_access_token is False
     assert len(info.versions) == 1
+
+
+def test_binding_key_is_independent_and_lifecycle_results_are_immutable(client):
+    from dataclasses import FrozenInstanceError
+
+    old_key = "o" * 32
+    new_key = "n" * 32
+    put = client.put_secret(
+        "bound", b"v1", binding_key=old_key, generate_access_token=True,
+    )
+    with pytest.raises(PermissionDeniedError):
+        client.get_secret("bound", secret_token=put.access_token)
+    with pytest.raises(PermissionDeniedError):
+        client.get_secret("bound", binding_key=old_key)
+    fetched = client.get_secret(
+        "bound", secret_token=put.access_token, binding_key=old_key,
+    )
+    assert fetched.value == b"v1"
+    assert fetched.bind_key == ""
+    info = client.get_secret_metadata("bound")
+    assert info.bound and info.versions[0].bound
+    assert info.versions[0].has_access_token
+
+    preview = client.preview_secret_binding_cohort("bound", binding_key=old_key)
+    rotated = client.rotate_secret_binding_key(
+        "bound", binding_key=old_key, new_binding_key=new_key,
+        expected_revision=preview.revision,
+        expected_affected_versions=preview.affected_versions,
+    )
+    assert rotated.affected_versions == (1,)
+    with pytest.raises(FrozenInstanceError):
+        rotated.revision = 0  # type: ignore[misc]
+    assert client.get_secret(
+        "bound", secret_token=put.access_token, binding_key=new_key,
+    ).value == b"v1"
+
+    unbound = client.unbind_secret("bound", binding_key=new_key)
+    assert unbound.anchor_version == 1
+    assert client.get_secret("bound", secret_token=put.access_token).value == b"v1"
 
 
 def test_delete_secret(client):

@@ -53,23 +53,22 @@ def test_put_invalidates_cache(server):
         c.close()
 
 
-def test_secret_cache(server):
+def test_secret_plaintext_is_never_cached(server):
     addr, store = server
     c = _client(addr, ttl=30)
     try:
         c.put_secret("c/s", b"one")
         assert c.get_secret("c/s").value == b"one"
-        # server-side change not seen through cache
+        # A server-side change is visible immediately despite a nonzero cache TTL.
         store.secrets[(NS_ENV, NS_APP, "c/s")]["versions"].append((b"two", "application/octet-stream"))
-        assert c.get_secret("c/s").value == b"one"
-        # writing through the client invalidates
+        assert c.get_secret("c/s").value == b"two"
         c.put_secret("c/s", b"three")
         assert c.get_secret("c/s").value == b"three"
     finally:
         c.close()
 
 
-def test_full_snapshot_invalidates_scoped_secret_cache(server):
+def test_secret_reads_do_not_depend_on_snapshot_cache_invalidation(server):
     addr, store = server
     c = _client(addr, ttl=30)
     try:

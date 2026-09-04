@@ -14,7 +14,7 @@ import pytest
 import kms_paramstore
 from kms_paramstore import (
     AsyncClient, Client, ConfigError, FailedPreconditionError, Page, Parameter,
-    ParameterValue, Secret, SecretValue,
+    ParameterValue, PermissionDeniedError, Secret, SecretValue,
 )
 from kms_paramstore._gen import kms_pb2
 from kms_paramstore._refs import NamespaceRef, Ref
@@ -25,7 +25,7 @@ from tests.conftest import NS
 from tests.helpers import wait_until
 
 
-def test_cache_is_bounded_cleans_expired_and_clones_secrets():
+def test_cache_is_bounded_cleans_expired_and_never_retains_secrets():
     cache = Cache(60, max_entries=2)
     for index in range(3):
         cache.put_param(f"/prod/app/{index}", 0, "", str(index))
@@ -34,11 +34,8 @@ def test_cache_is_bounded_cleans_expired_and_clones_secrets():
 
     secret = Secret(b"canary", env="prod", app="app", key="secret")
     cache.put_secret(secret.path, 0, "", secret)
-    first = cache.get_secret(secret.path, 0, "")
-    assert first is not None
-    first._value = b"mutated"
-    second = cache.get_secret(secret.path, 0, "")
-    assert second is not None and second.value == b"canary"
+    assert cache.get_secret(secret.path, 0, "") is None
+    assert cache.secret_size == 0
 
     expiring = Cache(0.001, max_entries=2)
     expiring.put_param("/prod/app/old", 0, "", "old")
@@ -143,6 +140,113 @@ def test_sync_list_timeout_reaches_rpc_layer():
         assert observed == [0.25]
     finally:
         client.close()
+
+
+class _ReflectedSecretError(grpc.RpcError):
+    def __init__(self, details: str) -> None:
+        self._details = details
+
+    def code(self):
+        return grpc.StatusCode.PERMISSION_DENIED
+
+    def details(self):
+        return self._details
+
+    def __str__(self) -> str:
+        return self._details
+
+
+class _RejectingSecretStub:
+    def __init__(self, details: str) -> None:
+        self._details = details
+
+    def __getattr__(self, _name):
+        def reject(*_args, **_kwargs):
+            raise _ReflectedSecretError(self._details)
+
+        return reject
+
+
+class _AsyncRejectingSecretStub:
+    def __init__(self, details: str) -> None:
+        self._details = details
+
+    def __getattr__(self, _name):
+        async def reject(*_args, **_kwargs):
+            raise _ReflectedSecretError(self._details)
+
+        return reject
+
+
+def test_all_sync_secret_bearing_rpcs_discard_reflected_remote_details():
+    plaintext = "secret-plaintext-reflection-canary"
+    token = "secret-token-reflection-canary"
+    binding_key = "binding-key-reflection-canary-000000000000"
+    details = f"server reflected {plaintext} {token} {binding_key}"
+    client = Client(channel=mock.MagicMock(), namespace=NS)
+    client._secret_stub = _RejectingSecretStub(details)
+    calls = (
+        lambda: client.get_secret("key", secret_token=token, binding_key=binding_key),
+        lambda: client.put_secret("key", plaintext, binding_key=binding_key),
+        lambda: client.bind_secret("key", binding_key=binding_key),
+        lambda: client.unbind_secret("key", binding_key=binding_key),
+        lambda: client.preview_secret_binding_cohort("key", binding_key=binding_key),
+        lambda: client.rotate_secret_binding_key(
+            "key", binding_key=binding_key, new_binding_key=binding_key + "-new",
+        ),
+        lambda: client.purge_secret_binding_cohort("key", binding_key=binding_key),
+    )
+    try:
+        for call in calls:
+            with pytest.raises(PermissionDeniedError) as caught:
+                call()
+            rendered = str(caught.value) + repr(caught.value)
+            assert caught.value.code == "permission_denied"
+            assert caught.value.grpc_code is grpc.StatusCode.PERMISSION_DENIED
+            assert rendered == (
+                "secret operation failed (permission_denied)"
+                "PermissionDeniedError('secret operation failed (permission_denied)')"
+            )
+            assert plaintext not in rendered
+            assert token not in rendered
+            assert binding_key not in rendered
+    finally:
+        client.close()
+
+
+def test_all_async_secret_bearing_rpcs_discard_reflected_remote_details():
+    async def exercise() -> None:
+        plaintext = "async-secret-plaintext-reflection-canary"
+        token = "async-secret-token-reflection-canary"
+        binding_key = "async-binding-key-reflection-canary-000000"
+        details = f"server reflected {plaintext} {token} {binding_key}"
+        client = AsyncClient(channel=mock.MagicMock(), namespace=NS)
+        client._secret_stub = _AsyncRejectingSecretStub(details)
+        calls = (
+            lambda: client.get_secret("key", secret_token=token, binding_key=binding_key),
+            lambda: client.put_secret("key", plaintext, binding_key=binding_key),
+            lambda: client.bind_secret("key", binding_key=binding_key),
+            lambda: client.unbind_secret("key", binding_key=binding_key),
+            lambda: client.preview_secret_binding_cohort("key", binding_key=binding_key),
+            lambda: client.rotate_secret_binding_key(
+                "key", binding_key=binding_key, new_binding_key=binding_key + "-new",
+            ),
+            lambda: client.purge_secret_binding_cohort("key", binding_key=binding_key),
+        )
+        try:
+            for call in calls:
+                with pytest.raises(PermissionDeniedError) as caught:
+                    await call()
+                rendered = str(caught.value) + repr(caught.value)
+                assert caught.value.code == "permission_denied"
+                assert caught.value.grpc_code is grpc.StatusCode.PERMISSION_DENIED
+                assert plaintext not in rendered
+                assert token not in rendered
+                assert binding_key not in rendered
+        finally:
+            await client.close()
+
+    asyncio.run(exercise())
 
 
 def test_async_reconcile_uses_captured_fence_and_tombstones_absence():

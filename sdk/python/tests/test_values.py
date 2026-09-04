@@ -35,6 +35,24 @@ def test_resolve_from_store(client, server):
     assert isinstance(cfg.api, Secret)
 
 
+def test_secret_value_passes_access_token_and_binding_key_independently(client):
+    binding_key = "b" * 32
+    result = client.put_secret(
+        "cfg/bound", b"bound-value", binding_key=binding_key,
+        generate_access_token=True,
+    )
+
+    class Cfg:
+        secret = SecretValue(
+            "cfg/bound", token=result.access_token, bind_key=binding_key,
+        )
+
+    config = Cfg()
+    client.resolve(config)
+    assert config.secret.value == b"bound-value"
+    assert config.secret.bind_key == ""
+
+
 def test_absolute_key_in_descriptor(client, server):
     _addr, store = server
     store.put_param_path("/other/svc/rate", "9")

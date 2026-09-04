@@ -40,6 +40,35 @@ def test_async_client_core_surface_and_close():
             promoted = await client.promote_secret_version("async/secret", 1)
             assert promoted.current_version == 1
             await client.destroy_secret_version("async/secret", 2)
+
+            old_key, new_key = "o" * 32, "n" * 32
+            bound = await client.put_secret(
+                "async/bound", b"value", binding_key=old_key,
+                generate_access_token=True,
+            )
+            assert (await client.get_secret(
+                "async/bound", secret_token=bound.access_token,
+                binding_key=old_key,
+            )).bind_key == ""
+            preview = await client.preview_secret_binding_cohort(
+                "async/bound", binding_key=old_key,
+            )
+            rotated = await client.rotate_secret_binding_key(
+                "async/bound", binding_key=old_key, new_binding_key=new_key,
+                expected_revision=preview.revision,
+                expected_affected_versions=preview.affected_versions,
+            )
+            assert rotated.affected_versions == (1,)
+            purge_preview = await client.preview_secret_binding_cohort(
+                "async/bound", binding_key=new_key,
+            )
+            purged = await client.purge_secret_binding_cohort(
+                "async/bound", binding_key=new_key,
+                expected_revision=purge_preview.revision,
+                expected_affected_versions=purge_preview.affected_versions,
+            )
+            assert purged.anchor_version == 1
+            assert (await client.get_secret_metadata("async/bound")).versions[0].state == "destroyed"
         assert client.closed
 
     try:
