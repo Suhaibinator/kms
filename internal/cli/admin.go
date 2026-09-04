@@ -87,7 +87,7 @@ func (c *CLI) cmdInit(args []string) int {
 	admin := fs.String("admin", "", "also create a bootstrap admin identity with this `name`")
 	certDir := fs.String("cert-dir", "", "`directory` for the bootstrap admin's client certificate (NAME.crt/NAME.key); requires --admin")
 	c.setUsage(fs, "init [flags]",
-		"Create or migrate the database, establish its master key and built-in CA, and optionally create a bootstrap admin identity with its client certificate.", true)
+		"Initialize the database, establish its master key and built-in CA, and optionally create a bootstrap admin identity with its client certificate.", true)
 	if !c.parseFlags(fs, args) {
 		return 2
 	}
@@ -166,9 +166,10 @@ func (b *bootstrappedStore) close() {
 }
 
 // bootstrapStore performs the three steps init runs before it creates
-// anything: open (and migrate) the database, acquire the master key —
-// generating the key file when it is absent, so an unattended run never stops
-// at a passphrase prompt it can satisfy itself — and prepare the built-in CA.
+// anything: materialize or verify the current database baseline, acquire the
+// master key — generating the key file when it is absent, so an unattended run
+// never stops at a passphrase prompt it can satisfy itself — and prepare the
+// built-in CA.
 // `dev` reuses it so a disposable store is bootstrapped by exactly the code
 // that bootstraps a real one. Errors arrive already prefixed with the step
 // that failed, so callers pass them to failErr with an empty prefix.
@@ -289,57 +290,13 @@ func (c *CLI) bootstrapAdminCertFailure(name string, err error) error {
 	return fmt.Errorf("%w; admin identity %q was created but its token was not printed — mint a replacement with: parameter-store rotate-admin --name %s", err, name, name)
 }
 
-// --- migrate ---------------------------------------------------------------
-
-func (c *CLI) cmdMigrate(args []string) int {
-	fs := c.newFlags("migrate")
-	r := c.serverSettings(fs, "storage.sqlite_path")
-	c.setUsage(fs, "migrate [flags]", "Apply any pending database migrations.", true)
-	if !c.parseFlags(fs, args) {
-		return 2
-	}
-	if !c.rejectPositionals() {
-		return 2
-	}
-	cfg, prov, _, err := r.resolve()
-	if err != nil {
-		return c.failErr("", err)
-	}
-	if err := c.requireSQLitePath(cfg); err != nil {
-		return c.failUsage("%v", err)
-	}
-	// Open runs migrations inside the transaction and refuses a newer schema.
-	store, err := storage.Open(cfg.Storage.SQLitePath)
-	if err != nil {
-		return c.failErr("migrating database", err)
-	}
-	_ = store.Close()
-	if c.jsonOutput() {
-		return c.printJSON(migrateJSON{
-			SQLitePath:       absPath(cfg.Storage.SQLitePath),
-			SQLitePathSource: prov["storage.sqlite_path"].String(),
-			Migrated:         true,
-		})
-	}
-	_, _ = fmt.Fprintf(c.Stdout, "Migrations applied to %s\n", dbTarget(cfg, prov))
-	return 0
-}
-
-// migrateJSON is the JSON form of migrate. migrated is always true: a failed
-// migration exits non-zero with an error instead of reporting false.
-type migrateJSON struct {
-	SQLitePath       string `json:"sqlite_path"`
-	SQLitePathSource string `json:"sqlite_path_source"`
-	Migrated         bool   `json:"migrated"`
-}
-
 // --- check -----------------------------------------------------------------
 
 func (c *CLI) cmdCheck(args []string) int {
 	fs := c.newFlags("check")
 	r := c.serverSettings(fs, "storage.sqlite_path", "encryption.kek_file")
 	c.setUsage(fs, "check [flags]",
-		"Verify that the database opens with an up-to-date schema and, when a key source is available, that the master key unseals it.", true)
+		"Verify that the database opens with the current baseline and, when a key source is available, that the master key unseals it.", true)
 	if !c.parseFlags(fs, args) {
 		return 2
 	}
@@ -371,7 +328,7 @@ func (c *CLI) cmdCheck(args []string) int {
 		SQLitePath:       absPath(cfg.Storage.SQLitePath),
 		SQLitePathSource: prov["storage.sqlite_path"].String(),
 	}
-	c.resultLine("Database OK (schema up to date): %s", dbTarget(cfg, prov))
+	c.resultLine("Database OK (current baseline): %s", dbTarget(cfg, prov))
 
 	// Verify the master key only if the database has been initialized and some
 	// key source is available. Never print key material.

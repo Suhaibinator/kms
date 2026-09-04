@@ -132,6 +132,37 @@ func TestLoadFromSQLite(t *testing.T) {
 	}
 }
 
+func TestLoadFromSQLiteRejectsLegacyKMSShape(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "kms-0.2.db")
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`
+		CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY);
+		CREATE TABLE parameters (
+			id INTEGER PRIMARY KEY,
+			path TEXT NOT NULL,
+			content_type TEXT NOT NULL
+		);
+		CREATE TABLE parameter_versions (
+			parameter_id INTEGER NOT NULL,
+			version_number INTEGER NOT NULL,
+			value TEXT NOT NULL
+		)`); err != nil {
+		_ = db.Close()
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := loadImportSource(path); err == nil {
+		t.Fatal("legacy KMS database was accepted as a SuhaibParameterStore import")
+	}
+}
+
 func TestImportDryRun(t *testing.T) {
 	dir := t.TempDir()
 	src := filepath.Join(dir, "export.json")

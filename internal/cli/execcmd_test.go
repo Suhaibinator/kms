@@ -469,11 +469,20 @@ func TestExecNeverLaunchesOnAResolutionError(t *testing.T) {
 			want: exitPermissionDenied,
 		},
 		{
-			name: "a release digest does not verify",
+			name: "a pinned parameter digest does not verify",
 			args: []string{"--release", "runtime", "--secret-token", "billing-key=" + envTestStripeToken},
 			set: func(f *envFixture) {
 				f.installRelease()
 				f.params.get["/prod/app/db/host"].Value = "db.tampered"
+			},
+			want: exitError,
+		},
+		{
+			name: "a release manifest digest does not verify",
+			args: []string{"--release", "runtime", "--secret-token", "billing-key=" + envTestStripeToken},
+			set: func(f *envFixture) {
+				f.installRelease()
+				f.releases.release.MetadataJson = `{"tampered":true}`
 			},
 			want: exitError,
 		},

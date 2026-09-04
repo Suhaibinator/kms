@@ -26,7 +26,7 @@ import (
 )
 
 // initKMS runs `init --admin ops`, the state every offline certificate command
-// expects: a migrated database, a master key file, a built-in CA, and one
+// expects: a baseline database, a master key file, a built-in CA, and one
 // enabled admin identity.
 func initKMS(t *testing.T, admin string) (db, keyFile string) {
 	t.Helper()
@@ -712,7 +712,7 @@ func TestCreateAdminCertDirRefusesWithoutCertificateAuthority(t *testing.T) {
 	keyFile := filepath.Join(dir, "master.key")
 	certDir := t.TempDir()
 
-	// Migrated database, but no init: no master key and no CA.
+	// Baseline database, but no init: no master key and no CA.
 	store, err := storage.Open(db)
 	if err != nil {
 		t.Fatal(err)

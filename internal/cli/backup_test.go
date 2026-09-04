@@ -8,7 +8,7 @@ import (
 	"github.com/Suhaibinator/kms/internal/storage"
 )
 
-// TestBackupCommand exercises backup against a real (migrated) database and
+// TestBackupCommand exercises backup against a real baseline database and
 // checks the refuse-existing-output behavior.
 func TestBackupCommand(t *testing.T) {
 	dir := t.TempDir()

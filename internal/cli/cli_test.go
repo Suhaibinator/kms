@@ -27,6 +27,24 @@ func TestRunUnknownCommand(t *testing.T) {
 	}
 }
 
+func TestMigrateCommandIsNotExposed(t *testing.T) {
+	c := newTestCLI()
+	if code := c.Run([]string{"migrate"}); code != 2 {
+		t.Fatalf("migrate exit = %d, want 2", code)
+	}
+	if !strings.Contains(c.stderr(), `unknown command "migrate"`) {
+		t.Fatalf("stderr = %s", c.stderr())
+	}
+
+	help := newTestCLI()
+	if code := help.Run([]string{"help"}); code != 0 {
+		t.Fatalf("help exit = %d", code)
+	}
+	if strings.Contains(help.stderr(), "\n  migrate") {
+		t.Fatalf("help still exposes migrate:\n%s", help.stderr())
+	}
+}
+
 func TestRunNoArgs(t *testing.T) {
 	c := newTestCLI()
 	if code := c.Run(nil); code != 2 {

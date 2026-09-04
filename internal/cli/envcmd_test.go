@@ -301,7 +301,7 @@ func (f *envFixture) run(args ...string) int {
 // envTestRelease builds the standard namespace-local "runtime" release. The
 // token-gated secret's alias deliberately differs from its key.
 func envTestRelease() *kmsv1.ConfigurationRelease {
-	return &kmsv1.ConfigurationRelease{
+	release := &kmsv1.ConfigurationRelease{
 		Namespace: &kmsv1.NamespaceRef{Env: "prod", App: "app"},
 		Name:      "runtime",
 		Version:   4,
@@ -319,6 +319,52 @@ func envTestRelease() *kmsv1.ConfigurationRelease {
 				ContentType: "application/octet-stream",
 			},
 		},
+	}
+	setEnvTestReleaseDigest(release)
+	return release
+}
+
+func setEnvTestReleaseDigest(release *kmsv1.ConfigurationRelease) {
+	digest, err := configurationReleaseDigest(release)
+	if err != nil {
+		panic(err)
+	}
+	release.Digest = digest
+}
+
+func TestConfigurationReleaseDigestMatchesCrossSDKGolden(t *testing.T) {
+	t.Parallel()
+	release := &kmsv1.ConfigurationRelease{
+		Namespace:     &kmsv1.NamespaceRef{Env: "prod", App: "api"},
+		Name:          "runtime",
+		Version:       42,
+		SchemaVersion: 7,
+		Entries: []*kmsv1.ConfigurationReleaseEntry{
+			{
+				Alias: "z-secret", Kind: "secret",
+				Ref: envTestRef("prod", "api", "db/password"), Version: 9,
+				ContentType: "string", MetadataJson: "{}",
+			},
+			{
+				Alias: "a-policy", Kind: "parameter",
+				Ref: envTestRef("prod", "api", "policy"), Version: 3,
+				ContentType: "json", MetadataJson: `{"owner":"platform"}`,
+				ParameterDigest: envTestDigest(`{"min":14}`),
+			},
+		},
+		Digest:          "ignored",
+		MetadataJson:    `{"rollout":"all"}`,
+		CreatedBy:       "ignored-creator",
+		CreatedAtUnixMs: 1_725_000_000_000,
+	}
+
+	got, err := configurationReleaseDigest(release)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const want = "0cc9ea54ba0d4903027235ac4ba5604114d7fbc787209919a0633e4e708f26c3"
+	if got != want {
+		t.Fatalf("digest = %s, want cross-SDK golden %s", got, want)
 	}
 }
 
@@ -1149,6 +1195,7 @@ func TestEnvReleaseVerificationFailuresAreFatal(t *testing.T) {
 			name: "empty recorded digest",
 			set: func(f *envFixture) {
 				f.releases.release.Entries[0].ParameterDigest = ""
+				setEnvTestReleaseDigest(f.releases.release)
 			},
 			want: "value does not match the release digest",
 		},
@@ -1191,6 +1238,7 @@ func TestEnvReleaseVerificationFailuresAreFatal(t *testing.T) {
 			name: "empty parameter content type mismatch",
 			set: func(f *envFixture) {
 				f.releases.release.Entries[0].ContentType = ""
+				setEnvTestReleaseDigest(f.releases.release)
 			},
 			want: "content type \"string\" does not match the release's \"\"",
 		},
@@ -1219,6 +1267,7 @@ func TestEnvReleaseVerificationFailuresAreFatal(t *testing.T) {
 			name: "empty secret content type mismatch",
 			set: func(f *envFixture) {
 				f.releases.release.Entries[2].ContentType = ""
+				setEnvTestReleaseDigest(f.releases.release)
 			},
 			want: "content type \"application/octet-stream\" does not match the release's \"\"",
 		},
@@ -1256,6 +1305,26 @@ func TestEnvReleaseVerificationFailuresAreFatal(t *testing.T) {
 				t.Fatalf("stderr leaked secret material: %s", f.stderr())
 			}
 		})
+	}
+}
+
+func TestEnvReleaseRejectsTamperedManifestBeforeReads(t *testing.T) {
+	t.Parallel()
+	f := newEnvFixture(t)
+	f.installRelease()
+	f.releases.release.MetadataJson = `{"tampered":true}`
+
+	if code := f.run("--release", "runtime", "--secret-token", "billing-key="+envTestStripeToken); code != exitError {
+		t.Fatalf("exit = %d, want %d (stderr=%s)", code, exitError, f.stderr())
+	}
+	if !strings.Contains(f.stderr(), "release runtime: manifest digest mismatch") {
+		t.Fatalf("stderr = %s", f.stderr())
+	}
+	if got := f.rec.count("GetParameter") + f.rec.count("GetSecretMetadata") + f.rec.count("GetSecret"); got != 0 {
+		t.Fatalf("tampered release caused %d resource reads: %+v", got, f.rec.snapshot())
+	}
+	if f.stdout() != "" {
+		t.Fatalf("stdout = %q, want no partial candidate", f.stdout())
 	}
 }
 

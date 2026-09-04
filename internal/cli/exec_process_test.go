@@ -98,8 +98,15 @@ func TestExecLaunchesARealProcess(t *testing.T) {
 		getErr: map[string]error{},
 	}
 	secrets := &envSecretStub{
-		rec:  rec,
-		list: []*kmsv1.SecretMetadata{{Ref: envTestRef("prod", "app", "kms-test/secret")}},
+		rec: rec,
+		list: []*kmsv1.SecretMetadata{{
+			Ref:    envTestRef("prod", "app", "kms-test/secret"),
+			Labels: map[string]uint64{"current": 1},
+			Versions: []*kmsv1.SecretVersionInfo{{
+				Version: 1,
+				State:   "enabled",
+			}},
+		}},
 		get: map[string]*kmsv1.GetSecretResponse{
 			"/prod/app/kms-test/secret": {
 				Ref: envTestRef("prod", "app", "kms-test/secret"), Version: 1, Value: []byte(execSecretValue),

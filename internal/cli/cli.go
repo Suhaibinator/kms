@@ -121,8 +121,6 @@ func (c *CLI) Run(args []string) int {
 		code = c.cmdHealthcheck(cmdArgs)
 	case "init":
 		code = c.cmdInit(cmdArgs)
-	case "migrate":
-		code = c.cmdMigrate(cmdArgs)
 	case "check":
 		code = c.cmdCheck(cmdArgs)
 	case "backup":
@@ -323,8 +321,7 @@ Server:
                    HEALTHCHECK or a supervisor). --ready probes /readyz.
 
 Administration:
-  init             Create/migrate a database and master key.
-  migrate          Apply pending database migrations.
+  init             Initialize a database, master key, and built-in CA.
   check            Verify a database and (optionally) the master key.
   backup           Write a consistent online database backup.
   restore          Restore a database file (server must be stopped).

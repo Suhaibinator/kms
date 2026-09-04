@@ -543,7 +543,8 @@ func devExamples(facts *devFacts) []string {
 }
 
 // devReadyTimeout bounds the wait for the listener. It is generous because the
-// first start of a dev store also runs migrations and generates a master key.
+// first start of a dev store also materializes the baseline and generates a
+// master key.
 const devReadyTimeout = 30 * time.Second
 
 // awaitDevReady polls the health endpoint over TLS, verifying against the

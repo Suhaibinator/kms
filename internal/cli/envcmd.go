@@ -15,6 +15,7 @@ import (
 	"strings"
 
 	"google.golang.org/grpc"
+	"google.golang.org/protobuf/proto"
 
 	kmsv1 "github.com/Suhaibinator/kms/gen/kmsv1"
 	"github.com/Suhaibinator/kms/internal/envinject"
@@ -340,6 +341,9 @@ func (c *CLI) resolveReleaseValues(ctx context.Context, conn *grpc.ClientConn, c
 	if !sameNamespace(rel.GetNamespace(), ns) {
 		return nil, nil, fmt.Errorf("release %s: server returned a different namespace", name)
 	}
+	if rel.GetName() != name {
+		return nil, nil, fmt.Errorf("release %s: server returned a different release", name)
+	}
 	// Validate the whole manifest's namespace boundary before fetching any
 	// resource. A malformed foreign pin must not become a resource-existence
 	// oracle or leave the caller with a partially verified candidate.
@@ -347,6 +351,13 @@ func (c *CLI) resolveReleaseValues(ctx context.Context, conn *grpc.ClientConn, c
 		if e.GetRef() == nil || !sameNamespace(e.GetRef().GetNamespace(), rel.GetNamespace()) {
 			return nil, nil, fmt.Errorf("release entry %s must reference its home namespace", e.GetAlias())
 		}
+		if e.GetKind() != "parameter" && e.GetKind() != "secret" {
+			return nil, nil, fmt.Errorf("release entry %s has unknown kind %q", e.GetAlias(), e.GetKind())
+		}
+	}
+	digest, err := configurationReleaseDigest(rel)
+	if err != nil || rel.GetDigest() == "" || !strings.EqualFold(digest, rel.GetDigest()) {
+		return nil, nil, fmt.Errorf("release %s: manifest digest mismatch", name)
 	}
 	params := kmsv1.NewParameterServiceClient(conn)
 	var items []envinject.Item
@@ -383,6 +394,52 @@ func (c *CLI) resolveReleaseValues(ctx context.Context, conn *grpc.ClientConn, c
 		}
 	}
 	return items, secrets, nil
+}
+
+// configurationReleaseDigest mirrors the server and SDK immutable protobuf
+// projection. Allocated release versions, timestamps, creator, and the digest
+// field itself are intentionally excluded.
+func configurationReleaseDigest(release *kmsv1.ConfigurationRelease) (string, error) {
+	if release == nil || release.GetNamespace() == nil {
+		return "", errors.New("release namespace is missing")
+	}
+	projection := &kmsv1.ConfigurationRelease{
+		Namespace: &kmsv1.NamespaceRef{
+			Env: release.GetNamespace().GetEnv(),
+			App: release.GetNamespace().GetApp(),
+		},
+		Name:          release.GetName(),
+		SchemaVersion: release.GetSchemaVersion(),
+		MetadataJson:  release.GetMetadataJson(),
+	}
+	entries := append([]*kmsv1.ConfigurationReleaseEntry(nil), release.GetEntries()...)
+	sort.Slice(entries, func(i, j int) bool { return entries[i].GetAlias() < entries[j].GetAlias() })
+	for _, entry := range entries {
+		if entry == nil || entry.GetRef() == nil || entry.GetRef().GetNamespace() == nil {
+			return "", errors.New("release entry resource is missing")
+		}
+		projection.Entries = append(projection.Entries, &kmsv1.ConfigurationReleaseEntry{
+			Alias: entry.GetAlias(),
+			Kind:  entry.GetKind(),
+			Ref: &kmsv1.ResourceRef{
+				Namespace: &kmsv1.NamespaceRef{
+					Env: entry.GetRef().GetNamespace().GetEnv(),
+					App: entry.GetRef().GetNamespace().GetApp(),
+				},
+				Key: entry.GetRef().GetKey(),
+			},
+			Version:         entry.GetVersion(),
+			ContentType:     entry.GetContentType(),
+			MetadataJson:    entry.GetMetadataJson(),
+			ParameterDigest: entry.GetParameterDigest(),
+		})
+	}
+	encoded, err := (proto.MarshalOptions{Deterministic: true}).Marshal(projection)
+	if err != nil {
+		return "", err
+	}
+	sum := sha256.Sum256(encoded)
+	return hex.EncodeToString(sum[:]), nil
 }
 
 func sameRef(a, b *kmsv1.ResourceRef) bool {

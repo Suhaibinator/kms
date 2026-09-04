@@ -20,7 +20,7 @@ import (
 func (c *CLI) cmdHealthcheck(args []string) int {
 	fs := c.newFlags("healthcheck")
 	r := c.serverSettings(fs, "server.http_addr", "security.tls_enabled")
-	ready := fs.Bool("ready", false, "probe /readyz (store, migrations, and master key) instead of /healthz")
+	ready := fs.Bool("ready", false, "probe /readyz (store baseline and master key) instead of /healthz")
 	timeout := fs.Duration("timeout", 3*time.Second, "give up after this `duration`")
 	c.setUsage(fs, "healthcheck [flags]",
 		"Probe this host's own HTTP listener on 127.0.0.1 and exit 0 when it answers 200. "+
