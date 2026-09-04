@@ -294,7 +294,7 @@ func (s *Service) BindSecret(ctx context.Context, pr Principal, ref domain.Ref, 
 	if err := validateRef(ref); err != nil {
 		return SecretVersionMutationResult{}, err
 	}
-	if err := validateBindingKeyArgument(bindingKey); err != nil {
+	if err := validateNewBindingKeyArgument(bindingKey); err != nil {
 		return SecretVersionMutationResult{}, err
 	}
 	ctx, namespace, err := s.authorize(ctx, pr, domain.OpSecretWrite, domain.ResourceSecret, ref)
@@ -306,12 +306,14 @@ func (s *Service) BindSecret(ctx context.Context, pr Principal, ref domain.Ref, 
 	keyring, err := s.requireKeyring()
 	if err != nil {
 		s.keyWriteMu.Unlock()
+		s.auditRefWithNamespaceID(ctx, pr, "secret.bind", domain.ResourceSecret, ref, namespace.ID, version, "error", nil)
 		return SecretVersionMutationResult{}, err
 	}
 	result, err := s.store.BindSecretVersion(ctx, ref, version, bindingRewrap(keyring, ref, bindingKey))
 	s.keyWriteMu.Unlock()
 	if err != nil {
-		return SecretVersionMutationResult{}, err
+		s.auditRefWithNamespaceID(ctx, pr, "secret.bind", domain.ResourceSecret, ref, namespace.ID, version, "error", nil)
+		return SecretVersionMutationResult{}, sanitizeBindingMutationError(err)
 	}
 
 	s.auditRefWithNamespaceID(ctx, pr, "secret.bind", domain.ResourceSecret, ref, namespace.ID, result.AnchorVersion, "allow", nil)
@@ -325,9 +327,6 @@ func (s *Service) UnbindSecret(ctx context.Context, pr Principal, ref domain.Ref
 	if err := validateRef(ref); err != nil {
 		return SecretVersionMutationResult{}, err
 	}
-	if err := validateBindingKeyArgument(bindingKey); err != nil {
-		return SecretVersionMutationResult{}, err
-	}
 	ctx, namespace, err := s.authorize(ctx, pr, domain.OpSecretWrite, domain.ResourceSecret, ref)
 	if err != nil {
 		return SecretVersionMutationResult{}, err
@@ -337,11 +336,13 @@ func (s *Service) UnbindSecret(ctx context.Context, pr Principal, ref domain.Ref
 	keyring, err := s.requireKeyring()
 	if err != nil {
 		s.keyWriteMu.Unlock()
+		s.auditRefWithNamespaceID(ctx, pr, "secret.unbind", domain.ResourceSecret, ref, namespace.ID, version, "error", nil)
 		return SecretVersionMutationResult{}, err
 	}
 	result, err := s.store.UnbindSecretVersion(ctx, ref, version, bindingUnwrap(keyring, ref, bindingKey))
 	s.keyWriteMu.Unlock()
 	if err != nil {
+		s.auditRefWithNamespaceID(ctx, pr, "secret.unbind", domain.ResourceSecret, ref, namespace.ID, version, "error", nil)
 		return SecretVersionMutationResult{}, sanitizeBindingMutationError(err)
 	}
 
@@ -354,9 +355,6 @@ func (s *Service) UnbindSecret(ctx context.Context, pr Principal, ref domain.Ref
 // around anchor without changing storage. anchor 0 resolves current.
 func (s *Service) PreviewSecretBindingCohort(ctx context.Context, pr Principal, ref domain.Ref, anchor uint64, bindingKey string) (SecretBindingCohortResult, error) {
 	if err := validateRef(ref); err != nil {
-		return SecretBindingCohortResult{}, err
-	}
-	if err := validateBindingKeyArgument(bindingKey); err != nil {
 		return SecretBindingCohortResult{}, err
 	}
 	ctx, namespace, err := s.authorize(ctx, pr, domain.OpSecretWrite, domain.ResourceSecret, ref)
@@ -389,10 +387,7 @@ func (s *Service) RotateSecretBindingKey(ctx context.Context, pr Principal, ref 
 	if err := validateRef(ref); err != nil {
 		return SecretBindingCohortResult{}, err
 	}
-	if err := validateBindingKeyArgument(bindingKey); err != nil {
-		return SecretBindingCohortResult{}, err
-	}
-	if err := validateBindingKeyArgument(newBindingKey); err != nil {
+	if err := validateNewBindingKeyArgument(newBindingKey); err != nil {
 		return SecretBindingCohortResult{}, err
 	}
 	ctx, namespace, err := s.authorize(ctx, pr, domain.OpSecretWrite, domain.ResourceSecret, ref)
@@ -427,14 +422,11 @@ func (s *Service) PurgeSecretBindingCohort(ctx context.Context, pr Principal, re
 	if err := validateRef(ref); err != nil {
 		return SecretBindingCohortResult{}, err
 	}
-	// Reject non-admin callers before binding-key validation, namespace lookup,
-	// or cohort discovery so delegated destroy policy cannot become an oracle.
+	// Reject non-admin callers before namespace lookup or cohort discovery so
+	// delegated destroy policy cannot become a binding-key oracle.
 	if !pr.IsAdmin() {
 		s.auditRef(ctx, pr, "secret.binding_cohort.purge", domain.ResourceSecret, ref, anchor, "deny", nil)
 		return SecretBindingCohortResult{}, domain.Errorf(domain.ErrPermissionDenied, "access denied")
-	}
-	if err := validateBindingKeyArgument(bindingKey); err != nil {
-		return SecretBindingCohortResult{}, err
 	}
 	ctx, namespace, err := s.authorize(ctx, pr, domain.OpSecretDestroy, domain.ResourceSecret, ref)
 	if err != nil {
@@ -459,6 +451,13 @@ func (s *Service) PurgeSecretBindingCohort(ctx context.Context, pr Principal, re
 		CreatedAt:     s.now(),
 	})
 	s.keyWriteMu.Unlock()
+	if errors.Is(err, storage.ErrPurgeCleanupPending) {
+		// The logical purge, change-log row, and single allow audit already
+		// committed. Wake consumers, preserve the committed result, and surface
+		// the distinct cleanup state without appending a misleading error audit.
+		s.getHub().Wake()
+		return secretBindingCohortResult(result), storage.ErrPurgeCleanupPending
+	}
 	if err != nil {
 		s.auditRefWithNamespaceID(ctx, pr, "secret.binding_cohort.purge", domain.ResourceSecret, ref, namespace.ID, anchor, "error", nil)
 		return SecretBindingCohortResult{}, sanitizeBindingMutationError(err)
@@ -486,7 +485,7 @@ func secretBindingCohortResult(result storage.SecretBindingResult) SecretBinding
 	}
 }
 
-func validateBindingKeyArgument(bindingKey string) error {
+func validateNewBindingKeyArgument(bindingKey string) error {
 	if err := crypto.ValidateBindingKey(bindingKey); err != nil {
 		return domain.Errorf(domain.ErrInvalidArgument, "binding_key must be valid UTF-8 and at least %d bytes", crypto.MinBindingKeyBytes)
 	}
@@ -535,6 +534,9 @@ func bindingRewrap(keyring *crypto.Keyring, ref domain.Ref, bindingKey string) s
 
 func bindingUnwrap(keyring *crypto.Keyring, ref domain.Ref, bindingKey string) storage.SecretBindingRewrapFunc {
 	return func(ver storage.SecretVersionRecord) (storage.SecretBindingWrapping, error) {
+		if crypto.ValidateBindingKey(bindingKey) != nil {
+			return storage.SecretBindingWrapping{}, domain.ErrDecryptFailed
+		}
 		kek, err := keyring.Get(ver.KEKID)
 		if err != nil {
 			return storage.SecretBindingWrapping{}, domain.ErrDecryptFailed
@@ -547,6 +549,9 @@ func bindingUnwrap(keyring *crypto.Keyring, ref domain.Ref, bindingKey string) s
 
 func bindingRotate(keyring *crypto.Keyring, ref domain.Ref, bindingKey, newBindingKey string) storage.SecretBindingRewrapFunc {
 	return func(ver storage.SecretVersionRecord) (storage.SecretBindingWrapping, error) {
+		if crypto.ValidateBindingKey(bindingKey) != nil {
+			return storage.SecretBindingWrapping{}, domain.ErrDecryptFailed
+		}
 		kek, err := keyring.Get(ver.KEKID)
 		if err != nil {
 			return storage.SecretBindingWrapping{}, domain.ErrDecryptFailed

@@ -38,6 +38,10 @@ type fakeStore struct {
 	pingErr     error
 	auditErr    error
 	policiesErr error
+	// purgeResultErr simulates a post-commit purge cleanup failure: the fake
+	// applies the tombstones/audit/revision, then returns this error with the
+	// populated result just like SQLStore.
+	purgeResultErr error
 
 	// optional behavior overrides
 	onPoliciesForSubject      func(subject string) ([]domain.Policy, error)
@@ -575,7 +579,8 @@ func (f *fakeStore) PurgeSecretBindingCohort(_ context.Context, ref domain.Ref, 
 		SourceIP: audit.SourceIP, UserAgent: audit.UserAgent, RequestID: audit.RequestID,
 		CreatedAt: audit.CreatedAt, Metadata: "{}",
 	})
-	return storage.SecretBindingResult{AnchorVersion: resolved, AffectedVersions: affected, Revision: f.revision}, nil
+	result := storage.SecretBindingResult{AnchorVersion: resolved, AffectedVersions: affected, Revision: f.revision}
+	return result, f.purgeResultErr
 }
 
 func (f *fakeStore) bindingVersion(ref domain.Ref, version uint64) (*fakeSecret, uint64, storage.SecretVersionRecord, error) {

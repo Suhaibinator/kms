@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -492,6 +493,191 @@ func TestPutSecretValidation(t *testing.T) {
 	}
 }
 
+func TestBindingMutationNewKeysRemainInvalidArguments(t *testing.T) {
+	badKeys := map[string]string{
+		"missing":      "",
+		"short":        "too-short",
+		"invalid utf8": strings.Repeat("a", 32) + "\xff",
+	}
+	for name, key := range badKeys {
+		t.Run("bind/"+name, func(t *testing.T) {
+			store := newFakeStore()
+			s := newTestService(store)
+			withKeyring(t, s)
+			ref := tref("bind-new-key-validation")
+			putSecret(t, s, PutSecretInput{Ref: ref, Value: []byte("value")})
+			before := store.secrets[ref.String()].versions[1]
+			beforeRevision := store.revision
+
+			_, err := s.BindSecret(context.Background(), adminPrincipal(), ref, 1, key)
+			if !errors.Is(err, domain.ErrInvalidArgument) {
+				t.Fatalf("BindSecret error = %v, want ErrInvalidArgument", err)
+			}
+			if got := store.secrets[ref.String()].versions[1]; !reflect.DeepEqual(got, before) || store.revision != beforeRevision {
+				t.Fatal("invalid new bind key mutated the secret")
+			}
+		})
+
+		t.Run("rotate-new/"+name, func(t *testing.T) {
+			store := newFakeStore()
+			s := newTestService(store)
+			withKeyring(t, s)
+			ref := tref("rotate-new-key-validation")
+			putSecret(t, s, PutSecretInput{Ref: ref, Value: []byte("value"), BindingKey: testBindingKeyA})
+			before := store.secrets[ref.String()].versions[1]
+			beforeRevision := store.revision
+
+			_, err := s.RotateSecretBindingKey(context.Background(), adminPrincipal(), ref, 1, testBindingKeyA, key, nil, nil)
+			if !errors.Is(err, domain.ErrInvalidArgument) {
+				t.Fatalf("RotateSecretBindingKey error = %v, want ErrInvalidArgument", err)
+			}
+			if got := store.secrets[ref.String()].versions[1]; !reflect.DeepEqual(got, before) || store.revision != beforeRevision {
+				t.Fatal("invalid new rotation key mutated the secret")
+			}
+		})
+	}
+}
+
+func TestBindingMutationUnlockKeysCollapseWithoutMutationOrLeakage(t *testing.T) {
+	type operation struct {
+		name      string
+		eventType string
+		run       func(*Service, domain.Ref, string) error
+	}
+	operations := []operation{
+		{name: "unbind", eventType: "secret.unbind", run: func(s *Service, ref domain.Ref, key string) error {
+			_, err := s.UnbindSecret(context.Background(), adminPrincipal(), ref, 1, key)
+			return err
+		}},
+		{name: "preview", eventType: "secret.binding_cohort.preview", run: func(s *Service, ref domain.Ref, key string) error {
+			_, err := s.PreviewSecretBindingCohort(context.Background(), adminPrincipal(), ref, 1, key)
+			return err
+		}},
+		{name: "rotate-old", eventType: "secret.binding_key.rotate", run: func(s *Service, ref domain.Ref, key string) error {
+			_, err := s.RotateSecretBindingKey(context.Background(), adminPrincipal(), ref, 1, key, testBindingKeyC, nil, nil)
+			return err
+		}},
+		{name: "purge", eventType: "secret.binding_cohort.purge", run: func(s *Service, ref domain.Ref, key string) error {
+			_, err := s.PurgeSecretBindingCohort(context.Background(), adminPrincipal(), ref, 1, key, nil, nil)
+			return err
+		}},
+	}
+	credentials := []struct {
+		name string
+		key  string
+	}{
+		{name: "missing", key: ""},
+		{name: "short", key: "too-short"},
+		{name: "invalid-utf8", key: strings.Repeat("x", 32) + "\xff"},
+		{name: "wrong", key: testBindingKeyB},
+	}
+
+	for _, op := range operations {
+		for _, credential := range credentials {
+			t.Run(op.name+"/"+credential.name, func(t *testing.T) {
+				store := newFakeStore()
+				s, hub := newTestServiceWithHub(t, store)
+				observedCore, observed := observer.New(zap.DebugLevel)
+				s.log = zap.New(observedCore)
+				ref := tref("unlock-key-collapse")
+				putSecret(t, s, PutSecretInput{Ref: ref, Value: []byte("value"), BindingKey: testBindingKeyA})
+				hub.wakes = 0
+				before := store.secrets[ref.String()].versions[1]
+				beforeRevision := store.revision
+				auditsBefore := len(store.audits)
+
+				err := op.run(s, ref, credential.key)
+				if err != domain.ErrDecryptFailed || err.Error() != domain.ErrDecryptFailed.Error() {
+					t.Fatalf("error = %#v, want canonical ErrDecryptFailed", err)
+				}
+				if credential.key != "" && strings.Contains(err.Error(), credential.key) {
+					t.Fatal("binding key appeared in returned error")
+				}
+				if got := store.secrets[ref.String()].versions[1]; !reflect.DeepEqual(got, before) || store.revision != beforeRevision {
+					t.Fatalf("%s with an unusable key mutated the secret", op.name)
+				}
+				if hub.wakes != 0 {
+					t.Fatalf("%s with an unusable key woke watchers %d times", op.name, hub.wakes)
+				}
+				if len(store.audits) != auditsBefore+1 {
+					t.Fatalf("audit count = %d, want %d", len(store.audits), auditsBefore+1)
+				}
+				errorAudit := store.audits[len(store.audits)-1]
+				if errorAudit.EventType != op.eventType || errorAudit.Decision != "error" || errorAudit.Metadata != "{}" ||
+					errorAudit.ResourceNamespaceID != store.namespaces[tns.String()].ID || errorAudit.ResourceVersion != 1 {
+					t.Fatalf("error audit = %+v", errorAudit)
+				}
+				for _, audit := range store.audits {
+					if credential.key != "" && strings.Contains(fmt.Sprintf("%+v", audit), credential.key) {
+						t.Fatal("binding key appeared in an audit event")
+					}
+				}
+				if credential.key != "" && observed.FilterMessageSnippet(credential.key).Len() != 0 {
+					t.Fatal("binding key appeared in logs")
+				}
+			})
+		}
+	}
+}
+
+func TestBindUnbindAuthorizedFailuresAreAuditedAndRedacted(t *testing.T) {
+	tests := []struct {
+		name      string
+		eventType string
+		invoke    func(*Service, domain.Ref) error
+	}{
+		{
+			name:      "bind",
+			eventType: "secret.bind",
+			invoke: func(s *Service, ref domain.Ref) error {
+				_, err := s.BindSecret(context.Background(), adminPrincipal(), ref, 1, testBindingKeyB)
+				return err
+			},
+		},
+		{
+			name:      "unbind",
+			eventType: "secret.unbind",
+			invoke: func(s *Service, ref domain.Ref) error {
+				_, err := s.UnbindSecret(context.Background(), adminPrincipal(), ref, 1, testBindingKeyB)
+				return err
+			},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			store := newFakeStore()
+			s := newTestService(store)
+			withKeyring(t, s)
+			ref := tref(tc.name + "-failure-audit")
+			putSecret(t, s, PutSecretInput{Ref: ref, Value: []byte("value"), BindingKey: testBindingKeyA})
+			before := store.secrets[ref.String()].versions[1]
+			beforeRevision := store.revision
+			auditsBefore := len(store.audits)
+
+			err := tc.invoke(s, ref)
+			if err == nil {
+				t.Fatal("mutation unexpectedly succeeded")
+			}
+			if got := store.secrets[ref.String()].versions[1]; !reflect.DeepEqual(got, before) || store.revision != beforeRevision {
+				t.Fatal("failed mutation changed the secret")
+			}
+			if len(store.audits) != auditsBefore+1 {
+				t.Fatalf("audit count = %d, want %d", len(store.audits), auditsBefore+1)
+			}
+			audit := store.audits[len(store.audits)-1]
+			if audit.EventType != tc.eventType || audit.Decision != "error" || audit.ResourceNamespaceID != store.namespaces[tns.String()].ID ||
+				audit.ResourceEnv != ref.NS.Env || audit.ResourceApp != ref.NS.App || audit.ResourceKey != ref.Key || audit.ResourceVersion != 1 || audit.Metadata != "{}" {
+				t.Fatalf("error audit = %+v", audit)
+			}
+			for _, key := range []string{testBindingKeyA, testBindingKeyB} {
+				if strings.Contains(fmt.Sprintf("%+v", audit), key) || strings.Contains(err.Error(), key) {
+					t.Fatalf("binding key leaked from failed %s", tc.name)
+				}
+			}
+		})
+	}
+}
+
 func TestBindUnbindExactVersionPreserveCiphertext(t *testing.T) {
 	ctx := context.Background()
 	store := newFakeStore()
@@ -750,6 +936,36 @@ func TestPurgeBindingCohortRollsBackWhenAuditUnavailable(t *testing.T) {
 	after := store.secrets[ref.String()].versions[1]
 	if after.State != before.State || !bytes.Equal(after.Ciphertext, before.Ciphertext) || !bytes.Equal(after.EncryptedDEK, before.EncryptedDEK) || store.revision != beforeRevision {
 		t.Fatal("failed purge changed the version or revision")
+	}
+}
+
+func TestPurgeCleanupPendingReturnsCommittedResultAndWakes(t *testing.T) {
+	store := newFakeStore()
+	s, hub := newTestServiceWithHub(t, store)
+	ref := tref("purge-cleanup-pending")
+	putSecret(t, s, PutSecretInput{Ref: ref, Value: []byte("value"), BindingKey: testBindingKeyA})
+	hub.wakes = 0
+	store.purgeResultErr = storage.ErrPurgeCleanupPending
+	auditsBefore := len(store.audits)
+
+	result, err := s.PurgeSecretBindingCohort(context.Background(), adminPrincipal(), ref, 1, testBindingKeyA, nil, nil)
+	if err != storage.ErrPurgeCleanupPending {
+		t.Fatalf("error = %#v, want canonical ErrPurgeCleanupPending", err)
+	}
+	if result.AnchorVersion != 1 || !slices.Equal(result.AffectedVersions, []uint64{1}) || result.Revision == 0 {
+		t.Fatalf("committed result = %+v", result)
+	}
+	if got := store.secrets[ref.String()].versions[1]; got.State != domain.StateDestroyed {
+		t.Fatalf("logical purge did not commit: %+v", got)
+	}
+	if hub.wakes != 1 {
+		t.Fatalf("watch wakes = %d, want 1", hub.wakes)
+	}
+	if len(store.audits) != auditsBefore+1 {
+		t.Fatalf("audit count = %d, want one transactional allow row", len(store.audits)-auditsBefore)
+	}
+	if audit := store.audits[len(store.audits)-1]; audit.EventType != "secret.binding_cohort.purge" || audit.Decision != "allow" {
+		t.Fatalf("cleanup-pending audit = %+v", audit)
 	}
 }
 
