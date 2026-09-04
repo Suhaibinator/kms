@@ -371,13 +371,7 @@ func bindingVersions(rows []secretVersionModel) []uint64 {
 }
 
 func validateSecretBindingGuard(guard SecretBindingCASGuard) error {
-	if guard.ExpectedRevision == nil {
-		if len(guard.ExpectedAffectedVersions) != 0 {
-			return domain.Errorf(domain.ErrInvalidArgument, "expected revision and affected versions must be supplied together")
-		}
-		return nil
-	}
-	if *guard.ExpectedRevision == 0 || len(guard.ExpectedAffectedVersions) == 0 {
+	if guard.ExpectedRevision == 0 || len(guard.ExpectedAffectedVersions) == 0 {
 		return domain.Errorf(domain.ErrInvalidArgument, "expected revision and affected versions must be supplied together")
 	}
 	var previous uint64
@@ -392,18 +386,11 @@ func validateSecretBindingGuard(guard SecretBindingCASGuard) error {
 
 func cloneSecretBindingGuard(guard SecretBindingCASGuard) SecretBindingCASGuard {
 	guard.ExpectedAffectedVersions = slices.Clone(guard.ExpectedAffectedVersions)
-	if guard.ExpectedRevision != nil {
-		revision := *guard.ExpectedRevision
-		guard.ExpectedRevision = &revision
-	}
 	return guard
 }
 
 func checkSecretBindingGuard(guard SecretBindingCASGuard, revision uint64, affected []uint64) error {
-	if guard.ExpectedRevision == nil {
-		return nil
-	}
-	if *guard.ExpectedRevision != revision || !slices.Equal(guard.ExpectedAffectedVersions, affected) {
+	if guard.ExpectedRevision != revision || !slices.Equal(guard.ExpectedAffectedVersions, affected) {
 		return domain.Errorf(domain.ErrAborted, "secret version set changed; preview and retry")
 	}
 	return nil
@@ -654,9 +641,8 @@ func (s *SQLStore) PurgeSecretBindingCohort(ctx context.Context, ref domain.Ref,
 // PurgeSecretUnboundVersions irreversibly tombstones the exact set returned by
 // a prior preview. Both guards are mandatory.
 func (s *SQLStore) PurgeSecretUnboundVersions(ctx context.Context, ref domain.Ref, expectedRevision uint64, expectedAffectedVersions []uint64, audit SecretBindingPurgeAudit) (SecretVersionSetResult, error) {
-	revision := expectedRevision
 	guard := cloneSecretBindingGuard(SecretBindingCASGuard{
-		ExpectedRevision:         &revision,
+		ExpectedRevision:         expectedRevision,
 		ExpectedAffectedVersions: expectedAffectedVersions,
 	})
 	if err := validateSecretBindingGuard(guard); err != nil {

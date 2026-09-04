@@ -1032,9 +1032,8 @@ Listing is always namespace-scoped: `env` and `app` are required.
   under the new key; the historical cohort remains unchanged under the old
   key. The replacement must differ byte for byte from the current key.
 - `POST /api/v1/secrets/binding-cohort/purge` — admin only; preview-shaped body
-  with optional paired `expected_revision` and `expected_affected_versions`
-  guards → the cohort result. When supplied, the guards must exactly match a
-  prior preview. This
+  with required `expected_revision` and `expected_affected_versions` guards →
+  the cohort result. The guards must exactly match a prior preview. This
   irreversibly destroys the contiguous matching cohort even when immutable
   releases pin it.
 - `POST /api/v1/secrets/unbound-versions/preview` — `{"env","app","key"}` →

@@ -225,7 +225,7 @@ func TestRotationCreatesOneVersionAndLeavesHistoricalCohortUnderOldKey(t *testin
 		t.Fatalf("rotated current read=%q err=%v", got.Value, err)
 	}
 	old, _ := h.svc.PreviewSecretBindingCohort(ctx, h.admin, ref, 1, integrationBindingKeyA)
-	if _, err := h.svc.PurgeSecretBindingCohort(ctx, h.admin, ref, 1, integrationBindingKeyA, new(old.Revision), old.AffectedVersions); err != nil {
+	if _, err := h.svc.PurgeSecretBindingCohort(ctx, h.admin, ref, 1, integrationBindingKeyA, old.Revision, old.AffectedVersions); err != nil {
 		t.Fatalf("purge old cohort: %v", err)
 	}
 	if got, err := h.svc.GetSecret(ctx, h.admin, ref, 3, "", "", integrationBindingKeyB); err != nil || string(got.Value) != "old-2" {
@@ -346,14 +346,14 @@ func TestPurgeBindingCohortInvalidatesReleaseAndPreservesHighWater(t *testing.T)
 		t.Fatalf("preview compromised cohort = %+v err=%v", preview, err)
 	}
 	for _, unusable := range []string{"", "short", string([]byte{0xff, 0xfe}), integrationBindingKeyA} {
-		if _, err := h.svc.PurgeSecretBindingCohort(ctx, h.admin, ref, 2, unusable, nil, nil); !errors.Is(err, domain.ErrDecryptFailed) || err.Error() != domain.ErrDecryptFailed.Error() {
+		if _, err := h.svc.PurgeSecretBindingCohort(ctx, h.admin, ref, 2, unusable, preview.Revision, preview.AffectedVersions); !errors.Is(err, domain.ErrDecryptFailed) || err.Error() != domain.ErrDecryptFailed.Error() {
 			t.Fatalf("purge with unusable key err = %v, want identical ErrDecryptFailed", err)
 		}
 	}
-	if _, err := h.svc.PurgeSecretBindingCohort(ctx, h.admin, ref, 2, integrationBindingKeyB, new(preview.Revision), nil); !errors.Is(err, domain.ErrInvalidArgument) {
+	if _, err := h.svc.PurgeSecretBindingCohort(ctx, h.admin, ref, 2, integrationBindingKeyB, preview.Revision, nil); !errors.Is(err, domain.ErrInvalidArgument) {
 		t.Fatalf("purge revision-only guard err = %v, want ErrInvalidArgument", err)
 	}
-	if _, err := h.svc.PurgeSecretBindingCohort(ctx, h.admin, ref, 2, integrationBindingKeyB, new(preview.Revision), []uint64{2}); !errors.Is(err, domain.ErrAborted) {
+	if _, err := h.svc.PurgeSecretBindingCohort(ctx, h.admin, ref, 2, integrationBindingKeyB, preview.Revision, []uint64{2}); !errors.Is(err, domain.ErrAborted) {
 		t.Fatalf("purge affected-set mismatch err = %v, want ErrAborted", err)
 	}
 	if cohort, err := h.svc.PreviewSecretBindingCohort(ctx, h.admin, ref, 2, integrationBindingKeyB); err != nil || !slices.Equal(cohort.AffectedVersions, preview.AffectedVersions) {
@@ -367,8 +367,8 @@ func TestPurgeBindingCohortInvalidatesReleaseAndPreservesHighWater(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, deniedExisting := h.svc.PurgeSecretBindingCohort(ctx, delegate, ref, 2, integrationBindingKeyB, nil, nil)
-	_, deniedMissing := h.svc.PurgeSecretBindingCohort(ctx, delegate, domain.Ref{NS: ns, Key: "missing"}, 999, "short", nil, nil)
+	_, deniedExisting := h.svc.PurgeSecretBindingCohort(ctx, delegate, ref, 2, integrationBindingKeyB, 0, nil)
+	_, deniedMissing := h.svc.PurgeSecretBindingCohort(ctx, delegate, domain.Ref{NS: ns, Key: "missing"}, 999, "short", 0, nil)
 	if !errors.Is(deniedExisting, domain.ErrPermissionDenied) || !errors.Is(deniedMissing, domain.ErrPermissionDenied) || deniedExisting.Error() != deniedMissing.Error() {
 		t.Fatalf("non-admin purge leaked key/cohort existence: existing=%v missing=%v", deniedExisting, deniedMissing)
 	}
@@ -376,7 +376,7 @@ func TestPurgeBindingCohortInvalidatesReleaseAndPreservesHighWater(t *testing.T)
 		t.Fatalf("denied purge changed revision: %d -> %d err=%v", revisionBeforeDenied, revision, err)
 	}
 
-	purged, err := h.svc.PurgeSecretBindingCohort(ctx, h.admin, ref, 2, integrationBindingKeyB, new(preview.Revision), preview.AffectedVersions)
+	purged, err := h.svc.PurgeSecretBindingCohort(ctx, h.admin, ref, 2, integrationBindingKeyB, preview.Revision, preview.AffectedVersions)
 	if err != nil {
 		t.Fatalf("PurgeSecretBindingCohort: %v", err)
 	}
@@ -453,7 +453,7 @@ func TestPurgeBindingCohortInvalidatesReleaseAndPreservesHighWater(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := h.svc.PurgeSecretBindingCohort(ctx, h.admin, reuseRef, 0, integrationBindingKeyB, new(reusePreview.Revision), reusePreview.AffectedVersions); err != nil {
+	if _, err := h.svc.PurgeSecretBindingCohort(ctx, h.admin, reuseRef, 0, integrationBindingKeyB, reusePreview.Revision, reusePreview.AffectedVersions); err != nil {
 		t.Fatalf("purge reuse cohort: %v", err)
 	}
 	if _, err := h.svc.DeleteSecret(ctx, h.admin, reuseRef); err != nil {

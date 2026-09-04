@@ -1061,9 +1061,10 @@ func (m *memStore) TransitionSecretVersion(_ context.Context, params storage.Sec
 	row.record.Labels[domain.LabelPrevious], row.record.Labels[domain.LabelCurrent] = current, version
 	row.record.Bound, row.record.ContentType, row.record.Metadata, row.record.UpdatedAt = targetBound, source.ContentType, source.Metadata, now
 	changeType, eventType := domain.ChangeBind, "secret.bind"
-	if params.Kind == storage.SecretTransitionUnbind {
+	switch params.Kind {
+	case storage.SecretTransitionUnbind:
 		changeType, eventType = domain.ChangeUnbind, "secret.unbind"
-	} else if params.Kind == storage.SecretTransitionRotate {
+	case storage.SecretTransitionRotate:
 		changeType, eventType = domain.ChangeRotateBindingKey, "secret.binding_key.rotate"
 	}
 	affected := []uint64{current, version}
@@ -1104,13 +1105,7 @@ func (m *memStore) bindingCohortLocked(ref domain.Ref, anchor uint64, test stora
 }
 
 func validateMemBindingGuard(guard storage.SecretBindingCASGuard) error {
-	if guard.ExpectedRevision == nil {
-		if len(guard.ExpectedAffectedVersions) != 0 {
-			return domain.Errorf(domain.ErrInvalidArgument, "expected revision and affected versions must be supplied together")
-		}
-		return nil
-	}
-	if *guard.ExpectedRevision == 0 || len(guard.ExpectedAffectedVersions) == 0 {
+	if guard.ExpectedRevision == 0 || len(guard.ExpectedAffectedVersions) == 0 {
 		return domain.Errorf(domain.ErrInvalidArgument, "expected revision and affected versions must be supplied together")
 	}
 	for i, version := range guard.ExpectedAffectedVersions {
@@ -1161,7 +1156,7 @@ func (m *memStore) PurgeSecretBindingCohort(_ context.Context, ref domain.Ref, a
 	if err != nil {
 		return storage.SecretBindingResult{}, err
 	}
-	if guard.ExpectedRevision != nil && (*guard.ExpectedRevision != m.revision || !slices.Equal(guard.ExpectedAffectedVersions, affected)) {
+	if guard.ExpectedRevision != m.revision || !slices.Equal(guard.ExpectedAffectedVersions, affected) {
 		return storage.SecretBindingResult{}, domain.Errorf(domain.ErrAborted, "secret version set changed")
 	}
 	if m.auditErr != nil {
@@ -1187,13 +1182,7 @@ func (m *memStore) PurgeSecretBindingCohort(_ context.Context, ref domain.Ref, a
 		ResourceType: domain.ResourceSecret, Ref: ref, ChangeType: domain.ChangePurgeBindingCohort,
 		Version: resolved, AffectedVersions: slices.Clone(affected),
 	})
-	m.audit = append(m.audit, domain.AuditEvent{
-		EventType: "secret.binding_cohort.purge", ActorIdentity: audit.ActorIdentity,
-		ActorType: audit.ActorType, ResourceType: domain.ResourceSecret,
-		ResourceEnv: ref.NS.Env, ResourceApp: ref.NS.App, ResourceKey: ref.Key,
-		ResourceVersion: resolved, Decision: "allow", SourceIP: audit.SourceIP,
-		UserAgent: audit.UserAgent, RequestID: audit.RequestID, CreatedAt: now,
-	})
+	m.appendBindingAuditLocked("secret.binding_cohort.purge", ref, resolved, affected, audit)
 	result := storage.SecretBindingResult{AnchorVersion: resolved, AffectedVersions: affected, Revision: revision}
 	if m.purgeResultErr != nil {
 		return result, m.purgeResultErr

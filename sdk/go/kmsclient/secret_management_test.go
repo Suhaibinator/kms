@@ -73,7 +73,7 @@ func TestEverySecretBearingRPCDiscardsRemoteDiagnosticText(t *testing.T) {
 			return err
 		}},
 		{method: "PurgeSecretBindingCohort", call: func() error {
-			_, err := client.PurgeSecretBindingCohortIfUnchanged(context.Background(), "redaction", 1, key, validCohortGuard)
+			_, err := client.PurgeSecretBindingCohort(context.Background(), "redaction", 1, key, validCohortGuard)
 			return err
 		}},
 		{method: "PreviewSecretUnboundVersions", call: func() error {
@@ -126,7 +126,7 @@ func TestPurgeCleanupPendingHasDistinctSanitizedSentinel(t *testing.T) {
 		status.Error(codes.Unavailable, purgeCleanupPendingWireMessage))
 
 	guard := SecretBindingCohortResult{AnchorVersion: 1, Revision: 1, AffectedVersions: []uint64{1}}
-	result, err := client.PurgeSecretBindingCohortIfUnchanged(context.Background(), "cleanup-pending", 1, strings.Repeat("k", 32), guard)
+	result, err := client.PurgeSecretBindingCohort(context.Background(), "cleanup-pending", 1, strings.Repeat("k", 32), guard)
 	if result.AnchorVersion != 0 || len(result.AffectedVersions) != 0 || result.Revision != 0 || !errors.Is(err, ErrPurgeCleanupPending) {
 		t.Fatalf("purge result=%+v error=%v, want zero result and ErrPurgeCleanupPending", result, err)
 	}
@@ -136,7 +136,7 @@ func TestPurgeCleanupPendingHasDistinctSanitizedSentinel(t *testing.T) {
 
 	server.SetSecretOperationError("PurgeSecretBindingCohort", testNS, "cleanup-pending",
 		status.Error(codes.Unavailable, purgeCleanupPendingWireMessage+" reflected-key"))
-	_, err = client.PurgeSecretBindingCohortIfUnchanged(context.Background(), "cleanup-pending", 1, "reflected-key", guard)
+	_, err = client.PurgeSecretBindingCohort(context.Background(), "cleanup-pending", 1, "reflected-key", guard)
 	if errors.Is(err, ErrPurgeCleanupPending) || strings.Contains(err.Error(), "reflected-key") {
 		t.Fatalf("non-canonical unavailable error was trusted or leaked: %v", err)
 	}
@@ -233,7 +233,7 @@ func TestSecretBindingManagementRequestMapping(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := client.PurgeSecretBindingCohortIfUnchanged(ctx, "managed", 11, secondKey, rotated); err != nil {
+	if _, err := client.PurgeSecretBindingCohort(ctx, "managed", 11, secondKey, rotated); err != nil {
 		t.Fatal(err)
 	}
 	purge := server.PurgeSecretBindingCohortCalls()
@@ -280,7 +280,7 @@ func TestGuardedBindingMutationsRejectMalformedPreviewLocally(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			if _, err := client.PurgeSecretBindingCohortIfUnchanged(context.Background(), "missing", 1, key, test.expected); !errors.Is(err, ErrInvalidArgument) {
+			if _, err := client.PurgeSecretBindingCohort(context.Background(), "missing", 1, key, test.expected); !errors.Is(err, ErrInvalidArgument) {
 				t.Fatalf("malformed purge guard error = %v, want ErrInvalidArgument", err)
 			}
 		})

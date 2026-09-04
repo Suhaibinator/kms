@@ -669,9 +669,10 @@ func (s *fakeStore) TransitionSecretVersion(_ context.Context, params storage.Se
 	sec.rec.Labels[domain.LabelPrevious], sec.rec.Labels[domain.LabelCurrent] = current, version
 	sec.rec.Bound, sec.rec.ContentType, sec.rec.Metadata, sec.rec.UpdatedAt = targetBound, source.ContentType, source.Metadata, now
 	eventType := "secret.bind"
-	if params.Kind == storage.SecretTransitionUnbind {
+	switch params.Kind {
+	case storage.SecretTransitionUnbind:
 		eventType = "secret.unbind"
-	} else if params.Kind == storage.SecretTransitionRotate {
+	case storage.SecretTransitionRotate:
 		eventType = "secret.binding_key.rotate"
 	}
 	revision := s.bump()
@@ -710,13 +711,7 @@ func (s *fakeStore) bindingCohort(ref domain.Ref, anchor uint64, test storage.Se
 }
 
 func validFakeBindingGuard(guard storage.SecretBindingCASGuard) error {
-	if guard.ExpectedRevision == nil {
-		if len(guard.ExpectedAffectedVersions) != 0 {
-			return domain.Errorf(domain.ErrInvalidArgument, "preview guard is invalid")
-		}
-		return nil
-	}
-	if *guard.ExpectedRevision == 0 || len(guard.ExpectedAffectedVersions) == 0 || !slices.IsSorted(guard.ExpectedAffectedVersions) {
+	if guard.ExpectedRevision == 0 || len(guard.ExpectedAffectedVersions) == 0 || !slices.IsSorted(guard.ExpectedAffectedVersions) {
 		return domain.Errorf(domain.ErrInvalidArgument, "preview guard is invalid")
 	}
 	for i, version := range guard.ExpectedAffectedVersions {
@@ -768,7 +763,7 @@ func (s *fakeStore) PurgeSecretBindingCohort(_ context.Context, ref domain.Ref, 
 	if err != nil {
 		return storage.SecretBindingResult{}, err
 	}
-	if guard.ExpectedRevision != nil && (*guard.ExpectedRevision != s.revision || !slices.Equal(guard.ExpectedAffectedVersions, affected)) {
+	if guard.ExpectedRevision != s.revision || !slices.Equal(guard.ExpectedAffectedVersions, affected) {
 		return storage.SecretBindingResult{}, domain.Errorf(domain.ErrAborted, "secret version set changed")
 	}
 	if s.auditErr != nil {
@@ -791,18 +786,7 @@ func (s *fakeStore) PurgeSecretBindingCohort(_ context.Context, ref domain.Ref, 
 	}
 	sec.rec.UpdatedAt = now
 	revision := s.bump()
-	namespaceID := int64(0)
-	if namespace := s.namespaces[nsKey(ref.NS)]; namespace != nil {
-		namespaceID = namespace.ID
-	}
-	s.audit = append(s.audit, domain.AuditEvent{
-		EventType: "secret.binding_cohort.purge", ActorIdentity: audit.ActorIdentity,
-		ActorType: audit.ActorType, ResourceType: domain.ResourceSecret,
-		ResourceNamespaceID: namespaceID, ResourceEnv: ref.NS.Env, ResourceApp: ref.NS.App,
-		ResourceKey: ref.Key, ResourceVersion: anchor, Decision: "allow",
-		SourceIP: audit.SourceIP, UserAgent: audit.UserAgent, RequestID: audit.RequestID,
-		CreatedAt: now,
-	})
+	s.appendBindingAuditLocked("secret.binding_cohort.purge", ref, anchor, affected, audit)
 	result := storage.SecretBindingResult{AnchorVersion: anchor, AffectedVersions: affected, Revision: revision}
 	if s.purgeResultErr != nil {
 		return result, s.purgeResultErr

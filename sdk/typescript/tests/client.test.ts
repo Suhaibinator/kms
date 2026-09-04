@@ -570,7 +570,7 @@ describe("KmsClient", () => {
     await client.close();
   });
 
-  it("allows omitted bound-purge guards and validates supplied guard sets locally", async () => {
+  it("requires and validates bound-purge guard sets locally", async () => {
     const transport = new FakeTransport(() => ({
       anchorVersion: 8n,
       affectedVersions: [7n, 8n],
@@ -594,18 +594,8 @@ describe("KmsClient", () => {
       },
     ]);
 
-    await client.purgeSecretBindingCohort("credential", {
-      anchorVersion: 8n,
-      bindingKey: "binding-key-b",
-    });
-    expect(transport.calls[1]?.request).toEqual({
-      ref: { namespace: { env: "prod", app: "api" }, key: "credential" },
-      anchorVersion: 8n,
-      bindingKey: "binding-key-b",
-      expectedAffectedVersions: [],
-    });
-
     const invalid = [
+      {},
       { expectedRevision: 1n },
       { expectedAffectedVersions: [1n] },
       { expectedRevision: 0n, expectedAffectedVersions: [1n] },
@@ -623,7 +613,7 @@ describe("KmsClient", () => {
         } as never),
       ).rejects.toBeInstanceOf(ConfigError);
     }
-    expect(transport.calls).toHaveLength(2);
+    expect(transport.calls).toHaveLength(1);
     await client.close();
   });
 

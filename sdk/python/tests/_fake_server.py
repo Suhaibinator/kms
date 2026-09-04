@@ -608,10 +608,7 @@ class SecretServicer(kms_pb2_grpc.SecretServiceServicer):
 
     def _check_guard(self, request, versions: list[int], context) -> None:
         expected = list(request.expected_affected_versions)
-        has_revision = request.HasField("expected_revision")
-        if not has_revision and not expected:
-            return
-        if not has_revision or request.expected_revision == 0 or not expected:
+        if request.expected_revision == 0 or not expected:
             context.abort(
                 grpc.StatusCode.INVALID_ARGUMENT,
                 "expected revision and affected versions must be supplied together",

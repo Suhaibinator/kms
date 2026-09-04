@@ -2357,14 +2357,14 @@ func (x *RotateSecretBindingKeyRequest) GetNewBindingKey() string {
 
 // PurgeSecretBindingCohort is an admin-only irreversible destruction of the
 // contiguous cohort around anchor_version and bypasses release-reference
-// protection; anchor_version 0 selects current. The optional preview guards
-// must be supplied together and, when present, exactly match a prior preview.
+// protection; anchor_version 0 selects current. The preview guards are
+// required and must exactly match a prior preview.
 type PurgeSecretBindingCohortRequest struct {
 	state                    protoimpl.MessageState `protogen:"open.v1"`
 	Ref                      *ResourceRef           `protobuf:"bytes,1,opt,name=ref,proto3" json:"ref,omitempty"`
 	AnchorVersion            uint64                 `protobuf:"varint,2,opt,name=anchor_version,json=anchorVersion,proto3" json:"anchor_version,omitempty"`
 	BindingKey               string                 `protobuf:"bytes,3,opt,name=binding_key,json=bindingKey,proto3" json:"binding_key,omitempty"`
-	ExpectedRevision         *uint64                `protobuf:"varint,4,opt,name=expected_revision,json=expectedRevision,proto3,oneof" json:"expected_revision,omitempty"`
+	ExpectedRevision         uint64                 `protobuf:"varint,4,opt,name=expected_revision,json=expectedRevision,proto3" json:"expected_revision,omitempty"`
 	ExpectedAffectedVersions []uint64               `protobuf:"varint,5,rep,packed,name=expected_affected_versions,json=expectedAffectedVersions,proto3" json:"expected_affected_versions,omitempty"`
 	unknownFields            protoimpl.UnknownFields
 	sizeCache                protoimpl.SizeCache
@@ -2422,8 +2422,8 @@ func (x *PurgeSecretBindingCohortRequest) GetBindingKey() string {
 }
 
 func (x *PurgeSecretBindingCohortRequest) GetExpectedRevision() uint64 {
-	if x != nil && x.ExpectedRevision != nil {
-		return *x.ExpectedRevision
+	if x != nil {
+		return x.ExpectedRevision
 	}
 	return 0
 }
@@ -9194,15 +9194,14 @@ const file_kms_v1_kms_proto_rawDesc = "" +
 	"\x18expected_current_version\x18\x02 \x01(\x04R\x16expectedCurrentVersion\x12\x1f\n" +
 	"\vbinding_key\x18\x03 \x01(\tR\n" +
 	"bindingKey\x12&\n" +
-	"\x0fnew_binding_key\x18\x04 \x01(\tR\rnewBindingKey\"\x96\x02\n" +
+	"\x0fnew_binding_key\x18\x04 \x01(\tR\rnewBindingKey\"\xfb\x01\n" +
 	"\x1fPurgeSecretBindingCohortRequest\x12%\n" +
 	"\x03ref\x18\x01 \x01(\v2\x13.kms.v1.ResourceRefR\x03ref\x12%\n" +
 	"\x0eanchor_version\x18\x02 \x01(\x04R\ranchorVersion\x12\x1f\n" +
 	"\vbinding_key\x18\x03 \x01(\tR\n" +
-	"bindingKey\x120\n" +
-	"\x11expected_revision\x18\x04 \x01(\x04H\x00R\x10expectedRevision\x88\x01\x01\x12<\n" +
-	"\x1aexpected_affected_versions\x18\x05 \x03(\x04R\x18expectedAffectedVersionsB\x14\n" +
-	"\x12_expected_revision\"\x8d\x01\n" +
+	"bindingKey\x12+\n" +
+	"\x11expected_revision\x18\x04 \x01(\x04R\x10expectedRevision\x12<\n" +
+	"\x1aexpected_affected_versions\x18\x05 \x03(\x04R\x18expectedAffectedVersions\"\x8d\x01\n" +
 	"\x1bSecretBindingCohortResponse\x12%\n" +
 	"\x0eanchor_version\x18\x01 \x01(\x04R\ranchorVersion\x12+\n" +
 	"\x11affected_versions\x18\x02 \x03(\x04R\x10affectedVersions\x12\x1a\n" +
@@ -10176,7 +10175,6 @@ func file_kms_v1_kms_proto_init() {
 	if File_kms_v1_kms_proto != nil {
 		return
 	}
-	file_kms_v1_kms_proto_msgTypes[37].OneofWrappers = []any{}
 	file_kms_v1_kms_proto_msgTypes[50].OneofWrappers = []any{}
 	file_kms_v1_kms_proto_msgTypes[65].OneofWrappers = []any{
 		(*WatchReleaseRequest_Register)(nil),

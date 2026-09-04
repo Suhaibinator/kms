@@ -725,7 +725,7 @@ func (s *server) handlePurgeSecretBindingCohort(w http.ResponseWriter, r *http.R
 		refFields
 		AnchorVersion            uint64   `json:"anchor_version"`
 		BindingKey               string   `json:"binding_key"`
-		ExpectedRevision         *uint64  `json:"expected_revision"`
+		ExpectedRevision         uint64   `json:"expected_revision"`
 		ExpectedAffectedVersions []uint64 `json:"expected_affected_versions"`
 	}
 	if err := decodeJSON(w, r, &body); err != nil {

@@ -658,7 +658,7 @@ func TestBindingMutationUnlockKeysCollapseWithoutMutationOrLeakage(t *testing.T)
 			return err
 		}},
 		{name: "purge", eventType: "secret.binding_cohort.purge", run: func(s *Service, ref domain.Ref, key string, revision uint64) error {
-			_, err := s.PurgeSecretBindingCohort(context.Background(), adminPrincipal(), ref, 1, key, new(revision), []uint64{1})
+			_, err := s.PurgeSecretBindingCohort(context.Background(), adminPrincipal(), ref, 1, key, revision, []uint64{1})
 			return err
 		}},
 	}
@@ -978,7 +978,7 @@ func TestPurgeBindingCohortAdminOnlyAtomicAndRedacted(t *testing.T) {
 
 	storeCalls := 0
 	store.beforeBindingOperation = func(string) { storeCalls++ }
-	if _, err := s.PurgeSecretBindingCohort(ctx, clientPrincipal("app"), ref, 4, "short", nil, nil); !errors.Is(err, domain.ErrPermissionDenied) {
+	if _, err := s.PurgeSecretBindingCohort(ctx, clientPrincipal("app"), ref, 4, "short", 0, nil); !errors.Is(err, domain.ErrPermissionDenied) {
 		t.Fatalf("delegated non-admin purge err = %v", err)
 	}
 	if storeCalls != 0 {
@@ -990,7 +990,7 @@ func TestPurgeBindingCohortAdminOnlyAtomicAndRedacted(t *testing.T) {
 		t.Fatalf("preview: %v", err)
 	}
 	auditsBefore := len(store.audits)
-	result, err := s.PurgeSecretBindingCohort(ctx, adminPrincipal(), ref, 4, testBindingKeyB, new(preview.Revision), preview.AffectedVersions)
+	result, err := s.PurgeSecretBindingCohort(ctx, adminPrincipal(), ref, 4, testBindingKeyB, preview.Revision, preview.AffectedVersions)
 	if err != nil {
 		t.Fatalf("PurgeSecretBindingCohort: %v", err)
 	}
@@ -1041,7 +1041,7 @@ func TestPurgeBindingCohortRollsBackWhenAuditUnavailable(t *testing.T) {
 	}
 	store.auditErr = errors.New("audit unavailable")
 
-	if _, err := s.PurgeSecretBindingCohort(ctx, adminPrincipal(), ref, 1, testBindingKeyA, new(preview.Revision), preview.AffectedVersions); err == nil {
+	if _, err := s.PurgeSecretBindingCohort(ctx, adminPrincipal(), ref, 1, testBindingKeyA, preview.Revision, preview.AffectedVersions); err == nil {
 		t.Fatal("purge succeeded with unavailable transactional audit")
 	}
 	after := store.secrets[ref.String()].versions[1]
@@ -1206,7 +1206,7 @@ func TestPurgeCleanupPendingReturnsCommittedResultAndWakes(t *testing.T) {
 	store.purgeResultErr = storage.ErrPurgeCleanupPending
 	auditsBefore := len(store.audits)
 
-	result, err := s.PurgeSecretBindingCohort(context.Background(), adminPrincipal(), ref, 1, testBindingKeyA, new(preview.Revision), preview.AffectedVersions)
+	result, err := s.PurgeSecretBindingCohort(context.Background(), adminPrincipal(), ref, 1, testBindingKeyA, preview.Revision, preview.AffectedVersions)
 	if err != storage.ErrPurgeCleanupPending {
 		t.Fatalf("error = %#v, want canonical ErrPurgeCleanupPending", err)
 	}

@@ -274,9 +274,9 @@ client.purge_secret_unbound_versions(
 The server proves the supplied current key before rejecting a byte-for-byte
 unchanged replacement, preserving the canonical credential-failure boundary.
 
-Bound-cohort purge guards are optional but paired: supply both fields or
-neither. When supplied, and for every unbound-version purge, the SDK rejects
-an incomplete, zero, unsorted, or duplicate guard before the RPC. Purge is
+Bound-cohort and unbound-version purges both require exact prior-preview
+guards. The SDK rejects an incomplete, zero, unsorted, or duplicate guard
+before the RPC. Purge is
 irreversible and admin-only. See
 [`binding-keys.md`](binding-keys.md).
 

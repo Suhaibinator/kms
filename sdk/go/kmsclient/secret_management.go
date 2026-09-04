@@ -316,38 +316,25 @@ func (c *Client) PurgeSecretUnboundVersions(ctx context.Context, key string, exp
 	return versionSetResult(resp), nil
 }
 
-// PurgeSecretBindingCohort irreversibly destroys the contiguous cohort around
-// anchorVersion. anchorVersion 0 selects current.
+// PurgeSecretBindingCohort irreversibly destroys the exact contiguous cohort
+// returned by a prior PreviewSecretBindingCohort call. anchorVersion 0 selects
+// current.
 // If the logical purge commits but physical database-artifact cleanup remains
 // pending, the method returns a zero result and ErrPurgeCleanupPending; callers
 // must not retry with the discarded binding key.
-func (c *Client) PurgeSecretBindingCohort(ctx context.Context, key string, anchorVersion uint64, bindingKey string) (SecretBindingCohortResult, error) {
-	return c.purgeSecretBindingCohort(ctx, key, anchorVersion, bindingKey, nil)
-}
-
-// PurgeSecretBindingCohortIfUnchanged performs the purge only if the live
-// cohort still matches a prior PreviewSecretBindingCohort result. It has the
-// same zero-result ErrPurgeCleanupPending contract as PurgeSecretBindingCohort.
-func (c *Client) PurgeSecretBindingCohortIfUnchanged(ctx context.Context, key string, anchorVersion uint64, bindingKey string, expected SecretBindingCohortResult) (SecretBindingCohortResult, error) {
+func (c *Client) PurgeSecretBindingCohort(ctx context.Context, key string, anchorVersion uint64, bindingKey string, expected SecretBindingCohortResult) (SecretBindingCohortResult, error) {
 	expected.AffectedVersions = append([]uint64(nil), expected.AffectedVersions...)
 	if err := validateCohortGuard(expected); err != nil {
 		return SecretBindingCohortResult{}, err
 	}
-	return c.purgeSecretBindingCohort(ctx, key, anchorVersion, bindingKey, &expected)
-}
-
-func (c *Client) purgeSecretBindingCohort(ctx context.Context, key string, anchorVersion uint64, bindingKey string, expected *SecretBindingCohortResult) (SecretBindingCohortResult, error) {
 	r, err := c.resolveRef(ctx, key)
 	if err != nil {
 		return SecretBindingCohortResult{}, err
 	}
 	req := &kmsv1.PurgeSecretBindingCohortRequest{
 		Ref: r.resourceProto(), AnchorVersion: anchorVersion, BindingKey: bindingKey,
-	}
-	if expected != nil {
-		revision := expected.Revision
-		req.ExpectedRevision = &revision
-		req.ExpectedAffectedVersions = append([]uint64(nil), expected.AffectedVersions...)
+		ExpectedRevision:         expected.Revision,
+		ExpectedAffectedVersions: append([]uint64(nil), expected.AffectedVersions...),
 	}
 	cctx, cancel := c.callCtx(ctx)
 	defer cancel()

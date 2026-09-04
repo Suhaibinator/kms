@@ -129,9 +129,8 @@ await client.rotateSecretBindingKey("session-signing-key", {
 });
 ```
 
-Bound-cohort purge accepts optional paired prior-preview guards; supply both
-fields or neither. Unbound-version purge requires its exact prior-preview
-guard. When guards are supplied, a purge rejects locally unless its revision is
+Bound-cohort and unbound-version purges both require their exact prior-preview
+guards. A purge rejects locally unless its revision is
 positive and its affected versions are a non-empty, strictly ascending list of positive `bigint` values. The
 server validates the current binding key before rejecting an identical
 replacement, so credential failures retain their canonical behavior.

@@ -274,7 +274,7 @@ func (c *CLI) cmdSecretPurgeBindingCohort(args []string) int {
 		Ref:                      protoRef(ref),
 		AnchorVersion:            *version,
 		BindingKey:               bindingKey,
-		ExpectedRevision:         new(preview.Revision),
+		ExpectedRevision:         preview.GetRevision(),
 		ExpectedAffectedVersions: affected,
 	})
 	if err != nil {

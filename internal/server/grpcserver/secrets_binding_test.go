@@ -145,6 +145,49 @@ func TestSecretBindingTransitionAuditFailureRollsBack(t *testing.T) {
 	}
 }
 
+func TestSecretBindingCohortPurgeRequiresPreviewAndAuditsAffectedVersions(t *testing.T) {
+	env := newTestEnv(t, true)
+	env.store.addNamespace(domain.NamespaceRef{Env: "prod", App: "svc"})
+	client := env.secret()
+	secretRef := pRef("prod", "svc", "purge-guard")
+	if _, err := client.PutSecret(adminCtx(), &kmsv1.PutSecretRequest{Ref: secretRef, Value: []byte("value"), BindingKey: grpcBindingKeyA}); err != nil {
+		t.Fatalf("put: %v", err)
+	}
+	preview, err := client.PreviewSecretBindingCohort(adminCtx(), &kmsv1.PreviewSecretBindingCohortRequest{
+		Ref: secretRef, AnchorVersion: 1, BindingKey: grpcBindingKeyA,
+	})
+	if err != nil {
+		t.Fatalf("preview: %v", err)
+	}
+	if _, err := client.PurgeSecretBindingCohort(adminCtx(), &kmsv1.PurgeSecretBindingCohortRequest{
+		Ref: secretRef, AnchorVersion: 1, BindingKey: grpcBindingKeyA,
+	}); codeOf(err) != codes.InvalidArgument {
+		t.Fatalf("unguarded purge = %v, want InvalidArgument", err)
+	}
+	purged, err := client.PurgeSecretBindingCohort(adminCtx(), &kmsv1.PurgeSecretBindingCohortRequest{
+		Ref: secretRef, AnchorVersion: 1, BindingKey: grpcBindingKeyA,
+		ExpectedRevision: preview.GetRevision(), ExpectedAffectedVersions: preview.GetAffectedVersions(),
+	})
+	if err != nil || !slices.Equal(purged.GetAffectedVersions(), []uint64{1}) {
+		t.Fatalf("purge = %+v, %v", purged, err)
+	}
+	env.store.mu.Lock()
+	audits := slices.Clone(env.store.audit)
+	env.store.mu.Unlock()
+	found := false
+	for _, audit := range audits {
+		if audit.EventType == "secret.binding_cohort.purge" && audit.Decision == "allow" {
+			found = true
+			if audit.ResourceVersion != 1 || audit.Metadata != `{"affected_versions":[1]}` {
+				t.Fatalf("bound purge audit = %+v", audit)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("missing bound purge allow audit")
+	}
+}
+
 func TestUnboundVersionPreviewAndPurge(t *testing.T) {
 	env := newTestEnv(t, true)
 	env.store.addNamespace(domain.NamespaceRef{Env: "prod", App: "svc"})
@@ -242,7 +285,7 @@ func TestBindingCredentialFailuresRemainIndistinguishable(t *testing.T) {
 		{"purge", func(key string) error {
 			_, err := client.PurgeSecretBindingCohort(adminCtx(), &kmsv1.PurgeSecretBindingCohortRequest{
 				Ref: secretRef, AnchorVersion: 1, BindingKey: key,
-				ExpectedRevision: new(guard.Revision), ExpectedAffectedVersions: guard.GetAffectedVersions(),
+				ExpectedRevision: guard.GetRevision(), ExpectedAffectedVersions: guard.GetAffectedVersions(),
 			})
 			return err
 		}},

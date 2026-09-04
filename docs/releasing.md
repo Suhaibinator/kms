@@ -9,9 +9,8 @@ Prerelease tags are intentionally unsupported.
 `0.3.0` is a deliberately greenfield cutover. It replaces server-minted
 client-bound version tokens with operator-owned binding keys. Bind, unbind, and
 key rotation clone current into a new version guarded by its expected version.
-Bound-cohort purge accepts an optional paired exact prior-preview guard, which
-the CLI and console always supply. The separate all-unbound-version
-administrator operation requires its exact paired prior-preview guard.
+Bound-cohort purge and the separate all-unbound-version administrator
+operation both require their exact paired prior-preview guards.
 Protection is immutable exact-version metadata rather than release-entry data.
 Release entries/digests and the protobuf/JSON secret shapes are therefore not
 compatible with `0.2.x`.

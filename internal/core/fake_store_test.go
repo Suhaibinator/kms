@@ -712,13 +712,7 @@ func (f *fakeStore) bindingCohort(ref domain.Ref, anchor uint64, test storage.Se
 }
 
 func validateFakeBindingGuard(guard storage.SecretBindingCASGuard) error {
-	if guard.ExpectedRevision == nil {
-		if len(guard.ExpectedAffectedVersions) != 0 {
-			return domain.Errorf(domain.ErrInvalidArgument, "expected revision and affected versions must be supplied together")
-		}
-		return nil
-	}
-	if *guard.ExpectedRevision == 0 || len(guard.ExpectedAffectedVersions) == 0 {
+	if guard.ExpectedRevision == 0 || len(guard.ExpectedAffectedVersions) == 0 {
 		return domain.Errorf(domain.ErrInvalidArgument, "expected revision and affected versions must be supplied together")
 	}
 	for i, version := range guard.ExpectedAffectedVersions {
@@ -730,10 +724,7 @@ func validateFakeBindingGuard(guard storage.SecretBindingCASGuard) error {
 }
 
 func (f *fakeStore) checkBindingGuard(guard storage.SecretBindingCASGuard, affected []uint64) error {
-	if guard.ExpectedRevision == nil {
-		return nil
-	}
-	if *guard.ExpectedRevision != f.revision || !equalFakeVersions(guard.ExpectedAffectedVersions, affected) {
+	if guard.ExpectedRevision != f.revision || !equalFakeVersions(guard.ExpectedAffectedVersions, affected) {
 		return domain.Errorf(domain.ErrAborted, "secret version set changed")
 	}
 	return nil

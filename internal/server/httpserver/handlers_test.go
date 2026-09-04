@@ -733,6 +733,14 @@ func TestSecretBindingLifecyclePreviewCASRotateAndPurge(t *testing.T) {
 	if got := errCode(t, deniedPurge); got != "permission_denied" {
 		t.Fatalf("delegated purge code = %q", got)
 	}
+	unguardedPurge := e.admin(http.MethodPost, "/api/v1/secrets/binding-cohort/purge", map[string]any{
+		"env": "prod", "app": "gradethis", "key": "cohort",
+		"anchor_version": 2, "binding_key": keyA,
+	})
+	mustStatus(t, unguardedPurge, http.StatusBadRequest)
+	if got := errCode(t, unguardedPurge); got != "invalid_argument" {
+		t.Fatalf("unguarded purge code = %q, want invalid_argument", got)
+	}
 
 	// Any intervening revision makes the confirmation stale and aborts before
 	// destruction, even when the cryptographic cohort itself is unchanged.
@@ -773,6 +781,21 @@ func TestSecretBindingLifecyclePreviewCASRotateAndPurge(t *testing.T) {
 	mustStatus(t, metadata, http.StatusOK)
 	if got := decodeBody(t, metadata)["secret"].(map[string]any)["bound"]; got != true {
 		t.Fatalf("current projection bound = %v, want true", got)
+	}
+	e.store.mu.Lock()
+	audits := slices.Clone(e.store.audit)
+	e.store.mu.Unlock()
+	foundPurgeAudit := false
+	for _, audit := range audits {
+		if audit.EventType == "secret.binding_cohort.purge" && audit.Decision == "allow" {
+			foundPurgeAudit = true
+			if audit.ResourceVersion != 2 || audit.Metadata != `{"affected_versions":[1,2]}` {
+				t.Fatalf("bound purge audit = %+v", audit)
+			}
+		}
+	}
+	if !foundPurgeAudit {
+		t.Fatal("missing bound purge allow audit")
 	}
 }
 

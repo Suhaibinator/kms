@@ -118,8 +118,8 @@ regression where an old release still opens the bound source only with its old
 key while a new release pins the new unbound version with a different digest.
 
 Purge tests cover alternating protection modes, disabled, expired, destroyed,
-missing and corrupt versions; authorization-before-lookup; optional paired
-bound-purge guards and mandatory unbound-purge guards; release-reference bypass;
+missing and corrupt versions; authorization-before-lookup; mandatory exact
+preview guards for both purge operations; release-reference bypass;
 label preservation; tombstone contents;
 rollback, redaction, audit/change events; cleanup pending; CLI/console/HTTP;
 SDK parity; generated contracts; and full language/race suites.

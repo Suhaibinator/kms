@@ -54,7 +54,7 @@ func TestSecretBindingLifecycleModelsCredentialsCASAndTombstones(t *testing.T) {
 		t.Fatalf("current preview = %+v, %v", current, err)
 	}
 	if _, err := server.PurgeSecretBindingCohort(ctx, &kmsv1.PurgeSecretBindingCohortRequest{
-		Ref: ref, AnchorVersion: 3, BindingKey: keyB, ExpectedRevision: new(current.Revision), ExpectedAffectedVersions: current.GetAffectedVersions(),
+		Ref: ref, AnchorVersion: 3, BindingKey: keyB, ExpectedRevision: current.GetRevision(), ExpectedAffectedVersions: current.GetAffectedVersions(),
 	}); err != nil {
 		t.Fatalf("purge: %v", err)
 	}
@@ -137,7 +137,7 @@ func TestPutSecretInheritsAccessTokenAfterEveryGatedVersionIsPurged(t *testing.T
 				}
 				_, err = server.PurgeSecretBindingCohort(ctx, &kmsv1.PurgeSecretBindingCohortRequest{
 					Ref: ref, AnchorVersion: 1, BindingKey: bindingKey,
-					ExpectedRevision: new(preview.Revision), ExpectedAffectedVersions: preview.GetAffectedVersions(),
+					ExpectedRevision: preview.GetRevision(), ExpectedAffectedVersions: preview.GetAffectedVersions(),
 				})
 				return err
 			},

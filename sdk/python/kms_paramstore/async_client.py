@@ -20,7 +20,6 @@ from .cache import Cache
 from .client import (
     _assert_read_identity,
     _assert_ref_identity,
-    _cohort_guard,
     _normalize_selector,
     _required_version_set_guard,
     _secret_binding_cohort_result,
@@ -685,12 +684,12 @@ class AsyncClient:
 
     async def purge_secret_binding_cohort(
         self, key: str, *, anchor_version: int = 0, binding_key: str,
-        expected_revision: Optional[int] = None,
-        expected_affected_versions: Optional[Iterable[int]] = None,
+        expected_revision: int,
+        expected_affected_versions: Iterable[int],
         timeout: Optional[float] = None,
     ) -> SecretBindingCohortResult:
         _valid_uint64(anchor_version, "anchor_version")
-        guard = _cohort_guard(
+        revision, versions = _required_version_set_guard(
             expected_revision, expected_affected_versions,
         )
         ref = await self._resolve_ref(key)
@@ -699,10 +698,8 @@ class AsyncClient:
         try:
             request = kms_pb2.PurgeSecretBindingCohortRequest(
                 ref=to_proto_ref(ref), anchor_version=anchor_version, binding_key=binding_key,
+                expected_revision=revision, expected_affected_versions=versions,
             )
-            if guard is not None:
-                request.expected_revision = guard[0]
-                request.expected_affected_versions.extend(guard[1])
             response = await self._secret_stub.PurgeSecretBindingCohort(
                 request, metadata=self._auth_metadata(), timeout=call_timeout,
             )

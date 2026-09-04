@@ -911,13 +911,13 @@ class Client:
 
     def purge_secret_binding_cohort(
         self, key: str, *, anchor_version: int = 0, binding_key: str,
-        expected_revision: Optional[int] = None,
-        expected_affected_versions: Optional[Iterable[int]] = None,
+        expected_revision: int,
+        expected_affected_versions: Iterable[int],
         timeout: Optional[float] = None,
     ) -> SecretBindingCohortResult:
         """Irreversibly purge a contiguous bound-version cohort."""
         _valid_uint64(anchor_version, "anchor_version")
-        guard = _cohort_guard(
+        revision, versions = _required_version_set_guard(
             expected_revision, expected_affected_versions,
         )
         ref = self._resolve_ref(key)
@@ -926,10 +926,8 @@ class Client:
         try:
             request = kms_pb2.PurgeSecretBindingCohortRequest(
                 ref=to_proto_ref(ref), anchor_version=anchor_version, binding_key=binding_key,
+                expected_revision=revision, expected_affected_versions=versions,
             )
-            if guard is not None:
-                request.expected_revision = guard[0]
-                request.expected_affected_versions.extend(guard[1])
             response = self._secret_stub.PurgeSecretBindingCohort(
                 request, metadata=self._auth_metadata(), timeout=call_timeout,
             )
@@ -1054,18 +1052,6 @@ def _required_version_set_guard(
     if tuple(sorted(set(versions))) != versions:
         raise errors.ConfigError("expected_affected_versions must be sorted and unique")
     return revision, versions
-
-
-def _cohort_guard(
-    expected_revision: Optional[int], expected_affected_versions: Optional[Iterable[int]],
-) -> "Optional[Tuple[int, Tuple[int, ...]]]":
-    if (expected_revision is None) != (expected_affected_versions is None):
-        raise errors.ConfigError(
-            "expected_revision and expected_affected_versions must be supplied together"
-        )
-    if expected_revision is None:
-        return None
-    return _required_version_set_guard(expected_revision, expected_affected_versions or ())
 
 
 def _secret_version_transition_result(response) -> SecretVersionTransitionResult:

@@ -109,7 +109,7 @@ func (h *secretServer) PurgeSecretBindingCohort(ctx context.Context, req *kmsv1.
 	if err != nil {
 		return nil, err
 	}
-	result, err := h.s.svc.PurgeSecretBindingCohort(ctx, pr, refFromProto(req.GetRef()), req.GetAnchorVersion(), req.GetBindingKey(), req.ExpectedRevision, req.GetExpectedAffectedVersions())
+	result, err := h.s.svc.PurgeSecretBindingCohort(ctx, pr, refFromProto(req.GetRef()), req.GetAnchorVersion(), req.GetBindingKey(), req.GetExpectedRevision(), req.GetExpectedAffectedVersions())
 	if err != nil {
 		return nil, h.s.mapErr(ctx, err)
 	}

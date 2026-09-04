@@ -81,7 +81,7 @@ func previewBindingGuard(t *testing.T, st *SQLStore, r domain.Ref, anchor uint64
 		t.Fatalf("PreviewSecretBindingCohort: %v", err)
 	}
 	return SecretBindingCASGuard{
-		ExpectedRevision:         new(preview.Revision),
+		ExpectedRevision:         preview.Revision,
 		ExpectedAffectedVersions: slices.Clone(preview.AffectedVersions),
 	}
 }
@@ -301,7 +301,7 @@ func TestPurgeSecretBindingCohortTombstonesAndBypassesRelease(t *testing.T) {
 	if err := st.db.Model(&changeLogModel{}).Count(&changesBefore).Error; err != nil {
 		t.Fatal(err)
 	}
-	guard := SecretBindingCASGuard{ExpectedRevision: new(preview.Revision), ExpectedAffectedVersions: slices.Clone(preview.AffectedVersions)}
+	guard := SecretBindingCASGuard{ExpectedRevision: preview.Revision, ExpectedAffectedVersions: slices.Clone(preview.AffectedVersions)}
 	purged, err := st.PurgeSecretBindingCohort(ctx, r, 0, guard, bindingKeyTest('B'), SecretBindingPurgeAudit{
 		ActorIdentity: "admin", ActorType: domain.IdentityKindAdmin, SourceIP: "127.0.0.1", UserAgent: "test", RequestID: "request-1",
 	})
@@ -758,7 +758,7 @@ func TestPurgeSecretBindingCohortAuditFailureRollsBack(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, err = st.PurgeSecretBindingCohort(ctx, r, 1, SecretBindingCASGuard{
-		ExpectedRevision: new(preview.Revision), ExpectedAffectedVersions: preview.AffectedVersions,
+		ExpectedRevision: preview.Revision, ExpectedAffectedVersions: preview.AffectedVersions,
 	}, bindingKeyTest('B'), SecretBindingPurgeAudit{ActorIdentity: "admin"})
 	if !errors.Is(err, ErrRequiredAuditUnavailable) {
 		t.Fatalf("purge audit failure = %v, want ErrRequiredAuditUnavailable", err)
@@ -787,7 +787,7 @@ func TestPurgeSecretBindingCohortCASValidation(t *testing.T) {
 	before := []secretVersionModel{rawSecretVersion(t, st, r, 1), rawSecretVersion(t, st, r, 2)}
 
 	for _, guard := range []SecretBindingCASGuard{
-		{ExpectedRevision: new(preview.Revision)},
+		{ExpectedRevision: preview.Revision},
 		{ExpectedAffectedVersions: preview.AffectedVersions},
 	} {
 		if _, err := st.PurgeSecretBindingCohort(ctx, r, 1, guard, bindingKeyTest('B'), SecretBindingPurgeAudit{ActorIdentity: "admin"}); !errors.Is(err, domain.ErrInvalidArgument) {
@@ -799,7 +799,7 @@ func TestPurgeSecretBindingCohortCASValidation(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := st.PurgeSecretBindingCohort(ctx, r, 1, SecretBindingCASGuard{
-		ExpectedRevision: new(preview.Revision), ExpectedAffectedVersions: preview.AffectedVersions,
+		ExpectedRevision: preview.Revision, ExpectedAffectedVersions: preview.AffectedVersions,
 	}, bindingKeyTest('B'), SecretBindingPurgeAudit{ActorIdentity: "admin"}); !errors.Is(err, domain.ErrAborted) {
 		t.Fatalf("stale purge revision = %v", err)
 	}
@@ -808,7 +808,7 @@ func TestPurgeSecretBindingCohortCASValidation(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := st.PurgeSecretBindingCohort(ctx, r, 1, SecretBindingCASGuard{
-		ExpectedRevision: new(preview.Revision), ExpectedAffectedVersions: []uint64{1},
+		ExpectedRevision: preview.Revision, ExpectedAffectedVersions: []uint64{1},
 	}, bindingKeyTest('B'), SecretBindingPurgeAudit{ActorIdentity: "admin"}); !errors.Is(err, domain.ErrAborted) {
 		t.Fatalf("stale purge set = %v", err)
 	}
@@ -823,7 +823,7 @@ func TestPurgeSecretBindingCohortCASValidation(t *testing.T) {
 	}
 }
 
-func TestPurgeSecretBindingCohortAllowsUnguardedOperation(t *testing.T) {
+func TestPurgeSecretBindingCohortRejectsUnguardedOperation(t *testing.T) {
 	st := newStore(t)
 	ctx := context.Background()
 	seedNS(t, st, "prod", "app")
@@ -831,12 +831,12 @@ func TestPurgeSecretBindingCohortAllowsUnguardedOperation(t *testing.T) {
 	putBindingVersion(t, st, r, 'B')
 	putBindingVersion(t, st, r, 'B')
 
-	if _, err := st.PurgeSecretBindingCohort(ctx, r, 1, SecretBindingCASGuard{}, bindingKeyTest('B'), SecretBindingPurgeAudit{ActorIdentity: "admin"}); err != nil {
-		t.Fatalf("unguarded purge = %v", err)
+	if _, err := st.PurgeSecretBindingCohort(ctx, r, 1, SecretBindingCASGuard{}, bindingKeyTest('B'), SecretBindingPurgeAudit{ActorIdentity: "admin"}); !errors.Is(err, domain.ErrInvalidArgument) {
+		t.Fatalf("unguarded purge error = %v, want invalid argument", err)
 	}
 	for _, version := range []uint64{1, 2} {
-		if got := rawSecretVersion(t, st, r, version); got.State != domain.StateDestroyed {
-			t.Fatalf("unguarded purge did not destroy version %d", version)
+		if got := rawSecretVersion(t, st, r, version); got.State == domain.StateDestroyed {
+			t.Fatalf("unguarded purge destroyed version %d", version)
 		}
 	}
 }

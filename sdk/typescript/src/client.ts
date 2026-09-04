@@ -137,8 +137,8 @@ export interface PreviewSecretBindingCohortOptions extends CallOptions {
 }
 
 export interface SecretBindingCohortGuardOptions {
-  readonly expectedRevision?: bigint;
-  readonly expectedAffectedVersions?: readonly bigint[];
+  readonly expectedRevision: bigint;
+  readonly expectedAffectedVersions: readonly bigint[];
 }
 
 export interface RotateSecretBindingKeyOptions extends CallOptions {
@@ -760,7 +760,7 @@ export class KmsClient {
     );
     const anchorVersion = options?.anchorVersion ?? 0n;
     assertUint64(anchorVersion, "purgeSecretBindingCohort anchorVersion");
-    const guards = bindingCohortGuards(options, "purgeSecretBindingCohort");
+    const guards = requiredVersionSetGuards(options, "purgeSecretBindingCohort");
     const ref = await this.#resolveResourceRefForCall(key, options);
     const response = await this.#secretMutation(
       ref,
@@ -1241,24 +1241,6 @@ function requiredVersionSetGuards(
     previous = version;
   }
   return { expectedRevision: revision, expectedAffectedVersions: copied };
-}
-
-function bindingCohortGuards(
-  options: SecretBindingCohortGuardOptions | undefined,
-  operation: string,
-): { readonly expectedRevision?: bigint; readonly expectedAffectedVersions: bigint[] } {
-  const revision = options?.expectedRevision;
-  const versions = options?.expectedAffectedVersions;
-  if (revision === undefined && versions === undefined) return { expectedAffectedVersions: [] };
-  if (revision === undefined || versions === undefined) {
-    throw new ConfigError(
-      `${operation} expectedRevision and expectedAffectedVersions must be supplied together`,
-    );
-  }
-  return requiredVersionSetGuards(
-    { expectedRevision: revision, expectedAffectedVersions: versions },
-    operation,
-  );
 }
 
 /** @internal */

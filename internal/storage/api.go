@@ -100,12 +100,11 @@ type EncryptedPayload struct {
 // callback must be pure computation: no I/O and no calls into storage.
 type SecretBindingTestFunc func(SecretVersionRecord) error
 
-// SecretBindingCASGuard optionally binds a destructive version-set operation
-// to an exact prior preview. The zero value means no guard. Otherwise both
-// fields are required and the versions must be non-empty, positive, sorted,
-// and unique.
+// SecretBindingCASGuard binds a destructive version-set operation to an exact
+// prior preview. Both fields are required and the versions must be non-empty,
+// positive, sorted, and unique.
 type SecretBindingCASGuard struct {
-	ExpectedRevision         *uint64
+	ExpectedRevision         uint64
 	ExpectedAffectedVersions []uint64
 }
 
@@ -354,8 +353,8 @@ type Store interface {
 	// PreviewSecretBindingCohort discovers the contiguous cohort around anchor
 	// (0 = current) and returns the coherent global storage revision.
 	PreviewSecretBindingCohort(ctx context.Context, ref domain.Ref, anchor uint64, test SecretBindingTestFunc) (SecretBindingResult, error)
-	// PurgeSecretBindingCohort rediscovers the cohort and, when the optional
-	// paired preview guard is supplied, CAS-checks it against that preview,
+	// PurgeSecretBindingCohort rediscovers the cohort and CAS-checks the required
+	// paired preview guard against that exact preview,
 	// writes minimal tombstones, and appends its changelog and allow-audit rows
 	// in the same transaction. It intentionally bypasses release-pin guards.
 	// Success also requires a verified WAL truncate. If external use blocks that

@@ -440,7 +440,7 @@ func (s *Service) transitionSecretProtection(ctx context.Context, pr Principal, 
 
 // PurgeSecretBindingCohort irreversibly destroys the contiguous cohort around
 // anchor. It is admin-only regardless of delegated secret:destroy policy.
-func (s *Service) PurgeSecretBindingCohort(ctx context.Context, pr Principal, ref domain.Ref, anchor uint64, bindingKey string, expectedRevision *uint64, expectedAffected []uint64) (SecretBindingCohortResult, error) {
+func (s *Service) PurgeSecretBindingCohort(ctx context.Context, pr Principal, ref domain.Ref, anchor uint64, bindingKey string, expectedRevision uint64, expectedAffected []uint64) (SecretBindingCohortResult, error) {
 	if err := validateRef(ref); err != nil {
 		s.auditRef(ctx, pr, "secret.binding_cohort.purge", domain.ResourceSecret, ref, anchor, "error", nil)
 		return SecretBindingCohortResult{}, err

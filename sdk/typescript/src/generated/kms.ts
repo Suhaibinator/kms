@@ -349,14 +349,14 @@ export interface RotateSecretBindingKeyRequest {
 /**
  * PurgeSecretBindingCohort is an admin-only irreversible destruction of the
  * contiguous cohort around anchor_version and bypasses release-reference
- * protection; anchor_version 0 selects current. The optional preview guards
- * must be supplied together and, when present, exactly match a prior preview.
+ * protection; anchor_version 0 selects current. The preview guards are
+ * required and must exactly match a prior preview.
  */
 export interface PurgeSecretBindingCohortRequest {
   ref: ResourceRef | undefined;
   anchorVersion: bigint;
   bindingKey: string;
-  expectedRevision?: bigint | undefined;
+  expectedRevision: bigint;
   expectedAffectedVersions: bigint[];
 }
 
@@ -5896,13 +5896,7 @@ export const RotateSecretBindingKeyRequest: MessageFns<RotateSecretBindingKeyReq
 };
 
 function createBasePurgeSecretBindingCohortRequest(): PurgeSecretBindingCohortRequest {
-  return {
-    ref: undefined,
-    anchorVersion: 0n,
-    bindingKey: "",
-    expectedRevision: undefined,
-    expectedAffectedVersions: [],
-  };
+  return { ref: undefined, anchorVersion: 0n, bindingKey: "", expectedRevision: 0n, expectedAffectedVersions: [] };
 }
 
 export const PurgeSecretBindingCohortRequest: MessageFns<PurgeSecretBindingCohortRequest> = {
@@ -5919,7 +5913,7 @@ export const PurgeSecretBindingCohortRequest: MessageFns<PurgeSecretBindingCohor
     if (message.bindingKey !== "") {
       writer.uint32(26).string(message.bindingKey);
     }
-    if (message.expectedRevision !== undefined) {
+    if (message.expectedRevision !== 0n) {
       if (BigInt.asUintN(64, message.expectedRevision) !== message.expectedRevision) {
         throw new globalThis.Error("value provided for field message.expectedRevision of type uint64 too large");
       }
@@ -6030,7 +6024,7 @@ export const PurgeSecretBindingCohortRequest: MessageFns<PurgeSecretBindingCohor
         ? BigInt(object.expectedRevision)
         : isSet(object.expected_revision)
         ? BigInt(object.expected_revision)
-        : undefined,
+        : 0n,
       expectedAffectedVersions: globalThis.Array.isArray(object?.expectedAffectedVersions)
         ? object.expectedAffectedVersions.map((e: any) => BigInt(e))
         : globalThis.Array.isArray(object?.expected_affected_versions)
@@ -6050,7 +6044,7 @@ export const PurgeSecretBindingCohortRequest: MessageFns<PurgeSecretBindingCohor
     if (message.bindingKey !== "") {
       obj.bindingKey = message.bindingKey;
     }
-    if (message.expectedRevision !== undefined) {
+    if (message.expectedRevision !== 0n) {
       obj.expectedRevision = message.expectedRevision.toString();
     }
     if (message.expectedAffectedVersions?.length) {
@@ -6071,7 +6065,7 @@ export const PurgeSecretBindingCohortRequest: MessageFns<PurgeSecretBindingCohor
     message.bindingKey = object.bindingKey ?? "";
     message.expectedRevision = (object.expectedRevision !== undefined && object.expectedRevision !== null)
       ? BigInt(object.expectedRevision)
-      : undefined;
+      : 0n;
     message.expectedAffectedVersions = object.expectedAffectedVersions?.map((e) => BigInt(e)) || [];
     return message;
   },
@@ -18984,5 +18978,5 @@ export interface MessageFns<T> {
   fromPartial(object: DeepPartial<T>): T;
 }
 
-// source-sha256: 33ea11d409aacc19205d81d17771d7c053938ce66dbc8cb2df50a0f21108b69f
+// source-sha256: a0758738d88e8da874eccf8e7653ebd8e50319fe129bca9921971751a7e9bb24
 // generation-sha256: c3e69d40e38671d5381cfa50a679b45232adc3ecd3df927c51285f1901aa09ef

@@ -1002,14 +1002,8 @@ func (s *Server) bindingCohortLocked(display string, requested uint64, bindingKe
 	return anchor, affected, nil
 }
 
-func validateFakeCohortGuard(expectedRevision *uint64, expectedVersions []uint64, revision uint64, actual []uint64) error {
-	if expectedRevision == nil {
-		if len(expectedVersions) != 0 {
-			return status.Error(codes.InvalidArgument, "expected revision and affected versions must be supplied together")
-		}
-		return nil
-	}
-	if *expectedRevision == 0 || len(expectedVersions) == 0 {
+func validateFakeCohortGuard(expectedRevision uint64, expectedVersions []uint64, revision uint64, actual []uint64) error {
+	if expectedRevision == 0 || len(expectedVersions) == 0 {
 		return status.Error(codes.InvalidArgument, "expected revision and affected versions must be supplied together")
 	}
 	for index, version := range expectedVersions {
@@ -1017,7 +1011,7 @@ func validateFakeCohortGuard(expectedRevision *uint64, expectedVersions []uint64
 			return status.Error(codes.InvalidArgument, "expected affected versions must be sorted and unique")
 		}
 	}
-	if *expectedRevision != revision || len(expectedVersions) != len(actual) {
+	if expectedRevision != revision || len(expectedVersions) != len(actual) {
 		return status.Error(codes.Aborted, "secret version set changed")
 	}
 	for index := range actual {

@@ -211,7 +211,7 @@ The matching HTTP endpoints are:
 | Unbind | `POST /api/v1/secrets/unbind` | `expected_current_version`, `binding_key` |
 | Rotate | `POST /api/v1/secrets/binding-key/rotate` | `expected_current_version`, `binding_key`, `new_binding_key` |
 | Preview bound cohort | `POST /api/v1/secrets/binding-cohort/preview` | `anchor_version`, `binding_key` |
-| Purge bound cohort | `POST /api/v1/secrets/binding-cohort/purge` | `anchor_version`, `binding_key`, and optional paired `expected_revision`, `expected_affected_versions`; when supplied, they must match the exact prior preview (the CLI and console always supply them) |
+| Purge bound cohort | `POST /api/v1/secrets/binding-cohort/purge` | `anchor_version`, `binding_key`, and required `expected_revision`, `expected_affected_versions`; they must match the exact prior preview |
 | Preview unbound versions | `POST /api/v1/secrets/unbound-versions/preview` | none |
 | Purge unbound versions | `POST /api/v1/secrets/unbound-versions/purge` | required `expected_revision`, `expected_affected_versions` |
 

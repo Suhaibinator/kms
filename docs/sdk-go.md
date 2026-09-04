@@ -177,10 +177,9 @@ The client also exposes `GetSecretMetadata`, `BindSecret`, `UnbindSecret`,
 `PurgeSecretUnboundVersions`. Bind, unbind, and rotation require the current
 version observed by the caller and return `SecretVersionTransitionResult`;
 each creates one new current version and leaves the source unchanged.
-`PurgeSecretBindingCohort` performs the legacy unguarded bound-cohort purge;
-`PurgeSecretBindingCohortIfUnchanged` accepts the exact
-`SecretBindingCohortResult` returned by its preview. Unbound purge always
-requires the exact `SecretVersionSetResult` returned by its preview. Purge is
+`PurgeSecretBindingCohort` requires the exact `SecretBindingCohortResult`
+returned by its preview. Unbound purge likewise requires the exact
+`SecretVersionSetResult` returned by its preview. Purge is
 irreversible and requires an administrator. The server proves
 the supplied current key before rejecting a byte-for-byte unchanged rotation
 replacement, preserving the canonical credential-failure boundary.

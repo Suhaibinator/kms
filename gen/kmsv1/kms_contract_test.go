@@ -66,8 +66,8 @@ func TestV03WireFieldLayouts(t *testing.T) {
 
 	for _, name := range []protoreflect.Name{"PurgeSecretBindingCohortRequest", "PurgeSecretUnboundVersionsRequest"} {
 		descriptor := messages.ByName(name)
-		if field := descriptor.Fields().ByName("expected_revision"); field == nil || field.Kind() != protoreflect.Uint64Kind {
-			t.Errorf("%s.expected_revision must be uint64", descriptor.Name())
+		if field := descriptor.Fields().ByName("expected_revision"); field == nil || field.Kind() != protoreflect.Uint64Kind || field.Cardinality() != protoreflect.Optional || field.HasPresence() {
+			t.Errorf("%s.expected_revision must be a singular uint64 without presence", descriptor.Name())
 		}
 		if field := descriptor.Fields().ByName("expected_affected_versions"); field == nil || field.Cardinality() != protoreflect.Repeated {
 			t.Errorf("%s.expected_affected_versions must be repeated", descriptor.Name())

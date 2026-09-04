@@ -186,7 +186,7 @@ func TestMetricsBindingLifecyclePersistedAudits(t *testing.T) {
 	if err != nil {
 		t.Fatalf("purge preview: %v", err)
 	}
-	if _, err := s.PurgeSecretBindingCohort(ctx, adminPrincipal(), purgeRef, 1, testBindingKeyA, new(preview.Revision), preview.AffectedVersions); err != nil {
+	if _, err := s.PurgeSecretBindingCohort(ctx, adminPrincipal(), purgeRef, 1, testBindingKeyA, preview.Revision, preview.AffectedVersions); err != nil {
 		t.Fatalf("purge: %v", err)
 	}
 
@@ -214,7 +214,7 @@ func TestMetricsBindingPurgeCleanupPendingCountsCommittedAudit(t *testing.T) {
 	}
 	store.purgeResultErr = storage.ErrPurgeCleanupPending
 
-	if _, err := s.PurgeSecretBindingCohort(context.Background(), adminPrincipal(), ref, 1, testBindingKeyA, new(preview.Revision), preview.AffectedVersions); !errors.Is(err, storage.ErrPurgeCleanupPending) {
+	if _, err := s.PurgeSecretBindingCohort(context.Background(), adminPrincipal(), ref, 1, testBindingKeyA, preview.Revision, preview.AffectedVersions); !errors.Is(err, storage.ErrPurgeCleanupPending) {
 		t.Fatalf("purge cleanup pending = %v", err)
 	}
 	expectCount(t, m, "audit:secret.binding_cohort.purge:allow", 1)
