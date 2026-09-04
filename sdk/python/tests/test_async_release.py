@@ -149,6 +149,8 @@ class _AsyncClient:
         self.bound = False
         self.has_access_token = True
         self.state = "enabled"
+        self.destroyed_at_unix_ms = 0
+        self.expires_at_unix_ms = 0
 
     async def _resolve_namespace_arg(self, namespace):
         return namespace or NamespaceRef("prod", "app")
@@ -195,6 +197,8 @@ class _AsyncClient:
             versions=tuple(
                 kms_paramstore.models.SecretVersion(
                     version=version, state=self.state, bound=self.bound,
+                    destroyed_at_unix_ms=self.destroyed_at_unix_ms,
+                    expires_at_unix_ms=self.expires_at_unix_ms,
                     has_access_token=self.has_access_token,
                 ) for version in range(1, 10)
             ),
@@ -306,6 +310,19 @@ def test_async_bound_loader_resolves_independent_credentials_and_missing_key_rej
             await missing.run(lambda _cancel, _snapshot: _Prepared())
         assert caught.value.category == "token_unavailable"
         assert missing_client.binding_keys == []
+
+    asyncio.run(scenario())
+
+
+def test_async_loader_rejects_enabled_version_with_destroyed_timestamp(monkeypatch):
+    async def scenario():
+        loader, _stub, client = _loader(monkeypatch, _release(1, 10))
+        client.destroyed_at_unix_ms = 1
+        with pytest.raises(ReleaseCandidateError) as caught:
+            await loader.run(lambda _cancel, _snapshot: _Prepared())
+        assert caught.value.category == "resolution_failed"
+        assert client.tokens == []
+        assert client.binding_keys == []
 
     asyncio.run(scenario())
 

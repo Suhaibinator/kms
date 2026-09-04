@@ -91,6 +91,7 @@ class _SecretStub:
         self.bound = False
         self.has_access_token = True
         self.state = "enabled"
+        self.destroyed_at_unix_ms = 0
         self.expires_at_unix_ms = 0
         self.expected_binding_key = "local-binding-key"
         self.metadata_calls = 0
@@ -102,6 +103,7 @@ class _SecretStub:
                 ref=request.ref, content_type="string", labels={"current": 1},
                 versions=[kms_pb2.SecretVersionInfo(
                     version=version, state=self.state,
+                    destroyed_at_unix_ms=self.destroyed_at_unix_ms,
                     expires_at_unix_ms=self.expires_at_unix_ms,
                     bound=self.bound, has_access_token=self.has_access_token,
                 ) for version in range(1, 10)],
@@ -451,6 +453,14 @@ def test_wrong_binding_key_and_unavailable_live_version_are_resolution_failures(
     with pytest.raises(ReleaseStartupError) as disabled:
         loader.run(lambda _cancel, _snapshot: _Prepared())
     assert getattr(disabled.value, "category") == "resolution_failed"
+    assert client._secret_stub.tokens == []
+
+    loader, _stub, client = _loader(monkeypatch, _release(1, 10))
+    client._secret_stub.state = "enabled"
+    client._secret_stub.destroyed_at_unix_ms = 1
+    with pytest.raises(ReleaseStartupError) as destroyed:
+        loader.run(lambda _cancel, _snapshot: _Prepared())
+    assert getattr(destroyed.value, "category") == "resolution_failed"
     assert client._secret_stub.tokens == []
 
 

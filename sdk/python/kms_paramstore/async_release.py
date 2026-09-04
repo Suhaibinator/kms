@@ -555,7 +555,11 @@ class AsyncReleaseLoader:
         ):
             raise _CandidateFailure("version_mismatch")
         matches = tuple(item for item in live.versions if item.version == entry.version)
-        if len(matches) != 1 or matches[0].state != "enabled":
+        if (
+            len(matches) != 1
+            or matches[0].state != "enabled"
+            or matches[0].destroyed_at_unix_ms != 0
+        ):
             raise _CandidateFailure("resolution_failed")
         exact = matches[0]
         if exact.expires_at_unix_ms > 0 and exact.expires_at_unix_ms <= int(time.time() * 1000):
