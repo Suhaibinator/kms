@@ -395,10 +395,10 @@ Deliver these paths to the consuming application through its normal secret
 and configuration mechanism:
 
 ```text
-KMS_ENDPOINT     = kms.internal:8443
-KMS_CLIENT_CERT  = /run/credentials/gradethis-be.crt
-KMS_CLIENT_KEY   = /run/credentials/gradethis-be.key
-KMS_SERVER_CA    = /etc/ssl/kms/server-ca.crt
+KMS_ENDPOINT         = kms.internal:8443
+KMS_CLIENT_CERT_FILE = /run/credentials/gradethis-be.crt
+KMS_CLIENT_KEY_FILE  = /run/credentials/gradethis-be.key
+KMS_CA_FILE          = /etc/ssl/kms/server-ca.crt
 ```
 
 The client certificate is public identity material, but its private key is a
@@ -406,7 +406,7 @@ secret and should be readable only by the application account. The server CA
 bundle is public trust configuration and must come from the operator or the
 organization's PKI. Do **not** deploy the KMS server private key, the built-in
 client-issuing CA, or an admin token to the application. In particular, do not
-substitute output from `admin ca show` for `KMS_SERVER_CA`.
+substitute output from `admin ca show` for `KMS_CA_FILE`.
 
 ### 4. Configure the SDK
 
@@ -421,9 +421,9 @@ Go ([full guide](sdk-go.md)):
 client, err := kmsclient.NewClient(kmsclient.Config{
     Endpoint: os.Getenv("KMS_ENDPOINT"),
     TLS: kmsclient.MTLSFromFiles(
-        os.Getenv("KMS_CLIENT_CERT"),
-        os.Getenv("KMS_CLIENT_KEY"),
-        os.Getenv("KMS_SERVER_CA"),
+        os.Getenv("KMS_CLIENT_CERT_FILE"),
+        os.Getenv("KMS_CLIENT_KEY_FILE"),
+        os.Getenv("KMS_CA_FILE"),
     ),
 })
 if err != nil {
@@ -441,9 +441,9 @@ from kms_paramstore import Client, mtls_from_files
 with Client(
     os.environ["KMS_ENDPOINT"],
     tls=mtls_from_files(
-        os.environ["KMS_CLIENT_CERT"],
-        os.environ["KMS_CLIENT_KEY"],
-        os.environ["KMS_SERVER_CA"],
+        os.environ["KMS_CLIENT_CERT_FILE"],
+        os.environ["KMS_CLIENT_KEY_FILE"],
+        os.environ["KMS_CA_FILE"],
     ),
 ) as client:
     identity = client.who_am_i()  # verifies TLS, the client cert, and enrollment
@@ -457,9 +457,9 @@ import { createClient, mtlsFromFiles } from "@suhaibinator/kms";
 const client = createClient({
   endpoint: process.env.KMS_ENDPOINT!,
   credentials: mtlsFromFiles(
-    process.env.KMS_CLIENT_CERT!,
-    process.env.KMS_CLIENT_KEY!,
-    process.env.KMS_SERVER_CA!,
+    process.env.KMS_CLIENT_CERT_FILE!,
+    process.env.KMS_CLIENT_KEY_FILE!,
+    process.env.KMS_CA_FILE!,
   ),
 });
 

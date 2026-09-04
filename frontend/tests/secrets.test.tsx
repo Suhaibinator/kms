@@ -442,7 +442,11 @@ describe("protected secret reveal", () => {
     );
 
     render(<SecretDetailPage />);
-    fireEvent.click(await screen.findByRole("button", { name: "Reveal secret" }));
+    const revealButton = await screen.findByRole("button", { name: "Reveal secret" });
+    const revealNotice = screen.getByText(/Revealing decrypts the selected version/);
+    expect(revealNotice).toHaveTextContent("A binding key, when required");
+    expect(revealNotice).not.toHaveTextContent("access token");
+    fireEvent.click(revealButton);
     let dialog = screen.getByRole("dialog", { name: "Reveal secret value?" });
     let bindingInput = within(dialog).getByLabelText("Binding key");
     const confirm = within(dialog).getByRole("button", { name: "Reveal" });
@@ -476,6 +480,62 @@ describe("protected secret reveal", () => {
       "Revealed version 1",
       "Recorded in the audit log.",
     );
+  });
+
+  it.each([
+    ["environment", { env: "staging" }],
+    ["application", { app: "other-app" }],
+    ["key", { key: "other-secret" }],
+    ["version", { version: 2 }],
+  ])("rejects a reveal response with a mismatched %s", async (_field, patch) => {
+    mocks.router.query = { env: SECRET.env, app: SECRET.app, key: SECRET.key };
+    vi.spyOn(api, "secretMetadata").mockResolvedValue({ secret: SECRET });
+    vi.spyOn(api, "revealSecret").mockResolvedValue({
+      env: SECRET.env,
+      app: SECRET.app,
+      key: SECRET.key,
+      version: 1,
+      value_base64: "d3Jvbmctc2VjcmV0LXJlc3BvbnNl",
+      content_type: "text/plain",
+      ...patch,
+    });
+
+    render(<SecretDetailPage />);
+    fireEvent.click(await screen.findByRole("button", { name: "Reveal secret" }));
+    fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Reveal" }));
+
+    await waitFor(() => expect(mocks.toast.error).toHaveBeenCalledTimes(1));
+    expect(mocks.toast.error.mock.calls[0][0]).toEqual(
+      new Error("Reveal response did not match the requested secret version."),
+    );
+    expect(mocks.toast.success).not.toHaveBeenCalled();
+    expect(screen.queryByRole("button", { name: "Show value" })).not.toBeInTheDocument();
+  });
+
+  it("does not offer administrator reveal controls to a client identity", async () => {
+    const protectedSecret: SecretMetadata = {
+      ...SECRET,
+      bound: true,
+      versions: [{ ...SECRET.versions[0], bound: true }],
+    };
+    mocks.identity = { name: "app", kind: "client", namespace: null };
+    mocks.router.query = {
+      env: protectedSecret.env,
+      app: protectedSecret.app,
+      key: protectedSecret.key,
+    };
+    vi.spyOn(api, "secretMetadata").mockResolvedValue({ secret: protectedSecret });
+    const reveal = vi.spyOn(api, "revealSecret");
+
+    render(<SecretDetailPage />);
+
+    expect(
+      await screen.findByText(/Secret values can be revealed only by an administrator/),
+    ).toBeVisible();
+    expect(screen.queryByRole("button", { name: "Reveal secret" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Reveal" })).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Binding key")).not.toBeInTheDocument();
+    expect(reveal).not.toHaveBeenCalled();
   });
 
   it("discards an in-flight reveal and closes its dialog when the active secret changes", async () => {

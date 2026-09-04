@@ -43,6 +43,9 @@ describe("sdk snippets", () => {
     expect(go).toContain('Name: "runtime"');
     expect(go).toContain('candidate.Parameter("rate_limits")');
     expect(go).toContain("kmsclient.MTLSFromFiles(");
+    expect(go).toContain('os.Getenv("KMS_CLIENT_CERT_FILE")');
+    expect(go).toContain('os.Getenv("KMS_CLIENT_KEY_FILE")');
+    expect(go).toContain('os.Getenv("KMS_CA_FILE")');
     expect(go).not.toContain("Insecure");
 
     const ts = tsSnippet(input);
@@ -51,6 +54,9 @@ describe("sdk snippets", () => {
     expect(ts).toContain('createReleaseLoader({ name: "runtime" })');
     expect(ts).toContain('snapshot.parameter("rate_limits")');
     expect(ts).toContain("mtlsFromFiles(");
+    expect(ts).toContain("process.env.KMS_CLIENT_CERT_FILE!");
+    expect(ts).toContain("process.env.KMS_CLIENT_KEY_FILE!");
+    expect(ts).toContain("process.env.KMS_CA_FILE!");
   });
 
   it("opts into cleartext with a warning comment when TLS is off, and escapes quotes", () => {

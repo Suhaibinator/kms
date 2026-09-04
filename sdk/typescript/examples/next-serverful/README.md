@@ -9,9 +9,9 @@ Copy the files into a serverful Next.js application, adjust the aliases and
 validation for the application's release, and set:
 
 - `KMS_ENDPOINT`
-- `KMS_CLIENT_CERT`
-- `KMS_CLIENT_KEY`
-- `KMS_SERVER_CA`
+- `KMS_CLIENT_CERT_FILE`
+- `KMS_CLIENT_KEY_FILE`
+- `KMS_CA_FILE`
 - optionally `KMS_PASSWORD_PEPPER_TOKEN` for a token-protected release secret
 
 The deployment must use the Node runtime. Static export and Edge deployments

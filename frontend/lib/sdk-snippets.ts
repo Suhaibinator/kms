@@ -42,9 +42,9 @@ export function goSnippet(input: SnippetInput): string {
   const name = identifier(alias);
   const transport = input.tls
     ? `    TLS: kmsclient.MTLSFromFiles(
-        os.Getenv("KMS_CLIENT_CERT"),
-        os.Getenv("KMS_CLIENT_KEY"),
-        os.Getenv("KMS_SERVER_CA"),
+        os.Getenv("KMS_CLIENT_CERT_FILE"),
+        os.Getenv("KMS_CLIENT_KEY_FILE"),
+        os.Getenv("KMS_CA_FILE"),
     ),`
     : `    // The server reports TLS disabled: cleartext is for a loopback dev server only.
     Insecure: true,
@@ -84,9 +84,9 @@ export function tsSnippet(input: SnippetInput): string {
   const name = identifier(alias);
   const credentials = input.tls
     ? `  credentials: mtlsFromFiles(
-    process.env.KMS_CLIENT_CERT!,
-    process.env.KMS_CLIENT_KEY!,
-    process.env.KMS_SERVER_CA!,
+    process.env.KMS_CLIENT_CERT_FILE!,
+    process.env.KMS_CLIENT_KEY_FILE!,
+    process.env.KMS_CA_FILE!,
   ),`
     : `  // The server reports TLS disabled: cleartext is for a loopback dev server only.
   insecure: true,

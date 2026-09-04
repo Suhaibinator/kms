@@ -56,6 +56,7 @@ import type { SecretBindingCohortResponse, SecretMetadata, SecretVersion } from 
 import { validateBindingKey, validateMetadataJson } from "@/lib/validation";
 
 const REVEAL_SECONDS = 30;
+const REVEAL_RESPONSE_MISMATCH = "Reveal response did not match the requested secret version.";
 
 // Ephemeral reveal state. This is the only place a secret plaintext lives in
 // the client, and only inside component state — never logged or toasted.
@@ -182,6 +183,19 @@ export default function SecretDetailPage() {
     };
   }, [ready, hasRef, load, request, revealRequest]);
 
+  // Reveal is an administrator-only break-glass operation. If the active
+  // identity changes, immediately discard both pending credentials and any
+  // plaintext that was revealed by the previous administrator session.
+  useEffect(() => {
+    if (isAdmin) return;
+    revealRequest.abort();
+    setRevealTarget(null);
+    setRevealBindingKey("");
+    setRevealBusy(false);
+    setRevealed(null);
+    setValueVisible(false);
+  }, [isAdmin, revealRequest]);
+
   // Auto-hide countdown for the revealed value.
   useEffect(() => {
     if (!revealed) {
@@ -205,7 +219,7 @@ export default function SecretDetailPage() {
 
   const doReveal = useCallback(
     async (version: number) => {
-      if (!hasRef) return;
+      if (!hasRef || !isAdmin) return;
       const run = revealRequest.begin();
       const versionInfo = secret?.versions.find((candidate) => candidate.version === version);
       const bindingKey = versionInfo?.bound ? revealBindingKey : undefined;
@@ -218,6 +232,14 @@ export default function SecretDetailPage() {
           signal: run.signal,
         });
         if (!run.current || activeRefKey.current !== refKey) return;
+        if (
+          res.env !== ref.env ||
+          res.app !== ref.app ||
+          res.key !== ref.key ||
+          res.version !== version
+        ) {
+          throw new Error(REVEAL_RESPONSE_MISMATCH);
+        }
         setRevealed({
           version: res.version,
           valueBase64: res.value_base64,
@@ -237,13 +259,17 @@ export default function SecretDetailPage() {
         }
       }
     },
-    [hasRef, ref, refKey, revealBindingKey, revealRequest, secret?.versions, toast],
+    [hasRef, isAdmin, ref, refKey, revealBindingKey, revealRequest, secret?.versions, toast],
   );
 
-  const openReveal = useCallback((version: number) => {
-    setRevealBindingKey("");
-    setRevealTarget(version);
-  }, []);
+  const openReveal = useCallback(
+    (version: number) => {
+      if (!isAdmin) return;
+      setRevealBindingKey("");
+      setRevealTarget(version);
+    },
+    [isAdmin],
+  );
 
   const closeReveal = useCallback(() => {
     setRevealBindingKey("");
@@ -460,7 +486,12 @@ export default function SecretDetailPage() {
       {/* Reveal */}
       <div className="card">
         <div className="card-title">Secret value</div>
-        {revealed ? (
+        {!isAdmin ? (
+          <div className="warn-panel">
+            Secret values can be revealed only by an administrator. Application identities may
+            resolve them through the SDK with the exact-version credentials they require.
+          </div>
+        ) : revealed ? (
           <div className="reveal-box">
             <div className="between mb-2">
               <div className="row-wrap">
@@ -521,9 +552,9 @@ export default function SecretDetailPage() {
         ) : (
           <div>
             <div className="warn-panel mb-4">
-              Revealing decrypts the selected version and records an audit event. Any required
-              access token or binding key is sent only in that request and is not stored by the
-              console. The value auto-hides after {REVEAL_SECONDS} seconds.
+              Revealing decrypts the selected version and records an audit event. A binding key,
+              when required, is sent only in that request and is not stored by the console. The
+              value auto-hides after {REVEAL_SECONDS} seconds.
             </div>
             <div className="row-wrap">
               <label className="field-label" htmlFor="reveal-version">
@@ -578,6 +609,7 @@ export default function SecretDetailPage() {
                       key={v.version}
                       v={v}
                       isCurrent={v.version === current}
+                      canReveal={isAdmin}
                       canPurge={isAdmin}
                       onReveal={openReveal}
                       onConfirm={setConfirm}
@@ -716,6 +748,7 @@ export default function SecretDetailPage() {
 function VersionRow({
   v,
   isCurrent,
+  canReveal,
   canPurge,
   onReveal,
   onConfirm,
@@ -723,6 +756,7 @@ function VersionRow({
 }: {
   v: SecretVersion;
   isCurrent: boolean;
+  canReveal: boolean;
   canPurge: boolean;
   onReveal: (version: number) => void;
   onConfirm: (
@@ -763,7 +797,7 @@ function VersionRow({
       </td>
       <td>
         <div className="row-actions">
-          {v.state === "enabled" ? (
+          {canReveal && v.state === "enabled" ? (
             <Button variant="outline" size="sm" onClick={() => onReveal(v.version)}>
               Reveal
             </Button>

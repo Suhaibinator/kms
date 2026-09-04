@@ -50,9 +50,9 @@ import { createClient, mtlsFromFiles } from "@suhaibinator/kms";
 const client = createClient({
   endpoint: process.env.KMS_ENDPOINT ?? "kms.internal:8443",
   credentials: mtlsFromFiles(
-    process.env.KMS_CLIENT_CERT!,
-    process.env.KMS_CLIENT_KEY!,
-    process.env.KMS_SERVER_CA!,
+    process.env.KMS_CLIENT_CERT_FILE!,
+    process.env.KMS_CLIENT_KEY_FILE!,
+    process.env.KMS_CA_FILE!,
   ),
   // Optional when the authenticated identity is bound to a namespace.
   namespace: process.env.KMS_NAMESPACE,

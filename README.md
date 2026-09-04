@@ -494,9 +494,9 @@ Go ([full guide](docs/sdk-go.md)):
 client, err := kmsclient.NewClient(kmsclient.Config{
     Endpoint: os.Getenv("KMS_ENDPOINT"),
     TLS: kmsclient.MTLSFromFiles(
-        os.Getenv("KMS_CLIENT_CERT"),
-        os.Getenv("KMS_CLIENT_KEY"),
-        os.Getenv("KMS_SERVER_CA"),
+        os.Getenv("KMS_CLIENT_CERT_FILE"),
+        os.Getenv("KMS_CLIENT_KEY_FILE"),
+        os.Getenv("KMS_CA_FILE"),
     ),
 })
 if err != nil {
@@ -514,9 +514,9 @@ from kms_paramstore import Client, mtls_from_files
 with Client(
     os.environ["KMS_ENDPOINT"],
     tls=mtls_from_files(
-        os.environ["KMS_CLIENT_CERT"],
-        os.environ["KMS_CLIENT_KEY"],
-        os.environ["KMS_SERVER_CA"],
+        os.environ["KMS_CLIENT_CERT_FILE"],
+        os.environ["KMS_CLIENT_KEY_FILE"],
+        os.environ["KMS_CA_FILE"],
     ),
 ) as client:
     identity = client.who_am_i()  # verifies TLS, the client cert, and enrollment
@@ -530,9 +530,9 @@ import { createClient, mtlsFromFiles } from "@suhaibinator/kms";
 const client = createClient({
   endpoint: process.env.KMS_ENDPOINT!,
   credentials: mtlsFromFiles(
-    process.env.KMS_CLIENT_CERT!,
-    process.env.KMS_CLIENT_KEY!,
-    process.env.KMS_SERVER_CA!,
+    process.env.KMS_CLIENT_CERT_FILE!,
+    process.env.KMS_CLIENT_KEY_FILE!,
+    process.env.KMS_CA_FILE!,
   ),
 });
 
