@@ -10,6 +10,7 @@ import (
 
 	kmsv1 "github.com/Suhaibinator/kms/gen/kmsv1"
 	"github.com/Suhaibinator/kms/internal/domain"
+	"github.com/Suhaibinator/kms/internal/storage"
 )
 
 // mapError translates a domain error into a gRPC status. Sentinel errors map to
@@ -52,6 +53,10 @@ func mapError(log *zap.Logger, ctx context.Context, err error) error {
 		return status.Error(codes.Aborted, err.Error())
 	case errors.Is(err, domain.ErrResourceExhausted):
 		return status.Error(codes.ResourceExhausted, err.Error())
+	case errors.Is(err, storage.ErrPurgeCleanupPending):
+		// The logical purge committed. Preserve that distinction without
+		// suggesting rollback or asking the caller to resubmit the key.
+		return status.Error(codes.Unavailable, storage.ErrPurgeCleanupPending.Error())
 	case errors.Is(err, domain.ErrNotReady):
 		return status.Error(codes.Unavailable, "service not ready")
 	case errors.Is(err, domain.ErrDecryptFailed):

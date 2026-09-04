@@ -9,6 +9,7 @@ import (
 	"google.golang.org/grpc/status"
 
 	"github.com/Suhaibinator/kms/internal/domain"
+	"github.com/Suhaibinator/kms/internal/storage"
 )
 
 func TestMapError_SentinelCodes(t *testing.T) {
@@ -27,6 +28,7 @@ func TestMapError_SentinelCodes(t *testing.T) {
 		{"precond", domain.Errorf(domain.ErrFailedPrecondition, "state"), codes.FailedPrecondition, ""},
 		{"aborted", domain.Errorf(domain.ErrAborted, "cas"), codes.Aborted, ""},
 		{"exhausted", domain.Errorf(domain.ErrResourceExhausted, "budget"), codes.ResourceExhausted, ""},
+		{"purge-cleanup-pending", errors.Join(errors.New("cleanup detail"), storage.ErrPurgeCleanupPending), codes.Unavailable, storage.ErrPurgeCleanupPending.Error()},
 		{"notready", domain.Errorf(domain.ErrNotReady, "starting"), codes.Unavailable, "service not ready"},
 		{"decrypt", domain.ErrDecryptFailed, codes.Internal, "internal error"},
 		{"wrapped-decrypt", domain.Errorf(domain.ErrDecryptFailed, "secret /a v1"), codes.Internal, "internal error"},
