@@ -152,7 +152,7 @@ func TestMetricsDecryptFailed(t *testing.T) {
 	expectCount(t, m, "decrypt_failed", 0)
 
 	store.tamperCiphertext(tref("s"), 1)
-	if _, err := s.GetSecret(ctx, adminPrincipal(), tref("s"), 0, ""); !errors.Is(err, domain.ErrDecryptFailed) {
+	if _, err := s.GetSecret(ctx, adminPrincipal(), tref("s"), 0, "", "", ""); !errors.Is(err, domain.ErrDecryptFailed) {
 		t.Fatalf("err = %v, want ErrDecryptFailed", err)
 	}
 	expectCount(t, m, "decrypt_failed", 1)

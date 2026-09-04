@@ -18,18 +18,13 @@ type PutSecretInput struct {
 	Value       []byte
 	ContentType string
 	Metadata    string
-	// ClientBound selects the double-wrapped mode. Must match the existing
-	// secret's mode on updates.
-	ClientBound bool
-	// GenerateToken mints a fresh per-secret access token, returned exactly
-	// once. Required when creating a client-bound secret; on an existing
-	// client-bound secret it rotates the token (old token must be supplied
-	// with the request).
+	// BindingKey is operator-owned key material used to bind this version. An
+	// empty value creates an unbound version; it is never persisted or hashed.
+	BindingKey string
+	// GenerateToken independently mints or rotates the secret-level access
+	// token, returned exactly once.
 	GenerateToken bool
 	ExpiresAt     int64 // unix ms, 0 = never
-	// SecretToken is the current per-secret credential. It is consumed only
-	// when updating an existing client-bound secret and is never persisted.
-	SecretToken string
 }
 
 // PutSecretResult reports the write outcome.
@@ -44,8 +39,7 @@ type PutSecretResult struct {
 // GetSecret decrypts and returns a secret value for an authorized machine
 // caller. Per-secret access tokens, when set, are required — including for
 // admins (the audited admin path is RevealSecret).
-func (s *Service) GetSecret(ctx context.Context, pr Principal, ref domain.Ref, version uint64, label string, secretTokens ...string) (domain.SecretValue, error) {
-	secretToken := firstSecretToken(secretTokens)
+func (s *Service) GetSecret(ctx context.Context, pr Principal, ref domain.Ref, version uint64, label, secretToken, bindingKey string) (domain.SecretValue, error) {
 	if err := validateRef(ref); err != nil {
 		return domain.SecretValue{}, err
 	}
@@ -62,41 +56,27 @@ func (s *Service) GetSecret(ctx context.Context, pr Principal, ref domain.Ref, v
 	if err != nil {
 		return domain.SecretValue{}, err
 	}
-	// Per-secret token gate. Applied before the version-state check so a caller
-	// without the token cannot probe version state (disabled/destroyed/expired).
-	// The generic error covers missing and wrong tokens so callers cannot
-	// distinguish them.
-	//
-	// Protection presence is pinned to the exact version. This prevents adding
-	// a token to a later version from retroactively making older immutable
-	// versions unreadable. The token hash remains secret-scoped, so rotating an
-	// existing standard-secret token replaces the credential for every version
-	// that was created as token-protected.
-	//
-	// For a client-bound secret the token is the decryption key itself, bound
-	// per version (each version has its own HKDF salt and may have been written
-	// under a different token after a rotation). The secret-level AccessTokenHash
-	// only tracks the LATEST token, so comparing against it would wrongly reject
-	// a valid token for an older version. We therefore require only that a token
-	// be present here and let the crypto layer authenticate it against the
-	// specific version — a wrong token fails as a generic decryption error, with
-	// no additional information leaked.
-	if ver.ClientBound {
-		if secretToken == "" {
-			s.auditRefWithNamespaceID(ctx, pr, "secret.read", domain.ResourceSecret, ref, namespace.ID, ver.Version, "deny",
-				map[string]string{"reason": "token"})
-			return domain.SecretValue{}, domain.Errorf(domain.ErrPermissionDenied, "access denied")
-		}
-	} else if ver.HasAccessToken && !tokenHashMatches(secretToken, rec.AccessTokenHash) {
+	// Both credentials are checked against the exact version before its state,
+	// expiry, or ciphertext is inspected. This prevents callers missing either
+	// credential from probing version state. Access-token failures remain a
+	// generic authorization denial; all unusable binding-key material collapses
+	// to the same generic decryption error.
+	if ver.HasAccessToken && !tokenHashMatches(secretToken, rec.AccessTokenHash) {
 		s.auditRefWithNamespaceID(ctx, pr, "secret.read", domain.ResourceSecret, ref, namespace.ID, ver.Version, "deny",
-			map[string]string{"reason": "token"})
+			map[string]string{"reason": "credential"})
 		return domain.SecretValue{}, domain.Errorf(domain.ErrPermissionDenied, "access denied")
+	}
+	if ver.Bound {
+		if err := testVersionBindingKey(keyring, ref, ver, bindingKey); err != nil {
+			s.auditRefWithNamespaceID(ctx, pr, "secret.read", domain.ResourceSecret, ref, namespace.ID, ver.Version, "error", nil)
+			return domain.SecretValue{}, err
+		}
 	}
 	if err := s.checkVersionReadable(ver); err != nil {
 		return domain.SecretValue{}, err
 	}
 
-	plaintext, err := s.decryptVersion(keyring, rec, ver, secretToken)
+	plaintext, err := s.decryptVersion(keyring, rec, ver, bindingKey)
 	if err != nil {
 		s.auditRefWithNamespaceID(ctx, pr, "secret.read", domain.ResourceSecret, ref, namespace.ID, ver.Version, "error", nil)
 		s.log.Error("secret decryption failed", zap.String("ref", ref.String()), zap.Uint64("version", ver.Version), zap.String("kek_id", ver.KEKID))
@@ -119,13 +99,10 @@ func (s *Service) GetSecret(ctx context.Context, pr Principal, ref domain.Ref, v
 	}, nil
 }
 
-// RevealSecret is the audited admin path used by the frontend/CLI. It
-// bypasses the per-secret token gate for standard secrets (break-glass).
-// Client-bound versions still require their client token because it is part
-// of the cryptographic key material; the token is supplied transiently on the
-// request as an operation-specific input.
-func (s *Service) RevealSecret(ctx context.Context, pr Principal, ref domain.Ref, version uint64, label string, secretTokens ...string) (domain.SecretValue, error) {
-	secretToken := firstSecretToken(secretTokens)
+// RevealSecret is the audited admin break-glass path. It bypasses the
+// independent access-token gate, but a bound version still requires its
+// operator-owned binding key because the server cannot decrypt without it.
+func (s *Service) RevealSecret(ctx context.Context, pr Principal, ref domain.Ref, version uint64, label, secretToken, bindingKey string) (domain.SecretValue, error) {
 	if err := validateRef(ref); err != nil {
 		return domain.SecretValue{}, err
 	}
@@ -146,15 +123,20 @@ func (s *Service) RevealSecret(ctx context.Context, pr Principal, ref domain.Ref
 	if err != nil {
 		return domain.SecretValue{}, err
 	}
+	// secretToken is intentionally accepted as an independent operation input
+	// for transport symmetry, then ignored by this break-glass path.
+	_ = secretToken
+	if ver.Bound {
+		if err := testVersionBindingKey(keyring, ref, ver, bindingKey); err != nil {
+			s.auditRefWithNamespaceID(ctx, pr, "secret.reveal", domain.ResourceSecret, ref, namespace.ID, ver.Version, "error", nil)
+			return domain.SecretValue{}, err
+		}
+	}
 	if err := s.checkVersionReadable(ver); err != nil {
 		return domain.SecretValue{}, err
 	}
 
-	// Standard secrets intentionally retain the token-gate bypass. The crypto
-	// layer ignores clientToken for standard wrapping, while client-bound
-	// wrapping authenticates it against the selected immutable version. Missing,
-	// wrong, and unusable key material all collapse to ErrDecryptFailed.
-	plaintext, err := s.decryptVersion(keyring, rec, ver, secretToken)
+	plaintext, err := s.decryptVersion(keyring, rec, ver, bindingKey)
 	if err != nil {
 		s.auditRefWithNamespaceID(ctx, pr, "secret.reveal", domain.ResourceSecret, ref, namespace.ID, ver.Version, "error", nil)
 		s.log.Error("secret decryption failed", zap.String("ref", ref.String()), zap.Uint64("version", ver.Version), zap.String("kek_id", ver.KEKID))
@@ -173,16 +155,6 @@ func (s *Service) RevealSecret(ctx context.Context, pr Principal, ref domain.Ref
 		Metadata:    ver.Metadata,
 		CreatedAt:   ver.CreatedAt,
 	}, nil
-}
-
-// firstSecretToken keeps the in-process service API source-compatible while
-// making the credential an operation-specific argument rather than part of the
-// authenticated principal. Transports pass at most one value.
-func firstSecretToken(tokens []string) string {
-	if len(tokens) == 0 {
-		return ""
-	}
-	return tokens[0]
 }
 
 // PutSecret creates a secret or appends a new immutable version.
@@ -208,11 +180,13 @@ func (s *Service) PutSecret(ctx context.Context, pr Principal, in PutSecretInput
 	if err != nil {
 		return PutSecretResult{}, err
 	}
-	ctx, namespace, err := s.authorize(ctx, pr, domain.OpSecretWrite, domain.ResourceSecret, in.Ref)
-	if err != nil {
-		return PutSecretResult{}, err
+	bound := in.BindingKey != ""
+	if bound {
+		if err := crypto.ValidateBindingKey(in.BindingKey); err != nil {
+			return PutSecretResult{}, domain.Errorf(domain.ErrInvalidArgument, "binding_key must be valid UTF-8 and at least %d bytes", crypto.MinBindingKeyBytes)
+		}
 	}
-	keyring, err := s.requireKeyring()
+	ctx, namespace, err := s.authorize(ctx, pr, domain.OpSecretWrite, domain.ResourceSecret, in.Ref)
 	if err != nil {
 		return PutSecretResult{}, err
 	}
@@ -222,55 +196,15 @@ func (s *Service) PutSecret(ctx context.Context, pr Principal, in PutSecretInput
 	if err != nil && !errors.Is(err, domain.ErrNotFound) {
 		return PutSecretResult{}, err
 	}
-	if exists && existing.ClientBound != in.ClientBound {
-		return PutSecretResult{}, domain.Errorf(domain.ErrFailedPrecondition,
-			"secret %s already exists with client_bound=%v; the mode of a secret cannot change", in.Ref, existing.ClientBound)
-	}
-	if in.SecretToken != "" && (!exists || !in.ClientBound) {
-		return PutSecretResult{}, domain.Errorf(domain.ErrInvalidArgument,
-			"secret_token is accepted only when updating an existing client-bound secret")
-	}
 	expected := &storage.SecretWriteExpectation{Exists: exists}
 	if exists {
 		expected.ID = existing.ID
 		expected.AccessTokenHash = append([]byte(nil), existing.AccessTokenHash...)
 	}
 
-	// Resolve token handling.
-	var (
-		newTokenHash []byte // stored on the secret row when non-nil
-		mintedToken  string // returned once to the caller
-		encToken     string // key material for client-bound encryption
-	)
-	if in.ClientBound {
-		switch {
-		case exists:
-			// Writing a new version requires proving possession of the
-			// current token — it is the encryption key share.
-			if !tokenHashMatches(in.SecretToken, existing.AccessTokenHash) {
-				s.auditRefWithNamespaceID(ctx, pr, "secret.write", domain.ResourceSecret, in.Ref, namespace.ID, 0, "deny",
-					map[string]string{"reason": "token"})
-				return PutSecretResult{}, domain.Errorf(domain.ErrPermissionDenied, "access denied")
-			}
-			encToken = in.SecretToken
-			if in.GenerateToken { // token rotation with the new version
-				mintedToken, newTokenHash, err = crypto.GenerateToken("kmss")
-				if err != nil {
-					return PutSecretResult{}, err
-				}
-				encToken = mintedToken
-			}
-		case in.GenerateToken:
-			mintedToken, newTokenHash, err = crypto.GenerateToken("kmss")
-			if err != nil {
-				return PutSecretResult{}, err
-			}
-			encToken = mintedToken
-		default:
-			return PutSecretResult{}, domain.Errorf(domain.ErrInvalidArgument,
-				"creating a client-bound secret requires generate_access_token; the returned token is the only key share and is shown exactly once")
-		}
-	} else if in.GenerateToken {
+	var newTokenHash []byte
+	var mintedToken string
+	if in.GenerateToken {
 		mintedToken, newTokenHash, err = crypto.GenerateToken("kmss")
 		if err != nil {
 			return PutSecretResult{}, err
@@ -281,6 +215,11 @@ func (s *Service) PutSecret(ctx context.Context, pr Principal, in PutSecretInput
 	// SQL storage independently checks key_metadata inside the transaction to
 	// catch a rotation performed by another process.
 	s.keyWriteMu.RLock()
+	keyring, err := s.requireKeyring()
+	if err != nil {
+		s.keyWriteMu.RUnlock()
+		return PutSecretResult{}, err
+	}
 	kek := keyring.Active()
 	value := in.Value
 	ref := in.Ref
@@ -289,7 +228,7 @@ func (s *Service) PutSecret(ctx context.Context, pr Principal, in PutSecretInput
 		ContentType:     in.ContentType,
 		Metadata:        metadata,
 		CreatedBy:       pr.Identity.Name,
-		ClientBound:     in.ClientBound,
+		Bound:           bound,
 		AccessTokenHash: newTokenHash,
 		Expected:        expected,
 		ExpiresAt:       unixMSToTime(in.ExpiresAt),
@@ -297,8 +236,8 @@ func (s *Service) PutSecret(ctx context.Context, pr Principal, in PutSecretInput
 			aad := crypto.BuildAAD(ref.NS.Env, ref.NS.App, ref.Key, version)
 			var res crypto.EncryptResult
 			var eerr error
-			if in.ClientBound {
-				res, eerr = crypto.EncryptClientBound(kek, value, aad, encToken)
+			if bound {
+				res, eerr = crypto.EncryptBindingKey(kek, value, aad, in.BindingKey)
 			} else {
 				res, eerr = crypto.Encrypt(kek, value, aad)
 			}
@@ -306,14 +245,14 @@ func (s *Service) PutSecret(ctx context.Context, pr Principal, in PutSecretInput
 				return storage.EncryptedPayload{}, eerr
 			}
 			return storage.EncryptedPayload{
-				Ciphertext:    res.Ciphertext,
-				EncryptedDEK:  res.EncryptedDEK,
-				KEKID:         res.KEKID,
-				WrapMode:      res.WrapMode,
-				ClientKeySalt: res.ClientKeySalt,
-				Algorithm:     res.Algorithm,
-				Nonce:         res.Nonce,
-				AAD:           res.AAD,
+				Ciphertext:     res.Ciphertext,
+				EncryptedDEK:   res.EncryptedDEK,
+				KEKID:          res.KEKID,
+				WrapMode:       res.WrapMode,
+				BindingKeySalt: res.BindingKeySalt,
+				Algorithm:      res.Algorithm,
+				Nonce:          res.Nonce,
+				AAD:            res.AAD,
 			}, nil
 		},
 	})
@@ -323,8 +262,8 @@ func (s *Service) PutSecret(ctx context.Context, pr Principal, in PutSecretInput
 	}
 
 	meta := map[string]string{}
-	if in.ClientBound {
-		meta["client_bound"] = "true"
+	if bound {
+		meta["bound"] = "true"
 	}
 	if in.GenerateToken {
 		meta["token_minted"] = "true"
@@ -333,6 +272,304 @@ func (s *Service) PutSecret(ctx context.Context, pr Principal, in PutSecretInput
 	s.getHub().Wake()
 
 	return PutSecretResult{Version: version, Revision: revision, AccessToken: mintedToken}, nil
+}
+
+// SecretVersionMutationResult reports an exact-version binding mutation.
+type SecretVersionMutationResult struct {
+	AnchorVersion    uint64
+	AffectedVersions []uint64
+	Revision         uint64
+}
+
+// SecretBindingCohortResult reports a discovered or mutated contiguous cohort.
+type SecretBindingCohortResult struct {
+	AnchorVersion    uint64
+	AffectedVersions []uint64
+	Revision         uint64
+}
+
+// BindSecret adds binding-key protection to one exact version without
+// rewriting its encrypted value. version 0 resolves the current label.
+func (s *Service) BindSecret(ctx context.Context, pr Principal, ref domain.Ref, version uint64, bindingKey string) (SecretVersionMutationResult, error) {
+	if err := validateRef(ref); err != nil {
+		return SecretVersionMutationResult{}, err
+	}
+	if err := validateBindingKeyArgument(bindingKey); err != nil {
+		return SecretVersionMutationResult{}, err
+	}
+	ctx, namespace, err := s.authorize(ctx, pr, domain.OpSecretWrite, domain.ResourceSecret, ref)
+	if err != nil {
+		return SecretVersionMutationResult{}, err
+	}
+
+	s.keyWriteMu.Lock()
+	keyring, err := s.requireKeyring()
+	if err != nil {
+		s.keyWriteMu.Unlock()
+		return SecretVersionMutationResult{}, err
+	}
+	result, err := s.store.BindSecretVersion(ctx, ref, version, bindingRewrap(keyring, ref, bindingKey))
+	s.keyWriteMu.Unlock()
+	if err != nil {
+		return SecretVersionMutationResult{}, err
+	}
+
+	s.auditRefWithNamespaceID(ctx, pr, "secret.bind", domain.ResourceSecret, ref, namespace.ID, result.AnchorVersion, "allow", nil)
+	s.getHub().Wake()
+	return secretVersionMutationResult(result), nil
+}
+
+// UnbindSecret removes binding-key protection from one exact version without
+// rewriting its encrypted value. version 0 resolves the current label.
+func (s *Service) UnbindSecret(ctx context.Context, pr Principal, ref domain.Ref, version uint64, bindingKey string) (SecretVersionMutationResult, error) {
+	if err := validateRef(ref); err != nil {
+		return SecretVersionMutationResult{}, err
+	}
+	if err := validateBindingKeyArgument(bindingKey); err != nil {
+		return SecretVersionMutationResult{}, err
+	}
+	ctx, namespace, err := s.authorize(ctx, pr, domain.OpSecretWrite, domain.ResourceSecret, ref)
+	if err != nil {
+		return SecretVersionMutationResult{}, err
+	}
+
+	s.keyWriteMu.Lock()
+	keyring, err := s.requireKeyring()
+	if err != nil {
+		s.keyWriteMu.Unlock()
+		return SecretVersionMutationResult{}, err
+	}
+	result, err := s.store.UnbindSecretVersion(ctx, ref, version, bindingUnwrap(keyring, ref, bindingKey))
+	s.keyWriteMu.Unlock()
+	if err != nil {
+		return SecretVersionMutationResult{}, sanitizeBindingMutationError(err)
+	}
+
+	s.auditRefWithNamespaceID(ctx, pr, "secret.unbind", domain.ResourceSecret, ref, namespace.ID, result.AnchorVersion, "allow", nil)
+	s.getHub().Wake()
+	return secretVersionMutationResult(result), nil
+}
+
+// PreviewSecretBindingCohort discovers the contiguous bound-version cohort
+// around anchor without changing storage. anchor 0 resolves current.
+func (s *Service) PreviewSecretBindingCohort(ctx context.Context, pr Principal, ref domain.Ref, anchor uint64, bindingKey string) (SecretBindingCohortResult, error) {
+	if err := validateRef(ref); err != nil {
+		return SecretBindingCohortResult{}, err
+	}
+	if err := validateBindingKeyArgument(bindingKey); err != nil {
+		return SecretBindingCohortResult{}, err
+	}
+	ctx, namespace, err := s.authorize(ctx, pr, domain.OpSecretWrite, domain.ResourceSecret, ref)
+	if err != nil {
+		return SecretBindingCohortResult{}, err
+	}
+
+	// A read lock keeps the keyring view stable while storage holds its read
+	// transaction. Preview does not serialize unrelated puts.
+	s.keyWriteMu.RLock()
+	keyring, err := s.requireKeyring()
+	if err != nil {
+		s.keyWriteMu.RUnlock()
+		return SecretBindingCohortResult{}, err
+	}
+	result, err := s.store.PreviewSecretBindingCohort(ctx, ref, anchor, bindingTest(keyring, ref, bindingKey))
+	s.keyWriteMu.RUnlock()
+	if err != nil {
+		s.auditRefWithNamespaceID(ctx, pr, "secret.binding_cohort.preview", domain.ResourceSecret, ref, namespace.ID, anchor, "error", nil)
+		return SecretBindingCohortResult{}, sanitizeBindingMutationError(err)
+	}
+
+	s.auditRefWithNamespaceID(ctx, pr, "secret.binding_cohort.preview", domain.ResourceSecret, ref, namespace.ID, result.AnchorVersion, "allow", nil)
+	return secretBindingCohortResult(result), nil
+}
+
+// RotateSecretBindingKey rewraps every DEK in the contiguous cohort around
+// anchor. Ciphertext and each version's recorded KEK remain unchanged.
+func (s *Service) RotateSecretBindingKey(ctx context.Context, pr Principal, ref domain.Ref, anchor uint64, bindingKey, newBindingKey string, expectedRevision *uint64, expectedAffected []uint64) (SecretBindingCohortResult, error) {
+	if err := validateRef(ref); err != nil {
+		return SecretBindingCohortResult{}, err
+	}
+	if err := validateBindingKeyArgument(bindingKey); err != nil {
+		return SecretBindingCohortResult{}, err
+	}
+	if err := validateBindingKeyArgument(newBindingKey); err != nil {
+		return SecretBindingCohortResult{}, err
+	}
+	ctx, namespace, err := s.authorize(ctx, pr, domain.OpSecretWrite, domain.ResourceSecret, ref)
+	if err != nil {
+		return SecretBindingCohortResult{}, err
+	}
+
+	s.keyWriteMu.Lock()
+	keyring, err := s.requireKeyring()
+	if err != nil {
+		s.keyWriteMu.Unlock()
+		return SecretBindingCohortResult{}, err
+	}
+	result, err := s.store.RotateSecretBindingKey(ctx, ref, anchor, storage.SecretBindingCASGuard{
+		ExpectedRevision:         expectedRevision,
+		ExpectedAffectedVersions: expectedAffected,
+	}, bindingTest(keyring, ref, bindingKey), bindingRotate(keyring, ref, bindingKey, newBindingKey))
+	s.keyWriteMu.Unlock()
+	if err != nil {
+		s.auditRefWithNamespaceID(ctx, pr, "secret.binding_key.rotate", domain.ResourceSecret, ref, namespace.ID, anchor, "error", nil)
+		return SecretBindingCohortResult{}, sanitizeBindingMutationError(err)
+	}
+
+	s.auditRefWithNamespaceID(ctx, pr, "secret.binding_key.rotate", domain.ResourceSecret, ref, namespace.ID, result.AnchorVersion, "allow", nil)
+	s.getHub().Wake()
+	return secretBindingCohortResult(result), nil
+}
+
+// PurgeSecretBindingCohort irreversibly destroys the contiguous cohort around
+// anchor. It is admin-only regardless of delegated secret:destroy policy.
+func (s *Service) PurgeSecretBindingCohort(ctx context.Context, pr Principal, ref domain.Ref, anchor uint64, bindingKey string, expectedRevision *uint64, expectedAffected []uint64) (SecretBindingCohortResult, error) {
+	if err := validateRef(ref); err != nil {
+		return SecretBindingCohortResult{}, err
+	}
+	// Reject non-admin callers before binding-key validation, namespace lookup,
+	// or cohort discovery so delegated destroy policy cannot become an oracle.
+	if !pr.IsAdmin() {
+		s.auditRef(ctx, pr, "secret.binding_cohort.purge", domain.ResourceSecret, ref, anchor, "deny", nil)
+		return SecretBindingCohortResult{}, domain.Errorf(domain.ErrPermissionDenied, "access denied")
+	}
+	if err := validateBindingKeyArgument(bindingKey); err != nil {
+		return SecretBindingCohortResult{}, err
+	}
+	ctx, namespace, err := s.authorize(ctx, pr, domain.OpSecretDestroy, domain.ResourceSecret, ref)
+	if err != nil {
+		return SecretBindingCohortResult{}, err
+	}
+
+	s.keyWriteMu.Lock()
+	keyring, err := s.requireKeyring()
+	if err != nil {
+		s.keyWriteMu.Unlock()
+		return SecretBindingCohortResult{}, err
+	}
+	result, err := s.store.PurgeSecretBindingCohort(ctx, ref, anchor, storage.SecretBindingCASGuard{
+		ExpectedRevision:         expectedRevision,
+		ExpectedAffectedVersions: expectedAffected,
+	}, bindingTest(keyring, ref, bindingKey), storage.SecretBindingPurgeAudit{
+		ActorIdentity: pr.Identity.Name,
+		ActorType:     pr.Identity.Kind,
+		SourceIP:      pr.RemoteAddr,
+		UserAgent:     pr.UserAgent,
+		RequestID:     pr.RequestID,
+		CreatedAt:     s.now(),
+	})
+	s.keyWriteMu.Unlock()
+	if err != nil {
+		s.auditRefWithNamespaceID(ctx, pr, "secret.binding_cohort.purge", domain.ResourceSecret, ref, namespace.ID, anchor, "error", nil)
+		return SecretBindingCohortResult{}, sanitizeBindingMutationError(err)
+	}
+
+	// Storage inserted the single allow audit atomically with the tombstones and
+	// change-log entry. Appending a second allow row here would break that unit.
+	s.getHub().Wake()
+	return secretBindingCohortResult(result), nil
+}
+
+func secretVersionMutationResult(result storage.SecretBindingResult) SecretVersionMutationResult {
+	return SecretVersionMutationResult{
+		AnchorVersion:    result.AnchorVersion,
+		AffectedVersions: append([]uint64(nil), result.AffectedVersions...),
+		Revision:         result.Revision,
+	}
+}
+
+func secretBindingCohortResult(result storage.SecretBindingResult) SecretBindingCohortResult {
+	return SecretBindingCohortResult{
+		AnchorVersion:    result.AnchorVersion,
+		AffectedVersions: append([]uint64(nil), result.AffectedVersions...),
+		Revision:         result.Revision,
+	}
+}
+
+func validateBindingKeyArgument(bindingKey string) error {
+	if err := crypto.ValidateBindingKey(bindingKey); err != nil {
+		return domain.Errorf(domain.ErrInvalidArgument, "binding_key must be valid UTF-8 and at least %d bytes", crypto.MinBindingKeyBytes)
+	}
+	return nil
+}
+
+func sanitizeBindingMutationError(err error) error {
+	if errors.Is(err, domain.ErrDecryptFailed) {
+		return domain.ErrDecryptFailed
+	}
+	return err
+}
+
+func bindingTest(keyring *crypto.Keyring, ref domain.Ref, bindingKey string) storage.SecretBindingTestFunc {
+	return func(ver storage.SecretVersionRecord) error {
+		return testVersionBindingKey(keyring, ref, ver, bindingKey)
+	}
+}
+
+func testVersionBindingKey(keyring *crypto.Keyring, ref domain.Ref, ver storage.SecretVersionRecord, bindingKey string) error {
+	if crypto.ValidateBindingKey(bindingKey) != nil {
+		return domain.ErrDecryptFailed
+	}
+	kek, err := keyring.Get(ver.KEKID)
+	if err != nil {
+		return domain.ErrDecryptFailed
+	}
+	aad := crypto.BuildAAD(ref.NS.Env, ref.NS.App, ref.Key, ver.Version)
+	if err := crypto.TestBindingKeyDEK(kek, ver.EncryptedDEK, ver.BindingKeySalt, aad, bindingKey); err != nil {
+		return domain.ErrDecryptFailed
+	}
+	return nil
+}
+
+func bindingRewrap(keyring *crypto.Keyring, ref domain.Ref, bindingKey string) storage.SecretBindingRewrapFunc {
+	return func(ver storage.SecretVersionRecord) (storage.SecretBindingWrapping, error) {
+		kek, err := keyring.Get(ver.KEKID)
+		if err != nil {
+			return storage.SecretBindingWrapping{}, domain.ErrDecryptFailed
+		}
+		aad := crypto.BuildAAD(ref.NS.Env, ref.NS.App, ref.Key, ver.Version)
+		result, err := crypto.BindDEK(kek, ver.EncryptedDEK, aad, bindingKey)
+		return bindingWrappingResult(result, err)
+	}
+}
+
+func bindingUnwrap(keyring *crypto.Keyring, ref domain.Ref, bindingKey string) storage.SecretBindingRewrapFunc {
+	return func(ver storage.SecretVersionRecord) (storage.SecretBindingWrapping, error) {
+		kek, err := keyring.Get(ver.KEKID)
+		if err != nil {
+			return storage.SecretBindingWrapping{}, domain.ErrDecryptFailed
+		}
+		aad := crypto.BuildAAD(ref.NS.Env, ref.NS.App, ref.Key, ver.Version)
+		result, err := crypto.UnbindDEK(kek, ver.EncryptedDEK, ver.BindingKeySalt, aad, bindingKey)
+		return bindingWrappingResult(result, err)
+	}
+}
+
+func bindingRotate(keyring *crypto.Keyring, ref domain.Ref, bindingKey, newBindingKey string) storage.SecretBindingRewrapFunc {
+	return func(ver storage.SecretVersionRecord) (storage.SecretBindingWrapping, error) {
+		kek, err := keyring.Get(ver.KEKID)
+		if err != nil {
+			return storage.SecretBindingWrapping{}, domain.ErrDecryptFailed
+		}
+		aad := crypto.BuildAAD(ref.NS.Env, ref.NS.App, ref.Key, ver.Version)
+		result, err := crypto.RotateBindingKeyDEK(kek, ver.EncryptedDEK, ver.BindingKeySalt, aad, bindingKey, newBindingKey)
+		return bindingWrappingResult(result, err)
+	}
+}
+
+func bindingWrappingResult(result crypto.DEKRewrapResult, err error) (storage.SecretBindingWrapping, error) {
+	if err != nil {
+		if errors.Is(err, domain.ErrDecryptFailed) {
+			return storage.SecretBindingWrapping{}, domain.ErrDecryptFailed
+		}
+		return storage.SecretBindingWrapping{}, err
+	}
+	return storage.SecretBindingWrapping{
+		EncryptedDEK:   result.EncryptedDEK,
+		KEKID:          result.KEKID,
+		WrapMode:       result.WrapMode,
+		BindingKeySalt: result.BindingKeySalt,
+	}, nil
 }
 
 // ListSecrets lists secret metadata in a namespace under a key prefix, filtered
@@ -481,7 +718,7 @@ func (s *Service) checkVersionReadable(ver storage.SecretVersionRecord) error {
 }
 
 // decryptVersion recovers plaintext for a stored version.
-func (s *Service) decryptVersion(keyring *crypto.Keyring, rec storage.SecretRecord, ver storage.SecretVersionRecord, clientToken string) ([]byte, error) {
+func (s *Service) decryptVersion(keyring *crypto.Keyring, rec storage.SecretRecord, ver storage.SecretVersionRecord, bindingKey string) ([]byte, error) {
 	kek, err := keyring.Get(ver.KEKID)
 	if err != nil {
 		s.m().DecryptFailed()
@@ -495,16 +732,16 @@ func (s *Service) decryptVersion(keyring *crypto.Keyring, rec storage.SecretReco
 	// returning the wrong secret's plaintext.
 	aad := crypto.BuildAAD(rec.Ref.NS.Env, rec.Ref.NS.App, rec.Ref.Key, ver.Version)
 	pt, err := crypto.Decrypt(kek, crypto.DecryptInput{
-		Ciphertext:    ver.Ciphertext,
-		EncryptedDEK:  ver.EncryptedDEK,
-		Nonce:         ver.Nonce,
-		AAD:           aad,
-		WrapMode:      ver.WrapMode,
-		ClientKeySalt: ver.ClientKeySalt,
-		ClientToken:   clientToken,
+		Ciphertext:     ver.Ciphertext,
+		EncryptedDEK:   ver.EncryptedDEK,
+		Nonce:          ver.Nonce,
+		AAD:            aad,
+		WrapMode:       ver.WrapMode,
+		BindingKeySalt: ver.BindingKeySalt,
+		BindingKey:     bindingKey,
 	})
 	if err != nil {
-		// Deliberately generic: token, ciphertext, and key failures are
+		// Deliberately generic: credential, ciphertext, and key failures are
 		// indistinguishable to the caller.
 		s.m().DecryptFailed()
 		return nil, domain.ErrDecryptFailed

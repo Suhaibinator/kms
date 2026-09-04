@@ -241,7 +241,7 @@ func TestSecretOpsRequireKeyring(t *testing.T) {
 	store := newFakeStore()
 	s := newTestService(store) // no keyring attached
 
-	_, err := s.GetSecret(ctx, adminPrincipal(), tref("s"), 0, "")
+	_, err := s.GetSecret(ctx, adminPrincipal(), tref("s"), 0, "", "", "")
 	if !errors.Is(err, domain.ErrNotReady) {
 		t.Fatalf("GetSecret without keyring err = %v, want ErrNotReady", err)
 	}

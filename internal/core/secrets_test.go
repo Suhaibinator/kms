@@ -1,13 +1,27 @@
 package core
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"fmt"
+	"slices"
+	"strings"
 	"testing"
 	"time"
 
+	"go.uber.org/zap"
+	"go.uber.org/zap/zaptest/observer"
+
+	"github.com/Suhaibinator/kms/internal/crypto"
 	"github.com/Suhaibinator/kms/internal/domain"
 	"github.com/Suhaibinator/kms/internal/storage"
+)
+
+const (
+	testBindingKeyA = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	testBindingKeyB = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	testBindingKeyC = "cccccccccccccccccccccccccccccccc"
 )
 
 // putSecret creates/updates a secret as admin and returns the result. It fails
@@ -30,7 +44,7 @@ func TestPutGetSecretStandardRoundTrip(t *testing.T) {
 
 	putSecret(t, s, PutSecretInput{Ref: tref("db"), Value: []byte("hunter2"), ContentType: "text/plain"})
 
-	val, err := s.GetSecret(ctx, adminPrincipal(), tref("db"), 0, "")
+	val, err := s.GetSecret(ctx, adminPrincipal(), tref("db"), 0, "", "", "")
 	if err != nil {
 		t.Fatalf("GetSecret: %v", err)
 	}
@@ -68,11 +82,11 @@ func TestPutSecretNewVersionRoundTrips(t *testing.T) {
 		t.Fatalf("second version = %d, want 2", r2.Version)
 	}
 
-	cur, err := s.GetSecret(ctx, adminPrincipal(), tref("db"), 0, "")
+	cur, err := s.GetSecret(ctx, adminPrincipal(), tref("db"), 0, "", "", "")
 	if err != nil || string(cur.Value) != "v2" {
 		t.Fatalf("current = %q, %v; want v2", cur.Value, err)
 	}
-	old, err := s.GetSecret(ctx, adminPrincipal(), tref("db"), 1, "")
+	old, err := s.GetSecret(ctx, adminPrincipal(), tref("db"), 1, "", "", "")
 	if err != nil || string(old.Value) != "v1" {
 		t.Fatalf("v1 = %q, %v; want v1", old.Value, err)
 	}
@@ -126,17 +140,17 @@ func TestExactSecretVersionPinsContentTypeAndTokenProtection(t *testing.T) {
 
 	// Adding protection to v2 must not retroactively alter v1. A pinned release
 	// can continue resolving v1 without a token and sees its original type.
-	v1, err := s.GetSecret(ctx, adminPrincipal(), tref("api"), 1, "")
+	v1, err := s.GetSecret(ctx, adminPrincipal(), tref("api"), 1, "", "", "")
 	if err != nil {
 		t.Fatalf("GetSecret(v1): %v", err)
 	}
 	if string(v1.Value) != "v1" || v1.ContentType != "text/plain" {
 		t.Fatalf("v1 = %+v, want original text version", v1)
 	}
-	if _, err := s.GetSecret(ctx, adminPrincipal(), tref("api"), 2, ""); !errors.Is(err, domain.ErrPermissionDenied) {
+	if _, err := s.GetSecret(ctx, adminPrincipal(), tref("api"), 2, "", "", ""); !errors.Is(err, domain.ErrPermissionDenied) {
 		t.Fatalf("GetSecret(v2 without token) err = %v, want permission denied", err)
 	}
-	gotV2, err := s.GetSecret(ctx, adminPrincipal(), tref("api"), 2, "", v2.AccessToken)
+	gotV2, err := s.GetSecret(ctx, adminPrincipal(), tref("api"), 2, "", v2.AccessToken, "")
 	if err != nil {
 		t.Fatalf("GetSecret(v2): %v", err)
 	}
@@ -150,13 +164,13 @@ func TestExactSecretVersionPinsContentTypeAndTokenProtection(t *testing.T) {
 	v3 := putSecret(t, s, PutSecretInput{
 		Ref: tref("api"), Value: []byte("v3"), ContentType: "text/plain", GenerateToken: true,
 	})
-	if _, err := s.GetSecret(ctx, adminPrincipal(), tref("api"), 2, "", v2.AccessToken); !errors.Is(err, domain.ErrPermissionDenied) {
+	if _, err := s.GetSecret(ctx, adminPrincipal(), tref("api"), 2, "", v2.AccessToken, ""); !errors.Is(err, domain.ErrPermissionDenied) {
 		t.Fatalf("GetSecret(v2 with rotated-out token) err = %v, want permission denied", err)
 	}
-	if _, err := s.GetSecret(ctx, adminPrincipal(), tref("api"), 2, "", v3.AccessToken); err != nil {
+	if _, err := s.GetSecret(ctx, adminPrincipal(), tref("api"), 2, "", v3.AccessToken, ""); err != nil {
 		t.Fatalf("GetSecret(v2 with current token): %v", err)
 	}
-	if _, err := s.GetSecret(ctx, adminPrincipal(), tref("api"), 1, ""); err != nil {
+	if _, err := s.GetSecret(ctx, adminPrincipal(), tref("api"), 1, "", "", ""); err != nil {
 		t.Fatalf("GetSecret(v1 after token rotation): %v", err)
 	}
 }
@@ -175,7 +189,7 @@ func TestGetSecretTokenGate(t *testing.T) {
 	}
 
 	t.Run("missing token denied and audited", func(t *testing.T) {
-		_, err := s.GetSecret(ctx, adminPrincipal(), tref("api"), 0, "")
+		_, err := s.GetSecret(ctx, adminPrincipal(), tref("api"), 0, "", "", "")
 		if !errors.Is(err, domain.ErrPermissionDenied) {
 			t.Fatalf("err = %v, want ErrPermissionDenied", err)
 		}
@@ -185,13 +199,13 @@ func TestGetSecretTokenGate(t *testing.T) {
 	})
 
 	t.Run("wrong token denied", func(t *testing.T) {
-		if _, err := s.GetSecret(ctx, adminPrincipal(), tref("api"), 0, "", "kmss_wrong"); !errors.Is(err, domain.ErrPermissionDenied) {
+		if _, err := s.GetSecret(ctx, adminPrincipal(), tref("api"), 0, "", "kmss_wrong", ""); !errors.Is(err, domain.ErrPermissionDenied) {
 			t.Fatalf("err = %v, want ErrPermissionDenied", err)
 		}
 	})
 
 	t.Run("correct token allowed", func(t *testing.T) {
-		val, err := s.GetSecret(ctx, adminPrincipal(), tref("api"), 0, "", res.AccessToken)
+		val, err := s.GetSecret(ctx, adminPrincipal(), tref("api"), 0, "", res.AccessToken, "")
 		if err != nil {
 			t.Fatalf("GetSecret: %v", err)
 		}
@@ -212,7 +226,7 @@ func TestGetSecretRejectsUnreadableVersions(t *testing.T) {
 		if _, err := s.DisableSecret(ctx, adminPrincipal(), tref("s"), 1, false); err != nil {
 			t.Fatalf("DisableSecret: %v", err)
 		}
-		_, err := s.GetSecret(ctx, adminPrincipal(), tref("s"), 0, "")
+		_, err := s.GetSecret(ctx, adminPrincipal(), tref("s"), 0, "", "", "")
 		if !errors.Is(err, domain.ErrFailedPrecondition) {
 			t.Fatalf("err = %v, want ErrFailedPrecondition", err)
 		}
@@ -226,7 +240,7 @@ func TestGetSecretRejectsUnreadableVersions(t *testing.T) {
 		if _, err := s.DestroySecretVersion(ctx, adminPrincipal(), tref("s"), 1); err != nil {
 			t.Fatalf("DestroySecretVersion: %v", err)
 		}
-		_, err := s.GetSecret(ctx, adminPrincipal(), tref("s"), 1, "")
+		_, err := s.GetSecret(ctx, adminPrincipal(), tref("s"), 1, "", "", "")
 		if !errors.Is(err, domain.ErrFailedPrecondition) {
 			t.Fatalf("err = %v, want ErrFailedPrecondition", err)
 		}
@@ -239,7 +253,7 @@ func TestGetSecretRejectsUnreadableVersions(t *testing.T) {
 		future := time.Now().Add(time.Hour).UnixMilli()
 		putSecret(t, s, PutSecretInput{Ref: tref("s"), Value: []byte("v"), ContentType: "text/plain", ExpiresAt: future})
 		store.expireVersion(tref("s"), 1)
-		_, err := s.GetSecret(ctx, adminPrincipal(), tref("s"), 0, "")
+		_, err := s.GetSecret(ctx, adminPrincipal(), tref("s"), 0, "", "", "")
 		if !errors.Is(err, domain.ErrFailedPrecondition) {
 			t.Fatalf("err = %v, want ErrFailedPrecondition", err)
 		}
@@ -255,7 +269,7 @@ func TestGetSecretDecryptFailureAudited(t *testing.T) {
 
 	store.tamperCiphertext(tref("s"), 1)
 
-	_, err := s.GetSecret(ctx, adminPrincipal(), tref("s"), 0, "")
+	_, err := s.GetSecret(ctx, adminPrincipal(), tref("s"), 0, "", "", "")
 	if !errors.Is(err, domain.ErrDecryptFailed) {
 		t.Fatalf("err = %v, want ErrDecryptFailed", err)
 	}
@@ -272,7 +286,7 @@ func TestGetSecretFailsClosedWhenAuditUnavailable(t *testing.T) {
 	putSecret(t, s, PutSecretInput{Ref: tref("s"), Value: []byte("topsecret"), ContentType: "text/plain"})
 
 	store.auditErr = errors.New("audit sink down")
-	val, err := s.GetSecret(ctx, adminPrincipal(), tref("s"), 0, "")
+	val, err := s.GetSecret(ctx, adminPrincipal(), tref("s"), 0, "", "", "")
 	if !errors.Is(err, domain.ErrFailedPrecondition) {
 		t.Fatalf("err = %v, want ErrFailedPrecondition (fail closed)", err)
 	}
@@ -289,7 +303,7 @@ func TestRevealSecretNonAdminDenied(t *testing.T) {
 	withKeyring(t, s)
 	putSecret(t, s, PutSecretInput{Ref: tref("s"), Value: []byte("v"), ContentType: "text/plain"})
 
-	_, err := s.RevealSecret(ctx, clientPrincipal("app"), tref("s"), 0, "")
+	_, err := s.RevealSecret(ctx, clientPrincipal("app"), tref("s"), 0, "", "", "")
 	if !errors.Is(err, domain.ErrPermissionDenied) {
 		t.Fatalf("err = %v, want ErrPermissionDenied", err)
 	}
@@ -306,7 +320,7 @@ func TestRevealSecretBypassesTokenGate(t *testing.T) {
 	withKeyring(t, s)
 	putSecret(t, s, PutSecretInput{Ref: tref("s"), Value: []byte("v"), ContentType: "text/plain", GenerateToken: true})
 
-	val, err := s.RevealSecret(ctx, adminPrincipal(), tref("s"), 0, "")
+	val, err := s.RevealSecret(ctx, adminPrincipal(), tref("s"), 0, "", "", "")
 	if err != nil {
 		t.Fatalf("RevealSecret: %v", err)
 	}
@@ -322,100 +336,137 @@ func TestRevealSecretBypassesTokenGate(t *testing.T) {
 	}
 }
 
-func TestRevealClientBoundUsesVersionToken(t *testing.T) {
+func TestBoundSecretCredentialsAreIndependentAndVersionExact(t *testing.T) {
 	ctx := context.Background()
 	store := newFakeStore()
 	s := newTestService(store)
 	withKeyring(t, s)
 
-	res := putSecret(t, s, PutSecretInput{
-		Ref: tref("cb"), Value: []byte("v"), ContentType: "text/plain",
-		ClientBound: true, GenerateToken: true,
+	// v1 is bound but not token-gated. v2 is unbound and establishes a
+	// secret-level access token. v3 is both bound and token-gated by inheritance.
+	putSecret(t, s, PutSecretInput{
+		Ref: tref("credentials"), Value: []byte("v1"), BindingKey: testBindingKeyA,
 	})
-	if res.AccessToken == "" {
-		t.Fatal("client-bound creation should mint a token")
+	v2 := putSecret(t, s, PutSecretInput{
+		Ref: tref("credentials"), Value: []byte("v2"), GenerateToken: true,
+	})
+	putSecret(t, s, PutSecretInput{
+		Ref: tref("credentials"), Value: []byte("v3"), BindingKey: testBindingKeyA,
+	})
+
+	if value, err := s.GetSecret(ctx, adminPrincipal(), tref("credentials"), 1, "", "", testBindingKeyA); err != nil || string(value.Value) != "v1" {
+		t.Fatalf("bound-only v1 = %q, err=%v", value.Value, err)
+	}
+	if value, err := s.GetSecret(ctx, adminPrincipal(), tref("credentials"), 2, "", v2.AccessToken, "ignored extra key"); err != nil || string(value.Value) != "v2" {
+		t.Fatalf("token-only v2 = %q, err=%v", value.Value, err)
 	}
 
-	withoutToken := adminPrincipal()
-	_, missingErr := s.RevealSecret(ctx, withoutToken, tref("cb"), 0, "")
-	if !errors.Is(missingErr, domain.ErrDecryptFailed) {
-		t.Fatalf("missing token err = %v, want ErrDecryptFailed", missingErr)
+	if _, err := s.GetSecret(ctx, adminPrincipal(), tref("credentials"), 3, "", "", testBindingKeyA); !errors.Is(err, domain.ErrPermissionDenied) {
+		t.Fatalf("v3 without access token err = %v, want permission denied", err)
+	}
+	missingKeyErr := func() error {
+		_, err := s.GetSecret(ctx, adminPrincipal(), tref("credentials"), 3, "", v2.AccessToken, "")
+		return err
+	}()
+	wrongKeyErr := func() error {
+		_, err := s.GetSecret(ctx, adminPrincipal(), tref("credentials"), 3, "", v2.AccessToken, testBindingKeyB)
+		return err
+	}()
+	if !errors.Is(missingKeyErr, domain.ErrDecryptFailed) || !errors.Is(wrongKeyErr, domain.ErrDecryptFailed) || missingKeyErr.Error() != wrongKeyErr.Error() {
+		t.Fatalf("missing/wrong binding-key errors differ: %v / %v", missingKeyErr, wrongKeyErr)
+	}
+	if value, err := s.GetSecret(ctx, adminPrincipal(), tref("credentials"), 3, "", v2.AccessToken, testBindingKeyA); err != nil || string(value.Value) != "v3" {
+		t.Fatalf("both credentials v3 = %q, err=%v", value.Value, err)
 	}
 
-	_, wrongErr := s.RevealSecret(ctx, adminPrincipal(), tref("cb"), 0, "", "kmss_wrongwrongwrongwrongwrongwrong")
-	if !errors.Is(wrongErr, domain.ErrDecryptFailed) {
-		t.Fatalf("wrong token err = %v, want ErrDecryptFailed", wrongErr)
+	info, err := s.GetSecretInfo(ctx, adminPrincipal(), tref("credentials"))
+	if err != nil {
+		t.Fatalf("GetSecretInfo: %v", err)
+	}
+	if !info.Bound || !info.HasAccessToken || len(info.Versions) != 3 {
+		t.Fatalf("current metadata = %+v", info)
+	}
+	wantFlags := [][2]bool{{true, false}, {false, true}, {true, true}}
+	for i, want := range wantFlags {
+		if got := [2]bool{info.Versions[i].Bound, info.Versions[i].HasAccessToken}; got != want {
+			t.Fatalf("v%d flags = %v, want %v", i+1, got, want)
+		}
+	}
+
+	if _, err := s.DisableSecret(ctx, adminPrincipal(), tref("credentials"), 3, false); err != nil {
+		t.Fatalf("disable v3: %v", err)
+	}
+	if _, err := s.GetSecret(ctx, adminPrincipal(), tref("credentials"), 3, "", "wrong-token", testBindingKeyA); !errors.Is(err, domain.ErrPermissionDenied) {
+		t.Fatalf("wrong token probed disabled state: %v", err)
+	}
+	if _, err := s.GetSecret(ctx, adminPrincipal(), tref("credentials"), 3, "", v2.AccessToken, testBindingKeyB); !errors.Is(err, domain.ErrDecryptFailed) {
+		t.Fatalf("wrong binding key probed disabled state: %v", err)
+	}
+	if _, err := s.GetSecret(ctx, adminPrincipal(), tref("credentials"), 3, "", v2.AccessToken, testBindingKeyA); !errors.Is(err, domain.ErrFailedPrecondition) {
+		t.Fatalf("correct credentials did not expose disabled state: %v", err)
+	}
+}
+
+func TestRevealBoundSecretBypassesTokenOnly(t *testing.T) {
+	ctx := context.Background()
+	store := newFakeStore()
+	s := newTestService(store)
+	withKeyring(t, s)
+
+	putSecret(t, s, PutSecretInput{
+		Ref: tref("bound-reveal"), Value: []byte("v"), BindingKey: testBindingKeyA, GenerateToken: true,
+	})
+	_, missingErr := s.RevealSecret(ctx, adminPrincipal(), tref("bound-reveal"), 0, "", "", "")
+	_, wrongErr := s.RevealSecret(ctx, adminPrincipal(), tref("bound-reveal"), 0, "", "", testBindingKeyB)
+	if !errors.Is(missingErr, domain.ErrDecryptFailed) || !errors.Is(wrongErr, domain.ErrDecryptFailed) {
+		t.Fatalf("missing/wrong binding-key errors = %v / %v", missingErr, wrongErr)
 	}
 	if missingErr.Error() != wrongErr.Error() {
-		t.Fatalf("missing and wrong tokens produced distinguishable errors: %q != %q", missingErr, wrongErr)
+		t.Fatalf("missing and wrong keys produced distinguishable errors: %q != %q", missingErr, wrongErr)
 	}
 
-	val, err := s.RevealSecret(ctx, adminPrincipal(), tref("cb"), 0, "", res.AccessToken)
+	// No secret access token is supplied: Reveal bypasses that independent gate.
+	val, err := s.RevealSecret(ctx, adminPrincipal(), tref("bound-reveal"), 0, "", "", testBindingKeyA)
 	if err != nil {
-		t.Fatalf("RevealSecret with token: %v", err)
+		t.Fatalf("RevealSecret with binding key: %v", err)
 	}
 	if string(val.Value) != "v" {
 		t.Fatalf("value = %q, want v", val.Value)
 	}
 	if !store.hasAudit("secret.reveal", "allow") || !store.hasAudit("secret.reveal", "error") {
-		t.Fatal("client-bound reveal outcomes were not audited")
+		t.Fatal("bound reveal outcomes were not audited")
 	}
 }
 
-func TestClientBoundLifecycle(t *testing.T) {
-	ctx := context.Background()
+func TestPutSecretAllowsAlternatingBindingKeys(t *testing.T) {
 	store := newFakeStore()
 	s := newTestService(store)
 	withKeyring(t, s)
+	ref := tref("epochs")
 
-	_, err := s.PutSecret(ctx, adminPrincipal(), PutSecretInput{
-		Ref: tref("cb"), Value: []byte("v"), ContentType: "text/plain", ClientBound: true,
-	})
-	if !errors.Is(err, domain.ErrInvalidArgument) {
-		t.Fatalf("create without token err = %v, want ErrInvalidArgument", err)
+	inputs := []PutSecretInput{
+		{Ref: ref, Value: []byte("a1"), BindingKey: testBindingKeyA},
+		{Ref: ref, Value: []byte("plain")},
+		{Ref: ref, Value: []byte("b1"), BindingKey: testBindingKeyB},
+		{Ref: ref, Value: []byte("b2"), BindingKey: testBindingKeyB},
+		{Ref: ref, Value: []byte("a2"), BindingKey: testBindingKeyA},
+	}
+	for _, input := range inputs {
+		putSecret(t, s, input)
 	}
 
-	res := putSecret(t, s, PutSecretInput{
-		Ref: tref("cb"), Value: []byte("secret-value"), ContentType: "text/plain",
-		ClientBound: true, GenerateToken: true,
-	})
-	token := res.AccessToken
-
-	if _, err := s.GetSecret(ctx, adminPrincipal(), tref("cb"), 0, ""); !errors.Is(err, domain.ErrPermissionDenied) {
-		t.Fatalf("read without token err = %v, want ErrPermissionDenied", err)
+	wantBound := []bool{true, false, true, true, true}
+	for i, want := range wantBound {
+		if got := store.secrets[ref.String()].versions[uint64(i+1)].Bound; got != want {
+			t.Fatalf("v%d bound = %v, want %v", i+1, got, want)
+		}
 	}
-	val, err := s.GetSecret(ctx, adminPrincipal(), tref("cb"), 0, "", token)
-	if err != nil {
-		t.Fatalf("read with token: %v", err)
+	if !store.secrets[ref.String()].rec.Bound {
+		t.Fatal("current summary did not follow bound v5")
 	}
-	if string(val.Value) != "secret-value" {
-		t.Fatalf("value = %q, want secret-value", val.Value)
-	}
-
-	if _, err := s.PutSecret(ctx, adminPrincipal(), PutSecretInput{
-		Ref: tref("cb"), Value: []byte("v2"), ContentType: "text/plain", ClientBound: true,
-	}); !errors.Is(err, domain.ErrPermissionDenied) {
-		t.Fatalf("update without token err = %v, want ErrPermissionDenied", err)
-	}
-	if _, err := s.PutSecret(ctx, adminPrincipal(), PutSecretInput{
-		Ref: tref("cb"), Value: []byte("v2"), ContentType: "text/plain", ClientBound: true, SecretToken: token,
-	}); err != nil {
-		t.Fatalf("update with token: %v", err)
-	}
-}
-
-func TestPutSecretModeCannotChange(t *testing.T) {
-	ctx := context.Background()
-	store := newFakeStore()
-	s := newTestService(store)
-	withKeyring(t, s)
-	putSecret(t, s, PutSecretInput{Ref: tref("s"), Value: []byte("v"), ContentType: "text/plain"})
-
-	_, err := s.PutSecret(ctx, adminPrincipal(), PutSecretInput{
-		Ref: tref("s"), Value: []byte("v2"), ContentType: "text/plain", ClientBound: true, GenerateToken: true,
-	})
-	if !errors.Is(err, domain.ErrFailedPrecondition) {
-		t.Fatalf("err = %v, want ErrFailedPrecondition", err)
+	putSecret(t, s, PutSecretInput{Ref: ref, Value: []byte("plain2")})
+	if store.secrets[ref.String()].rec.Bound {
+		t.Fatal("current summary did not follow unbound v6")
 	}
 }
 
@@ -426,11 +477,11 @@ func TestPutSecretValidation(t *testing.T) {
 	withKeyring(t, s)
 
 	cases := map[string]PutSecretInput{
-		"empty value":               {Ref: tref("s"), Value: nil},
-		"bad key":                   {Ref: domain.Ref{NS: tns, Key: "bad key"}, Value: []byte("v")},
-		"invalid metadata":          {Ref: tref("s"), Value: []byte("v"), Metadata: "not-json"},
-		"token on new standard":     {Ref: tref("new-standard"), Value: []byte("v"), SecretToken: "unused"},
-		"token on new client-bound": {Ref: tref("new-client-bound"), Value: []byte("v"), ClientBound: true, GenerateToken: true, SecretToken: "unused"},
+		"empty value":           {Ref: tref("s"), Value: nil},
+		"bad key":               {Ref: domain.Ref{NS: tns, Key: "bad key"}, Value: []byte("v")},
+		"invalid metadata":      {Ref: tref("s"), Value: []byte("v"), Metadata: "not-json"},
+		"short binding key":     {Ref: tref("short"), Value: []byte("v"), BindingKey: "too-short"},
+		"invalid utf8 bind key": {Ref: tref("utf8"), Value: []byte("v"), BindingKey: strings.Repeat("a", 32) + "\xff"},
 	}
 	for name, in := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -439,12 +490,338 @@ func TestPutSecretValidation(t *testing.T) {
 			}
 		})
 	}
+}
 
-	putSecret(t, s, PutSecretInput{Ref: tref("standard"), Value: []byte("v")})
-	if _, err := s.PutSecret(ctx, adminPrincipal(), PutSecretInput{
-		Ref: tref("standard"), Value: []byte("v2"), SecretToken: "unused",
-	}); !errors.Is(err, domain.ErrInvalidArgument) {
-		t.Fatalf("token on existing standard secret err = %v, want ErrInvalidArgument", err)
+func TestBindUnbindExactVersionPreserveCiphertext(t *testing.T) {
+	ctx := context.Background()
+	store := newFakeStore()
+	s, hub := newTestServiceWithHub(t, store)
+	ref := tref("exact-bind")
+	putSecret(t, s, PutSecretInput{Ref: ref, Value: []byte("value")})
+	hub.wakes = 0
+
+	original := store.secrets[ref.String()].versions[1]
+	result, err := s.BindSecret(ctx, adminPrincipal(), ref, 0, testBindingKeyA)
+	if err != nil {
+		t.Fatalf("BindSecret: %v", err)
+	}
+	if result.AnchorVersion != 1 || !slices.Equal(result.AffectedVersions, []uint64{1}) {
+		t.Fatalf("bind result = %+v", result)
+	}
+	bound := store.secrets[ref.String()].versions[1]
+	if !bound.Bound || bound.WrapMode != domain.WrapModeBindingKey || len(bound.BindingKeySalt) == 0 {
+		t.Fatalf("bound row = %+v", bound)
+	}
+	if !bytes.Equal(bound.Ciphertext, original.Ciphertext) || bytes.Equal(bound.EncryptedDEK, original.EncryptedDEK) {
+		t.Fatal("bind must preserve ciphertext and rewrap the DEK")
+	}
+	if hub.wakes != 1 {
+		t.Fatalf("bind wakes = %d, want 1", hub.wakes)
+	}
+
+	beforePreviewWakes := hub.wakes
+	preview, err := s.PreviewSecretBindingCohort(ctx, adminPrincipal(), ref, 0, testBindingKeyA)
+	if err != nil || !slices.Equal(preview.AffectedVersions, []uint64{1}) {
+		t.Fatalf("preview = %+v, err=%v", preview, err)
+	}
+	if hub.wakes != beforePreviewWakes {
+		t.Fatal("preview woke watchers")
+	}
+
+	beforeWrong := store.secrets[ref.String()].versions[1]
+	if _, err := s.UnbindSecret(ctx, adminPrincipal(), ref, 1, testBindingKeyB); !errors.Is(err, domain.ErrDecryptFailed) {
+		t.Fatalf("UnbindSecret(wrong key) err = %v", err)
+	}
+	afterWrong := store.secrets[ref.String()].versions[1]
+	if !bytes.Equal(afterWrong.Ciphertext, beforeWrong.Ciphertext) || !bytes.Equal(afterWrong.EncryptedDEK, beforeWrong.EncryptedDEK) {
+		t.Fatal("wrong-key unbind changed persisted data")
+	}
+
+	result, err = s.UnbindSecret(ctx, adminPrincipal(), ref, 1, testBindingKeyA)
+	if err != nil {
+		t.Fatalf("UnbindSecret: %v", err)
+	}
+	unbound := store.secrets[ref.String()].versions[1]
+	if unbound.Bound || unbound.WrapMode != domain.WrapModeStandard || len(unbound.BindingKeySalt) != 0 {
+		t.Fatalf("unbound row = %+v", unbound)
+	}
+	if !bytes.Equal(unbound.Ciphertext, original.Ciphertext) {
+		t.Fatal("unbind rewrote value ciphertext")
+	}
+	if value, err := s.GetSecret(ctx, adminPrincipal(), ref, 1, "", "", ""); err != nil || string(value.Value) != "value" {
+		t.Fatalf("unbound read = %q, err=%v", value.Value, err)
+	}
+	if hub.wakes != 2 {
+		t.Fatalf("bind+unbind wakes = %d, want 2", hub.wakes)
+	}
+}
+
+func TestBindingCohortDiscoveryAndRotation(t *testing.T) {
+	ctx := context.Background()
+	store := newFakeStore()
+	s := newTestService(store)
+	ring := withKeyring(t, s)
+	ref := tref("cohorts")
+
+	putSecret(t, s, PutSecretInput{Ref: ref, Value: []byte("a1"), BindingKey: testBindingKeyA})
+	putSecret(t, s, PutSecretInput{Ref: ref, Value: []byte("a2"), BindingKey: testBindingKeyA})
+	putSecret(t, s, PutSecretInput{Ref: ref, Value: []byte("plain")})
+	putSecret(t, s, PutSecretInput{Ref: ref, Value: []byte("b1"), BindingKey: testBindingKeyB})
+
+	// A later cohort may use another recorded KEK. Rotation must use the KEK
+	// recorded on each row instead of assuming the currently active key.
+	secondKEK, err := crypto.NewKEKFromMaterial("kek-second", bytes.Repeat([]byte{0x9}, 32))
+	if err != nil {
+		t.Fatalf("NewKEKFromMaterial: %v", err)
+	}
+	ring.SetActive(secondKEK)
+	putSecret(t, s, PutSecretInput{Ref: ref, Value: []byte("b2"), BindingKey: testBindingKeyB})
+	putSecret(t, s, PutSecretInput{Ref: ref, Value: []byte("a3"), BindingKey: testBindingKeyA})
+	if _, err := s.DisableSecret(ctx, adminPrincipal(), ref, 5, false); err != nil {
+		t.Fatalf("disable v5: %v", err)
+	}
+
+	for _, tc := range []struct {
+		anchor uint64
+		key    string
+		want   []uint64
+	}{
+		{anchor: 1, key: testBindingKeyA, want: []uint64{1, 2}},
+		{anchor: 4, key: testBindingKeyB, want: []uint64{4, 5}},
+		{anchor: 6, key: testBindingKeyA, want: []uint64{6}},
+	} {
+		preview, err := s.PreviewSecretBindingCohort(ctx, adminPrincipal(), ref, tc.anchor, tc.key)
+		if err != nil || !slices.Equal(preview.AffectedVersions, tc.want) {
+			t.Fatalf("preview anchor %d = %+v, err=%v, want %v", tc.anchor, preview, err, tc.want)
+		}
+	}
+	if _, err := s.PreviewSecretBindingCohort(ctx, adminPrincipal(), ref, 4, testBindingKeyA); !errors.Is(err, domain.ErrDecryptFailed) {
+		t.Fatalf("wrong anchor key err = %v, want ErrDecryptFailed", err)
+	}
+
+	preview, err := s.PreviewSecretBindingCohort(ctx, adminPrincipal(), ref, 4, testBindingKeyB)
+	if err != nil {
+		t.Fatalf("preview B: %v", err)
+	}
+	before := map[uint64]storage.SecretVersionRecord{
+		4: store.secrets[ref.String()].versions[4],
+		5: store.secrets[ref.String()].versions[5],
+	}
+	rotated, err := s.RotateSecretBindingKey(ctx, adminPrincipal(), ref, 4, testBindingKeyB, testBindingKeyC, &preview.Revision, preview.AffectedVersions)
+	if err != nil {
+		t.Fatalf("RotateSecretBindingKey: %v", err)
+	}
+	if !slices.Equal(rotated.AffectedVersions, []uint64{4, 5}) {
+		t.Fatalf("rotated versions = %v", rotated.AffectedVersions)
+	}
+	for _, version := range rotated.AffectedVersions {
+		after := store.secrets[ref.String()].versions[version]
+		if !bytes.Equal(after.Ciphertext, before[version].Ciphertext) || after.KEKID != before[version].KEKID {
+			t.Fatalf("v%d ciphertext or recorded KEK changed", version)
+		}
+		if bytes.Equal(after.EncryptedDEK, before[version].EncryptedDEK) || bytes.Equal(after.BindingKeySalt, before[version].BindingKeySalt) {
+			t.Fatalf("v%d DEK wrapping or salt did not rotate", version)
+		}
+	}
+	if bytes.Equal(store.secrets[ref.String()].versions[4].BindingKeySalt, store.secrets[ref.String()].versions[5].BindingKeySalt) {
+		t.Fatal("rotated versions reused a binding salt")
+	}
+	if _, err := s.PreviewSecretBindingCohort(ctx, adminPrincipal(), ref, 4, testBindingKeyB); !errors.Is(err, domain.ErrDecryptFailed) {
+		t.Fatalf("old key still opens anchor: %v", err)
+	}
+	if got, err := s.PreviewSecretBindingCohort(ctx, adminPrincipal(), ref, 4, testBindingKeyC); err != nil || !slices.Equal(got.AffectedVersions, []uint64{4, 5}) {
+		t.Fatalf("new-key preview = %+v, err=%v", got, err)
+	}
+}
+
+func TestBindingCohortCASGuards(t *testing.T) {
+	ctx := context.Background()
+	store := newFakeStore()
+	s := newTestService(store)
+	withKeyring(t, s)
+	ref := tref("cas")
+	putSecret(t, s, PutSecretInput{Ref: ref, Value: []byte("v1"), BindingKey: testBindingKeyA})
+	putSecret(t, s, PutSecretInput{Ref: ref, Value: []byte("v2"), BindingKey: testBindingKeyA})
+	preview, err := s.PreviewSecretBindingCohort(ctx, adminPrincipal(), ref, 1, testBindingKeyA)
+	if err != nil {
+		t.Fatalf("preview: %v", err)
+	}
+
+	if _, err := s.RotateSecretBindingKey(ctx, adminPrincipal(), ref, 1, testBindingKeyA, testBindingKeyB, &preview.Revision, nil); !errors.Is(err, domain.ErrInvalidArgument) {
+		t.Fatalf("revision-only guard err = %v", err)
+	}
+	if _, err := s.RotateSecretBindingKey(ctx, adminPrincipal(), ref, 1, testBindingKeyA, testBindingKeyB, nil, preview.AffectedVersions); !errors.Is(err, domain.ErrInvalidArgument) {
+		t.Fatalf("versions-only guard err = %v", err)
+	}
+
+	putSecret(t, s, PutSecretInput{Ref: tref("unrelated"), Value: []byte("change revision")})
+	if _, err := s.RotateSecretBindingKey(ctx, adminPrincipal(), ref, 1, testBindingKeyA, testBindingKeyB, &preview.Revision, preview.AffectedVersions); !errors.Is(err, domain.ErrAborted) {
+		t.Fatalf("stale revision guard err = %v", err)
+	}
+	currentRevision := store.revision
+	if _, err := s.RotateSecretBindingKey(ctx, adminPrincipal(), ref, 1, testBindingKeyA, testBindingKeyB, &currentRevision, []uint64{1}); !errors.Is(err, domain.ErrAborted) {
+		t.Fatalf("stale affected-version guard err = %v", err)
+	}
+	if _, err := s.PreviewSecretBindingCohort(ctx, adminPrincipal(), ref, 1, testBindingKeyA); err != nil {
+		t.Fatalf("failed CAS mutated wrapping: %v", err)
+	}
+}
+
+func TestPurgeBindingCohortAdminOnlyAtomicAndRedacted(t *testing.T) {
+	ctx := context.Background()
+	store := newFakeStore()
+	seedTokenNS(store)
+	s := newTestService(store)
+	withKeyring(t, s)
+	observedCore, observed := observer.New(zap.DebugLevel)
+	s.log = zap.New(observedCore)
+	ref := tref("purge")
+
+	putSecret(t, s, PutSecretInput{Ref: ref, Value: []byte("a1"), BindingKey: testBindingKeyA})
+	putSecret(t, s, PutSecretInput{Ref: ref, Value: []byte("plain")})
+	putSecret(t, s, PutSecretInput{Ref: ref, Value: []byte("b1"), Metadata: `{"sensitive":"operator note"}`, BindingKey: testBindingKeyB})
+	putSecret(t, s, PutSecretInput{Ref: ref, Value: []byte("b2"), BindingKey: testBindingKeyB})
+	store.addPolicy(domain.Policy{Name: "delegated-destroy", Subject: "app", Allow: []domain.PolicyRule{{Operation: domain.OpSecretDestroy, Env: "prod", App: "app"}}})
+
+	storeCalls := 0
+	store.beforeBindingOperation = func(string) { storeCalls++ }
+	if _, err := s.PurgeSecretBindingCohort(ctx, clientPrincipal("app"), ref, 4, "short", nil, nil); !errors.Is(err, domain.ErrPermissionDenied) {
+		t.Fatalf("delegated non-admin purge err = %v", err)
+	}
+	if storeCalls != 0 {
+		t.Fatalf("non-admin purge reached cohort storage %d times", storeCalls)
+	}
+
+	preview, err := s.PreviewSecretBindingCohort(ctx, adminPrincipal(), ref, 4, testBindingKeyB)
+	if err != nil {
+		t.Fatalf("preview: %v", err)
+	}
+	auditsBefore := len(store.audits)
+	result, err := s.PurgeSecretBindingCohort(ctx, adminPrincipal(), ref, 4, testBindingKeyB, &preview.Revision, preview.AffectedVersions)
+	if err != nil {
+		t.Fatalf("PurgeSecretBindingCohort: %v", err)
+	}
+	if !slices.Equal(result.AffectedVersions, []uint64{3, 4}) {
+		t.Fatalf("purged versions = %v", result.AffectedVersions)
+	}
+	if len(store.audits) != auditsBefore+1 {
+		t.Fatalf("purge appended %d audit rows, want exactly 1", len(store.audits)-auditsBefore)
+	}
+	for _, version := range []uint64{3, 4} {
+		rec := store.secrets[ref.String()].versions[version]
+		if rec.State != domain.StateDestroyed || len(rec.Ciphertext) != 0 || len(rec.EncryptedDEK) != 0 || len(rec.Nonce) != 0 || len(rec.BindingKeySalt) != 0 || rec.Metadata != "" {
+			t.Fatalf("v%d was not reduced to a tombstone: %+v", version, rec)
+		}
+	}
+	if store.secrets[ref.String()].versions[1].State == domain.StateDestroyed || store.secrets[ref.String()].versions[2].State == domain.StateDestroyed {
+		t.Fatal("purge crossed a cohort boundary")
+	}
+	if got := store.secrets[ref.String()].rec.Labels[domain.LabelCurrent]; got != 4 {
+		t.Fatalf("current label moved to %d during purge", got)
+	}
+
+	for _, audit := range store.audits {
+		if strings.Contains(fmt.Sprintf("%+v", audit), testBindingKeyB) {
+			t.Fatal("binding key appeared in audit event")
+		}
+	}
+	if observed.FilterMessageSnippet(testBindingKeyB).Len() != 0 {
+		t.Fatal("binding key appeared in logs")
+	}
+	if _, err := s.PreviewSecretBindingCohort(ctx, adminPrincipal(), ref, 3, testBindingKeyB); err == nil || strings.Contains(err.Error(), testBindingKeyB) {
+		t.Fatalf("post-purge error was absent or leaked key: %v", err)
+	}
+}
+
+func TestPurgeBindingCohortRollsBackWhenAuditUnavailable(t *testing.T) {
+	ctx := context.Background()
+	store := newFakeStore()
+	s := newTestService(store)
+	withKeyring(t, s)
+	ref := tref("purge-rollback")
+	putSecret(t, s, PutSecretInput{Ref: ref, Value: []byte("v"), BindingKey: testBindingKeyA})
+	before := store.secrets[ref.String()].versions[1]
+	beforeRevision := store.revision
+	store.auditErr = errors.New("audit unavailable")
+
+	if _, err := s.PurgeSecretBindingCohort(ctx, adminPrincipal(), ref, 1, testBindingKeyA, nil, nil); err == nil {
+		t.Fatal("purge succeeded with unavailable transactional audit")
+	}
+	after := store.secrets[ref.String()].versions[1]
+	if after.State != before.State || !bytes.Equal(after.Ciphertext, before.Ciphertext) || !bytes.Equal(after.EncryptedDEK, before.EncryptedDEK) || store.revision != beforeRevision {
+		t.Fatal("failed purge changed the version or revision")
+	}
+}
+
+func TestBindingMutationSerializesWithPut(t *testing.T) {
+	ctx := context.Background()
+	store := newFakeStore()
+	s := newTestService(store)
+	withKeyring(t, s)
+	ref := tref("serialized")
+	putSecret(t, s, PutSecretInput{Ref: ref, Value: []byte("v1")})
+
+	enteredMutation := make(chan struct{})
+	releaseMutation := make(chan struct{})
+	store.beforeBindingOperation = func(operation string) {
+		if operation == "bind" {
+			close(enteredMutation)
+			<-releaseMutation
+		}
+	}
+	bindDone := make(chan error, 1)
+	go func() {
+		_, err := s.BindSecret(ctx, adminPrincipal(), ref, 1, testBindingKeyA)
+		bindDone <- err
+	}()
+	<-enteredMutation
+
+	enteredPut := make(chan struct{})
+	store.beforeCreateSecretVersion = func(storage.CreateSecretParams) { close(enteredPut) }
+	putDone := make(chan error, 1)
+	go func() {
+		_, err := s.PutSecret(ctx, adminPrincipal(), PutSecretInput{Ref: ref, Value: []byte("v2")})
+		putDone <- err
+	}()
+	select {
+	case <-enteredPut:
+		t.Fatal("put entered storage while binding mutation held the key-write lock")
+	case <-time.After(100 * time.Millisecond):
+	}
+	close(releaseMutation)
+	if err := <-bindDone; err != nil {
+		t.Fatalf("BindSecret: %v", err)
+	}
+	if err := <-putDone; err != nil {
+		t.Fatalf("PutSecret: %v", err)
+	}
+}
+
+func TestBindingLifecycleRequiresSecretWriteAuthorization(t *testing.T) {
+	ctx := context.Background()
+	store := newFakeStore()
+	seedTokenNS(store)
+	s := newTestService(store)
+	withKeyring(t, s)
+	ref := tref("binding-authz")
+	putSecret(t, s, PutSecretInput{Ref: ref, Value: []byte("v")})
+	client := clientPrincipal("app")
+
+	if _, err := s.BindSecret(ctx, client, ref, 1, testBindingKeyA); !errors.Is(err, domain.ErrPermissionDenied) {
+		t.Fatalf("unauthorized bind err = %v", err)
+	}
+	store.addPolicy(domain.Policy{Name: "writer", Subject: "app", Allow: []domain.PolicyRule{{Operation: domain.OpSecretWrite, Env: "prod", App: "app"}}})
+	if _, err := s.BindSecret(ctx, client, ref, 1, testBindingKeyA); err != nil {
+		t.Fatalf("authorized bind: %v", err)
+	}
+	if _, err := s.PreviewSecretBindingCohort(ctx, client, ref, 1, testBindingKeyA); err != nil {
+		t.Fatalf("authorized preview: %v", err)
+	}
+	if _, err := s.RotateSecretBindingKey(ctx, client, ref, 1, testBindingKeyA, testBindingKeyB, nil, nil); err != nil {
+		t.Fatalf("authorized rotate: %v", err)
+	}
+	if _, err := s.UnbindSecret(ctx, client, ref, 1, testBindingKeyB); err != nil {
+		t.Fatalf("authorized unbind: %v", err)
 	}
 }
 
@@ -481,13 +858,13 @@ func TestDisableEnableAndDestroyFlow(t *testing.T) {
 	if _, err := s.DisableSecret(ctx, adminPrincipal(), tref("s"), 1, false); err != nil {
 		t.Fatalf("disable: %v", err)
 	}
-	if _, err := s.GetSecret(ctx, adminPrincipal(), tref("s"), 1, ""); !errors.Is(err, domain.ErrFailedPrecondition) {
+	if _, err := s.GetSecret(ctx, adminPrincipal(), tref("s"), 1, "", "", ""); !errors.Is(err, domain.ErrFailedPrecondition) {
 		t.Fatalf("disabled read err = %v, want ErrFailedPrecondition", err)
 	}
 	if _, err := s.DisableSecret(ctx, adminPrincipal(), tref("s"), 1, true); err != nil {
 		t.Fatalf("enable: %v", err)
 	}
-	if _, err := s.GetSecret(ctx, adminPrincipal(), tref("s"), 1, ""); err != nil {
+	if _, err := s.GetSecret(ctx, adminPrincipal(), tref("s"), 1, "", "", ""); err != nil {
 		t.Fatalf("re-enabled read: %v", err)
 	}
 
@@ -497,7 +874,7 @@ func TestDisableEnableAndDestroyFlow(t *testing.T) {
 	if _, err := s.DisableSecret(ctx, adminPrincipal(), tref("s"), 1, true); err != nil {
 		t.Fatalf("enable after destroy (store call): %v", err)
 	}
-	if _, err := s.GetSecret(ctx, adminPrincipal(), tref("s"), 1, ""); !errors.Is(err, domain.ErrFailedPrecondition) {
+	if _, err := s.GetSecret(ctx, adminPrincipal(), tref("s"), 1, "", "", ""); !errors.Is(err, domain.ErrFailedPrecondition) {
 		t.Fatalf("destroyed read err = %v, want ErrFailedPrecondition", err)
 	}
 }
@@ -531,7 +908,7 @@ func TestPromoteSecretVersion(t *testing.T) {
 	if cur != 1 || prev != 2 {
 		t.Fatalf("promote returned current=%d previous=%d, want 1/2", cur, prev)
 	}
-	val, err := s.GetSecret(ctx, adminPrincipal(), tref("s"), 0, "")
+	val, err := s.GetSecret(ctx, adminPrincipal(), tref("s"), 0, "", "", "")
 	if err != nil || string(val.Value) != "v1" {
 		t.Fatalf("current after promote = %q, %v; want v1", val.Value, err)
 	}
@@ -556,11 +933,11 @@ func TestSecretAADBindsToRef(t *testing.T) {
 	moved.rec.Ref = tref("other")
 	store.secrets[tref("other").String()] = moved
 
-	if _, err := s.GetSecret(ctx, adminPrincipal(), tref("other"), 0, ""); !errors.Is(err, domain.ErrDecryptFailed) {
+	if _, err := s.GetSecret(ctx, adminPrincipal(), tref("other"), 0, "", "", ""); !errors.Is(err, domain.ErrDecryptFailed) {
 		t.Fatalf("relocated read err = %v, want ErrDecryptFailed", err)
 	}
 	// The original location still decrypts.
-	if _, err := s.GetSecret(ctx, adminPrincipal(), tref("db"), 0, ""); err != nil {
+	if _, err := s.GetSecret(ctx, adminPrincipal(), tref("db"), 0, "", "", ""); err != nil {
 		t.Fatalf("original read: %v", err)
 	}
 }

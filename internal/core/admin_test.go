@@ -598,7 +598,7 @@ func TestRotateKEKRewrapsSecretsAndCA(t *testing.T) {
 
 	// Secrets still decrypt under the rotated KEK.
 	for _, tc := range []struct{ key, want string }{{"a", "alpha"}, {"b", "bravo"}} {
-		val, err := s.GetSecret(ctx, adminPrincipal(), tref(tc.key), 0, "")
+		val, err := s.GetSecret(ctx, adminPrincipal(), tref(tc.key), 0, "", "", "")
 		if err != nil {
 			t.Fatalf("GetSecret(%s) after rotate: %v", tc.key, err)
 		}

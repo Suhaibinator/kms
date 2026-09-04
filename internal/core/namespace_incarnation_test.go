@@ -153,11 +153,11 @@ func TestNamespaceIncarnationBindingRejectsAuthorizationABA(t *testing.T) {
 
 		svc := New(wrapped, nil, "test")
 		svc.SetKeyring(ring)
-		_, err := svc.GetSecret(context.Background(), boundClientPrincipal("client", ns), ref, 0, "")
+		_, err := svc.GetSecret(context.Background(), boundClientPrincipal("client", ns), ref, 0, "", "", "")
 		if !errors.Is(err, domain.ErrAborted) {
 			t.Fatalf("GetSecret after namespace ABA err = %v, want ErrAborted", err)
 		}
-		got, err := seed.RevealSecret(context.Background(), adminPrincipal(), ref, 0, "")
+		got, err := seed.RevealSecret(context.Background(), adminPrincipal(), ref, 0, "", "", "")
 		if err != nil || string(got.Value) != "incarnation-b" {
 			t.Fatalf("unbound legitimate reveal = %q, err %v", got.Value, err)
 		}
