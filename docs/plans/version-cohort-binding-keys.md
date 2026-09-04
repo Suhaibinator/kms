@@ -47,6 +47,8 @@ Add these SecretService operations:
 ```proto
 rpc BindSecret(BindSecretRequest) returns (SecretVersionMutationResponse);
 rpc UnbindSecret(UnbindSecretRequest) returns (SecretVersionMutationResponse);
+rpc PreviewSecretBindingCohort(PreviewSecretBindingCohortRequest)
+    returns (SecretBindingCohortResponse);
 rpc RotateSecretBindingKey(RotateSecretBindingKeyRequest)
     returns (SecretBindingCohortResponse);
 rpc PurgeSecretBindingCohort(PurgeSecretBindingCohortRequest)
@@ -66,6 +68,9 @@ Request semantics:
 - `RotateSecretBindingKey(ref, anchor_version, binding_key, new_binding_key)`
   - `anchor_version = 0` means current.
   - Rotates the contiguous cohort around the anchor.
+- `PreviewSecretBindingCohort(ref, anchor_version, binding_key)`
+  - `anchor_version = 0` means current.
+  - Discovers the cohort without mutating it and returns the current storage revision.
 - `PurgeSecretBindingCohort(ref, anchor_version, binding_key)`
   - `anchor_version = 0` means current.
   - Admin-only and purges the contiguous matching cohort.
@@ -74,6 +79,11 @@ Request semantics:
   - Sorted affected version numbers.
   - Resulting storage revision.
   - No derived key or cohort identifier.
+- Interactive rotate and purge callers pass the preview revision and affected
+  versions back as compare-and-swap guards. The server rediscovers and compares
+  the cohort inside the mutation transaction; any intervening change aborts
+  before rewrap or destruction, so the executed set is exactly the set the
+  administrator confirmed.
 
 Missing and incorrect binding keys return the same sanitized permission/decryption errors used for other secret credentials. Errors and audit records must never echo request fields.
 
@@ -423,8 +433,9 @@ The metadata lookup and secret fetch count as one unit under the existing concur
 - Generated application code may source keys from any mechanism; environment-variable helpers are application code, not SDK policy.
 - Low-level alias maps use release aliases, not resource paths.
 - Extra map entries are retained privately but never transmitted. Only the exact alias being resolved is looked up.
-- Passing either `secret_token` or `binding_key` disables direct-read cache lookup and insertion.
-- Uncredentialed reads may use the cache only for versions verified as requiring neither credential.
+- Secret-value caching is disabled. Binding and access-token requirements are
+  mutable live metadata, so even a formerly uncredentialed cache entry could
+  otherwise bypass protection added by another client after the cache fill.
 - Binding keys are never included in cache keys, exception text, callbacks, tracing attributes, metrics labels, acknowledgements, or test snapshots.
 - Secret comparison and change reporting use only resolved path/version identity; changing a local binding-key declaration alone is not reported as a configuration-value change.
 
