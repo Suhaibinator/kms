@@ -329,12 +329,10 @@ func (c *CLI) cmdPutSecret(args []string) int {
 	fs := c.newFlags("put-secret")
 	cf := addConnFlags(c, fs)
 	valueFile := fs.String("value-file", "", "read the secret value from this `file` (default: stdin)")
-	clientBound := fs.Bool("client-bound", false, "write a client-bound secret (new secrets also require --generate-token)")
 	genToken := fs.Bool("generate-token", false, "mint or rotate a per-secret access token (shown once)")
 	contentType := fs.String("content-type", "text/plain", "secret content `type`")
-	addSecretTokenFlags(fs, cf, "existing per-secret `token` (client-bound updates)")
 	c.setUsage(fs, "put-secret /env/app/key [flags]",
-		"Store a secret value read from --value-file or standard input.", false)
+		"Store a secret value read from --value-file or standard input. KMS_BINDING_KEY binds the new version when set.", false)
 	if !c.parseFlags(fs, args) {
 		return 2
 	}
@@ -348,6 +346,13 @@ func (c *CLI) cmdPutSecret(args []string) int {
 	ref, err := keyutil.SplitDisplayPath(pos[0])
 	if err != nil {
 		return c.failUsage("invalid path: %v", err)
+	}
+	bindingKey := ""
+	if key, ok := c.env(bindingKeyEnv); ok && key != "" {
+		if err := validateBindingKeyInput(key); err != nil {
+			return c.failUsage("put-secret: %s: %v", bindingKeyEnv, err)
+		}
+		bindingKey = key
 	}
 	value, err := c.readValue(*valueFile)
 	if err != nil {
@@ -366,9 +371,8 @@ func (c *CLI) cmdPutSecret(args []string) int {
 		Ref:                 protoRef(ref),
 		Value:               value,
 		ContentType:         *contentType,
-		ClientBound:         *clientBound,
+		BindingKey:          bindingKey,
 		GenerateAccessToken: *genToken,
-		SecretToken:         cf.secretToken,
 	})
 	if err != nil {
 		return c.failErr("put-secret", err)
@@ -435,23 +439,51 @@ func (c *CLI) cmdGetSecret(args []string) int {
 	if err != nil {
 		return c.failUsage("invalid path: %v", err)
 	}
+	if *version != 0 && *label != "" {
+		return c.failUsage("get-secret: --version and --label are mutually exclusive")
+	}
 
 	conn, err := c.dialConn(cf)
 	if err != nil {
 		return c.failErr("", err)
 	}
 	defer func() { _ = conn.Close() }()
-	ctx, cancel := callContext()
-	defer cancel()
 
-	resp, err := kmsv1.NewSecretServiceClient(conn).GetSecret(cf.authCtx(ctx), &kmsv1.GetSecretRequest{
+	client := kmsv1.NewSecretServiceClient(conn)
+	metadataCtx, cancelMetadata := callContext()
+	metadataResp, err := client.GetSecretMetadata(cf.authCtx(metadataCtx), &kmsv1.GetSecretMetadataRequest{Ref: protoRef(ref)})
+	cancelMetadata()
+	if err != nil {
+		return c.failErr("get-secret", err)
+	}
+	metadata := metadataResp.GetSecret()
+	if metadata == nil || !sameRef(metadata.GetRef(), protoRef(ref)) {
+		return c.fail("get-secret metadata: server returned a different resource")
+	}
+	selected, err := selectSecretVersion(metadata, *version, *label)
+	if err != nil {
+		return c.fail("get-secret metadata: %v", err)
+	}
+	bindingKey := ""
+	if selected.GetBound() {
+		bindingKey, err = c.requiredBindingKey(bindingKeyEnv, "Binding key for "+ref.String()+": ", false)
+		if err != nil {
+			return c.failUsage("get-secret: %v", err)
+		}
+	}
+	readCtx, cancelRead := callContext()
+	defer cancelRead()
+	resp, err := client.GetSecret(cf.authCtx(readCtx), &kmsv1.GetSecretRequest{
 		Ref:         protoRef(ref),
-		Version:     *version,
-		Label:       *label,
+		Version:     selected.GetVersion(),
 		SecretToken: cf.secretToken,
+		BindingKey:  bindingKey,
 	})
 	if err != nil {
 		return c.failErr("get-secret", err)
+	}
+	if resp.GetVersion() != selected.GetVersion() || !sameRef(resp.GetRef(), protoRef(ref)) {
+		return c.fail("get-secret: server returned a different secret version")
 	}
 
 	// The destination rules are the same in both output modes: --out wins, a
@@ -623,12 +655,12 @@ func (c *CLI) cmdList(args []string) int {
 		}
 		for _, s := range resp.Secrets {
 			note := "standard"
-			if s.ClientBound {
-				note = "client-bound"
+			if s.GetBound() {
+				note = "bound"
 			}
 			items = append(items, listItemJSON{
 				Type: "secret", Path: displayPath(s.Ref), Current: s.Labels["current"],
-				Note: note, ClientBound: s.ClientBound,
+				Note: note, Bound: s.GetBound(),
 			})
 		}
 		if token = resp.NextPageToken; token == "" {
@@ -651,14 +683,13 @@ func (c *CLI) cmdList(args []string) int {
 }
 
 // listItemJSON is one row of the namespace listing. It carries every table
-// column plus client_bound, so a consumer need not parse the human-readable
-// note to tell a client-bound secret from a standard one.
+// column plus bound, so a consumer need not parse the human-readable note.
 type listItemJSON struct {
-	Type        string `json:"type"` // parameter | secret
-	Path        string `json:"path"` // /env/app/key
-	Current     uint64 `json:"current"`
-	Note        string `json:"note"`         // content type (parameter) or standard|client-bound (secret)
-	ClientBound bool   `json:"client_bound"` // always false for a parameter
+	Type    string `json:"type"` // parameter | secret
+	Path    string `json:"path"` // /env/app/key
+	Current uint64 `json:"current"`
+	Note    string `json:"note"`  // content type (parameter) or standard|bound (secret)
+	Bound   bool   `json:"bound"` // always false for a parameter
 }
 
 // --- helpers ---------------------------------------------------------------

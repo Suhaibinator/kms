@@ -162,14 +162,15 @@ func (s *envParameterStub) GetParameter(ctx context.Context, req *kmsv1.GetParam
 }
 
 // envSecretStub answers the SecretService calls. requireToken names the secrets
-// whose GetSecret the server refuses without the matching per-secret token, the
-// way a token-gated or client-bound secret behaves.
+// whose GetSecret the server refuses without the matching per-secret token.
 type envSecretStub struct {
 	kmsv1.UnimplementedSecretServiceServer
 	rec          *envRecorder
 	list         []*kmsv1.SecretMetadata
+	metadata     map[string]*kmsv1.SecretMetadata
 	get          map[string]*kmsv1.GetSecretResponse
 	getErr       map[string]error
+	metadataErr  map[string]error
 	requireToken map[string]string
 	listErr      error
 }
@@ -204,6 +205,19 @@ func (s *envSecretStub) GetSecret(ctx context.Context, req *kmsv1.GetSecretReque
 		return nil, status.Errorf(codes.NotFound, "no secret %s", path)
 	}
 	return resp, nil
+}
+
+func (s *envSecretStub) GetSecretMetadata(ctx context.Context, req *kmsv1.GetSecretMetadataRequest) (*kmsv1.GetSecretMetadataResponse, error) {
+	path := displayPath(req.GetRef())
+	s.rec.record(ctx, envCall{method: "GetSecretMetadata", path: path})
+	if err := s.metadataErr[path]; err != nil {
+		return nil, err
+	}
+	metadata, ok := s.metadata[path]
+	if !ok {
+		return nil, status.Errorf(codes.NotFound, "no secret %s", path)
+	}
+	return &kmsv1.GetSecretMetadataResponse{Secret: metadata}, nil
 }
 
 // envReleaseStub answers GetActiveRelease.
@@ -251,14 +265,22 @@ func newEnvFixture(t *testing.T) *envFixture {
 		secrets: &envSecretStub{
 			rec: rec,
 			list: []*kmsv1.SecretMetadata{
-				{Ref: envTestRef("prod", "app", "session-secret")},
-				{Ref: envTestRef("prod", "app", "stripe-key"), HasAccessToken: true},
+				{
+					Ref: envTestRef("prod", "app", "session-secret"), Labels: map[string]uint64{"current": 4},
+					Versions: []*kmsv1.SecretVersionInfo{{Version: 4, State: "enabled"}},
+				},
+				{
+					Ref: envTestRef("prod", "app", "stripe-key"), HasAccessToken: true, Labels: map[string]uint64{"current": 9},
+					Versions: []*kmsv1.SecretVersionInfo{{Version: 9, State: "enabled", HasAccessToken: true}},
+				},
 			},
+			metadata: map[string]*kmsv1.SecretMetadata{},
 			get: map[string]*kmsv1.GetSecretResponse{
 				"/prod/app/session-secret": {Ref: envTestRef("prod", "app", "session-secret"), Version: 4, Value: []byte(envTestSessionValue)},
 				"/prod/app/stripe-key":     {Ref: envTestRef("prod", "app", "stripe-key"), Version: 9, Value: []byte(envTestStripeValue)},
 			},
 			getErr:       map[string]error{},
+			metadataErr:  map[string]error{},
 			requireToken: map[string]string{"/prod/app/stripe-key": envTestStripeToken},
 		},
 		releases: &envReleaseStub{rec: rec},
@@ -295,7 +317,7 @@ func envTestRelease() *kmsv1.ConfigurationRelease {
 			},
 			{
 				Alias: "billing-key", Kind: "secret", Ref: envTestRef("prod", "app", "stripe-key"), Version: 9,
-				ContentType: "application/octet-stream", HasAccessToken: true,
+				ContentType: "application/octet-stream",
 			},
 		},
 	}
@@ -315,6 +337,10 @@ func (f *envFixture) installRelease() {
 	f.secrets.get["/prod/app/stripe-key"] = &kmsv1.GetSecretResponse{
 		Ref: envTestRef("prod", "app", "stripe-key"), Version: 9, Value: []byte(envTestStripeValue),
 		ContentType: "application/octet-stream",
+	}
+	f.secrets.metadata["/prod/app/stripe-key"] = &kmsv1.SecretMetadata{
+		Ref: envTestRef("prod", "app", "stripe-key"), Labels: map[string]uint64{"current": 9},
+		Versions: []*kmsv1.SecretVersionInfo{{Version: 9, State: "enabled", HasAccessToken: true}},
 	}
 }
 
@@ -529,6 +555,44 @@ func TestEnvNoSecretsRejectsASecretToken(t *testing.T) {
 	}
 	if strings.Contains(f.stderr(), envTestStripeToken) {
 		t.Fatalf("stderr echoed the token: %s", f.stderr())
+	}
+}
+
+func TestEnvBoundNamespaceSecretIsPresentEmptyAndNeverFetched(t *testing.T) {
+	f := newEnvFixture(t)
+	f.secrets.list[0].Bound = true
+	f.secrets.list[0].Versions[0].Bound = true
+	if code := f.run("--secret-token", "stripe-key="+envTestStripeToken); code != exitOK {
+		t.Fatalf("exit = %d, stderr=%s", code, f.stderr())
+	}
+	if !strings.Contains(f.stdout(), "SESSION_SECRET=\"\"\n") {
+		t.Fatalf("stdout = %q, want the bound secret present with an empty value", f.stdout())
+	}
+	for _, call := range f.rec.snapshot() {
+		if call.method == "GetSecret" && call.path == "/prod/app/session-secret" {
+			t.Fatal("GetSecret was called for a bound namespace version")
+		}
+	}
+}
+
+func TestEnvReleaseUsesExactVersionMetadataAndEmitsBoundPinEmpty(t *testing.T) {
+	f := newEnvFixture(t)
+	f.installRelease()
+	f.secrets.metadata["/prod/app/stripe-key"].Versions = []*kmsv1.SecretVersionInfo{
+		{Version: 8, State: "enabled", HasAccessToken: true},
+		{Version: 9, State: "enabled", Bound: true, HasAccessToken: true},
+	}
+	if code := f.run("--release", "runtime"); code != exitOK {
+		t.Fatalf("exit = %d, stderr=%s", code, f.stderr())
+	}
+	if !strings.Contains(f.stdout(), "BILLING_KEY=\"\"\n") {
+		t.Fatalf("stdout = %q, want bound release alias present with an empty value", f.stdout())
+	}
+	if n := f.rec.count("GetSecretMetadata"); n != 1 {
+		t.Fatalf("GetSecretMetadata called %d times, want exact pinned-version lookup", n)
+	}
+	if n := f.rec.count("GetSecret"); n != 0 {
+		t.Fatalf("GetSecret called %d times for a bound release version", n)
 	}
 }
 

@@ -42,7 +42,7 @@ func (c *CLI) cmdExec(args []string) int {
 	addEnvSelectionFlags(fs, &sel)
 	preserveEnv := fs.Bool("preserve-env", false, "let an existing environment variable win over an injected one of the same name (the shadowed names are reported)")
 	c.setUsage(fs, "exec ENV/APP [flags] -- COMMAND [ARGS...]",
-		"Run COMMAND with the namespace's parameters and secrets injected as environment variables. The CLI resolves every value first, then replaces itself with COMMAND (on Unix), so signals and the exit status pass straight through. Injected variables win over the parent environment unless --preserve-env is given; KMS_SECRET_TOKEN_* variables never reach the command. Prefer --release NAME in production: the values are then the exact, digest-verified versions the active release pins.", false)
+		"Run COMMAND with the namespace's parameters and secrets injected as environment variables. The CLI resolves every value first, then replaces itself with COMMAND (on Unix), so signals and the exit status pass straight through. Injected variables win over the parent environment unless --preserve-env is given; binding keys and KMS_SECRET_TOKEN_* variables never reach the command. Prefer --release NAME in production: the values are then the exact, digest-verified versions the active release pins.", false)
 	if !c.parseFlags(fs, own) {
 		return 2
 	}
@@ -79,7 +79,15 @@ func (c *CLI) cmdExec(args []string) int {
 	}
 	c.printResolutionNotes(res)
 
-	env, shadowed := envinject.Merge(c.environ(), res.vars, *preserveEnv, caseInsensitiveEnv())
+	parent := scrubChildCredentialEnvironment(c.environ(), caseInsensitiveEnv())
+	// A bound bulk output is deliberately the empty string. It is a security
+	// decision, not an ordinary injected default, so --preserve-env must not
+	// replace it with a stale non-empty parent value.
+	parent = removeEnvironmentNames(parent, res.boundNames, caseInsensitiveEnv())
+	env, shadowed := envinject.Merge(parent, res.vars, *preserveEnv, caseInsensitiveEnv())
+	// Apply the filter again after injection: a store key or release alias that
+	// maps to a reserved credential variable must not smuggle it into the child.
+	env = scrubChildCredentialEnvironment(env, caseInsensitiveEnv())
 	for _, name := range shadowed {
 		c.info("note: %s is already set and kept (--preserve-env); the store's value was not injected", name)
 	}
@@ -88,6 +96,79 @@ func (c *CLI) cmdExec(args []string) int {
 		_, _ = fmt.Fprintf(c.Stderr, "error: exec %s: %v\n", command[0], err)
 	}
 	return code
+}
+
+// scrubBindingKeyEnvironment removes the two exact process-level binding-key
+// variables before exec. Per-secret access-token variables are independently
+// removed by envinject.Merge. Near-miss names are intentionally preserved.
+func scrubBindingKeyEnvironment(parent []string, caseInsensitive bool) []string {
+	out := make([]string, 0, len(parent))
+	for _, entry := range parent {
+		name, _, ok := strings.Cut(entry, "=")
+		if !ok {
+			out = append(out, entry)
+			continue
+		}
+		matches := func(want string) bool {
+			if caseInsensitive {
+				return strings.EqualFold(name, want)
+			}
+			return name == want
+		}
+		if matches(bindingKeyEnv) || matches(newBindingKeyEnv) {
+			continue
+		}
+		out = append(out, entry)
+	}
+	return out
+}
+
+func scrubChildCredentialEnvironment(parent []string, caseInsensitive bool) []string {
+	withoutBindingKeys := scrubBindingKeyEnvironment(parent, caseInsensitive)
+	out := make([]string, 0, len(withoutBindingKeys))
+	for _, entry := range withoutBindingKeys {
+		name, _, ok := strings.Cut(entry, "=")
+		if !ok {
+			out = append(out, entry)
+			continue
+		}
+		isSecretToken := strings.HasPrefix(name, secretTokenEnvPrefix)
+		if caseInsensitive && len(name) >= len(secretTokenEnvPrefix) {
+			isSecretToken = strings.EqualFold(name[:len(secretTokenEnvPrefix)], secretTokenEnvPrefix)
+		}
+		if !isSecretToken {
+			out = append(out, entry)
+		}
+	}
+	return out
+}
+
+func removeEnvironmentNames(entries, names []string, caseInsensitive bool) []string {
+	if len(names) == 0 {
+		return entries
+	}
+	wanted := make(map[string]struct{}, len(names))
+	for _, name := range names {
+		if caseInsensitive {
+			name = strings.ToUpper(name)
+		}
+		wanted[name] = struct{}{}
+	}
+	out := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		name, _, ok := strings.Cut(entry, "=")
+		lookup := name
+		if caseInsensitive {
+			lookup = strings.ToUpper(lookup)
+		}
+		if ok {
+			if _, remove := wanted[lookup]; remove {
+				continue
+			}
+		}
+		out = append(out, entry)
+	}
+	return out
 }
 
 // environ returns the parent environment for the command, from the test

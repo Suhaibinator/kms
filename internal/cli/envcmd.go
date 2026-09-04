@@ -116,11 +116,13 @@ func (sel *envSelection) validate() error {
 
 // secretItem is a secret selected for injection, before its value is fetched.
 type secretItem struct {
-	ref         *kmsv1.ResourceRef
-	alias       string // release mode only
-	version     uint64 // release mode only; 0 = label current
-	contentType string // release mode only; "" = not recorded
-	needsToken  bool
+	ref             *kmsv1.ResourceRef
+	alias           string // release mode only
+	version         uint64 // release mode only; 0 = label current
+	contentType     string // release mode only; "" = not recorded
+	bound           bool
+	needsToken      bool
+	protectionKnown bool // namespace listings include exact version metadata; release entries do not
 }
 
 // names lists every spelling a token flag may use for this secret. In
@@ -155,9 +157,10 @@ func (s secretItem) tokenEnvName() (string, bool) {
 
 // resolvedEnvironment is what resolveEnvironment produces for both commands.
 type resolvedEnvironment struct {
-	vars    []envinject.Var
-	notes   []envinject.Note
-	skipped []string // secrets skipped for want of a token (display paths)
+	vars       []envinject.Var
+	notes      []envinject.Note
+	boundNames []string // output variables that must remain explicitly empty
+	skipped    []string // secrets skipped for want of a token (display paths)
 }
 
 // resolveEnvironment fetches the selected entries and maps them to variables.
@@ -184,10 +187,40 @@ func (c *CLI) resolveEnvironment(ctx context.Context, conn *grpc.ClientConn, cf 
 		return resolvedEnvironment{}, err
 	}
 	var out resolvedEnvironment
+	var boundItems []envinject.Item
 	if !sel.noSecrets {
 		client := kmsv1.NewSecretServiceClient(conn)
-		for _, s := range secrets {
+		for _, selected := range secrets {
+			s := selected
 			path := displayPath(s.ref)
+			if !s.protectionKnown {
+				metadataResp, err := client.GetSecretMetadata(cf.authCtx(ctx), &kmsv1.GetSecretMetadataRequest{Ref: s.ref})
+				if err != nil {
+					return resolvedEnvironment{}, fmt.Errorf("secret %s metadata: %w", path, err)
+				}
+				metadata := metadataResp.GetSecret()
+				if metadata == nil || !sameRef(metadata.GetRef(), s.ref) {
+					return resolvedEnvironment{}, fmt.Errorf("secret %s metadata: server returned a different resource", path)
+				}
+				versionInfo, err := selectSecretVersion(metadata, s.version, "")
+				if err != nil {
+					return resolvedEnvironment{}, fmt.Errorf("secret %s metadata: %w", path, err)
+				}
+				s.bound = versionInfo.GetBound()
+				s.needsToken = !s.bound && versionInfo.GetHasAccessToken()
+				s.protectionKnown = true
+			}
+			if s.bound {
+				// Bulk commands never request or consume binding keys. A bound
+				// output remains present with an explicitly empty value so callers
+				// cannot mistake omission for a default or a missing selection.
+				item := envinject.Item{
+					Key: s.ref.GetKey(), Alias: s.alias, Value: []byte{}, ContentType: s.contentType, Secret: true,
+				}
+				items = append(items, item)
+				boundItems = append(boundItems, item)
+				continue
+			}
 			token, err := tokens.lookup(s, ns, c)
 			if err != nil {
 				return resolvedEnvironment{}, err
@@ -224,11 +257,22 @@ func (c *CLI) resolveEnvironment(ctx context.Context, conn *grpc.ClientConn, cf 
 		return resolvedEnvironment{}, err
 	}
 
-	out.vars, out.notes, err = envinject.Resolve(items, envinject.Rules{
+	rules := envinject.Rules{
 		Prefix: sel.envPrefix, MaxEntryBytes: maxEnvEntryBytes, MaxTotalBytes: maxEnvTotalBytes,
-	})
+	}
+	out.vars, out.notes, err = envinject.Resolve(items, rules)
 	if err != nil {
 		return resolvedEnvironment{}, err
+	}
+	for _, item := range boundItems {
+		vars, _, err := envinject.Resolve([]envinject.Item{item}, rules)
+		if err != nil {
+			return resolvedEnvironment{}, fmt.Errorf("mapping bound secret output: %w", err)
+		}
+		if len(vars) != 1 {
+			return resolvedEnvironment{}, fmt.Errorf("mapping bound secret output: expected one variable, got %d", len(vars))
+		}
+		out.boundNames = append(out.boundNames, vars[0].Name)
 	}
 	return out, nil
 }
@@ -259,7 +303,18 @@ func (c *CLI) resolveNamespaceValues(ctx context.Context, conn *grpc.ClientConn,
 			return nil, nil, fmt.Errorf("list secrets: %w", err)
 		}
 		for _, s := range resp.GetSecrets() {
-			secrets = append(secrets, secretItem{ref: s.GetRef(), needsToken: s.GetHasAccessToken() || s.GetClientBound()})
+			versionInfo, err := selectSecretVersion(s, 0, "")
+			if err != nil {
+				return nil, nil, fmt.Errorf("secret %s metadata: %w", displayPath(s.GetRef()), err)
+			}
+			secrets = append(secrets, secretItem{
+				ref:             s.GetRef(),
+				version:         versionInfo.GetVersion(),
+				contentType:     s.GetContentType(),
+				bound:           versionInfo.GetBound(),
+				needsToken:      !versionInfo.GetBound() && versionInfo.GetHasAccessToken(),
+				protectionKnown: true,
+			})
 		}
 		if token = resp.GetNextPageToken(); token == "" {
 			break
@@ -311,7 +366,6 @@ func (c *CLI) resolveReleaseValues(ctx context.Context, conn *grpc.ClientConn, c
 		case "secret":
 			secrets = append(secrets, secretItem{
 				ref: e.GetRef(), alias: e.GetAlias(), version: e.GetVersion(), contentType: e.GetContentType(),
-				needsToken: e.GetHasAccessToken() || e.GetClientBound(),
 			})
 		default:
 			return nil, nil, fmt.Errorf("release entry %s has unknown kind %q", e.GetAlias(), e.GetKind())

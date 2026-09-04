@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -32,8 +33,8 @@ type execFixture struct {
 }
 
 // newExecFixture wires the standard namespace to a recording launcher and a
-// fixed parent environment. The parent deliberately carries a per-secret token
-// and an identity token: only the former is stripped from the child.
+// fixed parent environment. The parent deliberately carries per-secret and
+// binding credentials plus an identity token: only the identity token survives.
 func newExecFixture(t *testing.T, code int, err error) *execFixture {
 	t.Helper()
 	f := &execFixture{envFixture: newEnvFixture(t)}
@@ -44,6 +45,8 @@ func newExecFixture(t *testing.T, code int, err error) *execFixture {
 			"KMS_TOKEN=id-token",
 			"KMS_SECRET_TOKEN_STRIPE_KEY=" + envTestStripeToken,
 			"KMS_SECRET_TOKEN_FILE=/run/secrets/stripe",
+			bindingKeyEnv + "=" + testOldBindingKey,
+			newBindingKeyEnv + "=" + testNewBindingKey,
 		}
 	}
 	f.launchOverride = func(argv, env []string) (int, error) {
@@ -195,8 +198,7 @@ func TestExecRequiresACommand(t *testing.T) {
 
 // TestExecInjectsTheMergedEnvironment: the child sees its parent's environment
 // plus the store's values, with the injected names last and sorted, and with
-// every KMS_SECRET_TOKEN_* entry removed — those are inputs to the CLI, not
-// credentials the workload should inherit.
+// every per-secret or binding credential removed.
 func TestExecInjectsTheMergedEnvironment(t *testing.T) {
 	t.Parallel()
 	f := newExecFixture(t, 0, nil)
@@ -243,6 +245,10 @@ func TestExecStripsSecretTokensFromTheChild(t *testing.T) {
 		if strings.HasPrefix(entry, secretTokenEnvPrefix) {
 			t.Fatalf("child environment carries %q", entry)
 		}
+		name, _, _ := strings.Cut(entry, "=")
+		if name == bindingKeyEnv || name == newBindingKeyEnv {
+			t.Fatalf("child environment carries binding credential %q", name)
+		}
 	}
 	var sawIdentity bool
 	for _, entry := range f.launched.env {
@@ -256,6 +262,62 @@ func TestExecStripsSecretTokensFromTheChild(t *testing.T) {
 	// The stripped names never reach stderr either, since they carry tokens.
 	if strings.Contains(f.stderr(), envTestStripeToken) {
 		t.Fatalf("stderr = %s", f.stderr())
+	}
+}
+
+func TestExecKeepsBoundSecretAsAnEmptyChildVariableWithoutFetching(t *testing.T) {
+	f := newExecFixture(t, 0, nil)
+	f.secrets.list[0].Bound = true
+	f.secrets.list[0].Versions[0].Bound = true
+	baseEnvironment := f.environOverride
+	f.environOverride = func() []string {
+		return append(baseEnvironment(), "SESSION_SECRET=stale-parent-default")
+	}
+	if code := f.runExec([]string{"--secret-token", "stripe-key=" + envTestStripeToken, "--preserve-env", "--quiet"}, "/usr/bin/app"); code != exitOK {
+		t.Fatalf("exit = %d, stderr=%s", code, f.stderr())
+	}
+	if !slices.Contains(f.launched.env, "SESSION_SECRET=") {
+		t.Fatalf("child environment = %q, want bound secret present and empty", f.launched.env)
+	}
+	if slices.Contains(f.launched.env, "SESSION_SECRET=stale-parent-default") {
+		t.Fatalf("--preserve-env replaced a required empty bound output: %q", f.launched.env)
+	}
+	for _, call := range f.rec.snapshot() {
+		if call.method == "GetSecret" && call.path == "/prod/app/session-secret" {
+			t.Fatal("GetSecret was called for a bound exec value")
+		}
+	}
+}
+
+func TestScrubBindingKeyEnvironmentRemovesOnlyExactCredentialNames(t *testing.T) {
+	parent := []string{
+		bindingKeyEnv + "=old",
+		newBindingKeyEnv + "=new",
+		"KMS_BINDING_KEY_SUFFIX=keep",
+		"kms_binding_key=case",
+		"PATH=/bin",
+	}
+	wantSensitive := []string{"KMS_BINDING_KEY_SUFFIX=keep", "kms_binding_key=case", "PATH=/bin"}
+	if got := scrubBindingKeyEnvironment(parent, false); !slices.Equal(got, wantSensitive) {
+		t.Fatalf("case-sensitive scrub = %q, want %q", got, wantSensitive)
+	}
+	wantInsensitive := []string{"KMS_BINDING_KEY_SUFFIX=keep", "PATH=/bin"}
+	if got := scrubBindingKeyEnvironment(parent, true); !slices.Equal(got, wantInsensitive) {
+		t.Fatalf("case-insensitive scrub = %q, want %q", got, wantInsensitive)
+	}
+}
+
+func TestScrubChildCredentialEnvironmentAlsoRemovesInjectedTokenNames(t *testing.T) {
+	entries := []string{
+		"KMS_SECRET_TOKEN_API=token",
+		"KMS_SECRET_TOKEN_=token",
+		bindingKeyEnv + "=binding",
+		"KMS_SECRET_TOKENX=keep",
+		"APP=value",
+	}
+	want := []string{"KMS_SECRET_TOKENX=keep", "APP=value"}
+	if got := scrubChildCredentialEnvironment(entries, false); !slices.Equal(got, want) {
+		t.Fatalf("credential scrub = %q, want %q", got, want)
 	}
 }
 

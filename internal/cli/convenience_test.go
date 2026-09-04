@@ -111,6 +111,7 @@ type secretStub struct {
 	getReq              *kmsv1.GetSecretRequest
 	putReq              *kmsv1.PutSecretRequest
 	getResp             *kmsv1.GetSecretResponse
+	metadataResp        *kmsv1.GetSecretMetadataResponse
 	putResp             *kmsv1.PutSecretResponse
 	err                 error
 	getErr              error
@@ -141,6 +142,25 @@ func (s *secretStub) GetSecret(ctx context.Context, req *kmsv1.GetSecretRequest)
 		return nil, s.getErr
 	}
 	return s.getResp, nil
+}
+
+func (s *secretStub) GetSecretMetadata(ctx context.Context, _ *kmsv1.GetSecretMetadataRequest) (*kmsv1.GetSecretMetadataResponse, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.record(ctx)
+	if s.getErr != nil {
+		return nil, s.getErr
+	}
+	if s.metadataResp != nil {
+		return s.metadataResp, nil
+	}
+	if s.getResp == nil {
+		return nil, status.Error(codes.NotFound, "no such secret")
+	}
+	return &kmsv1.GetSecretMetadataResponse{Secret: &kmsv1.SecretMetadata{
+		Ref: s.getResp.GetRef(), Labels: map[string]uint64{"current": s.getResp.GetVersion()},
+		Versions: []*kmsv1.SecretVersionInfo{{Version: s.getResp.GetVersion(), State: "enabled"}},
+	}}, nil
 }
 
 func (s *secretStub) PutSecret(ctx context.Context, req *kmsv1.PutSecretRequest) (*kmsv1.PutSecretResponse, error) {
@@ -178,7 +198,7 @@ func listStubs() (*parameterStub, *secretStub) {
 		{Ref: ref("prod", "gradethis", "settings"), Version: 1, ContentType: "json"},
 	}}, &secretStub{secrets: []*kmsv1.SecretMetadata{
 		{Ref: ref("prod", "gradethis", "db-password"), Labels: map[string]uint64{"current": 7}},
-		{Ref: ref("prod", "gradethis", "webhook"), ClientBound: true, Labels: map[string]uint64{"current": 2}},
+		{Ref: ref("prod", "gradethis", "webhook"), Bound: true, Labels: map[string]uint64{"current": 2}},
 	}}
 }
 
@@ -195,7 +215,7 @@ func TestListTableIsUnchanged(t *testing.T) {
 		"parameter  /prod/gradethis/greeting     3        string",
 		"parameter  /prod/gradethis/settings     1        json",
 		"secret     /prod/gradethis/db-password  7        standard",
-		"secret     /prod/gradethis/webhook      2        client-bound",
+		"secret     /prod/gradethis/webhook      2        bound",
 		"",
 	}, "\n")
 	if c.stdout() != want {
@@ -224,7 +244,7 @@ func TestListJSONShape(t *testing.T) {
 	if !ok {
 		t.Fatalf("items[0] = %#v", items[0])
 	}
-	assertJSONFields(t, first, "type", "path", "current", "note", "client_bound")
+	assertJSONFields(t, first, "type", "path", "current", "note", "bound")
 	if first["type"] != "parameter" || first["path"] != "/prod/gradethis/greeting" || first["note"] != "string" {
 		t.Fatalf("items[0] = %v", first)
 	}
@@ -236,12 +256,12 @@ func TestListJSONShape(t *testing.T) {
 	if params.pages != 2 {
 		t.Fatalf("ListParameters called %d times, want 2 (paged)", params.pages)
 	}
-	clientBound, ok := items[3].(map[string]any)
-	if !ok || clientBound["client_bound"] != true || clientBound["note"] != "client-bound" {
-		t.Fatalf("items[3] = %#v, want the client-bound secret", items[3])
+	bound, ok := items[3].(map[string]any)
+	if !ok || bound["bound"] != true || bound["note"] != "bound" {
+		t.Fatalf("items[3] = %#v, want the bound secret", items[3])
 	}
-	if items[2].(map[string]any)["client_bound"] != false {
-		t.Fatalf("a standard secret reported client_bound: %v", items[2])
+	if items[2].(map[string]any)["bound"] != false {
+		t.Fatalf("a standard secret reported bound: %v", items[2])
 	}
 }
 
@@ -351,6 +371,83 @@ func TestGetSecretQuietSilencesOnlyTheProgressLine(t *testing.T) {
 	}
 }
 
+func TestGetSecretUsesExactVersionMetadataAndBindingKeyEnvironment(t *testing.T) {
+	secrets := &secretStub{
+		metadataResp: &kmsv1.GetSecretMetadataResponse{Secret: &kmsv1.SecretMetadata{
+			Ref: ref("prod", "gradethis", "db-password"), Labels: map[string]uint64{"current": 7},
+			Versions: []*kmsv1.SecretVersionInfo{{Version: 6, State: "enabled"}, {Version: 7, State: "enabled", Bound: true, HasAccessToken: true}},
+		}},
+		getResp: &kmsv1.GetSecretResponse{Ref: ref("prod", "gradethis", "db-password"), Version: 7, Value: []byte("hunter2")},
+	}
+	c := newConvenienceCLI(t, &parameterStub{}, secrets)
+	c.lookupEnv = mapLookup(map[string]string{bindingKeyEnv: testOldBindingKey})
+	if code := c.Run([]string{"get-secret", "/prod/gradethis/db-password", "--secret-token", "access-token", "--insecure", "--token", "identity"}); code != exitOK {
+		t.Fatalf("exit = %d, stderr=%s", code, c.stderr())
+	}
+	if secrets.getReq.GetVersion() != 7 || secrets.getReq.GetLabel() != "" {
+		t.Fatalf("GetSecret selector = version %d label %q, want exact version 7", secrets.getReq.GetVersion(), secrets.getReq.GetLabel())
+	}
+	if secrets.getReq.GetBindingKey() != testOldBindingKey || secrets.getReq.GetSecretToken() != "access-token" {
+		t.Fatal("GetSecret did not carry both independent credentials")
+	}
+	if strings.Contains(c.stdout()+c.stderr(), testOldBindingKey) {
+		t.Fatal("get-secret output leaked the binding key")
+	}
+}
+
+func TestGetSecretPromptsOnlyWhenSelectedVersionIsBound(t *testing.T) {
+	secrets := &secretStub{
+		metadataResp: &kmsv1.GetSecretMetadataResponse{Secret: &kmsv1.SecretMetadata{
+			Ref: ref("prod", "gradethis", "db-password"), Labels: map[string]uint64{"current": 8, "previous": 7},
+			Versions: []*kmsv1.SecretVersionInfo{{Version: 7, State: "enabled"}, {Version: 8, State: "enabled", Bound: true}},
+		}},
+		getResp: &kmsv1.GetSecretResponse{Ref: ref("prod", "gradethis", "db-password"), Version: 8, Value: []byte("hunter2")},
+	}
+	c := newConvenienceCLI(t, &parameterStub{}, secrets)
+	c.isTTY = func() bool { return true }
+	c.Stdin = openPromptInput(t, "")
+	reads := 0
+	c.readPassword = func(int) ([]byte, error) {
+		reads++
+		return []byte(testOldBindingKey), nil
+	}
+	if code := c.Run([]string{"get-secret", "/prod/gradethis/db-password", "--insecure"}); code != exitOK {
+		t.Fatalf("exit = %d, stderr=%s", code, c.stderr())
+	}
+	if reads != 1 || secrets.getReq.GetBindingKey() != testOldBindingKey {
+		t.Fatalf("password reads = %d, request key = %q", reads, secrets.getReq.GetBindingKey())
+	}
+	if strings.Contains(c.stderr(), testOldBindingKey) {
+		t.Fatal("prompt echoed the binding key")
+	}
+}
+
+func TestGetSecretRejectsMismatchedMetadataBeforeCredentialOrValueRead(t *testing.T) {
+	secrets := &secretStub{
+		metadataResp: &kmsv1.GetSecretMetadataResponse{Secret: &kmsv1.SecretMetadata{
+			Ref: ref("prod", "gradethis", "other-secret"), Labels: map[string]uint64{"current": 7},
+			Versions: []*kmsv1.SecretVersionInfo{{Version: 7, State: "enabled", Bound: true}},
+		}},
+		getResp: &kmsv1.GetSecretResponse{Ref: ref("prod", "gradethis", "db-password"), Version: 7, Value: []byte("hunter2")},
+	}
+	c := newConvenienceCLI(t, &parameterStub{}, secrets)
+	c.isTTY = func() bool { return true }
+	c.Stdin = openPromptInput(t, "")
+	c.readPassword = func(int) ([]byte, error) {
+		t.Fatal("mismatched metadata caused a credential prompt")
+		return nil, nil
+	}
+	if code := c.Run([]string{"get-secret", "/prod/gradethis/db-password", "--insecure"}); code != exitError {
+		t.Fatalf("exit = %d, stderr=%s", code, c.stderr())
+	}
+	if secrets.getReq != nil {
+		t.Fatal("GetSecret ran after mismatched metadata")
+	}
+	if !strings.Contains(c.stderr(), "server returned a different resource") {
+		t.Fatalf("stderr = %q", c.stderr())
+	}
+}
+
 // --- put-secret / put-parameter --------------------------------------------
 
 func TestPutSecretJSONCarriesTheAccessTokenOnceWithTheWarningOnStderr(t *testing.T) {
@@ -362,7 +459,7 @@ func TestPutSecretJSONCarriesTheAccessTokenOnceWithTheWarningOnStderr(t *testing
 		t.Fatal(err)
 	}
 	code := c.Run([]string{"-o", "json", "put-secret", "/prod/gradethis/db-password",
-		"--value-file", valueFile, "--generate-token", "--secret-token", "kmss_current", "--insecure", "--token", "t"})
+		"--value-file", valueFile, "--generate-token", "--insecure", "--token", "t"})
 	if code != 0 {
 		t.Fatalf("put-secret exit = %d, stderr=%s", code, c.stderr())
 	}
@@ -373,9 +470,6 @@ func TestPutSecretJSONCarriesTheAccessTokenOnceWithTheWarningOnStderr(t *testing
 	}
 	if strings.Count(c.stdout(), "kmss_generated") != 1 {
 		t.Fatalf("access token appears more than once on stdout: %q", c.stdout())
-	}
-	if got := secrets.putReq.GetSecretToken(); got != "kmss_current" {
-		t.Fatalf("PutSecret secret_token = %q, want kmss_current", got)
 	}
 	if got := secrets.secretTokenMetadata; len(got) != 1 || got[0] != "" {
 		t.Fatalf("custom secret-token metadata = %v, want none", got)
@@ -401,6 +495,41 @@ func TestPutSecretJSONOmitsAnAbsentAccessToken(t *testing.T) {
 		t.Fatalf("put-secret exit = %d, stderr=%s", code, c.stderr())
 	}
 	assertJSONFields(t, decodeJSONStdout(t, c), "key", "version", "revision")
+}
+
+func TestPutSecretUsesOpaqueBindingKeyEnvironment(t *testing.T) {
+	secrets := &secretStub{putResp: &kmsv1.PutSecretResponse{Version: 1, Revision: 2}}
+	c := newConvenienceCLI(t, &parameterStub{}, secrets)
+	opaque := testOldBindingKey + " \t"
+	c.lookupEnv = mapLookup(map[string]string{bindingKeyEnv: opaque})
+	valueFile := filepath.Join(t.TempDir(), "value")
+	if err := os.WriteFile(valueFile, []byte("s3cret"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if code := c.Run([]string{"put-secret", "/prod/gradethis/db-password", "--value-file", valueFile, "--insecure"}); code != exitOK {
+		t.Fatalf("exit = %d, stderr=%s", code, c.stderr())
+	}
+	if got := secrets.putReq.GetBindingKey(); got != opaque {
+		t.Fatalf("binding key = %q, want exact opaque environment string", got)
+	}
+	if strings.Contains(c.stdout()+c.stderr(), opaque) {
+		t.Fatal("put-secret output leaked the binding key")
+	}
+}
+
+func TestPutSecretRejectsRemovedProtectionFlags(t *testing.T) {
+	for _, flag := range []string{"--client-bound", "--secret-token"} {
+		t.Run(flag, func(t *testing.T) {
+			secrets := &secretStub{putResp: &kmsv1.PutSecretResponse{Version: 1}}
+			c := newConvenienceCLI(t, &parameterStub{}, secrets)
+			if code := c.Run([]string{"put-secret", "/prod/gradethis/db-password", flag, "value", "--insecure"}); code != exitUsage {
+				t.Fatalf("exit = %d, stderr=%s", code, c.stderr())
+			}
+			if secrets.putReq != nil {
+				t.Fatal("PutSecret ran with a removed flag")
+			}
+		})
+	}
 }
 
 func TestPutParameterJSON(t *testing.T) {

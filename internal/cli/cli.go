@@ -67,6 +67,10 @@ type CLI struct {
 	// isTTY reports whether stdin is an interactive terminal; nil means
 	// term.IsTerminal on Stdin. Tests inject it to exercise prompts.
 	isTTY func() bool
+	// readPassword reads one non-echoed line from a terminal file descriptor.
+	// nil means term.ReadPassword. Tests inject it so credential prompts can be
+	// exercised without placing a real terminal in the test process.
+	readPassword func(fd int) ([]byte, error)
 	// launchOverride replaces the process launcher used by `exec`; nil means
 	// launchProcess. Tests capture argv and the child environment instead of
 	// replacing the test binary.
@@ -145,6 +149,10 @@ func (c *CLI) Run(args []string) int {
 		code = c.cmdExec(cmdArgs)
 	case "env":
 		code = c.cmdEnv(cmdArgs)
+	case "binding-key":
+		code = c.cmdBindingKey(cmdArgs)
+	case "secret":
+		code = c.cmdSecret(cmdArgs)
 	case "put-secret":
 		code = c.cmdPutSecret(cmdArgs)
 	case "get-secret":
@@ -342,6 +350,12 @@ Management (talk to a running server over gRPC):
 
 Convenience (talk to a running server over gRPC):
   whoami                        Print the identity the server sees for this credential.
+  binding-key generate           Generate one operator-owned binding key.
+  binding-key rotate PATH        Rotate the binding-key cohort containing a secret version.
+  secret bind PATH               Bind one secret version in place.
+  secret unbind PATH             Unbind one secret version in place.
+  secret purge-binding-cohort PATH
+                                  Irreversibly purge one compromised binding-key cohort (admin only).
   put-secret /env/app/key       Store a secret (value from --value-file or stdin).
   get-secret /env/app/key       Fetch a secret (requires --show, --out, or a pipe).
   put-parameter /env/app/key V  Store a parameter value.
@@ -371,7 +385,8 @@ Exit codes: 0 ok, 1 error, 2 usage, 3 unauthenticated, 4 permission denied,
 Settings resolve in this order: flag, then KMS_* environment variable, then the
 config file, then the built-in default. Commands that talk to a running server
 read KMS_ENDPOINT, KMS_TOKEN, KMS_TOKEN_FILE, KMS_CA_FILE, KMS_CLIENT_CERT_FILE,
-and KMS_CLIENT_KEY_FILE as flag defaults.
+and KMS_CLIENT_KEY_FILE as flag defaults. Single-secret binding operations also
+read KMS_BINDING_KEY and rotation reads KMS_NEW_BINDING_KEY.
 
 Run "parameter-store <command> -h" for command-specific flags.
 `)
