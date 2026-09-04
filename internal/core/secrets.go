@@ -707,6 +707,12 @@ func (s *Service) PromoteSecretVersion(ctx context.Context, pr Principal, ref do
 
 // checkVersionReadable rejects disabled, destroyed, and expired versions.
 func (s *Service) checkVersionReadable(ver storage.SecretVersionRecord) error {
+	// State and tombstone time are independently persisted. Treat any
+	// contradictory row as destroyed instead of allowing a corrupt "enabled"
+	// state to resurrect tombstoned secret material.
+	if !ver.DestroyedAt.IsZero() {
+		return domain.Errorf(domain.ErrFailedPrecondition, "secret version %d is destroyed", ver.Version)
+	}
 	switch ver.State {
 	case domain.StateEnabled:
 	case domain.StateDisabled:

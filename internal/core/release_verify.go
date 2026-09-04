@@ -138,11 +138,16 @@ func (s *Service) VerifyReleaseDefaults(ctx context.Context, pr Principal, in do
 	// storage validation enforce this invariant, but verify it again here so a
 	// corrupt row or alternate ReleaseStore implementation cannot turn this
 	// endpoint into a cross-namespace comparison oracle.
+	if release.Namespace != in.Namespace {
+		s.auditVerifyDefaults(ctx, pr, auditRef, namespace.ID, release.Version, "error", counts)
+		return domain.VerifyReleaseDefaultsResult{}, domain.Errorf(domain.ErrFailedPrecondition,
+			"active release violates namespace ownership invariants")
+	}
 	for _, entry := range release.Entries {
-		if entry.Ref.NS != release.Namespace {
+		if entry.Ref.NS != in.Namespace || entry.ResourceNamespaceID <= 0 {
 			s.auditVerifyDefaults(ctx, pr, auditRef, namespace.ID, release.Version, "error", counts)
 			return domain.VerifyReleaseDefaultsResult{}, domain.Errorf(domain.ErrFailedPrecondition,
-				"active release contains an entry outside its home namespace")
+				"active release violates namespace ownership invariants")
 		}
 	}
 
@@ -256,15 +261,14 @@ func (s *Service) verifyDefaultsEntry(ctx context.Context, req domain.VerifyDefa
 	if entry.Kind != domain.ReleaseEntryParameter {
 		return domain.VerifyVerdictSecretAlias, nil
 	}
-	entryCtx := ctx
-	if entry.ResourceNamespaceID > 0 {
-		bound, err := storage.BindNamespaceIncarnation(ctx, entry.Ref.NS, entry.ResourceNamespaceID)
-		if err != nil {
-			// The pinned namespace incarnation is gone: the pin no longer
-			// resolves, which from the caller's perspective is a missing entry.
-			return domain.VerifyVerdictMissingInRelease, nil
-		}
-		entryCtx = bound
+	if entry.ResourceNamespaceID <= 0 {
+		return domain.VerifyVerdictMissingInRelease, nil
+	}
+	entryCtx, err := storage.BindNamespaceIncarnation(ctx, entry.Ref.NS, entry.ResourceNamespaceID)
+	if err != nil {
+		// The pinned namespace incarnation is gone: the pin no longer
+		// resolves, which from the caller's perspective is a missing entry.
+		return domain.VerifyVerdictMissingInRelease, nil
 	}
 	p, err := s.store.GetParameter(entryCtx, entry.Ref, entry.Version, "")
 	if err != nil {

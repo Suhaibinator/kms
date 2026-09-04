@@ -186,23 +186,22 @@ func TestNamespaceIncarnationBindingRejectsAuthorizationABA(t *testing.T) {
 
 	t.Run("configuration release write cannot cross into recreated namespace", func(t *testing.T) {
 		st, ns, _ := newNamespaceIncarnationStore(t)
-		sourceNS := domain.NamespaceRef{Env: "prod", App: "source"}
-		if _, err := st.CreateNamespace(context.Background(), domain.Namespace{NamespaceRef: sourceNS, CreatedBy: "test"}); err != nil {
-			t.Fatal(err)
-		}
-		sourceRef := domain.Ref{NS: sourceNS, Key: "settings"}
-		if _, _, err := st.PutParameter(context.Background(), sourceRef, "1", "integer", "{}", "test"); err != nil {
-			t.Fatal(err)
-		}
+		ref := domain.Ref{NS: ns, Key: "settings"}
 		wrapped := &namespaceSwapStore{Store: st, ReleaseStore: st, target: ns}
-		wrapped.afterNamespaceRead = func() error { return replaceWithMTLSNamespace(st, ns) }
+		wrapped.afterNamespaceRead = func() error {
+			if err := replaceWithMTLSNamespace(st, ns); err != nil {
+				return err
+			}
+			_, _, err := st.PutParameter(context.Background(), ref, "1", "integer", "{}", "racing-admin")
+			return err
+		}
 
 		svc := New(wrapped, nil, "test")
 		_, err := svc.CreateConfigurationRelease(context.Background(), adminPrincipal(), domain.CreateConfigurationReleaseInput{
 			Namespace: ns,
 			Name:      "runtime",
 			Entries: []domain.ReleaseEntrySelector{{
-				Alias: "settings", Kind: domain.ReleaseEntryParameter, Ref: sourceRef, Label: domain.LabelCurrent,
+				Alias: "settings", Kind: domain.ReleaseEntryParameter, Ref: ref, Label: domain.LabelCurrent,
 			}},
 		})
 		if !errors.Is(err, domain.ErrAborted) {

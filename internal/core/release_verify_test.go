@@ -222,22 +222,39 @@ func TestVerifyReleaseDefaultsVerdicts(t *testing.T) {
 	}
 }
 
-func TestVerifyReleaseDefaultsRejectsMalformedCrossNamespaceActiveRelease(t *testing.T) {
+func TestVerifyReleaseDefaultsRejectsMalformedActiveReleaseIdentity(t *testing.T) {
 	f := newVerifyFixture(t)
 	ctx := context.Background()
-	malformed := f.release
-	malformed.Release.Entries = append([]domain.ConfigurationReleaseEntry(nil), malformed.Release.Entries...)
-	malformed.Release.Entries[0].Ref.NS = domain.NamespaceRef{Env: "shared", App: "platform"}
-	store := &activeReleaseOverrideStore{
-		Store: f.st, ReleaseStore: f.st, ApplicationStore: f.st, active: malformed,
-	}
-	svc := New(store, nil, "test")
-	out, err := svc.VerifyReleaseDefaults(ctx, f.admin, domain.VerifyReleaseDefaultsInput{
-		Namespace: f.ns,
-		Entries:   []domain.VerifyDefaultsEntry{{Alias: "json_cfg", ContentType: "json", SHA256: mustHash(t, "json", verifyCanonical)}},
-	})
-	if !errors.Is(err, domain.ErrFailedPrecondition) || len(out.Entries) != 0 {
-		t.Fatalf("malformed cross-namespace release: out=%+v err=%v", out, err)
+	for _, test := range []struct {
+		name   string
+		mutate func(*domain.ActiveConfigurationRelease)
+	}{
+		{name: "foreign entry", mutate: func(active *domain.ActiveConfigurationRelease) {
+			active.Release.Entries[0].Ref.NS = domain.NamespaceRef{Env: "shared", App: "platform"}
+		}},
+		{name: "foreign release", mutate: func(active *domain.ActiveConfigurationRelease) {
+			active.Release.Namespace = domain.NamespaceRef{Env: "shared", App: "platform"}
+		}},
+		{name: "missing namespace identity", mutate: func(active *domain.ActiveConfigurationRelease) {
+			active.Release.Entries[0].ResourceNamespaceID = 0
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			malformed := f.release
+			malformed.Release.Entries = append([]domain.ConfigurationReleaseEntry(nil), malformed.Release.Entries...)
+			test.mutate(&malformed)
+			store := &activeReleaseOverrideStore{
+				Store: f.st, ReleaseStore: f.st, ApplicationStore: f.st, active: malformed,
+			}
+			svc := New(store, nil, "test")
+			out, err := svc.VerifyReleaseDefaults(ctx, f.admin, domain.VerifyReleaseDefaultsInput{
+				Namespace: f.ns,
+				Entries:   []domain.VerifyDefaultsEntry{{Alias: "json_cfg", ContentType: "json", SHA256: mustHash(t, "json", verifyCanonical)}},
+			})
+			if !errors.Is(err, domain.ErrFailedPrecondition) || len(out.Entries) != 0 {
+				t.Fatalf("malformed active release: out=%+v err=%v", out, err)
+			}
+		})
 	}
 }
 
@@ -487,7 +504,7 @@ func TestVerifyDefaultsEntryUnsupportedContentType(t *testing.T) {
 		t.Fatal(err)
 	}
 	entries := map[string]domain.ConfigurationReleaseEntry{
-		"broken": {Alias: "broken", Kind: domain.ReleaseEntryParameter, Ref: ref, Version: 1, ContentType: "json", ParameterDigest: sha256Hex([]byte(raw))},
+		"broken": {Alias: "broken", Kind: domain.ReleaseEntryParameter, Ref: ref, ResourceNamespaceID: 1, Version: 1, ContentType: "json", ParameterDigest: sha256Hex([]byte(raw))},
 	}
 	verdict, err := s.verifyDefaultsEntry(ctx, domain.VerifyDefaultsEntry{Alias: "broken", ContentType: "json", SHA256: strings.Repeat("0", 64)}, entries, nil)
 	if err != nil || verdict != domain.VerifyVerdictUnsupportedContentType {
@@ -495,7 +512,7 @@ func TestVerifyDefaultsEntryUnsupportedContentType(t *testing.T) {
 	}
 	// A pin whose stored bytes drifted from the release digest is differs, and
 	// a pin whose parameter vanished is missing_in_release.
-	entries["broken"] = domain.ConfigurationReleaseEntry{Alias: "broken", Kind: domain.ReleaseEntryParameter, Ref: ref, Version: 1, ContentType: "json", ParameterDigest: "stale"}
+	entries["broken"] = domain.ConfigurationReleaseEntry{Alias: "broken", Kind: domain.ReleaseEntryParameter, Ref: ref, ResourceNamespaceID: 1, Version: 1, ContentType: "json", ParameterDigest: "stale"}
 	if verdict, err := s.verifyDefaultsEntry(ctx, domain.VerifyDefaultsEntry{Alias: "broken", ContentType: "json", SHA256: strings.Repeat("0", 64)}, entries, nil); err != nil || verdict != domain.VerifyVerdictDiffers {
 		t.Fatalf("digest drift verdict = %q err=%v", verdict, err)
 	}

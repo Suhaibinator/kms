@@ -405,7 +405,42 @@ func (s *Service) validateConfigurationRelease(ctx context.Context, pr Principal
 	if err != nil {
 		return nil, err
 	}
-	return s.validateReleaseEntries(ctx, pr, rs, rel, nil, authorizeEntries, true)
+	return s.validatePersistedReleaseEntries(ctx, pr, rs, ns, rel, authorizeEntries, true)
+}
+
+func persistedReleaseIntegrityViolations(home domain.NamespaceRef, rel domain.ConfigurationRelease) []domain.ReleaseValidationError {
+	if rel.Namespace != home {
+		return []domain.ReleaseValidationError{{
+			Code: domain.ReleaseValidationUnreadable, Message: "release is outside its requested namespace",
+		}}
+	}
+	validation := make([]domain.ReleaseValidationError, 0)
+	for _, entry := range rel.Entries {
+		switch {
+		case entry.Ref.NS != home:
+			validation = append(validation, domain.ReleaseValidationError{
+				Alias: entry.Alias, Code: domain.ReleaseValidationUnreadable,
+				Message: "release entry is outside the release namespace",
+			})
+		case entry.ResourceNamespaceID <= 0:
+			validation = append(validation, domain.ReleaseValidationError{
+				Alias: entry.Alias, Code: domain.ReleaseValidationUnreadable,
+				Message: "release entry is missing its namespace identity",
+			})
+		}
+	}
+	return validation
+}
+
+// validatePersistedReleaseEntries fails closed on immutable namespace identity
+// corruption before any resource lookup. Transient dry-run candidates use
+// validateReleaseEntries directly because storage has not assigned their
+// ResourceNamespaceID yet.
+func (s *Service) validatePersistedReleaseEntries(ctx context.Context, pr Principal, rs storage.ReleaseStore, home domain.NamespaceRef, rel domain.ConfigurationRelease, authorizeEntries, adopt bool) ([]domain.ReleaseValidationError, error) {
+	if validation := persistedReleaseIntegrityViolations(home, rel); len(validation) > 0 {
+		return validation, nil
+	}
+	return s.validateReleaseEntries(ctx, pr, rs, rel, nil, authorizeEntries, adopt)
 }
 
 // validateReleaseEntries validates an in-memory release: every pinned entry
@@ -414,8 +449,9 @@ func (s *Service) validateConfigurationRelease(ctx context.Context, pr Principal
 // parameter aliases (dry-run of an edit) — those aliases skip the stored
 // lookup and digest check and the override is what the schema sees. adopt is
 // forwarded to the contract check; dry-run callers pass false so validation
-// never writes. Entries with a zero ResourceNamespaceID (never persisted) are
-// read through the caller's already-bound context instead of re-binding.
+// never writes. Transient entries have a zero ResourceNamespaceID and are read
+// through the caller's already-bound context instead of re-binding. Persisted
+// callers must first use validatePersistedReleaseEntries, which rejects zero.
 func (s *Service) validateReleaseEntries(ctx context.Context, pr Principal, rs storage.ReleaseStore, rel domain.ConfigurationRelease, overrides map[string]releaseCandidateValue, authorizeEntries, adopt bool) ([]domain.ReleaseValidationError, error) {
 	if err := s.validateApplicationReleaseContract(ctx, rel.Namespace.App, rel.Name, rel.SchemaVersion, rel.Entries, adopt); err != nil {
 		return nil, err

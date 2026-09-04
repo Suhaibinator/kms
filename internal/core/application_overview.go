@@ -94,14 +94,28 @@ func (s *Service) secretStates(ctx context.Context, app domain.Application, ns d
 		if !ok || ref.NS != ns {
 			continue
 		}
-		if _, ok := present[ref.Key]; !ok {
+		secret, ok := present[ref.Key]
+		if !ok {
 			continue
 		}
-		_, ver, err := s.store.GetSecretVersion(ctx, ref, 0, domain.LabelCurrent)
-		if err != nil {
+		// Once the secret itself is known to exist, inability to resolve its
+		// advertised current version is an unreadable state, not absence of a
+		// finding. This keeps corrupt or concurrently inconsistent projections
+		// fail closed.
+		out[ref.Key] = secretCurrentState{State: "unavailable"}
+		current := secret.Labels[domain.LabelCurrent]
+		if current == 0 {
 			continue
 		}
-		out[ref.Key] = secretCurrentState{State: ver.State, Expired: !ver.ExpiresAt.IsZero() && now.After(ver.ExpiresAt)}
+		_, ver, err := s.store.GetSecretVersion(ctx, ref, current, "")
+		if err != nil || ver.Version != current {
+			continue
+		}
+		state := ver.State
+		if !ver.DestroyedAt.IsZero() {
+			state = domain.StateDestroyed
+		}
+		out[ref.Key] = secretCurrentState{State: state, Expired: !ver.ExpiresAt.IsZero() && now.After(ver.ExpiresAt)}
 	}
 	return out
 }
@@ -109,14 +123,14 @@ func (s *Service) secretStates(ctx context.Context, app domain.Application, ns d
 // activeReleaseValidation re-checks the active release's pins in memory so
 // readiness can report stale pins. A release that no longer matches the
 // contract is reported by readiness itself and is not re-validated here.
-func (s *Service) activeReleaseValidation(ctx context.Context, pr Principal, rs storage.ReleaseStore, app domain.Application, active *domain.ActiveConfigurationRelease) []domain.ReleaseValidationError {
+func (s *Service) activeReleaseValidation(ctx context.Context, pr Principal, rs storage.ReleaseStore, app domain.Application, home domain.NamespaceRef, active *domain.ActiveConfigurationRelease) []domain.ReleaseValidationError {
 	if active == nil {
 		return nil
 	}
-	if len(app.Contract) > 0 && !releaseMatchesContract(app.Contract, active.Release.Entries) {
+	if !releaseMatchesContract(app.Contract, home, active.Release) {
 		return nil
 	}
-	validation, err := s.validateReleaseEntries(ctx, pr, rs, active.Release, nil, false, false)
+	validation, err := s.validatePersistedReleaseEntries(ctx, pr, rs, home, active.Release, false, false)
 	if err != nil {
 		return nil
 	}
@@ -206,7 +220,7 @@ func (s *Service) GetApplicationOverview(ctx context.Context, pr Principal, name
 			App: app, Namespace: ns, Rows: rows, Refs: refs,
 			Secrets:          s.secretStates(ctx, app, ns.NamespaceRef, refs, secretsByEnv[ns.Env], now),
 			Active:           f.Active,
-			ActiveValidation: s.activeReleaseValidation(ctx, pr, rs, app, f.Active),
+			ActiveValidation: s.activeReleaseValidation(ctx, pr, rs, app, ns.NamespaceRef, f.Active),
 			LatestVersion:    f.LatestVersion, ReleaseCount: f.Count, Acks: f.Acks,
 			SchemaMissing: schemaMissing, Now: now,
 		}

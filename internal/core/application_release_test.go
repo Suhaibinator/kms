@@ -38,7 +38,7 @@ func TestCreateApplicationReleaseCarriesActiveSecretAndNeverActivates(t *testing
 	admin := adminPrincipal()
 	app := seedConsoleApp(t, svc, admin, "dev", "prod")
 	ns := domain.NamespaceRef{Env: "dev", App: app.Name}
-	secretNS := domain.NamespaceRef{Env: "prod", App: app.Name}
+	secretNS := ns
 	baseline, err := svc.CreateConfigurationRelease(ctx, admin, domain.CreateConfigurationReleaseInput{
 		Namespace: ns, Name: app.ReleaseName, SchemaVersion: app.SchemaVersion, Metadata: `{"source":"baseline"}`,
 		Entries: []domain.ReleaseEntrySelector{

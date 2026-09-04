@@ -143,7 +143,7 @@ func evaluateReadinessCase(in readinessCaseInput) readinessCaseExpected {
 		release := domain.ConfigurationRelease{Namespace: ns, Name: app.ReleaseName, Version: in.Active.Version, SchemaVersion: app.SchemaVersion}
 		for _, field := range in.Contract {
 			if version, ok := in.Active.Pins[field.Alias]; ok {
-				release.Entries = append(release.Entries, domain.ConfigurationReleaseEntry{Alias: field.Alias, Kind: field.Kind, Ref: domain.Ref{NS: ns, Key: field.Alias}, Version: version, ContentType: contentTypes[field.Alias]})
+				release.Entries = append(release.Entries, domain.ConfigurationReleaseEntry{Alias: field.Alias, Kind: field.Kind, Ref: domain.Ref{NS: ns, Key: field.Alias}, ResourceNamespaceID: 1, Version: version, ContentType: contentTypes[field.Alias]})
 			}
 		}
 		active = &domain.ActiveConfigurationRelease{Release: release, ActivationRevision: in.Active.ActivationRevision, PreviousVersion: in.Active.PreviousVersion}

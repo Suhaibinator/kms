@@ -247,6 +247,18 @@ func TestGetSecretRejectsUnreadableVersions(t *testing.T) {
 		}
 	})
 
+	t.Run("enabled with destroyed timestamp", func(t *testing.T) {
+		store := newFakeStore()
+		s := newTestService(store)
+		withKeyring(t, s)
+		putSecret(t, s, PutSecretInput{Ref: tref("s"), Value: []byte("v"), ContentType: "text/plain"})
+		store.markVersionDestroyedAt(tref("s"), 1)
+		_, err := s.GetSecret(ctx, adminPrincipal(), tref("s"), 1, "", "", "")
+		if !errors.Is(err, domain.ErrFailedPrecondition) {
+			t.Fatalf("err = %v, want ErrFailedPrecondition", err)
+		}
+	})
+
 	t.Run("expired", func(t *testing.T) {
 		store := newFakeStore()
 		s := newTestService(store)

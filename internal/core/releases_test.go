@@ -381,6 +381,41 @@ func TestReleaseCandidateValidationIsDryRunSafe(t *testing.T) {
 	}
 }
 
+func TestPersistedReleaseIntegrityRequiresHomeNamespaceIdentity(t *testing.T) {
+	home := domain.NamespaceRef{Env: "prod", App: "worker"}
+	valid := domain.ConfigurationRelease{Namespace: home, Entries: []domain.ConfigurationReleaseEntry{{
+		Alias: "settings", Kind: domain.ReleaseEntryParameter,
+		Ref: domain.Ref{NS: home, Key: "settings"}, ResourceNamespaceID: 7,
+	}}}
+	if got := persistedReleaseIntegrityViolations(home, valid); len(got) != 0 {
+		t.Fatalf("valid persisted release violations = %+v", got)
+	}
+	for _, test := range []struct {
+		name   string
+		mutate func(*domain.ConfigurationRelease)
+	}{
+		{name: "wrong release namespace", mutate: func(release *domain.ConfigurationRelease) {
+			release.Namespace = domain.NamespaceRef{Env: "shared", App: "worker"}
+		}},
+		{name: "foreign entry", mutate: func(release *domain.ConfigurationRelease) {
+			release.Entries[0].Ref.NS = domain.NamespaceRef{Env: "shared", App: "worker"}
+		}},
+		{name: "zero namespace identity", mutate: func(release *domain.ConfigurationRelease) {
+			release.Entries[0].ResourceNamespaceID = 0
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			release := valid
+			release.Entries = append([]domain.ConfigurationReleaseEntry(nil), valid.Entries...)
+			test.mutate(&release)
+			got := persistedReleaseIntegrityViolations(home, release)
+			if len(got) != 1 || got[0].Code != domain.ReleaseValidationUnreadable {
+				t.Fatalf("violations = %+v, want one unreadable violation", got)
+			}
+		})
+	}
+}
+
 func TestResolveReleaseCandidateCollectsPerAliasErrors(t *testing.T) {
 	ctx := context.Background()
 	st, err := storage.Open(filepath.Join(t.TempDir(), "kms.db"))
