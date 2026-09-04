@@ -862,6 +862,41 @@ describe("binding-key version actions", () => {
     ).not.toBeInTheDocument();
   });
 
+  it("blocks a no-op binding-key rotation inline", async () => {
+    vi.spyOn(api, "previewSecretBindingCohort").mockResolvedValue({
+      anchor_version: 1,
+      affected_versions: [1],
+      revision: 41,
+    });
+    const rotate = vi.spyOn(api, "rotateSecretBindingKey");
+    renderBoundDetail();
+    fireEvent.click(await screen.findByRole("button", { name: "Rotate key" }));
+    let dialog = screen.getByRole("dialog", { name: "Rotate binding key · v1" });
+    fireEvent.change(within(dialog).getByLabelText("Current binding key"), {
+      target: { value: BINDING_KEY },
+    });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Preview cohort" }));
+    await screen.findByTestId("binding-cohort-versions");
+
+    dialog = screen.getByRole("dialog", { name: "Rotate binding key · v1" });
+    fireEvent.change(within(dialog).getByLabelText("Current binding key"), {
+      target: { value: BINDING_KEY },
+    });
+    fireEvent.change(within(dialog).getByLabelText("New binding key"), {
+      target: { value: BINDING_KEY },
+    });
+    fireEvent.blur(within(dialog).getByLabelText("New binding key"));
+    fireEvent.change(within(dialog).getByLabelText("Confirm new binding key"), {
+      target: { value: BINDING_KEY },
+    });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Rotate binding key" }));
+
+    expect(
+      within(dialog).getByText("New binding key must differ from current binding key."),
+    ).toBeVisible();
+    expect(rotate).not.toHaveBeenCalled();
+  });
+
   it("previews and purges the exact cohort only for an administrator", async () => {
     vi.spyOn(api, "previewSecretBindingCohort").mockResolvedValue({
       anchor_version: 1,

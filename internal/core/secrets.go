@@ -564,6 +564,9 @@ func bindingWrappingResult(result crypto.DEKRewrapResult, err error) (storage.Se
 		if errors.Is(err, domain.ErrDecryptFailed) {
 			return storage.SecretBindingWrapping{}, domain.ErrDecryptFailed
 		}
+		if errors.Is(err, crypto.ErrBindingKeyUnchanged) {
+			return storage.SecretBindingWrapping{}, domain.Errorf(domain.ErrInvalidArgument, "new binding key must differ from current binding key")
+		}
 		return storage.SecretBindingWrapping{}, err
 	}
 	return storage.SecretBindingWrapping{

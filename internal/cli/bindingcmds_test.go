@@ -229,6 +229,30 @@ func TestBindingKeyRotatePreviewsConfirmsAndSendsCASGuards(t *testing.T) {
 	}
 }
 
+func TestBindingKeyRotateRejectsUnchangedReplacementBeforeMutation(t *testing.T) {
+	stub := &bindingSecretStub{previewResp: &kmsv1.SecretBindingCohortResponse{
+		AnchorVersion: 5, AffectedVersions: []uint64{4, 5}, Revision: 71,
+	}}
+	c := newBindingCLI(t, stub)
+	c.lookupEnv = mapLookup(map[string]string{
+		bindingKeyEnv:    testOldBindingKey,
+		newBindingKeyEnv: testOldBindingKey,
+	})
+	code := c.Run([]string{"binding-key", "rotate", "/prod/app/api-key", "--version", "5", "--yes", "--insecure"})
+	if code != exitUsage {
+		t.Fatalf("exit = %d, want usage; stderr=%s", code, c.stderr())
+	}
+	if stub.previewReq == nil {
+		t.Fatal("rotation did not validate the old key through preview")
+	}
+	if stub.rotateReq != nil {
+		t.Fatal("no-op rotation made a mutation RPC")
+	}
+	if !strings.Contains(c.stderr(), "new binding key must differ from current binding key") || strings.Contains(c.stdout()+c.stderr(), testOldBindingKey) {
+		t.Fatalf("unsafe or missing no-op error: %q", c.stderr())
+	}
+}
+
 func TestBindingKeyRotatePromptsOldThenConfirmsNewTwice(t *testing.T) {
 	stub := &bindingSecretStub{
 		previewResp: &kmsv1.SecretBindingCohortResponse{AnchorVersion: 2, AffectedVersions: []uint64{2}, Revision: 10},

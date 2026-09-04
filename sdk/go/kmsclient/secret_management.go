@@ -3,7 +3,9 @@ package kmsclient
 import (
 	"context"
 	"errors"
+	"fmt"
 	"maps"
+	"unicode/utf8"
 
 	kmsv1 "github.com/Suhaibinator/kms/gen/kmsv1"
 )
@@ -225,6 +227,9 @@ func (c *Client) RotateSecretBindingKeyIfUnchanged(ctx context.Context, key stri
 }
 
 func (c *Client) rotateSecretBindingKey(ctx context.Context, key string, anchorVersion uint64, bindingKey, newBindingKey string, expected *SecretBindingCohortResult) (SecretBindingCohortResult, error) {
+	if len(newBindingKey) >= 32 && utf8.ValidString(newBindingKey) && bindingKey == newBindingKey {
+		return SecretBindingCohortResult{}, fmt.Errorf("%w: new binding key must differ from current binding key", ErrInvalidArgument)
+	}
 	r, err := c.resolveRef(ctx, key)
 	if err != nil {
 		return SecretBindingCohortResult{}, err

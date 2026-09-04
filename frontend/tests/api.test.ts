@@ -212,6 +212,23 @@ describe("apiFetch", () => {
     }
   });
 
+  it("rejects an unchanged replacement binding key without fetching", () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch");
+    const key = "same-binding-key-0123456789abcdef";
+
+    expect(() =>
+      api.rotateSecretBindingKey(
+        { env: "prod", app: "billing", key: "api-key" },
+        1,
+        key,
+        key,
+        1,
+        [1],
+      ),
+    ).toThrow("New binding key must differ from current binding key.");
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it("turns a request timeout into a useful unavailable error", async () => {
     vi.spyOn(globalThis, "fetch").mockImplementation((_input, init) => {
       return new Promise((_resolve, reject) => {

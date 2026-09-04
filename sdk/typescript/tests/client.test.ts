@@ -847,6 +847,23 @@ describe("KmsClient", () => {
     await client.close();
   });
 
+  it("rejects an unchanged replacement binding key without making an RPC", async () => {
+    const transport = new FakeTransport(() => {
+      throw new Error("unexpected RPC");
+    });
+    const client = new KmsClient({ transport, namespace: "prod/api" });
+    const bindingKey = "same-binding-key-0123456789abcdef";
+
+    await expect(
+      client.rotateSecretBindingKey("secret", { bindingKey, newBindingKey: bindingKey }),
+    ).rejects.toMatchObject({
+      code: "invalid_argument",
+      message: "new binding key must differ from current binding key",
+    });
+    expect(transport.calls).toHaveLength(0);
+    await client.close();
+  });
+
   it("coalesces concurrent close calls until transport cleanup completes", async () => {
     const base = new FakeTransport(() => ({}));
     let finishClose!: () => void;

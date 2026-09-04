@@ -801,6 +801,17 @@ func TestBindingCohortDiscoveryAndRotation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("preview B: %v", err)
 	}
+	beforeNoop := store.secrets[ref.String()].versions[4]
+	beforeNoopRevision := store.revision
+	if _, err := s.RotateSecretBindingKey(ctx, adminPrincipal(), ref, 4, testBindingKeyB, testBindingKeyB, &preview.Revision, preview.AffectedVersions); !errors.Is(err, domain.ErrInvalidArgument) || err.Error() != "new binding key must differ from current binding key: invalid argument" {
+		t.Fatalf("no-op rotation err = %v, want sanitized ErrInvalidArgument", err)
+	}
+	if after := store.secrets[ref.String()].versions[4]; !reflect.DeepEqual(after, beforeNoop) || store.revision != beforeNoopRevision {
+		t.Fatal("no-op rotation mutated the secret or revision")
+	}
+	if _, err := s.RotateSecretBindingKey(ctx, adminPrincipal(), ref, 1, testBindingKeyB, testBindingKeyB, nil, nil); !errors.Is(err, domain.ErrDecryptFailed) {
+		t.Fatalf("wrong old key on no-op rotation err = %v, want ErrDecryptFailed", err)
+	}
 	before := map[uint64]storage.SecretVersionRecord{
 		4: store.secrets[ref.String()].versions[4],
 		5: store.secrets[ref.String()].versions[5],

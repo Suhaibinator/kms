@@ -1023,6 +1023,9 @@ Listing is always namespace-scoped: `env` and `app` are required.
 - `POST /api/v1/secrets/binding-key/rotate` — preview-shaped body plus
   `new_binding_key` and optional paired `expected_revision` /
   `expected_affected_versions` compare-and-swap guards → the cohort result.
+  The new key must differ byte for byte from the current key; an unchanged
+  replacement returns a fixed `invalid_argument` after authorization, current
+  credential verification, and any CAS check.
 - `POST /api/v1/secrets/binding-cohort/purge` — admin only; preview-shaped body
   plus the optional paired guards → the cohort result. This irreversibly
   destroys the contiguous matching cohort even when immutable releases pin it.

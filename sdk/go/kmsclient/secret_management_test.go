@@ -231,6 +231,17 @@ func TestSecretBindingManagementRequestMapping(t *testing.T) {
 	}
 }
 
+func TestRotateSecretBindingKeyRejectsNoopLocally(t *testing.T) {
+	client, server := newTestClient(t, Config{})
+	key := strings.Repeat("k", 32)
+	if _, err := client.RotateSecretBindingKey(context.Background(), "missing", 1, key, key); !errors.Is(err, ErrInvalidArgument) || err.Error() != "kmsclient: invalid argument: new binding key must differ from current binding key" {
+		t.Fatalf("RotateSecretBindingKey(no-op) = %v", err)
+	}
+	if got := len(server.RotateSecretBindingKeyCalls()); got != 0 {
+		t.Fatalf("no-op rotation made %d RPCs", got)
+	}
+}
+
 func TestGuardedBindingMutationsRejectMalformedPreviewLocally(t *testing.T) {
 	client, server := newTestClient(t, Config{})
 	key := strings.Repeat("k", 32)

@@ -5,7 +5,9 @@ versions. They solve a different problem from access tokens: an access token
 authorizes a read, while a binding key participates in decrypting the version's
 DEK. A version may require either credential, both, or neither. KMS is
 deliberately agnostic about which aliases use the same string; it never stores,
-hashes, fingerprints, compares, or assigns an identity to a binding key.
+hashes, fingerprints, or assigns an identity to a binding key. The only
+equality check is between the current and replacement values supplied together
+for one rotation request, which rejects an accidental no-op.
 
 This is the `0.3.x` contract. It replaces the `0.2.x` client-bound token and
 per-alias token-file design. `0.3.x` requires a freshly initialized database;
@@ -147,6 +149,15 @@ KMS_BINDING_KEY="$old_key" KMS_NEW_BINDING_KEY="$new_key" \
 KMS_BINDING_KEY="$compromised_key" \
   parameter-store secret purge-binding-cohort /prod/app/api-key --version 7
 ```
+
+A rotation rejects `binding_key == new_binding_key` byte for byte. SDKs, the
+CLI, and the console reject this locally before sending the mutation. The
+server remains authoritative: it validates and authorizes the request, proves
+that the current key opens the anchor, and checks any CAS guard before reporting
+the fixed `invalid_argument` error. Consequently, a missing or wrong current
+key still follows the same sanitized credential/decryption path, and a stale
+preview still reports a conflict rather than revealing the equality decision.
+No key material is included in the error.
 
 Purge requires an authenticated administrator and is irreversible. It bypasses
 the normal current/previous release-reference safeguard because its purpose is

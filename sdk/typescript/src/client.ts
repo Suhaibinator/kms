@@ -685,6 +685,9 @@ export class KmsClient {
       options?.newBindingKey,
       "rotateSecretBindingKey newBindingKey",
     );
+    if (new TextEncoder().encode(newBindingKey).length >= 32 && bindingKey === newBindingKey) {
+      throw new ConfigError("new binding key must differ from current binding key");
+    }
     const anchorVersion = options?.anchorVersion ?? 0n;
     assertUint64(anchorVersion, "rotateSecretBindingKey anchorVersion");
     const guards = bindingCohortGuards(options, "rotateSecretBindingKey");

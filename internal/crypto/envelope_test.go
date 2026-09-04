@@ -270,6 +270,12 @@ func TestBindingMutationRejectsWrongAndShortKeys(t *testing.T) {
 	if _, err := RotateBindingKeyDEK(kek, bound.EncryptedDEK, bound.BindingKeySalt, aad, testBindingKeyA, "short"); !errors.Is(err, ErrBindingKeyTooShort) {
 		t.Fatalf("RotateBindingKeyDEK(short new key) = %v, want ErrBindingKeyTooShort", err)
 	}
+	if _, err := RotateBindingKeyDEK(kek, bound.EncryptedDEK, bound.BindingKeySalt, aad, testBindingKeyA, testBindingKeyA); !errors.Is(err, ErrBindingKeyUnchanged) {
+		t.Fatalf("RotateBindingKeyDEK(unchanged) = %v, want ErrBindingKeyUnchanged", err)
+	}
+	if _, err := RotateBindingKeyDEK(kek, bound.EncryptedDEK, bound.BindingKeySalt, aad, testBindingKeyB, testBindingKeyB); !errors.Is(err, domain.ErrDecryptFailed) {
+		t.Fatalf("RotateBindingKeyDEK(wrong unchanged key) = %v, want ErrDecryptFailed", err)
+	}
 }
 
 func TestBindingMutationDoesNotModifyInputs(t *testing.T) {

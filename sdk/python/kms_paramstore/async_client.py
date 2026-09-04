@@ -22,6 +22,7 @@ from .client import (
     _assert_ref_identity,
     _cohort_guard,
     _normalize_selector,
+    _reject_noop_binding_key_rotation,
     _secret_binding_cohort_result,
     _secret_version_mutation_result,
     _valid_page_size,
@@ -622,6 +623,7 @@ class AsyncClient:
         timeout: Optional[float] = None,
     ) -> SecretBindingCohortResult:
         _valid_uint64(anchor_version, "anchor_version")
+        _reject_noop_binding_key_rotation(binding_key, new_binding_key)
         guard = _cohort_guard(expected_revision, expected_affected_versions)
         ref = await self._resolve_ref(key)
         call_timeout = self._call_timeout(timeout)

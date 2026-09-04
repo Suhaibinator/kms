@@ -646,6 +646,14 @@ func TestSecretBindingLifecyclePreviewCASRotateAndPurge(t *testing.T) {
 		t.Fatalf("preview affected_versions = %v, want [1 2]", affected)
 	}
 	revision := uint64(preview["revision"].(float64))
+	w = e.admin(http.MethodPost, "/api/v1/secrets/binding-key/rotate", map[string]any{
+		"env": "prod", "app": "gradethis", "key": "cohort",
+		"anchor_version": 2, "binding_key": keyA, "new_binding_key": keyA,
+	})
+	mustStatus(t, w, http.StatusBadRequest)
+	if got := errCode(t, w); got != "invalid_argument" {
+		t.Fatalf("no-op rotation error code = %q, want invalid_argument", got)
+	}
 
 	// The guard is optional, but when present both members are required. In
 	// particular, explicit revision zero must retain presence and reach the CAS

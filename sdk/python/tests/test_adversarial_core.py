@@ -386,6 +386,22 @@ def test_all_sync_secret_bearing_rpcs_discard_reflected_remote_details():
         client.close()
 
 
+def test_sync_rotation_rejects_unchanged_binding_key_without_rpc():
+    key = "same-binding-key-0123456789abcdef"
+    client = Client(channel=mock.MagicMock(), namespace=NS)
+    client._secret_stub = SimpleNamespace(RotateSecretBindingKey=mock.MagicMock())
+    try:
+        with pytest.raises(ConfigError) as caught:
+            client.rotate_secret_binding_key(
+                "secret", binding_key=key, new_binding_key=key,
+            )
+        assert str(caught.value) == "new binding key must differ from current binding key"
+        assert caught.value.code == "invalid_argument"
+        client._secret_stub.RotateSecretBindingKey.assert_not_called()
+    finally:
+        client.close()
+
+
 def test_all_async_secret_bearing_rpcs_discard_reflected_remote_details():
     async def exercise() -> None:
         plaintext = "async-secret-plaintext-reflection-canary"
@@ -416,6 +432,26 @@ def test_all_async_secret_bearing_rpcs_discard_reflected_remote_details():
                 assert plaintext not in rendered
                 assert token not in rendered
                 assert binding_key not in rendered
+        finally:
+            await client.close()
+
+    asyncio.run(exercise())
+
+
+def test_async_rotation_rejects_unchanged_binding_key_without_rpc():
+    async def exercise() -> None:
+        key = "same-binding-key-0123456789abcdef"
+        client = AsyncClient(channel=mock.MagicMock(), namespace=NS)
+        rotate = mock.AsyncMock()
+        client._secret_stub = SimpleNamespace(RotateSecretBindingKey=rotate)
+        try:
+            with pytest.raises(ConfigError) as caught:
+                await client.rotate_secret_binding_key(
+                    "secret", binding_key=key, new_binding_key=key,
+                )
+            assert str(caught.value) == "new binding key must differ from current binding key"
+            assert caught.value.code == "invalid_argument"
+            rotate.assert_not_awaited()
         finally:
             await client.close()
 

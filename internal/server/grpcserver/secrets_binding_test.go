@@ -142,6 +142,12 @@ func TestSecretBindingTransportLifecycle(t *testing.T) {
 	if preview.GetAnchorVersion() != 3 || !slices.Equal(preview.GetAffectedVersions(), []uint64{3, 4}) || preview.GetRevision() == 0 {
 		t.Fatalf("preview response = %+v", preview)
 	}
+	_, err = client.RotateSecretBindingKey(adminCtx(), &kmsv1.RotateSecretBindingKeyRequest{
+		Ref: secretRef, AnchorVersion: 3, BindingKey: grpcBindingKeyB, NewBindingKey: grpcBindingKeyB,
+	})
+	if codeOf(err) != codes.InvalidArgument || status.Convert(err).Message() != "new binding key must differ from current binding key: invalid argument" {
+		t.Fatalf("no-op rotation error = %v, want sanitized InvalidArgument", err)
+	}
 
 	// Optional scalar presence must survive protobuf decoding. With no revision,
 	// versions-only is malformed; pointer-to-zero is a present but stale guard.

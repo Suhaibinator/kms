@@ -686,6 +686,13 @@ export const api = {
     expectedAffectedVersions: number[],
     request?: ApiRequestOptions,
   ): Promise<SecretBindingCohortResponse> {
+    if (new TextEncoder().encode(newBindingKey).length >= 32 && bindingKey === newBindingKey) {
+      throw new ApiError(
+        "invalid_argument",
+        "New binding key must differ from current binding key.",
+        0,
+      );
+    }
     return secretApiFetch<SecretBindingCohortResponse>("/secrets/binding-key/rotate", {
       ...request,
       method: "POST",

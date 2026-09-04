@@ -13,6 +13,10 @@ import (
 // None of these values, nor any error wrapping them, ever contains secret
 // plaintext.
 var (
+	// ErrInvalidArgument is returned for an invalid request or local SDK
+	// configuration, including a no-op binding-key rotation.
+	ErrInvalidArgument = errors.New("kmsclient: invalid argument")
+
 	// ErrAlreadyExists is returned when an immutable resource already exists,
 	// including an identical schema already registered for an application.
 	ErrAlreadyExists = errors.New("kmsclient: already exists")
@@ -79,6 +83,8 @@ func mapError(err error) error {
 		return nil
 	case codes.AlreadyExists:
 		return fmt.Errorf("%w: %s", ErrAlreadyExists, st.Message())
+	case codes.InvalidArgument:
+		return fmt.Errorf("%w: %s", ErrInvalidArgument, st.Message())
 	case codes.NotFound:
 		return fmt.Errorf("%w: %s", ErrNotFound, st.Message())
 	case codes.PermissionDenied:
@@ -121,6 +127,8 @@ func mapSecretError(err error) error {
 		return nil
 	case codes.AlreadyExists:
 		return fmt.Errorf("%w: secret operation failed", ErrAlreadyExists)
+	case codes.InvalidArgument:
+		return fmt.Errorf("%w: secret operation failed", ErrInvalidArgument)
 	case codes.NotFound:
 		return fmt.Errorf("%w: secret operation failed", ErrNotFound)
 	case codes.PermissionDenied:

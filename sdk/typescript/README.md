@@ -133,7 +133,9 @@ await client.rotateSecretBindingKey("session-signing-key", {
 
 The two preview guards must be supplied together. A guarded mutation rejects
 locally unless its revision is positive and its affected versions are a
-non-empty, strictly ascending list of positive `bigint` values.
+non-empty, strictly ascending list of positive `bigint` values. Rotation also
+rejects a byte-for-byte unchanged replacement locally as `ConfigError` without
+making an RPC; the server independently enforces the same rule.
 
 ## Declarative values and hot reload
 

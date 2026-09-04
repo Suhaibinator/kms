@@ -1114,7 +1114,12 @@ function BindingActionModal({
   const previewKeyError = needsPreview && preview === null ? validateBindingKey(previewKey) : null;
   const operationKeyError = action ? validateBindingKey(operationKey) : null;
   const newBindingKeyError =
-    action?.kind === "rotate" && preview !== null ? validateBindingKey(newBindingKey) : null;
+    action?.kind === "rotate" && preview !== null
+      ? (validateBindingKey(newBindingKey) ??
+        (operationKey === newBindingKey
+          ? "New binding key must differ from current binding key."
+          : null))
+      : null;
   const confirmNewBindingKeyError =
     action?.kind === "rotate" && preview !== null && confirmNewBindingKey !== newBindingKey
       ? "The new binding keys do not match."

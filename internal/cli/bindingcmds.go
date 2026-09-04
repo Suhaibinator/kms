@@ -216,6 +216,9 @@ func (c *CLI) cmdBindingKeyRotate(args []string) int {
 	if err != nil {
 		return c.failUsage("binding-key rotate: %v", err)
 	}
+	if oldKey == newKey {
+		return c.failUsage("binding-key rotate: new binding key must differ from current binding key")
+	}
 	revision := preview.GetRevision()
 	affected := append([]uint64(nil), preview.GetAffectedVersions()...)
 	mutationCtx, cancelMutation := callContext()

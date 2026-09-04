@@ -263,6 +263,10 @@ client.purge_secret_binding_cohort(
 )
 ```
 
+Sync and async rotation reject a byte-for-byte unchanged replacement locally
+as `ConfigError` without making an RPC. The server independently enforces the
+same rule.
+
 The two expected fields are optional but paired; the SDK rejects an incomplete,
 zero, unsorted, or duplicate guard before the RPC. Purge is irreversible and
 admin-only. See [`binding-keys.md`](binding-keys.md).

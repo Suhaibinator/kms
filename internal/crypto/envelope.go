@@ -29,6 +29,7 @@ var (
 	ErrBindingKeyRequired    = errors.New("binding key required")
 	ErrBindingKeyTooShort    = errors.New("binding key must be at least 32 UTF-8 bytes")
 	ErrBindingKeyInvalidUTF8 = errors.New("binding key must be valid UTF-8")
+	ErrBindingKeyUnchanged   = errors.New("new binding key must differ from current binding key")
 )
 
 // BuildAAD returns the canonical associated-data string binding a secret
@@ -237,6 +238,11 @@ func RotateBindingKeyDEK(kek *KEK, encryptedDEK, bindingKeySalt []byte, aad, bin
 		return DEKRewrapResult{}, domain.ErrDecryptFailed
 	}
 	defer Zero(dek)
+	// Check equality only after the existing credential has opened the DEK.
+	// This keeps an invalid old credential on the usual decrypt-failure path.
+	if bindingKey == newBindingKey {
+		return DEKRewrapResult{}, ErrBindingKeyUnchanged
+	}
 	return wrapDEKWithBindingKey(kek, dek, aad, newBindingKey)
 }
 

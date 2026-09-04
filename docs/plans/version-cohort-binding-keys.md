@@ -33,7 +33,10 @@ A compromised binding key can be purged by anchoring at one version. KMS destroy
 - Define the compact `0.3.x` write request as `ref = 1`, `value = 2`, `content_type = 3`, `metadata_json = 4`, `binding_key = 5`, `generate_access_token = 6`, and `expires_at_unix_ms = 7`.
 - Remove `client_bound` and the write-side `secret_token` outright. Do not reserve their old names or numbers; the latter’s only existing purpose was proving the conflated client-bound token.
 - A non-empty `binding_key` creates a bound version. An empty value creates an unbound version, regardless of the preceding version’s protection.
-- A non-empty binding key must contain at least 32 UTF-8 bytes. No normalization, trimming, prefix requirement, or equality comparison is performed server-side.
+- A non-empty binding key must contain at least 32 UTF-8 bytes. No normalization,
+  trimming, prefix, encoding, or entropy requirement is imposed. KMS does not
+  compare keys across secrets or versions. Rotation alone compares the two
+  caller-supplied strings and rejects a byte-for-byte unchanged replacement.
 - Access-token behavior remains separate:
   - `generate_access_token` creates or rotates the secret-level access token.
   - New versions inherit token gating while `access_token_hash` exists.
@@ -68,6 +71,8 @@ Request semantics:
 - `RotateSecretBindingKey(ref, anchor_version, binding_key, new_binding_key)`
   - `anchor_version = 0` means current.
   - Rotates the contiguous cohort around the anchor.
+  - Rejects a byte-for-byte identical current and replacement key with a fixed,
+    sanitized `InvalidArgument` error and no mutation.
 - `PreviewSecretBindingCohort(ref, anchor_version, binding_key)`
   - `anchor_version = 0` means current.
   - Discovers the cohort without mutating it and returns the current storage revision.
@@ -229,6 +234,11 @@ func (c *Client) PurgeSecretBindingCohortIfUnchanged(
 The `IfUnchanged` variants replay the preview's revision and sorted affected
 versions as a paired CAS guard. Secret plaintext caching is disabled entirely;
 successful mutations still invalidate compatibility bookkeeping.
+
+Both Go rotation methods reject identical input strings locally without an RPC
+using `ErrInvalidArgument`. Python sync/async methods and TypeScript reject the
+same condition as `ConfigError`. This is convenience validation only; the
+server remains authoritative.
 
 ### Secret types
 
@@ -492,6 +502,8 @@ The metadata lookup and secret fetch count as one unit under the existing concur
   - `KMS_BINDING_KEY` for non-interactive invocation.
   - A non-echoing prompt when the variable is absent and stdin is a terminal.
   - `KMS_NEW_BINDING_KEY` or a second prompt for rotation.
+- Rotation rejects identical current and replacement strings after preview has
+  verified the current key and before sending the mutation RPC.
 - Online operations use existing bearer-token/mTLS administrator authentication; the running server uses its configured KEK.
 - There is no offline secret-read or secret-export command in the current CLI.
   If a single-secret offline read is introduced later, it must use the existing
@@ -513,6 +525,8 @@ The metadata lookup and secret fetch count as one unit under the existing concur
 - Console secret history displays `bound` and `has_access_token` per version.
 - Bind/unbind actions target one version; rotate and purge preview and confirm the discovered affected version range.
 - Binding-key form fields are password inputs held only in request-local browser state and cleared after submission.
+- The console marks an identical rotation replacement invalid inline; its API
+  wrapper also refuses to send the request.
 - Purge confirmation names the secret, anchor, and affected versions; no key-derived identifier is displayed.
 
 ## 0.3.x greenfield storage baseline
@@ -538,6 +552,14 @@ The metadata lookup and secret fetch count as one unit under the existing concur
 
 - Contract tests verify the new compact protobuf field layouts and generated Go/Python/TypeScript output; they do not preserve or test legacy field reservations.
 - Crypto tests cover bound/unbound encryption, wrong keys, fresh salts, in-place rewrap, zeroization paths, and unchanged value ciphertext.
+- Rotation tests cover no-op rejection without mutation at the crypto/core,
+  gRPC, HTTP, SDK, CLI, and console boundaries. Authoritative ordering is:
+  validate replacement shape, authorize, cryptographically verify the current
+  key and discover the cohort, check the CAS guard, then compare the two
+  caller-supplied strings. This keeps wrong current credentials on the existing
+  sanitized decrypt-failure path and stale previews on the existing aborted
+  path. Client-side equality checks are intentionally earlier and reveal only
+  the caller's own arguments.
 - Cohort tests cover first/middle/last anchors, bidirectional scans, key reuse after a boundary, destroyed/missing/corrupt boundaries, disabled/expired versions, and transaction rollback.
 - Purge tests verify exact affected versions, current-label failure, immutable invalid releases, admin-only authorization, audit redaction, and version-number non-reuse.
 - SDK tests in all three languages cover:

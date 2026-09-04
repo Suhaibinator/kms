@@ -178,7 +178,9 @@ or otherwise reviewed automation should preview first and call
 `RotateSecretBindingKeyIfUnchanged` or
 `PurgeSecretBindingCohortIfUnchanged`, passing the returned revision and exact
 affected versions as one compare-and-swap guard. Purge is irreversible and
-requires an administrator. See [`binding-keys.md`](binding-keys.md).
+requires an administrator. Both rotation methods reject a byte-for-byte
+unchanged replacement locally as `ErrInvalidArgument` without making an RPC.
+See [`binding-keys.md`](binding-keys.md).
 
 `SecretMetadata.Bound` summarizes the current-labeled version, while the
 top-level `HasAccessToken` reports whether the secret currently has an access

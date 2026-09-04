@@ -848,6 +848,7 @@ class Client:
     ) -> SecretBindingCohortResult:
         """Rotate the binding key for a contiguous version cohort."""
         _valid_uint64(anchor_version, "anchor_version")
+        _reject_noop_binding_key_rotation(binding_key, new_binding_key)
         guard = _cohort_guard(expected_revision, expected_affected_versions)
         ref = self._resolve_ref(key)
         call_timeout = self._call_timeout(timeout)
@@ -989,6 +990,17 @@ def _valid_page_size(value: int) -> int:
     if isinstance(value, bool) or not isinstance(value, int) or value < 0 or value > 1000:
         raise errors.ConfigError("page_size must be an integer between 0 and 1000")
     return value
+
+
+def _reject_noop_binding_key_rotation(binding_key: str, new_binding_key: str) -> None:
+    if not isinstance(binding_key, str) or not isinstance(new_binding_key, str):
+        return
+    try:
+        replacement_is_valid = len(new_binding_key.encode("utf-8")) >= 32
+    except UnicodeEncodeError:
+        replacement_is_valid = False
+    if replacement_is_valid and binding_key == new_binding_key:
+        raise errors.ConfigError("new binding key must differ from current binding key")
 
 
 def _normalize_selector(version: int, label: str) -> Tuple[int, str]:
