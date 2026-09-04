@@ -31,6 +31,9 @@ type bindingSecretStub struct {
 	purgeReq    *kmsv1.PurgeSecretBindingCohortRequest
 	previewAt   time.Time
 	mutationAt  time.Time
+	previewEnd  <-chan struct{}
+	mutationEnd <-chan struct{}
+	previewOff  bool
 	bindErr     error
 	unbindErr   error
 	previewErr  error
@@ -51,12 +54,19 @@ func (s *bindingSecretStub) UnbindSecret(_ context.Context, req *kmsv1.UnbindSec
 func (s *bindingSecretStub) PreviewSecretBindingCohort(ctx context.Context, req *kmsv1.PreviewSecretBindingCohortRequest) (*kmsv1.SecretBindingCohortResponse, error) {
 	s.previewReq = req
 	s.previewAt, _ = ctx.Deadline()
+	s.previewEnd = ctx.Done()
 	return s.previewResp, s.previewErr
 }
 
 func (s *bindingSecretStub) RotateSecretBindingKey(ctx context.Context, req *kmsv1.RotateSecretBindingKeyRequest) (*kmsv1.SecretBindingCohortResponse, error) {
 	s.rotateReq = req
 	s.mutationAt, _ = ctx.Deadline()
+	s.mutationEnd = ctx.Done()
+	select {
+	case <-s.previewEnd:
+		s.previewOff = true
+	default:
+	}
 	return s.cohort, s.rotateErr
 }
 
@@ -218,8 +228,14 @@ func TestBindingKeyRotatePreviewsConfirmsAndSendsCASGuards(t *testing.T) {
 	if stub.rotateReq.ExpectedRevision == nil || stub.rotateReq.GetExpectedRevision() != 71 || !slices.Equal(stub.rotateReq.GetExpectedAffectedVersions(), []uint64{4, 5}) {
 		t.Fatalf("rotate CAS guards = revision %v, versions %v", stub.rotateReq.ExpectedRevision, stub.rotateReq.GetExpectedAffectedVersions())
 	}
-	if stub.previewAt.IsZero() || stub.mutationAt.IsZero() || !stub.mutationAt.After(stub.previewAt) {
-		t.Fatalf("preview deadline = %v, mutation deadline = %v; want a fresh post-confirmation deadline", stub.previewAt, stub.mutationAt)
+	if stub.previewAt.IsZero() || stub.mutationAt.IsZero() {
+		t.Fatalf("preview deadline = %v, mutation deadline = %v; want bounded RPCs", stub.previewAt, stub.mutationAt)
+	}
+	if stub.previewEnd == nil || stub.mutationEnd == nil || stub.previewEnd == stub.mutationEnd {
+		t.Fatal("preview and mutation did not use independent cancellation lifetimes")
+	}
+	if !stub.previewOff {
+		t.Fatal("preview context remained live when mutation started")
 	}
 	if !strings.Contains(c.stderr(), "affected versions: 4, 5") {
 		t.Fatalf("preview omitted exact versions: %q", c.stderr())
