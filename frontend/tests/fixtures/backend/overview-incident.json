@@ -57,7 +57,7 @@
           "activation_revision": 8,
           "created_at_unix_ms": 1755000000000,
           "created_by": "admin",
-          "digest": "d5a86ac820f5ce21b04e33bc82c5fad598614561c8fb704ad5828cb897cbbdea",
+          "digest": "08f53341d29463769364f4f4b5df6f28dfdbb401b6e7d76e5a770d53c930aecb",
           "entries": [
             {
               "alias": "database",
@@ -132,6 +132,7 @@
       "values": [
         {
           "alias": "database",
+          "bound": false,
           "content_type": "json",
           "current_version": 1,
           "key": "database",
@@ -141,6 +142,7 @@
         },
         {
           "alias": "db_password",
+          "bound": false,
           "content_type": "text/plain",
           "current_version": 1,
           "key": "db_password",
@@ -150,6 +152,7 @@
         },
         {
           "alias": "rate_limits",
+          "bound": false,
           "content_type": "integer",
           "current_version": 2,
           "key": "rate_limits",
@@ -216,7 +219,7 @@
           "activation_revision": 12,
           "created_at_unix_ms": 1755000000000,
           "created_by": "admin",
-          "digest": "496c2721734fb712291c864f12f1676c1e9a1c3bc54365eb51ad0904f16aeaaa",
+          "digest": "1ebc665cc60ba49933b4697512cc74beda5e869d75d6927e7442636fea565559",
           "entries": [
             {
               "alias": "database",
@@ -306,6 +309,7 @@
       "values": [
         {
           "alias": "database",
+          "bound": false,
           "content_type": "json",
           "current_version": 1,
           "key": "database",
@@ -315,6 +319,7 @@
         },
         {
           "alias": "db_password",
+          "bound": false,
           "content_type": "text/plain",
           "current_version": 1,
           "key": "db_password",
@@ -324,6 +329,7 @@
         },
         {
           "alias": "rate_limits",
+          "bound": false,
           "content_type": "integer",
           "current_version": 4,
           "key": "rate_limits",
@@ -340,13 +346,17 @@
     {
       "environments": {
         "dev": {
+          "bound": false,
           "content_type": "json",
+          "has_access_token": false,
           "present": true,
           "value": "{\"host\":\"db.internal\",\"pool\":8}",
           "version": 1
         },
         "prod": {
+          "bound": false,
           "content_type": "json",
+          "has_access_token": false,
           "present": true,
           "value": "{\"host\":\"db.internal\",\"pool\":8}",
           "version": 1
@@ -358,12 +368,16 @@
     {
       "environments": {
         "dev": {
+          "bound": false,
           "content_type": "text/plain",
+          "has_access_token": false,
           "present": true,
           "version": 1
         },
         "prod": {
+          "bound": false,
           "content_type": "text/plain",
+          "has_access_token": false,
           "present": true,
           "version": 1
         }
@@ -374,13 +388,17 @@
     {
       "environments": {
         "dev": {
+          "bound": false,
           "content_type": "integer",
+          "has_access_token": false,
           "present": true,
           "value": "7",
           "version": 2
         },
         "prod": {
+          "bound": false,
           "content_type": "integer",
+          "has_access_token": false,
           "present": true,
           "value": "20",
           "version": 4
