@@ -7656,8 +7656,8 @@ type AuditEvent struct {
 	CreatedAtUnixMs int64                  `protobuf:"varint,14,opt,name=created_at_unix_ms,json=createdAtUnixMs,proto3" json:"created_at_unix_ms,omitempty"`
 	MetadataJson    string                 `protobuf:"bytes,15,opt,name=metadata_json,json=metadataJson,proto3" json:"metadata_json,omitempty"`
 	// The immutable incarnation ID of the namespace the event was authorized
-	// against (0 for global events and legacy rows), so a deleted-and-recreated
-	// env/app can be told apart in an export.
+	// against. It is 0 only for global/non-namespaced events, so a
+	// deleted-and-recreated env/app can be told apart in an export.
 	ResourceNamespaceId int64 `protobuf:"varint,16,opt,name=resource_namespace_id,json=resourceNamespaceId,proto3" json:"resource_namespace_id,omitempty"`
 	unknownFields       protoimpl.UnknownFields
 	sizeCache           protoimpl.SizeCache

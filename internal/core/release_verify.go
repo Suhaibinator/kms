@@ -134,6 +134,17 @@ func (s *Service) VerifyReleaseDefaults(ctx context.Context, pr Principal, in do
 		return domain.VerifyReleaseDefaultsResult{}, err
 	}
 	release := active.Release
+	// A release pin is always scoped to its owning namespace. Creation and
+	// storage validation enforce this invariant, but verify it again here so a
+	// corrupt row or alternate ReleaseStore implementation cannot turn this
+	// endpoint into a cross-namespace comparison oracle.
+	for _, entry := range release.Entries {
+		if entry.Ref.NS != release.Namespace {
+			s.auditVerifyDefaults(ctx, pr, auditRef, namespace.ID, release.Version, "error", counts)
+			return domain.VerifyReleaseDefaultsResult{}, domain.Errorf(domain.ErrFailedPrecondition,
+				"active release contains an entry outside its home namespace")
+		}
+	}
 
 	// Schema check against the application-pinned version (falling back to the
 	// release's own pin when the application has none). The generator's
@@ -170,7 +181,7 @@ func (s *Service) VerifyReleaseDefaults(ctx context.Context, pr Principal, in do
 	mentioned := make(map[string]struct{}, len(in.Entries))
 	for _, req := range in.Entries {
 		mentioned[req.Alias] = struct{}{}
-		verdict, err := s.verifyDefaultsEntry(ctx, pr, in.Namespace, req, releaseEntries, contract)
+		verdict, err := s.verifyDefaultsEntry(ctx, req, releaseEntries, contract)
 		if err != nil {
 			return domain.VerifyReleaseDefaultsResult{}, err
 		}
@@ -234,7 +245,7 @@ func (s *Service) VerifyReleaseDefaults(ctx context.Context, pr Principal, in do
 
 // verifyDefaultsEntry produces the verdict for one requested alias. It reads
 // parameters only; a secret alias is answered before any storage access.
-func (s *Service) verifyDefaultsEntry(ctx context.Context, pr Principal, releaseNS domain.NamespaceRef, req domain.VerifyDefaultsEntry, releaseEntries map[string]domain.ConfigurationReleaseEntry, contract map[string]struct{}) (string, error) {
+func (s *Service) verifyDefaultsEntry(ctx context.Context, req domain.VerifyDefaultsEntry, releaseEntries map[string]domain.ConfigurationReleaseEntry, contract map[string]struct{}) (string, error) {
 	entry, ok := releaseEntries[req.Alias]
 	if !ok {
 		if _, inContract := contract[req.Alias]; inContract {
@@ -244,18 +255,6 @@ func (s *Service) verifyDefaultsEntry(ctx context.Context, pr Principal, release
 	}
 	if entry.Kind != domain.ReleaseEntryParameter {
 		return domain.VerifyVerdictSecretAlias, nil
-	}
-	// Release access never grants access to a referenced parameter. A pin
-	// from another namespace is only probed when the caller also holds the
-	// verify operation there; otherwise the whole call is denied (and audited
-	// by authorize) so the verdict set stays closed.
-	if entry.Ref.NS != releaseNS && !pr.IsAdmin() {
-		if _, _, err := s.authorize(ctx, pr, domain.OpConfigurationReleaseVerifyDefaults, domain.ResourceParameter, entry.Ref); err != nil {
-			// authorize has audited the denial; the caller must not learn which
-			// namespace the pin targets, whether it still exists, or which auth
-			// methods it allows, so every failure collapses to the neutral text.
-			return "", domain.Errorf(domain.ErrPermissionDenied, "access denied")
-		}
 	}
 	entryCtx := ctx
 	if entry.ResourceNamespaceID > 0 {

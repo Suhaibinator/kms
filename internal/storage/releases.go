@@ -444,25 +444,10 @@ func (s *SQLStore) ConfigurationReleaseActivationExists(ctx context.Context, ns 
 		if err := tx.Table("configuration_release_activations").Where("revision = ? AND namespace_id = ? AND release_name = ? AND version_number = ?", revision, nsID, name, version).Count(&count).Error; err != nil {
 			return err
 		}
-		if count == 1 {
-			exists = true
-			return nil
-		}
-		// Compatibility fallback for databases upgraded while a retained activation
-		// existed only in the v1 changelog/current labels.
-		count = 0
-		if err := tx.Model(&changeLogModel{}).Where("revision = ? AND resource_type = ? AND namespace_id = ? AND env = ? AND app = ? AND key = ? AND change_type = ? AND version_number = ?", revision, domain.ResourceConfigurationRelease, nsID, ns.Env, ns.App, name, "activate", version).Count(&count).Error; err != nil {
-			return err
-		}
-		if count == 1 {
-			exists = true
-			return nil
-		}
-		count = 0
-		if err := tx.Model(&configurationReleaseLabelModel{}).Where("namespace_id = ? AND release_name = ? AND version_number = ? AND activation_revision = ?", nsID, name, version, revision).Count(&count).Error; err != nil {
-			return err
-		}
-		exists = count > 0
+		// The activation-history table is authoritative in the greenfield 0.3
+		// baseline. Changelog and mutable label rows are not proof that this exact
+		// activation occurred.
+		exists = count == 1
 		return nil
 	}, &sql.TxOptions{ReadOnly: true})
 	return exists, err
@@ -587,8 +572,7 @@ func validateReleasePinsTx(tx *gorm.DB, releaseID int64) error {
 		JOIN configuration_releases r ON r.id = e.release_id
 		JOIN namespaces rn ON rn.id = r.namespace_id
 		LEFT JOIN namespaces n
-			ON e.resource_namespace_id > 0
-			AND n.id = e.resource_namespace_id
+			ON n.id = e.resource_namespace_id
 			AND n.env = e.resource_env AND n.app = e.resource_app
 		LEFT JOIN parameters p
 			ON e.kind = ? AND p.namespace_id = n.id AND p.name = e.resource_key
@@ -606,10 +590,7 @@ func validateReleasePinsTx(tx *gorm.DB, releaseID int64) error {
 	for _, pin := range pins {
 		if pin.StoredResourceNamespaceID != pin.OwnerNamespaceID ||
 			pin.StoredResourceEnv != pin.OwnerEnv || pin.StoredResourceApp != pin.OwnerApp {
-			return releasePinValidationError(pin.Alias, domain.ReleaseValidationUnreadable, "release entry is outside its home namespace")
-		}
-		if pin.StoredResourceNamespaceID <= 0 {
-			return releasePinValidationError(pin.Alias, domain.ReleaseValidationUnreadable, "release entry predates immutable namespace pins; recreate the release")
+			return releasePinValidationError(pin.Alias, domain.ReleaseValidationUnreadable, "release entry resource namespace does not match its owner")
 		}
 		if !pin.ResourceNamespaceID.Valid {
 			return releasePinValidationError(pin.Alias, domain.ReleaseValidationNotFound, "release entry references a missing or replaced namespace")
@@ -986,7 +967,7 @@ func findProtectedReleaseReference(db *gorm.DB, ref domain.Ref, kind string, ver
 	if err != nil {
 		return ReleaseReference{}, err
 	}
-	q := db.Table("configuration_release_entries e").Select("n.env,n.app,r.name AS release_name,r.version_number,e.alias").Joins("JOIN configuration_releases r ON r.id=e.release_id").Joins("JOIN namespaces n ON n.id=r.namespace_id").Joins("JOIN configuration_release_labels l ON l.namespace_id=r.namespace_id AND l.release_name=r.name AND l.version_number=r.version_number AND l.label IN (?,?)", domain.LabelCurrent, domain.LabelPrevious).Where("e.kind=? AND e.resource_key=? AND ((e.resource_namespace_id=? AND e.resource_env=? AND e.resource_app=?) OR (e.resource_namespace_id=0 AND e.resource_env=? AND e.resource_app=?))", kind, ref.Key, resourceNamespaceID, ref.NS.Env, ref.NS.App, ref.NS.Env, ref.NS.App)
+	q := db.Table("configuration_release_entries e").Select("n.env,n.app,r.name AS release_name,r.version_number,e.alias").Joins("JOIN configuration_releases r ON r.id=e.release_id").Joins("JOIN namespaces n ON n.id=r.namespace_id").Joins("JOIN configuration_release_labels l ON l.namespace_id=r.namespace_id AND l.release_name=r.name AND l.version_number=r.version_number AND l.label IN (?,?)", domain.LabelCurrent, domain.LabelPrevious).Where("e.kind=? AND e.resource_key=? AND e.resource_namespace_id=? AND e.resource_env=? AND e.resource_app=?", kind, ref.Key, resourceNamespaceID, ref.NS.Env, ref.NS.App)
 	if version > 0 {
 		q = q.Where("e.resource_version=?", version)
 	}

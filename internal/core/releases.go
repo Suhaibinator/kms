@@ -738,7 +738,7 @@ func (s *Service) SetReleaseSubscriberConnected(ctx context.Context, ns domain.N
 func (s *Service) ResetReleaseSubscriberConnections(ctx context.Context) error {
 	rs, err := s.releaseStore()
 	if err != nil {
-		return nil // release storage is additive for legacy Store implementations
+		return nil // Data-plane-only Store implementations may omit release state.
 	}
 	return rs.ResetReleaseInstanceConnections(ctx, s.now())
 }

@@ -73,6 +73,42 @@ func TestV03WireFieldLayouts(t *testing.T) {
 	}
 }
 
+func TestV03AllMessagesAreDenseAndUnreserved(t *testing.T) {
+	t.Parallel()
+
+	assertDenseUnreservedMessages(t, File_kms_v1_kms_proto.Messages())
+}
+
+func assertDenseUnreservedMessages(t *testing.T, messages protoreflect.MessageDescriptors) {
+	t.Helper()
+	for index := 0; index < messages.Len(); index++ {
+		descriptor := messages.Get(index)
+		t.Run(string(descriptor.FullName()), func(t *testing.T) {
+			if descriptor.ReservedNames().Len() != 0 || descriptor.ReservedRanges().Len() != 0 {
+				t.Errorf("reserved names/ranges = %d/%d, want 0/0", descriptor.ReservedNames().Len(), descriptor.ReservedRanges().Len())
+			}
+
+			seen := make([]bool, descriptor.Fields().Len()+1)
+			for fieldIndex := 0; fieldIndex < descriptor.Fields().Len(); fieldIndex++ {
+				field := descriptor.Fields().Get(fieldIndex)
+				number := int(field.Number())
+				if number < 1 || number > descriptor.Fields().Len() {
+					t.Errorf("field %s has number %d outside dense range 1..%d", field.Name(), number, descriptor.Fields().Len())
+					continue
+				}
+				seen[number] = true
+			}
+			for number := 1; number < len(seen); number++ {
+				if !seen[number] {
+					t.Errorf("field number %d is missing from dense range 1..%d", number, descriptor.Fields().Len())
+				}
+			}
+
+			assertDenseUnreservedMessages(t, descriptor.Messages())
+		})
+	}
+}
+
 func TestV03SecretBindingRPCLayouts(t *testing.T) {
 	t.Parallel()
 

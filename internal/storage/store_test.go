@@ -156,6 +156,18 @@ func TestSchemaDDL(t *testing.T) {
 			t.Errorf("secret_versions missing %s", column)
 		}
 	}
+	var releaseColumns []struct {
+		Name         string
+		DefaultValue *string `gorm:"column:dflt_value"`
+	}
+	if err := st.db.Raw("PRAGMA table_info(configuration_release_entries)").Scan(&releaseColumns).Error; err != nil {
+		t.Fatal(err)
+	}
+	for _, column := range releaseColumns {
+		if column.Name == "resource_namespace_id" && column.DefaultValue != nil {
+			t.Errorf("resource_namespace_id retained a default: %q", *column.DefaultValue)
+		}
+	}
 }
 
 func TestPragmasApplied(t *testing.T) {
@@ -399,6 +411,9 @@ func TestOpenRejectsLegacyLayoutsWithoutMutation(t *testing.T) {
 		"unstamped nonempty": func(t *testing.T) string {
 			return createRaw(t, `CREATE TABLE legacy_secrets (id INTEGER PRIMARY KEY, value TEXT)`, `INSERT INTO legacy_secrets VALUES (1, 'keep-me')`)
 		},
+		"non-table schema object": func(t *testing.T) string {
+			return createRaw(t, `CREATE VIEW operator_view AS SELECT 'keep-me' AS value`)
+		},
 		"partial stamped baseline": func(t *testing.T) string {
 			return createRaw(t,
 				`CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL)`,
@@ -409,7 +424,18 @@ func TestOpenRejectsLegacyLayoutsWithoutMutation(t *testing.T) {
 	for name, setup := range tests {
 		t.Run(name, func(t *testing.T) {
 			path := setup(t)
+			if runtime.GOOS != "windows" {
+				// A compatibility rejection must happen before the private-file
+				// normalizer turns a valid owner-read-only mode into 0600.
+				if err := os.Chmod(path, 0o400); err != nil {
+					t.Fatal(err)
+				}
+			}
 			before, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			beforeInfo, err := os.Stat(path)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -425,6 +451,21 @@ func TestOpenRejectsLegacyLayoutsWithoutMutation(t *testing.T) {
 			}
 			if !bytes.Equal(before, after) {
 				t.Fatal("rejected legacy database was mutated")
+			}
+			afterInfo, err := os.Stat(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if beforeInfo.Mode() != afterInfo.Mode() {
+				t.Fatalf("rejected database mode changed from %v to %v", beforeInfo.Mode(), afterInfo.Mode())
+			}
+			if !beforeInfo.ModTime().Equal(afterInfo.ModTime()) {
+				t.Fatalf("rejected database modification time changed from %v to %v", beforeInfo.ModTime(), afterInfo.ModTime())
+			}
+			for _, suffix := range []string{"-journal", "-wal", "-shm"} {
+				if _, err := os.Lstat(path + suffix); !os.IsNotExist(err) {
+					t.Fatalf("rejected database created sidecar %s: %v", suffix, err)
+				}
 			}
 		})
 	}
@@ -442,15 +483,17 @@ func TestBaselineMaterializationIsAtomicAndVerificationIsExact(t *testing.T) {
 
 	t.Run("rollback leaves no partial schema", func(t *testing.T) {
 		db := newMemoryDB(t, "baseline-rollback")
-		boom := errors.New("after baseline")
-		err := db.Transaction(func(tx *gorm.DB) error {
-			if err := materializeBaseline(tx); err != nil {
+		err := initializeBaselineWithVerifier(db, func(tx *gorm.DB) error {
+			// Model a materialization defect that only exact baseline verification
+			// can detect. The verifier error must roll back the surrounding
+			// initialization transaction, including all preceding DDL.
+			if err := tx.Exec("DROP INDEX idx_secret_ns_name").Error; err != nil {
 				return err
 			}
-			return boom
+			return verifyBaselineDB(tx)
 		})
-		if !errors.Is(err, boom) {
-			t.Fatalf("transaction err = %v, want injected failure", err)
+		if err == nil || !strings.Contains(err.Error(), "incompatible 0.3.x database baseline") {
+			t.Fatalf("initialization err = %v, want exact-baseline failure", err)
 		}
 		var count int64
 		if err := db.Raw("SELECT COUNT(*) FROM sqlite_master WHERE name NOT LIKE 'sqlite_%'").Scan(&count).Error; err != nil {
@@ -824,6 +867,38 @@ func TestCreateSecretVersionAllowsMixedProtectionAndTracksCurrent(t *testing.T) 
 	}
 	if rec.Bound {
 		t.Fatal("current summary remained bound after promoting unbound version")
+	}
+}
+
+func TestSecretMetadataReadsRejectDanglingCurrentLabel(t *testing.T) {
+	st := newStore(t)
+	ctx := context.Background()
+	ns := seedNS(t, st, "prod", "app").NamespaceRef
+	r := domain.Ref{NS: ns, Key: "dangling-current"}
+	putSecret(t, st, r, true)
+
+	rec, err := st.GetSecretRecord(ctx, r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.db.Model(&secretLabelModel{}).
+		Where("secret_id = ? AND label = ?", rec.ID, domain.LabelCurrent).
+		Update("version_number", 999).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := st.GetSecretRecord(ctx, r); !errors.Is(err, domain.ErrFailedPrecondition) {
+		t.Fatalf("GetSecretRecord dangling current error = %v, want failed precondition", err)
+	}
+	if _, err := st.GetSecretInfo(ctx, r); !errors.Is(err, domain.ErrFailedPrecondition) {
+		t.Fatalf("GetSecretInfo dangling current error = %v, want failed precondition", err)
+	}
+	secrets, next, err := st.ListSecrets(ctx, ns, "", ListPage{})
+	if !errors.Is(err, domain.ErrFailedPrecondition) {
+		t.Fatalf("ListSecrets dangling current error = %v, want failed precondition", err)
+	}
+	if secrets != nil || next != "" {
+		t.Fatalf("ListSecrets returned partial metadata on corruption: secrets=%+v next=%q", secrets, next)
 	}
 }
 
@@ -2612,9 +2687,6 @@ func TestDeleteAuditByIDs(t *testing.T) {
 	}
 }
 
-// TestAuditDecisionIndexCreatedOnExistingDatabase covers the upgrade path: a
-// database written before the decision index existed gains it on the next
-// migration rather than only on a freshly created file.
 func TestRevisionMonotonicAfterPruneAll(t *testing.T) {
 	st := newStore(t)
 	ctx := context.Background()

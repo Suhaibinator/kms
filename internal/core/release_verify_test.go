@@ -25,6 +25,20 @@ type verifyFixture struct {
 	schema  domain.ConfigurationSchema
 }
 
+// activeReleaseOverrideStore lets this package exercise fail-closed handling
+// of a corrupt/alternate release store while retaining the real store for all
+// other capabilities.
+type activeReleaseOverrideStore struct {
+	storage.Store
+	storage.ReleaseStore
+	storage.ApplicationStore
+	active domain.ActiveConfigurationRelease
+}
+
+func (s *activeReleaseOverrideStore) GetActiveConfigurationRelease(context.Context, domain.NamespaceRef, string) (domain.ActiveConfigurationRelease, error) {
+	return s.active, nil
+}
+
 const (
 	verifyPrettyJSON = "{\n  \"b\": 1,\n  \"a\": 2\n}"
 	verifyCanonical  = `{"a":2,"b":1}`
@@ -208,39 +222,22 @@ func TestVerifyReleaseDefaultsVerdicts(t *testing.T) {
 	}
 }
 
-func TestVerifyReleaseDefaultsCrossNamespaceEntry(t *testing.T) {
+func TestVerifyReleaseDefaultsRejectsMalformedCrossNamespaceActiveRelease(t *testing.T) {
 	f := newVerifyFixture(t)
 	ctx := context.Background()
-	shared := domain.NamespaceRef{Env: "shared", App: "platform"}
-	if _, err := f.st.CreateNamespace(ctx, domain.Namespace{NamespaceRef: shared, CreatedBy: "admin"}); err != nil {
-		t.Fatal(err)
+	malformed := f.release
+	malformed.Release.Entries = append([]domain.ConfigurationReleaseEntry(nil), malformed.Release.Entries...)
+	malformed.Release.Entries[0].Ref.NS = domain.NamespaceRef{Env: "shared", App: "platform"}
+	store := &activeReleaseOverrideStore{
+		Store: f.st, ReleaseStore: f.st, ApplicationStore: f.st, active: malformed,
 	}
-	if _, _, err := f.st.PutParameter(ctx, domain.Ref{NS: shared, Key: "flags"}, `{"x":true}`, "json", "{}", "admin"); err != nil {
-		t.Fatal(err)
-	}
-	other := domain.NamespaceRef{Env: "stage", App: "xapp"}
-	if _, err := f.st.CreateNamespace(ctx, domain.Namespace{NamespaceRef: other, CreatedBy: "admin"}); err != nil {
-		t.Fatal(err)
-	}
-	rel, err := f.svc.CreateConfigurationRelease(ctx, f.admin, domain.CreateConfigurationReleaseInput{
-		Namespace: other, Name: "runtime",
-		Entries: []domain.ReleaseEntrySelector{{Alias: "flags", Kind: domain.ReleaseEntryParameter, Ref: domain.Ref{NS: shared, Key: "flags"}}},
+	svc := New(store, nil, "test")
+	out, err := svc.VerifyReleaseDefaults(ctx, f.admin, domain.VerifyReleaseDefaultsInput{
+		Namespace: f.ns,
+		Entries:   []domain.VerifyDefaultsEntry{{Alias: "json_cfg", ContentType: "json", SHA256: mustHash(t, "json", verifyCanonical)}},
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, _, err := f.svc.ActivateConfigurationRelease(ctx, f.admin, other, "runtime", rel.Version, nil); err != nil {
-		t.Fatal(err)
-	}
-	out, err := f.svc.VerifyReleaseDefaults(ctx, f.admin, domain.VerifyReleaseDefaultsInput{
-		Namespace: other,
-		Entries:   []domain.VerifyDefaultsEntry{{Alias: "flags", ContentType: "json", SHA256: mustHash(t, "json", `{ "x" : true }`)}},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if out.Summary.Match != 1 || out.Entries[0].Verdict != domain.VerifyVerdictMatch {
-		t.Fatalf("cross-namespace entry = %+v", out)
+	if !errors.Is(err, domain.ErrFailedPrecondition) || len(out.Entries) != 0 {
+		t.Fatalf("malformed cross-namespace release: out=%+v err=%v", out, err)
 	}
 }
 
@@ -492,113 +489,18 @@ func TestVerifyDefaultsEntryUnsupportedContentType(t *testing.T) {
 	entries := map[string]domain.ConfigurationReleaseEntry{
 		"broken": {Alias: "broken", Kind: domain.ReleaseEntryParameter, Ref: ref, Version: 1, ContentType: "json", ParameterDigest: sha256Hex([]byte(raw))},
 	}
-	verdict, err := s.verifyDefaultsEntry(ctx, adminPrincipal(), ns, domain.VerifyDefaultsEntry{Alias: "broken", ContentType: "json", SHA256: strings.Repeat("0", 64)}, entries, nil)
+	verdict, err := s.verifyDefaultsEntry(ctx, domain.VerifyDefaultsEntry{Alias: "broken", ContentType: "json", SHA256: strings.Repeat("0", 64)}, entries, nil)
 	if err != nil || verdict != domain.VerifyVerdictUnsupportedContentType {
 		t.Fatalf("verdict = %q err=%v", verdict, err)
 	}
 	// A pin whose stored bytes drifted from the release digest is differs, and
 	// a pin whose parameter vanished is missing_in_release.
 	entries["broken"] = domain.ConfigurationReleaseEntry{Alias: "broken", Kind: domain.ReleaseEntryParameter, Ref: ref, Version: 1, ContentType: "json", ParameterDigest: "stale"}
-	if verdict, err := s.verifyDefaultsEntry(ctx, adminPrincipal(), ns, domain.VerifyDefaultsEntry{Alias: "broken", ContentType: "json", SHA256: strings.Repeat("0", 64)}, entries, nil); err != nil || verdict != domain.VerifyVerdictDiffers {
+	if verdict, err := s.verifyDefaultsEntry(ctx, domain.VerifyDefaultsEntry{Alias: "broken", ContentType: "json", SHA256: strings.Repeat("0", 64)}, entries, nil); err != nil || verdict != domain.VerifyVerdictDiffers {
 		t.Fatalf("digest drift verdict = %q err=%v", verdict, err)
 	}
 	entries["gone"] = domain.ConfigurationReleaseEntry{Alias: "gone", Kind: domain.ReleaseEntryParameter, Ref: domain.Ref{NS: ns, Key: "gone"}, Version: 1, ContentType: "string"}
-	if verdict, err := s.verifyDefaultsEntry(ctx, adminPrincipal(), ns, domain.VerifyDefaultsEntry{Alias: "gone", ContentType: "string", SHA256: strings.Repeat("0", 64)}, entries, nil); err != nil || verdict != domain.VerifyVerdictMissingInRelease {
+	if verdict, err := s.verifyDefaultsEntry(ctx, domain.VerifyDefaultsEntry{Alias: "gone", ContentType: "string", SHA256: strings.Repeat("0", 64)}, entries, nil); err != nil || verdict != domain.VerifyVerdictMissingInRelease {
 		t.Fatalf("vanished parameter verdict = %q err=%v", verdict, err)
-	}
-}
-
-func TestVerifyReleaseDefaultsCrossNamespaceRequiresVerifyGrantThere(t *testing.T) {
-	f := newVerifyFixture(t)
-	ctx := context.Background()
-	shared := domain.NamespaceRef{Env: "shared", App: "platform"}
-	if _, err := f.st.CreateNamespace(ctx, domain.Namespace{NamespaceRef: shared, AllowedAuthMethods: []domain.AuthMethod{domain.AuthMethodToken}, CreatedBy: "admin"}); err != nil {
-		t.Fatal(err)
-	}
-	if _, _, err := f.st.PutParameter(ctx, domain.Ref{NS: shared, Key: "flags"}, `{"x":true}`, "json", "{}", "admin"); err != nil {
-		t.Fatal(err)
-	}
-	other := domain.NamespaceRef{Env: "stage", App: "xapp"}
-	if _, err := f.st.CreateNamespace(ctx, domain.Namespace{NamespaceRef: other, AllowedAuthMethods: []domain.AuthMethod{domain.AuthMethodToken}, CreatedBy: "admin"}); err != nil {
-		t.Fatal(err)
-	}
-	rel, err := f.svc.CreateConfigurationRelease(ctx, f.admin, domain.CreateConfigurationReleaseInput{
-		Namespace: other, Name: "runtime",
-		Entries: []domain.ReleaseEntrySelector{{Alias: "flags", Kind: domain.ReleaseEntryParameter, Ref: domain.Ref{NS: shared, Key: "flags"}}},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, _, err := f.svc.ActivateConfigurationRelease(ctx, f.admin, other, "runtime", rel.Version, nil); err != nil {
-		t.Fatal(err)
-	}
-	in := domain.VerifyReleaseDefaultsInput{
-		Namespace: other,
-		Entries:   []domain.VerifyDefaultsEntry{{Alias: "flags", ContentType: "json", SHA256: mustHash(t, "json", `{"x":true}`)}},
-	}
-	// Verify grant on the release namespace only: the cross-namespace pin must
-	// not be probed, and the whole call is denied without any verdict.
-	if _, err := f.st.CreatePolicy(ctx, domain.Policy{Name: "ci-stage", Subject: "ci", Allow: []domain.PolicyRule{{Operation: domain.OpConfigurationReleaseVerifyDefaults, Env: "stage", App: "xapp"}}}); err != nil {
-		t.Fatal(err)
-	}
-	out, err := f.svc.VerifyReleaseDefaults(ctx, clientPrincipal("ci"), in)
-	if !errors.Is(err, domain.ErrPermissionDenied) || len(out.Entries) != 0 {
-		t.Fatalf("cross-namespace probe without a grant there: out=%+v err=%v", out, err)
-	}
-	// Granting verify on the pinned namespace (not parameter:read) is enough.
-	if _, err := f.st.CreatePolicy(ctx, domain.Policy{Name: "ci-shared", Subject: "ci", Allow: []domain.PolicyRule{{Operation: domain.OpConfigurationReleaseVerifyDefaults, Env: "shared", App: "platform"}}}); err != nil {
-		t.Fatal(err)
-	}
-	out, err = f.svc.VerifyReleaseDefaults(ctx, clientPrincipal("ci"), in)
-	if err != nil || out.Summary.Match != 1 {
-		t.Fatalf("cross-namespace probe with a grant there: out=%+v err=%v", out, err)
-	}
-}
-
-func TestVerifyReleaseDefaultsCrossNamespaceDenialIsNeutral(t *testing.T) {
-	f := newVerifyFixture(t)
-	ctx := context.Background()
-	// The pinned namespace admits mTLS only, so a token identity holding the
-	// verify operation there is still refused by the auth-method gate. That
-	// refusal must read exactly like "no policy" and never name the namespace.
-	locked := domain.NamespaceRef{Env: "locked", App: "platform"}
-	if _, err := f.st.CreateNamespace(ctx, domain.Namespace{NamespaceRef: locked, AllowedAuthMethods: []domain.AuthMethod{domain.AuthMethodMTLS}, CreatedBy: "admin"}); err != nil {
-		t.Fatal(err)
-	}
-	if _, _, err := f.st.PutParameter(ctx, domain.Ref{NS: locked, Key: "flags"}, `{"x":true}`, "json", "{}", "admin"); err != nil {
-		t.Fatal(err)
-	}
-	other := domain.NamespaceRef{Env: "stage", App: "yapp"}
-	if _, err := f.st.CreateNamespace(ctx, domain.Namespace{NamespaceRef: other, AllowedAuthMethods: []domain.AuthMethod{domain.AuthMethodToken}, CreatedBy: "admin"}); err != nil {
-		t.Fatal(err)
-	}
-	rel, err := f.svc.CreateConfigurationRelease(ctx, f.admin, domain.CreateConfigurationReleaseInput{
-		Namespace: other, Name: "runtime",
-		Entries: []domain.ReleaseEntrySelector{{Alias: "flags", Kind: domain.ReleaseEntryParameter, Ref: domain.Ref{NS: locked, Key: "flags"}}},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, _, err := f.svc.ActivateConfigurationRelease(ctx, f.admin, other, "runtime", rel.Version, nil); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := f.st.CreatePolicy(ctx, domain.Policy{Name: "ci-both", Subject: "ci", Allow: []domain.PolicyRule{
-		{Operation: domain.OpConfigurationReleaseVerifyDefaults, Env: "stage", App: "yapp"},
-		{Operation: domain.OpConfigurationReleaseVerifyDefaults, Env: "locked", App: "platform"},
-	}}); err != nil {
-		t.Fatal(err)
-	}
-	out, err := f.svc.VerifyReleaseDefaults(ctx, clientPrincipal("ci"), domain.VerifyReleaseDefaultsInput{
-		Namespace: other,
-		Entries:   []domain.VerifyDefaultsEntry{{Alias: "flags", ContentType: "json", SHA256: mustHash(t, "json", `{"x":true}`)}},
-	})
-	if !errors.Is(err, domain.ErrPermissionDenied) || len(out.Entries) != 0 {
-		t.Fatalf("method-gated pin: out=%+v err=%v", out, err)
-	}
-	if strings.Contains(err.Error(), "locked") || strings.Contains(err.Error(), "platform") || strings.Contains(err.Error(), "mtls") {
-		t.Fatalf("denial leaks the pinned namespace: %v", err)
-	}
-	if err.Error() != "access denied: permission denied" {
-		t.Fatalf("denial text = %q, want the neutral access-denied text", err.Error())
 	}
 }

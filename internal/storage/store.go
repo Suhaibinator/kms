@@ -77,7 +77,7 @@ func Open(path string) (*SQLStore, error) {
 }
 
 // ValidateKMSDatabase opens an existing database read-only and verifies that
-// it is a migrated KMS database supported by this build. Unlike Open it never
+// it is an exact KMS database baseline supported by this build. Unlike Open it never
 // creates a missing file or adds KMS tables to an unrelated SQLite database.
 func ValidateKMSDatabase(path string) error {
 	if path == "" {
@@ -122,16 +122,24 @@ func OpenWithOptions(path string, opts Options) (*SQLStore, error) {
 			return nil, fmt.Errorf("close new database %q: %w", path, err)
 		}
 	} else if errors.Is(err, os.ErrExist) {
-		// Never hand SQLite a symlink, an attacker-owned pre-existing entry, or
-		// an inherited broad ACL. The entry-stable parent plus exact-file checks
-		// make the secured path safe to reuse for SQLite's pathname open.
-		stablePath, err = fileutil.SecureExistingPrivateFile(stablePath)
+		// Compatibility inspection must precede any permission normalization.
+		// A rejected database is operator data, not ours to chmod or otherwise
+		// mutate. First prove, without chmod or writes, that the existing entry is
+		// the current user's already-private stable regular file.
+		stablePath, err = fileutil.ValidateExistingPrivateFile(stablePath)
 		if err != nil {
-			return nil, fmt.Errorf("secure existing database %q: %w", path, err)
+			return nil, fmt.Errorf("validate existing database %q: %w", path, err)
 		}
 		empty, inspectErr := inspectBaselinePath(stablePath)
 		if inspectErr != nil {
 			return nil, inspectErr
+		}
+		// Only a compatible baseline (or a truly schema-empty file) becomes KMS
+		// state. At that point enforce the private-file contract before reopening
+		// it read-write.
+		stablePath, err = fileutil.SecureExistingPrivateFile(stablePath)
+		if err != nil {
+			return nil, fmt.Errorf("secure existing database %q: %w", path, err)
 		}
 		initialize = empty
 	} else {
@@ -287,13 +295,10 @@ func inspectBaselineDB(db *gorm.DB) (bool, error) {
 	if err != nil {
 		return false, incompatibleBaseline("cannot inspect schema: %v", err)
 	}
-	tableCount := 0
-	for _, object := range actual {
-		if object.Type == "table" {
-			tableCount++
-		}
-	}
-	if tableCount == 0 {
+	// Initialization is allowed only for a database with no user schema objects
+	// whatsoever. A view, trigger, or standalone user index is state just as a
+	// table is and must never be overwritten by KMS initialization.
+	if len(actual) == 0 {
 		return true, nil
 	}
 
@@ -336,7 +341,11 @@ func verifyBaselineDB(db *gorm.DB) error {
 }
 
 func initializeBaseline(db *gorm.DB) error {
-	if err := db.Transaction(func(tx *gorm.DB) error {
+	return initializeBaselineWithVerifier(db, verifyBaselineDB)
+}
+
+func initializeBaselineWithVerifier(db *gorm.DB, verify func(*gorm.DB) error) error {
+	return db.Transaction(func(tx *gorm.DB) error {
 		var count int64
 		if err := tx.Raw("SELECT COUNT(*) FROM sqlite_master WHERE type IN ('table', 'index', 'trigger', 'view') AND name NOT LIKE 'sqlite_%'").Scan(&count).Error; err != nil {
 			return fmt.Errorf("inspect empty database: %w", err)
@@ -344,11 +353,14 @@ func initializeBaseline(db *gorm.DB) error {
 		if count != 0 {
 			return incompatibleBaseline("database changed while it was being opened")
 		}
-		return materializeBaseline(tx)
-	}); err != nil {
-		return err
-	}
-	return verifyBaselineDB(db)
+		if err := materializeBaseline(tx); err != nil {
+			return err
+		}
+		// Exact physical-schema and stamp verification belongs inside this same
+		// transaction. If model materialization ever drifts from the accepted
+		// baseline, returning the verifier error rolls every DDL change back.
+		return verify(tx)
+	})
 }
 
 // Ping verifies the database is reachable.

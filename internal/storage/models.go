@@ -284,7 +284,7 @@ type configurationReleaseEntryModel struct {
 	// ResourceNamespaceID is deliberately denormalized without a foreign key:
 	// immutable/inactive release history may outlive deletion of its source
 	// namespace, but must never resolve a recreated env/app name instead.
-	ResourceNamespaceID int64  `gorm:"column:resource_namespace_id;not null;default:0;index:idx_release_entry_resource,priority:1"`
+	ResourceNamespaceID int64  `gorm:"column:resource_namespace_id;not null;index:idx_release_entry_resource,priority:1"`
 	ResourceEnv         string `gorm:"column:resource_env;not null;index:idx_release_entry_ref,priority:3"`
 	ResourceApp         string `gorm:"column:resource_app;not null;index:idx_release_entry_ref,priority:4"`
 	ResourceKey         string `gorm:"column:resource_key;not null;index:idx_release_entry_ref,priority:5;index:idx_release_entry_resource,priority:3"`
@@ -355,10 +355,8 @@ type releaseSubscriberStateModel struct {
 	ServerTimestamp    string         `gorm:"column:server_timestamp;not null;index:idx_release_subscriber_server_time;index:idx_release_subscriber_page,priority:3"`
 	Connected          int64          `gorm:"column:connected;not null;default:0"`
 	DisconnectedAt     *string        `gorm:"column:disconnected_at;index:idx_release_subscriber_disconnected"`
-	// AppliedDivergent / DivergentFieldCount (schema v7) record that an applied
-	// generation differs from the application's source-owned defaults. They are
-	// added by an explicit ALTER TABLE in migrate because this table is never
-	// AutoMigrate'd once it exists.
+	// AppliedDivergent / DivergentFieldCount record that an applied generation
+	// differs from the application's source-owned defaults.
 	AppliedDivergent    int64 `gorm:"column:applied_divergent;not null;default:0"`
 	DivergentFieldCount int64 `gorm:"column:divergent_field_count;not null;default:0"`
 }

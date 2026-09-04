@@ -17,8 +17,8 @@ type ReleaseReference struct {
 }
 
 // ReleaseStore is the persistence contract for configuration releases. It is
-// separate from Store so existing test doubles and external Store
-// implementations remain source-compatible while the new service is additive.
+// separate from Store so data-plane-only stores and focused test doubles do
+// not need to implement the release-management surface.
 type ReleaseStore interface {
 	CreateConfigurationRelease(ctx context.Context, release domain.ConfigurationRelease) (domain.ConfigurationRelease, error)
 	GetConfigurationRelease(ctx context.Context, ns domain.NamespaceRef, name string, version uint64) (domain.ConfigurationRelease, error)
@@ -44,7 +44,7 @@ type ReleaseStore interface {
 	PruneReleaseAcknowledgements(ctx context.Context, disconnectedBefore time.Time) (int, error)
 }
 
-// FirstReleaseStore is the additive atomic primitive used by zero-edit Ship.
+// FirstReleaseStore is the atomic primitive used by zero-edit Ship.
 // It prevents two concurrent first-release requests from creating v1 and v2.
 type FirstReleaseStore interface {
 	CreateFirstConfigurationRelease(ctx context.Context, release domain.ConfigurationRelease) (domain.ConfigurationRelease, error)

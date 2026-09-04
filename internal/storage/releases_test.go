@@ -338,6 +338,42 @@ func TestConfigurationReleaseActivationHistoryDoesNotCrossNamespaceIncarnations(
 	}
 }
 
+func TestConfigurationReleaseActivationExistsRequiresAuthoritativeHistory(t *testing.T) {
+	ctx := context.Background()
+	st := newStore(t)
+	namespace := seedNS(t, st, "prod", "app")
+	ns := namespace.NamespaceRef
+
+	// A matching changelog row and mutable label used to be accepted as legacy
+	// substitutes. Neither is authoritative in the greenfield 0.3 baseline.
+	revision, err := appendChange(st.db.WithContext(ctx), &changeLogModel{
+		ResourceType:  domain.ResourceConfigurationRelease,
+		NamespaceID:   namespace.ID,
+		Env:           ns.Env,
+		App:           ns.App,
+		Key:           "runtime",
+		ChangeType:    "activate",
+		VersionNumber: 7,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.db.Create(&configurationReleaseLabelModel{
+		NamespaceID: namespace.ID, ReleaseName: "runtime", Label: domain.LabelCurrent,
+		VersionNumber: 7, ActivationRevision: int64(revision),
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	exists, err := st.ConfigurationReleaseActivationExists(ctx, ns, "runtime", 7, revision)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if exists {
+		t.Fatal("changelog and label rows were accepted without authoritative activation history")
+	}
+}
+
 func TestConfigurationReleaseRequiresHomeNamespace(t *testing.T) {
 	ctx := context.Background()
 	st := newStore(t)
@@ -391,6 +427,14 @@ func TestConfigurationReleaseRequiresHomeNamespace(t *testing.T) {
 	}
 	if _, _, err := st.ActivateConfigurationRelease(ctx, home.NamespaceRef, release.Name, release.Version, nil); !errors.Is(err, domain.ErrFailedPrecondition) {
 		t.Fatalf("activation accepted corrupt cross-namespace entry: %v", err)
+	}
+	if err := st.db.Model(&configurationReleaseEntryModel{}).
+		Where("release_id = (SELECT id FROM configuration_releases WHERE namespace_id = ? AND name = ? AND version_number = ?)", home.ID, release.Name, release.Version).
+		Updates(map[string]any{"resource_namespace_id": 0, "resource_app": home.App}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := st.ActivateConfigurationRelease(ctx, home.NamespaceRef, release.Name, release.Version, nil); !errors.Is(err, domain.ErrFailedPrecondition) {
+		t.Fatalf("activation accepted zero resource namespace identity: %v", err)
 	}
 }
 

@@ -311,16 +311,19 @@ func secretInfo(db *gorm.DB, ns domain.NamespaceRef, sec secretModel) (domain.Se
 	if err != nil {
 		return domain.Secret{}, err
 	}
+	// Resolve the current summary through the same exact version lookup used by
+	// GetSecretRecord. Silently reporting Bound=false when the label dangles
+	// would turn corrupt metadata into a plausible unbound secret.
+	currentBound, err := currentSecretBound(db, sec.ID, labels)
+	if err != nil {
+		return domain.Secret{}, err
+	}
 	var vers []secretVersionModel
 	if err := db.Where("secret_id = ?", sec.ID).Order("version_number ASC").Find(&vers).Error; err != nil {
 		return domain.Secret{}, err
 	}
 	vinfos := make([]domain.SecretVersionInfo, 0, len(vers))
-	currentBound := false
 	for _, v := range vers {
-		if labels[domain.LabelCurrent] == uint64(v.VersionNumber) {
-			currentBound = i2b(v.Bound)
-		}
 		vinfos = append(vinfos, domain.SecretVersionInfo{
 			Version:        uint64(v.VersionNumber),
 			Bound:          i2b(v.Bound),

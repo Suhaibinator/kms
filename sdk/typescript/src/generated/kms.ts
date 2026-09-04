@@ -1043,8 +1043,8 @@ export interface AuditEvent {
   metadataJson: string;
   /**
    * The immutable incarnation ID of the namespace the event was authorized
-   * against (0 for global events and legacy rows), so a deleted-and-recreated
-   * env/app can be told apart in an export.
+   * against. It is 0 only for global/non-namespaced events, so a
+   * deleted-and-recreated env/app can be told apart in an export.
    */
   resourceNamespaceId: bigint;
 }
@@ -18690,5 +18690,5 @@ export interface MessageFns<T> {
   fromPartial(object: DeepPartial<T>): T;
 }
 
-// source-sha256: afd195a63376bbc4b6ab59d2795bec9f0574eb13294909a6b9acd1ba81ed7d5c
+// source-sha256: 75fc632b6746ef4a3606d9e6c56aba9ca3ecb0ead8308f72db5d64b0fbe41a74
 // generation-sha256: c3e69d40e38671d5381cfa50a679b45232adc3ecd3df927c51285f1901aa09ef
