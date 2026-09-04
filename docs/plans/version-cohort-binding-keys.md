@@ -150,6 +150,14 @@ This produces the intended grouping without storing key identity. For key epochs
   - Any other recoverable cryptographic payload.
 - Retain a minimal tombstone containing version number, destroyed state, creation/destruction timestamps, and non-sensitive audit identity.
 - Clear version metadata if it may contain operator-supplied sensitive information.
+- Configure every SQLite connection with secure deletion enabled. A purge is not
+  reported as an ordinary success until the committed tombstones have been
+  checkpointed through a successful truncating WAL checkpoint, so the retired
+  payload is absent from the active database and WAL files.
+- This active-database guarantee cannot retract copies outside KMS: operators
+  must separately expire backups and filesystem/volume snapshots, and use disk
+  encryption or media destruction for raw-device remanence. They must also
+  rotate or revoke the compromised upstream application secret itself.
 - Preserve labels exactly. If `current` points into the purged cohort, current becomes unreadable; KMS never auto-promotes another version.
 - Append one transactional change-log entry describing the affected versions and one sanitized admin audit event. Neither contains the binding key.
 - There is no purge-all flag and no arbitrary version list.
