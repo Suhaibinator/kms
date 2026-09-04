@@ -84,7 +84,10 @@ func main() {
 }
 ```
 
-Preview is the default. The runner reads the admin identity token from
+Preview is the default. Connection settings resolve from flags, then the
+matching `KMS_*` environment variable, then the built-in endpoint default.
+This includes `KMS_ENDPOINT`, `KMS_CA_FILE`, `KMS_CLIENT_CERT_FILE`, and
+`KMS_CLIENT_KEY_FILE`. The runner reads the admin identity token from
 `KMS_TOKEN`; it deliberately has no token flag, keeping bearer credentials out
 of process listings and shell history:
 
