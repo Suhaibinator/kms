@@ -644,7 +644,9 @@ export class ReleaseLoader {
       const matching = live.versions.filter((version) => version.version === entry.version);
       if (matching.length !== 1) throw new ResolutionError("resolution_failed");
       const exact = matching[0];
-      if (exact?.state !== "enabled") throw new ResolutionError("resolution_failed");
+      if (exact?.state !== "enabled" || exact.destroyedAtUnixMs !== 0n) {
+        throw new ResolutionError("resolution_failed");
+      }
       const now = BigInt(Math.trunc(this.#options.now()));
       if (exact.expiresAtUnixMs > 0n && exact.expiresAtUnixMs <= now) {
         throw new ResolutionError("resolution_failed");

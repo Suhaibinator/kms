@@ -356,6 +356,10 @@ describe("ReleaseLoader", () => {
     ["duplicate version", duplicateSecretMetadataResource("database/password", 11n)],
     ["disabled", secretMetadataResource("database/password", 11n, false, false, "disabled")],
     ["destroyed", secretMetadataResource("database/password", 11n, false, false, "destroyed")],
+    [
+      "enabled with destroyed timestamp",
+      secretMetadataResource("database/password", 11n, false, false, "enabled", 0n, 1n),
+    ],
     ["expired", secretMetadataResource("database/password", 11n, false, false, "enabled", 99n)],
   ] as const)(
     "rejects %s exact live secret metadata as resolution_failed",
@@ -1285,6 +1289,7 @@ function secretMetadataResource(
   hasAccessToken = false,
   state = "enabled",
   expiresAtUnixMs = 0n,
+  destroyedAtUnixMs = 0n,
 ): SecretMetadata {
   return {
     ref: { namespace, key },
@@ -1301,7 +1306,7 @@ function secretMetadataResource(
         state,
         createdBy: "test",
         createdAtUnixMs: 1n,
-        destroyedAtUnixMs: 0n,
+        destroyedAtUnixMs,
         expiresAtUnixMs,
         metadataJson: "",
         bound,
