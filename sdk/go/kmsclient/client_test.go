@@ -291,7 +291,8 @@ func TestPutParameterAndSecret(t *testing.T) {
 		t.Errorf("readback = %q, want 42", v)
 	}
 
-	sres, err := c.PutSecret(ctx, "new-secret", []byte("shh"), WithGenerateAccessToken(), WithPutBindingKey("binding-key-value"))
+	bindingKey := strings.Repeat("k", 32)
+	sres, err := c.PutSecret(ctx, "new-secret", []byte("shh"), WithGenerateAccessToken(), WithPutBindingKey(bindingKey))
 	if err != nil {
 		t.Fatalf("PutSecret: %v", err)
 	}
@@ -299,11 +300,26 @@ func TestPutParameterAndSecret(t *testing.T) {
 		t.Errorf("expected minted access token")
 	}
 	calls := srv.PutSecretCalls()
-	if len(calls) != 1 || calls[0].BindingKey != "binding-key-value" || !calls[0].GenerateAccessToken {
+	if len(calls) != 1 || calls[0].BindingKey != bindingKey || !calls[0].GenerateAccessToken {
 		t.Errorf("PutSecret call not recorded with flags: %+v", calls)
 	}
 	if calls[0].Namespace != testNS || calls[0].Key != "new-secret" {
 		t.Errorf("PutSecret call ref = %s/%s, want %s/new-secret", calls[0].Namespace, calls[0].Key, testNS)
+	}
+	metadata, err := c.GetSecretMetadata(ctx, "new-secret")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !metadata.Bound || !metadata.HasAccessToken || len(metadata.Versions) != 1 ||
+		!metadata.Versions[0].Bound || !metadata.Versions[0].HasAccessToken {
+		t.Fatalf("PutSecret live metadata = %+v", metadata)
+	}
+	if _, err := c.GetSecret(ctx, "new-secret"); !errors.Is(err, ErrPermissionDenied) {
+		t.Fatalf("uncredentialed bound read error = %v", err)
+	}
+	secret, err := c.GetSecret(ctx, "new-secret", WithSecretToken(sres.AccessToken), WithBindingKey(bindingKey))
+	if err != nil || secret.StringValue() != "shh" {
+		t.Fatalf("credentialed bound read = %v, %v", secret, err)
 	}
 }
 

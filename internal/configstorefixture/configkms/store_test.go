@@ -50,6 +50,8 @@ type releaseData struct {
 	runtimeContentType  string
 	passwordBound       bool
 	runtimeTokenBound   bool
+	passwordBindingKey  string
+	runtimeBindingKey   string
 	omitAlias           string
 }
 
@@ -119,6 +121,12 @@ func scriptResources(server *kmsclienttest.Server, data releaseData) {
 	server.SetSecretVersion(fixtureNamespace, data.runtimeTokenPath, data.runtimeTokenValue, "text/plain", data.runtimeTokenVersion)
 	server.SetSecretVersionMetadata(fixtureNamespace, data.passwordPath, data.passwordVersion, "enabled", data.passwordBound, false, 0)
 	server.SetSecretVersionMetadata(fixtureNamespace, data.runtimeTokenPath, data.runtimeTokenVersion, "enabled", data.runtimeTokenBound, false, 0)
+	if data.passwordBindingKey != "" {
+		server.SetSecretVersionCredentials(fixtureNamespace, data.passwordPath, data.passwordVersion, "", data.passwordBindingKey)
+	}
+	if data.runtimeBindingKey != "" {
+		server.SetSecretVersionCredentials(fixtureNamespace, data.runtimeTokenPath, data.runtimeTokenVersion, "", data.runtimeBindingKey)
+	}
 }
 
 func releaseSpec(data releaseData) kmsclienttest.ReleaseSpec {
@@ -304,6 +312,27 @@ func TestMissingHotReloadBindingKeyKeepsPreviousSnapshot(t *testing.T) {
 	}
 	if got := fixture.store.Current().Release().Version(); got != 1 {
 		t.Fatalf("rejected candidate displaced last-known-good release with version %d", got)
+	}
+}
+
+func TestWrongHotReloadBindingKeyKeepsPreviousSnapshot(t *testing.T) {
+	declaration := fixtureconfig.Defaults()
+	declaration.Password.BindKey = strings.Repeat("w", 32)
+	fixture := startFixture(t, matchingRelease(1, 41), func() *fixtureconfig.Config { return declaration }, func(configstore.DefaultMismatchReport) {})
+	candidate := matchingRelease(2, 42)
+	candidate.passwordBound = true
+	candidate.passwordBindingKey = strings.Repeat("r", 32)
+	activate(t, fixture, candidate)
+	ack := waitAcknowledgement(t, fixture.sub, 2, kmsclient.ReleaseStateRejected)
+	if ack.GetRejectionCategory() != kmsclient.ReleaseRejectResolutionFailed {
+		t.Fatalf("rejection category = %q", ack.GetRejectionCategory())
+	}
+	if got := fixture.store.Current().Release().Version(); got != 1 {
+		t.Fatalf("wrong binding key displaced last-known-good release with version %d", got)
+	}
+	_, gotKey := fixture.server.SecretCredentials("/" + fixtureNamespace + "/" + passwordPath)
+	if gotKey != strings.Repeat("w", 32) {
+		t.Fatalf("wrong binding key was not sent for the exact alias: %q", gotKey)
 	}
 }
 

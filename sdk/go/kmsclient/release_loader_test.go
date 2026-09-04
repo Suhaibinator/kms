@@ -38,6 +38,7 @@ type releaseLoaderServer struct {
 	secretSummaryBound    bool
 	secretSummaryHasToken bool
 	secretState           string
+	secretDestroyedAt     int64
 	secretExpiry          int64
 	expectedToken         string
 	expectedBindKey       string
@@ -111,7 +112,7 @@ func (s *releaseLoaderServer) GetSecretMetadata(_ context.Context, req *kmsv1.Ge
 		HasAccessToken: s.secretSummaryHasToken, Labels: map[string]uint64{"current": secret.GetVersion()},
 		Versions: []*kmsv1.SecretVersionInfo{{
 			Version: secret.GetVersion(), State: s.secretState, ExpiresAtUnixMs: s.secretExpiry,
-			Bound: s.secretBound, HasAccessToken: s.secretHasToken,
+			DestroyedAtUnixMs: s.secretDestroyedAt, Bound: s.secretBound, HasAccessToken: s.secretHasToken,
 		}},
 	}}, nil
 }
@@ -569,6 +570,38 @@ func TestReleaseLoaderUsesExactLiveProtectionAndBothCredentials(t *testing.T) {
 	}
 }
 
+func TestReleaseLoaderConfigurationAndLoaderFormattingRedactBindingKeys(t *testing.T) {
+	const canary = "binding-key-format-canary"
+	server, _ := newExactProtectionResolution(t, false, false)
+	client := newReleaseTestClient(t, server)
+	cfg := ReleaseLoaderConfig{
+		Name: "runtime", BindingKeys: map[string]string{"password": canary},
+		SecretTokenProvider: func(string, string) (string, bool) { return canary, true },
+		ValidateManifest:    func(context.Context, ReleaseManifest) error { return nil },
+	}
+	loader, err := NewReleaseLoader(client, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for label, value := range map[string]any{"config": cfg, "loader": loader} {
+		for _, rendered := range []string{
+			fmt.Sprintf("%v", value), fmt.Sprintf("%+v", value), fmt.Sprintf("%#v", value),
+			fmt.Sprintf("%s", value), fmt.Sprintf("%q", value),
+		} {
+			if strings.Contains(rendered, canary) {
+				t.Fatalf("%s formatting leaked binding key: %q", label, rendered)
+			}
+		}
+		encoded, marshalErr := json.Marshal(value)
+		if marshalErr != nil {
+			t.Fatalf("marshal %s: %v", label, marshalErr)
+		}
+		if strings.Contains(string(encoded), canary) {
+			t.Fatalf("%s JSON leaked binding key: %s", label, encoded)
+		}
+	}
+}
+
 func TestReleaseLoaderCredentialFailureCategories(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -610,19 +643,48 @@ func TestReleaseLoaderCredentialFailureCategories(t *testing.T) {
 	}
 }
 
+func TestReleaseLoaderRequiresExactContentTypeEvenForEmptyPin(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		entry int
+		want  string
+	}{
+		{name: "parameter", entry: 0, want: ReleaseRejectDigestMismatch},
+		{name: "secret", entry: 1, want: ReleaseRejectVersionMismatch},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			server, candidate := newExactProtectionResolution(t, false, false)
+			candidate.release.Entries[test.entry].ContentType = ""
+			candidate.release.Digest, _ = deterministicReleaseDigest(candidate.release)
+			client := newReleaseTestClient(t, server)
+			loader, err := NewReleaseLoader(client, ReleaseLoaderConfig{Name: "runtime"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, category, err := loader.resolveCandidate(context.Background(), namespaceRef{env: "prod", app: "app"}, candidate)
+			if err == nil || category != test.want {
+				t.Fatalf("category=%q error=%v, want %q", category, err, test.want)
+			}
+		})
+	}
+}
+
 func TestReleaseLoaderRejectsUnavailableVersionBeforeCredentialCallbacks(t *testing.T) {
 	for _, test := range []struct {
-		name   string
-		state  string
-		expiry int64
+		name        string
+		state       string
+		destroyedAt int64
+		expiry      int64
 	}{
 		{name: "disabled", state: "disabled"},
 		{name: "destroyed", state: "destroyed"},
+		{name: "enabled with destroyed timestamp", state: "enabled", destroyedAt: 1},
 		{name: "expired", state: "enabled", expiry: 1},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			server, candidate := newExactProtectionResolution(t, true, true)
 			server.secretState = test.state
+			server.secretDestroyedAt = test.destroyedAt
 			server.secretExpiry = test.expiry
 			var providerCalls atomic.Int32
 			client := newReleaseTestClient(t, server)

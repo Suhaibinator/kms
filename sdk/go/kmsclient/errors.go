@@ -53,7 +53,15 @@ var (
 	// budget for the requested operation (for example VerifyReleaseDefaults).
 	// Retry after the window resets; do not retry in a tight loop.
 	ErrRateLimited = errors.New("kmsclient: rate limited")
+
+	// ErrPurgeCleanupPending means the logical binding-cohort purge committed,
+	// but KMS could not yet prove that the retired payload was removed from its
+	// live database artifacts. Purge methods return a zero result with this
+	// error; callers must not retry with the discarded binding key.
+	ErrPurgeCleanupPending = errors.New("kmsclient: secret purge committed; database artifact cleanup is pending")
 )
+
+const purgeCleanupPendingWireMessage = "secret purge committed; database artifact cleanup is pending"
 
 // mapError translates a gRPC status error into one of the exported sentinel
 // errors, preserving the server's (non-secret) message for context. Non-status
@@ -99,8 +107,11 @@ func mapSecretError(err error) error {
 	}
 	st, ok := status.FromError(err)
 	if !ok {
-		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-			return err
+		if errors.Is(err, context.Canceled) {
+			return context.Canceled
+		}
+		if errors.Is(err, context.DeadlineExceeded) {
+			return context.DeadlineExceeded
 		}
 		return errors.New("kmsclient: secret operation failed")
 	}
@@ -125,4 +136,16 @@ func mapSecretError(err error) error {
 	default:
 		return status.Error(st.Code(), safeMessage)
 	}
+}
+
+// mapPurgeSecretError preserves the one fixed post-commit condition exposed by
+// the purge transport. It deliberately recognizes no other remote text.
+func mapPurgeSecretError(err error) error {
+	if err == nil {
+		return nil
+	}
+	if st, ok := status.FromError(err); ok && st.Code() == codes.Unavailable && st.Message() == purgeCleanupPendingWireMessage {
+		return ErrPurgeCleanupPending
+	}
+	return mapSecretError(err)
 }

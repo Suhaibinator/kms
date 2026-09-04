@@ -3,6 +3,7 @@ package kmsclient
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -40,6 +41,94 @@ func TestSecretRPCErrorCannotReflectBindingKey(t *testing.T) {
 	}
 	if strings.Contains(err.Error(), bindingKey) {
 		t.Fatalf("error reflected binding key: %v", err)
+	}
+}
+
+func TestEverySecretBearingRPCDiscardsRemoteDiagnosticText(t *testing.T) {
+	client, server := newTestClient(t, Config{})
+	server.SetSecretVersion(testNS, "redaction", []byte("value"), "text/plain", 1)
+	key := strings.Repeat("k", 32)
+	newKey := strings.Repeat("n", 32)
+	calls := []struct {
+		method string
+		call   func() error
+	}{
+		{method: "GetSecret", call: func() error {
+			_, err := client.GetSecret(context.Background(), "redaction", WithBindingKey(key))
+			return err
+		}},
+		{method: "PutSecret", call: func() error {
+			_, err := client.PutSecret(context.Background(), "redaction", []byte("value"), WithPutBindingKey(key))
+			return err
+		}},
+		{method: "BindSecret", call: func() error { _, err := client.BindSecret(context.Background(), "redaction", 1, key); return err }},
+		{method: "UnbindSecret", call: func() error { _, err := client.UnbindSecret(context.Background(), "redaction", 1, key); return err }},
+		{method: "PreviewSecretBindingCohort", call: func() error {
+			_, err := client.PreviewSecretBindingCohort(context.Background(), "redaction", 1, key)
+			return err
+		}},
+		{method: "RotateSecretBindingKey", call: func() error {
+			_, err := client.RotateSecretBindingKey(context.Background(), "redaction", 1, key, newKey)
+			return err
+		}},
+		{method: "PurgeSecretBindingCohort", call: func() error {
+			_, err := client.PurgeSecretBindingCohort(context.Background(), "redaction", 1, key)
+			return err
+		}},
+	}
+	for _, test := range calls {
+		t.Run(test.method, func(t *testing.T) {
+			canary := "remote-reflected-" + test.method + "-" + key
+			server.SetSecretOperationError(test.method, testNS, "redaction", status.Error(codes.Internal, canary))
+			err := test.call()
+			if err == nil || strings.Contains(err.Error(), canary) || strings.Contains(err.Error(), key) {
+				t.Fatalf("mapped error leaked remote diagnostic: %v", err)
+			}
+		})
+	}
+}
+
+func TestSecretErrorCanonicalizesWrappedContext(t *testing.T) {
+	const canary = "binding-key-from-interceptor"
+	for _, test := range []struct {
+		name string
+		base error
+	}{
+		{name: "canceled", base: context.Canceled},
+		{name: "deadline", base: context.DeadlineExceeded},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			got := mapSecretError(fmt.Errorf("%s: %w", canary, test.base))
+			if got != test.base || !errors.Is(got, test.base) {
+				t.Fatalf("mapped error = %#v, want canonical %v", got, test.base)
+			}
+			if strings.Contains(got.Error(), canary) {
+				t.Fatalf("mapped context error leaked credential: %v", got)
+			}
+		})
+	}
+}
+
+func TestPurgeCleanupPendingHasDistinctSanitizedSentinel(t *testing.T) {
+	client, server := newTestClient(t, Config{})
+	server.SetSecretVersion(testNS, "cleanup-pending", []byte("value"), "text/plain", 1)
+	server.SetSecretVersionCredentials(testNS, "cleanup-pending", 1, "", strings.Repeat("k", 32))
+	server.SetSecretOperationError("PurgeSecretBindingCohort", testNS, "cleanup-pending",
+		status.Error(codes.Unavailable, purgeCleanupPendingWireMessage))
+
+	result, err := client.PurgeSecretBindingCohort(context.Background(), "cleanup-pending", 1, strings.Repeat("k", 32))
+	if result.AnchorVersion != 0 || len(result.AffectedVersions) != 0 || result.Revision != 0 || !errors.Is(err, ErrPurgeCleanupPending) {
+		t.Fatalf("purge result=%+v error=%v, want zero result and ErrPurgeCleanupPending", result, err)
+	}
+	if err.Error() != ErrPurgeCleanupPending.Error() {
+		t.Fatalf("purge error = %q, want fixed sentinel text", err)
+	}
+
+	server.SetSecretOperationError("PurgeSecretBindingCohort", testNS, "cleanup-pending",
+		status.Error(codes.Unavailable, purgeCleanupPendingWireMessage+" reflected-key"))
+	_, err = client.PurgeSecretBindingCohort(context.Background(), "cleanup-pending", 1, "reflected-key")
+	if errors.Is(err, ErrPurgeCleanupPending) || strings.Contains(err.Error(), "reflected-key") {
+		t.Fatalf("non-canonical unavailable error was trusted or leaked: %v", err)
 	}
 }
 
@@ -95,40 +184,81 @@ func TestSecretBindingManagementRequestMapping(t *testing.T) {
 	client, server := newTestClient(t, Config{})
 	server.SetSecretVersion(testNS, "managed", []byte("value"), "text/plain", 7)
 	ctx := context.Background()
+	firstKey := strings.Repeat("a", 32)
+	secondKey := strings.Repeat("b", 32)
 
-	bind, err := client.BindSecret(ctx, "managed", 7, "first-key")
+	bind, err := client.BindSecret(ctx, "managed", 7, firstKey)
 	if err != nil || bind.AnchorVersion != 7 || len(bind.AffectedVersions) != 1 {
 		t.Fatalf("BindSecret = %+v, %v", bind, err)
 	}
-	if calls := server.BindSecretCalls(); len(calls) != 1 || calls[0].GetVersion() != 7 || calls[0].GetBindingKey() != "first-key" {
+	if calls := server.BindSecretCalls(); len(calls) != 1 || calls[0].GetVersion() != 7 || calls[0].GetBindingKey() != firstKey {
 		t.Fatalf("BindSecret calls = %+v", calls)
 	}
-	if _, err := client.UnbindSecret(ctx, "managed", 7, "first-key"); err != nil {
+	if _, err := client.UnbindSecret(ctx, "managed", 7, firstKey); err != nil {
 		t.Fatal(err)
 	}
-	if calls := server.UnbindSecretCalls(); len(calls) != 1 || calls[0].GetBindingKey() != "first-key" {
+	if calls := server.UnbindSecretCalls(); len(calls) != 1 || calls[0].GetBindingKey() != firstKey {
 		t.Fatalf("UnbindSecret calls = %+v", calls)
 	}
-	preview, err := client.PreviewSecretBindingCohort(ctx, "managed", 7, "first-key")
+	if _, err := client.BindSecret(ctx, "managed", 7, firstKey); err != nil {
+		t.Fatal(err)
+	}
+	preview, err := client.PreviewSecretBindingCohort(ctx, "managed", 7, firstKey)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if calls := server.PreviewSecretBindingCohortCalls(); len(calls) != 1 || calls[0].GetAnchorVersion() != 7 {
 		t.Fatalf("Preview calls = %+v", calls)
 	}
-	if _, err := client.RotateSecretBindingKeyIfUnchanged(ctx, "managed", 7, "first-key", "second-key", preview); err != nil {
+	if _, err := client.RotateSecretBindingKeyIfUnchanged(ctx, "managed", 7, firstKey, secondKey, preview); err != nil {
 		t.Fatal(err)
 	}
 	rotate := server.RotateSecretBindingKeyCalls()
-	if len(rotate) != 1 || rotate[0].GetBindingKey() != "first-key" || rotate[0].GetNewBindingKey() != "second-key" ||
+	if len(rotate) != 1 || rotate[0].GetBindingKey() != firstKey || rotate[0].GetNewBindingKey() != secondKey ||
 		rotate[0].ExpectedRevision == nil || rotate[0].GetExpectedRevision() != preview.Revision || len(rotate[0].GetExpectedAffectedVersions()) != 1 {
 		t.Fatalf("Rotate calls = %+v", rotate)
 	}
-	if _, err := client.PurgeSecretBindingCohortIfUnchanged(ctx, "managed", 7, "second-key", preview); err != nil {
+	rotated, err := client.PreviewSecretBindingCohort(ctx, "managed", 7, secondKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.PurgeSecretBindingCohortIfUnchanged(ctx, "managed", 7, secondKey, rotated); err != nil {
 		t.Fatal(err)
 	}
 	purge := server.PurgeSecretBindingCohortCalls()
-	if len(purge) != 1 || purge[0].GetBindingKey() != "second-key" || purge[0].ExpectedRevision == nil {
+	if len(purge) != 1 || purge[0].GetBindingKey() != secondKey || purge[0].ExpectedRevision == nil {
 		t.Fatalf("Purge calls = %+v", purge)
+	}
+}
+
+func TestGuardedBindingMutationsRejectMalformedPreviewLocally(t *testing.T) {
+	client, server := newTestClient(t, Config{})
+	key := strings.Repeat("k", 32)
+	newKey := strings.Repeat("n", 32)
+	tests := []struct {
+		name     string
+		expected SecretBindingCohortResult
+	}{
+		{name: "zero revision", expected: SecretBindingCohortResult{AffectedVersions: []uint64{1}}},
+		{name: "empty versions", expected: SecretBindingCohortResult{Revision: 1}},
+		{name: "zero version", expected: SecretBindingCohortResult{Revision: 1, AffectedVersions: []uint64{0}}},
+		{name: "unsorted", expected: SecretBindingCohortResult{Revision: 1, AffectedVersions: []uint64{2, 1}}},
+		{name: "duplicate", expected: SecretBindingCohortResult{Revision: 1, AffectedVersions: []uint64{1, 1}}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if _, err := client.RotateSecretBindingKeyIfUnchanged(context.Background(), "missing", 1, key, newKey, test.expected); err == nil {
+				t.Fatal("malformed rotate guard succeeded")
+			}
+			if _, err := client.PurgeSecretBindingCohortIfUnchanged(context.Background(), "missing", 1, key, test.expected); err == nil {
+				t.Fatal("malformed purge guard succeeded")
+			}
+		})
+	}
+	if got := len(server.RotateSecretBindingKeyCalls()); got != 0 {
+		t.Fatalf("invalid rotate guards made %d RPCs", got)
+	}
+	if got := len(server.PurgeSecretBindingCohortCalls()); got != 0 {
+		t.Fatalf("invalid purge guards made %d RPCs", got)
 	}
 }

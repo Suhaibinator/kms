@@ -5,6 +5,8 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"io"
@@ -77,6 +79,46 @@ type ReleaseLoaderConfig struct {
 	InstanceID string
 }
 
+type releaseLoaderConfigJSON struct {
+	Name                 string `json:"name"`
+	ReconcileInterval    string `json:"reconcile_interval"`
+	MaxConcurrentFetches int    `json:"max_concurrent_fetches"`
+	InstanceID           string `json:"instance_id,omitempty"`
+}
+
+func (c ReleaseLoaderConfig) safeProjection() releaseLoaderConfigJSON {
+	return releaseLoaderConfigJSON{
+		Name:                 c.Name,
+		ReconcileInterval:    c.ReconcileInterval.String(),
+		MaxConcurrentFetches: c.MaxConcurrentFetches,
+		InstanceID:           c.InstanceID,
+	}
+}
+
+// String omits all credential containers and callbacks.
+func (c ReleaseLoaderConfig) String() string {
+	return fmt.Sprintf("ReleaseLoaderConfig{name=%q reconcile_interval=%s max_concurrent_fetches=%d instance_id=%q}",
+		c.Name, c.ReconcileInterval, c.MaxConcurrentFetches, c.InstanceID)
+}
+
+func (c ReleaseLoaderConfig) GoString() string { return c.String() }
+
+func (c ReleaseLoaderConfig) Format(f fmt.State, verb rune) {
+	if verb == 'q' {
+		_, _ = fmt.Fprintf(f, "%q", c.String())
+		return
+	}
+	_, _ = io.WriteString(f, c.String())
+}
+
+func (c ReleaseLoaderConfig) MarshalJSON() ([]byte, error) {
+	return json.Marshal(c.safeProjection())
+}
+
+func (c ReleaseLoaderConfig) MarshalJSONTo(out *jsontext.Encoder) error {
+	return json.MarshalEncode(out, c.safeProjection())
+}
+
 // PreparedRelease is application-owned state built from a complete candidate.
 // Commit must be infallible and should normally perform only an atomic swap.
 type PreparedRelease interface {
@@ -115,6 +157,45 @@ type ReleaseLoader struct {
 	statusMu sync.RWMutex
 	status   ReleaseLoaderStatus
 	stats    ReleaseLoaderStats
+}
+
+// String exposes only non-sensitive loader identity and lifecycle state.
+func (l *ReleaseLoader) String() string {
+	if l == nil {
+		return "ReleaseLoader<nil>"
+	}
+	return fmt.Sprintf("ReleaseLoader{name=%q instance_id=%q running=%t}", l.cfg.Name, l.instanceID, l.running.Load())
+}
+
+func (l *ReleaseLoader) GoString() string { return l.String() }
+
+func (l *ReleaseLoader) Format(f fmt.State, verb rune) {
+	if verb == 'q' {
+		_, _ = fmt.Fprintf(f, "%q", l.String())
+		return
+	}
+	_, _ = io.WriteString(f, l.String())
+}
+
+type releaseLoaderJSON struct {
+	Name       string `json:"name"`
+	InstanceID string `json:"instance_id"`
+	Running    bool   `json:"running"`
+}
+
+func (l *ReleaseLoader) safeProjection() *releaseLoaderJSON {
+	if l == nil {
+		return nil
+	}
+	return &releaseLoaderJSON{Name: l.cfg.Name, InstanceID: l.instanceID, Running: l.running.Load()}
+}
+
+func (l *ReleaseLoader) MarshalJSON() ([]byte, error) {
+	return json.Marshal(l.safeProjection())
+}
+
+func (l *ReleaseLoader) MarshalJSONTo(out *jsontext.Encoder) error {
+	return json.MarshalEncode(out, l.safeProjection())
 }
 
 // NewReleaseLoader creates a loader. It does not contact KMS until Run.
@@ -807,7 +888,7 @@ func (l *ReleaseLoader) resolveEntry(ctx context.Context, entry *kmsv1.Configura
 		if entry.GetParameterDigest() == "" || !strings.EqualFold(hex.EncodeToString(sum[:]), entry.GetParameterDigest()) {
 			return out, ReleaseRejectDigestMismatch, errors.New("parameter digest mismatch")
 		}
-		if entry.GetContentType() != "" && parameter.GetContentType() != entry.GetContentType() {
+		if parameter.GetContentType() != entry.GetContentType() {
 			return out, ReleaseRejectDigestMismatch, errors.New("parameter content type mismatch")
 		}
 		p := ReleaseParameter{value: parameter.GetValue(), entry: out.entry}
@@ -870,7 +951,7 @@ func (l *ReleaseLoader) resolveEntry(ctx context.Context, entry *kmsv1.Configura
 		if secret.Path() != r.display() {
 			return out, ReleaseRejectVersionMismatch, errors.New("secret resource reference mismatch")
 		}
-		if entry.GetContentType() != "" && secret.ContentType() != entry.GetContentType() {
+		if secret.ContentType() != entry.GetContentType() {
 			return out, ReleaseRejectVersionMismatch, errors.New("secret content type mismatch")
 		}
 		secret = cloneSecret(secret)

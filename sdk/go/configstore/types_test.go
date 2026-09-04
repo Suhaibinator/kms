@@ -1,6 +1,7 @@
 package configstore
 
 import (
+	"context"
 	"encoding/json/jsontext"
 	"encoding/json/v2"
 	"errors"
@@ -42,6 +43,34 @@ func TestCandidateErrorClassifiesUnwrapsAndRedacts(t *testing.T) {
 	for _, output := range formats {
 		if strings.Contains(output, canary) {
 			t.Fatalf("formatted CandidateError leaked cause: %q", output)
+		}
+	}
+}
+
+func TestOptionsAndManagerFormattingRedactBindingKeys(t *testing.T) {
+	const canary = "configstore-binding-key-format-canary"
+	options := Options{
+		Release: "runtime", BindingKeys: map[string]string{"password": canary},
+		SecretTokenProvider: func(string, string) (string, bool) { return canary, true },
+	}
+	manager := unitManager(options, func(context.Context, kmsclient.ReleaseSnapshot) (PreparedCandidate, error) {
+		return PreparedCandidate{}, nil
+	})
+	for label, value := range map[string]any{"options": options, "manager": manager} {
+		for _, rendered := range []string{
+			fmt.Sprintf("%v", value), fmt.Sprintf("%+v", value), fmt.Sprintf("%#v", value),
+			fmt.Sprintf("%s", value), fmt.Sprintf("%q", value),
+		} {
+			if strings.Contains(rendered, canary) {
+				t.Fatalf("%s formatting leaked binding key: %q", label, rendered)
+			}
+		}
+		encoded, err := json.Marshal(value)
+		if err != nil {
+			t.Fatalf("marshal %s: %v", label, err)
+		}
+		if strings.Contains(string(encoded), canary) {
+			t.Fatalf("%s JSON leaked binding key: %s", label, encoded)
 		}
 	}
 }
