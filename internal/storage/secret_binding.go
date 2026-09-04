@@ -279,7 +279,7 @@ func discoverSecretBindingCohort(tx *gorm.DB, ref domain.Ref, requestedAnchor ui
 	}
 	slices.Reverse(down)
 	rows := append(down, anchor)
-	for version := anchor.VersionNumber + 1; version > 0 && version <= math.MaxInt64; version++ {
+	for version := anchor.VersionNumber + 1; version > 0; version++ {
 		var row secretVersionModel
 		err := tx.Where("secret_id = ? AND version_number = ?", sec.ID, version).First(&row).Error
 		if errors.Is(err, gorm.ErrRecordNotFound) {
