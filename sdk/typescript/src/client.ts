@@ -590,7 +590,7 @@ export class KmsClient {
   async setSecretEnabled(
     key: string,
     enabled: boolean,
-    options: CallOptions & { readonly version?: bigint; readonly secretToken?: string } = {},
+    options: CallOptions & { readonly version?: bigint } = {},
   ): Promise<bigint> {
     assertUint64(options.version ?? 0n, "version");
     const ref = await this.#resolveResourceRefForCall(key, options);
@@ -606,7 +606,7 @@ export class KmsClient {
   async destroySecretVersion(
     key: string,
     version: bigint,
-    options: CallOptions & { readonly secretToken?: string } = {},
+    options: CallOptions = {},
   ): Promise<bigint> {
     assertUint64(version, "destroySecretVersion version", true);
     const ref = await this.#resolveResourceRefForCall(key, options);
@@ -622,7 +622,7 @@ export class KmsClient {
   async promoteSecretVersion(
     key: string,
     version: bigint,
-    options: CallOptions & { readonly secretToken?: string } = {},
+    options: CallOptions = {},
   ): Promise<{
     readonly currentVersion: bigint;
     readonly previousVersion: bigint;

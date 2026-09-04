@@ -523,20 +523,15 @@ describe("protocol-faithful gRPC integration", () => {
       await expect(
         client.setSecretEnabled("password", false, {
           version: firstExactInteger + 10n,
-          secretToken: "disable-token",
         }),
       ).resolves.toBe(firstExactInteger + 21n);
+      await expect(client.setSecretEnabled("password", true)).resolves.toBe(
+        firstExactInteger + 22n,
+      );
       await expect(
-        client.setSecretEnabled("password", true, { secretToken: "enable-token" }),
-      ).resolves.toBe(firstExactInteger + 22n);
-      await expect(
-        client.destroySecretVersion("password", firstExactInteger + 10n, {
-          secretToken: "destroy-token",
-        }),
+        client.destroySecretVersion("password", firstExactInteger + 10n),
       ).resolves.toBe(firstExactInteger + 23n);
-      const promoted = await client.promoteSecretVersion("password", firstExactInteger + 12n, {
-        secretToken: "promote-token",
-      });
+      const promoted = await client.promoteSecretVersion("password", firstExactInteger + 12n);
       expect(promoted).toEqual({
         currentVersion: firstExactInteger + 12n,
         previousVersion: firstExactInteger + 10n,
