@@ -917,6 +917,25 @@ func (m *memStore) GetSecretInfo(_ context.Context, ref domain.Ref) (domain.Secr
 	return m.secretInfoLocked(row), nil
 }
 
+func (m *memStore) GetSecretVersionInfo(_ context.Context, ref domain.Ref, version uint64) (domain.Secret, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	row := m.secrets[ref.String()]
+	if row == nil {
+		return domain.Secret{}, domain.Errorf(domain.ErrNotFound, "secret %s", ref)
+	}
+	info := m.secretInfoLocked(row)
+	for _, candidate := range info.Versions {
+		if candidate.Version == version {
+			info.Bound = candidate.Bound
+			info.Labels = nil
+			info.Versions = []domain.SecretVersionInfo{candidate}
+			return info, nil
+		}
+	}
+	return domain.Secret{}, domain.Errorf(domain.ErrNotFound, "secret %s version %d", ref, version)
+}
+
 func (m *memStore) ListSecrets(_ context.Context, namespace domain.NamespaceRef, keyPrefix string, _ storage.ListPage) ([]domain.Secret, string, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()

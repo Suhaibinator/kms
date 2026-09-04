@@ -280,6 +280,7 @@ export interface CreateSecretRequest {
   metadata_json: string;
   binding_key?: string;
   generate_access_token: boolean;
+  create_only?: boolean;
   expires_at_unix_ms: number;
 }
 

@@ -479,10 +479,15 @@ class AsyncClient:
         return Page(tuple(_secret_info_from_proto(s) for s in response.secrets), response.next_page_token)
 
     async def get_secret_metadata(self, key: str, *, timeout: Optional[float] = None) -> SecretInfo:
+        return await self._get_secret_metadata_version(key, version=0, timeout=timeout)
+
+    async def _get_secret_metadata_version(
+        self, key: str, *, version: int, timeout: Optional[float] = None,
+    ) -> SecretInfo:
         ref = await self._resolve_ref(key)
         try:
             response = await self._secret_stub.GetSecretMetadata(
-                kms_pb2.GetSecretMetadataRequest(ref=to_proto_ref(ref)),
+                kms_pb2.GetSecretMetadataRequest(ref=to_proto_ref(ref), version=version),
                 metadata=self._auth_metadata(), timeout=self._call_timeout(timeout),
             )
         except grpc.RpcError as exc:

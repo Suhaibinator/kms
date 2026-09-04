@@ -336,10 +336,12 @@ class DestroySecretVersionResponse(_message.Message):
     def __init__(self, revision: _Optional[int] = ...) -> None: ...
 
 class GetSecretMetadataRequest(_message.Message):
-    __slots__ = ("ref",)
+    __slots__ = ("ref", "version")
     REF_FIELD_NUMBER: _ClassVar[int]
+    VERSION_FIELD_NUMBER: _ClassVar[int]
     ref: ResourceRef
-    def __init__(self, ref: _Optional[_Union[ResourceRef, _Mapping]] = ...) -> None: ...
+    version: int
+    def __init__(self, ref: _Optional[_Union[ResourceRef, _Mapping]] = ..., version: _Optional[int] = ...) -> None: ...
 
 class GetSecretMetadataResponse(_message.Message):
     __slots__ = ("secret",)

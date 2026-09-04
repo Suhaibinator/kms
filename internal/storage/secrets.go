@@ -382,6 +382,52 @@ func (s *SQLStore) GetSecretInfo(ctx context.Context, ref domain.Ref) (domain.Se
 	return out, err
 }
 
+// GetSecretVersionInfo returns a bounded metadata-only projection for one
+// exact version. It deliberately does not resolve or load labels, so an
+// unrelated corrupt current label cannot make a historical release pin fail.
+func (s *SQLStore) GetSecretVersionInfo(ctx context.Context, ref domain.Ref, version uint64) (domain.Secret, error) {
+	if version == 0 {
+		return domain.Secret{}, domain.Errorf(domain.ErrInvalidArgument, "secret version must be greater than zero")
+	}
+	var out domain.Secret
+	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		nsID, err := resolveNamespaceID(tx, ref.NS)
+		if err != nil {
+			return err
+		}
+		var sec secretModel
+		if err := tx.Select("id", "content_type", "metadata_json", "created_at", "updated_at", "access_token_hash").
+			Where("namespace_id = ? AND name = ?", nsID, ref.Key).First(&sec).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return domain.Errorf(domain.ErrNotFound, "secret %s", ref)
+			}
+			return err
+		}
+		var ver secretVersionModel
+		if err := tx.Select("version_number", "state", "created_by", "created_at", "destroyed_at", "expires_at", "metadata_json", "bound", "has_access_token").
+			Where("secret_id = ? AND version_number = ?", sec.ID, version).First(&ver).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return domain.Errorf(domain.ErrNotFound, "secret %s version %d", ref, version)
+			}
+			return err
+		}
+		info := domain.SecretVersionInfo{
+			Version: uint64(ver.VersionNumber), State: ver.State, CreatedBy: ver.CreatedBy,
+			CreatedAt: parseTime(ver.CreatedAt), DestroyedAt: parseTimePtr(ver.DestroyedAt),
+			ExpiresAt: parseTimePtr(ver.ExpiresAt), Metadata: ver.MetadataJSON,
+			Bound: i2b(ver.Bound), HasAccessToken: i2b(ver.HasAccessToken),
+		}
+		out = domain.Secret{
+			Ref: ref, ContentType: sec.ContentType, Bound: info.Bound,
+			HasAccessToken: sec.AccessTokenHash != nil, Metadata: sec.MetadataJSON,
+			CreatedAt: parseTime(sec.CreatedAt), UpdatedAt: parseTime(sec.UpdatedAt),
+			Versions: []domain.SecretVersionInfo{info},
+		}
+		return nil
+	}, &sql.TxOptions{ReadOnly: true})
+	return out, err
+}
+
 // ListSecrets returns secrets in ns matching keyPrefix, ordered by key. The
 // namespace must exist.
 func (s *SQLStore) ListSecrets(ctx context.Context, ns domain.NamespaceRef, keyPrefix string, page ListPage) ([]domain.Secret, string, error) {

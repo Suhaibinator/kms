@@ -3,6 +3,7 @@ package cli
 import (
 	"crypto/rand"
 	"encoding/base64"
+	"flag"
 	"fmt"
 	"runtime"
 	"strconv"
@@ -116,8 +117,12 @@ echo on an interactive terminal; purging unbound versions requires no binding ke
 func (c *CLI) cmdSecretBind(args []string) int {
 	fs := c.newFlags("secret bind")
 	cf := addConnFlags(c, fs)
+	expectedCurrent := addExpectedCurrentVersionFlag(fs)
 	c.setUsage(fs, "secret bind /env/app/key [flags]", "Create a new current version with binding-key protection.", false)
 	if !c.parseFlags(fs, args) {
+		return exitUsage
+	}
+	if !c.validateExpectedCurrentVersion("secret bind", expectedCurrent) {
 		return exitUsage
 	}
 	ref, ok := c.bindingCommandRef("secret bind")
@@ -130,7 +135,7 @@ func (c *CLI) cmdSecretBind(args []string) int {
 	}
 	defer func() { _ = conn.Close() }()
 	client := kmsv1.NewSecretServiceClient(conn)
-	current, code := c.readCurrentSecretVersion(client, cf, ref, "secret bind")
+	current, code := c.resolveExpectedCurrentVersion(client, cf, ref, "secret bind", expectedCurrent)
 	if code != exitOK {
 		return code
 	}
@@ -152,8 +157,12 @@ func (c *CLI) cmdSecretBind(args []string) int {
 func (c *CLI) cmdSecretUnbind(args []string) int {
 	fs := c.newFlags("secret unbind")
 	cf := addConnFlags(c, fs)
+	expectedCurrent := addExpectedCurrentVersionFlag(fs)
 	c.setUsage(fs, "secret unbind /env/app/key [flags]", "Create a new current version without binding-key protection.", false)
 	if !c.parseFlags(fs, args) {
+		return exitUsage
+	}
+	if !c.validateExpectedCurrentVersion("secret unbind", expectedCurrent) {
 		return exitUsage
 	}
 	ref, ok := c.bindingCommandRef("secret unbind")
@@ -166,7 +175,7 @@ func (c *CLI) cmdSecretUnbind(args []string) int {
 	}
 	defer func() { _ = conn.Close() }()
 	client := kmsv1.NewSecretServiceClient(conn)
-	current, code := c.readCurrentSecretVersion(client, cf, ref, "secret unbind")
+	current, code := c.resolveExpectedCurrentVersion(client, cf, ref, "secret unbind", expectedCurrent)
 	if code != exitOK {
 		return code
 	}
@@ -188,8 +197,12 @@ func (c *CLI) cmdSecretUnbind(args []string) int {
 func (c *CLI) cmdBindingKeyRotate(args []string) int {
 	fs := c.newFlags("binding-key rotate")
 	cf := addConnFlags(c, fs)
+	expectedCurrent := addExpectedCurrentVersionFlag(fs)
 	c.setUsage(fs, "binding-key rotate /env/app/key [flags]", "Create a new current version protected by a replacement binding key.", false)
 	if !c.parseFlags(fs, args) {
+		return exitUsage
+	}
+	if !c.validateExpectedCurrentVersion("binding-key rotate", expectedCurrent) {
 		return exitUsage
 	}
 	ref, ok := c.bindingCommandRef("binding-key rotate")
@@ -206,7 +219,7 @@ func (c *CLI) cmdBindingKeyRotate(args []string) int {
 	}
 	defer func() { _ = conn.Close() }()
 	client := kmsv1.NewSecretServiceClient(conn)
-	current, code := c.readCurrentSecretVersion(client, cf, ref, "binding-key rotate")
+	current, code := c.resolveExpectedCurrentVersion(client, cf, ref, "binding-key rotate", expectedCurrent)
 	if code != exitOK {
 		return code
 	}
@@ -344,6 +357,27 @@ func (c *CLI) readCurrentSecretVersion(client kmsv1.SecretServiceClient, cf *con
 		return 0, c.fail("%s metadata: secret has no current version", operation)
 	}
 	return current, exitOK
+}
+
+func addExpectedCurrentVersionFlag(fs *flag.FlagSet) *optionalUint64 {
+	expected := &optionalUint64{}
+	fs.Var(expected, "expected-current-version", "expected current secret `version`; when omitted, read current metadata")
+	return expected
+}
+
+func (c *CLI) validateExpectedCurrentVersion(operation string, expected *optionalUint64) bool {
+	if expected.set && expected.value == 0 {
+		c.failUsage("%s: expected-current-version must be greater than zero", operation)
+		return false
+	}
+	return true
+}
+
+func (c *CLI) resolveExpectedCurrentVersion(client kmsv1.SecretServiceClient, cf *connFlags, ref domain.Ref, operation string, expected *optionalUint64) (uint64, int) {
+	if expected.set {
+		return expected.value, exitOK
+	}
+	return c.readCurrentSecretVersion(client, cf, ref, operation)
 }
 
 func (c *CLI) bindingCommandRef(command string) (domain.Ref, bool) {

@@ -67,6 +67,8 @@ def test_async_client_core_surface_and_close():
             metadata = await client.get_secret_metadata("async/bound")
             assert metadata.versions[0].state == "enabled"
             assert metadata.versions[1].state == "destroyed"
+            exact = await client._get_secret_metadata_version("async/bound", version=2)
+            assert [version.version for version in exact.versions] == [2]
         assert client.closed
 
     try:

@@ -68,6 +68,7 @@ class FakeStore:
         # Test-only secret state. Binding credentials are retained solely so
         # this in-process fake can exercise credential and cohort behavior.
         self.secrets: Dict[_RefKey, dict] = {}
+        self.secret_metadata_versions: List[int] = []
         self.subs: List[_Subscription] = []
         self.require_bearer = require_bearer
         self.whoami_name = whoami_name
@@ -289,6 +290,7 @@ class SecretServicer(kms_pb2_grpc.SecretServiceServicer):
     def GetSecretMetadata(self, request, context):
         rk = _rk_from_ref(request.ref)
         with self.store.lock:
+            self.store.secret_metadata_versions.append(request.version)
             sec = self.store.secrets.get(rk)
             if sec is None:
                 context.abort(grpc.StatusCode.NOT_FOUND, "not found")
@@ -300,13 +302,17 @@ class SecretServicer(kms_pb2_grpc.SecretServiceServicer):
                 bound=bool(sec["binding_keys"][i]),
                 has_access_token=sec["has_tokens"][i],
             ) for i in range(len(sec["versions"]))]
+            if request.version:
+                versions = [version for version in versions if version.version == request.version]
+                if not versions:
+                    context.abort(grpc.StatusCode.NOT_FOUND, "version not found")
             current = sec["current_version"] - 1
             meta = kms_pb2.SecretMetadata(
                 ref=_proto_ref(rk), content_type=sec["content_type"],
-                bound=bool(sec["binding_keys"][current]),
+                bound=versions[0].bound if request.version else bool(sec["binding_keys"][current]),
                 has_access_token=bool(sec["token"]),
                 metadata_json=sec["metadata"][current],
-                labels={
+                labels={} if request.version else {
                     "current": sec["current_version"],
                     **({"previous": sec.get("previous_version", 0)} if sec.get("previous_version") else {}),
                 }, versions=versions,

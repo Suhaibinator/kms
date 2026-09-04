@@ -151,6 +151,7 @@ class _AsyncClient:
         self.state = "enabled"
         self.destroyed_at_unix_ms = 0
         self.expires_at_unix_ms = 0
+        self.metadata_versions: List[int] = []
 
     async def _resolve_namespace_arg(self, namespace):
         return namespace or NamespaceRef("prod", "app")
@@ -188,8 +189,9 @@ class _AsyncClient:
             content_type="string",
         )
 
-    async def get_secret_metadata(self, key, *, timeout=None):
+    async def _get_secret_metadata_version(self, key, *, version, timeout=None):
         del timeout
+        self.metadata_versions.append(version)
         env, app, resource_key = key[1:].split("/", 2)
         return kms_paramstore.models.SecretInfo(
             env=env, app=app, key=resource_key, content_type="string",
@@ -281,6 +283,7 @@ def test_async_loader_applies_redacts_and_acknowledges(monkeypatch):
         assert prepared.aborts == 0
         assert order[0] == "manifest"
         assert client.tokens == ["token"]
+        assert client.metadata_versions == [1]
         applied = [a for a in stub.acknowledgements if a.state == "applied"][-1]
         assert applied.applied_divergent
         assert applied.divergent_field_count == 65_535

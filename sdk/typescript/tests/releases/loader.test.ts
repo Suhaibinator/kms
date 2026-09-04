@@ -141,8 +141,8 @@ class FakeTransport implements ReleaseTransport {
     return Promise.resolve(secret);
   }
 
-  fetchSecretMetadata(ref: ResourceRef): Promise<SecretMetadata> {
-    this.calls.push(`secret-metadata:${pathOf(ref)}`);
+  fetchSecretMetadata(ref: ResourceRef, version: bigint): Promise<SecretMetadata> {
+    this.calls.push(`secret-metadata:${pathOf(ref)}:${version}`);
     const metadata = this.secretMetadata.get(pathOf(ref));
     if (!metadata) return Promise.reject(new Error("secret metadata not found"));
     return Promise.resolve(metadata);
@@ -231,6 +231,7 @@ describe("ReleaseLoader", () => {
     expect(order).toContain("token:database:/prod/api/database/password");
     expect(transport.tokens).toEqual(["local-token"]);
     expect(transport.bindingKeys).toEqual(["local-binding-key"]);
+    expect(transport.calls).toContain("secret-metadata:/prod/api/database/password:11");
     expect(transport.registration).toMatchObject({
       name: "runtime",
       clientName: "unit-test",

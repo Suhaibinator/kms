@@ -92,6 +92,8 @@ export class ApiError extends Error {
 }
 
 export const SECRET_OPERATION_FAILED_MESSAGE = "Secret operation failed.";
+export const SECRET_ALREADY_EXISTS_MESSAGE =
+  "This secret already exists. Open it in the secret editor to create a new version.";
 export const PURGE_CLEANUP_PENDING_MESSAGE =
   "secret purge committed; database artifact cleanup is pending";
 
@@ -112,6 +114,10 @@ export class PurgeCleanupPendingApiError extends ApiError {
 // status is the reliable signal, so ship/rollback/clone callers test this.
 export function isConflict(err: unknown): boolean {
   return err instanceof ApiError && err.status === 409;
+}
+
+export function isSecretAlreadyExists(err: unknown): boolean {
+  return err instanceof ApiError && err.status === 409 && err.code === "already_exists";
 }
 
 /**

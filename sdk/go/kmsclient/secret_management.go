@@ -43,13 +43,17 @@ type SecretMetadata struct {
 
 // GetSecretMetadata returns live metadata for every retained version.
 func (c *Client) GetSecretMetadata(ctx context.Context, key string) (SecretMetadata, error) {
+	return c.getSecretMetadata(ctx, key, 0)
+}
+
+func (c *Client) getSecretMetadata(ctx context.Context, key string, version uint64) (SecretMetadata, error) {
 	r, err := c.resolveRef(ctx, key)
 	if err != nil {
 		return SecretMetadata{}, err
 	}
 	cctx, cancel := c.callCtx(ctx)
 	defer cancel()
-	resp, err := c.secrets.GetSecretMetadata(cctx, &kmsv1.GetSecretMetadataRequest{Ref: r.resourceProto()})
+	resp, err := c.secrets.GetSecretMetadata(cctx, &kmsv1.GetSecretMetadataRequest{Ref: r.resourceProto(), Version: version})
 	if err != nil {
 		return SecretMetadata{}, mapError(err)
 	}

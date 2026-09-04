@@ -45,6 +45,7 @@ type releaseLoaderServer struct {
 	expectedBindKey        string
 	parameterFetches       int
 	metadataFetches        int
+	metadataVersion        uint64
 	secretFetches          int
 
 	watchEvents chan *kmsv1.WatchReleaseEvent
@@ -104,9 +105,22 @@ func (s *releaseLoaderServer) GetSecretMetadata(_ context.Context, req *kmsv1.Ge
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.metadataFetches++
+	s.metadataVersion = req.GetVersion()
 	if s.secretMetadataOverride != nil {
+		metadata := proto.Clone(s.secretMetadataOverride).(*kmsv1.SecretMetadata)
+		if req.GetVersion() != 0 {
+			metadata.Labels = nil
+			metadata.Versions = nil
+			for _, version := range s.secretMetadataOverride.GetVersions() {
+				if version.GetVersion() == req.GetVersion() {
+					metadata.Versions = []*kmsv1.SecretVersionInfo{proto.Clone(version).(*kmsv1.SecretVersionInfo)}
+					metadata.Bound = version.GetBound()
+					break
+				}
+			}
+		}
 		return &kmsv1.GetSecretMetadataResponse{
-			Secret: proto.Clone(s.secretMetadataOverride).(*kmsv1.SecretMetadata),
+			Secret: metadata,
 		}, nil
 	}
 	secret := s.secrets[req.GetRef().GetKey()]
@@ -121,6 +135,27 @@ func (s *releaseLoaderServer) GetSecretMetadata(_ context.Context, req *kmsv1.Ge
 			DestroyedAtUnixMs: s.secretDestroyedAt, Bound: s.secretBound, HasAccessToken: s.secretHasToken,
 		}},
 	}}, nil
+}
+
+func TestReleaseLoaderExactMetadataRequestAvoidsFullHistoryMessageLimit(t *testing.T) {
+	server, candidate := newExactProtectionResolution(t, false, false)
+	versions := make([]*kmsv1.SecretVersionInfo, 0, 5000)
+	for version := uint64(1); version <= 5000; version++ {
+		versions = append(versions, &kmsv1.SecretVersionInfo{
+			Version: version, State: "enabled", MetadataJson: strings.Repeat("x", 1024),
+		})
+	}
+	server.secretMetadataOverride = &kmsv1.SecretMetadata{
+		Ref: testResource("password"), ContentType: "text/plain", Versions: versions,
+	}
+	client := newReleaseTestClient(t, server)
+	loader, err := NewReleaseLoader(client, ReleaseLoaderConfig{Name: "runtime"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, category, err := loader.resolveCandidate(context.Background(), namespaceRef{env: "prod", app: "app"}, candidate); err != nil || category != "" {
+		t.Fatalf("bounded exact metadata resolution category=%q error=%v", category, err)
+	}
 }
 
 func (s *releaseLoaderServer) GetActiveRelease(_ context.Context, _ *kmsv1.GetActiveReleaseRequest) (*kmsv1.GetActiveReleaseResponse, error) {
@@ -569,10 +604,10 @@ func TestReleaseLoaderUsesExactLiveProtectionAndBothCredentials(t *testing.T) {
 	}
 	server.mu.Lock()
 	token, key := server.secretToken, server.bindingKey
-	metadataFetches, secretFetches := server.metadataFetches, server.secretFetches
+	metadataFetches, metadataVersion, secretFetches := server.metadataFetches, server.metadataVersion, server.secretFetches
 	server.mu.Unlock()
-	if token != "access-token" || key != "binding-key" || metadataFetches != 1 || secretFetches != 1 {
-		t.Fatalf("credentials/fetches = token:%q key:%q metadata:%d secret:%d", token, key, metadataFetches, secretFetches)
+	if token != "access-token" || key != "binding-key" || metadataFetches != 1 || metadataVersion != 7 || secretFetches != 1 {
+		t.Fatalf("credentials/fetches = token:%q key:%q metadata:%d version:%d secret:%d", token, key, metadataFetches, metadataVersion, secretFetches)
 	}
 }
 

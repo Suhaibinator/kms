@@ -277,7 +277,15 @@ export interface DestroySecretVersionResponse {
 }
 
 export interface GetSecretMetadataRequest {
-  ref: ResourceRef | undefined;
+  ref:
+    | ResourceRef
+    | undefined;
+  /**
+   * 0 returns full history. A non-zero value returns only this exact version:
+   * labels are omitted, versions contains exactly one item, and the envelope's
+   * bound field describes that requested version rather than the current label.
+   */
+  version: bigint;
 }
 
 export interface GetSecretMetadataResponse {
@@ -4949,13 +4957,19 @@ export const DestroySecretVersionResponse: MessageFns<DestroySecretVersionRespon
 };
 
 function createBaseGetSecretMetadataRequest(): GetSecretMetadataRequest {
-  return { ref: undefined };
+  return { ref: undefined, version: 0n };
 }
 
 export const GetSecretMetadataRequest: MessageFns<GetSecretMetadataRequest> = {
   encode(message: GetSecretMetadataRequest, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
     if (message.ref !== undefined) {
       ResourceRef.encode(message.ref, writer.uint32(10).fork()).join();
+    }
+    if (message.version !== 0n) {
+      if (BigInt.asUintN(64, message.version) !== message.version) {
+        throw new globalThis.Error("value provided for field message.version of type uint64 too large");
+      }
+      writer.uint32(16).uint64(message.version);
     }
     return writer;
   },
@@ -4981,6 +4995,14 @@ export const GetSecretMetadataRequest: MessageFns<GetSecretMetadataRequest> = {
             message.ref = ResourceRef.decode(reader, reader.uint32());
             continue;
           }
+          case 2: {
+            if (tag !== 16) {
+              break;
+            }
+
+            message.version = reader.uint64() as bigint;
+            continue;
+          }
         }
         if ((tag & 7) === 4 || tag === 0) {
           break;
@@ -4994,13 +5016,19 @@ export const GetSecretMetadataRequest: MessageFns<GetSecretMetadataRequest> = {
   },
 
   fromJSON(object: any): GetSecretMetadataRequest {
-    return { ref: isSet(object.ref) ? ResourceRef.fromJSON(object.ref) : undefined };
+    return {
+      ref: isSet(object.ref) ? ResourceRef.fromJSON(object.ref) : undefined,
+      version: isSet(object.version) ? BigInt(object.version) : 0n,
+    };
   },
 
   toJSON(message: GetSecretMetadataRequest): unknown {
     const obj: any = {};
     if (message.ref !== undefined) {
       obj.ref = ResourceRef.toJSON(message.ref);
+    }
+    if (message.version !== 0n) {
+      obj.version = message.version.toString();
     }
     return obj;
   },
@@ -5011,6 +5039,7 @@ export const GetSecretMetadataRequest: MessageFns<GetSecretMetadataRequest> = {
   fromPartial(object: DeepPartial<GetSecretMetadataRequest>): GetSecretMetadataRequest {
     const message = createBaseGetSecretMetadataRequest();
     message.ref = (object.ref !== undefined && object.ref !== null) ? ResourceRef.fromPartial(object.ref) : undefined;
+    message.version = (object.version !== undefined && object.version !== null) ? BigInt(object.version) : 0n;
     return message;
   },
 };
@@ -18978,5 +19007,5 @@ export interface MessageFns<T> {
   fromPartial(object: DeepPartial<T>): T;
 }
 
-// source-sha256: a0758738d88e8da874eccf8e7653ebd8e50319fe129bca9921971751a7e9bb24
+// source-sha256: a0d12510da3c8fc28ccc109b2a966816bb6ba0b38242a92d4a4265946ed2be7e
 // generation-sha256: c3e69d40e38671d5381cfa50a679b45232adc3ecd3df927c51285f1901aa09ef

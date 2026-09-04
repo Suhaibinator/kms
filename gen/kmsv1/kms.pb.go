@@ -1839,8 +1839,12 @@ func (x *DestroySecretVersionResponse) GetRevision() uint64 {
 }
 
 type GetSecretMetadataRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Ref           *ResourceRef           `protobuf:"bytes,1,opt,name=ref,proto3" json:"ref,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	Ref   *ResourceRef           `protobuf:"bytes,1,opt,name=ref,proto3" json:"ref,omitempty"`
+	// 0 returns full history. A non-zero value returns only this exact version:
+	// labels are omitted, versions contains exactly one item, and the envelope's
+	// bound field describes that requested version rather than the current label.
+	Version       uint64 `protobuf:"varint,2,opt,name=version,proto3" json:"version,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1880,6 +1884,13 @@ func (x *GetSecretMetadataRequest) GetRef() *ResourceRef {
 		return x.Ref
 	}
 	return nil
+}
+
+func (x *GetSecretMetadataRequest) GetVersion() uint64 {
+	if x != nil {
+		return x.Version
+	}
+	return 0
 }
 
 type GetSecretMetadataResponse struct {
@@ -9158,9 +9169,10 @@ const file_kms_v1_kms_proto_rawDesc = "" +
 	"\x03ref\x18\x01 \x01(\v2\x13.kms.v1.ResourceRefR\x03ref\x12\x18\n" +
 	"\aversion\x18\x02 \x01(\x04R\aversion\":\n" +
 	"\x1cDestroySecretVersionResponse\x12\x1a\n" +
-	"\brevision\x18\x01 \x01(\x04R\brevision\"A\n" +
+	"\brevision\x18\x01 \x01(\x04R\brevision\"[\n" +
 	"\x18GetSecretMetadataRequest\x12%\n" +
-	"\x03ref\x18\x01 \x01(\v2\x13.kms.v1.ResourceRefR\x03ref\"K\n" +
+	"\x03ref\x18\x01 \x01(\v2\x13.kms.v1.ResourceRefR\x03ref\x12\x18\n" +
+	"\aversion\x18\x02 \x01(\x04R\aversion\"K\n" +
 	"\x19GetSecretMetadataResponse\x12.\n" +
 	"\x06secret\x18\x01 \x01(\v2\x16.kms.v1.SecretMetadataR\x06secret\"^\n" +
 	"\x1bPromoteSecretVersionRequest\x12%\n" +

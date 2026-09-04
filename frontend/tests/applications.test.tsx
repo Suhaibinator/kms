@@ -709,6 +709,7 @@ describe("ApplicationsPage", () => {
       metadata_json: '{"owner":"platform"}',
       binding_key: bindingKey,
       generate_access_token: true,
+      create_only: true,
       expires_at_unix_ms: datetimeLocalToUnixMs("2099-01-02T03:04"),
     });
 
@@ -720,5 +721,34 @@ describe("ApplicationsPage", () => {
         secretRef: { env: "prod", app: overview.application.name, key: secret.alias },
       }),
     );
+  });
+
+  it("directs an existing quick-create key to the secret editor", async () => {
+    const overview = clone(ready);
+    const prod = env(overview, "prod");
+    const secret = prod.values.find((value) => value.kind === "secret");
+    if (!secret) throw new Error("fixture has no secret alias");
+    secret.present = false;
+    mocks.query = { app: overview.application.name };
+    mocks.applicationOverview.mockResolvedValue(overview);
+    mocks.createSecret.mockRejectedValue(
+      new ApiError("already_exists", "Secret operation failed.", 409),
+    );
+
+    render(<ApplicationsPage />);
+    fireEvent.click(await screen.findByRole("button", { name: "Add secret" }));
+    const modal = screen.getByRole("dialog", { name: "New secret" });
+    fireEvent.change(within(modal).getByRole("textbox", { name: "Secret value" }), {
+      target: { value: "value" },
+    });
+    fireEvent.click(within(modal).getByRole("button", { name: "Create secret" }));
+
+    await waitFor(() =>
+      expect(mocks.toast.error).toHaveBeenCalledWith(
+        "This secret already exists. Open it in the secret editor to create a new version.",
+        "Secret already exists",
+      ),
+    );
+    expect(screen.getByRole("dialog", { name: "New secret" })).toBeInTheDocument();
   });
 });

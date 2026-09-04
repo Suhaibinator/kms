@@ -814,6 +814,22 @@ func (f *fakeStore) GetSecretInfo(_ context.Context, ref domain.Ref) (domain.Sec
 	}, nil
 }
 
+func (f *fakeStore) GetSecretVersionInfo(ctx context.Context, ref domain.Ref, version uint64) (domain.Secret, error) {
+	info, err := f.GetSecretInfo(ctx, ref)
+	if err != nil {
+		return domain.Secret{}, err
+	}
+	for _, candidate := range info.Versions {
+		if candidate.Version == version {
+			info.Bound = candidate.Bound
+			info.Versions = []domain.SecretVersionInfo{candidate}
+			info.Labels = nil
+			return info, nil
+		}
+	}
+	return domain.Secret{}, domain.Errorf(domain.ErrNotFound, "secret %s version %d", ref, version)
+}
+
 func (f *fakeStore) ListSecrets(_ context.Context, ns domain.NamespaceRef, keyPrefix string, _ storage.ListPage) ([]domain.Secret, string, error) {
 	f.secretMu.RLock()
 	defer f.secretMu.RUnlock()

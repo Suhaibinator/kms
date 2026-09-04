@@ -873,8 +873,8 @@ class ReleaseLoader:
         if entry.kind != _KIND_SECRET:
             raise _CandidateFailure("resolution_failed", "unknown entry kind")
         try:
-            live = self._client.get_secret_metadata(
-                entry.path, timeout=self._config.request_timeout,
+            live = self._client._get_secret_metadata_version(
+                entry.path, version=entry.version, timeout=self._config.request_timeout,
             )
         except Exception:
             check_cancelled()

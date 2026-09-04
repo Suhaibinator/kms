@@ -5,6 +5,7 @@ import (
 
 	kmsv1 "github.com/Suhaibinator/kms/gen/kmsv1"
 	"github.com/Suhaibinator/kms/internal/core"
+	"github.com/Suhaibinator/kms/internal/domain"
 )
 
 type secretServer struct {
@@ -220,7 +221,12 @@ func (h *secretServer) GetSecretMetadata(ctx context.Context, req *kmsv1.GetSecr
 	if err != nil {
 		return nil, err
 	}
-	sec, err := h.s.svc.GetSecretInfo(ctx, pr, refFromProto(req.GetRef()))
+	var sec domain.Secret
+	if req.GetVersion() == 0 {
+		sec, err = h.s.svc.GetSecretInfo(ctx, pr, refFromProto(req.GetRef()))
+	} else {
+		sec, err = h.s.svc.GetSecretVersionInfo(ctx, pr, refFromProto(req.GetRef()), req.GetVersion())
+	}
 	if err != nil {
 		return nil, h.s.mapErr(ctx, err)
 	}

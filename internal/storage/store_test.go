@@ -964,12 +964,73 @@ func TestSecretMetadataReadsRejectDanglingCurrentLabel(t *testing.T) {
 	if _, err := st.GetSecretInfo(ctx, r); !errors.Is(err, domain.ErrFailedPrecondition) {
 		t.Fatalf("GetSecretInfo dangling current error = %v, want failed precondition", err)
 	}
+	exact, err := st.GetSecretVersionInfo(ctx, r, 1)
+	if err != nil {
+		t.Fatalf("GetSecretVersionInfo must ignore unrelated current label corruption: %v", err)
+	}
+	if len(exact.Versions) != 1 || exact.Versions[0].Version != 1 || !exact.Versions[0].Bound {
+		t.Fatalf("exact metadata projection = %+v", exact)
+	}
 	secrets, next, err := st.ListSecrets(ctx, ns, "", ListPage{})
 	if !errors.Is(err, domain.ErrFailedPrecondition) {
 		t.Fatalf("ListSecrets dangling current error = %v, want failed precondition", err)
 	}
 	if secrets != nil || next != "" {
 		t.Fatalf("ListSecrets returned partial metadata on corruption: secrets=%+v next=%q", secrets, next)
+	}
+}
+
+func TestGetSecretVersionInfoProjectsOnlyOneMetadataRow(t *testing.T) {
+	st := newStore(t)
+	ctx := context.Background()
+	seedNS(t, st, "prod", "app")
+	r := ref("prod", "app", "bounded-metadata")
+	putSecret(t, st, r, false)
+	if _, _, err := st.CreateSecretVersion(ctx, CreateSecretParams{Ref: r, Encrypt: encryptStub(nil)}); err != nil {
+		t.Fatal(err)
+	}
+	rec, err := st.GetSecretRecord(ctx, r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.db.Model(&secretVersionModel{}).Where("secret_id = ?", rec.ID).
+		Update("ciphertext", bytes.Repeat([]byte("x"), 5<<20)).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	var queries []string
+	const callback = "test:capture-bounded-secret-metadata"
+	if err := st.db.Callback().Query().After("gorm:query").Register(callback, func(db *gorm.DB) {
+		queries = append(queries, db.Statement.SQL.String())
+	}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = st.db.Callback().Query().Remove(callback) })
+
+	info, err := st.GetSecretVersionInfo(ctx, r, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(info.Versions) != 1 || info.Versions[0].Version != 1 {
+		t.Fatalf("exact projection = %+v", info)
+	}
+	var versionQuery string
+	for _, query := range queries {
+		if strings.Contains(query, "secret_versions") {
+			versionQuery = query
+			break
+		}
+	}
+	if versionQuery == "" {
+		t.Fatalf("secret version query not captured: %q", queries)
+	}
+	for _, forbidden := range []string{"ciphertext", "encrypted_dek", "nonce", "binding_key_salt", "SELECT *"} {
+		if strings.Contains(strings.ToLower(versionQuery), strings.ToLower(forbidden)) {
+			t.Fatalf("exact metadata query selected %q: %s", forbidden, versionQuery)
+		}
+	}
+	if !strings.Contains(versionQuery, "version_number") || !strings.Contains(versionQuery, "LIMIT 1") {
+		t.Fatalf("exact metadata query is not bounded to one version: %s", versionQuery)
 	}
 }
 

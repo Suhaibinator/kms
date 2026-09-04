@@ -896,7 +896,7 @@ func (l *ReleaseLoader) resolveEntry(ctx context.Context, entry *kmsv1.Configura
 		return out, "", nil
 
 	case "secret":
-		live, err := l.client.GetSecretMetadata(ctx, r.display())
+		live, err := l.client.getSecretMetadata(ctx, r.display(), entry.GetVersion())
 		if err != nil {
 			if errors.Is(err, errSecretMetadataRefMismatch) {
 				return out, ReleaseRejectVersionMismatch, err

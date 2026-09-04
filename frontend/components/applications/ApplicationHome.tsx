@@ -20,15 +20,15 @@ import { Modal } from "@/components/Modal";
 import ConnectSdkPanel from "@/components/onboarding/ConnectSdkPanel";
 import SetupPanel from "@/components/onboarding/SetupPanel";
 import { StatusChip } from "@/components/StatusChip";
+import { SecretWorkspace } from "@/components/secrets/SecretWorkspace";
 import RollbackDialog from "@/components/ship/RollbackDialog";
 import ShipModal from "@/components/ship/ShipModal";
-import { SecretWorkspace } from "@/components/secrets/SecretWorkspace";
 import { TransportBadge } from "@/components/TransportBadge";
 import { Badge, EmptyState, PageHeader } from "@/components/ui";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useToast } from "@/context/ToastContext";
-import { api } from "@/lib/api";
+import { api, isSecretAlreadyExists, SECRET_ALREADY_EXISTS_MESSAGE } from "@/lib/api";
 import type { ContractEntry } from "@/lib/contract-derive";
 import { crumbs } from "@/lib/crumbs";
 import { links } from "@/lib/links";
@@ -771,6 +771,7 @@ export function ApplicationHome({
               metadata_json: request.metadataJson,
               ...(request.bindingKey !== undefined ? { binding_key: request.bindingKey } : null),
               generate_access_token: request.generateAccessToken,
+              create_only: true,
               expires_at_unix_ms: request.expiresAtUnixMs,
             });
             toast.success(
@@ -781,7 +782,11 @@ export function ApplicationHome({
             );
             return response;
           } catch (error) {
-            toast.error(error, "Failed to create secret");
+            if (isSecretAlreadyExists(error)) {
+              toast.error(SECRET_ALREADY_EXISTS_MESSAGE, "Secret already exists");
+            } else {
+              toast.error(error, "Failed to create secret");
+            }
             throw error;
           } finally {
             setSecretSaving(false);

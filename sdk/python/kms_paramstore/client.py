@@ -676,10 +676,15 @@ class Client:
 
     def get_secret_metadata(self, key: str, *, timeout: Optional[float] = None) -> SecretInfo:
         """Return secret-level metadata (never plaintext)."""
+        return self._get_secret_metadata_version(key, version=0, timeout=timeout)
+
+    def _get_secret_metadata_version(
+        self, key: str, *, version: int, timeout: Optional[float] = None,
+    ) -> SecretInfo:
         ref = self._resolve_ref(key)
         try:
             resp = self._secret_stub.GetSecretMetadata(
-                kms_pb2.GetSecretMetadataRequest(ref=to_proto_ref(ref)),
+                kms_pb2.GetSecretMetadataRequest(ref=to_proto_ref(ref), version=version),
                 metadata=self._auth_metadata(),
                 timeout=self._call_timeout(timeout),
             )

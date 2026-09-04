@@ -14,6 +14,7 @@ import (
 	"go.uber.org/zap"
 	"go.uber.org/zap/zaptest/observer"
 
+	"github.com/Suhaibinator/kms/internal/crypto"
 	"github.com/Suhaibinator/kms/internal/domain"
 	"github.com/Suhaibinator/kms/internal/storage"
 )
@@ -102,6 +103,68 @@ func TestPutSecretNewVersionRoundTrips(t *testing.T) {
 	old, err := s.GetSecret(ctx, adminPrincipal(), tref("db"), 1, "", "", "")
 	if err != nil || string(old.Value) != "v1" {
 		t.Fatalf("v1 = %q, %v; want v1", old.Value, err)
+	}
+}
+
+func TestPutSecretCreateOnlyRejectsExistingSecret(t *testing.T) {
+	ctx := context.Background()
+	store := newFakeStore()
+	s := newTestService(store)
+	withKeyring(t, s)
+	ref := tref("db")
+
+	putSecret(t, s, PutSecretInput{Ref: ref, Value: []byte("v1")})
+	store.beforeCreateSecretVersion = func(storage.CreateSecretParams) {
+		t.Fatal("create-only conflict reached storage write")
+	}
+
+	_, err := s.PutSecret(ctx, adminPrincipal(), PutSecretInput{
+		Ref: ref, Value: []byte("replacement"), CreateOnly: true,
+	})
+	if !errors.Is(err, domain.ErrAlreadyExists) {
+		t.Fatalf("create-only PutSecret err = %v, want ErrAlreadyExists", err)
+	}
+	if got := store.secrets[ref.String()].next; got != 1 {
+		t.Fatalf("existing secret advanced to version %d", got)
+	}
+}
+
+func TestPutSecretCreateOnlyLosesConcurrentCreationWithoutChangingWinner(t *testing.T) {
+	ctx := context.Background()
+	store := newFakeStore()
+	s := newTestService(store)
+	withKeyring(t, s)
+	ref := tref("race")
+	winnerToken, winnerHash, err := crypto.GenerateToken("kmss")
+	if err != nil {
+		t.Fatalf("generate winner token: %v", err)
+	}
+
+	store.beforeCreateSecretVersion = func(loser storage.CreateSecretParams) {
+		_, _, createErr := store.CreateSecretVersion(ctx, storage.CreateSecretParams{
+			Ref:             ref,
+			ContentType:     "text/plain",
+			AccessTokenHash: winnerHash,
+			Expected:        &storage.SecretWriteExpectation{Exists: false},
+			Encrypt:         loser.Encrypt,
+		})
+		if createErr != nil {
+			t.Fatalf("concurrent winner create: %v", createErr)
+		}
+	}
+
+	_, err = s.PutSecret(ctx, adminPrincipal(), PutSecretInput{
+		Ref: ref, Value: []byte("loser"), GenerateToken: true, CreateOnly: true,
+	})
+	if !errors.Is(err, domain.ErrAborted) {
+		t.Fatalf("concurrent create-only PutSecret err = %v, want ErrAborted", err)
+	}
+	winner := store.secrets[ref.String()]
+	if winner.next != 1 || store.revision != 1 {
+		t.Fatalf("winner state changed: version=%d revision=%d", winner.next, store.revision)
+	}
+	if !tokenHashMatches(winnerToken, winner.rec.AccessTokenHash) {
+		t.Fatal("winner access token was replaced")
 	}
 }
 

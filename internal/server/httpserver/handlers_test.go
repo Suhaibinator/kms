@@ -13,6 +13,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Suhaibinator/kms/internal/core"
 	"github.com/Suhaibinator/kms/internal/domain"
 	"github.com/Suhaibinator/kms/internal/storage"
 )
@@ -435,6 +436,46 @@ func TestSecretsLifecycle(t *testing.T) {
 	// Delete.
 	w = e.admin(http.MethodDelete, "/api/v1/secrets?env=prod&app=gradethis&key=stripe-api-key", nil)
 	mustStatus(t, w, http.StatusOK)
+}
+
+func TestCreateOnlySecretRejectsExistingKey(t *testing.T) {
+	e := newTestEnv(t)
+	e.createNS("prod", "gradethis")
+	body := map[string]any{
+		"env": "prod", "app": "gradethis", "key": "stripe-api-key",
+		"value_base64":          base64.StdEncoding.EncodeToString([]byte("original")),
+		"generate_access_token": true,
+		"create_only":           true,
+	}
+
+	w := e.admin(http.MethodPost, "/api/v1/secrets", body)
+	mustStatus(t, w, http.StatusOK)
+	created := decodeBody(t, w)
+	token := created["access_token"].(string)
+	revision := uint64(created["revision"].(float64))
+	body["value_base64"] = base64.StdEncoding.EncodeToString([]byte("replacement"))
+	w = e.admin(http.MethodPost, "/api/v1/secrets", body)
+	mustStatus(t, w, http.StatusConflict)
+	if got := errCode(t, w); got != "already_exists" {
+		t.Fatalf("error code = %q, want already_exists", got)
+	}
+
+	w = e.admin(http.MethodGet, "/api/v1/secrets/metadata?env=prod&app=gradethis&key=stripe-api-key", nil)
+	mustStatus(t, w, http.StatusOK)
+	secret := decodeBody(t, w)["secret"].(map[string]any)
+	if got := len(secret["versions"].([]any)); got != 1 {
+		t.Fatalf("versions = %d, want 1", got)
+	}
+	if e.store.revision != revision {
+		t.Fatalf("revision = %d, want unchanged %d", e.store.revision, revision)
+	}
+	value, err := e.svc.GetSecret(context.Background(), core.Principal{
+		Identity: domain.Identity{Name: "admin", Kind: domain.IdentityKindAdmin},
+		Method:   domain.AuthMethodToken,
+	}, domain.Ref{NS: domain.NamespaceRef{Env: "prod", App: "gradethis"}, Key: "stripe-api-key"}, 0, "", token, "")
+	if err != nil || string(value.Value) != "original" {
+		t.Fatalf("original token read = %q, %v", value.Value, err)
+	}
 }
 
 func TestBoundRevealRequiresBindingKey(t *testing.T) {

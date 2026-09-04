@@ -372,6 +372,9 @@ type Store interface {
 	// returns both the secret row and the version row.
 	GetSecretVersion(ctx context.Context, ref domain.Ref, version uint64, label string) (SecretRecord, SecretVersionRecord, error)
 	GetSecretInfo(ctx context.Context, ref domain.Ref) (domain.Secret, error)
+	// GetSecretVersionInfo returns a metadata-only projection for one exact
+	// version. Implementations must not load ciphertext or unrelated versions.
+	GetSecretVersionInfo(ctx context.Context, ref domain.Ref, version uint64) (domain.Secret, error)
 	ListSecrets(ctx context.Context, ns domain.NamespaceRef, keyPrefix string, page ListPage) ([]domain.Secret, string, error)
 	DeleteSecret(ctx context.Context, ref domain.Ref) (uint64, error)
 

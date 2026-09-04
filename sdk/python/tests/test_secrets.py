@@ -50,7 +50,7 @@ def test_secret_token_required_and_propagated(client):
     assert got.value == b"v"
 
 
-def test_secret_metadata(client):
+def test_secret_metadata(client, server):
     client.put_secret("meta", b"v")
     info = client.get_secret_metadata("meta")
     assert info.key == "meta"
@@ -60,6 +60,9 @@ def test_secret_metadata(client):
     assert info.versions[0].bound is False
     assert info.versions[0].has_access_token is False
     assert len(info.versions) == 1
+    exact = client._get_secret_metadata_version("meta", version=1)
+    assert [version.version for version in exact.versions] == [1]
+    assert server[1].secret_metadata_versions == [0, 1]
 
 
 def test_binding_key_is_independent_and_lifecycle_results_are_immutable(client):

@@ -11,8 +11,8 @@ import {
 } from "@/components/BulkSelection";
 import { Icon } from "@/components/icons";
 import NamespacePicker, { type NamespaceSelection } from "@/components/NamespacePicker";
-import { SecretWorkspace, shouldOpenSecretWorkspace } from "@/components/secrets/SecretWorkspace";
 import { headerLabels, SortHeaderRow, useSort } from "@/components/SortableTable";
+import { SecretWorkspace, shouldOpenSecretWorkspace } from "@/components/secrets/SecretWorkspace";
 import {
   Badge,
   EmptyState,
@@ -26,7 +26,13 @@ import {
 import { Button, ButtonLink } from "@/components/ui/button";
 import { useAuth } from "@/context/AuthContext";
 import { useToast } from "@/context/ToastContext";
-import { api, isAbortError, type ResourceRef } from "@/lib/api";
+import {
+  api,
+  isAbortError,
+  isSecretAlreadyExists,
+  type ResourceRef,
+  SECRET_ALREADY_EXISTS_MESSAGE,
+} from "@/lib/api";
 import { bulkSummary, runBulk } from "@/lib/bulk";
 import { crumbs } from "@/lib/crumbs";
 import { formatUnixMs } from "@/lib/format";
@@ -428,6 +434,7 @@ export default function SecretsPage() {
               metadata_json: request.metadataJson,
               ...(request.bindingKey !== undefined ? { binding_key: request.bindingKey } : null),
               generate_access_token: request.generateAccessToken,
+              create_only: true,
               expires_at_unix_ms: request.expiresAtUnixMs,
             });
             toast.success(
@@ -438,7 +445,11 @@ export default function SecretsPage() {
             );
             return response;
           } catch (error) {
-            toast.error(error, "Failed to create secret");
+            if (isSecretAlreadyExists(error)) {
+              toast.error(SECRET_ALREADY_EXISTS_MESSAGE, "Secret already exists");
+            } else {
+              toast.error(error, "Failed to create secret");
+            }
             throw error;
           } finally {
             setSecretSaving(false);

@@ -136,16 +136,20 @@ and re-encrypts the value with fresh ciphertext, DEK, nonce, version-bound AAD,
 active KEK, and (for a bound result) binding salt. The new version becomes
 `current`; the unchanged source becomes `previous`.
 
-The CLI reads current metadata immediately before each transition and submits
-that version as the required `expected_current_version` compare-and-swap guard.
-There is no transition `--version` flag:
+Pass a positive `--expected-current-version` to submit that version as the
+required compare-and-swap guard without reading secret metadata. This lets an
+identity authorized only for `secret:binding-manage` perform the transition.
+When the flag is omitted, the CLI reads current metadata immediately before the
+transition and uses the observed version:
 
 ```bash
-KMS_BINDING_KEY="$new_key" parameter-store secret bind /prod/app/api-key
-KMS_BINDING_KEY="$current_key" parameter-store secret unbind /prod/app/api-key
+KMS_BINDING_KEY="$new_key" parameter-store secret bind /prod/app/api-key \
+  --expected-current-version 7
+KMS_BINDING_KEY="$current_key" parameter-store secret unbind /prod/app/api-key \
+  --expected-current-version 8
 
 KMS_BINDING_KEY="$old_key" KMS_NEW_BINDING_KEY="$new_key" \
-  parameter-store binding-key rotate /prod/app/api-key
+  parameter-store binding-key rotate /prod/app/api-key --expected-current-version 8
 ```
 
 Bind requires an unbound current version. Unbind and rotation require a bound

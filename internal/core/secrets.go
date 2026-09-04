@@ -25,7 +25,10 @@ type PutSecretInput struct {
 	// GenerateToken independently mints or rotates the secret-level access
 	// token, returned exactly once.
 	GenerateToken bool
-	ExpiresAt     int64 // unix ms, 0 = never
+	// CreateOnly rejects the write when the secret already exists. Storage's
+	// write expectation also rejects a concurrent creation atomically.
+	CreateOnly bool
+	ExpiresAt  int64 // unix ms, 0 = never
 }
 
 // PutSecretResult reports the write outcome.
@@ -193,6 +196,13 @@ func (s *Service) PutSecret(ctx context.Context, pr Principal, in PutSecretInput
 	exists := err == nil
 	if err != nil && !errors.Is(err, domain.ErrNotFound) {
 		return PutSecretResult{}, err
+	}
+	if in.CreateOnly && exists {
+		return PutSecretResult{}, domain.Errorf(
+			domain.ErrAlreadyExists,
+			"secret %s already exists; create a new version from the secret editor",
+			in.Ref,
+		)
 	}
 	expected := &storage.SecretWriteExpectation{Exists: exists}
 	if exists {
@@ -673,6 +683,21 @@ func (s *Service) GetSecretInfo(ctx context.Context, pr Principal, ref domain.Re
 		return domain.Secret{}, err
 	}
 	return s.store.GetSecretInfo(ctx, ref)
+}
+
+// GetSecretVersionInfo returns metadata for one exact version (no values).
+func (s *Service) GetSecretVersionInfo(ctx context.Context, pr Principal, ref domain.Ref, version uint64) (domain.Secret, error) {
+	if err := validateRef(ref); err != nil {
+		return domain.Secret{}, err
+	}
+	if version == 0 {
+		return domain.Secret{}, domain.Errorf(domain.ErrInvalidArgument, "secret version must be greater than zero")
+	}
+	ctx, _, err := s.authorize(ctx, pr, domain.OpSecretRead, domain.ResourceSecret, ref)
+	if err != nil {
+		return domain.Secret{}, err
+	}
+	return s.store.GetSecretVersionInfo(ctx, ref, version)
 }
 
 // DeleteSecret removes a secret and all versions (ciphertext included).

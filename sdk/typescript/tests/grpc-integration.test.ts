@@ -549,7 +549,9 @@ describe("protocol-faithful gRPC integration", () => {
           pageToken: "secret-page",
         },
       ]);
-      expect(secretMetadataRequests).toEqual([{ ref: { namespace, key: "password" } }]);
+      expect(secretMetadataRequests).toEqual([
+        { ref: { namespace, key: "password" }, version: 0n },
+      ]);
       expect(putSecretRequests).toEqual([
         {
           ref: { namespace, key: "password" },

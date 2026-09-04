@@ -95,7 +95,11 @@ export interface ReleaseTransport {
     bindingKey: string,
     signal?: AbortSignal,
   ): Promise<FetchedSecret>;
-  fetchSecretMetadata(ref: ResourceRef, signal?: AbortSignal): Promise<SecretMetadata>;
+  fetchSecretMetadata(
+    ref: ResourceRef,
+    version: bigint,
+    signal?: AbortSignal,
+  ): Promise<SecretMetadata>;
   watchRelease(
     registration: ReleaseWatchRegistration,
     signal: AbortSignal,
@@ -636,7 +640,7 @@ export class ReleaseLoader {
     if (entry.kind === "secret") {
       let live: SecretMetadata;
       try {
-        live = await this.#transport.fetchSecretMetadata(cloneRef(ref), signal);
+        live = await this.#transport.fetchSecretMetadata(cloneRef(ref), entry.version, signal);
       } catch {
         throw new ResolutionError(signal.aborted ? "superseded" : "resolution_failed");
       }

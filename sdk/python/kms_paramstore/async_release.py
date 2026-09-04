@@ -542,8 +542,8 @@ class AsyncReleaseLoader:
                 raise _CandidateFailure("digest_mismatch")
             return parameter.value
         try:
-            live = await self._client.get_secret_metadata(
-                entry.path, timeout=self._config.request_timeout,
+            live = await self._client._get_secret_metadata_version(
+                entry.path, version=entry.version, timeout=self._config.request_timeout,
             )
         except Exception:
             raise _CandidateFailure(

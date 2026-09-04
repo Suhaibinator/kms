@@ -571,7 +571,7 @@ export class KmsClient {
     try {
       const response = await this.#transport.unary(
         SecretServiceService.getSecretMetadata,
-        { ref: toWireRef(ref) },
+        { ref: toWireRef(ref), version: 0n },
         this.#callOptions(options),
       );
       if (!response.secret)
@@ -1061,11 +1061,11 @@ export class KmsClient {
           throwSecretMapped(error);
         }
       },
-      fetchSecretMetadata: async (wireRef, signal) => {
+      fetchSecretMetadata: async (wireRef, version, signal) => {
         try {
           const response = await this.#transport.unary(
             SecretServiceService.getSecretMetadata,
-            { ref: wireRef },
+            { ref: wireRef, version },
             this.#callOptions(signal ? { signal } : {}),
           );
           if (!response.secret) {

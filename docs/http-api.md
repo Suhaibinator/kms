@@ -988,14 +988,17 @@ Listing is always namespace-scoped: `env` and `app` are required.
   { "env": "prod", "app": "gradethis", "key": "stripe-api-key",
     "value_base64": "...", "content_type": "text/plain",
     "metadata_json": "{}", "binding_key": "",
-    "generate_access_token": false, "expires_at_unix_ms": 0 }
+    "generate_access_token": false, "create_only": false,
+    "expires_at_unix_ms": 0 }
   ```
   → `{"version": 1, "revision": 7, "access_token": "..."}`
   (`access_token` present only when `generate_access_token` was true — shown
   once, never again.) A non-empty `binding_key` creates a bound version; empty
   creates an unbound version, independent of the preceding version. A non-empty
   key must be opaque valid UTF-8 of at least 32 bytes. Access-token generation
-  is independent and there is no write-side `secret_token`.
+  is independent and there is no write-side `secret_token`. Set `create_only`
+  to reject an existing key instead of appending a version; the absence check
+  is enforced atomically with creation.
 - `POST /api/v1/secrets/reveal` — `{"env","app","key","version": 0,"label": "","binding_key":"..."}` →
   `{"env","app","key","version","value_base64","content_type"}`.
   Admin only. Every successful reveal and decryption failure is audited as a

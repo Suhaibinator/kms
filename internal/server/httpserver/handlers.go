@@ -522,6 +522,7 @@ func (s *server) handlePutSecret(w http.ResponseWriter, r *http.Request) {
 		MetadataJSON        string `json:"metadata_json"`
 		BindingKey          string `json:"binding_key"`
 		GenerateAccessToken bool   `json:"generate_access_token"`
+		CreateOnly          bool   `json:"create_only"`
 		ExpiresAtUnixMS     int64  `json:"expires_at_unix_ms"`
 	}
 	if err := decodeJSON(w, r, &body); err != nil {
@@ -540,6 +541,7 @@ func (s *server) handlePutSecret(w http.ResponseWriter, r *http.Request) {
 		Metadata:      body.MetadataJSON,
 		BindingKey:    body.BindingKey,
 		GenerateToken: body.GenerateAccessToken,
+		CreateOnly:    body.CreateOnly,
 		ExpiresAt:     body.ExpiresAtUnixMS,
 	})
 	crypto.Zero(value)

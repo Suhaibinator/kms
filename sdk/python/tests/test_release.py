@@ -95,9 +95,11 @@ class _SecretStub:
         self.expires_at_unix_ms = 0
         self.expected_binding_key = "local-binding-key"
         self.metadata_calls = 0
+        self.metadata_versions: List[int] = []
 
     def GetSecretMetadata(self, request, **_kwargs):
         self.metadata_calls += 1
+        self.metadata_versions.append(request.version)
         return kms_pb2.GetSecretMetadataResponse(
             secret=kms_pb2.SecretMetadata(
                 ref=request.ref, content_type="string", labels={"current": 1},
@@ -273,13 +275,13 @@ class _Client:
             content_type=response.content_type,
         )
 
-    def get_secret_metadata(self, key, *, timeout=None):
+    def _get_secret_metadata_version(self, key, *, version, timeout=None):
         del timeout
         env, app, resource_key = key[1:].split("/", 2)
         response = self._secret_stub.GetSecretMetadata(
             kms_pb2.GetSecretMetadataRequest(ref=kms_pb2.ResourceRef(
                 namespace=kms_pb2.NamespaceRef(env=env, app=app), key=resource_key,
-            ))
+            ), version=version)
         )
         return kms_paramstore.models._secret_info_from_proto(response.secret)
 
@@ -405,6 +407,7 @@ def test_initial_snapshot_is_complete_immutable_redacting_and_acknowledged(monke
     assert "value-1" not in repr(snapshot)
     assert "[REDACTED]" in repr(snapshot)
     assert client._secret_stub.tokens == ["local-token"]
+    assert client._secret_stub.metadata_versions == [1]
     with pytest.raises(TypeError):
         snapshot.parameters["setting"] = "changed"
     with pytest.raises(FrozenInstanceError):
@@ -725,7 +728,7 @@ def test_superseded_candidate_stops_after_blocked_live_metadata(monkeypatch):
 
     metadata_entered = threading.Event()
     release_metadata = threading.Event()
-    original_get_metadata = client.get_secret_metadata
+    original_get_metadata = client._get_secret_metadata_version
     should_block = True
 
     def blocking_get_metadata(*args, **kwargs):
@@ -737,7 +740,7 @@ def test_superseded_candidate_stops_after_blocked_live_metadata(monkeypatch):
             assert release_metadata.wait(timeout=2)
         return result
 
-    client.get_secret_metadata = blocking_get_metadata
+    client._get_secret_metadata_version = blocking_get_metadata
     stub.activate(_release(2, 20))
     assert metadata_entered.wait(timeout=2)
     stub.activate(_release(3, 30))

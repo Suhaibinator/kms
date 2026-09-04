@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
 	kmsv1 "github.com/Suhaibinator/kms/gen/kmsv1"
 )
@@ -44,11 +46,13 @@ type bindingSecretStub struct {
 	rotateErr     error
 	purgeErr      error
 	metadataErr   error
+	metadataCalls int
 	setPreviewErr error
 	setPurgeErr   error
 }
 
 func (s *bindingSecretStub) GetSecretMetadata(_ context.Context, _ *kmsv1.GetSecretMetadataRequest) (*kmsv1.GetSecretMetadataResponse, error) {
+	s.metadataCalls++
 	return s.metadata, s.metadataErr
 }
 
@@ -198,6 +202,60 @@ func TestSecretBindAndUnbindUseOpaqueEnvironmentKey(t *testing.T) {
 				t.Fatal("command output leaked the binding key")
 			}
 		})
+	}
+}
+
+func TestBindingMutationsAcceptExplicitCurrentVersionWithoutMetadataRead(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		args []string
+		get  func(*bindingSecretStub) uint64
+	}{
+		{name: "bind", args: []string{"secret", "bind", "/prod/app/api-key"}, get: func(s *bindingSecretStub) uint64 { return s.bindReq.GetExpectedCurrentVersion() }},
+		{name: "unbind", args: []string{"secret", "unbind", "/prod/app/api-key"}, get: func(s *bindingSecretStub) uint64 { return s.unbindReq.GetExpectedCurrentVersion() }},
+		{name: "rotate", args: []string{"binding-key", "rotate", "/prod/app/api-key"}, get: func(s *bindingSecretStub) uint64 { return s.rotateReq.GetExpectedCurrentVersion() }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			stub := &bindingSecretStub{
+				metadataErr: status.Error(codes.PermissionDenied, "secret:read denied"),
+				transition:  &kmsv1.SecretVersionTransitionResponse{CurrentVersion: 8, PreviousVersion: 7, Revision: 19},
+			}
+			c := newBindingCLI(t, stub)
+			c.lookupEnv = mapLookup(map[string]string{bindingKeyEnv: testOldBindingKey, newBindingKeyEnv: testNewBindingKey})
+			args := append(tc.args, "--expected-current-version", "7", "--insecure", "--token", "identity")
+			if code := c.Run(args); code != exitOK {
+				t.Fatalf("exit = %d, stderr=%s", code, c.stderr())
+			}
+			if stub.metadataCalls != 0 {
+				t.Fatalf("metadata calls = %d, want none", stub.metadataCalls)
+			}
+			if got := tc.get(stub); got != 7 {
+				t.Fatalf("expected current version = %d, want 7", got)
+			}
+		})
+	}
+}
+
+func TestBindingMutationsRejectInvalidExpectedCurrentVersionBeforeDial(t *testing.T) {
+	for _, prefix := range [][]string{
+		{"secret", "bind", "/prod/app/api-key"},
+		{"secret", "unbind", "/prod/app/api-key"},
+		{"binding-key", "rotate", "/prod/app/api-key"},
+	} {
+		for _, value := range []string{"0", "-1", "invalid"} {
+			args := append(slices.Clone(prefix), "--expected-current-version", value)
+			c := newTestCLI()
+			c.dialOverride = func(*connFlags) (*grpc.ClientConn, error) {
+				t.Fatal("invalid expected current version reached connection setup")
+				return nil, nil
+			}
+			if code := c.Run(args); code != exitUsage {
+				t.Fatalf("args %v: exit = %d, stderr=%s", args, code, c.stderr())
+			}
+			if value == "0" && !strings.Contains(c.stderr(), "expected-current-version must be greater than zero") {
+				t.Fatalf("args %v: stderr = %q", args, c.stderr())
+			}
+		}
 	}
 }
 
