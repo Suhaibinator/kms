@@ -32,7 +32,8 @@ type managedConfigClientFactory func(kmsclient.Config) (managedConfigClient, err
 // RunManagedConfigCommand dispatches "schema upload", "defaults apply", or
 // "release create". The importing application's main normally passes
 // os.Args[1:] and the generated GeneratedSchema and EncodeDefaultsArtifact
-// functions.
+// functions. Every subcommand uses the same flag, KMS_* environment, and
+// built-in-default precedence for connection settings.
 func RunManagedConfigCommand[P ~string, T any](
 	args []string,
 	stdout io.Writer,
@@ -86,14 +87,10 @@ func runManagedConfigCommand[P ~string, T any](
 }
 
 type managedReleaseFlags struct {
+	managedConnectionFlags
 	profile  string
-	endpoint string
 	metadata string
 	execute  bool
-	insecure bool
-	ca       string
-	cert     string
-	key      string
 }
 
 func runManagedReleaseCreate[P ~string, T any](
@@ -206,13 +203,9 @@ func parseManagedReleaseFlags(args []string, stdout, stderr io.Writer) (managedR
 	set := flag.NewFlagSet("managed-config release create", flag.ContinueOnError)
 	set.SetOutput(stderr)
 	set.StringVar(&result.profile, "profile", "", "application defaults profile")
-	set.StringVar(&result.endpoint, "endpoint", "localhost:8443", "KMS gRPC endpoint")
 	set.StringVar(&result.metadata, "metadata-json", "", "non-sensitive release metadata JSON")
 	set.BoolVar(&result.execute, "execute", false, "create after a fresh preview")
-	set.BoolVar(&result.insecure, "insecure", false, "disable TLS for local development")
-	set.StringVar(&result.ca, "ca", "", "CA bundle for server verification")
-	set.StringVar(&result.cert, "cert", "", "client certificate for mTLS")
-	set.StringVar(&result.key, "key", "", "client private key for mTLS")
+	addManagedConnectionFlags(set, &result.managedConnectionFlags)
 	set.Usage = func() {
 		if stdout != nil {
 			_, _ = fmt.Fprint(stdout, managedReleaseUsage())
@@ -227,6 +220,7 @@ func parseManagedReleaseFlags(args []string, stdout, stderr io.Writer) (managedR
 	if set.NArg() != 0 {
 		return managedReleaseFlags{}, false, errors.New("positional arguments are not supported")
 	}
+	resolveManagedConnectionFlags(set, &result.managedConnectionFlags)
 	if !canonicalDefaultsText(result.profile, false) {
 		return managedReleaseFlags{}, false, errors.New("--profile must be nonempty and canonical")
 	}
@@ -312,12 +306,8 @@ func writeManagedReleaseResult(writer io.Writer, heading string, result kmsclien
 }
 
 type managedSchemaFlags struct {
-	endpoint string
+	managedConnectionFlags
 	metadata string
-	insecure bool
-	ca       string
-	cert     string
-	key      string
 }
 
 func runManagedSchemaUpload(
@@ -376,12 +366,8 @@ func parseManagedSchemaFlags(args []string, stdout, stderr io.Writer) (managedSc
 	var result managedSchemaFlags
 	set := flag.NewFlagSet("managed-config schema upload", flag.ContinueOnError)
 	set.SetOutput(stderr)
-	set.StringVar(&result.endpoint, "endpoint", "localhost:8443", "KMS gRPC endpoint")
 	set.StringVar(&result.metadata, "metadata-json", "", "non-sensitive metadata JSON")
-	set.BoolVar(&result.insecure, "insecure", false, "disable TLS for local development")
-	set.StringVar(&result.ca, "ca", "", "CA bundle for server verification")
-	set.StringVar(&result.cert, "cert", "", "client certificate for mTLS")
-	set.StringVar(&result.key, "key", "", "client private key for mTLS")
+	addManagedConnectionFlags(set, &result.managedConnectionFlags)
 	set.Usage = func() {
 		if stdout != nil {
 			_, _ = fmt.Fprint(stdout, managedSchemaUsage())
@@ -396,6 +382,7 @@ func parseManagedSchemaFlags(args []string, stdout, stderr io.Writer) (managedSc
 	if set.NArg() != 0 {
 		return managedSchemaFlags{}, false, errors.New("positional arguments are not supported")
 	}
+	resolveManagedConnectionFlags(set, &result.managedConnectionFlags)
 	return result, false, nil
 }
 
@@ -422,12 +409,12 @@ func managedReleaseUsage() string {
 	return "Usage: managed-config release create --profile <profile> [flags]\n\n" +
 		"Flags:\n" +
 		"  --profile <profile>     Application defaults profile (required)\n" +
-		"  --endpoint <host:port>  KMS gRPC endpoint (default localhost:8443)\n" +
+		"  --endpoint <host:port>  KMS gRPC endpoint (env KMS_ENDPOINT; default localhost:8443)\n" +
 		"  --metadata-json JSON    Non-sensitive release metadata\n" +
 		"  --execute               Create after a fresh preview; does not activate\n" +
 		"  --insecure              Disable TLS for local development\n" +
-		"  --ca FILE               CA bundle for server verification\n" +
-		"  --cert FILE --key FILE  Client certificate and private key for mTLS\n" +
+		"  --ca FILE               CA bundle for server verification (env KMS_CA_FILE)\n" +
+		"  --cert FILE --key FILE  Client certificate and private key for mTLS (env KMS_CLIENT_CERT_FILE / KMS_CLIENT_KEY_FILE)\n" +
 		"  --help                  Show this help\n\n" +
 		"The identity bearer token is read from KMS_TOKEN.\n"
 }
@@ -435,11 +422,11 @@ func managedReleaseUsage() string {
 func managedSchemaUsage() string {
 	return "Usage: managed-config schema upload [flags]\n\n" +
 		"Flags:\n" +
-		"  --endpoint <host:port>  KMS gRPC endpoint (default localhost:8443)\n" +
+		"  --endpoint <host:port>  KMS gRPC endpoint (env KMS_ENDPOINT; default localhost:8443)\n" +
 		"  --metadata-json JSON    Non-sensitive schema metadata\n" +
 		"  --insecure              Disable TLS for local development\n" +
-		"  --ca FILE               CA bundle for server verification\n" +
-		"  --cert FILE --key FILE  Client certificate and private key for mTLS\n" +
+		"  --ca FILE               CA bundle for server verification (env KMS_CA_FILE)\n" +
+		"  --cert FILE --key FILE  Client certificate and private key for mTLS (env KMS_CLIENT_CERT_FILE / KMS_CLIENT_KEY_FILE)\n" +
 		"  --help                  Show this help\n\n" +
 		"The identity bearer token is read from KMS_TOKEN.\n"
 }

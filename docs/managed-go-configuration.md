@@ -687,8 +687,10 @@ generated defaults. Existing secret aliases retain the active release's exact
 secret pins even when their `current` labels have moved; first-release and new
 secret aliases resolve `current`. Missing secrets fail closed. This command
 never activates a release—the new inactive version is reviewed and activated
-in the web console. All three commands read `KMS_TOKEN` and accept the standard
-endpoint/TLS flags. `RunDefaultsApplier` remains available as a standalone API.
+in the web console. All three commands read `KMS_TOKEN`; endpoint, CA,
+certificate, and key resolve from flags, then their standard `KMS_*`
+environment variables, then the built-in endpoint default. `RunDefaultsApplier`
+remains available as a standalone API.
 
 ### Check the generated contract
 

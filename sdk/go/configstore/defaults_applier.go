@@ -31,22 +31,19 @@ type defaultsApplyClient interface {
 type defaultsApplyClientFactory func(kmsclient.Config) (defaultsApplyClient, error)
 
 type defaultsApplierFlags struct {
+	managedConnectionFlags
 	profile           string
-	endpoint          string
 	overwrite         bool
 	updateDefinition  bool
 	execute           bool
 	confirmProduction string
-	insecure          bool
-	ca                string
-	cert              string
-	key               string
 }
 
 // RunDefaultsApplier runs a complete source-defaults preview or apply command.
 // The importing application's main normally passes os.Args[1:], standard I/O,
 // its defaults provider, generated artifact encoder, and profile-to-namespace
-// resolver. The KMS identity token is read from KMS_TOKEN. Definition drift
+// resolver. Connection settings resolve from flags, then their KMS_*
+// environment variables, then the built-in endpoint default. Definition drift
 // is previewed read-only and requires --update-definition for execution.
 func RunDefaultsApplier[P ~string, T any](
 	args []string,
@@ -171,15 +168,11 @@ func parseDefaultsApplierFlags(args []string, stdout, stderr io.Writer) (default
 	set := flag.NewFlagSet("defaults-applier", flag.ContinueOnError)
 	set.SetOutput(stderr)
 	set.StringVar(&result.profile, "profile", "", "application defaults profile")
-	set.StringVar(&result.endpoint, "endpoint", "localhost:8443", "KMS gRPC endpoint")
 	set.BoolVar(&result.overwrite, "overwrite", false, "permit differing parameter values to be updated")
 	set.BoolVar(&result.updateDefinition, "update-definition", false, "permit the application contract and schema pin to be updated")
 	set.BoolVar(&result.execute, "execute", false, "apply after a fresh preview")
 	set.StringVar(&result.confirmProduction, "confirm-production", "", "production environment name confirmation")
-	set.BoolVar(&result.insecure, "insecure", false, "disable TLS for local development")
-	set.StringVar(&result.ca, "ca", "", "CA bundle for server verification")
-	set.StringVar(&result.cert, "cert", "", "client certificate for mTLS")
-	set.StringVar(&result.key, "key", "", "client private key for mTLS")
+	addManagedConnectionFlags(set, &result.managedConnectionFlags)
 	set.Usage = func() {
 		if stdout == nil {
 			return
@@ -195,6 +188,7 @@ func parseDefaultsApplierFlags(args []string, stdout, stderr io.Writer) (default
 	if set.NArg() != 0 {
 		return defaultsApplierFlags{}, false, errors.New("positional arguments are not supported")
 	}
+	resolveManagedConnectionFlags(set, &result.managedConnectionFlags)
 	if !canonicalDefaultsText(result.profile, false) {
 		return defaultsApplierFlags{}, false, errors.New("--profile must be nonempty and canonical")
 	}
@@ -205,14 +199,14 @@ func defaultsApplierUsage() string {
 	return "Usage: defaults-applier --profile <profile> [flags]\n\n" +
 		"Flags:\n" +
 		"  --profile <profile>       Application defaults profile (required)\n" +
-		"  --endpoint <host:port>    KMS gRPC endpoint (default localhost:8443)\n" +
+		"  --endpoint <host:port>    KMS gRPC endpoint (env KMS_ENDPOINT; default localhost:8443)\n" +
 		"  --overwrite               Permit differing parameter values to be updated\n" +
 		"  --update-definition       Permit the application contract and schema pin to be updated\n" +
 		"  --execute                 Apply after a fresh preview\n" +
 		"  --confirm-production ENV  Required with --execute for production environments\n" +
 		"  --insecure                Disable TLS for local development\n" +
-		"  --ca FILE                 CA bundle for server verification\n" +
-		"  --cert FILE --key FILE    Client certificate and private key for mTLS\n" +
+		"  --ca FILE                 CA bundle for server verification (env KMS_CA_FILE)\n" +
+		"  --cert FILE --key FILE    Client certificate and private key for mTLS (env KMS_CLIENT_CERT_FILE / KMS_CLIENT_KEY_FILE)\n" +
 		"  --help                    Show this help\n\n" +
 		"The identity bearer token is read from KMS_TOKEN.\n"
 }
