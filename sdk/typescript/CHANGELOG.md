@@ -26,6 +26,9 @@ a minor release may contain documented breaking changes.
 
 ### Added
 
+- `PurgeCleanupPendingError` distinguishes the fail-closed case where a secret
+  cohort purge committed but active database artifact cleanup remains pending.
+  This outcome is not retry-safe with a discarded binding key.
 - `onApplied(report: AppliedReport)` managed-store callback with immutable
   `phase`, `release`, `defaultDivergent`, `changed()` (`FieldChange` list,
   secrets path-only) and `groups()` (canonical non-secret parameter documents);

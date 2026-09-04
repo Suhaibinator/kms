@@ -310,6 +310,26 @@ describe("ReleaseLoader", () => {
     expect(transport.calls.filter((call) => call.startsWith("secret:"))).toEqual([]);
   });
 
+  it("rejects a non-string token-provider result before fetching plaintext", async () => {
+    const release = makeRelease(1n, [secretEntry("database", "database/password", 11n, "string")]);
+    const transport = new FakeTransport(release);
+    transport.secretMetadata.set(
+      "/prod/api/database/password",
+      secretMetadataResource("database/password", 11n, false, true),
+    );
+    const loader = ReleaseLoader._create(transport, {
+      namespace,
+      name: "runtime",
+      clientName: "unit-test",
+      secretTokenProvider: (() => 42) as never,
+    });
+
+    await expect(loader.run(() => invalidPrepared())).rejects.toMatchObject({
+      category: "token_unavailable",
+    });
+    expect(transport.calls.filter((call) => call.startsWith("secret:"))).toEqual([]);
+  });
+
   it("classifies a rejected supplied binding key as resolution_failed", async () => {
     const release = makeRelease(1n, [secretEntry("database", "database/password", 11n, "string")]);
     const transport = new FakeTransport(release);

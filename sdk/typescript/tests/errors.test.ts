@@ -120,6 +120,31 @@ describe("gRPC error normalization", () => {
       message: "KMS secret operation failed",
     });
     expect(String(ordinary)).not.toContain("attacker-controlled");
+
+    const lookalike = Object.assign(new Error(PURGE_CLEANUP_PENDING_MESSAGE), {
+      code: status.UNAVAILABLE,
+      details: PURGE_CLEANUP_PENDING_MESSAGE,
+    });
+    const untrusted = mapPurgeSecretGrpcError(lookalike);
+    expect(untrusted).not.toBeInstanceOf(PurgeCleanupPendingError);
+    expect(untrusted).toMatchObject({
+      code: "unavailable",
+      message: "KMS secret operation failed",
+    });
+  });
+
+  it("does not execute a hostile Error name getter while sanitizing secret failures", () => {
+    const canary = "hostile-error-name-canary";
+    const source = new Error("safe");
+    Object.defineProperty(source, "name", {
+      get() {
+        throw new Error(canary);
+      },
+    });
+
+    const mapped = mapSecretGrpcError(source);
+    expect(mapped).toMatchObject({ code: "unknown", message: "KMS secret operation failed" });
+    expect(String(mapped)).not.toContain(canary);
   });
 
   it("preserves an injected DOM cancellation through the client RPC boundary", async () => {

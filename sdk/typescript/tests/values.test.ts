@@ -155,6 +155,31 @@ describe("SecretValue", () => {
     expect(unavailable.initialized).toBe(false);
   });
 
+  it("does not retain credentials reflected by a custom secret resolver", async () => {
+    const bindingKey = "resolver-reflected-binding-key-canary";
+    const token = "resolver-reflected-access-token-canary";
+    const client = new FakeResolver();
+    client.secretError = new Error(`${bindingKey}|${token}`);
+    const value = new SecretValue("secret/key", { bindKey: bindingKey, token });
+
+    const error = await value.init(client).catch((reason: unknown) => reason);
+    expect(error).toMatchObject({ code: "unknown" });
+    expect((error as Error & { cause?: unknown }).cause).toBeUndefined();
+    for (const rendered of [String(error), inspect(error), JSON.stringify(error)]) {
+      expect(rendered).not.toContain(bindingKey);
+      expect(rendered).not.toContain(token);
+    }
+  });
+
+  it("rejects non-string binding-key declarations without coercion", () => {
+    const hostile = Object.freeze({
+      toString() {
+        throw new Error("declaration-coercion-canary");
+      },
+    });
+    expect(() => new SecretValue({ bindKey: hostile as never })).toThrow(ConfigError);
+  });
+
   it("allows broad fallback only when opted in and never hides config errors", async () => {
     const client = new FakeResolver();
     client.fallbackToDefaultsOnError = true;

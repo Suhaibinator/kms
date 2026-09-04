@@ -792,6 +792,40 @@ describe("KmsClient", () => {
     await client.close();
   });
 
+  it("rejects non-string secret credentials before making an RPC", async () => {
+    const transport = new FakeTransport(() => {
+      throw new Error("unexpected RPC");
+    });
+    const client = new KmsClient({ transport, namespace: "prod/api" });
+    const hostile = Object.freeze({
+      toString() {
+        throw new Error("credential-coercion-canary");
+      },
+    });
+    const calls: readonly (() => Promise<unknown>)[] = [
+      () => client.getSecret("secret", { bindingKey: hostile as never }),
+      () => client.getSecret("secret", { secretToken: hostile as never }),
+      () => client.putSecret("secret", "value", { bindingKey: hostile as never }),
+      () => client.bindSecret("secret", { bindingKey: hostile as never }),
+      () => client.unbindSecret("secret", { bindingKey: hostile as never }),
+      () => client.previewSecretBindingCohort("secret", { bindingKey: hostile as never }),
+      () =>
+        client.rotateSecretBindingKey("secret", {
+          bindingKey: "old",
+          newBindingKey: hostile as never,
+        }),
+      () => client.purgeSecretBindingCohort("secret", { bindingKey: hostile as never }),
+    ];
+
+    for (const call of calls) {
+      const error = await call().catch((reason: unknown) => reason);
+      expect(error).toBeInstanceOf(ConfigError);
+      expect(String(error)).not.toContain("credential-coercion-canary");
+    }
+    expect(transport.calls).toHaveLength(0);
+    await client.close();
+  });
+
   it("coalesces concurrent close calls until transport cleanup completes", async () => {
     const base = new FakeTransport(() => ({}));
     let finishClose!: () => void;

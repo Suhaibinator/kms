@@ -1,4 +1,11 @@
-import { ConfigError, isKmsError, NotInitializedError, wrapError } from "./errors.js";
+import {
+  ConfigError,
+  isKmsError,
+  KmsError,
+  mapSecretGrpcError,
+  NotInitializedError,
+  wrapError,
+} from "./errors.js";
 import { type ResourceRef, splitDisplayPath, type VersionRef } from "./refs.js";
 import { REDACTED, Secret } from "./secret.js";
 
@@ -98,12 +105,20 @@ function secretOptions(
 ): Required<SecretValueOptions> {
   const input = typeof keyOrOptions === "string" ? { ...options, key: keyOrOptions } : keyOrOptions;
   return {
-    key: input.key ?? "",
-    token: input.token ?? "",
-    bindKey: input.bindKey ?? "",
-    envVar: input.envVar ?? "",
-    default: input.default ?? "",
+    key: optionalSecretOption(input?.key, "key"),
+    token: optionalSecretOption(input?.token, "token"),
+    bindKey: optionalSecretOption(input?.bindKey, "bindKey"),
+    envVar: optionalSecretOption(input?.envVar, "envVar"),
+    default: optionalSecretOption(input?.default, "default"),
   };
+}
+
+function optionalSecretOption(value: unknown, name: string): string {
+  if (value === undefined) return "";
+  if (typeof value !== "string") {
+    throw new ConfigError(`SecretValue ${name} must be a string`);
+  }
+  return value;
 }
 
 function parameterOptions(
@@ -247,7 +262,13 @@ export class SecretValue {
           this.#resolved = new Secret(this.#default, { path: this.#key });
           return;
         }
-        throw wrapError(`resolve secret ${JSON.stringify(this.#key)}`, error);
+        const mapped =
+          mapSecretGrpcError(error) ?? new KmsError("unknown", "KMS secret operation failed");
+        throw new KmsError(
+          mapped.code,
+          `resolve secret ${JSON.stringify(this.#key)}: ${mapped.message}`,
+          mapped.grpcCode === undefined ? {} : { grpcCode: mapped.grpcCode },
+        );
       }
     }
 

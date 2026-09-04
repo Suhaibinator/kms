@@ -279,6 +279,13 @@ try {
 }
 ```
 
+`PurgeCleanupPendingError` is the distinct post-commit outcome for a cohort
+purge whose SQLite artifact cleanup is still pending. The logical purge has
+already happened and KMS has failed closed, so do not retry it as though it had
+rolled back. Handle this class separately from an ordinary `unavailable` error
+and restore service by completing the documented database cleanup/reopen
+procedure.
+
 `Secret`, `SecretValue`, and release secrets redact string conversion, JSON,
 and Node inspection. Their byte accessors return defensive copies. Once an
 application explicitly extracts plaintext, that copy is ordinary application

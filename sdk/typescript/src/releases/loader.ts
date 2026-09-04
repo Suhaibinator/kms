@@ -656,8 +656,13 @@ export class ReleaseLoader {
           throw new ResolutionError("token_unavailable");
         }
         try {
-          token =
-            (await this.#options.secretTokenProvider(entry.alias, metadata.path, signal)) ?? "";
+          const provided = await this.#options.secretTokenProvider(
+            entry.alias,
+            metadata.path,
+            signal,
+          );
+          if (typeof provided !== "string") throw new ResolutionError("token_unavailable");
+          token = provided;
         } catch {
           throw new ResolutionError(signal.aborted ? "superseded" : "token_unavailable");
         }

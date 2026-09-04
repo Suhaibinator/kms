@@ -193,10 +193,11 @@ export function mapSecretGrpcError(error: ServiceError | Error | unknown): KmsEr
       ...(error.grpcCode === undefined ? {} : { grpcCode: error.grpcCode }),
     });
   }
-  if (error instanceof Error && error.name === "AbortError") {
+  const errorName = safeErrorName(error);
+  if (errorName === "AbortError") {
     return new KmsError("cancelled", "KMS secret operation failed");
   }
-  if (error instanceof Error && error.name === "TimeoutError") {
+  if (errorName === "TimeoutError") {
     return new KmsError("deadline_exceeded", "KMS secret operation failed");
   }
   const grpcCode = grpcCodeOf(error);
@@ -219,13 +220,23 @@ export function mapPurgeSecretGrpcError(
 }
 
 function isPurgeCleanupPending(error: unknown): boolean {
-  if (grpcCodeOf(error) !== status.UNAVAILABLE) return false;
-  if (error instanceof KmsError) return error.message === PURGE_CLEANUP_PENDING_MESSAGE;
-  if (!(error instanceof Error)) return false;
   try {
-    return (error as Partial<GrpcErrorLike>).details === PURGE_CLEANUP_PENDING_MESSAGE;
+    return (
+      isGrpcErrorLike(error) &&
+      error.code === status.UNAVAILABLE &&
+      error.details === PURGE_CLEANUP_PENDING_MESSAGE
+    );
   } catch {
     return false;
+  }
+}
+
+function safeErrorName(error: unknown): string | undefined {
+  if (!(error instanceof Error)) return undefined;
+  try {
+    return typeof error.name === "string" ? error.name : undefined;
+  } catch {
+    return undefined;
   }
 }
 

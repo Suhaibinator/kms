@@ -338,11 +338,13 @@ export class KmsClient {
   }
 
   async getSecret(key: string, options: GetOptions = {}): Promise<Secret> {
-    const ref = await this.#resolveResourceRefForCall(key, options);
+    const secretToken = optionalCredential(options.secretToken, "getSecret secretToken");
+    const bindingKey = optionalCredential(options.bindingKey, "getSecret bindingKey");
     const selector = normalizeVersionRef(options);
+    const ref = await this.#resolveResourceRefForCall(key, options);
     // Secret protection is live metadata. Never serve plaintext from cache:
     // doing so could bypass binding/token protection added after a prior read.
-    return this.fetchSecret(ref, selector, options);
+    return this.fetchSecret(ref, selector, { ...options, secretToken, bindingKey });
   }
 
   /** @internal Exact-ref fetch used by the release runtime. */
@@ -352,6 +354,8 @@ export class KmsClient {
     options: GetOptions = {},
   ): Promise<Secret> {
     this.#assertOpen();
+    const secretToken = optionalCredential(options.secretToken, "fetchSecret secretToken");
+    const bindingKey = optionalCredential(options.bindingKey, "fetchSecret bindingKey");
     try {
       const response = await this.#transport.unary(
         SecretServiceService.getSecret,
@@ -359,8 +363,8 @@ export class KmsClient {
           ref: toWireRef(ref),
           version: selector.version,
           label: selector.label,
-          secretToken: options.secretToken ?? "",
-          bindingKey: options.bindingKey ?? "",
+          secretToken,
+          bindingKey,
         },
         this.#callOptions(options),
       );
@@ -418,30 +422,33 @@ export class KmsClient {
     ) {
       throw new ConfigError("expiresAtUnixMs must be a bigint in the non-negative int64 range");
     }
-    const ref = await this.#resolveResourceRefForCall(key, options);
+    const bindingKey = optionalCredential(options.bindingKey, "putSecret bindingKey");
     const plaintext = typeof value === "string" ? Buffer.from(value) : Buffer.from(value);
     try {
-      const response = await this.#transport.unary(
-        SecretServiceService.putSecret,
-        {
-          ref: toWireRef(ref),
-          value: plaintext,
-          contentType: options.contentType ?? "",
-          metadataJson: options.metadataJson ?? "",
-          bindingKey: options.bindingKey ?? "",
-          generateAccessToken: options.generateAccessToken ?? false,
-          expiresAtUnixMs,
-        },
-        this.#callOptions(options),
-      );
-      this.#cache.invalidateSecret(displayPath(ref));
-      return Object.freeze({
-        version: response.version,
-        revision: response.revision,
-        accessToken: response.accessToken,
-      });
-    } catch (error) {
-      throwSecretMapped(error);
+      const ref = await this.#resolveResourceRefForCall(key, options);
+      try {
+        const response = await this.#transport.unary(
+          SecretServiceService.putSecret,
+          {
+            ref: toWireRef(ref),
+            value: plaintext,
+            contentType: options.contentType ?? "",
+            metadataJson: options.metadataJson ?? "",
+            bindingKey,
+            generateAccessToken: options.generateAccessToken ?? false,
+            expiresAtUnixMs,
+          },
+          this.#callOptions(options),
+        );
+        this.#cache.invalidateSecret(displayPath(ref));
+        return Object.freeze({
+          version: response.version,
+          revision: response.revision,
+          accessToken: response.accessToken,
+        });
+      } catch (error) {
+        throwSecretMapped(error);
+      }
     } finally {
       plaintext.fill(0);
     }
@@ -633,27 +640,33 @@ export class KmsClient {
   }
 
   async bindSecret(key: string, options: BindSecretOptions): Promise<SecretVersionMutationResult> {
-    return this.#bindingMutation(key, options.version ?? 0n, options.bindingKey, options, true);
+    const bindingKey = requiredCredential(options?.bindingKey, "bindSecret bindingKey");
+    return this.#bindingMutation(key, options?.version ?? 0n, bindingKey, options, true);
   }
 
   async unbindSecret(
     key: string,
     options: BindSecretOptions,
   ): Promise<SecretVersionMutationResult> {
-    return this.#bindingMutation(key, options.version ?? 0n, options.bindingKey, options, false);
+    const bindingKey = requiredCredential(options?.bindingKey, "unbindSecret bindingKey");
+    return this.#bindingMutation(key, options?.version ?? 0n, bindingKey, options, false);
   }
 
   async previewSecretBindingCohort(
     key: string,
     options: PreviewSecretBindingCohortOptions,
   ): Promise<SecretBindingCohortResult> {
-    const anchorVersion = options.anchorVersion ?? 0n;
+    const bindingKey = requiredCredential(
+      options?.bindingKey,
+      "previewSecretBindingCohort bindingKey",
+    );
+    const anchorVersion = options?.anchorVersion ?? 0n;
     assertUint64(anchorVersion, "previewSecretBindingCohort anchorVersion");
     const ref = await this.#resolveResourceRefForCall(key, options);
     try {
       const response = await this.#transport.unary(
         SecretServiceService.previewSecretBindingCohort,
-        { ref: toWireRef(ref), anchorVersion, bindingKey: options.bindingKey },
+        { ref: toWireRef(ref), anchorVersion, bindingKey },
         this.#callOptions(options),
       );
       return frozenBindingResult(response);
@@ -666,7 +679,12 @@ export class KmsClient {
     key: string,
     options: RotateSecretBindingKeyOptions,
   ): Promise<SecretBindingCohortResult> {
-    const anchorVersion = options.anchorVersion ?? 0n;
+    const bindingKey = requiredCredential(options?.bindingKey, "rotateSecretBindingKey bindingKey");
+    const newBindingKey = requiredCredential(
+      options?.newBindingKey,
+      "rotateSecretBindingKey newBindingKey",
+    );
+    const anchorVersion = options?.anchorVersion ?? 0n;
     assertUint64(anchorVersion, "rotateSecretBindingKey anchorVersion");
     const guards = bindingCohortGuards(options, "rotateSecretBindingKey");
     const ref = await this.#resolveResourceRefForCall(key, options);
@@ -676,8 +694,8 @@ export class KmsClient {
       {
         ref: toWireRef(ref),
         anchorVersion,
-        bindingKey: options.bindingKey,
-        newBindingKey: options.newBindingKey,
+        bindingKey,
+        newBindingKey,
         ...guards,
       },
       options,
@@ -689,7 +707,11 @@ export class KmsClient {
     key: string,
     options: PurgeSecretBindingCohortOptions,
   ): Promise<SecretBindingCohortResult> {
-    const anchorVersion = options.anchorVersion ?? 0n;
+    const bindingKey = requiredCredential(
+      options?.bindingKey,
+      "purgeSecretBindingCohort bindingKey",
+    );
+    const anchorVersion = options?.anchorVersion ?? 0n;
     assertUint64(anchorVersion, "purgeSecretBindingCohort anchorVersion");
     const guards = bindingCohortGuards(options, "purgeSecretBindingCohort");
     const ref = await this.#resolveResourceRefForCall(key, options);
@@ -699,7 +721,7 @@ export class KmsClient {
       {
         ref: toWireRef(ref),
         anchorVersion,
-        bindingKey: options.bindingKey,
+        bindingKey,
         ...guards,
       },
       options,
@@ -1126,6 +1148,18 @@ function assertUint64(value: bigint, name: string, positive = false): void {
       `${name} must be a ${positive ? "positive " : ""}bigint in the uint64 range`,
     );
   }
+}
+
+function optionalCredential(value: unknown, name: string): string {
+  if (value === undefined) return "";
+  return requiredCredential(value, name);
+}
+
+function requiredCredential(value: unknown, name: string): string {
+  if (typeof value !== "string") {
+    throw new ConfigError(`${name} must be a string`);
+  }
+  return value;
 }
 
 function bindingCohortGuards(
