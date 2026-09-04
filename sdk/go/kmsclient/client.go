@@ -31,6 +31,8 @@ const (
 	callbackQueueSize = 1024
 )
 
+var errSecretResponseIdentityMismatch = errors.New("kmsclient: secret response identity mismatch")
+
 // Config configures a Client.
 type Config struct {
 	// Endpoint is the server address as host:port. For custom transports it
@@ -401,13 +403,12 @@ func (c *Client) GetSecret(ctx context.Context, key string, opts ...GetOption) (
 	if err != nil {
 		return Secret{}, mapSecretError(err)
 	}
-	path := display
-	if resp.GetRef() != nil {
-		path = refFromProto(resp.GetRef()).display()
+	if resp == nil || !sameResourceRef(resp.GetRef(), r.resourceProto()) || resp.GetVersion() == 0 || (o.version != 0 && resp.GetVersion() != o.version) {
+		return Secret{}, errSecretResponseIdentityMismatch
 	}
 	s := Secret{
 		value:       resp.GetValue(),
-		path:        path,
+		path:        display,
 		version:     resp.GetVersion(),
 		contentType: resp.GetContentType(),
 	}

@@ -943,6 +943,9 @@ func (l *ReleaseLoader) resolveEntry(ctx context.Context, entry *kmsv1.Configura
 		}
 		secret, err := l.client.GetSecret(ctx, r.display(), WithVersion(entry.GetVersion()), WithSecretToken(token), WithBindingKey(bindingKey))
 		if err != nil {
+			if errors.Is(err, errSecretResponseIdentityMismatch) {
+				return out, ReleaseRejectVersionMismatch, err
+			}
 			return out, ReleaseRejectResolutionFailed, err
 		}
 		if secret.Version() != entry.GetVersion() {

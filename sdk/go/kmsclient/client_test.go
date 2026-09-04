@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	kmsv1 "github.com/Suhaibinator/kms/gen/kmsv1"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
@@ -39,6 +40,63 @@ func TestGetParameterAndSecret(t *testing.T) {
 	}
 	if sec.Path() != "/prod/app/db/password" {
 		t.Errorf("Secret.Path = %q", sec.Path())
+	}
+}
+
+func TestGetSecretRejectsUnauthoritativeResponseIdentity(t *testing.T) {
+	validRef := testResource("password")
+	tests := []struct {
+		name     string
+		response *kmsv1.GetSecretResponse
+		options  []GetOption
+	}{
+		{
+			name:     "missing ref",
+			response: &kmsv1.GetSecretResponse{Version: 7, Value: []byte("response-secret-canary")},
+		},
+		{
+			name: "missing namespace",
+			response: &kmsv1.GetSecretResponse{
+				Ref: &kmsv1.ResourceRef{Key: "password"}, Version: 7, Value: []byte("response-secret-canary"),
+			},
+		},
+		{
+			name: "wrong ref",
+			response: &kmsv1.GetSecretResponse{
+				Ref: testResource("different"), Version: 7, Value: []byte("response-secret-canary"),
+			},
+		},
+		{
+			name: "zero version",
+			response: &kmsv1.GetSecretResponse{
+				Ref: validRef, Value: []byte("response-secret-canary"),
+			},
+		},
+		{
+			name: "wrong exact version",
+			response: &kmsv1.GetSecretResponse{
+				Ref: validRef, Version: 8, Value: []byte("response-secret-canary"),
+			},
+			options: []GetOption{WithVersion(7)},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server := newReleaseLoaderServer()
+			server.secrets["password"] = tt.response
+			client := newReleaseTestClient(t, server)
+			secret, err := client.GetSecret(context.Background(), "password", tt.options...)
+			if !errors.Is(err, errSecretResponseIdentityMismatch) {
+				t.Fatalf("GetSecret error = %v, want identity mismatch", err)
+			}
+			if err.Error() != "kmsclient: secret response identity mismatch" || strings.Contains(err.Error(), "response-secret-canary") {
+				t.Fatalf("GetSecret returned unsafe error %q", err)
+			}
+			if secret.StringValue() != "" || secret.Version() != 0 || secret.Path() != "" {
+				t.Fatalf("GetSecret returned partial secret: %v", secret)
+			}
+		})
 	}
 }
 

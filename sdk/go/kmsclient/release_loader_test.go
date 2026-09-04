@@ -27,24 +27,25 @@ type releaseLoaderServer struct {
 	kmsv1.UnimplementedSecretServiceServer
 	kmsv1.UnimplementedConfigurationReleaseServiceServer
 
-	mu                    sync.Mutex
-	active                *kmsv1.GetActiveReleaseResponse
-	parameters            map[string]*kmsv1.Parameter
-	secrets               map[string]*kmsv1.GetSecretResponse
-	secretToken           string
-	bindingKey            string
-	secretBound           bool
-	secretHasToken        bool
-	secretSummaryBound    bool
-	secretSummaryHasToken bool
-	secretState           string
-	secretDestroyedAt     int64
-	secretExpiry          int64
-	expectedToken         string
-	expectedBindKey       string
-	parameterFetches      int
-	metadataFetches       int
-	secretFetches         int
+	mu                     sync.Mutex
+	active                 *kmsv1.GetActiveReleaseResponse
+	parameters             map[string]*kmsv1.Parameter
+	secrets                map[string]*kmsv1.GetSecretResponse
+	secretToken            string
+	bindingKey             string
+	secretBound            bool
+	secretHasToken         bool
+	secretSummaryBound     bool
+	secretSummaryHasToken  bool
+	secretState            string
+	secretDestroyedAt      int64
+	secretExpiry           int64
+	secretMetadataOverride *kmsv1.SecretMetadata
+	expectedToken          string
+	expectedBindKey        string
+	parameterFetches       int
+	metadataFetches        int
+	secretFetches          int
 
 	watchEvents chan *kmsv1.WatchReleaseEvent
 	watchKills  chan struct{}
@@ -103,6 +104,11 @@ func (s *releaseLoaderServer) GetSecretMetadata(_ context.Context, req *kmsv1.Ge
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.metadataFetches++
+	if s.secretMetadataOverride != nil {
+		return &kmsv1.GetSecretMetadataResponse{
+			Secret: proto.Clone(s.secretMetadataOverride).(*kmsv1.SecretMetadata),
+		}, nil
+	}
 	secret := s.secrets[req.GetRef().GetKey()]
 	if secret == nil {
 		return nil, status.Error(5, "not found")
@@ -1539,6 +1545,72 @@ func TestReleaseLoaderRejectsReturnedResourceReferenceMismatch(t *testing.T) {
 			})
 			if err == nil || !strings.Contains(err.Error(), ReleaseRejectVersionMismatch) {
 				t.Fatalf("Run error = %v", err)
+			}
+		})
+	}
+}
+
+func TestReleaseLoaderRejectsUnauthoritativeSecretReadResponse(t *testing.T) {
+	tests := []struct {
+		name     string
+		response *kmsv1.GetSecretResponse
+	}{
+		{
+			name:     "missing ref",
+			response: &kmsv1.GetSecretResponse{Version: 4, Value: []byte("response-secret-canary"), ContentType: "text/plain"},
+		},
+		{
+			name: "mismatched ref",
+			response: &kmsv1.GetSecretResponse{
+				Ref: testResource("different-secret"), Version: 4, Value: []byte("response-secret-canary"), ContentType: "text/plain",
+			},
+		},
+		{
+			name: "zero version",
+			response: &kmsv1.GetSecretResponse{
+				Ref: testResource("password"), Value: []byte("response-secret-canary"), ContentType: "text/plain",
+			},
+		},
+		{
+			name: "mismatched exact version",
+			response: &kmsv1.GetSecretResponse{
+				Ref: testResource("password"), Version: 5, Value: []byte("response-secret-canary"), ContentType: "text/plain",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server := newReleaseLoaderServer()
+			release := testRelease(4, "settings-value")
+			server.parameters["settings"] = &kmsv1.Parameter{
+				Ref: testResource("settings"), Value: "settings-value", ContentType: "json", Version: 4,
+			}
+			server.secrets["password"] = tt.response
+			server.secretMetadataOverride = &kmsv1.SecretMetadata{
+				Ref: testResource("password"), ContentType: "text/plain", Labels: map[string]uint64{"current": 4},
+				Versions: []*kmsv1.SecretVersionInfo{{Version: 4, State: "enabled"}},
+			}
+			client := newReleaseTestClient(t, server)
+			loader, err := NewReleaseLoader(client, ReleaseLoaderConfig{Name: "runtime"})
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			snapshot, category, err := loader.resolveCandidate(
+				context.Background(),
+				namespaceRef{env: "prod", app: "app"},
+				releaseCandidate{release: release, revision: 11},
+			)
+			if err == nil || category != ReleaseRejectVersionMismatch {
+				t.Fatalf("category=%q error=%v, want %q", category, err, ReleaseRejectVersionMismatch)
+			}
+			if err.Error() != "kmsclient: secret response identity mismatch" || strings.Contains(err.Error(), "response-secret-canary") {
+				t.Fatalf("unsafe resolution error %q", err)
+			}
+			_, hasSecret := snapshot.Secret("password")
+			if snapshot.Version() != 0 || hasSecret {
+				t.Fatalf("malformed candidate produced a snapshot: %v", snapshot)
 			}
 		})
 	}
