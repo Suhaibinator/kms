@@ -348,6 +348,24 @@ func TestScrubChildCredentialEnvironmentAlsoRemovesInjectedTokenNames(t *testing
 	}
 }
 
+func TestRemoveEnvironmentNamesUsesWindowsCaseFoldingForUnavailableSecrets(t *testing.T) {
+	t.Parallel()
+	entries := []string{
+		"app_secret=stale-plain",
+		"App_Secret_B64=stale-binary",
+		"APP_SECRETISH=keep",
+		"OTHER=keep",
+	}
+	names := []string{"APP_SECRET", "APP_SECRET_B64"}
+	want := []string{"APP_SECRETISH=keep", "OTHER=keep"}
+	if got := removeEnvironmentNames(entries, names, true); !slices.Equal(got, want) {
+		t.Fatalf("case-insensitive removal = %q, want %q", got, want)
+	}
+	if got := removeEnvironmentNames(entries, names, false); !slices.Equal(got, entries) {
+		t.Fatalf("case-sensitive removal = %q, want mixed-case names preserved", got)
+	}
+}
+
 // TestExecInjectedWinsUnlessPreserveEnv: the default is that the store decides,
 // because a stale variable left in a service manager's environment is exactly
 // the drift exec exists to remove. --preserve-env inverts that and reports

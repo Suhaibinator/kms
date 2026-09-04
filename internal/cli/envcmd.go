@@ -65,8 +65,9 @@ func addEnvSelectionFlags(fs *flag.FlagSet, sel *envSelection) {
 // relative key, its /env/app/key path, or (in release mode) its alias. String
 // prints the keys only, so a token can never surface through flag help.
 type secretTokenList struct {
-	keys   []string
-	values map[string]string
+	keys    []string
+	values  map[string]string
+	invalid string // fixed diagnostic only; never derived from raw flag input
 }
 
 func (l *secretTokenList) String() string { return strings.Join(l.keys, ",") }
@@ -74,13 +75,19 @@ func (l *secretTokenList) String() string { return strings.Join(l.keys, ",") }
 func (l *secretTokenList) Set(raw string) error {
 	key, value, ok := strings.Cut(raw, "=")
 	if !ok || key == "" || value == "" {
-		return fmt.Errorf("expected KEY=VALUE")
+		if l.invalid == "" {
+			l.invalid = "must use KEY=VALUE with non-empty KEY and VALUE"
+		}
+		return nil
 	}
 	if l.values == nil {
 		l.values = map[string]string{}
 	}
 	if _, dup := l.values[key]; dup {
-		return fmt.Errorf("%s given more than once", key)
+		if l.invalid == "" {
+			l.invalid = "names the same key more than once"
+		}
+		return nil
 	}
 	l.keys = append(l.keys, key)
 	l.values[key] = value
@@ -91,6 +98,12 @@ var _ flag.Value = (*secretTokenList)(nil)
 
 // validate checks the selection flags that do not need the server.
 func (sel *envSelection) validate() error {
+	if sel.tokens.invalid != "" {
+		return usageError("--secret-token " + sel.tokens.invalid)
+	}
+	if sel.tokenFiles.invalid != "" {
+		return usageError("--secret-token-file " + sel.tokenFiles.invalid)
+	}
 	if sel.prefix != "" && sel.release != "" {
 		return usageError("--prefix and --release are mutually exclusive: a release fixes its own entries")
 	}

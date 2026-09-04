@@ -48,6 +48,14 @@ func envTestDigest(value string) string {
 	return hex.EncodeToString(sum[:])
 }
 
+func envTestTokenGatedSecret(key string) *kmsv1.SecretMetadata {
+	return &kmsv1.SecretMetadata{
+		Ref: envTestRef("prod", "app", key), HasAccessToken: true,
+		Labels:   map[string]uint64{"current": 1},
+		Versions: []*kmsv1.SecretVersionInfo{{Version: 1, State: "enabled", HasAccessToken: true}},
+	}
+}
+
 // --- stubs ------------------------------------------------------------------
 
 // envCall records one RPC a stub answered together with the credentials and
@@ -895,6 +903,57 @@ func TestEnvMissingSecretTokenFailsClosedUnlessIncompleteIsExplicit(t *testing.T
 	})
 }
 
+func TestEnvIncompleteModeValidatesOmittedSecretNames(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name    string
+		params  []*kmsv1.Parameter
+		secrets []*kmsv1.SecretMetadata
+		want    string
+	}{
+		{
+			name:    "unavailable key needs env prefix",
+			secrets: []*kmsv1.SecretMetadata{envTestTokenGatedSecret("2fa-secret")},
+			want:    "mapping unavailable secret output: \"2fa-secret\" maps to \"2FA_SECRET\", which starts with a digit: use --env-prefix",
+		},
+		{
+			name: "possible binary name collides with resolved value",
+			params: []*kmsv1.Parameter{
+				{Ref: envTestRef("prod", "app", "api-b64"), Value: "resolved", ContentType: "string"},
+			},
+			secrets: []*kmsv1.SecretMetadata{envTestTokenGatedSecret("api")},
+			want:    "unavailable secret /prod/app/api and another selected value both map to environment variable API_B64",
+		},
+		{
+			name: "two omitted possible names collide",
+			secrets: []*kmsv1.SecretMetadata{
+				envTestTokenGatedSecret("api"),
+				envTestTokenGatedSecret("api-b64"),
+			},
+			want: "unavailable secrets /prod/app/api and /prod/app/api-b64 may both map to environment variable API_B64",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			f := newEnvFixture(t)
+			f.params.list = tc.params
+			f.secrets.list = tc.secrets
+			if code := f.run("--allow-incomplete-secrets"); code != exitError {
+				t.Fatalf("exit = %d, want %d (stderr=%s)", code, exitError, f.stderr())
+			}
+			if !strings.Contains(f.stderr(), tc.want) {
+				t.Fatalf("stderr = %s, want %q", f.stderr(), tc.want)
+			}
+			if f.stdout() != "" {
+				t.Fatalf("stdout = %q, want no output after mapping failure", f.stdout())
+			}
+			if n := f.rec.count("GetSecret"); n != 0 {
+				t.Fatalf("GetSecret called %d times for unavailable-only selection", n)
+			}
+		})
+	}
+}
+
 // TestEnvWrongSecretTokenExitsFour: the server answers PermissionDenied, and
 // the CLI must surface that code rather than flattening it to 1.
 func TestEnvWrongSecretTokenExitsFour(t *testing.T) {
@@ -1024,7 +1083,9 @@ func TestEnvUnusedEnvironmentTokensAreFine(t *testing.T) {
 // error, and a repeated key inside one flag is rejected by the parser.
 func TestEnvRejectsConflictingTokenFlags(t *testing.T) {
 	t.Parallel()
-	tokenFile := writeSecretTokenFile(t, envTestStripeToken+"\n")
+	// Every case is rejected during selection validation, before a token file
+	// would be opened, so the path deliberately need not exist.
+	tokenFile := "/run/secrets/stripe-token"
 	for _, tc := range []struct {
 		name string
 		args []string
@@ -1038,17 +1099,17 @@ func TestEnvRejectsConflictingTokenFlags(t *testing.T) {
 		{
 			name: "repeated key in --secret-token",
 			args: []string{"--secret-token", "stripe-key=a", "--secret-token", "stripe-key=b"},
-			want: "stripe-key given more than once",
+			want: "--secret-token names the same key more than once",
 		},
 		{
 			name: "repeated key in --secret-token-file",
 			args: []string{"--secret-token-file", "stripe-key=" + tokenFile, "--secret-token-file", "stripe-key=" + tokenFile},
-			want: "stripe-key given more than once",
+			want: "--secret-token-file names the same key more than once",
 		},
 		{
 			name: "not KEY=VALUE",
 			args: []string{"--secret-token", "stripe-key"},
-			want: "expected KEY=VALUE",
+			want: "--secret-token must use KEY=VALUE with non-empty KEY and VALUE",
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -1064,6 +1125,89 @@ func TestEnvRejectsConflictingTokenFlags(t *testing.T) {
 				t.Fatalf("a usage error still made %d RPCs", n)
 			}
 		})
+	}
+}
+
+// TestBulkCommandsNeverReflectInvalidInlineSecretTokens covers the flag
+// package boundary: Value.Set must not return an error containing the raw
+// KEY=TOKEN, because flag would quote that complete credential in its own
+// diagnostic before the command can redact it.
+func TestBulkCommandsNeverReflectInvalidInlineSecretTokens(t *testing.T) {
+	t.Parallel()
+	const (
+		firstCanary  = "first-ultra-secret-canary"
+		secondCanary = "second-ultra-secret-canary"
+	)
+	for _, tc := range []struct {
+		name string
+		flag string
+		args []string
+		want string
+	}{
+		{
+			name: "inline token has empty key",
+			flag: "--secret-token",
+			args: []string{"=" + firstCanary},
+			want: "--secret-token must use KEY=VALUE with non-empty KEY and VALUE",
+		},
+		{
+			name: "inline token has no separator",
+			flag: "--secret-token",
+			args: []string{firstCanary},
+			want: "--secret-token must use KEY=VALUE with non-empty KEY and VALUE",
+		},
+		{
+			name: "inline token repeats a key",
+			flag: "--secret-token",
+			args: []string{"stripe-key=" + firstCanary, "stripe-key=" + secondCanary},
+			want: "--secret-token names the same key more than once",
+		},
+		{
+			name: "token file has empty key",
+			flag: "--secret-token-file",
+			args: []string{"=" + firstCanary},
+			want: "--secret-token-file must use KEY=VALUE with non-empty KEY and VALUE",
+		},
+		{
+			name: "token file repeats a key",
+			flag: "--secret-token-file",
+			args: []string{"stripe-key=" + firstCanary, "stripe-key=" + secondCanary},
+			want: "--secret-token-file names the same key more than once",
+		},
+	} {
+		for _, command := range []string{"env", "exec"} {
+			t.Run(command+"/"+tc.name, func(t *testing.T) {
+				t.Parallel()
+				f := newExecFixture(t, 0, nil)
+				var args []string
+				for _, value := range tc.args {
+					args = append(args, tc.flag, value)
+				}
+				var code int
+				if command == "env" {
+					code = f.run(args...)
+				} else {
+					code = f.runExec(args, "/usr/bin/app")
+				}
+				if code != exitUsage {
+					t.Fatalf("exit = %d, want %d (stderr=%s)", code, exitUsage, f.stderr())
+				}
+				if !strings.Contains(f.stderr(), tc.want) {
+					t.Fatalf("stderr = %s, want %q", f.stderr(), tc.want)
+				}
+				for _, canary := range []string{firstCanary, secondCanary} {
+					if strings.Contains(f.stderr(), canary) || strings.Contains(f.stdout(), canary) {
+						t.Fatalf("%s reflected credential canary %q: stdout=%q stderr=%q", command, canary, f.stdout(), f.stderr())
+					}
+				}
+				if calls := f.rec.snapshot(); len(calls) != 0 {
+					t.Fatalf("invalid credential input made RPCs: %+v", calls)
+				}
+				if f.launched.called {
+					t.Fatal("invalid credential input launched a child")
+				}
+			})
+		}
 	}
 }
 
@@ -1922,8 +2066,9 @@ func TestEnvTerminalGuardRefusesBeforeAnyRPC(t *testing.T) {
 }
 
 // TestSecretTokenListSetAndString: the flag accepts one KEY=VALUE per
-// occurrence, rejects a repeat, and prints only the keys so flag help and
-// error messages can never carry a token.
+// occurrence and prints only keys. Invalid input is retained as a sanitized
+// validation result rather than returned from Set, because flag reflects a
+// failing Value.Set argument verbatim in its own diagnostic.
 func TestSecretTokenListSetAndString(t *testing.T) {
 	t.Parallel()
 	var list secretTokenList
@@ -1951,19 +2096,34 @@ func TestSecretTokenListSetAndString(t *testing.T) {
 	if list.values["gamma"] != "a=b==" {
 		t.Fatalf("gamma = %q", list.values["gamma"])
 	}
-	for _, tc := range []struct{ raw, want string }{
-		{raw: "alpha=three", want: "given more than once"},
-		{raw: "noequals", want: "expected KEY=VALUE"},
-		{raw: "=value", want: "expected KEY=VALUE"},
-		{raw: "key=", want: "expected KEY=VALUE"},
+	for _, tc := range []struct {
+		name string
+		seed string
+		raw  string
+		want string
+	}{
+		{name: "duplicate", seed: "alpha=one", raw: "alpha=three", want: "names the same key more than once"},
+		{name: "no separator", raw: "noequals", want: "must use KEY=VALUE with non-empty KEY and VALUE"},
+		{name: "empty key", raw: "=value", want: "must use KEY=VALUE with non-empty KEY and VALUE"},
+		{name: "empty value", raw: "key=", want: "must use KEY=VALUE with non-empty KEY and VALUE"},
 	} {
-		err := list.Set(tc.raw)
-		if err == nil {
-			t.Fatalf("Set(%q) succeeded", tc.raw)
-		}
-		if !strings.Contains(err.Error(), tc.want) {
-			t.Fatalf("Set(%q) = %v, want %q", tc.raw, err, tc.want)
-		}
+		t.Run(tc.name, func(t *testing.T) {
+			var invalid secretTokenList
+			if tc.seed != "" {
+				if err := invalid.Set(tc.seed); err != nil {
+					t.Fatalf("seed Set = %v", err)
+				}
+			}
+			if err := invalid.Set(tc.raw); err != nil {
+				t.Fatalf("Set(%q) returned an unsafe flag-level error: %v", tc.raw, err)
+			}
+			if invalid.invalid != tc.want {
+				t.Fatalf("invalid = %q, want %q", invalid.invalid, tc.want)
+			}
+			if strings.Contains(invalid.String(), "three") || strings.Contains(invalid.String(), "value") {
+				t.Fatalf("String reflected invalid value: %q", invalid.String())
+			}
+		})
 	}
 }
 
