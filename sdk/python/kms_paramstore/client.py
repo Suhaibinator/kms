@@ -706,7 +706,6 @@ class Client:
         enabled: bool,
         *,
         version: int = 0,
-        secret_token: str = "",
         timeout: Optional[float] = None,
     ) -> int:
         """Enable or disable one version, or all versions when ``version`` is 0."""
@@ -728,7 +727,6 @@ class Client:
         key: str,
         version: int,
         *,
-        secret_token: str = "",
         timeout: Optional[float] = None,
     ) -> int:
         """Permanently destroy the plaintext for one exact secret version."""
@@ -750,7 +748,6 @@ class Client:
         key: str,
         version: int,
         *,
-        secret_token: str = "",
         timeout: Optional[float] = None,
     ) -> PromoteSecretResult:
         """Move the ``current`` label to one exact secret version."""

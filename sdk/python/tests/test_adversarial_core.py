@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import math
 import threading
 import time
@@ -23,6 +24,17 @@ from kms_paramstore.cache import Cache
 from tests._fake_server import start_server
 from tests.conftest import NS
 from tests.helpers import wait_until
+
+
+def test_non_read_secret_mutations_do_not_accept_unused_secret_tokens():
+    for client_type in (Client, AsyncClient):
+        for method_name in (
+            "set_secret_enabled",
+            "destroy_secret_version",
+            "promote_secret_version",
+        ):
+            signature = inspect.signature(getattr(client_type, method_name))
+            assert "secret_token" not in signature.parameters
 
 
 def test_cache_is_bounded_cleans_expired_and_never_retains_secrets():

@@ -838,8 +838,11 @@ class ReleaseLoader:
         )
 
     def _resolve_entry(self, entry: ReleaseEntry, cancel: threading.Event):
-        if cancel.is_set() or self._stop_event.is_set():
-            raise _CandidateFailure("superseded")
+        def check_cancelled() -> None:
+            if cancel.is_set() or self._stop_event.is_set():
+                raise _CandidateFailure("superseded")
+
+        check_cancelled()
         proto_ref = to_proto_ref(split_display_path(entry.path))
         timeout = self._client._call_timeout(self._config.request_timeout)
         if entry.kind == _KIND_PARAMETER:
@@ -850,7 +853,9 @@ class ReleaseLoader:
                     timeout=timeout,
                 )
             except grpc.RpcError as exc:
+                check_cancelled()
                 raise _CandidateFailure("resolution_failed", _grpc_code_name(exc)) from None
+            check_cancelled()
             parameter = response.parameter
             if parameter.version != entry.version:
                 raise _CandidateFailure("version_mismatch")
@@ -872,7 +877,9 @@ class ReleaseLoader:
                 entry.path, timeout=self._config.request_timeout,
             )
         except Exception:
+            check_cancelled()
             raise _CandidateFailure("resolution_failed") from None
+        check_cancelled()
         requested_ref = split_display_path(entry.path)
         if (live.env, live.app, live.key) != (
             requested_ref.ns.env, requested_ref.ns.app, requested_ref.key,
@@ -897,7 +904,9 @@ class ReleaseLoader:
             try:
                 secret_token = _token_from_result(provider(entry.alias, entry.path))
             except Exception:
+                check_cancelled()
                 raise _CandidateFailure("token_unavailable") from None
+            check_cancelled()
             if not secret_token:
                 raise _CandidateFailure("token_unavailable")
         binding_key = ""
@@ -914,7 +923,9 @@ class ReleaseLoader:
                 timeout=self._config.request_timeout,
             )
         except Exception:
+            check_cancelled()
             raise _CandidateFailure("resolution_failed") from None
+        check_cancelled()
         if secret.version != entry.version:
             raise _CandidateFailure("version_mismatch")
         if secret.path != entry.path:

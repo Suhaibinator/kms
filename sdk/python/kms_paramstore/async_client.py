@@ -486,7 +486,7 @@ class AsyncClient:
             raise errors.ParamStoreError("KMS secret metadata response was empty", code="internal")
         return _secret_info_from_proto(response.secret)
 
-    async def _secret_revision_mutation(self, method, request, ref: Ref, secret_token: str, timeout) -> int:
+    async def _secret_revision_mutation(self, method, request, ref: Ref, timeout) -> int:
         try:
             response = await method(
                 request, metadata=self._auth_metadata(), timeout=self._call_timeout(timeout)
@@ -500,11 +500,11 @@ class AsyncClient:
         ref = await self._resolve_ref(key)
         return await self._secret_revision_mutation(
             self._secret_stub.DeleteSecret, kms_pb2.DeleteSecretRequest(ref=to_proto_ref(ref)),
-            ref, "", timeout,
+            ref, timeout,
         )
 
     async def set_secret_enabled(
-        self, key: str, enabled: bool, *, version: int = 0, secret_token: str = "",
+        self, key: str, enabled: bool, *, version: int = 0,
         timeout: Optional[float] = None,
     ) -> int:
         _valid_uint64(version, "version")
@@ -512,22 +512,22 @@ class AsyncClient:
         return await self._secret_revision_mutation(
             self._secret_stub.DisableSecret,
             kms_pb2.DisableSecretRequest(ref=to_proto_ref(ref), version=version, enable=enabled),
-            ref, secret_token, timeout,
+            ref, timeout,
         )
 
     async def destroy_secret_version(
-        self, key: str, version: int, *, secret_token: str = "", timeout: Optional[float] = None
+        self, key: str, version: int, *, timeout: Optional[float] = None
     ) -> int:
         _valid_uint64(version, "version", nonzero=True)
         ref = await self._resolve_ref(key)
         return await self._secret_revision_mutation(
             self._secret_stub.DestroySecretVersion,
             kms_pb2.DestroySecretVersionRequest(ref=to_proto_ref(ref), version=version),
-            ref, secret_token, timeout,
+            ref, timeout,
         )
 
     async def promote_secret_version(
-        self, key: str, version: int, *, secret_token: str = "", timeout: Optional[float] = None
+        self, key: str, version: int, *, timeout: Optional[float] = None
     ) -> PromoteSecretResult:
         _valid_uint64(version, "version", nonzero=True)
         ref = await self._resolve_ref(key)

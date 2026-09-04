@@ -711,6 +711,49 @@ def test_newer_activation_cancels_and_aborts_stale_candidate(monkeypatch):
     assert loader.stats().rejections["superseded"] >= 1
 
 
+def test_superseded_candidate_stops_after_blocked_live_metadata(monkeypatch):
+    loader, stub, client = _loader(monkeypatch, _release(1, 10))
+    prepared: Dict[int, _Prepared] = {}
+
+    thread, raised = _run_in_thread(
+        loader,
+        lambda _cancel, snapshot: prepared.setdefault(snapshot.version, _Prepared()),
+    )
+    assert wait_until(lambda: loader.status().applied_version == 1)
+    client._secret_stub.tokens.clear()
+    client._secret_stub.binding_keys.clear()
+
+    metadata_entered = threading.Event()
+    release_metadata = threading.Event()
+    original_get_metadata = client.get_secret_metadata
+    should_block = True
+
+    def blocking_get_metadata(*args, **kwargs):
+        nonlocal should_block
+        result = original_get_metadata(*args, **kwargs)
+        if should_block:
+            should_block = False
+            metadata_entered.set()
+            assert release_metadata.wait(timeout=2)
+        return result
+
+    client.get_secret_metadata = blocking_get_metadata
+    stub.activate(_release(2, 20))
+    assert metadata_entered.wait(timeout=2)
+    stub.activate(_release(3, 30))
+    assert wait_until(lambda: loader.status().observed_version == 3)
+    release_metadata.set()
+
+    assert wait_until(lambda: loader.status().applied_version == 3)
+    loader.stop()
+    thread.join(timeout=2)
+
+    assert not raised
+    assert 2 not in prepared
+    assert prepared[3].commits == 1
+    assert client._secret_stub.tokens == ["local-token"]
+
+
 def test_active_fence_includes_release_name(monkeypatch):
     loader, stub, _client = _loader(monkeypatch, _release(1, 10))
     stale = _Prepared()
