@@ -593,6 +593,53 @@ func TestEnvReleaseUsesExactVersionMetadataAndEmitsBoundPinEmpty(t *testing.T) {
 	}
 }
 
+func TestEnvReleaseRejectsUnavailableBoundMetadataBeforeEmission(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name     string
+		versions []*kmsv1.SecretVersionInfo
+	}{
+		{
+			name:     "disabled",
+			versions: []*kmsv1.SecretVersionInfo{{Version: 9, State: "disabled", Bound: true}},
+		},
+		{
+			name:     "contradictory destroyed timestamp",
+			versions: []*kmsv1.SecretVersionInfo{{Version: 9, State: "enabled", DestroyedAtUnixMs: 1, Bound: true}},
+		},
+		{
+			name:     "expired",
+			versions: []*kmsv1.SecretVersionInfo{{Version: 9, State: "enabled", ExpiresAtUnixMs: 1, Bound: true}},
+		},
+		{
+			name: "duplicate",
+			versions: []*kmsv1.SecretVersionInfo{
+				{Version: 9, State: "enabled", Bound: true},
+				{Version: 9, State: "enabled", Bound: true},
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			f := newEnvFixture(t)
+			f.installRelease()
+			f.secrets.metadata["/prod/app/stripe-key"].Versions = tc.versions
+			if code := f.run("--release", "runtime"); code != exitError {
+				t.Fatalf("exit = %d, want %d (stdout=%q stderr=%s)", code, exitError, f.stdout(), f.stderr())
+			}
+			if !strings.Contains(f.stderr(), "metadata") {
+				t.Fatalf("stderr = %s, want metadata rejection", f.stderr())
+			}
+			if f.stdout() != "" {
+				t.Fatalf("stdout = %q, want no candidate output", f.stdout())
+			}
+			if n := f.rec.count("GetSecret"); n != 0 {
+				t.Fatalf("GetSecret called %d times for unavailable metadata", n)
+			}
+		})
+	}
+}
+
 // --- per-secret tokens ------------------------------------------------------
 
 // TestEnvSecretTokenSourcesAndSpellings: a token may be named by the display

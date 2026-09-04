@@ -7,6 +7,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"golang.org/x/term"
@@ -412,12 +413,23 @@ func selectSecretVersion(metadata *kmsv1.SecretMetadata, version uint64, label s
 			return nil, fmt.Errorf("secret has no %q label", label)
 		}
 	}
+	var selected *kmsv1.SecretVersionInfo
 	for _, candidate := range metadata.GetVersions() {
 		if candidate.GetVersion() == version {
-			return candidate, nil
+			if selected != nil {
+				return nil, fmt.Errorf("secret metadata contains version %d more than once", version)
+			}
+			selected = candidate
 		}
 	}
-	return nil, fmt.Errorf("secret metadata does not contain version %d", version)
+	if selected == nil {
+		return nil, fmt.Errorf("secret metadata does not contain version %d", version)
+	}
+	if selected.GetState() != domain.StateEnabled || selected.GetDestroyedAtUnixMs() != 0 ||
+		(selected.GetExpiresAtUnixMs() > 0 && selected.GetExpiresAtUnixMs() <= time.Now().UnixMilli()) {
+		return nil, fmt.Errorf("secret version %d is unavailable", version)
+	}
+	return selected, nil
 }
 
 type secretMutationJSON struct {
