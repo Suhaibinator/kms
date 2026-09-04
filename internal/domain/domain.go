@@ -28,8 +28,8 @@ const (
 
 // Wrap modes for secret versions.
 const (
-	WrapModeStandard    = "standard"
-	WrapModeClientBound = "client_bound"
+	WrapModeStandard   = "standard"
+	WrapModeBindingKey = "binding_key"
 )
 
 // Well-known labels.
@@ -98,14 +98,18 @@ const (
 
 // Change types recorded in the change log and pushed over watch streams.
 const (
-	ChangePut      = "put"
-	ChangeDelete   = "delete"
-	ChangeLabel    = "label"
-	ChangePromote  = "promote"
-	ChangeDisable  = "disable"
-	ChangeEnable   = "enable"
-	ChangeDestroy  = "destroy"
-	ChangeActivate = "activate"
+	ChangePut                = "put"
+	ChangeDelete             = "delete"
+	ChangeLabel              = "label"
+	ChangePromote            = "promote"
+	ChangeDisable            = "disable"
+	ChangeEnable             = "enable"
+	ChangeDestroy            = "destroy"
+	ChangeActivate           = "activate"
+	ChangeBind               = "bind"
+	ChangeUnbind             = "unbind"
+	ChangeRotateBindingKey   = "rotate_binding_key"
+	ChangePurgeBindingCohort = "purge_binding_cohort"
 )
 
 // NamespaceRef is a fixed (env, app) pair — the first-class grouping every
@@ -177,7 +181,7 @@ type ParameterVersionInfo struct {
 type Secret struct {
 	Ref            Ref
 	ContentType    string
-	ClientBound    bool
+	Bound          bool
 	HasAccessToken bool
 	Metadata       string
 	CreatedAt      time.Time
@@ -188,13 +192,15 @@ type Secret struct {
 
 // SecretVersionInfo describes one secret version without key material.
 type SecretVersionInfo struct {
-	Version     uint64
-	State       string
-	CreatedBy   string
-	CreatedAt   time.Time
-	DestroyedAt time.Time // zero if not destroyed
-	ExpiresAt   time.Time // zero if no expiry
-	Metadata    string
+	Version        uint64
+	State          string
+	Bound          bool
+	HasAccessToken bool
+	CreatedBy      string
+	CreatedAt      time.Time
+	DestroyedAt    time.Time // zero if not destroyed
+	ExpiresAt      time.Time // zero if no expiry
+	Metadata       string
 }
 
 // SecretValue is a decrypted secret returned to an authorized caller.
