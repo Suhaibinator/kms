@@ -569,6 +569,29 @@ func TestBaselineMaterializationIsAtomicAndVerificationIsExact(t *testing.T) {
 	})
 }
 
+func TestReferenceBaselineSchemaConcurrent(t *testing.T) {
+	const workers = 16
+	start := make(chan struct{})
+	errs := make(chan error, workers)
+	var ready sync.WaitGroup
+	ready.Add(workers)
+	for range workers {
+		go func() {
+			ready.Done()
+			<-start
+			_, err := referenceBaselineSchema()
+			errs <- err
+		}()
+	}
+	ready.Wait()
+	close(start)
+	for range workers {
+		if err := <-errs; err != nil {
+			t.Errorf("referenceBaselineSchema: %v", err)
+		}
+	}
+}
+
 func TestPutGetParameter(t *testing.T) {
 	st := newStore(t)
 	ctx := context.Background()

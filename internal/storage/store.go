@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/glebarez/sqlite"
@@ -59,6 +60,8 @@ const (
 	sqlStoreMaxOpenConns = 0 // database/sql default: unlimited
 	sqlStoreMaxIdleConns = 2 // database/sql default, made explicit for restoration after purge
 )
+
+var baselineReferenceID atomic.Uint64
 
 // SQLStore is the SQLite-backed implementation of Store.
 type SQLStore struct {
@@ -308,7 +311,12 @@ func materializeBaseline(tx *gorm.DB) error {
 }
 
 func referenceBaselineSchema() ([]baselineSchemaObject, error) {
-	dsn := fmt.Sprintf("file:kms-baseline-reference-%d?mode=memory&cache=shared", time.Now().UnixNano())
+	// Shared in-memory databases are keyed by name. A timestamp is not unique
+	// enough here: Windows clocks can return the same value to concurrent calls,
+	// making otherwise independent verifiers race over one schema_migrations
+	// table. The process-local sequence is collision-free for the lifetime in
+	// which an in-memory database can exist.
+	dsn := fmt.Sprintf("file:kms-baseline-reference-%d?mode=memory&cache=shared", baselineReferenceID.Add(1))
 	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{
 		Logger:                 logger.Default.LogMode(logger.Silent),
 		SkipDefaultTransaction: true,
