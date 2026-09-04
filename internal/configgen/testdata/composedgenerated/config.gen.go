@@ -135,12 +135,19 @@ func Start(ctx context.Context, client *kmsclient.Client, options Options) (*Sto
 	if !defaults.Common.Token.IsZero() || defaults.Common.Token.Path() != "" || defaults.Common.Token.Version() != 0 || defaults.Common.Token.ContentType() != "" {
 		return nil, fmt.Errorf("generated config store: default secret Common.Token must be zero")
 	}
-	store := &Store{defaults: cloneRoot(defaults)}
+	bindingKeys := make(map[string]string)
+	if defaults.Common.Token.BindKey != "" {
+		bindingKeys["common_token"] = defaults.Common.Token.BindKey
+	}
+	sanitizedDefaults := cloneRoot(defaults)
+	sanitizedDefaults.Common.Token.BindKey = ""
+	store := &Store{defaults: sanitizedDefaults}
 	manager, err := configstore.Start(ctx, client, configstore.Options{
 		Release:              options.Release,
 		Contract:             generatedContract,
 		Callbacks:            options.Callbacks,
 		SecretTokenProvider:  options.SecretTokenProvider,
+		BindingKeys:          bindingKeys,
 		ReconcileInterval:    options.ReconcileInterval,
 		MaxConcurrentFetches: options.MaxConcurrentFetches,
 		InstanceID:           options.InstanceID,
@@ -180,6 +187,7 @@ func (s *Store) prepare(ctx context.Context, snapshot kmsclient.ReleaseSnapshot)
 		return configstore.PreparedCandidate{}, configstore.Reject(configstore.RejectConfigContractMismatch, fmt.Errorf("missing secret alias common_token"))
 	}
 	candidate.Common.Token = secret0.Clone()
+	candidate.Common.Token.BindKey = ""
 	if err := candidate.Validate(); err != nil {
 		return configstore.PreparedCandidate{}, configstore.Reject(configstore.RejectConfigValidationFailed, fmt.Errorf("validate KMS configuration: %w", err))
 	}
@@ -188,6 +196,7 @@ func (s *Store) prepare(ctx context.Context, snapshot kmsclient.ReleaseSnapshot)
 	}
 	effectiveDefaults := cloneRoot(s.defaults)
 	effectiveDefaults.Common.Token = secret0.Clone()
+	effectiveDefaults.Common.Token.BindKey = ""
 	if err := effectiveDefaults.Validate(); err != nil {
 		return configstore.PreparedCandidate{}, configstore.Reject(configstore.RejectConfigValidationFailed, fmt.Errorf("validate effective application defaults: %w", err))
 	}

@@ -5,6 +5,7 @@ import (
 	"encoding/json/jsontext"
 	"errors"
 	"fmt"
+	"maps"
 	"strings"
 	"sync"
 
@@ -61,6 +62,10 @@ func Start(
 		return nil, err
 	}
 	options.Contract = append([]ContractEntry(nil), options.Contract...)
+	bindingKeys := maps.Clone(options.BindingKeys)
+	// The manager retains Options for callbacks and status bookkeeping; keep
+	// credentials only in the lower-level loader.
+	options.BindingKeys = nil
 
 	manager := &Manager{
 		options: options,
@@ -73,6 +78,7 @@ func Start(
 		Name:                options.Release,
 		ReconcileInterval:   options.ReconcileInterval,
 		SecretTokenProvider: options.SecretTokenProvider,
+		BindingKeys:         bindingKeys,
 		ValidateManifest: func(ctx context.Context, manifest kmsclient.ReleaseManifest) error {
 			identity := releaseIdentityFromManifest(manifest)
 			manager.mu.Lock()

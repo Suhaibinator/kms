@@ -48,6 +48,8 @@ type releaseData struct {
 	runtimeTokenPath    string
 	databaseContentType string
 	runtimeContentType  string
+	passwordBound       bool
+	runtimeTokenBound   bool
 	omitAlias           string
 }
 
@@ -115,6 +117,8 @@ func scriptResources(server *kmsclienttest.Server, data releaseData) {
 	server.SetParameterVersion(fixtureNamespace, runtimePath, data.runtimeDocument, "json", data.runtimeVersion)
 	server.SetSecretVersion(fixtureNamespace, data.passwordPath, data.passwordValue, "text/plain", data.passwordVersion)
 	server.SetSecretVersion(fixtureNamespace, data.runtimeTokenPath, data.runtimeTokenValue, "text/plain", data.runtimeTokenVersion)
+	server.SetSecretVersionMetadata(fixtureNamespace, data.passwordPath, data.passwordVersion, "enabled", data.passwordBound, false, 0)
+	server.SetSecretVersionMetadata(fixtureNamespace, data.runtimeTokenPath, data.runtimeTokenVersion, "enabled", data.runtimeTokenBound, false, 0)
 }
 
 func releaseSpec(data releaseData) kmsclienttest.ReleaseSpec {
@@ -235,6 +239,72 @@ func startFixtureWithCallbacks(
 		server.Close()
 	})
 	return fixture
+}
+
+func TestGeneratedStartExtractsAndStripsDeclarationBindingKeys(t *testing.T) {
+	initial := matchingRelease(1, 41)
+	initial.passwordBound = true
+	initial.runtimeTokenBound = true
+	declaration := fixtureconfig.Defaults()
+	declaration.Password.BindKey = "database-password-binding-key"
+	declaration.RuntimeToken.BindKey = "runtime-token-binding-key"
+
+	fixture := startFixture(t, initial, func() *fixtureconfig.Config { return declaration }, func(configstore.DefaultMismatchReport) {})
+	passwordToken, passwordKey := fixture.server.SecretCredentials("/" + fixtureNamespace + "/" + passwordPath)
+	runtimeToken, runtimeKey := fixture.server.SecretCredentials("/" + fixtureNamespace + "/" + runtimeTokenPath)
+	if passwordToken != "" || runtimeToken != "" {
+		t.Fatal("generated binding sent access tokens for binding-only versions")
+	}
+	if passwordKey != "database-password-binding-key" || runtimeKey != "runtime-token-binding-key" {
+		t.Fatalf("binding keys by alias = password:%q runtime:%q", passwordKey, runtimeKey)
+	}
+	if declaration.Password.BindKey == "" || declaration.RuntimeToken.BindKey == "" {
+		t.Fatal("generated startup mutated the application-owned declaration")
+	}
+	if fixture.store.defaults.Password.BindKey != "" || fixture.store.defaults.RuntimeToken.BindKey != "" {
+		t.Fatal("generated store retained binding keys in its defaults")
+	}
+	resolved := fixture.store.Current().Config()
+	if resolved.Password.BindKey != "" || resolved.RuntimeToken.BindKey != "" {
+		t.Fatal("published configuration retained declaration binding keys")
+	}
+}
+
+func TestGeneratedStartRejectsMissingBindingKey(t *testing.T) {
+	initial := matchingRelease(1, 41)
+	initial.passwordBound = true
+	server, err := kmsclienttest.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer server.Close()
+	installInitial(t, server, initial)
+	client := newFixtureClient(t, server)
+	defer func() { _ = client.Close() }()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	_, err = Start(ctx, client, Options{
+		Release: fixtureReleaseName, Defaults: fixtureconfig.Defaults,
+		Callbacks:  configstore.Callbacks{OnDefaultMismatch: func(configstore.DefaultMismatchReport) {}},
+		InstanceID: "missing-binding-key",
+	})
+	if err == nil || !strings.Contains(err.Error(), kmsclient.ReleaseRejectTokenUnavailable) {
+		t.Fatalf("Start error = %v, want %s", err, kmsclient.ReleaseRejectTokenUnavailable)
+	}
+}
+
+func TestMissingHotReloadBindingKeyKeepsPreviousSnapshot(t *testing.T) {
+	fixture := startFixture(t, matchingRelease(1, 41), fixtureconfig.Defaults, func(configstore.DefaultMismatchReport) {})
+	candidate := matchingRelease(2, 42)
+	candidate.passwordBound = true
+	activate(t, fixture, candidate)
+	ack := waitAcknowledgement(t, fixture.sub, 2, kmsclient.ReleaseStateRejected)
+	if ack.GetRejectionCategory() != kmsclient.ReleaseRejectTokenUnavailable {
+		t.Fatalf("rejection category = %q", ack.GetRejectionCategory())
+	}
+	if got := fixture.store.Current().Release().Version(); got != 1 {
+		t.Fatalf("rejected candidate displaced last-known-good release with version %d", got)
+	}
 }
 
 func waitAcknowledgement(t *testing.T, sub *kmsclienttest.ReleaseSubscription, version uint64, state string) *kmsv1.ReleaseAcknowledgement {

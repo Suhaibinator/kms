@@ -66,6 +66,22 @@ func TestGenerateIsDeterministicAndCanonical(t *testing.T) {
 	if bytes.Contains(first.Binding, []byte("AllowDefaultMismatch")) {
 		t.Fatal("generated binding still references the removed AllowDefaultMismatch option")
 	}
+	optionsBlock := regexp.MustCompile(`(?s)type Options struct \{(.*?)\n\}`).FindSubmatch(first.Binding)
+	if len(optionsBlock) != 2 || bytes.Contains(optionsBlock[1], []byte("BindingKeys")) {
+		t.Fatal("generated public Options exposes the private binding-key map")
+	}
+	for _, want := range [][]byte{
+		[]byte(`if defaults.Password.BindKey != "" {`),
+		[]byte(`bindingKeys["database_password"] = defaults.Password.BindKey`),
+		[]byte(`sanitizedDefaults.Password.BindKey = ""`),
+		[]byte(`BindingKeys:          bindingKeys,`),
+		[]byte(`candidate.Password.BindKey = ""`),
+		[]byte(`effectiveDefaults.Password.BindKey = ""`),
+	} {
+		if !bytes.Contains(first.Binding, want) {
+			t.Fatalf("generated binding-key extraction/stripping is missing %q", want)
+		}
+	}
 	if !bytes.Contains(first.Binding, []byte(`configstore.RejectDecode("database", err)`)) {
 		t.Fatal("generated binding does not forward safe candidate rejection diagnostics")
 	}

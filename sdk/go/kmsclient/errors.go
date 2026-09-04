@@ -1,6 +1,7 @@
 package kmsclient
 
 import (
+	"context"
 	"errors"
 	"fmt"
 
@@ -29,7 +30,7 @@ var (
 	ErrUnauthenticated = errors.New("kmsclient: unauthenticated")
 
 	// ErrFailedPrecondition is returned when the request is well-formed but the
-	// server state does not allow it (e.g. mode mismatch on a client-bound
+	// server state does not allow it (e.g. mode mismatch on a bound
 	// secret).
 	ErrFailedPrecondition = errors.New("kmsclient: failed precondition")
 
@@ -86,5 +87,42 @@ func mapError(err error) error {
 		// Preserve the original status error (code + message) for everything
 		// else (Unavailable, DeadlineExceeded, Internal, ...).
 		return err
+	}
+}
+
+// mapSecretError deliberately discards remote diagnostic text for operations
+// that carry plaintext or per-secret credentials. Even a buggy or hostile
+// peer that reflects request material cannot make it part of an SDK error.
+func mapSecretError(err error) error {
+	if err == nil {
+		return nil
+	}
+	st, ok := status.FromError(err)
+	if !ok {
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return err
+		}
+		return errors.New("kmsclient: secret operation failed")
+	}
+	const safeMessage = "kmsclient: secret operation failed"
+	switch st.Code() {
+	case codes.OK:
+		return nil
+	case codes.AlreadyExists:
+		return fmt.Errorf("%w: secret operation failed", ErrAlreadyExists)
+	case codes.NotFound:
+		return fmt.Errorf("%w: secret operation failed", ErrNotFound)
+	case codes.PermissionDenied:
+		return fmt.Errorf("%w: secret operation failed", ErrPermissionDenied)
+	case codes.Unauthenticated:
+		return fmt.Errorf("%w: secret operation failed", ErrUnauthenticated)
+	case codes.FailedPrecondition:
+		return fmt.Errorf("%w: secret operation failed", ErrFailedPrecondition)
+	case codes.Aborted:
+		return fmt.Errorf("%w: secret operation failed", ErrAborted)
+	case codes.ResourceExhausted:
+		return fmt.Errorf("%w: secret operation failed", ErrRateLimited)
+	default:
+		return status.Error(st.Code(), safeMessage)
 	}
 }

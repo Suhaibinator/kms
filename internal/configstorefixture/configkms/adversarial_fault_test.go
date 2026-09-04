@@ -188,12 +188,9 @@ func TestFaultPrefetchContractFailureReportsIdentityBeforeAnyResourceRead(t *tes
 	bad.runtimeTokenValue = []byte(secretCanary)
 	bad.databaseContentType = "text/plain"
 	scriptResources(fixture.server, bad)
+	fixture.server.SetSecretVersionMetadata(fixtureNamespace, bad.passwordPath, bad.passwordVersion, "enabled", false, true, 0)
+	fixture.server.SetSecretVersionMetadata(fixtureNamespace, bad.runtimeTokenPath, bad.runtimeTokenVersion, "enabled", false, true, 0)
 	spec := releaseSpec(bad)
-	for i := range spec.Entries {
-		if spec.Entries[i].Kind == "secret" {
-			spec.Entries[i].HasAccessToken = true
-		}
-	}
 	if _, err := fixture.server.ActivateConfigurationRelease(spec, bad.activationRevision); err != nil {
 		t.Fatal(err)
 	}

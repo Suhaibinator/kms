@@ -43,9 +43,8 @@ const (
 	defaultReleaseFetchConcurrency  = 16
 )
 
-// SecretTokenProvider supplies a locally held per-secret access token or
-// client-bound key share. It is called only for release entries marked as
-// token-protected or client-bound.
+// SecretTokenProvider supplies a locally held per-secret access token. It is
+// called only when the exact pinned version's live metadata requires one.
 type SecretTokenProvider func(alias, path string) (token string, ok bool)
 
 // ValidateReleaseManifestFunc validates unresolved release identity and entry
@@ -63,6 +62,9 @@ type ReleaseLoaderConfig struct {
 	// SecretTokenProvider supplies locally held credentials for protected
 	// secret entries. Tokens are sent only to the corresponding GetSecret RPC.
 	SecretTokenProvider SecretTokenProvider
+	// BindingKeys contains operator-owned binding keys indexed by release alias.
+	// It is defensively copied and never exposed through loader diagnostics.
+	BindingKeys map[string]string
 	// ValidateManifest optionally validates the immutable unresolved manifest.
 	// It runs after release identity, digest, and basic entry validation, but
 	// before any resource fetch or secret-token lookup.
@@ -133,6 +135,7 @@ func NewReleaseLoader(client *Client, cfg ReleaseLoaderConfig) (*ReleaseLoader, 
 	if cfg.MaxConcurrentFetches > 256 {
 		return nil, errors.New("kmsclient: MaxConcurrentFetches must not exceed 256")
 	}
+	cfg.BindingKeys = maps.Clone(cfg.BindingKeys)
 	instanceID := strings.TrimSpace(cfg.InstanceID)
 	if instanceID == "" {
 		var err error
@@ -684,6 +687,9 @@ func (l *ReleaseLoader) resolveCandidate(ctx context.Context, ns namespaceRef, c
 }
 
 func newReleaseManifest(release *kmsv1.ConfigurationRelease, candidate releaseCandidate) (ReleaseManifest, error) {
+	if release == nil || release.GetNamespace() == nil {
+		return ReleaseManifest{}, errors.New("empty release")
+	}
 	manifest := ReleaseManifest{
 		namespace:          release.GetNamespace().GetEnv() + "/" + release.GetNamespace().GetApp(),
 		name:               release.GetName(),
@@ -695,6 +701,11 @@ func newReleaseManifest(release *kmsv1.ConfigurationRelease, candidate releaseCa
 		entries:            make(map[string]ReleaseEntryMetadata, len(release.GetEntries())),
 	}
 	for _, entry := range release.GetEntries() {
+		if entry == nil || entry.GetRef() == nil || entry.GetRef().GetNamespace() == nil ||
+			entry.GetRef().GetNamespace().GetEnv() != release.GetNamespace().GetEnv() ||
+			entry.GetRef().GetNamespace().GetApp() != release.GetNamespace().GetApp() {
+			return ReleaseManifest{}, errors.New("release entry namespace mismatch")
+		}
 		metadata, err := releaseEntryMetadata(entry)
 		if err != nil {
 			return ReleaseManifest{}, err
@@ -734,8 +745,6 @@ func deterministicReleaseDigest(release *kmsv1.ConfigurationRelease) (string, er
 			ContentType:     entry.GetContentType(),
 			MetadataJson:    entry.GetMetadataJson(),
 			ParameterDigest: entry.GetParameterDigest(),
-			ClientBound:     entry.GetClientBound(),
-			HasAccessToken:  entry.GetHasAccessToken(),
 		})
 	}
 	b, err := (proto.MarshalOptions{Deterministic: true}).Marshal(projection)
@@ -747,7 +756,7 @@ func deterministicReleaseDigest(release *kmsv1.ConfigurationRelease) (string, er
 }
 
 func releaseEntryMetadata(entry *kmsv1.ConfigurationReleaseEntry) (ReleaseEntryMetadata, error) {
-	if entry == nil || entry.GetRef() == nil || entry.GetRef().GetNamespace() == nil || entry.GetAlias() == "" || entry.GetVersion() == 0 {
+	if entry == nil || entry.GetRef() == nil || entry.GetRef().GetNamespace() == nil || entry.GetRef().GetKey() == "" || entry.GetAlias() == "" || entry.GetVersion() == 0 {
 		return ReleaseEntryMetadata{}, errors.New("invalid release entry")
 	}
 	if entry.GetKind() != "parameter" && entry.GetKind() != "secret" {
@@ -762,8 +771,6 @@ func releaseEntryMetadata(entry *kmsv1.ConfigurationReleaseEntry) (ReleaseEntryM
 		ContentType:     entry.GetContentType(),
 		MetadataJSON:    entry.GetMetadataJson(),
 		ParameterDigest: entry.GetParameterDigest(),
-		ClientBound:     entry.GetClientBound(),
-		HasAccessToken:  entry.GetHasAccessToken(),
 	}, nil
 }
 
@@ -808,18 +815,52 @@ func (l *ReleaseLoader) resolveEntry(ctx context.Context, entry *kmsv1.Configura
 		return out, "", nil
 
 	case "secret":
+		live, err := l.client.GetSecretMetadata(ctx, r.display())
+		if err != nil {
+			if errors.Is(err, errSecretMetadataRefMismatch) {
+				return out, ReleaseRejectVersionMismatch, err
+			}
+			return out, ReleaseRejectResolutionFailed, err
+		}
+		if live.Path != r.display() {
+			return out, ReleaseRejectVersionMismatch, errors.New("secret metadata resource reference mismatch")
+		}
+		var exact *SecretVersionInfo
+		matches := 0
+		for i := range live.Versions {
+			if live.Versions[i].Version == entry.GetVersion() {
+				exact = &live.Versions[i]
+				matches++
+			}
+		}
+		if exact == nil || matches != 1 {
+			return out, ReleaseRejectResolutionFailed, errors.New("secret version metadata unavailable")
+		}
+		if exact.State != "enabled" || exact.DestroyedAtUnixMS != 0 {
+			return out, ReleaseRejectResolutionFailed, errors.New("secret version is unavailable")
+		}
+		if exact.ExpiresAtUnixMS > 0 && exact.ExpiresAtUnixMS <= time.Now().UnixMilli() {
+			return out, ReleaseRejectResolutionFailed, errors.New("secret version is unavailable")
+		}
 		token := ""
-		if entry.GetHasAccessToken() || entry.GetClientBound() {
+		if exact.HasAccessToken {
 			if l.cfg.SecretTokenProvider == nil {
 				return out, ReleaseRejectTokenUnavailable, errors.New("secret token provider unavailable")
 			}
 			var ok bool
-			token, ok = l.cfg.SecretTokenProvider(entry.GetAlias(), r.display())
+			token, ok = callSecretTokenProvider(l.cfg.SecretTokenProvider, entry.GetAlias(), r.display())
 			if !ok || token == "" {
 				return out, ReleaseRejectTokenUnavailable, errors.New("secret token unavailable")
 			}
 		}
-		secret, err := l.client.GetSecret(ctx, r.display(), WithVersion(entry.GetVersion()), WithSecretToken(token))
+		bindingKey := ""
+		if exact.Bound {
+			bindingKey = l.cfg.BindingKeys[entry.GetAlias()]
+			if bindingKey == "" {
+				return out, ReleaseRejectTokenUnavailable, errors.New("secret binding key unavailable")
+			}
+		}
+		secret, err := l.client.GetSecret(ctx, r.display(), WithVersion(entry.GetVersion()), WithSecretToken(token), WithBindingKey(bindingKey))
 		if err != nil {
 			return out, ReleaseRejectResolutionFailed, err
 		}
@@ -838,6 +879,15 @@ func (l *ReleaseLoader) resolveEntry(ctx context.Context, entry *kmsv1.Configura
 	default:
 		return out, ReleaseRejectResolutionFailed, errors.New("unknown release entry kind")
 	}
+}
+
+func callSecretTokenProvider(provider SecretTokenProvider, alias, path string) (token string, ok bool) {
+	defer func() {
+		if recover() != nil {
+			token, ok = "", false
+		}
+	}()
+	return provider(alias, path)
 }
 
 func sameResourceRef(a, b *kmsv1.ResourceRef) bool {

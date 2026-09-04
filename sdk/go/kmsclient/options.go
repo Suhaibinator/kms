@@ -5,6 +5,7 @@ type getOptions struct {
 	version     uint64
 	label       string
 	secretToken string
+	bindingKey  string
 }
 
 // GetOption customizes a single GetParameter / GetSecret call.
@@ -22,12 +23,18 @@ func WithLabel(label string) GetOption {
 	return func(o *getOptions) { o.label = label }
 }
 
-// WithSecretToken supplies the credential in a GetSecret request. It is
-// required for token-protected and client-bound secrets; for client-bound
-// secrets the token also carries the client key share. GetParameter accepts
-// this shared option for compatibility but never transmits the token.
+// WithSecretToken supplies the per-secret access token in a GetSecret request.
+// GetParameter accepts this shared option for compatibility but never
+// transmits the token.
 func WithSecretToken(token string) GetOption {
 	return func(o *getOptions) { o.secretToken = token }
+}
+
+// WithBindingKey supplies the independent operator-owned binding key in a
+// GetSecret request. GetParameter accepts this shared option but never
+// transmits the key.
+func WithBindingKey(key string) GetOption {
+	return func(o *getOptions) { o.bindingKey = key }
 }
 
 func applyGetOptions(opts []GetOption) getOptions {
@@ -70,10 +77,9 @@ func applyPutOptions(opts []PutOption) putOptions {
 type putSecretOptions struct {
 	contentType         string
 	metadataJSON        string
-	clientBound         bool
+	bindingKey          string
 	generateAccessToken bool
 	expiresAtUnixMS     int64
-	secretToken         string
 }
 
 // PutSecretOption customizes a PutSecret call.
@@ -89,11 +95,10 @@ func WithSecretMetadataJSON(j string) PutSecretOption {
 	return func(o *putSecretOptions) { o.metadataJSON = j }
 }
 
-// WithClientBound opts a secret into client-bound double wrapping. New secrets
-// also require WithGenerateAccessToken; updates must keep this option set and
-// supply the current token with WithPutSecretToken.
-func WithClientBound() PutSecretOption {
-	return func(o *putSecretOptions) { o.clientBound = true }
+// WithPutBindingKey creates the new version bound to key. An empty key creates
+// an unbound version; the server validates non-empty keys.
+func WithPutBindingKey(key string) PutSecretOption {
+	return func(o *putSecretOptions) { o.bindingKey = key }
 }
 
 // WithGenerateAccessToken asks the server to mint a per-secret access token,
@@ -106,12 +111,6 @@ func WithGenerateAccessToken() PutSecretOption {
 // 0 means never.
 func WithExpiresAt(unixMS int64) PutSecretOption {
 	return func(o *putSecretOptions) { o.expiresAtUnixMS = unixMS }
-}
-
-// WithPutSecretToken supplies the current credential in a PutSecret request,
-// needed when updating an existing client-bound secret.
-func WithPutSecretToken(token string) PutSecretOption {
-	return func(o *putSecretOptions) { o.secretToken = token }
 }
 
 func applyPutSecretOptions(opts []PutSecretOption) putSecretOptions {

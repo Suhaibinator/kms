@@ -23,7 +23,7 @@ cert/key plus the operator's server CA bundle.
 client, err := kmsclient.NewClient(kmsclient.Config{
     Endpoint:  "parameter-store.prod.internal:8443",
     TLS:       kmsclient.MTLSFromFiles("client.crt", "client.key", "server-ca.crt"),
-    CacheTTL:  time.Minute,                                         // optional in-memory read cache
+    CacheTTL:  time.Minute, // optional parameter cache; secrets are never cached
 })
 if err != nil {
     return err
@@ -77,7 +77,10 @@ Read options:
 ```go
 client.GetParameter(ctx, key, kmsclient.WithVersion(3))
 client.GetSecret(ctx, key, kmsclient.WithLabel("previous"))
-client.GetSecret(ctx, key, kmsclient.WithSecretToken(tok)) // token-protected / client-bound
+client.GetSecret(ctx, key,
+    kmsclient.WithSecretToken(tok),   // when access-token protected
+    kmsclient.WithBindingKey(bindKey), // when bound; independent of the token
+)
 ```
 
 ## Redaction
@@ -187,6 +190,7 @@ loader, err := kmsclient.NewReleaseLoader(client, kmsclient.ReleaseLoaderConfig{
         token, ok := localTokens[alias]
         return token, ok
     },
+    BindingKeys: map[string]string{"openai_api_key": openAIBindingKey},
 })
 if err != nil { return err }
 

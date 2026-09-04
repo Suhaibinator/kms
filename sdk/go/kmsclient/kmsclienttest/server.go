@@ -90,12 +90,21 @@ type Server struct {
 	paramVersions   map[string]map[uint64]*kmsv1.Parameter
 	secretMeta      map[string]*kmsv1.GetSecretResponse // display path -> current secret
 	secretVersions  map[string]map[uint64]*kmsv1.GetSecretResponse
+	secretMetadata  map[string]*kmsv1.SecretMetadata
 	revision        uint64
 	paramErr        map[string]error       // display path -> error
 	secretErr       map[string]error       // display path -> error
 	lastMetadata    map[string]metadata.MD // method -> incoming md
 	lastSecretToken map[string]string      // method -> request field
+	lastBindingKey  map[string]string      // method -> request field
+	secretTokens    map[string]string      // display path -> most recent GetSecret token
+	bindingKeys     map[string]string      // display path -> most recent GetSecret binding key
 	putSecrets      []PutSecretCall
+	bindCalls       []*kmsv1.BindSecretRequest
+	unbindCalls     []*kmsv1.UnbindSecretRequest
+	previewCalls    []*kmsv1.PreviewSecretBindingCohortRequest
+	rotateCalls     []*kmsv1.RotateSecretBindingKeyRequest
+	purgeCalls      []*kmsv1.PurgeSecretBindingCohortRequest
 	defaultsCalls   []*kmsv1.ApplyApplicationDefaultsRequest
 	defaultsQueue   []scriptedDefaultsResponse
 	verifyCalls     []*kmsv1.VerifyReleaseDefaultsRequest
@@ -137,9 +146,8 @@ type PutSecretCall struct {
 	Key                 string
 	Path                string // display path
 	Value               []byte
-	ClientBound         bool
+	BindingKey          string
 	GenerateAccessToken bool
-	SecretToken         string
 }
 
 // New starts a fake server on an in-memory bufconn listener.
@@ -150,7 +158,11 @@ func New() (*Server, error) {
 		paramVersions:    make(map[string]map[uint64]*kmsv1.Parameter),
 		secretMeta:       make(map[string]*kmsv1.GetSecretResponse),
 		secretVersions:   make(map[string]map[uint64]*kmsv1.GetSecretResponse),
+		secretMetadata:   make(map[string]*kmsv1.SecretMetadata),
 		lastSecretToken:  make(map[string]string),
+		lastBindingKey:   make(map[string]string),
+		secretTokens:     make(map[string]string),
+		bindingKeys:      make(map[string]string),
 		paramErr:         make(map[string]error),
 		secretErr:        make(map[string]error),
 		lastMetadata:     make(map[string]metadata.MD),
@@ -191,14 +203,12 @@ func (s *Server) DialOptions() []grpc.DialOption {
 // configuration release. Path may be relative to ReleaseSpec.Namespace or an
 // absolute /env/app/key display path.
 type ReleaseEntrySpec struct {
-	Alias          string
-	Kind           string
-	Path           string
-	Version        uint64
-	ContentType    string
-	MetadataJSON   string
-	ClientBound    bool
-	HasAccessToken bool
+	Alias        string
+	Kind         string
+	Path         string
+	Version      uint64
+	ContentType  string
+	MetadataJSON string
 }
 
 // ReleaseSpec describes an immutable release for ReleaseLoader and generated
@@ -286,14 +296,12 @@ func (s *Server) buildRelease(spec ReleaseSpec) (*kmsv1.ConfigurationRelease, er
 		ref := resourceProto(namespace, key)
 		display := displayOf(ref)
 		entry := &kmsv1.ConfigurationReleaseEntry{
-			Alias:          item.Alias,
-			Kind:           item.Kind,
-			Ref:            ref,
-			Version:        item.Version,
-			ContentType:    item.ContentType,
-			MetadataJson:   item.MetadataJSON,
-			ClientBound:    item.ClientBound,
-			HasAccessToken: item.HasAccessToken,
+			Alias:        item.Alias,
+			Kind:         item.Kind,
+			Ref:          ref,
+			Version:      item.Version,
+			ContentType:  item.ContentType,
+			MetadataJson: item.MetadataJSON,
 		}
 		switch item.Kind {
 		case "parameter":
@@ -352,8 +360,6 @@ func deterministicReleaseDigest(release *kmsv1.ConfigurationRelease) (string, er
 			ContentType:     entry.GetContentType(),
 			MetadataJson:    entry.GetMetadataJson(),
 			ParameterDigest: entry.GetParameterDigest(),
-			ClientBound:     entry.GetClientBound(),
-			HasAccessToken:  entry.GetHasAccessToken(),
 		})
 	}
 	b, err := (proto.MarshalOptions{Deterministic: true}).Marshal(projection)
@@ -451,6 +457,53 @@ func (s *Server) setSecretVersionLocked(namespace, key string, value []byte, con
 		s.secretVersions[display] = versions
 	}
 	versions[version] = secret
+	metadata := s.secretMetadata[display]
+	if metadata == nil {
+		metadata = &kmsv1.SecretMetadata{Ref: ref, Labels: make(map[string]uint64)}
+		s.secretMetadata[display] = metadata
+	}
+	metadata.ContentType = contentType
+	metadata.Labels["current"] = version
+	found := false
+	for _, info := range metadata.Versions {
+		if info.GetVersion() == version {
+			found = true
+			break
+		}
+	}
+	if !found {
+		metadata.Versions = append(metadata.Versions, &kmsv1.SecretVersionInfo{Version: version, State: "enabled"})
+		sort.Slice(metadata.Versions, func(i, j int) bool { return metadata.Versions[i].GetVersion() < metadata.Versions[j].GetVersion() })
+	}
+}
+
+func (s *Server) setSecretVersionMetadataLocked(display string, version uint64, state string, bound, hasAccessToken bool, expiresAtUnixMS int64) {
+	metadata := s.secretMetadata[display]
+	if metadata == nil {
+		return
+	}
+	for _, info := range metadata.Versions {
+		if info.GetVersion() != version {
+			continue
+		}
+		info.State = state
+		info.Bound = bound
+		info.HasAccessToken = hasAccessToken
+		info.ExpiresAtUnixMs = expiresAtUnixMS
+		if metadata.GetLabels()["current"] == version {
+			metadata.Bound = bound
+			metadata.HasAccessToken = hasAccessToken
+		}
+		return
+	}
+}
+
+// SetSecretVersionMetadata configures the live protection and availability of
+// one exact version. It never changes the immutable release manifest.
+func (s *Server) SetSecretVersionMetadata(namespace, key string, version uint64, state string, bound, hasAccessToken bool, expiresAtUnixMS int64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.setSecretVersionMetadataLocked(displayOf(resourceProto(namespace, key)), version, state, bound, hasAccessToken, expiresAtUnixMS)
 }
 
 // SetSecretPath is SetSecret addressed by display path.
@@ -534,12 +587,71 @@ func (s *Server) LastSecretToken(method string) string {
 	return s.lastSecretToken[method]
 }
 
+// LastBindingKey returns the operation-specific binding-key request field most
+// recently received by a secret RPC.
+func (s *Server) LastBindingKey(method string) string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.lastBindingKey[method]
+}
+
+// SecretCredentials returns the most recent GetSecret credentials for one
+// display path. Empty strings mean the credential was not sent.
+func (s *Server) SecretCredentials(displayPath string) (secretToken, bindingKey string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.secretTokens[displayPath], s.bindingKeys[displayPath]
+}
+
 // PutSecretCalls returns a copy of recorded PutSecret invocations.
 func (s *Server) PutSecretCalls() []PutSecretCall {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	out := make([]PutSecretCall, len(s.putSecrets))
 	copy(out, s.putSecrets)
+	return out
+}
+
+// BindSecretCalls returns deep copies of recorded BindSecret requests.
+func (s *Server) BindSecretCalls() []*kmsv1.BindSecretRequest {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return cloneProtoSlice(s.bindCalls)
+}
+
+// UnbindSecretCalls returns deep copies of recorded UnbindSecret requests.
+func (s *Server) UnbindSecretCalls() []*kmsv1.UnbindSecretRequest {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return cloneProtoSlice(s.unbindCalls)
+}
+
+// PreviewSecretBindingCohortCalls returns deep copies of recorded previews.
+func (s *Server) PreviewSecretBindingCohortCalls() []*kmsv1.PreviewSecretBindingCohortRequest {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return cloneProtoSlice(s.previewCalls)
+}
+
+// RotateSecretBindingKeyCalls returns deep copies of recorded rotations.
+func (s *Server) RotateSecretBindingKeyCalls() []*kmsv1.RotateSecretBindingKeyRequest {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return cloneProtoSlice(s.rotateCalls)
+}
+
+// PurgeSecretBindingCohortCalls returns deep copies of recorded purges.
+func (s *Server) PurgeSecretBindingCohortCalls() []*kmsv1.PurgeSecretBindingCohortRequest {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return cloneProtoSlice(s.purgeCalls)
+}
+
+func cloneProtoSlice[T proto.Message](in []T) []T {
+	out := make([]T, len(in))
+	for i, item := range in {
+		out[i] = proto.Clone(item).(T)
+	}
 	return out
 }
 
@@ -696,6 +808,9 @@ func (s *Server) GetSecret(ctx context.Context, req *kmsv1.GetSecretRequest) (*k
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.lastSecretToken["GetSecret"] = req.GetSecretToken()
+	s.lastBindingKey["GetSecret"] = req.GetBindingKey()
+	s.secretTokens[display] = req.GetSecretToken()
+	s.bindingKeys[display] = req.GetBindingKey()
 	if err := s.secretErr[display]; err != nil {
 		return nil, err
 	}
@@ -709,21 +824,32 @@ func (s *Server) GetSecret(ctx context.Context, req *kmsv1.GetSecretRequest) (*k
 	return meta, nil
 }
 
+func (s *Server) GetSecretMetadata(ctx context.Context, req *kmsv1.GetSecretMetadataRequest) (*kmsv1.GetSecretMetadataResponse, error) {
+	s.recordMD(ctx, "GetSecretMetadata")
+	display := displayOf(req.GetRef())
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	metadata := s.secretMetadata[display]
+	if metadata == nil {
+		return nil, notFound(display)
+	}
+	return &kmsv1.GetSecretMetadataResponse{Secret: proto.Clone(metadata).(*kmsv1.SecretMetadata)}, nil
+}
+
 func (s *Server) PutSecret(ctx context.Context, req *kmsv1.PutSecretRequest) (*kmsv1.PutSecretResponse, error) {
 	s.recordMD(ctx, "PutSecret")
 	display := displayOf(req.GetRef())
 	s.SetSecretPath(display, req.GetValue())
 	ns, key := splitDisplay(display)
 	s.mu.Lock()
-	s.lastSecretToken["PutSecret"] = req.GetSecretToken()
+	s.lastBindingKey["PutSecret"] = req.GetBindingKey()
 	s.putSecrets = append(s.putSecrets, PutSecretCall{
 		Namespace:           ns,
 		Key:                 key,
 		Path:                display,
 		Value:               req.GetValue(),
-		ClientBound:         req.GetClientBound(),
+		BindingKey:          req.GetBindingKey(),
 		GenerateAccessToken: req.GetGenerateAccessToken(),
-		SecretToken:         req.GetSecretToken(),
 	})
 	rev := s.revision
 	s.mu.Unlock()
@@ -732,6 +858,65 @@ func (s *Server) PutSecret(ctx context.Context, req *kmsv1.PutSecretRequest) (*k
 		resp.AccessToken = "minted-token-for-" + display
 	}
 	return resp, nil
+}
+
+func (s *Server) BindSecret(ctx context.Context, req *kmsv1.BindSecretRequest) (*kmsv1.SecretVersionMutationResponse, error) {
+	s.recordMD(ctx, "BindSecret")
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.bindCalls = append(s.bindCalls, proto.Clone(req).(*kmsv1.BindSecretRequest))
+	s.revision++
+	anchor := s.resolveSecretVersionLocked(displayOf(req.GetRef()), req.GetVersion())
+	return &kmsv1.SecretVersionMutationResponse{AnchorVersion: anchor, AffectedVersions: []uint64{anchor}, Revision: s.revision}, nil
+}
+
+func (s *Server) UnbindSecret(ctx context.Context, req *kmsv1.UnbindSecretRequest) (*kmsv1.SecretVersionMutationResponse, error) {
+	s.recordMD(ctx, "UnbindSecret")
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.unbindCalls = append(s.unbindCalls, proto.Clone(req).(*kmsv1.UnbindSecretRequest))
+	s.revision++
+	anchor := s.resolveSecretVersionLocked(displayOf(req.GetRef()), req.GetVersion())
+	return &kmsv1.SecretVersionMutationResponse{AnchorVersion: anchor, AffectedVersions: []uint64{anchor}, Revision: s.revision}, nil
+}
+
+func (s *Server) PreviewSecretBindingCohort(ctx context.Context, req *kmsv1.PreviewSecretBindingCohortRequest) (*kmsv1.SecretBindingCohortResponse, error) {
+	s.recordMD(ctx, "PreviewSecretBindingCohort")
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.previewCalls = append(s.previewCalls, proto.Clone(req).(*kmsv1.PreviewSecretBindingCohortRequest))
+	anchor := s.resolveSecretVersionLocked(displayOf(req.GetRef()), req.GetAnchorVersion())
+	return &kmsv1.SecretBindingCohortResponse{AnchorVersion: anchor, AffectedVersions: []uint64{anchor}, Revision: s.revision}, nil
+}
+
+func (s *Server) RotateSecretBindingKey(ctx context.Context, req *kmsv1.RotateSecretBindingKeyRequest) (*kmsv1.SecretBindingCohortResponse, error) {
+	s.recordMD(ctx, "RotateSecretBindingKey")
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.rotateCalls = append(s.rotateCalls, proto.Clone(req).(*kmsv1.RotateSecretBindingKeyRequest))
+	s.revision++
+	anchor := s.resolveSecretVersionLocked(displayOf(req.GetRef()), req.GetAnchorVersion())
+	return &kmsv1.SecretBindingCohortResponse{AnchorVersion: anchor, AffectedVersions: []uint64{anchor}, Revision: s.revision}, nil
+}
+
+func (s *Server) PurgeSecretBindingCohort(ctx context.Context, req *kmsv1.PurgeSecretBindingCohortRequest) (*kmsv1.SecretBindingCohortResponse, error) {
+	s.recordMD(ctx, "PurgeSecretBindingCohort")
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.purgeCalls = append(s.purgeCalls, proto.Clone(req).(*kmsv1.PurgeSecretBindingCohortRequest))
+	s.revision++
+	anchor := s.resolveSecretVersionLocked(displayOf(req.GetRef()), req.GetAnchorVersion())
+	return &kmsv1.SecretBindingCohortResponse{AnchorVersion: anchor, AffectedVersions: []uint64{anchor}, Revision: s.revision}, nil
+}
+
+func (s *Server) resolveSecretVersionLocked(display string, requested uint64) uint64 {
+	if requested != 0 {
+		return requested
+	}
+	if metadata := s.secretMetadata[display]; metadata != nil {
+		return metadata.GetLabels()["current"]
+	}
+	return 0
 }
 
 // --- AdminService ----------------------------------------------------------

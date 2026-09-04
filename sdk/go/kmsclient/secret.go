@@ -18,6 +18,10 @@ const redactedText = "[REDACTED]"
 //
 // Secret is a value type; copies redact identically.
 type Secret struct {
+	// BindKey is a declaration-only credential used by generated configuration
+	// stores. Secrets fetched from KMS always leave it empty.
+	BindKey string
+
 	value       []byte
 	path        string
 	version     uint64
@@ -44,8 +48,8 @@ func (s Secret) Version() uint64 { return s.version }
 func (s Secret) ContentType() string { return s.contentType }
 
 // Clone returns an independent copy of the Secret. The plaintext buffer is
-// deep-copied while the immutable path, version, and content-type metadata are
-// preserved.
+// deep-copied while declaration credentials and immutable metadata are
+// preserved. Generated stores strip BindKey before retaining resolved values.
 func (s Secret) Clone() Secret {
 	s.value = append([]byte(nil), s.value...)
 	return s

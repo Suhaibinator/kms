@@ -145,12 +145,23 @@ func Start(ctx context.Context, client *kmsclient.Client, options Options) (*Sto
 	if !defaults.RuntimeToken.IsZero() || defaults.RuntimeToken.Path() != "" || defaults.RuntimeToken.Version() != 0 || defaults.RuntimeToken.ContentType() != "" {
 		return nil, fmt.Errorf("generated config store: default secret RuntimeToken must be zero")
 	}
-	store := &Store{defaults: cloneRoot(defaults)}
+	bindingKeys := make(map[string]string)
+	if defaults.Password.BindKey != "" {
+		bindingKeys["database_password"] = defaults.Password.BindKey
+	}
+	if defaults.RuntimeToken.BindKey != "" {
+		bindingKeys["runtime_token"] = defaults.RuntimeToken.BindKey
+	}
+	sanitizedDefaults := cloneRoot(defaults)
+	sanitizedDefaults.Password.BindKey = ""
+	sanitizedDefaults.RuntimeToken.BindKey = ""
+	store := &Store{defaults: sanitizedDefaults}
 	manager, err := configstore.Start(ctx, client, configstore.Options{
 		Release:              options.Release,
 		Contract:             generatedContract,
 		Callbacks:            options.Callbacks,
 		SecretTokenProvider:  options.SecretTokenProvider,
+		BindingKeys:          bindingKeys,
 		ReconcileInterval:    options.ReconcileInterval,
 		MaxConcurrentFetches: options.MaxConcurrentFetches,
 		InstanceID:           options.InstanceID,
@@ -190,11 +201,13 @@ func (s *Store) prepare(ctx context.Context, snapshot kmsclient.ReleaseSnapshot)
 		return configstore.PreparedCandidate{}, configstore.Reject(configstore.RejectConfigContractMismatch, fmt.Errorf("missing secret alias database_password"))
 	}
 	candidate.Password = secret0.Clone()
+	candidate.Password.BindKey = ""
 	secret1, ok := snapshot.Secret("runtime_token")
 	if !ok {
 		return configstore.PreparedCandidate{}, configstore.Reject(configstore.RejectConfigContractMismatch, fmt.Errorf("missing secret alias runtime_token"))
 	}
 	candidate.RuntimeToken = secret1.Clone()
+	candidate.RuntimeToken.BindKey = ""
 	if err := candidate.Validate(); err != nil {
 		return configstore.PreparedCandidate{}, configstore.Reject(configstore.RejectConfigValidationFailed, fmt.Errorf("validate KMS configuration: %w", err))
 	}
@@ -203,7 +216,9 @@ func (s *Store) prepare(ctx context.Context, snapshot kmsclient.ReleaseSnapshot)
 	}
 	effectiveDefaults := cloneRoot(s.defaults)
 	effectiveDefaults.Password = secret0.Clone()
+	effectiveDefaults.Password.BindKey = ""
 	effectiveDefaults.RuntimeToken = secret1.Clone()
+	effectiveDefaults.RuntimeToken.BindKey = ""
 	if err := effectiveDefaults.Validate(); err != nil {
 		return configstore.PreparedCandidate{}, configstore.Reject(configstore.RejectConfigValidationFailed, fmt.Errorf("validate effective application defaults: %w", err))
 	}

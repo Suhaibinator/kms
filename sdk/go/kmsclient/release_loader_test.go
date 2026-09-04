@@ -27,13 +27,23 @@ type releaseLoaderServer struct {
 	kmsv1.UnimplementedSecretServiceServer
 	kmsv1.UnimplementedConfigurationReleaseServiceServer
 
-	mu               sync.Mutex
-	active           *kmsv1.GetActiveReleaseResponse
-	parameters       map[string]*kmsv1.Parameter
-	secrets          map[string]*kmsv1.GetSecretResponse
-	secretToken      string
-	parameterFetches int
-	secretFetches    int
+	mu                    sync.Mutex
+	active                *kmsv1.GetActiveReleaseResponse
+	parameters            map[string]*kmsv1.Parameter
+	secrets               map[string]*kmsv1.GetSecretResponse
+	secretToken           string
+	bindingKey            string
+	secretBound           bool
+	secretHasToken        bool
+	secretSummaryBound    bool
+	secretSummaryHasToken bool
+	secretState           string
+	secretExpiry          int64
+	expectedToken         string
+	expectedBindKey       string
+	parameterFetches      int
+	metadataFetches       int
+	secretFetches         int
 
 	watchEvents chan *kmsv1.WatchReleaseEvent
 	watchKills  chan struct{}
@@ -43,12 +53,14 @@ type releaseLoaderServer struct {
 
 func newReleaseLoaderServer() *releaseLoaderServer {
 	return &releaseLoaderServer{
-		parameters:  make(map[string]*kmsv1.Parameter),
-		secrets:     make(map[string]*kmsv1.GetSecretResponse),
-		watchEvents: make(chan *kmsv1.WatchReleaseEvent, 16),
-		watchKills:  make(chan struct{}, 4),
-		watchRegs:   make(chan *kmsv1.ReleaseWatchRegistration, 4),
-		acks:        make(chan *kmsv1.ReleaseAcknowledgement, 32),
+		parameters:     make(map[string]*kmsv1.Parameter),
+		secrets:        make(map[string]*kmsv1.GetSecretResponse),
+		watchEvents:    make(chan *kmsv1.WatchReleaseEvent, 16),
+		watchKills:     make(chan struct{}, 4),
+		watchRegs:      make(chan *kmsv1.ReleaseWatchRegistration, 4),
+		acks:           make(chan *kmsv1.ReleaseAcknowledgement, 32),
+		secretHasToken: true,
+		secretState:    "enabled",
 	}
 }
 
@@ -72,11 +84,36 @@ func (s *releaseLoaderServer) GetSecret(ctx context.Context, req *kmsv1.GetSecre
 	defer s.mu.Unlock()
 	s.secretFetches++
 	s.secretToken = req.GetSecretToken()
+	s.bindingKey = req.GetBindingKey()
+	if s.expectedToken != "" && req.GetSecretToken() != s.expectedToken {
+		return nil, status.Error(7, "credential rejected")
+	}
+	if s.expectedBindKey != "" && req.GetBindingKey() != s.expectedBindKey {
+		return nil, status.Error(7, "credential rejected")
+	}
 	secret := s.secrets[req.GetRef().GetKey()]
 	if secret == nil {
 		return nil, status.Error(5, "not found")
 	}
 	return secret, nil
+}
+
+func (s *releaseLoaderServer) GetSecretMetadata(_ context.Context, req *kmsv1.GetSecretMetadataRequest) (*kmsv1.GetSecretMetadataResponse, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.metadataFetches++
+	secret := s.secrets[req.GetRef().GetKey()]
+	if secret == nil {
+		return nil, status.Error(5, "not found")
+	}
+	return &kmsv1.GetSecretMetadataResponse{Secret: &kmsv1.SecretMetadata{
+		Ref: secret.GetRef(), ContentType: secret.GetContentType(), Bound: s.secretSummaryBound,
+		HasAccessToken: s.secretSummaryHasToken, Labels: map[string]uint64{"current": secret.GetVersion()},
+		Versions: []*kmsv1.SecretVersionInfo{{
+			Version: secret.GetVersion(), State: s.secretState, ExpiresAtUnixMs: s.secretExpiry,
+			Bound: s.secretBound, HasAccessToken: s.secretHasToken,
+		}},
+	}}, nil
 }
 
 func (s *releaseLoaderServer) GetActiveRelease(_ context.Context, _ *kmsv1.GetActiveReleaseRequest) (*kmsv1.GetActiveReleaseResponse, error) {
@@ -144,7 +181,7 @@ func testRelease(version uint64, parameterValue string) *kmsv1.ConfigurationRele
 			},
 			{
 				Alias: "password", Kind: "secret", Ref: testResource("password"), Version: version,
-				ContentType: "text/plain", HasAccessToken: true,
+				ContentType: "text/plain",
 			},
 		},
 	}
@@ -479,6 +516,164 @@ func TestReleaseLoaderResolvesRedactsCommitsAndAcknowledges(t *testing.T) {
 	cancel()
 	if err := <-runErr; err != context.Canceled {
 		t.Fatalf("Run error = %v, want context.Canceled", err)
+	}
+}
+
+func newExactProtectionResolution(t *testing.T, bound, hasToken bool) (*releaseLoaderServer, releaseCandidate) {
+	t.Helper()
+	server := newReleaseLoaderServer()
+	server.secretBound = bound
+	server.secretHasToken = hasToken
+	release := testRelease(7, `{"enabled":true}`)
+	server.parameters["settings"] = &kmsv1.Parameter{Ref: testResource("settings"), Value: `{"enabled":true}`, ContentType: "json", Version: 7}
+	server.secrets["password"] = &kmsv1.GetSecretResponse{Ref: testResource("password"), Version: 7, Value: []byte("very-secret"), ContentType: "text/plain"}
+	return server, releaseCandidate{release: release, revision: 42}
+}
+
+func TestReleaseLoaderUsesExactLiveProtectionAndBothCredentials(t *testing.T) {
+	server, candidate := newExactProtectionResolution(t, true, true)
+	server.expectedToken = "access-token"
+	server.expectedBindKey = "binding-key"
+	client := newReleaseTestClient(t, server)
+	bindingKeys := map[string]string{"password": "binding-key", "unused": "never-sent"}
+	loader, err := NewReleaseLoader(client, ReleaseLoaderConfig{
+		Name: "runtime",
+		SecretTokenProvider: func(alias, path string) (string, bool) {
+			if alias != "password" || path != "/prod/app/password" {
+				t.Fatalf("provider arguments = %q %q", alias, path)
+			}
+			return "access-token", true
+		},
+		BindingKeys: bindingKeys,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Loader construction must sever the caller's map alias.
+	bindingKeys["password"] = "mutated-after-construction"
+
+	snapshot, category, err := loader.resolveCandidate(context.Background(), namespaceRef{env: "prod", app: "app"}, candidate)
+	if err != nil || category != "" {
+		t.Fatalf("resolveCandidate category=%q error=%v", category, err)
+	}
+	secret, ok := snapshot.Secret("password")
+	if !ok || secret.StringValue() != "very-secret" || secret.BindKey != "" {
+		t.Fatalf("resolved secret = %v, present=%t, BindKey=%q", secret, ok, secret.BindKey)
+	}
+	server.mu.Lock()
+	token, key := server.secretToken, server.bindingKey
+	metadataFetches, secretFetches := server.metadataFetches, server.secretFetches
+	server.mu.Unlock()
+	if token != "access-token" || key != "binding-key" || metadataFetches != 1 || secretFetches != 1 {
+		t.Fatalf("credentials/fetches = token:%q key:%q metadata:%d secret:%d", token, key, metadataFetches, secretFetches)
+	}
+}
+
+func TestReleaseLoaderCredentialFailureCategories(t *testing.T) {
+	tests := []struct {
+		name       string
+		bound      bool
+		hasToken   bool
+		provider   SecretTokenProvider
+		bindingKey string
+		expectKey  string
+		want       string
+	}{
+		{name: "missing access token", hasToken: true, want: ReleaseRejectTokenUnavailable},
+		{name: "provider returns empty", hasToken: true, provider: func(string, string) (string, bool) { return "", true }, want: ReleaseRejectTokenUnavailable},
+		{name: "provider panic", hasToken: true, provider: func(string, string) (string, bool) { panic("credential material") }, want: ReleaseRejectTokenUnavailable},
+		{name: "missing binding key", bound: true, want: ReleaseRejectTokenUnavailable},
+		{name: "wrong binding key", bound: true, bindingKey: "wrong-binding-key", expectKey: "right-binding-key", want: ReleaseRejectResolutionFailed},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			server, candidate := newExactProtectionResolution(t, test.bound, test.hasToken)
+			server.expectedBindKey = test.expectKey
+			client := newReleaseTestClient(t, server)
+			keys := map[string]string{}
+			if test.bindingKey != "" {
+				keys["password"] = test.bindingKey
+			}
+			loader, err := NewReleaseLoader(client, ReleaseLoaderConfig{Name: "runtime", SecretTokenProvider: test.provider, BindingKeys: keys})
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, category, err := loader.resolveCandidate(context.Background(), namespaceRef{env: "prod", app: "app"}, candidate)
+			if err == nil || category != test.want {
+				t.Fatalf("resolveCandidate category=%q error=%v, want %q", category, err, test.want)
+			}
+			if (test.bindingKey != "" && strings.Contains(err.Error(), test.bindingKey)) ||
+				(test.expectKey != "" && strings.Contains(err.Error(), test.expectKey)) {
+				t.Fatalf("resolution error leaked a binding key: %v", err)
+			}
+		})
+	}
+}
+
+func TestReleaseLoaderRejectsUnavailableVersionBeforeCredentialCallbacks(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		state  string
+		expiry int64
+	}{
+		{name: "disabled", state: "disabled"},
+		{name: "destroyed", state: "destroyed"},
+		{name: "expired", state: "enabled", expiry: 1},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			server, candidate := newExactProtectionResolution(t, true, true)
+			server.secretState = test.state
+			server.secretExpiry = test.expiry
+			var providerCalls atomic.Int32
+			client := newReleaseTestClient(t, server)
+			loader, err := NewReleaseLoader(client, ReleaseLoaderConfig{
+				Name: "runtime", BindingKeys: map[string]string{"password": "binding-key"},
+				SecretTokenProvider: func(string, string) (string, bool) { providerCalls.Add(1); return "token", true },
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, category, err := loader.resolveCandidate(context.Background(), namespaceRef{env: "prod", app: "app"}, candidate)
+			if err == nil || category != ReleaseRejectResolutionFailed {
+				t.Fatalf("category=%q error=%v", category, err)
+			}
+			server.mu.Lock()
+			secretFetches := server.secretFetches
+			server.mu.Unlock()
+			if providerCalls.Load() != 0 || secretFetches != 0 {
+				t.Fatalf("unavailable version probed credentials/value: provider=%d secret=%d", providerCalls.Load(), secretFetches)
+			}
+		})
+	}
+}
+
+func TestReleaseLoaderRejectsForeignEntryBeforeAnyCallback(t *testing.T) {
+	server, candidate := newExactProtectionResolution(t, true, true)
+	secretEntry := candidate.release.Entries[1]
+	secretEntry.Ref = &kmsv1.ResourceRef{Namespace: &kmsv1.NamespaceRef{Env: "prod", App: "other"}, Key: "password"}
+	candidate.release.Digest, _ = deterministicReleaseDigest(candidate.release)
+	var validatorCalls, providerCalls atomic.Int32
+	client := newReleaseTestClient(t, server)
+	loader, err := NewReleaseLoader(client, ReleaseLoaderConfig{
+		Name: "runtime", BindingKeys: map[string]string{"password": "binding-key"},
+		ValidateManifest:    func(context.Context, ReleaseManifest) error { validatorCalls.Add(1); return nil },
+		SecretTokenProvider: func(string, string) (string, bool) { providerCalls.Add(1); return "token", true },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, category, err := loader.resolveCandidate(context.Background(), namespaceRef{env: "prod", app: "app"}, candidate)
+	if err == nil || category != ReleaseRejectResolutionFailed {
+		t.Fatalf("category=%q error=%v", category, err)
+	}
+	if validatorCalls.Load() != 0 || providerCalls.Load() != 0 {
+		t.Fatalf("foreign pin reached callbacks: validator=%d provider=%d", validatorCalls.Load(), providerCalls.Load())
+	}
+	server.mu.Lock()
+	parameterFetches, metadataFetches, secretFetches := server.parameterFetches, server.metadataFetches, server.secretFetches
+	server.mu.Unlock()
+	if parameterFetches != 0 || metadataFetches != 0 || secretFetches != 0 {
+		t.Fatalf("foreign pin triggered fetches: parameter=%d metadata=%d secret=%d", parameterFetches, metadataFetches, secretFetches)
 	}
 }
 
