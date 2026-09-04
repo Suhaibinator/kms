@@ -80,6 +80,53 @@ type EncryptedPayload struct {
 	AAD            string
 }
 
+// SecretBindingWrapping is the only mutation surface exposed to binding-key
+// cryptography callbacks. Keeping value ciphertext, nonce, algorithm, and AAD
+// out of this type makes it impossible for an in-place binding operation to
+// rewrite the encrypted secret value accidentally.
+type SecretBindingWrapping struct {
+	EncryptedDEK   []byte
+	KEKID          string
+	WrapMode       string
+	BindingKeySalt []byte
+}
+
+// SecretBindingTestFunc proves that a caller-held binding key can open one
+// persisted version. The key itself remains entirely above storage.
+type SecretBindingTestFunc func(SecretVersionRecord) error
+
+// SecretBindingRewrapFunc opens and rewraps one persisted DEK above storage.
+// Implementations must be pure computation: no I/O and no calls into storage.
+type SecretBindingRewrapFunc func(SecretVersionRecord) (SecretBindingWrapping, error)
+
+// SecretBindingCASGuard optionally binds rotate/purge execution to a preview.
+// The zero value means no guard. Otherwise both fields are required and the
+// versions must be non-empty, sorted, and unique.
+type SecretBindingCASGuard struct {
+	ExpectedRevision         *uint64
+	ExpectedAffectedVersions []uint64
+}
+
+// SecretBindingResult is returned by exact-version and cohort operations.
+// AffectedVersions is always non-empty, sorted, and unique on success.
+type SecretBindingResult struct {
+	AnchorVersion    uint64
+	AffectedVersions []uint64
+	Revision         uint64
+}
+
+// SecretBindingPurgeAudit is the deliberately narrow request context storage
+// accepts for a purge. Storage supplies the fixed event/resource/decision and
+// sanitized metadata, so no caller credential can enter the durable audit row.
+type SecretBindingPurgeAudit struct {
+	ActorIdentity string
+	ActorType     string
+	SourceIP      string
+	UserAgent     string
+	RequestID     string
+	CreatedAt     time.Time
+}
+
 // SecretWriteExpectation is the secret state observed by the service before it
 // prepares a write. Storage compares it inside the write transaction so an
 // absent secret cannot silently become an update and a client-bound write
@@ -253,6 +300,23 @@ type Store interface {
 	// Bound and unbound versions may freely alternate. Fails with
 	// domain.ErrAborted if p.Expected no longer matches the secret row.
 	CreateSecretVersion(ctx context.Context, p CreateSecretParams) (version, revision uint64, err error)
+
+	// BindSecretVersion and UnbindSecretVersion rewrap exactly one version in
+	// place. version 0 resolves the current label. Storage never receives the
+	// binding key; the callback receives only the persisted encrypted record.
+	BindSecretVersion(ctx context.Context, ref domain.Ref, version uint64, rewrap SecretBindingRewrapFunc) (SecretBindingResult, error)
+	UnbindSecretVersion(ctx context.Context, ref domain.Ref, version uint64, rewrap SecretBindingRewrapFunc) (SecretBindingResult, error)
+
+	// PreviewSecretBindingCohort discovers the contiguous cohort around anchor
+	// (0 = current) and returns the coherent global storage revision.
+	PreviewSecretBindingCohort(ctx context.Context, ref domain.Ref, anchor uint64, test SecretBindingTestFunc) (SecretBindingResult, error)
+	// RotateSecretBindingKey rediscovers and optionally CAS-checks the cohort,
+	// then rewraps every selected DEK atomically.
+	RotateSecretBindingKey(ctx context.Context, ref domain.Ref, anchor uint64, guard SecretBindingCASGuard, testOld SecretBindingTestFunc, rewrapNew SecretBindingRewrapFunc) (SecretBindingResult, error)
+	// PurgeSecretBindingCohort rediscovers and optionally CAS-checks the cohort,
+	// writes minimal tombstones, and appends its changelog and allow-audit rows
+	// in the same transaction. It intentionally bypasses release-pin guards.
+	PurgeSecretBindingCohort(ctx context.Context, ref domain.Ref, anchor uint64, guard SecretBindingCASGuard, test SecretBindingTestFunc, audit SecretBindingPurgeAudit) (SecretBindingResult, error)
 
 	GetSecretRecord(ctx context.Context, ref domain.Ref) (SecretRecord, error)
 	// GetSecretVersion resolves version (>0) or label (default "current") and

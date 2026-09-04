@@ -244,18 +244,19 @@ func (auditEventModel) TableName() string { return "audit_events" }
 // changeLogDDL) to guarantee INTEGER PRIMARY KEY AUTOINCREMENT; this struct is
 // used only for queries.
 type changeLogModel struct {
-	Revision      int64   `gorm:"column:revision;primaryKey;autoIncrement"`
-	ResourceType  string  `gorm:"column:resource_type;not null"`
-	NamespaceID   int64   `gorm:"column:namespace_id;not null;default:0;index:idx_change_log_namespace_revision,priority:1"`
-	Env           string  `gorm:"column:env;not null"`
-	App           string  `gorm:"column:app;not null"`
-	Key           string  `gorm:"column:key;not null"`
-	ChangeType    string  `gorm:"column:change_type;not null"`
-	Value         *string `gorm:"column:value"`
-	ContentType   string  `gorm:"column:content_type;not null;default:''"`
-	VersionNumber int64   `gorm:"column:version_number;not null;default:0"`
-	Label         string  `gorm:"column:label;not null;default:''"`
-	CreatedAt     string  `gorm:"column:created_at;not null"`
+	Revision             int64   `gorm:"column:revision;primaryKey;autoIncrement"`
+	ResourceType         string  `gorm:"column:resource_type;not null"`
+	NamespaceID          int64   `gorm:"column:namespace_id;not null;default:0;index:idx_change_log_namespace_revision,priority:1"`
+	Env                  string  `gorm:"column:env;not null"`
+	App                  string  `gorm:"column:app;not null"`
+	Key                  string  `gorm:"column:key;not null"`
+	ChangeType           string  `gorm:"column:change_type;not null"`
+	Value                *string `gorm:"column:value"`
+	ContentType          string  `gorm:"column:content_type;not null;default:''"`
+	VersionNumber        int64   `gorm:"column:version_number;not null;default:0"`
+	AffectedVersionsJSON string  `gorm:"column:affected_versions_json;not null;default:'[]'"`
+	Label                string  `gorm:"column:label;not null;default:''"`
+	CreatedAt            string  `gorm:"column:created_at;not null"`
 }
 
 func (changeLogModel) TableName() string { return "change_log" }
@@ -542,17 +543,22 @@ func toChangeEntry(m changeLogModel) domain.ChangeLogEntry {
 	if m.Value != nil {
 		value = *m.Value
 	}
+	var affectedVersions []uint64
+	if err := json.Unmarshal([]byte(zeroOr(m.AffectedVersionsJSON, "[]")), &affectedVersions); err != nil {
+		affectedVersions = nil
+	}
 	return domain.ChangeLogEntry{
-		Revision:     uint64(m.Revision),
-		ResourceType: m.ResourceType,
-		NamespaceID:  m.NamespaceID,
-		Ref:          domain.Ref{NS: domain.NamespaceRef{Env: m.Env, App: m.App}, Key: m.Key},
-		ChangeType:   m.ChangeType,
-		Value:        value,
-		ContentType:  m.ContentType,
-		Version:      uint64(m.VersionNumber),
-		Label:        m.Label,
-		CreatedAt:    parseTime(m.CreatedAt),
+		Revision:         uint64(m.Revision),
+		ResourceType:     m.ResourceType,
+		NamespaceID:      m.NamespaceID,
+		Ref:              domain.Ref{NS: domain.NamespaceRef{Env: m.Env, App: m.App}, Key: m.Key},
+		ChangeType:       m.ChangeType,
+		Value:            value,
+		ContentType:      m.ContentType,
+		Version:          uint64(m.VersionNumber),
+		AffectedVersions: affectedVersions,
+		Label:            m.Label,
+		CreatedAt:        parseTime(m.CreatedAt),
 	}
 }
 

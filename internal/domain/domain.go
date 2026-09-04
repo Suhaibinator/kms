@@ -373,8 +373,11 @@ type ChangeLogEntry struct {
 	Value       string // parameter value for puts; empty for secrets
 	ContentType string
 	Version     uint64
-	Label       string
-	CreatedAt   time.Time
+	// AffectedVersions records the exact sorted version set for one atomic
+	// multi-version secret mutation. It is empty for ordinary changes.
+	AffectedVersions []uint64
+	Label            string
+	CreatedAt        time.Time
 }
 
 // Subscriber describes one live watch stream in the registry. Namespaces are

@@ -46,6 +46,7 @@ const changeLogDDL = `CREATE TABLE IF NOT EXISTS change_log (
 	value          TEXT,
 	content_type   TEXT NOT NULL DEFAULT '',
 	version_number INTEGER NOT NULL DEFAULT 0,
+	affected_versions_json TEXT NOT NULL DEFAULT '[]',
 	label          TEXT NOT NULL DEFAULT '',
 	created_at     TEXT NOT NULL
 )`
@@ -582,6 +583,9 @@ func appendChange(tx *gorm.DB, cl *changeLogModel) (uint64, error) {
 	}
 	if cl.CreatedAt == "" {
 		cl.CreatedAt = fmtTime(time.Now())
+	}
+	if cl.AffectedVersionsJSON == "" {
+		cl.AffectedVersionsJSON = "[]"
 	}
 	if err := tx.Omit(clause.Associations).Create(cl).Error; err != nil {
 		return 0, err
