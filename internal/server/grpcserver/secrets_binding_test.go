@@ -141,7 +141,7 @@ func TestSecretBindingTransportLifecycle(t *testing.T) {
 	assertMetadata(false, []bool{true, false, true})
 
 	bound, err := client.BindSecret(adminCtx(), &kmsv1.BindSecretRequest{
-		Ref: secretRef, Version: 0, BindingKey: grpcBindingKeyA,
+		Ref: secretRef, Version: 0, BindingKey: grpcBindingKeyC,
 	})
 	if err != nil {
 		t.Fatalf("bind current: %v", err)
@@ -152,7 +152,7 @@ func TestSecretBindingTransportLifecycle(t *testing.T) {
 	assertMetadata(true, []bool{true, true, true})
 
 	unbound, err := client.UnbindSecret(adminCtx(), &kmsv1.UnbindSecretRequest{
-		Ref: secretRef, Version: 2, BindingKey: grpcBindingKeyA,
+		Ref: secretRef, Version: 2, BindingKey: grpcBindingKeyC,
 	})
 	if err != nil {
 		t.Fatalf("unbind v2: %v", err)

@@ -137,6 +137,11 @@ KMS_BINDING_KEY="$new_key" parameter-store secret bind /prod/app/api-key --versi
 KMS_BINDING_KEY="$current_key" parameter-store secret unbind /prod/app/api-key --version 7
 ```
 
+Bind refuses a proposed key that already opens either immediate live bound
+neighbor of the selected version. This prevents an exact-version operation
+from silently joining cohorts outside its singleton affected-version result.
+Unbind can only split a cohort and needs no corresponding check.
+
 `--version 0` (the default) selects `current`. Rotation and purge first preview
 the contiguous cohort around the anchor, print the exact affected versions,
 and request confirmation. They replay the preview's revision and version list
@@ -158,6 +163,17 @@ the fixed `invalid_argument` error. Consequently, a missing or wrong current
 key still follows the same sanitized credential/decryption path, and a stale
 preview still reports a conflict rather than revealing the equality decision.
 No key material is included in the error.
+
+Rotation also refuses a replacement key that opens an immediate live bound
+neighbor just outside the rediscovered source cohort. The server performs this
+check inside the mutation transaction, after validating the optional preview
+guard and before preparing or writing any rewrapped DEK. A rejected implicit
+merge returns a fixed, sanitized `failed_precondition` and changes no version,
+revision, change log, or allow audit. Missing, unbound, destroyed, corrupt, and
+differently keyed versions remain hard boundaries, so the same key may still
+be reused beyond one of them. Intentional cohort merging is not supported in
+`0.3.x`; a future merge operation would need to preview and guard the complete
+resulting cohort.
 
 Purge requires an authenticated administrator and is irreversible. It bypasses
 the normal current/previous release-reference safeguard because its purpose is

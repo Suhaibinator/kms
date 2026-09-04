@@ -195,7 +195,7 @@ func TestSecretBindingExactVersionLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := st.BindSecretVersion(ctx, r, 0, func(SecretVersionRecord) (SecretBindingWrapping, error) {
+	if _, err := st.BindSecretVersion(ctx, r, 0, bindingKeyTest('B'), func(SecretVersionRecord) (SecretBindingWrapping, error) {
 		return SecretBindingWrapping{}, callbackFailure
 	}, SecretBindingAudit{}); !errors.Is(err, callbackFailure) {
 		t.Fatalf("callback failure = %v", err)
@@ -207,14 +207,14 @@ func TestSecretBindingExactVersionLifecycle(t *testing.T) {
 		t.Fatalf("failed bind revision = %d, want %d", revision, revisionBefore)
 	}
 
-	if _, err := st.BindSecretVersion(ctx, r, 1, func(rec SecretVersionRecord) (SecretBindingWrapping, error) {
+	if _, err := st.BindSecretVersion(ctx, r, 1, bindingKeyTest('B'), func(rec SecretVersionRecord) (SecretBindingWrapping, error) {
 		return SecretBindingWrapping{EncryptedDEK: []byte("new"), KEKID: "different-kek", WrapMode: domain.WrapModeBindingKey, BindingKeySalt: []byte("fresh")}, nil
 	}, SecretBindingAudit{}); !errors.Is(err, domain.ErrFailedPrecondition) {
 		t.Fatalf("changed KEK = %v", err)
 	}
 
 	auditContext := SecretBindingAudit{ActorIdentity: "binding-operator", ActorType: domain.IdentityKindClient, RequestID: "request-exact"}
-	result, err := st.BindSecretVersion(ctx, r, 0, func(rec SecretVersionRecord) (SecretBindingWrapping, error) {
+	result, err := st.BindSecretVersion(ctx, r, 0, bindingKeyTest('B'), func(rec SecretVersionRecord) (SecretBindingWrapping, error) {
 		// Callback-owned buffer changes must not leak into the stored payload.
 		rec.Ciphertext[0] = 'X'
 		rec.Nonce[0] = 'Y'
@@ -298,7 +298,7 @@ func TestCreateAndBindRequireExactBindingSaltSize(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, size := range []int{0, crypto.BindingKeySaltSize - 1, crypto.BindingKeySaltSize + 1} {
-		_, err := st.BindSecretVersion(ctx, r, 1, func(rec SecretVersionRecord) (SecretBindingWrapping, error) {
+		_, err := st.BindSecretVersion(ctx, r, 1, bindingKeyTest('B'), func(rec SecretVersionRecord) (SecretBindingWrapping, error) {
 			return SecretBindingWrapping{
 				EncryptedDEK:   []byte("rewrapped"),
 				KEKID:          rec.KEKID,
@@ -315,6 +315,62 @@ func TestCreateAndBindRequireExactBindingSaltSize(t *testing.T) {
 		if got, _ := st.CurrentRevision(ctx); got != revision {
 			t.Fatalf("invalid bind salt length %d changed revision to %d, want %d", size, got, revision)
 		}
+	}
+}
+
+func TestBindSecretVersionRejectsImplicitCohortMergeAtomically(t *testing.T) {
+	tests := []struct {
+		name          string
+		keys          []byte
+		targetVersion uint64
+	}{
+		{name: "both sides", keys: []byte{'A', 0, 'A'}, targetVersion: 2},
+		{name: "lower neighbor", keys: []byte{'A', 0}, targetVersion: 2},
+		{name: "upper neighbor", keys: []byte{0, 'A'}, targetVersion: 1},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			st := newStore(t)
+			ctx := context.Background()
+			seedNS(t, st, "prod", "app")
+			r := ref("prod", "app", "bind-merge")
+			for _, key := range tc.keys {
+				putBindingVersion(t, st, r, key)
+			}
+			before := make([]secretVersionModel, len(tc.keys))
+			for i := range before {
+				before[i] = rawSecretVersion(t, st, r, uint64(i+1))
+			}
+			revisionBefore, err := st.CurrentRevision(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			rewrapCalls := 0
+			_, err = st.BindSecretVersion(ctx, r, tc.targetVersion, bindingKeyTest('A'), func(rec SecretVersionRecord) (SecretBindingWrapping, error) {
+				rewrapCalls++
+				return bindingRewrap('A', 'n')(rec)
+			}, SecretBindingAudit{ActorIdentity: "operator"})
+			if !errors.Is(err, domain.ErrFailedPrecondition) || err.Error() != "binding change would merge an adjacent cohort: failed precondition" {
+				t.Fatalf("BindSecretVersion = %v, want sanitized merge failure", err)
+			}
+			if rewrapCalls != 0 {
+				t.Fatalf("rewrap calls = %d, want 0", rewrapCalls)
+			}
+			for i, want := range before {
+				if got := rawSecretVersion(t, st, r, uint64(i+1)); !reflect.DeepEqual(bindingRowSnapshot(got), bindingRowSnapshot(want)) {
+					t.Fatalf("rejected bind changed version %d", i+1)
+				}
+			}
+			if revision, _ := st.CurrentRevision(ctx); revision != revisionBefore {
+				t.Fatalf("rejected bind revision = %d, want %d", revision, revisionBefore)
+			}
+			if changes, err := st.ListChangesSince(ctx, revisionBefore, 10); err != nil || len(changes) != 0 {
+				t.Fatalf("rejected bind changes = %+v err=%v", changes, err)
+			}
+			if audits, _, err := st.ListAudit(ctx, domain.AuditFilter{EventType: bindSecretAuditEvent}, ListPage{}); err != nil || len(audits) != 0 {
+				t.Fatalf("rejected bind allow audits = %+v err=%v", audits, err)
+			}
+		})
 	}
 }
 
@@ -419,7 +475,7 @@ func TestRotateSecretBindingKeyCASRollbackAndStaleRows(t *testing.T) {
 	}
 	for _, guard := range invalidGuards {
 		rewrapCalls := 0
-		_, err := st.RotateSecretBindingKey(ctx, r, 2, guard, bindingKeyTest('B'), func(rec SecretVersionRecord) (SecretBindingWrapping, error) {
+		_, err := st.RotateSecretBindingKey(ctx, r, 2, guard, bindingKeyTest('B'), bindingKeyTest('C'), func(rec SecretVersionRecord) (SecretBindingWrapping, error) {
 			rewrapCalls++
 			return bindingRewrap('C', 'n')(rec)
 		}, SecretBindingAudit{})
@@ -434,7 +490,7 @@ func TestRotateSecretBindingKeyCASRollbackAndStaleRows(t *testing.T) {
 	rewrapCalls := 0
 	_, err = st.RotateSecretBindingKey(ctx, r, 2, SecretBindingCASGuard{
 		ExpectedRevision: uint64Pointer(preview.Revision), ExpectedAffectedVersions: preview.AffectedVersions,
-	}, bindingKeyTest('B'), func(rec SecretVersionRecord) (SecretBindingWrapping, error) {
+	}, bindingKeyTest('B'), bindingKeyTest('C'), func(rec SecretVersionRecord) (SecretBindingWrapping, error) {
 		rewrapCalls++
 		return bindingRewrap('C', 'n')(rec)
 	}, SecretBindingAudit{})
@@ -448,7 +504,7 @@ func TestRotateSecretBindingKeyCASRollbackAndStaleRows(t *testing.T) {
 	}
 	_, err = st.RotateSecretBindingKey(ctx, r, 2, SecretBindingCASGuard{
 		ExpectedRevision: uint64Pointer(preview.Revision), ExpectedAffectedVersions: []uint64{1, 2},
-	}, bindingKeyTest('B'), func(rec SecretVersionRecord) (SecretBindingWrapping, error) {
+	}, bindingKeyTest('B'), bindingKeyTest('C'), func(rec SecretVersionRecord) (SecretBindingWrapping, error) {
 		rewrapCalls++
 		return bindingRewrap('C', 'n')(rec)
 	}, SecretBindingAudit{})
@@ -463,7 +519,7 @@ func TestRotateSecretBindingKeyCASRollbackAndStaleRows(t *testing.T) {
 	callbackFailure := errors.New("rewrap version two")
 	_, err = st.RotateSecretBindingKey(ctx, r, 2, SecretBindingCASGuard{
 		ExpectedRevision: uint64Pointer(preview.Revision), ExpectedAffectedVersions: preview.AffectedVersions,
-	}, bindingKeyTest('B'), func(rec SecretVersionRecord) (SecretBindingWrapping, error) {
+	}, bindingKeyTest('B'), bindingKeyTest('C'), func(rec SecretVersionRecord) (SecretBindingWrapping, error) {
 		if rec.Version == 2 {
 			return SecretBindingWrapping{}, callbackFailure
 		}
@@ -483,7 +539,7 @@ func TestRotateSecretBindingKeyCASRollbackAndStaleRows(t *testing.T) {
 
 	result, err := st.RotateSecretBindingKey(ctx, r, 2, SecretBindingCASGuard{
 		ExpectedRevision: uint64Pointer(preview.Revision), ExpectedAffectedVersions: preview.AffectedVersions,
-	}, bindingKeyTest('B'), bindingRewrap('C', 'n'), SecretBindingAudit{})
+	}, bindingKeyTest('B'), bindingKeyTest('C'), bindingRewrap('C', 'n'), SecretBindingAudit{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -509,7 +565,7 @@ func TestRotateSecretBindingKeyCASRollbackAndStaleRows(t *testing.T) {
 	beforeStale := []secretVersionModel{rawSecretVersion(t, st, r, 1), rawSecretVersion(t, st, r, 2), rawSecretVersion(t, st, r, 3)}
 	_, err = st.RotateSecretBindingKey(ctx, r, 2, SecretBindingCASGuard{
 		ExpectedRevision: uint64Pointer(previewC.Revision), ExpectedAffectedVersions: previewC.AffectedVersions,
-	}, bindingKeyTest('C'), bindingRewrap('D', 'n'), SecretBindingAudit{})
+	}, bindingKeyTest('C'), bindingKeyTest('D'), bindingRewrap('D', 'n'), SecretBindingAudit{})
 	if !errors.Is(err, domain.ErrAborted) {
 		t.Fatalf("stale row = %v", err)
 	}
@@ -517,6 +573,194 @@ func TestRotateSecretBindingKeyCASRollbackAndStaleRows(t *testing.T) {
 		if got := rawSecretVersion(t, st, r, uint64(i+1)); !reflect.DeepEqual(bindingRowSnapshot(got), bindingRowSnapshot(want)) {
 			t.Fatalf("stale row failure did not roll back version %d", i+1)
 		}
+	}
+}
+
+func TestRotateSecretBindingKeyRejectsImplicitCohortMergeAtomically(t *testing.T) {
+	tests := []struct {
+		name string
+		keys []byte
+	}{
+		{name: "both sides", keys: []byte{'A', 'B', 'B', 'A'}},
+		{name: "lower neighbor", keys: []byte{'A', 'B', 'B'}},
+		{name: "upper neighbor", keys: []byte{'B', 'B', 'A'}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			st := newStore(t)
+			ctx := context.Background()
+			seedNS(t, st, "prod", "app")
+			r := ref("prod", "app", "rotate-merge")
+			for _, key := range tc.keys {
+				putBindingVersion(t, st, r, key)
+			}
+			anchor := uint64(1)
+			if tc.keys[0] == 'A' {
+				anchor = 2
+			}
+			preview, err := st.PreviewSecretBindingCohort(ctx, r, anchor, bindingKeyTest('B'))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if tc.name == "both sides" {
+				newKeyTestCalls := 0
+				_, err := st.RotateSecretBindingKey(ctx, r, anchor, SecretBindingCASGuard{
+					ExpectedRevision: uint64Pointer(preview.Revision - 1), ExpectedAffectedVersions: preview.AffectedVersions,
+				}, bindingKeyTest('B'), func(rec SecretVersionRecord) error {
+					newKeyTestCalls++
+					return bindingKeyTest('A')(rec)
+				}, bindingRewrap('A', 'n'), SecretBindingAudit{})
+				if !errors.Is(err, domain.ErrAborted) || newKeyTestCalls != 0 {
+					t.Fatalf("stale guard ordering: new-key tests=%d err=%v", newKeyTestCalls, err)
+				}
+			}
+			before := make([]secretVersionModel, len(tc.keys))
+			for i := range before {
+				before[i] = rawSecretVersion(t, st, r, uint64(i+1))
+			}
+			rewrapCalls := 0
+			_, err = st.RotateSecretBindingKey(ctx, r, anchor, SecretBindingCASGuard{
+				ExpectedRevision: uint64Pointer(preview.Revision), ExpectedAffectedVersions: preview.AffectedVersions,
+			}, bindingKeyTest('B'), bindingKeyTest('A'), func(rec SecretVersionRecord) (SecretBindingWrapping, error) {
+				rewrapCalls++
+				return bindingRewrap('A', 'n')(rec)
+			}, SecretBindingAudit{ActorIdentity: "operator"})
+			if !errors.Is(err, domain.ErrFailedPrecondition) || err.Error() != "binding change would merge an adjacent cohort: failed precondition" {
+				t.Fatalf("RotateSecretBindingKey = %v, want sanitized merge failure", err)
+			}
+			if rewrapCalls != 0 {
+				t.Fatalf("rewrap calls = %d, want 0", rewrapCalls)
+			}
+			for i, want := range before {
+				if got := rawSecretVersion(t, st, r, uint64(i+1)); !reflect.DeepEqual(bindingRowSnapshot(got), bindingRowSnapshot(want)) {
+					t.Fatalf("rejected rotation changed version %d", i+1)
+				}
+			}
+			if revision, _ := st.CurrentRevision(ctx); revision != preview.Revision {
+				t.Fatalf("rejected rotation revision = %d, want %d", revision, preview.Revision)
+			}
+			if changes, err := st.ListChangesSince(ctx, preview.Revision, 10); err != nil || len(changes) != 0 {
+				t.Fatalf("rejected rotation changes = %+v err=%v", changes, err)
+			}
+			if audits, _, err := st.ListAudit(ctx, domain.AuditFilter{EventType: rotateBindingKeyAuditEvent}, ListPage{}); err != nil || len(audits) != 0 {
+				t.Fatalf("rejected rotation allow audits = %+v err=%v", audits, err)
+			}
+		})
+	}
+}
+
+func TestRotateSecretBindingKeyAllowsDifferentKeyAndReuseBeyondBoundaries(t *testing.T) {
+	t.Run("different key does not merge", func(t *testing.T) {
+		st := newStore(t)
+		ctx := context.Background()
+		seedNS(t, st, "prod", "app")
+		r := ref("prod", "app", "rotate-different")
+		for _, key := range []byte{'A', 'B', 'B', 'A'} {
+			putBindingVersion(t, st, r, key)
+		}
+		preview, err := st.PreviewSecretBindingCohort(ctx, r, 2, bindingKeyTest('B'))
+		if err != nil {
+			t.Fatal(err)
+		}
+		result, err := st.RotateSecretBindingKey(ctx, r, 2, SecretBindingCASGuard{
+			ExpectedRevision: uint64Pointer(preview.Revision), ExpectedAffectedVersions: preview.AffectedVersions,
+		}, bindingKeyTest('B'), bindingKeyTest('C'), bindingRewrap('C', 'n'), SecretBindingAudit{ActorIdentity: "operator"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !slices.Equal(result.AffectedVersions, []uint64{2, 3}) {
+			t.Fatalf("rotation result = %+v", result)
+		}
+		for _, version := range []uint64{2, 3} {
+			if row := rawSecretVersion(t, st, r, version); row.BindingKeySalt[0] != 'C' {
+				t.Fatalf("version %d was not rotated to C", version)
+			}
+		}
+	})
+
+	boundaries := []struct {
+		name    string
+		prepare func(*testing.T, *SQLStore, domain.Ref) SecretBindingTestFunc
+	}{
+		{
+			name: "unbound",
+			prepare: func(t *testing.T, st *SQLStore, r domain.Ref) SecretBindingTestFunc {
+				putBindingVersion(t, st, r, 0)
+				return bindingKeyTest('A')
+			},
+		},
+		{
+			name: "missing",
+			prepare: func(t *testing.T, st *SQLStore, r domain.Ref) SecretBindingTestFunc {
+				putBindingVersion(t, st, r, 0)
+				row := rawSecretVersion(t, st, r, 2)
+				if err := st.db.Delete(&row).Error; err != nil {
+					t.Fatal(err)
+				}
+				return bindingKeyTest('A')
+			},
+		},
+		{
+			name: "destroyed",
+			prepare: func(t *testing.T, st *SQLStore, r domain.Ref) SecretBindingTestFunc {
+				putBindingVersion(t, st, r, 'A')
+				if _, err := st.DestroySecretVersion(context.Background(), r, 2); err != nil {
+					t.Fatal(err)
+				}
+				return bindingKeyTest('A')
+			},
+		},
+		{
+			name: "cryptographically corrupt",
+			prepare: func(t *testing.T, st *SQLStore, r domain.Ref) SecretBindingTestFunc {
+				putBindingVersion(t, st, r, 'A')
+				row := rawSecretVersion(t, st, r, 2)
+				if err := st.db.Model(&secretVersionModel{}).Where("id = ?", row.ID).Update("encrypted_dek", []byte("corrupt")).Error; err != nil {
+					t.Fatal(err)
+				}
+				return func(rec SecretVersionRecord) error {
+					if bytes.Equal(rec.EncryptedDEK, []byte("corrupt")) {
+						return errBindingKeyRejected
+					}
+					return bindingKeyTest('A')(rec)
+				}
+			},
+		},
+		{
+			name: "different key",
+			prepare: func(t *testing.T, st *SQLStore, r domain.Ref) SecretBindingTestFunc {
+				putBindingVersion(t, st, r, 'C')
+				return bindingKeyTest('A')
+			},
+		},
+	}
+	for _, tc := range boundaries {
+		t.Run(tc.name, func(t *testing.T) {
+			st := newStore(t)
+			ctx := context.Background()
+			seedNS(t, st, "prod", "app")
+			r := ref("prod", "app", "rotate-boundary")
+			putBindingVersion(t, st, r, 'A')
+			testNew := tc.prepare(t, st, r)
+			putBindingVersion(t, st, r, 'B')
+			preview, err := st.PreviewSecretBindingCohort(ctx, r, 3, bindingKeyTest('B'))
+			if err != nil {
+				t.Fatal(err)
+			}
+			result, err := st.RotateSecretBindingKey(ctx, r, 3, SecretBindingCASGuard{
+				ExpectedRevision: uint64Pointer(preview.Revision), ExpectedAffectedVersions: preview.AffectedVersions,
+			}, bindingKeyTest('B'), testNew, bindingRewrap('A', 'n'), SecretBindingAudit{ActorIdentity: "operator"})
+			if err != nil {
+				t.Fatalf("rotation across %s boundary: %v", tc.name, err)
+			}
+			if !slices.Equal(result.AffectedVersions, []uint64{3}) {
+				t.Fatalf("rotation result = %+v", result)
+			}
+			cohort, err := st.PreviewSecretBindingCohort(ctx, r, 3, testNew)
+			if err != nil || !slices.Equal(cohort.AffectedVersions, []uint64{3}) {
+				t.Fatalf("rotation crossed %s boundary: %+v err=%v", tc.name, cohort, err)
+			}
+		})
 	}
 }
 
@@ -575,7 +819,7 @@ func TestRotateRejectsInvalidOrReusedSaltsAcrossWholeCohort(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			_, err := st.RotateSecretBindingKey(ctx, r, 2, SecretBindingCASGuard{
 				ExpectedRevision: uint64Pointer(preview.Revision), ExpectedAffectedVersions: preview.AffectedVersions,
-			}, bindingKeyTest('B'), tc.rewrap, SecretBindingAudit{})
+			}, bindingKeyTest('B'), bindingKeyTest('C'), tc.rewrap, SecretBindingAudit{})
 			if !errors.Is(err, domain.ErrFailedPrecondition) {
 				t.Fatalf("RotateSecretBindingKey = %v, want failed precondition", err)
 			}
@@ -1120,7 +1364,7 @@ func TestBindingMutationAuditFailureRollsBack(t *testing.T) {
 		{
 			name: "bind",
 			run: func(ctx context.Context, st *SQLStore, ref domain.Ref) error {
-				_, err := st.BindSecretVersion(ctx, ref, 1, bindingRewrap('B', 'n'), SecretBindingAudit{ActorIdentity: "operator"})
+				_, err := st.BindSecretVersion(ctx, ref, 1, bindingKeyTest('B'), bindingRewrap('B', 'n'), SecretBindingAudit{ActorIdentity: "operator"})
 				return err
 			},
 		},
@@ -1134,7 +1378,7 @@ func TestBindingMutationAuditFailureRollsBack(t *testing.T) {
 		{
 			name: "rotate", bound: true,
 			run: func(ctx context.Context, st *SQLStore, ref domain.Ref) error {
-				_, err := st.RotateSecretBindingKey(ctx, ref, 1, SecretBindingCASGuard{}, bindingKeyTest('B'), bindingRewrap('C', 'n'), SecretBindingAudit{ActorIdentity: "operator"})
+				_, err := st.RotateSecretBindingKey(ctx, ref, 1, SecretBindingCASGuard{}, bindingKeyTest('B'), bindingKeyTest('C'), bindingRewrap('C', 'n'), SecretBindingAudit{ActorIdentity: "operator"})
 				return err
 			},
 		},

@@ -64,6 +64,9 @@ Request semantics:
   - `version = 0` means current.
   - Requires an existing, non-destroyed, unbound version.
   - Binds only that exact version in place.
+  - Rejects with a sanitized `FailedPrecondition` if the proposed key opens
+    either immediate live bound neighbor, because binding the version would
+    implicitly merge cohorts beyond the singleton affected-version response.
 - `UnbindSecret(ref, version, binding_key)`
   - Requires an existing, non-destroyed, bound version.
   - The supplied key must open that version.
@@ -71,6 +74,9 @@ Request semantics:
 - `RotateSecretBindingKey(ref, anchor_version, binding_key, new_binding_key)`
   - `anchor_version = 0` means current.
   - Rotates the contiguous cohort around the anchor.
+  - After rediscovering the old cohort and validating any CAS guard, rejects
+    with a sanitized `FailedPrecondition` if the replacement key opens either
+    immediate live bound neighbor outside that cohort.
   - Rejects a byte-for-byte identical current and replacement key with a fixed,
     sanitized `InvalidArgument` error and no mutation.
 - `PreviewSecretBindingCohort(ref, anchor_version, binding_key)`
@@ -142,9 +148,16 @@ Zero derived keys, unwrapped DEKs, and temporary inner plaintext buffers as soon
   - Rewrap the raw DEK directly under the same KEK.
 - Rotate:
   - Discover the cohort using the old key.
+  - Check any preview/CAS guard against that discovered source cohort.
+  - Cryptographically test the new key against the immediate bound versions
+    outside the cohort and reject rather than merge with either neighbor.
   - Rewrap each selected DEK with the new key and a fresh independent salt.
   - Preserve each version’s original KEK ID unless a separate KEK rotation occurs.
 - Bind/unbind affect one version. Rotate affects a discovered cohort.
+- Bind and rotate never implicitly merge cohorts. Storage remains key-blind:
+  it receives pure test callbacks for the proposed key and runs the neighbor
+  checks inside the same transaction before preparing or writing any rewrap.
+  Unbind needs no merge check because it can only split a cohort.
 - Serialize these operations with secret puts, purge, and server-KEK rotation.
 - Commit all cohort changes in one transaction. Any stale row, wrong anchor key, corrupt selected version, or concurrent mutation aborts the operation.
 
@@ -582,6 +595,10 @@ The metadata lookup and secret fetch count as one unit under the existing concur
   sanitized decrypt-failure path and stale previews on the existing aborted
   path. Client-side equality checks are intentionally earlier and reveal only
   the caller's own arguments.
+- Bind/rotation merge tests cover both-sided and one-sided adjacent matches,
+  rollback of every wrapping/revision/change/audit effect, successful use of a
+  different new key, and key reuse beyond unbound, missing, destroyed,
+  corrupt, or differently keyed hard boundaries.
 - Cohort tests cover first/middle/last anchors, bidirectional scans, key reuse after a boundary, destroyed/missing/corrupt boundaries, disabled/expired versions, and transaction rollback.
 - Authorization tests prove `secret:binding-manage` is default-deny, absent
   from implicit home grants, explicitly delegable, and matched by `secret:*`,
@@ -611,4 +628,8 @@ The metadata lookup and secret fetch count as one unit under the existing concur
 - A release pinned to an older binding-key cohort requires that cohort’s key. KMS cannot recover historical keys because it stores no identifier or verifier.
 - Changing a secret value while supplying a different binding key begins a new cohort; it does not rewrap older versions.
 - Rotation and compromise purge are deliberately cohort-scoped, while bind and unbind are exact-version operations.
+- Exact-version bind and cohort rotation reject any proposed key that would
+  merge their reported affected set with an immediately adjacent cohort.
+  Intentional merging, if added later, requires a separate previewable
+  operation that reports and guards the complete resulting cohort.
 - This is the breaking greenfield baseline for the `0.3.x` line, with no migration path for `0.2.x` databases, client-bound tokens, generated bindings, or old release digests.

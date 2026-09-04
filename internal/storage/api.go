@@ -324,18 +324,20 @@ type Store interface {
 
 	// BindSecretVersion and UnbindSecretVersion rewrap exactly one version in
 	// place. version 0 resolves the current label. Storage never receives the
-	// binding key; the callback receives only the persisted encrypted record.
-	// The fixed sanitized allow audit commits atomically with the rewrap and
-	// change-log row.
-	BindSecretVersion(ctx context.Context, ref domain.Ref, version uint64, rewrap SecretBindingRewrapFunc, audit SecretBindingAudit) (SecretBindingResult, error)
+	// binding key; callbacks receive only persisted encrypted records. Bind
+	// uses testNew to reject a key that would implicitly merge the target with
+	// an adjacent cohort. The fixed sanitized allow audit commits atomically
+	// with the rewrap and change-log row.
+	BindSecretVersion(ctx context.Context, ref domain.Ref, version uint64, testNew SecretBindingTestFunc, rewrap SecretBindingRewrapFunc, audit SecretBindingAudit) (SecretBindingResult, error)
 	UnbindSecretVersion(ctx context.Context, ref domain.Ref, version uint64, rewrap SecretBindingRewrapFunc, audit SecretBindingAudit) (SecretBindingResult, error)
 
 	// PreviewSecretBindingCohort discovers the contiguous cohort around anchor
 	// (0 = current) and returns the coherent global storage revision.
 	PreviewSecretBindingCohort(ctx context.Context, ref domain.Ref, anchor uint64, test SecretBindingTestFunc) (SecretBindingResult, error)
 	// RotateSecretBindingKey rediscovers and optionally CAS-checks the cohort,
-	// then rewraps every selected DEK and its fixed allow audit atomically.
-	RotateSecretBindingKey(ctx context.Context, ref domain.Ref, anchor uint64, guard SecretBindingCASGuard, testOld SecretBindingTestFunc, rewrapNew SecretBindingRewrapFunc, audit SecretBindingAudit) (SecretBindingResult, error)
+	// uses testNew to reject an implicit merge with an adjacent cohort, then
+	// rewraps every selected DEK and its fixed allow audit atomically.
+	RotateSecretBindingKey(ctx context.Context, ref domain.Ref, anchor uint64, guard SecretBindingCASGuard, testOld, testNew SecretBindingTestFunc, rewrapNew SecretBindingRewrapFunc, audit SecretBindingAudit) (SecretBindingResult, error)
 	// PurgeSecretBindingCohort rediscovers and optionally CAS-checks the cohort,
 	// writes minimal tombstones, and appends its changelog and allow-audit rows
 	// in the same transaction. It intentionally bypasses release-pin guards.

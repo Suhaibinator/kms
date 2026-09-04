@@ -706,6 +706,80 @@ func TestBindUnbindAuthorizedFailuresAreAuditedAndRedacted(t *testing.T) {
 	}
 }
 
+func TestBindingMutationImplicitMergeFailuresAreAtomicAuditedAndRedacted(t *testing.T) {
+	tests := []struct {
+		name      string
+		eventType string
+		keys      []string
+		invoke    func(*Service, domain.Ref) error
+	}{
+		{
+			name:      "bind",
+			eventType: "secret.bind",
+			keys:      []string{testBindingKeyA, "", testBindingKeyA},
+			invoke: func(s *Service, ref domain.Ref) error {
+				_, err := s.BindSecret(context.Background(), adminPrincipal(), ref, 2, testBindingKeyA)
+				return err
+			},
+		},
+		{
+			name:      "rotate",
+			eventType: "secret.binding_key.rotate",
+			keys:      []string{testBindingKeyA, testBindingKeyB, testBindingKeyB, testBindingKeyA},
+			invoke: func(s *Service, ref domain.Ref) error {
+				_, err := s.RotateSecretBindingKey(context.Background(), adminPrincipal(), ref, 2, testBindingKeyB, testBindingKeyA, nil, nil)
+				return err
+			},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			store := newFakeStore()
+			s, hub := newTestServiceWithHub(t, store)
+			ref := tref("implicit-merge-" + tc.name)
+			for i, key := range tc.keys {
+				putSecret(t, s, PutSecretInput{Ref: ref, Value: []byte(fmt.Sprintf("value-%d", i+1)), BindingKey: key})
+			}
+			hub.wakes = 0
+			before := make(map[uint64]storage.SecretVersionRecord, len(tc.keys))
+			for version, rec := range store.secrets[ref.String()].versions {
+				before[version] = rec
+			}
+			beforeRevision := store.revision
+			auditsBefore := len(store.audits)
+
+			err := tc.invoke(s, ref)
+			if !errors.Is(err, domain.ErrFailedPrecondition) || err.Error() != "binding change would merge an adjacent cohort: failed precondition" {
+				t.Fatalf("error = %v, want sanitized merge failure", err)
+			}
+			for version, want := range before {
+				if got := store.secrets[ref.String()].versions[version]; !reflect.DeepEqual(got, want) {
+					t.Fatalf("rejected %s changed version %d", tc.name, version)
+				}
+			}
+			if store.revision != beforeRevision {
+				t.Fatalf("rejected %s revision = %d, want %d", tc.name, store.revision, beforeRevision)
+			}
+			if hub.wakes != 0 {
+				t.Fatalf("rejected %s woke watchers %d times", tc.name, hub.wakes)
+			}
+			if len(store.audits) != auditsBefore+1 {
+				t.Fatalf("audit count = %d, want %d", len(store.audits), auditsBefore+1)
+			}
+			audit := store.audits[len(store.audits)-1]
+			if audit.EventType != tc.eventType || audit.Decision != "error" || audit.ResourceNamespaceID != store.namespaces[tns.String()].ID ||
+				audit.ResourceEnv != ref.NS.Env || audit.ResourceApp != ref.NS.App || audit.ResourceKey != ref.Key || audit.Metadata != "{}" {
+				t.Fatalf("error audit = %+v", audit)
+			}
+			for _, key := range []string{testBindingKeyA, testBindingKeyB} {
+				if strings.Contains(fmt.Sprintf("%+v", audit), key) || strings.Contains(err.Error(), key) {
+					t.Fatalf("binding key leaked from failed %s", tc.name)
+				}
+			}
+		})
+	}
+}
+
 func TestBindUnbindExactVersionPreserveCiphertext(t *testing.T) {
 	ctx := context.Background()
 	store := newFakeStore()

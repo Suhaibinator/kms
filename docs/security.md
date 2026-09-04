@@ -229,7 +229,10 @@ DEK in place without changing the version number, value ciphertext, or KEK ID.
 Rotation discovers and atomically rewraps a contiguous cohort using fresh
 independent salts. Cohort membership is proved only by opening adjacent bound
 versions with the supplied key and stops at the first boundary; KMS stores no
-cohort identifier.
+cohort identifier. Exact-version bind and cohort rotation test the proposed
+key against their immediate outside neighbors inside the transaction and
+reject an implicit cohort merge before any rewrap. Hard boundaries still
+permit non-adjacent reuse of the same key.
 
 An administrator can preview and irreversibly purge the contiguous cohort for
 a compromised key. The mutation replays the preview revision and exact

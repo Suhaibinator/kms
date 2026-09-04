@@ -309,7 +309,7 @@ func (s *Service) BindSecret(ctx context.Context, pr Principal, ref domain.Ref, 
 		s.auditRefWithNamespaceID(ctx, pr, "secret.bind", domain.ResourceSecret, ref, namespace.ID, version, "error", nil)
 		return SecretVersionMutationResult{}, err
 	}
-	result, err := s.store.BindSecretVersion(ctx, ref, version, bindingRewrap(keyring, ref, bindingKey), secretBindingAudit(pr, s.now()))
+	result, err := s.store.BindSecretVersion(ctx, ref, version, bindingTest(keyring, ref, bindingKey), bindingRewrap(keyring, ref, bindingKey), secretBindingAudit(pr, s.now()))
 	s.keyWriteMu.Unlock()
 	if err != nil {
 		s.recordRequiredBindingAuditFailure(err)
@@ -415,7 +415,7 @@ func (s *Service) RotateSecretBindingKey(ctx context.Context, pr Principal, ref 
 	result, err := s.store.RotateSecretBindingKey(ctx, ref, anchor, storage.SecretBindingCASGuard{
 		ExpectedRevision:         expectedRevision,
 		ExpectedAffectedVersions: expectedAffected,
-	}, bindingTest(keyring, ref, bindingKey), bindingRotate(keyring, ref, bindingKey, newBindingKey), secretBindingAudit(pr, s.now()))
+	}, bindingTest(keyring, ref, bindingKey), bindingTest(keyring, ref, newBindingKey), bindingRotate(keyring, ref, bindingKey, newBindingKey), secretBindingAudit(pr, s.now()))
 	s.keyWriteMu.Unlock()
 	if err != nil {
 		s.recordRequiredBindingAuditFailure(err)

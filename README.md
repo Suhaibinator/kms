@@ -64,8 +64,10 @@ deployment, start at [Quickstart](#quickstart).
   wrapping layer to any secret version. Binding is live metadata and can be
   changed in place without a new version or release re-pin. Adjacent versions
   that open with one key form a cryptographically discovered cohort for
-  guarded rotation or administrator-only compromise purge. KMS never stores,
-  hashes, fingerprints, or escrows the key; see
+  guarded rotation or administrator-only compromise purge. Exact-version bind
+  and cohort rotation reject replacement keys that would silently merge with
+  an adjacent cohort. KMS never stores, hashes, fingerprints, or escrows the
+  key; see
   [`docs/binding-keys.md`](docs/binding-keys.md).
 - **Built-in certificate authority + mTLS**: an embedded CA (Ed25519,
   KEK-wrapped private key) created by `init` mints short-lived client
@@ -635,7 +637,8 @@ Full detail: [`docs/security.md`](docs/security.md). Summary:
   operation that needs it; KMS never stores a copy, hash, fingerprint, or
   cohort identifier. Bind/unbind operate on one version in place. Rotation and
   administrator-only purge operate on a cryptographically discovered
-  contiguous cohort with preview/CAS protection. See
+  contiguous cohort with preview/CAS protection; bind and rotation reject
+  implicit merges outside their reported affected set. See
   [`docs/binding-keys.md`](docs/binding-keys.md).
 - **Proof of identity**: machine clients authenticate by mTLS client
   certificate from the built-in CA (identity is the cert's

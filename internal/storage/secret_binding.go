@@ -201,9 +201,12 @@ func appendSecretBindingAllowAudit(tx *gorm.DB, eventType string, sec secretMode
 	return nil
 }
 
-func (s *SQLStore) mutateExactSecretBinding(ctx context.Context, ref domain.Ref, version uint64, targetBound bool, rewrap SecretBindingRewrapFunc, audit SecretBindingAudit) (SecretBindingResult, error) {
+func (s *SQLStore) mutateExactSecretBinding(ctx context.Context, ref domain.Ref, version uint64, targetBound bool, testNew SecretBindingTestFunc, rewrap SecretBindingRewrapFunc, audit SecretBindingAudit) (SecretBindingResult, error) {
 	if rewrap == nil {
 		return SecretBindingResult{}, domain.Errorf(domain.ErrInvalidArgument, "binding rewrap callback is required")
+	}
+	if targetBound && testNew == nil {
+		return SecretBindingResult{}, domain.Errorf(domain.ErrInvalidArgument, "binding test callback is required")
 	}
 	var result SecretBindingResult
 	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
@@ -220,6 +223,9 @@ func (s *SQLStore) mutateExactSecretBinding(ctx context.Context, ref domain.Ref,
 			}
 			if !validStandardWrapping(row) {
 				return domain.Errorf(domain.ErrFailedPrecondition, "secret %s version %d has invalid wrapping metadata", ref, row.VersionNumber)
+			}
+			if err := rejectSecretBindingCohortMerge(tx, sec.ID, row.VersionNumber-1, row.VersionNumber+1, testNew); err != nil {
+				return err
 			}
 		} else {
 			if !i2b(row.Bound) {
@@ -273,14 +279,38 @@ func (s *SQLStore) mutateExactSecretBinding(ctx context.Context, ref domain.Ref,
 }
 
 // BindSecretVersion adds a binding-key wrapping layer to one exact version.
-func (s *SQLStore) BindSecretVersion(ctx context.Context, ref domain.Ref, version uint64, rewrap SecretBindingRewrapFunc, audit SecretBindingAudit) (SecretBindingResult, error) {
-	return s.mutateExactSecretBinding(ctx, ref, version, true, rewrap, audit)
+func (s *SQLStore) BindSecretVersion(ctx context.Context, ref domain.Ref, version uint64, testNew SecretBindingTestFunc, rewrap SecretBindingRewrapFunc, audit SecretBindingAudit) (SecretBindingResult, error) {
+	return s.mutateExactSecretBinding(ctx, ref, version, true, testNew, rewrap, audit)
 }
 
 // UnbindSecretVersion removes a binding-key wrapping layer from one exact
 // version after the callback has authenticated and opened it.
 func (s *SQLStore) UnbindSecretVersion(ctx context.Context, ref domain.Ref, version uint64, rewrap SecretBindingRewrapFunc, audit SecretBindingAudit) (SecretBindingResult, error) {
-	return s.mutateExactSecretBinding(ctx, ref, version, false, rewrap, audit)
+	return s.mutateExactSecretBinding(ctx, ref, version, false, nil, rewrap, audit)
+}
+
+// rejectSecretBindingCohortMerge checks only the immediate numeric neighbors
+// outside a binding mutation. Missing, destroyed, unbound, and structurally
+// corrupt rows remain hard cohort boundaries. A callback failure means the
+// proposed key does not open that neighbor and is intentionally not surfaced.
+func rejectSecretBindingCohortMerge(tx *gorm.DB, secretID, lower, upper int64, testNew SecretBindingTestFunc) error {
+	for _, version := range []int64{lower, upper} {
+		if version <= 0 {
+			continue
+		}
+		var row secretVersionModel
+		err := tx.Where("secret_id = ? AND version_number = ?", secretID, version).First(&row).Error
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		if validBoundWrapping(row) && testNew(bindingCallbackRecord(row)) == nil {
+			return domain.Errorf(domain.ErrFailedPrecondition, "binding change would merge an adjacent cohort")
+		}
+	}
+	return nil
 }
 
 // discoverSecretBindingCohort validates the anchor first, then scans adjacent
@@ -441,8 +471,8 @@ func (s *SQLStore) PreviewSecretBindingCohort(ctx context.Context, ref domain.Re
 
 // RotateSecretBindingKey rewraps every member of the rediscovered cohort in
 // one transaction while preserving each version's KEK and value payload.
-func (s *SQLStore) RotateSecretBindingKey(ctx context.Context, ref domain.Ref, anchor uint64, guard SecretBindingCASGuard, testOld SecretBindingTestFunc, rewrapNew SecretBindingRewrapFunc, audit SecretBindingAudit) (SecretBindingResult, error) {
-	if testOld == nil || rewrapNew == nil {
+func (s *SQLStore) RotateSecretBindingKey(ctx context.Context, ref domain.Ref, anchor uint64, guard SecretBindingCASGuard, testOld, testNew SecretBindingTestFunc, rewrapNew SecretBindingRewrapFunc, audit SecretBindingAudit) (SecretBindingResult, error) {
+	if testOld == nil || testNew == nil || rewrapNew == nil {
 		return SecretBindingResult{}, domain.Errorf(domain.ErrInvalidArgument, "binding test and rewrap callbacks are required")
 	}
 	guard = cloneSecretBindingGuard(guard)
@@ -461,6 +491,9 @@ func (s *SQLStore) RotateSecretBindingKey(ctx context.Context, ref domain.Ref, a
 			return err
 		}
 		if err := checkSecretBindingGuard(guard, currentRevision, affected); err != nil {
+			return err
+		}
+		if err := rejectSecretBindingCohortMerge(tx, sec.ID, rows[0].VersionNumber-1, rows[len(rows)-1].VersionNumber+1, testNew); err != nil {
 			return err
 		}
 
