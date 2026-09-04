@@ -1182,7 +1182,7 @@ namespace.
 | `secret unbind /env/app/key` | `--version` (`0` = current) | Unbinds one exact version in place using its current key. |
 | `binding-key rotate /env/app/key` | `--version` (`0` = current) | Obtains the current key, previews the contiguous cohort, prints exact versions, confirms, then obtains the new key separately (`KMS_BINDING_KEY`, `KMS_NEW_BINDING_KEY`) and submits the preview revision/version CAS guards. A byte-for-byte unchanged replacement is rejected locally before mutation. |
 | `secret purge-binding-cohort /env/app/key` | `--version` (`0` = current) | **Irreversible, admin only.** Previews and confirms the exact contiguous compromised cohort, then replays CAS guards and destroys it even if releases pin those versions. |
-| `exec ENV/APP -- COMMAND [ARGS...]` | `--release NAME`, `--prefix`, `--no-secrets`, `--env-prefix`, `--strict`, `--secret-token KEY=TOKEN`/`--secret-token-file KEY=PATH` (repeatable), `--preserve-env` | Runs `COMMAND` with the namespace's parameters and secrets injected as environment variables. Resolves every value first, then replaces itself with `COMMAND` (on Unix), so signals and the exit status pass straight through. See [Run any process with store values](#run-any-process-with-store-values). |
+| `exec ENV/APP -- COMMAND [ARGS...]` | `--release NAME`, `--prefix`, `--no-secrets`, `--env-prefix`, `--allow-incomplete-secrets` (namespace mode only), `--secret-token KEY=TOKEN`/`--secret-token-file KEY=PATH` (repeatable), `--preserve-env` | Runs `COMMAND` with the namespace's parameters and secrets injected as environment variables. Resolves every value first, then replaces itself with `COMMAND` (on Unix), so signals and the exit status pass straight through. See [Run any process with store values](#run-any-process-with-store-values). |
 | `env ENV/APP` | the same selection and token flags as `exec`, plus `--format dotenv\|export\|json\|yaml`, `--show`, `--out FILE`, `--force` | Prints the same variables instead of running anything, for `source <(...)`, an `EnvironmentFile=`, or a `jq` pipeline. Refuses to print to an interactive terminal unless `--show`, `--out`, or `--no-secrets` is given. |
 
 Binding keys are opaque valid UTF-8 strings of at least 32 bytes. The CLI reads
@@ -1277,10 +1277,11 @@ since `application/octet-stream` is the default for every secret.
 #### Bound secrets and per-secret access tokens
 
 Bulk `env`/`exec` never accept or request binding keys and never call
-`GetSecret` for a bound version. The output variable remains present with an
-explicit empty value; it is not skipped and cannot fall through to a parent
-environment value or default, including with `--preserve-env`. Use an SDK
-release loader when a process must consume bound secrets.
+`GetSecret` for a bound version. A secret-inclusive invocation that selects a
+bound version fails before `env` prints anything or `exec` launches its child;
+an empty credential value is never synthesized. Use `--no-secrets` for an
+intentional parameter-only invocation, or an SDK release loader when a process
+must consume bound secrets.
 
 An unbound secret carrying the independent access-token gate needs its token
 before it can be read. Unlike `get-secret`, which takes one single-valued
@@ -1300,26 +1301,42 @@ same `KEY` in both flags is a usage error (exit `2`), and naming one secret
 under two different spellings is refused as ambiguous (exit `1`) even when the
 tokens agree. A flag token is also refused when it names a secret that is not
 in the selection or does not need one (exit `1`): a stale token or a typo that
-lands on the wrong secret would otherwise leave the intended secret skipped
-with only a warning. `KMS_SECRET_TOKEN_<NAME>` variables are ambient and may
+lands on the wrong secret is almost certainly an operator error.
+`KMS_SECRET_TOKEN_<NAME>` variables are ambient and may
 be leftovers, so they are read only for a secret that needs a token and never
 cause a refusal. `KMS_SECRET_TOKEN_FILE`, which only `get-secret` reads, is not
 consulted here.
 
 The token travels only in that unbound secret's `GetSecret` protobuf request;
-no other call carries it. A gated unbound secret whose token was not supplied
-is **skipped**, with a
-warning `--quiet` cannot suppress:
+no other call carries it. By default, a gated unbound secret whose token was
+not supplied fails the complete invocation before any environment output or
+child launch. The same fail-closed rule applies to a selected bound secret.
+This makes the ordinary secret-inclusive mode atomic: it never silently turns
+a missing credential into a partial runtime configuration.
+
+Namespace mode has one explicit availability-oriented escape hatch:
+`--allow-incomplete-secrets`. It emits parameters and successfully resolved
+unbound secrets while omitting bound secrets and gated secrets that lack a
+token. Every omission produces a warning that `--quiet` cannot suppress:
 
 ```text
-warning: skipped secret /prod/gradethis/stripe-key: it requires a per-secret token and none was supplied (use --strict to fail instead)
+warning: omitted unavailable secret /prod/gradethis/stripe-key: it requires a per-secret token and none was supplied (--allow-incomplete-secrets)
 ```
 
-`--strict` promotes that to a refusal before anything is launched, which is
-what a production unit wants: a workload that starts without its database
-password fails later and less clearly. `--no-secrets` removes the condition by
-selecting parameters only — and then makes any `--secret-token`/
-`--secret-token-file` an error, since it can no longer apply to anything.
+Incomplete mode never creates an empty secret value. With `exec`, both the
+plain mapped name and its possible `_B64` form are removed from the inherited
+environment before launch, including under `--preserve-env`, so an omitted
+secret cannot fall through to a stale parent credential. With `env`, omission
+cannot unset a variable in the shell that consumes its output: source into a
+clean environment, or explicitly unset the omitted names first. This mode is
+rejected with `--release`, because a release is an atomic configuration unit.
+
+`--no-secrets` intentionally selects parameters only and therefore succeeds
+even when the namespace or release contains unavailable secrets. It makes any
+`--secret-token`/`--secret-token-file` an error, since the token can no longer
+apply to anything. `--allow-incomplete-secrets` and `--no-secrets` are mutually
+exclusive. The former opt-in `--strict` flag no longer exists; fail-closed is
+the default.
 
 #### The command's environment
 
@@ -1330,9 +1347,9 @@ selecting parameters only — and then makes any `--secret-token`/
   not shadow the store.
 - `--preserve-env` inverts it for ordinary resolved values — the parent's value
   is kept — and every shadowed name is reported, so the difference is visible
-  rather than assumed. A bound-secret empty placeholder is the exception: it
-  always replaces an inherited value so the parent cannot masquerade as the
-  secret. For an ordinary value the diagnostic is:
+  rather than assumed. Unavailable secret names in explicit incomplete mode
+  are removed before this merge and cannot be preserved. For an ordinary
+  resolved value the diagnostic is:
   `note: DB_HOST is already set and kept (--preserve-env); the store's value was not injected`.
 - Every `KMS_SECRET_TOKEN_*` variable is **removed** from the command's
   environment (`KMS_SECRET_TOKEN_FILE` shares that prefix and goes too). They
@@ -1392,7 +1409,7 @@ publishes the result at mode `0600`; an existing path is refused with exit `6`
 unless `--force` is given, and a failed write leaves nothing behind. The
 destination must satisfy the [secure destination-path](#secure-destination-paths)
 rules. `--quiet` suppresses the `Wrote N variables to ...` line and the base64
-note, never the skipped-secret warning. With `--output json` stdout still
+note, never an incomplete-secret warning. With `--output json` stdout still
 carries one document, `{out_file, variables}`, and the values only ever reach
 the file.
 
@@ -1408,14 +1425,14 @@ User=gradethis
 Environment=KMS_ENDPOINT=kms.internal:8443
 Environment=KMS_TOKEN_FILE=/etc/gradethis/kms.token
 ExecStart=/usr/local/bin/parameter-store exec prod/gradethis \
-  --release runtime --strict -- /usr/local/bin/gradethis-server
+  --release runtime -- /usr/local/bin/gradethis-server
 Restart=on-failure
 ```
 
 On Unix the CLI replaces itself with the server once every value is resolved,
 so systemd's `MainPID`, `Restart=`, signal delivery, and exit status all refer
-to the server itself rather than to a surviving wrapper. `--strict` fails the
-start rather than running the server without a secret. (Windows has no
+to the server itself rather than to a surviving wrapper. Secret resolution is
+fail-closed by default. (Windows has no
 `exec(2)`; there the CLI stays as a thin parent that forwards the child's exit
 status.)
 
@@ -1434,7 +1451,7 @@ RuntimeDirectoryPreserve=yes
 Environment=KMS_ENDPOINT=kms.internal:8443
 Environment=KMS_TOKEN_FILE=/etc/gradethis/kms.token
 ExecStart=/usr/local/bin/parameter-store env prod/gradethis \
-  --release runtime --strict --force --out /run/gradethis/env
+  --release runtime --force --out /run/gradethis/env
 
 # /etc/systemd/system/gradethis.service
 [Unit]
@@ -1465,9 +1482,10 @@ way it reads `sh`'s:
 | `127` | The command was not found — or a bare name resolved only through the current directory, which is refused; run it as `./name` or give its path. |
 
 Everything before the launch uses the standard CLI codes: `2` for a usage
-problem (a missing `--`, `--prefix` with `--release`, one key in both token
-flags), `1` for a resolution failure (a digest mismatch, a missing token under
-`--strict`, a `--secret-token` that names nothing in the selection), and `3`–`9`
+problem (a missing `--`, `--prefix` with `--release`, incomplete mode with a
+release, one key in both token flags), `1` for a resolution failure (a digest
+mismatch, a missing required token, a bound secret in a bulk selection, a
+`--secret-token` that names nothing in the selection), and `3`–`9`
 mirroring the server's status — `4` for a wrong per-secret token, `5` for a
 release that is not there, `7` for a failed precondition. A resolution failure
 never starts the command. Note the overlap: a command that itself exits `126`

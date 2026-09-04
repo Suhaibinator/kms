@@ -41,13 +41,13 @@ const listPageSize = 1000
 // envSelection is what exec and env share: which entries to inject, how to
 // name them, and where per-secret tokens come from.
 type envSelection struct {
-	prefix     string
-	release    string
-	noSecrets  bool
-	envPrefix  string
-	strict     bool
-	tokens     secretTokenList
-	tokenFiles secretTokenList
+	prefix                 string
+	release                string
+	noSecrets              bool
+	envPrefix              string
+	allowIncompleteSecrets bool
+	tokens                 secretTokenList
+	tokenFiles             secretTokenList
 }
 
 // addEnvSelectionFlags registers the selection flags on fs.
@@ -56,7 +56,7 @@ func addEnvSelectionFlags(fs *flag.FlagSet, sel *envSelection) {
 	fs.StringVar(&sel.release, "release", "", "inject the entries of the active release `NAME` (exact versions, verified digests) instead of the namespace's current values")
 	fs.BoolVar(&sel.noSecrets, "no-secrets", false, "inject parameters only")
 	fs.StringVar(&sel.envPrefix, "env-prefix", "", "prepend this `prefix` to every variable name")
-	fs.BoolVar(&sel.strict, "strict", false, "treat a secret whose token was not supplied as an error instead of skipping it")
+	fs.BoolVar(&sel.allowIncompleteSecrets, "allow-incomplete-secrets", false, "namespace mode only: omit secrets that are bound or lack a required token, with a warning")
 	fs.Var(&sel.tokens, "secret-token", "per-secret access token as `KEY=TOKEN` (repeatable; visible in the process list, prefer --secret-token-file)")
 	fs.Var(&sel.tokenFiles, "secret-token-file", "read a per-secret access token from a private file, as `KEY=PATH` (repeatable)")
 }
@@ -103,6 +103,12 @@ func (sel *envSelection) validate() error {
 		if err := keyutil.ValidateKey(sel.release); err != nil {
 			return usageError(fmt.Sprintf("invalid --release: %v", err))
 		}
+	}
+	if sel.allowIncompleteSecrets && sel.release != "" {
+		return usageError("--allow-incomplete-secrets cannot be used with --release: release resolution is atomic")
+	}
+	if sel.allowIncompleteSecrets && sel.noSecrets {
+		return usageError("--allow-incomplete-secrets and --no-secrets are mutually exclusive")
 	}
 	if !envinject.ValidPrefix(sel.envPrefix) {
 		return usageError(fmt.Sprintf("invalid --env-prefix %q: must match [A-Za-z_][A-Za-z0-9_]*", sel.envPrefix))
@@ -158,16 +164,27 @@ func (s secretItem) tokenEnvName() (string, bool) {
 
 // resolvedEnvironment is what resolveEnvironment produces for both commands.
 type resolvedEnvironment struct {
-	vars       []envinject.Var
-	notes      []envinject.Note
-	boundNames []string // output variables that must remain explicitly empty
-	skipped    []string // secrets skipped for want of a token (display paths)
+	vars             []envinject.Var
+	notes            []envinject.Note
+	unavailableNames []string // plain and _B64 names exec must remove from its inherited environment
+	omitted          []omittedSecret
+}
+
+type omittedSecret struct {
+	path   string
+	reason string
+	secret secretItem
+}
+
+type secretResolution struct {
+	secret secretItem
+	token  string
 }
 
 // resolveEnvironment fetches the selected entries and maps them to variables.
-// Any failure other than "token not supplied" is fatal so a process is never
-// started with a silently partial environment; the token case is a skip that
-// --strict promotes to an error.
+// Secret-inclusive resolution is atomic by default: an unavailable selected
+// secret aborts before any output is printed or child is launched. Namespace
+// mode may explicitly opt into omission with --allow-incomplete-secrets.
 func (c *CLI) resolveEnvironment(ctx context.Context, conn *grpc.ClientConn, cf *connFlags, ns *kmsv1.NamespaceRef, sel *envSelection) (resolvedEnvironment, error) {
 	var (
 		items   []envinject.Item
@@ -177,7 +194,7 @@ func (c *CLI) resolveEnvironment(ctx context.Context, conn *grpc.ClientConn, cf 
 	if sel.release != "" {
 		items, secrets, err = c.resolveReleaseValues(ctx, conn, cf, ns, sel.release)
 	} else {
-		items, secrets, err = c.resolveNamespaceValues(ctx, conn, cf, ns, sel.prefix)
+		items, secrets, err = c.resolveNamespaceValues(ctx, conn, cf, ns, sel.prefix, !sel.noSecrets)
 	}
 	if err != nil {
 		return resolvedEnvironment{}, err
@@ -188,9 +205,9 @@ func (c *CLI) resolveEnvironment(ctx context.Context, conn *grpc.ClientConn, cf 
 		return resolvedEnvironment{}, err
 	}
 	var out resolvedEnvironment
-	var boundItems []envinject.Item
 	if !sel.noSecrets {
 		client := kmsv1.NewSecretServiceClient(conn)
+		plans := make([]secretResolution, 0, len(secrets))
 		for _, selected := range secrets {
 			s := selected
 			path := displayPath(s.ref)
@@ -211,29 +228,35 @@ func (c *CLI) resolveEnvironment(ctx context.Context, conn *grpc.ClientConn, cf 
 				s.needsToken = !s.bound && versionInfo.GetHasAccessToken()
 				s.protectionKnown = true
 			}
-			if s.bound {
-				// Bulk commands never request or consume binding keys. A bound
-				// output remains present with an explicitly empty value so callers
-				// cannot mistake omission for a default or a missing selection.
-				item := envinject.Item{
-					Key: s.ref.GetKey(), Alias: s.alias, Value: []byte{}, ContentType: s.contentType, Secret: true,
-				}
-				items = append(items, item)
-				boundItems = append(boundItems, item)
-				continue
-			}
 			token, err := tokens.lookup(s, ns, c)
 			if err != nil {
 				return resolvedEnvironment{}, err
 			}
-			if s.needsToken && token == "" {
-				if sel.strict {
-					return resolvedEnvironment{}, fmt.Errorf("secret %s requires a per-secret token and none was supplied (--secret-token-file %s=PATH)", path, path)
-				}
-				out.skipped = append(out.skipped, path)
+			if s.bound {
+				out.omitted = append(out.omitted, omittedSecret{
+					path: path, reason: "it is bound and bulk commands do not accept binding keys", secret: s,
+				})
 				continue
 			}
-			req := &kmsv1.GetSecretRequest{Ref: s.ref, Version: s.version, SecretToken: token}
+			if s.needsToken && token == "" {
+				out.omitted = append(out.omitted, omittedSecret{
+					path: path, reason: "it requires a per-secret token and none was supplied", secret: s,
+				})
+				continue
+			}
+			plans = append(plans, secretResolution{secret: s, token: token})
+		}
+		if err := tokens.unused(); err != nil {
+			return resolvedEnvironment{}, err
+		}
+		if len(out.omitted) != 0 && !sel.allowIncompleteSecrets {
+			missing := out.omitted[0]
+			return resolvedEnvironment{}, fmt.Errorf("secret %s cannot be materialized: %s", missing.path, missing.reason)
+		}
+		for _, plan := range plans {
+			s := plan.secret
+			path := displayPath(s.ref)
+			req := &kmsv1.GetSecretRequest{Ref: s.ref, Version: s.version, SecretToken: plan.token}
 			resp, err := client.GetSecret(cf.authCtx(ctx), req)
 			if err != nil {
 				return resolvedEnvironment{}, fmt.Errorf("secret %s: %w", path, redactSecretRPCError(err))
@@ -253,8 +276,7 @@ func (c *CLI) resolveEnvironment(ctx context.Context, conn *grpc.ClientConn, cf 
 				Key: s.ref.GetKey(), Alias: s.alias, Value: resp.GetValue(), ContentType: resp.GetContentType(), Secret: true,
 			})
 		}
-	}
-	if err := tokens.unused(); err != nil {
+	} else if err := tokens.unused(); err != nil {
 		return resolvedEnvironment{}, err
 	}
 
@@ -265,22 +287,36 @@ func (c *CLI) resolveEnvironment(ctx context.Context, conn *grpc.ClientConn, cf 
 	if err != nil {
 		return resolvedEnvironment{}, err
 	}
-	for _, item := range boundItems {
+	seenUnavailable := make(map[string]string, 2*len(out.omitted))
+	for _, missing := range out.omitted {
+		item := envinject.Item{Key: missing.secret.ref.GetKey(), Alias: missing.secret.alias, Secret: true}
 		vars, _, err := envinject.Resolve([]envinject.Item{item}, rules)
 		if err != nil {
-			return resolvedEnvironment{}, fmt.Errorf("mapping bound secret output: %w", err)
+			return resolvedEnvironment{}, fmt.Errorf("mapping unavailable secret output: %w", err)
 		}
 		if len(vars) != 1 {
-			return resolvedEnvironment{}, fmt.Errorf("mapping bound secret output: expected one variable, got %d", len(vars))
+			return resolvedEnvironment{}, fmt.Errorf("mapping unavailable secret output: expected one variable, got %d", len(vars))
 		}
-		out.boundNames = append(out.boundNames, vars[0].Name)
+		for _, name := range []string{vars[0].Name, vars[0].Name + "_B64"} {
+			if previous, exists := seenUnavailable[name]; exists {
+				return resolvedEnvironment{}, fmt.Errorf("unavailable secrets %s and %s may both map to environment variable %s", previous, missing.path, name)
+			}
+			for _, resolved := range out.vars {
+				if resolved.Name == name {
+					return resolvedEnvironment{}, fmt.Errorf("unavailable secret %s and another selected value both map to environment variable %s", missing.path, name)
+				}
+			}
+			seenUnavailable[name] = missing.path
+			out.unavailableNames = append(out.unavailableNames, name)
+		}
 	}
 	return out, nil
 }
 
 // resolveNamespaceValues lists the namespace's current parameters (values
-// travel inline) and the secrets that will need a GetSecret call.
-func (c *CLI) resolveNamespaceValues(ctx context.Context, conn *grpc.ClientConn, cf *connFlags, ns *kmsv1.NamespaceRef, prefix string) ([]envinject.Item, []secretItem, error) {
+// travel inline) and, when requested, the secrets that will need a GetSecret
+// call. Parameter-only mode never calls the secret service.
+func (c *CLI) resolveNamespaceValues(ctx context.Context, conn *grpc.ClientConn, cf *connFlags, ns *kmsv1.NamespaceRef, prefix string, includeSecrets bool) ([]envinject.Item, []secretItem, error) {
 	actx := cf.authCtx(ctx)
 	var items []envinject.Item
 	params := kmsv1.NewParameterServiceClient(conn)
@@ -295,6 +331,9 @@ func (c *CLI) resolveNamespaceValues(ctx context.Context, conn *grpc.ClientConn,
 		if token = resp.GetNextPageToken(); token == "" {
 			break
 		}
+	}
+	if !includeSecrets {
+		return items, nil, nil
 	}
 	var secrets []secretItem
 	sc := kmsv1.NewSecretServiceClient(conn)
@@ -483,10 +522,10 @@ func (c *CLI) secretTokens(sel *envSelection) (*secretTokenSource, error) {
 //
 // The flags are checked before needsToken is consulted: a flag token that
 // names a secret needing none is a typo (or a stale script) landing on the
-// wrong secret, and the intended one would otherwise be skipped with only a
-// warning. Two spellings of one secret are ambiguous even when they agree, so
-// they are refused rather than resolved by spelling order. Environment tokens
-// are ambient and may be leftovers, so they are only read when needed.
+// wrong secret. Two spellings of one secret are ambiguous even when they
+// agree, so they are refused rather than resolved by spelling order.
+// Environment tokens are ambient and may be leftovers, so they are only read
+// when needed.
 func (t *secretTokenSource) lookup(s secretItem, ns *kmsv1.NamespaceRef, c *CLI) (string, error) {
 	var matched []string
 	for _, name := range s.names(ns) {
@@ -529,14 +568,13 @@ func (t *secretTokenSource) unused() error {
 	return fmt.Errorf("--secret-token/--secret-token-file names %s, which is not a secret in the selection that requires a token", strings.Join(stray, ", "))
 }
 
-// printResolutionNotes reports non-fatal outcomes on stderr: secrets skipped
-// for want of a token and values that were base64-encoded. Names only, never
-// values. A skipped secret means the environment is incomplete, so that
-// warning is not subject to --quiet; --strict or --no-secrets silences it by
-// removing the condition.
+// printResolutionNotes reports non-fatal outcomes on stderr: secrets omitted
+// by an explicit incomplete-mode request and values that were base64-encoded.
+// Names only, never values. An omitted secret means the environment is
+// incomplete, so its warning is not subject to --quiet.
 func (c *CLI) printResolutionNotes(res resolvedEnvironment) {
-	for _, path := range res.skipped {
-		_, _ = fmt.Fprintf(c.Stderr, "warning: skipped secret %s: it requires a per-secret token and none was supplied (use --strict to fail instead)\n", path)
+	for _, missing := range res.omitted {
+		_, _ = fmt.Fprintf(c.Stderr, "warning: omitted unavailable secret %s: %s (--allow-incomplete-secrets)\n", missing.path, missing.reason)
 	}
 	for _, n := range res.notes {
 		if n.Kind == envinject.NoteBinaryEncoded {
@@ -569,7 +607,7 @@ func (c *CLI) cmdEnv(args []string) int {
 	out := fs.String("out", "", "write to this private `file` (0600) instead of stdout; refuses to replace an existing file")
 	force := fs.Bool("force", false, "replace an existing --out file")
 	c.setUsage(fs, "env ENV/APP [flags]",
-		"Print the namespace's parameters and secrets as environment variable assignments, for `source <(parameter-store env ENV/APP --format export)` or an EnvironmentFile=. Same selection, naming and token flags as exec; only the injected variables are printed.", false)
+		"Print the namespace's parameters and secrets as environment variable assignments, for `source <(parameter-store env ENV/APP --format export)` or an EnvironmentFile=. Secret-inclusive resolution fails before output if any selected secret is unavailable; --no-secrets intentionally selects parameters only, while namespace mode may opt into warned omission with --allow-incomplete-secrets. Source incomplete output only into a clean environment because omitted assignments cannot unset inherited values. Same selection, naming and token flags as exec; only the injected variables are printed.", false)
 	if !c.parseFlags(fs, args) {
 		return 2
 	}

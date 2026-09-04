@@ -79,14 +79,14 @@ func TestSplitExecArgs(t *testing.T) {
 		{name: "no arguments", args: nil, wantOwn: nil, wantCommand: nil, wantOK: false},
 		{
 			name:    "no separator",
-			args:    []string{"prod/app", "--strict"},
-			wantOwn: []string{"prod/app", "--strict"},
+			args:    []string{"prod/app", "--allow-incomplete-secrets"},
+			wantOwn: []string{"prod/app", "--allow-incomplete-secrets"},
 			wantOK:  false,
 		},
 		{
 			name:        "separator with a command",
-			args:        []string{"prod/app", "--strict", "--", "echo", "hi"},
-			wantOwn:     []string{"prod/app", "--strict"},
+			args:        []string{"prod/app", "--allow-incomplete-secrets", "--", "echo", "hi"},
+			wantOwn:     []string{"prod/app", "--allow-incomplete-secrets"},
 			wantCommand: []string{"echo", "hi"},
 			wantOK:      true,
 		},
@@ -265,22 +265,49 @@ func TestExecStripsSecretTokensFromTheChild(t *testing.T) {
 	}
 }
 
-func TestExecKeepsBoundSecretAsAnEmptyChildVariableWithoutFetching(t *testing.T) {
+func TestExecReleaseNoSecretsLaunchesWithParametersOnly(t *testing.T) {
+	t.Parallel()
+	f := newExecFixture(t, 0, nil)
+	f.installRelease()
+	if code := f.runExec([]string{"--release", "runtime", "--no-secrets"}, "/usr/bin/app"); code != exitOK {
+		t.Fatalf("exit = %d, stderr=%s", code, f.stderr())
+	}
+	if !f.launched.called {
+		t.Fatal("parameter-only release did not launch")
+	}
+	for _, want := range []string{"API_URL=" + envTestAPIURLValue, "DB_HOST=" + envTestHostValue} {
+		if !slices.Contains(f.launched.env, want) {
+			t.Fatalf("child environment = %q, want %q", f.launched.env, want)
+		}
+	}
+	for _, entry := range f.launched.env {
+		if strings.HasPrefix(entry, "BILLING_KEY=") {
+			t.Fatalf("parameter-only release injected secret: %q", entry)
+		}
+	}
+	if n := f.rec.count("GetSecretMetadata") + f.rec.count("GetSecret"); n != 0 {
+		t.Fatalf("secret service read called %d times under release --no-secrets", n)
+	}
+}
+
+func TestExecIncompleteModeOmitsBoundSecretAndScrubsInheritedNames(t *testing.T) {
 	f := newExecFixture(t, 0, nil)
 	f.secrets.list[0].Bound = true
 	f.secrets.list[0].Versions[0].Bound = true
 	baseEnvironment := f.environOverride
 	f.environOverride = func() []string {
-		return append(baseEnvironment(), "SESSION_SECRET=stale-parent-default")
+		return append(baseEnvironment(), "APP_SESSION_SECRET=stale-parent-default", "APP_SESSION_SECRET_B64=stale-parent-binary")
 	}
-	if code := f.runExec([]string{"--secret-token", "stripe-key=" + envTestStripeToken, "--preserve-env", "--quiet"}, "/usr/bin/app"); code != exitOK {
+	if code := f.runExec([]string{"--allow-incomplete-secrets", "--env-prefix", "APP_", "--secret-token", "stripe-key=" + envTestStripeToken, "--preserve-env", "--quiet"}, "/usr/bin/app"); code != exitOK {
 		t.Fatalf("exit = %d, stderr=%s", code, f.stderr())
 	}
-	if !slices.Contains(f.launched.env, "SESSION_SECRET=") {
-		t.Fatalf("child environment = %q, want bound secret present and empty", f.launched.env)
+	for _, entry := range f.launched.env {
+		if strings.HasPrefix(entry, "APP_SESSION_SECRET=") || strings.HasPrefix(entry, "APP_SESSION_SECRET_B64=") {
+			t.Fatalf("child environment retained unavailable secret name %q", entry)
+		}
 	}
-	if slices.Contains(f.launched.env, "SESSION_SECRET=stale-parent-default") {
-		t.Fatalf("--preserve-env replaced a required empty bound output: %q", f.launched.env)
+	if !strings.Contains(f.stderr(), "warning: omitted unavailable secret /prod/app/session-secret: it is bound") {
+		t.Fatalf("stderr = %s, want unsuppressible bound-secret warning", f.stderr())
 	}
 	for _, call := range f.rec.snapshot() {
 		if call.method == "GetSecret" && call.path == "/prod/app/session-secret" {
@@ -383,24 +410,28 @@ func TestExecInjectedWinsUnlessPreserveEnv(t *testing.T) {
 	})
 }
 
-// TestExecReportsSkippedSecretsBeforeLaunching: the warning must be on stderr
+// TestExecIncompleteModeReportsOmittedSecretsBeforeLaunching: the warning must be on stderr
 // before the process image is replaced, or on Unix it would never be printed
 // at all.
-func TestExecReportsSkippedSecretsBeforeLaunching(t *testing.T) {
+func TestExecIncompleteModeReportsOmittedSecretsBeforeLaunching(t *testing.T) {
 	t.Parallel()
 	f := newExecFixture(t, 0, nil)
-	if code := f.runExec(nil, "/usr/bin/app"); code != 0 {
+	baseEnvironment := f.environOverride
+	f.environOverride = func() []string {
+		return append(baseEnvironment(), "STRIPE_KEY=stale-parent-secret", "STRIPE_KEY_B64=stale-parent-binary")
+	}
+	if code := f.runExec([]string{"--allow-incomplete-secrets", "--preserve-env"}, "/usr/bin/app"); code != 0 {
 		t.Fatalf("exit = %d, stderr=%s", code, f.stderr())
 	}
-	if !strings.Contains(f.stderr(), "warning: skipped secret /prod/app/stripe-key") {
+	if !strings.Contains(f.stderr(), "warning: omitted unavailable secret /prod/app/stripe-key") {
 		t.Fatalf("stderr = %s", f.stderr())
 	}
 	if !f.launched.called {
-		t.Fatal("a skipped secret must not stop the launch without --strict")
+		t.Fatal("explicit incomplete mode did not launch the command")
 	}
 	for _, entry := range f.launched.env {
-		if strings.HasPrefix(entry, "STRIPE_KEY=") {
-			t.Fatalf("a skipped secret reached the child: %q", entry)
+		if strings.HasPrefix(entry, "STRIPE_KEY=") || strings.HasPrefix(entry, "STRIPE_KEY_B64=") {
+			t.Fatalf("an omitted secret name reached the child: %q", entry)
 		}
 	}
 }
@@ -450,9 +481,35 @@ func TestExecNeverLaunchesOnAResolutionError(t *testing.T) {
 		want int
 	}{
 		{
-			name: "--strict with a secret that has no token",
+			name: "missing secret token by default",
+			set:  func(*envFixture) {},
+			want: exitError,
+		},
+		{
+			name: "bound secret by default",
+			args: []string{"--secret-token", "stripe-key=" + envTestStripeToken},
+			set: func(f *envFixture) {
+				f.secrets.list[0].Bound = true
+				f.secrets.list[0].Versions[0].Bound = true
+			},
+			want: exitError,
+		},
+		{
+			name: "obsolete --strict flag",
 			args: []string{"--strict"},
 			set:  func(*envFixture) {},
+			want: exitUsage,
+		},
+		{
+			name: "incomplete mode with release",
+			args: []string{"--release", "runtime", "--allow-incomplete-secrets"},
+			set:  func(*envFixture) {},
+			want: exitUsage,
+		},
+		{
+			name: "release secret missing token",
+			args: []string{"--release", "runtime"},
+			set:  func(f *envFixture) { f.installRelease() },
 			want: exitError,
 		},
 		{

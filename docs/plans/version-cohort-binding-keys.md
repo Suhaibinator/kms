@@ -547,8 +547,19 @@ The metadata lookup and secret fetch count as one unit under the existing concur
 - Bulk `env` and `exec` never request binding keys:
   - Emit parameters normally.
   - Resolve unbound secrets normally, including access-token handling.
-  - Emit an empty string for every bound-secret output.
-  - Never silently substitute defaults for those bound values.
+  - Fail closed by default, before output or launch, when any selected secret
+    is bound or lacks a required per-secret token.
+  - Keep `--no-secrets` as the explicit parameter-only path for namespace and
+    release selections; it never reads secret plaintext.
+  - Namespace mode alone may opt into `--allow-incomplete-secrets`, which
+    omits unavailable secrets with an unsuppressible warning and never emits
+    an empty credential value.
+  - Reject incomplete mode for releases, whose resolution stays atomic.
+  - In incomplete `exec`, scrub both the plain mapped name and possible `_B64`
+    name of every omitted secret from the inherited environment, even with
+    `--preserve-env`; `env` documentation warns that sourcing output cannot
+    unset a stale variable in a dirty shell.
+  - Remove the old `--strict` switch because fail-closed is the default.
   - Scrub `KMS_BINDING_KEY` and `KMS_NEW_BINDING_KEY` before launching a child process.
 
 ## Releases and console

@@ -563,19 +563,22 @@ func TestEnvRejectsAKeyThatCannotBeAVariable(t *testing.T) {
 	}
 }
 
-// TestEnvNoSecretsNeverCallsGetSecret: --no-secrets is a promise that the
-// invocation reads no secret material at all, so it must not even ask.
-func TestEnvNoSecretsNeverCallsGetSecret(t *testing.T) {
+// TestEnvNoSecretsNeverCallsSecretService: --no-secrets is a promise that the
+// invocation selects parameters only, so it must not list metadata or read
+// secret material even when secrets exist in the namespace.
+func TestEnvNoSecretsNeverCallsSecretService(t *testing.T) {
 	t.Parallel()
 	f := newEnvFixture(t)
+	// This would fail the invocation if parameter-only mode touched secrets.
+	f.secrets.listErr = status.Error(codes.PermissionDenied, "secret listing denied")
 	if code := f.run("--no-secrets"); code != 0 {
 		t.Fatalf("exit = %d, stderr=%s", code, f.stderr())
 	}
 	if got := f.stdout(); got != "DB_HOST=db.internal\nGREETING=\"hello world\"\n" {
 		t.Fatalf("stdout = %q", got)
 	}
-	if n := f.rec.count("GetSecret"); n != 0 {
-		t.Fatalf("GetSecret called %d times under --no-secrets", n)
+	if n := f.rec.count("ListSecrets") + f.rec.count("GetSecretMetadata") + f.rec.count("GetSecret"); n != 0 {
+		t.Fatalf("secret service called %d times under --no-secrets", n)
 	}
 	// No secret was selected, so nothing was skipped either.
 	if strings.Contains(f.stderr(), "warning:") {
@@ -601,35 +604,62 @@ func TestEnvNoSecretsRejectsASecretToken(t *testing.T) {
 	}
 }
 
-func TestEnvBoundNamespaceSecretIsPresentEmptyAndNeverFetched(t *testing.T) {
-	f := newEnvFixture(t)
-	f.secrets.list[0].Bound = true
-	f.secrets.list[0].Versions[0].Bound = true
-	if code := f.run("--secret-token", "stripe-key="+envTestStripeToken); code != exitOK {
-		t.Fatalf("exit = %d, stderr=%s", code, f.stderr())
+func TestEnvBoundNamespaceSecretFailsClosedOrIsExplicitlyOmitted(t *testing.T) {
+	configure := func(f *envFixture) {
+		f.secrets.list[0].Bound = true
+		f.secrets.list[0].Versions[0].Bound = true
 	}
-	if !strings.Contains(f.stdout(), "SESSION_SECRET=\"\"\n") {
-		t.Fatalf("stdout = %q, want the bound secret present with an empty value", f.stdout())
-	}
-	for _, call := range f.rec.snapshot() {
-		if call.method == "GetSecret" && call.path == "/prod/app/session-secret" {
-			t.Fatal("GetSecret was called for a bound namespace version")
+
+	t.Run("default fails without output", func(t *testing.T) {
+		f := newEnvFixture(t)
+		configure(f)
+		if code := f.run("--secret-token", "stripe-key="+envTestStripeToken); code != exitError {
+			t.Fatalf("exit = %d, want %d (stderr=%s)", code, exitError, f.stderr())
 		}
-	}
+		if f.stdout() != "" {
+			t.Fatalf("stdout = %q, want no partial output", f.stdout())
+		}
+		if !strings.Contains(f.stderr(), "secret /prod/app/session-secret cannot be materialized: it is bound") {
+			t.Fatalf("stderr = %s, want bound-secret failure", f.stderr())
+		}
+		if n := f.rec.count("GetSecret"); n != 0 {
+			t.Fatalf("GetSecret called %d times before fail-closed rejection", n)
+		}
+	})
+
+	t.Run("explicit incomplete mode omits with warning", func(t *testing.T) {
+		f := newEnvFixture(t)
+		configure(f)
+		if code := f.run("--allow-incomplete-secrets", "--quiet", "--secret-token", "stripe-key="+envTestStripeToken); code != exitOK {
+			t.Fatalf("exit = %d, stderr=%s", code, f.stderr())
+		}
+		if strings.Contains(f.stdout(), "SESSION_SECRET") {
+			t.Fatalf("stdout = %q, want bound secret omitted", f.stdout())
+		}
+		if !strings.Contains(f.stdout(), "STRIPE_KEY="+envTestStripeValue) {
+			t.Fatalf("stdout = %q, want resolvable secret preserved", f.stdout())
+		}
+		if !strings.Contains(f.stderr(), "warning: omitted unavailable secret /prod/app/session-secret: it is bound") {
+			t.Fatalf("stderr = %s, want unsuppressible omission warning", f.stderr())
+		}
+	})
 }
 
-func TestEnvReleaseUsesExactVersionMetadataAndEmitsBoundPinEmpty(t *testing.T) {
+func TestEnvReleaseBoundPinFailsClosed(t *testing.T) {
 	f := newEnvFixture(t)
 	f.installRelease()
 	f.secrets.metadata["/prod/app/stripe-key"].Versions = []*kmsv1.SecretVersionInfo{
 		{Version: 8, State: "enabled", HasAccessToken: true},
 		{Version: 9, State: "enabled", Bound: true, HasAccessToken: true},
 	}
-	if code := f.run("--release", "runtime"); code != exitOK {
-		t.Fatalf("exit = %d, stderr=%s", code, f.stderr())
+	if code := f.run("--release", "runtime"); code != exitError {
+		t.Fatalf("exit = %d, want %d (stderr=%s)", code, exitError, f.stderr())
 	}
-	if !strings.Contains(f.stdout(), "BILLING_KEY=\"\"\n") {
-		t.Fatalf("stdout = %q, want bound release alias present with an empty value", f.stdout())
+	if f.stdout() != "" {
+		t.Fatalf("stdout = %q, want no release output", f.stdout())
+	}
+	if !strings.Contains(f.stderr(), "secret /prod/app/stripe-key cannot be materialized: it is bound") {
+		t.Fatalf("stderr = %s, want bound release rejection", f.stderr())
 	}
 	if n := f.rec.count("GetSecretMetadata"); n != 1 {
 		t.Fatalf("GetSecretMetadata called %d times, want exact pinned-version lookup", n)
@@ -820,56 +850,47 @@ func TestEnvSecretTokenPrecedence(t *testing.T) {
 	})
 }
 
-// TestEnvSkipsSecretsWithoutATokenAndStrictFails: the default is a partial
-// environment plus a warning that --quiet cannot suppress; --strict turns the
-// same condition into a refusal, before anything is printed.
-func TestEnvSkipsSecretsWithoutATokenAndStrictFails(t *testing.T) {
+// TestEnvMissingSecretTokenFailsClosedUnlessIncompleteIsExplicit: the default
+// is atomic; namespace mode alone may explicitly request omission, whose
+// warning --quiet cannot suppress.
+func TestEnvMissingSecretTokenFailsClosedUnlessIncompleteIsExplicit(t *testing.T) {
 	t.Parallel()
 
-	t.Run("skips with a warning", func(t *testing.T) {
+	t.Run("default fails before output or secret fetch", func(t *testing.T) {
 		t.Parallel()
 		f := newEnvFixture(t)
-		if code := f.run(); code != 0 {
-			t.Fatalf("exit = %d, stderr=%s", code, f.stderr())
+		if code := f.run(); code != exitError {
+			t.Fatalf("exit = %d, want %d (stderr=%s)", code, exitError, f.stderr())
 		}
-		want := "warning: skipped secret /prod/app/stripe-key: it requires a per-secret token and none was supplied (use --strict to fail instead)\n"
+		want := "secret /prod/app/stripe-key cannot be materialized: it requires a per-secret token and none was supplied"
 		if !strings.Contains(f.stderr(), want) {
 			t.Fatalf("stderr = %q, want %q", f.stderr(), want)
 		}
-		if strings.Contains(f.stdout(), "STRIPE_KEY") {
-			t.Fatalf("stdout = %q, want the gated secret left out", f.stdout())
+		if f.stdout() != "" {
+			t.Fatalf("stdout = %q, want no partial output", f.stdout())
 		}
-		if !strings.Contains(f.stdout(), "SESSION_SECRET="+envTestSessionValue) {
-			t.Fatalf("stdout = %q, want the ungated secret present", f.stdout())
-		}
-		// A skipped secret is never fetched.
-		if n := f.rec.count("GetSecret"); n != 1 {
-			t.Fatalf("GetSecret called %d times, want 1 (the ungated secret)", n)
+		if n := f.rec.count("GetSecret"); n != 0 {
+			t.Fatalf("GetSecret called %d times before fail-closed rejection", n)
 		}
 	})
 
-	t.Run("--quiet keeps the warning", func(t *testing.T) {
+	t.Run("explicit incomplete mode omits with warning", func(t *testing.T) {
 		t.Parallel()
 		f := newEnvFixture(t)
-		if code := f.run("--quiet"); code != 0 {
+		if code := f.run("--allow-incomplete-secrets", "--quiet"); code != 0 {
 			t.Fatalf("exit = %d, stderr=%s", code, f.stderr())
 		}
-		if !strings.Contains(f.stderr(), "warning: skipped secret /prod/app/stripe-key") {
+		if !strings.Contains(f.stderr(), "warning: omitted unavailable secret /prod/app/stripe-key") {
 			t.Fatalf("--quiet suppressed the incomplete-environment warning: %q", f.stderr())
 		}
-	})
-
-	t.Run("--strict fails", func(t *testing.T) {
-		t.Parallel()
-		f := newEnvFixture(t)
-		if code := f.run("--strict"); code != exitError {
-			t.Fatalf("exit = %d, want %d (stderr=%s)", code, exitError, f.stderr())
+		if strings.Contains(f.stdout(), "STRIPE_KEY") {
+			t.Fatalf("stdout = %q, want the gated secret omitted", f.stdout())
 		}
-		if !strings.Contains(f.stderr(), "requires a per-secret token and none was supplied") {
-			t.Fatalf("stderr = %s", f.stderr())
+		if !strings.Contains(f.stdout(), "SESSION_SECRET="+envTestSessionValue) {
+			t.Fatalf("stdout = %q, want the resolved secret present", f.stdout())
 		}
-		if f.stdout() != "" {
-			t.Fatalf("stdout = %q, want nothing printed on a strict failure", f.stdout())
+		if n := f.rec.count("GetSecret"); n != 1 {
+			t.Fatalf("GetSecret called %d times, want 1 for the resolvable secret", n)
 		}
 	})
 }
@@ -878,15 +899,20 @@ func TestEnvSkipsSecretsWithoutATokenAndStrictFails(t *testing.T) {
 // the CLI must surface that code rather than flattening it to 1.
 func TestEnvWrongSecretTokenExitsFour(t *testing.T) {
 	t.Parallel()
-	f := newEnvFixture(t)
-	if code := f.run("--secret-token", "stripe-key=wrong"); code != exitPermissionDenied {
-		t.Fatalf("exit = %d, want %d (stderr=%s)", code, exitPermissionDenied, f.stderr())
-	}
-	if !strings.Contains(f.stderr(), "/prod/app/stripe-key") {
-		t.Fatalf("stderr = %s, want it to name the secret", f.stderr())
-	}
-	if f.stdout() != "" {
-		t.Fatalf("stdout = %q, want nothing on a fatal error", f.stdout())
+	for _, args := range [][]string{
+		{"--secret-token", "stripe-key=wrong"},
+		{"--allow-incomplete-secrets", "--secret-token", "stripe-key=wrong"},
+	} {
+		f := newEnvFixture(t)
+		if code := f.run(args...); code != exitPermissionDenied {
+			t.Fatalf("env %v exit = %d, want %d (stderr=%s)", args, code, exitPermissionDenied, f.stderr())
+		}
+		if !strings.Contains(f.stderr(), "/prod/app/stripe-key") {
+			t.Fatalf("stderr = %s, want it to name the secret", f.stderr())
+		}
+		if f.stdout() != "" {
+			t.Fatalf("stdout = %q, want nothing on a fatal error", f.stdout())
+		}
 	}
 }
 
@@ -1136,19 +1162,19 @@ func TestEnvReleaseTokenSpellingsAndEnvName(t *testing.T) {
 
 // TestEnvReleaseKeyEnvNameIsIgnored: the key-derived variable is not the
 // release-mode name, so KMS_SECRET_TOKEN_STRIPE_KEY does not unlock an entry
-// aliased billing-key. The secret is skipped instead.
+// aliased billing-key. Atomic release resolution fails closed.
 func TestEnvReleaseKeyEnvNameIsIgnored(t *testing.T) {
 	t.Parallel()
 	f := newEnvFixture(t)
 	f.installRelease()
 	f.lookupEnv = mapLookup(map[string]string{"KMS_SECRET_TOKEN_STRIPE_KEY": envTestStripeToken})
-	if code := f.run("--release", "runtime"); code != 0 {
-		t.Fatalf("exit = %d, stderr=%s", code, f.stderr())
+	if code := f.run("--release", "runtime"); code != exitError {
+		t.Fatalf("exit = %d, want %d (stderr=%s)", code, exitError, f.stderr())
 	}
-	if strings.Contains(f.stdout(), "BILLING_KEY") {
-		t.Fatalf("stdout = %q, want the entry skipped", f.stdout())
+	if f.stdout() != "" {
+		t.Fatalf("stdout = %q, want no partial release output", f.stdout())
 	}
-	if !strings.Contains(f.stderr(), "warning: skipped secret /prod/app/stripe-key") {
+	if !strings.Contains(f.stderr(), "cannot be materialized") {
 		t.Fatalf("stderr = %s", f.stderr())
 	}
 }
@@ -1166,8 +1192,8 @@ func TestEnvReleaseWithoutSecrets(t *testing.T) {
 	if got := f.stdout(); got != want {
 		t.Fatalf("stdout = %q, want %q", got, want)
 	}
-	if n := f.rec.count("GetSecret"); n != 0 {
-		t.Fatalf("GetSecret called %d times under --no-secrets", n)
+	if n := f.rec.count("GetSecretMetadata") + f.rec.count("GetSecret"); n != 0 {
+		t.Fatalf("secret service read called %d times under release --no-secrets", n)
 	}
 	if strings.Contains(f.stderr(), "warning:") {
 		t.Fatalf("stderr = %s, want no skip warning", f.stderr())
@@ -1397,6 +1423,45 @@ func TestEnvPrefixAndReleaseConflict(t *testing.T) {
 	}
 }
 
+func TestEnvIncompleteModeFlagConflicts(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name string
+		args []string
+		want string
+	}{
+		{
+			name: "release is atomic",
+			args: []string{"--release", "runtime", "--allow-incomplete-secrets"},
+			want: "--allow-incomplete-secrets cannot be used with --release",
+		},
+		{
+			name: "parameter-only mode is already complete",
+			args: []string{"--no-secrets", "--allow-incomplete-secrets"},
+			want: "--allow-incomplete-secrets and --no-secrets are mutually exclusive",
+		},
+		{
+			name: "obsolete strict flag",
+			args: []string{"--strict"},
+			want: "flag provided but not defined: -strict",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			f := newEnvFixture(t)
+			if code := f.run(tc.args...); code != exitUsage {
+				t.Fatalf("exit = %d, want %d (stderr=%s)", code, exitUsage, f.stderr())
+			}
+			if !strings.Contains(f.stderr(), tc.want) {
+				t.Fatalf("stderr = %s, want %q", f.stderr(), tc.want)
+			}
+			if len(f.rec.snapshot()) != 0 {
+				t.Fatalf("usage error made RPCs: %+v", f.rec.snapshot())
+			}
+		})
+	}
+}
+
 // --- output flags -----------------------------------------------------------
 
 // TestEnvOutputFlagConflicts: the invalid combinations are refused before the
@@ -1605,7 +1670,7 @@ func TestEnvQuietSuppressesProgressOnly(t *testing.T) {
 	path := filepath.Join(dir, "app.env")
 	f := newEnvFixture(t)
 	f.secrets.get["/prod/app/session-secret"].Value = []byte{0x00, 0x01, 0x02}
-	if code := f.run("--quiet", "--out", path); code != 0 {
+	if code := f.run("--allow-incomplete-secrets", "--quiet", "--out", path); code != 0 {
 		t.Fatalf("exit = %d, stderr=%s", code, f.stderr())
 	}
 	if strings.Contains(f.stderr(), "Wrote") {
@@ -1614,7 +1679,7 @@ func TestEnvQuietSuppressesProgressOnly(t *testing.T) {
 	if strings.Contains(f.stderr(), "note:") {
 		t.Fatalf("--quiet kept the encoding note: %s", f.stderr())
 	}
-	if !strings.Contains(f.stderr(), "warning: skipped secret /prod/app/stripe-key") {
+	if !strings.Contains(f.stderr(), "warning: omitted unavailable secret /prod/app/stripe-key") {
 		t.Fatalf("--quiet suppressed the skip warning: %s", f.stderr())
 	}
 }
@@ -1643,7 +1708,7 @@ func TestEnvBinaryValueIsBase64WithANote(t *testing.T) {
 	t.Parallel()
 	f := newEnvFixture(t)
 	f.secrets.get["/prod/app/session-secret"].Value = []byte{0x00, 0xff, 0x10}
-	if code := f.run("--no-secrets=false"); code != 0 {
+	if code := f.run("--secret-token", "stripe-key="+envTestStripeToken); code != 0 {
 		t.Fatalf("exit = %d, stderr=%s", code, f.stderr())
 	}
 	if !strings.Contains(f.stdout(), "SESSION_SECRET_B64=AP8Q\n") {
@@ -1709,7 +1774,7 @@ func TestEnvNeverPrintsSecretMaterialOnStderr(t *testing.T) {
 		set  func(*envFixture)
 		args []string
 	}{
-		{name: "skipped secret", set: func(*envFixture) {}},
+		{name: "omitted secret", set: func(*envFixture) {}, args: []string{"--allow-incomplete-secrets"}},
 		{
 			name: "binary note",
 			set: func(f *envFixture) {
@@ -1842,7 +1907,11 @@ func TestEnvTerminalGuardRefusesBeforeAnyRPC(t *testing.T) {
 	}
 
 	// The three escape hatches all pass the guard on the same terminal.
-	for _, args := range [][]string{{"--show"}, {"--no-secrets"}, {"--out", filepath.Join(t.TempDir(), "app.env")}} {
+	for _, args := range [][]string{
+		{"--show", "--secret-token", "stripe-key=" + envTestStripeToken},
+		{"--no-secrets"},
+		{"--out", filepath.Join(t.TempDir(), "app.env"), "--secret-token", "stripe-key=" + envTestStripeToken},
+	} {
 		allowed := newEnvFixture(t)
 		allowed.Stdout = pty
 		full := append([]string{"env", "prod/app", "--insecure", "--token", "id-token"}, args...)

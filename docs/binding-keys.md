@@ -271,6 +271,10 @@ hot reload, a rejected candidate never partially replaces the last-known-good
 snapshot.
 
 Bulk `env` and `exec` deliberately do not consume binding keys or call
-`GetSecret` for bound versions. Each selected bound alias remains present with
-an explicit empty value, preventing an omitted field or parent/default value
-from masquerading as the secret.
+`GetSecret` for bound versions. Secret-inclusive bulk resolution fails closed
+when it selects a bound version; it never synthesizes an empty credential.
+`--no-secrets` is the intentional parameter-only path. Namespace mode may
+explicitly use `--allow-incomplete-secrets` to omit unavailable secrets with a
+warning; `exec` also removes their plain and possible `_B64` names from the
+inherited environment. Release mode remains atomic and rejects incomplete
+resolution.

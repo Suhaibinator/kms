@@ -402,8 +402,15 @@ same set instead of running anything.
 # -> sk_test_123
 
 # In production, pin the active release's exact, digest-verified versions:
-parameter-store exec prod/gradethis --release runtime --strict -- ./server
+parameter-store exec prod/gradethis --release runtime -- ./server
 ```
+
+Secret-inclusive `env` and `exec` invocations fail closed if any selected
+secret is bound or lacks a required per-secret token. Use `--no-secrets` for an
+intentional parameter-only run. Namespace mode can explicitly opt into a
+partial result with `--allow-incomplete-secrets`; unavailable secrets are
+omitted with an unsuppressible warning and are never synthesized as empty
+credentials. Release mode remains atomic and rejects that opt-in.
 
 The equivalent from a consuming application using the Go SDK is below. This
 local example deliberately opts into cleartext and token authentication; do
