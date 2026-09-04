@@ -73,9 +73,9 @@ func Load(ctx context.Context) (*Config, error) {
         // and the namespace is discovered from the bound identity via WhoAmI.
         // No Token, no Namespace needed here.
         TLS: kmsclient.MTLSFromFiles(
-            os.Getenv("PARAM_STORE_CLIENT_CERT"),
-            os.Getenv("PARAM_STORE_CLIENT_KEY"),
-            os.Getenv("PARAM_STORE_SERVER_CA_CERT"), // trusts the operator-provided server cert
+            os.Getenv("KMS_CLIENT_CERT_FILE"),
+            os.Getenv("KMS_CLIENT_KEY_FILE"),
+            os.Getenv("KMS_CA_FILE"), // trusts the operator-provided server cert
         ),
     })
     if err != nil {
@@ -149,9 +149,9 @@ function requiredEnvironment(name: string): string {
 const client = createClient({
   endpoint: requiredEnvironment("PARAM_STORE_ENDPOINT"),
   credentials: mtlsFromFiles(
-    requiredEnvironment("PARAM_STORE_CLIENT_CERT"),
-    requiredEnvironment("PARAM_STORE_CLIENT_KEY"),
-    requiredEnvironment("PARAM_STORE_SERVER_CA_CERT"),
+    requiredEnvironment("KMS_CLIENT_CERT_FILE"),
+    requiredEnvironment("KMS_CLIENT_KEY_FILE"),
+    requiredEnvironment("KMS_CA_FILE"),
   ),
   // namespace may be omitted for a namespace-bound identity
 });
@@ -214,14 +214,14 @@ entries:
 ```bash
 parameter-store release create runtime-release.yaml \
   --endpoint "$PARAM_STORE_ENDPOINT" --token "$ADMIN_TOKEN" \
-  --ca "$PARAM_STORE_SERVER_CA_CERT"
+  --ca "$KMS_CA_FILE"
 parameter-store release validate prod/gradethis runtime 1 \
   --endpoint "$PARAM_STORE_ENDPOINT" --token "$ADMIN_TOKEN" \
-  --ca "$PARAM_STORE_SERVER_CA_CERT"
+  --ca "$KMS_CA_FILE"
 parameter-store release activate prod/gradethis runtime 1 \
   --expected-current-version 0 \
   --endpoint "$PARAM_STORE_ENDPOINT" --token "$ADMIN_TOKEN" \
-  --ca "$PARAM_STORE_SERVER_CA_CERT"
+  --ca "$KMS_CA_FILE"
 ```
 
 The Go process replaces manifest watching, parallel ad hoc reads, and apply
@@ -271,7 +271,7 @@ Roll back by reactivating any retained immutable version:
 ```bash
 parameter-store release rollback prod/gradethis runtime 1 \
   --endpoint "$PARAM_STORE_ENDPOINT" --token "$ADMIN_TOKEN" \
-  --ca "$PARAM_STORE_SERVER_CA_CERT"
+  --ca "$KMS_CA_FILE"
 ```
 
 Use the Releases frontend or `parameter-store release subscribers

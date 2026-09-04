@@ -838,7 +838,7 @@ documents before publishing them; secret values are provisioned separately.
 ```bash
 parameter-store release schema create my-service config/runtime.schema.json \
   --endpoint "$PARAM_STORE_ENDPOINT" --token "$ADMIN_TOKEN" \
-  --ca "$PARAM_STORE_SERVER_CA_CERT"
+  --ca "$KMS_CA_FILE"
 ```
 
 Record the returned immutable schema version in the release manifest. Each
@@ -851,7 +851,7 @@ parameter-store put-parameter \
   '{"request_limit":2000}' \
   --content-type json \
   --endpoint "$PARAM_STORE_ENDPOINT" --token "$ADMIN_TOKEN" \
-  --ca "$PARAM_STORE_SERVER_CA_CERT"
+  --ca "$KMS_CA_FILE"
 ```
 
 Do not publish sparse patches. Copy the current release manifest and update
@@ -872,20 +872,20 @@ Create, validate, diff, and activate with compare-and-swap:
 ```bash
 parameter-store release create runtime-release.yaml \
   --endpoint "$PARAM_STORE_ENDPOINT" --token "$ADMIN_TOKEN" \
-  --ca "$PARAM_STORE_SERVER_CA_CERT"
+  --ca "$KMS_CA_FILE"
 
 parameter-store release validate prod/my-service runtime 15 \
   --endpoint "$PARAM_STORE_ENDPOINT" --token "$ADMIN_TOKEN" \
-  --ca "$PARAM_STORE_SERVER_CA_CERT"
+  --ca "$KMS_CA_FILE"
 
 parameter-store release diff prod/my-service runtime 14 15 \
   --endpoint "$PARAM_STORE_ENDPOINT" --token "$ADMIN_TOKEN" \
-  --ca "$PARAM_STORE_SERVER_CA_CERT"
+  --ca "$KMS_CA_FILE"
 
 parameter-store release activate prod/my-service runtime 15 \
   --expected-current-version 14 \
   --endpoint "$PARAM_STORE_ENDPOINT" --token "$ADMIN_TOKEN" \
-  --ca "$PARAM_STORE_SERVER_CA_CERT"
+  --ca "$KMS_CA_FILE"
 ```
 
 Activation is validation-gated. KMS repeats release validation immediately
@@ -903,7 +903,7 @@ compare-and-swap guard, or accepts an explicit retained version:
 ```bash
 parameter-store release rollback prod/my-service runtime \
   --endpoint "$PARAM_STORE_ENDPOINT" --token "$ADMIN_TOKEN" \
-  --ca "$PARAM_STORE_SERVER_CA_CERT"
+  --ca "$KMS_CA_FILE"
 ```
 
 Monitor per-instance lifecycle acknowledgements:
@@ -911,7 +911,7 @@ Monitor per-instance lifecycle acknowledgements:
 ```bash
 parameter-store release subscribers prod/my-service runtime \
   --endpoint "$PARAM_STORE_ENDPOINT" --token "$ADMIN_TOKEN" \
-  --ca "$PARAM_STORE_SERVER_CA_CERT"
+  --ca "$KMS_CA_FILE"
 ```
 
 ### Diagnose a rejected candidate
