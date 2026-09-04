@@ -56,8 +56,8 @@ const COLUMNS: ReadonlyArray<SortColumn<SecretMetadata>> = [
   { id: "type", label: "Type", value: (s) => s.content_type },
   { id: "current", label: "Current", value: (s) => currentVersion(s) },
   { id: "versions", label: "Versions", value: (s) => s.versions?.length ?? 0 },
-  // Client-bound is the mode that changes how a value is read, so it leads.
-  { id: "mode", label: "Mode", value: (s) => Boolean(s.client_bound) },
+  // Binding-key protection changes how the current version is read, so it leads.
+  { id: "mode", label: "Mode", value: (s) => Boolean(s.bound) },
   { id: "updated", label: "Updated", value: (s) => s.updated_at_unix_ms },
 ];
 
@@ -327,10 +327,10 @@ export default function SecretsPage() {
                     <td data-label="Versions">{s.versions?.length ?? 0}</td>
                     <td data-label="Mode">
                       <div className="row-wrap">
-                        {s.client_bound ? (
-                          <Badge kind="warning">client-bound</Badge>
+                        {s.bound ? (
+                          <Badge kind="warning">binding key</Badge>
                         ) : (
-                          <Badge kind="neutral">standard</Badge>
+                          <Badge kind="neutral">master key only</Badge>
                         )}
                         {s.has_access_token ? <Badge kind="accent">access token</Badge> : null}
                       </div>

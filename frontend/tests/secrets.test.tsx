@@ -17,14 +17,16 @@ const mocks = vi.hoisted(() => ({
   toast: {
     error: vi.fn(),
     success: vi.fn(),
+    info: vi.fn(),
   },
+  identity: { name: "root", kind: "admin" as "admin" | "client", namespace: null },
 }));
 
 vi.mock("next/router", () => ({ useRouter: () => mocks.router }));
 vi.mock("@/context/ToastContext", () => ({ useToast: () => mocks.toast }));
 // The page asks who is signed in before it offers bulk delete.
 vi.mock("@/context/AuthContext", () => ({
-  useAuth: () => ({ identity: { name: "root", kind: "admin", namespace: null } }),
+  useAuth: () => ({ identity: mocks.identity }),
 }));
 
 const NAMESPACE: Namespace = {
@@ -38,12 +40,15 @@ const NAMESPACE: Namespace = {
   secret_count: 1,
 };
 
+const BINDING_KEY = "binding-key-current-0000000000001";
+const NEW_BINDING_KEY = "binding-key-replacement-0000000001";
+
 const SECRET: SecretMetadata = {
   env: NAMESPACE.env,
   app: NAMESPACE.app,
   key: "api-key",
   content_type: "text/plain",
-  client_bound: false,
+  bound: false,
   has_access_token: false,
   metadata_json: "{}",
   created_at_unix_ms: 1,
@@ -53,6 +58,8 @@ const SECRET: SecretMetadata = {
     {
       version: 1,
       state: "enabled",
+      bound: false,
+      has_access_token: false,
       created_by: "admin",
       created_at_unix_ms: 1,
       destroyed_at_unix_ms: 0,
@@ -69,6 +76,8 @@ beforeEach(() => {
   mocks.router.replace.mockReset();
   mocks.toast.error.mockReset();
   mocks.toast.success.mockReset();
+  mocks.toast.info.mockReset();
+  mocks.identity = { name: "root", kind: "admin", namespace: null };
   vi.spyOn(api, "listNamespaces").mockResolvedValue({
     namespaces: [NAMESPACE],
     next_page_token: "",
@@ -344,6 +353,35 @@ describe("new secret validation", () => {
     fireEvent.submit(metadata.closest("form") as HTMLFormElement);
     expect(createSecret).not.toHaveBeenCalled();
   });
+
+  it("sends an opaque binding key without coupling it to access-token generation", async () => {
+    let finish: (value: { version: number; revision: number }) => void = () => undefined;
+    const createSecret = vi.spyOn(api, "createSecret").mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve;
+        }),
+    );
+    await renderReadyForm();
+
+    fireEvent.click(
+      screen.getByRole("checkbox", { name: /Bind this version to an application key/ }),
+    );
+    const input = screen.getByLabelText("Binding key");
+    const opaqueKey = `  ${"k".repeat(30)}`;
+    fireEvent.change(input, { target: { value: opaqueKey } });
+    fireEvent.submit(input.closest("form") as HTMLFormElement);
+
+    await waitFor(() => expect(createSecret).toHaveBeenCalledTimes(1));
+    expect(createSecret.mock.calls[0][0]).toMatchObject({
+      binding_key: opaqueKey,
+      generate_access_token: false,
+    });
+    expect(createSecret.mock.calls[0][0]).not.toHaveProperty("client_bound");
+    expect(createSecret.mock.calls[0][0]).not.toHaveProperty("secret_token");
+    expect(input).toHaveValue("");
+    await act(async () => finish({ version: 1, revision: 1 }));
+  });
 });
 
 describe("new secret version validation", () => {
@@ -368,23 +406,24 @@ describe("new secret version validation", () => {
   });
 });
 
-describe("client-bound secret reveal", () => {
-  it("requires the selected version token, clears cancelled input, and sends it transiently", async () => {
-    const clientBoundSecret: SecretMetadata = {
+describe("protected secret reveal", () => {
+  it("requires both exact-version credentials, clears cancelled input, and sends them transiently", async () => {
+    const protectedSecret: SecretMetadata = {
       ...SECRET,
-      client_bound: true,
+      bound: true,
       has_access_token: true,
+      versions: [{ ...SECRET.versions[0], bound: true, has_access_token: true }],
     };
     mocks.router.query = {
-      env: clientBoundSecret.env,
-      app: clientBoundSecret.app,
-      key: clientBoundSecret.key,
+      env: protectedSecret.env,
+      app: protectedSecret.app,
+      key: protectedSecret.key,
     };
-    vi.spyOn(api, "secretMetadata").mockResolvedValue({ secret: clientBoundSecret });
+    vi.spyOn(api, "secretMetadata").mockResolvedValue({ secret: protectedSecret });
     const revealResponse = {
-      env: clientBoundSecret.env,
-      app: clientBoundSecret.app,
-      key: clientBoundSecret.key,
+      env: protectedSecret.env,
+      app: protectedSecret.app,
+      key: protectedSecret.key,
       version: 1,
       value_base64: "dmFsdWU=",
       content_type: "text/plain",
@@ -400,19 +439,24 @@ describe("client-bound secret reveal", () => {
     render(<SecretDetailPage />);
     fireEvent.click(await screen.findByRole("button", { name: "Reveal secret" }));
     let dialog = screen.getByRole("dialog", { name: "Reveal secret value?" });
-    let tokenInput = within(dialog).getByLabelText("Token for this version");
+    let tokenInput = within(dialog).getByLabelText("Access token");
+    let bindingInput = within(dialog).getByLabelText("Binding key");
     const confirm = within(dialog).getByRole("button", { name: "Reveal" });
     expect(tokenInput).toHaveAttribute("type", "password");
     expect(confirm).toBeDisabled();
 
     fireEvent.change(tokenInput, { target: { value: "kmss_discarded" } });
+    fireEvent.change(bindingInput, { target: { value: "discarded-binding-key" } });
     fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
     fireEvent.click(screen.getByRole("button", { name: "Reveal secret" }));
     dialog = screen.getByRole("dialog", { name: "Reveal secret value?" });
-    tokenInput = within(dialog).getByLabelText("Token for this version");
+    tokenInput = within(dialog).getByLabelText("Access token");
+    bindingInput = within(dialog).getByLabelText("Binding key");
     expect(tokenInput).toHaveValue("");
+    expect(bindingInput).toHaveValue("");
 
     fireEvent.change(tokenInput, { target: { value: "kmss_version_token" } });
+    fireEvent.change(bindingInput, { target: { value: "binding-key-for-version-00000001" } });
     fireEvent.click(within(dialog).getByRole("button", { name: "Reveal" }));
 
     await waitFor(() =>
@@ -421,10 +465,12 @@ describe("client-bound secret reveal", () => {
         1,
         "",
         "kmss_version_token",
+        "binding-key-for-version-00000001",
         { signal: expect.any(AbortSignal) },
       ),
     );
     expect(tokenInput).toHaveValue("");
+    expect(bindingInput).toHaveValue("");
     await act(async () => finishReveal(revealResponse));
     expect(mocks.toast.success).toHaveBeenCalledWith(
       "Revealed version 1",
@@ -435,8 +481,9 @@ describe("client-bound secret reveal", () => {
   it("discards an in-flight reveal and closes its dialog when the active secret changes", async () => {
     const firstSecret: SecretMetadata = {
       ...SECRET,
-      client_bound: true,
+      bound: true,
       has_access_token: true,
+      versions: [{ ...SECRET.versions[0], bound: true, has_access_token: true }],
     };
     const nextSecret: SecretMetadata = {
       ...firstSecret,
@@ -466,8 +513,11 @@ describe("client-bound secret reveal", () => {
     const view = render(<SecretDetailPage />);
     fireEvent.click(await screen.findByRole("button", { name: "Reveal secret" }));
     const dialog = screen.getByRole("dialog", { name: "Reveal secret value?" });
-    fireEvent.change(within(dialog).getByLabelText("Token for this version"), {
+    fireEvent.change(within(dialog).getByLabelText("Access token"), {
       target: { value: "kmss_stale_token" },
+    });
+    fireEvent.change(within(dialog).getByLabelText("Binding key"), {
+      target: { value: "binding-key-for-version-00000001" },
     });
     fireEvent.click(within(dialog).getByRole("button", { name: "Reveal" }));
 
@@ -599,5 +649,187 @@ describe("new secret version dialog", () => {
     fireEvent.click(screen.getByRole("button", { name: "Save new version" }));
     await waitFor(() => expect(createSecret).toHaveBeenCalledTimes(1));
     expect(createSecret.mock.calls[0][0]).toMatchObject({ value_base64: "AQID" });
+  });
+
+  it("chooses binding protection independently for the new version", async () => {
+    const createSecret = vi
+      .spyOn(api, "createSecret")
+      .mockResolvedValue({ version: 2, revision: 3 });
+    const dialog = await openNewVersion();
+    fireEvent.change(within(dialog).getByRole("textbox", { name: "Value" }), {
+      target: { value: "next value" },
+    });
+    fireEvent.click(within(dialog).getByRole("checkbox", { name: /Bind only this new version/ }));
+    const key = within(dialog).getByLabelText("Binding key");
+    fireEvent.change(key, { target: { value: BINDING_KEY } });
+    fireEvent.click(screen.getByRole("button", { name: "Save new version" }));
+
+    await waitFor(() => expect(createSecret).toHaveBeenCalledTimes(1));
+    expect(createSecret.mock.calls[0][0]).toMatchObject({
+      binding_key: BINDING_KEY,
+      generate_access_token: false,
+    });
+    expect(createSecret.mock.calls[0][0]).not.toHaveProperty("client_bound");
+    expect(createSecret.mock.calls[0][0]).not.toHaveProperty("secret_token");
+    expect(key).toHaveValue("");
+  });
+});
+
+describe("binding-key version actions", () => {
+  function renderDetail(secret: SecretMetadata) {
+    mocks.router.query = { env: secret.env, app: secret.app, key: secret.key };
+    vi.spyOn(api, "secretMetadata").mockResolvedValue({ secret });
+    return render(<SecretDetailPage />);
+  }
+
+  function renderBoundDetail() {
+    return renderDetail({
+      ...SECRET,
+      bound: true,
+      versions: [{ ...SECRET.versions[0], bound: true }],
+    });
+  }
+
+  it("binds and unbinds one exact version without a cohort preview", async () => {
+    const bind = vi.spyOn(api, "bindSecret").mockResolvedValue({
+      anchor_version: 1,
+      affected_versions: [1],
+      revision: 10,
+    });
+    const preview = vi.spyOn(api, "previewSecretBindingCohort");
+    const view = renderDetail(SECRET);
+    fireEvent.click(await screen.findByRole("button", { name: "Bind" }));
+    let dialog = screen.getByRole("dialog", { name: "Bind · v1" });
+    const key = within(dialog).getByLabelText("New binding key");
+    fireEvent.change(key, { target: { value: BINDING_KEY } });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Bind" }));
+
+    await waitFor(() =>
+      expect(bind).toHaveBeenCalledWith(
+        { env: "prod", app: "billing", key: "api-key" },
+        1,
+        BINDING_KEY,
+        { signal: expect.any(AbortSignal) },
+      ),
+    );
+    expect(key).toHaveValue("");
+    expect(preview).not.toHaveBeenCalled();
+
+    // Re-render a bound row to exercise the inverse exact-version operation.
+    view.unmount();
+    const unbind = vi.spyOn(api, "unbindSecret").mockResolvedValue({
+      anchor_version: 1,
+      affected_versions: [1],
+      revision: 11,
+    });
+    renderBoundDetail();
+    fireEvent.click(await screen.findByRole("button", { name: "Unbind" }));
+    dialog = screen.getByRole("dialog", { name: "Unbind · v1" });
+    fireEvent.change(within(dialog).getByLabelText("Current binding key"), {
+      target: { value: BINDING_KEY },
+    });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Unbind" }));
+    await waitFor(() => expect(unbind).toHaveBeenCalledTimes(1));
+  });
+
+  it("previews rotation, clears preview credentials, and replays the exact CAS", async () => {
+    const preview = vi.spyOn(api, "previewSecretBindingCohort").mockResolvedValue({
+      anchor_version: 1,
+      affected_versions: [1, 2],
+      revision: 41,
+    });
+    const rotate = vi.spyOn(api, "rotateSecretBindingKey").mockResolvedValue({
+      anchor_version: 1,
+      affected_versions: [1, 2],
+      revision: 42,
+    });
+    renderBoundDetail();
+    fireEvent.click(await screen.findByRole("button", { name: "Rotate key" }));
+    let dialog = screen.getByRole("dialog", { name: "Rotate binding key · v1" });
+    const previewInput = within(dialog).getByLabelText("Current binding key");
+    fireEvent.change(previewInput, { target: { value: BINDING_KEY } });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Preview cohort" }));
+
+    await waitFor(() =>
+      expect(preview).toHaveBeenCalledWith(
+        { env: "prod", app: "billing", key: "api-key" },
+        1,
+        BINDING_KEY,
+        { signal: expect.any(AbortSignal) },
+      ),
+    );
+    dialog = screen.getByRole("dialog", { name: "Rotate binding key · v1" });
+    expect(within(dialog).getByTestId("binding-cohort-versions")).toHaveTextContent("v1");
+    expect(within(dialog).getByTestId("binding-cohort-versions")).toHaveTextContent("v2");
+    const current = within(dialog).getByLabelText("Current binding key");
+    const replacement = within(dialog).getByLabelText("New binding key");
+    const confirmation = within(dialog).getByLabelText("Confirm new binding key");
+    expect(current).toHaveValue("");
+    fireEvent.change(current, { target: { value: BINDING_KEY } });
+    fireEvent.change(replacement, { target: { value: NEW_BINDING_KEY } });
+    fireEvent.change(confirmation, { target: { value: NEW_BINDING_KEY } });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Rotate binding key" }));
+
+    await waitFor(() =>
+      expect(rotate).toHaveBeenCalledWith(
+        { env: "prod", app: "billing", key: "api-key" },
+        1,
+        BINDING_KEY,
+        NEW_BINDING_KEY,
+        41,
+        [1, 2],
+        { signal: expect.any(AbortSignal) },
+      ),
+    );
+    expect(
+      screen.queryByRole("dialog", { name: "Rotate binding key · v1" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("previews and purges the exact cohort only for an administrator", async () => {
+    vi.spyOn(api, "previewSecretBindingCohort").mockResolvedValue({
+      anchor_version: 1,
+      affected_versions: [1],
+      revision: 50,
+    });
+    const purge = vi.spyOn(api, "purgeSecretBindingCohort").mockResolvedValue({
+      anchor_version: 1,
+      affected_versions: [1],
+      revision: 51,
+    });
+    renderBoundDetail();
+    fireEvent.click(await screen.findByRole("button", { name: "Purge cohort" }));
+    let dialog = screen.getByRole("dialog", { name: "Purge cohort · v1" });
+    fireEvent.change(within(dialog).getByLabelText("Current binding key"), {
+      target: { value: BINDING_KEY },
+    });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Preview cohort" }));
+    await screen.findByTestId("binding-cohort-versions");
+    dialog = screen.getByRole("dialog", { name: "Purge cohort · v1" });
+    fireEvent.change(within(dialog).getByLabelText("Current binding key"), {
+      target: { value: BINDING_KEY },
+    });
+    fireEvent.change(within(dialog).getByLabelText(/Type PURGE/), {
+      target: { value: "PURGE" },
+    });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Purge versions" }));
+
+    await waitFor(() =>
+      expect(purge).toHaveBeenCalledWith(
+        { env: "prod", app: "billing", key: "api-key" },
+        1,
+        BINDING_KEY,
+        50,
+        [1],
+        { signal: expect.any(AbortSignal) },
+      ),
+    );
+  });
+
+  it("does not offer cohort purge to a client identity", async () => {
+    mocks.identity = { name: "app", kind: "client", namespace: null };
+    renderBoundDetail();
+    expect(await screen.findByRole("button", { name: "Rotate key" })).toBeVisible();
+    expect(screen.queryByRole("button", { name: "Purge cohort" })).not.toBeInTheDocument();
   });
 });

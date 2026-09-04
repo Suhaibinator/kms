@@ -109,7 +109,7 @@ export type ConceptKey =
   | "instance"
   | "applied"
   | "rejected"
-  | "client_bound"
+  | "binding_key"
   | "rollback"
   | "cas";
 
@@ -183,10 +183,10 @@ export const CONCEPTS: Record<ConceptKey, Concept> = {
     definition:
       "The instance could not adopt the release and keeps serving its last-known-good. The bounded category says why; the diagnostic is local detail.",
   },
-  client_bound: {
-    term: "Client-bound secret",
+  binding_key: {
+    term: "Binding key",
     definition:
-      "A secret only its owning client identity can read. The console can see metadata and pin versions, never the value.",
+      "An operator-owned string that adds a second wrapping layer to one secret version. KMS never stores, hashes, or fingerprints it.",
   },
   rollback: {
     term: "Roll back",

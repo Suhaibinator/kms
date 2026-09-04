@@ -61,9 +61,7 @@
           "entries": [
             {
               "alias": "database",
-              "client_bound": false,
               "content_type": "json",
-              "has_access_token": false,
               "kind": "parameter",
               "metadata_json": "{}",
               "parameter_digest": "9688de1c874bbf965648c5e98101ddcf3d79000a5ddeb7e84928dfa99320f7de",
@@ -78,9 +76,7 @@
             },
             {
               "alias": "db_password",
-              "client_bound": false,
               "content_type": "text/plain",
-              "has_access_token": false,
               "kind": "secret",
               "metadata_json": "{}",
               "parameter_digest": "",
@@ -95,9 +91,7 @@
             },
             {
               "alias": "rate_limits",
-              "client_bound": false,
               "content_type": "integer",
-              "has_access_token": false,
               "kind": "parameter",
               "metadata_json": "{}",
               "parameter_digest": "7902699be42c8a8e46fbbb4501726517e86b22c56a189f7625a6da49081b2451",
@@ -138,7 +132,6 @@
       "values": [
         {
           "alias": "database",
-          "client_bound": false,
           "content_type": "json",
           "current_version": 1,
           "key": "database",
@@ -148,7 +141,6 @@
         },
         {
           "alias": "db_password",
-          "client_bound": false,
           "content_type": "text/plain",
           "current_version": 1,
           "key": "db_password",
@@ -158,7 +150,6 @@
         },
         {
           "alias": "rate_limits",
-          "client_bound": false,
           "content_type": "integer",
           "current_version": 2,
           "key": "rate_limits",
@@ -210,9 +201,7 @@
           "entries": [
             {
               "alias": "database",
-              "client_bound": false,
               "content_type": "json",
-              "has_access_token": false,
               "kind": "parameter",
               "metadata_json": "{}",
               "parameter_digest": "9688de1c874bbf965648c5e98101ddcf3d79000a5ddeb7e84928dfa99320f7de",
@@ -227,9 +216,7 @@
             },
             {
               "alias": "db_password",
-              "client_bound": false,
               "content_type": "text/plain",
-              "has_access_token": false,
               "kind": "secret",
               "metadata_json": "{}",
               "parameter_digest": "",
@@ -244,9 +231,7 @@
             },
             {
               "alias": "rate_limits",
-              "client_bound": false,
               "content_type": "integer",
-              "has_access_token": false,
               "kind": "parameter",
               "metadata_json": "{}",
               "parameter_digest": "7902699be42c8a8e46fbbb4501726517e86b22c56a189f7625a6da49081b2451",
@@ -287,7 +272,6 @@
       "values": [
         {
           "alias": "database",
-          "client_bound": false,
           "content_type": "json",
           "current_version": 1,
           "key": "database",
@@ -297,7 +281,6 @@
         },
         {
           "alias": "db_password",
-          "client_bound": false,
           "content_type": "text/plain",
           "current_version": 1,
           "key": "db_password",
@@ -307,7 +290,6 @@
         },
         {
           "alias": "rate_limits",
-          "client_bound": false,
           "content_type": "integer",
           "current_version": 2,
           "key": "rate_limits",
@@ -324,17 +306,13 @@
     {
       "environments": {
         "dev": {
-          "client_bound": false,
           "content_type": "json",
-          "has_access_token": false,
           "present": true,
           "value": "{\"host\":\"db.internal\",\"pool\":8}",
           "version": 1
         },
         "prod": {
-          "client_bound": false,
           "content_type": "json",
-          "has_access_token": false,
           "present": true,
           "value": "{\"host\":\"db.internal\",\"pool\":8}",
           "version": 1
@@ -346,16 +324,12 @@
     {
       "environments": {
         "dev": {
-          "client_bound": false,
           "content_type": "text/plain",
-          "has_access_token": false,
           "present": true,
           "version": 1
         },
         "prod": {
-          "client_bound": false,
           "content_type": "text/plain",
-          "has_access_token": false,
           "present": true,
           "version": 1
         }
@@ -366,17 +340,13 @@
     {
       "environments": {
         "dev": {
-          "client_bound": false,
           "content_type": "integer",
-          "has_access_token": false,
           "present": true,
           "value": "7",
           "version": 2
         },
         "prod": {
-          "client_bound": false,
           "content_type": "integer",
-          "has_access_token": false,
           "present": true,
           "value": "7",
           "version": 2

@@ -758,7 +758,6 @@ export function ApplicationHome({
               value_base64: utf8ToBase64(request.value),
               content_type: request.contentType,
               metadata_json: "{}",
-              client_bound: false,
               generate_access_token: false,
               expires_at_unix_ms: 0,
             });

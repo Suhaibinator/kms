@@ -120,7 +120,7 @@ function MatrixCell({
       <Link href={links.secretDetail({ env: environment, app, key: row.key })}>
         <span className="secret-cell">
           Secret v{cell.version}
-          {cell.client_bound ? " · client-bound" : ""}
+          {cell.bound ? " · binding key" : ""}
         </span>
       </Link>
     );

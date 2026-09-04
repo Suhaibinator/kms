@@ -54,7 +54,9 @@ import type {
   RollbackRequest,
   RollbackResponse,
   RotateIdentityResponse,
+  SecretBindingCohortResponse,
   SecretMetadata,
+  SecretVersionMutationResponse,
   ShipRequest,
   ShipResult,
   SubscriberStreamSnapshot,
@@ -535,7 +537,7 @@ export const api = {
       request,
     );
   },
-  // Client-bound updates carry the current token only in this request body.
+  // Binding keys are operation-local request fields and are never retained.
   createSecret(req: CreateSecretRequest): Promise<CreateSecretResponse> {
     return apiFetch<CreateSecretResponse>("/secrets", { method: "POST", body: req });
   },
@@ -544,6 +546,7 @@ export const api = {
     version: number,
     label: string,
     secretToken?: string,
+    bindingKey?: string,
     request?: ApiRequestOptions,
   ): Promise<RevealSecretResponse> {
     return apiFetch<RevealSecretResponse>("/secrets/reveal", {
@@ -556,6 +559,95 @@ export const api = {
         version,
         label,
         ...(secretToken ? { secret_token: secretToken } : null),
+        ...(bindingKey ? { binding_key: bindingKey } : null),
+      },
+    });
+  },
+  bindSecret(
+    ref: ResourceRef,
+    version: number,
+    bindingKey: string,
+    request?: ApiRequestOptions,
+  ): Promise<SecretVersionMutationResponse> {
+    return apiFetch<SecretVersionMutationResponse>("/secrets/bind", {
+      ...request,
+      method: "POST",
+      body: { env: ref.env, app: ref.app, key: ref.key, version, binding_key: bindingKey },
+    });
+  },
+  unbindSecret(
+    ref: ResourceRef,
+    version: number,
+    bindingKey: string,
+    request?: ApiRequestOptions,
+  ): Promise<SecretVersionMutationResponse> {
+    return apiFetch<SecretVersionMutationResponse>("/secrets/unbind", {
+      ...request,
+      method: "POST",
+      body: { env: ref.env, app: ref.app, key: ref.key, version, binding_key: bindingKey },
+    });
+  },
+  previewSecretBindingCohort(
+    ref: ResourceRef,
+    anchorVersion: number,
+    bindingKey: string,
+    request?: ApiRequestOptions,
+  ): Promise<SecretBindingCohortResponse> {
+    return apiFetch<SecretBindingCohortResponse>("/secrets/binding-cohort/preview", {
+      ...request,
+      method: "POST",
+      body: {
+        env: ref.env,
+        app: ref.app,
+        key: ref.key,
+        anchor_version: anchorVersion,
+        binding_key: bindingKey,
+      },
+    });
+  },
+  rotateSecretBindingKey(
+    ref: ResourceRef,
+    anchorVersion: number,
+    bindingKey: string,
+    newBindingKey: string,
+    expectedRevision: number,
+    expectedAffectedVersions: number[],
+    request?: ApiRequestOptions,
+  ): Promise<SecretBindingCohortResponse> {
+    return apiFetch<SecretBindingCohortResponse>("/secrets/binding-key/rotate", {
+      ...request,
+      method: "POST",
+      body: {
+        env: ref.env,
+        app: ref.app,
+        key: ref.key,
+        anchor_version: anchorVersion,
+        binding_key: bindingKey,
+        new_binding_key: newBindingKey,
+        expected_revision: expectedRevision,
+        expected_affected_versions: expectedAffectedVersions,
+      },
+    });
+  },
+  purgeSecretBindingCohort(
+    ref: ResourceRef,
+    anchorVersion: number,
+    bindingKey: string,
+    expectedRevision: number,
+    expectedAffectedVersions: number[],
+    request?: ApiRequestOptions,
+  ): Promise<SecretBindingCohortResponse> {
+    return apiFetch<SecretBindingCohortResponse>("/secrets/binding-cohort/purge", {
+      ...request,
+      method: "POST",
+      body: {
+        env: ref.env,
+        app: ref.app,
+        key: ref.key,
+        anchor_version: anchorVersion,
+        binding_key: bindingKey,
+        expected_revision: expectedRevision,
+        expected_affected_versions: expectedAffectedVersions,
       },
     });
   },

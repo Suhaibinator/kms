@@ -9,6 +9,7 @@ import { SecretContentTypeSelect } from "@/components/secrets/SecretContentTypeS
 import { SecretValueField } from "@/components/secrets/SecretValueField";
 import {
   Badge,
+  Checkbox,
   EmptyState,
   Field,
   Input,
@@ -23,6 +24,7 @@ import {
 } from "@/components/ui";
 import { AppSelect } from "@/components/ui/app-select";
 import { Button, ButtonLink } from "@/components/ui/button";
+import { useAuth } from "@/context/AuthContext";
 import { useToast } from "@/context/ToastContext";
 import { ApiError, api, isAbortError, type ResourceRef } from "@/lib/api";
 import { crumbs } from "@/lib/crumbs";
@@ -44,8 +46,8 @@ import {
 import { useFocusFirstInvalid } from "@/lib/forms";
 import { useFieldErrors, useLatestRequest, useQueryParams } from "@/lib/hooks";
 import { links } from "@/lib/links";
-import type { SecretMetadata, SecretVersion } from "@/lib/types";
-import { validateMetadataJson } from "@/lib/validation";
+import type { SecretBindingCohortResponse, SecretMetadata, SecretVersion } from "@/lib/types";
+import { validateBindingKey, validateMetadataJson } from "@/lib/validation";
 
 const REVEAL_SECONDS = 30;
 
@@ -58,9 +60,16 @@ interface Revealed {
   isText: boolean;
 }
 
+type BindingAction = {
+  kind: "bind" | "unbind" | "rotate" | "purge";
+  version: number;
+};
+
 export default function SecretDetailPage() {
   const router = useRouter();
   const toast = useToast();
+  const { identity } = useAuth();
+  const isAdmin = identity?.kind === "admin";
   const { values, ready } = useQueryParams(["env", "app", "key"]);
   const env = values.env ?? "";
   const app = values.app ?? "";
@@ -85,7 +94,8 @@ export default function SecretDetailPage() {
 
   // Reveal flow.
   const [revealTarget, setRevealTarget] = useState<number | null>(null); // version pending confirm
-  const [revealToken, setRevealToken] = useState("");
+  const [revealSecretToken, setRevealSecretToken] = useState("");
+  const [revealBindingKey, setRevealBindingKey] = useState("");
   const [revealBusy, setRevealBusy] = useState(false);
   const [revealed, setRevealed] = useState<Revealed | null>(null);
   const [valueVisible, setValueVisible] = useState(false);
@@ -100,6 +110,7 @@ export default function SecretDetailPage() {
     | null
   >(null);
   const [actionBusy, setActionBusy] = useState(false);
+  const [bindingAction, setBindingAction] = useState<BindingAction | null>(null);
 
   // New version modal.
   const [newVersionOpen, setNewVersionOpen] = useState(false);
@@ -150,10 +161,12 @@ export default function SecretDetailPage() {
     revealRequest.abort();
     setRevealTarget(null);
     setRevealBusy(false);
+    setBindingAction(null);
     if (hasRef) {
       setRevealed(null);
       setValueVisible(false);
-      setRevealToken("");
+      setRevealSecretToken("");
+      setRevealBindingKey("");
       void load();
     } else {
       setLoadState("idle");
@@ -190,13 +203,18 @@ export default function SecretDetailPage() {
     async (version: number) => {
       if (!hasRef) return;
       const run = revealRequest.begin();
-      const token = secret?.client_bound ? revealToken : undefined;
+      const versionInfo = secret?.versions.find((candidate) => candidate.version === version);
+      const secretToken = versionInfo?.has_access_token ? revealSecretToken : undefined;
+      const bindingKey = versionInfo?.bound ? revealBindingKey : undefined;
       // Clear the credential from React state as the request starts. The local
       // copy exists only for this in-flight call and is never persisted.
-      setRevealToken("");
+      setRevealSecretToken("");
+      setRevealBindingKey("");
       setRevealBusy(true);
       try {
-        const res = await api.revealSecret(ref, version, "", token, { signal: run.signal });
+        const res = await api.revealSecret(ref, version, "", secretToken, bindingKey, {
+          signal: run.signal,
+        });
         if (!run.current || activeRefKey.current !== refKey) return;
         setRevealed({
           version: res.version,
@@ -217,16 +235,27 @@ export default function SecretDetailPage() {
         }
       }
     },
-    [hasRef, ref, refKey, revealToken, revealRequest, secret?.client_bound, toast],
+    [
+      hasRef,
+      ref,
+      refKey,
+      revealSecretToken,
+      revealBindingKey,
+      revealRequest,
+      secret?.versions,
+      toast,
+    ],
   );
 
   const openReveal = useCallback((version: number) => {
-    setRevealToken("");
+    setRevealSecretToken("");
+    setRevealBindingKey("");
     setRevealTarget(version);
   }, []);
 
   const closeReveal = useCallback(() => {
-    setRevealToken("");
+    setRevealSecretToken("");
+    setRevealBindingKey("");
     setRevealTarget(null);
   }, []);
 
@@ -351,6 +380,10 @@ export default function SecretDetailPage() {
 
   const current = secret.labels?.current;
   const enabledVersions = secret.versions.filter((v) => v.state === "enabled");
+  const revealVersionInfo =
+    revealTarget === null
+      ? null
+      : (secret.versions.find((version) => version.version === revealTarget) ?? null);
 
   return (
     <>
@@ -395,13 +428,13 @@ export default function SecretDetailPage() {
             ["Content type", secret.content_type || "—"],
             [
               "Mode",
-              secret.client_bound ? (
+              secret.bound ? (
                 <Badge kind="warning" key="mode">
-                  client-bound
+                  binding key
                 </Badge>
               ) : (
                 <Badge kind="neutral" key="mode">
-                  standard (master-key)
+                  master key only
                 </Badge>
               ),
             ],
@@ -497,10 +530,9 @@ export default function SecretDetailPage() {
         ) : (
           <div>
             <div className="warn-panel mb-4">
-              {secret.client_bound
-                ? "Revealing this client-bound value requires the token used for the selected version. The token is sent only in this request body and is not stored by the console. "
-                : "Revealing decrypts the secret and records an audit event. "}
-              The value auto-hides after {REVEAL_SECONDS} seconds.
+              Revealing decrypts the selected version and records an audit event. Any required
+              access token or binding key is sent only in that request and is not stored by the
+              console. The value auto-hides after {REVEAL_SECONDS} seconds.
             </div>
             <div className="row-wrap">
               <label className="field-label" htmlFor="reveal-version">
@@ -515,7 +547,7 @@ export default function SecretDetailPage() {
                 placeholder="No enabled versions"
                 options={enabledVersions.map((version) => ({
                   value: String(version.version),
-                  label: `v${version.version}${version.version === current ? " (current)" : ""}`,
+                  label: `v${version.version}${version.version === current ? " (current)" : ""}${version.bound ? " · bound" : ""}`,
                 }))}
               />
               <Button
@@ -540,7 +572,7 @@ export default function SecretDetailPage() {
               <thead>
                 <tr>
                   <th>Version</th>
-                  <th>State</th>
+                  <th>State &amp; protection</th>
                   <th>Created by</th>
                   <th>Created</th>
                   <th>Expires</th>
@@ -555,8 +587,10 @@ export default function SecretDetailPage() {
                       key={v.version}
                       v={v}
                       isCurrent={v.version === current}
+                      canPurge={isAdmin}
                       onReveal={openReveal}
                       onConfirm={setConfirm}
+                      onBindingAction={setBindingAction}
                     />
                   ))}
               </tbody>
@@ -574,19 +608,35 @@ export default function SecretDetailPage() {
             You are about to decrypt and display version {revealTarget} of{" "}
             <span className="mono">{displayPath(ref)}</span>. This is recorded in the audit log. The
             value will auto-hide after {REVEAL_SECONDS} seconds.
-            {secret.client_bound ? (
+            {revealVersionInfo?.has_access_token ? (
               <Field
-                label="Token for this version"
-                hint="The token is used only for this reveal request and is not saved."
+                label="Access token"
+                hint="Used only for this reveal request and not saved."
                 className="mt-4"
               >
                 <Input
                   type="password"
-                  value={revealToken}
+                  value={revealSecretToken}
                   required
                   autoComplete="off"
                   spellCheck={false}
-                  onChange={(event) => setRevealToken(event.target.value)}
+                  onChange={(event) => setRevealSecretToken(event.target.value)}
+                />
+              </Field>
+            ) : null}
+            {revealVersionInfo?.bound ? (
+              <Field
+                label="Binding key"
+                hint="Used only for this reveal request and not saved."
+                className="mt-4"
+              >
+                <Input
+                  type="password"
+                  value={revealBindingKey}
+                  required
+                  autoComplete="off"
+                  spellCheck={false}
+                  onChange={(event) => setRevealBindingKey(event.target.value)}
                 />
               </Field>
             ) : null}
@@ -594,7 +644,10 @@ export default function SecretDetailPage() {
         }
         confirmLabel="Reveal"
         busy={revealBusy}
-        confirmDisabled={secret.client_bound && revealToken.length === 0}
+        confirmDisabled={
+          (revealVersionInfo?.has_access_token === true && revealSecretToken.length === 0) ||
+          (revealVersionInfo?.bound === true && revealBindingKey.length === 0)
+        }
         onConfirm={() => revealTarget !== null && doReveal(revealTarget)}
         onCancel={closeReveal}
       />
@@ -674,6 +727,16 @@ export default function SecretDetailPage() {
           void load({ background: true });
         }}
       />
+
+      <BindingActionModal
+        action={bindingAction}
+        secretRef={ref}
+        onClose={() => setBindingAction(null)}
+        onSaved={() => {
+          setBindingAction(null);
+          void load({ background: true });
+        }}
+      />
     </>
   );
 }
@@ -681,17 +744,21 @@ export default function SecretDetailPage() {
 function VersionRow({
   v,
   isCurrent,
+  canPurge,
   onReveal,
   onConfirm,
+  onBindingAction,
 }: {
   v: SecretVersion;
   isCurrent: boolean;
+  canPurge: boolean;
   onReveal: (version: number) => void;
   onConfirm: (
     c:
       | { kind: "disable" | "enable" | "promote"; version: number }
       | { kind: "destroy"; version: number },
   ) => void;
+  onBindingAction: (action: BindingAction) => void;
 }) {
   const destroyed = v.state === "destroyed";
   const expired = v.expires_at_unix_ms > 0 && v.expires_at_unix_ms <= Date.now();
@@ -704,7 +771,11 @@ function VersionRow({
         </div>
       </td>
       <td>
-        <SecretStateBadge state={v.state} />
+        <div className="row-wrap">
+          <SecretStateBadge state={v.state} />
+          {v.bound ? <Badge kind="warning">bound</Badge> : null}
+          {v.has_access_token ? <Badge kind="accent">access token</Badge> : null}
+        </div>
       </td>
       <td>{v.created_by || <span className="faint">—</span>}</td>
       <td className="nowrap">{formatUnixMs(v.created_at_unix_ms)}</td>
@@ -753,6 +824,35 @@ function VersionRow({
           ) : null}
           {!destroyed ? (
             <Button
+              variant="outline"
+              size="sm"
+              onClick={() =>
+                onBindingAction({ kind: v.bound ? "unbind" : "bind", version: v.version })
+              }
+            >
+              {v.bound ? "Unbind" : "Bind"}
+            </Button>
+          ) : null}
+          {v.bound && !destroyed ? (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => onBindingAction({ kind: "rotate", version: v.version })}
+            >
+              Rotate key
+            </Button>
+          ) : null}
+          {v.bound && !destroyed && canPurge ? (
+            <Button
+              variant="destructive"
+              size="sm"
+              onClick={() => onBindingAction({ kind: "purge", version: v.version })}
+            >
+              Purge cohort
+            </Button>
+          ) : null}
+          {!destroyed ? (
+            <Button
               variant="destructive"
               size="sm"
               onClick={() => onConfirm({ kind: "destroy", version: v.version })}
@@ -782,9 +882,10 @@ function NewVersionModal({
   const [alreadyBase64, setAlreadyBase64] = useState(false);
   const [contentType, setContentType] = useState(secret.content_type || "text/plain");
   const [metadataJson, setMetadataJson] = useState("{}");
-  const [clientToken, setClientToken] = useState("");
+  const [bindVersion, setBindVersion] = useState(false);
+  const [bindingKey, setBindingKey] = useState("");
   const [saving, setSaving] = useState(false);
-  const errors = useFieldErrors<"value" | "metadata" | "token">();
+  const errors = useFieldErrors<"value" | "metadata" | "bindingKey">();
   const { reset: resetErrors } = errors;
   const valueRef = useRef<HTMLElement | null>(null);
   const { formRef, requestFocus } = useFocusFirstInvalid();
@@ -795,8 +896,11 @@ function NewVersionModal({
       setAlreadyBase64(false);
       setContentType(secret.content_type || "text/plain");
       setMetadataJson("{}");
-      setClientToken("");
+      setBindVersion(false);
+      setBindingKey("");
       resetErrors();
+    } else {
+      setBindingKey("");
     }
   }, [open, secret.content_type, resetErrors]);
 
@@ -805,17 +909,15 @@ function NewVersionModal({
   // alone, never the value.
   const valueError = validateSecretValue(value, alreadyBase64);
   const metadataError = validateMetadataJson(metadataJson);
-  const tokenError =
-    secret.client_bound && !clientToken.trim()
-      ? "The client access token is required to add a version to a client-bound secret."
-      : null;
+  const bindingKeyError = bindVersion ? validateBindingKey(bindingKey) : null;
   const shownValueError = errors.shown("value", valueError);
   const shownMetadataError = errors.shown("metadata", metadataError);
-  const shownTokenError = errors.shown("token", tokenError);
-  const blocked = !!(shownValueError || shownMetadataError || shownTokenError);
+  const shownBindingKeyError = errors.shown("bindingKey", bindingKeyError);
+  const blocked = !!(shownValueError || shownMetadataError || shownBindingKeyError);
   const dirty =
     value !== "" ||
-    clientToken !== "" ||
+    bindVersion ||
+    bindingKey !== "" ||
     !isEmptyJson(metadataJson) ||
     contentType !== (secret.content_type || "text/plain");
   const currentVersion = secret.labels?.current;
@@ -827,11 +929,13 @@ function NewVersionModal({
     errors.markAllTouched();
     // Every problem now has an inline message beside the field that caused it;
     // move focus there so the button never looks dead.
-    if (valueError || metadataError || tokenError) {
+    if (valueError || metadataError || bindingKeyError) {
       requestFocus();
       return;
     }
+    const requestBindingKey = bindVersion ? bindingKey : undefined;
     setSaving(true);
+    setBindingKey("");
     try {
       const res = await api.createSecret({
         env: secret.env,
@@ -840,14 +944,12 @@ function NewVersionModal({
         value_base64: secretValueBase64(value, alreadyBase64),
         content_type: contentType.trim() || "text/plain",
         metadata_json: metadataJson.trim() || "{}",
-        client_bound: secret.client_bound,
+        ...(requestBindingKey !== undefined ? { binding_key: requestBindingKey } : null),
         generate_access_token: false,
         expires_at_unix_ms: 0,
-        ...(secret.client_bound ? { secret_token: clientToken.trim() } : null),
       });
       // Clear the plaintext from the field immediately.
       setValue("");
-      setClientToken("");
       toast.success(`Created version ${res.version}`, "New version is now current.");
       onSaved();
     } catch (err) {
@@ -921,25 +1023,421 @@ function NewVersionModal({
             onSubmit={() => void submit()}
           />
         </Field>
-        {secret.client_bound ? (
+        <div className="checkbox-row mt-4 mb-4">
+          <Checkbox
+            id="bind-new-version"
+            checked={bindVersion}
+            onCheckedChange={(checked) => {
+              setBindVersion(checked);
+              if (!checked) setBindingKey("");
+            }}
+          />
+          <label htmlFor="bind-new-version">
+            <strong>Bind only this new version</strong>
+            <div className="faint text-sm">
+              Protection does not carry forward from the current version. Choose it explicitly for
+              each new version.
+            </div>
+          </label>
+        </div>
+        {bindVersion ? (
           <Field
-            label="Client access token"
-            hint="Required. The existing token re-wraps the new version's key. It is sent once and never stored."
-            error={shownTokenError}
+            label="Binding key"
+            hint="At least 32 UTF-8 bytes. Used only for this write and never retained by KMS."
+            error={shownBindingKeyError}
           >
             <Input
               className="font-mono"
               type="password"
-              value={clientToken}
+              value={bindingKey}
               autoComplete="off"
               spellCheck={false}
-              onChange={(e) => setClientToken(e.target.value)}
-              onBlur={() => errors.touch("token")}
-              placeholder="client access token"
+              onChange={(e) => setBindingKey(e.target.value)}
+              onBlur={() => errors.touch("bindingKey")}
+              placeholder="application binding key"
             />
           </Field>
         ) : null}
       </form>
     </Modal>
   );
+}
+
+function BindingActionModal({
+  action,
+  secretRef,
+  onClose,
+  onSaved,
+}: {
+  action: BindingAction | null;
+  secretRef: ResourceRef;
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const toast = useToast();
+  const [preview, setPreview] = useState<SecretBindingCohortResponse | null>(null);
+  const [previewKey, setPreviewKey] = useState("");
+  const [operationKey, setOperationKey] = useState("");
+  const [newBindingKey, setNewBindingKey] = useState("");
+  const [confirmNewBindingKey, setConfirmNewBindingKey] = useState("");
+  const [purgeText, setPurgeText] = useState("");
+  const [busy, setBusy] = useState(false);
+  const request = useLatestRequest();
+  const errors = useFieldErrors<
+    "previewKey" | "operationKey" | "newBindingKey" | "confirmNewBindingKey" | "purgeText"
+  >();
+  const { reset: resetErrors } = errors;
+
+  const actionKey = action ? `${action.kind}:${action.version}` : "";
+  useEffect(() => {
+    // Reading the identity is intentional: reopening a different action for
+    // the same mounted page must discard the previous action's credentials.
+    void actionKey;
+    request.abort();
+    setPreview(null);
+    setPreviewKey("");
+    setOperationKey("");
+    setNewBindingKey("");
+    setConfirmNewBindingKey("");
+    setPurgeText("");
+    setBusy(false);
+    resetErrors();
+  }, [actionKey, request, resetErrors]);
+
+  const needsPreview = action?.kind === "rotate" || action?.kind === "purge";
+  const previewKeyError = needsPreview && preview === null ? validateBindingKey(previewKey) : null;
+  const operationKeyError = action ? validateBindingKey(operationKey) : null;
+  const newBindingKeyError =
+    action?.kind === "rotate" && preview !== null ? validateBindingKey(newBindingKey) : null;
+  const confirmNewBindingKeyError =
+    action?.kind === "rotate" && preview !== null && confirmNewBindingKey !== newBindingKey
+      ? "The new binding keys do not match."
+      : null;
+  const purgeTextError =
+    action?.kind === "purge" && preview !== null && purgeText !== "PURGE"
+      ? "Type PURGE exactly to confirm."
+      : null;
+
+  const clearCredentials = useCallback(() => {
+    setPreviewKey("");
+    setOperationKey("");
+    setNewBindingKey("");
+    setConfirmNewBindingKey("");
+    setPurgeText("");
+  }, []);
+
+  const close = useCallback(() => {
+    clearCredentials();
+    setPreview(null);
+    onClose();
+  }, [clearCredentials, onClose]);
+
+  async function previewCohort() {
+    if (!action || !needsPreview || previewKeyError) {
+      errors.markAllTouched();
+      return;
+    }
+    const key = previewKey;
+    setPreviewKey("");
+    setBusy(true);
+    const run = request.begin();
+    try {
+      const result = await api.previewSecretBindingCohort(secretRef, action.version, key, {
+        signal: run.signal,
+      });
+      if (!run.current) return;
+      setPreview(result);
+      resetErrors();
+    } catch (err) {
+      if (!run.current) return;
+      toast.error(err, "Could not preview binding cohort");
+    } finally {
+      if (run.current) setBusy(false);
+    }
+  }
+
+  async function mutate() {
+    if (!action || (needsPreview && preview === null)) return;
+    errors.markAllTouched();
+    if (operationKeyError || newBindingKeyError || confirmNewBindingKeyError || purgeTextError) {
+      return;
+    }
+
+    const oldOrNewKey = operationKey;
+    const replacement = newBindingKey;
+    clearCredentials();
+    setBusy(true);
+    const run = request.begin();
+    try {
+      if (action.kind === "bind") {
+        const result = await api.bindSecret(secretRef, action.version, oldOrNewKey, {
+          signal: run.signal,
+        });
+        if (!run.current) return;
+        toast.success(`Bound version ${result.anchor_version}`, "No secret version was created.");
+      } else if (action.kind === "unbind") {
+        const result = await api.unbindSecret(secretRef, action.version, oldOrNewKey, {
+          signal: run.signal,
+        });
+        if (!run.current) return;
+        toast.success(`Unbound version ${result.anchor_version}`, "No secret version was created.");
+      } else if (action.kind === "rotate" && preview) {
+        const result = await api.rotateSecretBindingKey(
+          secretRef,
+          action.version,
+          oldOrNewKey,
+          replacement,
+          preview.revision,
+          preview.affected_versions,
+          { signal: run.signal },
+        );
+        if (!run.current) return;
+        toast.success(
+          `Rotated ${result.affected_versions.length} version${result.affected_versions.length === 1 ? "" : "s"}`,
+          "The release pins did not change.",
+        );
+      } else if (action.kind === "purge" && preview) {
+        const result = await api.purgeSecretBindingCohort(
+          secretRef,
+          action.version,
+          oldOrNewKey,
+          preview.revision,
+          preview.affected_versions,
+          { signal: run.signal },
+        );
+        if (!run.current) return;
+        toast.success(
+          `Purged ${result.affected_versions.length} version${result.affected_versions.length === 1 ? "" : "s"}`,
+          "Affected versions are permanent tombstones.",
+        );
+      }
+      onSaved();
+    } catch (err) {
+      if (!run.current) return;
+      if (
+        action.kind === "purge" &&
+        err instanceof ApiError &&
+        err.code === "purge_cleanup_pending"
+      ) {
+        toast.info(
+          "Purge committed",
+          "Database artifact cleanup is pending. Do not retry with the binding key; restart the service to complete cleanup.",
+          { duration: 12_000 },
+        );
+        onSaved();
+        return;
+      }
+      if (err instanceof ApiError && err.code === "aborted") {
+        setPreview(null);
+        toast.error(err, "Cohort changed — preview it again");
+      } else {
+        toast.error(err, `${bindingActionVerb(action.kind)} failed`);
+      }
+    } finally {
+      if (run.current) setBusy(false);
+    }
+  }
+
+  const previewStage = needsPreview && preview === null;
+  const dirty =
+    previewKey !== "" ||
+    operationKey !== "" ||
+    newBindingKey !== "" ||
+    confirmNewBindingKey !== "" ||
+    purgeText !== "";
+
+  return (
+    <Modal
+      open={action !== null}
+      title={action ? bindingActionTitle(action) : "Binding key"}
+      description={
+        action
+          ? action.kind === "bind"
+            ? "Add binding-key protection to this exact version without creating a new version."
+            : action.kind === "unbind"
+              ? "Remove binding-key protection from this exact version without creating a new version."
+              : "KMS discovers only the contiguous versions around this anchor that open with the same key."
+          : undefined
+      }
+      onClose={close}
+      dismissible={!busy}
+      dirty={dirty && !busy}
+      footer={(requestClose) => (
+        <>
+          <Button variant="outline" onClick={requestClose} disabled={busy}>
+            Cancel
+          </Button>
+          {previewStage ? (
+            <Button
+              onClick={() => void previewCohort()}
+              loading={busy}
+              disabled={!!previewKeyError}
+            >
+              Preview cohort
+            </Button>
+          ) : (
+            <Button
+              variant={action?.kind === "purge" ? "destructive-solid" : "default"}
+              onClick={() => void mutate()}
+              loading={busy}
+              disabled={
+                !!operationKeyError ||
+                !!newBindingKeyError ||
+                !!confirmNewBindingKeyError ||
+                !!purgeTextError
+              }
+            >
+              {action ? bindingActionButton(action.kind) : "Continue"}
+            </Button>
+          )}
+        </>
+      )}
+    >
+      {action ? (
+        <form
+          onSubmit={(event) => {
+            event.preventDefault();
+            if (previewStage) void previewCohort();
+            else void mutate();
+          }}
+        >
+          {previewStage ? (
+            <Field
+              label="Current binding key"
+              hint="Used only to discover the cohort; it is cleared before the preview returns."
+              error={errors.shown("previewKey", previewKeyError)}
+            >
+              <Input
+                className="font-mono"
+                type="password"
+                value={previewKey}
+                autoComplete="off"
+                spellCheck={false}
+                onChange={(event) => setPreviewKey(event.target.value)}
+                onBlur={() => errors.touch("previewKey")}
+              />
+            </Field>
+          ) : (
+            <>
+              {preview ? (
+                <div className={action.kind === "purge" ? "danger-panel mb-4" : "info-panel mb-4"}>
+                  <strong>
+                    {action.kind === "purge"
+                      ? "This exact cohort will be destroyed:"
+                      : "Cohort preview"}
+                  </strong>
+                  <div className="row-wrap mt-2" data-testid="binding-cohort-versions">
+                    {preview.affected_versions.map((version) => (
+                      <Badge key={version} kind={action.kind === "purge" ? "warning" : "accent"}>
+                        v{version}
+                      </Badge>
+                    ))}
+                  </div>
+                  <div className="faint mt-2 text-sm">
+                    <span className="mono">{displayPath(secretRef)}</span> · anchor v
+                    {preview.anchor_version} · revision {preview.revision}. KMS will abort if either
+                    changes before confirmation.
+                  </div>
+                  {action.kind === "purge" ? (
+                    <div className="mt-2">
+                      Release entries and labels remain, but every affected version becomes an
+                      unreadable tombstone. This cannot be undone.
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
+              <Field
+                label={action.kind === "bind" ? "New binding key" : "Current binding key"}
+                hint="Used only for this request and cleared as soon as it starts."
+                error={errors.shown("operationKey", operationKeyError)}
+              >
+                <Input
+                  className="font-mono"
+                  type="password"
+                  value={operationKey}
+                  autoComplete="off"
+                  spellCheck={false}
+                  onChange={(event) => setOperationKey(event.target.value)}
+                  onBlur={() => errors.touch("operationKey")}
+                />
+              </Field>
+              {action.kind === "rotate" ? (
+                <>
+                  <Field
+                    label="New binding key"
+                    hint="At least 32 UTF-8 bytes. Each affected DEK gets a fresh independent salt."
+                    error={errors.shown("newBindingKey", newBindingKeyError)}
+                  >
+                    <Input
+                      className="font-mono"
+                      type="password"
+                      value={newBindingKey}
+                      autoComplete="off"
+                      spellCheck={false}
+                      onChange={(event) => setNewBindingKey(event.target.value)}
+                      onBlur={() => errors.touch("newBindingKey")}
+                    />
+                  </Field>
+                  <Field
+                    label="Confirm new binding key"
+                    error={errors.shown("confirmNewBindingKey", confirmNewBindingKeyError)}
+                  >
+                    <Input
+                      className="font-mono"
+                      type="password"
+                      value={confirmNewBindingKey}
+                      autoComplete="off"
+                      spellCheck={false}
+                      onChange={(event) => setConfirmNewBindingKey(event.target.value)}
+                      onBlur={() => errors.touch("confirmNewBindingKey")}
+                    />
+                  </Field>
+                </>
+              ) : null}
+              {action.kind === "purge" ? (
+                <Field
+                  label={
+                    <>
+                      Type <span className="mono">PURGE</span> to confirm
+                    </>
+                  }
+                  error={errors.shown("purgeText", purgeTextError)}
+                >
+                  <Input
+                    className="font-mono"
+                    value={purgeText}
+                    autoComplete="off"
+                    spellCheck={false}
+                    onChange={(event) => setPurgeText(event.target.value)}
+                    onBlur={() => errors.touch("purgeText")}
+                  />
+                </Field>
+              ) : null}
+            </>
+          )}
+        </form>
+      ) : null}
+    </Modal>
+  );
+}
+
+function bindingActionVerb(kind: BindingAction["kind"]): string {
+  switch (kind) {
+    case "bind":
+      return "Bind";
+    case "unbind":
+      return "Unbind";
+    case "rotate":
+      return "Rotate binding key";
+    case "purge":
+      return "Purge cohort";
+  }
+}
+
+function bindingActionTitle(action: BindingAction): string {
+  return `${bindingActionVerb(action.kind)} · v${action.version}`;
+}
+
+function bindingActionButton(kind: BindingAction["kind"]): string {
+  return kind === "purge" ? "Purge versions" : bindingActionVerb(kind);
 }

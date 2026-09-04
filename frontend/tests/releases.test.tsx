@@ -108,8 +108,6 @@ const releaseV1 = {
       content_type: "json",
       metadata_json: "{}",
       parameter_digest: "old-digest",
-      client_bound: false,
-      has_access_token: false,
     },
   ],
   digest: "11111111111111111111111111111111",

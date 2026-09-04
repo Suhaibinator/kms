@@ -91,7 +91,7 @@ describe("apiFetch", () => {
     );
   });
 
-  it("sends a reveal token in the body and never creates a custom secret header", async () => {
+  it("sends independent reveal credentials in the body and never creates custom secret headers", async () => {
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
       new Response(
         JSON.stringify({
@@ -111,6 +111,7 @@ describe("apiFetch", () => {
       2,
       "",
       "kmss_version_token",
+      "operator-binding-key-00000000001",
     );
 
     const init = fetchMock.mock.calls[0]?.[1];
@@ -123,10 +124,11 @@ describe("apiFetch", () => {
       key: "api-key",
       version: 2,
       secret_token: "kmss_version_token",
+      binding_key: "operator-binding-key-00000000001",
     });
   });
 
-  it("sends an update token in the secret request body", async () => {
+  it("sends a binding key in the secret write body without legacy protection fields", async () => {
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
       new Response(JSON.stringify({ version: 2, revision: 2 }), {
         status: 200,
@@ -141,19 +143,71 @@ describe("apiFetch", () => {
       value_base64: "dmFsdWU=",
       content_type: "text/plain",
       metadata_json: "{}",
-      client_bound: true,
+      binding_key: "operator-binding-key-00000000001",
       generate_access_token: false,
       expires_at_unix_ms: 0,
-      secret_token: "kmss_current_token",
     });
 
     const init = fetchMock.mock.calls[0]?.[1];
     expect(init?.headers).not.toEqual(
       expect.objectContaining({ "X-KMS-Secret-Token": expect.any(String) }),
     );
-    expect(JSON.parse(String(init?.body))).toMatchObject({
-      secret_token: "kmss_current_token",
+    const body = JSON.parse(String(init?.body));
+    expect(body).toMatchObject({ binding_key: "operator-binding-key-00000000001" });
+    expect(body).not.toHaveProperty("client_bound");
+    expect(body).not.toHaveProperty("secret_token");
+  });
+
+  it("sends lifecycle credentials only in bodies and preserves preview CAS fields", async () => {
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockImplementation(
+        async () =>
+          new Response(
+            JSON.stringify({ anchor_version: 4, affected_versions: [4, 5], revision: 19 }),
+            { status: 200, headers: { "Content-Type": "application/json" } },
+          ),
+      );
+    const ref = { env: "prod", app: "billing", key: "api-key" };
+
+    await api.bindSecret(ref, 4, "new-binding-key-0000000000000001");
+    await api.unbindSecret(ref, 4, "old-binding-key-0000000000000001");
+    await api.previewSecretBindingCohort(ref, 4, "old-binding-key-0000000000000001");
+    await api.rotateSecretBindingKey(
+      ref,
+      4,
+      "old-binding-key-0000000000000001",
+      "next-binding-key-000000000000001",
+      18,
+      [4, 5],
+    );
+    await api.purgeSecretBindingCohort(ref, 4, "old-binding-key-0000000000000001", 18, [4, 5]);
+
+    expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
+      "/api/v1/secrets/bind",
+      "/api/v1/secrets/unbind",
+      "/api/v1/secrets/binding-cohort/preview",
+      "/api/v1/secrets/binding-key/rotate",
+      "/api/v1/secrets/binding-cohort/purge",
+    ]);
+    const rotateBody = JSON.parse(String(fetchMock.mock.calls[3]?.[1]?.body));
+    expect(rotateBody).toMatchObject({
+      anchor_version: 4,
+      binding_key: "old-binding-key-0000000000000001",
+      new_binding_key: "next-binding-key-000000000000001",
+      expected_revision: 18,
+      expected_affected_versions: [4, 5],
     });
+    const purgeBody = JSON.parse(String(fetchMock.mock.calls[4]?.[1]?.body));
+    expect(purgeBody).toMatchObject({
+      anchor_version: 4,
+      binding_key: "old-binding-key-0000000000000001",
+      expected_revision: 18,
+      expected_affected_versions: [4, 5],
+    });
+    for (const [, init] of fetchMock.mock.calls) {
+      expect(JSON.stringify(init?.headers ?? {})).not.toContain("binding-key");
+    }
   });
 
   it("turns a request timeout into a useful unavailable error", async () => {

@@ -169,7 +169,7 @@ export function QuickSecretModal({
           />
         </Field>
         <div className="quick-secret-advanced text-sm">
-          Need expiration, metadata, an access token, or client-bound protection?{" "}
+          Need expiration, metadata, an access token, or binding-key protection?{" "}
           <Link href={advancedHref}>Open advanced secret options</Link>.
         </div>
       </form>

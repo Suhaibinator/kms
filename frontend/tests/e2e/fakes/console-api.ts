@@ -40,7 +40,7 @@ export interface FakeParameter {
 export interface FakeSecret {
   key: string;
   versionCount: number;
-  client_bound: boolean;
+  bound: boolean;
 }
 
 export interface FakeNamespace {
@@ -142,7 +142,7 @@ export function incidentState(): ConsoleState {
         ns.secrets[value.key] = {
           key: value.key,
           versionCount: versions,
-          client_bound: value.client_bound ?? false,
+          bound: value.bound ?? false,
         };
       }
     }
@@ -341,7 +341,7 @@ function environmentOverview(state: ConsoleState, ns: FakeNamespace): Environmen
       content_type: field.kind === "parameter" ? parameter?.content_type : "text/plain",
       current_version: current,
       pinned_version: pinned,
-      client_bound: secret?.client_bound,
+      bound: secret?.bound,
     };
   });
   const rollout = rolloutOf(ns);
@@ -443,7 +443,7 @@ function applicationOverview(state: ConsoleState): ApplicationOverview {
                   present: true,
                   content_type: "",
                   version: secret.versionCount,
-                  client_bound: secret.client_bound,
+                  bound: secret.bound,
                   has_access_token: false,
                 }
               : { present: false, content_type: "", version: 0 },
@@ -523,8 +523,6 @@ function buildCandidate(
       content_type: field.kind === "parameter" ? (parameter?.content_type ?? "") : "",
       metadata_json: "{}",
       parameter_digest: field.kind === "parameter" ? `sha256:${field.alias}-${to}` : "",
-      client_bound: secret?.client_bound ?? false,
-      has_access_token: false,
     });
   }
   const latest = ns.releases.reduce((max, release) => Math.max(max, release.version), 0);
@@ -849,7 +847,7 @@ function handle(
             app,
             key: secret.key,
             content_type: "text/plain",
-            client_bound: secret.client_bound,
+            bound: secret.bound,
             has_access_token: false,
             metadata_json: "{}",
             created_at_unix_ms: 1,
