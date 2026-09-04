@@ -36,6 +36,7 @@ from .errors import (
     NotInitializedError,
     ParamStoreError,
     PermissionDeniedError,
+    PurgeCleanupPendingError,
     RateLimitedError,
     UnauthenticatedError,
 )
@@ -142,6 +143,7 @@ __all__ = [
     "ParamStoreError",
     "NotFoundError",
     "PermissionDeniedError",
+    "PurgeCleanupPendingError",
     "RateLimitedError",
     "UnauthenticatedError",
     "FailedPreconditionError",

@@ -856,7 +856,7 @@ class ReleaseLoader:
                 raise _CandidateFailure("version_mismatch")
             if str(Ref(NamespaceRef(parameter.ref.namespace.env, parameter.ref.namespace.app), parameter.ref.key)) != entry.path:
                 raise _CandidateFailure("version_mismatch", "resource mismatch")
-            if entry.content_type and parameter.content_type != entry.content_type:
+            if parameter.content_type != entry.content_type:
                 raise _CandidateFailure("digest_mismatch", "content type mismatch")
             digest = hashlib.sha256(parameter.value.encode("utf-8")).hexdigest()
             if not _valid_sha256_hex(entry.parameter_digest) or not hmac.compare_digest(
@@ -915,7 +915,7 @@ class ReleaseLoader:
             raise _CandidateFailure("version_mismatch")
         if secret.path != entry.path:
             raise _CandidateFailure("version_mismatch", "resource mismatch")
-        if entry.content_type and secret.content_type != entry.content_type:
+        if secret.content_type != entry.content_type:
             raise _CandidateFailure("version_mismatch", "content type mismatch")
         return secret
 

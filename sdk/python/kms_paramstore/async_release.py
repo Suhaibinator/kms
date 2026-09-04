@@ -538,7 +538,7 @@ class AsyncReleaseLoader:
                 or digest.lower() != entry.parameter_digest.lower()
             ):
                 raise _CandidateFailure("digest_mismatch")
-            if entry.content_type and parameter.content_type != entry.content_type:
+            if parameter.content_type != entry.content_type:
                 raise _CandidateFailure("digest_mismatch")
             return parameter.value
         try:
@@ -595,7 +595,7 @@ class AsyncReleaseLoader:
             ) from None
         if secret.version != entry.version or secret.path != entry.path:
             raise _CandidateFailure("version_mismatch")
-        if entry.content_type and secret.content_type != entry.content_type:
+        if secret.content_type != entry.content_type:
             raise _CandidateFailure("version_mismatch")
         return secret
 

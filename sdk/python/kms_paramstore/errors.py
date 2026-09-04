@@ -18,12 +18,19 @@ __all__ = [
     "UnauthenticatedError",
     "FailedPreconditionError",
     "RateLimitedError",
+    "PurgeCleanupPendingError",
     "NotInitializedError",
     "ConfigError",
     "NoNamespaceError",
     "map_grpc_error",
     "map_secret_grpc_error",
+    "map_purge_grpc_error",
 ]
+
+
+_PURGE_CLEANUP_PENDING_MESSAGE = (
+    "secret purge committed; database artifact cleanup is pending"
+)
 
 
 class ParamStoreError(Exception):
@@ -100,6 +107,22 @@ class RateLimitedError(ParamStoreError):
     code = "resource_exhausted"
 
 
+class PurgeCleanupPendingError(ParamStoreError):
+    """The purge committed, but active database artifacts need cleanup.
+
+    The server is fail-closed until it can finish cleanup. The caller must not
+    retry the purge with a binding key it has already discarded.
+    """
+
+    code = "purge_cleanup_pending"
+
+    def __init__(self) -> None:
+        super().__init__(
+            _PURGE_CLEANUP_PENDING_MESSAGE,
+            grpc_code=grpc.StatusCode.UNAVAILABLE,
+        )
+
+
 # Map gRPC status codes to SDK exception types. Codes not listed here surface as
 # a generic ParamStoreError that preserves the code name and message.
 _CODE_MAP = {
@@ -155,13 +178,7 @@ def map_grpc_error(err: grpc.RpcError) -> ParamStoreError:
     return exc_type(message, grpc_code=code)
 
 
-def map_secret_grpc_error(err: grpc.RpcError) -> ParamStoreError:
-    """Translate a secret-bearing RPC error without trusting remote details.
-
-    Only the structured gRPC status code affects the result.  In particular,
-    neither ``details()`` nor ``str(err)`` is used because a misbehaving peer
-    could reflect secret plaintext, an access token, or a binding key there.
-    """
+def _grpc_error_code(err: grpc.RpcError) -> Optional[grpc.StatusCode]:
     code = None
     code_method = getattr(err, "code", None)
     if callable(code_method):
@@ -171,6 +188,11 @@ def map_secret_grpc_error(err: grpc.RpcError) -> ParamStoreError:
             candidate = None
         if isinstance(candidate, grpc.StatusCode):
             code = candidate
+    return code
+
+
+def _secret_error_from_code(code: Optional[grpc.StatusCode]) -> ParamStoreError:
+    """Build a fixed-message secret error from structured status only."""
 
     exc_type = _CODE_MAP.get(code, ParamStoreError)
     stable_code = _CODE_NAMES.get(code, "unknown")
@@ -178,3 +200,33 @@ def map_secret_grpc_error(err: grpc.RpcError) -> ParamStoreError:
     if exc_type is ParamStoreError:
         return ParamStoreError(message, code=stable_code, grpc_code=code)
     return exc_type(message, grpc_code=code)
+
+
+def map_secret_grpc_error(err: grpc.RpcError) -> ParamStoreError:
+    """Translate a secret-bearing RPC error without trusting remote details.
+
+    Only the structured gRPC status code affects the result.  In particular,
+    neither ``details()`` nor ``str(err)`` is used because a misbehaving peer
+    could reflect secret plaintext, an access token, or a binding key there.
+    """
+    return _secret_error_from_code(_grpc_error_code(err))
+
+
+def map_purge_grpc_error(err: grpc.RpcError) -> ParamStoreError:
+    """Translate a purge RPC error, recognizing only the committed sentinel.
+
+    Remote details are inspected solely for an exact comparison with KMS's
+    fixed cleanup-pending message. Every other detail is discarded and mapped
+    using the ordinary fixed-message secret error path.
+    """
+    code = _grpc_error_code(err)
+    if code is grpc.StatusCode.UNAVAILABLE:
+        details_method = getattr(err, "details", None)
+        if callable(details_method):
+            try:
+                details = details_method()
+            except Exception:
+                details = None
+            if details == _PURGE_CLEANUP_PENDING_MESSAGE:
+                return PurgeCleanupPendingError()
+    return _secret_error_from_code(code)

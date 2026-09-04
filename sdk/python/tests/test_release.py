@@ -759,6 +759,48 @@ def test_prepare_rejection_keeps_last_known_good(monkeypatch):
     assert "sensitive" not in rejected[-1].diagnostic
 
 
+@pytest.mark.parametrize(
+    ("alias", "category"),
+    [("setting", "digest_mismatch"), ("password", "version_mismatch")],
+)
+def test_empty_pinned_content_type_rejects_without_replacing_lkg(
+    monkeypatch, alias, category
+):
+    loader, stub, _client = _loader(monkeypatch, _release(1, 10))
+    prepared: Dict[int, _Prepared] = {}
+    published = []
+
+    def prepare(_cancel, snapshot):
+        published.append(snapshot.version)
+        return prepared.setdefault(snapshot.version, _Prepared())
+
+    thread, raised = _run_in_thread(loader, prepare)
+    assert wait_until(lambda: loader.status().applied_version == 1)
+
+    tampered = _release(2, 20)
+    entry = next(item for item in tampered[0].entries if item.alias == alias)
+    entry.content_type = ""
+    # Recompute the projection digest so this reaches exact-version resolution;
+    # an empty pin must never act as a wildcard.
+    tampered[0].digest = release_module._release_digest(tampered[0])
+    stub.activate(tampered)
+
+    assert wait_until(lambda: loader.status().last_failure_category == category)
+    assert loader.status().applied_version == 1
+    assert published == [1]
+    assert prepared[1].commits == 1
+    assert 2 not in prepared
+    assert wait_until(
+        lambda: any(
+            ack.state == "rejected" and ack.activation_revision == 20
+            for ack in stub.acknowledgements
+        )
+    )
+    loader.stop()
+    thread.join(timeout=2)
+    assert not raised
+
+
 def test_commit_exception_is_fatal_and_never_aborted_or_applied(monkeypatch):
     loader, stub, _client = _loader(monkeypatch, _release(1, 10))
 

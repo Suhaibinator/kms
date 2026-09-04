@@ -267,8 +267,10 @@ All SDK errors derive from `ParamStoreError`. gRPC status codes map to
 an unconfigured `SecretValue`/`ParameterValue`); its subclass `NoNamespaceError`
 is raised when a relative key is used on a client with no namespace (unbound
 identity and no `namespace=`). `NotInitializedError` is raised when a declarative
-field is read before `Client.resolve` has run. No exception (or its message) ever
-contains secret plaintext.
+field is read before `Client.resolve` has run. `PurgeCleanupPendingError` means a
+cohort purge committed but KMS closed fail-safe while database artifact cleanup
+remains pending; do not retry that purge with a discarded binding key. No
+exception (or its message) ever contains secret plaintext or credentials.
 
 ## Development
 

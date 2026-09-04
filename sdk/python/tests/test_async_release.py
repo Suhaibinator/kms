@@ -497,6 +497,48 @@ def test_async_rejection_preserves_lkg_and_replays_acks(monkeypatch):
     asyncio.run(scenario())
 
 
+@pytest.mark.parametrize(
+    ("alias", "category"),
+    [("setting", "digest_mismatch"), ("password", "version_mismatch")],
+)
+def test_async_empty_pinned_content_type_rejects_without_replacing_lkg(
+    monkeypatch, alias, category
+):
+    async def scenario():
+        loader, stub, _client = _loader(monkeypatch, _release(1, 10))
+        prepared: Dict[int, _Prepared] = {}
+        published = []
+
+        async def prepare(_cancel, snapshot):
+            published.append(snapshot.version)
+            return prepared.setdefault(snapshot.version, _Prepared())
+
+        task = asyncio.create_task(loader.run(prepare))
+        await _wait_for(lambda: loader.status().applied_version == 1)
+
+        tampered = _release(2, 20)
+        entry = next(item for item in tampered[0].entries if item.alias == alias)
+        entry.content_type = ""
+        tampered[0].digest = release_module._release_digest(tampered[0])
+        stub.activate(tampered)
+
+        await _wait_for(lambda: loader.status().last_failure_category == category)
+        assert loader.status().applied_version == 1
+        assert published == [1]
+        assert prepared[1].commits == 1
+        assert 2 not in prepared
+        await _wait_for(
+            lambda: any(
+                ack.state == "rejected" and ack.activation_revision == 20
+                for ack in stub.acknowledgements
+            )
+        )
+        loader.stop()
+        await task
+
+    asyncio.run(scenario())
+
+
 def test_async_loader_rejects_overlap_but_allows_sequential_runs(monkeypatch):
     async def scenario():
         loader, _stub, _client = _loader(monkeypatch, _release(1, 10))

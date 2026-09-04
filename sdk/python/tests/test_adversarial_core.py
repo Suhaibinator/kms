@@ -14,7 +14,7 @@ import pytest
 import kms_paramstore
 from kms_paramstore import (
     AsyncClient, Client, ConfigError, FailedPreconditionError, Page, Parameter,
-    ParameterValue, PermissionDeniedError, Secret, SecretValue,
+    ParameterValue, ParamStoreError, PermissionDeniedError, Secret, SecretValue,
 )
 from kms_paramstore._gen import kms_pb2
 from kms_paramstore._refs import NamespaceRef, Ref
@@ -178,6 +178,37 @@ class _AsyncRejectingSecretStub:
         return reject
 
 
+class _PurgeStatusError(grpc.RpcError):
+    def __init__(self, code: grpc.StatusCode, details: str) -> None:
+        self._code = code
+        self._details = details
+
+    def code(self):
+        return self._code
+
+    def details(self):
+        return self._details
+
+    def __str__(self) -> str:
+        return self._details
+
+
+class _PurgeStub:
+    def __init__(self, error: grpc.RpcError) -> None:
+        self._error = error
+
+    def PurgeSecretBindingCohort(self, *_args, **_kwargs):
+        raise self._error
+
+
+class _AsyncPurgeStub:
+    def __init__(self, error: grpc.RpcError) -> None:
+        self._error = error
+
+    async def PurgeSecretBindingCohort(self, *_args, **_kwargs):
+        raise self._error
+
+
 def test_all_sync_secret_bearing_rpcs_discard_reflected_remote_details():
     plaintext = "secret-plaintext-reflection-canary"
     token = "secret-token-reflection-canary"
@@ -203,6 +234,7 @@ def test_all_sync_secret_bearing_rpcs_discard_reflected_remote_details():
             rendered = str(caught.value) + repr(caught.value)
             assert caught.value.code == "permission_denied"
             assert caught.value.grpc_code is grpc.StatusCode.PERMISSION_DENIED
+            assert caught.value.__context__ is None
             assert rendered == (
                 "secret operation failed (permission_denied)"
                 "PermissionDeniedError('secret operation failed (permission_denied)')"
@@ -240,9 +272,79 @@ def test_all_async_secret_bearing_rpcs_discard_reflected_remote_details():
                 rendered = str(caught.value) + repr(caught.value)
                 assert caught.value.code == "permission_denied"
                 assert caught.value.grpc_code is grpc.StatusCode.PERMISSION_DENIED
+                assert caught.value.__context__ is None
                 assert plaintext not in rendered
                 assert token not in rendered
                 assert binding_key not in rendered
+        finally:
+            await client.close()
+
+    asyncio.run(exercise())
+
+
+def test_sync_purge_cleanup_pending_is_exact_public_and_drops_rpc_context():
+    canonical = "secret purge committed; database artifact cleanup is pending"
+    binding_key = "sync-purge-binding-key-canary-000000000000"
+    client = Client(channel=mock.MagicMock(), namespace=NS)
+    try:
+        client._secret_stub = _PurgeStub(
+            _PurgeStatusError(grpc.StatusCode.UNAVAILABLE, canonical)
+        )
+        with pytest.raises(kms_paramstore.PurgeCleanupPendingError) as caught:
+            client.purge_secret_binding_cohort("key", binding_key=binding_key)
+        assert caught.value.code == "purge_cleanup_pending"
+        assert caught.value.grpc_code is grpc.StatusCode.UNAVAILABLE
+        assert str(caught.value) == canonical
+        assert caught.value.__cause__ is None
+        assert caught.value.__context__ is None
+
+        reflected = canonical + " " + binding_key
+        client._secret_stub = _PurgeStub(
+            _PurgeStatusError(grpc.StatusCode.UNAVAILABLE, reflected)
+        )
+        with pytest.raises(ParamStoreError) as generic:
+            client.purge_secret_binding_cohort("key", binding_key=binding_key)
+        assert type(generic.value) is ParamStoreError
+        assert generic.value.code == "unavailable"
+        assert str(generic.value) == "secret operation failed (unavailable)"
+        assert generic.value.__context__ is None
+        assert binding_key not in str(generic.value) + repr(generic.value)
+    finally:
+        client.close()
+
+
+def test_async_purge_cleanup_pending_requires_unavailable_and_drops_rpc_context():
+    async def exercise() -> None:
+        canonical = "secret purge committed; database artifact cleanup is pending"
+        binding_key = "async-purge-binding-key-canary-0000000000"
+        client = AsyncClient(channel=mock.MagicMock(), namespace=NS)
+        try:
+            client._secret_stub = _AsyncPurgeStub(
+                _PurgeStatusError(grpc.StatusCode.UNAVAILABLE, canonical)
+            )
+            with pytest.raises(kms_paramstore.PurgeCleanupPendingError) as caught:
+                await client.purge_secret_binding_cohort(
+                    "key", binding_key=binding_key
+                )
+            assert caught.value.code == "purge_cleanup_pending"
+            assert caught.value.grpc_code is grpc.StatusCode.UNAVAILABLE
+            assert str(caught.value) == canonical
+            assert caught.value.__context__ is None
+
+            client._secret_stub = _AsyncPurgeStub(
+                _PurgeStatusError(grpc.StatusCode.INTERNAL, canonical)
+            )
+            with pytest.raises(ParamStoreError) as generic:
+                await client.purge_secret_binding_cohort(
+                    "key", binding_key=binding_key
+                )
+            assert not isinstance(
+                generic.value, kms_paramstore.PurgeCleanupPendingError
+            )
+            assert generic.value.code == "internal"
+            assert str(generic.value) == "secret operation failed (internal)"
+            assert generic.value.__context__ is None
+            assert binding_key not in str(generic.value) + repr(generic.value)
         finally:
             await client.close()
 
