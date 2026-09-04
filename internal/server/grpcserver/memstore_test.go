@@ -716,6 +716,21 @@ func (m *memStore) DestroySecretVersion(context.Context, domain.Ref, uint64) (ui
 func (m *memStore) PromoteSecretVersion(context.Context, domain.Ref, uint64) (uint64, uint64, uint64, error) {
 	panic("unused")
 }
+func (m *memStore) BindSecretVersion(context.Context, domain.Ref, uint64, storage.SecretBindingRewrapFunc) (storage.SecretBindingResult, error) {
+	panic("unused")
+}
+func (m *memStore) UnbindSecretVersion(context.Context, domain.Ref, uint64, storage.SecretBindingRewrapFunc) (storage.SecretBindingResult, error) {
+	panic("unused")
+}
+func (m *memStore) PreviewSecretBindingCohort(context.Context, domain.Ref, uint64, storage.SecretBindingTestFunc) (storage.SecretBindingResult, error) {
+	panic("unused")
+}
+func (m *memStore) RotateSecretBindingKey(context.Context, domain.Ref, uint64, storage.SecretBindingCASGuard, storage.SecretBindingTestFunc, storage.SecretBindingRewrapFunc) (storage.SecretBindingResult, error) {
+	panic("unused")
+}
+func (m *memStore) PurgeSecretBindingCohort(context.Context, domain.Ref, uint64, storage.SecretBindingCASGuard, storage.SecretBindingTestFunc, storage.SecretBindingPurgeAudit) (storage.SecretBindingResult, error) {
+	panic("unused")
+}
 func (m *memStore) UpdateSecretAccessTokenHash(context.Context, domain.Ref, []byte) error {
 	panic("unused")
 }

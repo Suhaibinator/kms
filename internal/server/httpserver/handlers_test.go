@@ -3,6 +3,7 @@ package httpserver
 import (
 	"crypto/tls"
 	"encoding/base64"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -430,49 +431,51 @@ func TestSecretsLifecycle(t *testing.T) {
 	mustStatus(t, w, http.StatusOK)
 }
 
-func TestClientBoundRevealRequiresToken(t *testing.T) {
+func TestBoundRevealRequiresBindingKey(t *testing.T) {
 	e := newTestEnv(t)
 	e.createNS("prod", "gradethis")
+	const bindingKey = "binding-key-a-0123456789-0123456789"
 	w := e.admin(http.MethodPost, "/api/v1/secrets", map[string]any{
 		"env": "prod", "app": "gradethis", "key": "bound",
 		"value_base64": base64.StdEncoding.EncodeToString([]byte("v")),
-		"client_bound": true, "generate_access_token": true,
+		"binding_key":  bindingKey, "generate_access_token": true,
 	})
 	mustStatus(t, w, http.StatusOK)
 	token, ok := decodeBody(t, w)["access_token"].(string)
 	if !ok || token == "" {
-		t.Fatal("client-bound create did not return an access token")
+		t.Fatal("token-gated bound create did not return an access token")
 	}
 	body := map[string]any{"env": "prod", "app": "gradethis", "key": "bound"}
 
-	// Missing and wrong tokens collapse to the same generic boundary response.
+	// Missing and wrong binding keys collapse to the same generic boundary
+	// response. The independently minted access token is not needed on the
+	// audited admin reveal path.
 	w = e.admin(http.MethodPost, "/api/v1/secrets/reveal", body)
 	mustStatus(t, w, http.StatusInternalServerError)
 	missingBody := w.Body.String()
 	if errCode(t, w) != "internal" {
-		t.Fatalf("missing-token code = %s", errCode(t, w))
+		t.Fatalf("missing-binding-key code = %s", errCode(t, w))
 	}
 
-	// Reveal deliberately ignores the generic custom token header.
+	// Neither the per-secret token nor a similarly named header can substitute
+	// for the operation-local binding key.
 	w = e.do(http.MethodPost, "/api/v1/secrets/reveal", body, map[string]string{
 		"Authorization":      "Bearer " + e.adminToken,
 		"X-KMS-Secret-Token": token,
 	})
 	mustStatus(t, w, http.StatusInternalServerError)
 	if w.Body.String() != missingBody {
-		t.Fatalf("header and missing tokens produced distinguishable responses: %q != %q", missingBody, w.Body.String())
+		t.Fatalf("header and missing binding keys produced distinguishable responses: %q != %q", missingBody, w.Body.String())
 	}
 
-	// Wrong body tokens retain the same generic response.
-	body["secret_token"] = "kmss_wrongwrongwrongwrongwrongwrong"
+	body["binding_key"] = "wrong-binding-key-0123456789-012345"
 	w = e.admin(http.MethodPost, "/api/v1/secrets/reveal", body)
 	mustStatus(t, w, http.StatusInternalServerError)
 	if w.Body.String() != missingBody {
-		t.Fatalf("missing and wrong tokens produced distinguishable responses: %q != %q", missingBody, w.Body.String())
+		t.Fatalf("missing and wrong binding keys produced distinguishable responses: %q != %q", missingBody, w.Body.String())
 	}
 
-	// The request-body field supplies the client key share.
-	body["secret_token"] = token
+	body["binding_key"] = bindingKey
 	w = e.admin(http.MethodPost, "/api/v1/secrets/reveal", body)
 	mustStatus(t, w, http.StatusOK)
 	got := decodeBody(t, w)
@@ -484,40 +487,194 @@ func TestClientBoundRevealRequiresToken(t *testing.T) {
 	}
 }
 
-func TestClientBoundUpdateTokenIsRequestBodyOnly(t *testing.T) {
+func TestSecretWritesFreelyAlternateBindingAndRejectLegacyFields(t *testing.T) {
 	e := newTestEnv(t)
 	e.createNS("prod", "gradethis")
+	const (
+		keyA = "binding-key-a-0123456789-0123456789"
+		keyB = "binding-key-b-0123456789-0123456789"
+	)
 	create := map[string]any{
 		"env": "prod", "app": "gradethis", "key": "bound-update",
 		"value_base64": base64.StdEncoding.EncodeToString([]byte("v1")),
-		"client_bound": true, "generate_access_token": true,
+		"binding_key":  keyA, "generate_access_token": true,
 	}
 	w := e.admin(http.MethodPost, "/api/v1/secrets", create)
 	mustStatus(t, w, http.StatusOK)
-	token := decodeBody(t, w)["access_token"].(string)
+	if token, _ := decodeBody(t, w)["access_token"].(string); token == "" {
+		t.Fatal("expected independently generated access token")
+	}
+
+	// The next version may be unbound even though v1 is bound; no prior
+	// binding key or access token is a write credential in the 0.3 contract.
 	update := map[string]any{
 		"env": "prod", "app": "gradethis", "key": "bound-update",
 		"value_base64": base64.StdEncoding.EncodeToString([]byte("v2")),
-		"client_bound": true,
+	}
+	w = e.admin(http.MethodPost, "/api/v1/secrets", update)
+	mustStatus(t, w, http.StatusOK)
+
+	update["value_base64"] = base64.StdEncoding.EncodeToString([]byte("v3"))
+	update["binding_key"] = keyB
+	w = e.admin(http.MethodPost, "/api/v1/secrets", update)
+	mustStatus(t, w, http.StatusOK)
+
+	// Removed greenfield fields are unknown rather than silently accepted.
+	legacy := maps.Clone(update)
+	legacy["client_bound"] = true
+	w = e.admin(http.MethodPost, "/api/v1/secrets", legacy)
+	mustStatus(t, w, http.StatusBadRequest)
+	delete(legacy, "client_bound")
+	legacy["secret_token"] = "obsolete-write-credential"
+	w = e.admin(http.MethodPost, "/api/v1/secrets", legacy)
+	mustStatus(t, w, http.StatusBadRequest)
+
+	for _, tc := range []struct {
+		version uint64
+		key     string
+		want    string
+	}{
+		{version: 1, key: keyA, want: "v1"},
+		{version: 2, want: "v2"},
+		{version: 3, key: keyB, want: "v3"},
+	} {
+		w = e.admin(http.MethodPost, "/api/v1/secrets/reveal", map[string]any{
+			"env": "prod", "app": "gradethis", "key": "bound-update",
+			"version": tc.version, "binding_key": tc.key,
+		})
+		mustStatus(t, w, http.StatusOK)
+		if got := decodeBody(t, w)["value_base64"]; got != base64.StdEncoding.EncodeToString([]byte(tc.want)) {
+			t.Fatalf("v%d plaintext = %v", tc.version, got)
+		}
+	}
+}
+
+func TestSecretBindingLifecyclePreviewCASRotateAndPurge(t *testing.T) {
+	e := newTestEnv(t)
+	e.createNS("prod", "gradethis")
+	const (
+		keyA = "binding-key-a-0123456789-0123456789"
+		keyB = "binding-key-b-0123456789-0123456789"
+		keyC = "binding-key-c-0123456789-0123456789"
+	)
+	put := func(value, bindingKey string) {
+		t.Helper()
+		w := e.admin(http.MethodPost, "/api/v1/secrets", map[string]any{
+			"env": "prod", "app": "gradethis", "key": "cohort",
+			"value_base64": base64.StdEncoding.EncodeToString([]byte(value)),
+			"binding_key":  bindingKey,
+		})
+		mustStatus(t, w, http.StatusOK)
+	}
+	put("v1", keyA)
+	put("v2", keyA)
+	put("v3", keyB)
+
+	previewRequest := map[string]any{
+		"env": "prod", "app": "gradethis", "key": "cohort",
+		"anchor_version": 2, "binding_key": keyA,
+	}
+	w := e.admin(http.MethodPost, "/api/v1/secrets/binding-cohort/preview", previewRequest)
+	mustStatus(t, w, http.StatusOK)
+	preview := decodeBody(t, w)
+	affected := preview["affected_versions"].([]any)
+	if len(affected) != 2 || affected[0] != float64(1) || affected[1] != float64(2) {
+		t.Fatalf("preview affected_versions = %v, want [1 2]", affected)
+	}
+	revision := uint64(preview["revision"].(float64))
+
+	w = e.admin(http.MethodPost, "/api/v1/secrets/binding-key/rotate", map[string]any{
+		"env": "prod", "app": "gradethis", "key": "cohort",
+		"anchor_version": 2, "binding_key": keyA, "new_binding_key": keyC,
+		"expected_revision": revision, "expected_affected_versions": []uint64{1, 2},
+	})
+	mustStatus(t, w, http.StatusOK)
+	rotated := decodeBody(t, w)
+	if got := rotated["affected_versions"].([]any); len(got) != 2 || got[0] != float64(1) || got[1] != float64(2) {
+		t.Fatalf("rotated affected_versions = %v", got)
 	}
 
-	// The deprecated custom header cannot authorize an update.
-	w = e.do(http.MethodPost, "/api/v1/secrets", update, map[string]string{
-		"Authorization": "Bearer " + e.adminToken, "X-KMS-Secret-Token": token,
+	// Old material no longer opens the cohort; the replacement key does, while
+	// the adjacent B epoch remains a hard boundary.
+	w = e.admin(http.MethodPost, "/api/v1/secrets/reveal", map[string]any{
+		"env": "prod", "app": "gradethis", "key": "cohort", "version": 1, "binding_key": keyA,
 	})
-	mustStatus(t, w, http.StatusForbidden)
-
-	// A correct legacy header cannot override a wrong body credential.
-	update["secret_token"] = "kmss_wrongwrongwrongwrongwrongwrong"
-	w = e.do(http.MethodPost, "/api/v1/secrets", update, map[string]string{
-		"Authorization": "Bearer " + e.adminToken, "X-KMS-Secret-Token": token,
+	mustStatus(t, w, http.StatusInternalServerError)
+	w = e.admin(http.MethodPost, "/api/v1/secrets/reveal", map[string]any{
+		"env": "prod", "app": "gradethis", "key": "cohort", "version": 1, "binding_key": keyC,
 	})
-	mustStatus(t, w, http.StatusForbidden)
+	mustStatus(t, w, http.StatusOK)
 
-	// A body token is authoritative even when a conflicting legacy header is present.
-	update["secret_token"] = token
-	w = e.do(http.MethodPost, "/api/v1/secrets", update, map[string]string{
-		"Authorization": "Bearer " + e.adminToken, "X-KMS-Secret-Token": "wrong",
+	previewRequest["binding_key"] = keyC
+	w = e.admin(http.MethodPost, "/api/v1/secrets/binding-cohort/preview", previewRequest)
+	mustStatus(t, w, http.StatusOK)
+	preview = decodeBody(t, w)
+	revision = uint64(preview["revision"].(float64))
+
+	// Any intervening revision makes the confirmation stale and aborts before
+	// destruction, even when the cryptographic cohort itself is unchanged.
+	w = e.admin(http.MethodPut, "/api/v1/parameters", map[string]any{
+		"env": "prod", "app": "gradethis", "key": "revision-bump", "value": "x",
+	})
+	mustStatus(t, w, http.StatusOK)
+	purge := map[string]any{
+		"env": "prod", "app": "gradethis", "key": "cohort",
+		"anchor_version": 2, "binding_key": keyC,
+		"expected_revision": revision, "expected_affected_versions": []uint64{1, 2},
+	}
+	w = e.admin(http.MethodPost, "/api/v1/secrets/binding-cohort/purge", purge)
+	mustStatus(t, w, http.StatusConflict)
+	if errCode(t, w) != "aborted" {
+		t.Fatalf("stale purge code = %s", errCode(t, w))
+	}
+
+	w = e.admin(http.MethodPost, "/api/v1/secrets/binding-cohort/preview", previewRequest)
+	mustStatus(t, w, http.StatusOK)
+	preview = decodeBody(t, w)
+	purge["expected_revision"] = uint64(preview["revision"].(float64))
+	w = e.admin(http.MethodPost, "/api/v1/secrets/binding-cohort/purge", purge)
+	mustStatus(t, w, http.StatusOK)
+
+	for _, version := range []uint64{1, 2} {
+		w = e.admin(http.MethodPost, "/api/v1/secrets/reveal", map[string]any{
+			"env": "prod", "app": "gradethis", "key": "cohort", "version": version, "binding_key": keyC,
+		})
+		mustStatus(t, w, http.StatusPreconditionFailed)
+	}
+	w = e.admin(http.MethodPost, "/api/v1/secrets/reveal", map[string]any{
+		"env": "prod", "app": "gradethis", "key": "cohort", "version": 3, "binding_key": keyB,
+	})
+	mustStatus(t, w, http.StatusOK)
+}
+
+func TestSecretBindAndUnbindMutateExactVersionInPlace(t *testing.T) {
+	e := newTestEnv(t)
+	e.createNS("prod", "gradethis")
+	const bindingKey = "binding-key-a-0123456789-0123456789"
+	w := e.admin(http.MethodPost, "/api/v1/secrets", map[string]any{
+		"env": "prod", "app": "gradethis", "key": "exact",
+		"value_base64": base64.StdEncoding.EncodeToString([]byte("plaintext")),
+	})
+	mustStatus(t, w, http.StatusOK)
+
+	w = e.admin(http.MethodPost, "/api/v1/secrets/bind", map[string]any{
+		"env": "prod", "app": "gradethis", "key": "exact", "version": 1, "binding_key": bindingKey,
+	})
+	mustStatus(t, w, http.StatusOK)
+	if got := decodeBody(t, w); got["anchor_version"] != float64(1) || len(got["affected_versions"].([]any)) != 1 {
+		t.Fatalf("bind response = %v", got)
+	}
+	w = e.admin(http.MethodPost, "/api/v1/secrets/reveal", map[string]any{
+		"env": "prod", "app": "gradethis", "key": "exact", "version": 1, "binding_key": bindingKey,
+	})
+	mustStatus(t, w, http.StatusOK)
+
+	w = e.admin(http.MethodPost, "/api/v1/secrets/unbind", map[string]any{
+		"env": "prod", "app": "gradethis", "key": "exact", "version": 1, "binding_key": bindingKey,
+	})
+	mustStatus(t, w, http.StatusOK)
+	w = e.admin(http.MethodPost, "/api/v1/secrets/reveal", map[string]any{
+		"env": "prod", "app": "gradethis", "key": "exact", "version": 1,
 	})
 	mustStatus(t, w, http.StatusOK)
 }

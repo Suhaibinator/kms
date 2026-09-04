@@ -51,6 +51,11 @@ func (s *server) newAPIMux() *http.ServeMux {
 	mux.HandleFunc("POST /api/v1/secrets/disable", s.handleDisableSecret)
 	mux.HandleFunc("POST /api/v1/secrets/destroy", s.handleDestroySecret)
 	mux.HandleFunc("POST /api/v1/secrets/promote", s.handlePromoteSecret)
+	mux.HandleFunc("POST /api/v1/secrets/bind", s.handleBindSecret)
+	mux.HandleFunc("POST /api/v1/secrets/unbind", s.handleUnbindSecret)
+	mux.HandleFunc("POST /api/v1/secrets/binding-cohort/preview", s.handlePreviewSecretBindingCohort)
+	mux.HandleFunc("POST /api/v1/secrets/binding-key/rotate", s.handleRotateSecretBindingKey)
+	mux.HandleFunc("POST /api/v1/secrets/binding-cohort/purge", s.handlePurgeSecretBindingCohort)
 	mux.HandleFunc("DELETE /api/v1/secrets", s.handleDeleteSecret)
 
 	mux.HandleFunc("GET /api/v1/policies", s.handleListPolicies)
@@ -513,10 +518,9 @@ func (s *server) handlePutSecret(w http.ResponseWriter, r *http.Request) {
 		ValueBase64         string `json:"value_base64"`
 		ContentType         string `json:"content_type"`
 		MetadataJSON        string `json:"metadata_json"`
-		ClientBound         bool   `json:"client_bound"`
+		BindingKey          string `json:"binding_key"`
 		GenerateAccessToken bool   `json:"generate_access_token"`
 		ExpiresAtUnixMS     int64  `json:"expires_at_unix_ms"`
-		SecretToken         string `json:"secret_token"`
 	}
 	if err := decodeJSON(w, r, &body); err != nil {
 		s.writeError(w, r, err)
@@ -532,12 +536,12 @@ func (s *server) handlePutSecret(w http.ResponseWriter, r *http.Request) {
 		Value:         value,
 		ContentType:   body.ContentType,
 		Metadata:      body.MetadataJSON,
-		ClientBound:   body.ClientBound,
+		BindingKey:    body.BindingKey,
 		GenerateToken: body.GenerateAccessToken,
 		ExpiresAt:     body.ExpiresAtUnixMS,
-		SecretToken:   body.SecretToken,
 	})
-	body.SecretToken = ""
+	crypto.Zero(value)
+	body.BindingKey = ""
 	if err != nil {
 		s.writeError(w, r, err)
 		return
@@ -555,15 +559,17 @@ func (s *server) handleRevealSecret(w http.ResponseWriter, r *http.Request) {
 		Version     uint64 `json:"version"`
 		Label       string `json:"label"`
 		SecretToken string `json:"secret_token"`
+		BindingKey  string `json:"binding_key"`
 	}
 	if err := decodeJSON(w, r, &body); err != nil {
 		s.writeError(w, r, err)
 		return
 	}
 	pr := principalFrom(r.Context())
-	// Reveal accepts its client-bound key share only in the request body.
-	val, err := s.svc.RevealSecret(r.Context(), pr, body.ref(), body.Version, body.Label, body.SecretToken)
+	// Credentials are operation-local request fields and are never retained.
+	val, err := s.svc.RevealSecret(r.Context(), pr, body.ref(), body.Version, body.Label, body.SecretToken, body.BindingKey)
 	body.SecretToken = ""
+	body.BindingKey = ""
 	if err != nil {
 		s.writeError(w, r, err)
 		return
@@ -633,6 +639,123 @@ func (s *server) handlePromoteSecret(w http.ResponseWriter, r *http.Request) {
 		"current_version":  current,
 		"previous_version": previous,
 		"revision":         revision,
+	})
+}
+
+func (s *server) handleBindSecret(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		refFields
+		Version    uint64 `json:"version"`
+		BindingKey string `json:"binding_key"`
+	}
+	if err := decodeJSON(w, r, &body); err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	result, err := s.svc.BindSecret(r.Context(), principalFrom(r.Context()), body.ref(), body.Version, body.BindingKey)
+	body.BindingKey = ""
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	writeSecretVersionMutationResult(w, result)
+}
+
+func (s *server) handleUnbindSecret(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		refFields
+		Version    uint64 `json:"version"`
+		BindingKey string `json:"binding_key"`
+	}
+	if err := decodeJSON(w, r, &body); err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	result, err := s.svc.UnbindSecret(r.Context(), principalFrom(r.Context()), body.ref(), body.Version, body.BindingKey)
+	body.BindingKey = ""
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	writeSecretVersionMutationResult(w, result)
+}
+
+func (s *server) handlePreviewSecretBindingCohort(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		refFields
+		AnchorVersion uint64 `json:"anchor_version"`
+		BindingKey    string `json:"binding_key"`
+	}
+	if err := decodeJSON(w, r, &body); err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	result, err := s.svc.PreviewSecretBindingCohort(r.Context(), principalFrom(r.Context()), body.ref(), body.AnchorVersion, body.BindingKey)
+	body.BindingKey = ""
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	writeSecretBindingCohortResult(w, result)
+}
+
+func (s *server) handleRotateSecretBindingKey(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		refFields
+		AnchorVersion            uint64   `json:"anchor_version"`
+		BindingKey               string   `json:"binding_key"`
+		NewBindingKey            string   `json:"new_binding_key"`
+		ExpectedRevision         *uint64  `json:"expected_revision"`
+		ExpectedAffectedVersions []uint64 `json:"expected_affected_versions"`
+	}
+	if err := decodeJSON(w, r, &body); err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	result, err := s.svc.RotateSecretBindingKey(r.Context(), principalFrom(r.Context()), body.ref(), body.AnchorVersion, body.BindingKey, body.NewBindingKey, body.ExpectedRevision, body.ExpectedAffectedVersions)
+	body.BindingKey = ""
+	body.NewBindingKey = ""
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	writeSecretBindingCohortResult(w, result)
+}
+
+func (s *server) handlePurgeSecretBindingCohort(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		refFields
+		AnchorVersion            uint64   `json:"anchor_version"`
+		BindingKey               string   `json:"binding_key"`
+		ExpectedRevision         *uint64  `json:"expected_revision"`
+		ExpectedAffectedVersions []uint64 `json:"expected_affected_versions"`
+	}
+	if err := decodeJSON(w, r, &body); err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	result, err := s.svc.PurgeSecretBindingCohort(r.Context(), principalFrom(r.Context()), body.ref(), body.AnchorVersion, body.BindingKey, body.ExpectedRevision, body.ExpectedAffectedVersions)
+	body.BindingKey = ""
+	if err != nil {
+		s.writeError(w, r, err)
+		return
+	}
+	writeSecretBindingCohortResult(w, result)
+}
+
+func writeSecretVersionMutationResult(w http.ResponseWriter, result core.SecretVersionMutationResult) {
+	writeJSON(w, http.StatusOK, map[string]any{
+		"anchor_version":    result.AnchorVersion,
+		"affected_versions": append([]uint64(nil), result.AffectedVersions...),
+		"revision":          result.Revision,
+	})
+}
+
+func writeSecretBindingCohortResult(w http.ResponseWriter, result core.SecretBindingCohortResult) {
+	writeJSON(w, http.StatusOK, map[string]any{
+		"anchor_version":    result.AnchorVersion,
+		"affected_versions": append([]uint64(nil), result.AffectedVersions...),
+		"revision":          result.Revision,
 	})
 }
 
