@@ -9,8 +9,6 @@ import (
 	"testing"
 	"time"
 
-	"gorm.io/gorm"
-
 	"github.com/Suhaibinator/kms/internal/domain"
 )
 
@@ -340,165 +338,60 @@ func TestConfigurationReleaseActivationHistoryDoesNotCrossNamespaceIncarnations(
 	}
 }
 
-func TestConfigurationReleaseSourceNamespaceIncarnationIsImmutable(t *testing.T) {
-	t.Run("inactive release cannot activate against recreated source", func(t *testing.T) {
-		ctx := context.Background()
-		st := newStore(t)
-		sourceA := seedNS(t, st, "prod", "source")
-		target := seedNS(t, st, "prod", "target")
-		resource := ref("prod", "source", "config")
-		if _, _, err := st.PutParameter(ctx, resource, "same-value", "string", "{}", "admin"); err != nil {
-			t.Fatal(err)
-		}
-		release, err := st.CreateConfigurationRelease(ctx, domain.ConfigurationRelease{
-			Namespace: target.NamespaceRef, Name: "runtime", Digest: "digest", Metadata: "{}",
-			Entries: []domain.ConfigurationReleaseEntry{{Alias: "config", Kind: domain.ReleaseEntryParameter, Ref: resource, Version: 1, ContentType: "string", ParameterDigest: fmt.Sprintf("%x", sha256.Sum256([]byte("same-value")))}},
+func TestConfigurationReleaseRequiresHomeNamespace(t *testing.T) {
+	ctx := context.Background()
+	st := newStore(t)
+	home := seedNS(t, st, "prod", "home")
+	seedNS(t, st, "prod", "other")
+
+	foreignParameter := ref("prod", "other", "config")
+	if _, _, err := st.PutParameter(ctx, foreignParameter, "value", "string", "{}", "admin"); err != nil {
+		t.Fatal(err)
+	}
+	foreignSecret := ref("prod", "other", "secret")
+	putSecret(t, st, foreignSecret, false)
+
+	for _, entry := range []domain.ConfigurationReleaseEntry{
+		{Alias: "config", Kind: domain.ReleaseEntryParameter, Ref: foreignParameter, Version: 1},
+		{Alias: "secret", Kind: domain.ReleaseEntrySecret, Ref: foreignSecret, Version: 1},
+	} {
+		_, err := st.CreateConfigurationRelease(ctx, domain.ConfigurationRelease{
+			Namespace: home.NamespaceRef, Name: "runtime", Digest: "digest", Metadata: "{}",
+			Entries: []domain.ConfigurationReleaseEntry{entry},
 		})
-		if err != nil {
-			t.Fatal(err)
+		if !errors.Is(err, domain.ErrInvalidArgument) {
+			t.Fatalf("foreign %s entry err = %v, want ErrInvalidArgument", entry.Kind, err)
 		}
-		var persisted configurationReleaseEntryModel
-		if err := st.db.Where("release_id = (SELECT id FROM configuration_releases WHERE namespace_id = ? AND name = ? AND version_number = ?)", target.ID, release.Name, release.Version).First(&persisted).Error; err != nil {
-			t.Fatal(err)
-		}
-		if persisted.ResourceNamespaceID != sourceA.ID {
-			t.Fatalf("persisted source namespace ID = %d, want %d", persisted.ResourceNamespaceID, sourceA.ID)
-		}
+	}
+	var releaseCount int64
+	if err := st.db.Model(&configurationReleaseModel{}).Count(&releaseCount).Error; err != nil {
+		t.Fatal(err)
+	}
+	if releaseCount != 0 {
+		t.Fatalf("rejected foreign entries persisted %d releases", releaseCount)
+	}
 
-		// The inactive release does not protect its old pin, so remove A and
-		// reproduce an indistinguishable name/key/version/value in B.
-		if _, err := st.DeleteParameter(ctx, resource); err != nil {
-			t.Fatal(err)
-		}
-		if err := st.DeleteNamespace(ctx, sourceA.NamespaceRef); err != nil {
-			t.Fatal(err)
-		}
-		sourceB, err := st.CreateNamespace(ctx, domain.Namespace{NamespaceRef: sourceA.NamespaceRef, CreatedBy: "admin"})
-		if err != nil {
-			t.Fatal(err)
-		}
-		if sourceB.ID == sourceA.ID {
-			t.Fatalf("source namespace ID was reused: %d", sourceB.ID)
-		}
-		if _, _, err := st.PutParameter(ctx, resource, "same-value", "string", "{}", "admin"); err != nil {
-			t.Fatal(err)
-		}
-		if _, _, err := st.ActivateConfigurationRelease(ctx, target.NamespaceRef, release.Name, release.Version, nil); !errors.Is(err, domain.ErrFailedPrecondition) {
-			t.Fatalf("activate old release against recreated source err = %v, want ErrFailedPrecondition", err)
-		} else {
-			var validationFailed *domain.ReleaseValidationFailedError
-			if !errors.As(err, &validationFailed) || len(validationFailed.Violations()) != 1 || validationFailed.Violations()[0].Code != domain.ReleaseValidationNotFound {
-				t.Fatalf("activate old release error = %T %v, want one structured not_found violation", err, err)
-			}
-		}
+	homeParameter := domain.Ref{NS: home.NamespaceRef, Key: "config"}
+	if _, _, err := st.PutParameter(ctx, homeParameter, "value", "string", "{}", "admin"); err != nil {
+		t.Fatal(err)
+	}
+	release, err := st.CreateConfigurationRelease(ctx, domain.ConfigurationRelease{
+		Namespace: home.NamespaceRef, Name: "runtime", Digest: "home", Metadata: "{}",
+		Entries: []domain.ConfigurationReleaseEntry{{
+			Alias: "config", Kind: domain.ReleaseEntryParameter, Ref: homeParameter, Version: 1,
+		}},
 	})
-
-	t.Run("legacy source pins fail activation closed", func(t *testing.T) {
-		ctx := context.Background()
-		st := newStore(t)
-		seedNS(t, st, "prod", "source")
-		target := seedNS(t, st, "prod", "target")
-		resource := ref("prod", "source", "config")
-		if _, _, err := st.PutParameter(ctx, resource, "value", "string", "{}", "admin"); err != nil {
-			t.Fatal(err)
-		}
-		release, err := st.CreateConfigurationRelease(ctx, domain.ConfigurationRelease{
-			Namespace: target.NamespaceRef, Name: "runtime", Digest: "digest", Metadata: "{}",
-			Entries: []domain.ConfigurationReleaseEntry{{Alias: "config", Kind: domain.ReleaseEntryParameter, Ref: resource, Version: 1}},
-		})
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err := st.db.Model(&configurationReleaseEntryModel{}).Where("release_id = (SELECT id FROM configuration_releases WHERE namespace_id = ? AND name = ? AND version_number = ?)", target.ID, release.Name, release.Version).Update("resource_namespace_id", 0).Error; err != nil {
-			t.Fatal(err)
-		}
-		if _, _, err := st.ActivateConfigurationRelease(ctx, target.NamespaceRef, release.Name, release.Version, nil); !errors.Is(err, domain.ErrFailedPrecondition) {
-			t.Fatalf("activate legacy source pin err = %v, want ErrFailedPrecondition", err)
-		}
-	})
-
-	t.Run("legacy active pins remain deletion guards", func(t *testing.T) {
-		ctx := context.Background()
-		st := newStore(t)
-		seedNS(t, st, "prod", "source")
-		target := seedNS(t, st, "prod", "target")
-		resource := ref("prod", "source", "config")
-		if _, _, err := st.PutParameter(ctx, resource, "value", "string", "{}", "admin"); err != nil {
-			t.Fatal(err)
-		}
-		release, err := st.CreateConfigurationRelease(ctx, domain.ConfigurationRelease{
-			Namespace: target.NamespaceRef, Name: "runtime", Digest: "digest", Metadata: "{}",
-			Entries: []domain.ConfigurationReleaseEntry{{Alias: "config", Kind: domain.ReleaseEntryParameter, Ref: resource, Version: 1}},
-		})
-		if err != nil {
-			t.Fatal(err)
-		}
-		if _, _, err := st.ActivateConfigurationRelease(ctx, target.NamespaceRef, release.Name, release.Version, nil); err != nil {
-			t.Fatal(err)
-		}
-		if err := st.db.Model(&configurationReleaseEntryModel{}).Where("release_id = (SELECT id FROM configuration_releases WHERE namespace_id = ? AND name = ? AND version_number = ?)", target.ID, release.Name, release.Version).Update("resource_namespace_id", 0).Error; err != nil {
-			t.Fatal(err)
-		}
-		if _, err := st.DeleteParameter(ctx, resource); !errors.Is(err, domain.ErrFailedPrecondition) {
-			t.Fatalf("delete resource pinned by legacy active release err = %v, want ErrFailedPrecondition", err)
-		}
-	})
-
-	t.Run("old exact pin does not protect recreated source", func(t *testing.T) {
-		ctx := context.Background()
-		st := newStore(t)
-		sourceA := seedNS(t, st, "prod", "source")
-		target := seedNS(t, st, "prod", "target")
-		resource := ref("prod", "source", "config")
-		if _, _, err := st.PutParameter(ctx, resource, "value", "string", "{}", "admin"); err != nil {
-			t.Fatal(err)
-		}
-		release, err := st.CreateConfigurationRelease(ctx, domain.ConfigurationRelease{
-			Namespace: target.NamespaceRef, Name: "runtime", Digest: "digest", Metadata: "{}",
-			Entries: []domain.ConfigurationReleaseEntry{{Alias: "config", Kind: domain.ReleaseEntryParameter, Ref: resource, Version: 1}},
-		})
-		if err != nil {
-			t.Fatal(err)
-		}
-		if _, _, err := st.ActivateConfigurationRelease(ctx, target.NamespaceRef, release.Name, release.Version, nil); err != nil {
-			t.Fatal(err)
-		}
-
-		// Simulate recovery from an older build/operator repair that removed A
-		// without consulting the release guard. The retained release must remain
-		// tied to A and must not make a same-name B resource undeletable.
-		if err := st.db.Transaction(func(tx *gorm.DB) error {
-			var parameter parameterModel
-			if err := tx.Where("namespace_id = ? AND name = ?", sourceA.ID, resource.Key).First(&parameter).Error; err != nil {
-				return err
-			}
-			if err := tx.Where("parameter_id = ?", parameter.ID).Delete(&parameterLabelModel{}).Error; err != nil {
-				return err
-			}
-			if err := tx.Where("parameter_id = ?", parameter.ID).Delete(&parameterVersionModel{}).Error; err != nil {
-				return err
-			}
-			return tx.Delete(&parameter).Error
-		}); err != nil {
-			t.Fatal(err)
-		}
-		if err := st.DeleteNamespace(ctx, sourceA.NamespaceRef); err != nil {
-			t.Fatal(err)
-		}
-		sourceB, err := st.CreateNamespace(ctx, domain.Namespace{NamespaceRef: sourceA.NamespaceRef, CreatedBy: "admin"})
-		if err != nil {
-			t.Fatal(err)
-		}
-		if sourceB.ID == sourceA.ID {
-			t.Fatalf("source namespace ID was reused: %d", sourceB.ID)
-		}
-		if _, _, err := st.PutParameter(ctx, resource, "value", "string", "{}", "admin"); err != nil {
-			t.Fatal(err)
-		}
-		if _, err := st.DeleteParameter(ctx, resource); err != nil {
-			t.Fatalf("old exact source pin protected recreated resource: %v", err)
-		}
-	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.db.Model(&configurationReleaseEntryModel{}).
+		Where("release_id = (SELECT id FROM configuration_releases WHERE namespace_id = ? AND name = ? AND version_number = ?)", home.ID, release.Name, release.Version).
+		Update("resource_app", "other").Error; err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := st.ActivateConfigurationRelease(ctx, home.NamespaceRef, release.Name, release.Version, nil); !errors.Is(err, domain.ErrFailedPrecondition) {
+		t.Fatalf("activation accepted corrupt cross-namespace entry: %v", err)
+	}
 }
 
 func TestNamespaceDeleteRetiresConfigurationReleaseState(t *testing.T) {

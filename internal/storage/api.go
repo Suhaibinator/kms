@@ -24,9 +24,11 @@ import (
 
 // SecretRecord is the secret-level row.
 type SecretRecord struct {
-	ID              int64
-	Ref             domain.Ref
-	ClientBound     bool
+	ID  int64
+	Ref domain.Ref
+	// Bound is the live protection state of the version selected by current.
+	// Exact-version authorization must use SecretVersionRecord.Bound instead.
+	Bound           bool
 	AccessTokenHash []byte // nil when no per-secret token is set
 	ContentType     string
 	Metadata        string
@@ -42,18 +44,17 @@ type SecretVersionRecord struct {
 	ID       int64
 	SecretID int64
 	Version  uint64
-	// ContentType and the protection flags are immutable attributes of this
-	// exact version. SecretRecord carries the latest secret-level view for
-	// listing and token-hash rotation, but must not be used to interpret or
-	// authorize a historical version.
+	// ContentType and the protection flags describe this exact version.
+	// SecretRecord carries the current-version summary for listing and the
+	// secret-level token hash, but must not authorize a historical version.
 	ContentType    string
-	ClientBound    bool
+	Bound          bool
 	HasAccessToken bool
 	Ciphertext     []byte
 	EncryptedDEK   []byte
 	KEKID          string
-	WrapMode       string // domain.WrapModeStandard | domain.WrapModeClientBound
-	ClientKeySalt  []byte // HKDF salt for client-bound versions, else nil
+	WrapMode       string // domain.WrapModeStandard | domain.WrapModeBindingKey
+	BindingKeySalt []byte // HKDF salt for bound versions, else nil
 	Algorithm      string
 	Nonce          []byte
 	AAD            string
@@ -69,14 +70,14 @@ type SecretVersionRecord struct {
 // version. The storage layer persists it verbatim. AAD is produced in the
 // service layer (it binds env/app/key/version) and stored opaque here.
 type EncryptedPayload struct {
-	Ciphertext    []byte
-	EncryptedDEK  []byte
-	KEKID         string
-	WrapMode      string
-	ClientKeySalt []byte
-	Algorithm     string
-	Nonce         []byte
-	AAD           string
+	Ciphertext     []byte
+	EncryptedDEK   []byte
+	KEKID          string
+	WrapMode       string
+	BindingKeySalt []byte
+	Algorithm      string
+	Nonce          []byte
+	AAD            string
 }
 
 // SecretWriteExpectation is the secret state observed by the service before it
@@ -103,7 +104,7 @@ type CreateSecretParams struct {
 	ContentType string
 	Metadata    string
 	CreatedBy   string
-	ClientBound bool // required mode; must match the existing secret if present
+	Bound       bool
 	// AccessTokenHash, when non-nil, is stored on the secret row (sha256 of
 	// the per-secret token). It may be set on creation or when minting a new
 	// token for an existing secret.
@@ -249,9 +250,8 @@ type Store interface {
 	// CreateSecretVersion atomically creates/updates the secret row, assigns
 	// the next version number, invokes p.Encrypt(version), stores the
 	// payload, moves labels, and appends a metadata-only change-log entry.
-	// Fails with domain.ErrFailedPrecondition if p.ClientBound does not match
-	// an existing secret's mode, or domain.ErrAborted if p.Expected no longer
-	// matches the secret row.
+	// Bound and unbound versions may freely alternate. Fails with
+	// domain.ErrAborted if p.Expected no longer matches the secret row.
 	CreateSecretVersion(ctx context.Context, p CreateSecretParams) (version, revision uint64, err error)
 
 	GetSecretRecord(ctx context.Context, ref domain.Ref) (SecretRecord, error)

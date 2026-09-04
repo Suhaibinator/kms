@@ -54,23 +54,14 @@ func (s *SQLStore) createConfigurationRelease(ctx context.Context, release domai
 		if err != nil {
 			return err
 		}
-		// Entry namespaces were independently authorized by the service and are
-		// accumulated in the request context. Re-resolve each one inside this write
-		// transaction so none can be replaced between pinning the entry and
-		// publishing the immutable release.
-		entryNamespaceIDs := map[domain.NamespaceRef]int64{}
 		for _, entry := range release.Entries {
-			if _, seen := entryNamespaceIDs[entry.Ref.NS]; seen {
-				continue
+			if entry.Ref.NS != release.Namespace {
+				return domain.Errorf(domain.ErrInvalidArgument,
+					"release entry %q must reference its home namespace %s", entry.Alias, release.Namespace)
 			}
-			entryNamespaceID, err := resolveNamespaceID(tx, entry.Ref.NS)
-			if err != nil {
-				return err
-			}
-			entryNamespaceIDs[entry.Ref.NS] = entryNamespaceID
 		}
 		for index := range release.Entries {
-			release.Entries[index].ResourceNamespaceID = entryNamespaceIDs[release.Entries[index].Ref.NS]
+			release.Entries[index].ResourceNamespaceID = nsID
 		}
 		if options.application != nil {
 			if err := verifyApplicationReleaseState(tx, nsID, *options.application); err != nil {
@@ -126,11 +117,10 @@ func (s *SQLStore) createConfigurationRelease(ctx context.Context, release domai
 		}
 		for _, entry := range release.Entries {
 			em := configurationReleaseEntryModel{
-				ReleaseID: m.ID, Alias: entry.Alias, Kind: entry.Kind, ResourceNamespaceID: entryNamespaceIDs[entry.Ref.NS],
+				ReleaseID: m.ID, Alias: entry.Alias, Kind: entry.Kind, ResourceNamespaceID: nsID,
 				ResourceEnv: entry.Ref.NS.Env, ResourceApp: entry.Ref.NS.App, ResourceKey: entry.Ref.Key,
 				ResourceVersion: int64(entry.Version), ContentType: entry.ContentType,
 				MetadataJSON: zeroOr(entry.Metadata, "{}"), ParameterDigest: entry.ParameterDigest,
-				ClientBound: b2i(entry.ClientBound), HasAccessToken: b2i(entry.HasAccessToken),
 			}
 			if err := tx.Omit(clause.Associations).Create(&em).Error; err != nil {
 				if isUniqueErr(err) {
@@ -293,7 +283,7 @@ func releaseFromModelAndEntries(ns domain.NamespaceRef, m configurationReleaseMo
 			Version:             uint64(e.ResourceVersion),
 			ResourceNamespaceID: e.ResourceNamespaceID,
 			ContentType:         e.ContentType, Metadata: e.MetadataJSON,
-			ParameterDigest: e.ParameterDigest, ClientBound: i2b(e.ClientBound), HasAccessToken: i2b(e.HasAccessToken),
+			ParameterDigest: e.ParameterDigest,
 		})
 	}
 	return domain.ConfigurationRelease{
@@ -560,9 +550,12 @@ func validateReleasePinsTx(tx *gorm.DB, releaseID int64) error {
 		Kind                      string
 		PinnedContentType         string
 		PinnedParameterDigest     string
-		PinnedClientBound         int64
-		PinnedHasAccessToken      int64
+		OwnerNamespaceID          int64
+		OwnerEnv                  string
+		OwnerApp                  string
 		StoredResourceNamespaceID int64
+		StoredResourceEnv         string
+		StoredResourceApp         string
 		ResourceNamespaceID       sql.NullInt64
 		ParameterVersionID        sql.NullInt64
 		ParameterValue            sql.NullString
@@ -571,16 +564,17 @@ func validateReleasePinsTx(tx *gorm.DB, releaseID int64) error {
 		SecretState               sql.NullString
 		SecretExpiresAt           sql.NullString
 		SecretContentType         sql.NullString
-		SecretClientBound         sql.NullInt64
-		SecretHasAccessToken      sql.NullInt64
 	}
 	var pins []pinRow
 	err := tx.Raw(`SELECT e.alias, e.kind,
 			e.content_type AS pinned_content_type,
 			e.parameter_digest AS pinned_parameter_digest,
-			e.client_bound AS pinned_client_bound,
-			e.has_access_token AS pinned_has_access_token,
+			r.namespace_id AS owner_namespace_id,
+			rn.env AS owner_env,
+			rn.app AS owner_app,
 			e.resource_namespace_id AS stored_resource_namespace_id,
+			e.resource_env AS stored_resource_env,
+			e.resource_app AS stored_resource_app,
 			n.id AS resource_namespace_id,
 			pv.id AS parameter_version_id,
 			pv.value AS parameter_value,
@@ -588,10 +582,10 @@ func validateReleasePinsTx(tx *gorm.DB, releaseID int64) error {
 			sv.id AS secret_version_id,
 			sv.state AS secret_state,
 			sv.expires_at AS secret_expires_at,
-			sv.content_type AS secret_content_type,
-			sv.client_bound AS secret_client_bound,
-			sv.has_access_token AS secret_has_access_token
+			sv.content_type AS secret_content_type
 		FROM configuration_release_entries e
+		JOIN configuration_releases r ON r.id = e.release_id
+		JOIN namespaces rn ON rn.id = r.namespace_id
 		LEFT JOIN namespaces n
 			ON e.resource_namespace_id > 0
 			AND n.id = e.resource_namespace_id
@@ -610,6 +604,10 @@ func validateReleasePinsTx(tx *gorm.DB, releaseID int64) error {
 		return err
 	}
 	for _, pin := range pins {
+		if pin.StoredResourceNamespaceID != pin.OwnerNamespaceID ||
+			pin.StoredResourceEnv != pin.OwnerEnv || pin.StoredResourceApp != pin.OwnerApp {
+			return releasePinValidationError(pin.Alias, domain.ReleaseValidationUnreadable, "release entry is outside its home namespace")
+		}
 		if pin.StoredResourceNamespaceID <= 0 {
 			return releasePinValidationError(pin.Alias, domain.ReleaseValidationUnreadable, "release entry predates immutable namespace pins; recreate the release")
 		}
@@ -645,9 +643,6 @@ func validateReleasePinsTx(tx *gorm.DB, releaseID int64) error {
 			}
 			if pin.PinnedContentType != "" && (!pin.SecretContentType.Valid || pin.SecretContentType.String != pin.PinnedContentType) {
 				return releasePinValidationError(pin.Alias, domain.ReleaseValidationContentType, "secret content type does not match release pin")
-			}
-			if !pin.SecretClientBound.Valid || !pin.SecretHasAccessToken.Valid || pin.SecretClientBound.Int64 != pin.PinnedClientBound || pin.SecretHasAccessToken.Int64 != pin.PinnedHasAccessToken {
-				return releasePinValidationError(pin.Alias, domain.ReleaseValidationUnreadable, "secret protection metadata does not match release pin")
 			}
 		default:
 			return releasePinValidationError(pin.Alias, domain.ReleaseValidationUnreadable, "release entry kind is invalid")

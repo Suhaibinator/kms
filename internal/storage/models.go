@@ -7,11 +7,10 @@ import (
 	"github.com/Suhaibinator/kms/internal/domain"
 )
 
-// This file defines the GORM models. They map one-to-one onto the tables in
-// migrations/0001_initial.sql. Timestamps are stored as fixed-width RFC3339
-// UTC text (see fmtTime) so lexicographic ordering matches chronological
-// ordering in SQL. Nullable time/blob columns use pointer/[]byte fields so a
-// zero value round-trips to SQL NULL.
+// This file defines the authoritative 0.3.x baseline schema. Timestamps are
+// stored as fixed-width RFC3339 UTC text (see fmtTime) so lexicographic
+// ordering matches chronological ordering in SQL. Nullable time/blob columns
+// use pointer/[]byte fields so a zero value round-trips to SQL NULL.
 
 // keyMetadataModel -> key_metadata.
 type keyMetadataModel struct {
@@ -104,7 +103,6 @@ type secretModel struct {
 	NamespaceID     int64          `gorm:"column:namespace_id;not null;uniqueIndex:idx_secret_ns_name,priority:1"`
 	Namespace       namespaceModel `gorm:"foreignKey:NamespaceID;references:ID"`
 	Name            string         `gorm:"column:name;not null;uniqueIndex:idx_secret_ns_name,priority:2"`
-	ClientBound     int64          `gorm:"column:client_bound;not null;default:0"`
 	AccessTokenHash []byte         `gorm:"column:access_token_hash"`
 	ContentType     string         `gorm:"column:content_type;not null;default:application/octet-stream"`
 	MetadataJSON    string         `gorm:"column:metadata_json;not null;default:{}"`
@@ -114,29 +112,41 @@ type secretModel struct {
 
 func (secretModel) TableName() string { return "secrets" }
 
+// secretVersionHighWaterModel preserves the next-version identity for a
+// secret path after the deletable secret row and its versions are removed.
+// NamespaceID binds the counter to one namespace incarnation.
+type secretVersionHighWaterModel struct {
+	NamespaceID int64          `gorm:"column:namespace_id;not null;primaryKey;autoIncrement:false"`
+	Namespace   namespaceModel `gorm:"foreignKey:NamespaceID;references:ID;constraint:OnDelete:CASCADE"`
+	Name        string         `gorm:"column:name;not null;primaryKey"`
+	LastVersion int64          `gorm:"column:last_version;not null;default:0"`
+}
+
+func (secretVersionHighWaterModel) TableName() string { return "secret_version_high_water" }
+
 // secretVersionModel -> secret_versions.
 type secretVersionModel struct {
 	ID             int64       `gorm:"column:id;primaryKey;autoIncrement"`
 	SecretID       int64       `gorm:"column:secret_id;not null;uniqueIndex:idx_secret_ver,priority:1"`
 	Secret         secretModel `gorm:"foreignKey:SecretID;references:ID;constraint:OnDelete:CASCADE"`
 	VersionNumber  int64       `gorm:"column:version_number;not null;uniqueIndex:idx_secret_ver,priority:2"`
-	ContentType    string      `gorm:"column:content_type;not null;default:application/octet-stream"`
-	ClientBound    int64       `gorm:"column:client_bound;not null;default:0"`
+	ContentType    string      `gorm:"column:content_type;default:application/octet-stream"`
+	Bound          int64       `gorm:"column:bound;not null;default:0"`
 	HasAccessToken int64       `gorm:"column:has_access_token;not null;default:0"`
 	Ciphertext     []byte      `gorm:"column:ciphertext"`
 	EncryptedDEK   []byte      `gorm:"column:encrypted_dek"`
-	KEKID          string      `gorm:"column:kek_id;not null"`
-	WrapMode       string      `gorm:"column:wrap_mode;not null;default:standard"`
-	ClientKeySalt  []byte      `gorm:"column:client_key_salt"`
-	Algorithm      string      `gorm:"column:algorithm;not null;default:AES-256-GCM"`
+	KEKID          string      `gorm:"column:kek_id"`
+	WrapMode       string      `gorm:"column:wrap_mode;default:standard"`
+	BindingKeySalt []byte      `gorm:"column:binding_key_salt"`
+	Algorithm      string      `gorm:"column:algorithm;default:AES-256-GCM"`
 	Nonce          []byte      `gorm:"column:nonce"`
-	AAD            string      `gorm:"column:aad;not null"`
+	AAD            string      `gorm:"column:aad"`
 	State          string      `gorm:"column:state;not null;default:enabled"`
 	CreatedBy      string      `gorm:"column:created_by;not null;default:''"`
 	CreatedAt      string      `gorm:"column:created_at;not null"`
 	DestroyedAt    *string     `gorm:"column:destroyed_at"`
 	ExpiresAt      *string     `gorm:"column:expires_at"`
-	MetadataJSON   string      `gorm:"column:metadata_json;not null;default:{}"`
+	MetadataJSON   string      `gorm:"column:metadata_json;default:{}"`
 }
 
 func (secretVersionModel) TableName() string { return "secret_versions" }
@@ -282,8 +292,6 @@ type configurationReleaseEntryModel struct {
 	ContentType         string `gorm:"column:content_type;not null;default:''"`
 	MetadataJSON        string `gorm:"column:metadata_json;not null;default:{}"`
 	ParameterDigest     string `gorm:"column:parameter_digest;not null;default:''"`
-	ClientBound         int64  `gorm:"column:client_bound;not null;default:0"`
-	HasAccessToken      int64  `gorm:"column:has_access_token;not null;default:0"`
 }
 
 func (configurationReleaseEntryModel) TableName() string { return "configuration_release_entries" }
@@ -393,6 +401,7 @@ var autoMigrateModels = []any{
 	&parameterVersionModel{},
 	&parameterLabelModel{},
 	&secretModel{},
+	&secretVersionHighWaterModel{},
 	&secretVersionModel{},
 	&secretLabelModel{},
 	&identityModel{},
@@ -496,7 +505,6 @@ func toSecretRecord(sec secretModel, ref domain.Ref, labels map[string]uint64) S
 	return SecretRecord{
 		ID:              sec.ID,
 		Ref:             ref,
-		ClientBound:     i2b(sec.ClientBound),
 		AccessTokenHash: sec.AccessTokenHash,
 		ContentType:     sec.ContentType,
 		Metadata:        sec.MetadataJSON,
@@ -512,13 +520,13 @@ func toSecretVersionRecord(v secretVersionModel) SecretVersionRecord {
 		SecretID:       v.SecretID,
 		Version:        uint64(v.VersionNumber),
 		ContentType:    v.ContentType,
-		ClientBound:    i2b(v.ClientBound),
+		Bound:          i2b(v.Bound),
 		HasAccessToken: i2b(v.HasAccessToken),
 		Ciphertext:     v.Ciphertext,
 		EncryptedDEK:   v.EncryptedDEK,
 		KEKID:          v.KEKID,
 		WrapMode:       v.WrapMode,
-		ClientKeySalt:  v.ClientKeySalt,
+		BindingKeySalt: v.BindingKeySalt,
 		Algorithm:      v.Algorithm,
 		Nonce:          v.Nonce,
 		AAD:            v.AAD,

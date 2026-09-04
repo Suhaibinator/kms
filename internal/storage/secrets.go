@@ -5,6 +5,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"math"
 	"time"
 
 	"gorm.io/gorm"
@@ -34,6 +35,21 @@ func setSecretLabel(tx *gorm.DB, secretID int64, label string, version uint64) e
 		Label:         label,
 		VersionNumber: int64(version),
 	}).Error
+}
+
+func currentSecretBound(tx *gorm.DB, secretID int64, labels map[string]uint64) (bool, error) {
+	current, ok := labels[domain.LabelCurrent]
+	if !ok {
+		return false, nil
+	}
+	var version secretVersionModel
+	if err := tx.Select("bound").Where("secret_id = ? AND version_number = ?", secretID, current).First(&version).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return false, domain.Errorf(domain.ErrFailedPrecondition, "secret current label points to missing version %d", current)
+		}
+		return false, err
+	}
+	return i2b(version.Bound), nil
 }
 
 // findSecret resolves a secret row from its ref, returning ErrNotFound (naming
@@ -83,7 +99,6 @@ func (s *SQLStore) CreateSecretVersion(ctx context.Context, p CreateSecretParams
 			sec = secretModel{
 				NamespaceID:     nsID,
 				Name:            p.Ref.Key,
-				ClientBound:     b2i(p.ClientBound),
 				AccessTokenHash: p.AccessTokenHash,
 				ContentType:     contentType,
 				MetadataJSON:    metadata,
@@ -96,10 +111,6 @@ func (s *SQLStore) CreateSecretVersion(ctx context.Context, p CreateSecretParams
 		case e != nil:
 			return e
 		default:
-			if i2b(sec.ClientBound) != p.ClientBound {
-				return domain.Errorf(domain.ErrFailedPrecondition,
-					"secret %s wrap-mode mismatch (existing client_bound=%v, requested=%v)", p.Ref, i2b(sec.ClientBound), p.ClientBound)
-			}
 			upd := map[string]any{
 				"content_type":  contentType,
 				"metadata_json": metadata,
@@ -114,13 +125,24 @@ func (s *SQLStore) CreateSecretVersion(ctx context.Context, p CreateSecretParams
 			}
 		}
 
-		// Next version includes destroyed versions so numbers are never reused.
-		var maxVer int64
-		if err := tx.Model(&secretVersionModel{}).Where("secret_id = ?", sec.ID).
-			Select("COALESCE(MAX(version_number), 0)").Scan(&maxVer).Error; err != nil {
-			return err
+		// The high-water row is independent of the deletable secret graph. A
+		// delete/recreate cycle at the same namespace/path therefore cannot reuse
+		// a version number and accidentally satisfy an immutable release pin.
+		var highWater secretVersionHighWaterModel
+		hwErr := tx.Where("namespace_id = ? AND name = ?", nsID, p.Ref.Key).First(&highWater).Error
+		switch {
+		case errors.Is(hwErr, gorm.ErrRecordNotFound):
+			highWater = secretVersionHighWaterModel{NamespaceID: nsID, Name: p.Ref.Key}
+			if err := tx.Omit(clause.Associations).Create(&highWater).Error; err != nil {
+				return err
+			}
+		case hwErr != nil:
+			return hwErr
 		}
-		newVer := uint64(maxVer) + 1
+		if highWater.LastVersion == math.MaxInt64 {
+			return domain.Errorf(domain.ErrFailedPrecondition, "secret %s version space exhausted", p.Ref)
+		}
+		newVer := uint64(highWater.LastVersion + 1)
 		hasAccessToken := len(sec.AccessTokenHash) > 0
 		if p.AccessTokenHash != nil {
 			hasAccessToken = len(p.AccessTokenHash) > 0
@@ -150,13 +172,13 @@ func (s *SQLStore) CreateSecretVersion(ctx context.Context, p CreateSecretParams
 			SecretID:       sec.ID,
 			VersionNumber:  int64(newVer),
 			ContentType:    contentType,
-			ClientBound:    b2i(p.ClientBound),
+			Bound:          b2i(p.Bound),
 			HasAccessToken: b2i(hasAccessToken),
 			Ciphertext:     payload.Ciphertext,
 			EncryptedDEK:   payload.EncryptedDEK,
 			KEKID:          payload.KEKID,
 			WrapMode:       zeroOr(payload.WrapMode, domain.WrapModeStandard),
-			ClientKeySalt:  payload.ClientKeySalt,
+			BindingKeySalt: payload.BindingKeySalt,
 			Algorithm:      zeroOr(payload.Algorithm, "AES-256-GCM"),
 			Nonce:          payload.Nonce,
 			AAD:            payload.AAD,
@@ -168,6 +190,15 @@ func (s *SQLStore) CreateSecretVersion(ctx context.Context, p CreateSecretParams
 		}
 		if err := tx.Omit(clause.Associations).Create(&sv).Error; err != nil {
 			return err
+		}
+		updated := tx.Model(&secretVersionHighWaterModel{}).
+			Where("namespace_id = ? AND name = ? AND last_version = ?", nsID, p.Ref.Key, highWater.LastVersion).
+			Update("last_version", int64(newVer))
+		if updated.Error != nil {
+			return updated.Error
+		}
+		if updated.RowsAffected != 1 {
+			return domain.Errorf(domain.ErrAborted, "secret %s changed concurrently; retry", p.Ref)
 		}
 
 		labels, err := loadSecretLabels(tx, sec.ID)
@@ -219,6 +250,10 @@ func (s *SQLStore) GetSecretRecord(ctx context.Context, ref domain.Ref) (SecretR
 			return err
 		}
 		out = toSecretRecord(sec, ref, labels)
+		out.Bound, err = currentSecretBound(tx, sec.ID, labels)
+		if err != nil {
+			return err
+		}
 		return nil
 	}, &sql.TxOptions{ReadOnly: true})
 	return out, err
@@ -258,6 +293,10 @@ func (s *SQLStore) GetSecretVersion(ctx context.Context, ref domain.Ref, version
 			return err
 		}
 		rec = toSecretRecord(sec, ref, labels)
+		rec.Bound, err = currentSecretBound(tx, sec.ID, labels)
+		if err != nil {
+			return err
+		}
 		versionRec = toSecretVersionRecord(sv)
 		return nil
 	}, &sql.TxOptions{ReadOnly: true})
@@ -277,21 +316,27 @@ func secretInfo(db *gorm.DB, ns domain.NamespaceRef, sec secretModel) (domain.Se
 		return domain.Secret{}, err
 	}
 	vinfos := make([]domain.SecretVersionInfo, 0, len(vers))
+	currentBound := false
 	for _, v := range vers {
+		if labels[domain.LabelCurrent] == uint64(v.VersionNumber) {
+			currentBound = i2b(v.Bound)
+		}
 		vinfos = append(vinfos, domain.SecretVersionInfo{
-			Version:     uint64(v.VersionNumber),
-			State:       v.State,
-			CreatedBy:   v.CreatedBy,
-			CreatedAt:   parseTime(v.CreatedAt),
-			DestroyedAt: parseTimePtr(v.DestroyedAt),
-			ExpiresAt:   parseTimePtr(v.ExpiresAt),
-			Metadata:    v.MetadataJSON,
+			Version:        uint64(v.VersionNumber),
+			Bound:          i2b(v.Bound),
+			HasAccessToken: i2b(v.HasAccessToken),
+			State:          v.State,
+			CreatedBy:      v.CreatedBy,
+			CreatedAt:      parseTime(v.CreatedAt),
+			DestroyedAt:    parseTimePtr(v.DestroyedAt),
+			ExpiresAt:      parseTimePtr(v.ExpiresAt),
+			Metadata:       v.MetadataJSON,
 		})
 	}
 	return domain.Secret{
 		Ref:            domain.Ref{NS: ns, Key: sec.Name},
 		ContentType:    sec.ContentType,
-		ClientBound:    i2b(sec.ClientBound),
+		Bound:          currentBound,
 		HasAccessToken: sec.AccessTokenHash != nil,
 		Metadata:       sec.MetadataJSON,
 		CreatedAt:      parseTime(sec.CreatedAt),
